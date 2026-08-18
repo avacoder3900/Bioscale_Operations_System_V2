@@ -31,7 +31,6 @@ export const POST: RequestHandler = async ({ request, params }) => {
 			task = await createKanbanItem({
 				title: sub.title,
 				description: sub.description || undefined,
-				project: parent.project ?? null,
 				assignee: parent.assignee ?? null,
 				tags: sub.tags || parent.tags || [],
 				source: 'agent',

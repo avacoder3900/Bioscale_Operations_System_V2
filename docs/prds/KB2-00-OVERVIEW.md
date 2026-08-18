@@ -57,13 +57,15 @@ task update. Demotion is allowed and audited.
 6. **Only a human replenishes** — including a human driving Claude. Every mutating MCP tool takes a
    required `actor` (username); replenish validates it. New permission `kanban:replenish`.
 7. **Weekly replenishment cadence.**
-8. **Software board**: same engine, `board: 'software'` discriminator, own global queue + cap +
+8. **[SUPERSEDED by KB2-16 (2026-08-16): one board — 'software' is a tag; `review` is legal
+   everywhere.]** **Software board**: same engine, `board: 'software'` discriminator, own global queue + cap +
    policy block, shared per-person WIP limits across boards, extra `review` status. Software DoR
    includes an **agent handoff brief** — commitment = writing the description that lets a coding
    agent execute without re-discovery.
 9. **Standing work (e.g. cartridge build queue) is not a flow item.** Separate Supply panel with
    live target-vs-actual computed from BIMS data (KB2-10).
-10. **Projects stay a separate collection** (containers by construction — they are not tasks and
+10. **[SUPERSEDED by KB2-16 (2026-08-16): projects removed entirely — tasks carry tags; the
+    kanban_projects collection is dead data.]** **Projects stay a separate collection** (containers by construction — they are not tasks and
     can never enter Tier 2). No merge into the task collection.
 11. **All policy numbers live in a `KanbanPolicy` config doc** (singleton `_id:'default'`),
     tunable via admin UI + MCP tool, no deploys. Numbers below are SEEDS to be recomputed from

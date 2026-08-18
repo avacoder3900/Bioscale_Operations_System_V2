@@ -1,5 +1,5 @@
 import { json, error } from '@sveltejs/kit';
-import { connectDB, KanbanTask, KanbanProject, AuditLog } from '$lib/server/db';
+import { connectDB, KanbanTask, AuditLog } from '$lib/server/db';
 import { generateId } from '$lib/server/db/utils.js';
 import { requireAgentApiKey } from '$lib/server/api-auth';
 import { transitionTask, TransitionError } from '$lib/server/kanban/transition';
@@ -17,7 +17,7 @@ export const PATCH: RequestHandler = async ({ request, params }) => {
 	const body = await request.json();
 	const {
 		title, description, status, sizeClass, assignedTo, dueDate, tags,
-		appendContext, projectId, actor, reason, waitingOn, waitingUntil,
+		appendContext, actor, reason, waitingOn, waitingUntil,
 		sourceRef, dor
 	} = body;
 
@@ -69,23 +69,6 @@ export const PATCH: RequestHandler = async ({ request, params }) => {
 				changedFields.push(`dor.${k}`);
 			}
 		}
-	}
-
-	if (projectId !== undefined) {
-		oldData.project = task.project;
-		if (projectId) {
-			// Look up project to get name and color
-			const proj = await KanbanProject.findById(projectId).lean() as any;
-			if (proj) {
-				$set.project = { _id: proj._id, name: proj.name, color: proj.color };
-			} else {
-				// Fallback: set project with just the ID (name will be missing but at least it's assigned)
-				$set.project = { _id: projectId, name: 'Unknown', color: '#808080' };
-			}
-		} else {
-			$set.project = null;
-		}
-		changedFields.push('project');
 	}
 
 	if (assignedTo !== undefined) {

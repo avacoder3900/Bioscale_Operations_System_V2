@@ -13,14 +13,14 @@ export const POST: RequestHandler = async ({ request }) => {
 	requireAgentApiKey(request);
 	await connectDB();
 	const body = await request.json();
-	const { taskIds, board, actor, note } = body;
+	const { taskIds, actor, note } = body;
 
 	if (!Array.isArray(taskIds) || taskIds.length === 0) {
 		return json({ success: false, error: 'taskIds (ordered array) is required' }, { status: 400 });
 	}
 
 	try {
-		const result = await replenish({ taskIds, board, actorUsername: actor, via: 'mcp', note });
+		const result = await replenish({ taskIds, actorUsername: actor, via: 'mcp', note });
 		return json({ success: true, data: result });
 	} catch (e) {
 		if (e instanceof ReplenishError) {

@@ -1,5 +1,5 @@
 import { fail, redirect, error } from '@sveltejs/kit';
-import { connectDB, KanbanTask, KanbanProject, AuditLog, User } from '$lib/server/db';
+import { connectDB, KanbanTask, AuditLog, User } from '$lib/server/db';
 import { generateId } from '$lib/server/db/utils.js';
 import { requirePermission } from '$lib/server/permissions';
 import { checkWipLimit } from '$lib/server/kanban/wip-limit';
@@ -19,8 +19,6 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 
 	const task = await KanbanTask.findById(params.taskId).lean() as any;
 	if (!task) error(404, 'Task not found');
-
-	const projects = await KanbanProject.find().sort({ sortOrder: 1 }).lean();
 
 	// Collect all unique tags across all tasks for "allTags"
 	const allTagsRaw = await KanbanTask.distinct('tags');
@@ -43,7 +41,6 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 			description: task.description ?? null,
 			status: task.status,
 			sizeClass: task.sizeClass as KanbanSizeClass | undefined,
-			projectId: task.project?._id ?? null,
 			assignedTo: task.assignee?._id ?? null,
 			dueDate: task.dueDate ?? null,
 			waitingReason: task.waitingReason ?? null,
@@ -55,12 +52,9 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 			statusChangedAt: task.statusChangedAt ?? null,
 			source: task.source ?? null,
 			assigneeName: task.assignee?.username ?? null,
-			projectName: task.project?.name ?? null,
-			projectColor: task.project?.color ?? null,
 			tags: (task.tags ?? []).map(mapTag),
 			// KB2-07: spikes + discovered-work provenance
 			itemType: (task.itemType ?? 'deliverable') as string,
-			board: (task.board ?? 'ops') as string,
 			origin: (task.origin ?? 'planned') as string,
 			spawnedFrom: (task.spawnedFrom ?? null) as string | null,
 			spike: task.spike?.question
@@ -79,9 +73,6 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 			createdAt: c.createdAt,
 			userId: c.createdBy?._id ?? '',
 			username: c.createdBy?.username ?? 'Unknown'
-		})),
-		projects: projects.map((p: any) => ({
-			id: p._id, name: p.name, color: p.color, isActive: p.isActive, sortOrder: p.sortOrder
 		})),
 		allTags: (allTagsRaw as string[]).map(mapTag),
 		taskTags: (task.tags ?? []).map(mapTag),
@@ -106,14 +97,7 @@ export const actions: Actions = {
 		const title = fd.get('title') as string;
 		if (!title?.trim()) return fail(400, { error: 'Title is required' });
 
-		const projectId = fd.get('projectId') as string | null;
 		const assignedTo = fd.get('assignedTo') as string | null;
-
-		let project = null;
-		if (projectId) {
-			const p = await KanbanProject.findById(projectId).lean() as any;
-			if (p) project = { _id: p._id, name: p.name, color: p.color };
-		}
 
 		let assignee = null;
 		if (assignedTo) {
@@ -134,7 +118,6 @@ export const actions: Actions = {
 		const $set: any = {
 			title: title.trim(),
 			description: (fd.get('description') as string) || undefined,
-			project,
 			assignee,
 			dueDate: dueDate ? new Date(dueDate) : null,
 			waitingReason: (fd.get('waitingReason') as string) || null,
@@ -273,8 +256,7 @@ export const actions: Actions = {
 				title,
 				description: fd.get('description')?.toString() || undefined,
 				actor: { username: locals.user.username, via: 'ui' },
-				board: parent.board ?? 'ops',
-				project: parent.project ?? null,
+				tags: parent.tags ?? [],
 				origin: 'discovered',
 				spawnedFrom: params.taskId
 			});

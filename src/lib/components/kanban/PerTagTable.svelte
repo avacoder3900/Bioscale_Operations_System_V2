@@ -1,7 +1,6 @@
 <script lang="ts">
-	interface PerProjectRow {
-		id: string;
-		name: string;
+	interface PerTagRow {
+		tag: string;
 		color: string;
 		active: number;
 		doneInRange: number;
@@ -11,12 +10,12 @@
 	}
 
 	interface Props {
-		rows: PerProjectRow[];
+		rows: PerTagRow[];
 	}
 
 	let { rows }: Props = $props();
 
-	type SortKey = 'name' | 'active' | 'doneInRange' | 'medianCycleDays' | 'wip' | 'aging';
+	type SortKey = 'tag' | 'active' | 'doneInRange' | 'medianCycleDays' | 'wip' | 'aging';
 	let sortKey = $state<SortKey>('doneInRange');
 	let sortDir = $state<'asc' | 'desc'>('desc');
 
@@ -43,14 +42,14 @@
 </script>
 
 <div class="tron-card p-4">
-	<h3 class="tron-text-primary mb-3 text-sm font-bold">Per project</h3>
+	<h3 class="tron-text-primary mb-3 text-sm font-bold">Per tag</h3>
 	{#if rows.length === 0}
-		<p class="tron-text-muted text-xs">No projects.</p>
+		<p class="tron-text-muted text-xs">No tags.</p>
 	{:else}
 		<table class="w-full text-xs">
 			<thead>
 				<tr class="tron-text-muted text-left">
-					<th class="cursor-pointer pb-2" onclick={() => setSort('name')}>Project{arrow('name')}</th>
+					<th class="cursor-pointer pb-2" onclick={() => setSort('tag')}>Tag{arrow('tag')}</th>
 					<th class="cursor-pointer pb-2 text-right" onclick={() => setSort('active')}>Active{arrow('active')}</th>
 					<th class="cursor-pointer pb-2 text-right" onclick={() => setSort('doneInRange')}>Done{arrow('doneInRange')}</th>
 					<th class="cursor-pointer pb-2 text-right" onclick={() => setSort('medianCycleDays')}>Median cyc{arrow('medianCycleDays')}</th>
@@ -59,7 +58,7 @@
 				</tr>
 			</thead>
 			<tbody>
-				{#each sorted as r (r.id)}
+				{#each sorted as r (r.tag)}
 					<tr class="border-t border-[var(--color-tron-border)]/40">
 						<td class="py-1.5">
 							<a
@@ -68,7 +67,7 @@
 								style="color: {r.color};"
 							>
 								<span class="h-2 w-2 rounded-full" style="background: {r.color};"></span>
-								{r.name}
+								{r.tag}
 							</a>
 						</td>
 						<td class="py-1.5 text-right">{r.active}</td>

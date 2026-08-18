@@ -35,7 +35,6 @@ export const load: PageServerLoad = async ({ locals }) => {
 				targets.map((t) => ({
 					id: t._id,
 					name: t.name,
-					board: t.board ?? 'ops',
 					metricKind: t.metric?.kind ?? 'manual',
 					metricParams: JSON.stringify(t.metric?.params ?? {}, null, 0),
 					target: t.target,
@@ -55,7 +54,6 @@ export const load: PageServerLoad = async ({ locals }) => {
 				templates.map((t) => ({
 					id: t._id,
 					name: t.name,
-					board: t.board ?? 'ops',
 					itemType: t.itemType ?? 'deliverable',
 					sizeClass: t.sizeClass,
 					classOfService: t.classOfService ?? 'standard',
@@ -63,7 +61,6 @@ export const load: PageServerLoad = async ({ locals }) => {
 					dorDeliverable: t.dor?.deliverable ?? '',
 					dorHandoffBrief: t.dor?.handoffBrief ?? '',
 					tags: (t.tags ?? []).join(', '),
-					defaultProjectId: t.defaultProjectId ?? '',
 					notes: t.notes ?? '',
 					active: t.active !== false
 				}))
@@ -74,13 +71,10 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 // Form field name → policy dot-path (same editable set as the agent endpoint).
 const NUMBER_FIELDS: [string, string][] = [
-	['ops_readyCap', 'boards.ops.readyCap'],
-	['ops_minOrderPoint', 'boards.ops.minOrderPoint'],
-	['software_readyCap', 'boards.software.readyCap'],
-	['software_minOrderPoint', 'boards.software.minOrderPoint'],
+	['readyCap', 'readyCap'],
+	['minOrderPoint', 'minOrderPoint'],
 	['wipPerPerson', 'wipPerPerson'],
 	['wipChoreMax', 'wipChoreMax'],
-	['pullWindow', 'pullWindow'],
 	['expedite_systemMax', 'expedite.systemMax'],
 	['expedite_alertPct', 'expedite.alertPctRolling30d'],
 	['allocation_standard', 'allocation.standard'],
@@ -123,13 +117,11 @@ function parseTargetForm(fd: FormData) {
 		return { error: 'Target, reorder point, and batch size must be numbers' };
 	}
 	const spawnItemType = fd.get('spawnItemType')?.toString() === 'chore' ? 'chore' : 'deliverable';
-	const board = fd.get('board')?.toString() === 'software' ? 'software' : 'ops';
 	const spawnSizeClassRaw = fd.get('spawnSizeClass')?.toString();
 	const spawnSizeClass = spawnSizeClassRaw && ['short', 'medium', 'long'].includes(spawnSizeClassRaw) ? spawnSizeClassRaw : 'short';
 	return {
 		doc: {
 			name,
-			board,
 			metric: { kind, params },
 			target,
 			reorderPoint,
@@ -163,7 +155,6 @@ function parseTemplateForm(fd: FormData) {
 	if (!deliverable) {
 		return { error: 'DoR deliverable is required — a template captures the SOP shape, DoR-complete' };
 	}
-	const board = fd.get('board')?.toString() === 'software' ? 'software' : 'ops';
 	const tags = (fd.get('tags')?.toString() ?? '')
 		.split(',')
 		.map((s) => s.trim())
@@ -171,17 +162,15 @@ function parseTemplateForm(fd: FormData) {
 	return {
 		doc: {
 			name,
-			board,
 			itemType: fd.get('itemType')?.toString() === 'chore' ? 'chore' : 'deliverable',
 			sizeClass,
 			classOfService,
 			titleTemplate,
 			dor: {
 				deliverable,
-				handoffBrief: board === 'software' ? fd.get('dorHandoffBrief')?.toString() || undefined : undefined
+				handoffBrief: fd.get('dorHandoffBrief')?.toString() || undefined
 			},
 			tags,
-			defaultProjectId: fd.get('defaultProjectId')?.toString() || undefined,
 			notes: fd.get('notes')?.toString() || undefined,
 			active: fd.get('active') === 'on'
 		}

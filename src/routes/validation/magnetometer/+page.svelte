@@ -44,7 +44,15 @@
 </script>
 
 <div class="space-y-6">
-	<h2 class="tron-text-primary text-2xl font-bold">Magnetometer Validation</h2>
+	<div class="flex items-center justify-between">
+		<h2 class="tron-text-primary text-2xl font-bold">Magnetometer Validation</h2>
+		<a
+			href="/validation/magnetometer/calibration"
+			class="text-sm text-[var(--color-tron-cyan)] hover:underline"
+		>
+			Stage Calibration Tool →
+		</a>
+	</div>
 
 	{#if form?.error}
 		<div class="rounded border border-[var(--color-tron-red)] bg-[rgba(255,0,0,0.1)] p-3">

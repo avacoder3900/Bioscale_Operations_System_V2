@@ -37,10 +37,13 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 
 	// Yield statistics
 	const totalBacked = cs.length;
-	const phases = ['wax_filled', 'wax_stored', 'wax_ready', 'reagent_filled', 'inspected', 'sealed', 'reagent_qc', 'reagent_ready', 'reagent_rejected', 'stored', 'released'];
+	// Funnel of "reached at least this stage". wax_qc is retired (WAX-SIMPLIFY-2) but
+	// kept in the ordering so historical rows still land at the right depth; the
+	// off-ramps (wax_rejected) are deliberately not funnel stages.
+	const phases = ['wax_filled', 'wax_ready', 'reagent_filled', 'inspected', 'sealed', 'reagent_qc', 'reagent_ready', 'reagent_rejected', 'stored', 'released'];
 	const phaseCounts = phases.map((phase) => {
 		const count = cs.filter((c) => {
-			const phaseOrder = ['wax_filled', 'wax_stored', 'wax_qc', 'wax_ready', 'reagent_filled', 'inspected', 'sealed', 'reagent_qc', 'reagent_ready', 'reagent_rejected', 'cured', 'stored', 'released'];
+			const phaseOrder = ['wax_filled', 'wax_qc', 'wax_ready', 'reagent_filled', 'inspected', 'sealed', 'reagent_qc', 'reagent_ready', 'reagent_rejected', 'cured', 'stored', 'released'];
 			return phaseOrder.indexOf(c.status) >= phaseOrder.indexOf(phase);
 		}).length;
 		return {

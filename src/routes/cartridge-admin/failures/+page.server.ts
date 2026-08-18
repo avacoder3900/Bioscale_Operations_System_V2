@@ -23,7 +23,9 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	const filter: Record<string, any> = {
 		$or: [
 			{ 'reagentInspection.status': 'Rejected' },
-			{ 'waxQc.status': 'Rejected' }
+			{ 'waxQc.status': 'Rejected' },
+			// Wax Reject page sets both status + waxQc; older rows may only carry the status.
+			{ status: 'wax_rejected' }
 		]
 	};
 	if (assayTypeId) filter['reagentFilling.assayType._id'] = assayTypeId;

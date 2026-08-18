@@ -17,7 +17,6 @@ export const load: PageServerLoad = async ({ locals }) => {
 			description: t.description ?? null,
 			status: t.status,
 			sizeClass: t.sizeClass ?? null,
-			projectId: t.project?._id ?? null,
 			assignedTo: t.assignee?._id ?? null,
 			dueDate: t.dueDate ?? null,
 			waitingReason: t.waitingReason ?? null,
@@ -26,8 +25,6 @@ export const load: PageServerLoad = async ({ locals }) => {
 			statusChangedAt: t.statusChangedAt ?? null,
 			archivedAt: t.archivedAt ?? null,
 			assigneeName: t.assignee?.username ?? null,
-			projectName: t.project?.name ?? null,
-			projectColor: t.project?.color ?? null,
 			tags: (t.tags ?? []).map((tag: string) => ({ id: tag, name: tag, color: '#6b7280' }))
 		}))
 	};

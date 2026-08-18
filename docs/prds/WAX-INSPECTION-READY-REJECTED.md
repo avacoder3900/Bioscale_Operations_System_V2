@@ -1,6 +1,12 @@
 # PRD: Wax inspection status flow — wax_stored → wax_qc → wax_ready / wax_rejected
 
-**Status:** Approved (discussion 2026-06-17). Implement.
+> **Superseded 2026-08-17 by WAX-SIMPLIFY-1..3** (`WAX-SIMPLIFY-1-DROP-WAX-STORED.md`,
+> `WAX-SIMPLIFY-2-REJECT-ONLY-INSPECTION.md`, `WAX-SIMPLIFY-3-REAGENT-GATE.md`): `wax_stored`
+> and the `wax_qc` photo→verdict step are retired; visual pass is implicit at `wax_filled`,
+> rejects go through the Wax Reject page, and reagent filling accepts `wax_filled | wax_ready`.
+> Kept for history only.
+
+**Status:** Superseded (was: Approved, discussion 2026-06-17).
 **Replaces:** the pre-storage wax-QC accept/reject step + the `wax_filled/wax_stored/wax_qc`
 reagent allow-list.
 

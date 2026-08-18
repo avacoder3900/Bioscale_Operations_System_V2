@@ -7,6 +7,7 @@ import {
 } from '$lib/server/db';
 import { getCheckedOutCartridgeIds } from '$lib/server/checkout-utils';
 import { requirePermission } from '$lib/server/permissions';
+import { WAX_STAGE_STATUSES } from '$lib/shared/cartridge-wax-status';
 import type { PageServerLoad } from './$types';
 
 export const config = { maxDuration: 60 };
@@ -323,7 +324,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 			waxFilling: {
 				inProgress: phaseMap.get('wax_filling') ?? 0,
 				waxFilled: phaseMap.get('wax_filled') ?? 0,
-				waxStored: phaseMap.get('wax_stored') ?? 0
+				// Wax-stage carts eligible for reagent filling (WAX-SIMPLIFY-3)
+				waxStage: WAX_STAGE_STATUSES.reduce((s, st) => s + (phaseMap.get(st) ?? 0), 0)
 			},
 			reagentFilling: {
 				inProgress: phaseMap.get('reagent_filling') ?? 0,

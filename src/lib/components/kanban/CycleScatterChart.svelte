@@ -18,7 +18,7 @@
 		title: string;
 		completedAt: string;
 		cycleTimeDays: number;
-		projectColor: string;
+		color: string;
 	}
 
 	interface Props {
@@ -41,7 +41,7 @@
 					y: p.cycleTimeDays,
 					raw: p
 				})),
-				backgroundColor: block.points.map((p) => p.projectColor),
+				backgroundColor: block.points.map((p) => p.color),
 				borderColor: '#000',
 				pointRadius: 4,
 				pointHoverRadius: 6

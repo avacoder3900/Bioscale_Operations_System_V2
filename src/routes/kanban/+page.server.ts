@@ -1,25 +1,22 @@
 /**
  * KB2-06 — "Queue": the Tier 2 default view. A horizontal single-lane column
- * board per board (Ready | In Progress | Waiting | Blocked | Done). Every
+ * board (Ready | In Progress | In Review | Waiting | Blocked | Done). Every
  * mutation goes through the transition service (or demote for commitment
  * unwinds) — zero direct status writes here. Quick capture lives on Inventory.
+ * KB2-16: one board — tags carry the ops/software distinction.
  */
 import { fail, redirect } from '@sveltejs/kit';
 import { connectDB, KanbanTask } from '$lib/server/db';
 import { requirePermission, hasPermission, isAdmin } from '$lib/server/permissions';
 import { transitionTask, TransitionError } from '$lib/server/kanban/transition';
 import { demote, ReplenishError } from '$lib/server/kanban/replenish';
-import { getKanbanPolicy, boardPolicyOf } from '$lib/server/kanban/policy';
+import { getKanbanPolicy, queuePolicyOf } from '$lib/server/kanban/policy';
 import { standingStatus } from '$lib/server/kanban/standing';
-import { isKanbanStatus, type KanbanBoard, type KanbanStatus } from '$lib/shared/kanban-status';
+import { isKanbanStatus, type KanbanStatus } from '$lib/shared/kanban-status';
 import type { PageServerLoad, Actions } from './$types';
 import type { RequestEvent } from '@sveltejs/kit';
 
 const DAY = 86400000;
-
-function boardOf(url: URL): KanbanBoard {
-	return url.searchParams.get('board') === 'software' ? 'software' : 'ops';
-}
 
 function mapTask(t: any) {
 	return {
@@ -31,8 +28,7 @@ function mapTask(t: any) {
 		classOfService: (t.classOfService ?? 'standard') as string,
 		sizeClass: (t.sizeClass ?? null) as string | null,
 		origin: (t.origin ?? 'planned') as string,
-		projectName: (t.project?.name ?? null) as string | null,
-		projectColor: (t.project?.color ?? null) as string | null,
+		tags: (t.tags ?? []) as string[],
 		assigneeName: (t.assignee?.username ?? null) as string | null,
 		blockedReason: (t.blockedReason ?? null) as string | null,
 		waitingOn: (t.waitingOn ?? null) as string | null,
@@ -46,15 +42,13 @@ function mapTask(t: any) {
 	};
 }
 
-export const load: PageServerLoad = async ({ locals, url }) => {
+export const load: PageServerLoad = async ({ locals }) => {
 	if (!locals.user) redirect(302, '/login');
 	requirePermission(locals.user, 'kanban:read');
 	await connectDB();
-	const board = boardOf(url);
 
 	const policy = await getKanbanPolicy();
-	const { readyCap, minOrderPoint } = boardPolicyOf(policy, board);
-	const pullWindow: number = policy?.pullWindow ?? 3;
+	const { readyCap, minOrderPoint } = queuePolicyOf(policy);
 
 	// Supply loops (KB2-10/KB2-13) — the panel load IS a supply tick: anything
 	// below its reorder point (standing targets + below-min parts) spawns its
@@ -69,7 +63,6 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 
 	const weekAgo = new Date(Date.now() - 7 * DAY);
 	const tasks = (await KanbanTask.find({
-		board,
 		archived: false,
 		$or: [
 			{ status: { $in: ['ready', 'wip', 'waiting', 'blocked', 'review'] } },
@@ -80,15 +73,12 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		.lean()) as any[];
 
 	const capturedCount = await KanbanTask.countDocuments({
-		board,
 		status: { $in: ['captured', 'processed'] },
 		archived: false
 	});
 	const readyCount = tasks.filter((t) => t.status === 'ready').length;
 
 	return {
-		board,
-		pullWindow,
 		readyCap,
 		minOrderPoint,
 		readyCount,

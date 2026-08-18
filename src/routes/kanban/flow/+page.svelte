@@ -9,8 +9,9 @@
 	import CycleScatterChart from '$lib/components/kanban/CycleScatterChart.svelte';
 	import AgingWipChart from '$lib/components/kanban/AgingWipChart.svelte';
 	import TimeInStatusChart from '$lib/components/kanban/TimeInStatusChart.svelte';
-	import PerProjectTable from '$lib/components/kanban/PerProjectTable.svelte';
+	import PerTagTable from '$lib/components/kanban/PerTagTable.svelte';
 	import SourceMixDonut from '$lib/components/kanban/SourceMixDonut.svelte';
+	import { TIER1_STATUSES, TIER2_STATUSES } from '$lib/shared/kanban-status';
 
 	let { data } = $props();
 
@@ -63,7 +64,7 @@
 		<div>
 			<h2 class="tron-text-primary text-2xl font-bold">Flow</h2>
 			<p class="tron-text-muted text-sm">
-				How work moves on the <span class="font-bold uppercase">{data.board}</span> board —
+				How work moves —
 				{data.history.taskCount.active} active · {data.history.taskCount.archivedInRange} archived in range.
 				The pathology is diagnosed in the work, not in people.
 			</p>
@@ -188,7 +189,7 @@
 						<tr class="tron-text-muted text-left text-xs uppercase">
 							<th class="pb-2 pr-3">Item</th>
 							<th class="pb-2 pr-3">Status</th>
-							<th class="pb-2 pr-3">Project</th>
+							<th class="pb-2 pr-3">Tags</th>
 							<th class="pb-2 pr-3">Size</th>
 							<th class="pb-2 pr-3 text-right">Age (d)</th>
 							<th class="pb-2 pr-3 text-right">SLE (d)</th>
@@ -207,7 +208,7 @@
 									{/if}
 								</td>
 								<td class="py-2 pr-3"><TaskStatusBadge status={item.status} /></td>
-								<td class="tron-text-muted py-2 pr-3 text-xs">{item.project ?? '—'}</td>
+								<td class="tron-text-muted py-2 pr-3 text-xs">{(item.tags ?? []).join(', ') || '—'}</td>
 								<td class="tron-text-muted py-2 pr-3 text-xs uppercase">{item.sizeClass ?? '—'}</td>
 								<td class="py-2 pr-3 text-right font-bold" style="color: {item.overSle ? 'var(--color-tron-red)' : 'var(--color-tron-text-primary)'};">
 									{item.ageDays ?? '—'}
@@ -234,14 +235,25 @@
 		{/if}
 	</section>
 
-	<!-- CFD (KB2-15, ported; board + range aware) -->
-	<CfdChart points={data.history.cfd} />
+	<!-- CFDs (KB2-15, ported; range aware) — split by tier so the
+	     unbounded Tier 1 inventory can't drown the committed-flow signal.
+	     Tier 2 (the delivery pipeline) first; Tier 1 (inventory) below it. -->
+	<CfdChart
+		points={data.history.cfd}
+		title="Cumulative Flow — Tier 2 (committed: ready → done)"
+		statuses={TIER2_STATUSES}
+	/>
+	<CfdChart
+		points={data.history.cfd}
+		title="Cumulative Flow — Tier 1 (inventory: captured / processed / icebox / declined)"
+		statuses={TIER1_STATUSES}
+	/>
 
 	<!-- Daily WIP timeline (KB2-15, ported) — coordination view: who is on what.
-	     Cross-board by design (one human, one limit). No totals, ever. -->
+	     One human, one limit. No totals, ever. -->
 	<WipTimelineWidget data={data.wipTimeline} />
 
-	<!-- Historical flow charts (KB2-15, ported; board + range aware) -->
+	<!-- Historical flow charts (KB2-15, ported; range aware) -->
 	<section class="grid grid-cols-1 gap-4 lg:grid-cols-2">
 		<ThroughputChart points={data.history.throughput} />
 		<CycleScatterChart block={data.history.cycleScatter} />
@@ -249,10 +261,10 @@
 		<TimeInStatusChart rows={data.history.timeInStatus} />
 	</section>
 
-	<!-- Entry mix + per-project breakdown (KB2-15, ported; person-free) -->
+	<!-- Entry mix + per-tag breakdown (KB2-15, ported; person-free. KB2-16: tags replaced projects) -->
 	<section class="grid grid-cols-1 gap-4 lg:grid-cols-2">
 		<SourceMixDonut slices={data.history.sourceMix} />
-		<PerProjectTable rows={data.history.perProject} />
+		<PerTagTable rows={data.history.perTag} />
 	</section>
 
 	<!-- KB2-14: capacity + replenishment history (moved from the retired Replenish page) -->
@@ -292,7 +304,7 @@
 		<section class="tron-card !p-4">
 			<h3 class="tron-text-primary mb-3 text-sm font-bold uppercase tracking-wide">Recent replenishment events</h3>
 			{#if data.events.length === 0}
-				<p class="tron-text-muted text-xs">No replenishment events yet on this board.</p>
+				<p class="tron-text-muted text-xs">No replenishment events yet.</p>
 			{:else}
 				<ul class="space-y-1.5">
 					{#each data.events as e (e.id)}

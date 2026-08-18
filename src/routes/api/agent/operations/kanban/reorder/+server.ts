@@ -6,27 +6,28 @@ import type { RequestHandler } from './$types';
 
 /**
  * KB2-02: explicit, audited re-rank. scope 'ready' = the global commitment
- * order (actor needs kanban:replenish); scope {projectId} = Tier 1 option
- * ranking within a project.
+ * order (actor needs kanban:replenish); scope 'tier1' = the global Tier 1
+ * option order (KB2-16 — the legacy {projectId} shape maps to 'tier1').
  */
 export const POST: RequestHandler = async ({ request }) => {
 	requireAgentApiKey(request);
 	await connectDB();
 	const body = await request.json();
-	const { board, scope, orderedTaskIds, actor } = body;
+	const { orderedTaskIds, actor } = body;
+	const scope = body.scope === 'ready' ? 'ready' : body.scope === 'tier1' || body.scope?.projectId ? 'tier1' : null;
 
 	if (!Array.isArray(orderedTaskIds) || orderedTaskIds.length === 0) {
 		return json({ success: false, error: 'orderedTaskIds is required' }, { status: 400 });
 	}
-	if (scope !== 'ready' && !scope?.projectId) {
-		return json({ success: false, error: "scope must be 'ready' or {projectId}" }, { status: 400 });
+	if (!scope) {
+		return json({ success: false, error: "scope must be 'ready' or 'tier1'" }, { status: 400 });
 	}
 	if (!actor?.trim()) {
 		return json({ success: false, error: 'actor (username) is required' }, { status: 400 });
 	}
 
 	try {
-		const result = await reorder({ board, scope, orderedTaskIds, actorUsername: actor, via: 'mcp' });
+		const result = await reorder({ scope, orderedTaskIds, actorUsername: actor, via: 'mcp' });
 		return json({ success: true, data: result });
 	} catch (e) {
 		if (e instanceof ReplenishError) {

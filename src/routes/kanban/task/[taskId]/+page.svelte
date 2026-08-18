@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { enhance } from '$app/forms';
-	import { goto } from '$app/navigation';
+	import { enhance, deserialize } from '$app/forms';
+	import { afterNavigate, beforeNavigate, goto } from '$app/navigation';
 	import TronButton from '$lib/components/ui/TronButton.svelte';
 	import TronInput from '$lib/components/ui/TronInput.svelte';
 	import TaskStatusBadge from '$lib/components/kanban/TaskStatusBadge.svelte';
@@ -14,6 +14,54 @@
 
 	let saving = $state(false);
 	let archiving = $state(false);
+
+	// Back link returns to whichever kanban page you came from (queue,
+	// inventory, flow, …) — not always the queue board.
+	let backUrl = $state('/kanban');
+	afterNavigate((nav) => {
+		const from = nav.from?.url;
+		if (from && from.pathname.startsWith('/kanban') && !from.pathname.startsWith('/kanban/task/')) {
+			backUrl = from.pathname + from.search;
+		}
+	});
+
+	// Autosave: unsaved edit-form changes are flushed to ?/update when
+	// navigating away, so hitting Save Changes is optional.
+	let dirty = $state(false);
+	let autosaveError = $state<string | null>(null);
+	let editForm: HTMLFormElement | undefined = $state();
+
+	async function autosave(): Promise<boolean> {
+		if (!editForm) return true;
+		const response = await fetch('?/update', {
+			method: 'POST',
+			body: new FormData(editForm),
+			headers: { 'x-sveltekit-action': 'true' }
+		});
+		const result = deserialize(await response.text());
+		if (result.type === 'success') {
+			dirty = false;
+			return true;
+		}
+		autosaveError =
+			(result.type === 'failure' && (result.data as any)?.error) ||
+			'Could not auto-save your changes — fix the form and save manually.';
+		return false;
+	}
+
+	beforeNavigate((nav) => {
+		if (!dirty || archiving) return;
+		if (nav.type === 'leave') {
+			// Tab close / hard navigation — best-effort, can't await.
+			if (editForm) navigator.sendBeacon(`${location.pathname}?/update`, new FormData(editForm));
+			return;
+		}
+		const to = nav.to?.url;
+		nav.cancel();
+		autosave().then((ok) => {
+			if (ok && to) goto(to.href);
+		});
+	});
 
 	// KB2-07 — the stop-now test + spike close
 	let relatedStep = $state<null | 'ask' | 'option' | 'context'>(null);
@@ -80,7 +128,7 @@
 	<!-- Breadcrumb -->
 	<div class="flex items-center gap-3">
 		<a
-			href="/kanban"
+			href={backUrl}
 			class="flex items-center gap-1 text-sm text-[var(--color-tron-text-secondary)] transition-colors hover:text-[var(--color-tron-cyan)]"
 		>
 			<svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -101,6 +149,14 @@
 			{form.error}
 		</div>
 	{/if}
+	{#if autosaveError}
+		<div
+			class="rounded border border-[rgba(255,51,102,0.3)] bg-[rgba(255,51,102,0.1)] px-4 py-3 text-sm"
+			style="color: var(--color-tron-red);"
+		>
+			{autosaveError}
+		</div>
+	{/if}
 	{#if form?.success}
 		<div
 			class="rounded border border-[rgba(0,255,136,0.3)] bg-[rgba(0,255,136,0.1)] px-4 py-3 text-sm"
@@ -118,16 +174,6 @@
 				<div class="mb-6 flex flex-wrap items-center justify-between gap-3">
 					<div class="flex items-center gap-3">
 						<TaskStatusBadge status={data.task.status} />
-						{#if data.task.projectName}
-							<span
-								class="inline-flex items-center gap-1.5 rounded px-2 py-1 text-xs font-medium"
-								style="background: {data.task.projectColor}20; color: {data.task.projectColor};"
-							>
-								<span class="h-2 w-2 rounded-full" style="background: {data.task.projectColor};"
-								></span>
-								{data.task.projectName}
-							</span>
-						{/if}
 					</div>
 					<div class="flex items-center gap-2">
 						{#if flow.prev}
@@ -184,10 +230,16 @@
 				<form
 					method="POST"
 					action="?/update"
+					bind:this={editForm}
+					oninput={() => {
+						dirty = true;
+						autosaveError = null;
+					}}
 					use:enhance={() => {
 						saving = true;
-						return async ({ update }) => {
+						return async ({ result, update }) => {
 							saving = false;
+							if (result.type === 'success') dirty = false;
 							await update();
 						};
 					}}
@@ -211,21 +263,6 @@
 							rows="4"
 							placeholder="Task description...">{data.task.description ?? ''}</textarea
 						>
-					</div>
-
-					<div class="mb-4">
-						<label for="projectId" class="tron-label">Project</label>
-						<select
-							id="projectId"
-							name="projectId"
-							class="tron-select w-full"
-							value={data.task.projectId ?? ''}
-						>
-							<option value="">No project</option>
-							{#each data.projects as project}
-								<option value={project.id}>{project.name}</option>
-							{/each}
-						</select>
 					</div>
 
 					<div class="mb-4">
@@ -295,7 +332,7 @@
 							return async ({ result, update }) => {
 								archiving = false;
 								if (result.type === 'success') {
-									goto('/kanban');
+									goto(backUrl);
 								} else {
 									await update();
 								}
@@ -434,7 +471,7 @@
 			<form method="POST" action="?/discoverOption" use:enhance={modalEnhance}>
 				<p class="tron-text-muted mb-4 text-sm">
 					New option — created as <span class="font-bold">captured</span> / origin
-					<span class="font-bold">discovered</span>, spawned from this task, same project.
+					<span class="font-bold">discovered</span>, spawned from this task, same tags.
 				</p>
 				<div class="mb-4">
 					<TronInput label="Title" name="title" required placeholder="One line is enough" />

@@ -58,8 +58,8 @@
 	// yet so it stays inert.
 	const pipelineStages = $derived(() => [
 		{ label: 'Backing', count: data.pipeline.backing.backedTotal, sub: `${data.pipeline.backing.totalReadyCartridges} ready`, color: 'tron-purple', stageSlug: 'backing' },
-		{ label: 'Wax Fill', count: data.pipeline.waxFilling.inProgress + data.pipeline.waxFilling.waxFilled, sub: `${data.pipeline.waxFilling.inProgress} filling`, color: 'tron-yellow', stageSlug: 'wax_fill' },
-		{ label: 'Cooling', count: data.pipeline.waxFilling.waxStored, sub: 'in fridge', color: 'tron-blue', stageSlug: 'cooling' },
+		{ label: 'Wax Fill', count: data.pipeline.waxFilling.inProgress, sub: 'filling', color: 'tron-yellow', stageSlug: 'wax_fill' },
+		{ label: 'Wax-Filled', count: data.pipeline.waxFilling.waxStage, sub: 'ready for reagent', color: 'tron-blue', stageSlug: 'cooling' },
 		{ label: 'Reagent', count: data.pipeline.reagentFilling.inProgress + data.pipeline.reagentFilling.reagentFilled, sub: `${data.pipeline.reagentFilling.inProgress} filling`, color: 'tron-orange', stageSlug: 'reagent' },
 		{ label: 'Seal', count: data.pipeline.reagentFilling.sealed, sub: 'sealed', color: 'tron-cyan', stageSlug: 'seal' },
 		{ label: 'QC', count: data.pipeline.reagentFilling.reagentFilled, sub: 'pending', color: 'tron-green', stageSlug: null },

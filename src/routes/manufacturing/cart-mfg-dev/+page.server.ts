@@ -8,6 +8,7 @@ import {
 import { requirePermission } from '$lib/server/permissions';
 import { getCheckedOutCartridgeIds } from '$lib/server/checkout-utils';
 import { WAX_PAGE_OWNED } from '$lib/server/db/models/wax-filling-run';
+import { WAX_STAGE_STATUSES } from '$lib/shared/cartridge-wax-status';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
@@ -161,9 +162,9 @@ export const load: PageServerLoad = async ({ locals }) => {
 			} },
 			{ $group: { _id: '$robotId', totalMs: { $sum: '$durationMs' } } }
 		]),
-		// Oldest wax stored
+		// Oldest wax-stage cart sitting in a fridge
 		CartridgeRecord.findOne(
-			{ status: 'wax_stored', _id: { $nin: checkedOutIds } },
+			{ status: { $in: [...WAX_STAGE_STATUSES] }, 'waxStorage.timestamp': { $exists: true }, _id: { $nin: checkedOutIds } },
 			{ 'waxStorage.timestamp': 1 }
 		).sort({ 'waxStorage.timestamp': 1 }).lean()
 	]);
@@ -301,7 +302,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 		alerts.push({ level: 'orange', message: 'No active top seal rolls — register a new roll' });
 	}
 	if (oldestWaxAgeDays > waxStorageMaxAgeDays) {
-		const count = phaseMap.get('wax_stored') ?? 0;
+		const count = WAX_STAGE_STATUSES.reduce((s, st) => s + (phaseMap.get(st) ?? 0), 0);
 		alerts.push({ level: 'yellow', message: `${count} cartridges have been in fridge > ${waxStorageMaxAgeDays} days — run reagent?` });
 	}
 	// Blocked robot alerts
@@ -382,7 +383,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 			waxFilling: {
 				inProgress: inFillingIds.size,
 				waxFilled: phaseMap.get('wax_filled') ?? 0,
-				waxStored: phaseMap.get('wax_stored') ?? 0
+				// Wax-stage carts eligible for reagent filling (WAX-SIMPLIFY-3)
+				waxStage: WAX_STAGE_STATUSES.reduce((s, st) => s + (phaseMap.get(st) ?? 0), 0)
 			},
 			reagentFilling: {
 				inProgress: phaseMap.get('reagent_filling') ?? 0,

@@ -26,10 +26,11 @@
 	}
 
 	const PHASE = 'wax_filled';
-	// wax_stored carts get photographed (→ wax_qc); wax_qc carts get re-scanned to
-	// give the Ready/Rejected verdict. (wax_filling/wax_filled kept for tolerance.)
+	// WAX-SIMPLIFY-2: wax QC is visual-only for now (rejects go through Wax
+	// Reject). This page stays as the CV deployment point; photographing here no
+	// longer changes status. Legacy wax_qc carts can still be given a verdict.
 	// 'linked' is allowed so already-linked carts can still be photographed here.
-	const ALLOWED_STATUSES = ['wax_filling', 'wax_filled', 'wax_stored', 'wax_qc', 'linked'];
+	const ALLOWED_STATUSES = ['wax_filling', 'wax_filled', 'wax_qc', 'wax_ready', 'linked'];
 
 	// ── Sticky cartridge context ────────────────────────────────────────────
 	let cartridgeId = $state<string | null>(null);
@@ -521,9 +522,6 @@
 			} else {
 				verdict = { state: 'no_model' };
 			}
-			// Photographing a wax_stored cart advanced it to wax_qc server-side —
-			// reflect that so the Ready/Rejected verdict buttons appear.
-			if (cartridgeStatus === 'wax_stored') cartridgeStatus = 'wax_qc';
 			flashBanner('ok', `Captured ${result.cartridgeImageNumber}`, 1800);
 		} catch (e) {
 			if (pollSeq === mySeq) verdict = { state: 'error', message: e instanceof Error ? e.message : 'Capture failed' };
@@ -702,6 +700,11 @@
 				Operator: <span class="text-[var(--color-tron-cyan)]">{data.user.username}</span>
 			</div>
 		</header>
+
+		<!-- WAX-SIMPLIFY-2: this page is out of the menu; kept for CV deployment. -->
+		<div class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-2 text-xs text-[var(--color-tron-text-secondary)]">
+			Wax QC is currently visual-only — use <a href="/manufacturing/cart-mfg/wax-reject" class="text-[var(--color-tron-cyan)] hover:underline">Wax Reject</a>. This page stays for CV model deployment; photographing here does not change cartridge status.
+		</div>
 
 		<!-- Deployment status: yellow notice when nothing is deployed at wax_filled -->
 		{#if !data.modelDeployed}

@@ -7338,6 +7338,60 @@ What this deployment is for: reagent run timer shows a countdown as the headline
 again (elapsed demoted to a secondary line), still robot-driven for completion.
 
 ================================================================================
+2026-08-13 — feat/magnetometer-stage-calibration — SPU magnetometer stage
+calibration tool + live stage position during moves
+================================================================================
+Alejandro: "try to recover work on the magnetometer calibration feature for the
+validation tab. it was a tool to set the location of each read position and create
+[the] code that will replace the current code. but its a tool first, that then makes
+the fix" — then: "commit both to a working branch off of master. It should also
+directly control the spu from the bims so we can see the motion in real time".
+
+Recovered the calibration tool onto a clean branch off origin/master (the work had
+been sitting in the validation-runs worktree on an unrelated branch). Two commits:
+
+  8b2b00cf  SPU magnetometer stage calibration tool
+  31466a6d  live stage position during calibration moves
+
+The tool is the deliverable, and the constants are its output. The operator homes the
+stage, jogs to each of the 8 well read positions, captures each one, and the page
+emits the MAGNETOMETER_FIRST_POSITION / STAGE_MICRONS_TO_MAGNETOMETER_START_POSITION
+constants to paste into firmware — measured rather than derived, which is the actual
+fix for the read positions drifting off the wells.
+
+Real-time motion: stage_control blocks for the whole duration of a move, so its return
+value only ever reported the FINAL position. Firmware v90 (separate repo, below) adds
+stage_pos + stage_moving cloud variables; because the sketch runs SYSTEM_THREAD(ENABLED)
+the Particle system thread keeps answering variable reads while the motion loop is
+blocked. BIMS polls them at 400ms through /api/validation/magnetometer/calibrate/live
+alongside the move, and the readout switches to a pulsing "moving" live value during
+travel. Polling is best-effort by design: stage_control's return value stays
+authoritative and a dropped sample never surfaces as a move error.
+
+VALIDATION NOTE — npm run build was NOT run locally (it OOMs at ~30GB on this machine;
+the Vercel branch build is the gate and it passed, see below). svelte-check in this
+worktree reports 100 pre-existing errors across 115 files, almost all missing-dep noise
+(jsqr, bwip-js/browser) because the worktree has no full node_modules. Zero errors in
+the magnetometer files — grepped specifically to confirm.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-6am6i1a4s.vercel.app
+Source: branch feat/magnetometer-stage-calibration @ commit 31466a6d
+Retrieve this exact code: git checkout feat/magnetometer-stage-calibration at commit 31466a6d
+  (or: git log feat/magnetometer-stage-calibration --oneline to find it if the branch has moved on)
+What this deployment is for: operator-driven tool to measure the 8 magnetometer well
+read positions on a real SPU and emit the firmware constants, with the stage motion
+visible live in the browser while it travels.
+
+NOT YET DONE — this is a preview, not production, and it is only half the loop:
+  - Firmware v90 is committed in brevitest-device-SPU_Firmware_v72_AV on branch
+    feat/magnetometer-stage-calibration @ 6d83c0d, compiled clean for msom
+    (particle compile msom src --target 6.3.3, flash 138130 / RAM 41468, saved as
+    firmware/test-firmware-v90.bin) but is NOT pushed and NOT flashed to any device.
+    The live position readout shows nothing until v90 is on the SPU.
+  - No captured calibration has been run on hardware yet, so the emitted constants
+    are still unverified against real well positions.
+
+================================================================================
 2026-08-14 — master — KB2-15: Analytics folded into Flow, single kanban nav
 ================================================================================
 Consolidated the two overlapping metrics pages per Jacob's direction (PRD:
@@ -7387,6 +7441,310 @@ What this deployment is for: KB2-15 — the consolidated Flow page (Analytics me
   per-person leaderboard widgets deleted) and the single kanban nav row.
 
 ================================================================================
+2026-08-13 — master — SPU magnetometer stage calibration tool shipped to production
+================================================================================
+Alejandro: "lets push this feature to master".
+
+Merged feat/magnetometer-stage-calibration into master (fast-forward; origin/master
+was merged into the branch first — the only conflict was both sides appending to
+progress.txt, resolved by keeping both entries).
+
+What shipped:
+- /validation/magnetometer/calibration — the operator tool: home the stage, jog to
+  each well, capture the position of each, save a CalibrationRecord, and emit the
+  firmware constants (MAGNETOMETER_FIRST_POSITION / MAGNETOMETER_LAST_POSITION /
+  STAGE_MICRONS_TO_MAGNETOMETER_START_POSITION plus the well_move table) for pasting
+  into brevitest-firmware. The tool comes first; the firmware fix is its output.
+- Direct USB control: src/lib/services/spu-serial.ts drives the stage over Web Serial
+  from the browser, so the motion is visible in real time instead of round-tripping
+  through the Particle cloud. Cloud transport remains the fallback with no cable.
+- Live stage position readout while a jog/goto is in flight.
+- "Stage Calibration Tool" link added to the existing /validation/magnetometer page.
+
+svelte-check: 98 errors / 429 warnings — baseline (master's own), 0 in the new files.
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit 38464973
+Retrieve this exact code: git checkout master at commit 38464973
+  (or: git log master --oneline to find it if master has since moved on)
+What this deployment is for: measuring real magnetometer well positions on a bench SPU
+  and generating the firmware constants that replace the hardcoded ones.
+
+Corrections to the preview entry above (same date, feat/magnetometer-stage-calibration):
+- That entry says v90 is "NOT pushed and NOT flashed to any device" and that no
+  calibration had been captured on hardware. Both are now out of date. A calibration
+  WAS captured on BT-M01-0000-0203, the measured positions were written into the
+  firmware well_move table (brevitest-device-SPU_Firmware_v72_AV, branch
+  feat/magnetometer-stage-calibration @ 0795024), and that build is flashed to 0203.
+- The firmware branch is still local-only: 0795024 is NOT pushed to any remote, so
+  the constants live on this machine only. That is the next thing to lose.
+
+Still open:
+- The validation run (serial cmd 70) on 0203 is blocked on hardware: validate_magnets()
+  guards on device_state.detector_on, so the jig cartridge must be physically inserted
+  before the well readings can be taken. The tool's output is therefore not yet
+  confirmed against a passing validation run.
+- BT-M01-0000-0256 is still on the old product build (no prune_validation_files, old
+  well positions) and keeps serving stale magnet-validation files.
+
+================================================================================
+2026-08-16 — feat/kanban-tweaks — task detail: back link returns to origin page + autosave on navigate away
+================================================================================
+Two small kanban task-detail fixes (src/routes/kanban/task/[taskId]/+page.svelte only;
+no server changes):
+
+1. "Back to Board" was hardcoded to /kanban, so arriving from Inventory (or Flow,
+   Archived, …) always dumped you back on the Queue board. The page now captures the
+   in-app origin via afterNavigate — any /kanban/* page except another task detail,
+   query string preserved — and the back link (plus the post-archive redirect) returns
+   there. Direct/external entry still falls back to /kanban.
+
+2. Edit-form changes now auto-save on navigation away. The form tracks dirty state on
+   input; beforeNavigate cancels the pending navigation, POSTs the form to the existing
+   ?/update action (x-sveltekit-action + deserialize, same wire format as enhance), and
+   resumes the navigation on success. On action failure (e.g. cleared title) the page
+   stays put and shows the error banner instead of silently dropping the edit. Tab
+   close / hard navigation gets a best-effort navigator.sendBeacon flush. The Save
+   Changes button still works and clears the dirty flag.
+
+npm run check: 11 errors = baseline, 0 new (none in the task page).
+Note: working tree also carries Alejandro's uncommitted camera_capture.py /
+camera_capture_NO_POST_PROCESSING.py edits — deliberately left untouched, not part of
+this branch's commits.
+
+================================================================================
+2026-08-16 — feat/kanban-tweaks — Decline label + tiered CFDs on Flow
+================================================================================
+Two more small kanban tweaks on the same branch:
+
+- Inventory: "Decline…" buttons → "Decline" (Jacob found the ellipsis noisy).
+- Flow: the single CFD mixed unbounded Tier 1 inventory (~45 of ~63 items) with the
+  committed pipeline, drowning the delivery signal. Split into two stacked charts —
+  Tier 2 (ready → done) first, Tier 1 (captured/processed/icebox/declined) below.
+  CfdChart.svelte gained optional title + statuses props; data unchanged (each CFD
+  point already carried all status counts). Decision: NO historical data reset — the
+  stale July flatline ages out of the range selector naturally.
+
+npm run check: 11 errors = baseline, 0 new.
+Branch is still local-only (push blocked: keychain is DuckyDrakeHaus, repo needs
+Quickj10) — Jacob will trigger the push to master when the tweak batch is done.
+
+================================================================================
+2026-08-16 — feat/kanban-tweaks — KB2-16: projects removed, one board, tags everywhere; pages renamed Tier 1 / Tier 2
+================================================================================
+Jacob's in-session decision (PRD: docs/prds/KB2-16-projects-to-tags.md, written first;
+supersedes KB2-00 decisions #8 software board and #10 projects-stay): projects are too
+one-dimensional — tasks + tags do the same job; the ops/software board discriminator is
+replaced by a 'software' tag; Tier 1 is one solid iterable list with a global operator-
+applied order. Late addendum (decision #11): pages are named for what they are — /kanban
+is titled "Tier 2", /kanban/inventory "Tier 1" (nav + headings; routes/URLs unchanged).
+
+What changed (commits 01c2c7b6, bf5976c6, e9cfcdd4, 6bc818e0 + this docs commit):
+- Vocabulary: BOARDS/KanbanBoard/legalStatusesFor deleted; 'review' legal everywhere.
+- Models: task loses project subdoc + board (indexes → {status, rank}); policy collapses
+  boards.ops/software to one top-level readyCap/minOrderPoint (queuePolicyOf falls back
+  to the old boards.ops values so deploy-before-migrate is safe); template loses board +
+  defaultProjectId (tags instead); standing target loses board; KanbanProject model gone.
+- Engine: Tier 1 rank is one global ordinal list; one global ready queue; reorder scope
+  'tier1' replaces {projectId}; software handoff-brief DoR invariant keyed on the
+  'software' tag; per-tag flow breakdown replaces per-project; tag-hash colors
+  ($lib/shared/tag-color) replace project colors in WIP timeline + cycle scatter.
+- UI: Tier 1 page = flat globally-ranked list, ▲▼ rerank global, multi-select match-any
+  tag filter, capture takes comma-separated tags; Tier 2 board shows tag chips and an
+  In Review column when occupied; task detail loses the project select (back-link +
+  autosave work preserved); Flow loses the board selector; Policy has a single queue
+  block; Archive shows Tags; /kanban/projects + project ui-state API deleted; nav has
+  no Projects link or board switcher.
+- Agent API + MCP — BREAKING for callers passing board/projectId (heads-up Alejandro):
+  kanban_capture no longer requires projectId; kanban_projects_overview and
+  /api/agent/operations/projects are gone; board params dropped across
+  replenish/replenishment-status/flow-metrics/board-snapshot; reorder scope is
+  'ready'|'tier1' (legacy {projectId} accepted, maps to 'tier1'); set_policy paths are
+  readyCap/minOrderPoint.
+- Docs: KB2-00 decisions #8/#10 marked SUPERSEDED inline; KB2-17 strategy-layer concept
+  note captured (no build - the FOCUS.md doc + an MCP drift-report ritual is the shape).
+
+Migration: scripts/migrate-kb2-16-projects-to-tags.ts (dry-run default, --apply to
+write, idempotent; syntax-checked only). NOT RUN AGAINST PRODUCTION — prod tasks still
+carry project/board fields until it runs. Order: deploy KB2-16 code → run migration.
+The code tolerates unmigrated data (rank ties break on createdAt; queuePolicyOf reads
+old boards.ops values; legacy board:* replenishment signals auto-resolve).
+
+npm run check: 11 errors = baseline, 0 new (all 11 in untouched files).
+
+================================================================================
+2026-08-16 — master — small kanban tweaks shipped: back-link origin + autosave, Decline label, tiered CFDs
+================================================================================
+Cherry-picked the pre-KB2-16 tweaks from feat/kanban-tweaks onto master for production
+(b13ff816, dbf8202c, 7f5c1883 + docs). KB2-16 (projects→tags, one board) is still building
+on the feature branch and deliberately NOT included — it requires a prod data migration.
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit (this commit; git log master --oneline to confirm)
+Retrieve this exact code: git checkout master at this entry's merge commit
+What this deployment is for: task-detail back link returns to the page you came from +
+  edit form autosaves on navigate away; Inventory Decline buttons lose the ellipsis;
+  Flow shows two CFDs (Tier 2 committed flow above, Tier 1 inventory below).
+
+================================================================================
+2026-08-17 — master — KB2-16 shipped to production: projects→tags, one board, Tier 1/Tier 2
+================================================================================
+Fast-forwarded master to feat/kanban-tweaks @ c9855010 (KB2-16 complete + small tweaks
+already live). npm run check: 11 errors = baseline, 0 new.
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit (this commit's parent c9855010; git log master --oneline)
+Retrieve this exact code: git checkout master at this entry's commit
+What this deployment is for: KB2-16 — projects removed (tags carry everything), single
+  board ('software' is a tag), Tier 1 = one flat globally-ranked list with tag filter,
+  pages renamed exactly "Tier 1"/"Tier 2", per-tag flow breakdown, MCP/agent API updated.
+
+POST-DEPLOY REQUIRED (Jacob, from laptop):
+  git pull
+  npx tsx scripts/migrate-kb2-16-projects-to-tags.ts          # dry run, eyeball counts
+  npx tsx scripts/migrate-kb2-16-projects-to-tags.ts --apply  # idempotent
+Until --apply runs, prod tasks still carry project/board fields (code tolerates this;
+tags appear once migrated). MCP/agent callers passing board/projectId are BROKEN as of
+this deploy — heads-up Alejandro.
+
+================================================================================
+2026-08-17 — master — KB2-16 production migration APPLIED
+================================================================================
+Ran scripts/migrate-kb2-16-projects-to-tags.ts against production Atlas (bioscale db)
+after the KB2-16 code was live: dry run → --apply → dry run again to confirm convergence.
+Counts: 9 projects → 411 tasks received their project's name as a tag and lost the
+project subdoc; 0 software-board tasks (nothing gained a 'software' tag); board unset on
+409 tasks; 52 Tier 1 options re-ranked into one global 1..N; 5 Ready items re-ranked;
+policy singleton collapsed to readyCap=8 / minOrderPoint=3 with the boards block dropped;
+0 templates touched; two stale {board,...} indexes dropped and {status, rank} ensured;
+0 legacy board:* signals / standing targets to clean. Re-run dry run showed 0 remaining
+project subdocs, 0 board fields, no stale indexes. kanban_projects collection left in
+place as dead data per the PRD. The POST-DEPLOY REQUIRED step above is now complete.
+
+================================================================================
+2026-08-17 — feat/kanban-tier2-freeform — Tier 2 free-reign pull, tracking numbers, links, tag autocomplete
+================================================================================
+Deployment (preview):
+  branch:  feat/kanban-tier2-freeform
+  commit:  6f6fc7c60eb0c595d040bc51ae86784be61024de
+  URL:     https://bioscale-operations-system-mongodb-7064bxapu.vercel.app
+  build:   Vercel preview, success (Deployment has completed)
+
+What this deployment is for:
+  - Tier 2 pull window REMOVED. Any Ready task is startable; rank is now only an
+    ordering suggestion. WIP limit is the sole remaining gate and its rejection
+    message names the tasks the person already holds.
+  - TASK-NNN tracking numbers on every newly created task. Backed by a new
+    KanbanCounter model; numbers allocated by findOneAndUpdate upsert so
+    concurrent captures cannot collide, and never reused.
+  - Typed task links: relates / blocks / blocked_by / derived_from, written
+    bidirectionally in one pass, mirror removed on unlink, audit on both sides.
+    Spawning a follow-on task creates it pre-linked to its parent.
+  - Tier 1 capture tag autocomplete over existing vocabulary (prefix first, Tab
+    accepts, Enter only mid-word). Server folds case variants onto existing tags
+    so near-duplicates cannot enter the vocabulary by any entry path.
+
+NOT DONE — deliberate:
+  Pre-existing tasks have NO tracking number and were not backfilled. That is a
+  bulk ID-keyed write and belongs in a separate /px-off solo pass. Until then the
+  board is mixed: new tasks numbered, old ones blank.
+
+Verification status:
+  svelte-check: 0 errors in kanban files. The 96 errors / 429 warnings reported
+  repo-wide are pre-existing (missing optional deps sharp/chart.js plus untouched
+  assembly/capture/parts WIP) and are unchanged by this branch.
+  No migration required for this deploy. Preview verified by user, then merged.
+
+## Deployment (production) — 2026-08-17
+  source:  feat/kanban-tier2-freeform -> master (fast-forward, 2 commits)
+  branch:  master
+  commit:  67988e2d63d31b0789ceb50408741e23e0eb21e2
+  URL:     https://bioscale-operations-system-mongodb-p35xn4l2x-brevitest.vercel.app
+  alias:   https://bioscale-operations-system-mongodb.vercel.app
+  build:   Vercel production, Ready (2m). No rebuild-from-scratch — same SHA as
+           the verified preview, so Vercel promoted the existing build.
+  content: identical to the preview entry above (Tier 2 free-reign pull, TASK-NNN
+           tracking numbers, typed task links, Tier 1 tag autocomplete).
+  note:    pre-existing tasks still have no tracking number — backfill is a
+           separate /px-off ID-keyed pass, not done here.
+2026-08-17 — feat/wax-status-simplify — WAX-SIMPLIFY-1..3: wax_stored dropped, reject-only wax inspection, reagent gate widened
+================================================================================
+Jacob's decisions (conversation 2026-08-17): (1) wax_stored is redundant — "if they have been
+filled with wax they are stored" — collapse into wax_filled; (2) shortcut the wax QC / CV
+verdict flow for now: inspect by eye at wax_filled, only REJECTS get recorded, on a new page
+where the cart is scanned + photographed (so every failure image is captured for training) —
+not-rejected implicitly means accepted; (3) reagent filling accepts wax_filled OR wax_ready.
+Confirmed follow-on decisions: existing wax_qc carts migrate to wax_filled (not wax_ready);
+/wax-inspect stays in the codebase (out of the menu) for when CV comes back.
+
+PRDs: docs/prds/WAX-SIMPLIFY-1-DROP-WAX-STORED.md, WAX-SIMPLIFY-2-REJECT-ONLY-INSPECTION.md,
+WAX-SIMPLIFY-3-REAGENT-GATE.md (supersede WAX-INSPECTION-READY-REJECTED + WAX-FLOW-4's verdict
+intent; supersession banners added to the old PRDs, nothing rewritten).
+
+Built (bab03d13, 51 files):
+- NEW src/lib/shared/cartridge-wax-status.ts — WAX_STAGE_STATUSES=['wax_filled','wax_ready'],
+  LEGACY_WAX_STATUSES, WAX_REJECTABLE_STATUSES, WAX_ORDER, isWaxStage(), isReagentEligible()
+  (the ONE reagent admission rule; used by both api/dev/validate-equipment and
+  reagent-filling startRun so they can't disagree).
+- Model: wax_stored removed from CartridgeRecord.status enum (wax_qc kept for historical
+  rows); waxQc.source added (was written but not in schema).
+- Wax-fill terminal step (wax-filling storeDeckAndComplete + opentron-control completeRun):
+  fridge scan still records waxStorage.* — status stays wax_filled. "Where" is a field,
+  "what stage" is the status; they were conflated.
+- quick-wax-store/ DELETED (quick-wax-fill already lands wax_filled); quick-seal accepts
+  wax_filled too.
+- api/cv/capture: wax_stored→wax_qc auto-advance block removed. api/cv/wax-verdict:
+  eligible-from = wax_filled|wax_ready|wax_qc|wax_stored, reason optional, imageId audited,
+  update filtered on the cart's actual status (409 on race), priorStatus set.
+- NEW /manufacturing/cart-mfg/wax-reject (Wax Reject): scanner sticky context, Pi-station /
+  USB capture cloned from wax-inspect; Space = photo (POST /api/cv/capture phase wax_filled
+  verdict:'rejected' → CvImage qcLabel rejected = training label); reason chips
+  (underfill/overfill/bubble/smear/other + note); Reject (Enter) disabled until a photo
+  exists → wax_rejected; feed of last 50 rejects; counts wax_filled / rejected today.
+  Nav: "Wax Inspect" → "Wax Reject"; /wax-inspect still loads with a grey "visual-only —
+  use Wax Reject" banner, ALLOWED_STATUSES minus wax_stored, optimistic bump removed.
+- Consumer sweep: fridge occupancy everywhere (/, cartridge-dashboard, fridges-ovens,
+  equipment/location, equipment/activity, inventory/fridge-storage, pipeline, consumables)
+  = status ∈ WAX_STAGE_STATUSES AND waxStorage.location; phaseOrder/STAGES/LifecycleStage
+  drop wax_stored; cart-mfg tiles split "Wax Fill (filling)" / "Wax-Filled (ready for
+  reagent)"; cartridge-admin/failures also lists status wax_rejected; equipment-activity
+  event kind cartridge_wax_stored → cartridge_wax_filled; ask-bims + tier1 doc strings and
+  list_cartridges_in_storage query; seed-domain-data + ask-bims baseline test updated. Svelte
+  color maps keep wax_stored/wax_qc keys so historical rows render.
+- Migration: scripts/migrate-wax-simplify.ts (dry-run default, --apply, idempotent):
+  wax_stored → wax_filled, wax_qc → wax_filled (priorStatus + AuditLog per cart),
+  StandingTarget.metric.params.statuses rewritten. DRY RUN vs prod 2026-08-17: 227 wax_stored,
+  196 wax_qc, 0 standing targets; live wax_filled=17, wax_ready=330. NOT APPLIED — deploy day.
+
+npm run check: 11 errors = baseline, 0 new.
+
+DEPLOY-DAY RUNBOOK (order matters — deploy, then migrate):
+  1. merge feat/wax-status-simplify → master, push (Vercel builds production)
+  2. npx tsx scripts/migrate-wax-simplify.ts            # dry run, eyeball counts
+  3. npx tsx scripts/migrate-wax-simplify.ts --apply    # idempotent
+  Until --apply runs: 227 wax_stored carts are invisible to fridge/wax-stage counts and are
+  refused at the reagent gate with a "legacy status — run migrate-wax-simplify" hint;
+  Wax Reject will still accept them. Nothing breaks, it just under-counts.
+
+================================================================================
+2026-08-17 — master — WAX-SIMPLIFY-1..3 shipped to production + migration APPLIED
+================================================================================
+Merged feat/wax-status-simplify into master (merge commit dad155c2; concurrent kanban tier-2
+free-reign work 6f6fc7c6 from the other machine merged cleanly — only progress.txt conflicted,
+both entries kept). Pushed; Vercel production build went live (version.json 1787007198559).
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit dad155c2
+Retrieve this exact code: git checkout master at dad155c2
+What this deployment is for: WAX-SIMPLIFY — wax_stored gone (wax_filled is the stored state),
+  new Wax Reject page (scan + mandatory photo → wax_rejected; passes implicit), Wax Inspect
+  out of the menu, reagent gate accepts wax_filled|wax_ready.
+
+Migration scripts/migrate-wax-simplify.ts run AFTER the build was live: dry run → --apply →
+dry run. 227 wax_stored → wax_filled, 196 wax_qc → wax_filled (priorStatus + AuditLog per
+cart, changedBy 'migration:wax-simplify'), 0 standing targets touched. Wax-stage counts now:
+wax_filled=440, wax_ready=330. Re-run dry: 0/0/0. The deploy-day runbook above is COMPLETE.
+
 2026-08-17 — jq/barcode-scanning — Zebra ZT230 cartridge barcode printing via Browser Print
 ================================================================================
 New branch + worktree (..\Bioscale_Operations_System_V2-jq-barcode-scanning) for a run of

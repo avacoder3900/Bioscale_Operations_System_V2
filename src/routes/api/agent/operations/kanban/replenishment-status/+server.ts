@@ -8,10 +8,9 @@ import type { RequestHandler } from './$types';
  * KB2-02: the "should we replenish?" view — candidates with DoR readiness,
  * ready count vs cap, min-order-point signal, WIP share by class of service.
  */
-export const GET: RequestHandler = async ({ request, url }) => {
+export const GET: RequestHandler = async ({ request }) => {
 	requireAgentApiKey(request);
 	await connectDB();
-	const board = url.searchParams.get('board') === 'software' ? 'software' : 'ops';
-	const data = await replenishmentStatus(board);
+	const data = await replenishmentStatus();
 	return json({ success: true, data: JSON.parse(JSON.stringify(data)) });
 };

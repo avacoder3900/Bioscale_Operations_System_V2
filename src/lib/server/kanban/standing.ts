@@ -33,7 +33,6 @@ import {
 } from '$lib/server/db';
 import { createKanbanItem, transitionTask } from './transition.js';
 import { renumberReady, checkMinOrderPoint } from './queue.js';
-import type { KanbanBoard } from '$lib/shared/kanban-status';
 
 const SUPPLY_ACTOR = 'system:supply';
 
@@ -81,7 +80,6 @@ export async function computeActual(target: any): Promise<number | null> {
  */
 async function shapeAndCommit(opts: {
 	taskId: string;
-	board: KanbanBoard;
 	shape: {
 		itemType?: string;
 		sizeClass: string;
@@ -112,7 +110,7 @@ async function shapeAndCommit(opts: {
 	});
 	// Bottom of the global ready rank order; pull-window exemption makes it
 	// pullable anyway (transition.ts skips the window for supply sources).
-	const last: any = await KanbanTask.findOne({ board: opts.board, status: 'ready', archived: false, _id: { $ne: opts.taskId } })
+	const last: any = await KanbanTask.findOne({ status: 'ready', archived: false, _id: { $ne: opts.taskId } })
 		.sort({ rank: -1 })
 		.select('rank')
 		.lean();
@@ -125,20 +123,18 @@ async function shapeAndCommit(opts: {
 			}
 		}
 	);
-	await renumberReady(opts.board);
-	await checkMinOrderPoint(opts.board);
+	await renumberReady();
+	await checkMinOrderPoint();
 }
 
 /** Spawn (and auto-commit) the build card for one below-reorder-point standing target. */
 async function spawnStandingBuild(t: any, actual: number, actorUsername?: string): Promise<string> {
-	const board = (t.board ?? 'ops') as KanbanBoard;
 	const tpl: any = t.templateId ? await KanbanTemplate.findById(t.templateId).lean() : null;
 
 	const created: any = await createKanbanItem({
 		title: `Build ${t.batchSize} × ${t.name}`,
 		description: `Standing supply target "${t.name}" dropped to ${actual} (reorder point ${t.reorderPoint}, target ${t.target}). Suggested batch: ${t.batchSize}.`,
 		actor: { username: actorUsername ?? SUPPLY_ACTOR, via: 'system' },
-		board,
 		itemType: (tpl?.itemType ?? t.spawnItemType ?? 'deliverable') as any,
 		origin: 'planned',
 		source: 'standing-target',
@@ -148,7 +144,6 @@ async function spawnStandingBuild(t: any, actual: number, actorUsername?: string
 
 	await shapeAndCommit({
 		taskId: created._id,
-		board,
 		shape: tpl
 			? {
 					sizeClass: tpl.sizeClass,
@@ -172,7 +167,6 @@ async function spawnPartReorder(part: any): Promise<string> {
 		title: `Order ${part.minimumOrderQty} × ${part.partNumber} ${part.name ?? ''}`.trim(),
 		description: `Part ${part.partNumber} (${part.name ?? 'unnamed'}) is at ${part.inventoryCount} on hand — at/below minimum order quantity ${part.minimumOrderQty}. Reorder batch: ${part.minimumOrderQty}${part.supplier ? ` from ${part.supplier}` : ''}.`,
 		actor: { username: SUPPLY_ACTOR, via: 'system' },
-		board: 'ops',
 		itemType: 'chore',
 		origin: 'planned',
 		source: 'part-reorder',
@@ -180,7 +174,6 @@ async function spawnPartReorder(part: any): Promise<string> {
 	});
 	await shapeAndCommit({
 		taskId: created._id,
-		board: 'ops',
 		shape: {
 			sizeClass: 'short',
 			classOfService: 'chore',

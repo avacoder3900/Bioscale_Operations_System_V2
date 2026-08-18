@@ -9,11 +9,11 @@
  * aggregate.)
  *
  * KB2-15 — the Analytics page is retired into this one: person-free historical
- * charts (CFD, throughput, cycle scatter, aging, time-in-status, per-project,
+ * charts (CFD, throughput, cycle scatter, aging, time-in-status, per-tag,
  * source mix) from flow-history.ts, driven by ?range=; plus the daily WIP
- * timeline (coordination view, cross-board by design) from wip-timeline.ts,
- * driven by ?day= and ?tz=. The per-assignee table and creator-mix donut were
- * deleted outright (KB2-00 decision #12).
+ * timeline (coordination view) from wip-timeline.ts, driven by ?day= and ?tz=.
+ * The per-assignee table and creator-mix donut were deleted outright (KB2-00
+ * decision #12). KB2-16: one board — the ?board= selector is gone.
  */
 import { redirect } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
@@ -22,23 +22,21 @@ import { flowMetrics } from '$lib/server/kanban/flow-metrics';
 import { replenishmentStatus } from '$lib/server/kanban/replenish';
 import { loadFlowHistory, parseRange } from '$lib/server/kanban/flow-history';
 import { loadWipTimeline } from '$lib/server/kanban/wip-timeline';
-import type { KanbanBoard } from '$lib/shared/kanban-status';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals, url }) => {
 	if (!locals.user) redirect(302, '/login');
 	requirePermission(locals.user, 'kanban:read');
 	await connectDB();
-	const board: KanbanBoard = url.searchParams.get('board') === 'software' ? 'software' : 'ops';
 	const range = parseRange(url.searchParams.get('range'));
 	const day = url.searchParams.get('day');
 	const tzRaw = url.searchParams.get('tz');
 	const tzOffsetMin = tzRaw !== null && Number.isFinite(Number(tzRaw)) ? Number(tzRaw) : 0;
 
 	const [metrics, status, history, wipTimeline] = await Promise.all([
-		flowMetrics(board),
-		replenishmentStatus(board),
-		loadFlowHistory(board, range),
+		flowMetrics(),
+		replenishmentStatus(),
+		loadFlowHistory(range),
 		loadWipTimeline(day, tzOffsetMin)
 	]);
 
@@ -47,15 +45,13 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	// this regex full-scans the audit log (Atlas query-targeting alert, 2026-07-31).
 	const events = (await AuditLog.find({
 		tableName: 'kanban_tasks',
-		recordId: { $regex: /^replenishment:/ },
-		'newData.board': board
+		recordId: { $regex: /^replenishment:/ }
 	})
 		.sort({ changedAt: -1 })
 		.limit(10)
 		.lean()) as any[];
 
 	return {
-		board,
 		metrics: JSON.parse(JSON.stringify(metrics)),
 		history: JSON.parse(JSON.stringify(history)),
 		wipTimeline: JSON.parse(JSON.stringify(wipTimeline)),

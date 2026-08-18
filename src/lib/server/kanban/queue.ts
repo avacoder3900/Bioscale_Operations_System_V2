@@ -4,13 +4,16 @@
  * separate so the two don't import each other.
  */
 import { KanbanTask, WorkflowViolation, generateId } from '$lib/server/db';
-import { getKanbanPolicy, boardPolicyOf } from './policy.js';
-import type { KanbanBoard } from '$lib/shared/kanban-status';
+import { getKanbanPolicy, queuePolicyOf } from './policy.js';
 
-/** Renumber the global ready queue of a board to strict 1..N (no ties, no gaps). */
-export async function renumberReady(board: KanbanBoard): Promise<void> {
-	const items = (await KanbanTask.find({ board, status: 'ready', archived: false })
-		.sort({ rank: 1 })
+// KB2-16: legacy per-board signal ids kept in the lookup so open pre-migration
+// violations still auto-resolve instead of dangling forever.
+const QUEUE_SIGNAL_IDS = ['queue:ready', 'board:ops', 'board:software'];
+
+/** Renumber the global ready queue to strict 1..N (no ties, no gaps). */
+export async function renumberReady(): Promise<void> {
+	const items = (await KanbanTask.find({ status: 'ready', archived: false })
+		.sort({ rank: 1, createdAt: 1 })
 		.select('_id rank')
 		.lean()) as any[];
 	let r = 1;
@@ -21,23 +24,23 @@ export async function renumberReady(board: KanbanBoard): Promise<void> {
 }
 
 /** Below the minimum order point → emit (or auto-resolve) the replenishment signal. */
-export async function checkMinOrderPoint(board: KanbanBoard): Promise<void> {
+export async function checkMinOrderPoint(): Promise<void> {
 	const policy = await getKanbanPolicy();
-	const { minOrderPoint } = boardPolicyOf(policy, board);
-	const count = await KanbanTask.countDocuments({ board, status: 'ready', archived: false });
-	const open = await WorkflowViolation.findOne({ type: 'replenishment_needed', taskId: `board:${board}`, resolved: false });
+	const { minOrderPoint } = queuePolicyOf(policy);
+	const count = await KanbanTask.countDocuments({ status: 'ready', archived: false });
+	const open = await WorkflowViolation.findOne({ type: 'replenishment_needed', taskId: { $in: QUEUE_SIGNAL_IDS }, resolved: false });
 	if (count < minOrderPoint && !open) {
 		await WorkflowViolation.create({
 			_id: generateId(),
 			type: 'replenishment_needed',
-			taskId: `board:${board}`,
-			description: `Ready queue on the ${board} board is at ${count} (minimum order point ${minOrderPoint}). Run replenishment before people start pulling from Tier 1 again.`,
+			taskId: 'queue:ready',
+			description: `Ready queue is at ${count} (minimum order point ${minOrderPoint}). Run replenishment before people start pulling from Tier 1 again.`,
 			severity: 'high',
 			timestamp: new Date()
 		});
 	} else if (count >= minOrderPoint && open) {
-		await WorkflowViolation.updateOne(
-			{ _id: open._id },
+		await WorkflowViolation.updateMany(
+			{ type: 'replenishment_needed', taskId: { $in: QUEUE_SIGNAL_IDS }, resolved: false },
 			{ $set: { resolved: true, resolvedAt: new Date(), resolvedBy: 'system:auto' } }
 		);
 	}

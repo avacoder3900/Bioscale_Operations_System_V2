@@ -7,20 +7,21 @@
  * blocked-needs-reason) enforceable in exactly one place, and what guarantees
  * humans and Claude produce identical flow records.
  */
-import { connectDB, KanbanTask, AuditLog, generateId } from '$lib/server/db';
+import { connectDB, KanbanTask, AuditLog, generateId, nextTrackingNumber } from '$lib/server/db';
 import {
 	isKanbanStatus,
 	isTierCrossing,
-	legalStatusesFor,
 	tierOf,
 	STATUS_DATE_FIELD,
+	isKanbanLinkType,
+	LINK_INVERSE,
+	LINK_LABEL,
 	type KanbanStatus,
-	type KanbanBoard,
 	type KanbanItemType,
-	type KanbanOrigin
+	type KanbanOrigin,
+	type KanbanLinkType
 } from '$lib/shared/kanban-status';
 import { checkWipLimit } from './wip-limit.js';
-import { getKanbanPolicy } from './policy.js';
 import { renumberReady, checkMinOrderPoint } from './queue.js';
 
 export type TransitionVia = 'ui' | 'mcp' | 'agent-api' | 'system';
@@ -31,7 +32,6 @@ export class TransitionError extends Error {
 		| 'INVALID_STATUS'
 		| 'TIER_CROSSING_FORBIDDEN'
 		| 'WIP_LIMIT_EXCEEDED'
-		| 'PULL_WINDOW'
 		| 'REASON_REQUIRED'
 		| 'WAITING_DEPENDENCY_REQUIRED'
 		| 'NOT_FOUND';
@@ -67,12 +67,7 @@ export async function transitionTask(opts: TransitionOptions) {
 	if (!task) throw new TransitionError('NOT_FOUND', `Task ${taskId} not found`);
 
 	const from = task.status as KanbanStatus;
-	const board = (task.board ?? 'ops') as KanbanBoard;
 	if (from === to) return { task, changed: false as const };
-
-	if (!legalStatusesFor(board).includes(to)) {
-		throw new TransitionError('INVALID_STATUS', `Status '${to}' is not legal on the '${board}' board.`);
-	}
 
 	// The commitment point — the single most important invariant in KB2.
 	if (isTierCrossing(from, to) && !opts.allowTierCrossing) {
@@ -99,22 +94,10 @@ export async function transitionTask(opts: TransitionOptions) {
 		}
 	}
 
-	// Pull policy (KB2-02): consume the queue from the top-N only. Preserves
-	// real choice (skill/equipment match) inside a bounded window. Expedite
-	// bypasses the window by definition; so do supply autopilot cards (KB2-13:
-	// source standing-target/part-reorder) — supply work is always legitimate
-	// to pull, at any rank.
-	const isSupplyCard = task.source === 'standing-target' || task.source === 'part-reorder';
-	if (from === 'ready' && to === 'wip' && task.classOfService !== 'expedite' && !isSupplyCard) {
-		const policy = await getKanbanPolicy();
-		const window = policy?.pullWindow ?? 3;
-		if ((task.rank ?? 0) > window) {
-			throw new TransitionError(
-				'PULL_WINDOW',
-				`Pull from the top ${window} of the ready queue (ranks 1–${window}); this item is rank ${task.rank}. If it should be worked now, reorder the queue first.`
-			);
-		}
-	}
+	// Pull policy (KB2-02) removed: the ready queue is pull-anywhere. Any ready
+	// card may be pulled to wip regardless of rank. Rank survives as the
+	// recommended order — a suggestion the puller is free to ignore — and WIP
+	// limits remain the real constraint on how much is in flight at once.
 
 	if (to === 'blocked' && !opts.reason?.trim()) {
 		throw new TransitionError('REASON_REQUIRED', "Moving to 'blocked' requires a reason (what is blocking us?).");
@@ -168,8 +151,8 @@ export async function transitionTask(opts: TransitionOptions) {
 	// rank gap and check queue depth. Entering ready happens only via replenish,
 	// which does its own renumber/check.
 	if (from === 'ready' && to !== 'ready') {
-		await renumberReady(board);
-		await checkMinOrderPoint(board);
+		await renumberReady();
+		await checkMinOrderPoint();
 	}
 
 	await AuditLog.create({
@@ -188,9 +171,7 @@ export async function transitionTask(opts: TransitionOptions) {
 export interface CreateKanbanItemOptions {
 	title: string;
 	actor: TransitionActor;
-	board?: KanbanBoard;
 	description?: string;
-	project?: { _id: string; name: string; color?: string } | null;
 	assignee?: { _id: string; username: string } | null;
 	itemType?: KanbanItemType;
 	origin?: KanbanOrigin;
@@ -201,17 +182,222 @@ export interface CreateKanbanItemOptions {
 	source?: string;
 	sourceRef?: string;
 	spike?: { question: string; timebox: { amount: number; unit: 'hours' | 'days' } };
+	/**
+	 * KB2-20: links to declare at birth. This is how "a task spawns the task it
+	 * needs" arrives already wired — the caller passes the originating task and
+	 * the relationship, and the new card comes back linked and selectable.
+	 */
+	links?: Array<{ taskId: string; type?: KanbanLinkType; note?: string }>;
+}
+
+/**
+ * Validate declared links and stamp them for storage. Links are stored ONLY on
+ * the declaring task; the inverse edge is derived on read (see readLinks), so
+ * there is no second write that can fail and leave the pair inconsistent.
+ */
+async function resolveLinks(
+	declared: CreateKanbanItemOptions['links'],
+	username: string,
+	now: Date
+): Promise<Array<{ _id: string; taskId: string; type: KanbanLinkType; note?: string; createdAt: Date; createdBy: string }>> {
+	if (!declared?.length) return [];
+
+	// De-dupe on (taskId, type) so a double-click cannot stack identical edges.
+	const seen = new Set<string>();
+	const unique = declared.filter((l) => {
+		const key = `${l.taskId}::${l.type ?? 'relates_to'}`;
+		if (seen.has(key)) return false;
+		seen.add(key);
+		return true;
+	});
+
+	for (const l of unique) {
+		if (l.type && !isKanbanLinkType(l.type)) {
+			throw new TransitionError('INVALID_STATUS', `Unknown link type '${l.type}'.`);
+		}
+	}
+
+	const ids = unique.map((l) => l.taskId);
+	const found = await KanbanTask.find({ _id: { $in: ids } }).select('_id').lean();
+	const foundIds = new Set(found.map((t: any) => t._id));
+	const missing = ids.filter((id) => !foundIds.has(id));
+	if (missing.length) {
+		throw new TransitionError(
+			'NOT_FOUND',
+			`Cannot link to task(s) that do not exist: ${missing.join(', ')}.`
+		);
+	}
+
+	return unique.map((l) => ({
+		_id: generateId(),
+		taskId: l.taskId,
+		type: l.type ?? 'relates_to',
+		note: l.note?.trim() || undefined,
+		createdAt: now,
+		createdBy: username
+	}));
+}
+
+/**
+ * Read a task's full link set: its own declared edges plus the inverse of every
+ * edge other tasks declared against it. Callers get one uniform list and never
+ * need to know which side happens to hold the stored row.
+ */
+export async function readLinks(taskId: string) {
+	await connectDB();
+
+	const [self, inbound]: [any, any[]] = await Promise.all([
+		KanbanTask.findById(taskId).select('links').lean(),
+		KanbanTask.find({ 'links.taskId': taskId, archived: false })
+			.select('_id trackingNumber title status links')
+			.lean()
+	]);
+
+	const own = (self?.links ?? []).map((l: any) => ({
+		linkId: l._id,
+		taskId: l.taskId,
+		type: l.type as KanbanLinkType,
+		note: l.note,
+		direction: 'declared' as const,
+		ownerTaskId: taskId
+	}));
+
+	const derived = inbound.flatMap((t: any) =>
+		(t.links ?? [])
+			.filter((l: any) => l.taskId === taskId)
+			.map((l: any) => ({
+				linkId: l._id,
+				taskId: t._id,
+				type: LINK_INVERSE[l.type as KanbanLinkType] ?? 'relates_to',
+				note: l.note,
+				direction: 'derived' as const,
+				ownerTaskId: t._id
+			}))
+	);
+
+	const all = [...own, ...derived];
+	if (!all.length) return [];
+
+	// Hydrate the far side so the UI can render a labelled, clickable chip
+	// without a second round trip.
+	const others: any[] = await KanbanTask.find({ _id: { $in: all.map((l) => l.taskId) } })
+		.select('_id trackingNumber title status itemType')
+		.lean();
+	const byId = new Map(others.map((t: any) => [t._id, t]));
+
+	return all.map((l) => {
+		const other = byId.get(l.taskId);
+		return {
+			...l,
+			label: LINK_LABEL[l.type as KanbanLinkType] ?? l.type,
+			trackingNumber: other?.trackingNumber ?? null,
+			title: other?.title ?? '(deleted task)',
+			status: other?.status ?? null,
+			itemType: other?.itemType ?? null
+		};
+	});
+}
+
+/**
+ * Add a link to an existing task. Self-links and duplicates are rejected rather
+ * than quietly collapsing, so the caller sees what actually happened.
+ */
+export async function addLink(
+	taskId: string,
+	link: { taskId: string; type?: KanbanLinkType; note?: string },
+	actor: TransitionActor
+) {
+	await connectDB();
+	const now = new Date();
+
+	if (link.taskId === taskId) {
+		throw new TransitionError('REASON_REQUIRED', 'A task cannot be linked to itself.');
+	}
+
+	const task: any = await KanbanTask.findById(taskId).select('links').lean();
+	if (!task) throw new TransitionError('NOT_FOUND', `Task ${taskId} not found.`);
+
+	const type = link.type ?? 'relates_to';
+	const existing = (task.links ?? []).find((l: any) => l.taskId === link.taskId && l.type === type);
+	if (existing) return { added: false as const, linkId: existing._id };
+
+	const [resolved] = await resolveLinks([{ ...link, type }], actor.username, now);
+
+	await KanbanTask.findByIdAndUpdate(taskId, {
+		$push: {
+			links: resolved,
+			activityLog: {
+				_id: generateId(),
+				action: 'link_added',
+				details: { taskId: link.taskId, type, via: actor.via },
+				createdAt: now,
+				createdBy: actor.username
+			}
+		}
+	});
+
+	await AuditLog.create({
+		_id: generateId(),
+		tableName: 'kanban_tasks',
+		recordId: taskId,
+		action: 'UPDATE',
+		newData: { link: { taskId: link.taskId, type }, via: actor.via },
+		changedBy: actor.username,
+		changedAt: now
+	});
+
+	return { added: true as const, linkId: resolved._id };
+}
+
+/** Remove a declared link by its subdocument id. Derived edges are not removable
+ *  from this side — the owning task has to drop them, which readLinks makes obvious. */
+export async function removeLink(taskId: string, linkId: string, actor: TransitionActor) {
+	await connectDB();
+	const now = new Date();
+
+	const res = await KanbanTask.findByIdAndUpdate(
+		taskId,
+		{
+			$pull: { links: { _id: linkId } },
+			$push: {
+				activityLog: {
+					_id: generateId(),
+					action: 'link_removed',
+					details: { linkId, via: actor.via },
+					createdAt: now,
+					createdBy: actor.username
+				}
+			}
+		},
+		{ new: true }
+	)
+		.select('_id')
+		.lean();
+
+	if (!res) throw new TransitionError('NOT_FOUND', `Task ${taskId} not found.`);
+
+	await AuditLog.create({
+		_id: generateId(),
+		tableName: 'kanban_tasks',
+		recordId: taskId,
+		action: 'UPDATE',
+		newData: { removedLinkId: linkId, via: actor.via },
+		changedBy: actor.username,
+		changedAt: now
+	});
+
+	return { removed: true as const };
 }
 
 /**
  * Standard creation path: everything starts as a Tier 1 'captured' option at
- * the bottom of its project's rank scope. There is deliberately no status
- * argument — entering Tier 2 happens only through replenishment (KB2-02).
+ * the bottom of the global Tier 1 rank order (KB2-16: one flat list). There is
+ * deliberately no status argument — entering Tier 2 happens only through
+ * replenishment (KB2-02).
  */
 export async function createKanbanItem(opts: CreateKanbanItemOptions) {
 	await connectDB();
 	const now = new Date();
-	const board = opts.board ?? 'ops';
 
 	if (opts.itemType === 'spike') {
 		if (!opts.spike?.question?.trim() || !opts.spike?.timebox?.amount) {
@@ -222,10 +408,8 @@ export async function createKanbanItem(opts: CreateKanbanItemOptions) {
 		}
 	}
 
-	// Append to the bottom of the Tier 1 rank scope (board + project).
+	// Append to the bottom of the global Tier 1 rank order.
 	const last: any = await KanbanTask.findOne({
-		board,
-		'project._id': opts.project?._id ?? null,
 		status: { $in: ['captured', 'processed'] },
 		archived: false
 	})
@@ -234,24 +418,39 @@ export async function createKanbanItem(opts: CreateKanbanItemOptions) {
 		.lean();
 	const rank = (last?.rank ?? 0) + 1;
 
+	// KB2-20: resolve declared links before insert. A link to a task that does
+	// not exist is a data error, not a silent no-op — fail the create so the
+	// caller learns the id is wrong instead of shipping a dangling edge.
+	const links = await resolveLinks(opts.links, opts.actor.username, now);
+
+	// Allocated before insert so the number is on the card from the first read.
+	// If the counter is unreachable the create still proceeds unnumbered rather
+	// than losing the option — backfill-tracking-numbers.ts closes the gap.
+	let trackingNumber: string | undefined;
+	try {
+		trackingNumber = await nextTrackingNumber('task');
+	} catch (err) {
+		console.error('[kanban] tracking number allocation failed, creating unnumbered', err);
+	}
+
 	const task = await KanbanTask.create({
 		_id: generateId(),
+		trackingNumber,
 		title: opts.title.trim(),
 		description: opts.description || undefined,
 		status: 'captured',
-		board,
 		rank,
 		itemType: opts.itemType ?? 'deliverable',
 		origin: opts.origin ?? 'planned',
 		spawnedFrom: opts.spawnedFrom || undefined,
 		parentTaskId: opts.parentTaskId || undefined,
-		project: opts.project ?? undefined,
 		assignee: opts.assignee ?? undefined,
 		dueDate: opts.dueDate,
 		tags: opts.tags ?? [],
 		source: opts.source,
 		sourceRef: opts.sourceRef,
 		spike: opts.spike,
+		links,
 		statusChangedAt: now,
 		createdBy: opts.actor.username,
 		activityLog: [{
@@ -268,7 +467,7 @@ export async function createKanbanItem(opts: CreateKanbanItemOptions) {
 		tableName: 'kanban_tasks',
 		recordId: task._id,
 		action: 'INSERT',
-		newData: { title: opts.title.trim(), board, status: 'captured', origin: opts.origin ?? 'planned', via: opts.actor.via },
+		newData: { title: opts.title.trim(), status: 'captured', origin: opts.origin ?? 'planned', via: opts.actor.via },
 		changedBy: opts.actor.username,
 		changedAt: now
 	});

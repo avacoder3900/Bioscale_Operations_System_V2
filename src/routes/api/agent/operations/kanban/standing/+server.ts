@@ -29,7 +29,7 @@ export const POST: RequestHandler = async ({ request }) => {
 	if (!actor?.trim()) return json({ success: false, error: 'actor (username) is required' }, { status: 400 });
 
 	if (targetId) {
-		const allowed = ['name', 'metric', 'target', 'reorderPoint', 'batchSize', 'spawnItemType', 'active', 'notes', 'board', 'autoCommit', 'spawnSizeClass', 'templateId'];
+		const allowed = ['name', 'metric', 'target', 'reorderPoint', 'batchSize', 'spawnItemType', 'active', 'notes', 'autoCommit', 'spawnSizeClass', 'templateId'];
 		const $set: Record<string, unknown> = {};
 		for (const k of allowed) if (fields[k] !== undefined) $set[k] = fields[k];
 		if (!Object.keys($set).length) return json({ success: false, error: 'No updatable fields provided' }, { status: 400 });
@@ -52,7 +52,7 @@ export const POST: RequestHandler = async ({ request }) => {
 	const created: any = await StandingTarget.create({
 		_id: generateId(),
 		name, metric, target, reorderPoint, batchSize,
-		spawnItemType: fields.spawnItemType, board: fields.board, notes: fields.notes,
+		spawnItemType: fields.spawnItemType, notes: fields.notes,
 		autoCommit: fields.autoCommit, spawnSizeClass: fields.spawnSizeClass, templateId: fields.templateId,
 		createdBy: actor.trim()
 	});

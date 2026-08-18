@@ -1,23 +1,20 @@
 import { json } from '@sveltejs/kit';
 import { requireAgentApiKey } from '$lib/server/api-auth';
-import { connectDB, KanbanTask, KanbanProject } from '$lib/server/db';
-import { legalStatusesFor } from '$lib/shared/kanban-status';
+import { connectDB, KanbanTask } from '$lib/server/db';
+import { ALL_STATUSES } from '$lib/shared/kanban-status';
 import type { RequestHandler } from './$types';
 
-// All statuses legal on the ops board (i.e. everything except 'review').
-const COLUMNS = legalStatusesFor('ops');
+// KB2-16: one board, every status is a column.
+const COLUMNS = ALL_STATUSES;
 
 export const GET: RequestHandler = async ({ request }) => {
 	requireAgentApiKey(request);
 	await connectDB();
 
-	const [projects, tasks] = await Promise.all([
-		KanbanProject.find({ isActive: true }).sort({ sortOrder: 1 }).lean(),
-		KanbanTask.find({ archived: { $ne: true } })
-			.select('_id title status rank sizeClass assignee project dueDate tags activityLog statusChangedAt')
-			.sort({ rank: 1 })
-			.lean()
-	]);
+	const tasks = await KanbanTask.find({ archived: { $ne: true } })
+		.select('_id title status rank sizeClass assignee dueDate tags activityLog statusChangedAt')
+		.sort({ rank: 1 })
+		.lean();
 
 	const tasksByStatus: Record<string, any[]> = {};
 	for (const col of COLUMNS) {
@@ -39,7 +36,6 @@ export const GET: RequestHandler = async ({ request }) => {
 			rank: t.rank ?? 0,
 			sizeClass: t.sizeClass ?? null,
 			assignee: t.assignee,
-			project: t.project,
 			dueDate: t.dueDate,
 			tags: t.tags,
 			recentActivity: (t.activityLog || []).slice(-5).map((a: any) => ({
@@ -55,7 +51,6 @@ export const GET: RequestHandler = async ({ request }) => {
 	return json({
 		success: true,
 		data: {
-			projects: (projects as any[]).map(p => ({ id: p._id, name: p.name, color: p.color })),
 			columns: COLUMNS.map(status => ({
 				status,
 				tasks: tasksByStatus[status] || []

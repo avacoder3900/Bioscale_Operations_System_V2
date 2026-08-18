@@ -1,11 +1,12 @@
 /**
  * Quick Wax Fill Test shortcut.
  *
- * Bulk-scan cartridge barcodes and land them all at `wax_filled` — the state a
- * cartridge sits in right after the wax fill, before it is stored
- * (wax_filled → wax_stored → photo → wax_qc → wax_ready | wax_rejected).
+ * Bulk-scan cartridge barcodes and land them all at `wax_filled` — the wax-stage
+ * resting state (WAX-SIMPLIFY-1: wax_filled IS stored; visual pass is implicit,
+ * rejects go through Wax Reject → wax_rejected; wax_filled | wax_ready → reagent).
+ * Quick Wax Store was folded into this page.
  *
- * Like Quick Wax Store, this ACCEPTS BARCODES THAT DON'T EXIST YET: a not-found
+ * This ACCEPTS BARCODES THAT DON'T EXIST YET: a not-found
  * barcode is CREATED as a fresh cartridge at wax_filled so you can conjure test
  * carts on the fly. A barcode that already exists is moved to wax_filled from
  * wherever it was. Every cart gets a "Quick Wax Fill" note, the `usedForTestFill`

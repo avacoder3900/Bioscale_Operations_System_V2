@@ -10,14 +10,11 @@
 // Tier 1 — upstream, uncommitted. Unbounded inventory of options.
 export const TIER1_STATUSES = ['captured', 'processed', 'icebox', 'declined'] as const;
 
-// Tier 2 — downstream, committed. Bounded, globally ordered per board.
+// Tier 2 — downstream, committed. Bounded, one globally ordered queue.
 export const TIER2_STATUSES = ['ready', 'wip', 'waiting', 'blocked', 'review', 'done'] as const;
 
 export const ALL_STATUSES = [...TIER1_STATUSES, ...TIER2_STATUSES] as const;
 export type KanbanStatus = (typeof ALL_STATUSES)[number];
-
-export const BOARDS = ['ops', 'software'] as const;
-export type KanbanBoard = (typeof BOARDS)[number];
 
 export const ITEM_TYPES = ['deliverable', 'spike', 'chore'] as const;
 export type KanbanItemType = (typeof ITEM_TYPES)[number];
@@ -30,6 +27,29 @@ export type KanbanSizeClass = (typeof SIZE_CLASSES)[number];
 
 export const ORIGINS = ['planned', 'discovered'] as const;
 export type KanbanOrigin = (typeof ORIGINS)[number];
+
+// KB2-20: task-to-task link vocabulary. Stored one-way; the reverse direction
+// is derived at read time via LINK_INVERSE so a link can never be half-written.
+export const LINK_TYPES = ['blocks', 'blocked_by', 'relates_to'] as const;
+export type KanbanLinkType = (typeof LINK_TYPES)[number];
+
+export const LINK_INVERSE: Readonly<Record<KanbanLinkType, KanbanLinkType>> = {
+	blocks: 'blocked_by',
+	blocked_by: 'blocks',
+	relates_to: 'relates_to'
+};
+
+export const LINK_LABEL: Readonly<Record<KanbanLinkType, string>> = {
+	blocks: 'Blocks',
+	blocked_by: 'Blocked by',
+	relates_to: 'Relates to'
+};
+
+const LINK_SET: ReadonlySet<string> = new Set(LINK_TYPES);
+
+export function isKanbanLinkType(s: string): s is KanbanLinkType {
+	return LINK_SET.has(s);
+}
 
 const TIER1_SET: ReadonlySet<string> = new Set(TIER1_STATUSES);
 const TIER2_SET: ReadonlySet<string> = new Set(TIER2_STATUSES);
@@ -48,10 +68,8 @@ export function isTierCrossing(from: KanbanStatus, to: KanbanStatus): boolean {
 	return tierOf(from) !== tierOf(to);
 }
 
-/** `review` (PR open) is legal only on the software board. */
-export function legalStatusesFor(board: KanbanBoard): readonly KanbanStatus[] {
-	return board === 'software' ? ALL_STATUSES : ALL_STATUSES.filter((s) => s !== 'review');
-}
+// KB2-16: the ops/software board discriminator is gone — one board, tags carry
+// the distinction (`software` is just a tag) and `review` is legal everywhere.
 
 export const STATUS_META: Record<KanbanStatus, { label: string; color: string; tier: 1 | 2 }> = {
 	captured: { label: 'Captured', color: '#94a3b8', tier: 1 },

@@ -12,7 +12,7 @@
  */
 import { connectDB, KanbanTask } from '$lib/server/db';
 import { getKanbanPolicy } from './policy.js';
-import type { KanbanBoard, KanbanSizeClass } from '$lib/shared/kanban-status';
+import type { KanbanSizeClass } from '$lib/shared/kanban-status';
 
 const DAY = 86400000;
 const MIN_SLE_SAMPLES = 8;
@@ -23,9 +23,8 @@ function percentile(sorted: number[], p: number): number | null {
 }
 
 /** Cycle-time samples (days, wip → done) per size class, archived included. */
-async function cycleTimeSamples(board: KanbanBoard) {
+async function cycleTimeSamples() {
 	const done = (await KanbanTask.find({
-		board,
 		status: 'done',
 		wipDate: { $ne: null },
 		completedDate: { $ne: null }
@@ -48,10 +47,10 @@ async function cycleTimeSamples(board: KanbanBoard) {
  * once there is data; policy seed until then; "insufficient data" below the
  * minimum sample size — never a fabricated number.
  */
-export async function sle(board: KanbanBoard = 'ops') {
+export async function sle() {
 	const policy = await getKanbanPolicy();
 	const pct = policy?.sle?.percentile ?? 85;
-	const samples = await cycleTimeSamples(board);
+	const samples = await cycleTimeSamples();
 	const out: Record<string, { days: number | null; n: number; source: 'measured' | 'seed' | 'insufficient' }> = {};
 	for (const sc of ['short', 'medium', 'long'] as KanbanSizeClass[]) {
 		const arr = samples[sc] ?? [];
@@ -74,22 +73,20 @@ export async function sle(board: KanbanBoard = 'ops') {
  * Flow debt = this item aged while items started after it reached done —
  * the measurable signature of cherry-picking, diagnosed in the work.
  */
-export async function workItemAge(board: KanbanBoard = 'ops') {
+export async function workItemAge() {
 	await connectDB();
 	const now = Date.now();
-	const sleData = await sle(board);
+	const sleData = await sle();
 
 	const active = (await KanbanTask.find({
-		board,
 		status: { $in: ['wip', 'waiting', 'blocked', 'review'] },
 		archived: false
 	})
-		.select('title status sizeClass classOfService itemType wipDate committedAt project blockedReason waitingOn waitingUntil rank')
+		.select('title status sizeClass classOfService itemType wipDate committedAt tags blockedReason waitingOn waitingUntil rank')
 		.lean()) as any[];
 
 	// Overtaken-by set: done items whose wip started after each active item's start.
 	const recentDone = (await KanbanTask.find({
-		board,
 		status: 'done',
 		wipDate: { $ne: null },
 		completedDate: { $gte: new Date(now - 30 * DAY) }
@@ -108,7 +105,7 @@ export async function workItemAge(board: KanbanBoard = 'ops') {
 			taskId: t._id,
 			title: t.title,
 			status: t.status,
-			project: t.project?.name,
+			tags: t.tags ?? [],
 			sizeClass: t.sizeClass,
 			classOfService: t.classOfService,
 			ageDays: ageDays === null ? null : Math.round(ageDays * 10) / 10,
@@ -125,10 +122,10 @@ export async function workItemAge(board: KanbanBoard = 'ops') {
 }
 
 /** discovered ÷ all over committed items, rolling window. Reserves queue capacity honestly. */
-export async function discoveredRatio(board: KanbanBoard = 'ops', windowDays = 30) {
+export async function discoveredRatio(windowDays = 30) {
 	await connectDB();
 	const since = new Date(Date.now() - windowDays * DAY);
-	const committed = (await KanbanTask.find({ board, committedAt: { $gte: since } })
+	const committed = (await KanbanTask.find({ committedAt: { $gte: since } })
 		.select('origin')
 		.lean()) as any[];
 	const discovered = committed.filter((t) => t.origin === 'discovered').length;
@@ -145,10 +142,10 @@ export async function discoveredRatio(board: KanbanBoard = 'ops', windowDays = 3
 }
 
 /** Weekly done counts (throughput trend) + expedite share — aggregates, never per-person. */
-export async function throughputAndExpedite(board: KanbanBoard = 'ops', weeks = 8) {
+export async function throughputAndExpedite(weeks = 8) {
 	await connectDB();
 	const since = new Date(Date.now() - weeks * 7 * DAY);
-	const done = (await KanbanTask.find({ board, status: 'done', completedDate: { $gte: since } })
+	const done = (await KanbanTask.find({ status: 'done', completedDate: { $gte: since } })
 		.select('completedDate classOfService')
 		.lean()) as any[];
 	const byWeek: Record<string, number> = {};
@@ -157,7 +154,7 @@ export async function throughputAndExpedite(board: KanbanBoard = 'ops', weeks = 
 		const week = new Date(d.getTime() - ((d.getUTCDay() + 6) % 7) * DAY).toISOString().slice(0, 10);
 		byWeek[week] = (byWeek[week] ?? 0) + 1;
 	}
-	const committed30 = (await KanbanTask.find({ board, committedAt: { $gte: new Date(Date.now() - 30 * DAY) } })
+	const committed30 = (await KanbanTask.find({ committedAt: { $gte: new Date(Date.now() - 30 * DAY) } })
 		.select('classOfService')
 		.lean()) as any[];
 	const expedite = committed30.filter((t) => t.classOfService === 'expedite').length;
@@ -180,11 +177,10 @@ export async function throughputAndExpedite(board: KanbanBoard = 'ops', weeks = 
  * in transitions[]. Diagnostic and protective — it distinguishes "slow" from
  * "sat in waiting nine days"; blocked time is a SYSTEM problem.
  */
-export async function flowEfficiency(board: KanbanBoard = 'ops', windowDays = 60) {
+export async function flowEfficiency(windowDays = 60) {
 	await connectDB();
 	const since = new Date(Date.now() - windowDays * DAY);
 	const done = (await KanbanTask.find({
-		board,
 		status: 'done',
 		completedDate: { $gte: since },
 		wipDate: { $ne: null }
@@ -223,12 +219,12 @@ export async function flowEfficiency(board: KanbanBoard = 'ops', windowDays = 60
 }
 
 /** The Flow view / MCP one-call. No people anywhere in this payload. */
-export async function flowMetrics(board: KanbanBoard = 'ops') {
+export async function flowMetrics() {
 	const [age, ratio, throughput, efficiency] = await Promise.all([
-		workItemAge(board),
-		discoveredRatio(board),
-		throughputAndExpedite(board),
-		flowEfficiency(board)
+		workItemAge(),
+		discoveredRatio(),
+		throughputAndExpedite(),
+		flowEfficiency()
 	]);
-	return { board, workItemAge: age, discoveredRatio: ratio, ...throughput, flowEfficiency: efficiency };
+	return { workItemAge: age, discoveredRatio: ratio, ...throughput, flowEfficiency: efficiency };
 }
