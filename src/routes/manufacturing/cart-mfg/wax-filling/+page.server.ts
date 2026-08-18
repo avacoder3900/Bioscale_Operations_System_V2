@@ -892,6 +892,24 @@ export const actions: Actions = {
 			protocolParameters[def.variableName] = value;
 		}
 
+		// Partial-deck runs (2026-08-18). The protocol's `cartridges` is the END
+		// cartridge (it slices the first N cartridges of the destination list) and
+		// `resume_cartridge` is the START. In BIMS `cartridges` is locked to the
+		// number of cartridges the operator SCANNED into the run, so for a run that
+		// starts partway (e.g. positions 16..24 = 9 scanned) the natural meaning is
+		// "this many cartridges FROM the start". Translate count -> end here so the
+		// operator never has to do that arithmetic (and can't get an empty run).
+		const declared = new Set(paramSchema.map((d) => d.variableName));
+		const startCart = Number(runTimeParameterValues['resume_cartridge'] ?? 1);
+		if (declared.has('resume_cartridge') && startCart > 1) {
+			const count = Number(runTimeParameterValues['cartridges'] ?? 24);
+			const endCart = Math.min(24, startCart + count - 1);
+			runTimeParameterValues['cartridges'] = endCart;
+			protocolParameters['cartridges'] = endCart;
+			protocolParameters['cartridgesScanned'] = count;
+			console.log(`[wax startRun] partial deck: start cartridge ${startCart}, ${count} scanned -> end cartridge ${endCart}`);
+		}
+
 		// PRD 6: inject the BIMS-native calibration params (global offset +
 		// calibrator point) for robots that have a captured offset. No-op for the
 		// pre-cutover protocol (none of these RTPs declared) — see calibration-rtps.

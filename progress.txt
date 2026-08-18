@@ -7960,6 +7960,80 @@ What this deployment is for: Zebra page with calibrated ZT230 defaults + Content
 for the first mint→print→confirm run on the physical printer.
 
 ================================================================================
+2026-08-18 — master — B07 wax "went to the reagent hole" investigation + tip-calibration guards (opt-in, adjust cap, wax calibration check)
+================================================================================
+INVESTIGATION (from B07's own run logs, runs 096d4346 / 3831da1d on protocol ec109ceb, plus Mongo
++ deck_calibration_edits): operator saw the wax tip land on the REAGENT hole on the middle carrier
+of deck-004 while the Studio positions looked right, and suspected the .py mixes up locations.
+- The .py well mapping is correct: destinations [X2,X4,X6,X8]...[X10,X12,X14,X16]... (even = wax);
+  carrier 2 used the same tip and the same tip-cal adjust as carrier 1; run labwareOffsets all 0;
+  bundled deck-004 == Mongo (freshness gate working). Nothing carrier-specific in the code.
+- The tip-cal adjust IS the error: B07 wax runs applied x=-1.5..-3.1mm (y +0.4..+1.1) — the wax
+  and reagent holes are only ~3.5mm apart, so the "bend correction" walks the tip onto the reagent
+  hole. Cause: wax (p20) and reagent (p300) protocols probe from DIFFERENT start points
+  (cal_x-0.6/cal_y-6.5 vs cal_x-1.4/cal_y-7.0) against ONE 'C' baseline that was zeroed for the
+  reagent recipe. Missed-probe landmine seen live: 3831da1d's 2nd tip walked 5mm on both axes;
+  6edf15cd (08-13, deck-002 baseline -4.5/1.2) dispensed with adjust (-6.8,-1.3).
+- Also found: bridge daemon Calibrate-tip uses the WAX recipe for all mounts (0.8mm x bias for
+  reagent Studio teaching — explains the B14 07-29 residual); deck-004 carrier 2/3 wax wells were
+  group-shifted 08-03 and never per-hole taught (only carrier 1 was, 08-05); deck-003's wax sits on
+  the wrong side (-3.9 x) of its reagent partners. The 'C' baseline is per DECK (calibrator = the
+  carriage's particle device).
+
+BUILT (protocols/Wax_Filling_GEN7_Cartridge.py, now 22 RTPs):
+- use_tip_calibration (default OFF, mirrors reagent): OFF skips the 'C' read + X/Y probe and
+  dispenses at the taught wax hole — WYSIWYG with the Deck Calibration Studio.
+- max_tip_adjust (default 1.5mm): missed limit switch or |adjust| > cap = REJECTED probe -> retry
+  once with a fresh tip -> else pause + continue at nominal (0,0). Never dispenses a rejected adjust.
+- run_calibration_check (default OFF): tours 9 wax holes (X2,L6,A8,A10,L14,X16,X18,L22,A24) with
+  the exact fill motion incl. adjust, pausing at each, then asks before dispensing.
+- dispense_depth comments corrected (default -1.0 = hover 1mm above the rim).
+- wax-filling/+page.svelte WAX_PARAM_DEFAULTS pre-selects both bools OFF (server posts only
+  schema-declared params, so R04/B14's older uploads are unaffected until they resync).
+- scripts/deploy-wax-tipcal-guards.cjs: gated deploy (analysis clean, required RTPs, geometry
+  identical to the robot's current wax protocol) + audit log; ROBOT=b07|b14|r04.
+- Stored wax OpentronProtocol .py synced to this build (scripts/set-stored-wax-py.cjs, pre-image in
+  calibration-backups/) so the run-start auto-resync cannot downgrade the code.
+NOTE: R04/B14 will inherit tip-cal OFF the next time the freshness gate re-bundles their wax
+protocol — run RUN CALIBRATION CHECK there first. Not yet built: per-mount probe recipes in the
+bridge daemon; per-run adjust logging into BIMS.
+npm run check: 11 errors — unchanged baseline.
+
+Deployment: robot protocol — B07 (hidden-leaf) wax entry repointed ec109ceb -> 5f048b1f-7cf0-40ab-9fee-f6e3be9fe120
+Source: branch master @ commit 4dd04f0f
+Retrieve this exact code: git checkout master at commit 4dd04f0f
+What this deployment is for: wax fills land where the Studio shows (tip-cal OFF), bad probes can no longer push the tip into the reagent hole, operator can pre-check 9 wax holes.
+
+Deployment: production — Vercel auto-deploy from master push (wax run-start form defaults)
+Source: branch master @ commit 4dd04f0f
+Retrieve this exact code: git checkout master at commit 4dd04f0f
+What this deployment is for: USE TIP CALIBRATION / RUN CALIBRATION CHECK pre-selected OFF on the wax run-start form.
+
+================================================================================
+2026-08-18 — master — wax: start a fill partway through the deck (Start at cartridge / hole)
+================================================================================
+Operator re-taught deck-004 wax and wanted to fill only positions 16..24 without re-running 1..15.
+Ported resume_window() + resume_cartridge/resume_hole RTPs from feat/fill-resume-after-tip-break
+onto the guarded wax build (now 24 RTPs). START = (cartridge, hole) 1-based; END = existing
+`cartridges`. Slices on cartridge = row boundaries (batching intact); source-volume model reduced
+by the skipped wells + "volume needed for the remaining N wells" comment; empty window pauses.
+BIMS wax startRun: `cartridges` is locked to the SCANNED count, so with a start > 1 the server
+converts count -> end (start 16 + 9 scanned = end 24; protocolParameters.cartridgesScanned kept).
+deploy-wax-tipcal-guards.cjs gate changed to "bundled == live Mongo" (+ delta vs current protocol
+printed) so a freshly re-taught deck can be deployed. Stored wax .py re-synced (pre-image in
+calibration-backups/). npm run check: 11 errors — baseline. Unit-checked resume_window
+(cart 16..24 -> wells 180..288, first well C10).
+
+Deployment: robot protocol — B07 wax entry repointed 9c2a2abd -> 2f616b20-ace4-49c6-8f44-808e01276ca2
+Source: branch master @ commit 87450841
+Retrieve this exact code: git checkout master at commit 87450841
+What this deployment is for: fill cartridges 16..24 on the re-taught deck-004 without refilling 1..15.
+
+Deployment: production — Vercel auto-deploy from master push (count->end translation in startRun)
+Source: branch master @ commit 87450841
+Retrieve this exact code: git checkout master at commit 87450841
+What this deployment is for: "Start at cartridge 16" with 9 scanned cartridges runs 16..24 instead of an empty run.
+
 2026-08-18 — jq/barcode-scanning → master — ZT230 final calibration (ruler-measured), 100-label live run clean, session notes
 ================================================================================
 Full narrative of the bench session (setup gotchas, every calibration step and why,
