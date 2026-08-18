@@ -8109,3 +8109,23 @@ positions. Over-cap adjust (tip present) keeps retry-once-then-nominal. Requires
 Deployment: robot protocol — B07 wax entry c25df215 -> ce11c99f-e70b-4284-9dc7-28fcb786bb33 (stored .py synced)
 Source: branch master @ this commit
 What this deployment is for: a missed tip pickup can no longer fill with a bare nozzle.
+
+================================================================================
+2026-08-18 — master — wax: mid-run tip swap (swap + recalibrate + resume at the same well)
+================================================================================
+Operator: probes miss the calibrator on some runs / tips fail; wanted to change the tip during a paused
+run, calibrate it, and continue exactly where the run was. OT-2 protocols can't take commands mid-run,
+so: wax run page "Tip problem?" card (running or paused) -> action requestTipSwap -> Ot2BridgeCommand
+kind tip_swap_request (new enum) -> daemon execute_tip_swap_request writes
+/data/ot2-bridge/tip-swap-request.json -> the wax protocol polls it before every dispense + at batch
+start. On request: blow-out un-dispensed wax to source; 'rack' = drop + next tracked tip; 'hand' =
+raise 60mm over calibrator + pause "pull old tip off, push new one on, Resume" (pick_up=False path
+keeps the API's tip model); re-probe (no-tip/cap guards apply); re-aspirate; continue at the
+interrupted well. Stale request cleared at run start; Cancel button removes an un-acted request.
+npm run check: 11 errors — baseline.
+
+Deployment: robot protocol — B07 wax entry ce11c99f -> 1f7395c5-c908-40e9-a770-1065926fac2b (stored .py synced)
+Deployment: robot daemon — B07 /data/ot2-bridge/ot2-bridge.py updated + ot2-bridge restarted 20:32Z (active). B14/R04 daemons NOT yet updated.
+Deployment: production — Vercel auto-deploy from master push (Tip problem? card + requestTipSwap action)
+Source: branch master @ this commit
+What this deployment is for: swap a bad tip mid-run (robot or by hand), recalibrate, resume at the same well.
