@@ -46,33 +46,20 @@ export interface ApplyDeckEditResult {
 
 const n = (v: unknown) => (Number.isFinite(Number(v)) ? Number(v) : 0);
 
-// ── Physical-bounds backstop. NOT a magnitude cap (corrections can be large) — this
-// rejects only edits that push a well OFF the labware's own body. The OT-2 labware
-// schema requires every well coord within the labware: 0 ≤ x ≤ xDimension,
-// 0 ≤ y ≤ yDimension, 0 ≤ z. A jog past an edge (e.g. y = −0.5) makes the WHOLE def
-// fail registration on the robot ("Input should be a valid integer" / "≥ 0"), which
-// silently breaks move-to-hole wherever that deck is loaded (the 2026-06 deck-003
-// row-A bug). Z keeps a generous upper margin (catches gross runaway like deck-004's
-// 82mm-on-a-12.7mm-deck). Real holes are always well inside, so nothing legit is blocked.
-const Z_UPPER_MARGIN_MM = 40;
-
-function dimsOf(def: any): { xMax: number; yMax: number; zMax: number } {
-	const d = def?.definition?.dimensions ?? {};
-	const x = Number(d.xDimension), y = Number(d.yDimension), z = Number(d.zDimension);
-	return {
-		xMax: Number.isFinite(x) && x > 0 ? x : Infinity,
-		yMax: Number.isFinite(y) && y > 0 ? y : Infinity,
-		zMax: Number.isFinite(z) && z > 0 ? z + Z_UPPER_MARGIN_MM : Infinity
-	};
-}
-
-/** Returns a reason string if `after` is off the labware body, else null. */
-function outOfBounds(after: Vec3, b: { xMax: number; yMax: number; zMax: number }): string | null {
-	if (after.x < 0 || after.x > b.xMax) return `x ${after.x.toFixed(2)}mm outside the labware [0, ${b.xMax}]`;
-	if (after.y < 0 || after.y > b.yMax) return `y ${after.y.toFixed(2)}mm outside the labware [0, ${b.yMax}]`;
-	if (after.z < 0 || after.z > b.zMax) return `z ${after.z.toFixed(2)}mm outside the labware [0, ${Number.isFinite(b.zMax) ? b.zMax.toFixed(1) : '∞'}]`;
-	return null;
-}
+// ── Positional bounds: INTENTIONALLY NOT ENFORCED (2026-08-18, by request).
+// Fill holes may be moved to any coordinate — negative, past xDimension/yDimension,
+// or arbitrarily high in Z. The only validation left is numeric sanity (`n()` below
+// coerces non-finite input to 0), so a well always ends up with real numbers.
+//
+// What this used to guard, and what you now own manually:
+//   • The OT-2 labware schema wants 0 ≤ x ≤ xDimension, 0 ≤ y ≤ yDimension, 0 ≤ z.
+//     A coord outside that can make the robot reject the WHOLE definition at
+//     registration, which silently breaks move-to-hole for every deck that loads it
+//     (the 2026-06 deck-003 row-A bug).
+//   • Gross Z runaway (e.g. 82mm on a 12.7mm deck) feeds the arc-height math and
+//     produced the "Arc out of bounds in Z" gantry error.
+// Both are now possible again on purpose. Verify a moved hole on the robot before
+// trusting a deck in production.
 
 export async function applyDeckEdit(input: ApplyDeckEditInput): Promise<ApplyDeckEditResult> {
 	await connectDB();
@@ -87,14 +74,7 @@ export async function applyDeckEdit(input: ApplyDeckEditInput): Promise<ApplyDec
 	const before: Vec3 = { x: n(well.x), y: n(well.y), z: n(well.z) };
 	const after: Vec3 = { x: before.x + delta.x, y: before.y + delta.y, z: before.z + delta.z };
 
-	// Physical-bounds backstop (no magnitude cap — corrections can be large).
-	const oob = outOfBounds(after, dimsOf(def));
-	if (oob) {
-		throw new Error(
-			`Rejected: ${wellName} ${oob}. A well can't be moved off the deck's physical body ` +
-				`(the robot rejects the whole def otherwise). Re-capture within the labware.`
-		);
-	}
+	// No positional bounds check — any coordinate is accepted (see note above).
 
 	// 1. Mongo source of truth — set the well's coords (Mixed sub-path).
 	await LabwareDefinition.updateOne(
@@ -195,7 +175,6 @@ export async function applyDeckEditBatch(
 	const def = (await LabwareDefinition.findOne({ loadName: deckLoadName }).lean()) as any;
 	if (!def) throw new Error(`Labware definition "${deckLoadName}" not found in labware_definitions.`);
 	const wells = def.definition?.wells ?? {};
-	const dims = dimsOf(def);
 
 	const now = new Date();
 	const failed: { wellName: string; reason: string }[] = [];
@@ -211,11 +190,7 @@ export async function applyDeckEditBatch(
 		}
 		const before: Vec3 = { x: n(well.x), y: n(well.y), z: n(well.z) };
 		const after: Vec3 = { x: before.x + delta.x, y: before.y + delta.y, z: before.z + delta.z };
-		const oob = outOfBounds(after, dims);
-		if (oob) {
-			failed.push({ wellName, reason: oob });
-			continue;
-		}
+		// No positional bounds check — any coordinate is accepted (see note above).
 		setOps[`definition.wells.${wellName}.x`] = after.x;
 		setOps[`definition.wells.${wellName}.y`] = after.y;
 		setOps[`definition.wells.${wellName}.z`] = after.z;
@@ -314,7 +289,6 @@ export async function applyDeckEditsPerWell(
 	const def = (await LabwareDefinition.findOne({ loadName: deckLoadName }).lean()) as any;
 	if (!def) throw new Error(`Labware definition "${deckLoadName}" not found in labware_definitions.`);
 	const wells = def.definition?.wells ?? {};
-	const dims = dimsOf(def);
 
 	const now = new Date();
 	const failed: { wellName: string; reason: string }[] = [];
@@ -330,11 +304,7 @@ export async function applyDeckEditsPerWell(
 		}
 		const before: Vec3 = { x: n(well.x), y: n(well.y), z: n(well.z) };
 		const after: Vec3 = { x: before.x + delta.x, y: before.y + delta.y, z: before.z + delta.z };
-		const oob = outOfBounds(after, dims);
-		if (oob) {
-			failed.push({ wellName, reason: oob });
-			continue;
-		}
+		// No positional bounds check — any coordinate is accepted (see note above).
 		setOps[`definition.wells.${wellName}.x`] = after.x;
 		setOps[`definition.wells.${wellName}.y`] = after.y;
 		setOps[`definition.wells.${wellName}.z`] = after.z;

@@ -409,15 +409,18 @@
 		}
 	}
 
-	// Build the post-apply message: report count, any guard-rejected wells, and
-	// whether the open run already reflects it (absolute moves) or needs a reload.
+	// Build the post-apply message: report count, any skipped wells, and whether the
+	// open run already reflects it (absolute moves) or needs a reload. Position is no
+	// longer restricted, so `failed` now only ever means "well not found".
 	function applyMsg(verb: string, r: any): string {
 		const liveNote = runId
 			? slotOrigin
 				? ' Live in this run — “Move to hole” reflects it now.'
 				: ' Move to a hole once to enable live updates (or Reload deck).'
 			: '';
-		const rej = r.failed?.length ? ` ⚠ ${r.failed.length} rejected (out of bounds).` : '';
+		const rej = r.failed?.length
+			? ` ⚠ ${r.failed.length} skipped (${r.failed.map((f: any) => `${f.wellName}: ${f.reason}`).join('; ')}).`
+			: '';
 		return `${verb} to ${r.applied} hole(s) — saved to BIMS.${rej}${liveNote} Re-upload (Sync) for real fills.`;
 	}
 
