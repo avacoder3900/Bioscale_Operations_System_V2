@@ -216,7 +216,7 @@ export async function demote(opts: {
 		throw new ReplenishError('NOT_ELIGIBLE', 'A wip item must leave wip (finish, block, or wait) before it can be demoted — deliberate friction.');
 	}
 	if (!['ready', 'waiting', 'blocked', 'review'].includes(task.status)) {
-		throw new ReplenishError('NOT_ELIGIBLE', `Status '${task.status}' is not a demotable Tier 2 state.`);
+		throw new ReplenishError('NOT_ELIGIBLE', `Status '${task.status}' is not a demotable Board state.`);
 	}
 
 	await transitionTask({
@@ -296,8 +296,31 @@ export async function replenishmentStatus() {
 		archived: false
 	})
 		.sort({ rank: 1, createdAt: 1 })
-		.select('_id title status rank tags itemType classOfService sizeClass origin dor spike')
+		.select('_id trackingNumber title status rank tags itemType classOfService sizeClass origin dor spike links')
 		.lean()) as any[];
+
+	// P1-4: blockers of each candidate — its own blocked_by links plus any task
+	// that declares it `blocks` this candidate. Warn (never hard-block) when a
+	// blocker isn't done: humans may consciously pull gated work.
+	const candidateIds = new Set(candidates.map((c) => c._id));
+	const inbound = (await KanbanTask.find({
+		archived: false,
+		links: { $elemMatch: { type: 'blocks', taskId: { $in: [...candidateIds] } } }
+	})
+		.select('_id links')
+		.lean()) as any[];
+	const blockerIdsByCandidate = new Map<string, Set<string>>();
+	const addBlocker = (cid: string, bid: string) => {
+		if (!blockerIdsByCandidate.has(cid)) blockerIdsByCandidate.set(cid, new Set());
+		blockerIdsByCandidate.get(cid)!.add(bid);
+	};
+	for (const c of candidates) for (const l of c.links ?? []) if (l.type === 'blocked_by') addBlocker(c._id, l.taskId);
+	for (const t of inbound) for (const l of t.links ?? []) if (l.type === 'blocks' && candidateIds.has(l.taskId)) addBlocker(l.taskId, t._id);
+	const allBlockerIds = [...new Set([...blockerIdsByCandidate.values()].flatMap((s) => [...s]))];
+	const blockerDocs = allBlockerIds.length
+		? ((await KanbanTask.find({ _id: { $in: allBlockerIds } }).select('_id trackingNumber title status').lean()) as any[])
+		: [];
+	const blockerById = new Map(blockerDocs.map((b) => [b._id, b]));
 
 	const wip = (await KanbanTask.find({ status: 'wip', archived: false })
 		.select('classOfService')
@@ -311,8 +334,14 @@ export async function replenishmentStatus() {
 		allocationTargetsPct: policy.allocation,
 		candidates: candidates.map((c) => {
 			const missing = dorMissingFields(c);
+			const isSoftware = (c.tags ?? []).includes('software');
+			const openBlockers = [...(blockerIdsByCandidate.get(c._id) ?? [])]
+				.map((bid) => blockerById.get(bid))
+				.filter((b) => b && b.status !== 'done')
+				.map((b) => ({ taskId: b._id, trackingNumber: b.trackingNumber ?? null, title: b.title, status: b.status }));
 			return {
 				taskId: c._id,
+				trackingNumber: c.trackingNumber ?? null,
 				title: c.title,
 				status: c.status,
 				tags: c.tags ?? [],
@@ -322,7 +351,20 @@ export async function replenishmentStatus() {
 				sizeClass: c.sizeClass,
 				origin: c.origin,
 				dorComplete: missing.length === 0,
-				dorMissing: missing
+				dorMissing: missing,
+				// P2-6.3: per-candidate checklist so the software handoff-brief rule is
+				// visible BEFORE a replenish attempt fails.
+				dorChecklist: {
+					deliverable: c.dor?.deliverable?.trim() ? 'ok' : 'missing',
+					handoffBrief: isSoftware ? (c.dor?.handoffBrief?.trim() ? 'ok' : 'missing') : 'n/a',
+					sizeClass: c.sizeClass ? 'ok' : 'missing',
+					classOfService: c.classOfService ? 'ok' : 'missing'
+				},
+				// P1-4: warning only — replenish still allows it.
+				blockedByOpen: openBlockers,
+				warning: openBlockers.length
+					? `blocked by open task(s): ${openBlockers.map((b) => `${b.trackingNumber ?? b.taskId} "${b.title}" (${b.status})`).join('; ')}`
+					: undefined
 			};
 		})
 	};

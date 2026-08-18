@@ -7820,3 +7820,66 @@ Retrieve this exact code: git checkout master at commit 4576a6ca
 What this deployment is for: first live test of /manufacturing/print-barcodes/zebra against
 the physical ZT230 via Zebra Browser Print (Avery page moved onto the shared batch service;
 OT2-TAILNET PRDs ride along as docs).
+================================================================================
+2026-08-18 — feat/kanban-tweaks — deliverable writable at any tier (capture → process pre-fill)
+================================================================================
+Jacob: "add a deliverables field that exists even for Tier 1 tasks, so we have the optionality
+to add a deliverable when defining Tier 1 tasks, and when they go to be processed whatever is
+in that field auto-populates the deliverables field there." dor.deliverable already existed on
+every KanbanTask and the Process modal already pre-filled from it — the gap was that nothing let
+you WRITE it before processing. Fixed (9b24c857): optional Deliverable input under the Tier 1
+capture box (inventory/+page.svelte + capture action → createKanbanItem dor option in
+transition.ts); "Deliverable (DoR)" textarea on the task detail edit form for every status
+(task/[taskId] load + update action; logs dor_updated when it changes); agent
+POST /api/agent/operations/kanban/tasks and MCP kanban_capture accept dor {deliverable,
+handoffBrief}. Not required until replenishment — the KB2-02 DoR floor is unchanged. The
+existing DoR dot on Tier 1 rows turns green as soon as a captured option carries a
+deliverable. MCP server version 3.0.0 → 3.0.1 (tool schema change, per convention).
+npm run check: 11 errors = baseline, 0 new.
+
+================================================================================
+2026-08-18 — feat/kanban-tweaks — "Tier 2" → "Board"; rank badge + pull-window language gone
+================================================================================
+Jacob: (1) rename Tier 2 to "Board" everywhere, Tier 1 stays; (2) drop the top-3 pull limit on
+the board — "if something has been committed to the board it has already been approved, we
+don't need another list of priority on the board." The pull-window GATE was already removed
+server-side this morning (6f6fc7c6, other machine); what remained was the visual priority
+list — the rank number badge on every Ready card and the "rank is a suggestion" caption — plus
+stale "pull window, default top 3" text in the MCP tool descriptions. Removed all of it. Rank
+is kept server-side on the Board only as a stable commit-order sort key (Tier 1 keeps its
+explicit rank + reorder). Renamed user-facing "Tier 2" → "Board": KanbanNav tab, /kanban
+header (+ subtitle "Committed work — everything here is already approved. Pull anything."),
+Flow CFD title, MCP kanban_update_task / policy / standing descriptions, machine-actor
+HUMAN_ONLY_ACTIONS what/where, transition audit direction string, replenish demote error,
+ask-bims-tier1 schema doc. Code identifiers (TIER2_STATUSES etc.) unchanged. KB2-00 decision
+#5 amended + pull-window seed row struck. MCP 3.0.1 → 3.0.2. check: 11 = baseline.
+
+================================================================================
+2026-08-18 — feat/kanban-tweaks — KB2-18: BIMS kanban MCP improvements (Alejandro's spec) ALL DONE
+================================================================================
+Alejandro's bims-mcp-improvements-spec.md (from the Aug 18 ~45-op roadmap import via MCP) filed
+as docs/prds/KB2-18-MCP-IMPROVEMENTS.md with a decisions header. Every item shipped (81303e61):
+P0-1 dor at capture (already done this morning for kanban_capture; now also on subtasks; the
+  created activity records dorSetAtCapture; response echoes dor + dorSet).
+P0-2 kanban_capture_bulk → POST /api/agent/operations/kanban/tasks/bulk (1–50 items, PER-ITEM
+  results, not a transaction; bad spike / unknown parent / cycle rejects only that item).
+P1-3 tags.ts: normalizeTags() (trim, collapse ws, case-fold onto existing vocabulary, de-dupe)
+  now runs INSIDE createKanbanItem and on every tags write (agent PATCH, merge, UI capture —
+  inventory's inline copy replaced); renameTag() + kanban_rename_tag (from/to|null/scope).
+P1-4 built on Alejandro's KB2-20 typed links instead of a parallel field: links + blockedBy
+  sugar accepted on capture/bulk/subtasks/PATCH + MCP; removeLinkId; DFS cycle guard on
+  blocks/blocked_by (assertNoBlockingCycle in transition.ts, id pre-allocated at create so the
+  guard sees the owner); board-snapshot carries links (declared+derived) + resolved blockedBy /
+  blocks; replenishment-status adds blockedByOpen + warning (never hard-blocks).
+P1-5 parentTaskId on PATCH/MCP via setParent(): exists / no self / no cycle / max depth 3 /
+  null detaches / audited both sides / NO status coupling (nothing coupled before either).
+P2-6 agent-shapes.ts captureEcho (id, trackingNumber, description, itemType, origin, dor,
+  dorSet, links); merge de-dupes tags case-insensitively; replenishment-status dorChecklist
+  (deliverable / handoffBrief ok|missing|n/a / sizeClass / classOfService); snapshot params
+  statuses, tag, includeActivity (MCP schema exposes them, tool description tells the model
+  to narrow); the two 'MCP Test' artifacts declined (reason "test artifacts").
+MCP 3.0.2 → 3.1.0. Smoke-tested 20 assertions end-to-end against the live agent API from a
+local dev server (bulk mixed batch, casing fold, cycle + self rejections, snapshot both
+directions + filters + 400 on bad status, replenishment warning, re-parent + cycle + detach,
+subtask dor + tag inheritance, rename + remove) — all PASS; 4 smoke tasks declined afterwards.
+npm run check: 11 = baseline.

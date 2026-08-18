@@ -278,6 +278,16 @@
 			{/if}
 		</div>
 		<TronButton type="submit" variant="primary" disabled={submitting}>Capture</TronButton>
+		<!-- Optional deliverable at capture — pre-fills the Process modal's DoR field -->
+		<div class="basis-full">
+			<input
+				name="deliverable"
+				class="tron-input w-full"
+				placeholder="Deliverable (optional) — what will exist or be true when this is done, and how you'd verify it"
+				title="Optional now; pre-fills the deliverable when this option is processed"
+				autocomplete="off"
+			/>
+		</div>
 	</form>
 
 	<!-- KB2-11: capture from a workflow template — lands processed + DoR-complete -->

@@ -126,16 +126,16 @@ function escapeRegex(s: string): string {
  */
 export const HUMAN_ONLY_ACTIONS: Record<string, { what: string; where: string }> = {
 	kanban_replenish: {
-		what: 'Committing work (Tier 1 → Tier 2)',
+		what: 'Committing work (Tier 1 → Board)',
 		where: 'Kanban → Tier 1, select the items and use the commit bar'
 	},
 	kanban_demote: {
-		what: 'Demoting committed work (Tier 2 → Tier 1)',
+		what: 'Demoting committed work (Board → Tier 1)',
 		where: 'Kanban → the task page, Demote'
 	},
 	kanban_reorder_ready: {
 		what: 'Reordering the committed (ready) queue',
-		where: 'Kanban → Tier 2, reorder the ready queue'
+		where: 'Kanban → Board (order is commit order; there is no priority list on the Board)'
 	},
 	kanban_set_policy: { what: 'Changing kanban policy', where: 'Kanban → Policy' },
 	kanban_set_template: { what: 'Changing workflow templates', where: 'Kanban → Policy → Templates' },
