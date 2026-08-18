@@ -76,6 +76,7 @@ then a whole-run audit (unique, none on cartridges, each in exactly one batch).
 | `CwPbrMKTEWd0LEvnKn0un` | 4 | pilot — confirmed |
 | `04iO0uB6vOMgF-LgCjRmI` | 200 | printer paper-out mid-batch (sensor issue); ~130 physically printed; job cancelled with `~JA`; **confirmed as 200 per Jacob** (keep the printed ones, remaining ~70 UUIDs burned/never printed). Audit note on the row. −N inventory adjustment pending Jacob's count. |
 | `GOQVfGWjucaP8SNPaZhtD` | 100 | live run after re-calibration — clean, no blank rows, all checks OK |
+| `yjqDRuFzLLLTg_RyJnE7Y`, `nD-aYslUNeQn1AgfTg549`, `LKaGCjlOReEZx7R76jwbd`, `95-vzrVyh7-mweT5Sjeps`, `otYGHRtwGTsz3-m2s-fT5`, `g8OAMRCFDhY_Oy23p8TcB`, `H0I6grRnwjeis4wbqhufE`, `ic5GQStEyuKO_edMXgB_E`, `-gABL0wIS1pUJ7eVrFlSD`, `nLE65rLcyvnlD4g7VowqT` | 10 × 200 = **2000** | the big run — every batch drained cleanly (identical 88→11 curve), no error flags, final audit 2000/2000 unique, 0 on cartridges, each in exactly one batch; PT-CT-106 816 → 2816. UUID list: `%LOCALAPPDATA%\BIMS\zebra-runs\zebra-bulk-2026-08-18-1787075040104.txt` |
 
 Random-UUID **test** labels were also printed via `zebra-send.ts labels` (not
 minted; Jacob told to discard).
@@ -91,7 +92,6 @@ WI-01 during the 100-run; 716 → 816 for our +100).
 
 ## 6. Open items
 
-- Run the remaining **1900** labels (Jacob approved a big batch once alignment held over 100).
 - Post the −N adjustment on PT-CT-106 for the ~70 unprinted UUIDs of batch `04iO0uB6vOMgF-LgCjRmI` once counted.
 - Ethernet for the printer (needs a DHCP-serving port / static IP + Browser Print "Add printer").
 - Push final calibration + tools to master (in progress at time of writing).

@@ -8058,3 +8058,8 @@ read that first. Short version of what changed in code since the previous entry:
   scripts/tsconfig.json + $env shim), page Feed button + width/length fields, calib key v3.
 
 npm run check: 11 errors (baseline). test:unit 91 passed.
+
+2026-08-18 addendum — 2000-label production run complete on the ZT230: 10 batches × 200
+(yjqDRuFzLLLTg_RyJnE7Y … nLE65rLcyvnlD4g7VowqT), each drained + confirmed, no error flags, no
+blank rows; final audit 2000 unique / 0 on cartridges / each in exactly one batch; PT-CT-106
+816 → 2816. Details in docs/sessions/2026-08-18-zebra-zt230-bench-session.md §4.
