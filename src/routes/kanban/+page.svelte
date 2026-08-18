@@ -245,13 +245,13 @@
 								</div>
 							</div>
 						</div>
-						<div class="mt-2 flex flex-wrap items-center gap-2">
+						<div class="mt-2 flex flex-wrap items-center gap-1.5">
 							<form method="POST" action="?/pull" use:enhance={submitEnhance}>
 								{@render hiddenTask(t)}
-								<TronButton type="submit" variant="primary" disabled={submitting}>Pull</TronButton>
+								<TronButton size="sm" type="submit" variant="primary" disabled={submitting}>Pull</TronButton>
 							</form>
 							{#if data.canReplenish}
-								<TronButton onclick={() => (modal = { kind: 'demote', task: t })}>Demote…</TronButton>
+								<TronButton size="sm" onclick={() => (modal = { kind: 'demote', task: t })}>Demote</TronButton>
 							{/if}
 						</div>
 					</div>
@@ -276,14 +276,14 @@
 								{@render cardChips(t)}
 								{@render ageBadge(t)}
 							</div>
-							<div class="mt-2 flex flex-wrap items-center gap-2">
+							<div class="mt-2 flex flex-wrap items-center gap-1.5">
 								<form method="POST" action="?/move" use:enhance={submitEnhance}>
 									{@render hiddenTask(t)}
 									<input type="hidden" name="to" value="done" />
-									<TronButton type="submit" variant="primary" disabled={submitting}>Done</TronButton>
+									<TronButton size="sm" type="submit" variant="primary" disabled={submitting}>Done</TronButton>
 								</form>
-								<TronButton onclick={() => (modal = { kind: 'block', task: t })}>Block…</TronButton>
-								<TronButton onclick={() => (modal = { kind: 'wait', task: t })}>Wait…</TronButton>
+								<TronButton size="sm" onclick={() => (modal = { kind: 'block', task: t })}>Block</TronButton>
+								<TronButton size="sm" onclick={() => (modal = { kind: 'wait', task: t })}>Wait</TronButton>
 							</div>
 						</div>
 					{/each}
@@ -307,7 +307,7 @@
 								<form method="POST" action="?/move" use:enhance={submitEnhance}>
 									{@render hiddenTask(t)}
 									<input type="hidden" name="to" value="done" />
-									<TronButton type="submit" variant="primary" disabled={submitting}>Done</TronButton>
+									<TronButton size="sm" type="submit" variant="primary" disabled={submitting}>Done</TronButton>
 								</form>
 							</div>
 						</div>
@@ -334,13 +334,13 @@
 							{@render cardChips(t)}
 							{@render ageBadge(t)}
 						</div>
-						<div class="mt-2 flex flex-wrap items-center gap-2">
+						<div class="mt-2 flex flex-wrap items-center gap-1.5">
 							<form method="POST" action="?/resume" use:enhance={submitEnhance}>
 								{@render hiddenTask(t)}
-								<TronButton type="submit" variant="primary" disabled={submitting}>Resume</TronButton>
+								<TronButton size="sm" type="submit" variant="primary" disabled={submitting}>Resume</TronButton>
 							</form>
 							{#if data.canReplenish}
-								<TronButton onclick={() => (modal = { kind: 'demote', task: t })}>Demote…</TronButton>
+								<TronButton size="sm" onclick={() => (modal = { kind: 'demote', task: t })}>Demote</TronButton>
 							{/if}
 						</div>
 					</div>
@@ -366,13 +366,13 @@
 							{@render cardChips(t)}
 							{@render ageBadge(t)}
 						</div>
-						<div class="mt-2 flex flex-wrap items-center gap-2">
+						<div class="mt-2 flex flex-wrap items-center gap-1.5">
 							<form method="POST" action="?/resume" use:enhance={submitEnhance}>
 								{@render hiddenTask(t)}
-								<TronButton type="submit" variant="primary" disabled={submitting}>Resume</TronButton>
+								<TronButton size="sm" type="submit" variant="primary" disabled={submitting}>Resume</TronButton>
 							</form>
 							{#if data.canReplenish}
-								<TronButton onclick={() => (modal = { kind: 'demote', task: t })}>Demote…</TronButton>
+								<TronButton size="sm" onclick={() => (modal = { kind: 'demote', task: t })}>Demote</TronButton>
 							{/if}
 						</div>
 					</div>

@@ -219,7 +219,7 @@
 						{/if}
 						{#if data.task.itemType === 'spike' && data.task.status === 'wip'}
 							<TronButton variant="primary" onclick={() => (showSpikeClose = true)}>
-								Close spike…
+								Close spike
 							</TronButton>
 						{/if}
 						<TronButton onclick={() => (relatedStep = 'ask')}>Related work discovered</TronButton>
