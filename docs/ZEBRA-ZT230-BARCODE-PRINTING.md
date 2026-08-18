@@ -44,9 +44,36 @@ Fallback if the agent is unavailable: **Download .zpl** and send the file with
 Zebra Setup Utilities. The batch still has to be confirmed on the page within
 the 5-minute window.
 
+## Bench-verified 2026-08-18 (lab ZT230-200dpi, serial 52J150301773)
+
+- Connected over **USB** to the operator PC; Browser Print 1.3.2.489 lists it as
+  `52j150301773 (usb)`. Ethernet on this unit showed `000.000.000.000` (no
+  DHCP on that wall port) — parked; USB works with zero setup.
+- Windows identifies it as "ZTC ZT230-200dpi ZPL" → **203 dpi**. Thermal
+  transfer with ribbon.
+- The roll is **20 mm × 20 mm** labels (sold as ¾"), 2-across, ~0.13" web
+  between columns; the printer's own sensor reports 161 dots label length.
+- Baseline offsets: X 0, **Y −8 dots** (`^LT-8` — TOF sat ~1 mm below the
+  die-cut). These are now the code defaults (`ZT230_2X_075_DEFAULTS`).
+- Layout approved: A B C at 15 dots, QR module 3 (33-module symbol ≈ 12 mm),
+  UUID text 10 dots on two lines. Alignment rows land on the die-cut in both
+  columns; test labels scanned.
+
+Gotchas found:
+- Browser Print rejects `/write` without a `Content-Type` header
+  ("Failed to write to device: null") — the client sets `text/plain`.
+- Hot-unplugging USB while the agent is running can **crash Browser Print**
+  (process exits, `localhost:9100` stops answering). Relaunch it from the
+  desktop shortcut; there is no window — only a tray icon (right-click).
+- With the printhead open or the printer paused, jobs sit in the buffer and
+  a job buffered while the head is open may be discarded on close — resend.
+- An empty `^XA^XZ` is ignored; to feed, print a 1-dot mark (`buildFeedZpl`,
+  page button "Feed 2 rows", CLI `zebra-send.ts raw …`).
+- CLI bench tool: `npx tsx scripts/zebra-send.ts align|labels|raw|status|list`.
+
 ## Printer media setup (once per roll type)
 
-- Media: 2-across die-cut labels, ¾" × ¾", gap/web sensing.
+- Media: 2-across die-cut labels, 20 mm × 20 mm, gap/web sensing.
 - Run the printer's own media calibration (front panel → Calibrate, or hold
   PAUSE+CANCEL / FEED per ZT230 manual) so top-of-form is detected on the gap.
 - Print mode: tear-off (or peel if fitted). Darkness/speed can be left on the

@@ -119,7 +119,7 @@ export function computeGeometry(cfg: ZebraLabelConfig): LabelGeometry {
 
 	// Avery cell proportions: ABC marks along the top starting 0.08" in with
 	// 0.22" spacing; QR centred at 0.347" from the left edge (B column).
-	const abcFont = cfg.abcMarks ? round(0.06 * dpi) : 0; // ≈12 dots @203
+	const abcFont = cfg.abcMarks ? round(0.075 * dpi) : 0; // ≈15 dots @203 (was 12; "slightly bigger" — Jacob 2026-08-18)
 	const abcTop = round(0.02 * dpi);
 	const abcLeft = round(0.08 * dpi);
 	const abcSpacing = round(0.22 * dpi);
@@ -138,9 +138,12 @@ export function computeGeometry(cfg: ZebraLabelConfig): LabelGeometry {
 	let textFont = 0;
 	if (textLines > 0) {
 		// 18 chars per line must fit labelW; ^A0 is ~0.5×height per char.
+		// Cap at 0.05" (10 dots @203): the UUID text is an internal aid, the QR
+		// is what gets scanned — Jacob 2026-08-18: "that udi can be small".
+		// The earlier 0.07" cap put line 2 on the bottom die-cut edge.
 		const byWidth = Math.floor(labelW / (18 * 0.52));
 		const byHeight = Math.floor(remaining / (textLines * 1.1));
-		textFont = Math.min(round(0.07 * dpi), byWidth, byHeight);
+		textFont = Math.min(round(0.05 * dpi), byWidth, byHeight);
 	}
 	const finalTextLines = textFont >= round(0.03 * dpi) ? textLines : 0;
 
@@ -246,6 +249,19 @@ export function buildCartridgeLabelsZpl(barcodes: string[], cfg: ZebraLabelConfi
 		formats.push(f);
 	}
 	return { zpl: preamble + formats.join('\n') + '\n', rows: formats.length, labels: barcodes.length, geometry: g };
+}
+
+/**
+ * Feed `rows` blank rows (advance the media past the tear bar). An empty
+ * ^XA^XZ is silently discarded by the printer, so print a single 1-dot mark
+ * in the corner — invisible, but the format is real and the printer advances.
+ */
+export function buildFeedZpl(rows = 2, cfg: ZebraLabelConfig = ZT230_2X_075_DEFAULTS): ZplJob {
+	const g = computeGeometry(cfg);
+	const n = Math.max(1, Math.min(10, Math.round(rows)));
+	const zpl = `^XA^PW${g.printWidth}^LL${g.labelLength}^FO2,2^GB1,1,1^FS^PQ${n}^XZ
+`;
+	return { zpl, rows: n, labels: n * cfg.columns, geometry: g };
 }
 
 /**

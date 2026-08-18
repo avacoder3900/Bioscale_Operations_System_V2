@@ -8,6 +8,7 @@
 		ZT230_2X_075_DEFAULTS,
 		buildAlignmentZpl,
 		buildCartridgeLabelsZpl,
+		buildFeedZpl,
 		computeGeometry,
 		type ZebraLabelConfig
 	} from '$lib/zebra/cartridge-label-zpl';
@@ -93,7 +94,7 @@
 	});
 
 	// ── Calibration (per browser, like the Avery page) ───────────────────
-	const CALIB_KEY = 'zebraLabelCalib.v1';
+	const CALIB_KEY = 'zebraLabelCalib.v2'; // v2: 20 mm / 0.13" / y=-8 baseline (2026-08-18)
 	function loadCalib(): Partial<ZebraLabelConfig> | null {
 		if (typeof localStorage === 'undefined') return null;
 		try {
@@ -104,6 +105,7 @@
 	}
 	const _saved = loadCalib();
 	let dpi = $state(_saved?.dpi ?? ZT230_2X_075_DEFAULTS.dpi);
+	let labelSizeIn = $state(_saved?.labelWidthIn ?? ZT230_2X_075_DEFAULTS.labelWidthIn);
 	let columnGapIn = $state(_saved?.columnGapIn ?? ZT230_2X_075_DEFAULTS.columnGapIn);
 	let offsetX = $state(_saved?.offsetX ?? ZT230_2X_075_DEFAULTS.offsetX);
 	let offsetY = $state(_saved?.offsetY ?? ZT230_2X_075_DEFAULTS.offsetY);
@@ -116,6 +118,8 @@
 	const cfg = $derived<ZebraLabelConfig>({
 		...ZT230_2X_075_DEFAULTS,
 		dpi: Number(dpi) || 203,
+		labelWidthIn: Number(labelSizeIn) || ZT230_2X_075_DEFAULTS.labelWidthIn,
+		labelHeightIn: Number(labelSizeIn) || ZT230_2X_075_DEFAULTS.labelHeightIn,
 		columnGapIn: Number(columnGapIn) || 0,
 		offsetX: Math.round(Number(offsetX) || 0),
 		offsetY: Math.round(Number(offsetY) || 0),
@@ -133,9 +137,10 @@
 	});
 	function resetCalib() {
 		dpi = ZT230_2X_075_DEFAULTS.dpi;
+		labelSizeIn = ZT230_2X_075_DEFAULTS.labelWidthIn;
 		columnGapIn = ZT230_2X_075_DEFAULTS.columnGapIn;
-		offsetX = 0;
-		offsetY = 0;
+		offsetX = ZT230_2X_075_DEFAULTS.offsetX;
+		offsetY = ZT230_2X_075_DEFAULTS.offsetY;
 		darkness = '';
 		printSpeedIps = '';
 		qrMagnification = ZT230_2X_075_DEFAULTS.qrMagnification;
@@ -229,6 +234,19 @@
 		}
 	}
 
+	async function feedRows() {
+		if (!selectedPrinter) {
+			testMsg = 'Pick a printer first.';
+			return;
+		}
+		try {
+			await sendZpl(selectedPrinter, buildFeedZpl(2, cfg).zpl);
+			testMsg = '✓ Fed 2 rows.';
+		} catch (e) {
+			testMsg = `✗ ${e instanceof Error ? e.message : String(e)}`;
+		}
+	}
+
 	function downloadZpl() {
 		if (!job || 'error' in job || !hasBatch) return;
 		const blob = new Blob([job.zpl], { type: 'text/plain' });
@@ -301,7 +319,7 @@
 	<div>
 		<h1 class="text-xl font-semibold" style="color: var(--color-tron-cyan)">Print Cartridge Barcodes — Zebra ZT230</h1>
 		<p class="mt-1 text-xs" style="color: var(--color-tron-text-secondary)">
-			Roll labels, {data.columns}-across ¾&quot; squares. Same UUID barcodes and inventory accounting as the
+			Roll labels, {data.columns}-across 20&nbsp;mm squares (sold as ¾&quot;). Same UUID barcodes and inventory accounting as the
 			<a href="/manufacturing/print-barcodes" class="underline" style="color: var(--color-tron-cyan)">Avery sheet page</a>;
 			the job is pushed to the printer through Zebra Browser Print on this PC (USB or LAN/WiFi).
 		</p>
@@ -346,6 +364,10 @@
 				<button type="button" onclick={checkPrinterStatus} disabled={!selectedPrinter}
 					class="mt-4 rounded border border-[var(--color-tron-border)] px-2 py-1 text-xs hover:border-[var(--color-tron-text-secondary)] disabled:opacity-50"
 					style="color: var(--color-tron-text-secondary)">Check status</button>
+				<button type="button" onclick={feedRows} disabled={!selectedPrinter} title="Advance 2 rows past the tear bar (prints nothing)"
+					class="mt-4 rounded border border-[var(--color-tron-border)] px-2 py-1 text-xs hover:border-[var(--color-tron-text-secondary)] disabled:opacity-50"
+					style="color: var(--color-tron-text-secondary)">Feed 2 rows</button>
+				{#if testMsg && !printerStatus}<span class="mt-4 text-xs" style="color: var(--color-tron-text)">{testMsg}</span>{/if}
 				{#if printerStatus}<span class="mt-4 text-xs font-mono" style="color: var(--color-tron-text)">{printerStatus}</span>{/if}
 			</div>
 		{/if}
@@ -368,6 +390,8 @@
 					<select bind:value={dpi} class="mt-1 w-28 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-2 py-1 text-sm font-mono" style="color: var(--color-tron-text)">
 						<option value={203}>203</option><option value={300}>300</option>
 					</select></label>
+				<label class="block"><span class="block text-[10px] uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Label size (in, square)</span>
+					<input type="number" step="0.001" min="0.5" max="2" bind:value={labelSizeIn} class="mt-1 w-28 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-2 py-1 text-sm font-mono" style="color: var(--color-tron-text)" /></label>
 				<label class="block"><span class="block text-[10px] uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Gap between columns (in)</span>
 					<input type="number" step="0.005" min="0" max="0.5" bind:value={columnGapIn} class="mt-1 w-28 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-2 py-1 text-sm font-mono" style="color: var(--color-tron-text)" /></label>
 				<label class="block"><span class="block text-[10px] uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">X offset (dots, + = right)</span>
