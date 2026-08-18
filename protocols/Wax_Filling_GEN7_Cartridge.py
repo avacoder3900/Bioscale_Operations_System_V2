@@ -17,16 +17,56 @@ metadata = {
 
 requirements = {"robotType": "OT-2", "apiLevel": "2.19"}
 
+# Cartridges on a deck. The destination list is always laid out as this many equal
+# contiguous blocks (12 wax wells each: 3 rows x 4 cols), so cartridge N is the
+# slice [(N-1)*per : N*per] — and every slice boundary is a ROW boundary, which the
+# row-aligned aspirate batching relies on.
+CARTS_ON_DECK = 24
+
+
+def resume_window(total_wells, cartridges_per_deck, resume_cartridge=1, resume_hole=1,
+                  carts_on_deck=CARTS_ON_DECK):
+    """Which slice of the destination list should this run actually fill?
+
+    `cartridges_per_deck` has always truncated the END of the list (fill the first N
+    cartridges). Resume adds a START, so a run can pick up at any cartridge (e.g. after
+    a broken tip, or after re-calibrating part of a deck) instead of re-filling from 1.
+
+    resume_cartridge/resume_hole are 1-based (that's how an operator counts them on the
+    bench). The default (1, 1) yields start=0 — a normal full run, byte-for-byte the old
+    behaviour. Returns (start, end) to be used as well_names[start:end].
+
+    Module-level and pure ON PURPOSE: the fill loop is wrapped in
+    `if dispense and not protocol.is_simulating()`, so analysis never executes it.
+    """
+    wells_on_cart = int(total_wells / carts_on_deck)
+    end = min(cartridges_per_deck * wells_on_cart, total_wells)
+    start = (resume_cartridge - 1) * wells_on_cart + (resume_hole - 1)
+    return max(0, min(start, end)), end
+
+
 def add_parameters(parameters: protocol_api.Parameters):
     parameters.add_int(
         variable_name="cartridges",
         display_name="Cartridges",
-        description="The number of cartridges to be filled.",
+        description="Last cartridge to fill (END). With a start cartridge set, BIMS converts its scanned count into this.",
         default=24,
         minimum=1,
         maximum=24,
         unit="cartridges",
     )
+
+    # ── Start partway through the deck ─────────────────────────────────────────
+    # `cartridges` is the END; these set the START. (1, 1) = a normal full run, so an
+    # operator who never touches them sees no change. 1-based because that is how the
+    # operator counts cartridges and holes on the bench. Example: cartridges 16..24 =
+    # resume_cartridge 16 + cartridges 24.
+    parameters.add_int(variable_name="resume_cartridge", display_name="Start at cartridge",
+        description="Start filling at this cartridge (1 = from the beginning). Fills through 'Cartridges'.",
+        default=1, minimum=1, maximum=24)
+    parameters.add_int(variable_name="resume_hole", display_name="Start at hole in that cart",
+        description="Within the start cartridge, begin at this wax hole (1 = its first hole, 12 = last).",
+        default=1, minimum=1, maximum=12)
         
     parameters.add_bool(
         variable_name="wax",
@@ -783,11 +823,33 @@ def run(protocol: protocol_api.ProtocolContext):
                 adjust: XY offset adjustment dict
                 cartridges_per_deck: Number of cartridges to fill
             """
-            wells_to_fill_names = []
-            wells_on_cart = int(len(well_names)/24)
-           
-            for i in range(cartridges_per_deck * wells_on_cart):
-                wells_to_fill_names.append(well_names[i])
+            wells_on_cart = int(len(well_names) / CARTS_ON_DECK)
+            start_i, end_i = resume_window(
+                len(well_names), cartridges_per_deck, resume_cartridge, resume_hole)
+            wells_to_fill_names = well_names[start_i:end_i]
+
+            if start_i > 0:
+                protocol.comment(
+                    f'START: cartridge {resume_cartridge} hole {resume_hole} '
+                    f'(well index {start_i}) — skipping {start_i} well(s), '
+                    f'{len(wells_to_fill_names)} to fill through cartridge {cartridges_per_deck}.'
+                )
+                # source_volume arrives as (dead_volume + wax for ALL wells up to the END
+                # cartridge). The skipped wells were never dispensed by THIS run, so the
+                # tube holds less than the model assumes only if the operator loaded it
+                # for the partial run — either way, subtracting the skipped wells' wax
+                # leaves exactly (dead_volume + wax for the wells that remain), which is
+                # what the aspirate-height maths needs. Load the tube for the remaining
+                # wells (see "Calculated source volume needed" comment).
+                skipped_volume = sum(
+                    well_volumes[COLUMN_GATE.get(get_well_column(w), 'wax_gate4')]
+                    for w in well_names[:start_i]
+                )
+                source_volume = source_volume - skipped_volume
+                protocol.comment(f'START: source volume model reduced by {skipped_volume:.1f}uL for the skipped wells.')
+            if not wells_to_fill_names:
+                protocol.pause('Nothing to fill: start cartridge is beyond the "Cartridges" end. Cancel/Stop and fix the parameters.')
+                return
 
             for source in sources:
                 source_well = tuberack[source]
@@ -1127,6 +1189,11 @@ def run(protocol: protocol_api.ProtocolContext):
         wax = protocol.params.wax
         cartridges_per_deck = protocol.params.cartridges
 
+        # Start point (1, 1) = normal full run. Read into the enclosing scope so
+        # dispense_reagent() closes over them.
+        resume_cartridge = protocol.params.resume_cartridge
+        resume_hole = protocol.params.resume_hole
+
         tube_locations = {
             'wax': 'A3',
         }
@@ -1174,6 +1241,13 @@ def run(protocol: protocol_api.ProtocolContext):
             protocol.comment(f"Gate volumes — Gate4: {well_volumes['wax_gate4']}uL, Gate3: {well_volumes['wax_gate3']}uL, Gate2: {well_volumes['wax_gate2']}uL, Gate1: {well_volumes['wax_gate1']}uL")
             # protocol.comment(f"Gate volumes — Gate4: {well_volumes['wax_gate4']}uL, Gate3: {well_volumes['wax_gate3']}uL, Gate2: {well_volumes['wax_gate2']}uL")  # GATE 1 DISABLED
             protocol.comment(f"Calculated source volume needed: {source_volumes['wax']}uL")
+            _start_i, _end_i = resume_window(len(final_destinations['wax']), cartridges_per_deck, resume_cartridge, resume_hole)
+            if _start_i > 0:
+                _remaining = dead_volume + sum(
+                    well_volumes[COLUMN_GATE.get(get_well_column(w), 'wax_gate4')]
+                    for w in final_destinations['wax'][_start_i:_end_i]
+                )
+                protocol.comment(f"START at cartridge {resume_cartridge} hole {resume_hole}: source volume needed for the remaining {_end_i - _start_i} wells = {_remaining:.1f}uL")
         else:
             # Placeholder during analysis
             source_volumes = {'wax': 0}

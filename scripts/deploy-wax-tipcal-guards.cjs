@@ -10,8 +10,9 @@
  *
  * LABWARE: bundles the LIVE Mongo labware_definitions for exactly the labware the
  * robot's current wax protocol loads (that's what the run-start freshness gate
- * enforces anyway) and HARD-GATES that every well resolves identically to the
- * robot's current wax protocol — the deck does not move, only the code changes.
+ * enforces anyway) and HARD-GATES that every bundled well == live Mongo. The delta
+ * vs the robot's current protocol is printed for information (a freshly
+ * re-calibrated deck is SUPPOSED to differ there).
  *
  * Gates (no repoint unless ALL pass): analysis completed with zero errors; RTPs
  * bims_native + dispense_depth + use_tip_calibration + max_tip_adjust +
@@ -43,7 +44,7 @@ const HOST = process.env.ROBOT_HOST || R.host;
 const REPO = path.resolve(__dirname, '..');
 const H = { 'opentrons-version': '*' };
 const APPLY = process.env.DEPLOY_APPLY === '1';
-const REQUIRED_RTPS = ['bims_native', 'dispense_depth', 'use_tip_calibration', 'max_tip_adjust', 'run_calibration_check'];
+const REQUIRED_RTPS = ['bims_native', 'dispense_depth', 'use_tip_calibration', 'max_tip_adjust', 'run_calibration_check', 'resume_cartridge', 'resume_hole'];
 
 const rget = (p) => fetch(`http://${HOST}:31950${p}`, { headers: H, signal: AbortSignal.timeout(90000) }).then((r) => r.json());
 
@@ -130,22 +131,37 @@ async function main() {
   const show = (k) => (params.find((p) => p.variableName === k) || {}).default;
   console.log(`  defaults: use_tip_calibration=${show('use_tip_calibration')} max_tip_adjust=${show('max_tip_adjust')} run_calibration_check=${show('run_calibration_check')} dispense_depth=${show('dispense_depth')}`);
 
+  // Geometry gate: the new upload must resolve every well EXACTLY as live Mongo
+  // (the source of truth the run-start freshness gate enforces). The delta vs the
+  // robot's current protocol is reported for information — a re-calibrated deck is
+  // expected to differ there, and that is precisely what should reach the robot.
   const fresh = wellsOf(await labwareDefsOfProtocol(pid));
+  const mongoWells = {};
+  for (const lw of labware) mongoWells[lw.fileName.replace(/\.json$/, '')] = JSON.parse(lw.json).wells;
   const problems = [];
-  for (const ln of Object.keys(baseline)) {
+  for (const ln of Object.keys(mongoWells)) {
     if (!fresh[ln]) { problems.push(`${ln}: MISSING from new upload`); continue; }
     let worst = 0, at = null;
-    for (const wn of Object.keys(baseline[ln])) {
-      const b = baseline[ln][wn], f = fresh[ln][wn];
+    for (const wn of Object.keys(mongoWells[ln])) {
+      const b = mongoWells[ln][wn], f = fresh[ln][wn];
       if (!f) { problems.push(`${ln}.${wn} missing`); continue; }
       const d = Math.max(Math.abs(b.x - f.x), Math.abs(b.y - f.y), Math.abs(b.z - f.z));
       if (d > worst) { worst = d; at = wn; }
     }
-    if (worst > 1e-6) problems.push(`${ln}: moved up to ${worst.toFixed(4)}mm (worst ${at})`);
-    else console.log(`    ${ln}: identical`);
+    if (worst > 1e-6) problems.push(`${ln}: differs from Mongo up to ${worst.toFixed(4)}mm (worst ${at})`);
+    // info: delta vs the robot's CURRENT protocol
+    let cw = 0, ca = null, cn = 0;
+    for (const wn of Object.keys(mongoWells[ln])) {
+      const b = (baseline[ln] || {})[wn], f = fresh[ln][wn];
+      if (!b || !f) continue;
+      const d = Math.max(Math.abs(b.x - f.x), Math.abs(b.y - f.y), Math.abs(b.z - f.z));
+      if (d > 1e-6) cn++;
+      if (d > cw) { cw = d; ca = wn; }
+    }
+    console.log(`    ${ln}: == Mongo${cn ? `; vs current protocol: ${cn} wells changed, max ${cw.toFixed(3)}mm (${ca})` : '; identical to current protocol'}`);
   }
-  if (problems.length) { problems.forEach((p) => console.log(`    !! ${p}`)); await cleanup('deck geometry moved'); throw new Error(`geometry differs from ${R.name} current — NOT repointing`); }
-  console.log(`  geometry gate OK: every well identical to ${R.name}'s current wax protocol`);
+  if (problems.length) { problems.forEach((p) => console.log(`    !! ${p}`)); await cleanup('geometry != Mongo'); throw new Error('bundled geometry does not match live Mongo — NOT repointing'); }
+  console.log('  geometry gate OK: every bundled well == live Mongo');
 
   if (!APPLY) {
     console.log(`\nVERIFY-ONLY (nothing changed in BIMS). Re-run with DEPLOY_APPLY=1 to repoint ${R.name}'s wax entry at ${pid}. (Upload ${pid} left on the robot.)`);
