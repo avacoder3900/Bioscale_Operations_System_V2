@@ -8097,3 +8097,15 @@ Start-at-cartridge/hole from the OT-2 log, same BIMS run record) and pause-to-in
 Deployment: robot protocol — B07 wax entry repointed 1cd39003 -> 99152e18-d7a1-4a46-b500-c8294b4ca7be
 Source: branch master @ this commit
 What this deployment is for: one fresh tip per carrier + operator checkpoint to remove finished cartridges.
+
+================================================================================
+2026-08-18 — master — wax: no-tip detection with hand-insert prompt (probe = tip sensor)
+================================================================================
+Operator: the OT-2 sometimes fails to pick up a tip and keeps going (no tip sensor). The calibrator
+probe now doubles as the tip check: a probe that never reaches the switch lifts the pipette to
+z_cal+60 over the calibrator, logs WARNING: NO TIP DETECTED, and pauses "push a tip on BY HAND, then
+Resume to calibrate that tip" — loops until a probe succeeds; never dispenses, never eats rack
+positions. Over-cap adjust (tip present) keeps retry-once-then-nominal. Requires tip-cal ON (default).
+Deployment: robot protocol — B07 wax entry c25df215 -> ce11c99f-e70b-4284-9dc7-28fcb786bb33 (stored .py synced)
+Source: branch master @ this commit
+What this deployment is for: a missed tip pickup can no longer fill with a bare nozzle.
