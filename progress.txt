@@ -7904,3 +7904,15 @@ Heads-up Alejandro/Nick: Claude Desktop will pick up the new tools on its next M
 (reconnect if the tool list looks stale). Pending chat-side work can proceed: DoR backfill on
 the 41 roadmap tasks, re-tag cleanup via kanban_rename_tag, John's A4M punch-list import via
 kanban_capture_bulk.
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit f7c573b1
+Retrieve this exact code: git checkout master at f7c573b1
+What this deployment is for: ROBOTARM-01 — new "Robot Arm Deck" labware definition for deck
+  calibration. Single gen7 cartridge (cartridge 1 of gen4deck_gen7cartridge_001), 24 holes:
+  8 reagent holes on odd columns + 16 wax-gate holes on even columns. Merge is purely additive
+  (6 files, 1776 insertions, 0 deletions) — no existing route or model touched.
+  Labware doc is already live in Mongo (shared prod DB) and verified byte-identical to
+  labware/robotarm_cartridge_deck_001.json by scripts/verify-robotarm-deck.ts.
+Next step: calibrate the deck in the UI at /opentrons/labware — nudge x/y/z per well and save;
+  offsets land in RobotDeckOffset, the definition itself stays the untouched reference.
