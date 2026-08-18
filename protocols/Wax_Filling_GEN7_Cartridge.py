@@ -725,16 +725,58 @@ def run(protocol: protocol_api.ProtocolContext):
                     return adj, False, f'adjust ({xOffset}, {yOffset}) exceeds max_tip_adjust {max_adjust}mm'
                 return adj, True, ''
 
+            def _fresh_tip(tag):
+                """Drop whatever is (or isn't) on the nozzle and pick up the next tracked tip."""
+                nonlocal _tip_index
+                if pipette.has_tip:
+                    pipette.drop_tip()
+                if not protocol.is_simulating() and _tip_index >= len(_all_tips):
+                    protocol.pause('TIP TRACKER: tiprack exhausted — refill rack, enable "Tiprack Refilled" on next run, then click Resume to continue with current run from A1')
+                    _tip_index = 0
+                    pipette.starting_tip = _all_tips[0]
+                    save_tip_state(0)
+                pipette.pick_up_tip()
+                if not protocol.is_simulating():
+                    _tip_index += 1
+                    save_tip_state(_tip_index)
+                    protocol.comment(f'TIP TRACKER: consumed tip {_all_tips[_tip_index - 1].well_name} ({tag}) — index {_tip_index}')
+
+            def _no_tip_prompt(attempt, why):
+                """The switch was never reached: on the OT-2 (no tip sensor) that is how a
+                missing tip looks. Lift clear so the operator can reach the pipette, and
+                pause until they have pushed a tip on by hand. Nothing is dispensed and
+                no rack position is consumed while this loops."""
+                pipette.move_to(types.Location(types.Point(x=cal_x + 2.0, y=cal_y + 1.0, z=z_cal + 60), carriage), force_direct=True, speed=20)
+                protocol.comment(f'WARNING: NO TIP DETECTED on the pipette (attempt {attempt}: {why}).')
+                protocol.pause(
+                    f'NO TIP DETECTED (attempt {attempt}: {why}). The pipette is raised over the '
+                    f'calibrator. Push a tip firmly onto the pipette BY HAND (or check the tip rack), '
+                    f'then click Resume to calibrate that tip. Cancel/Stop to end the run.'
+                )
+
             # First attempt with the tip just picked up.
             adj, ok, why = _probe_once()
             if ok:
                 protocol.comment(f'Tip calibration OK: adjust x={adj["x"]}, y={adj["y"]}')
                 return adj
 
-            # Rejected -> retry ONCE with a fresh tip (a bent/misseated tip is the
-            # common cause). Never dispense with a rejected adjust.
+            # Missed switch = no tip (or tip not touching). Prompt for a hand-inserted
+            # tip and calibrate it; loop until a probe succeeds or the operator cancels.
+            attempt = 1
+            while not ok and 'not reached' in why:
+                _no_tip_prompt(attempt, why)
+                adj, ok, why = _probe_once()
+                attempt += 1
+                if ok:
+                    protocol.comment(f'Tip calibration OK on hand-inserted tip (attempt {attempt}): adjust x={adj["x"]}, y={adj["y"]}')
+                    return adj
+
+            # Switch WAS reached but the adjust is over the cap (tip is on; calibrator
+            # baseline/lever off, or a badly bent tip) -> retry ONCE with a fresh rack
+            # tip, then pause; Resume continues at nominal (0,0), never with the bad value.
             protocol.comment(f'Tip calibration REJECTED ({why}) — retrying with a fresh tip.')
-            pipette.drop_tip()
+            if pipette.has_tip:
+                pipette.drop_tip()
             if not protocol.is_simulating() and _tip_index >= len(_all_tips):
                 protocol.pause('TIP TRACKER: tiprack exhausted — refill rack, enable "Tiprack Refilled" on next run, then click Resume to continue with current run from A1')
                 _tip_index = 0
@@ -745,16 +787,19 @@ def run(protocol: protocol_api.ProtocolContext):
                 _tip_index += 1
                 save_tip_state(_tip_index)
                 protocol.comment(f'TIP TRACKER: consumed tip {_all_tips[_tip_index - 1].well_name} (retry) — index {_tip_index}')
-
             adj, ok, why = _probe_once()
             if ok:
                 protocol.comment(f'Tip calibration OK on retry: adjust x={adj["x"]}, y={adj["y"]}')
                 return adj
+            attempt = 1
+            while not ok and 'not reached' in why:
+                _no_tip_prompt(attempt, why)
+                adj, ok, why = _probe_once()
+                attempt += 1
+                if ok:
+                    protocol.comment(f'Tip calibration OK on hand-inserted tip (attempt {attempt}): adjust x={adj["x"]}, y={adj["y"]}')
+                    return adj
 
-            # Rejected twice. Do NOT apply it. Pause so the operator knows, then
-            # continue at the NOMINAL (taught) wax hole position — the same thing
-            # use_tip_calibration=OFF does. Resume is now safe; before this change a
-            # missed probe silently returned ~-6mm and dispensed into the wrong hole.
             protocol.pause(
                 f'Tip calibration REJECTED twice ({why}). '
                 f'Click Resume to CONTINUE AT NOMINAL wax hole positions (adjust 0,0 — '
