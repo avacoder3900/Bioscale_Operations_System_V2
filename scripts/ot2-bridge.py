@@ -1255,6 +1255,49 @@ def execute_auto_resume_run(command_id: str, payload: dict) -> None:
 CAL_NOMINAL_X = 125.181  # .py calibrator approach point in the carriage frame
 CAL_NOMINAL_Y = 173.247
 
+# The X probe does NOT start from the same place in the two fill protocols, and
+# the measured adjust is a function of how far the tip travels before it trips
+# the switch — so the start point is part of the measurement, not a detail.
+#
+#   Wax_Filling_GEN7_Cartridge.py:697   x_pos = cal_x - 0.6 ; y_pos = cal_y - 6.5
+#   Reagent_Filling_GEN7.py:617         x_pos = cal_x - 1.4 ; y_pos = cal_y - 7.0
+#
+# This daemon used to hardcode the WAX numbers for every profile. The Studio
+# therefore taught every deck — wax holes AND reagent holes — against the wax
+# probe, while a reagent fill measured against the reagent probe. Starting 0.8mm
+# further left means 0.8mm less travel to the switch, so the fill's adjust came
+# out ~0.8mm less negative than the one the deck was taught with, and every
+# reagent hole landed ~0.8mm to the RIGHT. Hole radius is 0.9mm, so it missed.
+# (Wax was self-consistent by accident: its recipe *is* the hardcoded one.)
+#
+# Deltas are held relative to the nominal point so they translate onto whatever
+# absolute calibrator location BIMS supplies, exactly like the .py does.
+CAL_PROBE_RECIPES = {
+    "wax":     {"x_dx": -0.6, "x_dy": -6.5},
+    "reagent": {"x_dx": -1.4, "x_dy": -7.0},
+}
+CAL_PROBE_Y_DX = 8.829   # Y probe start — identical in both protocols
+CAL_PROBE_Y_DY = -7.5
+
+
+def _resolve_cal_profile(payload: dict, tip: dict) -> str:
+    """Which fill's probe recipe to use: 'wax' or 'reagent'.
+
+    Prefers the explicit profile BIMS sends. Falls back to the tiprack loadName,
+    which is unambiguous (20uL rack = wax / p20, 200uL Biotix = reagent / p300).
+    Deliberately does NOT infer from z_cal: B07's zCalWax is 40.15, close enough
+    to reagent's 40.8 to guess wrong.
+    """
+    explicit = str((payload or {}).get("profile") or "").strip().lower()
+    if explicit in CAL_PROBE_RECIPES:
+        return explicit
+    load_name = str((tip or {}).get("loadName") or "").lower()
+    if "200ul" in load_name or "biotix" in load_name:
+        return "reagent"
+    if "20ul" in load_name:
+        return "wax"
+    return "wax"  # historical default
+
 
 _BEND_RE = re.compile(rb"(-?\d+(?:\.\d+)?)\s*:\s*(-?\d+(?:\.\d+)?)")
 
@@ -1423,6 +1466,7 @@ def execute_calibrate_tip(command_id: str, payload: dict) -> None:
     """
     cal = (payload or {}).get("calibrator") or {}
     tip = (payload or {}).get("tiprack") or {}
+    cal_profile = _resolve_cal_profile(payload, tip)
     try:
         cal_x = float(cal["x"]); cal_y = float(cal["y"]); z_cal = float(cal["z"])
     except Exception:
@@ -1487,17 +1531,25 @@ def execute_calibrate_tip(command_id: str, payload: dict) -> None:
         ptx = ref_x - CAL_NOMINAL_X
         pty = ref_y - CAL_NOMINAL_Y
 
-        # X probe — .py start (124.581, 166.747) translated onto the reference.
+        # X probe — start point comes from THIS fill's recipe, not a hardcoded
+        # one. Using the wax start for a reagent tip biases the adjust by 0.8mm,
+        # which is wider than a 1.8mm hole's radius. See CAL_PROBE_RECIPES.
+        recipe = CAL_PROBE_RECIPES[cal_profile]
+        x_start = CAL_NOMINAL_X + recipe["x_dx"] + ptx
+        y_start = CAL_NOMINAL_Y + recipe["x_dy"] + pty
+        log.info("calibrate_tip: %s recipe — X probe from x=%.3f y=%.3f",
+                 cal_profile, x_start, y_start)
         x_shift, x_ok = _probe_axis(run_id, pipette_id, ser, "x",
-                                    124.581 + ptx, 166.747 + pty, z_probe, b"X")
+                                    x_start, y_start, z_probe, b"X")
         # adjust = (calibrator C-string baseline) - travel-to-switch. The old
         # hardcoded position constant (150.536/177.0) that produced a ~32mm jump
         # is GONE — the C string is now the baseline the operator dials in.
         x_offset = round(bend["x"] - x_shift, 1)
 
-        # Y probe — .py start (134.01, 165.747) translated onto the reference.
+        # Y probe — identical recipe in both protocols (cal_x + 8.829, cal_y - 7.5).
         y_shift, y_ok = _probe_axis(run_id, pipette_id, ser, "y",
-                                    134.01 + ptx, 165.747 + pty, z_probe, b"Y")
+                                    CAL_NOMINAL_X + CAL_PROBE_Y_DX + ptx,
+                                    CAL_NOMINAL_Y + CAL_PROBE_Y_DY + pty, z_probe, b"Y")
         y_offset = round(bend["y"] - y_shift, 1)
 
         # Retract (slow, lift off the fixture). KEEP THE TIP ON — the operator

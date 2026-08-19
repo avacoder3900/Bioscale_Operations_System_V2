@@ -8554,3 +8554,68 @@ WHAT TO WATCH ON THE FIRST R04 FILL
   - A Sync should create deck_versions v2 for any deck with unpublished edits.
   - offset_x/y/z must be 0 and use_tip_calibration true in the run's RTPs.
 NOT VERIFIED ON HARDWARE YET — no physical robot has run this code.
+
+================================================================================
+2026-08-19 — feat/deck-calibration-hardening — ROOT CAUSE: Studio taught every deck with the WAX probe recipe
+================================================================================
+Operator ran reagent filling on R04/DECK-001 after the offset retirement and the tip
+still landed right of the hole. Traced it to the real cause, which is NOT in the
+BIMS -> Mongo -> upload path audited earlier.
+
+EVIDENCE (run 6d5f0828-11f4-49f9-8b50-ea2da1179f4f, read off R04 directly)
+  RTPs were exactly as intended: bims_native true, offset_x/y/z 0,
+  use_tip_calibration true, cal_x 125.181, cal_y 173.247, z_cal 40.8.
+  Robot log: "Offset calibration: x=-5.0, y=1.8" (C baseline read fine),
+             "BIMS-native offsets (applied to ALL labware): x=0.0, y=0.0, z=0.0".
+  Applied well offsets on every dispense: {x:-6.5, y:-0.1}.
+  Probe travel: X start 123.781 -> 122.381 (1.400mm, 15 steps) => adjust -5.0-1.5 = -6.5
+                Y start 165.747 -> 163.947 (1.800mm, 19 steps) => adjust  1.8-1.9 = -0.1
+  So the probe ran, the math is correct, and the adjust WAS applied.
+
+  But the Studio's own calibrate_tip on the same robot repeatedly measured
+  adjust x = -7.4 / -7.5 / -7.6 (bend x = -5.0, shift 2.4-2.6). Tight cluster,
+  not noise — a systematic ~1.0mm disagreement with the fill.
+
+THE CAUSE — three probe recipes, one hardcoded
+  Wax_Filling_GEN7_Cartridge.py:697   x_pos = cal_x - 0.6  (124.581), y = cal_y - 6.5
+  Reagent_Filling_GEN7.py:617         x_pos = cal_x - 1.4  (123.781), y = cal_y - 7.0
+  scripts/ot2-bridge.py:1492          HARDCODED 124.581 / 166.747 for BOTH
+  (The Y probe start is identical in both protocols: cal_x + 8.829, cal_y - 7.5.)
+
+  The daemon that backs the Studio's "Calibrate tip" always used the WAX start.
+  The probe walks in -X and the adjust is a function of travel-to-switch, so
+  starting 0.8mm further left yields 0.8mm less travel and an adjust ~0.8mm less
+  negative. Every deck — wax holes AND reagent holes — was therefore taught
+  tip-neutral against the WAX probe, while a reagent fill measures against the
+  REAGENT probe. Net: reagent holes land ~0.8-1.0mm to the RIGHT. Hole radius is
+  0.9mm, so it misses. Wax was self-consistent only by accident: the hardcoded
+  numbers ARE the wax recipe, which is why B07/deck-004 wax was confirmed good on
+  08-18 and why the wax complaint was the separate +1mm global offset (now zero).
+
+FIXED
+  ~ scripts/ot2-bridge.py — CAL_PROBE_RECIPES{wax,reagent} expressed as deltas from
+    CAL_NOMINAL_X/Y so they translate onto whatever absolute calibrator point BIMS
+    supplies, exactly like the .py does. X probe start now comes from the resolved
+    profile; Y probe expressed through the same constants (values unchanged).
+    _resolve_cal_profile() prefers an explicit payload profile, falls back to the
+    tiprack loadName (20ul = wax, 200ul/biotix = reagent). Deliberately does NOT
+    infer from z_cal — B07's zCalWax is 40.15, too close to reagent's 40.8.
+  ~ api/scanner/calibrate-tip/+server.ts — sends profile: 'wax' | 'reagent' from
+    TIP_FOR_MOUNT (right/p20 = wax, left/p300 = reagent).
+
+  Verified arithmetically: wax -> 124.581/166.747 (unchanged, no regression),
+  reagent -> 123.781/166.247 (matches the failing run's observed probe start
+  exactly), Y -> 134.010/165.747. Profile resolution unit-checked for explicit,
+  tiprack-inferred, and empty cases.
+
+STILL TO DO
+  - ot2-bridge.py runs ON the robot at /data/ot2-bridge/ and is deployed over SSH.
+    The key (docs/brevitest-opentrons-files-4-21/ot2_ssh_key) is NOT on this machine
+    and is not tracked in git, so the daemon fix is NOT yet on R04.
+  - R04 still has run 6d5f0828 current and PAUSED — stop it before re-testing.
+  - Existing reagent hole coordinates were taught against the wax probe and are
+    therefore ~0.8mm too far right. Fixing the daemon corrects future teaching only.
+    After deploying, re-run Calibrate tip and jog ONE reagent hole on deck 001 to
+    measure the true residual before deciding re-teach vs a one-time X shift on the
+    odd-column wells. Do not bulk-apply on the strength of the 0.8mm estimate —
+    that is how decks 002/003 ended up 24.5mm and 7.4mm out.

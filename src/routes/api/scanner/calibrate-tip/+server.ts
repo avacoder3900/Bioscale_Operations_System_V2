@@ -38,9 +38,12 @@ const WAIT_TIMEOUT_MS = 240_000;
 const COMMAND_TTL_MS = 270_000;
 
 // mount → (tiprack loadName, default z_cal). Matches the studio + the protocols.
-const TIP_FOR_MOUNT: Record<string, { loadName: string; zCalKey: 'zCalWax' | 'zCalReagent'; defaultZ: number }> = {
-	right: { loadName: 'cosmasanddamian_96_tiprack_20ul', zCalKey: 'zCalWax', defaultZ: 34.491 },
-	left: { loadName: 'cosmas_and_damian_biotix_96_200ul_tiprack', zCalKey: 'zCalReagent', defaultZ: 40.8 }
+const TIP_FOR_MOUNT: Record<
+	string,
+	{ loadName: string; zCalKey: 'zCalWax' | 'zCalReagent'; defaultZ: number; profile: 'wax' | 'reagent' }
+> = {
+	right: { loadName: 'cosmasanddamian_96_tiprack_20ul', zCalKey: 'zCalWax', defaultZ: 34.491, profile: 'wax' },
+	left: { loadName: 'cosmas_and_damian_biotix_96_200ul_tiprack', zCalKey: 'zCalReagent', defaultZ: 40.8, profile: 'reagent' }
 };
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -93,6 +96,14 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		kind: 'calibrate_tip',
 		payload: {
 			pipetteMount: mount,
+			// Which fill's probe recipe the daemon must use. The X probe starts
+			// from a different point in the wax and reagent protocols, and the
+			// adjust is a function of travel-to-switch — so measuring a reagent
+			// tip against the wax start biases it ~0.8mm, wider than a 1.8mm
+			// hole's radius. The daemon can infer this from the tiprack, but
+			// sending it explicitly means a renamed rack can never silently
+			// change how a deck is taught.
+			profile: tipSpec.profile,
 			calibrator: { x: calX, y: calY, z: zCal },
 			tiprack: {
 				definition: tipDef.definition,
