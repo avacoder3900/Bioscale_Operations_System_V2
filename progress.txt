@@ -8283,3 +8283,227 @@ Retrieve this exact code: git checkout master at commit 43d8c9d3
 What this deployment is for: top sealing implicit / post-OT-2 reagent queue retired
   (REAGENT-TOPSEAL-IMPLICIT). Watch: first real reagent run Complete → run Completed,
   carts reagent_filled, PT-CT-113 consumption row; Reagent Inspect photo → reagent_qc.
+
+================================================================================
+2026-08-19 — feat/deck-calibration-hardening — deck calibration audit: version control, deck identity binding, staged per-robot rollout
+================================================================================
+Full audit of the cartridge-deck calibration path (BIMS -> Mongo -> deck JSON -> OT-2)
+after repeated "calibrated deck fills in the wrong place" reports. Branch cut off
+origin/master @ 916126b91.
+
+AUDIT FINDINGS (read on master, not inferred). Deck geometry never travels at run
+time — it rides only inside the protocol upload bundle, as ABSOLUTE well coordinates
+in labware_definitions (BIMS deliberately does not use Opentrons labwareOffsets; see
+CALIB-3). Root causes found:
+  A. Deck identity was never bound. Operator picks DECK-004; the robot picks its
+     definition from a Particle id read over USB serial. Nothing compared them.
+     deck_calibration_edits.deckEquipmentId was null on all 47,340 rows.
+  B. Maintenance-run labware reuse matched on loadName only (maintenance.ts), and
+     edits never bumped version — so after a deck edit the robot kept serving
+     pre-edit geometry while the Studio showed the new numbers, and the operator's
+     second jog silently doubled the correction. (Was already known: progress.txt
+     "close and reopen the maintenance run after every deck edit".)
+  C. Editing never bumped version. Opentrons keys definition identity to
+     namespace/loadName/version; changing geometry at a fixed version is how stale
+     calibration gets applied to new coordinates.
+  D. DECK-001's own definition is wrong (unchanged here — needs one jog measurement;
+     288 wax wells deliberately NOT touched, per docs/DECK001-WAX-ALIGNMENT-TEST.md).
+  E. Every upload bundled all 19 labware defs, each named <loadName>.json — two defs
+     sharing a loadName would collide on multipart filename with an undefined winner.
+     Prod has no duplicates today, so this never fired.
+  F. opentrons_run_records was EMPTY — no run ever recorded which geometry it used.
+
+NOT root causes (corrected mid-audit): run-start staleness is already solved on master
+by ensureFreshRunProtocol (protocol-freshness.ts), wired into both fill routes; and
+calibration-baseline.cjs is NOT dangerous — its writes are gated behind RESTORE_APPLY=1.
+
+BUILT
+  + src/lib/server/db/models/deck-version.ts — immutable deck_versions collection
+  + src/lib/server/services/deck-calibration/deck-versions.ts — publish / rollback /
+    list. Publish bumps version and freezes the blob + sha256; rollback republishes an
+    old snapshot FORWARD as a new higher version (never rewrites history).
+  + .../deck-calibration/resolve.ts — one deterministic loadName -> definition
+    resolver, replacing 6 ambiguous findOne({loadName}) sites.
+  + .../deck-calibration/definition-hash.ts — dependency-free canonical sha256 shared
+    by app and migration scripts.
+  + .../deck-calibration/run-guard.ts — resolves the deck a run will use; refuses an
+    unbound/dangling/archived deck when enforcement is armed.
+  + .../deck-calibration/rollout.ts — DECK_HARDENING_ROBOT_IDS per-robot opt-in.
+  + src/lib/server/opentrons/labware-refs.ts — parses load_labware() calls and the
+    Particle-id -> deck map straight out of the .py (comment-stripped, so retired
+    decks 005/006 are excluded).
+  ~ proxy.ts robotUploadProtocol — bundles only what the protocol loads (6 defs, not
+    19) and hard-fails on ambiguity or filename collision.
+  ~ maintenance.ts loadLabwareInRun — reuse compares the full ns/loadName/version URI.
+  ~ apply-edit.ts — resolver-based lookups, writes target the resolved _id, each edit
+    marks the deck unpublished.
+  ~ equipment.ts — deckLoadName, particleDeviceId, archivedAt/By/Reason.
+  ~ opentrons-run-record.ts — deckGeometry provenance subdoc.
+  ~ wax-filling + reagent-filling startRun — deck guard + run-record provenance.
+  ~ deck-calibration/+page.server.ts — publishDeck / rollbackDeck actions; Sync now
+    freezes a version before uploading; load exposes version history.
+  ~ calibration-baseline.cjs — restore now sets hasUnpublishedEdits so restored
+    geometry gets its own version on the next Sync.
+  + scripts/backfill-deck-versions.ts, scripts/deck-registry-bind.ts (--plan/--apply)
+
+STAGED ROLLOUT — nothing is on by default. DECK_HARDENING_ROBOT_IDS names the robots
+the new behaviour applies to; unset means every robot keeps today's exact code path,
+which is what makes this branch safe to merge before it is safe to enable. Run-record
+provenance is deliberately NOT gated (it changes no behaviour and is how you see
+whether the guard would have fired before arming it).
+
+PRODUCTION SAFETY — verified, not assumed. Every field the migrations write was
+grepped against origin/master: equipment.deckLoadName (on master that name belongs to
+deck_calibration_edits), equipment.particleDeviceId (belongs to the SPU/Particle
+models), equipment.archivedAt (never used with equipment; deck pickers don't filter on
+it), lastPublishedVersion / hasUnpublishedEdits / deck_versions (all new). Production
+reads none of them. A version bump also cannot disturb other robots: the production
+freshness gate compares well coordinates, and publishing changes version, not coords.
+
+MIGRATIONS — DRY-RUN ONLY, nothing applied to production yet.
+  backfill-deck-versions --plan: would freeze 5 baselines at v1 —
+    gen4deck_gen7cartridge_001/002/003/004 (576 wells each), robotarm_cartridge_deck_001 (24)
+  deck-registry-bind --plan: bind DECK-001..004 to their loadName + Particle id
+    (parsed from the .py), archive DECK-005/006 (no definition, 0 run references,
+    lastUsed never — matches the protocols' own "decks 005/006 retired" comment).
+    Archive, never delete.
+
+npm run check: 73 errors / 434 warnings — identical to the master baseline, zero
+errors in any changed file.
+
+Diagram of the full datapath (artifact):
+https://claude.ai/code/artifact/90794613-a1e4-4edf-9e19-661ea3b1ddb2
+
+NOT DONE / NEXT
+  - No physical robot exercised. Version round-trip should be proven on
+    robotarm_cartridge_deck_001 first (24 wells, not a production fill deck).
+  - Deck->Particle bindings follow the existing numbering convention; the convention
+    is now written down and checkable but has NOT been measured. equipment.currentRobotId
+    is null on all 6 deck rows, so the DB does not know which deck sits on which robot.
+    Confirm the deck physically on R04 before trusting its binding.
+  - A Vercel preview shares the production database and drives real robots — preview
+    isolates code, not data. R04 is itself production equipment.
+  - DECK-001 wax geometry still unresolved (Candidate A vs B unsettled).
+  - No UI yet for the version history / rollback actions; server actions only.
+
+================================================================================
+2026-08-19 — feat/deck-calibration-hardening — global robot offsets RETIRED; deck JSON is the single source of truth
+================================================================================
+Follow-on from the deck-calibration audit, after tracing the live "wax lands further
+right than it should" reports to their cause.
+
+WHAT WAS ACTUALLY WRONG (evidence, not inference)
+  17:23 today  +1.0mm X applied to 12 REAGENT wells (row X) of gen4deck_gen7cartridge_001
+  17:24 today  R04 global robot offset set to {x:1, y:0, z:0}
+The same 1mm correction was entered TWICE, in two different layers, one minute apart.
+The deck edit moved 12 reagent wells; the global offset moves ALL 576 wells plus the
+tube rack and tip rack. Verified against docs/deck001-live-labware-def-2026-08-19.json
+(this morning's snapshot): reagent X1 59.655 -> 60.655 and X3 53.655 -> 54.655, while
+wax X2/X4 did not move at all. So the wax holes shifted +1mm right purely as collateral
+from the global offset — exactly the reported symptom, and unintended.
+
+KEY MECHANISM: the Deck Calibration Studio jogs through the maintenance API
+(maintenance.ts), which reads the labware definition and applies NO global offset.
+A production run applies one via set_offset. So the position an operator physically
+verifies in the Studio was NOT the position the run used. Confirmed by grep: nothing
+in maintenance.ts reads RobotDeckOffset.
+
+PRECEDENT: same mistake, third occurrence. B14 was set to {-0.1,-2.4,0} on 07-01,
+caused the 07-08 deck-004 fill misses, zeroed 07-09 with the note "decks used on B14
+are Studio-tuned on B14, so the global offset double-counts".
+
+CHANGED
+  ~ calibration-rtps.ts — bims_native forced TRUE, offset_x/y/z forced 0. Forcing
+    bims_native true is load-bearing: with it false the .py falls back to its hardcoded
+    ROBOT_OFFSETS table, which is NOT all zeros (hidden-leaf/B07 = 0.15,-0.25,-1.3), so
+    deleting the rows would REINTRODUCE offsets. cal_x/cal_y/z_cal are kept — those are
+    where the tip-calibrator fixture physically sits, not a hole correction.
+  ~ deck-calibration/+page.server.ts — saveRobotOffset now REFUSES any non-zero offset.
+  + scripts/zero-robot-offsets.ts (--plan/--apply)
+
+APPLIED TO PRODUCTION
+  npx tsx scripts/zero-robot-offsets.ts --apply
+    Robot 2 R04  {x:1,y:0,z:0} -> {x:0,y:0,z:0}   (audit action=retire_global_offset)
+    Robot 1 B14  already 0,0,0
+    Robot 3 B07  already 0,0,0 (reference)
+  Live immediately — production reads robot_deck_offsets at run start, so the next fill
+  gets set_offset(0,0,0) with no deploy required. Reversible: the prior value is in the
+  audit row.
+
+DECK GEOMETRY — EARLIER CLAIM WITHDRAWN
+  An earlier note in this session said decks 001/004 had wax "~3.3mm too far right".
+  That was WRONG — an artifact of computing a deck-wide wax->reagent statistic while
+  ignoring cartridge orientation. Rows band in threes (A-C, D-F, ... V-X) = one cartridge
+  each, and orientation ALTERNATES: bands ABC/GHI/MNO/STU run +x, DEF/JKL/PQR/VWX run -x.
+  Within each band the wax->reagent offset is a consistent ~3.0mm with the sign flipping,
+  i.e. wax midway between reagent columns, which is correct.
+    deck 001  +2.4..+3.5 / -2.8..-3.5   correct (band spreads up to 2.0mm — loosest)
+    deck 004  +3.1..+3.2 / -2.5..-3.2   correct, tightest (spreads <= 0.8mm)
+    deck 003  -4.4 / -9.9   wax wells uniformly ~7.4mm displaced vs reagent
+    deck 002  +27.5 / +21.4 wax wells uniformly ~24.5mm displaced vs reagent
+  Decks 002/003 look bulk-shifted by a single constant (a bad global apply), not drifted.
+  NOT corrected — needs one jog measurement per deck to confirm before touching 288 wells.
+
+STILL OPEN — per-tip calibration cannot be enabled yet
+  The target model is: deck JSON = only source of hole positions; per-tip probe = only
+  correction. The protocol already has the switch (use_tip_calibration RTP, added
+  2026-08-18) but the probe math lost two frame terms in the PRD-6 refactor:
+    legacy   xOffset = round(x_pos - shift - 150.536 + offset['x'], 1)
+    current  xOffset = round(offset['x'] - shift, 1)
+  Independently confirmed these are directly comparable: both probe in the carriage
+  frame (types.Location(..., carriage)), both apply the result the same way
+  (well.top(h).move(Point(adjust.x, adjust.y, 0))), and the probe point is identical —
+  legacy hardcodes x_pos=124.581, current computes cal_x-0.6 = 125.181-0.6 = 124.581.
+  Missing terms: X 124.581-150.536 = -25.955 ; Y 165.747-177.0 = -11.253.
+  Enabling use_tip_calibration today would nudge every dispense ~26mm X / ~11mm Y.
+  Restore those terms (expressed via cal_x/cal_y, not re-hardcoded) and bench-validate
+  BEFORE turning the per-tip probe on.
+
+================================================================================
+2026-08-19 — feat/deck-calibration-hardening — CORRECTION: per-tip probe math is fine; tip calibration forced ON
+================================================================================
+RETRACTION of the previous entry's "STILL OPEN — per-tip calibration cannot be enabled"
+section. That conclusion was WRONG and is withdrawn.
+
+The earlier entry (and docs/DECK001-WAX-ALIGNMENT-TEST.md:167-188) claimed the PRD-6
+refactor dropped two carriage-frame constants (X -25.955, Y -11.253) from
+pick_up_and_calibrate_tip, and that re-enabling the probe would throw dispenses ~26mm.
+The reasoning looked sound — same carriage frame, same application via
+well.top(h).move(Point(adjust.x, adjust.y, 0)), and the probe start point is identical
+(legacy hardcodes x_pos=124.581; current computes cal_x-0.6 = 125.181-0.6 = 124.581).
+
+It was still wrong. scripts/ot2-bridge.py:1493-1495 documents the removal:
+  "adjust = (calibrator C-string baseline) - travel-to-switch. The old hardcoded
+   position constant (150.536/177.0) that produced a ~32mm jump is GONE — the C
+   string is now the baseline the operator dials in."
+So the constants WERE the bug and their removal was deliberate. The current formula
+(offset['x'] - shift, where offset is the calibrator's serial 'C' bend reading) is
+correct. A sanity check during the analysis had already shown the legacy formula
+yielding a ~26-31mm adjust — implausible for a tip-bend correction — and that signal
+should have been followed instead of the handoff doc.
+
+ALSO WRONG in the previous framing: per-tip calibration was never disabled by default.
+  protocols/Wax_Filling_GEN7_Cartridge.py:109  use_tip_calibration default=True
+  protocols/Reagent_Filling_GEN7.py:41         default=False (BIMS overrides to true)
+  wax-filling/+page.svelte:197                 use_tip_calibration: true
+  reagent-filling/+page.svelte:128             REAGENT_PARAM_DEFAULTS { use_tip_calibration: true }
+The "Per-tip calibration DISABLED" line in the DECK001 failing run was that run's own
+setting, not a system default.
+
+WHY THIS MATTERS OPERATIONALLY (from the .py's own note at :101-107)
+  Deck holes are taught in the Studio WITH "Calibrate tip" active, so the stored
+  coordinates are tip-NEUTRAL. Running with the probe OFF does not degrade to
+  "uncorrected" — it parks the tip on the REAGENT hole instead of the wax one
+  (confirmed B07/deck-004 2026-08-18). Wrong hole, not a small error.
+
+CHANGED
+  ~ calibration-rtps.ts — use_tip_calibration forced TRUE alongside the forced-zero
+    offsets. It is now a system invariant rather than a form default that can drift.
+    A dead calibrator is a STOP condition, not a reason to switch the probe off;
+    max_tip_adjust (4.0mm) still rejects an implausible probe per-tip.
+
+RESULTING POSITIONAL MODEL — now exactly as specified
+  deck labware definition  = the only source of hole positions
+  per-tip calibrator probe = the only correction applied on top, re-measured per tip
+  global robot offsets     = forced 0 (rows kept at zero so bims_native stays true)
+  protocol ROBOT_OFFSETS   = bypassed

@@ -20,6 +20,7 @@ export { BackingLot } from './backing-lot.js';
 export { LabwareDefinition } from './labware-definition.js';
 export { DeckCalibrationEdit } from './deck-calibration-edit.js';
 export { RobotDeckOffset } from './robot-deck-offset.js';
+export { DeckVersion } from './deck-version.js';
 export { TipCalibratorFixture } from './tip-calibrator-fixture.js';
 export { Session } from './session.js';
 export { Role } from './role.js';

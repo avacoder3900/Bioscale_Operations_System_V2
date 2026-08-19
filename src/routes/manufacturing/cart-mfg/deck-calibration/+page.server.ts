@@ -31,6 +31,14 @@ import {
 	deckEditHistory
 } from '$lib/server/services/deck-calibration/apply-edit';
 import { getRobot, robotUploadProtocol } from '$lib/server/opentrons/proxy';
+import {
+	publishDeckVersion,
+	rollbackDeckVersion,
+	listDeckVersions
+} from '$lib/server/services/deck-calibration/deck-versions';
+import { isDeckLoadName } from '$lib/server/services/deck-calibration/resolve';
+import { isHardenedRobot } from '$lib/server/services/deck-calibration/rollout';
+import { DeckVersion } from '$lib/server/db';
 import type { PageServerLoad, Actions } from './$types';
 
 const DECK_RE = /(gen4deck|cartridge_deck)/i;
@@ -97,8 +105,20 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		zCalWax: c.zCalWax ?? 34.491, zCalReagent: c.zCalReagent ?? 40.8
 	}));
 
+	// Version history for the selected deck (empty for racks — only decks are versioned).
+	const versions = selected && isDeckLoadName(selected) ? await listDeckVersions(selected, 50) : [];
+	const selectedDef = selected
+		? ((await LabwareDefinition.findOne({ loadName: selected })
+				.select('version lastPublishedVersion hasUnpublishedEdits')
+				.lean()) as any)
+		: null;
+
 	return {
 		kind,
+		versions: JSON.parse(JSON.stringify(versions)),
+		liveVersion: selectedDef?.version ?? null,
+		lastPublishedVersion: selectedDef?.lastPublishedVersion ?? null,
+		hasUnpublishedEdits: !!selectedDef?.hasUnpublishedEdits,
 		decks, tubeRacks, tipRacks,
 		robots,
 		selected,
@@ -208,6 +228,23 @@ export const actions: Actions = {
 		const x = Number(data.get('x')), y = Number(data.get('y')), z = Number(data.get('z'));
 		if (!robotId) return fail(400, { error: 'Pick a robot' });
 		if (![x, y, z].every(Number.isFinite)) return fail(400, { error: 'x/y/z must be numbers' });
+
+		// Global offsets are retired (2026-08-19). The deck definition is the only
+		// source of hole positions, and the per-tip probe is the only correction on
+		// top of it. A non-zero global offset moves all 576 holes plus the tube and
+		// tip racks, so it silently double-counts geometry the Studio already tuned
+		// — that is what caused the 07-08 deck-004 misses on B14 and pushed R04's
+		// wax 1mm right on 08-19. Storing zero is still allowed so the row can stay
+		// as an explicit "no offset" record.
+		if (x !== 0 || y !== 0 || z !== 0) {
+			return fail(400, {
+				error:
+					`Global robot offsets are retired — this would move every hole on the deck, ` +
+					`not just the one you measured. The deck definition is the single source of ` +
+					`truth for hole positions; correct the hole in the Studio instead, and let the ` +
+					`per-tip calibrator handle tip-to-tip variation.`
+			});
+		}
 		await TipCalibratorFixture.updateOne(
 			{ robotId },
 			{ $set: { position: { x, y, z }, capturedBy: { _id: locals.user._id, username: locals.user.username }, capturedAt: new Date() }, $setOnInsert: { _id: generateId() } },
@@ -239,6 +276,81 @@ export const actions: Actions = {
 	},
 
 	/**
+	 * Freeze the selected deck's current geometry as a new immutable version.
+	 *
+	 * Separate from Sync so a deck can be snapshotted at a known-good moment
+	 * without also pushing it to a robot. No-ops when nothing changed since the
+	 * last version, so pressing it twice cannot litter the history.
+	 */
+	publishDeck: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'manufacturing:write');
+		await connectDB();
+
+		const data = await request.formData();
+		const deckLoadName = (data.get('deckLoadName') as string)?.trim() || '';
+		const note = (data.get('note') as string)?.trim() || '';
+		if (!deckLoadName) return fail(400, { error: 'deckLoadName is required' });
+		if (!isDeckLoadName(deckLoadName)) {
+			return fail(400, { error: `"${deckLoadName}" is not a cartridge deck — only decks are versioned.` });
+		}
+
+		try {
+			const r = await publishDeckVersion({ deckLoadName, user: locals.user, note: note || undefined });
+			return { success: true, action: 'publishDeck', ...r };
+		} catch (e) {
+			return fail(500, { error: e instanceof Error ? e.message : 'Publish failed' });
+		}
+	},
+
+	/**
+	 * Restore an earlier version of a deck.
+	 *
+	 * The old snapshot is never mutated — its geometry is republished as a NEW
+	 * higher version, so a version number always means exactly one geometry.
+	 * Requires the deck's loadName typed back as confirmation, because this
+	 * rewrites every hole on the deck at once.
+	 */
+	rollbackDeck: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'manufacturing:write');
+		await connectDB();
+
+		const data = await request.formData();
+		const deckLoadName = (data.get('deckLoadName') as string)?.trim() || '';
+		const toVersion = Number(data.get('toVersion'));
+		const confirm = (data.get('confirm') as string)?.trim() || '';
+		const note = (data.get('note') as string)?.trim() || '';
+
+		if (!deckLoadName) return fail(400, { error: 'deckLoadName is required' });
+		if (!Number.isInteger(toVersion) || toVersion < 1) {
+			return fail(400, { error: 'toVersion must be a published version number' });
+		}
+		if (confirm !== deckLoadName) {
+			return fail(400, {
+				error: `Type the deck's loadName (${deckLoadName}) to confirm — rollback rewrites every hole on the deck.`
+			});
+		}
+
+		try {
+			const r = await rollbackDeckVersion({
+				deckLoadName,
+				toVersion,
+				user: locals.user,
+				note: note || undefined
+			});
+			return {
+				success: true,
+				action: 'rollbackDeck',
+				...r,
+				detail: `${r.detail}. Sync to the robot to put it on the deck.`
+			};
+		} catch (e) {
+			return fail(500, { error: e instanceof Error ? e.message : 'Rollback failed' });
+		}
+	},
+
+	/**
 	 * Push the corrected deck to a robot by re-uploading the protocol — robotUploadProtocol
 	 * bundles the now-corrected labware defs from Mongo. Needs the protocol .py bytes,
 	 * which BIMS only has if a protocol was stored (OpentronProtocol.fileContent). If
@@ -260,6 +372,39 @@ export const actions: Actions = {
 
 		const types = which === 'wax' ? ['wax-filling'] : which === 'reagent' ? ['reagent-filling'] : ['wax-filling', 'reagent-filling'];
 		const results: { processType: string; ok: boolean; detail: string }[] = [];
+
+		// Freeze every deck carrying unpublished jog edits BEFORE uploading, so the
+		// bundle the robot receives is a numbered version we can name later, and so
+		// the definition arrives under a NEW namespace/loadName/version URI. That
+		// fresh identity is what stops a robot reusing a definition it already
+		// holds — Opentrons keys registered definitions to that triple, so pushing
+		// changed geometry at an unchanged version is how stale coordinates survive
+		// a "successful" sync.
+		// Gated per robot: bumping a deck's version changes the identity every robot
+		// resolves it by, so it only happens when syncing to an opted-in robot.
+		const dirty = isHardenedRobot(robot)
+			? ((await LabwareDefinition.find({ hasUnpublishedEdits: true })
+					.select('loadName')
+					.lean()) as any[])
+			: [];
+		const publishedVersions: { deckLoadName: string; version: number }[] = [];
+		for (const d of dirty.filter((x) => isDeckLoadName(String(x.loadName)))) {
+			try {
+				const r = await publishDeckVersion({
+					deckLoadName: String(d.loadName),
+					user: locals.user,
+					note: `sync to ${robot.name ?? robotId}`
+				});
+				if (r.published) publishedVersions.push({ deckLoadName: String(d.loadName), version: r.version });
+				results.push({ processType: String(d.loadName), ok: true, detail: r.detail });
+			} catch (e) {
+				results.push({
+					processType: String(d.loadName),
+					ok: false,
+					detail: `Could not freeze a version: ${e instanceof Error ? e.message : 'unknown'}`
+				});
+			}
+		}
 
 		for (const pt of types) {
 			const proto = (await OpentronProtocol.findOne({ processType: pt, isActive: true }).sort({ createdAt: -1 }).lean()) as any;
@@ -287,6 +432,21 @@ export const actions: Actions = {
 						updatedAt: new Date()
 					} } }
 				);
+				for (const pv of publishedVersions) {
+					await DeckVersion.updateOne(
+						{ deckLoadName: pv.deckLoadName, version: pv.version },
+						{
+							$push: {
+								publishedToRobots: {
+									robotId: String(robotId),
+									robotName: robot.name ?? null,
+									opentronsProtocolId: uploaded.opentronsProtocolId,
+									at: new Date()
+								}
+							}
+						}
+					);
+				}
 				results.push({ processType: pt, ok: true, detail: `Re-uploaded — analysis ${uploaded.analysisStatus}` });
 			} catch (e) {
 				results.push({ processType: pt, ok: false, detail: e instanceof Error ? e.message : 'Upload failed' });

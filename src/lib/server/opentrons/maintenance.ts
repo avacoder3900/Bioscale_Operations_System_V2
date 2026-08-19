@@ -13,6 +13,7 @@
  */
 
 import { robotPost, robotGet, robotDelete } from './proxy';
+import { isHardenedRobot } from '$lib/server/services/deck-calibration/rollout';
 
 /** Axis names accepted by moveRelative on OT-2 (left/right Z is per pipette mount) */
 export type JogAxis = 'x' | 'y' | 'leftZ' | 'rightZ';
@@ -377,13 +378,15 @@ async function loadedLabwareAtSlot(
 	robot: RobotRef,
 	runId: string,
 	slot: string
-): Promise<{ id: string; loadName: string } | null> {
+): Promise<{ id: string; loadName: string; definitionUri: string | null } | null> {
 	const res = await robotGet(robot as any, `/maintenance_runs/${runId}`);
 	if (!res.ok) return null;
 	const body = (await res.json().catch(() => ({}))) as any;
 	const lw = (body?.data?.labware ?? []) as Array<any>;
 	const match = lw.find((x) => String(x?.location?.slotName ?? '') === String(slot));
-	return match?.id ? { id: match.id, loadName: match.loadName } : null;
+	return match?.id
+		? { id: match.id, loadName: match.loadName, definitionUri: match.definitionUri ?? null }
+		: null;
 }
 
 export async function loadLabwareInRun(
@@ -396,7 +399,24 @@ export async function loadLabwareInRun(
 	// used to load this slot (e.g. pick up a tip, then pick up again without closing).
 	// Reuse the existing labware id instead of failing.
 	const existing = await loadedLabwareAtSlot(robot, runId, args.slot).catch(() => null);
-	if (existing && existing.loadName === args.loadName) return existing.id;
+	// Reuse ONLY when the full identity matches — namespace/loadName/version, not
+	// loadName alone. A maintenance run binds the geometry it was given at load
+	// time and keeps serving it. Matching on loadName meant that after a deck edit
+	// the robot still moved to the PRE-edit coordinates while the Studio displayed
+	// the new ones, so the operator jogged the same error a second time and the
+	// correction silently doubled. Publishing bumps the version, so a stale bind
+	// now fails this check and is reloaded.
+	const wantUri = `${args.namespace}/${args.loadName}/${args.version}`;
+	if (existing && existing.loadName === args.loadName) {
+		// Gated per robot: on a robot that is not opted in, keep the old
+		// loadName-only reuse so its jog sessions behave exactly as they do today.
+		if (!isHardenedRobot(robot)) return existing.id;
+		if (!existing.definitionUri || existing.definitionUri === wantUri) return existing.id;
+		// Same labware, different version: the slot holds geometry we no longer
+		// trust. Treat it exactly like a foreign occupant so the caller opens a
+		// fresh run rather than silently calibrating against stale coordinates.
+		throw new SlotOccupiedError(args.slot, existing.definitionUri, wantUri);
+	}
 	// A DIFFERENT labware already occupies the slot (e.g. the reagent tiprack was loaded
 	// to calibrate it, then a wax tip pickup needs the 20µL rack in the same physical
 	// slot 11). The OT-2 has no gripper and moveLabware/offDeck pauses the run, so the

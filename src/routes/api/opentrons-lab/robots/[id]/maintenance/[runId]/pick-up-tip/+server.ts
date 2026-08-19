@@ -10,6 +10,7 @@ import type { RequestHandler } from './$types';
 import { requirePermission } from '$lib/server/permissions';
 import { getRobot } from '$lib/server/opentrons/proxy';
 import { connectDB, LabwareDefinition } from '$lib/server/db';
+import { resolveLabwareDefinition } from '$lib/server/services/deck-calibration/resolve';
 import { registerLabwareDefinition, loadLabwareInRun, pickUpTip, SlotOccupiedError } from '$lib/server/opentrons/maintenance';
 
 export const config = { maxDuration: 60 };
@@ -30,10 +31,15 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 	if (!tiprackLoadName || typeof tiprackLoadName !== 'string') error(400, 'tiprackLoadName required');
 
 	await connectDB();
-	const def = (await LabwareDefinition.findOne({ loadName: tiprackLoadName }).lean()) as any;
-	if (!def?.definition) error(404, `Tiprack "${tiprackLoadName}" not found in BIMS labware library`);
-	const namespace = def.namespace ?? def.definition?.namespace;
-	const version = Number(def.version ?? def.definition?.version ?? 1);
+	let def: any;
+	try {
+		({ doc: def } = await resolveLabwareDefinition(tiprackLoadName, { strict: true }));
+	} catch (e) {
+		throw error(404, e instanceof Error ? e.message : `Tiprack "${tiprackLoadName}" not found`);
+	}
+	// Identity from the registered blob, not the columns (see load-labware).
+	const namespace = def.definition?.namespace ?? def.namespace;
+	const version = Number(def.definition?.version ?? def.version ?? 1);
 
 	try {
 		await registerLabwareDefinition(robot, params.runId, def.definition);

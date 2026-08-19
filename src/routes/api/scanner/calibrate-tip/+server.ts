@@ -18,6 +18,7 @@
  */
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
+import { resolveLabwareDefinition } from '$lib/server/services/deck-calibration/resolve';
 import { requirePermission } from '$lib/server/permissions';
 import {
 	connectDB,
@@ -69,9 +70,11 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 	await connectDB();
 
 	const tipSpec = TIP_FOR_MOUNT[mount];
-	const tipDef = (await LabwareDefinition.findOne({ loadName: tipSpec.loadName }).lean()) as any;
-	if (!tipDef?.definition) {
-		error(400, `Tiprack '${tipSpec.loadName}' not in the BIMS labware library`);
+	let tipDef: any;
+	try {
+		({ doc: tipDef } = await resolveLabwareDefinition(tipSpec.loadName, { strict: true }));
+	} catch (e) {
+		throw error(400, e instanceof Error ? e.message : `Tiprack '${tipSpec.loadName}' not in the BIMS labware library`);
 	}
 
 	// Calibrator point: per-robot fixture, else the 'global' fallback, else .py default.

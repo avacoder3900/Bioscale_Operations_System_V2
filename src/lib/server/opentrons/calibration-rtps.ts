@@ -1,20 +1,36 @@
 /**
- * NATIVE-CALIBRATION-SYSTEM PRD 6 — compute the BIMS-native calibration runtime
- * parameters for a wax/reagent run.
+ * Calibration runtime parameters for a wax/reagent run.
  *
- * The cutover protocols expose RTPs: bims_native, offset_x/y/z (global deck
- * offset → applied to ALL labware), cal_x/cal_y/z_cal (tip-calibrator point).
- * This resolves them from RobotDeckOffset + TipCalibratorFixture and returns
- * ONLY the keys the uploaded protocol actually declares (passed via the param
- * schema) — so it's safe against a robot still running the pre-cutover .py
- * (unknown RTPs make POST /runs fail).
+ * POSITIONAL MODEL (2026-08-19). There is exactly ONE source of truth for where
+ * a hole is: the deck's labware definition in Mongo. Nothing else is allowed to
+ * move the pipette relative to it. The only correction applied on top is the
+ * per-tip probe, which measures how far THIS tip is bent and is re-measured at
+ * every tip pickup.
  *
- * Safety: bims_native is set True only when a RobotDeckOffset row exists for the
- * robot. With no row, bims_native stays absent/False and the protocol falls back
- * to its built-in per-robot table = current behavior. The reference robot's row
- * is 0,0,0, so its "apply to all labware" is a positional no-op.
+ * That means every global offset is now forced to zero:
+ *
+ *   offset_x/y/z = 0   ->  carriage.set_offset(0,0,0), and the same for the tube
+ *                          rack and tip rack, i.e. positional no-ops.
+ *
+ * `bims_native` is forced TRUE, and that is load-bearing rather than cosmetic.
+ * The protocol falls back to a hardcoded ROBOT_OFFSETS table when bims_native is
+ * false, and that table is NOT all zeros (hidden-leaf / B07 carries
+ * {0.15, -0.25, -1.3}). Simply deleting the RobotDeckOffset rows would therefore
+ * REINTRODUCE offsets rather than remove them. Sending bims_native=true with
+ * zeros is what actually disables both layers.
+ *
+ * Why the global offset had to go: the Deck Calibration Studio jogs through the
+ * maintenance API, which reads the labware definition and applies NO global
+ * offset. A production run applied one. So the position an operator physically
+ * verified in the Studio was not the position the run used — on 2026-08-19 R04
+ * carried x=+1mm, which pushed every wax hole 1mm right of the verified spot.
+ * The same mistake hit B14 on 2026-07-01 and caused the 07-08 deck-004 misses.
+ *
+ * cal_x / cal_y / z_cal are KEPT. They are not a correction to hole positions —
+ * they are where the tip-calibrator fixture physically sits, i.e. where the
+ * robot must travel to measure a tip. They are legitimately per-robot.
  */
-import { connectDB, RobotDeckOffset, TipCalibratorFixture } from '$lib/server/db';
+import { connectDB, TipCalibratorFixture } from '$lib/server/db';
 
 type ParamDef = { variableName: string };
 
@@ -28,23 +44,37 @@ export async function calibrationRtpValues(
 	await connectDB();
 	const declared = new Set((paramSchema ?? []).map((p) => p.variableName));
 	const out: Record<string, number | boolean> = {};
-	// If the uploaded protocol has none of the cutover RTPs, it's the old .py —
-	// inject nothing.
+
+	// No cutover RTPs at all => pre-cutover .py. Injecting unknown RTPs makes
+	// POST /runs fail, so inject nothing and leave that protocol alone.
 	if (!declared.has('bims_native')) return out;
 
-	const off = (await RobotDeckOffset.findOne({ robotId }).lean()) as any;
+	// Always native, always zero. See the header: this is what disables BOTH the
+	// stored per-robot offset and the protocol's hardcoded fallback table.
+	out['bims_native'] = true;
+	if (declared.has('offset_x')) out['offset_x'] = 0;
+	if (declared.has('offset_y')) out['offset_y'] = 0;
+	if (declared.has('offset_z')) out['offset_z'] = 0;
+
+	// The per-tip probe is the ONLY correction left, so it is not optional.
+	//
+	// Deck holes are taught in the Studio with "Calibrate tip" active, which means
+	// the stored coordinates are tip-NEUTRAL: they only land when the fill applies
+	// the same probe adjust. Running with the probe off does not fall back to
+	// "uncorrected" — it parks the tip on the REAGENT hole instead of the wax one
+	// (confirmed on B07/deck-004, 2026-08-18). That is a wrong-hole dispense, not a
+	// small error, so it must not be reachable by an operator toggle or a stale
+	// form default.
+	//
+	// A dead calibrator is therefore a STOP condition, not a reason to switch this
+	// off. max_tip_adjust still rejects an implausible probe and falls back to
+	// nominal for that tip.
+	if (declared.has('use_tip_calibration')) out['use_tip_calibration'] = true;
+
+	// Tip-calibrator fixture location — where to go to measure, not a hole shift.
 	const fix =
 		((await TipCalibratorFixture.findOne({ robotId }).lean()) as any) ||
 		((await TipCalibratorFixture.findOne({ robotId: 'global' }).lean()) as any);
-
-	// Drive BIMS-native offset only when a captured offset exists for this robot.
-	out['bims_native'] = !!off;
-	if (off) {
-		const o = off.offset ?? { x: 0, y: 0, z: 0 };
-		if (declared.has('offset_x')) out['offset_x'] = Number(o.x ?? 0);
-		if (declared.has('offset_y')) out['offset_y'] = Number(o.y ?? 0);
-		if (declared.has('offset_z')) out['offset_z'] = Number(o.z ?? 0);
-	}
 	if (fix) {
 		const p = fix.position ?? {};
 		if (declared.has('cal_x') && p.x != null) out['cal_x'] = Number(p.x);

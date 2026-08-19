@@ -16,7 +16,16 @@ const labwareDefinitionSchema = new Schema({
 	category: String,                               // metadata.displayCategory
 	fileName: String,                               // original .json filename (display only)
 	definition: { type: Schema.Types.Mixed, required: true }, // the full labware JSON
-	uploadedBy: String
+	uploadedBy: String,
+
+	// ── Deck version control (deck_versions) ────────────────────────────────
+	// `version` above is the Opentrons identity component and is bumped on
+	// PUBLISH, not on each jog edit. These two track the relationship between
+	// the live working geometry and the frozen history.
+	/** Highest version frozen into deck_versions. Null until first publish. */
+	lastPublishedVersion: { type: Number, default: null },
+	/** True when jog edits have landed since lastPublishedVersion was frozen. */
+	hasUnpublishedEdits: { type: Boolean, default: false }
 }, { timestamps: true });
 
 // One row per (namespace, loadName, version) — re-upload upserts.

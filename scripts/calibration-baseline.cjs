@@ -124,9 +124,14 @@ async function main() {
     const only = args.slice(1);
     const defs = base.labwareDefinitions.filter((d) => !only.length || only.includes(d.loadName));
     for (const d of defs) {
+      // Mark the def unpublished as well as restoring it. Restoring rewrites
+      // geometry behind deck_versions' back, so without this the deck would look
+      // "published at vN" while carrying entirely different coordinates, and the
+      // next Sync would skip freezing it. Flagging it dirty makes the next Sync
+      // freeze the restored geometry as its own numbered version.
       await db.collection('labware_definitions').updateOne(
         { loadName: d.loadName },
-        { $set: { definition: d.definition } },
+        { $set: { definition: d.definition, hasUnpublishedEdits: true } },
         { upsert: false }
       );
       console.log(`restored def ${d.loadName}`);

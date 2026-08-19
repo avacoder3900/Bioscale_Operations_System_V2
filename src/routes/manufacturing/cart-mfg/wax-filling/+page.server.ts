@@ -15,6 +15,9 @@ import { protectLockedCarts, LOCKED_STATUSES } from '$lib/server/manufacturing/l
 import { getRobot, robotGet, robotPost, bridgeDeviceIdForRobot } from '$lib/server/opentrons/proxy';
 import { calibrationRtpValues } from '$lib/server/opentrons/calibration-rtps';
 import { ensureFreshRunProtocol } from '$lib/server/opentrons/protocol-freshness';
+import { resolveDeckBinding, DeckBindingError } from '$lib/server/services/deck-calibration/run-guard';
+import { isHardenedRobot } from '$lib/server/services/deck-calibration/rollout';
+import { OpentronsRunRecord } from '$lib/server/db';
 import bcrypt from 'bcryptjs';
 import type { PageServerLoad, Actions } from './$types';
 
@@ -849,6 +852,23 @@ export const actions: Actions = {
 		const robot = await getRobot(robotId);
 		if (!robot) return fail(404, { error: `Robot ${robotId} not found / not active` });
 
+		// Deck identity guard. BIMS knows which deck the operator selected; the
+		// robot picks its cartridge-deck definition independently, from a Particle
+		// id it reads over serial. Prove the selected deck is actually bound to a
+		// real definition before moving a pipette — an unbound or dangling deck is
+		// how a calibrated deck ends up filling at someone else's coordinates.
+		let deckBinding;
+		try {
+			deckBinding = await resolveDeckBinding(run?.deckId ?? null, {
+				enforce: isHardenedRobot(robot)
+			});
+		} catch (e) {
+			if (e instanceof DeckBindingError) return fail(400, { error: e.message });
+			throw e;
+		}
+		if (deckBinding.warning) console.warn('[wax-filling startRun] ' + deckBinding.warning);
+
+
 		// Freshness gate: resolve the robot's CURRENT wax protocol server-side and
 		// prove its bundled deck calibration matches live Mongo; auto-resync if
 		// not. The posted opentronsProtocolId is intentionally NOT trusted — a page
@@ -936,6 +956,30 @@ export const actions: Actions = {
 			if (!opentronsRunId) {
 				return fail(502, { error: 'Robot returned no run id' });
 			}
+
+		// Geometry provenance. Record exactly which deck definition, at which
+		// version and content hash, this run was started against — the definition
+		// is edited in place, so these coordinates stop existing the moment anyone
+		// jogs the deck again.
+		try {
+			await OpentronsRunRecord.create({
+				_id: generateId(),
+				manufacturingRunId: String(runId),
+				manufacturingRunType: 'wax-filling',
+				robotId: String(robotId),
+				robotName: robot.name ?? null,
+				opentronsRunId,
+				opentronsProtocolId: runProtocolId,
+				runtimeParameters: runTimeParameterValues,
+				deckGeometry: deckBinding,
+				status: 'created',
+				robotCreatedAt: new Date(),
+				startedBy: locals.user.username
+			});
+		} catch (e) {
+			// Provenance must never block a fill that the robot already accepted.
+			console.error('[wax-filling startRun] could not write run record:', e instanceof Error ? e.message : e);
+		}
 		} catch (err) {
 			return fail(502, {
 				error: `Couldn't reach robot: ${err instanceof Error ? err.message : 'unknown'}`
