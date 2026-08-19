@@ -8603,3 +8603,13 @@ Context: multi-pose joint-map calibration is ALREADY on master (9e9e19fe,
 whose code is byte-identical to master's and should be deleted, not merged.
 The Pi serves the matching /calibrate/map endpoints from
 feat/multi-pose-calibration.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-git-feat-ro-61d252-brevitest.vercel.app
+  (immutable: https://bioscale-operations-system-mongodb-k6p10m1hn-brevitest.vercel.app)
+Source: branch feat/robot-arm-unified-ui @ commit ee389ce3
+Retrieve this exact code: git checkout feat/robot-arm-unified-ui at commit ee389ce3
+What this deployment is for: verify the consolidated arm page —
+  Control/Jog/Calibrate/Runs tabs, the live MJPEG arm camera panel, and the
+  ungated per-joint jog — before merging ARM-02 forward to master. Entry point
+  /manufacturing/cart-mfg/robot-arm/control. arm-pi is live with DRY_RUN=false,
+  so per-joint jog on this preview produces REAL motion.
