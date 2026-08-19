@@ -8263,3 +8263,23 @@ Source: branch feat/cartridge-status-flow @ commit c627c5be
 Retrieve this exact code: git checkout feat/cartridge-status-flow at commit c627c5be
 What this deployment is for: bench-test the implicit-top-seal reagent flow (Complete run →
   reagent_filled → Reagent Inspect photo → reagent_qc) before merging to master.
+
+================================================================================
+2026-08-19 — master — cartridge-status-flow merged to production + top-sealing cleanup applied
+================================================================================
+Merged feat/cartridge-status-flow → master (merge 43d8c9d3). Per Jacob's follow-up: the
+carts "waiting at top sealing" were 31 ReagentBatchRecords stuck at status 'Top Sealing'
+(Jul 1 – Aug 14, mostly already-run carts). Migration was narrowed to RUN status only —
+no cartridge status changed, no completed carts / test results touched, historical
+topSeal sub-docs (726 carts, 663 completed) kept for DHR/traceability. Ran
+`npx tsx scripts/migrate-retire-top-sealing.ts --apply` against production Atlas:
+31 runs → Completed (audit rows action=migrate_retire_top_sealing), 0 remaining. 3 carts
+still at `sealed` are left as-is (capture accepts sealed → reagent_qc).
+Also added scripts/diag-topseal-retire-state.ts (read-only census).
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit 43d8c9d3
+Retrieve this exact code: git checkout master at commit 43d8c9d3
+What this deployment is for: top sealing implicit / post-OT-2 reagent queue retired
+  (REAGENT-TOPSEAL-IMPLICIT). Watch: first real reagent run Complete → run Completed,
+  carts reagent_filled, PT-CT-113 consumption row; Reagent Inspect photo → reagent_qc.
