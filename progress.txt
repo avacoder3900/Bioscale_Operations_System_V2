@@ -8256,3 +8256,10 @@ Inspection/Top Sealing/Storage runs → Completed; sealed carts → reagent_fill
 RUN IT after this branch deploys to production.
 Not touched: Cut Top Seal material cutting (top-seal-cutting, WI-03, PT-CT-103 rolls).
 npm run check: 11 errors / 434 warnings — exact baseline, zero in touched files.
+
+Deployment: preview — Vercel GitHub-integration preview for the branch push (URL in the
+  Vercel dashboard → Deployments, filter branch feat/cartridge-status-flow)
+Source: branch feat/cartridge-status-flow @ commit c627c5be
+Retrieve this exact code: git checkout feat/cartridge-status-flow at commit c627c5be
+What this deployment is for: bench-test the implicit-top-seal reagent flow (Complete run →
+  reagent_filled → Reagent Inspect photo → reagent_qc) before merging to master.
