@@ -23,8 +23,7 @@ export const load: LayoutServerLoad = async ({ locals }) => {
 		await connectDB();
 
 		// Mirror of reagent-filling's layout: reagent runs lock the robot from
-		// wax until they pass Inspection (i.e. only Top Sealing / Storage free
-		// the robot).
+		// wax until they complete (Running is the last reagent stage).
 		const REAGENT_PAGE_OWNED = ['Setup', 'Loading', 'Running', 'Inspection',
 			'setup', 'loading', 'running', 'inspection'];
 

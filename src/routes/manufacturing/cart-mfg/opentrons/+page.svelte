@@ -54,7 +54,6 @@
 			case 'Inspection':
 				return 'bg-yellow-900/50 text-yellow-300 border border-yellow-500/30';
 			case 'QC':
-			case 'Top Sealing':
 				return 'bg-cyan-900/50 text-cyan-300 border border-cyan-500/30';
 			case 'Completed':
 				return 'bg-emerald-900/50 text-emerald-300 border border-emerald-500/30';

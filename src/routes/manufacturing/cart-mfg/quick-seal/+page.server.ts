@@ -2,9 +2,16 @@
  * Quick-Seal shortcut (QUICK-SEAL-WAXQC-TO-SEALED.md).
  *
  * Bulk-scan cartridge barcodes and move them from the wax stage
- * (wax_filled / wax_ready, plus legacy wax_qc) straight to `sealed` — the state
- * right before the reagent picture. Shortcuts reagent_filling → reagent_filled →
- * sealed for a workflow where those steps are handled outside BIMS.
+ * (wax_filled / wax_ready, plus legacy wax_qc) straight to `reagent_filled` —
+ * the state right before the reagent picture. Shortcuts reagent_filling →
+ * reagent_filled for a workflow where those steps are handled outside BIMS.
+ *
+ * REAGENT-TOPSEAL-IMPLICIT (2026-08-19): the target used to be `sealed`
+ * (post top-seal, pre-photo). `sealed` is retired as a live state — top sealing
+ * is implicit after reagent fill and the Reagent Inspect photo takes
+ * reagent_filled → reagent_qc. No reagentFilling sub-doc is written (none of
+ * that data exists for a shortcut cart); `priorStatus` + the note keep the
+ * provenance.
  *
  * WAX-SIMPLIFY: wax_filled is accepted (it is the wax-stage resting state now).
  * Any other status (or not-found) is rejected per-cart and reported; valid carts
@@ -64,15 +71,14 @@ export const actions: Actions = {
 				{ _id: barcode },
 				{
 					$set: {
-						status: 'sealed',
-						priorStatus: cart.status,
-						topSeal: { operator: op, timestamp: now, recordedAt: now }
+						status: 'reagent_filled',
+						priorStatus: cart.status
 					},
 					$push: {
 						notes: {
 							_id: generateId(),
-							body: `Quick-Seal shortcut: ${cart.status} → sealed (skipped verdict / reagent-fill steps).`,
-							phase: 'sealed',
+							body: `Quick-Seal shortcut: ${cart.status} → reagent_filled (skipped verdict / reagent-fill steps; top seal implicit).`,
+							phase: 'reagent_filled',
 							author: op.username,
 							createdAt: now
 						}
@@ -84,7 +90,7 @@ export const actions: Actions = {
 				tableName: 'cartridge_records',
 				recordId: barcode,
 				action: 'quick_seal',
-				newData: { from: cart.status, to: 'sealed' },
+				newData: { from: cart.status, to: 'reagent_filled' },
 				changedAt: now,
 				changedBy: op.username
 			});

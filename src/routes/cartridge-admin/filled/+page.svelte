@@ -14,11 +14,10 @@
 	let feedbackType = $state<'success' | 'error'>('success');
 	let showCustomerAssign = $state<string | null>(null);
 
-	const FILLED_STAGES: ('Inspected' | 'Top Sealed' | 'Stored')[] = ['Inspected', 'Top Sealed', 'Stored'];
+	const FILLED_STAGES: ('Inspected' | 'Stored')[] = ['Inspected', 'Stored'];
 
 	const stageColors: Record<string, string> = {
 		Inspected: 'bg-yellow-900/50 text-yellow-300 border-yellow-500/30',
-		'Top Sealed': 'bg-purple-900/50 text-purple-300 border-purple-500/30',
 		Stored: 'bg-emerald-900/50 text-emerald-300 border-emerald-500/30'
 	};
 

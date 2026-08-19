@@ -59,7 +59,7 @@ export const GET: RequestHandler = async ({ locals }) => {
 	const REAGENT_ACTIVE = ['Setup', 'Loading', 'Running', 'Inspection',
 		'setup', 'loading', 'running', 'inspection'];
 	const WAX_POST_OT2_QUEUED = ['QC', 'Storage', 'qc', 'storage'];
-	const REAGENT_POST_OT2_QUEUED = ['Top Sealing', 'Storage'];
+	// Reagent runs have no post-OT-2 queue (REAGENT-TOPSEAL-IMPLICIT).
 
 	const robotStatuses = (robots as any[]).map((robot: any) => {
 		const robotId = String(robot._id);
@@ -76,8 +76,6 @@ export const GET: RequestHandler = async ({ locals }) => {
 			status = 'running_reagent'; displayStatus = `In Use — Reagent (${reagentRun.status})`; robotPhysicallyFree = false;
 		} else if (waxRun && WAX_POST_OT2_QUEUED.includes(waxRun.status)) {
 			status = 'available'; displayStatus = `Available — Wax queued (${waxRun.status})`; robotPhysicallyFree = true;
-		} else if (reagentRun && REAGENT_POST_OT2_QUEUED.includes(reagentRun.status)) {
-			status = 'available'; displayStatus = `Available — Reagent queued (${reagentRun.status})`; robotPhysicallyFree = true;
 		} else {
 			status = 'available'; displayStatus = 'Available'; robotPhysicallyFree = true;
 		}

@@ -144,7 +144,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 			activeRuns: activeWaxRuns, completedRuns: waxStats[0]?.totalRuns ?? 0
 		},
 		{
-			id: 'reagent', name: 'Reagent Filling + Top Seal', href: '/manufacturing/cart-mfg/reagent-filling',
+			id: 'reagent', name: 'Reagent Filling (top seal implicit)', href: '/manufacturing/cart-mfg/reagent-filling',
 			inputs: [
 				{ name: 'Wax-Filled Cartridges', icon: '🟡', count: waxStored, unit: 'available' },
 				{ name: 'Reagents (per assay)', icon: '💧', count: null as number | null, unit: 'wells' },

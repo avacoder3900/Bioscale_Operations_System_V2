@@ -194,7 +194,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 	const REAGENT_ACTIVE = ['Setup', 'Loading', 'Running', 'Inspection',
 		'setup', 'loading', 'running', 'inspection'];
 	const WAX_POST_OT2_QUEUED = ['QC', 'Storage', 'qc', 'storage'];
-	const REAGENT_POST_OT2_QUEUED = ['Top Sealing', 'Storage'];
+	// Reagent runs have no post-OT-2 queue (REAGENT-TOPSEAL-IMPLICIT): Running
+	// is the terminal stage, so a reagent run is either active or done.
 
 	const robotUtilMap = new Map<string, number>();
 	for (const r of [...(robotUtilWax as any[]), ...(robotUtilReagent as any[])]) {
@@ -221,10 +222,6 @@ export const load: PageServerLoad = async ({ locals }) => {
 		} else if (waxRun && WAX_POST_OT2_QUEUED.includes(waxRun.status)) {
 			status = 'available';
 			displayStatus = `Available — Wax queued (${waxRun.status})`;
-			robotPhysicallyFree = true;
-		} else if (reagentRun && REAGENT_POST_OT2_QUEUED.includes(reagentRun.status)) {
-			status = 'available';
-			displayStatus = `Available — Reagent queued (${reagentRun.status})`;
 			robotPhysicallyFree = true;
 		} else {
 			status = 'available';
@@ -321,7 +318,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 	const completedStatuses = ['completed', 'Completed'];
 	const activeStatuses = ['Setup', 'Loading', 'Running', 'setup', 'loading', 'running',
-		'Awaiting Removal', 'QC', 'Storage', 'Inspection', 'Top Sealing'];
+		'Awaiting Removal', 'QC', 'Storage', 'Inspection'];
 	const abortedStatuses = ['aborted', 'Aborted', 'cancelled', 'Cancelled'];
 
 	const yieldPercent = producedToday > 0

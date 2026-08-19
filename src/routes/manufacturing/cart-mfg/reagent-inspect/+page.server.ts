@@ -1,9 +1,10 @@
 /**
  * /manufacturing/cart-mfg/reagent-inspect — inline CV deployment point
- * (REAGENT-INSPECT-AFTER-TOPSEAL).
+ * (REAGENT-INSPECT-AFTER-TOPSEAL, REAGENT-TOPSEAL-IMPLICIT).
  *
- * Runs AFTER Cut Top Seal: every sealed cartridge gets photographed here and the
- * deployed model's verdict is shown immediately. Mirror of /wax-inspect, pinned
+ * Runs after reagent fill + the implicit top seal: every reagent_filled
+ * cartridge gets photographed here (→ reagent_qc) and the deployed model's
+ * verdict is shown immediately. Mirror of /wax-inspect, pinned
  * to the 'reagent_filled' phase: same scanner-wedge sticky context, same
  * Pi-station WebRTC + USB-camera capture paths, same POST /api/cv/capture →
  * poll /api/cv/inspections round-trip. The scan-gated human verdict moves a

@@ -1,8 +1,10 @@
 <script lang="ts">
 	/**
-	 * Reagent Inspect — inline CV deployment point (REAGENT-INSPECT-AFTER-TOPSEAL).
+	 * Reagent Inspect — inline CV deployment point (REAGENT-INSPECT-AFTER-TOPSEAL,
+	 * REAGENT-TOPSEAL-IMPLICIT).
 	 *
-	 * Runs AFTER Cut Top Seal. Scan a sealed cartridge (sticky context),
+	 * Runs after reagent fill + the implicit top seal. Scan a reagent_filled
+	 * cartridge (sticky context),
 	 * photograph it (Pi WebRTC station or USB camera), POST /api/cv/capture at
 	 * phase 'reagent_filled', then poll /api/cv/inspections?imageId= until the
 	 * deployed model's verdict lands. The scan-gated human verdict moves a
@@ -26,10 +28,12 @@
 	}
 
 	const PHASE = 'reagent_filled';
-	// sealed carts get photographed (→ reagent_qc); reagent_qc carts get re-scanned
-	// to give the Ready/Rejected verdict.
-	// 'linked' is allowed so already-linked carts can still be photographed here.
-	const ALLOWED_STATUSES = ['sealed', 'reagent_qc', 'linked'];
+	// reagent_filled carts get photographed (→ reagent_qc); reagent_qc carts get
+	// re-scanned to give the Ready/Rejected verdict. 'sealed' is the legacy
+	// pre-photo state (retired by REAGENT-TOPSEAL-IMPLICIT) — still accepted so
+	// any stragglers can be photographed. 'linked' is allowed so already-linked
+	// carts can still be photographed here.
+	const ALLOWED_STATUSES = ['reagent_filled', 'reagent_qc', 'sealed', 'linked'];
 
 	// ── Sticky cartridge context ────────────────────────────────────────────
 	let cartridgeId = $state<string | null>(null);
@@ -521,9 +525,9 @@
 			} else {
 				verdict = { state: 'no_model' };
 			}
-			// Photographing a sealed cart advanced it to reagent_qc server-side —
-			// reflect that so the Ready/Rejected verdict buttons appear.
-			if (cartridgeStatus === 'sealed') cartridgeStatus = 'reagent_qc';
+			// Photographing a reagent_filled (or legacy sealed) cart advanced it to
+			// reagent_qc server-side — reflect that so the verdict buttons appear.
+			if (cartridgeStatus === 'reagent_filled' || cartridgeStatus === 'sealed') cartridgeStatus = 'reagent_qc';
 			flashBanner('ok', `Captured ${result.cartridgeImageNumber}`, 1800);
 		} catch (e) {
 			if (pollSeq === mySeq) verdict = { state: 'error', message: e instanceof Error ? e.message : 'Capture failed' };
@@ -695,7 +699,7 @@
 			<div>
 				<h1 class="text-2xl font-bold text-[var(--color-tron-cyan)]">Reagent Inspect</h1>
 				<p class="text-xs text-[var(--color-tron-text-secondary)]">
-					Scan each sealed cartridge after Cut Top Seal, press Space to photograph it, and the deployed model's PASS/FAIL verdict appears below. The verdict is advisory — the reagent QC accept/reject (scan-gated) stays with you.
+					Scan each reagent-filled cartridge after it's top-sealed, press Space to photograph it, and the deployed model's PASS/FAIL verdict appears below. The verdict is advisory — the reagent QC accept/reject (scan-gated) stays with you.
 				</p>
 			</div>
 			<div class="text-xs text-[var(--color-tron-text-secondary)]">

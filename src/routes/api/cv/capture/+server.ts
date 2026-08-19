@@ -251,12 +251,17 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		// (the old wax_stored → wax_qc auto-advance is gone). Wax rejects are an
 		// explicit POST /api/cv/wax-verdict from the Wax Reject page.
 
-		// Reagent inspection (REAGENT-INSPECT-AFTER-TOPSEAL): photographing a `sealed`
-		// cart (post Cut Top Seal) advances it to reagent_qc ("photographed, awaiting
-		// verdict"). The scan-gated verdict then moves it to reagent_ready/reagent_rejected.
-		if (updated.status === 'sealed') {
+		// Reagent inspection (REAGENT-TOPSEAL-IMPLICIT, supersedes
+		// REAGENT-INSPECT-AFTER-TOPSEAL): photographing a `reagent_filled` cart
+		// advances it to reagent_qc ("photographed, awaiting verdict"). Top sealing
+		// is implicit between reagent fill and this photo — there is no longer a
+		// `sealed` hop. Legacy `sealed` carts (pre-migration) are accepted too so
+		// nothing strands. The scan-gated verdict then moves it to
+		// reagent_ready / reagent_rejected.
+		if (updated.status === 'reagent_filled' || updated.status === 'sealed') {
+			const from = updated.status;
 			await CartridgeRecord.updateOne(
-				{ _id: cartridgeId, status: 'sealed' },
+				{ _id: cartridgeId, status: from },
 				{ $set: { status: 'reagent_qc' } }
 			);
 			await AuditLog.create({
@@ -264,7 +269,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 				tableName: 'cartridge_records',
 				recordId: cartridgeId,
 				action: 'reagent_inspection_photo',
-				newData: { status: 'reagent_qc', from: 'sealed', imageId, phase },
+				newData: { status: 'reagent_qc', from, imageId, phase },
 				changedAt: capturedAt,
 				changedBy: locals.user.username
 			});

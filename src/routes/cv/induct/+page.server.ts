@@ -39,9 +39,9 @@ const READY_FOR = {
 		blurb: 'Wax Reject: photograph + reject wax_filled → wax_rejected; passes are implicit (no status change).'
 	},
 	reagent: {
-		status: 'sealed',
+		status: 'reagent_filled',
 		label: 'Reagent inspection',
-		blurb: 'Photograph on Reagent Inspect (post top-seal) to advance sealed → reagent_qc, then a verdict.'
+		blurb: 'Photograph on Reagent Inspect (after the implicit top seal) to advance reagent_filled → reagent_qc, then a verdict.'
 	},
 	post_mortem: {
 		status: 'completed',
