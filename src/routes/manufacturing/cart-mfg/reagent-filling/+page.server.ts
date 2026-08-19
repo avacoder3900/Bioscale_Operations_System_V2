@@ -8,7 +8,6 @@ import {
 import { recordTransaction, resolvePartId } from '$lib/server/services/inventory-transaction';
 import { checkRobotConflict, checkDeckConflict, checkTrayConflict } from '$lib/server/manufacturing/resource-locks';
 import { WAX_PAGE_OWNED } from '$lib/server/manufacturing/run-statuses';
-import { resolveFridgeId } from '$lib/server/services/equipment-resolve';
 import { getRobot, robotGet, robotPost, bridgeDeviceIdForRobot } from '$lib/server/opentrons/proxy';
 import { calibrationRtpValues } from '$lib/server/opentrons/calibration-rtps';
 import { ensureFreshRunProtocol } from '$lib/server/opentrons/protocol-freshness';
@@ -25,7 +24,7 @@ const TERMINAL = new Set(['completed', 'aborted', 'voided', 'cancelled', 'Comple
 function toStage(status: string | null | undefined): string | null {
 	if (!status) return null;
 	// Already a UI stage
-	if (['Setup', 'Loading', 'Running', 'Inspection', 'Top Sealing', 'Storage'].includes(status)) return status;
+	if (['Setup', 'Loading', 'Running'].includes(status)) return status;
 	// Legacy mapping
 	const map: Record<string, string> = {
 		setup: 'Setup', running: 'Running'
@@ -52,7 +51,6 @@ function emptyReagentState(robotId: string, loadError?: string) {
 		assayTypes: [] as { id: string; name: string; skuCode: string | null; isActive: boolean; reagents: { wellPosition: number; reagentName: string }[] }[],
 		reagentDefinitions: [] as { id: string; reagentName: string; wellPosition: number | null; volumeMicroliters: number | null; isActive: boolean }[],
 		cartridges: [] as any[],
-		currentSealBatch: null as null | { batchId: string; firstScanTime: string | null; cartridgeIds: string[] },
 		rejectionCodes: [] as any[],
 		tubes: [] as { id: string; reagentName: string; volume: number }[],
 		reagentPrepDone: false,
@@ -117,14 +115,10 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 			}))
 		}));
 
-		// This page owns stages Setup → Loading → Running → Inspection.
-		// Pre-OT-2 stages have robotReleasedAt unset; Inspection is post-OT-2
-		// (completeRunFilling sets robotReleasedAt) but still renders here.
-		// The filter is status-based, not robotReleasedAt-based, so an
-		// Inspection run keeps loading its cartridges on this page after the
-		// OT-2 handoff. Inspection moved off this page (REAGENT-INSPECT-AFTER-TOPSEAL):
-		// a completed run goes straight to Top Sealing on Opentron Control, so
-		// Inspection / Top Sealing / Storage runs live there and must NOT match.
+		// This page owns stages Setup → Loading → Running. Running is terminal:
+		// completeRunFilling marks the run Completed (REAGENT-TOPSEAL-IMPLICIT),
+		// so a completed run must NOT match here. Legacy 'Inspection' /
+		// 'Top Sealing' / 'Storage' runs (pre-migration) are not page-owned either.
 		const PAGE_OWNED_STATUSES = ['Setup', 'Loading', 'Running', 'setup', 'running'];
 		let activeRun: any = null;
 		if (robotId) {
@@ -213,27 +207,10 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 			deckPosition: cf.deckPosition ?? null,
 			inspectionStatus: cf.inspectionStatus ?? 'Pending',
 			inspectionReason: cf.inspectionReason ?? null,
-			topSealBatchId: cf.topSealBatchId ?? null,
 			inspectedBy: cf.inspectedBy?.username ?? null,
 			currentStatus: cf.inspectionStatus ?? 'Pending',
 			storageLocation: cf.storageLocation ?? null
 		}));
-
-		// Current active seal batch (in_progress)
-		const currentSealBatch = (() => {
-			const batches = activeRun?.sealBatches ?? [];
-			const inProgress = batches.find((b: any) => b.status === 'in_progress');
-			if (!inProgress) return null;
-			const cartridgeIds = (inProgress.cartridgeIds ?? []).map(String);
-			return {
-				batchId: String(inProgress._id),
-				topSealLotId: inProgress.topSealLotId ?? '',
-				scannedCount: cartridgeIds.length,
-				totalTarget: 12,
-				firstScanTime: inProgress.firstScanTime ? new Date(inProgress.firstScanTime).toISOString() : null,
-				cartridgeIds
-			};
-		})();
 
 		// Tube records (reagent prep)
 		const tubes = (activeRun?.tubeRecords ?? []).map((t: any) => ({
@@ -315,7 +292,6 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 			assayTypes,
 			reagentDefinitions,
 			cartridges,
-			currentSealBatch,
 			rejectionCodes,
 			tubes,
 			// Reagent-batch prep state, server-derived so it survives a reload (the
@@ -335,33 +311,6 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 		return emptyReagentState(robotId, 'Failed to load reagent filling data. Please refresh the page.');
 	}
 };
-
-/**
- * Resolve the active run for a post-OT-2 action on this page.
- *
- * Why this exists: once completeRunFilling sets robotReleasedAt, the page's
- * load filter excludes the run from activeRun, so `data.activeRunId` on the
- * client becomes null and submitForm posts `runId=''`. The client page still
- * optimistically shows Inspection/Top Sealing/Storage (pendingStage isn't
- * cleared for those actions), so the operator clicks through and hits these
- * actions with an empty runId — producing a spurious "Run not found".
- *
- * When runId from the form is empty, fall back to the most recent post-OT-2
- * run for this robot. The client sends robotId in every submitForm call.
- */
-const POST_OT2_STATUSES = ['Inspection', 'Top Sealing', 'Storage'];
-async function resolveRunId(data: FormData): Promise<string | null> {
-	const runId = (data.get('runId') as string | null)?.trim() ?? '';
-	if (runId) return runId;
-	const robotId = (data.get('robotId') as string | null)?.trim() ?? '';
-	if (!robotId) return null;
-	const run = await ReagentBatchRecord.findOne({
-		'robot._id': robotId,
-		status: { $in: POST_OT2_STATUSES },
-		robotReleasedAt: { $exists: true }
-	}).sort({ createdAt: -1 }).select('_id').lean() as any;
-	return run ? String(run._id) : null;
-}
 
 /**
  * Best-effort stop of the OT-2 run backing a reagent run, BEFORE marking it
@@ -431,7 +380,6 @@ export const actions: Actions = {
 			status: 'Loading',
 			tubeRecords: [],
 			cartridgesFilled: [],
-			sealBatches: [],
 			setupTimestamp: new Date()
 		});
 
@@ -891,7 +839,7 @@ export const actions: Actions = {
 	 * embedded controller observes terminal status). Stamps
 	 * pipetteTipState.after and consumed onto the ReagentBatchRecord;
 	 * does NOT advance the reagent state machine — the operator still
-	 * walks Inspection via the existing completeRunFilling flow.
+	 * clicks Complete (completeRunFilling) to finish the run.
 	 */
 	recordRunFinished: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
@@ -976,7 +924,18 @@ export const actions: Actions = {
 		return { success: true, consumed, nextTipIndex: finalIndex };
 	},
 
-	/** Complete run filling — move to Inspection */
+	/**
+	 * Complete run filling — the run is DONE here (REAGENT-TOPSEAL-IMPLICIT).
+	 *
+	 * Running is the terminal reagent-fill stage. There is no longer a post-OT-2
+	 * queue (Inspection / Top Sealing / Storage on Opentron Control): the run goes
+	 * straight to Completed, cartridges become `reagent_filled`, and top sealing
+	 * is implicit — the operator seals the carts off-page and the next BIMS touch
+	 * is the Reagent Inspect photo (reagent_filled → reagent_qc via /api/cv/capture).
+	 * Top-seal cut-sheet inventory (PT-CT-113) is deducted here, per run, at
+	 * ceil(cartridges / cartridgesPerSheet). Storage is recorded later via
+	 * /cartridge-admin/storage.
+	 */
 	completeRunFilling: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
 		await connectDB();
@@ -985,16 +944,18 @@ export const actions: Actions = {
 		const runId = data.get('runId') as string;
 		const now = new Date();
 
+		// Idempotency: the Running-stage UI can double-submit on a slow network.
+		const existing = await ReagentBatchRecord.findById(runId).select('status finalizedAt').lean() as any;
+		if (!existing) return fail(404, { error: 'Run not found' });
+		if (existing.status === 'Completed' || existing.finalizedAt) return { success: true };
+
 		const run = await ReagentBatchRecord.findByIdAndUpdate(runId, {
 			$set: {
-				// Inspection moved off this page (REAGENT-INSPECT-AFTER-TOPSEAL): a
-				// completed run goes straight to Top Sealing on Opentron Control;
-				// reagent inspection happens later on the Reagent Inspect page.
-				status: 'Top Sealing',
+				status: 'Completed',
+				finalizedAt: now,
 				runEndTime: now,
 				// Robot is physically free as of now — releases the robot lock so
-				// the next wax/reagent run can start while sealing/storage continue
-				// detached on Opentron Control.
+				// the next wax/reagent run can start.
 				robotReleasedAt: now
 			}
 		}, { new: true }).lean() as any;
@@ -1043,419 +1004,33 @@ export const actions: Actions = {
 					? `Reagent filling run — 4x 2ml tubes (research run, ${run.cartridgesFilled.length} cartridges)`
 					: `Reagent filling run — 4x 2ml tubes (assay: ${run.assayType?.name ?? 'unknown'}, ${run.cartridgesFilled.length} cartridges)`
 			});
-		}
 
-		await AuditLog.create({
-			_id: generateId(),
-			tableName: 'reagent_batch_records',
-			recordId: runId,
-			action: 'UPDATE',
-			changedBy: locals.user?.username,
-			changedAt: now,
-			newData: { status: 'Top Sealing' }
-		});
-
-		// Robot is now free. The page's load function will no longer find this run
-		// as "active" (robotReleasedAt filters it out), so invalidateAll() will
-		// reset the page to "Start new run". The post-OT-2 steps (inspect/seal/
-		// store) are accessible from Opentron Control.
-		return { success: true };
-	},
-
-	/** Complete inspection batch — mark cartridges and move to Top Sealing */
-	completeInspectionBatch: async ({ request, locals }) => {
-		if (!locals.user) redirect(302, '/login');
-		await connectDB();
-
-		const data = await request.formData();
-		const runId = await resolveRunId(data);
-		const rejectedCartridgesRaw = data.get('rejectedCartridges') as string;
-		const trayId = ((data.get('trayId') as string | null) ?? '').trim() || undefined;
-		const now = new Date();
-
-		let rejectedCartridges: { cartridgeId: string; reason: string; status: string }[] = [];
-		if (rejectedCartridgesRaw) {
-			try { rejectedCartridges = JSON.parse(rejectedCartridgesRaw); } catch { /* ignore */ }
-		}
-
-		if (!runId) return fail(404, { error: 'Run not found' });
-		const run = await ReagentBatchRecord.findById(runId).lean() as any;
-		if (!run) return fail(404, { error: 'Run not found' });
-
-		// Tray conflict runs at scan time (see /api/dev/validate-equipment
-		// ?type=tray). No duplicate check here.
-
-		// Build update for each cartridge's inspection status
-		const rejectedMap = new Map(rejectedCartridges.map((c: any) => [c.cartridgeId, c]));
-		const updatedCartridges = (run.cartridgesFilled ?? []).map((cf: any) => {
-			const rejected = rejectedMap.get(cf.cartridgeId);
-			if (rejected) {
-				return {
-					...cf,
-					inspectionStatus: rejected.status ?? 'Rejected',
-					inspectionReason: rejected.reason ?? null,
-					inspectedBy: { _id: locals.user!._id, username: locals.user!.username },
-					inspectedAt: now
-				};
-			}
-			return { ...cf, inspectionStatus: cf.inspectionStatus === 'Pending' ? 'Accepted' : cf.inspectionStatus, inspectedBy: { _id: locals.user!._id, username: locals.user!.username }, inspectedAt: now };
-		});
-
-		const updateFields: Record<string, any> = {
-			cartridgesFilled: updatedCartridges,
-			status: 'Top Sealing'
-		};
-		if (trayId) updateFields.trayId = trayId;
-		await ReagentBatchRecord.findByIdAndUpdate(runId, { $set: updateFields });
-
-		// Write reagentInspection to CartridgeRecord (WRITE-ONCE for rejected)
-		for (const rej of rejectedCartridges) {
-			await CartridgeRecord.findOneAndUpdate(
-				{ _id: rej.cartridgeId, 'reagentInspection.recordedAt': { $exists: false } },
-				{
-					$set: {
-						'reagentInspection.status': rej.status ?? 'Rejected',
-						'reagentInspection.reason': rej.reason ?? undefined,
-						'reagentInspection.operator': { _id: locals.user!._id, username: locals.user!.username },
-						'reagentInspection.timestamp': now,
-						'reagentInspection.recordedAt': now,
-						status: 'scrapped',
-						voidedAt: now,
-						voidReason: `Reagent inspection rejection: ${rej.reason ?? 'unspecified'}`
-					}
-				}
-			);
-
-			// Record scrap transaction for rejected cartridge
-			await recordTransaction({
-				transactionType: 'scrap',
-				cartridgeRecordId: rej.cartridgeId,
-				quantity: 1,
-				manufacturingStep: 'reagent_filling',
-				manufacturingRunId: runId,
-				operatorId: locals.user._id,
-				operatorUsername: locals.user.username,
-				scrapReason: rej.reason ?? 'Reagent inspection rejection',
-				scrapCategory: 'reagent_defect',
-				notes: `Reagent inspection rejection: ${rej.reason ?? 'No reason provided'}`
-			});
-		}
-
-		return { success: true };
-	},
-
-	/** Alias for completeInspectionBatch */
-	completeInspection: async ({ request, locals }) => {
-		// Delegate to completeInspectionBatch
-		if (!locals.user) redirect(302, '/login');
-		await connectDB();
-
-		const data = await request.formData();
-		const runId = await resolveRunId(data);
-		if (!runId) return fail(404, { error: 'Run not found' });
-		await ReagentBatchRecord.findByIdAndUpdate(runId, { $set: { status: 'Top Sealing' } });
-		return { success: true };
-	},
-
-	/** Create a top seal batch */
-	createTopSealBatch: async ({ request, locals }) => {
-		if (!locals.user) redirect(302, '/login');
-		await connectDB();
-
-		const data = await request.formData();
-		const runId = await resolveRunId(data);
-		const topSealLotId = data.get('topSealLotId') as string;
-
-		if (!topSealLotId?.trim()) return fail(400, { error: 'Top seal lot ID is required' });
-		if (!runId) return fail(404, { error: 'Run not found' });
-
-		const batchId = generateId();
-		const now = new Date();
-
-		await ReagentBatchRecord.findByIdAndUpdate(runId, {
-			$push: {
-				sealBatches: {
-					_id: batchId,
-					topSealLotId: topSealLotId.trim(),
-					operator: { _id: locals.user!._id, username: locals.user!.username },
-					firstScanTime: now,
-					cartridgeIds: [],
-					status: 'in_progress'
-				}
-			}
-		});
-
-		return { success: true, batchId };
-	},
-
-	/** Scan a cartridge into a seal batch */
-	scanCartridgeForSeal: async ({ request, locals }) => {
-		if (!locals.user) redirect(302, '/login');
-		await connectDB();
-
-		const data = await request.formData();
-		const runId = await resolveRunId(data);
-		const batchId = data.get('batchId') as string;
-		const cartridgeRecordId = data.get('cartridgeRecordId') as string;
-
-		if (!cartridgeRecordId) return fail(400, { error: 'Cartridge ID required' });
-		if (!runId) return fail(404, { error: 'Run not found' });
-
-		// Mark cartridge in the sealBatch as scanned
-		await ReagentBatchRecord.findOneAndUpdate(
-			{ _id: runId, 'sealBatches._id': batchId },
-			{ $addToSet: { 'sealBatches.$.cartridgeIds': cartridgeRecordId } }
-		);
-
-		// Mark the cartridgeFilled entry with topSealBatchId
-		await ReagentBatchRecord.findOneAndUpdate(
-			{ _id: runId, 'cartridgesFilled.cartridgeId': cartridgeRecordId },
-			{ $set: { 'cartridgesFilled.$.topSealBatchId': batchId } }
-		);
-
-		return { success: true };
-	},
-
-	/** Complete a seal batch */
-	completeSealBatch: async ({ request, locals }) => {
-		if (!locals.user) redirect(302, '/login');
-		await connectDB();
-
-		const data = await request.formData();
-		const runId = await resolveRunId(data);
-		const batchId = data.get('batchId') as string;
-		const now = new Date();
-
-		if (!runId) return fail(404, { error: 'Run not found' });
-
-		const run = await ReagentBatchRecord.findOneAndUpdate(
-			{ _id: runId, 'sealBatches._id': batchId },
-			{
-				$set: {
-					'sealBatches.$.status': 'completed',
-					'sealBatches.$.completionTime': now
-				}
-			},
-			{ new: true }
-		).lean() as any;
-
-		// Write topSeal phase to each cartridge in the batch (WRITE-ONCE)
-		const batch = (run?.sealBatches ?? []).find((b: any) => String(b._id) === batchId);
-		if (batch?.cartridgeIds?.length) {
-			const bulkOps = batch.cartridgeIds.map((cid: string) => ({
-				updateOne: {
-					filter: { _id: cid, 'topSeal.recordedAt': { $exists: false } },
-					update: {
-						$set: {
-							'topSeal.batchId': batchId,
-							'topSeal.topSealLotId': batch.topSealLotId,
-							'topSeal.operator': { _id: locals.user!._id, username: locals.user!.username },
-							'topSeal.timestamp': now,
-							'topSeal.recordedAt': now,
-							status: 'sealed'
-						}
-					}
-				}
-			}));
-			await CartridgeRecord.bulkWrite(bulkOps);
-
-			// Consume 1 cut sheet (PT-CT-113) per batch — one sheet seals up
-			// to 12 cartridges. Previously this looped 1× PT-CT-103 per
-			// cartridge, which was wrong on two counts: (1) PT-CT-103 is the
-			// roll, already consumed at cut time; (2) consumption is
-			// per-sheet, not per-cartridge. Partial sheets still count as
-			// fully consumed — you can't un-peel a liner.
+			// Consume top-seal cut sheets (PT-CT-113) — implicit top seal. One
+			// sheet seals up to `topSealCutting.cartridgesPerSheet` carts (default
+			// 12); partial sheets count as fully consumed. This used to happen per
+			// seal batch on the (now removed) Top Sealing step; deducting at fill
+			// completion may slightly over-count when operators split batches,
+			// which is acceptable (decision 2026-08-19 — cut sheets are cheap).
+			// No lot linkage: the sheet lot is no longer scanned.
 			const cutSheetPartId = await resolvePartId('PT-CT-113');
 			if (cutSheetPartId) {
+				const settingsDoc = await ManufacturingSettings.findById('default').lean().catch(() => null) as any;
+				const perSheet = Math.max(1, Number(settingsDoc?.topSealCutting?.cartridgesPerSheet ?? 12));
+				const sheets = Math.ceil(run.cartridgesFilled.length / perSheet);
 				await recordTransaction({
 					transactionType: 'consumption',
 					partDefinitionId: cutSheetPartId,
-					quantity: 1,
+					quantity: sheets,
 					manufacturingStep: 'top_seal',
-					manufacturingRunId: runId,
-					operatorId: locals.user._id,
-					operatorUsername: locals.user.username,
-					lotId: batch.topSealLotId ?? undefined,
-					notes: `Top seal batch ${batchId}: 1 sheet consumed from lot ${batch.topSealLotId ?? 'unknown'} (${batch.cartridgeIds.length} cartridges sealed)`
+					manufacturingRunId: String(run._id),
+					operatorId: run.operator?._id,
+					operatorUsername: run.operator?.username,
+					notes: `Reagent filling run complete — ${sheets} top-seal cut sheet(s) for ${run.cartridgesFilled.length} cartridges (implicit top seal, ${perSheet}/sheet)`
 				});
 			}
-
-			await AuditLog.create({
-				_id: generateId(),
-				tableName: 'reagent_batch_records',
-				recordId: runId,
-				action: 'UPDATE',
-				changedBy: locals.user?.username,
-				changedAt: now,
-				newData: { sealBatchId: batchId, status: 'completed', topSealLotId: batch.topSealLotId }
-			});
 		}
 
-		return { success: true };
-	},
-
-	/** Transition from Top Sealing to Storage */
-	/** Reject a cartridge during top sealing */
-	rejectAtSeal: async ({ request, locals }) => {
-		if (!locals.user) redirect(302, '/login');
-		await connectDB();
-
-		const data = await request.formData();
-		const runId = await resolveRunId(data);
-		const cartridgeId = data.get('cartridgeId') as string;
-		const now = new Date();
-
-		if (!cartridgeId) return fail(400, { error: 'Cartridge ID required' });
-		if (!runId) return fail(404, { error: 'Run not found' });
-
-		// Update inspection status to Rejected in the run's cartridgesFilled
-		await ReagentBatchRecord.findOneAndUpdate(
-			{ _id: runId, 'cartridgesFilled.cartridgeId': cartridgeId },
-			{
-				$set: {
-					'cartridgesFilled.$.inspectionStatus': 'Rejected',
-					'cartridgesFilled.$.inspectionReason': 'Rejected at top sealing',
-					'cartridgesFilled.$.inspectedBy': { _id: locals.user!._id, username: locals.user!.username },
-					'cartridgesFilled.$.inspectedAt': now
-				}
-			}
-		);
-
-		// Update CartridgeRecord
-		await CartridgeRecord.findOneAndUpdate(
-			{ _id: cartridgeId },
-			{ $set: { status: 'scrapped', voidedAt: now, voidReason: 'Rejected at top sealing' } }
-		);
-
-		await recordTransaction({
-			transactionType: 'scrap',
-			cartridgeRecordId: cartridgeId,
-			quantity: 1,
-			manufacturingStep: 'top_seal',
-			manufacturingRunId: runId,
-			operatorId: locals.user._id,
-			operatorUsername: locals.user.username,
-			scrapReason: 'Rejected at top sealing',
-			scrapCategory: 'seal_failure',
-			notes: 'Top seal rejection'
-		});
-
-		return { success: true };
-	},
-
-	transitionToStorage: async ({ request, locals }) => {
-		if (!locals.user) redirect(302, '/login');
-		await connectDB();
-
-		const data = await request.formData();
-		const runId = await resolveRunId(data);
-		if (!runId) return fail(404, { error: 'Run not found' });
-
-		await ReagentBatchRecord.findByIdAndUpdate(runId, { $set: { status: 'Storage' } });
-		return { success: true };
-	},
-
-	/** Record batch storage */
-	recordBatchStorage: async ({ request, locals }) => {
-		if (!locals.user) redirect(302, '/login');
-		await connectDB();
-
-		const data = await request.formData();
-		const runId = await resolveRunId(data);
-		const cartridgeIdsRaw = data.get('cartridgeIds') as string;
-		const location = data.get('location') as string;
-		const now = new Date();
-
-		if (!runId) return fail(404, { error: 'Run not found' });
-
-		let cartridgeIds: string[] = [];
-		try { cartridgeIds = JSON.parse(cartridgeIdsRaw); } catch { /* ignore */ }
-
-		if (cartridgeIds.length > 0) {
-			// S1a: resolve the scanned fridge reference (barcode, name, or _id)
-			// to the canonical Equipment._id. Fail the action if unresolved so
-			// we don't write a raw string into the authoritative fridgeId field.
-			const resolvedFridgeId = await resolveFridgeId(location);
-			if (!resolvedFridgeId) {
-				return fail(400, { error: `Unknown fridge: ${location}` });
-			}
-
-			// Update storage location in cartridgesFilled
-			for (const cid of cartridgeIds) {
-				await ReagentBatchRecord.findOneAndUpdate(
-					{ _id: runId, 'cartridgesFilled.cartridgeId': cid },
-					{
-						$set: {
-							'cartridgesFilled.$.storageLocation': location,
-							'cartridgesFilled.$.storedAt': now
-						}
-					}
-				);
-			}
-
-			// Write storage phase to CartridgeRecord
-			const bulkOps = cartridgeIds.map((cid: string) => ({
-				updateOne: {
-					filter: { _id: cid, 'storage.recordedAt': { $exists: false } },
-					update: {
-						$set: {
-							'storage.fridgeName': location,              // raw input — denormalized display snapshot
-							'storage.fridgeId': resolvedFridgeId,        // Equipment._id (authoritative — S1a)
-							'storage.locationId': resolvedFridgeId,      // Equipment._id (kept in sync — S1a)
-							'storage.operator': { _id: locals.user!._id, username: locals.user!.username },
-							'storage.timestamp': now,
-							'storage.recordedAt': now,
-							status: 'stored'
-						}
-					}
-				}
-			}));
-			await CartridgeRecord.bulkWrite(bulkOps);
-
-			// Record storage transactions
-			for (const cid of cartridgeIds) {
-				await recordTransaction({
-					transactionType: 'creation',
-					cartridgeRecordId: cid,
-					quantity: 1,
-					manufacturingStep: 'storage',
-					manufacturingRunId: runId,
-					operatorId: locals.user._id,
-					operatorUsername: locals.user.username,
-					notes: `Stored in ${location}`
-				});
-			}
-
-			await AuditLog.create({
-				_id: generateId(),
-				tableName: 'cartridge_records',
-				recordId: cartridgeIds[0] ?? 'batch',
-				action: 'UPDATE',
-				changedBy: locals.user?.username,
-				changedAt: now,
-				newData: { status: 'stored', location, count: cartridgeIds.length }
-			});
-		}
-
-		return { success: true };
-	},
-
-	/** Complete the run */
-	completeRun: async ({ request, locals }) => {
-		if (!locals.user) redirect(302, '/login');
-		await connectDB();
-
-		const data = await request.formData();
-		const runId = await resolveRunId(data);
-		const now = new Date();
-
-		if (!runId) return fail(404, { error: 'Run not found' });
-
-		const run = await ReagentBatchRecord.findByIdAndUpdate(runId, {
-			$set: { status: 'Completed', finalizedAt: now, runEndTime: now }
-		}, { new: true }).lean() as any;
-
-		// Update deck usage if deckId is set
+		// Deck usage log (was in the old completeRun action on Opentron Control).
 		if (run?.deckId) {
 			const cartridgeCount = run?.cartridgesFilled?.length ?? 0;
 			await Equipment.findByIdAndUpdate(run.deckId, {
@@ -1470,7 +1045,7 @@ export const actions: Actions = {
 						createdAt: now
 					}
 				}
-			});
+			}).catch((e: unknown) => console.error('[reagent-filling] deck usageLog failed:', e));
 		}
 
 		await AuditLog.create({
@@ -1480,9 +1055,12 @@ export const actions: Actions = {
 			action: 'UPDATE',
 			changedBy: locals.user?.username,
 			changedAt: now,
-			newData: { status: 'Completed' }
+			newData: { status: 'Completed', cartridgeStatus: 'reagent_filled' }
 		});
 
+		// Robot is now free and the run is terminal. The page's load function
+		// will no longer find this run as "active", so invalidateAll() resets the
+		// page to "Start new run". Next BIMS touch for these carts: Reagent Inspect.
 		return { success: true };
 	},
 
@@ -1497,11 +1075,11 @@ export const actions: Actions = {
 		const now = new Date();
 
 		// Once the OT-2 has finished (robotReleasedAt set), the run is committed
-		// and can no longer be cancelled. Per-cartridge rejection at inspection
-		// or sealing remains available.
+		// and can no longer be cancelled. Per-cartridge rejection happens later
+		// on the Reagent Inspect page.
 		const existing = await ReagentBatchRecord.findById(runId).select('robotReleasedAt opentronsRunId robot').lean() as any;
 		if (existing?.robotReleasedAt) {
-			return fail(400, { error: 'Cannot cancel: the OT-2 has already completed this run. Reject individual cartridges at inspection or sealing instead.' });
+			return fail(400, { error: 'Cannot cancel: the OT-2 has already completed this run. Reject individual cartridges on Reagent Inspect instead.' });
 		}
 
 		// Actually halt the OT-2 first — otherwise the robot keeps running.
@@ -1583,7 +1161,7 @@ export const actions: Actions = {
 		return { success: true, warning: abortRobotWarning ?? undefined };
 	},
 
-	/** Reset to deck loading — clear cartridges and seal batches, go back to Loading */
+	/** Reset to deck loading — clear cartridges, go back to Loading */
 	resetToLoading: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
 		await connectDB();
@@ -1606,7 +1184,6 @@ export const actions: Actions = {
 			$set: {
 				cartridgesFilled: [],
 				cartridgeCount: 0,
-				sealBatches: [],
 				deckId: undefined,
 				status: 'Loading'
 			},
@@ -1625,7 +1202,7 @@ export const actions: Actions = {
 		const runId = data.get('runId') as string;
 		const targetStage = data.get('targetStage') as string;
 
-		const validStages = ['Setup', 'Loading', 'Running', 'Inspection', 'Top Sealing', 'Storage'];
+		const validStages = ['Setup', 'Loading', 'Running'];
 		if (!validStages.includes(targetStage)) {
 			return fail(400, { error: `Invalid target stage: ${targetStage}` });
 		}

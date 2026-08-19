@@ -36,8 +36,8 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 	if (!cart) return json({ error: `Cartridge ${cartridgeId} not found` }, { status: 404 });
 	if (cart.status !== 'reagent_qc') {
 		const hint =
-			cart.status === 'sealed'
-				? 'photograph it first (it must be reagent_qc)'
+			cart.status === 'reagent_filled' || cart.status === 'sealed'
+				? 'photograph it first on Reagent Inspect (it must be reagent_qc)'
 				: cart.status === 'reagent_ready' || cart.status === 'reagent_rejected'
 					? `it already has a verdict (${cart.status})`
 					: `it is in phase "${cart.status}"`;

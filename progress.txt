@@ -8221,3 +8221,38 @@ Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
 Source: branch master @ commit 66d8e337
 Retrieve this exact code: git checkout master at commit 66d8e337
 What this deployment is for: onboarding docs (no runtime impact) + kanban wording change.
+
+================================================================================
+2026-08-19 — feat/cartridge-status-flow — top sealing becomes implicit; post-OT-2 reagent queue retired
+================================================================================
+Per Jacob: top sealing is no longer a BIMS step. A reagent run now ENDS when the operator
+clicks Complete on the Running stage — completeRunFilling sets the ReagentBatchRecord
+Completed (+finalizedAt/runEndTime/robotReleasedAt, idempotent), carts go reagent_filled,
+PT-CT-113 top-seal cut sheets are deducted right there (ceil(carts / topSealCutting.
+cartridgesPerSheet, default 12), step top_seal, no lot linkage — slight over-count accepted),
+and the deck usageLog write moved in from the old completeRun. The Reagent Inspect photo
+now takes reagent_filled → reagent_qc (was sealed → reagent_qc); verdict flow unchanged.
+Decisions locked with Jacob: photo → reagent_qc (not a renamed 'sealed'), and the whole
+post-OT-2 queue goes — Storage too (fridge storage stays on /cartridge-admin/storage).
+PRD: docs/prds/REAGENT-TOPSEAL-IMPLICIT.md (supersedes the sealed hop in
+REAGENT-INSPECT-AFTER-TOPSEAL; QUICK-SEAL target is now reagent_filled).
+
+Deleted: opentron-control/reagent/[runId]/ (page+server), reagent-filling components
+TopSealing/Inspection/CompletionStorage.svelte, nine dead reagent-filling server actions
+(completeInspectionBatch, completeInspection, createTopSealBatch, scanCartridgeForSeal,
+completeSealBatch, rejectAtSeal, transitionToStorage, recordBatchStorage, completeRun) +
+resolveRunId helper, the "Reagent Cartridges Requiring Top Sealing & Storage" layout row
+(+types/helpers), robot-cards reagentQueue + seal-deadline math, cartridge-admin/filled
+dead 'Top Sealed' chip.
+Changed: api/cv/capture (reagent_filled|sealed → reagent_qc), reagent-verdict hint,
+cv/induct READY_FOR.reagent=reagent_filled, reagent-inspect ALLOWED_STATUSES, quick-seal
+→ reagent_filled, run-statuses REAGENT_NON_TERMINAL drops Top Sealing/Storage (model index
+partialFilterExpression deliberately kept — avoids Atlas index-options conflict), dashboards
+(cart-mfg, cart-mfg-dev, api/manufacturing/dashboard) drop "Reagent queued" branch,
+force-reset/qa-qc/opentrons status lists, model comments (CartridgeRecord.topSeal
+deprecated; enums kept for history), ask-bims-tier1 flow prose.
+Migration: scripts/migrate-retire-top-sealing.ts (dry-run default, --apply) — stuck
+Inspection/Top Sealing/Storage runs → Completed; sealed carts → reagent_filled; audit rows.
+RUN IT after this branch deploys to production.
+Not touched: Cut Top Seal material cutting (top-seal-cutting, WI-03, PT-CT-103 rolls).
+npm run check: 11 errors / 434 warnings — exact baseline, zero in touched files.

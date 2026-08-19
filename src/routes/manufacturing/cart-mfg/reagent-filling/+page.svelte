@@ -12,7 +12,8 @@
 	import RunExecution from '$lib/components/manufacturing/reagent-filling/RunExecution.svelte';
 	import ProtocolStartPanel from '$lib/components/manufacturing/ProtocolStartPanel.svelte';
 	import EmbeddedRunController from '$lib/components/manufacturing/EmbeddedRunController.svelte';
-	// Top Sealing + Storage happen on Opentron Control post-OT-2 queue, not here.
+	// REAGENT-TOPSEAL-IMPLICIT: there is no post-OT-2 queue. Run completion ends
+	// the run; top sealing is implicit; the next touch is the Reagent Inspect photo.
 
 	let { data } = $props();
 
@@ -25,8 +26,8 @@
 	let showResetModal = $state(false);
 
 	// Inspection (and its holding-tray scan) moved off this page — see
-	// REAGENT-INSPECT-AFTER-TOPSEAL. The run now ends at Run; sealing happens on
-	// Opentron Control and inspection on the Reagent Inspect page.
+	// REAGENT-INSPECT-AFTER-TOPSEAL. The run now ends at Run; top sealing is
+	// implicit (REAGENT-TOPSEAL-IMPLICIT) and inspection happens on Reagent Inspect.
 
 	// Admin override state
 	let showOverrideModal = $state(false);
@@ -45,10 +46,9 @@
 		}
 	});
 
-	// Reagent-filling page owns Setup → Load → Run (3 stages). Inspection moved
-	// off this page (REAGENT-INSPECT-AFTER-TOPSEAL): a completed run goes straight
-	// to Top Sealing on Opentron Control, then the Reagent Inspect page; both live
-	// on the post-OT-2 queue, reached after the run finishes here.
+	// Reagent-filling page owns Setup → Load → Run (3 stages). Completing the
+	// run here finishes it (status Completed, carts reagent_filled); the carts
+	// are top-sealed off-page and photographed on the Reagent Inspect page.
 	const STAGES = ['Setup', 'Loading', 'Running'] as const;
 	type Stage = (typeof STAGES)[number];
 
@@ -127,7 +127,7 @@
 	 */
 	const REAGENT_PARAM_DEFAULTS = Object.freeze({ use_tip_calibration: true });
 
-	// "Run again": complete the just-finished run (→ Top Sealing, robot freed),
+	// "Run again": complete the just-finished run (→ Completed, robot freed),
 	// then start a fresh run on the same robot reusing the same assay + protocol
 	// params — landing on barcode scanning. Mirrors the wax flow.
 	async function handleRunAgain() {
@@ -138,7 +138,7 @@
 		runAgainParamsFd = capturedParamsFd;
 		runFinishedLocal = false;
 		// 1) Complete the current run — robotReleasedAt frees the robot and the
-		//    page load drops it as active (status → Top Sealing).
+		//    page load drops it as active (status → Completed).
 		await submitForm('completeRunFilling');
 		if (errorMsg) { runAgainParamsFd = null; return; }
 		// 2) Create a fresh run on the same robot with the same assay.
@@ -262,8 +262,8 @@
 
 	// Timeline bubbles (4): the Loading stage is split into "Barcode Scanning"
 	// (deck + cartridge scan, cartridges===0) and "Reagent Prep" (cartridges>0).
-	// Inspection moved off this page — the run ends at Run (then Top Sealing →
-	// Reagent Inspect on the post-OT-2 queue).
+	// Inspection moved off this page — the run ends at Run (then implicit top
+	// seal → Reagent Inspect).
 	const TIMELINE = ['Reagent Fill Setup', 'Barcode Scanning', 'Reagent Prep', 'Run'] as const;
 	const currentBubbleIndex = $derived.by(() => {
 		const s = stage;
@@ -746,13 +746,13 @@
 			</div>
 		{/if}
 
-		<!-- Run-complete controls (REAGENT-INSPECT-AFTER-TOPSEAL): appear only once
-		     the .py finishes. Inspection is no longer here — the batch goes to Top
-		     Sealing, and Run again starts a fresh batch with the same parameters. -->
+		<!-- Run-complete controls: appear only once the .py finishes. Complete
+		     finishes the run (carts → reagent_filled; top seal implicit; next stop
+		     Reagent Inspect). Run again starts a fresh batch with the same parameters. -->
 		{#if !isViewingPast && (previewParam || runFinished)}
 			<div class="mt-4 flex flex-col items-center gap-3 rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4">
 				<p class="text-sm text-[var(--color-tron-text-secondary)]">
-					Run finished. Send this batch to Top Sealing, or run another batch with the same parameters.
+					Run finished. Complete this batch (cartridges → reagent filled; top-seal them, then photograph on Reagent Inspect), or run another batch with the same parameters.
 				</p>
 				<button
 					type="button"
@@ -760,7 +760,7 @@
 					disabled={submitting}
 					class="min-h-[44px] w-full max-w-sm rounded-lg border border-green-500/50 bg-green-900/20 px-8 py-3 text-base font-bold text-green-400 transition-all hover:bg-green-900/30 disabled:opacity-50"
 				>
-					Complete — send to Top Sealing
+					Complete run
 				</button>
 				<button
 					type="button"

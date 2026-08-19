@@ -1,7 +1,6 @@
 import { redirect } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
 import { connectDB, Equipment, ReagentBatchRecord, WaxFillingRun } from '$lib/server/db';
-import { loadRobotCardsAndQueues } from '$lib/server/manufacturing/robot-cards';
 import { getRobotsHealth } from '$lib/server/opentrons/health';
 import type { LayoutServerLoad } from './$types';
 
@@ -20,15 +19,15 @@ export const load: LayoutServerLoad = async ({ locals }) => {
 		// Stages where the operator is still actively handling this run on the
 		// filling page. A robot is "locked" during these — tabs show the stage
 		// badge, new runs are blocked, and Opentron Control shows "In Use".
-		// Once status moves past these (Top Sealing / Storage for reagent;
-		// QC / Storage for wax), the run goes to the post-OT-2 queue on
-		// Opentron Control and the robot becomes Available.
+		// Reagent runs end at Running (REAGENT-TOPSEAL-IMPLICIT) — there is no
+		// post-OT-2 reagent queue any more. Wax runs past these (QC / Storage)
+		// go to the wax post-OT-2 queue on Opentron Control.
 		const REAGENT_PAGE_OWNED = ['Setup', 'Loading', 'Running', 'Inspection',
 			'setup', 'loading', 'running', 'inspection'];
 		const WAX_PAGE_OWNED = ['Setup', 'Loading', 'Running', 'Awaiting Removal',
 			'setup', 'loading', 'running', 'awaiting_removal', 'cooling'];
 
-		const [robots, activeRuns, activeWaxRuns, cardsAndQueues] = await Promise.all([
+		const [robots, activeRuns, activeWaxRuns] = await Promise.all([
 			Equipment.find({ equipmentType: 'robot', isActive: true }, { _id: 1, name: 1, robotSide: 1 }).sort({ name: 1 }).lean(),
 			ReagentBatchRecord.find(
 				{ status: { $in: REAGENT_PAGE_OWNED } },
@@ -37,10 +36,7 @@ export const load: LayoutServerLoad = async ({ locals }) => {
 			WaxFillingRun.find(
 				{ status: { $in: WAX_PAGE_OWNED } },
 				{ 'robot._id': 1, status: 1 }
-			).lean().catch(() => []),
-			// Post-OT-2 reagent queue (Top Sealing / Storage handoff) — shown
-			// inline below the wizard (WAX-FLOW-1).
-			loadRobotCardsAndQueues().catch(() => ({ reagentQueue: [] as any[], maxTimeBeforeSealMin: 60 }))
+			).lean().catch(() => [])
 		]);
 
 		// Per-robot health (ready/busy/hung/offline) from the bridge heartbeat —
@@ -50,7 +46,6 @@ export const load: LayoutServerLoad = async ({ locals }) => {
 		).catch(() => ({}) as Record<string, any>);
 
 		return {
-			reagentQueue: JSON.parse(JSON.stringify(cardsAndQueues.reagentQueue ?? [])),
 			user: JSON.parse(JSON.stringify(locals.user)),
 			robots: (robots as any[]).map((r) => ({
 				// Stringify ObjectId to ensure proper serialization on Vercel
@@ -91,8 +86,7 @@ export const load: LayoutServerLoad = async ({ locals }) => {
 		return {
 			user: JSON.parse(JSON.stringify(locals.user)),
 			robots: [],
-			dashboardState: [],
-			reagentQueue: []
+			dashboardState: []
 		};
 	}
 };

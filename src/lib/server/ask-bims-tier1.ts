@@ -151,7 +151,7 @@ Mfg path (operations app + Lambda):
   raw materials → [WI-02 thermoseal cut] → [WI-01 backing → LotRecord+CartridgeRecord.backing]
   → [Wax Filling → WaxFillingRun + cart.waxFilling]
   → [Wax QC] → [Wax Storage] → [Reagent Filling → ReagentBatchRecord + cart.reagentFilling]
-  → [Reagent Inspection] → [Top Seal] → [Oven Cure] → [Cold Storage]
+  → (top seal, implicit) → [Reagent Inspect photo → reagent_qc → reagent_ready|reagent_rejected] → [Cold Storage]
   → [QA/QC Release] → [Shipping] → [Assay Loaded] → [linked]
 
 Test path (research app + Lambda middleware):

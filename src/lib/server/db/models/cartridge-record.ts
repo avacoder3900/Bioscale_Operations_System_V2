@@ -64,6 +64,9 @@ const cartridgeRecordSchema = new Schema({
 		status: { type: String, enum: ['Accepted', 'Rejected', 'Pending'] },
 		reason: String, source: String, operator: operatorRef, timestamp: Date, recordedAt: Date
 	},
+	// DEPRECATED (REAGENT-TOPSEAL-IMPLICIT, 2026-08-19): top sealing is no longer
+	// a BIMS step, so nothing writes this any more. Kept for historical DHR /
+	// traceability reads on carts sealed before the change.
 	topSeal: {
 		batchId: String, topSealLotId: String, operator: operatorRef, timestamp: Date, recordedAt: Date
 	},
@@ -164,9 +167,13 @@ const cartridgeRecordSchema = new Schema({
 			// wax_rejected. wax_filled | wax_ready → reagent. `wax_qc` is retired but kept
 			// in the enum so historical rows still validate; `wax_stored` is migrated away.
 			'backing', 'wax_filling', 'wax_filled', 'wax_qc', 'wax_ready', 'wax_rejected', 'reagent_filling', 'reagent_filled',
-			// Reagent inspection flow (REAGENT-INSPECT-AFTER-TOPSEAL): after Cut Top Seal a
-			// cartridge is `sealed`; a photo on the Reagent Inspect page → reagent_qc;
-			// a scan-gated verdict → reagent_ready | reagent_rejected.
+			// Reagent inspection flow (REAGENT-TOPSEAL-IMPLICIT, supersedes
+			// REAGENT-INSPECT-AFTER-TOPSEAL): reagent_filled IS the post-fill resting
+			// state — top sealing is implicit, not a BIMS step. A photo on the Reagent
+			// Inspect page → reagent_qc; a scan-gated verdict → reagent_ready |
+			// reagent_rejected. `sealed` is retired (was "top-sealed, awaiting photo")
+			// but kept so historical rows validate; the migration moved live ones to
+			// reagent_filled.
 			'sealed', 'reagent_qc', 'reagent_ready', 'reagent_rejected', 'stored', 'released', 'shipped',
 			'linked', 'underway', 'completed', 'cancelled', 'scrapped', 'voided',
 			'packeted', 'transferred', 'received'

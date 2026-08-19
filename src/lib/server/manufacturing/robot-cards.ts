@@ -1,11 +1,14 @@
 /**
- * Shared robot-status cards + post-OT-2 queues.
+ * Shared robot-status cards + the wax post-OT-2 queue.
  * Used by the Opentron Control hub (backup route) and the wax-filling /
  * reagent-filling pages' robot-select start screens (WAX-FLOW-1).
+ *
+ * REAGENT-TOPSEAL-IMPLICIT (2026-08-19): the reagent post-OT-2 queue
+ * (Top Sealing / Storage) is gone — reagent runs finish at Running, so there
+ * is no `reagentQueue` any more. Only wax has a post-OT-2 queue.
  */
 import {
-	Equipment, WaxFillingRun, ReagentBatchRecord,
-	ManufacturingSettings, CartridgeRecord
+	Equipment, WaxFillingRun, ReagentBatchRecord, CartridgeRecord
 } from '$lib/server/db';
 
 const TERMINAL_WAX = new Set(['completed', 'aborted', 'cancelled', 'voided',
@@ -15,8 +18,8 @@ const TERMINAL_REAGENT = new Set(['completed', 'aborted', 'voided', 'cancelled',
 
 // Stages where the operator is still actively handling the run on the filling
 // page — the robot is "In Use" until status moves past these. Once past
-// (QC/Storage for wax, Top Sealing/Storage for reagent), the run appears in
-// the respective post-OT-2 queue instead.
+// (QC/Storage for wax), the run appears in the wax post-OT-2 queue instead.
+// Reagent runs have no post-OT-2 stages: the next status is terminal.
 export const WAX_FILLING_PAGE_STAGES = new Set([
 	'Setup', 'Loading', 'Running', 'Awaiting Removal',
 	'setup', 'loading', 'running', 'awaiting_removal', 'cooling'
@@ -39,11 +42,10 @@ export interface RobotCard {
 export async function loadRobotCardsAndQueues() {
 	const now = Date.now();
 
-	const [robots, settingsDoc, allWaxRuns, allReagentRuns] = await Promise.all([
+	const [robots, allWaxRuns, allReagentRuns] = await Promise.all([
 		Equipment.find({ equipmentType: 'robot', isActive: true }, {
 			_id: 1, name: 1, robotSide: 1
 		}).sort({ name: 1 }).lean(),
-		ManufacturingSettings.findById('default').lean(),
 		WaxFillingRun.find(
 			{ status: { $nin: [...TERMINAL_WAX] } }
 		).sort({ createdAt: -1 }).lean(),
@@ -52,11 +54,8 @@ export async function loadRobotCardsAndQueues() {
 		).sort({ createdAt: -1 }).lean()
 	]);
 
-	const settings = settingsDoc as any ?? {};
-	const maxTimeBeforeSealMin: number = settings.reagentFilling?.maxTimeBeforeSealMin ?? 60;
-
 	// Robot ID → name map. Reagent runs sometimes only have robot._id set (no
-	// name embedded), so reagentQueue rows were rendering the raw ID.
+	// name embedded), so queue rows were rendering the raw ID.
 	const robotNameById = new Map<string, string>();
 	for (const r of robots as any[]) robotNameById.set(String(r._id), r.name ?? '');
 	const resolveRobotName = (run: any): string =>
@@ -93,7 +92,6 @@ export async function loadRobotCardsAndQueues() {
 	const robotActiveWax = new Map<string, any>();
 	const robotActiveReagent = new Map<string, any>();
 	const waxQueue: any[] = [];
-	const reagentQueue: any[] = [];
 
 	for (const r of allWaxRuns as any[]) {
 		const robotId = String(r.robot?._id ?? '');
@@ -118,38 +116,11 @@ export async function loadRobotCardsAndQueues() {
 
 	for (const r of allReagentRuns as any[]) {
 		const robotId = String(r.robot?._id ?? '');
+		// Only page-owned stages lock the robot. Any legacy post-OT-2 status
+		// ('Top Sealing' / 'Storage', pre-migration) is ignored here — the
+		// migrate-retire-top-sealing script closes those out.
 		if (REAGENT_FILLING_PAGE_STAGES.has(r.status)) {
 			robotActiveReagent.set(robotId, r);
-		} else {
-			const releasedAt = r.robotReleasedAt ? new Date(r.robotReleasedAt).getTime() : now;
-			const sealDeadlineMs = releasedAt + maxTimeBeforeSealMin * 60000;
-			const sealOverdue = now > sealDeadlineMs;
-			const sealMinRemaining = sealOverdue ? 0 : Math.ceil((sealDeadlineMs - now) / 60000);
-			const sealed = (r.cartridgesFilled ?? []).filter((c: any) => c.topSealBatchId).length;
-			const total = r.cartridgesFilled?.length ?? r.cartridgeCount ?? 0;
-
-			// Fridge(s) come from the run's own cartridgesFilled[].storageLocation
-			const fridges = new Set<string>();
-			for (const cf of (r.cartridgesFilled ?? [])) {
-				if (cf.storageLocation) fridges.add(String(cf.storageLocation));
-			}
-
-			reagentQueue.push({
-				runId: String(r._id),
-				robotName: resolveRobotName(r),
-				status: r.status,
-				assayTypeName: r.assayType?.name ?? '',
-				cartridgeCount: total,
-				sealedCount: sealed,
-				robotReleasedAt: r.robotReleasedAt ? new Date(r.robotReleasedAt).toISOString() : null,
-				elapsedSinceReleasedMin: Math.floor((now - releasedAt) / 60000),
-				sealMinRemaining,
-				sealOverdue,
-				maxTimeBeforeSealMin,
-				operatorName: r.operator?.username ?? 'Unknown',
-				trayId: r.trayId ?? null,
-				fridgeLocation: summarizeFridges(fridges)
-			});
 		}
 	}
 
@@ -189,5 +160,5 @@ export async function loadRobotCardsAndQueues() {
 		};
 	});
 
-	return { robotCards, waxQueue, reagentQueue, maxTimeBeforeSealMin };
+	return { robotCards, waxQueue };
 }

@@ -16,7 +16,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 
 	// Find completed reagent runs that have (or need) a QA/QC release
 	const query: Record<string, any> = {
-		status: { $in: ['Completed', 'completed', 'Storage', 'Top Sealing'] }
+		status: { $in: ['Completed', 'completed'] }
 	};
 
 	// Filter by test result status
