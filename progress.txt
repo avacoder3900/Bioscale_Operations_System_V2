@@ -8566,3 +8566,40 @@ returns immediately instead of burning attempts, since retrying cannot change it
 
 `npm run check`: 11 errors / 426 warnings / 91 files - baseline unchanged, zero in
 touched files. `npm run test:unit`: 90 passed.
+
+================================================================================
+2026-08-19 — feat/robot-arm-unified-ui — one arm page: Control/Jog/Calibrate/Runs tabs
+================================================================================
+The arm pages were four unrelated routes an operator had to navigate between by
+hand. ARM-02 (feat/robot-arm-page-consolidation, b4925d70) consolidated them
+into a real +layout.svelte with Control / Jog / Calibrate / Runs tabs plus a
+live arm camera panel, but the branch was left 124 commits behind master and was
+never merged. Brought it forward onto master here, together with the per-joint
+jog fix from feat/robot-arm-movement-tests.
+
+Merge was clean: the only conflict was progress.txt (append-only log — both
+sides' entries kept verbatim). Every code file auto-merged, including
+cart-mfg/+layout.svelte and the jog page, where the two branches turn out to
+touch disjoint regions: ARM-02 rewrites the <script> poll to a scoped
+invalidate(ARM_POSE_DEP) instead of invalidateAll(), while the movement-test fix
+ungates the per-joint buttons further down the markup. Verified both survived:
+per-joint buttons now `disabled={sessionActive}` (Cartesian pad correctly keeps
+its !pose gate), and the scoped poll is in place.
+
+What this brings onto master beyond the tabs: a live MJPEG arm camera panel
+(RobotArmCameraPanel.svelte), the /api/robot-arm/cameras stream-url +
+snapshot endpoints with a direct-transport-with-proxy-fallback, the ARM-01
+invariant guard, and a vitest unit config.
+
+Tests: `npx vitest run --config tests/vitest.unit.config.ts` — 133 passed / 8
+files, including the 27 robot-arm URL invariant tests and the 15 camera
+stream-url tests.
+
+svelte-check: 107 errors / 434 warnings — exactly master's own baseline, zero in
+any robot-arm or cart-mfg file.
+
+Context: multi-pose joint-map calibration is ALREADY on master (9e9e19fe,
+2026-07-31); origin/feat/robot-arm-pose-calibration is a redundant leftover
+whose code is byte-identical to master's and should be deleted, not merged.
+The Pi serves the matching /calibrate/map endpoints from
+feat/multi-pose-calibration.
