@@ -3712,3 +3712,108 @@ src/routes/capture/+page.svelte:
 
 npm run check: 11 errors / 434 warnings — identical pre-existing baseline,
 zero in touched file.
+
+================================================================================
+2026-08-19 — feat/tip-calibrator-teach — robot arm: re-register leader BusLinker
+================================================================================
+The leader BusLinker serial recorded on 2026-08-18 (5C4C128110) matches no board
+physically attached to arm-pi. Re-read the board directly over SSH with
+`udevadm info -q property -n /dev/ttyACM1`: the attached leader reports
+5C4C125867 (VID/PID 1a86:55d3). Confirmed it is a live arm bus, not a stray
+CH343 — all 6 STS3215 servos answer at ~12.4 V. The follower (5C4C126808 on
+ttyACM0) was already correct and its udev symlink was present.
+
+Because the udev rule keyed on the wrong serial, /dev/buslinker-leader was never
+created, and LEADER_PORT in the Pi's .env points at that symlink — so the leader
+arm could not be opened at all and teleop could not start.
+
+Files touched (BIMS): scripts/seed-robot-arm.ts — leader serialNumber
+5C4C128110 -> 5C4C125867, with the board history in a comment.
+
+DB (production, cluster0): ran `npx tsx scripts/seed-robot-arm.ts`. It upserts by
+role, so the existing leader document was updated in place rather than inserted:
+robot_arms leader _id -RnCMND5dwA_Zze3XfBoj now serialNumber 5C4C125867.
+Still 2 arms / 12 servos — no duplicates. Verified with a read-only probe after
+the write.
+
+Companion changes in the robot-arm repo (branch fix/leader-buslinker-swap,
+uncommitted pending review): deploy/pi/udev/99-buslinker.rules, src/server/app.py
+(_KNOWN_ARM_SERIALS), docs/pi-deployment.md, docs/PRD_BIMS_robot_arm.md.
+app.py + the rule file were copied to arm-pi and the service restarted;
+/ports/status now reports the new board with expected_role "leader".
+
+STILL OPEN: installing the udev rule into /etc/udev/rules.d/ needs a sudo
+password on arm-pi (only `systemctl {start,stop,restart} robot-arm` and
+`daemon-reload` are NOPASSWD there). Until that is run by hand,
+/dev/buslinker-leader does not exist and the leader arm stays unusable.
+No deployment created for this entry.
+
+================================================================================
+2026-08-19 — Deck floor from labware dimensions + guarded production calibrator
+================================================================================
+
+Branch: feat/tip-calibrator-teach
+Commit: 7253d1ab5155ddba132922347f4277dcbd4d1a96
+Preview: https://bioscale-operations-system-mongodb-git-feat-ti-528704-brevitest.vercel.app
+Deployment: dpl_34muEmrsxsumhKfDh7hJCXUmHZfX (Preview, Ready, 2m build)
+
+Goal: get the new cartridge deck editable for a bench test with the tip
+calibrator, where holes must move UP so the pipette dispenses into a raised
+location.
+
+Branch recovery + assembly. feat/tip-calibrator-teach was local-only and
+unpushed (it plus ~280 lines of uncommitted work and an untracked PRD were the
+only copies). Pushed as-is first, then:
+  - 1b55eaf7b  committed the uncommitted two-field-Z work (approach Z vs probe Z)
+  - 69e0c7868  cherry-picked 32554cf69 "allow fill holes anywhere on the deck"
+    from feat/deck-unrestricted-hole-positions. Cherry-pick, NOT merge: that
+    branch sits on a far newer master, so merging would have dragged in 261
+    commits / 417 files of unrelated work (zebra, kanban, wax tip swap) the day
+    before a bench test. The commit itself is 2 files, +23/-50. Applied clean.
+  - 7253d1ab5  this entry.
+bims-tipcal-recovery-backup/ was a redundant Aug-18 snapshot; every blob in it
+verified present in the repo, nothing lost.
+
+1. Floor restored, ceiling deliberately not. Raising a hole and moving it in XY
+stay unrestricted — that is the point of the new deck. Below the deck's bottom
+face there is no hole to dispense into, only the slot, so a negative Z is now
+refused (reject, never clamp). Floor is derived from the deck's own `dimensions`
+in the labware JSON, never from its holes: dimensions describes the physical
+block, hole x/y/z are locations inside that frame, so a crept hole must not be
+able to drag the floor down with it (same reasoning as safeArcZ). Enforced on the
+SAVED coord in apply-edit.ts at all three call sites, and on the COMMANDED coord
+in moveToWellSafe since a move reads live coords.
+
+2. Production stopped being laxer than the wizard that teaches it.
+calibrationRtpValues read the calibrator with a bare finite(), so cal_x/cal_y
+accepted the fixture schema's DEFAULT position of 0 — a never-taught row would
+send a real fill run to the deck's front-left corner at full confidence — and
+z_cal accepted 0/negative/500mm, with finite(null) coercing to a probe depth of
+0, straight through the deck. Now uses the same taughtXY() zero-guard and
+plausibleZ() envelope as resolveCalibratorPoint, falling back to the .py
+defaults (34.491 wax / 40.8 reagent). taughtXY exported for this.
+
+Verification: svelte-check clean on all touched files (the 11 repo-wide errors
+are pre-existing, in AskBimsWidget.svelte and assembly/[sessionId]). 14 guard
+assertions run against the built module, all passing. resolveCalibratorPoint
+itself was already correct — the bug was only that production bypassed it.
+
+KNOWN ISSUES, not fixed here (found by a 4-agent review of the merged tree):
+  - Stale labware cache is the one most likely to cost a bench session:
+    maintenance.ts:375 reuses labware at a slot by loadName ONLY, and
+    apply-edit.ts never bumps `version`. Inside a reused maintenance run an edit
+    is silently ignored — the gantry goes to the OLD hole while the UI shows the
+    NEW coords, so the operator jogs again and the additive delta DOUBLES, with
+    no error anywhere. WORKAROUND until fixed: close and reopen the maintenance
+    run after every deck edit, before moving.
+  - revertCalibrator restores history without re-running plausibleZ.
+  - applyBatch/applyPerWell are the only mutating actions with no AuditLog.
+  - startRun on both production fill pages has no requirePermission.
+  - CAL_Z_LIMITS.max is still 200mm on the calibrator teach path — unchanged by
+    the unrestricted-deck work. If the new deck needs a calibrator taught above
+    200mm the form will refuse it.
+
+Left uncommitted on purpose: protocols/Wax_Filling_GEN7_Cartridge.py has a
+separate legacy-path X/Y zero restoration (X_ZERO -25.955 / Y_ZERO -11.253,
+fixing a +25.955mm bias on the non-bims_native path). Unrelated to this work,
+still undefended in the working tree.
