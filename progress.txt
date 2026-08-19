@@ -8162,3 +8162,12 @@ Still NOT ported from the old branch, deliberately, and open as follow-up work:
 Merged current master (through the mid-run tip swap work) into the branch first; no conflicts, and
 master's 6 new commits do not touch the wax deck grid.
 npm run check: 11 errors / 434 warnings — exact baseline, zero errors in any touched file.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-fyqgpd52k-brevitest.vercel.app
+  (also aliased: https://bioscale-operations-system-mongodb-opejkb67i.vercel.app)
+  Branch git-alias not resolvable from CLI (branch name too long — Vercel truncates + hashes it);
+  read it off the inspector if needed: https://vercel.com/brevitest/bioscale-operations-system-mongodb/GZEgUne4upLiTA1WNbeUzqqix9SC
+Source: branch feat/scan-then-check-v2 @ commit 41ae9391
+Retrieve this exact code: git checkout feat/scan-then-check-v2 at commit 41ae9391
+What this deployment is for: verify wax deck scan-then-check on current master before merging to
+production; NOT yet merged to master.
