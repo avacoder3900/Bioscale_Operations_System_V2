@@ -14,16 +14,16 @@
  *      'Completed' (+ finalizedAt / runEndTime / robotReleasedAt if unset).
  *      The OT-2 already finished these runs; they were only "open" for the
  *      manual seal/store steps that no longer exist in BIMS.
- *   2. CartridgeRecords at `sealed` (top-sealed, awaiting the Reagent Inspect
- *      photo) → `reagent_filled`. Under the new flow reagent_filled IS the
- *      "awaiting photo" state; the photo takes it to reagent_qc. The old
- *      `topSeal` sub-doc is left in place (history); `priorStatus` records
- *      where the cart came from.
- *   3. Audit log rows for both, tagged action 'migrate_retire_top_sealing'.
+ *   2. Report-only: carts still at `sealed`, and the topSeal sub-doc census.
+ *      Per Jacob (2026-08-19): DO NOT change any cartridge status and do not
+ *      touch completed carts / test results. `sealed` carts keep their status
+ *      (/api/cv/capture still accepts `sealed` → reagent_qc when photographed);
+ *      historical `topSeal` sub-docs stay for DHR / traceability.
+ *   3. Audit log rows for step 1, tagged action 'migrate_retire_top_sealing'.
  *
- * NOT touched: `sealed` / 'Top Sealing' stay in the schema enums (historical
- * rows must still validate); the Cut Top Seal material-cutting flow
- * (top-seal-cutting, WI-03, PT-CT-103 rolls) is unchanged.
+ * NOT touched: any CartridgeRecord; `sealed` / 'Top Sealing' stay in the schema
+ * enums (historical rows must still validate); the Cut Top Seal material-cutting
+ * flow (top-seal-cutting, WI-03, PT-CT-103 rolls) is unchanged.
  */
 import mongoose from 'mongoose';
 import { nanoid } from 'nanoid';
@@ -73,46 +73,19 @@ async function main() {
 		}
 	}
 
-	// ---- Step 2: sealed cartridges → reagent_filled --------------------------
+	// ---- Step 2: report only — no cartridge writes -------------------------
 	const sealedCount = await carts.countDocuments({ status: 'sealed' });
-	const sealedSample = (await carts
-		.find({ status: 'sealed' })
-		.project({ _id: 1, 'topSeal.timestamp': 1, 'reagentFilling.runId': 1, priorStatus: 1 })
-		.limit(10)
-		.toArray()) as any[];
-	console.log(`\nStep 2: ${sealedCount} cartridge(s) at 'sealed' → 'reagent_filled'`);
-	for (const c of sealedSample) {
-		console.log(`   ${String(c._id)}  sealedAt=${c.topSeal?.timestamp?.toISOString?.() ?? '-'}  reagentRun=${c.reagentFilling?.runId ?? '-'}  prior=${c.priorStatus ?? '-'}`);
-	}
-	if (sealedCount > 10) console.log(`   … and ${sealedCount - 10} more`);
-	if (APPLY && sealedCount > 0) {
-		const ids = (await carts.find({ status: 'sealed' }).project({ _id: 1 }).toArray()).map((c: any) => c._id);
-		const res = await carts.updateMany(
-			{ _id: { $in: ids }, status: 'sealed' },
-			{ $set: { status: 'reagent_filled', priorStatus: 'sealed' } }
-		);
-		console.log(`   modified ${res.modifiedCount}`);
-		if (ids.length) {
-			await audit.insertMany(ids.map((id: any) => ({
-				_id: nanoid(),
-				tableName: 'cartridge_records',
-				recordId: String(id),
-				action: 'migrate_retire_top_sealing',
-				oldData: { status: 'sealed' },
-				newData: { status: 'reagent_filled' },
-				reason: 'REAGENT-TOPSEAL-IMPLICIT: `sealed` retired; reagent_filled is the awaiting-photo state',
-				changedBy: 'migration',
-				changedAt: now
-			})));
-		}
-	}
+	const topSealCensus = await carts.aggregate([
+		{ $match: { 'topSeal.recordedAt': { $exists: true } } },
+		{ $group: { _id: '$status', n: { $sum: 1 } } }, { $sort: { n: -1 } }
+	]).toArray();
+	console.log(`\nStep 2 (report only): ${sealedCount} cart(s) still at 'sealed' — left as-is (capture accepts sealed → reagent_qc).`);
+	console.log('   carts with a historical topSeal sub-doc, by status (kept for DHR/traceability):');
+	for (const row of topSealCensus as any[]) console.log(`     ${String(row._id).padEnd(14)} ${row.n}`);
 
 	// ---- Summary -------------------------------------------------------------
-	const [remainingRuns, remainingSealed] = await Promise.all([
-		runs.countDocuments({ status: { $in: RETIRED_RUN_STAGES } }),
-		carts.countDocuments({ status: 'sealed' })
-	]);
-	console.log(`\nAfter: retired-stage runs=${remainingRuns}  sealed carts=${remainingSealed}`);
+	const remainingRuns = await runs.countDocuments({ status: { $in: RETIRED_RUN_STAGES } });
+	console.log(`\nAfter: retired-stage runs=${remainingRuns}  (cartridge statuses untouched by design)`);
 	if (!APPLY) console.log('\nDry run — nothing written. Re-run with --apply to migrate.');
 	await mongoose.disconnect();
 }

@@ -15,8 +15,8 @@ cut sheets are cheap).
 ## Decisions (locked 2026-08-19)
 - **Photo → `reagent_qc`.** The Reagent Inspect photo takes `reagent_filled →
   reagent_qc` (not → `sealed`). `sealed` is retired as a live state: it is kept in
-  the enum so historical rows validate, `/api/cv/capture` still accepts it for
-  stragglers, and the migration moves live `sealed` carts to `reagent_filled`.
+  the enum so historical rows validate, and `/api/cv/capture` still accepts it for
+  the 3 straggler carts (their status is deliberately NOT migrated).
 - **The whole post-OT-2 reagent queue goes, Storage included.** A reagent run
   ends at Running: `completeRunFilling` sets the run `Completed` (+ `finalizedAt`,
   `runEndTime`, `robotReleasedAt`). The Opentron Control reagent page
@@ -77,10 +77,13 @@ Reagent run status: `Setup → Loading → Running → Completed` (or Cancelled/
 
 ### Migration
 `scripts/migrate-retire-top-sealing.ts` (dry-run default, `--apply` to write):
-1. reagent runs in Inspection/Top Sealing/Storage → `Completed`
-2. carts at `sealed` → `reagent_filled` (`priorStatus: 'sealed'`)
-3. audit rows, action `migrate_retire_top_sealing`
-Run it after this branch is deployed to production.
+1. reagent runs in Inspection/Top Sealing/Storage → `Completed` (31 runs at time of
+   writing, Jul 1 – Aug 14; their carts are mostly already `completed`/ran)
+2. report-only census of `sealed` carts (3) and historical `topSeal` sub-docs (726)
+3. audit rows for step 1, action `migrate_retire_top_sealing`
+**Per Jacob 2026-08-19: no cartridge status is changed and completed carts / test
+results are not touched.** The 3 `sealed` carts stay `sealed` (capture accepts them).
+`topSeal` sub-docs stay as DHR/traceability history.
 
 ## Out of scope / follow-ups
 - Removing `sealed` / 'Top Sealing' from the enums and `ReagentBatchRecord.sealBatches`
