@@ -8342,3 +8342,13 @@ OPEN, deliberately not done:
   on the preview; a 401 from the arm means re-set that var from the Pi's value.
 - Per-joint grid covers J1..J5; the gripper (J6) has no button though the server
   accepts sid 1..6.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-git-feat-ro-101e4a-brevitest.vercel.app
+  (immutable: https://bioscale-operations-system-mongodb-ataa61sn8-brevitest.vercel.app)
+Source: branch feat/robot-arm-movement-tests @ commit 5eb52dc2
+Retrieve this exact code: git checkout feat/robot-arm-movement-tests at commit 5eb52dc2
+What this deployment is for: exercise per-joint jog + torque against arm-pi now
+  that the replacement leader BusLinker (5C4C125867) is detected and registered.
+  Jog page: /manufacturing/cart-mfg/robot-arm/jog — the Cartesian pad stays
+  disabled (no IK on the Pi); the per-joint and torque controls are the ones to
+  test. DRY_RUN=true on arm-pi, so commands are logged, not executed.
