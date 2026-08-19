@@ -8194,3 +8194,30 @@ Deployment: production — Vercel auto-deploy from master push
 Source: branch master @ this commit (merge of feat/scan-then-check-v2 @ 31943ccd via PR #43)
 Retrieve this exact code: git checkout master at commit eb831741 (code) — this commit adds only the log
 What this deployment is for: put wax deck scan-then-check live in production.
+
+================================================================================
+2026-08-19 — master — INFRA-101 engineer onboarding kit + kanban "investigation" wording
+================================================================================
+New docs/onboarding/ (4 files) for the first engineer-onboarding session, delivered as a
+Claude Project: INFRA-101-project-instructions.md (paste into Project Instructions —
+one-point-then-questions pacing, 8 modules), INFRA-101-knowledge.md (dense cross-repo
+knowledge base for Project Context: Mongo tiers/sacred docs, SvelteKit-on-Vercel request
+lifecycle, env-var homes, firmware→Particle→Lambda→Mongo path, OT-2/CV/arm control-plane
+patterns, MCP, Ralph loop; §9 lists stale docs), INFRA-101-quick-reference.md (cards A–H),
+INFRA-101-diagrams.md (8 mermaid diagrams + image-gen prompts). Companion field-guide
+artifact: https://claude.ai/code/artifact/515e163e-3551-4b78-a14e-18b05423500a
+Context load found: live Lambda middleware is in brevitest-device/firmware/Middleware
+reference files/lambda-current-8_18_26/ (brevitest-middleware repo is stale);
+Brevitest-Firmware-v2 is a stale copy; AGENTS.md/ralph-checklist.md still say dev/main.
+
+Also folded in Jacob's pending kanban-tweaks working tree: "spike" → "investigation" in
+kanban UI + MCP tool copy (itemType value unchanged), plus four scripts/diag-cartridge-ghost-*.ts.
+NOTE: first push was blocked by GitHub push protection — .claude/settings.local.json held the
+live MCP key inside permission-allowlist strings. Commits were rebuilt without that file; the
+pushed history is clean. The key is already on the rotate list (mcp-live memory) — rotate it.
+npm run check: 11 errors / 434 warnings — exact baseline, zero in touched files.
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit 66d8e337
+Retrieve this exact code: git checkout master at commit 66d8e337
+What this deployment is for: onboarding docs (no runtime impact) + kanban wording change.
