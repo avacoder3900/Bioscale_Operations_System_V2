@@ -8129,3 +8129,36 @@ Deployment: robot daemon — B07 /data/ot2-bridge/ot2-bridge.py updated + ot2-br
 Deployment: production — Vercel auto-deploy from master push (Tip problem? card + requestTipSwap action)
 Source: branch master @ this commit
 What this deployment is for: swap a bad tip mid-run (robot or by hand), recalibrate, resume at the same well.
+
+================================================================================
+2026-08-19 — feat/scan-then-check-v2 — wax deck: scan-then-check deferred validation (ported onto current master)
+================================================================================
+Validating every cartridge scan round-tripped to the server and made wax deck loading crawl. The deck
+grid now accepts scans locally without judgement and validates the whole set at the deferred boundary
+(last slot filled, or the next action taken), so the operator scans at wedge-scanner speed and sees
+failures once, at the end.
+
+checkCartridgeScans() in src/lib/server/manufacturing/cartridge-scan-check.ts does the local checks
+(duplicate, over-capacity) in memory plus one CartridgeRecord.find({_id:{$in}}) for the entire set and
+returns per-barcode flags; it is read-only. POST /api/manufacturing/cartridge-scan-check exposes it as
+a batch endpoint. wax-filling/DeckLoadingGrid.svelte drops the per-scan blocking rejects, keeps the
+scan input open past capacity so an extra scan lands and gets flagged instead of being silently
+dropped, and renders per-slot failures with mismatch reconciliation.
+
+Lineage note: this replaces the earlier feat/scan-then-check branch, which was cut 2026-03-16 and is
+now 1650 commits behind master. That branch edited src/routes/spu/manufacturing/{wax,reagent}-filling/
+— paths master has since moved to src/routes/manufacturing/cart-mfg/ — and its versions of both
+DeckLoadingGrid components predate Jacob's May–June robot deck-scan / sweep-progress / QR-alias
+rewrites (wax grid 490 -> 1273 lines). Merging it would have reverted that work; it should not be
+merged and is superseded by this branch.
+
+Still NOT ported from the old branch, deliberately, and open as follow-up work:
+  - reagent-filling DeckLoadingGrid deferred validation
+  - TopSealing deferred validation + batched completeSealBatch (master still has scanCartridgeForSeal)
+  - wax QC completeQCBatch — NOT needed: master's cart-mfg/opentron-control/wax/[runId] already
+    batches QC, already reads r.reasonCode, and already applies rejections before the phase loops,
+    so both wax-QC bugs the old commit fixed are independently fixed on master.
+
+Merged current master (through the mid-run tip swap work) into the branch first; no conflicts, and
+master's 6 new commits do not touch the wax deck grid.
+npm run check: 11 errors / 434 warnings — exact baseline, zero errors in any touched file.
