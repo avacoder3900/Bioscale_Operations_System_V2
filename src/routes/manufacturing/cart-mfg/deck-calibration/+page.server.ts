@@ -31,6 +31,10 @@ import {
 	deckEditHistory
 } from '$lib/server/services/deck-calibration/apply-edit';
 import { getRobot, robotUploadProtocol } from '$lib/server/opentrons/proxy';
+// The single source of truth for "is this Z a height a pipette may be sent to".
+// Shared with the probe path (resolveCalibratorPoint) so the studio cannot save a
+// value the robot would then refuse to use — one window, one definition.
+import { CAL_Z_LIMITS, plausibleZ } from '$lib/server/services/deck-calibration/tip-calibrator';
 import type { PageServerLoad, Actions } from './$types';
 
 const DECK_RE = /(gen4deck|cartridge_deck)/i;
@@ -67,6 +71,15 @@ type CalEntry = {
 	capturedBy: string | null;
 	capturedAt: string | null;
 	history: CalHistoryEntry[];
+	/**
+	 * True when this robot has no fixture row of its own and these numbers came
+	 * from the shared 'global' row (loadCalibratorFixture's precedence: own row →
+	 * 'global' → the .py default). It matters because the first Save forks the
+	 * robot off 'global' permanently — from then on a change to the shared fixture
+	 * stops reaching it — so the page has to be able to say so before the operator
+	 * commits.
+	 */
+	inheritedFromGlobal: boolean;
 };
 
 /** Shape one raw history subdoc for the client, filling any gap with the defaults. */
@@ -111,10 +124,17 @@ function toPrevSnapshot(prev: any) {
  * Shape one raw TipCalibratorFixture doc for the client. Every read of a
  * calibrator (load + both actions) goes through here so the UI always gets the
  * same object, including for robots whose fixture predates the history array.
+ *
+ * `opts` exists because one doc can be surfaced under two identities: its own
+ * row, and — for every robot that has no row — the shared 'global' fixture
+ * standing in for that robot. In the second case the entry is keyed by the
+ * borrowing robot, not by 'global', because the page looks calibrators up by
+ * robotId.
  */
-function toCalEntry(c: any): CalEntry {
+function toCalEntry(c: any, opts?: { robotId?: string; inheritedFromGlobal?: boolean }): CalEntry {
+	const inheritedFromGlobal = opts?.inheritedFromGlobal === true;
 	return {
-		robotId: String(c?.robotId ?? ''),
+		robotId: String(opts?.robotId ?? c?.robotId ?? ''),
 		position: {
 			x: Number(c?.position?.x ?? CAL_DEFAULTS.x),
 			y: Number(c?.position?.y ?? CAL_DEFAULTS.y),
@@ -124,7 +144,12 @@ function toCalEntry(c: any): CalEntry {
 		zCalReagent: Number(c?.zCalReagent ?? CAL_DEFAULTS.zCalReagent),
 		capturedBy: c?.capturedBy?.username ?? null,
 		capturedAt: c?.capturedAt?.toISOString?.() ?? null,
-		history: Array.isArray(c?.history) ? c.history.map(toCalHistoryEntry) : []
+		// An inherited entry deliberately carries NO history: the undo list drives
+		// revertCalibrator, which only ever writes the robot's own row. Handing the
+		// operator 'global' teaches as this robot's undo points would offer a revert
+		// that either 404s or forks the robot off 'global' by accident.
+		history: inheritedFromGlobal || !Array.isArray(c?.history) ? [] : c.history.map(toCalHistoryEntry),
+		inheritedFromGlobal
 	};
 }
 
@@ -182,7 +207,25 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	}));
 	// Includes the per-robot undo history (newest first) so the wizard can show the
 	// previous value and offer one-click revert without a second round-trip.
-	const calibrators = (await TipCalibratorFixture.find({}).lean() as any[]).map(toCalEntry);
+	const calRows = (await TipCalibratorFixture.find({}).lean()) as any[];
+	// A robot with no row of its own silently runs on the shared 'global' fixture
+	// (loadCalibratorFixture's precedence). Looking calibrators up by robotId would
+	// find nothing for those robots, so the page would show the .py defaults and
+	// give no hint that the numbers actually in force belong to another document.
+	// Synthesise one entry per such robot, keyed by that robot and flagged, so the
+	// page can warn that the first Save forks it off 'global' for good. When there
+	// is no 'global' row there is nothing to inherit — the robot really is on the
+	// .py defaults, and the page's existing no-entry path already says so.
+	const globalRow = calRows.find((c) => String(c?.robotId ?? '') === 'global') ?? null;
+	const taughtRobotIds = new Set(calRows.map((c) => String(c?.robotId ?? '')));
+	const calibrators = [
+		...calRows.map((c) => toCalEntry(c)),
+		...(globalRow
+			? robots
+					.filter((r) => !taughtRobotIds.has(r._id))
+					.map((r) => toCalEntry(globalRow, { robotId: r._id, inheritedFromGlobal: true }))
+			: [])
+	];
 
 	return {
 		kind,
@@ -285,6 +328,11 @@ export const actions: Actions = {
 	 * Fields: robotId, x, y, z (required); zCalWax, zCalReagent (optional — the
 	 * robot's current value is kept if omitted); source ('manual' | 'probe');
 	 * note (optional free text, e.g. the probe adjustment that produced this).
+	 *
+	 * Every Z here ends up commanded on a real pipette — the probe reads the two
+	 * zCal* fields and calibration-rtps injects them as production z_cal — so all
+	 * three Z values are range-checked against CAL_Z_LIMITS before anything is
+	 * written, and a failed check writes nothing at all.
 	 */
 	saveCalibrator: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
@@ -294,7 +342,14 @@ export const actions: Actions = {
 		const robotId = (data.get('robotId') as string)?.trim();
 		const x = Number(data.get('x')), y = Number(data.get('y')), z = Number(data.get('z'));
 		if (!robotId) return fail(400, { error: 'Pick a robot' });
-		if (![x, y, z].every(Number.isFinite)) return fail(400, { error: 'x/y/z must be numbers' });
+		if (![x, y].every(Number.isFinite)) return fail(400, { error: 'x/y must be numbers' });
+		// Save is the only write path into production z_cal, so this is the last
+		// place a bad height can be caught by a human-readable message instead of by
+		// the pipette hitting the fixture. Every rejection names its field, and we
+		// reject rather than clamp (PRD §5.4) — a clamp would quietly send the tip
+		// somewhere the operator never asked for.
+		const zRange = `between ${CAL_Z_LIMITS.min} and ${CAL_Z_LIMITS.max} mm`;
+		if (plausibleZ(z) === undefined) return fail(400, { error: `z (approach) must be a number ${zRange}` });
 
 		const source = (data.get('source') as string)?.trim() === 'probe' ? 'probe' : 'manual';
 		const note = (data.get('note') as string)?.trim() || null;
@@ -304,14 +359,37 @@ export const actions: Actions = {
 		const prev = (await TipCalibratorFixture.findOne({ robotId }).lean()) as any;
 
 		// A blank/absent Z field means "leave it alone"; a present-but-junk one is an error.
+		// The client only ever sends the key for the tip profile it is editing, so the
+		// other one is always carried forward here — which is why this write has to
+		// re-validate the carried value too, not just the submitted one.
 		const rawWax = data.get('zCalWax');
 		const rawReagent = data.get('zCalReagent');
 		const hasWax = rawWax !== null && String(rawWax).trim() !== '';
 		const hasReagent = rawReagent !== null && String(rawReagent).trim() !== '';
-		const zCalWax = hasWax ? Number(rawWax) : Number(prev?.zCalWax ?? CAL_DEFAULTS.zCalWax);
-		const zCalReagent = hasReagent ? Number(rawReagent) : Number(prev?.zCalReagent ?? CAL_DEFAULTS.zCalReagent);
-		if (![zCalWax, zCalReagent].every(Number.isFinite)) {
-			return fail(400, { error: 'zCalWax/zCalReagent must be numbers' });
+
+		let zCalWax: number;
+		if (hasWax) {
+			// Submitted by the operator: an implausible value is their mistake to fix,
+			// so refuse the whole save rather than silently storing a different number.
+			const v = plausibleZ(Number(rawWax));
+			if (v === undefined) return fail(400, { error: `zCalWax (probe Z) must be a number ${zRange}` });
+			zCalWax = v;
+		} else {
+			// Not submitted: carry the stored value forward. If what is stored is not a
+			// usable height — most often a partial write that materialised as a real 0
+			// (PRD §5.5) — fall back to the .py default instead of failing. The operator
+			// is not editing this field, and blocking them on damage they did not cause
+			// would make the bad value unfixable through the studio.
+			zCalWax = plausibleZ(Number(prev?.zCalWax)) ?? CAL_DEFAULTS.zCalWax;
+		}
+
+		let zCalReagent: number;
+		if (hasReagent) {
+			const v = plausibleZ(Number(rawReagent));
+			if (v === undefined) return fail(400, { error: `zCalReagent (probe Z) must be a number ${zRange}` });
+			zCalReagent = v;
+		} else {
+			zCalReagent = plausibleZ(Number(prev?.zCalReagent)) ?? CAL_DEFAULTS.zCalReagent;
 		}
 
 		const capturedBy = { _id: locals.user._id, username: locals.user.username };
@@ -334,6 +412,8 @@ export const actions: Actions = {
 		await AuditLog.create({ _id: generateId(), tableName: 'tip_calibrator_fixtures', recordId: robotId, action: 'save_calibrator', newData: { x, y, z, zCalWax, zCalReagent, source, note }, changedAt: new Date(), changedBy: locals.user?.username });
 
 		const saved = (await TipCalibratorFixture.findOne({ robotId }).lean()) as any;
+		// inheritedFromGlobal is false by construction: the upsert just gave this
+		// robot a row of its own, which is exactly the fork the page warned about.
 		return { success: true, action: 'saveCalibrator', calibrator: JSON.parse(JSON.stringify(toCalEntry(saved))) };
 	},
 
@@ -388,6 +468,8 @@ export const actions: Actions = {
 		await AuditLog.create({ _id: generateId(), tableName: 'tip_calibrator_fixtures', recordId: robotId, action: 'revert_calibrator', newData: { historyIndex, ...restored.position, zCalWax: restored.zCalWax, zCalReagent: restored.zCalReagent }, changedAt: new Date(), changedBy: locals.user?.username });
 
 		const saved = (await TipCalibratorFixture.findOne({ robotId }).lean()) as any;
+		// Revert only ever runs against a robot's own row (it 404s above otherwise),
+		// so this entry is never an inherited one.
 		return { success: true, action: 'revertCalibrator', calibrator: JSON.parse(JSON.stringify(toCalEntry(saved))) };
 	},
 

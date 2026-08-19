@@ -97,6 +97,57 @@ export function finite(v: unknown): number | undefined {
 	return Number.isFinite(n) ? n : undefined;
 }
 
+/**
+ * The Z window a calibrator height has to fall inside to be believed, in mm.
+ *
+ * This is the OT-2's usable Z envelope, not a tolerance around any taught
+ * point — deliberately wide, so it only ever catches garbage and never an
+ * operator legitimately re-teaching a height. Both ends are load-bearing and
+ * they fail in opposite directions: under the floor the pipette drives into the
+ * fixture (a crash), over the ceiling it never touches off (no reading).
+ *
+ * Shared with the deck-calibration page so a bad number is refused at the form,
+ * before the robot is ever asked to move to it.
+ */
+export const CAL_Z_LIMITS = { min: 5, max: 200 } as const;
+
+/**
+ * Z guard: a real number INSIDE CAL_Z_LIMITS, else undefined.
+ *
+ * Stricter than finite() because 0 is the dangerous case. The fixture schema's
+ * `vec` defaults every axis to 0, so a partial write materialises as a literal
+ * 0 that is indistinguishable from a taught value — and 0 is straight through
+ * the deck. Anything outside the window means NOT TAUGHT, so callers fall back
+ * to the .py default instead of commanding it.
+ *
+ * Rejects rather than clamps: a clamp would quietly move the pipette to a height
+ * nobody asked for, which is worse than refusing to move at all.
+ *
+ * Pure and DB-free on purpose — form validation runs it on raw request input.
+ */
+export function plausibleZ(v: unknown): number | undefined {
+	const n = finite(v);
+	if (n === undefined) return undefined;
+	return n >= CAL_Z_LIMITS.min && n <= CAL_Z_LIMITS.max ? n : undefined;
+}
+
+/**
+ * XY guard: a real, non-zero coordinate, else undefined.
+ *
+ * The same "a stored 0 is not a taught value" problem as plausibleZ, for the
+ * same reason — `vec` defaults x and y to 0 too — so a half-written fixture
+ * would otherwise send the tip to the deck's front-left corner at full
+ * confidence.
+ *
+ * Deliberately no range window: CAL_Z_LIMITS is a Z envelope, and an XY window
+ * would be invented rather than measured. Zero-vs-taught is the failure this
+ * fleet actually has.
+ */
+function taughtXY(v: unknown): number | undefined {
+	const n = finite(v);
+	return n === undefined || n === 0 ? undefined : n;
+}
+
 export interface ResolvedCalibrator {
 	/** The point to move to / probe at. */
 	point: CalPoint;
@@ -139,9 +190,12 @@ export async function resolveCalibratorPoint(
 	const { fixture, source } = await loadCalibratorFixture(robotId);
 	return {
 		point: {
-			x: finite(fixture?.position?.x) ?? DEFAULT_CALIBRATOR_XY.x,
-			y: finite(fixture?.position?.y) ?? DEFAULT_CALIBRATOR_XY.y,
-			z: finite(fixture?.[spec.zCalKey]) ?? spec.defaultZ
+			// Guarded, not merely finite: a stored 0, or a Z outside the envelope,
+			// means this fixture was never fully taught on that axis. Falling back to
+			// the .py default is the only safe reading of it — see the guards above.
+			x: taughtXY(fixture?.position?.x) ?? DEFAULT_CALIBRATOR_XY.x,
+			y: taughtXY(fixture?.position?.y) ?? DEFAULT_CALIBRATOR_XY.y,
+			z: plausibleZ(fixture?.[spec.zCalKey]) ?? spec.defaultZ
 		},
 		source,
 		fixture,
