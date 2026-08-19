@@ -8285,17 +8285,6 @@ What this deployment is for: top sealing implicit / post-OT-2 reagent queue reti
   carts reagent_filled, PT-CT-113 consumption row; Reagent Inspect photo → reagent_qc.
 
 ================================================================================
-Per Jacob: no CV rejection of reagent carts yet — Reagent Inspect just captures the picture.
-Added INFERENCE_DISABLED_PHASES = {'reagent_filled'} + isInferenceDisabledForPhase() in
-src/lib/server/cv/run-inference.ts; runPhaseInference() returns early for those phases, so
-BOTH capture paths (/api/cv/capture and /api/cv/capture-ingest) skip inference at
-reagent_filled even if a CvProject deploys there (no CvInspection rows written).
-reagent-inspect/+page.server.ts returns inferenceDisabled:true and forces modelDeployed:false
-so the client never polls; the page shows a neutral "Capture only — CV inference is switched
-off for reagent inspect for now" notice instead of the deploy-status banner. Photo still
-advances reagent_filled → reagent_qc; the scan-gated human verdict is unchanged. To re-enable,
-remove 'reagent_filled' from the set. npm run check: 11 errors / 434 warnings — baseline.
-=======
 2026-08-19 — feat/robot-arm-movement-tests — unblock BIMS robot-arm movement tests
 ================================================================================
 Two-part fix: get the replacement leader BusLinker recognised, then make BIMS
@@ -8627,4 +8616,20 @@ What this deployment is for: verify the consolidated arm page —
 
 ================================================================================
 2026-08-19 — feat/cartridge-status-flow → master — reagent inspect: CV inference OFF (capture only)
-=========================================================================
+================================================================================
+Per Jacob: no CV rejection of reagent carts yet — Reagent Inspect just captures the picture.
+Added INFERENCE_DISABLED_PHASES = {'reagent_filled'} + isInferenceDisabledForPhase() in
+src/lib/server/cv/run-inference.ts; runPhaseInference() returns early for those phases, so
+BOTH capture paths (/api/cv/capture and /api/cv/capture-ingest) skip inference at
+reagent_filled even if a CvProject deploys there (no CvInspection rows written).
+reagent-inspect/+page.server.ts returns inferenceDisabled:true and forces modelDeployed:false
+so the client never polls; the page shows a neutral "Capture only — CV inference is switched
+off for reagent inspect for now" notice instead of the deploy-status banner. Photo still
+advances reagent_filled → reagent_qc; the scan-gated human verdict is unchanged. To re-enable,
+remove 'reagent_filled' from the set. npm run check: 11 errors / 434 warnings — baseline.
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ merge 79d54998 (feature commit 5a684bee; also carries the robot-arm
+  ARM-02 work that landed on master in parallel)
+Retrieve this exact code: git checkout master at commit 79d54998
+What this deployment is for: Reagent Inspect capture-only (CV inference off at reagent_filled).
