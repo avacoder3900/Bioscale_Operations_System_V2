@@ -134,7 +134,24 @@ export async function runInferenceForProject(ctx: InferenceContext, project: any
 	}
 }
 
+/**
+ * Phases where auto-on-capture inference is switched OFF for now — captures
+ * at these phases save the photo and nothing else (no CvInspection, no
+ * model verdict), even if a CvProject deploys there.
+ *
+ * reagent_filled: per Jacob 2026-08-19 — the Reagent Inspect page should
+ * just capture the picture; CV rejection of reagent carts is not wanted yet.
+ * Remove the phase from this set to turn inference back on.
+ */
+export const INFERENCE_DISABLED_PHASES: ReadonlySet<string> = new Set(['reagent_filled']);
+
+export function isInferenceDisabledForPhase(phase: string | null | undefined): boolean {
+	return !!phase && INFERENCE_DISABLED_PHASES.has(phase);
+}
+
 export async function runPhaseInference(ctx: InferenceContext): Promise<void> {
+	if (isInferenceDisabledForPhase(ctx.phase)) return;
+
 	const projects = await CvProject.find({
 		deployAtPhases: ctx.phase,
 		activeModelVersion: { $ne: null }
