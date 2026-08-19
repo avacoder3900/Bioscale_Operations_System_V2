@@ -359,7 +359,7 @@
 		<select bind:value={itemTypeFilter} class="tron-select">
 			<option value="all">All types</option>
 			<option value="deliverable">Deliverable</option>
-			<option value="spike">Spike</option>
+			<option value="spike">Investigation</option>
 			<option value="chore">Chore</option>
 		</select>
 		<select bind:value={originFilter} class="tron-select">
@@ -591,8 +591,8 @@
 					<p class="tron-text-muted text-xs">
 						<span class="tron-text-primary font-bold">Can't write the deliverable?</span>
 						If you don't know enough to say what 'done' looks like, this isn't a deliverable yet — make it a
-						spike: a timeboxed investigation with a question ('Can X work?') and a timebox (e.g. 2 days). A
-						spike is done when the timebox ends — 'we still don't know' is a valid recorded answer.
+						an investigation: a timeboxed question ('Can X work?') with a timebox (e.g. 2 days). An
+						investigation is done when the timebox ends — 'we still don't know' is a valid recorded answer.
 					</p>
 				</div>
 			</div>

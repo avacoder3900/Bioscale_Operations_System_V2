@@ -219,7 +219,7 @@
 						{/if}
 						{#if data.task.itemType === 'spike' && data.task.status === 'wip'}
 							<TronButton variant="primary" onclick={() => (showSpikeClose = true)}>
-								Close spike
+								Close investigation
 							</TronButton>
 						{/if}
 						<TronButton onclick={() => (relatedStep = 'ask')}>Related work discovered</TronButton>
@@ -427,7 +427,7 @@
 			<!-- Spike info (KB2-07) -->
 			{#if data.task.spike}
 				<div class="tron-card">
-					<h3 class="tron-text-primary mb-3 text-sm font-bold">Spike</h3>
+					<h3 class="tron-text-primary mb-3 text-sm font-bold">Investigation</h3>
 					<p class="tron-text-primary text-sm">{data.task.spike.question}</p>
 					{#if data.task.spike.timebox}
 						<p class="tron-text-muted mt-1 text-xs">
@@ -516,10 +516,10 @@
 
 <!-- KB2-07: close spike -->
 {#if showSpikeClose}
-	<KanbanModal title="Close spike" onclose={() => (showSpikeClose = false)} maxWidth="max-w-xl">
+	<KanbanModal title="Close investigation" onclose={() => (showSpikeClose = false)} maxWidth="max-w-xl">
 		<form method="POST" action="?/closeSpike" use:enhance={modalEnhance}>
 			<p class="tron-text-muted mb-4 text-sm">
-				A spike is done when the timebox expires — "we spent the time and still don't know" is a
+				An investigation is done when the timebox expires — "we spent the time and still don't know" is a
 				valid, recorded outcome, never a failure. Its output is options, not tasks.
 			</p>
 			<div class="mb-4">
@@ -549,7 +549,7 @@
 			</div>
 			<div class="flex justify-end gap-3">
 				<TronButton onclick={() => (showSpikeClose = false)}>Cancel</TronButton>
-				<TronButton type="submit" variant="primary" disabled={modalSubmitting}>Close Spike</TronButton>
+				<TronButton type="submit" variant="primary" disabled={modalSubmitting}>Close investigation</TronButton>
 			</div>
 		</form>
 	</KanbanModal>

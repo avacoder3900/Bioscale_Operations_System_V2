@@ -258,7 +258,7 @@
 		<p class="tron-text-muted mb-3 text-xs">
 			Ultra-defined recurring work ("Build &amp; validate an SPU") captured once as an SOP shape.
 			Capturing from a template lands the item already processed and DoR-complete — immediately
-			replenishable. Spikes cannot be templated: a templated investigation is a contradiction.
+			replenishable. Investigations cannot be templated: a templated investigation is a contradiction.
 		</p>
 		{#if data.templates.length === 0}
 			<p class="tron-text-muted text-xs">No workflow templates yet.</p>
@@ -402,7 +402,7 @@
 				<TronInput label="Name" name="name" value={tpl?.name ?? ''} required placeholder="Build & validate an SPU" />
 			</div>
 			<div class="mb-4">
-				<label for="wt-type" class="tron-label">Item type (spikes cannot be templated)</label>
+				<label for="wt-type" class="tron-label">Item type (investigations cannot be templated)</label>
 				<select id="wt-type" name="itemType" class="tron-select w-full" value={tpl?.itemType ?? 'deliverable'}>
 					<option value="deliverable">Deliverable</option>
 					<option value="chore">Chore</option>

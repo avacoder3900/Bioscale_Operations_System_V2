@@ -135,7 +135,7 @@ const CAPTURE_ITEM_SHAPE = {
 	itemType: z.enum(['deliverable', 'spike', 'chore']).optional(),
 	spike: z
 		.object({
-			question: z.string().describe('The question the spike answers. If it cannot be written, the uncertainty is not shaped enough to fund.'),
+			question: z.string().describe('The question the investigation answers. If it cannot be written, the uncertainty is not shaped enough to fund.'),
 			timebox: z.object({ amount: z.number(), unit: z.enum(['hours', 'days']) })
 		})
 		.optional()
@@ -781,7 +781,7 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 		'inside that task — append it there with kanban_update_task appendContext instead of capturing a new item. ' +
 		'For a spike (timeboxed investigation), set itemType:spike with question + timebox — a spike cannot be created without them. ' +
 		'SIZING TEST (apply when shaping work): can you confidently pick a size? Yes → deliverable. No but the next milestone is ' +
-		'nameable → capture the milestone, not the project. No milestone nameable → spike. Otherwise it is a project — only its milestones flow. ' +
+		'nameable → capture the milestone, not the project. No milestone nameable → investigation (itemType spike). Otherwise it is a project — only its milestones flow. ' +
 		'Options that are BORN SHAPED (workshops, punch lists) may carry dor at capture — it pre-fills processing and is never required here. ' +
 		'Gating: pass blockedBy (task ids) or typed links; blocking edges are cycle-checked. ' +
 		'Response echoes the stored task (id, trackingNumber, description, itemType, origin, dor, links) so no snapshot re-read is needed.';
@@ -815,7 +815,7 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 			description:
 				'Capture MANY kanban options in one call (1–50). Same item shape as kanban_capture, minus actor/templateId. ' +
 				'PER-ITEM RESULTS, NOT A TRANSACTION: every item is validated and created independently in input order; a bad item ' +
-				'(e.g. a spike without a question, an unknown parentTaskId, a blocking cycle) is rejected on its own with a clear error and the ' +
+				'(e.g. an investigation without a question, an unknown parentTaskId, a blocking cycle) is rejected on its own with a clear error and the ' +
 				'rest still land. Each success is audit-logged like a single capture. Response: results[] in input order ' +
 				'({index, success, task | error}) + summary {requested, created, rejected}. ' + CAPTURE_DOCTRINE,
 			inputSchema: z.object({
@@ -993,9 +993,9 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 				'fixed_date requires a real external dueDate. `actor` = the human doing the processing (never guess). ' +
 				'SIZING TEST — size class is a measurement bucket, never a time promise (SLEs are computed from history): ' +
 				'can you confidently pick a size? Yes → size it. No but the next milestone is nameable → split; size the milestone. ' +
-				'No milestone nameable → convert to a spike and timebox the question. Otherwise it is a project — keep it upstream. ' +
+				'No milestone nameable → convert to an investigation (itemType spike) and timebox the question. Otherwise it is a project — keep it upstream. ' +
 				"Can't write the deliverable? If you don't know enough to say what 'done' looks like, this isn't a deliverable yet — " +
-				"make it a spike: a timeboxed investigation with a question ('Can X work?') and a timebox (e.g. 2 days). A spike is " +
+				"make it an investigation (itemType 'spike'): a timeboxed question ('Can X work?') with a timebox (e.g. 2 days). An investigation is " +
 				"done when the timebox ends — 'we still don't know' is a valid recorded answer.",
 			inputSchema: z.object({
 				taskId: z.string(),
@@ -1040,9 +1040,9 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 		'kanban_close_spike',
 		{ annotations: WRITE_TOOL,
 			description:
-				'Close a spike: record the outcome and file what was learned as new captured options (origin discovered). ' +
-				'"We spent the timebox and still don\'t know" is a VALID outcome — never treat an unanswered spike as failure. ' +
-				'A spike\'s output is options, not tasks.',
+				'Close an investigation (itemType spike): record the outcome and file what was learned as new captured options (origin discovered). ' +
+				'"We spent the timebox and still don\'t know" is a VALID outcome — never treat an unanswered investigation as failure. ' +
+				'An investigation\'s output is options, not tasks.',
 			inputSchema: z.object({
 				taskId: z.string(),
 				actor: z.string().describe('Username (required — never guess).'),
@@ -1050,7 +1050,7 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 				spawnOptions: z
 					.array(z.object({ title: z.string(), description: z.string().optional() }))
 					.optional()
-					.describe('New options this spike surfaced — filed as captured/discovered.')
+					.describe('New options this investigation surfaced — filed as captured/discovered.')
 			})
 		},
 		async (args) =>
@@ -1120,7 +1120,7 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 		{ annotations: WRITE_TOOL,
 			description:
 				'Create or update a workflow template (actor needs kanban:admin). Templates encode the SOP shape once: ' +
-				'title, size class, class of service, and a pre-written DoR deliverable. Spikes cannot be templated.',
+				'title, size class, class of service, and a pre-written DoR deliverable. Investigations (spikes) cannot be templated.',
 			inputSchema: z.object({
 				actor: z.string().describe('Username with kanban:admin (required — never guess).'),
 				templateId: z.string().optional().describe('Omit to create; provide to update.'),

@@ -76,7 +76,7 @@
 		<span class="rounded-full px-1.5 py-0.5 text-[10px] font-bold" style="background: rgba(245,158,11,0.12); color: #f59e0b;">FIXED {fmtDate(t.dueDate)}</span>
 	{/if}
 	{#if t.itemType === 'spike'}
-		<span class="rounded-full px-1.5 py-0.5 text-[10px] font-bold" style="background: rgba(129,140,248,0.15); color: #818cf8;">SPIKE</span>
+		<span class="rounded-full px-1.5 py-0.5 text-[10px] font-bold" style="background: rgba(129,140,248,0.15); color: #818cf8;">INVESTIGATION</span>
 	{:else if t.itemType === 'chore'}
 		<span class="rounded-full px-1.5 py-0.5 text-[10px] font-bold" style="background: rgba(56,189,248,0.12); color: #38bdf8;">CHORE</span>
 	{/if}

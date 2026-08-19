@@ -22,7 +22,7 @@ import type { KanbanClassOfService, KanbanSizeClass } from '$lib/shared/kanban-s
  *   - None of the above → it's a project, not an item; only its milestones flow.
  */
 export const SIZING_DECISION_TEST =
-	"Can you confidently pick a size? Yes → deliverable, size it. No but you can name the next milestone → split and size the milestone (outcome = the milestone). No and you can't name the milestone → make it a spike and timebox the question instead. None of the above → it's a project, not an item — keep it upstream and let its milestones flow.";
+	"Can you confidently pick a size? Yes → deliverable, size it. No but you can name the next milestone → split and size the milestone (outcome = the milestone). No and you can't name the milestone → make it an investigation (itemType 'spike') and timebox the question instead. None of the above → it's a project, not an item — keep it upstream and let its milestones flow.";
 
 export async function processTask(opts: {
 	taskId: string;
@@ -183,7 +183,7 @@ export async function closeSpike(opts: {
 	if (!task) throw new TransitionError('NOT_FOUND', `Task ${opts.taskId} not found`);
 	if (task.itemType !== 'spike') throw new TransitionError('INVALID_STATUS', 'Not a spike.');
 	if (!opts.outcome?.trim()) {
-		throw new TransitionError('REASON_REQUIRED', 'Closing a spike requires recording the outcome — including "still unknown".');
+		throw new TransitionError('REASON_REQUIRED', 'Closing an investigation requires recording the outcome — including "still unknown".');
 	}
 
 	await KanbanTask.updateOne({ _id: opts.taskId }, { $set: { 'spike.outcome': opts.outcome.trim() } });
