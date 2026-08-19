@@ -211,7 +211,7 @@ async function callAgentApi(
 export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 	// Version bump signals clients (claude.ai caches connector tool lists) that
 	// the toolset changed — bump on every tool add/remove/rename.
-	const server = new McpServer({ name: 'bims-operations', version: '3.1.0' });
+	const server = new McpServer({ name: 'bims-operations', version: '3.1.1' });
 
 	// ---------------------------------------------------------------- meta
 
