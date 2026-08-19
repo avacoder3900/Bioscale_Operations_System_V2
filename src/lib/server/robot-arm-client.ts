@@ -290,6 +290,57 @@ export interface JointMapStatus {
 	live_error: string | null;
 }
 
+// Camera status, mirroring robot-arm/src/server/cameras.py CameraWorker.status().
+// Every field here is reported by the Pi; none of it is inferred or persisted.
+export interface CameraStatus {
+	name: string;
+	device: string | null;
+	running: boolean;
+	requested: { width: number; height: number; fps: number; quality: number };
+	/** [h, w, channels] of the last decoded frame; null before the first frame. */
+	actual_size: number[] | null;
+	frames: number;
+	last_frame_age_s: number | null;
+	stale: boolean;
+	error: string | null;
+}
+
+/**
+ * Fetch raw (non-JSON) bytes from the Pi — currently only camera JPEGs.
+ *
+ * Deliberately separate from robotArmFetch, which JSON.parses every body and
+ * would corrupt a JPEG. Returns the bytes plus the upstream content type so
+ * the proxy route can pass both through unchanged; nothing here re-encodes.
+ */
+export async function robotArmFetchBytes(
+	path: string,
+	opts: { timeoutMs?: number } = {}
+): Promise<{ bytes: ArrayBuffer; contentType: string }> {
+	const apiKey = env.ROBOT_ARM_API_KEY;
+	if (!apiKey) throw new Error('ROBOT_ARM_API_KEY not set in env');
+
+	const controller = new AbortController();
+	const timeout = setTimeout(() => controller.abort(), opts.timeoutMs ?? 5000);
+	try {
+		const res = await fetch(`${baseUrl()}${path}`, {
+			method: 'GET',
+			headers: { 'x-api-key': apiKey },
+			signal: controller.signal
+		});
+		if (!res.ok) {
+			// Error bodies from FastAPI are small JSON/text, safe to read as text.
+			const text = await res.text().catch(() => '');
+			throw new Error(`robot-arm ${res.status}: ${text.slice(0, 200)}`);
+		}
+		return {
+			bytes: await res.arrayBuffer(),
+			contentType: res.headers.get('content-type') ?? 'image/jpeg'
+		};
+	} finally {
+		clearTimeout(timeout);
+	}
+}
+
 export const robotArm = {
 	getActive: () => robotArmFetch<ActiveSession>('/sessions/active'),
 	getPortStatus: () => robotArmFetch<PortStatus>('/ports/status'),
@@ -344,7 +395,13 @@ export const robotArm = {
 	// Connection health for the ARM-01 panel. Enumerating serial ports is
 	// slower than a bare /health, so give it more room than the 5s default
 	// without going all the way to the 15s used for calibration.
-	preflight: () => robotArmFetch<ArmPreflight>('/health/preflight', { timeoutMs: 8000 }),
+	// Default 8s suits a page load that exists to diagnose the arm. The ARM-02
+	// layout load overrides it to 3s: it renders on all four tabs, so it must
+	// never be the thing that stalls a page. Safe to call often — the Pi only
+	// checks port *presence* against comports(), it never opens the bus, so
+	// this cannot contend with the calibrate load's servo traffic.
+	preflight: (opts: { timeoutMs?: number } = {}) =>
+		robotArmFetch<ArmPreflight>('/health/preflight', { timeoutMs: opts.timeoutMs ?? 8000 }),
 
 	listTasks: () => robotArmFetch<{ tasks: ArmTask[] }>('/tasks'),
 
@@ -411,5 +468,55 @@ export const robotArm = {
 		robotArmFetch<{ removed: boolean }>('/calibrate/map', {
 			method: 'DELETE',
 			timeoutMs: 5000
-		})
+		}),
+
+	// --- Cameras (ARM-02) -------------------------------------------------
+	//
+	// listCameras is safe to call from a layout load on every arm page view:
+	// cameras.py:408-411 documents that status "deliberately does *not* start
+	// workers — polling status should never power on a camera as a side
+	// effect". It also touches no serial bus, so it cannot contend with the
+	// calibrate load's 25s of servo traffic (see the getCalibration note).
+	//
+	// Short timeout on purpose: this runs in a layout load that renders on
+	// all four arm tabs, so it must never be the thing that stalls a page.
+	// app.py:857-860 returns an *envelope* — `{"cameras": [...]}` — not a bare
+	// array. Unwrap it here so callers get the array their types promise: the
+	// generic on robotArmFetch is an unchecked cast, so getting this wrong is
+	// invisible to `npm run check` and only shows up as a render-time
+	// "cameras.find is not a function" 500.
+	listCameras: async (): Promise<CameraStatus[]> => {
+		const body = await robotArmFetch<{ cameras?: CameraStatus[] }>('/cameras', {
+			timeoutMs: 3000
+		});
+		return Array.isArray(body?.cameras) ? body.cameras : [];
+	},
+
+	// One JPEG, whatever the worker's latest frame is. The Pi answers from a
+	// slot rather than waiting on the camera, so this returns fast or not at
+	// all; 4s is generous and keeps a wedged camera from pinning the function.
+	getCameraSnapshot: (name: string) =>
+		robotArmFetchBytes(`/cameras/${encodeURIComponent(name)}/snapshot.jpg`, {
+			timeoutMs: 4000
+		}),
+
+	/**
+	 * Exchange the API key for a short-lived, camera-only token the browser
+	 * can put in a stream URL (ARM-02 mode B).
+	 *
+	 * The snapshot proxy above exists because the browser cannot authenticate
+	 * to the Pi. This is the other half of that story: for viewers who *can*
+	 * reach the Pi directly, one token turns the feed into a real MJPEG stream
+	 * instead of a sequence of stills, at ~1 round trip instead of ~1 per frame.
+	 *
+	 * The API key still never leaves the server — only this token does, and it
+	 * reads pixels, cannot move the arm, and expires in minutes (app.py's auth
+	 * note covers the reasoning). Callers must treat the result as a credential:
+	 * never log it, never cache it.
+	 */
+	mintStreamToken: () =>
+		robotArmFetch<{ stream_token?: string; stream_token_expires_in_s?: number }>(
+			'/cameras/auth',
+			{ method: 'POST', timeoutMs: 4000 }
+		)
 };
