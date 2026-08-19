@@ -495,6 +495,18 @@
 	let slotOrigin = $state<{ x: number; y: number; z: number } | null>(null);
 	let loadedWells = $state<Map<string, { x: number; y: number; z: number }> | null>(null);
 	const APPROACH_Z_MM = 2; // critical point parks this far above the well top
+
+	// Deck floor for the tip, derived from the deck's OWN dimensions (data.dimensions
+	// ← definition.dimensions in the labware JSON), never from its holes. The frame's
+	// origin is the deck's bottom face; holes are locations INSIDE it, so a crept or
+	// mistyped hole must not be allowed to define how low the tip may go.
+	//
+	// Upward is deliberately unbounded — raising a hole is the whole point of the new
+	// cartridge deck. Downward is not: below the deck bottom there is no hole to
+	// dispense into, only the slot. Server-side apply-edit.ts enforces the same floor
+	// on the SAVED coordinate; this is the same rule on the COMMANDED one, because a
+	// move reads live coords and an out-of-range value must never reach the gantry.
+	const DECK_FLOOR_Z = 0;
 	// True after an offset is applied while a run is open: the run still holds the
 	// pre-edit deck, so "Move to hole" would use stale coords until the deck is reloaded.
 	let deckDirty = $state(false);
@@ -618,6 +630,16 @@
 			// Absolute move from LIVE coords → reflects edits instantly, tip-independent.
 			const w = wellByName.get(name);
 			if (!w) throw new Error(`Unknown well ${name}`);
+			// Reject, never clamp — same rule as the calibrator Z fields. A clamp would
+			// quietly send the tip to a depth the operator never asked for.
+			const targetZ = w.z + APPROACH_Z_MM;
+			if (!Number.isFinite(targetZ) || targetZ < DECK_FLOOR_Z) {
+				throw new Error(
+					`Well ${name} sits at z ${w.z}mm — descending to ${targetZ}mm would put the tip below the ` +
+						`${dim.z || 12.7}mm deck's floor (${DECK_FLOOR_Z}mm), into the slot rather than a hole. ` +
+						`Fix the hole's Z before moving.`
+				);
+			}
 			await api(`/api/opentrons-lab/robots/${selectedRobotId}/maintenance/${runId}/move-to`, {
 				method: 'POST',
 				body: JSON.stringify({

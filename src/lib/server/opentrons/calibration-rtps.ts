@@ -16,8 +16,10 @@
  */
 import { connectDB, RobotDeckOffset } from '$lib/server/db';
 import {
-	finite,
+	DEFAULT_CALIBRATOR_XY,
 	loadCalibratorFixture,
+	plausibleZ,
+	taughtXY,
 	Z_CAL_FOR_PROCESS
 } from '$lib/server/services/deck-calibration/tip-calibrator';
 
@@ -51,14 +53,26 @@ export async function calibrationRtpValues(
 	// With no fixture at all we inject nothing and let the .py keep its own
 	// built-in calibrator point — same as before the wizard existed.
 	if (fix) {
+		// Guarded exactly like the probe path (resolveCalibratorPoint), NOT with a bare
+		// finite() read. The difference is not cosmetic:
+		//
+		//   • position.x/y DEFAULT TO 0 in the fixture schema, so a row saved before the
+		//     operator ever taught a point holds a real, finite 0. finite(0) === 0 passed
+		//     that straight through as cal_x/cal_y and sent a production run to the deck's
+		//     front-left corner at full confidence. taughtXY() treats 0 as "never taught"
+		//     and falls back to the .py's own calibrator point instead.
+		//   • z_cal is the touch-off depth. finite() accepted 0, negative, or 500mm; and
+		//     finite(null) === 0 (Number(null) === 0), so a field explicitly written null
+		//     became a probe depth of 0 — straight through the deck. plausibleZ() holds it
+		//     to CAL_Z_LIMITS and falls back to the .py default.
+		//
+		// Production must never be laxer than the wizard that teaches it.
 		const p = fix.position ?? {};
-		const x = finite(p.x);
-		const y = finite(p.y);
-		if (declared.has('cal_x') && x !== undefined) out['cal_x'] = x;
-		if (declared.has('cal_y') && y !== undefined) out['cal_y'] = y;
+		if (declared.has('cal_x')) out['cal_x'] = taughtXY(p.x) ?? DEFAULT_CALIBRATOR_XY.x;
+		if (declared.has('cal_y')) out['cal_y'] = taughtXY(p.y) ?? DEFAULT_CALIBRATOR_XY.y;
 		if (declared.has('z_cal')) {
 			const { zCalKey, defaultZ } = Z_CAL_FOR_PROCESS[processType];
-			out['z_cal'] = finite(fix[zCalKey]) ?? defaultZ;
+			out['z_cal'] = plausibleZ(fix[zCalKey]) ?? defaultZ;
 		}
 	}
 	return out;

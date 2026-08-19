@@ -46,7 +46,51 @@ export interface ApplyDeckEditResult {
 
 const n = (v: unknown) => (Number.isFinite(Number(v)) ? Number(v) : 0);
 
-// ── Positional bounds: INTENTIONALLY NOT ENFORCED (2026-08-18, by request).
+// ── Positional bounds: CEILING AND XY NOT ENFORCED, FLOOR IS (2026-08-19).
+//
+// A hole may be moved arbitrarily high, and anywhere in XY, so the pipette can
+// dispense into a raised location on the new cartridge deck. That freedom is the
+// whole point of the 2026-08-18 change and is preserved exactly.
+//
+// What is enforced again is the FLOOR, and only the floor. Below the deck's bottom
+// plane there is no hole to dispense into — just the slot, and the tip. That is the
+// one direction where "unrestricted" means "crash" rather than "reach".
+//
+// The floor is derived from the deck's OWN `dimensions` in the labware JSON, never
+// from its holes. `dimensions` describes the physical block: the frame's origin is
+// the deck's bottom face and `zDimension` is how tall the block stands. Hole x/y/z
+// are LOCATIONS INSIDE that frame, so they are exactly what must not be trusted to
+// define the limit — an edited or crept hole would drag the floor down with it.
+// (Same reasoning as safeArcZ, which is derived from dimensions.z and not from
+// max(well.z), after a deck whose wells had crept to 82mm produced an arc height
+// past the gantry limit.)
+//
+// Still yours to verify manually, unchanged from the 2026-08-18 note:
+//   • The OT-2 labware schema wants 0 ≤ x ≤ xDimension, 0 ≤ y ≤ yDimension. A coord
+//     outside that can make the robot reject the WHOLE definition at registration,
+//     silently breaking move-to-hole for every deck that loads it (the 2026-06
+//     deck-003 row-A bug). XY is still unbounded here.
+//   • Gross upward Z runaway still feeds the arc-height math.
+// Verify a moved hole on the robot before trusting a deck in production.
+
+/** The deck's bottom face, in the labware frame `dimensions` measures up from. */
+const DECK_FLOOR_Z = 0;
+
+/**
+ * Reject-never-clamp floor check. Returns an operator-readable reason, or null when
+ * the coordinate is fine. Clamping is deliberately not offered: silently moving a
+ * hole to a Z the operator did not ask for is how a tip ends up somewhere nobody
+ * predicted.
+ */
+function belowDeckFloor(after: Vec3, def: any): string | null {
+	if (!(after.z < DECK_FLOOR_Z)) return null;
+	const h = Number(def?.definition?.dimensions?.zDimension);
+	const deck = Number.isFinite(h) && h > 0 ? `${h}mm-tall deck` : 'deck';
+	return `z ${after.z.toFixed(2)}mm is below the ${deck}'s floor (${DECK_FLOOR_Z}mm) — the tip would be driven into the slot, not into a hole. Raising a hole is unrestricted; lowering it past the deck bottom is not.`;
+}
+
+// ── Original 2026-08-18 note, kept for provenance:
+// Positional bounds: INTENTIONALLY NOT ENFORCED (2026-08-18, by request).
 // Fill holes may be moved to any coordinate — negative, past xDimension/yDimension,
 // or arbitrarily high in Z. The only validation left is numeric sanity (`n()` below
 // coerces non-finite input to 0), so a well always ends up with real numbers.
@@ -74,7 +118,8 @@ export async function applyDeckEdit(input: ApplyDeckEditInput): Promise<ApplyDec
 	const before: Vec3 = { x: n(well.x), y: n(well.y), z: n(well.z) };
 	const after: Vec3 = { x: before.x + delta.x, y: before.y + delta.y, z: before.z + delta.z };
 
-	// No positional bounds check — any coordinate is accepted (see note above).
+	const floorErr = belowDeckFloor(after, def);
+	if (floorErr) throw new Error(`Well "${wellName}": ${floorErr}`);
 
 	// 1. Mongo source of truth — set the well's coords (Mixed sub-path).
 	await LabwareDefinition.updateOne(
@@ -190,7 +235,11 @@ export async function applyDeckEditBatch(
 		}
 		const before: Vec3 = { x: n(well.x), y: n(well.y), z: n(well.z) };
 		const after: Vec3 = { x: before.x + delta.x, y: before.y + delta.y, z: before.z + delta.z };
-		// No positional bounds check — any coordinate is accepted (see note above).
+		const floorErr = belowDeckFloor(after, def);
+		if (floorErr) {
+			failed.push({ wellName, reason: floorErr });
+			continue;
+		}
 		setOps[`definition.wells.${wellName}.x`] = after.x;
 		setOps[`definition.wells.${wellName}.y`] = after.y;
 		setOps[`definition.wells.${wellName}.z`] = after.z;
@@ -304,7 +353,11 @@ export async function applyDeckEditsPerWell(
 		}
 		const before: Vec3 = { x: n(well.x), y: n(well.y), z: n(well.z) };
 		const after: Vec3 = { x: before.x + delta.x, y: before.y + delta.y, z: before.z + delta.z };
-		// No positional bounds check — any coordinate is accepted (see note above).
+		const floorErr = belowDeckFloor(after, def);
+		if (floorErr) {
+			failed.push({ wellName, reason: floorErr });
+			continue;
+		}
 		setOps[`definition.wells.${wellName}.x`] = after.x;
 		setOps[`definition.wells.${wellName}.y`] = after.y;
 		setOps[`definition.wells.${wellName}.z`] = after.z;

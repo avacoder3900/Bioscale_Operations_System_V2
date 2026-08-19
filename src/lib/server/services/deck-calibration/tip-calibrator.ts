@@ -143,7 +143,7 @@ export function plausibleZ(v: unknown): number | undefined {
  * would be invented rather than measured. Zero-vs-taught is the failure this
  * fleet actually has.
  */
-function taughtXY(v: unknown): number | undefined {
+export function taughtXY(v: unknown): number | undefined {
 	const n = finite(v);
 	return n === undefined || n === 0 ? undefined : n;
 }
