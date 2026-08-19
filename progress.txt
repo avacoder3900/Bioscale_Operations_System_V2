@@ -8619,3 +8619,55 @@ STILL TO DO
     measure the true residual before deciding re-teach vs a one-time X shift on the
     odd-column wells. Do not bulk-apply on the strength of the 0.8mm estimate —
     that is how decks 002/003 ended up 24.5mm and 7.4mm out.
+
+================================================================================
+2026-08-19 — feat/deck-calibration-hardening — bridge fix deployed to R04; deck-001 reagent holes corrected -1.0mm
+================================================================================
+DEPLOYED ot2-bridge.py to R04 (172.16.28.144). No SSH key on the operator's machine,
+so it went over the robot's Jupyter server on :48888 (Opentrons' documented on-robot
+execution path, open on the lab LAN, no token). Operator uploaded the file through the
+Jupyter web UI and ran a 6-line install cell: dated backup to
+/data/ot2-bridge/ot2-bridge.py.bak-20260819, copy into place, systemctl restart.
+Verified: CAL_PROBE_RECIPES present True, reagent recipe present True, service active.
+
+FIX CONFIRMED ON HARDWARE
+  R04 reagent-profile calibrate_tip, before: -7.4 / -7.5 / -7.6 / -7.8 (4 readings)
+                                      after: -6.7            (2026-08-19T21:47:04Z)
+  A 0.9mm shift, matching the 0.8mm recipe difference plus probe scatter, and now in
+  agreement with what the fill itself measured (-6.5). Y also matched at -0.1.
+  NOTE the request carried no payload.profile — it came from PRODUCTION BIMS, which
+  does not have the API change. The daemon resolved 'reagent' from the tiprack
+  loadName fallback. The fallback is what made the daemon fix sufficient on its own.
+
+DECK-001 REAGENT HOLES CORRECTED
+  Coordinates had been taught while the Studio measured -7.6; a fill now applies
+  ~-6.6, leaving every reagent hole ~1.0mm right. Operator jogged one hole and
+  confirmed 1mm; the probe arithmetic independently predicted -6.6 - (-7.6) = +1.0.
+  Applied dx = -1.0 to all 288 odd-column (reagent) wells:
+    npx tsx scripts/shift-deck-wells.ts --deck gen4deck_gen7cartridge_001 \
+      --holes reagent --dx -1.0 --apply
+  288 deck_calibration_edits rows + one deck_bulk_shift audit row. Wax (even) columns
+  deliberately untouched — the wax recipe was never biased, which is why wax fills on
+  B07/deck-004 verified fine on 08-18.
+  Verified after: within-band consistency holds (all 3 rows of a band share x per
+  column). Pre-existing 0.056mm outlier at row U col 1 left alone — 16x under the
+  0.9mm hole radius, and a uniform shift cannot create a mismatch.
+  Rollback available: deck_versions v1 baseline (hash a5f3520ebdf8) still frozen.
+
++ scripts/shift-deck-wells.ts — --plan default, per-well bounds check against the
+  deck's own dimensions, aborts if any well would leave the deck body, one edit row
+  per well, marks the deck unpublished.
+
+HOW IT REACHES THE FILL
+  The deck is flagged hasUnpublishedEdits. Production's run-start freshness gate
+  (ensureFreshRunProtocol) diffs the bundled well coords against live Mongo and
+  auto-re-uploads, so the correction reaches the next reagent run with no Sync.
+  Production does NOT create a deck_versions v2 (publishing lives on the branch) —
+  publish the corrected geometry as v2 once a fill proves it good.
+
+STILL OPEN
+  - Deck 004's reagent holes carry the same ~1mm bias; correct only after 001 is
+    proven by an actual fill.
+  - Decks 002/003 remain 24.5mm and 7.4mm out on the wax-to-reagent invariant.
+  - No version panel in the calibration tab; deck_versions and run provenance are
+    readable only from the database.
