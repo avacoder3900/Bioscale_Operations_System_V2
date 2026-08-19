@@ -44,7 +44,7 @@ const HOST = process.env.ROBOT_HOST || R.host;
 const REPO = path.resolve(__dirname, '..');
 const H = { 'opentrons-version': '*' };
 const APPLY = process.env.DEPLOY_APPLY === '1';
-const REQUIRED_RTPS = ['bims_native', 'dispense_depth', 'use_tip_calibration', 'max_tip_adjust', 'run_calibration_check', 'resume_cartridge', 'resume_hole'];
+const REQUIRED_RTPS = ['bims_native', 'dispense_depth', 'use_tip_calibration', 'max_tip_adjust', 'run_calibration_check', 'resume_cartridge', 'resume_hole', 'wells_per_tip', 'pause_between_carriers'];
 
 const rget = (p) => fetch(`http://${HOST}:31950${p}`, { headers: H, signal: AbortSignal.timeout(90000) }).then((r) => r.json());
 
