@@ -8507,3 +8507,50 @@ RESULTING POSITIONAL MODEL — now exactly as specified
   per-tip calibrator probe = the only correction applied on top, re-measured per tip
   global robot offsets     = forced 0 (rows kept at zero so bims_native stays true)
   protocol ROBOT_OFFSETS   = bypassed
+
+================================================================================
+2026-08-19 — feat/deck-calibration-hardening — preview deployed + all migrations APPLIED to production
+================================================================================
+Pushed the deck-calibration hardening branch and applied every migration against the
+production Atlas cluster. Operator confirmed DECK-001 is the deck physically mounted
+on R04, which validates the numbering convention for that pair (the DB could not tell
+us — equipment.currentRobotId is null on all six deck rows).
+
+APPLIED TO PRODUCTION (all audit-logged, nothing deleted)
+  npx tsx scripts/backfill-deck-versions.ts --apply
+    froze 5 baselines at v1 into deck_versions:
+      gen4deck_gen7cartridge_001  576 wells  a5f3520ebdf8
+      gen4deck_gen7cartridge_002  576 wells  223f1201b0c5
+      gen4deck_gen7cartridge_003  576 wells  35a16bd526eb
+      gen4deck_gen7cartridge_004  576 wells  289604016747
+      robotarm_cartridge_deck_001  24 wells  1cb86cfc73ea
+  npx tsx scripts/deck-registry-bind.ts --apply
+    bound DECK-001..004 -> gen4deck_gen7cartridge_00N + Particle id (parsed from the .py)
+    archived DECK-005, DECK-006 (no definition, 0 run refs, lastUsed never)
+  npx tsx scripts/zero-robot-offsets.ts --apply   [earlier this session]
+    R04 {x:1,y:0,z:0} -> {x:0,y:0,z:0}; B14 and B07 already zero
+
+Verified after apply: 5 deck_versions rows; DECK-001..004 bound and active; DECK-005/006
+archived; all three robot offsets 0,0,0.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-4qnab2c4v-brevitest.vercel.app
+Source: branch feat/deck-calibration-hardening @ commit 94e0a172b
+Retrieve this exact code: git checkout feat/deck-calibration-hardening at commit 94e0a172b
+  (or: git log feat/deck-calibration-hardening --oneline to find it if the branch moved on)
+What this deployment is for: testing the single-source-of-truth positional model on R04 —
+  deck JSON is the only source of hole positions, per-tip calibrator probe is the only
+  correction, global offsets forced to zero. Identified by commit SHA via
+  `vercel ls --meta githubCommitSha=...`; status Ready, 2m build.
+
+TO ARM THE GATED BEHAVIOUR ON R04 (Vercel env var, Preview scope only)
+  DECK_HARDENING_ROBOT_IDS = CCyX8FjTRGvYOd9vISGvi      (R04; the string "R04" also matches)
+  Unset = every robot keeps today's exact code path. With it set for R04 you get the
+  deck-binding run guard, the narrowed 6-def bundle, version publish on Sync, and the
+  strict ns/loadName/version labware-reuse check.
+
+WHAT TO WATCH ON THE FIRST R04 FILL
+  - opentrons_run_records gets its first ever row: deck id, loadName, version, sha256.
+  - The upload bundle should carry 6 labware defs, not 19.
+  - A Sync should create deck_versions v2 for any deck with unpublished edits.
+  - offset_x/y/z must be 0 and use_tip_calibration true in the run's RTPs.
+NOT VERIFIED ON HARDWARE YET — no physical robot has run this code.
