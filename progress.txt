@@ -8171,3 +8171,26 @@ Source: branch feat/scan-then-check-v2 @ commit 41ae9391
 Retrieve this exact code: git checkout feat/scan-then-check-v2 at commit 41ae9391
 What this deployment is for: verify wax deck scan-then-check on current master before merging to
 production; NOT yet merged to master.
+
+================================================================================
+2026-08-19 — master — scan-then-check-v2 merged to master (PR #43)
+================================================================================
+PR #43 merged feat/scan-then-check-v2 into master: wax deck scan-then-check deferred validation
+(checkCartridgeScans + POST /api/manufacturing/cartridge-scan-check + DeckLoadingGrid deferring
+validation to the batch boundary). Full narrative in the 2026-08-19 feat/scan-then-check-v2 entry above.
+
+Deploy gotcha worth remembering: because master was merged INTO the branch before the PR, the merge
+commit eb831741 had a tree byte-identical (9eec8c8f) to the already-built preview 31943ccd. Vercel
+deduplicated and skipped the build entirely — zero commit statuses, zero GitHub deployment records —
+and never promoted that build to production, so master carried the code while production kept serving
+the old bundle. Verified by probe: preview POST /api/manufacturing/cartridge-scan-check -> 401
+(exists, auth-gated) vs production -> 404, with a nonexistent control path -> 404 on both. This commit
+exists partly to change the tree and force the production build.
+
+Old branch feat/scan-then-check is superseded and must NOT be merged (1650 commits behind, stale
+src/routes/spu/manufacturing/ paths, pre-rewrite DeckLoadingGrid) — close it.
+
+Deployment: production — Vercel auto-deploy from master push
+Source: branch master @ this commit (merge of feat/scan-then-check-v2 @ 31943ccd via PR #43)
+Retrieve this exact code: git checkout master at commit eb831741 (code) — this commit adds only the log
+What this deployment is for: put wax deck scan-then-check live in production.
