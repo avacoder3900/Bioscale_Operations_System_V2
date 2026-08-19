@@ -632,12 +632,18 @@
 			if (!w) throw new Error(`Unknown well ${name}`);
 			// Reject, never clamp — same rule as the calibrator Z fields. A clamp would
 			// quietly send the tip to a depth the operator never asked for.
-			const targetZ = w.z + APPROACH_Z_MM;
-			if (!Number.isFinite(targetZ) || targetZ < DECK_FLOOR_Z) {
+			// Check the STORED hole Z, not the derived target: well.z is the hole's
+			// BOTTOM in the labware frame (verified on DECK001 — z 3.5-8.8mm with
+			// depth 3.75 on a 12.7mm block, so z + depth lands just under the deck
+			// top). z < 0 therefore means the hole bottom is below the deck's bottom
+			// face — the tip would be in the slot, not in a hole. Testing the target
+			// instead would let the +2mm approach clearance mask a hole sitting up to
+			// 2mm below the deck. Same rule, same number as apply-edit.ts server-side.
+			if (!Number.isFinite(w.z) || w.z < DECK_FLOOR_Z) {
 				throw new Error(
-					`Well ${name} sits at z ${w.z}mm — descending to ${targetZ}mm would put the tip below the ` +
-						`${dim.z || 12.7}mm deck's floor (${DECK_FLOOR_Z}mm), into the slot rather than a hole. ` +
-						`Fix the hole's Z before moving.`
+					`Well ${name} sits at z ${w.z}mm, below the ${dim.z || 12.7}mm deck's floor ` +
+						`(${DECK_FLOOR_Z}mm) — the tip would be driven into the slot, not into a hole. ` +
+						`Raising a hole is unrestricted; fix this hole's Z before moving.`
 				);
 			}
 			await api(`/api/opentrons-lab/robots/${selectedRobotId}/maintenance/${runId}/move-to`, {
