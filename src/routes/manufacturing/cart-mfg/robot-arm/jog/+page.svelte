@@ -54,11 +54,14 @@
 	</div>
 
 	{#if data.poseError}
-		<div class="rounded border border-red-500/40 bg-red-900/10 p-3 text-sm">
-			<p class="font-medium text-red-400">Pose unreachable</p>
+		<div class="rounded border border-amber-500/40 bg-amber-900/10 p-3 text-sm">
+			<p class="font-medium text-amber-400">Cartesian pose unavailable</p>
 			<p class="mt-1 text-xs" style="color: var(--color-tron-text-secondary)">{data.poseError}</p>
 			<p class="mt-1 text-xs" style="color: var(--color-tron-text-secondary)">
-				Arm FastAPI server must be up (default http://127.0.0.1:8765) with the follower connected.
+				The Cartesian pad above needs the IK stack (ikpy + URDF + jog calibration), which is not
+				ported to the Pi server yet. <strong>Per-joint jog and torque below still work</strong> —
+				use those for movement tests. If the arm server is simply down, check that the robot-arm
+				service is running on arm-pi and that ROBOT_ARM_BASE_URL points at it.
 			</p>
 		</div>
 	{:else if sessionActive}
@@ -210,7 +213,7 @@
 						<input type="hidden" name="delta_steps" value={jointStep} />
 						<button
 							type="submit"
-							disabled={sessionActive || !pose}
+							disabled={sessionActive}
 							class="w-full rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 px-2 py-2 font-mono text-sm transition-colors hover:bg-[var(--color-tron-cyan)]/20 disabled:opacity-40"
 							style="color: var(--color-tron-cyan)"
 						>
@@ -222,7 +225,7 @@
 						<input type="hidden" name="delta_steps" value={-jointStep} />
 						<button
 							type="submit"
-							disabled={sessionActive || !pose}
+							disabled={sessionActive}
 							class="w-full rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 px-2 py-2 font-mono text-sm transition-colors hover:bg-[var(--color-tron-cyan)]/20 disabled:opacity-40"
 							style="color: var(--color-tron-cyan)"
 						>

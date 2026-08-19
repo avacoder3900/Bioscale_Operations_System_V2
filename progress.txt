@@ -8283,3 +8283,62 @@ Retrieve this exact code: git checkout master at commit 43d8c9d3
 What this deployment is for: top sealing implicit / post-OT-2 reagent queue retired
   (REAGENT-TOPSEAL-IMPLICIT). Watch: first real reagent run Complete → run Completed,
   carts reagent_filled, PT-CT-113 consumption row; Reagent Inspect photo → reagent_qc.
+
+================================================================================
+2026-08-19 — feat/robot-arm-movement-tests — unblock BIMS robot-arm movement tests
+================================================================================
+Two-part fix: get the replacement leader BusLinker recognised, then make BIMS
+able to actually drive the arms.
+
+HARDWARE / IDENTITY. The leader BusLinker serial recorded on 2026-08-18
+(5C4C128110) matches no board physically attached to arm-pi. Re-read the board
+over SSH with `udevadm info -q property -n /dev/ttyACM1`: the attached leader
+reports 5C4C125867 (VID/PID 1a86:55d3). Confirmed it is a real arm bus, not a
+stray CH343 — all 6 STS3215 servos answer at ~12.4 V. Because the udev rule
+keyed on the wrong serial, /dev/buslinker-leader was never created, and
+LEADER_PORT on the Pi points at exactly that symlink, so the leader arm could
+not be opened at all. Fixed the udev rule and _KNOWN_ARM_SERIALS in the
+robot-arm repo (branch fix/leader-buslinker-swap), installed the rule on the Pi,
+and restarted the service. /health/preflight is now ok:true with both
+leader_port and follower_port present and an empty diagnosis.
+
+scripts/seed-robot-arm.ts here on master was still the original PRD version:
+COM10/COM11, serials 5C4C126959 / 5C4C128050, and upserting by serialNumber —
+which would insert a second document on any board swap and then violate the
+unique index on `role`. Replaced with the current shape: upsert by role, Pi
+udev symlink paths, follower 5C4C126808, leader 5C4C125867. Ran against
+production: the existing leader doc (_id -RnCMND5dwA_Zze3XfBoj) was updated in
+place; still 2 arms / 12 servos, verified by read-only probe after the write.
+
+BIMS UI. The Pi's server does NOT implement the Cartesian IK stack — GET /pose
+returns "requires the IK stack (ikpy + URDF + jog calibration), which has not
+been ported to this server yet". The jog page gates its per-joint +/- buttons on
+`disabled={sessionActive || !pose}`, and pose is permanently null, so every
+per-joint control rendered disabled even though /servos/{id}/jog works fine.
+Dropped the `|| !pose` gate on the two per-joint buttons. The Cartesian pad
+keeps its gate — it genuinely needs IK. Also rewrote the "Pose unreachable"
+banner, which blamed a down server and cited a wrong port (8765; the server is
+on 8000): now "Cartesian pose unavailable", amber not red, saying per-joint jog
+and torque still work.
+
+.env.example still documented the RETIRED alejandros-pc host and the stale
+Funnel URL alejandros-pc.tailf65a70.ts.net. Corrected to arm-pi /
+https://arm-pi.tailf65a70.ts.net per robot-arm docs/tailscale.md.
+
+Connectivity verified end-to-end: Funnel on at https://arm-pi.tailf65a70.ts.net
+-> 127.0.0.1:8000, publicly reachable, /health ok, authed call returns 200 and
+unauthed returns 401. Vercel production already has
+ROBOT_ARM_BASE_URL=https://arm-pi.tailf65a70.ts.net.
+
+svelte-check: 107 errors / 434 warnings — master's own pre-existing baseline,
+zero in the touched files.
+
+OPEN, deliberately not done:
+- DRY_RUN=true is still set on arm-pi. Motion commands are logged, not executed.
+  Nothing physically moves until that is flipped by hand at the arm.
+- ROBOT_ARM_API_KEY on Vercel could not be verified — it is a Sensitive var and
+  reads blank on `vercel env pull`. Set ~12d ago while the Pi's .env was last
+  written 2026-08-18, so a mismatch is possible. Confirm by loading the jog page
+  on the preview; a 401 from the arm means re-set that var from the Pi's value.
+- Per-joint grid covers J1..J5; the gripper (J6) has no button though the server
+  accepts sid 1..6.
