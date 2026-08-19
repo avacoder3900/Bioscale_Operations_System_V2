@@ -65,6 +65,12 @@
 	// Per-slot rescan / sweep state
 	let failedSlots = $state<Set<number>>(new SvelteSet());
 	let sweepFailures = $state<Array<{ slotIndex: number; message: string }>>([]);
+
+	// SCAN-THEN-CHECK state. `checkedAt` is the marker that the current set of
+	// scans has been validated server-side; any new scan clears it back to null,
+	// so a deck can never be completed on a stale pass.
+	let checkedAt = $state<number | null>(null);
+	let checking = $state(false);
 	let sweepCount = $state<number>(plannedCartridgeCount ?? TOTAL_POSITIONS);
 	let expandedSlot = $state<number | null>(null);
 	let expandedInput = $state('');
@@ -86,6 +92,8 @@
 		firstEmptySlotIndex >= 0 ? SCAN_ORDER[firstEmptySlotIndex] : null
 	);
 	const isFull = $derived(filledCount >= TOTAL_POSITIONS);
+	/** Scans on the deck that no server check has cleared yet. */
+	const needsCheck = $derived(filledCount > 0 && checkedAt === null);
 
 	// Map position -> scan for grid display. slotIndex i ↔ deck position i+1.
 	const positionMap = $derived.by(() => {
@@ -314,15 +322,14 @@
 		if (!currentLot) {
 			return { ok: false, error: 'No available oven-ready lots' };
 		}
-		try {
-			const res = await fetch(`/api/dev/validate-equipment?type=cartridge&id=${encodeURIComponent(scanned)}`);
-			const result = await res.json();
-			if (!res.ok || result.error) {
-				return { ok: false, error: result.error ?? `Cartridge "${scanned}" validation failed` };
-			}
-		} catch {
-			return { ok: false, error: 'Validation service unavailable, cannot proceed' };
-		}
+		// SCAN-THEN-CHECK: no per-scan server validation here. Every guard above
+		// this line is local and instant (deck bounds, slot occupancy, in-session
+		// duplicate, lot present) so the operator still gets an immediate beep on
+		// the obvious mistakes. Existence/phase checks need the DB, so they are
+		// deferred to runDeferredCheck() — fired when the deck fills or when the
+		// operator takes the next action. That is the whole point of the feature:
+		// scanning a full deck costs one round-trip, not 24.
+		checkedAt = null;
 		const next = scans.slice();
 		next[targetSlot] = { cartridgeId: scanned, backedLotId: currentLot.lotId };
 		scans = next;
@@ -349,6 +356,10 @@
 			if (r.ok) {
 				deckError = '';
 				playBeep(true);
+				// "…until the last cartridge is scanned": a full deck is itself a
+				// boundary, so check now rather than making the operator discover
+				// 24 scans later that slot 3 was bad.
+				if (isFull) await runDeferredCheck();
 			} else {
 				deckError = r.error ?? 'Scan failed';
 				playBeep(false);
@@ -639,8 +650,72 @@
 		return scans.filter((s): s is CartridgeScan => s !== null);
 	}
 
-	function tryComplete() {
-		if (filledCount === 0) return;
+	/**
+	 * SCAN-THEN-CHECK gate. Validates every scan currently on the deck in a
+	 * single request. Returns true when the deck is clear to proceed.
+	 *
+	 * On failure it paints the offending slots through the same
+	 * failedSlots/sweepFailures channel the robot sweep already uses, so a
+	 * deferred-check failure and a sweep failure look identical to the operator
+	 * and reuse the existing retry affordances.
+	 */
+	async function runDeferredCheck(): Promise<boolean> {
+		if (checking) return false;
+		// Keep the real slot index alongside each barcode — the request is dense
+		// but the error painting has to land on the right physical slot.
+		const entries = scans
+			.map((s, slotIndex) => (s ? { slotIndex, cartridgeId: s.cartridgeId } : null))
+			.filter((e): e is { slotIndex: number; cartridgeId: string } => e !== null);
+		if (entries.length === 0) return false;
+
+		checking = true;
+		try {
+			const res = await fetch('/api/manufacturing/cartridge-scan-check', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ barcodes: entries.map((e) => e.cartridgeId), context: 'wax' })
+			});
+			const data = await res.json();
+			if (!res.ok) {
+				deckError = data?.error ?? 'Scan check failed';
+				playBeep(false);
+				return false;
+			}
+
+			const results = (data.results ?? []) as Array<{ ok: boolean; error?: string }>;
+			const failures = entries
+				.map((e, i) => ({ slotIndex: e.slotIndex, message: results[i]?.error ?? 'Validation failed' }))
+				.filter((_, i) => !results[i]?.ok);
+
+			if (failures.length > 0) {
+				failedSlots = new SvelteSet(failures.map((f) => f.slotIndex));
+				sweepFailures = failures;
+				const n = failures.length;
+				deckError = `${n} cartridge${n === 1 ? '' : 's'} failed the check — clear the highlighted slot${n === 1 ? '' : 's'} and re-scan.`;
+				playBeep(false);
+				return false;
+			}
+
+			failedSlots = new SvelteSet();
+			sweepFailures = [];
+			deckError = '';
+			checkedAt = Date.now();
+			return true;
+		} catch {
+			deckError = 'Validation service unavailable, cannot proceed';
+			playBeep(false);
+			return false;
+		} finally {
+			checking = false;
+		}
+	}
+
+	async function tryComplete() {
+		if (filledCount === 0 || checking) return;
+		// Deferred validation runs here, before any count reconciliation, so the
+		// operator never explains a count mismatch on a deck that was going to be
+		// rejected anyway.
+		if (needsCheck && !(await runDeferredCheck())) return;
 		// Check for mismatch with planned count
 		if (plannedCartridgeCount != null && filledCount !== plannedCartridgeCount) {
 			showMismatchModal = true;
@@ -649,8 +724,12 @@
 		onComplete({ deckId, ovenId, cartridgeScans: denseScans() });
 	}
 
-	function confirmMismatch() {
+	async function confirmMismatch() {
 		if (!mismatchReason.trim()) return;
+		if (needsCheck && !(await runDeferredCheck())) {
+			showMismatchModal = false;
+			return;
+		}
 		showMismatchModal = false;
 		onComplete({
 			deckId,
@@ -661,8 +740,9 @@
 		mismatchReason = '';
 	}
 
-	function confirmPartialLoad() {
-		if (filledCount === 0) return;
+	async function confirmPartialLoad() {
+		if (filledCount === 0 || checking) return;
+		if (needsCheck && !(await runDeferredCheck())) return;
 		onComplete({ deckId, ovenId, cartridgeScans: denseScans() });
 	}
 
