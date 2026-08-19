@@ -8285,8 +8285,6 @@ What this deployment is for: top sealing implicit / post-OT-2 reagent queue reti
   carts reagent_filled, PT-CT-113 consumption row; Reagent Inspect photo → reagent_qc.
 
 ================================================================================
-2026-08-19 — feat/cartridge-status-flow → master — reagent inspect: CV inference OFF (capture only)
-================================================================================
 Per Jacob: no CV rejection of reagent carts yet — Reagent Inspect just captures the picture.
 Added INFERENCE_DISABLED_PHASES = {'reagent_filled'} + isInferenceDisabledForPhase() in
 src/lib/server/cv/run-inference.ts; runPhaseInference() returns early for those phases, so
@@ -8297,3 +8295,336 @@ so the client never polls; the page shows a neutral "Capture only — CV inferen
 off for reagent inspect for now" notice instead of the deploy-status banner. Photo still
 advances reagent_filled → reagent_qc; the scan-gated human verdict is unchanged. To re-enable,
 remove 'reagent_filled' from the set. npm run check: 11 errors / 434 warnings — baseline.
+=======
+2026-08-19 — feat/robot-arm-movement-tests — unblock BIMS robot-arm movement tests
+================================================================================
+Two-part fix: get the replacement leader BusLinker recognised, then make BIMS
+able to actually drive the arms.
+
+HARDWARE / IDENTITY. The leader BusLinker serial recorded on 2026-08-18
+(5C4C128110) matches no board physically attached to arm-pi. Re-read the board
+over SSH with `udevadm info -q property -n /dev/ttyACM1`: the attached leader
+reports 5C4C125867 (VID/PID 1a86:55d3). Confirmed it is a real arm bus, not a
+stray CH343 — all 6 STS3215 servos answer at ~12.4 V. Because the udev rule
+keyed on the wrong serial, /dev/buslinker-leader was never created, and
+LEADER_PORT on the Pi points at exactly that symlink, so the leader arm could
+not be opened at all. Fixed the udev rule and _KNOWN_ARM_SERIALS in the
+robot-arm repo (branch fix/leader-buslinker-swap), installed the rule on the Pi,
+and restarted the service. /health/preflight is now ok:true with both
+leader_port and follower_port present and an empty diagnosis.
+
+scripts/seed-robot-arm.ts here on master was still the original PRD version:
+COM10/COM11, serials 5C4C126959 / 5C4C128050, and upserting by serialNumber —
+which would insert a second document on any board swap and then violate the
+unique index on `role`. Replaced with the current shape: upsert by role, Pi
+udev symlink paths, follower 5C4C126808, leader 5C4C125867. Ran against
+production: the existing leader doc (_id -RnCMND5dwA_Zze3XfBoj) was updated in
+place; still 2 arms / 12 servos, verified by read-only probe after the write.
+
+BIMS UI. The Pi's server does NOT implement the Cartesian IK stack — GET /pose
+returns "requires the IK stack (ikpy + URDF + jog calibration), which has not
+been ported to this server yet". The jog page gates its per-joint +/- buttons on
+`disabled={sessionActive || !pose}`, and pose is permanently null, so every
+per-joint control rendered disabled even though /servos/{id}/jog works fine.
+Dropped the `|| !pose` gate on the two per-joint buttons. The Cartesian pad
+keeps its gate — it genuinely needs IK. Also rewrote the "Pose unreachable"
+banner, which blamed a down server and cited a wrong port (8765; the server is
+on 8000): now "Cartesian pose unavailable", amber not red, saying per-joint jog
+and torque still work.
+
+.env.example still documented the RETIRED alejandros-pc host and the stale
+Funnel URL alejandros-pc.tailf65a70.ts.net. Corrected to arm-pi /
+https://arm-pi.tailf65a70.ts.net per robot-arm docs/tailscale.md.
+
+Connectivity verified end-to-end: Funnel on at https://arm-pi.tailf65a70.ts.net
+-> 127.0.0.1:8000, publicly reachable, /health ok, authed call returns 200 and
+unauthed returns 401. Vercel production already has
+ROBOT_ARM_BASE_URL=https://arm-pi.tailf65a70.ts.net.
+
+svelte-check: 107 errors / 434 warnings — master's own pre-existing baseline,
+zero in the touched files.
+
+OPEN, deliberately not done:
+- DRY_RUN=true is still set on arm-pi. Motion commands are logged, not executed.
+  Nothing physically moves until that is flipped by hand at the arm.
+- ROBOT_ARM_API_KEY on Vercel could not be verified — it is a Sensitive var and
+  reads blank on `vercel env pull`. Set ~12d ago while the Pi's .env was last
+  written 2026-08-18, so a mismatch is possible. Confirm by loading the jog page
+  on the preview; a 401 from the arm means re-set that var from the Pi's value.
+- Per-joint grid covers J1..J5; the gripper (J6) has no button though the server
+  accepts sid 1..6.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-git-feat-ro-101e4a-brevitest.vercel.app
+  (immutable: https://bioscale-operations-system-mongodb-ataa61sn8-brevitest.vercel.app)
+Source: branch feat/robot-arm-movement-tests @ commit 5eb52dc2
+Retrieve this exact code: git checkout feat/robot-arm-movement-tests at commit 5eb52dc2
+What this deployment is for: exercise per-joint jog + torque against arm-pi now
+  that the replacement leader BusLinker (5C4C125867) is detected and registered.
+  Jog page: /manufacturing/cart-mfg/robot-arm/jog — the Cartesian pad stays
+  disabled (no IK on the Pi); the per-joint and torque controls are the ones to
+  test. DRY_RUN=true on arm-pi, so commands are logged, not executed.
+2026-08-04 - feat/robot-arm-page-consolidation - ARM-02 arm page consolidation + live arm camera
+================================================================================
+PRD docs/prds/ARM-02-arm-page-consolidation-and-camera.md. Two asks: (1) Jog / Runs /
+Calibrate stop being siblings on the Cart Mfg nav and become tabs inside the Robot Arm
+page; (2) the camera newly mounted on the arm Pi becomes usable in that same window, so
+the arm can be driven and watched at once (incl. during leader-follower).
+- New src/routes/manufacturing/cart-mfg/robot-arm/+layout.svelte hosts the tab strip
+  (Control | Jog | Calibrate | Runs) + +layout.server.ts loads camera status. Because the
+  panel is mounted in the LAYOUT, one component instance survives tab navigation - the
+  feed does not restart when the operator switches tabs. Cart Mfg +layout.svelte drops the
+  three now-nested nav entries.
+- New src/lib/components/RobotArmCameraPanel.svelte: camera picker, fps 1/5/10, size
+  S/M/L, pause, collapse, fullscreen, snapshot download; prefs persisted to localStorage
+  under bims.armCamera.v1.
+- Transport is snapshot POLLING through a same-origin proxy
+  (src/routes/api/robot-arm/cameras/[name]/snapshot/+server.ts), NOT the Pi's MJPEG
+  stream. Two reasons: the browser's per-host connection cap means a hung MJPEG socket
+  starves the rest of the page, and the proxy keeps ROBOT_ARM_API_KEY server-side instead
+  of shipping it to the client. New robotArmFetchBytes() in robot-arm-client.ts is kept
+  separate from robotArmFetch() because the latter JSON.parses every body and would
+  corrupt a JPEG.
+- Frames preload into a detached Image before swap-in, so a slow/failed frame leaves the
+  previous frame up rather than flashing an empty box.
+
+Three silent-failure bugs found and fixed during review, all of the same shape - the UI
+would have looked fine while lying:
+- localStorage restore ran in an $effect tracking `cameras`, which changes identity on
+  every layout invalidation. A background data refresh would have yanked the operator's
+  camera selection back to the saved one mid-use. Now guarded to restore once.
+- `selected` was seeded once from cameras[0]. If the list was empty at first paint (Pi
+  unreachable, or populated by a later invalidate) the panel stayed blank FOREVER with
+  cameras sitting in the dropdown. Replaced with a reactive reconcile effect that also
+  covers a camera disappearing out from under the operator.
+- A deliberately paused feed was about to show the amber "stale" dot, training the
+  operator to ignore the one indicator that means something. Paused vs stale are now
+  visually distinct and a frozen frame is always labelled.
+
+npm run check: 11 errors - identical to the documented baseline (r2.ts, AskBimsWidget,
+assembly, parts); zero in touched files. Warnings 427->426 and files-with-problems 92->91,
+i.e. the only delta is the one warning this branch removed. NOT verified against a live
+Pi: the CameraStatus interface mirrors robot-arm/src/server/cameras.py CameraWorker
+.status() as read, but the field mapping and the rendered tab strip are unproven until the
+page is opened with the arm up. On mismatch the panel renders its error path rather than
+breaking.
+
+Deployment: preview - https://bioscale-operations-system-mongodb-git-feat-ro-4b5a61-brevitest.vercel.app
+  (immutable: https://bioscale-operations-system-mongodb-lsjkmik16-brevitest.vercel.app)
+Source: branch feat/robot-arm-page-consolidation @ commit b4925d70
+Retrieve this exact code: git checkout feat/robot-arm-page-consolidation at commit b4925d70
+What this deployment is for: review ARM-02 - the four arm tabs under one Robot Arm page,
+and the arm camera panel that stays mounted across tab switches. Needs opening with the
+arm Pi reachable; the camera field mapping is unverified against a live device.
+
+================================================================================
+2026-08-04 - feat/robot-arm-page-consolidation - fix 500 on all four Robot Arm tabs
+================================================================================
+Every Robot Arm tab returned 500 on a full page load. Diagnosis came from the Vercel
+runtime log, not from inference: "TypeError: cameras.find is not a function" thrown from
+RobotArmCameraPanel during SSR of the arm +layout.svelte.
+
+Root cause: robot-arm/src/server/app.py:857-860 returns an envelope, {"cameras": [...]},
+but robot-arm-client.ts:483 declared it as robotArmFetch<CameraStatus[]>. The generic on
+robotArmFetch is an unchecked cast with no runtime validation, so the wrong shape was
+invisible to `npm run check` - the type said array, the wire said object. The panel then
+called cameras.find(...) on an object.
+
+Why it took down the whole page rather than one panel: the camera panel is rendered in the
++layout, so an SSR throw inside it fails every child route. The prior entry's claim that a
+field mismatch would "render its error path rather than breaking" was wrong - that guard
+only covered the fetch-rejected path (cameras -> []), never a fetch that succeeded with an
+unexpected shape. The /__data.json requests returned 200 throughout; only the HTML render
+500'd, which is the signature of a component-SSR fault rather than a load fault.
+
+Fix, two layers:
+  - robot-arm-client.ts listCameras() now unwraps the envelope and returns
+    Array.isArray(body?.cameras) ? body.cameras : [] - correct shape at the boundary.
+  - +layout.server.ts additionally requires Array.isArray() before passing cameras
+    through, so future drift in the Pi's response degrades to the empty/error state
+    instead of 500ing all four tabs.
+
+`npm run check`: 11 errors / 426 warnings / 91 files-with-problems - byte-identical to the
+baseline recorded in the entry above; zero errors in touched files.
+
+================================================================================
+2026-08-04 - feat/robot-arm-page-consolidation - ARM-02 mode B: optional direct
+             MJPEG from the Pi, with permanent snapshot-proxy fallback
+================================================================================
+Built the second camera transport. The proxy path (every frame round-trips through
+a BIMS serverless function) is why the feed reads as stills rather than video; this
+adds an opt-in path where the browser opens ONE MJPEG connection to the Pi instead.
+
+Pi side (robot-arm repo, commit 9c2c039, deployed + hash-verified on the Pi at
+065efb40708d96b5a876eb00d289c301df00fad3):
+  - POST /cameras/auth now RETURNS the stream token in the JSON body, not just as
+    a Set-Cookie. A cookie is useless here: the browser is on the BIMS origin and
+    the stream is on the Pi's, so a cross-site cookie is exactly what SameSite
+    blocks. Token is camera-scoped, cannot move the arm, and expires in minutes.
+  - NOT YET LIVE: the service needs `sudo systemctl restart robot-arm.service`,
+    which requires interactive auth this session cannot provide.
+
+BIMS side:
+  - robot-arm-client.ts: mintStreamToken() wraps POST /cameras/auth.
+  - NEW /api/robot-arm/cameras/stream-url: mints a token and returns it with an
+    origin. Publishes ROBOT_ARM_PUBLIC_URL, never ROBOT_ARM_BASE_URL - separate
+    vars on purpose, so the private/tailnet address stays server-side as before.
+    Unset => reports unavailable and the panel keeps polling. Failures are soft
+    (json available:false), never 5xx, because the caller has a working fallback.
+  - RobotArmCameraPanel.svelte: negotiates once per mount. Probes with a
+    TERMINATING snapshot.jpg rather than the stream itself - an <img> pointed at
+    multipart/x-mixed-replace has no dependable load event and cannot be timed
+    out, so the stream cannot serve as its own reachability test. On success,
+    src becomes the Pi's stream.mjpg; any error at any later point falls back to
+    proxy permanently. No crossorigin attribute (would demand CORS the Pi does
+    not send). Pause/collapse clears src, which is what actually closes the
+    socket - otherwise "pause" would stop the picture while the Pi kept encoding.
+  - Honesty fixes that fall out of it: the fps selector is DISABLED in direct mode
+    (it sets the polling rate, which no longer exists) rather than silently doing
+    nothing; the frame counter is omitted in direct mode because the browser owns
+    that socket and we genuinely cannot count its frames; staleness switches to
+    the Pi's own server-computed flag, since a client-side clock cannot see a
+    frozen direct stream.
+
+INERT BY DEFAULT: with ROBOT_ARM_PUBLIC_URL unset, behaviour is byte-identical to
+before - stream-url reports unavailable and every viewer polls the proxy.
+
+OPEN DECISION, flagged not resolved: ARM-01 PRD s7.6 consequence 1 states "Nothing
+client-side may reference the Pi ... no Pi hostname rendered into an <img src>".
+Mode B breaks the letter of that rule. It preserves the REASON (G0 "any device":
+proxy stays the default and the fallback, so a phone on cellular is unaffected),
+but the origin an operator would set is the Funnel FQDN, which discloses the
+tailnet name to anyone who can load the arm page. That is the user's invariant to
+waive or keep, so the env var is left unset pending their call. The s11 grep check
+the PRD promised was never implemented, so nothing enforces this today either way.
+
+`npm run check`: 11 errors / 426 warnings / 91 files-with-problems - identical to
+the baseline above; zero errors in touched files.
+
+================================================================================
+2026-08-05 - feat/robot-arm-page-consolidation - ARM-02 follow-ups: invariant
+             guard, mode-B route tests, scoped jog poll
+================================================================================
+- Jog tab polled every 2s with invalidateAll(), which re-ran the arm layout load
+  too - so the tab where the operator is most likely to be moving the arm was
+  also issuing two extra Pi round trips (camera list + preflight) every two
+  seconds. Load now declares a dependency; the poll invalidates only that.
+  NOT fixed: use:enhance still defaults to invalidateAll() on submit, so each
+  jog click re-runs the layout load. Per-click rather than continuous, and
+  narrowing it means hand-written submit handlers across seven forms on a page
+  this branch cannot exercise yet.
+- NEW src/lib/server/robot-arm-url-invariant.test.ts (27 tests): the check
+  ARM-01 s7.6 promised and s11 left unwritten. Enforces value ACCESS rather than
+  name MENTION - a literal grep for ROBOT_ARM_BASE_URL hits 3 files today (all
+  legitimate error-message prose) and would have been unlandable, and an
+  unlandable check gets deleted. Masks comments/markup/style, keeps string and
+  template-literal bodies as code so bracket access and indirection still bite,
+  and uses a non-alphanumeric boundary rather than \b so PUBLIC_ROBOT_ARM_BASE_URL
+  cannot sneak through on the underscore. Explicitly asserts ROBOT_ARM_PUBLIC_URL
+  stays ALLOWED, including testing the compiled regex against it, so a later
+  broadening to /ROBOT_ARM_\w*URL/ fails loudly instead of silently killing mode B.
+- NEW src/routes/api/robot-arm/cameras/stream-url/server.test.ts (15 tests):
+  pins the soft-failure contract - env unset, Pi throws, Pi returns no
+  stream_token (older build) all yield {available:false} and never a 5xx, and the
+  happy path sets a no-store Cache-Control because the body carries a credential.
+- tests/vitest.unit.config.ts gains a stub for $env/dynamic/private so route
+  handlers can be imported without SvelteKit's vite plugin. package.json gains
+  test:invariants.
+
+`npm run test:unit`: 90 passed (4 files) - run directly, not taken on report.
+`npm run check`: 11 errors / 426 warnings / 91 files - baseline unchanged, zero
+in touched files.
+
+FOUND, NOT FIXED - pre-existing leak of the PRIVATE origin to the browser:
+  control/+page.server.ts:206  armBaseUrl: env.ROBOT_ARM_BASE_URL ?? null
+consumed at control/+page.svelte:61 and :422 as baseUrl={data.armBaseUrl}. This
+is returned from a load function, so it is serialized into page data and readable
+in the browser. It predates ARM-02 (it came in with ARM-01's connection panel,
+whose inline comment defends it as "not a secret" - true of the KEY, but s7.6.1
+is about the ADDRESS). Consequence worth stating: the tailnet FQDN was ALREADY
+reaching browsers on the Control tab before mode B, so mode B's disclosure is
+much less incremental than assumed when the exception was waived. Left alone
+because the fix is a UX decision (drop the diagnostic, or switch it to the
+sanctioned ROBOT_ARM_PUBLIC_URL), not a mechanical one. The new invariant test
+does NOT catch it - +page.server.ts is outside the client scan surface.
+
+================================================================================
+2026-08-05 - feat/robot-arm-page-consolidation - fix spurious first-load fallback
+             to proxy in the camera transport negotiation
+================================================================================
+First real end-to-end run of ARM-02 mode B. It worked, but the Vercel access log
+showed it worked by accident:
+  12:52:10.41  GET /api/robot-arm/cameras/stream-url   200   <- negotiated
+  12:52:10.41  GET .../cameras/external/snapshot       200   <- proxy starts (by design)
+  12:52:16/17/18  .../snapshot 200 x3                        <- STILL polling 6-8s later
+  12:52:40.81  stream-url 200 + snapshot 200                 <- remount, 2nd negotiation
+  (nothing after; page active until 12:52:49)                <- direct engaged
+Snapshot traffic stopping dead is the signature of direct mode, since those
+frames then go browser->Pi and never touch BIMS. So attempt 1 failed and fell
+back; only a remount (triggered by the operator interacting with a form) reached
+direct. On a plain page load the feed would have stayed on proxy indefinitely.
+
+Not a server problem: timed the exact probe URL through the public Funnel three
+times - connect 0.001s, TLS 0.02s, total 0.022-0.030s, HTTP 200. The 3s probe
+budget was never about the origin being slow, it was about first-request TLS/DNS
+setup from a cold browser.
+
+Fix: probe timeout 3s -> 8s, and up to 3 attempts with backoff (1.5s, 3s),
+minting a fresh token each pass rather than reusing one that may itself have been
+the failure. Retrying is safe because it is not load-bearing - proxy is streaming
+the whole time, so a slow probe costs stills, not blackness. Still bounded, and
+an available:false answer (no public origin configured, or the Pi cannot mint)
+returns immediately instead of burning attempts, since retrying cannot change it.
+
+`npm run check`: 11 errors / 426 warnings / 91 files - baseline unchanged, zero in
+touched files. `npm run test:unit`: 90 passed.
+
+================================================================================
+2026-08-19 — feat/robot-arm-unified-ui — one arm page: Control/Jog/Calibrate/Runs tabs
+================================================================================
+The arm pages were four unrelated routes an operator had to navigate between by
+hand. ARM-02 (feat/robot-arm-page-consolidation, b4925d70) consolidated them
+into a real +layout.svelte with Control / Jog / Calibrate / Runs tabs plus a
+live arm camera panel, but the branch was left 124 commits behind master and was
+never merged. Brought it forward onto master here, together with the per-joint
+jog fix from feat/robot-arm-movement-tests.
+
+Merge was clean: the only conflict was progress.txt (append-only log — both
+sides' entries kept verbatim). Every code file auto-merged, including
+cart-mfg/+layout.svelte and the jog page, where the two branches turn out to
+touch disjoint regions: ARM-02 rewrites the <script> poll to a scoped
+invalidate(ARM_POSE_DEP) instead of invalidateAll(), while the movement-test fix
+ungates the per-joint buttons further down the markup. Verified both survived:
+per-joint buttons now `disabled={sessionActive}` (Cartesian pad correctly keeps
+its !pose gate), and the scoped poll is in place.
+
+What this brings onto master beyond the tabs: a live MJPEG arm camera panel
+(RobotArmCameraPanel.svelte), the /api/robot-arm/cameras stream-url +
+snapshot endpoints with a direct-transport-with-proxy-fallback, the ARM-01
+invariant guard, and a vitest unit config.
+
+Tests: `npx vitest run --config tests/vitest.unit.config.ts` — 133 passed / 8
+files, including the 27 robot-arm URL invariant tests and the 15 camera
+stream-url tests.
+
+svelte-check: 107 errors / 434 warnings — exactly master's own baseline, zero in
+any robot-arm or cart-mfg file.
+
+Context: multi-pose joint-map calibration is ALREADY on master (9e9e19fe,
+2026-07-31); origin/feat/robot-arm-pose-calibration is a redundant leftover
+whose code is byte-identical to master's and should be deleted, not merged.
+The Pi serves the matching /calibrate/map endpoints from
+feat/multi-pose-calibration.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-git-feat-ro-61d252-brevitest.vercel.app
+  (immutable: https://bioscale-operations-system-mongodb-k6p10m1hn-brevitest.vercel.app)
+Source: branch feat/robot-arm-unified-ui @ commit ee389ce3
+Retrieve this exact code: git checkout feat/robot-arm-unified-ui at commit ee389ce3
+What this deployment is for: verify the consolidated arm page —
+  Control/Jog/Calibrate/Runs tabs, the live MJPEG arm camera panel, and the
+  ungated per-joint jog — before merging ARM-02 forward to master. Entry point
+  /manufacturing/cart-mfg/robot-arm/control. arm-pi is live with DRY_RUN=false,
+  so per-joint jog on this preview produces REAL motion.
+
+================================================================================
+2026-08-19 — feat/cartridge-status-flow → master — reagent inspect: CV inference OFF (capture only)
+=========================================================================

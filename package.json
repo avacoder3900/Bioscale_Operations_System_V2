@@ -11,7 +11,8 @@
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
     "test:contracts": "vitest run --config tests/vitest.contracts.config.ts",
-    "test:unit": "vitest run --config tests/vitest.unit.config.ts"
+    "test:unit": "vitest run --config tests/vitest.unit.config.ts",
+    "test:invariants": "vitest run --config tests/vitest.unit.config.ts src/lib/server/robot-arm-url-invariant.test.ts"
   },
   "devDependencies": {
     "@sveltejs/adapter-auto": "^7.0.0",
