@@ -21,6 +21,7 @@ import { connectDB } from '$lib/server/db/connection.js';
 import { CaptureStation, deriveStatus } from '$lib/server/db/models/capture-station.js';
 import { CvProject } from '$lib/server/db/models/cv-project.js';
 import { CvInspection } from '$lib/server/db/models/cv-inspection.js';
+import { isInferenceDisabledForPhase } from '$lib/server/cv/run-inference';
 import { CvImage } from '$lib/server/db/models/cv-image.js';
 import { getR2Url } from '$lib/server/services/r2';
 import { requirePermission } from '$lib/server/permissions';
@@ -108,7 +109,12 @@ export const load: PageServerLoad = async ({ locals }) => {
 	return {
 		stations: JSON.parse(JSON.stringify(stations)),
 		user: { _id: locals.user._id, username: locals.user.username },
-		modelDeployed: deployedProjects.length > 0,
+		// Inference is switched off for reagent_filled for now (run-inference.ts
+		// INFERENCE_DISABLED_PHASES): the page captures only, never polls for a
+		// verdict. modelDeployed is forced false so the client takes the
+		// capture-only path; inferenceDisabled drives the notice text.
+		inferenceDisabled: isInferenceDisabledForPhase(PHASE),
+		modelDeployed: !isInferenceDisabledForPhase(PHASE) && deployedProjects.length > 0,
 		deployedProjects: JSON.parse(JSON.stringify(deployedProjects)),
 		recentInspections: JSON.parse(JSON.stringify(recentInspections))
 	};
