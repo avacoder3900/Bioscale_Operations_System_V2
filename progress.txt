@@ -9174,3 +9174,15 @@ REMAINING
   3. Decks 002/003 remain 24.5mm and 7.4mm out on the wax-to-reagent invariant.
   4. No version panel in the calibration tab — deck_versions and run provenance are
      readable only from the database.
+
+================================================================================
+2026-08-20 — feat/kanban-tweaks — Tier 1 rank jump: click the number, type a position
+================================================================================
+Per Jacob: the ▲▼ one-step arrows make long moves painful (rank 50 → 1 = 49 clicks).
+The rank number on /kanban/inventory is now a button — click it, type a target position,
+Enter (or blur) submits; Escape cancels. New ?/rankSet action builds the current
+captured/processed order, splices the task to the clamped target index, and calls the
+existing reorder({scope:'tier1'}) service, so numbering stays strict 1..N and the move is
+audited like the arrows. Double-fire guard (Enter also blurs) nulls rankEdit before POST.
+MCP untouched — kanban_reorder_queue already covers tier1 for Claude-app workshopping.
+npm run check: 11 errors / 434 warnings — baseline.
