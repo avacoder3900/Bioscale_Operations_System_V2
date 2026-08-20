@@ -123,7 +123,17 @@ def add_parameters(parameters: protocol_api.Parameters):
         description="Reject a tip-calibration adjust larger than this in X or Y (retry once, then nominal).",
         default=4.0,
         minimum=0.3,
-        maximum=5.0,
+        # Ceiling raised from 5.0 (2026-08-20). The cap is compared against the
+        # RAW adjust, which is `calibrator C-string baseline - travel-to-switch`,
+        # so it carries that robot's baseline. R04's fixture is dialled to -5.0,
+        # making a perfectly normal wax adjust about -6.0 — over the old 5.0
+        # ceiling, so EVERY R04 wax probe was rejected and the fill silently fell
+        # back to nominal. Nominal is ~5.7mm off, because the holes were taught
+        # with the probe adjust applied. B07's baseline is -1.0 and its normal
+        # adjust ~-2.2, which is why wax looked fine there.
+        # The default stays 4.0 so nothing changes for a robot BIMS has no value
+        # for; BIMS sends a per-robot cap from TipCalibratorFixture.maxTipAdjust.
+        maximum=12.0,
         unit="mm",
     )
 
@@ -838,13 +848,27 @@ def run(protocol: protocol_api.ProtocolContext):
                     protocol.comment(f'Tip calibration OK on hand-inserted tip (attempt {attempt}): adjust x={adj["x"]}, y={adj["y"]}')
                     return adj
 
-            protocol.pause(
-                f'Tip calibration REJECTED twice ({why}). '
-                f'Click Resume to CONTINUE AT NOMINAL wax hole positions (adjust 0,0 — '
-                f'no tip correction), or Cancel/Stop to end the run and check the calibrator.'
+            # NO NOMINAL FALLBACK (2026-08-20).
+            #
+            # "Continue at nominal" reads like a safe degraded mode and is the
+            # opposite. The deck holes are taught WITH the probe adjust applied —
+            # they are tip-NEUTRAL — so nominal is not "uncorrected", it is a
+            # known-wrong position roughly 5.7mm off, and the fill quietly puts
+            # wax somewhere that is not the hole. That is exactly what happened on
+            # R04 on 2026-08-20: every probe was rejected by a too-tight
+            # max_tip_adjust and 288 holes were addressed at nominal.
+            #
+            # The deck definition is the only source of hole positions and the
+            # per-tip probe is the only correction allowed on top of it. If the
+            # probe cannot produce one, there is no legitimate position to move
+            # to, so the run stops instead of inventing one.
+            raise RuntimeError(
+                f'Tip calibration REJECTED twice ({why}). Refusing to continue at nominal: '
+                f'the wax holes are taught tip-neutral, so nominal is about 5.7mm off the '
+                f'hole, not merely uncorrected. Check the calibrator fixture, or raise the '
+                f'max tip adjust for this robot in BIMS if the reading is genuinely normal '
+                f'for it, then re-run.'
             )
-            protocol.comment('Continuing with adjust x=0.0, y=0.0 (nominal wax hole positions).')
-            return { 'x': 0.0, 'y': 0.0 }
 
         # 9 WAX holes spread over all three carriers (cols 2-8 | 10-16 | 18-24) and
         # the front/middle/back of the deck (rows A / L / X). Same well names the

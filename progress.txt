@@ -9014,3 +9014,84 @@ What this deployment is for: verify the consolidated arm page —
 ================================================================================
 2026-08-19 — feat/cartridge-status-flow → master — reagent inspect: CV inference OFF (capture only)
 =========================================================================
+
+================================================================================
+2026-08-20 — feat/deck-calibration-hardening — WAX root cause: every probe rejected by max_tip_adjust
+================================================================================
+Reagent was fixed 08-19 (probe-recipe mismatch). Wax was still landing right of the
+hole. DIFFERENT bug — not the probe recipe, which is self-consistent for wax.
+
+EVIDENCE — R04 wax run c8cd6298, read off the robot
+  Dispenses into X2/X4/X6/X8 carried wellLocation offset {x:0, y:0} — NO tip adjust
+  at all, where the reagent run had carried {x:-6.5, y:-0.1}. The robot's own log:
+    "Offset calibration: x=-5.0, y=1.8"
+    "Tip calibration REJECTED (adjust (-6.0, -0.0) exceeds max_tip_adjust 4.0mm)
+     — retrying with a fresh tip."
+    "TIP TRACKER: consumed tip G12 (retry) — index 95"
+    "Continuing with adjust x=0.0, y=0.0 (nominal wax hole positions)."
+    "Dispensed 2.2uL into well X2 (tip #1)"
+  X probe start 124.581 = cal_x - 0.6 = the wax recipe, so the recipe was correct.
+
+WHY THE ADJUST IS "TOO BIG"
+  The cap is compared against the RAW adjust, which is
+  `calibrator C-string baseline - travel-to-switch`, so it carries the fixture's
+  dialled baseline. R04's baseline is -5.0, making a NORMAL wax adjust about -6.0;
+  the 4.0 default rejected all of them. B07's baseline is -1.0 and its normal wax
+  adjust ~-2.2, which is why wax looked fine there and why one global cap cannot be
+  tight enough for B07 and loose enough for R04 at once.
+  Falling back to nominal is not "uncorrected" — the holes were taught WITH the
+  probe adjust applied, so nominal is ~5.7mm off, to the right. Exactly the symptom.
+  NOTE: this is the cap hypothesis raised on 08-19 and then wrongly dropped when the
+  reagent protocol turned out to declare no cap. Both were true; two separate bugs.
+
+FIXED — per-robot cap, not a global loosening
+  ~ Wax_Filling_GEN7_Cartridge.py — max_tip_adjust ceiling 5.0 -> 12.0. Default stays
+    4.0, so a robot BIMS has no value for is unchanged. (5.0 was itself below R04's
+    normal 6.0, so even the old maximum could not have unblocked it.)
+  ~ tip-calibrator-fixture.ts — maxTipAdjust (Number, default null), per robot.
+  ~ calibration-rtps.ts — injects max_tip_adjust from the fixture, CLAMPED to the
+    ceiling the uploaded protocol actually declares (parametersSchema carries min/max).
+    A robot still on the old .py therefore gets 5.0 rather than a failed POST /runs.
+  + scripts/set-tip-adjust-cap.ts — sets the cap AND refreshes the stored wax
+    protocol source, refusing to run unless the local .py carries the raised ceiling.
+
+APPLIED TO PRODUCTION
+  npx tsx scripts/set-tip-adjust-cap.ts --robot CCyX8FjTRGvYOd9vISGvi --cap 8 --apply
+    R04 maxTipAdjust: unset -> 8   (normal adjust ~6.0; a missed probe is ~-10.0,
+    since a miss walks the full 5mm, so 8 still rejects a genuine bad probe)
+    stored wax protocol source refreshed c6868c3de06d -> 9aded7ff07ac
+  B07 and B14 left unset — they keep the 4.0 default and their tight guard.
+
+SEQUENCE THAT MATTERS
+  The robot must receive the raised-ceiling .py BEFORE BIMS sends 8.0, or POST /runs
+  would reject an out-of-range value. The clamp makes that ordering forgiving, but
+  the wax protocol must still be SYNCED to R04 for the fix to take effect — the
+  run-start freshness gate compares WELL COORDINATES only and will not notice that
+  the .py changed.
+
+NOT a coordinate problem: the wax hole geometry was never touched and must not be.
+
+--- addendum, same day ---
+Two further changes under the "deck is the only source of position" rule:
+
+1. NO NOMINAL FALLBACK (wax). pick_up_and_calibrate_tip used to pause and offer
+   "Resume to CONTINUE AT NOMINAL", then return adjust {0,0}. That reads like a safe
+   degraded mode and is the opposite: the holes are taught tip-neutral, so nominal is
+   a KNOWN-WRONG position ~5.7mm off, not an uncorrected one. It is what silently put
+   288 holes in the wrong place on 2026-08-20. Now raises instead — if the probe
+   cannot produce a correction there is no legitimate position, so the run stops.
+   Reagent needed no equivalent: its only zero-adjust return is the
+   use_tip_calibration=False path, and BIMS forces that true.
+   The remaining zero-returns in wax are that same disabled path (unreachable) and a
+   serial-write failure that returns a FAILED probe tuple into the retry/raise logic.
+
+2. FILENAME REGRESSION FIXED. scripts/ot2-bridge.py had been renamed on disk to
+   scripts/ot2-bridge-new.py.py while preparing the Jupyter upload, and a `git add -A`
+   in 472540abe committed the rename — so master briefly carried the daemon under the
+   wrong name while OT2-BRIDGE-DEPLOYMENT.md still referenced scripts/ot2-bridge.py.
+   Content was always correct (81114 bytes, CAL_PROBE_RECIPES present); only the path
+   was wrong. Renamed back.
+
+auto_resume_run was investigated and CLEARED: it resumes only the engine's own
+start-of-run pause and declines operator/protocol-commanded pauses
+(pause_was_commanded), so it was not dismissing the calibration-reject prompt.

@@ -28,6 +28,17 @@ const tipCalibratorFixtureSchema = new Schema({
 	position: { type: vec, required: true }, // approach point the tip moves to before the probe
 	zCalWax: { type: Number, default: 34.491 }, // p20 tip cal Z
 	zCalReagent: { type: Number, default: 40.8 }, // p300 tip cal Z
+	/**
+	 * Largest tip-calibration adjust this robot may apply, in mm. Optional —
+	 * absent means the protocol's own default (4.0) stands.
+	 *
+	 * Per robot because the cap is compared against the RAW adjust, which is
+	 * `calibrator baseline - travel-to-switch` and therefore carries that
+	 * fixture's dialled baseline. R04 sits at -5.0 so a normal wax adjust is
+	 * ~-6.0; B07 sits at -1.0 so its normal is ~-2.2. One global number cannot
+	 * be tight enough for B07 and loose enough for R04 at the same time.
+	 */
+	maxTipAdjust: { type: Number, default: null },
 	capturedBy: { type: operatorRef },
 	capturedAt: { type: Date, default: Date.now }
 });

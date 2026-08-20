@@ -32,7 +32,7 @@
  */
 import { connectDB, TipCalibratorFixture } from '$lib/server/db';
 
-type ParamDef = { variableName: string };
+type ParamDef = { variableName: string; min?: number; max?: number };
 
 const Z_CAL_DEFAULT = { 'wax-filling': 34.491, 'reagent-filling': 40.8 } as const;
 
@@ -82,6 +82,27 @@ export async function calibrationRtpValues(
 		if (declared.has('z_cal')) {
 			const z = processType === 'wax-filling' ? fix.zCalWax : fix.zCalReagent;
 			out['z_cal'] = Number(z ?? Z_CAL_DEFAULT[processType]);
+		}
+
+		// Per-robot rejection cap for the tip probe.
+		//
+		// The protocol compares this against the RAW adjust, which is
+		// `calibrator baseline - travel-to-switch` and so carries that fixture's
+		// dialled baseline. R04's baseline is -5.0, making a perfectly normal wax
+		// adjust about -6.0; the protocol's 4.0 default rejected every one of them
+		// and fell back to NOMINAL — which is ~5.7mm off, because the holes were
+		// taught with the adjust applied. B07's baseline is -1.0 (normal adjust
+		// ~-2.2), so a single global cap cannot be tight enough there and loose
+		// enough on R04 at once.
+		//
+		// Clamped to the bound the uploaded protocol actually declares: a robot
+		// still running the pre-2026-08-20 .py caps at 5.0, and sending more would
+		// make POST /runs fail outright instead of merely being too strict.
+		if (declared.has('max_tip_adjust') && fix.maxTipAdjust != null) {
+			const spec = (paramSchema ?? []).find((p) => p.variableName === 'max_tip_adjust');
+			const ceiling = Number(spec?.max);
+			const wanted = Number(fix.maxTipAdjust);
+			out['max_tip_adjust'] = Number.isFinite(ceiling) ? Math.min(wanted, ceiling) : wanted;
 		}
 	}
 	return out;
