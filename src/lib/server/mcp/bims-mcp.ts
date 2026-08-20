@@ -219,7 +219,7 @@ async function callAgentApi(
 export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 	// Version bump signals clients (claude.ai caches connector tool lists) that
 	// the toolset changed — bump on every tool add/remove/rename.
-	const server = new McpServer({ name: 'bims-operations', version: '3.2.0' });
+	const server = new McpServer({ name: 'bims-operations', version: '3.2.1' });
 
 	// ---------------------------------------------------------------- meta
 
@@ -1295,7 +1295,12 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 			inputSchema: z.object({
 				parentTaskId: z.string().describe('The parent task _id.'),
 				subtasks: z
-					.array(z.object({ ...CAPTURE_ITEM_SHAPE, parentTaskId: z.undefined().optional() }))
+					// NOTE: no z.undefined() here — zod v4's toJSONSchema throws
+					// "Undefined cannot be represented in JSON Schema" on it, which
+					// killed the ENTIRE tools/list (connector showed "no tools
+					// available" from the KB2-18 deploy 2026-08-18 until 2026-08-20).
+					// A nested parentTaskId is stripped in the handler instead.
+					.array(z.object({ ...CAPTURE_ITEM_SHAPE }))
 					.min(1)
 					.describe('Subtasks to create — same shape as a capture item (dor / links / blockedBy allowed). Assignee and tags default to the parent\'s.'),
 				actor: z.string().optional().describe('Username of the human driving this change (defaults to "agent").')
@@ -1303,9 +1308,11 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 		},
 		async ({ parentTaskId, subtasks, actor }) =>
 			machineWrite('kanban_create_subtasks', actor, (resolved) =>
+				// Strip any nested parentTaskId — subtasks always attach to the
+				// top-level parent (was schema-enforced via z.undefined(); see NOTE).
 				callAgentApi(fetcher, `/api/agent/operations/kanban/tasks/${encodeURIComponent(parentTaskId)}/subtasks`, {
 					method: 'POST',
-					body: { subtasks, actor: resolved }
+					body: { subtasks: subtasks.map(({ parentTaskId: _ignored, ...st }: any) => st), actor: resolved }
 				})
 			)
 	);

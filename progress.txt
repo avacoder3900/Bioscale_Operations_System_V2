@@ -9230,3 +9230,20 @@ What this deployment is for: KB2-27/28/29 roadmap feature (milestones, estimateD
   v3.2.0 with kanban_roadmap + plan tools) + Tier 1 rank jump. Production MCP now has
   the tools for the roadmap-v4 import workshop. NOTE: claude.ai caches connector tool
   lists — if new tools don't appear in the Claude app, reconnect the BIMS connector.
+
+================================================================================
+2026-08-20 — feat/kanban-tweaks → master — fix: MCP tools/list dead since KB2-18 (z.undefined)
+================================================================================
+Jacob reported the BIMS connector showing "This connector has no tools available" — and
+recalled someone mentioning it BEFORE today's roadmap deploy. Root cause confirmed by
+bisection (local dev server + pre-KB2-27 file + zod construct isolation): NOT the key
+(first wrong hypothesis — my curl used a key transcribed from a screenshot), NOT the
+KB2-27/28/29 changes, NOT a dependency bump (lock pinned since Jul 30). The killer:
+kanban_create_subtasks (KB2-18, deployed 2026-08-18) used `parentTaskId:
+z.undefined().optional()` in its item schema; zod v4's toJSONSchema throws "Undefined
+cannot be represented in JSON Schema" on z.undefined(), which killed the ENTIRE
+tools/list response. initialize still succeeded, so claude.ai showed "connected" with
+zero tools — broken for two days, masked as a caching quirk.
+Fix: plain CAPTURE_ITEM_SHAPE in the subtasks array; nested parentTaskId now stripped in
+the handler; MCP version 3.2.1. Verified locally: tools/list returns 59 tools incl.
+kanban_roadmap + the plan tools. npm run check: 11/434 baseline.
