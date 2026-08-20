@@ -63,8 +63,11 @@ export async function captureOptionsFromBody(
 		description: typeof body.description === 'string' && body.description ? body.description : defaults.description,
 		origin: body.origin === 'discovered' ? 'discovered' : defaults.origin ?? 'planned',
 		spawnedFrom: body.spawnedFrom || defaults.spawnedFrom,
-		itemType: ['deliverable', 'spike', 'chore'].includes(body.itemType) ? body.itemType : defaults.itemType,
+		itemType: ['deliverable', 'spike', 'chore', 'milestone'].includes(body.itemType) ? body.itemType : defaults.itemType,
 		spike: body.spike || undefined,
+		// KB2-27: workshopped estimate (working days) — plan imports set it at capture.
+		estimateDays:
+			typeof body.estimateDays === 'number' && body.estimateDays > 0 ? body.estimateDays : undefined,
 		dor,
 		assignee,
 		dueDate: body.dueDate ? new Date(body.dueDate) : defaults.dueDate,

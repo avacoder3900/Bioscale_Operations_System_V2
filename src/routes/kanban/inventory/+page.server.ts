@@ -321,6 +321,48 @@ export const actions: Actions = {
 		return { success: true };
 	},
 
+	// Rank jump (KB2-26): click the rank number, type a target position, the task
+	// moves there and everything else shifts by one. Same reorder() service as
+	// the arrows — build the current order, splice, renumber 1..N.
+	rankSet: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'kanban:write');
+		await connectDB();
+		const fd = await request.formData();
+		const taskId = fd.get('taskId')?.toString();
+		const target = parseInt(fd.get('rank')?.toString() ?? '', 10);
+		if (!taskId || !Number.isFinite(target)) {
+			return fail(400, { error: 'Missing taskId or rank' });
+		}
+
+		const scope = (await KanbanTask.find({
+			status: { $in: ['captured', 'processed'] },
+			archived: false
+		})
+			.sort({ rank: 1, createdAt: 1 })
+			.select('_id')
+			.lean()) as any[];
+		const ids = scope.map((t) => String(t._id));
+		const i = ids.indexOf(taskId);
+		if (i === -1) return fail(400, { error: 'Only captured/processed options can be ranked.' });
+		ids.splice(i, 1);
+		// Clamp: 1 = top, anything ≥ length+1 = bottom.
+		const j = Math.min(Math.max(target, 1), ids.length + 1) - 1;
+		ids.splice(j, 0, taskId);
+
+		try {
+			await reorder({
+				scope: 'tier1',
+				orderedTaskIds: ids,
+				actorUsername: locals.user.username,
+				via: 'ui'
+			});
+		} catch (e) {
+			return serviceFail(e);
+		}
+		return { success: true };
+	},
+
 	icebox: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
 		requirePermission(locals.user, 'kanban:write');

@@ -184,6 +184,8 @@ export interface CreateKanbanItemOptions {
 	source?: string;
 	sourceRef?: string;
 	spike?: { question: string; timebox: { amount: number; unit: 'hours' | 'days' } };
+	/** KB2-27: workshopped estimate in working days (> 0). Plan imports set it at capture. */
+	estimateDays?: number;
 	/**
 	 * Optional Definition-of-Ready fields at capture. A Tier 1 option may carry
 	 * its deliverable from birth; processing pre-fills from it rather than
@@ -651,6 +653,8 @@ export async function createKanbanItem(opts: CreateKanbanItemOptions) {
 		parentTaskId: opts.parentTaskId || undefined,
 		assignee: opts.assignee ?? undefined,
 		dueDate: opts.dueDate,
+		estimateDays:
+			typeof opts.estimateDays === 'number' && opts.estimateDays > 0 ? opts.estimateDays : undefined,
 		tags,
 		source: opts.source,
 		sourceRef: opts.sourceRef,

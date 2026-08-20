@@ -29,6 +29,9 @@ const kanbanTaskSchema = new Schema({
 	itemType: { type: String, enum: ITEM_TYPES, default: 'deliverable' },
 	classOfService: { type: String, enum: CLASSES_OF_SERVICE, default: 'standard' },
 	sizeClass: { type: String, enum: SIZE_CLASSES }, // set at processing (KB2-03); replaces taskLength
+	// KB2-27: workshopped estimate in working days (Claude-app ↔ MCP). Rung 1 of
+	// the scheduler's ladder; checked against actuals (wipDate→completedDate).
+	estimateDays: Number,
 	origin: { type: String, enum: ORIGINS, default: 'planned' },
 	spawnedFrom: String, // task that was in wip when this option was captured (provenance, ≠ parentTaskId)
 	// KB2-16: the project subdoc and board discriminator are gone — tags carry both jobs.

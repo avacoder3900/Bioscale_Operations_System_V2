@@ -31,6 +31,7 @@ export { KanbanTemplate } from './kanban-template.js';
 export { StandingTarget } from './standing-target.js';
 export { KanbanTask } from './kanban-task.js';
 export { KanbanCounter, nextTrackingNumber } from './kanban-counter.js';
+export { PlanningDocument } from './planning-document.js';
 export { Customer } from './customer.js';
 export { WorkInstruction } from './work-instruction.js';
 export { Document } from './document.js';

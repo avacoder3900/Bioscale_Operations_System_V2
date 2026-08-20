@@ -1,5 +1,6 @@
 <script lang="ts">
-	import { enhance } from '$app/forms';
+	import { enhance, deserialize } from '$app/forms';
+	import { invalidateAll } from '$app/navigation';
 	import TronButton from '$lib/components/ui/TronButton.svelte';
 	import TronInput from '$lib/components/ui/TronInput.svelte';
 	import KanbanModal from '$lib/components/kanban/KanbanModal.svelte';
@@ -15,6 +16,8 @@
 	let successMsg = $state('');
 	let submitting = $state(false);
 	let modal = $state<null | { kind: 'process' | 'decline'; task: TaskRow }>(null);
+	// KB2-26 rank jump: which task's rank number is being edited, and the typed value.
+	let rankEdit = $state<null | { id: string; value: string }>(null);
 	let processCos = $state('standard');
 
 	// KB2-25 — tag autocomplete. The field stays a plain comma-separated string
@@ -164,6 +167,35 @@
 			return true;
 		})
 	);
+
+	// KB2-26 rank jump: POST ?/rankSet with the typed target position. Blur and
+	// Enter both land here; rankEdit is nulled first so the double-fire (Enter
+	// triggers blur) is a no-op the second time.
+	async function submitRankSet() {
+		if (!rankEdit) return;
+		const { id, value } = rankEdit;
+		rankEdit = null;
+		const n = parseInt(value, 10);
+		if (!Number.isFinite(n)) return;
+		submitting = true;
+		try {
+			const body = new FormData();
+			body.set('taskId', id);
+			body.set('rank', String(n));
+			const res = await fetch('?/rankSet', { method: 'POST', body });
+			const result = deserialize(await res.text());
+			if (result.type === 'failure') {
+				errorMsg = (result.data as any)?.error ?? 'Rank change failed';
+			} else {
+				errorMsg = '';
+				await invalidateAll();
+			}
+		} catch {
+			errorMsg = 'Rank change failed';
+		} finally {
+			submitting = false;
+		}
+	}
 
 	function submitEnhance() {
 		submitting = true;
@@ -416,7 +448,29 @@
 							{/if}
 						{/if}
 						{#if t.status === 'captured' || t.status === 'processed'}
-							<span class="tron-text-muted w-7 shrink-0 text-right text-xs font-bold">{t.rank}</span>
+							{#if rankEdit !== null && rankEdit.id === t.id}
+								<!-- svelte-ignore a11y_autofocus -->
+								<input
+									type="number"
+									min="1"
+									class="w-12 shrink-0 rounded border border-[var(--color-tron-cyan)] bg-[var(--color-tron-bg-tertiary)] px-1 py-0.5 text-right text-xs font-bold text-[var(--color-tron-cyan)] outline-none"
+									autofocus
+									bind:value={rankEdit.value}
+									onkeydown={(e) => {
+										if (e.key === 'Enter') submitRankSet();
+										else if (e.key === 'Escape') rankEdit = null;
+									}}
+									onblur={() => submitRankSet()}
+									aria-label="Set rank position"
+								/>
+							{:else}
+								<button
+									type="button"
+									class="tron-text-muted w-7 shrink-0 cursor-pointer rounded text-right text-xs font-bold hover:bg-[var(--color-tron-bg-tertiary)] hover:text-[var(--color-tron-cyan)]"
+									title="Click to type a new position — the list shifts around it"
+									onclick={() => (rankEdit = { id: t.id, value: String(t.rank) })}
+								>{t.rank}</button>
+							{/if}
 						{:else}
 							<span class="w-7 shrink-0"></span>
 						{/if}

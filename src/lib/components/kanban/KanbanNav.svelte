@@ -8,9 +8,13 @@
 	// KB2-16 decision #11 (amended 2026-08-18): the committed queue is simply
 	// "Board" — once something is on it, it's approved; no second priority list.
 	// Tier 1 stays the unbounded option inventory. Routes stay.
+	// KB2-29 adds Roadmap (derived schedule + must-start) and Plans
+	// (immortalized strategy docs).
 	const tabs = [
 		{ href: '/kanban', label: 'Board' },
 		{ href: '/kanban/inventory', label: 'Tier 1' },
+		{ href: '/kanban/roadmap', label: 'Roadmap' },
+		{ href: '/kanban/plans', label: 'Plans' },
 		{ href: '/kanban/flow', label: 'Flow' },
 		{ href: '/kanban/policy', label: 'Policy' },
 		{ href: '/kanban/archived', label: 'Archive' }

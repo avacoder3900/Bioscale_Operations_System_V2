@@ -9174,3 +9174,50 @@ REMAINING
   3. Decks 002/003 remain 24.5mm and 7.4mm out on the wax-to-reagent invariant.
   4. No version panel in the calibration tab — deck_versions and run provenance are
      readable only from the database.
+
+================================================================================
+2026-08-20 — feat/kanban-tweaks — Tier 1 rank jump: click the number, type a position
+================================================================================
+Per Jacob: the ▲▼ one-step arrows make long moves painful (rank 50 → 1 = 49 clicks).
+The rank number on /kanban/inventory is now a button — click it, type a target position,
+Enter (or blur) submits; Escape cancels. New ?/rankSet action builds the current
+captured/processed order, splices the task to the clamped target index, and calls the
+existing reorder({scope:'tier1'}) service, so numbering stays strict 1..N and the move is
+audited like the arrows. Double-fire guard (Enter also blurs) nulls rankEdit before POST.
+MCP untouched — kanban_reorder_queue already covers tier1 for Claude-app workshopping.
+npm run check: 11 errors / 434 warnings — baseline.
+
+================================================================================
+2026-08-20 — feat/kanban-tweaks — KB2-27/28/29: milestones, roadmap scheduler, plans (SHIPPED)
+================================================================================
+The big roadmap feature, workshopped with Jacob this session (research: CPM/critical
+chain/LiquidPlanner/Vacanti — see PRDs). Three PRDs written AND implemented:
+
+KB2-27 (schema): itemType 'milestone' (a dated anchor node — other tasks gate on it via
+blocked_by; its dueDate is the only hard date), estimateDays on KanbanTask (workshopped
+via MCP; ladder: explicit → SIZE_CLASS_DAYS {1,3,7} → historical median), PlanningDocument
+collection (immortalized strategy docs, verbatim markdown, supersession chain; spawned
+tasks carry sourceRef 'plan:<id>'). MCP: kanban_file_plan / kanban_list_plans /
+kanban_get_plan, estimateDays on capture/process/update, server version 3.2.0. Agent API:
+/api/agent/operations/kanban/plans (+/[id]).
+
+KB2-28 (scheduler): src/lib/server/kanban/schedule.ts — computeRoadmap(): per dated
+milestone, CPM backward pass (LS/LF anchored at dueDate) + forward pass from today +
+slack + critical chain + Goldratt capacity clamp (velocity = MEAN weekly estimate-days
+completed, 8-wk window — mean not median because completions get batch-recorded; live
+prod velocity 1.625 d/wk) + must-start list (unblocked, LS ≤ today+5, slack asc, Tier 1
+rank tiebreak) + buffer burn + estimate-vs-actual calibration. Business-day math
+throughout. Dates are OUTPUTS — never written to tasks. Exposed via
+/api/agent/operations/kanban/roadmap + MCP kanban_roadmap. Smoke-tested read-only against
+prod Atlas (scripts/diag-roadmap-compute.ts): day math verified, empty-milestone path OK.
+
+KB2-29 (views): /kanban/roadmap — milestone countdown cards (buffer, % done, infeasible
+banner), must-start list, chronological SVG timeline (past of today = FACT from
+wip/completed stamps, future = MATH from the backward pass, dashed; lanes = tags per
+KB2-00 #12 — never people; milestone diamonds; critical chain in red). /kanban/plans +
+/kanban/plans/[planId] — plan index + verbatim doc + spawned-task lens. KanbanNav grows
+Roadmap + Plans tabs.
+
+npm run check: 11 errors / 434 warnings — exact baseline.
+Next: workshop roadmap-v4 in the Claude app → kanban_file_plan → capture milestones
+(A4M Dec 11, recipe-lock ~Sep 11) + chains with estimates → the roadmap page lights up.

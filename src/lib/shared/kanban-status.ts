@@ -16,7 +16,11 @@ export const TIER2_STATUSES = ['ready', 'wip', 'waiting', 'blocked', 'review', '
 export const ALL_STATUSES = [...TIER1_STATUSES, ...TIER2_STATUSES] as const;
 export type KanbanStatus = (typeof ALL_STATUSES)[number];
 
-export const ITEM_TYPES = ['deliverable', 'spike', 'chore'] as const;
+// KB2-27: 'milestone' — a dated anchor node in the dependency graph (A4M,
+// recipe-lock). Not work: duration 0 in the scheduler, sizing optional. Other
+// tasks gate on it via `blocked_by`; its dueDate is the only HARD date the
+// roadmap scheduler (KB2-28) anchors to.
+export const ITEM_TYPES = ['deliverable', 'spike', 'chore', 'milestone'] as const;
 export type KanbanItemType = (typeof ITEM_TYPES)[number];
 
 export const CLASSES_OF_SERVICE = ['standard', 'fixed_date', 'chore', 'expedite'] as const;
@@ -24,6 +28,15 @@ export type KanbanClassOfService = (typeof CLASSES_OF_SERVICE)[number];
 
 export const SIZE_CLASSES = ['short', 'medium', 'long'] as const;
 export type KanbanSizeClass = (typeof SIZE_CLASSES)[number];
+
+// KB2-27/28: canonical sizeClass → working-days mapping, rung 2 of the
+// estimate ladder (explicit estimateDays → this → historical median). A
+// measurement default, not a promise — same doctrine as sizing (KB2-12).
+export const SIZE_CLASS_DAYS: Readonly<Record<KanbanSizeClass, number>> = {
+	short: 1,
+	medium: 3,
+	long: 7
+};
 
 export const ORIGINS = ['planned', 'discovered'] as const;
 export type KanbanOrigin = (typeof ORIGINS)[number];
