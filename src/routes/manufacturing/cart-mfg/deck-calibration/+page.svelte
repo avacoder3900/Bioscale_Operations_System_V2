@@ -878,6 +878,16 @@
 	// move-to, the pipette would descend to touch-off depth with nothing protecting
 	// it -- that is the crash case, so the two never share a control.
 	let calX = $state(125.181), calY = $state(173.247), calZ = $state(34.491);
+	// "Is the tip already on the fixture?" — the one-click Calibrate sequence asks this
+	// before it decides to travel. In ATTACHED mode the daemon probes from the pipette's
+	// CURRENT position (ot2-bridge.py execute_calibrate_tip), so a tip the operator has
+	// jogged onto the calibrator IS the point being taught. Re-driving to the stored
+	// calX/calY would silently throw that jog away, so within tolerance we leave it be.
+	const CAL_AT_TOLERANCE_MM = 3;
+	function atCalibratorNow(): boolean {
+		return liveX !== null && liveY !== null
+			&& Math.hypot(liveX - calX, liveY - calY) <= CAL_AT_TOLERANCE_MM;
+	}
 	// Both probe Zs are held at once so flipping the tip type swaps which one is
 	// shown without discarding the other one's unsaved edit. Defaults mirror
 	// TIP_PROFILE[*].defaultZ in $lib/server/services/deck-calibration/tip-calibrator.ts
@@ -935,19 +945,48 @@
 	// move-to during tuning so captured geometry is tip-zeroed (no double-count).
 	let tipAdjust = $state<{ x: number; y: number } | null>(null);
 	let calibrating = $state(false);
+	// ONE CLICK = the whole setup. Picking up a tip and travelling to the fixture are
+	// mandatory, never-varying prerequisites of the probe, and skipping the travel used
+	// to fail deep in the robot ("limit switch not reached within 5mm") because the
+	// daemon probes wherever the tip happens to be. So this does both, driven by the
+	// tip profile — which calibration is being done — rather than nagging the operator.
 	async function calibrateTip() {
 		if (!runId || !pipetteId) { errMsg = 'Open a run first'; return; }
-		if (!hasTip) { errMsg = 'Pick up a tip first — calibration probes that tip and keeps it on for tuning'; return; }
 		if (!tipProfile) { errMsg = 'Pick the tip type first (p20/wax or p300/reagent) — the probe depth depends on it and is never guessed'; return; }
 		// Try-before-commit means the probe runs at whatever is in the fields RIGHT
 		// NOW, saved or not. That makes this form the last line of defence before the
 		// gantry moves, so both heights are range-checked here.
-		if (checkedZ(calZ, 'Approach Z') === null) return;
+		const approachZNow = checkedZ(calZ, 'Approach Z');
+		if (approachZNow === null) return;
 		const probeZNow = checkedZ(probeZ, 'Probe Z');
 		if (probeZNow === null) return;
-		clearMsg(); calibrating = true;
-		msg = 'Calibrating tip on the fixture… (slow limit-switch probe; the tip stays on for tuning)';
+		const tipLabel = tipProfile === 'reagent' ? 'p300' : 'p20';
+		// busy for the WHOLE sequence, not just the probe: this now commands gantry
+		// motion, so the jog pad and the other motion buttons stay locked out.
+		clearMsg(); busy = true; calibrating = true;
 		try {
+			// Step 1 — a tip of the type this calibration is for. tiprackForProfile is
+			// derived from tipProfile, never from the mount.
+			let pickedUpNow = false;
+			if (!hasTip) {
+				msg = `Picking up a ${tipLabel} tip (${tiprackForProfile} ${tipWell})…`;
+				await doPickUpTip();
+				pickedUpNow = true;
+				// Live XY is the tiprack in slot 11 now, not the fixture — re-read it so
+				// the position readout is honest. Not load-bearing: pickedUpNow already
+				// forces the travel below, because refreshPosition swallows its own
+				// errors and a stale liveX/liveY must never be allowed to skip a move.
+				await refreshPosition();
+			}
+			// Step 2 — travel, unless the operator already jogged onto the fixture.
+			if (!pickedUpNow && atCalibratorNow()) {
+				msg = 'Already on the calibrator — probing from the jogged position…';
+			} else {
+				msg = `Moving to the tip calibrator (${calX}, ${calY}, ${approachZNow})…`;
+				await doGoToCalibrator(approachZNow);
+			}
+			// Step 3 — the probe itself.
+			msg = 'Calibrating tip on the fixture… (slow limit-switch probe; the tip stays on for tuning)';
 			// Probe inside THIS run so the tip + session survive for deck tuning.
 			// tipProfile — NOT the mount — decides the probe Z and the tiprack.
 			// `calibrator` is the UN-SAVED override (PRD section 4.3):
@@ -963,7 +1002,34 @@
 				await refreshPosition();
 				msg = `Tip calibrated: adjust x=${tipAdjust.x} y=${tipAdjust.y}. Tip kept on; applied to every move-to while tuning. Move to a hole to set a fresh nominal.`;
 			} else { errMsg = 'Calibration returned no adjust'; }
-		} catch (e) { errMsg = e instanceof Error ? e.message : String(e); } finally { calibrating = false; }
+		} catch (e) { errMsg = e instanceof Error ? e.message : String(e); } finally { busy = false; calibrating = false; }
+	}
+
+	// The two steps below are each a button AND a step of calibrateTip's sequence, so
+	// the action is split from the button handler: the do* helpers throw and touch no
+	// busy/msg state, which lets them compose. The wrappers keep the standalone
+	// buttons behaving exactly as they always have.
+
+	/** Pick up a tip of the current profile. Throws on failure. */
+	async function doPickUpTip(): Promise<void> {
+		if (!tiprackForProfile) throw new Error('Pick the tip type first (p20/wax or p300/reagent) — it is not inferred from the mount');
+		await api(`/api/opentrons-lab/robots/${selectedRobotId}/maintenance/${runId}/pick-up-tip`, {
+			method: 'POST',
+			body: JSON.stringify({ pipetteId, tiprackLoadName: tiprackForProfile, slot: '11', tipWell })
+		});
+		hasTip = true;
+		// Tip state just changed → any nominal taken without the tip is now a
+		// different frame. Force a fresh Move-to-hole before the next capture.
+		nominal = null; refWell = null;
+	}
+
+	/** Safe arc to the calibrator APPROACH point (lift, travel, descend). Caller range-checks z. Throws. */
+	async function doGoToCalibrator(z: number): Promise<void> {
+		await api(`/api/opentrons-lab/robots/${selectedRobotId}/maintenance/${runId}/move-to`, {
+			method: 'POST',
+			body: JSON.stringify({ pipetteId, x: calX, y: calY, z, minimumZHeight: safeArcZ, forceDirect: false })
+		});
+		await refreshPosition();
 	}
 
 	async function pickUpTipAction() {
@@ -972,14 +1038,7 @@
 		clearMsg(); busy = true;
 		msg = 'Loading tiprack & picking up a tip…';
 		try {
-			await api(`/api/opentrons-lab/robots/${selectedRobotId}/maintenance/${runId}/pick-up-tip`, {
-				method: 'POST',
-				body: JSON.stringify({ pipetteId, tiprackLoadName: tiprackForProfile, slot: '11', tipWell })
-			});
-			hasTip = true;
-			// Tip state just changed → any nominal taken without the tip is now a
-			// different frame. Force a fresh Move-to-hole before the next capture.
-			nominal = null; refWell = null;
+			await doPickUpTip();
 			msg = `Picked up a tip (${tiprackForProfile} ${tipWell}). Now go to the calibrator or a hole.`;
 		} catch (e) { errMsg = e instanceof Error ? e.message : String(e); } finally { busy = false; }
 	}
@@ -988,16 +1047,12 @@
 		// APPROACH Z only, deliberately. This is a free jog with no probe routine
 		// underneath it, so handing it the touch-off depth would drive the tip into
 		// the fixture unprotected.
-		if (checkedZ(calZ, 'Approach Z') === null) return;
+		const approachZNow = checkedZ(calZ, 'Approach Z');
+		if (approachZNow === null) return;
 		clearMsg(); busy = true;
 		try {
-			// Safe arc to the calibrator point (lift, travel, descend).
-			await api(`/api/opentrons-lab/robots/${selectedRobotId}/maintenance/${runId}/move-to`, {
-				method: 'POST',
-				body: JSON.stringify({ pipetteId, x: calX, y: calY, z: calZ, minimumZHeight: safeArcZ, forceDirect: false })
-			});
-			await refreshPosition();
-			msg = `At the tip-calibrator approach point (${calX}, ${calY}, ${calZ}). Jog to fine-tune.`;
+			await doGoToCalibrator(approachZNow);
+			msg = `At the tip-calibrator approach point (${calX}, ${calY}, ${approachZNow}). Jog to fine-tune.`;
 		} catch (e) { errMsg = e instanceof Error ? e.message : String(e); } finally { busy = false; }
 	}
 
@@ -1339,9 +1394,33 @@
 						<button type="button" onclick={pickUpTipAction} disabled={!pipetteId || busy || !tipProfile} class="rounded border border-[var(--color-tron-cyan)]/40 px-2 py-2 text-xs text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40">Pick up tip</button>
 						<button type="button" onclick={goToCalibrator} disabled={!pipetteId || busy} class="rounded border border-[var(--color-tron-cyan)]/40 px-2 py-2 text-xs text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40">Go to calibrator</button>
 					</div>
-					<button type="button" onclick={calibrateTip} disabled={busy || calibrating || !pipetteId || !hasTip || !tipProfile} class="mt-2 w-full rounded border border-purple-400/50 bg-purple-900/20 px-2 py-2 text-xs font-bold text-purple-200 hover:bg-purple-900/30 disabled:opacity-40" title="Probe the tip on the limit-switch fixture (slow); keeps the tip on for deck tuning. Pick up a tip first.">
-						{calibrating ? 'Calibrating tip…' : hasTip ? 'Calibrate tip (probe, keeps tip)' : 'Calibrate tip — pick up a tip first'}
+					<!--
+						One click runs the whole setup: pick up a tip of the SELECTED tip type,
+						travel to the calibrator, then probe. Still hard-gated on tip type — the
+						probe depth is never guessed — but no longer on hasTip, because picking
+						the tip up is now a step of the sequence rather than a prerequisite.
+					-->
+					<button type="button" onclick={calibrateTip} disabled={busy || calibrating || !pipetteId || !tipProfile} class="mt-2 w-full rounded border border-purple-400/50 bg-purple-900/20 px-2 py-2 text-xs font-bold text-purple-200 hover:bg-purple-900/30 disabled:opacity-40" title="Picks up a tip of the selected type, travels to the tip calibrator, then runs the slow limit-switch probe. Keeps the tip on for deck tuning.">
+						{calibrating
+							? 'Calibrating tip…'
+							: !tipProfile
+								? 'Calibrate tip — pick a tip type first'
+								: hasTip
+									? 'Calibrate tip (probe, keeps tip)'
+									: `Calibrate tip (picks up a ${tipProfile === 'reagent' ? 'p300' : 'p20'} tip first)`}
 					</button>
+					{#if tipProfile && !calibrating}
+						<!-- Nothing about the auto-motion is hidden: say what the click will do. -->
+						<p class="mt-1 text-[10px] leading-tight" style="color: var(--color-tron-text-secondary)">
+							{#if !hasTip}
+								Picks up <span class="font-mono">{tiprackForProfile} {tipWell}</span> from slot 11, moves to ({calX}, {calY}, {calZ}), then probes.
+							{:else if atCalibratorNow()}
+								Probes from the current jogged position &mdash; already within {CAL_AT_TOLERANCE_MM} mm of the calibrator, so it will not travel.
+							{:else}
+								Moves to ({calX}, {calY}, {calZ}), then probes.
+							{/if}
+						</p>
+					{/if}
 					{#if tipAdjust}
 						<button type="button" onclick={() => (tipAdjust = null)} class="mt-1 w-full rounded border border-[var(--color-tron-border)] px-2 py-1 text-[10px] hover:border-amber-400/60" style="color: var(--color-tron-text-secondary)">Clear tip adjust</button>
 					{/if}
