@@ -9122,3 +9122,55 @@ Both tables are now all-zero with a comment telling the next person not to
 Z-axis dispense mechanics (jump_height, well_z_depth, dispense_depth, touch_tip
 v_offset) deliberately left alone — they set how deep the tip goes into a hole, not
 which hole it goes to.
+
+================================================================================
+2026-08-20 — feat/deck-calibration-hardening — fleet state after the deck-calibration work
+================================================================================
+Both fills verified on hardware on R04. Closing state of the fleet.
+
+BRIDGE DAEMON — all three robots on the same build, verified by hash
+  B14 172.16.28.71   sha256 0bb0df0d2c051211  active  .bak-20260820
+  B07 172.16.28.101  sha256 0bb0df0d2c051211  active  .bak-20260820
+  R04 172.16.28.144  sha256 0bb0df0d2c051211  active  .bak-20260819
+  repo scripts/ot2-bridge.py  0bb0df0d2c051211
+  Deployed over each robot's Jupyter server on :48888 (no SSH key on the operator's
+  machine). The teaching asymmetry is gone: any robot now probes with the recipe
+  matching the profile being taught.
+
+VERIFIED ON HARDWARE (R04)
+  reagent run — dispenses carried offset {x:-6.5, y:-0.1}; operator confirmed the fill
+  wax run c7871849 — "Tip calibration OK: adjust x=-6.0, y=0.1" and every deck
+    dispense carried {x:-6.0, y:0.1}. Same log also shows
+    "BIMS-native offsets (applied to ALL labware): x=0.0, y=0.0, z=0.0" and
+    "Applied robot offsets: x=0.0, y=0.0, z=0.0" — position is JSON + tip probe only.
+  Contrast with the pre-fix wax run c8cd6298: REJECTED, adjust discarded, {0,0}.
+
+PER-ROBOT CAP — set from measurement, not copied
+  R04  maxTipAdjust 8     bend -5.0, wax adjust -5.8   (4.0 rejected every probe)
+  B07  unset -> 4.0       bend -1.0, wax adjust -1.8 measured 08-20 15:53 — inside 4.0,
+                          raising it would weaken a guard that works
+  B14  unset -> 4.0       UNKNOWN. bend -4.5 suggests it will exceed 4.0, but the only
+                          reading is stale and was taken at zCal 25.804, matching
+                          neither of B14's configured depths (34.491 / 40.8).
+                          MEASURE before setting.
+
+PROTOCOL UPLOADS
+  R04  wax + reagent  08-20 15:10  current
+  B07  wax + reagent  08-20 15:55  current
+  B14  wax + reagent  08-19 15:38  STALE — predates the raised ceiling, the removed
+                                   nominal fallback and the zeroed ROBOT_OFFSETS table
+
+DECK GEOMETRY
+  gen4deck_gen7cartridge_001  v2 (0cb3c9141552) — reagent -1.0mm, proven by both fills
+                              v1 (a5f3520ebdf8) retained as the pre-correction rollback
+  Wax coordinates were never changed on any deck; wax was never a geometry problem.
+
+REMAINING
+  1. B14: Sync wax + reagent, then Calibrate tip (wax) and set maxTipAdjust from the
+     reading. Until synced, a rejected probe on B14 still falls back to nominal — the
+     exact failure that mis-filled 288 holes on R04.
+  2. Deck 004's reagent holes carry the same ~1mm teach-time bias deck 001 had.
+     Measure one hole before applying; do not assume deck 001's -1.0 transfers.
+  3. Decks 002/003 remain 24.5mm and 7.4mm out on the wax-to-reagent invariant.
+  4. No version panel in the calibration tab — deck_versions and run provenance are
+     readable only from the database.
