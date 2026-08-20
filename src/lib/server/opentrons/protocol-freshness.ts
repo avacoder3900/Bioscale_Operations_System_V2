@@ -79,6 +79,24 @@ async function bundledDefsMatchMongo(
 		if (!loadName || !mongoDefs.has(loadName)) continue;
 		const want = mongoDefs.get(loadName)?.wells ?? {};
 		const got = def.wells ?? {};
+
+		// Deck HEIGHT is geometry too, and it is the one change wells cannot reveal.
+		// The OT-2 plans its own default arcs and collision checks from dimensions,
+		// so a bundle declaring a stale 12.7mm block under a raised deck believes it
+		// may travel low — and this gate would have waved it through, because a pure
+		// zDimension edit moves no well. Compare dimensions before the wells.
+		const wantDims = mongoDefs.get(loadName)?.dimensions ?? {};
+		const gotDims = def.dimensions ?? {};
+		for (const k of ['xDimension', 'yDimension', 'zDimension']) {
+			const w = Number(wantDims[k]);
+			const g = Number(gotDims[k]);
+			// Mongo not declaring a dimension is not drift — comparing it against the
+			// bundle would mark every such def permanently stale and re-upload forever.
+			if (!Number.isFinite(w) || w <= 0) continue;
+			if (Math.abs(g - w) > TOL) {
+				return { ok: false, detail: `${loadName} ${k} bundled ${g} != current ${w}` };
+			}
+		}
 		for (const wn of Object.keys(want)) {
 			const w = want[wn];
 			const g = got[wn];

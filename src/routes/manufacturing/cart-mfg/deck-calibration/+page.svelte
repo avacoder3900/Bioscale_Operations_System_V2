@@ -233,6 +233,14 @@
 		}
 	});
 
+	// Deck HEIGHT (dimensions.zDimension). Not cosmetic: it sets the well-edit
+	// ceiling AND the safe-arc height here, and the OT-2 plans its own default arcs
+	// and collision checks from it — a block declared 12.7mm under a physically
+	// raised deck tells the robot it may travel low. Prefilled from live dims.
+	let heightInput = $state(0);
+	$effect(() => { heightInput = +(dim.z ?? 0).toFixed(2); });
+	const heightDirty = $derived(Number.isFinite(heightInput) && Math.abs(heightInput - (dim.z ?? 0)) > 1e-6);
+
 	// Session undo stack of applied shifts (offset / global / set-position). Each
 	// entry is the wells + the delta that was applied, so undo = apply the inverse.
 	type Vec3 = { x: number; y: number; z: number };
@@ -272,6 +280,23 @@
 		} finally {
 			busy = false;
 		}
+	}
+
+	/**
+	 * Write dimensions.zDimension. The server rejects (never clamps) a height that
+	 * is below its own holes or too tall to fly under, so a failure here is a real
+	 * geometry answer worth reading, not a validation nag.
+	 */
+	async function saveDeckHeight(): Promise<void> {
+		if (!heightDirty) return;
+		const wasZ = dim.z ?? 0;
+		const res = await postAction('setDeckHeight', {
+			deckLoadName: data.selected,
+			zDimension: String(heightInput),
+			robotId: selectedRobotId ?? ''
+		});
+		if (!res) return;
+		msg = `Deck height ${wasZ.toFixed(2)} → ${Number(res.after?.z ?? heightInput).toFixed(2)}mm. Well-edit ceiling ${Number(res.editCeiling ?? 0).toFixed(1)}mm · safe arc ${res.safeArcZ}mm${res.fileSynced ? ' · lab file mirrored' : ''}. Re-publish + re-upload the protocol before a production run.`;
 	}
 
 	// Core apply: one delta → many wells (Mongo via applyBatch). Records the op on
@@ -606,7 +631,25 @@
 	// tip adds ~50mm, so the critical point must stay below ~115mm. (Verify per robot.)
 	const ARC_CLEARANCE_MM = 80;
 	const ARC_CEILING_MM = 115;
-	const safeArcZ = $derived(Math.min(Math.round((dim.z || 12.7) + ARC_CLEARANCE_MM), ARC_CEILING_MM));
+	// The ceiling is a CAP, and a cap is a lie once the deck grows into it: above
+	// zDimension ~35 the arc stops rising while the holes keep rising, so the
+	// "safe" arc silently converges on the deck top and eventually passes below
+	// it. Keep the cap (the gantry is real) but refuse to fly when what is left
+	// is not clearance. Matches the server guard in apply-edit.ts, which will not
+	// let a deck be declared taller than ARC_CEILING - MIN_ARC_CLEARANCE.
+	const MIN_ARC_CLEARANCE_MM = 10;
+	const deckZ = $derived(dim.z || 12.7);
+	const safeArcZ = $derived(Math.min(Math.round(deckZ + ARC_CLEARANCE_MM), ARC_CEILING_MM));
+	const arcClearance = $derived(safeArcZ - deckZ);
+	const arcBlocked = $derived(
+		arcClearance < MIN_ARC_CLEARANCE_MM
+			? `Refusing to move: the safe arc (${safeArcZ}mm, capped at the ${ARC_CEILING_MM}mm gantry ceiling) leaves only ${arcClearance.toFixed(1)}mm over a ${deckZ.toFixed(1)}mm deck — ${(MIN_ARC_CLEARANCE_MM - arcClearance).toFixed(1)}mm short of the ${MIN_ARC_CLEARANCE_MM}mm minimum. Lower the deck height or use a shorter tip.`
+			: null
+	);
+	/** Every robot move goes through this first — reject, never clamp. */
+	function assertArcFlyable(): void {
+		if (arcBlocked) throw new Error(arcBlocked);
+	}
 
 	// Safe arc: lift to safeArcZ, travel in XY, descend. Never drags the tip.
 	// Once the slot origin is known we move by ABSOLUTE coordinates from the live
@@ -614,6 +657,7 @@
 	// The first move of a session uses moveToWell (the run's loaded def) and derives
 	// the origin from the load-time snapshot.
 	async function moveToWellSafe(name: string): Promise<void> {
+		assertArcFlyable();
 		const lid = await ensureDeckLoaded();
 		const ax = tipAdjust?.x ?? 0, ay = tipAdjust?.y ?? 0;
 
@@ -918,6 +962,7 @@
 		if (!runId || !pipetteId) { errMsg = 'Open a maintenance run first'; return; }
 		clearMsg(); busy = true;
 		try {
+			assertArcFlyable();
 			// Safe arc to the calibrator point (lift, travel, descend).
 			await api(`/api/opentrons-lab/robots/${selectedRobotId}/maintenance/${runId}/move-to`, {
 				method: 'POST',
@@ -1025,6 +1070,13 @@
 			<div class="text-xs" style="color: var(--color-tron-text-secondary)">Tip-calibrator fixture · slot-free</div>
 		{:else}
 			<div class="text-xs" style="color: var(--color-tron-text-secondary)">{wells.length} holes · {dim.x}×{dim.y} mm · slot {data.slot}</div>
+			<label class="text-xs" style="color: var(--color-tron-text-secondary)" title="dimensions.zDimension — the declared block height. Sets the well-edit ceiling, the safe-arc height, and the arcs the OT-2 plans for itself.">Height z
+				<span class="mt-1 flex items-center gap-1">
+					<input type="number" step="0.1" min="0.1" bind:value={heightInput} class="w-20 rounded border border-[var(--color-tron-border)] bg-black/30 px-2 py-1.5 font-mono text-xs" style="color: var(--color-tron-text)" />
+					<button type="button" onclick={saveDeckHeight} disabled={busy || !heightDirty} class="rounded border border-[var(--color-tron-border)] px-2 py-1.5 text-xs enabled:hover:border-[var(--color-tron-cyan)] disabled:opacity-40" style="color: var(--color-tron-text)">Set</button>
+				</span>
+			</label>
+			<div class="text-xs {arcBlocked ? 'text-red-300' : ''}" style={arcBlocked ? '' : 'color: var(--color-tron-text-secondary)'} title="Lift height for every move between holes">arc {safeArcZ}mm · clears deck by {arcClearance.toFixed(1)}mm</div>
 		{/if}
 	</div>
 

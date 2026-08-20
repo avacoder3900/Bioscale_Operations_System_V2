@@ -58,13 +58,31 @@ const n = (v: unknown) => (Number.isFinite(Number(v)) ? Number(v) : 0);
 // 82mm-on-a-12.7mm-deck). Real holes are always well inside, so nothing legit is blocked.
 const Z_UPPER_MARGIN_MM = 40;
 
+// Mirrors ARC_CEILING_MM in deck-calibration/+page.svelte: the OT-2 left p300
+// rejects gantry Z past ~170mm and a Biotix tip adds 52.0mm, so the critical
+// point must stay under ~115mm. A deck taller than the arc that is supposed to
+// clear it is not a deck the robot can fly over.
+const ARC_CEILING_MM = 115;
+const MIN_ARC_CLEARANCE_MM = 10;
+
+/**
+ * The highest a well may be declared and still be reachable. Z_UPPER_MARGIN_MM is
+ * DECK-relative — it rises with zDimension — so on its own it would accept a well
+ * above the gantry ceiling as soon as a deck is raised, certifying geometry the
+ * safe arc cannot clear (at zDimension 105 it would allow a well at 145mm while
+ * the arc caps at 115). The machine bound does not move with the deck; take
+ * whichever binds first.
+ */
+const MAX_FLYABLE_WELL_Z_MM = ARC_CEILING_MM - MIN_ARC_CLEARANCE_MM;
+
 function dimsOf(def: any): { xMax: number; yMax: number; zMax: number } {
 	const d = def?.definition?.dimensions ?? {};
 	const x = Number(d.xDimension), y = Number(d.yDimension), z = Number(d.zDimension);
+	const deckBound = Number.isFinite(z) && z > 0 ? z + Z_UPPER_MARGIN_MM : Infinity;
 	return {
 		xMax: Number.isFinite(x) && x > 0 ? x : Infinity,
 		yMax: Number.isFinite(y) && y > 0 ? y : Infinity,
-		zMax: Number.isFinite(z) && z > 0 ? z + Z_UPPER_MARGIN_MM : Infinity
+		zMax: Math.min(deckBound, MAX_FLYABLE_WELL_Z_MM)
 	};
 }
 
@@ -72,7 +90,13 @@ function dimsOf(def: any): { xMax: number; yMax: number; zMax: number } {
 function outOfBounds(after: Vec3, b: { xMax: number; yMax: number; zMax: number }): string | null {
 	if (after.x < 0 || after.x > b.xMax) return `x ${after.x.toFixed(2)}mm outside the labware [0, ${b.xMax}]`;
 	if (after.y < 0 || after.y > b.yMax) return `y ${after.y.toFixed(2)}mm outside the labware [0, ${b.yMax}]`;
-	if (after.z < 0 || after.z > b.zMax) return `z ${after.z.toFixed(2)}mm outside the labware [0, ${Number.isFinite(b.zMax) ? b.zMax.toFixed(1) : '∞'}]`;
+	if (after.z < 0 || after.z > b.zMax) {
+		// Name WHICH ceiling bit: "outside the labware" is wrong and misleading when
+		// it was the gantry that bound, and the fix is different (lower the well vs
+		// lower the whole deck).
+		const why = b.zMax >= MAX_FLYABLE_WELL_Z_MM ? 'gantry ceiling' : 'labware height + margin';
+		return `z ${after.z.toFixed(2)}mm outside [0, ${Number.isFinite(b.zMax) ? b.zMax.toFixed(1) : 'inf'}] (${why})`;
+	}
 	return null;
 }
 
@@ -187,14 +211,6 @@ export async function applyDeckEdit(input: ApplyDeckEditInput): Promise<ApplyDec
  */
 export const DIMENSIONS_EDIT_WELL = '__dimensions__';
 
-// Mirrors ARC_CEILING_MM in deck-calibration/+page.svelte: the OT-2 left p300
-// rejects gantry Z past ~170mm and a Biotix tip adds 52.0mm, so the critical
-// point must stay under ~115mm. A deck taller than the arc that is supposed to
-// clear it is not a deck the robot can fly over — reject it here rather than let
-// the clamp swallow it silently.
-const ARC_CEILING_MM = 115;
-const MIN_ARC_CLEARANCE_MM = 10;
-
 export interface ApplyDeckDimensionEditInput {
 	deckLoadName: string;
 	/** Absolute new zDimension in mm. x/y are optional and rarely change. */
@@ -259,7 +275,7 @@ export async function applyDeckDimensionEdit(
 
 	// 3. The tip has to be able to clear it. Reject with the deficit named rather
 	//    than accept a deck the safe arc cannot fly over.
-	const maxHeight = ARC_CEILING_MM - MIN_ARC_CLEARANCE_MM;
+	const maxHeight = MAX_FLYABLE_WELL_Z_MM;
 	if (after.z > maxHeight) {
 		throw new Error(
 			`Rejected: zDimension ${after.z.toFixed(2)}mm exceeds the flyable maximum ${maxHeight}mm ` +

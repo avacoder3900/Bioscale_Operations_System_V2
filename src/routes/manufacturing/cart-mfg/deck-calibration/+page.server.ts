@@ -28,6 +28,7 @@ import {
 import {
 	applyDeckEditBatch,
 	applyDeckEditsPerWell,
+	applyDeckDimensionEdit,
 	deckEditHistory
 } from '$lib/server/services/deck-calibration/apply-edit';
 import { getRobot, robotUploadProtocol } from '$lib/server/opentrons/proxy';
@@ -215,6 +216,41 @@ export const actions: Actions = {
 			return { success: true, action: 'applyPerWell', ...res };
 		} catch (e) {
 			return fail(400, { error: e instanceof Error ? e.message : 'Per-well apply failed' });
+		}
+	},
+
+	/**
+	 * Set the labware HEIGHT (dimensions.zDimension).
+	 *
+	 * The one geometry field that had no write path, which meant a deck could only
+	 * ever declare 12.7mm. It is not just this app's edit ceiling: the OT-2 plans
+	 * its own default arcs and collision checks from zDimension, so a stale height
+	 * under a raised deck tells the robot it may travel low. The service rejects a
+	 * height that would orphan a hole or leave no tip clearance — surface its
+	 * message verbatim, it names the deficit in mm.
+	 */
+	setDeckHeight: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'manufacturing:write');
+
+		const data = await request.formData();
+		const deckLoadName = (data.get('deckLoadName') as string)?.trim() || '';
+		const zDimension = Number(data.get('zDimension'));
+		const robotId = (data.get('robotId') as string)?.trim() || null;
+
+		if (!deckLoadName) return fail(400, { error: 'Pick a deck' });
+		if (!Number.isFinite(zDimension)) return fail(400, { error: 'Height must be a number' });
+
+		try {
+			const res = await applyDeckDimensionEdit({
+				deckLoadName,
+				zDimension,
+				user: { _id: locals.user._id, username: locals.user.username },
+				robotId
+			});
+			return { success: true, action: 'setDeckHeight', ...res };
+		} catch (e) {
+			return fail(400, { error: e instanceof Error ? e.message : 'Height edit failed' });
 		}
 	},
 

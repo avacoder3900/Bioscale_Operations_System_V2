@@ -6,16 +6,18 @@
  * and does its current geometry fit under the gantry?
  *
  * Motivation (docs/DECK-Z-HEIGHT-APPROACH.md): the Z guards in this codebase
- * were written for a 12.7mm deck. Above ~35mm two of them stop protecting and
- * start misleading:
+ * were written for a 12.7mm deck. Above ~35mm the arc stops rising with the deck,
+ * so both guards are now bounded by the MACHINE, not by the deck:
  *
- *   - safeArcZ clamps at ARC_CEILING_MM and silently stops tracking the deck,
- *     so the "safe" arc can end up BELOW the deck top.
- *   - apply-edit's zMax = zDimension + 40 is relative to the deck, not to the
- *     machine, so at a tall zDimension it will happily accept a well declared
- *     ABOVE the gantry ceiling — certifying an unflyable deck.
+ *   - the Studio refuses to move once safeArcZ leaves under MIN_ARC_CLEARANCE_MM
+ *     over the deck (it still caps at ARC_CEILING_MM — the gantry is real — but a
+ *     cap that has eaten the clearance is a rejection, not a smaller arc).
+ *   - apply-edit's well zMax is min(zDimension + 40, ARC_CEILING - MIN_ARC_CLEARANCE),
+ *     so a raised deck can no longer certify a well above the gantry ceiling.
  *
- * This script makes both visible before a robot is involved.
+ * This script shows what those guards will do before a robot is involved, and is
+ * the only place that reports the TIP-specific ceiling — the guards assume a
+ * Biotix tip, so a longer tip lowers the real ceiling below what they enforce.
  *
  * Usage:
  *   npx tsx scripts/deck-z-preflight.ts --file docs/deck001-live-labware-def-2026-08-19.json
@@ -55,6 +57,8 @@ const TIPS: Record<string, { label: string; length: number; overlap: number; mou
 const ARC_CLEARANCE_MM = 80; // deck-calibration/+page.svelte
 const ARC_CEILING_MM = 115; // deck-calibration/+page.svelte
 const Z_UPPER_MARGIN_MM = 40; // services/deck-calibration/apply-edit.ts
+const MIN_ARC_CLEARANCE_MM = 10; // both, via MAX_FLYABLE_WELL_Z_MM / assertArcFlyable
+const MAX_FLYABLE_WELL_Z_MM = ARC_CEILING_MM - MIN_ARC_CLEARANCE_MM;
 
 const MIN_TRAVEL_CLEARANCE_MM = 10; // absolute floor for "the tip cleared it"
 const SANE_TRAVEL_CLEARANCE_MM = 25; // what you actually want to design to
@@ -117,7 +121,9 @@ async function main() {
 	const rawArc = Math.round(zDim + ARC_CLEARANCE_MM);
 	const safeArcZ = Math.min(rawArc, ARC_CEILING_MM);
 	const clamped = rawArc > ARC_CEILING_MM;
-	const editZMax = zDim + Z_UPPER_MARGIN_MM;
+	// Mirrors dimsOf(): deck-relative margin OR the machine bound, whichever binds.
+	const editZMax = Math.min(zDim + Z_UPPER_MARGIN_MM, MAX_FLYABLE_WELL_Z_MM);
+	const arcClearance = safeArcZ - zDim;
 
 	const maxStructAbs = effectiveCeiling - MIN_TRAVEL_CLEARANCE_MM;
 	const maxStructSane = effectiveCeiling - SANE_TRAVEL_CLEARANCE_MM;
@@ -163,9 +169,23 @@ async function main() {
 		f(safeArcZ - maxTop) + ' mm',
 		safeArcZ - maxTop < MIN_TRAVEL_CLEARANCE_MM ? 'FAIL: ARC AT/BELOW THE DECK - crash path' : ''
 	);
+	line(
+		'clearance over declared deck',
+		f(arcClearance) + ' mm',
+		arcClearance < MIN_ARC_CLEARANCE_MM
+			? `BLOCKED: Studio refuses to move (< ${MIN_ARC_CLEARANCE_MM}mm)`
+			: clamped
+				? 'note: arc is capped, clearance shrinks as the deck rises'
+				: ''
+	);
 
 	console.log('\nEDIT GUARD (apply-edit.ts)');
-	line('zMax = zDimension + 40', f(editZMax) + ' mm');
+	line(
+		'well zMax = min(zDim + 40, 105)',
+		f(editZMax) + ' mm',
+		editZMax < zDim + Z_UPPER_MARGIN_MM ? 'machine bound binds' : 'deck bound binds'
+	);
+	line('deck height max (dimension edit)', f(MAX_FLYABLE_WELL_Z_MM) + ' mm');
 	if (editZMax > effectiveCeiling) {
 		line(
 			'',
@@ -218,10 +238,16 @@ async function main() {
 		line('clearance over the structure', f(tClear) + ' mm');
 		line('binding ceiling', f(effectiveCeiling) + ' mm');
 		line('headroom (ceiling - H)', f(effectiveCeiling - H) + ' mm');
+		const tEdit = Math.min(H + Z_UPPER_MARGIN_MM, MAX_FLYABLE_WELL_Z_MM);
 		line(
 			'edit guard would accept up to',
-			f(H + Z_UPPER_MARGIN_MM) + ' mm',
-			H + Z_UPPER_MARGIN_MM > effectiveCeiling ? 'WARN: above the real ceiling' : ''
+			f(tEdit) + ' mm',
+			tEdit > effectiveCeiling ? `WARN: ${(tEdit - effectiveCeiling).toFixed(2)}mm above THIS tip\x27s ceiling` : ''
+		);
+		line(
+			'dimension edit would',
+			H > MAX_FLYABLE_WELL_Z_MM ? 'REJECT' : 'accept',
+			H > MAX_FLYABLE_WELL_Z_MM ? `> ${MAX_FLYABLE_WELL_Z_MM}mm flyable max` : ''
 		);
 		console.log('');
 		if (H >= effectiveCeiling)
