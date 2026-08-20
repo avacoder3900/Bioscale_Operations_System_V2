@@ -213,10 +213,23 @@ def run(protocol: protocol_api.ProtocolContext):
     # =====================================================================
     import socket
     
+    # ZEROED 2026-08-20. This table is a DEAD FALLBACK and must stay all-zero.
+    #
+    # The deck definition is the only source of hole positions and the per-tip
+    # calibrator probe is the only correction applied on top of it. This table
+    # predates that rule: it shifts ALL labware for a robot, so any non-zero
+    # value here double-counts geometry the Deck Calibration Studio already
+    # tuned. B07 carried real values and they are now 0 — BIMS forces
+    # bims_native=True and sends zeros, so the table was already unreachable in
+    # practice; zeroing it means even a protocol that somehow ran without the
+    # BIMS parameters cannot move the pipette off the taught position.
+    #
+    # Do not "calibrate a new robot" by adding numbers here. Tune the deck in
+    # the Studio; that is what the fill actually uses.
     ROBOT_OFFSETS = {
         'muddy-water':       { 'name': 'Left (B14)',   'x': 0.0, 'y': 0.0, 'z': 0.0 },
         'OT2CEP20210817R04': { 'name': 'Middle (R04)', 'x': 0.0, 'y': 0.0, 'z': 0.0 },
-        'hidden-leaf':       { 'name': 'Right (B07)',  'x': 0.2, 'y': -0.35, 'z': -0.35 },
+        'hidden-leaf':       { 'name': 'Right (B07)',  'x': 0.0, 'y': 0.0, 'z': 0.0 },
     }
     DEFAULT_OFFSETS = { 'name': 'Unknown', 'x': 0.0, 'y': 0.0, 'z': 0.0 }
     

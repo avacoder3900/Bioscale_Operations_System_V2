@@ -9095,3 +9095,30 @@ Two further changes under the "deck is the only source of position" rule:
 auto_resume_run was investigated and CLEARED: it resumes only the engine's own
 start-of-run pause and declines operator/protocol-commanded pauses
 (pause_was_commanded), so it was not dismissing the calibration-reject prompt.
+
+--- addendum 2, same day: last position influence removed ---
+Audited EVERY X/Y influence in both fill protocols (grep for set_offset and
+.move(types.Point(...))). Result: every well move is well.top(...) — the JSON
+position — plus the per-tip `adjust`, and nothing else. The complete list:
+  .move(Point(adjust.x, adjust.y, 0))   the tip calibrator — the one allowed corrector
+  set_offset(robot_offsets)             carriage + tuberack + tiprack; BIMS forces 0,0,0
+  ROBOT_OFFSETS hardcoded table         per hostname, ALL labware — NOW ZEROED
+  cornerOffsetFromSlot                  0,0,0 on all four decks
+  Opentrons LPC labwareOffsets          never sent; BIMS does not use them
+
+ZEROED the hardcoded ROBOT_OFFSETS fallback in both protocols. B07 carried
+0.15/-0.25/-1.3 (wax) and 0.2/-0.35/-0.35 (reagent). Dormant, because BIMS forces
+bims_native=True and sends zeros — but if that injection ever failed to reach a
+protocol the table would move all of B07's labware, including -1.3mm in Z on wax.
+Both tables are now all-zero with a comment telling the next person not to
+"calibrate a new robot" by adding numbers there; the Studio is what the fill uses.
+
++ scripts/refresh-protocol-source.ts — syncs a repo .py into the stored
+  OpentronProtocol.fileContent. Needed because BIMS uploads from the STORED source
+  and the run-start freshness gate compares WELL COORDINATES only, so a .py edit is
+  invisible to it: refresh the source, then Sync to push it.
+  Applied: wax 61a0322f -> d898d238, reagent 1d4d629d -> be37b43e.
+
+Z-axis dispense mechanics (jump_height, well_z_depth, dispense_depth, touch_tip
+v_offset) deliberately left alone — they set how deep the tip goes into a hole, not
+which hole it goes to.
