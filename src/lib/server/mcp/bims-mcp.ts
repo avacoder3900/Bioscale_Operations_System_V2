@@ -132,7 +132,10 @@ const CAPTURE_ITEM_SHAPE = {
 	description: z.string().optional(),
 	origin: z.enum(['planned', 'discovered']).optional().describe("'discovered' when it emerged while working another item."),
 	spawnedFrom: z.string().optional().describe('Task id that was being worked when this was discovered.'),
-	itemType: z.enum(['deliverable', 'spike', 'chore']).optional(),
+	itemType: z
+		.enum(['deliverable', 'spike', 'chore', 'milestone'])
+		.optional()
+		.describe("'milestone' (KB2-27) = a dated anchor node (A4M, recipe-lock): not work, duration 0 in the roadmap scheduler; other tasks gate on it via blocked_by and its dueDate is the hard date the backward pass anchors to."),
 	spike: z
 		.object({
 			question: z.string().describe('The question the investigation answers. If it cannot be written, the uncertainty is not shaped enough to fund.'),
@@ -141,7 +144,12 @@ const CAPTURE_ITEM_SHAPE = {
 		.optional()
 		.describe('Required when itemType is spike.'),
 	assignedTo: z.string().optional().describe('User _id to assign.'),
-	dueDate: z.string().optional().describe('ISO date string.'),
+	dueDate: z.string().optional().describe('ISO date string. For itemType milestone this is the HARD anchor date.'),
+	estimateDays: z
+		.number()
+		.positive()
+		.optional()
+		.describe('KB2-27: workshopped estimate in working days. Rung 1 of the scheduler ladder (explicit → sizeClass mapping → historical median); checked against actuals later. Set during plan imports.'),
 	tags: z.array(z.string()).optional().describe('Trimmed and case-folded onto the existing vocabulary server-side.'),
 	parentTaskId: z.string().optional().describe('Create as a subtask of this task.'),
 	sourceRef: z.string().optional().describe('External reference (e.g. pr:123, branch:name, or a ticket id).'),
@@ -211,7 +219,7 @@ async function callAgentApi(
 export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 	// Version bump signals clients (claude.ai caches connector tool lists) that
 	// the toolset changed — bump on every tool add/remove/rename.
-	const server = new McpServer({ name: 'bims-operations', version: '3.1.1' });
+	const server = new McpServer({ name: 'bims-operations', version: '3.2.0' });
 
 	// ---------------------------------------------------------------- meta
 
@@ -877,8 +885,14 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 				waitingUntil: z.string().optional().describe('Required when moving to waiting: ISO follow-up date.'),
 				assignedTo: z.string().optional().describe('User _id to reassign to.'),
 				dueDate: z.string().optional().describe('ISO date string.'),
+				estimateDays: z
+					.number()
+					.positive()
+					.nullable()
+					.optional()
+					.describe('KB2-27: workshopped estimate in working days; null clears it back to the ladder fallback.'),
 				tags: z.array(z.string()).optional(),
-				sourceRef: z.string().optional().describe('External link — software items: pr:<number>, branch:<name>, commit:<sha>.'),
+				sourceRef: z.string().optional().describe("External link — software items: pr:<number>, branch:<name>, commit:<sha>; plan imports: plan:<planId> (from kanban_file_plan)."),
 				dor: DOR_FIELD,
 				links: LINKS_FIELD,
 				blockedBy: BLOCKED_BY_FIELD,
@@ -1003,6 +1017,11 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 				sizeClass: z.enum(['short', 'medium', 'long']).describe('Per the written definitions in policy (kanban_get_policy shows them).'),
 				classOfService: z.enum(['standard', 'fixed_date', 'chore', 'expedite']),
 				dueDate: z.string().optional().describe('ISO date — required for fixed_date.'),
+				estimateDays: z
+					.number()
+					.positive()
+					.optional()
+					.describe('KB2-27: workshopped estimate in working days (finer-grained than sizeClass; used by the roadmap scheduler first).'),
 				dor: z
 					.object({
 						deliverable: z.string().optional().describe("State what will exist or be true when this is done — and how you'd verify it. Outcome, not steps."),
@@ -1015,6 +1034,74 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 			machineWrite('kanban_process', (args as any).actor, (actor) =>
 				callAgentApi(fetcher, '/api/agent/operations/kanban/process', { method: 'POST', body: { ...args, actor } })
 			)
+	);
+
+	// ------------------------------------------- kanban: immortalized plans (KB2-27)
+
+	server.registerTool(
+		'kanban_roadmap',
+		{ annotations: READ_ONLY,
+			description:
+				'The derived roadmap (KB2-28): for every milestone task (itemType milestone) with a dueDate, a CPM ' +
+				'backward/forward pass over the blocked_by graph — latest-start/slack per task, the critical chain, a ' +
+				'capacity clamp from measured throughput, projected finish vs the anchor date (bufferDays; negative = ' +
+				'INFEASIBLE — raise it with the human: cut scope, add capacity, or move the date), chain % done, and the ' +
+				'must-start list (unblocked tasks whose latest start is now/past — the "work on this next" answer; slack ' +
+				'ascending, Tier 1 rank tiebreak). Also: estimate-vs-actual calibration (medianActualOverEstimate — apply it ' +
+				'when workshopping new estimates) and unscheduled milestones (missing dueDate). All dates are OUTPUTS ' +
+				'recomputed fresh per call; to change them, change reality: links, estimateDays, scope. ' +
+				'estimateSource per task says which ladder rung produced its duration (explicit / sizeClass / median).',
+			inputSchema: z.object({})
+		},
+		async () => callAgentApi(fetcher, '/api/agent/operations/kanban/roadmap')
+	);
+
+	server.registerTool(
+		'kanban_file_plan',
+		{ annotations: WRITE_TOOL,
+			description:
+				'File a FINALIZED strategy document (e.g. a workshopped roadmap) as an immortal PlanningDocument: full markdown ' +
+				'verbatim, timestamped, versioned. File the plan FIRST, then capture its tasks with sourceRef "plan:<id>" (the ' +
+				'result echoes the exact sourceRef) so every task can answer "where did this come from?". Content is never ' +
+				'edited after filing — file a new version with `supersedes` to chain v4 → v5 (the old plan flips to superseded). ' +
+				'Only file documents the human has explicitly finalized in the workshop — never drafts.',
+			inputSchema: z.object({
+				title: z.string().describe('e.g. "Fall 2026 Roadmap — v4".'),
+				content: z.string().describe('The FULL markdown, verbatim — this is the immortal record.'),
+				version: z.string().optional().describe('Free version string, e.g. "v4".'),
+				context: z.string().optional().describe('One paragraph: what question the workshop answered.'),
+				supersedes: z.string().optional().describe('Plan _id this replaces (flips it to superseded).'),
+				actor: ACTOR_FIELD
+			})
+		},
+		async (args) =>
+			machineWrite('kanban_file_plan', (args as any).actor, (actor) =>
+				callAgentApi(fetcher, '/api/agent/operations/kanban/plans', { method: 'POST', body: { ...args, actor } })
+			)
+	);
+
+	server.registerTool(
+		'kanban_list_plans',
+		{ annotations: READ_ONLY,
+			description:
+				'List immortalized PlanningDocuments (KB2-27), newest first, with spawned-task progress (done/total via ' +
+				'sourceRef "plan:<id>"). Use kanban_get_plan for the full markdown + task index.',
+			inputSchema: z.object({})
+		},
+		async () => callAgentApi(fetcher, '/api/agent/operations/kanban/plans')
+	);
+
+	server.registerTool(
+		'kanban_get_plan',
+		{ annotations: READ_ONLY,
+			description:
+				'One PlanningDocument: the full markdown verbatim, plus a live index of every task it spawned (with statuses) ' +
+				'and the supersession chain. The plan is a lens on the board — use it to answer "of the things this plan ' +
+				'called for, what is done / in flight / declined?".',
+			inputSchema: z.object({ planId: z.string() })
+		},
+		async ({ planId }) =>
+			callAgentApi(fetcher, `/api/agent/operations/kanban/plans/${encodeURIComponent(planId)}`)
 	);
 
 	server.registerTool(

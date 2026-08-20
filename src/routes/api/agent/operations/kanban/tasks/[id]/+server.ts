@@ -19,7 +19,8 @@ export const PATCH: RequestHandler = async ({ request, params }) => {
 	const {
 		title, description, status, sizeClass, assignedTo, dueDate, tags,
 		appendContext, actor, reason, waitingOn, waitingUntil,
-		sourceRef, dor, links, blockedBy, removeLinkId, parentTaskId
+		sourceRef, dor, links, blockedBy, removeLinkId, parentTaskId,
+		estimateDays
 	} = body;
 
 	const actorName = typeof actor === 'string' && actor.trim() ? actor.trim() : 'agent';
@@ -46,6 +47,15 @@ export const PATCH: RequestHandler = async ({ request, params }) => {
 		oldData.sizeClass = task.sizeClass;
 		$set.sizeClass = sizeClass;
 		changedFields.push('sizeClass');
+	}
+	// KB2-27: workshopped estimate in working days; null clears it.
+	if (estimateDays !== undefined) {
+		if (estimateDays !== null && !(typeof estimateDays === 'number' && estimateDays > 0)) {
+			throw error(400, 'estimateDays must be a positive number of working days (or null to clear)');
+		}
+		oldData.estimateDays = task.estimateDays;
+		$set.estimateDays = estimateDays;
+		changedFields.push('estimateDays');
 	}
 	if (dueDate !== undefined) {
 		oldData.dueDate = task.dueDate;
