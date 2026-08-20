@@ -9251,3 +9251,16 @@ this machine, so the Vercel branch build is the gate.
 NOT YET DONE — no height has actually been written. applyDeckDimensionEdit has not run
 against Mongo. The first real write is a production geometry change and wants /px-off,
 a deck_versions publish, and a protocol re-upload before any fill runs.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-git-feat-de-d0b8d8-brevitest.vercel.app
+  (immutable: https://bioscale-operations-system-mongodb-fjxv1639w-brevitest.vercel.app)
+Source: branch feat/deck-calibration-hardening @ commit e769508ff
+Retrieve this exact code: git checkout feat/deck-calibration-hardening at commit e769508ff
+What this deployment is for: review the deck Z-height work in the Deck Calibration
+Studio — the Height z field in the header (writes dimensions.zDimension via the
+setDeckHeight action), the arc-clearance readout beside it, and the move rejection
+that replaces the silent arc clamp. Vercel build ● Ready in 2m, deployment
+dpl_F6fuv3RhHfYLsWo9ApstVqYRTBm3; alias verified serving (302 -> /login).
+No height has been written to any deck yet — the UI is deployed, the geometry is not
+changed. First real write wants /px-off, a deck_versions publish and a protocol
+re-upload.
