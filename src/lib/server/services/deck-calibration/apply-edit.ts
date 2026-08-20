@@ -167,6 +167,183 @@ export async function applyDeckEdit(input: ApplyDeckEditInput): Promise<ApplyDec
 	return { before, after, fileSynced };
 }
 
+// ── Deck HEIGHT edits ────────────────────────────────────────────────────────
+//
+// `dimensions.zDimension` is the one geometry field nothing could write. That was
+// fine while every deck was 12.7mm, and blocking as soon as one isn't: the well
+// guard above derives its Z ceiling from zDimension, and — more importantly — the
+// OT-2 plans its own default arcs and collision checks from zDimension. Declaring
+// a 12.7mm block while holes sit at 60mm means the robot believes it may travel
+// low, and it will drag a tip through the raised structure.
+//
+// Same append-with-history contract as a well edit: Mongo, markUnpublished, a
+// DeckCalibrationEdit row, an AuditLog row, best-effort local-file mirror.
+
+/**
+ * Reserved `wellName` for a dimensions edit. `DeckCalibrationEdit.wellName` is
+ * required, and a height change belongs in the same history stream as the hole
+ * changes — reconstructing "why did this deck move" needs both in one timeline.
+ * `before`/`after` carry the full dimensions triple rather than a well's coords.
+ */
+export const DIMENSIONS_EDIT_WELL = '__dimensions__';
+
+// Mirrors ARC_CEILING_MM in deck-calibration/+page.svelte: the OT-2 left p300
+// rejects gantry Z past ~170mm and a Biotix tip adds 52.0mm, so the critical
+// point must stay under ~115mm. A deck taller than the arc that is supposed to
+// clear it is not a deck the robot can fly over — reject it here rather than let
+// the clamp swallow it silently.
+const ARC_CEILING_MM = 115;
+const MIN_ARC_CLEARANCE_MM = 10;
+
+export interface ApplyDeckDimensionEditInput {
+	deckLoadName: string;
+	/** Absolute new zDimension in mm. x/y are optional and rarely change. */
+	zDimension: number;
+	xDimension?: number;
+	yDimension?: number;
+	user: { _id?: string; username?: string };
+	robotId?: string | null;
+	deckEquipmentId?: string | null;
+}
+
+export interface ApplyDeckDimensionEditResult {
+	before: Vec3;
+	after: Vec3;
+	fileSynced: boolean;
+	/** New well-edit ceiling implied by the height, for the caller to surface. */
+	editCeiling: number;
+	/** New safe-arc height implied by the height. */
+	safeArcZ: number;
+}
+
+export async function applyDeckDimensionEdit(
+	input: ApplyDeckDimensionEditInput
+): Promise<ApplyDeckDimensionEditResult> {
+	await connectDB();
+	const { deckLoadName } = input;
+
+	const { doc: def } = await resolveLabwareDefinition(deckLoadName, { strict: true });
+	const dims = def.definition?.dimensions ?? {};
+
+	const before: Vec3 = { x: n(dims.xDimension), y: n(dims.yDimension), z: n(dims.zDimension) };
+	const after: Vec3 = {
+		x: input.xDimension === undefined ? before.x : n(input.xDimension),
+		y: input.yDimension === undefined ? before.y : n(input.yDimension),
+		z: n(input.zDimension)
+	};
+
+	// 1. A dimension is an extent, not a coordinate — zero or negative is nonsense.
+	if (!(after.z > 0)) {
+		throw new Error(`Rejected: zDimension must be greater than 0 (got ${after.z}).`);
+	}
+
+	// 2. The deck must still contain its own holes. Lowering a deck below a hole
+	//    orphans that hole outside the labware body, which makes the robot reject
+	//    the WHOLE definition at registration — the same failure mode the well
+	//    guard exists to prevent, arrived at from the other direction.
+	const wells: [string, any][] = Object.entries(def.definition?.wells ?? {});
+	const orphaned = wells
+		.map(([name, w]) => ({ name, top: n(w.z) + n(w.depth) }))
+		.filter((w) => w.top > after.z + 1e-6);
+	if (orphaned.length) {
+		const shown = orphaned
+			.slice(0, 5)
+			.map((w) => `${w.name} (${w.top.toFixed(2)}mm)`)
+			.join(', ');
+		throw new Error(
+			`Rejected: zDimension ${after.z.toFixed(2)}mm is below ${orphaned.length} hole top(s) — ` +
+				`${shown}${orphaned.length > 5 ? `, +${orphaned.length - 5} more` : ''}. ` +
+				`Every well must satisfy z + depth <= zDimension. Lower the holes first, or raise the height.`
+		);
+	}
+
+	// 3. The tip has to be able to clear it. Reject with the deficit named rather
+	//    than accept a deck the safe arc cannot fly over.
+	const maxHeight = ARC_CEILING_MM - MIN_ARC_CLEARANCE_MM;
+	if (after.z > maxHeight) {
+		throw new Error(
+			`Rejected: zDimension ${after.z.toFixed(2)}mm exceeds the flyable maximum ${maxHeight}mm ` +
+				`(arc ceiling ${ARC_CEILING_MM}mm − ${MIN_ARC_CLEARANCE_MM}mm minimum clearance) ` +
+				`by ${(after.z - maxHeight).toFixed(2)}mm. The pipette could not travel over this deck.`
+		);
+	}
+
+	// 1. Mongo source of truth.
+	await LabwareDefinition.updateOne(
+		{ _id: def._id },
+		{
+			$set: {
+				'definition.dimensions.xDimension': after.x,
+				'definition.dimensions.yDimension': after.y,
+				'definition.dimensions.zDimension': after.z
+			}
+		}
+	);
+	// definitionHash covers the whole definition, dimensions included, so the
+	// version machinery already sees this as a geometry change.
+	await markUnpublished(deckLoadName);
+
+	// 2. Append-only history — same stream as the hole edits.
+	await DeckCalibrationEdit.create({
+		_id: generateId(),
+		deckLoadName,
+		deckEquipmentId: input.deckEquipmentId ?? null,
+		wellName: DIMENSIONS_EDIT_WELL,
+		delta: { x: after.x - before.x, y: after.y - before.y, z: after.z - before.z },
+		before,
+		after,
+		robotId: input.robotId ?? null,
+		createdBy: input.user?.username,
+		createdAt: new Date()
+	});
+
+	await AuditLog.create({
+		_id: generateId(),
+		tableName: 'labware_definitions',
+		recordId: deckLoadName,
+		action: 'deck_dimension_edit',
+		newData: { before, after, robotId: input.robotId ?? null },
+		changedAt: new Date(),
+		changedBy: input.user?.username
+	});
+
+	// 3. Best-effort local-file mirror (lab Mac). Mongo already committed.
+	let fileSynced = false;
+	try {
+		if (fs.existsSync(LABWARE_DIR)) {
+			for (const f of fs.readdirSync(LABWARE_DIR).filter((x) => x.endsWith('.json'))) {
+				const fp = path.join(LABWARE_DIR, f);
+				try {
+					const json = JSON.parse(fs.readFileSync(fp, 'utf8'));
+					if (json?.parameters?.loadName === deckLoadName) {
+						json.dimensions = {
+							...(json.dimensions ?? {}),
+							xDimension: after.x,
+							yDimension: after.y,
+							zDimension: after.z
+						};
+						fs.writeFileSync(fp, JSON.stringify(json, null, 2));
+						fileSynced = true;
+						break;
+					}
+				} catch {
+					/* skip unparseable file */
+				}
+			}
+		}
+	} catch {
+		/* best-effort — Mongo is source of truth */
+	}
+
+	return {
+		before,
+		after,
+		fileSynced,
+		editCeiling: after.z + Z_UPPER_MARGIN_MM,
+		safeArcZ: Math.min(Math.round(after.z + 80), ARC_CEILING_MM)
+	};
+}
+
 export interface ApplyDeckEditBatchInput {
 	deckLoadName: string;
 	wellNames: string[];
