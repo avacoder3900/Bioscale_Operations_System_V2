@@ -9221,3 +9221,12 @@ Roadmap + Plans tabs.
 npm run check: 11 errors / 434 warnings — exact baseline.
 Next: workshop roadmap-v4 in the Claude app → kanban_file_plan → capture milestones
 (A4M Dec 11, recipe-lock ~Sep 11) + chains with estimates → the roadmap page lights up.
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ merge f2aa6f65 (feature commits ee6c9ad4 + 097c22f5)
+Retrieve this exact code: git checkout master at commit f2aa6f65
+What this deployment is for: KB2-27/28/29 roadmap feature (milestones, estimateDays,
+  PlanningDocuments, computeRoadmap scheduler, /kanban/roadmap + /kanban/plans, MCP
+  v3.2.0 with kanban_roadmap + plan tools) + Tier 1 rank jump. Production MCP now has
+  the tools for the roadmap-v4 import workshop. NOTE: claude.ai caches connector tool
+  lists — if new tools don't appear in the Claude app, reconnect the BIMS connector.
