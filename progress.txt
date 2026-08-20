@@ -3817,3 +3817,68 @@ Left uncommitted on purpose: protocols/Wax_Filling_GEN7_Cartridge.py has a
 separate legacy-path X/Y zero restoration (X_ZERO -25.955 / Y_ZERO -11.253,
 fixing a +25.955mm bias on the non-bims_native path). Unrelated to this work,
 still undefended in the working tree.
+
+================================================================================
+2026-08-20 — One-click "Calibrate tip" in the Deck Calibration Studio
+================================================================================
+
+Branch: feat/tip-calibrator-teach
+Commit: eecaba83a773fc86bef6ad43f1468de22be65c6b
+Preview: https://bioscale-operations-system-mongodb-hlbxmo3r4.vercel.app
+Deployment: 6010775501 (Preview, success)
+Retrieve this exact code: git checkout feat/tip-calibrator-teach at commit eecaba83a773fc86bef6ad43f1468de22be65c6b
+What this deployment is for: bench-test the one-click tip calibration flow on a
+robot with the calibrator fixture wired.
+
+Goal: quality-of-life. Running a tip calibration was a strict four-click ritual
+— open a maintenance run, pick the tip type, "Pick up tip", "Go to calibrator",
+then "Calibrate tip". Steps 3 and 4 are mandatory and never vary, but the
+Calibrate button was hard-disabled until they were done (!hasTip) and its label
+only nagged: "Calibrate tip — pick up a tip first". Worse, forgetting the travel
+failed deep in the robot rather than in the UI: ot2-bridge.py
+execute_calibrate_tip in ATTACHED mode probes from the pipette's CURRENT
+position and does not travel to the fixture itself, so a skipped "Go to
+calibrator" ended as "limit switch not reached within 5mm".
+
+Now "Calibrate tip" runs the whole sequence in one click: pick up a tip from the
+tiprack that matches WHICH CALIBRATION IS BEING DONE (tipProfile — wax → p20
+cosmasanddamian_96_tiprack_20ul, reagent → p300 Biotix 200uL, slot 11 / A1),
+travel to the calibrator approach point, then probe.
+
+Files: src/routes/manufacturing/cart-mfg/deck-calibration/+page.svelte only.
+No server, endpoint, or ot2-bridge.py changes — every step reuses an endpoint
+the page already called.
+
+  - pickUpTipAction / goToCalibrator each owned their own busy/msg handling, so
+    they could not be called from inside another sequence. Split the action out
+    of the handler into throwing doPickUpTip() / doGoToCalibrator(z) helpers.
+    The two standalone buttons are unchanged behaviourally and stay in the UI as
+    manual escape hatches.
+  - atCalibratorNow(): within CAL_AT_TOLERANCE_MM (3mm) of calX/calY the travel
+    is SKIPPED. A tip the operator jogged onto the fixture to TEACH a point is
+    the point being taught — re-driving to the stored field values would throw
+    that jog away silently, and the daemon probes from current position anyway.
+    Forced off after an auto pick-up (pickedUpNow): refreshPosition swallows its
+    own errors, so a stale liveX/liveY must never be allowed to skip a move.
+  - busy is now held for the WHOLE sequence, not just the probe — this button
+    commands gantry motion now, so the jog pad and the other motion buttons
+    (all already gated on busy) lock out for its duration.
+  - Button: dropped the !hasTip gate, KEPT the !tipProfile gate, label states
+    what the click will do, and a hint line under it names the tiprack/point so
+    none of the auto-motion is hidden.
+
+Invariants deliberately preserved: tipProfile is still never inferred from the
+mount (the pipettes are not fixed to mounts on this fleet — that is the historic
+6.309mm probe-depth error), and Approach Z (calZ, travel) is still never the
+Probe Z (touch-off depth, owned by the daemon's protected routine).
+
+npm run check: 11 errors / 434 warnings — identical pre-existing baseline, zero
+in the touched file.
+
+NOT YET BENCH-VERIFIED. Needs a robot with the calibrator fixture wired:
+  - p20/wax with no tip → expect p20 rack A1 slot 11, arc to (calX, calY, calZ),
+    probe returns adjust{x,y}, tip stays on.
+  - p300/reagent → expect the Biotix rack and the zCalReagent depth.
+  - jog ~1mm off the fixture and click again → expect NO re-travel; the hint and
+    the status line should both say it is probing from the jogged position.
+  - no tip type selected → button disabled, amber hint still shown.
