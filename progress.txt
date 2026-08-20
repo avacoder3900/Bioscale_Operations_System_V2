@@ -9174,3 +9174,80 @@ REMAINING
   3. Decks 002/003 remain 24.5mm and 7.4mm out on the wax-to-reagent invariant.
   4. No version panel in the calibration tab — deck_versions and run provenance are
      readable only from the database.
+
+================================================================================
+2026-08-20 — feat/deck-calibration-hardening — deck Z-height: guards bounded by the
+             machine, and dimensions.zDimension finally writable
+================================================================================
+Raising a deck in Z was blocked by four separate things, and three of them failed
+silently. Scoped in docs/DECK-Z-HEIGHT-APPROACH.md; this is the implementation.
+
+THE CORE GAP — dimensions.zDimension had no write path
+  Nothing in src/, scripts/ or protocols/ wrote definition.dimensions, so every deck
+  could only ever declare 12.7mm. That is not just this app's edit ceiling: the OT-2
+  plans its OWN default arcs and collision checks from zDimension, so a 12.7 declared
+  under a physically raised deck tells the robot it may travel low — and it will drag
+  a tip through the structure.
+
+  applyDeckDimensionEdit() writes it under the same append-with-history contract as a
+  well edit (Mongo, markUnpublished, DeckCalibrationEdit under the reserved wellName
+  __dimensions__, AuditLog action deck_dimension_edit, best-effort lab-file mirror).
+  Three rejections, never a clamp: a dimension must be positive; the deck must still
+  contain its own holes (z + depth <= zDimension, checked against every well and
+  naming the offenders); and the height must leave >= 10mm under the 115mm arc
+  ceiling. Wired to the Studio via the setDeckHeight action and a height field in the
+  deck-calibration header, which reports the resulting edit ceiling and safe arc back.
+
+GUARD 1 — the well guard was deck-relative, so it grew into the ceiling
+  zMax = zDimension + 40 rises with the deck. At zDimension 105 it would have accepted
+  a well declared at 145mm while the arc caps at 115 — certifying a hole ABOVE the arc
+  meant to clear it. Now min(zDimension + 40, ARC_CEILING - MIN_ARC_CLEARANCE) = 105
+  hard. The rejection also names which ceiling bound, because the fix differs: lower
+  the well, or lower the whole deck.
+
+GUARD 2 — the safe arc clamped and kept flying
+  safeArcZ = min(round(zDim + 80), 115). Past zDimension ~35 the arc stops rising while
+  the holes keep rising; past ~105 the "safe" arc passes BELOW the deck top. The cap
+  stays (the gantry is real) but every move now goes through assertArcFlyable(), which
+  throws with the deficit in mm once under 10mm of clearance remains. Verified every
+  safeArcZ consumer is inside moveToWellSafe or goToCalibrator — no unguarded path.
+  A live "arc 93mm · clears deck by 80.3mm" readout in the header turns red when moves
+  are blocked. At DECK001's 12.7 nothing changes.
+
+GUARD 3 — the freshness gate could not see a height change
+  ensureFreshRunProtocol diffs bundled geometry against Mongo and auto-re-uploads, but
+  it compared well x/y/z ONLY. A pure zDimension edit moves no well, so a production
+  fill would have started on a bundle still declaring the old block height, with no
+  warning. bundledDefsMatchMongo now compares dimensions too, skipping any dimension
+  Mongo does not declare — otherwise a def without dimensions reads as permanently
+  stale and re-uploads forever.
+
+TOOLING
+  scripts/deck-z-preflight.ts — read-only. For a def + tip it prints the declared
+  height, max(well.z + depth), both ceilings, the implied safe arc, the max flyable
+  structure height and every violation. Mirrors of the live constants are kept in sync
+  with this commit, so the script agrees with the code rather than describing the old
+  bounds. Verified against docs/deck001-live-labware-def-2026-08-19.json:
+    zDimension 12.70 · max well top 12.55 · safeArcZ 93 · clearance 80.30
+    well zMax = min(zDim+40, 105) -> 52.70  (deck bound binds)
+    deck height max (dimension edit) 105.00
+    --target-height 110 -> "dimension edit would REJECT > 105mm flyable max"
+    --target-height  40 -> accept, 75.00mm arc clearance
+  The 170mm gantry limit the script derives from is still UNVERIFIED — measure it by
+  homing before designing near the ceiling. The 115mm code cap binds first today.
+
+FILES
+  src/lib/server/services/deck-calibration/apply-edit.ts     (guard + dimension edit)
+  src/lib/server/opentrons/protocol-freshness.ts             (dimensions in the diff)
+  src/routes/manufacturing/cart-mfg/deck-calibration/+page.server.ts  (setDeckHeight)
+  src/routes/manufacturing/cart-mfg/deck-calibration/+page.svelte     (guard + UI)
+  scripts/deck-z-preflight.ts                                (new, read-only)
+
+npm run check — 83 errors / 434 warnings, IDENTICAL to the pre-change baseline on this
+branch; zero in any touched file. (The baseline is MCP module resolution, robot-arm
+$types and the assembly page — untouched here.) No local build: npm run build OOMs on
+this machine, so the Vercel branch build is the gate.
+
+NOT YET DONE — no height has actually been written. applyDeckDimensionEdit has not run
+against Mongo. The first real write is a production geometry change and wants /px-off,
+a deck_versions publish, and a protocol re-upload before any fill runs.
