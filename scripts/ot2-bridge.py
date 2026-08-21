@@ -1447,7 +1447,7 @@ def _probe_axis(run_id: str, pipette_id: str, ser: "serial.Serial",
     return shift, reached
 
 
-# ── Live limit-switch watch (calibrator_watch) ────────────────────────────────
+# ── Live limit-switch watch (calibrator_watch) ─────────────────────────────
 # The operator hand-jogs the tip onto the calibrator while this listens; every
 # switch closure is reported to BIMS with its timestamp and the pipette position
 # at that moment. That is what LOCATES the fixture.
@@ -1458,22 +1458,46 @@ def _probe_axis(run_id: str, pipette_id: str, ser: "serial.Serial",
 # AT ALL — the operator drives — and reports individual trips instead of a net
 # number, because "where did the switch close" is the measurement wanted here.
 #
-# ATTACHED-ONLY, and that is a safety property rather than a convenience: it runs
-# inside the Studio's open maintenance run and only ever READS position. A watch
-# that opened its own run could move an arm the operator has their hands on.
+# RUNS ON ITS OWN THREAD, and that is load-bearing rather than an optimisation.
+# command_loop is a SINGLE worker: it executes one command and only polls for the
+# next after that one returns. A watch listens for minutes, so running it inline
+# froze every other command for the whole watch — including the http relay that
+# jogging goes through. The watch exists to observe jogging, so inline execution
+# blocked the very motion it was built to watch, and the robot looked dead to the
+# Studio (heartbeat fine, commands ignored). Spawning here and returning
+# immediately keeps the command loop free; the worker posts the result when it
+# finishes.
 WATCH_POLL_S = 0.02        # serial read timeout while listening for a trip
 WATCH_HEARTBEAT_S = 3.0    # how often to ask BIMS "am I still wanted?"
 WATCH_REARM_S = 0.35       # settle time before re-arming a switch after a trip
 WATCH_MAX_DURATION_S = 1800
 
+# HTTP statuses that mean "this will NEVER succeed", as opposed to a blip.
+# 404 = the route is not deployed on the BIMS this robot posts to (the daemon's
+# BIMS_BASE_URL points at production; a branch preview does not have it), 401/403
+# = the agent key is wrong. Retrying any of them is pointless, and because the
+# watch used to treat every error as transient it re-posted every 3s for the full
+# ten minutes while holding the command loop — the exact failure that took B14
+# out. These stand the watch down instead.
+WATCH_FATAL_HTTP = (401, 403, 404)
+
+# One watch at a time per daemon: two would contend for the calibrator's serial
+# port and each would see a fraction of the trips, with nothing to reveal it.
+_watch_lock = threading.Lock()
+_watch_thread = None
+_watch_stop = None
+# Set by main() so a daemon shutdown also ends an in-flight watch rather than
+# leaving the port held by a thread nobody is waiting on.
+_SHUTDOWN = threading.Event()
+
 
 def _post_switch_event(command_id: str, payload: dict) -> bool:
-    """POST one trip (or a heartbeat) — returns True when BIMS wants us to STOP.
+    """POST one trip (or a heartbeat) — returns True when the watch must STOP.
 
-    Fails SAFE in the direction of continuing: a network blip returns False so
-    one dropped request cannot silently end a watch the operator is mid-jog on.
-    Only an explicit cancelRequested (or a terminal status, which the endpoint
-    reports as a 409) stops it.
+    Fails safe toward CONTINUING for anything that might be transient (a timeout,
+    a 500, a dropped connection), so one blip cannot end a watch the operator is
+    mid-jog on. But a WATCH_FATAL_HTTP status is not a blip — that route will
+    never answer — so it stops immediately.
     """
     url = "{}/api/agent/ot2/commands/{}/switch-event".format(BIMS_BASE_URL, command_id)
     try:
@@ -1485,6 +1509,11 @@ def _post_switch_event(command_id: str, payload: dict) -> bool:
         if r.status_code == 409:
             log.info("calibrator_watch: BIMS says the watch is over (%s)", body.get("status"))
             return True
+        if r.status_code in WATCH_FATAL_HTTP:
+            log.error("calibrator_watch: switch-event got %s from %s — the route is not "
+                      "deployed on this BIMS (or the agent key is wrong). Standing down "
+                      "instead of retrying.", r.status_code, BIMS_BASE_URL)
+            return True
         if r.status_code >= 400:
             log.warning("switch-event POST %s: %s", r.status_code, r.text[:200])
             return False
@@ -1494,12 +1523,29 @@ def _post_switch_event(command_id: str, payload: dict) -> bool:
         return False
 
 
+def _stop_active_watch(reason: str) -> None:
+    """Ask any running watch to finish, and wait briefly for it to release the port."""
+    global _watch_thread, _watch_stop
+    t, ev = _watch_thread, _watch_stop
+    if t is not None and t.is_alive():
+        log.info("calibrator_watch: stopping the running watch (%s)", reason)
+        if ev is not None:
+            ev.set()
+        t.join(timeout=5)
+    _watch_thread, _watch_stop = None, None
+
+
 def execute_calibrator_watch(command_id: str, payload: dict) -> None:
-    """Arm the calibrator's limit switches and report each trip until stopped.
+    """Validate, then hand the watch to its own thread and RETURN.
+
+    Returning promptly is the whole point — see the module note above. Only the
+    cheap argument checks happen here, so a malformed command still fails fast
+    and visibly rather than being swallowed by a background thread.
 
     payload:
       runId / pipetteId  — the Studio's OPEN maintenance run (both required)
       durationMs         — how long to stay armed
+      firstAxis          — 'x' (default) or 'y'
     """
     run_id = (payload or {}).get("runId")
     pipette_id = (payload or {}).get("pipetteId")
@@ -1509,6 +1555,23 @@ def execute_calibrator_watch(command_id: str, payload: dict) -> None:
                                            "(the watch attaches to the studio's run)"})
         return
 
+    with _watch_lock:
+        _stop_active_watch("superseded by {}".format(command_id))
+        ev = threading.Event()
+        t = threading.Thread(
+            target=_calibrator_watch_worker,
+            args=(command_id, payload, run_id, pipette_id, ev),
+            name="calwatch", daemon=True)
+        globals()["_watch_stop"] = ev
+        globals()["_watch_thread"] = t
+        t.start()
+    log.info("calibrator_watch %s: started on its own thread; command loop stays free",
+             command_id)
+
+
+def _calibrator_watch_worker(command_id: str, payload: dict, run_id: str,
+                             pipette_id: str, cancel: "threading.Event") -> None:
+    """The listening loop. Runs off the command loop; posts its own result."""
     try:
         duration_s = min(float((payload or {}).get("durationMs") or 600000) / 1000.0,
                          WATCH_MAX_DURATION_S)
@@ -1560,6 +1623,10 @@ def execute_calibrator_watch(command_id: str, payload: dict) -> None:
 
         ser.timeout = WATCH_POLL_S
         while time.time() < deadline:
+            if cancel.is_set() or _SHUTDOWN.is_set():
+                stop_reason = "stopped locally"
+                break
+
             got = b""
             try:
                 got = ser.read(1)
@@ -1589,13 +1656,12 @@ def execute_calibrator_watch(command_id: str, payload: dict) -> None:
 
                 trips += 1
                 log.info("calibrator_watch %s: %s switch tripped at %s", command_id, axis, pos)
-                cancel = _post_switch_event(command_id, {
+                if _post_switch_event(command_id, {
                     "axis": axis,
                     "trippedAt": tripped_at,
                     "position": pos,
                     "bend": bend,
-                })
-                if cancel:
+                }):
                     stop_reason = "stopped from BIMS"
                     break
 
@@ -1657,6 +1723,7 @@ def execute_calibrator_watch(command_id: str, payload: dict) -> None:
         "armedAtEnd": armed.decode() if armed else None,
         "firstAxis": first_axis.decode(),
     }})
+
 
 
 def execute_calibrate_tip(command_id: str, payload: dict) -> None:
@@ -1965,6 +2032,9 @@ def main() -> None:
     def _shutdown(signum, _frame):
         log.info("Signal %s — shutting down", signum)
         stop.set()
+        # Also ends an in-flight calibrator watch: it runs off the command loop,
+        # so nothing else would tell it to release the calibrator's serial port.
+        _SHUTDOWN.set()
 
     signal.signal(signal.SIGTERM, _shutdown)
     signal.signal(signal.SIGINT, _shutdown)
@@ -1984,6 +2054,8 @@ def main() -> None:
         stop.set()
 
     log.info("Shutting down")
+    _SHUTDOWN.set()
+    _stop_active_watch("daemon shutting down")
     port.close()
     for t in threads:
         t.join(timeout=2)
