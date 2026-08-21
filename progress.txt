@@ -9953,3 +9953,22 @@ taught frame:
   3. saveDeckFrame's automatic re-derive moves a robot's calibrator. Confirm on
      a robot with its OWN fixture that the x/y move is what you expect, and on
      a robot still on 'global' that nothing is forked off silently.
+
+Deployment: robot (lab hardware, not Vercel) — B14 / muddy-water.local
+Source: branch feat/deck-frame-calibrator-watch @ commit 6bf27d6e4 (the feature
+  commit; the daemon blob is byte-identical at d6ebcab29, which only adds a log
+  entry, so either checkout yields the deployed file)
+Retrieve this exact code: git checkout feat/deck-frame-calibrator-watch at commit 6bf27d6e4
+  (or: git log feat/deck-frame-calibrator-watch --oneline to find it if the branch has since moved on)
+What this deployment is for: puts execute_calibrator_watch on B14 so the live
+  limit-switch watch has a daemon to talk to. Deployed by scp to
+  /data/ot2-bridge/ot2-bridge.py + systemctl restart, NOT via Vercel — this
+  file runs on the OT-2's internal Pi and is outbound-only.
+  Pre-deploy the robot's file was md5 891fe170ef43e77fc204a3befb44cbbe, byte-
+  identical to the merge base, so nothing robot-side was lost; backed up to
+  ot2-bridge.py.bak-20260821. Post-deploy md5 2320ec3fe68f1c5fe08157847cb68a2b
+  matches the repo. Restarted clean: PID 16003, Python 3.10.8, serial port
+  opened, no errors.
+  INERT UNTIL THE BIMS SIDE SHIPS — nothing can create a calibrator_watch
+  command until the new API routes are live, so B14 simply keeps doing its
+  existing job. R04 and B07 are untouched and still on the old daemon.
