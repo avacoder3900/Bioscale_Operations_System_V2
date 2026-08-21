@@ -1042,6 +1042,13 @@
 	async function calibrateTip() {
 		if (!runId || !pipetteId) { errMsg = 'Open a run first'; return; }
 		if (!tipProfile) { errMsg = 'Pick the tip type first (p20/wax or p300/reagent) — the probe depth depends on it and is never guessed'; return; }
+		// Same refusal the jog path makes. This sequence travels to the fixture with
+		// a tip on, so an arc that cannot clear the deck must stop it here rather
+		// than be silently lowered into the deck edge.
+		if (arcTooHigh) {
+			errMsg = `This deck needs a ${safeArcZ}mm travel height, above the ${ARC_CEILING_MM}mm limit — NOT calibrating.`;
+			return;
+		}
 		// Try-before-commit means the probe runs at whatever is in the fields RIGHT
 		// NOW, saved or not. That makes this form the last line of defence before the
 		// gantry moves, so both heights are range-checked here.
@@ -1082,7 +1089,7 @@
 			// applyCalibratorOverride lays it over the stored fixture axis by axis, so the
 			// probe happens at the live field values without writing a thing to Mongo.
 			// Its z is the PROBE Z -- the touch-off depth -- never the approach height.
-			const res = await api('/api/scanner/calibrate-tip', { method: 'POST', body: JSON.stringify({ robotId: selectedRobotId, mount: desiredMount, tipProfile, tipWell, runId, pipetteId, calibrator: { x: calX, y: calY, z: probeZNow } }) });
+			const res = await api('/api/scanner/calibrate-tip', { method: 'POST', body: JSON.stringify({ robotId: selectedRobotId, mount: desiredMount, tipProfile, tipWell, runId, pipetteId, safeArcZ, calibrator: { x: calX, y: calY, z: probeZNow } }) });
 			if (res?.adjust && typeof res.adjust.x === 'number') {
 				tipAdjust = { x: res.adjust.x, y: res.adjust.y };
 				// The probe moved the gantry and changed the applied adjust → any prior

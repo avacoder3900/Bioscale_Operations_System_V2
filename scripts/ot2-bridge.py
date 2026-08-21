@@ -683,16 +683,26 @@ def home_gantry(run_id: str, force: bool = False) -> None:
 
 
 def move_to_coordinates(run_id: str, pipette_id: str, x: float, y: float, z: float,
-                        speed: Optional[float] = None, force_direct: bool = True) -> None:
+                        speed: Optional[float] = None, force_direct: bool = True,
+                        min_z: Optional[float] = None) -> None:
     # forceDirect — sweeps carry no tips/liquid; direct point-to-point cuts
     # ~0.5-1s off every slot transition (same rationale as maintenance.ts).
     # speed (mm/s) lets the tip-calibration probe creep slowly onto the limit
     # switch; omitted = the robot's default (fast) gantry speed for sweeps/scans.
+    #
+    # min_z + force_direct=False is the SAFE ARC: lift, travel, descend. Pass it
+    # for any move that crosses the deck WITH A TIP ON. The direct default is
+    # correct for sweeps (no tip, nothing to break) and for the probe's own
+    # 0.1mm creep steps, but it is wrong for travelling to the fixture: a direct
+    # move from a deck hole to a calibrator sitting 60mm lower cuts a diagonal
+    # straight through the deck edge. That crashed a tip on B14 (2026-08-21).
     params = {"pipetteId": pipette_id,
               "coordinates": {"x": x, "y": y, "z": z},
               "forceDirect": force_direct}
     if speed is not None:
         params["speed"] = speed
+    if min_z is not None:
+        params["minimumZHeight"] = min_z
     send_maintenance_command(run_id, "moveToCoordinates", params, timeout_s=30.0)
 
 
@@ -1746,6 +1756,14 @@ def execute_calibrate_tip(command_id: str, payload: dict) -> None:
     """
     cal = (payload or {}).get("calibrator") or {}
     tip = (payload or {}).get("tiprack") or {}
+    # Travel height for every approach move below. BIMS computes it from the
+    # deck's MEASURED height (safeArcZ in the studio) and sends it; absent, fall
+    # back to a lift well above any deck this fleet runs rather than to a direct
+    # move, because "no arc" is the failure mode this exists to prevent.
+    try:
+        arc_z = float((payload or {}).get("safeArcZ"))
+    except (TypeError, ValueError):
+        arc_z = 150.0
     cal_profile = _resolve_cal_profile(payload, tip)
     try:
         cal_x = float(cal["x"]); cal_y = float(cal["y"]); z_cal = float(cal["z"])
@@ -1800,12 +1818,14 @@ def execute_calibrate_tip(command_id: str, payload: dict) -> None:
             ref_y = cur["y"] if cur["y"] is not None else cal_y
             z_probe = z_cal
             if cur["z"] is None or abs(cur["z"] - z_cal) > 1e-6:
-                move_to_coordinates(run_id, pipette_id, ref_x, ref_y, z_cal, speed=CAL_APPROACH_SPEED)
+                move_to_coordinates(run_id, pipette_id, ref_x, ref_y, z_cal,
+                                    speed=CAL_APPROACH_SPEED, force_direct=False, min_z=arc_z)
             log.info("calibrate_tip: probing from x=%s y=%s at z_cal=%s (tip was at z=%s)",
                      ref_x, ref_y, z_cal, cur["z"])
         else:
             ref_x, ref_y, z_probe = cal_x, cal_y, z_cal
-            move_to_coordinates(run_id, pipette_id, cal_x, cal_y, z_cal, speed=CAL_APPROACH_SPEED)
+            move_to_coordinates(run_id, pipette_id, cal_x, cal_y, z_cal,
+                                speed=CAL_APPROACH_SPEED, force_direct=False, min_z=arc_z)
 
         # Translate the .py probe recipe onto the start reference.
         ptx = ref_x - CAL_NOMINAL_X
@@ -1834,7 +1854,8 @@ def execute_calibrate_tip(command_id: str, payload: dict) -> None:
 
         # Retract (slow, lift off the fixture). KEEP THE TIP ON — the operator
         # uses it to tune the deck next. (No drop_tip.)
-        move_to_coordinates(run_id, pipette_id, 127.181 + ptx, 174.247 + pty, z_probe + 20, speed=CAL_APPROACH_SPEED)
+        move_to_coordinates(run_id, pipette_id, 127.181 + ptx, 174.247 + pty, z_probe + 20,
+                            speed=CAL_APPROACH_SPEED, force_direct=False, min_z=arc_z)
 
         # If an axis never tripped its limit switch, the probe is INVALID — the
         # computed offset is garbage (full 5mm travel). Fail loudly so BIMS does

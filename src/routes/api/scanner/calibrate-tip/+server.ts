@@ -45,6 +45,7 @@ import {
 	asTipProfile,
 	resolveCalibratorPoint,
 	applyCalibratorOverride,
+	finite,
 	readProbeResult,
 	type CalMount,
 	type CalPoint,
@@ -168,6 +169,13 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			// change how a deck is taught.
 			// On this side the profile IS the operator's explicit choice, not a lookup.
 			profile: tipProfile,
+			// Travel height for the daemon's approach + retract moves. Those used to
+			// be forceDirect point-to-point, which cuts a diagonal from wherever the
+			// tip is straight to the fixture — through the deck edge if the fixture
+			// sits lower, which crashed a tip on B14. The page computes this from the
+			// deck's MEASURED height, so it is the same number the studio's own jog
+			// arcs use. Omitted -> the daemon falls back to a high lift, never direct.
+			...(finite(body?.safeArcZ) !== undefined ? { safeArcZ: finite(body?.safeArcZ) } : {}),
 			calibrator: { x: calX, y: calY, z: zCal },
 			tiprack: {
 				definition: tipDef.definition,
