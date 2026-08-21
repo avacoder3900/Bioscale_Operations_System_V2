@@ -40,6 +40,8 @@ export interface ScheduledTask {
 	onCriticalChain: boolean;
 	late: boolean; // lateStart < today
 	blockedByOpen: string[]; // not-done blocker ids
+	/** KB2-30: ALL in-subgraph predecessors (incl. done) — the canvas draws edges from these. */
+	blockedBy: string[];
 }
 
 export interface MustStartRow {
@@ -335,7 +337,8 @@ export async function computeRoadmap(now = new Date()): Promise<RoadmapResult> {
 		const tasks: ScheduledTask[] = topo.map((id) => {
 			const t = byId.get(id);
 			const done = isDone(id);
-			const blockedByOpen = [...(preds.get(id) ?? [])].filter((p) => inSet.has(p) && !isDone(p));
+			const allPreds = [...(preds.get(id) ?? [])].filter((p) => inSet.has(p));
+			const blockedByOpen = allPreds.filter((p) => !isDone(p));
 			const slack = done ? null : slackOf(id);
 			return {
 				id,
@@ -355,7 +358,8 @@ export async function computeRoadmap(now = new Date()): Promise<RoadmapResult> {
 				slackDays: slack,
 				onCriticalChain: !done && id !== mid && slack === minSlack,
 				late: !done && id !== mid && LS.get(id)! < today,
-				blockedByOpen
+				blockedByOpen,
+				blockedBy: allPreds
 			};
 		});
 

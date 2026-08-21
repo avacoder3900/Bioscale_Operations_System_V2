@@ -1,54 +1,74 @@
 /**
- * KB2-29 — /kanban/roadmap: the chronological view.
- *
- * One time axis split by today's line — PAST IS FACT (actual wip→done spans
- * from real stamps, last 8 weeks), FUTURE IS MATH (the KB2-28 derived
- * schedule). Lanes are TAGS, never people (KB2-00 decision #12: a per-person
- * past timeline would visually reconstruct the forbidden per-person history
- * aggregates). Plus the daily drivers: per-milestone countdown + must-start.
+ * KB2-29/KB2-30 — /kanban/roadmap: countdown cards + must-start list (KB2-29)
+ * above the infinite-canvas dependency map (KB2-30, replaced the swimlane
+ * timeline 2026-08-20). The canvas draws nodes from the KB2-28 scheduler
+ * result (blockedBy edges, slack, critical chain) and merges pinned positions
+ * from kanban_canvas_layout; anything unpinned gets dagre auto-layout
+ * client-side.
  */
-import { redirect } from '@sveltejs/kit';
+import { fail, redirect } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
-import { connectDB, KanbanTask } from '$lib/server/db';
+import { connectDB, KanbanCanvasLayout, AuditLog, generateId } from '$lib/server/db';
 import { computeRoadmap } from '$lib/server/kanban/schedule';
-import type { PageServerLoad } from './$types';
-
-const DAY_MS = 24 * 60 * 60 * 1000;
+import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
 	if (!locals.user) redirect(302, '/login');
 	requirePermission(locals.user, 'kanban:read');
 	await connectDB();
 
-	const roadmap = await computeRoadmap();
-
-	// Past-fact spans: last 8 weeks of actual work. Done (wip→completed) and
-	// in-flight (wip→now). Lane = first tag (same rule as WIP-timeline color).
-	const since = new Date(Date.now() - 56 * DAY_MS);
-	const past = (await KanbanTask.find({
-		$or: [
-			{ status: 'done', completedDate: { $gte: since } },
-			{ status: { $in: ['wip', 'review'] }, wipDate: { $exists: true } }
-		]
-	})
-		.select('_id trackingNumber title status tags wipDate completedDate itemType')
-		.lean()) as any[];
-
-	const pastSpans = past
-		.filter((t) => t.wipDate)
-		.map((t) => ({
-			id: String(t._id),
-			trackingNumber: t.trackingNumber ?? null,
-			title: t.title,
-			status: t.status,
-			lane: (t.tags ?? [])[0] ?? 'untagged',
-			start: new Date(t.wipDate).toISOString(),
-			end: t.completedDate ? new Date(t.completedDate).toISOString() : null // null = still going
-		}));
+	const [roadmap, layoutDocs] = await Promise.all([
+		computeRoadmap(),
+		KanbanCanvasLayout.find({}).select('_id x y').lean()
+	]);
 
 	return {
 		roadmap: JSON.parse(JSON.stringify(roadmap)),
-		pastSpans: JSON.parse(JSON.stringify(pastSpans)),
+		pinned: JSON.parse(JSON.stringify(layoutDocs)) as { _id: string; x: number; y: number }[],
 		user: JSON.parse(JSON.stringify(locals.user))
 	};
+};
+
+export const actions: Actions = {
+	/**
+	 * Persist a dragged node's position (shared layout). Deliberately NOT
+	 * audit-logged — high-frequency presentation writes; pinnedBy keeps
+	 * accountability (KB2-30 documented exception).
+	 */
+	pinNode: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'kanban:write');
+		await connectDB();
+		const fd = await request.formData();
+		const taskId = fd.get('taskId')?.toString();
+		const x = parseFloat(fd.get('x')?.toString() ?? '');
+		const y = parseFloat(fd.get('y')?.toString() ?? '');
+		if (!taskId || !Number.isFinite(x) || !Number.isFinite(y)) {
+			return fail(400, { error: 'Missing taskId/x/y' });
+		}
+		await KanbanCanvasLayout.updateOne(
+			{ _id: taskId },
+			{ $set: { x, y, pinnedBy: locals.user.username } },
+			{ upsert: true }
+		);
+		return { success: true };
+	},
+
+	/** Clear ALL pins → next load re-runs auto-layout. Destroys a shared arrangement → audited. */
+	relayout: async ({ locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'kanban:write');
+		await connectDB();
+		const { deletedCount } = await KanbanCanvasLayout.deleteMany({});
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'kanban_canvas_layout',
+			recordId: 'relayout',
+			action: 'DELETE',
+			newData: { event: 'relayout', pinsCleared: deletedCount },
+			changedBy: locals.user.username,
+			changedAt: new Date()
+		});
+		return { success: true, cleared: deletedCount };
+	}
 };

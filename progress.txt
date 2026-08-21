@@ -9247,3 +9247,30 @@ zero tools — broken for two days, masked as a caching quirk.
 Fix: plain CAPTURE_ITEM_SHAPE in the subtasks array; nested parentTaskId now stripped in
 the handler; MCP version 3.2.1. Verified locally: tools/list returns 59 tools incl.
 kanban_roadmap + the plan tools. npm run check: 11/434 baseline.
+
+================================================================================
+2026-08-20 — feat/kanban-tweaks → master — KB2-30: infinite-zoom roadmap canvas (replaces timeline)
+================================================================================
+Jacob's verdict on the KB2-29 swimlane timeline after seeing live data: "good first pass
+on the data structures... not at all what I was imagining" — wanted a flow-bubble map on
+an infinite zoom whiteboard. Research (session report): @xyflow/svelte (Svelte Flow 1.6,
+MIT, Svelte-5-native rewrite by the xyflow team) + @dagrejs/dagre LR layout; rejected
+tldraw (React + watermark license), Excalidraw (React), Svelvet (stale), Cytoscape
+(HTML-label hackery), Sigma/Konva (wrong scale). PRD: docs/prds/KB2-30-roadmap-canvas.md.
+
+Built: RoadmapCanvas.svelte (SvelteFlow viewport, dagre auto-layout, minimap, controls,
+fit-view, dark bg) + TaskNode (3-tier semantic zoom w/ hysteresis: dot → chip → full card;
+critical=red border, late badge, done faded, tag color) + MilestoneNode (diamond + date +
+buffer). Focus mode: click → upstream+downstream chain lit, rest dimmed to 15%, Esc
+clears. Hide-done toggle. Drag pins a node: kanban_canvas_layout collection (_id=taskId,
+x/y/pinnedBy — SHARED layout, presentation-only, per-drag saves documented as exempt from
+AuditLog; Re-layout clears all pins and IS audited). Scheduler addendum: ScheduledTask
+grows blockedBy (ALL in-subgraph preds) so edges through done work stay visible.
+/kanban/roadmap keeps countdown cards + must-start; timeline section deleted.
+Deps: @xyflow/svelte 1.6.3, @dagrejs/dagre 3.1.1. npm run check: 11/434 baseline; vite
+production compile clean (1m21s).
+
+Also this session, deployed earlier to master: MCP tools/list fix (736bad8d — connector
+dead since KB2-18's z.undefined(); confirmed working, all 59 tools list; Jacob already
+ran the roadmap-v4 import workshop — live data shows A4M at buffer −3 wd on soft inputs).
+Task page: dead Ready button → Process/Reshape modal (22a8496b).
