@@ -9871,3 +9871,24 @@ NOT BENCH-VERIFIED. Needs a robot with a tiprack in slot 11:
      (this is the tip-break recovery path — it must NOT be blocked).
   5. Tip on -> Fill motion runs at the real fill height.
   6. "Calibrate tip" unchanged: still picks up, travels, probes, keeps the tip.
+
+Deployment: PRODUCTION — https://bioscale-operations-system-mongodb.vercel.app
+  (also https://bioscale-operations-system-mongodb-brevitest.vercel.app
+   and  https://bioscale-operations-system-mongodb-git-master-brevitest.vercel.app)
+  (immutable: https://bioscale-operations-system-mongodb-aqiib26x7-brevitest.vercel.app)
+Source: branch master @ commit ee713757a (merge of feat/restore-tip-pickup, af69cac3a)
+Retrieve this exact code: git checkout master at commit ee713757a
+What this deployment is for: "Pick up tip" is back in production. Build ● Ready,
+2m, both GitHub statuses success.
+
+FIELD NOTE (2026-08-21, immediately after this deploy): first report from the
+floor was "can't select Pick up tip". It was NOT missing and NOT broken — the
+button was greyed. It is gated on `!pipetteId || busy || !tipProfile`, and the
+blocker in practice is !pipetteId: no maintenance run open. Enable sequence is
+Open run (Jog panel, top right) -> pick p20/wax or p300/reagent -> Pick up tip.
+
+The real defect this exposed is that the button does not SAY why it is
+disabled. "Calibrate tip" self-labels ("Calibrate tip — pick a tip type
+first"); the restored button just reads "Pick up tip (no probe)" greyed out,
+with no reason. Worth fixing on the next touch of this panel. Not fixed here —
+this entry is the deployment record, not a change.
