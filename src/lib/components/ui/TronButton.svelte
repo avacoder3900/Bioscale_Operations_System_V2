@@ -5,12 +5,15 @@
 	interface Props extends HTMLButtonAttributes {
 		children: Snippet;
 		variant?: 'default' | 'primary' | 'danger' | 'ghost';
+		/** 'sm' = compact card-action size (kanban board cards). */
+		size?: 'md' | 'sm';
 		class?: string;
 	}
 
 	let {
 		children,
 		variant = 'default',
+		size = 'md',
 		class: className = '',
 		disabled = false,
 		type = 'button',
@@ -28,6 +31,6 @@
 	);
 </script>
 
-<button class="{buttonClass} {className}" {disabled} {type} {...restProps}>
+<button class="{buttonClass} {size === 'sm' ? '!min-h-0 !px-2 !py-0.5 !text-xs !font-medium' : ''} {className}" {disabled} {type} {...restProps}>
 	{@render children()}
 </button>

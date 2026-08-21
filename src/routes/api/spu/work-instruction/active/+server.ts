@@ -1,13 +1,11 @@
 import { json } from '@sveltejs/kit';
-import { env } from '$env/dynamic/private';
 import { hasPermission } from '$lib/server/permissions';
+import { isAgentApiKey } from '$lib/server/api-auth';
 import { getActiveSpuWorkInstruction } from '$lib/server/services/spu-work-instruction';
 import type { RequestHandler } from './$types';
 
 export const GET: RequestHandler = async ({ request, locals }) => {
-	const apiKey =
-		request.headers.get('x-api-key') || request.headers.get('x-agent-api-key');
-	const isAgent = !!apiKey && !!env.AGENT_API_KEY && apiKey === env.AGENT_API_KEY;
+	const isAgent = isAgentApiKey(request);
 	const isUser = !!locals.user && hasPermission(locals.user, 'spu:read');
 
 	if (!isAgent && !isUser) {

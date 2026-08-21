@@ -8,6 +8,7 @@ import {
 import { requirePermission } from '$lib/server/permissions';
 import { getCheckedOutCartridgeIds } from '$lib/server/checkout-utils';
 import { WAX_PAGE_OWNED } from '$lib/server/db/models/wax-filling-run';
+import { WAX_STAGE_STATUSES } from '$lib/shared/cartridge-wax-status';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
@@ -161,9 +162,9 @@ export const load: PageServerLoad = async ({ locals }) => {
 			} },
 			{ $group: { _id: '$robotId', totalMs: { $sum: '$durationMs' } } }
 		]),
-		// Oldest wax stored
+		// Oldest wax-stage cart sitting in a fridge
 		CartridgeRecord.findOne(
-			{ status: 'wax_stored', _id: { $nin: checkedOutIds } },
+			{ status: { $in: [...WAX_STAGE_STATUSES] }, 'waxStorage.timestamp': { $exists: true }, _id: { $nin: checkedOutIds } },
 			{ 'waxStorage.timestamp': 1 }
 		).sort({ 'waxStorage.timestamp': 1 }).lean()
 	]);
@@ -193,7 +194,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 	const REAGENT_ACTIVE = ['Setup', 'Loading', 'Running', 'Inspection',
 		'setup', 'loading', 'running', 'inspection'];
 	const WAX_POST_OT2_QUEUED = ['QC', 'Storage', 'qc', 'storage'];
-	const REAGENT_POST_OT2_QUEUED = ['Top Sealing', 'Storage'];
+	// Reagent runs have no post-OT-2 queue (REAGENT-TOPSEAL-IMPLICIT): Running
+	// is the terminal stage, so a reagent run is either active or done.
 
 	const robotUtilMap = new Map<string, number>();
 	for (const r of [...(robotUtilWax as any[]), ...(robotUtilReagent as any[])]) {
@@ -220,10 +222,6 @@ export const load: PageServerLoad = async ({ locals }) => {
 		} else if (waxRun && WAX_POST_OT2_QUEUED.includes(waxRun.status)) {
 			status = 'available';
 			displayStatus = `Available — Wax queued (${waxRun.status})`;
-			robotPhysicallyFree = true;
-		} else if (reagentRun && REAGENT_POST_OT2_QUEUED.includes(reagentRun.status)) {
-			status = 'available';
-			displayStatus = `Available — Reagent queued (${reagentRun.status})`;
 			robotPhysicallyFree = true;
 		} else {
 			status = 'available';
@@ -301,7 +299,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 		alerts.push({ level: 'orange', message: 'No active top seal rolls — register a new roll' });
 	}
 	if (oldestWaxAgeDays > waxStorageMaxAgeDays) {
-		const count = phaseMap.get('wax_stored') ?? 0;
+		const count = WAX_STAGE_STATUSES.reduce((s, st) => s + (phaseMap.get(st) ?? 0), 0);
 		alerts.push({ level: 'yellow', message: `${count} cartridges have been in fridge > ${waxStorageMaxAgeDays} days — run reagent?` });
 	}
 	// Blocked robot alerts
@@ -320,7 +318,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 	const completedStatuses = ['completed', 'Completed'];
 	const activeStatuses = ['Setup', 'Loading', 'Running', 'setup', 'loading', 'running',
-		'Awaiting Removal', 'QC', 'Storage', 'Inspection', 'Top Sealing'];
+		'Awaiting Removal', 'QC', 'Storage', 'Inspection'];
 	const abortedStatuses = ['aborted', 'Aborted', 'cancelled', 'Cancelled'];
 
 	const yieldPercent = producedToday > 0
@@ -382,7 +380,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 			waxFilling: {
 				inProgress: inFillingIds.size,
 				waxFilled: phaseMap.get('wax_filled') ?? 0,
-				waxStored: phaseMap.get('wax_stored') ?? 0
+				// Wax-stage carts eligible for reagent filling (WAX-SIMPLIFY-3)
+				waxStage: WAX_STAGE_STATUSES.reduce((s, st) => s + (phaseMap.get(st) ?? 0), 0)
 			},
 			reagentFilling: {
 				inProgress: phaseMap.get('reagent_filling') ?? 0,

@@ -32,10 +32,13 @@ const JOINT_NAMES = [
 
 const ARMS = [
 	{
-		// Leader BusLinker replaced 2026-08-18 (old board 5C4C126959 failed).
-		// Serial read from the Pi via `udevadm info -q property -n /dev/ttyACM1`.
+		// Leader BusLinker. Serial re-read from the board on 2026-08-19 via
+		// `udevadm info -q property -n /dev/ttyACM1` on arm-pi, and confirmed
+		// live (all 6 STS3215 servos answer on that bus at ~12.4 V).
+		// Supersedes 5C4C128110 (recorded 2026-08-18, matches no attached
+		// board) and 5C4C126959 (PRD Phase D, failed).
 		role: 'leader' as const,
-		serialNumber: '5C4C128110',
+		serialNumber: '5C4C125867',
 		comPort: '/dev/buslinker-leader',
 		modelName: 'so-arm-101',
 		voltage: 12,

@@ -42,6 +42,7 @@ Run:
 import os
 import sys
 import glob
+import re
 import time
 import json
 import base64
@@ -107,6 +108,26 @@ HEARTBEAT_INTERVAL = int(os.environ.get("HEARTBEAT_INTERVAL_S", "10"))
 # scanner scan for up to that long; a 3s window cut off decodes that landed at
 # 3-5s (marginally-aimed positions) and reported them as "empty (ACK only)".
 SCAN_TIMEOUT = float(os.environ.get("SCAN_TIMEOUT_S", "5.5"))
+
+# A scanner USB re-enumeration (bumped cable, flaky hub) invalidates the open
+# file handle. Reads/writes on the dead fd raise termios.error/OSError — NOT
+# serial.SerialException — so they must not be treated as "scan didn't decode":
+# the handle is dead and udev has likely pointed /dev/scanner at a NEW ttyACM
+# node. Any device-level failure therefore drops the handle and reopens. The
+# observed disconnect->re-enumerate gap is ~2s, so the ladder spans that.
+PORT_OPEN_ATTEMPTS = int(os.environ.get("SCANNER_PORT_OPEN_ATTEMPTS", "3"))
+PORT_REOPEN_DELAY_S = float(os.environ.get("SCANNER_PORT_REOPEN_DELAY_S", "1.0"))
+# Marks a scan that failed because the PORT is down, as opposed to a scan that
+# ran fine but decoded nothing. The two demand opposite responses: a no-decode
+# is worth rastering the gantry for, a dead port never is.
+PORT_ERROR_PREFIX = "scanner port error: "
+
+# The real "is a maintenance run open" endpoint. NOT "/maintenance_runs/current"
+# — that string is captured by the /maintenance_runs/{runId} route as a run
+# literally named "current", so it always 404s ("Run current was not found")
+# whether or not a run is open. Using it made stale-run detection permanently
+# blind, which is how a stuck maintenance run escalated to a wedged engine.
+MAINT_CURRENT_RUN = "/maintenance_runs/current_run"
 
 # Search-raster fallback: when the on-point scan fails (barcode placement varies
 # + the acrylic deck has optical imperfections), the gantry rasters a small grid
@@ -301,7 +322,7 @@ def engine_health() -> dict:
     except Exception:
         out["engineOk"] = False
     try:
-        r = ot2_request("GET", "/maintenance_runs/current", timeout=5)
+        r = ot2_request("GET", MAINT_CURRENT_RUN, timeout=5)
         if r.status_code == 404:
             out["maintenanceRun"] = None
         elif r.status_code < 400:
@@ -354,7 +375,7 @@ def clear_stale_maintenance_run() -> Optional[dict]:
     — if the server is hung this DELETE will also time out (the restart ladder
     handles that case)."""
     try:
-        r = ot2_request("GET", "/maintenance_runs/current", timeout=5)
+        r = ot2_request("GET", MAINT_CURRENT_RUN, timeout=5)
     except Exception:
         return None
     if r.status_code == 404 or r.status_code >= 500:
@@ -364,7 +385,7 @@ def clear_stale_maintenance_run() -> Optional[dict]:
         return None
     log.warning("clearing stale maintenance run %s", mid)
     try:
-        ot2_request("DELETE", "/maintenance_runs/{}".format(mid), timeout=10)
+        close_maintenance_run(mid)  # retries while the run is still winding down
     except Exception as e:
         log.warning("delete maintenance run %s failed: %s", mid, e)
     return {"id": mid, "action": "cleared"}
@@ -378,8 +399,50 @@ ACTIVE_RUN_STATES = {"running", "finishing"}
 TERMINAL_RUN_STATES = {"stopped", "failed", "succeeded"}
 
 
+def _run_actions(run_data: dict) -> list:
+    """The run's action log — the play/pause/stop COMMANDS issued against it."""
+    return (run_data or {}).get("actions") or []
+
+
+def pause_was_commanded(run_data: dict) -> bool:
+    """True if the run is paused because somebody asked for it.
+
+    This is the one reliable way to tell the two kinds of `paused` apart:
+
+      - The engine's own start-of-run pause (off-deck labware, "confirm deck
+        loaded") is a protocol-level wait. Nothing appears in run.actions except
+        the `play` that started the run.
+      - An operator pressing Pause in BIMS goes out as POST /runs/<id>/actions
+        with actionType 'pause'. The OT-2 API documents run.actions as
+        "client-initiated run control actions, ordered oldest to newest", so
+        that — and only that — lands in the log.
+
+    We look at the LATEST action rather than "has ever been paused", because the
+    log is append-only: a run that was paused and then resumed would otherwise
+    stay flagged for the rest of its life, and a genuinely stale off-deck pause
+    later in that run could never be cleared. Latest action 'pause' means the
+    operator's most recent instruction was stop; anything else means it was go.
+    """
+    for action in reversed(_run_actions(run_data)):
+        kind = (action.get("actionType") or "").lower()
+        if kind in ("play", "pause", "stop"):
+            return kind == "pause"
+    return False
+
+
+def _fetch_run(run_id: str, timeout: float = 6) -> Optional[dict]:
+    """GET /runs/<id> -> the `data` object, or None if it can't be read."""
+    try:
+        r = ot2_request("GET", "/runs/{}".format(run_id), timeout=timeout)
+        if r.status_code >= 400:
+            return None
+        return ((r.json() or {}).get("data")) or None
+    except Exception:
+        return None
+
+
 def _current_protocol_run() -> Optional[dict]:
-    """Return {'id','status'} for the robot's current protocol run, or None."""
+    """Return {'id','status','pauseCommanded'} for the current protocol run."""
     try:
         r = ot2_request("GET", "/runs", timeout=8)
         if r.status_code >= 400:
@@ -393,8 +456,9 @@ def _current_protocol_run() -> Optional[dict]:
         return None
     for run in (body.get("data") or []):
         if run.get("id") == cur_id:
-            return {"id": cur_id, "status": run.get("status")}
-    return {"id": cur_id, "status": None}
+            return {"id": cur_id, "status": run.get("status"),
+                    "pauseCommanded": pause_was_commanded(run)}
+    return {"id": cur_id, "status": None, "pauseCommanded": False}
 
 
 def clear_stale_protocol_run() -> Optional[dict]:
@@ -412,6 +476,13 @@ def clear_stale_protocol_run() -> Optional[dict]:
         raise RobotCommandError(
             "Robot has an ACTIVE protocol run (status={}) — refusing to "
             "auto-clear it. Stop that run before scanning.".format(status))
+    if status == "paused" and run.get("pauseCommanded"):
+        # A deliberately-paused fill is not a leftover. It looks identical to the
+        # start-of-run off-deck pause by status alone, which is how paused fills
+        # were getting silently stopped when someone started a deck scan.
+        raise RobotCommandError(
+            "Robot has a protocol run that was deliberately PAUSED — refusing to "
+            "auto-clear it. Resume it, or stop it explicitly, before scanning.")
     # Stale: paused / idle / blocked-by-open-door / stop-requested / awaiting-recovery
     run_id = run["id"]
     log.warning("clearing stale protocol run %s (status=%s) blocking maintenance op",
@@ -481,17 +552,40 @@ def open_maintenance_run(_attempt: int = 0) -> str:
     return run_id
 
 
+# The robot refuses to DELETE a maintenance run while a command is still in
+# flight: "Run is currently active. Allow the run to finish or stop it with a
+# `stop` action". There is no stop action to take — the robot's own OpenAPI spec
+# exposes only GET and DELETE on /maintenance_runs/{runId} — so the only recourse
+# is to let the in-flight command land and re-DELETE. This matters: a maintenance
+# run we fail to delete wedges the run engine, and every later maintenance op
+# 500s with RunConflictError until someone restarts the robot-server by hand.
+CLOSE_ACTIVE_HINTS = ("currently active", "not idle", "allow the run to finish")
+CLOSE_ATTEMPTS = int(os.environ.get("MAINT_CLOSE_ATTEMPTS", "6"))
+CLOSE_RETRY_DELAY_S = float(os.environ.get("MAINT_CLOSE_RETRY_DELAY_S", "2.0"))
+
+
 def close_maintenance_run(run_id: str) -> None:
-    """Best-effort — does not raise on 404."""
-    r = ot2_request("DELETE", "/maintenance_runs/{}".format(run_id))
-    if r.status_code >= 400 and r.status_code != 404:
+    """Delete a maintenance run. Does not raise on 404. Retries while the run is
+    still active — see CLOSE_ACTIVE_HINTS above for why giving up here is what
+    wedges the engine."""
+    detail = None
+    for attempt in range(CLOSE_ATTEMPTS):
+        r = ot2_request("DELETE", "/maintenance_runs/{}".format(run_id))
+        if r.status_code < 400 or r.status_code == 404:
+            return
         body = {}
         try:
             body = r.json() or {}
         except Exception:
             pass
         detail = _first_error_detail(body) or "Robot returned {} on close maintenance run".format(r.status_code)
-        raise RobotCommandError(detail)
+        if not any(h in (detail or "").lower() for h in CLOSE_ACTIVE_HINTS):
+            raise RobotCommandError(detail)  # a real failure, not a wind-down race
+        if attempt < CLOSE_ATTEMPTS - 1:
+            log.warning("maintenance run %s still active — re-deleting in %.0fs (%d/%d)",
+                        run_id, CLOSE_RETRY_DELAY_S, attempt + 1, CLOSE_ATTEMPTS)
+            time.sleep(CLOSE_RETRY_DELAY_S)
+    raise RobotCommandError(detail or "could not close maintenance run {}".format(run_id))
 
 
 def _first_error_detail(body: dict) -> Optional[str]:
@@ -641,9 +735,48 @@ class ScannerPort:
                 pass
             self.ser = None
 
+    def _scan_window(self, wait_s: float) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+        """One scan window against the currently-open handle. Returns the same
+        (text, raw, error) triple as trigger_and_read for scan outcomes, and
+        RAISES for device-level failures so the caller can reopen the port."""
+        assert self.ser is not None
+        SETTLE_S = 0.15          # rest before each (re)trigger so the engine resets
+        RETRIGGER_EVERY_S = 1.0  # listen this long per burst before re-poking
+        deadline = time.time() + wait_s
+        last_raw: Optional[str] = None
+        got_any = False
+        while time.time() < deadline:
+            # Rest, flush, fire one burst.
+            time.sleep(SETTLE_S)
+            self.ser.reset_input_buffer()
+            self.ser.write(TRIGGER_BYTES)
+            self.ser.flush()
+            burst_deadline = min(deadline, time.time() + RETRIGGER_EVERY_S)
+            buf = bytearray()
+            while time.time() < burst_deadline:
+                chunk = self.ser.read(256)
+                if chunk:
+                    got_any = True
+                    buf.extend(chunk)
+                    time.sleep(0.03)  # let a piecewise payload finish arriving
+                    if _decoded_payload(buf):
+                        break
+                elif _decoded_payload(buf):
+                    break
+            if buf:
+                last_raw = buf.hex()
+            decoded = _decoded_payload(buf)
+            if decoded:
+                return decoded.decode("utf-8", errors="replace").strip(), last_raw, None
+            # else: this burst only ACKed (or was silent) — re-poke.
+        if not got_any:
+            return None, None, "no response within timeout"
+        return None, last_raw, "empty payload (ACK only)"
+
     def trigger_and_read(self, timeout_s: Optional[float] = None, clamp: bool = True) -> Tuple[Optional[str], Optional[str], Optional[str]]:
         """Fire the scanner repeatedly until it decodes or the window expires;
-        return (decoded_text, raw_hex, error).
+        return (decoded_text, raw_hex, error). Reopens the port and retries if
+        the device errors out mid-scan (see PORT_OPEN_ATTEMPTS).
 
         In Command Mode ONE trigger = ONE short scan burst (the module's
         "Single Scanning Time"), then it ACKs and goes idle. A single trigger +
@@ -657,50 +790,37 @@ class ScannerPort:
         wait_s = timeout_s if timeout_s and timeout_s > 0 else SCAN_TIMEOUT
         if clamp:
             wait_s = max(wait_s, SCAN_TIMEOUT)   # on-point scans get the full window
-        SETTLE_S = 0.15          # rest before each (re)trigger so the engine resets
-        RETRIGGER_EVERY_S = 1.0  # listen this long per burst before re-poking
         with self.lock:
-            if not self.is_open():
-                self.open()
-            if not self.is_open():
-                return None, None, "serial port not open"
-            try:
-                assert self.ser is not None
-                deadline = time.time() + wait_s
-                last_raw: Optional[str] = None
-                got_any = False
-                while time.time() < deadline:
-                    # Rest, flush, fire one burst.
-                    time.sleep(SETTLE_S)
-                    self.ser.reset_input_buffer()
-                    self.ser.write(TRIGGER_BYTES)
-                    self.ser.flush()
-                    burst_deadline = min(deadline, time.time() + RETRIGGER_EVERY_S)
-                    buf = bytearray()
-                    while time.time() < burst_deadline:
-                        chunk = self.ser.read(256)
-                        if chunk:
-                            got_any = True
-                            buf.extend(chunk)
-                            time.sleep(0.03)  # let a piecewise payload finish arriving
-                            if _decoded_payload(buf):
-                                break
-                        elif _decoded_payload(buf):
-                            break
-                    if buf:
-                        last_raw = buf.hex()
-                    decoded = _decoded_payload(buf)
-                    if decoded:
-                        return decoded.decode("utf-8", errors="replace").strip(), last_raw, None
-                    # else: this burst only ACKed (or was silent) — re-poke.
-                if not got_any:
-                    return None, None, "no response within timeout"
-                return None, last_raw, "empty payload (ACK only)"
-            except serial.SerialException as e:
-                self.close()
-                return None, None, "serial error: {}".format(e)
-            except Exception as e:
-                return None, None, "unexpected error: {}".format(e)
+            detail = None
+            for attempt in range(PORT_OPEN_ATTEMPTS):
+                if not self.is_open():
+                    self.open()
+                if not self.is_open():
+                    detail = "cannot open {}".format(self.port)
+                else:
+                    try:
+                        return self._scan_window(wait_s)
+                    except Exception as e:
+                        # serial.SerialException, OSError, or the bare
+                        # termios.error that a re-enumerated USB node throws from
+                        # reset_input_buffer(). All of them mean the same thing:
+                        # this handle is dead. Drop it — is_open() would happily
+                        # keep reporting True — so the next attempt opens whatever
+                        # /dev/scanner points at NOW.
+                        self.close()
+                        detail = str(e) or e.__class__.__name__
+                if attempt < PORT_OPEN_ATTEMPTS - 1:
+                    log.warning("scanner port %s failed (%s) — reopening (%d/%d)",
+                                self.port, detail, attempt + 2, PORT_OPEN_ATTEMPTS)
+                    time.sleep(PORT_REOPEN_DELAY_S)
+            return None, None, PORT_ERROR_PREFIX + (detail or "unknown")
+
+
+def is_port_error(err: Optional[str]) -> bool:
+    """True when a scan failed because the serial port is DOWN, as opposed to a
+    scan that ran fine and simply decoded nothing. Callers use this to skip the
+    gantry raster: moving the head around cannot fix a dead scanner."""
+    return bool(err) and err.startswith(PORT_ERROR_PREFIX)
 
 
 def scan_with_retry(port: ScannerPort, timeout_s: float, retry_once: bool) -> dict:
@@ -708,7 +828,9 @@ def scan_with_retry(port: ScannerPort, timeout_s: float, retry_once: bool) -> di
     {barcode, rawPayload, error, attempts}."""
     text, raw, err = port.trigger_and_read(timeout_s)
     attempts = 1
-    if (err or not text) and retry_once:
+    # A port error already exhausted the reopen ladder inside trigger_and_read;
+    # an immediate re-scan would just repeat it. Only retry a genuine no-decode.
+    if (err or not text) and retry_once and not is_port_error(err):
         log.info("Scan attempt 1 failed (%s) — retrying", err or "no barcode")
         text, raw, err = port.trigger_and_read(timeout_s)
         attempts = 2
@@ -722,7 +844,7 @@ def search_scan(port: ScannerPort, run_id: str, pipette_id: str,
     Compensates for barcode-placement variance and acrylic-deck optics. Returns
     a scan dict; the first stop that decodes wins."""
     last = {"barcode": None, "rawPayload": None, "error": "search found nothing", "attempts": 0}
-    for (dx, dy, dz) in SEARCH_OFFSETS:
+    for i, (dx, dy, dz) in enumerate(SEARCH_OFFSETS):
         try:
             move_to_coordinates(run_id, pipette_id, x + dx, y + dy, z - dz)
         except Exception as e:
@@ -732,6 +854,13 @@ def search_scan(port: ScannerPort, run_id: str, pipette_id: str,
         last = {"barcode": text, "rawPayload": raw, "error": err, "attempts": 1}
         if text:
             log.info("search hit at dx=%+d dy=%+d dz=-%d", dx, dy, dz)
+            return last
+        if is_port_error(err):
+            # The scanner is down, not mis-aimed. Every remaining stop would be a
+            # gantry move feeding a dead port — minutes of motion that cannot
+            # succeed, while the single command worker blocks everything behind it.
+            log.warning("search aborted after %d/%d stop(s) — scanner port is down (%s)",
+                        i + 1, len(SEARCH_OFFSETS), err)
             return last
     return last
 
@@ -927,12 +1056,17 @@ def execute_sweep(command_id: str, payload: dict, port: ScannerPort) -> None:
 
             scan = scan_with_retry(port, scan_timeout, retry_once)
             # On failure, raster a small grid around the taught point (placement
-            # variance + acrylic optics) — first stop that decodes wins.
-            if not scan["barcode"]:
+            # variance + acrylic optics) — first stop that decodes wins. But only
+            # when the scanner actually WORKED and just didn't decode; rastering a
+            # dead port is pure dead time.
+            if not scan["barcode"] and not is_port_error(scan["error"]):
                 log.info("Slot %d: on-point scan failed — searching grid", slot_index + 1)
                 scan = search_scan(port, maint_run_id, pipette_id, pos["x"], pos["y"], pos["z"])
                 if scan["barcode"]:
                     log.info("Slot %d: recovered via grid search", slot_index + 1)
+            elif not scan["barcode"]:
+                log.warning("Slot %d: scanner port is down (%s) — skipping grid search",
+                            slot_index + 1, scan["error"])
             slots_done += 1
             if scan["barcode"]:
                 scan_count += 1
@@ -1011,10 +1145,13 @@ def execute_deck_scan(command_id: str, payload: dict, port: ScannerPort) -> None
         home_gantry(maint_run_id, force=True)
         move_to_coordinates(maint_run_id, pipette_id, pos["x"], pos["y"], pos["z"])
         scan = scan_with_retry(port, scan_timeout, True)
-        # Same grid-search fallback as the sweep if the deck QR didn't decode.
-        if not scan["barcode"]:
+        # Same grid-search fallback as the sweep if the deck QR didn't decode —
+        # and, as there, only when the scanner itself is alive.
+        if not scan["barcode"] and not is_port_error(scan["error"]):
             log.info("deck_scan: on-point scan failed — searching grid")
             scan = search_scan(port, maint_run_id, pipette_id, pos["x"], pos["y"], pos["z"])
+        elif not scan["barcode"]:
+            log.warning("deck_scan: scanner port is down (%s) — skipping grid search", scan["error"])
         if scan["barcode"]:
             _post_result(command_id, {"ok": True, "status": 200, "body": {
                 "barcode": scan["barcode"],
@@ -1067,16 +1204,23 @@ def execute_auto_resume_run(command_id: str, payload: dict) -> None:
     log.info("auto_resume_run %s: watching run %s for the initial pause", command_id, run_id)
     deadline = time.time() + AUTO_RESUME_TIMEOUT_S
     resumed = False
+    declined = False
     while time.time() < deadline:
         time.sleep(1.0)
-        try:
-            r = ot2_request("GET", "/runs/{}".format(run_id), timeout=6)
-            if r.status_code >= 400:
-                continue
-            status = (((r.json() or {}).get("data")) or {}).get("status")
-        except Exception:
+        data = _fetch_run(run_id)
+        if data is None:
             continue
+        status = data.get("status")
         if status == "paused":
+            # Only the engine's own start-of-run pause is ours to clear. If the
+            # pause was COMMANDED, an operator asked for it — leave it alone.
+            # Without this the daemon would undo a Pause pressed inside the
+            # AUTO_RESUME_TIMEOUT_S window, which is the same bug the browser had.
+            if pause_was_commanded(data):
+                declined = True
+                log.info("auto_resume_run %s: run %s was paused on purpose — not resuming",
+                         command_id, run_id)
+                break
             try:
                 ot2_request("POST", "/runs/{}/actions".format(run_id),
                             {"data": {"actionType": "play"}}, timeout=10)
@@ -1089,7 +1233,8 @@ def execute_auto_resume_run(command_id: str, payload: dict) -> None:
             log.info("auto_resume_run %s: run %s ended (%s) before pausing", command_id, run_id, status)
             break
         # 'running' / 'idle' / None -> keep waiting for the initial pause
-    _post_result(command_id, {"ok": True, "status": 200, "body": {"resumed": resumed}})
+    _post_result(command_id, {"ok": True, "status": 200,
+                              "body": {"resumed": resumed, "declined": declined}})
 
 
 # Tip calibration (NATIVE-CALIBRATION-SYSTEM PRD 4) -------------------------
@@ -1110,15 +1255,66 @@ def execute_auto_resume_run(command_id: str, payload: dict) -> None:
 CAL_NOMINAL_X = 125.181  # .py calibrator approach point in the carriage frame
 CAL_NOMINAL_Y = 173.247
 
+# The X probe does NOT start from the same place in the two fill protocols, and
+# the measured adjust is a function of how far the tip travels before it trips
+# the switch — so the start point is part of the measurement, not a detail.
+#
+#   Wax_Filling_GEN7_Cartridge.py:697   x_pos = cal_x - 0.6 ; y_pos = cal_y - 6.5
+#   Reagent_Filling_GEN7.py:617         x_pos = cal_x - 1.4 ; y_pos = cal_y - 7.0
+#
+# This daemon used to hardcode the WAX numbers for every profile. The Studio
+# therefore taught every deck — wax holes AND reagent holes — against the wax
+# probe, while a reagent fill measured against the reagent probe. Starting 0.8mm
+# further left means 0.8mm less travel to the switch, so the fill's adjust came
+# out ~0.8mm less negative than the one the deck was taught with, and every
+# reagent hole landed ~0.8mm to the RIGHT. Hole radius is 0.9mm, so it missed.
+# (Wax was self-consistent by accident: its recipe *is* the hardcoded one.)
+#
+# Deltas are held relative to the nominal point so they translate onto whatever
+# absolute calibrator location BIMS supplies, exactly like the .py does.
+CAL_PROBE_RECIPES = {
+    "wax":     {"x_dx": -0.6, "x_dy": -6.5},
+    "reagent": {"x_dx": -1.4, "x_dy": -7.0},
+}
+CAL_PROBE_Y_DX = 8.829   # Y probe start — identical in both protocols
+CAL_PROBE_Y_DY = -7.5
+
+
+def _resolve_cal_profile(payload: dict, tip: dict) -> str:
+    """Which fill's probe recipe to use: 'wax' or 'reagent'.
+
+    Prefers the explicit profile BIMS sends. Falls back to the tiprack loadName,
+    which is unambiguous (20uL rack = wax / p20, 200uL Biotix = reagent / p300).
+    Deliberately does NOT infer from z_cal: B07's zCalWax is 40.15, close enough
+    to reagent's 40.8 to guess wrong.
+    """
+    explicit = str((payload or {}).get("profile") or "").strip().lower()
+    if explicit in CAL_PROBE_RECIPES:
+        return explicit
+    load_name = str((tip or {}).get("loadName") or "").lower()
+    if "200ul" in load_name or "biotix" in load_name:
+        return "reagent"
+    if "20ul" in load_name:
+        return "wax"
+    return "wax"  # historical default
+
+
+_BEND_RE = re.compile(rb"(-?\d+(?:\.\d+)?)\s*:\s*(-?\d+(?:\.\d+)?)")
+
 
 def _parse_bend(raw: bytes):
-    """Parse the calibrator's 'C' reply (e.g. b'-4.05:1.55\\r\\n') → {x,y} or None.
-    Matches the .py's str(bytes).split(':') parsing."""
-    parts = str(raw).split(":")
-    if len(parts) < 2 or not raw:
+    """Parse the calibrator's 'C' reply → {x,y} or None. Regex, not positional
+    slicing: some calibrator fixtures prefix the value (B07 answers
+    b'= -0.2:2.3\\r\\n' where R04/B14 answer bare b'-4.5:0.8\\r\\n'), and the
+    old str(bytes)[2:] slicing choked on the prefix — so the daemon skipped the
+    real calibrator and reported "fixture not found" with it plugged in fine."""
+    if not raw:
+        return None
+    m = _BEND_RE.search(raw)
+    if not m:
         return None
     try:
-        return {"x": float(parts[0][2:]), "y": float(parts[1][:-5])}
+        return {"x": float(m.group(1)), "y": float(m.group(2))}
     except Exception:
         return None
 
@@ -1270,6 +1466,7 @@ def execute_calibrate_tip(command_id: str, payload: dict) -> None:
     """
     cal = (payload or {}).get("calibrator") or {}
     tip = (payload or {}).get("tiprack") or {}
+    cal_profile = _resolve_cal_profile(payload, tip)
     try:
         cal_x = float(cal["x"]); cal_y = float(cal["y"]); z_cal = float(cal["z"])
     except Exception:
@@ -1309,16 +1506,23 @@ def execute_calibrate_tip(command_id: str, payload: dict) -> None:
             bend = {"x": 0.0, "y": 0.0}
         log.info("calibrate_tip: bend x=%s y=%s", bend["x"], bend["y"])
 
-        # Where to probe from. ATTACHED: start from the tip's CURRENT position
-        # (the operator already jogged it onto the calibrator) at the CURRENT Z —
-        # no re-approach, no secondary raise. STANDALONE: use the saved calibrator
-        # point and approach it first.
+        # Where to probe from. ATTACHED: keep the tip's CURRENT X/Y as the
+        # reference (the operator may have jogged onto the fixture) but ALWAYS
+        # probe at the fill's z_cal for this mount (reagent 40.8 / wax 34.491).
+        # Probing at the tip's current Z instead (e.g. the studio's 38.5 park
+        # height) pressed the switch levers 2.3mm+ away from where every fill
+        # probes them, biasing the measured adjust between the teach frame and
+        # the fill frame — a persistent studio-vs-fill offset no amount of deck
+        # re-teaching could remove. STANDALONE: saved point, approach first.
         if attached:
             cur = get_current_position(run_id, pipette_id)
             ref_x = cur["x"] if cur["x"] is not None else cal_x
             ref_y = cur["y"] if cur["y"] is not None else cal_y
-            z_probe = cur["z"] if cur["z"] is not None else z_cal
-            log.info("calibrate_tip: probing from current pos x=%s y=%s z=%s", ref_x, ref_y, z_probe)
+            z_probe = z_cal
+            if cur["z"] is None or abs(cur["z"] - z_cal) > 1e-6:
+                move_to_coordinates(run_id, pipette_id, ref_x, ref_y, z_cal, speed=CAL_APPROACH_SPEED)
+            log.info("calibrate_tip: probing from x=%s y=%s at z_cal=%s (tip was at z=%s)",
+                     ref_x, ref_y, z_cal, cur["z"])
         else:
             ref_x, ref_y, z_probe = cal_x, cal_y, z_cal
             move_to_coordinates(run_id, pipette_id, cal_x, cal_y, z_cal, speed=CAL_APPROACH_SPEED)
@@ -1327,17 +1531,25 @@ def execute_calibrate_tip(command_id: str, payload: dict) -> None:
         ptx = ref_x - CAL_NOMINAL_X
         pty = ref_y - CAL_NOMINAL_Y
 
-        # X probe — .py start (124.581, 166.747) translated onto the reference.
+        # X probe — start point comes from THIS fill's recipe, not a hardcoded
+        # one. Using the wax start for a reagent tip biases the adjust by 0.8mm,
+        # which is wider than a 1.8mm hole's radius. See CAL_PROBE_RECIPES.
+        recipe = CAL_PROBE_RECIPES[cal_profile]
+        x_start = CAL_NOMINAL_X + recipe["x_dx"] + ptx
+        y_start = CAL_NOMINAL_Y + recipe["x_dy"] + pty
+        log.info("calibrate_tip: %s recipe — X probe from x=%.3f y=%.3f",
+                 cal_profile, x_start, y_start)
         x_shift, x_ok = _probe_axis(run_id, pipette_id, ser, "x",
-                                    124.581 + ptx, 166.747 + pty, z_probe, b"X")
+                                    x_start, y_start, z_probe, b"X")
         # adjust = (calibrator C-string baseline) - travel-to-switch. The old
         # hardcoded position constant (150.536/177.0) that produced a ~32mm jump
         # is GONE — the C string is now the baseline the operator dials in.
         x_offset = round(bend["x"] - x_shift, 1)
 
-        # Y probe — .py start (134.01, 165.747) translated onto the reference.
+        # Y probe — identical recipe in both protocols (cal_x + 8.829, cal_y - 7.5).
         y_shift, y_ok = _probe_axis(run_id, pipette_id, ser, "y",
-                                    134.01 + ptx, 165.747 + pty, z_probe, b"Y")
+                                    CAL_NOMINAL_X + CAL_PROBE_Y_DX + ptx,
+                                    CAL_NOMINAL_Y + CAL_PROBE_Y_DY + pty, z_probe, b"Y")
         y_offset = round(bend["y"] - y_shift, 1)
 
         # Retract (slow, lift off the fixture). KEEP THE TIP ON — the operator
@@ -1383,6 +1595,40 @@ def execute_calibrate_tip(command_id: str, payload: dict) -> None:
                 log.warning("calibrate_tip: close run failed: %s", e)
 
 
+TIP_SWAP_REQUEST_PATH = "/data/ot2-bridge/tip-swap-request.json"
+
+
+def execute_tip_swap_request(command_id: str, payload: dict) -> None:
+    """Operator pressed "Swap tip" on the BIMS wax run page. The running wax
+    protocol polls TIP_SWAP_REQUEST_PATH before every dispense; when it finds
+    the file it empties the tip into the source, swaps the tip (mode 'rack' =
+    robot takes the next tracked tip; 'hand' = pauses for the operator to push
+    one on), re-probes it on the calibrator, re-aspirates and continues at the
+    very well it was about to fill. The protocol deletes the file when it acts.
+    payload: { mode: 'rack'|'hand', cancel?: bool }"""
+    try:
+        if payload.get("cancel"):
+            try:
+                os.remove(TIP_SWAP_REQUEST_PATH)
+                log.info("tip_swap_request %s: cancelled (file removed)", command_id)
+            except FileNotFoundError:
+                pass
+            _post_result(command_id, {"ok": True, "status": 200, "body": {"cancelled": True}})
+            return
+        mode = "hand" if str(payload.get("mode") or "rack") == "hand" else "rack"
+        os.makedirs(os.path.dirname(TIP_SWAP_REQUEST_PATH), exist_ok=True)
+        tmp = TIP_SWAP_REQUEST_PATH + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump({"mode": mode, "requestedAt": time.time(),
+                       "requestedBy": payload.get("requestedBy"), "runId": payload.get("runId")}, f)
+        os.replace(tmp, TIP_SWAP_REQUEST_PATH)
+        log.info("tip_swap_request %s: mode=%s written to %s", command_id, mode, TIP_SWAP_REQUEST_PATH)
+        _post_result(command_id, {"ok": True, "status": 200, "body": {"mode": mode, "path": TIP_SWAP_REQUEST_PATH}})
+    except Exception as e:
+        log.error("tip_swap_request %s failed: %s", command_id, e)
+        _post_result(command_id, {"ok": False, "error": str(e)})
+
+
 def execute_command(cmd: dict, port: ScannerPort) -> None:
     command_id = cmd.get("_id")
     kind = cmd.get("kind")
@@ -1403,6 +1649,8 @@ def execute_command(cmd: dict, port: ScannerPort) -> None:
         execute_auto_resume_run(command_id, cmd.get("payload") or {})
     elif kind == "calibrate_tip":
         execute_calibrate_tip(command_id, cmd.get("payload") or {})
+    elif kind == "tip_swap_request":
+        execute_tip_swap_request(command_id, cmd.get("payload") or {})
     else:
         log.warning("Unknown command kind '%s' (id=%s)", kind, command_id)
         _post_result(command_id, {"ok": False, "error": "unknown command kind: {}".format(kind)})

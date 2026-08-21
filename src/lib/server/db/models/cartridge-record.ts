@@ -39,7 +39,7 @@ const cartridgeRecordSchema = new Schema({
 	},
 	waxQc: {
 		status: { type: String, enum: ['Accepted', 'Rejected', 'Pending'] },
-		rejectionReason: String, operator: operatorRef, timestamp: Date, recordedAt: Date
+		rejectionReason: String, source: String, operator: operatorRef, timestamp: Date, recordedAt: Date
 	},
 	waxStorage: {
 		locationId: String,           // Equipment._id of the fridge (authoritative join key - S1a)
@@ -64,6 +64,9 @@ const cartridgeRecordSchema = new Schema({
 		status: { type: String, enum: ['Accepted', 'Rejected', 'Pending'] },
 		reason: String, source: String, operator: operatorRef, timestamp: Date, recordedAt: Date
 	},
+	// DEPRECATED (REAGENT-TOPSEAL-IMPLICIT, 2026-08-19): top sealing is no longer
+	// a BIMS step, so nothing writes this any more. Kept for historical DHR /
+	// traceability reads on carts sealed before the change.
 	topSeal: {
 		batchId: String, topSealLotId: String, operator: operatorRef, timestamp: Date, recordedAt: Date
 	},
@@ -159,12 +162,18 @@ const cartridgeRecordSchema = new Schema({
 	status: {
 		type: String,
 		enum: [
-			// Wax inspection flow (WAX-INSPECTION-READY-REJECTED): wax_stored → (photo)
-			// → wax_qc (awaiting verdict) → wax_ready | wax_rejected. Only wax_ready → reagent.
-			'backing', 'wax_filling', 'wax_filled', 'wax_stored', 'wax_qc', 'wax_ready', 'wax_rejected', 'reagent_filling', 'reagent_filled',
-			// Reagent inspection flow (REAGENT-INSPECT-AFTER-TOPSEAL): after Cut Top Seal a
-			// cartridge is `sealed`; a photo on the Reagent Inspect page → reagent_qc;
-			// a scan-gated verdict → reagent_ready | reagent_rejected.
+			// Wax stage (WAX-SIMPLIFY-1..3, see src/lib/shared/cartridge-wax-status.ts):
+			// wax_filled IS the stored state; visual pass is implicit; Wax Reject page →
+			// wax_rejected. wax_filled | wax_ready → reagent. `wax_qc` is retired but kept
+			// in the enum so historical rows still validate; `wax_stored` is migrated away.
+			'backing', 'wax_filling', 'wax_filled', 'wax_qc', 'wax_ready', 'wax_rejected', 'reagent_filling', 'reagent_filled',
+			// Reagent inspection flow (REAGENT-TOPSEAL-IMPLICIT, supersedes
+			// REAGENT-INSPECT-AFTER-TOPSEAL): reagent_filled IS the post-fill resting
+			// state — top sealing is implicit, not a BIMS step. A photo on the Reagent
+			// Inspect page → reagent_qc; a scan-gated verdict → reagent_ready |
+			// reagent_rejected. `sealed` is retired (was "top-sealed, awaiting photo")
+			// but kept so historical rows validate; the migration moved live ones to
+			// reagent_filled.
 			'sealed', 'reagent_qc', 'reagent_ready', 'reagent_rejected', 'stored', 'released', 'shipped',
 			'linked', 'underway', 'completed', 'cancelled', 'scrapped', 'voided',
 			'packeted', 'transferred', 'received'
@@ -182,6 +191,13 @@ const cartridgeRecordSchema = new Schema({
 		r2Key: String,
 		r2Url: String,
 		cartridgeImageNumber: String,
+		// CV-MICROSCOPE-01: photo type descriptor + grid-sequence identity.
+		// 'microscope' photos are phase-less timed grid shots; sequenceId groups
+		// one run, sequenceIndex is capture order, location is the grid slot.
+		photoType: { type: String, enum: ['inspection', 'microscope'] },
+		sequenceId: String,
+		sequenceIndex: Number,
+		location: { row: String, col: Number, _id: false },
 		// Compact deployed-model verdict mirror (CV-PIPELINE-V2 Stage 5), written
 		// by run-inference.ts on non-shadow completion. Summary only — labels,
 		// embeddings and inspection history stay on the cv_* collections.
@@ -220,7 +236,7 @@ cartridgeRecordSchema.index({ 'reagentFilling.runId': 1 });
 cartridgeRecordSchema.index({ 'reagentFilling.assayType._id': 1 });
 cartridgeRecordSchema.index({ 'storage.locationId': 1 });
 cartridgeRecordSchema.index({ 'storage.fridgeId': 1 });         // S1a: canonical fridge join
-cartridgeRecordSchema.index({ 'waxStorage.locationId': 1 });    // S1a: canonical fridge join for wax_stored
+cartridgeRecordSchema.index({ 'waxStorage.locationId': 1 });    // S1a: canonical fridge join for wax-stage carts in a fridge
 cartridgeRecordSchema.index({ 'storage.containerBarcode': 1 });
 cartridgeRecordSchema.index({ 'qaqcRelease.shippingLotId': 1 });
 cartridgeRecordSchema.index({ 'shipping.packageId': 1 });
@@ -230,6 +246,15 @@ cartridgeRecordSchema.index({ 'sample.subjectId': 1 });
 cartridgeRecordSchema.index({ 'testResult.status': 1 });
 cartridgeRecordSchema.index({ arm: 1 });
 cartridgeRecordSchema.index({ experiment: 1 });
+// cartridge-dashboard sorts by updatedAt and counts by createdAt window on the
+// largest collection in the DB — both were unindexed full scans per page load
+// (Atlas query-targeting audit, 2026-07-31).
+cartridgeRecordSchema.index({ updatedAt: -1 });
+cartridgeRecordSchema.index({ createdAt: -1 });
+// Dashboard/statistics aggregates $match on these via $exists — Query Insights
+// showed one such shape at 164,818 docs examined per doc returned.
+cartridgeRecordSchema.index({ 'reagentInspection.status': 1 });
+cartridgeRecordSchema.index({ 'waxQc.status': 1 });
 
 applySacredMiddleware(cartridgeRecordSchema);
 

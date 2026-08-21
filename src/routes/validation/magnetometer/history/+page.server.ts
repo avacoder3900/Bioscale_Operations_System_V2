@@ -1,4 +1,5 @@
 import { connectDB, ValidationSession } from '$lib/server/db';
+import { extractMagTestTime, pullDelaySeconds } from '$lib/server/magnetometer-time';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ url }) => {
@@ -9,7 +10,10 @@ export const load: PageServerLoad = async ({ url }) => {
 		const from = url.searchParams.get('from') || null;
 		const to = url.searchParams.get('to') || null;
 
-		const query: Record<string, any> = { type: 'magnetometer' };
+		// Sessions are written with type 'mag' by both the fetch action and the poll
+		// endpoint; only 5 stray records in production ever used 'magnetometer'. This
+		// page used to query the latter alone and so showed almost nothing.
+		const query: Record<string, any> = { type: { $in: ['mag', 'magnetometer'] } };
 		if (status) query.status = status;
 		if (from || to) {
 			query.createdAt = {};
@@ -30,6 +34,15 @@ export const load: PageServerLoad = async ({ url }) => {
 			const result = (s.results ?? [])[0] as any;
 			const processed = result?.processedData ?? {};
 			const magData = s.magResults ?? processed?.magResults ?? {};
+
+			// Prefer the stored testRanAt, but derive it from rawData for the sessions
+			// recorded before that field existed. rawData is already on every document,
+			// so every historical row gets a correct time with no migration and without
+			// touching a single stored record.
+			const derived = extractMagTestTime(s.rawData);
+			const testRanAt: Date | null = s.testRanAt ?? derived?.at ?? null;
+			const recordedAt: Date | null = s.completedAt ?? s.createdAt ?? null;
+
 			return {
 				id: String(s._id),
 				status: s.status ?? 'pending',
@@ -37,6 +50,12 @@ export const load: PageServerLoad = async ({ url }) => {
 				startedAt: s.startedAt?.toISOString?.() ?? null,
 				completedAt: s.completedAt?.toISOString?.() ?? null,
 				createdAt: s.createdAt?.toISOString?.() ?? new Date().toISOString(),
+				testRanAt: testRanAt ? new Date(testRanAt).toISOString() : null,
+				pullDelaySeconds: pullDelaySeconds(
+					testRanAt ? new Date(testRanAt) : null,
+					recordedAt ? new Date(recordedAt) : null
+				),
+				spuUdi: s.spuUdi ?? null,
 				barcode: s.barcode ?? null,
 				username: s.userId ?? null,
 				avgMagnitude: magData.avgMagnitude ?? processed?.avgMagnitude ?? null

@@ -14,7 +14,7 @@ const ot2BridgeCommandSchema = new Schema({
 	_id: { type: String, default: () => generateId() },
 	robotId: String,             // OpentronsRobot._id
 	deviceId: String,            // ot2-<slot>-bridge
-	kind: { type: String, enum: ['http', 'sweep', 'deck_scan', 'upload_protocol', 'restart_robot_server', 'auto_resume_run', 'calibrate_tip'], required: true },
+	kind: { type: String, enum: ['http', 'sweep', 'deck_scan', 'upload_protocol', 'restart_robot_server', 'auto_resume_run', 'calibrate_tip', 'tip_swap_request'], required: true },
 	// kind 'http': relay this request to http://localhost:31950 on the robot
 	request: {
 		method: String,
@@ -49,9 +49,19 @@ const ot2BridgeCommandSchema = new Schema({
 
 ot2BridgeCommandSchema.index({ deviceId: 1, status: 1, createdAt: 1 });
 ot2BridgeCommandSchema.index({ robotId: 1, createdAt: -1 });
+// Sweep-status endpoint (polled in a loop by the deck-loading UI during every
+// scan) looks up by kind + payload.sweepRunId — was the #1 offender in Atlas
+// Query Insights 2026-07-31: 14.5K executions/day, ~36,000 docs examined per
+// doc returned (full 50K-doc scan per poll tick).
+ot2BridgeCommandSchema.index({ kind: 1, 'payload.sweepRunId': 1 });
 // History self-cleans 7 days after completion (completedAt is also set when
 // a command is failed/expired, so every terminal doc ages out).
-ot2BridgeCommandSchema.index({ completedAt: 1 }, { expireAfterSeconds: 7 * 24 * 3600 });
+// Commands are queue messages, not records — their useful life is minutes,
+// and the robots generate ~3,600/day with fat payloads (~460MB by 2026-07-31).
+// Completed commands keep 3 days for debugging; 7-day createdAt TTL is the
+// backstop for failed/expired/stuck states that previously lived forever.
+ot2BridgeCommandSchema.index({ completedAt: 1 }, { expireAfterSeconds: 3 * 24 * 3600 });
+ot2BridgeCommandSchema.index({ createdAt: 1 }, { expireAfterSeconds: 7 * 24 * 3600 });
 
 export const Ot2BridgeCommand = mongoose.models.Ot2BridgeCommand
 	|| mongoose.model('Ot2BridgeCommand', ot2BridgeCommandSchema, 'ot2_bridge_commands');

@@ -18,12 +18,27 @@ const partDefinitionSchema = new Schema({
 	bomType: { type: String, enum: ['spu', 'cartridge'] },
 	supplierPartNumber: String,
 	quantityPerUnit: Number,
-	barcode: String, // scannable barcode label for this part
+	barcode: String, // primary scannable barcode label for this part
+	altBarcodes: { type: [String], default: undefined }, // additional valid scan labels (e.g. line-side bin labels), stored lowercase
+	// Per-barcode (bin/label) quantities from physical counts. Each entry is one
+	// physical label on a bin of this part; inventoryCount stays the rolled-up total.
+	barcodeCounts: {
+		type: [{
+			_id: false,
+			barcode: String, // lowercase, like barcode/altBarcodes
+			quantity: Number,
+			countedAt: Date,
+			countedBy: String
+		}],
+		default: undefined
+	},
+	lastPhysicalCountAt: Date,
 	lastBoxSyncAt: Date
 }, { timestamps: true });
 
 partDefinitionSchema.index({ partNumber: 1 }, { unique: true });
 partDefinitionSchema.index({ barcode: 1 }, { unique: true, sparse: true });
+partDefinitionSchema.index({ altBarcodes: 1 }, { sparse: true });
 partDefinitionSchema.index({ bomType: 1 });
 
 export const PartDefinition = mongoose.models.PartDefinition || mongoose.model('PartDefinition', partDefinitionSchema, 'part_definitions');

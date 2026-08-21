@@ -3,8 +3,20 @@
 
 	let { data } = $props();
 
-	let fillTime = $state(data.settings.fillTimePerCartridgeMin);
+	let startupOverheadSec = $state(data.settings.startupOverheadSec);
+	let secondsPerReagentGroup = $state(data.settings.secondsPerReagentGroup);
+	let secondsPerDispense = $state(data.settings.secondsPerDispense);
 	let coolingTime = $state(data.settings.minCoolingTimeMin);
+
+	// Worked example so the numbers above are checkable without starting a run:
+	// a full deck, all four reagent rows (3 wells per cartridge per row).
+	const exampleMin = $derived(
+		Math.round(
+			(Number(startupOverheadSec || 0)
+				+ 4 * Number(secondsPerReagentGroup || 0)
+				+ 24 * 3 * 4 * Number(secondsPerDispense || 0)) / 60
+		)
+	);
 	let expandedAssayId = $state<string | null>(null);
 	let showAddAssay = $state(false);
 	let showAddCode = $state(false);
@@ -37,12 +49,37 @@
 	<div class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4">
 		<h3 class="mb-3 text-sm font-semibold text-[var(--color-tron-text)]">Configuration</h3>
 		<form method="POST" action="?/updateSettings" use:enhance={handleResult} class="space-y-3">
-			<div class="grid grid-cols-2 gap-4">
+			<div>
+				<p class="text-xs font-semibold text-[var(--color-tron-text)]">Run-time estimate</p>
+				<p class="mt-1 text-[11px] text-[var(--color-tron-text-secondary)]">
+					The estimate scales with the wells a run will actually fill, not with cartridge count
+					alone: <span class="font-mono">startup + rows × per-row + wells × per-well</span>. A
+					reagent row fills 3 wells per cartridge; a single-column selection fills 1.
+				</p>
+			</div>
+			<div class="grid grid-cols-3 gap-4">
 				<div>
-					<label for="fillTime" class="text-xs text-[var(--color-tron-text-secondary)]">Fill time per cartridge (min)</label>
-					<input id="fillTime" name="fillTime" type="number" step="0.05" min="0.1" max="10" bind:value={fillTime}
+					<label for="startupOverheadSec" class="text-xs text-[var(--color-tron-text-secondary)]">Startup overhead (sec)</label>
+					<input id="startupOverheadSec" name="startupOverheadSec" type="number" step="5" min="0" max="1800" bind:value={startupOverheadSec}
 						class="mt-1 min-h-[44px] w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-3 py-2 text-sm text-[var(--color-tron-text)]" />
 				</div>
+				<div>
+					<label for="secondsPerReagentGroup" class="text-xs text-[var(--color-tron-text-secondary)]">Per reagent row (sec)</label>
+					<input id="secondsPerReagentGroup" name="secondsPerReagentGroup" type="number" step="5" min="0" max="1800" bind:value={secondsPerReagentGroup}
+						class="mt-1 min-h-[44px] w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-3 py-2 text-sm text-[var(--color-tron-text)]" />
+				</div>
+				<div>
+					<label for="secondsPerDispense" class="text-xs text-[var(--color-tron-text-secondary)]">Per well filled (sec)</label>
+					<input id="secondsPerDispense" name="secondsPerDispense" type="number" step="0.1" min="0" max="60" bind:value={secondsPerDispense}
+						class="mt-1 min-h-[44px] w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-3 py-2 text-sm text-[var(--color-tron-text)]" />
+				</div>
+			</div>
+			<p class="text-[11px] text-[var(--color-tron-text-secondary)]">
+				With these values, 24 cartridges × all four reagent rows (288 wells) estimates
+				<span class="font-mono text-[var(--color-tron-cyan)]">~{exampleMin} min</span>.
+				Measured runs of that shape took 22–25 min.
+			</p>
+			<div class="grid grid-cols-2 gap-4 border-t border-[var(--color-tron-border)] pt-3">
 				<div>
 					<label for="coolingTime" class="text-xs text-[var(--color-tron-text-secondary)]">Min cooling time (min)</label>
 					<input id="coolingTime" name="coolingTime" type="number" min="1" max="120" bind:value={coolingTime}

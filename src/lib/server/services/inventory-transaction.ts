@@ -22,6 +22,7 @@ export interface RecordTransactionParams {
 	partDefinitionId?: string;
 	lotId?: string;
 	cartridgeRecordId?: string;
+	spuId?: string;
 	quantity: number;
 	manufacturingStep?: 'cut_thermoseal' | 'laser_cut' | 'backing' | 'wax_filling' | 'reagent_filling' | 'top_seal' | 'cut_top_seal' | 'storage' | 'qa_qc' | 'scrap';
 	manufacturingRunId?: string;
@@ -61,6 +62,17 @@ export async function recordTransaction(params: RecordTransactionParams): Promis
 			{ $set: { inventoryCount: newQuantity } }
 		);
 
+		// KB2-13 supply loop: a stock decrement immediately re-checks the
+		// part-reorder rule + any part_stock standing targets for THIS part.
+		// Fire-and-forget with a lazy import — the supply autopilot must never
+		// throw into (or slow) the transaction-recording path.
+		if (newQuantity < previousQuantity) {
+			const partId = String(params.partDefinitionId);
+			import('$lib/server/kanban/standing')
+				.then(({ checkSupplyForPart }) => checkSupplyForPart(partId))
+				.catch((e) => console.error('[inventory-transaction] supply check failed:', e));
+		}
+
 		// Low inventory check — only fire on the transition into low state
 		if (params.transactionType === 'consumption' || params.transactionType === 'scrap') {
 			const minOrder = part?.minimumOrderQty;
@@ -87,6 +99,7 @@ export async function recordTransaction(params: RecordTransactionParams): Promis
 		partDefinitionId: params.partDefinitionId,
 		lotId: params.lotId,
 		cartridgeRecordId: params.cartridgeRecordId,
+		spuId: params.spuId,
 		quantity: params.quantity,
 		previousQuantity,
 		newQuantity,

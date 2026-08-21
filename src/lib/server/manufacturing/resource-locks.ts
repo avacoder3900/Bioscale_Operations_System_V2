@@ -36,8 +36,9 @@ export async function checkRobotConflict(robotId: string): Promise<string | null
 /**
  * Is this deck bound to any run that still physically has it?
  * The deck is only truly "in use" during page-owned stages. Once status
- * moves past the filling page (QC/Storage for wax, Top Sealing/Storage
- * for reagent), the cartridges are off the deck and it's free for reuse.
+ * moves past the filling page (QC/Storage for wax; Completed for reagent —
+ * there is no reagent post-OT-2 queue), the cartridges are off the deck and
+ * it's free for reuse.
  */
 export async function checkDeckConflict(deckId: string, ignoreRunId?: string): Promise<string | null> {
 	if (!deckId) return null;

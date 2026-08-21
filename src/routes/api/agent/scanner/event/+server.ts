@@ -46,6 +46,30 @@ export const POST: RequestHandler = async ({ request }) => {
 	const source = VALID_SOURCES.has(body?.source) ? body.source : 'unknown';
 
 	await connectDB();
+	const now = new Date();
+
+	// Heartbeats are liveness signals, not history: ONE doc per device,
+	// overwritten in place. Storing every ping as a permanent row grew this
+	// collection to 1.5M docs (Atlas incident, 2026-07-31). Consumers only
+	// ever read the latest heartbeat per device, so the shape is unchanged.
+	if (eventType === 'heartbeat') {
+		const hbId = `hb:${deviceId}`;
+		await ScannerEvent.updateOne(
+			{ _id: hbId },
+			{
+				$set: {
+					deviceId,
+					eventType: 'heartbeat',
+					source,
+					metadata: body?.metadata && typeof body.metadata === 'object' ? body.metadata : undefined,
+					receivedAt: now
+				}
+			},
+			{ upsert: true }
+		);
+		return json({ success: true, eventId: hbId, receivedAt: now });
+	}
+
 	const doc = await ScannerEvent.create({
 		deviceId,
 		eventType,
@@ -55,7 +79,7 @@ export const POST: RequestHandler = async ({ request }) => {
 		contextRef: typeof body?.contextRef === 'string' ? body.contextRef : undefined,
 		errorMessage: typeof body?.errorMessage === 'string' ? body.errorMessage : undefined,
 		metadata: body?.metadata && typeof body.metadata === 'object' ? body.metadata : undefined,
-		receivedAt: new Date()
+		receivedAt: now
 	});
 
 	return json({ success: true, eventId: doc._id, receivedAt: doc.receivedAt });

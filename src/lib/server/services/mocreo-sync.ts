@@ -29,19 +29,12 @@ const GATEWAY_OUTAGE_FRACTION = 0.5;
 const TEMP_RECOVERY_HYSTERESIS_C = 0.5;
 
 function authenticateSync(request: Request): void {
-	// 1) Explicit CRON_SECRET Bearer (preferred — set in Vercel env).
+	// 1) Explicit CRON_SECRET Bearer (Vercel sends it automatically when the
+	//    env var is set). No user-agent fallback — that header is forgeable.
 	const authHeader = request.headers.get('authorization')?.replace('Bearer ', '');
 	if (env.CRON_SECRET && authHeader === env.CRON_SECRET) return;
 
-	// 2) Vercel Cron user-agent fallback. Vercel fires cron requests with
-	//    user-agent "vercel-cron/1.0"; if CRON_SECRET isn't configured the
-	//    Bearer header is absent. GET only — POST still requires the agent key.
-	if (request.method === 'GET') {
-		const ua = request.headers.get('user-agent') ?? '';
-		if (ua.startsWith('vercel-cron/')) return;
-	}
-
-	// 3) Fall back to agent API key auth (openclaw, worker scripts).
+	// 2) Fall back to agent API key auth (openclaw, worker scripts).
 	requireAgentApiKey(request);
 }
 

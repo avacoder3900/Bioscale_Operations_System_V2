@@ -18,6 +18,8 @@ import {
 	AuditLog,
 	generateId
 } from '$lib/server/db';
+import { resolveLabwareDefinition } from './resolve';
+import { markUnpublished } from './deck-versions';
 
 const LABWARE_DIR =
 	process.env.OPENTRONS_LABWARE_DIR ||
@@ -110,8 +112,10 @@ export async function applyDeckEdit(input: ApplyDeckEditInput): Promise<ApplyDec
 	const { deckLoadName, wellName } = input;
 	const delta: Vec3 = { x: n(input.delta?.x), y: n(input.delta?.y), z: n(input.delta?.z) };
 
-	const def = (await LabwareDefinition.findOne({ loadName: deckLoadName }).lean()) as any;
-	if (!def) throw new Error(`Labware definition "${deckLoadName}" not found in labware_definitions.`);
+	// Resolve by the full identity, not the bare loadName: labware_definitions is
+	// uniquely indexed on (namespace, loadName, version), so a loadName alone can
+	// legitimately match several documents and `findOne` would pick arbitrarily.
+	const { doc: def } = await resolveLabwareDefinition(deckLoadName, { strict: true });
 	const well = def.definition?.wells?.[wellName];
 	if (!well) throw new Error(`Well "${wellName}" not found in "${deckLoadName}".`);
 
@@ -123,7 +127,7 @@ export async function applyDeckEdit(input: ApplyDeckEditInput): Promise<ApplyDec
 
 	// 1. Mongo source of truth — set the well's coords (Mixed sub-path).
 	await LabwareDefinition.updateOne(
-		{ loadName: deckLoadName },
+		{ _id: def._id },
 		{
 			$set: {
 				[`definition.wells.${wellName}.x`]: after.x,
@@ -132,6 +136,7 @@ export async function applyDeckEdit(input: ApplyDeckEditInput): Promise<ApplyDec
 			}
 		}
 	);
+	await markUnpublished(deckLoadName);
 
 	// 2. Append-only history.
 	await DeckCalibrationEdit.create({
@@ -217,8 +222,10 @@ export async function applyDeckEditBatch(
 	const delta: Vec3 = { x: n(input.delta?.x), y: n(input.delta?.y), z: n(input.delta?.z) };
 	const wellNames = Array.from(new Set(input.wellNames ?? []));
 
-	const def = (await LabwareDefinition.findOne({ loadName: deckLoadName }).lean()) as any;
-	if (!def) throw new Error(`Labware definition "${deckLoadName}" not found in labware_definitions.`);
+	// Resolve by the full identity, not the bare loadName: labware_definitions is
+	// uniquely indexed on (namespace, loadName, version), so a loadName alone can
+	// legitimately match several documents and `findOne` would pick arbitrarily.
+	const { doc: def } = await resolveLabwareDefinition(deckLoadName, { strict: true });
 	const wells = def.definition?.wells ?? {};
 
 	const now = new Date();
@@ -258,12 +265,24 @@ export async function applyDeckEditBatch(
 		});
 	}
 
+	// ALL-OR-NOTHING: a batch that can only partly apply must not apply at all.
+	// Partial application tears the group's internal geometry apart — the classic
+	// case is a row clamping at the y=0 edge while the rest of the deck moves,
+	// after which the dropped wells are permanently offset from their neighbors
+	// (and a subsequent Undo moves them AGAIN). This exact mechanism corrupted
+	// deck calibrations repeatedly (2026-07: "calibration keeps getting messed
+	// up"). Fail loudly with the per-well reasons instead; the operator
+	// re-captures with a delta that fits every selected well.
+	if (failed.length > 0) {
+		return { applied: 0, failed, fileSynced: false, results: [] };
+	}
 	if (results.length === 0) {
 		return { applied: 0, failed, fileSynced: false, results };
 	}
 
 	// 1. One Mongo write for every well's coords.
-	await LabwareDefinition.updateOne({ loadName: deckLoadName }, { $set: setOps });
+	await LabwareDefinition.updateOne({ _id: def._id }, { $set: setOps });
+	await markUnpublished(deckLoadName);
 
 	// 2. Batch history + one summary audit row.
 	await DeckCalibrationEdit.insertMany(historyDocs);
@@ -335,8 +354,10 @@ export async function applyDeckEditsPerWell(
 		if (e?.wellName) editMap.set(e.wellName, { x: n(e.delta?.x), y: n(e.delta?.y), z: n(e.delta?.z) });
 	}
 
-	const def = (await LabwareDefinition.findOne({ loadName: deckLoadName }).lean()) as any;
-	if (!def) throw new Error(`Labware definition "${deckLoadName}" not found in labware_definitions.`);
+	// Resolve by the full identity, not the bare loadName: labware_definitions is
+	// uniquely indexed on (namespace, loadName, version), so a loadName alone can
+	// legitimately match several documents and `findOne` would pick arbitrarily.
+	const { doc: def } = await resolveLabwareDefinition(deckLoadName, { strict: true });
 	const wells = def.definition?.wells ?? {};
 
 	const now = new Date();
@@ -380,7 +401,8 @@ export async function applyDeckEditsPerWell(
 		return { applied: 0, failed, fileSynced: false, results };
 	}
 
-	await LabwareDefinition.updateOne({ loadName: deckLoadName }, { $set: setOps });
+	await LabwareDefinition.updateOne({ _id: def._id }, { $set: setOps });
+	await markUnpublished(deckLoadName);
 	await DeckCalibrationEdit.insertMany(historyDocs);
 	await AuditLog.create({
 		_id: generateId(),

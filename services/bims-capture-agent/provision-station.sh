@@ -144,7 +144,7 @@ else
   "stationId": "${STATION_ID}",
   "name": "${STATION_NAME}",
   "hostname": "${fqdn}",
-  "capabilities": { "camera": true, "scanner": true, "led": false, "robotArm": false },
+  "capabilities": { "camera": true, "scanner": true, "led": false, "robotArm": false, "sequence": true },
   "agentVersion": "0.1.0"
 }
 JSON

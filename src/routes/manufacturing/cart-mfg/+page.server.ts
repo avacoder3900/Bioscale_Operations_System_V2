@@ -7,6 +7,7 @@ import {
 } from '$lib/server/db';
 import { getCheckedOutCartridgeIds } from '$lib/server/checkout-utils';
 import { requirePermission } from '$lib/server/permissions';
+import { WAX_STAGE_STATUSES } from '$lib/shared/cartridge-wax-status';
 import type { PageServerLoad } from './$types';
 
 export const config = { maxDuration: 60 };
@@ -211,7 +212,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 	// Post-OT-2 / on the Opentron Control queue — run still exists but robot
 	// is free for a new filling run.
 	const WAX_POST_OT2_QUEUED = ['QC', 'Storage', 'qc', 'storage'];
-	const REAGENT_POST_OT2_QUEUED = ['Top Sealing', 'Storage'];
+	// Reagent runs have no post-OT-2 queue (REAGENT-TOPSEAL-IMPLICIT): Running
+	// is the terminal stage, so a reagent run is either active or done.
 
 	const robotUtilMap = new Map<string, number>();
 	for (const r of [...(robotUtilWax as any[]), ...(robotUtilReagent as any[])]) {
@@ -239,10 +241,6 @@ export const load: PageServerLoad = async ({ locals }) => {
 			// Control for post-OT-2 handling.
 			status = 'available';
 			displayStatus = `Available — Wax queued (${waxRun.status})`;
-			robotPhysicallyFree = true;
-		} else if (reagentRun && REAGENT_POST_OT2_QUEUED.includes(reagentRun.status)) {
-			status = 'available';
-			displayStatus = `Available — Reagent queued (${reagentRun.status})`;
 			robotPhysicallyFree = true;
 		} else {
 			status = 'available';
@@ -299,7 +297,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 		agg.filter((a) => statuses.includes(a._id)).reduce((s, a) => s + a.count, 0);
 	const completedStatuses = ['completed', 'Completed'];
 	const activeStatuses = ['Setup', 'Loading', 'Running', 'setup', 'loading', 'running',
-		'Awaiting Removal', 'QC', 'Storage', 'Inspection', 'Top Sealing'];
+		'Awaiting Removal', 'QC', 'Storage', 'Inspection'];
 	const abortedStatuses = ['aborted', 'Aborted', 'cancelled', 'Cancelled'];
 
 	const yieldPercent = producedToday > 0
@@ -323,7 +321,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 			waxFilling: {
 				inProgress: phaseMap.get('wax_filling') ?? 0,
 				waxFilled: phaseMap.get('wax_filled') ?? 0,
-				waxStored: phaseMap.get('wax_stored') ?? 0
+				// Wax-stage carts eligible for reagent filling (WAX-SIMPLIFY-3)
+				waxStage: WAX_STAGE_STATUSES.reduce((s, st) => s + (phaseMap.get(st) ?? 0), 0)
 			},
 			reagentFilling: {
 				inProgress: phaseMap.get('reagent_filling') ?? 0,

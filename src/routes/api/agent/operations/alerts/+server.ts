@@ -2,7 +2,7 @@ import { json } from '@sveltejs/kit';
 import { requireAgentApiKey } from '$lib/server/api-auth';
 import {
 	connectDB, PartDefinition, Equipment, KanbanTask,
-	ApprovalRequest, AgentMessage
+	ApprovalRequest, AgentMessage, WorkflowViolation
 } from '$lib/server/db';
 import type { RequestHandler } from './$types';
 
@@ -22,14 +22,15 @@ export const GET: RequestHandler = async ({ request }) => {
 	const now = new Date();
 	const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
 
-	const [lowStockParts, problemEquipment, overdueTasks, staleApprovals, failedMessages] = await Promise.all([
+	const [lowStockParts, problemEquipment, overdueTasks, staleApprovals, failedMessages, replenishSignals] = await Promise.all([
 		PartDefinition.find({ isActive: true, inventoryCount: { $lte: 0 } })
 			.select('_id partNumber name inventoryCount').lean(),
 		Equipment.find({ status: { $ne: 'active' } })
 			.select('_id name equipmentType status').lean(),
 		KanbanTask.find({
 			dueDate: { $lt: now },
-			status: { $nin: ['done'] },
+			// Active = anything not finished or deliberately parked/declined
+			status: { $nin: ['done', 'declined', 'icebox'] },
 			archived: { $ne: true }
 		}).select('_id title dueDate status').lean(),
 		ApprovalRequest.find({
@@ -37,7 +38,9 @@ export const GET: RequestHandler = async ({ request }) => {
 			createdAt: { $lt: oneDayAgo }
 		}).select('_id changeTitle createdAt').lean(),
 		AgentMessage.find({ status: 'failed' })
-			.select('_id toUserId subject createdAt').lean()
+			.select('_id toUserId subject createdAt').lean(),
+		WorkflowViolation.find({ type: 'replenishment_needed', resolved: false })
+			.select('_id taskId description timestamp').lean()
 	]);
 
 	const alerts: Alert[] = [];
@@ -94,6 +97,17 @@ export const GET: RequestHandler = async ({ request }) => {
 			entityId: m._id,
 			entityType: 'agent_message',
 			createdAt: m.createdAt?.toISOString() || now.toISOString()
+		});
+	}
+
+	for (const v of replenishSignals as any[]) {
+		alerts.push({
+			type: 'replenishment_needed',
+			severity: 'critical',
+			message: v.description,
+			entityId: v._id,
+			entityType: 'workflow_violation',
+			createdAt: v.timestamp?.toISOString() || now.toISOString()
 		});
 	}
 

@@ -61,11 +61,58 @@ export const GET: RequestHandler = async ({ request, url }) => {
 	// Single-SPU lookup by any unique identifier
 	if (spuId || udi || barcode) {
 		const lookup = spuId ? { _id: spuId } : udi ? { udi } : { barcode };
-		const spu = await Spu.findOne(lookup as any).lean();
+		const spu = (await Spu.findOne(lookup as any).lean()) as any;
 		if (!spu) {
 			return json({ success: false, error: 'SPU not found' }, { status: 404 });
 		}
-		return json({ success: true, data: { spu: mapSpu(spu) } });
+		const mapped = mapSpu(spu);
+
+		// BIMS-style magnetometer detail: the page shows ONE value per cell — the
+		// Z per channel with a pass mark against the criteria — never the raw
+		// T/X/Y axis values.
+		const mag = spu.validation?.magnetometer;
+		const criteria =
+			mag?.criteriaUsed && typeof mag.criteriaUsed === 'object' ? mag.criteriaUsed : null;
+		const inRange = (z: unknown): boolean | null =>
+			typeof z === 'number' &&
+			typeof criteria?.minZ === 'number' &&
+			typeof criteria?.maxZ === 'number'
+				? z >= criteria.minZ && z <= criteria.maxZ
+				: null;
+		(mapped.validation as any).magnetometer = {
+			...(mapped.validation as any).magnetometer,
+			testRanAt: mag?.testRanAt ?? null,
+			criteria,
+			wells: Array.isArray(mag?.results)
+				? mag.results.map((w: any) => ({
+						well: w.well,
+						chA_Z: w.chA_Z ?? null,
+						chA_pass: inRange(w.chA_Z),
+						chB_Z: w.chB_Z ?? null,
+						chB_pass: inRange(w.chB_Z),
+						chC_Z: w.chC_Z ?? null,
+						chC_pass: inRange(w.chC_Z)
+					}))
+				: []
+		};
+		const spectro = spu.validation?.spectrophotometer;
+		if (spectro?.results) (mapped.validation as any).spectrophotometer.results = spectro.results;
+
+		return json({
+			success: true,
+			data: {
+				spu: mapped,
+				guidance:
+					'PRESENTATION — magnetometer: render validation.magnetometer.wells as the BIMS table ' +
+					'"Well | Ch A (Z) | Ch B (Z) | Ch C (Z)" — ONE Z value per cell with a check/cross from chX_pass, ' +
+					'headed by "Criteria: Z range <minZ> - <maxZ>". Never show raw T/X/Y axis values unless the user asks ' +
+					'for raw device output. HISTORIES: this record holds only the latest rollup per modality — for full ' +
+					'run histories use the find_test_results / validation_tab tools if available, otherwise run_saved_query ' +
+					'with "SPU Validation Sessions" (magnetometer/thermocouple) or "Validation Runs". OPTICS: optical runs ' +
+					'live on cartridge_records with device.name = this SPU\'s UDI (rolled up here under spectrophotometer); ' +
+					'they are NOT in validation_sessions.'
+			}
+		});
 	}
 
 	// List with optional filters

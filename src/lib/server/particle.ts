@@ -112,24 +112,53 @@ function extractNumericId(name: string): string | null {
 }
 
 /**
+ * Device names that are eligible for SPU auto-creation during linking.
+ *
+ * Deliberately strict. The Particle account holds far more than SPUs — cartridge
+ * decks (Cartridge_Deck_GEN4_001), tip calibrators, bench tools (TOOL-CT-047) and
+ * scratch devices (new4, Argon, owl_narwhal) all carry trailing digits and would
+ * otherwise mint junk SPU records into a sacred collection. Only the real SPU
+ * naming scheme qualifies; everything else still falls through to `unmatched`.
+ */
+export const SPU_DEVICE_NAME_PATTERN = /^BT-M01-\d{4}-\d{4}$/;
+
+/**
  * Match Particle devices to SPUs by numeric suffix (e.g. BT-M01-0000-0209 ↔ SPU-0209).
  * Updates SPU.particleLink with the Particle device ID and serial number.
+ *
+ * A device whose name matches SPU_DEVICE_NAME_PATTERN but has no corresponding SPU
+ * gets one created automatically (status 'draft'), so a newly registered device shows
+ * up in BIMS without a separate manual registration step.
  */
-export async function linkDevicesToSpus(): Promise<{ linked: number; alreadyLinked: number; unmatched: string[]; errors: string[] }> {
+export async function linkDevicesToSpus(
+	actor?: { _id?: string; username?: string }
+): Promise<{ linked: number; alreadyLinked: number; created: string[]; unmatched: string[]; errors: string[] }> {
 	await connectDB();
-	const { Spu } = await import('$lib/server/db');
+	const { Spu, AuditLog } = await import('$lib/server/db');
 	const devices = await listDevices();
 	const allSpus = await Spu.find({}, { _id: 1, udi: 1, particleLink: 1 }).lean() as any[];
 	const errors: string[] = [];
 	const unmatched: string[] = [];
+	const created: string[] = [];
+	const actorLabel = actor?.username ?? actor?._id ?? 'system:particle-sync';
 	let linked = 0;
 	let alreadyLinked = 0;
 
-	// Build a map of numeric suffix → SPU for fast lookup
+	// Lookup maps. `spuByNumber` keeps the original raw-suffix behaviour untouched.
+	// `spuByNumberNorm` ignores zero-padding so an existing "SPU-255" still matches a
+	// device named "BT-M01-0000-0255" instead of minting a duplicate into a sacred
+	// (undeletable) collection — but it is consulted ONLY for SPU-named devices, see below.
+	const normaliseNum = (num: string) => String(parseInt(num, 10));
 	const spuByNumber = new Map<string, any>();
+	const spuByNumberNorm = new Map<string, any>();
+	const spuByUdi = new Map<string, any>();
 	for (const spu of allSpus) {
+		if (spu.udi) spuByUdi.set(spu.udi, spu);
 		const num = extractNumericId(spu.udi);
-		if (num) spuByNumber.set(num, spu);
+		if (num) {
+			spuByNumber.set(num, spu);
+			spuByNumberNorm.set(normaliseNum(num), spu);
+		}
 	}
 
 	for (const device of devices) {
@@ -146,15 +175,96 @@ export async function linkDevicesToSpus(): Promise<{ linked: number; alreadyLink
 			continue;
 		}
 
-		const spu = spuByNumber.get(deviceNum);
+		// Exact UDI wins, then raw suffix (unchanged legacy behaviour). The padding-
+		// normalised map is a LAST resort and only for devices whose name is a real SPU
+		// name — otherwise "Cartridge_Deck_GEN4_001" (suffix "001" → "1") would match SPU
+		// BT-M01-0000-0001 (suffix "0001" → "1") and rename it to the deck's name.
+		let spu = spuByUdi.get(deviceName) ?? spuByNumber.get(deviceNum);
+		if (!spu && SPU_DEVICE_NAME_PATTERN.test(deviceName)) {
+			spu = spuByNumberNorm.get(normaliseNum(deviceNum));
+		}
+
+		// No SPU for this device yet — auto-create one if the name is a real SPU name.
 		if (!spu) {
-			unmatched.push(`${deviceName} (no SPU with number ${deviceNum})`);
+			if (!SPU_DEVICE_NAME_PATTERN.test(deviceName)) {
+				unmatched.push(`${deviceName} (no SPU with number ${deviceNum})`);
+				continue;
+			}
+
+			let newSpuId: string;
+			try {
+				newSpuId = generateId();
+				const now = new Date();
+				await Spu.create({
+					_id: newSpuId,
+					udi: deviceName,
+					// The device name IS the printed identifier for these units.
+					barcode: deviceName,
+					status: 'draft',
+					assemblyStatus: 'created',
+					qcStatus: 'pending',
+					statusTransitions: [{
+						_id: generateId(),
+						from: null,
+						to: 'draft',
+						changedBy: { _id: actor?._id ?? 'system:particle-sync', username: actorLabel },
+						changedAt: now,
+						reason: 'auto_created_particle_sync'
+					}],
+					// Deliberately NOT the acting user: /assembly's "Start new build" reuses a
+					// recent draft matching { createdBy: <user>, status:'draft',
+					// assemblyStatus:'created' }, which would make an operator assemble a
+					// physical unit under a UDI already bound to a Particle device.
+					createdBy: 'system:particle-sync'
+				});
+			} catch (err) {
+				errors.push(`${deviceName}: auto-create failed — ${err instanceof Error ? err.message : String(err)}`);
+				continue;
+			}
+
+			// Registered immediately so a later failure can never orphan an SPU that is
+			// absent from created[]/the lookup maps — the row cannot be deleted afterwards.
+			spu = { _id: newSpuId, udi: deviceName, particleLink: null };
+			spuByNumber.set(deviceNum, spu);
+			spuByNumberNorm.set(normaliseNum(deviceNum), spu);
+			spuByUdi.set(deviceName, spu);
+			created.push(deviceName);
+
+			try {
+				await AuditLog.create({
+					_id: generateId(),
+					tableName: 'spus',
+					recordId: newSpuId,
+					action: 'INSERT',
+					newData: {
+						udi: deviceName,
+						status: 'draft',
+						autoCreatedFrom: 'particle',
+						particleDeviceId: device.id
+					},
+					reason: 'Auto-created from Particle device during link',
+					changedBy: actorLabel
+				});
+			} catch (err) {
+				errors.push(`${deviceName}: SPU created but audit log failed — ${err instanceof Error ? err.message : String(err)}`);
+			}
+		}
+
+		// Check if already linked to this device (before the collision guard, so a
+		// long-standing link is not re-reported as an error on every single run).
+		if (spu.particleLink?.particleDeviceId === device.id) {
+			alreadyLinked++;
 			continue;
 		}
 
-		// Check if already linked to this device
-		if (spu.particleLink?.particleDeviceId === device.id) {
-			alreadyLinked++;
+		// Two distinct SPU-named devices share a trailing-digit suffix (e.g.
+		// BT-M01-0000-0255 vs BT-M01-0001-0255). Overwriting would silently rename the SPU
+		// and steal the other device's link, so refuse and report instead. Non-SPU-named
+		// devices are exempt: renaming "SPU-0209" → "BT-M01-0000-0209" is the intended
+		// legacy behaviour and must keep working.
+		if (spu.udi && spu.udi !== deviceName
+			&& SPU_DEVICE_NAME_PATTERN.test(spu.udi) && SPU_DEVICE_NAME_PATTERN.test(deviceName)) {
+			errors.push(`${deviceName}: suffix ${deviceNum} already belongs to ${spu.udi} — not relinking`);
 			continue;
 		}
 
@@ -176,14 +286,16 @@ export async function linkDevicesToSpus(): Promise<{ linked: number; alreadyLink
 		}
 	}
 
-	return { linked, alreadyLinked, unmatched, errors };
+	return { linked, alreadyLinked, created, unmatched, errors };
 }
 
 /**
  * Sync all devices from Particle Cloud into the local ParticleDevice collection.
  * Upserts by particleDeviceId to keep local DB in sync.
  */
-export async function syncDevices(): Promise<{ synced: number; errors: string[] }> {
+export async function syncDevices(
+	actor?: { _id?: string; username?: string }
+): Promise<{ synced: number; created: string[]; errors: string[] }> {
 	await connectDB();
 	const devices = await listDevices();
 	const errors: string[] = [];
@@ -227,12 +339,17 @@ export async function syncDevices(): Promise<{ synced: number; errors: string[] 
 		}
 	);
 
-	// Auto-link devices to SPUs after sync
+	// Auto-link devices to SPUs after sync (also auto-creates SPUs for new devices).
+	// Linking is non-fatal to the sync itself, but its errors must NOT be swallowed —
+	// this path writes to a sacred collection, so a silent failure is unacceptable.
+	let created: string[] = [];
 	try {
-		await linkDevicesToSpus();
-	} catch (_) {
-		// Non-fatal — sync succeeded even if linking fails
+		const linkResult = await linkDevicesToSpus(actor);
+		created = linkResult.created;
+		errors.push(...linkResult.errors);
+	} catch (err) {
+		errors.push(`Linking failed: ${err instanceof Error ? err.message : String(err)}`);
 	}
 
-	return { synced, errors };
+	return { synced, created, errors };
 }

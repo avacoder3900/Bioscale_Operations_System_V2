@@ -1,21 +1,30 @@
 """USB camera bridge for the Pi station — aiortc VideoStreamTrack backed by OpenCV.
 
-Opens /dev/video0 via cv2.VideoCapture with MJPG at 1280x720. If the camera
-isn't present, `is_available()` returns False and /health surfaces
+Opens a UVC camera via cv2.VideoCapture with MJPG. The device is selectable
+(CAMERA_DEVICE env — index, /dev path, or case-insensitive name substring) and
+a tuning preset is selectable (CAMERA_PROFILE env — 'default' or 'microscope').
+If the camera isn't present, `is_available()` returns False and /health surfaces
 camera_ok=False — the agent stays up so the scanner / LED can still work.
 
-WebRTC frame budget on Pi 4: ~720p at 15 fps (see PRD §5.3). Downsampling
-to that ceiling and the recv() fps cap live in this module; task #14 hardens
-both paths.
+WebRTC frame budget on Pi 4: ~720p at 15 fps (see PRD §5.3). The WebRTC track is
+downsampled to that ceiling in recv(); `grab_still()` returns a full-resolution
+frame from the *same* capture handle for the timed microscope sequence (see
+sequence.py), so the two never open the device twice.
+
+Windows dev mode: opens with the DSHOW backend and a numeric index (name-based
+device selection is not available through OpenCV on Windows — see _resolve_device).
 """
 
 from __future__ import annotations
 
 import asyncio
+import glob
 import logging
+import os
 import re
 import shutil
 import subprocess
+import sys
 import threading
 import time
 from fractions import Fraction
@@ -28,20 +37,50 @@ from av import VideoFrame
 
 log = logging.getLogger("bims-capture-agent.camera")
 
-# Resolution + fps choice (PRD §5.3): the Pi 4 hardware H264 encoder can
+_IS_WINDOWS = sys.platform == "win32"
+
+# Streaming ceiling + fps (PRD §5.3): the Pi 4 hardware H264 encoder can
 # sustain 720p comfortably at ~10-15 fps while leaving CPU headroom for
-# aiortc, the OS, and (eventually) inference. 1080p doubles the pixel
-# budget for marginal QC value at this distance — operators are aligning
-# a cartridge, not reading fine print. We *ask* the driver for MJPG at
-# 1280x720, but cheap USB cameras often ignore the request and serve a
-# higher native resolution; recv() resizes down defensively. The fps cap
-# uses an asyncio.sleep on the remaining slot time so a slow camera
-# doesn't bunch frames and a fast camera doesn't burn the CPU.
-_CAMERA_INDEX = 0
-_TARGET_WIDTH = 1280
-_TARGET_HEIGHT = 720
-_TARGET_FPS = 15
-_FRAME_INTERVAL = 1.0 / _TARGET_FPS
+# aiortc, the OS, and (eventually) inference. recv() downsamples anything
+# larger than this ceiling for the live WebRTC track; the fps cap uses an
+# asyncio.sleep on the remaining slot time so a slow camera doesn't bunch
+# frames and a fast camera doesn't burn the CPU. Full-resolution stills for
+# the microscope sequence bypass this ceiling via grab_still().
+# Env-tunable per station (latency work): STREAM_WIDTH / STREAM_HEIGHT /
+# STREAM_FPS — smaller/slower stream = less encode time = lower lag.
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, "") or default)
+    except ValueError:
+        return default
+
+
+_STREAM_WIDTH = _env_int("STREAM_WIDTH", 1280)
+_STREAM_HEIGHT = _env_int("STREAM_HEIGHT", 720)
+_TARGET_FPS = _env_int("STREAM_FPS", 15)
+_FRAME_INTERVAL = 1.0 / max(1, _TARGET_FPS)
+
+# Latency-bench hook: STAMP_FRAMES=1 embeds a millisecond timestamp as pixel
+# blocks into every live frame (see latency_stamp.py) so a receiver on the
+# same clock can measure capture→delivery latency through any transport.
+_STAMP_FRAMES = os.environ.get("STAMP_FRAMES", "") == "1"
+
+# CAMERA_PROFILE presets applied after the capture opens. 'default' keeps the
+# historical 1280x720 behavior; 'microscope' targets the sensor's full
+# 1920x1080, kills autofocus + auto-exposure (fixed optics → consistent timed
+# stills), and applies no LIZA-style color pipeline (there is none in this
+# module today — microscope optics have their own illumination and must not
+# inherit the cartridge-rig color defaults if any are ever added here).
+_CAMERA_PROFILE = os.environ.get("CAMERA_PROFILE", "default").strip().lower() or "default"
+_PROFILE_DIMS: dict[str, tuple[int, int]] = {
+    "default": (1280, 720),
+    "microscope": (1920, 1080),
+}
+
+# Raw CAMERA_DEVICE spec (index "0", path "/dev/video2", or name "celestron").
+# Resolved once, lazily, to an OpenCV-openable source (int index or str path).
+_CAMERA_DEVICE_ENV = os.environ.get("CAMERA_DEVICE", "").strip()
+_resolved_source: Optional[object] = None
 
 # Friendly-name → (cv2.CAP_PROP_*, value-type, [min, max], rough-typical-range)
 # Operators send {prop: "exposure", value: -5}; we map to the cv2 enum here
@@ -102,6 +141,115 @@ _camera_ok = False
 _v4l2_ranges_cache: Optional[dict] = None
 
 
+# ----------------- device selection (CAMERA_DEVICE) -----------------
+def _device_yields_frames(index: int) -> bool:
+    """Open /dev/videoN briefly and check it actually reads a frame.
+
+    Many UVC cameras expose a second /dev/videoN node (metadata / still-capture)
+    that opens cleanly but never yields video frames. Used to prefer the lowest
+    working node when resolving a device by name.
+    """
+    cap = cv2.VideoCapture(index)
+    try:
+        if not cap.isOpened():
+            return False
+        ok, frame = cap.read()
+        return bool(ok and frame is not None)
+    finally:
+        cap.release()
+
+
+def _resolve_device_by_name(substr: str) -> Optional[str]:
+    """Map a case-insensitive name substring to a /dev/videoN path (Linux only).
+
+    Scans /sys/class/video4linux/*/name. Prefers the lowest node index that
+    yields frames (see _device_yields_frames). Returns None if nothing matches
+    or when running on Windows (OpenCV can't enumerate DirectShow names).
+    """
+    if _IS_WINDOWS:
+        log.warning(
+            "CAMERA_DEVICE name matching (%r) is not available on Windows via "
+            "OpenCV — use a numeric index instead; falling back to index 0",
+            substr,
+        )
+        return None
+    substr_l = substr.lower()
+    matches: list[int] = []
+    for name_path in sorted(glob.glob("/sys/class/video4linux/video*/name")):
+        try:
+            with open(name_path) as fh:
+                cam_name = fh.read().strip()
+        except OSError:
+            continue
+        if substr_l in cam_name.lower():
+            node = os.path.basename(os.path.dirname(name_path))  # 'videoN'
+            try:
+                matches.append(int(node.replace("video", "")))
+            except ValueError:
+                continue
+    if not matches:
+        return None
+    for n in sorted(matches):
+        if _device_yields_frames(n):
+            return f"/dev/video{n}"
+    # None yielded a frame on probe — return the lowest so open() still tries.
+    return f"/dev/video{min(matches)}"
+
+
+def _resolve_device() -> object:
+    """Resolve CAMERA_DEVICE to an OpenCV source: an int index or a str path.
+
+    Accepts an integer index ("0"), a device path ("/dev/video2"), or a
+    case-insensitive name substring ("celestron"). Unset → index 0 (the
+    historical /dev/video0 default). A name that can't be resolved (or Windows,
+    where name matching is unsupported) falls back to index 0.
+    """
+    spec = _CAMERA_DEVICE_ENV
+    if not spec:
+        return 0
+    if spec.isdigit():
+        return int(spec)
+    if spec.startswith("/dev/") or (not _IS_WINDOWS and os.path.exists(spec)):
+        return spec
+    resolved = _resolve_device_by_name(spec)
+    if resolved is not None:
+        return resolved
+    log.warning("CAMERA_DEVICE=%r unresolved — falling back to index 0", spec)
+    return 0
+
+
+def _camera_source() -> object:
+    """Lazily resolve + cache the OpenCV source for CAMERA_DEVICE."""
+    global _resolved_source
+    if _resolved_source is None:
+        _resolved_source = _resolve_device()
+        log.info(
+            "camera source resolved to %r (CAMERA_DEVICE=%r, profile=%s)",
+            _resolved_source,
+            _CAMERA_DEVICE_ENV or "<unset>",
+            _CAMERA_PROFILE,
+        )
+    return _resolved_source
+
+
+def _open_capture(source: object) -> "cv2.VideoCapture":
+    """Open a capture with the platform-appropriate backend.
+
+    Windows: DSHOW (fast startup, prop support). Linux: CAP_V4L2 explicitly —
+    the auto backend resolves to GStreamer on Pi OS, which silently ignores
+    FOURCC/width/height sets and pins UVC cams at their 640x480 default
+    (verified on the Celestron: auto → 640x480, V4L2 → full 1920x1080).
+    """
+    if _IS_WINDOWS:
+        return cv2.VideoCapture(source, cv2.CAP_DSHOW)
+    return cv2.VideoCapture(source, cv2.CAP_V4L2)
+
+
+def _profile_dims() -> tuple[int, int]:
+    """Capture (not streaming) resolution for the active CAMERA_PROFILE."""
+    return _PROFILE_DIMS.get(_CAMERA_PROFILE, _PROFILE_DIMS["default"])
+
+
 class CameraTrack(VideoStreamTrack):
     """aiortc track that pulls frames off cv2.VideoCapture."""
 
@@ -109,30 +257,139 @@ class CameraTrack(VideoStreamTrack):
 
     def __init__(self) -> None:
         super().__init__()
-        self._cap = cv2.VideoCapture(_CAMERA_INDEX)
-        self._native_w = _TARGET_WIDTH
-        self._native_h = _TARGET_HEIGHT
+        source = _camera_source()
+        # LIVE/STILL SPLIT: the shared handle runs at the STREAM resolution so
+        # the live pipeline (decode → encode) costs the same as a plain webcam
+        # (~0.9 MP/frame at 720p, vs 2 MP when we captured 1080p and shrank
+        # every frame). grab_still() renegotiates the sensor to the profile's
+        # full still resolution per shot and restores — ~100-300 ms per still,
+        # invisible at multi-second sequence intervals.
+        still_w, still_h = _profile_dims()
+        cap_w = min(still_w, _STREAM_WIDTH)
+        cap_h = min(still_h, _STREAM_HEIGHT)
+        self._still_w, self._still_h = still_w, still_h
+        self._live_w, self._live_h = cap_w, cap_h
+        # >0 while a sequence run holds the sensor at still resolution —
+        # renegotiation on this camera costs ~4s, so we switch once per RUN,
+        # not per shot. recv()'s resize branch downsizes live frames meanwhile.
+        self._still_mode = 0
+        # Serializes cv2 reads between the WebRTC recv() (event loop) and
+        # grab_still() (sequence thread) — cv2.VideoCapture.read() is not
+        # thread-safe, and both share this single handle.
+        self._read_lock = threading.Lock()
+        self._cap = _open_capture(source)
+        self._native_w = cap_w
+        self._native_h = cap_h
         self._next_deadline = 0.0
         if self._cap.isOpened():
             self._cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
-            self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, _TARGET_WIDTH)
-            self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, _TARGET_HEIGHT)
+            self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, cap_w)
+            self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, cap_h)
             self._cap.set(cv2.CAP_PROP_FPS, _TARGET_FPS)
-            self._native_w = int(self._cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or _TARGET_WIDTH
-            self._native_h = int(self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or _TARGET_HEIGHT
+            # Depth-1 capture buffer: read() always hands back the NEWEST
+            # frame. The OpenCV default (~4 frames) serves stale frames,
+            # which reads as ~250ms of extra display lag at 15 fps.
+            self._cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            if _CAMERA_PROFILE == "microscope":
+                # Fixed optics: disable autofocus + auto-exposure so a timed
+                # run of stills is consistent shot-to-shot. Values remain live-
+                # adjustable via set_param() from the /capture tuning sliders.
+                self._cap.set(cv2.CAP_PROP_AUTOFOCUS, 0)
+                self._cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 1)  # 1 = manual (UVC)
+            self._native_w = int(self._cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or cap_w
+            self._native_h = int(self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or cap_h
             log.info(
-                "camera opened: %dx%d native, target %dx%d @ %d fps",
+                "camera opened: source=%r %dx%d native, profile=%s, stream ceiling "
+                "%dx%d @ %d fps",
+                source,
                 self._native_w,
                 self._native_h,
-                _TARGET_WIDTH,
-                _TARGET_HEIGHT,
+                _CAMERA_PROFILE,
+                _STREAM_WIDTH,
+                _STREAM_HEIGHT,
                 _TARGET_FPS,
             )
         else:
-            log.warning("cv2.VideoCapture(%d) failed to open", _CAMERA_INDEX)
+            log.warning("cv2.VideoCapture(%r) failed to open", source)
 
     def is_open(self) -> bool:
         return bool(self._cap and self._cap.isOpened())
+
+    def grab_live(self) -> Optional["object"]:
+        """One fresh frame at the LIVE (stream) resolution — no renegotiation.
+
+        Used by the MJPEG preview: cheap, safe to call every frame.
+        """
+        if self._cap is None:
+            return None
+        with self._read_lock:
+            if not self.is_open():
+                return None
+            ok, frame_bgr = self._cap.read()
+        if not ok or frame_bgr is None:
+            return None
+        return frame_bgr
+
+    def enter_still_mode(self) -> None:
+        """Hold the sensor at the profile's STILL resolution (sequence run).
+
+        Renegotiation costs ~4s on the Celestron, so a run switches once at
+        start and once at end instead of per shot. Nested calls refcount.
+        """
+        if (self._still_w, self._still_h) == (self._live_w, self._live_h):
+            return
+        with self._read_lock:
+            if not self.is_open():
+                return
+            self._still_mode += 1
+            if self._still_mode == 1:
+                self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, self._still_w)
+                self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._still_h)
+                self._cap.read()  # flush the transition frame
+
+    def exit_still_mode(self) -> None:
+        """Restore the LIVE (stream) resolution once no run holds still mode."""
+        if (self._still_w, self._still_h) == (self._live_w, self._live_h):
+            return
+        with self._read_lock:
+            if not self.is_open() or self._still_mode == 0:
+                return
+            self._still_mode -= 1
+            if self._still_mode == 0:
+                self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, self._live_w)
+                self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._live_h)
+                self._cap.read()  # flush back
+
+    def grab_still(self) -> Optional["object"]:
+        """Return a fresh FULL-RESOLUTION BGR frame from the shared capture.
+
+        Inside still mode (sequence runs) this is a plain read — the sensor is
+        already at still resolution. Outside it, it renegotiates for a single
+        shot (slow on this camera: ~4s round trip) and restores — acceptable
+        for one-off grabs, never for per-frame use (that's grab_live()).
+        """
+        if self._cap is None:
+            return None
+        with self._read_lock:
+            if not self.is_open():
+                return None
+            in_still_mode = self._still_mode > 0
+            needs_switch = (
+                not in_still_mode
+                and (self._still_w, self._still_h) != (self._live_w, self._live_h)
+            )
+            if needs_switch:
+                self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, self._still_w)
+                self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._still_h)
+                self._cap.read()  # flush the transition frame
+            ok, frame_bgr = self._cap.read()
+            if needs_switch:
+                self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, self._live_w)
+                self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._live_h)
+                self._cap.read()  # flush back
+        if not ok or frame_bgr is None:
+            return None
+        return frame_bgr
 
     async def recv(self) -> VideoFrame:
         # Pace frames to _TARGET_FPS. Sleeping based on a monotonic deadline
@@ -151,24 +408,32 @@ class CameraTrack(VideoStreamTrack):
                 self._next_deadline = time.monotonic() + _FRAME_INTERVAL
 
         pts, time_base = await self.next_timestamp()
-        ok, frame_bgr = self._cap.read() if self.is_open() else (False, None)
+        if self.is_open():
+            with self._read_lock:
+                ok, frame_bgr = self._cap.read()
+        else:
+            ok, frame_bgr = False, None
         if not ok or frame_bgr is None:
             # Black frame keeps the track alive when the camera glitches —
             # the client sees blank video rather than a torn-down connection.
             import numpy as np
 
-            frame_rgb = np.zeros((_TARGET_HEIGHT, _TARGET_WIDTH, 3), dtype="uint8")
+            frame_rgb = np.zeros((_STREAM_HEIGHT, _STREAM_WIDTH, 3), dtype="uint8")
         else:
             h, w = frame_bgr.shape[:2]
-            if w > _TARGET_WIDTH or h > _TARGET_HEIGHT:
+            if w > _STREAM_WIDTH or h > _STREAM_HEIGHT:
                 # AREA is the cheap, high-quality downsampler — good for
                 # 1080p -> 720p shrink. Skip the resize when the camera
-                # already honored our requested 1280x720.
+                # already fits the streaming ceiling.
                 frame_bgr = cv2.resize(
                     frame_bgr,
-                    (_TARGET_WIDTH, _TARGET_HEIGHT),
+                    (_STREAM_WIDTH, _STREAM_HEIGHT),
                     interpolation=cv2.INTER_AREA,
                 )
+            if _STAMP_FRAMES:
+                from latency_stamp import stamp_frame
+
+                stamp_frame(frame_bgr)
             frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
 
         video_frame = VideoFrame.from_ndarray(frame_rgb, format="rgb24")
@@ -307,6 +572,46 @@ def known_param_names() -> list[str]:
     return list(CAMERA_PROPS.keys())
 
 
+def grab_still() -> Optional["object"]:
+    """Full-resolution BGR frame from the shared camera, or None if unavailable.
+
+    Used by the sequence engine (sequence.py) for timed microscope stills —
+    renegotiates the sensor to still resolution per shot (live/still split).
+    Do NOT call per-frame; use grab_live() for previews.
+    """
+    source = _ensure_source_track()
+    if source is None:
+        return None
+    return source.grab_still()
+
+
+def grab_live() -> Optional["object"]:
+    """One frame at the live stream resolution — cheap, preview-safe."""
+    source = _ensure_source_track()
+    if source is None:
+        return None
+    return source.grab_live()
+
+
+def enter_still_mode() -> None:
+    """Hold the sensor at still resolution for a sequence run (refcounted)."""
+    source = _ensure_source_track()
+    if source is not None:
+        source.enter_still_mode()
+
+
+def exit_still_mode() -> None:
+    """Release the still-resolution hold; live resolution restores at zero."""
+    source = _ensure_source_track()
+    if source is not None:
+        source.exit_still_mode()
+
+
+def profile() -> str:
+    """Active CAMERA_PROFILE ('default' or 'microscope'). For /health + logging."""
+    return _CAMERA_PROFILE
+
+
 def _query_v4l2_ranges() -> dict[str, dict]:
     """Read the camera's real per-control ranges via `v4l2-ctl --list-ctrls`.
 
@@ -323,7 +628,16 @@ def _query_v4l2_ranges() -> dict[str, dict]:
     if shutil.which("v4l2-ctl") is None:
         log.info("v4l2-ctl not found — using advisory camera ranges")
         return {}
-    device = f"/dev/video{_CAMERA_INDEX}"
+    # Derive the V4L2 node from the resolved CAMERA_DEVICE source: an int index
+    # → /dev/videoN, an explicit /dev path passes through, anything else → the
+    # historical /dev/video0.
+    src = _camera_source()
+    if isinstance(src, int):
+        device = f"/dev/video{src}"
+    elif isinstance(src, str) and src.startswith("/dev/"):
+        device = src
+    else:
+        device = "/dev/video0"
     try:
         proc = subprocess.run(
             ["v4l2-ctl", "--device", device, "--list-ctrls"],

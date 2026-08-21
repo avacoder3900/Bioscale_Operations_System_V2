@@ -201,14 +201,14 @@
 		</div>
 	{/if}
 
-	<!-- Pick the fridge the deck is stored in, then commit the whole deck to
-	     wax_stored (WAX-FLOW: deck-removed → fridge → wax_stored). -->
+	<!-- Pick the fridge the deck is stored in, then commit the whole deck at
+	     wax_filled (WAX-SIMPLIFY-1: deck-removed → fridge; wax_filled is the stored state). -->
 	{#if phase === 'pick_fridge'}
 		<div class="flex flex-col items-center gap-5 py-4">
 			<div class="w-full max-w-sm text-center">
 				<p class="text-lg font-semibold text-[var(--color-tron-text)]">Where is this deck stored?</p>
 				<p class="mt-1 text-xs text-[var(--color-tron-text-secondary)]">
-					Pick the fridge — every cartridge on this run moves to <span class="font-mono text-[var(--color-tron-cyan)]">wax_stored</span>.
+					Pick the fridge — every cartridge on this run is recorded there at <span class="font-mono text-[var(--color-tron-cyan)]">wax_filled</span>.
 				</p>
 			</div>
 			<div class="w-full max-w-sm">

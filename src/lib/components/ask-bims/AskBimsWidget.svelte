@@ -1223,10 +1223,15 @@
 			display: none !important;
 		}
 	}
+	/* Anchored bottom-RIGHT, not bottom-left: a fixed bottom-left element sits on
+	   top of the first column of every full-bleed table in the app, which in BIMS
+	   is where row checkboxes and barcode links live. It blocked selecting rows in
+	   the optical-confirmation cartridge log. Right-hand columns are timestamps,
+	   where an overlap is cosmetic rather than blocking. */
 	.ask-bims-pill {
 		position: fixed;
 		bottom: 1.25rem;
-		left: 1.25rem;
+		right: 1.25rem;
 		z-index: 40;
 		display: inline-flex;
 		align-items: center;
@@ -1260,7 +1265,7 @@
 	.ask-bims-panel {
 		position: fixed;
 		bottom: 1.25rem;
-		left: 1.25rem;
+		right: 1.25rem;
 		z-index: 40;
 		width: 22rem;
 		max-width: calc(100vw - 2.5rem);
@@ -1401,7 +1406,7 @@
 		}
 		.ask-bims-pill {
 			bottom: calc(1rem + env(safe-area-inset-bottom, 0));
-			left: 1rem;
+			right: 1rem;
 			padding: 0.5rem 0.875rem;
 			font-size: 0.75rem;
 		}

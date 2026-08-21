@@ -1,17 +1,22 @@
 /**
- * Hard cap on per-user WIP. Called before any status transition into 'wip'
- * or any assignee change that would land an existing wip task on a user at
- * their limit.
+ * Hard cap on per-user WIP (KB2-04). Called by the transition service before
+ * any status transition into 'wip' or any assignee change that would land an
+ * existing wip task on a user at their limit.
  *
- * Per PRD KANBAN-WIP-LIMIT-ENFORCEMENT: no bypass, including admins.
+ * The limit lives in KanbanPolicy.wipPerPerson — one human, one limit
+ * (replaces the old per-user `user.wipLimit` field). At most
+ * KanbanPolicy.wipChoreMax of a person's WIP may be chores. Per PRD
+ * KANBAN-WIP-LIMIT-ENFORCEMENT: no bypass, including admins. Per-person WIP
+ * is a limit, not a score.
  */
 import { connectDB, KanbanTask, User } from '$lib/server/db';
+import { getKanbanPolicy } from './policy.js';
 
 export type WipLimitCheck =
 	| { ok: true }
 	| {
 			ok: false;
-			kind: 'wip_limit_exceeded';
+			kind: 'wip_limit_exceeded' | 'chore_limit_exceeded';
 			assigneeId: string;
 			assignee: string;
 			limit: number;
@@ -21,25 +26,30 @@ export type WipLimitCheck =
 
 export async function checkWipLimit(
 	assigneeId: string | null | undefined,
-	excludeTaskId: string | null = null
+	excludeTaskId: string | null = null,
+	incomingIsChore = false
 ): Promise<WipLimitCheck> {
 	if (!assigneeId) return { ok: true };
 
 	await connectDB();
-	const user = (await User.findById(assigneeId).select('wipLimit username').lean()) as any;
+	const user = (await User.findById(assigneeId).select('username').lean()) as any;
 	if (!user) return { ok: true }; // missing assignee record — let other validation surface this
 
-	const limit = typeof user.wipLimit === 'number' ? user.wipLimit : 3;
+	const policy = await getKanbanPolicy();
+	const limit = policy?.wipPerPerson ?? 2;
+	const choreMax = policy?.wipChoreMax ?? 1;
 
 	const filter: any = {
 		'assignee._id': assigneeId,
-		status: 'wip',
+		status: 'wip', // one human, one limit
 		archived: false
 	};
 	if (excludeTaskId) filter._id = { $ne: excludeTaskId };
 
-	const currentWipTasks = (await KanbanTask.find(filter).select('_id title').lean()) as any[];
-	const currentCount = currentWipTasks.length;
+	const currentWipTasks = (await KanbanTask.find(filter).select('_id title itemType classOfService').lean()) as any[];
+	// Expedite bypasses personal WIP limits by definition (it is the emergency lane).
+	const counted = currentWipTasks.filter((t) => t.classOfService !== 'expedite');
+	const currentCount = counted.length;
 
 	if (currentCount >= limit) {
 		return {
@@ -49,8 +59,23 @@ export async function checkWipLimit(
 			assignee: user.username ?? assigneeId,
 			limit,
 			currentCount,
-			currentTasks: currentWipTasks.map((t) => ({ _id: t._id, title: t.title }))
+			currentTasks: counted.map((t) => ({ _id: t._id, title: t.title }))
 		};
+	}
+
+	if (incomingIsChore) {
+		const chores = counted.filter((t) => t.itemType === 'chore' || t.classOfService === 'chore');
+		if (chores.length >= choreMax) {
+			return {
+				ok: false,
+				kind: 'chore_limit_exceeded',
+				assigneeId,
+				assignee: user.username ?? assigneeId,
+				limit: choreMax,
+				currentCount: chores.length,
+				currentTasks: chores.map((t) => ({ _id: t._id, title: t.title }))
+			};
+		}
 	}
 
 	return { ok: true };

@@ -8,7 +8,9 @@ const ALLOWED_COLLECTIONS = new Set([
 	'documents', 'work_instructions', 'part_definitions', 'bom_items', 'spus',
 	'production_runs', 'lot_records', 'shipping_lots', 'shipping_packages',
 	'test_results', 'audit_log', 'cartridge_records', 'batches',
-	'agent_messages', 'approval_requests', 'schema_metadata'
+	'agent_messages', 'approval_requests', 'schema_metadata',
+	'validation_sessions', 'wax_filling_runs', 'reagent_batch_records',
+	'optical_test_cartridges', 'cartridge_groups', 'validation_runs', 'validation_groups'
 ]);
 
 function sanitizeFilterValue(value: unknown): unknown {
@@ -18,12 +20,39 @@ function sanitizeFilterValue(value: unknown): unknown {
 	return undefined;
 }
 
+// Range filters: a "field__gte" parameter becomes { field: { $gte: value } }.
+// Only these four whitelisted operators are ever constructed — arbitrary $-keys
+// from the caller are still dropped by sanitizeFilter.
+const RANGE_OPS: Record<string, string> = { __gte: '$gte', __lte: '$lte', __gt: '$gt', __lt: '$lt' };
+
+/** ISO-ish date strings in range params compare as dates, not strings. */
+function coerceRangeValue(value: unknown): unknown {
+	if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}([T ]|$)/.test(value)) {
+		const d = new Date(value);
+		if (!Number.isNaN(d.getTime())) return d;
+	}
+	return value;
+}
+
 function sanitizeFilter(parameters: Record<string, unknown>): Record<string, unknown> {
 	const filter: Record<string, unknown> = {};
 	for (const [key, value] of Object.entries(parameters)) {
 		if (key.startsWith('$') || key.includes('.')) continue;
 		const sanitized = sanitizeFilterValue(value);
-		if (sanitized !== undefined) {
+		if (sanitized === undefined) continue;
+
+		const suffix = Object.keys(RANGE_OPS).find((s) => key.endsWith(s) && key.length > s.length);
+		if (suffix) {
+			const field = key.slice(0, -suffix.length);
+			if (field.startsWith('$') || field.includes('.')) continue;
+			const existing = filter[field];
+			const range: Record<string, unknown> =
+				existing && typeof existing === 'object' && !(existing instanceof Date)
+					? (existing as Record<string, unknown>)
+					: {};
+			range[RANGE_OPS[suffix]] = coerceRangeValue(sanitized);
+			filter[field] = range;
+		} else {
 			filter[key] = sanitized;
 		}
 	}
@@ -110,6 +139,8 @@ export const POST: RequestHandler = async ({ request }) => {
 				queryId,
 				queryName: query.name,
 				rowCount: results.length,
+				// How the assistant should present these rows (set per saved query).
+				presentationHint: query.resultFormat ?? null,
 				results: JSON.parse(JSON.stringify(results)),
 				executedAt: new Date().toISOString()
 			}

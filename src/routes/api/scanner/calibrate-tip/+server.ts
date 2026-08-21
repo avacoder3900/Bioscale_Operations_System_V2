@@ -11,7 +11,8 @@
  * for the jog session and applies it to subsequent move-to so tuning is done
  * against a tip-zeroed reference (else captured geometry double-counts the bend).
  *
- * mount → tip type and the calibrator point both come from
+ * The tip type is the CALLER'S explicit `tipProfile` — never derived from the
+ * mount. It and the calibrator point both come from
  * $lib/server/services/deck-calibration/tip-calibrator (single source of truth).
  *
  * TEACH FLOW: the deck-calibration wizard jogs the tip onto the fixture and then
@@ -29,11 +30,11 @@
  */
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
+import { resolveLabwareDefinition } from '$lib/server/services/deck-calibration/resolve';
 import { requirePermission } from '$lib/server/permissions';
 import {
 	connectDB,
 	OpentronsRobot,
-	LabwareDefinition,
 	Ot2BridgeCommand,
 	AuditLog,
 	generateId
@@ -56,6 +57,12 @@ const POLL_INTERVAL_MS = 500;
 const WAIT_TIMEOUT_MS = 240_000;
 const COMMAND_TTL_MS = 270_000;
 
+// MERGE NOTE (2026-08-21): master's TIP_FOR_MOUNT is deliberately NOT kept. It
+// maps mount → tip type, which is the inference this branch exists to remove —
+// the pipettes are not fixed to mounts on this fleet, and reading the tiprack or
+// the probe depth off the mount is the 6.309 mm error. TIP_PROFILE (keyed by the
+// operator's explicit choice) replaces it. Master's `profile` payload field from
+// 4b3209eb6 is kept below; on this side it is simply tipProfile itself.
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** Shape returned on every non-guard outcome, so the wizard can render one way. */
@@ -127,10 +134,14 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 
 	await connectDB();
 
+	// Tiprack from the OPERATOR'S tip profile (branch), resolved through master's
+	// strict versioned resolver (94e0a172b) rather than a bare loadName lookup.
 	const tipSpec = TIP_PROFILE[tipProfile];
-	const tipDef = (await LabwareDefinition.findOne({ loadName: tipSpec.loadName }).lean()) as any;
-	if (!tipDef?.definition) {
-		error(400, `Tiprack '${tipSpec.loadName}' not in the BIMS labware library`);
+	let tipDef: any;
+	try {
+		({ doc: tipDef } = await resolveLabwareDefinition(tipSpec.loadName, { strict: true }));
+	} catch (e) {
+		throw error(400, e instanceof Error ? e.message : `Tiprack '${tipSpec.loadName}' not in the BIMS labware library`);
 	}
 
 	// Calibrator point: per-robot fixture → 'global' fallback → .py default …
@@ -148,6 +159,15 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		kind: 'calibrate_tip',
 		payload: {
 			pipetteMount: mount,
+			// Which fill's probe recipe the daemon must use. The X probe starts
+			// from a different point in the wax and reagent protocols, and the
+			// adjust is a function of travel-to-switch — so measuring a reagent
+			// tip against the wax start biases it ~0.8mm, wider than a 1.8mm
+			// hole's radius. The daemon can infer this from the tiprack, but
+			// sending it explicitly means a renamed rack can never silently
+			// change how a deck is taught.
+			// On this side the profile IS the operator's explicit choice, not a lookup.
+			profile: tipProfile,
 			calibrator: { x: calX, y: calY, z: zCal },
 			tiprack: {
 				definition: tipDef.definition,

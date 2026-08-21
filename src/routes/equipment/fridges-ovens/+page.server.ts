@@ -3,6 +3,7 @@ import { fail } from '@sveltejs/kit';
 import { connectDB, generateId, Equipment, EquipmentLocation, AuditLog, CartridgeRecord, TemperatureReading } from '$lib/server/db';
 import { isAdmin, requirePermission } from '$lib/server/permissions';
 import { getCheckedOutCartridgeIds } from '$lib/server/checkout-utils';
+import { WAX_STAGE_STATUSES, isWaxStage } from '$lib/shared/cartridge-wax-status';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
@@ -30,14 +31,15 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 		// Fetch actual cartridge records stored in fridges (for counts + detail display).
 		// Three buckets — same split as /inventory/fridge-storage and /equipment/activity:
-		//   wax_accepted: status='wax_stored' (post-QC live inventory)
+		//   wax_accepted: status∈WAX_STAGE_STATUSES with a fridge scan (live inventory;
+		//                 WAX-SIMPLIFY-1 — wax_filled IS the stored state)
 		//   wax_scrapped: status='scrapped' with waxStorage.location set
 		//                 (physically still in the fridge as QA quarantine)
 		//   reagent:      status='stored' with storage.fridgeName set
 		const storedCartridges = await CartridgeRecord.find({
 			_id: { $nin: checkedOutIds },
 			$or: [
-				{ 'waxStorage.location': { $exists: true }, status: 'wax_stored' },
+				{ 'waxStorage.location': { $exists: true }, status: { $in: [...WAX_STAGE_STATUSES] } },
 				{ 'waxStorage.location': { $exists: true }, status: 'scrapped' },
 				{ 'storage.fridgeName': { $exists: true }, status: 'stored' }
 			]
@@ -57,7 +59,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 		const waxScrappedMap = new Map<string, number>();
 		const cartridgesByFridge = new Map<string, any[]>();
 		for (const c of storedCartridges) {
-			const isWax = !!c.waxStorage?.location && (c.status === 'wax_stored' || c.status === 'scrapped');
+			const isWax = !!c.waxStorage?.location && (isWaxStage(c.status) || c.status === 'scrapped');
 			const key = isWax ? c.waxStorage.location : c.storage?.fridgeName;
 			if (!key) continue;
 			occupantMap.set(key, (occupantMap.get(key) ?? 0) + 1);

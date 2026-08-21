@@ -10,7 +10,8 @@ import type { RequestHandler } from './$types';
 import { requirePermission } from '$lib/server/permissions';
 import { getRobot } from '$lib/server/opentrons/proxy';
 import { connectDB, LabwareDefinition } from '$lib/server/db';
-import { registerLabwareDefinition, loadLabwareInRun, pickUpTip } from '$lib/server/opentrons/maintenance';
+import { resolveLabwareDefinition } from '$lib/server/services/deck-calibration/resolve';
+import { registerLabwareDefinition, loadLabwareInRun, pickUpTip, SlotOccupiedError } from '$lib/server/opentrons/maintenance';
 
 export const config = { maxDuration: 60 };
 
@@ -30,10 +31,15 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 	if (!tiprackLoadName || typeof tiprackLoadName !== 'string') error(400, 'tiprackLoadName required');
 
 	await connectDB();
-	const def = (await LabwareDefinition.findOne({ loadName: tiprackLoadName }).lean()) as any;
-	if (!def?.definition) error(404, `Tiprack "${tiprackLoadName}" not found in BIMS labware library`);
-	const namespace = def.namespace ?? def.definition?.namespace;
-	const version = Number(def.version ?? def.definition?.version ?? 1);
+	let def: any;
+	try {
+		({ doc: def } = await resolveLabwareDefinition(tiprackLoadName, { strict: true }));
+	} catch (e) {
+		throw error(404, e instanceof Error ? e.message : `Tiprack "${tiprackLoadName}" not found`);
+	}
+	// Identity from the registered blob, not the columns (see load-labware).
+	const namespace = def.definition?.namespace ?? def.namespace;
+	const version = Number(def.definition?.version ?? def.version ?? 1);
 
 	try {
 		await registerLabwareDefinition(robot, params.runId, def.definition);
@@ -50,6 +56,13 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 		}
 		return json({ tiprackLabwareId });
 	} catch (e) {
+		// A different rack occupies slot 11 (e.g. the reagent rack from an earlier
+		// calibration step in this same run). The slot can't be freed in place, so
+		// tell the client to reopen the run and retry — 409 + a stable code lets it
+		// auto-recover instead of showing the raw LocationIsOccupiedError.
+		if (e instanceof SlotOccupiedError) {
+			return json({ code: e.code, message: e.message }, { status: 409 });
+		}
 		console.error('[API] pick-up-tip error:', e instanceof Error ? e.message : e);
 		error(502, e instanceof Error ? e.message : 'Failed to pick up tip');
 	}

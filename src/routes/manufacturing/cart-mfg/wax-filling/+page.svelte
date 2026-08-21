@@ -91,6 +91,39 @@
 
 	let submitting = $state(false);
 	let submittingTooLong = $state(false);
+
+	/**
+	 * Mid-run tip swap (2026-08-18). Sends a request to the on-robot bridge; the
+	 * running wax protocol picks it up before its next dispense, swaps the tip
+	 * (robot from the rack, or the operator by hand), re-probes it on the
+	 * calibrator, and re-aspirates + continues at the very well it stopped at.
+	 * Usable while the run is running or paused.
+	 */
+	let tipSwapStatus = $state<'' | 'sending' | 'rack' | 'hand' | 'cancelled' | 'error'>('');
+	let tipSwapAt = $state<number>(0);
+	async function requestTipSwap(mode: 'rack' | 'hand' | 'cancel') {
+		if (!data.runState.runId) return;
+		tipSwapStatus = 'sending';
+		try {
+			const fd = new FormData();
+			fd.set('runId', data.runState.runId);
+			fd.set('mode', mode === 'cancel' ? 'rack' : mode);
+			fd.set('cancel', mode === 'cancel' ? 'true' : 'false');
+			const res = await fetch('?/requestTipSwap', {
+				method: 'POST',
+				body: fd,
+				headers: { 'x-sveltekit-action': 'true' },
+				signal: AbortSignal.timeout(20000)
+			});
+			const text = await res.text();
+			if (!res.ok || text.includes('"type":"failure"')) throw new Error(text.slice(0, 200));
+			tipSwapStatus = mode === 'cancel' ? 'cancelled' : mode;
+			tipSwapAt = Date.now();
+		} catch (e) {
+			console.error('[wax] tip swap request failed', e);
+			tipSwapStatus = 'error';
+		}
+	}
 	let errorMsg = $state('');
 	// Post-action notice for carts the wax-flow guard (protectLockedCarts)
 	// silently skipped during a write. Surfaced as an amber banner the operator
@@ -124,6 +157,47 @@
 	// after a clean scan. Client-only: a mid-flow page reload re-shows the step.
 	let paramsReady = $state(false);
 	let capturedParamsFd = $state<FormData | null>(null);
+
+	/**
+	 * Run-time parameters BIMS pre-selects for a wax run, overriding the .py's own
+	 * defaults. These seed the form; the operator can still change any of them.
+	 *
+	 * Gate volumes: the .py defaults all four gates to 1.60, but the line has run
+	 * gate 1 at 1.6 and gates 2-4 at 2.2 on every wax run since 2026-07-28 (16
+	 * consecutive runs across R04 and B07), so the operator retyped three fields
+	 * every time. These are the values already in use — this only stops the typing.
+	 *
+	 * Row alignment holds at these volumes. Per the .py's own arithmetic, a
+	 * cartridge row is 4 wax wells (gates 4,3,2,1) = 8.2uL at 2.2/2.2/2.2/1.6,
+	 * which fits the 20uL - aspirate_remainder budget as long as the remainder is
+	 * <= 11.8; its default is 11.5. That matters because an aspiration batch that
+	 * ends mid-row forces the next one to open by crossing a cartridge wall, which
+	 * bends the tip — see the row_key batching guard in the protocol.
+	 *
+	 * Deliberately NOT in contextReadonly: gate volumes are the main tuning knob
+	 * for fill quality, so they stay editable per run.
+	 *
+	 * dispense_depth is intentionally left alone — it is per-robot (B07 needed a
+	 * different value to stop tips breaking on dispense) and has no single default.
+	 *
+	 * Frozen for a stable object identity: ProtocolStartPanel re-seeds the whole
+	 * form when contextValues changes, which would wipe an operator's edits.
+	 */
+	const WAX_PARAM_DEFAULTS = Object.freeze({
+		vol_gate1: 1.6,
+		vol_gate2: 2.2,
+		vol_gate3: 2.2,
+		vol_gate4: 2.2,
+		// Tip calibration ON by default (2026-08-18): decks are taught in the Studio
+		// with "Calibrate tip" active (tip-neutral coordinates), so the fill must
+		// apply the same probe adjust to land the wax hole — OFF parks the tip on
+		// the reagent hole (confirmed on B07/deck-004). max_tip_adjust 4.0 rejects
+		// only genuinely bad probes (B07's normal wax adjust is ~2.3mm).
+		// Only posted when the protocol declares the RTP (server filters by schema).
+		use_tip_calibration: true,
+		max_tip_adjust: 4.0,
+		run_calibration_check: false
+	});
 
 	// Orchestrated scan-and-start (deck_load substage): one Start Run press
 	// drives deck-barcode scan → cartridge sweep → loadDeck → startRun. Each
@@ -360,9 +434,9 @@
 	let pendingOverrideAction = $state('');
 	let pendingOverrideData = $state<Record<string, string>>({});
 
-	// Deck-removal is the terminal commit (storeDeckAndComplete → wax_stored, run
+	// Deck-removal is the terminal commit (storeDeckAndComplete → wax_filled, run
 	// completed → page idle), so this page owns only Loading → Running. Cooling/QC/
-	// storage were removed (WAX-FLOW: deck-removed → fridge → wax_stored).
+	// storage were removed (WAX-SIMPLIFY-1: deck-removed → fridge → wax_filled).
 	const STAGES = ['Loading', 'Running'] as const;
 
 	// Optimistic stage: prevents UI flash when invalidateAll() returns stale/failed data
@@ -647,7 +721,7 @@
 
 	function handleDeckRemoved(storageLocation: string) {
 		// Deck-removed is now the single commit: write the waxFilling phase record,
-		// store in the chosen fridge, flip the whole deck to wax_stored, complete
+		// store in the chosen fridge, land the whole deck at wax_filled, complete
 		// the run. Replaces the old cooling → QC → storage chain.
 		if (data.runState.runId) {
 			submitAction('storeDeckAndComplete', {
@@ -715,7 +789,7 @@
 
 	// Timeline bubbles (3): the Loading stage is split into "Wax fill setup"
 	// (wax_prep) and "Barcode scanning" (deck_load/ready_to_run); then Run. The
-	// run ends at deck-removal (→ fridge → wax_stored) inside the Run stage, so
+	// run ends at deck-removal (→ fridge, status wax_filled) inside the Run stage, so
 	// there are no cooling/QC/storage bubbles.
 	const TIMELINE = ['Wax fill setup', 'Barcode scanning', 'Run'] as const;
 	const currentBubbleIndex = $derived.by(() => {
@@ -1084,7 +1158,7 @@
 					<ProtocolStartPanel
 						robot={{ _id: data.opentronsRobotId, name: data.robotName }}
 						protocols={data.robotProtocols}
-						contextValues={{ cartridges: data.runState.plannedCartridgeCount ?? 24 }}
+						contextValues={{ ...WAX_PARAM_DEFAULTS, cartridges: data.runState.plannedCartridgeCount ?? 24 }}
 						contextReadonly={['cartridges']}
 						lastTipState={data.lastTipState}
 						submitting={submitting}
@@ -1121,7 +1195,7 @@
 					<ProtocolStartPanel
 						robot={{ _id: data.opentronsRobotId, name: data.robotName }}
 						protocols={data.robotProtocols}
-						contextValues={{ cartridges: data.runState.plannedCartridgeCount ?? 24 }}
+						contextValues={{ ...WAX_PARAM_DEFAULTS, cartridges: data.runState.plannedCartridgeCount ?? 24 }}
 						contextReadonly={['cartridges']}
 						lastTipState={data.lastTipState}
 						submitting={submitting}
@@ -1191,7 +1265,7 @@
 					<ProtocolStartPanel
 						robot={{ _id: data.opentronsRobotId, name: data.robotName }}
 						protocols={data.robotProtocols}
-						contextValues={{ cartridges: data.runState.plannedCartridgeCount ?? 24 }}
+						contextValues={{ ...WAX_PARAM_DEFAULTS, cartridges: data.runState.plannedCartridgeCount ?? 24 }}
 						contextReadonly={['cartridges']}
 						lastTipState={data.lastTipState}
 						submitting={submitting || orchestrating}
@@ -1247,6 +1321,51 @@
 						});
 					}}
 				/>
+				{#if !runFinishedLocal}
+					<div class="mt-3 rounded-lg border border-amber-500/40 bg-amber-900/10 p-4">
+						<div class="flex flex-wrap items-center justify-between gap-3">
+							<div>
+								<h3 class="text-sm font-semibold text-amber-200">Tip problem? Swap the tip without losing your place</h3>
+								<p class="mt-1 text-xs text-amber-200/80">
+									The robot finishes nothing further with the current tip: it empties it back into the wax tube, swaps the tip,
+									re-calibrates it, then re-aspirates and continues at the exact well it stopped at. Works while running or paused.
+								</p>
+							</div>
+							<div class="flex flex-wrap gap-2">
+								<button type="button"
+									class="rounded-md border border-amber-400/60 bg-amber-500/20 px-3 py-1.5 text-sm font-medium text-amber-100 hover:bg-amber-500/30 disabled:opacity-50"
+									disabled={tipSwapStatus === 'sending'}
+									onclick={() => requestTipSwap('rack')}>
+									Swap tip — robot picks a new one
+								</button>
+								<button type="button"
+									class="rounded-md border border-amber-400/60 bg-amber-500/20 px-3 py-1.5 text-sm font-medium text-amber-100 hover:bg-amber-500/30 disabled:opacity-50"
+									disabled={tipSwapStatus === 'sending'}
+									onclick={() => requestTipSwap('hand')}>
+									Swap tip — I'll put one on by hand
+								</button>
+								{#if tipSwapStatus === 'rack' || tipSwapStatus === 'hand'}
+									<button type="button"
+										class="rounded-md border border-[var(--color-tron-border)] px-3 py-1.5 text-sm text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]"
+										onclick={() => requestTipSwap('cancel')}>
+										Cancel request
+									</button>
+								{/if}
+							</div>
+						</div>
+						{#if tipSwapStatus === 'sending'}
+							<p class="mt-2 text-xs text-amber-200/80">Sending to the robot…</p>
+						{:else if tipSwapStatus === 'rack'}
+							<p class="mt-2 text-xs text-emerald-300">Requested. The robot will stop before its next well, drop the tip, pick a fresh one from the rack, calibrate it and continue. If the run is paused, press Resume.</p>
+						{:else if tipSwapStatus === 'hand'}
+							<p class="mt-2 text-xs text-emerald-300">Requested. The robot will stop before its next well, raise the pipette over the calibrator and pause — pull the old tip off, push a new one on, then press Resume. It calibrates the new tip and continues. If the run is paused now, press Resume first so it can reach that point.</p>
+						{:else if tipSwapStatus === 'cancelled'}
+							<p class="mt-2 text-xs text-[var(--color-tron-text-secondary)]">Request cancelled (only if the robot hadn't acted on it yet).</p>
+						{:else if tipSwapStatus === 'error'}
+							<p class="mt-2 text-xs text-red-300">Could not send the request to the robot bridge — try again, or Pause and swap the tip when the run reaches its next tip change.</p>
+						{/if}
+					</div>
+				{/if}
 			{/if}
 			<RunExecution
 				runId={previewParam ? 'WXR-PREVIEW' : (data.runState.runId ?? '')}

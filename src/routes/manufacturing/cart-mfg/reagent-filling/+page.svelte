@@ -12,7 +12,8 @@
 	import RunExecution from '$lib/components/manufacturing/reagent-filling/RunExecution.svelte';
 	import ProtocolStartPanel from '$lib/components/manufacturing/ProtocolStartPanel.svelte';
 	import EmbeddedRunController from '$lib/components/manufacturing/EmbeddedRunController.svelte';
-	// Top Sealing + Storage happen on Opentron Control post-OT-2 queue, not here.
+	// REAGENT-TOPSEAL-IMPLICIT: there is no post-OT-2 queue. Run completion ends
+	// the run; top sealing is implicit; the next touch is the Reagent Inspect photo.
 
 	let { data } = $props();
 
@@ -25,8 +26,8 @@
 	let showResetModal = $state(false);
 
 	// Inspection (and its holding-tray scan) moved off this page — see
-	// REAGENT-INSPECT-AFTER-TOPSEAL. The run now ends at Run; sealing happens on
-	// Opentron Control and inspection on the Reagent Inspect page.
+	// REAGENT-INSPECT-AFTER-TOPSEAL. The run now ends at Run; top sealing is
+	// implicit (REAGENT-TOPSEAL-IMPLICIT) and inspection happens on Reagent Inspect.
 
 	// Admin override state
 	let showOverrideModal = $state(false);
@@ -45,10 +46,9 @@
 		}
 	});
 
-	// Reagent-filling page owns Setup → Load → Run (3 stages). Inspection moved
-	// off this page (REAGENT-INSPECT-AFTER-TOPSEAL): a completed run goes straight
-	// to Top Sealing on Opentron Control, then the Reagent Inspect page; both live
-	// on the post-OT-2 queue, reached after the run finishes here.
+	// Reagent-filling page owns Setup → Load → Run (3 stages). Completing the
+	// run here finishes it (status Completed, carts reagent_filled); the carts
+	// are top-sealed off-page and photographed on the Reagent Inspect page.
 	const STAGES = ['Setup', 'Loading', 'Running'] as const;
 	type Stage = (typeof STAGES)[number];
 
@@ -105,7 +105,29 @@
 	let runFinishedLocal = $state(false);
 	const runFinished = $derived(runFinishedLocal || !!data.runState.opentronsRunFinalStatus);
 
-	// "Run again": complete the just-finished run (→ Top Sealing, robot freed),
+	// The robot's own status, reported by EmbeddedRunController. Used to hold the
+	// run clock while the robot is paused — paused time isn't fill time.
+	let robotStatus = $state<string | null>(null);
+
+	/**
+	 * Run-time parameters BIMS pre-selects for a reagent run, overriding the .py's
+	 * own defaults. These seed the form; the operator can still change any of them.
+	 *
+	 * use_tip_calibration: the protocol declares it `default=False`, so operators
+	 * were ticking it on before every single run — 59 of the last 60 reagent runs
+	 * across all three robots had it on, the one exception being a cancelled run.
+	 * Pre-selecting it matches what the line actually does. Deliberately NOT in
+	 * contextReadonly: a flaky tip calibrator is a real failure mode, and turning
+	 * this off is the documented workaround (it falls back to nominal well
+	 * positions), so the operator has to keep that escape hatch.
+	 *
+	 * Kept as one frozen constant rather than an inline literal so the pre-scan
+	 * panel gets a stable object identity: ProtocolStartPanel re-seeds the whole
+	 * form whenever contextValues changes, which would wipe an operator's edits.
+	 */
+	const REAGENT_PARAM_DEFAULTS = Object.freeze({ use_tip_calibration: true });
+
+	// "Run again": complete the just-finished run (→ Completed, robot freed),
 	// then start a fresh run on the same robot reusing the same assay + protocol
 	// params — landing on barcode scanning. Mirrors the wax flow.
 	async function handleRunAgain() {
@@ -116,7 +138,7 @@
 		runAgainParamsFd = capturedParamsFd;
 		runFinishedLocal = false;
 		// 1) Complete the current run — robotReleasedAt frees the robot and the
-		//    page load drops it as active (status → Top Sealing).
+		//    page load drops it as active (status → Completed).
 		await submitForm('completeRunFilling');
 		if (errorMsg) { runAgainParamsFd = null; return; }
 		// 2) Create a fresh run on the same robot with the same assay.
@@ -240,8 +262,8 @@
 
 	// Timeline bubbles (4): the Loading stage is split into "Barcode Scanning"
 	// (deck + cartridge scan, cartridges===0) and "Reagent Prep" (cartridges>0).
-	// Inspection moved off this page — the run ends at Run (then Top Sealing →
-	// Reagent Inspect on the post-OT-2 queue).
+	// Inspection moved off this page — the run ends at Run (then implicit top
+	// seal → Reagent Inspect).
 	const TIMELINE = ['Reagent Fill Setup', 'Barcode Scanning', 'Reagent Prep', 'Run'] as const;
 	const currentBubbleIndex = $derived.by(() => {
 		const s = stage;
@@ -602,6 +624,7 @@
 			<ProtocolStartPanel
 				robot={{ _id: data.opentronsRobotId, name: data.robotId }}
 				protocols={data.robotProtocols}
+				contextValues={REAGENT_PARAM_DEFAULTS}
 				lastTipState={data.lastTipState}
 				submitting={submitting}
 				formAction="?/startRun"
@@ -664,7 +687,7 @@
 				<ProtocolStartPanel
 					robot={{ _id: data.opentronsRobotId, name: data.robotId }}
 					protocols={data.robotProtocols}
-					contextValues={{ cartridges: data.cartridges.length }}
+					contextValues={{ ...REAGENT_PARAM_DEFAULTS, cartridges: data.cartridges.length }}
 					contextReadonly={['cartridges']}
 					lastTipState={data.lastTipState}
 					submitting={submitting}
@@ -683,6 +706,7 @@
 				robotId={data.opentronsRobotId}
 				robotName={data.runState.assayTypeName ?? 'Reagent Run'}
 				opentronsRunId={data.runState.opentronsRunId}
+				onStatusChange={(status) => { robotStatus = status; }}
 				onComplete={(status) => {
 					// The .py landed terminal — reveal the run-complete controls. The
 					// run does NOT auto-advance; the operator sends it on or re-runs.
@@ -704,6 +728,10 @@
 				cartridgeCount={previewParam ? 8 : (data.runState.cartridgeCount ?? 0)}
 				runStartTime={new Date(data.runState.runStartTime ?? Date.now())}
 				runEndTime={new Date(data.runState.runEndTime ?? (Date.now() + 600000))}
+				protocolParameters={data.runState.protocolParameters}
+				robotFinished={runFinished}
+				paused={robotStatus === 'paused'}
+				autoCompleteOnExpiry={!data.runState.opentronsRunId}
 				onTimerComplete={() => { runFinishedLocal = true; }}
 				onAbort={(reason, photoUrl) => submitForm('abortRun', { reason, photoUrl: photoUrl ?? '' })}
 				readonly={isViewingPast}
@@ -711,20 +739,20 @@
 		{:else}
 			<!-- Run has been started but the server hasn't written runEndTime yet.
 			     Show a brief "starting" state instead of a misleading flat-10-min
-			     fallback countdown (the real timer = start + cartridges × fillTime). -->
+			     fallback estimate (see lib/manufacturing/reagent-run-estimate.ts). -->
 			<div class="flex flex-col items-center gap-2 rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-6 text-center">
 				<h2 class="text-lg font-semibold text-[var(--color-tron-text)]">Starting run…</h2>
 				<p class="text-sm text-[var(--color-tron-text-secondary)]">Creating the protocol run on the robot — the countdown will appear once it begins.</p>
 			</div>
 		{/if}
 
-		<!-- Run-complete controls (REAGENT-INSPECT-AFTER-TOPSEAL): appear only once
-		     the .py finishes. Inspection is no longer here — the batch goes to Top
-		     Sealing, and Run again starts a fresh batch with the same parameters. -->
+		<!-- Run-complete controls: appear only once the .py finishes. Complete
+		     finishes the run (carts → reagent_filled; top seal implicit; next stop
+		     Reagent Inspect). Run again starts a fresh batch with the same parameters. -->
 		{#if !isViewingPast && (previewParam || runFinished)}
 			<div class="mt-4 flex flex-col items-center gap-3 rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4">
 				<p class="text-sm text-[var(--color-tron-text-secondary)]">
-					Run finished. Send this batch to Top Sealing, or run another batch with the same parameters.
+					Run finished. Complete this batch (cartridges → reagent filled; top-seal them, then photograph on Reagent Inspect), or run another batch with the same parameters.
 				</p>
 				<button
 					type="button"
@@ -732,7 +760,7 @@
 					disabled={submitting}
 					class="min-h-[44px] w-full max-w-sm rounded-lg border border-green-500/50 bg-green-900/20 px-8 py-3 text-base font-bold text-green-400 transition-all hover:bg-green-900/30 disabled:opacity-50"
 				>
-					Complete — send to Top Sealing
+					Complete run
 				</button>
 				<button
 					type="button"

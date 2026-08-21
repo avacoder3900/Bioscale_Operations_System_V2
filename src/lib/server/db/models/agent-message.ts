@@ -14,4 +14,10 @@ const agentMessageSchema = new Schema({
 	sentAt: Date, deliveredAt: Date, readAt: Date, actionedAt: Date
 }, { timestamps: true });
 
+// Messages endpoints filter/sort by user + status with no indexes at all —
+// two full scans per list request (Atlas query-targeting audit, 2026-07-31).
+agentMessageSchema.index({ toUserId: 1, createdAt: -1 });
+agentMessageSchema.index({ fromUserId: 1, createdAt: -1 });
+agentMessageSchema.index({ status: 1, createdAt: -1 });
+
 export const AgentMessage = mongoose.models.AgentMessage || mongoose.model('AgentMessage', agentMessageSchema, 'agent_messages');

@@ -10,7 +10,9 @@
     "prepare": "svelte-kit sync || echo ''",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
-    "test:contracts": "vitest run --config tests/vitest.contracts.config.ts"
+    "test:contracts": "vitest run --config tests/vitest.contracts.config.ts",
+    "test:unit": "vitest run --config tests/vitest.unit.config.ts",
+    "test:invariants": "vitest run --config tests/vitest.unit.config.ts src/lib/server/robot-arm-url-invariant.test.ts"
   },
   "devDependencies": {
     "@sveltejs/adapter-auto": "^7.0.0",
@@ -41,9 +43,12 @@
     "@anthropic-ai/sdk": "^0.89.0",
     "@aws-sdk/client-s3": "^3.1019.0",
     "@aws-sdk/s3-request-presigner": "^3.1019.0",
+    "@dagrejs/dagre": "^3.1.1",
     "@google/generative-ai": "^0.24.1",
+    "@modelcontextprotocol/server": "^2.0.0",
     "@oslojs/crypto": "^1.0.1",
     "@oslojs/encoding": "^1.1.0",
+    "@xyflow/svelte": "^1.6.3",
     "bcryptjs": "^3.0.3",
     "bwip-js": "^4.10.1",
     "chart.js": "^4.5.1",
@@ -61,6 +66,7 @@
     "svelte-chartjs": "^4.0.1",
     "uplot": "^1.6.32",
     "xlsx": "^0.18.5",
+    "zod": "^4.4.3",
     "zxing-wasm": "^3.1.0"
   }
 }

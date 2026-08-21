@@ -1,172 +1,160 @@
+/**
+ * KB2-06 — "Queue": the Tier 2 default view. A horizontal single-lane column
+ * board (Ready | In Progress | In Review | Waiting | Blocked | Done). Every
+ * mutation goes through the transition service (or demote for commitment
+ * unwinds) — zero direct status writes here. Quick capture lives on Inventory.
+ * KB2-16: one board — tags carry the ops/software distinction.
+ */
 import { fail, redirect } from '@sveltejs/kit';
-import { connectDB, KanbanTask, KanbanProject, AuditLog } from '$lib/server/db';
-import { generateId } from '$lib/server/db/utils.js';
-import { requirePermission } from '$lib/server/permissions';
-import { checkWipLimit } from '$lib/server/kanban/wip-limit';
+import { connectDB, KanbanTask } from '$lib/server/db';
+import { requirePermission, hasPermission, isAdmin } from '$lib/server/permissions';
+import { transitionTask, TransitionError } from '$lib/server/kanban/transition';
+import { demote, ReplenishError } from '$lib/server/kanban/replenish';
+import { getKanbanPolicy, queuePolicyOf } from '$lib/server/kanban/policy';
+import { standingStatus } from '$lib/server/kanban/standing';
+import { isKanbanStatus, type KanbanStatus } from '$lib/shared/kanban-status';
 import type { PageServerLoad, Actions } from './$types';
+import type { RequestEvent } from '@sveltejs/kit';
+
+const DAY = 86400000;
+
+function mapTask(t: any) {
+	return {
+		id: t._id as string,
+		title: t.title as string,
+		status: t.status as KanbanStatus,
+		rank: (t.rank ?? 0) as number,
+		itemType: (t.itemType ?? 'deliverable') as string,
+		classOfService: (t.classOfService ?? 'standard') as string,
+		sizeClass: (t.sizeClass ?? null) as string | null,
+		origin: (t.origin ?? 'planned') as string,
+		tags: (t.tags ?? []) as string[],
+		assigneeName: (t.assignee?.username ?? null) as string | null,
+		blockedReason: (t.blockedReason ?? null) as string | null,
+		waitingOn: (t.waitingOn ?? null) as string | null,
+		waitingUntil: (t.waitingUntil ?? null) as string | null,
+		waitingReason: (t.waitingReason ?? null) as string | null,
+		dueDate: (t.dueDate ?? null) as string | null,
+		completedDate: (t.completedDate ?? null) as string | null,
+		daysInStatus: t.statusChangedAt
+			? Math.floor((Date.now() - new Date(t.statusChangedAt).getTime()) / DAY)
+			: 0
+	};
+}
 
 export const load: PageServerLoad = async ({ locals }) => {
 	if (!locals.user) redirect(302, '/login');
 	requirePermission(locals.user, 'kanban:read');
 	await connectDB();
 
-	const tasks = await KanbanTask.find({ archived: false }).sort({ sortOrder: 1 }).lean();
+	const policy = await getKanbanPolicy();
+	const { readyCap, minOrderPoint } = queuePolicyOf(policy);
+
+	// Supply loops (KB2-10/KB2-13) — the panel load IS a supply tick: anything
+	// below its reorder point (standing targets + below-min parts) spawns its
+	// auto-committed card here, before the task query, so it shows immediately.
+	// Target CRUD lives on the policy page. Never let a supply failure break the board.
+	let standing: Awaited<ReturnType<typeof standingStatus>> = { targets: [], partsReorder: [] };
+	try {
+		standing = await standingStatus({ spawn: true, actorUsername: 'system:supply' });
+	} catch (e) {
+		console.error('[kanban] supply tick failed:', e);
+	}
+
+	const weekAgo = new Date(Date.now() - 7 * DAY);
+	const tasks = (await KanbanTask.find({
+		archived: false,
+		$or: [
+			{ status: { $in: ['ready', 'wip', 'waiting', 'blocked', 'review'] } },
+			{ status: 'done', $or: [{ completedDate: { $gte: weekAgo } }, { statusChangedAt: { $gte: weekAgo } }] }
+		]
+	})
+		.sort({ rank: 1 })
+		.lean()) as any[];
+
+	const capturedCount = await KanbanTask.countDocuments({
+		status: { $in: ['captured', 'processed'] },
+		archived: false
+	});
+	const readyCount = tasks.filter((t) => t.status === 'ready').length;
 
 	return {
-		currentUserId: locals.user._id as string,
-		tasks: tasks.map((t: any) => ({
-			id: t._id,
-			title: t.title,
-			description: t.description ?? null,
-			status: t.status,
-			prioritized: t.prioritized ?? false,
-			taskLength: t.taskLength,
-			projectId: t.project?._id ?? null,
-			assignedTo: t.assignee?._id ?? null,
-			dueDate: t.dueDate ?? null,
-			sortOrder: t.sortOrder ?? 0,
-			waitingReason: t.waitingReason ?? null,
-			waitingOn: t.waitingOn ?? null,
-			createdAt: t.createdAt,
-			statusChangedAt: t.statusChangedAt ?? null,
-			source: t.source ?? null,
-			assigneeName: t.assignee?.username ?? null,
-			projectName: t.project?.name ?? null,
-			projectColor: t.project?.color ?? null,
-			tags: (t.tags ?? []).map((tag: string) => ({ id: tag, name: tag, color: '#6b7280' })),
-			daysInStatus: t.statusChangedAt
-				? Math.floor((Date.now() - new Date(t.statusChangedAt).getTime()) / 86400000)
-				: 0
-		}))
+		readyCap,
+		minOrderPoint,
+		readyCount,
+		capturedCount,
+		canReplenish: hasPermission(locals.user, 'kanban:replenish') || isAdmin(locals.user),
+		standing: JSON.parse(JSON.stringify(standing)),
+		tasks: JSON.parse(JSON.stringify(tasks.map(mapTask)))
 	};
 };
 
+/**
+ * Shared transition runner: buttons map 1:1 to named transitions; the
+ * service's typed errors surface verbatim in the UI banner.
+ */
+async function runTransition(event: RequestEvent, forcedTo?: KanbanStatus) {
+	const { locals, request } = event;
+	if (!locals.user) redirect(302, '/login');
+	requirePermission(locals.user, 'kanban:write');
+	await connectDB();
+	const fd = await request.formData();
+	const taskId = fd.get('taskId')?.toString();
+	const to = forcedTo ?? fd.get('to')?.toString();
+	if (!taskId || !to) return fail(400, { error: 'Missing taskId or target status' });
+	if (!isKanbanStatus(to)) return fail(400, { error: `'${to}' is not a valid status` });
+
+	const reason = fd.get('reason')?.toString() || undefined;
+	const waitingOn = fd.get('waitingOn')?.toString() || undefined;
+	const waitingUntilRaw = fd.get('waitingUntil')?.toString();
+
+	try {
+		await transitionTask({
+			taskId,
+			to,
+			actor: { username: locals.user.username, via: 'ui' },
+			reason,
+			waitingOn,
+			waitingUntil: waitingUntilRaw ? new Date(waitingUntilRaw) : undefined
+		});
+	} catch (e) {
+		if (e instanceof TransitionError) return fail(400, { error: e.message, code: e.code });
+		throw e;
+	}
+	return { success: true };
+}
+
 export const actions: Actions = {
-	create: async ({ request, locals }) => {
+	// Quick capture lives on the Inventory page — no 'create' action here.
+	pull: (event) => runTransition(event, 'wip'),
+	resume: (event) => runTransition(event, 'wip'),
+	block: (event) => runTransition(event, 'blocked'),
+	wait: (event) => runTransition(event, 'waiting'),
+	move: (event) => runTransition(event),
+
+	demote: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
 		requirePermission(locals.user, 'kanban:write');
 		await connectDB();
 		const fd = await request.formData();
-		const title = fd.get('title') as string;
-		if (!title?.trim()) return fail(400, { error: 'Title is required' });
-
-		const status = (fd.get('status') as string) || 'backlog';
-		const prioritized = fd.get('prioritized') === 'true';
-		const taskLength = (fd.get('taskLength') as string) || 'medium';
-		const projectId = fd.get('projectId') as string | null;
-		const assignedTo = fd.get('assignedTo') as string | null;
-		const dueDate = fd.get('dueDate') as string | null;
-		const description = fd.get('description') as string | null;
-
-		let project = null;
-		if (projectId) {
-			const p = await KanbanProject.findById(projectId).lean() as any;
-			if (p) project = { _id: p._id, name: p.name, color: p.color };
-		}
-
-		let assignee = null;
-		if (assignedTo) {
-			const { User } = await import('$lib/server/db');
-			const u = await User.findById(assignedTo).lean() as any;
-			if (u) assignee = { _id: u._id, username: u.username };
-		}
-
-		const taskId = generateId();
-		await KanbanTask.create({
-			_id: taskId,
-			title: title.trim(),
-			description: description || undefined,
-			status,
-			prioritized,
-			taskLength,
-			project,
-			assignee,
-			dueDate: dueDate ? new Date(dueDate) : undefined,
-			statusChangedAt: new Date(),
-			createdBy: locals.user._id
-		});
-
-		await AuditLog.create({
-			tableName: 'kanban_tasks',
-			recordId: taskId,
-			action: 'INSERT',
-			newData: { title: title.trim(), status },
-			changedBy: locals.user.username ?? locals.user._id
-		});
-
-		return { success: true };
-	},
-
-	move: async ({ request, locals }) => {
-		if (!locals.user) redirect(302, '/login');
-		requirePermission(locals.user, 'kanban:write');
-		await connectDB();
-		const fd = await request.formData();
-		const taskId = fd.get('taskId') as string;
-		const newStatus = fd.get('newStatus') as string;
-		if (!taskId || !newStatus) return fail(400, { error: 'Missing taskId or newStatus' });
-
-		const sortOrder = fd.get('sortOrder') ? Number(fd.get('sortOrder')) : undefined;
-		const waitingReason = fd.get('waitingReason') as string | null;
-		const waitingOn = fd.get('waitingOn') as string | null;
-
-		const task = await KanbanTask.findById(taskId) as any;
-		if (!task) return fail(400, { error: 'Task not found' });
-
-		// Hard WIP-limit cap. Skip if already in wip (idempotent re-move).
-		if (newStatus === 'wip' && task.status !== 'wip') {
-			const check = await checkWipLimit(task.assignee?._id ?? null, taskId);
-			if (!check.ok) return fail(409, { wipLimitError: check });
-		}
-
-		const oldStatus = task.status;
-		const update: any = {
-			status: newStatus,
-			statusChangedAt: new Date()
-		};
-		if (sortOrder !== undefined) update.sortOrder = sortOrder;
-		if (newStatus === 'waiting') {
-			update.waitingReason = waitingReason || null;
-			update.waitingOn = waitingOn || null;
-		}
-
-		await KanbanTask.updateOne({ _id: taskId }, {
-			$set: update,
-			$push: {
-				activityLog: {
-					_id: generateId(),
-					action: 'status_change',
-					details: { from: oldStatus, to: newStatus },
-					createdAt: new Date(),
-					createdBy: locals.user.username ?? locals.user._id
-				}
-			}
-		});
-
-		return { success: true };
-	},
-
-	delete: async ({ request, locals }) => {
-		if (!locals.user) redirect(302, '/login');
-		requirePermission(locals.user, 'kanban:write');
-		await connectDB();
-		const fd = await request.formData();
-		const taskId = fd.get('taskId') as string;
+		const taskId = fd.get('taskId')?.toString();
+		const reason = fd.get('reason')?.toString();
 		if (!taskId) return fail(400, { error: 'Missing taskId' });
 
-		const task = await KanbanTask.findById(taskId).lean() as any;
-		if (!task) return fail(400, { error: 'Task not found' });
-
-		await KanbanTask.deleteOne({ _id: taskId });
-
-		await AuditLog.create({
-			tableName: 'kanban_tasks',
-			recordId: taskId,
-			action: 'DELETE',
-			oldData: { title: task.title, status: task.status },
-			changedBy: locals.user.username ?? locals.user._id
-		});
-
+		try {
+			await demote({
+				taskId,
+				reason: reason ?? '',
+				actorUsername: locals.user.username,
+				via: 'ui'
+			});
+		} catch (e) {
+			if (e instanceof ReplenishError) {
+				return fail(e.code === 'PERMISSION_DENIED' ? 403 : 400, { error: e.message, code: e.code });
+			}
+			if (e instanceof TransitionError) return fail(400, { error: e.message, code: e.code });
+			throw e;
+		}
 		return { success: true };
 	}
 };

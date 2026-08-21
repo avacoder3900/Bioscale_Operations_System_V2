@@ -17,16 +17,56 @@ metadata = {
 
 requirements = {"robotType": "OT-2", "apiLevel": "2.19"}
 
+# Cartridges on a deck. The destination list is always laid out as this many equal
+# contiguous blocks (12 wax wells each: 3 rows x 4 cols), so cartridge N is the
+# slice [(N-1)*per : N*per] — and every slice boundary is a ROW boundary, which the
+# row-aligned aspirate batching relies on.
+CARTS_ON_DECK = 24
+
+
+def resume_window(total_wells, cartridges_per_deck, resume_cartridge=1, resume_hole=1,
+                  carts_on_deck=CARTS_ON_DECK):
+    """Which slice of the destination list should this run actually fill?
+
+    `cartridges_per_deck` has always truncated the END of the list (fill the first N
+    cartridges). Resume adds a START, so a run can pick up at any cartridge (e.g. after
+    a broken tip, or after re-calibrating part of a deck) instead of re-filling from 1.
+
+    resume_cartridge/resume_hole are 1-based (that's how an operator counts them on the
+    bench). The default (1, 1) yields start=0 — a normal full run, byte-for-byte the old
+    behaviour. Returns (start, end) to be used as well_names[start:end].
+
+    Module-level and pure ON PURPOSE: the fill loop is wrapped in
+    `if dispense and not protocol.is_simulating()`, so analysis never executes it.
+    """
+    wells_on_cart = int(total_wells / carts_on_deck)
+    end = min(cartridges_per_deck * wells_on_cart, total_wells)
+    start = (resume_cartridge - 1) * wells_on_cart + (resume_hole - 1)
+    return max(0, min(start, end)), end
+
+
 def add_parameters(parameters: protocol_api.Parameters):
     parameters.add_int(
         variable_name="cartridges",
         display_name="Cartridges",
-        description="The number of cartridges to be filled.",
+        description="Last cartridge to fill (END). With a start cartridge set, BIMS converts its scanned count into this.",
         default=24,
         minimum=1,
         maximum=24,
         unit="cartridges",
     )
+
+    # ── Start partway through the deck ─────────────────────────────────────────
+    # `cartridges` is the END; these set the START. (1, 1) = a normal full run, so an
+    # operator who never touches them sees no change. 1-based because that is how the
+    # operator counts cartridges and holes on the bench. Example: cartridges 16..24 =
+    # resume_cartridge 16 + cartridges 24.
+    parameters.add_int(variable_name="resume_cartridge", display_name="Start at cartridge",
+        description="Start filling at this cartridge (1 = from the beginning). Fills through 'Cartridges'.",
+        default=1, minimum=1, maximum=24)
+    parameters.add_int(variable_name="resume_hole", display_name="Start at hole in that cart",
+        description="Within the start cartridge, begin at this wax hole (1 = its first hole, 12 = last).",
+        default=1, minimum=1, maximum=12)
         
     parameters.add_bool(
         variable_name="wax",
@@ -54,6 +94,80 @@ def add_parameters(parameters: protocol_api.Parameters):
         variable_name="row_pattern_2",
         display_name="Channel A (V,S,P,M...)", 
         description="Fill every 3rd row starting with V (pattern i%3==2)",
+        default=True
+    )
+
+    # ------------------------------------------------------------------
+    # Tip-calibration controls (2026-08-18). The per-tip X/Y probe on the
+    # calibrator fixture, switchable like the reagent protocol. DEFAULT ON:
+    # the decks are taught in the Deck Calibration Studio WITH "Calibrate tip"
+    # active, i.e. the stored hole coordinates are tip-neutral and only land
+    # when the fill applies the same probe adjust (B07/deck-004 confirmed
+    # 2026-08-18: OFF parks the tip on the REAGENT hole; ON lands the wax hole).
+    # OFF only for a deck taught raw (no Calibrate tip) or a dead calibrator.
+    parameters.add_bool(
+        variable_name="use_tip_calibration",
+        display_name="USE TIP CALIBRATION",
+        description="ON = shift X/Y by the calibrator probe (decks are taught tip-neutral). OFF = raw taught position.",
+        default=True
+    )
+
+    # Any adjust larger than this is rejected as a bad probe (missed switch,
+    # bad baseline, bent tip): retry once with a fresh tip, then pause and
+    # continue at nominal. B07's NORMAL wax adjust is about (-2.3, +0.7)mm
+    # (p20 recipe vs a baseline zeroed for the reagent tip), so the cap must
+    # sit well above that; a missed probe returns >5mm.
+    parameters.add_float(
+        variable_name="max_tip_adjust",
+        display_name="Max tip adjust (mm)",
+        description="Reject a tip-calibration adjust larger than this in X or Y (retry once, then nominal).",
+        default=4.0,
+        minimum=0.3,
+        # Ceiling raised from 5.0 (2026-08-20). The cap is compared against the
+        # RAW adjust, which is `calibrator C-string baseline - travel-to-switch`,
+        # so it carries that robot's baseline. R04's fixture is dialled to -5.0,
+        # making a perfectly normal wax adjust about -6.0 — over the old 5.0
+        # ceiling, so EVERY R04 wax probe was rejected and the fill silently fell
+        # back to nominal. Nominal is ~5.7mm off, because the holes were taught
+        # with the probe adjust applied. B07's baseline is -1.0 and its normal
+        # adjust ~-2.2, which is why wax looked fine there.
+        # The default stays 4.0 so nothing changes for a robot BIMS has no value
+        # for; BIMS sends a per-robot cap from TipCalibratorFixture.maxTipAdjust.
+        maximum=12.0,
+        unit="mm",
+    )
+
+    # Tour 9 wax holes across all three carriers with the EXACT fill motion
+    # (jump -> pre-jump -> dispense height, tip adjust included) and pause at
+    # each so the operator can confirm the tip is over the WAX hole before any
+    # wax is dispensed. Same idea as the reagent protocol's calibration check.
+    parameters.add_bool(
+        variable_name="run_calibration_check",
+        display_name="RUN CALIBRATION CHECK",
+        description="Visit 9 wax holes with the real fill motion and pause at each before dispensing.",
+        default=False
+    )
+
+    # ── Per-carrier legs (2026-08-18) ────────────────────────────────────────────
+    # A deck is 3 carriers x 8 cartridges and the fill order is carrier 1 -> 2 -> 3.
+    # Cartridges must come OFF the heated deck after ~8 (heat vs wax/cartridge), and a
+    # p20 tip carrying wax for 180 dispenses (~15 cartridges) was going bad mid-run
+    # with no way for the robot to notice (OT-2 has no pressure/liquid sensing).
+    # Default: fresh probed tip every 96 wells (= 8 cartridges = one carrier) and a
+    # checkpoint pause at each carrier boundary to remove the finished cartridges.
+    parameters.add_int(
+        variable_name="wells_per_tip",
+        display_name="Wells per tip",
+        description="Change (and re-probe) the tip after this many dispenses. 96 = one carrier (8 cartridges).",
+        default=96,
+        minimum=4,
+        maximum=288,
+        unit="wells",
+    )
+    parameters.add_bool(
+        variable_name="pause_between_carriers",
+        display_name="Pause between carriers",
+        description="Drop the tip and pause after cartridge 8 and 16 so the finished cartridges can be removed.",
         default=True
     )
 
@@ -100,6 +214,41 @@ def add_parameters(parameters: protocol_api.Parameters):
         minimum=0.1,
         maximum=20.0,
         unit="uL",
+    )
+
+    # Backing volume aspirated on top of what actually gets dispensed, then blown
+    # back into the source at the end of the cycle. The p20 caps a single aspiration
+    # at 20uL, so this directly sets how many wells fit in one trip to the wax tube:
+    #     usable per trip = 20 - aspirate_remainder
+    # One cartridge row is 4 wax wells (gates 4,3,2,1). To fill a whole row per trip
+    # the four gate volumes must sum to no more than that usable figure — at
+    # 2.2/2.2/2.2/1.6 a row is 8.2uL, which needs a remainder of 11.8 or lower.
+    # Raising this back toward 13.5 (the old hardcoded value) is safe but costs trips:
+    # the protocol will simply fill part of a row per aspiration.
+    parameters.add_float(
+        variable_name="aspirate_remainder",
+        display_name="Aspirate Remainder",
+        description="Backing volume held in the tip per trip. Lower = more wells per aspiration.",
+        default=11.5,
+        minimum=0.0,
+        maximum=18.0,
+        unit="uL",
+    )
+
+    # How far BELOW the hole rim the tip stops to dispense. The hole is 3.75mm deep,
+    # so the tip's floor clearance = 3.75 - dispense_depth. The old hardcoded value
+    # was 3.0mm (only 0.75mm clearance) which bottomed the tip out and snapped it.
+    # Default -1.0 = HOVER 1.0mm ABOVE the rim (like reagent's +2 hover); positive
+    # values enter the bore (1.0 -> 2.75mm floor clearance). Capped at 2.5 so the
+    # old crash-deep 3.0 cannot be re-entered by hand.
+    parameters.add_float(
+        variable_name="dispense_depth",
+        display_name="Wax dispense depth (mm)",
+        description="How far below the hole rim the tip dispenses. Negative = hover above it.",
+        default=-1.0,
+        minimum=-2.0,
+        maximum=2.5,
+        unit="mm",
     )
 
     # ==================================================================
@@ -167,10 +316,23 @@ def run(protocol: protocol_api.ProtocolContext):
     # =====================================================================
     import socket
     
+    # ZEROED 2026-08-20. This table is a DEAD FALLBACK and must stay all-zero.
+    #
+    # The deck definition is the only source of hole positions and the per-tip
+    # calibrator probe is the only correction applied on top of it. This table
+    # predates that rule: it shifts ALL labware for a robot, so any non-zero
+    # value here double-counts geometry the Deck Calibration Studio already
+    # tuned. B07 carried real values and they are now 0 — BIMS forces
+    # bims_native=True and sends zeros, so the table was already unreachable in
+    # practice; zeroing it means even a protocol that somehow ran without the
+    # BIMS parameters cannot move the pipette off the taught position.
+    #
+    # Do not "calibrate a new robot" by adding numbers here. Tune the deck in
+    # the Studio; that is what the fill actually uses.
     ROBOT_OFFSETS = {
         'muddy-water':       { 'name': 'Left (B14)',   'x': 0.0, 'y': 0.0,  'z': 0.0  },   # Calibrate when ready
         'OT2CEP20210817R04': { 'name': 'Middle (R04)', 'x': 0.0, 'y': 0.0,  'z': 0.0  },   # Calibrate when ready
-        'hidden-leaf':       { 'name': 'Right (B07)',  'x': 0.15, 'y': -0.25, 'z': -1.3 },   # Existing calibrated offsets
+        'hidden-leaf':       { 'name': 'Right (B07)',  'x': 0.0, 'y': 0.0, 'z': 0.0 },
     }
     DEFAULT_OFFSETS = { 'name': 'Unknown', 'x': 0.0, 'y': 0.0, 'z': 0.0 }
     
@@ -405,32 +567,43 @@ def run(protocol: protocol_api.ProtocolContext):
             ser = _find_calibrator(wait_s=8)
     
     try:
-        # Read offset data with retry logic
-        try:
-            serial_write_with_retry(ser, b'C')
-            offset_data_raw = serial_read_with_retry(ser)
-            offset_data = str(offset_data_raw).split(':')
-            if len(offset_data) >= 2:
-                offset['x'] = float(offset_data[0][2:])
-                offset['y'] = float(offset_data[1][:-5])
-                protocol.comment(f'Offset calibration: x={offset["x"]}, y={offset["y"]}')
-            else:
-                raise ValueError('Invalid offset data format')
-        except Exception as e:
-            # Do NOT bail the run here. The 'C' baseline read can come back blank or
-            # malformed even when the calibrator is otherwise fine — operators have
-            # resumed past this in the Opentrons app and the run + per-tip probe still
-            # work. Pause so the operator can choose to continue, then proceed with a
-            # zero baseline (the per-tip X/Y probe below still runs; in bims_native mode
-            # the global offset is applied separately via set_offset). Never `return`.
-            protocol.pause(
-                f'Could not read offset calibration ({str(e)}). '
-                f'Click Resume to START THE RUN ANYWAY (zero baseline; per-tip '
-                f'calibration still runs), or Cancel/Stop to end.'
-            )
-            offset['x'] = 0.0
-            offset['y'] = 0.0
-            protocol.comment('Continuing without serial offset baseline — using x=0.0, y=0.0.')
+        # The 'C' baseline only feeds the per-tip X/Y probe, so when tip
+        # calibration is OFF there is nothing to read — skip the serial exchange
+        # (and its could-not-read pause) entirely, like the reagent protocol.
+        if not protocol.params.use_tip_calibration:
+            protocol.comment('Tip calibration disabled — skipping offset baseline read (x=0.0, y=0.0).')
+        else:
+          # Read offset data with retry logic
+          try:
+              serial_write_with_retry(ser, b'C')
+              offset_data_raw = serial_read_with_retry(ser)
+              # Regex, not positional slicing: some calibrator fixtures prefix the
+              # bend reply (B07: b'= -0.2:2.3\r\n'; others bare b'-4.5:0.8\r\n').
+              # The old str(bytes)[2:] parsing raised on the prefix, forcing a
+              # zero-baseline run whose per-tip adjust was wrong by the baseline.
+              import re as _re_cal
+              _m = _re_cal.search(rb'(-?\d+(?:\.\d+)?)\s*:\s*(-?\d+(?:\.\d+)?)', offset_data_raw or b'')
+              if _m:
+                  offset['x'] = float(_m.group(1))
+                  offset['y'] = float(_m.group(2))
+                  protocol.comment(f'Offset calibration: x={offset["x"]}, y={offset["y"]}')
+              else:
+                  raise ValueError(f'Invalid offset data format: {offset_data_raw!r}')
+          except Exception as e:
+              # Do NOT bail the run here. The 'C' baseline read can come back blank or
+              # malformed even when the calibrator is otherwise fine — operators have
+              # resumed past this in the Opentrons app and the run + per-tip probe still
+              # work. Pause so the operator can choose to continue, then proceed with a
+              # zero baseline (the per-tip X/Y probe below still runs; in bims_native mode
+              # the global offset is applied separately via set_offset). Never `return`.
+              protocol.pause(
+                  f'Could not read offset calibration ({str(e)}). '
+                  f'Click Resume to START THE RUN ANYWAY (zero baseline; per-tip '
+                  f'calibration still runs), or Cancel/Stop to end.'
+              )
+              offset['x'] = 0.0
+              offset['y'] = 0.0
+              protocol.comment('Continuing without serial offset baseline — using x=0.0, y=0.0.')
 
         # Read particle ID (which carriage/deck is loaded) with retry-on-resume —
         # never bail to an empty run. 'I' is reliable in practice; if it ever returns
@@ -458,7 +631,44 @@ def run(protocol: protocol_api.ProtocolContext):
         protocol.comment(f'Loaded carriage for particle ID: {particle_id}')
         protocol.comment(f'Applied robot offsets: x={robot_offsets["x"]}, y={robot_offsets["y"]}, z={robot_offsets["z"]}')
 
-        def pick_up_and_calibrate_tip():
+        # ── Mid-run tip swap request (2026-08-18) ────────────────────────────────
+        # BIMS ("Tip problem?" card on the wax run page) asks the on-robot bridge daemon
+        # to write this file. The fill loop checks it before EVERY dispense; when
+        # present the run finishes nothing further with the current tip: it empties the
+        # tip back into the source, swaps the tip (robot from the rack, or the operator
+        # by hand), re-probes it on the calibrator, then re-aspirates and continues at
+        # the very well it was about to fill. Nothing skipped, nothing double-filled.
+        _TIP_SWAP_REQ = '/data/ot2-bridge/tip-swap-request.json'
+
+        def take_tip_swap_request():
+            """Return the requested mode ('rack' | 'hand') and consume the file, else None."""
+            if protocol.is_simulating():
+                return None
+            try:
+                import os as _os, json as _json
+                if not _os.path.exists(_TIP_SWAP_REQ):
+                    return None
+                mode = 'rack'
+                try:
+                    with open(_TIP_SWAP_REQ, 'r') as _f:
+                        mode = str((_json.load(_f) or {}).get('mode') or 'rack')
+                except Exception:
+                    pass
+                try:
+                    _os.remove(_TIP_SWAP_REQ)
+                except Exception:
+                    pass
+                return 'hand' if mode == 'hand' else 'rack'
+            except Exception:
+                return None
+
+        # A stale request left over from an earlier run must not fire now.
+        take_tip_swap_request()
+
+        def pick_up_and_calibrate_tip(pick_up=True):
+            """pick_up=False: a tip was put on BY HAND while the API already models a
+            tip (has_tip stays True so the tip length is honoured) — skip drop/pick-up
+            and just probe."""
             nonlocal _tip_index
             # PRD 6: calibrator point + probe Z are RTPs (defaults = the previously
             # hardcoded values). Move points track cal_x/cal_y; the limit-switch
@@ -468,89 +678,238 @@ def run(protocol: protocol_api.ProtocolContext):
             cal_y = protocol.params.cal_y
             z_cal = protocol.params.z_cal
 
-            if (pipette.has_tip):
+            if pick_up and pipette.has_tip:
                 pipette.drop_tip()
 
             # Check if rack is exhausted before picking up
-            if not protocol.is_simulating() and _tip_index >= len(_all_tips):
+            if pick_up and not protocol.is_simulating() and _tip_index >= len(_all_tips):
                 protocol.pause('TIP TRACKER: tiprack exhausted — refill rack, enable "Tiprack Refilled" on next run, then click Resume to continue with current run from A1')
                 _tip_index = 0
                 pipette.starting_tip = _all_tips[0]
                 save_tip_state(0)
 
-            pipette.pick_up_tip()
+            if pick_up:
+                pipette.pick_up_tip()
 
-            # Persist immediately after pickup so an aborted run still advances the counter
+                # Persist immediately after pickup so an aborted run still advances the counter
+                if not protocol.is_simulating():
+                    _tip_index += 1
+                    save_tip_state(_tip_index)
+                    if _tip_index < len(_all_tips):
+                        protocol.comment(f'TIP TRACKER: consumed tip {_all_tips[_tip_index - 1].well_name} — next tip will be {_all_tips[_tip_index].well_name} (index {_tip_index})')
+                    else:
+                        protocol.comment(f'TIP TRACKER: consumed tip {_all_tips[_tip_index - 1].well_name} — rack now empty')
+
+            # Per-tip bend calibration is OPT-IN (use_tip_calibration). When OFF,
+            # skip the physical X/Y limit-switch probe entirely and dispense at the
+            # taught (nominal) wax hole — no probe-derived shift. The tip is already
+            # picked up and the tip tracker already advanced, so nothing is lost.
+            if not protocol.params.use_tip_calibration:
+                protocol.comment('Per-tip calibration DISABLED — nominal wax hole position, no X/Y probe.')
+                return { 'x': 0.0, 'y': 0.0 }
+
+            max_adjust = float(protocol.params.max_tip_adjust)
+
+            def _probe_once():
+                """One X+Y probe. Returns (adjust, ok, reason). Never pauses.
+                A missed limit switch (full 5mm walk) or an adjust larger than
+                max_tip_adjust is a REJECTED probe — the caller decides what to do.
+                Always retracts off the fixture before returning."""
+                pipette.move_to(types.Location(types.Point(x=cal_x, y=cal_y, z=z_cal), carriage), speed=None)
+
+                x_pos = cal_x - 0.6
+                y_pos = cal_y - 6.5
+                pipette.move_to(types.Location(types.Point(x=x_pos, y=y_pos, z=z_cal), carriage), force_direct=True, speed=20)
+                limit_reached = False
+                shift = 0.1
+                try:
+                    serial_write_with_retry(ser, b'X')
+                except Exception as e:
+                    protocol.comment(f'Error writing to serial during X calibration: {str(e)}')
+                    return { 'x': 0.0, 'y': 0.0 }, False, 'serial write failed (X)'
+
+                while (not limit_reached):
+                    pipette.move_to(types.Location(types.Point(x=x_pos - shift, y=y_pos, z=z_cal), carriage), force_direct=True, speed=5)
+                    shift += 0.1
+                    if (shift > 5):
+                        break
+                    # Direct read with very short timeout for fast calibration
+                    original_timeout = ser.timeout
+                    ser.timeout = 0.01
+                    try:
+                        response = ser.read(1)
+                        limit_reached = response == b'X'
+                    finally:
+                        ser.timeout = original_timeout
+                x_ok = limit_reached
+                xOffset = round(offset['x'] - shift, 1)
+
+                yOffset = 0.0
+                y_ok = False
+                if x_ok:
+                    x_pos = cal_x + 8.829
+                    y_pos = cal_y - 7.5
+                    pipette.move_to(types.Location(types.Point(x=x_pos, y=y_pos, z=z_cal), carriage), force_direct=True, speed=20)
+                    limit_reached = False
+                    shift = 0.1
+                    try:
+                        serial_write_with_retry(ser, b'Y')
+                    except Exception as e:
+                        protocol.comment(f'Error writing to serial during Y calibration: {str(e)}')
+                        return { 'x': xOffset, 'y': 0.0 }, False, 'serial write failed (Y)'
+
+                    while (not limit_reached):
+                        pipette.move_to(types.Location(types.Point(x=x_pos, y=y_pos - shift, z=z_cal), carriage), force_direct=True, speed=5)
+                        shift += 0.1
+                        if (shift > 5):
+                            break
+                        original_timeout = ser.timeout
+                        ser.timeout = 0.01
+                        try:
+                            response = ser.read(1)
+                            limit_reached = response == b'Y'
+                        finally:
+                            ser.timeout = original_timeout
+                    y_ok = limit_reached
+                    yOffset = round(offset['y'] - shift, 1)
+
+                # Retract off the fixture (slow), then lift.
+                pipette.move_to(types.Location(types.Point(x=cal_x + 2.0, y=cal_y + 1.0, z=z_cal), carriage), force_direct=True, speed=20)
+                pipette.move_to(types.Location(types.Point(x=cal_x + 2.0, y=cal_y + 1.0, z=z_cal + 20), carriage), force_direct=True, speed=20)
+
+                adj = { 'x': xOffset, 'y': yOffset }
+                if not x_ok:
+                    return adj, False, 'X limit switch not reached within 5mm'
+                if not y_ok:
+                    return adj, False, 'Y limit switch not reached within 5mm'
+                if abs(xOffset) > max_adjust or abs(yOffset) > max_adjust:
+                    return adj, False, f'adjust ({xOffset}, {yOffset}) exceeds max_tip_adjust {max_adjust}mm'
+                return adj, True, ''
+
+            def _fresh_tip(tag):
+                """Drop whatever is (or isn't) on the nozzle and pick up the next tracked tip."""
+                nonlocal _tip_index
+                if pipette.has_tip:
+                    pipette.drop_tip()
+                if not protocol.is_simulating() and _tip_index >= len(_all_tips):
+                    protocol.pause('TIP TRACKER: tiprack exhausted — refill rack, enable "Tiprack Refilled" on next run, then click Resume to continue with current run from A1')
+                    _tip_index = 0
+                    pipette.starting_tip = _all_tips[0]
+                    save_tip_state(0)
+                pipette.pick_up_tip()
+                if not protocol.is_simulating():
+                    _tip_index += 1
+                    save_tip_state(_tip_index)
+                    protocol.comment(f'TIP TRACKER: consumed tip {_all_tips[_tip_index - 1].well_name} ({tag}) — index {_tip_index}')
+
+            def _no_tip_prompt(attempt, why):
+                """The switch was never reached: on the OT-2 (no tip sensor) that is how a
+                missing tip looks. Lift clear so the operator can reach the pipette, and
+                pause until they have pushed a tip on by hand. Nothing is dispensed and
+                no rack position is consumed while this loops."""
+                pipette.move_to(types.Location(types.Point(x=cal_x + 2.0, y=cal_y + 1.0, z=z_cal + 60), carriage), force_direct=True, speed=20)
+                protocol.comment(f'WARNING: NO TIP DETECTED on the pipette (attempt {attempt}: {why}).')
+                protocol.pause(
+                    f'NO TIP DETECTED (attempt {attempt}: {why}). The pipette is raised over the '
+                    f'calibrator. Push a tip firmly onto the pipette BY HAND (or check the tip rack), '
+                    f'then click Resume to calibrate that tip. Cancel/Stop to end the run.'
+                )
+
+            # First attempt with the tip just picked up.
+            adj, ok, why = _probe_once()
+            if ok:
+                protocol.comment(f'Tip calibration OK: adjust x={adj["x"]}, y={adj["y"]}')
+                return adj
+
+            # Missed switch = no tip (or tip not touching). Prompt for a hand-inserted
+            # tip and calibrate it; loop until a probe succeeds or the operator cancels.
+            attempt = 1
+            while not ok and 'not reached' in why:
+                _no_tip_prompt(attempt, why)
+                adj, ok, why = _probe_once()
+                attempt += 1
+                if ok:
+                    protocol.comment(f'Tip calibration OK on hand-inserted tip (attempt {attempt}): adjust x={adj["x"]}, y={adj["y"]}')
+                    return adj
+
+            # Switch WAS reached but the adjust is over the cap (tip is on; calibrator
+            # baseline/lever off, or a badly bent tip) -> retry ONCE with a fresh rack
+            # tip, then pause; Resume continues at nominal (0,0), never with the bad value.
+            protocol.comment(f'Tip calibration REJECTED ({why}) — retrying with a fresh tip.')
+            if pipette.has_tip:
+                pipette.drop_tip()
+            if not protocol.is_simulating() and _tip_index >= len(_all_tips):
+                protocol.pause('TIP TRACKER: tiprack exhausted — refill rack, enable "Tiprack Refilled" on next run, then click Resume to continue with current run from A1')
+                _tip_index = 0
+                pipette.starting_tip = _all_tips[0]
+                save_tip_state(0)
+            pipette.pick_up_tip()
             if not protocol.is_simulating():
                 _tip_index += 1
                 save_tip_state(_tip_index)
-                if _tip_index < len(_all_tips):
-                    protocol.comment(f'TIP TRACKER: consumed tip {_all_tips[_tip_index - 1].well_name} — next tip will be {_all_tips[_tip_index].well_name} (index {_tip_index})')
-                else:
-                    protocol.comment(f'TIP TRACKER: consumed tip {_all_tips[_tip_index - 1].well_name} — rack now empty')
+                protocol.comment(f'TIP TRACKER: consumed tip {_all_tips[_tip_index - 1].well_name} (retry) — index {_tip_index}')
+            adj, ok, why = _probe_once()
+            if ok:
+                protocol.comment(f'Tip calibration OK on retry: adjust x={adj["x"]}, y={adj["y"]}')
+                return adj
+            attempt = 1
+            while not ok and 'not reached' in why:
+                _no_tip_prompt(attempt, why)
+                adj, ok, why = _probe_once()
+                attempt += 1
+                if ok:
+                    protocol.comment(f'Tip calibration OK on hand-inserted tip (attempt {attempt}): adjust x={adj["x"]}, y={adj["y"]}')
+                    return adj
 
-            pipette.move_to(types.Location(types.Point(x=cal_x, y=cal_y, z=z_cal), carriage), speed=None)
+            # NO NOMINAL FALLBACK (2026-08-20).
+            #
+            # "Continue at nominal" reads like a safe degraded mode and is the
+            # opposite. The deck holes are taught WITH the probe adjust applied —
+            # they are tip-NEUTRAL — so nominal is not "uncorrected", it is a
+            # known-wrong position roughly 5.7mm off, and the fill quietly puts
+            # wax somewhere that is not the hole. That is exactly what happened on
+            # R04 on 2026-08-20: every probe was rejected by a too-tight
+            # max_tip_adjust and 288 holes were addressed at nominal.
+            #
+            # The deck definition is the only source of hole positions and the
+            # per-tip probe is the only correction allowed on top of it. If the
+            # probe cannot produce one, there is no legitimate position to move
+            # to, so the run stops instead of inventing one.
+            raise RuntimeError(
+                f'Tip calibration REJECTED twice ({why}). Refusing to continue at nominal: '
+                f'the wax holes are taught tip-neutral, so nominal is about 5.7mm off the '
+                f'hole, not merely uncorrected. Check the calibrator fixture, or raise the '
+                f'max tip adjust for this robot in BIMS if the reading is genuinely normal '
+                f'for it, then re-run.'
+            )
 
-            x_pos = cal_x - 0.6
-            y_pos = cal_y - 6.5
-            pipette.move_to(types.Location(types.Point(x=x_pos, y=y_pos, z=z_cal), carriage), force_direct=True, speed=20)
-            limit_reached = False
-            shift = 0.1
-            try:
-                serial_write_with_retry(ser, b'X')
-            except Exception as e:
-                protocol.pause(f'Error writing to serial during X calibration: {str(e)} - click Resume to continue')
-                return { 'x': 0, 'y': 0 }
-            
-            while (not limit_reached):
-                pipette.move_to(types.Location(types.Point(x=x_pos - shift, y=y_pos, z=z_cal), carriage), force_direct=True, speed=5)
-                shift += 0.1
-                if (shift > 5):
-                    protocol.pause('Unable to calibrate X axis, xOffset=' + str(x_pos + shift) + ' - click Resume to end')
-                    break
-                # Direct read with very short timeout for fast calibration
-                original_timeout = ser.timeout
-                ser.timeout = 0.01
-                try:
-                    response = ser.read(1)
-                    limit_reached = response == b'X'
-                finally:
-                    ser.timeout = original_timeout
-                #adjustment made to the 100.3 to be close to the x position
-            xOffset = round(offset['x'] - shift, 1)
-            x_pos = cal_x + 8.829
-            y_pos = cal_y - 7.5
-            pipette.move_to(types.Location(types.Point(x=x_pos, y=y_pos, z=z_cal), carriage), force_direct=True, speed=20)
-            limit_reached = False
-            shift = 0.1
-            
-            try:
-                serial_write_with_retry(ser, b'Y')
-            except Exception as e:
-                protocol.pause(f'Error writing to serial during Y calibration: {str(e)} - click Resume to continue')
-                return { 'x': xOffset, 'y': 0 }
-            
-            while (not limit_reached):
-                pipette.move_to(types.Location(types.Point(x=x_pos, y=y_pos - shift, z=z_cal), carriage), force_direct=True, speed=5)
-                shift += 0.1
-                if (shift > 5):
-                    protocol.pause('Unable to calibrate Y axis, yOffset=' + str(y_pos - shift) + ' - click Resume to continue')
-                    break
-                # Direct read with very short timeout for fast calibration
-                original_timeout = ser.timeout
-                ser.timeout = 0.01
-                try:
-                    response = ser.read(1)
-                    limit_reached = response == b'Y'
-                finally:
-                    ser.timeout = original_timeout
-            #adjustment made to the 161.2 to be close to the y position
-            yOffset = round(offset['y'] - shift, 1)
+        # 9 WAX holes spread over all three carriers (cols 2-8 | 10-16 | 18-24) and
+        # the front/middle/back of the deck (rows A / L / X). Same well names the
+        # fill uses, so this exercises the exact deck definition + tip adjust.
+        calibration_check_wells = ['X2', 'L6', 'A8', 'A10', 'L14', 'X16', 'X18', 'L22', 'A24']
 
-            pipette.move_to(types.Location(types.Point(x=cal_x + 2.0, y=cal_y + 1.0, z=z_cal), carriage), force_direct=True, speed=20)
-            pipette.move_to(types.Location(types.Point(x=cal_x + 2.0, y=cal_y + 1.0, z=z_cal + 20), carriage), force_direct=True, speed=20)
-            
-            return { 'x': xOffset, 'y': yOffset }
+        def run_calibration_check(adjust):
+            """Tour the 9 check holes with the EXACT fill motion (jump -> pre-jump ->
+            dispense height, tip adjust included) and pause at each so the operator
+            can confirm the tip is over the WAX hole, not the reagent hole beside it."""
+            jump_height = 60
+            well_prejump_height = 5
+            well_z_depth = -float(protocol.params.dispense_depth) + z_offset
+            n = len(calibration_check_wells)
+            for i, well_name in enumerate(calibration_check_wells):
+                well = carriage[well_name]
+                pipette.move_to(well.top(jump_height))
+                pipette.move_to(well.top(jump_height).move(types.Point(adjust['x'], adjust['y'], 0.0)))
+                pipette.move_to(well.top(well_prejump_height).move(types.Point(adjust['x'], adjust['y'], 0.0)))
+                pipette.move_to(well.top(well_z_depth).move(types.Point(adjust['x'], adjust['y'], 0.0)))
+                protocol.pause(
+                    f'Calibration check {i + 1}/{n}: wax hole {well_name} '
+                    f'(adjust x={adjust["x"]}, y={adjust["y"]}). Tip over the WAX hole? '
+                    f'Click Resume for the next hole, Cancel/Stop to end.'
+                )
+                pipette.move_to(well.top(well_prejump_height).move(types.Point(adjust['x'], adjust['y'], 0.0)))
+            pipette.move_to(carriage[calibration_check_wells[-1]].top(jump_height).move(types.Point(adjust['x'], adjust['y'], 0.0)))
+            return True
 
         disposal_volume = 1
         maximum_volume_per_aspiration = 20
@@ -558,7 +917,7 @@ def run(protocol: protocol_api.ProtocolContext):
         tube_rim_height_2mL = 107.55
         aspirating_z_height_tweak = .25
         max_aspirate_depth = 50+aspirating_z_height_tweak
-        aspirate_remainder = 13.5
+        aspirate_remainder = protocol.params.aspirate_remainder
 
         def source_height(source_volume):
             lookup_table_2mL = collections.OrderedDict()
@@ -608,26 +967,97 @@ def run(protocol: protocol_api.ProtocolContext):
                 adjust: XY offset adjustment dict
                 cartridges_per_deck: Number of cartridges to fill
             """
-            wells_to_fill_names = []
-            wells_on_cart = int(len(well_names)/24)
-           
-            for i in range(cartridges_per_deck * wells_on_cart):
-                wells_to_fill_names.append(well_names[i])
+            wells_on_cart = int(len(well_names) / CARTS_ON_DECK)
+            start_i, end_i = resume_window(
+                len(well_names), cartridges_per_deck, resume_cartridge, resume_hole)
+            wells_to_fill_names = well_names[start_i:end_i]
+
+            if start_i > 0:
+                protocol.comment(
+                    f'START: cartridge {resume_cartridge} hole {resume_hole} '
+                    f'(well index {start_i}) — skipping {start_i} well(s), '
+                    f'{len(wells_to_fill_names)} to fill through cartridge {cartridges_per_deck}.'
+                )
+                # source_volume arrives as (dead_volume + wax for ALL wells up to the END
+                # cartridge). The skipped wells were never dispensed by THIS run, so the
+                # tube holds less than the model assumes only if the operator loaded it
+                # for the partial run — either way, subtracting the skipped wells' wax
+                # leaves exactly (dead_volume + wax for the wells that remain), which is
+                # what the aspirate-height maths needs. Load the tube for the remaining
+                # wells (see "Calculated source volume needed" comment).
+                skipped_volume = sum(
+                    well_volumes[COLUMN_GATE.get(get_well_column(w), 'wax_gate4')]
+                    for w in well_names[:start_i]
+                )
+                source_volume = source_volume - skipped_volume
+                protocol.comment(f'START: source volume model reduced by {skipped_volume:.1f}uL for the skipped wells.')
+            if not wells_to_fill_names:
+                protocol.pause('Nothing to fill: start cartridge is beyond the "Cartridges" end. Cancel/Stop and fix the parameters.')
+                return
 
             for source in sources:
                 source_well = tuberack[source]
                 destination_wells = [carriage[name] for name in wells_to_fill_names]
                 
-                jump_count = 0
-                jump_frequency = 288
                 jump_height = 60
-                tip_dispenses = 180
+                # Wells per tip (RTP; was hardcoded 180). Batches never cross a tip
+                # boundary (see wells_before_tip_change), and 96 is a whole number of
+                # rows and cartridges, so a tip change lands exactly on a carrier edge.
+                tip_dispenses = max(4, int(protocol.params.wells_per_tip))
                 tip_change_count = 0
+                pause_between_carriers = bool(protocol.params.pause_between_carriers)
+
+                def carrier_of(well_name):
+                    """0-based carrier (0 = cols 2-8, 1 = cols 10-16, 2 = cols 18-24)."""
+                    return (int(get_well_column(well_name)) - 1) // 8
                 well_prejump_height = 5
+                # True until the very first dispense of the run, which approaches the
+                # carriage from the tip calibrator and always gets the full-height lift.
+                first_dispense = True
                 # Process all wells
                 well_index = 0
-                
+
+                # Log the aspiration budget so a short-filling run is diagnosable from
+                # the run log alone rather than by watching the pipette.
+                row_total = sum(well_volumes[g] for g in ('wax_gate4', 'wax_gate3', 'wax_gate2', 'wax_gate1'))
+                protocol.comment(
+                    f'Aspirate budget: {maximum_volume_per_aspiration}uL pipette max - '
+                    f'{aspirate_remainder}uL remainder = {maximum_volume_per_aspiration - aspirate_remainder}uL '
+                    f'usable per trip; one cartridge row needs {round(row_total, 2)}uL'
+                )
+                if row_total > maximum_volume_per_aspiration - aspirate_remainder:
+                    protocol.comment(
+                        'NOTE: a full cartridge row does not fit in one aspiration, so rows will be '
+                        'filled in parts. Lower the gate volumes or the aspirate remainder to get '
+                        '4 wells per trip.'
+                    )
+
+                def do_tip_swap(mode, at_well):
+                    """Operator-requested mid-run tip swap. The tip has already been
+                    emptied back into the source by the caller. 'rack' = robot drops
+                    the tip and takes the next tracked one; 'hand' = operator pulls the
+                    old tip off and pushes a new one on while the API keeps modelling a
+                    tip (so the tip length stays right) — then re-probe either way."""
+                    protocol.comment(f'TIP SWAP requested from BIMS ({mode}) — will continue at well {at_well}.')
+                    if mode == 'hand':
+                        _cx, _cy, _cz = protocol.params.cal_x, protocol.params.cal_y, protocol.params.z_cal
+                        pipette.move_to(types.Location(types.Point(x=_cx + 2.0, y=_cy + 1.0, z=_cz + 60), carriage), force_direct=True, speed=20)
+                        protocol.pause(
+                            f'TIP SWAP (by hand): the pipette is raised over the calibrator. Pull the old tip '
+                            f'off and push a NEW tip firmly on, then click Resume — it will calibrate the new '
+                            f'tip and continue at well {at_well}. Cancel/Stop to end the run.'
+                        )
+                        return pick_up_and_calibrate_tip(pick_up=False)
+                    return pick_up_and_calibrate_tip()
+
                 while well_index < len(destination_wells):
+                    # Operator asked for a tip swap between batches -> do it now, before
+                    # aspirating for the next batch (the tip is empty here).
+                    _swap = take_tip_swap_request()
+                    if _swap:
+                        adjust = do_tip_swap(_swap, wells_to_fill_names[well_index])
+                        first_dispense = True
+
                     # Calculate how many wells we can do in this aspiration cycle
                     # Must account for variable volumes per well
                     available_volume = maximum_volume_per_aspiration - aspirate_remainder
@@ -645,22 +1075,41 @@ def run(protocol: protocol_api.ProtocolContext):
                         vol = well_volumes[gate]
                         
                         # Check if adding this well would exceed capacity
-                        if batch_volume + vol > available_volume:
+                        # (1e-9 tolerance: gate volumes like 2.2 are not exact in binary,
+                        # so a row that fits on paper must not be rejected by rounding)
+                        if batch_volume + vol > available_volume + 1e-9:
                             break
-                        
+
                         # Check tip change limit
                         if batch_size >= wells_before_tip_change:
                             break
-                        
+
+                        # Never let one aspiration span two cartridge rows. A batch that
+                        # ends mid-row forces the NEXT batch to open by crossing a row —
+                        # and every third time, a cartridge wall — on the API's default
+                        # in-labware travel arc (well top + 5mm), which is not enough to
+                        # clear that wall and bends the tip. Ending each batch at a row
+                        # boundary routes every crossing through the trip back to the
+                        # source tube, which arcs at deck-clearing height. This is what
+                        # silently kept the old uniform-1.6uL config safe: 4 x 1.6 = 6.4
+                        # happened to be exactly one row per aspiration.
+                        if batch_size > 0 and row_key(well_name) != row_key(wells_to_fill_names[well_index]):
+                            break
+
                         batch_volume += vol
                         batch_size += 1
-                    
+
                     wells_this_cycle = batch_size
-                    
+
                     # Skip if we can't do any wells (shouldn't happen but safety check)
                     if wells_this_cycle <= 0:
+                        protocol.comment(
+                            f'STOPPING: well {wells_to_fill_names[well_index]} needs more than the '
+                            f'{available_volume}uL usable per aspiration. Lower its gate volume or '
+                            f'the aspirate remainder.'
+                        )
                         break
-                        
+
                     wells_to_fill = destination_wells[well_index:well_index + wells_this_cycle]
                     wells_to_fill_names_batch = wells_to_fill_names[well_index:well_index + wells_this_cycle]
                     
@@ -700,9 +1149,20 @@ def run(protocol: protocol_api.ProtocolContext):
 
                     # DISPENSING - with variable volumes and rates per well
                     dispensed_volume = 0
-                    well_z_depth = -3.0 + z_offset
+                    # Tunable dispense depth (was hardcoded -3.0 = 0.75mm clearance,
+                    # which snapped tips on the hole floor). Default -1.0 = hover 1mm
+                    # above the rim. z_offset stays for the BIMS global Z.
+                    well_z_depth = -float(protocol.params.dispense_depth) + z_offset
 
+                    swap_at = None
                     for idx, well in enumerate(wells_to_fill):
+                        # Operator asked for a tip swap mid-batch: stop BEFORE this well.
+                        # The wells already done in this batch count; this one and the
+                        # rest of the batch are re-done with the new tip.
+                        _swap = take_tip_swap_request()
+                        if _swap:
+                            swap_at = (idx, _swap)
+                            break
                         # Determine volume and rate for this specific well via gate
                         well_name = wells_to_fill_names_batch[idx]
                         col = get_well_column(well_name)
@@ -710,29 +1170,69 @@ def run(protocol: protocol_api.ProtocolContext):
                         current_volume = well_volumes[gate]
                         current_rate = dispense_rates[gate]
                         
-                        if jump_count % jump_frequency == 0:
+                        # Wall clearance. idx == 0 arrives from the source tube, which is
+                        # a cross-labware move the API already arcs deck-high, so only a
+                        # crossing WITHIN a batch needs the explicit lift. The batch
+                        # builder normally prevents those entirely; this is the guard for
+                        # when gate volumes are too large to fit a whole row in one trip.
+                        # (This used to be `jump_count % 288 == 0`, which — with 288 wax
+                        # wells on a deck — fired once at the start of the run and never
+                        # again, so no crossing was ever actually cleared.)
+                        crosses_row = idx > 0 and row_key(well_name) != row_key(wells_to_fill_names_batch[idx - 1])
+                        if first_dispense or crosses_row:
                             pipette.move_to(well.top(jump_height))
                             pipette.move_to(well.top(jump_height).move(types.Point(adjust['x'], adjust['y'], 0.0)))
                             protocol.delay(seconds=.3)
                             pipette.move_to(well.top(well_prejump_height).move(types.Point(adjust['x'], adjust['y'], 0.0)))
                             protocol.delay(seconds=.3)
-                            
+                        first_dispense = False
+
                         pipette.dispense(current_volume, well.top(well_z_depth).move(types.Point(adjust['x'], adjust['y'], 0.0)), rate=current_rate)
-                        
+
                         tip_change_count += 1
-                        jump_count += 1
                         dispensed_volume += current_volume
                         protocol.comment(f'Dispensed {current_volume}uL into well {well_name} (tip #{tip_change_count})')
                      
                     source_volume -= dispensed_volume
+
+                    if swap_at is not None:
+                        # Give the un-dispensed wax back to the source, then swap + probe,
+                        # then loop back: the next batch starts at the interrupted well.
+                        _idx, _mode = swap_at
+                        well_index += _idx
+                        pipette.blow_out(location=source_well.top())
+                        adjust = do_tip_swap(_mode, wells_to_fill_names[well_index])
+                        first_dispense = True
+                        continue
+
                     well_index += wells_this_cycle
                     
                     # Blow out remaining liquid
                     pipette.blow_out(location=source_well.top())
                     
+                    # CARRIER CHECKPOINT: the next well starts a new carrier -> drop the
+                    # tip (pipette parks at the trash, away from the deck), pause so the
+                    # operator removes the finished 8 cartridges, then continue with a
+                    # fresh probed tip. Skips the plain tip-change below (tip is fresh).
+                    if well_index < len(destination_wells) and pause_between_carriers and \
+                            carrier_of(wells_to_fill_names[well_index]) != carrier_of(wells_to_fill_names[well_index - 1]):
+                        done_c = carrier_of(wells_to_fill_names[well_index - 1])
+                        next_c = carrier_of(wells_to_fill_names[well_index])
+                        if pipette.has_tip:
+                            pipette.drop_tip()
+                        protocol.comment(f'CHECKPOINT: carrier {done_c + 1} (cartridges {done_c * 8 + 1}-{done_c * 8 + 8}) done; {well_index} of {len(destination_wells)} wells filled.')
+                        protocol.pause(
+                            f'CHECKPOINT: carrier {done_c + 1} done (cartridges {done_c * 8 + 1}-{done_c * 8 + 8}). '
+                            f'Remove those cartridges — do NOT move the deck. '
+                            f'Click Resume to continue with carrier {next_c + 1} (cartridges {next_c * 8 + 1}-{next_c * 8 + 8}) on a fresh tip.'
+                        )
+                        adjust = pick_up_and_calibrate_tip()
+                        # Re-align the wells-per-tip counter to the carrier edge (matters
+                        # when the run started mid-deck via Start-at-cartridge).
+                        tip_change_count = 0
                     # CHECK FOR TIP CHANGE AFTER COMPLETING ASPIRATION CYCLE
-                    if tip_change_count % tip_dispenses == 0 and well_index < len(destination_wells):
-                        protocol.comment('Changing tip after completing aspiration cycle')
+                    elif tip_change_count % tip_dispenses == 0 and well_index < len(destination_wells):
+                        protocol.comment(f'Changing tip after {tip_dispenses} dispenses')
                         adjust = pick_up_and_calibrate_tip()
 
                 if pipette.has_tip:
@@ -747,6 +1247,27 @@ def run(protocol: protocol_api.ProtocolContext):
         # NOTE: special_columns replaced by per-gate COLUMN_GATE mapping above.
         
         full_rows_reverse = ['X', 'W', 'V', 'U', 'T', 'S', 'R', 'Q', 'P', 'O', 'N', 'M', 'L', 'K', 'J', 'I', 'H', 'G', 'F', 'E', 'D', 'C', 'B', 'A']
+
+        # ------------------------------------------------------------------
+        # Carriage geometry: 24 cartridges in a 3 (x) by 8 (y) grid.
+        #   x-blocks are columns 1-8, 9-16, 17-24 (a ~145mm gap between blocks)
+        #   y-blocks are three rows each, in full_rows_reverse order: X,W,V |
+        #   U,T,S | R,Q,P | ... so one cartridge is 3 rows x 4 wax columns.
+        # The 4 wax wells of a single row sit ~6mm apart on one flat cartridge
+        # top; stepping to the next row, and above all to the next cartridge,
+        # has to clear the raised carriage wall between cartridge bodies.
+        # ------------------------------------------------------------------
+        def get_well_row(well_name):
+            """Extract the row letter from a well name like 'X10' -> 'X'."""
+            i = 0
+            while i < len(well_name) and not well_name[i].isdigit():
+                i += 1
+            return well_name[:i]
+
+        def row_key(well_name):
+            """Identity of the physical row of 4 wax wells this well sits in."""
+            col = int(get_well_column(well_name))
+            return ((col - 1) // 8, full_rows_reverse.index(get_well_row(well_name)))
 
         def get_rows_for_column(col_num, pattern_index):
             """Return appropriate row set based on column number and pattern"""
@@ -884,6 +1405,11 @@ def run(protocol: protocol_api.ProtocolContext):
         wax = protocol.params.wax
         cartridges_per_deck = protocol.params.cartridges
 
+        # Start point (1, 1) = normal full run. Read into the enclosing scope so
+        # dispense_reagent() closes over them.
+        resume_cartridge = protocol.params.resume_cartridge
+        resume_hole = protocol.params.resume_hole
+
         tube_locations = {
             'wax': 'A3',
         }
@@ -931,12 +1457,29 @@ def run(protocol: protocol_api.ProtocolContext):
             protocol.comment(f"Gate volumes — Gate4: {well_volumes['wax_gate4']}uL, Gate3: {well_volumes['wax_gate3']}uL, Gate2: {well_volumes['wax_gate2']}uL, Gate1: {well_volumes['wax_gate1']}uL")
             # protocol.comment(f"Gate volumes — Gate4: {well_volumes['wax_gate4']}uL, Gate3: {well_volumes['wax_gate3']}uL, Gate2: {well_volumes['wax_gate2']}uL")  # GATE 1 DISABLED
             protocol.comment(f"Calculated source volume needed: {source_volumes['wax']}uL")
+            _start_i, _end_i = resume_window(len(final_destinations['wax']), cartridges_per_deck, resume_cartridge, resume_hole)
+            if _start_i > 0:
+                _remaining = dead_volume + sum(
+                    well_volumes[COLUMN_GATE.get(get_well_column(w), 'wax_gate4')]
+                    for w in final_destinations['wax'][_start_i:_end_i]
+                )
+                protocol.comment(f"START at cartridge {resume_cartridge} hole {resume_hole}: source volume needed for the remaining {_end_i - _start_i} wells = {_remaining:.1f}uL")
         else:
             # Placeholder during analysis
             source_volumes = {'wax': 0}
 
         if dispense and not protocol.is_simulating():        
             if wax:
+                if protocol.params.run_calibration_check:
+                    # Optional pre-flight: pick up + calibrate a tip exactly as the fill
+                    # will, tour 9 wax holes, then ask before dispensing anything.
+                    protocol.comment('Calibration check enabled. Picking up tip and calibrating...')
+                    check_adjust = pick_up_and_calibrate_tip()
+                    protocol.comment(f'Calibration check adjust: x={check_adjust["x"]}, y={check_adjust["y"]}')
+                    run_calibration_check(check_adjust)
+                    protocol.pause('Calibration check done. Click Resume to START WAX DISPENSING with a fresh tip, or Cancel/Stop to end the run.')
+                    if pipette.has_tip:
+                        pipette.drop_tip()
                 adjust = pick_up_and_calibrate_tip()
                 dispense_reagent(
                     sources=[tube_locations['wax']], 

@@ -374,7 +374,8 @@ async function seed() {
 	// ─── 8. Cartridge Records ───────────────────────────────────────
 	console.log('Seeding cartridge records...');
 	const cartridgeData = [];
-	const phases = ['backing', 'wax_filled', 'wax_qc', 'wax_stored', 'reagent_filled', 'inspected', 'sealed', 'cured', 'stored', 'released'];
+	// WAX-SIMPLIFY-1: wax_filled IS the stored state (no wax_stored / wax_qc producers).
+	const phases = ['backing', 'wax_filled', 'wax_ready', 'wax_rejected', 'reagent_filled', 'inspected', 'sealed', 'cured', 'stored', 'released'];
 	for (let i = 0; i < 20; i++) {
 		const phase = phases[i % phases.length];
 		const cid = id();
@@ -394,10 +395,14 @@ async function seed() {
 				operator: operatorRef, runStartTime: ago(4), runEndTime: ago(4),
 				recordedAt: ago(4)
 			} : undefined,
-			waxQc: ['wax_qc', 'wax_stored', 'reagent_filled', 'inspected', 'sealed', 'cured', 'stored', 'released'].includes(phase) ? {
-				status: 'Accepted', operator: operatorRef, timestamp: ago(3), recordedAt: ago(3)
-			} : undefined,
-			waxStorage: ['wax_stored', 'reagent_filled', 'inspected', 'sealed', 'cured', 'stored', 'released'].includes(phase) ? {
+			// Only rejects carry a waxQc row now (visual pass is implicit); wax_ready keeps
+			// an Accepted row for the legacy/CV-verdict shape.
+			waxQc: phase === 'wax_rejected'
+				? { status: 'Rejected', rejectionReason: 'bubble', source: 'human', operator: operatorRef, timestamp: ago(3), recordedAt: ago(3) }
+				: phase === 'wax_ready'
+					? { status: 'Accepted', source: 'human', operator: operatorRef, timestamp: ago(3), recordedAt: ago(3) }
+					: undefined,
+			waxStorage: ['wax_filled', 'wax_ready', 'wax_rejected', 'reagent_filled', 'inspected', 'sealed', 'cured', 'stored', 'released'].includes(phase) ? {
 				location: 'Fridge 001 - Shelf 1', coolingTrayId: trayIds[0],
 				operator: operatorRef, timestamp: ago(3), recordedAt: ago(3)
 			} : undefined,

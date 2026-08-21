@@ -111,7 +111,7 @@
 		<div>
 			<h2 class="text-xl font-semibold text-[var(--color-tron-text)]">Cartridge Checkout</h2>
 			<p class="mt-1 text-sm text-[var(--color-tron-text-secondary)]">
-				Scan one or more wax-stored cartridges, provide a reason, and check them out as a group.
+				Scan one or more cartridges (e.g. wax_filled / wax_rejected from the fridge or reject bucket), provide a reason, and check them out as a group.
 				Checkout records the physical removal event — it does not change the cartridge's production
 				or quality status. Each checkout is logged with operator and timestamp.
 			</p>

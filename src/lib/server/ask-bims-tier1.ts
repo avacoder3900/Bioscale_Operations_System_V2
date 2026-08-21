@@ -55,7 +55,7 @@ Manufacturing —
   wax_filling_runs 🟢 — wax fill runs. status, robot, operator, cartridgeIds[], deckId, waxSourceLot(string ⚠), waxTubeId→consumables, runStartTime/runEndTime. On complete writes CartridgeRecord.waxFilling write-once
 
 Cartridge & Reagent —
-  cartridge_records 🟡 — sacred mfg+test record. status enum: backing/wax_filled/wax_qc/wax_stored/reagent_filled/inspected/sealed/cured/stored/released/shipped/linked/underway/completed/cancelled/scrapped/voided + legacy(packeted/transferred/refrigerated/received). backing.lotId→lot_records, waxFilling.runId→wax_filling_runs, reagentFilling.runId→reagent_batch_records, qaqcRelease.shippingLotId→shipping_lots, shipping.packageId→shipping_packages, testExecution.spu._id→spus, reagentChain[]→protocol_executions, priorStatus(restore on unlink), corrections[]
+  cartridge_records 🟡 — sacred mfg+test record. status enum: backing/wax_filling/wax_filled(=stored; wax_filled|wax_ready→reagent)/wax_ready/wax_rejected(off-ramp)/reagent_filling/reagent_filled/inspected/sealed/cured/stored/released/shipped/linked/underway/completed/cancelled/scrapped/voided + legacy(packeted/transferred/refrigerated/received). backing.lotId→lot_records, waxFilling.runId→wax_filling_runs, reagentFilling.runId→reagent_batch_records, qaqcRelease.shippingLotId→shipping_lots, shipping.packageId→shipping_packages, testExecution.spu._id→spus, reagentChain[]→protocol_executions, priorStatus(restore on unlink), corrections[]
   reagent_batch_records 🟡 — sacred reagent fill run. status: setup/running/completed/aborted/voided. assayType→assay_definitions, robot+operator, cartridgesFilled[].cartridgeId→cartridge_records, tubeRecords[].sourceLotId(free string ⚠), inspectionStatus, topSeal{topSealLotId→consumables}, qcRelease, corrections[]
   assay_definitions 🟡 — sacred assay/test types. _id is 8-char A+hex (firmware constraint). name, skuCode(unique sparse), versions[], BCODE(Mixed JS object — Lambda compiles), bcode(Buffer — V2 binary), reagents[].subComponents[], lockedAt, isActive, schema uses minimize:false ✓
   cartridge_groups 🟢 — logical groupings of cartridges
@@ -100,8 +100,8 @@ Users & Auth —
   invite_tokens 🟢 — one-time invitation tokens. status: pending/accepted/expired
 
 Kanban & Project Management —
-  kanban_projects 🟢 — project containers
-  kanban_tasks 🟢 — board items. status: backlog/ready/wip/waiting/done. priority: high/medium/low. comments[], actionLog[], proposals[](agent-suggested changes: pending/approved/edited/vetoed)
+  kanban_projects 🟢 — RETIRED (KB2-16): dead data; tasks carry tags instead
+  kanban_tasks 🟢 — board items. status: captured/processed/icebox/declined (Tier 1, uncommitted) or ready/wip/waiting/blocked/review/done (Board, committed — being on the Board is the approval, no priority list there). rank: Tier 1 ordinal priority (on the Board it is only commit order). sizeClass: short/medium/long. comments[], actionLog[], proposals[](agent-suggested changes: pending/approved/edited/vetoed)
 
 Agent & Integration —
   agent_messages 🟢 — system→user. messageType: info/alert/request/approval/status_update/meeting_summary. status: pending/sent/delivered/read/actioned/failed
@@ -151,7 +151,7 @@ Mfg path (operations app + Lambda):
   raw materials → [WI-02 thermoseal cut] → [WI-01 backing → LotRecord+CartridgeRecord.backing]
   → [Wax Filling → WaxFillingRun + cart.waxFilling]
   → [Wax QC] → [Wax Storage] → [Reagent Filling → ReagentBatchRecord + cart.reagentFilling]
-  → [Reagent Inspection] → [Top Seal] → [Oven Cure] → [Cold Storage]
+  → (top seal, implicit) → [Reagent Inspect photo → reagent_qc → reagent_ready|reagent_rejected] → [Cold Storage]
   → [QA/QC Release] → [Shipping] → [Assay Loaded] → [linked]
 
 Test path (research app + Lambda middleware):

@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
 	import ThermocoupleChart from '$lib/components/validation/thermocouple/ThermocoupleChart.svelte';
-	import * as XLSX from 'xlsx';
+	import ThermoFileUpload from '$lib/components/validation/thermocouple/ThermoFileUpload.svelte';
 
 	interface Props {
 		data: {
@@ -12,7 +12,7 @@
 				barcode: string | null;
 				createdAt: string;
 				spuUdi: string | null;
-				stats: { min: number; max: number; average: number } | null;
+				stats: { min: number; max: number; mode: number | null; average: number } | null;
 			}>;
 		};
 		form: {
@@ -22,7 +22,7 @@
 			results?: {
 				passed: boolean;
 				stats: {
-					min: number; max: number; average: number; stdDev: number;
+					min: number; max: number; mode: number; average: number; stdDev: number;
 					cv: number; range: number; drift: number;
 					readingCount: number; durationMs: number;
 				};
@@ -39,8 +39,6 @@
 	let maxTemp = $state(40);
 	let readings = $state<Array<{ timestamp: number; temperature: number }>>([]);
 	let fileName = $state('');
-	let parseError = $state('');
-	let isDragging = $state(false);
 	let showFahrenheit = $state(false);
 	let isSubmitting = $state(false);
 	let readingsJson = $state('');
@@ -57,6 +55,20 @@
 		const max = Math.max(...temps);
 		const sum = temps.reduce((a, b) => a + b, 0);
 		const avg = sum / temps.length;
+		// Mode at 0.1°C resolution (matches server computeMode)
+		const counts = new Map<number, number>();
+		for (const t of temps) {
+			const b = Math.round(t * 10) / 10;
+			counts.set(b, (counts.get(b) ?? 0) + 1);
+		}
+		let mode = temps[0];
+		let bestCount = -1;
+		for (const [bucket, count] of counts) {
+			if (count > bestCount || (count === bestCount && Math.abs(bucket - avg) < Math.abs(mode - avg))) {
+				mode = bucket;
+				bestCount = count;
+			}
+		}
 		const variance = temps.reduce((acc, t) => acc + (t - avg) ** 2, 0) / temps.length;
 		const stdDev = Math.sqrt(variance);
 		const cv = avg !== 0 ? (stdDev / avg) * 100 : 0;
@@ -66,7 +78,7 @@
 			? readings[readings.length - 1].timestamp - readings[0].timestamp
 			: 0;
 		return {
-			min, max, average: avg, stdDev, cv, range, drift,
+			min, max, mode, average: avg, stdDev, cv, range, drift,
 			readingCount: temps.length, durationMs
 		};
 	});
@@ -86,133 +98,17 @@
 	}
 	function formatDate(d: string): string { return new Date(d).toLocaleString(); }
 
-	// File parsing
-	function handleFile(file: File) {
-		parseError = '';
-		fileName = file.name;
-
-		const reader = new FileReader();
-		reader.onload = (e) => {
-			try {
-				const data = new Uint8Array(e.target!.result as ArrayBuffer);
-				const wb = XLSX.read(data, { type: 'array' });
-				const ws = wb.Sheets[wb.SheetNames[0]];
-				const rows: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1 });
-
-				if (rows.length < 2) {
-					parseError = 'File has no data rows';
-					return;
-				}
-
-				// Find temperature and time columns
-				const header = rows[0].map((h: any) => String(h).toLowerCase().trim());
-				let tempCol = header.findIndex(h =>
-					h.includes('temp') || h.includes('°c') || h.includes('celsius') || h === 'c' || h === 't'
-				);
-				let timeCol = header.findIndex(h =>
-					h.includes('time') || h.includes('timestamp') || h.includes('date') || h.includes('elapsed')
-				);
-
-				// Fallback: if no header match, assume col 0 = time, col 1 = temp
-				if (tempCol === -1 && rows[0].length >= 2) {
-					// Check if first data row has numbers
-					const firstDataRow = rows[1];
-					if (typeof firstDataRow[1] === 'number' || !isNaN(Number(firstDataRow[1]))) {
-						timeCol = 0;
-						tempCol = 1;
-					} else if (typeof firstDataRow[0] === 'number' || !isNaN(Number(firstDataRow[0]))) {
-						tempCol = 0;
-						timeCol = -1;
-					}
-				}
-				if (tempCol === -1 && rows[0].length === 1) {
-					tempCol = 0;
-				}
-
-				if (tempCol === -1) {
-					parseError = 'Could not find temperature column. Expected header containing "temp", "°C", "celsius", or "T"';
-					return;
-				}
-
-				// Parse data rows (skip header)
-				const parsed: Array<{ timestamp: number; temperature: number }> = [];
-				const startTime = Date.now();
-
-				for (let i = 1; i < rows.length; i++) {
-					const row = rows[i];
-					if (!row || row.length === 0) continue;
-
-					const tempVal = Number(row[tempCol]);
-					if (isNaN(tempVal)) continue;
-
-					let ts: number;
-					if (timeCol >= 0 && row[timeCol] != null) {
-						const timeVal = row[timeCol];
-						// Check if it's an Excel date serial number
-						if (typeof timeVal === 'number' && timeVal > 25000 && timeVal < 60000) {
-							// Excel date serial
-							const excelEpoch = new Date(1899, 11, 30).getTime();
-							ts = excelEpoch + timeVal * 86400000;
-						} else if (typeof timeVal === 'number' && timeVal > 1000000000000) {
-							ts = timeVal; // already ms timestamp
-						} else if (typeof timeVal === 'number' && timeVal > 1000000000) {
-							ts = timeVal * 1000; // seconds timestamp
-						} else if (typeof timeVal === 'number') {
-							// Elapsed seconds
-							ts = startTime + timeVal * 1000;
-						} else if (typeof timeVal === 'string') {
-							const d = new Date(timeVal);
-							ts = isNaN(d.getTime()) ? startTime + (i - 1) * 1000 : d.getTime();
-						} else {
-							ts = startTime + (i - 1) * 1000;
-						}
-					} else {
-						// No time column — assume 1 reading per second
-						ts = startTime + (i - 1) * 1000;
-					}
-
-					parsed.push({ timestamp: ts, temperature: tempVal });
-				}
-
-				if (parsed.length === 0) {
-					parseError = 'No valid temperature readings found in file';
-					return;
-				}
-
-				// Sort by timestamp
-				parsed.sort((a, b) => a.timestamp - b.timestamp);
-				readings = parsed;
-				readingsJson = JSON.stringify(parsed);
-			} catch (err) {
-				parseError = `Failed to parse file: ${err instanceof Error ? err.message : String(err)}`;
-			}
-		};
-		reader.readAsArrayBuffer(file);
+	// File parsing lives in the shared ThermoFileUpload component
+	function onParsed(p: { readings: Array<{ timestamp: number; temperature: number }>; readingsJson: string; fileName: string }) {
+		readings = p.readings;
+		readingsJson = p.readingsJson;
+		fileName = p.fileName;
 	}
 
-	function handleDrop(e: DragEvent) {
-		e.preventDefault();
-		isDragging = false;
-		const file = e.dataTransfer?.files[0];
-		if (file) handleFile(file);
-	}
-
-	function handleDragOver(e: DragEvent) {
-		e.preventDefault();
-		isDragging = true;
-	}
-
-	function handleFileInput(e: Event) {
-		const input = e.target as HTMLInputElement;
-		const file = input.files?.[0];
-		if (file) handleFile(file);
-	}
-
-	function clearFile() {
+	function onClear() {
 		readings = [];
 		readingsJson = '';
 		fileName = '';
-		parseError = '';
 	}
 </script>
 
@@ -334,53 +230,12 @@
 		<!-- File Upload -->
 		<div class="tron-card mt-4 p-6">
 			<h2 class="tron-heading mb-4 text-lg font-semibold">Upload Temperature Data</h2>
-
-			{#if !hasReadings}
-				<!-- svelte-ignore a11y_no_static_element_interactions -->
-				<div
-					class="flex flex-col items-center justify-center rounded-lg border-2 border-dashed p-12 transition-colors
-						{isDragging
-							? 'border-[var(--color-tron-orange)] bg-[var(--color-tron-orange)]/10'
-							: 'border-[var(--color-tron-border)] hover:border-[var(--color-tron-cyan)]'}"
-					ondrop={handleDrop}
-					ondragover={handleDragOver}
-					ondragleave={() => isDragging = false}
-				>
-					<svg class="mb-4 h-12 w-12 text-[var(--color-tron-text-secondary)]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-					</svg>
-					<p class="tron-heading mb-2 text-lg">Drop .csv file here</p>
-					<p class="tron-text-muted mb-4 text-sm">or click to browse</p>
-					<label class="cursor-pointer rounded-lg bg-[var(--color-tron-orange)] px-6 py-3 font-semibold text-[var(--color-tron-bg-primary)] transition-all hover:bg-[var(--color-tron-orange)]/90" style="min-height: 44px">
-						Choose File
-						<input type="file" accept=".csv" class="hidden" onchange={handleFileInput} />
-					</label>
-				</div>
-			{:else}
-				<!-- File loaded -->
-				<div class="flex items-center justify-between rounded-lg bg-[var(--color-tron-bg-tertiary)] p-4">
-					<div class="flex items-center gap-3">
-						<svg class="h-8 w-8 text-[var(--color-tron-green)]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-							<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-						</svg>
-						<div>
-							<p class="tron-heading font-medium">{fileName}</p>
-							<p class="tron-text-muted text-sm">{readings.length} readings loaded</p>
-						</div>
-					</div>
-					<button type="button" onclick={clearFile} class="tron-text-muted text-sm hover:text-[var(--color-tron-red)]">
-						Clear
-					</button>
-				</div>
-			{/if}
-
-			{#if parseError}
-				<p class="mt-2 text-sm text-[var(--color-tron-red)]">{parseError}</p>
-			{/if}
+			<ThermoFileUpload onparsed={onParsed} onclear={onClear} />
 		</div>
 
 		<!-- Hidden fields for form submission -->
 		<input type="hidden" name="readings" value={readingsJson} />
+		<input type="hidden" name="fileName" value={fileName} />
 
 		<!-- Stats Preview + Chart -->
 		{#if hasReadings && stats}
@@ -399,11 +254,15 @@
 			<div class="tron-card mt-4 p-6">
 				<h2 class="tron-heading mb-4 text-lg font-semibold">Statistics Preview</h2>
 				<div class="grid grid-cols-2 gap-4 md:grid-cols-4">
-					<div class="rounded-lg bg-[var(--color-tron-bg-tertiary)] p-4 text-center">
+					<div class="rounded-lg border border-[var(--color-tron-cyan)]/30 bg-[var(--color-tron-bg-tertiary)] p-4 text-center">
+						<span class="tron-text-muted block text-xs uppercase">Mode</span>
+						<span class="tron-heading text-2xl font-bold">{fmtTemp(stats.mode)}</span>
+					</div>
+					<div class="rounded-lg border border-[var(--color-tron-cyan)]/30 bg-[var(--color-tron-bg-tertiary)] p-4 text-center">
 						<span class="tron-text-muted block text-xs uppercase">Min</span>
 						<span class="tron-heading text-2xl font-bold">{fmtTemp(stats.min)}</span>
 					</div>
-					<div class="rounded-lg bg-[var(--color-tron-bg-tertiary)] p-4 text-center">
+					<div class="rounded-lg border border-[var(--color-tron-cyan)]/30 bg-[var(--color-tron-bg-tertiary)] p-4 text-center">
 						<span class="tron-text-muted block text-xs uppercase">Max</span>
 						<span class="tron-heading text-2xl font-bold">{fmtTemp(stats.max)}</span>
 					</div>
@@ -483,7 +342,7 @@
 							{/if}
 							{#if session.stats}
 								<span class="tron-text-muted ml-2 text-sm">
-									{session.stats.min.toFixed(1)}°C – {session.stats.max.toFixed(1)}°C (avg {session.stats.average.toFixed(1)}°C)
+									{session.stats.min.toFixed(1)}°C – {session.stats.max.toFixed(1)}°C{#if session.stats.mode != null}&nbsp;· mode {session.stats.mode.toFixed(1)}°C{/if} (avg {session.stats.average.toFixed(1)}°C)
 								</span>
 							{/if}
 						</div>

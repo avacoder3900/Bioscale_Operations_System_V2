@@ -3,6 +3,7 @@ import {
 	connectDB, ManufacturingSettings, AssayDefinition, generateId
 } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
+import { DEFAULT_REAGENT_RUN_TUNING } from '$lib/manufacturing/reagent-run-estimate';
 import type { PageServerLoad, Actions } from './$types';
 
 export const config = { maxDuration: 60 };
@@ -32,7 +33,9 @@ export const load: PageServerLoad = async ({ locals }) => {
 		return {
 			settings: {
 				minCoolingTimeMin: reagent.minCoolingTimeMin ?? 30,
-				fillTimePerCartridgeMin: reagent.fillTimePerCartridgeMin ?? 0.5,
+				startupOverheadSec: reagent.startupOverheadSec ?? DEFAULT_REAGENT_RUN_TUNING.startupOverheadSec,
+				secondsPerReagentGroup: reagent.secondsPerReagentGroup ?? DEFAULT_REAGENT_RUN_TUNING.secondsPerReagentGroup,
+				secondsPerDispense: reagent.secondsPerDispense ?? DEFAULT_REAGENT_RUN_TUNING.secondsPerDispense,
 				maxTimeBeforeSealMin: reagent.maxTimeBeforeSealMin ?? 60
 			},
 			assayTypes: (assayDefs as any[]).map((a) => ({
@@ -53,7 +56,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 	} catch (err) {
 		console.error('[REAGENT-FILLING SETTINGS] Load error:', err instanceof Error ? err.message : err);
 		return {
-			settings: { minCoolingTimeMin: 30, fillTimePerCartridgeMin: 0.5, maxTimeBeforeSealMin: 60 },
+			settings: { minCoolingTimeMin: 30, ...DEFAULT_REAGENT_RUN_TUNING, maxTimeBeforeSealMin: 60 },
 			assayTypes: [],
 			rejectionReasons: []
 		};
@@ -61,22 +64,28 @@ export const load: PageServerLoad = async ({ locals }) => {
 };
 
 export const actions: Actions = {
-	/** Update numeric settings (form sends fillTime, coolingTime) */
+	/** Update numeric settings (run-time estimate tuning, cooling, seal deadline) */
 	updateSettings: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
 		requirePermission(locals.user, 'manufacturing:admin');
 		await connectDB();
 
 		const data = await request.formData();
-		const fillTime = data.get('fillTime') !== null ? Number(data.get('fillTime')) : null;
-		const coolingTime = data.get('coolingTime') !== null ? Number(data.get('coolingTime')) : null;
-
-		const sealDeadline = data.get('sealDeadline') !== null ? Number(data.get('sealDeadline')) : null;
+		const num = (key: string) => {
+			if (data.get(key) === null) return null;
+			const n = Number(data.get(key));
+			return isNaN(n) || n < 0 ? null : n;
+		};
+		const coolingTime = num('coolingTime');
+		const sealDeadline = num('sealDeadline');
 
 		const update: Record<string, any> = {};
-		if (fillTime !== null && !isNaN(fillTime)) update['reagentFilling.fillTimePerCartridgeMin'] = fillTime;
-		if (coolingTime !== null && !isNaN(coolingTime)) update['reagentFilling.minCoolingTimeMin'] = coolingTime;
-		if (sealDeadline !== null && !isNaN(sealDeadline)) update['reagentFilling.maxTimeBeforeSealMin'] = sealDeadline;
+		for (const key of ['startupOverheadSec', 'secondsPerReagentGroup', 'secondsPerDispense'] as const) {
+			const v = num(key);
+			if (v !== null) update[`reagentFilling.${key}`] = v;
+		}
+		if (coolingTime !== null) update['reagentFilling.minCoolingTimeMin'] = coolingTime;
+		if (sealDeadline !== null) update['reagentFilling.maxTimeBeforeSealMin'] = sealDeadline;
 
 		if (Object.keys(update).length > 0) {
 			update.updatedAt = new Date();

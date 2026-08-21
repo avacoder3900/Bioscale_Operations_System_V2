@@ -1,8 +1,10 @@
 <script lang="ts">
 	/**
-	 * Reagent Inspect — inline CV deployment point (REAGENT-INSPECT-AFTER-TOPSEAL).
+	 * Reagent Inspect — inline CV deployment point (REAGENT-INSPECT-AFTER-TOPSEAL,
+	 * REAGENT-TOPSEAL-IMPLICIT).
 	 *
-	 * Runs AFTER Cut Top Seal. Scan a sealed cartridge (sticky context),
+	 * Runs after reagent fill + the implicit top seal. Scan a reagent_filled
+	 * cartridge (sticky context),
 	 * photograph it (Pi WebRTC station or USB camera), POST /api/cv/capture at
 	 * phase 'reagent_filled', then poll /api/cv/inspections?imageId= until the
 	 * deployed model's verdict lands. The scan-gated human verdict moves a
@@ -26,10 +28,12 @@
 	}
 
 	const PHASE = 'reagent_filled';
-	// sealed carts get photographed (→ reagent_qc); reagent_qc carts get re-scanned
-	// to give the Ready/Rejected verdict.
-	// 'linked' is allowed so already-linked carts can still be photographed here.
-	const ALLOWED_STATUSES = ['sealed', 'reagent_qc', 'linked'];
+	// reagent_filled carts get photographed (→ reagent_qc); reagent_qc carts get
+	// re-scanned to give the Ready/Rejected verdict. 'sealed' is the legacy
+	// pre-photo state (retired by REAGENT-TOPSEAL-IMPLICIT) — still accepted so
+	// any stragglers can be photographed. 'linked' is allowed so already-linked
+	// carts can still be photographed here.
+	const ALLOWED_STATUSES = ['reagent_filled', 'reagent_qc', 'sealed', 'linked'];
 
 	// ── Sticky cartridge context ────────────────────────────────────────────
 	let cartridgeId = $state<string | null>(null);
@@ -521,9 +525,9 @@
 			} else {
 				verdict = { state: 'no_model' };
 			}
-			// Photographing a sealed cart advanced it to reagent_qc server-side —
-			// reflect that so the Ready/Rejected verdict buttons appear.
-			if (cartridgeStatus === 'sealed') cartridgeStatus = 'reagent_qc';
+			// Photographing a reagent_filled (or legacy sealed) cart advanced it to
+			// reagent_qc server-side — reflect that so the verdict buttons appear.
+			if (cartridgeStatus === 'reagent_filled' || cartridgeStatus === 'sealed') cartridgeStatus = 'reagent_qc';
 			flashBanner('ok', `Captured ${result.cartridgeImageNumber}`, 1800);
 		} catch (e) {
 			if (pollSeq === mySeq) verdict = { state: 'error', message: e instanceof Error ? e.message : 'Capture failed' };
@@ -695,7 +699,7 @@
 			<div>
 				<h1 class="text-2xl font-bold text-[var(--color-tron-cyan)]">Reagent Inspect</h1>
 				<p class="text-xs text-[var(--color-tron-text-secondary)]">
-					Scan each sealed cartridge after Cut Top Seal, press Space to photograph it, and the deployed model's PASS/FAIL verdict appears below. The verdict is advisory — the reagent QC accept/reject (scan-gated) stays with you.
+					Scan each reagent-filled cartridge after it's top-sealed and press Space to photograph it. The reagent QC accept/reject (scan-gated) is yours{#if !data.inferenceDisabled} — when a model is deployed its PASS/FAIL verdict appears below as advisory only{/if}.
 				</p>
 			</div>
 			<div class="text-xs text-[var(--color-tron-text-secondary)]">
@@ -703,8 +707,15 @@
 			</div>
 		</header>
 
-		<!-- Deployment status: yellow notice when nothing is deployed at reagent_filled -->
-		{#if !data.modelDeployed}
+		<!-- Deployment status. Inference is switched OFF for reagent_filled for now
+		     (capture only — see run-inference.ts INFERENCE_DISABLED_PHASES); otherwise
+		     a yellow notice when nothing is deployed, green when a model is live. -->
+		{#if data.inferenceDisabled}
+			<div class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-3 text-sm text-[var(--color-tron-text-secondary)]">
+				<span class="font-semibold text-[var(--color-tron-text)]">Capture only — CV inference is switched off for reagent inspect for now.</span>
+				<span class="ml-2">Photos are saved against the cartridge (reagent_filled → reagent_qc); no model verdict is run. The accept/reject decision is yours.</span>
+			</div>
+		{:else if !data.modelDeployed}
 			<div class="rounded border border-[var(--color-tron-yellow,#facc15)] bg-[rgba(250,204,21,0.08)] p-3 text-sm text-[var(--color-tron-yellow,#facc15)]">
 				<span class="font-semibold">No model is deployed at the reagent_filled phase — captures will save without inference.</span>
 				<span class="ml-2 text-[var(--color-tron-text-secondary)]">Promote a model and add "reagent_filled" to deployAtPhases under <a href="/cv/projects" class="text-[var(--color-tron-cyan)] hover:underline">/cv/projects</a> → Deployment.</span>
@@ -890,7 +901,7 @@
 					<div class="text-lg font-bold text-[var(--color-tron-red,#ff3366)]">Inference failed</div>
 					<div class="text-xs text-[var(--color-tron-text-secondary)]">{verdict.message}</div>
 				{:else if verdict.state === 'no_model'}
-					<div class="text-lg font-bold text-[var(--color-tron-text-secondary)]">Captured — saved without inference</div>
+					<div class="text-lg font-bold text-[var(--color-tron-text-secondary)]">{data.inferenceDisabled ? 'Captured' : 'Captured — saved without inference'}</div>
 					<div class="text-xs text-[var(--color-tron-text-secondary)]">No model is deployed at reagent_filled.</div>
 				{/if}
 				{#if shadowNote}

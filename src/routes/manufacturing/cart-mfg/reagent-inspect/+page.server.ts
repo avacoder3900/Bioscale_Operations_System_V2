@@ -1,9 +1,10 @@
 /**
  * /manufacturing/cart-mfg/reagent-inspect — inline CV deployment point
- * (REAGENT-INSPECT-AFTER-TOPSEAL).
+ * (REAGENT-INSPECT-AFTER-TOPSEAL, REAGENT-TOPSEAL-IMPLICIT).
  *
- * Runs AFTER Cut Top Seal: every sealed cartridge gets photographed here and the
- * deployed model's verdict is shown immediately. Mirror of /wax-inspect, pinned
+ * Runs after reagent fill + the implicit top seal: every reagent_filled
+ * cartridge gets photographed here (→ reagent_qc) and the deployed model's
+ * verdict is shown immediately. Mirror of /wax-inspect, pinned
  * to the 'reagent_filled' phase: same scanner-wedge sticky context, same
  * Pi-station WebRTC + USB-camera capture paths, same POST /api/cv/capture →
  * poll /api/cv/inspections round-trip. The scan-gated human verdict moves a
@@ -20,6 +21,7 @@ import { connectDB } from '$lib/server/db/connection.js';
 import { CaptureStation, deriveStatus } from '$lib/server/db/models/capture-station.js';
 import { CvProject } from '$lib/server/db/models/cv-project.js';
 import { CvInspection } from '$lib/server/db/models/cv-inspection.js';
+import { isInferenceDisabledForPhase } from '$lib/server/cv/run-inference';
 import { CvImage } from '$lib/server/db/models/cv-image.js';
 import { getR2Url } from '$lib/server/services/r2';
 import { requirePermission } from '$lib/server/permissions';
@@ -107,7 +109,12 @@ export const load: PageServerLoad = async ({ locals }) => {
 	return {
 		stations: JSON.parse(JSON.stringify(stations)),
 		user: { _id: locals.user._id, username: locals.user.username },
-		modelDeployed: deployedProjects.length > 0,
+		// Inference is switched off for reagent_filled for now (run-inference.ts
+		// INFERENCE_DISABLED_PHASES): the page captures only, never polls for a
+		// verdict. modelDeployed is forced false so the client takes the
+		// capture-only path; inferenceDisabled drives the notice text.
+		inferenceDisabled: isInferenceDisabledForPhase(PHASE),
+		modelDeployed: !isInferenceDisabledForPhase(PHASE) && deployedProjects.length > 0,
 		deployedProjects: JSON.parse(JSON.stringify(deployedProjects)),
 		recentInspections: JSON.parse(JSON.stringify(recentInspections))
 	};

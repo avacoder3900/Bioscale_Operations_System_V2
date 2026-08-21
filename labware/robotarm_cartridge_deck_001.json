@@ -1,0 +1,329 @@
+{
+  "ordering": [
+    [
+      "A1",
+      "B1",
+      "C1"
+    ],
+    [
+      "A2",
+      "B2",
+      "C2"
+    ],
+    [
+      "A3",
+      "B3",
+      "C3"
+    ],
+    [
+      "A4",
+      "B4",
+      "C4"
+    ],
+    [
+      "A5",
+      "B5",
+      "C5"
+    ],
+    [
+      "A6",
+      "B6",
+      "C6"
+    ],
+    [
+      "A7",
+      "B7",
+      "C7"
+    ],
+    [
+      "A8",
+      "B8",
+      "C8"
+    ]
+  ],
+  "brand": {
+    "brand": "Cosmas & Damian",
+    "brandId": [
+      "BT-042",
+      "BT-042-101"
+    ]
+  },
+  "metadata": {
+    "displayName": "Robot Arm Deck 1 Cartridge Gen7 v1 001",
+    "displayCategory": "wellPlate",
+    "displayVolumeUnits": "µL",
+    "tags": []
+  },
+  "dimensions": {
+    "xDimension": 454.8,
+    "yDimension": 276.4,
+    "zDimension": 12.7
+  },
+  "wells": {
+    "A1": {
+      "depth": 3.75,
+      "totalLiquidVolume": 18,
+      "shape": "circular",
+      "diameter": 1.8,
+      "x": 52.827,
+      "y": 1.8000000000000003,
+      "z": 8.700000000000001
+    },
+    "B1": {
+      "depth": 3.75,
+      "totalLiquidVolume": 18,
+      "shape": "circular",
+      "diameter": 1.8,
+      "x": 52.827,
+      "y": 10.799999999999999,
+      "z": 8.200000000000001
+    },
+    "C1": {
+      "depth": 3.75,
+      "totalLiquidVolume": 18,
+      "shape": "circular",
+      "diameter": 1.8,
+      "x": 52.827,
+      "y": 19.8,
+      "z": 8.200000000000001
+    },
+    "A2": {
+      "depth": 3.75,
+      "totalLiquidVolume": 18,
+      "shape": "circular",
+      "diameter": 1.8,
+      "x": 56.09,
+      "y": 1,
+      "z": 3.3
+    },
+    "B2": {
+      "depth": 3.75,
+      "totalLiquidVolume": 18,
+      "shape": "circular",
+      "diameter": 1.8,
+      "x": 56.09,
+      "y": 9.429999999999996,
+      "z": 3.3
+    },
+    "C2": {
+      "depth": 3.75,
+      "totalLiquidVolume": 18,
+      "shape": "circular",
+      "diameter": 1.8,
+      "x": 56.09,
+      "y": 18.130000000000003,
+      "z": 3.3
+    },
+    "A3": {
+      "depth": 3.75,
+      "totalLiquidVolume": 18,
+      "shape": "circular",
+      "diameter": 1.8,
+      "x": 58.827,
+      "y": 1.8000000000000003,
+      "z": 8.700000000000001
+    },
+    "B3": {
+      "depth": 3.75,
+      "totalLiquidVolume": 18,
+      "shape": "circular",
+      "diameter": 1.8,
+      "x": 58.827,
+      "y": 10.799999999999999,
+      "z": 8.200000000000001
+    },
+    "C3": {
+      "depth": 3.75,
+      "totalLiquidVolume": 18,
+      "shape": "circular",
+      "diameter": 1.8,
+      "x": 58.827,
+      "y": 19.8,
+      "z": 8.200000000000001
+    },
+    "A4": {
+      "depth": 3.75,
+      "totalLiquidVolume": 18,
+      "shape": "circular",
+      "diameter": 1.8,
+      "x": 62.09,
+      "y": 1,
+      "z": 3.3
+    },
+    "B4": {
+      "depth": 3.75,
+      "totalLiquidVolume": 18,
+      "shape": "circular",
+      "diameter": 1.8,
+      "x": 62.09,
+      "y": 9.429999999999996,
+      "z": 3.3
+    },
+    "C4": {
+      "depth": 3.75,
+      "totalLiquidVolume": 18,
+      "shape": "circular",
+      "diameter": 1.8,
+      "x": 62.09,
+      "y": 18.130000000000003,
+      "z": 3.3
+    },
+    "A5": {
+      "depth": 3.75,
+      "totalLiquidVolume": 18,
+      "shape": "circular",
+      "diameter": 1.8,
+      "x": 64.82699999999998,
+      "y": 1.8000000000000003,
+      "z": 8.700000000000001
+    },
+    "B5": {
+      "depth": 3.75,
+      "totalLiquidVolume": 18,
+      "shape": "circular",
+      "diameter": 1.8,
+      "x": 64.82699999999998,
+      "y": 10.799999999999999,
+      "z": 8.200000000000001
+    },
+    "C5": {
+      "depth": 3.75,
+      "totalLiquidVolume": 18,
+      "shape": "circular",
+      "diameter": 1.8,
+      "x": 64.82699999999998,
+      "y": 19.8,
+      "z": 8.200000000000001
+    },
+    "A6": {
+      "depth": 3.75,
+      "totalLiquidVolume": 18,
+      "shape": "circular",
+      "diameter": 1.8,
+      "x": 68.09,
+      "y": 1,
+      "z": 3.3
+    },
+    "B6": {
+      "depth": 3.75,
+      "totalLiquidVolume": 18,
+      "shape": "circular",
+      "diameter": 1.8,
+      "x": 68.09,
+      "y": 9.429999999999996,
+      "z": 3.3
+    },
+    "C6": {
+      "depth": 3.75,
+      "totalLiquidVolume": 18,
+      "shape": "circular",
+      "diameter": 1.8,
+      "x": 68.09,
+      "y": 18.130000000000003,
+      "z": 3.3
+    },
+    "A7": {
+      "depth": 3.75,
+      "totalLiquidVolume": 18,
+      "shape": "circular",
+      "diameter": 1.8,
+      "x": 70.82699999999998,
+      "y": 1.8000000000000003,
+      "z": 8.700000000000001
+    },
+    "B7": {
+      "depth": 3.75,
+      "totalLiquidVolume": 18,
+      "shape": "circular",
+      "diameter": 1.8,
+      "x": 70.82699999999998,
+      "y": 10.799999999999999,
+      "z": 8.200000000000001
+    },
+    "C7": {
+      "depth": 3.75,
+      "totalLiquidVolume": 18,
+      "shape": "circular",
+      "diameter": 1.8,
+      "x": 70.82699999999998,
+      "y": 19.8,
+      "z": 8.200000000000001
+    },
+    "A8": {
+      "depth": 3.75,
+      "totalLiquidVolume": 18,
+      "shape": "circular",
+      "diameter": 1.8,
+      "x": 74.09,
+      "y": 1,
+      "z": 3.3
+    },
+    "B8": {
+      "depth": 3.75,
+      "totalLiquidVolume": 18,
+      "shape": "circular",
+      "diameter": 1.8,
+      "x": 74.09,
+      "y": 9.429999999999996,
+      "z": 3.3
+    },
+    "C8": {
+      "depth": 3.75,
+      "totalLiquidVolume": 18,
+      "shape": "circular",
+      "diameter": 1.8,
+      "x": 74.09,
+      "y": 18.130000000000003,
+      "z": 3.3
+    }
+  },
+  "groups": [
+    {
+      "metadata": {
+        "wellBottomShape": "flat"
+      },
+      "wells": [
+        "A1",
+        "B1",
+        "C1",
+        "A2",
+        "B2",
+        "C2",
+        "A3",
+        "B3",
+        "C3",
+        "A4",
+        "B4",
+        "C4",
+        "A5",
+        "B5",
+        "C5",
+        "A6",
+        "B6",
+        "C6",
+        "A7",
+        "B7",
+        "C7",
+        "A8",
+        "B8",
+        "C8"
+      ]
+    }
+  ],
+  "parameters": {
+    "format": "irregular",
+    "quirks": [],
+    "isTiprack": false,
+    "isMagneticModuleCompatible": false,
+    "loadName": "robotarm_cartridge_deck_001",
+    "tipOverlap": 0
+  },
+  "namespace": "cosmas_damian",
+  "version": 1,
+  "schemaVersion": 2,
+  "cornerOffsetFromSlot": {
+    "x": 0,
+    "y": 0,
+    "z": 0
+  }
+}

@@ -1,7 +1,7 @@
 import { fail } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
-import { connectDB, ValidationSession, GeneratedBarcode, Spu, AuditLog, generateId } from '$lib/server/db';
-import { computeChannelStats } from '$lib/server/thermocouple-stats';
+import { connectDB, ValidationSession, GeneratedBarcode, Spu } from '$lib/server/db';
+import { processThermoUpload, type ThermoReading } from '$lib/server/validation/thermo-upload';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
@@ -20,6 +20,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 	const sessions = await ValidationSession.find({ type: 'thermo' })
 		.sort({ createdAt: -1 })
 		.limit(10)
+		.select('-results.rawData')
 		.lean() as any[];
 
 	const barcodeIds = sessions.map((s: any) => s.generatedBarcodeId).filter(Boolean);
@@ -47,6 +48,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 					? {
 						min: thermoResult.processedData.stats.min,
 						max: thermoResult.processedData.stats.max,
+						mode: thermoResult.processedData.stats.mode ?? null,
 						average: thermoResult.processedData.stats.average
 					}
 					: null
@@ -63,6 +65,7 @@ export const actions: Actions = {
 		const form = await request.formData();
 		const spuId = form.get('spuId')?.toString();
 		const readingsJson = form.get('readings')?.toString();
+		const fileName = form.get('fileName')?.toString() || null;
 		const minTemp = Number(form.get('minTemp'));
 		const maxTemp = Number(form.get('maxTemp'));
 
@@ -71,7 +74,7 @@ export const actions: Actions = {
 		if (isNaN(minTemp) || isNaN(maxTemp)) return fail(400, { error: 'Temperature range is required' });
 		if (minTemp >= maxTemp) return fail(400, { error: 'Min must be less than max temperature' });
 
-		let readings: Array<{ timestamp: number; temperature: number }>;
+		let readings: ThermoReading[];
 		try {
 			readings = JSON.parse(readingsJson);
 			if (!Array.isArray(readings) || readings.length === 0) {
@@ -81,119 +84,23 @@ export const actions: Actions = {
 			return fail(400, { error: 'Invalid readings data' });
 		}
 
-		// Verify SPU exists
-		const spu = await Spu.findById(spuId).lean() as any;
-		if (!spu) return fail(400, { error: 'SPU not found' });
-
-		// Compute stats using shared utility
-		const temps = readings.map(r => r.temperature);
-		const stats = computeChannelStats(temps, minTemp, maxTemp);
-		const durationMs = readings.length >= 2
-			? readings[readings.length - 1].timestamp - readings[0].timestamp
-			: 0;
-
-		// Pass/fail
-		const passed = stats.outOfRangeCount === 0;
-		const failureReasons: string[] = [];
-		if (temps.some(t => t < minTemp)) {
-			failureReasons.push(`${temps.filter(t => t < minTemp).length} reading(s) below minimum ${minTemp}°C`);
-		}
-		if (temps.some(t => t > maxTemp)) {
-			failureReasons.push(`${temps.filter(t => t > maxTemp).length} reading(s) above maximum ${maxTemp}°C`);
-		}
-
-		const interpretation = passed
-			? `All ${readings.length} readings within acceptable range (${minTemp}°C - ${maxTemp}°C)`
-			: `${stats.outOfRangeCount} of ${readings.length} readings outside acceptable range`;
-
-		// Generate barcode
-		const barcodeDoc = await GeneratedBarcode.findOneAndUpdate(
-			{ prefix: 'THERMO' },
-			{ $inc: { sequence: 1 } },
-			{ upsert: true, new: true, setDefaultsOnInsert: true }
-		);
-		const seq = (barcodeDoc as any).sequence ?? 1;
-		const barcode = `THERMO-${String(seq).padStart(6, '0')}`;
-
-		const barcodeId = generateId();
-		await GeneratedBarcode.create({
-			_id: barcodeId,
-			prefix: 'THERMO',
-			sequence: seq,
-			barcode,
-			type: 'validation_thermo'
-		});
-
-		// Create validation session
-		const sessionId = generateId();
-		const resultId = generateId();
-		await ValidationSession.create({
-			_id: sessionId,
-			type: 'thermo',
-			status: passed ? 'completed' : 'failed',
-			userId: locals.user!._id,
-			generatedBarcodeId: barcodeId,
-			barcode,
+		const outcome = await processThermoUpload({
 			spuId,
-			spuUdi: spu.udi,
-			startedAt: new Date(readings[0].timestamp),
-			completedAt: new Date(),
-			config: { minTemp, maxTemp },
-			results: [{
-				_id: resultId,
-				testType: 'thermocouple',
-				rawData: { readings },
-				processedData: {
-					stats: { ...stats, durationMs },
-					interpretation,
-					failureReasons,
-					criteria: { minTemp, maxTemp }
-				},
-				passed,
-				notes: interpretation,
-				createdAt: new Date()
-			}]
+			readings,
+			criteria: { minTemp, maxTemp },
+			fileName,
+			user: { _id: locals.user!._id, username: locals.user!.username }
 		});
-
-		// Update SPU validation.thermocouple
-		await Spu.updateOne(
-			{ _id: spuId },
-			{
-				$set: {
-					'validation.thermocouple.status': passed ? 'passed' : 'failed',
-					'validation.thermocouple.sessionId': sessionId,
-					'validation.thermocouple.completedAt': new Date(),
-					'validation.thermocouple.rawData': { readingCount: readings.length, fileName: null },
-					'validation.thermocouple.results': { ...stats, durationMs },
-					'validation.thermocouple.failureReasons': failureReasons,
-					'validation.thermocouple.criteriaUsed': { minTemp, maxTemp }
-				}
-			}
-		);
-
-		// Audit log
-		await AuditLog.create({
-			_id: generateId(),
-			action: 'thermocouple_validation_upload',
-			resourceType: 'validation_session',
-			resourceId: sessionId,
-			userId: locals.user!._id,
-			username: locals.user!.username,
-			timestamp: new Date(),
-			details: {
-				spuId,
-				spuUdi: spu.udi,
-				barcode,
-				passed,
-				stats: { ...stats, durationMs },
-				failureReasons
-			}
-		});
+		if ('error' in outcome) return fail(400, { error: outcome.error });
 
 		return {
 			success: true,
-			sessionId,
-			results: { passed, stats: { ...stats, durationMs }, failureReasons }
+			sessionId: outcome.sessionId,
+			results: {
+				passed: outcome.passed ?? false,
+				stats: outcome.stats,
+				failureReasons: outcome.failureReasons
+			}
 		};
 	}
 };

@@ -8,6 +8,7 @@ import {
 	generateId
 } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
+import { estimateReagentRunSeconds } from '$lib/manufacturing/reagent-run-estimate';
 import type { PageServerLoad, Actions } from './$types';
 
 export const config = { maxDuration: 60 };
@@ -27,9 +28,15 @@ const waxDefaults = {
 	cartridgesPerColumn: 8
 };
 
+/** The shape this read-only card quotes an estimate for: a full deck, all four rows. */
+const FULL_DECK_CARTRIDGES = 24;
+const FULL_DECK_PARAMS = { well_2: true, well_3: true, well_4: true, well_5: true };
+
 const reagentDefaults = {
 	minCoolingTimeMin: 30,
-	fillTimePerCartridgeMin: 0.5,
+	fullDeckEstimateMin: Math.round(
+		estimateReagentRunSeconds(FULL_DECK_PARAMS, FULL_DECK_CARTRIDGES, null).seconds / 60
+	),
 	maxTimeBeforeSealMin: 60
 };
 
@@ -72,7 +79,9 @@ export const load: PageServerLoad = async ({ locals }) => {
 			},
 			reagent: {
 				minCoolingTimeMin: reagent.minCoolingTimeMin ?? reagentDefaults.minCoolingTimeMin,
-				fillTimePerCartridgeMin: reagent.fillTimePerCartridgeMin ?? reagentDefaults.fillTimePerCartridgeMin,
+				fullDeckEstimateMin: Math.round(
+					estimateReagentRunSeconds(FULL_DECK_PARAMS, FULL_DECK_CARTRIDGES, reagent).seconds / 60
+				),
 				maxTimeBeforeSealMin: reagent.maxTimeBeforeSealMin ?? reagentDefaults.maxTimeBeforeSealMin
 			},
 			lastUpdatedAt: doc?.updatedAt ? new Date(doc.updatedAt).toISOString() : null

@@ -8,7 +8,7 @@ import { requirePermission } from '$lib/server/permissions';
 import type { PageServerLoad } from './$types';
 
 const PAGE_SIZE = 50;
-const VALID_TYPES = new Set(['teleop', 'record', 'replay', 'calibrate']);
+const VALID_TYPES = new Set(['teleop', 'record', 'replay', 'calibrate', 'task']);
 const VALID_STATUSES = new Set(['pending', 'running', 'completed', 'failed', 'cancelled']);
 
 export const load: PageServerLoad = async ({ locals, url }) => {

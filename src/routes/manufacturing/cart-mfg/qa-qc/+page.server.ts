@@ -16,7 +16,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 
 	// Find completed reagent runs that have (or need) a QA/QC release
 	const query: Record<string, any> = {
-		status: { $in: ['Completed', 'completed', 'Storage', 'Top Sealing'] }
+		status: { $in: ['Completed', 'completed'] }
 	};
 
 	// Filter by test result status
@@ -125,7 +125,8 @@ export const actions: Actions = {
 	/** Record the QA/QC test result */
 	recordResult: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
-		requirePermission(locals.user, 'manufacturing:write');
+		// PERM-04 §B: the pass/fail release decision is an admin gate.
+		requirePermission(locals.user, 'manufacturing:release');
 		await connectDB();
 
 		const data = await request.formData();
@@ -208,7 +209,8 @@ export const actions: Actions = {
 	/** Scrap a cartridge that fails QC */
 	scrapCartridge: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
-		requirePermission(locals.user, 'manufacturing:write');
+		// PERM-04 §B: scrap disposition is an admin gate.
+		requirePermission(locals.user, 'manufacturing:release');
 		await connectDB();
 
 		const data = await request.formData();
@@ -272,7 +274,8 @@ export const actions: Actions = {
 	/** Admin override to overturn a scrap decision */
 	overturnScrap: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
-		requirePermission(locals.user, 'manufacturing:write');
+		// PERM-04 §B: overturning a disposition is an admin gate.
+		requirePermission(locals.user, 'manufacturing:release');
 		await connectDB();
 
 		const data = await request.formData();

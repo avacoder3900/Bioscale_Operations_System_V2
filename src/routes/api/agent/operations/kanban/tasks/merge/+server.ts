@@ -2,6 +2,8 @@ import { json, error } from '@sveltejs/kit';
 import { connectDB, KanbanTask, AuditLog } from '$lib/server/db';
 import { generateId } from '$lib/server/db/utils.js';
 import { requireAgentApiKey } from '$lib/server/api-auth';
+import { transitionTask, TransitionError } from '$lib/server/kanban/transition';
+import { normalizeTags } from '$lib/server/kanban/tags';
 import type { RequestHandler } from './$types';
 
 export const POST: RequestHandler = async ({ request }) => {
@@ -35,8 +37,8 @@ export const POST: RequestHandler = async ({ request }) => {
 		`\n\n---\n**Merged from: ${source.title}** (${source._id})\n${source.description || '(no description)'}`
 	].join('').trim();
 
-	// Merge tags (deduplicate)
-	const mergedTags = [...new Set([...(target.tags || []), ...(source.tags || [])])];
+	// Merge tags — case-insensitive de-dupe onto the canonical vocabulary (P1-3/P2-6.2).
+	const mergedTags = await normalizeTags([...(target.tags || []), ...(source.tags || [])]);
 
 	// Update target: absorb source content
 	await KanbanTask.findByIdAndUpdate(targetTaskId, {
@@ -59,12 +61,28 @@ export const POST: RequestHandler = async ({ request }) => {
 		}
 	});
 
-	// Archive source task
+	// Close the source through the transition service (tier crossing allowed —
+	// a merged Tier 1 option is forced to done). The service records the
+	// transitions[] entry, status_change activity, and its own AuditLog row,
+	// so no manual status/transition writes happen here.
+	try {
+		await transitionTask({
+			taskId: sourceTaskId,
+			to: 'done',
+			actor: { username: 'agent', via: 'agent-api' },
+			reason: `merged into ${targetTaskId}`,
+			allowTierCrossing: true
+		});
+	} catch (e) {
+		if (e instanceof TransitionError) throw error(400, e.message);
+		throw e;
+	}
+
+	// Archive source task (archiving is not a status change)
 	await KanbanTask.findByIdAndUpdate(sourceTaskId, {
 		$set: {
 			archived: true,
-			archivedAt: now,
-			status: 'done'
+			archivedAt: now
 		},
 		$push: {
 			activityLog: {
@@ -77,13 +95,6 @@ export const POST: RequestHandler = async ({ request }) => {
 				},
 				createdAt: now,
 				createdBy: 'agent'
-			},
-			transitions: {
-				_id: generateId(),
-				fromStatus: source.status,
-				toStatus: 'done',
-				changedBy: 'agent',
-				timestamp: now
 			}
 		}
 	});

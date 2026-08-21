@@ -6,7 +6,7 @@
 	interface WipSegment {
 		taskId: string;
 		taskTitle: string;
-		projectColor: string;
+		color: string;
 		startBucket: number;
 		endBucket: number;
 		startUtc: string;
@@ -59,14 +59,14 @@
 		const params = new URLSearchParams($page.url.searchParams);
 		params.set('day', iso);
 		params.set('tz', String(new Date().getTimezoneOffset()));
-		goto(`/kanban/analytics?${params.toString()}`, { replaceState: true, noScroll: true });
+		goto(`${$page.url.pathname}?${params.toString()}`, { replaceState: true, noScroll: true });
 	}
 
 	// Anchor the chart to the viewer's local timezone. The server otherwise
 	// buckets against UTC midnight, which drifts segments by the tz offset —
 	// at 3:32pm CT that puts bars in the ">6pm" overflow, visibly stretching
 	// past the now-line. Runs as a $effect so it re-fires whenever the URL
-	// loses the tz param (e.g. clicking the "Analytics" nav link while
+	// loses the tz param (e.g. clicking the "Flow" nav link while
 	// already on this page strips the search string but doesn't remount).
 	$effect(() => {
 		if (typeof window === 'undefined') return;
@@ -75,7 +75,7 @@
 		if (current === wanted) return;
 		const params = new URLSearchParams($page.url.searchParams);
 		params.set('tz', wanted);
-		goto(`/kanban/analytics?${params.toString()}`, { replaceState: true, noScroll: true });
+		goto(`${$page.url.pathname}?${params.toString()}`, { replaceState: true, noScroll: true });
 	});
 
 	// Pseudo-push refresh: poll a tiny watermark endpoint every 2s. When the
@@ -330,7 +330,7 @@
 													title={cell ? `${cell.taskTitle}\n${formatRange(cell)}` : ''}
 													class="block h-5 shrink-0 border-r border-[var(--color-tron-bg-primary)] transition-opacity hover:opacity-80"
 													style="width: {isOverflowCell ? '32px' : '18px'}; background: {cell
-														? cell.projectColor
+														? cell.color
 														: 'rgba(160,160,160,0.08)'}; {lane.isOverflow && cell ? 'outline: 1px solid var(--color-tron-red);' : ''}"
 												></a>
 											{/each}
@@ -342,10 +342,10 @@
 												<a
 													href="/kanban/task/{seg.taskId}"
 													class="inline-flex items-center gap-1 text-[10px] hover:underline"
-													style="color: {seg.projectColor};"
+													style="color: {seg.color};"
 													title={seg.taskTitle}
 												>
-													<span class="h-1.5 w-1.5 shrink-0 rounded-full" style="background: {seg.projectColor};"></span>
+													<span class="h-1.5 w-1.5 shrink-0 rounded-full" style="background: {seg.color};"></span>
 													<span class="max-w-[240px] truncate">{seg.taskTitle}</span>
 												</a>
 											{/each}

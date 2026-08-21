@@ -14,6 +14,10 @@ import { checkRobotConflict, checkDeckConflict, checkTrayConflict } from '$lib/s
 import { protectLockedCarts, LOCKED_STATUSES } from '$lib/server/manufacturing/locked-cartridges';
 import { getRobot, robotGet, robotPost, bridgeDeviceIdForRobot } from '$lib/server/opentrons/proxy';
 import { calibrationRtpValues } from '$lib/server/opentrons/calibration-rtps';
+import { ensureFreshRunProtocol } from '$lib/server/opentrons/protocol-freshness';
+import { resolveDeckBinding, DeckBindingError } from '$lib/server/services/deck-calibration/run-guard';
+import { isHardenedRobot } from '$lib/server/services/deck-calibration/rollout';
+import { OpentronsRunRecord } from '$lib/server/db';
 import bcrypt from 'bcryptjs';
 import type { PageServerLoad, Actions } from './$types';
 
@@ -848,18 +852,37 @@ export const actions: Actions = {
 		const robot = await getRobot(robotId);
 		if (!robot) return fail(404, { error: `Robot ${robotId} not found / not active` });
 
-		// Resolve the protocol on the robot to coerce form-string values to
-		// their native types (int/float/bool). Form fields all arrive as
-		// strings; the OT-2 API expects e.g. true (bool) not "true" (str).
-		const robotDoc = await OpentronsRobot.findById(robotId).lean() as any;
-		const protocol = (robotDoc?.protocols ?? []).find(
-			(p: any) => p.opentronsProtocolId === opentronsProtocolId
-		);
-		if (!protocol) {
-			return fail(400, {
-				error: `Protocol ${opentronsProtocolId} isn't uploaded to this robot. Upload it via /opentrons/devices first.`
+		// Deck identity guard. BIMS knows which deck the operator selected; the
+		// robot picks its cartridge-deck definition independently, from a Particle
+		// id it reads over serial. Prove the selected deck is actually bound to a
+		// real definition before moving a pipette — an unbound or dangling deck is
+		// how a calibrated deck ends up filling at someone else's coordinates.
+		let deckBinding;
+		try {
+			deckBinding = await resolveDeckBinding(run?.deckId ?? null, {
+				enforce: isHardenedRobot(robot)
+			});
+		} catch (e) {
+			if (e instanceof DeckBindingError) return fail(400, { error: e.message });
+			throw e;
+		}
+		if (deckBinding.warning) console.warn('[wax-filling startRun] ' + deckBinding.warning);
+
+
+		// Freshness gate: resolve the robot's CURRENT wax protocol server-side and
+		// prove its bundled deck calibration matches live Mongo; auto-resync if
+		// not. The posted opentronsProtocolId is intentionally NOT trusted — a page
+		// loaded before a Sync would post the older upload, which still exists on
+		// the robot and would silently run stale geometry.
+		let protocol: { opentronsProtocolId: string; parametersSchema: any[] | null };
+		try {
+			protocol = await ensureFreshRunProtocol(robot, String(robotId), 'wax-filling', locals.user.username);
+		} catch (e) {
+			return fail(502, {
+				error: `Deck-calibration freshness check failed: ${e instanceof Error ? e.message : 'unknown'}`
 			});
 		}
+		const runProtocolId = protocol.opentronsProtocolId;
 
 		const paramSchema = (protocol.parametersSchema ?? []) as Array<{
 			variableName: string;
@@ -889,6 +912,24 @@ export const actions: Actions = {
 			protocolParameters[def.variableName] = value;
 		}
 
+		// Partial-deck runs (2026-08-18). The protocol's `cartridges` is the END
+		// cartridge (it slices the first N cartridges of the destination list) and
+		// `resume_cartridge` is the START. In BIMS `cartridges` is locked to the
+		// number of cartridges the operator SCANNED into the run, so for a run that
+		// starts partway (e.g. positions 16..24 = 9 scanned) the natural meaning is
+		// "this many cartridges FROM the start". Translate count -> end here so the
+		// operator never has to do that arithmetic (and can't get an empty run).
+		const declared = new Set(paramSchema.map((d) => d.variableName));
+		const startCart = Number(runTimeParameterValues['resume_cartridge'] ?? 1);
+		if (declared.has('resume_cartridge') && startCart > 1) {
+			const count = Number(runTimeParameterValues['cartridges'] ?? 24);
+			const endCart = Math.min(24, startCart + count - 1);
+			runTimeParameterValues['cartridges'] = endCart;
+			protocolParameters['cartridges'] = endCart;
+			protocolParameters['cartridgesScanned'] = count;
+			console.log(`[wax startRun] partial deck: start cartridge ${startCart}, ${count} scanned -> end cartridge ${endCart}`);
+		}
+
 		// PRD 6: inject the BIMS-native calibration params (global offset +
 		// calibrator point) for robots that have a captured offset. No-op for the
 		// pre-cutover protocol (none of these RTPs declared) — see calibration-rtps.
@@ -901,7 +942,7 @@ export const actions: Actions = {
 		try {
 			const createRes = await robotPost(robot, '/runs', {
 				data: {
-					protocolId: opentronsProtocolId,
+					protocolId: runProtocolId,
 					...(Object.keys(runTimeParameterValues).length ? { runTimeParameterValues } : {})
 				}
 			});
@@ -915,6 +956,30 @@ export const actions: Actions = {
 			if (!opentronsRunId) {
 				return fail(502, { error: 'Robot returned no run id' });
 			}
+
+		// Geometry provenance. Record exactly which deck definition, at which
+		// version and content hash, this run was started against — the definition
+		// is edited in place, so these coordinates stop existing the moment anyone
+		// jogs the deck again.
+		try {
+			await OpentronsRunRecord.create({
+				_id: generateId(),
+				manufacturingRunId: String(runId),
+				manufacturingRunType: 'wax-filling',
+				robotId: String(robotId),
+				robotName: robot.name ?? null,
+				opentronsRunId,
+				opentronsProtocolId: runProtocolId,
+				runtimeParameters: runTimeParameterValues,
+				deckGeometry: deckBinding,
+				status: 'created',
+				robotCreatedAt: new Date(),
+				startedBy: locals.user.username
+			});
+		} catch (e) {
+			// Provenance must never block a fill that the robot already accepted.
+			console.error('[wax-filling startRun] could not write run record:', e instanceof Error ? e.message : e);
+		}
 		} catch (err) {
 			return fail(502, {
 				error: `Couldn't reach robot: ${err instanceof Error ? err.message : 'unknown'}`
@@ -1113,14 +1178,16 @@ export const actions: Actions = {
 
 
 	/**
-	 * Confirm deck removed + store in one commit (WAX-FLOW: deck-removed → fridge
-	 * → wax_stored). Replaces the old cooling → completeQC → recordStorage →
-	 * completeRun chain on this page now that QC is the wax-inspect photo/verdict
-	 * flow on an already-stored cart. The operator clicks "Confirm — Deck Removed",
-	 * picks the fridge the deck is stored in, and every cartridge on the run goes
-	 * straight wax_filling → wax_stored. Preserves the two non-redundant side
-	 * effects from the old chain: the waxFilling phase WRITE-ONCE record (DHR /
-	 * traceability) and the per-cartridge wax consumption (PT-CT-105).
+	 * Confirm deck removed + store in one commit (WAX-SIMPLIFY-1: deck-removed →
+	 * fridge → wax_filled). Replaces the old cooling → completeQC → recordStorage →
+	 * completeRun chain. The operator clicks "Confirm — Deck Removed", picks the
+	 * fridge the deck is stored in, and every cartridge on the run goes straight
+	 * wax_filling → wax_filled — wax_filled IS the stored state; the fridge is a
+	 * location (waxStorage), not a status. Visual QC happens by eye on wax_filled
+	 * carts; rejects go through the Wax Reject page. Preserves the two
+	 * non-redundant side effects from the old chain: the waxFilling phase
+	 * WRITE-ONCE record (DHR / traceability) and the per-cartridge wax consumption
+	 * (PT-CT-105).
 	 */
 	storeDeckAndComplete: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
@@ -1152,7 +1219,7 @@ export const actions: Actions = {
 
 			if (safeIds.length > 0) {
 				// One write per cart: stamp the waxFilling phase record + storage
-				// location and flip straight to wax_stored. Filter on status so we
+				// location and flip straight to wax_filled. Filter on status so we
 				// only touch this run's carts that are actually still wax_filling.
 				const bulkOps = safeIds.map((cid: string) => ({
 					updateOne: {
@@ -1174,7 +1241,7 @@ export const actions: Actions = {
 								'waxStorage.operator': { _id: locals.user!._id, username: locals.user!.username },
 								'waxStorage.timestamp': now,
 								'waxStorage.recordedAt': now,
-								status: 'wax_stored'
+								status: 'wax_filled'
 							}
 						}
 					}
@@ -1218,7 +1285,7 @@ export const actions: Actions = {
 				action: 'UPDATE',
 				changedBy: locals.user?.username,
 				changedAt: now,
-				newData: { status: 'completed', cartridgeStatus: 'wax_stored', storageLocation }
+				newData: { status: 'completed', cartridgeStatus: 'wax_filled', storageLocation }
 			});
 		} catch (e) {
 			console.error('[storeDeckAndComplete] audit log failed:', e instanceof Error ? e.message : e);
@@ -1459,6 +1526,53 @@ export const actions: Actions = {
 	 * AND to WaxFillingRun.notes[] so run-history surfaces can read run.notes
 	 * directly. At most one wax_run note per cartridge — re-saving overwrites.
 	 */
+	/**
+	 * Mid-run tip swap (2026-08-18). Asks the on-robot bridge daemon to write a
+	 * request file that the running wax protocol polls before every dispense.
+	 * The protocol then empties the tip, swaps it (mode 'rack' = robot takes the
+	 * next tracked tip; 'hand' = pauses for the operator to push one on),
+	 * re-probes it on the calibrator, and re-aspirates + continues at the very
+	 * well it was about to fill. Works whether the run is running or paused.
+	 */
+	requestTipSwap: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		await connectDB();
+		const data = await request.formData();
+		const runId = data.get('runId')?.toString();
+		const mode = data.get('mode')?.toString() === 'hand' ? 'hand' : 'rack';
+		const cancel = data.get('cancel')?.toString() === 'true';
+		if (!runId) return fail(400, { error: 'Missing runId' });
+		const run = await WaxFillingRun.findById(runId).lean() as any;
+		if (!run) return fail(404, { error: 'Run not found' });
+		const robotId = run.robot?._id;
+		const robot = robotId ? await OpentronsRobot.findById(robotId).lean() as any : null;
+		if (!robot) return fail(400, { error: 'Run has no OT-2 robot' });
+		try {
+			await Ot2BridgeCommand.create({
+				_id: generateId(),
+				robotId: String(robotId),
+				deviceId: bridgeDeviceIdForRobot(robot as any),
+				kind: 'tip_swap_request',
+				payload: { mode, cancel, runId: run.opentronsRunId ?? null, requestedBy: locals.user.username },
+				ttlMs: 120_000,
+				requestedBy: locals.user.username
+			});
+		} catch (e) {
+			return fail(502, { error: `Could not reach the robot bridge: ${e instanceof Error ? e.message : 'unknown'}` });
+		}
+		await AuditLog.create({
+			_id: generateId(),
+			action: cancel ? 'wax_tip_swap_cancel' : 'wax_tip_swap_request',
+			resourceType: 'wax_filling_run',
+			resourceId: runId,
+			userId: locals.user._id,
+			username: locals.user.username,
+			timestamp: new Date(),
+			details: { mode, opentronsRunId: run.opentronsRunId ?? null }
+		});
+		return { success: true, tipSwap: cancel ? 'cancelled' : mode };
+	},
+
 	recordWaxRunNote: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
 		await connectDB();

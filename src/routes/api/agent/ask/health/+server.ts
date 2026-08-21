@@ -9,12 +9,12 @@ import type { RequestHandler } from './$types';
  * /api/agent/ask error responses.
  */
 export const GET: RequestHandler = async ({ locals }) => {
-	const authenticated = Boolean(locals.user);
+	if (!locals.user) return json({ error: 'Unauthorized' }, { status: 401 });
 	const apiKeyConfigured = Boolean(process.env.ANTHROPIC_API_KEY);
 
 	return json({
-		ok: authenticated && apiKeyConfigured,
-		authenticated,
+		ok: apiKeyConfigured,
+		authenticated: true,
 		apiKeyConfigured,
 		defaultModel: DEFAULT_MODEL,
 		allowedModels: ALLOWED_MODELS,

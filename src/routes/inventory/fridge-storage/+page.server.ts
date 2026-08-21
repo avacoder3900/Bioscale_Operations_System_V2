@@ -1,6 +1,7 @@
 import { redirect } from '@sveltejs/kit';
 import { connectDB, CartridgeRecord, Equipment, EquipmentLocation } from '$lib/server/db';
 import { getCheckedOutCartridgeIds } from '$lib/server/checkout-utils';
+import { WAX_STAGE_STATUSES } from '$lib/shared/cartridge-wax-status';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
@@ -69,15 +70,15 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 	// Fetch cartridges physically present in a fridge.
 	//  Three buckets serve two different operational purposes:
-	//    (1) wax_accepted  — status='wax_stored' + waxQc.status='Accepted'
-	//        (live inventory available for reagent fill)
+	//    (1) wax_accepted  — status∈WAX_STAGE_STATUSES (wax_filled | wax_ready) with a
+	//        fridge scan (live inventory available for reagent fill; WAX-SIMPLIFY-1)
 	//    (2) wax_scrapped  — status='scrapped' + waxStorage.location set + not
 	//        checked out; physically still occupying the fridge, QA quarantine
 	//    (3) reagent       — status∈{stored, reagent_filled} with storage.fridgeName set
 	const storedCartridges = await CartridgeRecord.find({
 		_id: { $nin: checkedOut },
 		$or: [
-			{ 'waxStorage.location': { $exists: true, $ne: null }, status: 'wax_stored' },
+			{ 'waxStorage.location': { $exists: true, $ne: null }, status: { $in: [...WAX_STAGE_STATUSES] } },
 			{ 'waxStorage.location': { $exists: true, $ne: null }, status: 'scrapped' },
 			{ 'storage.fridgeName': { $exists: true, $ne: null }, status: { $in: ['stored', 'reagent_filled'] } }
 		]
@@ -115,15 +116,13 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 		if (waxLoc && keyToFridge.has(waxLoc)) {
 			const idx = keyToFridge.get(waxLoc)!;
-			// wax_stored -> accepted bucket; scrapped -> quarantine bucket.
-			// A wax_stored cartridge without waxQc.status='Accepted' is an
-			// anomaly (shouldn't happen on the storage path) but we bucket it
-			// as "accepted" for display since the status is wax_stored.
+			// wax-stage -> accepted bucket (visual pass is implicit — no waxQc row
+			// needed); scrapped -> quarantine bucket.
 			const type = c.status === 'scrapped' ? 'wax_scrapped' : 'wax_accepted';
 			fridgeCartridges[idx].push({
 				id: String(c._id),
 				type,
-				phase: c.status ?? 'wax_stored',
+				phase: c.status ?? 'wax_filled',
 				qc: c.waxQc?.status ?? null,
 				voidReason: c.voidReason ?? null,
 				location: waxLoc,

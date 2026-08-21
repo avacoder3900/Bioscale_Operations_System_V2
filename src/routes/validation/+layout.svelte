@@ -10,14 +10,14 @@
 
 	const navItems = [
 		{
+			href: '/validation/runs',
+			label: 'Runs',
+			icon: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4'
+		},
+		{
 			href: '/validation/magnetometer',
 			label: 'Magnetometer',
 			icon: 'M13 10V3L4 14h7v7l9-11h-7z'
-		},
-		{
-			href: '/validation/spectrophotometer',
-			label: 'Spectrophotometer',
-			icon: 'M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z'
 		},
 		{
 			href: '/validation/thermocouple',
@@ -37,7 +37,7 @@
 	}
 
 	function getSectionName(path: string): string {
-		if (path.includes('/spectrophotometer')) return 'Spectrophotometer';
+		if (path.includes('/runs')) return 'Runs';
 		if (path.includes('/thermocouple')) return 'Thermocouple';
 		if (path.includes('/magnetometer')) return 'Magnetometer';
 		if (path.includes('/optical-confirmation')) return 'Optical Confirmation';
