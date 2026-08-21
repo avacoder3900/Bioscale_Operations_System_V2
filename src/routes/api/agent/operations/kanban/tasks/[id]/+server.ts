@@ -20,7 +20,7 @@ export const PATCH: RequestHandler = async ({ request, params }) => {
 		title, description, status, sizeClass, assignedTo, dueDate, tags,
 		appendContext, actor, reason, waitingOn, waitingUntil,
 		sourceRef, dor, links, blockedBy, removeLinkId, parentTaskId,
-		estimateDays
+		estimateDays, effortDays
 	} = body;
 
 	const actorName = typeof actor === 'string' && actor.trim() ? actor.trim() : 'agent';
@@ -47,6 +47,15 @@ export const PATCH: RequestHandler = async ({ request, params }) => {
 		oldData.sizeClass = task.sizeClass;
 		$set.sizeClass = sizeClass;
 		changedFields.push('sizeClass');
+	}
+	// KB2-31: hands-on effort in working days; null clears it (falls back to duration).
+	if (effortDays !== undefined) {
+		if (effortDays !== null && !(typeof effortDays === 'number' && effortDays > 0)) {
+			throw error(400, 'effortDays must be a positive number of working days (or null to clear)');
+		}
+		oldData.effortDays = task.effortDays;
+		$set.effortDays = effortDays;
+		changedFields.push('effortDays');
 	}
 	// KB2-27: workshopped estimate in working days; null clears it.
 	if (estimateDays !== undefined) {

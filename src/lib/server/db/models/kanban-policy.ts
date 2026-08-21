@@ -46,6 +46,20 @@ const kanbanPolicySchema = new Schema(
 				long: { type: Number, default: null }
 			}
 		},
+		// KB2-31 — scheduler capacity v2. teamEstDaysPerWeek: the human-set team
+		// capacity knob (null = legacy: measured velocity only). schedule[]: dated
+		// rate changes (intern onboarding), sorted by `from`, later entries win.
+		// blendMinN/measuredMinN/trailingWindowWeeks: thresholds for the
+		// policy → blend → measured hand-off as real completion data accrues.
+		// HUMAN-ONLY to change (PERM-05): edited on /kanban/policy, never via MCP;
+		// the agent explores capacities via kanban_roadmap's non-persisted what-ifs.
+		capacity: {
+			teamEstDaysPerWeek: { type: Number, default: null },
+			schedule: [{ _id: false, from: Date, teamEstDaysPerWeek: Number }],
+			blendMinN: { type: Number, default: 8 },
+			measuredMinN: { type: Number, default: 15 },
+			trailingWindowWeeks: { type: Number, default: 6 }
+		},
 		recalibrateAfter: Date, // nag when past due — seeds must be replaced by measured demand
 		updatedBy: String,
 		updatedAt: Date

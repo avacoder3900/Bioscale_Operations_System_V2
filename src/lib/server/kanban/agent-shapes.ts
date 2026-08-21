@@ -68,6 +68,9 @@ export async function captureOptionsFromBody(
 		// KB2-27: workshopped estimate (working days) — plan imports set it at capture.
 		estimateDays:
 			typeof body.estimateDays === 'number' && body.estimateDays > 0 ? body.estimateDays : undefined,
+		// KB2-31: hands-on effort when it differs from duration.
+		effortDays:
+			typeof body.effortDays === 'number' && body.effortDays > 0 ? body.effortDays : undefined,
 		dor,
 		assignee,
 		dueDate: body.dueDate ? new Date(body.dueDate) : defaults.dueDate,

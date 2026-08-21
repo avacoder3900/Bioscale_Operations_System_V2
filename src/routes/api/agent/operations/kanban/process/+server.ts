@@ -14,7 +14,7 @@ export const POST: RequestHandler = async ({ request }) => {
 	requireAgentApiKey(request);
 	await connectDB();
 	const body = await request.json();
-	const { taskId, actor, sizeClass, classOfService, dueDate, dor, estimateDays } = body;
+	const { taskId, actor, sizeClass, classOfService, dueDate, dor, estimateDays, effortDays } = body;
 
 	if (!taskId) return json({ success: false, error: 'taskId is required' }, { status: 400 });
 	if (!actor?.trim()) return json({ success: false, error: 'actor (username of the person processing) is required' }, { status: 400 });
@@ -29,6 +29,7 @@ export const POST: RequestHandler = async ({ request }) => {
 			via: 'mcp',
 			sizeClass,
 			estimateDays: typeof estimateDays === 'number' && estimateDays > 0 ? estimateDays : undefined,
+			effortDays: typeof effortDays === 'number' && effortDays > 0 ? effortDays : undefined,
 			classOfService,
 			dueDate: dueDate ? new Date(dueDate) : undefined,
 			dor

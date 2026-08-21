@@ -31,8 +31,10 @@ export async function processTask(opts: {
 	sizeClass: KanbanSizeClass;
 	classOfService: KanbanClassOfService;
 	dueDate?: Date; // required when classOfService === 'fixed_date'
-	/** KB2-27: workshopped estimate in working days (> 0). */
+	/** KB2-27: workshopped estimate (duration) in working days (> 0). */
 	estimateDays?: number;
+	/** KB2-31: hands-on effort in working days when it differs from duration. */
+	effortDays?: number;
 	dor?: { deliverable?: string; handoffBrief?: string };
 }) {
 	await connectDB();
@@ -51,6 +53,8 @@ export async function processTask(opts: {
 	};
 	if (opts.dueDate) $set.dueDate = opts.dueDate;
 	if (typeof opts.estimateDays === 'number' && opts.estimateDays > 0) $set.estimateDays = opts.estimateDays;
+	if (typeof opts.effortDays === 'number' && opts.effortDays > 0) $set.effortDays = opts.effortDays;
+	if (typeof opts.effortDays === 'number' && opts.effortDays > 0) $set.effortDays = opts.effortDays;
 	if (opts.dor?.deliverable !== undefined) $set['dor.deliverable'] = opts.dor.deliverable;
 	if (opts.dor?.handoffBrief !== undefined) $set['dor.handoffBrief'] = opts.dor.handoffBrief;
 	await KanbanTask.updateOne({ _id: opts.taskId }, { $set });
@@ -75,8 +79,10 @@ export async function reshapeTask(opts: {
 	sizeClass?: KanbanSizeClass;
 	classOfService?: KanbanClassOfService;
 	dueDate?: Date;
-	/** KB2-27: workshopped estimate in working days (> 0). */
+	/** KB2-27: workshopped estimate (duration) in working days (> 0). */
 	estimateDays?: number;
+	/** KB2-31: hands-on effort in working days when it differs from duration. */
+	effortDays?: number;
 	dor?: { deliverable?: string; handoffBrief?: string };
 }) {
 	await connectDB();

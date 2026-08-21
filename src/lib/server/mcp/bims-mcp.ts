@@ -149,7 +149,12 @@ const CAPTURE_ITEM_SHAPE = {
 		.number()
 		.positive()
 		.optional()
-		.describe('KB2-27: workshopped estimate in working days. Rung 1 of the scheduler ladder (explicit → sizeClass mapping → historical median); checked against actuals later. Set during plan imports.'),
+		.describe('KB2-27: workshopped DURATION estimate in working days (drives CPM chain dates). Rung 1 of the scheduler ladder (explicit → sizeClass mapping → historical median); checked against actuals later. Set during plan imports.'),
+	effortDays: z
+		.number()
+		.positive()
+		.optional()
+		.describe('KB2-31: hands-on team effort in working days when it differs from duration (elapsed-time tasks: incubations, at-home testing). The capacity clamp, measured velocity, and calibration consume effortDays ?? estimateDays. Omit when effort ≈ duration.'),
 	tags: z.array(z.string()).optional().describe('Trimmed and case-folded onto the existing vocabulary server-side.'),
 	parentTaskId: z.string().optional().describe('Create as a subtask of this task.'),
 	sourceRef: z.string().optional().describe('External reference (e.g. pr:123, branch:name, or a ticket id).'),
@@ -219,7 +224,7 @@ async function callAgentApi(
 export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 	// Version bump signals clients (claude.ai caches connector tool lists) that
 	// the toolset changed — bump on every tool add/remove/rename.
-	const server = new McpServer({ name: 'bims-operations', version: '3.2.1' });
+	const server = new McpServer({ name: 'bims-operations', version: '3.3.0' });
 
 	// ---------------------------------------------------------------- meta
 
@@ -890,7 +895,13 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 					.positive()
 					.nullable()
 					.optional()
-					.describe('KB2-27: workshopped estimate in working days; null clears it back to the ladder fallback.'),
+					.describe('KB2-27: workshopped DURATION estimate in working days; null clears it back to the ladder fallback.'),
+				effortDays: z
+					.number()
+					.positive()
+					.nullable()
+					.optional()
+					.describe('KB2-31: hands-on effort in working days (elapsed-time tasks); null clears it (clamp falls back to duration).'),
 				tags: z.array(z.string()).optional(),
 				sourceRef: z.string().optional().describe("External link — software items: pr:<number>, branch:<name>, commit:<sha>; plan imports: plan:<planId> (from kanban_file_plan)."),
 				dor: DOR_FIELD,
@@ -1021,7 +1032,12 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 					.number()
 					.positive()
 					.optional()
-					.describe('KB2-27: workshopped estimate in working days (finer-grained than sizeClass; used by the roadmap scheduler first).'),
+					.describe('KB2-27: workshopped DURATION estimate in working days (finer-grained than sizeClass; used by the roadmap scheduler first).'),
+				effortDays: z
+					.number()
+					.positive()
+					.optional()
+					.describe('KB2-31: hands-on team effort in working days when it differs from duration (elapsed-time tasks).'),
 				dor: z
 					.object({
 						deliverable: z.string().optional().describe("State what will exist or be true when this is done — and how you'd verify it. Outcome, not steps."),
@@ -1042,18 +1058,89 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 		'kanban_roadmap',
 		{ annotations: READ_ONLY,
 			description:
-				'The derived roadmap (KB2-28): for every milestone task (itemType milestone) with a dueDate, a CPM ' +
+				'The derived roadmap (KB2-28/31): for every milestone task (itemType milestone) with a dueDate, a CPM ' +
 				'backward/forward pass over the blocked_by graph — latest-start/slack per task, the critical chain, a ' +
-				'capacity clamp from measured throughput, projected finish vs the anchor date (bufferDays; negative = ' +
-				'INFEASIBLE — raise it with the human: cut scope, add capacity, or move the date), chain % done, and the ' +
-				'must-start list (unblocked tasks whose latest start is now/past — the "work on this next" answer; slack ' +
-				'ascending, Tier 1 rank tiebreak). Also: estimate-vs-actual calibration (medianActualOverEstimate — apply it ' +
-				'when workshopping new estimates) and unscheduled milestones (missing dueDate). All dates are OUTPUTS ' +
-				'recomputed fresh per call; to change them, change reality: links, estimateDays, scope. ' +
-				'estimateSource per task says which ladder rung produced its duration (explicit / sizeClass / median).',
+				'capacity clamp (effort-days through the piecewise capacity schedule), projected finish vs the anchor date ' +
+				'(bufferDays; negative = INFEASIBLE — raise it with the human: cut scope, add capacity, or move the date), ' +
+				'chain % done, and the must-start list (unblocked, latest start now/past; slack ascending, rank tiebreak). ' +
+				'Velocity is self-explaining: velocityDaysPerWeek (effective, used), measuredVelocityDaysPerWeek, ' +
+				'velocitySource (policy | blend | measured), velocitySampleN, resolvedCapacitySchedule. Per-task effortDays ' +
+				'where set. WHAT-IFS (never persisted, this call only): capacityOverride pretends teamEstDaysPerWeek = X; ' +
+				'scheduleOverride supplies dated rates — answer "what does A4M look like at 6 vs 10 vs 15 days/week?" live ' +
+				'without touching policy (policy itself is human-edited on /kanban/policy). All dates are OUTPUTS recomputed ' +
+				'fresh per call; to change them, change reality: links, estimates, scope. Use kanban_velocity_report to ' +
+				'audit how the velocity number was derived.',
+			inputSchema: z.object({
+				capacityOverride: z
+					.number()
+					.positive()
+					.optional()
+					.describe('What-if: pretend teamEstDaysPerWeek = X for this computation only.'),
+				scheduleOverride: z
+					.array(
+						z.object({
+							from: z.string().describe('ISO date the rate takes effect.'),
+							teamEstDaysPerWeek: z.number().positive()
+						})
+					)
+					.optional()
+					.describe('What-if: dated capacity rates for this computation only (e.g. intern onboarding scenarios).')
+			})
+		},
+		async ({ capacityOverride, scheduleOverride }) =>
+			callAgentApi(fetcher, '/api/agent/operations/kanban/roadmap', {
+				query: {
+					capacityOverride,
+					scheduleOverride: scheduleOverride ? JSON.stringify(scheduleOverride) : undefined
+				}
+			})
+	);
+
+	server.registerTool(
+		'kanban_velocity_report',
+		{ annotations: READ_ONLY,
+			description:
+				"The speedometer's homework (KB2-32): the trailing-window completion list (taskId, completedAt, " +
+				'estimateDays, effortDays, countedDays + which field was counted), weekly buckets, measured velocity, ' +
+				'sample size n, the velocitySource decision trace (policy/blend/measured + thresholds + knob), and ' +
+				'calibration over the same field the clamp consumes. Use it to EXPLAIN any projection and to audit ' +
+				'velocity pollution (elapsed-time tasks counted at duration instead of effort) instead of trusting a ' +
+				'single opaque number.',
 			inputSchema: z.object({})
 		},
-		async () => callAgentApi(fetcher, '/api/agent/operations/kanban/roadmap')
+		async () => callAgentApi(fetcher, '/api/agent/operations/kanban/velocity-report')
+	);
+
+	server.registerTool(
+		'kanban_set_estimates',
+		{ annotations: WRITE_TOOL,
+			description:
+				'Bulk estimate/effort writes (KB2-32) — the estimate-workshop hot loop. 1–50 entries of ' +
+				'{ taskId, estimateDays?, effortDays? } (null clears a field; omitted leaves it alone). Per-item results ' +
+				'like kanban_capture_bulk; one audit row per applied item. estimateDays = DURATION (CPM dates); ' +
+				'effortDays = hands-on team time (capacity clamp) — set effortDays on elapsed-time tasks (incubations, ' +
+				'at-home testing) so they stop eating fictional team-weeks.',
+			inputSchema: z.object({
+				items: z
+					.array(
+						z.object({
+							taskId: z.string(),
+							estimateDays: z.number().positive().nullable().optional(),
+							effortDays: z.number().positive().nullable().optional()
+						})
+					)
+					.min(1)
+					.max(50),
+				actor: ACTOR_FIELD
+			})
+		},
+		async (args) =>
+			machineWrite('kanban_set_estimates', (args as any).actor, (actor) =>
+				callAgentApi(fetcher, '/api/agent/operations/kanban/estimates', {
+					method: 'POST',
+					body: { ...args, actor }
+				})
+			)
 	);
 
 	server.registerTool(
@@ -1174,7 +1261,9 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 		'kanban_set_policy',
 		{ annotations: WRITE_TOOL,
 			description:
-				'Tune kanban policy knobs at runtime (no deploy). `actor` must hold kanban:admin. ' +
+				'HUMAN-ONLY (PERM-05): this tool is refused server-side — kanban policy (including the KB2-31 capacity block: ' +
+				'teamEstDaysPerWeek, schedule[], blend thresholds) is edited by a human on /kanban/policy. To explore capacities ' +
+				'live, use kanban_roadmap({capacityOverride, scheduleOverride}) — non-persisted what-ifs. ' +
 				'updates is a map of dot-path → value, e.g. {"readyCap": 10, "wipPerPerson": 2}. ' +
 				'Valid paths: readyCap, minOrderPoint, wipPerPerson, wipChoreMax, ' +
 				'expedite.{systemMax|alertPctRolling30d}, allocation.{standard|fixed_date|chore}, ' +

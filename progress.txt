@@ -9302,3 +9302,43 @@ Retrieve this exact code: git checkout master at commit e744b11e
 What this deployment is for: Timeline mode on the roadmap canvas — verify /kanban/roadmap
   opens in Timeline (cards at scheduled dates, today line, milestone verticals) and the
   Flow toggle still drags/pins.
+
+================================================================================
+2026-08-20 — feat/kanban-tweaks → master — KB2-31/32: scheduler capacity v2 (knob, effort split, schedule, blend + MCP surface)
+================================================================================
+Implemented scheduler-capacity-v2-spec.md (workshopped in the Claude app, TASK-096) —
+PRDs docs/prds/KB2-31-capacity-v2.md + KB2-32-capacity-mcp-surface.md. The clamp's Dec
+2027 A4M projection was a measurement artifact (board recorded one person's batch-logged
+till while the 3.5-person kitchen worked off-board) compounded by elapsed-time tasks
+charged at calendar duration.
+
+KB2-31: KanbanPolicy.capacity {teamEstDaysPerWeek (null=legacy), schedule[] (dated
+rates), blendMinN 8, measuredMinN 15, trailingWindowWeeks 6}. KanbanTask.effortDays
+(hands-on days ≠ duration). Scheduler: effectiveVelocity = knob ?? measured; blend
+policy→blend→measured as estimated completions accrue (trailing window, valued over
+effortDays ?? estimateDays — same field calibration now uses, so elapsed tasks stop
+poisoning both); clamp workload = effort; piecewise clampWalk over the dated schedule.
+Output: velocityDaysPerWeek (effective) + measuredVelocityDaysPerWeek + velocitySource +
+velocitySampleN + resolvedCapacitySchedule + per-task effortDays. Legacy guarantee held:
+knob null + no effortDays → numbers identical (verified live: A4M clamp Jan 2028,
+buffer −280 — the absurd number, faithfully preserved).
+
+DEVIATION from spec: kanban_set_policy stays HUMAN-ONLY (PERM-05 closed MCP policy
+writes; self-declared actors ≠ authorization). Capacity is set on /kanban/policy (new
+Capacity section: knob, thresholds, schedule textarea "YYYY-MM-DD rate"); the agent
+explores via kanban_roadmap's NON-PERSISTED what-ifs instead.
+
+KB2-32 (MCP v3.3.0): effortDays on capture/capture_bulk/create_subtasks/process/
+update_task; kanban_roadmap gains {capacityOverride, scheduleOverride} what-ifs; NEW
+kanban_velocity_report (trailing completion list w/ counted-field per task, weekly
+buckets, decision trace, calibration) + NEW kanban_set_estimates (bulk 1–50, per-item
+results, audit row each — the workshop hot loop; the v4 worksheet burned ~50 sequential
+update_task calls). New tool names bind in a FRESH Claude-app chat.
+
+Acceptance vs spec (scripts/diag-capacity-v2.ts, live): capacityOverride=10 → A4M clamp
+2026-11-17 buffer +17 wd (spec predicted mid-Nov, +3–4 wks ✓), recipe-lock feasible ✓;
++schedule {2026-10-01: 15} → A4M 2026-10-29 buffer +30 ✓; overrides don't persist ✓;
+legacy identical ✓. npm run check: 11/434 baseline.
+NEXT (human): set capacity.teamEstDaysPerWeek=10 on /kanban/policy. NEXT (agent, fresh
+chat): effortDays data pass via kanban_set_estimates (internal run 3, external 5,
+mini-val 4, stability 2, gold-std design 5, gold-std run 3).

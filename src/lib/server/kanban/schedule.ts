@@ -14,6 +14,7 @@
  * capacity clamp models ONE team-wide pipe from aggregate throughput.
  */
 import { connectDB, KanbanTask } from '$lib/server/db';
+import { getKanbanPolicy } from './policy.js';
 import { SIZE_CLASS_DAYS, type KanbanSizeClass } from '$lib/shared/kanban-status';
 
 // ---------------------------------------------------------------- types
@@ -42,6 +43,22 @@ export interface ScheduledTask {
 	blockedByOpen: string[]; // not-done blocker ids
 	/** KB2-30: ALL in-subgraph predecessors (incl. done) — the canvas draws edges from these. */
 	blockedBy: string[];
+	/** KB2-31: hands-on effort (working days) when it differs from duration; null = same. */
+	effortDays: number | null;
+}
+
+/** KB2-31 — how the effective velocity was chosen. */
+export type VelocitySource = 'policy' | 'blend' | 'measured';
+
+export interface CapacityPeriod {
+	from: string; // ISO date; first period starts today
+	teamEstDaysPerWeek: number;
+}
+
+/** KB2-31 — non-persisted what-if inputs (kanban_roadmap overrides). */
+export interface CapacityOverrides {
+	capacityOverride?: number;
+	scheduleOverride?: { from: string; teamEstDaysPerWeek: number }[];
 }
 
 export interface MustStartRow {
@@ -82,8 +99,16 @@ export interface RoadmapResult {
 	milestones: MilestoneSchedule[];
 	/** Milestones with no dueDate — flagged, not scheduled. */
 	unscheduledMilestones: { id: string; title: string; trackingNumber: string | null }[];
-	/** Mean weekly estimate-days completed (last 8 weeks); null = no history, clamp disabled. */
+	/** EFFECTIVE velocity the clamp used (est-days/week); null = clamp disabled. */
 	velocityDaysPerWeek: number | null;
+	/** KB2-31: what the board actually measured (trailing window when the knob is set, legacy 8-wk mean otherwise). */
+	measuredVelocityDaysPerWeek: number | null;
+	/** KB2-31: where the effective velocity came from. */
+	velocitySource: VelocitySource;
+	/** KB2-31: estimated completions in the trailing window (drives the blend). */
+	velocitySampleN: number;
+	/** KB2-31: the piecewise capacity schedule the clamp walked (resolved from policy/overrides). */
+	resolvedCapacitySchedule: CapacityPeriod[] | null;
 	medianCycleDays: number; // ladder rung 3
 	calibration: { n: number; medianActualOverEstimate: number | null };
 }
@@ -101,6 +126,12 @@ function startOfDay(d: Date): Date {
 function isWeekend(d: Date): boolean {
 	const w = d.getDay();
 	return w === 0 || w === 6;
+}
+
+/** Parse a date that may be a YYYY-MM-DD string (treat as LOCAL midnight, not UTC) or a Date. */
+export function parseLocalDate(v: string | Date): Date {
+	if (v instanceof Date) return v;
+	return /^\d{4}-\d{2}-\d{2}$/.test(v) ? new Date(v + 'T00:00:00') : new Date(v);
 }
 
 /** Add n business days (n may be fractional; fraction applied on the final day). */
@@ -154,6 +185,16 @@ function effectiveDuration(
 	return { days: medianCycleDays, source: 'median' };
 }
 
+/**
+ * KB2-31 — hands-on effort for the capacity clamp / velocity / calibration:
+ * effortDays ?? duration ladder. Duration stays what CPM walks; effort is what
+ * the team's week actually spends.
+ */
+function effectiveEffort(t: any, medianCycleDays: number): number {
+	if (typeof t.effortDays === 'number' && t.effortDays > 0) return t.effortDays;
+	return effectiveDuration(t, medianCycleDays).days;
+}
+
 function median(xs: number[]): number | null {
 	if (!xs.length) return null;
 	const s = [...xs].sort((a, b) => a - b);
@@ -161,14 +202,31 @@ function median(xs: number[]): number | null {
 	return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
 }
 
-/** The whole roadmap: every dated milestone scheduled, plus global calibration. */
-export async function computeRoadmap(now = new Date()): Promise<RoadmapResult> {
+/**
+ * The whole roadmap: every dated milestone scheduled, plus global calibration.
+ * `overrides` (KB2-31/32) are what-ifs for THIS computation only — never persisted.
+ */
+export async function computeRoadmap(
+	now = new Date(),
+	overrides: CapacityOverrides = {}
+): Promise<RoadmapResult> {
 	await connectDB();
 	const today = startOfDay(now);
+	const policy: any = await getKanbanPolicy().catch(() => null);
+	const cap = policy?.capacity ?? {};
+	const blendMinN: number = cap.blendMinN ?? 8;
+	const measuredMinN: number = cap.measuredMinN ?? 15;
+	const trailingWindowWeeks: number = cap.trailingWindowWeeks ?? 6;
+	const knob: number | null =
+		typeof overrides.capacityOverride === 'number' && overrides.capacityOverride > 0
+			? overrides.capacityOverride
+			: typeof cap.teamEstDaysPerWeek === 'number' && cap.teamEstDaysPerWeek > 0
+				? cap.teamEstDaysPerWeek
+				: null;
 
 	const all = (await KanbanTask.find({ archived: false })
 		.select(
-			'_id trackingNumber title status rank tags itemType sizeClass estimateDays dueDate links wipDate completedDate'
+			'_id trackingNumber title status rank tags itemType sizeClass estimateDays effortDays dueDate links wipDate completedDate'
 		)
 		.lean()) as any[];
 	// Recently archived done tasks still count for history/velocity:
@@ -176,7 +234,7 @@ export async function computeRoadmap(now = new Date()): Promise<RoadmapResult> {
 		status: 'done',
 		completedDate: { $gte: new Date(today.getTime() - 91 * DAY_MS) }
 	})
-		.select('_id sizeClass estimateDays wipDate completedDate')
+		.select('_id sizeClass estimateDays effortDays wipDate completedDate')
 		.lean()) as any[];
 
 	// --- ladder rung 3: median actual cycle time (wip → done, business days) ---
@@ -187,32 +245,118 @@ export async function computeRoadmap(now = new Date()): Promise<RoadmapResult> {
 	// the default duration for unsized future work absurdly optimistic.
 	const medianCycleDays = Math.max(1, median(cycles) ?? 3);
 
-	// --- calibration: actual vs explicit estimate ---
+	// --- calibration: actual vs the SAME field the clamp consumes (KB2-31:
+	// effortDays ?? estimateDays) — else elapsed tasks poison calibration
+	// exactly as they poison velocity ---
+	const explicitEst = (t: any): number | null =>
+		typeof t.effortDays === 'number' && t.effortDays > 0
+			? t.effortDays
+			: typeof t.estimateDays === 'number' && t.estimateDays > 0
+				? t.estimateDays
+				: null;
 	const ratios = doneHistory
-		.filter((t) => t.wipDate && t.completedDate && typeof t.estimateDays === 'number' && t.estimateDays > 0)
+		.filter((t) => t.wipDate && t.completedDate && explicitEst(t) !== null)
 		.map(
 			(t) =>
 				Math.max(0.5, businessDaysBetween(new Date(t.wipDate), new Date(t.completedDate))) /
-				t.estimateDays
+				explicitEst(t)!
 		);
 	const calibration = { n: ratios.length, medianActualOverEstimate: median(ratios) };
 
-	// --- velocity: mean weekly estimate-days completed, last 8 full weeks ---
-	const weekly = new Map<number, number>();
+	// --- measured velocity (KB2-31) ---
+	// Legacy (no knob): mean weekly LADDER days over 8 weeks — unchanged from
+	// KB2-28 so acceptance #5 holds (numbers identical when capacity is unset).
+	// Knob set: TRAILING window (trailingWindowWeeks) valued over
+	// effortDays ?? estimateDays for estimated tasks (ladder for the rest) so
+	// the pre-team era ages out and elapsed tasks stop inflating.
+	const sumWindow = (weeks: number, valueOf: (t: any) => number): number => {
+		let total = 0;
+		for (const t of doneHistory) {
+			if (!t.completedDate) continue;
+			const weeksAgo = Math.floor(
+				(today.getTime() - startOfDay(new Date(t.completedDate)).getTime()) / (7 * DAY_MS)
+			);
+			if (weeksAgo < 0 || weeksAgo >= weeks) continue;
+			total += valueOf(t);
+		}
+		return total;
+	};
+	const legacyTotal = sumWindow(8, (t) => effectiveDuration(t, medianCycleDays).days);
+	const legacyVelocity = legacyTotal > 0 ? legacyTotal / 8 : null;
+	const trailingTotal = sumWindow(trailingWindowWeeks, (t) => effectiveEffort(t, medianCycleDays));
+	const trailingVelocity = trailingTotal > 0 ? trailingTotal / trailingWindowWeeks : null;
+	// n = estimated completions in the trailing window (the blend driver).
+	let velocitySampleN = 0;
 	for (const t of doneHistory) {
-		if (!t.completedDate) continue;
-		const done = new Date(t.completedDate);
-		const weeksAgo = Math.floor((today.getTime() - startOfDay(done).getTime()) / (7 * DAY_MS));
-		if (weeksAgo < 0 || weeksAgo >= 8) continue;
-		const dur = effectiveDuration(t, medianCycleDays).days;
-		weekly.set(weeksAgo, (weekly.get(weeksAgo) ?? 0) + dur);
+		if (!t.completedDate || explicitEst(t) === null) continue;
+		const weeksAgo = Math.floor(
+			(today.getTime() - startOfDay(new Date(t.completedDate)).getTime()) / (7 * DAY_MS)
+		);
+		if (weeksAgo >= 0 && weeksAgo < trailingWindowWeeks) velocitySampleN++;
 	}
-	// MEAN over the 8-week window, not median: completions get batch-recorded
-	// (production data: 9 done marks land in one ISO week), so the median week
-	// is often 0 and would silently disable the capacity clamp. The mean
-	// absorbs spikes; zero total still yields null (no signal → clamp off).
-	const totalDone8w = [...weekly.values()].reduce((a, b) => a + b, 0);
-	const velocityDaysPerWeek = totalDone8w > 0 ? totalDone8w / 8 : null;
+
+	let velocitySource: VelocitySource;
+	let velocityDaysPerWeek: number | null;
+	let measuredVelocityDaysPerWeek: number | null;
+	if (knob === null) {
+		// Legacy behavior, byte-for-byte on the numbers.
+		velocitySource = 'measured';
+		velocityDaysPerWeek = legacyVelocity;
+		measuredVelocityDaysPerWeek = legacyVelocity;
+	} else if (velocitySampleN >= measuredMinN && trailingVelocity !== null) {
+		velocitySource = 'measured';
+		velocityDaysPerWeek = trailingVelocity;
+		measuredVelocityDaysPerWeek = trailingVelocity;
+	} else if (velocitySampleN >= blendMinN && trailingVelocity !== null) {
+		velocitySource = 'blend';
+		const w = velocitySampleN / measuredMinN;
+		velocityDaysPerWeek = trailingVelocity * w + knob * (1 - w);
+		measuredVelocityDaysPerWeek = trailingVelocity;
+	} else {
+		velocitySource = 'policy';
+		velocityDaysPerWeek = knob;
+		measuredVelocityDaysPerWeek = trailingVelocity;
+	}
+
+	// --- capacity schedule (KB2-31 #3): piecewise rates from today ---
+	const rawSchedule: any[] =
+		overrides.scheduleOverride ??
+		(overrides.capacityOverride != null ? [] : (cap.schedule ?? []));
+	const schedulePeriods: CapacityPeriod[] | null = velocityDaysPerWeek
+		? [
+				{ from: iso(today)!, teamEstDaysPerWeek: velocityDaysPerWeek },
+				...rawSchedule
+					.filter(
+						(e: any) =>
+							e && e.from && typeof e.teamEstDaysPerWeek === 'number' && e.teamEstDaysPerWeek > 0 &&
+							startOfDay(parseLocalDate(e.from)) > today
+					)
+					.map((e: any) => ({
+						from: iso(startOfDay(parseLocalDate(e.from)))!,
+						teamEstDaysPerWeek: e.teamEstDaysPerWeek
+					}))
+					.sort((a: CapacityPeriod, b: CapacityPeriod) => a.from.localeCompare(b.from))
+			]
+		: null;
+
+	/** Walk the piecewise schedule consuming `remaining` effort-days → finish date. */
+	const clampWalk = (remaining: number): Date | null => {
+		if (!schedulePeriods || remaining <= 0) return null;
+		let cursor = new Date(today);
+		let left = remaining;
+		for (let i = 0; i < schedulePeriods.length; i++) {
+			const rate = schedulePeriods[i].teamEstDaysPerWeek;
+			const end = i + 1 < schedulePeriods.length ? startOfDay(parseLocalDate(schedulePeriods[i + 1].from)) : null;
+			const weeksAvail = end ? (end.getTime() - cursor.getTime()) / (7 * DAY_MS) : Infinity;
+			const weeksNeeded = left / rate;
+			if (weeksNeeded <= weeksAvail) {
+				return addBusinessDays(cursor, weeksNeeded * 5);
+			}
+			left -= weeksAvail * rate;
+			cursor = end!;
+		}
+		return null; // unreachable (last period is unbounded)
+	};
 
 	// --- graph: normalized blocking edges (pred → succ) ---
 	const byId = new Map(all.map((t) => [String(t._id), t]));
@@ -316,14 +460,12 @@ export async function computeRoadmap(now = new Date()): Promise<RoadmapResult> {
 
 		const cpmFinishDate = EF.get(mid) ?? today;
 
-		// Capacity clamp: one team-wide pipe.
+		// Capacity clamp: one team-wide pipe. KB2-31: workload = EFFORT
+		// (effortDays ?? duration), walked through the piecewise schedule.
 		const remainingDays = topo
 			.filter((id) => !isDone(id))
-			.reduce((s, id) => s + dur.get(id)!.days, 0);
-		let clampFinishDate: Date | null = null;
-		if (velocityDaysPerWeek && velocityDaysPerWeek > 0) {
-			clampFinishDate = addBusinessDays(today, (remainingDays / velocityDaysPerWeek) * 5);
-		}
+			.reduce((s, id) => s + effectiveEffort(byId.get(id), medianCycleDays), 0);
+		const clampFinishDate: Date | null = clampWalk(remainingDays);
 		const projectedFinishDate =
 			clampFinishDate && clampFinishDate > cpmFinishDate ? clampFinishDate : cpmFinishDate;
 
@@ -359,7 +501,8 @@ export async function computeRoadmap(now = new Date()): Promise<RoadmapResult> {
 				onCriticalChain: !done && id !== mid && slack === minSlack,
 				late: !done && id !== mid && LS.get(id)! < today,
 				blockedByOpen,
-				blockedBy: allPreds
+				blockedBy: allPreds,
+				effortDays: typeof t.effortDays === 'number' && t.effortDays > 0 ? t.effortDays : null
 			};
 		});
 
@@ -419,6 +562,10 @@ export async function computeRoadmap(now = new Date()): Promise<RoadmapResult> {
 		milestones,
 		unscheduledMilestones,
 		velocityDaysPerWeek,
+		measuredVelocityDaysPerWeek,
+		velocitySource,
+		velocitySampleN,
+		resolvedCapacitySchedule: schedulePeriods,
 		medianCycleDays,
 		calibration
 	};

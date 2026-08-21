@@ -173,6 +173,28 @@
 					<TronInput label="Recalibrate after" name="recalibrateAfter" type="date" value={recalValue} />
 					<p class="tron-text-muted mt-1 text-[11px]">When this date passes, the page nags: seeds must be replaced by measured demand.</p>
 				</div>
+
+				<!-- KB2-31 — scheduler capacity v2. HUMAN-ONLY by PERM-05: the agent
+				     explores capacities via kanban_roadmap what-ifs; committing the
+				     knob happens here. -->
+				<h3 class="tron-text-primary mt-6 mb-2 text-sm font-bold uppercase tracking-wider">Roadmap capacity (KB2-31)</h3>
+				<div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+					{@render knob('Team est-days / week', 'capacity_teamEstDaysPerWeek', p.capacity?.teamEstDaysPerWeek ?? null, 'Hands-on estimate-days the whole team completes per week (e.g. 10 = Nick 3 + Jacob 3 + Alejandro 3 + Javier 1). Empty = legacy: measured board velocity only — which under-counts while most work happens off-board.')}
+					{@render knob('Blend min n', 'capacity_blendMinN', p.capacity?.blendMinN ?? 8, 'Estimated completions in the trailing window before measured velocity starts blending in.')}
+					{@render knob('Measured min n', 'capacity_measuredMinN', p.capacity?.measuredMinN ?? 15, 'Completions at which measured velocity fully replaces the knob.')}
+					{@render knob('Trailing window (weeks)', 'capacity_trailingWindowWeeks', p.capacity?.trailingWindowWeeks ?? 6, 'Measured velocity looks back this far — the pre-team era ages out.')}
+				</div>
+				<div class="mt-3 max-w-md">
+					<label for="capacity-schedule" class="tron-label">Dated capacity schedule (optional)</label>
+					<textarea
+						id="capacity-schedule"
+						name="capacity_schedule"
+						class="tron-input w-full font-mono text-xs"
+						rows="3"
+						placeholder={'2026-10-01 15\n(one per line: YYYY-MM-DD rate — e.g. interns start Oct 1 → 15/wk)'}
+					>{(p.capacity?.schedule ?? []).map((e: any) => `${String(e.from).slice(0, 10)} ${e.teamEstDaysPerWeek}`).join('\n')}</textarea>
+					<p class="tron-text-muted mt-1 text-[11px]">The clamp walks these rates piecewise from today. Empty clears. The roadmap echoes the resolved schedule so projections are self-explaining.</p>
+				</div>
 			</section>
 
 			<div class="flex justify-end">

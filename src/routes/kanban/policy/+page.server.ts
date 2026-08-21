@@ -80,13 +80,19 @@ const NUMBER_FIELDS: [string, string][] = [
 	['allocation_standard', 'allocation.standard'],
 	['allocation_fixed_date', 'allocation.fixed_date'],
 	['allocation_chore', 'allocation.chore'],
-	['sle_percentile', 'sle.percentile']
+	['sle_percentile', 'sle.percentile'],
+	// KB2-31 capacity v2 blend thresholds
+	['capacity_blendMinN', 'capacity.blendMinN'],
+	['capacity_measuredMinN', 'capacity.measuredMinN'],
+	['capacity_trailingWindowWeeks', 'capacity.trailingWindowWeeks']
 ];
 // Nullable numbers: empty string clears the seed.
 const NULLABLE_NUMBER_FIELDS: [string, string][] = [
 	['sle_short', 'sle.perSizeClassDays.short'],
 	['sle_medium', 'sle.perSizeClassDays.medium'],
-	['sle_long', 'sle.perSizeClassDays.long']
+	['sle_long', 'sle.perSizeClassDays.long'],
+	// KB2-31: the capacity knob — empty clears it back to legacy measured-only.
+	['capacity_teamEstDaysPerWeek', 'capacity.teamEstDaysPerWeek']
 ];
 const STRING_FIELDS: [string, string][] = [
 	['sizeClass_short', 'sizeClassDefinitions.short'],
@@ -208,6 +214,25 @@ export const actions: Actions = {
 		}
 		const recal = fd.get('recalibrateAfter')?.toString();
 		if (recal) $set['recalibrateAfter'] = new Date(recal);
+
+		// KB2-31: dated capacity schedule — textarea, one entry per line:
+		// "YYYY-MM-DD rate". Empty textarea clears the schedule.
+		const schedRaw = fd.get('capacity_schedule');
+		if (schedRaw !== null && schedRaw !== undefined) {
+			const lines = schedRaw.toString().split('\n').map((l) => l.trim()).filter(Boolean);
+			const entries: { from: Date; teamEstDaysPerWeek: number }[] = [];
+			for (const line of lines) {
+				const m = line.match(/^(\d{4}-\d{2}-\d{2})\s+([\d.]+)$/);
+				if (!m) return fail(400, { error: `Capacity schedule line "${line}" — expected "YYYY-MM-DD rate"` });
+				const from = new Date(m[1] + 'T00:00:00');
+				const rate = Number(m[2]);
+				if (isNaN(from.getTime())) return fail(400, { error: `Capacity schedule: bad date "${m[1]}"` });
+				if (!Number.isFinite(rate) || rate <= 0) return fail(400, { error: `Capacity schedule: rate must be > 0 ("${line}")` });
+				entries.push({ from, teamEstDaysPerWeek: rate });
+			}
+			entries.sort((a, b) => a.from.getTime() - b.from.getTime());
+			$set['capacity.schedule'] = entries;
+		}
 
 		if (!Object.keys($set).length) return fail(400, { error: 'No policy changes provided' });
 

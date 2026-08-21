@@ -120,7 +120,11 @@
 		{:else}
 			No estimate-vs-actual history yet — calibration appears once estimated tasks complete.
 		{/if}
-		Velocity: {data.roadmap.velocityDaysPerWeek ? `${data.roadmap.velocityDaysPerWeek.toFixed(1)} estimate-days/week (8-wk mean)` : 'no history — capacity clamp off'}.
+		Velocity: {data.roadmap.velocityDaysPerWeek ? `${data.roadmap.velocityDaysPerWeek.toFixed(1)} est-days/week` : 'none — capacity clamp off'}
+		(source: {data.roadmap.velocitySource}{data.roadmap.measuredVelocityDaysPerWeek != null && data.roadmap.velocitySource !== 'measured' ? ` — board measures ${data.roadmap.measuredVelocityDaysPerWeek.toFixed(1)}` : ''}; n={data.roadmap.velocitySampleN} estimated completions in the trailing window).
+		{#if (data.roadmap.resolvedCapacitySchedule?.length ?? 0) > 1}
+			Capacity schedule: {data.roadmap.resolvedCapacitySchedule.map((s: any) => `${s.from} → ${s.teamEstDaysPerWeek}/wk`).join(', ')}.
+		{/if}
 		Unsized default: {data.roadmap.medianCycleDays} wd.
 		All future dates are computed, never stored — change them by changing links, estimates, or scope.
 	</p>

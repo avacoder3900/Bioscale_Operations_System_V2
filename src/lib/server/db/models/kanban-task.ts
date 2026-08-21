@@ -31,7 +31,13 @@ const kanbanTaskSchema = new Schema({
 	sizeClass: { type: String, enum: SIZE_CLASSES }, // set at processing (KB2-03); replaces taskLength
 	// KB2-27: workshopped estimate in working days (Claude-app ↔ MCP). Rung 1 of
 	// the scheduler's ladder; checked against actuals (wipDate→completedDate).
+	// KB2-31: estimateDays is DURATION (calendar-shaped: drives CPM chain dates).
 	estimateDays: Number,
+	// KB2-31: hands-on team effort in working days, when it differs from
+	// duration (elapsed-time tasks: incubations, at-home testing). The capacity
+	// clamp + measured velocity + calibration consume effortDays ?? estimateDays
+	// so long experiments stop eating fictional team-weeks.
+	effortDays: Number,
 	origin: { type: String, enum: ORIGINS, default: 'planned' },
 	spawnedFrom: String, // task that was in wip when this option was captured (provenance, ≠ parentTaskId)
 	// KB2-16: the project subdoc and board discriminator are gone — tags carry both jobs.
