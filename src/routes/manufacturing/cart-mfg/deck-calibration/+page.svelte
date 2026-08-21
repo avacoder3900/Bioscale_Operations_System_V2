@@ -635,15 +635,66 @@
 		return loadedLabwareId;
 	}
 	// Safe-arc lift height (critical-point deck Z) for moves between holes.
-	// Based on the labware's OWN physical height (dimensions.z) + clearance — NOT
-	// max(well.z), which a corrupted/edited well could inflate without bound (that
-	// drove the "Arc out of bounds in Z" error: a deck whose wells had crept to 82mm
-	// produced safeArcZ 162 → +tip ≈ 211mm, past the gantry limit). Clamped to a
-	// machine-real ceiling: the OT-2 left p300 rejects gantry Z beyond ~170mm, and a
-	// tip adds ~50mm, so the critical point must stay below ~115mm. (Verify per robot.)
-	const ARC_CLEARANCE_MM = 80;
-	const ARC_CEILING_MM = 115;
-	const safeArcZ = $derived(Math.min(Math.round((dim.z || 12.7) + ARC_CLEARANCE_MM), ARC_CEILING_MM));
+	//
+	// THIS NUMBER DESTROYED A TIP (2026-08-21, B14). It came from the labware's own
+	// dimensions.z — 12.7mm for robotarm_cartridge_deck_001 — giving an arc of 93,
+	// while that deck sits on a riser which puts its wells at z≈133 ABSOLUTE. The
+	// "safe" arc therefore travelled ~40mm BELOW the deck surface and drove the tip
+	// through it. dimensions.z describes how tall the plate is, NOT how high the
+	// plate is mounted, and nothing in the old formula could tell the difference.
+	//
+	// Derived now from the highest absolute point actually MEASURED on this deck:
+	// the slot-origin-derived well height once a move has established it, and the
+	// taught reference hole, which is a jog-verified absolute reading. The old
+	// labware-relative estimate survives only as the last-resort fallback, and
+	// keeps its generous 80mm lift because it is relative to a plate sitting at
+	// slot level.
+	//
+	// max(well.z) is still not used directly: a corrupted well would inflate it
+	// without bound (the original "Arc out of bounds in Z"). Going through
+	// slotOrigin + well.z keeps it anchored to a measured origin, and the ceiling
+	// below catches the rest.
+	const ARC_CLEARANCE_ABS_MM = 15; // above a MEASURED absolute deck top
+	const ARC_CLEARANCE_REL_MM = 80; // above the labware's own height (fallback)
+	/**
+	 * Machine ceiling for the critical point, in deck Z.
+	 *
+	 * 150 because the ROBOT ITSELF commands the pipette to z=150 for tip attachment
+	 * (GET /robot/positions → attach_tip.point), so it is machine-sanctioned on this
+	 * fleet rather than estimated. The previous 115 was a guess carrying its own
+	 * "(Verify per robot.)" note, and on this deck it sat below the deck surface.
+	 */
+	const ARC_CEILING_MM = 150;
+
+	/** Highest ABSOLUTE z actually measured on this deck, or null if unknown. */
+	const deckTopAbsZ = $derived.by(() => {
+		const c: number[] = [];
+		if (slotOrigin && wells.length) {
+			const zs = wells.map((w) => w.z).filter((z) => Number.isFinite(z));
+			if (zs.length) c.push(slotOrigin.z + Math.max(...zs));
+		}
+		// The taught reference hole is a real jog-verified absolute reading, and it
+		// is available BEFORE the first move — which is exactly when the old formula
+		// was at its most dangerous, because slotOrigin is still null then.
+		const t = Number((currentCalibrator as any)?.referenceHole?.taught?.z);
+		if (Number.isFinite(t)) c.push(t);
+		return c.length ? Math.max(...c) : null;
+	});
+
+	const safeArcZ = $derived(
+		deckTopAbsZ === null
+			? Math.round((dim.z || 12.7) + ARC_CLEARANCE_REL_MM)
+			: Math.round(deckTopAbsZ + ARC_CLEARANCE_ABS_MM)
+	);
+	/**
+	 * REJECT, never clamp — the rule every other guard on this page follows.
+	 *
+	 * The old code did Math.min(required, ceiling), which silently LOWERED the arc
+	 * whenever the deck was too tall. That is not a safety clamp, it is the crash:
+	 * it quietly flies the tip under the obstacle it was asked to clear. If the
+	 * required arc will not fit, refuse to move and say so.
+	 */
+	const arcTooHigh = $derived(safeArcZ > ARC_CEILING_MM);
 
 	// Safe arc: lift to safeArcZ, travel in XY, descend. Never drags the tip.
 	// Once the slot origin is known we move by ABSOLUTE coordinates from the live
@@ -651,6 +702,16 @@
 	// The first move of a session uses moveToWell (the run's loaded def) and derives
 	// the origin from the load-time snapshot.
 	async function moveToWellSafe(name: string): Promise<void> {
+		// Checked BEFORE the labware is loaded, so a deck that cannot be traversed
+		// safely never gets as far as commanding motion.
+		if (arcTooHigh) {
+			throw new Error(
+				`This deck needs a ${safeArcZ}mm travel height to clear it, but the pipette ` +
+					`cannot go above ${ARC_CEILING_MM}mm. NOT MOVING — at any lower height the tip ` +
+					`would be dragged through the deck. Lower the deck, or re-check the taught ` +
+					`reference height if it looks wrong.`
+			);
+		}
 		const lid = await ensureDeckLoaded();
 		const ax = tipAdjust?.x ?? 0, ay = tipAdjust?.y ?? 0;
 
