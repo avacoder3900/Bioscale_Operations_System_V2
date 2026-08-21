@@ -30,11 +30,20 @@
  * they are where the tip-calibrator fixture physically sits, i.e. where the
  * robot must travel to measure a tip. They are legitimately per-robot.
  */
-import { connectDB, TipCalibratorFixture } from '$lib/server/db';
+// RobotDeckOffset is deliberately NOT imported: the positional model above
+// forces every global offset to zero, so there is nothing left to read.
+// TipCalibratorFixture is reached through loadCalibratorFixture, which owns the
+// per-robot → 'global' fallback order the wizard uses.
+import { connectDB } from '$lib/server/db';
+import {
+	DEFAULT_CALIBRATOR_XY,
+	loadCalibratorFixture,
+	plausibleZ,
+	taughtXY,
+	Z_CAL_FOR_PROCESS
+} from '$lib/server/services/deck-calibration/tip-calibrator';
 
 type ParamDef = { variableName: string; min?: number; max?: number };
-
-const Z_CAL_DEFAULT = { 'wax-filling': 34.491, 'reagent-filling': 40.8 } as const;
 
 export async function calibrationRtpValues(
 	robotId: string,
@@ -48,6 +57,13 @@ export async function calibrationRtpValues(
 	// No cutover RTPs at all => pre-cutover .py. Injecting unknown RTPs makes
 	// POST /runs fail, so inject nothing and leave that protocol alone.
 	if (!declared.has('bims_native')) return out;
+
+	// MERGE NOTE (2026-08-21, feat/tip-calibrator-teach → master): the offset policy
+	// below is master's and is kept verbatim. The branch predated it and still read
+	// RobotDeckOffset, which would have REINTRODUCED the wrong-hole dispense the
+	// comment describes. What the branch contributes here is the GUARDED read of the
+	// calibrator point further down (taughtXY / plausibleZ), which master still did
+	// with bare finite() reads. Both survive.
 
 	// Always native, always zero. See the header: this is what disables BOTH the
 	// stored per-robot offset and the protocol's hardcoded fallback table.
@@ -72,16 +88,32 @@ export async function calibrationRtpValues(
 	if (declared.has('use_tip_calibration')) out['use_tip_calibration'] = true;
 
 	// Tip-calibrator fixture location — where to go to measure, not a hole shift.
-	const fix =
-		((await TipCalibratorFixture.findOne({ robotId }).lean()) as any) ||
-		((await TipCalibratorFixture.findOne({ robotId: 'global' }).lean()) as any);
+	// Same fallback chain the calibration wizard uses: this robot's taught point,
+	// else the shared 'global' one. One helper owns that order.
+	const { fixture: fix } = await loadCalibratorFixture(robotId);
+	// With no fixture at all we inject nothing and let the .py keep its own
+	// built-in calibrator point — same as before the wizard existed.
 	if (fix) {
+		// Guarded exactly like the probe path (resolveCalibratorPoint), NOT with a bare
+		// finite() read. The difference is not cosmetic:
+		//
+		//   • position.x/y DEFAULT TO 0 in the fixture schema, so a row saved before the
+		//     operator ever taught a point holds a real, finite 0. finite(0) === 0 passed
+		//     that straight through as cal_x/cal_y and sent a production run to the deck's
+		//     front-left corner at full confidence. taughtXY() treats 0 as "never taught"
+		//     and falls back to the .py's own calibrator point instead.
+		//   • z_cal is the touch-off depth. finite() accepted 0, negative, or 500mm; and
+		//     finite(null) === 0 (Number(null) === 0), so a field explicitly written null
+		//     became a probe depth of 0 — straight through the deck. plausibleZ() holds it
+		//     to CAL_Z_LIMITS and falls back to the .py default.
+		//
+		// Production must never be laxer than the wizard that teaches it.
 		const p = fix.position ?? {};
-		if (declared.has('cal_x') && p.x != null) out['cal_x'] = Number(p.x);
-		if (declared.has('cal_y') && p.y != null) out['cal_y'] = Number(p.y);
+		if (declared.has('cal_x')) out['cal_x'] = taughtXY(p.x) ?? DEFAULT_CALIBRATOR_XY.x;
+		if (declared.has('cal_y')) out['cal_y'] = taughtXY(p.y) ?? DEFAULT_CALIBRATOR_XY.y;
 		if (declared.has('z_cal')) {
-			const z = processType === 'wax-filling' ? fix.zCalWax : fix.zCalReagent;
-			out['z_cal'] = Number(z ?? Z_CAL_DEFAULT[processType]);
+			const { zCalKey, defaultZ } = Z_CAL_FOR_PROCESS[processType];
+			out['z_cal'] = plausibleZ(fix[zCalKey]) ?? defaultZ;
 		}
 
 		// Per-robot rejection cap for the tip probe.

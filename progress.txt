@@ -9424,3 +9424,303 @@ Dedup watch: master landed on a commit that ALREADY had green preview statuses �
   "Work Instructions" nav label. Note bundle-hash comparison is NOT a valid identity
   check on this app — SvelteKit inlines a build timestamp, so two builds of the same
   source get different hashes.
+
+================================================================================
+2026-07-10 — feat/capture-card-labels — Capture cards show full cartridge name + label chips
+================================================================================
+Per user: on /capture's "Just captured" strip they couldn't see the specific
+name of each cartridge (the id was truncated to the 128px card width) or which
+labels were applied (only a "N labels" count button).
+
+src/routes/capture/+page.svelte:
+- Capture record now carries cartridgeId (from the capture response's
+  cartridgeRecordId); the card shows the FULL cartridge id (break-all, never
+  truncated) with the cartridgeImageNumber in the tooltip, and the phase line
+  gains "photo N" from the image-number suffix.
+- Applied labels render inline as cyan chips on the card, so tags are visible
+  at a glance; the tag button becomes "Edit labels…" when labels exist
+  ("Tag failure…" when none).
+
+npm run check: 11 errors / 434 warnings — identical pre-existing baseline,
+zero in touched file.
+
+================================================================================
+2026-08-19 — feat/tip-calibrator-teach — robot arm: re-register leader BusLinker
+================================================================================
+The leader BusLinker serial recorded on 2026-08-18 (5C4C128110) matches no board
+physically attached to arm-pi. Re-read the board directly over SSH with
+`udevadm info -q property -n /dev/ttyACM1`: the attached leader reports
+5C4C125867 (VID/PID 1a86:55d3). Confirmed it is a live arm bus, not a stray
+CH343 — all 6 STS3215 servos answer at ~12.4 V. The follower (5C4C126808 on
+ttyACM0) was already correct and its udev symlink was present.
+
+Because the udev rule keyed on the wrong serial, /dev/buslinker-leader was never
+created, and LEADER_PORT in the Pi's .env points at that symlink — so the leader
+arm could not be opened at all and teleop could not start.
+
+Files touched (BIMS): scripts/seed-robot-arm.ts — leader serialNumber
+5C4C128110 -> 5C4C125867, with the board history in a comment.
+
+DB (production, cluster0): ran `npx tsx scripts/seed-robot-arm.ts`. It upserts by
+role, so the existing leader document was updated in place rather than inserted:
+robot_arms leader _id -RnCMND5dwA_Zze3XfBoj now serialNumber 5C4C125867.
+Still 2 arms / 12 servos — no duplicates. Verified with a read-only probe after
+the write.
+
+Companion changes in the robot-arm repo (branch fix/leader-buslinker-swap,
+uncommitted pending review): deploy/pi/udev/99-buslinker.rules, src/server/app.py
+(_KNOWN_ARM_SERIALS), docs/pi-deployment.md, docs/PRD_BIMS_robot_arm.md.
+app.py + the rule file were copied to arm-pi and the service restarted;
+/ports/status now reports the new board with expected_role "leader".
+
+STILL OPEN: installing the udev rule into /etc/udev/rules.d/ needs a sudo
+password on arm-pi (only `systemctl {start,stop,restart} robot-arm` and
+`daemon-reload` are NOPASSWD there). Until that is run by hand,
+/dev/buslinker-leader does not exist and the leader arm stays unusable.
+No deployment created for this entry.
+
+================================================================================
+2026-08-19 — Deck floor from labware dimensions + guarded production calibrator
+================================================================================
+
+Branch: feat/tip-calibrator-teach
+Commit: 7253d1ab5155ddba132922347f4277dcbd4d1a96
+Preview: https://bioscale-operations-system-mongodb-git-feat-ti-528704-brevitest.vercel.app
+Deployment: dpl_34muEmrsxsumhKfDh7hJCXUmHZfX (Preview, Ready, 2m build)
+
+Goal: get the new cartridge deck editable for a bench test with the tip
+calibrator, where holes must move UP so the pipette dispenses into a raised
+location.
+
+Branch recovery + assembly. feat/tip-calibrator-teach was local-only and
+unpushed (it plus ~280 lines of uncommitted work and an untracked PRD were the
+only copies). Pushed as-is first, then:
+  - 1b55eaf7b  committed the uncommitted two-field-Z work (approach Z vs probe Z)
+  - 69e0c7868  cherry-picked 32554cf69 "allow fill holes anywhere on the deck"
+    from feat/deck-unrestricted-hole-positions. Cherry-pick, NOT merge: that
+    branch sits on a far newer master, so merging would have dragged in 261
+    commits / 417 files of unrelated work (zebra, kanban, wax tip swap) the day
+    before a bench test. The commit itself is 2 files, +23/-50. Applied clean.
+  - 7253d1ab5  this entry.
+bims-tipcal-recovery-backup/ was a redundant Aug-18 snapshot; every blob in it
+verified present in the repo, nothing lost.
+
+1. Floor restored, ceiling deliberately not. Raising a hole and moving it in XY
+stay unrestricted — that is the point of the new deck. Below the deck's bottom
+face there is no hole to dispense into, only the slot, so a negative Z is now
+refused (reject, never clamp). Floor is derived from the deck's own `dimensions`
+in the labware JSON, never from its holes: dimensions describes the physical
+block, hole x/y/z are locations inside that frame, so a crept hole must not be
+able to drag the floor down with it (same reasoning as safeArcZ). Enforced on the
+SAVED coord in apply-edit.ts at all three call sites, and on the COMMANDED coord
+in moveToWellSafe since a move reads live coords.
+
+2. Production stopped being laxer than the wizard that teaches it.
+calibrationRtpValues read the calibrator with a bare finite(), so cal_x/cal_y
+accepted the fixture schema's DEFAULT position of 0 — a never-taught row would
+send a real fill run to the deck's front-left corner at full confidence — and
+z_cal accepted 0/negative/500mm, with finite(null) coercing to a probe depth of
+0, straight through the deck. Now uses the same taughtXY() zero-guard and
+plausibleZ() envelope as resolveCalibratorPoint, falling back to the .py
+defaults (34.491 wax / 40.8 reagent). taughtXY exported for this.
+
+Verification: svelte-check clean on all touched files (the 11 repo-wide errors
+are pre-existing, in AskBimsWidget.svelte and assembly/[sessionId]). 14 guard
+assertions run against the built module, all passing. resolveCalibratorPoint
+itself was already correct — the bug was only that production bypassed it.
+
+KNOWN ISSUES, not fixed here (found by a 4-agent review of the merged tree):
+  - Stale labware cache is the one most likely to cost a bench session:
+    maintenance.ts:375 reuses labware at a slot by loadName ONLY, and
+    apply-edit.ts never bumps `version`. Inside a reused maintenance run an edit
+    is silently ignored — the gantry goes to the OLD hole while the UI shows the
+    NEW coords, so the operator jogs again and the additive delta DOUBLES, with
+    no error anywhere. WORKAROUND until fixed: close and reopen the maintenance
+    run after every deck edit, before moving.
+  - revertCalibrator restores history without re-running plausibleZ.
+  - applyBatch/applyPerWell are the only mutating actions with no AuditLog.
+  - startRun on both production fill pages has no requirePermission.
+  - CAL_Z_LIMITS.max is still 200mm on the calibrator teach path — unchanged by
+    the unrestricted-deck work. If the new deck needs a calibrator taught above
+    200mm the form will refuse it.
+
+Left uncommitted on purpose: protocols/Wax_Filling_GEN7_Cartridge.py has a
+separate legacy-path X/Y zero restoration (X_ZERO -25.955 / Y_ZERO -11.253,
+fixing a +25.955mm bias on the non-bims_native path). Unrelated to this work,
+still undefended in the working tree.
+
+================================================================================
+2026-08-20 — One-click "Calibrate tip" in the Deck Calibration Studio
+================================================================================
+
+Branch: feat/tip-calibrator-teach
+Commit: eecaba83a773fc86bef6ad43f1468de22be65c6b
+Preview: https://bioscale-operations-system-mongodb-hlbxmo3r4.vercel.app
+Deployment: 6010775501 (Preview, success)
+Retrieve this exact code: git checkout feat/tip-calibrator-teach at commit eecaba83a773fc86bef6ad43f1468de22be65c6b
+What this deployment is for: bench-test the one-click tip calibration flow on a
+robot with the calibrator fixture wired.
+
+Goal: quality-of-life. Running a tip calibration was a strict four-click ritual
+— open a maintenance run, pick the tip type, "Pick up tip", "Go to calibrator",
+then "Calibrate tip". Steps 3 and 4 are mandatory and never vary, but the
+Calibrate button was hard-disabled until they were done (!hasTip) and its label
+only nagged: "Calibrate tip — pick up a tip first". Worse, forgetting the travel
+failed deep in the robot rather than in the UI: ot2-bridge.py
+execute_calibrate_tip in ATTACHED mode probes from the pipette's CURRENT
+position and does not travel to the fixture itself, so a skipped "Go to
+calibrator" ended as "limit switch not reached within 5mm".
+
+Now "Calibrate tip" runs the whole sequence in one click: pick up a tip from the
+tiprack that matches WHICH CALIBRATION IS BEING DONE (tipProfile — wax → p20
+cosmasanddamian_96_tiprack_20ul, reagent → p300 Biotix 200uL, slot 11 / A1),
+travel to the calibrator approach point, then probe.
+
+Files: src/routes/manufacturing/cart-mfg/deck-calibration/+page.svelte only.
+No server, endpoint, or ot2-bridge.py changes — every step reuses an endpoint
+the page already called.
+
+  - pickUpTipAction / goToCalibrator each owned their own busy/msg handling, so
+    they could not be called from inside another sequence. Split the action out
+    of the handler into throwing doPickUpTip() / doGoToCalibrator(z) helpers.
+    The two standalone buttons are unchanged behaviourally and stay in the UI as
+    manual escape hatches.
+  - atCalibratorNow(): within CAL_AT_TOLERANCE_MM (3mm) of calX/calY the travel
+    is SKIPPED. A tip the operator jogged onto the fixture to TEACH a point is
+    the point being taught — re-driving to the stored field values would throw
+    that jog away silently, and the daemon probes from current position anyway.
+    Forced off after an auto pick-up (pickedUpNow): refreshPosition swallows its
+    own errors, so a stale liveX/liveY must never be allowed to skip a move.
+  - busy is now held for the WHOLE sequence, not just the probe — this button
+    commands gantry motion now, so the jog pad and the other motion buttons
+    (all already gated on busy) lock out for its duration.
+  - Button: dropped the !hasTip gate, KEPT the !tipProfile gate, label states
+    what the click will do, and a hint line under it names the tiprack/point so
+    none of the auto-motion is hidden.
+
+Invariants deliberately preserved: tipProfile is still never inferred from the
+mount (the pipettes are not fixed to mounts on this fleet — that is the historic
+6.309mm probe-depth error), and Approach Z (calZ, travel) is still never the
+Probe Z (touch-off depth, owned by the daemon's protected routine).
+
+npm run check: 11 errors / 434 warnings — identical pre-existing baseline, zero
+in the touched file.
+
+NOT YET BENCH-VERIFIED. Needs a robot with the calibrator fixture wired:
+  - p20/wax with no tip → expect p20 rack A1 slot 11, arc to (calX, calY, calZ),
+    probe returns adjust{x,y}, tip stays on.
+  - p300/reagent → expect the Biotix rack and the zCalReagent depth.
+  - jog ~1mm off the fixture and click again → expect NO re-travel; the hint and
+    the status line should both say it is probing from the jogged position.
+  - no tip type selected → button disabled, amber hint still shown.
+
+================================================================================
+2026-08-21 — Tip calibration panel condensed to the one button
+================================================================================
+
+Branch: feat/tip-calibrator-teach
+Commit: 7a0340fba7848023dfd44cdea4d9c42b66d8c802
+Preview: https://bioscale-operations-system-mongodb-nlupgcv0o-brevitest.vercel.app
+Deployment: 6024173094 (Preview, success)
+Retrieve this exact code: git checkout feat/tip-calibrator-teach at commit 7a0340fba7848023dfd44cdea4d9c42b66d8c802
+What this deployment is for: bench-test the condensed tip panel together with
+the one-click Calibrate tip flow from 2026-08-20 (commit eecaba83a).
+
+Follow-on to yesterday's one-click Calibrate tip. The panel still showed the
+manual steps that button now performs, so the everyday flow read as three
+competing buttons instead of one.
+
+  - "Pick up tip" DELETED, along with its pickUpTipAction wrapper. It did
+    nothing calibrateTip doesn't do as step 1, and nothing else on the page
+    wants a tip on its own. doPickUpTip stays as the shared step.
+  - "Go to calibrator" MOVED into the teach disclosure, relabelled "Go to
+    calibrator (park, no probe)". Deliberately NOT deleted: it is the first step
+    of the teach loop (park → jog → From live ↧ → Save), and "Calibrate tip"
+    would travel to the same point but then spend 1-2 min probing, which
+    teaching does not want. Deleting it would have cost this branch the very
+    workflow it is named for.
+  - calX / calY / Approach Z, the Probe Z block, that park button and the
+    From live ↧ / Save → robot row all moved into a native <details> titled
+    "Fixture point (teach)", closed by default.
+
+Main view is now: tip status → tip type → one button + its hint. Nothing the
+click depends on is hidden silently — the hint under the button always names the
+tiprack and the exact point it will drive to, and the inherited-from-global
+provenance warning stays in the main view because it is conditional and rare.
+
+Files: src/routes/manufacturing/cart-mfg/deck-calibration/+page.svelte only.
+Markup move plus one deleted function; no behaviour change to the sequence
+itself, and no server/endpoint/ot2-bridge.py changes.
+
+npm run check: 11 errors / 434 warnings — identical pre-existing baseline. The
+two warnings in this file are the deck SVG canvas (lines 1218/1251), untouched.
+
+STILL NOT BENCH-VERIFIED — the 2026-08-20 entry's four test cases are unchanged
+and still outstanding. Add one: open "Fixture point (teach)", confirm "Go to
+calibrator (park, no probe)" parks WITHOUT probing, and that jog → From live ↧
+→ Save still round-trips the calibrator point.
+
+================================================================================
+2026-08-21 — Reconciled feat/tip-calibrator-teach with master (6 weeks stale)
+================================================================================
+
+Branch: feat/tip-calibrator-teach
+Commit: 188bb9910c88118c1fb4ce76e419519aa4199ff0  (merge; parents 53eefc504 + 4a3579b9f)
+Preview: https://bioscale-operations-system-mongodb-ls1ou8428.vercel.app
+Deployment: 6024737251 (Preview, success)
+Retrieve this exact code: git checkout feat/tip-calibrator-teach at commit 188bb9910c88118c1fb4ce76e419519aa4199ff0
+What this deployment is for: the FIRST build of this branch against current
+master. The 08-20 and 08-21 previews were built on the 2026-07-10 base and do
+not represent what master would run. Bench-test on this one, not those.
+
+Asked to ship this branch to master. It could not go as-is: merge-base was
+2026-07-10, master was +312 commits, and the merge hit 7 conflict hunks across
+6 files, all in the calibration path. Not mechanical — master and the branch had
+grown OVERLAPPING implementations and each fixed a bug the other still had.
+Resolved by intent rather than by side:
+
+  calibration-rtps.ts
+    MASTER's offset policy verbatim (bims_native forced true, offsets zeroed,
+    use_tip_calibration mandatory, RobotDeckOffset no longer read). The branch
+    predated it and still read RobotDeckOffset, which would have REINTRODUCED
+    the wrong-hole dispense confirmed on B07/deck-004 2026-08-18.
+    BRANCH's guards kept on the calibrator point master retains: taughtXY() /
+    plausibleZ() rather than bare finite() reads.
+
+  api/scanner/calibrate-tip/+server.ts
+    BRANCH's tipProfile wins; master's TIP_FOR_MOUNT dropped (mount-inference is
+    the 6.309mm probe-depth error). MASTER's `profile` payload field (4b3209eb6)
+    and strict resolveLabwareDefinition kept.
+
+  deck-calibration/+page.server.ts
+    Imports unioned; BRANCH's saveCalibrator wins (range-checks all three Zs).
+
+  deck-calibration/+page.svelte
+    MASTER's 409 SLOT_OCCUPIED recovery kept, retargeted tiprackForMount ->
+    tiprackForProfile, and it now retakes the busy lock (stopMaintenance /
+    startMaintenance clear it in their own finally blocks while the calibrate
+    sequence still owns the gantry). BRANCH's doPickUpTip step wraps it.
+
+  scripts/seed-robot-arm.ts — master (leader serial re-read 08-19).
+  progress.txt — union.
+
+MASTER BUG FOUND WHILE MERGING, fixed here:
+  master carries the "global robot offsets are retired" guard
+  (x!==0||y!==0||z!==0 -> fail) INSIDE saveCalibrator, where x/y/z are the
+  tip-calibrator FIXTURE POSITION (~125.181, 173.247, 34.491). On master today
+  that rejects every legitimate calibrator save. Meanwhile saveRobotOffset — the
+  action that actually writes RobotDeckOffset.offset — has NO guard, so the
+  thing it was written to block still gets through. Moved to saveRobotOffset,
+  master's wording verbatim. WORTH A HUMAN CONFIRMING this reading: it changes
+  behaviour on both actions.
+
+npm run check: 84 errors / 434 warnings — identical to master's OWN baseline
+(verified by checking out origin/master and running check there). Zero added,
+none in any resolved file.
+
+MASTER IS UNTOUCHED. Not merged to master pending a bench test — this tree has
+never run on a robot, and it now carries two independent gantry-motion changes
+(the one-click sequence and the reconciled offset/probe path) plus the
+saveCalibrator guard move. Outstanding tests are the four in the 08-20 entry,
+the teach-disclosure test in the 08-21 entry, plus: confirm a calibrator Save
+now succeeds, and confirm saveRobotOffset refuses a non-zero offset.
