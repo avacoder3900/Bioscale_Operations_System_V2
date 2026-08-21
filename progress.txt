@@ -9944,3 +9944,11 @@ just never called them), so UI adds get the same validation as MCP: existence, s
 dupes, blocking-cycle guard, activity log + audit rows. Structure block: parent, subtasks
 (status badges), spawned-from provenance (read-only; re-parent stays MCP).
 npm run check: 11/434 baseline.
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit 9dc9308b
+Retrieve this exact code: git checkout master at commit 9dc9308b
+What this deployment is for: KB2-33 dependencies panel. Verify on any linked task (e.g.
+  TASK-007 "Publish locked cortisol recipe"): Blocked by shows the four chemistry
+  decisions with amber dots; add a test relates_to by TASK-number, remove it; a cycle
+  attempt is rejected with the cycle message.
