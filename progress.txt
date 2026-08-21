@@ -9342,3 +9342,11 @@ legacy identical ✓. npm run check: 11/434 baseline.
 NEXT (human): set capacity.teamEstDaysPerWeek=10 on /kanban/policy. NEXT (agent, fresh
 chat): effortDays data pass via kanban_set_estimates (internal run 3, external 5,
 mini-val 4, stability 2, gold-std design 5, gold-std run 3).
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit f0d519ae
+Retrieve this exact code: git checkout master at commit f0d519ae
+What this deployment is for: KB2-31/32 capacity v2. After deploy: (1) Jacob sets
+  capacity.teamEstDaysPerWeek=10 on /kanban/policy → A4M projection should move from
+  Jan 2028 to ~Nov 17 with +17 wd buffer; (2) fresh Claude-app chat to bind
+  kanban_velocity_report + kanban_set_estimates, then the effortDays data pass.
