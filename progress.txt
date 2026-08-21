@@ -9917,4 +9917,11 @@ this entry is the deployment record, not a change.
 
 ================================================================================
 2026-08-21 — feat/kanban-tweaks → master — KB2-30 fixes: timeline collapse + blank Flow mode
-=========================================================================
+================================================================================
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ merge 6ae082fa (fix commit 78e9d4d3; also carries parallel
+  deck-calibration work ee909667)
+Retrieve this exact code: git checkout master at commit 6ae082fa
+What this deployment is for: roadmap Timeline spreads by capacity-sequenced planned
+  start; Flow mode no longer blank on toggle. Verify: /kanban/roadmap → cards spread
+  along the axis; toggle Flow → graph fits into view automatically.
