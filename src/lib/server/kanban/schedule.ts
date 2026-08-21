@@ -45,6 +45,15 @@ export interface ScheduledTask {
 	blockedBy: string[];
 	/** KB2-31: hands-on effort (working days) when it differs from duration; null = same. */
 	effortDays: number | null;
+	/**
+	 * KB2-30 addendum: capacity-sequenced plan — when this task gets its TURN
+	 * through the team pipe (list scheduling: ready tasks by latest-start then
+	 * rank, serialized at the effective velocity). This is what the Timeline
+	 * canvas positions by, so cards spread across the calendar instead of
+	 * piling at "everything could start today". Null when velocity is unknown.
+	 */
+	plannedStart: string | null;
+	plannedFinish: string | null;
 }
 
 /** KB2-31 — how the effective velocity was chosen. */
@@ -502,7 +511,9 @@ export async function computeRoadmap(
 				late: !done && id !== mid && LS.get(id)! < today,
 				blockedByOpen,
 				blockedBy: allPreds,
-				effortDays: typeof t.effortDays === 'number' && t.effortDays > 0 ? t.effortDays : null
+				effortDays: typeof t.effortDays === 'number' && t.effortDays > 0 ? t.effortDays : null,
+				plannedStart: null,
+				plannedFinish: null
 			};
 		});
 
@@ -553,6 +564,71 @@ export async function computeRoadmap(
 			mustStart,
 			cycleError
 		});
+	}
+
+	// --- capacity-sequenced planned schedule (KB2-30 addendum) ---------------
+	// One aggregate pipe at the effective velocity. List scheduling: repeatedly
+	// take the READY task (all preds planned or done) with the earliest
+	// latest-start (slack pressure), Tier 1 rank as tiebreak, and run it
+	// serially through the pipe; a task never starts before its blockers
+	// finish. Produces plannedStart/plannedFinish per not-done task — the
+	// honest "when does this get its turn" forecast the Timeline canvas draws.
+	if (velocityDaysPerWeek && velocityDaysPerWeek > 0) {
+		type Row = { id: string; ls: number; rank: number; effort: number; preds: string[]; row: ScheduledTask[] };
+		const union = new Map<string, Row>();
+		const doneFinish = new Map<string, Date>();
+		for (const m of milestones) {
+			for (const t of m.tasks) {
+				if (t.itemType === 'milestone') continue;
+				if (t.done) {
+					doneFinish.set(t.id, t.earlyFinish ? new Date(t.earlyFinish + 'T00:00:00') : today);
+					continue;
+				}
+				const ls = t.lateStart ? new Date(t.lateStart + 'T00:00:00').getTime() : Infinity;
+				const existing = union.get(t.id);
+				if (existing) {
+					existing.ls = Math.min(existing.ls, ls);
+					existing.row.push(t);
+				} else {
+					union.set(t.id, {
+						id: t.id,
+						ls,
+						rank: t.rank,
+						effort: effectiveEffort(byId.get(t.id), medianCycleDays),
+						preds: t.blockedBy.filter((pid) => !doneFinish.has(pid)),
+						row: [t]
+					});
+				}
+			}
+		}
+		// preds may reference tasks outside the union (done) — refilter now that
+		// doneFinish is complete.
+		for (const r of union.values()) r.preds = r.preds.filter((pid) => union.has(pid));
+
+		const planned = new Map<string, { start: Date; finish: Date }>();
+		let pipeFree = today;
+		const remaining = new Set(union.keys());
+		while (remaining.size) {
+			let pick: Row | null = null;
+			for (const id of remaining) {
+				const r = union.get(id)!;
+				if (!r.preds.every((pid) => planned.has(pid))) continue;
+				if (!pick || r.ls < pick.ls || (r.ls === pick.ls && r.rank < pick.rank)) pick = r;
+			}
+			if (!pick) break; // cycle remnant — already reported via cycleError
+			remaining.delete(pick.id);
+			const predFinish = pick.preds.length
+				? new Date(Math.max(...pick.preds.map((pid) => planned.get(pid)!.finish.getTime())))
+				: today;
+			const start = predFinish > pipeFree ? predFinish : pipeFree;
+			const finish = addBusinessDays(start, (pick.effort / velocityDaysPerWeek) * 5);
+			planned.set(pick.id, { start, finish });
+			pipeFree = finish;
+			for (const t of pick.row) {
+				t.plannedStart = iso(start);
+				t.plannedFinish = iso(finish);
+			}
+		}
 	}
 
 	milestones.sort((a, b) => a.dueDate.localeCompare(b.dueDate));

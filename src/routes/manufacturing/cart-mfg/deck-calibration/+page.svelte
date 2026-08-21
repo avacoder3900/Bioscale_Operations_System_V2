@@ -1092,9 +1092,23 @@
 		await refreshPosition();
 	}
 
-	// No standalone "Pick up tip" handler any more: calibrateTip picks the tip up as
-	// step 1, and there is nothing else on this page that wants a tip on its own.
-	// doPickUpTip stays as the shared step.
+	// Standalone "Pick up tip": a tip WITHOUT the 1-2 minute probe. Restored after the
+	// panel was condensed, because two flows on this page want a tip on its own and
+	// neither wants a calibration: Fill motion only matches the real fill height with
+	// a tip on, and "Move to hole" -> Capture offset must be taught in the same tip
+	// frame it will run in. Going through "Calibrate tip" for those means waiting out
+	// a probe nobody asked for. Guards are calibrateTip's step 1 exactly — tip type is
+	// never inferred from the mount, because probe depth differs by 6.309 mm.
+	async function pickUpTipAction() {
+		if (!runId || !pipetteId) { errMsg = 'Open a maintenance run first'; return; }
+		if (!tiprackForProfile) { errMsg = 'Pick the tip type first (p20/wax or p300/reagent) — it is not inferred from the mount'; return; }
+		clearMsg(); busy = true;
+		msg = 'Loading tiprack & picking up a tip…';
+		try {
+			await doPickUpTip();
+			msg = `Picked up a tip (${tiprackForProfile} ${tipWell}). No calibration run — use "Calibrate tip" for that, or move to a hole.`;
+		} catch (e) { errMsg = e instanceof Error ? e.message : String(e); } finally { busy = false; }
+	}
 
 	// Park at the fixture without probing — the first step of the teach loop
 	// (park → jog → From live ↧ → Save). Lives in the teach disclosure.
@@ -1729,9 +1743,10 @@
 						type, travel to the calibrator, then probe. Still hard-gated on tip type —
 						the probe depth is never guessed — but no longer on hasTip, because picking
 						the tip up is now a step of the sequence rather than a prerequisite.
-						The separate "Pick up tip" button is gone (it did nothing this doesn't);
-						"Go to calibrator" moved into the teach disclosure below, where it is still
-						needed to park at the fixture and jog WITHOUT firing the 1-2 min probe.
+						The plain "Pick up tip" below it is the same step WITHOUT the probe, for the
+						flows that need a tip but no calibration (Fill motion, Move to hole →
+						Capture). "Go to calibrator" stays in the teach disclosure, where it parks
+						at the fixture to jog WITHOUT firing the 1-2 min probe.
 					-->
 					<button type="button" onclick={calibrateTip} disabled={busy || calibrating || !pipetteId || !tipProfile} class="mt-2 w-full rounded border border-purple-400/50 bg-purple-900/20 px-2 py-2 text-xs font-bold text-purple-200 hover:bg-purple-900/30 disabled:opacity-40" title="Picks up a tip of the selected type, travels to the tip calibrator, then runs the slow limit-switch probe. Keeps the tip on for deck tuning.">
 						{calibrating
@@ -1754,6 +1769,17 @@
 							{/if}
 						</p>
 					{/if}
+					<!--
+						Secondary on purpose: thin, outlined, below the primary. It is a tip and
+						nothing else — no travel, no probe. Guarded on tip type for the same reason
+						"Calibrate tip" is (the rack, hence the tip length, follows the operator's
+						explicit choice), but deliberately NOT on hasTip: that flag is this page's
+						belief, and an operator recovering from a dropped or broken tip has to be
+						able to pick another one up without reopening the run.
+					-->
+					<button type="button" onclick={pickUpTipAction} disabled={!pipetteId || busy || !tipProfile} class="mt-1 w-full rounded border border-[var(--color-tron-cyan)]/40 px-2 py-1.5 text-[11px] text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40" title="Just picks up a tip of the selected type from slot 11 — no travel to the calibrator, no probe.">
+						{hasTip ? 'Pick up tip (another one)' : 'Pick up tip (no probe)'}
+					</button>
 					{#if currentCalibrator?.inheritedFromGlobal}
 						<!-- Provenance of the point the button above will probe at. Conditional and
 						     rare, so it stays in the main view rather than hiding in the disclosure. -->

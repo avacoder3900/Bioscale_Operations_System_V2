@@ -9352,6 +9352,28 @@ What this deployment is for: KB2-31/32 capacity v2. After deploy: (1) Jacob sets
   kanban_velocity_report + kanban_set_estimates, then the effortDays data pass.
 
 ================================================================================
+Jacob (checked live /kanban/roadmap in Chrome with him): "everything is getting collapsed
+into the first column instead of looking like the flow chart." Two root causes found by
+browser inspection:
+1. TIMELINE COLLAPSE: cards were positioned at earlyStart — the forward pass gives every
+   unblocked task ES=today, so the whole graph occupied ~5 days of x-space at the today
+   line while the axis ran to December. Fix: a capacity-sequenced PLANNED schedule
+   (KB2-30 addendum in schedule.ts): list scheduling through the one team pipe at the
+   effective velocity — ready tasks picked by latest-start (slack pressure) then Tier 1
+   rank, never before their blockers finish → plannedStart/plannedFinish per task.
+   Timeline now positions by plannedStart (falls back to earlyStart when velocity is
+   unknown). Verified at capacityOverride=10: A4M chain spreads Aug 21 → Nov 5 in
+   dependency order — the "gantt but nodes" picture.
+2. BLANK FLOW MODE (bug): {#key mode} remounted SvelteFlow, which fitViewed against the
+   STALE node array before the $effect swapped in the new layout → graph rendered
+   off-viewport (only visible in the minimap; manual fit-view rescued it). Fix: no
+   remount — new CanvasRefit child (useSvelteFlow().fitView inside the flow context)
+   refits ~80ms after each mode change.
+NOTE seen live: capacity knob still unset in prod (velocity 1.8 measured, A4M "279 wd
+OVER, projected Jan 6") — Jacob still needs to set Team est-days/week = 10 on
+/kanban/policy; until then the Timeline spread stretches to the honest-but-absurd
+clamp horizon. npm run check: 11/434 baseline.
+=======
 2026-08-21 — feat/spu-mfg-tabs — SPU Mfg gets a section tab strip (Assembly / Work
 Instructions / Validation), consolidated out of the left nav
 ================================================================================
@@ -9795,6 +9817,114 @@ NOT BENCH-VERIFIED — READ THIS BEFORE THE NEXT FILL RUN
     6. saveRobotOffset REFUSES a non-zero offset.
     7. Calibrate reagent then switch to wax in one run -> the 409 SLOT_OCCUPIED
        path reopens slot 11 cleanly and the gantry stays locked throughout.
+
+================================================================================
+2026-08-21 — feat/restore-tip-pickup — "Pick up tip" restored to the deck-calibration tip panel
+================================================================================
+
+Reverses one specific deletion from this morning's panel condense (7a0340fba),
+and nothing else. That commit removed the standalone "Pick up tip" button and
+its pickUpTipAction wrapper on the reasoning that calibrateTip already picks a
+tip up as step 1. It does — but only as the opening move of the 1-2 minute
+limit-switch probe, and two flows on this page want a tip with NO calibration
+attached:
+
+  - Fill motion. Its own hint still reads "Pick up a tip first to match the real
+    fill height", and after the delete there was no button on the page that
+    does that. The hint pointed at a control that no longer existed.
+  - Move to hole -> Capture offset. nominal and capture have to be taken in the
+    same tip frame (the page rejects a capture if nominal.hasTip != hasTip), so
+    teaching a hole with a tip on meant sitting through a probe nobody asked
+    for, on a fixture that has nothing to do with that hole.
+
+RESTORED
+  - pickUpTipAction, byte-for-byte the same guards as calibrateTip's step 1:
+    maintenance run open, and a tip type explicitly chosen. Tip type is still
+    never inferred from the mount — probe depth differs by 6.309 mm between the
+    p20/wax and p300/reagent racks, and f8a07846 exists because of that. The
+    success message now says outright that nothing was calibrated, so the two
+    buttons cannot be confused after the fact.
+  - The button, in the MAIN view directly under "Calibrate tip" — thin,
+    outlined, 11px, deliberately subordinate to the bold purple primary. The
+    condense was right that three competing buttons read badly; the fix is
+    hierarchy, not deletion. Label switches to "Pick up tip (another one)" when
+    the page believes a tip is already on.
+
+DELIBERATELY NOT gated on hasTip. That flag is this page's *belief* about the
+mount, not a sensor reading — it is set optimistically after a pickup and
+cleared only when the run opens or closes. An operator recovering from a
+dropped, broken or hand-removed tip (see d76a6165, 48fee8cd) has to be able to
+pick another one up without reopening the run, and a hasTip gate would lock
+exactly that person out.
+
+UNTOUCHED: "Go to calibrator (park, no probe)" stays in the "Fixture point
+(teach)" disclosure where the condense put it, and the disclosure itself is
+unchanged. calibrateTip, doPickUpTip, doPickUp and the 409 SLOT_OCCUPIED
+recovery are all untouched — this commit adds a caller, it does not change the
+sequence.
+
+Files: src/routes/manufacturing/cart-mfg/deck-calibration/+page.svelte only.
+No server, endpoint or ot2-bridge.py changes.
+
+  npm run check — 118 errors / 434 warnings, byte-identical to the SAME tree
+  with this change stashed (measured both ways, not assumed). Zero errors and
+  zero warnings in the touched file. The count reads 118 rather than the 84
+  logged for master because this worktree junctions the home-clone's
+  node_modules, which is missing bwip-js / qrcode / jsqr; those three missing
+  modules and the implicit-any cascade behind them are the whole difference.
+  An install artifact, not a regression — the delta from this change is 0.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-git-feat-re-19bfef-brevitest.vercel.app
+  (immutable: https://bioscale-operations-system-mongodb-g5eqf2u19-brevitest.vercel.app)
+Source: branch feat/restore-tip-pickup @ commit af69cac3a
+Retrieve this exact code: git checkout feat/restore-tip-pickup at commit af69cac3a
+What this deployment is for: bench-check that "Pick up tip" picks up a tip and
+stops there — no travel to the calibrator, no probe — and that Fill motion and
+Move to hole -> Capture are reachable with a tip on without running a
+calibration first.
+
+NOT BENCH-VERIFIED. Needs a robot with a tiprack in slot 11:
+  1. p20/wax selected, no tip -> "Pick up tip (no probe)" picks up from
+     cosmasanddamian_96_tiprack_20ul, gantry does NOT travel to (calX,calY),
+     status reads "No calibration run".
+  2. Same for p300/reagent -> the Biotix rack.
+  3. No tip type selected -> button disabled.
+  4. With a tip on, label reads "(another one)" and a second press still works
+     (this is the tip-break recovery path — it must NOT be blocked).
+  5. Tip on -> Fill motion runs at the real fill height.
+  6. "Calibrate tip" unchanged: still picks up, travels, probes, keeps the tip.
+
+Deployment: PRODUCTION — https://bioscale-operations-system-mongodb.vercel.app
+  (also https://bioscale-operations-system-mongodb-brevitest.vercel.app
+   and  https://bioscale-operations-system-mongodb-git-master-brevitest.vercel.app)
+  (immutable: https://bioscale-operations-system-mongodb-aqiib26x7-brevitest.vercel.app)
+Source: branch master @ commit ee713757a (merge of feat/restore-tip-pickup, af69cac3a)
+Retrieve this exact code: git checkout master at commit ee713757a
+What this deployment is for: "Pick up tip" is back in production. Build ● Ready,
+2m, both GitHub statuses success.
+
+FIELD NOTE (2026-08-21, immediately after this deploy): first report from the
+floor was "can't select Pick up tip". It was NOT missing and NOT broken — the
+button was greyed. It is gated on `!pipetteId || busy || !tipProfile`, and the
+blocker in practice is !pipetteId: no maintenance run open. Enable sequence is
+Open run (Jog panel, top right) -> pick p20/wax or p300/reagent -> Pick up tip.
+
+The real defect this exposed is that the button does not SAY why it is
+disabled. "Calibrate tip" self-labels ("Calibrate tip — pick a tip type
+first"); the restored button just reads "Pick up tip (no probe)" greyed out,
+with no reason. Worth fixing on the next touch of this panel. Not fixed here —
+this entry is the deployment record, not a change.
+
+================================================================================
+2026-08-21 — feat/kanban-tweaks → master — KB2-30 fixes: timeline collapse + blank Flow mode
+================================================================================
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ merge 6ae082fa (fix commit 78e9d4d3; also carries parallel
+  deck-calibration work ee909667)
+Retrieve this exact code: git checkout master at commit 6ae082fa
+What this deployment is for: roadmap Timeline spreads by capacity-sequenced planned
+  start; Flow mode no longer blank on toggle. Verify: /kanban/roadmap → cards spread
+  along the axis; toggle Flow → graph fits into view automatically.
 
 ================================================================================
 2026-08-21 — feat/deck-frame-calibrator-watch — deck frame (4 jogged corners) + live calibrator limit-switch watch
