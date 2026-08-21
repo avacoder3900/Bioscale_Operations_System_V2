@@ -9925,3 +9925,22 @@ Retrieve this exact code: git checkout master at commit 6ae082fa
 What this deployment is for: roadmap Timeline spreads by capacity-sequenced planned
   start; Flow mode no longer blank on toggle. Verify: /kanban/roadmap → cards spread
   along the axis; toggle Flow → graph fits into view automatically.
+
+================================================================================
+2026-08-21 — feat/kanban-tweaks → master — KB2-33: dependencies panel on the task page
+================================================================================
+Per Jacob: dependency data was write-only from the UI — links (KB2-20: blocks/blocked_by/
+relates_to + note + author, cycle-guarded) existed and drove the scheduler/canvas, but no
+page showed OR edited them; relates_to was visible nowhere. PRD
+docs/prds/KB2-33-dependencies-panel.md.
+
+Task detail page right column gains a Dependencies card: Blocked by (status dot — green
+done / amber open — answers "why can't this start"), Blocks, Related; each row links to
+the other task, shows the note, and has ✕ remove (declared links only — derived rows say
+which task owns them). Add form: type select + target accepting TASK-number (lenient
+case/zero-padding: task-12 → TASK-012) or raw id + optional note → the EXISTING
+addLink/removeLink/readLinks services in transition.ts (zero new service code — the page
+just never called them), so UI adds get the same validation as MCP: existence, self-link,
+dupes, blocking-cycle guard, activity log + audit rows. Structure block: parent, subtasks
+(status badges), spawned-from provenance (read-only; re-parent stays MCP).
+npm run check: 11/434 baseline.

@@ -3,7 +3,14 @@ import { connectDB, KanbanTask, AuditLog, User } from '$lib/server/db';
 import { generateId } from '$lib/server/db/utils.js';
 import { requirePermission } from '$lib/server/permissions';
 import { checkWipLimit } from '$lib/server/kanban/wip-limit';
-import { transitionTask, createKanbanItem, TransitionError } from '$lib/server/kanban/transition';
+import {
+	transitionTask,
+	createKanbanItem,
+	TransitionError,
+	readLinks,
+	addLink as addLinkService,
+	removeLink as removeLinkService
+} from '$lib/server/kanban/transition';
 import { closeSpike as closeSpikeService, processTask, reshapeTask, SIZING_DECISION_TEST } from '$lib/server/kanban/process';
 import { getKanbanPolicy } from '$lib/server/kanban/policy';
 import {
@@ -43,7 +50,27 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 
 	const policyDoc: any = await getKanbanPolicy().catch(() => null);
 
+	// KB2-33 — dependencies panel: full link set (declared + derived, hydrated),
+	// plus structure (parent / subtasks / spawned-from provenance).
+	const [links, parentTask, subtasks, spawnedFromTask] = await Promise.all([
+		readLinks(params.taskId),
+		task.parentTaskId
+			? KanbanTask.findById(task.parentTaskId).select('_id trackingNumber title status').lean()
+			: null,
+		KanbanTask.find({ parentTaskId: params.taskId, archived: false })
+			.select('_id trackingNumber title status')
+			.sort({ rank: 1, createdAt: 1 })
+			.lean(),
+		task.spawnedFrom
+			? KanbanTask.findById(task.spawnedFrom).select('_id trackingNumber title status').lean()
+			: null
+	]);
+
 	return {
+		links: JSON.parse(JSON.stringify(links)),
+		parentTask: parentTask ? JSON.parse(JSON.stringify(parentTask)) : null,
+		subtasks: JSON.parse(JSON.stringify(subtasks)),
+		spawnedFromTask: spawnedFromTask ? JSON.parse(JSON.stringify(spawnedFromTask)) : null,
 		task: {
 			id: task._id,
 			title: task.title,
@@ -112,6 +139,74 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 };
 
 export const actions: Actions = {
+	/**
+	 * KB2-33 — add a dependency from the task page. Target accepts a
+	 * TASK-number (lenient case/zero-padding) or a raw task id; everything
+	 * else rides the existing addLink service, so UI adds get the same
+	 * validation as MCP: existence, self-link, dupes, the blocking-cycle
+	 * guard, activity log + audit.
+	 */
+	addLink: async ({ request, locals, params }) => {
+		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'kanban:write');
+		await connectDB();
+		const fd = await request.formData();
+		const targetRaw = fd.get('target')?.toString().trim() ?? '';
+		const type = fd.get('linkType')?.toString() ?? 'relates_to';
+		const note = fd.get('note')?.toString().trim() || undefined;
+		if (!targetRaw) return fail(400, { error: 'Enter a TASK-number or task id to link to' });
+		if (!['blocks', 'blocked_by', 'relates_to'].includes(type)) {
+			return fail(400, { error: 'Invalid link type' });
+		}
+
+		// Resolve: exact id → exact tracking# → lenient tracking# (case +
+		// zero-padding: "task-12" matches TASK-012).
+		let target: any = await KanbanTask.findById(targetRaw).select('_id').lean();
+		if (!target) {
+			const up = targetRaw.toUpperCase();
+			const candidates = [up];
+			const m = up.match(/^TASK-?0*(\d+)$/);
+			if (m) {
+				for (const width of [3, 2, 4]) candidates.push(`TASK-${m[1].padStart(width, '0')}`);
+				candidates.push(`TASK-${m[1]}`);
+			}
+			target = await KanbanTask.findOne({ trackingNumber: { $in: [...new Set(candidates)] } })
+				.select('_id')
+				.lean();
+		}
+		if (!target) return fail(404, { error: `No task found for "${targetRaw}" — use a TASK-number or task id` });
+
+		try {
+			const res = await addLinkService(
+				params.taskId,
+				{ taskId: String(target._id), type: type as any, note },
+				{ username: locals.user.username, via: 'ui' }
+			);
+			if (!res.added) return fail(400, { error: 'That link already exists' });
+		} catch (e) {
+			if (e instanceof TransitionError) return fail(400, { error: e.message });
+			throw e;
+		}
+		return { success: true };
+	},
+
+	/** KB2-33 — remove a link this task declares (derived rows are owned by the other task). */
+	removeLink: async ({ request, locals, params }) => {
+		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'kanban:write');
+		await connectDB();
+		const fd = await request.formData();
+		const linkId = fd.get('linkId')?.toString();
+		if (!linkId) return fail(400, { error: 'Missing linkId' });
+		try {
+			await removeLinkService(params.taskId, linkId, { username: locals.user.username, via: 'ui' });
+		} catch (e) {
+			if (e instanceof TransitionError) return fail(400, { error: e.message });
+			throw e;
+		}
+		return { success: true };
+	},
+
 	/**
 	 * KB2-03 process / KB2-12 reshape from the task page (2026-08-20): the old
 	 * header "Ready" button was a dead end — captured→ready is a tier crossing

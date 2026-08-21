@@ -104,6 +104,14 @@
 
 	const sizeLabels: Record<string, string> = { short: 'Short', medium: 'Medium', long: 'Long' };
 
+	// KB2-33 dependencies panel — add-link form state.
+	let linkType = $state<'blocked_by' | 'blocks' | 'relates_to'>('blocked_by');
+	const linkGroups = $derived({
+		blocked_by: data.links.filter((l: any) => l.type === 'blocked_by'),
+		blocks: data.links.filter((l: any) => l.type === 'blocks'),
+		relates_to: data.links.filter((l: any) => l.type === 'relates_to')
+	});
+
 	// KB2-03/KB2-12 unified Process modal (mirrors /kanban/inventory).
 	let showProcess = $state(false);
 	let processCos = $state('standard');
@@ -385,6 +393,115 @@
 
 		<!-- Right column: metadata + tags + comments + activity -->
 		<div class="space-y-6">
+			<!-- KB2-33: Dependencies — the blocked_by edges here are exactly what the
+			     roadmap scheduler walks; add one and the canvas moves on next load. -->
+			<div class="tron-card">
+				<h3 class="tron-text-primary mb-1 text-sm font-bold">Dependencies</h3>
+				<p class="tron-text-muted mb-3 text-[11px]">Blocking edges drive the roadmap (KB2-28). Cycle-checked.</p>
+
+				{#snippet linkRow(l: any)}
+					<div class="flex items-start gap-2 py-1 text-sm">
+						<span
+							class="mt-1.5 h-2 w-2 shrink-0 rounded-full"
+							style="background: {l.status === 'done' ? '#10b981' : '#f59e0b'};"
+							title={l.status === 'done' ? 'done' : `still ${l.status ?? 'open'}`}
+						></span>
+						<div class="min-w-0 flex-1">
+							<a href="/kanban/task/{l.taskId}" class="tron-text-primary hover:underline">
+								{#if l.trackingNumber}<span class="font-mono text-xs tron-text-muted">{l.trackingNumber}</span>{/if}
+								<span class="{l.status === 'done' ? 'line-through opacity-60' : ''}">{l.title}</span>
+							</a>
+							{#if l.note}<p class="tron-text-muted text-[11px]">{l.note}</p>{/if}
+							{#if l.direction === 'derived'}
+								<p class="tron-text-muted text-[10px] italic">declared on the other task — remove it there</p>
+							{/if}
+						</div>
+						{#if l.direction === 'declared'}
+							<form method="POST" action="?/removeLink" use:enhance>
+								<input type="hidden" name="linkId" value={l.linkId} />
+								<button type="submit" class="text-xs font-bold" style="color: var(--color-tron-red);" title="Remove link">✕</button>
+							</form>
+						{/if}
+					</div>
+				{/snippet}
+
+				{#if data.links.length === 0}
+					<p class="tron-text-muted mb-3 text-xs">No links yet.</p>
+				{:else}
+					{#if linkGroups.blocked_by.length}
+						<p class="tron-label !mb-0.5">Blocked by</p>
+						<div class="mb-2 divide-y divide-[var(--color-tron-border)]">
+							{#each linkGroups.blocked_by as l (l.linkId + l.direction)}{@render linkRow(l)}{/each}
+						</div>
+					{/if}
+					{#if linkGroups.blocks.length}
+						<p class="tron-label !mb-0.5">Blocks</p>
+						<div class="mb-2 divide-y divide-[var(--color-tron-border)]">
+							{#each linkGroups.blocks as l (l.linkId + l.direction)}{@render linkRow(l)}{/each}
+						</div>
+					{/if}
+					{#if linkGroups.relates_to.length}
+						<p class="tron-label !mb-0.5">Related</p>
+						<div class="mb-2 divide-y divide-[var(--color-tron-border)]">
+							{#each linkGroups.relates_to as l (l.linkId + l.direction)}{@render linkRow(l)}{/each}
+						</div>
+					{/if}
+				{/if}
+
+				<!-- Add link -->
+				<form method="POST" action="?/addLink" use:enhance class="mt-2 space-y-2 border-t border-[var(--color-tron-border)] pt-3">
+					<div class="flex gap-2">
+						<select name="linkType" class="tron-select w-[130px] shrink-0 text-xs" bind:value={linkType}>
+							<option value="blocked_by">Blocked by</option>
+							<option value="blocks">Blocks</option>
+							<option value="relates_to">Related to</option>
+						</select>
+						<input
+							name="target"
+							class="tron-input min-w-0 flex-1 text-xs"
+							placeholder="TASK-012 or task id"
+							required
+						/>
+					</div>
+					<div class="flex gap-2">
+						<input name="note" class="tron-input min-w-0 flex-1 text-xs" placeholder="Note (optional)" />
+						<TronButton type="submit">Add</TronButton>
+					</div>
+				</form>
+
+				<!-- Structure: parent / subtasks / provenance (read-only; re-parent via MCP) -->
+				{#if data.parentTask || data.subtasks.length || data.spawnedFromTask}
+					<div class="mt-3 border-t border-[var(--color-tron-border)] pt-3">
+						{#if data.parentTask}
+							<p class="tron-label !mb-0.5">Parent</p>
+							<a href="/kanban/task/{data.parentTask._id}" class="tron-text-primary block py-0.5 text-sm hover:underline">
+								{#if data.parentTask.trackingNumber}<span class="font-mono text-xs tron-text-muted">{data.parentTask.trackingNumber}</span>{/if}
+								{data.parentTask.title}
+							</a>
+						{/if}
+						{#if data.subtasks.length}
+							<p class="tron-label !mb-0.5 mt-1.5">Subtasks</p>
+							{#each data.subtasks as st (st._id)}
+								<div class="flex items-center gap-2 py-0.5 text-sm">
+									<a href="/kanban/task/{st._id}" class="tron-text-primary min-w-0 flex-1 truncate hover:underline">
+										{#if st.trackingNumber}<span class="font-mono text-xs tron-text-muted">{st.trackingNumber}</span>{/if}
+										{st.title}
+									</a>
+									<TaskStatusBadge status={st.status} />
+								</div>
+							{/each}
+						{/if}
+						{#if data.spawnedFromTask}
+							<p class="tron-label !mb-0.5 mt-1.5">Discovered while working</p>
+							<a href="/kanban/task/{data.spawnedFromTask._id}" class="tron-text-primary block py-0.5 text-sm hover:underline">
+								{#if data.spawnedFromTask.trackingNumber}<span class="font-mono text-xs tron-text-muted">{data.spawnedFromTask.trackingNumber}</span>{/if}
+								{data.spawnedFromTask.title}
+							</a>
+						{/if}
+					</div>
+				{/if}
+			</div>
+
 			<!-- Task metadata -->
 			<div class="tron-card">
 				<h3 class="tron-text-primary mb-4 text-sm font-bold">Task Info</h3>
