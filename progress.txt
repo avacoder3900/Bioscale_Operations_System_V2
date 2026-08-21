@@ -10102,3 +10102,43 @@ What this deployment is for: puts execute_calibrator_watch on B14 so the live
   INERT UNTIL THE BIMS SIDE SHIPS — nothing can create a calibrator_watch
   command until the new API routes are live, so B14 simply keeps doing its
   existing job. R04 and B07 are untouched and still on the old daemon.
+
+================================================================================
+2026-08-21 — feat/deck-frame-calibrator-watch — merge master: "Pick up tip" restored alongside the deck frame + switch watch
+================================================================================
+The branch was cut from fb87206ee, i.e. master BEFORE af69cac3a restored the
+standalone "Pick up tip" button — so its tree silently lacked that button while
+heavily rewriting the very file that carries it. Merged origin/master (7 commits)
+to fix that before this goes anywhere near production.
+
+Only progress.txt conflicted; +page.svelte auto-merged. Verified by inspection
+rather than trusting the auto-merge — both sides are present exactly once:
+  master's  pickUpTipAction handler + its onclick={pickUpTipAction} button
+  branch's  captureCorner / saveDeckFrame / startWatch / armedAxis, the
+            "Deck frame — four corners" block and the sensor-watch panel
+No conflict markers, no duplicated handlers.
+
+progress.txt resolved by KEEPING BOTH sides (it is an append-only log, so there
+was nothing to choose between): master's entries first, then this branch's.
+
+scripts/ot2-bridge.py is untouched by the merge — md5 still
+2320ec3fe68f1c5fe08157847cb68a2b, matching what is already deployed on B14, so
+NO robot redeploy is needed for this merge.
+
+  npm run test:unit — 177/177.
+  npm run check — 85 errors / 434 warnings, up 1 from the branch's 84. The new
+  one is "Cannot find module '@xyflow/svelte'" in
+  lib/components/kanban/roadmap/CanvasRefit.svelte, a file that arrived verbatim
+  from master (git diff origin/master on it is empty) and whose three sibling
+  roadmap components were already erroring the same way in the 84 baseline. It
+  is a missing dep in this clone's node_modules, not a merge artifact. Zero
+  errors attributable to this branch.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-eo3bmtlp5.vercel.app
+  (branch alias, always latest: https://bioscale-operations-system-mongodb-git-feat-de-52595e-brevitest.vercel.app)
+Source: branch feat/deck-frame-calibrator-watch @ commit 6cc869f23
+Retrieve this exact code: git checkout feat/deck-frame-calibrator-watch at commit 6cc869f23
+  (or: git log feat/deck-frame-calibrator-watch --oneline to find it if the branch has moved on)
+What this deployment is for: first build carrying BOTH the restored "Pick up
+  tip" button and the four-corner deck frame + live switch watch, so the tip
+  pickup can be exercised in the same session as a frame teach.
