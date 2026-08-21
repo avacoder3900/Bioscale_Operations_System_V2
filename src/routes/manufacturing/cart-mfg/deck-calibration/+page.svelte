@@ -1032,16 +1032,12 @@
 		await refreshPosition();
 	}
 
-	async function pickUpTipAction() {
-		if (!runId || !pipetteId) { errMsg = 'Open a maintenance run first'; return; }
-		if (!tiprackForProfile) { errMsg = 'Pick the tip type first (p20/wax or p300/reagent) — it is not inferred from the mount'; return; }
-		clearMsg(); busy = true;
-		msg = 'Loading tiprack & picking up a tip…';
-		try {
-			await doPickUpTip();
-			msg = `Picked up a tip (${tiprackForProfile} ${tipWell}). Now go to the calibrator or a hole.`;
-		} catch (e) { errMsg = e instanceof Error ? e.message : String(e); } finally { busy = false; }
-	}
+	// No standalone "Pick up tip" handler any more: calibrateTip picks the tip up as
+	// step 1, and there is nothing else on this page that wants a tip on its own.
+	// doPickUpTip stays as the shared step.
+
+	// Park at the fixture without probing — the first step of the teach loop
+	// (park → jog → From live ↧ → Save). Lives in the teach disclosure.
 	async function goToCalibrator() {
 		if (!runId || !pipetteId) { errMsg = 'Open a maintenance run first'; return; }
 		// APPROACH Z only, deliberately. This is a free jog with no probe routine
@@ -1362,7 +1358,7 @@
 					<button type="button" onclick={captureOffset} disabled={!pipetteId || busy || !nominal} class="rounded border border-green-500/50 bg-green-900/20 px-2 py-2 text-xs font-bold text-green-300 hover:bg-green-900/30 disabled:opacity-40">Capture offset</button>
 				</div>
 
-				<!-- Tip pickup + calibrator (real-workflow setup) -->
+				<!-- Tip calibration: tip type → one button. Teach controls behind a disclosure. -->
 				<div class="mt-3 rounded border border-[var(--color-tron-border)] bg-black/20 p-2">
 					<div class="mb-1 flex items-center justify-between text-[11px]" style="color: var(--color-tron-text-secondary)">
 						<span class="font-bold uppercase tracking-wider">Tip</span>
@@ -1390,15 +1386,14 @@
 							<p class="mt-1 text-[10px] text-amber-300/90">Pick the tip type — probe depth differs by 6.309 mm and is never guessed.</p>
 						{/if}
 					</div>
-					<div class="grid grid-cols-2 gap-2">
-						<button type="button" onclick={pickUpTipAction} disabled={!pipetteId || busy || !tipProfile} class="rounded border border-[var(--color-tron-cyan)]/40 px-2 py-2 text-xs text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40">Pick up tip</button>
-						<button type="button" onclick={goToCalibrator} disabled={!pipetteId || busy} class="rounded border border-[var(--color-tron-cyan)]/40 px-2 py-2 text-xs text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40">Go to calibrator</button>
-					</div>
 					<!--
-						One click runs the whole setup: pick up a tip of the SELECTED tip type,
-						travel to the calibrator, then probe. Still hard-gated on tip type — the
-						probe depth is never guessed — but no longer on hasTip, because picking
+						ONE BUTTON is the whole everyday flow: pick up a tip of the SELECTED tip
+						type, travel to the calibrator, then probe. Still hard-gated on tip type —
+						the probe depth is never guessed — but no longer on hasTip, because picking
 						the tip up is now a step of the sequence rather than a prerequisite.
+						The separate "Pick up tip" button is gone (it did nothing this doesn't);
+						"Go to calibrator" moved into the teach disclosure below, where it is still
+						needed to park at the fixture and jog WITHOUT firing the 1-2 min probe.
 					-->
 					<button type="button" onclick={calibrateTip} disabled={busy || calibrating || !pipetteId || !tipProfile} class="mt-2 w-full rounded border border-purple-400/50 bg-purple-900/20 px-2 py-2 text-xs font-bold text-purple-200 hover:bg-purple-900/30 disabled:opacity-40" title="Picks up a tip of the selected type, travels to the tip calibrator, then runs the slow limit-switch probe. Keeps the tip on for deck tuning.">
 						{calibrating
@@ -1421,56 +1416,76 @@
 							{/if}
 						</p>
 					{/if}
-					{#if tipAdjust}
-						<button type="button" onclick={() => (tipAdjust = null)} class="mt-1 w-full rounded border border-[var(--color-tron-border)] px-2 py-1 text-[10px] hover:border-amber-400/60" style="color: var(--color-tron-text-secondary)">Clear tip adjust</button>
-					{/if}
-					<!--
-						TWO Z heights on one fixture, and deliberately TWO controls (PRD CALIB-4
-						section 5, decision 1). Approach Z is travel-only; Probe Z is the touch-off
-						depth the limit-switch routine owns. Merging them would let a plain jog
-						descend to touch-off depth with no probe protecting the tip.
-					-->
-					<div class="mt-1 grid grid-cols-3 gap-1 text-[10px]" style="color: var(--color-tron-text-secondary)">
-						<label>calX <input type="number" step="0.1" bind:value={calX} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-0.5 font-mono" style="color: var(--color-tron-text)" /></label>
-						<label>calY <input type="number" step="0.1" bind:value={calY} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-0.5 font-mono" style="color: var(--color-tron-text)" /></label>
-						<label title="Pre-probe travel height: where the tip parks before the probe runs. Never the touch-off depth.">Approach Z <input type="number" step="0.1" min={CAL_Z_MIN} max={CAL_Z_MAX} bind:value={calZ} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-0.5 font-mono" style="color: var(--color-tron-text)" /></label>
-					</div>
-					<p class="mt-1 text-[10px] leading-tight" style="color: var(--color-tron-text-secondary)">
-						Approach Z is the pre-probe travel height only &mdash; "Go to calibrator" parks there. The probe never reads it.
-					</p>
-
-					<!-- Probe Z: the real touch-off depth, and the number production z_cal reads. -->
-					<div class="mt-2 rounded border border-purple-400/30 bg-purple-900/10 p-1.5">
-						<label class="block text-[10px]" style="color: var(--color-tron-text-secondary)">
-							Probe Z &mdash; {tipProfile === 'reagent'
-								? 'p300 · reagent-filling (zCalReagent)'
-								: tipProfile === 'wax'
-									? 'p20 · wax-filling (zCalWax)'
-									: 'pick a tip type above'}
-							<input
-								type="number"
-								step="0.1"
-								min={CAL_Z_MIN}
-								max={CAL_Z_MAX}
-								disabled={!tipProfile}
-								value={Number.isFinite(probeZ) ? probeZ : ''}
-								oninput={(e) => setProbeZ(e.currentTarget.valueAsNumber)}
-								class="mt-0.5 w-full rounded border border-purple-400/40 bg-black/30 px-1 py-0.5 font-mono disabled:opacity-40"
-								style="color: var(--color-tron-text)" />
-						</label>
-						<p class="mt-1 text-[10px] leading-tight" style="color: var(--color-tron-text-secondary)">
-							Touch-off depth the limit-switch probe descends to. "Calibrate tip" uses whatever is typed here immediately &mdash; no save needed &mdash; and Save writes it to production z_cal for this robot. Switching tip type swaps this field; the other process keeps its own value.
-						</p>
-					</div>
 					{#if currentCalibrator?.inheritedFromGlobal}
+						<!-- Provenance of the point the button above will probe at. Conditional and
+						     rare, so it stays in the main view rather than hiding in the disclosure. -->
 						<p class="mt-1 rounded border border-amber-400/40 bg-amber-900/15 px-1.5 py-1 text-[10px] leading-tight text-amber-200">
 							{robot?.name ?? 'This robot'} has no fixture of its own and is using the shared <span class="font-mono">global</span> one. The first Save forks it off permanently &mdash; later edits to <span class="font-mono">global</span> will stop reaching it.
 						</p>
 					{/if}
-					<div class="mt-1 grid grid-cols-2 gap-2">
-						<button type="button" onclick={captureCalibratorFromLive} disabled={busy || liveX === null} class="rounded border border-[var(--color-tron-border)] px-2 py-1.5 text-[11px] hover:border-[var(--color-tron-cyan)] disabled:opacity-40" style="color: var(--color-tron-text)" title="Copy the live jogged position into the X/Y/Z fields">From live ↧</button>
-						<button type="button" onclick={saveCalibratorPosition} disabled={busy || !selectedRobotId} class="rounded border border-green-500/40 bg-green-900/15 px-2 py-1.5 text-[11px] font-semibold text-green-300 hover:bg-green-900/25 disabled:opacity-40">Save → {robot?.name ?? 'robot'}</button>
-					</div>
+					{#if tipAdjust}
+						<button type="button" onclick={() => (tipAdjust = null)} class="mt-1 w-full rounded border border-[var(--color-tron-border)] px-2 py-1 text-[10px] hover:border-amber-400/60" style="color: var(--color-tron-text-secondary)">Clear tip adjust</button>
+					{/if}
+
+					<!--
+						Teaching the fixture point is the rare path; probing at it is the daily one.
+						So the coordinates, the two Z controls and the save/park buttons live behind
+						a disclosure, closed by default. Nothing is hidden that the click depends on
+						silently — the hint under the button always names the point it will drive to.
+					-->
+					<details class="mt-2 rounded border border-[var(--color-tron-border)] bg-black/20">
+						<summary class="cursor-pointer select-none px-2 py-1 text-[10px] uppercase tracking-wider hover:text-[var(--color-tron-cyan)]" style="color: var(--color-tron-text-secondary)">Fixture point (teach)</summary>
+						<div class="border-t border-[var(--color-tron-border)] p-2">
+							<!--
+								TWO Z heights on one fixture, and deliberately TWO controls (PRD CALIB-4
+								section 5, decision 1). Approach Z is travel-only; Probe Z is the touch-off
+								depth the limit-switch routine owns. Merging them would let a plain jog
+								descend to touch-off depth with no probe protecting the tip.
+							-->
+							<div class="grid grid-cols-3 gap-1 text-[10px]" style="color: var(--color-tron-text-secondary)">
+								<label>calX <input type="number" step="0.1" bind:value={calX} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-0.5 font-mono" style="color: var(--color-tron-text)" /></label>
+								<label>calY <input type="number" step="0.1" bind:value={calY} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-0.5 font-mono" style="color: var(--color-tron-text)" /></label>
+								<label title="Pre-probe travel height: where the tip parks before the probe runs. Never the touch-off depth.">Approach Z <input type="number" step="0.1" min={CAL_Z_MIN} max={CAL_Z_MAX} bind:value={calZ} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-0.5 font-mono" style="color: var(--color-tron-text)" /></label>
+							</div>
+							<p class="mt-1 text-[10px] leading-tight" style="color: var(--color-tron-text-secondary)">
+								Approach Z is the pre-probe travel height only &mdash; both "Calibrate tip" and "Go to calibrator" park there. The probe never reads it.
+							</p>
+
+							<!-- Probe Z: the real touch-off depth, and the number production z_cal reads. -->
+							<div class="mt-2 rounded border border-purple-400/30 bg-purple-900/10 p-1.5">
+								<label class="block text-[10px]" style="color: var(--color-tron-text-secondary)">
+									Probe Z &mdash; {tipProfile === 'reagent'
+										? 'p300 · reagent-filling (zCalReagent)'
+										: tipProfile === 'wax'
+											? 'p20 · wax-filling (zCalWax)'
+											: 'pick a tip type above'}
+									<input
+										type="number"
+										step="0.1"
+										min={CAL_Z_MIN}
+										max={CAL_Z_MAX}
+										disabled={!tipProfile}
+										value={Number.isFinite(probeZ) ? probeZ : ''}
+										oninput={(e) => setProbeZ(e.currentTarget.valueAsNumber)}
+										class="mt-0.5 w-full rounded border border-purple-400/40 bg-black/30 px-1 py-0.5 font-mono disabled:opacity-40"
+										style="color: var(--color-tron-text)" />
+								</label>
+								<p class="mt-1 text-[10px] leading-tight" style="color: var(--color-tron-text-secondary)">
+									Touch-off depth the limit-switch probe descends to. "Calibrate tip" uses whatever is typed here immediately &mdash; no save needed &mdash; and Save writes it to production z_cal for this robot. Switching tip type swaps this field; the other process keeps its own value.
+								</p>
+							</div>
+							<!--
+								Park at the fixture WITHOUT probing. This is the teach loop's first step
+								(park → jog → From live ↧ → Save); "Calibrate tip" would also travel here
+								but then spend 1-2 minutes probing, which is not what teaching wants.
+							-->
+							<button type="button" onclick={goToCalibrator} disabled={!pipetteId || busy} class="mt-2 w-full rounded border border-[var(--color-tron-cyan)]/40 px-2 py-1.5 text-[11px] text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40" title="Park at the approach point so you can jog onto the fixture — no probe">Go to calibrator (park, no probe)</button>
+							<div class="mt-1 grid grid-cols-2 gap-2">
+								<button type="button" onclick={captureCalibratorFromLive} disabled={busy || liveX === null} class="rounded border border-[var(--color-tron-border)] px-2 py-1.5 text-[11px] hover:border-[var(--color-tron-cyan)] disabled:opacity-40" style="color: var(--color-tron-text)" title="Copy the live jogged position into the X/Y/Z fields">From live ↧</button>
+								<button type="button" onclick={saveCalibratorPosition} disabled={busy || !selectedRobotId} class="rounded border border-green-500/40 bg-green-900/15 px-2 py-1.5 text-[11px] font-semibold text-green-300 hover:bg-green-900/25 disabled:opacity-40">Save → {robot?.name ?? 'robot'}</button>
+							</div>
+						</div>
+					</details>
 				</div>
 
 				<!-- Tour + Fill motion: drive the pipette through holes like a real fill -->
