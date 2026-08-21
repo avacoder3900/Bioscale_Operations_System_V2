@@ -20,6 +20,7 @@
 	import dagre from '@dagrejs/dagre';
 	import TaskNode from './TaskNode.svelte';
 	import MilestoneNode from './MilestoneNode.svelte';
+	import CanvasRefit from './CanvasRefit.svelte';
 	import { tagColor } from '$lib/shared/tag-color';
 	import { deserialize } from '$app/forms';
 
@@ -127,10 +128,20 @@
 		};
 	}
 
+	// KB2-30 addendum: Timeline positions by the capacity-sequenced PLAN
+	// (plannedStart — when the task gets its turn through the team pipe), not
+	// by earlyStart. earlyStart made every unblocked card pile at "today"
+	// (everything COULD start now) — the collapse Jacob reported 2026-08-21.
+	const timelineDateOf = (t: any): string | null => t.plannedStart ?? t.earlyStart ?? null;
+
 	// ---- timeline scale (shared by node layout + backdrop decorations)
 	const timeScale = $derived.by(() => {
 		const dates: number[] = [];
-		for (const { t } of graph.tasks) if (t.earlyStart) dates.push(new Date(t.earlyStart + 'T00:00:00').getTime());
+		for (const { t } of graph.tasks) {
+			const d = timelineDateOf(t);
+			if (d) dates.push(new Date(d + 'T00:00:00').getTime());
+			if (t.plannedFinish) dates.push(new Date(t.plannedFinish + 'T00:00:00').getTime());
+		}
 		for (const m of graph.milestoneRows) dates.push(new Date(m.dueDate + 'T00:00:00').getTime());
 		const now = Date.now();
 		const min = (dates.length ? Math.min(...dates, now) : now) - 6 * DAY_MS;
@@ -155,10 +166,10 @@
 		for (const lane of laneOrder) {
 			const inLane = tasks
 				.filter(({ t }) => laneOf(t) === lane)
-				.sort((a, b) => String(a.t.earlyStart).localeCompare(String(b.t.earlyStart)));
+				.sort((a, b) => String(timelineDateOf(a.t) ?? '') .localeCompare(String(timelineDateOf(b.t) ?? '')));
 			const rowEnds: number[] = [];
 			for (const { t } of inLane) {
-				const x = xOf(new Date(t.earlyStart + 'T00:00:00').getTime());
+				const x = xOf(new Date((timelineDateOf(t) ?? '1970-01-01') + 'T00:00:00').getTime());
 				let row = rowEnds.findIndex((e) => e <= x);
 				if (row === -1) { row = rowEnds.length; rowEnds.push(0); }
 				rowEnds[row] = x + TASK_W + 24;
@@ -356,8 +367,7 @@
 		</div>
 	</div>
 	<div style="height: 72vh; min-height: 480px;">
-		{#key mode}
-			<SvelteFlow
+		<SvelteFlow
 				bind:nodes
 				bind:edges
 				{nodeTypes}
@@ -369,6 +379,7 @@
 				onnodedragstop={onDragStop}
 				colorMode="dark"
 			>
+				<CanvasRefit signal={mode} />
 				<Background bgColor="#060b14" patternColor="#152232" gap={26} />
 				{#if mode === 'timeline' && backdrop}
 					<ViewportPortal target="back">
@@ -406,6 +417,5 @@
 					maskColor="rgba(6,11,20,0.75)"
 				/>
 			</SvelteFlow>
-		{/key}
 	</div>
 </section>

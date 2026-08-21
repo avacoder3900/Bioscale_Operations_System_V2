@@ -9350,3 +9350,28 @@ What this deployment is for: KB2-31/32 capacity v2. After deploy: (1) Jacob sets
   capacity.teamEstDaysPerWeek=10 on /kanban/policy → A4M projection should move from
   Jan 2028 to ~Nov 17 with +17 wd buffer; (2) fresh Claude-app chat to bind
   kanban_velocity_report + kanban_set_estimates, then the effortDays data pass.
+
+================================================================================
+2026-08-21 — feat/kanban-tweaks → master — KB2-30 fixes: timeline collapse + blank Flow mode
+================================================================================
+Jacob (checked live /kanban/roadmap in Chrome with him): "everything is getting collapsed
+into the first column instead of looking like the flow chart." Two root causes found by
+browser inspection:
+1. TIMELINE COLLAPSE: cards were positioned at earlyStart — the forward pass gives every
+   unblocked task ES=today, so the whole graph occupied ~5 days of x-space at the today
+   line while the axis ran to December. Fix: a capacity-sequenced PLANNED schedule
+   (KB2-30 addendum in schedule.ts): list scheduling through the one team pipe at the
+   effective velocity — ready tasks picked by latest-start (slack pressure) then Tier 1
+   rank, never before their blockers finish → plannedStart/plannedFinish per task.
+   Timeline now positions by plannedStart (falls back to earlyStart when velocity is
+   unknown). Verified at capacityOverride=10: A4M chain spreads Aug 21 → Nov 5 in
+   dependency order — the "gantt but nodes" picture.
+2. BLANK FLOW MODE (bug): {#key mode} remounted SvelteFlow, which fitViewed against the
+   STALE node array before the $effect swapped in the new layout → graph rendered
+   off-viewport (only visible in the minimap; manual fit-view rescued it). Fix: no
+   remount — new CanvasRefit child (useSvelteFlow().fitView inside the flow context)
+   refits ~80ms after each mode change.
+NOTE seen live: capacity knob still unset in prod (velocity 1.8 measured, A4M "279 wd
+OVER, projected Jan 6") — Jacob still needs to set Team est-days/week = 10 on
+/kanban/policy; until then the Timeline spread stretches to the honest-but-absurd
+clamp horizon. npm run check: 11/434 baseline.
