@@ -9585,3 +9585,68 @@ STILL NOT BENCH-VERIFIED — the 2026-08-20 entry's four test cases are unchange
 and still outstanding. Add one: open "Fixture point (teach)", confirm "Go to
 calibrator (park, no probe)" parks WITHOUT probing, and that jog → From live ↧
 → Save still round-trips the calibrator point.
+
+================================================================================
+2026-08-21 — Reconciled feat/tip-calibrator-teach with master (6 weeks stale)
+================================================================================
+
+Branch: feat/tip-calibrator-teach
+Commit: 188bb9910c88118c1fb4ce76e419519aa4199ff0  (merge; parents 53eefc504 + 4a3579b9f)
+Preview: https://bioscale-operations-system-mongodb-ls1ou8428.vercel.app
+Deployment: 6024737251 (Preview, success)
+Retrieve this exact code: git checkout feat/tip-calibrator-teach at commit 188bb9910c88118c1fb4ce76e419519aa4199ff0
+What this deployment is for: the FIRST build of this branch against current
+master. The 08-20 and 08-21 previews were built on the 2026-07-10 base and do
+not represent what master would run. Bench-test on this one, not those.
+
+Asked to ship this branch to master. It could not go as-is: merge-base was
+2026-07-10, master was +312 commits, and the merge hit 7 conflict hunks across
+6 files, all in the calibration path. Not mechanical — master and the branch had
+grown OVERLAPPING implementations and each fixed a bug the other still had.
+Resolved by intent rather than by side:
+
+  calibration-rtps.ts
+    MASTER's offset policy verbatim (bims_native forced true, offsets zeroed,
+    use_tip_calibration mandatory, RobotDeckOffset no longer read). The branch
+    predated it and still read RobotDeckOffset, which would have REINTRODUCED
+    the wrong-hole dispense confirmed on B07/deck-004 2026-08-18.
+    BRANCH's guards kept on the calibrator point master retains: taughtXY() /
+    plausibleZ() rather than bare finite() reads.
+
+  api/scanner/calibrate-tip/+server.ts
+    BRANCH's tipProfile wins; master's TIP_FOR_MOUNT dropped (mount-inference is
+    the 6.309mm probe-depth error). MASTER's  payload field (4b3209eb6)
+    and strict resolveLabwareDefinition kept.
+
+  deck-calibration/+page.server.ts
+    Imports unioned; BRANCH's saveCalibrator wins (range-checks all three Zs).
+
+  deck-calibration/+page.svelte
+    MASTER's 409 SLOT_OCCUPIED recovery kept, retargeted tiprackForMount ->
+    tiprackForProfile, and it now retakes the busy lock (stopMaintenance /
+    startMaintenance clear it in their own finally blocks while the calibrate
+    sequence still owns the gantry). BRANCH's doPickUpTip step wraps it.
+
+  scripts/seed-robot-arm.ts — master (leader serial re-read 08-19).
+  progress.txt — union.
+
+MASTER BUG FOUND WHILE MERGING, fixed here:
+  master carries the "global robot offsets are retired" guard
+  (x!==0||y!==0||z!==0 -> fail) INSIDE saveCalibrator, where x/y/z are the
+  tip-calibrator FIXTURE POSITION (~125.181, 173.247, 34.491). On master today
+  that rejects every legitimate calibrator save. Meanwhile saveRobotOffset — the
+  action that actually writes RobotDeckOffset.offset — has NO guard, so the
+  thing it was written to block still gets through. Moved to saveRobotOffset,
+  master's wording verbatim. WORTH A HUMAN CONFIRMING this reading: it changes
+  behaviour on both actions.
+
+npm run check: 84 errors / 434 warnings — identical to master's OWN baseline
+(verified by checking out origin/master and running check there). Zero added,
+none in any resolved file.
+
+MASTER IS UNTOUCHED. Not merged to master pending a bench test — this tree has
+never run on a robot, and it now carries two independent gantry-motion changes
+(the one-click sequence and the reconciled offset/probe path) plus the
+saveCalibrator guard move. Outstanding tests are the four in the 08-20 entry,
+the teach-disclosure test in the 08-21 entry, plus: confirm a calibrator Save
+now succeeds, and confirm saveRobotOffset refuses a non-zero offset.
