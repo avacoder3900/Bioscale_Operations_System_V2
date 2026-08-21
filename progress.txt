@@ -9399,3 +9399,14 @@ are artifacts of borrowing pm-test's node_modules via junction (missing @xyflow/
 and @dagrejs/dagre, which master's package.json adds) — they resolve on Vercel's real
 install. Effective baseline ~113. Local `npm run build` not attempted (OOMs ~30GB on
 this machine); Vercel's branch build is the gate.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-git-feat-sp-c89f55-brevitest.vercel.app
+  (immutable: https://bioscale-operations-system-mongodb-cqqfoybqo-brevitest.vercel.app)
+Source: branch feat/spu-mfg-tabs @ commit 18aa078b
+Retrieve this exact code: git checkout feat/spu-mfg-tabs at commit 18aa078b
+What this deployment is for: eyeball the new SPU Mfg tab strip — open /spu/mfg and
+  confirm the Overview / SPU Assembly / Work Instructions / Validation tabs render and
+  stay put as you click through; check the left Manufacturing group no longer lists the
+  three separately but still expands + highlights SPU Mfg while inside them; check
+  /validation shows section tabs above its Runs/Mag/Thermo/Optical sub-tabs, and that
+  /documents/instructions showing both nav rows is acceptable.
