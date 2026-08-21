@@ -9295,3 +9295,10 @@ same focus mode/semantic zoom/hide-done; positions are derived in Timeline mode 
 dragging is disabled there (Flow mode keeps drag-to-pin + Re-layout). Timeline layout is
 its own pure $derived (first cut mutated $state inside a $derived — state_unsafe_mutation
 — restructured). npm run check: 11/434 baseline.
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit e744b11e
+Retrieve this exact code: git checkout master at commit e744b11e
+What this deployment is for: Timeline mode on the roadmap canvas — verify /kanban/roadmap
+  opens in Timeline (cards at scheduled dates, today line, milestone verticals) and the
+  Flow toggle still drags/pins.
