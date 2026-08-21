@@ -3882,3 +3882,49 @@ NOT YET BENCH-VERIFIED. Needs a robot with the calibrator fixture wired:
   - jog ~1mm off the fixture and click again → expect NO re-travel; the hint and
     the status line should both say it is probing from the jogged position.
   - no tip type selected → button disabled, amber hint still shown.
+
+================================================================================
+2026-08-21 — Tip calibration panel condensed to the one button
+================================================================================
+
+Branch: feat/tip-calibrator-teach
+Commit: 7a0340fba7848023dfd44cdea4d9c42b66d8c802
+Preview: https://bioscale-operations-system-mongodb-nlupgcv0o-brevitest.vercel.app
+Deployment: 6024173094 (Preview, success)
+Retrieve this exact code: git checkout feat/tip-calibrator-teach at commit 7a0340fba7848023dfd44cdea4d9c42b66d8c802
+What this deployment is for: bench-test the condensed tip panel together with
+the one-click Calibrate tip flow from 2026-08-20 (commit eecaba83a).
+
+Follow-on to yesterday's one-click Calibrate tip. The panel still showed the
+manual steps that button now performs, so the everyday flow read as three
+competing buttons instead of one.
+
+  - "Pick up tip" DELETED, along with its pickUpTipAction wrapper. It did
+    nothing calibrateTip doesn't do as step 1, and nothing else on the page
+    wants a tip on its own. doPickUpTip stays as the shared step.
+  - "Go to calibrator" MOVED into the teach disclosure, relabelled "Go to
+    calibrator (park, no probe)". Deliberately NOT deleted: it is the first step
+    of the teach loop (park → jog → From live ↧ → Save), and "Calibrate tip"
+    would travel to the same point but then spend 1-2 min probing, which
+    teaching does not want. Deleting it would have cost this branch the very
+    workflow it is named for.
+  - calX / calY / Approach Z, the Probe Z block, that park button and the
+    From live ↧ / Save → robot row all moved into a native <details> titled
+    "Fixture point (teach)", closed by default.
+
+Main view is now: tip status → tip type → one button + its hint. Nothing the
+click depends on is hidden silently — the hint under the button always names the
+tiprack and the exact point it will drive to, and the inherited-from-global
+provenance warning stays in the main view because it is conditional and rare.
+
+Files: src/routes/manufacturing/cart-mfg/deck-calibration/+page.svelte only.
+Markup move plus one deleted function; no behaviour change to the sequence
+itself, and no server/endpoint/ot2-bridge.py changes.
+
+npm run check: 11 errors / 434 warnings — identical pre-existing baseline. The
+two warnings in this file are the deck SVG canvas (lines 1218/1251), untouched.
+
+STILL NOT BENCH-VERIFIED — the 2026-08-20 entry's four test cases are unchanged
+and still outstanding. Add one: open "Fixture point (teach)", confirm "Go to
+calibrator (park, no probe)" parks WITHOUT probing, and that jog → From live ↧
+→ Save still round-trips the calibrator point.
