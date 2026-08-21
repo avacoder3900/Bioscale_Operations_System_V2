@@ -8,6 +8,21 @@
 	import { goto, invalidateAll } from '$app/navigation';
 	import { deserialize } from '$app/forms';
 	import { page } from '$app/stores';
+	// The SAME geometry the saveDeckFrame action runs. Imported rather than
+	// re-implemented so the width/rotation/fit the operator sees while capturing
+	// corners is exactly what the server will compute when they save — a second
+	// copy here would drift, and the drift would only show as a deck taught
+	// slightly wrong.
+	import {
+		CORNER_LABELS,
+		CORNER_NAMES,
+		deriveFrame,
+		toFrameRelative,
+		validateCorners,
+		type Corner,
+		type CornerLabel,
+		type DeckFrameDerived
+	} from '$lib/shared/deck-frame';
 
 	let { data } = $props();
 
@@ -1154,6 +1169,275 @@
 		msg = `Calibrator fields set from live (${calX}, ${calY}, ${calZ}). Click Save to persist.`;
 	}
 
+	// ══ Deck frame: four jogged corners say where the deck physically IS ══════
+	//
+	// Jog the tip to each physical corner of the deck plate and capture it. Those
+	// four points give the deck's origin, size and rotation — which is what lets
+	// the calibrator be stored as a FRACTION of the deck instead of a bare
+	// absolute point that silently goes stale the moment the deck is reseated.
+	//
+	// The fit runs client-side from $lib/shared/deck-frame, the same module the
+	// save action uses, so what is previewed here is what gets stored.
+
+	type Vec = { x: number; y: number; z: number };
+	let frameCorners = $state<Record<CornerLabel, Vec | null>>({
+		FL: null,
+		FR: null,
+		BR: null,
+		BL: null
+	});
+	/** The re-derive the server declined to apply silently, awaiting a human. */
+	let pendingRederive = $state<{ deltaMm: number; from: any; to: any; message: string } | null>(null);
+
+	const savedFrame = $derived(
+		((data.deckFrames ?? []) as any[]).find((f) => f.robotId === selectedRobotId) ?? null
+	);
+	const frameLimits = $derived(
+		(data.frameLimits ?? { maxResidualMm: 1, maxSilentRederiveMm: 10 }) as {
+			maxResidualMm: number;
+			maxSilentRederiveMm: number;
+		}
+	);
+
+	const capturedCorners = $derived(
+		CORNER_LABELS.filter((l) => frameCorners[l] !== null).map(
+			(l) => ({ label: l, ...(frameCorners[l] as Vec) }) as Corner
+		)
+	);
+	/** Why the current four corners are not yet a usable frame (null once they are). */
+	const frameProblem = $derived(
+		capturedCorners.length < 4 ? null : validateCorners(capturedCorners)
+	);
+	/** Live preview of the frame these corners describe. Null until all four are in. */
+	const draftFrame = $derived.by((): DeckFrameDerived | null => {
+		if (capturedCorners.length < 4 || frameProblem) return null;
+		try {
+			return deriveFrame(capturedCorners);
+		} catch {
+			return null;
+		}
+	});
+	const draftFits = $derived(!!draftFrame && draftFrame.residualMm <= frameLimits.maxResidualMm);
+
+	/** Where the current calibrator XY sits inside the previewed frame. */
+	const calInDraftFrame = $derived(
+		draftFrame ? toFrameRelative(draftFrame, { x: calX, y: calY }) : null
+	);
+
+	function captureCorner(label: CornerLabel) {
+		if (liveX === null || liveY === null || liveZ === null) {
+			errMsg = 'No live position — open a run and jog to the corner first';
+			return;
+		}
+		frameCorners[label] = { x: +liveX.toFixed(3), y: +liveY.toFixed(3), z: +liveZ.toFixed(3) };
+		msg = `Captured ${CORNER_NAMES[label]} corner at (${frameCorners[label]!.x}, ${frameCorners[label]!.y}, ${frameCorners[label]!.z}).`;
+	}
+
+	function clearCorner(label: CornerLabel) {
+		frameCorners[label] = null;
+	}
+
+	/** Pull the robot's saved corners back into the draft, to re-teach just one. */
+	function loadSavedCorners() {
+		if (!savedFrame) { errMsg = 'This robot has no saved deck frame yet'; return; }
+		const next: Record<CornerLabel, Vec | null> = { FL: null, FR: null, BR: null, BL: null };
+		for (const c of savedFrame.corners ?? []) {
+			if (CORNER_LABELS.includes(c.label)) next[c.label as CornerLabel] = { x: c.x, y: c.y, z: c.z };
+		}
+		frameCorners = next;
+		msg = 'Loaded the saved corners — re-capture any that moved, then Save.';
+	}
+
+	async function saveDeckFrame() {
+		if (!selectedRobotId) { errMsg = 'Pick a robot'; return; }
+		if (capturedCorners.length < 4) { errMsg = 'Capture all four deck corners first'; return; }
+		if (frameProblem) { errMsg = frameProblem; return; }
+
+		const fields: Record<string, string> = { robotId: selectedRobotId, deckLoadName: data.selected ?? '' };
+		for (const c of capturedCorners) {
+			fields[`corner_${c.label}_x`] = String(c.x);
+			fields[`corner_${c.label}_y`] = String(c.y);
+			fields[`corner_${c.label}_z`] = String(c.z);
+		}
+		pendingRederive = null;
+		const r = await postAction('saveDeckFrame', fields);
+		if (!r) return;
+
+		const rd = r.rederive ?? null;
+		// 'needs-confirm' is the one outcome that leaves work on the table: the
+		// frame saved but the calibrator deliberately did not move. Surface it as a
+		// prompt rather than a status line, or it reads as "done" when it is not.
+		if (rd?.reason === 'needs-confirm') {
+			pendingRederive = { deltaMm: rd.deltaMm, from: rd.from, to: rd.to, message: rd.message };
+			msg = '';
+			errMsg = '';
+		} else {
+			msg = rd?.message ?? 'Deck frame saved.';
+		}
+	}
+
+	async function confirmRederive() {
+		if (!selectedRobotId) return;
+		const r = await postAction('rederiveCalibrator', { robotId: selectedRobotId });
+		if (r) {
+			pendingRederive = null;
+			msg = r.rederive?.message ?? 'Calibrator re-derived onto the new deck frame.';
+		}
+	}
+
+	// ══ Live limit-switch watch ═══════════════════════════════════════════════
+	//
+	// Arms the calibrator's limit switches and records each trip — which switch,
+	// when, and where the tip was — while the operator hand-jogs onto the
+	// fixture. THIS COMMANDS NO MOTION; the operator drives, we only listen.
+	//
+	// Distinct from "Calibrate tip" above, which drives the closed-loop creep
+	// probe and reports one net adjust{x,y}. That measures a TIP against a known
+	// fixture; this LOCATES the fixture.
+
+	let watchCommandId = $state<string | null>(null);
+	let watchArmed = $state(false);
+	let watchQueued = $state(false);
+	let watchEvents = $state<any[]>([]);
+	let watchTimer: ReturnType<typeof setInterval> | null = null;
+
+	/**
+	 * Which switch is live right now.
+	 *
+	 * The daemon arms ONE axis at a time and hands off to the other on each trip,
+	 * starting at X (the order both fill protocols probe in, so the order a normal
+	 * approach reaches them). That makes the armed axis a pure function of the
+	 * trip count — no extra plumbing needed to display it, and it stays correct
+	 * through a page reload because the trips come from the server.
+	 *
+	 * Worth showing: with only one switch live, an operator touching the OTHER
+	 * one sees nothing happen, and without this that is indistinguishable from a
+	 * broken fixture.
+	 */
+	const armedAxis = $derived(watchEvents.length % 2 === 0 ? 'X' : 'Y');
+
+	/**
+	 * The calibrator point the trips imply: x from the most recent x-axis trip,
+	 * y from the most recent y-axis trip.
+	 *
+	 * Per-axis and most-recent-wins because that is how the fixture actually
+	 * reads — each switch measures ONE axis, and the operator will usually touch
+	 * off a few times before they are happy. Requires one of each: a point built
+	 * from two x-trips would be half-guessed, and guessing is what put the
+	 * pipette into the fixture in the first place.
+	 */
+	const tripPoint = $derived.by(() => {
+		const latest = (axis: string) =>
+			[...watchEvents].reverse().find((e) => e?.axis === axis && e?.position);
+		const ex = latest('x');
+		const ey = latest('y');
+		if (!ex || !ey) return null;
+		const x = Number(ex.position.x);
+		const y = Number(ey.position.y);
+		const zs = [Number(ex.position.z), Number(ey.position.z)].filter(Number.isFinite);
+		if (!Number.isFinite(x) || !Number.isFinite(y) || !zs.length) return null;
+		return { x: +x.toFixed(3), y: +y.toFixed(3), z: +(zs.reduce((s, v) => s + v, 0) / zs.length).toFixed(3) };
+	});
+
+	async function pollWatch() {
+		if (!watchCommandId || !selectedRobotId) return;
+		try {
+			const res = await api(`/api/opentrons-lab/robots/${selectedRobotId}/calibrator-watch/${watchCommandId}`);
+			watchEvents = res?.events ?? [];
+			watchArmed = !!res?.armed;
+			watchQueued = !!res?.queued;
+			// Terminal: stop polling. A watch that ended on its own (timeout, daemon
+			// error) must not leave the UI claiming the switches are still live.
+			if (!res?.armed && !res?.queued) {
+				stopPolling();
+				if (res?.error) errMsg = `Watch ended: ${res.error}`;
+			}
+		} catch (e) {
+			// One failed poll is a network blip, not a reason to tear down a watch
+			// the operator is mid-jog on. A real end is detected above.
+			console.warn('[calibrator-watch] poll failed', e);
+		}
+	}
+
+	function stopPolling() {
+		if (watchTimer) { clearInterval(watchTimer); watchTimer = null; }
+		watchArmed = false;
+		watchQueued = false;
+	}
+
+	async function startWatch() {
+		if (!runId || !pipetteId) { errMsg = 'Open a maintenance run first — the watch attaches to it'; return; }
+		clearMsg();
+		busy = true;
+		try {
+			const res = await api(`/api/opentrons-lab/robots/${selectedRobotId}/calibrator-watch`, {
+				method: 'POST',
+				body: JSON.stringify({ runId, pipetteId })
+			});
+			watchCommandId = res?.commandId ?? null;
+			watchEvents = [];
+			watchQueued = true;
+			if (watchTimer) clearInterval(watchTimer);
+			watchTimer = setInterval(pollWatch, 1000);
+			msg = 'Watch requested. Once it arms, jog the tip onto the calibrator — every switch trip is recorded.';
+		} catch (e) {
+			errMsg = e instanceof Error ? e.message : String(e);
+		} finally {
+			busy = false;
+		}
+	}
+
+	async function stopWatch() {
+		if (!watchCommandId || !selectedRobotId) { stopPolling(); return; }
+		busy = true;
+		try {
+			await api(`/api/opentrons-lab/robots/${selectedRobotId}/calibrator-watch/${watchCommandId}`, { method: 'DELETE' });
+			await pollWatch(); // one last read so no trip is lost from the display
+			msg = `Watch stopped — ${watchEvents.length} trip${watchEvents.length === 1 ? '' : 's'} recorded.`;
+		} catch (e) {
+			errMsg = e instanceof Error ? e.message : String(e);
+		} finally {
+			stopPolling();
+			busy = false;
+		}
+	}
+
+	/** Load the trip-derived point into the calibrator fields (does NOT save). */
+	function useTripsAsCalibrator() {
+		if (!tripPoint) { errMsg = 'Need at least one X trip and one Y trip before a point can be derived'; return; }
+		calX = tripPoint.x;
+		calY = tripPoint.y;
+		// z is NOT taken from the trip: the trips happen at probe depth, and calZ is
+		// the APPROACH height the free-jog move-to commands. Copying a touch-off
+		// depth into it is precisely the crash case the two-field split prevents.
+		msg = `Calibrator X/Y set from the switch trips (${calX}, ${calY}). Approach Z left at ${calZ} — check it, then Save.`;
+	}
+
+	/** Save the calibrator from the trips, tagged 'sensor' and carrying the log. */
+	async function saveCalibratorFromTrips() {
+		if (!selectedRobotId) { errMsg = 'Pick a robot'; return; }
+		if (!watchEvents.length) { errMsg = 'No switch trips recorded to save'; return; }
+		if (checkedZ(calZ, 'Approach Z') === null) return;
+		const fields: Record<string, string> = {
+			robotId: selectedRobotId,
+			x: String(calX), y: String(calY), z: String(calZ),
+			source: 'sensor',
+			switchEvents: JSON.stringify(watchEvents)
+		};
+		if (probeZKey) {
+			const z = checkedZ(probeZ, 'Probe Z');
+			if (z === null) return;
+			fields[probeZKey] = String(z);
+		}
+		const r = await postAction('saveCalibrator', fields);
+		if (r) {
+			msg =
+				`Saved calibrator for ${robot?.name} from ${watchEvents.length} switch trip` +
+				`${watchEvents.length === 1 ? '' : 's'}: (${calX}, ${calY}, ${calZ}).` +
+				(savedFrame ? ' Linked to this robot’s deck frame.' : ' No deck frame taught yet — teach the four corners to link it.');
+		}
+	}
+
 	// ── PRD 5: save the robot's GLOBAL deck offset. The captured dx/dy/dz (the
 	// error of THIS robot vs the reference deck) is the global correction applied
 	// to all labware at fill time. One robot is the reference (offset 0,0,0).
@@ -1166,6 +1450,15 @@
 	}
 
 	onDestroy(() => {
+		// Release the calibrator's serial port rather than leaving a watch armed on
+		// a page nobody is looking at — it holds the fixture against the next
+		// operation, and its trips would be recorded with no one to read them.
+		if (watchTimer) clearInterval(watchTimer);
+		if (watchCommandId && selectedRobotId) {
+			try {
+				fetch(`/api/opentrons-lab/robots/${selectedRobotId}/calibrator-watch/${watchCommandId}`, { method: 'DELETE', credentials: 'same-origin', keepalive: true });
+			} catch { /* best-effort */ }
+		}
 		if (runId) {
 			try {
 				fetch(`/api/opentrons-lab/robots/${selectedRobotId}/maintenance/${runId}`, { method: 'DELETE', credentials: 'same-origin', keepalive: true });
@@ -1531,6 +1824,154 @@
 							</div>
 						</div>
 					</details>
+				</div>
+
+				<!-- Deck frame: four jogged corners say where the deck physically is -->
+				<div class="mt-3 rounded border border-[var(--color-tron-border)] bg-black/20 p-2">
+					<div class="mb-1 flex items-center justify-between">
+						<div class="text-[11px] font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Deck frame — four corners</div>
+						{#if savedFrame}
+							<button type="button" onclick={loadSavedCorners} class="rounded border border-[var(--color-tron-border)] px-2 py-0.5 text-[10px] hover:border-[var(--color-tron-cyan)]" style="color: var(--color-tron-text)" title="Load this robot's saved corners so you can re-capture just the ones that moved">Load saved</button>
+						{/if}
+					</div>
+					<p class="mb-2 text-[10px]" style="color: var(--color-tron-text-secondary)">
+						Jog the tip to each physical corner of the deck plate and capture it. The four points give the deck's <strong>area, position and rotation</strong> — and let the tip calibrator be stored as a fraction of the deck, so re-teaching these corners after a reseat moves it automatically instead of needing a re-probe.
+					</p>
+
+					<div class="space-y-1">
+						{#each CORNER_LABELS as label (label)}
+							{@const c = frameCorners[label]}
+							<div class="flex items-center gap-1.5 text-[11px]">
+								<span class="w-7 shrink-0 font-mono font-bold" style="color: var(--color-tron-cyan)">{label}</span>
+								<span class="w-20 shrink-0 opacity-70" style="color: var(--color-tron-text-secondary)">{CORNER_NAMES[label]}</span>
+								<span class="min-w-0 flex-1 truncate font-mono" style="color: var(--color-tron-text)">
+									{#if c}{c.x}, {c.y}, {c.z}{:else}<span class="opacity-40">not captured</span>{/if}
+								</span>
+								<button type="button" onclick={() => captureCorner(label)} disabled={busy || liveX === null} class="shrink-0 rounded border border-[var(--color-tron-cyan)]/40 px-2 py-0.5 text-[10px] text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40" title="Capture the live jogged position as this corner">Capture</button>
+								{#if c}
+									<button type="button" onclick={() => clearCorner(label)} class="shrink-0 rounded border border-[var(--color-tron-border)] px-1.5 py-0.5 text-[10px] opacity-60 hover:border-red-500/50 hover:text-red-300" style="color: var(--color-tron-text-secondary)" title="Clear this corner">✕</button>
+								{/if}
+							</div>
+						{/each}
+					</div>
+
+					{#if frameProblem}
+						<p class="mt-2 rounded border border-red-500/40 bg-red-900/15 p-1.5 text-[10px] text-red-200">{frameProblem}</p>
+					{:else if draftFrame}
+						<div class="mt-2 rounded border border-[var(--color-tron-border)] bg-black/30 p-1.5 text-[10px] font-mono" style="color: var(--color-tron-text-secondary)">
+							<div><span class="opacity-60">area</span> {draftFrame.width.toFixed(2)} × {draftFrame.height.toFixed(2)} mm</div>
+							<div><span class="opacity-60">origin</span> {draftFrame.origin.x.toFixed(2)}, {draftFrame.origin.y.toFixed(2)}</div>
+							<div><span class="opacity-60">rotation</span> {draftFrame.rotationDeg.toFixed(3)}° · <span class="opacity-60">square by</span> {draftFrame.squarenessDeg.toFixed(3)}°</div>
+							<div class={draftFits ? '' : 'text-red-300'}>
+								<span class="opacity-60">fit</span> {draftFrame.residualMm.toFixed(3)} mm
+								{#if !draftFits}<strong> — over the {frameLimits.maxResidualMm} mm limit (≈{(draftFrame.residualMm * 4).toFixed(1)} mm at one corner)</strong>{/if}
+							</div>
+							{#if calInDraftFrame}
+								<div class="mt-1 border-t border-[var(--color-tron-border)] pt-1">
+									<span class="opacity-60">calibrator sits at</span> u {calInDraftFrame.u.toFixed(4)} · v {calInDraftFrame.v.toFixed(4)}
+								</div>
+							{/if}
+						</div>
+					{:else}
+						<p class="mt-2 text-[10px]" style="color: var(--color-tron-text-secondary)">{capturedCorners.length} of 4 corners captured.</p>
+					{/if}
+
+					<button type="button" onclick={saveDeckFrame} disabled={busy || !selectedRobotId || !draftFits} class="mt-2 w-full rounded border border-green-500/40 bg-green-900/15 px-2 py-1.5 text-[11px] font-semibold text-green-300 hover:bg-green-900/25 disabled:opacity-40">
+						Save deck frame → {robot?.name ?? 'robot'}
+					</button>
+
+					{#if pendingRederive}
+						<div class="mt-2 rounded border border-amber-500/50 bg-amber-900/20 p-2 text-[10px] text-amber-100">
+							<p class="font-bold">Calibrator NOT moved — confirm first</p>
+							<p class="mt-1">{pendingRederive.message}</p>
+							<p class="mt-1 font-mono">
+								{pendingRederive.from?.x?.toFixed?.(3)}, {pendingRederive.from?.y?.toFixed?.(3)}
+								→ {pendingRederive.to?.x?.toFixed?.(3)}, {pendingRederive.to?.y?.toFixed?.(3)}
+							</p>
+							<div class="mt-2 grid grid-cols-2 gap-1">
+								<button type="button" onclick={confirmRederive} disabled={busy} class="rounded border border-amber-400/60 bg-amber-900/30 px-2 py-1 font-bold text-amber-100 disabled:opacity-40">Move it {pendingRederive.deltaMm.toFixed(2)} mm</button>
+								<button type="button" onclick={() => (pendingRederive = null)} class="rounded border border-[var(--color-tron-border)] px-2 py-1" style="color: var(--color-tron-text-secondary)">Leave it</button>
+							</div>
+						</div>
+					{/if}
+
+					{#if savedFrame}
+						<p class="mt-1.5 text-[10px]" style="color: var(--color-tron-text-secondary)">
+							Saved: {savedFrame.derived.width.toFixed(1)} × {savedFrame.derived.height.toFixed(1)} mm at {savedFrame.derived.rotationDeg.toFixed(2)}°
+							{#if savedFrame.capturedBy}· {savedFrame.capturedBy}{/if}
+							{#if savedFrame.capturedAt}· {new Date(savedFrame.capturedAt).toLocaleString()}{/if}
+						</p>
+					{:else}
+						<p class="mt-1.5 text-[10px]" style="color: var(--color-tron-text-secondary)">No deck frame taught for this robot yet.</p>
+					{/if}
+				</div>
+
+				<!-- Live limit-switch watch: locate the fixture by hand-jogging onto it -->
+				<div class="mt-3 rounded border border-[var(--color-tron-border)] bg-black/20 p-2">
+					<div class="mb-1 flex items-center justify-between">
+						<div class="text-[11px] font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Sensor watch</div>
+						{#if watchArmed}
+							<span class="rounded border border-green-500/50 bg-green-900/25 px-1.5 py-0.5 text-[10px] font-bold text-green-300">● {armedAxis} SWITCH LIVE</span>
+						{:else if watchQueued}
+							<span class="rounded border border-amber-500/50 bg-amber-900/20 px-1.5 py-0.5 text-[10px] text-amber-300">waiting for bridge…</span>
+						{/if}
+					</div>
+					<p class="mb-2 text-[10px]" style="color: var(--color-tron-text-secondary)">
+						Arms the calibrator's limit switches and records <strong>every trip</strong> — which switch, when, and where the tip was — while <strong>you</strong> jog onto the fixture. This commands no motion of its own. (The <em>Calibrate tip</em> button above is the opposite: it drives the creep probe to measure a tip against a fixture whose location is already known.)
+					</p>
+					<p class="mb-2 text-[10px]" style="color: var(--color-tron-text-secondary)">
+						<strong>One switch is live at a time</strong>, starting with <strong>X</strong> — the one a normal approach reaches first — and handing off to the other after each trip. Touch the switch the badge names; the other one is deaf until its turn.
+					</p>
+
+					<div class="grid grid-cols-2 gap-1">
+						<button type="button" onclick={startWatch} disabled={busy || watchArmed || watchQueued || !runId} class="rounded border border-[var(--color-tron-cyan)]/40 px-2 py-1.5 text-[11px] text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40">Start watch</button>
+						<button type="button" onclick={stopWatch} disabled={busy || (!watchArmed && !watchQueued)} class="rounded border border-red-500/40 bg-red-900/15 px-2 py-1.5 text-[11px] text-red-300 disabled:opacity-40">■ Stop</button>
+					</div>
+					{#if !runId}
+						<p class="mt-1 text-[10px] text-amber-300/80">Open a maintenance run first — the watch attaches to it.</p>
+					{/if}
+
+					{#if watchEvents.length}
+						<div class="mt-2 max-h-40 overflow-y-auto rounded border border-[var(--color-tron-border)] bg-black/30">
+							<table class="w-full text-[10px] font-mono">
+								<thead class="sticky top-0 bg-black/70">
+									<tr style="color: var(--color-tron-text-secondary)">
+										<th class="px-1 py-0.5 text-left font-normal">switch</th>
+										<th class="px-1 py-0.5 text-left font-normal">activated</th>
+										<th class="px-1 py-0.5 text-right font-normal">x</th>
+										<th class="px-1 py-0.5 text-right font-normal">y</th>
+										<th class="px-1 py-0.5 text-right font-normal">z</th>
+									</tr>
+								</thead>
+								<tbody style="color: var(--color-tron-text)">
+									{#each watchEvents as e, i (i)}
+										<tr class="border-t border-[var(--color-tron-border)]/40">
+											<td class="px-1 py-0.5 font-bold" style="color: var(--color-tron-cyan)">{e.axis?.toUpperCase?.() ?? '?'}</td>
+											<td class="px-1 py-0.5">{e.trippedAt ? new Date(e.trippedAt).toLocaleTimeString(undefined, { hour12: false }) + '.' + String(new Date(e.trippedAt).getMilliseconds()).padStart(3, '0') : '—'}</td>
+											<td class="px-1 py-0.5 text-right">{e.position?.x != null ? Number(e.position.x).toFixed(2) : '—'}</td>
+											<td class="px-1 py-0.5 text-right">{e.position?.y != null ? Number(e.position.y).toFixed(2) : '—'}</td>
+											<td class="px-1 py-0.5 text-right">{e.position?.z != null ? Number(e.position.z).toFixed(2) : '—'}</td>
+										</tr>
+									{/each}
+								</tbody>
+							</table>
+						</div>
+
+						{#if tripPoint}
+							<div class="mt-2 rounded border border-[var(--color-tron-cyan)]/30 bg-black/30 p-1.5 text-[10px]" style="color: var(--color-tron-text-secondary)">
+								<span class="opacity-60">from the latest X + Y trips:</span>
+								<span class="font-mono" style="color: var(--color-tron-text)"> {tripPoint.x}, {tripPoint.y}</span>
+							</div>
+							<div class="mt-1 grid grid-cols-2 gap-1">
+								<button type="button" onclick={useTripsAsCalibrator} disabled={busy} class="rounded border border-[var(--color-tron-border)] px-2 py-1.5 text-[10px] hover:border-[var(--color-tron-cyan)] disabled:opacity-40" style="color: var(--color-tron-text)" title="Load the trip-derived X/Y into the calibrator fields above (does not save)">Use as calibrator ↥</button>
+								<button type="button" onclick={saveCalibratorFromTrips} disabled={busy || !selectedRobotId} class="rounded border border-green-500/40 bg-green-900/15 px-2 py-1.5 text-[10px] font-semibold text-green-300 hover:bg-green-900/25 disabled:opacity-40" title="Save the calibrator fields, tagged as sensor-taught, keeping this trip log on the record">Save with trip log</button>
+							</div>
+						{:else}
+							<p class="mt-1 text-[10px] text-amber-300/80">Need at least one X trip and one Y trip to derive a point.</p>
+						{/if}
+					{:else if watchArmed}
+						<p class="mt-2 text-[10px]" style="color: var(--color-tron-text-secondary)">Listening on the <strong>{armedAxis}</strong> switch — no trips yet. Jog the tip onto it.</p>
+					{/if}
 				</div>
 
 				<!-- Tour + Fill motion: drive the pipette through holes like a real fill -->

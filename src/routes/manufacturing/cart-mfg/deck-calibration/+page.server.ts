@@ -22,6 +22,7 @@ import {
 	OpentronProtocol,
 	RobotDeckOffset,
 	TipCalibratorFixture,
+	DeckFrame,
 	AuditLog,
 	generateId
 } from '$lib/server/db';
@@ -34,7 +35,28 @@ import { getRobot, robotUploadProtocol } from '$lib/server/opentrons/proxy';
 // The single source of truth for "is this Z a height a pipette may be sent to".
 // Shared with the probe path (resolveCalibratorPoint) so the studio cannot save a
 // value the robot would then refuse to use — one window, one definition.
-import { CAL_Z_LIMITS, plausibleZ } from '$lib/server/services/deck-calibration/tip-calibrator';
+import {
+	CAL_Z_LIMITS,
+	plausibleZ,
+	taughtXY
+} from '$lib/server/services/deck-calibration/tip-calibrator';
+// The deck's own frame: four jogged corners → origin/size/rotation, and the
+// u,v mapping that lets the calibrator be stored as a fraction of the deck
+// instead of a bare absolute point that goes stale when the deck is reseated.
+// In $lib/shared (not $lib/server) so the page can derive the same frame
+// client-side for a live preview — one implementation, both sides.
+import {
+	CORNER_LABELS,
+	MAX_RESIDUAL_MM,
+	MAX_SILENT_REDERIVE_MM,
+	deriveFrame,
+	fromFrameRelative,
+	toFrameRelative,
+	validateCorners,
+	withinFrame,
+	type Corner,
+	type DeckFrameDerived
+} from '$lib/shared/deck-frame';
 import {
 	publishDeckVersion,
 	rollbackDeckVersion,
@@ -161,6 +183,226 @@ function toCalEntry(c: any, opts?: { robotId?: string; inheritedFromGlobal?: boo
 	};
 }
 
+/** One taught deck frame, serialised for the client (dates → ISO strings). */
+type FrameEntry = {
+	robotId: string;
+	deckLoadName: string | null;
+	corners: { label: string; x: number; y: number; z: number }[];
+	derived: DeckFrameDerived;
+	capturedBy: string | null;
+	capturedAt: string | null;
+	historyCount: number;
+};
+
+/**
+ * Shape one raw DeckFrame doc for the client.
+ *
+ * Deliberately NO defaults-filling of the kind toCalEntry does: a calibrator has
+ * a sane .py fallback to stand in for a missing field, but half a deck frame is
+ * not a deck frame. A robot either has four taught corners or it has none, so a
+ * malformed row is surfaced as absent rather than patched into something that
+ * looks taught.
+ */
+function toFrameEntry(f: any): FrameEntry | null {
+	if (!f?.derived || !Array.isArray(f?.corners) || f.corners.length !== 4) return null;
+	return {
+		robotId: String(f.robotId ?? ''),
+		deckLoadName: f.deckLoadName ?? null,
+		corners: f.corners.map((c: any) => ({
+			label: String(c?.label ?? ''),
+			x: Number(c?.x),
+			y: Number(c?.y),
+			z: Number(c?.z)
+		})),
+		derived: {
+			origin: { x: Number(f.derived.origin?.x), y: Number(f.derived.origin?.y) },
+			uAxis: { x: Number(f.derived.uAxis?.x), y: Number(f.derived.uAxis?.y) },
+			vAxis: { x: Number(f.derived.vAxis?.x), y: Number(f.derived.vAxis?.y) },
+			width: Number(f.derived.width),
+			height: Number(f.derived.height),
+			rotationDeg: Number(f.derived.rotationDeg),
+			squarenessDeg: Number(f.derived.squarenessDeg),
+			residualMm: Number(f.derived.residualMm),
+			surfaceZ: Number(f.derived.surfaceZ)
+		},
+		capturedBy: f.capturedBy?.username ?? null,
+		capturedAt: f.capturedAt?.toISOString?.() ?? null,
+		historyCount: Array.isArray(f.history) ? f.history.length : 0
+	};
+}
+
+/**
+ * Pull four corners out of submitted form data.
+ *
+ * Returns the corners unvalidated — validateCorners() owns every judgement about
+ * whether they describe a deck, so there is exactly one place that decides. This
+ * only turns strings into numbers, and does it with Number() so that a blank or
+ * junk field arrives as NaN and is rejected by name downstream, rather than as
+ * a 0 that reads as a real coordinate at the deck's front-left corner.
+ */
+function readCornersFromForm(data: FormData): Corner[] {
+	return CORNER_LABELS.map((label) => ({
+		label,
+		x: Number(data.get(`corner_${label}_x`)),
+		y: Number(data.get(`corner_${label}_y`)),
+		z: Number(data.get(`corner_${label}_z`))
+	}));
+}
+
+/** What a re-derive attempt did, or why it declined to do anything. */
+type RederiveOutcome = {
+	applied: boolean;
+	/**
+	 * Machine-readable so the page can tell "nothing to do" (silent) from
+	 * "waiting on you" (a confirmation prompt) without matching on prose.
+	 */
+	reason: 'applied' | 'no-fixture' | 'no-relative' | 'underivable' | 'guard-failed' | 'needs-confirm';
+	message: string;
+	from?: { x: number; y: number };
+	to?: { x: number; y: number };
+	deltaMm?: number;
+	/** How much the taught deck SURFACE moved in z, when we can tell. Never applied. */
+	surfaceZDeltaMm?: number | null;
+};
+
+/**
+ * Move a robot's calibrator onto a freshly-taught deck frame.
+ *
+ * Shared by saveDeckFrame (which calls it with force=false, so a large move is
+ * reported rather than applied) and rederiveCalibrator (force=true, after the
+ * operator has confirmed that move). Every decline is a first-class outcome with
+ * a reason — this runs automatically on every frame save, and a robot that
+ * simply has no calibrator linked yet must not read as a failure.
+ *
+ * ONLY x and y. See the note on saveDeckFrame for why z is reported, not derived.
+ */
+async function rederiveCalibratorForFrame(
+	robotId: string,
+	frame: DeckFrameDerived,
+	user: { _id: string; username: string },
+	force: boolean,
+	prevSurfaceZ?: number | null
+): Promise<RederiveOutcome> {
+	const surfaceZDeltaMm =
+		typeof prevSurfaceZ === 'number' && Number.isFinite(prevSurfaceZ)
+			? frame.surfaceZ - prevSurfaceZ
+			: null;
+
+	// The robot's OWN row only. A robot running on the shared 'global' fixture has
+	// nothing of its own to re-derive, and writing one here would fork it off
+	// 'global' as a side effect of teaching corners — a consequential change the
+	// page warns about before the operator makes it deliberately.
+	const fixture = (await TipCalibratorFixture.findOne({ robotId }).lean()) as any;
+	if (!fixture) {
+		return {
+			applied: false,
+			reason: 'no-fixture',
+			message: 'Deck frame saved. This robot has no calibrator of its own yet, so nothing was re-derived.',
+			surfaceZDeltaMm
+		};
+	}
+
+	const rel = fixture.frameRelative;
+	if (rel == null || !Number.isFinite(Number(rel.u)) || !Number.isFinite(Number(rel.v))) {
+		return {
+			applied: false,
+			reason: 'no-relative',
+			message:
+				'Deck frame saved. The calibrator is not linked to a frame yet — save it once with ' +
+				'this frame taught, and future corner teaches will move it automatically.',
+			surfaceZDeltaMm
+		};
+	}
+
+	const next = fromFrameRelative(frame, { u: Number(rel.u), v: Number(rel.v) });
+	if (!next) {
+		return {
+			applied: false,
+			reason: 'underivable',
+			message: 'Deck frame saved, but the calibrator position could not be derived from it.',
+			surfaceZDeltaMm
+		};
+	}
+
+	// The SAME guard the probe path applies (tip-calibrator.ts): a 0 is not a
+	// taught coordinate. A degenerate frame that survived every earlier check
+	// still must not be able to write one into production geometry.
+	if (taughtXY(next.x) === undefined || taughtXY(next.y) === undefined) {
+		return {
+			applied: false,
+			reason: 'guard-failed',
+			message:
+				'Deck frame saved, but the derived calibrator position failed the safety guard ' +
+				`(x=${next.x}, y=${next.y}) and was not written.`,
+			surfaceZDeltaMm
+		};
+	}
+
+	const from = { x: Number(fixture.position?.x), y: Number(fixture.position?.y) };
+	const deltaMm =
+		Number.isFinite(from.x) && Number.isFinite(from.y)
+			? Math.hypot(next.x - from.x, next.y - from.y)
+			: Infinity;
+
+	if (!force && deltaMm > MAX_SILENT_REDERIVE_MM) {
+		return {
+			applied: false,
+			reason: 'needs-confirm',
+			message:
+				`Deck frame saved. Re-deriving would move the calibrator ${deltaMm.toFixed(2)} mm ` +
+				`(limit ${MAX_SILENT_REDERIVE_MM} mm), so it was NOT changed. That much disagreement ` +
+				`means the new corners and the old calibrator disagree about where the deck is — ` +
+				`check the corners, then confirm if the move is real.`,
+			from,
+			to: next,
+			deltaMm,
+			surfaceZDeltaMm
+		};
+	}
+
+	const now = new Date();
+	await TipCalibratorFixture.updateOne(
+		{ robotId },
+		{
+			// z is carried through untouched — the frame maps the deck plane only.
+			$set: {
+				'position.x': next.x,
+				'position.y': next.y,
+				'frameRelative.derivedAt': now,
+				capturedBy: { _id: user._id, username: user.username },
+				capturedAt: now
+			},
+			$push: {
+				history: {
+					$each: [{ ...toPrevSnapshot(fixture), source: 'frame', note: 'Re-derived from a new deck frame' }],
+					$position: 0,
+					$slice: CAL_HISTORY_MAX
+				}
+			}
+		}
+	);
+
+	await AuditLog.create({
+		_id: generateId(),
+		tableName: 'tip_calibrator_fixtures',
+		recordId: robotId,
+		action: 'rederive_calibrator',
+		newData: { from, to: next, deltaMm, forced: force, frameRelative: { u: rel.u, v: rel.v } },
+		changedAt: now,
+		changedBy: user.username
+	});
+
+	return {
+		applied: true,
+		reason: 'applied',
+		message: `Calibrator moved ${deltaMm.toFixed(2)} mm with the deck.`,
+		from,
+		to: next,
+		deltaMm,
+		surfaceZDeltaMm
+	};
+}
+
 export const load: PageServerLoad = async ({ locals, url }) => {
 	if (!locals.user) redirect(302, '/login');
 	requirePermission(locals.user, 'manufacturing:read');
@@ -235,6 +477,14 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 			: [])
 	];
 
+	// Taught deck frames, one per robot that has one. Unlike calibrators there is
+	// no 'global' stand-in: a frame measures where a plate sits on ONE machine, so
+	// a robot without a row genuinely has no frame rather than inheriting a
+	// fiction. Malformed rows drop out via toFrameEntry rather than half-loading.
+	const deckFrames = ((await DeckFrame.find({}).lean()) as any[])
+		.map(toFrameEntry)
+		.filter((f): f is FrameEntry => f !== null);
+
 	// Version history for the selected deck (empty for racks — only decks are versioned).
 	const versions = selected && isDeckLoadName(selected) ? await listDeckVersions(selected, 50) : [];
 	const selectedDef = selected
@@ -258,7 +508,12 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		editedWells,
 		history: JSON.parse(JSON.stringify(history)),
 		robotOffsets: JSON.parse(JSON.stringify(robotOffsets)),
-		calibrators: JSON.parse(JSON.stringify(calibrators))
+		calibrators: JSON.parse(JSON.stringify(calibrators)),
+		deckFrames: JSON.parse(JSON.stringify(deckFrames)),
+		// Thresholds the UI has to render against (residual quality, re-derive
+		// confirmation). Sent from here so the geometry module stays the single
+		// source — a component cannot import from $lib/server.
+		frameLimits: { maxResidualMm: MAX_RESIDUAL_MM, maxSilentRederiveMm: MAX_SILENT_REDERIVE_MM }
 	};
 };
 
@@ -381,8 +636,32 @@ export const actions: Actions = {
 		const zRange = `between ${CAL_Z_LIMITS.min} and ${CAL_Z_LIMITS.max} mm`;
 		if (plausibleZ(z) === undefined) return fail(400, { error: `z (approach) must be a number ${zRange}` });
 
-		const source = (data.get('source') as string)?.trim() === 'probe' ? 'probe' : 'manual';
+		// 'sensor' = taught from live limit-switch trips (the calibrator watch);
+		// 'probe' = the closed-loop creep probe; anything else is a typed/jogged save.
+		const rawSource = (data.get('source') as string)?.trim();
+		const source =
+			rawSource === 'probe' ? 'probe' : rawSource === 'sensor' ? 'sensor' : 'manual';
 		const note = (data.get('note') as string)?.trim() || null;
+
+		/**
+		 * The limit-switch trips this point was taught from, if any.
+		 *
+		 * Parsed defensively and dropped on any problem rather than failing the
+		 * save: these are a RECORD of how the point was measured, not the point
+		 * itself, so losing them must never cost the operator a calibration they
+		 * just spent a jog session producing. Capped for the same reason the
+		 * switch-event endpoint caps its own array — a stuck switch.
+		 */
+		let switchEvents: unknown[] = [];
+		const rawEvents = data.get('switchEvents');
+		if (typeof rawEvents === 'string' && rawEvents.trim()) {
+			try {
+				const parsed = JSON.parse(rawEvents);
+				if (Array.isArray(parsed)) switchEvents = parsed.slice(0, 100);
+			} catch {
+				switchEvents = [];
+			}
+		}
 
 		// The doc we are about to overwrite — both the undo snapshot and the
 		// fallback for any Z the caller did not send.
@@ -422,16 +701,55 @@ export const actions: Actions = {
 			zCalReagent = plausibleZ(Number(prev?.zCalReagent)) ?? CAL_DEFAULTS.zCalReagent;
 		}
 
+		/**
+		 * Link this point to the robot's deck frame, if it has one.
+		 *
+		 * DERIVED here rather than accepted from the client: the fraction must
+		 * describe the position actually being stored, and the server is the only
+		 * place that knows both the point that passed validation above and the
+		 * frame currently on record. A client-supplied u,v could disagree with
+		 * either, and the disagreement would only surface later as a re-derive
+		 * that moves the calibrator somewhere nobody taught it.
+		 *
+		 * Absent frame, or a point that lands implausibly far outside it, simply
+		 * means no link — `position` remains the absolute truth either way, so the
+		 * save succeeds and the robot behaves exactly as it did before.
+		 */
+		let frameRelative: { u: number; v: number; frameId: string | null; derivedAt: Date } | null =
+			null;
+		const frameDoc = (await DeckFrame.findOne({ robotId }).lean()) as any;
+		if (frameDoc?.derived) {
+			const rel = toFrameRelative(frameDoc.derived, { x, y });
+			if (rel && withinFrame(rel)) {
+				frameRelative = {
+					u: rel.u,
+					v: rel.v,
+					frameId: String(frameDoc._id),
+					derivedAt: new Date()
+				};
+			}
+		}
+
 		const capturedBy = { _id: locals.user._id, username: locals.user.username };
 		const update: Record<string, any> = {
-			$set: { position: { x, y, z }, zCalWax, zCalReagent, capturedBy, capturedAt: new Date() },
+			$set: {
+				position: { x, y, z },
+				zCalWax,
+				zCalReagent,
+				capturedBy,
+				capturedAt: new Date(),
+				// Only overwrite the link when we have a new one. A save made while
+				// the frame happens to be missing must not silently unlink a
+				// calibrator that was correctly linked before.
+				...(frameRelative ? { frameRelative } : {})
+			},
 			$setOnInsert: { _id: generateId() }
 		};
 		// Only push a snapshot if there was something to replace (a first teach has no history).
 		if (prev) {
 			update.$push = {
 				history: {
-					$each: [{ ...toPrevSnapshot(prev), source, note }],
+					$each: [{ ...toPrevSnapshot(prev), source, note, switchEvents }],
 					$position: 0, // newest first
 					$slice: CAL_HISTORY_MAX
 				}
@@ -439,7 +757,7 @@ export const actions: Actions = {
 		}
 		await TipCalibratorFixture.updateOne({ robotId }, update, { upsert: true });
 
-		await AuditLog.create({ _id: generateId(), tableName: 'tip_calibrator_fixtures', recordId: robotId, action: 'save_calibrator', newData: { x, y, z, zCalWax, zCalReagent, source, note }, changedAt: new Date(), changedBy: locals.user?.username });
+		await AuditLog.create({ _id: generateId(), tableName: 'tip_calibrator_fixtures', recordId: robotId, action: 'save_calibrator', newData: { x, y, z, zCalWax, zCalReagent, source, note, frameRelative, switchEventCount: switchEvents.length }, changedAt: new Date(), changedBy: locals.user?.username });
 
 		const saved = (await TipCalibratorFixture.findOne({ robotId }).lean()) as any;
 		// inheritedFromGlobal is false by construction: the upsert just gave this
@@ -504,6 +822,152 @@ export const actions: Actions = {
 	},
 
 	/** PRD 5: save a robot's GLOBAL deck offset (applies to all labware at fill time). */
+	/**
+	 * Save the four jogged deck corners as this robot's deck frame, then re-derive
+	 * the calibrator onto it.
+	 *
+	 * The re-derive is the reason the frame is worth teaching. Reseating a deck
+	 * used to silently invalidate the calibrator's absolute point; with a frame,
+	 * re-teaching four corners moves it with the deck and no fixture re-probe is
+	 * needed.
+	 *
+	 * That same power is why this is the most dangerous write on the page: it
+	 * changes a value the PRODUCTION FILL PATH reads (resolveCalibratorPoint), on
+	 * the strength of four jogs. So the re-derive is fenced three ways —
+	 *
+	 *   1. the frame must fit (residual under MAX_RESIDUAL_MM) or nothing is saved;
+	 *   2. the derived point must clear the same taughtXY guard the probe path uses,
+	 *      so a degenerate frame cannot write a 0 that reads as taught;
+	 *   3. a move beyond MAX_SILENT_REDERIVE_MM is REPORTED, not applied — over
+	 *      that distance the new frame disagrees with the old one about where the
+	 *      deck is, and a human decides. The frame still saves; only the
+	 *      calibrator write waits for `rederiveCalibrator`.
+	 *
+	 * Z is deliberately NOT re-derived. The frame is a map of the deck PLANE; the
+	 * calibrator's z is an approach height above the fixture, which u,v says
+	 * nothing about. The corner heights do move around (surfaceZ), so the change
+	 * is reported for the operator to act on — but inferring an approach height
+	 * from four corner jogs would be a guess at the one axis where guessing wrong
+	 * drives the pipette into the fixture.
+	 */
+	saveDeckFrame: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'manufacturing:write');
+		await connectDB();
+
+		const data = await request.formData();
+		const robotId = (data.get('robotId') as string)?.trim();
+		if (!robotId) return fail(400, { error: 'Pick a robot' });
+		const deckLoadName = (data.get('deckLoadName') as string)?.trim() || null;
+		const note = (data.get('note') as string)?.trim() || null;
+
+		const corners = readCornersFromForm(data);
+		const invalid = validateCorners(corners);
+		if (invalid) return fail(400, { error: invalid });
+
+		let derived: DeckFrameDerived;
+		try {
+			derived = deriveFrame(corners);
+		} catch (e) {
+			return fail(400, { error: e instanceof Error ? e.message : 'Could not derive a deck frame' });
+		}
+
+		// Reject rather than clamp, same as every other guard on this page. A frame
+		// that does not fit is four points that are not one rectangle, and every
+		// coordinate derived from it would be wrong with nothing to show for it.
+		if (derived.residualMm > MAX_RESIDUAL_MM) {
+			return fail(400, {
+				error:
+					`Those four corners do not describe one rectangle — the fit is off by ` +
+					`${derived.residualMm.toFixed(2)} mm (limit ${MAX_RESIDUAL_MM} mm). Note the fit ` +
+					`absorbs most of a single bad corner, so this means one corner is roughly ` +
+					`${(derived.residualMm * 4).toFixed(1)} mm out of place. Re-jog the corners and try again.`
+			});
+		}
+
+		const capturedBy = { _id: locals.user._id, username: locals.user.username };
+		const now = new Date();
+		const prevFrame = (await DeckFrame.findOne({ robotId }).lean()) as any;
+
+		const stamped = corners.map((c) => ({ ...c, capturedAt: now, capturedBy }));
+		const update: Record<string, any> = {
+			$set: { deckLoadName, corners: stamped, derived, capturedBy, capturedAt: now },
+			$setOnInsert: { _id: generateId() }
+		};
+		if (prevFrame) {
+			update.$push = {
+				history: {
+					$each: [
+						{
+							corners: prevFrame.corners ?? [],
+							derived: prevFrame.derived,
+							capturedBy: prevFrame.capturedBy ?? null,
+							capturedAt: prevFrame.capturedAt ?? null,
+							note
+						}
+					],
+					$position: 0,
+					$slice: CAL_HISTORY_MAX
+				}
+			};
+		}
+		await DeckFrame.updateOne({ robotId }, update, { upsert: true });
+
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'deck_frames',
+			recordId: robotId,
+			action: 'save_deck_frame',
+			newData: { deckLoadName, corners: stamped, derived, note },
+			changedAt: now,
+			changedBy: locals.user?.username
+		});
+
+		const savedFrame = (await DeckFrame.findOne({ robotId }).lean()) as any;
+		const rederive = await rederiveCalibratorForFrame(
+			robotId,
+			derived,
+			locals.user,
+			false,
+			prevFrame?.derived?.surfaceZ ?? null
+		);
+
+		return {
+			success: true,
+			action: 'saveDeckFrame',
+			frame: JSON.parse(JSON.stringify(toFrameEntry(savedFrame))),
+			rederive
+		};
+	},
+
+	/**
+	 * Apply a re-derive that saveDeckFrame refused to apply silently.
+	 *
+	 * Reached only from the confirmation the page shows when the new frame would
+	 * move the calibrator further than MAX_SILENT_REDERIVE_MM. Same write, same
+	 * guards; the only difference is that a human has now looked at the distance.
+	 */
+	rederiveCalibrator: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'manufacturing:write');
+		await connectDB();
+
+		const data = await request.formData();
+		const robotId = (data.get('robotId') as string)?.trim();
+		if (!robotId) return fail(400, { error: 'Pick a robot' });
+
+		const frameDoc = (await DeckFrame.findOne({ robotId }).lean()) as any;
+		if (!frameDoc?.derived) {
+			return fail(400, { error: 'This robot has no taught deck frame to re-derive from' });
+		}
+
+		const rederive = await rederiveCalibratorForFrame(robotId, frameDoc.derived, locals.user, true);
+		if (!rederive.applied) {
+			return fail(400, { error: rederive.message });
+		}
+		return { success: true, action: 'rederiveCalibrator', rederive };
+	},
+
 	saveRobotOffset: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
 		requirePermission(locals.user, 'manufacturing:write');

@@ -50,6 +50,7 @@ import signal
 import logging
 import threading
 import subprocess
+from datetime import datetime, timezone
 from typing import Optional, Tuple
 
 try:
@@ -1446,6 +1447,218 @@ def _probe_axis(run_id: str, pipette_id: str, ser: "serial.Serial",
     return shift, reached
 
 
+# ── Live limit-switch watch (calibrator_watch) ────────────────────────────────
+# The operator hand-jogs the tip onto the calibrator while this listens; every
+# switch closure is reported to BIMS with its timestamp and the pipette position
+# at that moment. That is what LOCATES the fixture.
+#
+# Deliberately the mirror image of execute_calibrate_tip: that routine drives the
+# gantry itself in a closed loop and returns one net adjust{x,y}, measuring a TIP
+# against a fixture whose position is already known. This one COMMANDS NO MOTION
+# AT ALL — the operator drives — and reports individual trips instead of a net
+# number, because "where did the switch close" is the measurement wanted here.
+#
+# ATTACHED-ONLY, and that is a safety property rather than a convenience: it runs
+# inside the Studio's open maintenance run and only ever READS position. A watch
+# that opened its own run could move an arm the operator has their hands on.
+WATCH_POLL_S = 0.02        # serial read timeout while listening for a trip
+WATCH_HEARTBEAT_S = 3.0    # how often to ask BIMS "am I still wanted?"
+WATCH_REARM_S = 0.35       # settle time before re-arming a switch after a trip
+WATCH_MAX_DURATION_S = 1800
+
+
+def _post_switch_event(command_id: str, payload: dict) -> bool:
+    """POST one trip (or a heartbeat) — returns True when BIMS wants us to STOP.
+
+    Fails SAFE in the direction of continuing: a network blip returns False so
+    one dropped request cannot silently end a watch the operator is mid-jog on.
+    Only an explicit cancelRequested (or a terminal status, which the endpoint
+    reports as a 409) stops it.
+    """
+    url = "{}/api/agent/ot2/commands/{}/switch-event".format(BIMS_BASE_URL, command_id)
+    try:
+        r = requests.post(url, headers=_bims_headers(), data=json.dumps(payload), timeout=10)
+        try:
+            body = r.json() or {}
+        except Exception:
+            body = {}
+        if r.status_code == 409:
+            log.info("calibrator_watch: BIMS says the watch is over (%s)", body.get("status"))
+            return True
+        if r.status_code >= 400:
+            log.warning("switch-event POST %s: %s", r.status_code, r.text[:200])
+            return False
+        return bool(body.get("cancelRequested"))
+    except Exception as e:
+        log.warning("switch-event POST failed: %s", e)
+        return False
+
+
+def execute_calibrator_watch(command_id: str, payload: dict) -> None:
+    """Arm the calibrator's limit switches and report each trip until stopped.
+
+    payload:
+      runId / pipetteId  — the Studio's OPEN maintenance run (both required)
+      durationMs         — how long to stay armed
+    """
+    run_id = (payload or {}).get("runId")
+    pipette_id = (payload or {}).get("pipetteId")
+    if not run_id or not pipette_id:
+        _post_result(command_id, {"ok": False,
+                                  "error": "calibrator_watch: runId + pipetteId required "
+                                           "(the watch attaches to the studio's run)"})
+        return
+
+    try:
+        duration_s = min(float((payload or {}).get("durationMs") or 600000) / 1000.0,
+                         WATCH_MAX_DURATION_S)
+    except Exception:
+        duration_s = 600.0
+
+    ser, bend = _open_calibrator_serial()
+    if not ser:
+        _post_result(command_id, {"ok": False,
+                                  "error": "calibrator fixture not found — no /dev/ttyACM device "
+                                           "answered the 'C' bend query (scanner skipped)"})
+        return
+    if bend is None:
+        bend = {"x": 0.0, "y": 0.0}
+
+    log.info("calibrator_watch %s: armed on run %s (%.0fs, bend x=%s y=%s)",
+             command_id, run_id, duration_s, bend["x"], bend["y"])
+
+    deadline = time.time() + duration_s
+    last_beat = time.time()
+    trips = 0
+    stop_reason = "duration elapsed"
+    # Hoisted above the try so a failure part-way through can still report which
+    # switch was live when it happened — that is the whole diagnosis.
+    first_axis = b"Y" if str((payload or {}).get("firstAxis") or "").lower() == "y" else b"X"
+    armed = first_axis
+    failure = None
+
+    try:
+        # ONE axis armed at a time, in the order the switches are actually
+        # touched — X first, then Y.
+        #
+        # This mirrors _probe_axis, the only code proven against this fixture: it
+        # arms a single axis, waits for that byte, and moves on. Arming both at
+        # once was never demonstrated to work, and if the fixture's arming is
+        # EXCLUSIVE the second arm byte silently disarms the first — half the
+        # trips would vanish with nothing on screen to say so. Sequential arming
+        # is correct under BOTH readings of the hardware, so it removes the
+        # question instead of betting on the answer.
+        #
+        # X first because that is the order both fill protocols probe in
+        # (CAL_PROBE_RECIPES does the X probe, then the Y probe), so it is the
+        # switch a normal approach reaches first. Overridable per command via
+        # `firstAxis` for a fixture or approach that runs the other way round —
+        # a config change, not a redeploy.
+        _cal_write(ser, armed)
+        log.info("calibrator_watch %s: armed %s (one axis at a time)",
+                 command_id, armed.decode())
+
+        ser.timeout = WATCH_POLL_S
+        while time.time() < deadline:
+            got = b""
+            try:
+                got = ser.read(1)
+            except Exception as e:
+                log.warning("calibrator_watch: serial read failed: %s", e)
+                stop_reason = "serial read failed: {}".format(e)
+                break
+
+            # Only the ARMED axis is a real trip. Anything else on the wire is
+            # a stale byte from a previous arm or a bounce, and crediting it
+            # would stamp a position the operator was never at.
+            if got == armed:
+                # Timestamp FIRST, before the position round-trip: the trip is the
+                # moment the switch closed, not the moment the robot got round to
+                # answering. That gap is small, but it is exactly the quantity the
+                # operator is being shown.
+                tripped_at = datetime.now(timezone.utc).isoformat()
+                axis = "x" if got == b"X" else "y"
+                pos = None
+                try:
+                    pos = get_current_position(run_id, pipette_id)
+                except Exception as e:
+                    # A trip with no position is still worth reporting: it tells
+                    # the operator the switch works and when it closed. Staying
+                    # silent would look identical to the switch never firing.
+                    log.warning("calibrator_watch: position read failed: %s", e)
+
+                trips += 1
+                log.info("calibrator_watch %s: %s switch tripped at %s", command_id, axis, pos)
+                cancel = _post_switch_event(command_id, {
+                    "axis": axis,
+                    "trippedAt": tripped_at,
+                    "position": pos,
+                    "bend": bend,
+                })
+                if cancel:
+                    stop_reason = "stopped from BIMS"
+                    break
+
+                # Hand off to the OTHER axis: that switch is the next one the
+                # approach reaches, and after it fires we come back round to the
+                # first. One armed at a time, cycling, so the operator can touch
+                # off X → Y as many times as it takes to be happy.
+                armed = b"Y" if armed == b"X" else b"X"
+                time.sleep(WATCH_REARM_S)
+                try:
+                    # Drop anything that arrived during the settle window — it
+                    # belongs to the switch we just read, not the one being armed.
+                    ser.reset_input_buffer()
+                    _cal_write(ser, armed)
+                except Exception as e:
+                    log.warning("calibrator_watch: arming %s after the %s trip failed: %s",
+                                armed.decode(), axis, e)
+                last_beat = time.time()
+                continue
+
+            # No trip. Trips are the only other traffic on this channel, so an
+            # operator who presses Stop without touching a switch produces none —
+            # without this the port would stay held until the deadline.
+            if time.time() - last_beat >= WATCH_HEARTBEAT_S:
+                last_beat = time.time()
+                if _post_switch_event(command_id, {"heartbeat": True}):
+                    stop_reason = "stopped from BIMS"
+                    break
+    except Exception as e:
+        # Without this the command would sit at 'claimed' with no result and the
+        # Studio would poll "waiting for bridge" forever — a hang the operator
+        # cannot tell apart from a daemon that is simply busy. Same contract as
+        # execute_calibrate_tip: every exit posts something.
+        failure = str(e)
+        log.error("calibrator_watch %s failed: %s", command_id, e)
+    finally:
+        try:
+            ser.close()
+        except Exception:
+            pass
+
+    if failure:
+        _post_result(command_id, {"ok": False, "error": "calibrator_watch: {} (armed {} at the time, "
+                                                        "{} trip(s) recorded)".format(
+                                      failure, armed.decode(), trips)})
+        return
+
+    log.info("calibrator_watch %s: ended (%s) after %d trip(s)", command_id, stop_reason, trips)
+    # ok:true even when the operator stopped it early — a watch that listened and
+    # was told to stand down did its job. Only a fixture we could never open, or a
+    # missing run, is a failure; both return above.
+    _post_result(command_id, {"ok": True, "status": 200, "body": {
+        "trips": trips,
+        "stopReason": stop_reason,
+        "bend": bend,
+        "attached": True,
+        # Which switch was still waiting when this ended — the first thing to look
+        # at when an operator says "it stopped seeing my touches".
+        "armedAtEnd": armed.decode() if armed else None,
+        "firstAxis": first_axis.decode(),
+    }})
+
+
 def execute_calibrate_tip(command_id: str, payload: dict) -> None:
     """PRD 4: probe the tip on the calibrator, return adjust{x,y}. KEEPS the tip on.
 
@@ -1649,6 +1862,8 @@ def execute_command(cmd: dict, port: ScannerPort) -> None:
         execute_auto_resume_run(command_id, cmd.get("payload") or {})
     elif kind == "calibrate_tip":
         execute_calibrate_tip(command_id, cmd.get("payload") or {})
+    elif kind == "calibrator_watch":
+        execute_calibrator_watch(command_id, cmd.get("payload") or {})
     elif kind == "tip_swap_request":
         execute_tip_swap_request(command_id, cmd.get("payload") or {})
     else:

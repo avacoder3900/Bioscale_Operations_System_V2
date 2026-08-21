@@ -14,7 +14,7 @@ const ot2BridgeCommandSchema = new Schema({
 	_id: { type: String, default: () => generateId() },
 	robotId: String,             // OpentronsRobot._id
 	deviceId: String,            // ot2-<slot>-bridge
-	kind: { type: String, enum: ['http', 'sweep', 'deck_scan', 'upload_protocol', 'restart_robot_server', 'auto_resume_run', 'calibrate_tip', 'tip_swap_request'], required: true },
+	kind: { type: String, enum: ['http', 'sweep', 'deck_scan', 'upload_protocol', 'restart_robot_server', 'auto_resume_run', 'calibrate_tip', 'tip_swap_request', 'calibrator_watch'], required: true },
 	// kind 'http': relay this request to http://localhost:31950 on the robot
 	request: {
 		method: String,
@@ -25,6 +25,17 @@ const ot2BridgeCommandSchema = new Schema({
 	// kind 'upload_protocol': { fileName, fileB64 } — base64 .py uploaded to the
 	// robot's /protocols then analyzed on-robot (see OT2-BRIDGE-3)
 	payload: Schema.Types.Mixed,
+	// kind 'calibrator_watch': the limit-switch trips seen so far, appended one at
+	// a time by the daemon while the operator hand-jogs onto the fixture, and
+	// polled by the Studio to render them live. Each entry is
+	// { axis, trippedAt, position: {x,y,z}, bend: {x,y} }.
+	//
+	// Lives on the queue message rather than in its own collection precisely
+	// BECAUSE it is disposable: a watch is a live view, not a record, so it
+	// inherits this schema's TTL indexes and self-cleans. The trips that end up
+	// producing a saved calibrator point are copied onto that fixture's history
+	// entry (switchEvents), which is the durable record.
+	events: { type: [Schema.Types.Mixed], default: [] },
 	status: {
 		type: String,
 		enum: ['pending', 'claimed', 'completed', 'failed', 'expired'],

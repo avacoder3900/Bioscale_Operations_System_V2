@@ -9795,3 +9795,80 @@ NOT BENCH-VERIFIED — READ THIS BEFORE THE NEXT FILL RUN
     6. saveRobotOffset REFUSES a non-zero offset.
     7. Calibrate reagent then switch to wax in one run -> the 409 SLOT_OCCUPIED
        path reopens slot 11 cleanly and the gantry stays locked throughout.
+
+================================================================================
+2026-08-21 — feat/deck-frame-calibrator-watch — deck frame (4 jogged corners) + live calibrator limit-switch watch
+================================================================================
+The tip calibrator was stored as a bare absolute point, so reseating the deck
+silently invalidated it with nothing on screen to say so, and the only way BIMS
+ever learned a switch had tripped was the closed-loop creep probe — which
+reports a net adjust{x,y} and throws away when and where each switch closed.
+
+Two new capabilities, both driven from the Deck Calibration Studio:
+
+TEACH THE DECK'S FRAME. Jog the tip to the four physical corners of the deck
+plate and capture each. A least-squares affine fit onto the unit square gives
+origin / width / height / rotation, previewed live as corners land. The
+calibrator is then stored as a FRACTION (u,v) of that frame, so re-teaching the
+corners after a reseat re-derives its absolute position — no fixture re-probe.
+
+LIVE LIMIT-SWITCH WATCH. New bridge command kind 'calibrator_watch' arms the
+calibrator's switches and records every trip (which switch, timestamp, and the
+pipette position at that instant) while the OPERATOR hand-jogs. It attaches to
+the Studio's open maintenance run and COMMANDS NO MOTION AT ALL — the exact
+mirror of execute_calibrate_tip, which drives the gantry to measure a tip
+against a fixture whose position is already known. This one locates the fixture.
+
+Files:
+  src/lib/shared/deck-frame.ts (+ .test.ts, 25 tests) — the geometry. In
+    $lib/shared, not $lib/server, because the Studio derives the same frame
+    client-side for the live preview; one implementation, both sides.
+  src/lib/server/db/models/deck-frame.ts — new deck_frames collection, per robot.
+    Deliberately NO 'global' fallback row: a frame measures one physical machine.
+  tip-calibrator-fixture.ts — additive only (frameRelative, switchEvents on
+    history, two new history sources). resolveCalibratorPoint needed ZERO edits,
+    so a robot with no frame behaves exactly as before.
+  ot2-bridge-command.ts — 'calibrator_watch' kind + events[] (lives on the queue
+    message so it inherits the TTL indexes and self-cleans).
+  api/opentrons-lab/robots/[id]/calibrator-watch/{,[commandId]}/+server.ts
+  api/agent/ot2/commands/[id]/switch-event/+server.ts — daemon → BIMS, plus a
+    heartbeat, because trips are the only other traffic on that channel and an
+    operator who stops without touching a switch generates none (the port would
+    stay held until the deadline).
+  deck-calibration/+page.{server.ts,svelte} — saveDeckFrame / rederiveCalibrator
+    actions, corner-capture + sensor-watch UI.
+  scripts/ot2-bridge.py — execute_calibrator_watch + dispatch.
+
+TWO CALIBRATION DECISIONS WORTH KNOWING:
+  1. The affine fit ABSORBS 3/4 of a single mis-jogged corner — an 8mm bad
+     corner reads as 2mm of residual. MAX_RESIDUAL_MM is therefore 1 (catching a
+     4mm corner error), not the 3 it started as. The 4x relationship is pinned in
+     a test; anyone "loosening" it without reading that will let bad decks through.
+  2. The watch arms ONE switch at a time, X first (the order CAL_PROBE_RECIPES
+     probes in, so the one a normal approach reaches), handing off on each trip.
+     Arming both at once was never demonstrated against this fixture and would
+     silently lose half the trips if its arming is exclusive. Sequential is
+     correct either way, so it removes the question instead of betting on it.
+
+The re-derive writes a value the PRODUCTION FILL PATH reads, so it is fenced
+three ways: the frame must fit; the derived point must clear the same taughtXY
+guard the probe path uses; and a move over 10mm is reported for explicit
+confirmation rather than applied. Z is never derived — the frame maps the deck
+plane, and the calibrator's z is an approach height above the fixture.
+
+  npm run test:unit — 177/177 across 10 files (25 new).
+  npm run check — 84 errors / 434 warnings, unchanged from master's baseline,
+  zero added (all 84 are in kanban roadmap / MCP / R2 / parts, untouched here).
+
+NOT BENCH-VERIFIED
+  The corner-teaching half needs only a browser. The watch needs the fixture on
+  the wire. Outstanding:
+    1. Teach four corners on a robot, confirm width/height/rotation match the
+       real plate and the fit reads under 1mm.
+    2. Arm a watch, touch the X switch by hand -> a trip appears with the right
+       axis, a sane timestamp, and the position you were at.
+    3. Confirm the handoff: after the X trip the badge says Y SWITCH LIVE and
+       touching Y registers.
+    4. Save the calibrator from trips, then re-teach the corners with the deck
+       deliberately shifted -> the re-derived point tracks the shift.
+    5. Confirm a >10mm re-derive REFUSES silently-applying and prompts instead.

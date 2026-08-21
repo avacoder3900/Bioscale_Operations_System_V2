@@ -22,6 +22,7 @@ export { DeckCalibrationEdit } from './deck-calibration-edit.js';
 export { RobotDeckOffset } from './robot-deck-offset.js';
 export { DeckVersion } from './deck-version.js';
 export { TipCalibratorFixture } from './tip-calibrator-fixture.js';
+export { DeckFrame } from './deck-frame.js';
 export { Session } from './session.js';
 export { Role } from './role.js';
 export { InviteToken } from './invite-token.js';

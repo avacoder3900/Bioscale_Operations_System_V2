@@ -30,7 +30,9 @@ const operatorRef = new Schema(
  *
  * `source` describes the write that REPLACED this value:
  *   manual = typed/jogged and saved, probe = saved from a calibration probe,
- *   revert = this value was displaced by a revert to an older point.
+ *   revert = this value was displaced by a revert to an older point,
+ *   frame  = displaced by a re-derive from a freshly-taught deck frame,
+ *   sensor = displaced by a point taught from live limit-switch trips.
  */
 const calibratorHistoryEntry = new Schema(
 	{
@@ -39,8 +41,19 @@ const calibratorHistoryEntry = new Schema(
 		zCalReagent: { type: Number, default: 40.8 },
 		capturedBy: { type: operatorRef },
 		capturedAt: { type: Date, default: Date.now },
-		source: { type: String, enum: ['manual', 'probe', 'revert'], default: 'manual' },
-		note: { type: String, default: null }
+		source: {
+			type: String,
+			enum: ['manual', 'probe', 'revert', 'frame', 'sensor'],
+			default: 'manual'
+		},
+		note: { type: String, default: null },
+		/**
+		 * The limit-switch trips this point was taught from, when it was taught
+		 * from a live sensor watch. The durable copy of "when did each sensor
+		 * activate, and where was the tip when it did" — the watch itself lives on
+		 * the bridge-command queue message and ages out within days.
+		 */
+		switchEvents: { type: [Schema.Types.Mixed], default: [] }
 	},
 	{ _id: false }
 );
@@ -62,6 +75,33 @@ const tipCalibratorFixtureSchema = new Schema({
 	 * be tight enough for B07 and loose enough for R04 at the same time.
 	 */
 	maxTipAdjust: { type: Number, default: null },
+	/**
+	 * Where this calibrator sits as a FRACTION of the robot's taught deck frame
+	 * (see deck-frame.ts): u across the deck, v front-to-back, 0..1 inside it.
+	 *
+	 * `position` above stays the absolute source of truth that the production
+	 * fill path reads — resolveCalibratorPoint() does not look at this field, so
+	 * a robot with no frame behaves exactly as before. This is the input to the
+	 * RE-DERIVE: when the corners are re-taught after a deck is reseated, the new
+	 * absolute position is fromFrameRelative(newFrame, this), which is what makes
+	 * a reseat a four-corner jog instead of a re-probe.
+	 *
+	 * Null until the calibrator is saved against a frame. `frameId` records which
+	 * frame the fraction was measured in, so a re-derive can tell a stale pairing
+	 * from a current one.
+	 */
+	frameRelative: {
+		type: new Schema(
+			{
+				u: { type: Number, required: true },
+				v: { type: Number, required: true },
+				frameId: { type: String, default: null },
+				derivedAt: { type: Date, default: Date.now }
+			},
+			{ _id: false }
+		),
+		default: null
+	},
 	capturedBy: { type: operatorRef },
 	capturedAt: { type: Date, default: Date.now },
 	// Newest-first list of the points this one replaced. Capped at 10 on write.
