@@ -102,6 +102,56 @@ const tipCalibratorFixtureSchema = new Schema({
 		),
 		default: null
 	},
+	/**
+	 * THE calibrator's anchor: one taught deck hole, and the calibrator's offset
+	 * from it.
+	 *
+	 * This replaces frameRelative as what the calibrator hangs off, because a
+	 * hole is a far better reference than the deck's plate corners: a hole has a
+	 * NOMINAL position in the deck's own labware definition, so "the calibrator
+	 * is 3.97 mm left and 99.65 mm back of hole H12" is a statement about the
+	 * geometry the robot actually fills. A plate corner has no nominal at all —
+	 * the four-corner frame could only ever describe where the plate sat, never
+	 * relate it to the wells.
+	 *
+	 * It also costs the operator one jog instead of four, and re-teaching is one
+	 * jog too: move to the same hole after a deck is reseated, capture it, and
+	 * the calibrator's absolute position follows.
+	 *
+	 * `nominal` is the definition's coordinate for that well AT TEACH TIME, kept
+	 * so a later change to the deck definition shows up as a discrepancy rather
+	 * than silently shifting the calibrator. `taught` is where the tip actually
+	 * was. The calibrator's absolute position is taught + offset.
+	 *
+	 * Null until a reference hole is captured. `position` above remains the
+	 * absolute source of truth the production fill path reads, so a robot without
+	 * a reference hole behaves exactly as it always has.
+	 */
+	referenceHole: {
+		type: new Schema(
+			{
+				deckLoadName: { type: String, required: true },
+				wellName: { type: String, required: true },
+				nominal: { type: vec, required: true },
+				taught: { type: vec, required: true },
+				/**
+				 * Calibrator minus the taught hole position, in mm — the quantity that
+				 * survives a reseat. Re-teach the hole and this is re-applied to the
+				 * new taught position.
+				 *
+				 * dz is RECORDED BUT NEVER APPLIED on re-derive: the calibrator's z is
+				 * an approach height above a fixture, not a depth below the deck plane,
+				 * so inferring it from a hole would be a guess on the one axis where
+				 * guessing wrong drives the pipette into the fixture.
+				 */
+				offset: { type: vec, default: null },
+				capturedBy: { type: operatorRef },
+				capturedAt: { type: Date, default: Date.now }
+			},
+			{ _id: false }
+		),
+		default: null
+	},
 	capturedBy: { type: operatorRef },
 	capturedAt: { type: Date, default: Date.now },
 	// Newest-first list of the points this one replaced. Capped at 10 on write.

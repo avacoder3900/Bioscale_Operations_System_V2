@@ -38,7 +38,8 @@ import { getRobot, robotUploadProtocol } from '$lib/server/opentrons/proxy';
 import {
 	CAL_Z_LIMITS,
 	plausibleZ,
-	taughtXY
+	taughtXY,
+	finite as finiteNum
 } from '$lib/server/services/deck-calibration/tip-calibrator';
 // The deck's own frame: four jogged corners → origin/size/rotation, and the
 // u,v mapping that lets the calibrator be stored as a fraction of the deck
@@ -101,6 +102,16 @@ type CalEntry = {
 	capturedBy: string | null;
 	capturedAt: string | null;
 	history: CalHistoryEntry[];
+	/** The taught deck hole this calibrator is anchored to, if one was captured. */
+	referenceHole: {
+		deckLoadName: string;
+		wellName: string;
+		nominal: { x: number; y: number; z: number };
+		taught: { x: number; y: number; z: number };
+		offset: { x: number; y: number; z: number } | null;
+		capturedBy: string | null;
+		capturedAt: string | null;
+	} | null;
 	/**
 	 * True when this robot has no fixture row of its own and these numbers came
 	 * from the shared 'global' row (loadCalibratorFixture's precedence: own row →
@@ -179,6 +190,21 @@ function toCalEntry(c: any, opts?: { robotId?: string; inheritedFromGlobal?: boo
 		// operator 'global' teaches as this robot's undo points would offer a revert
 		// that either 404s or forks the robot off 'global' by accident.
 		history: inheritedFromGlobal || !Array.isArray(c?.history) ? [] : c.history.map(toCalHistoryEntry),
+		// Not carried across an inherited entry, for the same reason history is not:
+		// the anchor belongs to the robot that taught it, and showing another
+		// robot’s hole here would invite a re-derive against the wrong machine.
+		referenceHole:
+			inheritedFromGlobal || !c?.referenceHole
+				? null
+				: {
+						deckLoadName: String(c.referenceHole.deckLoadName ?? ''),
+						wellName: String(c.referenceHole.wellName ?? ''),
+						nominal: vec3(c.referenceHole.nominal),
+						taught: vec3(c.referenceHole.taught),
+						offset: c.referenceHole.offset ? vec3(c.referenceHole.offset) : null,
+						capturedBy: c.referenceHole.capturedBy?.username ?? null,
+						capturedAt: c.referenceHole.capturedAt?.toISOString?.() ?? null
+					},
 		inheritedFromGlobal
 	};
 }
@@ -400,6 +426,117 @@ async function rederiveCalibratorForFrame(
 		to: next,
 		deltaMm,
 		surfaceZDeltaMm
+	};
+}
+
+/** Plain {x,y,z} out of a Mongoose subdoc, with every axis a real number. */
+function vec3(v: any): { x: number; y: number; z: number } {
+	return { x: Number(v?.x ?? 0), y: Number(v?.y ?? 0), z: Number(v?.z ?? 0) };
+}
+
+/**
+ * Move a robot’s calibrator onto a freshly-taught reference hole.
+ *
+ * The hole-anchored twin of rederiveCalibratorForFrame, and now the primary
+ * path: re-teach the one hole after a deck is reseated and the calibrator
+ * follows it, with no re-probe of the fixture.
+ *
+ * Fenced exactly like the frame re-derive, because it writes the same value the
+ * PRODUCTION FILL PATH reads: the result must clear taughtXY, and a move beyond
+ * MAX_SILENT_REDERIVE_MM is reported rather than applied. X AND Y ONLY — the
+ * stored dz is recorded for reference but never applied, since the calibrator’s
+ * z is an approach height above a fixture, not a depth below the deck plane.
+ */
+async function rederiveCalibratorFromHole(
+	robotId: string,
+	fixture: any,
+	taught: { x: number; y: number; z: number },
+	user: { _id: string; username: string },
+	force: boolean
+): Promise<RederiveOutcome> {
+	const off = fixture?.referenceHole?.offset;
+	if (!off || finiteNum(off.x) === undefined || finiteNum(off.y) === undefined) {
+		return {
+			applied: false,
+			reason: 'no-relative',
+			message:
+				'Reference hole saved. The calibrator is not linked to it yet — teach the ' +
+				'calibrator (sensor watch or probe) once and the link is made, after which ' +
+				're-teaching this hole moves it automatically.'
+		};
+	}
+
+	const next = { x: taught.x + Number(off.x), y: taught.y + Number(off.y) };
+	if (taughtXY(next.x) === undefined || taughtXY(next.y) === undefined) {
+		return {
+			applied: false,
+			reason: 'guard-failed',
+			message:
+				'Reference hole saved, but the derived calibrator position failed the ' +
+				`safety guard (x=${next.x}, y=${next.y}) and was not written.`
+		};
+	}
+
+	const from = { x: Number(fixture.position?.x), y: Number(fixture.position?.y) };
+	const deltaMm =
+		Number.isFinite(from.x) && Number.isFinite(from.y)
+			? Math.hypot(next.x - from.x, next.y - from.y)
+			: Infinity;
+
+	if (!force && deltaMm > MAX_SILENT_REDERIVE_MM) {
+		return {
+			applied: false,
+			reason: 'needs-confirm',
+			message:
+				`Reference hole saved. Re-deriving would move the calibrator ${deltaMm.toFixed(2)} mm ` +
+				`(limit ${MAX_SILENT_REDERIVE_MM} mm), so it was NOT changed — the new hole position ` +
+				`and the stored offset disagree by more than a reseat should account for. Check the ` +
+				`hole, then confirm if the move is real.`,
+			from,
+			to: next,
+			deltaMm
+		};
+	}
+
+	const now = new Date();
+	await TipCalibratorFixture.updateOne(
+		{ robotId },
+		{
+			$set: {
+				'position.x': next.x,
+				'position.y': next.y,
+				capturedBy: { _id: user._id, username: user.username },
+				capturedAt: now
+			},
+			$push: {
+				history: {
+					$each: [
+						{ ...toPrevSnapshot(fixture), source: 'frame', note: 'Re-derived from a re-taught reference hole' }
+					],
+					$position: 0,
+					$slice: CAL_HISTORY_MAX
+				}
+			}
+		}
+	);
+
+	await AuditLog.create({
+		_id: generateId(),
+		tableName: 'tip_calibrator_fixtures',
+		recordId: robotId,
+		action: 'rederive_calibrator_from_hole',
+		newData: { from, to: next, deltaMm, forced: force, wellName: fixture?.referenceHole?.wellName ?? null },
+		changedAt: now,
+		changedBy: user.username
+	});
+
+	return {
+		applied: true,
+		reason: 'applied',
+		message: `Calibrator moved ${deltaMm.toFixed(2)} mm with the reference hole.`,
+		from,
+		to: next,
+		deltaMm
 	};
 }
 
@@ -730,6 +867,24 @@ export const actions: Actions = {
 			}
 		}
 
+		/**
+		 * Link this point to the robot's reference hole by storing the vector
+		 * between them. THIS is what survives a reseat: re-teach the hole and the
+		 * calibrator is re-derived as taught + offset.
+		 *
+		 * Derived server-side from the point that just passed validation and the
+		 * hole currently on record, so the two can never disagree. dz is stored for
+		 * reference only — the re-derive never applies it.
+		 */
+		const refHole = prev?.referenceHole;
+		const holeOffset = refHole?.taught
+			? {
+					x: x - Number(refHole.taught.x),
+					y: y - Number(refHole.taught.y),
+					z: z - Number(refHole.taught.z)
+				}
+			: null;
+
 		const capturedBy = { _id: locals.user._id, username: locals.user.username };
 		const update: Record<string, any> = {
 			$set: {
@@ -741,7 +896,9 @@ export const actions: Actions = {
 				// Only overwrite the link when we have a new one. A save made while
 				// the frame happens to be missing must not silently unlink a
 				// calibrator that was correctly linked before.
-				...(frameRelative ? { frameRelative } : {})
+				...(frameRelative ? { frameRelative } : {}),
+				// Only when a hole is on record; never clears an existing link.
+				...(holeOffset ? { 'referenceHole.offset': holeOffset } : {})
 			},
 			$setOnInsert: { _id: generateId() }
 		};
@@ -822,6 +979,126 @@ export const actions: Actions = {
 	},
 
 	/** PRD 5: save a robot's GLOBAL deck offset (applies to all labware at fill time). */
+	/**
+	 * Capture the deck hole the calibrator is anchored to.
+	 *
+	 * THE anchor for the calibrator, replacing the four-corner frame. A hole is a
+	 * far better reference than a plate corner because it has a NOMINAL position
+	 * in the deck definition, so the stored offset relates the fixture to the
+	 * geometry the robot actually fills — and re-teaching it after a reseat is one
+	 * jog rather than four.
+	 *
+	 * Re-teaching the SAME well keeps the offset and moves the calibrator with it.
+	 * Choosing a DIFFERENT well clears the offset instead of re-pointing it: the
+	 * old vector was measured from a different hole, and silently reusing it would
+	 * fling the calibrator across the deck by the spacing between the two.
+	 */
+	saveReferenceHole: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'manufacturing:write');
+		await connectDB();
+
+		const data = await request.formData();
+		const robotId = (data.get('robotId') as string)?.trim();
+		const deckLoadName = (data.get('deckLoadName') as string)?.trim();
+		const wellName = (data.get('wellName') as string)?.trim();
+		if (!robotId) return fail(400, { error: 'Pick a robot' });
+		if (!deckLoadName || !wellName) {
+			return fail(400, { error: 'Move to a hole first — the reference needs a deck and a well' });
+		}
+
+		// Every axis explicitly. A blank field arriving as 0 would place the hole at
+		// the deck corner and put the calibrator an entire deck away from itself.
+		const read = (prefix: string) => {
+			const out: Record<string, number> = {};
+			for (const axis of ['x', 'y', 'z'] as const) {
+				const v = finiteNum(data.get(`${prefix}${axis.toUpperCase()}`));
+				if (v === undefined) return null;
+				out[axis] = v;
+			}
+			return out as { x: number; y: number; z: number };
+		};
+		const nominal = read('nominal');
+		const taught = read('taught');
+		if (!nominal) return fail(400, { error: `No nominal x/y/z for ${wellName} — reselect the hole` });
+		if (!taught) return fail(400, { error: 'No live position captured — jog to the hole, then capture' });
+
+		const prev = (await TipCalibratorFixture.findOne({ robotId }).lean()) as any;
+		const sameWell =
+			prev?.referenceHole?.wellName === wellName &&
+			prev?.referenceHole?.deckLoadName === deckLoadName;
+		// Keep the offset only when it still means something (same hole).
+		const offset = sameWell ? (prev?.referenceHole?.offset ?? null) : null;
+
+		const capturedBy = { _id: locals.user._id, username: locals.user.username };
+		const now = new Date();
+		await TipCalibratorFixture.updateOne(
+			{ robotId },
+			{
+				$set: {
+					referenceHole: { deckLoadName, wellName, nominal, taught, offset, capturedBy, capturedAt: now }
+				},
+				// A robot with no fixture row yet still needs somewhere to put the anchor.
+				// Seed the .py defaults rather than 0,0,0 — position is required, and a
+				// zeroed one reads as "taught" to nothing that looks at it later.
+				$setOnInsert: {
+					_id: generateId(),
+					position: { x: CAL_DEFAULTS.x, y: CAL_DEFAULTS.y, z: CAL_DEFAULTS.z },
+					zCalWax: CAL_DEFAULTS.zCalWax,
+					zCalReagent: CAL_DEFAULTS.zCalReagent
+				}
+			},
+			{ upsert: true }
+		);
+
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'tip_calibrator_fixtures',
+			recordId: robotId,
+			action: 'save_reference_hole',
+			newData: { deckLoadName, wellName, nominal, taught, keptOffset: !!offset, sameWell },
+			changedAt: now,
+			changedBy: locals.user?.username
+		});
+
+		// Re-teaching the same hole is exactly the reseat case, so move the
+		// calibrator with it. A fresh hole has no offset yet and simply reports that.
+		const after = (await TipCalibratorFixture.findOne({ robotId }).lean()) as any;
+		const rederive = await rederiveCalibratorFromHole(robotId, after, taught, locals.user, false);
+
+		return {
+			success: true,
+			action: 'saveReferenceHole',
+			calibrator: JSON.parse(JSON.stringify(toCalEntry(after))),
+			rederive
+		};
+	},
+
+	/**
+	 * Apply a hole re-derive that saveReferenceHole refused to apply silently.
+	 */
+	rederiveFromHole: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'manufacturing:write');
+		await connectDB();
+		const data = await request.formData();
+		const robotId = (data.get('robotId') as string)?.trim();
+		if (!robotId) return fail(400, { error: 'Pick a robot' });
+
+		const fixture = (await TipCalibratorFixture.findOne({ robotId }).lean()) as any;
+		if (!fixture?.referenceHole?.taught) {
+			return fail(400, { error: 'This robot has no taught reference hole to re-derive from' });
+		}
+		const rederive = await rederiveCalibratorFromHole(
+			robotId,
+			fixture,
+			vec3(fixture.referenceHole.taught),
+			locals.user,
+			true
+		);
+		if (!rederive.applied) return fail(400, { error: rederive.message });
+		return { success: true, action: 'rederiveFromHole', rederive };
+	},
 	/**
 	 * Save the four jogged deck corners as this robot's deck frame, then re-derive
 	 * the calibrator onto it.

@@ -1183,6 +1183,85 @@
 		msg = `Calibrator fields set from live (${calX}, ${calY}, ${calZ}). Click Save to persist.`;
 	}
 
+	// ══ Reference hole: THE anchor the tip calibrator hangs off ═══════════════
+	//
+	// Move the tip to a fill hole (a reagent hole in practice), jog onto the real
+	// hole, capture. The calibrator is then stored as a vector from that hole, so
+	// re-teaching this ONE hole after a reseat moves the calibrator with it.
+	//
+	// Better than the four-corner frame because a hole has a nominal coordinate in
+	// the deck definition — the offset relates the fixture to the geometry actually
+	// being filled, not just to where the plate happens to sit.
+
+	/**
+	 * Why "Move to hole" / "Capture offset" are disabled, in words.
+	 *
+	 * Both were greyed with no explanation, which is how "Capture offset is broken"
+	 * gets reported when nothing is broken at all — on the calibrator view there are
+	 * no holes to select, so the chain that enables them can never start. Same defect
+	 * the Pick up tip field note called out. Null means enabled.
+	 */
+	const moveToHoleWhy = $derived(
+		!pipetteId
+			? 'open a maintenance run first (Jog panel, top right)'
+			: kind !== 'deck'
+				? 'switch to the Deck view — this view has no holes to select'
+				: selCount !== 1
+					? `select exactly one hole (${selCount} selected)`
+					: null
+	);
+	const captureOffsetWhy = $derived(
+		!pipetteId
+			? 'open a maintenance run first'
+			: !nominal
+				? 'use "Move to hole" first — it sets the reference this measures against'
+				: null
+	);
+
+	/** The robot's saved reference hole, if it has one. */
+	const refHole = $derived((currentCalibrator as any)?.referenceHole ?? null);
+
+	/**
+	 * Save the hole the tip is currently on as the calibrator's anchor.
+	 *
+	 * `nominal` is where the robot went for that well and the live reading is where
+	 * the operator jogged it to — both ABSOLUTE, so the pair is frame-consistent.
+	 * (The definition's own x/y/z is labware-local and would not be.)
+	 */
+	async function saveReferenceHoleAction() {
+		if (!selectedRobotId) { errMsg = 'Pick a robot'; return; }
+		if (!refWell || !nominal) { errMsg = 'Move to a hole first — that picks which hole is the anchor'; return; }
+		await refreshPosition();
+		if (liveX === null || liveY === null || liveZ === null) { errMsg = 'Could not read the live position'; return; }
+		if (nominal.hasTip !== hasTip) {
+			errMsg = `Tip state changed since "Move to hole" (${nominal.hasTip ? 'tip was on' : 'no tip'}, now ${hasTip ? 'tip on' : 'no tip'}). Move to the hole again so both readings share one tip frame.`;
+			return;
+		}
+		const r = await postAction('saveReferenceHole', {
+			robotId: selectedRobotId,
+			deckLoadName: data.selected ?? '',
+			wellName: refWell,
+			nominalX: String(nominal.x), nominalY: String(nominal.y), nominalZ: String(nominal.z),
+			taughtX: String(+liveX.toFixed(3)), taughtY: String(+liveY.toFixed(3)), taughtZ: String(+liveZ.toFixed(3))
+		});
+		if (!r) return;
+		const rd = r.rederive ?? null;
+		if (rd?.reason === 'needs-confirm') {
+			pendingHoleRederive = { deltaMm: rd.deltaMm, from: rd.from, to: rd.to, message: rd.message };
+			msg = ''; errMsg = '';
+		} else {
+			msg = `Reference hole set to ${refWell}. ${rd?.message ?? ''}`.trim();
+		}
+	}
+
+	let pendingHoleRederive = $state<{ deltaMm: number; from: any; to: any; message: string } | null>(null);
+
+	async function confirmHoleRederive() {
+		if (!selectedRobotId) return;
+		const r = await postAction('rederiveFromHole', { robotId: selectedRobotId });
+		if (r) { pendingHoleRederive = null; msg = r.rederive?.message ?? 'Calibrator re-derived from the reference hole.'; }
+	}
+
 	// ══ Deck frame: four jogged corners say where the deck physically IS ══════
 	//
 	// Jog the tip to each physical corner of the deck plate and capture it. Those
@@ -1706,9 +1785,41 @@
 				</div>
 
 				<div class="mt-2 grid grid-cols-2 gap-2">
-					<button type="button" onclick={moveToSelectedHole} disabled={!pipetteId || busy || selCount !== 1} class="rounded border border-[var(--color-tron-cyan)]/40 px-2 py-2 text-xs text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40" title="Select exactly one hole">Move to hole</button>
-					<button type="button" onclick={captureOffset} disabled={!pipetteId || busy || !nominal} class="rounded border border-green-500/50 bg-green-900/20 px-2 py-2 text-xs font-bold text-green-300 hover:bg-green-900/30 disabled:opacity-40">Capture offset</button>
+					<button type="button" onclick={moveToSelectedHole} disabled={!!moveToHoleWhy || busy} class="rounded border border-[var(--color-tron-cyan)]/40 px-2 py-2 text-xs text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40" title={moveToHoleWhy ?? 'Move to the selected hole'}>Move to hole</button>
+					<button type="button" onclick={captureOffset} disabled={!!captureOffsetWhy || busy} class="rounded border border-green-500/50 bg-green-900/20 px-2 py-2 text-xs font-bold text-green-300 hover:bg-green-900/30 disabled:opacity-40" title={captureOffsetWhy ?? 'Capture the jogged offset from the hole'}>Capture offset</button>
 				</div>
+				<!-- A greyed button that does not say why is how "Capture offset is broken"
+				     gets reported when nothing is broken. Say it, in words. -->
+				{#if moveToHoleWhy || captureOffsetWhy}
+					<p class="mt-1 text-[10px] text-amber-300/80">
+						{#if moveToHoleWhy}<span class="block">Move to hole — {moveToHoleWhy}.</span>{/if}
+						{#if captureOffsetWhy}<span class="block">Capture offset — {captureOffsetWhy}.</span>{/if}
+					</p>
+				{/if}
+
+				<!-- Anchor the tip calibrator to this hole -->
+				<button type="button" onclick={saveReferenceHoleAction} disabled={busy || !refWell || !nominal || !selectedRobotId} class="mt-2 w-full rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 px-2 py-2 text-xs font-semibold text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/20 disabled:opacity-40" title="Store this hole as the point the tip calibrator is measured from">
+					⌖ Set {refWell ?? 'this hole'} as the calibrator's reference hole
+				</button>
+				<p class="mt-1 text-[10px]" style="color: var(--color-tron-text-secondary)">
+					Anchors the tip calibrator to this hole. Teach the calibrator afterwards (sensor watch or probe) and the vector between them is stored — then re-teaching <strong>just this hole</strong> after a reseat moves the calibrator with it, with no re-probe.
+				</p>
+				{#if refHole}
+					<p class="mt-1 text-[10px] font-mono" style="color: var(--color-tron-text-secondary)">
+						anchor: {refHole.wellName} @ {refHole.taught.x.toFixed(2)}, {refHole.taught.y.toFixed(2)}, {refHole.taught.z.toFixed(2)}
+						{#if refHole.offset}<br />calibrator offset: dx {refHole.offset.x.toFixed(2)} dy {refHole.offset.y.toFixed(2)}{:else}<br /><span class="text-amber-300/80">not linked to the calibrator yet — teach the calibrator to link it</span>{/if}
+					</p>
+				{/if}
+				{#if pendingHoleRederive}
+					<div class="mt-2 rounded border border-amber-500/50 bg-amber-900/20 p-2 text-[10px] text-amber-100">
+						<p class="font-bold">Calibrator NOT moved — confirm first</p>
+						<p class="mt-1">{pendingHoleRederive.message}</p>
+						<div class="mt-2 grid grid-cols-2 gap-1">
+							<button type="button" onclick={confirmHoleRederive} disabled={busy} class="rounded border border-amber-400/60 bg-amber-900/30 px-2 py-1 font-bold text-amber-100 disabled:opacity-40">Move it {pendingHoleRederive.deltaMm.toFixed(2)} mm</button>
+							<button type="button" onclick={() => (pendingHoleRederive = null)} class="rounded border border-[var(--color-tron-border)] px-2 py-1" style="color: var(--color-tron-text-secondary)">Leave it</button>
+						</div>
+					</div>
+				{/if}
 
 				<!-- Tip calibration: tip type → one button. Teach controls behind a disclosure. -->
 				<div class="mt-3 rounded border border-[var(--color-tron-border)] bg-black/20 p-2">
