@@ -9724,3 +9724,74 @@ never run on a robot, and it now carries two independent gantry-motion changes
 saveCalibrator guard move. Outstanding tests are the four in the 08-20 entry,
 the teach-disclosure test in the 08-21 entry, plus: confirm a calibrator Save
 now succeeds, and confirm saveRobotOffset refuses a non-zero offset.
+
+================================================================================
+2026-08-21 — PRODUCTION: one-click Calibrate tip + tip-calibrator reconciliation
+================================================================================
+Branch: master
+Commit: aa467cbcabc62b80907e6a705258f8f84909cb0f  (merge; parents ca01a0d2a + fa3ed64cd)
+Preview: https://bioscale-operations-system-mongodb-2yqni1rz6-brevitest.vercel.app
+Deployment: 6025035513 (Production, success)
+Production alias: https://bioscale-operations-system-mongodb.vercel.app
+Retrieve this exact code: git checkout master at commit aa467cbcabc62b80907e6a705258f8f84909cb0f
+What this deployment is for: ships the one-click tip-calibration flow and the
+six-week reconciliation of feat/tip-calibrator-teach with master.
+
+Verified the alias actually serves this build rather than an older bundle
+(the Vercel dedup failure mode): /login returns 200 and the alias and the
+immutable deployment URL serve the same entry chunk, start.BO3KAGr2.js.
+
+WHAT SHIPPED
+  One-click "Calibrate tip" in the Deck Calibration Studio. Was a four-click
+  ritual where skipping a step failed deep in the robot rather than in the UI —
+  the ot2-bridge daemon in ATTACHED mode probes from the pipette's CURRENT
+  position, so a forgotten "Go to calibrator" surfaced as "limit switch not
+  reached within 5mm". The button now picks up a tip from the tiprack matching
+  which calibration is being done (tipProfile, never the mount), travels, and
+  probes. A tip already jogged within 3mm of the fixture is left where it is.
+  busy is held across the whole sequence. Panel condensed: "Pick up tip" gone,
+  "Go to calibrator" moved into a "Fixture point (teach)" disclosure as
+  "(park, no probe)".
+
+  Plus the reconciliation with master (merge-base 2026-07-10, master was +312).
+  Full hunk-by-hunk rationale is in the 2026-08-21 reconciliation entry above;
+  the short version is master's offset policy + the branch's tipProfile and
+  taughtXY/plausibleZ guards, with master's `profile` field, strict
+  resolveLabwareDefinition and 409 SLOT_OCCUPIED recovery all kept.
+
+MASTER BUG FIXED BY THIS DEPLOY
+  Until now, production REJECTED every legitimate tip-calibrator save: the
+  "global robot offsets are retired" guard (x!==0||y!==0||z!==0 -> fail) sat in
+  saveCalibrator, where x/y/z are the fixture POSITION (~125.181, 173.247,
+  34.491). Meanwhile saveRobotOffset — which actually writes
+  RobotDeckOffset.offset — had no guard, so the thing it was meant to block got
+  through. Guard moved to saveRobotOffset, master's wording verbatim.
+
+VERIFICATION DONE
+  npm run test:unit — 152 passed (9 files), up from 133. New
+  tip-calibrator.test.ts pins the guards this merge chose to keep: taughtXY(0)
+  undefined, plausibleZ rejects null (Number(null)===0 is a probe depth through
+  the deck) and rejects rather than clamps, asTipProfile fails closed on
+  'left'/'right', TIP_PROFILE and Z_CAL_FOR_PROCESS must agree, 6.309mm gap
+  pinned. A finite() regression-witness block fails loudly if finite() is ever
+  tightened, so the guard tests can't go vacuous.
+  npm run check — 84 errors / 434 warnings, master's own pre-existing baseline,
+  zero added (confirmed by running check on origin/master directly).
+
+NOT BENCH-VERIFIED — READ THIS BEFORE THE NEXT FILL RUN
+  Nothing here ran on a robot. The tests say the numbers are guarded; they do
+  NOT say the pipette lands where it should. Production now carries two
+  independent gantry-motion changes plus the guard move, none exercised on
+  hardware. Outstanding:
+    1. Calibrate tip, p20/wax, no tip on -> picks up from
+       cosmasanddamian_96_tiprack_20ul A1 slot 11, arcs to (calX,calY,calZ),
+       probe returns adjust{x,y}, tip stays on.
+    2. Same for p300/reagent -> Biotix rack, zCalReagent depth.
+    3. Jog ~1mm off the fixture, click again -> NO re-travel; status says it is
+       probing from the jogged position.
+    4. Open "Fixture point (teach)": "Go to calibrator (park, no probe)" parks
+       without probing; jog -> From live -> Save round-trips.
+    5. A calibrator Save SUCCEEDS (it could not on the previous production).
+    6. saveRobotOffset REFUSES a non-zero offset.
+    7. Calibrate reagent then switch to wax in one run -> the 409 SLOT_OCCUPIED
+       path reopens slot 11 cleanly and the gantry stays locked throughout.
