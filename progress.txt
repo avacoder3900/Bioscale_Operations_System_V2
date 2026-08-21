@@ -9274,3 +9274,10 @@ Also this session, deployed earlier to master: MCP tools/list fix (736bad8d — 
 dead since KB2-18's z.undefined(); confirmed working, all 59 tools list; Jacob already
 ran the roadmap-v4 import workshop — live data shows A4M at buffer −3 wd on soft inputs).
 Task page: dead Ready button → Process/Reshape modal (22a8496b).
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit cac199c8
+Retrieve this exact code: git checkout master at commit cac199c8
+What this deployment is for: KB2-30 roadmap canvas — verify /kanban/roadmap renders the
+  A4M + recipe-lock graph as an infinite-zoom map; drag a card, reload, position holds;
+  click a node → chain focus; zoom out → chips → dots.
