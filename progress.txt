@@ -9350,3 +9350,52 @@ What this deployment is for: KB2-31/32 capacity v2. After deploy: (1) Jacob sets
   capacity.teamEstDaysPerWeek=10 on /kanban/policy → A4M projection should move from
   Jan 2028 to ~Nov 17 with +17 wd buffer; (2) fresh Claude-app chat to bind
   kanban_velocity_report + kanban_set_estimates, then the effortDays data pass.
+
+================================================================================
+2026-08-21 — feat/spu-mfg-tabs — SPU Mfg gets a section tab strip (Assembly / Work
+Instructions / Validation), consolidated out of the left nav
+================================================================================
+SPU Mfg was a bare page while Cart Mfg (/manufacturing/cart-mfg) had a proper tab
+strip across its process steps. SPU Assembly, Work Instructions and Validation were
+loose siblings in the left "Manufacturing" nav group with nothing tying them to SPU
+Mfg. This gives the SPU side the same shape.
+
+New src/lib/components/spu/SpuMfgTabs.svelte — breadcrumb (SPU / SPU Manufacturing /
+<section>) plus the tab strip: Overview (/spu/mfg), SPU Assembly (/assembly), Work
+Instructions (/documents/instructions), Validation (/validation). Styled to match
+cart-mfg's underline tabs. Takes showBreadcrumb so it can sit under a layout that
+already renders one.
+
+Deliberately NOT a route move: those four trees keep their own URLs, and the strip is
+mounted by each one's layout instead. That keeps every deep link intact
+(/assembly/[sessionId], /validation/magnetometer/[sessionId], /documents/instructions/
+[id]/run/[runId]) while the tabs stay visible as you move between sections — a move
+under /spu/mfg/* would have rewritten every href and redirect in those trees.
+
+Files: NEW src/routes/spu/mfg/+layout.svelte, src/routes/assembly/+layout.svelte,
+src/routes/documents/instructions/+layout.svelte (breadcrumb suppressed — the
+Documents layout above already renders one, so Work Instructions shows the Documents
+tabs and the SPU Mfg strip both; it genuinely belongs to both sections).
+MODIFIED src/routes/validation/+layout.svelte — strip replaces its local breadcrumb,
+its own Runs/Magnetometer/Thermocouple/Optical sub-tabs stay below (section tabs →
+modality tabs). Dropped the now-dead getSectionName/currentSection and fixed a
+pre-existing type error there (item.exact was passed to isActive but navItems carry
+no exact field).
+MODIFIED src/routes/+layout.svelte — SPU Assembly / Work Instructions / Validation
+removed from the Manufacturing nav group. NavItem gains an optional sectionPaths[];
+SPU Mfg claims ['/assembly','/documents/instructions','/validation'] so the group
+still auto-expands and SPU Mfg still highlights anywhere inside the section. The
+three ad-hoc prefix matches (group auto-expand, activeLabel, isActive) collapse onto
+one matchesItem() helper that honours sectionPaths.
+
+NOTE ON THE BRANCH POINT: this was first built in the home-root clone, which sits on
+feat/scan-then-check — 1702 commits behind master, from before the routes moved out
+of /spu/ (there: /spu/assembly, /spu/validation, /spu/documents/instructions,
+/spu/manufacturing, and the nav in /spu/+layout.svelte). Every href was wrong for
+master. Rebuilt from scratch here off origin/master; nothing was cherry-picked.
+
+npm run check: 118 errors / 434 warnings, zero in the touched files. 5 of those 118
+are artifacts of borrowing pm-test's node_modules via junction (missing @xyflow/svelte
+and @dagrejs/dagre, which master's package.json adds) — they resolve on Vercel's real
+install. Effective baseline ~113. Local `npm run build` not attempted (OOMs ~30GB on
+this machine); Vercel's branch build is the gate.
