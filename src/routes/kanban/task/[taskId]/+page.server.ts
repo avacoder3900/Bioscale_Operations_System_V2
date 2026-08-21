@@ -4,8 +4,15 @@ import { generateId } from '$lib/server/db/utils.js';
 import { requirePermission } from '$lib/server/permissions';
 import { checkWipLimit } from '$lib/server/kanban/wip-limit';
 import { transitionTask, createKanbanItem, TransitionError } from '$lib/server/kanban/transition';
-import { closeSpike as closeSpikeService } from '$lib/server/kanban/process';
-import { isKanbanStatus, SIZE_CLASSES, type KanbanSizeClass } from '$lib/shared/kanban-status';
+import { closeSpike as closeSpikeService, processTask, reshapeTask, SIZING_DECISION_TEST } from '$lib/server/kanban/process';
+import { getKanbanPolicy } from '$lib/server/kanban/policy';
+import {
+	isKanbanStatus,
+	SIZE_CLASSES,
+	CLASSES_OF_SERVICE,
+	type KanbanSizeClass,
+	type KanbanClassOfService
+} from '$lib/shared/kanban-status';
 import type { PageServerLoad, Actions } from './$types';
 
 function mapTag(tag: string) {
@@ -34,6 +41,8 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 		for (const u of users as any[]) usersMap.set(u._id, u.username);
 	}
 
+	const policyDoc: any = await getKanbanPolicy().catch(() => null);
+
 	return {
 		task: {
 			id: task._id,
@@ -41,6 +50,8 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 			description: task.description ?? null,
 			status: task.status,
 			sizeClass: task.sizeClass as KanbanSizeClass | undefined,
+			classOfService: (task.classOfService ?? 'standard') as string,
+			estimateDays: (task.estimateDays ?? null) as number | null,
 			assignedTo: task.assignee?._id ?? null,
 			dueDate: task.dueDate ?? null,
 			waitingReason: task.waitingReason ?? null,
@@ -73,6 +84,13 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 					}
 				: null
 		},
+		// KB2-03/KB2-12 process modal support (mirrors /kanban/inventory)
+		sizingDecisionTest: SIZING_DECISION_TEST,
+		sizeClassDefinitions: {
+			short: policyDoc?.sizeClassDefinitions?.short ?? '',
+			medium: policyDoc?.sizeClassDefinitions?.medium ?? '',
+			long: policyDoc?.sizeClassDefinitions?.long ?? ''
+		},
 		comments: (task.comments ?? []).map((c: any) => ({
 			id: c._id,
 			content: c.content,
@@ -94,6 +112,88 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 };
 
 export const actions: Actions = {
+	/**
+	 * KB2-03 process / KB2-12 reshape from the task page (2026-08-20): the old
+	 * header "Ready" button was a dead end — captured→ready is a tier crossing
+	 * the server rejects by design (commitment goes through replenishment).
+	 * Processing is the real next step for a captured option, so the header
+	 * now opens the same unified Process modal as /kanban/inventory.
+	 * Both accept estimateDays (KB2-27 — feeds the roadmap scheduler).
+	 */
+	process: async ({ request, locals, params }) => {
+		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'kanban:write');
+		await connectDB();
+		const fd = await request.formData();
+		const sizeClass = fd.get('sizeClass')?.toString();
+		const classOfService = fd.get('classOfService')?.toString();
+		if (!sizeClass || !(SIZE_CLASSES as readonly string[]).includes(sizeClass)) {
+			return fail(400, { error: 'A valid size class is required' });
+		}
+		if (!classOfService || !(CLASSES_OF_SERVICE as readonly string[]).includes(classOfService)) {
+			return fail(400, { error: 'A valid class of service is required' });
+		}
+		const dueDateRaw = fd.get('dueDate')?.toString();
+		const estimateRaw = parseFloat(fd.get('estimateDays')?.toString() ?? '');
+
+		try {
+			await processTask({
+				taskId: params.taskId,
+				actorUsername: locals.user.username,
+				via: 'ui',
+				sizeClass: sizeClass as KanbanSizeClass,
+				classOfService: classOfService as KanbanClassOfService,
+				dueDate: dueDateRaw ? new Date(dueDateRaw) : undefined,
+				estimateDays: Number.isFinite(estimateRaw) && estimateRaw > 0 ? estimateRaw : undefined,
+				dor: {
+					deliverable: fd.get('deliverable')?.toString() || undefined,
+					handoffBrief: fd.get('handoffBrief')?.toString() || undefined
+				}
+			});
+		} catch (e) {
+			if (e instanceof TransitionError) return fail(400, { error: e.message });
+			throw e;
+		}
+		return { success: true };
+	},
+
+	reshape: async ({ request, locals, params }) => {
+		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'kanban:write');
+		await connectDB();
+		const fd = await request.formData();
+		const sizeClass = fd.get('sizeClass')?.toString();
+		const classOfService = fd.get('classOfService')?.toString();
+		if (sizeClass && !(SIZE_CLASSES as readonly string[]).includes(sizeClass)) {
+			return fail(400, { error: 'A valid size class is required' });
+		}
+		if (classOfService && !(CLASSES_OF_SERVICE as readonly string[]).includes(classOfService)) {
+			return fail(400, { error: 'A valid class of service is required' });
+		}
+		const dueDateRaw = fd.get('dueDate')?.toString();
+		const estimateRaw = parseFloat(fd.get('estimateDays')?.toString() ?? '');
+
+		try {
+			await reshapeTask({
+				taskId: params.taskId,
+				actorUsername: locals.user.username,
+				via: 'ui',
+				sizeClass: (sizeClass as KanbanSizeClass) || undefined,
+				classOfService: (classOfService as KanbanClassOfService) || undefined,
+				dueDate: dueDateRaw ? new Date(dueDateRaw) : undefined,
+				estimateDays: Number.isFinite(estimateRaw) && estimateRaw > 0 ? estimateRaw : undefined,
+				dor: {
+					deliverable: fd.get('deliverable')?.toString() || undefined,
+					handoffBrief: fd.get('handoffBrief')?.toString() || undefined
+				}
+			});
+		} catch (e) {
+			if (e instanceof TransitionError) return fail(400, { error: e.message });
+			throw e;
+		}
+		return { success: true };
+	},
+
 	update: async ({ request, locals, params }) => {
 		if (!locals.user) redirect(302, '/login');
 		requirePermission(locals.user, 'kanban:write');

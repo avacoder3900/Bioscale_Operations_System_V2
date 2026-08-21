@@ -8,7 +8,7 @@
 	import CommentList from '$lib/components/kanban/CommentList.svelte';
 	import TagPicker from '$lib/components/kanban/TagPicker.svelte';
 	import ActivityLog from '$lib/components/kanban/ActivityLog.svelte';
-	import { STATUS_META, type KanbanStatus } from '$lib/shared/kanban-status';
+	import { STATUS_META, SIZE_CLASSES, CLASSES_OF_SERVICE, type KanbanStatus } from '$lib/shared/kanban-status';
 
 	let { data, form } = $props();
 
@@ -82,13 +82,15 @@
 		};
 	}
 
-	// Flow buttons per status. captured→ready is a tier crossing that the
-	// server rejects by design until replenishment lands (KB2-02) — the
-	// error surfaces in the message area above.
+	// Flow buttons per status. Tier crossings (captured/processed → ready and
+	// ready → captured) are NOT offered here — the server rejects them by
+	// design (KB2-02: commitment goes through replenishment on Tier 1). The
+	// old header "Ready" button was exactly that dead end; captured options
+	// get a Process button instead (2026-08-20), processed ones a Reshape.
 	const statusFlow: Partial<Record<KanbanStatus, { prev?: KanbanStatus; next?: KanbanStatus }>> = {
-		captured: { next: 'ready' },
-		processed: { next: 'ready' },
-		ready: { prev: 'captured', next: 'wip' },
+		captured: {},
+		processed: {},
+		ready: { next: 'wip' },
 		wip: { prev: 'ready', next: 'waiting' },
 		waiting: { prev: 'wip', next: 'wip' },
 		blocked: { next: 'wip' },
@@ -101,6 +103,21 @@
 	}
 
 	const sizeLabels: Record<string, string> = { short: 'Short', medium: 'Medium', long: 'Long' };
+
+	// KB2-03/KB2-12 unified Process modal (mirrors /kanban/inventory).
+	let showProcess = $state(false);
+	let processCos = $state('standard');
+	function openProcess() {
+		processCos = data.task.classOfService ?? 'standard';
+		showProcess = true;
+	}
+	const cosLabels: Record<string, string> = {
+		standard: 'Standard',
+		fixed_date: 'Fixed date (real external deadline)',
+		chore: 'Chore',
+		expedite: 'Expedite (emergency lane — system-capped)'
+	};
+	const isSoftware = $derived((data.task.tags ?? []).some((t: { name: string }) => t.name === 'software'));
 
 	let flow = $derived(statusFlow[data.task.status as KanbanStatus] ?? {});
 
@@ -213,6 +230,11 @@
 									</span>
 								</TronButton>
 							</form>
+						{/if}
+						{#if data.task.status === 'captured'}
+							<TronButton variant="primary" onclick={openProcess}>Process</TronButton>
+						{:else if data.task.status === 'processed'}
+							<TronButton onclick={openProcess}>Reshape</TronButton>
 						{/if}
 						{#if data.task.status === 'done'}
 							<TronButton variant="primary" disabled>Completed</TronButton>
@@ -550,6 +572,110 @@
 			<div class="flex justify-end gap-3">
 				<TronButton onclick={() => (showSpikeClose = false)}>Cancel</TronButton>
 				<TronButton type="submit" variant="primary" disabled={modalSubmitting}>Close investigation</TronButton>
+			</div>
+		</form>
+	</KanbanModal>
+{/if}
+
+<!-- Unified Process modal (KB2-03 process / KB2-12 reshape — mirrors /kanban/inventory).
+     Replaces the old dead header "Ready" button: commitment still goes through
+     replenishment; PROCESSING is the real next step for a captured option. -->
+{#if showProcess}
+	<KanbanModal title="{data.task.status === 'captured' ? 'Process' : 'Reshape'}: {data.task.title}" onclose={() => (showProcess = false)} maxWidth="max-w-xl">
+		<p class="tron-text-muted mb-3 text-sm">
+			{#if data.task.status === 'captured'}
+				Processing shapes a captured option into a real candidate: sized and classed by the person
+				processing — not the author, not the eventual assignee. Commitment to the Board still happens
+				at replenishment on Tier 1.
+			{:else}
+				Reshaping edits size, class, estimate, and DoR in place — audited, no status change.
+			{/if}
+		</p>
+		<div class="mb-4 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-tertiary)] px-3 py-2">
+			<p class="tron-text-primary text-xs font-bold uppercase tracking-wide">The sizing decision test</p>
+			<p class="tron-text-muted mt-1 text-xs">{data.sizingDecisionTest}</p>
+		</div>
+		<form
+			method="POST"
+			action={data.task.status === 'captured' ? '?/process' : '?/reshape'}
+			use:enhance={() => {
+				return async ({ result, update }) => {
+					await update({ reset: false });
+					if (result.type === 'success') showProcess = false;
+				};
+			}}
+		>
+			<fieldset class="mb-4">
+				<legend class="tron-label">Size class</legend>
+				<div class="space-y-2">
+					{#each SIZE_CLASSES as sc (sc)}
+						<label class="flex items-start gap-2 text-sm">
+							<input type="radio" name="sizeClass" value={sc} required class="mt-1" checked={data.task.sizeClass === sc} />
+							<span>
+								<span class="tron-text-primary font-bold capitalize">{sc}</span>
+								{#if (data.sizeClassDefinitions as Record<string, string>)[sc]}
+									<span class="tron-text-muted block text-xs">{(data.sizeClassDefinitions as Record<string, string>)[sc]}</span>
+								{/if}
+							</span>
+						</label>
+					{/each}
+				</div>
+			</fieldset>
+
+			<div class="mb-4">
+				<label for="tp-cos" class="tron-label">Class of service</label>
+				<select id="tp-cos" name="classOfService" class="tron-select w-full" required bind:value={processCos}>
+					{#each CLASSES_OF_SERVICE as cos (cos)}
+						<option value={cos}>{cosLabels[cos] ?? cos}</option>
+					{/each}
+				</select>
+			</div>
+
+			{#if processCos === 'fixed_date'}
+				<div class="mb-4">
+					<TronInput
+						label="Due date (a real external date)"
+						name="dueDate"
+						type="date"
+						value={data.task.dueDate ? String(data.task.dueDate).slice(0, 10) : ''}
+						required
+					/>
+				</div>
+			{/if}
+
+			<div class="mb-4">
+				<label for="tp-estimate" class="tron-label">Estimate (working days — optional, KB2-27)</label>
+				<input
+					id="tp-estimate"
+					name="estimateDays"
+					type="number"
+					min="0.5"
+					step="0.5"
+					class="tron-input w-full"
+					value={data.task.estimateDays ?? ''}
+					placeholder="Feeds the roadmap scheduler; falls back to size class if empty"
+				/>
+			</div>
+
+			<div class="mb-4">
+				<label for="tp-deliverable" class="tron-label">Deliverable (DoR)</label>
+				<textarea id="tp-deliverable" name="deliverable" class="tron-input w-full" rows="3">{data.task.dor.deliverable}</textarea>
+				<p class="tron-text-muted mt-1 text-xs">
+					State what will exist or be true when this is done — and how you'd verify it. Outcome, not steps.
+				</p>
+			</div>
+			{#if isSoftware}
+				<div class="mb-4">
+					<label for="tp-brief" class="tron-label">Agent handoff brief (software DoR)</label>
+					<textarea id="tp-brief" name="handoffBrief" class="tron-input w-full" rows="3">{data.task.dor.handoffBrief}</textarea>
+				</div>
+			{/if}
+
+			<div class="flex justify-end gap-3">
+				<TronButton onclick={() => (showProcess = false)}>Cancel</TronButton>
+				<TronButton type="submit" variant="primary">
+					{data.task.status === 'captured' ? 'Mark Processed' : 'Save Changes'}
+				</TronButton>
 			</div>
 		</form>
 	</KanbanModal>
