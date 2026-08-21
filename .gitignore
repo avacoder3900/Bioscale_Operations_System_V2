@@ -40,3 +40,4 @@ services/bims-capture-agent/.env
 
 # Ralph loop iteration logs
 /.ralph-logs/
+.env*

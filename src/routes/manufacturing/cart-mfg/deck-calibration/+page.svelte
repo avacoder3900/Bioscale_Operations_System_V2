@@ -71,6 +71,13 @@
 			lastCalRobot = selectedRobotId;
 			const cal = (data.calibrators as any[]).find((c) => c.robotId === selectedRobotId);
 			if (cal?.position) { calX = cal.position.x; calY = cal.position.y; calZ = cal.position.z; }
+			// Probe Z lives in its OWN fixture fields (zCalWax / zCalReagent), never in
+			// position.z. Seeding only position.z is exactly why this page LOOKED like it
+			// round-tripped a calibration Z while the probe never read the number back.
+			// Seed both so the field shows the depth this robot would actually probe at,
+			// falling back to the .py defaults when nothing has ever been taught.
+			calZWax = typeof cal?.zCalWax === 'number' ? cal.zCalWax : PROBE_Z_DEFAULT.wax;
+			calZReagent = typeof cal?.zCalReagent === 'number' ? cal.zCalReagent : PROBE_Z_DEFAULT.reagent;
 			offsetIsReference = !!(data.robotOffsets as any[]).find((o) => o.robotId === selectedRobotId)?.isReference;
 		}
 	});
@@ -402,15 +409,18 @@
 		}
 	}
 
-	// Build the post-apply message: report count, any guard-rejected wells, and
-	// whether the open run already reflects it (absolute moves) or needs a reload.
+	// Build the post-apply message: report count, any skipped wells, and whether the
+	// open run already reflects it (absolute moves) or needs a reload. Position is no
+	// longer restricted, so `failed` now only ever means "well not found".
 	function applyMsg(verb: string, r: any): string {
 		const liveNote = runId
 			? slotOrigin
 				? ' Live in this run — “Move to hole” reflects it now.'
 				: ' Move to a hole once to enable live updates (or Reload deck).'
 			: '';
-		const rej = r.failed?.length ? ` ⚠ ${r.failed.length} rejected (out of bounds).` : '';
+		const rej = r.failed?.length
+			? ` ⚠ ${r.failed.length} skipped (${r.failed.map((f: any) => `${f.wellName}: ${f.reason}`).join('; ')}).`
+			: '';
 		return `${verb} to ${r.applied} hole(s) — saved to BIMS.${rej}${liveNote} Re-upload (Sync) for real fills.`;
 	}
 
@@ -485,6 +495,18 @@
 	let slotOrigin = $state<{ x: number; y: number; z: number } | null>(null);
 	let loadedWells = $state<Map<string, { x: number; y: number; z: number }> | null>(null);
 	const APPROACH_Z_MM = 2; // critical point parks this far above the well top
+
+	// Deck floor for the tip, derived from the deck's OWN dimensions (data.dimensions
+	// ← definition.dimensions in the labware JSON), never from its holes. The frame's
+	// origin is the deck's bottom face; holes are locations INSIDE it, so a crept or
+	// mistyped hole must not be allowed to define how low the tip may go.
+	//
+	// Upward is deliberately unbounded — raising a hole is the whole point of the new
+	// cartridge deck. Downward is not: below the deck bottom there is no hole to
+	// dispense into, only the slot. Server-side apply-edit.ts enforces the same floor
+	// on the SAVED coordinate; this is the same rule on the COMMANDED one, because a
+	// move reads live coords and an out-of-range value must never reach the gantry.
+	const DECK_FLOOR_Z = 0;
 	// True after an offset is applied while a run is open: the run still holds the
 	// pre-edit deck, so "Move to hole" would use stale coords until the deck is reloaded.
 	let deckDirty = $state(false);
@@ -621,6 +643,22 @@
 			// Absolute move from LIVE coords → reflects edits instantly, tip-independent.
 			const w = wellByName.get(name);
 			if (!w) throw new Error(`Unknown well ${name}`);
+			// Reject, never clamp — same rule as the calibrator Z fields. A clamp would
+			// quietly send the tip to a depth the operator never asked for.
+			// Check the STORED hole Z, not the derived target: well.z is the hole's
+			// BOTTOM in the labware frame (verified on DECK001 — z 3.5-8.8mm with
+			// depth 3.75 on a 12.7mm block, so z + depth lands just under the deck
+			// top). z < 0 therefore means the hole bottom is below the deck's bottom
+			// face — the tip would be in the slot, not in a hole. Testing the target
+			// instead would let the +2mm approach clearance mask a hole sitting up to
+			// 2mm below the deck. Same rule, same number as apply-edit.ts server-side.
+			if (!Number.isFinite(w.z) || w.z < DECK_FLOOR_Z) {
+				throw new Error(
+					`Well ${name} sits at z ${w.z}mm, below the ${dim.z || 12.7}mm deck's floor ` +
+						`(${DECK_FLOOR_Z}mm) — the tip would be driven into the slot, not into a hole. ` +
+						`Raising a hole is unrestricted; fix this hole's Z before moving.`
+				);
+			}
 			await api(`/api/opentrons-lab/robots/${selectedRobotId}/maintenance/${runId}/move-to`, {
 				method: 'POST',
 				body: JSON.stringify({
@@ -845,24 +883,130 @@
 	// ── Tip pickup + go to tip calibrator (matches the real fill workflow) ──
 	// Tiprack + calibrator point come from the protocols (wax: p20 right + the
 	// limit-switch calibrator at 125.181,173.247,z34.491; reagent: p300 left).
+	// TWO different Z heights live on one fixture, and they are deliberately TWO
+	// controls (PRD CALIB-4 section 5, decision 1). calZ is the APPROACH point --
+	// where the tip parks BEFORE the probe, and the only Z that "Go to calibrator"
+	// may ever command. The probe Zs below are the touch-off depths the limit-switch
+	// routine descends to under its own protection. If a probe Z drove the free jog
+	// move-to, the pipette would descend to touch-off depth with nothing protecting
+	// it -- that is the crash case, so the two never share a control.
 	let calX = $state(125.181), calY = $state(173.247), calZ = $state(34.491);
+	// "Is the tip already on the fixture?" — the one-click Calibrate sequence asks this
+	// before it decides to travel. In ATTACHED mode the daemon probes from the pipette's
+	// CURRENT position (ot2-bridge.py execute_calibrate_tip), so a tip the operator has
+	// jogged onto the calibrator IS the point being taught. Re-driving to the stored
+	// calX/calY would silently throw that jog away, so within tolerance we leave it be.
+	const CAL_AT_TOLERANCE_MM = 3;
+	function atCalibratorNow(): boolean {
+		return liveX !== null && liveY !== null
+			&& Math.hypot(liveX - calX, liveY - calY) <= CAL_AT_TOLERANCE_MM;
+	}
+	// Both probe Zs are held at once so flipping the tip type swaps which one is
+	// shown without discarding the other one's unsaved edit. Defaults mirror
+	// TIP_PROFILE[*].defaultZ in $lib/server/services/deck-calibration/tip-calibrator.ts
+	// (wax/p20 34.491, reagent/p300 40.8) -- that file is the source of truth.
+	const PROBE_Z_DEFAULT: Record<'wax' | 'reagent', number> = { wax: 34.491, reagent: 40.8 };
+	let calZWax = $state(PROBE_Z_DEFAULT.wax); // -> fixture.zCalWax, p20 / wax-filling
+	let calZReagent = $state(PROBE_Z_DEFAULT.reagent); // -> fixture.zCalReagent, p300 / reagent-filling
+	// CAL_Z_LIMITS per PRD section 4.4, re-declared here as literals rather than
+	// imported: tip-calibrator.ts sits under $lib/server and SvelteKit hard-blocks
+	// value imports from server code into a component. Keep in sync with the export
+	// there, which stays the source of truth.
+	const CAL_Z_MIN = 5, CAL_Z_MAX = 200;
 	let tipWell = $state('A1');
 	let hasTip = $state(false);
-	const tiprackForMount = $derived(desiredMount === 'right' ? 'cosmasanddamian_96_tiprack_20ul' : 'cosmas_and_damian_biotix_96_200ul_tiprack');
+	// Which tip is on the mount is an OPERATOR CHOICE, never inferred. The
+	// pipettes are not fixed to mounts on this fleet, so deriving the tiprack
+	// (or the calibration Z) from desiredMount loaded the wrong definition and
+	// probed at the wrong depth. Starts null so nothing can proceed on a guess.
+	let tipProfile = $state<'wax' | 'reagent' | null>(null);
+	const tiprackForProfile = $derived(
+		tipProfile === 'wax'
+			? 'cosmasanddamian_96_tiprack_20ul'
+			: tipProfile === 'reagent'
+				? 'cosmas_and_damian_biotix_96_200ul_tiprack'
+				: null
+	);
+
+	// Which stored field the Probe Z control is editing right now. Keyed off the
+	// explicit tip profile, never the mount -- getting that wrong is the 6.309 mm
+	// error. Null until a tip type is picked, and a null key means Save sends NO
+	// probe Z at all: an absent key is "leave it alone", which is far safer than
+	// guessing which fill process the operator meant.
+	const probeZKey = $derived(
+		tipProfile === 'wax' ? 'zCalWax' : tipProfile === 'reagent' ? 'zCalReagent' : null
+	);
+	const probeZ = $derived(tipProfile === 'reagent' ? calZReagent : calZWax);
+	function setProbeZ(v: number) {
+		if (tipProfile === 'reagent') calZReagent = v;
+		else calZWax = v;
+	}
+	// Reject, never clamp (PRD section 5, decision 4): a clamp silently moves the
+	// pipette somewhere the operator did not ask for. Failure here is asymmetric --
+	// too low crashes into the fixture, too high reads nothing -- so a bad number is
+	// refused at the form rather than discovered at the robot.
+	function checkedZ(v: number, label: string): number | null {
+		if (!Number.isFinite(v) || v < CAL_Z_MIN || v > CAL_Z_MAX) {
+			errMsg = `${label} must be a number between ${CAL_Z_MIN} and ${CAL_Z_MAX} mm (got ${Number.isFinite(v) ? v : 'blank'})`;
+			return null;
+		}
+		return v;
+	}
 
 	// ── PRD 4: robot-side tip calibration (limit-switch probe via the bridge). ──
 	// The returned adjust{x,y} is the per-tip bend correction; we apply it to every
 	// move-to during tuning so captured geometry is tip-zeroed (no double-count).
 	let tipAdjust = $state<{ x: number; y: number } | null>(null);
 	let calibrating = $state(false);
+	// ONE CLICK = the whole setup. Picking up a tip and travelling to the fixture are
+	// mandatory, never-varying prerequisites of the probe, and skipping the travel used
+	// to fail deep in the robot ("limit switch not reached within 5mm") because the
+	// daemon probes wherever the tip happens to be. So this does both, driven by the
+	// tip profile — which calibration is being done — rather than nagging the operator.
 	async function calibrateTip() {
 		if (!runId || !pipetteId) { errMsg = 'Open a run first'; return; }
-		if (!hasTip) { errMsg = 'Pick up a tip first — calibration probes that tip and keeps it on for tuning'; return; }
-		clearMsg(); calibrating = true;
-		msg = 'Calibrating tip on the fixture… (slow limit-switch probe; the tip stays on for tuning)';
+		if (!tipProfile) { errMsg = 'Pick the tip type first (p20/wax or p300/reagent) — the probe depth depends on it and is never guessed'; return; }
+		// Try-before-commit means the probe runs at whatever is in the fields RIGHT
+		// NOW, saved or not. That makes this form the last line of defence before the
+		// gantry moves, so both heights are range-checked here.
+		const approachZNow = checkedZ(calZ, 'Approach Z');
+		if (approachZNow === null) return;
+		const probeZNow = checkedZ(probeZ, 'Probe Z');
+		if (probeZNow === null) return;
+		const tipLabel = tipProfile === 'reagent' ? 'p300' : 'p20';
+		// busy for the WHOLE sequence, not just the probe: this now commands gantry
+		// motion, so the jog pad and the other motion buttons stay locked out.
+		clearMsg(); busy = true; calibrating = true;
 		try {
+			// Step 1 — a tip of the type this calibration is for. tiprackForProfile is
+			// derived from tipProfile, never from the mount.
+			let pickedUpNow = false;
+			if (!hasTip) {
+				msg = `Picking up a ${tipLabel} tip (${tiprackForProfile} ${tipWell})…`;
+				await doPickUpTip();
+				pickedUpNow = true;
+				// Live XY is the tiprack in slot 11 now, not the fixture — re-read it so
+				// the position readout is honest. Not load-bearing: pickedUpNow already
+				// forces the travel below, because refreshPosition swallows its own
+				// errors and a stale liveX/liveY must never be allowed to skip a move.
+				await refreshPosition();
+			}
+			// Step 2 — travel, unless the operator already jogged onto the fixture.
+			if (!pickedUpNow && atCalibratorNow()) {
+				msg = 'Already on the calibrator — probing from the jogged position…';
+			} else {
+				msg = `Moving to the tip calibrator (${calX}, ${calY}, ${approachZNow})…`;
+				await doGoToCalibrator(approachZNow);
+			}
+			// Step 3 — the probe itself.
+			msg = 'Calibrating tip on the fixture… (slow limit-switch probe; the tip stays on for tuning)';
 			// Probe inside THIS run so the tip + session survive for deck tuning.
-			const res = await api('/api/scanner/calibrate-tip', { method: 'POST', body: JSON.stringify({ robotId: selectedRobotId, mount: desiredMount, tipWell, runId, pipetteId }) });
+			// tipProfile — NOT the mount — decides the probe Z and the tiprack.
+			// `calibrator` is the UN-SAVED override (PRD section 4.3):
+			// applyCalibratorOverride lays it over the stored fixture axis by axis, so the
+			// probe happens at the live field values without writing a thing to Mongo.
+			// Its z is the PROBE Z -- the touch-off depth -- never the approach height.
+			const res = await api('/api/scanner/calibrate-tip', { method: 'POST', body: JSON.stringify({ robotId: selectedRobotId, mount: desiredMount, tipProfile, tipWell, runId, pipetteId, calibrator: { x: calX, y: calY, z: probeZNow } }) });
 			if (res?.adjust && typeof res.adjust.x === 'number') {
 				tipAdjust = { x: res.adjust.x, y: res.adjust.y };
 				// The probe moved the gantry and changed the applied adjust → any prior
@@ -871,14 +1015,24 @@
 				await refreshPosition();
 				msg = `Tip calibrated: adjust x=${tipAdjust.x} y=${tipAdjust.y}. Tip kept on; applied to every move-to while tuning. Move to a hole to set a fresh nominal.`;
 			} else { errMsg = 'Calibration returned no adjust'; }
-		} catch (e) { errMsg = e instanceof Error ? e.message : String(e); } finally { calibrating = false; }
+		} catch (e) { errMsg = e instanceof Error ? e.message : String(e); } finally { busy = false; calibrating = false; }
 	}
+
+	// doPickUpTip is a STEP of calibrateTip's sequence rather than a button handler:
+	// it throws and touches no busy/msg state, which is what lets it compose. (The
+	// standalone "Pick up tip" button was removed when the panel was condensed.)
 
 	// Load the tiprack + pick up a tip. If slot 11 already holds a DIFFERENT rack
 	// (e.g. the reagent rack loaded earlier this run to calibrate it, then a wax tip
 	// pickup needs the 20µL rack in the same slot), the endpoint returns 409
 	// SLOT_OCCUPIED — the slot can't be freed in place (no gripper), so reopen the run
 	// (fresh empty deck) once and retry. allowRecover guards against an infinite loop.
+	//
+	// MERGE NOTE (2026-08-21): this recovery is master's and is kept. One-click
+	// Calibrate tip makes it MORE reachable, not less — an operator can now switch
+	// tip type and re-run without ever thinking about what is in slot 11. The rack
+	// comes from tiprackForProfile (the operator's explicit choice), not master's
+	// tiprackForMount, which inferred it from the mount.
 	async function doPickUp(allowRecover: boolean) {
 		const res = await fetch(
 			`/api/opentrons-lab/robots/${selectedRobotId}/maintenance/${runId}/pick-up-tip`,
@@ -886,7 +1040,7 @@
 				method: 'POST',
 				credentials: 'same-origin',
 				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ pipetteId, tiprackLoadName: tiprackForMount, slot: '11', tipWell })
+				body: JSON.stringify({ pipetteId, tiprackLoadName: tiprackForProfile, slot: '11', tipWell })
 			}
 		);
 		if (res.ok) return;
@@ -895,36 +1049,65 @@
 			msg = 'Slot 11 had another rack loaded — reopening the run to free it…';
 			await stopMaintenance();
 			await startMaintenance();
+			// Both of those clear `busy` in their own finally blocks, but the calibrate
+			// sequence still owns the gantry — take the lock back before carrying on.
+			busy = true;
 			if (!runId || !pipetteId) throw new Error('Could not reopen the maintenance run to free slot 11');
 			return doPickUp(false);
 		}
 		throw new Error(body?.message || (typeof body === 'string' ? body : `HTTP ${res.status}`));
 	}
 
+	/** Pick up a tip of the current profile. Throws on failure. */
+	async function doPickUpTip(): Promise<void> {
+		if (!tiprackForProfile) throw new Error('Pick the tip type first (p20/wax or p300/reagent) — it is not inferred from the mount');
+		await doPickUp(true);
+		hasTip = true;
+		// Tip state just changed → any nominal taken without the tip is now a
+		// different frame. Force a fresh Move-to-hole before the next capture.
+		nominal = null; refWell = null;
+	}
+
+	/** Safe arc to the calibrator APPROACH point (lift, travel, descend). Caller range-checks z. Throws. */
+	async function doGoToCalibrator(z: number): Promise<void> {
+		await api(`/api/opentrons-lab/robots/${selectedRobotId}/maintenance/${runId}/move-to`, {
+			method: 'POST',
+			body: JSON.stringify({ pipetteId, x: calX, y: calY, z, minimumZHeight: safeArcZ, forceDirect: false })
+		});
+		await refreshPosition();
+	}
+
+	// Standalone "Pick up tip": a tip WITHOUT the 1-2 minute probe. Restored after the
+	// panel was condensed, because two flows on this page want a tip on its own and
+	// neither wants a calibration: Fill motion only matches the real fill height with
+	// a tip on, and "Move to hole" -> Capture offset must be taught in the same tip
+	// frame it will run in. Going through "Calibrate tip" for those means waiting out
+	// a probe nobody asked for. Guards are calibrateTip's step 1 exactly — tip type is
+	// never inferred from the mount, because probe depth differs by 6.309 mm.
 	async function pickUpTipAction() {
 		if (!runId || !pipetteId) { errMsg = 'Open a maintenance run first'; return; }
+		if (!tiprackForProfile) { errMsg = 'Pick the tip type first (p20/wax or p300/reagent) — it is not inferred from the mount'; return; }
 		clearMsg(); busy = true;
 		msg = 'Loading tiprack & picking up a tip…';
 		try {
-			await doPickUp(true);
-			hasTip = true;
-			// Tip state just changed → any nominal taken without the tip is now a
-			// different frame. Force a fresh Move-to-hole before the next capture.
-			nominal = null; refWell = null;
-			msg = `Picked up a tip (${tiprackForMount} ${tipWell}). Now go to the calibrator or a hole.`;
+			await doPickUpTip();
+			msg = `Picked up a tip (${tiprackForProfile} ${tipWell}). No calibration run — use "Calibrate tip" for that, or move to a hole.`;
 		} catch (e) { errMsg = e instanceof Error ? e.message : String(e); } finally { busy = false; }
 	}
+
+	// Park at the fixture without probing — the first step of the teach loop
+	// (park → jog → From live ↧ → Save). Lives in the teach disclosure.
 	async function goToCalibrator() {
 		if (!runId || !pipetteId) { errMsg = 'Open a maintenance run first'; return; }
+		// APPROACH Z only, deliberately. This is a free jog with no probe routine
+		// underneath it, so handing it the touch-off depth would drive the tip into
+		// the fixture unprotected.
+		const approachZNow = checkedZ(calZ, 'Approach Z');
+		if (approachZNow === null) return;
 		clearMsg(); busy = true;
 		try {
-			// Safe arc to the calibrator point (lift, travel, descend).
-			await api(`/api/opentrons-lab/robots/${selectedRobotId}/maintenance/${runId}/move-to`, {
-				method: 'POST',
-				body: JSON.stringify({ pipetteId, x: calX, y: calY, z: calZ, minimumZHeight: safeArcZ, forceDirect: false })
-			});
-			await refreshPosition();
-			msg = `At tip calibrator (${calX}, ${calY}, ${calZ}). Jog to fine-tune.`;
+			await doGoToCalibrator(approachZNow);
+			msg = `At the tip-calibrator approach point (${calX}, ${calY}, ${approachZNow}). Jog to fine-tune.`;
 		} catch (e) { errMsg = e instanceof Error ? e.message : String(e); } finally { busy = false; }
 	}
 
@@ -950,11 +1133,35 @@
 	// live position whenever a run was open, ignoring typed edits.)
 	async function saveCalibratorPosition() {
 		if (!selectedRobotId) { errMsg = 'Pick a robot'; return; }
-		const r = await postAction('saveCalibrator', { robotId: selectedRobotId, x: String(calX), y: String(calY), z: String(calZ) });
-		if (r) msg = `Saved tip-calibrator for ${robot?.name}: (${calX}, ${calY}, ${calZ}).`;
+		if (checkedZ(calZ, 'Approach Z') === null) return;
+		// Save is the ONLY write path to production: these numbers become that robot's
+		// z_cal runtime parameter in real wax/reagent runs. Send exactly ONE probe-Z
+		// key, chosen by the active tip profile -- omitting the other key means "leave
+		// it alone", so a wax session can never quietly rewrite the reagent depth.
+		const fields: Record<string, string> = {
+			robotId: selectedRobotId,
+			x: String(calX), y: String(calY), z: String(calZ),
+			source: 'manual'
+		};
+		if (probeZKey) {
+			const z = checkedZ(probeZ, 'Probe Z');
+			if (z === null) return;
+			fields[probeZKey] = String(z);
+		}
+		// Read the inherit flag BEFORE saving: postAction invalidates and re-loads, and
+		// once this robot has its own row the fork it just performed is invisible.
+		const forkedFromGlobal = !!currentCalibrator?.inheritedFromGlobal;
+		const r = await postAction('saveCalibrator', fields);
+		if (r)
+			msg =
+				`Saved tip-calibrator for ${robot?.name}: approach (${calX}, ${calY}, ${calZ})` +
+				(probeZKey ? ` and probe Z ${probeZ} -> ${probeZKey}.` : ' (probe Z untouched - no tip type picked).') +
+				(forkedFromGlobal ? ` This robot now has its own fixture and no longer follows 'global'.` : '');
 	}
 	// Fill the calibrator X/Y/Z fields from the live jogged position (jog onto the
 	// calibrator → click this → Save).
+	// APPROACH point only: the live reading is where the tip is parked, not the
+	// depth the probe found, so it must never be copied into a Probe Z field.
 	function captureCalibratorFromLive() {
 		if (liveX === null || liveY === null || liveZ === null) { errMsg = 'No live position — open a run and move/jog first'; return; }
 		calX = +liveX.toFixed(3); calY = +liveY.toFixed(3); calZ = +liveZ.toFixed(3);
@@ -1210,31 +1417,146 @@
 					<button type="button" onclick={captureOffset} disabled={!pipetteId || busy || !nominal} class="rounded border border-green-500/50 bg-green-900/20 px-2 py-2 text-xs font-bold text-green-300 hover:bg-green-900/30 disabled:opacity-40">Capture offset</button>
 				</div>
 
-				<!-- Tip pickup + calibrator (real-workflow setup) -->
+				<!-- Tip calibration: tip type → one button. Teach controls behind a disclosure. -->
 				<div class="mt-3 rounded border border-[var(--color-tron-border)] bg-black/20 p-2">
 					<div class="mb-1 flex items-center justify-between text-[11px]" style="color: var(--color-tron-text-secondary)">
 						<span class="font-bold uppercase tracking-wider">Tip</span>
-						<span>{hasTip ? '🟢 tip on' : 'no tip'} · {tiprackForMount.includes('20ul') ? 'p20 rack' : 'p300 rack'}{tipAdjust ? ` · zeroed (${tipAdjust.x}, ${tipAdjust.y})` : ''}</span>
+						<span>{hasTip ? '🟢 tip on' : 'no tip'} · {tipProfile ? (tipProfile === 'wax' ? 'p20 rack' : 'p300 rack') : 'tip type not set'}{tipAdjust ? ` · zeroed (${tipAdjust.x}, ${tipAdjust.y})` : ''}</span>
 					</div>
-					<div class="grid grid-cols-2 gap-2">
-						<button type="button" onclick={pickUpTipAction} disabled={!pipetteId || busy} class="rounded border border-[var(--color-tron-cyan)]/40 px-2 py-2 text-xs text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40">Pick up tip</button>
-						<button type="button" onclick={goToCalibrator} disabled={!pipetteId || busy} class="rounded border border-[var(--color-tron-cyan)]/40 px-2 py-2 text-xs text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40">Go to calibrator</button>
+					<!--
+						Tip type is chosen explicitly. It sets BOTH the tiprack definition and
+						the calibration probe Z, neither of which can be read off the mount —
+						the pipettes are not fixed to mounts on this fleet.
+					-->
+					<div class="mb-2">
+						<div class="mb-1 text-[10px] uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Tip type on {desiredMount}</div>
+						<div class="grid grid-cols-2 gap-2">
+							{#each [['wax', 'p20 · wax'], ['reagent', 'p300 · reagent']] as [p, lbl] (p)}
+								<button
+									type="button"
+									onclick={() => (tipProfile = p as 'wax' | 'reagent')}
+									disabled={busy || hasTip}
+									title={hasTip ? 'Drop the tip before changing tip type' : 'Sets the tiprack and the calibration probe Z'}
+									class="rounded border px-2 py-1.5 text-[11px] transition-colors disabled:opacity-40 {tipProfile === p ? 'border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/20 text-[var(--color-tron-cyan)]' : 'border-[var(--color-tron-border)] hover:border-[var(--color-tron-cyan)]/60'}"
+									style={tipProfile === p ? '' : 'color: var(--color-tron-text-secondary)'}>{lbl}</button>
+							{/each}
+						</div>
+						{#if !tipProfile}
+							<p class="mt-1 text-[10px] text-amber-300/90">Pick the tip type — probe depth differs by 6.309 mm and is never guessed.</p>
+						{/if}
 					</div>
-					<button type="button" onclick={calibrateTip} disabled={busy || calibrating || !pipetteId || !hasTip} class="mt-2 w-full rounded border border-purple-400/50 bg-purple-900/20 px-2 py-2 text-xs font-bold text-purple-200 hover:bg-purple-900/30 disabled:opacity-40" title="Probe the tip on the limit-switch fixture (slow); keeps the tip on for deck tuning. Pick up a tip first.">
-						{calibrating ? 'Calibrating tip…' : hasTip ? 'Calibrate tip (probe, keeps tip)' : 'Calibrate tip — pick up a tip first'}
+					<!--
+						ONE BUTTON is the whole everyday flow: pick up a tip of the SELECTED tip
+						type, travel to the calibrator, then probe. Still hard-gated on tip type —
+						the probe depth is never guessed — but no longer on hasTip, because picking
+						the tip up is now a step of the sequence rather than a prerequisite.
+						The plain "Pick up tip" below it is the same step WITHOUT the probe, for the
+						flows that need a tip but no calibration (Fill motion, Move to hole →
+						Capture). "Go to calibrator" stays in the teach disclosure, where it parks
+						at the fixture to jog WITHOUT firing the 1-2 min probe.
+					-->
+					<button type="button" onclick={calibrateTip} disabled={busy || calibrating || !pipetteId || !tipProfile} class="mt-2 w-full rounded border border-purple-400/50 bg-purple-900/20 px-2 py-2 text-xs font-bold text-purple-200 hover:bg-purple-900/30 disabled:opacity-40" title="Picks up a tip of the selected type, travels to the tip calibrator, then runs the slow limit-switch probe. Keeps the tip on for deck tuning.">
+						{calibrating
+							? 'Calibrating tip…'
+							: !tipProfile
+								? 'Calibrate tip — pick a tip type first'
+								: hasTip
+									? 'Calibrate tip (probe, keeps tip)'
+									: `Calibrate tip (picks up a ${tipProfile === 'reagent' ? 'p300' : 'p20'} tip first)`}
 					</button>
+					{#if tipProfile && !calibrating}
+						<!-- Nothing about the auto-motion is hidden: say what the click will do. -->
+						<p class="mt-1 text-[10px] leading-tight" style="color: var(--color-tron-text-secondary)">
+							{#if !hasTip}
+								Picks up <span class="font-mono">{tiprackForProfile} {tipWell}</span> from slot 11, moves to ({calX}, {calY}, {calZ}), then probes.
+							{:else if atCalibratorNow()}
+								Probes from the current jogged position &mdash; already within {CAL_AT_TOLERANCE_MM} mm of the calibrator, so it will not travel.
+							{:else}
+								Moves to ({calX}, {calY}, {calZ}), then probes.
+							{/if}
+						</p>
+					{/if}
+					<!--
+						Secondary on purpose: thin, outlined, below the primary. It is a tip and
+						nothing else — no travel, no probe. Guarded on tip type for the same reason
+						"Calibrate tip" is (the rack, hence the tip length, follows the operator's
+						explicit choice), but deliberately NOT on hasTip: that flag is this page's
+						belief, and an operator recovering from a dropped or broken tip has to be
+						able to pick another one up without reopening the run.
+					-->
+					<button type="button" onclick={pickUpTipAction} disabled={!pipetteId || busy || !tipProfile} class="mt-1 w-full rounded border border-[var(--color-tron-cyan)]/40 px-2 py-1.5 text-[11px] text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40" title="Just picks up a tip of the selected type from slot 11 — no travel to the calibrator, no probe.">
+						{hasTip ? 'Pick up tip (another one)' : 'Pick up tip (no probe)'}
+					</button>
+					{#if currentCalibrator?.inheritedFromGlobal}
+						<!-- Provenance of the point the button above will probe at. Conditional and
+						     rare, so it stays in the main view rather than hiding in the disclosure. -->
+						<p class="mt-1 rounded border border-amber-400/40 bg-amber-900/15 px-1.5 py-1 text-[10px] leading-tight text-amber-200">
+							{robot?.name ?? 'This robot'} has no fixture of its own and is using the shared <span class="font-mono">global</span> one. The first Save forks it off permanently &mdash; later edits to <span class="font-mono">global</span> will stop reaching it.
+						</p>
+					{/if}
 					{#if tipAdjust}
 						<button type="button" onclick={() => (tipAdjust = null)} class="mt-1 w-full rounded border border-[var(--color-tron-border)] px-2 py-1 text-[10px] hover:border-amber-400/60" style="color: var(--color-tron-text-secondary)">Clear tip adjust</button>
 					{/if}
-					<div class="mt-1 grid grid-cols-3 gap-1 text-[10px]" style="color: var(--color-tron-text-secondary)">
-						<label>calX <input type="number" step="0.1" bind:value={calX} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-0.5 font-mono" style="color: var(--color-tron-text)" /></label>
-						<label>calY <input type="number" step="0.1" bind:value={calY} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-0.5 font-mono" style="color: var(--color-tron-text)" /></label>
-						<label>calZ <input type="number" step="0.1" bind:value={calZ} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-0.5 font-mono" style="color: var(--color-tron-text)" /></label>
-					</div>
-					<div class="mt-1 grid grid-cols-2 gap-2">
-						<button type="button" onclick={captureCalibratorFromLive} disabled={busy || liveX === null} class="rounded border border-[var(--color-tron-border)] px-2 py-1.5 text-[11px] hover:border-[var(--color-tron-cyan)] disabled:opacity-40" style="color: var(--color-tron-text)" title="Copy the live jogged position into the X/Y/Z fields">From live ↧</button>
-						<button type="button" onclick={saveCalibratorPosition} disabled={busy || !selectedRobotId} class="rounded border border-green-500/40 bg-green-900/15 px-2 py-1.5 text-[11px] font-semibold text-green-300 hover:bg-green-900/25 disabled:opacity-40">Save → {robot?.name ?? 'robot'}</button>
-					</div>
+
+					<!--
+						Teaching the fixture point is the rare path; probing at it is the daily one.
+						So the coordinates, the two Z controls and the save/park buttons live behind
+						a disclosure, closed by default. Nothing is hidden that the click depends on
+						silently — the hint under the button always names the point it will drive to.
+					-->
+					<details class="mt-2 rounded border border-[var(--color-tron-border)] bg-black/20">
+						<summary class="cursor-pointer select-none px-2 py-1 text-[10px] uppercase tracking-wider hover:text-[var(--color-tron-cyan)]" style="color: var(--color-tron-text-secondary)">Fixture point (teach)</summary>
+						<div class="border-t border-[var(--color-tron-border)] p-2">
+							<!--
+								TWO Z heights on one fixture, and deliberately TWO controls (PRD CALIB-4
+								section 5, decision 1). Approach Z is travel-only; Probe Z is the touch-off
+								depth the limit-switch routine owns. Merging them would let a plain jog
+								descend to touch-off depth with no probe protecting the tip.
+							-->
+							<div class="grid grid-cols-3 gap-1 text-[10px]" style="color: var(--color-tron-text-secondary)">
+								<label>calX <input type="number" step="0.1" bind:value={calX} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-0.5 font-mono" style="color: var(--color-tron-text)" /></label>
+								<label>calY <input type="number" step="0.1" bind:value={calY} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-0.5 font-mono" style="color: var(--color-tron-text)" /></label>
+								<label title="Pre-probe travel height: where the tip parks before the probe runs. Never the touch-off depth.">Approach Z <input type="number" step="0.1" min={CAL_Z_MIN} max={CAL_Z_MAX} bind:value={calZ} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-0.5 font-mono" style="color: var(--color-tron-text)" /></label>
+							</div>
+							<p class="mt-1 text-[10px] leading-tight" style="color: var(--color-tron-text-secondary)">
+								Approach Z is the pre-probe travel height only &mdash; both "Calibrate tip" and "Go to calibrator" park there. The probe never reads it.
+							</p>
+
+							<!-- Probe Z: the real touch-off depth, and the number production z_cal reads. -->
+							<div class="mt-2 rounded border border-purple-400/30 bg-purple-900/10 p-1.5">
+								<label class="block text-[10px]" style="color: var(--color-tron-text-secondary)">
+									Probe Z &mdash; {tipProfile === 'reagent'
+										? 'p300 · reagent-filling (zCalReagent)'
+										: tipProfile === 'wax'
+											? 'p20 · wax-filling (zCalWax)'
+											: 'pick a tip type above'}
+									<input
+										type="number"
+										step="0.1"
+										min={CAL_Z_MIN}
+										max={CAL_Z_MAX}
+										disabled={!tipProfile}
+										value={Number.isFinite(probeZ) ? probeZ : ''}
+										oninput={(e) => setProbeZ(e.currentTarget.valueAsNumber)}
+										class="mt-0.5 w-full rounded border border-purple-400/40 bg-black/30 px-1 py-0.5 font-mono disabled:opacity-40"
+										style="color: var(--color-tron-text)" />
+								</label>
+								<p class="mt-1 text-[10px] leading-tight" style="color: var(--color-tron-text-secondary)">
+									Touch-off depth the limit-switch probe descends to. "Calibrate tip" uses whatever is typed here immediately &mdash; no save needed &mdash; and Save writes it to production z_cal for this robot. Switching tip type swaps this field; the other process keeps its own value.
+								</p>
+							</div>
+							<!--
+								Park at the fixture WITHOUT probing. This is the teach loop's first step
+								(park → jog → From live ↧ → Save); "Calibrate tip" would also travel here
+								but then spend 1-2 minutes probing, which is not what teaching wants.
+							-->
+							<button type="button" onclick={goToCalibrator} disabled={!pipetteId || busy} class="mt-2 w-full rounded border border-[var(--color-tron-cyan)]/40 px-2 py-1.5 text-[11px] text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40" title="Park at the approach point so you can jog onto the fixture — no probe">Go to calibrator (park, no probe)</button>
+							<div class="mt-1 grid grid-cols-2 gap-2">
+								<button type="button" onclick={captureCalibratorFromLive} disabled={busy || liveX === null} class="rounded border border-[var(--color-tron-border)] px-2 py-1.5 text-[11px] hover:border-[var(--color-tron-cyan)] disabled:opacity-40" style="color: var(--color-tron-text)" title="Copy the live jogged position into the X/Y/Z fields">From live ↧</button>
+								<button type="button" onclick={saveCalibratorPosition} disabled={busy || !selectedRobotId} class="rounded border border-green-500/40 bg-green-900/15 px-2 py-1.5 text-[11px] font-semibold text-green-300 hover:bg-green-900/25 disabled:opacity-40">Save → {robot?.name ?? 'robot'}</button>
+							</div>
+						</div>
+					</details>
 				</div>
 
 				<!-- Tour + Fill motion: drive the pipette through holes like a real fill -->

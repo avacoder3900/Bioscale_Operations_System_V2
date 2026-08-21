@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
 	import { page } from '$app/stores';
+	import SpuMfgTabs from '$lib/components/spu/SpuMfgTabs.svelte';
 
 	interface Props {
 		children: Snippet;
@@ -31,43 +32,14 @@
 		}
 	];
 
-	function isActive(href: string, currentPath: string, exact = false): boolean {
-		if (exact) return currentPath === href;
-		return currentPath.startsWith(href);
+	function isActive(href: string, currentPath: string): boolean {
+		return currentPath === href || currentPath.startsWith(href + '/');
 	}
 
-	function getSectionName(path: string): string {
-		if (path.includes('/runs')) return 'Runs';
-		if (path.includes('/thermocouple')) return 'Thermocouple';
-		if (path.includes('/magnetometer')) return 'Magnetometer';
-		if (path.includes('/optical-confirmation')) return 'Optical Confirmation';
-		return 'Dashboard';
-	}
-
-	let currentSection = $derived(getSectionName($page.url.pathname));
 </script>
 
 <div class="space-y-6">
-	<!-- Breadcrumb -->
-	<nav class="flex items-center gap-2 text-sm">
-		<a
-			href='/'
-			class="text-[var(--color-tron-text-secondary)] transition-colors hover:text-[var(--color-tron-cyan)]"
-		>
-			SPU
-		</a>
-		<span class="text-[var(--color-tron-text-secondary)]">/</span>
-		<a
-			href="/validation"
-			class="text-[var(--color-tron-text-secondary)] transition-colors hover:text-[var(--color-tron-cyan)]"
-		>
-			Validation
-		</a>
-		{#if currentSection !== 'Dashboard'}
-			<span class="text-[var(--color-tron-text-secondary)]">/</span>
-			<span class="text-[var(--color-tron-cyan)]">{currentSection}</span>
-		{/if}
-	</nav>
+	<SpuMfgTabs />
 
 	<!-- Sub-navigation tabs -->
 	<div class="flex gap-2 border-b border-[var(--color-tron-border)] pb-4">
