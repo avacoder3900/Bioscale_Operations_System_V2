@@ -9872,3 +9872,84 @@ NOT BENCH-VERIFIED
     4. Save the calibrator from trips, then re-teach the corners with the deck
        deliberately shifted -> the re-derived point tracks the shift.
     5. Confirm a >10mm re-derive REFUSES silently-applying and prompts instead.
+
+================================================================================
+2026-08-21 — feat/deck-frame-calibrator-watch — four-corner deck frame + live
+             calibrator switch watch (first commit; was uncommitted local work)
+================================================================================
+
+This work existed only as ~2,300 lines of UNCOMMITTED changes in the BIMS-V2
+clone until now. It had never been committed, never pushed, and never built by
+Vercel. That is the main thing this entry records: it is now recoverable.
+
+DECK FRAME (four corners)
+  The operator jogs the tip to the four physical corners of the deck plate —
+  FL, FR, BR, BL — and captures each. Those four points are the ONLY input: a
+  plate corner, unlike a labware well, has no nominal coordinate to fit
+  against, so the frame is defined entirely by what was taught.
+
+  The point of it: the tip calibrator stops being a bare absolute point that
+  goes stale the moment the deck is reseated. It is stored as a FRACTION of
+  the frame, so re-teaching the corners re-derives its absolute position with
+  no re-probing of the fixture. saveDeckFrame runs that re-derive itself, in x
+  and y only, and every decline is a first-class outcome with a reason — a
+  robot on the shared 'global' fixture is deliberately NOT forked off it as a
+  side effect of teaching corners. A large move is reported, not applied;
+  rederiveCalibrator applies it after the operator confirms.
+
+  Geometry is in $lib/shared/deck-frame.ts, pure and DB-free, because the
+  Studio derives a frame CLIENT-side to show size and fit quality as each
+  corner lands — before anything is saved. One implementation, not two drifting
+  copies. Reject, never clamp, carried over from tip-calibrator.ts.
+
+CALIBRATOR SWITCH WATCH
+  Arms the calibrator's limit switches and records every trip — which switch,
+  when, where the tip was — while the OPERATOR jogs. Commands no motion of its
+  own, which is the whole point: "Calibrate tip" drives a creep probe against a
+  fixture whose location is already known; this answers "where is the switch
+  actually closing?". The daemon arms one axis at a time and hands off on each
+  trip, so the armed axis is a pure function of the trip count.
+
+  Robot side is scripts/ot2-bridge.py (+215 lines). It runs ON the OT-2 at
+  /data/ot2-bridge/, outbound-only — the robot polls BIMS, BIMS never dials in.
+  NOTHING happens on a robot until that file is deployed there. The preview URL
+  below exercises the UI and the server routes only.
+
+  npm run check — 84 errors / 434 warnings, exactly master's own pre-existing
+  baseline. Zero errors in all 12 touched files (grepped, not inferred). The
+  two warnings in +page.svelte are the deck SVG canvas, pre-existing, and only
+  moved line numbers (1218/1251 -> 1556/1589) because this adds 441 lines above
+  them.
+  npx vitest run src/lib/shared/deck-frame.test.ts — 25/25 pass.
+
+DELIBERATELY LEFT UNTRACKED (they were sitting in the same working tree and are
+not part of this feature): .worktrees/ (nested worktrees arm-pose-cal and
+deck-cal-hardening), archived-stashes-from-onedrive-dev/ (468K of old .patch
+files), docs/DECK-Z-HEIGHT-APPROACH.md (scoping doc for the separate deck-Z
+effort), scripts/diag-r04-wax-param-diff.ts (diagnostic).
+  ⚠ .worktrees/ is NOT in this clone's .gitignore. `git add -A` here would
+  commit two nested worktrees. Worth fixing on its own.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-git-feat-de-52595e-brevitest.vercel.app
+  (immutable: https://bioscale-operations-system-mongodb-c82gc26j6-brevitest.vercel.app)
+Source: branch feat/deck-frame-calibrator-watch @ commit 6bf27d6e4
+Retrieve this exact code: git checkout feat/deck-frame-calibrator-watch at commit 6bf27d6e4
+What this deployment is for: first look at the four-corner teach UI and the
+watch panel in a real build. UI + server routes only — the switch watch cannot
+arm anything until ot2-bridge.py is deployed to the robot.
+
+BASE: fb87206ee, i.e. master BEFORE the "Pick up tip" restore. This tree does
+NOT have that button. master has since moved further (9fe511174, Jacob's kanban
+KB2-30 fixes), so a merge from master is owed before this goes anywhere near
+production.
+
+NOT BENCH-VERIFIED. Two known weak spots, both to be checked before trusting a
+taught frame:
+  1. Dual-axis arming (X -> Y handoff on each trip) has never run on hardware.
+  2. The frame residual UNDER-REPORTS corner error roughly 4x — deck-frame.ts
+     line 100 notes a corner taught 8 mm out of place reads as 2 mm. A small
+     residual is NOT evidence of a good teach. Do not use it as an acceptance
+     criterion until this is characterised.
+  3. saveDeckFrame's automatic re-derive moves a robot's calibrator. Confirm on
+     a robot with its OWN fixture that the x/y move is what you expect, and on
+     a robot still on 'global' that nothing is forked off silently.
