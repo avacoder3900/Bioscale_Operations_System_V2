@@ -10142,3 +10142,62 @@ Retrieve this exact code: git checkout feat/deck-frame-calibrator-watch at commi
 What this deployment is for: first build carrying BOTH the restored "Pick up
   tip" button and the four-corner deck frame + live switch watch, so the tip
   pickup can be exercised in the same session as a frame teach.
+
+================================================================================
+2026-08-21 — feat/deck-frame-calibrator-watch — robot-arm deck riser + the safe arc that wasn't
+================================================================================
+Two tips were destroyed on B14 before this was understood. Both failures were in
+code whose job is to prevent exactly that, and both are now fixed and verified on
+the robot ("this worked", operator, after the second fix).
+
+THE DECK IS ON A ~122mm RISER THAT NOTHING MODELLED.
+  robotarm_cartridge_deck_001 had cornerOffsetFromSlot.z = 0, so the robot
+  computed A1 at z 10.70 while the real well is at 133.10 — a 122.40mm error,
+  straight down, on every move-to-hole. Now cornerOffsetFromSlot.z = 122.400,
+  derived as (verified tip z 133.10 - well.z 8.70 - approach 2.00) so that Move
+  to hole reproduces a height already proven safe by hand rather than inferring
+  a new one.
+
+  It belongs in cornerOffsetFromSlot, NOT in the well z values: a well cannot sit
+  above its own labware's 12.7mm zDimension. The plate is not taller, it is
+  mounted higher. Verified after: A1 -> (197.88, 220.24, 133.10), B1 -> 132.60,
+  even columns -> 127.70, both z tiers preserved.
+
+  Same deck was re-baselined in x/y onto the jog-verified A1 earlier in the day
+  (dx -1.747, dy -3.023 across all 24 wells) through applyDeckEditBatch, so the
+  per-hole history, audit rows and floor guards all apply and it is reversible.
+
+THE SAFE ARC WAS 40mm UNDER THE DECK (commit 363142269).
+  safeArcZ came from the labware's own dimensions.z — 12.7 here — giving
+  min(round(12.7+80), 115) = 93, while the deck surface is at ~133. Every "safe"
+  arc dragged the tip through the deck. dimensions.z says how tall the plate IS,
+  not how high it is MOUNTED, and the old formula could not tell them apart.
+
+  Now derived from the highest MEASURED absolute z: slotOrigin-derived once a
+  move establishes it, and the taught reference hole — which is the one that
+  matters, because it exists BEFORE the first move, exactly when slotOrigin is
+  null and the old formula was most dangerous.
+
+  And it REJECTS instead of clamping. Math.min(required, ceiling) silently
+  lowered the arc whenever the deck was too tall, which is not a safety clamp —
+  it is the crash. Ceiling 115 -> 150, now machine-evidenced: the robot itself
+  commands the pipette to z=150 for tip attachment (GET /robot/positions ->
+  attach_tip.point). The old 115 carried its own "(Verify per robot.)" note.
+
+  B14 now: travel 146, descend to 133.10. Was: travel 93, descend to 10.70.
+
+LESSON WORTH KEEPING: the operator said "the z is correct on my side" when handing
+over 133.10. That was acted on only halfway — x/y went into the definition and z
+was filed on the reference hole as a frame mismatch, without asking WHY the frames
+disagreed by 122mm. That gap was the riser, and it was visible in numbers already
+in hand.
+
+  npm run check — 85 errors, unchanged baseline, zero in touched files.
+  npm run test:unit — 177/177.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-git-feat-de-52595e-brevitest.vercel.app
+Source: branch feat/deck-frame-calibrator-watch @ commit 363142269
+Retrieve this exact code: git checkout feat/deck-frame-calibrator-watch at commit 363142269
+What this deployment is for: the arc fix. The two geometry changes above are DATA
+  (labware_definitions + tip_calibrator_fixtures), not code, and are already live
+  for every client.
