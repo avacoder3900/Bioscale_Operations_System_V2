@@ -9615,7 +9615,7 @@ Resolved by intent rather than by side:
 
   api/scanner/calibrate-tip/+server.ts
     BRANCH's tipProfile wins; master's TIP_FOR_MOUNT dropped (mount-inference is
-    the 6.309mm probe-depth error). MASTER's  payload field (4b3209eb6)
+    the 6.309mm probe-depth error). MASTER's `profile` payload field (4b3209eb6)
     and strict resolveLabwareDefinition kept.
 
   deck-calibration/+page.server.ts
