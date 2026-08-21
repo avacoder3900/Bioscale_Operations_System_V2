@@ -9281,3 +9281,17 @@ Retrieve this exact code: git checkout master at commit cac199c8
 What this deployment is for: KB2-30 roadmap canvas — verify /kanban/roadmap renders the
   A4M + recipe-lock graph as an infinite-zoom map; drag a card, reload, position holds;
   click a node → chain focus; zoom out → chips → dots.
+
+================================================================================
+2026-08-20 — feat/kanban-tweaks → master — KB2-30 addendum: Timeline mode on the canvas
+================================================================================
+Jacob: "time is not represented on the chart... its like a gantt chart sort of but not
+really." Added a Timeline/Flow toggle to RoadmapCanvas (Timeline default): x-axis IS time
+— task cards positioned at their scheduled earlyStart (completion date for done work),
+milestone diamonds at their dueDate, with week gridlines + month labels + glowing today
+line + green/red milestone due verticals rendered behind the graph via ViewportPortal
+(target="back"), tag-lane bands with greedy sub-row packing. Same node/edge aesthetic,
+same focus mode/semantic zoom/hide-done; positions are derived in Timeline mode so
+dragging is disabled there (Flow mode keeps drag-to-pin + Re-layout). Timeline layout is
+its own pure $derived (first cut mutated $state inside a $derived — state_unsafe_mutation
+— restructured). npm run check: 11/434 baseline.
