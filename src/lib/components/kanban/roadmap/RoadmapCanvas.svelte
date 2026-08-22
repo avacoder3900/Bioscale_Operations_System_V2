@@ -410,7 +410,11 @@
 			>{fullscreen ? '✕ Exit' : '⛶ Fullscreen'}</button>
 		</div>
 	</div>
-	<div class="relative min-h-0 flex-1" style={fullscreen ? '' : 'height: 78vh; min-height: 520px;'}>
+	<!-- flex-1 only in fullscreen: outside it the section has auto height, so
+	     flex-basis 0% would override the inline height and collapse the canvas
+	     to 0px (KB2-35 bug found live 2026-08-21: 141 nodes rendering into a
+	     zero-height clipped box). -->
+	<div class={fullscreen ? 'relative min-h-0 flex-1' : 'relative'} style={fullscreen ? '' : 'height: 78vh; min-height: 520px;'}>
 		<SvelteFlow
 			bind:nodes
 			bind:edges
