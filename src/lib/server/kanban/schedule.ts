@@ -103,9 +103,27 @@ export interface MilestoneSchedule {
 	cycleError: string | null; // dependency cycle detected — data error, not scheduled
 }
 
+/** KB2-34 — an open task wired into NO dated milestone's subgraph. */
+export interface ParkedTask {
+	id: string;
+	trackingNumber: string | null;
+	title: string;
+	status: string;
+	rank: number;
+	tags: string[];
+	itemType: string;
+	durationDays: number;
+	estimateSource: EstimateSource;
+	effortDays: number | null;
+	plannedStart: string | null;
+	plannedFinish: string | null;
+}
+
 export interface RoadmapResult {
 	generatedAt: string;
 	milestones: MilestoneSchedule[];
+	/** KB2-34: open tasks in no milestone subgraph — visible (ghosted) so gaps get wired, scheduled behind chain work. */
+	parked: ParkedTask[];
 	/** Milestones with no dueDate — flagged, not scheduled. */
 	unscheduledMilestones: { id: string; title: string; trackingNumber: string | null }[];
 	/** EFFECTIVE velocity the clamp used (est-days/week); null = clamp disabled. */
@@ -566,16 +584,33 @@ export async function computeRoadmap(
 		});
 	}
 
-	// --- capacity-sequenced planned schedule (KB2-30 addendum) ---------------
+	// --- capacity-sequenced planned schedule (KB2-30 addendum; KB2-34: the
+	// queue now covers the WHOLE BOARD) -------------------------------------
 	// One aggregate pipe at the effective velocity. List scheduling: repeatedly
-	// take the READY task (all preds planned or done) with the earliest
-	// latest-start (slack pressure), Tier 1 rank as tiebreak, and run it
-	// serially through the pipe; a task never starts before its blockers
-	// finish. Produces plannedStart/plannedFinish per not-done task — the
-	// honest "when does this get its turn" forecast the Timeline canvas draws.
+	// take the READY task (all preds planned or done) — milestone-chain tasks
+	// first by latest-start (slack pressure) with Tier 1 rank as tiebreak,
+	// parked (unwired) tasks behind them by rank. Blocking edges among parked
+	// tasks are respected. Every open task gets an honest "when does this get
+	// its turn"; milestone buffers state the chain-first-discipline plan.
+	const OPEN_STATUSES = new Set(['captured', 'processed', 'ready', 'wip', 'waiting', 'blocked', 'review']);
+	const openTasks = all.filter(
+		(t) => t.itemType !== 'milestone' && OPEN_STATUSES.has(t.status)
+	);
+	const parked: ParkedTask[] = [];
+
 	if (velocityDaysPerWeek && velocityDaysPerWeek > 0) {
-		type Row = { id: string; ls: number; rank: number; effort: number; preds: string[]; row: ScheduledTask[] };
-		const union = new Map<string, Row>();
+		type Row = {
+			id: string;
+			ls: number;
+			rank: number;
+			effort: number;
+			preds: string[];
+			rowRefs: ScheduledTask[]; // milestone-graph rows to stamp (empty for parked)
+			parkedRef: ParkedTask | null;
+		};
+		// Chain tasks: min lateStart across milestone appearances.
+		const chainLS = new Map<string, number>();
+		const chainRows = new Map<string, ScheduledTask[]>();
 		const doneFinish = new Map<string, Date>();
 		for (const m of milestones) {
 			for (const t of m.tasks) {
@@ -585,25 +620,48 @@ export async function computeRoadmap(
 					continue;
 				}
 				const ls = t.lateStart ? new Date(t.lateStart + 'T00:00:00').getTime() : Infinity;
-				const existing = union.get(t.id);
-				if (existing) {
-					existing.ls = Math.min(existing.ls, ls);
-					existing.row.push(t);
-				} else {
-					union.set(t.id, {
-						id: t.id,
-						ls,
-						rank: t.rank,
-						effort: effectiveEffort(byId.get(t.id), medianCycleDays),
-						preds: t.blockedBy.filter((pid) => !doneFinish.has(pid)),
-						row: [t]
-					});
-				}
+				chainLS.set(t.id, Math.min(chainLS.get(t.id) ?? Infinity, ls));
+				if (!chainRows.has(t.id)) chainRows.set(t.id, []);
+				chainRows.get(t.id)!.push(t);
 			}
 		}
-		// preds may reference tasks outside the union (done) — refilter now that
-		// doneFinish is complete.
-		for (const r of union.values()) r.preds = r.preds.filter((pid) => union.has(pid));
+
+		const union = new Map<string, Row>();
+		for (const t of openTasks) {
+			const id = String(t._id);
+			const inChain = chainRows.has(id);
+			let parkedRef: ParkedTask | null = null;
+			if (!inChain) {
+				const d = effectiveDuration(t, medianCycleDays);
+				parkedRef = {
+					id,
+					trackingNumber: t.trackingNumber ?? null,
+					title: t.title,
+					status: t.status,
+					rank: t.rank ?? 0,
+					tags: t.tags ?? [],
+					itemType: t.itemType ?? 'deliverable',
+					durationDays: d.days,
+					estimateSource: d.source,
+					effortDays: typeof t.effortDays === 'number' && t.effortDays > 0 ? t.effortDays : null,
+					plannedStart: null,
+					plannedFinish: null
+				};
+				parked.push(parkedRef);
+			}
+			union.set(id, {
+				id,
+				ls: chainLS.get(id) ?? Infinity,
+				rank: t.rank ?? 0,
+				effort: effectiveEffort(t, medianCycleDays),
+				preds: [...(preds.get(id) ?? [])].filter((pid) => {
+					const p = byId.get(pid);
+					return p && p.itemType !== 'milestone' && OPEN_STATUSES.has(p.status);
+				}),
+				rowRefs: chainRows.get(id) ?? [],
+				parkedRef
+			});
+		}
 
 		const planned = new Map<string, { start: Date; finish: Date }>();
 		let pipeFree = today;
@@ -612,30 +670,62 @@ export async function computeRoadmap(
 			let pick: Row | null = null;
 			for (const id of remaining) {
 				const r = union.get(id)!;
-				if (!r.preds.every((pid) => planned.has(pid))) continue;
+				if (!r.preds.every((pid) => !remaining.has(pid))) continue;
 				if (!pick || r.ls < pick.ls || (r.ls === pick.ls && r.rank < pick.rank)) pick = r;
 			}
-			if (!pick) break; // cycle remnant — already reported via cycleError
+			if (!pick) break; // cycle remnant — reported via cycleError on the milestone
 			remaining.delete(pick.id);
-			const predFinish = pick.preds.length
-				? new Date(Math.max(...pick.preds.map((pid) => planned.get(pid)!.finish.getTime())))
+			const predFinishes = pick.preds
+				.map((pid) => planned.get(pid)?.finish ?? doneFinish.get(pid))
+				.filter(Boolean) as Date[];
+			const predFinish = predFinishes.length
+				? new Date(Math.max(...predFinishes.map((d) => d.getTime())))
 				: today;
 			const start = predFinish > pipeFree ? predFinish : pipeFree;
 			const finish = addBusinessDays(start, (pick.effort / velocityDaysPerWeek) * 5);
 			planned.set(pick.id, { start, finish });
 			pipeFree = finish;
-			for (const t of pick.row) {
+			for (const t of pick.rowRefs) {
 				t.plannedStart = iso(start);
 				t.plannedFinish = iso(finish);
 			}
+			if (pick.parkedRef) {
+				pick.parkedRef.plannedStart = iso(start);
+				pick.parkedRef.plannedFinish = iso(finish);
+			}
+		}
+	} else {
+		// No velocity — parked tasks still listed, just undated.
+		for (const t of openTasks) {
+			const id = String(t._id);
+			const inAnyChain = milestones.some((m) => m.tasks.some((x) => x.id === id && !x.done));
+			if (!inAnyChain) {
+				const d = effectiveDuration(t, medianCycleDays);
+				parked.push({
+					id,
+					trackingNumber: t.trackingNumber ?? null,
+					title: t.title,
+					status: t.status,
+					rank: t.rank ?? 0,
+					tags: t.tags ?? [],
+					itemType: t.itemType ?? 'deliverable',
+					durationDays: d.days,
+					estimateSource: d.source,
+					effortDays: typeof t.effortDays === 'number' && t.effortDays > 0 ? t.effortDays : null,
+					plannedStart: null,
+					plannedFinish: null
+				});
+			}
 		}
 	}
+	parked.sort((a, b) => a.rank - b.rank);
 
 	milestones.sort((a, b) => a.dueDate.localeCompare(b.dueDate));
 
 	return {
 		generatedAt: now.toISOString(),
 		milestones,
+		parked,
 		unscheduledMilestones,
 		velocityDaysPerWeek,
 		measuredVelocityDaysPerWeek,

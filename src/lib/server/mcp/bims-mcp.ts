@@ -1069,7 +1069,9 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 				'scheduleOverride supplies dated rates — answer "what does A4M look like at 6 vs 10 vs 15 days/week?" live ' +
 				'without touching policy (policy itself is human-edited on /kanban/policy). All dates are OUTPUTS recomputed ' +
 				'fresh per call; to change them, change reality: links, estimates, scope. Use kanban_velocity_report to ' +
-				'audit how the velocity number was derived.',
+				'audit how the velocity number was derived. parked[] (KB2-34) lists open tasks wired into NO milestone ' +
+				'chain (each with its planned turn behind chain work) — the wiring gaps; propose blocked_by edges for the ' +
+				'ones that actually gate a milestone.',
 			inputSchema: z.object({
 				capacityOverride: z
 					.number()

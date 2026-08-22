@@ -9952,3 +9952,36 @@ What this deployment is for: KB2-33 dependencies panel. Verify on any linked tas
   TASK-007 "Publish locked cortisol recipe"): Blocked by shows the four chemistry
   decisions with amber dots; add a test relates_to by TASK-number, remove it; a cycle
   attempt is rejected with the cycle message.
+
+================================================================================
+2026-08-21 — feat/kanban-tweaks → master — KB2-34/35: whole-board roadmap + readability pass
+================================================================================
+Ralph loop on Jacob's two approvals. PRDs: KB2-34-whole-board-roadmap.md,
+KB2-35-roadmap-readability.md.
+
+DATA PASS first (scripts/wire-a4m-gates-2026-08-21.ts, actor jacob, audited, notes on
+every edge): 8 gates wired per Jacob's decisions — bench studies TASK-055/056/057/058 →
+A4M; TASK-009 internal round 1 → TASK-011 external round 1 (internal 2/3 stay parallel);
+TASK-085 protocol v3 → A4M; TASK-019+TASK-020 (SPU 4-test regime) → A4M. Effect: the
+hidden internal-testing limb joined the A4M subgraph and the buffer told the truth —
++17 wd flipped to −19 wd (projected Jan 6). Working as designed.
+
+KB2-34 (scheduler): computeRoadmap now returns parked[] — open tasks in NO milestone
+subgraph (95 live!). The capacity-sequenced planned queue covers the WHOLE BOARD: chain
+tasks first (latest-start, rank tiebreak), parked behind by rank, blocking edges among
+parked respected — every open task gets an honest "when does this get its turn"
+(live: parked queue runs mid-Dec onward, after chain work). kanban_roadmap description
+notes parked[] as the wiring-gap list.
+
+KB2-35 (canvas/page): full-bleed canvas (margin calc(50%−50vw), 78vh) + ⛶ fullscreen
+overlay (Esc order: focus → fullscreen); countdown cards collapsed to a one-line
+milestone strip (◆ name · date · buffer badge, tooltip carries detail); must-start moved
+below the canvas. Floating SCREEN-SPACE axis: months/weeks/today pinned top tracking
+horizontal pan only; lane rail pinned left tracking vertical only (ViewportReporter
+child feeds vp state; canvas backdrop keeps only gridlines/bands). Semantic tiers
+retuned (dots <0.42, chips font-14 0.48–0.82, cards >0.82); milestone names
+counter-scale min(18,12/zoom) — readable at any altitude; edges quiet (non-critical 30%
+opacity, critical 90%, focus 100%/6%); parked ghost style (dashed grey, 60% opacity,
+UNWIRED badge; Flow mode packs them in a grid below the dag — dagre would dump the
+disconnected set into one giant column). Header shows "N unwired" count.
+npm run check: 11/434 baseline.

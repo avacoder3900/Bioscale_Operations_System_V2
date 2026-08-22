@@ -13,20 +13,27 @@
 
 	const viewport = useViewport();
 
-	// Hysteresis so cards don't flicker at the boundary.
+	// Hysteresis so cards don't flicker at the boundary. KB2-35 retune: chips
+	// only appear once their text is ≥~7px effective; full cards from 0.8.
 	let tier = $state<'far' | 'mid' | 'near'>('mid');
 	$effect(() => {
 		const z = viewport.current.zoom;
-		if (tier !== 'far' && z < 0.28) tier = 'far';
-		else if (tier === 'far' && z > 0.34) tier = 'mid';
-		if (tier !== 'near' && z > 0.72) tier = 'near';
-		else if (tier === 'near' && z < 0.66) tier = 'mid';
+		if (tier !== 'far' && z < 0.42) tier = 'far';
+		else if (tier === 'far' && z > 0.48) tier = 'mid';
+		if (tier !== 'near' && z > 0.82) tier = 'near';
+		else if (tier === 'near' && z < 0.76) tier = 'mid';
 	});
 
 	const color = $derived(tagColor(data.lane ?? 'untagged'));
 	const statusColor = $derived(STATUS_META[data.status as KanbanStatus]?.color ?? '#94a3b8');
 	const borderColor = $derived(
-		data.critical && !data.done ? '#f87171' : data.done ? 'rgba(148,163,184,0.25)' : `${color}66`
+		data.parked
+			? 'rgba(148,163,184,0.45)'
+			: data.critical && !data.done
+				? '#f87171'
+				: data.done
+					? 'rgba(148,163,184,0.25)'
+					: `${color}88`
 	);
 </script>
 
@@ -34,16 +41,16 @@
 	class="task-node"
 	style="
 		width: 230px; height: 64px;
-		border: {data.critical && !data.done ? 2 : 1.2}px solid {borderColor};
+		border: {data.critical && !data.done && !data.parked ? 2 : 1.2}px {data.parked ? 'dashed' : 'solid'} {borderColor};
 		border-radius: 10px;
-		background: {data.done ? 'rgba(30,41,59,0.35)' : 'var(--color-tron-bg-secondary, #0b1220)'};
-		opacity: {data.dimmed ? 0.15 : data.done ? 0.45 : 1};
+		background: {data.done ? 'rgba(30,41,59,0.35)' : data.parked ? 'rgba(20,28,42,0.7)' : 'var(--color-tron-bg-secondary, #0b1220)'};
+		opacity: {data.dimmed ? 0.15 : data.done ? 0.45 : data.parked ? 0.6 : 1};
 		transition: opacity 120ms ease;
 		position: relative;
 		overflow: hidden;
 	"
 	title={`${data.trackingNumber ? data.trackingNumber + ' — ' : ''}${data.title}
-${data.done ? 'done' : `slack ${data.slackDays} wd · ${data.durationDays} wd (${data.estimateSource})`}`}
+${data.parked ? 'UNWIRED — in no milestone chain; open the task to add dependencies' : data.done ? 'done' : `slack ${data.slackDays} wd · ${data.durationDays} wd (${data.estimateSource})`}`}
 >
 	<Handle type="target" position={Position.Left} style="opacity:0;" />
 	<Handle type="source" position={Position.Right} style="opacity:0;" />
@@ -55,7 +62,7 @@ ${data.done ? 'done' : `slack ${data.slackDays} wd · ${data.durationDays} wd ($
 	{:else if tier === 'mid'}
 		<div style="position:absolute; inset:0; display:flex; align-items:center; gap:8px; padding:0 10px;">
 			<span style="width:10px; height:10px; border-radius:50%; background:{statusColor}; flex-shrink:0;"></span>
-			<span style="color: var(--color-tron-text, #e2e8f0); font-size: 13px; font-weight: 600; line-height: 1.15; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;">
+			<span style="color: #f1f5f9; font-size: 14px; font-weight: 600; line-height: 1.15; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;">
 				{data.title}
 			</span>
 		</div>
@@ -67,13 +74,16 @@ ${data.done ? 'done' : `slack ${data.slackDays} wd · ${data.durationDays} wd ($
 				{/if}
 				<a
 					href="/kanban/task/{data.id}"
-					style="color: var(--color-tron-text, #e2e8f0); font-size: 11.5px; font-weight: 700; line-height:1.15; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; text-decoration:none;"
+					style="color: #f1f5f9; font-size: 12px; font-weight: 700; line-height:1.15; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; text-decoration:none;"
 					onpointerdown={(e) => e.stopPropagation()}
 				>{data.title}</a>
 			</div>
 			<div style="display:flex; align-items:center; gap:6px; font-size: 9px;">
 				<span style="color:{statusColor}; font-weight:700; text-transform:uppercase;">{STATUS_META[data.status as KanbanStatus]?.label ?? data.status}</span>
-				{#if !data.done}
+				{#if data.parked}
+					<span style="color:#94a3b8; font-weight:700; letter-spacing:0.04em;">UNWIRED</span>
+					<span style="color: var(--color-tron-text-secondary, #64748b);">{data.durationDays} wd</span>
+				{:else if !data.done}
 					<span style="color: var(--color-tron-text-secondary, #64748b);">{data.durationDays} wd ({data.estimateSource === 'explicit' ? 'est' : data.estimateSource})</span>
 					<span style="color: {data.slackDays <= 5 ? '#facc15' : 'var(--color-tron-text-secondary, #64748b)'};">slack {data.slackDays}</span>
 				{/if}

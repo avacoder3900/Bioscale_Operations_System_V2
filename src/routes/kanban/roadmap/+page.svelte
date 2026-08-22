@@ -1,17 +1,15 @@
 <script lang="ts">
 	/**
-	 * KB2-29/KB2-30 — Roadmap: countdown cards + must-start list (the daily
-	 * drivers) above the infinite-zoom dependency canvas (KB2-30 — replaced
-	 * the swimlane timeline 2026-08-20; a timeline can't show the graph, and
-	 * the graph is what the plan is). All dates are computed, never stored —
-	 * change them by changing links, estimates, or scope.
+	 * KB2-29/30/34/35 — Roadmap. Compact milestone strip → full-bleed canvas
+	 * (the map gets the pixels) → must-start list → calibration footnote.
+	 * All dates are computed, never stored — change them by changing links,
+	 * estimates, or scope.
 	 */
 	import { onMount } from 'svelte';
 	import RoadmapCanvas from '$lib/components/kanban/roadmap/RoadmapCanvas.svelte';
 
 	let { data } = $props();
 
-	// Svelte Flow is a browser-only canvas — mount it client-side.
 	let mounted = $state(false);
 	onMount(() => (mounted = true));
 
@@ -24,47 +22,41 @@
 	const fmt = (isoDate: string) =>
 		new Date(isoDate + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 	const cal = $derived(data.roadmap.calibration);
+	const cycleErrors = $derived(data.roadmap.milestones.filter((m: any) => m.cycleError));
 </script>
 
 <svelte:head><title>Roadmap — Kanban</title></svelte:head>
 
-<div class="space-y-6">
-	<!-- ======================= Milestone countdown headers ======================= -->
+<div class="space-y-4">
+	<!-- ============ Compact milestone strip (KB2-35 — cards collapsed) ============ -->
 	{#if data.roadmap.milestones.length === 0}
 		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-6 text-sm tron-text-muted">
 			No dated milestones yet. Workshop the plan in the Claude app, file it with
 			<span class="font-mono text-[var(--color-tron-cyan)]">kanban_file_plan</span>, then capture milestone tasks
 			(<span class="font-mono">itemType: 'milestone'</span> + a due date) and wire their
-			<span class="font-mono">blocked_by</span> chains. The backward pass takes it from there.
+			<span class="font-mono">blocked_by</span> chains.
 		</div>
 	{:else}
-		<div class="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+		<div class="flex flex-wrap items-center gap-2">
 			{#each data.roadmap.milestones as m (m.id)}
-				<div class="rounded-lg border p-4 {m.feasible ? 'border-[var(--color-tron-border)]' : 'border-red-500/60'} bg-[var(--color-tron-bg-secondary)]">
-					<div class="flex items-baseline justify-between gap-2">
-						<a href="/kanban/task/{m.id}" class="tron-text-primary text-sm font-bold hover:underline">◆ {m.title}</a>
-						<span class="text-xs font-mono tron-text-muted">{fmt(m.dueDate)}</span>
-					</div>
-					<div class="mt-2 flex items-center gap-4 text-xs">
-						<span class="tron-text-muted">{m.daysLeft} wd left</span>
-						<span class="tron-text-muted">{Math.round(m.chainPctByDays * 100)}% of chain done</span>
-						<span class="font-bold {m.feasible ? (m.bufferDays <= 5 ? 'text-yellow-400' : 'text-green-400') : 'text-red-400'}">
-							{m.feasible ? `${m.bufferDays} wd buffer` : `${-m.bufferDays} wd OVER`}
-						</span>
-					</div>
-					<div class="mt-1 text-[11px] tron-text-muted">
-						projected {fmt(m.projectedFinish)}{m.clampFinish && m.clampFinish > m.cpmFinish ? ' (capacity-limited)' : ''}
-					</div>
-					{#if !m.feasible}
-						<div class="mt-2 rounded border border-red-500/40 bg-red-900/15 p-2 text-[11px] text-red-300">
-							Not reachable at current pace — cut scope, add capacity, or move the date.
-						</div>
-					{/if}
-					{#if m.cycleError}
-						<div class="mt-2 rounded border border-yellow-500/40 bg-yellow-900/15 p-2 text-[11px] text-yellow-300">{m.cycleError}</div>
-					{/if}
-				</div>
+				<a
+					href="/kanban/task/{m.id}"
+					class="flex items-center gap-2 rounded-lg border px-3 py-1.5 text-sm transition-all hover:bg-[var(--color-tron-bg-tertiary)] {m.feasible ? 'border-[var(--color-tron-border)]' : 'border-red-500/60'}"
+					title={`${m.title}
+due ${m.dueDate} · projected ${m.projectedFinish}${m.clampFinish && m.clampFinish > m.cpmFinish ? ' (capacity-limited)' : ''}
+${Math.round(m.chainPctByDays * 100)}% of chain done · ${m.daysLeft} wd left${m.feasible ? '' : '\nNOT REACHABLE at current pace — cut scope, add capacity, or move the date'}`}
+				>
+					<span style="color: {m.feasible ? '#34d399' : '#f87171'};">◆</span>
+					<span class="tron-text-primary font-bold">{m.title.replace(/^MILESTONE:\s*/i, '')}</span>
+					<span class="font-mono text-xs tron-text-muted">{fmt(m.dueDate)}</span>
+					<span class="rounded px-1.5 py-0.5 text-xs font-bold {m.feasible ? (m.bufferDays <= 5 ? 'bg-yellow-900/40 text-yellow-300' : 'bg-emerald-900/40 text-emerald-300') : 'bg-red-900/50 text-red-300'}">
+						{m.feasible ? `+${m.bufferDays} wd` : `${m.bufferDays} wd ⚠`}
+					</span>
+				</a>
 			{/each}
+			{#if data.roadmap.milestones.some((m: any) => !m.feasible)}
+				<span class="text-xs text-red-300">⚠ not reachable at current pace — cut scope, add capacity, or move the date</span>
+			{/if}
 		</div>
 	{/if}
 
@@ -76,8 +68,24 @@
 			{/each}
 		</div>
 	{/if}
+	{#each cycleErrors as m (m.id)}
+		<div class="rounded border border-yellow-500/40 bg-yellow-900/15 p-2 text-xs text-yellow-300">{m.title}: {m.cycleError}</div>
+	{/each}
 
-	<!-- ======================= Must-start (daily driver) ======================= -->
+	<!-- ============ The canvas — full-bleed (KB2-35) ============ -->
+	{#if data.roadmap.milestones.length > 0}
+		<div style="margin-left: calc(50% - 50vw); margin-right: calc(50% - 50vw);">
+			{#if mounted}
+				<RoadmapCanvas roadmap={data.roadmap} pinned={data.pinned} />
+			{:else}
+				<div class="flex h-[78vh] min-h-[520px] items-center justify-center border-y border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] text-sm tron-text-muted">
+					Loading canvas…
+				</div>
+			{/if}
+		</div>
+	{/if}
+
+	<!-- ============ Must-start (daily driver) ============ -->
 	{#if allMustStart.length}
 		<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)]">
 			<div class="border-b border-[var(--color-tron-border)] px-4 py-2 text-sm font-bold tron-text-primary">
@@ -102,17 +110,6 @@
 		</section>
 	{/if}
 
-	<!-- ======================= The canvas (KB2-30) ======================= -->
-	{#if data.roadmap.milestones.length > 0}
-		{#if mounted}
-			<RoadmapCanvas roadmap={data.roadmap} pinned={data.pinned} />
-		{:else}
-			<div class="flex h-[72vh] min-h-[480px] items-center justify-center rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] text-sm tron-text-muted">
-				Loading canvas…
-			</div>
-		{/if}
-	{/if}
-
 	<!-- calibration footnote -->
 	<p class="px-1 text-[11px] tron-text-muted">
 		{#if cal.n > 0 && cal.medianActualOverEstimate}
@@ -126,6 +123,7 @@
 			Capacity schedule: {data.roadmap.resolvedCapacitySchedule.map((s: any) => `${s.from} → ${s.teamEstDaysPerWeek}/wk`).join(', ')}.
 		{/if}
 		Unsized default: {data.roadmap.medianCycleDays} wd.
-		All future dates are computed, never stored — change them by changing links, estimates, or scope.
+		{data.roadmap.parked?.length ?? 0} unwired tasks queue behind chain work — wire them via each task's Dependencies panel.
+		All future dates are computed, never stored.
 	</p>
 </div>
