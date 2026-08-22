@@ -9985,3 +9985,11 @@ opacity, critical 90%, focus 100%/6%); parked ghost style (dashed grey, 60% opac
 UNWIRED badge; Flow mode packs them in a grid below the dag — dagre would dump the
 disconnected set into one giant column). Header shows "N unwired" count.
 npm run check: 11/434 baseline.
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit 2d73fab9
+Retrieve this exact code: git checkout master at commit 2d73fab9
+What this deployment is for: KB2-34/35. Verify: /kanban/roadmap — milestone strip on one
+  line, canvas edge-to-edge with floating month/week axis + left lane rail, ⛶ fullscreen,
+  95 ghosted UNWIRED cards queued after chain work, Flow mode shows parked grid below
+  the dag, "95 unwired" chip in header.
