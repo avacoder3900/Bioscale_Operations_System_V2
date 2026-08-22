@@ -419,7 +419,6 @@
 			bind:nodes
 			bind:edges
 			{nodeTypes}
-			fitView
 			minZoom={0.15}
 			maxZoom={2.2}
 			onnodeclick={({ node }) => (focusId = focusId === node.id ? null : node.id)}
