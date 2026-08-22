@@ -15,7 +15,9 @@
 		void signal;
 		// Small delay: the parent's $effect swaps the node arrays after render;
 		// fit once the new positions are in.
-		const t = setTimeout(() => void fitView({ padding: 0.12, duration: 250 }), 80);
+		// KB2-35: clamp the fit — a timeline need not squeeze seven months into
+		// one screen; fit the near term readably and let the user pan.
+		const t = setTimeout(() => void fitView({ padding: 0.1, duration: 250, minZoom: 0.55, maxZoom: 0.9 }), 80);
 		return () => clearTimeout(t);
 	});
 </script>

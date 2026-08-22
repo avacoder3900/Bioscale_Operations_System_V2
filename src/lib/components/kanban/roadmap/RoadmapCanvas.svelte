@@ -416,7 +416,7 @@
 			bind:edges
 			{nodeTypes}
 			fitView
-			minZoom={0.08}
+			minZoom={0.15}
 			maxZoom={2.2}
 			onnodeclick={({ node }) => (focusId = focusId === node.id ? null : node.id)}
 			onpaneclick={() => (focusId = null)}
@@ -461,7 +461,9 @@
 					<div style="position:absolute; left:{screenX(mth.x) + 6}px; top:2px; font-size:12.5px; font-weight:800; letter-spacing:0.08em; text-transform:uppercase; color:#cbd5e1;">{fmtMonth(mth.ms)}</div>
 				{/each}
 				{#each backdrop.weeks as w (w.ms)}
-					<div style="position:absolute; left:{screenX(w.x) + 3}px; top:20px; font-size:10px; font-family: ui-monospace, monospace; color:#7b8ba3;">{fmtTick(w.ms)}</div>
+					{#if vp.zoom >= 0.35}
+						<div style="position:absolute; left:{screenX(w.x) + 3}px; top:20px; font-size:10px; font-family: ui-monospace, monospace; color:#7b8ba3;">{fmtTick(w.ms)}</div>
+					{/if}
 					<div style="position:absolute; left:{screenX(w.x)}px; top:32px; width:1px; height:8px; background:#2a3b52;"></div>
 				{/each}
 				<div style="position:absolute; left:{screenX(backdrop.todayX) - 18}px; top:3px; font-size:10px; font-weight:800; color:#00d4ff; background:rgba(0,212,255,0.12); border:1px solid rgba(0,212,255,0.5); border-radius:4px; padding:0 5px;">today</div>
