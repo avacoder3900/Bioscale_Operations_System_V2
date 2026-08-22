@@ -1,23 +1,30 @@
 <script lang="ts">
 	/**
-	 * KB2-30 fix — refit the viewport whenever `signal` (the layout mode)
-	 * changes. Must be a CHILD of <SvelteFlow> (the hook needs its context).
-	 * Without this, a mode switch left the viewport fitted to the previous
-	 * layout's coordinates — the new layout rendered off-screen and the canvas
-	 * looked empty (nodes only visible in the minimap).
+	 * KB2-30/35 fix — position the viewport whenever `signal` (layout mode /
+	 * fullscreen) changes. Must be a CHILD of <SvelteFlow>.
+	 *
+	 * Not a plain fitView: with the whole board on the canvas (KB2-34) a fit
+	 * squeezes months into sub-pixel soup, and a zoom-clamped fit centers on
+	 * the empty middle of the bounds. Instead: readable fixed zoom, anchored
+	 * at the TOP-LEFT of the content — "now", where the action is — and the
+	 * user pans right into the future.
 	 */
-	import { useSvelteFlow } from '@xyflow/svelte';
+	import { useSvelteFlow, useNodes, getNodesBounds } from '@xyflow/svelte';
 
 	let { signal }: { signal: string } = $props();
-	const { fitView } = useSvelteFlow();
+	const { setViewport } = useSvelteFlow();
+	const nodes = useNodes();
 
 	$effect(() => {
 		void signal;
-		// Small delay: the parent's $effect swaps the node arrays after render;
-		// fit once the new positions are in.
-		// KB2-35: clamp the fit — a timeline need not squeeze seven months into
-		// one screen; fit the near term readably and let the user pan.
-		const t = setTimeout(() => void fitView({ padding: 0.1, duration: 250, minZoom: 0.55, maxZoom: 0.9 }), 80);
+		const t = setTimeout(() => {
+			const current = nodes.current;
+			if (!current.length) return;
+			const b = getNodesBounds(current);
+			const zoom = 0.6;
+			// 210px clears the pinned lane rail; 60px clears the floating axis.
+			void setViewport({ x: -b.x * zoom + 210, y: -b.y * zoom + 60, zoom }, { duration: 250 });
+		}, 80);
 		return () => clearTimeout(t);
 	});
 </script>
