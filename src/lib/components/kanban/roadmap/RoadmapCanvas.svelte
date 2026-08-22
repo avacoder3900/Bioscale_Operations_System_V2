@@ -164,9 +164,15 @@
 		];
 		const { xOf } = timeScale;
 		const laneOf = (t: any) => (t.tags ?? [])[0] ?? 'untagged';
-		const laneCounts = new Map<string, number>();
-		for (const { t } of rows) laneCounts.set(laneOf(t), (laneCounts.get(laneOf(t)) ?? 0) + 1);
-		const laneOrder = [...laneCounts.entries()].sort((a, b) => b[1] - a[1]).map(([l]) => l);
+		// Lane order: earliest planned activity first — the hot lanes sit at the
+		// top where the anchored initial view opens (KB2-35).
+		const laneEarliest = new Map<string, string>();
+		for (const { t } of rows) {
+			const l = laneOf(t);
+			const d = timelineDateOf(t);
+			if (!laneEarliest.has(l) || d < laneEarliest.get(l)!) laneEarliest.set(l, d);
+		}
+		const laneOrder = [...laneEarliest.entries()].sort((a, b) => a[1].localeCompare(b[1])).map(([l]) => l);
 
 		const Y0 = 0, LANE_PAD = 14, ROW_H = TASK_H + 12;
 		let y = Y0;

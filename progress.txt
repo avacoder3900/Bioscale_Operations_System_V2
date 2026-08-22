@@ -9993,3 +9993,16 @@ What this deployment is for: KB2-34/35. Verify: /kanban/roadmap — milestone st
   line, canvas edge-to-edge with floating month/week axis + left lane rail, ⛶ fullscreen,
   95 ghosted UNWIRED cards queued after chain work, Flow mode shows parked grid below
   the dag, "95 unwired" chip in header.
+
+Post-deploy browser QA on KB2-34/35 (live, Chrome) found and fixed four issues in
+sequence: (1) fit-zoom clamp spec'd in the PRD but unimplemented — 141 nodes fit to
+zoom 0.08, sub-pixel (cc3c5f1f); (2) clamped fit centered on the empty middle of seven
+months of bounds — CanvasRefit now anchors top-left at zoom 0.6 via
+getNodesBounds+setViewport (67dba73e); (3) canvas collapsed to 0px height outside
+fullscreen — flex-basis 0% beat the inline height in an auto-height flex column
+(1ca845b6); (4) SvelteFlow's built-in fitView prop fired after the anchored setViewport
+and re-zoomed to the 0.15 clamp — removed, CanvasRefit owns positioning (7294be6a).
+Lanes now order by earliest planned date so the hot lane opens on top. Verified live:
+today line + readable axis + glowing recipe-lock diamond at the anchored open; footnote
+self-describes "Velocity: 10.0 (source: policy — board measures 2.3)" — Jacob's knob
+is active. npm run check: 11/434 throughout.
