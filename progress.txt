@@ -10029,3 +10029,10 @@ URL (?tags=a,b via history.replaceState) — bookmarkable views.
 Data chore: renameTag folded 'cartridge' → 'Cartridge' (2 tasks, audited); other
 lowercase strays (bom, inventory, MCP Test…) left — semantic calls, not case dupes.
 npm run check: 11/434 baseline.
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit 9a7c54b6 (feature commit 7c289e4a)
+Retrieve this exact code: git checkout master at commit 9a7c54b6
+What this deployment is for: KB2-36 chain bands + tag chips. Structurally verified via
+  DOM probe (Chrome window was minimized, no pixels): 143 nodes, 20 tag chips w/ counts,
+  left-edge tag stripes on cards, UNWIRED BACKLOG divider. Visual pass: Jacob.
