@@ -22,8 +22,8 @@
 			if (!current.length) return;
 			const b = getNodesBounds(current);
 			const zoom = 0.6;
-			// 210px clears the pinned lane rail; 60px clears the floating axis.
-			void setViewport({ x: -b.x * zoom + 210, y: -b.y * zoom + 60, zoom }, { duration: 250 });
+			// 60px margins clear the floating axis (the lane rail is gone — KB2-36).
+			void setViewport({ x: -b.x * zoom + 60, y: -b.y * zoom + 60, zoom }, { duration: 250 });
 		}, 80);
 		return () => clearTimeout(t);
 	});
