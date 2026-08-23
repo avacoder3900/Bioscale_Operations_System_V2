@@ -9,6 +9,7 @@
 import { fail, redirect } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
 import { connectDB, KanbanCanvasLayout, AuditLog, generateId } from '$lib/server/db';
+import { addLink, TransitionError } from '$lib/server/kanban/transition';
 import { computeRoadmap } from '$lib/server/kanban/schedule';
 import type { PageServerLoad, Actions } from './$types';
 
@@ -51,6 +52,35 @@ export const actions: Actions = {
 			{ $set: { x, y, pinnedBy: locals.user.username } },
 			{ upsert: true }
 		);
+		return { success: true };
+	},
+
+	/**
+	 * KB2-37 — click-to-connect on the canvas: blockerId must finish before
+	 * blockedId starts. Rides the addLink service (existence, self-link, dupe,
+	 * blocking-cycle guard, audit + activity log) — identical protections to
+	 * the task-page panel and MCP paths. Declared as blocked_by on the blocked
+	 * task, consistent with existing wiring.
+	 */
+	addEdge: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'kanban:write');
+		await connectDB();
+		const fd = await request.formData();
+		const blockerId = fd.get('blockerId')?.toString();
+		const blockedId = fd.get('blockedId')?.toString();
+		if (!blockerId || !blockedId) return fail(400, { error: 'Missing blockerId/blockedId' });
+		try {
+			const res = await addLink(
+				blockedId,
+				{ taskId: blockerId, type: 'blocked_by', note: 'wired on the roadmap canvas' },
+				{ username: locals.user.username, via: 'ui' }
+			);
+			if (!res.added) return fail(400, { error: 'That dependency already exists' });
+		} catch (e) {
+			if (e instanceof TransitionError) return fail(400, { error: e.message });
+			throw e;
+		}
 		return { success: true };
 	},
 

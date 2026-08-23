@@ -28,6 +28,7 @@
 	import { deserialize } from '$app/forms';
 	import { page } from '$app/stores';
 	import { get } from 'svelte/store';
+	import { invalidateAll } from '$app/navigation';
 
 	let {
 		roadmap,
@@ -48,6 +49,58 @@
 	let hideDone = $state(false);
 	let fullscreen = $state(false);
 	let focusId = $state<string | null>(null);
+	// KB2-37 — click-to-connect: first click arms a port (left = the blocked
+	// side, right = the blocker side); a complementary click on another node
+	// creates the edge via ?/addEdge (cycle-guarded, audited) and the whole
+	// roadmap recomputes + rearranges. Same-side click re-anchors; Esc / pane /
+	// same-dot click cancels.
+	let pendingPort = $state<{ id: string; side: 'left' | 'right'; label: string } | null>(null);
+	let connectError = $state('');
+	let connectBusy = $state(false);
+
+	function labelOf(id: string): string {
+		for (const m of roadmap.milestones) {
+			if (m.id === id) return m.title.replace(/^MILESTONE:\s*/i, '');
+			const t = m.tasks.find((x: any) => x.id === id);
+			if (t) return t.trackingNumber ?? t.title.slice(0, 40);
+		}
+		const pk = (roadmap.parked ?? []).find((x: any) => x.id === id);
+		return pk ? (pk.trackingNumber ?? pk.title.slice(0, 40)) : id.slice(0, 8);
+	}
+
+	async function onPort(id: string, side: 'left' | 'right') {
+		connectError = '';
+		if (connectBusy) return;
+		if (!pendingPort) {
+			pendingPort = { id, side, label: labelOf(id) };
+			return;
+		}
+		if (pendingPort.id === id && pendingPort.side === side) { pendingPort = null; return; } // toggle off
+		if (pendingPort.side === side) { pendingPort = { id, side, label: labelOf(id) }; return; } // re-anchor
+		if (pendingPort.id === id) { connectError = 'A task cannot depend on itself.'; pendingPort = null; return; }
+		// complementary sides on two nodes → blocker = the RIGHT end, blocked = the LEFT end
+		const blockerId = side === 'right' ? id : pendingPort.id;
+		const blockedId = side === 'left' ? id : pendingPort.id;
+		connectBusy = true;
+		try {
+			const body = new FormData();
+			body.set('blockerId', blockerId);
+			body.set('blockedId', blockedId);
+			const res = deserialize(await (await fetch('?/addEdge', { method: 'POST', body })).text());
+			if (res.type === 'failure') {
+				connectError = (res.data as any)?.error ?? 'Could not create the dependency';
+			} else {
+				// Success: recompute everything — bands, planned queue, slack,
+				// buffers — the map rearranges around the new edge.
+				await invalidateAll();
+			}
+		} catch {
+			connectError = 'Could not create the dependency';
+		} finally {
+			connectBusy = false;
+			pendingPort = null;
+		}
+	}
 	let vp = $state({ x: 0, y: 0, zoom: 1 });
 	// KB2-36 — tag filter (a LENS, not an axis): multi-select union, dims
 	// non-matching tasks, persists in the URL (?tags=a,b) via replaceState.
@@ -157,7 +210,9 @@
 			critical: !parked && (critical.get(t.id) ?? false),
 			late: !parked && (t.late ?? false),
 			parked,
-			dimmed: dimmedFn(t.id)
+			dimmed: dimmedFn(t.id),
+			onPort,
+			pendingPort: pendingPort && pendingPort.id === t.id ? pendingPort.side : null
 		};
 	}
 	function milestoneData(m: any, dimmedFn: (id: string) => boolean) {
@@ -168,7 +223,9 @@
 			dueDate: m.dueDate,
 			bufferDays: m.bufferDays,
 			feasible: m.feasible,
-			dimmed: dimmedFn(m.id)
+			dimmed: dimmedFn(m.id),
+			onPort,
+			pendingPort: pendingPort && pendingPort.id === m.id ? pendingPort.side : null
 		};
 	}
 
@@ -438,7 +495,8 @@
 	}
 
 	function onEsc() {
-		if (focusId) focusId = null;
+		if (pendingPort) pendingPort = null;
+		else if (focusId) focusId = null;
 		else if (fullscreen) fullscreen = false;
 	}
 </script>
@@ -467,6 +525,16 @@
 					title="dependency structure; drag to arrange (pins persist)"
 				>Flow</button>
 			</div>
+			{#if pendingPort}
+				<span class="rounded border border-[var(--color-tron-cyan)]/60 bg-[rgba(0,212,255,0.08)] px-2 py-0.5 text-[11px] font-bold text-[var(--color-tron-cyan)]">
+					Connecting {pendingPort.label} — click the {pendingPort.side === 'right' ? 'LEFT ○ of the task that comes AFTER it' : 'RIGHT ○ of the task that comes BEFORE it'} · Esc cancels
+				</span>
+			{:else if connectBusy}
+				<span class="text-[11px] tron-text-muted">wiring…</span>
+			{/if}
+			{#if connectError}
+				<span class="text-[11px] font-bold text-red-300">{connectError}</span>
+			{/if}
 			{#if (roadmap.parked?.length ?? 0) > 0}
 				<span class="rounded-full border border-slate-500/40 bg-slate-500/10 px-2 py-0.5 text-[11px] font-bold text-slate-300"
 					title="Open tasks wired into no milestone chain — ghosted on the map; open one and add dependencies to wire it in">
@@ -522,7 +590,7 @@
 			minZoom={0.15}
 			maxZoom={2.2}
 			onnodeclick={({ node }) => (focusId = focusId === node.id ? null : node.id)}
-			onpaneclick={() => (focusId = null)}
+			onpaneclick={() => { focusId = null; pendingPort = null; }}
 			onnodedragstop={onDragStop}
 			colorMode="dark"
 		>

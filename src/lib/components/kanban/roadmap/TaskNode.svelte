@@ -59,6 +59,27 @@ ${data.parked ? 'UNWIRED — in no milestone chain; open the task to add depende
 	<Handle type="target" position={Position.Left} style="opacity:0;" />
 	<Handle type="source" position={Position.Right} style="opacity:0;" />
 
+	{#if tier !== 'far' && data.onPort}
+		<!-- KB2-37 click-to-connect ports: left = "starts after…", right = "must
+		     finish before…". stopPropagation so focus mode never fires. -->
+		<button
+			type="button"
+			aria-label="starts after…"
+			title="starts after… (click, then click the RIGHT ○ of the task that comes before)"
+			style="position:absolute; left:-8px; top:50%; transform:translateY(-50%); width:14px; height:14px; border-radius:50%; border:2px solid {data.pendingPort === 'left' ? '#00d4ff' : 'rgba(0,212,255,0.55)'}; background:{data.pendingPort === 'left' ? '#00d4ff' : '#0b1220'}; box-shadow:{data.pendingPort === 'left' ? '0 0 10px #00d4ff' : 'none'}; cursor:pointer; z-index:5; padding:0;"
+			onpointerdown={(e) => e.stopPropagation()}
+			onclick={(e) => { e.stopPropagation(); data.onPort(data.id, 'left'); }}
+		></button>
+		<button
+			type="button"
+			aria-label="must finish before…"
+			title="must finish before… (click, then click the LEFT ○ of the task that comes after)"
+			style="position:absolute; right:-8px; top:50%; transform:translateY(-50%); width:14px; height:14px; border-radius:50%; border:2px solid {data.pendingPort === 'right' ? '#00d4ff' : 'rgba(0,212,255,0.55)'}; background:{data.pendingPort === 'right' ? '#00d4ff' : '#0b1220'}; box-shadow:{data.pendingPort === 'right' ? '0 0 10px #00d4ff' : 'none'}; cursor:pointer; z-index:5; padding:0;"
+			onpointerdown={(e) => e.stopPropagation()}
+			onclick={(e) => { e.stopPropagation(); data.onPort(data.id, 'right'); }}
+		></button>
+	{/if}
+
 	{#if tier === 'far'}
 		<div style="position:absolute; inset:0; display:flex; align-items:center; justify-content:center;">
 			<div style="width: 34px; height: 34px; border-radius: 50%; background: {color}{data.done ? '33' : '99'};"></div>

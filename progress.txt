@@ -10036,3 +10036,24 @@ Retrieve this exact code: git checkout master at commit 9a7c54b6
 What this deployment is for: KB2-36 chain bands + tag chips. Structurally verified via
   DOM probe (Chrome window was minimized, no pixels): 143 nodes, 20 tag chips w/ counts,
   left-edge tag stripes on cards, UNWIRED BACKLOG divider. Visual pass: Jacob.
+
+================================================================================
+2026-08-23 — feat/kanban-tweaks → master — KB2-37: click-to-connect on the roadmap canvas
+================================================================================
+Per Jacob: "click to connect… left and right corners are the chronological sides… I
+click one then go find the one I want… drawing the new connections starts to rearrange
+the roadmap. Claude builds some of it, then I go clean it up." PRD
+docs/prds/KB2-37-canvas-click-to-connect.md.
+
+Every card + milestone grows visible port dots (hidden at far zoom): LEFT = "starts
+after…", RIGHT = "must finish before…". First click arms (glow + header hint naming the
+task and which ○ to click next); complementary click on another node fires ?/addEdge →
+the EXISTING addLink service (existence / self-link / dupe / blocking-cycle guard /
+audit + activity log — identical to panel + MCP paths; edge declared blocked_by on the
+blocked task, note "wired on the roadmap canvas"). Success → invalidateAll() → the
+whole roadmap recomputes and REARRANGES live: an UNWIRED ghost jumps out of the backlog
+block into its chain's band, bands/planned queue/slack/buffers all update. Failures
+(cycle/dupe) show inline. Same-side click re-anchors; same-dot/Esc/pane cancels (Esc
+order: pending → focus → fullscreen). Port clicks stopPropagation — focus mode
+untouched. relates_to stays panel-only by design. Edge removal stays on the task panel.
+npm run check: 11/434 baseline.
