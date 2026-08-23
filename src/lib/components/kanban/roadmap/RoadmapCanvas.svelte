@@ -26,6 +26,8 @@
 	import ViewportReporter from './ViewportReporter.svelte';
 	import { tagColor } from '$lib/shared/tag-color';
 	import { deserialize } from '$app/forms';
+	import { page } from '$app/stores';
+	import { get } from 'svelte/store';
 
 	let {
 		roadmap,
@@ -47,6 +49,31 @@
 	let fullscreen = $state(false);
 	let focusId = $state<string | null>(null);
 	let vp = $state({ x: 0, y: 0, zoom: 1 });
+	// KB2-36 — tag filter (a LENS, not an axis): multi-select union, dims
+	// non-matching tasks, persists in the URL (?tags=a,b) via replaceState.
+	let tagFilter = $state(
+		new Set(
+			(get(page).url.searchParams.get('tags') ?? '')
+				.split(',')
+				.map((t) => t.trim())
+				.filter(Boolean)
+		)
+	);
+	function toggleTag(tag: string) {
+		if (tagFilter.has(tag)) tagFilter.delete(tag);
+		else tagFilter.add(tag);
+		tagFilter = new Set(tagFilter);
+		const url = new URL(location.href);
+		if (tagFilter.size) url.searchParams.set('tags', [...tagFilter].join(','));
+		else url.searchParams.delete('tags');
+		history.replaceState(history.state, '', url);
+	}
+	function clearTags() {
+		tagFilter = new Set();
+		const url = new URL(location.href);
+		url.searchParams.delete('tags');
+		history.replaceState(history.state, '', url);
+	}
 	// svelte-ignore state_referenced_locally — deliberate seed-once (drags own it after).
 	let pinMap = $state(new Map(pinned.map((p) => [p._id, { x: p.x, y: p.y }])));
 
@@ -81,6 +108,16 @@
 		return { chainTasks, parkedTasks, milestoneRows, edges };
 	});
 
+	// KB2-36 — chip census over everything on the map.
+	const tagCounts = $derived.by(() => {
+		const counts = new Map<string, number>();
+		for (const { t } of graph.chainTasks) for (const tag of t.tags ?? []) counts.set(tag, (counts.get(tag) ?? 0) + 1);
+		for (const t of graph.parkedTasks) for (const tag of t.tags ?? []) counts.set(tag, (counts.get(tag) ?? 0) + 1);
+		return [...counts.entries()].sort((a, b) => b[1] - a[1]);
+	});
+	const tagDim = (t: any): boolean =>
+		tagFilter.size > 0 && !(t.tags ?? []).some((x: string) => tagFilter.has(x));
+
 	// ---- adjacency for focus mode
 	const adj = $derived.by(() => {
 		const up = new Map<string, string[]>(), down = new Map<string, string[]>();
@@ -113,6 +150,7 @@
 			status: t.status,
 			done: t.done ?? false,
 			lane: (t.tags ?? [])[0] ?? 'untagged',
+			tags: t.tags ?? [],
 			durationDays: t.durationDays,
 			estimateSource: t.estimateSource,
 			slackDays: t.slackDays ?? null,
@@ -156,52 +194,78 @@
 		return { min, max, xOf, width: xOf(max) };
 	});
 
-	// ---- timeline layout (pure derived)
+	// ---- timeline layout (pure derived) — KB2-36: y = CHAIN BANDS (connected
+	// components over the drawn blocking edges), not tag lanes. The vertical
+	// order finally means something: hot chains first. Unwired singles pack
+	// into one compact backlog block at the bottom.
 	const timelineLayout = $derived.by(() => {
-		const rows = [
-			...graph.chainTasks.filter(({ t }) => !(hideDone && t.done)).map(({ t }) => ({ t, parked: false })),
-			...graph.parkedTasks.map((t: any) => ({ t, parked: true }))
-		];
+		const chain = graph.chainTasks.filter(({ t }) => !(hideDone && t.done));
 		const { xOf } = timeScale;
-		const laneOf = (t: any) => (t.tags ?? [])[0] ?? 'untagged';
-		// Lane order: earliest planned activity first — the hot lanes sit at the
-		// top where the anchored initial view opens (KB2-35).
-		const laneEarliest = new Map<string, string>();
-		for (const { t } of rows) {
-			const l = laneOf(t);
-			const d = timelineDateOf(t);
-			if (!laneEarliest.has(l) || d < laneEarliest.get(l)!) laneEarliest.set(l, d);
-		}
-		const laneOrder = [...laneEarliest.entries()].sort((a, b) => a[1].localeCompare(b[1])).map(([l]) => l);
+		const Y0 = 0, BAND_PAD = 16, ROW_H = TASK_H + 12;
 
-		const Y0 = 0, LANE_PAD = 14, ROW_H = TASK_H + 12;
+		// union-find over chain tasks + milestones via the drawn edges
+		const parent = new Map<string, string>();
+		const find = (x: string): string => {
+			let r = x;
+			while (parent.get(r) !== r) r = parent.get(r)!;
+			let c = x;
+			while (parent.get(c) !== c) { const n = parent.get(c)!; parent.set(c, r); c = n; }
+			return r;
+		};
+		const ids = [...chain.map(({ t }) => t.id), ...graph.milestoneRows.map((m: any) => m.id)];
+		for (const id of ids) parent.set(id, id);
+		for (const e of graph.edges) {
+			if (parent.has(e.source) && parent.has(e.target)) parent.set(find(e.source), find(e.target));
+		}
+		const comps = new Map<string, any[]>();
+		for (const { t } of chain) {
+			const r = find(t.id);
+			if (!comps.has(r)) comps.set(r, []);
+			comps.get(r)!.push(t);
+		}
+		const bands = [...comps.values()]
+			.map((tasks) => ({
+				tasks: tasks.sort((a, b) => timelineDateOf(a).localeCompare(timelineDateOf(b))),
+				earliest: tasks.reduce((min, t) => (timelineDateOf(t) < min ? timelineDateOf(t) : min), '9999')
+			}))
+			.sort((a, b) => a.earliest.localeCompare(b.earliest));
+
 		let y = Y0;
-		const lanes: { lane: string; y: number; rows: number }[] = [];
 		const positions = new Map<string, { x: number; y: number }>();
-		for (const lane of laneOrder) {
-			const inLane = rows
-				.filter(({ t }) => laneOf(t) === lane)
-				.sort((a, b) => timelineDateOf(a.t).localeCompare(timelineDateOf(b.t)));
+		const bandRects: { y: number; height: number }[] = [];
+		const packInto = (tasks: any[], startY: number): number => {
 			const rowEnds: number[] = [];
-			for (const { t } of inLane) {
+			for (const t of tasks) {
 				const x = xOf(new Date(timelineDateOf(t) + 'T00:00:00').getTime());
 				let row = rowEnds.findIndex((e) => e <= x);
 				if (row === -1) { row = rowEnds.length; rowEnds.push(0); }
 				rowEnds[row] = x + TASK_W + 24;
-				positions.set(t.id, { x, y: y + LANE_PAD + row * ROW_H });
+				positions.set(t.id, { x, y: startY + row * ROW_H });
 			}
-			const rowsN = Math.max(1, rowEnds.length);
-			lanes.push({ lane, y, rows: rowsN });
-			y += LANE_PAD * 2 + rowsN * ROW_H;
+			return Math.max(1, rowEnds.length);
+		};
+		for (const band of bands) {
+			const rows = packInto(band.tasks, y + BAND_PAD);
+			const height = BAND_PAD * 2 + rows * ROW_H;
+			bandRects.push({ y, height });
+			y += height;
 		}
-		// Milestone strip: slim band directly above the top lane (KB2-35).
+		// Unwired backlog block (KB2-34 ghosts) — separated, packed by planned date.
+		const unwiredY = y + 46;
+		const parkedSorted = [...graph.parkedTasks].sort((a: any, b: any) =>
+			timelineDateOf(a).localeCompare(timelineDateOf(b))
+		);
+		const unwiredRows = parkedSorted.length ? packInto(parkedSorted, unwiredY + BAND_PAD) : 0;
+		const totalH = parkedSorted.length ? unwiredY + BAND_PAD * 2 + unwiredRows * ROW_H : y;
+
+		// Milestones stay in the top strip.
 		graph.milestoneRows.forEach((m: any, i: number) => {
 			positions.set(m.id, {
 				x: xOf(new Date(m.dueDate + 'T00:00:00').getTime()) - MILE_W / 2,
 				y: Y0 - MILE_H - 10 - (i % 2) * 30
 			});
 		});
-		return { positions, lanes, totalH: y };
+		return { positions, bands: bandRects, unwiredY: parkedSorted.length ? unwiredY : null, totalH };
 	});
 
 	// ---- flow layout: dagre over the wired graph, parked grid below (KB2-34)
@@ -249,7 +313,16 @@
 		const mIds = new Set(graph.milestoneRows.map((m: any) => m.id));
 		const visible = new Set<string>([...chain.map(({ t }) => t.id), ...mIds]);
 		const edges = graph.edges.filter((e) => visible.has(e.source) && visible.has(e.target));
-		const dimmed = (id: string) => (focusSet ? !focusSet.has(id) : false);
+		const taskById = new Map<string, any>([
+			...graph.chainTasks.map(({ t }) => [t.id, t] as [string, any]),
+			...graph.parkedTasks.map((t: any) => [t.id, t] as [string, any])
+		]);
+		// KB2-36: focus dim OR tag-filter dim (milestones never tag-dim).
+		const dimmed = (id: string) => {
+			const focusDim = focusSet ? !focusSet.has(id) : false;
+			const t = taskById.get(id);
+			return focusDim || (t ? tagDim(t) : false);
+		};
 		const critical = new Map(graph.chainTasks.map(({ t }) => [t.id, t.onCriticalChain && !t.done]));
 		const positions = mode === 'timeline' ? timelineLayout.positions : flowLayout.positions;
 		const draggable = mode === 'flow';
@@ -282,7 +355,8 @@
 		const flowEdges: Edge[] = edges.map((e) => {
 			const crit = (critical.get(e.source) ?? false) && ((critical.get(e.target) ?? false) || mIds.has(e.target));
 			const inFocus = focusSet ? focusSet.has(e.source) && focusSet.has(e.target) : null;
-			const opacity = inFocus === null ? (crit ? 0.9 : 0.3) : inFocus ? 1 : 0.06;
+			const tagDimEdge = dimmed(e.source) || dimmed(e.target);
+			const opacity = tagDimEdge ? 0.06 : inFocus === null ? (crit ? 0.9 : 0.3) : inFocus ? 1 : 0.06;
 			return {
 				id: `${e.source}→${e.target}`,
 				source: e.source,
@@ -297,7 +371,7 @@
 	});
 
 	// Canvas-space backdrop: gridlines/bands only — ALL text lives in the
-	// screen-space floating axis + lane rail (KB2-35).
+	// screen-space floating axis (KB2-35).
 	const backdrop = $derived.by(() => {
 		if (mode !== 'timeline') return null;
 		const { min, max, xOf } = timeScale;
@@ -327,9 +401,8 @@
 
 	const BACKDROP_TOP = -190;
 
-	// Screen-space x/y for the floating axis + lane rail.
+	// Screen-space x for the floating axis.
 	const screenX = (canvasX: number) => vp.x + canvasX * vp.zoom;
-	const screenY = (canvasY: number) => vp.y + canvasY * vp.zoom;
 	const fmtTick = (ms: number) =>
 		new Date(ms).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 	const fmtMonth = (ms: number) =>
@@ -416,6 +489,27 @@
 			>{fullscreen ? '✕ Exit' : '⛶ Fullscreen'}</button>
 		</div>
 	</div>
+	{#if tagCounts.length}
+		<div class="flex flex-wrap items-center gap-1.5 border-t border-[var(--color-tron-border)] px-4 py-1.5">
+			{#each tagCounts as [tag, n] (tag)}
+				{@const active = tagFilter.has(tag)}
+				<button
+					type="button"
+					class="flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] transition-all"
+					style="border-color: {active ? tagColor(tag) : 'var(--color-tron-border)'}; background: {active ? tagColor(tag) + '26' : 'transparent'}; color: {active ? tagColor(tag) : 'var(--color-tron-text-secondary)'};"
+					onclick={() => toggleTag(tag)}
+					title={active ? 'Click to remove from filter' : 'Click to filter — everything else dims; multi-select unions'}
+				>
+					<span class="h-2 w-2 rounded-full" style="background: {tagColor(tag)};"></span>
+					{tag}
+					<span class="opacity-60">{n}</span>
+				</button>
+			{/each}
+			{#if tagFilter.size}
+				<button type="button" class="ml-1 text-[11px] font-bold text-[var(--color-tron-cyan)] hover:underline" onclick={clearTags}>clear</button>
+			{/if}
+		</div>
+	{/if}
 	<!-- flex-1 only in fullscreen: outside it the section has auto height, so
 	     flex-basis 0% would override the inline height and collapse the canvas
 	     to 0px (KB2-35 bug found live 2026-08-21: 141 nodes rendering into a
@@ -444,11 +538,15 @@
 					{#each backdrop.milestones as mm (mm.x)}
 						<div style="position:absolute; left:{mm.x}px; top:{BACKDROP_TOP}px; width:1.5px; height:{timelineLayout.totalH - BACKDROP_TOP + 60}px; background: {mm.feasible ? 'rgba(52,211,153,0.5)' : 'rgba(248,113,113,0.55)'};"></div>
 					{/each}
-					{#each timelineLayout.lanes as L, i (L.lane)}
+					{#each timelineLayout.bands as B, i (B.y)}
 						{#if i % 2 === 1}
-							<div style="position:absolute; left:-260px; top:{L.y}px; width:{timeScale.width + 320}px; height:{L.rows * (64 + 12) + 28}px; background: rgba(255,255,255,0.018);"></div>
+							<div style="position:absolute; left:-260px; top:{B.y}px; width:{timeScale.width + 320}px; height:{B.height}px; background: rgba(255,255,255,0.018);"></div>
 						{/if}
 					{/each}
+					{#if timelineLayout.unwiredY !== null}
+						<div style="position:absolute; left:-260px; top:{timelineLayout.unwiredY - 12}px; width:{timeScale.width + 320}px; height:0; border-top: 1px dashed rgba(148,163,184,0.35);"></div>
+						<div style="position:absolute; left:12px; top:{timelineLayout.unwiredY - 4}px; font-size:14px; font-weight:800; letter-spacing:0.1em; color:#94a3b8;">UNWIRED BACKLOG — open a task and add dependencies to wire it in</div>
+					{/if}
 				</ViewportPortal>
 			{/if}
 			<Controls position="bottom-left" />
@@ -476,12 +574,6 @@
 					<div style="position:absolute; left:{screenX(w.x)}px; top:32px; width:1px; height:8px; background:#2a3b52;"></div>
 				{/each}
 				<div style="position:absolute; left:{screenX(backdrop.todayX) - 18}px; top:3px; font-size:10px; font-weight:800; color:#00d4ff; background:rgba(0,212,255,0.12); border:1px solid rgba(0,212,255,0.5); border-radius:4px; padding:0 5px;">today</div>
-			</div>
-			<!-- KB2-35 lane rail: pinned left, tracks vertical pan only. -->
-			<div class="pointer-events-none absolute inset-y-0 left-0 w-[190px] overflow-hidden" style="background: linear-gradient(to right, rgba(6,11,20,0.92) 40%, rgba(6,11,20,0));">
-				{#each timelineLayout.lanes as L (L.lane)}
-					<div style="position:absolute; left:8px; top:{screenY(L.y + 10)}px; font-size:12px; font-weight:800; color:{tagColor(L.lane)}; text-shadow: 0 0 6px rgba(0,0,0,0.9); white-space:nowrap;">{L.lane}</div>
-				{/each}
 			</div>
 		{/if}
 	</div>

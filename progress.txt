@@ -10006,3 +10006,26 @@ Lanes now order by earliest planned date so the hot lane opens on top. Verified 
 today line + readable axis + glowing recipe-lock diamond at the anchored open; footnote
 self-describes "Velocity: 10.0 (source: policy — board measures 2.3)" — Jacob's knob
 is active. npm run check: 11/434 throughout.
+
+================================================================================
+2026-08-23 — feat/kanban-tweaks → master — KB2-36: chain bands + tag filter (tags = lens, not axis)
+================================================================================
+Jacob: "is it weird to have tags as a y axis?" Yes — 17 arbitrary lanes, the A4M chain
+zigzagging across 5-6 of them, multi-tag tasks filed under first tag only. PRD
+docs/prds/KB2-36-chain-bands-tag-filter.md (option A from the discussion).
+
+Timeline y is now CHAIN BANDS: connected components over the drawn blocking edges
+(union-find; milestones connect but stay in the top strip) → the A4M river packs as one
+contiguous band, hot chains first; unwired singles pack into one "UNWIRED BACKLOG"
+block at the bottom (canvas-space label). Zero new data — membership derived fresh from
+links[] per load, same doctrine as everything else. Lane rail overlay removed.
+
+Tags on the card: 4px left-edge stripe (primary tag color) + up to 3 extra-tag dots in
+the card footer (tooltip lists all). Tag CHIPS toolbar under the canvas header, BOTH
+modes: every tag w/ color+count, click=toggle, multi-select=union, clear; non-matching
+tasks DIM to 15% (never hidden — time-shape stays visible), milestones never dim, edges
+dim if either endpoint does; combines with focus-mode dim (OR). Filter persists in the
+URL (?tags=a,b via history.replaceState) — bookmarkable views.
+Data chore: renameTag folded 'cartridge' → 'Cartridge' (2 tasks, audited); other
+lowercase strays (bom, inventory, MCP Test…) left — semantic calls, not case dupes.
+npm run check: 11/434 baseline.

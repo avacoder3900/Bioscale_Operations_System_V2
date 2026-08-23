@@ -25,6 +25,9 @@
 	});
 
 	const color = $derived(tagColor(data.lane ?? 'untagged'));
+	// KB2-36: tags render on the card — primary as a left-edge stripe, the
+	// rest as small dots (lanes were lossy for multi-tag tasks).
+	const extraTags = $derived(((data.tags ?? []) as string[]).slice(1, 4));
 	const statusColor = $derived(STATUS_META[data.status as KanbanStatus]?.color ?? '#94a3b8');
 	const borderColor = $derived(
 		data.parked
@@ -48,6 +51,7 @@
 		transition: opacity 120ms ease;
 		position: relative;
 		overflow: hidden;
+		border-left: 4px solid {data.parked ? 'rgba(148,163,184,0.5)' : color};
 	"
 	title={`${data.trackingNumber ? data.trackingNumber + ' — ' : ''}${data.title}
 ${data.parked ? 'UNWIRED — in no milestone chain; open the task to add dependencies' : data.done ? 'done' : `slack ${data.slackDays} wd · ${data.durationDays} wd (${data.estimateSource})`}`}
@@ -87,7 +91,12 @@ ${data.parked ? 'UNWIRED — in no milestone chain; open the task to add depende
 					<span style="color: var(--color-tron-text-secondary, #64748b);">{data.durationDays} wd ({data.estimateSource === 'explicit' ? 'est' : data.estimateSource})</span>
 					<span style="color: {data.slackDays <= 5 ? '#facc15' : 'var(--color-tron-text-secondary, #64748b)'};">slack {data.slackDays}</span>
 				{/if}
-				<span style="margin-left:auto; width:8px; height:8px; border-radius:50%; background:{color}; flex-shrink:0;" title={data.lane}></span>
+				<span style="margin-left:auto; display:flex; gap:3px; flex-shrink:0;" title={(data.tags ?? []).join(' · ')}>
+					<span style="width:8px; height:8px; border-radius:50%; background:{color};"></span>
+					{#each extraTags as tg (tg)}
+						<span style="width:8px; height:8px; border-radius:50%; background:{tagColor(tg)};"></span>
+					{/each}
+				</span>
 			</div>
 		</div>
 	{/if}
