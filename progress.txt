@@ -10057,3 +10057,10 @@ block into its chain's band, bands/planned queue/slack/buffers all update. Failu
 order: pending → focus → fullscreen). Port clicks stopPropagation — focus mode
 untouched. relates_to stays panel-only by design. Edge removal stays on the task panel.
 npm run check: 11/434 baseline.
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit e3a536f9
+Retrieve this exact code: git checkout master at commit e3a536f9
+What this deployment is for: KB2-37 click-to-connect. DOM-verified: 286 ports on 143
+  nodes (2/node). Visual pass: Jacob — click a right ○, then a left ○; wiring an
+  UNWIRED ghost should yank it into its chain band as the map recomputes.
