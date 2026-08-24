@@ -76,6 +76,19 @@
 	// starts hands-off with those values. Client-only — a reload re-shows the step.
 	let paramsReady = $state(false);
 	let capturedParamsFd = $state<FormData | null>(null);
+	/**
+	 * Cartridge count from the captured protocol params (set BEFORE scanning).
+	 * Passed to DeckLoadingGrid so the auto-sweep only walks that many
+	 * positions on a partial fill — previously the sweep always walked all 24
+	 * and spent a full scan-timeout on every empty slot. (After the scan,
+	 * startRunWithCapturedParams still overwrites param_cartridges with the
+	 * real scanned count, so the run itself is driven by what was scanned.)
+	 */
+	const plannedScanCount = $derived.by(() => {
+		const raw = capturedParamsFd?.get('param_cartridges')?.toString();
+		const n = raw ? Math.floor(Number(raw)) : NaN;
+		return Number.isFinite(n) && n >= 1 && n <= 24 ? n : null;
+	});
 	// "Run again" stashes the prior run's params here so the fresh run skips the
 	// param step and lands straight on barcode scanning (the per-run reset below
 	// reapplies it instead of clearing).
@@ -656,6 +669,7 @@
 		<!-- Step 3: Deck + cartridge scan. On complete, auto-start the run with the
 		     params + batch captured before scanning — straight into filling, no button. -->
 		<DeckLoadingGrid
+			plannedCartridgeCount={plannedScanCount}
 			onComplete={async ({ deckId, cartridgeScans }) => {
 				await submitForm('loadDeck', { deckId, cartridgeScans: JSON.stringify(cartridgeScans) });
 				// Hands-off auto-start (mirror wax): scan was the last manual step.

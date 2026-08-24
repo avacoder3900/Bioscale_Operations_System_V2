@@ -6,6 +6,14 @@
 
 	interface Props {
 		onComplete: (data: { deckId: string; cartridgeScans: CartridgeScan[] }) => void;
+		/**
+		 * Cartridge count the operator set in the protocol-params step (partial
+		 * fills). Seeds the auto-sweep slot cap so the scanner only walks the
+		 * positions that actually hold cartridges — without it the sweep walked
+		 * all 24 taught positions and burned the full scan window on every empty
+		 * slot. The operator can still override in the Count box.
+		 */
+		plannedCartridgeCount?: number | null;
 		readonly?: boolean;
 		focusPaused?: boolean;
 		// OpentronsRobot._id (or legacy Equipment robot id) — when set, the
@@ -16,7 +24,7 @@
 		runId?: string | null;
 	}
 
-	let { onComplete, readonly: isReadonly = false, focusPaused = false, robotId = null, runId = null }: Props = $props();
+	let { onComplete, readonly: isReadonly = false, focusPaused = false, robotId = null, runId = null, plannedCartridgeCount = null }: Props = $props();
 
 	// 8 rows x 3 cols, vertical snake: Col1 down, Col2 up, Col3 down
 	const GRID_ROWS = [
@@ -50,6 +58,13 @@
 	let failedSlots = $state<Set<number>>(new SvelteSet());
 	let sweepFailures = $state<Array<{ slotIndex: number; message: string }>>([]);
 	let sweepCount = $state<number>(TOTAL_POSITIONS);
+	// Seed (and follow) the planned partial-fill count. Reactive rather than an
+	// initial-value capture so a count that lands after mount still applies;
+	// never fights the operator mid-sweep.
+	$effect(() => {
+		const n = plannedCartridgeCount != null ? Math.floor(plannedCartridgeCount) : null;
+		if (n != null && n >= 1 && n <= TOTAL_POSITIONS && !sweepInFlight) sweepCount = n;
+	});
 	let expandedSlot = $state<number | null>(null);
 	let expandedInput = $state('');
 	let expandedOverride = $state(false);
