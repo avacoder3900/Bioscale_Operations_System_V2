@@ -8681,7 +8681,6 @@ so the client never polls; the page shows a neutral "Capture only — CV inferen
 off for reagent inspect for now" notice instead of the deploy-status banner. Photo still
 advances reagent_filled → reagent_qc; the scan-gated human verdict is unchanged. To re-enable,
 remove 'reagent_filled' from the set. npm run check: 11 errors / 434 warnings — baseline.
-=======
 2026-08-19 — feat/robot-arm-movement-tests — unblock BIMS robot-arm movement tests
 ================================================================================
 Two-part fix: get the replacement leader BusLinker recognised, then make BIMS
@@ -10064,3 +10063,19 @@ Retrieve this exact code: git checkout master at commit e3a536f9
 What this deployment is for: KB2-37 click-to-connect. DOM-verified: 286 ports on 143
   nodes (2/node). Visual pass: Jacob — click a right ○, then a left ○; wiring an
   UNWIRED ghost should yank it into its chain band as the map recomputes.
+=======
+2026-08-24 — master — reagent partial fill: barcode sweep now respects the cartridge count
+================================================================================
+Operator: on partial reagent runs the auto barcode scan swept all 24 positions, waiting out the full
+scanner read window on every empty slot. Cause: the params step captures the operator's cartridge
+count into capturedParamsFd, but reagent DeckLoadingGrid (unlike the wax grid) had no
+plannedCartridgeCount prop — sweepCount hardcoded to 24, and the only control was the small Count box
+defaulting to 24. The /api/scanner/sweep endpoint already supported maxSlots; the value simply never
+reached it. Fix: +page.svelte derives plannedScanCount from capturedParamsFd (param_cartridges,
+clamped 1..24) and passes it to the grid; the grid seeds/follows it via $effect (never mid-sweep).
+Count box override preserved; the run's real cartridge count is still stamped from the actual scan.
+npm run check: 11 errors / 434 warnings — baseline.
+
+Deployment: production — Vercel auto-deploy from master push
+Source: branch master @ this commit
+What this deployment is for: partial reagent runs scan only the loaded positions instead of timing out on all 24.
