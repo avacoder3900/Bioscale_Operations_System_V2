@@ -10216,3 +10216,16 @@ Deployment: production — Vercel auto-deploy from master push
 Source: branch master @ commit 49b9fdca (merge of feat/kanban-tweaks, fast-forward: 3bee213a roadmap batch + 49b9fdca back-arrow hardening)
 Retrieve this exact code: git checkout master at commit 49b9fdca
 What this deployment is for: roadmap wrapping titles/growing cards/corner jump-to-detail + back-arrow origin memory, live for the team.
+
+================================================================================
+2026-08-25 — feat/kanban-tweaks — Task-detail back button label: just "Back"
+================================================================================
+Jacob: the destination-named back label ("Back to Board"/"Back to Roadmap"/…) should just say
+"Back". Dropped the BACK_LABELS lookup added earlier today; the arrow still returns to the exact
+origin page (afterNavigate + sessionStorage, unchanged). File: task/[taskId]/+page.svelte.
+npm run check: 11 errors = baseline, 0 in touched files.
+
+Deployment: production — Vercel auto-deploy from master push
+Source: branch master @ this commit (fast-forward of feat/kanban-tweaks)
+Retrieve this exact code: git checkout master at this commit
+What this deployment is for: back button reads "Back" on the task page.

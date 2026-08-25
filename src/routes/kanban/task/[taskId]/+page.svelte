@@ -16,8 +16,8 @@
 	let archiving = $state(false);
 
 	// Back link returns to whichever kanban page you came from (queue,
-	// inventory, roadmap, flow, …) — not always the queue board — and the
-	// label says where it goes. Persisted per tab so a refresh (or task→task
+	// inventory, roadmap, flow, …) — not always the queue board.
+	// Persisted per tab so a refresh (or task→task
 	// hopping after one) doesn't forget the origin; nav.from === null means a
 	// fresh document load, the only time the stored origin is consulted.
 	const BACK_KEY = 'kanban:taskBackUrl';
@@ -31,15 +31,6 @@
 			try { backUrl = sessionStorage.getItem(BACK_KEY) ?? backUrl; } catch { /* keep default */ }
 		}
 	});
-	const BACK_LABELS: [string, string][] = [
-		['/kanban/roadmap', 'Back to Roadmap'],
-		['/kanban/inventory', 'Back to Tier 1'],
-		['/kanban/flow', 'Back to Flow'],
-		['/kanban/plans', 'Back to Plans'],
-		['/kanban/archived', 'Back to Archive'],
-		['/kanban/policy', 'Back to Policy']
-	];
-	let backLabel = $derived(BACK_LABELS.find(([p]) => backUrl.startsWith(p))?.[1] ?? 'Back to Board');
 
 	// Autosave: unsaved edit-form changes are flushed to ?/update when
 	// navigating away, so hitting Save Changes is optional.
@@ -175,7 +166,7 @@
 			<svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
 				<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
 			</svg>
-			{backLabel}
+			Back
 		</a>
 		<span class="tron-text-muted text-sm">/</span>
 		<span class="tron-text-muted text-sm">Task Detail</span>
