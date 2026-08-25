@@ -10124,3 +10124,21 @@ of "Engine hung" while the server is activating.
 Deployment: robot daemon — B07 /data/ot2-bridge/ot2-bridge.py @ this commit (ot2-bridge restarted 16:08Z)
 Source: branch master @ this commit
 What this deployment is for: pressing Restart during the 2-3 min boot can no longer wedge the robot.
+
+================================================================================
+2026-08-25 — DATA FIX — deck-004 Sync 422 (negative row-A y) resolved by cornerOffsetFromSlot y re-baseline
+================================================================================
+Operator's Studio Sync failed ("upload via bridge failed"): both bridge upload_protocol commands got
+robot 422 ProtocolFilesInvalid — "gen4deck_gen7cartridge_004.json could not be read as a labware
+definition". Cause: today's carrier-1 front-row wax teaching put A2/A4/A6/A8 at y=-0.5; the Opentrons
+labware schema forbids negative coords, and the Studio's x/y bounds guard was intentionally removed
+2026-08-18 (comment in apply-edit.ts documents exactly this failure mode). The daemon's >=400 upload
+path posts the error to the command doc but logs nothing locally — the UI only said "failed".
+Fix (deck-001 July precedent): frame re-baseline in Mongo — cornerOffsetFromSlot.y 0 -> -1.0, all 576
+wells y += 1.0. Every physical position identical; min stored y now +0.5; row A has 1mm headroom.
+Backup backups/gen4deck_004-backup-2026-08-25-pre-y-rebaseline.json + audit_logs deck_frame_rebaseline.
+Edits themselves were all saved (16 edits 17:59-18:19Z); only the robot upload had failed. Re-sync (or
+the run-start freshness gate) delivers the corrected def. Also noted: yesterday's reagent sync failure
+(cPYh6cP5) was the restart-window 502, unrelated.
+NOT changed: the removed bounds guard stays removed (operator's 08-18 request); consider a SCHEMA-only
+pre-upload validation (reject what the robot will reject, allow anything it will accept).
