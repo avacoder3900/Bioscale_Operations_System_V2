@@ -1178,7 +1178,25 @@ def execute_deck_scan(command_id: str, payload: dict, port: ScannerPort) -> None
 
 def execute_restart_robot_server(command_id: str) -> None:
     """Manual recovery (UI button): restart the OT-2 robot-server and wait for
-    it to come back. Bypasses the auto-heal cooldown."""
+    it to come back. Bypasses the auto-heal cooldown.
+
+    RESTART-STORM GUARD (2026-08-25, B07): this robot-server takes ~2-3 min to
+    boot, and while it boots BIMS shows "Engine hung" — which invites another
+    restart press. Each queued restart killed the boot of the previous one, so
+    the server sat in 'activating' for 40 minutes. If the service is currently
+    starting, do NOT kill it — report that it's booting and let it finish."""
+    try:
+        state = subprocess.run(["systemctl", "is-active", "opentrons-robot-server"],
+                               capture_output=True, text=True, timeout=10).stdout.strip()
+    except Exception:
+        state = "unknown"
+    if state == "activating":
+        log.info("restart_robot_server %s: server is BOOTING — refusing to kill it (restart-storm guard)", command_id)
+        _post_result(command_id, {"ok": True, "status": 200, "body": {
+            "restarted": False, "alreadyStarting": True,
+            "message": "Robot server is already starting up (boot takes ~2-3 min on this robot). "
+                       "No restart issued — wait for it to finish instead of pressing restart again."}})
+        return
     log.info("restart_robot_server command %s: restarting on operator request", command_id)
     ok = restart_robot_server("manual restart via BIMS", force=True)
     if ok:
