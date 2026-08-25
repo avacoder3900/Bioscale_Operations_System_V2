@@ -24,7 +24,7 @@
  *     PT-CT-106 is recorded, because that is the part WI-01 cartridge-back
  *     consumes 1-per-cartridge regardless of how the label was printed.
  */
-import { AuditLog, BarcodeSheetBatch, BarcodeInventory, CartridgeRecord, PartDefinition } from '$lib/server/db/models';
+import { AuditLog, BarcodeSheetBatch, BarcodeInventory, CartridgeRecord, PartDefinition, ReceivingLot } from '$lib/server/db/models';
 import { generateId } from '$lib/server/db/utils';
 import { mintCartridgeBarcodes } from '$lib/server/services/barcode-generator';
 import { recordTransaction } from '$lib/server/services/inventory-transaction';
@@ -270,6 +270,42 @@ export async function confirmBatch(input: ConfirmInput): Promise<ConfirmResult> 
 		notes: `Print barcode batch ${batchId}: ${totalLabels} label${totalLabels === 1 ? '' : 's'} printed` +
 			(medium === 'zebra-roll' ? ' (Zebra roll)' : '')
 	});
+
+	// WI-01 cartridge backing selects/validates its Barcode input against a
+	// ReceivingLot (validateLotForPart), but in-house printed labels never had
+	// one — inventory counted them while the backing gate couldn't see them
+	// (2026-08-25: Jacob's 2,304-label Zebra run had to be backfilled by hand).
+	// Upsert a per-day in-house lot per medium; same-day batches accumulate
+	// into it, so the WI-01 dropdown shows one lot per print day.
+	const d = printedAt;
+	const dayStamp = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
+	const inHouseLotId = `${medium === 'zebra-roll' ? 'ZEBRA' : 'AVERY'}-${dayStamp}-PTCT106`;
+	try {
+		await ReceivingLot.findOneAndUpdate(
+			{ lotId: inHouseLotId },
+			{
+				$inc: { quantity: totalLabels },
+				$setOnInsert: {
+					_id: generateId(),
+					lotId: inHouseLotId,
+					lotNumber: `LOT-${dayStamp}-${medium === 'zebra-roll' ? 'ZBRA' : 'AVRY'}`,
+					part: { _id: barcodePart._id, partNumber: barcodePart.partNumber, name: 'Barcode' },
+					operator: { _id: user._id, username: user.username },
+					inspectionPathway: 'coc',
+					status: 'accepted',
+					dispositionType: 'accepted',
+					notes: `In-house printed barcode labels (${medium}); quantity accumulates across the day's confirmed print batches. Auto-created so WI-01 cartridge backing can consume this lot.`,
+					createdAt: printedAt
+				},
+				$set: { updatedAt: printedAt }
+			},
+			{ upsert: true }
+		);
+	} catch (e) {
+		// The print batch is already committed and counted — a lot upsert
+		// failure must not fail the confirm. Surface it in the log instead.
+		console.error(`[barcode-print-batch] in-house ReceivingLot upsert failed for ${inHouseLotId}:`, e instanceof Error ? e.message : e);
+	}
 
 	const partAfterDoc = await PartDefinition.findById(barcodePart._id).select('inventoryCount').lean() as
 		| { inventoryCount?: number }
