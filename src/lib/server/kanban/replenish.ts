@@ -258,20 +258,31 @@ export async function reorder(opts: {
 		opts.scope === 'ready'
 			? { status: 'ready', archived: false }
 			: { status: { $in: ['captured', 'processed'] }, archived: false };
-	const inScope = (await KanbanTask.find(filter).select('_id').lean()) as any[];
-	const inScopeIds = new Set(inScope.map((t) => String(t._id)));
+	const inScope = (await KanbanTask.find(filter).select('_id rank').lean()) as any[];
+	const rankById = new Map(inScope.map((t) => [String(t._id), t.rank]));
+	const inScopeIds = new Set(rankById.keys());
 
+	// One bulkWrite, and only for ranks that actually change — a ▲/▼ swap on a
+	// 100-task list is 2 writes in 1 round trip, not 100 sequential updateOnes.
+	const ops: any[] = [];
 	let r = 1;
+	const assign = (id: string) => {
+		if (rankById.get(id) !== r) ops.push({ updateOne: { filter: { _id: id }, update: { $set: { rank: r } } } });
+		r++;
+	};
 	for (const id of opts.orderedTaskIds) {
 		if (!inScopeIds.has(id)) continue;
-		await KanbanTask.updateOne({ _id: id }, { $set: { rank: r++ } });
+		assign(id);
 		inScopeIds.delete(id);
 	}
 	// Anything in scope but not in the provided order goes after, preserving relative order.
 	if (inScopeIds.size) {
-		const rest = (await KanbanTask.find({ _id: { $in: [...inScopeIds] } }).sort({ rank: 1 }).select('_id').lean()) as any[];
-		for (const t of rest) await KanbanTask.updateOne({ _id: t._id }, { $set: { rank: r++ } });
+		const rest = inScope
+			.filter((t) => inScopeIds.has(String(t._id)))
+			.sort((a, b) => (a.rank ?? 0) - (b.rank ?? 0));
+		for (const t of rest) assign(String(t._id));
 	}
+	if (ops.length) await KanbanTask.bulkWrite(ops, { ordered: false });
 
 	await AuditLog.create({
 		_id: generateId(),

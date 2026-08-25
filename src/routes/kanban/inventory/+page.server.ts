@@ -126,9 +126,10 @@ function serviceFail(e: unknown) {
 }
 
 export const actions: Actions = {
-	// KB2-14 — the commitment ceremony: one replenishment event per commit,
-	// selected candidates in staged order. The service re-validates everything
-	// (actor holds kanban:replenish, DoR, caps) server-side.
+	// The commitment point: the per-row Commit button posts one taskId (the
+	// KB2-14 staging bar is gone; the action still takes a list so nothing
+	// else breaks). The service re-validates everything (actor holds
+	// kanban:replenish, DoR, caps) server-side.
 	commit: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
 		requirePermission(locals.user, 'kanban:write');

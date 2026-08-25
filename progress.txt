@@ -10142,3 +10142,26 @@ the run-start freshness gate) delivers the corrected def. Also noted: yesterday'
 (cPYh6cP5) was the restart-window 502, unrelated.
 NOT changed: the removed bounds guard stays removed (operator's 08-18 request); consider a SCHEMA-only
 pre-upload validation (reject what the robot will reject, allow anything it will accept).
+
+================================================================================
+2026-08-25 — feat/kanban-tweaks — Tier 1 one-click commit + rank-move de-lag
+================================================================================
+Two UX tweaks from Jacob. (1) The KB2-14 two-step commit (staging checkbox -> sticky commit bar ->
+Commit button) is gone: each Tier 1 row now has a Commit button right next to Process, greyed out
+until the task is processed + DoR-complete (tooltip on the wrapper span says why — disabled buttons
+don't show tooltips). Posts the same ?/commit action with a single taskId; the action still accepts
+a taskIds list and replenish() still re-validates actor/DoR/caps server-side, so the gate is
+unchanged — only the ceremony UI is. Checkbox column, row highlight, staged/commitNote state, and
+the sticky bar all deleted; the replenishment-result panel (promoted ranks / rejection reasons)
+stays. Batch commits with a note remain available via MCP kanban_replenish. (2) Rank ▲/▼ and rank
+jump were laggy because reorder() in src/lib/server/kanban/replenish.ts renumbered the whole tier-1
+scope with ~100 sequential updateOne round trips to Atlas; now it diffs against current ranks and
+issues one unordered bulkWrite of only the changed ranks (a swap = 2 writes, 1 round trip). Benefits
+the ready-queue reorder path too. renumberReady() already skipped no-ops over a cap-8 queue — left
+alone. Files: src/routes/kanban/inventory/+page.svelte, +page.server.ts (comment),
+src/lib/server/kanban/replenish.ts. npm run check: 11 errors = baseline, 0 in touched files.
+
+Deployment: preview — Vercel auto-build from branch push (URL in Vercel dashboard Deployments tab)
+Source: branch feat/kanban-tweaks @ this commit
+Retrieve this exact code: git checkout feat/kanban-tweaks at this commit
+What this deployment is for: Tier 1 one-click Commit button + fast rank moves, for Jacob to try before master merge.

@@ -81,33 +81,21 @@
 		}
 	}
 
-	// KB2-14 — the commitment ceremony: staged taskIds in commit order.
-	let staged = $state<string[]>([]);
-	let commitNote = $state('');
+	// One-click commit — replaces the KB2-14 staging checkbox + sticky commit
+	// bar. The button is only enabled on processed + DoR-complete rows; the
+	// replenish() gate re-checks everything server-side either way.
 	let commitResult = $derived((form as any)?.replenishResult ?? null);
-	let taskById = $derived(new Map<string, TaskRow>(data.tasks.map((t: TaskRow) => [t.id, t] as [string, TaskRow])));
 
-	// Only processed + DoR-complete rows are checkable; the gate re-checks server-side.
-	function stageable(t: TaskRow): boolean {
+	function committable(t: TaskRow): boolean {
 		return t.status === 'processed' && t.dorMissing.length === 0;
 	}
-	function stageBlockedReason(t: TaskRow): string {
+	function commitBlockedReason(t: TaskRow): string {
 		if (t.status === 'captured') return "Still 'captured' — process it first";
 		return 'DoR incomplete:\n' + t.dorMissing.join('\n');
 	}
-	function toggleStaged(taskId: string) {
-		staged = staged.includes(taskId) ? staged.filter((id) => id !== taskId) : [...staged, taskId];
-	}
-	function moveStaged(taskId: string, dir: -1 | 1) {
-		const i = staged.indexOf(taskId);
-		const j = i + dir;
-		if (i === -1 || j < 0 || j >= staged.length) return;
-		const next = [...staged];
-		[next[i], next[j]] = [next[j], next[i]];
-		staged = next;
-	}
 
-	// Commit gets its own enhance: on success the staging is spent.
+	// Commit keeps its own enhance: replenishResult arrives via `form`, and the
+	// list should repaint without resetting other in-flight inputs.
 	function commitEnhance() {
 		submitting = true;
 		return async ({ result, update }: { result: any; update: (opts?: any) => Promise<void> }) => {
@@ -116,8 +104,6 @@
 				errorMsg = result.data?.error ?? 'Commit failed';
 			} else if (result.type === 'success') {
 				errorMsg = '';
-				staged = [];
-				commitNote = '';
 			}
 			await update({ reset: false });
 		};
@@ -430,23 +416,7 @@
 	<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)]">
 		<div class="divide-y divide-[var(--color-tron-border)]">
 			{#each filtered as t (t.id)}
-					<div class="flex flex-wrap items-center gap-3 px-4 py-2.5 {staged.includes(t.id) ? 'bg-[rgba(0,212,255,0.06)]' : ''}">
-						{#if data.canReplenish}
-							<!-- KB2-14 staging checkbox: processed + DoR-complete only -->
-							{#if t.status === 'captured' || t.status === 'processed'}
-								<input
-									type="checkbox"
-									class="shrink-0"
-									checked={staged.includes(t.id)}
-									disabled={!stageable(t)}
-									onchange={() => toggleStaged(t.id)}
-									title={stageable(t) ? 'Stage for commitment' : stageBlockedReason(t)}
-									aria-label="Stage for commitment"
-								/>
-							{:else}
-								<span class="w-[13px] shrink-0"></span>
-							{/if}
-						{/if}
+					<div class="flex flex-wrap items-center gap-3 px-4 py-2.5">
 						{#if t.status === 'captured' || t.status === 'processed'}
 							{#if rankEdit !== null && rankEdit.id === t.id}
 								<!-- svelte-ignore a11y_autofocus -->
@@ -515,6 +485,16 @@
 									<button type="submit" name="direction" value="down" class="tron-button !px-2 !py-1 text-xs" title="Rank down" disabled={submitting}>▼</button>
 								</form>
 								<TronButton variant="primary" onclick={() => openProcess(t)}>Process</TronButton>
+								{#if data.canReplenish}
+									<!-- One-click commit: enabled once processed + DoR-complete.
+									     The span carries the tooltip — disabled buttons don't. -->
+									<form method="POST" action="?/commit" use:enhance={commitEnhance} class="flex items-center">
+										<input type="hidden" name="taskIds" value={t.id} />
+										<span title={committable(t) ? 'Commit to the Board — joins the ready queue' : commitBlockedReason(t)}>
+											<TronButton type="submit" variant="primary" disabled={!committable(t) || submitting}>Commit</TronButton>
+										</span>
+									</form>
+								{/if}
 								<form method="POST" action="?/icebox" use:enhance={submitEnhance}>
 									<input type="hidden" name="taskId" value={t.id} />
 									<TronButton type="submit" disabled={submitting}>Icebox</TronButton>
@@ -536,48 +516,6 @@
 		</div>
 	</section>
 
-	<!-- KB2-14: the commit bar — the ceremony itself. Sticks to the viewport
-	     bottom while anything is staged; hidden entirely without the permission. -->
-	{#if data.canReplenish && staged.length > 0}
-		<div
-			class="sticky bottom-2 z-30 rounded-lg border bg-[var(--color-tron-bg-secondary)] p-4"
-			style="border-color: var(--color-tron-cyan); box-shadow: 0 0 14px rgba(0,212,255,0.25);"
-		>
-			<div class="mb-3 flex flex-wrap items-center justify-between gap-2">
-				<span class="tron-text-primary text-sm font-bold">
-					{staged.length} selected
-					<span class="tron-text-muted font-normal"> · Ready {data.ready.count}/{data.ready.cap}</span>
-				</span>
-				<span class="tron-text-muted text-xs">Order below = the order they join the queue</span>
-			</div>
-			<ol class="mb-3 space-y-1.5">
-				{#each staged as id, i (id)}
-					{@const t = taskById.get(id)}
-					<li class="flex items-center gap-2">
-						<span class="tron-text-muted w-5 text-right text-xs font-bold">{i + 1}</span>
-						<span class="tron-text-primary flex-1 truncate text-sm">{t?.title ?? id}</span>
-						<button type="button" class="tron-button !px-2 !py-0.5 text-xs" onclick={() => moveStaged(id, -1)} disabled={i === 0} title="Move up">▲</button>
-						<button type="button" class="tron-button !px-2 !py-0.5 text-xs" onclick={() => moveStaged(id, 1)} disabled={i === staged.length - 1} title="Move down">▼</button>
-						<button type="button" class="text-xs font-bold" style="color: var(--color-tron-red);" onclick={() => toggleStaged(id)} title="Remove">✕</button>
-					</li>
-				{/each}
-			</ol>
-			<form method="POST" action="?/commit" class="flex flex-wrap items-center gap-2" use:enhance={commitEnhance}>
-				{#each staged as id (id)}
-					<input type="hidden" name="taskIds" value={id} />
-				{/each}
-				<input
-					name="note"
-					class="tron-input min-w-[220px] flex-1"
-					placeholder="Note (optional — recorded on the event)"
-					bind:value={commitNote}
-				/>
-				<TronButton type="submit" variant="primary" disabled={submitting}>
-					{submitting ? 'Committing…' : `Commit ${staged.length} item${staged.length === 1 ? '' : 's'}`}
-				</TronButton>
-			</form>
-		</div>
-	{/if}
 </div>
 
 <!-- Unified Process modal (KB2-03 + KB2-12): processes captured items, reshapes processed ones -->
