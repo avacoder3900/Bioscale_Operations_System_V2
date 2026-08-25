@@ -10211,3 +10211,8 @@ Deployment: preview — Vercel auto-build from branch push (URL in Vercel dashbo
 Source: branch feat/kanban-tweaks @ this commit
 Retrieve this exact code: git checkout feat/kanban-tweaks at this commit
 What this deployment is for: back-arrow origin memory hardened against refresh, bundled with the roadmap batch for QA.
+
+Deployment: production — Vercel auto-deploy from master push
+Source: branch master @ commit 49b9fdca (merge of feat/kanban-tweaks, fast-forward: 3bee213a roadmap batch + 49b9fdca back-arrow hardening)
+Retrieve this exact code: git checkout master at commit 49b9fdca
+What this deployment is for: roadmap wrapping titles/growing cards/corner jump-to-detail + back-arrow origin memory, live for the team.
