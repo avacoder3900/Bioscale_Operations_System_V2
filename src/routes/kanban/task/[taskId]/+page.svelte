@@ -17,12 +17,18 @@
 
 	// Back link returns to whichever kanban page you came from (queue,
 	// inventory, roadmap, flow, …) — not always the queue board — and the
-	// label says where it goes.
+	// label says where it goes. Persisted per tab so a refresh (or task→task
+	// hopping after one) doesn't forget the origin; nav.from === null means a
+	// fresh document load, the only time the stored origin is consulted.
+	const BACK_KEY = 'kanban:taskBackUrl';
 	let backUrl = $state('/kanban');
 	afterNavigate((nav) => {
 		const from = nav.from?.url;
 		if (from && from.pathname.startsWith('/kanban') && !from.pathname.startsWith('/kanban/task/')) {
 			backUrl = from.pathname + from.search;
+			try { sessionStorage.setItem(BACK_KEY, backUrl); } catch { /* private mode etc. */ }
+		} else if (!from) {
+			try { backUrl = sessionStorage.getItem(BACK_KEY) ?? backUrl; } catch { /* keep default */ }
 		}
 	});
 	const BACK_LABELS: [string, string][] = [

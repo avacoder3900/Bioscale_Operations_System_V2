@@ -10194,3 +10194,20 @@ Deployment: preview — Vercel auto-build from branch push (URL in Vercel dashbo
 Source: branch feat/kanban-tweaks @ this commit
 Retrieve this exact code: git checkout feat/kanban-tweaks at this commit
 What this deployment is for: roadmap wrapping titles + card growth + ↗ jump-to-detail, for Jacob's canvas QA.
+
+================================================================================
+2026-08-25 — feat/kanban-tweaks — Task-detail back arrow survives refresh
+================================================================================
+Follow-up to the roadmap batch: Jacob asked for the task-page back arrow to return to wherever you
+came from (board / Tier 1 / map). That already worked via the afterNavigate origin capture (all
+kanban pages use plain client-side <a> links) — the always-"Back to Board" label was hiding it and
+was fixed in 3bee213a. Remaining gap closed here: a page refresh (or new tab) lost the in-memory
+origin and fell back to /kanban. backUrl is now mirrored to sessionStorage (key kanban:taskBackUrl)
+and restored only on fresh document loads (nav.from === null), so refresh + task→task hopping keep
+the true origin; try/catch guards private-mode storage. File: task/[taskId]/+page.svelte.
+npm run check: 11 errors = baseline, 0 in touched files.
+
+Deployment: preview — Vercel auto-build from branch push (URL in Vercel dashboard Deployments tab)
+Source: branch feat/kanban-tweaks @ this commit
+Retrieve this exact code: git checkout feat/kanban-tweaks at this commit
+What this deployment is for: back-arrow origin memory hardened against refresh, bundled with the roadmap batch for QA.
