@@ -10079,3 +10079,15 @@ npm run check: 11 errors / 434 warnings — baseline.
 Deployment: production — Vercel auto-deploy from master push
 Source: branch master @ this commit
 What this deployment is for: partial reagent runs scan only the loaded positions instead of timing out on all 24.
+
+================================================================================
+2026-08-25 — DATA BACKFILL — ReceivingLot for Jacob's 08-18 Zebra barcode print run (unblocks WI-01 backing)
+================================================================================
+Operator couldn't start WI-01 cartridge backing: the Barcode-lot gate (validateLotForPart) requires a
+ReceivingLot with part PT-CT-106, but zebra-roll confirmBatch records only inventory transactions —
+no ReceivingLot — so Jacob's 2026-08-18 ZT230 run (13 printed batches, 2,304 labels; PT-CT-106
+inventoryCount 2,707) had nothing scannable/selectable, and the three old Avery lots (Apr/May) are
+exhausted. Backfilled receiving_lots doc lotId ZEBRA-20260818-PTCT106 (lotNumber LOT-20260818-ZBRA,
+qty 2304, status accepted, notes list all 13 BarcodeSheetBatch ids) + audit_logs row
+(receiving_lot_backfill). No code change. Systemic fix NOT yet built: zebra confirmBatch should
+auto-create an in-house ReceivingLot per roll run.
