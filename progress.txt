@@ -10106,3 +10106,21 @@ assembly/kanban-roadmap files; baseline was 11 before those landed).
 Deployment: production — Vercel auto-deploy from master push
 Source: branch master @ this commit
 What this deployment is for: every future in-house label print run is immediately usable in WI-01.
+
+================================================================================
+2026-08-25 — master — B07 "Engine hung" was a restart storm; daemon now refuses to kill a booting server
+================================================================================
+Operator couldn't wax fill: persistent Engine hung despite power cycles + server restarts. Diagnosis
+from robot journal: nginx answered 502 (backend down) because the server was permanently 'activating'
+— it takes ~2-3 min to boot, BIMS labels that window "Engine hung", and every Restart press queued a
+bridge restart_robot_server command that killed the boot of the previous one (15 requests 15:26-16:01;
+two boots reached "Application startup complete" and were killed 4-8s later). Recovery: expired the 5
+queued/claimed restart commands in ot2_bridge_commands, hands off, server up at 16:05 (health/runs
+200). Fix: execute_restart_robot_server checks systemctl is-active first — 'activating' => no kill,
+returns alreadyStarting + wait message. Deployed to B07 daemon (restarted, active); B14/R04 daemons
+get it on their next update. Possible follow-up (not built): health.ts could show "Starting…" instead
+of "Engine hung" while the server is activating.
+
+Deployment: robot daemon — B07 /data/ot2-bridge/ot2-bridge.py @ this commit (ot2-bridge restarted 16:08Z)
+Source: branch master @ this commit
+What this deployment is for: pressing Restart during the 2-3 min boot can no longer wedge the robot.
