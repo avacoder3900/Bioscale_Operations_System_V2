@@ -41,6 +41,13 @@
 	const nodeTypes = { task: TaskNode, milestone: MilestoneNode };
 
 	const TASK_W = 230, TASK_H = 64, MILE_W = 210, MILE_H = 104;
+	// Cards grow with their wrapped title: ~30 chars/line at the near-tier
+	// font in ~195px of text width, capped at 4 lines. The same height feeds
+	// the node, the timeline row packing, and dagre, so nothing overlaps.
+	const TITLE_LINE_CHARS = 30, TITLE_LINE_PX = 15, TITLE_MAX_LINES = 4;
+	const titleLines = (t: any) =>
+		Math.min(TITLE_MAX_LINES, Math.max(1, Math.ceil((t.title ?? '').length / TITLE_LINE_CHARS)));
+	const heightOf = (t: any) => TASK_H + (titleLines(t) - 1) * TITLE_LINE_PX;
 	const DAY_MS = 24 * 60 * 60 * 1000;
 	const PX_PER_DAY = 26;
 	const AXIS_H = 40; // floating axis strip height (screen px)
@@ -211,6 +218,8 @@
 			late: !parked && (t.late ?? false),
 			parked,
 			dimmed: dimmedFn(t.id),
+			lines: titleLines(t),
+			heightPx: heightOf(t),
 			onPort,
 			pendingPort: pendingPort && pendingPort.id === t.id ? pendingPort.side : null
 		};
@@ -258,7 +267,7 @@
 	const timelineLayout = $derived.by(() => {
 		const chain = graph.chainTasks.filter(({ t }) => !(hideDone && t.done));
 		const { xOf } = timeScale;
-		const Y0 = 0, BAND_PAD = 16, ROW_H = TASK_H + 12;
+		const Y0 = 0, BAND_PAD = 16, ROW_GAP = 12;
 
 		// union-find over chain tasks + milestones via the drawn edges
 		const parent = new Map<string, string>();
@@ -290,20 +299,30 @@
 		let y = Y0;
 		const positions = new Map<string, { x: number; y: number }>();
 		const bandRects: { y: number; height: number }[] = [];
+		// Rows are variable-height now (cards grow with their title): assign
+		// tasks to rows greedily by x first, then stack rows by each row's
+		// tallest card. Returns the vertical space consumed.
 		const packInto = (tasks: any[], startY: number): number => {
 			const rowEnds: number[] = [];
+			const rowMaxH: number[] = [];
+			const placed: { id: string; x: number; row: number }[] = [];
 			for (const t of tasks) {
 				const x = xOf(new Date(timelineDateOf(t) + 'T00:00:00').getTime());
 				let row = rowEnds.findIndex((e) => e <= x);
-				if (row === -1) { row = rowEnds.length; rowEnds.push(0); }
+				if (row === -1) { row = rowEnds.length; rowEnds.push(0); rowMaxH.push(0); }
 				rowEnds[row] = x + TASK_W + 24;
-				positions.set(t.id, { x, y: startY + row * ROW_H });
+				rowMaxH[row] = Math.max(rowMaxH[row], heightOf(t));
+				placed.push({ id: t.id, x, row });
 			}
-			return Math.max(1, rowEnds.length);
+			const rowY: number[] = [];
+			let yy = startY;
+			for (const h of rowMaxH) { rowY.push(yy); yy += h + ROW_GAP; }
+			for (const p of placed) positions.set(p.id, { x: p.x, y: rowY[p.row] });
+			return Math.max(TASK_H + ROW_GAP, yy - startY);
 		};
 		for (const band of bands) {
-			const rows = packInto(band.tasks, y + BAND_PAD);
-			const height = BAND_PAD * 2 + rows * ROW_H;
+			const used = packInto(band.tasks, y + BAND_PAD);
+			const height = BAND_PAD * 2 + used;
 			bandRects.push({ y, height });
 			y += height;
 		}
@@ -312,8 +331,8 @@
 		const parkedSorted = [...graph.parkedTasks].sort((a: any, b: any) =>
 			timelineDateOf(a).localeCompare(timelineDateOf(b))
 		);
-		const unwiredRows = parkedSorted.length ? packInto(parkedSorted, unwiredY + BAND_PAD) : 0;
-		const totalH = parkedSorted.length ? unwiredY + BAND_PAD * 2 + unwiredRows * ROW_H : y;
+		const unwiredUsed = parkedSorted.length ? packInto(parkedSorted, unwiredY + BAND_PAD) : 0;
+		const totalH = parkedSorted.length ? unwiredY + BAND_PAD * 2 + unwiredUsed : y;
 
 		// Milestones stay in the top strip.
 		graph.milestoneRows.forEach((m: any, i: number) => {
@@ -331,7 +350,7 @@
 		const g = new dagre.graphlib.Graph();
 		g.setGraph({ rankdir: 'LR', ranksep: 110, nodesep: 26, marginx: 40, marginy: 40 });
 		g.setDefaultEdgeLabel(() => ({}));
-		for (const { t } of chain) g.setNode(t.id, { width: TASK_W, height: TASK_H });
+		for (const { t } of chain) g.setNode(t.id, { width: TASK_W, height: heightOf(t) });
 		for (const m of graph.milestoneRows) g.setNode(m.id, { width: MILE_W, height: MILE_H });
 		for (const e of graph.edges) g.setEdge(e.source, e.target);
 		dagre.layout(g);
@@ -345,21 +364,20 @@
 			maxY = Math.max(maxY, pos.y + h);
 			maxX = Math.max(maxX, pos.x + w);
 		};
-		for (const { t } of chain) place(t.id, TASK_W, TASK_H);
+		for (const { t } of chain) place(t.id, TASK_W, heightOf(t));
 		for (const m of graph.milestoneRows) place(m.id, MILE_W, MILE_H);
 		// Parked grid below the graph — dagre would dump the disconnected set
-		// into one giant first column (the original collapse, reborn).
+		// into one giant first column (the original collapse, reborn). Grid rows
+		// step by their tallest card (heights vary with wrapped titles).
 		const PER_ROW = Math.max(3, Math.floor(Math.max(maxX, 1200) / (TASK_W + 30)));
 		const sorted = [...graph.parkedTasks].sort((a: any, b: any) => a.rank - b.rank);
+		let gy = maxY + 110, gridRowH = 0;
 		sorted.forEach((t: any, i: number) => {
+			const col = i % PER_ROW;
+			if (col === 0 && i > 0) { gy += gridRowH + 26; gridRowH = 0; }
+			gridRowH = Math.max(gridRowH, heightOf(t));
 			const pin = pinMap.get(t.id);
-			positions.set(
-				t.id,
-				pin ?? {
-					x: 40 + (i % PER_ROW) * (TASK_W + 30),
-					y: maxY + 110 + Math.floor(i / PER_ROW) * (TASK_H + 26)
-				}
-			);
+			positions.set(t.id, pin ?? { x: 40 + col * (TASK_W + 30), y: gy });
 		});
 		return { positions, parkedBandY: maxY + 70 };
 	});

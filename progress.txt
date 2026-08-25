@@ -10170,3 +10170,27 @@ Deployment: production — Vercel auto-deploy from master push
 Source: branch master @ commit 5cbc442c (merge of feat/kanban-tweaks, fast-forward)
 Retrieve this exact code: git checkout master at commit 5cbc442c
 What this deployment is for: Tier 1 one-click Commit button + bulkWrite rank reorder, live for the team.
+
+================================================================================
+2026-08-25 — feat/kanban-tweaks — Roadmap: wrapping titles, growing cards, corner jump-to-detail
+================================================================================
+Two roadmap-canvas tweaks from Jacob. (1) Task-card titles wrap up to 4 lines and the card grows to
+fit: RoadmapCanvas computes titleLines/heightOf (~30 chars/line, +15px per extra line over the 64px
+base) and feeds the SAME height to the node (data.heightPx/lines), the timeline row packing (rows
+are now variable-height — stacked by each row's tallest card, packInto returns consumed px), dagre
+(per-node height), and the parked grid (rows step by tallest card) — so nothing overlaps. TaskNode
+near tier drops nowrap/ellipsis for a -webkit-line-clamp box; mid tier clamps at max(2, lines).
+(2) Every task card (mid+near tiers) and milestone gets a small ↗ icon in the top-right corner
+linking to /kanban/task/<id> (stopPropagation so focus mode doesn't fire; shifts left when the LATE
+badge owns the corner) — milestones previously had NO route to their detail page from the canvas.
+Back from the detail page already returned to the roadmap (afterNavigate captures the from-URL,
+filters included); the breadcrumb label now says where it goes ("Back to Roadmap" / "Back to
+Tier 1" / …) instead of always "Back to Board". Files: roadmap/TaskNode.svelte,
+roadmap/MilestoneNode.svelte, roadmap/RoadmapCanvas.svelte, task/[taskId]/+page.svelte.
+npm run check: 11 errors = baseline, 0 in touched files. Per the KB2-35 lesson, eyeball the canvas
+in the preview build before master merge (layout bugs there have only shown up live).
+
+Deployment: preview — Vercel auto-build from branch push (URL in Vercel dashboard Deployments tab)
+Source: branch feat/kanban-tweaks @ this commit
+Retrieve this exact code: git checkout feat/kanban-tweaks at this commit
+What this deployment is for: roadmap wrapping titles + card growth + ↗ jump-to-detail, for Jacob's canvas QA.

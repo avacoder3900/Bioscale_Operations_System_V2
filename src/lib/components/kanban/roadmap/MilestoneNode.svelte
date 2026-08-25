@@ -20,6 +20,16 @@
 	<Handle type="target" position={Position.Left} style="opacity:0;" />
 	<Handle type="source" position={Position.Right} style="opacity:0;" />
 
+	<!-- Corner jump to the milestone's task page (same affordance as task cards). -->
+	<a
+		class="open-link"
+		href="/kanban/task/{data.id}"
+		aria-label="Open milestone details"
+		title="Open milestone details"
+		onpointerdown={(e) => e.stopPropagation()}
+		onclick={(e) => e.stopPropagation()}
+	>↗</a>
+
 	{#if data.onPort}
 		<button
 			type="button"
@@ -46,3 +56,27 @@
 		</div>
 	</div>
 </div>
+
+<style>
+	.open-link {
+		position: absolute;
+		top: 3px;
+		right: 3px;
+		z-index: 6;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		width: 17px;
+		height: 17px;
+		border-radius: 5px;
+		font-size: 11px;
+		font-weight: 700;
+		color: #7b8ba3;
+		background: rgba(11, 18, 32, 0.65);
+		text-decoration: none;
+	}
+	.open-link:hover {
+		color: #00d4ff;
+		background: rgba(0, 212, 255, 0.14);
+	}
+</style>

@@ -2,7 +2,8 @@
 	/**
 	 * KB2-30 — a task on the roadmap canvas. Semantic zoom, 3 tiers with
 	 * hysteresis (far: dot · mid: chip · near: full card). Dimensions are
-	 * constant across tiers so edges don't re-anchor. Colors by first tag;
+	 * constant across tiers so edges don't re-anchor — height comes from the
+	 * layout (data.heightPx grows with the wrapped title). Colors by first tag;
 	 * critical chain = red border; late = red corner badge; done = faded.
 	 */
 	import { Handle, Position, useViewport } from '@xyflow/svelte';
@@ -43,7 +44,7 @@
 <div
 	class="task-node"
 	style="
-		width: 230px; height: 64px;
+		width: 230px; height: {data.heightPx ?? 64}px;
 		border: {data.critical && !data.done && !data.parked ? 2 : 1.2}px {data.parked ? 'dashed' : 'solid'} {borderColor};
 		border-radius: 10px;
 		background: {data.done ? 'rgba(30,41,59,0.35)' : data.parked ? 'rgba(20,28,42,0.7)' : 'var(--color-tron-bg-secondary, #0b1220)'};
@@ -80,26 +81,41 @@ ${data.parked ? 'UNWIRED — in no milestone chain; open the task to add depende
 		></button>
 	{/if}
 
+	{#if tier !== 'far'}
+		<!-- Corner jump to the task page — a plain node click is focus mode, so
+		     the link swallows its events. Shifts left when the LATE badge owns
+		     the corner. -->
+		<a
+			class="open-link"
+			href="/kanban/task/{data.id}"
+			aria-label="Open task details"
+			title="Open task details"
+			style="right: {data.late && !data.done ? 36 : 3}px;"
+			onpointerdown={(e) => e.stopPropagation()}
+			onclick={(e) => e.stopPropagation()}
+		>↗</a>
+	{/if}
+
 	{#if tier === 'far'}
 		<div style="position:absolute; inset:0; display:flex; align-items:center; justify-content:center;">
 			<div style="width: 34px; height: 34px; border-radius: 50%; background: {color}{data.done ? '33' : '99'};"></div>
 		</div>
 	{:else if tier === 'mid'}
-		<div style="position:absolute; inset:0; display:flex; align-items:center; gap:8px; padding:0 10px;">
+		<div style="position:absolute; inset:0; display:flex; align-items:center; gap:8px; padding:0 10px 0 10px;">
 			<span style="width:10px; height:10px; border-radius:50%; background:{statusColor}; flex-shrink:0;"></span>
-			<span style="color: #f1f5f9; font-size: 14px; font-weight: 600; line-height: 1.15; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;">
+			<span style="color: #f1f5f9; font-size: 14px; font-weight: 600; line-height: 1.15; overflow: hidden; display: -webkit-box; -webkit-line-clamp: {Math.max(2, data.lines ?? 2)}; -webkit-box-orient: vertical; padding-right: 12px;">
 				{data.title}
 			</span>
 		</div>
 	{:else}
 		<div style="position:absolute; inset:0; padding: 6px 10px; display:flex; flex-direction:column; justify-content:space-between;">
-			<div style="display:flex; align-items:center; gap:6px; min-width:0;">
+			<div style="display:flex; align-items:flex-start; gap:6px; min-width:0; padding-right:14px;">
 				{#if data.trackingNumber}
-					<span style="font-family: ui-monospace, monospace; font-size: 9px; color: var(--color-tron-text-secondary, #64748b); flex-shrink:0;">{data.trackingNumber}</span>
+					<span style="font-family: ui-monospace, monospace; font-size: 9px; color: var(--color-tron-text-secondary, #64748b); flex-shrink:0; padding-top:2px;">{data.trackingNumber}</span>
 				{/if}
 				<a
 					href="/kanban/task/{data.id}"
-					style="color: #f1f5f9; font-size: 12px; font-weight: 700; line-height:1.15; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; text-decoration:none;"
+					style="color: #f1f5f9; font-size: 12px; font-weight: 700; line-height:1.25; overflow:hidden; display:-webkit-box; -webkit-line-clamp:{data.lines ?? 1}; -webkit-box-orient:vertical; text-decoration:none;"
 					onpointerdown={(e) => e.stopPropagation()}
 				>{data.title}</a>
 			</div>
@@ -126,3 +142,26 @@ ${data.parked ? 'UNWIRED — in no milestone chain; open the task to add depende
 		<span style="position:absolute; top:0; right:0; background:#f87171; color:#0b1220; font-size:8px; font-weight:800; padding:1px 5px; border-radius:0 8px 0 6px;">LATE</span>
 	{/if}
 </div>
+
+<style>
+	.open-link {
+		position: absolute;
+		top: 3px;
+		z-index: 6;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		width: 17px;
+		height: 17px;
+		border-radius: 5px;
+		font-size: 11px;
+		font-weight: 700;
+		color: #7b8ba3;
+		background: rgba(11, 18, 32, 0.65);
+		text-decoration: none;
+	}
+	.open-link:hover {
+		color: #00d4ff;
+		background: rgba(0, 212, 255, 0.14);
+	}
+</style>
