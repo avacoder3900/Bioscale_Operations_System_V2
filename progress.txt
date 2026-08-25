@@ -10091,3 +10091,18 @@ exhausted. Backfilled receiving_lots doc lotId ZEBRA-20260818-PTCT106 (lotNumber
 qty 2304, status accepted, notes list all 13 BarcodeSheetBatch ids) + audit_logs row
 (receiving_lot_backfill). No code change. Systemic fix NOT yet built: zebra confirmBatch should
 auto-create an in-house ReceivingLot per roll run.
+
+================================================================================
+2026-08-25 — master — barcode print confirm now auto-creates the in-house ReceivingLot
+================================================================================
+Systemic fix for yesterday's backfill: confirmBatch (both Avery + Zebra surfaces) upserts a per-day
+per-medium PT-CT-106 ReceivingLot (ZEBRA-/AVERY-YYYYMMDD-PTCT106, accepted, coc; same-day batches
+$inc quantity into one lot) right after the batch is claimed + inventory recorded, so WI-01 backing
+can always select/scan the lot without manual DB work. Upsert failure logs but never fails the
+confirm. Naming matches the 08-25 hand backfill (ZEBRA-20260818-PTCT106).
+npm run check: 0 errors in touched files (19 repo-wide, all pre-existing in new upstream
+assembly/kanban-roadmap files; baseline was 11 before those landed).
+
+Deployment: production — Vercel auto-deploy from master push
+Source: branch master @ this commit
+What this deployment is for: every future in-house label print run is immediately usable in WI-01.
