@@ -10165,3 +10165,8 @@ Deployment: preview — Vercel auto-build from branch push (URL in Vercel dashbo
 Source: branch feat/kanban-tweaks @ this commit
 Retrieve this exact code: git checkout feat/kanban-tweaks at this commit
 What this deployment is for: Tier 1 one-click Commit button + fast rank moves, for Jacob to try before master merge.
+
+Deployment: production — Vercel auto-deploy from master push
+Source: branch master @ commit 5cbc442c (merge of feat/kanban-tweaks, fast-forward)
+Retrieve this exact code: git checkout master at commit 5cbc442c
+What this deployment is for: Tier 1 one-click Commit button + bulkWrite rank reorder, live for the team.
