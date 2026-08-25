@@ -41,10 +41,12 @@
 	const nodeTypes = { task: TaskNode, milestone: MilestoneNode };
 
 	const TASK_W = 230, TASK_H = 64, MILE_W = 210, MILE_H = 104;
-	// Cards grow with their wrapped title: ~30 chars/line at the near-tier
-	// font in ~195px of text width, capped at 4 lines. The same height feeds
-	// the node, the timeline row packing, and dagre, so nothing overlaps.
-	const TITLE_LINE_CHARS = 30, TITLE_LINE_PX = 15, TITLE_MAX_LINES = 4;
+	// Cards grow until the WHOLE title fits — truncation makes the map useless
+	// (Jacob, 2026-08-25). 22 chars/line is the worst tier's real budget (mid:
+	// 14px font in ~186px; near: 12px next to the tracking number), measured
+	// live after the first pass (30 chars) still ellipsized. The same height
+	// feeds the node, the timeline row packing, and dagre, so nothing overlaps.
+	const TITLE_LINE_CHARS = 22, TITLE_LINE_PX = 17, TITLE_MAX_LINES = 10;
 	const titleLines = (t: any) =>
 		Math.min(TITLE_MAX_LINES, Math.max(1, Math.ceil((t.title ?? '').length / TITLE_LINE_CHARS)));
 	const heightOf = (t: any) => TASK_H + (titleLines(t) - 1) * TITLE_LINE_PX;

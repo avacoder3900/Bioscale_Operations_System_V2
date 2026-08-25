@@ -10229,3 +10229,25 @@ Deployment: production — Vercel auto-deploy from master push
 Source: branch master @ this commit (fast-forward of feat/kanban-tweaks)
 Retrieve this exact code: git checkout master at this commit
 What this deployment is for: back button reads "Back" on the task page.
+
+================================================================================
+2026-08-25 — feat/kanban-tweaks — Roadmap fixes from live QA: ↗ broke back-origin; titles still truncating
+================================================================================
+Jacob's live report + browser verification on production. (1) ROOT CAUSE of "back from roadmap goes
+to the board": the new ↗ corner link's onclick stopPropagation (needed so focus mode doesn't fire)
+ALSO blocked SvelteKit's document-level link handler → full page load → afterNavigate had no from-URL
+and sessionStorage was empty → backUrl fell to /kanban. Verified live: a window marker did not
+survive the ↗ click. Tier 1 worked because its links don't stop propagation. Fix: the ↗ now
+preventDefaults and navigates via goto() (client-side) in TaskNode + MilestoneNode; href kept for
+middle-click. (2) Titles still ellipsized at the mid zoom tier (seen live: 4-line cards ending in
+"…"): the 30-chars/line estimate was tuned to the near tier's 12px font, but the mid tier renders
+14px in ~186px (~24 chars real), and the 4-line cap chopped anything longer. New budget: 22
+chars/line, 17px/line, cap raised to 10 lines — the whole title is always visible; cards (and the
+variable-height layouts, unchanged) just grow. RoadmapCanvas constants only. Files:
+roadmap/TaskNode.svelte, roadmap/MilestoneNode.svelte, roadmap/RoadmapCanvas.svelte.
+npm run check: 11 errors = baseline, 0 in touched files. Verified live post-deploy (see below).
+
+Deployment: production — Vercel auto-deploy from master push
+Source: branch master @ this commit (fast-forward of feat/kanban-tweaks)
+Retrieve this exact code: git checkout master at this commit
+What this deployment is for: roadmap ↗ preserves back-origin; task titles never truncate on the map.

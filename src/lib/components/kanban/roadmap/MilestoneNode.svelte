@@ -5,6 +5,7 @@
 	 * distance) so milestones stay readable from every altitude.
 	 */
 	import { Handle, Position, useViewport } from '@xyflow/svelte';
+	import { goto } from '$app/navigation';
 
 	let { data }: { data: any } = $props();
 	const viewport = useViewport();
@@ -27,7 +28,7 @@
 		aria-label="Open milestone details"
 		title="Open milestone details"
 		onpointerdown={(e) => e.stopPropagation()}
-		onclick={(e) => e.stopPropagation()}
+		onclick={(e) => { e.stopPropagation(); e.preventDefault(); goto(`/kanban/task/${data.id}`); }}
 	>↗</a>
 
 	{#if data.onPort}

@@ -7,6 +7,7 @@
 	 * critical chain = red border; late = red corner badge; done = faded.
 	 */
 	import { Handle, Position, useViewport } from '@xyflow/svelte';
+	import { goto } from '$app/navigation';
 	import { tagColor } from '$lib/shared/tag-color';
 	import { STATUS_META, type KanbanStatus } from '$lib/shared/kanban-status';
 
@@ -83,8 +84,10 @@ ${data.parked ? 'UNWIRED — in no milestone chain; open the task to add depende
 
 	{#if tier !== 'far'}
 		<!-- Corner jump to the task page — a plain node click is focus mode, so
-		     the link swallows its events. Shifts left when the LATE badge owns
-		     the corner. -->
+		     the link swallows its events. stopPropagation also blocks SvelteKit's
+		     document-level link handler, so navigate via goto() explicitly:
+		     a full-page load here loses the back-arrow origin (found live
+		     2026-08-25). Shifts left when the LATE badge owns the corner. -->
 		<a
 			class="open-link"
 			href="/kanban/task/{data.id}"
@@ -92,7 +95,7 @@ ${data.parked ? 'UNWIRED — in no milestone chain; open the task to add depende
 			title="Open task details"
 			style="right: {data.late && !data.done ? 36 : 3}px;"
 			onpointerdown={(e) => e.stopPropagation()}
-			onclick={(e) => e.stopPropagation()}
+			onclick={(e) => { e.stopPropagation(); e.preventDefault(); goto(`/kanban/task/${data.id}`); }}
 		>↗</a>
 	{/if}
 
