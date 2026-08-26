@@ -10300,3 +10300,32 @@ What this deployment is for: first look at the milestone-creation UI on /kanban/
 Build note: went pending → success with no intermediate spurious failure this time.
 Verified reachable: GET /kanban/roadmap → 302 /login (cookie auth, as expected).
 NOT yet verified in-app — needs a human logged in to click through the modal.
+
+================================================================================
+2026-08-26 - feat/kanban-milestone-ui - Tier 1 inventory: copy the visible task list
+================================================================================
+Added a "Copy list" button to the Tier 1 inventory filter bar, next to the
+"N options" count. It copies the task list as plain text, one task per line:
+
+  12  Fix wax probe bias  [processed/deliverable]  hardware
+
+Fields are rank, title, [status/itemType], then tags. Empty tags are dropped
+before the join rather than left as trailing whitespace.
+
+It copies `filtered`, not `data.tasks` - i.e. exactly what the status
+checkboxes, type/origin selects and tag filter are currently showing, in the
+displayed order (rank asc, as the load function sorts it). Copying the full
+set regardless of filters would hand back a list that doesn't match the screen,
+which is the wrong list whenever a filter is on.
+
+navigator.clipboard is the primary path with a hidden-textarea execCommand
+fallback, since the Clipboard API needs a secure context and can be denied; if
+both fail it sets errorMsg so it fails loudly instead of looking like a no-op.
+The button flips to a green check for 2s and is disabled when the filters leave
+zero rows.
+
+Files: src/routes/kanban/inventory/+page.svelte (one file, +58 lines).
+npm run check: 120 errors / 434 warnings absolute, with zero of either in the
+touched file. 120 matches the baseline recorded in the entry above - same cause,
+this worktree borrows node_modules from .worktrees/pm-test which predates
+@xyflow/svelte, chart.js and bwip-js. Vercel installs clean and stays the gate.
