@@ -10340,3 +10340,33 @@ What this deployment is for: the Tier 1 "Copy list" button on /kanban/inventory,
 Build note: pending -> success on both scopes, no spurious failure.
 Verified reachable: GET /kanban/inventory -> 302 /login (cookie auth, as expected).
 NOT yet verified in-app - needs a human logged in to click Copy and paste the result.
+
+================================================================================
+2026-08-26 - master - milestone-creation UI + Tier 1 copy button merged to production
+================================================================================
+PR #44 merged feat/kanban-milestone-ui into master as a merge commit, promoting
+both features from preview to production in one deploy:
+
+  - roadmap milestone creation (createMilestone action + modal), and
+  - the Tier 1 "Copy list" button on /kanban/inventory.
+
+No code changed in the merge - the tree is identical to the branch head that
+was already preview-built. That is exactly the case where Vercel has previously
+deduped and silently skipped the production build, so the production deployment
+was confirmed explicitly rather than assumed: GitHub deployment 6111892606,
+environment "Production", state success.
+
+Files: no new changes; see the two entries above for the per-feature detail.
+npm run check: unchanged from the branch (120 errors / 434 warnings absolute,
+zero in the touched files).
+
+Deployment: production - https://bioscale-operations-system-mongodb.vercel.app
+  (immutable: https://bioscale-operations-system-mongodb-gxepi0ouk-brevitest.vercel.app)
+Source: branch master @ commit fd1d2d75 (merge of f7f7bc50)
+Retrieve this exact code: git checkout master at commit fd1d2d75
+What this deployment is for: putting both kanban additions in front of real users.
+Verified reachable: GET /kanban/roadmap -> 302 /login on both the alias and the
+  immutable URL (cookie auth, as expected).
+STILL not verified in-app - nobody has logged in and clicked the milestone modal
+  or the Copy button. Production now serves code whose happy path is type-checked
+  and route-checked only. First real use is the actual test.
