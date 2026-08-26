@@ -30,7 +30,8 @@ const ALL_PERMISSIONS = [
 	{ group: 'productionRun', permissions: ['productionRun:read', 'productionRun:write'] },
 	{ group: 'shipping', permissions: ['shipping:read', 'shipping:write'] },
 	{ group: 'customer', permissions: ['customer:read', 'customer:write'] },
-	{ group: 'equipment', permissions: ['equipment:read', 'equipment:write'] }
+	{ group: 'equipment', permissions: ['equipment:read', 'equipment:write'] },
+	{ group: 'cleaning', permissions: ['cleaning:read', 'cleaning:write', 'cleaning:admin'] }
 ];
 
 export const load: PageServerLoad = async ({ locals, url }) => {
