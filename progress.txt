@@ -10290,3 +10290,13 @@ npm run check: 0 errors and 0 warnings in both touched files. Absolute count rea
 predates @xyflow/svelte, chart.js, bwip-js and friends — all real entries in
 package.json, so that noise is install drift, not breakage. Vercel installs clean
 and remains the real gate.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-o9xf44kda-brevitest.vercel.app
+  (also aliased: https://bioscale-operations-system-mongodb-kp64wx0z5.vercel.app)
+Source: branch feat/kanban-milestone-ui @ commit 10dee0a0
+Retrieve this exact code: git checkout feat/kanban-milestone-ui at commit 10dee0a0
+What this deployment is for: first look at the milestone-creation UI on /kanban/roadmap
+  (＋ Milestone chip, empty-state button, modal with the blocked_by chain picker).
+Build note: went pending → success with no intermediate spurious failure this time.
+Verified reachable: GET /kanban/roadmap → 302 /login (cookie auth, as expected).
+NOT yet verified in-app — needs a human logged in to click through the modal.
