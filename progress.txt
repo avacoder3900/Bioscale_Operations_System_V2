@@ -10251,3 +10251,92 @@ Deployment: production — Vercel auto-deploy from master push
 Source: branch master @ this commit (fast-forward of feat/kanban-tweaks)
 Retrieve this exact code: git checkout master at this commit
 What this deployment is for: roadmap ↗ preserves back-origin; task titles never truncate on the map.
+
+================================================================================
+2026-08-26 — feat/kanban-milestone-ui — /kanban/roadmap can create milestones (UI)
+================================================================================
+Milestones were agent-only: the service layer has supported them since KB2-27
+(createKanbanItem takes itemType 'milestone' + dueDate + blockedBy, and the KB2-28
+scheduler anchors its backward pass to any dated milestone), but the only way to
+make one was kanban_capture over MCP. The roadmap's empty state literally told you
+to go do it in the Claude app. This adds the missing UI on the page that consumes
+them.
+
+New action createMilestone in roadmap/+page.server.ts rides createKanbanItem — the
+same service the MCP path uses — so a UI milestone and an agent milestone are the
+same shape (Tier 1 'captured', rank appended, tags normalized, links cycle-checked,
+AuditLog INSERT written by the service). Due date is required and validated as
+YYYY-MM-DD, then parsed as LOCAL midnight to match the scheduler's parseLocalDate
+contract; an undated milestone anchors nothing, so it is rejected rather than
+silently landing in the unscheduled strip. blockedBy ids are de-duped before the
+call; resolveLinks still rejects dangling ids and blocking cycles.
+
+The load function now also returns linkCandidates — non-archived tasks excluding
+done/declined — to feed a chain picker.
+
+UI (roadmap/+page.svelte): a dashed "＋ Milestone" chip at the end of the milestone
+strip, and a primary "◆ New milestone" button in the empty state (whose copy now
+leads with the button and keeps the kanban_file_plan path as the secondary route).
+The modal takes title, due date, tags, an optional meaning line, and a blocked_by
+chain picker: filter by title/tracking number/tag, checkbox list capped at 200
+rows, selected ids held in state (not in the DOM) so filtering a row out of view
+cannot silently drop it from the submission, with removable chips for what is
+selected. Errors render inside the modal — a page-level banner would have been
+behind the z-50 overlay.
+
+Files: src/routes/kanban/roadmap/+page.server.ts, src/routes/kanban/roadmap/+page.svelte.
+npm run check: 0 errors and 0 warnings in both touched files. Absolute count read
+120 because this worktree borrows node_modules from .worktrees/pm-test, which
+predates @xyflow/svelte, chart.js, bwip-js and friends — all real entries in
+package.json, so that noise is install drift, not breakage. Vercel installs clean
+and remains the real gate.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-o9xf44kda-brevitest.vercel.app
+  (also aliased: https://bioscale-operations-system-mongodb-kp64wx0z5.vercel.app)
+Source: branch feat/kanban-milestone-ui @ commit 10dee0a0
+Retrieve this exact code: git checkout feat/kanban-milestone-ui at commit 10dee0a0
+What this deployment is for: first look at the milestone-creation UI on /kanban/roadmap
+  (＋ Milestone chip, empty-state button, modal with the blocked_by chain picker).
+Build note: went pending → success with no intermediate spurious failure this time.
+Verified reachable: GET /kanban/roadmap → 302 /login (cookie auth, as expected).
+NOT yet verified in-app — needs a human logged in to click through the modal.
+
+================================================================================
+2026-08-26 - feat/kanban-milestone-ui - Tier 1 inventory: copy the visible task list
+================================================================================
+Added a "Copy list" button to the Tier 1 inventory filter bar, next to the
+"N options" count. It copies the task list as plain text, one task per line:
+
+  12  Fix wax probe bias  [processed/deliverable]  hardware
+
+Fields are rank, title, [status/itemType], then tags. Empty tags are dropped
+before the join rather than left as trailing whitespace.
+
+It copies `filtered`, not `data.tasks` - i.e. exactly what the status
+checkboxes, type/origin selects and tag filter are currently showing, in the
+displayed order (rank asc, as the load function sorts it). Copying the full
+set regardless of filters would hand back a list that doesn't match the screen,
+which is the wrong list whenever a filter is on.
+
+navigator.clipboard is the primary path with a hidden-textarea execCommand
+fallback, since the Clipboard API needs a secure context and can be denied; if
+both fail it sets errorMsg so it fails loudly instead of looking like a no-op.
+The button flips to a green check for 2s and is disabled when the filters leave
+zero rows.
+
+Files: src/routes/kanban/inventory/+page.svelte (one file, +58 lines).
+npm run check: 120 errors / 434 warnings absolute, with zero of either in the
+touched file. 120 matches the baseline recorded in the entry above - same cause,
+this worktree borrows node_modules from .worktrees/pm-test which predates
+@xyflow/svelte, chart.js and bwip-js. Vercel installs clean and stays the gate.
+
+Deployment: preview - https://bioscale-operations-system-mongodb-cwpbs3qh9-brevitest.vercel.app
+  (the -4off8nfpd.vercel.app URL on the same build is behind Vercel SSO - use the
+  brevitest-scope one above)
+Source: branch feat/kanban-milestone-ui @ commit 1dcb4104
+Retrieve this exact code: git checkout feat/kanban-milestone-ui at commit 1dcb4104
+What this deployment is for: the Tier 1 "Copy list" button on /kanban/inventory,
+  on top of the milestone-creation UI already on this branch.
+Build note: pending -> success on both scopes, no spurious failure.
+Verified reachable: GET /kanban/inventory -> 302 /login (cookie auth, as expected).
+NOT yet verified in-app - needs a human logged in to click Copy and paste the result.

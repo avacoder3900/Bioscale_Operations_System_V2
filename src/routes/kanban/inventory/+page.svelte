@@ -154,6 +154,53 @@
 		})
 	);
 
+	// ---- Copy the visible list (plain text, one task per line) ----
+	// Copies exactly what the filters are showing, in the order shown (rank asc)
+	// — the point is to paste the current slice somewhere else, so a copy that
+	// ignored the filters would be the wrong list.
+	let copied = $state(false);
+	let copyTimer: ReturnType<typeof setTimeout> | undefined;
+
+	const taskLine = (t: TaskRow) =>
+		[
+			String(t.rank ?? 0),
+			t.title,
+			`[${t.status}/${t.itemType}]`,
+			(t.tags ?? []).join(', ')
+		]
+			.filter((part) => part !== '')
+			.join('  ');
+
+	const copyText = $derived(filtered.map(taskLine).join('\n'));
+
+	async function copyList() {
+		if (!filtered.length) return;
+		try {
+			await navigator.clipboard.writeText(copyText);
+		} catch {
+			// Clipboard API needs a secure context + permission; fall back to a
+			// throwaway textarea so this still works where it isn't granted.
+			const ta = document.createElement('textarea');
+			ta.value = copyText;
+			ta.setAttribute('readonly', '');
+			ta.style.position = 'fixed';
+			ta.style.opacity = '0';
+			document.body.appendChild(ta);
+			ta.select();
+			try {
+				document.execCommand('copy');
+			} catch {
+				errorMsg = 'Could not copy to the clipboard';
+				document.body.removeChild(ta);
+				return;
+			}
+			document.body.removeChild(ta);
+		}
+		copied = true;
+		clearTimeout(copyTimer);
+		copyTimer = setTimeout(() => (copied = false), 2000);
+	}
+
 	// KB2-26 rank jump: POST ?/rankSet with the typed target position. Blur and
 	// Enter both land here; rankEdit is nulled first so the double-fire (Enter
 	// triggers blur) is a no-op the second time.
@@ -386,6 +433,17 @@
 			<option value="discovered">Discovered</option>
 		</select>
 		<span class="tron-text-muted ml-auto text-xs">{filtered.length} option{filtered.length === 1 ? '' : 's'}</span>
+		<button
+			type="button"
+			onclick={copyList}
+			disabled={!filtered.length}
+			class="rounded border border-[var(--color-tron-border)] px-2.5 py-1 text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-40 {copied
+				? 'border-emerald-500/60 text-emerald-300'
+				: 'tron-text-muted hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]'}"
+			title="Copy the {filtered.length} listed task{filtered.length === 1 ? '' : 's'} as plain text, one per line"
+		>
+			{copied ? '✓ Copied' : '⧉ Copy list'}
+		</button>
 	</div>
 
 	<!-- KB2-16 — tag filter (match-any) -->
