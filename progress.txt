@@ -10329,3 +10329,14 @@ npm run check: 120 errors / 434 warnings absolute, with zero of either in the
 touched file. 120 matches the baseline recorded in the entry above - same cause,
 this worktree borrows node_modules from .worktrees/pm-test which predates
 @xyflow/svelte, chart.js and bwip-js. Vercel installs clean and stays the gate.
+
+Deployment: preview - https://bioscale-operations-system-mongodb-cwpbs3qh9-brevitest.vercel.app
+  (the -4off8nfpd.vercel.app URL on the same build is behind Vercel SSO - use the
+  brevitest-scope one above)
+Source: branch feat/kanban-milestone-ui @ commit 1dcb4104
+Retrieve this exact code: git checkout feat/kanban-milestone-ui at commit 1dcb4104
+What this deployment is for: the Tier 1 "Copy list" button on /kanban/inventory,
+  on top of the milestone-creation UI already on this branch.
+Build note: pending -> success on both scopes, no spurious failure.
+Verified reachable: GET /kanban/inventory -> 302 /login (cookie auth, as expected).
+NOT yet verified in-app - needs a human logged in to click Copy and paste the result.
