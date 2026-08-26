@@ -64,6 +64,7 @@ export const LEGACY_PERMISSION_GROUPS: { group: string; permissions: string[] }[
 	{ group: 'shipping', permissions: ['shipping:read', 'shipping:write'] },
 	{ group: 'customer', permissions: ['customer:read', 'customer:write'] },
 	{ group: 'equipment', permissions: ['equipment:read', 'equipment:write'] },
+	{ group: 'cleaning', permissions: ['cleaning:read', 'cleaning:write', 'cleaning:admin'] },
 	{ group: 'cv', permissions: ['cv:write', 'cv:admin'] }
 ];
 
