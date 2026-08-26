@@ -10251,3 +10251,42 @@ Deployment: production — Vercel auto-deploy from master push
 Source: branch master @ this commit (fast-forward of feat/kanban-tweaks)
 Retrieve this exact code: git checkout master at this commit
 What this deployment is for: roadmap ↗ preserves back-origin; task titles never truncate on the map.
+
+================================================================================
+2026-08-26 — feat/kanban-milestone-ui — /kanban/roadmap can create milestones (UI)
+================================================================================
+Milestones were agent-only: the service layer has supported them since KB2-27
+(createKanbanItem takes itemType 'milestone' + dueDate + blockedBy, and the KB2-28
+scheduler anchors its backward pass to any dated milestone), but the only way to
+make one was kanban_capture over MCP. The roadmap's empty state literally told you
+to go do it in the Claude app. This adds the missing UI on the page that consumes
+them.
+
+New action createMilestone in roadmap/+page.server.ts rides createKanbanItem — the
+same service the MCP path uses — so a UI milestone and an agent milestone are the
+same shape (Tier 1 'captured', rank appended, tags normalized, links cycle-checked,
+AuditLog INSERT written by the service). Due date is required and validated as
+YYYY-MM-DD, then parsed as LOCAL midnight to match the scheduler's parseLocalDate
+contract; an undated milestone anchors nothing, so it is rejected rather than
+silently landing in the unscheduled strip. blockedBy ids are de-duped before the
+call; resolveLinks still rejects dangling ids and blocking cycles.
+
+The load function now also returns linkCandidates — non-archived tasks excluding
+done/declined — to feed a chain picker.
+
+UI (roadmap/+page.svelte): a dashed "＋ Milestone" chip at the end of the milestone
+strip, and a primary "◆ New milestone" button in the empty state (whose copy now
+leads with the button and keeps the kanban_file_plan path as the secondary route).
+The modal takes title, due date, tags, an optional meaning line, and a blocked_by
+chain picker: filter by title/tracking number/tag, checkbox list capped at 200
+rows, selected ids held in state (not in the DOM) so filtering a row out of view
+cannot silently drop it from the submission, with removable chips for what is
+selected. Errors render inside the modal — a page-level banner would have been
+behind the z-50 overlay.
+
+Files: src/routes/kanban/roadmap/+page.server.ts, src/routes/kanban/roadmap/+page.svelte.
+npm run check: 0 errors and 0 warnings in both touched files. Absolute count read
+120 because this worktree borrows node_modules from .worktrees/pm-test, which
+predates @xyflow/svelte, chart.js, bwip-js and friends — all real entries in
+package.json, so that noise is install drift, not breakage. Vercel installs clean
+and remains the real gate.
