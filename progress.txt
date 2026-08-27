@@ -10370,3 +10370,45 @@ Verified reachable: GET /kanban/roadmap -> 302 /login on both the alias and the
 STILL not verified in-app - nobody has logged in and clicked the milestone modal
   or the Copy button. Production now serves code whose happy path is type-checked
   and route-checked only. First real use is the actual test.
+
+================================================================================
+2026-08-26 - feat/cleaning-calendar-master - cleaning calendar ported onto master
+================================================================================
+What: scheduled-cleaning calendar for SPU areas at /spu/cleaning. Areas, schedules
+(daily/weekly/monthly/quarterly), month grid, sign-off with optional second
+signature, skip-with-reason, and a 30-day "needs attention" overdue list.
+
+Why this branch exists: the feature was first written on feat/scan-then-check
+(that branch was simply the working tree at the time). Deployments must branch
+off master, so the work was cherry-picked onto a fresh branch cut from
+origin/master. Master has diverged enough that the port was not mechanical:
+  - nav moved out of src/routes/spu/+layout.svelte (now a pass-through) into
+    the root src/routes/+layout.svelte navGroups; Cleaning now sits in the
+    Infrastructure group next to Equipment.
+  - $lib/server/qms-gate (writeAudit) does not exist on master. Audit writes now
+    go to AuditLog directly via a local helper using master's field shape
+    (tableName / recordId / action / changedBy / changedAt, plus the optional
+    oldData / newData / changedFields / reason columns the schema already has).
+  - cleaning:read / :write / :admin registered in permissions-registry.ts as an
+    assignable legacy group, so they are grantable from the roles admin UI.
+    admin:full + bims already satisfies them via the scoped wildcard.
+
+Files: 3 models (cleaning-area, cleaning-schedule, cleaning-record),
+src/lib/server/cleaning/recurrence.ts, scripts/test-cleaning-recurrence.ts,
+src/routes/spu/cleaning/{+page.server.ts,+page.svelte}, models/index.ts,
+permissions-registry.ts, src/routes/+layout.svelte.
+
+npm run check: NOT run for this commit - fresh worktree with no node_modules.
+The Vercel build is the only gate this commit has passed. Recurrence logic was
+unit-tested earlier on the originating branch (29 cases pass, lab-local
+America/Chicago day keys so occurrences do not drift a day in UTC).
+
+Deployment: preview
+  https://bioscale-operations-system-mongodb-ca2nvte4h-brevitest.vercel.app
+Source: branch feat/cleaning-calendar-master @ commit 7bb40ec7
+Retrieve this exact code: git checkout feat/cleaning-calendar-master at 7bb40ec7
+What this deployment is for: first hands-on test of the cleaning calendar.
+Verified reachable: GET /spu/cleaning -> 302 /login (cookie auth, as expected).
+NOT verified in-app: nobody has logged in, created an area, or signed off an
+occurrence. Zero cleaning_areas exist yet, so the calendar renders empty until
+someone adds an area - that is the first thing to do when testing.
