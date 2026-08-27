@@ -10445,3 +10445,20 @@ renders empty until someone adds an area. First real test = add an area,
 schedule a recurrence, then sign off an occurrence with a typed "completed by"
 name (free-text, independent of the signed-in account, which is captured
 separately as the authenticated recorder).
+================================================================================
+2026-08-27 — master — reagent: no-tip recovery + max_tip_adjust guard ported from wax; deployed B07 + R04
+================================================================================
+Request (via Rachel): the wax fill's no-tip-recovery (probe misses the switch -> treat as NO TIP,
+pause for a hand-inserted tip, retry) existed only on wax — ported to Reagent_Filling_GEN7.py.
+Also closes the reagent's junk-adjust landmine (missed switch used to return baseline-5.1 on Resume
+and apply it). Structure = current wax doctrine (5e25bf4c): probe-once with validation; missed
+switch -> hand-insert loop; over-cap -> one fresh-tip retry; rejected twice -> RuntimeError (no
+nominal fallback; holes are tip-neutral). New max_tip_adjust RTP (default 4.0, max 8.0); per-robot
+ceiling (fixture.maxTipAdjust, R04=8) injected by the existing calibration-rtps path. 28 RTPs.
+Stored reagent .py synced; gated deploys: R04 1c431688 (rollback 86ea7782), B07 24eea91a (rollback
+94eb8abc) — B07 deployed after waiting out its active run. NOTE: 'Rachel' attribution — the wax
+feature is d76a6165 (08-18); no such author in git history.
+
+Deployment: robot protocol — R04 reagent 86ea7782 -> 1c431688; B07 reagent 94eb8abc -> 24eea91a
+Source: branch master @ this commit
+What this deployment is for: a reagent run can no longer dispense with a junk probe adjust or a bare nozzle; operators recover in place by pushing a tip on and resuming.
