@@ -307,10 +307,15 @@
 				<div class="mt-3 rounded border border-[var(--color-tron-border)] p-2 text-sm">
 					<div class="text-[var(--color-tron-text-primary)]">
 						{selected.record.status === 'skipped' ? 'Skipped' : 'Cleaned'} by
-						<span class="font-medium">{selected.record.completedBy}</span>
+						<span class="font-medium">
+							{selected.record.performedBy || selected.record.completedBy}
+						</span>
 					</div>
 					<div class="text-xs text-[var(--color-tron-text-secondary)]">
 						{fmtStamp(selected.record.completedAt)}
+						{#if selected.record.performedBy}
+							· recorded by {selected.record.completedBy}
+						{/if}
 					</div>
 					{#if selected.record.notes}
 						<div class="mt-1 text-xs italic text-[var(--color-tron-text-secondary)]">
@@ -339,6 +344,20 @@
 					<form method="POST" action="?/complete" use:enhance={submitting} class="mt-4 space-y-3">
 						<input type="hidden" name="scheduleId" value={selected.scheduleId} />
 						<input type="hidden" name="dueDate" value={selected.dueDate} />
+						<label class="block">
+							<span class="text-xs text-[var(--color-tron-text-secondary)]">Cleaned by</span>
+							<input
+								type="text"
+								name="performedBy"
+								maxlength="80"
+								autocomplete="off"
+								placeholder={data.currentUsername}
+								class="mt-1 w-full rounded-md border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-tertiary)] px-3 py-2 text-sm text-[var(--color-tron-text-primary)]"
+							/>
+							<span class="mt-1 block text-[11px] text-[var(--color-tron-text-secondary)]">
+								Leave blank if you did it. Your account is recorded either way.
+							</span>
+						</label>
 						<textarea
 							name="notes"
 							rows="2"

@@ -72,6 +72,7 @@ interface OccurrenceRow {
 		id: string;
 		status: string;
 		completedBy: string | null;
+		performedBy: string | null;
 		completedAt: string | null;
 		notes: string | null;
 	} | null;
@@ -134,6 +135,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 						id: rec._id,
 						status: rec.status,
 						completedBy: rec.completedBy?.username ?? null,
+						performedBy: rec.performedBy ?? null,
 						completedAt: rec.completedAt ? new Date(rec.completedAt).toISOString() : null,
 						notes: rec.notes ?? null
 					}
@@ -195,7 +197,9 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 			areaName: r.areaName ?? '',
 			dueDate: r.dueDate,
 			status: r.status,
-			by: r.completedBy?.username ?? 'unknown',
+			// Activity feed credits whoever did the work; the recorder stays
+			// visible on the occurrence itself (and in the audit log).
+			by: r.performedBy || r.completedBy?.username || 'unknown',
 			at: new Date(r.completedAt).toISOString(),
 			notes: r.notes ?? null
 		}));
@@ -238,6 +242,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 			overdue: attentionRows.length,
 			completedThisMonth
 		},
+		currentUsername: locals.user?.username ?? '',
 		canWrite: hasPermission(locals.user, 'cleaning:write'),
 		canAdmin: hasPermission(locals.user, 'cleaning:admin')
 	};
@@ -273,6 +278,10 @@ export const actions: Actions = {
 		const dueDate = form.get('dueDate')?.toString() ?? '';
 		const notes = form.get('notes')?.toString().trim() || undefined;
 		const status = form.get('status')?.toString() === 'skipped' ? 'skipped' : 'completed';
+		const performedByRaw = form.get('performedBy')?.toString().trim() ?? '';
+		if (performedByRaw.length > 80) {
+			return fail(400, { error: 'Name is too long (80 characters max).' });
+		}
 
 		const schedule = await resolveOccurrence(scheduleId, dueDate);
 		if (!schedule) return fail(400, { error: 'That is not a scheduled cleaning date.' });
@@ -283,6 +292,13 @@ export const actions: Actions = {
 		}
 
 		const user = event.locals.user!;
+		// Storing the entering user's own name adds nothing — leave it null so
+		// "performed by" always means "someone other than the recorder".
+		const performedBy =
+			performedByRaw && performedByRaw.toLowerCase() !== user.username.toLowerCase()
+				? performedByRaw
+				: undefined;
+
 		const existing: any = await CleaningRecord.findOne({ scheduleId, dueDate }).lean();
 
 		const doc = {
@@ -293,6 +309,9 @@ export const actions: Actions = {
 			title: schedule.title,
 			status,
 			completedBy: { _id: user._id, username: user.username },
+			// null, not undefined: Mongoose drops undefined from $set, which would
+			// strand a stale name on a re-signed-off occurrence.
+			performedBy: performedBy ?? null,
 			completedAt: new Date(),
 			notes
 		};

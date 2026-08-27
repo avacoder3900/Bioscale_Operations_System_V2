@@ -13,7 +13,17 @@ const cleaningRecordSchema = new Schema({
 	title: String,    // snapshot of the schedule title at sign-off time
 	dueDate: { type: String, required: true }, // 'YYYY-MM-DD' occurrence key
 	status: { type: String, enum: ['completed', 'skipped'], default: 'completed' },
+	/**
+	 * The account that entered this record. Always the authenticated session —
+	 * never operator-supplied, so the audit trail cannot be spoofed from the form.
+	 */
 	completedBy: { _id: String, username: String },
+	/**
+	 * Who actually did the cleaning, when that is not the person entering it
+	 * (e.g. a lead signs off work an operator performed). Free text on purpose:
+	 * cleaners are not all BIMS users. Empty/absent means completedBy did it.
+	 */
+	performedBy: String,
 	completedAt: { type: Date, default: Date.now },
 	notes: String
 }, { timestamps: true });
