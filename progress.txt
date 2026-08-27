@@ -10412,3 +10412,18 @@ Verified reachable: GET /spu/cleaning -> 302 /login (cookie auth, as expected).
 NOT verified in-app: nobody has logged in, created an area, or signed off an
 occurrence. Zero cleaning_areas exist yet, so the calendar renders empty until
 someone adds an area - that is the first thing to do when testing.
+2026-08-27 — master — reagent partial-fill sweep: server-side clamp (tab-state loss made it sweep 24 again)
+================================================================================
+Recurrence of the 08-24 bug, witnessed on R04 (20 selected, 24 swept at 18:49Z) while B07 swept 20
+correctly at 18:47/18:56 — same operator, minutes apart. The 08-24 fix derived the cap from
+capturedParamsFd, which lives only in the tab; reload/second-tab/fast-Run-again loses it, and nothing
+server-side knew the count before the scan (protocolParameters is stamped at startRun, post-scan).
+Structural fix: (1) savePlannedCount action persists plannedCartridgeCount on ReagentBatchRecord at
+params-confirm + on the Run-again carry-over path; (2) /api/scanner/sweep clamps the DEFAULT
+full-deck walk to the record's planned count (reagent + wax contextRef), logging the clamp; explicit
+sub-full client values and failed-slot retries are respected. Client cap kept as first line.
+npm run check: 0 errors in touched files (19 repo-wide, all pre-existing upstream).
+
+Deployment: production — Vercel auto-deploy from master push
+Source: branch master @ this commit
+What this deployment is for: a partial reagent run can never again sweep all 24 positions, regardless of browser-tab state.
