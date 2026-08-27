@@ -244,7 +244,9 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		},
 		currentUsername: locals.user?.username ?? '',
 		canWrite: hasPermission(locals.user, 'cleaning:write'),
-		canAdmin: hasPermission(locals.user, 'cleaning:admin')
+		canAdmin: hasPermission(locals.user, 'cleaning:admin'),
+		// Drives whether the Kanban tab bar is carried through onto this page.
+		canAccessKanban: hasPermission(locals.user, 'kanban:read')
 	};
 };
 

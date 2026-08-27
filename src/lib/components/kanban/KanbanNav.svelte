@@ -10,15 +10,23 @@
 	// Tier 1 stays the unbounded option inventory. Routes stay.
 	// KB2-29 adds Roadmap (derived schedule + must-start) and Plans
 	// (immortalized strategy docs).
+	// The Cleaning calendar sits at /spu/cleaning, outside the kanban tree, but
+	// it is scheduled work like everything else here so it rides in this tab bar
+	// immediately right of Roadmap. Following it leaves the kanban layout.
 	const tabs = [
 		{ href: '/kanban', label: 'Board' },
 		{ href: '/kanban/inventory', label: 'Tier 1' },
 		{ href: '/kanban/roadmap', label: 'Roadmap' },
+		{ href: '/spu/cleaning', label: 'Cleaning', requires: 'cleaning' },
 		{ href: '/kanban/plans', label: 'Plans' },
 		{ href: '/kanban/flow', label: 'Flow' },
 		{ href: '/kanban/policy', label: 'Policy' },
 		{ href: '/kanban/archived', label: 'Archive' }
 	];
+
+	const visibleTabs = $derived(
+		tabs.filter((t) => t.requires !== 'cleaning' || $page.data.canAccessCleaning !== false)
+	);
 
 	function isActive(href: string, path: string): boolean {
 		if (href === '/kanban') return path === '/kanban';
@@ -28,7 +36,7 @@
 
 <div class="mb-6 flex flex-wrap items-center justify-between gap-3 border-b border-[var(--color-tron-border)] pb-3">
 	<nav class="flex flex-wrap items-center gap-1" aria-label="Kanban views">
-		{#each tabs as tab (tab.href)}
+		{#each visibleTabs as tab (tab.href)}
 			{@const active = isActive(tab.href, $page.url.pathname)}
 			<a
 				href={tab.href}

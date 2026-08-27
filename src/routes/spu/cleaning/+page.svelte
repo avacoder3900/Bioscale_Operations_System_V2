@@ -2,6 +2,7 @@
 	import { enhance } from '$app/forms';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
+	import KanbanNav from '$lib/components/kanban/KanbanNav.svelte';
 
 	let { data, form } = $props();
 
@@ -96,6 +97,12 @@
 <svelte:head><title>Cleaning Calendar | BIMS</title></svelte:head>
 
 <div class="p-4 sm:p-6 space-y-5">
+	<!-- Cleaning is reached from the Kanban tab bar (right of Roadmap), so carry
+	     that bar through to this page for anyone who can see the board. -->
+	{#if data.canAccessKanban}
+		<KanbanNav />
+	{/if}
+
 	<!-- Header -->
 	<div class="flex flex-wrap items-center justify-between gap-3">
 		<div>

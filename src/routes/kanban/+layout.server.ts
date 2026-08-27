@@ -1,5 +1,5 @@
 import { redirect } from '@sveltejs/kit';
-import { requirePermission } from '$lib/server/permissions';
+import { requirePermission, hasPermission } from '$lib/server/permissions';
 import { connectDB, User } from '$lib/server/db';
 import type { LayoutServerLoad } from './$types';
 
@@ -14,7 +14,10 @@ export const load: LayoutServerLoad = async ({ locals }) => {
 
 	return {
 		user: JSON.parse(JSON.stringify(locals.user)),
-		users: users.map((u) => ({ id: u._id, username: u.username }))
+		users: users.map((u) => ({ id: u._id, username: u.username })),
+		// Cleaning lives outside /kanban but is surfaced as a tab in KanbanNav.
+		// Hide the tab from anyone who would just get a 403 on arrival.
+		canAccessCleaning: hasPermission(locals.user, 'cleaning:read')
 	};
 };
 
