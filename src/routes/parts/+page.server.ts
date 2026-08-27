@@ -36,9 +36,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 		])
 	]);
 
-	// Split SPU parts into BOM and non-BOM
+	// Only BOM parts are listed; isBom:false parts are retired from the SPU BOM
 	const spuParts = (allSpuParts as any[]).filter((p: any) => p.isBom !== false);
-	const nonBomParts = (allSpuParts as any[]).filter((p: any) => p.isBom === false);
 
 	// Map SPU parts to expected shape
 	const items = (spuParts as any[]).map((p) => {
@@ -135,18 +134,6 @@ export const load: PageServerLoad = async ({ locals }) => {
 		.map(inventoryFields);
 	const lowestInventory = [...zeroOrNegative, ...lowPositive];
 
-	// Non-BOM parts mapped
-	const nonBomItems = nonBomParts.map((p: any) => ({
-		id: p._id,
-		partNumber: p.partNumber ?? '',
-		name: p.name ?? '',
-		category: p.category ?? null,
-		supplier: p.supplier ?? null,
-		inventoryCount: p.inventoryCount ?? 0,
-		unitCost: parseFloat(p.unitCost) || null,
-		barcode: p.barcode ?? null
-	}));
-
 	// Transaction-based scanned inventory
 	const txMap = new Map(txAgg.map((t: any) => [t._id, t]));
 	const allParts = [...(allSpuParts as any[]), ...(cartridgePartDocs as any[])];
@@ -179,7 +166,6 @@ export const load: PageServerLoad = async ({ locals }) => {
 	return {
 		items: itemsWithCost,
 		cartridgeParts,
-		nonBomItems,
 		scannedItems: JSON.parse(JSON.stringify(scannedItems)),
 		scannedSummary,
 		cartridgeBomSummary,

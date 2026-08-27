@@ -8,7 +8,7 @@
 
 	// Tab state from URL
 	const params = page.url.searchParams;
-	let activeTab = $state<'spu' | 'cartridge' | 'general' | 'scanned'>(params.get('tab') === 'cartridge' ? 'cartridge' : params.get('tab') === 'general' ? 'general' : params.get('tab') === 'scanned' ? 'scanned' : 'spu');
+	let activeTab = $state<'spu' | 'cartridge' | 'scanned'>(params.get('tab') === 'cartridge' ? 'cartridge' : params.get('tab') === 'scanned' ? 'scanned' : 'spu');
 
 	// Cartridge parts state
 	let cartSearchQuery = $state('');
@@ -109,7 +109,7 @@
 		return '';
 	}
 
-	function switchTab(tab: 'spu' | 'cartridge' | 'general' | 'scanned') {
+	function switchTab(tab: 'spu' | 'cartridge' | 'scanned') {
 		activeTab = tab;
 		const url = new URL(page.url);
 		url.searchParams.set('tab', tab);
@@ -341,13 +341,6 @@
 			{#if data.cartridgeBomSummary}
 				<span class="ml-1 text-xs">({data.cartridgeBomSummary.totalParts})</span>
 			{/if}
-		</button>
-		<button
-			class="px-4 py-2 text-sm font-medium transition-colors {activeTab === 'general' ? 'border-b-2 border-[var(--color-tron-cyan)] text-[var(--color-tron-cyan)]' : 'text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]'}"
-			onclick={() => switchTab('general')}
-		>
-			General Inventory
-			<span class="ml-1 text-xs">({data.nonBomItems?.length ?? 0})</span>
 		</button>
 		<button
 			class="px-4 py-2 text-sm font-medium transition-colors {activeTab === 'scanned' ? 'border-b-2 border-[var(--color-tron-cyan)] text-[var(--color-tron-cyan)]' : 'text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]'}"
@@ -1074,39 +1067,6 @@
 								{/if}
 							</td>
 						</tr>
-					{/each}
-				</tbody>
-			</table>
-		</div>
-	</TronCard>
-	{/if}
-
-	{#if activeTab === 'general'}
-	<TronCard>
-		<h3 class="mb-3 text-sm font-semibold text-[var(--color-tron-text)]">General Inventory (Non-BOM)</h3>
-		<p class="tron-text-muted text-xs mb-4">These items are tracked in inventory but are not part of the SPU or Cartridge BOM. They don't affect build capacity calculations.</p>
-		<div class="overflow-x-auto">
-			<table class="tron-table">
-				<thead>
-					<tr>
-						<th>Part #</th>
-						<th>Name</th>
-						<th>Category</th>
-						<th>Supplier</th>
-						<th class="text-right">Inventory</th>
-					</tr>
-				</thead>
-				<tbody>
-					{#each data.nonBomItems ?? [] as item (item.id)}
-						<tr class="cursor-pointer hover:bg-white/5" onclick={() => window.location.href = `/parts/${item.id}`}>
-							<td><button type="button" class="font-mono text-[var(--color-tron-cyan)] hover:underline cursor-pointer" onclick={(e) => { e.stopPropagation(); openWithdraw(item); }}>{item.partNumber}</button></td>
-							<td>{item.name}</td>
-							<td class="tron-text-muted">{item.category ?? '—'}</td>
-							<td class="tron-text-muted">{item.supplier ?? '—'}</td>
-							<td class="text-right font-mono {(item.inventoryCount ?? 0) <= 0 ? 'text-[var(--color-tron-red)]' : ''}">{item.inventoryCount}</td>
-						</tr>
-					{:else}
-						<tr><td colspan="5" class="tron-text-muted py-8 text-center">No general inventory items</td></tr>
 					{/each}
 				</tbody>
 			</table>
