@@ -114,7 +114,42 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		if (untaught.length > 0) error(400, `Position set "${set.title}" has no taught position for slot(s): ${untaught.join(', ')}`);
 		walkSlots = slotIndicesReq;
 	} else {
-		const slotsToWalk = Math.min(set.positionCount, maxSlotsRequested ?? set.positionCount);
+		// Server-side partial-fill clamp. The client sends maxSlots from its page
+		// state, but that state is lost by a reload / second tab / fast Run-again —
+		// twice now (08-24, 08-27 R04) the sweep walked all 24 positions of a
+		// partial fill because the tab forgot its count. When the run record holds
+		// a planned count (saved at the params step), use it to cap the DEFAULT
+		// full-deck walk. A deliberately different client value below the full
+		// count is respected (operator override, e.g. re-scan a specific range).
+		let plannedCap: number | null = null;
+		if (contextRef && (source === 'reagent_filling' || source === 'wax_filling')) {
+			try {
+				const { ReagentBatchRecord, WaxFillingRun } = await import('$lib/server/db');
+				if (source === 'reagent_filling') {
+					const rec = (await ReagentBatchRecord.findById(contextRef)
+						.select('plannedCartridgeCount').lean()) as { plannedCartridgeCount?: number } | null;
+					plannedCap = rec?.plannedCartridgeCount ?? null;
+				} else {
+					const rec = (await WaxFillingRun.findById(contextRef)
+						.select('plannedCartridgeCount').lean()) as { plannedCartridgeCount?: number } | null;
+					plannedCap = rec?.plannedCartridgeCount ?? null;
+				}
+			} catch {
+				plannedCap = null;
+			}
+			if (plannedCap != null && (!Number.isFinite(plannedCap) || plannedCap < 1 || plannedCap > set.positionCount)) {
+				plannedCap = null;
+			}
+		}
+		const requested = maxSlotsRequested ?? set.positionCount;
+		const applyPlanned =
+			plannedCap != null && requested >= set.positionCount && plannedCap < requested;
+		if (applyPlanned) {
+			console.log(
+				`[sweep] clamping default ${requested}-slot walk to planned count ${plannedCap} (source=${source}, contextRef=${contextRef})`
+			);
+		}
+		const slotsToWalk = Math.min(set.positionCount, applyPlanned ? (plannedCap as number) : requested);
 		const missing: number[] = [];
 		for (let i = 0; i < slotsToWalk; i++) {
 			if (!positionsBySlot.has(i)) missing.push(i);

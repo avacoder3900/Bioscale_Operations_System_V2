@@ -105,6 +105,11 @@ const reagentBatchRecordSchema = new Schema({
 	// Mixed because protocol parameter schemas evolve; the reagent protocol's
 	// add_parameters() is the source of truth for valid keys.
 	protocolParameters: Schema.Types.Mixed,
+	// Operator's planned cartridge count, saved at the params step BEFORE any
+	// scan — the scanner sweep clamps its default walk to this so a lost browser
+	// tab state can no longer make it sweep all 24 positions on a partial fill.
+	plannedCartridgeCount: Number,
+	plannedCountAt: Date,
 	// OT-2 run id (UUID, returned by `POST /runs` on the robot). Lets us
 	// pull commands/errors from the robot for this specific run.
 	opentronsRunId: String,

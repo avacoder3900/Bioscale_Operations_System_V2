@@ -428,6 +428,28 @@ export const actions: Actions = {
 	},
 
 	/** Record reagent preparation (tubes) */
+	/**
+	 * Persist the operator's planned cartridge count the moment the params step is
+	 * confirmed (BEFORE any scan). The auto barcode sweep previously relied on the
+	 * browser tab still holding the params FormData — a reload, a second tab, or a
+	 * fast Run-again lost it and the sweep walked all 24 positions (seen 08-24 and
+	 * again 08-27 on R04 with 20 selected). The sweep endpoint now reads this
+	 * server-side value and clamps its default instead of trusting tab state.
+	 */
+	savePlannedCount: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		await connectDB();
+		const data = await request.formData();
+		const runId = data.get('runId')?.toString();
+		const n = Math.floor(Number(data.get('plannedCartridgeCount')));
+		if (!runId) return fail(400, { error: 'Missing runId' });
+		if (!Number.isFinite(n) || n < 1 || n > 24) return fail(400, { error: 'plannedCartridgeCount must be 1-24' });
+		await ReagentBatchRecord.findByIdAndUpdate(runId, {
+			$set: { plannedCartridgeCount: n, plannedCountAt: new Date() }
+		});
+		return { success: true, plannedCartridgeCount: n };
+	},
+
 	recordReagentPrep: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
 		await connectDB();

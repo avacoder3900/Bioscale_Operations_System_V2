@@ -104,6 +104,9 @@
 			if (runAgainParamsFd && rid) {
 				capturedParamsFd = runAgainParamsFd;
 				paramsReady = true;
+				// Run-again skips the params panel, so persist the carried-over
+				// count for the NEW run here (activeRunId is the new run now).
+				persistPlannedCount(runAgainParamsFd);
 				runAgainParamsFd = null;
 			} else {
 				paramsReady = false;
@@ -163,9 +166,31 @@
 		//    paramsReady + capturedParamsFd → substage advances to barcode scan.
 	}
 
+	/**
+	 * Persist the planned count server-side the moment params are confirmed, so
+	 * the barcode sweep no longer depends on this tab keeping its state (a
+	 * reload / second tab / fast Run-again lost capturedParamsFd and the sweep
+	 * walked all 24 positions — seen 08-24 and again 08-27 on R04).
+	 * Fire-and-forget: the client-side cap still works when this races.
+	 */
+	function persistPlannedCount(fd: FormData | null) {
+		const raw = fd?.get('param_cartridges')?.toString();
+		const n = raw ? Math.floor(Number(raw)) : NaN;
+		if (!data.activeRunId || !Number.isFinite(n) || n < 1 || n > 24) return;
+		const body = new FormData();
+		body.set('runId', data.activeRunId);
+		body.set('plannedCartridgeCount', String(n));
+		fetch('?/savePlannedCount', {
+			method: 'POST',
+			body,
+			headers: { 'x-sveltekit-action': 'true' }
+		}).catch((e) => console.warn('[reagent] savePlannedCount failed', e));
+	}
+
 	function handleParamsConfirmed(fd: FormData) {
 		capturedParamsFd = fd;
 		paramsReady = true; // advance from params step to Barcode Scanning
+		persistPlannedCount(fd);
 	}
 
 	async function startRunWithCapturedParams() {
