@@ -10462,3 +10462,9 @@ feature is d76a6165 (08-18); no such author in git history.
 Deployment: robot protocol — R04 reagent 86ea7782 -> 1c431688; B07 reagent 94eb8abc -> 24eea91a
 Source: branch master @ this commit
 What this deployment is for: a reagent run can no longer dispense with a junk probe adjust or a bare nozzle; operators recover in place by pushing a tip on and resuming.
+
+2026-08-27 (cont.) — B14 reagent also repointed to the no-tip-recovery build: a6dfd6a4 -> 19338657
+(gated, bundled == live Mongo; note B14's old bundle carried stale deck-001/-004 geometry, now fresh).
+All three robots now run the guarded reagent .py (28 RTPs). Reminder: B14's calibrator fixture is
+taught to the robot-arm deck (294.88/79.24, zCalReagent 23.85) — re-teach before any real B14
+reagent fill; the new guard turns that misconfiguration into a NO TIP prompt instead of junk motion.
