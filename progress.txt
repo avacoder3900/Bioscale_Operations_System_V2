@@ -10427,3 +10427,21 @@ npm run check: 0 errors in touched files (19 repo-wide, all pre-existing upstrea
 Deployment: production — Vercel auto-deploy from master push
 Source: branch master @ this commit
 What this deployment is for: a partial reagent run can never again sweep all 24 positions, regardless of browser-tab state.
+
+--- 2026-08-27 · cleaning calendar merged to master (PRODUCTION) ---
+
+Deployment: production
+  https://bioscale-operations-system-mongodb-l7b0h88ab-brevitest.vercel.app
+Source: branch master @ merge commit 22aa93b79361e84108c6ebf8333c0d1fd5491436
+  (merge of feat/cleaning-calendar-master, no conflicts - master's only work
+  since the branch point was src/routes/parts/*, which cleaning never touched)
+Vercel: build success; GitHub Production deployment state=success.
+What this deployment is for: cleaning calendar now live for all users at
+/spu/cleaning, reachable from the Kanban tab strip (Board / Roadmap / Plans /
+Policy / Inventory / Cleaning / Archive) and from Infrastructure > Cleaning.
+
+Still NOT verified in production: no cleaning_areas exist yet, so the calendar
+renders empty until someone adds an area. First real test = add an area,
+schedule a recurrence, then sign off an occurrence with a typed "completed by"
+name (free-text, independent of the signed-in account, which is captured
+separately as the authenticated recorder).
