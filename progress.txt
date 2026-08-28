@@ -10680,3 +10680,25 @@ Row-alignment check: row = 2.2+2.2+2.2+1.8 = 8.4uL vs 8.5uL usable per aspiratio
 now 0.1uL — raising aspirate_remainder or any gate volume from here WILL break row alignment and
 walk the tip over a cartridge wall between batches. .py defaults (all gates 1.60) unchanged; the form
 supplies the line's values.
+
+================================================================================
+2026-08-28 — master — wax oven cure-time requirement SUSPENDED (one switch, reversible)
+================================================================================
+Context: B07/deck-004 wax run 9ATBLT8_ "kept cycling back to barcode scanning". Diagnosis: the sweep
+was perfect (24 scans, 0 errors) but 23 of 24 cartridges had been in the oven ~12 min against the
+60-min minimum, so loadDeck refused the deck (that is what the Admin Override button in the banner
+is for) — and on the pre-fix bundle the page then attempted startRun anyway, whose untracked-fill
+guard produced the generic "Auto-start failed" that OVERWROTE the real cure-time message. (The
+operator's tab was also running the pre-fix bundle: the fix is client-side, so a hard refresh was
+needed.)
+Operator decision: abolish the oven timing requirement for now, possibly reinstate later. Built
+src/lib/server/manufacturing/cure-time.ts with ENFORCE_CURE_TIME=false + isCureComplete/
+cureRemainingMin; loadDeck no longer blocks (it audit-logs "Cure-time gate suspended — N cartridges,
+worst M min short" instead), and the wax page, cart-mfg dashboard, cart-mfg-dev and pipeline board
+all read readiness through the same helper so nothing displays a countdown that gates nothing.
+backing.ovenEntryTime still recorded; admin-override path left intact. REINSTATE = flip the flag +
+restore the fail() in loadDeck. npm check 11 (baseline); build clean.
+
+Deployment: production — Vercel auto-deploy from master push
+Source: branch master @ this commit
+What this deployment is for: wax fills no longer wait on oven cure time.
