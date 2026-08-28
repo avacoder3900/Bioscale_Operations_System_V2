@@ -15,15 +15,7 @@
 				minOvenTimeMin: number;
 				runDurationMin: number;
 				removeDeckWarningMin: number;
-				coolingWarningMin: number;
-				deckLockoutMin: number;
-				minCoolingBeforeQcMin: number;
-				incubatorTempC: number;
-				heaterTempC: number;
-				waxPerDeckUl: number;
-				tubeCapacityUl: number;
 				waxPerCartridgeUl: number;
-				cartridgesPerColumn: number;
 				waxFillDeadVolumeUl: number;
 			};
 			rejectionReasons: RejectionReason[];
@@ -64,30 +56,12 @@
 				{ key: 'minOvenTimeMin', label: 'Min Oven Time', unit: 'min', min: 1, max: 1440 },
 				{ key: 'runDurationMin', label: 'Run Duration', unit: 'min', min: 1, max: 120 },
 				{ key: 'removeDeckWarningMin', label: 'Remove Deck Warning', unit: 'min', min: 1, max: 60 },
-				{ key: 'coolingWarningMin', label: 'Cooling Warning', unit: 'min', min: 1, max: 120 },
-				{ key: 'deckLockoutMin', label: 'Deck Lockout', unit: 'min', min: 1, max: 120 },
-				{ key: 'minCoolingBeforeQcMin', label: 'Min Cooling Before QC', unit: 'min', min: 0, max: 120 }
 			]
 		},
 		{
-			group: 'Temperature Parameters',
-			items: [
-				{ key: 'incubatorTempC', label: 'Incubator Temperature', unit: '°C', min: 20, max: 200 },
-				{ key: 'heaterTempC', label: 'Heater Temperature', unit: '°C', min: 20, max: 200 }
-			]
-		},
-		{
-			group: 'Wax Parameters',
-			items: [
-				{ key: 'waxPerDeckUl', label: 'Wax Per Deck', unit: 'µL', min: 1, max: 10000 },
-				{ key: 'tubeCapacityUl', label: 'Tube Capacity', unit: 'µL', min: 1, max: 50000 }
-			]
-		},
-		{
-			group: 'Incubator Tube Parameters',
+			group: 'Wax Volumes',
 			items: [
 				{ key: 'waxPerCartridgeUl', label: 'Wax Per Cartridge', unit: 'µL', min: 1, max: 1000 },
-				{ key: 'cartridgesPerColumn', label: 'Cartridges Per Column', unit: '', min: 1, max: 24 },
 				{ key: 'waxFillDeadVolumeUl', label: 'Fill Dead Volume (added to per-cartridge × count)', unit: 'µL', min: 0, max: 2000 }
 			]
 		}
@@ -105,7 +79,7 @@
 </script>
 
 <div class="space-y-6">
-	<h1 class="text-2xl font-semibold text-[var(--color-tron-text)]">Wax Filling Settings</h1>
+	<h1 class="text-2xl font-semibold text-[var(--color-tron-text)]">Wax Fill Params</h1>
 
 	{#if form?.success}
 		<div

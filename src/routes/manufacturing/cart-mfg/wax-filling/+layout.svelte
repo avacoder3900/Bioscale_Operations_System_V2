@@ -34,26 +34,9 @@
 	const BASE = '/manufacturing/cart-mfg/wax-filling';
 
 	// Sub-routes that are robot-agnostic — they should render regardless of robot selection
-	let isRobotAgnosticRoute = $derived(
-		$page.url.pathname.startsWith(`${BASE}/settings`) ||
-			$page.url.pathname.startsWith(`${BASE}/oven-queue`) ||
-			$page.url.pathname.startsWith(`${BASE}/equipment`)
-	);
+	let isRobotAgnosticRoute = $derived($page.url.pathname.startsWith(`${BASE}/settings`));
 
-	function isActive(path: string, currentPath: string, exact = false): boolean {
-		if (exact) return currentPath === path;
-		return currentPath.startsWith(path);
-	}
 
-	let navLinkClass = $derived.by(
-		() =>
-			(path: string, exact = false) =>
-				`min-h-[44px] rounded px-3 py-2 text-sm font-medium transition-colors ${
-					isActive(path, $page.url.pathname, exact)
-						? 'bg-[var(--color-tron-cyan)]/10 text-[var(--color-tron-cyan)]'
-						: 'text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]'
-				}`
-	);
 
 	function selectRobot(robotId: string) {
 		// Just navigate — do NOT create a run here. Run creation is deferred to
@@ -170,36 +153,17 @@
 		<span class="text-[var(--color-tron-text)]">Wax Filling</span>
 	</nav>
 
-	<div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-		<nav class="flex items-center gap-1">
-			<a href={resolve('/manufacturing/cart-mfg/wax-filling')} class={navLinkClass(BASE, true)}>
-				Run Wizard
-			</a>
-			<a
-				href={resolve('/manufacturing/cart-mfg/wax-filling/oven-queue')}
-				class={navLinkClass(`${BASE}/oven-queue`)}
-			>
-				Oven Queue
-			</a>
-			<a
-				href={resolve('/manufacturing/cart-mfg/wax-filling/settings')}
-				class={navLinkClass(`${BASE}/settings`)}
-			>
-				Settings
-			</a>
-			<a
-				href="/manufacturing/cart-mfg/opentron-control/settings"
-				class="min-h-[44px] rounded px-3 py-2 text-sm font-medium transition-colors text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]"
-			>
-				Teach Positions
-			</a>
-			<a
-				href={resolve('/equipment/activity')}
-				class="min-h-[44px] rounded px-3 py-2 text-sm font-medium transition-colors text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]"
-			>
-				Equipment
-			</a>
-		</nav>
+	<!-- UI cleanup 2026-08-28: the tab bar (Run Wizard / Oven Queue / Settings /
+	     Teach Positions / Equipment) is gone. This page IS the run wizard; Oven
+	     Queue was an abandoned melt-tracker; barcode-position teaching lives under
+	     Deck Calibration; Equipment has its own routes. Only the params link stays. -->
+	<div class="flex justify-end">
+		<a
+			href={resolve('/manufacturing/cart-mfg/wax-filling/settings')}
+			class="rounded border border-[var(--color-tron-border)] px-3 py-1.5 text-xs text-[var(--color-tron-text-secondary)] transition-colors hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]"
+		>
+			⚙ Wax Fill Params
+		</a>
 	</div>
 
 	<div class="flex gap-2 border-b border-[var(--color-tron-border)]">

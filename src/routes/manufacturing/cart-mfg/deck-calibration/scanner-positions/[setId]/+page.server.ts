@@ -148,6 +148,6 @@ export const actions: Actions = {
 			changedBy: locals.user.username
 		});
 
-		throw redirect(303, '/manufacturing/cart-mfg/opentron-control/settings');
+		throw redirect(303, '/manufacturing/cart-mfg/deck-calibration/barcode-positions');
 	}
 };

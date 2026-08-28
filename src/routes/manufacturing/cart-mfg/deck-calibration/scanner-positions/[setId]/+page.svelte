@@ -438,7 +438,7 @@
 			</p>
 		</div>
 		<a
-			href="/manufacturing/cart-mfg/opentron-control/settings"
+			href="/manufacturing/cart-mfg/deck-calibration/barcode-positions"
 			class="rounded border border-[var(--color-tron-border)] px-3 py-1.5 text-xs hover:border-[var(--color-tron-cyan)] transition-colors"
 			style="color: var(--color-tron-text)"
 		>
