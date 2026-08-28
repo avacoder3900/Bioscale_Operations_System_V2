@@ -62,9 +62,7 @@
 	// Per-robot calibration state (PRD 2/5): the selected robot's saved global
 	// offset + tip-calibrator fixture. Prefill the calibrator point when the robot
 	// changes so "Go to calibrator" starts from its last-saved position.
-	const currentOffset = $derived((data.robotOffsets as any[]).find((o) => o.robotId === selectedRobotId) ?? null);
 	const currentCalibrator = $derived((data.calibrators as any[]).find((c) => c.robotId === selectedRobotId) ?? null);
-	let offsetIsReference = $state(false);
 	let lastCalRobot = '';
 	$effect(() => {
 		if (selectedRobotId && selectedRobotId !== lastCalRobot) {
@@ -78,7 +76,6 @@
 			// falling back to the .py defaults when nothing has ever been taught.
 			calZWax = typeof cal?.zCalWax === 'number' ? cal.zCalWax : PROBE_Z_DEFAULT.wax;
 			calZReagent = typeof cal?.zCalReagent === 'number' ? cal.zCalReagent : PROBE_Z_DEFAULT.reagent;
-			offsetIsReference = !!(data.robotOffsets as any[]).find((o) => o.robotId === selectedRobotId)?.isReference;
 		}
 	});
 
@@ -445,22 +442,6 @@
 		}
 	}
 
-	// Re-baseline the WHOLE deck after a physical reseat. Applies the captured
-	// offset to ALL 576 holes at once — BOTH wax + reagent, ignoring the role
-	// filter — so a deck bump is a one-click fix, not per-hole re-tuning. Workflow:
-	// jog to ONE reference hole, Capture the offset, then re-baseline. Undo reverts it.
-	async function rebaselineDeck() {
-		if (dx === 0 && dy === 0 && dz === 0) { errMsg = 'Jog to one reference hole and Capture the offset first (or type dx/dy/dz).'; return; }
-		const names = wells.map((w) => w.name);
-		if (names.length === 0) { errMsg = 'No holes to shift'; return; }
-		if (!confirm(`Deck moved? Re-baseline the WHOLE deck — all ${names.length} holes (wax + reagent) — by dx=${dx} dy=${dy} dz=${dz}. Undo reverts it. Continue?`)) return;
-		const r = await applyDelta(names, { x: dx, y: dy, z: dz }, `deck re-baseline (${dx}, ${dy}, ${dz})`);
-		if (r) {
-			msg = applyMsg('Re-baselined the whole deck', r);
-			clearSelection();
-			if (runId && !slotOrigin) deckDirty = true;
-		}
-	}
 
 	let syncWhich = $state<'both' | 'wax' | 'reagent'>('both');
 	async function syncToRobot() {
@@ -1171,13 +1152,6 @@
 	// ── PRD 5: save the robot's GLOBAL deck offset. The captured dx/dy/dz (the
 	// error of THIS robot vs the reference deck) is the global correction applied
 	// to all labware at fill time. One robot is the reference (offset 0,0,0).
-	async function saveRobotOffsetFromCapture() {
-		if (!selectedRobotId) { errMsg = 'Pick a robot'; return; }
-		if (!offsetIsReference && dx === 0 && dy === 0 && dz === 0) { errMsg = 'Capture a non-zero offset first (or mark this robot the reference)'; return; }
-		const x = offsetIsReference ? 0 : dx, y = offsetIsReference ? 0 : dy, z = offsetIsReference ? 0 : dz;
-		const r = await postAction('saveRobotOffset', { robotId: selectedRobotId, x: String(x), y: String(y), z: String(z), isReference: String(offsetIsReference) });
-		if (r) msg = `Saved global offset for ${robot?.name}: (${x}, ${y}, ${z})${offsetIsReference ? ' — set as reference (others cleared)' : ''}.`;
-	}
 
 	onDestroy(() => {
 		if (runId) {
@@ -1625,10 +1599,7 @@
 				<button type="button" onclick={applyGlobalShift} disabled={busy} class="mt-2 w-full rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 px-3 py-2 text-xs font-semibold text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/20 disabled:opacity-40">
 					⤧ Shift whole grid by this offset {roleFilter !== 'all' ? `(${roleFilter} only)` : ''}
 				</button>
-				<button type="button" onclick={rebaselineDeck} disabled={busy} class="mt-2 w-full rounded border border-orange-500/60 bg-orange-900/20 px-3 py-2 text-sm font-bold text-orange-200 hover:bg-orange-900/30 disabled:opacity-40" title="Deck was moved/reseated? Shift ALL 576 holes (wax + reagent) by this offset in one click.">
-					⇱ Deck moved? Re-baseline ALL {wells.length} holes
-				</button>
-				<p class="mt-1 text-[10px]" style="color: var(--color-tron-text-secondary)">Anchor: jog to one hole (e.g. a corner) → Capture → shift translates every hole by that offset. <strong>Re-baseline</strong> hits the whole deck (both roles) — use it when the deck was bumped/reseated and everything is off by the same amount.</p>
+				<p class="mt-1 text-[10px]" style="color: var(--color-tron-text-secondary)">Anchor: jog to one hole (e.g. a corner) → Capture → <strong>Shift whole grid</strong> translates every hole of the active role by that offset.</p>
 				<button type="button" onclick={undoLast} disabled={busy || undoStack.length === 0} class="mt-2 w-full rounded border border-amber-500/50 bg-amber-900/15 px-3 py-2 text-xs font-semibold text-amber-300 hover:bg-amber-900/25 disabled:opacity-40" title="Revert the last applied shift (offset, global, or set-position)">
 					↶ Undo last {undoStack.length ? `(${undoStack.length})` : ''}
 				</button>
@@ -1663,25 +1634,11 @@
 				</button>
 			</section>
 
-			<!-- PRD 5: per-robot global deck offset -->
-			<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3">
-				<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Robot global offset</h2>
-				<p class="mt-1 text-[10px]" style="color: var(--color-tron-text-secondary)">
-					A whole-robot correction applied to ALL labware at fill time — for swapping one deck between robots. One robot is the reference (0,0,0); the others store their error vs it. Capture the offset (jog the same hole on this robot), then save.
-				</p>
-				<div class="mt-2 rounded border border-[var(--color-tron-border)] bg-black/30 p-2 text-[11px] font-mono" style="color: var(--color-tron-text)">
-					{robot?.name ?? 'robot'}: {currentOffset
-						? `(${currentOffset.offset.x}, ${currentOffset.offset.y}, ${currentOffset.offset.z})${currentOffset.isReference ? ' · reference' : ''}`
-						: 'none saved'}
-				</div>
-				<label class="mt-2 flex items-center gap-2 text-[11px]" style="color: var(--color-tron-text-secondary)">
-					<input type="checkbox" bind:checked={offsetIsReference} /> This robot is the reference (offset 0,0,0; clears others' reference flag)
-				</label>
-				<button type="button" onclick={saveRobotOffsetFromCapture} disabled={busy || !selectedRobotId} class="mt-2 w-full rounded border border-green-500/50 bg-green-900/20 px-3 py-2 text-xs font-bold text-green-300 hover:bg-green-900/30 disabled:opacity-40">
-					{offsetIsReference ? `Set ${robot?.name ?? 'robot'} as reference (0,0,0)` : `Save captured offset (${dx}, ${dy}, ${dz}) → ${robot?.name ?? 'robot'}`}
-				</button>
-			</section>
-
+			<!-- Robot global offset panel DELETED 2026-08-28. The offset layer was
+			     retired on 08-19 (calibration-rtps forces 0,0,0 and saveRobotOffset
+			     refuses non-zero), so the panel could only ever write zeros while
+			     advertising a deck-swapping workflow that does not work. Deck
+			     geometry + the per-tip probe are the whole positional model. -->
 			<!-- Sync -->
 			<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3">
 				<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Sync to robot</h2>

@@ -20,7 +20,6 @@ import {
 	LabwareDefinition,
 	OpentronsRobot,
 	OpentronProtocol,
-	RobotDeckOffset,
 	TipCalibratorFixture,
 	AuditLog,
 	generateId
@@ -209,10 +208,6 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	}
 
 	// Per-robot calibration: all global offsets + tip-calibrator fixtures (client picks by robot).
-	const robotOffsets = (await RobotDeckOffset.find({}).lean() as any[]).map((o) => ({
-		robotId: String(o.robotId), offset: o.offset ?? { x: 0, y: 0, z: 0 }, isReference: !!o.isReference,
-		capturedAt: o.capturedAt?.toISOString?.() ?? null, note: o.note ?? ''
-	}));
 	// Includes the per-robot undo history (newest first) so the wizard can show the
 	// previous value and offer one-click revert without a second round-trip.
 	const calRows = (await TipCalibratorFixture.find({}).lean()) as any[];
@@ -257,7 +252,6 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		dimensions,
 		editedWells,
 		history: JSON.parse(JSON.stringify(history)),
-		robotOffsets: JSON.parse(JSON.stringify(robotOffsets)),
 		calibrators: JSON.parse(JSON.stringify(calibrators))
 	};
 };
@@ -503,50 +497,12 @@ export const actions: Actions = {
 		return { success: true, action: 'revertCalibrator', calibrator: JSON.parse(JSON.stringify(toCalEntry(saved))) };
 	},
 
-	/** PRD 5: save a robot's GLOBAL deck offset (applies to all labware at fill time). */
-	saveRobotOffset: async ({ request, locals }) => {
-		if (!locals.user) redirect(302, '/login');
-		requirePermission(locals.user, 'manufacturing:write');
-		await connectDB();
-		const data = await request.formData();
-		const robotId = (data.get('robotId') as string)?.trim();
-		const x = Number(data.get('x')), y = Number(data.get('y')), z = Number(data.get('z'));
-		const isReference = (data.get('isReference') as string) === 'true';
-		if (!robotId) return fail(400, { error: 'Pick a robot' });
-		if (![x, y, z].every(Number.isFinite)) return fail(400, { error: 'x/y/z must be numbers' });
-
-		// Global offsets are retired (2026-08-19). The deck definition is the only
-		// source of hole positions, and the per-tip probe is the only correction on
-		// top of it. A non-zero global offset moves all 576 holes plus the tube and
-		// tip racks, so it silently double-counts geometry the Studio already tuned
-		// — that is what caused the 07-08 deck-004 misses on B14 and pushed R04's
-		// wax 1mm right on 08-19. Storing zero is still allowed so the row can stay
-		// as an explicit "no offset" record.
-		//
-		// MERGE NOTE (2026-08-21): master carried this guard in saveCalibrator, where
-		// x/y/z are the tip-calibrator FIXTURE POSITION (~125.181, 173.247, 34.491),
-		// not an offset — so on master it rejected every legitimate calibrator save
-		// while leaving this action, the one that actually writes RobotDeckOffset,
-		// unguarded. Moved here, which is what it was written to protect.
-		if (x !== 0 || y !== 0 || z !== 0) {
-			return fail(400, {
-				error:
-					`Global robot offsets are retired — this would move every hole on the deck, ` +
-					`not just the one you measured. The deck definition is the single source of ` +
-					`truth for hole positions; correct the hole in the Studio instead, and let the ` +
-					`per-tip calibrator handle tip-to-tip variation.`
-			});
-		}
-
-		if (isReference) await RobotDeckOffset.updateMany({ robotId: { $ne: robotId } }, { $set: { isReference: false } });
-		await RobotDeckOffset.updateOne(
-			{ robotId },
-			{ $set: { offset: { x, y, z }, isReference, capturedBy: { _id: locals.user._id, username: locals.user.username }, capturedAt: new Date() }, $setOnInsert: { _id: generateId() } },
-			{ upsert: true }
-		);
-		await AuditLog.create({ _id: generateId(), tableName: 'robot_deck_offsets', recordId: robotId, action: 'save_robot_offset', newData: { x, y, z, isReference }, changedAt: new Date(), changedBy: locals.user?.username });
-		return { success: true, action: 'saveRobotOffset' };
-	},
+	// saveRobotOffset action DELETED 2026-08-28 with its UI panel. Global offsets
+	// were retired 08-19 (calibration-rtps forces 0,0,0 at fill time) so the action
+	// could only ever store zeros. RobotDeckOffset rows are left untouched.
+	// To revisit deck/robot interchange, restore from git history — but note the
+	// measured frame difference between robots is not a pure translation
+	// (R04 vs B07: ~1.6mm x / 2.4mm y at the same commanded point).
 
 	/**
 	 * Freeze the selected deck's current geometry as a new immutable version.
