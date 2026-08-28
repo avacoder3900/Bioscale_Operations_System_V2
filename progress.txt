@@ -10673,3 +10673,10 @@ over the stored fixture by design. Fixed: deck-first resolution (legacy robot ro
 has none), seeding keyed on robot+deck with a .py-default fallback for never-taught decks, and
 deckLoadName/deckKey carried on each CalEntry. Lesson: re-keying storage is not enough when the UI
 can send an override — check every path that can win over the stored value.
+
+2026-08-28 (cont.) — wax gate-1 default volume 1.6 -> 1.8uL on the run-start form (operator request).
+Row-alignment check: row = 2.2+2.2+2.2+1.8 = 8.4uL vs 8.5uL usable per aspiration (20uL pipette -
+11.5uL aspirate_remainder), so aspiration batches still end on cartridge-row boundaries. Headroom is
+now 0.1uL — raising aspirate_remainder or any gate volume from here WILL break row alignment and
+walk the tip over a cartridge wall between batches. .py defaults (all gates 1.60) unchanged; the form
+supplies the line's values.
