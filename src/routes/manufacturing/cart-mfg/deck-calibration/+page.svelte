@@ -1538,50 +1538,25 @@
 					</details>
 				</div>
 
-				<!-- Tour + Fill motion: drive the pipette through holes like a real fill -->
+				<!-- Offset → selection lives in the rail (2026-08-28 swap): it is the
+				     everyday capture→apply control and belongs beside Jog/Capture. -->
 				<div class="mt-3 rounded border border-[var(--color-tron-border)] bg-black/20 p-2">
-					<div class="mb-1 text-[11px] font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Tour / Fill motion</div>
-					{#if touring}
-						<div class="mb-1 text-center text-[11px]" style="color: var(--color-tron-cyan)">{tourIndex + 1} / {tourWells.length} — {tourWells[tourIndex]}</div>
-						<div class="grid grid-cols-4 gap-1">
-							<button type="button" onclick={tourPrev} disabled={busy || tourIndex === 0} class="rounded border border-[var(--color-tron-border)] py-1.5 text-xs hover:border-[var(--color-tron-cyan)] disabled:opacity-40" style="color: var(--color-tron-text)">‹ Prev</button>
-							<button type="button" onclick={tourNext} disabled={busy || tourIndex >= tourWells.length - 1} class="rounded border border-[var(--color-tron-border)] py-1.5 text-xs hover:border-[var(--color-tron-cyan)] disabled:opacity-40" style="color: var(--color-tron-text)">Next ›</button>
-							{#if tourPlaying}
-								<button type="button" onclick={() => (tourPlaying = false)} class="rounded border border-amber-500/40 bg-amber-900/15 py-1.5 text-xs text-amber-300">Pause</button>
-							{:else}
-								<button type="button" onclick={tourPlay} disabled={busy || tourIndex >= tourWells.length - 1} class="rounded border border-[var(--color-tron-cyan)]/40 py-1.5 text-xs text-[var(--color-tron-cyan)] disabled:opacity-40">Play</button>
-							{/if}
-							<button type="button" onclick={tourStop} class="rounded border border-red-500/40 bg-red-900/15 py-1.5 text-xs text-red-300">Stop</button>
-						</div>
-					{:else if fillMotionRunning}
-						{#if fillPaused}<div class="mb-1 text-center text-[11px] text-amber-300">Paused</div>{/if}
-						<div class="grid grid-cols-2 gap-1">
-							{#if fillPaused}
-								<button type="button" onclick={resumeFillMotion} class="rounded border border-[var(--color-tron-cyan)]/40 py-2 text-xs text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10">▶ Resume</button>
-							{:else}
-								<button type="button" onclick={pauseFillMotion} class="rounded border border-amber-500/40 bg-amber-900/15 py-2 text-xs text-amber-300">❚❚ Pause</button>
-							{/if}
-							<button type="button" onclick={stopFillMotion} class="rounded border border-red-500/40 bg-red-900/15 py-2 text-xs text-red-300">■ Stop</button>
-						</div>
-					{:else}
-						<div class="grid grid-cols-2 gap-1">
-							<button type="button" onclick={startTour} disabled={!pipetteId || busy} class="rounded border border-[var(--color-tron-cyan)]/40 px-2 py-2 text-xs text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40" title="Drive through every hole in order (whole deck)">
-								Run through all {roleFilter === 'all' ? 'holes' : `${roleFilter} holes`}
-							</button>
-							<button type="button" onclick={runFillMotion} disabled={!pipetteId || busy || selCount === 0} class="rounded border border-[var(--color-tron-cyan)]/40 px-2 py-2 text-xs text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40" title="Drive the exact fill motion (jump 60mm → dispense +2mm → dwell → retract +5mm) at fill speed, for the selected hole(s) only">
-								▶ Fill motion ({selCount} selected)
-							</button>
-						</div>
-						<div class="mt-2 flex flex-wrap items-center gap-2 text-[11px]" style="color: var(--color-tron-text-secondary)">
-							<span class="opacity-70">Fill:</span>
-							<label class="flex items-center gap-1"><input type="checkbox" bind:checked={fillMatchProtocol} /> Protocol speed</label>
-							{#if !fillMatchProtocol}
-								<label>Cap <input type="number" min="1" max="400" step="1" bind:value={fillSpeed} class="w-14 rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-0.5 font-mono" style="color: var(--color-tron-text)" /> mm/s</label>
-							{/if}
-							<label>Dwell <input type="number" min="0" max="5000" step="50" bind:value={fillDwellMs} class="w-16 rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-0.5 font-mono" style="color: var(--color-tron-text)" /> ms</label>
-						</div>
-						<p class="mt-1 text-[10px]" style="color: var(--color-tron-text-secondary)"><strong>Fill motion</strong> mimics a real fill at each selected hole (60mm jump → 2mm-above-top dispense → {fillDwellMs}ms dwell → 5mm retract){fillMatchProtocol ? ' at the protocol’s own full speed' : ` capped to ${fillSpeed} mm/s`}, in fill order — pick any hole(s) as the start.{hasTip ? '' : ' Pick up a tip first to match the real fill height.'}</p>
-					{/if}
+					<div class="mb-1 text-[11px] font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Offset → selection</div>
+					<div class="mt-2 grid grid-cols-3 gap-2 text-xs" style="color: var(--color-tron-text-secondary)">
+						<label>dx <input type="number" step="0.01" bind:value={dx} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-1 font-mono" style="color: var(--color-tron-text)" /></label>
+						<label>dy <input type="number" step="0.01" bind:value={dy} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-1 font-mono" style="color: var(--color-tron-text)" /></label>
+						<label>dz <input type="number" step="0.01" bind:value={dz} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-1 font-mono" style="color: var(--color-tron-text)" /></label>
+					</div>
+					<button type="button" onclick={applyToSelection} disabled={busy || selCount === 0} class="mt-2 w-full rounded border border-green-500/50 bg-green-900/20 px-3 py-2 text-sm font-bold text-green-300 hover:bg-green-900/30 disabled:opacity-40">
+						Apply to {selCount} selected hole{selCount === 1 ? '' : 's'}
+					</button>
+					<button type="button" onclick={applyGlobalShift} disabled={busy} class="mt-2 w-full rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 px-3 py-2 text-xs font-semibold text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/20 disabled:opacity-40">
+						⤧ Shift whole grid by this offset {roleFilter !== 'all' ? `(${roleFilter} only)` : ''}
+					</button>
+					<p class="mt-1 text-[10px]" style="color: var(--color-tron-text-secondary)">Anchor: jog to one hole (e.g. a corner) → Capture → <strong>Shift whole grid</strong> translates every hole of the active role by that offset.</p>
+					<button type="button" onclick={undoLast} disabled={busy || undoStack.length === 0} class="mt-2 w-full rounded border border-amber-500/50 bg-amber-900/15 px-3 py-2 text-xs font-semibold text-amber-300 hover:bg-amber-900/25 disabled:opacity-40" title="Revert the last applied shift (offset, global, or set-position)">
+						↶ Undo last {undoStack.length ? `(${undoStack.length})` : ''}
+					</button>
 				</div>
 			</section>
 
@@ -1610,23 +1585,51 @@
 	     deck graphic, and they all act on the CURRENT SELECTION, so they belong
 	     with the grid rather than with the jog controls. -->
 	<div class="grid grid-cols-1 gap-4 lg:grid-cols-3">
+	<!-- Tour / Fill motion moved into the under-canvas row (2026-08-28 swap):
+	     it drives the whole selection/deck and needs the width. -->
 	<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3">
-		<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Offset → selection</h2>
-		<div class="mt-2 grid grid-cols-3 gap-2 text-xs" style="color: var(--color-tron-text-secondary)">
-			<label>dx <input type="number" step="0.01" bind:value={dx} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-1 font-mono" style="color: var(--color-tron-text)" /></label>
-			<label>dy <input type="number" step="0.01" bind:value={dy} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-1 font-mono" style="color: var(--color-tron-text)" /></label>
-			<label>dz <input type="number" step="0.01" bind:value={dz} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-1 font-mono" style="color: var(--color-tron-text)" /></label>
-		</div>
-		<button type="button" onclick={applyToSelection} disabled={busy || selCount === 0} class="mt-2 w-full rounded border border-green-500/50 bg-green-900/20 px-3 py-2 text-sm font-bold text-green-300 hover:bg-green-900/30 disabled:opacity-40">
-			Apply to {selCount} selected hole{selCount === 1 ? '' : 's'}
-		</button>
-		<button type="button" onclick={applyGlobalShift} disabled={busy} class="mt-2 w-full rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 px-3 py-2 text-xs font-semibold text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/20 disabled:opacity-40">
-			⤧ Shift whole grid by this offset {roleFilter !== 'all' ? `(${roleFilter} only)` : ''}
-		</button>
-		<p class="mt-1 text-[10px]" style="color: var(--color-tron-text-secondary)">Anchor: jog to one hole (e.g. a corner) → Capture → <strong>Shift whole grid</strong> translates every hole of the active role by that offset.</p>
-		<button type="button" onclick={undoLast} disabled={busy || undoStack.length === 0} class="mt-2 w-full rounded border border-amber-500/50 bg-amber-900/15 px-3 py-2 text-xs font-semibold text-amber-300 hover:bg-amber-900/25 disabled:opacity-40" title="Revert the last applied shift (offset, global, or set-position)">
-			↶ Undo last {undoStack.length ? `(${undoStack.length})` : ''}
-		</button>
+		<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Tour / Fill motion</h2>
+		{#if touring}
+			<div class="mb-1 text-center text-[11px]" style="color: var(--color-tron-cyan)">{tourIndex + 1} / {tourWells.length} — {tourWells[tourIndex]}</div>
+			<div class="grid grid-cols-4 gap-1">
+				<button type="button" onclick={tourPrev} disabled={busy || tourIndex === 0} class="rounded border border-[var(--color-tron-border)] py-1.5 text-xs hover:border-[var(--color-tron-cyan)] disabled:opacity-40" style="color: var(--color-tron-text)">‹ Prev</button>
+				<button type="button" onclick={tourNext} disabled={busy || tourIndex >= tourWells.length - 1} class="rounded border border-[var(--color-tron-border)] py-1.5 text-xs hover:border-[var(--color-tron-cyan)] disabled:opacity-40" style="color: var(--color-tron-text)">Next ›</button>
+				{#if tourPlaying}
+					<button type="button" onclick={() => (tourPlaying = false)} class="rounded border border-amber-500/40 bg-amber-900/15 py-1.5 text-xs text-amber-300">Pause</button>
+				{:else}
+					<button type="button" onclick={tourPlay} disabled={busy || tourIndex >= tourWells.length - 1} class="rounded border border-[var(--color-tron-cyan)]/40 py-1.5 text-xs text-[var(--color-tron-cyan)] disabled:opacity-40">Play</button>
+				{/if}
+				<button type="button" onclick={tourStop} class="rounded border border-red-500/40 bg-red-900/15 py-1.5 text-xs text-red-300">Stop</button>
+			</div>
+		{:else if fillMotionRunning}
+			{#if fillPaused}<div class="mb-1 text-center text-[11px] text-amber-300">Paused</div>{/if}
+			<div class="grid grid-cols-2 gap-1">
+				{#if fillPaused}
+					<button type="button" onclick={resumeFillMotion} class="rounded border border-[var(--color-tron-cyan)]/40 py-2 text-xs text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10">▶ Resume</button>
+				{:else}
+					<button type="button" onclick={pauseFillMotion} class="rounded border border-amber-500/40 bg-amber-900/15 py-2 text-xs text-amber-300">❚❚ Pause</button>
+				{/if}
+				<button type="button" onclick={stopFillMotion} class="rounded border border-red-500/40 bg-red-900/15 py-2 text-xs text-red-300">■ Stop</button>
+			</div>
+		{:else}
+			<div class="grid grid-cols-2 gap-1">
+				<button type="button" onclick={startTour} disabled={!pipetteId || busy} class="rounded border border-[var(--color-tron-cyan)]/40 px-2 py-2 text-xs text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40" title="Drive through every hole in order (whole deck)">
+					Run through all {roleFilter === 'all' ? 'holes' : `${roleFilter} holes`}
+				</button>
+				<button type="button" onclick={runFillMotion} disabled={!pipetteId || busy || selCount === 0} class="rounded border border-[var(--color-tron-cyan)]/40 px-2 py-2 text-xs text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40" title="Drive the exact fill motion (jump 60mm → dispense +2mm → dwell → retract +5mm) at fill speed, for the selected hole(s) only">
+					▶ Fill motion ({selCount} selected)
+				</button>
+			</div>
+			<div class="mt-2 flex flex-wrap items-center gap-2 text-[11px]" style="color: var(--color-tron-text-secondary)">
+				<span class="opacity-70">Fill:</span>
+				<label class="flex items-center gap-1"><input type="checkbox" bind:checked={fillMatchProtocol} /> Protocol speed</label>
+				{#if !fillMatchProtocol}
+					<label>Cap <input type="number" min="1" max="400" step="1" bind:value={fillSpeed} class="w-14 rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-0.5 font-mono" style="color: var(--color-tron-text)" /> mm/s</label>
+				{/if}
+				<label>Dwell <input type="number" min="0" max="5000" step="50" bind:value={fillDwellMs} class="w-16 rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-0.5 font-mono" style="color: var(--color-tron-text)" /> ms</label>
+			</div>
+			<p class="mt-1 text-[10px]" style="color: var(--color-tron-text-secondary)"><strong>Fill motion</strong> mimics a real fill at each selected hole (60mm jump → 2mm-above-top dispense → {fillDwellMs}ms dwell → 5mm retract){fillMatchProtocol ? ' at the protocol’s own full speed' : ` capped to ${fillSpeed} mm/s`}, in fill order — pick any hole(s) as the start.{hasTip ? '' : ' Pick up a tip first to match the real fill height.'}</p>
+		{/if}
 	</section>
 
 	<!-- Set absolute position (selection, anchor-translate) -->
