@@ -10641,3 +10641,25 @@ Source: branch master @ commit d004e5b2
 Retrieve this exact code: git checkout master at commit d004e5b2
   (or: git log master --oneline to find it if the branch has since moved on)
 What this deployment is for: reagent runs auto-complete on success (robot frees instantly) + cart-status guard so a deferred Complete can never regress experiment carts.
+
+================================================================================
+2026-08-28 — master — wax "keeps cycling back to barcode scanning": auto-start now stops when the deck load fails
+================================================================================
+Operator report: Rachel's wax fill looped through barcode scanning without starting; a retry by the
+operator minutes later started fine. Evidence: run o_RBXDz0Ic (18:06, B07) reached startRun with
+deckId undefined + 0 cartridgeIds -> this morning's untracked-fill guard refused it (correctly);
+run WaCQUaj9 (18:10) had DECK-004 + 24 carts and started (otRun 07b68e66). So the guard was doing
+its job; the intermittency is whether the deck load actually committed before the auto-start fired.
+Two client defects exposed and fixed: (1) handleDeckLoadComplete called startRunWithCapturedParams()
+unconditionally after loadDeck — before the guard this is precisely how the untracked fills since
+08-26 were created; it now returns if errorMsg is set (reagent already had the check; comment added).
+(2) Both fill pages replaced the server's message with a generic "Auto-start with your parameters
+failed", hiding the actionable "this run has no scanned deck/cartridges…" text — both now surface
+the server's own reason. npm check 11 (baseline).
+OPEN: why Rachel's loadDeck did not commit is not yet known (the run shows no deck at all). With the
+real error now displayed, the next occurrence will name its own cause — ask the operator to
+screenshot the red banner.
+
+Deployment: production — Vercel auto-deploy from master push
+Source: branch master @ this commit
+What this deployment is for: a failed deck load can no longer look like an endless scan loop.
