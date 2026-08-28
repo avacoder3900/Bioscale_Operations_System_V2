@@ -168,10 +168,12 @@
 	 * every time. These are the values already in use — this only stops the typing.
 	 *
 	 * Row alignment holds at these volumes. Per the .py's own arithmetic, a
-	 * cartridge row is 4 wax wells (gates 4,3,2,1) = 8.2uL at 2.2/2.2/2.2/1.6,
-	 * which fits the 20uL - aspirate_remainder budget as long as the remainder is
-	 * <= 11.8; its default is 11.5. That matters because an aspiration batch that
-	 * ends mid-row forces the next one to open by crossing a cartridge wall, which
+	 * cartridge row is 4 wax wells (gates 4,3,2,1) = 8.4uL at 2.2/2.2/2.2/1.8
+	 * (gate 1 raised from 1.6 on 2026-08-28), which fits the 20uL -
+	 * aspirate_remainder budget as long as the remainder is <= 11.6; its default
+	 * is 11.5 — 0.1uL of headroom, so RAISING aspirate_remainder or any gate
+	 * volume from here breaks row alignment. That matters because an aspiration
+	 * batch that ends mid-row forces the next one to open by crossing a cartridge wall, which
 	 * bends the tip — see the row_key batching guard in the protocol.
 	 *
 	 * Deliberately NOT in contextReadonly: gate volumes are the main tuning knob
@@ -184,7 +186,12 @@
 	 * form when contextValues changes, which would wipe an operator's edits.
 	 */
 	const WAX_PARAM_DEFAULTS = Object.freeze({
-		vol_gate1: 1.6,
+		// 1.6 -> 1.8 (2026-08-28, operator). Row total is now
+		// 2.2+2.2+2.2+1.8 = 8.4uL, still inside the 8.5uL usable per aspiration
+		// (20uL pipette - 11.5uL aspirate_remainder), so batches keep landing on
+		// cartridge-row boundaries — the alignment that stops the tip being walked
+		// over the cartridge wall mid-batch.
+		vol_gate1: 1.8,
 		vol_gate2: 2.2,
 		vol_gate3: 2.2,
 		vol_gate4: 2.2,
