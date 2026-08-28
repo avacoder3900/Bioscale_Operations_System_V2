@@ -10663,3 +10663,13 @@ screenshot the red banner.
 Deployment: production — Vercel auto-deploy from master push
 Source: branch master @ this commit
 What this deployment is for: a failed deck load can no longer look like an endless scan loop.
+
+2026-08-28 (cont.) — Calibrate tip on B14+deck-003 still drove to the robot-arm point AFTER the data
+rekey: the bridge command carried (294.88, 79.24, 23.85) as a jogged override. Cause was entirely
+client-side — currentCalibrator matched on robotId (so deck-003 on B14 resolved the arm row), and the
+effect seeding the calX/calY/calZ boxes fired only on ROBOT change, so selecting a different deck
+never re-seeded them; Calibrate tip then sent those stale boxes as an operator override, which wins
+over the stored fixture by design. Fixed: deck-first resolution (legacy robot rows only when the deck
+has none), seeding keyed on robot+deck with a .py-default fallback for never-taught decks, and
+deckLoadName/deckKey carried on each CalEntry. Lesson: re-keying storage is not enough when the UI
+can send an override — check every path that can win over the stored value.
