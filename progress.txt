@@ -10635,3 +10635,9 @@ CODE FIX (reagent parity with wax's 08-28 auto-advance):
 npm run check: 11 errors — unchanged vs. baseline (r2.ts/AskBimsWidget/assembly/parts).
 NOTE: uncommitted; layered on the working tree's existing reagent/wax/deck-cal modifications
 from the in-flight tip-calibrator session.
+
+Deployment: production — Vercel auto-deploy from master push
+Source: branch master @ commit d004e5b2
+Retrieve this exact code: git checkout master at commit d004e5b2
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: reagent runs auto-complete on success (robot frees instantly) + cart-status guard so a deferred Complete can never regress experiment carts.
