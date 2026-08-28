@@ -683,7 +683,14 @@
 			});
 			const text = await res.text();
 			if (!res.ok || text.includes('"type":"failure"')) {
-				errorMsg = 'Auto-start with your parameters failed — start the run manually below.';
+				// Surface what the SERVER said (2026-08-28). The generic message hid
+				// the actionable one — e.g. the untracked-fill guard's "this run has
+				// no scanned deck/cartridges" — so the page just bounced back to
+				// scanning and the operator had no idea why it kept looping.
+				const detail = parseActionError(text, res.status);
+				errorMsg = detail
+					? `Auto-start failed: ${detail}`
+					: 'Auto-start with your parameters failed — start the run manually below.';
 				pendingStage = null;
 				autoStartPending = false;
 			}
@@ -719,6 +726,12 @@
 			// Hands-off: record the deck load, then start the run with the params
 			// the operator set BEFORE scanning. No ready_to_run panel, no clicks.
 			await submitAction('loadDeck', formData);
+			// STOP if the deck load did not commit (2026-08-28). Charging into
+			// startRun anyway used to produce a run with no deck/cartridges — the
+			// robot filled carts no record pointed at. Since the untracked-fill
+			// guard, the same bug just loops back to scanning with a generic
+			// error. Either way the fix is the same: don't start what didn't load.
+			if (errorMsg) return;
 			await startRunWithCapturedParams();
 		} else {
 			// Fallback (mismatch, or params not captured e.g. mid-flow reload):

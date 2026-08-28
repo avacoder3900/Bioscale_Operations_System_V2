@@ -209,7 +209,18 @@
 			});
 			const txt = await res.text();
 			if (!res.ok || txt.includes('"type":"failure"')) {
-				errorMsg = 'Auto-start with your parameters failed — start the run manually below.';
+				// Show the server's own reason (2026-08-28) — the generic message hid
+				// actionable errors and made a failed auto-start look like a loop.
+				let detail = '';
+				try {
+					const parsed = JSON.parse(txt);
+					const raw = typeof parsed?.data === 'string' ? JSON.parse(parsed.data) : parsed?.data;
+					const found = Array.isArray(raw) ? raw.find((v: unknown) => typeof v === 'string' && v.length > 3) : raw?.error;
+					if (typeof found === 'string') detail = found;
+				} catch { /* fall back to the generic message */ }
+				errorMsg = detail
+					? `Auto-start failed: ${detail}`
+					: 'Auto-start with your parameters failed — start the run manually below.';
 				pendingStage = null;
 			}
 			await invalidateAll();
@@ -708,6 +719,8 @@
 			onComplete={async ({ deckId, cartridgeScans }) => {
 				await submitForm('loadDeck', { deckId, cartridgeScans: JSON.stringify(cartridgeScans) });
 				// Hands-off auto-start (mirror wax): scan was the last manual step.
+				// The !errorMsg guard is load-bearing — never start a run whose deck
+				// load did not commit.
 				if (!errorMsg && reagentBatchConfirmed && capturedParamsFd) {
 					await startRunWithCapturedParams();
 				}
