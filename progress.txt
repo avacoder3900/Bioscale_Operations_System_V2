@@ -10491,3 +10491,21 @@ npm run check: 19 errors repo-wide (pre-existing upstream), 0 in touched files.
 Deployment: production — Vercel auto-deploy from master push
 Source: branch master @ this commit
 What this deployment is for: carts can no longer be silently lost between wax filling and wax filled.
+
+================================================================================
+2026-08-28 — master — reagent cart scanning: scan-then-check (one batch ping instead of one per scan)
+================================================================================
+Operator: scanning carts onto the deck is laggy in both fills. Investigation: wax already got
+scan-then-check on 08-19 (per-scan is local; one batch check at the boundary) — reagent's grid still
+awaited /api/dev/validate-equipment per scan (~250-400ms warm, 1-3s serverless cold start; plus a
+same-slot race because the input clears before the await). The batch endpoint already supported
+context 'reagent'. Ported the wax pattern to reagent DeckLoadingGrid: instant local accept + beep;
+runDeferredCheck() posts all barcodes once at deck-full / auto-flow / Continue-partial; failed slots
+highlighted for re-scan. Eligibility rules identical (shared isReagentEligible). If wax scanning
+still feels slow to operators, it is NOT the cart scans (those are local) — look at the deck/oven
+barcode steps or the robot sweep.
+npm run check: 19 errors repo-wide (pre-existing), 0 in touched file.
+
+Deployment: production — Vercel auto-deploy from master push
+Source: branch master @ this commit
+What this deployment is for: reagent cart scanning flows at wedge-scanner speed; validation is one query.
