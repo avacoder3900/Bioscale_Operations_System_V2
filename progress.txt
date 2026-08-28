@@ -10599,3 +10599,39 @@ the arm rig on/off B14 is now non-destructive in both directions.
 Deployment: production — Vercel auto-deploy from master push
 Source: branch master @ commit 5b38aebe
 What this deployment is for: calibrator points follow the deck, so robot-arm <-> reagent swaps stop destroying calibration.
+
+================================================================================
+2026-08-28 — master — Exp-350 status recovery + reagent run auto-complete (clobber fix)
+================================================================================
+INCIDENT: 22 carts in research experiment 350 flipped from linked/tested back to
+reagent_filled at 18:06:08Z. Root cause (audit-trail confirmed): the morning reagent batch
+n5Iw21ygQ1ozRIQGhYqZY finished on the robot at 16:11Z but "Complete run" wasn't clicked until
+18:06 (to free the robot for wax work — a wax run started 12s later). In the 2h gap jacobq
+linked the physically-filled carts into exp 350 and tested 8 of them; completeRunFilling's
+cart bulkWrite guards only on write-once (reagentFilling.recordedAt absent), never on current
+status, so the deferred click restamped all 22 to reagent_filled.
+
+RECOVERY (one-off script, applied + verified): all 58 exp-350 carts set by rule — rawData
+present -> completed (8 restored), no rawData -> linked (14), underway untouched (3); fixed in
+BOTH cartridge_records and the experiment doc's embedded arms[].cartridges[].status, with
+audit_log entries (changedBy claude-fix-exp350) and a pre-change backup at
+calibration-backups/exp350-status-backup-2026-08-28T18-25-43-164Z.json. Final histogram:
+41 completed / 14 linked / 3 underway.
+
+CODE FIX (reagent parity with wax's 08-28 auto-advance):
+- src/routes/manufacturing/cart-mfg/reagent-filling/+page.server.ts: completion logic
+  extracted to idempotent finalizeReagentRun(runId, user, trigger). recordRunFinished now
+  finalizes immediately when the .py lands succeeded (run -> Completed, robotReleasedAt set,
+  carts stamped, tube/cut-sheet inventory) — robot frees the moment the run ends, no click
+  needed. Load function gains a SELF-HEAL reconcile (mirrors wax): a Running run whose final
+  status is succeeded (stamped, or polled from the robot) finalizes on next page visit.
+  Cart stamping is now guarded: status advances to reagent_filled only from
+  PRE_REAGENT_STATUSES (backing/wax_filled/wax_qc/wax_ready/wax_stored); carts that moved on
+  (linked/underway/completed) keep their status and only gain the reagentFilling stamp.
+  Stopped/failed runs still wait for operator cancel/abort — no auto-commit.
+- reagent-filling/+page.svelte: recordRunFinished no longer invalidates (keeps the finished
+  panel + Run-again alive against the already-Completed run; both are idempotent); finished-
+  panel copy updated, Complete button relabeled "Done".
+npm run check: 11 errors — unchanged vs. baseline (r2.ts/AskBimsWidget/assembly/parts).
+NOTE: uncommitted; layered on the working tree's existing reagent/wax/deck-cal modifications
+from the in-flight tip-calibrator session.

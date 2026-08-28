@@ -407,6 +407,16 @@
 				return;
 			}
 
+			// recordRunFinished: the server finalizes the batch and frees the robot
+			// the moment the .py succeeds. Skip the refresh — a reload here would
+			// drop the (now Completed) run from page state and wipe the finished
+			// panel before the operator sees it. Complete / Run again both remain
+			// valid: they're idempotent against an already-Completed run.
+			if (action === 'recordRunFinished') {
+				submitting = false;
+				return;
+			}
+
 			// Action succeeded — try client-side refresh first (fast on warm functions),
 			// fall back to full page reload after 5s (handles cold starts).
 			if (action in ACTION_NEXT_STAGE) {
@@ -747,8 +757,9 @@
 				opentronsRunId={data.runState.opentronsRunId}
 				onStatusChange={(status) => { robotStatus = status; }}
 				onComplete={(status) => {
-					// The .py landed terminal — reveal the run-complete controls. The
-					// run does NOT auto-advance; the operator sends it on or re-runs.
+					// The .py landed terminal — reveal the run-complete controls.
+					// recordRunFinished auto-finalizes a succeeded run server-side
+					// (carts stamped, robot freed); the panel below is confirmation.
 					runFinishedLocal = true;
 					submitForm('recordRunFinished', {
 						runId: data.activeRunId ?? '',
@@ -785,13 +796,14 @@
 			</div>
 		{/if}
 
-		<!-- Run-complete controls: appear only once the .py finishes. Complete
-		     finishes the run (carts → reagent_filled; top seal implicit; next stop
-		     Reagent Inspect). Run again starts a fresh batch with the same parameters. -->
+		<!-- Run-complete controls: appear only once the .py finishes. A succeeded
+		     run is already finalized server-side (carts → reagent_filled, robot
+		     freed); Done just clears the page. Run again starts a fresh batch
+		     with the same parameters. -->
 		{#if !isViewingPast && (previewParam || runFinished)}
 			<div class="mt-4 flex flex-col items-center gap-3 rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4">
 				<p class="text-sm text-[var(--color-tron-text-secondary)]">
-					Run finished. Complete this batch (cartridges → reagent filled; top-seal them, then photograph on Reagent Inspect), or run another batch with the same parameters.
+					Run finished — batch completed and the robot is free. Top-seal the cartridges, then photograph on Reagent Inspect. Or run another batch with the same parameters.
 				</p>
 				<button
 					type="button"
@@ -799,7 +811,7 @@
 					disabled={submitting}
 					class="min-h-[44px] w-full max-w-sm rounded-lg border border-green-500/50 bg-green-900/20 px-8 py-3 text-base font-bold text-green-400 transition-all hover:bg-green-900/30 disabled:opacity-50"
 				>
-					Complete run
+					Done
 				</button>
 				<button
 					type="button"
