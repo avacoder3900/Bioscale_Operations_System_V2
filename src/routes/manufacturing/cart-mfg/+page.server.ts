@@ -1,4 +1,5 @@
 import { redirect } from '@sveltejs/kit';
+import { isCureComplete, cureRemainingMin } from '$lib/server/manufacturing/cure-time';
 import {
 	connectDB, WaxFillingRun, ReagentBatchRecord, CartridgeRecord,
 	BackingLot, LaserCutBatch, Consumable, LotRecord, ManufacturingSettings,
@@ -136,7 +137,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 	const backingBatchRows = (backingCartGroups as any[]).map((g: any) => {
 		const entryMs = g.oldestEntry ? new Date(g.oldestEntry).getTime() : 0;
 		const elapsedMin = entryMs ? (now - entryMs) / 60000 : 0;
-		const isReady = elapsedMin >= minOvenTimeMin;
+		const isReady = isCureComplete(g.oldestEntry, minOvenTimeMin, now);
 		return {
 			lotId: String(g._id?.lotId ?? 'unknown'),
 			cartridgeCount: g.count ?? 0,
@@ -145,7 +146,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 			ovenLocationName: g.ovenLocationName ?? null,
 			ovenEntryTime: g.oldestEntry ? new Date(g.oldestEntry).toISOString() : null,
 			elapsedMin: Math.floor(elapsedMin),
-			remainingMin: Math.max(0, Math.ceil(minOvenTimeMin - elapsedMin)),
+			remainingMin: cureRemainingMin(g.oldestEntry, minOvenTimeMin, now),
 			isReady,
 			operatorUsername: g.operatorUsername ?? null,
 			legacy: false
@@ -165,8 +166,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 			ovenLocationName: bl.ovenLocationName ?? null,
 			ovenEntryTime: bl.ovenEntryTime ? new Date(bl.ovenEntryTime).toISOString() : null,
 			elapsedMin: Math.floor(elapsedMin),
-			remainingMin: Math.max(0, Math.ceil(minOvenTimeMin - elapsedMin)),
-			isReady: elapsedMin >= minOvenTimeMin,
+			remainingMin: cureRemainingMin(bl.ovenEntryTime, minOvenTimeMin, now),
+			isReady: isCureComplete(bl.ovenEntryTime, minOvenTimeMin, now),
 			operatorUsername: bl.operator?.username ?? null,
 			legacy: true
 		};

@@ -1,4 +1,5 @@
 import { redirect } from '@sveltejs/kit';
+import { isCureComplete, cureRemainingMin } from '$lib/server/manufacturing/cure-time';
 import {
 	connectDB, WaxFillingRun, ReagentBatchRecord, CartridgeRecord,
 	BackingLot, LaserCutBatch, Consumable, LotRecord, ManufacturingSettings,
@@ -179,8 +180,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 			status: bl.status ?? 'in_oven',
 			ovenLocationName: bl.ovenLocationName ?? null,
 			elapsedMin: Math.floor(elapsedMin),
-			remainingMin: Math.max(0, Math.ceil(minOvenTimeMin - elapsedMin)),
-			isReady: elapsedMin >= minOvenTimeMin,
+			remainingMin: cureRemainingMin(bl.ovenEntryTime, minOvenTimeMin),
+			isReady: isCureComplete(bl.ovenEntryTime, minOvenTimeMin),
 			operatorUsername: bl.operator?.username ?? null
 		};
 	});

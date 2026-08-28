@@ -1,4 +1,5 @@
 import { redirect, fail } from '@sveltejs/kit';
+import { isCureComplete } from '$lib/server/manufacturing/cure-time';
 import mongoose from 'mongoose';
 import {
 	connectDB, WaxFillingRun, CartridgeRecord, Consumable, ManufacturingSettings, generateId,
@@ -326,7 +327,7 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 		let backedReadyCount = 0;
 		for (const c of backedCartsRaw as any[]) {
 			const entry = c.backing?.ovenEntryTime ? new Date(c.backing.ovenEntryTime).getTime() : 0;
-			const isReady = entry > 0 && (now - entry) / 60000 >= minOvenTimeMin;
+			const isReady = isCureComplete(c.backing?.ovenEntryTime, minOvenTimeMin, now);
 			if (isReady) backedReadyCount++;
 			const key = c.backing?.ovenLocationId ?? 'unknown';
 			const g = ovenGroupMap.get(key) ?? {
@@ -834,6 +835,10 @@ export const actions: Actions = {
 				// Idempotent retry: already stamped onto this run by a prior submit
 				if (c.status === 'wax_filling' && c.waxFilling?.runId === runId) continue;
 				if (c.status !== 'backing') { wrongStatus.push({ id: cid, status: c.status ?? '(none)' }); continue; }
+				// CURE-TIME GATE SUSPENDED 2026-08-28 (operator decision). Nothing
+				// blocks on oven time any more; the shortfall is still MEASURED so it
+				// lands in the audit trail and so reinstating the gate is a one-line
+				// change (turn the `underTime` list back into a fail()).
 				const entry = c.backing?.ovenEntryTime ? new Date(c.backing.ovenEntryTime).getTime() : 0;
 				const elapsedMin = entry ? (now.getTime() - entry) / 60000 : 0;
 				if (!entry || elapsedMin < minOvenTimeMin) {
@@ -879,35 +884,29 @@ export const actions: Actions = {
 			if (wrongStatus.length > 0) {
 				return fail(400, { error: `Cartridge(s) not available for wax filling: ${wrongStatus.map((w) => `${w.id} (${w.status})`).join(', ')}.` });
 			}
-			if (underTime.length > 0 && !testMode) {
-				if (override) {
-					const verified = await verifyAdminOverride(adminUser, adminPass);
-					if (!verified.ok) {
-						return fail(403, { error: verified.error, requiresOverride: true });
-					}
+			// Oven cure time is NO LONGER ENFORCED (2026-08-28, operator: "completely
+			// abolish the heating/oven timing requirement for wax carts — we might
+			// reinstate it later"). Previously this refused the deck load and offered
+			// an admin override; carts backed minutes earlier could not be filled.
+			// The shortfall is still recorded on the run and in the audit log, so the
+			// data to reinstate the gate (and to see how often it would have fired)
+			// keeps accruing. To bring it back: return fail() here again — the client
+			// already handles `requiresOverride` and the admin re-auth modal is intact.
+			if (underTime.length > 0) {
+				const worst = Math.max(...underTime.map((u) => u.remainingMin));
+				console.log(`[loadDeck] cure-time gate suspended — proceeding with ${underTime.length} cartridge(s) under ${minOvenTimeMin} min (worst ${worst} min short)`);
+				try {
 					await AuditLog.create({
 						_id: generateId(),
 						tableName: 'cartridge_records',
 						recordId: runId,
 						action: 'UPDATE',
-						changedBy: verified.user.username,
+						changedBy: locals.user.username,
 						changedAt: now,
-						reason: `Wax cure time override by admin — ${underTime.length} cartridge(s) under ${minOvenTimeMin} min`,
-						newData: {
-							override: true,
-							operatorUsername: locals.user.username,
-							adminUsername: verified.user.username,
-							minOvenTimeMin,
-							cartridges: underTime
-						}
+						reason: `Cure-time gate suspended — ${underTime.length} cartridge(s) loaded under the ${minOvenTimeMin} min oven time (worst ${worst} min short)`,
+						newData: { cureGateSuspended: true, minOvenTimeMin, cartridges: underTime }
 					});
-				} else {
-					const worst = Math.max(...underTime.map((u) => u.remainingMin));
-					return fail(400, {
-						error: `${underTime.length} cartridge(s) have not finished the ${minOvenTimeMin} min oven time (up to ${worst} min remaining). Wait, or get an admin to override.`,
-						requiresOverride: true
-					});
-				}
+				} catch { /* never block the load on the note */ }
 			}
 
 			const ops = cartridgeIds.map((cid: string, idx: number) => ({

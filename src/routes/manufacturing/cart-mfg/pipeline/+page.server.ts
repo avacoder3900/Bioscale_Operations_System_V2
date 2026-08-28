@@ -9,6 +9,7 @@
  * `extra` map on each row.
  */
 import { redirect } from '@sveltejs/kit';
+import { isCureComplete, cureRemainingMin } from '$lib/server/manufacturing/cure-time';
 import {
 	connectDB, BackingLot, WaxFillingRun, ReagentBatchRecord, CartridgeRecord,
 	Equipment, ManufacturingSettings
@@ -162,7 +163,7 @@ async function loadBacking(now: Date, checkedOutIds: string[]): Promise<Pipeline
 	const batchRows: PipelineRow[] = groups.map((g: any) => {
 		const lotId = String(g._id ?? 'unknown');
 		const elapsed = ageMin(g.oldestEntry, now);
-		const ready = elapsed != null && elapsed >= minOvenMin;
+		const ready = isCureComplete(g.oldestEntry, minOvenMin, now.getTime());
 		return {
 			id: lotId,
 			idLabel: shortId(lotId, 12),
