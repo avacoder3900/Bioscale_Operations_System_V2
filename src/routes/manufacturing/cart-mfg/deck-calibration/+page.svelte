@@ -1194,18 +1194,17 @@
 <div class="mx-auto max-w-[1400px] space-y-4 overflow-x-clip p-4">
 	<div class="flex flex-wrap items-center justify-between gap-3">
 		<div>
-			<div class="flex items-center gap-3">
-				<h1 class="text-2xl font-bold" style="color: var(--color-tron-cyan)">Deck Calibration Studio</h1>
-				<a href="/manufacturing/cart-mfg/deck-calibration/barcode-positions"
-					class="rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 px-3 py-1.5 text-xs font-medium text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/20 transition-colors">
-					Teach barcode positions →
-				</a>
-			</div>
+			<h1 class="text-2xl font-bold" style="color: var(--color-tron-cyan)">Deck Calibration Studio</h1>
 			<p class="text-xs" style="color: var(--color-tron-text-secondary)">
 				Jog to a hole, capture the real offset, select a group of holes, apply it. Corrections persist in BIMS and reach the robot on Sync.
 			</p>
 		</div>
-		<a href="/manufacturing/cart-mfg/deck-tuner" class="rounded border border-[var(--color-tron-border)] px-3 py-1.5 text-xs hover:border-[var(--color-tron-cyan)]" style="color: var(--color-tron-text)">Text tuner →</a>
+		<!-- Text tuner (deck-tuner, CALIB-1) deleted 2026-08-28: superseded by this
+		     Studio since June; no recorded usage. -->
+		<a href="/manufacturing/cart-mfg/deck-calibration/barcode-positions"
+			class="rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 px-3 py-1.5 text-xs font-medium text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/20 transition-colors">
+			Teach barcode positions →
+		</a>
 	</div>
 
 	<!-- Pickers -->
