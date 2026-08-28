@@ -1219,7 +1219,7 @@
 
 	<div class="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_340px]">
 		<!-- Canvas -->
-		<section class="min-w-0 rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3">
+		<section class="flex min-w-0 flex-col rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3">
 			<div class="mb-2 flex flex-wrap items-center justify-between gap-2">
 				<div class="flex flex-wrap items-center gap-3">
 					<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">{kind === 'deck' ? 'Deck' : kind === 'tube' ? 'Tube rack' : 'Tip rack'} — {selCount} selected</h2>
@@ -1250,9 +1250,13 @@
 				</div>
 			</div>
 			<p class="mb-2 text-[11px]" style="color: var(--color-tron-text-secondary)">Drag a box to select a group (Shift adds). Click a hole to toggle. Wax holes are amber, reagent blue; the toggle restricts which you can select. Esc clears everything.</p>
-			<div class="overflow-auto rounded border border-[var(--color-tron-border)] bg-black/40" style="max-height: 85vh;">
+			<!-- The canvas box grows to fill the section (2026-08-28) so the deck no
+			     longer leaves dead space when the right rail is taller, and the
+			     graphic sits centred in whatever room it has. `safe center` keeps
+			     the top-left reachable if a zoomed deck overflows the box. -->
+			<div class="flex-1 overflow-auto rounded border border-[var(--color-tron-border)] bg-black/40" style="max-height: 85vh; display: flex; align-items: safe center; justify-content: safe center;">
 				{#if wells.length}
-				<div style={`width:${zoom * 100}%;`}>
+				<div style={`width:${zoom * 100}%; flex: 0 0 auto;`}>
 					<svg
 						bind:this={svgEl}
 						width="100%"
