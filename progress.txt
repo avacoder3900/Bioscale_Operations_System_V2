@@ -10509,3 +10509,27 @@ npm run check: 19 errors repo-wide (pre-existing), 0 in touched file.
 Deployment: production — Vercel auto-deploy from master push
 Source: branch master @ this commit
 What this deployment is for: reagent cart scanning flows at wedge-scanner speed; validation is one query.
+
+================================================================================
+2026-08-28 — master — wax-filling UI cleanup: run-wizard-only page; barcode teaching under Deck Calibration
+================================================================================
+Operator-directed stale-UI pass on /manufacturing/cart-mfg/wax-filling (had 5 tabs):
+(1) Oven Queue deleted — abandoned melt-tracker (code untouched since 2026-05-20; no PT-CT-114 lot
+ever got a waxMelt record; no melt audit entries; nothing consumed its ready state).
+(2) Settings kept, renamed "Wax Fill Params", pruned to the five live fields (minOvenTimeMin,
+runDurationMin, removeDeckWarningMin, waxPerCartridgeUl, waxFillDeadVolumeUl) + wax rejection
+reasons; dead fields from retired cooling/QC/storage stages removed from the page (doc values left
+in Mongo, harmless).
+(3) Teach Positions tab removed; scanner-position teaching physically moved:
+deck-calibration/scanner-positions/[setId] (was opentron-control/settings/scanner-positions/[setId],
+old URL now 404s) + new deck-calibration/barcode-positions page (set list + create). Deck
+Calibration Studio header has a "Teach barcode positions →" button. opentron-control/settings hub
+kept as read-only mirrors + link.
+(4) Equipment tab + orphaned wax-filling/equipment route deleted.
+(5) Tab bar removed entirely — the wax-filling page is the run wizard; "⚙ Wax Fill Params" link
+top-right.
+npm run check: 19 errors repo-wide (pre-existing), 0 in touched routes.
+
+Deployment: production — Vercel auto-deploy from master push
+Source: branch master @ this commit
+What this deployment is for: wax filling is one page again; calibration-adjacent teaching lives with deck calibration.
