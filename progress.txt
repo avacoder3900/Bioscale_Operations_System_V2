@@ -10537,3 +10537,15 @@ What this deployment is for: wax filling is one page again; calibration-adjacent
 2026-08-28 (cont.) — deck-tuner (text nudger, CALIB-1) deleted: superseded by the Studio since June,
 no recorded usage, only reference was the Studio header link. "Teach barcode positions →" now sits
 right-aligned in that header slot. npm check: 19 errors (pre-existing baseline).
+
+2026-08-28 (cont.) — Deck Calibration Studio stale-UI pass. DELETED: Robot global offset panel +
+saveRobotOffset action (offset layer retired 08-19; panel could only store zeros and advertised the
+deck-swap workflow behind the B14/R04 incidents — RobotDeckOffset rows and model left intact for a
+possible future revisit; frame delta between robots is NOT a pure translation, ~1.6mm x / 2.4mm y),
+and the "Re-baseline ALL 576 holes" button + rebaselineDeck() (one-click whole-deck move on sticky
+offsets; named in the July corruption postmortem; real whole-deck moves have always been scripted
+with backups). KEPT per operator: Shift whole grid (role-scoped), Set position, Align-to-anchor,
+and the mount Left/Right switch (still drives the maintenance-run mount, Z jog axis and tip-cal
+probe — only mount-based tip-type inference was deprecated). Noted minor redundancy left in place:
+the leftZ/rightZ dropdown is auto-set by the mount switch.
+npm run check: 19 errors (pre-existing baseline).
