@@ -10562,3 +10562,7 @@ Jog/Tip, where Tour/Fill was) and Tour / Fill motion moved into the under-canvas
 the capture→apply loop belongs next to the jog controls; the tour/fill driver benefits from the wider
 slot. Markup-only. npm check now 11 errors (the earlier 19 included @xyflow/svelte resolution
 failures that cleared once the dep was installed locally); build clean.
+
+2026-08-28 (cont.) — Studio canvas fills its section (flex column + flex-1 box, SVG centred with
+`safe center`), removing the dead band under the deck graphic when the right rail is taller. Zoom
+wrapper pinned flex:0 0 auto so zoom behaviour is unchanged. Markup/CSS only; build clean.
