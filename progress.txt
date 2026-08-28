@@ -10468,3 +10468,26 @@ What this deployment is for: a reagent run can no longer dispense with a junk pr
 All three robots now run the guarded reagent .py (28 RTPs). Reminder: B14's calibrator fixture is
 taught to the robot-arm deck (294.88/79.24, zCalReagent 23.85) — re-teach before any real B14
 reagent fill; the new guard turns that misconfiguration into a NO TIP prompt instead of junk motion.
+
+================================================================================
+2026-08-28 — master — wax cart advancement: run completion = wax_filled; smart abort; untracked-fill guard
+================================================================================
+Investigation of "carts intermittently not marked wax filled" found it systemic, four silent paths:
+(1) every wax run since 08-26 had cartridgeIds:[] AND no deckId — startRun allowed starting without a
+scan, so the robot filled carts no record pointed at; (2) cancel/abort reverted physically-filled
+carts to backing (e.g. 08-18 runs: 17 filled carts -> backing); (3) advancement only ever happened in
+storeDeckAndComplete ("Confirm Deck Removed" + fridge) — unclicked = 34 carts parked at wax_filling;
+(4) the status-filtered bulk update silently skipped carts (gIUsDWCc: 16 of 24 stamped).
+Operator decision: the ceremony is gone — a clean completion is the commit. Built: auto-advance in
+recordRunFinished (succeeded -> waxFilling stamp + PT-CT-105 + run completed); load-time self-heal
+for browser-closed completions; SMART ABORT (robot command log -> per-cart dispensed-well counts vs
+row-pattern expectation; fully-filled carts advance, rest revert); startRun untracked-fill guard with
+explicit audited "Test fill — no cartridges tracked" checkbox (calibration runs stay possible).
+cartridgeIds[i] = deck position i+1 (slot-ordered scans) is the smart-abort mapping assumption.
+NOT done (operator declined): stale-cart sweep/dashboard; skip-report on partial stamps. The 34
+stuck wax_filling carts from old runs remain — disposition list available on request.
+npm run check: 19 errors repo-wide (pre-existing upstream), 0 in touched files.
+
+Deployment: production — Vercel auto-deploy from master push
+Source: branch master @ this commit
+What this deployment is for: carts can no longer be silently lost between wax filling and wax filled.
