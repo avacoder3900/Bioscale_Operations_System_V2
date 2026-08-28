@@ -655,7 +655,16 @@
 	// Capture the protocol + params chosen at the params step (before scanning).
 	// The panel hands us the exact FormData it would have submitted to ?/startRun;
 	// we replay it after a clean scan so the run starts with those values.
+	/**
+	 * Explicit escape hatch for calibration/tuning fills with nothing scanned:
+	 * startRun now refuses a run with no deck/cartridges unless this is ticked
+	 * (untracked fills were silently producing carts that could never be marked
+	 * wax_filled). Posted as testFillNoCartridges on startRun.
+	 */
+	let testFillNoCarts = $state(false);
+
 	function handleParamsConfirmed(fd: FormData) {
+		if (testFillNoCarts) fd.set('testFillNoCartridges', 'true');
 		capturedParamsFd = fd;
 		paramsReady = true; // advances the substage to barcode scanning (deck_load)
 	}
@@ -1155,7 +1164,11 @@
 				</div>
 
 				{#if !isPreviewOrPast && data.opentronsRobotId && data.robotProtocols}
-					<ProtocolStartPanel
+									<label class="mb-2 flex items-center gap-2 text-xs text-[var(--color-tron-text-secondary)]">
+					<input type="checkbox" bind:checked={testFillNoCarts} class="accent-amber-400" />
+					Test fill — no cartridges tracked (calibration/tuning only; nothing will be marked wax filled)
+				</label>
+				<ProtocolStartPanel
 						robot={{ _id: data.opentronsRobotId, name: data.robotName }}
 						protocols={data.robotProtocols}
 						contextValues={{ ...WAX_PARAM_DEFAULTS, cartridges: data.runState.plannedCartridgeCount ?? 24 }}
@@ -1163,7 +1176,7 @@
 						lastTipState={data.lastTipState}
 						submitting={submitting}
 						formAction="?/startRun"
-						extraHidden={{ runId: data.runState.runId ?? '' }}
+						extraHidden={{ runId: data.runState.runId ?? '', ...(testFillNoCarts ? { testFillNoCartridges: 'true' } : {}) }}
 						autoStart={autoStartPending}
 						onAutoStarted={() => (autoStartPending = false)}
 					/>
@@ -1192,7 +1205,11 @@
 							Configure the run now. After you continue, scanning the deck + cartridges starts the run automatically with these values — you can walk away.
 						</p>
 					</div>
-					<ProtocolStartPanel
+									<label class="mb-2 flex items-center gap-2 text-xs text-[var(--color-tron-text-secondary)]">
+					<input type="checkbox" bind:checked={testFillNoCarts} class="accent-amber-400" />
+					Test fill — no cartridges tracked (calibration/tuning only; nothing will be marked wax filled)
+				</label>
+				<ProtocolStartPanel
 						robot={{ _id: data.opentronsRobotId, name: data.robotName }}
 						protocols={data.robotProtocols}
 						contextValues={{ ...WAX_PARAM_DEFAULTS, cartridges: data.runState.plannedCartridgeCount ?? 24 }}
@@ -1200,7 +1217,7 @@
 						lastTipState={data.lastTipState}
 						submitting={submitting}
 						formAction="?/startRun"
-						extraHidden={{ runId: data.runState.runId ?? '' }}
+						extraHidden={{ runId: data.runState.runId ?? '', ...(testFillNoCarts ? { testFillNoCartridges: 'true' } : {}) }}
 						submitLabel="Save & continue to barcode scan →"
 						onSubmitIntercept={handleParamsConfirmed}
 					/>
@@ -1262,7 +1279,11 @@
 						</div>
 					{/if}
 
-					<ProtocolStartPanel
+									<label class="mb-2 flex items-center gap-2 text-xs text-[var(--color-tron-text-secondary)]">
+					<input type="checkbox" bind:checked={testFillNoCarts} class="accent-amber-400" />
+					Test fill — no cartridges tracked (calibration/tuning only; nothing will be marked wax filled)
+				</label>
+				<ProtocolStartPanel
 						robot={{ _id: data.opentronsRobotId, name: data.robotName }}
 						protocols={data.robotProtocols}
 						contextValues={{ ...WAX_PARAM_DEFAULTS, cartridges: data.runState.plannedCartridgeCount ?? 24 }}
@@ -1270,7 +1291,7 @@
 						lastTipState={data.lastTipState}
 						submitting={submitting || orchestrating}
 						formAction="?/startRun"
-						extraHidden={{ runId: data.runState.runId ?? '' }}
+						extraHidden={{ runId: data.runState.runId ?? '', ...(testFillNoCarts ? { testFillNoCartridges: 'true' } : {}) }}
 						onSubmitIntercept={handleScanAndStart}
 					/>
 				</div>
@@ -1310,15 +1331,16 @@
 					robotId={data.opentronsRobotId}
 					robotName={data.robotName}
 					opentronsRunId={data.runState.opentronsRunId}
-					onComplete={(status) => {
-						// Stamp pipetteTipState.after + consumed onto the wax run.
-						// Wax status stays 'Running' until the operator confirms
-						// deck removal via the RunExecution component below.
+					onComplete={async (status) => {
+						// Stamp pipetteTipState.after + consumed. A clean completion
+						// ALSO auto-advances every cart to wax_filled and completes
+						// the run server-side (2026-08-28) — no deck-removed step.
 						runFinishedLocal = true;
-						submitAction('recordRunFinished', {
+						await submitAction('recordRunFinished', {
 							runId: data.runState.runId ?? '',
 							finalStatus: status
 						});
+						if (status === 'succeeded') await invalidateAll();
 					}}
 				/>
 				{#if !runFinishedLocal}

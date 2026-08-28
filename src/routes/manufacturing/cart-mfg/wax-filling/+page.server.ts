@@ -192,7 +192,33 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 				processType: r.processType ?? 'wax', sortOrder: r.sortOrder ?? i
 			}));
 
-		const run = activeWaxRun as any;
+		let run = activeWaxRun as any;
+		// SELF-HEAL (2026-08-28): if the robot finished cleanly while nobody had
+		// the page open, advance + complete on the next visit — the carts must
+		// not depend on a browser tab having been alive at the moment the run
+		// ended. Best-effort; failures leave the run for the normal flow.
+		if (run && run.status === 'Running' && run.opentronsRunId && !run.opentronsRunFinalStatus) {
+			try {
+				const rRobot = await getRobot(run.robot?._id);
+				if (rRobot) {
+					const rs = await robotGet(rRobot, `/runs/${run.opentronsRunId}`);
+					if (rs.ok) {
+						const st = ((await rs.json())?.data?.status ?? '').toLowerCase();
+						if (st === 'succeeded') {
+							const user = { _id: locals.user!._id, username: locals.user!.username };
+							await advanceCartsToWaxFilled(run, run.cartridgeIds ?? [], user, 'run-complete auto-advance (load reconcile)');
+							await WaxFillingRun.findByIdAndUpdate(run._id, {
+								$set: { status: 'completed', opentronsRunFinalStatus: 'succeeded', robotReleasedAt: new Date(), runEndTime: new Date() }
+							});
+							run = null; // page renders idle — run is done
+						}
+					}
+				}
+			} catch (e) {
+				console.error('[wax load] run reconcile failed:', e instanceof Error ? e.message : e);
+			}
+		}
+
 		const stage = run ? toStage(run.status) : null;
 
 		// Existing wax_run note body, if the operator has already saved one on
@@ -458,6 +484,128 @@ async function stopRobotRun(run: any): Promise<string | null> {
 	} catch (e) {
 		return `Couldn't reach the robot to stop the run (${e instanceof Error ? e.message : 'unknown'}) — confirm on the device.`;
 	}
+}
+
+
+/**
+ * Flip a run's carts wax_filling → wax_filled with the full waxFilling phase
+ * stamp + PT-CT-105 consumption. Shared by: auto-advance on a clean run
+ * completion, the smart abort (advance only the carts the robot actually
+ * finished), and the legacy storeDeckAndComplete action.
+ * Returns { advanced, skipped } — skipped = locked carts or carts whose status
+ * was no longer wax_filling.
+ */
+async function advanceCartsToWaxFilled(
+	run: any,
+	cartIds: string[],
+	user: { _id: string; username: string },
+	via: string
+): Promise<{ advanced: number; skipped: number }> {
+	if (!cartIds?.length) return { advanced: 0, skipped: 0 };
+	const now = new Date();
+	const { safeIds } = await protectLockedCarts(cartIds, via, String(run._id), user);
+	let advanced = 0;
+	if (safeIds.length > 0) {
+		const bulkOps = safeIds.map((cid: string) => ({
+			updateOne: {
+				filter: { _id: cid, status: 'wax_filling' },
+				update: {
+					$set: {
+						'waxFilling.runId': run._id,
+						'waxFilling.robotId': run.robot?._id,
+						'waxFilling.robotName': run.robot?.name,
+						'waxFilling.deckId': run.deckId,
+						'waxFilling.waxTubeId': run.waxTubeId,
+						'waxFilling.waxSourceLot': run.waxSourceLot,
+						'waxFilling.operator': run.operator,
+						'waxFilling.runStartTime': run.runStartTime,
+						'waxFilling.runEndTime': now,
+						'waxFilling.recordedAt': now,
+						status: 'wax_filled'
+					}
+				}
+			}
+		}));
+		const res = await CartridgeRecord.bulkWrite(bulkOps);
+		advanced = res.modifiedCount ?? 0;
+		try {
+			const waxPartId = await resolvePartId('PT-CT-105');
+			for (const cid of safeIds) {
+				await recordTransaction({
+					transactionType: 'consumption',
+					partDefinitionId: waxPartId ?? undefined,
+					cartridgeRecordId: cid,
+					lotId: run.waxSourceLot ?? undefined,
+					quantity: 1,
+					manufacturingStep: 'wax_filling',
+					manufacturingRunId: String(run._id),
+					operatorId: run.operator?._id,
+					operatorUsername: run.operator?.username,
+					notes: `Wax-filled cartridge (${via}) in run ${run._id}`
+				});
+			}
+		} catch (e) {
+			console.error(`[${via}] consumption recordTransaction failed:`, e instanceof Error ? e.message : e);
+		}
+	}
+	const skipped = cartIds.length - advanced;
+	try {
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'cartridge_records',
+			recordId: String(run._id),
+			action: 'UPDATE',
+			changedBy: user.username,
+			changedAt: now,
+			newData: { via, cartridgeStatus: 'wax_filled', advanced, skipped, cartIds }
+		});
+	} catch { /* non-fatal */ }
+	return { advanced, skipped };
+}
+
+/**
+ * Which of the run's carts did the robot actually FINISH filling? Parsed from
+ * the run's own command log ("Dispensed …uL into well X2" comments). A cart
+ * counts as filled only when every well its row-pattern selection expects got a
+ * dispense — partially-filled carts are NOT counted (they go back to backing on
+ * an abort; scrap-or-keep is the operator's call at QC).
+ * cartridgeIds[i] is deck position i+1 (the scan stores slot order).
+ */
+async function cartsFilledPerRobotLog(robot: any, opentronsRunId: string, run: any): Promise<Set<number>> {
+	const filled = new Set<number>();
+	const wellsPerCart = new Map<number, Set<string>>();
+	let cursor = 0;
+	for (let page = 0; page < 5; page++) {
+		const res = await robotGet(robot, `/runs/${opentronsRunId}/commands?cursor=${cursor}&pageLength=999`);
+		if (!res.ok) break;
+		const body = await res.json();
+		const cmds = (body.data ?? []) as Array<{ commandType: string; params?: { message?: string } }>;
+		for (const c of cmds) {
+			if (c.commandType !== 'comment') continue;
+			const m = c.params?.message?.match(/Dispensed [\d.]+uL into well ([A-X])(\d+)/);
+			if (!m) continue;
+			const row = m[1];
+			const col = parseInt(m[2], 10);
+			// carrier from column (wax = even cols 2-24), cart row-band from letter.
+			const carrier = Math.floor((col - 1) / 8); // 0,1,2
+			const band = Math.floor('XWVUTSRQPONMLKJIHGFEDCBA'.indexOf(row) / 3); // 0..7 (X,W,V=0 … C,B,A=7)
+			const cart = carrier * 8 + band + 1; // 1..24
+			if (!wellsPerCart.has(cart)) wellsPerCart.set(cart, new Set());
+			wellsPerCart.get(cart)!.add(row + col);
+		}
+		const total = body?.meta?.totalLength ?? 0;
+		cursor += cmds.length;
+		if (cursor >= total || cmds.length === 0) break;
+	}
+	// Expected wells per cart: 4 wax columns × the active row patterns (default 3).
+	const pp = run.protocolParameters ?? {};
+	const patterns = ['row_pattern_0', 'row_pattern_1', 'row_pattern_2']
+		.filter((k) => pp[k] !== false).length || 3;
+	const expected = 4 * patterns;
+	for (const [cart, wells] of wellsPerCart) {
+		if (wells.size >= expected) filled.add(cart);
+	}
+	return filled;
 }
 
 export const actions: Actions = {
@@ -849,6 +997,29 @@ export const actions: Actions = {
 		const robotId = run.robot?._id;
 		if (!robotId) return fail(400, { error: 'Wax run has no robot assigned' });
 
+		// UNTRACKED-FILL GUARD (2026-08-28). Runs were starting with no scanned
+		// deck and no cartridgeIds — the robot filled real carts that no record
+		// ever pointed at, so nothing could mark them wax_filled. A run may only
+		// start without them as an EXPLICIT test fill (calibration/tuning).
+		const testFill = data.get('testFillNoCartridges')?.toString() === 'true';
+		if (!testFill && (!run.deckId || !(run.cartridgeIds?.length))) {
+			return fail(400, {
+				error:
+					'This run has no scanned deck/cartridges — starting now would fill carts no record points at ' +
+					'(they could never be marked wax filled). Scan the deck + cartridges first, or tick ' +
+					'"Test fill — no cartridges tracked" if this is a calibration run.'
+			});
+		}
+		if (testFill && !(run.cartridgeIds?.length)) {
+			try {
+				await AuditLog.create({
+					_id: generateId(), tableName: 'wax_filling_runs', recordId: runId, action: 'UPDATE',
+					changedBy: locals.user?.username, changedAt: new Date(),
+					newData: { testFillNoCartridges: true, note: 'explicit untracked test fill' }
+				});
+			} catch { /* non-fatal */ }
+		}
+
 		const robot = await getRobot(robotId);
 		if (!robot) return fail(404, { error: `Robot ${robotId} not found / not active` });
 
@@ -1173,7 +1344,22 @@ export const actions: Actions = {
 			}
 		});
 
-		return { success: true, consumed, nextTipIndex: finalIndex };
+		// AUTO-ADVANCE (2026-08-28): a run that completes with no cancellation IS
+		// the statement that every cart on it got wax. No deck-removed / fridge
+		// ceremony — flip the whole run to wax_filled and complete it right here.
+		// Stopped/failed runs are left for cancel/abort (smart abort advances only
+		// the carts the robot log proves were finished).
+		let advanced = 0;
+		if (finalStatus === 'succeeded') {
+			const user = { _id: locals.user!._id, username: locals.user!.username };
+			const r = await advanceCartsToWaxFilled(run, run.cartridgeIds ?? [], user, 'run-complete auto-advance');
+			advanced = r.advanced;
+			await WaxFillingRun.findByIdAndUpdate(runId, {
+				$set: { status: 'completed', robotReleasedAt: now, runEndTime: now }
+			});
+		}
+
+		return { success: true, consumed, nextTipIndex: finalIndex, advanced, autoCompleted: finalStatus === 'succeeded' };
 	},
 
 
@@ -1404,7 +1590,7 @@ export const actions: Actions = {
 			return fail(400, { error: 'Cannot cancel: the OT-2 has already completed this run. Reject individual cartridges at QC instead.' });
 		}
 
-		const runBeforeCancel = await WaxFillingRun.findById(runId).select('cartridgeIds opentronsRunId robot').lean() as any;
+		const runBeforeCancel = await WaxFillingRun.findById(runId).select('cartridgeIds opentronsRunId robot deckId waxTubeId waxSourceLot operator runStartTime protocolParameters').lean() as any;
 		const cancelScannedIds: string[] = (runBeforeCancel?.cartridgeIds ?? []) as string[];
 
 		// Actually halt the OT-2 first — otherwise the robot keeps running.
@@ -1413,6 +1599,25 @@ export const actions: Actions = {
 		await WaxFillingRun.findByIdAndUpdate(runId, {
 			$set: { status: 'aborted', abortReason: reason, runEndTime: now }
 		});
+
+		// SMART ABORT (2026-08-28): the robot's own log proves which carts it
+		// finished before the stop — mark THOSE wax_filled instead of reverting
+		// real fills to backing. Only fully-filled carts count.
+		if (cancelScannedIds.length > 0 && runBeforeCancel?.opentronsRunId) {
+			try {
+				const cRobot = await getRobot(runBeforeCancel.robot?._id);
+				if (cRobot) {
+					const filled = await cartsFilledPerRobotLog(cRobot, runBeforeCancel.opentronsRunId, runBeforeCancel);
+					const filledIds = [...filled].map((n) => cancelScannedIds[n - 1]).filter(Boolean);
+					if (filledIds.length > 0) {
+						const r = await advanceCartsToWaxFilled(runBeforeCancel, filledIds, { _id: locals.user!._id, username: locals.user!.username }, 'smart-abort (cancel)');
+						console.log(`[cancelRun] smart abort: ${r.advanced} filled cart(s) marked wax_filled before revert`);
+					}
+				}
+			} catch (e) {
+				console.error('[cancelRun] smart abort check failed (reverting all):', e instanceof Error ? e.message : e);
+			}
+		}
 
 		// Cartridges scanned onto the deck never actually got wax-filled.
 		// WI-01-originated carts go back to 'backing' (the operator returns
@@ -1470,7 +1675,7 @@ export const actions: Actions = {
 			return fail(400, { error: 'Cannot abort: the OT-2 has already completed this run. Reject individual cartridges at QC instead.' });
 		}
 
-		const runBeforeAbort = await WaxFillingRun.findById(runId).select('cartridgeIds opentronsRunId robot').lean() as any;
+		const runBeforeAbort = await WaxFillingRun.findById(runId).select('cartridgeIds opentronsRunId robot deckId waxTubeId waxSourceLot operator runStartTime protocolParameters').lean() as any;
 		const abortScannedIds: string[] = (runBeforeAbort?.cartridgeIds ?? []) as string[];
 
 		// Actually halt the OT-2 first — otherwise the robot keeps running.
@@ -1479,6 +1684,24 @@ export const actions: Actions = {
 		await WaxFillingRun.findByIdAndUpdate(runId, {
 			$set: { status: 'aborted', abortReason: reason, runEndTime: now }
 		});
+
+		// SMART ABORT — see cancelRun: robot-proven filled carts advance instead
+		// of reverting to backing.
+		if (abortScannedIds.length > 0 && runBeforeAbort?.opentronsRunId) {
+			try {
+				const aRobot = await getRobot(runBeforeAbort.robot?._id);
+				if (aRobot) {
+					const filled = await cartsFilledPerRobotLog(aRobot, runBeforeAbort.opentronsRunId, runBeforeAbort);
+					const filledIds = [...filled].map((n) => abortScannedIds[n - 1]).filter(Boolean);
+					if (filledIds.length > 0) {
+						const r = await advanceCartsToWaxFilled(runBeforeAbort, filledIds, { _id: locals.user!._id, username: locals.user!.username }, 'smart-abort');
+						console.log(`[abortRun] smart abort: ${r.advanced} filled cart(s) marked wax_filled before revert`);
+					}
+				}
+			} catch (e) {
+				console.error('[abortRun] smart abort check failed (reverting all):', e instanceof Error ? e.message : e);
+			}
+		}
 
 		// Same revert semantics as cancelRun — see comment there.
 		if (abortScannedIds.length > 0) {
