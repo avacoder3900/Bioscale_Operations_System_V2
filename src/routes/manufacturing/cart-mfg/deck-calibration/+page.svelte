@@ -1586,54 +1586,6 @@
 			</section>
 
 			<!-- Offset + Apply -->
-			<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3">
-				<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Offset → selection</h2>
-				<div class="mt-2 grid grid-cols-3 gap-2 text-xs" style="color: var(--color-tron-text-secondary)">
-					<label>dx <input type="number" step="0.01" bind:value={dx} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-1 font-mono" style="color: var(--color-tron-text)" /></label>
-					<label>dy <input type="number" step="0.01" bind:value={dy} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-1 font-mono" style="color: var(--color-tron-text)" /></label>
-					<label>dz <input type="number" step="0.01" bind:value={dz} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-1 font-mono" style="color: var(--color-tron-text)" /></label>
-				</div>
-				<button type="button" onclick={applyToSelection} disabled={busy || selCount === 0} class="mt-2 w-full rounded border border-green-500/50 bg-green-900/20 px-3 py-2 text-sm font-bold text-green-300 hover:bg-green-900/30 disabled:opacity-40">
-					Apply to {selCount} selected hole{selCount === 1 ? '' : 's'}
-				</button>
-				<button type="button" onclick={applyGlobalShift} disabled={busy} class="mt-2 w-full rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 px-3 py-2 text-xs font-semibold text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/20 disabled:opacity-40">
-					⤧ Shift whole grid by this offset {roleFilter !== 'all' ? `(${roleFilter} only)` : ''}
-				</button>
-				<p class="mt-1 text-[10px]" style="color: var(--color-tron-text-secondary)">Anchor: jog to one hole (e.g. a corner) → Capture → <strong>Shift whole grid</strong> translates every hole of the active role by that offset.</p>
-				<button type="button" onclick={undoLast} disabled={busy || undoStack.length === 0} class="mt-2 w-full rounded border border-amber-500/50 bg-amber-900/15 px-3 py-2 text-xs font-semibold text-amber-300 hover:bg-amber-900/25 disabled:opacity-40" title="Revert the last applied shift (offset, global, or set-position)">
-					↶ Undo last {undoStack.length ? `(${undoStack.length})` : ''}
-				</button>
-			</section>
-
-			<!-- Set absolute position (selection, anchor-translate) -->
-			<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3">
-				<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Set position → selection</h2>
-				<p class="mt-1 text-[10px]" style="color: var(--color-tron-text-secondary)">Type an EXACT x/y/z (deck mm) for the <strong>anchor</strong> hole — not a change. With several holes selected, the whole group translates by the same delta (relative spacing preserved). Prefilled with the anchor's current coords; edit and apply.</p>
-				<div class="mt-1 text-[10px] font-mono" style="color: var(--color-tron-text-secondary)">
-					{anchor ? `Anchor: ${anchor}${selCount > 1 ? ` (+${selCount - 1} more move with it)` : ''}` : 'Select one or more holes'}
-				</div>
-				<div class="mt-2 grid grid-cols-3 gap-2 text-xs" style="color: var(--color-tron-text-secondary)">
-					<label>x <input type="number" step="0.01" bind:value={setX} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-1 font-mono" style="color: var(--color-tron-text)" /></label>
-					<label>y <input type="number" step="0.01" bind:value={setY} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-1 font-mono" style="color: var(--color-tron-text)" /></label>
-					<label>z <input type="number" step="0.01" bind:value={setZ} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-1 font-mono" style="color: var(--color-tron-text)" /></label>
-				</div>
-				<button type="button" onclick={applyAbsolute} disabled={busy || selCount === 0} class="mt-2 w-full rounded border border-green-500/50 bg-green-900/20 px-3 py-2 text-sm font-bold text-green-300 hover:bg-green-900/30 disabled:opacity-40" title="Select one or more holes; the typed position sets the anchor and the group moves with it">
-					{selCount === 0 ? 'Select one or more holes' : selCount === 1 ? `Set ${anchor} to this position` : `Move ${selCount} holes (anchor ${anchor})`}
-				</button>
-			</section>
-
-			<!-- Align selection to the anchor hole (straighten every line) -->
-			<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3">
-				<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Align selection → anchor hole</h2>
-				<p class="mt-1 text-[10px]" style="color: var(--color-tron-text-secondary)">Fixes lines that are shifted relative to each other within a cartridge. Jog-verify ONE good hole, select the whole cartridge (box-drag), and click the good hole <strong>last</strong> so it's the anchor. Every selected {anchor ? roleOf(anchor) : ''} hole snaps onto a clean grid ruled by the anchor's row and line: X from the anchor's row, Y from the anchor's line. Z untouched. {anchor ? `${roleOf(anchor) === 'wax' ? 'Reagent' : 'Wax'} holes are staggered by design — align them separately with a ${roleOf(anchor) === 'wax' ? 'reagent' : 'wax'} anchor.` : ''}</p>
-				<div class="mt-1 text-[10px] font-mono" style="color: var(--color-tron-text-secondary)">
-					{anchor && selCount >= 2 ? `Anchor: ${anchor} (${roleOf(anchor)}) — ${selCount - 1} other hole(s) selected` : 'Select the cartridge, click the trusted hole last'}
-				</div>
-				<button type="button" onclick={alignSelectionToAnchor} disabled={busy || selCount < 2} class="mt-2 w-full rounded border border-cyan-500/50 bg-cyan-900/20 px-3 py-2 text-sm font-bold text-cyan-300 hover:bg-cyan-900/30 disabled:opacity-40" title="Straighten every line in the selection to the anchor hole's row + line (same hole type only; Z untouched)">
-					{selCount < 2 ? 'Select the cartridge + an anchor hole' : `⌗ Align ${selCount - 1} hole(s) to ${anchor}`}
-				</button>
-			</section>
-
 			<!-- Robot global offset panel DELETED 2026-08-28. The offset layer was
 			     retired on 08-19 (calibration-rtps forces 0,0,0 and saveRobotOffset
 			     refuses non-zero), so the panel could only ever write zeros while
@@ -1651,6 +1603,60 @@
 				<p class="mt-1 text-[10px]" style="color: var(--color-tron-text-secondary)">Re-uploads the protocol so the corrected deck reaches the OT-2. Needs the protocol .py stored in BIMS.</p>
 			</section>
 		</div>
+	</div>
+
+	<!-- Hole-edit tools. Moved out of the right rail (2026-08-28) into a 3-up row
+	     under the canvas: they were stacking into the tall empty gap beside the
+	     deck graphic, and they all act on the CURRENT SELECTION, so they belong
+	     with the grid rather than with the jog controls. -->
+	<div class="grid grid-cols-1 gap-4 lg:grid-cols-3">
+	<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3">
+		<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Offset → selection</h2>
+		<div class="mt-2 grid grid-cols-3 gap-2 text-xs" style="color: var(--color-tron-text-secondary)">
+			<label>dx <input type="number" step="0.01" bind:value={dx} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-1 font-mono" style="color: var(--color-tron-text)" /></label>
+			<label>dy <input type="number" step="0.01" bind:value={dy} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-1 font-mono" style="color: var(--color-tron-text)" /></label>
+			<label>dz <input type="number" step="0.01" bind:value={dz} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-1 font-mono" style="color: var(--color-tron-text)" /></label>
+		</div>
+		<button type="button" onclick={applyToSelection} disabled={busy || selCount === 0} class="mt-2 w-full rounded border border-green-500/50 bg-green-900/20 px-3 py-2 text-sm font-bold text-green-300 hover:bg-green-900/30 disabled:opacity-40">
+			Apply to {selCount} selected hole{selCount === 1 ? '' : 's'}
+		</button>
+		<button type="button" onclick={applyGlobalShift} disabled={busy} class="mt-2 w-full rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 px-3 py-2 text-xs font-semibold text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/20 disabled:opacity-40">
+			⤧ Shift whole grid by this offset {roleFilter !== 'all' ? `(${roleFilter} only)` : ''}
+		</button>
+		<p class="mt-1 text-[10px]" style="color: var(--color-tron-text-secondary)">Anchor: jog to one hole (e.g. a corner) → Capture → <strong>Shift whole grid</strong> translates every hole of the active role by that offset.</p>
+		<button type="button" onclick={undoLast} disabled={busy || undoStack.length === 0} class="mt-2 w-full rounded border border-amber-500/50 bg-amber-900/15 px-3 py-2 text-xs font-semibold text-amber-300 hover:bg-amber-900/25 disabled:opacity-40" title="Revert the last applied shift (offset, global, or set-position)">
+			↶ Undo last {undoStack.length ? `(${undoStack.length})` : ''}
+		</button>
+	</section>
+
+	<!-- Set absolute position (selection, anchor-translate) -->
+	<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3">
+		<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Set position → selection</h2>
+		<p class="mt-1 text-[10px]" style="color: var(--color-tron-text-secondary)">Type an EXACT x/y/z (deck mm) for the <strong>anchor</strong> hole — not a change. With several holes selected, the whole group translates by the same delta (relative spacing preserved). Prefilled with the anchor's current coords; edit and apply.</p>
+		<div class="mt-1 text-[10px] font-mono" style="color: var(--color-tron-text-secondary)">
+			{anchor ? `Anchor: ${anchor}${selCount > 1 ? ` (+${selCount - 1} more move with it)` : ''}` : 'Select one or more holes'}
+		</div>
+		<div class="mt-2 grid grid-cols-3 gap-2 text-xs" style="color: var(--color-tron-text-secondary)">
+			<label>x <input type="number" step="0.01" bind:value={setX} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-1 font-mono" style="color: var(--color-tron-text)" /></label>
+			<label>y <input type="number" step="0.01" bind:value={setY} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-1 font-mono" style="color: var(--color-tron-text)" /></label>
+			<label>z <input type="number" step="0.01" bind:value={setZ} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-1 font-mono" style="color: var(--color-tron-text)" /></label>
+		</div>
+		<button type="button" onclick={applyAbsolute} disabled={busy || selCount === 0} class="mt-2 w-full rounded border border-green-500/50 bg-green-900/20 px-3 py-2 text-sm font-bold text-green-300 hover:bg-green-900/30 disabled:opacity-40" title="Select one or more holes; the typed position sets the anchor and the group moves with it">
+			{selCount === 0 ? 'Select one or more holes' : selCount === 1 ? `Set ${anchor} to this position` : `Move ${selCount} holes (anchor ${anchor})`}
+		</button>
+	</section>
+
+	<!-- Align selection to the anchor hole (straighten every line) -->
+	<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3">
+		<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Align selection → anchor hole</h2>
+		<p class="mt-1 text-[10px]" style="color: var(--color-tron-text-secondary)">Fixes lines that are shifted relative to each other within a cartridge. Jog-verify ONE good hole, select the whole cartridge (box-drag), and click the good hole <strong>last</strong> so it's the anchor. Every selected {anchor ? roleOf(anchor) : ''} hole snaps onto a clean grid ruled by the anchor's row and line: X from the anchor's row, Y from the anchor's line. Z untouched. {anchor ? `${roleOf(anchor) === 'wax' ? 'Reagent' : 'Wax'} holes are staggered by design — align them separately with a ${roleOf(anchor) === 'wax' ? 'reagent' : 'wax'} anchor.` : ''}</p>
+		<div class="mt-1 text-[10px] font-mono" style="color: var(--color-tron-text-secondary)">
+			{anchor && selCount >= 2 ? `Anchor: ${anchor} (${roleOf(anchor)}) — ${selCount - 1} other hole(s) selected` : 'Select the cartridge, click the trusted hole last'}
+		</div>
+		<button type="button" onclick={alignSelectionToAnchor} disabled={busy || selCount < 2} class="mt-2 w-full rounded border border-cyan-500/50 bg-cyan-900/20 px-3 py-2 text-sm font-bold text-cyan-300 hover:bg-cyan-900/30 disabled:opacity-40" title="Straighten every line in the selection to the anchor hole's row + line (same hole type only; Z untouched)">
+			{selCount < 2 ? 'Select the cartridge + an anchor hole' : `⌗ Align ${selCount - 1} hole(s) to ${anchor}`}
+		</button>
+	</section>
 	</div>
 
 	<!-- History -->
