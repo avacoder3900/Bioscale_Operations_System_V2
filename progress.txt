@@ -10533,3 +10533,7 @@ npm run check: 19 errors repo-wide (pre-existing), 0 in touched routes.
 Deployment: production — Vercel auto-deploy from master push
 Source: branch master @ this commit
 What this deployment is for: wax filling is one page again; calibration-adjacent teaching lives with deck calibration.
+
+2026-08-28 (cont.) — deck-tuner (text nudger, CALIB-1) deleted: superseded by the Studio since June,
+no recorded usage, only reference was the Studio header link. "Teach barcode positions →" now sits
+right-aligned in that header slot. npm check: 19 errors (pre-existing baseline).
