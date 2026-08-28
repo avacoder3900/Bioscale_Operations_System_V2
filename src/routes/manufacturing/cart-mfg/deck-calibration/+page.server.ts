@@ -73,6 +73,9 @@ type CalHistoryEntry = {
 };
 type CalEntry = {
 	robotId: string;
+	/** Deck this fixture belongs to (2026-08-28 rekey); null on legacy rows. */
+	deckLoadName: string | null;
+	deckKey: string | null;
 	position: { x: number; y: number; z: number };
 	zCalWax: number;
 	zCalReagent: number;
@@ -143,6 +146,12 @@ function toCalEntry(c: any, opts?: { robotId?: string; inheritedFromGlobal?: boo
 	const inheritedFromGlobal = opts?.inheritedFromGlobal === true;
 	return {
 		robotId: String(opts?.robotId ?? c?.robotId ?? ''),
+		// Deck identity (2026-08-28): fixtures are keyed by deck, so the page must
+		// pick the row for the DECK it is teaching, not for the robot. Without
+		// these the client fell back to robot matching and loaded B14's robot-arm
+		// row while deck-003 was selected — then sent it as a jogged override.
+		deckLoadName: c?.deckLoadName ?? null,
+		deckKey: c?.deckKey ?? null,
 		position: {
 			x: Number(c?.position?.x ?? CAL_DEFAULTS.x),
 			y: Number(c?.position?.y ?? CAL_DEFAULTS.y),

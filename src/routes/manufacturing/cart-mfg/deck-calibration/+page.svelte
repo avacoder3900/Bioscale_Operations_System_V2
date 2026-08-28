@@ -62,13 +62,40 @@
 	// Per-robot calibration state (PRD 2/5): the selected robot's saved global
 	// offset + tip-calibrator fixture. Prefill the calibrator point when the robot
 	// changes so "Go to calibrator" starts from its last-saved position.
-	const currentCalibrator = $derived((data.calibrators as any[]).find((c) => c.robotId === selectedRobotId) ?? null);
-	let lastCalRobot = '';
+	/**
+	 * The calibrator in force for what is currently selected. Deck first — the
+	 * fixture is bolted to the carriage, so it belongs to the deck (2026-08-28).
+	 * A legacy row still keyed only by robot is used ONLY when the selected deck
+	 * has no row of its own, so a robot-keyed leftover can never shadow a deck.
+	 */
+	const currentCalibrator = $derived.by(() => {
+		const rows = (data.calibrators as any[]) ?? [];
+		const deckName = kind === 'deck' ? data.selected : null;
+		if (deckName) {
+			const byDeck = rows.find((c) => c.deckLoadName === deckName);
+			if (byDeck) return byDeck;
+			// Deck selected but never taught: do NOT fall back to another deck's row.
+			const legacy = rows.find((c) => c.robotId === selectedRobotId && !c.deckLoadName);
+			return legacy ?? null;
+		}
+		return rows.find((c) => c.robotId === selectedRobotId && !c.deckLoadName) ?? null;
+	});
+	/**
+	 * Seed the calibrator fields from whatever is selected. Re-seeds on DECK
+	 * change too (2026-08-28) and reads currentCalibrator, which resolves
+	 * deck-first: this effect keyed on the robot alone and never re-ran when the
+	 * deck changed, so selecting deck-003 on B14 kept B14's robot-arm point in
+	 * the boxes — and Calibrate tip sends those boxes as a jogged override, which
+	 * is why the tip still drove to the arm fixture after the data was fixed.
+	 */
+	let lastCalSel = '';
 	$effect(() => {
-		if (selectedRobotId && selectedRobotId !== lastCalRobot) {
-			lastCalRobot = selectedRobotId;
-			const cal = (data.calibrators as any[]).find((c) => c.robotId === selectedRobotId);
+		const selKey = `${selectedRobotId}::${kind === 'deck' ? data.selected : kind}`;
+		if (selectedRobotId && selKey !== lastCalSel) {
+			lastCalSel = selKey;
+			const cal = currentCalibrator;
 			if (cal?.position) { calX = cal.position.x; calY = cal.position.y; calZ = cal.position.z; }
+			else { calX = 125.181; calY = 173.247; calZ = 38.5; }
 			// Probe Z lives in its OWN fixture fields (zCalWax / zCalReagent), never in
 			// position.z. Seeding only position.z is exactly why this page LOOKED like it
 			// round-tripped a calibration Z while the probe never read the number back.
