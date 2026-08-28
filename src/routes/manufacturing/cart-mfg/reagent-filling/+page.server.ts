@@ -751,7 +751,13 @@ export const actions: Actions = {
 
 		// PRD 6: inject BIMS-native calibration params (global offset + calibrator
 		// point) for robots with a captured offset. No-op for the pre-cutover .py.
-		const calRtps = await calibrationRtpValues(String(robotId), 'reagent-filling', paramSchema as any);
+		// Deck-keyed calibrator (2026-08-28): the fixture is bolted to the carriage,
+		// so the run gets the point taught for the deck that is physically mounted —
+		// deckBinding.particleDeviceId is the same id the .py reads at run start.
+		const calRtps = await calibrationRtpValues(String(robotId), 'reagent-filling', paramSchema as any, {
+			deckKey: deckBinding.particleDeviceId,
+			deckLoadName: deckBinding.deckLoadName
+		});
 		Object.assign(runTimeParameterValues, calRtps);
 		Object.assign(protocolParameters, calRtps);
 

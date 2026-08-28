@@ -22,7 +22,8 @@ import {
 	OpentronProtocol,
 	TipCalibratorFixture,
 	AuditLog,
-	generateId
+	generateId,
+	Equipment
 } from '$lib/server/db';
 import {
 	applyDeckEditBatch,
@@ -367,6 +368,21 @@ export const actions: Actions = {
 		const x = Number(data.get('x')), y = Number(data.get('y')), z = Number(data.get('z'));
 		if (!robotId) return fail(400, { error: 'Pick a robot' });
 		if (![x, y].every(Number.isFinite)) return fail(400, { error: 'x/y must be numbers' });
+		// DECK-KEYED (2026-08-28). The calibrator is bolted to the carriage, so a
+		// teach belongs to the deck that is mounted — writing it against the robot
+		// is what let the robot-arm session overwrite B14's reagent calibrator.
+		const deckLoadName = (data.get('deckLoadName') as string)?.trim() || null;
+		if (!deckLoadName) {
+			return fail(400, {
+				error:
+					'Pick the deck this calibrator belongs to. The fixture rides on the carriage, ' +
+					'so its position is saved per deck — swapping decks must not overwrite another ' +
+					"deck's point."
+			});
+		}
+		const deckEquip = (await Equipment.findOne({ equipmentType: 'deck', deckLoadName }).lean()) as any;
+		const deckKey: string | null = deckEquip?.particleDeviceId ?? null;
+		const selector = deckKey ? { deckKey } : { deckLoadName };
 		// Save is the only write path into production z_cal, so this is the last
 		// place a bad height can be caught by a human-readable message instead of by
 		// the pipette hitting the fixture. Every rejection names its field, and we
@@ -380,7 +396,7 @@ export const actions: Actions = {
 
 		// The doc we are about to overwrite — both the undo snapshot and the
 		// fallback for any Z the caller did not send.
-		const prev = (await TipCalibratorFixture.findOne({ robotId }).lean()) as any;
+		const prev = (await TipCalibratorFixture.findOne(selector).lean()) as any;
 
 		// A blank/absent Z field means "leave it alone"; a present-but-junk one is an error.
 		// The client only ever sends the key for the tip profile it is editing, so the
@@ -418,7 +434,17 @@ export const actions: Actions = {
 
 		const capturedBy = { _id: locals.user._id, username: locals.user.username };
 		const update: Record<string, any> = {
-			$set: { position: { x, y, z }, zCalWax, zCalReagent, capturedBy, capturedAt: new Date() },
+			$set: {
+				position: { x, y, z },
+				zCalWax,
+				zCalReagent,
+				capturedBy,
+				capturedAt: new Date(),
+				deckKey,
+				deckLoadName,
+				// Kept as "last robot this deck was taught on" — no longer the key.
+				robotId
+			},
 			$setOnInsert: { _id: generateId() }
 		};
 		// Only push a snapshot if there was something to replace (a first teach has no history).
@@ -431,11 +457,11 @@ export const actions: Actions = {
 				}
 			};
 		}
-		await TipCalibratorFixture.updateOne({ robotId }, update, { upsert: true });
+		await TipCalibratorFixture.updateOne(selector, update, { upsert: true });
 
-		await AuditLog.create({ _id: generateId(), tableName: 'tip_calibrator_fixtures', recordId: robotId, action: 'save_calibrator', newData: { x, y, z, zCalWax, zCalReagent, source, note }, changedAt: new Date(), changedBy: locals.user?.username });
+		await AuditLog.create({ _id: generateId(), tableName: 'tip_calibrator_fixtures', recordId: deckKey ?? deckLoadName, action: 'save_calibrator', newData: { x, y, z, zCalWax, zCalReagent, source, note, deckLoadName, deckKey, robotId }, changedAt: new Date(), changedBy: locals.user?.username });
 
-		const saved = (await TipCalibratorFixture.findOne({ robotId }).lean()) as any;
+		const saved = (await TipCalibratorFixture.findOne(selector).lean()) as any;
 		// inheritedFromGlobal is false by construction: the upsert just gave this
 		// robot a row of its own, which is exactly the fork the page warned about.
 		return { success: true, action: 'saveCalibrator', calibrator: JSON.parse(JSON.stringify(toCalEntry(saved))) };
@@ -462,15 +488,27 @@ export const actions: Actions = {
 			return fail(400, { error: 'historyIndex must be a whole number' });
 		}
 
-		const prev = (await TipCalibratorFixture.findOne({ robotId }).lean()) as any;
-		if (!prev) return fail(404, { error: 'This robot has no saved calibrator to revert' });
+		// Deck-keyed like saveCalibrator (2026-08-28): revert the point of the deck
+		// that is mounted, never "this robot's" row.
+		const deckLoadNameR = (data.get('deckLoadName') as string)?.trim() || null;
+		const deckEquipR = deckLoadNameR
+			? ((await Equipment.findOne({ equipmentType: 'deck', deckLoadName: deckLoadNameR }).lean()) as any)
+			: null;
+		const selectorR = deckEquipR?.particleDeviceId
+			? { deckKey: deckEquipR.particleDeviceId }
+			: deckLoadNameR
+				? { deckLoadName: deckLoadNameR }
+				: { robotId, deckKey: null };
+
+		const prev = (await TipCalibratorFixture.findOne(selectorR).lean()) as any;
+		if (!prev) return fail(404, { error: 'This deck has no saved calibrator to revert' });
 		const entry = Array.isArray(prev.history) ? prev.history[historyIndex] : undefined;
 		if (!entry) return fail(400, { error: 'That calibrator history entry no longer exists — reload the page' });
 
 		const restored = toCalHistoryEntry(entry); // fills any gaps with the defaults
 		const capturedBy = { _id: locals.user._id, username: locals.user.username };
 		await TipCalibratorFixture.updateOne(
-			{ robotId },
+			selectorR,
 			{
 				$set: {
 					position: restored.position,
@@ -491,7 +529,7 @@ export const actions: Actions = {
 
 		await AuditLog.create({ _id: generateId(), tableName: 'tip_calibrator_fixtures', recordId: robotId, action: 'revert_calibrator', newData: { historyIndex, ...restored.position, zCalWax: restored.zCalWax, zCalReagent: restored.zCalReagent }, changedAt: new Date(), changedBy: locals.user?.username });
 
-		const saved = (await TipCalibratorFixture.findOne({ robotId }).lean()) as any;
+		const saved = (await TipCalibratorFixture.findOne(selectorR).lean()) as any;
 		// Revert only ever runs against a robot's own row (it 404s above otherwise),
 		// so this entry is never an inherited one.
 		return { success: true, action: 'revertCalibrator', calibrator: JSON.parse(JSON.stringify(toCalEntry(saved))) };

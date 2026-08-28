@@ -144,8 +144,12 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		throw error(400, e instanceof Error ? e.message : `Tiprack '${tipSpec.loadName}' not in the BIMS labware library`);
 	}
 
-	// Calibrator point: per-robot fixture → 'global' fallback → .py default …
-	const saved = await resolveCalibratorPoint(String(robot._id), tipProfile);
+	// Calibrator point: the MOUNTED DECK's fixture → legacy robot row → 'global'
+	// → .py default (2026-08-28: the fixture rides on the carriage, so it is
+	// keyed by deck). The Studio sends the deck it is teaching.
+	const deckLoadName = body?.deckLoadName?.toString().trim() || null;
+	const deckKey = body?.deckKey?.toString().trim() || null;
+	const saved = await resolveCalibratorPoint(String(robot._id), tipProfile, { deckKey, deckLoadName });
 	// … then the operator's jogged point wins, axis by axis, when they sent one.
 	const { point: calibrator, overridden } = applyCalibratorOverride(saved.point, body?.calibrator);
 	const calibratorSource: CalSource = overridden ? 'jogged' : saved.source;

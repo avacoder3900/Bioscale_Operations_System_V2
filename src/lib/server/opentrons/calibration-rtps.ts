@@ -48,7 +48,14 @@ type ParamDef = { variableName: string; min?: number; max?: number };
 export async function calibrationRtpValues(
 	robotId: string,
 	processType: 'wax-filling' | 'reagent-filling',
-	paramSchema: ParamDef[]
+	paramSchema: ParamDef[],
+	/**
+	 * The deck this run will fill (2026-08-28). The calibrator fixture is bolted
+	 * to the carriage, so its point is keyed by the deck — pass the deck and the
+	 * run gets the calibrator that is physically mounted, not whatever was last
+	 * taught on this robot. Omitted = legacy robot-keyed lookup.
+	 */
+	deck: { deckKey?: string | null; deckLoadName?: string | null } = {}
 ): Promise<Record<string, number | boolean>> {
 	await connectDB();
 	const declared = new Set((paramSchema ?? []).map((p) => p.variableName));
@@ -90,7 +97,7 @@ export async function calibrationRtpValues(
 	// Tip-calibrator fixture location — where to go to measure, not a hole shift.
 	// Same fallback chain the calibration wizard uses: this robot's taught point,
 	// else the shared 'global' one. One helper owns that order.
-	const { fixture: fix } = await loadCalibratorFixture(robotId);
+	const { fixture: fix } = await loadCalibratorFixture(robotId, deck);
 	// With no fixture at all we inject nothing and let the .py keep its own
 	// built-in calibrator point — same as before the wizard existed.
 	if (fix) {

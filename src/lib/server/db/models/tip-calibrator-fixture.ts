@@ -9,8 +9,16 @@ import { generateId } from '../utils.js';
  * string = the tip's true position. The .py hardcoded its location
  * (x125.181, y173.247, z 34.491 wax / 40.8 reagent, relative to the carriage).
  * This makes the position BIMS-tunable (jog → save) and fed to the .py as an RTP.
- * Keyed by robotId; a robotId of 'global' is the fallback used until a per-robot
- * value is captured.
+ * KEYED BY DECK (2026-08-28). The fixture is bolted to the cartridge carriage,
+ * so it travels with the DECK, not the robot — but this was keyed
+ * `robotId: unique`, one row per robot. Swapping B14 onto the robot-arm deck
+ * therefore overwrote the reagent deck's calibrator point with the arm rig's
+ * (194mm away, probe Z 17mm low), and swapping back left a record describing a
+ * fixture that was no longer there. `deckKey` is the calibrator's own Particle
+ * serial id (what the .py reads at run start to choose the deck definition), so
+ * the geometry and the calibrator point can never disagree about which deck is
+ * mounted; `deckLoadName` is carried for humans. Legacy robot-keyed rows still
+ * resolve as a fallback, and a deckKey of 'global' is the shared default.
  */
 const vec = new Schema(
 	{ x: { type: Number, default: 0 }, y: { type: Number, default: 0 }, z: { type: Number, default: 0 } },
@@ -47,7 +55,19 @@ const calibratorHistoryEntry = new Schema(
 
 const tipCalibratorFixtureSchema = new Schema({
 	_id: { type: String, default: () => generateId() },
-	robotId: { type: String, required: true, unique: true, index: true }, // robot _id, or 'global'
+	/**
+	 * Primary key since 2026-08-28: the calibrator/carriage Particle device id
+	 * (e.g. 'e00fce68fc3b…'), or 'global' for the shared fallback. Sparse-unique
+	 * so legacy robot-keyed rows (deckKey absent) keep loading untouched.
+	 */
+	deckKey: { type: String, default: null, index: true },
+	/** Human-facing deck this fixture belongs to, e.g. 'gen4deck_gen7cartridge_003'. */
+	deckLoadName: { type: String, default: null, index: true },
+	/**
+	 * Legacy key / last robot this fixture was taught on. No longer unique: a
+	 * robot has as many calibrator points as it has decks it runs.
+	 */
+	robotId: { type: String, required: true, index: true },
 	position: { type: vec, required: true }, // approach point the tip moves to before the probe
 	zCalWax: { type: Number, default: 34.491 }, // p20 tip cal Z
 	zCalReagent: { type: Number, default: 40.8 }, // p300 tip cal Z
@@ -67,6 +87,11 @@ const tipCalibratorFixtureSchema = new Schema({
 	// Newest-first list of the points this one replaced. Capped at 10 on write.
 	history: { type: [calibratorHistoryEntry], default: [] }
 });
+
+tipCalibratorFixtureSchema.index(
+	{ deckKey: 1 },
+	{ unique: true, partialFilterExpression: { deckKey: { $type: 'string' } } }
+);
 
 export const TipCalibratorFixture =
 	mongoose.models.TipCalibratorFixture ||

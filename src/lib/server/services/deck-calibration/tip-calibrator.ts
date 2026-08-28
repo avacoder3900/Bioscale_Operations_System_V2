@@ -28,8 +28,10 @@ export interface CalPoint {
 /** Where the point we're using came from — surfaced in the UI so the operator knows. */
 export type CalSource =
 	| 'jogged' // operator taught it live in this session (not saved yet)
-	| 'robot' // this robot's saved fixture
-	| 'global' // the shared 'global' fallback fixture
+	| 'deck' // the mounted deck's own saved fixture (the 2026-08-28 key)
+	| 'legacy-robot' // a pre-rekey row still stored against the robot
+	| 'robot' // (legacy alias, kept so old callers still typecheck)
+	| 'global' // the shared fallback fixture
 	| 'default'; // nothing saved anywhere → the .py hardcoded point
 
 /** The .py's hardcoded calibrator XY (relative to the carriage). */
@@ -157,20 +159,52 @@ export interface ResolvedCalibrator {
 	fixture: any | null;
 	/** The fixture's robotId ('global' when the shared fallback was used). */
 	fixtureRobotId: string | null;
+	/** The deck the resolved fixture belongs to, when it is deck-keyed. */
+	fixtureDeck?: { deckKey: string | null; deckLoadName: string | null };
 }
 
 /**
  * Read the fixture that applies to a robot: its own row first, else the shared
  * 'global' row. Returns null when neither exists.
  */
+export interface DeckRef {
+	/** Calibrator/carriage Particle device id — the authoritative key. */
+	deckKey?: string | null;
+	/** Human deck load name, used when no Particle id is known. */
+	deckLoadName?: string | null;
+}
+
+/**
+ * Read the fixture that applies to a DECK (2026-08-28), falling back through
+ * the legacy robot-keyed row and the shared 'global' row.
+ *
+ * Order matters and is the whole point of the rework: the fixture is bolted to
+ * the carriage, so the deck's own row must win over anything stored against the
+ * robot. The robot row is consulted only for pairs not yet migrated, and is
+ * reported as 'legacy-robot' so callers can nudge an operator to re-teach.
+ */
 export async function loadCalibratorFixture(
-	robotId: string
-): Promise<{ fixture: any | null; source: 'robot' | 'global' | 'default' }> {
+	robotId: string,
+	deck: DeckRef = {}
+): Promise<{ fixture: any | null; source: 'deck' | 'legacy-robot' | 'global' | 'default' }> {
 	await connectDB();
-	const own = (await TipCalibratorFixture.findOne({ robotId: String(robotId) }).lean()) as any;
-	if (own) return { fixture: own, source: 'robot' };
-	const shared = (await TipCalibratorFixture.findOne({ robotId: 'global' }).lean()) as any;
-	if (shared) return { fixture: shared, source: 'global' };
+	if (deck.deckKey) {
+		const byKey = (await TipCalibratorFixture.findOne({ deckKey: String(deck.deckKey) }).lean()) as any;
+		if (byKey) return { fixture: byKey, source: 'deck' };
+	}
+	if (deck.deckLoadName) {
+		const byName = (await TipCalibratorFixture.findOne({ deckLoadName: String(deck.deckLoadName) }).lean()) as any;
+		if (byName) return { fixture: byName, source: 'deck' };
+	}
+	// Legacy: rows written before the deck rekey (deckKey absent).
+	const own = (await TipCalibratorFixture.findOne({
+		robotId: String(robotId),
+		deckKey: null
+	}).lean()) as any;
+	if (own) return { fixture: own, source: 'legacy-robot' };
+	const shared = (await TipCalibratorFixture.findOne({ deckKey: 'global' }).lean())
+		?? (await TipCalibratorFixture.findOne({ robotId: 'global' }).lean()) as any;
+	if (shared) return { fixture: shared as any, source: 'global' };
 	return { fixture: null, source: 'default' };
 }
 
@@ -184,10 +218,11 @@ export async function loadCalibratorFixture(
  */
 export async function resolveCalibratorPoint(
 	robotId: string,
-	profile: TipProfile
+	profile: TipProfile,
+	deck: DeckRef = {}
 ): Promise<ResolvedCalibrator> {
 	const spec = TIP_PROFILE[profile];
-	const { fixture, source } = await loadCalibratorFixture(robotId);
+	const { fixture, source } = await loadCalibratorFixture(robotId, deck);
 	return {
 		point: {
 			// Guarded, not merely finite: a stored 0, or a Z outside the envelope,
@@ -199,7 +234,10 @@ export async function resolveCalibratorPoint(
 		},
 		source,
 		fixture,
-		fixtureRobotId: fixture ? String(fixture.robotId) : null
+		fixtureRobotId: fixture ? String(fixture.robotId) : null,
+		fixtureDeck: fixture
+			? { deckKey: fixture.deckKey ?? null, deckLoadName: fixture.deckLoadName ?? null }
+			: undefined
 	};
 }
 

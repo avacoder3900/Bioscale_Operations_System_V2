@@ -987,7 +987,7 @@
 			// applyCalibratorOverride lays it over the stored fixture axis by axis, so the
 			// probe happens at the live field values without writing a thing to Mongo.
 			// Its z is the PROBE Z -- the touch-off depth -- never the approach height.
-			const res = await api('/api/scanner/calibrate-tip', { method: 'POST', body: JSON.stringify({ robotId: selectedRobotId, mount: desiredMount, tipProfile, tipWell, runId, pipetteId, calibrator: { x: calX, y: calY, z: probeZNow } }) });
+			const res = await api('/api/scanner/calibrate-tip', { method: 'POST', body: JSON.stringify({ robotId: selectedRobotId, deckLoadName: kind === 'deck' ? data.selected : null, mount: desiredMount, tipProfile, tipWell, runId, pipetteId, calibrator: { x: calX, y: calY, z: probeZNow } }) });
 			if (res?.adjust && typeof res.adjust.x === 'number') {
 				tipAdjust = { x: res.adjust.x, y: res.adjust.y };
 				// The probe moved the gantry and changed the applied adjust → any prior
@@ -1119,8 +1119,16 @@
 		// z_cal runtime parameter in real wax/reagent runs. Send exactly ONE probe-Z
 		// key, chosen by the active tip profile -- omitting the other key means "leave
 		// it alone", so a wax session can never quietly rewrite the reagent depth.
+		// DECK-KEYED SAVE (2026-08-28): the fixture is bolted to the carriage, so the
+		// point belongs to the mounted deck. Without this the robot-arm rig and the
+		// reagent deck overwrite each other's calibrator (B14, 08-21).
+		if (kind !== 'deck' || !data.selected) {
+			errMsg = 'Pick the deck this calibrator belongs to (Labware → Deck) before saving.';
+			return;
+		}
 		const fields: Record<string, string> = {
 			robotId: selectedRobotId,
+			deckLoadName: String(data.selected),
 			x: String(calX), y: String(calY), z: String(calZ),
 			source: 'manual'
 		};
@@ -1135,7 +1143,7 @@
 		const r = await postAction('saveCalibrator', fields);
 		if (r)
 			msg =
-				`Saved tip-calibrator for ${robot?.name}: approach (${calX}, ${calY}, ${calZ})` +
+				`Saved tip-calibrator for ${data.selected} (taught on ${robot?.name}): approach (${calX}, ${calY}, ${calZ})` +
 				(probeZKey ? ` and probe Z ${probeZ} -> ${probeZKey}.` : ' (probe Z untouched - no tip type picked).') +
 				(forkedFromGlobal ? ` This robot now has its own fixture and no longer follows 'global'.` : '');
 	}
