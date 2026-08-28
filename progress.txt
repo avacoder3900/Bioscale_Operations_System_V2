@@ -10566,3 +10566,36 @@ failures that cleared once the dep was installed locally); build clean.
 2026-08-28 (cont.) — Studio canvas fills its section (flex column + flex-1 box, SVG centred with
 `safe center`), removing the dead band under the deck graphic when the right rail is taller. Zoom
 wrapper pinned flex:0 0 auto so zoom behaviour is unchanged. Markup/CSS only; build clean.
+
+================================================================================
+2026-08-28 — master — tip-calibrator fixture re-keyed from ROBOT to DECK (B14/deck-003 restored)
+================================================================================
+Operator hit a "tip calibrator a foot away" on B14/deck-003 for reagent filling. Investigation:
+deck-003's HOLE geometry was untouched (zero deck_calibration_edits since 07-31; reagent grid in
+family with 001/004 — same 6mm pitch, z 6.15-8.76 vs 8.20-8.80 and 6.75-9.10). The damage was in
+tip_calibrator_fixtures, which was keyed robotId:UNIQUE — one row per robot — while the calibrator
+is physically bolted to the cartridge carriage and travels with the DECK. The 08-21 robot-arm
+session walked B14's row from (125.181,173.247,38.5)/zReag 40.8 to the arm rig's
+(294.88,79.24,23.85)/zReag 23.85 in five saves (all preserved in the doc's history), i.e. 169.7mm x
+/ -94mm y = 194mm (~7.6"), probe Z 17mm low. Swapping back could not restore it: the row was gone.
+
+REWORK: fixtures are now keyed by deckKey = the carriage's Particle device id (the same id the .py
+reads at run start to pick the deck definition, so geometry and calibrator cannot disagree);
+deckLoadName carried for humans; equipment rows already map barcode <-> loadName <-> particle id.
+Chose the Particle serial over the deck barcode: the calibrator itself reports the id
+(self-identifying), no scanner dependency/5.5s read window, and a barcode label can be swapped
+independently of the hardware. Resolution order: deck row -> legacy robot row -> global -> .py
+default. Both fill startRun paths pass the deckBinding they already resolve; calibrate-tip and the
+Studio save/revert are deck-scoped (Studio now refuses to save a calibrator with no deck selected).
+MIGRATION APPLIED (scripts/migrate-calibrator-to-deck.cjs, dry-run default): dropped the stale
+robotId_1 unique index; B07->deck-004, R04->deck-001 stamped; B14's arm values moved to a
+robotarm_cartridge_deck_001 row; deck-003 recreated from the doc's own 07-20 history entry
+(125.181,173.247,38.5 / zWax 34.491 / zReag 40.8) — the point in force for every good B14 reagent
+run through 08-14. Verified: any robot + any fill deck resolves the standard point; the arm deck
+keeps its own. npm check 11 (baseline); build clean.
+NEXT (operator): verify B14 with RUN CALIBRATION CHECK before a production reagent fill. Swapping
+the arm rig on/off B14 is now non-destructive in both directions.
+
+Deployment: production — Vercel auto-deploy from master push
+Source: branch master @ commit 5b38aebe
+What this deployment is for: calibrator points follow the deck, so robot-arm <-> reagent swaps stop destroying calibration.
