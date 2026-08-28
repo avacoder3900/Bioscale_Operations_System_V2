@@ -10549,3 +10549,10 @@ and the mount Left/Right switch (still drives the maintenance-run mount, Z jog a
 probe — only mount-based tip-type inference was deprecated). Noted minor redundancy left in place:
 the leftZ/rightZ dropdown is auto-set by the mount switch.
 npm run check: 19 errors (pre-existing baseline).
+
+2026-08-28 (cont.) — Deck Calibration Studio layout: the three selection-editing panels (Offset →
+selection, Set position → selection, Align → anchor) moved out of the right rail into a 3-up row
+beneath the deck canvas (stacked on narrow screens); the right rail now holds only robot-driving
+controls (Jog, Tip, Tour/Fill, Sync). Markup-only. Note for future local builds: `npm run build`
+failed until `npm install` pulled @xyflow/svelte (declared in package.json by upstream kanban work
+but missing from the local node_modules) — not a code fault.
