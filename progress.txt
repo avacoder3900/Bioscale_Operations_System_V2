@@ -10556,3 +10556,9 @@ beneath the deck canvas (stacked on narrow screens); the right rail now holds on
 controls (Jog, Tip, Tour/Fill, Sync). Markup-only. Note for future local builds: `npm run build`
 failed until `npm install` pulled @xyflow/svelte (declared in package.json by upstream kanban work
 but missing from the local node_modules) — not a code fault.
+
+2026-08-28 (cont.) — Studio layout swap: Offset → selection moved into the right rail (under
+Jog/Tip, where Tour/Fill was) and Tour / Fill motion moved into the under-canvas 3-up row. Rationale:
+the capture→apply loop belongs next to the jog controls; the tour/fill driver benefits from the wider
+slot. Markup-only. npm check now 11 errors (the earlier 19 included @xyflow/svelte resolution
+failures that cleared once the dep was installed locally); build clean.
