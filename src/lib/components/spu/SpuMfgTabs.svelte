@@ -11,16 +11,24 @@
 	// The SPU manufacturing section spans several route trees that each keep
 	// their own URLs. This strip is rendered by every one of their layouts so
 	// the tabs stay put as you move between them.
-	const navItems = [
+	// `exact` opts an entry out of prefix matching, so a parent route does not
+	// stay lit while you are on one of its subroutes.
+	const navItems: { href: string; label: string; icon: string; exact?: boolean }[] = [
 		{
 			href: '/spu/mfg',
 			label: 'Overview',
+			exact: true,
 			icon: 'M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z'
 		},
 		{
 			href: '/assembly',
 			label: 'SPU Assembly',
 			icon: 'M11 4a2 2 0 114 0v1a1 1 0 001 1h3a1 1 0 011 1v3a1 1 0 01-1 1h-1a2 2 0 100 4h1a1 1 0 011 1v3a1 1 0 01-1 1h-3a1 1 0 01-1-1v-1a2 2 0 10-4 0v1a1 1 0 01-1 1H7a1 1 0 01-1-1v-3a1 1 0 00-1-1H4a2 2 0 110-4h1a1 1 0 001-1V7a1 1 0 011-1h3a1 1 0 001-1V4z'
+		},
+		{
+			href: '/spu/mfg/barcodes',
+			label: 'Barcodes',
+			icon: 'M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z'
 		},
 		{
 			href: '/documents/instructions',
@@ -31,15 +39,22 @@
 			href: '/validation',
 			label: 'Validation',
 			icon: 'M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z'
+		},
+		{
+			href: '/spu/mfg/servicing',
+			label: 'Servicing',
+			icon: 'M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z'
 		}
 	];
 
-	function isActive(href: string, currentPath: string): boolean {
-		return currentPath === href || currentPath.startsWith(href + '/');
+	function isActive(item: { href: string; exact?: boolean }, currentPath: string): boolean {
+		return item.exact
+			? currentPath === item.href
+			: currentPath === item.href || currentPath.startsWith(item.href + '/');
 	}
 
 	let currentLabel = $derived(
-		navItems.find((i) => isActive(i.href, $page.url.pathname))?.label ?? 'Overview'
+		navItems.find((i) => isActive(i, $page.url.pathname))?.label ?? 'Overview'
 	);
 </script>
 
@@ -67,7 +82,7 @@
 
 <div class="flex flex-wrap gap-2 border-b border-[var(--color-tron-border)]">
 	{#each navItems as item (item.href)}
-		{@const active = isActive(item.href, $page.url.pathname)}
+		{@const active = isActive(item, $page.url.pathname)}
 		<a
 			href={item.href}
 			class="flex items-center gap-2 border-b-2 px-4 py-3 text-sm font-medium transition-colors {active

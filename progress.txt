@@ -10751,3 +10751,34 @@ Audit row written. NOT done (needs a deck re-verify, do not do casually): re-zer
 calibrator devices (new string = old - mean adjust) to bring their adjusts into B07's ~1-2mm range —
 both decks are taught in their current probe frames, so re-zeroing without re-teaching would shift
 every fill by ~6mm.
+================================================================================
+2026-08-31 — feat/spu-servicing-ui-master — servicing short ID fix + barcode assignment UI committed
+================================================================================
+Two fixes on the SPU servicing branch, both from a session that died before committing.
+
+extractShortId() in src/routes/spu/mfg/servicing/+page.server.ts sliced the FIRST 8 characters of
+the UDI to build the "SPU-0244" label in the Start Service Job picker. Every unit shares that
+prefix - GS1 UDIs all start "(01)...(21)0a10aced2021949..." and plain ids all start "BT-M01-0000-" -
+so every SPU in the dropdown rendered the same label and the picker could not be used to choose a
+unit. Now takes the LAST 4 characters, which is the part that varies, stripping separators first so
+both UDI shapes agree.
+
+/spu/mfg/barcodes (the UI that assigns a barcode to an SPU) plus its entry in SpuMfgTabs.svelte were
+written but never committed - 606 lines sitting untracked in the worktree, on no deployment, one
+git clean from gone. Now committed. The assign action requires spu:write, rejects a barcode already
+held by another unit, and AuditLogs old -> new with a reason on reassignment.
+
+NOT VERIFIED: the assign action has never been exercised against real data, only read. Needs a
+click-through on the preview before anyone uses it in the lab. Unauthenticated route probes are
+useless here - hooks.server.ts redirects every path to /login, including paths that do not exist.
+
+npx svelte-check: 11 errors / 433 warnings, unchanged from baseline. Not built locally (OOMs on
+this machine); the Vercel branch build is the gate and it passed.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-spvuc87p6-brevitest.vercel.app
+  (branch alias, same build: https://bioscale-operations-system-mongodb-git-feat-sp-e5d7a4-brevitest.vercel.app)
+Source: branch feat/spu-servicing-ui-master @ commit bff30791
+Retrieve this exact code: git checkout feat/spu-servicing-ui-master at commit bff30791
+  (short-ID fix alone is the parent commit, d96554c2)
+What this deployment is for: click-test the barcode assignment UI, and confirm the Start
+  Service Job picker now shows distinguishable SPU labels.
