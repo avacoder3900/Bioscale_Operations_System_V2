@@ -10702,3 +10702,25 @@ restore the fail() in loadDeck. npm check 11 (baseline); build clean.
 Deployment: production — Vercel auto-deploy from master push
 Source: branch master @ this commit
 What this deployment is for: wax fills no longer wait on oven cure time.
+
+================================================================================
+2026-08-31 — master — Deck Cal Studio: pipette-mount toggle moved to the top picker bar
+================================================================================
+Operator could not pick up a p20 tip on B07 for wax tip-calibration. Cause: mount and tip type are
+deliberately independent (since f8a07846, 08-18 — pipettes are not fixed to mounts fleet-wide), so
+BOTH must be set: on B07 the p20 is on the RIGHT mount (left = p300, confirmed live). The Studio
+defaults to Left, and the mount toggle lived inside the JOG panel where it looks like a during-run
+control, so a run got opened on the p300 and the 20uL pickup could not succeed. Toggle now sits in
+the top picker bar beside Labware/Deck/Robot (still disabled while a run is open).
+Checked at the same time — B07 wax tip-cal has NOT drifted and Rachel's p20/p300 work did not affect
+it: deck-004 fixture unchanged since 08-04 (125.181/173.247/38.5, zCalWax 40.15 — deliberately
+per-B07 via fix-b07-zcalwax.cjs; empty edit history), B07's daemon is byte-identical to the repo
+(has CAL_PROBE_RECIPES), and the last two wax runs measured adjust x=-2.0 y=+1.0/1.1 with z_cal
+40.15 — squarely in B07's historical band. Before 08-18 the code inferred right = p20/wax, which
+matches B07's actual layout, so the decoupling was a no-op there.
+NOT built (offered): auto-select the mount from the chosen tip type, or block when the selected
+profile does not match the pipette on that mount.
+
+Deployment: production — Vercel auto-deploy from master push
+Source: branch master @ this commit
+What this deployment is for: the mount is chosen with the other pre-run settings, so tip pickup stops failing silently.
