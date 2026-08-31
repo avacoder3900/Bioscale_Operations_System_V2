@@ -1131,7 +1131,17 @@
 		if (liveX === null || liveY === null || liveZ === null) { errMsg = 'Could not read position'; return; }
 		dx = +(liveX - nominal.x).toFixed(3);
 		dy = +(liveY - nominal.y).toFixed(3);
-		dz = +(liveZ - nominal.z).toFixed(3);
+		// Z-frame correction (critical). `nominal.z` is the critical point PARKED at
+		// the reference height + APPROACH_Z_MM, so a raw `liveZ - nominal.z` measures
+		// the jog from the HOVER, not from the rim, and bakes a -APPROACH_Z_MM bias
+		// into what gets stored: a capture taken exactly at a correct rim yields
+		// dz = -2 instead of 0, and re-teaching "more carefully" walks the well down
+		// 2mm every time. The fill then applies its own hover on the lowered rim and
+		// lands the tip on it. Add APPROACH_Z_MM back so dz is the true rim delta —
+		// the teaching convention is: jog the tip onto the rim, then Capture.
+		// (Merged from fix/deckcal-capture-clearance 4bff9f35, which sat unmerged
+		// since 2026-07-17; master still had the raw subtraction.)
+		dz = +(liveZ - nominal.z + APPROACH_Z_MM).toFixed(3);
 		msg = `Captured offset from ${refWell}: dx=${dx} dy=${dy} dz=${dz}. Select the holes to apply it to.`;
 	}
 
