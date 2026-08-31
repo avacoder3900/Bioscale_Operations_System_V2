@@ -1242,6 +1242,26 @@
 				{#each robots as r (r._id)}<option value={r._id}>{r.name}{r.isActive ? '' : ' (inactive)'}</option>{/each}
 			</select>
 		</label>
+		<!-- Mount lives here (2026-08-28), not in the JOG panel: it decides which
+		     PIPETTE the maintenance run loads, so it is a before-you-open-the-run
+		     choice like labware/deck/robot. Down in JOG it read as a during-run
+		     control and was easy to miss — an operator opened a run on the default
+		     left mount (a p300 on B07) and then could not pick up a p20 tip. -->
+		<div class="text-xs" style="color: var(--color-tron-text-secondary)">Pipette mount
+			<div class="mt-1 flex overflow-hidden rounded border border-[var(--color-tron-border)] text-[11px]">
+				{#each [['left', 'Left'], ['right', 'Right']] as [m, lbl] (m)}
+					<button
+						type="button"
+						disabled={!!runId}
+						onclick={() => { desiredMount = m as 'left' | 'right'; zAxis = m === 'right' ? 'rightZ' : 'leftZ'; }}
+						class="px-2.5 py-1.5 transition-colors disabled:opacity-50 {desiredMount === m ? 'bg-[var(--color-tron-cyan)]/20 text-[var(--color-tron-cyan)]' : 'text-[var(--color-tron-text-secondary)] hover:bg-white/5'}"
+						title={runId ? 'Close the run to switch mounts' : `Open the run on the ${lbl.toLowerCase()} mount`}
+					>{lbl}</button>
+				{/each}
+			</div>
+			{#if runId}<div class="mt-0.5 text-[10px]">close run to switch</div>{/if}
+		</div>
+
 		{#if kind === 'calibrator'}
 			<div class="text-xs" style="color: var(--color-tron-text-secondary)">Tip-calibrator fixture · slot-free</div>
 		{:else}
@@ -1384,21 +1404,6 @@
 						<button type="button" onclick={reloadDeckIntoRun} disabled={busy || connecting} class="shrink-0 rounded border border-amber-400/60 bg-amber-900/30 px-2 py-1 font-bold text-amber-100 disabled:opacity-40">Reload deck</button>
 					</div>
 				{/if}
-
-				<div class="mt-2 flex items-center gap-2 text-xs" style="color: var(--color-tron-text-secondary)">
-					<span>Pipette</span>
-					<div class="flex overflow-hidden rounded border border-[var(--color-tron-border)]">
-						{#each [['left', 'Left'], ['right', 'Right']] as [m, lbl] (m)}
-							<button
-								type="button"
-								disabled={!!runId}
-								onclick={() => { desiredMount = m as 'left' | 'right'; zAxis = m === 'right' ? 'rightZ' : 'leftZ'; }}
-								class="px-2.5 py-1 transition-colors disabled:opacity-50 {desiredMount === m ? 'bg-[var(--color-tron-cyan)]/20 text-[var(--color-tron-cyan)]' : 'hover:bg-white/5'}"
-							>{lbl}</button>
-						{/each}
-					</div>
-					{#if runId}<span class="text-[10px]">close run to switch</span>{/if}
-				</div>
 
 				<div class="mt-2 flex flex-wrap items-center gap-2 text-xs" style="color: var(--color-tron-text-secondary)">
 					<label>Step <select bind:value={stepSize} class="rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-0.5 font-mono text-xs" style="color: var(--color-tron-text)">
