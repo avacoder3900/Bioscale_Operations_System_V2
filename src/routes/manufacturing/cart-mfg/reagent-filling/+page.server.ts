@@ -1218,10 +1218,32 @@ export const actions: Actions = {
 		const data = await request.formData();
 		const runId = data.get('runId') as string;
 
+		// GUARD (2026-08-31): finalizing stamps every cartridge reagent_filled.
+		// A run that ended in `failed` may not have dispensed anything at all —
+		// B14 errored during tip calibration, before the first aspirate, and the
+		// page still offered a green "batch completed / Done". Committing that
+		// would push 20 unfilled cartridges downstream as filled. Require an
+		// explicit acknowledgement for any non-succeeded run; the happy path
+		// (recordRunFinished's auto-finalize, and Done after a clean run) is
+		// untouched.
+		const acknowledged = data.get('confirmDespiteFailure')?.toString() === 'true';
+		const runDoc = (await ReagentBatchRecord.findById(runId)
+			.select('opentronsRunFinalStatus cartridgesFilled').lean()) as any;
+		const finalStatus = String(runDoc?.opentronsRunFinalStatus ?? '').toLowerCase();
+		if (finalStatus && !['succeeded', 'completed'].includes(finalStatus) && !acknowledged) {
+			return fail(400, {
+				error:
+					`This run ended in "${finalStatus}" — the robot may not have filled any cartridges. ` +
+					`Completing it would mark all ${runDoc?.cartridgesFilled?.length ?? 0} as reagent-filled. ` +
+					`Fix the cause and re-run them, or confirm explicitly if you have verified the reagent went in.`,
+				requiresFailureAck: true
+			});
+		}
+
 		// Normally a no-op confirm: recordRunFinished already finalized the run
 		// the moment the .py succeeded. Still does the real work for runs that
-		// ended in a non-succeeded state the operator wants to commit anyway,
-		// and for legacy runs finished before auto-complete shipped.
+		// ended in a non-succeeded state the operator EXPLICITLY commits (see
+		// the guard above), and for legacy runs finished before auto-complete.
 		const res = await finalizeReagentRun(
 			runId,
 			{ _id: locals.user._id, username: locals.user.username },

@@ -22,6 +22,14 @@
 		 */
 		robotFinished?: boolean;
 		/**
+		 * The OT-2's terminal status ('succeeded' | 'failed' | 'stopped' | null).
+		 * Load-bearing (2026-08-31): `robotFinished` is true for ANY terminal
+		 * state, so the panel used to shout "Filling Complete" in green after a
+		 * run that errored out during tip calibration without dispensing a drop —
+		 * and the Done button beneath it stamps every cartridge reagent_filled.
+		 */
+		finalStatus?: string | null;
+		/**
 		 * Fall back to treating the estimate as a deadline: when it expires, call
 		 * onTimerComplete. Only for runs with no OT-2 run linked, where there is
 		 * no robot status to wait on.
@@ -38,7 +46,8 @@
 	let {
 		assayTypeName, cartridgeCount, runStartTime, runEndTime, onTimerComplete, onAbort,
 		readonly: isReadonly = false, protocolParameters = null,
-		robotFinished = false, autoCompleteOnExpiry = false, paused = false
+		robotFinished = false, autoCompleteOnExpiry = false, paused = false,
+		finalStatus = null
 	}: Props = $props();
 
 	let now = $state(Date.now());
@@ -81,6 +90,10 @@
 	const pastEstimate = $derived(!isReadonly && estimateMs > 0 && elapsedMs >= estimateMs);
 
 	const complete = $derived(isReadonly || robotFinished || manuallyFinished);
+	/** Terminal but NOT successful — the fill did not happen (or not fully). */
+	const failedRun = $derived(
+		!!finalStatus && !['succeeded', 'completed'].includes(String(finalStatus).toLowerCase())
+	);
 
 	const elapsedMin = $derived(Math.floor(elapsedMs / 60000));
 	const elapsedSec = $derived(Math.floor((elapsedMs % 60000) / 1000));
@@ -165,7 +178,15 @@
 	     the countdown is derived from stays visible. Past zero it flips to
 	     "+MM:SS over" rather than pretending the fill is done. -->
 	<div class="rounded-xl border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-6 text-center">
-		{#if complete}
+		{#if complete && failedRun}
+			<div class="space-y-2">
+				<div class="text-2xl font-bold text-red-400">Run did not complete</div>
+				<p class="text-sm text-[var(--color-tron-text-secondary)]">
+					The robot ended in "{finalStatus}" after {elapsedMin}:{pad(elapsedSec)}. See "Why it failed"
+					above. Cartridges have NOT been reagent-filled — fix the cause and run them again.
+				</p>
+			</div>
+		{:else if complete}
 			<div class="space-y-2">
 				<div class="text-2xl font-bold text-green-400">Filling Complete</div>
 				<p class="text-sm text-[var(--color-tron-text-secondary)]">
@@ -198,7 +219,7 @@
 		<!-- Progress bar — position against the estimate, not a countdown to a deadline -->
 		<div class="mt-4 h-2 w-full overflow-hidden rounded-full bg-[var(--color-tron-border)]">
 			<div
-				class="h-full rounded-full transition-all duration-1000 {complete ? 'bg-green-500' : paused ? 'bg-yellow-400' : pastEstimate ? 'bg-amber-500' : 'bg-[var(--color-tron-cyan)]'}"
+				class="h-full rounded-full transition-all duration-1000 {complete && failedRun ? 'bg-red-500' : complete ? 'bg-green-500' : paused ? 'bg-yellow-400' : pastEstimate ? 'bg-amber-500' : 'bg-[var(--color-tron-cyan)]'}"
 				style="width: {complete ? 100 : progress * 100}%"
 			></div>
 		</div>

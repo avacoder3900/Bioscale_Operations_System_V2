@@ -120,6 +120,15 @@
 	// (survives reload). Gates the Complete + Run-again controls on Running.
 	let runFinishedLocal = $state(false);
 	const runFinished = $derived(runFinishedLocal || !!data.runState.opentronsRunFinalStatus);
+	/**
+	 * Terminal but not successful. The finish controls used to present a failed
+	 * run exactly like a good one — green "batch completed", Done front and
+	 * centre — and Done stamps every cartridge reagent_filled (2026-08-31).
+	 */
+	const runFailed = $derived(
+		!!data.runState.opentronsRunFinalStatus &&
+			!['succeeded', 'completed'].includes(String(data.runState.opentronsRunFinalStatus).toLowerCase())
+	);
 
 	// The robot's own status, reported by EmbeddedRunController. Used to hold the
 	// run clock while the robot is paused — paused time isn't fill time.
@@ -793,6 +802,7 @@
 				runEndTime={new Date(data.runState.runEndTime ?? (Date.now() + 600000))}
 				protocolParameters={data.runState.protocolParameters}
 				robotFinished={runFinished}
+				finalStatus={data.runState.opentronsRunFinalStatus}
 				paused={robotStatus === 'paused'}
 				autoCompleteOnExpiry={!data.runState.opentronsRunId}
 				onTimerComplete={() => { runFinishedLocal = true; }}
@@ -815,12 +825,21 @@
 		     with the same parameters. -->
 		{#if !isViewingPast && (previewParam || runFinished)}
 			<div class="mt-4 flex flex-col items-center gap-3 rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4">
-				<p class="text-sm text-[var(--color-tron-text-secondary)]">
-					Run finished — batch completed and the robot is free. Top-seal the cartridges, then photograph on Reagent Inspect. Or run another batch with the same parameters.
-				</p>
+				{#if runFailed}
+					<p class="text-sm text-red-300">
+						The robot ended in "{data.runState.opentronsRunFinalStatus}" — these cartridges were NOT
+						reagent-filled. Fix the cause shown above, then run them again. Only press Done if you
+						have confirmed the reagent actually went in; it marks all
+						{data.runState.cartridgeCount ?? 0} cartridges as reagent-filled.
+					</p>
+				{:else}
+					<p class="text-sm text-[var(--color-tron-text-secondary)]">
+						Run finished — batch completed and the robot is free. Top-seal the cartridges, then photograph on Reagent Inspect. Or run another batch with the same parameters.
+					</p>
+				{/if}
 				<button
 					type="button"
-					onclick={() => submitForm('completeRunFilling')}
+					onclick={() => submitForm('completeRunFilling', runFailed ? { confirmDespiteFailure: 'true' } : {})}
 					disabled={submitting}
 					class="min-h-[44px] w-full max-w-sm rounded-lg border border-green-500/50 bg-green-900/20 px-8 py-3 text-base font-bold text-green-400 transition-all hover:bg-green-900/30 disabled:opacity-50"
 				>
