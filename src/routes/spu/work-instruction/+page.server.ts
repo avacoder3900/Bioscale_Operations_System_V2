@@ -6,6 +6,7 @@ import {
 	createSpuWiDraftVersion
 } from '$lib/server/services/spu-work-instruction';
 import { parseSpuWorkInstruction, PARSER_VERSION } from '$lib/server/services/spu-wi-parser';
+import { downloadViaWorker } from '$lib/server/services/r2';
 import type { Actions, PageServerLoad } from './$types';
 
 const MAX_BYTES = 25 * 1024 * 1024;
@@ -78,32 +79,79 @@ export const actions: Actions = {
 			audit.dbConnected = true;
 
 			const form = await request.formData();
-			const file = form.get('file');
-			audit.fileFieldType = file?.constructor?.name ?? typeof file;
+			const r2KeyRaw = form.get('r2Key');
+			const r2Key = typeof r2KeyRaw === 'string' ? r2KeyRaw.trim() : '';
 
-			if (!(file instanceof File) || file.size === 0) {
-				audit.failure = 'no-file';
-				return fail(400, { error: 'No file provided', audit });
+			let name: string;
+			let buffer: Buffer;
+			let fileSize: number;
+			let browserMime: string;
+
+			if (r2Key) {
+				// Large-file path: the browser already PUT the bytes to R2 through
+				// the Worker, so only this key crosses Vercel's ~4.5 MB body limit.
+				audit.uploadPath = 'r2';
+				audit.r2Key = r2Key;
+
+				// The key is minted server-side in upload-token; refuse anything
+				// pointing outside that prefix.
+				if (!r2Key.startsWith('spu-wi/uploads/')) {
+					audit.failure = 'bad-r2-key';
+					return fail(400, { error: 'Invalid upload key', audit });
+				}
+
+				name = String(form.get('fileName') ?? '').trim() || 'work-instruction';
+				browserMime = String(form.get('mimeType') ?? '').trim();
+
+				try {
+					buffer = await downloadViaWorker(r2Key);
+				} catch (err: any) {
+					audit.failure = 'r2-download-throw';
+					audit.r2Error = err?.message ?? String(err);
+					console.error('[wi-upload] r2 download threw', err);
+					return fail(502, {
+						error: `Could not read the uploaded file back from storage: ${err?.message ?? 'unknown error'}`,
+						audit
+					});
+				}
+				fileSize = buffer.byteLength;
+			} else {
+				const file = form.get('file');
+				audit.fileFieldType = file?.constructor?.name ?? typeof file;
+
+				if (!(file instanceof File) || file.size === 0) {
+					audit.failure = 'no-file';
+					return fail(400, { error: 'No file provided', audit });
+				}
+
+				audit.uploadPath = 'direct';
+
+				if (file.size > MAX_BYTES) {
+					audit.failure = 'too-large';
+					return fail(400, { error: `File too large (max ${MAX_BYTES / 1024 / 1024} MB)`, audit });
+				}
+
+				name = file.name || 'work-instruction';
+				browserMime = file.type;
+				buffer = Buffer.from(await file.arrayBuffer());
+				fileSize = file.size;
 			}
 
-			audit.fileName = file.name;
-			audit.fileSize = file.size;
-			audit.mimeTypeFromBrowser = file.type;
+			audit.fileName = name;
+			audit.fileSize = fileSize;
+			audit.mimeTypeFromBrowser = browserMime;
+			audit.bufferBytes = buffer.byteLength;
 
-			if (file.size > MAX_BYTES) {
-				audit.failure = 'too-large';
-				return fail(400, { error: `File too large (max ${MAX_BYTES / 1024 / 1024} MB)`, audit });
-			}
-
-			const name = file.name || 'work-instruction';
 			const lower = name.toLowerCase();
 			if (!lower.endsWith('.docx') && !lower.endsWith('.pdf')) {
 				audit.failure = 'unsupported-extension';
 				return fail(400, { error: 'Only .docx and .pdf files are supported', audit });
 			}
 
-			const buffer = Buffer.from(await file.arrayBuffer());
-			audit.bufferBytes = buffer.byteLength;
+			if (buffer.byteLength === 0) {
+				audit.failure = 'empty-buffer';
+				return fail(400, { error: 'Uploaded file was empty', audit });
+			}
 
 			const fallbackMime = lower.endsWith('.pdf')
 				? 'application/pdf'
@@ -114,7 +162,7 @@ export const actions: Actions = {
 				console.log('[wi-upload] starting parse', { fileName: name, bytes: buffer.byteLength });
 				parsed = await parseSpuWorkInstruction({
 					buffer,
-					mimeType: file.type || fallbackMime,
+					mimeType: browserMime || fallbackMime,
 					originalName: name
 				});
 				console.log('[wi-upload] parse complete', {
@@ -143,8 +191,8 @@ export const actions: Actions = {
 				dbResult = await createSpuWiDraftVersion({
 					title: parsed.title,
 					originalFileName: name,
-					fileSize: file.size,
-					mimeType: file.type,
+					fileSize,
+					mimeType: browserMime || fallbackMime,
 					rawContent: parsed.rawContent,
 					renderedHtml: parsed.renderedHtml,
 					parts: parsed.parts,

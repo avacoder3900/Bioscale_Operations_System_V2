@@ -28,14 +28,17 @@
 		timing = {};
 	}
 
+	// Files past Vercel's serverless body cap don't go through the form at all —
+	// they're PUT straight to R2 through the Cloudflare Worker, and only the
+	// resulting key is posted here.
+	let usesDirectUpload = $derived(!!selectedFile && selectedFile.size > VERCEL_LIMIT_BYTES);
+
 	let sizeWarning = $derived(
-		selectedFile && selectedFile.size > VERCEL_LIMIT_BYTES
-			? `File is ${fmtBytes(selectedFile.size)} — exceeds Vercel's 4.5 MB serverless upload limit. Use a smaller file or split the .docx.`
-			: selectedFile && selectedFile.size > SOFT_WARN_BYTES
-				? `File is ${fmtBytes(selectedFile.size)} — close to Vercel's 4.5 MB limit, may 413.`
-				: null
+		selectedFile && selectedFile.size > SOFT_WARN_BYTES && !usesDirectUpload
+			? `File is ${fmtBytes(selectedFile.size)} — close to Vercel's 4.5 MB limit, may 413.`
+			: null
 	);
-	let blockSubmit = $derived(!selectedFile || (selectedFile?.size ?? 0) > VERCEL_LIMIT_BYTES);
+	let blockSubmit = $derived(!selectedFile);
 </script>
 
 <div class="mx-auto max-w-3xl space-y-6 p-6">
@@ -78,12 +81,54 @@
 			method="POST"
 			action="?/upload"
 			enctype="multipart/form-data"
-			use:enhance={() => {
+			use:enhance={async ({ formData, cancel }) => {
 				clientError = null;
 				httpStatus = null;
 				submitting = true;
-				stage = `Sending ${selectedFile ? fmtBytes(selectedFile.size) : '?'} to server…`;
 				timing = { startedAt: Date.now() };
+
+				const f = selectedFile;
+				if (f && f.size > VERCEL_LIMIT_BYTES) {
+					// Two-step: mint a single-key token, PUT the bytes to R2 via the
+					// Worker, then post only the key. Keeps the request to Vercel tiny.
+					try {
+						stage = `Requesting upload token for ${fmtBytes(f.size)}…`;
+						const tokRes = await fetch('/spu/work-instruction/upload-token', {
+							method: 'POST',
+							headers: { 'Content-Type': 'application/json' },
+							body: JSON.stringify({ fileName: f.name, size: f.size })
+						});
+						if (!tokRes.ok) {
+							throw new Error(`token request ${tokRes.status}: ${(await tokRes.text()).slice(0, 200)}`);
+						}
+						const tok = await tokRes.json();
+
+						stage = `Uploading ${fmtBytes(f.size)} to R2…`;
+						const putRes = await fetch(tok.putUrl, {
+							method: 'PUT',
+							headers: { 'Content-Type': tok.contentType },
+							body: f
+						});
+						if (!putRes.ok) {
+							throw new Error(`R2 upload ${putRes.status}: ${(await putRes.text()).slice(0, 200)}`);
+						}
+
+						formData.delete('file');
+						formData.set('r2Key', tok.key);
+						formData.set('fileName', f.name);
+						formData.set('mimeType', f.type || tok.contentType);
+						stage = 'Uploaded to R2; asking server to parse…';
+					} catch (err: any) {
+						clientError = `Direct upload failed: ${err?.message ?? String(err)}`;
+						stage = 'Direct upload failed';
+						submitting = false;
+						cancel();
+						return;
+					}
+				} else {
+					stage = `Sending ${f ? fmtBytes(f.size) : '?'} to server…`;
+				}
+
 				return async ({ result, update }) => {
 					timing.finishedAt = Date.now();
 					try {
@@ -124,8 +169,14 @@
 					Upload (.docx or .pdf)
 				</label>
 				<p class="tron-text-muted mt-1 text-xs">
-					Server limit: <span class="font-mono">4.5 MB</span> (Vercel serverless cap).
+					Files over <span class="font-mono">4.5 MB</span> upload straight to R2 storage, bypassing
+					the Vercel serverless body cap.
 				</p>
+				{#if usesDirectUpload && selectedFile}
+					<p class="mt-1 text-xs text-[var(--color-tron-cyan)]">
+						{fmtBytes(selectedFile.size)} — will use direct-to-R2 upload.
+					</p>
+				{/if}
 			</div>
 			<input
 				id="wi-file"

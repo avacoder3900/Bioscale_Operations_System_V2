@@ -21,6 +21,57 @@ const CORS_HEADERS = {
 	'Access-Control-Max-Age': '86400',
 };
 
+/** Length-independent comparison, to avoid leaking the secret by timing. */
+function safeEqual(a: string, b: string): boolean {
+	if (a.length !== b.length) return false;
+	let diff = 0;
+	for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+	return diff === 0;
+}
+
+async function hmacHex(secret: string, message: string): Promise<string> {
+	const enc = new TextEncoder();
+	const cryptoKey = await crypto.subtle.importKey(
+		'raw',
+		enc.encode(secret),
+		{ name: 'HMAC', hash: 'SHA-256' },
+		false,
+		['sign']
+	);
+	const sig = await crypto.subtle.sign('HMAC', cryptoKey, enc.encode(message));
+	return [...new Uint8Array(sig)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+/**
+ * A write is authorised by EITHER:
+ *   - X-Upload-Secret matching UPLOAD_SECRET (server-to-server callers), or
+ *   - a short-lived HMAC token scoped to one method+key:
+ *       ?exp=<unix-seconds>&sig=hex(HMAC-SHA256(UPLOAD_SECRET, "METHOD\nkey\nexp"))
+ *
+ * The token form lets a browser upload without ever holding UPLOAD_SECRET.
+ * Because the key is inside the signed message, a leaked token can only write
+ * the one object it was minted for, and only until it expires.
+ */
+async function isAuthorized(
+	request: Request,
+	url: URL,
+	env: Env,
+	key: string
+): Promise<boolean> {
+	const secret = request.headers.get('X-Upload-Secret');
+	if (secret && safeEqual(secret, env.UPLOAD_SECRET)) return true;
+
+	const exp = url.searchParams.get('exp');
+	const sig = url.searchParams.get('sig');
+	if (!exp || !sig || !key) return false;
+
+	const expSeconds = Number(exp);
+	if (!Number.isFinite(expSeconds) || expSeconds * 1000 < Date.now()) return false;
+
+	const expected = await hmacHex(env.UPLOAD_SECRET, `${request.method}\n${key}\n${exp}`);
+	return safeEqual(sig.toLowerCase(), expected);
+}
+
 export default {
 	async fetch(request: Request, env: Env): Promise<Response> {
 		// CORS preflight
@@ -31,11 +82,18 @@ export default {
 		const url = new URL(request.url);
 		const path = url.pathname;
 
+		// The key this request targets, needed before auth so a token can be
+		// bound to it.
+		const routeKey = path.startsWith('/upload/')
+			? decodeURIComponent(path.slice('/upload/'.length))
+			: path.startsWith('/file/')
+				? decodeURIComponent(path.slice('/file/'.length))
+				: '';
+
 		// Auth check — required for PUT/DELETE, public for GET/HEAD
 		const requiresAuth = request.method === 'PUT' || request.method === 'DELETE';
 		if (requiresAuth) {
-			const secret = request.headers.get('X-Upload-Secret');
-			if (secret !== env.UPLOAD_SECRET) {
+			if (!(await isAuthorized(request, url, env, routeKey))) {
 				return new Response(JSON.stringify({ error: 'Unauthorized' }), {
 					status: 401,
 					headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' }
