@@ -10794,3 +10794,24 @@ aspirate_cover 2mm, so no new air-pull risk. Wax .py 27 RTPs; stored .py synced.
 Deployment: robot protocol — B07 6fd42371 -> 5fa897fc, R04 91a4742a -> 68124b01, B14 471b4098 -> ee4d2dfc
 Source: branch master @ this commit
 What this deployment is for: small wax batches stop driving the tip into the tube floor.
+
+================================================================================
+2026-08-31 — master — deck-cal capture Z: 2mm approach-clearance fix finally merged
+================================================================================
+Operator asked the teaching convention for the tube rack ("align the tip with the rim?"). The
+intended answer is yes — but master's capture math made it wrong: nominal is the critical point
+parked at reference + APPROACH_Z_MM (2mm), and capture did dz = liveZ - nominal.z, i.e. measured
+from the HOVER. Jogging onto a correct rim stored dz = -2, and each re-teach walked the well down
+another 2mm (the "precise re-teaching makes it worse" effect); the fill's own hover then landed the
+tip on the rim. Fix = dz + APPROACH_Z_MM, which is commit 4bff9f35 on fix/deckcal-capture-clearance
+(2026-07-17) — it had NEVER been merged (verified with git merge-base). Branch now redundant.
+Newly urgent because 7cf4896e made the wax protocol read the tube rim/bottom from the labware
+definition: a 2mm teach error on the tube rack is now a 2mm aspiration-depth error.
+CONVENTION (now true): Move to hole -> jog the tip ONTO the rim -> Capture. Do it with the tip type
+you fill with; capture refuses if tip state changed since the move.
+CAUTION: wells taught rim-style under the old math sit ~2mm low per teach event. Do NOT blanket-
+correct — verify per deck with Tour / Fill motion.
+
+Deployment: production — Vercel auto-deploy from master push
+Source: branch master @ this commit
+What this deployment is for: teaching a rim now stores the rim.
