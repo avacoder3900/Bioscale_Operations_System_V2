@@ -10724,3 +10724,30 @@ profile does not match the pipette on that mount.
 Deployment: production — Vercel auto-deploy from master push
 Source: branch master @ this commit
 What this deployment is for: the mount is chosen with the other pre-run settings, so tip pickup stops failing silently.
+
+================================================================================
+2026-08-31 — DATA FIX — B14/deck-003 tip-adjust cap set to 8 (reagent runs died at tip calibration)
+================================================================================
+Symptom: B14 reagent on deck-003 scanned 20 carts, then picked up a tip, trashed it, picked up
+another and stopped — "acts like there are no cartridges". Nothing to do with cartridges: the run
+never reached the first aspirate. Run logs (70085c39, 6dd538e2):
+  Offset calibration: x=-5.3, y=0.8
+  Tip calibration REJECTED (adjust (-6.5,-1.9) exceeds max_tip_adjust 4.0mm) — retrying with a fresh tip
+DECISIVE EVIDENCE that -6 is normal for this pair, not a fault: B14's last GOOD reagent run
+(eb029606, 08-14) ran the SAME baseline (-5.3, 0.8) and dispensed with adjust (-6.0, -1.7) into 70
+wells. So deck-003's holes are taught in the tip-cal-ON frame at ~-6mm x, and the probe is healthy
+(travel ~1.2mm — the operator watched it and it looked normal). The only thing that changed since
+those good runs is the max_tip_adjust guard that shipped with the guarded reagent build on 08-27
+(before that reagent had NO cap and simply applied the -6.0).
+Fleet comparison — this is what made B14 the odd one out:
+  B07/deck-004 baseline (-1.0,+2.5) adjust ~(-2.0,+1.0) cap unset(4.0)  — device was re-zeroed 07-20
+  R04/deck-001 baseline (-5.0,+1.8) adjust ~(-6.0..-6.7) cap 8 (08-20)  — device never zeroed
+  B14/deck-003 baseline (-5.3,+0.8) adjust ~(-6.0..-6.5) cap NEVER SET  — device never zeroed
+B14 simply never got either treatment (open item from the 08-20 log: "B14: … set maxTipAdjust from
+the reading"). FIX: deck-003 fixture maxTipAdjust = 8, matching R04 and restoring exactly the
+behaviour of the 08-14 runs that filled correctly. Verified the uploaded reagent protocol declares
+max_tip_adjust max=8 so the value is accepted (calibration-rtps also clamps to the declared ceiling).
+Audit row written. NOT done (needs a deck re-verify, do not do casually): re-zeroing the B14 and R04
+calibrator devices (new string = old - mean adjust) to bring their adjusts into B07's ~1-2mm range —
+both decks are taught in their current probe frames, so re-zeroing without re-teaching would shift
+every fill by ~6mm.
