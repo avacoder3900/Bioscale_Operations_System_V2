@@ -49,12 +49,15 @@ const RETURNABLE_STATUSES = [
 	'retired'
 ];
 
-/** SPU-0244 style label pulled out of the GS1 (21) serial segment. */
+/** SPU-0244 style label built from the last 4 characters of the unit's UDI. */
 function extractShortId(udi: string): string {
 	if (!udi) return '';
-	const match = udi.match(/\(21\)(.+)/);
-	if (!match) return udi.slice(0, 8).toUpperCase();
-	return `SPU-${match[1].slice(0, 8).toUpperCase()}`;
+	// UDIs are either GS1-style "(01)...(21)<serial>" or a plain unit id like
+	// "BT-M01-0000-0236". Both share a long fixed prefix, so the leading
+	// characters do not distinguish units - the tail is the unit number.
+	const serial = udi.match(/\(21\)(.+)/)?.[1] ?? udi;
+	const tail = serial.replace(/[^A-Za-z0-9]/g, '').slice(-4).toUpperCase();
+	return tail ? `SPU-${tail}` : '';
 }
 
 function daysSince(date: Date | string | null | undefined): number {
