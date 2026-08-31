@@ -10846,3 +10846,34 @@ Retrieve this exact code: git checkout feat/spu-servicing-ui-master at commit bf
   (short-ID fix alone is the parent commit, d96554c2)
 What this deployment is for: click-test the barcode assignment UI, and confirm the Start
   Service Job picker now shows distinguishable SPU labels.
+
+================================================================================
+2026-08-31 — master — SPU servicing UI + barcode assignment merged to production
+================================================================================
+Merged feat/spu-servicing-ui-master into master. Lands the servicing page
+(/spu/mfg/servicing), the ServiceRecord model, the Servicing entry in SpuMfgTabs, the
+last-4-UDI short ID fix, and the barcode assignment UI (/spu/mfg/barcodes) — 8 files,
+~2,630 insertions.
+
+Master moved THREE times during the merge (Jacob's wax aspiration floor, exp-351 cart
+recovery, deck-cal capture clearance), so this is a chain of merge commits rather than a
+fast-forward. Every collision was progress.txt only — no source file was touched by both
+sides, so nothing was hand-reconciled in code. All six 08-31 entries were preserved and
+ordered with the upstream entries first.
+
+npx svelte-check on the merged tree: 11 errors / 433 warnings — identical to the
+pre-merge baseline, so the merge introduced no new type failures. The green branch
+preview had NOT included master's newer commits, which is why it was re-checked after
+merging rather than trusted.
+
+STILL NOT VERIFIED: the barcode assign action has never been exercised against real data.
+It is now live in production but nothing calls it until an operator opens
+/spu/mfg/barcodes and assigns. Click-test before using it on real inventory. It requires
+spu:write, rejects a barcode already held by another unit, and AuditLogs old -> new with
+a reason on reassignment.
+Deployment: production — Vercel auto-deploy from master push
+  https://bioscale-operations-system-mongodb.vercel.app
+  build: https://bioscale-operations-system-mongodb-nkp50yoil-brevitest.vercel.app (dpl_9r9EC8NtwjNaMYNN71oq48qJm6wk)
+Source: branch master @ commit 738d43eab3e4f8717a4d47528cc484240ed854be
+Retrieve this exact code: git checkout 738d43eab3e4f8717a4d47528cc484240ed854be
+What this deployment is for: SPU servicing records and barcode assignment reach the lab.
