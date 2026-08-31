@@ -164,6 +164,20 @@ def add_parameters(parameters: protocol_api.Parameters):
         maximum=288,
         unit="wells",
     )
+    # Minimum gap between the tip end and the tube's inner bottom during
+    # aspiration (2026-08-31). Wax had NO floor: for small batches it aspirated
+    # at bottom(0.5mm) and operators hit the tube floor. Mirrors the reagent
+    # protocol's min_tip_clearance, which has run without incident.
+    parameters.add_float(
+        variable_name="min_tip_clearance",
+        display_name="Min tip clearance (mm)",
+        description="Tip never goes closer than this to the tube bottom when aspirating.",
+        default=1.5,
+        minimum=0.3,
+        maximum=5.0,
+        unit="mm",
+    )
+
     parameters.add_bool(
         variable_name="pause_between_carriers",
         display_name="Pause between carriers",
@@ -914,7 +928,16 @@ def run(protocol: protocol_api.ProtocolContext):
         disposal_volume = 1
         maximum_volume_per_aspiration = 20
         pipette_tip_capacity = 21
-        tube_rim_height_2mL = 107.55
+        # Tube geometry now comes from the LOADED LABWARE (2026-08-31), not from
+        # hardcoded numbers that had drifted from it: the .py said rim 107.55 /
+        # bottom 68.48 while cosmas_and_damian_drybath_tuberack says 105.85 /
+        # 67.25. Depth was computed against the hardcoded rim but commanded as
+        # source_well.top(-depth), which the robot measures from the REAL rim —
+        # so every aspiration ran 1.70mm deeper than the model intended. Reading
+        # the labware also picks up any offset applied to the rack.
+        _wax_tube = tuberack['A3']  # wax source tube (tube_locations['wax'], defined below)
+        tube_rim_height_2mL = _wax_tube.top().point.z
+        tube_bottom_height_lw = _wax_tube.bottom().point.z
         aspirating_z_height_tweak = .25
         max_aspirate_depth = 50+aspirating_z_height_tweak
         aspirate_remainder = protocol.params.aspirate_remainder
@@ -935,8 +958,10 @@ def run(protocol: protocol_api.ProtocolContext):
                 2000:33.60,
                 2250:37.06,
             }
-            # define the bottom of the tube in relation to the deck of the robot 
-            tube_bottom_height = 68.48
+            # Bottom of the tube relative to the deck — from the labware (see the
+            # note by tube_rim_height_2mL). The old hardcoded 68.48 was 1.23mm
+            # above where the definition puts it.
+            tube_bottom_height = tube_bottom_height_lw
             
             # create a list of the keys (volumes) from the lookup table
             lookup_table_keys_list = list(lookup_table_2mL) 
@@ -1133,13 +1158,30 @@ def run(protocol: protocol_api.ProtocolContext):
                     if aspirate_volume > pipette_tip_capacity:
                         print('WARNING: aspirating too much volume', aspirate_volume)
                     
-                    # ASPIRATION
-                    if aspirate_end < 30:
-                        pipette.aspirate(aspirate_volume, source_well.top(-(aspirate_end + aspirate_cover)))
-                        protocol.delay(seconds = 2)
-                    else:
-                        pipette.aspirate(aspirate_volume, source_well.bottom(.5))
-                        protocol.delay(seconds = 2)
+                    # ASPIRATION — one path, floored (2026-08-31).
+                    #
+                    # This used to branch: `aspirate_end < 30` took the liquid-height
+                    # model, and ANYTHING ELSE parked the tip at bottom(0.5mm) for the
+                    # whole run. With 8 cartridges aspirate_end is ~32, so small batches
+                    # always took the 0.5mm branch and operators hit the tube floor —
+                    # while 24-cartridge runs took the model branch and were fine, which
+                    # is why it looked intermittent.
+                    #
+                    # Now: always follow the height model, then clamp to the same floor
+                    # the reagent protocol uses (tube bottom + min_tip_clearance). The
+                    # tip stays aspirate_cover below the modelled surface until the
+                    # surface gets low enough that the floor takes over.
+                    tip_floor_z = tube_bottom_height_lw + float(protocol.params.min_tip_clearance)
+                    target_below_rim = aspirate_end + aspirate_cover
+                    target_tip_z = tube_rim_height_2mL - target_below_rim
+                    if target_tip_z < tip_floor_z:
+                        target_below_rim = tube_rim_height_2mL - tip_floor_z
+                        protocol.comment(
+                            f'Aspirate clamped to the tube floor: {float(protocol.params.min_tip_clearance)}mm '
+                            f'above the bottom ({target_below_rim:.2f}mm below the rim)'
+                        )
+                    pipette.aspirate(aspirate_volume, source_well.top(-target_below_rim))
+                    protocol.delay(seconds = 2)
 
                     pipette.move_to(source_well.top(-2.3))  # Move to touch_tip height
                     protocol.delay(seconds=3)               # Pause before x/y motion
