@@ -23,7 +23,11 @@ export type ParsedPart = {
 };
 
 export type ParsedStepInput = {
+	// Unique row position. Optional so versions parsed before 3.3.0 still type-check.
+	stepOrdinal?: number;
 	stepNumber: number;
+	// The author's printed numbering ("1.1", "Step 4"). Optional for the same reason.
+	stepLabel?: string;
 	title: string;
 	content: string;
 	contentText: string;
@@ -155,9 +159,14 @@ export async function createSpuWiDraftVersion(input: {
 				sortOrder: f.sortOrder
 			}))
 		})),
-		steps: (input.steps ?? []).map((s) => ({
+		steps: (input.steps ?? []).map((s, i) => ({
 			_id: generateId(),
+			// Fall back for input parsed before 3.3.0: position in the array is
+			// exactly what stepOrdinal means, and the printed label defaulted to
+			// the author's number.
+			stepOrdinal: s.stepOrdinal ?? i + 1,
 			stepNumber: s.stepNumber,
+			stepLabel: s.stepLabel ?? String(s.stepNumber),
 			title: s.title,
 			content: s.content,
 			images: s.images,

@@ -3,7 +3,11 @@ import { nanoid } from 'nanoid';
 import { uploadToR2, uploadViaWorker } from './r2';
 import type { FieldDefinition, ParsedPart } from './spu-work-instruction';
 
-export const PARSER_VERSION = '3.2.0';
+// 3.3.0 — steps carry a unique stepOrdinal plus the author's printed stepLabel.
+// data-step and scan field names are keyed on the ordinal (the author's own
+// numbering repeats across sub-steps and restarted sections), and field names
+// carry a per-part occurrence index so a step can reference one part twice.
+export const PARSER_VERSION = '3.3.0';
 
 // Matches "Friendly Name (PT-SPU-NNN) xN" (or "x N") with qty optional.
 // Our SPU WIs author qty as "x1" / "x2" / "x3" — multiplier glued to a small
@@ -34,7 +38,18 @@ const ALLOWED_TAGS = new Set([
 type Hit = { partName: string; partNumber: string; quantity: number; segIdx: number };
 
 export type ParsedStep = {
+	// Position of the row in the procedure table, 1..N. ALWAYS unique, and the
+	// only safe key for identifying a step. Use this for DOM ids, field names,
+	// and anything that stores a scan against a step.
+	stepOrdinal: number;
+	// The author's own numbering, parsed to an integer. NOT unique: "1.1" and
+	// "1.2" both yield 1, and a document whose sections restart at 1 repeats it.
+	// Kept for display and for backwards compatibility with versions parsed
+	// before 3.3.0.
 	stepNumber: number;
+	// The step-number cell exactly as the operator sees it ("1.1", "Step 4").
+	// This is what the printed label must agree with, not stepNumber.
+	stepLabel: string;
 	title: string;
 	content: string;
 	contentText: string;
@@ -271,12 +286,23 @@ function extractStepsFromTable(
 		const stepCellText = stripTags(stepCellHtml).trim();
 		const numMatch = stepCellText.match(/\d+/);
 
-		// Header row heuristic: first row, no number in step cell, and cell text
-		// contains "step" / "instruction" / "picture".
-		if (r === 0 && !numMatch && /step|instruction|picture|image/i.test(stepCellText)) continue;
+		// Header row heuristic: no step emitted yet, no number in the step cell,
+		// and the step cell reads like a column heading.
+		//
+		// Anchored on stepCounter, NOT on r === 0: real documents open with a
+		// merged single-cell title row (dropped above by `cells.length < 2`), so
+		// the actual header lands at r === 1 and used to slip through as step 1.
+		// That shifted every synthesized step number by one — WIMF-SPU-01 showed
+		// its first instruction as step 2. The step cell must itself contain the
+		// heading word, so a real step with an empty number cell is unaffected.
+		if (stepCounter === 0 && !numMatch && /step|instruction|picture|image/i.test(stepCellText)) continue;
 
 		stepCounter++;
+		// stepOrdinal is the row's position and is guaranteed unique. stepNumber
+		// is the author's numbering and is not — see the ParsedStep docs.
+		const stepOrdinal = stepCounter;
 		const stepNumber = numMatch ? parseInt(numMatch[0], 10) : stepCounter;
+		const stepLabel = stepCellText.length > 0 ? stepCellText : String(stepOrdinal);
 
 		// Concatenate every cell after the step-number cell verbatim. Common case
 		// is a single instruction cell, but if the author keeps a separate image
@@ -312,7 +338,7 @@ function extractStepsFromTable(
 				const n = parseInt(pm[3], 10);
 				if (Number.isFinite(n) && n >= 1 && n <= 999) quantity = n;
 			} else {
-				warnings.push(`Step ${stepNumber} ${partNumber}: no qty (need "xN" after the part number, e.g. "x2") — defaulting to 1`);
+				warnings.push(`Step ${stepLabel} ${partNumber}: no qty (need "xN" after the part number, e.g. "x2") — defaulting to 1`);
 			}
 			parts.push({
 				anchorId: `anchor-${nanoid(8)}`,
@@ -325,10 +351,12 @@ function extractStepsFromTable(
 
 		const fieldDefinitions = parts.flatMap((p) => p.fieldDefinitions);
 		const titleSource = instructionText.split(/[.!?]\s/)[0] ?? instructionText;
-		const title = (titleSource.length > 120 ? titleSource.slice(0, 117) + '…' : titleSource) || `Step ${stepNumber}`;
+		const title = (titleSource.length > 120 ? titleSource.slice(0, 117) + '…' : titleSource) || `Step ${stepLabel}`;
 
 		steps.push({
+			stepOrdinal,
 			stepNumber,
+			stepLabel,
 			title,
 			content: instructionHtml,
 			contentText: instructionText,
@@ -365,19 +393,29 @@ function renderStepRowsHtml(steps: ParsedStep[]): string {
 	for (const step of steps) {
 		const numCell = step.numCellHtml && stripTags(step.numCellHtml).trim().length > 0
 			? step.numCellHtml
-			: `<p>${step.stepNumber}</p>`;
+			: `<p>${escapeHtml(step.stepLabel)}</p>`;
 		const instructionCell = step.content && step.content.trim().length > 0
 			? step.content
 			: `<p>${escapeHtml(step.title)}</p>`;
 
 		const scanInputs: string[] = [];
 		let totalScans = 0;
+		// A step may reference the same part more than once ("one on the left and
+		// one on the right"). Those are distinct scans, so the field name carries
+		// an occurrence index — without it both inputs would share a `name` and a
+		// form post would keep only the last value.
+		const seenParts = new Map<string, number>();
 		for (const p of step.parts) {
 			totalScans++;
-			const fieldName = `step_${step.stepNumber}_${p.partNumber.replace(/[^A-Za-z0-9]/g, '_')}`;
+			const partKey = p.partNumber.replace(/[^A-Za-z0-9]/g, '_');
+			const occurrence = (seenParts.get(partKey) ?? 0) + 1;
+			seenParts.set(partKey, occurrence);
+			// Keyed on stepOrdinal, never stepNumber: the author's numbering can
+			// repeat across sub-steps and restarted sections.
+			const fieldName = `step_${step.stepOrdinal}_${partKey}_${occurrence}`;
 			const qtyLabel = p.quantity > 1 ? ` × ${p.quantity}` : '';
 			scanInputs.push(
-				`<div class="bims-wi-step__scan"><label>Scan ${escapeHtml(p.partNumber)}${qtyLabel}</label><input type="text" class="bims-wi-step__scan-input" name="${fieldName}" data-step="${step.stepNumber}" data-part="${escapeAttr(p.partNumber)}" data-qty="${p.quantity}" data-required="true" placeholder="Scan barcode" autocomplete="off" /></div>`
+				`<div class="bims-wi-step__scan"><label>Scan ${escapeHtml(p.partNumber)}${qtyLabel}</label><input type="text" class="bims-wi-step__scan-input" name="${fieldName}" data-step="${step.stepOrdinal}" data-step-label="${escapeAttr(step.stepLabel)}" data-part="${escapeAttr(p.partNumber)}" data-occurrence="${occurrence}" data-qty="${p.quantity}" data-required="true" placeholder="Scan barcode" autocomplete="off" /></div>`
 			);
 		}
 		const scansBlock = scanInputs.length
@@ -385,7 +423,7 @@ function renderStepRowsHtml(steps: ParsedStep[]): string {
 			: `<div class="bims-wi-step__scans bims-wi-step__scans--none" data-required-scans="0"><span class="bims-wi-step__no-scans">No scans required</span></div>`;
 
 		out.push(
-			`<section class="bims-wi-step" data-step="${step.stepNumber}" data-required-scans="${totalScans}"><div class="bims-wi-step__doc"><div class="bims-wi-step__num">${numCell}</div><div class="bims-wi-step__instruction">${instructionCell}</div></div>${scansBlock}</section>`
+			`<section class="bims-wi-step" data-step="${step.stepOrdinal}" data-step-label="${escapeAttr(step.stepLabel)}" data-required-scans="${totalScans}"><div class="bims-wi-step__doc"><div class="bims-wi-step__num">${numCell}</div><div class="bims-wi-step__instruction">${instructionCell}</div></div>${scansBlock}</section>`
 		);
 	}
 	out.push('</div>');

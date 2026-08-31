@@ -28,6 +28,7 @@ const workInstructionSchema = new Schema({
 		}],
 		steps: [{
 			_id: { type: String, default: () => generateId() },
+			stepOrdinal: Number, stepLabel: String,
 			stepNumber: Number, title: String, content: String,
 			imageData: String, imageContentType: String,
 			images: { type: [String], default: undefined },
