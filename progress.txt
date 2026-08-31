@@ -10751,6 +10751,50 @@ Audit row written. NOT done (needs a deck re-verify, do not do casually): re-zer
 calibrator devices (new string = old - mean adjust) to bring their adjusts into B07's ~1-2mm range —
 both decks are taught in their current probe frames, so re-zeroing without re-teaching would shift
 every fill by ~6mm.
+
+================================================================================
+2026-08-31 — master — Recovered exp-351 cart fb996782 (cancelled but actually completed)
+================================================================================
+Cart fb996782 (exp 351, S1, device BT-M01-0000-0202) showed cancelled though the operator
+watched the test complete. Root cause is in the device-upload Lambda (see
+docs/logging-middleware-update/index.mjs test_upload): at 19:52:23Z the device sent an EMPTY
+upload (0 readings) 28s after test start, and the Lambda's rule "numberOfReadings===0 ->
+cancelled" stamped the cart. The REAL 252-reading upload arrived at 20:19:13Z (duration 1619s,
+in line with the batch's 9 other devices) but the handler's idempotency guard
+(status==='cancelled' -> return cached) silently DISCARDED it and answered SUCCESS to the
+device. Data was still in device_events (event YnMTT0JNQ7NGkbj4v9JM_).
+RECOVERY (applied + verified, no code change): re-parsed the blob with the Lambda's exact
+parser, wrote rawData + status completed + checkpoints.completed (when=20:19:13Z, who
+'brevitest-cloud (recovered)') to cartridge_records, synced the experiment's embedded status,
+audit entry changedBy claude-recover-fb996782, full-doc backup at
+calibration-backups/fb996782-cancelled-backup-2026-08-31T20-30-17-654Z.json.
+OPEN: (1) why the device emitted an empty upload 28s in; (2) Lambda fix — a cancelled cart
+with 0 readings should accept a later data-bearing upload (the guard should only skip when
+rawData already has readings). Lambda is deployed infra, not this repo.
+
+================================================================================
+2026-08-31 — master — wax aspiration floored like reagent (8-cart runs were riding 0.5mm off the tube bottom)
+================================================================================
+Operator: "with 8 carts we are hitting the bottom of the tube too early... can we make wax match
+reagent?" Yes — and the mechanism was a branch, not a calibration issue:
+    if aspirate_end < 30: height model   else: source_well.bottom(0.5)
+aspirate_end grows as the tube empties, so the branch is chosen by BATCH SIZE. 24 carts (654.8uL)
+-> 25.6 (model); 12 -> 29.7 (model); 8 carts (251.6uL) -> 32.4 -> bottom(0.5mm) for the WHOLE run;
+4 carts likewise. Small batches ran with the tip 0.5mm off the floor. Reagent never had this branch —
+it has min_tip_clearance 1.5mm + tip_floor_z.
+Second defect found while checking: the wax tube constants had drifted from the labware — .py said
+rim 107.55 / bottom 68.48, cosmas_and_damian_drybath_tuberack says 105.85 / 67.25. Depth was computed
+against the hardcoded rim but commanded via source_well.top(-depth) (measured from the REAL rim), so
+every aspiration ran 1.70mm deeper than intended.
+FIX (wax now mirrors reagent): single aspiration path = height model clamped to
+tube_bottom + min_tip_clearance (new RTP, default 1.5mm); rim/bottom read from the loaded labware so
+they cannot drift and any rack offset is included. Modelled clearance 8 carts: 0.50mm flat ->
+4.22mm tapering to 1.80mm; 24 carts: 10.65 -> 11.12 tapering to 1.80. Submersion stays at
+aspirate_cover 2mm, so no new air-pull risk. Wax .py 27 RTPs; stored .py synced.
+Deployment: robot protocol — B07 6fd42371 -> 5fa897fc, R04 91a4742a -> 68124b01, B14 471b4098 -> ee4d2dfc
+Source: branch master @ this commit
+What this deployment is for: small wax batches stop driving the tip into the tube floor.
+
 ================================================================================
 2026-08-31 — feat/spu-servicing-ui-master — servicing short ID fix + barcode assignment UI committed
 ================================================================================
