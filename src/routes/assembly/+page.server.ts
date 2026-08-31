@@ -2,7 +2,10 @@ import { fail, redirect } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
 import { connectDB, AssemblySession, Spu, User, generateId, AuditLog } from '$lib/server/db';
 import { generateNextSpuUdi } from '$lib/server/services/udi-generator';
-import { getActiveSpuWorkInstruction } from '$lib/server/services/spu-work-instruction';
+import {
+	getActiveSpuWorkInstruction,
+	selectActiveWiVersion
+} from '$lib/server/services/spu-work-instruction';
 import type { Actions, PageServerLoad } from './$types';
 
 const STALE_DRAFT_MS = 24 * 60 * 60 * 1000;
@@ -20,11 +23,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 	const activeWi: any = await getActiveSpuWorkInstruction();
 	const activeWiTotalSteps = activeWi
-		? (
-				(activeWi.versions ?? []).find((v: any) => v.version === activeWi.currentVersion) ?? {
-					steps: []
-				}
-			).steps?.length ?? 0
+		? (selectActiveWiVersion(activeWi)?.version ?? { steps: [] }).steps?.length ?? 0
 		: null;
 
 	const candidateSpus = await Spu.find({

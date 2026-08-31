@@ -1,7 +1,10 @@
 import { json } from '@sveltejs/kit';
 import { requireAgentApiKey } from '$lib/server/api-auth';
 import { connectDB, PartDefinition } from '$lib/server/db';
-import { getActiveSpuWorkInstruction } from '$lib/server/services/spu-work-instruction';
+import {
+	getActiveSpuWorkInstruction,
+	selectActiveWiVersion
+} from '$lib/server/services/spu-work-instruction';
 import { SPU_COMPONENT_PARTS } from '$lib/server/services/spu-component-parts';
 import type { RequestHandler } from './$types';
 
@@ -51,8 +54,7 @@ export const GET: RequestHandler = async ({ request }) => {
 	const wi = (await getActiveSpuWorkInstruction()) as any;
 	if (wi) {
 		const versions = wi.versions ?? [];
-		const current =
-			versions.find((v: any) => v.version === wi.currentVersion) ?? versions[versions.length - 1];
+		const current = selectActiveWiVersion(wi)?.version ?? versions[versions.length - 1];
 		if (current) {
 			workInstruction = {
 				workInstructionId: wi._id,

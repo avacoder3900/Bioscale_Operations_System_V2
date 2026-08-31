@@ -45,6 +45,49 @@ export async function getSpuWorkInstructionDoc() {
 	return WorkInstruction.findOne({ documentType: SPU_WI_DOCUMENT_TYPE });
 }
 
+/**
+ * Pick the version entry to display/serve for an SPU work instruction.
+ *
+ * `versions[]` is append-only, and re-parsing the same source document pushes a
+ * NEW entry that reuses the existing version number — so version numbers are
+ * NOT unique. `versions.find(v => v.version === currentVersion)` therefore
+ * returned whichever entry was appended *first*. On the live document that is a
+ * Parser v1.2.0 entry with zero parts and no rendered HTML, which is why the
+ * page rendered empty while a complete v3.2.0 parse sat further down the array.
+ *
+ * Rule: newest parse wins — highest version number, then latest `parsedAt`,
+ * then latest array position. `isCurrent` reports whether the chosen entry is
+ * the inducted `currentVersion`, so callers can flag a draft parse.
+ */
+export function selectActiveWiVersion(
+	wi: any
+): { version: any; isCurrent: boolean } | null {
+	const versions = (wi?.versions ?? []) as any[];
+	if (versions.length === 0) return null;
+
+	const parsedTime = (v: any): number => {
+		const t = new Date(v?.parsedAt ?? 0).getTime();
+		return Number.isFinite(t) ? t : 0;
+	};
+
+	let best = 0;
+	for (let i = 1; i < versions.length; i++) {
+		const candidate = versions[i];
+		const incumbent = versions[best];
+		const cv = Number(candidate?.version ?? 0);
+		const iv = Number(incumbent?.version ?? 0);
+		if (cv > iv || (cv === iv && parsedTime(candidate) >= parsedTime(incumbent))) {
+			best = i;
+		}
+	}
+
+	const chosen = versions[best];
+	return {
+		version: chosen,
+		isCurrent: Number(chosen?.version ?? 0) === Number(wi?.currentVersion ?? 0)
+	};
+}
+
 export async function createSpuWiDraftVersion(input: {
 	title?: string;
 	revision?: string;

@@ -3,7 +3,8 @@ import { requirePermission } from '$lib/server/permissions';
 import { connectDB } from '$lib/server/db';
 import {
 	getSpuWorkInstructionDoc,
-	createSpuWiDraftVersion
+	createSpuWiDraftVersion,
+	selectActiveWiVersion
 } from '$lib/server/services/spu-work-instruction';
 import { parseSpuWorkInstruction, PARSER_VERSION } from '$lib/server/services/spu-wi-parser';
 import { downloadViaWorker } from '$lib/server/services/r2';
@@ -17,13 +18,12 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 	const wi: any = await getSpuWorkInstructionDoc();
 
-	const activeVersion = wi
-		? (wi.versions ?? []).find((v: any) => v.version === wi.currentVersion)
-		: null;
+	const selected = selectActiveWiVersion(wi);
+	const activeVersion = selected?.version ?? null;
 
 	const draftVersions = wi
 		? (wi.versions ?? [])
-				.filter((v: any) => v.version !== wi.currentVersion)
+				.filter((v: any) => v !== activeVersion)
 				.map((v: any) => ({
 					id: v._id,
 					version: v.version,
@@ -59,6 +59,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 				)
 			: null,
 		draftVersions,
+		activeVersionIsCurrent: selected?.isCurrent ?? false,
 		parserVersion: PARSER_VERSION
 	};
 };

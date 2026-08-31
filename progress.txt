@@ -10702,3 +10702,44 @@ restore the fail() in loadDeck. npm check 11 (baseline); build clean.
 Deployment: production — Vercel auto-deploy from master push
 Source: branch master @ this commit
 What this deployment is for: wax fills no longer wait on oven cure time.
+
+================================================================================
+2026-08-31 — feat/wi-direct-r2-upload — SPU work instruction was invisible: wrong tab target + stale version pick
+================================================================================
+Two independent bugs kept the parsed SPU work instruction off screen.
+
+(1) Wrong tab target. SpuMfgTabs' "Work Instructions" tab pointed at
+/documents/instructions — the generic document-control list — while the parsed SPU work
+instruction lives at /spu/work-instruction. That route had no inbound link at all except two
+buried on /assembly, so the uploader/parser output was effectively unreachable from the SPU
+mfg tabs. Repointed the tab to /spu/work-instruction, added altMatch so /documents/instructions
+still highlights the same tab (it mounts the strip too and would otherwise show nothing active),
+and added src/routes/spu/work-instruction/+layout.svelte so the strip persists there, matching
+how /assembly and /validation mount it.
+
+(2) Stale version pick — the real "nothing shows". versions[] is append-only and re-parsing the
+same source pushes a NEW entry reusing the existing version number, so version numbers are NOT
+unique. The live spu_creation doc has 9 entries: 3x v1, 6x v2. currentVersion is 1, so
+versions.find(v => v.version === currentVersion) returned the FIRST v1 — a Parser v1.2.0 entry
+with 0 parts, 0 steps content and 0 bytes of renderedHtml — while the complete Parser v3.2.0
+parse (10 parts, 8 steps, 9257 chars html) sat further down the array as a "draft".
+Added selectActiveWiVersion() to src/lib/server/services/spu-work-instruction.ts: newest parse
+wins (highest version, then latest parsedAt, then array position) and it returns isCurrent so
+callers can tell the chosen entry is not the inducted currentVersion. Replaced the identical
+find-by-version-number in all four call sites: spu/work-instruction/+page.server.ts (which also
+now excludes the chosen entry from draftVersions by identity, not by version number, and returns
+activeVersionIsCurrent), assembly/+page.server.ts (was reporting 1 step instead of 8),
+api/spu/work-instruction/active/+server.ts, and api/agent/inventory/spu-assembly-map/+server.ts.
+
+Verified against prod read-only: selection goes from "v1 Parser v1.2.0 parts=0 steps=1 html=0"
+to "v2 Parser v3.2.0 parts=10 steps=8 html=9257". No DB writes — this is a code-side fix by
+explicit decision.
+
+OPEN / KNOWN: the displayed parse is technically a draft (isCurrent=false); currentVersion is
+still 1. Proper follow-up is to induct v2 through the existing induct path so the document-control
+record matches what everyone sees. Also still open per the original ask: surfacing the parsed
+parts/steps on the SPU mfg overview as the SPU-creation reference, and linking the
+/documents/instructions card for spu_creation to the parsed view instead of the generic viewer.
+
+npm run check: 11 errors (baseline, all pre-existing: r2.ts, AskBimsWidget, assembly/[sessionId],
+parts/+page.svelte) — none in the touched files.

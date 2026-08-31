@@ -23,8 +23,14 @@
 			icon: 'M11 4a2 2 0 114 0v1a1 1 0 001 1h3a1 1 0 011 1v3a1 1 0 01-1 1h-1a2 2 0 100 4h1a1 1 0 011 1v3a1 1 0 01-1 1h-3a1 1 0 01-1-1v-1a2 2 0 10-4 0v1a1 1 0 01-1 1H7a1 1 0 01-1-1v-3a1 1 0 00-1-1H4a2 2 0 110-4h1a1 1 0 001-1V7a1 1 0 011-1h3a1 1 0 001-1V4z'
 		},
 		{
-			href: '/documents/instructions',
+			// The SPU work instruction (parsed .docx -> parts/steps) lives here.
+			// This used to point at /documents/instructions, which is the generic
+			// document-control list and never shows the parsed SPU instruction.
+			href: '/spu/work-instruction',
 			label: 'Work Instructions',
+			// Keep the generic document-control list highlighting this tab too, so
+			// /documents/instructions doesn't render a strip with nothing active.
+			altMatch: ['/documents/instructions'],
 			icon: 'M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z'
 		},
 		{
@@ -34,12 +40,17 @@
 		}
 	];
 
-	function isActive(href: string, currentPath: string): boolean {
+	function matches(href: string, currentPath: string): boolean {
 		return currentPath === href || currentPath.startsWith(href + '/');
 	}
 
+	function isActive(item: { href: string; altMatch?: string[] }, currentPath: string): boolean {
+		if (matches(item.href, currentPath)) return true;
+		return (item.altMatch ?? []).some((alt) => matches(alt, currentPath));
+	}
+
 	let currentLabel = $derived(
-		navItems.find((i) => isActive(i.href, $page.url.pathname))?.label ?? 'Overview'
+		navItems.find((i) => isActive(i, $page.url.pathname))?.label ?? 'Overview'
 	);
 </script>
 
@@ -67,7 +78,7 @@
 
 <div class="flex flex-wrap gap-2 border-b border-[var(--color-tron-border)]">
 	{#each navItems as item (item.href)}
-		{@const active = isActive(item.href, $page.url.pathname)}
+		{@const active = isActive(item, $page.url.pathname)}
 		<a
 			href={item.href}
 			class="flex items-center gap-2 border-b-2 px-4 py-3 text-sm font-medium transition-colors {active

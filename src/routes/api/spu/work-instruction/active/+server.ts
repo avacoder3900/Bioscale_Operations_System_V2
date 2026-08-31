@@ -1,7 +1,10 @@
 import { json } from '@sveltejs/kit';
 import { hasPermission } from '$lib/server/permissions';
 import { isAgentApiKey } from '$lib/server/api-auth';
-import { getActiveSpuWorkInstruction } from '$lib/server/services/spu-work-instruction';
+import {
+	getActiveSpuWorkInstruction,
+	selectActiveWiVersion
+} from '$lib/server/services/spu-work-instruction';
 import type { RequestHandler } from './$types';
 
 export const GET: RequestHandler = async ({ request, locals }) => {
@@ -15,7 +18,7 @@ export const GET: RequestHandler = async ({ request, locals }) => {
 	const wi: any = await getActiveSpuWorkInstruction();
 	if (!wi) return json({ error: 'No active SPU work instruction' }, { status: 404 });
 
-	const activeVersion = (wi.versions ?? []).find((v: any) => v.version === wi.currentVersion);
+	const activeVersion = selectActiveWiVersion(wi)?.version;
 	if (!activeVersion) return json({ error: 'Active version missing' }, { status: 500 });
 
 	const steps = (activeVersion.steps ?? []).map((s: any) => ({
