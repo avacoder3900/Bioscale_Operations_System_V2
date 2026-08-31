@@ -10877,3 +10877,26 @@ Deployment: production — Vercel auto-deploy from master push
 Source: branch master @ commit 738d43eab3e4f8717a4d47528cc484240ed854be
 Retrieve this exact code: git checkout 738d43eab3e4f8717a4d47528cc484240ed854be
 What this deployment is for: SPU servicing records and barcode assignment reach the lab.
+================================================================================
+2026-08-31 — DATA FIX — deck-001 wax band re-seated onto its reagent surface (matches deck-004)
+================================================================================
+Operator: deck-001 IS used a lot for wax filling; bring it in line with deck-004.
+Evidence for the change — the physical invariant is that a cartridge's wax (even col) and reagent
+(odd col) rims sit on the same top face, so their stored z should match:
+   deck-002 +0.60 | deck-003 +0.62 | deck-004 +0.16 | deck-001 -4.65  <- lone outlier
+deck-001's wax z history shows the cause is deliberate whole-deck operations, NOT the capture-
+clearance bug: the 07-10 rebuild session, then +0.5mm (07-28) and -3.9mm (08-06, ialas) applied to
+all 288 wax wells. Two decks agree with each other; 001 did not.
+APPLIED: each deck-001 wax well re-seated onto ITS OWN reagent partner's z using deck-004's measured
+relation (+0.158mm). Per-well, not a flat shift, so deck-001's reagent-taught surface variation is
+preserved. Wax z 3.50..3.85 -> 8.36..8.96 (mean shift +4.81mm, range 4.51..5.41). X/Y untouched,
+reagent untouched, 0 wells out of bounds (zDimension 12.7). 288 deck_calibration_edits rows written
+so this is visible in history and undoable through the Studio; audit_logs row + backup
+backups/gen4deck_001-backup-2026-08-31-pre-wax-z-align.json. Post-check: deck-001 wax-reagent now
++0.16mm, matching deck-004 exactly.
+Direction of risk is deliberate: RAISING the band means a too-high tip (wax may sit on the face —
+visible, harmless, revertible) rather than a too-low one (tip into the cartridge).
+MUST DO BEFORE A PRODUCTION WAX RUN ON R04: Deck Cal Studio -> deck-001 -> R04 -> p20/wax tip ->
+Fill motion on a few holes and confirm the tip hovers ~1mm above the rim (dispense_depth -1.0).
+The run-start freshness gate pushes this geometry to R04 automatically on the next wax run.
+Rollback: restore the backup json, or Undo in the Studio.
