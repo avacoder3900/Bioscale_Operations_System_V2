@@ -11096,3 +11096,16 @@ Retrieve this exact code: git checkout feat/spu-tweaks at commit cf918f80
   (or: git log master --oneline to find it if the branch has since moved on)
 What this deployment is for: Particle connectivity columns on /spu, Last Vitals panel + working
   ping/rename on SPU detail, Device Info edit-button polish
+
+================================================================================
+2026-09-01 — feat/spu-tweaks — FW column fix: product-scoped firmware enrichment
+================================================================================
+Jacob's screenshot after the SPU-INV-04 deploy confirmed Connected/OS/Last Heard working but the
+FW column empty for all units. Root cause: user-scoped GET /v1/devices returns no firmware_version
+for product-fleet devices — the console's "vNN" lives only on the product API. Added listProducts()
++ listAllProductDevices() (paginated) to src/lib/server/particle.ts; /api/particle/status now
+enriches the fleet map from every accessible product, showing "v83" and pending updates as
+"v85 → v83" like the console. Enrichment is best-effort in its own try/catch — product API failure
+degrades to base connectivity data. PRD-04 amended with the finding.
+
+npm run check: 11 errors / 433 warnings — baseline, 0 in touched files.

@@ -60,6 +60,40 @@ export async function getDevice(deviceId: string): Promise<ParticleApiDevice> {
 	return res.json();
 }
 
+/** List products the token's account has access to. */
+export async function listProducts(): Promise<{ id: number; slug?: string; name?: string }[]> {
+	const res = await particleFetch('/products');
+	const body = await res.json();
+	return body?.products ?? [];
+}
+
+/**
+ * Product-scoped device list, all pages. The user-scoped /devices call returns
+ * no firmware_version for product-fleet devices — the console's "Firmware vNN"
+ * number only exists on the product endpoint.
+ */
+export async function listAllProductDevices(productIdOrSlug: number | string): Promise<any[]> {
+	const out: any[] = [];
+	const perPage = 100;
+	for (let page = 1; page <= 20; page++) {
+		const res = await particleFetch(
+			`/products/${productIdOrSlug}/devices?per_page=${perPage}&page=${page}`
+		);
+		const body = await res.json();
+		const devices: any[] = body?.devices ?? [];
+		out.push(...devices);
+		const totalPages = body?.meta?.total_pages;
+		if (
+			devices.length === 0 ||
+			(typeof totalPages === 'number' && page >= totalPages) ||
+			(totalPages == null && devices.length < perPage)
+		) {
+			break;
+		}
+	}
+	return out;
+}
+
 /**
  * Last known device vitals (GET /v1/diagnostics/:id/last) — the data behind the
  * console's "Last vitals" panel. Payload shape varies by Device OS version, so

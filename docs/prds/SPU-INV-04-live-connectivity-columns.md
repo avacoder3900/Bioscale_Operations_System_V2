@@ -32,6 +32,14 @@ when someone clicks Sync on `/particle/settings`, so its online/offline status i
 4. **All four new columns are sortable** via the SPU-INV-03 mechanism (Connected: online first
    ascending; Last Heard chronological; FW/OS string compare; missing values last).
 
+## Amendment (2026-09-01, post-deploy)
+
+First production deploy confirmed Connected/OS/Last Heard working but FW empty for every unit:
+the user-scoped `/v1/devices` list returns no `firmware_version` for product-fleet devices. The
+console's "vNN" (and "vNN → vMM" pending-update state) lives only on the product API. The status
+endpoint now enriches best-effort from `GET /v1/products` + `GET /v1/products/:id/devices`
+(paginated); product-endpoint failure degrades back to the base connectivity data.
+
 ## Non-goals
 
 - No polling/live updates after the initial fetch (refresh the page to re-check).
