@@ -345,7 +345,7 @@
 										return async ({ result }) => {
 											deleting = false;
 											if (result.type === 'success') {
-												window.location.href = '/spu/mfg';
+												window.location.href = '/spu';
 											}
 										};
 									}}

@@ -40,7 +40,9 @@
 
 	// sectionPaths: sibling route trees that belong to this nav item's section but
 	// keep their own URLs (e.g. SPU Mfg owns Assembly / Work Instructions / Validation).
-	type NavItem = { href: string; label: string; icon: string; sectionPaths?: string[] };
+	// exact: opt out of prefix matching, so an item like /spu does not stay lit
+	// on subroutes that belong to other nav items (/spu/mfg/*, /spu/cleaning).
+	type NavItem = { href: string; label: string; icon: string; sectionPaths?: string[]; exact?: boolean };
 	type NavGroup = { label: string; icon: string; items: NavItem[] };
 
 	const topItems: NavItem[] = [
@@ -61,6 +63,12 @@
 			label: 'Manufacturing',
 			icon: 'M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35',
 			items: [
+				{
+					href: '/spu',
+					label: 'SPU Inventory',
+					exact: true,
+					icon: 'M4 6h16M4 10h16M4 14h16M4 18h16'
+				},
 				{
 					href: '/spu/mfg',
 					label: 'SPU Mfg',
@@ -171,6 +179,7 @@
 
 	function matchesItem(item: NavItem, currentPath: string): boolean {
 		if (item.href === '/') return currentPath === '/';
+		if (item.exact) return currentPath === item.href;
 		const paths = [item.href, ...(item.sectionPaths ?? [])];
 		return paths.some((p) => currentPath === p || currentPath.startsWith(p + '/'));
 	}

@@ -10970,3 +10970,38 @@ Checked for the Vercel dedup trap (identical tree already built as a preview): a
 NOT in this deploy: the "where it is" card on /spu/[spuId]. That page uses the embedded
   spu.serviceRecords[] model (Phase A send / Phase B return), not the ServiceRecord collection
   the board uses — which model it should read is still an open question.
+
+================================================================================
+2026-09-01 — feat/spu-tweaks — SPU inventory moves to /spu as a list view; /spu/mfg lands on Assembly
+================================================================================
+First of a batch of SPU-management tweaks. Two PRDs written then implemented (docs/prds/
+SPU-INV-01-list-view.md, SPU-INV-02-inventory-at-spu-root.md):
+
+1) Inventory relocated: the "Overview" card grid that lived at /spu/mfg is now the root SPU page.
+   /spu previously had NO page at all (404 — the spu/ tree only had a pass-through layout). New
+   src/routes/spu/+page.server.ts + +page.svelte carry the same spu:read load and search semantics.
+   /spu/mfg/+page.server.ts is now a redirect(302, '/assembly') so entering SPU Manufacturing
+   starts on the SPU Assembly tab; its +page.svelte was deleted. The mfg layout (tab strip) stays
+   for /spu/mfg/barcodes and /spu/mfg/servicing.
+
+2) Card grid → table list view: one row per SPU with UDI / Device ID / Barcode / Status
+   (SpuStatusBadge) / Batch / Owner / Validation n-of-3 chip / Created, whole row clickable to
+   /spu/[spuId]. Live search across UDI/device/barcode/owner/batch and Enter-jump-to-exact-match
+   preserved from the old page. Table follows the Tron idiom from mfg/barcodes. Drive-by: the load
+   now projects with .select() — the old Spu.find() dragged every inline attachments[].content CSV
+   blob and assembly.stepRecords[] into the list page on every view.
+
+Supporting changes: SpuMfgTabs.svelte drops the Overview tab, breadcrumb "SPU" now links to /spu,
+current-label fallback no longer claims "Overview"; root +layout.svelte gains an exact-match
+"SPU Inventory" nav item (new `exact` flag on NavItem — without it a /spu item would prefix-light
+on all /spu/mfg/*, /spu/cleaning, /spu/[spuId] pages); SPU delete flow in [spuId]/+page.svelte
+returns to /spu instead of /spu/mfg. Side effect: tests/contracts/07-spu.test.ts's first test
+(GET /spu expecting a `spus` page key) goes from failing to passing; the other 7 in that file
+remain stale (pre-existing — they target routes that no longer exist).
+
+Branch cut from origin/master @ 0aae448d. Note: GitHub's default branch is currently NEWDEV, which
+is fully contained in master (master is 396 ahead, NEWDEV 0) — treated it like the stale `main`
+situation and based on master, which is what production deploys.
+
+npm run check: 11 errors — unchanged vs. baseline (r2.ts/AskBimsWidget/assembly/parts), 0 in
+touched files.
