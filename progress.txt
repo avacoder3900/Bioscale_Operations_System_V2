@@ -10948,3 +10948,11 @@ Files: src/lib/server/db/models/service-group.ts (new), service-record.ts, model
 src/routes/spu/mfg/servicing/+page.server.ts, +page.svelte.
 npm run check: 120 errors / 433 warnings — master's pre-existing baseline, ZERO in the touched files.
 Not exercised against real data; the Vercel preview build is the gate.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-6p44wsg03-brevitest.vercel.app
+  (immutable: https://bioscale-operations-system-mongodb-6p44wsg03-brevitest.vercel.app)
+  build: https://vercel.com/brevitest/bioscale-operations-system-mongodb/6isa3zaRy5S4HsuN4YvJr6F6ZbDF
+Source: branch feat/spu-service-groups @ commit a7f92c10
+Retrieve this exact code: git checkout feat/spu-service-groups at commit a7f92c10
+What this deployment is for: review group tasks (group notes + per-unit findings) and the
+  reordered servicing board before merging to master.
