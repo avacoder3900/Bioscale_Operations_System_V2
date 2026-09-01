@@ -11042,3 +11042,10 @@ Sorting is client-side over the search-filtered rows; search + Enter-jump untouc
 touched: src/routes/spu/+page.svelte.
 
 npm run check: 11 errors — unchanged vs. baseline, 0 in touched files.
+
+Deployment: production — building from the GitHub push to master (exact deployment in the Vercel
+  dashboard, project bioscale-operations-system-mongodb, commit below)
+Source: branch master @ merge of feat/spu-tweaks (code commit bc63a805)
+Retrieve this exact code: git checkout feat/spu-tweaks at commit bc63a805
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: sortable columns on the /spu inventory list, default UDI ascending
