@@ -11013,3 +11013,18 @@ Source: branch feat/spu-tweaks @ commit 80bd58a5
 Retrieve this exact code: git checkout feat/spu-tweaks at commit 80bd58a5
   (or: git log feat/spu-tweaks --oneline to find it if the branch has since moved on)
 What this deployment is for: SPU inventory as a list view at /spu + /spu/mfg redirect to /assembly
+
+================================================================================
+2026-09-01 — master — feat/spu-tweaks merged to production
+================================================================================
+Fast-forward merge of feat/spu-tweaks (SPU-INV-01 list view + SPU-INV-02 inventory at /spu,
+/spu/mfg -> /assembly redirect) into master and pushed; Vercel production build triggered from
+the GitHub push.
+
+Deployment: production — building from the GitHub push to master (URL: the production domain;
+  exact deployment visible in the Vercel dashboard, project bioscale-operations-system-mongodb,
+  commit below)
+Source: branch master @ commit bc90588d (merge of feat/spu-tweaks, code changes in 80bd58a5)
+Retrieve this exact code: git checkout master at commit bc90588d
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: SPU inventory list view at /spu; SPU Mfg opens on Assembly tab
