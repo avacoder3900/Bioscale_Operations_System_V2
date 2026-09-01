@@ -11088,3 +11088,11 @@ src/routes/api/particle/vitals/[deviceId]/+server.ts (new), src/routes/spu/+page
 src/routes/spu/[spuId]/+page.server.ts, src/routes/spu/[spuId]/+page.svelte.
 
 npm run check: 11 errors / 433 warnings — exactly the pre-existing baseline, 0 in touched files.
+
+Deployment: production — building from the GitHub push to master (exact deployment in the Vercel
+  dashboard, project bioscale-operations-system-mongodb, commit below)
+Source: branch master @ merge of feat/spu-tweaks (code commit cf918f80)
+Retrieve this exact code: git checkout feat/spu-tweaks at commit cf918f80
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: Particle connectivity columns on /spu, Last Vitals panel + working
+  ping/rename on SPU detail, Device Info edit-button polish
