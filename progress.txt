@@ -11164,3 +11164,8 @@ src/routes/api/agent/operations/kanban/tasks/+server.ts, src/lib/server/mcp/bims
 docs/prds/KB2-38-capture-modes.md.
 npm run check: 11 errors = baseline, 0 in touched files.
 NOTE: shared checkout with a concurrent SPU session today — commits kept path-scoped.
+
+Deployment: preview — Vercel auto-build from branch push (URL in Vercel dashboard Deployments tab)
+Source: branch feat/kanban-capture-modes @ commit bbcfdfba
+Retrieve this exact code: git checkout feat/kanban-capture-modes at commit bbcfdfba
+What this deployment is for: QA of KB2-38 — quick box (position slot, no deliverable), /kanban/capture detailed mode, landing processed/committed, Board "+ New task".
