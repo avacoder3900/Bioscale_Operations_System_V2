@@ -11109,3 +11109,9 @@ enriches the fleet map from every accessible product, showing "v83" and pending 
 degrades to base connectivity data. PRD-04 amended with the finding.
 
 npm run check: 11 errors / 433 warnings — baseline, 0 in touched files.
+
+Deployment: production — building from the GitHub push to master (exact deployment in the Vercel
+  dashboard, project bioscale-operations-system-mongodb, commit below)
+Source: branch master @ merge of feat/spu-tweaks (code commit c383da17)
+Retrieve this exact code: git checkout feat/spu-tweaks at commit c383da17
+What this deployment is for: FW column fix — product-scoped firmware enrichment on /api/particle/status
