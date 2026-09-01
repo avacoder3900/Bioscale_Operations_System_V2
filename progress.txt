@@ -11005,3 +11005,11 @@ situation and based on master, which is what production deploys.
 
 npm run check: 11 errors — unchanged vs. baseline (r2.ts/AskBimsWidget/assembly/parts), 0 in
 touched files.
+
+Deployment: preview — building from the GitHub push (Vercel CLI not installed locally, so the
+  hashed preview URL isn't retrievable from this session; find it in the Vercel dashboard under
+  project bioscale-operations-system-mongodb, deployment for the commit below)
+Source: branch feat/spu-tweaks @ commit 80bd58a5
+Retrieve this exact code: git checkout feat/spu-tweaks at commit 80bd58a5
+  (or: git log feat/spu-tweaks --oneline to find it if the branch has since moved on)
+What this deployment is for: SPU inventory as a list view at /spu + /spu/mfg redirect to /assembly
