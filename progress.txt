@@ -10956,3 +10956,17 @@ Source: branch feat/spu-service-groups @ commit a7f92c10
 Retrieve this exact code: git checkout feat/spu-service-groups at commit a7f92c10
 What this deployment is for: review group tasks (group notes + per-unit findings) and the
   reordered servicing board before merging to master.
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+  (immutable: https://bioscale-operations-system-mongodb-f1z75rges-brevitest.vercel.app)
+Source: branch master @ commit f8244641 (fast-forward of feat/spu-service-groups, ffb2de36..f8244641)
+Retrieve this exact code: git checkout f8244641
+What this deployment is for: group service tasks reach the floor — group notes + per-unit
+  findings, and the reordered servicing board.
+Checked for the Vercel dedup trap (identical tree already built as a preview): a distinct
+  Production deployment 6205717545 was created and succeeded, so prod is NOT serving the old
+  bundle. No migration: groupId/findings are new optional fields on service_records and every
+  read path defaults them; service_groups starts empty.
+NOT in this deploy: the "where it is" card on /spu/[spuId]. That page uses the embedded
+  spu.serviceRecords[] model (Phase A send / Phase B return), not the ServiceRecord collection
+  the board uses — which model it should read is still an open question.
