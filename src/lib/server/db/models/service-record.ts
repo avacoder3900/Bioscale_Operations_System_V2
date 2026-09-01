@@ -14,6 +14,12 @@ export const SERVICE_TYPES = [
 export const SERVICE_PRIORITIES = ['low', 'normal', 'high'] as const;
 
 /**
+ * What a per-unit finding means. `ok` is an explicit clean result, not the
+ * absence of one - "nobody looked yet" is no findings at all.
+ */
+export const FINDING_OUTCOMES = ['ok', 'issue', 'rework', 'blocked'] as const;
+
+/**
  * One servicing job on one SPU.
  *
  * Servicing used to live only as `spu.status = 'servicing'` plus a free-text
@@ -53,6 +59,28 @@ const serviceRecordSchema = new Schema(
 
 		reason: String,
 		assignedTo: operatorRef,
+
+		/**
+		 * Set when this job is part of a ServiceGroup - the same task run across
+		 * several units. The shared task and group-wide notes live on the group;
+		 * everything else stays per-unit.
+		 */
+		groupId: String,
+
+		/**
+		 * What was found on THIS unit while working the job. Separate from `notes`
+		 * on purpose: notes are running commentary, findings are results, and only
+		 * findings carry an outcome that rolls up to the group.
+		 */
+		findings: [
+			{
+				_id: { type: String, default: () => generateId() },
+				text: String,
+				outcome: { type: String, enum: FINDING_OUTCOMES, default: 'ok' },
+				addedAt: { type: Date, default: () => new Date() },
+				addedBy: operatorRef
+			}
+		],
 
 		notes: [
 			{
@@ -124,6 +152,7 @@ serviceRecordSchema.index(
 serviceRecordSchema.index({ status: 1, openedAt: -1 });
 serviceRecordSchema.index({ status: 1, location: 1 });
 serviceRecordSchema.index({ spuId: 1, openedAt: -1 });
+serviceRecordSchema.index({ groupId: 1, status: 1 });
 
 export const ServiceRecord =
 	mongoose.models.ServiceRecord ||

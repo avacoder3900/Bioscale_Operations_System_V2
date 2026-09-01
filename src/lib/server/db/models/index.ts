@@ -79,7 +79,8 @@ export { Integration } from './integration.js';
 export { ParticleDevice } from './particle-device.js';
 export { WorkflowViolation } from './workflow-violation.js';
 export { ServiceTicket } from './service-ticket.js';
-export { ServiceRecord, SERVICE_TYPES, SERVICE_PRIORITIES } from './service-record.js';
+export { ServiceRecord, SERVICE_TYPES, SERVICE_PRIORITIES, FINDING_OUTCOMES } from './service-record.js';
+export { ServiceGroup } from './service-group.js';
 
 // Research-v2 collections — shared Mongo Atlas, BIMS reads only via Ask BIMS tools.
 export { Experiment } from './experiment.js';

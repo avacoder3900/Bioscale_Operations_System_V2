@@ -10900,3 +10900,51 @@ MUST DO BEFORE A PRODUCTION WAX RUN ON R04: Deck Cal Studio -> deck-001 -> R04 -
 Fill motion on a few holes and confirm the tip hovers ~1mm above the rim (dispense_depth -1.0).
 The run-start freshness gate pushes this geometry to R04 automatically on the next wax run.
 Rollback: restore the backup json, or Undo in the Studio.
+================================================================================
+2026-09-01 — feat/spu-service-groups — group tasks on the servicing board (group notes + per-unit findings)
+================================================================================
+The floor regularly runs the SAME job across a handful of units (recalibrate a batch, swap a part
+across a lot). Before this that meant N unrelated service records, with the shared context living in
+somebody's head or copy-pasted into every record's notes, and no way to see which units had actually
+been looked at.
+
+NEW MODEL — ServiceGroup (src/lib/server/db/models/service-group.ts, collection service_groups).
+It owns only the SHARED half: task name, description, serviceType, priority, and group-wide notes.
+Membership is a `groupId` stamped on ServiceRecord; the group deliberately holds NO member array, so
+a unit can never be in a group while missing its own service job. Every member keeps its own
+location, locationHistory, parts/firmware/other change trail, and close — a grouped unit is
+identical to an individually-serviced one apart from the stamp.
+
+ServiceRecord also gains `findings[]` (text + outcome ok/issue/rework/blocked + author + timestamp)
+and FINDING_OUTCOMES. Findings are deliberately separate from `notes`: notes are running commentary,
+findings are results, and only findings carry an outcome that rolls up to the group.
+
+BOARD — a "Group tasks" section above the individual jobs. Collapsed: task name, type/priority,
+unit count, "n/m with findings", and a red "N need attention" badge when any unit's latest outcome
+isn't ok. Expanded: group notes + add-note; per member the location, latest-outcome badge, full
+findings list, a record-a-finding form, "Complete unit", and "Remove from task"; an "+ Add units"
+panel; and "Close remaining N unit(s)" with a shared resolution. Bulk close defaults each unit to
+ITS OWN previousStatus rather than forcing units pulled from different states into one bucket, and
+refuses to mark the group done if a finalized SPU had to be left open.
+New actions: createGroup, addToGroup, removeFromGroup, addGroupNote, addFinding, closeGroupRemaining.
+enrollInGroup reuses master's existing createServiceJob helper, so a grouped unit takes the exact
+same intake path as a scanned or hand-picked one (same status transition, same audit trail).
+The existing closeService now auto-closes a group when its last member leaves.
+
+LAYOUT — the board was stats-first. Reordered to put the functional surface on top: scan bar and
+filters, then open jobs, then recently closed, with Summary + "Where they are" moved to the bottom
+under a "Statistics" heading. The scan bar was already master's primary path and is untouched.
+
+NOTE ON LINEAGE — this work was first built in the home-root clone on feat/cleaning-calendar, which
+forks from master at 2026-03-16 and is 1828 commits behind. That branch carries a STALE parallel copy
+of the servicing page with no scan action, no replacePart/recordFirmwareChange/recordOtherChange.
+Shipping it would have regressed master by months, so the feature was re-ported onto current master
+here instead. Not carried over: the client-side scan card (master already scans server-side) and the
+"where it is" card on /spu/[spuId] — that page uses a DIFFERENT service model (embedded
+spu.serviceRecords[] with Phase A send / Phase B return) rather than the ServiceRecord collection the
+board uses, so which model the record page should read is an open design question, deferred.
+
+Files: src/lib/server/db/models/service-group.ts (new), service-record.ts, models/index.ts,
+src/routes/spu/mfg/servicing/+page.server.ts, +page.svelte.
+npm run check: 120 errors / 433 warnings — master's pre-existing baseline, ZERO in the touched files.
+Not exercised against real data; the Vercel preview build is the gate.

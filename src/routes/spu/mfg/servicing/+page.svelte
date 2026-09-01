@@ -39,6 +39,64 @@
 
 	const changeCategories = ['adjustment', 'cleaning', 'rework', 'configuration', 'other'];
 
+	// --- Group tasks ------------------------------------------------------
+	let showGroupModal = $state(false);
+	/** Group whose "add units" panel is open. */
+	let addingToGroup = $state<string | null>(null);
+	/** Group currently expanded on the board. */
+	let openGroupId = $state<string | null>(null);
+	/** SPUs ticked in the create-group modal. */
+	let groupPicks = $state<string[]>([]);
+	let groupPickQuery = $state('');
+
+	const outcomeLabels: Record<string, string> = {
+		ok: 'OK',
+		issue: 'Issue',
+		rework: 'Rework',
+		blocked: 'Blocked'
+	};
+
+	function outcomeVariant(outcome: string | null): 'success' | 'error' | 'warning' | 'neutral' {
+		if (outcome === 'ok') return 'success';
+		if (outcome === 'rework') return 'warning';
+		if (outcome === 'issue' || outcome === 'blocked') return 'error';
+		return 'neutral';
+	}
+
+	function toggleGroup(id: string) {
+		openGroupId = openGroupId === id ? null : id;
+	}
+
+	function togglePick(id: string) {
+		groupPicks = groupPicks.includes(id)
+			? groupPicks.filter((x) => x !== id)
+			: [...groupPicks, id];
+	}
+
+	/** SPUs offered in the create-group picker, narrowed by the type-ahead. */
+	const groupPickOptions = $derived.by(() => {
+		const needle = groupPickQuery.trim().toLowerCase();
+		const all = data.groupCandidates as any[];
+		if (!needle) return all.slice(0, 60);
+		return all
+			.filter((sp) =>
+				[sp.shortId, sp.udi, sp.barcode, sp.customer, sp.status]
+					.filter(Boolean)
+					.some((v: string) => String(v).toLowerCase().includes(needle))
+			)
+			.slice(0, 60);
+	});
+
+	// Reset the group modal once a create succeeds, but leave errors on screen.
+	$effect(() => {
+		if (form?.success && form?.groupCreated) {
+			showGroupModal = false;
+			groupPicks = [];
+			groupPickQuery = '';
+		}
+		if (form?.success && form?.groupUpdated) addingToGroup = null;
+	});
+
 	function priorityVariant(priority: string): 'error' | 'info' | 'neutral' {
 		if (priority === 'high') return 'error';
 		if (priority === 'normal') return 'info';
@@ -131,6 +189,9 @@
 				Scan a unit to open or resume its job. Everything about that job lives in one panel.
 			</p>
 		</div>
+		<TronButton variant="ghost" onclick={() => (showGroupModal = true)}>
+			+ New group task
+		</TronButton>
 		<TronButton variant="ghost" onclick={() => (showOpenModal = true)}>
 			Start job without a scan
 		</TronButton>
@@ -171,48 +232,6 @@
 			<p class="mt-3 text-sm text-[var(--color-tron-cyan)]">{form.message}</p>
 		{/if}
 	</TronCard>
-
-	<!-- Summary -->
-	<div class="grid gap-4 sm:grid-cols-3">
-		<TronCard>
-			<p class="tron-text-muted text-xs font-bold uppercase">Open jobs</p>
-			<p class="tron-text-primary text-3xl font-bold">{data.totalOpen}</p>
-		</TronCard>
-		<TronCard>
-			<p class="tron-text-muted text-xs font-bold uppercase">Needs intake</p>
-			<p
-				class="text-3xl font-bold {data.needsIntakeCount > 0
-					? 'text-[var(--color-tron-orange)]'
-					: 'tron-text-primary'}"
-			>
-				{data.needsIntakeCount}
-			</p>
-		</TronCard>
-		<TronCard>
-			<p class="tron-text-muted text-xs font-bold uppercase">Oldest job</p>
-			<p class="tron-text-primary text-3xl font-bold">{ageLabel(data.oldestDays)}</p>
-		</TronCard>
-	</div>
-
-	<!-- Where they are -->
-	{#if data.byLocation.length > 0}
-		<TronCard>
-			<h3 class="tron-text-primary mb-3 text-sm font-bold uppercase">Where they are</h3>
-			<div class="flex flex-wrap gap-2">
-				{#each data.byLocation as bucket (bucket.location)}
-					<a
-						href="/spu/mfg/servicing?location={encodeURIComponent(
-							bucket.location === 'Unassigned' ? '__unassigned__' : bucket.location
-						)}"
-						class="rounded-full border border-[var(--color-tron-border)] px-3 py-1 text-xs transition-colors hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]"
-					>
-						{bucket.location}
-						<span class="tron-text-muted">· {bucket.count}</span>
-					</a>
-				{/each}
-			</div>
-		</TronCard>
-	{/if}
 
 	<!-- Filters -->
 	<TronCard>
@@ -256,6 +275,379 @@
 			</div>
 		</form>
 	</TronCard>
+
+	<!-- Group tasks: the same job running across several units. -->
+	{#if data.groups.length > 0}
+		<div class="space-y-3">
+			<h3 class="tron-text-muted text-sm font-bold uppercase">Group tasks</h3>
+			{#each data.groups as group (group.id)}
+				{@const expanded = openGroupId === group.id}
+				<TronCard class={expanded ? 'border-[var(--color-tron-cyan)]' : ''}>
+					<button
+						type="button"
+						class="flex w-full flex-wrap items-center gap-x-4 gap-y-2 text-left"
+						onclick={() => toggleGroup(group.id)}
+						aria-expanded={expanded}
+					>
+						<svg
+							class="h-4 w-4 shrink-0 text-[var(--color-tron-text-secondary)] transition-transform {expanded
+								? 'rotate-90'
+								: ''}"
+							fill="none"
+							stroke="currentColor"
+							viewBox="0 0 24 24"
+						>
+							<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+						</svg>
+
+						<span class="tron-text-primary font-bold">{group.name}</span>
+
+						<TronBadge variant="neutral">{typeLabels[group.serviceType] ?? group.serviceType}</TronBadge>
+						<TronBadge variant={priorityVariant(group.priority)}>
+							{priorityLabels[group.priority] ?? group.priority}
+						</TronBadge>
+
+						<span class="tron-text-secondary text-sm">
+							{group.memberCount}
+							{group.memberCount === 1 ? 'unit' : 'units'}
+						</span>
+						<span class="tron-text-muted text-sm">
+							{group.touchedCount}/{group.memberCount} with findings
+						</span>
+						{#if group.needsAttentionCount > 0}
+							<TronBadge variant="error">{group.needsAttentionCount} need attention</TronBadge>
+						{/if}
+						<span class="tron-text-muted ml-auto text-xs">open {ageLabel(group.daysOpen)}</span>
+					</button>
+
+					{#if expanded}
+						<div class="mt-4 space-y-4 border-t border-[var(--color-tron-border)] pt-4">
+							{#if group.description}
+								<p class="tron-text-secondary text-sm italic">{group.description}</p>
+							{/if}
+							<p class="tron-text-muted text-xs">
+								Opened {formatDate(group.openedAt)}{#if group.openedBy} by {group.openedBy}{/if}
+								{#if group.hiddenCount > 0}
+									· <span class="text-[var(--color-tron-orange)]">
+										{group.hiddenCount} more unit(s) hidden by the current filters
+									</span>
+								{/if}
+							</p>
+
+							<!-- Group notes: apply to the whole task, not one unit. -->
+							<div class="rounded border border-[var(--color-tron-border)] p-4">
+								<h4 class="tron-text-primary mb-3 text-sm font-bold uppercase">Group notes</h4>
+								{#if group.notes.length > 0}
+									<ul class="mb-3 space-y-2">
+										{#each group.notes as note (note.id)}
+											<li class="border-l-2 border-[var(--color-tron-cyan)] pl-3 text-sm">
+												<p class="tron-text-secondary">{note.text}</p>
+												<p class="tron-text-muted text-xs">
+													{note.addedBy ?? 'unknown'} · {formatDateTime(note.addedAt)}
+												</p>
+											</li>
+										{/each}
+									</ul>
+								{:else}
+									<p class="tron-text-muted mb-3 text-sm italic">
+										Nothing recorded for the task as a whole yet.
+									</p>
+								{/if}
+								<form
+									method="POST"
+									action="?/addGroupNote"
+									use:enhance={submitHandler}
+									class="flex gap-2"
+								>
+									<input type="hidden" name="groupId" value={group.id} />
+									<input
+										name="text"
+										type="text"
+										class="tron-input flex-1"
+										placeholder="Note for every unit in this task..."
+										required
+										style="min-height: 44px;"
+									/>
+									<TronButton type="submit" disabled={submitting} style="min-height: 44px;">
+										Add
+									</TronButton>
+								</form>
+							</div>
+
+							<!-- Per-unit findings -->
+							<div class="space-y-3">
+								<div class="flex flex-wrap items-center justify-between gap-2">
+									<h4 class="tron-text-primary text-sm font-bold uppercase">Units</h4>
+									<TronButton
+										onclick={() => (addingToGroup = addingToGroup === group.id ? null : group.id)}
+										style="min-height: 40px;"
+									>
+										{addingToGroup === group.id ? 'Cancel' : '+ Add units'}
+									</TronButton>
+								</div>
+
+								{#if addingToGroup === group.id}
+									<form
+										method="POST"
+										action="?/addToGroup"
+										use:enhance={submitHandler}
+										class="rounded border border-[var(--color-tron-cyan)] p-4"
+									>
+										<input type="hidden" name="groupId" value={group.id} />
+										<label for="add-units-{group.id}" class="tron-label">
+											Add SPUs to this task
+										</label>
+										<select
+											id="add-units-{group.id}"
+											name="spuIds"
+											multiple
+											size="6"
+											class="tron-select w-full"
+										>
+											{#each data.groupCandidates as spu (spu.id)}
+												<option value={spu.id}>
+													{spu.shortId} · {spu.status}{spu.inServicing ? ' · in servicing' : ''}{spu.customer
+														? ` · ${spu.customer}`
+														: ''}
+												</option>
+											{/each}
+										</select>
+										<p class="tron-text-muted mt-1 text-xs">
+											Ctrl/Cmd-click to pick several. Units not already in servicing are pulled in.
+										</p>
+										<div class="mt-3">
+											<label for="add-units-loc-{group.id}" class="tron-label">
+												Where are they? (optional)
+											</label>
+											<input
+												id="add-units-loc-{group.id}"
+												name="location"
+												type="text"
+												list="known-locations"
+												class="tron-input w-full"
+												placeholder="e.g. Bench 3, Lab A"
+												style="min-height: 44px;"
+											/>
+										</div>
+										<div class="mt-3">
+											<TronButton
+												type="submit"
+												variant="primary"
+												disabled={submitting}
+												style="min-height: 44px;"
+											>
+												Add to task
+											</TronButton>
+										</div>
+									</form>
+								{/if}
+
+								{#if group.members.length === 0}
+									<p class="tron-text-muted py-4 text-center text-sm">
+										No units match the current filters.
+									</p>
+								{/if}
+
+								{#each group.members as member (member.recordId)}
+									<div
+										id="svc-row-{member.recordId}"
+										class="rounded border border-[var(--color-tron-border)] p-4"
+									>
+										<div class="flex flex-wrap items-center gap-x-4 gap-y-2">
+											<a
+												href="/spu/{member.spuId}"
+												class="tron-text-primary font-bold hover:text-[var(--color-tron-cyan)]"
+											>
+												{member.shortId}
+											</a>
+											<span
+												class="flex items-center gap-1.5 text-sm"
+												style="color: {member.location
+													? 'var(--color-tron-cyan)'
+													: 'var(--color-tron-text-secondary)'};"
+											>
+												<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+													<path
+														stroke-linecap="round"
+														stroke-linejoin="round"
+														stroke-width="2"
+														d="M17.657 16.657L13.414 20.9a2 2 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"
+													/>
+													<path
+														stroke-linecap="round"
+														stroke-linejoin="round"
+														stroke-width="2"
+														d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"
+													/>
+												</svg>
+												{member.location || 'Location not set'}
+											</span>
+											{#if member.latestOutcome}
+												<TronBadge variant={outcomeVariant(member.latestOutcome)}>
+													{outcomeLabels[member.latestOutcome] ?? member.latestOutcome}
+												</TronBadge>
+											{:else}
+												<TronBadge variant="neutral">No findings yet</TronBadge>
+											{/if}
+											<form
+												method="POST"
+												action="?/removeFromGroup"
+												use:enhance={submitHandler}
+												class="ml-auto"
+											>
+												<input type="hidden" name="recordId" value={member.recordId} />
+												<button
+													type="submit"
+													class="tron-text-muted text-xs hover:text-[var(--color-tron-red)]"
+													disabled={submitting}
+												>
+													Remove from task
+												</button>
+											</form>
+										</div>
+
+										{#if member.findings.length > 0}
+											<ul class="mt-3 space-y-2">
+												{#each member.findings as finding (finding.id)}
+													<li class="flex gap-2 text-sm">
+														<TronBadge variant={outcomeVariant(finding.outcome)}>
+															{outcomeLabels[finding.outcome] ?? finding.outcome}
+														</TronBadge>
+														<span class="min-w-0 flex-1">
+															<span class="tron-text-secondary">{finding.text}</span>
+															<span class="tron-text-muted text-xs">
+																· {finding.addedBy ?? 'unknown'} · {formatDateTime(finding.addedAt)}
+															</span>
+														</span>
+													</li>
+												{/each}
+											</ul>
+										{/if}
+
+										<form
+											method="POST"
+											action="?/addFinding"
+											use:enhance={submitHandler}
+											class="mt-3 flex flex-wrap gap-2"
+										>
+											<input type="hidden" name="recordId" value={member.recordId} />
+											<input
+												name="text"
+												type="text"
+												class="tron-input min-w-[12rem] flex-1"
+												placeholder="What did you find on this unit?"
+												required
+												style="min-height: 44px;"
+											/>
+											<select name="outcome" class="tron-select" style="min-height: 44px;">
+												{#each data.findingOutcomes as outcome (outcome)}
+													<option value={outcome}>{outcomeLabels[outcome] ?? outcome}</option>
+												{/each}
+											</select>
+											<TronButton type="submit" disabled={submitting} style="min-height: 44px;">
+												Record
+											</TronButton>
+										</form>
+
+										<!-- Complete this one unit without waiting for the rest. -->
+										<form
+											method="POST"
+											action="?/closeService"
+											use:enhance={submitHandler}
+											class="mt-3 flex flex-wrap items-end gap-2"
+										>
+											<input type="hidden" name="recordId" value={member.recordId} />
+											<div class="min-w-[12rem] flex-1">
+												<label for="gclose-res-{member.recordId}" class="tron-label">
+													Resolution
+												</label>
+												<input
+													id="gclose-res-{member.recordId}"
+													name="resolution"
+													type="text"
+													class="tron-input w-full"
+													placeholder="What was done on this unit"
+													style="min-height: 44px;"
+												/>
+											</div>
+											<div>
+												<label for="gclose-status-{member.recordId}" class="tron-label">
+													Return to
+												</label>
+												<select
+													id="gclose-status-{member.recordId}"
+													name="returnToStatus"
+													class="tron-select"
+													style="min-height: 44px;"
+												>
+													{#each data.returnableStatuses as status (status)}
+														<option value={status} selected={status === (member.previousStatus ?? 'validated')}>
+															{status}
+														</option>
+													{/each}
+												</select>
+											</div>
+											<TronButton type="submit" disabled={submitting} style="min-height: 44px;">
+												Complete unit
+											</TronButton>
+										</form>
+									</div>
+								{/each}
+							</div>
+
+							<!-- Close everything still open under this task. -->
+							<div class="rounded border border-[var(--color-tron-green)] bg-[rgba(0,255,128,0.04)] p-4">
+								<h4 class="tron-text-primary mb-3 text-sm font-bold uppercase">Close group task</h4>
+								<form
+									method="POST"
+									action="?/closeGroupRemaining"
+									use:enhance={submitHandler}
+									class="grid gap-3 sm:grid-cols-3"
+								>
+									<input type="hidden" name="groupId" value={group.id} />
+									<div class="sm:col-span-2">
+										<label for="gclose-all-res-{group.id}" class="tron-label">Shared resolution</label>
+										<input
+											id="gclose-all-res-{group.id}"
+											name="resolution"
+											type="text"
+											class="tron-input w-full"
+											placeholder="What was done across the task"
+											style="min-height: 44px;"
+										/>
+									</div>
+									<div>
+										<label for="gclose-all-status-{group.id}" class="tron-label">Return units to</label>
+										<select
+											id="gclose-all-status-{group.id}"
+											name="returnToStatus"
+											class="tron-select w-full"
+											style="min-height: 44px;"
+										>
+											<option value="">Each unit's previous status</option>
+											{#each data.returnableStatuses as status (status)}
+												<option value={status}>{status}</option>
+											{/each}
+										</select>
+									</div>
+									<div class="sm:col-span-3">
+										<TronButton
+											type="submit"
+											variant="primary"
+											disabled={submitting}
+											style="min-height: 44px;"
+										>
+											Close remaining {group.members.length + group.hiddenCount} unit(s)
+										</TronButton>
+									</div>
+								</form>
+							</div>
+						</div>
+					{/if}
+				</TronCard>
+			{/each}
+		</div>
+	{/if}
 
 	<!-- Open jobs -->
 	{#if data.rows.length === 0}
@@ -807,6 +1199,52 @@
 			</div>
 		</TronCard>
 	{/if}
+
+	<h3 class="tron-text-muted border-t border-[var(--color-tron-border)] pt-6 text-sm font-bold uppercase">
+		Statistics
+	</h3>
+
+	<!-- Summary -->
+	<div class="grid gap-4 sm:grid-cols-3">
+		<TronCard>
+			<p class="tron-text-muted text-xs font-bold uppercase">Open jobs</p>
+			<p class="tron-text-primary text-3xl font-bold">{data.totalOpen}</p>
+		</TronCard>
+		<TronCard>
+			<p class="tron-text-muted text-xs font-bold uppercase">Needs intake</p>
+			<p
+				class="text-3xl font-bold {data.needsIntakeCount > 0
+					? 'text-[var(--color-tron-orange)]'
+					: 'tron-text-primary'}"
+			>
+				{data.needsIntakeCount}
+			</p>
+		</TronCard>
+		<TronCard>
+			<p class="tron-text-muted text-xs font-bold uppercase">Oldest job</p>
+			<p class="tron-text-primary text-3xl font-bold">{ageLabel(data.oldestDays)}</p>
+		</TronCard>
+	</div>
+
+	<!-- Where they are -->
+	{#if data.byLocation.length > 0}
+		<TronCard>
+			<h3 class="tron-text-primary mb-3 text-sm font-bold uppercase">Where they are</h3>
+			<div class="flex flex-wrap gap-2">
+				{#each data.byLocation as bucket (bucket.location)}
+					<a
+						href="/spu/mfg/servicing?location={encodeURIComponent(
+							bucket.location === 'Unassigned' ? '__unassigned__' : bucket.location
+						)}"
+						class="rounded-full border border-[var(--color-tron-border)] px-3 py-1 text-xs transition-colors hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]"
+					>
+						{bucket.location}
+						<span class="tron-text-muted">· {bucket.count}</span>
+					</a>
+				{/each}
+			</div>
+		</TronCard>
+	{/if}
 </div>
 
 <!-- Shared location suggestions for every location input on the page. -->
@@ -896,5 +1334,155 @@
 				</div>
 			</form>
 		</TronCard>
+	</div>
+{/if}
+
+{#if showGroupModal}
+	<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+		<div class="max-h-[90vh] w-full max-w-2xl overflow-y-auto">
+			<TronCard>
+				<div class="mb-4 flex items-center justify-between">
+					<h3 class="tron-text-primary text-lg font-bold">New Group Task</h3>
+					<button
+						type="button"
+						class="tron-text-muted hover:text-[var(--color-tron-cyan)]"
+						onclick={() => (showGroupModal = false)}
+						aria-label="Close"
+					>
+						&#10005;
+					</button>
+				</div>
+
+				<form method="POST" action="?/createGroup" use:enhance={submitHandler} class="space-y-4">
+					<div>
+						<label for="group-name" class="tron-label">Task</label>
+						<input
+							id="group-name"
+							name="name"
+							type="text"
+							class="tron-input w-full"
+							placeholder="e.g. Recalibrate magnetometer after thermistor fix"
+							required
+							style="min-height: 44px;"
+						/>
+					</div>
+
+					<div class="grid gap-4 sm:grid-cols-2">
+						<div>
+							<label for="group-type" class="tron-label">Service type</label>
+							<select id="group-type" name="serviceType" class="tron-select w-full" style="min-height: 44px;">
+								{#each data.serviceTypes as type (type)}
+									<option value={type}>{typeLabels[type] ?? type}</option>
+								{/each}
+							</select>
+						</div>
+						<div>
+							<label for="group-priority" class="tron-label">Priority</label>
+							<select id="group-priority" name="priority" class="tron-select w-full" style="min-height: 44px;">
+								{#each data.priorities as p (p)}
+									<option value={p} selected={p === 'normal'}>{priorityLabels[p] ?? p}</option>
+								{/each}
+							</select>
+						</div>
+					</div>
+
+					<div>
+						<label for="group-location" class="tron-label">Where are the units? (optional)</label>
+						<input
+							id="group-location"
+							name="location"
+							type="text"
+							list="known-locations"
+							class="tron-input w-full"
+							placeholder="e.g. Bench 3, Lab A"
+							style="min-height: 44px;"
+						/>
+					</div>
+
+					<div>
+						<label for="group-desc" class="tron-label">Description</label>
+						<textarea
+							id="group-desc"
+							name="description"
+							rows="2"
+							class="tron-input w-full"
+							placeholder="What the task involves..."
+						></textarea>
+					</div>
+
+					<div>
+						<label for="group-pick-q" class="tron-label">
+							SPUs ({groupPicks.length} selected)
+						</label>
+						<input
+							id="group-pick-q"
+							type="text"
+							class="tron-input mb-2 w-full"
+							placeholder="Filter by SPU, UDI, barcode, customer..."
+							bind:value={groupPickQuery}
+							style="min-height: 44px;"
+						/>
+						<div
+							class="max-h-56 overflow-y-auto rounded border border-[var(--color-tron-border)] p-2"
+						>
+							{#each groupPickOptions as spu (spu.id)}
+								<label
+									class="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-[rgba(0,229,255,0.06)]"
+								>
+									<input
+										type="checkbox"
+										checked={groupPicks.includes(spu.id)}
+										onchange={() => togglePick(spu.id)}
+									/>
+									<span class="tron-text-primary font-medium">{spu.shortId}</span>
+									<span class="tron-text-muted text-xs">{spu.status}</span>
+									{#if spu.inServicing}
+										<span class="text-xs text-[var(--color-tron-orange)]">· already in servicing</span>
+									{/if}
+									{#if spu.customer}
+										<span class="tron-text-muted text-xs">· {spu.customer}</span>
+									{/if}
+								</label>
+							{:else}
+								<p class="tron-text-muted p-2 text-sm">No SPUs match that filter.</p>
+							{/each}
+						</div>
+						<p class="tron-text-muted mt-1 text-xs">
+							Pick at least two. Units not already in servicing get pulled in with their own
+							service job.
+						</p>
+					</div>
+
+					{#each groupPicks as id (id)}
+						<input type="hidden" name="spuIds" value={id} />
+					{/each}
+
+					{#if form?.error}
+						<div class="rounded border border-[var(--color-tron-red)] bg-[rgba(255,51,102,0.1)] p-3">
+							<p class="text-sm text-[var(--color-tron-red)]">{form.error}</p>
+						</div>
+					{/if}
+
+					<div class="flex gap-3 pt-2">
+						<TronButton
+							type="button"
+							class="flex-1"
+							onclick={() => (showGroupModal = false)}
+							disabled={submitting}
+						>
+							Cancel
+						</TronButton>
+						<TronButton
+							type="submit"
+							variant="primary"
+							class="flex-1"
+							disabled={submitting || groupPicks.length < 2}
+						>
+							{submitting ? 'Creating...' : `Create task for ${groupPicks.length} units`}
+						</TronButton>
+					</div>
+				</form>
+			</TronCard>
+		</div>
 	</div>
 {/if}

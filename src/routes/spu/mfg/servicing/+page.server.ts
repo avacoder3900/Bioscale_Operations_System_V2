@@ -1,6 +1,6 @@
 import { fail } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
-import { connectDB, Spu, ServiceRecord, AuditLog, generateId } from '$lib/server/db';
+import { connectDB, Spu, ServiceRecord, ServiceGroup, AuditLog, generateId } from '$lib/server/db';
 import type { Actions, PageServerLoad, RequestEvent } from './$types';
 
 /**
@@ -34,6 +34,7 @@ async function writeAudit(
 
 const SERVICE_TYPES = ['inspection', 'calibration', 'repair', 'part-replacement', 'other'];
 const PRIORITIES = ['low', 'normal', 'high'];
+const FINDING_OUTCOMES = ['ok', 'issue', 'rework', 'blocked'];
 
 /** Statuses a unit can be handed back to once its service job closes. */
 const RETURNABLE_STATUSES = [
@@ -99,6 +100,11 @@ interface ServiceRow {
 	otherChanges: { id: string; category: string; description: string; performedBy: string | null; performedAt: string }[];
 	/** SPU sits in 'servicing' status but has no service record behind it. */
 	needsIntake: boolean;
+	/** Set when this job is part of a group task. */
+	groupId: string | null;
+	findings: { id: string; text: string; outcome: string; addedAt: string; addedBy: string | null }[];
+	/** Outcome of the most recent finding - the unit's state at a glance. */
+	latestOutcome: string | null;
 }
 
 /** Shared shape for the three change lists, so the row mappers stay readable. */
@@ -154,14 +160,15 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	const locationFilter = url.searchParams.get('location') ?? '';
 	const typeFilter = url.searchParams.get('type') ?? '';
 
-	const [openRecords, closedRecords, servicingSpus, pickerSpus] = await Promise.all([
+	const [openRecords, closedRecords, servicingSpus, pickerSpus, openGroups] = await Promise.all([
 		ServiceRecord.find({ status: 'open' }).sort({ openedAt: 1 }).lean(),
 		ServiceRecord.find({ status: 'closed' }).sort({ closedAt: -1 }).limit(15).lean(),
 		Spu.find({ status: 'servicing' }).select('udi barcode status assignment owner parts').lean(),
 		Spu.find({ status: { $ne: 'voided' } })
 			.select('udi barcode status assignment owner')
 			.sort({ udi: 1 })
-			.lean()
+			.lean(),
+		ServiceGroup.find({ status: 'open' }).sort({ openedAt: -1 }).lean()
 	]);
 
 	// Open records can reference SPUs outside the servicing bucket: a unit may be
@@ -173,6 +180,13 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	const spuById = new Map<string, any>((relatedSpus as any[]).map((s) => [s._id, s]));
 
 	const rows: ServiceRow[] = (openRecords as any[]).map((r) => {
+		const mappedFindings = [...(r.findings ?? [])].reverse().map((f: any) => ({
+			id: f._id,
+			text: f.text ?? '',
+			outcome: f.outcome ?? 'ok',
+			addedAt: new Date(f.addedAt).toISOString(),
+			addedBy: f.addedBy?.username ?? null
+		}));
 		const spu = spuById.get(r.spuId);
 		const udi = spu?.udi ?? r.spuUdi ?? '';
 		const lastMoveDoc = (r.locationHistory ?? []).at(-1);
@@ -217,7 +231,11 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 			})),
 			parts: mapParts(spu),
 			...mapChanges(r),
-			needsIntake: false
+			needsIntake: false,
+			groupId: r.groupId ?? null,
+			// Newest first: the latest finding is what belongs on the row.
+			findings: mappedFindings,
+			latestOutcome: mappedFindings[0]?.outcome ?? null
 		};
 	});
 
@@ -251,7 +269,10 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 			partsReplaced: [],
 			firmwareChanges: [],
 			otherChanges: [],
-			needsIntake: true
+			needsIntake: true,
+			groupId: null,
+			findings: [],
+			latestOutcome: null
 		});
 	}
 
@@ -290,6 +311,86 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		byType.set(row.serviceType, (byType.get(row.serviceType) ?? 0) + 1);
 	}
 
+	// Groups hang off the rows we already built, so the group view and the flat
+	// list can never disagree about a unit's location or findings. Counts come
+	// from every member; the visible member list respects the active filters.
+	function bucketByGroup(source: ServiceRow[]) {
+		const map = new Map<string, ServiceRow[]>();
+		for (const row of source) {
+			if (!row.groupId) continue;
+			const list = map.get(row.groupId) ?? [];
+			list.push(row);
+			map.set(row.groupId, list);
+		}
+		return map;
+	}
+	const allByGroup = bucketByGroup(rows);
+	const shownByGroup = bucketByGroup(filtered);
+	const filtersActive = Boolean(q || locationFilter || typeFilter);
+
+	const groups = (openGroups as any[])
+		.filter((g) => !filtersActive || (shownByGroup.get(g._id) ?? []).length > 0)
+		.map((g) => {
+			const all = allByGroup.get(g._id) ?? [];
+			const members = shownByGroup.get(g._id) ?? [];
+			return {
+				id: g._id,
+				name: g.name ?? '',
+				description: g.description ?? null,
+				serviceType: g.serviceType ?? 'other',
+				priority: g.priority ?? 'normal',
+				openedAt: g.openedAt ? new Date(g.openedAt).toISOString() : null,
+				openedBy: g.openedBy?.username ?? null,
+				daysOpen: daysSince(g.openedAt),
+				notes: (g.notes ?? []).map((n: any) => ({
+					id: n._id,
+					text: n.text ?? '',
+					addedAt: new Date(n.addedAt).toISOString(),
+					addedBy: n.addedBy?.username ?? null
+				})),
+				memberCount: all.length,
+				// Progress is "has anyone recorded a result on this unit", the only
+				// thing we can honestly claim without a per-step model.
+				touchedCount: all.filter((m) => m.findings.length > 0).length,
+				needsAttentionCount: all.filter((m) => m.latestOutcome && m.latestOutcome !== 'ok')
+					.length,
+				/** Hidden by the active filters - shown so the count never lies. */
+				hiddenCount: all.length - members.length,
+				members
+			};
+		});
+
+	// Units in a group are shown inside their group, not twice.
+	const ungroupedRows = filtered.filter((r) => !r.groupId);
+
+	// Anything that could join a group: units with no open job at all, plus units
+	// already in servicing on their own. Without the second half you could never
+	// group up work that is already underway.
+	const groupCandidates = [
+		...(pickerSpus as any[])
+			.filter((sp) => !recordedSpuIds.has(sp._id))
+			.map((sp) => ({
+				id: sp._id,
+				shortId: extractShortId(sp.udi),
+				udi: sp.udi,
+				barcode: sp.barcode ?? null,
+				status: sp.status ?? 'draft',
+				customer: sp.assignment?.customer?.name ?? null,
+				inServicing: false
+			})),
+		...rows
+			.filter((r) => !r.groupId && r.recordId)
+			.map((r) => ({
+				id: r.spuId,
+				shortId: r.shortId,
+				udi: r.udi,
+				barcode: r.barcode,
+				status: r.spuStatus,
+				customer: r.customer,
+				inServicing: true
+			}))
+	].sort((a, b) => a.shortId.localeCompare(b.shortId));
+
 	const eligibleSpus = (pickerSpus as any[])
 		.filter((s) => !recordedSpuIds.has(s._id))
 		.map((s) => ({
@@ -304,8 +405,10 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	return {
 		// Already plain primitives (dates were stringified on the way in), so this
 		// crosses the SvelteKit boundary without a JSON round-trip.
-		rows: filtered,
+		rows: ungroupedRows,
+		groups,
 		totalOpen: rows.length,
+		groupedCount: rows.filter((r) => r.groupId).length,
 		needsIntakeCount: rows.filter((r) => r.needsIntake).length,
 		oldestDays: rows.reduce((max, r) => Math.max(max, r.daysOpen), 0),
 		byLocation: [...byLocation.entries()]
@@ -316,6 +419,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 			.sort((a, b) => b.count - a.count),
 		knownLocations,
 		eligibleSpus,
+		groupCandidates,
 		recentlyClosed: (closedRecords as any[]).map((r) => ({
 			id: r._id,
 			spuId: r.spuId,
@@ -331,6 +435,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		filters: { q: url.searchParams.get('q') ?? '', location: locationFilter, type: typeFilter },
 		serviceTypes: SERVICE_TYPES,
 		priorities: PRIORITIES,
+		findingOutcomes: FINDING_OUTCOMES,
 		returnableStatuses: RETURNABLE_STATUSES
 	};
 };
@@ -419,6 +524,75 @@ async function createServiceJob(
 	});
 
 	return record._id;
+}
+
+/**
+ * Put one SPU into a group task.
+ *
+ * A unit already holding an open job just gets stamped with the groupId - we
+ * never open a second job for it, because the unique index forbids that and
+ * because its location and history belong to that same job. A unit with no
+ * open job gets one through createServiceJob, the exact path the scan bar and
+ * the manual form use, so a grouped unit is indistinguishable from an
+ * individually-serviced one apart from the stamp.
+ *
+ * Returns null on success, or a human-readable reason it was skipped.
+ */
+async function enrollInGroup(
+	event: RequestEvent,
+	spuId: string,
+	group: { _id: string; serviceType: string; priority: string; name: string },
+	location: string
+): Promise<string | null> {
+	const spu: any = await Spu.findById(spuId).lean();
+	if (!spu) return `${spuId}: not found`;
+	const label = extractShortId(spu.udi ?? '') || spuId;
+	if (spu.finalizedAt) return `${label}: finalized`;
+
+	const existing: any = await ServiceRecord.findOne({ spuId, status: 'open' }).lean();
+	if (existing) {
+		if (existing.groupId && existing.groupId !== group._id)
+			return `${label}: already in another group task`;
+		if (existing.groupId === group._id) return null; // already a member
+		await ServiceRecord.updateOne({ _id: existing._id }, { $set: { groupId: group._id } });
+		return null;
+	}
+
+	const recordId = await createServiceJob(event, spu, {
+		serviceType: group.serviceType,
+		priority: group.priority,
+		location,
+		reason: group.name
+	});
+	await ServiceRecord.updateOne({ _id: recordId }, { $set: { groupId: group._id } });
+	return null;
+}
+
+/**
+ * Close the group once nothing is still open under it. The resolution is passed
+ * in because a group can drain two very different ways - every unit finished,
+ * or the last unit was pulled out - and the closed record shouldn't claim the
+ * first when it was the second.
+ */
+async function closeGroupIfDrained(
+	event: RequestEvent,
+	groupId: string | null | undefined,
+	resolution: string
+) {
+	if (!groupId) return;
+	const stillOpen = await ServiceRecord.countDocuments({ groupId, status: 'open' });
+	if (stillOpen > 0) return;
+	await ServiceGroup.updateOne(
+		{ _id: groupId, status: 'open' },
+		{
+			$set: {
+				status: 'closed',
+				closedAt: new Date(),
+				closedBy: operator(event.locals.user),
+				resolution
+			}
+		}
+	);
 }
 
 export const actions: Actions = {
@@ -519,6 +693,218 @@ export const actions: Actions = {
 		});
 
 		return { success: true, opened: true, focusRecordId: recordId };
+	},
+
+	/** Start a task that runs across several units at once. */
+	createGroup: async (event) => {
+		requirePermission(event.locals.user, 'spu:write');
+		await connectDB();
+
+		const form = await event.request.formData();
+		const name = (form.get('name')?.toString() ?? '').trim();
+		const description = (form.get('description')?.toString() ?? '').trim();
+		const serviceTypeRaw = form.get('serviceType')?.toString() ?? 'other';
+		const priorityRaw = form.get('priority')?.toString() ?? 'normal';
+		const location = (form.get('location')?.toString() ?? '').trim();
+		const spuIds = form
+			.getAll('spuIds')
+			.map((v) => v.toString())
+			.filter(Boolean);
+
+		if (!name) return fail(400, { error: 'Give the group task a name' });
+		if (spuIds.length < 2) return fail(400, { error: 'Pick at least two SPUs for a group' });
+
+		const group: any = await ServiceGroup.create({
+			_id: generateId(),
+			name,
+			description: description || undefined,
+			serviceType: SERVICE_TYPES.includes(serviceTypeRaw) ? serviceTypeRaw : 'other',
+			priority: PRIORITIES.includes(priorityRaw) ? priorityRaw : 'normal',
+			status: 'open',
+			openedAt: new Date(),
+			openedBy: operator(event.locals.user)
+		});
+
+		const skipped: string[] = [];
+		for (const spuId of spuIds) {
+			const why = await enrollInGroup(event, spuId, group, location);
+			if (why) skipped.push(why);
+		}
+
+		const enrolled = spuIds.length - skipped.length;
+		if (enrolled === 0) {
+			// Nothing joined - don't leave an empty group cluttering the board.
+			await ServiceGroup.deleteOne({ _id: group._id });
+			return fail(400, { error: `No units could join: ${skipped.join(', ')}` });
+		}
+
+		await writeAudit(event, {
+			tableName: 'service_groups',
+			recordId: group._id,
+			action: 'INSERT',
+			newData: { name, serviceType: group.serviceType, members: enrolled },
+			reason: 'Group service task opened'
+		});
+
+		return { success: true, groupCreated: true, skipped: skipped.length ? skipped : undefined };
+	},
+
+	/** Add more units to a group already in flight. */
+	addToGroup: async (event) => {
+		requirePermission(event.locals.user, 'spu:write');
+		await connectDB();
+
+		const form = await event.request.formData();
+		const groupId = form.get('groupId')?.toString() ?? '';
+		const location = (form.get('location')?.toString() ?? '').trim();
+		const spuIds = form
+			.getAll('spuIds')
+			.map((v) => v.toString())
+			.filter(Boolean);
+
+		if (!groupId) return fail(400, { error: 'Missing group' });
+		if (spuIds.length === 0) return fail(400, { error: 'Pick at least one SPU' });
+
+		const group: any = await ServiceGroup.findById(groupId).lean();
+		if (!group) return fail(404, { error: 'Group not found' });
+		if (group.status !== 'open') return fail(400, { error: 'That group is already closed' });
+
+		const skipped: string[] = [];
+		for (const spuId of spuIds) {
+			const why = await enrollInGroup(event, spuId, group, location);
+			if (why) skipped.push(why);
+		}
+
+		await writeAudit(event, {
+			tableName: 'service_groups',
+			recordId: groupId,
+			action: 'UPDATE',
+			newData: { added: spuIds.length - skipped.length },
+			reason: 'Units added to group task'
+		});
+
+		return { success: true, groupUpdated: true, skipped: skipped.length ? skipped : undefined };
+	},
+
+	/** Detach a unit from its group. The unit's own service job stays open. */
+	removeFromGroup: async (event) => {
+		requirePermission(event.locals.user, 'spu:write');
+		await connectDB();
+
+		const form = await event.request.formData();
+		const recordId = form.get('recordId')?.toString() ?? '';
+		if (!recordId) return fail(400, { error: 'Missing service record' });
+
+		const record: any = await ServiceRecord.findById(recordId).lean();
+		if (!record) return fail(404, { error: 'Service record not found' });
+
+		await ServiceRecord.updateOne({ _id: recordId }, { $unset: { groupId: '' } });
+
+		await writeAudit(event, {
+			tableName: 'service_records',
+			recordId,
+			action: 'UPDATE',
+			oldData: { groupId: record.groupId ?? null },
+			newData: { groupId: null },
+			reason: 'Removed from group task'
+		});
+
+		// Pulling the last unit out shouldn't leave the group hanging open.
+		await closeGroupIfDrained(
+			event,
+			record.groupId,
+			'Closed automatically: last unit was removed from the task'
+		);
+
+		return { success: true, groupUpdated: true };
+	},
+
+	/** A note that applies to the whole task, not to any one unit. */
+	addGroupNote: async (event) => {
+		requirePermission(event.locals.user, 'spu:write');
+		await connectDB();
+
+		const form = await event.request.formData();
+		const groupId = form.get('groupId')?.toString() ?? '';
+		const text = (form.get('text')?.toString() ?? '').trim();
+
+		if (!groupId) return fail(400, { error: 'Missing group' });
+		if (!text) return fail(400, { error: 'Note cannot be empty' });
+
+		const group: any = await ServiceGroup.findById(groupId).lean();
+		if (!group) return fail(404, { error: 'Group not found' });
+
+		await ServiceGroup.updateOne(
+			{ _id: groupId },
+			{
+				$push: {
+					notes: {
+						_id: generateId(),
+						text,
+						addedAt: new Date(),
+						addedBy: operator(event.locals.user)
+					}
+				}
+			}
+		);
+
+		await writeAudit(event, {
+			tableName: 'service_groups',
+			recordId: groupId,
+			action: 'UPDATE',
+			newData: { note: text },
+			reason: 'Group note added'
+		});
+
+		return { success: true, noted: true };
+	},
+
+	/**
+	 * Record what was found on ONE unit. Works whether or not the unit is in a
+	 * group - an individually-serviced unit gets findings too.
+	 */
+	addFinding: async (event) => {
+		requirePermission(event.locals.user, 'spu:write');
+		await connectDB();
+
+		const form = await event.request.formData();
+		const recordId = form.get('recordId')?.toString() ?? '';
+		const text = (form.get('text')?.toString() ?? '').trim();
+		const outcomeRaw = form.get('outcome')?.toString() ?? 'ok';
+
+		if (!recordId) return fail(400, { error: 'Missing service record' });
+		if (!text) return fail(400, { error: 'Finding cannot be empty' });
+		const outcome = FINDING_OUTCOMES.includes(outcomeRaw) ? outcomeRaw : 'ok';
+
+		const record: any = await ServiceRecord.findById(recordId).lean();
+		if (!record) return fail(404, { error: 'Service record not found' });
+		if (record.status !== 'open')
+			return fail(400, { error: 'That service job is already closed' });
+
+		await ServiceRecord.updateOne(
+			{ _id: recordId },
+			{
+				$push: {
+					findings: {
+						_id: generateId(),
+						text,
+						outcome,
+						addedAt: new Date(),
+						addedBy: operator(event.locals.user)
+					}
+				}
+			}
+		);
+
+		await writeAudit(event, {
+			tableName: 'service_records',
+			recordId,
+			action: 'UPDATE',
+			newData: { finding: text, outcome },
+			reason: `Finding recorded (${outcome})`
+		});
+
+		return { success: true, found: true };
 	},
 
 	/** Move a unit to a new physical spot and keep the trail. */
@@ -938,6 +1324,136 @@ export const actions: Actions = {
 			reason: 'Service job closed'
 		});
 
+		// If that was the last unit in its group, the group is done too.
+		await closeGroupIfDrained(event, record.groupId, 'All units completed');
+
 		return { success: true, closed: true };
+	},
+
+	/**
+	 * Finish everything still open under a group in one go, with one shared
+	 * resolution. Units already completed individually keep the resolution and
+	 * return status they were closed with - this only touches what is still open.
+	 */
+	closeGroupRemaining: async (event) => {
+		requirePermission(event.locals.user, 'spu:write');
+		await connectDB();
+
+		const form = await event.request.formData();
+		const groupId = form.get('groupId')?.toString() ?? '';
+		const resolution = (form.get('resolution')?.toString() ?? '').trim();
+		const returnToRaw = form.get('returnToStatus')?.toString() ?? '';
+
+		if (!groupId) return fail(400, { error: 'Missing group' });
+
+		const group: any = await ServiceGroup.findById(groupId).lean();
+		if (!group) return fail(404, { error: 'Group not found' });
+		if (group.status !== 'open') return fail(400, { error: 'That group is already closed' });
+
+		const members: any[] = await ServiceRecord.find({ groupId, status: 'open' }).lean();
+
+		const closedIds: string[] = [];
+		const skipped: string[] = [];
+
+		for (const record of members) {
+			const spu: any = await Spu.findById(record.spuId).lean();
+			if (spu?.finalizedAt) {
+				skipped.push(extractShortId(record.spuUdi ?? '') || record.spuId);
+				continue;
+			}
+
+			// Each unit returns to ITS own previous status unless the form names
+			// one explicitly - units pulled from different states shouldn't all be
+			// forced into the same lifecycle bucket by a bulk close.
+			const returnTo = RETURNABLE_STATUSES.includes(returnToRaw)
+				? returnToRaw
+				: RETURNABLE_STATUSES.includes(record.previousStatus)
+					? record.previousStatus
+					: 'validated';
+
+			await ServiceRecord.updateOne(
+				{ _id: record._id },
+				{
+					$set: {
+						status: 'closed',
+						closedAt: new Date(),
+						closedBy: operator(event.locals.user),
+						resolution: resolution || undefined,
+						returnedToStatus: returnTo
+					}
+				}
+			);
+			closedIds.push(record._id);
+
+			const oldStatus = spu?.status ?? 'servicing';
+			if (spu && oldStatus !== returnTo) {
+				await Spu.updateOne(
+					{ _id: record.spuId },
+					{
+						$set: { status: returnTo },
+						$push: {
+							statusTransitions: {
+								_id: generateId(),
+								from: oldStatus,
+								to: returnTo,
+								changedBy: operator(event.locals.user),
+								changedAt: new Date(),
+								reason: `Group task closed: ${group.name}`
+							}
+						}
+					}
+				);
+				await writeAudit(event, {
+					tableName: 'spus',
+					recordId: record.spuId,
+					action: 'UPDATE',
+					oldData: { status: oldStatus },
+					newData: { status: returnTo },
+					reason: `Group task closed: ${group.name}`
+				});
+			}
+
+			await writeAudit(event, {
+				tableName: 'service_records',
+				recordId: record._id,
+				action: 'UPDATE',
+				oldData: { status: 'open' },
+				newData: { status: 'closed', returnedToStatus: returnTo, resolution },
+				reason: `Closed with group task: ${group.name}`
+			});
+		}
+
+		// Anything finalized stays open and keeps the group open with it, rather
+		// than marking a task done that still has a unit under it.
+		if (skipped.length === 0) {
+			await ServiceGroup.updateOne(
+				{ _id: groupId },
+				{
+					$set: {
+						status: 'closed',
+						closedAt: new Date(),
+						closedBy: operator(event.locals.user),
+						resolution: resolution || undefined
+					}
+				}
+			);
+		}
+
+		await writeAudit(event, {
+			tableName: 'service_groups',
+			recordId: groupId,
+			action: 'UPDATE',
+			oldData: { status: 'open' },
+			newData: { status: skipped.length ? 'open' : 'closed', closed: closedIds.length },
+			reason: 'Group task closed'
+		});
+
+		if (skipped.length) {
+			return fail(400, {
+				error: `Closed ${closedIds.length} unit(s); left open because the SPU is finalized: ${skipped.join(', ')}`
+			});
+		}
+
+		return { success: true, groupClosed: true };
 	}
 };
