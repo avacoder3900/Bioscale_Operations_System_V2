@@ -11169,3 +11169,8 @@ Deployment: preview — Vercel auto-build from branch push (URL in Vercel dashbo
 Source: branch feat/kanban-capture-modes @ commit bbcfdfba
 Retrieve this exact code: git checkout feat/kanban-capture-modes at commit bbcfdfba
 What this deployment is for: QA of KB2-38 — quick box (position slot, no deliverable), /kanban/capture detailed mode, landing processed/committed, Board "+ New task".
+
+Deployment: production — Vercel auto-deploy from master push
+Source: branch master @ commit cf522e52 (fast-forward of feat/kanban-capture-modes)
+Retrieve this exact code: git checkout master at commit cf522e52
+What this deployment is for: KB2-38 capture modes live — quick box position slot, /kanban/capture detailed mode with processed/committed landing, Board "+ New task", kanban_capture landing/position (MCP 3.4.0).
