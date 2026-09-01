@@ -11028,3 +11028,17 @@ Source: branch master @ commit bc90588d (merge of feat/spu-tweaks, code changes 
 Retrieve this exact code: git checkout master at commit bc90588d
   (or: git log master --oneline to find it if the branch has since moved on)
 What this deployment is for: SPU inventory list view at /spu; SPU Mfg opens on Assembly tab
+
+================================================================================
+2026-09-01 — feat/spu-tweaks — SPU inventory sortable columns (SPU-INV-03)
+================================================================================
+docs/prds/SPU-INV-03-column-sorting.md written then implemented. Every header on the /spu
+inventory table is now a button: click to sort by that column, click again to flip asc/desc
+(active column shows ▲/▼ and aria-sort). Default sort changed from server createdAt-desc order
+to UDI ascending. Per-column semantics: identifiers/batch/owner case-insensitive strings,
+Status in lifecycle order (draft→…→voided, via STATUS_ORDER lookup, unknown statuses last),
+Validation by passed count, Created chronological; missing values sort last in BOTH directions.
+Sorting is client-side over the search-filtered rows; search + Enter-jump untouched. Only file
+touched: src/routes/spu/+page.svelte.
+
+npm run check: 11 errors — unchanged vs. baseline, 0 in touched files.

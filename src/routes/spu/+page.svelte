@@ -7,18 +7,93 @@
 
 	let search = $state('');
 
-	// Search filters the visible rows live.
+	type Row = (typeof data.spus)[number];
+	type SortKey =
+		| 'udi'
+		| 'deviceId'
+		| 'barcode'
+		| 'status'
+		| 'batchNumber'
+		| 'owner'
+		| 'validation'
+		| 'created';
+
+	let sortKey = $state<SortKey>('udi');
+	let sortDir = $state<'asc' | 'desc'>('asc');
+
+	function toggleSort(key: SortKey) {
+		if (sortKey === key) {
+			sortDir = sortDir === 'asc' ? 'desc' : 'asc';
+		} else {
+			sortKey = key;
+			sortDir = 'asc';
+		}
+	}
+
+	// Status sorts in lifecycle order, not alphabetically.
+	const STATUS_ORDER = [
+		'draft',
+		'assembling',
+		'assembled',
+		'validating',
+		'validated',
+		'released-rnd',
+		'released-manufacturing',
+		'released-field',
+		'deployed',
+		'servicing',
+		'retired',
+		'voided'
+	];
+
+	function sortValue(s: Row, key: SortKey): string | number | null {
+		switch (key) {
+			case 'udi':
+				return s.udi.toLowerCase();
+			case 'deviceId':
+				return s.deviceId?.toLowerCase() ?? null;
+			case 'barcode':
+				return s.barcode?.toLowerCase() ?? null;
+			case 'status': {
+				const i = STATUS_ORDER.indexOf(s.status);
+				return i === -1 ? STATUS_ORDER.length : i;
+			}
+			case 'batchNumber':
+				return s.batchNumber?.toLowerCase() ?? null;
+			case 'owner':
+				return s.owner?.toLowerCase() ?? null;
+			case 'validation':
+				return s.validationPassed;
+			case 'created':
+				return s.createdAt ? new Date(s.createdAt).getTime() : null;
+		}
+	}
+
+	// Search filters the visible rows live; the active column then orders them.
+	// Missing values sort last in both directions.
 	let filtered = $derived.by(() => {
 		const q = search.trim().toLowerCase();
-		if (!q) return data.spus;
-		return data.spus.filter(
-			(s) =>
-				s.udi.toLowerCase().includes(q) ||
-				(s.deviceId && s.deviceId.toLowerCase().includes(q)) ||
-				(s.barcode && s.barcode.toLowerCase().includes(q)) ||
-				(s.owner && s.owner.toLowerCase().includes(q)) ||
-				(s.batchNumber && s.batchNumber.toLowerCase().includes(q))
-		);
+		const rows = !q
+			? [...data.spus]
+			: data.spus.filter(
+					(s) =>
+						s.udi.toLowerCase().includes(q) ||
+						(s.deviceId && s.deviceId.toLowerCase().includes(q)) ||
+						(s.barcode && s.barcode.toLowerCase().includes(q)) ||
+						(s.owner && s.owner.toLowerCase().includes(q)) ||
+						(s.batchNumber && s.batchNumber.toLowerCase().includes(q))
+				);
+		const dir = sortDir === 'asc' ? 1 : -1;
+		return rows.sort((a, b) => {
+			const av = sortValue(a, sortKey);
+			const bv = sortValue(b, sortKey);
+			if (av === null && bv === null) return 0;
+			if (av === null) return 1;
+			if (bv === null) return -1;
+			if (av < bv) return -dir;
+			if (av > bv) return dir;
+			return 0;
+		});
 	});
 
 	// Enter jumps straight to an exact UDI / device-id / barcode match.
@@ -38,6 +113,17 @@
 		if (!d) return '—';
 		return new Date(d).toLocaleDateString();
 	}
+
+	const COLUMNS: { key: SortKey; label: string }[] = [
+		{ key: 'udi', label: 'UDI' },
+		{ key: 'deviceId', label: 'Device ID' },
+		{ key: 'barcode', label: 'Barcode' },
+		{ key: 'status', label: 'Status' },
+		{ key: 'batchNumber', label: 'Batch' },
+		{ key: 'owner', label: 'Owner' },
+		{ key: 'validation', label: 'Validation' },
+		{ key: 'created', label: 'Created' }
+	];
 </script>
 
 <div class="space-y-5">
@@ -73,28 +159,26 @@
 				<table class="w-full text-sm">
 					<thead>
 						<tr class="border-b border-[var(--color-tron-border)] text-left">
-							<th class="py-2 pr-4 text-xs uppercase text-[var(--color-tron-text-secondary)]">UDI</th>
-							<th class="py-2 pr-4 text-xs uppercase text-[var(--color-tron-text-secondary)]"
-								>Device ID</th
-							>
-							<th class="py-2 pr-4 text-xs uppercase text-[var(--color-tron-text-secondary)]"
-								>Barcode</th
-							>
-							<th class="py-2 pr-4 text-xs uppercase text-[var(--color-tron-text-secondary)]"
-								>Status</th
-							>
-							<th class="py-2 pr-4 text-xs uppercase text-[var(--color-tron-text-secondary)]"
-								>Batch</th
-							>
-							<th class="py-2 pr-4 text-xs uppercase text-[var(--color-tron-text-secondary)]"
-								>Owner</th
-							>
-							<th class="py-2 pr-4 text-xs uppercase text-[var(--color-tron-text-secondary)]"
-								>Validation</th
-							>
-							<th class="py-2 text-xs uppercase text-[var(--color-tron-text-secondary)]"
-								>Created</th
-							>
+							{#each COLUMNS as col (col.key)}
+								{@const active = sortKey === col.key}
+								<th
+									class="py-0 {col.key === 'created' ? '' : 'pr-4'}"
+									aria-sort={active ? (sortDir === 'asc' ? 'ascending' : 'descending') : undefined}
+								>
+									<button
+										type="button"
+										class="flex items-center gap-1 py-2 text-xs uppercase transition-colors hover:text-[var(--color-tron-cyan)] {active
+											? 'text-[var(--color-tron-cyan)]'
+											: 'text-[var(--color-tron-text-secondary)]'}"
+										onclick={() => toggleSort(col.key)}
+									>
+										{col.label}
+										{#if active}
+											<span aria-hidden="true">{sortDir === 'asc' ? '▲' : '▼'}</span>
+										{/if}
+									</button>
+								</th>
+							{/each}
 						</tr>
 					</thead>
 					<tbody>
