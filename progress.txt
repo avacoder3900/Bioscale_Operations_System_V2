@@ -11015,3 +11015,12 @@ Files: src/lib/server/validation/run-optical.ts (new),
 runs/[runId]/+page.server.ts, runs/[runId]/+page.svelte.
 npm run check: 11 errors — unchanged master baseline (r2.ts, AskBimsWidget,
 assembly, parts); ZERO in the touched files.
+Deployment: preview — https://bioscale-operations-system-mongodb-kwhzsreei-brevitest.vercel.app
+Source: branch feat/validation-run-optical-verdict @ commit deeaab20
+Retrieve this exact code: git checkout feat/validation-run-optical-verdict at commit deeaab20
+  (or: git log feat/validation-run-optical-verdict --oneline to find it if the branch has since moved on)
+What this deployment is for: MASTER-BASED build of the validation run detail rebuild —
+per-SPU cards with step tabs, optical-confirmation A/B/C F7/F3 + cross-well CV + analysis
+flags auto-surfacing per SPU from cartridge_records, and the Pass device / Fail device
+verdict that snapshots the judged numbers onto the step cell + AuditLog. Supersedes the
+preview off feat/spu-validation-runs (bfa81c13), which was built on a stale optical lineage.
