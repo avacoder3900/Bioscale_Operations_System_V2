@@ -2,11 +2,8 @@ import { fail } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
 import { connectDB, AssayDefinition, CartridgeRecord } from '$lib/server/db';
 import { computeOpticalAnalysis } from '$lib/server/optical-analysis';
+import { OPTICAL_ASSAY_ID, OPTICAL_CARTRIDGE_FILTER } from '$lib/server/validation/optical-confirmation';
 import type { Actions, PageServerLoad } from './$types';
-
-// The single optical-confirmation assay in use: "Gen 5 Optical Scan - Start
-// Position Corrected". Change this id if a different optical assay is adopted.
-const OPTICAL_ASSAY_ID = 'A9EB41AD';
 
 export const load: PageServerLoad = async ({ locals }) => {
 	requirePermission(locals.user, 'cartridge:read');
@@ -22,13 +19,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 	// Select by ASSAY, not assayCategory: most Gen 5 runs are created through paths
 	// that never set a category (only ~19 of ~886 have one), so a category filter
 	// silently hides nearly the whole dataset.
-	const cartridges = await CartridgeRecord.find({
-		$or: [
-			{ assayId: OPTICAL_ASSAY_ID },
-			{ 'assay._id': OPTICAL_ASSAY_ID },
-			{ assayName: /Gen 5 Optical/i }
-		]
-	})
+	const cartridges = await CartridgeRecord.find(OPTICAL_CARTRIDGE_FILTER)
 		.select('serialNumber assayId assayName status statusUpdatedOn checkpoints createdAt analysis rawData device')
 		.sort({ createdAt: -1 })
 		.limit(200)

@@ -4,10 +4,36 @@
 	import { goto, invalidateAll } from '$app/navigation';
 	import ThermoFileUpload from '$lib/components/validation/thermocouple/ThermoFileUpload.svelte';
 
+	interface OpticalCartridge {
+		barcode: string;
+		serialNumber: string | null;
+		status: string;
+		assignedAt: string | null;
+		ranAt: string | null;
+		readingCount: number;
+		scanGroup: string;
+		ratioByChannel: Record<string, number | null>;
+	}
+
+	interface OpticalSummary {
+		cartridges: OpticalCartridge[];
+		channels: string[];
+		meanByChannel: Record<string, number | null>;
+		latestRanAt: string | null;
+	}
+
 	interface StepCell {
 		status: string;
 		sessionId?: string;
-		result?: { min?: number; max?: number; mode?: number; average?: number; readingCount?: number; fileName?: string | null };
+		result?: {
+			min?: number; max?: number; mode?: number; average?: number;
+			readingCount?: number; fileName?: string | null;
+			// optical_confirmation verdict snapshot
+			channels?: string[];
+			meanByChannel?: Record<string, number | null>;
+			cartridgeCount?: number;
+			judgedAt?: string | null;
+		};
 		evaluation?: { criteria: { minTemp: number; maxTemp: number }; passed: boolean; failureReasons: string[] } | null;
 		completedAt?: string | null;
 		completedBy?: { username?: string } | null;
@@ -44,6 +70,7 @@
 				finalized: boolean;
 				prior: Record<string, { status: string; sessionId: string | null; completedAt: string | null; failureReasons: string[] } | null>;
 			}>;
+			opticalByUdi: Record<string, OpticalSummary>;
 			thermoCriteria: { minTemp: number; maxTemp: number } | null;
 			otherActiveRuns: { id: string; runNumber: string; name: string | null }[];
 		};
@@ -69,7 +96,10 @@
 	let members = $derived((run.spus ?? []).filter(m => !m.removedAt));
 	let inProgress = $derived(run.status === 'in_progress');
 
-	// One expandable panel at a time, keyed `${spuId}:${step}:${mode}`
+	// Which step tab is open on each SPU card, keyed by spuId. Unset means
+	// "first step still needing attention" — see tabFor().
+	let activeTab = $state<Record<string, string>>({});
+	// One expandable sub-form at a time, keyed `${spuId}:${step}:${mode}`
 	let openPanel = $state<string | null>(null);
 	let showAbort = $state(false);
 	let editingName = $state(false);
@@ -79,8 +109,8 @@
 
 	// Live refresh: re-fetch run data every 10s (when the tab is visible) so
 	// validations completed elsewhere — another tab, another operator, the
-	// instrument pages — appear without a manual reload. Local UI state
-	// (open panels, parsed files) survives invalidation.
+	// instrument pages, a finished optical cartridge — appear without a manual
+	// reload. Local UI state (open tab, panels, parsed files) survives it.
 	let lastRefreshed = $state<Date | null>(null);
 	onMount(() => {
 		const id = setInterval(async () => {
@@ -101,6 +131,10 @@
 		return data.spuById[m.spuId]?.prior?.[step] ?? null;
 	}
 
+	function opticalFor(m: Member): OpticalSummary | null {
+		return data.opticalByUdi?.[m.udi] ?? null;
+	}
+
 	function sessionHref(sessionId: string): string {
 		const s = data.sessionById[sessionId];
 		if (s?.type === 'mag') return `/validation/magnetometer/${sessionId}`;
@@ -108,8 +142,22 @@
 		return `/validation/thermocouple/${sessionId}`;
 	}
 
-	function fmtShortDate(d: string | null): string {
+	function fmtShortDate(d: string | null | undefined): string {
 		return d ? new Date(d).toLocaleDateString() : '';
+	}
+
+	function fmtDate(d: string | null | undefined): string {
+		return d ? new Date(d).toLocaleString() : '—';
+	}
+
+	function fmtDateTimeShort(d: string | null | undefined): string {
+		if (!d) return '—';
+		const date = new Date(d);
+		return `${date.toLocaleDateString()} ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+	}
+
+	function fmtRatio(v: number | null | undefined): string {
+		return typeof v === 'number' && Number.isFinite(v) ? v.toFixed(3) : '—';
 	}
 
 	// Effective status: the run cell if it has state, else the SPU's prior
@@ -122,6 +170,37 @@
 
 	function passedCount(m: Member): number {
 		return (run.steps ?? []).filter(s => effectiveStatus(m, s) === 'passed').length;
+	}
+
+	function allPassed(m: Member): boolean {
+		return (run.steps ?? []).every(s => effectiveStatus(m, s) === 'passed');
+	}
+
+	// A step is "waiting on a person" when the data is in but no verdict is:
+	// an uploaded thermo file, or optical cartridges that have already run.
+	function awaitingVerdict(m: Member, step: string): boolean {
+		if (effectiveStatus(m, step) === 'uploaded') return true;
+		if (step === 'optical_confirmation') {
+			return cellFor(m, step).status === 'not_started' && (opticalFor(m)?.cartridges.length ?? 0) > 0;
+		}
+		return false;
+	}
+
+	function tabFor(m: Member): string {
+		const steps = run.steps ?? [];
+		const explicit = activeTab[m.spuId];
+		if (explicit && steps.includes(explicit)) return explicit;
+		// Default to the first step that still needs someone: a pending verdict
+		// first, then anything not yet decided.
+		return steps.find(s => awaitingVerdict(m, s))
+			?? steps.find(s => !['passed', 'skipped'].includes(effectiveStatus(m, s)))
+			?? steps[0]
+			?? '';
+	}
+
+	function selectTab(m: Member, step: string) {
+		activeTab[m.spuId] = step;
+		openPanel = null;
 	}
 
 	// Whole-run rollup for the header summary and the complete-run warning
@@ -140,10 +219,6 @@
 		return t;
 	});
 
-	function allPassed(m: Member): boolean {
-		return (run.steps ?? []).every(s => effectiveStatus(m, s) === 'passed');
-	}
-
 	function chip(status: string): string {
 		if (status === 'passed') return 'bg-[var(--color-tron-green)]/20 text-[var(--color-tron-green)]';
 		if (status === 'failed') return 'bg-[var(--color-tron-red)]/20 text-[var(--color-tron-red)]';
@@ -158,12 +233,23 @@
 		return status.charAt(0).toUpperCase() + status.slice(1);
 	}
 
-	function togglePanel(key: string) {
-		openPanel = openPanel === key ? null : key;
+	function stepMark(status: string): string {
+		if (status === 'passed') return '✓';
+		if (status === 'failed') return '✗';
+		if (status === 'uploaded') return '↑';
+		if (status === 'skipped') return '–';
+		return '·';
 	}
 
-	function fmtDate(d: string | null | undefined): string {
-		return d ? new Date(d).toLocaleString() : '—';
+	function markClass(status: string): string {
+		if (status === 'passed') return 'text-[var(--color-tron-green)]';
+		if (status === 'failed') return 'text-[var(--color-tron-red)]';
+		if (status === 'uploaded') return 'text-[var(--color-tron-orange)]';
+		return 'tron-text-muted';
+	}
+
+	function togglePanel(key: string) {
+		openPanel = openPanel === key ? null : key;
 	}
 
 	const submitAndClose = () => {
@@ -213,7 +299,7 @@
 				</span>
 			</p>
 			<!-- At-a-glance rollup so the state of the whole run is readable
-			     without scanning the matrix -->
+			     without opening every card -->
 			<p class="mt-1 text-sm">
 				<span class="font-medium text-[var(--color-tron-green)]">{stepTotals.passed}/{stepTotals.cells} passed</span>
 				{#if stepTotals.failed > 0}
@@ -278,246 +364,359 @@
 		</div>
 	{/if}
 
-	{#if !data.thermoCriteria}
-		<div class="rounded-lg border border-[var(--color-tron-orange)]/30 bg-[var(--color-tron-orange)]/10 p-4 text-sm text-[var(--color-tron-orange)]">
-			The standard thermocouple acceptance range is not configured yet — uploads are recorded as
-			<span class="font-semibold">uploaded</span> and can be evaluated once the range is set.
-		</div>
-	{:else}
-		<p class="tron-text-muted text-sm">
-			Thermocouple acceptance range: {data.thermoCriteria.minTemp}°C – {data.thermoCriteria.maxTemp}°C
-		</p>
-	{/if}
+	<!-- One card per SPU. Steps are tabs inside the card, so a step gets the
+	     full width for its data instead of a cramped table cell. -->
+	<div class="space-y-4">
+		{#each members as member (member.spuId)}
+			{@const step = tabFor(member)}
+			{@const cell = cellFor(member, step)}
+			{@const prior = cell.status === 'not_started' ? priorFor(member, step) : null}
+			{@const panelKey = `${member.spuId}:${step}`}
+			{@const optical = opticalFor(member)}
+			<div class="tron-card overflow-hidden">
+				<!-- Card header: identity + overall verdict for this SPU -->
+				<div class="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--color-tron-border)] p-4">
+					<div class="flex items-baseline gap-3">
+						<a href="/spu/{member.spuId}" class="tron-heading text-lg font-semibold hover:text-[var(--color-tron-cyan)] hover:underline">{member.udi}</a>
+						{#if data.spuById[member.spuId]?.finalized}
+							<span class="tron-text-muted text-xs">finalized</span>
+						{/if}
+						<span class="tron-text-muted text-sm">{passedCount(member)}/{run.steps.length} passed</span>
+					</div>
+					<div class="flex items-center gap-3">
+						{#if allPassed(member) && data.spuById[member.spuId]?.status === 'validating'}
+							<form method="POST" action="?/markValidated" use:enhance>
+								<input type="hidden" name="spuId" value={member.spuId} />
+								<button type="submit" class="rounded-lg bg-[var(--color-tron-green)] px-3 py-1.5 text-xs font-semibold text-[var(--color-tron-bg-primary)] hover:bg-[var(--color-tron-green)]/90">
+									Mark validated
+								</button>
+							</form>
+						{:else if data.spuById[member.spuId]?.status === 'validated'}
+							<span class="text-xs text-[var(--color-tron-green)]">validated ✓</span>
+						{/if}
+						{#if inProgress}
+							<form method="POST" action="?/removeSpu" use:enhance>
+								<input type="hidden" name="spuId" value={member.spuId} />
+								<button type="submit" class="tron-text-muted text-xs hover:text-[var(--color-tron-red)]" title="Remove from run">
+									Remove
+								</button>
+							</form>
+						{/if}
+					</div>
+				</div>
 
-	<!-- SPU × step matrix -->
-	<div class="tron-card overflow-x-auto">
-		<table class="w-full text-sm">
-			<thead>
-				<tr class="border-b border-[var(--color-tron-border)] text-left">
-					<th class="tron-text-muted p-3 font-medium">UDI</th>
-					{#each run.steps as step (step)}
-						<th class="tron-text-muted p-3 font-medium">{STEP_LABELS[step] ?? step}</th>
+				<!-- Step tabs -->
+				<div role="tablist" aria-label="Validation steps for {member.udi}" class="flex flex-wrap gap-1 border-b border-[var(--color-tron-border)] px-4 pt-3">
+					{#each run.steps as s (s)}
+						{@const st = effectiveStatus(member, s)}
+						<button
+							type="button"
+							role="tab"
+							aria-selected={s === step}
+							onclick={() => selectTab(member, s)}
+							class="flex items-center gap-2 rounded-t-lg border-b-2 px-4 py-2 text-sm font-medium transition-colors
+								{s === step
+									? 'border-[var(--color-tron-cyan)] text-[var(--color-tron-cyan)]'
+									: 'border-transparent text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)]'}"
+						>
+							<span class={markClass(st)}>{stepMark(st)}</span>
+							{STEP_LABELS[s] ?? s}
+							{#if awaitingVerdict(member, s)}
+								<span class="rounded-full bg-[var(--color-tron-orange)]/20 px-2 py-0.5 text-[10px] font-semibold text-[var(--color-tron-orange)]">
+									needs verdict
+								</span>
+							{/if}
+						</button>
 					{/each}
-					<th class="tron-text-muted p-3 font-medium">Overall</th>
-					<th class="p-3"></th>
-				</tr>
-			</thead>
-			<tbody class="divide-y divide-[var(--color-tron-border)]">
-				{#each members as member (member.spuId)}
-					<tr class="align-top">
-						<td class="p-3">
-							<a href="/spu/{member.spuId}" class="tron-heading font-medium hover:text-[var(--color-tron-cyan)] hover:underline">{member.udi}</a>
-							{#if data.spuById[member.spuId]?.finalized}
-								<span class="tron-text-muted block text-xs">finalized</span>
+				</div>
+
+				<!-- Active step panel -->
+				<div class="space-y-4 p-4">
+					<div class="flex flex-wrap items-center gap-3">
+						<span class="rounded-full px-3 py-1 text-xs font-medium {chip(prior ? prior.status : cell.status)}">
+							{chipLabel(prior ? prior.status : cell.status)}{prior ? ' · prior' : ''}
+						</span>
+						{#if cell.completedAt && !prior}
+							<span class="tron-text-muted text-xs">
+								{fmtDate(cell.completedAt)}{#if cell.completedBy?.username}&nbsp;· {cell.completedBy.username}{/if}
+							</span>
+						{/if}
+						{#if cell.sessionId && data.sessionById[cell.sessionId]}
+							<a href={sessionHref(cell.sessionId)} class="text-xs text-[var(--color-tron-cyan)] hover:underline">
+								{data.sessionById[cell.sessionId].barcode ?? 'session'} →
+							</a>
+						{/if}
+					</div>
+
+					{#if prior}
+						<!-- Carried over from the SPU's DHR (spu.validation.*) -->
+						<div class="rounded-lg border border-[var(--color-tron-border)] p-3">
+							<p class="tron-text-muted text-xs">
+								Recorded on the device record{#if prior.completedAt}&nbsp;· {fmtShortDate(prior.completedAt)}{/if}
+							</p>
+							{#if prior.status === 'failed' && prior.failureReasons?.length}
+								<p class="mt-1 text-xs text-[var(--color-tron-red)]">{prior.failureReasons.join('; ')}</p>
 							{/if}
-						</td>
+							<div class="mt-2 flex items-center gap-3">
+								{#if prior.sessionId && data.sessionById[prior.sessionId]}
+									<a href={sessionHref(prior.sessionId)} class="text-xs text-[var(--color-tron-cyan)] hover:underline">
+										{data.sessionById[prior.sessionId].barcode ?? 'session'} →
+									</a>
+								{/if}
+								{#if inProgress}
+									<form method="POST" action="?/recordStepResult" use:enhance>
+										<input type="hidden" name="spuId" value={member.spuId} />
+										<input type="hidden" name="step" value={step} />
+										<input type="hidden" name="outcome" value={prior.status} />
+										<input type="hidden" name="sessionId" value={prior.sessionId ?? ''} />
+										<input type="hidden" name="notes" value="Carried over from prior validation" />
+										<button type="submit" class="rounded-lg border border-[var(--color-tron-cyan)]/50 px-3 py-1.5 text-xs font-semibold text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10">
+											Use this result
+										</button>
+									</form>
+								{/if}
+							</div>
+						</div>
+					{/if}
 
-						{#each run.steps as step (step)}
-							{@const cell = cellFor(member, step)}
-							{@const prior = cell.status === 'not_started' ? priorFor(member, step) : null}
-							{@const panelKey = `${member.spuId}:${step}`}
-							<td class="p-3 {cell.status === 'passed' ? 'bg-[var(--color-tron-green)]/10' : cell.status === 'failed' ? 'bg-[var(--color-tron-red)]/5' : ''}">
-								<div class="flex flex-col items-start gap-1.5">
-									{#if prior}
-										<!-- Carried over from the SPU's DHR (spu.validation.*) -->
-										<span class="rounded-full px-2 py-1 text-xs font-medium {chip(prior.status)}">{chipLabel(prior.status)} · prior</span>
-										<span class="tron-text-muted text-xs">
-											from device record{#if prior.completedAt}&nbsp;· {fmtShortDate(prior.completedAt)}{/if}
-										</span>
-										{#if prior.status === 'failed' && prior.failureReasons?.length}
-											<span class="max-w-56 text-xs text-[var(--color-tron-red)]">{prior.failureReasons.join('; ')}</span>
-										{/if}
-										{#if prior.sessionId && data.sessionById[prior.sessionId]}
-											<a href={sessionHref(prior.sessionId)} class="text-xs text-[var(--color-tron-cyan)] hover:underline">
-												{data.sessionById[prior.sessionId].barcode ?? 'session'} →
-											</a>
-										{/if}
-										{#if inProgress}
-											<form method="POST" action="?/recordStepResult" use:enhance>
-												<input type="hidden" name="spuId" value={member.spuId} />
-												<input type="hidden" name="step" value={step} />
-												<input type="hidden" name="outcome" value={prior.status} />
-												<input type="hidden" name="sessionId" value={prior.sessionId ?? ''} />
-												<input type="hidden" name="notes" value="Carried over from prior validation" />
-												<button type="submit" class="text-xs text-[var(--color-tron-cyan)] hover:underline">Use this result</button>
-											</form>
-										{/if}
-									{:else}
-										<span class="rounded-full px-2 py-1 text-xs font-medium {chip(cell.status)}">{chipLabel(cell.status)}</span>
-									{/if}
+					{#if step === 'thermocouple'}
+						{#if !data.thermoCriteria}
+							<p class="rounded-lg border border-[var(--color-tron-orange)]/30 bg-[var(--color-tron-orange)]/10 p-3 text-xs text-[var(--color-tron-orange)]">
+								No standard acceptance range is configured — uploads park at <span class="font-semibold">uploaded</span> and are judged by review below.
+							</p>
+						{:else}
+							<p class="tron-text-muted text-xs">
+								Acceptance range: {data.thermoCriteria.minTemp}°C – {data.thermoCriteria.maxTemp}°C
+							</p>
+						{/if}
 
-									{#if step === 'thermocouple' && cell.result}
-										<span class="tron-text-muted text-xs">
-											{#if cell.result.min != null && cell.result.max != null}
-												min {cell.result.min.toFixed(1)} · max {cell.result.max.toFixed(1)}°C
-											{/if}
-											{#if cell.result.mode != null}
-												· mode {cell.result.mode.toFixed(1)}°C
-											{/if}
-											{#if cell.result.fileName}
-												· {cell.result.fileName}
-											{/if}
-										</span>
-									{/if}
-									{#if step === 'thermocouple' && cell.status === 'uploaded' && inProgress}
-										<!-- Verdict on the displayed values (manual until the
-										     larger-dataset acceptance range is defined) -->
-										<div class="flex gap-2">
-											<form method="POST" action="?/recordStepResult" use:enhance>
-												<input type="hidden" name="spuId" value={member.spuId} />
-												<input type="hidden" name="step" value={step} />
-												<input type="hidden" name="outcome" value="passed" />
-												<input type="hidden" name="notes" value="Approved on mode/min/max review" />
-												<button type="submit" class="rounded-lg bg-[var(--color-tron-green)] px-3 py-1.5 text-xs font-semibold text-[var(--color-tron-bg-primary)] hover:bg-[var(--color-tron-green)]/90">
-													Approve
-												</button>
-											</form>
-											<form method="POST" action="?/recordStepResult" use:enhance>
-												<input type="hidden" name="spuId" value={member.spuId} />
-												<input type="hidden" name="step" value={step} />
-												<input type="hidden" name="outcome" value="failed" />
-												<input type="hidden" name="notes" value="Rejected on mode/min/max review" />
-												<button type="submit" class="rounded-lg border border-[var(--color-tron-red)]/50 px-3 py-1.5 text-xs font-semibold text-[var(--color-tron-red)] hover:bg-[var(--color-tron-red)]/10">
-													Reject
-												</button>
-											</form>
+						{#if cell.result && (cell.result.min != null || cell.result.mode != null)}
+							<div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
+								{#each [['Min', cell.result.min], ['Max', cell.result.max], ['Mode', cell.result.mode], ['Average', cell.result.average]] as [label, value] (label)}
+									<div class="rounded-lg bg-[var(--color-tron-bg-tertiary)] p-3">
+										<div class="tron-text-muted text-xs">{label}</div>
+										<div class="tron-heading text-lg font-semibold">
+											{typeof value === 'number' ? `${value.toFixed(1)}°C` : '—'}
 										</div>
-									{/if}
-									{#if cell.evaluation}
-										<span class="tron-text-muted text-xs">
-											vs {cell.evaluation.criteria.minTemp}–{cell.evaluation.criteria.maxTemp}°C
-										</span>
-									{/if}
-									{#if cell.status === 'failed' && cell.evaluation?.failureReasons?.length}
-										<span class="max-w-56 text-xs text-[var(--color-tron-red)]">
-											{cell.evaluation.failureReasons.join('; ')}
-										</span>
-									{/if}
-									{#if cell.previous?.length}
-										<span class="tron-text-muted text-xs">
-											Earlier attempts:
-											{#each cell.previous as prev, pi (pi)}
-												{#if prev.sessionId && data.sessionById[prev.sessionId]}
-													<a href={sessionHref(prev.sessionId)} class="ml-1 hover:underline {prev.status === 'failed' ? 'text-[var(--color-tron-red)]' : prev.status === 'passed' ? 'text-[var(--color-tron-green)]' : ''}">
-														{prev.status === 'failed' ? '✗' : prev.status === 'passed' ? '✓' : '•'} {data.sessionById[prev.sessionId].barcode ?? prev.status}
-													</a>
-												{:else}
-													<span class="ml-1 {prev.status === 'failed' ? 'text-[var(--color-tron-red)]' : prev.status === 'passed' ? 'text-[var(--color-tron-green)]' : ''}">
-														{prev.status === 'failed' ? '✗ failed' : prev.status === 'passed' ? '✓ passed' : prev.status}
-													</span>
-												{/if}
+									</div>
+								{/each}
+							</div>
+							<p class="tron-text-muted text-xs">
+								{cell.result.readingCount ?? 0} readings{#if cell.result.fileName}&nbsp;· {cell.result.fileName}{/if}
+							</p>
+						{/if}
+
+						{#if cell.evaluation}
+							<p class="tron-text-muted text-xs">
+								Evaluated vs {cell.evaluation.criteria.minTemp}–{cell.evaluation.criteria.maxTemp}°C
+							</p>
+						{/if}
+						{#if cell.status === 'failed' && cell.evaluation?.failureReasons?.length}
+							<p class="text-xs text-[var(--color-tron-red)]">{cell.evaluation.failureReasons.join('; ')}</p>
+						{/if}
+
+						{#if cell.status === 'uploaded' && inProgress}
+							<!-- Verdict on the displayed values (manual until the
+							     larger-dataset acceptance range is defined) -->
+							<div class="flex flex-wrap gap-2">
+								<form method="POST" action="?/recordStepResult" use:enhance>
+									<input type="hidden" name="spuId" value={member.spuId} />
+									<input type="hidden" name="step" value={step} />
+									<input type="hidden" name="outcome" value="passed" />
+									<input type="hidden" name="notes" value="Approved on mode/min/max review" />
+									<button type="submit" class="rounded-lg bg-[var(--color-tron-green)] px-4 py-2 text-xs font-semibold text-[var(--color-tron-bg-primary)] hover:bg-[var(--color-tron-green)]/90">
+										Approve
+									</button>
+								</form>
+								<form method="POST" action="?/recordStepResult" use:enhance>
+									<input type="hidden" name="spuId" value={member.spuId} />
+									<input type="hidden" name="step" value={step} />
+									<input type="hidden" name="outcome" value="failed" />
+									<input type="hidden" name="notes" value="Rejected on mode/min/max review" />
+									<button type="submit" class="rounded-lg border border-[var(--color-tron-red)]/50 px-4 py-2 text-xs font-semibold text-[var(--color-tron-red)] hover:bg-[var(--color-tron-red)]/10">
+										Reject
+									</button>
+								</form>
+								{#if data.thermoCriteria}
+									<form method="POST" action="?/evaluateThermo" use:enhance>
+										<input type="hidden" name="spuId" value={member.spuId} />
+										<button type="submit" class="rounded-lg border border-[var(--color-tron-cyan)]/50 px-4 py-2 text-xs font-semibold text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10">
+											Evaluate against range
+										</button>
+									</form>
+								{/if}
+							</div>
+						{/if}
+
+					{:else if step === 'optical_confirmation'}
+						<!-- Ratios are pulled live from the optical cartridges this SPU
+						     ran since joining the run — no upload, no manual entry. -->
+						{#if !optical || optical.cartridges.length === 0}
+							<p class="tron-text-muted rounded-lg border border-dashed border-[var(--color-tron-border)] p-4 text-sm">
+								No optical cartridge has finished on {member.udi} since this run started
+								({fmtShortDate(member.addedAt ?? run.startedAt)}). Results appear here automatically
+								once a cartridge completes.
+							</p>
+						{:else}
+							<div class="overflow-x-auto rounded-lg border border-[var(--color-tron-border)]">
+								<table class="w-full text-sm">
+									<thead>
+										<tr class="border-b border-[var(--color-tron-border)] text-left">
+											<th class="tron-text-muted p-3 font-medium">Cartridge</th>
+											<th class="tron-text-muted p-3 font-medium">Ran</th>
+											<th class="tron-text-muted p-3 font-medium">Readings</th>
+											{#each optical.channels as ch (ch)}
+												<th class="tron-text-muted p-3 text-right font-medium">Ch {ch} (F7/F3)</th>
 											{/each}
-										</span>
-									{/if}
-									{#if cell.sessionId && data.sessionById[cell.sessionId]}
-										<a href={sessionHref(cell.sessionId)} class="text-xs text-[var(--color-tron-cyan)] hover:underline">
-											{data.sessionById[cell.sessionId].barcode ?? 'session'} →
-										</a>
-									{/if}
-									{#if cell.notes}
-										<span class="tron-text-muted text-xs italic">{cell.notes}</span>
-									{/if}
+										</tr>
+									</thead>
+									<tbody class="divide-y divide-[var(--color-tron-border)]">
+										{#each optical.cartridges as cart (cart.barcode)}
+											<tr>
+												<td class="p-3">
+													<a href="/validation/optical-confirmation/{cart.barcode}" class="font-mono text-xs text-[var(--color-tron-cyan)] hover:underline" title={cart.barcode}>
+														{cart.barcode.slice(0, 8)}…
+													</a>
+													{#if cart.serialNumber}
+														<span class="tron-text-muted ml-2 text-xs">{cart.serialNumber}</span>
+													{/if}
+												</td>
+												<td class="tron-text-muted p-3 text-xs">{fmtDateTimeShort(cart.ranAt)}</td>
+												<td class="tron-text-muted p-3 text-xs">{cart.readingCount}</td>
+												{#each optical.channels as ch (ch)}
+													<td class="tron-heading p-3 text-right font-mono">{fmtRatio(cart.ratioByChannel[ch])}</td>
+												{/each}
+											</tr>
+										{/each}
+										{#if optical.cartridges.length > 1}
+											<tr class="bg-[var(--color-tron-bg-tertiary)]">
+												<td class="tron-text-muted p-3 text-xs font-semibold" colspan="3">
+													Mean of {optical.cartridges.length} cartridges
+												</td>
+												{#each optical.channels as ch (ch)}
+													<td class="tron-heading p-3 text-right font-mono font-semibold">{fmtRatio(optical.meanByChannel[ch])}</td>
+												{/each}
+											</tr>
+										{/if}
+									</tbody>
+								</table>
+							</div>
+							<p class="tron-text-muted text-xs">
+								Ratio of summed F7 to summed F3 per channel, over the
+								{optical.cartridges[0]?.scanGroup === 'test' ? 'post-baseline test scans' : 'full run'}.
+							</p>
 
-									{#if inProgress}
-										<div class="flex flex-wrap gap-2">
-											{#if step === 'thermocouple'}
-												<button type="button" onclick={() => togglePanel(`${panelKey}:upload`)} class="text-xs text-[var(--color-tron-orange)] hover:underline">
-													{cell.status === 'not_started' ? 'Upload data' : cell.status === 'uploaded' ? 'Re-upload' : 'Run again'}
-												</button>
-												{#if cell.status === 'uploaded' && data.thermoCriteria}
-													<form method="POST" action="?/evaluateThermo" use:enhance>
-														<input type="hidden" name="spuId" value={member.spuId} />
-														<button type="submit" class="text-xs text-[var(--color-tron-cyan)] hover:underline">Evaluate</button>
-													</form>
-												{/if}
-											{:else if step === 'magnetometer'}
-												<a href="/validation/magnetometer?udi={encodeURIComponent(member.udi)}&runId={run._id}" class="text-xs text-[var(--color-tron-orange)] hover:underline">
-													{cell.status === 'not_started' || cell.status === 'in_progress' ? 'Run test →' : 'Run again →'}
-												</a>
-											{:else if step === 'optical_confirmation'}
-												<a href="/validation/optical-confirmation?udi={encodeURIComponent(member.udi)}&runId={run._id}" class="text-xs text-[var(--color-tron-orange)] hover:underline">
-													{cell.status === 'not_started' || cell.status === 'in_progress' ? 'Open →' : 'Run again →'}
-												</a>
-											{/if}
-											<button type="button" onclick={() => togglePanel(`${panelKey}:record`)} class="tron-text-muted text-xs hover:text-[var(--color-tron-cyan)]">
-												Record result
-											</button>
-										</div>
-									{/if}
-
-									<!-- Thermo upload panel -->
-									{#if openPanel === `${panelKey}:upload` && step === 'thermocouple' && inProgress}
-										<form method="POST" action="?/uploadThermo" use:enhance={submitAndClose} class="mt-2 w-64 space-y-2 rounded-lg border border-[var(--color-tron-border)] p-3">
-											<input type="hidden" name="spuId" value={member.spuId} />
-											<input type="hidden" name="readings" value={thermoParsed[member.spuId]?.readingsJson ?? ''} />
-											<input type="hidden" name="fileName" value={thermoParsed[member.spuId]?.fileName ?? ''} />
-											<ThermoFileUpload
-												compact
-												onparsed={(p) => thermoParsed[member.spuId] = { readingsJson: p.readingsJson, fileName: p.fileName, count: p.readings.length }}
-												onclear={() => delete thermoParsed[member.spuId]}
-											/>
-											<button
-												type="submit"
-												disabled={!thermoParsed[member.spuId]}
-												class="w-full rounded-lg bg-[var(--color-tron-orange)] px-3 py-2 text-xs font-semibold text-[var(--color-tron-bg-primary)] disabled:cursor-not-allowed disabled:opacity-50"
-											>
-												Upload for {member.udi}
-											</button>
-										</form>
-									{/if}
-
-									<!-- Manual record panel -->
-									{#if openPanel === `${panelKey}:record` && inProgress}
-										<form method="POST" action="?/recordStepResult" use:enhance={submitAndClose} class="mt-2 w-64 space-y-2 rounded-lg border border-[var(--color-tron-border)] p-3">
-											<input type="hidden" name="spuId" value={member.spuId} />
-											<input type="hidden" name="step" value={step} />
-											<select name="outcome" required class="tron-input w-full rounded-lg px-2 py-1.5 text-xs">
-												<option value="" disabled selected>Outcome…</option>
-												<option value="passed">Passed</option>
-												<option value="failed">Failed</option>
-												<option value="skipped">Skipped</option>
-											</select>
-											<input type="text" name="notes" placeholder="Notes (optional)" class="tron-input w-full rounded-lg px-2 py-1.5 text-xs" />
-											<button type="submit" class="w-full rounded-lg bg-[var(--color-tron-cyan)] px-3 py-2 text-xs font-semibold text-[var(--color-tron-bg-primary)]">
-												Save result
-											</button>
-										</form>
-									{/if}
-								</div>
-							</td>
-						{/each}
-
-						<td class="p-3">
-							<span class="tron-heading font-medium">{passedCount(member)}/{run.steps.length}</span>
-							{#if allPassed(member) && data.spuById[member.spuId]?.status === 'validating'}
-								<form method="POST" action="?/markValidated" use:enhance class="mt-1">
-									<input type="hidden" name="spuId" value={member.spuId} />
-									<button type="submit" class="rounded-lg bg-[var(--color-tron-green)] px-3 py-1.5 text-xs font-semibold text-[var(--color-tron-bg-primary)] hover:bg-[var(--color-tron-green)]/90">
-										Mark validated
-									</button>
-								</form>
-							{:else if data.spuById[member.spuId]?.status === 'validated'}
-								<span class="block text-xs text-[var(--color-tron-green)]">validated ✓</span>
+							{#if cell.result?.meanByChannel && cell.status !== 'not_started'}
+								<!-- What the recorded verdict was actually judged on -->
+								<p class="tron-text-muted text-xs">
+									Verdict recorded on {cell.result.cartridgeCount ?? 0} cartridge(s):
+									{#each cell.result.channels ?? [] as ch (ch)}
+										<span class="ml-2">Ch {ch} {fmtRatio(cell.result.meanByChannel[ch])}</span>
+									{/each}
+								</p>
 							{/if}
-						</td>
 
-						<td class="p-3 text-right">
 							{#if inProgress}
-								<form method="POST" action="?/removeSpu" use:enhance>
+								<form method="POST" action="?/recordOpticalVerdict" use:enhance class="flex flex-wrap items-center gap-2 border-t border-[var(--color-tron-border)] pt-4">
 									<input type="hidden" name="spuId" value={member.spuId} />
-									<button type="submit" class="tron-text-muted text-xs hover:text-[var(--color-tron-red)]" title="Remove from run">
-										Remove
+									<input type="text" name="notes" placeholder="Notes (optional)" class="tron-input min-w-48 flex-1 rounded-lg px-3 py-2 text-xs" />
+									<button type="submit" name="outcome" value="passed" class="rounded-lg bg-[var(--color-tron-green)] px-4 py-2 text-xs font-semibold text-[var(--color-tron-bg-primary)] hover:bg-[var(--color-tron-green)]/90">
+										{cell.status === 'not_started' ? 'Pass device' : 'Change to pass'}
+									</button>
+									<button type="submit" name="outcome" value="failed" class="rounded-lg border border-[var(--color-tron-red)]/50 px-4 py-2 text-xs font-semibold text-[var(--color-tron-red)] hover:bg-[var(--color-tron-red)]/10">
+										{cell.status === 'not_started' ? 'Fail device' : 'Change to fail'}
 									</button>
 								</form>
 							{/if}
-						</td>
-					</tr>
-				{/each}
-			</tbody>
-		</table>
+						{/if}
+					{/if}
+
+					{#if cell.notes}
+						<p class="tron-text-muted text-xs italic">{cell.notes}</p>
+					{/if}
+
+					{#if cell.previous?.length}
+						<p class="tron-text-muted text-xs">
+							Earlier attempts:
+							{#each cell.previous as prev, pi (pi)}
+								{#if prev.sessionId && data.sessionById[prev.sessionId]}
+									<a href={sessionHref(prev.sessionId)} class="ml-1 hover:underline {prev.status === 'failed' ? 'text-[var(--color-tron-red)]' : prev.status === 'passed' ? 'text-[var(--color-tron-green)]' : ''}">
+										{prev.status === 'failed' ? '✗' : prev.status === 'passed' ? '✓' : '•'} {data.sessionById[prev.sessionId].barcode ?? prev.status}
+									</a>
+								{:else}
+									<span class="ml-1 {prev.status === 'failed' ? 'text-[var(--color-tron-red)]' : prev.status === 'passed' ? 'text-[var(--color-tron-green)]' : ''}">
+										{prev.status === 'failed' ? '✗ failed' : prev.status === 'passed' ? '✓ passed' : prev.status}
+									</span>
+								{/if}
+							{/each}
+						</p>
+					{/if}
+
+					{#if inProgress}
+						<div class="flex flex-wrap items-center gap-4 border-t border-[var(--color-tron-border)] pt-3">
+							{#if step === 'thermocouple'}
+								<button type="button" onclick={() => togglePanel(`${panelKey}:upload`)} class="text-xs text-[var(--color-tron-orange)] hover:underline">
+									{cell.status === 'not_started' ? 'Upload data' : cell.status === 'uploaded' ? 'Re-upload' : 'Run again'}
+								</button>
+							{:else if step === 'magnetometer'}
+								<a href="/validation/magnetometer?udi={encodeURIComponent(member.udi)}&runId={run._id}" class="text-xs text-[var(--color-tron-orange)] hover:underline">
+									{cell.status === 'not_started' || cell.status === 'in_progress' ? 'Run test →' : 'Run again →'}
+								</a>
+							{:else if step === 'optical_confirmation'}
+								<a href="/validation/optical-confirmation?udi={encodeURIComponent(member.udi)}&runId={run._id}" class="text-xs text-[var(--color-tron-orange)] hover:underline">
+									Assign cartridges →
+								</a>
+							{/if}
+							<button type="button" onclick={() => togglePanel(`${panelKey}:record`)} class="tron-text-muted text-xs hover:text-[var(--color-tron-cyan)]">
+								Record result manually
+							</button>
+						</div>
+					{/if}
+
+					<!-- Thermo upload panel -->
+					{#if openPanel === `${panelKey}:upload` && step === 'thermocouple' && inProgress}
+						<form method="POST" action="?/uploadThermo" use:enhance={submitAndClose} class="w-full max-w-md space-y-2 rounded-lg border border-[var(--color-tron-border)] p-3">
+							<input type="hidden" name="spuId" value={member.spuId} />
+							<input type="hidden" name="readings" value={thermoParsed[member.spuId]?.readingsJson ?? ''} />
+							<input type="hidden" name="fileName" value={thermoParsed[member.spuId]?.fileName ?? ''} />
+							<ThermoFileUpload
+								compact
+								onparsed={(p) => thermoParsed[member.spuId] = { readingsJson: p.readingsJson, fileName: p.fileName, count: p.readings.length }}
+								onclear={() => delete thermoParsed[member.spuId]}
+							/>
+							<button
+								type="submit"
+								disabled={!thermoParsed[member.spuId]}
+								class="w-full rounded-lg bg-[var(--color-tron-orange)] px-3 py-2 text-xs font-semibold text-[var(--color-tron-bg-primary)] disabled:cursor-not-allowed disabled:opacity-50"
+							>
+								Upload for {member.udi}
+							</button>
+						</form>
+					{/if}
+
+					<!-- Manual record panel -->
+					{#if openPanel === `${panelKey}:record` && inProgress}
+						<form method="POST" action="?/recordStepResult" use:enhance={submitAndClose} class="w-full max-w-md space-y-2 rounded-lg border border-[var(--color-tron-border)] p-3">
+							<input type="hidden" name="spuId" value={member.spuId} />
+							<input type="hidden" name="step" value={step} />
+							<select name="outcome" required class="tron-input w-full rounded-lg px-2 py-1.5 text-xs">
+								<option value="" disabled selected>Outcome…</option>
+								<option value="passed">Passed</option>
+								<option value="failed">Failed</option>
+								<option value="skipped">Skipped</option>
+							</select>
+							<input type="text" name="notes" placeholder="Notes (optional)" class="tron-input w-full rounded-lg px-2 py-1.5 text-xs" />
+							<button type="submit" class="w-full rounded-lg bg-[var(--color-tron-cyan)] px-3 py-2 text-xs font-semibold text-[var(--color-tron-bg-primary)]">
+								Save result
+							</button>
+						</form>
+					{/if}
+				</div>
+			</div>
+		{/each}
 
 		{#if members.length === 0}
-			<p class="tron-text-muted p-6 text-sm">All SPUs have been removed from this run.</p>
+			<p class="tron-text-muted tron-card p-6 text-sm">All SPUs have been removed from this run.</p>
 		{/if}
 	</div>
 

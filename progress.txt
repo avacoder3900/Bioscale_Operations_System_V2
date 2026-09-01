@@ -4064,3 +4064,47 @@ Deployment: preview — https://bioscale-operations-system-mongodb-gi58fzcnh-bre
 Source: branch feat/spu-validation-runs @ commit bde86cf1
 Retrieve this exact code: git checkout feat/spu-validation-runs at commit bde86cf1
 What this deployment is for: per-cartridge research-engine optical analysis + assay-based cartridge log, for user review.
+
+================================================================================
+2026-09-01 — feat/spu-validation-runs — run detail rebuilt as per-SPU cards; optical ratios auto-surface + pass/fail
+================================================================================
+The validation run detail page was a wide SPU x step matrix where every cell
+carried a status chip, its values, three or four action links and two inline
+forms. Rebuilt as one card per SPU with the three steps as tabs inside it, so a
+step gets the full card width instead of a table cell.
+- Card header: UDI, finalized flag, n/3 passed, Mark validated, Remove.
+- Tab strip per SPU (role=tablist/tab) with a pass/fail/uploaded mark per step
+  and a "needs verdict" badge when data is in but nobody has ruled on it. The
+  open tab defaults to the first step needing a person (pending verdict first,
+  then anything undecided), and is overridable per card.
+- Thermocouple panel now shows min/max/mode/average as stat tiles instead of a
+  run-on text line; Approve / Reject / Evaluate sit together.
+Optical confirmation ratios now surface on the run WITHOUT any operator step:
+- New src/lib/server/validation/optical-confirmation.ts owns OPTICAL_ASSAY_ID
+  (A9EB41AD), the cartridge filter, and loadOpticalByUdi(). There is no join
+  table between a run and its optical cartridges — the device writes
+  cartridge_records.device.name = the SPU's UDI, so results are recovered by
+  matching that to the member UDI and keeping cartridges assigned OR completed
+  at/after the SPU joined the run (per-member cut-off, falls back to run start).
+- The run load derives opticalByUdi on every request; the existing 10s
+  invalidateAll means a finished cartridge appears on its own. Read-only —
+  nothing is written back to cartridge_records.
+- Optical tab renders a per-cartridge table of the three channels' F7/F3
+  (A/B/C), plus a mean row when more than one cartridge ran, and links each
+  barcode to its cartridge analysis page.
+- New recordOpticalVerdict action: Pass device / Fail device. Because no
+  standard acceptance range exists yet, the verdict is a human call on the
+  displayed numbers, so the action RECOMPUTES the analysis server-side and
+  snapshots channels/means/barcodes onto the step cell and into the AuditLog
+  entry — the record shows what the decision was made on, not just its outcome.
+  Overwriting a verdict pushes the old one onto previous[], as the other steps do.
+- optical-confirmation/+page.server.ts now imports the shared assay id/filter
+  instead of holding its own copy, so the two pages cannot drift.
+Verified against prod data via the BIMS MCP: channels are A/B/C, and cartridges
+already exist for UDIs 0223/0236/0244/0245 that postdate their runs, so the
+tables populate immediately.
+Files: src/lib/server/validation/optical-confirmation.ts (new),
+runs/[runId]/+page.server.ts, runs/[runId]/+page.svelte,
+optical-confirmation/+page.server.ts.
+npm run check: 10 errors — unchanged pre-existing baseline (r2.ts,
+AskBimsWidget, assembly page); warnings 436 -> 435.
