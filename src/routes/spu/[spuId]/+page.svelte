@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import { enhance } from '$app/forms';
 	import { TronCard, TronBadge, TronButton } from '$lib/components/ui';
 	import SpuStatusBadge from '$lib/components/spu/SpuStatusBadge.svelte';
@@ -35,6 +36,46 @@
 	let transitionReason = $state('');
 
 	const deviceId = $derived(data.particleLink?.particleDeviceId ?? data.spu.id);
+
+	// Last known device vitals — the Particle console's "Last vitals" panel (SPU-INV-05).
+	type Vitals = {
+		updatedAt: string | null;
+		signalStrength: number | null;
+		signalQuality: number | null;
+		operator: string | null;
+		accessTechnology: string | null;
+		cellGlobalIdentity: string | null;
+		roundTripMs: number | null;
+		ramUsed: number | null;
+		ramTotal: number | null;
+		disconnects: number | null;
+		rateLimitedPublishes: number | null;
+	};
+	const vitalsDeviceId = $derived(data.particleLink?.particleDeviceId ?? null);
+	let vitals = $state<Vitals | null>(null);
+	let vitalsStatus = $state<'idle' | 'loading' | 'ready' | 'error'>('idle');
+
+	async function loadVitals() {
+		if (!vitalsDeviceId) return;
+		vitalsStatus = 'loading';
+		try {
+			const res = await fetch(`/api/particle/vitals/${vitalsDeviceId}`);
+			if (!res.ok) throw new Error(`HTTP ${res.status}`);
+			vitals = await res.json();
+			vitalsStatus = 'ready';
+		} catch {
+			vitalsStatus = 'error';
+		}
+	}
+
+	onMount(() => {
+		if (vitalsDeviceId) loadVitals();
+	});
+
+	function fmtBytes(n: number): string {
+		if (n >= 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)}MB`;
+		return `${(n / 1024).toFixed(1)}kB`;
+	}
 
 	// Servicing
 	let showServicing = $state(false);
@@ -189,90 +230,96 @@
 		<div class="grid grid-cols-1 gap-6 md:grid-cols-2">
 			<!-- Device Information -->
 			<TronCard>
-				<h3 class="tron-text-primary mb-4 text-lg font-medium">Device Information</h3>
-				<dl class="space-y-3">
-					<div class="flex justify-between">
-						<dt class="tron-text-muted">Device ID</dt>
-						<dd class="tron-text-primary font-mono text-sm break-all">{deviceId}</dd>
-					</div>
-					<div class="flex justify-between items-start">
-						<dt class="tron-text-muted">UDI</dt>
-						<dd class="tron-text-primary font-mono">{data.spu.udi}</dd>
-					</div>
-					<div class="flex justify-between items-start">
-						<dt class="tron-text-muted">Barcode</dt>
-						<dd class="tron-text-primary font-mono">{data.spu.barcode ?? '—'}</dd>
-					</div>
-					<div>
-						{#if !editingIdentifiers}
-							<TronButton variant="ghost" onclick={() => { editingIdentifiers = true; editUdi = data.spu.udi; editBarcode = data.spu.barcode ?? ''; }} style="font-size: 0.75rem; padding: 4px 8px;">
-								✏️ Edit UDI / Barcode
-							</TronButton>
-						{:else}
-							<form
-								method="POST"
-								action="?/updateIdentifiers"
-								use:enhance={() => {
-									savingIdentifiers = true;
-									return async ({ result, update }) => {
-										savingIdentifiers = false;
-										if (result.type === 'success') editingIdentifiers = false;
-										await update();
-									};
-								}}
-								class="space-y-3 mt-2 rounded border border-[var(--color-tron-cyan)] bg-[rgba(0,255,255,0.03)] p-3"
-							>
-								<div>
-									<label for="edit-udi" class="tron-label text-xs">UDI</label>
-									<input id="edit-udi" name="udi" type="text" class="tron-input text-sm" bind:value={editUdi} required style="min-height: 38px;" />
-								</div>
-								<div>
-									<label for="edit-barcode" class="tron-label text-xs">Barcode</label>
-									<input id="edit-barcode" name="barcode" type="text" class="tron-input text-sm" bind:value={editBarcode} placeholder="Scan or enter barcode" style="min-height: 38px;" />
-								</div>
-								<div class="flex gap-2">
-									<TronButton variant="primary" type="submit" disabled={savingIdentifiers} style="font-size: 0.75rem; padding: 4px 12px;">
-										{savingIdentifiers ? 'Saving...' : 'Save'}
-									</TronButton>
-									<TronButton variant="ghost" onclick={() => { editingIdentifiers = false; }} style="font-size: 0.75rem; padding: 4px 12px;">
-										Cancel
-									</TronButton>
-								</div>
-							</form>
-						{/if}
-					</div>
-					<div class="flex justify-between">
-						<dt class="tron-text-muted">Batch</dt>
-						<dd>
-							{#if data.batch}
-								<a href="/spu/batches/{data.batch.id}" class="font-mono underline" style="color: var(--color-tron-cyan);">{data.batch.batchNumber}</a>
+				<div class="mb-4 flex items-center justify-between">
+					<h3 class="tron-text-primary text-lg font-medium">Device Information</h3>
+					{#if !editingIdentifiers}
+						<TronButton variant="ghost" onclick={() => { editingIdentifiers = true; editUdi = data.spu.udi; editBarcode = data.spu.barcode ?? ''; }} style="font-size: 0.75rem; padding: 4px 8px;">
+							✏️ Edit
+						</TronButton>
+					{/if}
+				</div>
+				<form
+					method="POST"
+					action="?/updateIdentifiers"
+					use:enhance={() => {
+						savingIdentifiers = true;
+						return async ({ result, update }) => {
+							savingIdentifiers = false;
+							if (result.type === 'success') editingIdentifiers = false;
+							await update();
+						};
+					}}
+				>
+					<dl class="space-y-3">
+						<!-- While editing, non-editable rows grey out so it's obvious only
+						     UDI and Barcode are typable. -->
+						<div class="flex justify-between {editingIdentifiers ? 'opacity-40' : ''}">
+							<dt class="tron-text-muted">Device ID</dt>
+							<dd class="tron-text-primary font-mono text-sm break-all">{deviceId}</dd>
+						</div>
+						<div class="flex items-center justify-between gap-3">
+							<dt class="tron-text-muted">
+								{#if editingIdentifiers}<label for="edit-udi">UDI</label>{:else}UDI{/if}
+							</dt>
+							{#if editingIdentifiers}
+								<input id="edit-udi" name="udi" type="text" class="tron-input font-mono text-sm" bind:value={editUdi} required style="min-height: 38px; max-width: 65%;" />
 							{:else}
-								<span class="text-sm" style="color: var(--color-tron-orange);">Not associated with a production batch</span>
+								<dd class="tron-text-primary font-mono">{data.spu.udi}</dd>
 							{/if}
-						</dd>
-					</div>
-					<div class="flex justify-between">
-						<dt class="tron-text-muted">Created</dt>
-						<dd class="tron-text-primary">{formatDate(data.spu.createdAt)}</dd>
-					</div>
-					<div class="flex justify-between">
-						<dt class="tron-text-muted">Created By</dt>
-						<dd class="tron-text-primary">{data.createdByName ?? '—'}</dd>
-					</div>
+						</div>
+						<div class="flex items-center justify-between gap-3">
+							<dt class="tron-text-muted">
+								{#if editingIdentifiers}<label for="edit-barcode">Barcode</label>{:else}Barcode{/if}
+							</dt>
+							{#if editingIdentifiers}
+								<input id="edit-barcode" name="barcode" type="text" class="tron-input font-mono text-sm" bind:value={editBarcode} placeholder="Scan or enter barcode" style="min-height: 38px; max-width: 65%;" />
+							{:else}
+								<dd class="tron-text-primary font-mono">{data.spu.barcode ?? '—'}</dd>
+							{/if}
+						</div>
+						<div class="flex justify-between {editingIdentifiers ? 'opacity-40' : ''}">
+							<dt class="tron-text-muted">Batch</dt>
+							<dd>
+								{#if data.batch}
+									<a href="/spu/batches/{data.batch.id}" class="font-mono underline" style="color: var(--color-tron-cyan);">{data.batch.batchNumber}</a>
+								{:else}
+									<span class="text-sm" style="color: var(--color-tron-orange);">Not associated with a production batch</span>
+								{/if}
+							</dd>
+						</div>
+						<div class="flex justify-between {editingIdentifiers ? 'opacity-40' : ''}">
+							<dt class="tron-text-muted">Created</dt>
+							<dd class="tron-text-primary">{formatDate(data.spu.createdAt)}</dd>
+						</div>
+						<div class="flex justify-between {editingIdentifiers ? 'opacity-40' : ''}">
+							<dt class="tron-text-muted">Created By</dt>
+							<dd class="tron-text-primary">{data.createdByName ?? '—'}</dd>
+						</div>
 
-					{#if data.spu.owner}
-						<div class="flex justify-between">
-							<dt class="tron-text-muted">Owner</dt>
-							<dd class="tron-text-primary">{data.spu.owner}</dd>
+						{#if data.spu.owner}
+							<div class="flex justify-between {editingIdentifiers ? 'opacity-40' : ''}">
+								<dt class="tron-text-muted">Owner</dt>
+								<dd class="tron-text-primary">{data.spu.owner}</dd>
+							</div>
+						{/if}
+						{#if data.spu.ownerNotes}
+							<div class="flex justify-between {editingIdentifiers ? 'opacity-40' : ''}">
+								<dt class="tron-text-muted">Owner Notes</dt>
+								<dd class="tron-text-primary">{data.spu.ownerNotes}</dd>
+							</div>
+						{/if}
+					</dl>
+					{#if editingIdentifiers}
+						<div class="mt-4 flex gap-2 border-t border-[var(--color-tron-border)] pt-4">
+							<TronButton variant="primary" type="submit" disabled={savingIdentifiers} style="font-size: 0.75rem; padding: 4px 12px;">
+								{savingIdentifiers ? 'Saving...' : 'Save'}
+							</TronButton>
+							<TronButton variant="ghost" type="button" onclick={() => { editingIdentifiers = false; }} style="font-size: 0.75rem; padding: 4px 12px;">
+								Cancel
+							</TronButton>
 						</div>
 					{/if}
-					{#if data.spu.ownerNotes}
-						<div class="flex justify-between">
-							<dt class="tron-text-muted">Owner Notes</dt>
-							<dd class="tron-text-primary">{data.spu.ownerNotes}</dd>
-						</div>
-					{/if}
-				</dl>
+				</form>
 			</TronCard>
 
 			<!-- Status Management -->
@@ -395,6 +442,92 @@
 			</TronCard>
 		</div>
 
+		{#snippet vitalsPanel()}
+			{#if vitalsDeviceId}
+				<div class="mt-4 border-t border-[var(--color-tron-border)] pt-4">
+					<div class="mb-3 flex items-center gap-2">
+						<h4 class="tron-text-primary font-medium">Last Vitals</h4>
+						<button
+							type="button"
+							class="tron-text-muted text-sm transition-colors hover:text-[var(--color-tron-cyan)]"
+							onclick={loadVitals}
+							disabled={vitalsStatus === 'loading'}
+							title="Refresh vitals"
+						>
+							{vitalsStatus === 'loading' ? '…' : '⟳'}
+						</button>
+						{#if vitals?.updatedAt}
+							<span class="tron-text-muted text-xs">{new Date(vitals.updatedAt).toLocaleString()}</span>
+						{/if}
+					</div>
+					{#if vitalsStatus === 'error'}
+						<p class="tron-text-muted text-sm">Vitals unavailable.</p>
+					{:else if vitalsStatus === 'loading' && !vitals}
+						<p class="tron-text-muted text-sm">Loading vitals…</p>
+					{:else if vitals}
+						<dl class="grid grid-cols-2 gap-x-4 gap-y-3 md:grid-cols-4">
+							{#if vitals.signalStrength !== null}
+								<div>
+									<dt class="tron-text-muted text-xs">Signal Strength</dt>
+									<dd class="tron-text-primary text-lg font-bold">{vitals.signalStrength}%</dd>
+								</div>
+							{/if}
+							{#if vitals.signalQuality !== null}
+								<div>
+									<dt class="tron-text-muted text-xs">Signal Quality</dt>
+									<dd class="tron-text-primary text-lg font-bold">{vitals.signalQuality}%</dd>
+								</div>
+							{/if}
+							{#if vitals.roundTripMs !== null}
+								<div>
+									<dt class="tron-text-muted text-xs">Round-Trip Time</dt>
+									<dd class="tron-text-primary text-lg font-bold">{vitals.roundTripMs}ms</dd>
+								</div>
+							{/if}
+							{#if vitals.ramUsed !== null}
+								<div>
+									<dt class="tron-text-muted text-xs">RAM Used</dt>
+									<dd class="tron-text-primary text-lg font-bold">
+										{fmtBytes(vitals.ramUsed)}{vitals.ramTotal !== null ? ` of ${fmtBytes(vitals.ramTotal)}` : ''}
+									</dd>
+								</div>
+							{/if}
+							{#if vitals.operator}
+								<div>
+									<dt class="tron-text-muted text-xs">Operator</dt>
+									<dd class="tron-text-primary text-sm">{vitals.operator}</dd>
+								</div>
+							{/if}
+							{#if vitals.accessTechnology}
+								<div>
+									<dt class="tron-text-muted text-xs">Access Technology</dt>
+									<dd class="tron-text-primary text-sm">{vitals.accessTechnology}</dd>
+								</div>
+							{/if}
+							{#if vitals.cellGlobalIdentity}
+								<div>
+									<dt class="tron-text-muted text-xs">Cell Global Identity</dt>
+									<dd class="tron-text-primary font-mono text-sm break-all">{vitals.cellGlobalIdentity}</dd>
+								</div>
+							{/if}
+							{#if vitals.disconnects !== null}
+								<div>
+									<dt class="tron-text-muted text-xs">Cloud Disconnects</dt>
+									<dd class="tron-text-primary text-sm">{vitals.disconnects}</dd>
+								</div>
+							{/if}
+							{#if vitals.rateLimitedPublishes !== null}
+								<div>
+									<dt class="tron-text-muted text-xs">Rate-Limited Publishes</dt>
+									<dd class="tron-text-primary text-sm">{vitals.rateLimitedPublishes}</dd>
+								</div>
+							{/if}
+						</dl>
+					{/if}
+				</div>
+			{/if}
+		{/snippet}
+
 		{#if data.particleDevice}
 			<TronCard>
 				<div class="mb-4 flex items-center justify-between">
@@ -433,6 +566,7 @@
 						<dd class="tron-text-primary">{formatDate(data.particleDevice.lastHeardAt)}</dd>
 					</div>
 				</dl>
+				{@render vitalsPanel()}
 				<div class="mt-4 flex flex-wrap items-center gap-3 border-t border-[var(--color-tron-border)] pt-4">
 					<form method="POST" action="?/pingDevice" use:enhance={() => { pinging = true; return async ({ update }) => { pinging = false; await update(); }; }}>
 						<TronButton type="submit" disabled={pinging} style="min-height: 44px;">{pinging ? 'Pinging...' : 'Ping Device'}</TronButton>
@@ -474,6 +608,7 @@
 						<dd class="tron-text-primary">{formatDate(data.particleLink.linkedAt)}</dd>
 					</div>
 				</dl>
+				{@render vitalsPanel()}
 			</TronCard>
 		{/if}
 

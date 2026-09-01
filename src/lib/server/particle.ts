@@ -60,6 +60,48 @@ export async function getDevice(deviceId: string): Promise<ParticleApiDevice> {
 	return res.json();
 }
 
+/**
+ * Last known device vitals (GET /v1/diagnostics/:id/last) — the data behind the
+ * console's "Last vitals" panel. Payload shape varies by Device OS version, so
+ * every field is extracted defensively and may come back null.
+ */
+export async function getLastVitals(deviceId: string): Promise<{
+	updatedAt: string | null;
+	signalStrength: number | null;
+	signalQuality: number | null;
+	operator: string | null;
+	accessTechnology: string | null;
+	cellGlobalIdentity: string | null;
+	roundTripMs: number | null;
+	ramUsed: number | null;
+	ramTotal: number | null;
+	disconnects: number | null;
+	rateLimitedPublishes: number | null;
+}> {
+	const res = await particleFetch(`/diagnostics/${deviceId}/last`);
+	const body = await res.json();
+	const d = body?.diagnostics ?? {};
+	const p = d.payload?.device ?? {};
+	const svc = d.payload?.service ?? {};
+	const num = (v: unknown): number | null => (typeof v === 'number' && isFinite(v) ? v : null);
+	const str = (v: unknown): string | null => (typeof v === 'string' && v ? v : null);
+	return {
+		updatedAt: str(d.updated_at),
+		signalStrength: num(p.network?.signal?.strength),
+		signalQuality: num(p.network?.signal?.quality),
+		operator: str(p.network?.cellular?.operator),
+		accessTechnology: str(
+			p.network?.cellular?.radio_access_technology ?? p.network?.signal?.at
+		),
+		cellGlobalIdentity: str(p.network?.cellular?.cell_global_identity),
+		roundTripMs: num(svc.coap?.round_trip),
+		ramUsed: num(p.system?.memory?.used),
+		ramTotal: num(p.system?.memory?.total),
+		disconnects: num(p.cloud?.connection?.disconnects ?? p.cloud?.disconnects),
+		rateLimitedPublishes: num(p.cloud?.publish?.rate_limited)
+	};
+}
+
 /** Ping a device (PUT /v1/devices/:id/ping) */
 export async function pingDevice(deviceId: string): Promise<{ online: boolean; ok: boolean }> {
 	const res = await particleFetch(`/devices/${deviceId}/ping`, { method: 'PUT' });

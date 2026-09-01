@@ -276,6 +276,53 @@ export const actions: Actions = {
 		return { success: true };
 	},
 
+	pingDevice: async ({ locals, params }) => {
+		requirePermission(locals.user, 'spu:write');
+		await connectDB();
+		const spu = await Spu.findById(params.spuId).select('particleLink').lean() as any;
+		const deviceId = spu?.particleLink?.particleDeviceId;
+		if (!deviceId) return fail(400, { error: 'No Particle device linked' });
+
+		const { pingDevice } = await import('$lib/server/particle');
+		try {
+			const result = await pingDevice(deviceId);
+			return { message: result.online ? 'Device is online.' : 'Device did not respond — offline.' };
+		} catch (err) {
+			return fail(502, { error: err instanceof Error ? err.message : 'Ping failed' });
+		}
+	},
+
+	renameDevice: async ({ request, locals, params }) => {
+		requirePermission(locals.user, 'spu:write');
+		await connectDB();
+		const form = await request.formData();
+		const name = form.get('name')?.toString().trim();
+		if (!name) return fail(400, { error: 'Name is required' });
+
+		const spu = await Spu.findById(params.spuId).select('particleLink').lean() as any;
+		const deviceId = spu?.particleLink?.particleDeviceId;
+		if (!deviceId) return fail(400, { error: 'No Particle device linked' });
+
+		const { renameDevice, getDevice } = await import('$lib/server/particle');
+		try {
+			const oldName = (await getDevice(deviceId)).name;
+			await renameDevice(deviceId, name);
+			await ParticleDevice.updateOne({ particleDeviceId: deviceId }, { $set: { name } });
+			await AuditLog.create({
+				_id: generateId(),
+				tableName: 'spus',
+				recordId: params.spuId,
+				action: 'UPDATE',
+				oldData: { particleDeviceName: oldName },
+				newData: { particleDeviceName: name },
+				changedBy: locals.user!.username ?? locals.user!._id
+			});
+			return { message: `Device renamed to ${name}.` };
+		} catch (err) {
+			return fail(502, { error: err instanceof Error ? err.message : 'Rename failed' });
+		}
+	},
+
 	uploadCsv: async ({ request, locals, params }) => {
 		requirePermission(locals.user, 'spu:write');
 		await connectDB();

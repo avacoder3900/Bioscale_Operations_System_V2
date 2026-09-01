@@ -11049,3 +11049,42 @@ Source: branch master @ merge of feat/spu-tweaks (code commit bc63a805)
 Retrieve this exact code: git checkout feat/spu-tweaks at commit bc63a805
   (or: git log master --oneline to find it if the branch has since moved on)
 What this deployment is for: sortable columns on the /spu inventory list, default UDI ascending
+
+================================================================================
+2026-09-01 — feat/spu-tweaks — Particle connectivity in BIMS (SPU-INV-04/05) + Device Info edit polish
+================================================================================
+Two PRDs written then implemented (docs/prds/SPU-INV-04-live-connectivity-columns.md,
+SPU-INV-05-device-vitals.md), plus a minor Device Information card polish Jacob asked for
+mid-session.
+
+SPU-INV-04 — live fleet connectivity on /spu: new GET /api/particle/status (session spu:read)
+wraps the existing listDevices() Particle call and returns online/last_heard/firmware/OS keyed
+by particleDeviceId. The inventory fetches it client-side after mount (table never blocks on
+Particle; failure shows a "Particle unavailable" note and — cells). Four new sortable columns:
+Connected (glowing green dot Online / dim Offline), FW, OS, Last Heard. Rationale documented in
+the PRD: the locally synced ParticleDevice collection is stale (syncDevices only runs from the
+manual Sync button on /particle/settings), so the list goes straight to the Particle API.
+
+SPU-INV-05 — Last Vitals panel on /spu/[spuId]: new getLastVitals() in src/lib/server/particle.ts
+(GET /v1/diagnostics/:id/last, defensively mapped — payload varies by Device OS) + GET
+/api/particle/vitals/[deviceId]. The Particle card now shows the console's "Last vitals" panel:
+signal strength/quality %, operator, access technology, cell global identity, round-trip ms,
+RAM used-of-total, cloud disconnects, rate-limited publishes, with a ⟳ refresh. Rendered via a
+snippet in both the full ParticleDevice card and the link-only fallback card. ALSO FIXED: the
+Ping Device and Rename buttons in that card posted to ?/pingDevice and ?/renameDevice which
+did not exist as actions (broken since the panel was built) — both are now wired to the
+long-dormant helpers in particle.ts; rename updates the local ParticleDevice mirror and
+audit-logs old→new name.
+
+Device Info polish: the ✏️ Edit UDI / Barcode button used to sit mid-list, bisecting the dl
+rows. Now a compact ✏️ Edit button in the card's top-right; when editing, UDI and Barcode
+become inline inputs in place and every non-editable row (Device ID, Batch, Created, Created
+By, Owner) greys to 40% opacity so the typable fields are obvious. Save/Cancel on a separate
+row at the bottom. Cancel now has type="button" (previously would have submitted the form in
+the new wrapping-form structure).
+
+Files: src/lib/server/particle.ts, src/routes/api/particle/status/+server.ts (new),
+src/routes/api/particle/vitals/[deviceId]/+server.ts (new), src/routes/spu/+page.svelte,
+src/routes/spu/[spuId]/+page.server.ts, src/routes/spu/[spuId]/+page.svelte.
+
+npm run check: 11 errors / 433 warnings — exactly the pre-existing baseline, 0 in touched files.
