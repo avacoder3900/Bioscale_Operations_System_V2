@@ -4108,3 +4108,12 @@ runs/[runId]/+page.server.ts, runs/[runId]/+page.svelte,
 optical-confirmation/+page.server.ts.
 npm run check: 10 errors — unchanged pre-existing baseline (r2.ts,
 AskBimsWidget, assembly page); warnings 436 -> 435.
+Deployment: preview — https://bioscale-operations-system-mongodb-rilrho67w-brevitest.vercel.app
+Branch alias: https://bioscale-operations-system-mongodb-git-feat-sp-056a04-brevitest.vercel.app
+Source: branch feat/spu-validation-runs @ commit bfa81c13
+Retrieve this exact code: git checkout feat/spu-validation-runs at commit bfa81c13
+  (or: git log feat/spu-validation-runs --oneline to find it if the branch has since moved on)
+What this deployment is for: validation run detail rebuilt as per-SPU cards with step
+tabs; optical-confirmation A/B/C F7/F3 ratios auto-surfacing per SPU from cartridge_records
+(device.name = UDI, scoped to cartridges at/after the SPU joined the run); Pass device /
+Fail device verdict that snapshots the judged ratios onto the step cell + AuditLog.
