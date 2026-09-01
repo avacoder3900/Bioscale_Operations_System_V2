@@ -2,14 +2,21 @@ import { json, error } from '@sveltejs/kit';
 import { connectDB, KanbanTask } from '$lib/server/db';
 import { requireAgentApiKey } from '$lib/server/api-auth';
 import { TransitionError } from '$lib/server/kanban/transition';
-import { captureOptionsFromBody, captureOne } from '$lib/server/kanban/agent-shapes';
+import { ReplenishError } from '$lib/server/kanban/replenish';
+import { captureTask, isCaptureLanding } from '$lib/server/kanban/capture';
+import { captureOptionsFromBody, captureEcho } from '$lib/server/kanban/agent-shapes';
+import { SIZE_CLASSES, CLASSES_OF_SERVICE } from '$lib/shared/kanban-status';
 import type { RequestHandler } from './$types';
 
 /**
- * Capture one Tier 1 option (kanban_capture). body.status is deliberately
- * ignored — every new item is captured; entering the Board happens only through
- * replenishment (KB2-02). Accepts dor / links / blockedBy at capture
- * (MCP-IMPROVEMENTS P0-1, P1-4) and echoes the stored task (P2-6.1).
+ * Capture one option (kanban_capture). body.status is deliberately ignored;
+ * KB2-38 adds `landing` ('captured' default | 'processed' | 'committed') and
+ * `position` (1-based slot in the landing list, blank = bottom). 'committed'
+ * still crosses the commitment point through replenish() — the actor must be
+ * a human holding kanban:replenish (KB2-00 #6, KB2-02), the DoR must be
+ * complete, and the ready cap applies — all checked before anything is
+ * written. Accepts dor / links / blockedBy at capture (MCP-IMPROVEMENTS
+ * P0-1, P1-4) and echoes the stored task (P2-6.1).
  */
 export const POST: RequestHandler = async ({ request }) => {
 	requireAgentApiKey(request);
@@ -45,12 +52,40 @@ export const POST: RequestHandler = async ({ request }) => {
 		}
 	}
 
+	if (body.landing !== undefined && !isCaptureLanding(body.landing)) {
+		throw error(400, "landing must be 'captured', 'processed' or 'committed'");
+	}
+	if (body.sizeClass !== undefined && !(SIZE_CLASSES as readonly string[]).includes(body.sizeClass)) {
+		throw error(400, `sizeClass must be one of ${SIZE_CLASSES.join('/')}`);
+	}
+	if (
+		body.classOfService !== undefined &&
+		!(CLASSES_OF_SERVICE as readonly string[]).includes(body.classOfService)
+	) {
+		throw error(400, `classOfService must be one of ${CLASSES_OF_SERVICE.join('/')}`);
+	}
+
 	try {
 		const opts = await captureOptionsFromBody(body, { username: actorName, via: 'agent-api' });
-		const data = await captureOne(opts);
+		const result = await captureTask({
+			...opts,
+			landing: body.landing,
+			position: typeof body.position === 'number' ? body.position : undefined,
+			sizeClass: body.sizeClass,
+			classOfService: body.classOfService,
+			commitNote: typeof body.commitNote === 'string' ? body.commitNote : undefined
+		});
+		const task = (await KanbanTask.findById(result.taskId).lean()) as any;
+		const data = {
+			...captureEcho(task),
+			landing: result.landing,
+			position: result.position,
+			...(result.replenish ? { replenish: result.replenish } : {})
+		};
 		return json({ success: true, data }, { status: 201 });
 	} catch (e) {
 		if (e instanceof TransitionError) throw error(400, e.message);
+		if (e instanceof ReplenishError) throw error(e.code === 'PERMISSION_DENIED' ? 403 : 400, e.message);
 		throw e;
 	}
 };

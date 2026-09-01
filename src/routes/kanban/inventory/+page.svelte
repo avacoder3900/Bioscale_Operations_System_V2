@@ -342,17 +342,27 @@
 				</div>
 			{/if}
 		</div>
+		<!-- KB2-38: optional slot in the Tier 1 order; blank = bottom -->
+		<input
+			name="position"
+			type="number"
+			min="1"
+			step="1"
+			class="tron-input w-[72px]"
+			placeholder="#"
+			title="Position in Tier 1 (1 = top). Blank = bottom (#{data.tasks.filter((t: TaskRow) => t.status === 'captured' || t.status === 'processed').length + 1})"
+			autocomplete="off"
+		/>
 		<TronButton type="submit" variant="primary" disabled={submitting}>Capture</TronButton>
-		<!-- Optional deliverable at capture — pre-fills the Process modal's DoR field -->
-		<div class="basis-full">
-			<input
-				name="deliverable"
-				class="tron-input w-full"
-				placeholder="Deliverable (optional) — what will exist or be true when this is done, and how you'd verify it"
-				title="Optional now; pre-fills the deliverable when this option is processed"
-				autocomplete="off"
-			/>
-		</div>
+		<!-- KB2-38: detailed capture — the whole item, and where it lands -->
+		<a
+			href="/kanban/capture"
+			class="rounded border px-3 py-2 text-sm font-medium hover:underline"
+			style="border-color: var(--color-tron-border); color: var(--color-tron-cyan);"
+			title="Fill out everything: deliverable, size, class, tags, estimate — and capture it processed or straight to the Board"
+		>
+			Detailed…
+		</a>
 	</form>
 
 	<!-- KB2-11: capture from a workflow template — lands processed + DoR-complete -->

@@ -11115,3 +11115,52 @@ Deployment: production — building from the GitHub push to master (exact deploy
 Source: branch master @ merge of feat/spu-tweaks (code commit c383da17)
 Retrieve this exact code: git checkout feat/spu-tweaks at commit c383da17
 What this deployment is for: FW column fix — product-scoped firmware enrichment on /api/particle/status
+
+================================================================================
+2026-09-01 — feat/kanban-capture-modes — KB2-38: capture modes (quick / detailed), landing tier, rank placement
+================================================================================
+Jacob: "there is often that i want to push tasks straight to the board, or i want them to be
+written out and processed… simplify the quick add field to not have the deliverables box…
+a new detail capture mode which brings up the task detail view… type in the spot on the
+tier 1 list that it goes to, defaults to the bottom… originate processed or committed."
+PRD docs/prds/KB2-38-capture-modes.md.
+
+ONE SERVICE: NEW src/lib/server/kanban/capture.ts — captureTask() = createKanbanItem →
+[processTask] → [replenish] → [reorder]. `landing` captured|processed|committed (default
+captured), `position` 1-based slot in the landing list (Tier 1 order, or the ready queue
+when committed; blank = bottom; clamped), sizeClass/classOfService required for the two
+shaped landings (the capturer IS the processor — KB2-03 rule kept explicit). Gates are the
+existing ones, FRONT-LOADED: committed runs requireReplenisher + dorMissingFields on the
+would-be task + a ready-cap check BEFORE anything is written, so a refused commit never
+leaves a half-created item; the crossing itself is still replenish() (one audited
+replenishment event). Placement reuses reorder()'s bulkWrite path. The `created` activity
+entry gains landing/position so the feed explains the jump.
+
+QUICK BOX (/kanban/inventory): the deliverable input under the box is GONE; it is title +
+tags + a small "#" position field (blank = bottom, tooltip shows the bottom slot) + a
+"Detailed…" link. Server action now calls captureTask.
+
+DETAILED CAPTURE: NEW route /kanban/capture (+page.server.ts, +page.svelte) shaped like the
+task detail page — main column title/description/deliverable/handoff brief (+ investigation
+question/timebox when itemType=spike); sidebar Landing radios (Commit disabled without
+kanban:replenish), Position (placeholder = bottom slot of the chosen list), Commit note,
+Shaping (item type, size class w/ policy definitions + sizing test, class of service, due
+date — required for milestones and fixed_date, estimate/effort days, assignee, tags with a
+datalist + click-chips from the board vocabulary). Required markers follow the landing
+(deliverable * when committing; handoff brief * when committing a 'software'-tagged item).
+Submit label = Capture / Capture & Process / Capture & Commit. Success redirects to Tier 1
+(captured/processed) or the Board (committed) so the row is visible in its slot; errors
+render the server reason verbatim. Board header gets "+ New task" → /kanban/capture?
+landing=committed. Milestones without a due date are refused (roadmap anchor rule).
+
+AGENT API + MCP: POST /api/agent/operations/kanban/tasks accepts landing/position/sizeClass/
+classOfService/commitNote and routes through captureTask (echo + landing + position +
+replenish event when committed; ReplenishError → 400/403). kanban_capture (MCP 3.3.0 →
+3.4.0) exposes the same fields with the doctrine in the description; capture_bulk and
+subtasks keep the plain always-captured shape (bulk commits stay a deliberate
+kanban_replenish). Files: src/lib/server/kanban/capture.ts (new), src/routes/kanban/capture/*
+(new), src/routes/kanban/inventory/+page.server.ts + .svelte, src/routes/kanban/+page.svelte,
+src/routes/api/agent/operations/kanban/tasks/+server.ts, src/lib/server/mcp/bims-mcp.ts,
+docs/prds/KB2-38-capture-modes.md.
+npm run check: 11 errors = baseline, 0 in touched files.
+NOTE: shared checkout with a concurrent SPU session today — commits kept path-scoped.

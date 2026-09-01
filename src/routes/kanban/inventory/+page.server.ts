@@ -12,7 +12,8 @@
 import { fail, redirect } from '@sveltejs/kit';
 import { connectDB, KanbanTask, KanbanTemplate, AuditLog, generateId } from '$lib/server/db';
 import { requirePermission, hasPermission, isAdmin } from '$lib/server/permissions';
-import { createKanbanItem, TransitionError } from '$lib/server/kanban/transition';
+import { TransitionError } from '$lib/server/kanban/transition';
+import { captureTask } from '$lib/server/kanban/capture';
 import { normalizeTags } from '$lib/server/kanban/tags';
 import {
 	processTask,
@@ -152,7 +153,9 @@ export const actions: Actions = {
 		}
 	},
 
-	// Capture box: one line → 'captured'. Optional comma-separated tags.
+	// Quick capture (KB2-38): title + tags + optional Tier 1 position → 'captured'.
+	// The deliverable field that used to sit under the box is gone — shaped
+	// items go through /kanban/capture (detailed mode).
 	capture: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
 		requirePermission(locals.user, 'kanban:write');
@@ -166,14 +169,15 @@ export const actions: Actions = {
 		// path: trim, case-fold onto the existing vocabulary, de-dupe.
 		const tags = await normalizeTags(fd.get('tags')?.toString() ?? '');
 
-		// Optional at capture — whatever is written here pre-fills the Process modal.
-		const deliverable = fd.get('deliverable')?.toString().trim() || undefined;
+		// Optional slot in the Tier 1 order; blank = bottom (the old behavior).
+		const positionRaw = fd.get('position')?.toString().trim();
+		const position = positionRaw ? parseInt(positionRaw, 10) : undefined;
 
 		try {
-			await createKanbanItem({
+			await captureTask({
 				title,
 				tags,
-				dor: deliverable ? { deliverable } : undefined,
+				position,
 				actor: { username: locals.user.username, via: 'ui' }
 			});
 		} catch (e) {

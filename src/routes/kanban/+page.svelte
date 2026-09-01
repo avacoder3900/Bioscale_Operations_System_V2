@@ -129,6 +129,16 @@
 			<p class="tron-text-muted text-sm">Committed work — everything here is already approved. Pull anything.</p>
 		</div>
 
+		<!-- KB2-38: detailed capture pre-set to land on the Board (replenisher gate applies server-side) -->
+		<a
+			href="/kanban/capture?landing=committed"
+			class="rounded border px-3 py-2 text-sm font-medium hover:underline"
+			style="border-color: var(--color-tron-border); color: var(--color-tron-cyan);"
+			title="Capture a fully shaped item straight onto the Board"
+		>
+			+ New task
+		</a>
+
 		<!-- Ready count vs cap gauge -->
 		<div class="min-w-[200px]">
 			<div class="mb-1 flex items-center justify-between text-xs">

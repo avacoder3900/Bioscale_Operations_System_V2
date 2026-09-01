@@ -224,7 +224,7 @@ async function callAgentApi(
 export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 	// Version bump signals clients (claude.ai caches connector tool lists) that
 	// the toolset changed — bump on every tool add/remove/rename.
-	const server = new McpServer({ name: 'bims-operations', version: '3.3.0' });
+	const server = new McpServer({ name: 'bims-operations', version: '3.4.0' });
 
 	// ---------------------------------------------------------------- meta
 
@@ -805,11 +805,27 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 			description:
 				'Capture ONE kanban option (one line is enough). ' + CAPTURE_DOCTRINE + ' ' +
 				'For ultra-defined recurring work (SPU builds, cartridge fills), pass templateId (see kanban_list_templates) — the item lands already processed and DoR-complete. ' +
-				'For 2+ items use kanban_capture_bulk.',
+				'For 2+ items use kanban_capture_bulk. ' +
+				"KB2-38 landing: 'captured' (default, Tier 1 bottom) · 'processed' (also sized + classed: sizeClass + classOfService required, you are the processor) · " +
+				"'committed' (straight onto the Board's ready queue: full DoR — deliverable, size, class, dueDate if fixed_date, handoffBrief if tagged software — AND the actor must hold kanban:replenish; ready cap applies; all checked before anything is written). " +
+				'position = 1-based slot in the landing list (Tier 1 order, or the ready queue when committed); omit for bottom.',
 			inputSchema: z.object({
 				...CAPTURE_ITEM_SHAPE,
 				title: z.string().optional().describe('One line is enough. Optional when templateId is given (template supplies it).'),
 				templateId: z.string().optional().describe('Capture from a workflow template — lands processed + replenishable.'),
+				landing: z
+					.enum(['captured', 'processed', 'committed'])
+					.optional()
+					.describe("Where it lands (KB2-38). Default 'captured'. 'processed' needs sizeClass + classOfService. 'committed' needs full DoR + an actor holding kanban:replenish."),
+				position: z
+					.number()
+					.int()
+					.positive()
+					.optional()
+					.describe('1-based slot in the landing list (1 = top). Omit = bottom. Clamped to the list length.'),
+				sizeClass: z.enum(['short', 'medium', 'long']).optional().describe('Required when landing is processed/committed. Apply the sizing decision test.'),
+				classOfService: z.enum(['standard', 'fixed_date', 'chore', 'expedite']).optional().describe('Required when landing is processed/committed. fixed_date needs dueDate.'),
+				commitNote: z.string().optional().describe('Note on the replenishment event when landing is committed.'),
 				actor: ACTOR_FIELD
 			})
 		},
