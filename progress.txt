@@ -10970,3 +10970,48 @@ Checked for the Vercel dedup trap (identical tree already built as a preview): a
 NOT in this deploy: the "where it is" card on /spu/[spuId]. That page uses the embedded
   spu.serviceRecords[] model (Phase A send / Phase B return), not the ServiceRecord collection
   the board uses — which model it should read is still an open question.
+
+================================================================================
+2026-09-01 — feat/validation-run-optical-verdict — run detail as per-SPU cards; optical ratios auto-surface + pass/fail
+================================================================================
+Rebased off master. This work was first built on feat/spu-validation-runs
+(commit bfa81c13), but that branch sits 6 commits off master and its optical
+lineage is STALE: it carries a hand-rolled computeOpticalAnalysis and its own
+copy of the assay id/filter, and it DELETES the optical group/analyze pages
+master now has. Master is further along — optical-analysis.ts is the full
+engine (endpoint window, robust stats, cross-well CV, outlier flags) and
+optical-constants.ts already owns OPTICAL_ASSAY_ID/OPTICAL_CARTRIDGE_FILTER.
+So the feature was re-implemented on master's APIs rather than cherry-picked.
+UI — validation run detail was a wide SPU x step matrix where every cell carried
+a status chip, its values, several action links and two inline forms. Now one
+card per SPU with the three steps as tabs:
+- Tab strip (role=tablist/tab) with a pass/fail/uploaded mark per step and a
+  "needs verdict" badge when data is in but nobody has ruled. The open tab
+  defaults to the first step needing a person; overridable per card.
+- Thermocouple values are stat tiles (min/max/mode/average) instead of a
+  run-on line; Approve / Reject / Evaluate sit together.
+- Carried over the run switcher (otherActiveRuns) from the older branch, since
+  the card header UI uses it — 12 lines, the only thing taken from that lineage.
+Optical confirmation now surfaces on the run with NO operator step:
+- New src/lib/server/validation/run-optical.ts: loadRunOpticalByUdi(). There is
+  no join table between a run and its optical cartridges — the device writes
+  cartridge_records.device.name = the SPU's UDI, so results are recovered by
+  matching that to the member UDI and keeping cartridges assigned OR completed
+  at/after the SPU joined the run (per-member cut-off, falls back to run start).
+  Derived on read, never written back. Delegates to master's analyzeCartridge,
+  so BIMS shows one set of optical numbers, not a second opinion.
+- Optical tab renders per-cartridge A/B/C F7/F3 plus cross-well CV and the
+  analysis flag, mean row when >1 cartridge, rogue channel highlighted, and the
+  flag reasons listed under the table so a verdict is never given blind.
+- New recordOpticalVerdict action: Pass device / Fail device. No standard
+  acceptance range exists yet, so this is a human call on the displayed
+  numbers — the action RECOMPUTES the analysis server-side and snapshots
+  ratios/CV/warnings/barcodes onto the step cell and the AuditLog entry. The
+  record shows what the decision was made on, not just its outcome. Re-ruling
+  pushes the old verdict onto previous[], as the other steps do.
+Passing optical makes allPassed true, so Mark validated appears — the loop from
+ratios to a released device closes on one page.
+Files: src/lib/server/validation/run-optical.ts (new),
+runs/[runId]/+page.server.ts, runs/[runId]/+page.svelte.
+npm run check: 11 errors — unchanged master baseline (r2.ts, AskBimsWidget,
+assembly, parts); ZERO in the touched files.

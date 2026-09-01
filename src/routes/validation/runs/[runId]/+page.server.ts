@@ -5,6 +5,7 @@ import {
 } from '$lib/server/db';
 import { STANDARD_THERMO_CRITERIA } from '$lib/server/validation/thermo-criteria';
 import { processThermoUpload, evaluateThermoSession, type ThermoReading } from '$lib/server/validation/thermo-upload';
+import { loadRunOpticalByUdi } from '$lib/server/validation/run-optical';
 import type { Actions, PageServerLoad } from './$types';
 
 const MANUAL_OUTCOMES = ['passed', 'failed', 'skipped'] as const;
@@ -24,6 +25,18 @@ function requireInProgress(run: any) {
 
 function activeMember(run: any, spuId: string): any | null {
 	return (run.spus ?? []).find((m: any) => m.spuId === spuId && !m.removedAt) ?? null;
+}
+
+// When each active member joined the run — the cut-off for "optical cartridges
+// belonging to this run". Falls back to the run's own start.
+function memberSinceByUdi(run: any, only?: any): Record<string, Date> {
+	const runStart = run.startedAt ? new Date(run.startedAt) : new Date(0);
+	const members = only ? [only] : (run.spus ?? []).filter((m: any) => !m.removedAt);
+	const out: Record<string, Date> = {};
+	for (const m of members) {
+		out[m.udi] = m.addedAt ? new Date(m.addedAt) : runStart;
+	}
+	return out;
 }
 
 async function auditRun(runId: string, action: string, username: string, newData: Record<string, unknown>, oldData?: Record<string, unknown>) {
@@ -124,11 +137,31 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 		}
 	}
 
+	// Other in-progress runs, for the header switcher — lets an operator hop
+	// between concurrent runs without going back through the list.
+	const otherActive = await ValidationRun.find({ status: 'in_progress', _id: { $ne: params.runId } })
+		.select('runNumber name')
+		.sort({ startedAt: -1 })
+		.lean() as any[];
+
+	// Optical-confirmation results are DERIVED, never stored on the run: the
+	// device writes cartridge_records with device.name = the SPU's UDI, so the
+	// per-channel F7/F3 ratios surface here on their own as soon as a cartridge
+	// finishes — no operator step, no write-back. Scoped per member to the
+	// cartridges that belong to this run (assigned/completed after it joined).
+	const opticalByUdi = await loadRunOpticalByUdi(memberSinceByUdi(run));
+
 	return {
 		run: JSON.parse(JSON.stringify(run)),
 		sessionById,
 		spuById,
-		thermoCriteria: STANDARD_THERMO_CRITERIA
+		opticalByUdi,
+		thermoCriteria: STANDARD_THERMO_CRITERIA,
+		otherActiveRuns: otherActive.map(r => ({
+			id: r._id,
+			runNumber: r.runNumber,
+			name: r.name ?? null
+		}))
 	};
 };
 
@@ -375,6 +408,96 @@ export const actions: Actions = {
 		}, { previousStatus });
 
 		return { success: true, spuId, step, outcome };
+	},
+
+	// Pass/fail the device on its optical-confirmation numbers. No standard
+	// acceptance range exists yet, so the verdict is a human judgement on the
+	// displayed ratios — which means the ratios are recomputed server-side and
+	// SNAPSHOTTED onto the cell. The record has to show what the decision was
+	// made on, not just how it came out.
+	recordOpticalVerdict: async ({ request, locals, params }) => {
+		requirePermission(locals.user, 'spu:write');
+		await connectDB();
+
+		const run = await loadRun(params.runId);
+		const locked = requireInProgress(run);
+		if (locked) return locked;
+
+		const form = await request.formData();
+		const spuId = form.get('spuId')?.toString();
+		const outcome = form.get('outcome')?.toString();
+		const notes = form.get('notes')?.toString().trim() || null;
+
+		if (!spuId) return fail(400, { error: 'Missing SPU' });
+		const member = activeMember(run, spuId);
+		if (!member) return fail(400, { error: 'SPU is not an active member of this run', spuId });
+		if (outcome !== 'passed' && outcome !== 'failed') {
+			return fail(400, { error: 'Outcome must be passed or failed', spuId });
+		}
+
+		const optical = await loadRunOpticalByUdi(memberSinceByUdi(run, member));
+		const summary = optical[member.udi];
+		if (!summary || summary.cartridges.length === 0) {
+			return fail(400, { error: 'No optical-confirmation results for this SPU yet', spuId });
+		}
+
+		const user = { _id: locals.user!._id, username: locals.user!.username };
+		const now = new Date();
+		const prior = member.steps?.optical_confirmation;
+		const previous = [
+			...(prior?.previous ?? []),
+			...(prior && !['not_started', 'in_progress'].includes(prior.status)
+				? [{
+					status: prior.status,
+					result: prior.result ?? null,
+					notes: prior.notes ?? null,
+					completedAt: prior.completedAt ?? null,
+					completedBy: prior.completedBy ?? null
+				}]
+				: [])
+		];
+
+		const result = {
+			meanByChannel: summary.meanByChannel,
+			cartridgeCount: summary.cartridges.length,
+			warningCount: summary.warningCount,
+			cartridges: summary.cartridges.map((c) => ({
+				barcode: c.barcode,
+				ranAt: c.ranAt,
+				readingCount: c.readingCount,
+				ratioByChannel: c.ratioByChannel,
+				crossWellCv: c.crossWellCv,
+				warning: c.warning,
+				reasons: c.reasons
+			})),
+			judgedAt: now
+		};
+
+		await ValidationRun.updateOne(
+			{ _id: params.runId, 'spus.spuId': spuId },
+			{
+				$set: {
+					'spus.$.steps.optical_confirmation.status': outcome,
+					'spus.$.steps.optical_confirmation.result': result,
+					'spus.$.steps.optical_confirmation.completedAt': now,
+					'spus.$.steps.optical_confirmation.completedBy': user,
+					'spus.$.steps.optical_confirmation.notes': notes,
+					'spus.$.steps.optical_confirmation.previous': previous
+				}
+			}
+		);
+
+		await auditRun(params.runId, 'validation_run_optical_verdict', user.username, {
+			spuId,
+			spuUdi: member.udi,
+			outcome,
+			notes,
+			meanByChannel: summary.meanByChannel,
+			warningCount: summary.warningCount,
+			cartridgeBarcodes: summary.cartridges.map((c) => c.barcode)
+		}, { previousStatus: prior?.status ?? 'not_started' });
+
+		return { success: true, spuId, step: 'optical_confirmation', outcome };
 	},
 
 	removeSpu: async ({ request, locals, params }) => {
