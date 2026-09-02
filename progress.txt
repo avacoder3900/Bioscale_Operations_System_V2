@@ -11573,3 +11573,10 @@ file. Warnings match the logged baseline exactly; the error count is above the 1
 on 2026-09-01 because 64 sit in src/lib/server/mcp/bims-mcp.ts — untouched here, and
 most likely a dependency-version artifact of the node_modules junctioned from another
 worktree rather than a regression.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-14tvynuiy-brevitest.vercel.app
+  (branch alias: https://bioscale-operations-system-mongodb-git-bimsv2-brevitest.vercel.app)
+Source: branch bimsv2 @ commit b636bc63
+Retrieve this exact code: git checkout bimsv2 at commit b636bc63
+What this deployment is for: thermocouple step verdict = operator Pass/Fail, on a branch cut
+  fresh off master (cherry-pick of the feat/thermo-manual-verdict work onto current master).
