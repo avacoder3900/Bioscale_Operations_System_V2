@@ -11297,3 +11297,8 @@ scroll — the board expands to its content and the page scrolls as a whole (Jac
 to have to scroll within an individual vertical column"). Verified live on the dev server.
 Files: src/routes/kanban/task/[taskId]/+page.server.ts + .svelte, src/routes/kanban/+page.svelte.
 npm run check: 11 = baseline (a stray escaped-newline in the tooltip briefly made it 13 — fixed).
+
+Deployment: production — Vercel auto-deploy from master push
+Source: branch master @ commit d7c90a20 (fast-forward of feat/kanban-capture-modes)
+Retrieve this exact code: git checkout master at commit d7c90a20
+What this deployment is for: roadmap milestones end their own lane + strip removed, quick-box "# · idea · tags", Commit from the task page, Board columns grow with the page.
