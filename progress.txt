@@ -11374,3 +11374,13 @@ Retrieve this exact code: git checkout feat/spu-tweaks at commit 1cb18312
 What this deployment is for: SPU status flow collapse (SPU-INV-07) — 6-status lifecycle, location
   field, legal-transition enforcement. Migration migrate-spu-status-collapse.ts --apply run after
   this deploy went live (see next entry).
+
+================================================================================
+2026-09-02 — master — SPU-INV-07 migration applied to production Atlas
+================================================================================
+scripts/migrate-spu-status-collapse.ts --apply run after the production deploy went live.
+Result: 8 spus released-rnd → {status: released, location: "R&D"}; 14 service_records.previousStatus
+released-rnd → released. Final spus.status distribution: draft 37, servicing 26, released 8,
+retired 1, validating 1 — entirely within the new 6-status vocabulary. statusTransitions history
+untouched (renders via badge legacy aliases). Migration is idempotent; diag script
+scripts/diag-spu-statuses.ts can re-verify anytime.
