@@ -11537,3 +11537,39 @@ Deployment: production — building from the GitHub push to master (Vercel dashb
 Source: branch master @ merge of feat/spu-tweaks
 Retrieve this exact code: git log master --oneline
 What this deployment is for: fix invisible no-cost parts + Unit Cost field on the add form
+
+================================================================================
+2026-09-02 — feat/thermo-manual-verdict — thermocouple step: operator Pass/Fail is the verdict
+================================================================================
+The thermocouple step on the validation run detail (/validation/runs/[runId], reached
+from SPU Manufacturing -> Validation) carried two competing verdict paths: manual
+Approve/Reject buttons, and an "Evaluate" action that auto-judged the readings against
+STANDARD_THERMO_CRITERIA. The auto path has never been reachable in production —
+src/lib/server/validation/thermo-criteria.ts still exports null (PRD OQ-1, range TBD),
+so the Evaluate button was permanently hidden and an orange banner told operators the
+range "is not configured yet", implying the step was blocked when in fact it was not.
+
+Per decision this session: the human verdict is the acceptance criterion for thermocouple
+data — there is no automatic range check. Changes, all in the run detail page:
+- Approve/Reject relabelled Pass/Fail, matching validation language elsewhere. The notes
+  recorded with the verdict changed to "Passed|Failed on operator review of min/max/mode".
+- Removed the Evaluate form (the unreachable auto-evaluation trigger).
+- Replaced the "acceptance range is not configured" banner with a plain statement that
+  the operator judges the readings and that verdict is the record.
+
+Deliberately NOT changed: STANDARD_THERMO_CRITERIA stays null and the evaluateThermo
+server action + thermo-upload.ts machinery stay in place, so a numeric range can be
+switched back on later without rebuilding it. The standalone /validation/thermocouple
+page (operator-entered min/max) is untouched.
+
+The verdict path itself is unchanged and already correct: recordStepResult is sacred-gated
+(refuses a finalized SPU), mirrors the outcome onto spu.validation.thermocouple.status,
+pushes any prior verdict onto previous[], and writes a validation_run_step_recorded
+AuditLog entry.
+
+Files: src/routes/validation/runs/[runId]/+page.svelte (only file touched; +9/-20).
+npm run check: 120 errors / 434 warnings, ZERO errors and ZERO warnings in the touched
+file. Warnings match the logged baseline exactly; the error count is above the 11 logged
+on 2026-09-01 because 64 sit in src/lib/server/mcp/bims-mcp.ts — untouched here, and
+most likely a dependency-version artifact of the node_modules junctioned from another
+worktree rather than a regression.
