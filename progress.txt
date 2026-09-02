@@ -11472,3 +11472,31 @@ Deployment: production — building from the GitHub push to master (Vercel dashb
 Source: branch master @ merge of feat/spu-tweaks
 Retrieve this exact code: git log master --oneline
 What this deployment is for: /spu inventory hides retired by default + Show-retired toggle
+
+================================================================================
+2026-09-02 — feat/spu-tweaks — used parts + subassemblies in SPU part inventory (SPU-INV-09)
+================================================================================
+PRD docs/prds/SPU-INV-09-used-parts-subassemblies.md written then implemented (Jacob's decisions:
+used counts start at 0/no deduction; subassembly builds support BOTH "de novo" (no child deduction
+— parts never inducted) and "from stock" (deducts children, refuses to go negative)).
+
+Model (PartDefinition): usedVariantOf (base part _id), isSubassembly, components[] snapshot
+subdocs ({partDefinitionId, partNumber, name, quantity}, _id:false).
+
+/parts gets a 4th tab "Used SPU Parts" between SPU and Cartridge (?tab=used): create a variant by
+picking any SPU part or subassembly from a dropdown (one variant per base, partNumber <base>-USED,
+name "<name> (Used)", count 0), per-row −/+ adjusters (floor 0). Used variants excluded from the
+SPU tab list.
+
+SPU tab: "⊞ Create Subassembly" next to "+ Add Part" — name/PN/classification + component picker
+(qty each, default 1, no nesting). Subassembly rows show a SUB badge that expands to components +
+four build controls: + De novo, + From stock, − Disassemble (returns parts), − No return. Loose
+counts never double-report: parts held in built subs show "+N in subs" under their inventory count
+(pristine subs only; used-variant subs' component lists are informational). Subassembly rows
+survive the no-cost filter; their unit cost derives from children.
+
+Actions (all inventory:write + AuditLog): createUsedVariant, adjustUsedCount, createSubassembly,
+buildSubassembly, unbuildSubassembly.
+
+npm run check: 10 errors — ONE BELOW the 11 baseline (actions returning {message} fixed the
+long-standing parts/+page.svelte form?.message type error); 434 warnings unchanged.

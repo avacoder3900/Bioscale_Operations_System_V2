@@ -8,12 +8,35 @@
 
 	// Tab state from URL
 	const params = page.url.searchParams;
-	let activeTab = $state<'spu' | 'cartridge' | 'scanned'>(params.get('tab') === 'cartridge' ? 'cartridge' : params.get('tab') === 'scanned' ? 'scanned' : 'spu');
+	let activeTab = $state<'spu' | 'used' | 'cartridge' | 'scanned'>(
+		params.get('tab') === 'cartridge' ? 'cartridge'
+		: params.get('tab') === 'scanned' ? 'scanned'
+		: params.get('tab') === 'used' ? 'used'
+		: 'spu'
+	);
 
 	// Cartridge parts state
 	let cartSearchQuery = $state('');
 	let cartAddOpen = $state(false);
 	let spuAddOpen = $state(false);
+
+	// SPU-INV-09: used parts + subassemblies
+	let usedAddOpen = $state(false);
+	let subCreateOpen = $state(false);
+	let expandedSub = $state<string | null>(null);
+	let buildQty = $state(1);
+	type SubComponent = { id: string; partNumber: string; name: string; quantity: number };
+	let subComponents = $state<SubComponent[]>([]);
+	let subPickId = $state('');
+	let subPickQty = $state(1);
+
+	function addSubComponent() {
+		const pick = data.subassemblyChildCandidates.find((c: { id: string }) => c.id === subPickId);
+		if (!pick || subComponents.some((c) => c.id === pick.id)) return;
+		subComponents.push({ ...pick, quantity: Math.max(1, Math.floor(subPickQty) || 1) });
+		subPickId = '';
+		subPickQty = 1;
+	}
 	let cartEditId = $state<string | null>(null);
 
 	type CartSortColumn = 'partNumber' | 'name' | 'category' | 'quantityPerUnit' | 'inventoryCount' | 'unitCost' | 'totalValue';
@@ -110,7 +133,7 @@
 		return '';
 	}
 
-	function switchTab(tab: 'spu' | 'cartridge' | 'scanned') {
+	function switchTab(tab: 'spu' | 'used' | 'cartridge' | 'scanned') {
 		activeTab = tab;
 		const url = new URL(page.url);
 		url.searchParams.set('tab', tab);
@@ -335,6 +358,13 @@
 			SPU Parts
 		</button>
 		<button
+			class="px-4 py-2 text-sm font-medium transition-colors {activeTab === 'used' ? 'border-b-2 border-[var(--color-tron-cyan)] text-[var(--color-tron-cyan)]' : 'text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]'}"
+			onclick={() => switchTab('used')}
+		>
+			Used SPU Parts
+			<span class="ml-1 text-xs">({data.usedParts?.length ?? 0})</span>
+		</button>
+		<button
 			class="px-4 py-2 text-sm font-medium transition-colors {activeTab === 'cartridge' ? 'border-b-2 border-[var(--color-tron-cyan)] text-[var(--color-tron-cyan)]' : 'text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]'}"
 			onclick={() => switchTab('cartridge')}
 		>
@@ -362,12 +392,20 @@
 			<h2 class="tron-text-primary font-mono text-2xl font-bold">SPU Parts</h2>
 			<p class="tron-text-muted">Bill of Materials — maintained in BIMS</p>
 		</div>
-		<button
-			class="tron-button"
-			onclick={() => (spuAddOpen = !spuAddOpen)}
-		>
-			{spuAddOpen ? 'Cancel' : '+ Add Part'}
-		</button>
+		<div class="flex items-center gap-2">
+			<button
+				class="tron-button"
+				onclick={() => { subCreateOpen = !subCreateOpen; if (subCreateOpen) spuAddOpen = false; }}
+			>
+				{subCreateOpen ? 'Cancel' : '⊞ Create Subassembly'}
+			</button>
+			<button
+				class="tron-button"
+				onclick={() => { spuAddOpen = !spuAddOpen; if (spuAddOpen) subCreateOpen = false; }}
+			>
+				{spuAddOpen ? 'Cancel' : '+ Add Part'}
+			</button>
+		</div>
 	</div>
 
 	{#if form?.error}
@@ -380,6 +418,75 @@
 		<div class="rounded border border-[var(--color-tron-green)] bg-[rgba(0,255,136,0.1)] p-3">
 			<p class="text-sm text-[var(--color-tron-green)]">{form.message}</p>
 		</div>
+	{/if}
+
+	{#if subCreateOpen}
+		<TronCard>
+			<h3 class="tron-text-primary mb-4 text-lg font-semibold">Create Subassembly</h3>
+			<p class="tron-text-muted mb-4 text-sm">
+				A subassembly is a grouping of existing parts with its own count. Loose part counts are
+				never double-reported — parts inside builds show as "tied up in subassemblies".
+			</p>
+			<form method="POST" action="?/createSubassembly" use:enhance={() => {
+				return async ({ result, update }) => {
+					await update();
+					if (result.type === 'success') { subCreateOpen = false; subComponents = []; }
+				};
+			}}>
+				<input type="hidden" name="components" value={JSON.stringify(subComponents.map((c) => ({ id: c.id, quantity: c.quantity })))} />
+				<div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+					<div>
+						<label for="sub-pn" class="tron-text-muted mb-1 block text-xs uppercase">Part Number *</label>
+						<input id="sub-pn" name="partNumber" required class="tron-input w-full" placeholder="e.g. SA-CTRL-001" />
+					</div>
+					<div>
+						<label for="sub-name" class="tron-text-muted mb-1 block text-xs uppercase">Name *</label>
+						<input id="sub-name" name="name" required class="tron-input w-full" />
+					</div>
+					<div>
+						<label for="sub-cat" class="tron-text-muted mb-1 block text-xs uppercase">Classification</label>
+						<input id="sub-cat" name="category" value="Subassembly" class="tron-input w-full" />
+					</div>
+				</div>
+				<div class="mt-4">
+					<label for="sub-desc" class="tron-text-muted mb-1 block text-xs uppercase">Description</label>
+					<input id="sub-desc" name="description" class="tron-input w-full" />
+				</div>
+
+				<div class="mt-4 border-t border-[var(--color-tron-border)] pt-4">
+					<span class="tron-text-muted mb-2 block text-xs uppercase">Component Parts</span>
+					<div class="flex flex-wrap items-end gap-2">
+						<select bind:value={subPickId} class="tron-select" style="min-width: 280px;">
+							<option value="">Pick a part…</option>
+							{#each data.subassemblyChildCandidates as c (c.id)}
+								{#if !subComponents.some((sc) => sc.id === c.id)}
+									<option value={c.id}>{c.partNumber} — {c.name}</option>
+								{/if}
+							{/each}
+						</select>
+						<input type="number" min="1" bind:value={subPickQty} class="tron-input" style="width: 80px;" title="Quantity" />
+						<button type="button" class="tron-button" onclick={addSubComponent} disabled={!subPickId}>Add</button>
+					</div>
+					{#if subComponents.length > 0}
+						<ul class="mt-3 space-y-1">
+							{#each subComponents as c (c.id)}
+								<li class="flex items-center gap-3 text-sm">
+									<span class="font-mono text-[var(--color-tron-cyan)]">{c.quantity}×</span>
+									<span class="font-mono">{c.partNumber}</span>
+									<span class="tron-text-muted">{c.name}</span>
+									<button type="button" class="tron-text-muted text-xs hover:text-[var(--color-tron-red)]" onclick={() => (subComponents = subComponents.filter((x) => x.id !== c.id))}>remove</button>
+								</li>
+							{/each}
+						</ul>
+					{:else}
+						<p class="tron-text-muted mt-2 text-sm">No components yet — add at least one.</p>
+					{/if}
+				</div>
+				<div class="mt-4">
+					<TronButton type="submit" disabled={subComponents.length === 0}>Create Subassembly</TronButton>
+				</div>
+			</form>
+		</TronCard>
 	{/if}
 
 	{#if spuAddOpen}
@@ -868,7 +975,19 @@
 					{#each filteredItems as item (item.id)}
 						{@const isLow = (item.inventoryCount ?? 0) <= item.minimumStockLevel}
 						<tr>
-							<td>{item.name}</td>
+							<td>
+								{item.name}
+								{#if item.isSubassembly}
+									<button
+										type="button"
+										class="ml-1 rounded bg-[var(--color-tron-cyan)]/15 px-1.5 py-0.5 text-[10px] font-bold text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/30"
+										onclick={() => (expandedSub = expandedSub === item.id ? null : item.id)}
+										title="Subassembly — click for components and build controls"
+									>
+										SUB {expandedSub === item.id ? '▴' : '▾'}
+									</button>
+								{/if}
+							</td>
 							<td><button type="button" class="font-mono text-[var(--color-tron-cyan)] hover:underline cursor-pointer" onclick={() => openWithdraw(item)}>{item.partNumber}</button></td>
 							<td>
 								{#if item.category}
@@ -885,10 +1004,15 @@
 								{:else}
 									{item.inventoryCount ?? 0}
 								{/if}
-								{#if item.inventorySource === 'box_estimate'}
+								{#if item.inventorySource === 'box_estimate' && !item.isSubassembly}
 									<span class="ml-1 text-[10px] px-1 py-0.5 rounded bg-yellow-900/50 text-yellow-400" title="From Box spreadsheet — not yet verified by scanning">BOX</span>
-								{:else}
+								{:else if !item.isSubassembly}
 									<span class="ml-1 text-[10px] px-1 py-0.5 rounded bg-green-900/50 text-green-400" title="Verified via barcode scanning">✓</span>
+								{/if}
+								{#if item.tiedUpInSubs > 0}
+									<div class="text-[10px] text-[var(--color-tron-cyan)]/70" title="Held inside built subassemblies — not counted in the loose inventory number above">
+										+{item.tiedUpInSubs} in subs
+									</div>
 								{/if}
 							</td>
 							<td class="font-mono">{formatCurrency(item.unitCost)}</td>
@@ -905,6 +1029,56 @@
 								<!-- eslint-enable svelte/no-navigation-without-resolve -->
 							</td>
 						</tr>
+						{#if item.isSubassembly && expandedSub === item.id}
+							<tr>
+								<td colspan="10" class="bg-[var(--color-tron-bg-secondary)]/40 px-4 py-3">
+									<div class="flex flex-wrap items-start gap-8">
+										<div>
+											<span class="tron-text-muted mb-1 block text-xs uppercase">Components (each build uses)</span>
+											<ul class="space-y-0.5 text-sm">
+												{#each item.components as c (c.partDefinitionId)}
+													<li>
+														<span class="font-mono text-[var(--color-tron-cyan)]">{c.quantity}×</span>
+														<span class="font-mono">{c.partNumber}</span>
+														<span class="tron-text-muted">{c.name}</span>
+													</li>
+												{/each}
+											</ul>
+										</div>
+										<div>
+											<span class="tron-text-muted mb-1 block text-xs uppercase">Adjust builds</span>
+											<div class="flex flex-wrap items-center gap-2">
+												<input type="number" min="1" bind:value={buildQty} class="tron-input" style="width: 70px;" title="Quantity" />
+												<form method="POST" action="?/buildSubassembly" use:enhance>
+													<input type="hidden" name="subId" value={item.id} />
+													<input type="hidden" name="qty" value={buildQty} />
+													<input type="hidden" name="mode" value="denovo" />
+													<button type="submit" class="tron-button text-xs" title="Increment the subassembly count without touching loose part counts (parts never inducted)">+ De novo</button>
+												</form>
+												<form method="POST" action="?/buildSubassembly" use:enhance>
+													<input type="hidden" name="subId" value={item.id} />
+													<input type="hidden" name="qty" value={buildQty} />
+													<input type="hidden" name="mode" value="stock" />
+													<button type="submit" class="tron-button text-xs" title="Increment the subassembly count AND deduct the components from loose inventory">+ From stock</button>
+												</form>
+												<form method="POST" action="?/unbuildSubassembly" use:enhance>
+													<input type="hidden" name="subId" value={item.id} />
+													<input type="hidden" name="qty" value={buildQty} />
+													<input type="hidden" name="mode" value="return" />
+													<button type="submit" class="tron-button text-xs" title="Decrement and return the components to loose inventory">− Disassemble</button>
+												</form>
+												<form method="POST" action="?/unbuildSubassembly" use:enhance>
+													<input type="hidden" name="subId" value={item.id} />
+													<input type="hidden" name="qty" value={buildQty} />
+													<input type="hidden" name="mode" value="discard" />
+													<button type="submit" class="tron-button text-xs" title="Decrement without returning parts (scrapped/lost)">− No return</button>
+												</form>
+											</div>
+										</div>
+									</div>
+								</td>
+							</tr>
+						{/if}
 					{:else}
 						<tr>
 							<td colspan="10" class="tron-text-muted py-8 text-center">
@@ -913,6 +1087,114 @@
 								{:else}
 									No parts yet. Use "Add Part" to create one.
 								{/if}
+							</td>
+						</tr>
+					{/each}
+				</tbody>
+			</table>
+		</div>
+	</TronCard>
+	{:else if activeTab === 'used'}
+	<!-- Used SPU Parts Tab (SPU-INV-09) -->
+	<div class="flex items-center justify-between">
+		<div>
+			<h2 class="tron-text-primary font-mono text-2xl font-bold">Used SPU Parts</h2>
+			<p class="tron-text-muted">Pulled electronics that are probably good but not pristine — tracked separately from new stock</p>
+		</div>
+		<button class="tron-button" onclick={() => (usedAddOpen = !usedAddOpen)}>
+			{usedAddOpen ? 'Cancel' : '+ Used Part'}
+		</button>
+	</div>
+
+	{#if form?.error}
+		<div class="rounded border border-[var(--color-tron-red)] bg-[rgba(255,51,102,0.1)] p-3">
+			<p class="text-sm text-[var(--color-tron-red)]">{form.error}</p>
+		</div>
+	{/if}
+	{#if form?.success && form?.message}
+		<div class="rounded border border-[var(--color-tron-green)] bg-[rgba(0,255,136,0.1)] p-3">
+			<p class="text-sm text-[var(--color-tron-green)]">{form.message}</p>
+		</div>
+	{/if}
+
+	{#if usedAddOpen}
+		<TronCard>
+			<h3 class="tron-text-primary mb-4 text-lg font-semibold">Create Used Variant</h3>
+			<p class="tron-text-muted mb-4 text-sm">
+				Pick an existing part (subassemblies included). The variant starts at count 0 — the
+				pristine part's count is never touched.
+			</p>
+			<form method="POST" action="?/createUsedVariant" use:enhance={() => {
+				return async ({ result, update }) => {
+					await update();
+					if (result.type === 'success') usedAddOpen = false;
+				};
+			}} class="flex flex-wrap items-end gap-3">
+				<div>
+					<label for="uv-base" class="tron-text-muted mb-1 block text-xs uppercase">Base Part *</label>
+					<select id="uv-base" name="basePartId" required class="tron-select" style="min-width: 320px;">
+						<option value="">Pick a part…</option>
+						{#each data.usedVariantCandidates as c (c.id)}
+							<option value={c.id}>{c.partNumber} — {c.name}</option>
+						{/each}
+					</select>
+				</div>
+				<TronButton type="submit">Create Variant</TronButton>
+			</form>
+		</TronCard>
+	{/if}
+
+	<TronCard>
+		<div class="overflow-x-auto">
+			<table class="tron-table">
+				<thead>
+					<tr>
+						<th>Part #</th>
+						<th>Name</th>
+						<th>Base Part</th>
+						<th>Classification</th>
+						<th>Count</th>
+						<th>Adjust</th>
+					</tr>
+				</thead>
+				<tbody>
+					{#each data.usedParts as p (p.id)}
+						<tr>
+							<td class="font-mono text-[var(--color-tron-cyan)]">
+								{p.partNumber}
+								{#if p.isSubassembly}
+									<span class="ml-1 rounded bg-[var(--color-tron-cyan)]/15 px-1.5 py-0.5 text-[10px] font-bold text-[var(--color-tron-cyan)]">SUB</span>
+								{/if}
+							</td>
+							<td>{p.name}</td>
+							<td class="font-mono text-xs">{p.basePartNumber}</td>
+							<td>
+								{#if p.category}
+									<TronBadge variant="neutral">{p.category}</TronBadge>
+								{:else}
+									<span class="tron-text-muted">—</span>
+								{/if}
+							</td>
+							<td class="font-mono text-lg">{p.inventoryCount}</td>
+							<td>
+								<div class="flex items-center gap-1">
+									<form method="POST" action="?/adjustUsedCount" use:enhance>
+										<input type="hidden" name="partId" value={p.id} />
+										<input type="hidden" name="delta" value="-1" />
+										<button type="submit" class="tron-button px-3 text-sm" disabled={p.inventoryCount <= 0}>−</button>
+									</form>
+									<form method="POST" action="?/adjustUsedCount" use:enhance>
+										<input type="hidden" name="partId" value={p.id} />
+										<input type="hidden" name="delta" value="1" />
+										<button type="submit" class="tron-button px-3 text-sm">+</button>
+									</form>
+								</div>
+							</td>
+						</tr>
+					{:else}
+						<tr>
+							<td colspan="6" class="tron-text-muted py-8 text-center">
+								No used parts yet. Use "+ Used Part" to create a variant of an existing part.
 							</td>
 						</tr>
 					{/each}

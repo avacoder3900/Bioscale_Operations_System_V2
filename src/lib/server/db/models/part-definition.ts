@@ -16,6 +16,23 @@ const partDefinitionSchema = new Schema({
 	percentAccepted: { type: Number, default: 100 },
 	createdBy: String,
 	bomType: { type: String, enum: ['spu', 'cartridge'] },
+	// Used-part variant (SPU-INV-09): set to the pristine part's _id. Variants
+	// carry their own inventoryCount; creating one never touches the base count.
+	usedVariantOf: String,
+	// Subassembly (SPU-INV-09): a special grouping of parts with its own count.
+	// Loose child counts are never double-reported — "tied up in subassemblies"
+	// is computed as subCount × quantity per child.
+	isSubassembly: { type: Boolean, default: false },
+	components: {
+		type: [{
+			_id: false,
+			partDefinitionId: String,
+			partNumber: String,
+			name: String,
+			quantity: { type: Number, default: 1 }
+		}],
+		default: undefined
+	},
 	supplierPartNumber: String,
 	quantityPerUnit: Number,
 	barcode: String, // primary scannable barcode label for this part

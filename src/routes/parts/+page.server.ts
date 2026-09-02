@@ -36,12 +36,31 @@ export const load: PageServerLoad = async ({ locals }) => {
 		])
 	]);
 
-	// Only BOM parts are listed; isBom:false parts are retired from the SPU BOM
-	const spuParts = (allSpuParts as any[]).filter((p: any) => p.isBom !== false);
+	// Only BOM parts are listed; isBom:false parts are retired from the SPU BOM.
+	// Used-part variants (SPU-INV-09) live on their own tab, not in the SPU list.
+	const spuParts = (allSpuParts as any[]).filter((p: any) => p.isBom !== false && !p.usedVariantOf);
+
+	// Tied-up-in-subassemblies math (SPU-INV-09): pristine subassemblies only —
+	// used-variant subs carry an informational component list but don't count.
+	const partCostById = new Map<string, number | null>(
+		(allSpuParts as any[]).map((p: any) => [p._id, parseFloat(p.unitCost) || null])
+	);
+	const tiedUp: Record<string, number> = {};
+	for (const sub of spuParts.filter((p: any) => p.isSubassembly)) {
+		for (const c of sub.components ?? []) {
+			tiedUp[c.partDefinitionId] = (tiedUp[c.partDefinitionId] ?? 0) + (c.quantity ?? 1) * (sub.inventoryCount ?? 0);
+		}
+	}
 
 	// Map SPU parts to expected shape
 	const items = (spuParts as any[]).map((p) => {
-		const cost = parseFloat(p.unitCost) || null;
+		// Subassemblies have no cost of their own — derive from children.
+		const cost = p.isSubassembly
+			? (p.components ?? []).reduce((sum: number, c: any) => {
+					const cc = partCostById.get(c.partDefinitionId);
+					return cc != null ? sum + cc * (c.quantity ?? 1) : sum;
+				}, 0) || null
+			: parseFloat(p.unitCost) || null;
 		const invCount = p.inventoryCount ?? 0;
 		return {
 			id: p._id,
@@ -58,12 +77,21 @@ export const load: PageServerLoad = async ({ locals }) => {
 			unitCost: cost,
 			totalValue: cost != null ? cost * invCount : null,
 			minimumStockLevel: p.minimumOrderQty ?? 0,
-			leadTimeDays: p.leadTimeDays ?? null
+			leadTimeDays: p.leadTimeDays ?? null,
+			isSubassembly: !!p.isSubassembly,
+			components: (p.components ?? []).map((c: any) => ({
+				partDefinitionId: c.partDefinitionId,
+				partNumber: c.partNumber ?? '',
+				name: c.name ?? '',
+				quantity: c.quantity ?? 1
+			})),
+			tiedUpInSubs: tiedUp[p._id] ?? 0
 		};
 	});
 
-	// Remove entries with no cost breakdown
-	const itemsWithCost = items.filter(i => i.unitCost != null && i.unitCost > 0);
+	// Remove entries with no cost breakdown (subassemblies stay regardless —
+	// their derived cost may legitimately be null)
+	const itemsWithCost = items.filter(i => i.isSubassembly || (i.unitCost != null && i.unitCost > 0));
 	const itemsNoCost = items.filter(i => i.unitCost == null || i.unitCost <= 0);
 	if (itemsNoCost.length > 0) {
 		console.log(`[parts] Filtered out ${itemsNoCost.length} items with no cost data`);
@@ -163,8 +191,45 @@ export const load: PageServerLoad = async ({ locals }) => {
 		totalValue: scannedItems.reduce((s, i) => s + (i.totalValue ?? 0), 0)
 	};
 
+	// Used-part variants tab (SPU-INV-09)
+	const usedById = new Map((allSpuParts as any[]).map((p: any) => [p._id, p]));
+	const usedParts = (allSpuParts as any[])
+		.filter((p: any) => p.usedVariantOf)
+		.map((p: any) => {
+			const base = usedById.get(p.usedVariantOf);
+			return {
+				id: p._id,
+				partNumber: p.partNumber ?? '',
+				name: p.name ?? '',
+				category: p.category ?? null,
+				inventoryCount: p.inventoryCount ?? 0,
+				isSubassembly: !!p.isSubassembly,
+				basePartId: p.usedVariantOf,
+				basePartNumber: base?.partNumber ?? '?',
+				baseName: base?.name ?? '?'
+			};
+		})
+		.sort((a, b) => a.partNumber.localeCompare(b.partNumber));
+
+	// Parts eligible for a new used variant: SPU parts (incl. subassemblies)
+	// that don't already have one.
+	const haveVariant = new Set((allSpuParts as any[]).filter((p: any) => p.usedVariantOf).map((p: any) => p.usedVariantOf));
+	const usedVariantCandidates = spuParts
+		.filter((p: any) => !haveVariant.has(p._id))
+		.map((p: any) => ({ id: p._id, partNumber: p.partNumber ?? '', name: p.name ?? '' }))
+		.sort((a: any, b: any) => a.partNumber.localeCompare(b.partNumber));
+
+	// Non-subassembly parts pickable as subassembly children.
+	const subassemblyChildCandidates = spuParts
+		.filter((p: any) => !p.isSubassembly)
+		.map((p: any) => ({ id: p._id, partNumber: p.partNumber ?? '', name: p.name ?? '' }))
+		.sort((a: any, b: any) => a.partNumber.localeCompare(b.partNumber));
+
 	return {
 		items: itemsWithCost,
+		usedParts,
+		usedVariantCandidates,
+		subassemblyChildCandidates,
 		cartridgeParts,
 		scannedItems: JSON.parse(JSON.stringify(scannedItems)),
 		scannedSummary,
@@ -199,6 +264,213 @@ export const actions: Actions = {
 			createdBy: locals.user!._id
 		});
 		return { success: true };
+	},
+
+	// ── SPU-INV-09: used-part variants + subassemblies ───────────────────────
+
+	createUsedVariant: async ({ request, locals }) => {
+		requirePermission(locals.user, 'inventory:write');
+		await connectDB();
+		const form = await request.formData();
+		const basePartId = form.get('basePartId')?.toString();
+		if (!basePartId) return fail(400, { error: 'Pick a part to make a used variant of' });
+
+		const base = await PartDefinition.findById(basePartId).lean() as any;
+		if (!base) return fail(404, { error: 'Base part not found' });
+		if (base.usedVariantOf) return fail(400, { error: 'Cannot make a used variant of a used variant' });
+		const existing = await PartDefinition.findOne({ usedVariantOf: basePartId }).lean();
+		if (existing) return fail(400, { error: 'A used variant of this part already exists' });
+
+		const _id = generateId();
+		await PartDefinition.create({
+			_id,
+			partNumber: `${base.partNumber}-USED`,
+			name: `${base.name} (Used)`,
+			description: `Used variant of ${base.partNumber}`,
+			category: base.category,
+			unitOfMeasure: base.unitOfMeasure,
+			bomType: 'spu',
+			usedVariantOf: basePartId,
+			// Counts start at 0 and are adjusted manually — creating a variant
+			// never touches the pristine part's count (Jacob, SPU-INV-09).
+			inventoryCount: 0,
+			isSubassembly: !!base.isSubassembly,
+			components: base.components ?? undefined,
+			createdBy: locals.user!._id
+		});
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'part_definitions',
+			recordId: _id,
+			action: 'INSERT',
+			newData: { usedVariantOf: basePartId, partNumber: `${base.partNumber}-USED` },
+			reason: 'Used-part variant created (SPU-INV-09)',
+			changedBy: locals.user!.username ?? locals.user!._id
+		});
+		return { success: true, message: `Created ${base.partNumber}-USED` };
+	},
+
+	adjustUsedCount: async ({ request, locals }) => {
+		requirePermission(locals.user, 'inventory:write');
+		await connectDB();
+		const form = await request.formData();
+		const partId = form.get('partId')?.toString();
+		const delta = Number(form.get('delta'));
+		if (!partId || !Number.isFinite(delta) || delta === 0) return fail(400, { error: 'Invalid adjustment' });
+
+		const part = await PartDefinition.findById(partId).lean() as any;
+		if (!part?.usedVariantOf) return fail(404, { error: 'Used part not found' });
+		const next = (part.inventoryCount ?? 0) + delta;
+		if (next < 0) return fail(400, { error: 'Count cannot go negative' });
+
+		await PartDefinition.updateOne({ _id: partId }, { $set: { inventoryCount: next } });
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'part_definitions',
+			recordId: partId,
+			action: 'UPDATE',
+			oldData: { inventoryCount: part.inventoryCount ?? 0 },
+			newData: { inventoryCount: next },
+			reason: 'Used-part count adjusted',
+			changedBy: locals.user!.username ?? locals.user!._id
+		});
+		return { success: true, message: `${part.partNumber}: ${next}` };
+	},
+
+	createSubassembly: async ({ request, locals }) => {
+		requirePermission(locals.user, 'inventory:write');
+		await connectDB();
+		const form = await request.formData();
+		const partNumber = form.get('partNumber')?.toString().trim();
+		const name = form.get('name')?.toString().trim();
+		let componentsRaw: { id: string; quantity: number }[];
+		try {
+			componentsRaw = JSON.parse(form.get('components')?.toString() ?? '[]');
+		} catch {
+			return fail(400, { error: 'Invalid component list' });
+		}
+		if (!partNumber || !name) return fail(400, { error: 'Part number and name are required' });
+		if (!Array.isArray(componentsRaw) || componentsRaw.length === 0) {
+			return fail(400, { error: 'Add at least one component part' });
+		}
+		if (await PartDefinition.findOne({ partNumber }).lean()) {
+			return fail(400, { error: 'Part number already exists' });
+		}
+
+		const children = await PartDefinition.find({ _id: { $in: componentsRaw.map((c) => c.id) } }).lean() as any[];
+		const childById = new Map(children.map((c) => [c._id, c]));
+		const components = [];
+		for (const c of componentsRaw) {
+			const child = childById.get(c.id);
+			if (!child) return fail(400, { error: `Component part ${c.id} not found` });
+			if (child.isSubassembly) return fail(400, { error: 'Subassemblies cannot nest' });
+			const quantity = Math.max(1, Math.floor(Number(c.quantity) || 1));
+			components.push({ partDefinitionId: child._id, partNumber: child.partNumber, name: child.name, quantity });
+		}
+
+		const _id = generateId();
+		await PartDefinition.create({
+			_id, partNumber, name,
+			description: form.get('description')?.toString().trim() || undefined,
+			category: form.get('category')?.toString().trim() || 'Subassembly',
+			bomType: 'spu',
+			isSubassembly: true,
+			components,
+			inventoryCount: 0,
+			createdBy: locals.user!._id
+		});
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'part_definitions',
+			recordId: _id,
+			action: 'INSERT',
+			newData: { partNumber, isSubassembly: true, components: components.map((c) => `${c.quantity}× ${c.partNumber}`) },
+			reason: 'Subassembly created (SPU-INV-09)',
+			changedBy: locals.user!.username ?? locals.user!._id
+		});
+		return { success: true, message: `Created subassembly ${partNumber}` };
+	},
+
+	buildSubassembly: async ({ request, locals }) => {
+		requirePermission(locals.user, 'inventory:write');
+		await connectDB();
+		const form = await request.formData();
+		const subId = form.get('subId')?.toString();
+		const qty = Math.floor(Number(form.get('qty')));
+		const mode = form.get('mode')?.toString(); // 'denovo' | 'stock'
+		if (!subId || !Number.isFinite(qty) || qty <= 0) return fail(400, { error: 'Invalid build quantity' });
+		if (mode !== 'denovo' && mode !== 'stock') return fail(400, { error: 'Invalid build mode' });
+
+		const sub = await PartDefinition.findById(subId).lean() as any;
+		if (!sub?.isSubassembly) return fail(404, { error: 'Subassembly not found' });
+
+		if (mode === 'stock') {
+			// Deduct children from loose stock; refuse rather than go negative.
+			const children = await PartDefinition.find({ _id: { $in: (sub.components ?? []).map((c: any) => c.partDefinitionId) } }).lean() as any[];
+			const childById = new Map(children.map((c) => [c._id, c]));
+			for (const c of sub.components ?? []) {
+				const child = childById.get(c.partDefinitionId);
+				const need = (c.quantity ?? 1) * qty;
+				if (!child || (child.inventoryCount ?? 0) < need) {
+					return fail(400, { error: `Not enough loose ${c.partNumber} (need ${need}, have ${child?.inventoryCount ?? 0})` });
+				}
+			}
+			for (const c of sub.components ?? []) {
+				await PartDefinition.updateOne(
+					{ _id: c.partDefinitionId },
+					{ $inc: { inventoryCount: -(c.quantity ?? 1) * qty } }
+				);
+			}
+		}
+
+		await PartDefinition.updateOne({ _id: subId }, { $inc: { inventoryCount: qty } });
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'part_definitions',
+			recordId: subId,
+			action: 'UPDATE',
+			oldData: { inventoryCount: sub.inventoryCount ?? 0 },
+			newData: { inventoryCount: (sub.inventoryCount ?? 0) + qty, mode, qty },
+			reason: mode === 'stock' ? 'Subassembly built from stock (children deducted)' : 'Subassembly added de novo',
+			changedBy: locals.user!.username ?? locals.user!._id
+		});
+		return { success: true, message: `${sub.partNumber}: +${qty} (${mode === 'stock' ? 'from stock' : 'de novo'})` };
+	},
+
+	unbuildSubassembly: async ({ request, locals }) => {
+		requirePermission(locals.user, 'inventory:write');
+		await connectDB();
+		const form = await request.formData();
+		const subId = form.get('subId')?.toString();
+		const qty = Math.floor(Number(form.get('qty')));
+		const mode = form.get('mode')?.toString(); // 'return' | 'discard'
+		if (!subId || !Number.isFinite(qty) || qty <= 0) return fail(400, { error: 'Invalid quantity' });
+		if (mode !== 'return' && mode !== 'discard') return fail(400, { error: 'Invalid mode' });
+
+		const sub = await PartDefinition.findById(subId).lean() as any;
+		if (!sub?.isSubassembly) return fail(404, { error: 'Subassembly not found' });
+		if ((sub.inventoryCount ?? 0) < qty) return fail(400, { error: `Only ${sub.inventoryCount ?? 0} on hand` });
+
+		await PartDefinition.updateOne({ _id: subId }, { $inc: { inventoryCount: -qty } });
+		if (mode === 'return') {
+			for (const c of sub.components ?? []) {
+				await PartDefinition.updateOne(
+					{ _id: c.partDefinitionId },
+					{ $inc: { inventoryCount: (c.quantity ?? 1) * qty } }
+				);
+			}
+		}
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'part_definitions',
+			recordId: subId,
+			action: 'UPDATE',
+			oldData: { inventoryCount: sub.inventoryCount ?? 0 },
+			newData: { inventoryCount: (sub.inventoryCount ?? 0) - qty, mode, qty },
+			reason: mode === 'return' ? 'Subassembly disassembled (parts returned to stock)' : 'Subassembly removed (no return)',
+			changedBy: locals.user!.username ?? locals.user!._id
+		});
+		return { success: true, message: `${sub.partNumber}: −${qty} (${mode === 'return' ? 'parts returned' : 'no return'})` };
 	},
 
 	createCartridgePart: async ({ request, locals }) => {
