@@ -11419,3 +11419,12 @@ Source: branch master @ merge of feat/spu-tweaks (code commit db30b624)
 Retrieve this exact code: git checkout feat/spu-tweaks at commit db30b624
 What this deployment is for: service-flag yellow LED sync (SPU-INV-08) — releasing a device stops
   its yellow servicing blink; Service Light badge + Resync on the SPU detail page
+
+================================================================================
+2026-09-02 — feat/spu-tweaks — parts page: + Add Part button on the SPU tab
+================================================================================
+/parts?tab=spu had no "+ Add Part" button although the ?/create action (PartDefinition) has
+existed on the server all along — only the cartridge and scanned tabs had add UIs. Added the same
+toggle-button + form-card idiom as the cartridge tab to the SPU Parts header: partNumber*/name*/
+classification/unit (default ea)/reorder point/description, posting to ?/create. Only file:
+src/routes/parts/+page.svelte. npm run check: 11 errors / 434 warnings — unchanged baseline.

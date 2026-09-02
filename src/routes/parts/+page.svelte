@@ -13,6 +13,7 @@
 	// Cartridge parts state
 	let cartSearchQuery = $state('');
 	let cartAddOpen = $state(false);
+	let spuAddOpen = $state(false);
 	let cartEditId = $state<string | null>(null);
 
 	type CartSortColumn = 'partNumber' | 'name' | 'category' | 'quantityPerUnit' | 'inventoryCount' | 'unitCost' | 'totalValue';
@@ -361,6 +362,12 @@
 			<h2 class="tron-text-primary font-mono text-2xl font-bold">SPU Parts</h2>
 			<p class="tron-text-muted">Bill of Materials — maintained in BIMS</p>
 		</div>
+		<button
+			class="tron-button"
+			onclick={() => (spuAddOpen = !spuAddOpen)}
+		>
+			{spuAddOpen ? 'Cancel' : '+ Add Part'}
+		</button>
 	</div>
 
 	{#if form?.error}
@@ -373,6 +380,48 @@
 		<div class="rounded border border-[var(--color-tron-green)] bg-[rgba(0,255,136,0.1)] p-3">
 			<p class="text-sm text-[var(--color-tron-green)]">{form.message}</p>
 		</div>
+	{/if}
+
+	{#if spuAddOpen}
+		<TronCard>
+			<h3 class="tron-text-primary mb-4 text-lg font-semibold">Add SPU Part</h3>
+			<form method="POST" action="?/create" use:enhance={() => {
+				return async ({ update }) => {
+					await update();
+					spuAddOpen = false;
+				};
+			}}>
+				<div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+					<div>
+						<label for="sp-pn" class="tron-text-muted mb-1 block text-xs uppercase">Part Number *</label>
+						<input id="sp-pn" name="partNumber" required class="tron-input w-full" />
+					</div>
+					<div>
+						<label for="sp-name" class="tron-text-muted mb-1 block text-xs uppercase">Name *</label>
+						<input id="sp-name" name="name" required class="tron-input w-full" />
+					</div>
+					<div>
+						<label for="sp-cat" class="tron-text-muted mb-1 block text-xs uppercase">Classification</label>
+						<input id="sp-cat" name="category" class="tron-input w-full" />
+					</div>
+					<div>
+						<label for="sp-uom" class="tron-text-muted mb-1 block text-xs uppercase">Unit of Measure</label>
+						<input id="sp-uom" name="unit" value="ea" class="tron-input w-full" />
+					</div>
+					<div>
+						<label for="sp-rop" class="tron-text-muted mb-1 block text-xs uppercase">Reorder Point</label>
+						<input id="sp-rop" name="reorderPoint" type="number" class="tron-input w-full" />
+					</div>
+				</div>
+				<div class="mt-4">
+					<label for="sp-desc" class="tron-text-muted mb-1 block text-xs uppercase">Description</label>
+					<input id="sp-desc" name="description" class="tron-input w-full" />
+				</div>
+				<div class="mt-4">
+					<TronButton type="submit">Create Part</TronButton>
+				</div>
+			</form>
+		</TronCard>
 	{/if}
 
 	<!-- Stats Cards -->
