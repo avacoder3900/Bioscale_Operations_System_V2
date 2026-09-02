@@ -219,6 +219,27 @@ export const load: PageServerLoad = async ({ locals }) => {
 		.map((p: any) => ({ id: p._id, partNumber: p.partNumber ?? '', name: p.name ?? '' }))
 		.sort((a: any, b: any) => a.partNumber.localeCompare(b.partNumber));
 
+	// Next part number in each iteration line (SPU-INV-09 follow-up): highest
+	// numeric suffix + 1, zero-padded to match. Computed over ALL spu parts
+	// (incl. retired/no-cost) so a suggestion never collides.
+	function nextInLine(prefix: string, fallbackStart: number): string {
+		let max = fallbackStart - 1;
+		let width = 3;
+		const re = new RegExp(`^${prefix}(\\d+)$`);
+		for (const p of allSpuParts as any[]) {
+			const m = String(p.partNumber ?? '').match(re);
+			if (m) {
+				max = Math.max(max, parseInt(m[1], 10));
+				width = Math.max(width, m[1].length);
+			}
+		}
+		return `${prefix}${String(max + 1).padStart(width, '0')}`;
+	}
+	const nextPartNumbers = {
+		part: nextInLine('PT-SPU-', 1),
+		subassembly: nextInLine('SBA-SPU-', 1)
+	};
+
 	// Non-subassembly parts pickable as subassembly children.
 	const subassemblyChildCandidates = spuParts
 		.filter((p: any) => !p.isSubassembly)
@@ -230,6 +251,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 		usedParts,
 		usedVariantCandidates,
 		subassemblyChildCandidates,
+		nextPartNumbers,
 		cartridgeParts,
 		scannedItems: JSON.parse(JSON.stringify(scannedItems)),
 		scannedSummary,

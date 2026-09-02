@@ -11505,3 +11505,12 @@ Deployment: production — building from the GitHub push to master (Vercel dashb
 Source: branch master @ merge of feat/spu-tweaks
 Retrieve this exact code: git log master --oneline
 What this deployment is for: used-part variants + subassemblies on /parts (SPU-INV-09)
+
+================================================================================
+2026-09-02 — feat/spu-tweaks — next-part-number suggest buttons on /parts forms
+================================================================================
+Both Add SPU Part and Create Subassembly forms gain a ⚡ button beside Part Number showing the
+next number in the iteration line (PT-SPU-NNN / SBA-SPU-NNN); clicking fills the field. Computed
+server-side over ALL spu parts (incl. retired/no-cost) so suggestions never collide; zero-padding
+width follows the existing convention. Files: src/routes/parts/+page.server.ts (+nextPartNumbers),
++page.svelte. npm run check: 10 errors / 434 warnings — baseline.

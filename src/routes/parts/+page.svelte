@@ -25,6 +25,8 @@
 	let subCreateOpen = $state(false);
 	let expandedSub = $state<string | null>(null);
 	let buildQty = $state(1);
+	let spuNewPartNumber = $state('');
+	let subNewPartNumber = $state('');
 	type SubComponent = { id: string; partNumber: string; name: string; quantity: number };
 	let subComponents = $state<SubComponent[]>([]);
 	let subPickId = $state('');
@@ -437,7 +439,17 @@
 				<div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
 					<div>
 						<label for="sub-pn" class="tron-text-muted mb-1 block text-xs uppercase">Part Number *</label>
-						<input id="sub-pn" name="partNumber" required class="tron-input w-full" placeholder="e.g. SA-CTRL-001" />
+						<div class="flex gap-2">
+							<input id="sub-pn" name="partNumber" required class="tron-input w-full" bind:value={subNewPartNumber} placeholder={data.nextPartNumbers.subassembly} />
+							<button
+								type="button"
+								class="tron-button whitespace-nowrap text-xs"
+								onclick={() => (subNewPartNumber = data.nextPartNumbers.subassembly)}
+								title="Next number in the SBA-SPU line"
+							>
+								⚡ {data.nextPartNumbers.subassembly}
+							</button>
+						</div>
 					</div>
 					<div>
 						<label for="sub-name" class="tron-text-muted mb-1 block text-xs uppercase">Name *</label>
@@ -501,7 +513,17 @@
 				<div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
 					<div>
 						<label for="sp-pn" class="tron-text-muted mb-1 block text-xs uppercase">Part Number *</label>
-						<input id="sp-pn" name="partNumber" required class="tron-input w-full" />
+						<div class="flex gap-2">
+							<input id="sp-pn" name="partNumber" required class="tron-input w-full" bind:value={spuNewPartNumber} placeholder={data.nextPartNumbers.part} />
+							<button
+								type="button"
+								class="tron-button whitespace-nowrap text-xs"
+								onclick={() => (spuNewPartNumber = data.nextPartNumbers.part)}
+								title="Next number in the PT-SPU line"
+							>
+								⚡ {data.nextPartNumbers.part}
+							</button>
+						</div>
 					</div>
 					<div>
 						<label for="sp-name" class="tron-text-muted mb-1 block text-xs uppercase">Name *</label>
