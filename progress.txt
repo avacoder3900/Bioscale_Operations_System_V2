@@ -11469,3 +11469,13 @@ file. Warnings match the logged baseline exactly; the error count is above the 1
 on 2026-09-01 because 64 sit in src/lib/server/mcp/bims-mcp.ts — untouched here, and
 most likely a dependency-version artifact of the node_modules junctioned from another
 worktree rather than a regression.
+
+Deployment: preview - https://bioscale-operations-system-mongodb-git-feat-th-230ac9-brevitest.vercel.app
+  (immutable: https://bioscale-operations-system-mongodb-94kopruib-brevitest.vercel.app)
+Source: branch feat/thermo-manual-verdict @ commit a286143c
+Mirror: branch deploy/thermo-manual-verdict pushed at the same commit as the deployable
+  bundle. Vercel raised no separate build for it - identical tree/commit to the feature
+  branch, so the dedup path applied and both branches are served by the build above.
+Retrieve this exact code: git checkout feat/thermo-manual-verdict at commit a286143c
+What this deployment is for: operator Pass/Fail is the thermocouple verdict; dead
+  auto-evaluate trigger and the misleading "range not configured" banner are gone.
