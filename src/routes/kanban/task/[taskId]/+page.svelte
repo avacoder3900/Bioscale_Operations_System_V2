@@ -517,6 +517,35 @@
 						<dt class="tron-text-muted">Status</dt>
 						<dd><TaskStatusBadge status={data.task.status} /></dd>
 					</div>
+					<!-- KB2-39: chain context — the milestone DAG this task belongs to, and its slot -->
+					{#if data.chain}
+						<div class="flex justify-between gap-3">
+							<dt class="tron-text-muted">Chain</dt>
+							<dd class="text-right">
+								<a
+									href="/kanban/inventory?chain={data.chain.chainId}&view=chain"
+									class="hover:underline"
+									style="color: var(--color-tron-cyan);"
+									title="Open this chain on Tier 1">{data.chain.chainName}</a
+								>
+								<div class="tron-text-muted text-xs">
+									{data.chain.position} of {data.chain.total}
+									{#if data.chain.nextUp}
+										· <span style="color: #34d399;">next up</span>
+									{:else if data.chain.behind > 0}
+										· behind {data.chain.behind}
+									{/if}
+									{#if data.chain.dueDate}· due {data.chain.dueDate}{/if}
+								</div>
+								{#if data.chain.also.length}
+									<div class="tron-text-muted text-xs">also in {data.chain.also.map((a: any) => a.name).join(', ')}</div>
+								{/if}
+								{#if data.chain.planId}
+									<a href="/kanban/plans/{data.chain.planId}" class="text-xs hover:underline" style="color: var(--color-tron-cyan);">plan ›</a>
+								{/if}
+							</dd>
+						</div>
+					{/if}
 					{#if data.task.sizeClass}
 						<div class="flex justify-between">
 							<dt class="tron-text-muted">Size</dt>

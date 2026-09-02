@@ -22,12 +22,18 @@ const planningDocumentSchema = new Schema(
 		status: { type: String, enum: ['active', 'superseded'], default: 'active' },
 		supersedes: String, // PlanningDocument _id this one replaces
 		authoredBy: String, // human username the workshop was on behalf of
-		filedVia: { type: String, enum: ['mcp', 'ui', 'agent-api'], default: 'mcp' }
+		filedVia: { type: String, enum: ['mcp', 'ui', 'agent-api'], default: 'mcp' },
+		// KB2-39: the milestone task this plan workshopped. A plan and a chain
+		// are the same object at two moments (rationale vs live DAG) — this is
+		// the link that collapses them. Set at filing (kanban_file_plan
+		// milestoneId) or by scripts/backfill-plan-milestones.ts.
+		milestoneId: String
 	},
 	{ timestamps: true }
 );
 
 planningDocumentSchema.index({ status: 1, createdAt: -1 });
+planningDocumentSchema.index({ milestoneId: 1 });
 
 export const PlanningDocument =
 	mongoose.models.PlanningDocument ||

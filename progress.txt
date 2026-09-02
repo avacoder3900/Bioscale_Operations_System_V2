@@ -11174,3 +11174,68 @@ Deployment: production — Vercel auto-deploy from master push
 Source: branch master @ commit cf522e52 (fast-forward of feat/kanban-capture-modes)
 Retrieve this exact code: git checkout master at commit cf522e52
 What this deployment is for: KB2-38 capture modes live — quick box position slot, /kanban/capture detailed mode with processed/committed landing, Board "+ New task", kanban_capture landing/position (MCP 3.4.0).
+
+================================================================================
+2026-09-01 — feat/kanban-capture-modes — KB2-39: chains as the unit of processing
+================================================================================
+Jacob: "make chains a core concept… blockers and blocking are what make the chain… a chain
+can have branches… only the immediate work belongs in chains because chains are part of
+processing… go review the plans." Reviewed all three filed plans (Fall v4, M1 20-SPUs,
+M2 robot-arm) + the live roadmap: processing as actually practiced is a WORKSHOP over a
+whole milestone (split/merge/wire/scope/spikes/plan), and its unit is the chain; the
+per-task Process modal is the last mile. Live: all 4 milestone chains wired but 56/71 chain
+tasks still status captured; plans M1/M2 showed 0 spawned tasks (nothing linked plan ↔
+milestone). PRD docs/prds/KB2-39-chains.md.
+
+DEFINITION (derived, never stored): a chain = a milestone's dependency DAG (milestone +
+everything transitively blocking it via blocks/blocked_by). Branches normal. Named by the
+milestone, dated by its dueDate, ordered topologically (rank tiebreak). Primary chain for
+shared prerequisites = earliest due date ("also in" the rest). Unanchored chains = wired
+components with no milestone downstream, named "→ terminal task". Unwired = the inbox.
+next up = not done + every blocker done; behind N = open transitive ancestors.
+
+SERVICE: NEW src/lib/server/kanban/chains.ts — deriveChains() → { chains[], byTask{} }, one
+source for every surface. Verified vs live board (scripts/diag-chains.ts, NEW, read-only):
+M1 orders TASK-113/125 tracks first, Build-20 behind 9, Validate behind 10; M2 shows its
+chute/deck/software tracks; 74 wired tasks; 6 small unanchored chains surfaced.
+
+PLAN ↔ CHAIN: PlanningDocument gains `milestoneId` (indexed). Agent POST /plans validates it
+is a milestone task; kanban_file_plan accepts milestoneId (MCP 3.4.0 → 3.5.0). NEW
+scripts/backfill-plan-milestones.ts parses "**Milestone:** TASK-NNN" (dry-run default,
+APPLY=1) — APPLIED to prod 2026-09-01: M1 → TASK-111, M2 → TASK-127; Fall v4 left unlinked
+(names two milestones; its tasks carry sourceRef).
+
+TIER 1 (/kanban/inventory): chain badge on every wired row from the moment it is wired
+("◆ M1 · NEXT UP" green / "◆ M1 · behind 3" cyan / "+1" for also-in; click = filter). Chain
+chips row (one chain at a time + "Unwired N"). View toggle "By rank | By chain" — chain view
+groups rows under chain headers (◆ name, due, done/total, on-Board, here, next-up count,
+plan ›, roadmap ›) in DEPENDENCY ORDER, then an Unwired group; rank is untouched (lens, not
+re-rank). "Process chain (k)" on each header walks the chain's captured tasks through the
+existing Process modal in order, advancing on each save (modal shows "Processing chain: i of
+n" + stop-after-this; chain context line ◆ name · position · next up/behind). Estimate days
+(working days) joins the Tier 1 Process/reshape modal (was task-page only) — inventory
+process/reshape actions now pass estimateDays. URL ?chain=<id>&view=chain[&process=1] opens
+the chain view filtered and can auto-start the walk (roadmap band labels + task page + plan
+page link here).
+
+ROADMAP: timeline bands = CHAINS (primary membership from deriveChains; replaces the KB2-36
+union-find components), sorted by the chain service (dated milestones by due date), each
+with a label rail: NAME · due · ±N wd buffer (from the scheduler, green/red) · done/total ·
+next up · "Tier 1 ›" · "plan ›". Band height grew 26px for the rail. Unwired block unchanged.
+RoadmapCanvas takes a `chains` prop; roadmap load runs deriveChains alongside computeRoadmap.
+
+TASK PAGE: Task Info gains Chain (link to the Tier 1 chain view), "3 of 13", next up /
+behind N, due, also-in, plan ›. PLANS: list shows "◆ chain · due · done/total" for linked
+plans; detail page gets a live Chain section (dependency order, NEXT UP markers, size/
+estimate, Tier 1 › / Roadmap › links). MCP: kanban_board_snapshot tasks carry
+chain {id,name,kind,dueDate,position,total,nextUp,behind,also} | null.
+
+Files: src/lib/server/kanban/chains.ts (new), scripts/diag-chains.ts (new),
+scripts/backfill-plan-milestones.ts (new), src/lib/server/db/models/planning-document.ts,
+src/lib/server/mcp/bims-mcp.ts, src/routes/api/agent/operations/kanban/{plans,board-snapshot}/
++server.ts, src/routes/kanban/inventory/+page.server.ts + .svelte, src/routes/kanban/roadmap/
++page.server.ts + .svelte, src/lib/components/kanban/roadmap/RoadmapCanvas.svelte,
+src/routes/kanban/task/[taskId]/+page.server.ts + .svelte, src/routes/kanban/plans/
++page.server.ts + .svelte, src/routes/kanban/plans/[planId]/+page.server.ts + .svelte,
+docs/prds/KB2-39-chains.md.
+npm run check: 11 errors = baseline, 0 in touched files.

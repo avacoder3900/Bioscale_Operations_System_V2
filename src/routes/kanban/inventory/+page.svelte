@@ -7,6 +7,8 @@
 	import TaskStatusBadge from '$lib/components/kanban/TaskStatusBadge.svelte';
 	import { SIZE_CLASSES, CLASSES_OF_SERVICE } from '$lib/shared/kanban-status';
 	import { tagColor } from '$lib/shared/tag-color';
+	import { page } from '$app/stores';
+	import { get } from 'svelte/store';
 
 	let { data, form } = $props();
 
@@ -124,6 +126,55 @@
 	let originFilter = $state('all');
 	// KB2-16 — tag filter (match-any). Empty selection = no tag filtering.
 	let tagFilter = $state<string[]>([]);
+
+	// KB2-39 — chains as a lens on Tier 1. `viewMode` groups the list by
+	// primary chain (dependency order inside each group; rank untouched);
+	// `chainFilter` narrows to one chain ('__unwired__' = not in any chain).
+	// URL: ?chain=<id>&view=chain[&process=1] — the roadmap band label and
+	// the task page link here; process=1 starts the Process-chain walk.
+	type ChainSummary = (typeof data.chains)[number];
+	const initialParams = get(page).url.searchParams;
+	let viewMode = $state<'rank' | 'chain'>(initialParams.get('view') === 'chain' ? 'chain' : 'rank');
+	let chainFilter = $state<string | null>(initialParams.get('chain'));
+	const chainById = $derived(new Map<string, ChainSummary>(data.chains.map((c: ChainSummary) => [c.id, c])));
+	// Chains that actually have Tier 1 rows on this page (chips + groups).
+	const chainsHere = $derived.by(() => {
+		const present = new Set<string>();
+		for (const t of data.tasks as TaskRow[]) if (t.chain) present.add(t.chain.chainId);
+		return (data.chains as ChainSummary[]).filter((c) => present.has(c.id));
+	});
+	const unwiredCount = $derived((data.tasks as TaskRow[]).filter((t) => !t.chain).length);
+	function toggleChainFilter(id: string) {
+		chainFilter = chainFilter === id ? null : id;
+	}
+	const fmtDue = (iso: string | null) =>
+		iso ? new Date(iso + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
+
+	// Process-chain walk: open the Process modal on each captured task of a
+	// chain in dependency order, advancing on every successful save.
+	let walkQueue = $state<string[]>([]);
+	let walkTotal = $state(0);
+	function startChainWalk(chainId: string) {
+		const c = chainById.get(chainId);
+		if (!c) return;
+		const captured = new Set((data.tasks as TaskRow[]).filter((t) => t.status === 'captured').map((t) => t.id));
+		const queue = c.order.filter((id: string) => captured.has(id));
+		if (!queue.length) return;
+		walkTotal = queue.length;
+		walkQueue = queue.slice(1);
+		const first = (data.tasks as TaskRow[]).find((t) => t.id === queue[0]);
+		if (first) openProcess(first);
+	}
+	function cancelChainWalk() {
+		walkQueue = [];
+		walkTotal = 0;
+	}
+	$effect(() => {
+		// Auto-start the walk when arriving via ?process=1 (once).
+		if (initialParams.get('process') === '1' && chainFilter && walkTotal === 0 && !modal) {
+			startChainWalk(chainFilter);
+		}
+	});
 	let allTags = $derived.by(() => {
 		const set = new Set<string>();
 		for (const t of data.tasks as TaskRow[]) for (const tag of t.tags ?? []) set.add(tag);
@@ -150,9 +201,34 @@
 			if (itemTypeFilter !== 'all' && t.itemType !== itemTypeFilter) return false;
 			if (originFilter !== 'all' && t.origin !== originFilter) return false;
 			if (tagFilter.length && !tagFilter.some((tag) => (t.tags ?? []).includes(tag))) return false;
+			// KB2-39 — chain filter (primary chain, or unwired).
+			if (chainFilter === '__unwired__' && t.chain) return false;
+			if (chainFilter && chainFilter !== '__unwired__' && t.chain?.chainId !== chainFilter) return false;
 			return true;
 		})
 	);
+
+	// KB2-39 — what the list renders: one flat group in rank view; in chain
+	// view, one group per chain (dependency order) then the unwired rest.
+	type RowGroup = { key: string; chain: ChainSummary | null; tasks: TaskRow[] };
+	const rowGroups = $derived.by((): RowGroup[] => {
+		if (viewMode !== 'chain') return [{ key: 'all', chain: null, tasks: filtered }];
+		const groups: RowGroup[] = [];
+		const byChain = new Map<string, TaskRow[]>();
+		const unwired: TaskRow[] = [];
+		for (const t of filtered as TaskRow[]) {
+			if (!t.chain) { unwired.push(t); continue; }
+			(byChain.get(t.chain.chainId) ?? byChain.set(t.chain.chainId, []).get(t.chain.chainId)!).push(t);
+		}
+		for (const c of data.chains as ChainSummary[]) {
+			const tasks = byChain.get(c.id);
+			if (!tasks?.length) continue;
+			tasks.sort((a, b) => (a.chain?.position ?? 0) - (b.chain?.position ?? 0));
+			groups.push({ key: c.id, chain: c, tasks });
+		}
+		if (unwired.length) groups.push({ key: '__unwired__', chain: null, tasks: unwired });
+		return groups;
+	});
 
 	// ---- Copy the visible list (plain text, one task per line) ----
 	// Copies exactly what the filters are showing, in the order shown (rank asc)
@@ -246,6 +322,15 @@
 					// repaint itself back into the field. Clear the state too.
 					tagsInput = '';
 					tagsFocused = false;
+					// KB2-39 — Process-chain walk: advance to the next captured task.
+					if (walkQueue.length) {
+						const nextId = walkQueue[0];
+						walkQueue = walkQueue.slice(1);
+						const next = (data.tasks as TaskRow[]).find((x) => x.id === nextId);
+						if (next) openProcess(next);
+					} else if (walkTotal) {
+						walkTotal = 0;
+					}
 				}
 				await update();
 			}
@@ -442,6 +527,11 @@
 			<option value="planned">Planned</option>
 			<option value="discovered">Discovered</option>
 		</select>
+		<!-- KB2-39 — view toggle: rank (global importance) vs chain (structure). A lens, never a re-rank. -->
+		<div class="flex items-center overflow-hidden rounded border border-[var(--color-tron-border)] text-xs" role="group" aria-label="List view">
+			<button type="button" class="px-2.5 py-1 {viewMode === 'rank' ? 'bg-[var(--color-tron-bg-tertiary)] text-[var(--color-tron-cyan)]' : 'tron-text-muted'}" onclick={() => (viewMode = 'rank')} title="One flat list in global rank order">By rank</button>
+			<button type="button" class="border-l border-[var(--color-tron-border)] px-2.5 py-1 {viewMode === 'chain' ? 'bg-[var(--color-tron-bg-tertiary)] text-[var(--color-tron-cyan)]' : 'tron-text-muted'}" onclick={() => (viewMode = 'chain')} title="Grouped by milestone chain, in dependency order">By chain</button>
+		</div>
 		<span class="tron-text-muted ml-auto text-xs">{filtered.length} option{filtered.length === 1 ? '' : 's'}</span>
 		<button
 			type="button"
@@ -455,6 +545,47 @@
 			{copied ? '✓ Copied' : '⧉ Copy list'}
 		</button>
 	</div>
+
+	<!-- KB2-39 — chain chips: one chain at a time, plus the unwired inbox -->
+	{#if chainsHere.length > 0 || unwiredCount > 0}
+		<div class="flex flex-wrap items-center gap-1.5 rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] px-4 py-2.5">
+			<span class="tron-text-muted mr-1 text-xs uppercase tracking-wide">Chains</span>
+			{#each chainsHere as c (c.id)}
+				{@const active = chainFilter === c.id}
+				<button
+					type="button"
+					class="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition-colors"
+					style={active
+						? 'border-color: var(--color-tron-cyan); background: rgba(0,212,255,0.12); color: var(--color-tron-cyan);'
+						: 'border-color: var(--color-tron-border); color: var(--color-tron-text-secondary);'}
+					onclick={() => toggleChainFilter(c.id)}
+					title="{c.done}/{c.total} done · {c.board} on the Board · {c.tier1} in Tier 1{c.dueDate ? ` · due ${c.dueDate}` : ''}"
+				>
+					<span style="color: {c.kind === 'milestone' ? 'var(--color-tron-cyan)' : '#94a3b8'};">◆</span>
+					{c.name}
+					{#if c.dueDate}<span class="tron-text-muted">{fmtDue(c.dueDate)}</span>{/if}
+					<span class="tron-text-muted">{c.tier1}</span>
+				</button>
+			{/each}
+			{#if unwiredCount > 0}
+				{@const active = chainFilter === '__unwired__'}
+				<button
+					type="button"
+					class="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition-colors"
+					style={active
+						? 'border-color: #94a3b8; background: rgba(148,163,184,0.12); color: #cbd5e1;'
+						: 'border-color: var(--color-tron-border); color: var(--color-tron-text-secondary);'}
+					onclick={() => toggleChainFilter('__unwired__')}
+					title="Not in any chain — the unshaped inbox"
+				>
+					Unwired <span class="tron-text-muted">{unwiredCount}</span>
+				</button>
+			{/if}
+			{#if chainFilter}
+				<button type="button" class="tron-text-muted ml-1 text-xs hover:underline" onclick={() => (chainFilter = null)}>clear</button>
+			{/if}
+		</div>
+	{/if}
 
 	<!-- KB2-16 — tag filter (match-any) -->
 	{#if allTags.length > 0}
@@ -483,7 +614,34 @@
 	<!-- KB2-16 — one flat iterable list, global rank order -->
 	<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)]">
 		<div class="divide-y divide-[var(--color-tron-border)]">
-			{#each filtered as t (t.id)}
+			{#each rowGroups as g (g.key)}
+				{#if viewMode === 'chain'}
+					<!-- KB2-39 — chain header: the milestone, its date, live progress, the walk -->
+					{@const capturedHere = g.tasks.filter((t: TaskRow) => t.status === 'captured').length}
+					<div class="flex flex-wrap items-center gap-3 bg-[var(--color-tron-bg-tertiary)] px-4 py-2">
+						{#if g.chain}
+							<span style="color: {g.chain.kind === 'milestone' ? 'var(--color-tron-cyan)' : '#94a3b8'};">◆</span>
+							<span class="tron-text-primary text-sm font-bold">{g.chain.name}</span>
+							{#if g.chain.dueDate}<span class="tron-text-muted text-xs">due {fmtDue(g.chain.dueDate)}</span>{/if}
+							<span class="tron-text-muted text-xs">{g.chain.done}/{g.chain.total} done · {g.chain.board} on the Board · {g.tasks.length} here · {g.chain.nextUp.length} next up</span>
+							<span class="ml-auto flex items-center gap-2">
+								{#if g.chain.planId}
+									<a href="/kanban/plans/{g.chain.planId}" class="text-xs hover:underline" style="color: var(--color-tron-cyan);" title={g.chain.planTitle ?? ''}>plan ›</a>
+								{/if}
+								<a href="/kanban/roadmap" class="text-xs hover:underline" style="color: var(--color-tron-cyan);">roadmap ›</a>
+								{#if capturedHere > 0}
+									<TronButton variant="primary" onclick={() => startChainWalk(g.chain!.id)} title="Process this chain's captured tasks one after another, in dependency order">
+										Process chain ({capturedHere})
+									</TronButton>
+								{/if}
+							</span>
+						{:else}
+							<span class="tron-text-primary text-sm font-bold">Unwired</span>
+							<span class="tron-text-muted text-xs">{g.tasks.length} option{g.tasks.length === 1 ? '' : 's'} in no chain — the inbox. Add a blocks/blocked-by link to wire one in.</span>
+						{/if}
+					</div>
+				{/if}
+				{#each g.tasks as t (t.id)}
 					<div class="flex flex-wrap items-center gap-3 px-4 py-2.5">
 						{#if t.status === 'captured' || t.status === 'processed'}
 							{#if rankEdit !== null && rankEdit.id === t.id}
@@ -528,6 +686,22 @@
 								{/if}
 								{#if t.classOfService && t.classOfService !== 'standard'}
 									<span class="tron-text-muted rounded bg-[var(--color-tron-bg-tertiary)] px-1.5 py-0.5 text-[10px] uppercase">{t.classOfService}</span>
+								{/if}
+								<!-- KB2-39 — chain badge: which milestone DAG, and whether it is startable -->
+								{#if t.chain}
+									<button
+										type="button"
+										class="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-bold"
+										style={t.chain.nextUp
+											? 'background: rgba(52,211,153,0.15); color: #34d399;'
+											: 'background: rgba(0,212,255,0.10); color: var(--color-tron-cyan);'}
+										title="{t.chain.chainName} · {t.chain.position} of {t.chain.total}{t.chain.also.length ? ` · also in ${t.chain.also.length} more` : ''} — click to filter"
+										onclick={() => toggleChainFilter(t.chain!.chainId)}
+									>
+										◆ {t.chain.chainName}
+										{#if t.chain.nextUp}· NEXT UP{:else if t.chain.behind > 0}· behind {t.chain.behind}{/if}
+										{#if t.chain.also.length}<span class="opacity-70">+{t.chain.also.length}</span>{/if}
+									</button>
 								{/if}
 								{#each t.tags ?? [] as tag (tag)}
 									<span class="inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px]" style="background: {tagColor(tag)}18; color: {tagColor(tag)};">
@@ -577,6 +751,7 @@
 							{/if}
 						</div>
 					</div>
+				{/each}
 			{/each}
 			{#if filtered.length === 0}
 				<p class="tron-text-muted px-4 py-3 text-xs">No Tier 1 options match the current filters.</p>
@@ -597,6 +772,19 @@
 				Reshaping edits size, class, and DoR in place — audited, no status change.
 			{/if}
 		</p>
+		<!-- KB2-39 — chain context + walk progress -->
+		{#if modal.task.chain || walkTotal}
+			<div class="mb-3 flex flex-wrap items-center gap-2 text-xs">
+				{#if modal.task.chain}
+					<span class="rounded px-1.5 py-0.5 font-bold" style="background: rgba(0,212,255,0.10); color: var(--color-tron-cyan);">◆ {modal.task.chain.chainName}</span>
+					<span class="tron-text-muted">{modal.task.chain.position} of {modal.task.chain.total}{#if modal.task.chain.nextUp} · next up{:else if modal.task.chain.behind > 0} · behind {modal.task.chain.behind}{/if}</span>
+				{/if}
+				{#if walkTotal}
+					<span class="ml-auto tron-text-muted">Processing chain: {walkTotal - walkQueue.length} of {walkTotal}</span>
+					<button type="button" class="tron-text-muted hover:underline" onclick={cancelChainWalk}>stop after this</button>
+				{/if}
+			</div>
+		{/if}
 		<div class="mb-4 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-tertiary)] px-3 py-2">
 			<p class="tron-text-primary text-xs font-bold uppercase tracking-wide">The sizing decision test</p>
 			<p class="tron-text-muted mt-1 text-xs">{data.sizingDecisionTest}</p>
@@ -639,6 +827,19 @@
 					/>
 				</div>
 			{/if}
+
+			<!-- KB2-39 — estimate joins the Tier 1 modal (was task-page only); the scheduler's rung 1 -->
+			<div class="mb-4">
+				<TronInput
+					label="Estimate (working days — optional; size class stands in when blank)"
+					name="estimateDays"
+					type="number"
+					min="0.5"
+					step="0.5"
+					value={modal.task.estimateDays ?? ''}
+					placeholder="duration in working days"
+				/>
+			</div>
 
 			<div class="mb-4">
 				<label for="proc-deliverable" class="tron-label">Deliverable (DoR)</label>

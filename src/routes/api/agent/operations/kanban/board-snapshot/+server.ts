@@ -1,5 +1,6 @@
 import { json, error } from '@sveltejs/kit';
 import { requireAgentApiKey } from '$lib/server/api-auth';
+import { deriveChains } from '$lib/server/kanban/chains';
 import { connectDB, KanbanTask } from '$lib/server/db';
 import { ALL_STATUSES, LINK_INVERSE, isKanbanStatus, type KanbanLinkType } from '$lib/shared/kanban-status';
 import type { RequestHandler } from './$types';
@@ -38,6 +39,9 @@ export const GET: RequestHandler = async ({ request, url }) => {
 		.sort({ rank: 1 })
 		.lean()) as any[];
 	const byId = new Map<string, any>(all.map((t) => [t._id, t]));
+
+	// KB2-39: chain membership (milestone DAGs, derived from links) per task.
+	const { byTask: chainByTask } = await deriveChains();
 
 	// Derived inverse edges: for every stored link A→B(type), B sees A with the
 	// inverse type. Built once over the whole board.
@@ -91,6 +95,20 @@ export const GET: RequestHandler = async ({ request, url }) => {
 			links: linksAll,
 			blockedBy,
 			blocks,
+			// KB2-39: primary chain (milestone DAG) + slot; null = unwired.
+			chain: chainByTask[t._id]
+				? {
+						id: chainByTask[t._id].chainId,
+						name: chainByTask[t._id].chainName,
+						kind: chainByTask[t._id].kind,
+						dueDate: chainByTask[t._id].dueDate,
+						position: chainByTask[t._id].position,
+						total: chainByTask[t._id].total,
+						nextUp: chainByTask[t._id].nextUp,
+						behind: chainByTask[t._id].behind,
+						also: chainByTask[t._id].also
+					}
+				: null,
 			...(includeActivity
 				? {
 						recentActivity: (t.activityLog || []).slice(-5).map((a: any) => ({

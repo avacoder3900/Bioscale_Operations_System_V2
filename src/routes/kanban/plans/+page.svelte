@@ -36,7 +36,16 @@
 						{#if p.context}<p class="mt-0.5 text-xs tron-text-muted">{p.context}</p>{/if}
 					</div>
 					<div class="flex items-center gap-4 text-xs tron-text-muted">
-						<span>{p.spawnedDone}/{p.spawnedTasks} tasks done</span>
+						{#if p.chain}
+							<!-- KB2-39: live chain progress (plan ↔ milestone link) -->
+							<span title="Live chain: {p.chain.done} done · {p.chain.board} on the Board · {p.chain.tier1} in Tier 1 · {p.chain.nextUp} next up">
+								<span style="color: var(--color-tron-cyan);">◆ {p.chain.name}</span>
+								{#if p.chain.dueDate}· due {p.chain.dueDate}{/if}
+								· {p.chain.done}/{p.chain.total} done
+							</span>
+						{:else}
+							<span>{p.spawnedDone}/{p.spawnedTasks} tasks done</span>
+						{/if}
 						<span>{p.authoredBy}</span>
 						<span class="font-mono">{fmt(p.createdAt)}</span>
 					</div>

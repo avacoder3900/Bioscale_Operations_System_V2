@@ -224,7 +224,7 @@ async function callAgentApi(
 export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 	// Version bump signals clients (claude.ai caches connector tool lists) that
 	// the toolset changed — bump on every tool add/remove/rename.
-	const server = new McpServer({ name: 'bims-operations', version: '3.4.0' });
+	const server = new McpServer({ name: 'bims-operations', version: '3.5.0' });
 
 	// ---------------------------------------------------------------- meta
 
@@ -1169,9 +1169,12 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 				'verbatim, timestamped, versioned. File the plan FIRST, then capture its tasks with sourceRef "plan:<id>" (the ' +
 				'result echoes the exact sourceRef) so every task can answer "where did this come from?". Content is never ' +
 				'edited after filing — file a new version with `supersedes` to chain v4 → v5 (the old plan flips to superseded). ' +
-				'Only file documents the human has explicitly finalized in the workshop — never drafts.',
+				'Only file documents the human has explicitly finalized in the workshop — never drafts. ' +
+				'KB2-39: a plan is usually a workshop over ONE milestone chain — pass milestoneId (the milestone task id) so the ' +
+				'plan and its live chain are one object (chain headers link to the plan; the plan page shows chain progress).',
 			inputSchema: z.object({
 				title: z.string().describe('e.g. "Fall 2026 Roadmap — v4".'),
+				milestoneId: z.string().optional().describe('KB2-39: id of the milestone task this plan workshopped (itemType milestone). Links plan ↔ chain.'),
 				content: z.string().describe('The FULL markdown, verbatim — this is the immortal record.'),
 				version: z.string().optional().describe('Free version string, e.g. "v4".'),
 				context: z.string().optional().describe('One paragraph: what question the workshop answered.'),

@@ -14,6 +14,7 @@ import { connectDB, KanbanTask, KanbanTemplate, AuditLog, generateId } from '$li
 import { requirePermission, hasPermission, isAdmin } from '$lib/server/permissions';
 import { TransitionError } from '$lib/server/kanban/transition';
 import { captureTask } from '$lib/server/kanban/capture';
+import { deriveChains } from '$lib/server/kanban/chains';
 import { normalizeTags } from '$lib/server/kanban/tags';
 import {
 	processTask,
@@ -54,6 +55,10 @@ export const load: PageServerLoad = async ({ locals }) => {
 	const { readyCap, minOrderPoint } = queuePolicyOf(policy);
 	const readyCount = await KanbanTask.countDocuments({ status: 'ready', archived: false });
 
+	// KB2-39: chains (milestone DAGs) — badge per wired row, chain chips, the
+	// "By chain" view and the Process-chain walk all read from this one derivation.
+	const chainsResult = await deriveChains();
+
 	// KB2-25 — the whole tag vocabulary, board-wide, so the capture box can
 	// complete against tags that live on tasks this page never loads (ready/wip/
 	// done/archived). `distinct` already de-dupes; we only sort for stable UI.
@@ -73,6 +78,26 @@ export const load: PageServerLoad = async ({ locals }) => {
 		sizingDecisionTest: SIZING_DECISION_TEST,
 		// KB2-25 — autocomplete source for the capture box.
 		tagVocabulary,
+		// KB2-39 — chain summaries in urgency order (dated milestones first).
+		chains: JSON.parse(
+			JSON.stringify(
+				chainsResult.chains.map((c) => ({
+					id: c.id,
+					kind: c.kind,
+					name: c.name,
+					trackingNumber: c.trackingNumber,
+					dueDate: c.dueDate,
+					planId: c.planId,
+					planTitle: c.planTitle,
+					order: c.order,
+					total: c.total,
+					done: c.done,
+					board: c.board,
+					tier1: c.tier1,
+					nextUp: c.nextUp
+				}))
+			)
+		),
 		templates: JSON.parse(
 			JSON.stringify(
 				templates.map((t) => ({
@@ -111,12 +136,23 @@ export const load: PageServerLoad = async ({ locals }) => {
 						handoffBrief: t.dor?.handoffBrief ?? ''
 					},
 					spike: t.spike?.question ? { question: t.spike.question, outcome: t.spike.outcome ?? null } : null,
+					estimateDays: t.estimateDays ?? null,
+					// KB2-39 — primary chain ref (null = unwired).
+					chain: chainsResult.byTask[String(t._id)] ?? null,
 					dorMissing: dorMissingFields(t)
 				}))
 			)
 		)
 	};
 };
+
+// KB2-39: estimate days joins the Tier 1 Process modal (it was task-page only).
+function parseEstimate(fd: FormData): number | undefined {
+	const raw = fd.get('estimateDays')?.toString().trim();
+	if (!raw) return undefined;
+	const n = Number(raw);
+	return Number.isFinite(n) && n > 0 ? n : undefined;
+}
 
 function serviceFail(e: unknown) {
 	if (e instanceof TransitionError) return fail(400, { error: e.message, code: e.code });
@@ -203,6 +239,7 @@ export const actions: Actions = {
 			return fail(400, { error: 'A valid class of service is required' });
 		}
 		const dueDateRaw = fd.get('dueDate')?.toString();
+		const estimateDays = parseEstimate(fd);
 
 		try {
 			await processTask({
@@ -212,6 +249,7 @@ export const actions: Actions = {
 				sizeClass: sizeClass as KanbanSizeClass,
 				classOfService: classOfService as KanbanClassOfService,
 				dueDate: dueDateRaw ? new Date(dueDateRaw) : undefined,
+				estimateDays,
 				dor: {
 					deliverable: fd.get('deliverable')?.toString() || undefined,
 					handoffBrief: fd.get('handoffBrief')?.toString() || undefined
@@ -241,6 +279,7 @@ export const actions: Actions = {
 			return fail(400, { error: 'A valid class of service is required' });
 		}
 		const dueDateRaw = fd.get('dueDate')?.toString();
+		const estimateDays = parseEstimate(fd);
 
 		try {
 			await reshapeTask({
@@ -250,6 +289,7 @@ export const actions: Actions = {
 				sizeClass: sizeClass ? (sizeClass as KanbanSizeClass) : undefined,
 				classOfService: classOfService ? (classOfService as KanbanClassOfService) : undefined,
 				dueDate: dueDateRaw ? new Date(dueDateRaw) : undefined,
+				estimateDays,
 				dor: {
 					deliverable: fd.get('deliverable')?.toString(),
 					handoffBrief: fd.get('handoffBrief')?.toString()

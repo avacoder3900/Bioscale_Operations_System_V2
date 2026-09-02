@@ -12,6 +12,7 @@ import {
 	removeLink as removeLinkService
 } from '$lib/server/kanban/transition';
 import { closeSpike as closeSpikeService, processTask, reshapeTask, SIZING_DECISION_TEST } from '$lib/server/kanban/process';
+import { deriveChains } from '$lib/server/kanban/chains';
 import { getKanbanPolicy } from '$lib/server/kanban/policy';
 import {
 	isKanbanStatus,
@@ -66,7 +67,20 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 			: null
 	]);
 
+	// KB2-39 — chain context: which milestone DAG this sits in, and where.
+	const chainsResult = await deriveChains();
+	const chainRef = chainsResult.byTask[params.taskId] ?? null;
+	const chainOf = (id: string) => chainsResult.chains.find((c) => c.id === id);
+	const chain = chainRef
+		? {
+				...chainRef,
+				planId: chainOf(chainRef.chainId)?.planId ?? null,
+				also: chainRef.also.map((id) => ({ id, name: chainOf(id)?.name ?? id }))
+			}
+		: null;
+
 	return {
+		chain: JSON.parse(JSON.stringify(chain)),
 		links: JSON.parse(JSON.stringify(links)),
 		parentTask: parentTask ? JSON.parse(JSON.stringify(parentTask)) : null,
 		subtasks: JSON.parse(JSON.stringify(subtasks)),

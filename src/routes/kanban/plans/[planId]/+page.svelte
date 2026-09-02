@@ -26,8 +26,45 @@
 			</p>
 			{#if data.plan.context}<p class="mt-1 max-w-3xl text-xs tron-text-muted">{data.plan.context}</p>{/if}
 		</div>
-		<div class="text-right text-sm tron-text-muted">{doneCount}/{data.spawned.length} spawned tasks done</div>
+		<div class="text-right text-sm tron-text-muted">
+			{#if data.chain}
+				<div><span style="color: var(--color-tron-cyan);">◆ {data.chain.name}</span>{#if data.chain.dueDate} · due {data.chain.dueDate}{/if}</div>
+				<div>{data.chain.done}/{data.chain.total} done · {data.chain.board} on the Board · {data.chain.tier1} in Tier 1</div>
+			{:else}
+				{doneCount}/{data.spawned.length} spawned tasks done
+			{/if}
+		</div>
 	</div>
+
+	<!-- KB2-39: the plan's live chain — the milestone DAG in dependency order -->
+	{#if data.chain}
+		<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)]">
+			<div class="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--color-tron-border)] px-4 py-2 text-sm font-bold tron-text-primary">
+				<span>Chain <span class="tron-text-muted font-normal">— live, in dependency order</span></span>
+				<span class="flex items-center gap-3 text-xs font-normal">
+					<a href="/kanban/inventory?chain={data.chain.id}&view=chain" class="hover:underline" style="color: var(--color-tron-cyan);">Tier 1 ›</a>
+					<a href="/kanban/roadmap" class="hover:underline" style="color: var(--color-tron-cyan);">Roadmap ›</a>
+				</span>
+			</div>
+			<div class="max-h-[480px] divide-y divide-[var(--color-tron-border)] overflow-y-auto">
+				{#each data.chain.tasks as t (t._id)}
+					<div class="flex flex-wrap items-center gap-2 px-4 py-1.5 text-sm">
+						<span class="tron-text-muted w-6 shrink-0 text-right font-mono text-xs">{t.position}</span>
+						<a href="/kanban/task/{t._id}" class="tron-text-primary min-w-[220px] flex-1 hover:underline">
+							{#if t.trackingNumber}<span class="font-mono text-xs tron-text-muted">{t.trackingNumber}</span>{/if}
+							{t.title}
+						</a>
+						{#if t.nextUp && t.status !== 'done'}
+							<span class="rounded px-1.5 py-0.5 text-[10px] font-bold" style="background: rgba(52,211,153,0.15); color: #34d399;">NEXT UP</span>
+						{/if}
+						{#if t.sizeClass}<span class="tron-text-muted rounded bg-[var(--color-tron-bg-tertiary)] px-1.5 py-0.5 text-[10px] uppercase">{t.sizeClass}</span>{/if}
+						{#if t.estimateDays}<span class="font-mono text-[10px] tron-text-muted">{t.estimateDays}d</span>{/if}
+						<TaskStatusBadge status={t.status} />
+					</div>
+				{/each}
+			</div>
+		</section>
+	{/if}
 
 	{#if data.spawned.length}
 		<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)]">

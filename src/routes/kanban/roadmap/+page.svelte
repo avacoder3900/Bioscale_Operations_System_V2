@@ -163,7 +163,7 @@ ${Math.round(m.chainPctByDays * 100)}% of chain done · ${m.daysLeft} wd left${m
 	{#if data.roadmap.milestones.length > 0}
 		<div style="margin-left: calc(50% - 50vw); margin-right: calc(50% - 50vw);">
 			{#if mounted}
-				<RoadmapCanvas roadmap={data.roadmap} pinned={data.pinned} />
+				<RoadmapCanvas roadmap={data.roadmap} chains={data.chains} pinned={data.pinned} />
 			{:else}
 				<div class="flex h-[78vh] min-h-[520px] items-center justify-center border-y border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] text-sm tron-text-muted">
 					Loading canvas…

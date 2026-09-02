@@ -15,7 +15,7 @@ export const GET: RequestHandler = async ({ request }) => {
 	await connectDB();
 
 	const plans = (await PlanningDocument.find({})
-		.select('_id title version status supersedes authoredBy filedVia context createdAt')
+		.select('_id title version status supersedes authoredBy filedVia context createdAt milestoneId')
 		.sort({ createdAt: -1 })
 		.lean()) as any[];
 
@@ -48,7 +48,7 @@ export const POST: RequestHandler = async ({ request }) => {
 	await connectDB();
 
 	const body = await request.json();
-	const { title, content, version, context, supersedes, actor } = body;
+	const { title, content, version, context, supersedes, actor, milestoneId } = body;
 	if (!title?.trim()) throw error(400, 'title is required');
 	if (!content?.trim()) throw error(400, 'content (the full markdown, verbatim) is required');
 	const actorName = typeof actor === 'string' && actor.trim() ? actor.trim() : 'agent';
@@ -56,6 +56,16 @@ export const POST: RequestHandler = async ({ request }) => {
 	if (supersedes) {
 		const prior = await PlanningDocument.findById(supersedes).lean();
 		if (!prior) throw error(404, `Plan to supersede (${supersedes}) not found`);
+	}
+
+	// KB2-39: the milestone this plan workshopped — the plan ↔ chain link.
+	let milestone: any = null;
+	if (typeof milestoneId === 'string' && milestoneId.trim()) {
+		milestone = await KanbanTask.findById(milestoneId.trim()).select('_id title itemType').lean();
+		if (!milestone) throw error(404, `milestoneId ${milestoneId} not found`);
+		if (milestone.itemType !== 'milestone') {
+			throw error(400, `milestoneId ${milestoneId} is itemType '${milestone.itemType}', not a milestone`);
+		}
 	}
 
 	const plan = await PlanningDocument.create({
@@ -67,7 +77,8 @@ export const POST: RequestHandler = async ({ request }) => {
 		status: 'active',
 		supersedes: supersedes || undefined,
 		authoredBy: actorName,
-		filedVia: 'mcp'
+		filedVia: 'mcp',
+		milestoneId: milestone ? String(milestone._id) : undefined
 	});
 
 	if (supersedes) {
@@ -79,7 +90,7 @@ export const POST: RequestHandler = async ({ request }) => {
 		tableName: 'planning_documents',
 		recordId: plan._id,
 		action: 'INSERT',
-		newData: { title: plan.title, version: plan.version, supersedes: supersedes || null },
+		newData: { title: plan.title, version: plan.version, supersedes: supersedes || null, milestoneId: plan.milestoneId ?? null },
 		changedBy: actorName,
 		changedAt: new Date()
 	});
@@ -92,6 +103,8 @@ export const POST: RequestHandler = async ({ request }) => {
 				title: plan.title,
 				version: plan.version ?? null,
 				sourceRef: `plan:${plan._id}`,
+				milestoneId: plan.milestoneId ?? null,
+				chainName: milestone ? milestone.title : null,
 				note: `Filed. Capture this plan's tasks with sourceRef "plan:${plan._id}" so provenance links back here.`
 			}
 		},

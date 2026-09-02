@@ -32,10 +32,13 @@
 
 	let {
 		roadmap,
-		pinned
+		pinned,
+		chains = null
 	}: {
 		roadmap: any;
 		pinned: { _id: string; x: number; y: number }[];
+		/** KB2-39: deriveChains() result — bands group by primary chain, labeled + linked. */
+		chains?: { chains: any[]; byTask: Record<string, any> } | null;
 	} = $props();
 
 	const nodeTypes = { task: TaskNode, milestone: MilestoneNode };
@@ -271,36 +274,33 @@
 		const { xOf } = timeScale;
 		const Y0 = 0, BAND_PAD = 16, ROW_GAP = 12;
 
-		// union-find over chain tasks + milestones via the drawn edges
-		const parent = new Map<string, string>();
-		const find = (x: string): string => {
-			let r = x;
-			while (parent.get(r) !== r) r = parent.get(r)!;
-			let c = x;
-			while (parent.get(c) !== c) { const n = parent.get(c)!; parent.set(c, r); c = n; }
-			return r;
-		};
-		const ids = [...chain.map(({ t }) => t.id), ...graph.milestoneRows.map((m: any) => m.id)];
-		for (const id of ids) parent.set(id, id);
-		for (const e of graph.edges) {
-			if (parent.has(e.source) && parent.has(e.target)) parent.set(find(e.source), find(e.target));
-		}
-		const comps = new Map<string, any[]>();
+		// KB2-39: bands = CHAINS — each task's PRIMARY milestone DAG from
+		// deriveChains() (same links, same doctrine: derived per load). Ordered
+		// by the chain service (dated milestones by due date first). Anything
+		// the service didn't place (e.g. blocks-only edges the scheduler sees
+		// differently) falls back to one trailing "wired" band.
+		const chainMeta = new Map<string, any>((chains?.chains ?? []).map((c: any) => [c.id, c]));
+		const byTask: Record<string, any> = chains?.byTask ?? {};
+		const groups = new Map<string, any[]>();
 		for (const { t } of chain) {
-			const r = find(t.id);
-			if (!comps.has(r)) comps.set(r, []);
-			comps.get(r)!.push(t);
+			const key = byTask[t.id]?.chainId ?? '__wired__';
+			if (!groups.has(key)) groups.set(key, []);
+			groups.get(key)!.push(t);
 		}
-		const bands = [...comps.values()]
-			.map((tasks) => ({
+		const chainOrder: string[] = [...(chains?.chains ?? []).map((c: any) => c.id), '__wired__'];
+		const orderIdx = (k: string) => { const i = chainOrder.indexOf(k); return i === -1 ? 1e9 : i; };
+		const bands = [...groups.entries()]
+			.map(([key, tasks]) => ({
+				key,
+				meta: chainMeta.get(key) ?? null,
 				tasks: tasks.sort((a, b) => timelineDateOf(a).localeCompare(timelineDateOf(b))),
 				earliest: tasks.reduce((min, t) => (timelineDateOf(t) < min ? timelineDateOf(t) : min), '9999')
 			}))
-			.sort((a, b) => a.earliest.localeCompare(b.earliest));
+			.sort((a, b) => orderIdx(a.key) - orderIdx(b.key) || a.earliest.localeCompare(b.earliest));
 
 		let y = Y0;
 		const positions = new Map<string, { x: number; y: number }>();
-		const bandRects: { y: number; height: number }[] = [];
+		const bandRects: { y: number; height: number; key: string; meta: any }[] = [];
 		// Rows are variable-height now (cards grow with their title): assign
 		// tasks to rows greedily by x first, then stack rows by each row's
 		// tallest card. Returns the vertical space consumed.
@@ -322,10 +322,12 @@
 			for (const p of placed) positions.set(p.id, { x: p.x, y: rowY[p.row] });
 			return Math.max(TASK_H + ROW_GAP, yy - startY);
 		};
+		// KB2-39: a label rail sits above each band's cards.
+		const LABEL_H = 26;
 		for (const band of bands) {
-			const used = packInto(band.tasks, y + BAND_PAD);
-			const height = BAND_PAD * 2 + used;
-			bandRects.push({ y, height });
+			const used = packInto(band.tasks, y + BAND_PAD + LABEL_H);
+			const height = BAND_PAD * 2 + LABEL_H + used;
+			bandRects.push({ y, height, key: band.key, meta: band.meta });
 			y += height;
 		}
 		// Unwired backlog block (KB2-34 ghosts) — separated, packed by planned date.
@@ -630,6 +632,24 @@
 						{#if i % 2 === 1}
 							<div style="position:absolute; left:-260px; top:{B.y}px; width:{timeScale.width + 320}px; height:{B.height}px; background: rgba(255,255,255,0.018);"></div>
 						{/if}
+						<!-- KB2-39: chain label rail — name · due · buffer · progress · Tier 1 / plan links -->
+						{@const ms = B.meta ? roadmap.milestones.find((m: any) => m.id === B.key) : null}
+						<div style="position:absolute; left:12px; top:{B.y + 6}px; display:flex; gap:12px; align-items:baseline; font-size:13px; white-space:nowrap; color:#94a3b8;">
+							<span style="font-weight:800; letter-spacing:0.06em; color:{B.meta ? (B.meta.kind === 'milestone' ? '#e2e8f0' : '#94a3b8') : '#94a3b8'};">
+								{B.meta ? B.meta.name.toUpperCase() : 'WIRED'}
+							</span>
+							{#if B.meta?.dueDate}<span>due {B.meta.dueDate}</span>{/if}
+							{#if ms}
+								<span style="color:{ms.feasible ? '#34d399' : '#f87171'};">{ms.bufferDays >= 0 ? '+' : ''}{ms.bufferDays} wd buffer</span>
+							{/if}
+							{#if B.meta}<span>{B.meta.done}/{B.meta.total} done · {B.meta.nextUp.length} next up</span>{/if}
+							{#if B.meta}
+								<a href="/kanban/inventory?chain={B.key}&view=chain" style="color: var(--color-tron-cyan, #00d4ff); pointer-events:auto;">Tier 1 ›</a>
+							{/if}
+							{#if B.meta?.planId}
+								<a href="/kanban/plans/{B.meta.planId}" style="color: var(--color-tron-cyan, #00d4ff); pointer-events:auto;" title={B.meta.planTitle}>plan ›</a>
+							{/if}
+						</div>
 					{/each}
 					{#if timelineLayout.unwiredY !== null}
 						<div style="position:absolute; left:-260px; top:{timelineLayout.unwiredY - 12}px; width:{timeScale.width + 320}px; height:0; border-top: 1px dashed rgba(148,163,184,0.35);"></div>

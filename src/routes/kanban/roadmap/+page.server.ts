@@ -12,6 +12,7 @@ import { connectDB, KanbanCanvasLayout, KanbanTask, AuditLog, generateId } from 
 import { addLink, createKanbanItem, TransitionError } from '$lib/server/kanban/transition';
 import { normalizeTags } from '$lib/server/kanban/tags';
 import { computeRoadmap } from '$lib/server/kanban/schedule';
+import { deriveChains } from '$lib/server/kanban/chains';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
@@ -19,8 +20,10 @@ export const load: PageServerLoad = async ({ locals }) => {
 	requirePermission(locals.user, 'kanban:read');
 	await connectDB();
 
-	const [roadmap, layoutDocs, candidateDocs] = await Promise.all([
+	const [roadmap, layoutDocs, candidateDocs, chains] = await Promise.all([
 		computeRoadmap(),
+		// KB2-39: bands = chains (milestone DAGs), labeled + linked to plans.
+		deriveChains(),
 		KanbanCanvasLayout.find({}).select('_id x y').lean(),
 		// Chain picker source: everything a new milestone could plausibly wait
 		// on. Done/declined work is excluded — gating on it anchors nothing.
@@ -32,6 +35,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 	return {
 		roadmap: JSON.parse(JSON.stringify(roadmap)),
+		chains: JSON.parse(JSON.stringify(chains)),
 		pinned: JSON.parse(JSON.stringify(layoutDocs)) as { _id: string; x: number; y: number }[],
 		linkCandidates: (candidateDocs as any[]).map((t) => ({
 			id: String(t._id),
