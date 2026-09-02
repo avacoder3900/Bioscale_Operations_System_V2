@@ -11519,3 +11519,16 @@ Deployment: production — building from the GitHub push to master (Vercel dashb
 Source: branch master @ merge of feat/spu-tweaks
 Retrieve this exact code: git log master --oneline
 What this deployment is for: next-part-number ⚡ suggest buttons on /parts forms
+
+================================================================================
+2026-09-02 — feat/spu-tweaks — fix: new parts without a unit cost were invisible
+================================================================================
+Jacob created "Metal Sheet Metal Enclosure" (PT-SPU-106) and it never appeared in the SPU parts
+list. Root cause: a long-standing load filter dropped any part without a positive unitCost
+("Remove entries with no cost breakdown") while the Add Part form had no cost field — so EVERY
+form-created part was silently hidden (also affected IFU-SPU-001 and PT-SPU-087). Fix: all parts
+are listed (missing cost renders "—"; Total Parts counts all; inventory-value stat still sums only
+costed parts; low-stock/lowest-inventory consider all), the Add Part form gains a Unit Cost field,
+and the create action stores it (String, per schema quirk) plus explicit bomType:'spu'/isBom:true.
+Files: src/routes/parts/+page.server.ts, +page.svelte.
+npm run check: 10 errors / 434 warnings — baseline.

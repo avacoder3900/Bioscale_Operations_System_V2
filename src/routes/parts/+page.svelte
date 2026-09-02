@@ -534,6 +534,10 @@
 						<input id="sp-cat" name="category" class="tron-input w-full" />
 					</div>
 					<div>
+						<label for="sp-cost" class="tron-text-muted mb-1 block text-xs uppercase">Unit Cost ($)</label>
+						<input id="sp-cost" name="unitCost" type="text" inputmode="decimal" class="tron-input w-full" placeholder="0.00" />
+					</div>
+					<div>
 						<label for="sp-uom" class="tron-text-muted mb-1 block text-xs uppercase">Unit of Measure</label>
 						<input id="sp-uom" name="unit" value="ea" class="tron-input w-full" />
 					</div>

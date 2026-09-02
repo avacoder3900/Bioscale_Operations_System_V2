@@ -89,13 +89,11 @@ export const load: PageServerLoad = async ({ locals }) => {
 		};
 	});
 
-	// Remove entries with no cost breakdown (subassemblies stay regardless —
-	// their derived cost may legitimately be null)
-	const itemsWithCost = items.filter(i => i.isSubassembly || (i.unitCost != null && i.unitCost > 0));
-	const itemsNoCost = items.filter(i => i.unitCost == null || i.unitCost <= 0);
-	if (itemsNoCost.length > 0) {
-		console.log(`[parts] Filtered out ${itemsNoCost.length} items with no cost data`);
-	}
+	// All parts are listed — a missing unit cost renders as "—" instead of
+	// hiding the row (the old no-cost filter silently swallowed newly created
+	// parts, since the add form had no cost field). Value stats still only
+	// count parts that have a cost.
+	const itemsWithCost = items.filter(i => i.unitCost != null && i.unitCost > 0);
 
 	// Cartridge parts (now from PartDefinition with bomType='cartridge')
 	const cartridgeParts = (cartridgePartDocs as any[]).map((p) => {
@@ -121,7 +119,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 	// Low stock items (from both parts and BOM)
 	const lowStockItems = [
-		...itemsWithCost.filter(i => i.inventoryCount < i.minimumStockLevel && i.minimumStockLevel > 0),
+		...items.filter(i => i.inventoryCount < i.minimumStockLevel && i.minimumStockLevel > 0),
 		...cartridgeParts.filter(i => i.inventoryCount < i.minimumStockLevel && i.minimumStockLevel > 0)
 	].map(i => ({
 		id: i.id,
@@ -142,7 +140,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 	// Computed stats
 	const allCategories = [...new Set(items.map(i => i.category).filter(Boolean))] as string[];
 	const stats = {
-		total: itemsWithCost.length,
+		total: items.length,
 		categories: allCategories.length,
 		totalInventoryValue: itemsWithCost.reduce((sum, i) => sum + (i.totalValue ?? 0), 0),
 		lowStockCount: lowStockItems.length
@@ -155,7 +153,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 		inventorySource: i.inventorySource ?? 'box_estimate'
 	});
 	const zeroOrNegative = items.filter(i => i.inventoryCount <= 0).map(inventoryFields);
-	const lowPositive = [...itemsWithCost]
+	const lowPositive = [...items]
 		.filter(i => i.inventoryCount > 0)
 		.sort((a, b) => a.inventoryCount - b.inventoryCount)
 		.slice(0, 10)
@@ -247,7 +245,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 		.sort((a: any, b: any) => a.partNumber.localeCompare(b.partNumber));
 
 	return {
-		items: itemsWithCost,
+		items,
 		usedParts,
 		usedVariantCandidates,
 		subassemblyChildCandidates,
@@ -275,6 +273,7 @@ export const actions: Actions = {
 		const existing = await PartDefinition.findOne({ partNumber });
 		if (existing) return fail(400, { error: 'Part number already exists' });
 
+		const unitCostRaw = form.get('unitCost')?.toString().trim();
 		await PartDefinition.create({
 			_id: generateId(),
 			partNumber,
@@ -283,9 +282,13 @@ export const actions: Actions = {
 			category: form.get('category')?.toString().trim() || undefined,
 			unitOfMeasure: form.get('unit')?.toString().trim() || 'ea',
 			minimumOrderQty: form.get('reorderPoint') ? Number(form.get('reorderPoint')) : undefined,
+			// Schema stores unitCost as String (known type quirk)
+			unitCost: unitCostRaw && !isNaN(parseFloat(unitCostRaw)) ? String(parseFloat(unitCostRaw)) : undefined,
+			bomType: 'spu',
+			isBom: true,
 			createdBy: locals.user!._id
 		});
-		return { success: true };
+		return { success: true, message: `Created ${partNumber}` };
 	},
 
 	// ── SPU-INV-09: used-part variants + subassemblies ───────────────────────
