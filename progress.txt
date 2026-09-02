@@ -11500,3 +11500,8 @@ buildSubassembly, unbuildSubassembly.
 
 npm run check: 10 errors — ONE BELOW the 11 baseline (actions returning {message} fixed the
 long-standing parts/+page.svelte form?.message type error); 434 warnings unchanged.
+
+Deployment: production — building from the GitHub push to master (Vercel dashboard, commit below)
+Source: branch master @ merge of feat/spu-tweaks
+Retrieve this exact code: git log master --oneline
+What this deployment is for: used-part variants + subassemblies on /parts (SPU-INV-09)
