@@ -1,6 +1,12 @@
 import { fail } from '@sveltejs/kit';
 import { hasPermission, requirePermission } from '$lib/server/permissions';
-import { connectDB, InventoryTransaction, PartDefinition, User, generateId } from '$lib/server/db';
+import { connectDB, InventoryTransaction, PartDefinition, Spu, User, generateId } from '$lib/server/db';
+import {
+	previewSpuKit,
+	spuIdsWithKitWithdrawal,
+	withdrawSpuKit
+} from '$lib/server/services/spu-kit-withdrawal';
+import { resolveSpuRef } from '$lib/server/services/inventory-resolve';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals, url }) => {
@@ -26,9 +32,22 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	if (retracted === 'yes') query.retractedAt = { $exists: true, $ne: null };
 	if (retracted === 'no') query.$or = [{ retractedAt: { $exists: false } }, { retractedAt: null }];
 
-	const [transactions, parts] = await Promise.all([
+	const canWithdraw = hasPermission(locals.user, 'inventory:write');
+
+	// The standard kit is identical for every SPU, so it is resolved once here
+	// rather than on each selection — the withdrawal modal renders instantly.
+	const [transactions, parts, spuKit, spus, kitWithdrawnSpuIds] = await Promise.all([
 		InventoryTransaction.find(query).sort({ performedAt: -1 }).limit(200).lean(),
-		PartDefinition.find({ isActive: true }).sort({ partNumber: 1 }).lean()
+		PartDefinition.find({ isActive: true }).sort({ partNumber: 1 }).lean(),
+		canWithdraw ? previewSpuKit() : null,
+		canWithdraw
+			? Spu.find({ status: { $ne: 'retired' } })
+					.select('_id udi barcode status')
+					.sort({ createdAt: -1 })
+					.limit(500)
+					.lean()
+			: [],
+		canWithdraw ? spuIdsWithKitWithdrawal() : []
 	]);
 
 	// Build lookups
@@ -67,12 +86,72 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 			partNumber: p.partNumber ?? '',
 			name: p.name ?? ''
 		})),
-		canRetract: hasPermission(locals.user, 'inventory:write'),
+		canRetract: canWithdraw,
+		canWithdraw,
+		spuKit: spuKit
+			? {
+					lines: spuKit.lines,
+					totalParts: spuKit.totalParts,
+					totalUnits: spuKit.totalUnits,
+					unresolvedCount: spuKit.unresolved.length,
+					shortageCount: spuKit.shortages.length
+				}
+			: null,
+		spus: (spus as any[]).map((s: any) => ({
+			id: String(s._id),
+			label: s.barcode || s.udi,
+			udi: s.udi ?? '',
+			barcode: s.barcode ?? null,
+			status: s.status ?? '',
+			alreadyWithdrawn: (kitWithdrawnSpuIds as string[]).includes(String(s._id))
+		})),
 		filters: { partId, type, startDate, endDate, retracted }
 	};
 };
 
 export const actions: Actions = {
+	/**
+	 * Withdraw the full standard parts kit for one SPU.
+	 *
+	 * Assembly scans only deduct barcode-scanned parts, so this books the rest
+	 * of the kit (screws, magnets, labels) in one go. Parts with no active part
+	 * definition are skipped and reported back with their work-instruction note
+	 * rather than failing the whole withdrawal.
+	 */
+	withdrawSpuKit: async ({ request, locals }) => {
+		requirePermission(locals.user, 'inventory:write');
+		await connectDB();
+
+		const form = await request.formData();
+		const spuRef = form.get('spuRef')?.toString().trim();
+		if (!spuRef) return fail(400, { error: 'Select an SPU to withdraw the kit for' });
+
+		const spu = await resolveSpuRef(spuRef);
+		if (!spu) return fail(404, { error: `SPU not found: "${spuRef}"` });
+		if ('ambiguous' in spu) {
+			const opts = spu.ambiguous.map((s: any) => s.barcode || s.udi).join(', ');
+			return fail(400, { error: `SPU reference "${spuRef}" is ambiguous — matches: ${opts}` });
+		}
+
+		const spuLabel = spu.barcode || spu.udi;
+		const result = await withdrawSpuKit({
+			spuId: String(spu._id),
+			spuLabel,
+			operatorUsername: locals.user!.username,
+			operatorId: locals.user!._id
+		});
+
+		return {
+			success: true,
+			withdrawal: {
+				spuLabel,
+				withdrawn: result.withdrawn,
+				skipped: result.skipped,
+				totalUnits: result.withdrawn.reduce((sum, w) => sum + w.quantity, 0)
+			}
+		};
+	},
+
 	create: async ({ request, locals }) => {
 		requirePermission(locals.user, 'inventory:write');
 		await connectDB();

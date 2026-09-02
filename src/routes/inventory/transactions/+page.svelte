@@ -29,6 +29,32 @@
 				partNumber: string | null;
 			}>;
 			canRetract: boolean;
+			canWithdraw: boolean;
+			spuKit: {
+				lines: Array<{
+					partNumber: string;
+					name: string;
+					quantity: number;
+					components: string[];
+					notes: string[];
+					partDefinitionId: string | null;
+					currentStock: number | null;
+					resolved: boolean;
+					short: boolean;
+				}>;
+				totalParts: number;
+				totalUnits: number;
+				unresolvedCount: number;
+				shortageCount: number;
+			} | null;
+			spus: Array<{
+				id: string;
+				label: string;
+				udi: string;
+				barcode: string | null;
+				status: string;
+				alreadyWithdrawn: boolean;
+			}>;
 			filters: {
 				partId: string | null;
 				type: string | null;
@@ -53,6 +79,39 @@
 	let retractingTransactionId = $state<string | null>(null);
 	let retractReason = $state('');
 	let isSubmitting = $state(false);
+
+	// SPU kit withdrawal state
+	let showKitModal = $state(false);
+	let selectedSpuId = $state('');
+	let acknowledgeRepeat = $state(false);
+	let isWithdrawing = $state(false);
+	let withdrawResult = $state<{
+		spuLabel: string;
+		withdrawn: Array<{ partNumber: string; name: string; quantity: number; newCount: number }>;
+		skipped: Array<{ partNumber: string; name: string; quantity: number; reason: string; notes: string[] }>;
+		totalUnits: number;
+	} | null>(null);
+	let withdrawError = $state<string | null>(null);
+
+	const selectedSpu = $derived(data.spus.find((s) => s.id === selectedSpuId) ?? null);
+	const isRepeatWithdrawal = $derived(selectedSpu?.alreadyWithdrawn === true);
+	const canConfirmWithdrawal = $derived(
+		Boolean(selectedSpuId) && (!isRepeatWithdrawal || acknowledgeRepeat) && !isWithdrawing
+	);
+
+	function openKitModal() {
+		selectedSpuId = '';
+		acknowledgeRepeat = false;
+		withdrawResult = null;
+		withdrawError = null;
+		showKitModal = true;
+	}
+
+	function closeKitModal() {
+		showKitModal = false;
+		withdrawResult = null;
+		withdrawError = null;
+	}
 
 	function applyFilters() {
 		const params = new URLSearchParams();
@@ -99,6 +158,11 @@
 			};
 		}
 		switch (type) {
+			case 'consumption':
+				return {
+					class: 'bg-[var(--color-tron-red)]/20 text-[var(--color-tron-red)]',
+					label: 'Consumption'
+				};
 			case 'deduction':
 				return {
 					class: 'bg-[var(--color-tron-red)]/20 text-[var(--color-tron-red)]',
@@ -125,9 +189,16 @@
 
 <div class="space-y-6">
 	<!-- Header -->
-	<div>
-		<h1 class="tron-heading text-2xl font-bold">Inventory Transactions</h1>
-		<p class="tron-text-muted mt-1">View and manage inventory movements</p>
+	<div class="flex flex-wrap items-start justify-between gap-4">
+		<div>
+			<h1 class="tron-heading text-2xl font-bold">Inventory Transactions</h1>
+			<p class="tron-text-muted mt-1">View and manage inventory movements</p>
+		</div>
+		{#if data.canWithdraw && data.spuKit}
+			<button type="button" onclick={openKitModal} class="tron-btn-primary px-4 py-2 text-sm">
+				Withdraw SPU Kit
+			</button>
+		{/if}
 	</div>
 
 	<!-- Filters -->
@@ -362,6 +433,212 @@
 					</button>
 				</div>
 			</form>
+		</div>
+	</div>
+{/if}
+
+<!-- SPU Kit Withdrawal Modal -->
+{#if showKitModal && data.spuKit}
+	<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+		<div class="tron-card flex max-h-[90vh] w-full max-w-3xl flex-col p-6">
+			{#if withdrawResult}
+				<!-- Result view -->
+				<h2 class="tron-heading mb-2 text-lg font-bold">Kit Withdrawn</h2>
+				<p class="tron-text-muted mb-4 text-sm">
+					Deducted {withdrawResult.totalUnits} unit{withdrawResult.totalUnits !== 1 ? 's' : ''} across
+					{withdrawResult.withdrawn.length} part{withdrawResult.withdrawn.length !== 1 ? 's' : ''} for SPU
+					{withdrawResult.spuLabel}.
+				</p>
+
+				{#if withdrawResult.skipped.length > 0}
+					<div
+						class="mb-4 border border-[var(--color-tron-yellow)]/40 bg-[var(--color-tron-yellow)]/10 p-4"
+					>
+						<h3 class="mb-2 text-sm font-bold text-[var(--color-tron-yellow)]">
+							{withdrawResult.skipped.length} part{withdrawResult.skipped.length !== 1 ? 's' : ''} could
+							not be withdrawn
+						</h3>
+						<ul class="space-y-3">
+							{#each withdrawResult.skipped as skip}
+								<li class="text-sm">
+									<span class="font-mono">{skip.partNumber}</span>
+									<span class="tron-text-muted">— {skip.name} (needed {skip.quantity})</span>
+									<div class="tron-text-muted mt-1 text-xs">{skip.reason}</div>
+									{#each skip.notes as note}
+										<div class="mt-1 text-xs text-[var(--color-tron-yellow)]">{note}</div>
+									{/each}
+								</li>
+							{/each}
+						</ul>
+					</div>
+				{/if}
+
+				<div class="min-h-0 flex-1 overflow-y-auto border border-[var(--color-tron-border)]">
+					<table class="w-full text-sm">
+						<thead class="tron-text-muted sticky top-0 bg-[var(--color-tron-bg)] text-left text-xs">
+							<tr>
+								<th class="p-2">Part</th>
+								<th class="p-2">Name</th>
+								<th class="p-2 text-right">Withdrawn</th>
+								<th class="p-2 text-right">On hand</th>
+							</tr>
+						</thead>
+						<tbody>
+							{#each withdrawResult.withdrawn as line}
+								<tr class="border-t border-[var(--color-tron-border)]">
+									<td class="p-2 font-mono text-xs">{line.partNumber}</td>
+									<td class="p-2">{line.name}</td>
+									<td class="p-2 text-right">{line.quantity}</td>
+									<td class="p-2 text-right {line.newCount < 0 ? 'text-[var(--color-tron-red)]' : ''}">
+										{line.newCount}
+									</td>
+								</tr>
+							{/each}
+						</tbody>
+					</table>
+				</div>
+
+				<div class="mt-4 flex justify-end">
+					<button
+						type="button"
+						onclick={async () => {
+							closeKitModal();
+							await invalidateAll();
+						}}
+						class="tron-btn-primary px-4 py-2 text-sm">Done</button
+					>
+				</div>
+			{:else}
+				<!-- Confirmation view -->
+				<h2 class="tron-heading mb-2 text-lg font-bold">Withdraw SPU Kit</h2>
+				<p class="tron-text-muted mb-4 text-sm">
+					Deducts the full standard parts kit for one SPU — {data.spuKit.totalParts} parts,
+					{data.spuKit.totalUnits} units total. Assembly scans only deduct barcode-scanned parts; this
+					books the rest of the build.
+				</p>
+
+				{#if withdrawError}
+					<div
+						class="mb-4 border border-[var(--color-tron-red)]/40 bg-[var(--color-tron-red)]/10 p-3 text-sm text-[var(--color-tron-red)]"
+					>
+						{withdrawError}
+					</div>
+				{/if}
+
+				<div class="mb-4">
+					<label for="kit-spu" class="tron-text-muted mb-1 block text-sm">SPU *</label>
+					<select id="kit-spu" bind:value={selectedSpuId} class="tron-input w-full px-3 py-2 text-sm">
+						<option value="">Select an SPU...</option>
+						{#each data.spus as spu}
+							<option value={spu.id}>
+								{spu.label} — {spu.status}{spu.alreadyWithdrawn ? ' (kit already withdrawn)' : ''}
+							</option>
+						{/each}
+					</select>
+				</div>
+
+				{#if isRepeatWithdrawal}
+					<label
+						class="mb-4 flex items-start gap-2 border border-[var(--color-tron-yellow)]/40 bg-[var(--color-tron-yellow)]/10 p-3 text-sm"
+					>
+						<input type="checkbox" bind:checked={acknowledgeRepeat} class="mt-1" />
+						<span>
+							A kit has already been withdrawn for this SPU. Withdrawing again will deduct a second
+							full kit. Confirm this is intentional.
+						</span>
+					</label>
+				{/if}
+
+				{#if data.spuKit.unresolvedCount > 0 || data.spuKit.shortageCount > 0}
+					<div class="tron-text-muted mb-3 text-xs">
+						{#if data.spuKit.unresolvedCount > 0}
+							<span class="text-[var(--color-tron-yellow)]">
+								{data.spuKit.unresolvedCount} part{data.spuKit.unresolvedCount !== 1 ? 's' : ''} cannot
+								be deducted (not in the inventory system) — see the notes below.
+							</span>
+						{/if}
+						{#if data.spuKit.shortageCount > 0}
+							<span class="ml-2 text-[var(--color-tron-red)]">
+								{data.spuKit.shortageCount} part{data.spuKit.shortageCount !== 1 ? 's' : ''} will go short
+								on stock.
+							</span>
+						{/if}
+					</div>
+				{/if}
+
+				<div class="min-h-0 flex-1 overflow-y-auto border border-[var(--color-tron-border)]">
+					<table class="w-full text-sm">
+						<thead class="tron-text-muted sticky top-0 bg-[var(--color-tron-bg)] text-left text-xs">
+							<tr>
+								<th class="p-2">Part</th>
+								<th class="p-2">Name</th>
+								<th class="p-2 text-right">Qty</th>
+								<th class="p-2 text-right">On hand</th>
+							</tr>
+						</thead>
+						<tbody>
+							{#each data.spuKit.lines as line}
+								<tr class="border-t border-[var(--color-tron-border)]">
+									<td class="p-2 align-top font-mono text-xs">{line.partNumber}</td>
+									<td class="p-2 align-top">
+										{line.name}
+										{#if !line.resolved}
+											<div class="mt-1 text-xs text-[var(--color-tron-yellow)]">
+												Not in the inventory system — will be skipped.
+											</div>
+										{/if}
+										{#each line.notes as note}
+											<div class="tron-text-muted mt-1 text-xs italic">{note}</div>
+										{/each}
+									</td>
+									<td class="p-2 text-right align-top">{line.quantity}</td>
+									<td
+										class="p-2 text-right align-top {!line.resolved
+											? 'text-[var(--color-tron-yellow)]'
+											: line.short
+												? 'text-[var(--color-tron-red)]'
+												: ''}"
+									>
+										{line.resolved ? line.currentStock : '—'}
+									</td>
+								</tr>
+							{/each}
+						</tbody>
+					</table>
+				</div>
+
+				<form
+					method="POST"
+					action="?/withdrawSpuKit"
+					class="mt-4 flex justify-end gap-3"
+					use:enhance={() => {
+						isWithdrawing = true;
+						withdrawError = null;
+						return async ({ result }) => {
+							isWithdrawing = false;
+							if (result.type === 'success' && result.data?.withdrawal) {
+								withdrawResult = result.data.withdrawal as typeof withdrawResult;
+							} else if (result.type === 'failure') {
+								withdrawError =
+									(result.data?.error as string) ?? 'Withdrawal failed. No inventory was changed.';
+							} else if (result.type === 'error') {
+								withdrawError = result.error?.message ?? 'Withdrawal failed.';
+							}
+						};
+					}}
+				>
+					<input type="hidden" name="spuRef" value={selectedSpuId} />
+					<button
+						type="button"
+						onclick={closeKitModal}
+						disabled={isWithdrawing}
+						class="tron-btn-secondary px-4 py-2 text-sm">Cancel</button
+					>
+					<button type="submit" disabled={!canConfirmWithdrawal} class="tron-btn-primary px-4 py-2 text-sm">
+						{isWithdrawing ? 'Withdrawing...' : 'Withdraw Kit'}
+					</button>
+				</form>
+			{/if}
 		</div>
 	</div>
 {/if}
