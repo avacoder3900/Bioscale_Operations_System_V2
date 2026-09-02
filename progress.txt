@@ -11433,3 +11433,28 @@ Deployment: production — building from the GitHub push to master (Vercel dashb
 Source: branch master @ merge of feat/spu-tweaks (code commit: see entry above)
 Retrieve this exact code: git log master --oneline
 What this deployment is for: + Add Part button/form on /parts?tab=spu
+
+================================================================================
+2026-09-02 — feat/spu-tweaks — SPU inventory reconciliation executed (approval unXY0MFkG58pNCy178UY0)
+================================================================================
+Executed Samantha Wolf's reconciliation doc (spu-reconciliation-2026-09-02.md) against production
+Atlas via scripts/reconcile-spu-2026-09-02.ts (dry-run verified first; every mutation writes a
+statusTransitions entry + AuditLog row; barcode clears used the doc's journal-before-clear rule —
+journal entry with the verbatim barcode is written and READ BACK before $unset; $unset not
+$set:null because of the sparse unique barcode index).
+
+Results: A2 10× draft→servicing; A3 45× →retired (Jacob chose to include the six recently-active
+holds 0239/0240/0241/0242/0248/0250 after confirming retirements are walk-back-able); A1 SKIPPED —
+0257 was already servicing, not draft (doc assumption stale; Jacob chose to leave it); A4 verify
+all clean (incl. 0243 released — the LED acceptance release); C 4 provenance journal entries;
+D 32/32 barcodes matched the doc VERBATIM, journaled + cleared; D2 42/42 no-barcode journal
+entries. Section B (create record for unregistered unit 52198, serial p054af421052198) SKIPPED per
+Jacob — register manually later. End state: 74 SPUs = 46 retired, 26 servicing, 2 released
+(0202, 0243), zero populated barcodes, all 74 journaled.
+
+Service-flag follow-through (direct DB writes bypass the app hooks): pushed set_service to the v88
+fleet — 0243 (released) → 0, blink stopped = SPU-INV-08 live acceptance PASSED; 0250 (retired)
+returned 404 → it's actually on v83 (handoff's v88 claim stale), recorded unsupported. The other
+retired/serviced units are fw<88 (no LED function) or covered by the syncDevices reconcile.
+
+Approval request unXY0MFkG58pNCy178UY0 is still Pending in BIMS — mark it decided when reviewed.
