@@ -11505,3 +11505,54 @@ Deployment: production — building from the GitHub push to master (Vercel dashb
 Source: branch master @ merge of feat/spu-tweaks
 Retrieve this exact code: git log master --oneline
 What this deployment is for: used-part variants + subassemblies on /parts (SPU-INV-09)
+
+================================================================================
+2026-09-02 — feat/spu-kit-withdrawal — "Withdraw SPU Kit" button on /inventory/transactions
+================================================================================
+Adds a one-click withdrawal of the full standard parts kit consumed by building one SPU.
+
+Why: assembly scans only deduct parts that carry a scannable barcode (-1 per scan in
+/assembly/[sessionId]), so screws, washers, magnets, belts and labels are physically
+consumed on every build but never leave the books. There was no UI path to book them —
+only the agent-facing POST /api/agent/inventory/reassembly, which requires naming each
+part and quantity by hand.
+
+What was built:
+- src/lib/server/services/spu-kit-withdrawal.ts (new). buildSpuKit() flattens the 12
+  components of SPU_COMPONENT_PARTS (curated from WIMF-SPU-01 v18) into one line per
+  distinct part number, summing quantities across components — 50 raw lines collapse to
+  45 distinct parts / 88 units with no unit loss (PT-SPU-030 -> 11, PT-SPU-009 -> 9,
+  PT-SPU-003/004 -> 4 each). previewSpuKit() resolves each line against part_definitions
+  and reports current stock, unresolvable lines, and shortages. withdrawSpuKit() applies
+  the deductions via recordTransaction({ transactionType: 'consumption', spuId, ... }) —
+  the same primitive and notes/AuditLog shape the reassembly endpoint already uses — and
+  writes one AuditLog row (operation: spu_kit_withdrawal) listing withdrawn and skipped.
+- src/lib/server/services/inventory-resolve.ts (new). resolveSpuRef()/resolvePartRef()
+  lifted verbatim out of the reassembly endpoint, which now imports them. These two flows
+  must resolve "SPU 203" and a part number identically; duplicating the rules would have
+  been a silent wrong-unit/wrong-part deduction waiting to happen.
+- /inventory/transactions: load() resolves the kit once (it is identical for every SPU, so
+  the modal renders with no round-trip), lists non-retired SPUs for the picker, and flags
+  which ones already had a kit withdrawn. New withdrawSpuKit action, inventory:write.
+- /inventory/transactions/+page.svelte: header button + confirmation modal showing the
+  full 45-line kit with per-part quantity and stock on hand before committing, then a
+  result view. Added a 'consumption' badge case so the new rows render as red deductions
+  rather than falling through to the default badge.
+
+Behaviour on parts that cannot be deducted (per operator decision): the withdrawal is NOT
+all-or-nothing. Lines with no active part definition are skipped, and the curated
+work-instruction note explaining why is surfaced verbatim — in the pre-withdrawal table
+and again in the result panel. Today that is 7 parts: PT-SPU-056/057/058/059/070/072
+("Not in the inventory system yet") and PT-SPU-104, the 40-tooth pulley WI v18 switched to
+in place of the 20-tooth PT-SPU-017. Shortages do not block either — a negative count
+means the physical count is behind, not that the part wasn't used — but they are flagged
+in red before the operator commits.
+
+Repeat withdrawals are allowed but guarded: SPUs with an existing kit withdrawal are
+marked in the picker and require an explicit acknowledgement checkbox, since one build
+consumes one kit and a second withdrawal doubles the deduction.
+
+npm run check: 10 errors / 434 warnings — unchanged from the SPU-INV-09 baseline; the
+five touched files contribute zero errors and zero warnings.
+
+Not yet deployed — no preview build requested yet.

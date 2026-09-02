@@ -1,13 +1,10 @@
 import { json, error } from '@sveltejs/kit';
-import { connectDB, PartDefinition, Spu, AuditLog } from '$lib/server/db';
+import { connectDB, PartDefinition, AuditLog } from '$lib/server/db';
 import { generateId } from '$lib/server/db/utils.js';
 import { requireAgentApiKey } from '$lib/server/api-auth';
 import { recordTransaction } from '$lib/server/services/inventory-transaction';
+import { resolvePartRef, resolveSpuRef } from '$lib/server/services/inventory-resolve';
 import type { RequestHandler } from './$types';
-
-function escapeRegex(s: string): string {
-	return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
 
 interface PartUsageInput {
 	part: string;
@@ -18,38 +15,6 @@ interface PartUsageInput {
 interface SpuUsageInput {
 	spu: string;
 	parts: PartUsageInput[];
-}
-
-async function resolveSpu(ref: string): Promise<any | { ambiguous: any[] } | null> {
-	const exact = await Spu.findOne({ $or: [{ _id: ref }, { udi: ref }, { barcode: ref }] })
-		.select('_id udi barcode status')
-		.lean();
-	if (exact) return exact;
-
-	// Suffix match so operators can say "SPU 203" or the last-5 of a barcode
-	const suffix = new RegExp(`${escapeRegex(ref)}$`, 'i');
-	const matches = await Spu.find({ $or: [{ udi: suffix }, { barcode: suffix }] })
-		.select('_id udi barcode status')
-		.limit(5)
-		.lean();
-	if (matches.length === 1) return matches[0];
-	if (matches.length > 1) return { ambiguous: matches };
-	return null;
-}
-
-async function resolvePart(ref: string): Promise<any | null> {
-	// Stored barcodes are lowercase; scanners typically emit uppercase.
-	const lc = ref.toLowerCase();
-	const byBarcode = await PartDefinition.findOne({
-		$or: [{ barcode: lc }, { altBarcodes: lc }],
-		isActive: { $ne: false }
-	}).lean();
-	if (byBarcode) return byBarcode;
-	const exact = new RegExp(`^${escapeRegex(ref)}$`, 'i');
-	return (
-		(await PartDefinition.findOne({ partNumber: exact, isActive: { $ne: false } }).lean()) ||
-		(await PartDefinition.findOne({ name: exact, isActive: { $ne: false } }).lean())
-	);
 }
 
 /**
@@ -86,7 +51,7 @@ export const POST: RequestHandler = async ({ request }) => {
 			problems.push(`Each entry needs an "spu" reference and a non-empty "parts" array (got: ${JSON.stringify(entry?.spu)})`);
 			continue;
 		}
-		const spu = await resolveSpu(String(entry.spu).trim());
+		const spu = await resolveSpuRef(String(entry.spu).trim());
 		if (!spu) {
 			problems.push(`SPU not found: "${entry.spu}"`);
 			continue;
@@ -104,7 +69,7 @@ export const POST: RequestHandler = async ({ request }) => {
 				problems.push(`SPU "${entry.spu}": each part needs a "part" reference and a positive integer quantity (got part=${JSON.stringify(p?.part)}, quantity=${JSON.stringify(p?.quantity)})`);
 				continue;
 			}
-			const def = await resolvePart(String(p.part).trim());
+			const def = await resolvePartRef(String(p.part).trim());
 			if (!def) {
 				problems.push(`SPU "${entry.spu}": part not found: "${p.part}" (try the parts lookup to resolve it first)`);
 				continue;
