@@ -11323,3 +11323,9 @@ src/routes/spu/[spuId]/+page.svelte.
 
 npm run check: 11 errors — baseline; 434 warnings (+1 vs yesterday, arrived with the kanban
 KB2-38/39 merges, none in SPU files).
+
+Deployment: production — building from the GitHub push to master (exact deployment in the Vercel
+  dashboard, project bioscale-operations-system-mongodb, commit below)
+Source: branch master @ merge of feat/spu-tweaks (code commit c2e07d37)
+Retrieve this exact code: git checkout feat/spu-tweaks at commit c2e07d37
+What this deployment is for: SPU device journal — free-form append-only log entries on the detail page
