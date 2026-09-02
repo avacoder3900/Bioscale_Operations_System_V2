@@ -11239,3 +11239,8 @@ src/routes/kanban/task/[taskId]/+page.server.ts + .svelte, src/routes/kanban/pla
 +page.server.ts + .svelte, src/routes/kanban/plans/[planId]/+page.server.ts + .svelte,
 docs/prds/KB2-39-chains.md.
 npm run check: 11 errors = baseline, 0 in touched files.
+
+Deployment: preview — Vercel auto-build from branch push (URL in Vercel dashboard Deployments tab)
+Source: branch feat/kanban-capture-modes @ the KB2-39 commit above (git log feat/kanban-capture-modes --oneline)
+Retrieve this exact code: git checkout feat/kanban-capture-modes at that commit
+What this deployment is for: QA of KB2-39 — Tier 1 By-chain view + Process-chain walk, roadmap chain rails, plan ↔ chain link, task-page chain context.
