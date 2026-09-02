@@ -124,6 +124,16 @@ const spuSchema = new Schema({
 		openedBy: operatorRef, openedAt: { type: Date, default: () => new Date() },
 		returnedBy: operatorRef, returnedAt: Date
 	}],
+	// Free-form device journal — append-only diary entries that carry the unit's
+	// story (context the structured fields can't hold). Never edited or deleted
+	// from the UI; corrections are new entries.
+	journal: [{
+		_id: { type: String, default: () => generateId() },
+		text: { type: String, required: true },
+		createdBy: operatorRef,
+		createdAt: { type: Date, default: () => new Date() }
+	}],
+
 	// Validations completed before this instant don't count toward the current
 	// N/3 (set when a serviced device is returned). Prior records are preserved.
 	validationResetAt: Date,

@@ -32,6 +32,10 @@
 	let uploadingCsv = $state(false);
 	let expandedAttachment = $state<string | null>(null);
 
+	// Device journal (SPU-INV-06)
+	let journalText = $state('');
+	let addingJournal = $state(false);
+
 	let showRecordHistory = $state(false);
 	let transitionReason = $state('');
 
@@ -441,6 +445,60 @@
 				</div>
 			</TronCard>
 		</div>
+
+		<!-- Device Journal (SPU-INV-06): free-form, append-only story of the unit -->
+		<TronCard>
+			<h3 class="tron-text-primary mb-1 text-lg font-medium">Journal</h3>
+			<p class="tron-text-muted mb-4 text-sm">
+				Free-form log for this unit's story — observations, quirks, context the structured fields
+				can't hold. Entries are permanent.
+			</p>
+			<form
+				method="POST"
+				action="?/addJournalEntry"
+				use:enhance={() => {
+					addingJournal = true;
+					return async ({ result, update }) => {
+						addingJournal = false;
+						if (result.type === 'success') journalText = '';
+						await update();
+					};
+				}}
+				class="mb-5 space-y-3"
+			>
+				<textarea
+					name="text"
+					class="tron-input w-full"
+					rows="3"
+					maxlength="5000"
+					placeholder="Write a journal entry… (e.g. “Ran hot during June pilot — thermals fine after re-seat, keep an eye on it”)"
+					bind:value={journalText}
+					disabled={addingJournal}
+				></textarea>
+				<div class="flex justify-end">
+					<TronButton type="submit" variant="primary" disabled={addingJournal || !journalText.trim()} style="min-height: 40px;">
+						{addingJournal ? 'Adding…' : 'Add Entry'}
+					</TronButton>
+				</div>
+			</form>
+
+			{#if data.spu.journal.length === 0}
+				<p class="tron-text-muted py-4 text-center text-sm">
+					No entries yet — start this unit's story above.
+				</p>
+			{:else}
+				<div class="space-y-0">
+					{#each data.spu.journal as entry (entry.id)}
+						<div class="border-l-2 border-[var(--color-tron-cyan)] py-3 pl-4">
+							<p class="tron-text-primary text-sm whitespace-pre-wrap">{entry.text}</p>
+							<p class="mt-1 text-xs" style="color: var(--color-tron-cyan); opacity: 0.6;">
+								{entry.createdByName ?? 'Unknown'} · {entry.createdAt ? new Date(entry.createdAt).toLocaleString() : '—'}
+							</p>
+						</div>
+					{/each}
+				</div>
+			{/if}
+		</TronCard>
 
 		{#snippet vitalsPanel()}
 			{#if vitalsDeviceId}

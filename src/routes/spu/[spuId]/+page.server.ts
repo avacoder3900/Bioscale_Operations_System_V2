@@ -104,7 +104,16 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 				openedAt: r.openedAt ?? null,
 				returnedByName: r.returnedBy?.username ?? null,
 				returnedAt: r.returnedAt ?? null
-			}))
+			})),
+			// Newest entry first — entries are pushed chronologically.
+			journal: (s.journal ?? [])
+				.map((j: any) => ({
+					id: j._id,
+					text: j.text ?? '',
+					createdByName: j.createdBy?.username ?? null,
+					createdAt: j.createdAt ?? null
+				}))
+				.reverse()
 		},
 		attachments: (s.attachments ?? []).map((a: any) => {
 			// Parse a capped preview (header + up to 50 rows) for inline viewing.
@@ -274,6 +283,38 @@ export const actions: Actions = {
 		await connectDB();
 		await Spu.updateOne({ _id: params.spuId }, { $unset: { particleLink: '' } });
 		return { success: true };
+	},
+
+	addJournalEntry: async ({ request, locals, params }) => {
+		requirePermission(locals.user, 'spu:write');
+		await connectDB();
+		const form = await request.formData();
+		const text = form.get('text')?.toString().trim();
+		if (!text) return fail(400, { error: 'Journal entry cannot be empty' });
+		if (text.length > 5000) return fail(400, { error: 'Journal entry too long (max 5000 characters)' });
+
+		const spu = await Spu.findById(params.spuId).select('_id').lean();
+		if (!spu) return fail(404, { error: 'SPU not found' });
+
+		const entry = {
+			_id: generateId(),
+			text,
+			createdBy: { _id: locals.user!._id, username: locals.user!.username },
+			createdAt: new Date()
+		};
+		await Spu.updateOne({ _id: params.spuId }, { $push: { journal: entry } });
+
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'spus',
+			recordId: params.spuId,
+			action: 'UPDATE',
+			oldData: {},
+			newData: { journalEntryAdded: entry._id, preview: text.slice(0, 120) },
+			changedBy: locals.user!.username ?? locals.user!._id
+		});
+
+		return { journalSuccess: true };
 	},
 
 	pingDevice: async ({ locals, params }) => {

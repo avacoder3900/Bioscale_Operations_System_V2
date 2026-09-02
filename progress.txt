@@ -11302,3 +11302,24 @@ Deployment: production — Vercel auto-deploy from master push
 Source: branch master @ commit d7c90a20 (fast-forward of feat/kanban-capture-modes)
 Retrieve this exact code: git checkout master at commit d7c90a20
 What this deployment is for: roadmap milestones end their own lane + strip removed, quick-box "# · idea · tags", Commit from the task page, Board columns grow with the page.
+
+================================================================================
+2026-09-02 — feat/spu-tweaks — SPU device journal (SPU-INV-06)
+================================================================================
+docs/prds/SPU-INV-06-device-journal.md written then implemented. New free-form, append-only
+journal[] on the Spu model ({_id nanoid, text, createdBy operatorRef, createdAt}) — diary/log
+entries that carry a unit's story (semantic context the structured fields can't hold). Decision
+over repurposing: ownerNotes is a single overwritable string and serviceRecords notes are
+servicing-scoped, so a dedicated array was cheaper and cleaner. Entries are append-only from the
+UI (no edit/delete — corrections are new entries), matching the record's QMS culture.
+
+New addJournalEntry action on /spu/[spuId] (spu:write, trims, 5000-char cap, audit-logged with
+120-char preview). Load maps journal newest-first. UI: full-width "Journal" card on the Device
+Information tab below the info/status grid — textarea + Add Entry on top, entries below with
+author + timestamp, whitespace preserved. No migration needed (absent array reads as []).
+
+Files: src/lib/server/db/models/spu.ts, src/routes/spu/[spuId]/+page.server.ts,
+src/routes/spu/[spuId]/+page.svelte.
+
+npm run check: 11 errors — baseline; 434 warnings (+1 vs yesterday, arrived with the kanban
+KB2-38/39 merges, none in SPU files).
