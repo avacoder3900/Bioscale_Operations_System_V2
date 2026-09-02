@@ -11366,3 +11366,11 @@ doesn't).
 
 PRD: docs/prds/SPU-INV-07-status-collapse.md (approved by Jacob: manual release, voided removed).
 npm run check: 11 errors / 434 warnings — unchanged baseline, 0 in touched files.
+
+Deployment: production — building from the GitHub push to master (exact deployment in the Vercel
+  dashboard, project bioscale-operations-system-mongodb, commit below)
+Source: branch master @ merge of feat/spu-tweaks (code commit 1cb18312)
+Retrieve this exact code: git checkout feat/spu-tweaks at commit 1cb18312
+What this deployment is for: SPU status flow collapse (SPU-INV-07) — 6-status lifecycle, location
+  field, legal-transition enforcement. Migration migrate-spu-status-collapse.ts --apply run after
+  this deploy went live (see next entry).
