@@ -11244,3 +11244,18 @@ Deployment: preview — Vercel auto-build from branch push (URL in Vercel dashbo
 Source: branch feat/kanban-capture-modes @ the KB2-39 commit above (git log feat/kanban-capture-modes --oneline)
 Retrieve this exact code: git checkout feat/kanban-capture-modes at that commit
 What this deployment is for: QA of KB2-39 — Tier 1 By-chain view + Process-chain walk, roadmap chain rails, plan ↔ chain link, task-page chain context.
+
+2026-09-01 — feat/kanban-capture-modes — KB2-39 browser QA fixes (local dev server + Chrome)
+Browser QA earned its keep again (see the KB2-35 lesson): (1) /kanban/roadmap threw
+"$$props.pinned.map is not a function" — the roadmap load inserted deriveChains() in the MIDDLE
+of the Promise.all array while destructuring it as the LAST element, so `pinned` received the
+chains object and the canvas never mounted ("Loading canvas…" forever). Moved deriveChains() to
+the end of the array. svelte-check cannot catch positional destructuring of a Promise.all.
+(2) Chain rail labels sat at canvas x=12 and were clipped by the opening viewport — each rail
+now anchors to its band's leftmost card (bandRects carry x). (3) KB2-38 quick-box position
+field rendered full-width: .tron-input sets width:100% in unlayered CSS (layout.css), which
+beats Tailwind's layered w-[72px]; replaced with an inline width. Verified live: Tier 1 By-chain
+view + chips + headers, Process-chain modal (walk counter, stop-after-this, estimate field;
+NOT submitted — dev points at prod Atlas), plan detail chain section, roadmap rails.
+Files: src/routes/kanban/roadmap/+page.server.ts, src/lib/components/kanban/roadmap/
+RoadmapCanvas.svelte, src/routes/kanban/inventory/+page.svelte. npm run check: 11 = baseline.

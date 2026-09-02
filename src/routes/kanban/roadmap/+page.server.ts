@@ -22,15 +22,15 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 	const [roadmap, layoutDocs, candidateDocs, chains] = await Promise.all([
 		computeRoadmap(),
-		// KB2-39: bands = chains (milestone DAGs), labeled + linked to plans.
-		deriveChains(),
 		KanbanCanvasLayout.find({}).select('_id x y').lean(),
 		// Chain picker source: everything a new milestone could plausibly wait
 		// on. Done/declined work is excluded — gating on it anchors nothing.
 		KanbanTask.find({ archived: false, status: { $nin: ['done', 'declined'] } })
 			.select('_id trackingNumber title status itemType tags rank')
 			.sort({ rank: 1 })
-			.lean()
+			.lean(),
+		// KB2-39: bands = chains (milestone DAGs), labeled + linked to plans.
+		deriveChains()
 	]);
 
 	return {

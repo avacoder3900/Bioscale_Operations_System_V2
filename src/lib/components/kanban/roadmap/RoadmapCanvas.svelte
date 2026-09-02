@@ -300,7 +300,7 @@
 
 		let y = Y0;
 		const positions = new Map<string, { x: number; y: number }>();
-		const bandRects: { y: number; height: number; key: string; meta: any }[] = [];
+		const bandRects: { y: number; height: number; key: string; meta: any; x: number }[] = [];
 		// Rows are variable-height now (cards grow with their title): assign
 		// tasks to rows greedily by x first, then stack rows by each row's
 		// tallest card. Returns the vertical space consumed.
@@ -327,7 +327,10 @@
 		for (const band of bands) {
 			const used = packInto(band.tasks, y + BAND_PAD + LABEL_H);
 			const height = BAND_PAD * 2 + LABEL_H + used;
-			bandRects.push({ y, height, key: band.key, meta: band.meta });
+			// Rail x = the band's leftmost card, so the label is never clipped by
+			// the opening viewport (which starts just right of canvas x=0).
+			const x = band.tasks.reduce((min, t) => Math.min(min, positions.get(t.id)?.x ?? min), Infinity);
+			bandRects.push({ y, height, key: band.key, meta: band.meta, x: Number.isFinite(x) ? x : 12 });
 			y += height;
 		}
 		// Unwired backlog block (KB2-34 ghosts) — separated, packed by planned date.
@@ -634,7 +637,7 @@
 						{/if}
 						<!-- KB2-39: chain label rail — name · due · buffer · progress · Tier 1 / plan links -->
 						{@const ms = B.meta ? roadmap.milestones.find((m: any) => m.id === B.key) : null}
-						<div style="position:absolute; left:12px; top:{B.y + 6}px; display:flex; gap:12px; align-items:baseline; font-size:13px; white-space:nowrap; color:#94a3b8;">
+						<div style="position:absolute; left:{B.x}px; top:{B.y + 6}px; display:flex; gap:12px; align-items:baseline; font-size:13px; white-space:nowrap; color:#94a3b8;">
 							<span style="font-weight:800; letter-spacing:0.06em; color:{B.meta ? (B.meta.kind === 'milestone' ? '#e2e8f0' : '#94a3b8') : '#94a3b8'};">
 								{B.meta ? B.meta.name.toUpperCase() : 'WIRED'}
 							</span>
