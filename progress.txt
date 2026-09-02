@@ -11514,3 +11514,8 @@ next number in the iteration line (PT-SPU-NNN / SBA-SPU-NNN); clicking fills the
 server-side over ALL spu parts (incl. retired/no-cost) so suggestions never collide; zero-padding
 width follows the existing convention. Files: src/routes/parts/+page.server.ts (+nextPartNumbers),
 +page.svelte. npm run check: 10 errors / 434 warnings — baseline.
+
+Deployment: production — building from the GitHub push to master (Vercel dashboard, commit below)
+Source: branch master @ merge of feat/spu-tweaks
+Retrieve this exact code: git log master --oneline
+What this deployment is for: next-part-number ⚡ suggest buttons on /parts forms
