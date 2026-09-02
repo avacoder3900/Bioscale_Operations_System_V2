@@ -11264,3 +11264,21 @@ Deployment: production — Vercel auto-deploy from master push
 Source: branch master @ commit 5f1dc318 (fast-forward of feat/kanban-capture-modes)
 Retrieve this exact code: git checkout master at commit 5f1dc318
 What this deployment is for: KB2-39 chains live — Tier 1 By-chain view + Process-chain walk, roadmap chain rails, plan ↔ chain link, task-page chain context, MCP 3.5.0 snapshot chain field; plus the browser-QA fixes.
+
+================================================================================
+2026-09-02 — feat/kanban-capture-modes — Roadmap: milestones end their own lane; strip removed; quick-box "# · idea · tags"
+================================================================================
+Jacob (screenshot): milestones were clustered in a top strip above the bands; the milestone
+card strip above the canvas cluttered the UI; the KB2-38 position field sat on a second row.
+(1) RoadmapCanvas timeline: each chain band now packs its milestone as the LAST item of its
+own lane — a milestone-sized pseudo-item centred on its due-date line, sorted by date with the
+cards so the greedy row packing still works when a chain runs past its date; packInto is
+milestone-aware (MILE_W/MILE_H). Milestones with no band on the map (no open tasks / all
+hidden) fall back to the old top strip so nothing is lost. (2) roadmap/+page.svelte: the
+milestone card strip (+ "not reachable" note) is deleted — the band rails already carry due +
+buffer; the "+ Milestone" button moved into the canvas toolbar via a new `onnewmilestone`
+prop (opens the same modal). Empty state (no milestones) unchanged. Unscheduled/cycle warnings
+kept. (3) inventory quick box: position field is first and inline — "# · idea · tags ·
+Capture · Detailed…" — 64px wide. Verified live on the dev server. Files:
+src/lib/components/kanban/roadmap/RoadmapCanvas.svelte, src/routes/kanban/roadmap/+page.svelte,
+src/routes/kanban/inventory/+page.svelte. npm run check: 11 = baseline.

@@ -389,6 +389,18 @@
 
 	<!-- Capture box: one line is enough -->
 	<form method="POST" action="?/capture" class="flex flex-wrap items-center gap-2" use:enhance={submitEnhance}>
+		<!-- KB2-38: optional slot in the Tier 1 order; blank = bottom -->
+		<input
+			name="position"
+			type="number"
+			min="1"
+			step="1"
+			class="tron-input"
+			style="width: 64px; flex: 0 0 auto;"
+			placeholder="#"
+			title="Position in Tier 1 (1 = top). Blank = bottom (#{data.tasks.filter((t: TaskRow) => t.status === 'captured' || t.status === 'processed').length + 1})"
+			autocomplete="off"
+		/>
 		<div class="min-w-[240px] flex-1">
 			<TronInput name="title" placeholder="Capture an option — one line is enough" required />
 		</div>
@@ -427,18 +439,6 @@
 				</div>
 			{/if}
 		</div>
-		<!-- KB2-38: optional slot in the Tier 1 order; blank = bottom -->
-		<input
-			name="position"
-			type="number"
-			min="1"
-			step="1"
-			class="tron-input"
-			style="width: 84px; flex: 0 0 auto;"
-			placeholder="#"
-			title="Position in Tier 1 (1 = top). Blank = bottom (#{data.tasks.filter((t: TaskRow) => t.status === 'captured' || t.status === 'processed').length + 1})"
-			autocomplete="off"
-		/>
 		<TronButton type="submit" variant="primary" disabled={submitting}>Capture</TronButton>
 		<!-- KB2-38: detailed capture — the whole item, and where it lands -->
 		<a

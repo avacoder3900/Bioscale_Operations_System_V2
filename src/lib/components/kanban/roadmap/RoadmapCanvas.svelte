@@ -33,12 +33,15 @@
 	let {
 		roadmap,
 		pinned,
-		chains = null
+		chains = null,
+		onnewmilestone = null
 	}: {
 		roadmap: any;
 		pinned: { _id: string; x: number; y: number }[];
 		/** KB2-39: deriveChains() result — bands group by primary chain, labeled + linked. */
 		chains?: { chains: any[]; byTask: Record<string, any> } | null;
+		/** Opens the page's new-milestone modal from the canvas toolbar (the strip above is gone). */
+		onnewmilestone?: (() => void) | null;
 	} = $props();
 
 	const nodeTypes = { task: TaskNode, milestone: MilestoneNode };
@@ -309,11 +312,18 @@
 			const rowMaxH: number[] = [];
 			const placed: { id: string; x: number; row: number }[] = [];
 			for (const t of tasks) {
-				const x = xOf(new Date(timelineDateOf(t) + 'T00:00:00').getTime());
+				// A milestone rides its band like a card: centred on its due-date
+				// line, milestone-sized, so it sits at the END of its own lane.
+				const mile = t.__mile === true;
+				const x = mile
+					? xOf(new Date(t.dueDate + 'T00:00:00').getTime()) - MILE_W / 2
+					: xOf(new Date(timelineDateOf(t) + 'T00:00:00').getTime());
+				const w = mile ? MILE_W : TASK_W;
+				const h = mile ? MILE_H : heightOf(t);
 				let row = rowEnds.findIndex((e) => e <= x);
 				if (row === -1) { row = rowEnds.length; rowEnds.push(0); rowMaxH.push(0); }
-				rowEnds[row] = x + TASK_W + 24;
-				rowMaxH[row] = Math.max(rowMaxH[row], heightOf(t));
+				rowEnds[row] = x + w + 24;
+				rowMaxH[row] = Math.max(rowMaxH[row], h);
 				placed.push({ id: t.id, x, row });
 			}
 			const rowY: number[] = [];
@@ -324,8 +334,15 @@
 		};
 		// KB2-39: a label rail sits above each band's cards.
 		const LABEL_H = 26;
+		const dateOfItem = (t: any): string => (t.__mile ? t.dueDate : timelineDateOf(t));
 		for (const band of bands) {
-			const used = packInto(band.tasks, y + BAND_PAD + LABEL_H);
+			// The chain's milestone ends its own lane (Jacob 2026-09-02) instead of
+			// clustering in a top strip. Sorted by date with the cards so the
+			// greedy row packing still works when a chain runs past its date.
+			const m = band.meta?.kind === 'milestone' ? graph.milestoneRows.find((x: any) => x.id === band.key) : null;
+			const items = m ? [...band.tasks, { __mile: true, id: m.id, dueDate: m.dueDate }] : band.tasks;
+			items.sort((a: any, b: any) => dateOfItem(a).localeCompare(dateOfItem(b)));
+			const used = packInto(items, y + BAND_PAD + LABEL_H);
 			const height = BAND_PAD * 2 + LABEL_H + used;
 			// Rail x = the band's leftmost card, so the label is never clipped by
 			// the opening viewport (which starts just right of canvas x=0).
@@ -341,8 +358,9 @@
 		const unwiredUsed = parkedSorted.length ? packInto(parkedSorted, unwiredY + BAND_PAD) : 0;
 		const totalH = parkedSorted.length ? unwiredY + BAND_PAD * 2 + unwiredUsed : y;
 
-		// Milestones stay in the top strip.
-		graph.milestoneRows.forEach((m: any, i: number) => {
+		// Milestones with no band on this map (no open chain tasks, or all hidden)
+		// fall back to the top strip so they are never lost.
+		graph.milestoneRows.filter((m: any) => !positions.has(m.id)).forEach((m: any, i: number) => {
 			positions.set(m.id, {
 				x: xOf(new Date(m.dueDate + 'T00:00:00').getTime()) - MILE_W / 2,
 				y: Y0 - MILE_H - 10 - (i % 2) * 30
@@ -565,6 +583,14 @@
 					title="Open tasks wired into no milestone chain — ghosted on the map; open one and add dependencies to wire it in">
 					{roadmap.parked.length} unwired
 				</span>
+			{/if}
+			{#if onnewmilestone}
+				<button
+					type="button"
+					onclick={() => onnewmilestone?.()}
+					class="rounded border border-dashed border-[var(--color-tron-border)] px-2 py-0.5 text-[11px] tron-text-muted transition-colors hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]"
+					title="Add a dated milestone and wire the chain it waits on"
+				>◆ + Milestone</button>
 			{/if}
 		</div>
 		<div class="flex items-center gap-3 text-xs">

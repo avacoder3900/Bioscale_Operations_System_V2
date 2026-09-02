@@ -99,7 +99,8 @@
 		<div class="rounded border border-emerald-500/40 bg-emerald-900/15 p-2 text-xs text-emerald-300">{successMsg}</div>
 	{/if}
 
-	<!-- ============ Compact milestone strip (KB2-35 — cards collapsed) ============ -->
+	<!-- The milestone strip is gone (Jacob 2026-09-02): milestones live at the end of their
+	     chain band on the canvas, and the rail carries due/buffer. Only the empty state remains. -->
 	{#if data.roadmap.milestones.length === 0}
 		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-6 text-sm tron-text-muted">
 			<p>
@@ -114,36 +115,6 @@
 				<span class="font-mono text-[var(--color-tron-cyan)]">kanban_file_plan</span>, and the milestones
 				arrive already chained.
 			</p>
-		</div>
-	{:else}
-		<div class="flex flex-wrap items-center gap-2">
-			{#each data.roadmap.milestones as m (m.id)}
-				<a
-					href="/kanban/task/{m.id}"
-					class="flex items-center gap-2 rounded-lg border px-3 py-1.5 text-sm transition-all hover:bg-[var(--color-tron-bg-tertiary)] {m.feasible ? 'border-[var(--color-tron-border)]' : 'border-red-500/60'}"
-					title={`${m.title}
-due ${m.dueDate} · projected ${m.projectedFinish}${m.clampFinish && m.clampFinish > m.cpmFinish ? ' (capacity-limited)' : ''}
-${Math.round(m.chainPctByDays * 100)}% of chain done · ${m.daysLeft} wd left${m.feasible ? '' : '\nNOT REACHABLE at current pace — cut scope, add capacity, or move the date'}`}
-				>
-					<span style="color: {m.feasible ? '#34d399' : '#f87171'};">◆</span>
-					<span class="tron-text-primary font-bold">{m.title.replace(/^MILESTONE:\s*/i, '')}</span>
-					<span class="font-mono text-xs tron-text-muted">{fmt(m.dueDate)}</span>
-					<span class="rounded px-1.5 py-0.5 text-xs font-bold {m.feasible ? (m.bufferDays <= 5 ? 'bg-yellow-900/40 text-yellow-300' : 'bg-emerald-900/40 text-emerald-300') : 'bg-red-900/50 text-red-300'}">
-						{m.feasible ? `+${m.bufferDays} wd` : `${m.bufferDays} wd ⚠`}
-					</span>
-				</a>
-			{/each}
-			<button
-				type="button"
-				onclick={openNew}
-				class="flex items-center gap-1.5 rounded-lg border border-dashed border-[var(--color-tron-border)] px-3 py-1.5 text-sm tron-text-muted transition-all hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]"
-				title="Add a dated milestone and wire the chain it waits on"
-			>
-				<span>＋</span><span>Milestone</span>
-			</button>
-			{#if data.roadmap.milestones.some((m: any) => !m.feasible)}
-				<span class="text-xs text-red-300">⚠ not reachable at current pace — cut scope, add capacity, or move the date</span>
-			{/if}
 		</div>
 	{/if}
 
@@ -163,7 +134,7 @@ ${Math.round(m.chainPctByDays * 100)}% of chain done · ${m.daysLeft} wd left${m
 	{#if data.roadmap.milestones.length > 0}
 		<div style="margin-left: calc(50% - 50vw); margin-right: calc(50% - 50vw);">
 			{#if mounted}
-				<RoadmapCanvas roadmap={data.roadmap} chains={data.chains} pinned={data.pinned} />
+				<RoadmapCanvas roadmap={data.roadmap} chains={data.chains} pinned={data.pinned} onnewmilestone={openNew} />
 			{:else}
 				<div class="flex h-[78vh] min-h-[520px] items-center justify-center border-y border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] text-sm tron-text-muted">
 					Loading canvas…
