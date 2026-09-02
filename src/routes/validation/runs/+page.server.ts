@@ -7,9 +7,9 @@ import {
 import type { Actions, PageServerLoad } from './$types';
 
 // Any SPU is selectable for a run (same scope as the thermocouple page's
-// SPU dropdown); only voided/retired units are excluded.
+// SPU dropdown); only retired units are excluded.
 const ROSTER_QUERY = {
-	status: { $nin: ['voided', 'retired'] }
+	status: { $ne: 'retired' }
 };
 
 function activeMembers(run: any): any[] {

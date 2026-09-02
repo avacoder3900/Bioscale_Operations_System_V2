@@ -581,7 +581,7 @@
 													style="min-height: 44px;"
 												>
 													{#each data.returnableStatuses as status (status)}
-														<option value={status} selected={status === (member.previousStatus ?? 'validated')}>
+														<option value={status} selected={status === (member.previousStatus ?? 'validating')}>
 															{status}
 														</option>
 													{/each}

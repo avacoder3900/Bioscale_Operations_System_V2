@@ -104,10 +104,24 @@ export const actions: Actions = {
 				'signature.meaning': meaning,
 				'signature.signedAt': new Date(),
 				assemblyStatus: 'completed',
-				status: 'assembled'
+				// Border status collapsed (SPU-INV-07): the e-signature marks the
+				// assembling → validating transition; assemblyStatus carries "done".
+				status: 'validating'
 			};
 
-			await Spu.updateOne({ _id: s.spuId }, { $set: assemblyData });
+			await Spu.updateOne({ _id: s.spuId }, {
+				$set: assemblyData,
+				$push: {
+					statusTransitions: {
+						_id: generateId(),
+						from: 'assembling',
+						to: 'validating',
+						changedBy: { _id: locals.user!._id, username: locals.user!.username },
+						changedAt: new Date(),
+						reason: 'assembly_completed_signed'
+					}
+				}
+			});
 		}
 
 		await AuditLog.create({

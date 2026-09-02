@@ -1,6 +1,9 @@
 import { fail } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
 import { connectDB, Spu, ServiceRecord, ServiceGroup, AuditLog, generateId } from '$lib/server/db';
+// Statuses a unit can be handed back to once its service job closes —
+// shared vocabulary from the SPU-INV-07 collapse.
+import { RETURNABLE_STATUSES } from '$lib/server/spu-status';
 import type { Actions, PageServerLoad, RequestEvent } from './$types';
 
 /**
@@ -35,20 +38,6 @@ async function writeAudit(
 const SERVICE_TYPES = ['inspection', 'calibration', 'repair', 'part-replacement', 'other'];
 const PRIORITIES = ['low', 'normal', 'high'];
 const FINDING_OUTCOMES = ['ok', 'issue', 'rework', 'blocked'];
-
-/** Statuses a unit can be handed back to once its service job closes. */
-const RETURNABLE_STATUSES = [
-	'draft',
-	'assembling',
-	'assembled',
-	'validating',
-	'validated',
-	'released-rnd',
-	'released-manufacturing',
-	'released-field',
-	'deployed',
-	'retired'
-];
 
 /** SPU-0244 style label built from the last 4 characters of the unit's UDI. */
 function extractShortId(udi: string): string {
@@ -164,7 +153,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		ServiceRecord.find({ status: 'open' }).sort({ openedAt: 1 }).lean(),
 		ServiceRecord.find({ status: 'closed' }).sort({ closedAt: -1 }).limit(15).lean(),
 		Spu.find({ status: 'servicing' }).select('udi barcode status assignment owner parts').lean(),
-		Spu.find({ status: { $ne: 'voided' } })
+		Spu.find({})
 			.select('udi barcode status assignment owner')
 			.sort({ udi: 1 })
 			.lean(),
@@ -1265,11 +1254,13 @@ export const actions: Actions = {
 		if (!record) return fail(404, { error: 'Service record not found' });
 		if (record.status !== 'open') return fail(400, { error: 'That service job is already closed' });
 
-		const returnTo = RETURNABLE_STATUSES.includes(returnToRaw)
+		// Fallback is 'validating' (SPU-INV-07): re-validation is the safe
+		// default when the stored previousStatus is unusable.
+		const returnTo = (RETURNABLE_STATUSES as string[]).includes(returnToRaw)
 			? returnToRaw
-			: RETURNABLE_STATUSES.includes(record.previousStatus)
+			: (RETURNABLE_STATUSES as string[]).includes(record.previousStatus)
 				? record.previousStatus
-				: 'validated';
+				: 'validating';
 
 		const spu: any = await Spu.findById(record.spuId).lean();
 		if (spu?.finalizedAt) return fail(400, { error: 'SPU is finalized' });
@@ -1365,11 +1356,11 @@ export const actions: Actions = {
 			// Each unit returns to ITS own previous status unless the form names
 			// one explicitly - units pulled from different states shouldn't all be
 			// forced into the same lifecycle bucket by a bulk close.
-			const returnTo = RETURNABLE_STATUSES.includes(returnToRaw)
+			const returnTo = (RETURNABLE_STATUSES as string[]).includes(returnToRaw)
 				? returnToRaw
-				: RETURNABLE_STATUSES.includes(record.previousStatus)
+				: (RETURNABLE_STATUSES as string[]).includes(record.previousStatus)
 					? record.previousStatus
-					: 'validated';
+					: 'validating';
 
 			await ServiceRecord.updateOne(
 				{ _id: record._id },

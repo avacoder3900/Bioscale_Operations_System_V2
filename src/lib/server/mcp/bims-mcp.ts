@@ -224,7 +224,7 @@ async function callAgentApi(
 export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 	// Version bump signals clients (claude.ai caches connector tool lists) that
 	// the toolset changed — bump on every tool add/remove/rename.
-	const server = new McpServer({ name: 'bims-operations', version: '3.5.0' });
+	const server = new McpServer({ name: 'bims-operations', version: '3.5.1' });
 
 	// ---------------------------------------------------------------- meta
 
@@ -746,8 +746,8 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 		'list_spus',
 		{ annotations: READ_ONLY,
 			description:
-				'List SPUs with optional filters and a status breakdown. Filter by lifecycle status (draft, assembling, assembled, ' +
-				'validating, validated, released-manufacturing, deployed, servicing, retired, voided), batch (id or batchNumber), ' +
+				'List SPUs with optional filters and a status breakdown. Filter by lifecycle status (draft, assembling, ' +
+				'validating, released, servicing, retired), batch (id or batchNumber), ' +
 				'or customer name. Newest first.',
 			inputSchema: z.object({
 				status: z.string().optional().describe('Lifecycle status to filter by.'),

@@ -7,6 +7,7 @@ import {
 	OpentronsRobot, WaxFillingRun, ReagentBatchRecord, AssayDefinition, PartDefinition, BackingLot
 } from '$lib/server/db';
 import { getCheckedOutCartridgeIds } from '$lib/server/checkout-utils';
+import { isSpuStatus, isLegalTransition } from '$lib/server/spu-status';
 import { WAX_FILLING_ACTIVE } from '$lib/server/manufacturing/run-statuses';
 import { WAX_STAGE_STATUSES } from '$lib/shared/cartridge-wax-status';
 import type { Actions, PageServerLoad } from './$types';
@@ -559,7 +560,9 @@ export const actions: Actions = {
 			}
 		}
 
-		await Spu.updateOne({ _id: spuId }, { $set: { assignment, status: 'assigned' } });
+		// Assignment is not a lifecycle status (SPU-INV-07 removed the rogue
+		// out-of-enum 'assigned' write that used to ride along here).
+		await Spu.updateOne({ _id: spuId }, { $set: { assignment } });
 		return { assignSuccess: true };
 	},
 
@@ -577,12 +580,14 @@ export const actions: Actions = {
 		const newStatus = form.get('status')?.toString();
 		if (!spuId || !newStatus) return fail(400, { error: 'SPU ID and status required' });
 
-		const validStatuses = ['draft', 'assembling', 'assembled', 'validating', 'validated', 'assigned', 'deployed', 'servicing', 'retired', 'voided'];
-		if (!validStatuses.includes(newStatus)) return fail(400, { error: 'Invalid status' });
+		if (!isSpuStatus(newStatus)) return fail(400, { error: 'Invalid status' });
 
 		const spu = await Spu.findById(spuId);
 		if (!spu) return fail(404, { error: 'SPU not found' });
 		if ((spu as any).finalizedAt) return fail(400, { error: 'SPU is finalized' });
+		if (!isLegalTransition((spu as any).status ?? 'draft', newStatus)) {
+			return fail(400, { error: `Illegal transition: ${(spu as any).status ?? 'draft'} → ${newStatus}` });
+		}
 
 		await Spu.updateOne({ _id: spuId }, { $set: { status: newStatus } });
 

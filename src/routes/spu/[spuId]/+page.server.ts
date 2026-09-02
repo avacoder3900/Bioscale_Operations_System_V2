@@ -5,6 +5,7 @@ import {
 	ElectronicSignature, AuditLog, ParticleDevice, ValidationSession, generateId
 } from '$lib/server/db';
 import { byId } from '$lib/server/db/native-helpers';
+import { isLegalTransition, LEGAL_TRANSITIONS, normalizeSpuStatus } from '$lib/server/spu-status';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals, params }) => {
@@ -61,6 +62,7 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 			udi: s.udi,
 			barcode: s.barcode ?? null,
 			status: s.status ?? 'draft',
+			location: s.location ?? null,
 			deviceState: s.deviceState ?? '',
 			owner: s.owner ?? null,
 			ownerNotes: s.ownerNotes ?? null,
@@ -105,6 +107,8 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 				returnedByName: r.returnedBy?.username ?? null,
 				returnedAt: r.returnedAt ?? null
 			})),
+			// Where this unit may legally transition next (drives the dropdown).
+			legalNextStatuses: LEGAL_TRANSITIONS[normalizeSpuStatus(s.status)],
 			// Newest entry first — entries are pushed chronologically.
 			journal: (s.journal ?? [])
 				.map((j: any) => ({
@@ -432,7 +436,7 @@ export const actions: Actions = {
 		return { deleteSuccess: true };
 	},
 
-	// updateAssignment removed — release status (released-rnd/manufacturing/field) via transitionStatus
+	// updateAssignment removed — releasing is a validating → released transitionStatus call
 
 	updateAssemblyStatus: async ({ request, locals, params }) => {
 		requirePermission(locals.user, 'spu:write');
@@ -471,7 +475,9 @@ export const actions: Actions = {
 					signedAt: new Date()
 				};
 			}
-			updates.status = 'assembled';
+			// Border status collapsed (SPU-INV-07): completing assembly moves the
+			// unit into validation; assemblyStatus records that assembly is done.
+			updates.status = 'validating';
 		}
 
 		await Spu.updateOne({ _id: params.spuId }, { $set: updates });
@@ -537,6 +543,11 @@ export const actions: Actions = {
 
 		const oldStatus = (spu as any).status ?? 'draft';
 		if (oldStatus === newStatus) return fail(400, { error: 'Status is already ' + newStatus });
+		// App-level enforcement — the schema enum can't do it (updateOne skips
+		// validators). This action is the UI's only generic status writer.
+		if (!isLegalTransition(oldStatus, newStatus)) {
+			return fail(400, { error: `Illegal transition: ${oldStatus} → ${newStatus}` });
+		}
 
 		const transition = {
 			_id: generateId(),

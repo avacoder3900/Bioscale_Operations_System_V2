@@ -404,51 +404,8 @@ export const actions: Actions = {
 		return { success: true, spuId };
 	},
 
-	markValidated: async ({ request, locals, params }) => {
-		requirePermission(locals.user, 'spu:write');
-		await connectDB();
-
-		const run = await loadRun(params.runId);
-		const form = await request.formData();
-		const spuId = form.get('spuId')?.toString();
-		if (!spuId) return fail(400, { error: 'Missing SPU' });
-		const member = activeMember(run, spuId);
-		if (!member) return fail(400, { error: 'SPU is not an active member of this run', spuId });
-
-		const spu = await Spu.findById(spuId).lean() as any;
-		if (!spu) return fail(404, { error: 'SPU not found', spuId });
-		if (spu.finalizedAt) return fail(400, { error: 'SPU is finalized', spuId });
-		if (spu.status !== 'validating') {
-			return fail(400, { error: `SPU status is ${spu.status ?? 'unset'}, expected validating`, spuId });
-		}
-
-		// Same shape as the SPU detail page's transitionStatus action
-		const transition = {
-			_id: generateId(),
-			from: spu.status,
-			to: 'validated',
-			changedBy: { _id: locals.user!._id, username: locals.user!.username },
-			changedAt: new Date(),
-			reason: `All validation-run steps passed (${run.runNumber})`
-		};
-		await Spu.updateOne(
-			{ _id: spuId },
-			{ $set: { status: 'validated' }, $push: { statusTransitions: transition } }
-		);
-
-		await AuditLog.create({
-			_id: generateId(),
-			tableName: 'spus',
-			recordId: spuId,
-			action: 'UPDATE',
-			oldData: { status: spu.status },
-			newData: { status: 'validated', reason: transition.reason },
-			changedAt: new Date(),
-			changedBy: locals.user!.username
-		});
-
-		return { success: true, spuId, validated: true };
-	},
+	// markValidated removed (SPU-INV-07): 'validated' collapsed away and release
+	// is a manual validating → released transition on the SPU detail page.
 
 	completeRun: async ({ locals, params }) => {
 		requirePermission(locals.user, 'spu:write');

@@ -59,8 +59,8 @@ export function createBimsMcpServer(): McpServer {
 			title: 'List SPUs',
 			description:
 				'List SPUs with optional filters and a status breakdown. Filter by lifecycle status ' +
-				'(e.g. draft, assembling, assembled, validating, validated, released-manufacturing, ' +
-				'deployed, servicing, retired, voided), by batch (id or batchNumber), or by customer name. ' +
+				'(draft, assembling, validating, released, servicing, retired), ' +
+				'by batch (id or batchNumber), or by customer name. ' +
 				'Returns up to `limit` SPUs (default 25, max 100), newest first.',
 			inputSchema: {
 				status: z.string().optional().describe('Lifecycle status to filter by.'),

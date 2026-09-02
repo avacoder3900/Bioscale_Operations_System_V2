@@ -29,8 +29,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 	const candidateSpus = await Spu.find({
 		'statusTransitions.reason': 'auto_created_assembly_tab',
-		finalizedAt: null,
-		voidedAt: null
+		finalizedAt: null
 	})
 		.sort({ createdAt: -1 })
 		.limit(50)

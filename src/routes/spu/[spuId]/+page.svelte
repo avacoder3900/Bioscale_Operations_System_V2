@@ -111,14 +111,12 @@
 		}).length
 	);
 
-	const STATUS_OPTIONS = [
-		'draft', 'assembling', 'assembled', 'validating', 'validated',
-		'released-rnd', 'released-manufacturing', 'released-field',
-		'deployed', 'servicing', 'retired', 'voided'
-	] as const;
+	// Only transitions legal from the current status (SPU-INV-07), server-computed.
+	const STATUS_OPTIONS = $derived(data.spu.legalNextStatuses ?? []);
 
+	// Includes legacy (pre-collapse) values so the transition history renders.
 	function statusColor(status: string): string {
-		if (['released-rnd', 'released-manufacturing', 'released-field', 'deployed'].includes(status)) return 'var(--color-tron-green)';
+		if (['released', 'released-rnd', 'released-manufacturing', 'released-field', 'deployed'].includes(status)) return 'var(--color-tron-green)';
 		if (['assembling', 'assembled'].includes(status)) return 'var(--color-tron-cyan)';
 		if (['validating', 'validated'].includes(status)) return 'var(--color-tron-yellow, #fbbf24)';
 		if (status === 'servicing') return 'var(--color-tron-orange, #f97316)';
@@ -280,6 +278,10 @@
 							{:else}
 								<dd class="tron-text-primary font-mono">{data.spu.barcode ?? '—'}</dd>
 							{/if}
+						</div>
+						<div class="flex justify-between {editingIdentifiers ? 'opacity-40' : ''}">
+							<dt class="tron-text-muted">Location</dt>
+							<dd class="tron-text-primary">{data.spu.location ?? '—'}</dd>
 						</div>
 						<div class="flex justify-between {editingIdentifiers ? 'opacity-40' : ''}">
 							<dt class="tron-text-muted">Batch</dt>

@@ -65,21 +65,8 @@
 		}
 	}
 
-	// Status sorts in lifecycle order, not alphabetically.
-	const STATUS_ORDER = [
-		'draft',
-		'assembling',
-		'assembled',
-		'validating',
-		'validated',
-		'released-rnd',
-		'released-manufacturing',
-		'released-field',
-		'deployed',
-		'servicing',
-		'retired',
-		'voided'
-	];
+	// Status sorts in lifecycle order, not alphabetically (SPU-INV-07 vocabulary).
+	const STATUS_ORDER = ['draft', 'assembling', 'validating', 'released', 'servicing', 'retired'];
 
 	function sortValue(s: Row, key: SortKey): string | number | null {
 		switch (key) {

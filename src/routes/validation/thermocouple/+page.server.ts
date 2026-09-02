@@ -10,7 +10,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 	// Load SPUs for dropdown
 	const spus = await Spu.find({
-		status: { $nin: ['voided', 'retired'] }
+		status: { $ne: 'retired' }
 	})
 		.select('_id udi status validation.thermocouple.status')
 		.sort({ udi: 1 })

@@ -11329,3 +11329,40 @@ Deployment: production — building from the GitHub push to master (exact deploy
 Source: branch master @ merge of feat/spu-tweaks (code commit c2e07d37)
 Retrieve this exact code: git checkout feat/spu-tweaks at commit c2e07d37
 What this deployment is for: SPU device journal — free-form append-only log entries on the detail page
+
+================================================================================
+2026-09-02 — feat/spu-tweaks — SPU status flow collapse (SPU-INV-07)
+================================================================================
+The 12-status SPU enum collapsed to 6: draft → assembling → validating → released ⇄ servicing →
+retired. Jacob's framing: border statuses become transition moments — the assembly e-signature now
+marks assembling→validating (assemblyStatus keeps "completed"); passing validation is the event
+that qualifies a unit for release, and RELEASE IS MANUAL (validating→released via transitionStatus
+on the detail page — run page's Mark Validated button replaced by "all steps passed ✓ / Release on
+SPU page →" and its markValidated action deleted). R&D is a location, not a status: new
+spu.location field, shown on the detail page.
+
+New src/lib/server/spu-status.ts is the single source of truth (SPU_STATUSES, LEGAL_TRANSITIONS,
+RETURNABLE_STATUSES, LEGACY_STATUS_MAP, isLegalTransition) — app-level enforcement because nearly
+all status writes are updateOne, which SKIPS Mongoose enum validators (how the rogue 'assigned'
+write survived). transitionStatus and dashboard updateStatus now validate transitions; assignSpu no
+longer writes status at all. Detail-page dropdown offers only legal next statuses (server-computed
+legalNextStatuses). Servicing board: shared RETURNABLE_STATUSES, close-ladder fallback
+'validated'→'validating', UI default likewise; behavior otherwise unchanged. Deleted the orphaned
+/spu/servicing/** ticket routes (3 server files, pages were deleted long ago; they hard-coded 6
+dead statuses and wrote unvalidated form input into spu.status). SpuStatusBadge keeps legacy keys
+as render-only aliases so the immutable statusTransitions history displays; statusColor likewise.
+Both MCP list_spus descriptions updated (bims-mcp version bumped 3.5.0→3.5.1 per convention, kanban
+tools untouched); voided dropped from validation/servicing picker filters; batches page drops the
+status==='assembled' fallback; seed-domain-data statuses rewritten; voidedAt/voidReason removed
+from the Spu schema (nothing wrote them; assembly candidate query filter cleaned).
+
+Data (scripts/diag-spu-statuses.ts): 73 SPUs — draft 37, servicing 26, released-rnd 8, retired 1,
+validating 1; zero devices in any other removed status. Migration
+scripts/migrate-spu-status-collapse.ts (dry-run/apply, idempotent): 8 spus released-rnd →
+{status released, location R&D}; 14 service_records.previousStatus released-rnd → released;
+statusTransitions history untouched (55 legacy entries render via badge aliases). Deploy order:
+code → production deploy → migration --apply (new code degrades safely on old data; reverse
+doesn't).
+
+PRD: docs/prds/SPU-INV-07-status-collapse.md (approved by Jacob: manual release, voided removed).
+npm run check: 11 errors / 434 warnings — unchanged baseline, 0 in touched files.

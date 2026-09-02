@@ -83,7 +83,14 @@ const spuSchema = new Schema({
 		assignedAt: Date, assignedBy: operatorRef
 	},
 
-	status: { type: String, enum: ['draft', 'assembling', 'assembled', 'validating', 'validated', 'released-rnd', 'released-manufacturing', 'released-field', 'deployed', 'servicing', 'retired', 'voided'] },
+	// Collapsed lifecycle (SPU-INV-07): draft → assembling → validating →
+	// released ⇄ servicing → retired. The vocabulary + legal-transition table
+	// live in src/lib/server/spu-status.ts — keep this enum in sync with it.
+	// NOTE: updateOne skips enum validators; app code enforces via that module.
+	status: { type: String, enum: ['draft', 'assembling', 'validating', 'released', 'servicing', 'retired'] },
+	// Physical/organizational location, not lifecycle ("R&D" etc.) — what the
+	// old released-rnd status encoded. Free-form for now.
+	location: String,
 	statusTransitions: [{
 		_id: { type: String, default: () => generateId() },
 		from: String,
@@ -139,8 +146,6 @@ const spuSchema = new Schema({
 	validationResetAt: Date,
 
 	finalizedAt: Date,
-	voidedAt: Date,
-	voidReason: String,
 	corrections: [correctionSchema],
 	createdBy: String,
 	owner: String,

@@ -438,14 +438,12 @@
 						<td class="p-3">
 							<span class="tron-heading font-medium">{passedCount(member)}/{run.steps.length}</span>
 							{#if allPassed(member) && data.spuById[member.spuId]?.status === 'validating'}
-								<form method="POST" action="?/markValidated" use:enhance class="mt-1">
-									<input type="hidden" name="spuId" value={member.spuId} />
-									<button type="submit" class="rounded-lg bg-[var(--color-tron-green)] px-3 py-1.5 text-xs font-semibold text-[var(--color-tron-bg-primary)] hover:bg-[var(--color-tron-green)]/90">
-										Mark validated
-									</button>
-								</form>
-							{:else if data.spuById[member.spuId]?.status === 'validated'}
-								<span class="block text-xs text-[var(--color-tron-green)]">validated ✓</span>
+								<span class="block text-xs text-[var(--color-tron-green)]">all steps passed ✓</span>
+								<a href="/spu/{member.spuId}" class="block text-xs text-[var(--color-tron-cyan)] hover:underline">
+									Release on SPU page →
+								</a>
+							{:else if data.spuById[member.spuId]?.status === 'released'}
+								<span class="block text-xs text-[var(--color-tron-green)]">released ✓</span>
 							{/if}
 						</td>
 

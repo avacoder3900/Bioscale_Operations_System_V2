@@ -691,7 +691,7 @@ async function seed() {
 
 	// ─── 16. SPUs ───────────────────────────────────────────────────
 	console.log('Seeding SPUs...');
-	const spuStatuses = ['draft', 'assembling', 'assembled', 'validated', 'assigned', 'deployed'];
+	const spuStatuses = ['draft', 'assembling', 'validating', 'released', 'servicing', 'retired'];
 	for (let i = 0; i < 6; i++) {
 		await upsertMany(db, 'spus', [{
 			_id: id(), udi: `SPU-${String(i + 1).padStart(4, '0')}`,
