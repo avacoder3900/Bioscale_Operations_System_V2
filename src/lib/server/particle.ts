@@ -427,5 +427,27 @@ export async function syncDevices(
 		errors.push(`Linking failed: ${err instanceof Error ? err.message : String(err)}`);
 	}
 
+	// Service-flag reconcile (SPU-INV-08): resend the yellow-LED bit to any
+	// linked, ONLINE device whose stored flag doesn't match its SPU's status —
+	// closes the "status changed while the device was unplugged" gap. Dynamic
+	// import because service-flag.ts imports callFunction from this module.
+	try {
+		const { syncServiceFlag, desiredServiceFlag } = await import('$lib/server/service-flag');
+		const { Spu } = await import('$lib/server/db');
+		const onlineIds = devices.filter((d) => d.online).map((d) => d.id);
+		const linked = await Spu.find({ 'particleLink.particleDeviceId': { $in: onlineIds } })
+			.select('status particleLink')
+			.lean() as any[];
+		for (const s of linked) {
+			const want = Number(desiredServiceFlag(s.status ?? 'draft'));
+			const pl = s.particleLink ?? {};
+			if (pl.serviceFlag !== want || pl.serviceFlagState !== 'synced') {
+				await syncServiceFlag(s._id);
+			}
+		}
+	} catch (err) {
+		errors.push(`Service-flag reconcile failed: ${err instanceof Error ? err.message : String(err)}`);
+	}
+
 	return { synced, created, errors };
 }

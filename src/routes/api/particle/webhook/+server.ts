@@ -10,8 +10,9 @@
  *   Request Format: JSON
  */
 import { json } from '@sveltejs/kit';
-import { connectDB, DeviceEvent, ParticleDevice, generateId } from '$lib/server/db';
+import { connectDB, DeviceEvent, ParticleDevice, Spu, generateId } from '$lib/server/db';
 import { requireAgentApiKey } from '$lib/server/api-auth';
+import { syncServiceFlag } from '$lib/server/service-flag';
 import type { RequestHandler } from './$types';
 
 export const POST: RequestHandler = async ({ request }) => {
@@ -81,6 +82,17 @@ export const POST: RequestHandler = async ({ request }) => {
 			}
 		}
 	);
+
+	// Device came (back) online → re-push the service-flag LED bit so a status
+	// change made while it was unplugged takes effect now (SPU-INV-08).
+	// Requires a Particle Console webhook on event `spark/status` with the
+	// agent API key header.
+	if (eventName === 'spark/status' && String(eventData).trim() === 'online') {
+		const spu = (await Spu.findOne({ 'particleLink.particleDeviceId': deviceId })
+			.select('_id')
+			.lean()) as any;
+		if (spu) await syncServiceFlag(spu._id);
+	}
 
 	return json({ success: true, event: eventType, deviceId });
 };

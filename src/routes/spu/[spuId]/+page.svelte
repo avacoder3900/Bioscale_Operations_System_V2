@@ -26,6 +26,27 @@
 	let editBarcode = $state(data.spu.barcode ?? '');
 	let pinging = $state(false);
 	let unlinking = $state(false);
+	let resyncingFlag = $state(false);
+
+	// Service-flag LED badge (SPU-INV-08).
+	function serviceLightBadge(link: { serviceFlagState: string | null; serviceFlag: number | null; serviceFlagError: string | null }): { text: string; color: string } {
+		switch (link.serviceFlagState) {
+			case 'synced':
+				return link.serviceFlag === 1
+					? { text: 'Blinking (not released)', color: 'var(--color-tron-yellow, #fbbf24)' }
+					: { text: 'Clear', color: 'var(--color-tron-green)' };
+			case 'offline':
+				return { text: 'Pending — device offline', color: 'var(--color-tron-text-secondary)' };
+			case 'unsupported':
+				return { text: 'Firmware < 88', color: 'var(--color-tron-text-secondary)' };
+			case 'unlinked':
+				return { text: 'No device linked', color: 'var(--color-tron-text-secondary)' };
+			case 'error':
+				return { text: link.serviceFlagError ?? 'Error', color: 'var(--color-tron-red, #ef4444)' };
+			default:
+				return { text: 'Not synced yet', color: 'var(--color-tron-text-secondary)' };
+		}
+	}
 	let renaming = $state(false);
 	let showRenameForm = $state(false);
 
@@ -625,6 +646,13 @@
 						<dt class="tron-text-muted text-sm">Last Heard</dt>
 						<dd class="tron-text-primary">{formatDate(data.particleDevice.lastHeardAt)}</dd>
 					</div>
+					{#if data.particleLink}
+						{@const light = serviceLightBadge(data.particleLink)}
+						<div>
+							<dt class="tron-text-muted text-sm">Service Light</dt>
+							<dd class="font-medium" style="color: {light.color};">{light.text}</dd>
+						</div>
+					{/if}
 				</dl>
 				{@render vitalsPanel()}
 				<div class="mt-4 flex flex-wrap items-center gap-3 border-t border-[var(--color-tron-border)] pt-4">
@@ -634,6 +662,9 @@
 					{#if !showRenameForm}
 						<TronButton type="button" onclick={() => (showRenameForm = true)} style="min-height: 44px;">Rename</TronButton>
 					{/if}
+					<form method="POST" action="?/resyncServiceFlag" use:enhance={() => { resyncingFlag = true; return async ({ update }) => { resyncingFlag = false; await update(); }; }}>
+						<TronButton type="submit" disabled={resyncingFlag} style="min-height: 44px;">{resyncingFlag ? 'Resyncing...' : 'Resync Light'}</TronButton>
+					</form>
 					<form method="POST" action="?/unlinkParticle" use:enhance={() => { unlinking = true; return async ({ update }) => { unlinking = false; await update(); }; }}>
 						<TronButton type="submit" disabled={unlinking} style="min-height: 44px;">{unlinking ? 'Unlinking...' : 'Unlink Device'}</TronButton>
 					</form>
@@ -667,6 +698,13 @@
 						<dt class="tron-text-muted text-sm">Linked At</dt>
 						<dd class="tron-text-primary">{formatDate(data.particleLink.linkedAt)}</dd>
 					</div>
+					{#if data.particleLink}
+						{@const light = serviceLightBadge(data.particleLink)}
+						<div>
+							<dt class="tron-text-muted text-sm">Service Light</dt>
+							<dd class="font-medium" style="color: {light.color};">{light.text}</dd>
+						</div>
+					{/if}
 				</dl>
 				{@render vitalsPanel()}
 			</TronCard>

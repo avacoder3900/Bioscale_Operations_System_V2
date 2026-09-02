@@ -4,6 +4,7 @@ import { connectDB, Spu, ServiceRecord, ServiceGroup, AuditLog, generateId } fro
 // Statuses a unit can be handed back to once its service job closes —
 // shared vocabulary from the SPU-INV-07 collapse.
 import { RETURNABLE_STATUSES } from '$lib/server/spu-status';
+import { syncServiceFlag } from '$lib/server/service-flag';
 import type { Actions, PageServerLoad, RequestEvent } from './$types';
 
 /**
@@ -502,6 +503,7 @@ async function createServiceJob(
 			newData: { status: 'servicing' },
 			reason: `Service job opened (${serviceType})`
 		});
+		await syncServiceFlag(spu._id);
 	}
 
 	await writeAudit(event, {
@@ -1304,6 +1306,7 @@ export const actions: Actions = {
 				newData: { status: returnTo },
 				reason: `Service job closed${resolution ? ': ' + resolution : ''}`
 			});
+			await syncServiceFlag(record.spuId);
 		}
 
 		await writeAudit(event, {
@@ -1402,6 +1405,7 @@ export const actions: Actions = {
 					newData: { status: returnTo },
 					reason: `Group task closed: ${group.name}`
 				});
+				await syncServiceFlag(record.spuId);
 			}
 
 			await writeAudit(event, {

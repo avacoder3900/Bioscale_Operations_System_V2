@@ -6,6 +6,7 @@ import {
 } from '$lib/server/db';
 import { byId } from '$lib/server/db/native-helpers';
 import { isLegalTransition, LEGAL_TRANSITIONS, normalizeSpuStatus } from '$lib/server/spu-status';
+import { syncServiceFlag } from '$lib/server/service-flag';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals, params }) => {
@@ -155,7 +156,11 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 					spuId: params.spuId,
 					particleDeviceId: s.particleLink.particleDeviceId,
 					particleSerial: s.particleLink.particleSerial ?? null,
-					linkedAt: s.particleLink.linkedAt
+					linkedAt: s.particleLink.linkedAt,
+					serviceFlag: s.particleLink.serviceFlag ?? null,
+					serviceFlagState: s.particleLink.serviceFlagState ?? null,
+					serviceFlagSyncedAt: s.particleLink.serviceFlagSyncedAt ?? null,
+					serviceFlagError: s.particleLink.serviceFlagError ?? null
 				}
 			: null,
 		particleDevice: particleDevice
@@ -481,6 +486,7 @@ export const actions: Actions = {
 		}
 
 		await Spu.updateOne({ _id: params.spuId }, { $set: updates });
+		if (updates.status) await syncServiceFlag(params.spuId);
 		return { success: true };
 	},
 
@@ -577,7 +583,17 @@ export const actions: Actions = {
 			changedBy: locals.user!.username ?? locals.user!._id
 		});
 
-		return { success: true, transitionSuccess: true };
+		// Push the yellow-LED service flag (SPU-INV-08) — best-effort, never blocks.
+		const serviceFlag = await syncServiceFlag(params.spuId);
+
+		return { success: true, transitionSuccess: true, serviceFlag };
+	},
+
+	resyncServiceFlag: async ({ locals, params }) => {
+		requirePermission(locals.user, 'spu:write');
+		await connectDB();
+		const serviceFlag = await syncServiceFlag(params.spuId);
+		return { serviceFlagResynced: true, serviceFlag };
 	},
 
 	deleteSpu: async ({ locals, params }) => {
@@ -645,6 +661,7 @@ export const actions: Actions = {
 			reason: `Service #${cycle} opened: ${issue}`,
 			changedBy: locals.user!.username ?? locals.user!._id
 		});
+		await syncServiceFlag(params.spuId);
 		return { success: true, serviceOpened: true };
 	},
 
@@ -690,6 +707,7 @@ export const actions: Actions = {
 			reason: `Service #${open.cycle} returned: ${fix}. Validation counter reset.`,
 			changedBy: locals.user!.username ?? locals.user!._id
 		});
+		await syncServiceFlag(params.spuId);
 		return { success: true, serviceReturned: true };
 	}
 };

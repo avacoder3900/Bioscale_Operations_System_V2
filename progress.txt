@@ -11384,3 +11384,31 @@ released-rnd → released. Final spus.status distribution: draft 37, servicing 2
 retired 1, validating 1 — entirely within the new 6-status vocabulary. statusTransitions history
 untouched (renders via badge legacy aliases). Migration is idempotent; diag script
 scripts/diag-spu-statuses.ts can re-verify anytime.
+
+================================================================================
+2026-09-02 — feat/spu-tweaks — Service-flag yellow LED sync (SPU-INV-08)
+================================================================================
+BIMS side of firmware v88's service-flag handoff
+(brevitest-device/firmware/Docs/SERVICE_FLAG_LED_HANDOFF.md): releasing a device now stops its
+yellow servicing blink. New src/lib/server/service-flag.ts — desiredServiceFlag ('0' only for
+status 'released', post-collapse) + syncServiceFlag(spuId): calls set_service on the device,
+reads back service_flag, classifies synced/unlinked/unsupported(fw<88 404)/offline/error, records
+outcome on new particleLink.serviceFlag* fields (spu.ts). Never throws — status writes never
+block on the device.
+
+Hooks after EVERY spu.status write: dashboard updateStatus; detail-page transitionStatus,
+updateAssemblyStatus, openService, returnService (+ new resyncServiceFlag action); assembly-tab
+assembling write; assembly-complete validating write; servicing-board intake, single close, bulk
+group close. Gap-closers per spec §3.3: (a) syncDevices() reconcile — after linking, re-push to
+any linked ONLINE device whose stored flag ≠ desired (dynamic import avoids the particle.ts ↔
+service-flag.ts cycle); (b) /api/particle/webhook now handles spark/status data=online by
+re-syncing the linked SPU (OPS STEP: add a Particle Console webhook on event spark/status →
+/api/particle/webhook with the x-agent-api-key header). UI: "Service Light" row in both Particle
+cards on /spu/[spuId] (Blinking (not released) / Clear / Pending — device offline / Firmware < 88
+/ error) + Resync Light button.
+
+Bench-verified against BT-M01-0000-0243 (v88, online): set_service → return_value 1, service_flag
+readback 1 — the exact calls the helper makes. 0243 is validating with flag=1 (blinking, correct);
+releasing it is the live acceptance test. PRD: docs/prds/SPU-INV-08-service-flag-led.md.
+
+npm run check: 11 errors / 434 warnings — unchanged baseline, 0 in touched files.

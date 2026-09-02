@@ -1,6 +1,7 @@
 import { fail, redirect } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
 import { connectDB, AssemblySession, Spu, ElectronicSignature, generateId, AuditLog } from '$lib/server/db';
+import { syncServiceFlag } from '$lib/server/service-flag';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals, url }) => {
@@ -122,6 +123,7 @@ export const actions: Actions = {
 					}
 				}
 			});
+			await syncServiceFlag(s.spuId);
 		}
 
 		await AuditLog.create({

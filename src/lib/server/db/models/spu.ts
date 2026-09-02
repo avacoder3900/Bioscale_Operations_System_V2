@@ -50,7 +50,11 @@ const spuSchema = new Schema({
 	particleLink: {
 		particleSerial: String, particleDeviceId: String,
 		linkedAt: Date, linkedBy: operatorRef,
-		previousSpuId: String, unlinkReason: String
+		previousSpuId: String, unlinkReason: String,
+		// Service-flag LED sync outcome (SPU-INV-08): last value pushed to the
+		// device and how the push went (synced|unlinked|unsupported|offline|error).
+		serviceFlag: Number, serviceFlagState: String,
+		serviceFlagSyncedAt: Date, serviceFlagError: String
 	},
 
 	validation: {

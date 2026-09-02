@@ -8,6 +8,7 @@ import {
 } from '$lib/server/db';
 import { getCheckedOutCartridgeIds } from '$lib/server/checkout-utils';
 import { isSpuStatus, isLegalTransition } from '$lib/server/spu-status';
+import { syncServiceFlag } from '$lib/server/service-flag';
 import { WAX_FILLING_ACTIVE } from '$lib/server/manufacturing/run-statuses';
 import { WAX_STAGE_STATUSES } from '$lib/shared/cartridge-wax-status';
 import type { Actions, PageServerLoad } from './$types';
@@ -602,7 +603,10 @@ export const actions: Actions = {
 			changedBy: locals.user!.username ?? locals.user!._id
 		});
 
-		return { statusUpdateSuccess: true, updatedStatus: newStatus };
+		// Push the yellow-LED service flag (SPU-INV-08) — best-effort, never blocks.
+		const serviceFlag = await syncServiceFlag(spuId);
+
+		return { statusUpdateSuccess: true, updatedStatus: newStatus, serviceFlag };
 	}
 };
 
