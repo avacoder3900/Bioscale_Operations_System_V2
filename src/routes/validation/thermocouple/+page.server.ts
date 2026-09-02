@@ -66,13 +66,14 @@ export const actions: Actions = {
 		const spuId = form.get('spuId')?.toString();
 		const readingsJson = form.get('readings')?.toString();
 		const fileName = form.get('fileName')?.toString() || null;
-		const minTemp = Number(form.get('minTemp'));
-		const maxTemp = Number(form.get('maxTemp'));
+		const outcomeChoice = form.get('outcome')?.toString();
 
 		if (!spuId) return fail(400, { error: 'Please select an SPU' });
 		if (!readingsJson) return fail(400, { error: 'No temperature data uploaded' });
-		if (isNaN(minTemp) || isNaN(maxTemp)) return fail(400, { error: 'Temperature range is required' });
-		if (minTemp >= maxTemp) return fail(400, { error: 'Min must be less than max temperature' });
+		// Binary operator verdict — there is no configured acceptance range.
+		if (outcomeChoice !== 'passed' && outcomeChoice !== 'failed') {
+			return fail(400, { error: 'Record a Pass or Fail verdict' });
+		}
 
 		let readings: ThermoReading[];
 		try {
@@ -87,7 +88,8 @@ export const actions: Actions = {
 		const outcome = await processThermoUpload({
 			spuId,
 			readings,
-			criteria: { minTemp, maxTemp },
+			criteria: null,
+			verdict: outcomeChoice,
 			fileName,
 			user: { _id: locals.user!._id, username: locals.user!.username }
 		});

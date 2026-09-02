@@ -50,21 +50,24 @@ function evaluateReadings(temps: number[], criteria: ThermoCriteria) {
  * /validation/thermocouple `upload` action): stats → THERMO- barcode →
  * ValidationSession → spu.validation.thermocouple rollup → audit.
  *
- * With `criteria` set, behavior is identical to the standalone page: pass/fail
- * is computed at upload. With `criteria: null` (validation-run uploads while
- * the standard range is unconfigured), the data is recorded but NOT judged:
- * the session is left 'in_progress' and the SPU rollup status stays 'pending'
- * until evaluateThermoSession() runs (VALIDATION-05: upload ≠ pass).
+ * Three judgment modes:
+ *  - `criteria` set: pass/fail is computed from the acceptance range at upload.
+ *  - `criteria: null`, no `verdict`: data is recorded but NOT judged — the
+ *    session is left 'in_progress' and the SPU rollup stays 'pending' until
+ *    evaluateThermoSession() runs (VALIDATION-05: upload ≠ pass).
+ *  - `criteria: null` + `verdict`: the operator's binary Pass/Fail IS the
+ *    record. Stats are still computed for display, but nothing is auto-judged.
  */
 export async function processThermoUpload(opts: {
 	spuId: string;
 	readings: ThermoReading[];
 	criteria: ThermoCriteria | null;
+	verdict?: 'passed' | 'failed' | null;
 	runId?: string;
 	fileName?: string | null;
 	user: { _id: string; username: string };
 }): Promise<{ error: string } | ThermoUploadOutcome> {
-	const { spuId, readings, criteria, runId, fileName, user } = opts;
+	const { spuId, readings, criteria, verdict, runId, fileName, user } = opts;
 
 	if (!Array.isArray(readings) || readings.length === 0) {
 		return { error: 'No valid readings in uploaded data' };
@@ -99,10 +102,22 @@ export async function processThermoUpload(opts: {
 		failureReasons = ev.failureReasons;
 		interpretation = ev.interpretation;
 	} else {
-		// No acceptance range yet — stats only, no out-of-range judgment.
+		// No acceptance range — stats only, never an out-of-range judgment.
 		stats = computeChannelStats(temps, Number.NEGATIVE_INFINITY, Number.POSITIVE_INFINITY);
-		interpretation = `${readings.length} readings uploaded, awaiting evaluation against the standard acceptance range`;
+		if (verdict) {
+			// The operator's binary call is the record.
+			passed = verdict === 'passed';
+			interpretation = passed
+				? `${readings.length} readings — passed on operator review of the min/max/mode shown`
+				: `${readings.length} readings — failed on operator review of the min/max/mode shown`;
+			if (!passed) failureReasons = ['Failed on operator review'];
+		} else {
+			interpretation = `${readings.length} readings uploaded, awaiting evaluation against the standard acceptance range`;
+		}
 	}
+
+	// A session is complete once it has been judged — by range or by operator.
+	const judged = !!criteria || !!verdict;
 
 	const barcodeDoc = await GeneratedBarcode.findOneAndUpdate(
 		{ prefix: 'THERMO' },
@@ -125,7 +140,7 @@ export async function processThermoUpload(opts: {
 	await ValidationSession.create({
 		_id: sessionId,
 		type: 'thermo',
-		status: criteria ? (passed ? 'completed' : 'failed') : 'in_progress',
+		status: judged ? (passed ? 'completed' : 'failed') : 'in_progress',
 		userId: user._id,
 		generatedBarcodeId: barcodeId,
 		barcode,
@@ -133,7 +148,7 @@ export async function processThermoUpload(opts: {
 		spuUdi: spu.udi,
 		runId: runId ?? null,
 		startedAt: new Date(readings[0].timestamp),
-		completedAt: criteria ? new Date() : null,
+		completedAt: judged ? new Date() : null,
 		config: criteria ? { minTemp: criteria.minTemp, maxTemp: criteria.maxTemp } : {},
 		results: [{
 			_id: generateId(),
@@ -158,11 +173,13 @@ export async function processThermoUpload(opts: {
 		'validation.thermocouple.rawData': { readingCount: readings.length, fileName: fileName ?? null },
 		'validation.thermocouple.results': { ...stats, durationMs }
 	};
-	if (criteria) {
+	if (judged) {
 		rollup['validation.thermocouple.status'] = passed ? 'passed' : 'failed';
 		rollup['validation.thermocouple.completedAt'] = new Date();
 		rollup['validation.thermocouple.failureReasons'] = failureReasons;
-		rollup['validation.thermocouple.criteriaUsed'] = { minTemp: criteria.minTemp, maxTemp: criteria.maxTemp };
+		if (criteria) {
+			rollup['validation.thermocouple.criteriaUsed'] = { minTemp: criteria.minTemp, maxTemp: criteria.maxTemp };
+		}
 	}
 	await Spu.updateOne({ _id: spuId }, { $set: rollup });
 
@@ -177,7 +194,8 @@ export async function processThermoUpload(opts: {
 			barcode,
 			runId: runId ?? null,
 			fileName: fileName ?? null,
-			evaluated: !!criteria,
+			evaluated: judged,
+			verdict: verdict ?? null,
 			passed,
 			stats: { ...stats, durationMs },
 			failureReasons
@@ -191,7 +209,7 @@ export async function processThermoUpload(opts: {
 		barcode,
 		spuUdi: spu.udi,
 		stats: { ...stats, durationMs },
-		evaluated: !!criteria,
+		evaluated: judged,
 		passed,
 		failureReasons
 	};

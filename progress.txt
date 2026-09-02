@@ -11580,3 +11580,40 @@ Source: branch bimsv2 @ commit b636bc63
 Retrieve this exact code: git checkout bimsv2 at commit b636bc63
 What this deployment is for: thermocouple step verdict = operator Pass/Fail, on a branch cut
   fresh off master (cherry-pick of the feat/thermo-manual-verdict work onto current master).
+
+================================================================
+2026-09-02 - bimsv2 - standalone thermocouple page: binary operator Pass/Fail
+================================================================
+The /validation/thermocouple upload page was the last surface still asking the
+operator to type an acceptance range (Min/Max Temp inputs, defaults 20/40) and
+then auto-judging the readings against it. Removed the range entirely; the
+operator now presses Pass or Fail and that verdict IS the record — matching the
+run-detail step behavior shipped earlier on this branch.
+
+processThermoUpload() gained a third judgment mode. It was (a) criteria set =>
+auto-judge at upload, (b) criteria null => record but leave 'in_progress' /
+rollup 'pending'. Now also (c) criteria null + verdict => the operator's binary
+call completes the session in the SAME write: status completed/failed,
+overallPassed, SPU rollup thermocouple.status passed/failed + completedAt, and
+NO criteriaUsed key (there is no range to cite). Stats are still computed over
+an infinite window for display only, so nothing is ever auto-judged. A new
+`judged = !!criteria || !!verdict` flag replaces the old `criteria ?` gates on
+session status, completedAt, the rollup block, and the audit `evaluated` field;
+the audit newData also carries `verdict` so a manual call is distinguishable
+from a range-computed one forever. The criteria path is untouched and the new
+opt is optional, so the run-detail caller (which passes the still-null
+STANDARD_THERMO_CRITERIA) behaves exactly as before.
+
+UI: Acceptance Criteria card deleted, minTemp/maxTemp state removed, chart now
+renders showBands={false} (no bands without a range), and the single orange
+"Save Results" submit became two submit buttons carrying name="outcome"
+value="passed"/"failed". Server validates outcome is exactly passed|failed and
+rejects anything else, so a verdict can't be skipped. Pass-banner copy no
+longer claims "All readings within acceptable range".
+
+Files: src/lib/server/validation/thermo-upload.ts,
+src/routes/validation/thermocouple/+page.server.ts,
+src/routes/validation/thermocouple/+page.svelte.
+npm run check: 119 errors / 434 warnings, ZERO errors and ZERO warnings in all
+three touched files; counts match the baseline logged in the entry above (that
+entry's 120 included one error since resolved elsewhere).

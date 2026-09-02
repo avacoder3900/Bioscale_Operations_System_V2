@@ -35,8 +35,6 @@
 
 	// State
 	let selectedSpuId = $state('');
-	let minTemp = $state(20);
-	let maxTemp = $state(40);
 	let readings = $state<Array<{ timestamp: number; temperature: number }>>([]);
 	let fileName = $state('');
 	let showFahrenheit = $state(false);
@@ -140,7 +138,7 @@
 					</svg>
 					<div>
 						<span class="text-lg font-bold text-[var(--color-tron-green)]">Test Passed</span>
-						<p class="tron-text-muted text-sm">All readings within acceptable range. SPU updated.</p>
+						<p class="tron-text-muted text-sm">Passed on operator review. SPU updated.</p>
 					</div>
 				{:else}
 					<svg class="h-8 w-8 text-[var(--color-tron-red)]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -201,30 +199,6 @@
 					Current thermocouple status: <span class="font-medium capitalize">{selectedSpu.thermoStatus ?? 'not tested'}</span>
 				</p>
 			{/if}
-		</div>
-
-		<!-- Temperature Range -->
-		<div class="tron-card mt-4 p-6">
-			<h2 class="tron-heading mb-4 text-lg font-semibold">Acceptance Criteria</h2>
-			<div class="flex items-center gap-4">
-				<div class="flex-1">
-					<label for="minTemp" class="tron-text-muted mb-1 block text-sm">Min Temp (°C)</label>
-					<input
-						type="number" id="minTemp" name="minTemp" step="0.1"
-						bind:value={minTemp}
-						class="tron-input w-full rounded-lg px-4 py-3 text-lg"
-					/>
-				</div>
-				<span class="tron-text-muted mt-6 text-xl">—</span>
-				<div class="flex-1">
-					<label for="maxTemp" class="tron-text-muted mb-1 block text-sm">Max Temp (°C)</label>
-					<input
-						type="number" id="maxTemp" name="maxTemp" step="0.1"
-						bind:value={maxTemp}
-						class="tron-input w-full rounded-lg px-4 py-3 text-lg"
-					/>
-				</div>
-			</div>
 		</div>
 
 		<!-- File Upload -->
@@ -295,27 +269,40 @@
 
 			<!-- Chart -->
 			<div class="mt-4">
-				<ThermocoupleChart {readings} {minTemp} {maxTemp} showBands={true} />
+				<ThermocoupleChart {readings} showBands={false} />
 			</div>
 
-			<!-- Submit -->
+			<!-- Verdict -->
 			<div class="mt-6">
-				<button
-					type="submit"
-					disabled={!selectedSpuId || isSubmitting}
-					class="flex w-full items-center justify-center gap-3 rounded-lg bg-[var(--color-tron-orange)] px-6 py-4 text-lg font-semibold text-[var(--color-tron-bg-primary)] transition-all hover:bg-[var(--color-tron-orange)]/90 disabled:cursor-not-allowed disabled:opacity-50"
-					style="min-height: 44px"
-				>
-					{#if isSubmitting}
-						<svg class="h-5 w-5 animate-spin" viewBox="0 0 24 24" fill="none">
-							<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-							<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-						</svg>
-						Saving...
-					{:else}
-						Save Results to {selectedSpu?.udi ?? 'SPU'}
-					{/if}
-				</button>
+				<p class="tron-text-muted mb-3 text-center text-sm">
+					No acceptance range is configured. The operator judges the readings above and
+					records the verdict — that verdict is the record.
+				</p>
+				<div class="flex gap-3">
+					<button
+						type="submit"
+						name="outcome"
+						value="passed"
+						disabled={!selectedSpuId || isSubmitting}
+						class="flex-1 rounded-lg bg-[var(--color-tron-green)] px-6 py-4 text-lg font-semibold text-[var(--color-tron-bg-primary)] transition-all hover:bg-[var(--color-tron-green)]/90 disabled:cursor-not-allowed disabled:opacity-50"
+						style="min-height: 44px"
+					>
+						{isSubmitting ? 'Saving...' : 'Pass'}
+					</button>
+					<button
+						type="submit"
+						name="outcome"
+						value="failed"
+						disabled={!selectedSpuId || isSubmitting}
+						class="flex-1 rounded-lg bg-[var(--color-tron-red)] px-6 py-4 text-lg font-semibold text-[var(--color-tron-bg-primary)] transition-all hover:bg-[var(--color-tron-red)]/90 disabled:cursor-not-allowed disabled:opacity-50"
+						style="min-height: 44px"
+					>
+						{isSubmitting ? 'Saving...' : 'Fail'}
+					</button>
+				</div>
+				<p class="tron-text-muted mt-2 text-center text-xs">
+					Recorded against {selectedSpu?.udi ?? 'the selected SPU'}
+				</p>
 				{#if !selectedSpuId}
 					<p class="mt-2 text-center text-sm text-[var(--color-tron-red)]">Select an SPU above before saving</p>
 				{/if}
