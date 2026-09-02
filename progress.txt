@@ -11428,3 +11428,8 @@ existed on the server all along — only the cartridge and scanned tabs had add 
 toggle-button + form-card idiom as the cartridge tab to the SPU Parts header: partNumber*/name*/
 classification/unit (default ea)/reorder point/description, posting to ?/create. Only file:
 src/routes/parts/+page.svelte. npm run check: 11 errors / 434 warnings — unchanged baseline.
+
+Deployment: production — building from the GitHub push to master (Vercel dashboard, commit below)
+Source: branch master @ merge of feat/spu-tweaks (code commit: see entry above)
+Retrieve this exact code: git log master --oneline
+What this deployment is for: + Add Part button/form on /parts?tab=spu
