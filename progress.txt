@@ -11458,3 +11458,12 @@ returned 404 → it's actually on v83 (handoff's v88 claim stale), recorded unsu
 retired/serviced units are fw<88 (no LED function) or covered by the syncDevices reconcile.
 
 Approval request unXY0MFkG58pNCy178UY0 is still Pending in BIMS — mark it decided when reviewed.
+
+================================================================================
+2026-09-02 — feat/spu-tweaks — /spu list hides retired by default + Show-retired toggle
+================================================================================
+With 46 of 74 units now retired after the reconciliation, the inventory list hid them by default:
+new client-side filter excludes status==='retired' unless the "Show retired (N)" switch (header,
+next to the unit count, role=switch) is on. Search and column sorting operate on the visible set;
+Enter-jump still finds exact matches. Only file: src/routes/spu/+page.svelte.
+npm run check: 11 errors / 434 warnings — unchanged baseline.

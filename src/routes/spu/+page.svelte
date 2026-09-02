@@ -7,6 +7,9 @@
 	let { data } = $props();
 
 	let search = $state('');
+	// Retired units are noise for day-to-day work — hidden unless toggled on.
+	let showRetired = $state(false);
+	const retiredCount = $derived(data.spus.filter((s) => s.status === 'retired').length);
 
 	// Live Particle connectivity, fetched after mount so the table never waits on
 	// the Particle API (SPU-INV-04). Keyed by particleDeviceId.
@@ -108,9 +111,10 @@
 	// Missing values sort last in both directions.
 	let filtered = $derived.by(() => {
 		const q = search.trim().toLowerCase();
+		const visible = showRetired ? data.spus : data.spus.filter((s) => s.status !== 'retired');
 		const rows = !q
-			? [...data.spus]
-			: data.spus.filter(
+			? [...visible]
+			: visible.filter(
 					(s) =>
 						s.udi.toLowerCase().includes(q) ||
 						(s.deviceId && s.deviceId.toLowerCase().includes(q)) ||
@@ -179,13 +183,35 @@
 <div class="space-y-5">
 	<div class="flex items-center justify-between gap-4">
 		<h1 class="text-xl font-bold text-[var(--color-tron-cyan)]">SPU Inventory</h1>
-		<span class="tron-text-muted text-sm">
+		<span class="flex items-center gap-4 text-sm">
 			{#if fleetError}
-				<span class="mr-3 text-[var(--color-tron-red)]">Particle unavailable</span>
+				<span class="text-[var(--color-tron-red)]">Particle unavailable</span>
 			{/if}
-			{filtered.length === data.spus.length
-				? `${data.spus.length} units`
-				: `${filtered.length} of ${data.spus.length} units`}
+			{#if retiredCount > 0}
+				<button
+					type="button"
+					class="flex items-center gap-2 transition-colors {showRetired ? 'text-[var(--color-tron-cyan)]' : 'tron-text-muted hover:text-[var(--color-tron-cyan)]'}"
+					onclick={() => (showRetired = !showRetired)}
+					role="switch"
+					aria-checked={showRetired}
+				>
+					<span
+						class="relative inline-block h-4 w-8 rounded-full transition-colors"
+						style="background: {showRetired ? 'var(--color-tron-cyan)' : 'var(--color-tron-border)'};"
+					>
+						<span
+							class="absolute top-0.5 h-3 w-3 rounded-full bg-[var(--color-tron-bg,#0a0e14)] transition-all"
+							style="left: {showRetired ? '18px' : '2px'};"
+						></span>
+					</span>
+					Show retired ({retiredCount})
+				</button>
+			{/if}
+			<span class="tron-text-muted">
+				{filtered.length === data.spus.length
+					? `${data.spus.length} units`
+					: `${filtered.length} of ${data.spus.length} units`}
+			</span>
 		</span>
 	</div>
 
