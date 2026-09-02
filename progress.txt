@@ -11467,3 +11467,8 @@ new client-side filter excludes status==='retired' unless the "Show retired (N)"
 next to the unit count, role=switch) is on. Search and column sorting operate on the visible set;
 Enter-jump still finds exact matches. Only file: src/routes/spu/+page.svelte.
 npm run check: 11 errors / 434 warnings — unchanged baseline.
+
+Deployment: production — building from the GitHub push to master (Vercel dashboard, commit below)
+Source: branch master @ merge of feat/spu-tweaks
+Retrieve this exact code: git log master --oneline
+What this deployment is for: /spu inventory hides retired by default + Show-retired toggle
