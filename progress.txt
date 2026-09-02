@@ -11532,3 +11532,8 @@ costed parts; low-stock/lowest-inventory consider all), the Add Part form gains 
 and the create action stores it (String, per schema quirk) plus explicit bomType:'spu'/isBom:true.
 Files: src/routes/parts/+page.server.ts, +page.svelte.
 npm run check: 10 errors / 434 warnings — baseline.
+
+Deployment: production — building from the GitHub push to master (Vercel dashboard, commit below)
+Source: branch master @ merge of feat/spu-tweaks
+Retrieve this exact code: git log master --oneline
+What this deployment is for: fix invisible no-cost parts + Unit Cost field on the add form
