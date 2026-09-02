@@ -11412,3 +11412,10 @@ readback 1 — the exact calls the helper makes. 0243 is validating with flag=1 
 releasing it is the live acceptance test. PRD: docs/prds/SPU-INV-08-service-flag-led.md.
 
 npm run check: 11 errors / 434 warnings — unchanged baseline, 0 in touched files.
+
+Deployment: production — building from the GitHub push to master (exact deployment in the Vercel
+  dashboard, project bioscale-operations-system-mongodb, commit below)
+Source: branch master @ merge of feat/spu-tweaks (code commit db30b624)
+Retrieve this exact code: git checkout feat/spu-tweaks at commit db30b624
+What this deployment is for: service-flag yellow LED sync (SPU-INV-08) — releasing a device stops
+  its yellow servicing blink; Service Light badge + Resync on the SPU detail page
