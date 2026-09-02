@@ -189,6 +189,12 @@
 			{autosaveError}
 		</div>
 	{/if}
+	{#if form?.committed}
+		<div class="mb-4 rounded border border-[rgba(0,255,136,0.3)] bg-[rgba(0,255,136,0.1)] px-4 py-3 text-sm" style="color: var(--color-tron-green);">
+			Committed — now #{form.rank} in the ready queue ({form.readyCount}/{form.readyCap}).
+			<a href="/kanban" class="ml-2 underline">Open the Board</a>
+		</div>
+	{/if}
 	{#if form?.success}
 		<div
 			class="rounded border border-[rgba(0,255,136,0.3)] bg-[rgba(0,255,136,0.1)] px-4 py-3 text-sm"
@@ -250,6 +256,15 @@
 							<TronButton variant="primary" onclick={openProcess}>Process</TronButton>
 						{:else if data.task.status === 'processed'}
 							<TronButton onclick={openProcess}>Reshape</TronButton>
+						{/if}
+						{#if data.task.status === 'processed' && data.canReplenish}
+							<!-- Commit from here (Jacob 2026-09-02) — same replenish() gate as the Tier 1 row button.
+							     The span carries the tooltip; disabled buttons don't show one. -->
+							<form method="POST" action="?/commit" use:enhance>
+								<span title={data.dorMissing.length ? 'DoR incomplete: ' + data.dorMissing.join('; ') : 'Commit to the Board — joins the ready queue'}>
+									<TronButton type="submit" variant="primary" disabled={data.dorMissing.length > 0}>Commit</TronButton>
+								</span>
+							</form>
 						{/if}
 						{#if data.task.status === 'done'}
 							<TronButton variant="primary" disabled>Completed</TronButton>

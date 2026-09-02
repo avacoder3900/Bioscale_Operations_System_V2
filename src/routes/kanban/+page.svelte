@@ -238,7 +238,7 @@
 		<!-- Ready — the global ordered queue -->
 		<div class="flex min-w-[250px] max-w-[340px] flex-1 flex-col rounded-lg">
 			{@render columnHeader(STATUS_META.ready.label, STATUS_META.ready.color, `${ready.length} / ${data.readyCap}`)}
-			<div class="max-h-[70vh] flex-1 space-y-2 overflow-y-auto pr-1">
+			<div class="flex-1 space-y-2">
 				{#if ready.length === 0}
 					<p class="tron-text-muted px-1 text-xs">The ready queue is empty. Replenishment decides what enters it.</p>
 				{/if}
@@ -272,7 +272,7 @@
 		<!-- In Progress — grouped by assignee (subheaders, not lanes) -->
 		<div class="flex min-w-[250px] max-w-[340px] flex-1 flex-col rounded-lg">
 			{@render columnHeader(STATUS_META.wip.label, STATUS_META.wip.color, `${wip.length}`)}
-			<div class="max-h-[70vh] flex-1 space-y-2 overflow-y-auto pr-1">
+			<div class="flex-1 space-y-2">
 				{#if wip.length === 0}
 					<p class="tron-text-muted px-1 text-xs">Nothing in progress.</p>
 				{/if}
@@ -305,7 +305,7 @@
 		{#if review.length > 0}
 			<div class="flex min-w-[250px] max-w-[340px] flex-1 flex-col rounded-lg">
 				{@render columnHeader(STATUS_META.review.label, STATUS_META.review.color, `${review.length}`)}
-				<div class="max-h-[70vh] flex-1 space-y-2 overflow-y-auto pr-1">
+				<div class="flex-1 space-y-2">
 					{#each review as t (t.id)}
 						<div class="tron-card !p-3">
 							<a href="/kanban/task/{t.id}" class="tron-text-primary text-sm font-medium hover:underline">{t.title}</a>
@@ -329,7 +329,7 @@
 		<!-- Waiting — named external dependency -->
 		<div class="flex min-w-[250px] max-w-[340px] flex-1 flex-col rounded-lg">
 			{@render columnHeader(STATUS_META.waiting.label, STATUS_META.waiting.color, `${waiting.length}`)}
-			<div class="max-h-[70vh] flex-1 space-y-2 overflow-y-auto pr-1">
+			<div class="flex-1 space-y-2">
 				{#if waiting.length === 0}
 					<p class="tron-text-muted px-1 text-xs">Nothing waiting.</p>
 				{/if}
@@ -361,7 +361,7 @@
 		<!-- Blocked — blocked on us, reason on the card -->
 		<div class="flex min-w-[250px] max-w-[340px] flex-1 flex-col rounded-lg">
 			{@render columnHeader(STATUS_META.blocked.label, STATUS_META.blocked.color, `${blocked.length}`)}
-			<div class="max-h-[70vh] flex-1 space-y-2 overflow-y-auto pr-1">
+			<div class="flex-1 space-y-2">
 				{#if blocked.length === 0}
 					<p class="tron-text-muted px-1 text-xs">Nothing blocked. Good.</p>
 				{/if}
@@ -393,7 +393,7 @@
 		<!-- Done (recent 7 days, pre-archive) -->
 		<div class="flex min-w-[250px] max-w-[340px] flex-1 flex-col rounded-lg">
 			{@render columnHeader(`${STATUS_META.done.label} — 7d`, STATUS_META.done.color, `${doneRecent.length}`)}
-			<div class="max-h-[70vh] flex-1 space-y-2 overflow-y-auto pr-1">
+			<div class="flex-1 space-y-2">
 				{#if doneRecent.length === 0}
 					<p class="tron-text-muted px-1 text-xs">Nothing finished in the last 7 days.</p>
 				{/if}

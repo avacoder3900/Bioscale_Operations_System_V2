@@ -11282,3 +11282,18 @@ kept. (3) inventory quick box: position field is first and inline — "# · idea
 Capture · Detailed…" — 64px wide. Verified live on the dev server. Files:
 src/lib/components/kanban/roadmap/RoadmapCanvas.svelte, src/routes/kanban/roadmap/+page.svelte,
 src/routes/kanban/inventory/+page.svelte. npm run check: 11 = baseline.
+
+================================================================================
+2026-09-02 — feat/kanban-capture-modes — Commit from the task page; Board columns grow with the page
+================================================================================
+(1) Task detail: a processed task now shows Commit next to Reshape (replenishers only; disabled
+with a DoR tooltip until the Definition of Ready is complete). New `commit` action in
+task/[taskId]/+page.server.ts rides replenish() — identical gate to the Tier 1 row button
+(actor holds kanban:replenish, DoR, ready cap, one audited replenishment event); success
+banner shows the new ready rank + queue depth with an "Open the Board" link; rejections
+surface the reason verbatim. Load adds canReplenish + dorMissing. Process → Commit is now one
+page. (2) Board (/kanban): the six columns lost their max-h-[70vh]/overflow-y-auto inner
+scroll — the board expands to its content and the page scrolls as a whole (Jacob: "i dont want
+to have to scroll within an individual vertical column"). Verified live on the dev server.
+Files: src/routes/kanban/task/[taskId]/+page.server.ts + .svelte, src/routes/kanban/+page.svelte.
+npm run check: 11 = baseline (a stray escaped-newline in the tooltip briefly made it 13 — fixed).

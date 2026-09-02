@@ -1,7 +1,8 @@
 import { fail, redirect, error } from '@sveltejs/kit';
 import { connectDB, KanbanTask, AuditLog, User } from '$lib/server/db';
 import { generateId } from '$lib/server/db/utils.js';
-import { requirePermission } from '$lib/server/permissions';
+import { requirePermission, hasPermission, isAdmin } from '$lib/server/permissions';
+import { replenish, ReplenishError, dorMissingFields } from '$lib/server/kanban/replenish';
 import { checkWipLimit } from '$lib/server/kanban/wip-limit';
 import {
 	transitionTask,
@@ -125,6 +126,9 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 					}
 				: null
 		},
+		// Commit from the task page (2026-09-02): same gate as Tier 1's per-row button.
+		canReplenish: hasPermission(locals.user, 'kanban:replenish') || isAdmin(locals.user),
+		dorMissing: dorMissingFields(task),
 		// KB2-03/KB2-12 process modal support (mirrors /kanban/inventory)
 		sizingDecisionTest: SIZING_DECISION_TEST,
 		sizeClassDefinitions: {
@@ -219,6 +223,36 @@ export const actions: Actions = {
 			throw e;
 		}
 		return { success: true };
+	},
+
+	/**
+	 * Commit straight from the task page (Jacob 2026-09-02): process it here,
+	 * then commit it here — no detour back to Tier 1. Rides replenish(), so the
+	 * gate is identical: actor must hold kanban:replenish, DoR complete, ready
+	 * cap respected, one audited replenishment event.
+	 */
+	commit: async ({ locals, params }) => {
+		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'kanban:write');
+		await connectDB();
+		try {
+			const result = await replenish({
+				taskIds: [params.taskId],
+				actorUsername: locals.user.username,
+				via: 'ui',
+				note: 'committed from the task page'
+			});
+			const rej = result.rejected.find((r) => r.taskId === params.taskId);
+			if (rej) return fail(400, { error: `Not committed: ${rej.reason}` });
+			const promoted = result.promoted.find((r) => r.taskId === params.taskId);
+			return { committed: true, rank: promoted?.rank ?? null, readyCount: result.readyCount, readyCap: result.readyCap };
+		} catch (e) {
+			if (e instanceof ReplenishError) {
+				return fail(e.code === 'PERMISSION_DENIED' ? 403 : 400, { error: e.message, code: e.code });
+			}
+			if (e instanceof TransitionError) return fail(400, { error: e.message, code: e.code });
+			throw e;
+		}
 	},
 
 	/**
