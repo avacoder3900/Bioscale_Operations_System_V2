@@ -11259,3 +11259,8 @@ view + chips + headers, Process-chain modal (walk counter, stop-after-this, esti
 NOT submitted — dev points at prod Atlas), plan detail chain section, roadmap rails.
 Files: src/routes/kanban/roadmap/+page.server.ts, src/lib/components/kanban/roadmap/
 RoadmapCanvas.svelte, src/routes/kanban/inventory/+page.svelte. npm run check: 11 = baseline.
+
+Deployment: production — Vercel auto-deploy from master push
+Source: branch master @ commit 5f1dc318 (fast-forward of feat/kanban-capture-modes)
+Retrieve this exact code: git checkout master at commit 5f1dc318
+What this deployment is for: KB2-39 chains live — Tier 1 By-chain view + Process-chain walk, roadmap chain rails, plan ↔ chain link, task-page chain context, MCP 3.5.0 snapshot chain field; plus the browser-QA fixes.
