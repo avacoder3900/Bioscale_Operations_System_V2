@@ -7,6 +7,7 @@ import {
 	withdrawSpuKit
 } from '$lib/server/services/spu-kit-withdrawal';
 import { resolveSpuRef } from '$lib/server/services/inventory-resolve';
+import { IN_BUILD_STATUSES, isInBuild } from '$lib/server/spu-status';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals, url }) => {
@@ -41,7 +42,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		PartDefinition.find({ isActive: true }).sort({ partNumber: 1 }).lean(),
 		canWithdraw ? previewSpuKit() : null,
 		canWithdraw
-			? Spu.find({ status: { $ne: 'retired' } })
+			? Spu.find({ status: { $in: IN_BUILD_STATUSES } })
 					.select('_id udi barcode status')
 					.sort({ createdAt: -1 })
 					.limit(500)
@@ -134,6 +135,16 @@ export const actions: Actions = {
 		}
 
 		const spuLabel = spu.barcode || spu.udi;
+
+		// A kit may only be withdrawn for a unit that is still being built. Units
+		// at validating or beyond were already assembled and their parts already
+		// came off the shelf, so withdrawing now would double-count them.
+		if (!isInBuild(String(spu.status ?? ''))) {
+			return fail(400, {
+				error: `${spuLabel} is ${spu.status} — kit withdrawal is only for units still being built (${IN_BUILD_STATUSES.join(', ')}).`
+			});
+		}
+
 		const result = await withdrawSpuKit({
 			spuId: String(spu._id),
 			spuLabel,
