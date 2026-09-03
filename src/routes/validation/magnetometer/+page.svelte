@@ -5,7 +5,7 @@
 
 	interface Props {
 		data: {
-			spus: { id: string; udi: string; particleDeviceId: string | null; status: string }[];
+			spus: { id: string; udi: string; particleDeviceId: string | null; status: string; retired: boolean }[];
 			criteria: { minZ: number; maxZ: number };
 		};
 		form: any;
@@ -18,7 +18,20 @@
 	let editingCriteria = $state(false);
 	let savingCriteria = $state(false);
 
+	// Retired units are hidden by default, same as the SPU inventory listing.
+	let showRetired = $state(false);
+
+	const visibleSpus = $derived(showRetired ? data.spus : data.spus.filter(s => !s.retired));
+	const totalCount = $derived(data.spus.length);
+
 	const selectedSpu = $derived(data.spus.find(s => s.id === selectedSpuId));
+
+	// Hiding retired units again must not leave a now-invisible SPU selected.
+	$effect(() => {
+		if (selectedSpuId && !visibleSpus.some(s => s.id === selectedSpuId)) {
+			selectedSpuId = '';
+		}
+	});
 
 	function formatDate(date: string | null): string {
 		if (!date) return '—';
@@ -41,10 +54,19 @@
 			<p class="tron-text-muted text-sm">Run the test on the SPU first, then select it here to fetch the results.</p>
 
 			<div>
-				<label for="spu-select" class="tron-label">Select SPU</label>
+				<div class="flex flex-wrap items-center justify-between gap-2">
+					<label for="spu-select" class="tron-label">Select SPU</label>
+					<div class="flex items-center gap-3">
+						<span class="tron-text-muted text-xs">{visibleSpus.length} of {totalCount} units</span>
+						<label class="flex cursor-pointer items-center gap-2 text-xs text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)]">
+							<input type="checkbox" class="accent-[var(--color-tron-cyan)]" bind:checked={showRetired} />
+							Show retired
+						</label>
+					</div>
+				</div>
 				<select id="spu-select" class="tron-select w-full" style="min-height: 48px;" bind:value={selectedSpuId}>
 					<option value="">Choose an SPU…</option>
-					{#each data.spus as spu (spu.id)}
+					{#each visibleSpus as spu (spu.id)}
 						<option value={spu.id}>{spu.udi} ({spu.status})</option>
 					{/each}
 				</select>

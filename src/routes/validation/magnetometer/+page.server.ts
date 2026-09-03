@@ -8,7 +8,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 	requirePermission(locals.user, 'spu:read');
 	await connectDB();
 
-	// Get all SPUs with particle links
+	// Get all SPUs with particle links. Retired units are included here and
+	// hidden by default in the UI; the page's toggle reveals them.
 	const spus = await Spu.find(
 		{ 'particleLink.particleDeviceId': { $exists: true, $ne: null } },
 		{ udi: 1, 'particleLink.particleDeviceId': 1, status: 1 }
@@ -22,7 +23,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 			id: s._id,
 			udi: s.udi,
 			particleDeviceId: s.particleLink?.particleDeviceId ?? null,
-			status: s.status
+			status: s.status,
+			retired: s.status === 'retired'
 		})),
 		criteria: {
 			minZ: criteria?.minZ ?? 3900,

@@ -4031,3 +4031,31 @@ that control/, jog/, calibrate/ and runs/ all render under /manufacturing/cart-m
 Build status: success (both Vercel scopes). Preview is cookie-session gated — it 302s to
 /login, so the routes need a real login to confirm end to end; the arm itself will not
 respond until ROBOT_ARM_BASE_URL / ROBOT_ARM_API_KEY point at the Pi.
+
+================================================================================
+2026-09-03 — feat/magnetometer-retired-toggle — Retired-SPU toggle on Magnetometer Validation
+================================================================================
+The Magnetometer Validation page's "Choose an SPU…" dropdown listed every SPU that
+had a Particle device linked, retired units included, with no way to filter them out.
+Retired hardware is not something anyone fetches magnetometer results from, so the
+list was longer than it needed to be and made picking a live unit harder.
+
+Added a "Show retired" checkbox next to the Select SPU label, defaulting to off, and
+a "X of Y units" counter beside it — X is what the dropdown currently lists, Y is the
+total including retired units. Ticking the box puts the retired units back in the list
+(X then equals Y). The filter is client-side: the load function still returns every
+particle-linked SPU and now tags each one with a `retired` boolean derived from
+`status === 'retired'`, so toggling costs no round-trip. An $effect clears the
+selection if the currently-selected SPU gets hidden by switching the toggle back off,
+so the hidden spuId can never be submitted to ?/readFromDevice.
+
+Only the magnetometer page changed; the thermocouple and validation-runs pages keep
+their existing server-side `status: { $nin: ['voided', 'retired'] }` filters.
+
+Files touched: src/routes/validation/magnetometer/+page.server.ts,
+src/routes/validation/magnetometer/+page.svelte.
+
+npm run check: 10 errors / 434 warnings — zero errors or warnings in either magnetometer
+file. (The 46-error figure in the entry above was measured on a differently-resolved
+node_modules; today's run on a fresh `npm install` reports 10, all in r2.ts,
+AskBimsWidget.svelte and assembly/[sessionId]/+page.svelte — none touched here.)
