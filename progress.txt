@@ -4049,6 +4049,12 @@ particle-linked SPU and now tags each one with a `retired` boolean derived from
 selection if the currently-selected SPU gets hidden by switching the toggle back off,
 so the hidden spuId can never be submitted to ?/readFromDevice.
 
+The toggle is the same sliding switch used by the SPU Inventory page
+(src/routes/spu/+page.svelte) — role="switch", cyan when on, labelled
+"Show retired (N)", and only rendered when at least one retired unit exists. That page
+lives on master/bimsv2, not on NEWDEV, which is why a repo-wide search of this branch
+turned up no prior art at first.
+
 Only the magnetometer page changed; the thermocouple and validation-runs pages keep
 their existing server-side `status: { $nin: ['voided', 'retired'] }` filters.
 

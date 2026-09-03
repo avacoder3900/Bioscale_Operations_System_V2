@@ -18,8 +18,10 @@
 	let editingCriteria = $state(false);
 	let savingCriteria = $state(false);
 
-	// Retired units are hidden by default, same as the SPU inventory listing.
+	// Retired units are noise for day-to-day work — hidden unless toggled on.
+	// Mirrors the SPU Inventory listing (src/routes/spu/+page.svelte on master).
 	let showRetired = $state(false);
+	const retiredCount = $derived(data.spus.filter(s => s.retired).length);
 
 	const visibleSpus = $derived(showRetired ? data.spus : data.spus.filter(s => !s.retired));
 	const totalCount = $derived(data.spus.length);
@@ -56,13 +58,29 @@
 			<div>
 				<div class="flex flex-wrap items-center justify-between gap-2">
 					<label for="spu-select" class="tron-label">Select SPU</label>
-					<div class="flex items-center gap-3">
-						<span class="tron-text-muted text-xs">{visibleSpus.length} of {totalCount} units</span>
-						<label class="flex cursor-pointer items-center gap-2 text-xs text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)]">
-							<input type="checkbox" class="accent-[var(--color-tron-cyan)]" bind:checked={showRetired} />
-							Show retired
-						</label>
-					</div>
+					<span class="flex items-center gap-4 text-xs">
+						{#if retiredCount > 0}
+							<button
+								type="button"
+								class="flex items-center gap-2 transition-colors {showRetired ? 'text-[var(--color-tron-cyan)]' : 'tron-text-muted hover:text-[var(--color-tron-cyan)]'}"
+								onclick={() => (showRetired = !showRetired)}
+								role="switch"
+								aria-checked={showRetired}
+							>
+								<span
+									class="relative inline-block h-4 w-8 rounded-full transition-colors"
+									style="background: {showRetired ? 'var(--color-tron-cyan)' : 'var(--color-tron-border)'};"
+								>
+									<span
+										class="absolute top-0.5 h-3 w-3 rounded-full bg-[var(--color-tron-bg,#0a0e14)] transition-all"
+										style="left: {showRetired ? '18px' : '2px'};"
+									></span>
+								</span>
+								Show retired ({retiredCount})
+							</button>
+						{/if}
+						<span class="tron-text-muted">{visibleSpus.length} of {totalCount} units</span>
+					</span>
 				</div>
 				<select id="spu-select" class="tron-select w-full" style="min-height: 48px;" bind:value={selectedSpuId}>
 					<option value="">Choose an SPU…</option>
