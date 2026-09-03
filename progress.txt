@@ -11624,3 +11624,12 @@ Source: branch bimsv2 @ commit 9cc9b7c7
 Retrieve this exact code: git checkout bimsv2 at commit 9cc9b7c7
 What this deployment is for: standalone /validation/thermocouple page now takes a
   binary operator Pass/Fail instead of a typed acceptance range.
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+  (immutable: https://bioscale-operations-system-mongodb-ek80se8lg-brevitest.vercel.app)
+Source: branch master @ commit 5cad0635
+Retrieve this exact code: git checkout master at commit 5cad0635
+What this deployment is for: promotes the two thermocouple operator-verdict commits
+  (b636bc63 run-detail step, 9cc9b7c7 standalone upload page) from bimsv2 to production
+  via clean fast-forward; master had not moved since bimsv2 was cut. Vercel did NOT
+  dedup despite the SHA already having a preview build — a real Production build ran.
