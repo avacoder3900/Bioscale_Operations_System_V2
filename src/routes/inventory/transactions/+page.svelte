@@ -514,7 +514,8 @@
 				<p class="tron-text-muted mb-4 text-sm">
 					Deducts the full standard parts kit for one SPU — {data.spuKit.totalParts} parts,
 					{data.spuKit.totalUnits} units total. Assembly scans only deduct barcode-scanned parts; this
-					books the rest of the build.
+					books the rest of the build. Only units still being built are listed — a unit that has
+					reached validating was already assembled off the shelf.
 				</p>
 
 				{#if withdrawError}
@@ -527,14 +528,27 @@
 
 				<div class="mb-4">
 					<label for="kit-spu" class="tron-text-muted mb-1 block text-sm">SPU *</label>
-					<select id="kit-spu" bind:value={selectedSpuId} class="tron-input w-full px-3 py-2 text-sm">
-						<option value="">Select an SPU...</option>
-						{#each data.spus as spu}
-							<option value={spu.id}>
-								{spu.label} — {spu.status}{spu.alreadyWithdrawn ? ' (kit already withdrawn)' : ''}
-							</option>
-						{/each}
-					</select>
+					{#if data.spus.length === 0}
+						<p
+							class="border border-[var(--color-tron-border)] p-3 text-sm text-[var(--color-tron-yellow)]"
+						>
+							No units are currently being built. An SPU must be at draft or assembling to withdraw a
+							kit for it.
+						</p>
+					{:else}
+						<select
+							id="kit-spu"
+							bind:value={selectedSpuId}
+							class="tron-input w-full px-3 py-2 text-sm"
+						>
+							<option value="">Select an SPU...</option>
+							{#each data.spus as spu}
+								<option value={spu.id}>
+									{spu.label} — {spu.status}{spu.alreadyWithdrawn ? ' (kit already withdrawn)' : ''}
+								</option>
+							{/each}
+						</select>
+					{/if}
 				</div>
 
 				{#if isRepeatWithdrawal}
