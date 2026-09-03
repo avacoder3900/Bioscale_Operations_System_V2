@@ -11617,3 +11617,10 @@ src/routes/validation/thermocouple/+page.svelte.
 npm run check: 119 errors / 434 warnings, ZERO errors and ZERO warnings in all
 three touched files; counts match the baseline logged in the entry above (that
 entry's 120 included one error since resolved elsewhere).
+
+Deployment: preview — https://bioscale-operations-system-mongodb-2nwvhkz0n-brevitest.vercel.app
+  (branch alias: https://bioscale-operations-system-mongodb-git-bimsv2-brevitest.vercel.app)
+Source: branch bimsv2 @ commit 9cc9b7c7
+Retrieve this exact code: git checkout bimsv2 at commit 9cc9b7c7
+What this deployment is for: standalone /validation/thermocouple page now takes a
+  binary operator Pass/Fail instead of a typed acceptance range.
