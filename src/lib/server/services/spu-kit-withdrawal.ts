@@ -37,6 +37,12 @@ export interface KitLine {
 	resolved: boolean;
 	/** True when stock on hand is below the quantity this kit needs. */
 	short: boolean;
+	/**
+	 * Set when the part is deliberately not withdrawn (antennas, aluminum tape
+	 * pending its mm figure). Distinct from `resolved: false`, which means the
+	 * part number simply does not exist in inventory.
+	 */
+	excludedReason: string | null;
 }
 
 /**
@@ -49,7 +55,17 @@ export function buildSpuKit(): Omit<
 	KitLine,
 	'partDefinitionId' | 'currentStock' | 'resolved' | 'short'
 >[] {
-	const byPart = new Map<string, { partNumber: string; name: string; quantity: number; components: string[]; notes: string[] }>();
+	const byPart = new Map<
+		string,
+		{
+			partNumber: string;
+			name: string;
+			quantity: number;
+			components: string[];
+			notes: string[];
+			excludedReason: string | null;
+		}
+	>();
 
 	for (const component of SPU_COMPONENT_PARTS) {
 		for (const part of component.parts) {
@@ -58,13 +74,17 @@ export function buildSpuKit(): Omit<
 				existing.quantity += part.quantityPerUnit;
 				if (!existing.components.includes(component.name)) existing.components.push(component.name);
 				if (part.note && !existing.notes.includes(part.note)) existing.notes.push(part.note);
+				// A part excluded in any component is excluded for the whole kit —
+				// withdrawing it "only for the other component" would be arbitrary.
+				if (part.kitExclusion && !existing.excludedReason) existing.excludedReason = part.kitExclusion;
 			} else {
 				byPart.set(part.partNumber, {
 					partNumber: part.partNumber,
 					name: part.name,
 					quantity: part.quantityPerUnit,
 					components: [component.name],
-					notes: part.note ? [part.note] : []
+					notes: part.note ? [part.note] : [],
+					excludedReason: part.kitExclusion ?? null
 				});
 			}
 		}
@@ -84,14 +104,18 @@ export async function previewSpuKit(): Promise<{
 	lines: KitLine[];
 	totalParts: number;
 	totalUnits: number;
+	deductedParts: number;
+	deductedUnits: number;
 	unresolved: KitLine[];
+	excluded: KitLine[];
 	shortages: KitLine[];
 }> {
 	const kit = buildSpuKit();
 
 	const lines: KitLine[] = [];
 	for (const line of kit) {
-		const def = await resolvePartRef(line.partNumber);
+		// An excluded line is never deducted, so its stock is not worth a lookup.
+		const def = line.excludedReason ? null : await resolvePartRef(line.partNumber);
 		lines.push({
 			...line,
 			partDefinitionId: def ? String(def._id) : null,
@@ -101,12 +125,17 @@ export async function previewSpuKit(): Promise<{
 		});
 	}
 
+	const deducted = lines.filter((l) => l.resolved && !l.excludedReason);
+
 	return {
 		lines,
 		totalParts: lines.length,
 		totalUnits: lines.reduce((sum, l) => sum + l.quantity, 0),
-		unresolved: lines.filter((l) => !l.resolved),
-		shortages: lines.filter((l) => l.resolved && l.short)
+		deductedParts: deducted.length,
+		deductedUnits: deducted.reduce((sum, l) => sum + l.quantity, 0),
+		unresolved: lines.filter((l) => !l.resolved && !l.excludedReason),
+		excluded: lines.filter((l) => l.excludedReason),
+		shortages: deducted.filter((l) => l.short)
 	};
 }
 
@@ -149,6 +178,17 @@ export async function withdrawSpuKit(params: {
 	const result: WithdrawResult = { withdrawn: [], skipped: [] };
 
 	for (const line of lines) {
+		if (line.excludedReason) {
+			result.skipped.push({
+				partNumber: line.partNumber,
+				name: line.name,
+				quantity: line.quantity,
+				reason: line.excludedReason,
+				notes: line.notes
+			});
+			continue;
+		}
+
 		if (!line.resolved || !line.partDefinitionId) {
 			result.skipped.push({
 				partNumber: line.partNumber,

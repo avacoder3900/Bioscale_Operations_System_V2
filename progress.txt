@@ -11573,3 +11573,50 @@ To exercise: log in, go to /inventory/transactions, "Withdraw SPU Kit". The pick
 lists only in-build SPUs (IN_BUILD_STATUSES) — already-assembled/released units are
 excluded, per the 2026-09-02 decision that withdrawal covers units currently being
 made, not existing stock.
+
+================================================================================
+2026-09-04 — feat/spu-kit-withdrawal — kit contents revised; PT-SPU-104 collision found
+================================================================================
+Operator-requested changes to what the kit withdraws, plus a wrong-part deduction bug
+found while making them.
+
+THE BUG (pre-existing, would have mis-deducted): spu-component-parts.ts listed
+PT-SPU-104 as "40 Tooth GT-2 Pulley" with a note saying it was not yet in inventory.
+It IS in inventory — as "Nickel plated Neodymium magnets" (Critical, description:
+"Spherical magnet. Supersedes PT-SPU-008", quantityPerUnit 3, inventoryCount -3). The
+number was reassigned after WI v18 was written. resolvePartRef() matches on partNumber,
+so a withdrawal would have deducted 1 unit off the MAGNETS believing it was a pulley,
+while the 3 spherical magnets actually needed were skipped (PT-SPU-008 no longer exists
+in part_definitions) and the real pulley was never touched. Note this means the earlier
+report that "PT-SPU-104 is skipped, not in inventory" was wrong — that came from a
+throwaway script keying off the note text, not from real resolution.
+
+Corrected against part_definitions, which is what deductions resolve against:
+- PT-SPU-008 (Main Magnet - Spherical, qty 3)  ->  PT-SPU-104 (Nickel plated Neodymium
+  magnets, qty 3). PT-SPU-008 is retired and no longer resolvable.
+- PT-SPU-104 (as pulley)  ->  PT-SPU-105 ("40 T 5mm bore pulley", 40-tooth 5 mm bore,
+  supersedes PT-SPU-017, qty 1).
+WIMF-SPU-01 v18 still prints PT-SPU-104 for the pulley and needs correcting at the
+document level — the code now deliberately disagrees with the WI and says so in a note.
+
+Other requested changes:
+- Timing belt PT-SPU-032: 350 -> 351 mm, and quantity is now 351 (MILLIMETRES) rather
+  than 1 cut, per operator decision. Caveat recorded on the part: stock is counted in
+  3000 mm spools (inventoryCount 7), so mm deductions drive it negative until the unit
+  of measure on PT-SPU-032 is reconciled. Operator accepted this knowingly.
+- Aluminum tape PT-SPU-099: excluded from withdrawal pending its per-SPU mm length.
+  part_definitions carries quantityPerUnit 60, which the operator has NOT confirmed, so
+  it is not used. Listed every withdrawal with the reason so the gap stays visible.
+- Antennas PT-SPU-101 / 102 / 103 (GNSS, cellular, Wi-Fi/BLE): excluded. No part
+  definitions exist for them in inventory anyway (parts_lookup "antenna" returns 0).
+
+Mechanism: new optional `kitExclusion` string on ComponentPart. An excluded part stays
+in SPU_COMPONENT_PARTS — that map is also the agent reassembly knowledge base, and
+deleting the antennas would break "what lives in the antennas component?" — but
+buildSpuKit marks it, previewSpuKit skips the stock lookup, and withdrawSpuKit routes it
+to `skipped` with the reason shown. Excluded is kept distinct from unresolved: one is a
+decision, the other is missing data.
+
+Kit now: 45 distinct parts, 41 deducted, 4 excluded (tape + 3 antennas).
+
+npm run check: 10 errors / 434 warnings — unchanged from baseline.

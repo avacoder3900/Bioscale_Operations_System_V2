@@ -94,7 +94,10 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 					lines: spuKit.lines,
 					totalParts: spuKit.totalParts,
 					totalUnits: spuKit.totalUnits,
+					deductedParts: spuKit.deductedParts,
+					deductedUnits: spuKit.deductedUnits,
 					unresolvedCount: spuKit.unresolved.length,
+					excludedCount: spuKit.excluded.length,
 					shortageCount: spuKit.shortages.length
 				}
 			: null,

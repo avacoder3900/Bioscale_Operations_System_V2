@@ -41,10 +41,14 @@
 					currentStock: number | null;
 					resolved: boolean;
 					short: boolean;
+					excludedReason: string | null;
 				}>;
 				totalParts: number;
 				totalUnits: number;
+				deductedParts: number;
+				deductedUnits: number;
 				unresolvedCount: number;
+				excludedCount: number;
 				shortageCount: number;
 			} | null;
 			spus: Array<{
@@ -512,10 +516,11 @@
 				<!-- Confirmation view -->
 				<h2 class="tron-heading mb-2 text-lg font-bold">Withdraw SPU Kit</h2>
 				<p class="tron-text-muted mb-4 text-sm">
-					Deducts the full standard parts kit for one SPU — {data.spuKit.totalParts} parts,
-					{data.spuKit.totalUnits} units total. Assembly scans only deduct barcode-scanned parts; this
-					books the rest of the build. Only units still being built are listed — a unit that has
-					reached validating was already assembled off the shelf.
+					Deducts the standard parts kit for one SPU — {data.spuKit.deductedParts} of
+					{data.spuKit.totalParts} parts. Assembly scans only deduct barcode-scanned parts; this books
+					the rest of the build. Only units still being built are listed — a unit that has reached
+					validating was already assembled off the shelf. Quantities are per the part's own unit of
+					measure (the timing belt is in mm, not cuts).
 				</p>
 
 				{#if withdrawError}
@@ -563,12 +568,18 @@
 					</label>
 				{/if}
 
-				{#if data.spuKit.unresolvedCount > 0 || data.spuKit.shortageCount > 0}
+				{#if data.spuKit.unresolvedCount > 0 || data.spuKit.excludedCount > 0 || data.spuKit.shortageCount > 0}
 					<div class="tron-text-muted mb-3 text-xs">
+						{#if data.spuKit.excludedCount > 0}
+							<span class="text-[var(--color-tron-cyan)]">
+								{data.spuKit.excludedCount} part{data.spuKit.excludedCount !== 1 ? 's' : ''} deliberately
+								not withdrawn — see the reasons below.
+							</span>
+						{/if}
 						{#if data.spuKit.unresolvedCount > 0}
-							<span class="text-[var(--color-tron-yellow)]">
+							<span class="ml-2 text-[var(--color-tron-yellow)]">
 								{data.spuKit.unresolvedCount} part{data.spuKit.unresolvedCount !== 1 ? 's' : ''} cannot
-								be deducted (not in the inventory system) — see the notes below.
+								be deducted (not in the inventory system).
 							</span>
 						{/if}
 						{#if data.spuKit.shortageCount > 0}
@@ -596,7 +607,11 @@
 									<td class="p-2 align-top font-mono text-xs">{line.partNumber}</td>
 									<td class="p-2 align-top">
 										{line.name}
-										{#if !line.resolved}
+										{#if line.excludedReason}
+											<div class="mt-1 text-xs text-[var(--color-tron-cyan)]">
+												Not withdrawn — {line.excludedReason}
+											</div>
+										{:else if !line.resolved}
 											<div class="mt-1 text-xs text-[var(--color-tron-yellow)]">
 												Not in the inventory system — will be skipped.
 											</div>
@@ -605,13 +620,19 @@
 											<div class="tron-text-muted mt-1 text-xs italic">{note}</div>
 										{/each}
 									</td>
-									<td class="p-2 text-right align-top">{line.quantity}</td>
 									<td
-										class="p-2 text-right align-top {!line.resolved
-											? 'text-[var(--color-tron-yellow)]'
-											: line.short
-												? 'text-[var(--color-tron-red)]'
-												: ''}"
+										class="p-2 text-right align-top {line.excludedReason
+											? 'tron-text-muted line-through'
+											: ''}">{line.quantity}</td
+									>
+									<td
+										class="p-2 text-right align-top {line.excludedReason
+											? 'tron-text-muted'
+											: !line.resolved
+												? 'text-[var(--color-tron-yellow)]'
+												: line.short
+													? 'text-[var(--color-tron-red)]'
+													: ''}"
 									>
 										{line.resolved ? line.currentStock : '—'}
 									</td>
