@@ -11665,3 +11665,8 @@ rollup at all — now writes the same rollup. Sessions remain the raw-evidence r
 Files: src/routes/spu/[spuId]/+page.server.ts, src/routes/validation/magnetometer/+page.server.ts,
 src/routes/api/validation/magnetometer/poll/+server.ts.
 npm run check: 10 errors / 434 warnings — baseline.
+
+Deployment: production — building from the GitHub push to master (Vercel dashboard, commit below)
+Source: branch master @ merge of feat/spu-tweaks
+Retrieve this exact code: git log master --oneline
+What this deployment is for: audit-trail visibility + magnetometer failure rollups (drift-audit quick wins)
