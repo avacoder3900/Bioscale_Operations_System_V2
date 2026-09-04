@@ -11691,3 +11691,8 @@ No backfill of the 24 already-closed jobs (scriptable later). PRD:
 docs/prds/SPU-INV-10-unified-journal.md.
 
 npm run check: 10 errors / 434 warnings — baseline.
+
+Deployment: production — building from the GitHub push to master (Vercel dashboard, commit below)
+Source: branch master @ merge of feat/spu-tweaks
+Retrieve this exact code: git log master --oneline
+What this deployment is for: unified semantic journal (SPU-INV-10) — servicing closes publish into SPU journals
