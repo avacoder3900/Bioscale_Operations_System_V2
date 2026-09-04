@@ -7,6 +7,7 @@ import {
 import { byId } from '$lib/server/db/native-helpers';
 import { isLegalTransition, LEGAL_TRANSITIONS, normalizeSpuStatus } from '$lib/server/spu-status';
 import { syncServiceFlag } from '$lib/server/service-flag';
+import { appendSpuJournal } from '$lib/server/spu-journal';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals, params }) => {
@@ -117,6 +118,8 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 				.map((j: any) => ({
 					id: j._id,
 					text: j.text ?? '',
+					source: j.source ?? 'manual',
+					refLabel: j.refLabel ?? null,
 					createdByName: j.createdBy?.username ?? null,
 					createdAt: j.createdAt ?? null
 				}))
@@ -305,26 +308,12 @@ export const actions: Actions = {
 		if (!text) return fail(400, { error: 'Journal entry cannot be empty' });
 		if (text.length > 5000) return fail(400, { error: 'Journal entry too long (max 5000 characters)' });
 
-		const spu = await Spu.findById(params.spuId).select('_id').lean();
-		if (!spu) return fail(404, { error: 'SPU not found' });
-
-		const entry = {
-			_id: generateId(),
+		const result = await appendSpuJournal(
+			params.spuId,
 			text,
-			createdBy: { _id: locals.user!._id, username: locals.user!.username },
-			createdAt: new Date()
-		};
-		await Spu.updateOne({ _id: params.spuId }, { $push: { journal: entry } });
-
-		await AuditLog.create({
-			_id: generateId(),
-			tableName: 'spus',
-			recordId: params.spuId,
-			action: 'UPDATE',
-			oldData: {},
-			newData: { journalEntryAdded: entry._id, preview: text.slice(0, 120) },
-			changedBy: locals.user!.username ?? locals.user!._id
-		});
+			{ _id: locals.user!._id, username: locals.user!.username }
+		);
+		if (!result.ok) return fail(result.error === 'SPU not found' ? 404 : 500, { error: result.error ?? 'Failed to add entry' });
 
 		return { journalSuccess: true };
 	},
@@ -711,6 +700,15 @@ export const actions: Actions = {
 			changedBy: locals.user!.username ?? locals.user!._id
 		});
 		await syncServiceFlag(params.spuId);
+
+		// Unified journal (SPU-INV-10): the quick service flow's story too.
+		await appendSpuJournal(
+			params.spuId,
+			`Service #${open.cycle} returned — re-validation required.\nIssue: ${open.issue ?? '—'}\nFix: ${fix}`,
+			operator,
+			{ source: 'service', refKind: 'inline_service', refId: open._id, refLabel: `Service #${open.cycle}` }
+		);
+
 		return { success: true, serviceReturned: true };
 	}
 };

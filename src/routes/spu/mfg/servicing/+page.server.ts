@@ -5,6 +5,7 @@ import { connectDB, Spu, ServiceRecord, ServiceGroup, AuditLog, generateId } fro
 // shared vocabulary from the SPU-INV-07 collapse.
 import { RETURNABLE_STATUSES } from '$lib/server/spu-status';
 import { syncServiceFlag } from '$lib/server/service-flag';
+import { appendSpuJournal } from '$lib/server/spu-journal';
 import type { Actions, PageServerLoad, RequestEvent } from './$types';
 
 /**
@@ -39,6 +40,49 @@ async function writeAudit(
 const SERVICE_TYPES = ['inspection', 'calibration', 'repair', 'part-replacement', 'other'];
 const PRIORITIES = ['low', 'normal', 'high'];
 const FINDING_OUTCOMES = ['ok', 'issue', 'rework', 'blocked'];
+
+/**
+ * The unified-journal "publish" moment (SPU-INV-10): closing a service job
+ * appends the whole story — findings, notes, changes, resolution — onto the
+ * unit's journal so it reads inline with manual entries on the SPU page.
+ */
+function serviceJournalText(
+	record: any,
+	resolution: string,
+	returnTo: string,
+	groupName: string | null | undefined,
+	closedBy: string | undefined
+): string {
+	const lines: string[] = [];
+	lines.push(
+		`Service job closed — ${record.serviceType ?? 'service'}` +
+			`${groupName ? ` (investigation: ${groupName})` : ''}` +
+			`${closedBy ? ` by ${closedBy}` : ''}.`
+	);
+	if (record.reason) lines.push(`Reason opened: ${record.reason}`);
+	const findings = record.findings ?? [];
+	if (findings.length) {
+		lines.push('Findings:');
+		for (const f of findings) lines.push(`• [${f.outcome ?? 'ok'}] ${f.text ?? ''}`);
+	}
+	const notes = record.notes ?? [];
+	if (notes.length) {
+		lines.push('Notes:');
+		for (const n of notes) lines.push(`• ${n.text ?? ''}`);
+	}
+	for (const p of record.partsReplaced ?? []) {
+		lines.push(`Part replaced: ${p.partNumber ?? '?'} ${p.partName ?? ''}${p.reason ? ` — ${p.reason}` : ''}`);
+	}
+	for (const fw of record.firmwareChanges ?? []) {
+		lines.push(`Firmware: ${fw.deviceType ?? 'device'} ${fw.previousVersion ?? '?'} → ${fw.newVersion ?? '?'}${fw.reason ? ` — ${fw.reason}` : ''}`);
+	}
+	for (const oc of record.otherChanges ?? []) {
+		lines.push(`Change: ${oc.description ?? oc.text ?? ''}`);
+	}
+	if (resolution) lines.push(`Resolution: ${resolution}`);
+	lines.push(`Returned to status: ${returnTo}.`);
+	return lines.join('\n');
+}
 
 /** SPU-0244 style label built from the last 4 characters of the unit's UDI. */
 function extractShortId(udi: string): string {
@@ -1318,6 +1362,15 @@ export const actions: Actions = {
 			reason: 'Service job closed'
 		});
 
+		// Unified journal (SPU-INV-10): closing is the publish moment.
+		const groupForJournal: any = record.groupId ? await ServiceGroup.findById(record.groupId).lean() : null;
+		await appendSpuJournal(
+			record.spuId,
+			serviceJournalText(record, resolution, returnTo, groupForJournal?.name, event.locals.user?.username),
+			{ _id: event.locals.user!._id, username: event.locals.user!.username },
+			{ source: 'service', refKind: 'service_record', refId: recordId, refLabel: `${record.serviceType ?? 'service'}${groupForJournal?.name ? ` — ${groupForJournal.name}` : ''}` }
+		);
+
 		// If that was the last unit in its group, the group is done too.
 		await closeGroupIfDrained(event, record.groupId, 'All units completed');
 
@@ -1416,6 +1469,15 @@ export const actions: Actions = {
 				newData: { status: 'closed', returnedToStatus: returnTo, resolution },
 				reason: `Closed with group task: ${group.name}`
 			});
+
+			// Unified journal (SPU-INV-10): each unit gets the investigation's
+			// story on its own record.
+			await appendSpuJournal(
+				record.spuId,
+				serviceJournalText(record, resolution, returnTo, group.name, event.locals.user?.username),
+				{ _id: event.locals.user!._id, username: event.locals.user!.username },
+				{ source: 'service', refKind: 'service_record', refId: record._id, refLabel: `${record.serviceType ?? 'service'} — ${group.name}` }
+			);
 		}
 
 		// Anything finalized stays open and keeps the group open with it, rather

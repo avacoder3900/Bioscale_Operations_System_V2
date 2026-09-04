@@ -512,7 +512,18 @@
 			{:else}
 				<div class="space-y-0">
 					{#each data.spu.journal as entry (entry.id)}
-						<div class="border-l-2 border-[var(--color-tron-cyan)] py-3 pl-4">
+						{@const isSystem = entry.source && entry.source !== 'manual'}
+						<div class="border-l-2 py-3 pl-4" style="border-color: {isSystem ? 'var(--color-tron-orange, #f97316)' : 'var(--color-tron-cyan)'};">
+							{#if isSystem}
+								<p class="mb-1 flex items-center gap-2">
+									<span class="rounded px-1.5 py-0.5 text-[10px] font-bold uppercase" style="background: rgba(249,115,22,0.15); color: var(--color-tron-orange, #f97316);">
+										{entry.source}
+									</span>
+									{#if entry.refLabel}
+										<span class="tron-text-muted text-xs">{entry.refLabel}</span>
+									{/if}
+								</p>
+							{/if}
 							<p class="tron-text-primary text-sm whitespace-pre-wrap">{entry.text}</p>
 							<p class="mt-1 text-xs" style="color: var(--color-tron-cyan); opacity: 0.6;">
 								{entry.createdByName ?? 'Unknown'} · {entry.createdAt ? new Date(entry.createdAt).toLocaleString() : '—'}

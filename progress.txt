@@ -11670,3 +11670,24 @@ Deployment: production — building from the GitHub push to master (Vercel dashb
 Source: branch master @ merge of feat/spu-tweaks
 Retrieve this exact code: git log master --oneline
 What this deployment is for: audit-trail visibility + magnetometer failure rollups (drift-audit quick wins)
+
+================================================================================
+2026-09-04 — feat/spu-tweaks — unified semantic journal (SPU-INV-10)
+================================================================================
+Jacob's framing: the SPU journal and the servicing board's investigations should write to ONE
+chronological stream per unit — closing/"publishing" a service job or group investigation (e.g.
+"Timing Belt Investigation on all SPUs") appends its findings inline with manual journal entries;
+future systems join the same stream. This is the lightweight DHR-spine from the 2026-09-04 drift
+audit and directly closes gap C (service closes previously left no narrative on the SPU).
+
+Implementation: journal entries gain source/refKind/refId/refLabel (additive; existing = manual).
+New shared writer src/lib/server/spu-journal.ts (appendSpuJournal — audit-logged, never throws);
+addJournalEntry action refactored onto it. Servicing board's closeService + closeGroupRemaining
+now append one entry per unit at close: service type, investigation/group name, reason, findings
+with outcomes, notes, parts replaced, firmware changes, resolution, closer, returned-to status
+(serviceJournalText builder). Detail-page inline returnService appends its issue/fix story too.
+UI: system entries get an orange left border + SERVICE badge + refLabel; manual entries unchanged.
+No backfill of the 24 already-closed jobs (scriptable later). PRD:
+docs/prds/SPU-INV-10-unified-journal.md.
+
+npm run check: 10 errors / 434 warnings — baseline.

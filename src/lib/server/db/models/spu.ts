@@ -141,6 +141,13 @@ const spuSchema = new Schema({
 	journal: [{
 		_id: { type: String, default: () => generateId() },
 		text: { type: String, required: true },
+		// Which system appended this entry (SPU-INV-10 unified journal):
+		// 'manual' (a person on the detail page), 'service' (servicing-board
+		// close), more kinds later. ref* points at the producing record.
+		source: { type: String, default: 'manual' },
+		refKind: String,
+		refId: String,
+		refLabel: String,
 		createdBy: operatorRef,
 		createdAt: { type: Date, default: () => new Date() }
 	}],
