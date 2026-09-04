@@ -106,28 +106,28 @@ export const actions: Actions = {
 				criteriaUsed: { minZ, maxZ }
 			});
 
-			// Update SPU DHR only when test passes
+			// Update the SPU DHR rollup on BOTH outcomes — a failed test is part of
+			// the unit's record too (failures used to stay 'pending' forever).
+			// qcStatus is only promoted on a pass.
 			const magStatus = overallPassed ? 'passed' : 'failed';
-			if (overallPassed) {
-				await Spu.updateOne({ _id: spuId }, {
-					$set: {
-						'validation.magnetometer': {
-							status: 'passed',
-							sessionId,
-							// completedAt keeps its existing meaning (when BIMS recorded
-							// this) so the DHR field is not silently redefined; testRanAt
-							// is the additive, accurate one.
-							completedAt: pulledAt,
-							testRanAt: testTime?.at ?? null,
-							rawData: rawResult,
-							results: parsed,
-							failureReasons: [],
-							criteriaUsed: { minZ, maxZ }
-						},
-						qcStatus: 'passed'
-					}
-				});
-			}
+			await Spu.updateOne({ _id: spuId }, {
+				$set: {
+					'validation.magnetometer': {
+						status: magStatus,
+						sessionId,
+						// completedAt keeps its existing meaning (when BIMS recorded
+						// this) so the DHR field is not silently redefined; testRanAt
+						// is the additive, accurate one.
+						completedAt: pulledAt,
+						testRanAt: testTime?.at ?? null,
+						rawData: rawResult,
+						results: parsed,
+						failureReasons: overallPassed ? [] : failureReasons,
+						criteriaUsed: { minZ, maxZ }
+					},
+					...(overallPassed ? { qcStatus: 'passed' } : {})
+				}
+			});
 
 			// Create audit log entry
 			await AuditLog.create({

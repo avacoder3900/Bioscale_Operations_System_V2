@@ -3,7 +3,7 @@ import { json } from '@sveltejs/kit';
 export const config = {
 	maxDuration: 60
 };
-import { connectDB, ValidationSession, Integration, generateId } from '$lib/server/db';
+import { connectDB, ValidationSession, Integration, Spu, generateId } from '$lib/server/db';
 import { getVariable } from '$lib/server/particle';
 import { extractMagTestTime } from '$lib/server/magnetometer-time';
 import type { RequestHandler } from './$types';
@@ -121,6 +121,28 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			criteriaUsed: { minZ, maxZ },
 			source: 'auto-poll'
 		});
+
+		// Roll the result up onto the SPU DHR — the poll path used to create
+		// sessions that never touched the unit's record at all. Both outcomes
+		// are recorded; qcStatus is only promoted on a pass (same rules as the
+		// manual read on /validation/magnetometer).
+		if (spuId) {
+			await Spu.updateOne({ _id: spuId }, {
+				$set: {
+					'validation.magnetometer': {
+						status: overallPassed ? 'passed' : 'failed',
+						sessionId,
+						completedAt: pulledAt,
+						testRanAt: testTime?.at ?? null,
+						rawData: rawResult,
+						results: parsed,
+						failureReasons: overallPassed ? [] : failureReasons,
+						criteriaUsed: { minZ, maxZ }
+					},
+					...(overallPassed ? { qcStatus: 'passed' } : {})
+				}
+			});
+		}
 
 		return json({
 			status: 'new_result',

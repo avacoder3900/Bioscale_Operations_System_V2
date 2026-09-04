@@ -11649,3 +11649,19 @@ What this deployment is for: promotes the two thermocouple operator-verdict comm
   (b636bc63 run-detail step, 9cc9b7c7 standalone upload page) from bimsv2 to production
   via clean fast-forward; master had not moved since bimsv2 was cut. Vercel did NOT
   dedup despite the SHA already having a preview build — a real Production build ran.
+
+================================================================================
+2026-09-04 — feat/spu-tweaks — drift-audit quick wins: audit trail visible + mag failures roll up
+================================================================================
+First two fixes from the 2026-09-04 drift audit, approved by Jacob (signature hardening explicitly
+deferred). (1) SPU detail "Record History" panel: the load queried AuditLog by entityId (a field
+no row has) sorted by createdAt (not a field) — always empty. Now {tableName:'spus', recordId}
+sorted by changedAt (uses the existing compound index); changedBy resolution fixed (writers store
+usernames — map only when it's a user _id). 87 existing prod rows become visible; read-path only.
+(2) Magnetometer rollups: the manual-read path only wrote spu.validation.magnetometer on PASS
+(fails stayed 'pending' forever) — now writes both outcomes with failureReasons, qcStatus still
+promoted only on pass; the auto-poll endpoint (the path the mag page actually uses) wrote NO
+rollup at all — now writes the same rollup. Sessions remain the raw-evidence record.
+Files: src/routes/spu/[spuId]/+page.server.ts, src/routes/validation/magnetometer/+page.server.ts,
+src/routes/api/validation/magnetometer/poll/+server.ts.
+npm run check: 10 errors / 434 warnings — baseline.

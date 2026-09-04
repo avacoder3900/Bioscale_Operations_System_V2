@@ -23,7 +23,9 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 		s.batch?._id ? Batch.findById(s.batch._id).lean() : null,
 		AssemblySession.find({ spuId: params.spuId }).sort({ createdAt: -1 }).lean(),
 		ElectronicSignature.find({ entityId: params.spuId }).sort({ signedAt: -1 }).lean(),
-		AuditLog.find({ entityId: params.spuId }).sort({ createdAt: -1 }).limit(50).lean(),
+		// Writers key SPU audit rows as {tableName:'spus', recordId} — the old
+		// {entityId} filter matched a field no row has and always returned [].
+		AuditLog.find({ tableName: 'spus', recordId: params.spuId }).sort({ changedAt: -1 }).limit(50).lean(),
 		Customer.find({ status: 'active' }, { name: 1 }).lean(),
 		ValidationSession.find({ spuId: params.spuId })
 			.select('_id type status startedAt completedAt overallPassed failureReasons criteriaUsed magResults override userId rawData')
@@ -48,7 +50,7 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 	const sigMap = new Map(sigUsers.map((u: any) => [u._id, u.username]));
 
 	// Audit trail user lookup
-	const auditUserIds = [...new Set(auditTrail.map((a: any) => a.userId).filter(Boolean))];
+	const auditUserIds = [...new Set(auditTrail.map((a: any) => a.changedBy).filter(Boolean))];
 	const auditUsers = auditUserIds.length ? await User.find({ _id: { $in: auditUserIds } }, { username: 1 }).lean() : [];
 	const auditMap = new Map(auditUsers.map((u: any) => [u._id, u.username]));
 
@@ -243,7 +245,8 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 			reason: a.reason ?? null,
 			oldData: a.oldData ?? null,
 			newData: a.newData ?? null,
-			changedBy: auditMap.get(a.userId) ?? auditMap.get(a.changedBy) ?? 'System',
+			// changedBy usually holds a username already; map only when it's a user _id.
+			changedBy: auditMap.get(a.changedBy) ?? a.changedBy ?? 'System',
 			changedAt: a.changedAt ?? a.createdAt
 		}))
 	};
