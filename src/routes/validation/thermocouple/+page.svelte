@@ -40,6 +40,9 @@
 	let showFahrenheit = $state(false);
 	let isSubmitting = $state(false);
 	let readingsJson = $state('');
+	// Bumped after a successful save to remount ThermoFileUpload, clearing its
+	// internal "N readings loaded" panel along with the staged readings below.
+	let uploadNonce = $state(0);
 
 	// Computed
 	let hasReadings = $derived(readings.length > 0);
@@ -169,9 +172,18 @@
 		action="?/upload"
 		use:enhance={() => {
 			isSubmitting = true;
-			return async ({ update }) => {
+			return async ({ result, update }) => {
 				await update();
 				isSubmitting = false;
+				if (result.type === 'success') {
+					// `update()` resets the <form> element, but the parsed readings
+					// live in component state and used to survive it — leaving the
+					// previous SPU's data staged and ready to be saved again against
+					// whichever SPU was picked next. Clear the upload explicitly.
+					onClear();
+					selectedSpuId = '';
+					uploadNonce += 1;
+				}
 			};
 		}}
 	>
@@ -204,8 +216,16 @@
 		<!-- File Upload -->
 		<div class="tron-card mt-4 p-6">
 			<h2 class="tron-heading mb-4 text-lg font-semibold">Upload Temperature Data</h2>
-			<ThermoFileUpload onparsed={onParsed} onclear={onClear} />
+			{#key uploadNonce}
+				<ThermoFileUpload onparsed={onParsed} onclear={onClear} />
+			{/key}
 		</div>
+
+		{#if !hasReadings}
+			<p class="tron-text-muted mt-4 text-center text-sm">
+				Load a file above to see the statistics and chart and record a Pass or Fail verdict.
+			</p>
+		{/if}
 
 		<!-- Hidden fields for form submission -->
 		<input type="hidden" name="readings" value={readingsJson} />

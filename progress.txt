@@ -11670,3 +11670,39 @@ Deployment: production — building from the GitHub push to master (Vercel dashb
 Source: branch master @ merge of feat/spu-tweaks
 Retrieve this exact code: git log master --oneline
 What this deployment is for: audit-trail visibility + magnetometer failure rollups (drift-audit quick wins)
+
+================================================================================
+2026-09-04 — fix/thermo-stale-upload-state — thermocouple upload: stale readings could be saved against the wrong SPU
+================================================================================
+Root cause of a real data-integrity incident found while investigating "SPU 257 thermocouple
+won't post". SPU 257's session THERMO-000031 stores 377 readings / min 40.90 / max 44.00 /
+avg 43.303 / sd 0.775 / mode 43.9 starting 2026-09-02T18:44:23Z — which is exactly what
+"247 temp data.xlsx" parses to, not 257's own file (635 readings, 37.55-44.40, avg 43.594).
+THERMO-000030 (SPU 247) was written at 20:34:06Z and THERMO-000031 (SPU 257) 32 seconds later
+with an identical payload: the same file was saved twice against two different SPUs.
+
+Why it was possible: on /validation/thermocouple the parsed readings live in Svelte component
+state, not in form fields. use:enhance calls update(), which resets the <form> element but
+leaves `readings`/`readingsJson` intact, so after a successful save the statistics, chart and
+Pass/Fail buttons stayed on screen fully populated. Changing only the SPU dropdown and pressing
+Pass again re-submitted the previous file against the newly selected SPU. Separately,
+ThermoFileUpload.handleFile never reset `readingCount`, so a file that failed to parse left the
+previous file's green "N readings loaded" panel up with only the filename swapped, while
+onparsed was never called — the UI claimed data was loaded when the parent held none (or held
+the earlier file's). Because the statistics, chart and both verdict buttons all sit inside a
+single {#if hasReadings && stats} block, that state also made the verdict buttons vanish with
+no explanation, which is how the operator experienced it.
+
+Fixes: (1) ThermoFileUpload.handleFile now zeroes readingCount and calls onclear() as soon as a
+new file is chosen, so a failed parse can never leave a previous file staged — this also hardens
+the run-detail board, which uses the same component. (2) The standalone page clears the staged
+upload after a successful save (onClear(), selectedSpuId reset, and a {#key uploadNonce} remount
+of ThermoFileUpload so its internal panel resets too). (3) Added a line telling the operator to
+load a file when no readings are staged, instead of the verdict buttons silently not existing.
+No server/schema changes; the existing 257 record is not touched by this commit.
+Files: src/lib/components/validation/thermocouple/ThermoFileUpload.svelte,
+src/routes/validation/thermocouple/+page.svelte.
+npm run check: zero errors and zero warnings in both touched files. Run-wide count (119) is
+inflated by this worktree borrowing node_modules from .worktrees/pm-test (older commit): 39
+"Cannot find module" errors (zod, sharp, chart.js, bwip-js, ...) plus their implicit-any
+cascade are missing-dependency artifacts, not a regression. Vercel's build is the real gate.
