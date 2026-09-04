@@ -11706,3 +11706,11 @@ npm run check: zero errors and zero warnings in both touched files. Run-wide cou
 inflated by this worktree borrowing node_modules from .worktrees/pm-test (older commit): 39
 "Cannot find module" errors (zod, sharp, chart.js, bwip-js, ...) plus their implicit-any
 cascade are missing-dependency artifacts, not a regression. Vercel's build is the real gate.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-git-fix-the-3ea973-brevitest.vercel.app
+  (immutable: https://bioscale-operations-system-mongodb-ak88vhsqf-brevitest.vercel.app)
+Source: branch fix/thermo-stale-upload-state @ commit 855c6d33
+Retrieve this exact code: git checkout fix/thermo-stale-upload-state at commit 855c6d33
+What this deployment is for: verify a thermocouple upload clears itself after saving, so the
+  next SPU cannot inherit the previous file's readings, and that a failed parse drops the
+  "N readings loaded" panel instead of leaving stale data staged.
