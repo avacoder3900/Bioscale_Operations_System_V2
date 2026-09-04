@@ -28,6 +28,14 @@
 		columnsNote = '';
 		fileName = file.name;
 
+		// Choosing a new file invalidates whatever was loaded before — here AND
+		// in the parent. Without this a failed parse kept the previous file's
+		// "N readings loaded" panel on screen (only the name changed) while the
+		// parent still held the old readings, so the earlier file could be
+		// submitted against a different SPU.
+		readingCount = 0;
+		onclear?.();
+
 		const reader = new FileReader();
 		reader.onload = (e) => {
 			try {
