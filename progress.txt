@@ -11537,3 +11537,21 @@ Deployment: production — building from the GitHub push to master (Vercel dashb
 Source: branch master @ merge of feat/spu-tweaks
 Retrieve this exact code: git log master --oneline
 What this deployment is for: fix invisible no-cost parts + Unit Cost field on the add form
+
+================================================================================
+2026-09-04 — feat/spu-tweaks — SPU data-drift audit (validation structures + sacred-record gaps)
+================================================================================
+Deep context load per Jacob: has the Spu "sacred final record" drifted as features were added?
+Full report: docs/SPU-DATA-DRIFT-AUDIT-2026-09-04.md (code census + read-only Atlas audit via new
+scripts/diag-spu-validation-drift.ts). Headlines: SPU detail-page audit trail queries a field no
+audit row has (entityId vs recordId) → ALWAYS empty despite 87 rows in prod; assembly e-signature
+keyed to sessionId so it never lists; magnetometer failures + all auto-poll sessions never reach
+the Spu; mag override attribution silently stripped by strict mode; thermo run uploads half-written
+(criteria hardcoded null); optics sessionId holds a cartridge barcode (View Session 404s) and only
+latest-of-N runs syncs; validation.status rollup has zero writers; servicing board (findings,
+location history, firmware changes, groups) writes essentially nothing onto the Spu — two parallel
+servicing systems can't see each other; validation-run completion touches no member Spu;
+finalizedAt never set + Delete-SPU button bypasses sacred middleware (source of 15 orphaned
+session spuIds); lux/location/corrections are dead schema branches. Analysis only — no app code
+changed. Fix order proposed in the doc (audit-trail one-liner first; append-whitelist sacred
+middleware before ever setting finalizedAt).
