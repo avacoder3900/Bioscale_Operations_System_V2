@@ -11555,4 +11555,21 @@ consumes one kit and a second withdrawal doubles the deduction.
 npm run check: 10 errors / 434 warnings — unchanged from the SPU-INV-09 baseline; the
 five touched files contribute zero errors and zero warnings.
 
-Not yet deployed — no preview build requested yet.
+=== DEPLOYMENT LOG — 2026-09-04 — preview ===
+branch:  feat/spu-kit-withdrawal
+commit:  76a9d9348c59378aa33c9817811e46e1d11548ff
+url:     https://bioscale-operations-system-mongodb-5e5fzt49f-brevitest.vercel.app
+status:  Vercel preview build success (~100s; the usual transient 'failure' did not
+         appear this time — went pending -> success cleanly).
+
+Preview only, not production. Branch pushed to origin for the first time with this
+build; no PR opened yet. The bare deployment URL
+(bioscale-operations-system-mongodb-kvqkr5nt3.vercel.app) sits behind Vercel SSO and
+302s to vercel.com/sso-api — use the -brevitest alias above, which serves the app's
+own /login. The git-branch alias was not resolvable, so the immutable URL is the one
+to share.
+
+To exercise: log in, go to /inventory/transactions, "Withdraw SPU Kit". The picker
+lists only in-build SPUs (IN_BUILD_STATUSES) — already-assembled/released units are
+excluded, per the 2026-09-02 decision that withdrawal covers units currently being
+made, not existing stock.
