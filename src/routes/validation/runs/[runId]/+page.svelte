@@ -226,16 +226,11 @@
 		</div>
 	{/if}
 
-	{#if !data.thermoCriteria}
-		<div class="rounded-lg border border-[var(--color-tron-orange)]/30 bg-[var(--color-tron-orange)]/10 p-4 text-sm text-[var(--color-tron-orange)]">
-			The standard thermocouple acceptance range is not configured yet — uploads are recorded as
-			<span class="font-semibold">uploaded</span> and can be evaluated once the range is set.
-		</div>
-	{:else}
-		<p class="tron-text-muted text-sm">
-			Thermocouple acceptance range: {data.thermoCriteria.minTemp}°C – {data.thermoCriteria.maxTemp}°C
-		</p>
-	{/if}
+	<p class="tron-text-muted text-sm">
+		Thermocouple data is judged by the operator — upload the readings, then Pass or Fail
+		the SPU on the min/max/mode shown. That verdict is the record; there is no automatic
+		acceptance range.
+	</p>
 
 	<!-- SPU × step matrix -->
 	<div class="tron-card overflow-x-auto">
@@ -315,18 +310,18 @@
 												<input type="hidden" name="spuId" value={member.spuId} />
 												<input type="hidden" name="step" value={step} />
 												<input type="hidden" name="outcome" value="passed" />
-												<input type="hidden" name="notes" value="Approved on mode/min/max review" />
+												<input type="hidden" name="notes" value="Passed on operator review of min/max/mode" />
 												<button type="submit" class="rounded-lg bg-[var(--color-tron-green)] px-3 py-1.5 text-xs font-semibold text-[var(--color-tron-bg-primary)] hover:bg-[var(--color-tron-green)]/90">
-													Approve
+													Pass
 												</button>
 											</form>
 											<form method="POST" action="?/recordStepResult" use:enhance>
 												<input type="hidden" name="spuId" value={member.spuId} />
 												<input type="hidden" name="step" value={step} />
 												<input type="hidden" name="outcome" value="failed" />
-												<input type="hidden" name="notes" value="Rejected on mode/min/max review" />
+												<input type="hidden" name="notes" value="Failed on operator review of min/max/mode" />
 												<button type="submit" class="rounded-lg border border-[var(--color-tron-red)]/50 px-3 py-1.5 text-xs font-semibold text-[var(--color-tron-red)] hover:bg-[var(--color-tron-red)]/10">
-													Reject
+													Fail
 												</button>
 											</form>
 										</div>
@@ -372,12 +367,6 @@
 												<button type="button" onclick={() => togglePanel(`${panelKey}:upload`)} class="text-xs text-[var(--color-tron-orange)] hover:underline">
 													{cell.status === 'not_started' ? 'Upload data' : cell.status === 'uploaded' ? 'Re-upload' : 'Run again'}
 												</button>
-												{#if cell.status === 'uploaded' && data.thermoCriteria}
-													<form method="POST" action="?/evaluateThermo" use:enhance>
-														<input type="hidden" name="spuId" value={member.spuId} />
-														<button type="submit" class="text-xs text-[var(--color-tron-cyan)] hover:underline">Evaluate</button>
-													</form>
-												{/if}
 											{:else if step === 'magnetometer'}
 												<a href="/validation/magnetometer?udi={encodeURIComponent(member.udi)}&runId={run._id}" class="text-xs text-[var(--color-tron-orange)] hover:underline">
 													{cell.status === 'not_started' || cell.status === 'in_progress' ? 'Run test →' : 'Run again →'}
