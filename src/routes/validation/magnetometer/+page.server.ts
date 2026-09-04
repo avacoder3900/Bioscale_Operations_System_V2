@@ -9,9 +9,13 @@ export const load: PageServerLoad = async ({ locals }) => {
 	requirePermission(locals.user, 'spu:read');
 	await connectDB();
 
-	// Get all SPUs with particle links
+	// Get all SPUs with particle links. Retired units are excluded outright, the
+	// same way the thermocouple picker does it — they are not validated.
 	const spus = await Spu.find(
-		{ 'particleLink.particleDeviceId': { $exists: true, $ne: null } },
+		{
+			'particleLink.particleDeviceId': { $exists: true, $ne: null },
+			status: { $ne: 'retired' }
+		},
 		{ udi: 1, 'particleLink.particleDeviceId': 1, status: 1 }
 	).sort({ udi: 1 }).lean() as any[];
 
