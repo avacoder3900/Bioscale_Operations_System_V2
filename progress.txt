@@ -11867,3 +11867,28 @@ Deployment: production — building from the GitHub push to master (Vercel dashb
 Source: branch master @ merge of feat/spu-tweaks
 Retrieve this exact code: git log master --oneline
 What this deployment is for: servicing standalone (tab strip cleanup)
+
+================================================================================
+2026-09-08 — feat/spu-tweaks — service-mode hard enforcement spec'd to firmware (v92 handoff)
+================================================================================
+Jacob's decision: the service-flag yellow LED graduates from soft to HARD enforcement — a
+not-released device must refuse normal cartridge tests while still accepting the three validation
+types (optical test carts, THERMO- heat carts, magnetometer barcode). Analysis: this is a
+firmware change, not middleware — normal cart runs validate device↔brevitest-cloud (BIMS never in
+the loop), and the device already holds both ingredients: EEPROM service_flag (BIMS-maintained,
+0 only at released, offline-safe) and distinct barcode types (CARTRIDGE/MAGNETOMETER/OPTICAL/
+THERMO already classified pre-test). BIMS side requires ZERO changes.
+
+Wrote the complete v92 spec into the device repo:
+brevitest-device/firmware/Docs/SERVICE_MODE_ENFORCEMENT_HANDOFF.md (left uncommitted for the
+firmware agent). Three items with file:line anchors: (1) reject BARCODE_TYPE_CARTRIDGE when
+service_flag=1 (buzzer + red blinks, no cloud call; all other types pass); (2) yellow pulse
+150ms → 1000ms (SERVICE_BLINK_DURATION_MS, 1s on/4s off); (3) yellow-during-test bug — root
+causes found: suppression list only covers RUNNING_TEST/STRESS_TESTING (HEATING,
+VALIDATING_THERMO, validation/upload states leak yellow) AND indicatorService registered at
+LED_PRIORITY_CRITICAL outranking test indicators at IMPORTANT — fix is an idle-only allowlist +
+priority demotion. Six-step bench acceptance checklist included (0243/0250).
+
+Governance model now complete on paper: servicing (board scan) and release are the only human-set
+statuses; everything else automatic (SPU-INV-12); once v92 flashes, the device itself enforces
+"no customer tests until a human releases."
