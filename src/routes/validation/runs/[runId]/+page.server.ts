@@ -5,6 +5,7 @@ import {
 } from '$lib/server/db';
 import { STANDARD_THERMO_CRITERIA } from '$lib/server/validation/thermo-criteria';
 import { processThermoUpload, evaluateThermoSession, type ThermoReading } from '$lib/server/validation/thermo-upload';
+import { parseThermoFile } from '$lib/server/validation/parse-thermo-file';
 import type { Actions, PageServerLoad } from './$types';
 
 const MANUAL_OUTCOMES = ['passed', 'failed', 'skipped'] as const;
@@ -143,23 +144,26 @@ export const actions: Actions = {
 
 		const form = await request.formData();
 		const spuId = form.get('spuId')?.toString();
-		const readingsJson = form.get('readings')?.toString();
-		const fileName = form.get('fileName')?.toString() || null;
+		const file = form.get('file');
+		const tzOffsetRaw = form.get('tzOffset')?.toString() ?? '';
 
 		if (!spuId) return fail(400, { error: 'Missing SPU', spuId });
 		const member = activeMember(run, spuId);
 		if (!member) return fail(400, { error: 'SPU is not an active member of this run', spuId });
-		if (!readingsJson) return fail(400, { error: 'No temperature data uploaded', spuId });
-
-		let readings: ThermoReading[];
-		try {
-			readings = JSON.parse(readingsJson);
-			if (!Array.isArray(readings) || readings.length === 0) {
-				return fail(400, { error: 'No valid readings in uploaded data', spuId });
-			}
-		} catch {
-			return fail(400, { error: 'Invalid readings data', spuId });
+		if (!(file instanceof File) || file.size === 0) {
+			return fail(400, { error: 'Choose a thermocouple file to upload', spuId });
 		}
+
+		// Same ingestion path as the standalone page: the file is posted whole
+		// and read here, so the board cannot stage one SPU's readings and then
+		// submit them under another.
+		const tzOffsetMinutes = tzOffsetRaw !== '' && Number.isFinite(Number(tzOffsetRaw))
+			? Number(tzOffsetRaw)
+			: undefined;
+		const parsed = parseThermoFile(new Uint8Array(await file.arrayBuffer()), { tzOffsetMinutes });
+		if ('error' in parsed) return fail(400, { error: parsed.error, spuId });
+		const readings: ThermoReading[] = parsed.readings;
+		const fileName = file.name;
 
 		const user = { _id: locals.user!._id, username: locals.user!.username };
 		const outcome = await processThermoUpload({

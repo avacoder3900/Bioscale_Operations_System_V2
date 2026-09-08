@@ -1,72 +1,45 @@
 <script lang="ts">
-	import * as XLSX from 'xlsx';
-	import { parseThermoRows } from './parse-thermo';
-
-	interface Reading {
-		timestamp: number;
-		temperature: number;
-	}
-
+	/**
+	 * Thermocouple file picker.
+	 *
+	 * Deliberately dumb: it stages the operator's file on a real form input and
+	 * reports the choice upward. It does not parse. The file itself is what gets
+	 * posted, so there is no parsed copy of the data that can drift away from the
+	 * file on screen — the defect that recorded SPU 247's measurement on SPU 257.
+	 */
 	interface Props {
 		accept?: string;
 		compact?: boolean;
-		onparsed: (payload: { readings: Reading[]; readingsJson: string; fileName: string }) => void;
-		onclear?: () => void;
+		/** Form field name the file is posted under. */
+		name?: string;
+		onfile?: (file: File | null) => void;
 	}
 
-	let { accept = '.csv,.xlsx', compact = false, onparsed, onclear }: Props = $props();
+	let { accept = '.csv,.xlsx', compact = false, name = 'file', onfile }: Props = $props();
 
 	let fileName = $state('');
-	let readingCount = $state(0);
-	let parseError = $state('');
-	let columnsNote = $state('');
+	let fileSize = $state(0);
 	let isDragging = $state(false);
-	let hasReadings = $derived(readingCount > 0);
+	let inputEl = $state<HTMLInputElement | undefined>();
 
-	function handleFile(file: File) {
-		parseError = '';
-		columnsNote = '';
-		fileName = file.name;
+	let hasFile = $derived(fileName !== '');
 
-		// Choosing a new file invalidates whatever was loaded before — here AND
-		// in the parent. Without this a failed parse kept the previous file's
-		// "N readings loaded" panel on screen (only the name changed) while the
-		// parent still held the old readings, so the earlier file could be
-		// submitted against a different SPU.
-		readingCount = 0;
-		onclear?.();
-
-		const reader = new FileReader();
-		reader.onload = (e) => {
-			try {
-				const data = new Uint8Array(e.target!.result as ArrayBuffer);
-				const wb = XLSX.read(data, { type: 'array' });
-				const ws = wb.Sheets[wb.SheetNames[0]];
-				const rows: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1 });
-
-				// Column detection + parsing (columns A–C only) lives in
-				// parse-thermo.ts so it can be unit-tested against real exports.
-				const result = parseThermoRows(rows);
-				if (result.error) {
-					parseError = result.error;
-					return;
-				}
-
-				readingCount = result.readings.length;
-				columnsNote = result.columnsNote;
-				onparsed({ readings: result.readings, readingsJson: JSON.stringify(result.readings), fileName: file.name });
-			} catch (err) {
-				parseError = `Failed to parse file: ${err instanceof Error ? err.message : String(err)}`;
-			}
-		};
-		reader.readAsArrayBuffer(file);
+	function announce(file: File | null) {
+		fileName = file?.name ?? '';
+		fileSize = file?.size ?? 0;
+		onfile?.(file);
 	}
 
 	function handleDrop(e: DragEvent) {
 		e.preventDefault();
 		isDragging = false;
-		const file = e.dataTransfer?.files[0];
-		if (file) handleFile(file);
+		const file = e.dataTransfer?.files?.[0];
+		if (!file || !inputEl) return;
+		// Move the dropped file onto the real input so the form posts it.
+		const dt = new DataTransfer();
+		dt.items.add(file);
+		inputEl.files = dt.files;
+		announce(file);
 	}
 
 	function handleDragOver(e: DragEvent) {
@@ -75,21 +48,25 @@
 	}
 
 	function handleFileInput(e: Event) {
-		const input = e.target as HTMLInputElement;
-		const file = input.files?.[0];
-		if (file) handleFile(file);
+		announce((e.target as HTMLInputElement).files?.[0] ?? null);
 	}
 
 	function clearFile() {
-		readingCount = 0;
-		fileName = '';
-		parseError = '';
-		columnsNote = '';
-		onclear?.();
+		if (inputEl) inputEl.value = '';
+		announce(null);
+	}
+
+	function fmtSize(bytes: number): string {
+		if (bytes < 1024) return `${bytes} B`;
+		if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+		return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 	}
 </script>
 
-{#if !hasReadings}
+<!-- Lives outside the branches below so the staged file survives the swap. -->
+<input bind:this={inputEl} type="file" {name} {accept} class="hidden" onchange={handleFileInput} />
+
+{#if !hasFile}
 	<!-- svelte-ignore a11y_no_static_element_interactions -->
 	<div
 		class="flex flex-col items-center justify-center rounded-lg border-2 border-dashed transition-colors
@@ -108,13 +85,17 @@
 		{/if}
 		<p class="tron-heading mb-2 {compact ? 'text-sm' : 'text-lg'}">Drop .csv or .xlsx file here</p>
 		<p class="tron-text-muted mb-4 text-sm">or click to browse</p>
-		<label class="cursor-pointer rounded-lg bg-[var(--color-tron-orange)] font-semibold text-[var(--color-tron-bg-primary)] transition-all hover:bg-[var(--color-tron-orange)]/90 {compact ? 'px-4 py-2 text-sm' : 'px-6 py-3'}" style="min-height: {compact ? '36px' : '44px'}">
+		<button
+			type="button"
+			onclick={() => inputEl?.click()}
+			class="cursor-pointer rounded-lg bg-[var(--color-tron-orange)] font-semibold text-[var(--color-tron-bg-primary)] transition-all hover:bg-[var(--color-tron-orange)]/90 {compact ? 'px-4 py-2 text-sm' : 'px-6 py-3'}"
+			style="min-height: {compact ? '36px' : '44px'}"
+		>
 			Choose File
-			<input type="file" {accept} class="hidden" onchange={handleFileInput} />
-		</label>
+		</button>
 	</div>
 {:else}
-	<!-- File loaded -->
+	<!-- File staged. Readings are counted by the server, after it reads the file. -->
 	<div class="flex items-center justify-between rounded-lg bg-[var(--color-tron-bg-tertiary)] {compact ? 'p-3' : 'p-4'}">
 		<div class="flex items-center gap-3">
 			<svg class="{compact ? 'h-6 w-6' : 'h-8 w-8'} text-[var(--color-tron-green)]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -122,15 +103,11 @@
 			</svg>
 			<div>
 				<p class="tron-heading font-medium {compact ? 'text-sm' : ''}">{fileName}</p>
-				<p class="tron-text-muted text-sm">{readingCount} readings loaded{#if columnsNote}&nbsp;· {columnsNote}{/if}</p>
+				<p class="tron-text-muted text-sm">{fmtSize(fileSize)} · ready to upload</p>
 			</div>
 		</div>
 		<button type="button" onclick={clearFile} class="tron-text-muted text-sm hover:text-[var(--color-tron-red)]">
 			Clear
 		</button>
 	</div>
-{/if}
-
-{#if parseError}
-	<p class="mt-2 text-sm text-[var(--color-tron-red)]">{parseError}</p>
 {/if}
