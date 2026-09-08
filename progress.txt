@@ -11812,3 +11812,8 @@ modalities, session fallback included), rows default-sorted most-recently-tested
 (never-tested sink to bottom), and a free-text search above the table filtering by UDI or
 lifecycle status (same feel as the inventory page). Files: src/routes/validation/+page.server.ts,
 +page.svelte. npm run check: 10/434 — baseline.
+
+Deployment: production — building from the GitHub push to master (Vercel dashboard, commit below)
+Source: branch master @ merge of feat/spu-tweaks
+Retrieve this exact code: git log master --oneline
+What this deployment is for: fleet matrix last-test column + recency sort + search
