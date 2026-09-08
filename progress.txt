@@ -11853,3 +11853,12 @@ Deployment: production — building from the GitHub push to master (Vercel dashb
 Source: branch master @ merge of feat/spu-tweaks
 Retrieve this exact code: git log master --oneline
 What this deployment is for: SPU nav restructure (Assembly + Servicing primary; WI back to Documents)
+
+================================================================================
+2026-09-08 — feat/spu-tweaks — servicing stands alone (tab strip removed there + from strip)
+================================================================================
+Per Jacob: Servicing removed from the SpuMfgTabs strip (now just SPU Assembly / Barcodes on the
+assembly-side pages) and the servicing page no longer renders any tab strip at all — it's its own
+top-level thing under the SPU nav group. spu/mfg/+layout hides the strip on /spu/mfg/servicing*.
+Files: src/lib/components/spu/SpuMfgTabs.svelte, src/routes/spu/mfg/+layout.svelte.
+npm run check: 10/434 — baseline.
