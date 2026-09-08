@@ -1,7 +1,8 @@
-import { error } from '@sveltejs/kit';
+import { error, fail } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
 import { connectDB, ValidationSession, GeneratedBarcode, User } from '$lib/server/db';
-import type { PageServerLoad } from './$types';
+import { recordThermoVerdict } from '$lib/server/validation/thermo-upload';
+import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals, params }) => {
 	requirePermission(locals.user, 'spu:read');
@@ -55,4 +56,28 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 		} : null,
 		channelCharts
 	};
+};
+
+export const actions: Actions = {
+	// The verdict, keyed on this session's id. Same call the uploader makes, so
+	// a session judged here is indistinguishable from one judged at upload time.
+	verdict: async ({ request, locals, params }) => {
+		requirePermission(locals.user, 'spu:write');
+		await connectDB();
+
+		const form = await request.formData();
+		const choice = form.get('outcome')?.toString();
+		if (choice !== 'passed' && choice !== 'failed') {
+			return fail(400, { error: 'Record a Pass or Fail verdict' });
+		}
+
+		const outcome = await recordThermoVerdict({
+			sessionId: params.sessionId,
+			verdict: choice,
+			user: { _id: locals.user!._id, username: locals.user!.username }
+		});
+		if ('error' in outcome) return fail(400, { error: outcome.error });
+
+		return { success: true, passed: outcome.passed };
+	}
 };

@@ -71,8 +71,10 @@
 		if (passed === false || status === 'failed') {
 			return { class: 'bg-[var(--color-tron-red)]/20 text-[var(--color-tron-red)]', label: 'Failed' };
 		}
+		// Uploaded but unjudged. Nothing is running — it is waiting on a person,
+		// so the badge says so and the row links to where the call is made.
 		if (status === 'in_progress') {
-			return { class: 'bg-[var(--color-tron-cyan)]/20 text-[var(--color-tron-cyan)]', label: 'In Progress' };
+			return { class: 'bg-[var(--color-tron-orange)]/20 text-[var(--color-tron-orange)]', label: 'Awaiting verdict' };
 		}
 		return { class: 'bg-[var(--color-tron-text-secondary)]/20 text-[var(--color-tron-text-secondary)]', label: 'Pending' };
 	}

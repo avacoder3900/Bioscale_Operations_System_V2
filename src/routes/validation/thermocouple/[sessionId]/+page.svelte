@@ -1,5 +1,7 @@
 <script lang="ts">
+	import { enhance } from '$app/forms';
 	import ThermocoupleResult from '$lib/components/validation/thermocouple/ThermocoupleResult.svelte';
+	import ThermocoupleChart from '$lib/components/validation/thermocouple/ThermocoupleChart.svelte';
 
 	interface ThermocoupleReading {
 		timestamp: number;
@@ -9,6 +11,8 @@
 	interface ThermocoupleStats {
 		min: number;
 		max: number;
+		mode?: number;
+		cv?: number;
 		average: number;
 		stdDev: number;
 		range: number;
@@ -43,9 +47,13 @@
 				createdAt: string;
 			} | null;
 		};
+		form: { error?: string; success?: boolean; passed?: boolean } | null;
 	}
 
-	let { data }: Props = $props();
+	let { data, form }: Props = $props();
+
+	let isSaving = $state(false);
+	let showFahrenheit = $state(false);
 
 	function getStatusInfo(status: string) {
 		switch (status) {
@@ -93,6 +101,19 @@
 
 	function formatDate(dateStr: string): string {
 		return new Date(dateStr).toLocaleString();
+	}
+
+	function toF(c: number): number { return c * 9 / 5 + 32; }
+	function fmtTemp(c: number): string {
+		if (showFahrenheit) return toF(c).toFixed(2) + '°F';
+		return c.toFixed(2) + '°C';
+	}
+	function formatDuration(ms: number): string {
+		const totalSec = Math.floor(ms / 1000);
+		const min = Math.floor(totalSec / 60);
+		const sec = totalSec % 60;
+		if (min > 0) return min + 'm ' + sec + 's';
+		return sec + 's';
 	}
 
 	function handlePrint() {
@@ -278,31 +299,132 @@
 					</div>
 				</div>
 			{:else}
+				<!--
+					Awaiting a verdict. No acceptance range is configured, so nothing
+					judges this automatically and the session would otherwise sit here
+					forever once the uploader's post-POST state was gone. The operator
+					reviews the stored numbers and records the call right here.
+				-->
 				<div
-					class="rounded-lg border border-[var(--color-tron-cyan)]/30 bg-[var(--color-tron-cyan)]/10 p-4"
+					class="rounded-lg border border-[var(--color-tron-orange)]/30 bg-[var(--color-tron-orange)]/10 p-4"
 				>
-					<div class="flex items-center gap-3">
-						<svg
-							class="h-8 w-8 text-[var(--color-tron-cyan)]"
-							fill="none"
-							viewBox="0 0 24 24"
-							stroke="currentColor"
-						>
-							<path
-								stroke-linecap="round"
-								stroke-linejoin="round"
-								stroke-width="2"
-								d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
-							/>
-						</svg>
+					<div class="flex items-center justify-between gap-3">
 						<div>
-							<span class="text-lg font-bold text-[var(--color-tron-cyan)]"
-								>Processing</span
+							<span class="text-lg font-bold text-[var(--color-tron-orange)]"
+								>Awaiting verdict</span
 							>
-							<p class="tron-text-muted text-sm">Results are being processed...</p>
+							<p class="tron-text-muted text-sm">
+								The readings below are what was stored for this session. Review them and
+								record Pass or Fail — that verdict is the record.
+							</p>
 						</div>
+						{#if resultStats}
+							<button
+								type="button"
+								onclick={() => (showFahrenheit = !showFahrenheit)}
+								class="shrink-0 rounded-lg bg-[var(--color-tron-bg-tertiary)] px-4 py-2 text-sm font-medium text-[var(--color-tron-text-secondary)] transition-colors hover:text-[var(--color-tron-cyan)] print:hidden"
+							>
+								Show in {showFahrenheit ? '°C' : '°F'}
+							</button>
+						{/if}
 					</div>
 				</div>
+
+				{#if resultStats}
+					<div class="mt-4 grid grid-cols-2 gap-4 md:grid-cols-4">
+						{#if resultStats.mode !== undefined}
+							<div class="rounded-lg border border-[var(--color-tron-cyan)]/30 bg-[var(--color-tron-bg-tertiary)] p-4 text-center">
+								<span class="tron-text-muted block text-xs uppercase">Mode</span>
+								<span class="tron-heading text-2xl font-bold">{fmtTemp(resultStats.mode)}</span>
+							</div>
+						{/if}
+						<div class="rounded-lg border border-[var(--color-tron-cyan)]/30 bg-[var(--color-tron-bg-tertiary)] p-4 text-center">
+							<span class="tron-text-muted block text-xs uppercase">Min</span>
+							<span class="tron-heading text-2xl font-bold">{fmtTemp(resultStats.min)}</span>
+						</div>
+						<div class="rounded-lg border border-[var(--color-tron-cyan)]/30 bg-[var(--color-tron-bg-tertiary)] p-4 text-center">
+							<span class="tron-text-muted block text-xs uppercase">Max</span>
+							<span class="tron-heading text-2xl font-bold">{fmtTemp(resultStats.max)}</span>
+						</div>
+						<div class="rounded-lg bg-[var(--color-tron-bg-tertiary)] p-4 text-center">
+							<span class="tron-text-muted block text-xs uppercase">Average</span>
+							<span class="tron-heading text-2xl font-bold">{fmtTemp(resultStats.average)}</span>
+						</div>
+						<div class="rounded-lg bg-[var(--color-tron-bg-tertiary)] p-4 text-center">
+							<span class="tron-text-muted block text-xs uppercase">Std Dev</span>
+							<span class="tron-heading text-2xl font-bold">{resultStats.stdDev.toFixed(3)}</span>
+						</div>
+						{#if resultStats.cv !== undefined}
+							<div class="rounded-lg bg-[var(--color-tron-bg-tertiary)] p-4 text-center">
+								<span class="tron-text-muted block text-xs uppercase">CV %</span>
+								<span class="tron-heading text-2xl font-bold">{resultStats.cv.toFixed(2)}%</span>
+							</div>
+						{/if}
+						<div class="rounded-lg bg-[var(--color-tron-bg-tertiary)] p-4 text-center">
+							<span class="tron-text-muted block text-xs uppercase">Range</span>
+							<span class="tron-heading text-2xl font-bold">{fmtTemp(resultStats.range)}</span>
+						</div>
+						<div class="rounded-lg bg-[var(--color-tron-bg-tertiary)] p-4 text-center">
+							<span class="tron-text-muted block text-xs uppercase">Readings</span>
+							<span class="tron-heading text-2xl font-bold">{resultStats.readingCount}</span>
+						</div>
+						<div class="rounded-lg bg-[var(--color-tron-bg-tertiary)] p-4 text-center">
+							<span class="tron-text-muted block text-xs uppercase">Duration</span>
+							<span class="tron-heading text-2xl font-bold">{formatDuration(resultStats.durationMs)}</span>
+						</div>
+					</div>
+				{/if}
+
+				{#if resultReadings.length > 0}
+					<div class="mt-4">
+						<ThermocoupleChart readings={resultReadings} showBands={false} />
+					</div>
+				{/if}
+
+				{#if form?.error}
+					<div class="mt-4 rounded-lg bg-[var(--color-tron-red)]/10 p-4 text-[var(--color-tron-red)]">
+						{form.error}
+					</div>
+				{/if}
+
+				<form
+					method="POST"
+					action="?/verdict"
+					class="mt-4 print:hidden"
+					use:enhance={() => {
+						isSaving = true;
+						return async ({ update }) => {
+							await update();
+							isSaving = false;
+						};
+					}}
+				>
+					<div class="flex gap-3">
+						<button
+							type="submit"
+							name="outcome"
+							value="passed"
+							disabled={isSaving}
+							class="flex-1 rounded-lg bg-[var(--color-tron-green)] px-6 py-4 text-lg font-semibold text-[var(--color-tron-bg-primary)] transition-all hover:bg-[var(--color-tron-green)]/90 disabled:cursor-not-allowed disabled:opacity-50"
+							style="min-height: 44px"
+						>
+							{isSaving ? 'Saving...' : 'Pass'}
+						</button>
+						<button
+							type="submit"
+							name="outcome"
+							value="failed"
+							disabled={isSaving}
+							class="flex-1 rounded-lg bg-[var(--color-tron-red)] px-6 py-4 text-lg font-semibold text-[var(--color-tron-bg-primary)] transition-all hover:bg-[var(--color-tron-red)]/90 disabled:cursor-not-allowed disabled:opacity-50"
+							style="min-height: 44px"
+						>
+							{isSaving ? 'Saving...' : 'Fail'}
+						</button>
+					</div>
+					<p class="tron-text-muted mt-2 text-center text-xs">
+						Recorded against {data.session.barcode ?? 'this session'} — the readings stored under it.
+					</p>
+				</form>
 			{/if}
 
 			{#if data.result.notes}

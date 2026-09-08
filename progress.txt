@@ -9372,7 +9372,8 @@ NOTE seen live: capacity knob still unset in prod (velocity 1.8 measured, A4M "2
 OVER, projected Jan 6") — Jacob still needs to set Team est-days/week = 10 on
 /kanban/policy; until then the Timeline spread stretches to the honest-but-absurd
 clamp horizon. npm run check: 11/434 baseline.
-=======
+
+================================================================================
 2026-08-21 — feat/spu-mfg-tabs — SPU Mfg gets a section tab strip (Assembly / Work
 Instructions / Validation), consolidated out of the left nav
 ================================================================================
@@ -10063,7 +10064,8 @@ Retrieve this exact code: git checkout master at commit e3a536f9
 What this deployment is for: KB2-37 click-to-connect. DOM-verified: 286 ports on 143
   nodes (2/node). Visual pass: Jacob — click a right ○, then a left ○; wiring an
   UNWIRED ghost should yank it into its chain band as the map recomputes.
-=======
+
+================================================================================
 2026-08-24 — master — reagent partial fill: barcode sweep now respects the cartridge count
 ================================================================================
 Operator: on partial reagent runs the auto barcode scan swept all 24 positions, waiting out the full
@@ -12093,3 +12095,46 @@ Deployment: production — building from the GitHub push to master (Vercel dashb
 Source: branch master @ 5c3fae3b (gio/validation-dhr tip, contains all prior work)
 Retrieve this exact code: git log master --oneline
 What this deployment is for: Giovanni's validation/DHR rework + kit withdrawal + all week's SPU work, redeployed together
+
+================================================================================
+2026-09-08 — fix/thermo-verdict-from-session — thermocouple sessions stuck on "Processing" can now be judged
+================================================================================
+Alejandro reported the thermo upload sitting on "Processing" and never producing a result. It was
+not a stalled job — there is no job. Since the VALIDATION-07 rework (44c1229d, "the file is the
+record"), upload and verdict are two steps: `processThermoUpload` stores the session unjudged
+(status in_progress, results[0].passed null) because STANDARD_THERMO_CRITERIA is still null, and
+only a Pass/Fail click calls `recordThermoVerdict`. That click lived ONLY in the uploader's
+post-POST `form` state. Reload, navigate away, or upload the next file and the staged session
+became unreachable — no screen in the app could judge an existing session. The session page
+renders `passed === null` as "Processing / Results are being processed...", so a permanently
+unjudgeable session looked like one that was still working.
+
+Production confirms it: 15 uploads on 2026-09-08 between 18:48Z and 19:19Z, 14 of them
+in_progress/passed null with "N readings uploaded, awaiting evaluation against the standard
+acceptance range". The single exception (THERMO-000051, SPU 247) was judged 4 seconds after
+upload — the only one where step 2 happened before leaving the page. Parsing was never at fault;
+stats are stored correctly on all 15.
+
+Fix — the verdict is now reachable from the session itself, keyed on its `_id`:
+- routes/validation/thermocouple/[sessionId]/+page.server.ts: new `verdict` action calling the
+  same `recordThermoVerdict()` the uploader uses, so a session judged here is indistinguishable
+  from one judged at upload time (it guards double-judging, writes the SPU rollup and the audit
+  row). requirePermission spu:write.
+- routes/validation/thermocouple/[sessionId]/+page.svelte: the inert "Processing" panel is
+  replaced by an "Awaiting verdict" review panel — the stored stats (mode/min/max/avg/SD/CV/range/
+  readings/duration, °C↔°F toggle), the chart drawn from the stored readings, and Pass/Fail
+  buttons. After recording, `update()` re-runs load and the normal full-result view renders.
+- routes/validation/thermocouple/+page.svelte: the run log badge for in_progress said "In
+  Progress", implying work underway; it now reads "Awaiting verdict" in orange, so the stranded
+  sessions are findable from the list.
+
+This makes the flow survive interruption: upload, walk away, come back through the run log and
+record the call. The 14 stranded sessions from this afternoon can be cleared through normal
+operator review rather than a DB edit.
+
+No schema change, no migration. Still open (unchanged by this fix): STANDARD_THERMO_CRITERIA is
+null, so nothing auto-judges and the validation-run board's Evaluate button stays disabled — a
+quality-policy decision, VALIDATION-07 OQ-4.
+
+npm run check: 119 errors / 434 warnings — identical to the pre-change baseline on this worktree
+(inflated by borrowed node_modules); zero errors and zero warnings in all three touched files.
