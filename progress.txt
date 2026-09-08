@@ -12075,3 +12075,21 @@ the record" rework + stale-upload fix) instead of his older client-parsed versio
 structure with the newest implementation. Fleet matrix combined: his column order + my Last-test
 column, recency sort, and search (colspan 7). npm run check on merged tree: 10/434 — baseline.
 Production redeploys from this push with Giovanni's + this week's work together.
+
+================================================================================
+2026-09-08 — master — gio/validation-dhr fully merged; production redeploy
+================================================================================
+Final integration of Giovanni's validation/DHR rework. Sequence: this session's conflict-resolved
+merge (f6553dc1 — his run-log structure kept; thermo /run REPLACED with master's newer server-side
+file-ingestion uploader; fleet matrix combined his Unit→Overall→Lifecycle order + "Complete"
+labeling with the last-test column/recency sort/search) reached origin/master mid-flow; Giovanni
+then synced master into his branch twice, and his final commits carried the identical SPU-INV-12
+autoEnterValidating hook for the moved magnetometer /run action (this session's pending working-
+tree edit — dropped in favor of his committed version, byte-equivalent) plus indentation cleanup
+and clickable optics-ratio → cartridge and thermo-mode → session links. Local master
+fast-forwarded to his tip (5c3fae3b). npm run check: 10/434 — baseline.
+
+Deployment: production — building from the GitHub push to master (Vercel dashboard, commit below)
+Source: branch master @ 5c3fae3b (gio/validation-dhr tip, contains all prior work)
+Retrieve this exact code: git log master --oneline
+What this deployment is for: Giovanni's validation/DHR rework + kit withdrawal + all week's SPU work, redeployed together
