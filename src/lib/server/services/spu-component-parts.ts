@@ -114,7 +114,12 @@ export const SPU_COMPONENT_PARTS: SpuComponent[] = [
 		parts: [
 			{ partNumber: 'SBA-SPU-004', name: 'Stage Board', quantityPerUnit: 1 },
 			{ partNumber: 'PT-SPU-002', name: 'M3 x 40 mm SHCS', quantityPerUnit: 2 },
-			{ partNumber: 'PT-SPU-031', name: 'Cartridge Heater', quantityPerUnit: 1 },
+			{
+				partNumber: 'PT-SPU-031',
+				name: 'Cartridge Heater',
+				quantityPerUnit: 1,
+				kitExclusion: 'Operator decision 2026-09-08: not withdrawn with the SPU kit.'
+			},
 			{ partNumber: 'PT-SPU-003', name: 'M3 Self-Retaining Washer - Nylon', quantityPerUnit: 1, note: 'Stage Board to Proximal Stage Bracket.' },
 			{ partNumber: 'PT-SPU-004', name: 'M3.12 x 8 mm - Torx Plastic Thread-Forming', quantityPerUnit: 1, note: 'Stage Board to Proximal Stage Bracket.' },
 			{ partNumber: 'PT-SPU-006', name: 'M3 split lock washer', quantityPerUnit: 2 },
@@ -204,12 +209,51 @@ export const SPU_COMPONENT_PARTS: SpuComponent[] = [
 		name: 'Labels',
 		aliases: ['label', 'udi label', 'top label', 'side label', 'front label', 'dc input label'],
 		parts: [
-			{ partNumber: 'PT-SPU-072', name: 'Avery Label Template 5523', quantityPerUnit: 1, note: 'Not in the inventory system yet.' },
-			{ partNumber: 'PT-SPU-070', name: 'DC Input Label', quantityPerUnit: 1, note: 'Not in the inventory system yet.' },
-			{ partNumber: 'PT-SPU-056', name: 'Top Label', quantityPerUnit: 1, note: 'Not in the inventory system yet.' },
-			{ partNumber: 'PT-SPU-057', name: 'Side Label', quantityPerUnit: 1, note: 'Not in the inventory system yet.' },
-			{ partNumber: 'PT-SPU-058', name: 'UDI Label', quantityPerUnit: 1, note: 'Not in the inventory system yet.' },
-			{ partNumber: 'PT-SPU-059', name: 'Front Label', quantityPerUnit: 1, note: 'Not in the inventory system yet.' }
+			// Labels are listed here because this map doubles as the agent
+			// reassembly knowledge base ("what goes on the enclosure?"), but the
+			// kit does not withdraw them. Operator decision 2026-09-08.
+			{
+				partNumber: 'PT-SPU-072',
+				name: 'Avery Label Template 5523',
+				quantityPerUnit: 1,
+				note: 'Not in the inventory system yet.',
+				kitExclusion: 'Operator decision 2026-09-08: labels are not withdrawn with the SPU kit.'
+			},
+			{
+				partNumber: 'PT-SPU-070',
+				name: 'DC Input Label',
+				quantityPerUnit: 1,
+				note: 'Not in the inventory system yet.',
+				kitExclusion: 'Operator decision 2026-09-08: labels are not withdrawn with the SPU kit.'
+			},
+			{
+				partNumber: 'PT-SPU-056',
+				name: 'Top Label',
+				quantityPerUnit: 1,
+				note: 'Not in the inventory system yet.',
+				kitExclusion: 'Operator decision 2026-09-08: labels are not withdrawn with the SPU kit.'
+			},
+			{
+				partNumber: 'PT-SPU-057',
+				name: 'Side Label',
+				quantityPerUnit: 1,
+				note: 'Not in the inventory system yet.',
+				kitExclusion: 'Operator decision 2026-09-08: labels are not withdrawn with the SPU kit.'
+			},
+			{
+				partNumber: 'PT-SPU-058',
+				name: 'UDI Label',
+				quantityPerUnit: 1,
+				note: 'Not in the inventory system yet.',
+				kitExclusion: 'Operator decision 2026-09-08: labels are not withdrawn with the SPU kit.'
+			},
+			{
+				partNumber: 'PT-SPU-059',
+				name: 'Front Label',
+				quantityPerUnit: 1,
+				note: 'Not in the inventory system yet.',
+				kitExclusion: 'Operator decision 2026-09-08: labels are not withdrawn with the SPU kit.'
+			}
 		]
 	}
 ];
