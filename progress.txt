@@ -11777,3 +11777,47 @@ Deployment: production — building from the GitHub push to master (Vercel dashb
 Source: branch master @ merge of feat/spu-tweaks
 Retrieve this exact code: git log master --oneline
 What this deployment is for: validation hub metric tiles removed
+
+================================================================================
+2026-09-08 - feat/spu-kit-withdrawal-v2 - isolated kittest mirror for SPU kit withdrawal
+================================================================================
+Rebuilt the SPU kit withdrawal work on current master (the old feat/spu-kit-withdrawal
+branch had drifted to 27 behind). Cherry-picked the three code commits; progress.txt
+conflicted both times and was resolved to master's side. No code conflicts.
+
+Stood up an isolated test database, bioscale_kittest, on the same Atlas cluster. The app
+resolves Mongo through a single MONGODB_URI and mongoose writes to whatever database that
+URI names, so a branch-scoped Preview override redirects every model - including
+inventory_transactions and audit_log - at the mirror. The live collections are unreachable
+from that deployment rather than merely avoided.
+
+Mirror contents: part_definitions 72, spus 74 (+1 seeded throwaway), users 20, sessions 63.
+inventory_transactions and audit_log deliberately start empty so the button's own writes
+are the only rows in them. Prod has NO draft/assembling SPUs at all right now (45 retired,
+19 servicing, 8 validating, 2 released), so KITTEST-001 was seeded in assembling state or
+the picker would have been empty.
+
+Two code changes fell out of the setup:
+- PT-SPU-032 now deducts 1 SECTION, not 351 mm. Belts are cut from 3000 mm spools into
+  350 mm sections up front and counted as sections. The old figure mixed millimetres
+  against a spool-denominated count and drove the balance to -344 on first withdrawal.
+  Mirror seeded to 10 sections; a good run leaves 9.
+- Kit withdrawal reads each before/after balance off the ledger row instead of inferring
+  previous = new + quantity. recordTransaction already captures both values as it applies
+  the change, so the row is authoritative; the inference assumed nothing else moved the
+  part in between, which is the assumption this feature exists to verify.
+
+Scripts: scripts/mirror-to-kittest.mjs (refuses any target but bioscale_kittest),
+scripts/seed-kittest-spu.mjs, scripts/verify-kittest.mjs (cross-checks every ledger row
+against part_definitions and re-asserts bioscale was untouched).
+
+npm run check: 10/434 - baseline.
+
+NOTE: the deployment below was built BEFORE the MONGODB_URI Preview override existed, so
+it still points at production. It proves the build only. Do not exercise the withdrawal
+button against it.
+
+Deployment: preview - https://bioscale-operations-system-mongodb-guhwo37l3-brevitest.vercel.app
+Source: branch feat/spu-kit-withdrawal-v2 @ 58a397ae29c174e34e053856815e6454749e94a1
+Retrieve this exact code: git checkout 58a397ae29c174e34e053856815e6454749e94a1
+What this deployment is for: build verification only; kit withdrawal test pending env override
