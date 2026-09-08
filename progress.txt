@@ -11759,3 +11759,8 @@ SpuMfgTabs itself. The validation section's own sub-nav gains an "Overview" entr
 /validation, the fleet hub) so the section is self-navigating. Files:
 src/routes/validation/+layout.svelte, src/lib/components/spu/SpuMfgTabs.svelte.
 npm run check: 10/434 — baseline.
+
+Deployment: production — building from the GitHub push to master (Vercel dashboard, commit below)
+Source: branch master @ merge of feat/spu-tweaks
+Retrieve this exact code: git log master --oneline
+What this deployment is for: validation pages drop the SPU Mfg tab strip; Validation tab removed from SpuMfgTabs
