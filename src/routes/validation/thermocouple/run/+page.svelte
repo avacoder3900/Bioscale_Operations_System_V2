@@ -84,7 +84,7 @@
 			<p class="tron-text-muted mt-1">Upload temperature data from your thermocouple software</p>
 		</div>
 		<a
-			href="/validation/thermocouple"
+			href="/validation/thermocouple/history"
 			class="text-sm text-[var(--color-tron-orange)] hover:underline"
 		>
 			View History →
