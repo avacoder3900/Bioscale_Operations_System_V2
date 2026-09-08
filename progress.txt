@@ -11803,3 +11803,12 @@ Deployment: production — building from the GitHub push to master (Vercel dashb
 Source: branch master @ merge of feat/spu-tweaks
 Retrieve this exact code: git log master --oneline
 What this deployment is for: validation runs retired — nav removal (data journaled via script pre-deploy)
+
+================================================================================
+2026-09-08 — feat/spu-tweaks — fleet matrix: last-test column + default recency sort + search
+================================================================================
+Per Jacob: matrix gains a "Last test" column (most recent completedAt/testRanAt across all three
+modalities, session fallback included), rows default-sorted most-recently-tested first
+(never-tested sink to bottom), and a free-text search above the table filtering by UDI or
+lifecycle status (same feel as the inventory page). Files: src/routes/validation/+page.server.ts,
++page.svelte. npm run check: 10/434 — baseline.

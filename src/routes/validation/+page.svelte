@@ -4,6 +4,28 @@
 	let { data } = $props();
 
 	let expanded = $state<string | null>(null);
+	let search = $state('');
+
+	// Rows arrive sorted most-recently-tested first; search filters within that.
+	const filteredRows = $derived.by(() => {
+		const q = search.trim().toLowerCase();
+		if (!q) return data.rows;
+		return data.rows.filter(
+			(r: { udi: string; status: string }) =>
+				r.udi.toLowerCase().includes(q) || r.status.toLowerCase().includes(q)
+		);
+	});
+
+	function fmtLastTest(d: string | null): string {
+		if (!d) return '—';
+		return new Date(d).toLocaleString(undefined, {
+			month: 'numeric',
+			day: 'numeric',
+			year: '2-digit',
+			hour: 'numeric',
+			minute: '2-digit'
+		});
+	}
 
 	function badgeVariant(status: string): 'success' | 'error' | 'warning' | 'neutral' {
 		if (status === 'passed' || status === 'overridden') return 'success';
@@ -49,8 +71,15 @@
 		<p class="tron-text-muted mb-4 text-xs">
 			Magnetometer shows the Z (gauss) range — expand a row for every point. Optics shows the
 			average F7/F3 ratio per channel. Thermocouple shows the mode of the temperature plot.
-			Retired units are hidden.
+			Most recently tested first. Retired units are hidden.
 		</p>
+		<input
+			type="text"
+			class="tron-input mb-4 w-full"
+			placeholder="Search by SPU UDI or lifecycle status..."
+			bind:value={search}
+			style="min-height: 44px;"
+		/>
 		<div class="overflow-x-auto">
 			<table class="w-full text-sm">
 				<thead>
@@ -60,11 +89,12 @@
 						<th class="py-2 pr-4 text-xs uppercase text-[var(--color-tron-text-secondary)]">Magnetometer (gauss)</th>
 						<th class="py-2 pr-4 text-xs uppercase text-[var(--color-tron-text-secondary)]">Optics ratio A / B / C</th>
 						<th class="py-2 pr-4 text-xs uppercase text-[var(--color-tron-text-secondary)]">Thermo mode</th>
+						<th class="py-2 pr-4 text-xs uppercase text-[var(--color-tron-text-secondary)]">Last test ▾</th>
 						<th class="py-2 text-xs uppercase text-[var(--color-tron-text-secondary)]">Overall</th>
 					</tr>
 				</thead>
 				<tbody>
-					{#each data.rows as r (r.id)}
+					{#each filteredRows as r (r.id)}
 						<tr class="border-b border-[var(--color-tron-border)] last:border-0">
 							<td class="py-2.5 pr-4 whitespace-nowrap">
 								<a href="/spu/{r.id}" class="font-mono font-bold text-[var(--color-tron-cyan)] hover:underline">{r.udi}</a>
@@ -108,13 +138,16 @@
 									<span class="tron-text-muted ml-2">—</span>
 								{/if}
 							</td>
+							<td class="py-2.5 pr-4 text-xs whitespace-nowrap {r.lastTestAt ? '' : 'tron-text-muted'}">
+								{fmtLastTest(r.lastTestAt)}
+							</td>
 							<td class="py-2.5">
 								<TronBadge variant={badgeVariant(r.overall)}>{r.overall}</TronBadge>
 							</td>
 						</tr>
 						{#if expanded === r.id && r.mag.wells}
 							<tr class="border-b border-[var(--color-tron-border)]">
-								<td colspan="6" class="bg-[var(--color-tron-bg-secondary)]/40 px-4 py-3">
+								<td colspan="7" class="bg-[var(--color-tron-bg-secondary)]/40 px-4 py-3">
 									<span class="tron-text-muted mb-2 block text-xs uppercase">Gauss (Z) at all points — {r.udi}</span>
 									<table class="text-xs">
 										<thead>
@@ -143,7 +176,7 @@
 							</tr>
 						{/if}
 					{:else}
-						<tr><td colspan="6" class="tron-text-muted py-8 text-center">No active units.</td></tr>
+						<tr><td colspan="7" class="tron-text-muted py-8 text-center">No units{search.trim() ? ` match “${search}”` : ''}.</td></tr>
 					{/each}
 				</tbody>
 			</table>
