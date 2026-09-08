@@ -12150,3 +12150,25 @@ Note: originally cut from master at f6553dc1 (master's head at the time) and pus
   baseline, zero in touched files. 179cc8f0 no longer exists.
 What this deployment is for: record a Pass/Fail verdict on a thermocouple session that was
   uploaded but never judged, so sessions stop stranding on "Processing"
+
+================================================================================
+2026-09-08 — master — thermo verdict-from-session merged to production
+================================================================================
+fix/thermo-verdict-from-session fast-forwarded onto master (319ce6d3 was an ancestor, no merge
+commit). Production gains exactly the three touched files: the [sessionId] verdict action, the
+"Awaiting verdict" review panel that replaces the inert "Processing" card, and the run-log badge
+rename. No schema change, no migration, nothing else in the diff.
+
+Once live, the 14 sessions uploaded 2026-09-08 18:48Z-19:19Z that are sitting in_progress /
+passed null can be cleared through the run log: open each, review the stored stats and chart,
+record Pass or Fail. That writes results[].passed, session status, the SPU
+validation.thermocouple rollup, and an audit row — the same path a verdict at upload time takes.
+
+Deployment: production — from the GitHub push to master (commit below)
+Source: branch master @ commit 40b5f0a8 (the fix; deploy-log commit on top)
+Retrieve this exact code: git checkout master at commit 40b5f0a8
+What this deployment is for: make an uploaded-but-unjudged thermocouple session judgeable, so
+  operators stop being stranded on "Processing" after leaving the uploader page
+
+Still open, unchanged by this: STANDARD_THERMO_CRITERIA is null, so nothing auto-judges and the
+validation-run board's Evaluate button stays disabled (VALIDATION-07 OQ-4, a quality decision).
