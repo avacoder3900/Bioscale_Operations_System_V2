@@ -11727,3 +11727,19 @@ Deployment: production — building from the GitHub push to master (Vercel dashb
 Source: branch master @ merge of feat/spu-tweaks
 Retrieve this exact code: git log master --oneline
 What this deployment is for: nav caret expand/collapse fix
+
+================================================================================
+2026-09-08 — feat/spu-tweaks — SPU Validation hub (SPU-INV-11)
+================================================================================
+Workshop outcome with Jacob (each instrument keeps its own page; one unified fleet view; metrics
+= real measurements): /validation stops redirecting to the magnetometer page and becomes the SPU
+Validation hub. Metric tiles (active units, fully validated, in-validating, any-failed, sessions
+7d, open runs); launcher cards to the four executors; Fleet Matrix (retired hidden): per unit —
+magnetometer badge + Z(gauss) range expanding to ALL points (5 wells × ch A/B/C; falls back to the
+latest mag session when the rollup is empty), optics avg F7/F3 ratio per channel A/B/C
+(results.ratioByChannel), thermocouple mode temperature (results.stats.mode), overall. UDIs link
+to unit Validation tabs. Nav: "SPU Validation" third entry in the SPU group; /validation removed
+from SPU Manufacturing's sectionPaths so highlighting splits. Detail-page Validation tab header
+now links to Hub / Run mag / Run thermo / Run optics / Runs. PRD:
+docs/prds/SPU-INV-11-validation-hub.md. Earlier today: nav caret untrack fix (shipped separately).
+npm run check: 10 errors / 434 warnings — baseline.

@@ -758,7 +758,13 @@
 						{validationOverall.toUpperCase()}
 					</span>
 				</h3>
-				<a href="/validation" class="text-sm hover:underline" style="color: var(--color-tron-cyan);">Open in BIMS Validation ↗</a>
+				<span class="flex flex-wrap items-center gap-3 text-sm">
+					<a href="/validation" class="hover:underline" style="color: var(--color-tron-cyan);">Validation Hub ↗</a>
+					<a href="/validation/magnetometer" class="tron-text-muted hover:text-[var(--color-tron-cyan)] hover:underline">Run mag</a>
+					<a href="/validation/thermocouple" class="tron-text-muted hover:text-[var(--color-tron-cyan)] hover:underline">Run thermo</a>
+					<a href="/validation/optical-confirmation" class="tron-text-muted hover:text-[var(--color-tron-cyan)] hover:underline">Run optics</a>
+					<a href="/validation/runs" class="tron-text-muted hover:text-[var(--color-tron-cyan)] hover:underline">Runs</a>
+				</span>
 			</div>
 
 			<div class="grid grid-cols-1 gap-3 md:grid-cols-3">
