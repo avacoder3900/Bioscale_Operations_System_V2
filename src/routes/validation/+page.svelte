@@ -102,7 +102,7 @@
 						<th class="py-2 pr-4 text-xs uppercase text-[var(--color-tron-text-secondary)]">Lifecycle</th>
 						<th class="py-2 pr-4 text-xs uppercase text-[var(--color-tron-text-secondary)]">Magnetometer (gauss)</th>
 						<th class="py-2 pr-4 text-xs uppercase text-[var(--color-tron-text-secondary)]">Optics ratio A / B / C</th>
-					<th class="py-2 pr-4 text-xs uppercase text-[var(--color-tron-text-secondary)]">Thermo mode</th>
+						<th class="py-2 pr-4 text-xs uppercase text-[var(--color-tron-text-secondary)]">Thermo mode</th>
 						<th class="py-2 text-xs uppercase text-[var(--color-tron-text-secondary)]">Last test ▾</th>
 					</tr>
 				</thead>
@@ -170,7 +170,7 @@
 									<span class="tron-text-muted ml-2">—</span>
 								{/if}
 							</td>
-						<td class="py-2.5 text-xs whitespace-nowrap {r.lastTestAt ? '' : 'tron-text-muted'}">
+							<td class="py-2.5 text-xs whitespace-nowrap {r.lastTestAt ? '' : 'tron-text-muted'}">
 								{fmtLastTest(r.lastTestAt)}
 							</td>
 						</tr>
