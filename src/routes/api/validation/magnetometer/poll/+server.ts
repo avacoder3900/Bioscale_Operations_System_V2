@@ -6,6 +6,7 @@ export const config = {
 import { connectDB, ValidationSession, Integration, Spu, generateId } from '$lib/server/db';
 import { getVariable } from '$lib/server/particle';
 import { extractMagTestTime } from '$lib/server/magnetometer-time';
+import { autoEnterValidating } from '$lib/server/spu-auto-validate';
 import type { RequestHandler } from './$types';
 import crypto from 'crypto';
 
@@ -142,6 +143,8 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 					...(overallPassed ? { qcStatus: 'passed' } : {})
 				}
 			});
+			// Evidence drives the evidence state (SPU-INV-12).
+			await autoEnterValidating(spuId, 'magnetometer', { _id: locals.user._id, username: locals.user.username });
 		}
 
 		return json({

@@ -11819,6 +11819,56 @@ Retrieve this exact code: git log master --oneline
 What this deployment is for: fleet matrix last-test column + recency sort + search
 
 ================================================================================
+2026-09-08 — feat/spu-tweaks — auto-enter validating on any test result (SPU-INV-12)
+================================================================================
+Recording any validation result now auto-flips the unit to 'validating' from draft/assembling/
+SERVICING (Jacob's explicit call — a test during servicing pulls the unit into validation);
+released never demoted, retired/finalized untouched. New src/lib/server/spu-auto-validate.ts
+(best-effort, transition + audit naming the instrument) hooked into all five writers: mag manual
+read, mag auto-poll, processThermoUpload, thermo XLSX API, optics sync. draft→validating added to
+LEGAL_TRANSITIONS. No firmware changes — flips fire at BIMS ingestion (mag: poll/read; optics: at
+sync). Remaining manual discipline: board scan on open (auto-sets servicing) + deliberate release.
+PRD: docs/prds/SPU-INV-12-auto-enter-validating.md. npm run check: 10/434 — baseline.
+
+Deployment: production — building from the GitHub push to master (Vercel dashboard, commit below)
+Source: branch master @ merge of feat/spu-tweaks
+Retrieve this exact code: git log master --oneline
+What this deployment is for: auto-enter validating on any test result (SPU-INV-12)
+
+================================================================================
+2026-09-08 — feat/spu-tweaks — SPU nav restructure: Assembly + Servicing elevated, SPU Manufacturing dissolved
+================================================================================
+Per Jacob: the SPU nav group is now SPU Inventory / SPU Assembly / SPU Servicing / SPU Validation.
+"SPU Manufacturing" removed as a nav concept (/spu/mfg still redirects to /assembly for old
+bookmarks). Barcodes rides as a child of SPU Assembly for now (sectionPaths /spu/mfg/barcodes —
+deliberately NOT the /spu/mfg prefix, which would also claim the servicing subroute; polish
+later). Work Instructions removed from the SpuMfgTabs strip and its layout no longer renders the
+strip — the routes live under /documents so the Documents nav item owns them (the SPU assembly
+flow will render the parsed followable version of the doc). SpuMfgTabs now shows
+SPU Assembly / Barcodes / Servicing on the pages that still render it. Files:
+src/routes/+layout.svelte, src/lib/components/spu/SpuMfgTabs.svelte,
+src/routes/documents/instructions/+layout.svelte. npm run check: 10/434 — baseline.
+
+Deployment: production — building from the GitHub push to master (Vercel dashboard, commit below)
+Source: branch master @ merge of feat/spu-tweaks
+Retrieve this exact code: git log master --oneline
+What this deployment is for: SPU nav restructure (Assembly + Servicing primary; WI back to Documents)
+
+================================================================================
+2026-09-08 — feat/spu-tweaks — servicing stands alone (tab strip removed there + from strip)
+================================================================================
+Per Jacob: Servicing removed from the SpuMfgTabs strip (now just SPU Assembly / Barcodes on the
+assembly-side pages) and the servicing page no longer renders any tab strip at all — it's its own
+top-level thing under the SPU nav group. spu/mfg/+layout hides the strip on /spu/mfg/servicing*.
+Files: src/lib/components/spu/SpuMfgTabs.svelte, src/routes/spu/mfg/+layout.svelte.
+npm run check: 10/434 — baseline.
+
+Deployment: production — building from the GitHub push to master (Vercel dashboard, commit below)
+Source: branch master @ merge of feat/spu-tweaks
+Retrieve this exact code: git log master --oneline
+What this deployment is for: servicing standalone (tab strip cleanup)
+
+================================================================================
 2026-09-04 — fix/thermo-stale-upload-state — thermocouple upload: stale readings could be saved against the wrong SPU
 ================================================================================
 Root cause of a real data-integrity incident found while investigating "SPU 257 thermocouple

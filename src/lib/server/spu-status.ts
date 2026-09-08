@@ -24,7 +24,9 @@ export type SpuStatus = (typeof SPU_STATUSES)[number];
  * shows up on the bench), and service return re-enters at validating by default.
  */
 export const LEGAL_TRANSITIONS: Record<SpuStatus, SpuStatus[]> = {
-	draft: ['assembling', 'servicing', 'retired'],
+	// draft → validating covers auto-enter-validation (a test recorded on a
+	// draft unit is validation evidence; see spu-auto-validate.ts).
+	draft: ['assembling', 'validating', 'servicing', 'retired'],
 	assembling: ['draft', 'validating', 'servicing', 'retired'],
 	validating: ['released', 'servicing', 'retired'],
 	released: ['servicing', 'retired'],
