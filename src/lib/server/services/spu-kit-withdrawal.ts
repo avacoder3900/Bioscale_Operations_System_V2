@@ -90,7 +90,14 @@ export function buildSpuKit(): Omit<
 		}
 	}
 
-	return [...byPart.values()].sort((a, b) => a.partNumber.localeCompare(b.partNumber));
+	// Parts carrying a kitExclusion are not in the kit at all. They stay in
+	// SPU_COMPONENT_PARTS because that map doubles as the agent reassembly
+	// knowledge base ("what lives in the antennas component?"), but they are
+	// dropped here so the withdrawal never lists, counts, or reports them --
+	// an operator reading the withdrawal should see only what it withdraws.
+	return [...byPart.values()]
+		.filter((p) => !p.excludedReason)
+		.sort((a, b) => a.partNumber.localeCompare(b.partNumber));
 }
 
 /**
