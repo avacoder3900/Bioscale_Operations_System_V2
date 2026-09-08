@@ -11706,3 +11706,8 @@ SPU Manufacturing (/spu/mfg, sectionPaths assembly/work-instructions/validation 
 "SPU Mfg"). Manufacturing group keeps Cart Mfg, Reagent Lots, barcodes, CV, Shipping, Opentron
 Clone. Only file: src/routes/+layout.svelte (navGroups array only — kanban session confirmed no
 pending edits there). npm run check: 10 errors / 434 warnings — baseline.
+
+Deployment: production — building from the GitHub push to master (Vercel dashboard, commit below)
+Source: branch master @ merge of feat/spu-tweaks
+Retrieve this exact code: git log master --oneline
+What this deployment is for: SPU top-level nav group (Inventory + Manufacturing)
