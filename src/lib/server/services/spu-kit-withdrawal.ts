@@ -157,7 +157,21 @@ export interface WithdrawResult {
 		previousCount: number;
 		newCount: number;
 	}>;
-	skipped: Array<{ partNumber: string; name: string; quantity: number; reason: string; notes: string[] }>;
+	/**
+	 * Lines that were not deducted. `kind` keeps a deliberate policy decision
+	 * distinct from a data problem: 'excluded' means the kit is defined not to
+	 * withdraw this part, 'unresolved' means it should have been withdrawn but
+	 * there is no active part definition to deduct from. Collapsing the two
+	 * makes every operator decision look like a failure in the result panel.
+	 */
+	skipped: Array<{
+		kind: 'excluded' | 'unresolved';
+		partNumber: string;
+		name: string;
+		quantity: number;
+		reason: string;
+		notes: string[];
+	}>;
 }
 
 /**
@@ -180,6 +194,7 @@ export async function withdrawSpuKit(params: {
 	for (const line of lines) {
 		if (line.excludedReason) {
 			result.skipped.push({
+				kind: 'excluded',
 				partNumber: line.partNumber,
 				name: line.name,
 				quantity: line.quantity,
@@ -191,6 +206,7 @@ export async function withdrawSpuKit(params: {
 
 		if (!line.resolved || !line.partDefinitionId) {
 			result.skipped.push({
+				kind: 'unresolved',
 				partNumber: line.partNumber,
 				name: line.name,
 				quantity: line.quantity,

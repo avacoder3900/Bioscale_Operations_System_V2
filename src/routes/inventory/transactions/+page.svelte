@@ -92,7 +92,14 @@
 	let withdrawResult = $state<{
 		spuLabel: string;
 		withdrawn: Array<{ partNumber: string; name: string; quantity: number; newCount: number }>;
-		skipped: Array<{ partNumber: string; name: string; quantity: number; reason: string; notes: string[] }>;
+		skipped: Array<{
+			kind: 'excluded' | 'unresolved';
+			partNumber: string;
+			name: string;
+			quantity: number;
+			reason: string;
+			notes: string[];
+		}>;
 		totalUnits: number;
 	} | null>(null);
 	let withdrawError = $state<string | null>(null);
@@ -454,16 +461,43 @@
 					{withdrawResult.spuLabel}.
 				</p>
 
-				{#if withdrawResult.skipped.length > 0}
+				<!-- Deliberate exclusions are not failures: neutral styling, and the
+				     section is worded so nothing here reads as something going wrong. -->
+				{#if withdrawResult.skipped.some((s) => s.kind === 'excluded')}
+					{@const excluded = withdrawResult.skipped.filter((s) => s.kind === 'excluded')}
+					<div class="mb-4 border border-[var(--color-tron-border)] p-4">
+						<h3 class="tron-heading mb-1 text-sm font-bold">
+							{excluded.length} part{excluded.length !== 1 ? 's' : ''} not part of this kit
+						</h3>
+						<p class="tron-text-muted mb-3 text-xs">
+							Deliberately not withdrawn — no stock was deducted for these.
+						</p>
+						<ul class="space-y-3">
+							{#each excluded as skip}
+								<li class="text-sm">
+									<span class="font-mono">{skip.partNumber}</span>
+									<span class="tron-text-muted">— {skip.name} (needed {skip.quantity})</span>
+									<div class="tron-text-muted mt-1 text-xs">{skip.reason}</div>
+									{#each skip.notes as note}
+										<div class="tron-text-muted mt-1 text-xs">{note}</div>
+									{/each}
+								</li>
+							{/each}
+						</ul>
+					</div>
+				{/if}
+
+				<!-- Only genuine data problems keep the warning treatment. -->
+				{#if withdrawResult.skipped.some((s) => s.kind === 'unresolved')}
+					{@const unresolved = withdrawResult.skipped.filter((s) => s.kind === 'unresolved')}
 					<div
 						class="mb-4 border border-[var(--color-tron-yellow)]/40 bg-[var(--color-tron-yellow)]/10 p-4"
 					>
 						<h3 class="mb-2 text-sm font-bold text-[var(--color-tron-yellow)]">
-							{withdrawResult.skipped.length} part{withdrawResult.skipped.length !== 1 ? 's' : ''} could
-							not be withdrawn
+							{unresolved.length} part{unresolved.length !== 1 ? 's' : ''} could not be withdrawn
 						</h3>
 						<ul class="space-y-3">
-							{#each withdrawResult.skipped as skip}
+							{#each unresolved as skip}
 								<li class="text-sm">
 									<span class="font-mono">{skip.partNumber}</span>
 									<span class="tron-text-muted">— {skip.name} (needed {skip.quantity})</span>

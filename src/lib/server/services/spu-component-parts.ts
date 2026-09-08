@@ -174,19 +174,22 @@ export const SPU_COMPONENT_PARTS: SpuComponent[] = [
 				partNumber: 'PT-SPU-101',
 				name: 'GNSS Antenna',
 				quantityPerUnit: 1,
-				kitExclusion: 'Not withdrawn by the kit; no part definition exists for it in inventory.'
+				kitExclusion:
+					'Not withdrawn by the kit; its part definition is deactivated in inventory, so there is no active stock to deduct from.'
 			},
 			{
 				partNumber: 'PT-SPU-102',
 				name: 'Wide Band Cellular Antenna',
 				quantityPerUnit: 1,
-				kitExclusion: 'Not withdrawn by the kit; no part definition exists for it in inventory.'
+				kitExclusion:
+					'Not withdrawn by the kit; its part definition is deactivated in inventory, so there is no active stock to deduct from.'
 			},
 			{
 				partNumber: 'PT-SPU-103',
 				name: 'Wi-Fi/BLE Antenna',
 				quantityPerUnit: 1,
-				kitExclusion: 'Not withdrawn by the kit; no part definition exists for it in inventory.'
+				kitExclusion:
+					'Not withdrawn by the kit; its part definition is deactivated in inventory, so there is no active stock to deduct from.'
 			}
 		]
 	},
