@@ -74,7 +74,13 @@
 	let editingName = $state(false);
 
 	// Per-SPU parsed thermo file (readings JSON + name) for the upload forms
-	let thermoParsed = $state<Record<string, { readingsJson: string; fileName: string; count: number }>>({});
+	// Which SPUs have a file staged on their picker. Only the filename is kept —
+	// the file itself rides on the form input and is read by the server, so the
+	// board never holds a parsed copy that could be posted under another SPU.
+	let thermoStaged = $state<Record<string, string>>({});
+	// The logger writes naive wall-clock text; the server needs the operator's
+	// zone to resolve it onto the same timeline as existing sessions.
+	let tzOffset = $state(new Date().getTimezoneOffset());
 
 	// Live refresh: re-fetch run data every 10s (when the tab is visible) so
 	// validations completed elsewhere — another tab, another operator, the
@@ -384,18 +390,20 @@
 
 									<!-- Thermo upload panel -->
 									{#if openPanel === `${panelKey}:upload` && step === 'thermocouple' && inProgress}
-										<form method="POST" action="?/uploadThermo" use:enhance={submitAndClose} class="mt-2 w-64 space-y-2 rounded-lg border border-[var(--color-tron-border)] p-3">
+										<form method="POST" action="?/uploadThermo" enctype="multipart/form-data" use:enhance={submitAndClose} class="mt-2 w-64 space-y-2 rounded-lg border border-[var(--color-tron-border)] p-3">
 											<input type="hidden" name="spuId" value={member.spuId} />
-											<input type="hidden" name="readings" value={thermoParsed[member.spuId]?.readingsJson ?? ''} />
-											<input type="hidden" name="fileName" value={thermoParsed[member.spuId]?.fileName ?? ''} />
+											<input type="hidden" name="tzOffset" value={tzOffset} />
 											<ThermoFileUpload
 												compact
-												onparsed={(p) => thermoParsed[member.spuId] = { readingsJson: p.readingsJson, fileName: p.fileName, count: p.readings.length }}
-												onclear={() => delete thermoParsed[member.spuId]}
+												name="file"
+												onfile={(f) => {
+													if (f) thermoStaged[member.spuId] = f.name;
+													else delete thermoStaged[member.spuId];
+												}}
 											/>
 											<button
 												type="submit"
-												disabled={!thermoParsed[member.spuId]}
+												disabled={!thermoStaged[member.spuId]}
 												class="w-full rounded-lg bg-[var(--color-tron-orange)] px-3 py-2 text-xs font-semibold text-[var(--color-tron-bg-primary)] disabled:cursor-not-allowed disabled:opacity-50"
 											>
 												Upload for {member.udi}
