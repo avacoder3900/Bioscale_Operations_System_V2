@@ -11777,3 +11777,24 @@ Deployment: production — building from the GitHub push to master (Vercel dashb
 Source: branch master @ merge of feat/spu-tweaks
 Retrieve this exact code: git log master --oneline
 What this deployment is for: validation hub metric tiles removed
+
+================================================================================
+2026-09-08 — feat/spu-tweaks — validation runs retired as a concept
+================================================================================
+Workshop conclusion with Jacob: runs added a declared-roster + closure ceremony nobody used
+(4 runs opened since Sep 1, 0 ever completed) and duplicated what now exists elsewhere — the hub
+matrix shows fleet gaps live, the lifecycle (validating→released) is the per-unit campaign, and
+servicing groups + the unified journal carry campaign narratives. Optics-in-runs was unique to
+how optical tests will be run per Jacob.
+
+Executed scripts/retire-validation-runs.ts --apply (dry-run verified; idempotent): 12 journal
+entries appended (source 'validation', refKind validation_run) — one per member SPU recording run
+number/name, membership dates, per-step cell state, and where the evidence lives; all 4 runs
+marked aborted with the retirement reason; audit rows for everything. NOTHING deleted —
+/validation/runs stays reachable by URL as history. UI: Runs removed from the validation sub-nav,
+the hub launcher cards, and the SPU detail Validation-tab links.
+
+Open thought parked for next session: how the SPU status flow should shape the validation hub
+(e.g. validating units front and center, drafts de-emphasized).
+
+npm run check: 10/434 — baseline.

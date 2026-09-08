@@ -18,8 +18,7 @@
 	const LAUNCHERS = [
 		{ href: '/validation/magnetometer', label: 'Magnetometer', desc: 'Read gauss values from a device' },
 		{ href: '/validation/thermocouple', label: 'Thermocouple', desc: 'Upload a temperature dataset + verdict' },
-		{ href: '/validation/optical-confirmation', label: 'Optical Confirmation', desc: 'Assign + analyze optics cartridges' },
-		{ href: '/validation/runs', label: 'Validation Runs', desc: 'Multi-unit validation checklists' }
+		{ href: '/validation/optical-confirmation', label: 'Optical Confirmation', desc: 'Assign + analyze optics cartridges' }
 	];
 </script>
 
