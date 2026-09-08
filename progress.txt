@@ -11798,3 +11798,8 @@ Open thought parked for next session: how the SPU status flow should shape the v
 (e.g. validating units front and center, drafts de-emphasized).
 
 npm run check: 10/434 — baseline.
+
+Deployment: production — building from the GitHub push to master (Vercel dashboard, commit below)
+Source: branch master @ merge of feat/spu-tweaks
+Retrieve this exact code: git log master --oneline
+What this deployment is for: validation runs retired — nav removal (data journaled via script pre-deploy)
