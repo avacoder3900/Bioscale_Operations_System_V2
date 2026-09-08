@@ -12138,3 +12138,15 @@ quality-policy decision, VALIDATION-07 OQ-4.
 
 npm run check: 119 errors / 434 warnings — identical to the pre-change baseline on this worktree
 (inflated by borrowed node_modules); zero errors and zero warnings in all three touched files.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-git-fix-the-0f1a90-brevitest.vercel.app
+  (branch alias, stable across pushes; per-build immutable URLs on the Vercel dashboard)
+Source: branch fix/thermo-verdict-from-session @ commit 40b5f0a8
+Retrieve this exact code: git checkout fix/thermo-verdict-from-session at commit 40b5f0a8
+Note: originally cut from master at f6553dc1 (master's head at the time) and pushed as 179cc8f0;
+  rebased onto master 319ce6d3 to pick up the three commits master gained meanwhile (progress.txt,
+  validation/+page.svelte, magnetometer/run). Only progress.txt conflicted — both entries kept.
+  The three source files applied unchanged; npm run check re-run on the rebased tree: 119/434,
+  baseline, zero in touched files. 179cc8f0 no longer exists.
+What this deployment is for: record a Pass/Fail verdict on a thermocouple session that was
+  uploaded but never judged, so sessions stop stranding on "Processing"
