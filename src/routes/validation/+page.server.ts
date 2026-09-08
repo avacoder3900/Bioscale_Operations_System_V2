@@ -84,11 +84,15 @@ export const load: PageServerLoad = async ({ locals }) => {
 				status: opt.status ?? 'pending',
 				ratios: ratios
 					? { A: ratios.A ?? null, B: ratios.B ?? null, C: ratios.C ?? null }
-					: null
+					: null,
+				// Optical runs are cartridge_records and the record _id IS the scanned
+				// barcode, so this is what /validation/optical-confirmation/[id] wants.
+				cartridgeBarcode: opt.results?.cartridgeBarcode ?? null
 			},
 			thermo: {
 				status: th.status ?? 'pending',
-				mode: thermoMode
+				mode: thermoMode,
+				sessionId: th.sessionId ?? null
 			},
 			overall
 		};
