@@ -16,7 +16,6 @@
 	] as const;
 	let view = $state<'device' | 'document' | 'validation'>('device');
 
-	let showStateForm = $state(false);
 	let updatingState = $state(false);
 	let confirmingDelete = $state(false);
 	let deleting = $state(false);
@@ -121,15 +120,99 @@
 		return phase === 0 ? 'New device' : `Post-service #${phase}`;
 	}
 
-	// Overall validation status for the Validation tab summary badge
-	const validationOverall = $derived((data.spu.validation as any)?.status ?? 'pending');
+	// The three modalities that make up SPU validation. `validation.lux` also
+	// exists in the schema but is never run, so it is deliberately excluded.
+	const VALIDATION_TESTS = [
+		{ key: 'magnetometer', name: 'Magnetometer', icon: '🧲' },
+		{ key: 'spectrophotometer', name: 'Spectrophotometer', icon: '🔬' },
+		{ key: 'thermocouple', name: 'Thermocouple', icon: '🌡️' }
+	] as const;
+
+	function isPassing(status: string | undefined): boolean {
+		return status === 'passed' || status === 'overridden';
+	}
+
+	// Where "View Session" points for a modality. Optical runs are cartridge
+	// records, not validation sessions: there is no /validation/spectrophotometer
+	// route, which is exactly why that link 404'd. cartridge_records._id IS the
+	// scanned barcode, so the optical viewer keys off that.
+	function sessionHref(key: string, result: any): string | null {
+		if (key === 'spectrophotometer') {
+			const barcode = result?.results?.cartridgeBarcode;
+			return barcode ? `/validation/optical-confirmation/${barcode}` : null;
+		}
+		return result?.sessionId ? `/validation/${key}/${result.sessionId}` : null;
+	}
+
+	// The measurement each modality reports, matching what the SPU Validation
+	// fleet matrix shows: gauss range, per-channel F7/F3 ratios, mode temperature.
+	function zRange(raw: any): string | null {
+		if (!Array.isArray(raw) || raw.length === 0) return null;
+		const zs = raw
+			.flatMap((w: any) => [w?.chA_Z, w?.chB_Z, w?.chC_Z])
+			.filter((z: any): z is number => typeof z === 'number');
+		if (!zs.length) return null;
+		return `${Math.min(...zs)}–${Math.max(...zs)}`;
+	}
+	function fmtRatio(r: number | null | undefined): string {
+		return r == null ? '—' : r.toFixed(2);
+	}
+	function measurement(key: string, r: any): { value: string; label: string } | null {
+		if (key === 'magnetometer') {
+			const z = zRange(r?.results);
+			return z ? { value: z, label: 'gauss range across all wells' } : null;
+		}
+		if (key === 'spectrophotometer') {
+			const ra = r?.results?.ratioByChannel;
+			return ra
+				? { value: `${fmtRatio(ra.A)} / ${fmtRatio(ra.B)} / ${fmtRatio(ra.C)}`, label: 'F7/F3 ratio A / B / C' }
+				: null;
+		}
+		if (key === 'thermocouple') {
+			const m = r?.results?.stats?.mode ?? r?.results?.mode ?? r?.results?.overallStats?.mode ?? null;
+			return m == null ? null : { value: `${m}°C`, label: 'mode temperature' };
+		}
+		return null;
+	}
+
+	// One row per modality — the single source the Device tab, the Validation tab
+	// and the Record Summary all render from, so they cannot drift apart.
+	const validationRows = $derived(
+		VALIDATION_TESTS.map((t) => {
+			const r = (data.spu.validation as any)?.[t.key];
+			const status: string = r?.status ?? 'pending';
+			const completedAt = r?.completedAt ?? null;
+			return {
+				key: t.key,
+				name: t.name,
+				icon: t.icon,
+				status,
+				passing: isPassing(status),
+				tested: status !== 'pending' || !!completedAt,
+				completedAt,
+				href: sessionHref(t.key, r),
+				measurement: measurement(t.key, r),
+				phase: validationPhase(completedAt),
+				result: r
+			};
+		})
+	);
+
 	// Count a test only if it passed AND was done in the current service cycle.
 	const validationPassedCount = $derived(
-		['magnetometer', 'spectrophotometer', 'thermocouple'].filter((k) => {
-			const r = (data.spu.validation as any)?.[k];
-			const passed = r?.status === 'passed' || r?.status === 'overridden';
-			return passed && validationPhase(r?.completedAt) === currentCycle;
-		}).length
+		validationRows.filter((r) => r.passing && r.phase === currentCycle).length
+	);
+
+	// `spu.validation.status` is vestigial — nothing in the codebase ever writes
+	// it, so it reads "pending" forever. That is the BT-M01-0000-0202 glitch:
+	// 3/3 sitting next to PENDING. Derive the rollup from the same rows the count
+	// uses so the two can never disagree again.
+	const validationOverall = $derived(
+		validationPassedCount >= VALIDATION_TESTS.length
+			? 'passed'
+			: validationRows.some((r) => r.status === 'failed')
+				? 'failed'
+				: 'pending'
 	);
 
 	// Only transitions legal from the current status (SPU-INV-07), server-computed.
@@ -190,7 +273,7 @@
 
 	$effect(() => {
 		if (form?.success) {
-			showStateForm = false;
+			editingIdentifiers = false;
 			transitionReason = '';
 			showServicing = false;
 		}
@@ -261,6 +344,22 @@
 						</TronButton>
 					{/if}
 				</div>
+				<!-- A status change is its own server action, so the controls in the
+				     Status row post through this form via the HTML form attribute rather
+				     than nesting a second <form> inside the identifiers one. -->
+				<form
+					id="status-transition-form"
+					method="POST"
+					action="?/transitionStatus"
+					use:enhance={() => {
+						updatingState = true;
+						return async ({ result, update }) => {
+							updatingState = false;
+							if (result.type === 'success') editingIdentifiers = false;
+							await update();
+						};
+					}}
+				></form>
 				<form
 					method="POST"
 					action="?/updateIdentifiers"
@@ -298,6 +397,52 @@
 								<input id="edit-barcode" name="barcode" type="text" class="tron-input font-mono text-sm" bind:value={editBarcode} placeholder="Scan or enter barcode" style="min-height: 38px; max-width: 65%;" />
 							{:else}
 								<dd class="tron-text-primary font-mono">{data.spu.barcode ?? '—'}</dd>
+							{/if}
+						</div>
+						<div class="flex items-center justify-between gap-3">
+							<dt class="tron-text-muted">
+								{#if editingIdentifiers}<label for="transition-status">Status</label>{:else}Status{/if}
+							</dt>
+							{#if editingIdentifiers}
+								<dd class="w-[65%] space-y-2">
+									<select
+										id="transition-status"
+										name="status"
+										form="status-transition-form"
+										class="tron-select w-full"
+										required
+										disabled={updatingState}
+										style="min-height: 38px;"
+									>
+										{#each STATUS_OPTIONS as opt (opt)}
+											{#if opt !== data.spu.status}
+												<option value={opt}>{opt}</option>
+											{/if}
+										{/each}
+									</select>
+									<input
+										id="transition-reason"
+										name="reason"
+										form="status-transition-form"
+										type="text"
+										class="tron-input w-full"
+										placeholder="Reason (optional)"
+										aria-label="Reason for status change"
+										bind:value={transitionReason}
+										disabled={updatingState}
+										style="min-height: 38px;"
+									/>
+									<button
+										type="submit"
+										form="status-transition-form"
+										class="tron-btn-primary w-full"
+										disabled={updatingState}
+									>
+										{updatingState ? 'Updating...' : 'Confirm status change'}
+									</button>
+								</dd>
+							{:else}
+								<dd><SpuStatusBadge status={data.spu.status} /></dd>
 							{/if}
 						</div>
 						<div class="flex justify-between {editingIdentifiers ? 'opacity-40' : ''}">
@@ -349,122 +494,67 @@
 				</form>
 			</TronCard>
 
-			<!-- Status Management -->
+			<!-- Validation. This block used to be Status; status now lives as a row
+			     in Device Information, so the space carries validation instead. -->
 			<TronCard>
-				<div class="mb-4 flex items-center justify-between">
-					<h3 class="tron-text-primary text-lg font-medium">Status</h3>
-					<SpuStatusBadge status={data.spu.status} />
+				<div class="mb-4 flex flex-wrap items-center justify-between gap-2">
+					<h3 class="tron-text-primary text-lg font-medium">Validation</h3>
+					<span class="flex items-center gap-2 text-xs">
+						<span
+							class="rounded-full px-2 py-0.5 font-bold"
+							style="color: {validationPassedCount >= 3 ? 'var(--color-tron-green)' : 'var(--color-tron-red)'}; background: rgba(128,128,128,0.12);"
+						>{validationPassedCount}/3</span>
+						<span
+							class="rounded-full px-2 py-0.5 font-bold"
+							style="color: {validationOverall === 'passed' ? 'var(--color-tron-green)' : validationOverall === 'failed' ? 'var(--color-tron-red)' : 'var(--color-tron-orange)'}; background: rgba(128,128,128,0.12);"
+						>{validationOverall.toUpperCase()}</span>
+						<a href="/validation" class="hover:underline" style="color: var(--color-tron-cyan);">Hub &rarr;</a>
+					</span>
 				</div>
-
-				{#if !showStateForm}
-					<TronButton variant="primary" onclick={() => (showStateForm = true)} style="min-height: 44px; width: 100%;">
-						Transition Status
-					</TronButton>
-				{:else}
-					<form
-						method="POST"
-						action="?/transitionStatus"
-						use:enhance={() => {
-							updatingState = true;
-							return async ({ result, update }) => {
-								updatingState = false;
-								await update();
-							};
-						}}
-						class="space-y-4 rounded border border-[var(--color-tron-cyan)] bg-[rgba(0,255,255,0.03)] p-4"
-					>
-						<div>
-							<label for="transition-status" class="tron-label">New Status</label>
-							<select id="transition-status" name="status" class="tron-select w-full" required disabled={updatingState} style="min-height: 44px;">
-								{#each STATUS_OPTIONS as opt (opt)}
-									{#if opt !== data.spu.status}
-										<option value={opt}>{opt}</option>
-									{/if}
-								{/each}
-							</select>
-						</div>
-						<div>
-							<label for="transition-reason" class="tron-label">Reason (optional)</label>
-							<input id="transition-reason" name="reason" type="text" class="tron-input" placeholder="Why is the status changing?" bind:value={transitionReason} disabled={updatingState} style="min-height: 44px;" />
-						</div>
-						<div class="flex gap-3">
-							<TronButton type="button" class="flex-1" onclick={() => (showStateForm = false)} disabled={updatingState}>Cancel</TronButton>
-							<TronButton type="submit" variant="primary" class="flex-1" disabled={updatingState}>
-								{updatingState ? 'Updating...' : 'Confirm Transition'}
-							</TronButton>
-						</div>
-					</form>
-				{/if}
-
-				<!-- Delete SPU -->
-				{#if !data.spu.finalizedAt}
-					{#if !confirmingDelete}
-						<button
-							type="button"
-							onclick={() => (confirmingDelete = true)}
-							class="mt-4 w-full rounded border px-4 py-2 text-sm"
-							style="border-color: var(--color-tron-red); color: var(--color-tron-red); background: transparent;"
+				<!-- One column per modality, read left to right: Magnetometer,
+				     Spectrophotometer, Thermocouple. Each stacks its own reading so the
+				     measurement is the thing your eye lands on. -->
+				<div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
+					{#each validationRows as row (row.key)}
+						<div
+							class="flex min-h-[190px] flex-col items-center justify-between rounded-lg border p-5 text-center"
+							style="border-color: {row.passing ? 'var(--color-tron-green)' : row.status === 'failed' ? 'var(--color-tron-red)' : 'var(--color-tron-border)'}; background: {row.passing ? 'rgba(0,255,100,0.05)' : row.status === 'failed' ? 'rgba(255,0,0,0.05)' : 'var(--color-tron-bg-secondary)'};"
 						>
-							🗑️ Delete SPU
-						</button>
-					{:else}
-						<div class="mt-4 rounded border p-4 space-y-3" style="border-color: var(--color-tron-red); background: rgba(255,0,0,0.05);">
-							<p class="text-sm" style="color: var(--color-tron-red);">Are you sure you want to permanently delete <strong>{data.spu.udi}</strong>? This cannot be undone.</p>
-							<div class="flex gap-2">
-								<form
-									method="POST"
-									action="?/deleteSpu"
-									use:enhance={() => {
-										deleting = true;
-										return async ({ result }) => {
-											deleting = false;
-											if (result.type === 'success') {
-												window.location.href = '/spu';
-											}
-										};
-									}}
-								>
-									<button type="submit" disabled={deleting} class="rounded px-4 py-2 text-sm font-medium" style="background: var(--color-tron-red); color: white;">
-										{deleting ? 'Deleting...' : 'Yes, Delete'}
-									</button>
-								</form>
-								<button type="button" onclick={() => (confirmingDelete = false)} class="tron-text-muted rounded px-4 py-2 text-sm">Cancel</button>
+							<div class="flex items-center justify-center gap-2">
+								<span class="text-lg" aria-hidden="true">{row.icon}</span>
+								<span class="tron-text-primary text-base font-bold">{row.name}</span>
+							</div>
+
+							<!-- the reading itself: the largest thing in the column -->
+							<div class="my-3">
+								<div class="tron-text-primary font-mono text-3xl leading-tight break-all">
+									{#if row.measurement}
+										<span title={row.measurement.label}>{row.measurement.value}</span>
+									{:else}
+										<span class="tron-text-muted">—</span>
+									{/if}
+								</div>
+								{#if row.measurement}
+									<div class="tron-text-muted mt-1 text-xs">{row.measurement.label}</div>
+								{/if}
+							</div>
+
+							<div>
+								<div class="flex items-center justify-center gap-2 text-sm">
+									{#if !row.tested}
+										<span class="tron-text-muted text-base" title="No test on record">⬜</span>
+										<span class="tron-text-muted">—</span>
+									{:else}
+										<span class="text-base" title={row.status}>{row.passing ? '✅' : '❌'}</span>
+										<span class="tron-text-muted">{row.completedAt ? formatDate(row.completedAt) : '—'}</span>
+									{/if}
+								</div>
+								{#if row.href}
+									<a href={row.href} class="mt-2 block text-sm font-medium underline" style="color: var(--color-tron-cyan);">View Session</a>
+								{/if}
 							</div>
 						</div>
-					{/if}
-				{/if}
-
-				<!-- Immutable Status Transition Log -->
-				<div class="mt-6 border-t pt-4" style="border-color: var(--color-tron-border);">
-					<h4 class="tron-text-muted mb-3 text-sm font-medium uppercase tracking-wide">Status Transition Log</h4>
-					{#if data.spu.statusTransitions && data.spu.statusTransitions.length > 0}
-						<div class="space-y-0">
-							{#each data.spu.statusTransitions as entry (entry.id)}
-								<div class="flex items-start gap-3 border-l-2 py-3 pl-4" style="border-color: {statusColor(entry.to)};">
-									<div class="-ml-[21px] mt-1 flex h-4 w-4 shrink-0 items-center justify-center rounded-full" style="background: var(--color-tron-bg); border: 2px solid {statusColor(entry.to)};">
-										<span class="text-[8px]" style="color: {statusColor(entry.to)};">→</span>
-									</div>
-									<div class="min-w-0 flex-1">
-										<div class="flex flex-wrap items-center gap-2">
-											{#if entry.from}
-												<span class="rounded px-2 py-0.5 text-[10px] font-bold uppercase" style="background: color-mix(in srgb, {statusColor(entry.from)} 20%, transparent); color: {statusColor(entry.from)};">{entry.from}</span>
-												<span class="tron-text-muted text-xs">→</span>
-											{/if}
-											<span class="rounded px-2 py-0.5 text-[10px] font-bold uppercase" style="background: color-mix(in srgb, {statusColor(entry.to)} 20%, transparent); color: {statusColor(entry.to)};">{entry.to}</span>
-										</div>
-										{#if entry.reason}
-											<p class="tron-text-muted mt-1 text-xs italic">"{entry.reason}"</p>
-										{/if}
-										<p class="mt-1 text-xs" style="color: var(--color-tron-cyan); opacity: 0.6;">
-											{entry.changedBy} · {formatDate(entry.changedAt)}
-										</p>
-									</div>
-								</div>
-							{/each}
-						</div>
-					{:else}
-						<p class="tron-text-muted py-4 text-center text-sm">No status transitions recorded yet.</p>
-					{/if}
+					{/each}
 				</div>
 			</TronCard>
 		</div>
@@ -737,6 +827,84 @@
 				</div>
 			</TronCard>
 		{/if}
+
+		<!-- Status Transition Log. Immutable lifecycle record; kept at the bottom
+		     with the other reference material rather than beside the editable fields. -->
+		<TronCard>
+			<div>
+				<h3 class="tron-text-primary text-lg font-medium">Status Transition Log</h3>
+				<p class="tron-text-muted text-sm">Every lifecycle change, who made it, and why</p>
+			</div>
+			<div class="mt-4 border-t pt-4" style="border-color: var(--color-tron-border);">
+				{#if data.spu.statusTransitions && data.spu.statusTransitions.length > 0}
+					<div class="space-y-0">
+						{#each data.spu.statusTransitions as entry (entry.id)}
+							<div class="flex items-start gap-3 border-l-2 py-3 pl-4" style="border-color: {statusColor(entry.to)};">
+								<div class="-ml-[21px] mt-1 flex h-4 w-4 shrink-0 items-center justify-center rounded-full" style="background: var(--color-tron-bg); border: 2px solid {statusColor(entry.to)};">
+									<span class="text-[8px]" style="color: {statusColor(entry.to)};">→</span>
+								</div>
+								<div class="min-w-0 flex-1">
+									<div class="flex flex-wrap items-center gap-2">
+										{#if entry.from}
+											<span class="rounded px-2 py-0.5 text-[10px] font-bold uppercase" style="background: color-mix(in srgb, {statusColor(entry.from)} 20%, transparent); color: {statusColor(entry.from)};">{entry.from}</span>
+											<span class="tron-text-muted text-xs">→</span>
+										{/if}
+										<span class="rounded px-2 py-0.5 text-[10px] font-bold uppercase" style="background: color-mix(in srgb, {statusColor(entry.to)} 20%, transparent); color: {statusColor(entry.to)};">{entry.to}</span>
+									</div>
+									{#if entry.reason}
+										<p class="tron-text-muted mt-1 text-xs italic">"{entry.reason}"</p>
+									{/if}
+									<p class="mt-1 text-xs" style="color: var(--color-tron-cyan); opacity: 0.6;">
+										{entry.changedBy} · {formatDate(entry.changedAt)}
+									</p>
+								</div>
+							</div>
+						{/each}
+					</div>
+				{:else}
+					<p class="tron-text-muted py-4 text-center text-sm">No status transitions recorded yet.</p>
+				{/if}
+			
+			</div>
+		</TronCard>
+
+			<!-- Delete SPU -->
+			{#if !data.spu.finalizedAt}
+				{#if !confirmingDelete}
+					<button
+						type="button"
+						onclick={() => (confirmingDelete = true)}
+						class="mt-4 w-full rounded border px-4 py-2 text-sm"
+						style="border-color: var(--color-tron-red); color: var(--color-tron-red); background: transparent;"
+					>
+						🗑️ Delete SPU
+					</button>
+				{:else}
+					<div class="mt-4 rounded border p-4 space-y-3" style="border-color: var(--color-tron-red); background: rgba(255,0,0,0.05);">
+						<p class="text-sm" style="color: var(--color-tron-red);">Are you sure you want to permanently delete <strong>{data.spu.udi}</strong>? This cannot be undone.</p>
+						<div class="flex gap-2">
+							<form
+								method="POST"
+								action="?/deleteSpu"
+								use:enhance={() => {
+									deleting = true;
+									return async ({ result }) => {
+										deleting = false;
+										if (result.type === 'success') {
+											window.location.href = '/spu';
+										}
+									};
+								}}
+							>
+								<button type="submit" disabled={deleting} class="rounded px-4 py-2 text-sm font-medium" style="background: var(--color-tron-red); color: white;">
+									{deleting ? 'Deleting...' : 'Yes, Delete'}
+								</button>
+							</form>
+							<button type="button" onclick={() => (confirmingDelete = false)} class="tron-text-muted rounded px-4 py-2 text-sm">Cancel</button>
+						</div>
+					</div>
+				{/if}
+			{/if}
 	{/if}
 
 	<!-- ═══════════════ VALIDATION ═══════════════ -->
@@ -767,12 +935,8 @@
 			</div>
 
 			<div class="grid grid-cols-1 gap-3 md:grid-cols-3">
-				{#each [
-					{ name: 'Magnetometer', key: 'magnetometer', icon: '🧲' },
-					{ name: 'Spectrophotometer', key: 'spectrophotometer', icon: '🔬' },
-					{ name: 'Thermocouple', key: 'thermocouple', icon: '🌡️' }
-				] as test (test.key)}
-					{@const result = (data.spu.validation as any)?.[test.key]}
+				{#each validationRows as test (test.key)}
+					{@const result = test.result}
 					<div class="rounded-lg border p-3" style="border-color: {result?.status === 'passed' || result?.status === 'overridden' ? 'var(--color-tron-green)' : result?.status === 'failed' ? 'var(--color-tron-red)' : 'var(--color-tron-border)'}; background: {result?.status === 'passed' || result?.status === 'overridden' ? 'rgba(0,255,100,0.05)' : result?.status === 'failed' ? 'rgba(255,0,0,0.05)' : 'var(--color-tron-bg-secondary)'};">
 						<div class="text-center">
 							<div class="text-lg">{test.icon}</div>
@@ -792,8 +956,8 @@
 								<div class="tron-text-muted text-[10px] mt-1">{formatDate(result.completedAt)}</div>
 									<div class="text-[10px] mt-0.5" style="color: {validationPhase(result.completedAt) === currentCycle ? 'var(--color-tron-cyan)' : 'var(--color-tron-text-secondary)'};">{phaseLabel(validationPhase(result.completedAt))}{#if validationPhase(result.completedAt) !== currentCycle} · not counted{/if}</div>
 							{/if}
-							{#if result?.sessionId}
-								<a href="/validation/{test.key}/{result.sessionId}" class="text-[10px] underline mt-1 block" style="color: var(--color-tron-cyan);">View Session</a>
+							{#if test.href}
+								<a href={test.href} class="text-[10px] underline mt-1 block" style="color: var(--color-tron-cyan);">View Session</a>
 							{/if}
 						</div>
 						{#if result?.status === 'failed' && result?.failureReasons?.length > 0}
@@ -915,6 +1079,45 @@
 				</div>
 			</TronCard>
 		{/if}
+
+		<!-- Spectrophotometer runs are cartridge_records keyed by device.name, not
+		     validation sessions, so they never appeared in the history above. That
+		     gap is what made BT-M01-0000-0202 look like it had a spectrophotometer
+		     pass with no test behind it. -->
+		<TronCard>
+			<div class="mb-4 flex flex-wrap items-center justify-between gap-2">
+				<h3 class="tron-text-primary text-lg font-medium">Spectrophotometer Run History</h3>
+				<span class="tron-text-muted text-xs">Optical Test Cartridge Log</span>
+			</div>
+			{#if data.opticalRuns?.length > 0}
+				<div class="space-y-2">
+					{#each data.opticalRuns as run (run.id)}
+						<div
+							class="flex flex-wrap items-center justify-between gap-3 rounded-lg border p-3"
+							style="border-color: var(--color-tron-border); background: var(--color-tron-bg-secondary);"
+						>
+							<div class="flex items-center gap-3">
+								<span aria-hidden="true">🔬</span>
+								<div>
+									<div class="tron-text-primary text-sm font-bold">{run.serialNumber ?? run.id}</div>
+									<div class="tron-text-muted text-xs">
+										{formatDate(run.completedAt ?? run.createdAt)}{#if run.assayName} &middot; {run.assayName}{/if}
+									</div>
+								</div>
+							</div>
+							<div class="flex items-center gap-2">
+								<span class="rounded-full px-2 py-0.5 text-xs font-bold tron-text-muted" style="background: rgba(128,128,128,0.15);">
+									{(run.status ?? 'unknown').toUpperCase()}
+								</span>
+								<a href="/validation/optical-confirmation/{run.id}" class="text-[10px] underline" style="color: var(--color-tron-cyan);">View</a>
+							</div>
+						</div>
+					{/each}
+				</div>
+			{:else}
+				<p class="tron-text-muted text-sm">No optical runs recorded for this unit.</p>
+			{/if}
+		</TronCard>
 	{/if}
 
 	<!-- ═══════════════ FULL DOCUMENT ═══════════════ -->
@@ -931,6 +1134,18 @@
 				<div class="flex justify-between gap-3"><dt class="tron-text-muted">QC Status</dt><dd class="tron-text-primary text-right">{data.spu.qcStatus}</dd></div>
 				<div class="flex justify-between gap-3"><dt class="tron-text-muted">Assembly Status</dt><dd class="tron-text-primary text-right">{data.spu.assemblyStatus}</dd></div>
 				<div class="flex justify-between gap-3"><dt class="tron-text-muted">Validation</dt><dd class="tron-text-primary text-right">{validationPassedCount}/3 ({validationOverall})</dd></div>
+				{#each validationRows as row (row.key)}
+					<div class="flex justify-between gap-3">
+						<dt class="tron-text-muted">{row.icon} {row.name}</dt>
+						<dd class="tron-text-primary text-right">
+							{#if !row.tested}
+								<span class="tron-text-muted">&mdash; not tested</span>
+							{:else}
+								{row.passing ? '✅' : '❌'} {row.status}{#if row.completedAt} &middot; {formatDate(row.completedAt)}{/if}
+							{/if}
+						</dd>
+					</div>
+				{/each}
 				<div class="flex justify-between gap-3"><dt class="tron-text-muted">Batch</dt><dd class="tron-text-primary text-right">{data.batch?.batchNumber ?? '—'}</dd></div>
 				<div class="flex justify-between gap-3"><dt class="tron-text-muted">Owner</dt><dd class="tron-text-primary text-right">{data.spu.owner ?? '—'}</dd></div>
 				<div class="flex justify-between gap-3"><dt class="tron-text-muted">Created</dt><dd class="tron-text-primary text-right">{formatDate(data.spu.createdAt)}</dd></div>

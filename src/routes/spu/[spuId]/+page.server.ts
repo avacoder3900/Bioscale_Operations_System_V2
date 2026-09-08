@@ -2,8 +2,9 @@ import { fail, error } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
 import {
 	connectDB, Spu, Batch, User, Customer, AssemblySession,
-	ElectronicSignature, AuditLog, ParticleDevice, ValidationSession, generateId
+	ElectronicSignature, AuditLog, ParticleDevice, ValidationSession, CartridgeRecord, generateId
 } from '$lib/server/db';
+import { OPTICAL_CARTRIDGE_FILTER } from '$lib/server/optical-constants';
 import { byId } from '$lib/server/db/native-helpers';
 import { isLegalTransition, LEGAL_TRANSITIONS, normalizeSpuStatus } from '$lib/server/spu-status';
 import { syncServiceFlag } from '$lib/server/service-flag';
@@ -33,6 +34,18 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 			.sort({ createdAt: -1 })
 			.lean()
 	]);
+
+	// Spectrophotometer runs are cartridge_records keyed by device.name (the SPU
+	// UDI), NOT validation_sessions. That is why the Validation Session History
+	// showed nothing for spectrophotometer even while the rollup read PASS —
+	// the history only ever queried ValidationSession.
+	const opticalRuns = s.udi
+		? await CartridgeRecord.find({ ...OPTICAL_CARTRIDGE_FILTER, 'device.name': s.udi })
+			.select('_id serialNumber assayName status statusUpdatedOn createdAt')
+			.sort({ createdAt: -1 })
+			.limit(25)
+			.lean()
+		: [];
 
 	// Particle device lookup
 	let particleDevice = null;
@@ -241,6 +254,14 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 				reason: v.override.reason,
 				originalResult: v.override.originalResult
 			} : null
+		})),
+		opticalRuns: (opticalRuns as any[]).map((c: any) => ({
+			id: c._id,
+			serialNumber: c.serialNumber ?? null,
+			assayName: c.assayName ?? null,
+			status: c.status ?? null,
+			createdAt: c.createdAt ?? null,
+			completedAt: c.statusUpdatedOn ?? null
 		})),
 		auditTrail: auditTrail.map((a: any) => ({
 			id: a._id,

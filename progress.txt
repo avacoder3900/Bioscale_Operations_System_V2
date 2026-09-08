@@ -12056,3 +12056,22 @@ Deployment: production — building from the GitHub push to master (Vercel dashb
 Source: branch master @ merge of feat/spu-kit-withdrawal-v2
 Retrieve this exact code: git log master --oneline
 What this deployment is for: kit-withdrawal UI + all prior SPU/validation work, redeployed together
+
+================================================================================
+2026-09-08 — master — Giovanni's gio/validation-dhr merged (careful three-way resolution)
+================================================================================
+CORRECTION FIRST: an earlier merge this afternoon pulled feat/spu-kit-withdrawal-v2 into master on
+a wrong guess that it was Giovanni's work (Jacob stopped it; kit-withdrawal stays on master per
+Jacob's no-revert). Giovanni's actual branch landed as gio/validation-dhr (5 commits): mag +
+thermo default pages become chronological RUN LOGS with execution moved to /run subpages
+(history/ pages folded in), fleet matrix column order Unit → Overall → Lifecycle, DHR validation
+on the default tab with status as a field, and the recorded un-retire of 0245/0248/0250.
+
+Merge resolution (his branch predated ~15 master commits): mag + thermo root pages taken as his
+run logs; his new /run pages upgraded — magnetometer/run gets the SPU-INV-12 autoEnterValidating
+hook re-applied (his move predated it; fail-rollup + retired-exclusion had survived), and
+thermocouple/run REPLACED with master's newer server-side file-ingestion uploader ("the file is
+the record" rework + stale-upload fix) instead of his older client-parsed version, preserving his
+structure with the newest implementation. Fleet matrix combined: his column order + my Last-test
+column, recency sort, and search (colspan 7). npm run check on merged tree: 10/434 — baseline.
+Production redeploys from this push with Giovanni's + this week's work together.

@@ -33,6 +33,19 @@
 		return 'neutral';
 	}
 
+	// Overall sits between the cyan UDI link and the grey lifecycle badge, and
+	// reads "Complete" rather than "passed" — a finished unit, not a graded one.
+	// Cyan (info) rather than green keeps the per-modality green as the signal
+	// that an individual test passed.
+	function overallVariant(status: string): 'info' | 'error' | 'neutral' {
+		if (status === 'passed' || status === 'overridden') return 'info';
+		if (status === 'failed') return 'error';
+		return 'neutral';
+	}
+	function overallLabel(status: string): string {
+		return status === 'passed' || status === 'overridden' ? 'Complete' : status;
+	}
+
 	function fmtRatio(r: number | null): string {
 		return r == null ? '—' : r.toFixed(2);
 	}
@@ -85,12 +98,12 @@
 				<thead>
 					<tr class="border-b border-[var(--color-tron-border)] text-left">
 						<th class="py-2 pr-4 text-xs uppercase text-[var(--color-tron-text-secondary)]">Unit</th>
+						<th class="py-2 pr-4 text-xs uppercase text-[var(--color-tron-text-secondary)]">Overall</th>
 						<th class="py-2 pr-4 text-xs uppercase text-[var(--color-tron-text-secondary)]">Lifecycle</th>
 						<th class="py-2 pr-4 text-xs uppercase text-[var(--color-tron-text-secondary)]">Magnetometer (gauss)</th>
 						<th class="py-2 pr-4 text-xs uppercase text-[var(--color-tron-text-secondary)]">Optics ratio A / B / C</th>
-						<th class="py-2 pr-4 text-xs uppercase text-[var(--color-tron-text-secondary)]">Thermo mode</th>
-						<th class="py-2 pr-4 text-xs uppercase text-[var(--color-tron-text-secondary)]">Last test ▾</th>
-						<th class="py-2 text-xs uppercase text-[var(--color-tron-text-secondary)]">Overall</th>
+					<th class="py-2 pr-4 text-xs uppercase text-[var(--color-tron-text-secondary)]">Thermo mode</th>
+						<th class="py-2 text-xs uppercase text-[var(--color-tron-text-secondary)]">Last test ▾</th>
 					</tr>
 				</thead>
 				<tbody>
@@ -98,6 +111,9 @@
 						<tr class="border-b border-[var(--color-tron-border)] last:border-0">
 							<td class="py-2.5 pr-4 whitespace-nowrap">
 								<a href="/spu/{r.id}" class="font-mono font-bold text-[var(--color-tron-cyan)] hover:underline">{r.udi}</a>
+							</td>
+							<td class="py-2.5 pr-4">
+								<TronBadge variant={overallVariant(r.overall)}>{overallLabel(r.overall)}</TronBadge>
 							</td>
 							<td class="py-2.5 pr-4">
 								<TronBadge variant="neutral">{r.status}</TronBadge>
@@ -123,26 +139,39 @@
 							<td class="py-2.5 pr-4 font-mono text-xs whitespace-nowrap">
 								{#if r.optics.ratios}
 									<TronBadge variant={badgeVariant(r.optics.status)}>{r.optics.status}</TronBadge>
+									{#if r.optics.cartridgeBarcode}
+									<a
+										href="/validation/optical-confirmation/{r.optics.cartridgeBarcode}"
+										class="ml-2 text-[var(--color-tron-cyan)] hover:underline"
+										title="Open this cartridge's optical test results"
+									>{fmtRatio(r.optics.ratios.A)} / {fmtRatio(r.optics.ratios.B)} / {fmtRatio(r.optics.ratios.C)}</a>
+								{:else}
 									<span class="ml-2">{fmtRatio(r.optics.ratios.A)} / {fmtRatio(r.optics.ratios.B)} / {fmtRatio(r.optics.ratios.C)}</span>
+								{/if}
 								{:else}
 									<TronBadge variant={badgeVariant(r.optics.status)}>{r.optics.status}</TronBadge>
 									<span class="tron-text-muted ml-2">—</span>
 								{/if}
 							</td>
-							<td class="py-2.5 pr-4 font-mono whitespace-nowrap">
+							<td class="py-2.5 font-mono whitespace-nowrap">
 								{#if r.thermo.mode != null}
 									<TronBadge variant={badgeVariant(r.thermo.status)}>{r.thermo.status}</TronBadge>
+									{#if r.thermo.sessionId}
+									<a
+										href="/validation/thermocouple/{r.thermo.sessionId}"
+										class="ml-2 text-[var(--color-tron-cyan)] hover:underline"
+										title="Open this unit's thermocouple test results"
+									>{r.thermo.mode}°C</a>
+								{:else}
 									<span class="ml-2">{r.thermo.mode}°C</span>
+								{/if}
 								{:else}
 									<TronBadge variant={badgeVariant(r.thermo.status)}>{r.thermo.status}</TronBadge>
 									<span class="tron-text-muted ml-2">—</span>
 								{/if}
 							</td>
-							<td class="py-2.5 pr-4 text-xs whitespace-nowrap {r.lastTestAt ? '' : 'tron-text-muted'}">
+						<td class="py-2.5 text-xs whitespace-nowrap {r.lastTestAt ? '' : 'tron-text-muted'}">
 								{fmtLastTest(r.lastTestAt)}
-							</td>
-							<td class="py-2.5">
-								<TronBadge variant={badgeVariant(r.overall)}>{r.overall}</TronBadge>
 							</td>
 						</tr>
 						{#if expanded === r.id && r.mag.wells}
