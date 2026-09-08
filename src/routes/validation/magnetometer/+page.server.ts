@@ -1,235 +1,78 @@
-import { fail, redirect } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
-import { connectDB, ValidationSession, Spu, Integration, AuditLog, generateId } from '$lib/server/db';
-import { getVariable } from '$lib/server/particle';
-import { extractMagTestTime, pullDelaySeconds } from '$lib/server/magnetometer-time';
-import type { Actions, PageServerLoad } from './$types';
+import { connectDB, ValidationSession, User } from '$lib/server/db';
+import { extractMagTestTime } from '$lib/server/magnetometer-time';
+import type { PageServerLoad } from './$types';
 
+/**
+ * Magnetometer Validation - the chronological run log.
+ *
+ * This route used to be the device-read page; that moved to
+ * /validation/magnetometer/run. No server-side filters: the page sorts
+ * client-side via the arrow in the Date header.
+ */
 export const load: PageServerLoad = async ({ locals }) => {
 	requirePermission(locals.user, 'spu:read');
 	await connectDB();
 
-	// Get all SPUs with particle links. Retired units are excluded outright, the
-	// same way the thermocouple picker does it — they are not validated.
-	const spus = await Spu.find(
-		{
-			'particleLink.particleDeviceId': { $exists: true, $ne: null },
-			status: { $ne: 'retired' }
-		},
-		{ udi: 1, 'particleLink.particleDeviceId': 1, status: 1 }
-	).sort({ udi: 1 }).lean() as any[];
+	// Sessions are written with type 'mag' by both the fetch action and the poll
+	// endpoint; only 5 stray records in production ever used 'magnetometer'.
+	const sessions = (await ValidationSession.find({ type: { $in: ['mag', 'magnetometer'] } })
+		.sort({ createdAt: -1 })
+		.limit(200)
+		.lean()) as any[];
 
-	// Get criteria
-	const criteria = await Integration.findOne({ type: 'mag_criteria' }).lean() as any;
+	// Resolve usernames. The previous version of this page put the raw userId in
+	// the User column, so it rendered a nanoid rather than a name.
+	const userIds = [...new Set(sessions.map((s) => s.userId).filter(Boolean))];
+	const users = userIds.length
+		? ((await User.find({ _id: { $in: userIds } }, { username: 1 }).lean()) as any[])
+		: [];
+	const userMap = new Map(users.map((u) => [u._id, u.username]));
 
-	return {
-		spus: spus.map((s: any) => ({
-			id: s._id,
-			udi: s.udi,
-			particleDeviceId: s.particleLink?.particleDeviceId ?? null,
-			status: s.status
-		})),
-		criteria: {
-			minZ: criteria?.minZ ?? 3900,
-			maxZ: criteria?.maxZ ?? 4500
-		}
-	};
-};
-
-export const actions: Actions = {
-	readFromDevice: async ({ request, locals }) => {
-		requirePermission(locals.user, 'spu:write');
-		await connectDB();
-
-		const form = await request.formData();
-		const spuId = form.get('spuId')?.toString();
-		if (!spuId) return fail(400, { error: 'Select an SPU' });
-
-		const spu = await Spu.findById(spuId).lean() as any;
-		if (!spu?.particleLink?.particleDeviceId) return fail(400, { error: 'SPU has no Particle device linked' });
-
-		// Read the current magnet_validation variable (from a previous run_test)
-		try {
-			// Check device is online first to avoid wasting time on offline devices
-			const { getDevice } = await import('$lib/server/particle');
-			const deviceInfo = await getDevice(spu.particleLink.particleDeviceId);
-			if (!deviceInfo.online) {
-				return fail(400, { error: `Device is offline (last seen: ${deviceInfo.last_heard ? new Date(deviceInfo.last_heard).toLocaleString() : 'never'})` });
-			}
-
-			const varData = await getVariable(spu.particleLink.particleDeviceId, 'magnet_validation');
-			const rawResult = varData.result;
-			if (!rawResult || typeof rawResult !== 'string') {
-				return fail(400, { error: 'No magnet_validation data on device. Run a test first.' });
-			}
-
-			// Parse
-			const parsed = parseMagValidation(rawResult);
-
-			// Get criteria
-			const criteria = await Integration.findOne({ type: 'mag_criteria' }).lean() as any;
-			const minZ = criteria?.minZ ?? 3900;
-			const maxZ = criteria?.maxZ ?? 4500;
-
-			// Evaluate
-			const failureReasons: string[] = [];
-			for (const well of parsed) {
-				for (const ch of ['A', 'B', 'C'] as const) {
-					const z = well[`ch${ch}_Z`];
-					if (z !== null && (z < minZ || z > maxZ)) {
-						failureReasons.push(`Well ${well.well} Ch ${ch}: Z=${z} (range: ${minZ}-${maxZ})`);
-					}
-				}
-			}
-
-			const overallPassed = failureReasons.length === 0;
-
-			// When the test actually RAN, per the device. `magnet_validation` is a
-			// variable holding the result of a previous run_test, so the time we read
-			// it is not the time it was measured — and a stale variable is a known
-			// failure mode. Null when the payload carries no timestamp.
-			const pulledAt = new Date();
-			const testTime = extractMagTestTime(rawResult);
-
-			const sessionId = generateId();
-			await ValidationSession.create({
-				_id: sessionId,
-				type: 'mag',
-				status: overallPassed ? 'completed' : 'failed',
-				startedAt: pulledAt,
-				completedAt: pulledAt,
-				testRanAt: testTime?.at ?? null,
-				userId: locals.user!._id,
-				spuUdi: spu.udi,
-				spuId: spu._id,
-				particleDeviceId: spu.particleLink.particleDeviceId,
-				rawData: rawResult,
-				magResults: parsed,
-				overallPassed,
-				failureReasons,
-				criteriaUsed: { minZ, maxZ }
-			});
-
-			// Update the SPU DHR rollup on BOTH outcomes — a failed test is part of
-			// the unit's record too (failures used to stay 'pending' forever).
-			// qcStatus is only promoted on a pass.
-			const magStatus = overallPassed ? 'passed' : 'failed';
-			await Spu.updateOne({ _id: spuId }, {
-				$set: {
-					'validation.magnetometer': {
-						status: magStatus,
-						sessionId,
-						// completedAt keeps its existing meaning (when BIMS recorded
-						// this) so the DHR field is not silently redefined; testRanAt
-						// is the additive, accurate one.
-						completedAt: pulledAt,
-						testRanAt: testTime?.at ?? null,
-						rawData: rawResult,
-						results: parsed,
-						failureReasons: overallPassed ? [] : failureReasons,
-						criteriaUsed: { minZ, maxZ }
-					},
-					...(overallPassed ? { qcStatus: 'passed' } : {})
-				}
-			});
-
-			// Create audit log entry
-			await AuditLog.create({
-				_id: generateId(),
-				tableName: 'spus',
-				recordId: spuId,
-				entityId: spuId,
-				action: 'UPDATE',
-				oldData: null,
-				newData: {
-					validationType: 'magnetometer',
-					status: magStatus,
-					sessionId,
-					overallPassed,
-					failureReasons: failureReasons.length > 0 ? failureReasons : undefined,
-					criteriaUsed: { minZ, maxZ }
-				},
-				changedAt: new Date(),
-				changedBy: locals.user!._id,
-				reason: `Magnetometer validation: ${magStatus.toUpperCase()}${failureReasons.length > 0 ? ' — ' + failureReasons.join('; ') : ''}`
-			});
-
-			return {
-				success: true,
-				sessionId,
-				spuUdi: spu.udi,
-				overallPassed,
-				failureReasons,
-				criteriaUsed: { minZ, maxZ },
-				magResults: parsed,
-				rawData: rawResult,
-				// The time the TEST ran — this is what the page shows. Null when the
-				// payload has no timestamp, in which case the UI says so rather than
-				// falling back to the pull time.
-				testRanAt: testTime?.at.toISOString() ?? null,
-				testTimeSource: testTime?.source ?? null,
-				pulledAt: pulledAt.toISOString(),
-				pullDelaySeconds: pullDelaySeconds(testTime?.at ?? null, pulledAt),
-				completedAt: pulledAt.toISOString()
-			};
-		} catch (err: any) {
-			return fail(400, { error: `Failed: ${err instanceof Error ? err.message : String(err)}` });
-		}
-	},
-
-	updateCriteria: async ({ request, locals }) => {
-		requirePermission(locals.user, 'spu:write');
-		await connectDB();
-
-		const form = await request.formData();
-		const minZ = parseFloat(form.get('minZ')?.toString() ?? '3900');
-		const maxZ = parseFloat(form.get('maxZ')?.toString() ?? '4500');
-
-		if (isNaN(minZ) || isNaN(maxZ) || minZ >= maxZ) {
-			return fail(400, { error: 'Invalid criteria range' });
-		}
-
-		await Integration.updateOne(
-			{ type: 'mag_criteria' },
-			{ $set: { type: 'mag_criteria', minZ, maxZ, updatedAt: new Date() } },
-			{ upsert: true }
-		);
-
-		return { criteriaUpdated: true };
-	}
-};
-
-interface MagWellResult {
-	well: number;
-	chA_T: number | null; chA_X: number | null; chA_Y: number | null; chA_Z: number | null;
-	chB_T: number | null; chB_X: number | null; chB_Y: number | null; chB_Z: number | null;
-	chC_T: number | null; chC_X: number | null; chC_Y: number | null; chC_Z: number | null;
-}
-
-function parseMagValidation(raw: string): MagWellResult[] {
-	const lines = raw.split('\n').map(l => l.trim()).filter(l => l.length > 0);
-	const results: MagWellResult[] = [];
-
-	for (const line of lines) {
-		const match = line.match(/^(\d+)\t/);
-		if (!match) continue;
-
-		const parts = line.split('\t').map(s => s.trim());
-		const well = parseInt(parts[0]);
-		const nums = parts.slice(1).map(s => {
-			const n = parseFloat(s);
-			return isNaN(n) ? null : n;
-		});
-
-		results.push({
-			well,
-			chA_T: nums[0] ?? null, chA_X: nums[1] ?? null, chA_Y: nums[2] ?? null, chA_Z: nums[3] ?? null,
-			chB_T: nums[4] ?? null, chB_X: nums[5] ?? null, chB_Y: nums[6] ?? null, chB_Z: nums[7] ?? null,
-			chC_T: nums[8] ?? null, chC_X: nums[9] ?? null, chC_Y: nums[10] ?? null, chC_Z: nums[11] ?? null
-		});
+	/** Lowest / highest Z (gauss) across every well and channel in a run. */
+	function gaussRange(raw: any): { min: number | null; max: number | null } {
+		if (!Array.isArray(raw) || raw.length === 0) return { min: null, max: null };
+		const zs = raw
+			.flatMap((w: any) => [w?.chA_Z, w?.chB_Z, w?.chC_Z])
+			.filter((z: any): z is number => typeof z === 'number');
+		if (!zs.length) return { min: null, max: null };
+		return { min: Math.min(...zs), max: Math.max(...zs) };
 	}
 
-	return results;
-}
+	const mapped = sessions.map((s) => {
+		const result = (s.results ?? [])[0] as any;
+		const processed = result?.processedData ?? {};
+		const wells = s.magResults ?? processed?.magResults ?? null;
+		const { min, max } = gaussRange(wells);
+
+		// When the test actually ran on the device — NOT when it was pulled into
+		// BIMS; those differ by days on some units. Stored testRanAt first, else
+		// recovered from the raw payload header. Deliberately no fall back to
+		// completedAt/createdAt: magnetometer-time.ts exists precisely because
+		// showing the pull time as the test time was the original bug, so a run
+		// with no recoverable timestamp renders as unknown.
+		const testRanAt = s.testRanAt ?? extractMagTestTime(s.rawData)?.at ?? null;
+
+		return {
+			id: String(s._id),
+			testRanAt: testRanAt ? new Date(testRanAt).toISOString() : null,
+			status: s.status ?? 'pending',
+			passed: s.overallPassed ?? result?.passed ?? null,
+			completedAt: s.completedAt?.toISOString?.() ?? null,
+			createdAt: s.createdAt?.toISOString?.() ?? new Date().toISOString(),
+			spuUdi: s.spuUdi ?? null,
+			spuId: s.spuId ?? null,
+			username: userMap.get(s.userId) ?? null,
+			gaussMin: min,
+			gaussMax: max
+		};
+	});
+
+	const total = mapped.length;
+	const passed = mapped.filter((s) => s.passed === true).length;
+	const failed = mapped.filter((s) => s.passed === false).length;
+
+	return { sessions: mapped, stats: { total, passed, failed } };
+};
 
 export const config = { maxDuration: 60 };

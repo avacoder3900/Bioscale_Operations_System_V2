@@ -1,243 +1,221 @@
 <script lang="ts">
-	import { enhance } from '$app/forms';
-	import TronCard from '$lib/components/ui/TronCard.svelte';
-	import TronButton from '$lib/components/ui/TronButton.svelte';
+	/**
+	 * Thermocouple Test History Page (THERM-010)
+	 *
+	 * Lists all thermocouple validation tests with filtering by date and result
+	 */
 
 	interface Props {
 		data: {
-			spus: { id: string; udi: string; particleDeviceId: string | null; status: string }[];
-			criteria: { minZ: number; maxZ: number };
+			sessions: Array<{
+				id: string;
+				status: string;
+				passed: boolean | null;
+				startedAt: string | null;
+				completedAt: string | null;
+				createdAt: string;
+				testRanAt: string | null;
+				spuUdi: string | null;
+				spuId: string | null;
+				username: string | null;
+				gaussMin: number | null;
+				gaussMax: number | null;
+			}>;
+			stats: {
+				total: number;
+				passed: number;
+				failed: number;
+			};
 		};
-		form: any;
 	}
 
-	let { data, form }: Props = $props();
+	let { data }: Props = $props();
 
-	let selectedSpuId = $state('');
-	let fetching = $state(false);
-	let editingCriteria = $state(false);
-	let savingCriteria = $state(false);
+	// Newest-first by default; the arrow in the Date header flips it. Sorting is
+	// client-side so the toggle costs no round trip.
+	let newestFirst = $state(true);
 
-	const selectedSpu = $derived(data.spus.find(s => s.id === selectedSpuId));
-
-	function formatDate(date: string | null): string {
-		if (!date) return '—';
-		return new Date(date).toLocaleString();
+	// Order by when the test RAN, not when it reached BIMS. Runs with no
+	// recoverable test time sort to the bottom either way rather than pretending
+	// to a date they don't have.
+	function runDate(s: { testRanAt: string | null }): number | null {
+		return s.testRanAt ? new Date(s.testRanAt).getTime() : null;
 	}
 
-	/** "3 minutes", "2 days" — how long before the pull the test actually ran. */
-	function humanAge(seconds: number | null): string {
-		if (seconds == null) return '';
-		if (seconds < 90) return `${seconds}s`;
-		const m = Math.round(seconds / 60);
-		if (m < 90) return `${m} min`;
-		const h = Math.round(m / 60);
-		if (h < 48) return `${h} hr`;
-		return `${Math.round(h / 24)} days`;
+	const sessions = $derived(
+		[...data.sessions].sort((a, b) => {
+			const x = runDate(a);
+			const y = runDate(b);
+			if (x === null && y === null) return 0;
+			if (x === null) return 1;
+			if (y === null) return -1;
+			return newestFirst ? y - x : x - y;
+		})
+	);
+
+	function formatDateTime(dateStr: string | null): string {
+		if (!dateStr) return 'N/A';
+		return new Date(dateStr).toLocaleString();
 	}
 
-	// The magnet_validation variable holds the result of a PREVIOUS run_test, so a
-	// fetch can return data measured long ago. Anything older than an hour is worth
-	// calling out — in production 153 of 413 stored sessions were more than an hour
-	// stale, the worst by 248 days.
-	const STALE_AFTER = 3600;
+	function formatGauss(z: number | null): string {
+		return z === null ? '—' : String(z);
+	}
+
+	function getResultBadge(passed: boolean | null, status: string) {
+		if (passed === true || status === 'completed') {
+			return { class: 'bg-[var(--color-tron-green)]/20 text-[var(--color-tron-green)]', label: 'Passed' };
+		}
+		if (passed === false || status === 'failed') {
+			return { class: 'bg-[var(--color-tron-red)]/20 text-[var(--color-tron-red)]', label: 'Failed' };
+		}
+		if (status === 'in_progress') {
+			return { class: 'bg-[var(--color-tron-cyan)]/20 text-[var(--color-tron-cyan)]', label: 'In Progress' };
+		}
+		return { class: 'bg-[var(--color-tron-text-secondary)]/20 text-[var(--color-tron-text-secondary)]', label: 'Pending' };
+	}
+
+	function exportToCsv() {
+		const headers = ['UDI', 'User', 'Gauss Min', 'Gauss Max', 'Result', 'Date'];
+		const rows = sessions.map((s) => [
+			s.spuUdi ?? '',
+			s.username ?? '',
+			s.gaussMin ?? '',
+			s.gaussMax ?? '',
+			s.passed === true ? 'Passed' : s.passed === false ? 'Failed' : 'Pending',
+			s.testRanAt ? formatDateTime(s.testRanAt) : ''
+		]);
+
+		const csv = [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');
+		const blob = new Blob([csv], { type: 'text/csv' });
+		const url = URL.createObjectURL(blob);
+		const a = document.createElement('a');
+		a.href = url;
+		a.download = `magnetometer-history-${new Date().toISOString().split('T')[0]}.csv`;
+		a.click();
+		URL.revokeObjectURL(url);
+	}
 </script>
 
+<svelte:head>
+	<title>Magnetometer Validation | Bioscale</title>
+</svelte:head>
+
 <div class="space-y-6">
+	<!-- Header -->
 	<div class="flex items-center justify-between">
-		<h2 class="tron-text-primary text-2xl font-bold">Magnetometer Validation</h2>
-		<a
-			href="/validation/magnetometer/calibration"
-			class="text-sm text-[var(--color-tron-cyan)] hover:underline"
-		>
-			Stage Calibration Tool →
-		</a>
+		<div>
+			<h1 class="tron-heading text-2xl font-bold">Magnetometer Validation</h1>
+			<p class="tron-text-muted mt-1">
+				{data.stats.total} tests · {data.stats.passed} passed · {data.stats.failed} failed
+			</p>
+		</div>
+
+		<div class="flex items-center gap-3">
+		<a href="/validation/magnetometer/run" class="tron-btn-primary">Run a test</a>
+		<button onclick={exportToCsv} class="tron-btn-secondary flex items-center gap-2">
+			<svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+				<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+			</svg>
+			Export CSV
+		</button>
+		</div>
 	</div>
 
-	{#if form?.error}
-		<div class="rounded border border-[var(--color-tron-red)] bg-[rgba(255,0,0,0.1)] p-3">
-			<p class="text-sm text-[var(--color-tron-red)]">{form.error}</p>
-		</div>
-	{/if}
-
-	<TronCard>
-		<div class="p-4 space-y-4">
-			<h3 class="tron-text-primary text-lg font-bold">Fetch Magnetometer Results</h3>
-			<p class="tron-text-muted text-sm">Run the test on the SPU first, then select it here to fetch the results.</p>
-
-			<div>
-				<label for="spu-select" class="tron-label">Select SPU</label>
-				<select id="spu-select" class="tron-select w-full" style="min-height: 48px;" bind:value={selectedSpuId}>
-					<option value="">Choose an SPU…</option>
-					{#each data.spus as spu (spu.id)}
-						<option value={spu.id}>{spu.udi} ({spu.status})</option>
-					{/each}
-				</select>
+	<!-- Run log -->
+	<div class="tron-card overflow-hidden">
+		{#if data.sessions.length === 0}
+			<div class="p-8 text-center">
+				<svg class="mx-auto h-12 w-12 text-[var(--color-tron-text-secondary)]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+					<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+				</svg>
+				<p class="tron-text-muted mt-4">No magnetometer tests found</p>
+				<a href="/validation/magnetometer/run" class="mt-4 inline-block text-[var(--color-tron-cyan)] hover:underline">
+					Run a test →
+				</a>
 			</div>
-
-			{#if selectedSpu && !selectedSpu.particleDeviceId}
-				<div class="text-sm" style="color: var(--color-tron-orange);">
-					⚠️ This SPU has no Particle device linked.
-				</div>
-			{/if}
-
-			<form method="POST" action="?/readFromDevice" use:enhance={() => {
-				fetching = true;
-				return async ({ update }) => {
-					fetching = false;
-					await update();
-				};
-			}}>
-				<input type="hidden" name="spuId" value={selectedSpuId} />
-				<button
-					type="submit"
-					disabled={!selectedSpu?.particleDeviceId || fetching}
-					class="w-full rounded-lg p-4 text-center font-bold text-lg transition-all cursor-pointer hover:opacity-90 active:scale-[0.98] disabled:opacity-30 disabled:cursor-not-allowed"
-					style="background: linear-gradient(135deg, var(--color-tron-cyan), var(--color-tron-green)); color: var(--color-tron-bg-primary); min-height: 56px;"
-				>
-					{fetching ? '⏳ Fetching…' : '🧲 Fetch Results'}
-				</button>
-			</form>
-
-			<!-- Inline Results -->
-			{#if form?.success && form?.magResults}
-				<div class="rounded-lg border p-4 space-y-4" style="border-color: {form.overallPassed ? 'var(--color-tron-green)' : 'var(--color-tron-red)'}; background: {form.overallPassed ? 'rgba(0,255,100,0.05)' : 'rgba(255,0,0,0.05)'};">
-					<div class="flex items-start justify-between">
-						<div>
-							<span class="tron-text-primary font-bold">{form.spuUdi}</span>
-							<!-- When the test RAN, per the device — not when we read it. -->
-							{#if form.testRanAt}
-								<span class="tron-text-muted text-xs ml-2">
-									Test run {formatDate(form.testRanAt)}
+		{:else}
+			<table class="w-full">
+				<thead class="border-b border-[var(--color-tron-border)] bg-[var(--color-tron-bg-tertiary)]">
+					<tr>
+						<th class="tron-text-muted px-4 py-3 text-left text-xs font-medium uppercase">UDI</th>
+						<th class="tron-text-muted px-4 py-3 text-left text-xs font-medium uppercase">
+								<span class="flex items-center gap-1.5">
+									Date
+									<button
+										type="button"
+										onclick={() => (newestFirst = !newestFirst)}
+										class="hover:text-[var(--color-tron-cyan)]"
+										aria-label={newestFirst ? 'Sort oldest first' : 'Sort newest first'}
+										title={newestFirst ? 'Newest first' : 'Oldest first'}
+									>
+										<svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+											{#if newestFirst}
+												<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+											{:else}
+												<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 10l7-7m0 0l7 7m-7-7v18" />
+											{/if}
+										</svg>
+									</button>
 								</span>
-							{:else}
-								<span
-									class="tron-text-muted text-xs ml-2"
-									title="This device's payload carries no timestamp (legacy format), so the time the test ran is genuinely unknown. It is deliberately not filled in with the time the data was read."
+							</th>
+						<th class="tron-text-muted px-4 py-3 text-left text-xs font-medium uppercase">User</th>
+						<th class="tron-text-muted px-4 py-3 text-left text-xs font-medium uppercase">Gauss Min</th>
+						<th class="tron-text-muted px-4 py-3 text-left text-xs font-medium uppercase">Gauss Max</th>
+						<th class="tron-text-muted px-4 py-3 text-left text-xs font-medium uppercase">Result</th>
+						<th class="tron-text-muted px-4 py-3 text-left text-xs font-medium uppercase">Test Results</th>
+										</tr>
+				</thead>
+				<tbody class="divide-y divide-[var(--color-tron-border)]">
+					{#each sessions as session (session.id)}
+						{@const badge = getResultBadge(session.passed, session.status)}
+						<tr class="transition-colors hover:bg-[var(--color-tron-bg-tertiary)]">
+							<td class="px-4 py-3">
+								{#if session.spuUdi && session.spuId}
+									<a
+										href="/spu/{session.spuId}"
+										class="font-mono font-medium text-[var(--color-tron-cyan)] hover:underline"
+										title="Open this unit's Device History Record"
+									>{session.spuUdi}</a>
+								{:else if session.spuUdi}
+									<span class="tron-heading font-mono font-medium">{session.spuUdi}</span>
+								{:else}
+									<span class="tron-text-muted">—</span>
+								{/if}
+							</td>
+							<td class="tron-text-secondary px-4 py-3 text-sm whitespace-nowrap">
+								{#if session.testRanAt}
+									{formatDateTime(session.testRanAt)}
+								{:else}
+									<span class="tron-text-muted" title="No test time recorded in the raw payload">—</span>
+								{/if}
+							</td>
+							<td class="tron-text-secondary px-4 py-3 text-sm">
+								{session.username ?? 'N/A'}
+							</td>
+							<td class="px-4 py-3">
+								<span class="tron-heading font-mono">{formatGauss(session.gaussMin)}</span>
+							</td>
+							<td class="px-4 py-3">
+								<span class="tron-heading font-mono">{formatGauss(session.gaussMax)}</span>
+							</td>
+							<td class="px-4 py-3">
+								<span class="rounded-full px-2 py-1 text-xs font-medium {badge.class}">
+									{badge.label}
+								</span>
+							</td>
+							<td class="px-4 py-3">
+								<a
+									href="/validation/magnetometer/{session.id}"
+									class="font-medium text-[var(--color-tron-cyan)] hover:underline"
 								>
-									Test run time unknown
-								</span>
-							{/if}
-							<div class="tron-text-muted text-xs mt-1 opacity-70">
-								Data read from device {formatDate(form.pulledAt ?? form.completedAt)}
-							</div>
-							{#if form.pullDelaySeconds != null && form.pullDelaySeconds > STALE_AFTER}
-								<div class="text-xs mt-1" style="color: var(--color-tron-orange);">
-									⚠️ These results were already {humanAge(form.pullDelaySeconds)} old when read — the
-									device was still holding an earlier test. Re-run the test on the SPU if you
-									expected fresh data.
-								</div>
-							{/if}
-						</div>
-						{#if form.overallPassed}
-							<span class="rounded-full px-3 py-1 text-sm font-bold" style="color: var(--color-tron-green); background: rgba(0,255,100,0.15);">PASS</span>
-						{:else}
-							<span class="rounded-full px-3 py-1 text-sm font-bold" style="color: var(--color-tron-red); background: rgba(255,0,0,0.15);">FAIL</span>
-						{/if}
-					</div>
-
-					{#if form.overallPassed}
-						<p class="text-sm" style="color: var(--color-tron-green);">Results saved to SPU DHR.</p>
-					{/if}
-
-					{#if form.criteriaUsed}
-						<div class="tron-text-muted text-xs">Criteria: Z range {form.criteriaUsed.minZ} – {form.criteriaUsed.maxZ}</div>
-					{/if}
-
-					<div class="overflow-x-auto">
-						<table class="tron-table text-xs">
-							<thead>
-								<tr>
-									<th>Well</th>
-									<th>Ch A (Z)</th>
-									<th>Ch B (Z)</th>
-									<th>Ch C (Z)</th>
-								</tr>
-							</thead>
-							<tbody>
-								{#each form.magResults as well}
-									<tr>
-										<td class="font-mono font-bold">{well.well}</td>
-										{#each ['A', 'B', 'C'] as ch}
-											{@const z = well[`ch${ch}_Z`]}
-											{@const inRange = z !== null && z !== undefined && form.criteriaUsed && z >= form.criteriaUsed.minZ && z <= form.criteriaUsed.maxZ}
-											<td class="font-mono" style="color: {z === null || z === undefined ? 'var(--color-tron-text-secondary)' : inRange ? 'var(--color-tron-green)' : 'var(--color-tron-red)'};">
-												{z !== null && z !== undefined ? z : '—'}
-												{#if z !== null && z !== undefined}
-													<span class="ml-1">{inRange ? '✓' : '✗'}</span>
-												{/if}
-											</td>
-										{/each}
-									</tr>
-								{/each}
-							</tbody>
-						</table>
-					</div>
-
-					{#if form.failureReasons?.length > 0}
-						<div class="space-y-1">
-							{#each form.failureReasons as reason}
-								<div class="text-xs" style="color: var(--color-tron-red);">✗ {reason}</div>
-							{/each}
-						</div>
-					{/if}
-
-					<details>
-						<summary class="tron-text-muted text-xs cursor-pointer hover:underline">Raw Device Output</summary>
-						<pre class="mt-2 text-[10px] tron-text-muted overflow-x-auto p-2 rounded" style="background: var(--color-tron-bg-secondary); white-space: pre-wrap; word-break: break-all;">{form.rawData}</pre>
-					</details>
-
-					<a href="/validation/magnetometer/{form.sessionId}" class="text-xs underline block" style="color: var(--color-tron-cyan);">View full session →</a>
-				</div>
-			{/if}
-		</div>
-	</TronCard>
-
-	<!-- Pass/Fail Criteria -->
-	<TronCard>
-		<div class="p-4">
-			<div class="flex items-center justify-between">
-				<h3 class="tron-text-primary font-bold">Pass/Fail Criteria (Z-axis)</h3>
-				{#if !editingCriteria}
-					<button type="button" onclick={() => (editingCriteria = true)} class="tron-text-muted text-xs underline">Edit</button>
-				{/if}
-			</div>
-
-			{#if editingCriteria}
-				<form
-					method="POST"
-					action="?/updateCriteria"
-					use:enhance={() => {
-						savingCriteria = true;
-						return async ({ update }) => {
-							savingCriteria = false;
-							editingCriteria = false;
-							await update();
-						};
-					}}
-					class="mt-3 flex items-end gap-3"
-				>
-					<div class="flex-1">
-						<label for="minZ" class="tron-label text-xs">Min Z</label>
-						<input id="minZ" name="minZ" type="number" class="tron-input w-full" value={data.criteria.minZ} style="min-height: 44px;" />
-					</div>
-					<div class="flex-1">
-						<label for="maxZ" class="tron-label text-xs">Max Z</label>
-						<input id="maxZ" name="maxZ" type="number" class="tron-input w-full" value={data.criteria.maxZ} style="min-height: 44px;" />
-					</div>
-					<TronButton type="submit" variant="primary" disabled={savingCriteria} style="min-height: 44px;">
-						{savingCriteria ? 'Saving…' : 'Save'}
-					</TronButton>
-					<button type="button" onclick={() => (editingCriteria = false)} class="tron-text-muted text-sm">Cancel</button>
-				</form>
-			{:else}
-				<p class="tron-text-muted mt-2 text-sm">
-					Z values must be between <strong class="tron-text-primary">{data.criteria.minZ}</strong> and <strong class="tron-text-primary">{data.criteria.maxZ}</strong> gauss to pass.
-				</p>
-				{#if form?.criteriaUpdated}
-					<p class="mt-1 text-xs" style="color: var(--color-tron-green);">✓ Criteria updated</p>
-				{/if}
-			{/if}
-		</div>
-	</TronCard>
+									View
+								</a>
+							</td>
+						</tr>
+					{/each}
+				</tbody>
+			</table>
+		{/if}
+	</div>
 </div>
