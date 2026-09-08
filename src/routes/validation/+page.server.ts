@@ -1,5 +1,5 @@
 import { requirePermission } from '$lib/server/permissions';
-import { connectDB, Spu, ValidationSession, ValidationRun } from '$lib/server/db';
+import { connectDB, Spu, ValidationSession } from '$lib/server/db';
 import type { PageServerLoad } from './$types';
 
 /**
@@ -12,8 +12,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 	requirePermission(locals.user, 'spu:read');
 	await connectDB();
 
-	const weekAgo = new Date(Date.now() - 7 * 86_400_000);
-	const [spus, latestMagSessions, runsOpen, sessions7d] = await Promise.all([
+	const [spus, latestMagSessions] = await Promise.all([
 		Spu.find({ status: { $ne: 'retired' } })
 			.select('udi status validation validationResetAt')
 			.sort({ udi: 1 })
@@ -24,9 +23,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 			{ $match: { type: { $in: ['mag', 'magnetometer'] } } },
 			{ $sort: { startedAt: -1 } },
 			{ $group: { _id: '$spuId', magResults: { $first: '$magResults' }, overallPassed: { $first: '$overallPassed' }, at: { $first: '$startedAt' } } }
-		]),
-		ValidationRun.countDocuments({ status: 'in_progress' }),
-		ValidationSession.countDocuments({ startedAt: { $gte: weekAgo } })
+		])
 	]);
 
 	const magBySpu = new Map<string, any>(latestMagSessions.map((m: any) => [m._id, m]));
@@ -97,16 +94,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 		};
 	});
 
-	const metrics = {
-		activeUnits: rows.length,
-		fullyValidated: rows.filter((r) => r.overall === 'passed').length,
-		inValidating: rows.filter((r) => r.status === 'validating').length,
-		anyFailed: rows.filter((r) => r.overall === 'failed').length,
-		sessions7d,
-		runsOpen
-	};
-
-	return { rows: JSON.parse(JSON.stringify(rows)), metrics };
+	return { rows: JSON.parse(JSON.stringify(rows)) };
 };
 
 export const config = { maxDuration: 60 };

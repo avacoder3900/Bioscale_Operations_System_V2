@@ -32,46 +32,6 @@
 		</p>
 	</div>
 
-	<!-- Metric tiles -->
-	<div class="grid gap-4 sm:grid-cols-3 lg:grid-cols-6">
-		<TronCard>
-			<div class="text-center">
-				<div class="tron-text-primary font-mono text-3xl font-bold">{data.metrics.activeUnits}</div>
-				<div class="tron-text-muted text-sm">Active Units</div>
-			</div>
-		</TronCard>
-		<TronCard>
-			<div class="text-center">
-				<div class="font-mono text-3xl font-bold text-[var(--color-tron-green)]">{data.metrics.fullyValidated}</div>
-				<div class="tron-text-muted text-sm">Fully Validated</div>
-			</div>
-		</TronCard>
-		<TronCard>
-			<div class="text-center">
-				<div class="font-mono text-3xl font-bold text-[var(--color-tron-yellow,#fbbf24)]">{data.metrics.inValidating}</div>
-				<div class="tron-text-muted text-sm">In Validating</div>
-			</div>
-		</TronCard>
-		<TronCard>
-			<div class="text-center">
-				<div class="font-mono text-3xl font-bold text-[var(--color-tron-red,#ef4444)]">{data.metrics.anyFailed}</div>
-				<div class="tron-text-muted text-sm">Any Modality Failed</div>
-			</div>
-		</TronCard>
-		<TronCard>
-			<div class="text-center">
-				<div class="tron-text-primary font-mono text-3xl font-bold">{data.metrics.sessions7d}</div>
-				<div class="tron-text-muted text-sm">Sessions (7d)</div>
-			</div>
-		</TronCard>
-		<TronCard>
-			<div class="text-center">
-				<div class="tron-text-primary font-mono text-3xl font-bold">{data.metrics.runsOpen}</div>
-				<div class="tron-text-muted text-sm">Open Runs</div>
-			</div>
-		</TronCard>
-	</div>
-
 	<!-- Launchers -->
 	<div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
 		{#each LAUNCHERS as l (l.href)}
