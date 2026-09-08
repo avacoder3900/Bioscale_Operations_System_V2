@@ -208,7 +208,7 @@
 						Completed: {formatDate(data.session.completedAt)}
 					</span>
 					<a
-						href="/validation/thermocouple/history"
+						href="/validation/thermocouple"
 						class="text-sm text-[var(--color-tron-cyan)] hover:underline"
 					>
 						View All History
