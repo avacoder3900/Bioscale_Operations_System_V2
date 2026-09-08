@@ -11817,3 +11817,15 @@ Deployment: production — building from the GitHub push to master (Vercel dashb
 Source: branch master @ merge of feat/spu-tweaks
 Retrieve this exact code: git log master --oneline
 What this deployment is for: fleet matrix last-test column + recency sort + search
+
+================================================================================
+2026-09-08 — feat/spu-tweaks — auto-enter validating on any test result (SPU-INV-12)
+================================================================================
+Recording any validation result now auto-flips the unit to 'validating' from draft/assembling/
+SERVICING (Jacob's explicit call — a test during servicing pulls the unit into validation);
+released never demoted, retired/finalized untouched. New src/lib/server/spu-auto-validate.ts
+(best-effort, transition + audit naming the instrument) hooked into all five writers: mag manual
+read, mag auto-poll, processThermoUpload, thermo XLSX API, optics sync. draft→validating added to
+LEGAL_TRANSITIONS. No firmware changes — flips fire at BIMS ingestion (mag: poll/read; optics: at
+sync). Remaining manual discipline: board scan on open (auto-sets servicing) + deliberate release.
+PRD: docs/prds/SPU-INV-12-auto-enter-validating.md. npm run check: 10/434 — baseline.

@@ -126,6 +126,10 @@ export async function syncOpticsValidation(opts?: { spuUdi?: string }): Promise<
 			reason: `Optics write-back: latest optical run ${latest.serialNumber ?? latest._id} → ${status}`
 		});
 		result.updated.push({ udi, status, cartridgeBarcode: latest._id });
+
+		// Evidence drives the evidence state (SPU-INV-12).
+		const { autoEnterValidating } = await import('$lib/server/spu-auto-validate');
+		await autoEnterValidating(spu._id, 'optics', { _id: 'system:optics-sync', username: 'optics-validation-sync' });
 	}
 
 	return result;
