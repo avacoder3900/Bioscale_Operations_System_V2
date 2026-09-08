@@ -11743,3 +11743,8 @@ from SPU Manufacturing's sectionPaths so highlighting splits. Detail-page Valida
 now links to Hub / Run mag / Run thermo / Run optics / Runs. PRD:
 docs/prds/SPU-INV-11-validation-hub.md. Earlier today: nav caret untrack fix (shipped separately).
 npm run check: 10 errors / 434 warnings — baseline.
+
+Deployment: production — building from the GitHub push to master (Vercel dashboard, commit below)
+Source: branch master @ merge of feat/spu-tweaks
+Retrieve this exact code: git log master --oneline
+What this deployment is for: SPU Validation hub at /validation (SPU-INV-11)
