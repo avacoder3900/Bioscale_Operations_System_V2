@@ -71,10 +71,18 @@
 					icon: 'M4 6h16M4 10h16M4 14h16M4 18h16'
 				},
 				{
-					href: '/spu/mfg',
-					label: 'SPU Manufacturing',
-					icon: 'M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z',
-					sectionPaths: ['/assembly', '/documents/instructions']
+					href: '/assembly',
+					label: 'SPU Assembly',
+					icon: 'M11 4a2 2 0 114 0v1a1 1 0 001 1h3a1 1 0 011 1v3a1 1 0 01-1 1h-1a2 2 0 100 4h1a1 1 0 011 1v3a1 1 0 01-1 1h-3a1 1 0 01-1-1v-1a2 2 0 10-4 0v1a1 1 0 01-1 1H7a1 1 0 01-1-1v-3a1 1 0 00-1-1H4a2 2 0 110-4h1a1 1 0 001-1V7a1 1 0 011-1h3a1 1 0 001-1V4z',
+					// Barcodes is part of the assembly process (child page for now).
+					// NOTE: not '/spu/mfg' itself — that prefix would also claim the
+					// servicing subroute; the /spu/mfg redirect lands here anyway.
+					sectionPaths: ['/spu/mfg/barcodes']
+				},
+				{
+					href: '/spu/mfg/servicing',
+					label: 'SPU Servicing',
+					icon: 'M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z'
 				},
 				{
 					href: '/validation',

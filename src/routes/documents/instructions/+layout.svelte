@@ -1,6 +1,5 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
-	import SpuMfgTabs from '$lib/components/spu/SpuMfgTabs.svelte';
 
 	interface Props {
 		children: Snippet;
@@ -9,7 +8,7 @@
 	let { children }: Props = $props();
 </script>
 
-<div class="space-y-6">
-	<SpuMfgTabs showBreadcrumb={false} />
-	{@render children()}
-</div>
+<!-- Work Instructions live in the Documents section (the SPU assembly flow
+     will render the parsed, followable version of the doc — the document
+     itself is a Documents concern). -->
+{@render children()}
