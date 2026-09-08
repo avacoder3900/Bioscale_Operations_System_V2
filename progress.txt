@@ -12041,3 +12041,18 @@ Deployment: preview - https://bioscale-operations-system-mongodb-guhwo37l3-brevi
 Source: branch feat/spu-kit-withdrawal-v2 @ 58a397ae29c174e34e053856815e6454749e94a1
 Retrieve this exact code: git checkout 58a397ae29c174e34e053856815e6454749e94a1
 What this deployment is for: build verification only; kit withdrawal test pending env override
+
+================================================================================
+2026-09-08 — master — Giovanni's SPU kit-withdrawal UI merged + redeploy
+================================================================================
+Per Jacob: feat/spu-kit-withdrawal-v2 (6 commits — "Withdraw SPU Kit" button on
+/inventory/transactions, kit content fixes incl. PT-SPU-104 collision, kittest mirror/verify
+scripts, new spu-kit-withdrawal service, IN_BUILD_STATUSES added to the shared spu-status module
+restricting withdrawal to draft/assembling) merged into master alongside this week's SPU work.
+progress.txt append-conflict resolved keep-both; spu-status.ts auto-merged clean.
+npm run check on merged tree: 10 errors / 434 warnings — baseline.
+
+Deployment: production — building from the GitHub push to master (Vercel dashboard, commit below)
+Source: branch master @ merge of feat/spu-kit-withdrawal-v2
+Retrieve this exact code: git log master --oneline
+What this deployment is for: kit-withdrawal UI + all prior SPU/validation work, redeployed together
