@@ -99,9 +99,9 @@ export const SPU_COMPONENT_PARTS: SpuComponent[] = [
 		parts: [
 			{
 				partNumber: 'PT-SPU-032',
-				name: 'Timing Belt 351 mm (cut from 6mm x 3000mm)',
-				quantityPerUnit: 351,
-				note: 'One 351 mm cut per SPU (was 350 mm). Quantity is in MILLIMETRES, not cuts — matches quantityPerUnit on the part definition. Stock is currently counted in 3000 mm spools (inventoryCount 7), so mm deductions will drive it negative until the unit of measure on PT-SPU-032 is reconciled.'
+				name: 'Timing Belt 350 mm section (cut from 6mm x 3000mm)',
+				quantityPerUnit: 1,
+				note: 'One pre-cut 350 mm section per SPU. Quantity is in SECTIONS, not millimetres: belts are cut from 3000 mm spools into sections up front and the sections are counted, so a build consumes exactly 1. This supersedes the earlier 351 mm deduction, which mixed millimetres against a spool-denominated stock count and drove the balance negative on the first withdrawal.'
 			},
 			{ partNumber: 'PT-SPU-015', name: 'Distal Stage Bracket', quantityPerUnit: 1 },
 			{ partNumber: 'PT-SPU-014', name: 'Proximal Stage Bracket', quantityPerUnit: 1 }

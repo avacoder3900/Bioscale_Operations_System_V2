@@ -13,7 +13,7 @@
  * operator so the gap is visible at the moment of withdrawal.
  */
 
-import { AuditLog, InventoryTransaction, PartDefinition } from '$lib/server/db/models/index.js';
+import { AuditLog, InventoryTransaction } from '$lib/server/db/models/index.js';
 import { generateId } from '$lib/server/db/utils.js';
 import { SPU_COMPONENT_PARTS } from './spu-component-parts.js';
 import { recordTransaction } from './inventory-transaction.js';
@@ -210,17 +210,23 @@ export async function withdrawSpuKit(params: {
 			notes: `${KIT_WITHDRAWAL_PREFIX} for SPU ${params.spuLabel}: ${line.name}`
 		});
 
-		const after = (await PartDefinition.findById(line.partDefinitionId)
-			.select('inventoryCount')
-			.lean()) as any;
-		const newCount = after?.inventoryCount ?? 0;
+		// Read the before/after balance off the ledger row itself rather than
+		// re-reading the part and inferring `previous = new + quantity`. That
+		// inference assumes nothing else moved the part between the decrement
+		// and the re-read, which is exactly the assumption this feature exists
+		// to verify. recordTransaction() captures both values at the moment it
+		// applies the change, so the row is the authoritative record.
+		const ledger = (await InventoryTransaction.findById(transactionId)
+			.select('previousQuantity newQuantity')
+			.lean()) as { previousQuantity?: number; newQuantity?: number } | null;
+
 		result.withdrawn.push({
 			transactionId,
 			partNumber: line.partNumber,
 			name: line.name,
 			quantity: line.quantity,
-			previousCount: newCount + line.quantity,
-			newCount
+			previousCount: ledger?.previousQuantity ?? 0,
+			newCount: ledger?.newQuantity ?? 0
 		});
 	}
 
