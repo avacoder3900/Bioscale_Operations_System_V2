@@ -11696,3 +11696,13 @@ Deployment: production — building from the GitHub push to master (Vercel dashb
 Source: branch master @ merge of feat/spu-tweaks
 Retrieve this exact code: git log master --oneline
 What this deployment is for: unified semantic journal (SPU-INV-10) — servicing closes publish into SPU journals
+
+================================================================================
+2026-09-08 — feat/spu-tweaks — SPU becomes its own top-level nav menu
+================================================================================
+Per Jacob: SPU elevated out of the Manufacturing group into its own top-level nav group. New
+"SPU" group (first in navGroups) with two entries: SPU Inventory (/spu, exact) and
+SPU Manufacturing (/spu/mfg, sectionPaths assembly/work-instructions/validation — renamed from
+"SPU Mfg"). Manufacturing group keeps Cart Mfg, Reagent Lots, barcodes, CV, Shipping, Opentron
+Clone. Only file: src/routes/+layout.svelte (navGroups array only — kanban session confirmed no
+pending edits there). npm run check: 10 errors / 434 warnings — baseline.
