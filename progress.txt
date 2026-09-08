@@ -11711,3 +11711,14 @@ Deployment: production — building from the GitHub push to master (Vercel dashb
 Source: branch master @ merge of feat/spu-tweaks
 Retrieve this exact code: git log master --oneline
 What this deployment is for: SPU top-level nav group (Inventory + Manufacturing)
+
+================================================================================
+2026-09-08 — feat/spu-tweaks — fix: nav group carets fought the auto-expand effect
+================================================================================
+Jacob: "the caret in the hamburger menu for the SPU menu is tied to the old manufacturing menu."
+Root cause: the auto-expand $effect read expandedGroups, making it a dependency — every caret
+click (which reassigns the Set) re-ran the effect, which instantly re-added the group owning the
+current page. Collapsing the SPU group while on an SPU page looked broken/cross-wired. Fix:
+untrack() the Set access so the effect only re-runs on pathname/group changes, and reassign after
+add so navigation-driven expansion is actually reactive (plain Sets aren't deeply proxied by
+$state). Only file: src/routes/+layout.svelte. npm run check: 10/434 — baseline.

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import './layout.css';
 	import favicon from '$lib/assets/favicon.svg';
+	import { untrack } from 'svelte';
 	import type { Snippet } from 'svelte';
 	import { page, navigating } from '$app/stores';
 	import { enhance } from '$app/forms';
@@ -148,17 +149,23 @@
 
 	let expandedGroups = $state(new Set<string>());
 
+	// Auto-expand the group that owns the current page. `untrack` matters:
+	// without it the effect depends on expandedGroups itself, so every caret
+	// click re-ran it and instantly re-expanded the active group — collapsing
+	// the group you were "in" looked broken / cross-wired with other groups.
 	$effect(() => {
 		const current = $page.url.pathname;
-		for (const group of filteredGroups) {
-			for (const item of group.items) {
-				const match = matchesItem(item, current);
-				if (match) {
+		const groups = filteredGroups;
+		untrack(() => {
+			let changed = false;
+			for (const group of groups) {
+				if (!expandedGroups.has(group.label) && group.items.some((item) => matchesItem(item, current))) {
 					expandedGroups.add(group.label);
-					break;
+					changed = true;
 				}
 			}
-		}
+			if (changed) expandedGroups = new Set(expandedGroups);
+		});
 	});
 
 	function toggleGroup(label: string) {
