@@ -11748,3 +11748,14 @@ Deployment: production — building from the GitHub push to master (Vercel dashb
 Source: branch master @ merge of feat/spu-tweaks
 Retrieve this exact code: git log master --oneline
 What this deployment is for: SPU Validation hub at /validation (SPU-INV-11)
+
+================================================================================
+2026-09-08 — feat/spu-tweaks — validation section stands alone (SpuMfgTabs deprecation begins)
+================================================================================
+Per Jacob (screenshots of the live hub): the validation pages no longer render the SPU
+Manufacturing tab strip (SpuMfgTabs removed from validation/+layout.svelte — Jacob plans to
+deprecate that menu entirely, other tabs TBD later), and the "Validation" tab is removed from
+SpuMfgTabs itself. The validation section's own sub-nav gains an "Overview" entry (exact-match →
+/validation, the fleet hub) so the section is self-navigating. Files:
+src/routes/validation/+layout.svelte, src/lib/components/spu/SpuMfgTabs.svelte.
+npm run check: 10/434 — baseline.

@@ -1,7 +1,6 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
 	import { page } from '$app/stores';
-	import SpuMfgTabs from '$lib/components/spu/SpuMfgTabs.svelte';
 
 	interface Props {
 		children: Snippet;
@@ -9,7 +8,15 @@
 
 	let { children }: Props = $props();
 
+	// The validation section stands on its own (the SPU Manufacturing tab strip
+	// is deprecated here) — Overview is the fleet hub at /validation.
 	const navItems = [
+		{
+			href: '/validation',
+			label: 'Overview',
+			exact: true,
+			icon: 'M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z'
+		},
 		{
 			href: '/validation/runs',
 			label: 'Runs',
@@ -32,19 +39,18 @@
 		}
 	];
 
-	function isActive(href: string, currentPath: string): boolean {
-		return currentPath === href || currentPath.startsWith(href + '/');
+	function isActive(item: { href: string; exact?: boolean }, currentPath: string): boolean {
+		if (item.exact) return currentPath === item.href;
+		return currentPath === item.href || currentPath.startsWith(item.href + '/');
 	}
 
 </script>
 
 <div class="space-y-6">
-	<SpuMfgTabs />
-
-	<!-- Sub-navigation tabs -->
+	<!-- Section tabs -->
 	<div class="flex gap-2 border-b border-[var(--color-tron-border)] pb-4">
 		{#each navItems as item (item.href)}
-			{@const active = isActive(item.href, $page.url.pathname)}
+			{@const active = isActive(item, $page.url.pathname)}
 			<a
 				href={item.href}
 				class="flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-all duration-200
