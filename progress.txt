@@ -11920,9 +11920,9 @@ locally — that is what this preview is for.
 Still open: SPU 257's record continues to read `passed` on 247's data and needs a human correction
 against the real file.
 
-Deployment: preview — PENDING_URL
-  (immutable: PENDING_IMMUTABLE)
-Source: branch fix/thermo-stale-upload-state @ commit PENDING_SHA
-Retrieve this exact code: git checkout fix/thermo-stale-upload-state at commit PENDING_SHA
+Deployment: preview — https://bioscale-operations-system-mongodb-git-fix-the-3ea973-brevitest.vercel.app
+  (immutable: https://bioscale-operations-system-mongodb-ak0o6tvql-brevitest.vercel.app)
+Source: branch fix/thermo-stale-upload-state @ commit 70e97420
+Retrieve this exact code: git checkout fix/thermo-stale-upload-state at commit 70e97420
 What this deployment is for: testing server-side thermocouple file ingestion end to end — upload
 257's and 247's own files and confirm each shows its own statistics and chart before any verdict.
