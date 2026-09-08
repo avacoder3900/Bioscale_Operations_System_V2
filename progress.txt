@@ -11861,3 +11861,68 @@ Retrieve this exact code: git checkout fix/thermo-stale-upload-state at commit 8
 What this deployment is for: verify a thermocouple upload clears itself after saving, so the
   next SPU cannot inherit the previous file's readings, and that a failed parse drops the
   "N readings loaded" panel instead of leaving stale data staged.
+
+================================================================================
+2026-09-08 — fix/thermo-stale-upload-state — thermocouple: the file is the record, parsed server-side
+================================================================================
+The durable fix specified in VALIDATION-07, following the SPU 257 incident. 855c6d33 closed the
+drift; this closes the class of defect behind it.
+
+Root cause, restated: the thermocouple record was built from numbers that existed only in browser
+memory. ThermoFileUpload parsed the operator's spreadsheet with XLSX client-side and handed the
+readings up as a JSON string in a hidden form field. "The file on screen" and "the data being
+submitted" were two separate objects, so they could disagree — and on 2026-09-03 they did, writing
+SPU 247's measurement into THERMO-000031 against SPU 257.
+
+The parser was never at fault. All 25 spreadsheets in "New SPU thermo data" parse cleanly through
+the production parser, 257 included (635 readings, 37.55-44.40 C, mode 44.3, avg 43.594). The file
+never reached it: a failed parse left the previous file's green "N readings loaded" panel on screen
+while the stats, chart and both verdict buttons — all behind one {#if hasReadings && stats} guard —
+silently vanished. That is the "won't upload, no graph, no buttons" symptom as reported.
+
+What changed. The file itself is now posted, read once on the server, and stored. Nothing parses in
+the client, so there is no second copy of the data to drift.
+
+- src/lib/server/validation/parse-thermo.ts — MOVED from src/lib/components/validation/thermocouple/.
+  Server-only now, and takes an explicit tzOffsetMinutes. The loggers write naive wall-clock text
+  ("14:01:39 2026-09-04"); with no zone the same file resolves five hours apart in a Central browser
+  and a UTC serverless function, which would have shifted every new session off all existing
+  history. The page sends getTimezoneOffset(). Verified: all 25 bench files reproduce their previous
+  browser-parsed timestamps exactly, byte for byte.
+- src/lib/server/validation/parse-thermo-file.ts — NEW. Bytes to readings, with errors an operator
+  can act on (empty file, unreadable workbook, no data rows, no temperature column) instead of the
+  silent empty state that caused the incident.
+- ThermoFileUpload.svelte — 136 lines of XLSX/FileReader parsing replaced by a plain picker over a
+  real file input. Drag-and-drop assigns through DataTransfer so the form still posts the file.
+- /validation/thermocouple — splits into ?/upload (file -> stored session, returns stats + a thinned
+  800-point chart series) and ?/verdict (keyed to that session _id). Same one screen for the
+  operator: pick SPU, drop file, review stats + chart, press Pass or Fail. The verdict now attaches
+  to a persisted session id, so it structurally cannot land on another SPU's data.
+- recordThermoVerdict() in thermo-upload.ts — NEW. Also sets top-level overallPassed, which
+  processThermoUpload never did: every session written through the upload path read
+  overallPassed: null while results[0].passed was true (VALIDATION-07 S5).
+- /validation/runs/[runId] — posts through the same ingestion path. That route is orphaned as of
+  b964fd9f (runs retired from navigation) but shares ThermoFileUpload, so it had to move with the
+  component contract rather than be left broken.
+
+Not included from VALIDATION-07: R2 storage of the original file and its sha256 duplicate warning
+(S6). Those add a hard R2 dependency on recording validation data; deferred deliberately to keep
+this to one screen and one POST. OQ-1 (block vs. defer when R2 is unreachable) stays open.
+
+Verification: all 25 bench spreadsheets ingest through the real server path; 247 -> 377 readings /
+40.90 / 44.00 / mode 43.9 and 257 -> 635 / 37.55 / 44.40 / mode 44.3, so the two files are no
+longer confusable. Rejection paths exercised. Rebased onto master (0 behind) — none of the 18
+intervening commits touch any file in this change. npm run check: zero errors in all seven touched
+files; run-wide 119 is the pre-existing baseline from this worktree borrowing node_modules from
+.worktrees/pm-test. Browser half (multipart submit, drag-and-drop, use:enhance) is unverified
+locally — that is what this preview is for.
+
+Still open: SPU 257's record continues to read `passed` on 247's data and needs a human correction
+against the real file.
+
+Deployment: preview — PENDING_URL
+  (immutable: PENDING_IMMUTABLE)
+Source: branch fix/thermo-stale-upload-state @ commit PENDING_SHA
+Retrieve this exact code: git checkout fix/thermo-stale-upload-state at commit PENDING_SHA
+What this deployment is for: testing server-side thermocouple file ingestion end to end — upload
+257's and 247's own files and confirm each shows its own statistics and chart before any verdict.
