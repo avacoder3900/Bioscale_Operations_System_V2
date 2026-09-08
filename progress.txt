@@ -11829,3 +11829,8 @@ read, mag auto-poll, processThermoUpload, thermo XLSX API, optics sync. draft→
 LEGAL_TRANSITIONS. No firmware changes — flips fire at BIMS ingestion (mag: poll/read; optics: at
 sync). Remaining manual discipline: board scan on open (auto-sets servicing) + deliberate release.
 PRD: docs/prds/SPU-INV-12-auto-enter-validating.md. npm run check: 10/434 — baseline.
+
+Deployment: production — building from the GitHub push to master (Vercel dashboard, commit below)
+Source: branch master @ merge of feat/spu-tweaks
+Retrieve this exact code: git log master --oneline
+What this deployment is for: auto-enter validating on any test result (SPU-INV-12)
