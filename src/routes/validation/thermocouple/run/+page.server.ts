@@ -99,7 +99,6 @@ export const actions: Actions = {
 		const outcome = await processThermoUpload({
 			spuId,
 			readings: parsed.readings,
-			criteria: null,
 			fileName: file.name,
 			user: { _id: locals.user!._id, username: locals.user!.username }
 		});

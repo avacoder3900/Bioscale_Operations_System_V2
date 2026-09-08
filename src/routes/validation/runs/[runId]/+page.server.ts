@@ -3,8 +3,7 @@ import { requirePermission } from '$lib/server/permissions';
 import {
 	connectDB, Spu, ValidationRun, ValidationSession, AuditLog, generateId
 } from '$lib/server/db';
-import { STANDARD_THERMO_CRITERIA } from '$lib/server/validation/thermo-criteria';
-import { processThermoUpload, evaluateThermoSession, type ThermoReading } from '$lib/server/validation/thermo-upload';
+import { processThermoUpload, recordThermoVerdict, type ThermoReading } from '$lib/server/validation/thermo-upload';
 import { parseThermoFile } from '$lib/server/validation/parse-thermo-file';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -128,8 +127,7 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 	return {
 		run: JSON.parse(JSON.stringify(run)),
 		sessionById,
-		spuById,
-		thermoCriteria: STANDARD_THERMO_CRITERIA
+		spuById
 	};
 };
 
@@ -169,17 +167,15 @@ export const actions: Actions = {
 		const outcome = await processThermoUpload({
 			spuId,
 			readings,
-			criteria: STANDARD_THERMO_CRITERIA,
 			runId: params.runId,
 			fileName,
 			user
 		});
 		if ('error' in outcome) return fail(400, { error: outcome.error, spuId });
 
-		// Decision 2: uploaded ≠ passed. Without a configured standard range the
-		// cell parks at 'uploaded'; with one, evaluation ran inside the upload.
-		// A re-upload keeps the earlier attempt in `previous` so failed history
-		// stays visible after a retry.
+		// Uploaded ≠ passed: the cell sits at 'uploaded' until a person judges it
+		// with the Pass/Fail on the cell. A re-upload keeps the earlier attempt
+		// in `previous` so failed history stays visible after a retry.
 		const prior = member.steps?.thermocouple;
 		const previous = [
 			...(prior?.previous ?? []),
@@ -202,15 +198,7 @@ export const actions: Actions = {
 			result: { ...outcome.stats, fileName },
 			completedAt: outcome.evaluated ? now : null,
 			completedBy: user,
-			evaluation: outcome.evaluated && STANDARD_THERMO_CRITERIA
-				? {
-					criteria: STANDARD_THERMO_CRITERIA,
-					passed: outcome.passed,
-					failureReasons: outcome.failureReasons,
-					evaluatedAt: now,
-					evaluatedBy: user
-				}
-				: null
+			evaluation: null
 		};
 		await ValidationRun.updateOne(
 			{ _id: params.runId, 'spus.spuId': spuId },
@@ -234,65 +222,6 @@ export const actions: Actions = {
 			evaluated: outcome.evaluated,
 			passed: outcome.passed
 		};
-	},
-
-	evaluateThermo: async ({ request, locals, params }) => {
-		requirePermission(locals.user, 'spu:write');
-		await connectDB();
-
-		if (!STANDARD_THERMO_CRITERIA) {
-			return fail(400, { error: 'Standard thermocouple acceptance range is not configured yet' });
-		}
-
-		const run = await loadRun(params.runId);
-		const locked = requireInProgress(run);
-		if (locked) return locked;
-
-		const form = await request.formData();
-		const spuId = form.get('spuId')?.toString();
-		if (!spuId) return fail(400, { error: 'Missing SPU' });
-		const member = activeMember(run, spuId);
-		if (!member) return fail(400, { error: 'SPU is not an active member of this run', spuId });
-		const cell = member.steps?.thermocouple;
-		if (!cell?.sessionId) return fail(400, { error: 'No uploaded thermocouple data to evaluate', spuId });
-
-		const user = { _id: locals.user!._id, username: locals.user!.username };
-		const outcome = await evaluateThermoSession({
-			sessionId: cell.sessionId,
-			criteria: STANDARD_THERMO_CRITERIA,
-			user
-		});
-		if ('error' in outcome) return fail(400, { error: outcome.error, spuId });
-
-		const now = new Date();
-		await ValidationRun.updateOne(
-			{ _id: params.runId, 'spus.spuId': spuId },
-			{
-				$set: {
-					'spus.$.steps.thermocouple.status': outcome.passed ? 'passed' : 'failed',
-					'spus.$.steps.thermocouple.completedAt': now,
-					'spus.$.steps.thermocouple.completedBy': user,
-					'spus.$.steps.thermocouple.evaluation': {
-						criteria: outcome.criteria,
-						passed: outcome.passed,
-						failureReasons: outcome.failureReasons,
-						evaluatedAt: now,
-						evaluatedBy: user
-					}
-				}
-			}
-		);
-
-		await auditRun(params.runId, 'validation_run_thermo_evaluated', user.username, {
-			spuId,
-			spuUdi: member.udi,
-			sessionId: cell.sessionId,
-			criteria: outcome.criteria,
-			passed: outcome.passed,
-			failureReasons: outcome.failureReasons
-		}, { previousStatus: cell.status });
-
-		return { success: true, spuId, evaluated: true, passed: outcome.passed };
 	},
 
 	recordStepResult: async ({ request, locals, params }) => {
@@ -337,10 +266,35 @@ export const actions: Actions = {
 				: [])
 		];
 
+		// A thermocouple call made here is the same call made anywhere else, so it
+		// goes through recordThermoVerdict: that judges the ValidationSession
+		// itself (results[].passed, overallPassed, status) as well as the SPU
+		// rollup and audit. Without this the board showed Passed while the
+		// session it was judging stayed unjudged and read "Awaiting verdict".
+		let thermoVerdictRecorded = false;
+		const linkedSessionId = sessionId ?? prior?.sessionId ?? null;
+		if (step === 'thermocouple' && outcome !== 'skipped' && linkedSessionId) {
+			const verdictOutcome = await recordThermoVerdict({
+				sessionId: linkedSessionId,
+				verdict: outcome,
+				user
+			});
+			if ('error' in verdictOutcome) {
+				// Already judged is not a failure — the run cell still records the
+				// call. Anything else (missing session, finalized SPU) is.
+				if (!verdictOutcome.error.includes('already carries a verdict')) {
+					return fail(400, { error: verdictOutcome.error, spuId });
+				}
+			} else {
+				thermoVerdictRecorded = true;
+			}
+		}
+
 		// Mirror manual pass/fail into the SPU rollup where one exists
 		// (magnetometer/thermocouple; optical confirmation has no rollup field on
 		// the Spu model — the run cell is its record). Sacred-gated write first.
-		if (outcome !== 'skipped' && (step === 'magnetometer' || step === 'thermocouple')) {
+		// Skipped when recordThermoVerdict already wrote the same rollup.
+		if (outcome !== 'skipped' && !thermoVerdictRecorded && (step === 'magnetometer' || step === 'thermocouple')) {
 			const spu = await Spu.findById(spuId).select('finalizedAt').lean() as any;
 			if (!spu) return fail(400, { error: 'SPU not found', spuId });
 			if (spu.finalizedAt) return fail(400, { error: 'SPU is finalized and cannot be modified', spuId });

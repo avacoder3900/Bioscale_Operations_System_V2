@@ -12172,3 +12172,40 @@ What this deployment is for: make an uploaded-but-unjudged thermocouple session 
 
 Still open, unchanged by this: STANDARD_THERMO_CRITERIA is null, so nothing auto-judges and the
 validation-run board's Evaluate button stays disabled (VALIDATION-07 OQ-4, a quality decision).
+
+================================================================================
+2026-09-08 — fix/thermo-verdict-from-session — acceptance range removed; the operator decides
+================================================================================
+Alejandro: remove the acceptance range and stop having data park on it — let the user decide.
+
+STANDARD_THERMO_CRITERIA had been null since VALIDATION-05, and everything downstream branched on
+it. That null was doing real damage: uploads recorded "awaiting evaluation against the standard
+acceptance range" and sat there, and the validation-run board's Evaluate action hard-failed with
+"Standard thermocouple acceptance range is not configured yet" — a button that could never work,
+gating data on a number nobody had decided.
+
+Removed outright:
+- src/lib/server/validation/thermo-criteria.ts — deleted (STANDARD_THERMO_CRITERIA, ThermoCriteria).
+- thermo-upload.ts: processThermoUpload loses its `criteria` parameter; stats are always computed
+  unbounded (nothing is ever "out of range"); `judged` is now simply "a person judged it".
+  evaluateReadings() and evaluateThermoSession() deleted — range-evaluation has no callers left.
+  The unjudged interpretation string now reads "N readings uploaded — awaiting the operator's
+  Pass/Fail" instead of pointing at a range that does not exist.
+- runs/[runId]: the evaluateThermo action deleted, thermoCriteria dropped from load and from the
+  page Props, cell.evaluation is null (no range to evaluate against).
+
+Fixed while in here — the run board's Pass/Fail did not reach the record. recordStepResult wrote
+the run cell and the SPU rollup but left the ValidationSession untouched, so the board could show
+Passed while the session it judged still read passed:null / in_progress ("Awaiting verdict") and
+overallPassed stayed null. It now routes thermocouple verdicts through recordThermoVerdict — the
+same call the session page and the uploader make — so session, rollup and audit all land together.
+"Already carries a verdict" is treated as success (the cell still records the call); a missing
+session or finalized SPU still fails loudly. The generic rollup write is skipped when the verdict
+call already made it, so there is exactly one writer.
+
+Left alone deliberately: POST /api/validation/thermocouple takes minTemp/maxTemp from its CALLER
+and judges immediately — it never parks data and has no in-app caller (only the chart subroute is
+referenced). Out of scope for "remove the standard range".
+
+npm run check: 119 errors / 434 warnings — baseline, 2093 files (one fewer, the deleted module);
+zero errors and zero warnings in every touched file.

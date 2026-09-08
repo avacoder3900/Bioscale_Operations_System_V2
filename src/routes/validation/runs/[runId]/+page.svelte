@@ -44,7 +44,6 @@
 				finalized: boolean;
 				prior: Record<string, { status: string; sessionId: string | null; completedAt: string | null; failureReasons: string[] } | null>;
 			}>;
-			thermoCriteria: { minTemp: number; maxTemp: number } | null;
 		};
 		form: {
 			error?: string;
@@ -309,8 +308,9 @@
 										</span>
 									{/if}
 									{#if step === 'thermocouple' && cell.status === 'uploaded' && inProgress}
-										<!-- Verdict on the displayed values (manual until the
-										     larger-dataset acceptance range is defined) -->
+										<!-- The verdict on the displayed values. This IS the
+										     judgment — it goes through recordThermoVerdict, so the
+										     session and the SPU rollup are judged with the cell. -->
 										<div class="flex gap-2">
 											<form method="POST" action="?/recordStepResult" use:enhance>
 												<input type="hidden" name="spuId" value={member.spuId} />
