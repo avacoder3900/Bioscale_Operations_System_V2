@@ -24,7 +24,9 @@ export type SpuStatus = (typeof SPU_STATUSES)[number];
  * shows up on the bench), and service return re-enters at validating by default.
  */
 export const LEGAL_TRANSITIONS: Record<SpuStatus, SpuStatus[]> = {
-	draft: ['assembling', 'servicing', 'retired'],
+	// draft → validating covers auto-enter-validation (a test recorded on a
+	// draft unit is validation evidence; see spu-auto-validate.ts).
+	draft: ['assembling', 'validating', 'servicing', 'retired'],
 	assembling: ['draft', 'validating', 'servicing', 'retired'],
 	validating: ['released', 'servicing', 'retired'],
 	released: ['servicing', 'retired'],
@@ -52,6 +54,19 @@ export const RETURNABLE_STATUSES: SpuStatus[] = [
 	'released',
 	'retired'
 ];
+
+/**
+ * Statuses where the unit is still physically being built, i.e. its parts are
+ * still being consumed off the shelf. The assembly e-signature is captured on
+ * assembling→validating, so a unit at validating or beyond is already built and
+ * its parts came off the shelf historically — withdrawing a kit for one would
+ * double-count. Kit withdrawal is restricted to this set.
+ */
+export const IN_BUILD_STATUSES: SpuStatus[] = ['draft', 'assembling'];
+
+export function isInBuild(status: string): boolean {
+	return (IN_BUILD_STATUSES as string[]).includes(status);
+}
 
 /**
  * Collapse map for values written before SPU-INV-07. Used by the data

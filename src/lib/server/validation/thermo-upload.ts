@@ -183,6 +183,10 @@ export async function processThermoUpload(opts: {
 	}
 	await Spu.updateOne({ _id: spuId }, { $set: rollup });
 
+	// Evidence drives the evidence state (SPU-INV-12).
+	const { autoEnterValidating } = await import('$lib/server/spu-auto-validate');
+	await autoEnterValidating(spuId, 'thermocouple', user);
+
 	await AuditLog.create({
 		_id: generateId(),
 		tableName: 'validation_sessions',
@@ -298,4 +302,111 @@ export async function evaluateThermoSession(opts: {
 	});
 
 	return { sessionId, stats: { ...stats, durationMs }, passed, failureReasons, criteria };
+}
+
+export interface ThermoVerdictOutcome {
+	sessionId: string;
+	barcode: string | null;
+	spuUdi: string | null;
+	passed: boolean;
+	stats: ThermoStats | null;
+	failureReasons: string[];
+}
+
+/**
+ * Record the operator's binary Pass/Fail against a session that has already
+ * been uploaded and is awaiting judgment.
+ *
+ * The verdict is keyed on the session `_id`, so it lands on the readings that
+ * were actually stored under it. There is no longer any path by which a
+ * verdict reaches a different SPU's data than the data shown beside it — which
+ * is how THERMO-000031 came to carry SPU 247's measurement.
+ *
+ * Also sets top-level `overallPassed`, which the upload path never did.
+ */
+export async function recordThermoVerdict(opts: {
+	sessionId: string;
+	verdict: 'passed' | 'failed';
+	user: { _id: string; username: string };
+}): Promise<{ error: string } | ThermoVerdictOutcome> {
+	const { sessionId, verdict, user } = opts;
+	const passed = verdict === 'passed';
+
+	const session = await ValidationSession.findById(sessionId).lean() as any;
+	if (!session) return { error: 'Validation session not found' };
+	if (session.type !== 'thermo') return { error: 'That session is not a thermocouple session' };
+
+	const result = session.results?.find((r: any) => r.testType === 'thermocouple');
+	if (!result) return { error: 'That session has no thermocouple result to judge' };
+	if (result.passed === true || result.passed === false) {
+		return { error: 'That session already carries a verdict' };
+	}
+
+	const spu = session.spuId ? await Spu.findById(session.spuId).lean() as any : null;
+	if (spu?.finalizedAt) return { error: 'SPU is finalized and cannot be modified' };
+
+	const stats: ThermoStats | null = result.processedData?.stats ?? null;
+	const readingCount = stats?.readingCount ?? result.rawData?.readings?.length ?? 0;
+	const interpretation = passed
+		? `${readingCount} readings — passed on operator review of the min/max/mode shown`
+		: `${readingCount} readings — failed on operator review of the min/max/mode shown`;
+	const failureReasons = passed ? [] : ['Failed on operator review'];
+	const now = new Date();
+
+	await ValidationSession.updateOne(
+		{ _id: sessionId, 'results._id': result._id },
+		{
+			$set: {
+				status: passed ? 'completed' : 'failed',
+				completedAt: now,
+				overallPassed: passed,
+				failureReasons,
+				'results.$.passed': passed,
+				'results.$.notes': interpretation,
+				'results.$.processedData.interpretation': interpretation,
+				'results.$.processedData.failureReasons': failureReasons
+			}
+		}
+	);
+
+	if (session.spuId) {
+		await Spu.updateOne(
+			{ _id: session.spuId },
+			{
+				$set: {
+					'validation.thermocouple.status': passed ? 'passed' : 'failed',
+					'validation.thermocouple.sessionId': sessionId,
+					'validation.thermocouple.completedAt': now,
+					'validation.thermocouple.failureReasons': failureReasons
+				}
+			}
+		);
+	}
+
+	await AuditLog.create({
+		_id: generateId(),
+		tableName: 'validation_sessions',
+		recordId: sessionId,
+		action: 'thermocouple_validation_verdict',
+		newData: {
+			spuId: session.spuId ?? null,
+			spuUdi: session.spuUdi ?? null,
+			barcode: session.barcode ?? null,
+			verdict,
+			passed,
+			stats,
+			failureReasons
+		},
+		changedAt: now,
+		changedBy: user.username
+	});
+
+	return {
+		sessionId,
+		barcode: session.barcode ?? null,
+		spuUdi: session.spuUdi ?? null,
+		passed,
+		stats,
+		failureReasons
+	};
 }

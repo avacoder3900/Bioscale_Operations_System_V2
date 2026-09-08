@@ -36,7 +36,25 @@ function isEmpty(v: unknown): boolean {
 // serials, ISO-ish strings, and the logger's "HH:MM:SS YYYY-MM-DD" order.
 // Plain numeric strings are NEVER treated as dates (Date.parse("23.8") can
 // succeed in some engines).
-function parseDateLike(v: unknown): number | null {
+//
+// Naive wall-clock text ("14:01:39 2026-09-04") names no zone, so the instant
+// it denotes depends on where it is read — the same file parsed in a Central
+// browser and in a UTC serverless function differs by five hours.
+// `tzOffsetMinutes` (the recording machine's Date#getTimezoneOffset) pins it
+// down. Omit it and naive text resolves in the host's local zone, which is
+// what the browser did before parsing moved to the server.
+function resolveNaive(
+	y: number, mo: number, d: number, h: number, mi: number, se: number,
+	tzOffsetMinutes?: number
+): number | null {
+	const utc = Date.UTC(y, mo - 1, d, h, mi, se);
+	if (!isFinite(utc)) return null;
+	return tzOffsetMinutes === undefined
+		? new Date(y, mo - 1, d, h, mi, se).getTime()
+		: utc + tzOffsetMinutes * 60000;
+}
+
+function parseDateLike(v: unknown, tzOffsetMinutes?: number): number | null {
 	if (typeof v === 'number') {
 		if (!isFinite(v)) return null;
 		if (v > 1e12) return v; // ms epoch
@@ -50,21 +68,26 @@ function parseDateLike(v: unknown): number | null {
 	if (typeof v !== 'string') return null;
 	const s = v.trim();
 	if (!s || PLAIN_NUMBER.test(s)) return null;
-	let t = Date.parse(s);
-	if (!isNaN(t)) return t;
-	// "16:00:05 2026-06-15" → "2026-06-15T16:00:05"
-	let m = s.match(/^(\d{1,2}:\d{2}(?::\d{2})?)\s+(\d{4}-\d{1,2}-\d{1,2})$/);
-	if (m) {
-		t = Date.parse(`${m[2]}T${m[1]}`);
-		if (!isNaN(t)) return t;
-	}
+
+	// Naive forms are matched explicitly, before falling back to the engine,
+	// so the zone rule above is applied rather than guessed at.
+
+	// "16:00:05 2026-06-15" — the loggers' time-first order
+	let m = s.match(/^(d{1,2}):(d{2})(?::(d{2}))?s+(d{4})-(d{1,2})-(d{1,2})$/);
+	if (m) return resolveNaive(+m[4], +m[5], +m[6], +m[1], +m[2], +(m[3] ?? 0), tzOffsetMinutes);
+
 	// "16:00:05 6/15/2026"
-	m = s.match(/^(\d{1,2}:\d{2}(?::\d{2})?)\s+(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})$/);
-	if (m) {
-		t = Date.parse(`${m[2]} ${m[1]}`);
-		if (!isNaN(t)) return t;
-	}
-	return null;
+	m = s.match(/^(d{1,2}):(d{2})(?::(d{2}))?s+(d{1,2})[/-](d{1,2})[/-](d{4})$/);
+	if (m) return resolveNaive(+m[6], +m[4], +m[5], +m[1], +m[2], +(m[3] ?? 0), tzOffsetMinutes);
+
+	// "2026-06-15T16:00:05" / "2026-06-15 16:00:05" — ISO-ish, no zone
+	m = s.match(/^(d{4})-(d{1,2})-(d{1,2})[T ](d{1,2}):(d{2})(?::(d{2}))?$/);
+	if (m) return resolveNaive(+m[1], +m[2], +m[3], +m[4], +m[5], +(m[6] ?? 0), tzOffsetMinutes);
+
+	// Anything else — the engine handles it, including explicit Z / +HH:MM
+	// offsets, which are absolute and must never be shifted.
+	const t = Date.parse(s);
+	return isNaN(t) ? null : t;
 }
 
 function asNumber(v: unknown): number | null {
@@ -105,7 +128,7 @@ function classifyColumn(values: unknown[]): ColClass {
 	return 'other';
 }
 
-export function parseThermoRows(rows: unknown[][]): ThermoParseResult {
+export function parseThermoRows(rows: unknown[][], tzOffsetMinutes?: number): ThermoParseResult {
 	const fail = (error: string): ThermoParseResult =>
 		({ readings: [], error, tempColumns: [], timeColumn: null, columnsNote: '' });
 
@@ -177,7 +200,7 @@ export function parseThermoRows(rows: unknown[][]): ThermoParseResult {
 		const temperature = temps.reduce((a, b) => a + b, 0) / temps.length;
 
 		let ts: number | null = null;
-		if (timeCol !== null) ts = parseDateLike(row[timeCol]);
+		if (timeCol !== null) ts = parseDateLike(row[timeCol], tzOffsetMinutes);
 		if (ts === null && indexCol !== null) {
 			const idx = asNumber(row[indexCol]);
 			if (idx !== null) ts = startTime + idx * 1000; // elapsed readings

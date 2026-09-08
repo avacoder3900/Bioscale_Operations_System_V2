@@ -931,7 +931,6 @@
 					<a href="/validation/magnetometer" class="tron-text-muted hover:text-[var(--color-tron-cyan)] hover:underline">Run mag</a>
 					<a href="/validation/thermocouple" class="tron-text-muted hover:text-[var(--color-tron-cyan)] hover:underline">Run thermo</a>
 					<a href="/validation/optical-confirmation" class="tron-text-muted hover:text-[var(--color-tron-cyan)] hover:underline">Run optics</a>
-					<a href="/validation/runs" class="tron-text-muted hover:text-[var(--color-tron-cyan)] hover:underline">Runs</a>
 				</span>
 			</div>
 

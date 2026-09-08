@@ -18,6 +18,15 @@ export interface ComponentPart {
 	name: string;
 	quantityPerUnit: number;
 	note?: string;
+	/**
+	 * Set when the part is genuinely part of the build but must NOT be deducted
+	 * by kit withdrawal — e.g. it is not stocked, or its per-unit quantity is
+	 * still unresolved. The part stays in this map because the map is also the
+	 * reassembly knowledge base ("what lives in the antennas component?"); only
+	 * the withdrawal skips it, and this string is shown to the operator as the
+	 * reason so the gap stays visible.
+	 */
+	kitExclusion?: string;
 }
 
 export interface SpuComponent {
@@ -51,10 +60,10 @@ export const SPU_COMPONENT_PARTS: SpuComponent[] = [
 				note: 'Mounting screws are included with the motor — no separate screw part.'
 			},
 			{
-				partNumber: 'PT-SPU-104',
-				name: '40 Tooth GT-2 Pulley',
+				partNumber: 'PT-SPU-105',
+				name: '40 T 5mm bore pulley',
 				quantityPerUnit: 1,
-				note: 'WI v18 uses the 40-tooth pulley (PT-SPU-104), NOT the older 20-tooth PT-SPU-017. PT-SPU-104 is not in the inventory system yet — track usage but deductions will fail until it is added.'
+				note: 'The 40-tooth 5 mm bore pulley, which supersedes the 20-tooth PT-SPU-017. NOTE: WIMF-SPU-01 v18 calls this part PT-SPU-104, but in part_definitions PT-SPU-104 is "Nickel plated Neodymium magnets" and the pulley is PT-SPU-105 — the number was reassigned after the WI was written. This map follows part_definitions, because that is what deductions resolve against. The WI text still needs correcting.'
 			}
 		]
 	},
@@ -74,10 +83,10 @@ export const SPU_COMPONENT_PARTS: SpuComponent[] = [
 		parts: [
 			{ partNumber: 'PT-SPU-013', name: 'Heater Block', quantityPerUnit: 1 },
 			{
-				partNumber: 'PT-SPU-008',
-				name: 'Main Magnet - Spherical',
+				partNumber: 'PT-SPU-104',
+				name: 'Nickel plated Neodymium magnets',
 				quantityPerUnit: 3,
-				note: '"All magnets in heating block" = 3x PT-SPU-008 + 6x PT-SPU-009 (three magnet wells/stacks). Per-well composition varies (1 spherical + 1-2 cylindrical) — if only some wells changed, ask the operator exactly how many of each magnet.'
+				note: 'The nickel-plated spherical magnet, which supersedes PT-SPU-008 (Main Magnet - Spherical); PT-SPU-008 no longer exists in part_definitions. "All magnets in heating block" = 3x PT-SPU-104 + 6x PT-SPU-009 (three magnet wells/stacks). Per-well composition varies (1 spherical + 1-2 cylindrical) — if only some wells changed, ask the operator exactly how many of each magnet.'
 			},
 			{ partNumber: 'PT-SPU-009', name: 'Support Magnet - Cylindrical', quantityPerUnit: 6 },
 			{ partNumber: 'PT-SPU-005', name: 'M3 x 25 mm - low profile SHCS', quantityPerUnit: 4, note: 'Mounts the Heater Block onto the LRA.' }
@@ -88,7 +97,12 @@ export const SPU_COMPONENT_PARTS: SpuComponent[] = [
 		name: 'Timing Belt + Stage Brackets',
 		aliases: ['timing belt', 'belt', 'stage brackets', 'distal bracket', 'proximal bracket'],
 		parts: [
-			{ partNumber: 'PT-SPU-032', name: 'Timing Belt 350 mm (cut from 6mm x 3000mm)', quantityPerUnit: 1, note: 'One 350 mm / 175-tooth cut per SPU.' },
+			{
+				partNumber: 'PT-SPU-032',
+				name: 'Timing Belt 350 mm section (cut from 6mm x 3000mm)',
+				quantityPerUnit: 1,
+				note: 'One pre-cut 350 mm section per SPU. Quantity is in SECTIONS, not millimetres: belts are cut from 3000 mm spools into sections up front and the sections are counted, so a build consumes exactly 1. This supersedes the earlier 351 mm deduction, which mixed millimetres against a spool-denominated stock count and drove the balance negative on the first withdrawal.'
+			},
 			{ partNumber: 'PT-SPU-015', name: 'Distal Stage Bracket', quantityPerUnit: 1 },
 			{ partNumber: 'PT-SPU-014', name: 'Proximal Stage Bracket', quantityPerUnit: 1 }
 		]
@@ -100,7 +114,12 @@ export const SPU_COMPONENT_PARTS: SpuComponent[] = [
 		parts: [
 			{ partNumber: 'SBA-SPU-004', name: 'Stage Board', quantityPerUnit: 1 },
 			{ partNumber: 'PT-SPU-002', name: 'M3 x 40 mm SHCS', quantityPerUnit: 2 },
-			{ partNumber: 'PT-SPU-031', name: 'Cartridge Heater', quantityPerUnit: 1 },
+			{
+				partNumber: 'PT-SPU-031',
+				name: 'Cartridge Heater',
+				quantityPerUnit: 1,
+				kitExclusion: 'Operator decision 2026-09-08: not withdrawn with the SPU kit.'
+			},
 			{ partNumber: 'PT-SPU-003', name: 'M3 Self-Retaining Washer - Nylon', quantityPerUnit: 1, note: 'Stage Board to Proximal Stage Bracket.' },
 			{ partNumber: 'PT-SPU-004', name: 'M3.12 x 8 mm - Torx Plastic Thread-Forming', quantityPerUnit: 1, note: 'Stage Board to Proximal Stage Bracket.' },
 			{ partNumber: 'PT-SPU-006', name: 'M3 split lock washer', quantityPerUnit: 2 },
@@ -125,7 +144,13 @@ export const SPU_COMPONENT_PARTS: SpuComponent[] = [
 			{ partNumber: 'PT-SPU-029', name: 'M3 x 10 mm SHCS', quantityPerUnit: 2, note: 'The screws that attach the Upper Magnet Bracket to the Heater Block.' },
 			{ partNumber: 'PT-SPU-009', name: 'Support Magnet - Cylindrical', quantityPerUnit: 3, note: 'Attached to the Holding Magnet Bar.' },
 			{ partNumber: 'PT-SPU-010', name: 'Holding Magnet - Bar', quantityPerUnit: 1 },
-			{ partNumber: 'PT-SPU-099', name: 'Aluminum Tape', quantityPerUnit: 1, note: 'Cut and attached over the Upper Magnet Bracket.' }
+			{
+				partNumber: 'PT-SPU-099',
+				name: 'Aluminum Tape',
+				quantityPerUnit: 1,
+				note: 'Cut and attached over the Upper Magnet Bracket. Consumed as a length in mm, but the per-SPU length is not yet established. (part_definitions carries quantityPerUnit 60, which has not been confirmed as the real figure.)',
+				kitExclusion: 'Consumed by length in mm — the per-SPU length has not been set yet, so nothing is deducted.'
+			}
 		]
 	},
 	{
@@ -145,9 +170,24 @@ export const SPU_COMPONENT_PARTS: SpuComponent[] = [
 		name: 'Antennas',
 		aliases: ['antenna', 'gnss', 'cellular antenna', 'wifi antenna', 'ble antenna'],
 		parts: [
-			{ partNumber: 'PT-SPU-101', name: 'GNSS Antenna', quantityPerUnit: 1 },
-			{ partNumber: 'PT-SPU-102', name: 'Wide Band Cellular Antenna', quantityPerUnit: 1 },
-			{ partNumber: 'PT-SPU-103', name: 'Wi-Fi/BLE Antenna', quantityPerUnit: 1 }
+			{
+				partNumber: 'PT-SPU-101',
+				name: 'GNSS Antenna',
+				quantityPerUnit: 1,
+				kitExclusion: 'Not withdrawn by the kit; no part definition exists for it in inventory.'
+			},
+			{
+				partNumber: 'PT-SPU-102',
+				name: 'Wide Band Cellular Antenna',
+				quantityPerUnit: 1,
+				kitExclusion: 'Not withdrawn by the kit; no part definition exists for it in inventory.'
+			},
+			{
+				partNumber: 'PT-SPU-103',
+				name: 'Wi-Fi/BLE Antenna',
+				quantityPerUnit: 1,
+				kitExclusion: 'Not withdrawn by the kit; no part definition exists for it in inventory.'
+			}
 		]
 	},
 	{
@@ -169,12 +209,51 @@ export const SPU_COMPONENT_PARTS: SpuComponent[] = [
 		name: 'Labels',
 		aliases: ['label', 'udi label', 'top label', 'side label', 'front label', 'dc input label'],
 		parts: [
-			{ partNumber: 'PT-SPU-072', name: 'Avery Label Template 5523', quantityPerUnit: 1, note: 'Not in the inventory system yet.' },
-			{ partNumber: 'PT-SPU-070', name: 'DC Input Label', quantityPerUnit: 1, note: 'Not in the inventory system yet.' },
-			{ partNumber: 'PT-SPU-056', name: 'Top Label', quantityPerUnit: 1, note: 'Not in the inventory system yet.' },
-			{ partNumber: 'PT-SPU-057', name: 'Side Label', quantityPerUnit: 1, note: 'Not in the inventory system yet.' },
-			{ partNumber: 'PT-SPU-058', name: 'UDI Label', quantityPerUnit: 1, note: 'Not in the inventory system yet.' },
-			{ partNumber: 'PT-SPU-059', name: 'Front Label', quantityPerUnit: 1, note: 'Not in the inventory system yet.' }
+			// Labels are listed here because this map doubles as the agent
+			// reassembly knowledge base ("what goes on the enclosure?"), but the
+			// kit does not withdraw them. Operator decision 2026-09-08.
+			{
+				partNumber: 'PT-SPU-072',
+				name: 'Avery Label Template 5523',
+				quantityPerUnit: 1,
+				note: 'Not in the inventory system yet.',
+				kitExclusion: 'Operator decision 2026-09-08: labels are not withdrawn with the SPU kit.'
+			},
+			{
+				partNumber: 'PT-SPU-070',
+				name: 'DC Input Label',
+				quantityPerUnit: 1,
+				note: 'Not in the inventory system yet.',
+				kitExclusion: 'Operator decision 2026-09-08: labels are not withdrawn with the SPU kit.'
+			},
+			{
+				partNumber: 'PT-SPU-056',
+				name: 'Top Label',
+				quantityPerUnit: 1,
+				note: 'Not in the inventory system yet.',
+				kitExclusion: 'Operator decision 2026-09-08: labels are not withdrawn with the SPU kit.'
+			},
+			{
+				partNumber: 'PT-SPU-057',
+				name: 'Side Label',
+				quantityPerUnit: 1,
+				note: 'Not in the inventory system yet.',
+				kitExclusion: 'Operator decision 2026-09-08: labels are not withdrawn with the SPU kit.'
+			},
+			{
+				partNumber: 'PT-SPU-058',
+				name: 'UDI Label',
+				quantityPerUnit: 1,
+				note: 'Not in the inventory system yet.',
+				kitExclusion: 'Operator decision 2026-09-08: labels are not withdrawn with the SPU kit.'
+			},
+			{
+				partNumber: 'PT-SPU-059',
+				name: 'Front Label',
+				quantityPerUnit: 1,
+				note: 'Not in the inventory system yet.',
+				kitExclusion: 'Operator decision 2026-09-08: labels are not withdrawn with the SPU kit.'
+			}
 		]
 	}
 ];

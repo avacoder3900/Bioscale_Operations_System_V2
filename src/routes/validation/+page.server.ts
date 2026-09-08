@@ -69,7 +69,20 @@ export const load: PageServerLoad = async ({ locals }) => {
 				? 'failed'
 				: 'pending';
 
+		// Most recent test of ANY modality — drives the default sort.
+		const times = [
+			v.magnetometer?.completedAt,
+			v.magnetometer?.testRanAt,
+			magSession?.at,
+			th.completedAt,
+			opt.completedAt
+		]
+			.filter(Boolean)
+			.map((t: any) => new Date(t).getTime());
+		const lastTestAt = times.length ? new Date(Math.max(...times)) : null;
+
 		return {
+			lastTestAt,
 			id: s._id,
 			udi: s.udi,
 			status: s.status ?? 'draft',
@@ -97,6 +110,9 @@ export const load: PageServerLoad = async ({ locals }) => {
 			overall
 		};
 	});
+
+	// Most recently tested first; never-tested units sink to the bottom.
+	rows.sort((a, b) => (b.lastTestAt?.getTime() ?? 0) - (a.lastTestAt?.getTime() ?? 0));
 
 	return { rows: JSON.parse(JSON.stringify(rows)) };
 };
