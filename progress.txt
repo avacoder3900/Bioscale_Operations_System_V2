@@ -12209,3 +12209,12 @@ referenced). Out of scope for "remove the standard range".
 
 npm run check: 119 errors / 434 warnings — baseline, 2093 files (one fewer, the deleted module);
 zero errors and zero warnings in every touched file.
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+  (immutable: https://bioscale-operations-system-mongodb-kgac85ku5-brevitest.vercel.app)
+Source: branch master @ commit d5874c72
+Retrieve this exact code: git checkout master at commit d5874c72
+What this deployment is for: the thermocouple acceptance range is gone — nothing parks waiting on
+  it, and the operator's Pass/Fail is the judgment everywhere (uploader, session page, run board)
+Verified on Vercel: Environment "Production", status Ready, commit d5874c7, production domain
+  bioscale-operations-system-mongodb.vercel.app assigned to this deployment.
