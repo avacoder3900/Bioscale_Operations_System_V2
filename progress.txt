@@ -11722,3 +11722,8 @@ current page. Collapsing the SPU group while on an SPU page looked broken/cross-
 untrack() the Set access so the effect only re-runs on pathname/group changes, and reassign after
 add so navigation-driven expansion is actually reactive (plain Sets aren't deeply proxied by
 $state). Only file: src/routes/+layout.svelte. npm run check: 10/434 — baseline.
+
+Deployment: production — building from the GitHub push to master (Vercel dashboard, commit below)
+Source: branch master @ merge of feat/spu-tweaks
+Retrieve this exact code: git log master --oneline
+What this deployment is for: nav caret expand/collapse fix
