@@ -11772,3 +11772,8 @@ Per Jacob ("i hate these top cards, with little one off metrics just get rid of 
 the six metric tiles are gone from /validation — page now opens with the launcher cards and goes
 straight to the Fleet Matrix. Load slimmed accordingly (dropped the runs/sessions counts).
 Files: src/routes/validation/+page.svelte, +page.server.ts. npm run check: 10/434 — baseline.
+
+Deployment: production — building from the GitHub push to master (Vercel dashboard, commit below)
+Source: branch master @ merge of feat/spu-tweaks
+Retrieve this exact code: git log master --oneline
+What this deployment is for: validation hub metric tiles removed
