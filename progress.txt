@@ -12254,3 +12254,8 @@ send-to-servicing. Files: new ServiceScanCard.svelte, src/routes/spu/[spuId]/+pa
 src/routes/+page.svelte. npm run check: my files clean; totals show +4 pre-existing-in-flight
 errors from the kanban session's uncommitted kanban-task.ts work (theirs, being fixed now) on top
 of the 10 baseline.
+
+Deployment: production — building from the GitHub push to master (Vercel dashboard, commit below)
+Source: branch master @ merge of feat/spu-tweaks
+Retrieve this exact code: git log master --oneline
+What this deployment is for: status editing removed from SPU detail; ServiceScanCard on detail page + dashboard
