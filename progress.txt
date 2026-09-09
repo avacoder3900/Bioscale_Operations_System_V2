@@ -12238,3 +12238,31 @@ Deployment: production — building from the GitHub push to master (Vercel dashb
 Source: branch master @ merge of feat/spu-tweaks
 Retrieve this exact code: git log master --oneline
 What this deployment is for: SPU inventory Location column (CFD backfill was DB-side, pre-applied)
+
+================================================================================
+2026-09-09 — feat/kanban-capture-modes — CFD ghosts: status-write guard + drift repair
+================================================================================
+Jacob reported ghost Waiting/Ready/WIP counts on the CFD vs the board. The SPU session found
+27 tasks whose status had changed with no activityLog status_change entry and backfilled them
+(scripts/backfill-kanban-cfd-ghosts.ts). This closes the root cause + the remainder.
+ROOT CAUSE: flow-history.ts replays activityLog `status_change` entries; every live writer
+already goes through transitionTask() (document save + entry) — audited all of them: task-page
+move/process/reshape, agent PATCH, MCP kanban_update_task/demote/replenish, merge (archives,
+no status), archive cron/page (archived flag only), standing supply cards (transitionTask),
+proposals (no status). The bypass was scripts/migrate-kanban-two-tier.ts (raw
+db.collection updateMany $set status, no entry) plus pre-KB2 rogue values ('backlog',
+'in_progress').
+FIX 1 — model guard: kanban-task.ts pre-hooks on updateOne/updateMany/findOneAndUpdate/
+replaceOne reject any update operator that touches `status` unless
+.setOptions({ allowRawStatusWrite: true }) — transitionTask persists via save() so it is
+unaffected. Probed live: raw $set status → rejected; escape hatch → ok; rank update → ok. Raw
+driver writes can't be caught — migration scripts must append the entry themselves.
+FIX 2 — scripts/diag-kanban-status-drift.ts (NEW): reports ROGUE status / LAG (status ≠ last
+logged) / UNLOGGED (non-captured, no entry); APPLY=1 appends ONE synthetic status_change
+{synthetic:true} dated statusChangedAt ?? archivedAt ?? updatedAt, and parks ROGUE tasks in
+'icebox' (least disruptive legal home) via the escape hatch; AuditLog row per repair.
+APPLIED to prod 2026-09-09: 17 drifted → 0 (5 'backlog' → icebox: Robot Arm movement into
+deck fixture, Calibrate cartridge on deck, Part Reclamation, cartridge-fill UI, image-capture
+UI; 3 archived-done LAG + 9 archived-done UNLOGGED got done entries dated Mar 2026).
+Files: src/lib/server/db/models/kanban-task.ts, scripts/diag-kanban-status-drift.ts.
+npm run check: 10 errors (below the 11 baseline; 0 in touched files).

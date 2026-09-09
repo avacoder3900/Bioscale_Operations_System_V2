@@ -137,4 +137,37 @@ kanbanTaskSchema.index({ updatedAt: -1 });
 // archive cron + status-scoped time reads
 kanbanTaskSchema.index({ status: 1, archived: 1, statusChangedAt: 1 });
 
+// ---------------------------------------------------------------------------
+// Status-write guard (2026-09-09). The flow history / CFD replays activityLog
+// `status_change` entries, so a status written WITHOUT one leaves a ghost on
+// the chart (27 found after the KB2 migrations wrote status with a raw
+// updateMany). Every legitimate status change goes through
+// src/lib/server/kanban/transition.ts, which persists via document save() and
+// writes the entry — so at the model level, an update operator that touches
+// `status` is always a mistake. Reject it loudly. Raw-driver writes
+// (db.collection(...)) bypass Mongoose entirely and cannot be caught here:
+// migration scripts MUST append a status_change entry themselves (see
+// scripts/backfill-kanban-cfd-ghosts.ts for the shape).
+// Escape hatch for a deliberate repair: .setOptions({ allowRawStatusWrite: true }).
+const STATUS_WRITE_ERROR =
+	'KanbanTask.status must change through transitionTask() (src/lib/server/kanban/transition.ts) so the activityLog status_change entry is written — the CFD replays that log. Use .setOptions({ allowRawStatusWrite: true }) only for an audited repair that also appends the entry.';
+
+function touchesStatus(update: any): boolean {
+	if (!update || typeof update !== 'object') return false;
+	if (Array.isArray(update)) return update.some(touchesStatus); // pipeline updates
+	if ('status' in update) return true;
+	for (const op of ['$set', '$setOnInsert', '$unset']) {
+		if (update[op] && typeof update[op] === 'object' && 'status' in update[op]) return true;
+	}
+	return false;
+}
+
+for (const hook of ['updateOne', 'updateMany', 'findOneAndUpdate', 'replaceOne'] as const) {
+	kanbanTaskSchema.pre(hook, function (this: any) {
+		if (touchesStatus(this.getUpdate()) && !this.getOptions()?.allowRawStatusWrite) {
+			throw new Error(STATUS_WRITE_ERROR);
+		}
+	});
+}
+
 export const KanbanTask = mongoose.models.KanbanTask || mongoose.model('KanbanTask', kanbanTaskSchema, 'kanban_tasks');
