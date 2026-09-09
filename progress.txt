@@ -12270,3 +12270,21 @@ Deployment: production — building from the GitHub push to master (Vercel dashb
 Source: branch master @ merge of feat/spu-tweaks
 Retrieve this exact code: git log master --oneline
 What this deployment is for: Mark-for-servicing header on the scan card
+
+================================================================================
+2026-09-09 — feat/spu-tweaks — servicing board sectioning + SPU breadcrumbs for the new IA
+================================================================================
+(1) Jacob spotted "4 single-SPU group tasks" on the servicing board. Investigation: NOT group
+tasks — 0210/0252/0253/0256 are units carrying servicing STATUS with no ServiceRecord at all
+(needs-intake leftovers from the Sep 2 reconciliation bulk-flip; only one real group exists —
+Timing Belt, 23 jobs; 0215 is a legit ungrouped single). Board now renders them under their own
+"Awaiting intake" heading with an explanatory note (scan to open a job, or run a test to move the
+unit along), after an "Open jobs" heading — they can no longer masquerade as groups. Disposition
+of the 4 units left to Jacob (scan them in, or script to validating).
+(2) Breadcrumbs rebuilt for the new IA via new src/lib/components/spu/SpuBreadcrumb.svelte
+("SPU" root always links /spu): detail page gets SPU / SPU Inventory / <UDI>; assembly + barcodes
+strip breadcrumb drops the dead "SPU Manufacturing" (now SPU / SPU Assembly [/ Barcodes]);
+servicing page gets SPU / SPU Servicing (+ page title fixed); validation layout gets SPU /
+SPU Validation [/ <instrument>]. Files: SpuBreadcrumb.svelte (new), SpuMfgTabs.svelte,
+spu/mfg/servicing/+page.svelte (+server-side none), spu/[spuId]/+page.svelte,
+validation/+layout.svelte. npm run check: 10/434 — baseline.

@@ -4,6 +4,7 @@
 	import { TronCard, TronBadge, TronButton } from '$lib/components/ui';
 	import SpuStatusBadge from '$lib/components/spu/SpuStatusBadge.svelte';
 	import ServiceScanCard from '$lib/components/spu/ServiceScanCard.svelte';
+	import SpuBreadcrumb from '$lib/components/spu/SpuBreadcrumb.svelte';
 
 	let { data, form: _form } = $props();
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -279,6 +280,7 @@
 </script>
 
 <div class="space-y-6">
+	<SpuBreadcrumb trail={[{ label: 'SPU Inventory', href: '/spu' }, { label: data.spu.udi }]} />
 	<div class="flex items-center justify-between">
 		<div>
 			<h2 class="tron-text-primary font-mono text-2xl font-bold">{data.spu.udi}</h2>
