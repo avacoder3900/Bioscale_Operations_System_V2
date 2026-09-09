@@ -10,7 +10,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 	// Projection matters: attachments[].content holds inline CSV blobs and
 	// assembly.stepRecords[] is large — neither is needed for the list.
 	const spus = await Spu.find()
-		.select('udi barcode status qcStatus owner batch particleLink validation validationResetAt createdAt')
+		.select('udi barcode status qcStatus owner location batch particleLink validation validationResetAt createdAt')
 		.sort({ createdAt: -1 })
 		.lean();
 
@@ -36,6 +36,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 				status: s.status ?? 'draft',
 				qcStatus: s.qcStatus ?? 'pending',
 				owner: s.owner ?? null,
+				location: s.location ?? null,
 				batchNumber: s.batch?.batchNumber ?? null,
 				validationPassed,
 				validationTotal: VALIDATION_KEYS.length,

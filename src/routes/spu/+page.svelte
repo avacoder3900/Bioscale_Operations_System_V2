@@ -47,6 +47,7 @@
 		| 'deviceId'
 		| 'barcode'
 		| 'status'
+		| 'location'
 		| 'connected'
 		| 'firmware'
 		| 'deviceOs'
@@ -83,6 +84,8 @@
 				const i = STATUS_ORDER.indexOf(s.status);
 				return i === -1 ? STATUS_ORDER.length : i;
 			}
+			case 'location':
+				return s.location?.toLowerCase() ?? null;
 			case 'connected': {
 				const d = dev(s);
 				// Online first when ascending; unlinked/unknown devices sort last.
@@ -158,6 +161,7 @@
 		{ key: 'deviceId', label: 'Device ID' },
 		{ key: 'barcode', label: 'Barcode' },
 		{ key: 'status', label: 'Status' },
+		{ key: 'location', label: 'Location' },
 		{ key: 'connected', label: 'Connected' },
 		{ key: 'firmware', label: 'FW' },
 		{ key: 'deviceOs', label: 'OS' },
@@ -282,6 +286,7 @@
 									{s.barcode ?? '—'}
 								</td>
 								<td class="py-2.5 pr-4"><SpuStatusBadge status={s.status} /></td>
+								<td class="py-2.5 pr-4 whitespace-nowrap">{s.location ?? '—'}</td>
 								<td class="py-2.5 pr-4 whitespace-nowrap">
 									{#if fleetLoading && s.deviceId}
 										<span class="tron-text-muted">…</span>

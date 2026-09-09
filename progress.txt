@@ -12218,3 +12218,18 @@ What this deployment is for: the thermocouple acceptance range is gone — nothi
   it, and the operator's Pass/Fail is the judgment everywhere (uploader, session page, run board)
 Verified on Vercel: Environment "Production", status Ready, commit d5874c7, production domain
   bioscale-operations-system-mongodb.vercel.app assigned to this deployment.
+
+================================================================================
+2026-09-09 — feat/spu-tweaks — CFD ghost-task backfill + SPU inventory Location column
+================================================================================
+(1) Jacob reported ghost Waiting/Ready/WIP counts on the kanban CFD vs the board (CFD tooltip:
+waiting 12/ready 11/wip 8 vs board 9/6/6). Root cause: flow-history reconstructs status-per-day
+from activityLog status_change entries; 27 tasks (migration-era demotions to captured/backlog,
+mostly dated 2026-08-14) had status changed WITHOUT log entries → frozen at old board statuses.
+Fixed data-side: scripts/backfill-kanban-cfd-ghosts.ts (dry-run verified, applied, re-run shows 0)
+appends one synthetic status_change per ghost dated statusChangedAt, note marking it as backfill.
+Board == CFD now. The writer that skips logging (likely demote path) handed to the kanban session
+to fix in code — their lane.
+(2) /spu inventory gains a sortable Location column (after Status), fed by the SPU-INV-07
+location field ("R&D" on the 2 released units). Files: src/routes/spu/+page.server.ts, +page.svelte.
+npm run check: 10/434 — baseline.
