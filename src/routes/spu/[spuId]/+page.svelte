@@ -3,6 +3,7 @@
 	import { enhance } from '$app/forms';
 	import { TronCard, TronBadge, TronButton } from '$lib/components/ui';
 	import SpuStatusBadge from '$lib/components/spu/SpuStatusBadge.svelte';
+	import ServiceScanCard from '$lib/components/spu/ServiceScanCard.svelte';
 
 	let { data, form: _form } = $props();
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -57,7 +58,6 @@
 	let addingJournal = $state(false);
 
 	let showRecordHistory = $state(false);
-	let transitionReason = $state('');
 
 	const deviceId = $derived(data.particleLink?.particleDeviceId ?? data.spu.id);
 
@@ -216,7 +216,6 @@
 	);
 
 	// Only transitions legal from the current status (SPU-INV-07), server-computed.
-	const STATUS_OPTIONS = $derived(data.spu.legalNextStatuses ?? []);
 
 	// Includes legacy (pre-collapse) values so the transition history renders.
 	function statusColor(status: string): string {
@@ -274,7 +273,6 @@
 	$effect(() => {
 		if (form?.success) {
 			editingIdentifiers = false;
-			transitionReason = '';
 			showServicing = false;
 		}
 	});
@@ -344,22 +342,6 @@
 						</TronButton>
 					{/if}
 				</div>
-				<!-- A status change is its own server action, so the controls in the
-				     Status row post through this form via the HTML form attribute rather
-				     than nesting a second <form> inside the identifiers one. -->
-				<form
-					id="status-transition-form"
-					method="POST"
-					action="?/transitionStatus"
-					use:enhance={() => {
-						updatingState = true;
-						return async ({ result, update }) => {
-							updatingState = false;
-							if (result.type === 'success') editingIdentifiers = false;
-							await update();
-						};
-					}}
-				></form>
 				<form
 					method="POST"
 					action="?/updateIdentifiers"
@@ -399,51 +381,12 @@
 								<dd class="tron-text-primary font-mono">{data.spu.barcode ?? '—'}</dd>
 							{/if}
 						</div>
-						<div class="flex items-center justify-between gap-3">
-							<dt class="tron-text-muted">
-								{#if editingIdentifiers}<label for="transition-status">Status</label>{:else}Status{/if}
-							</dt>
-							{#if editingIdentifiers}
-								<dd class="w-[65%] space-y-2">
-									<select
-										id="transition-status"
-										name="status"
-										form="status-transition-form"
-										class="tron-select w-full"
-										required
-										disabled={updatingState}
-										style="min-height: 38px;"
-									>
-										{#each STATUS_OPTIONS as opt (opt)}
-											{#if opt !== data.spu.status}
-												<option value={opt}>{opt}</option>
-											{/if}
-										{/each}
-									</select>
-									<input
-										id="transition-reason"
-										name="reason"
-										form="status-transition-form"
-										type="text"
-										class="tron-input w-full"
-										placeholder="Reason (optional)"
-										aria-label="Reason for status change"
-										bind:value={transitionReason}
-										disabled={updatingState}
-										style="min-height: 38px;"
-									/>
-									<button
-										type="submit"
-										form="status-transition-form"
-										class="tron-btn-primary w-full"
-										disabled={updatingState}
-									>
-										{updatingState ? 'Updating...' : 'Confirm status change'}
-									</button>
-								</dd>
-							{:else}
-								<dd><SpuStatusBadge status={data.spu.status} /></dd>
-							{/if}
+						<!-- Status is never edited directly here — the lifecycle moves
+						     automatically (tests, service closes); the one manual act is
+						     sending a unit to servicing via the scan card below. -->
+						<div class="flex justify-between {editingIdentifiers ? 'opacity-40' : ''}">
+							<dt class="tron-text-muted">Status</dt>
+							<dd><SpuStatusBadge status={data.spu.status} /></dd>
 						</div>
 						<div class="flex justify-between {editingIdentifiers ? 'opacity-40' : ''}">
 							<dt class="tron-text-muted">Location</dt>
@@ -558,6 +501,10 @@
 				</div>
 			</TronCard>
 		</div>
+
+		<!-- The one manual status act: send to servicing — the board's own scan
+		     element (scan this unit's label, or any other). -->
+		<ServiceScanCard />
 
 		<!-- Device Journal (SPU-INV-06): free-form, append-only story of the unit -->
 		<TronCard>

@@ -12238,3 +12238,19 @@ Deployment: production — building from the GitHub push to master (Vercel dashb
 Source: branch master @ merge of feat/spu-tweaks
 Retrieve this exact code: git log master --oneline
 What this deployment is for: SPU inventory Location column (CFD backfill was DB-side, pre-applied)
+
+================================================================================
+2026-09-09 — feat/spu-tweaks — status is no longer directly editable; scan-to-service everywhere
+================================================================================
+Per Jacob: the SPU detail page loses direct status editing (the status dropdown Giovanni's DHR
+rework put in the Device Info edit form is removed — Status renders as a read-only badge; the
+dormant transitionStatus server action remains for automation). Doctrine: the lifecycle moves
+automatically; SERVICING is the only manually-triggered status, and release lives in the board's
+close-with-review flow. The servicing board's scan element is extracted into
+src/lib/components/spu/ServiceScanCard.svelte (posts to the board's own ?/scan action; on success
+lands on /spu/mfg/servicing?q=<code> focused on that unit) and mounted IDENTICALLY on: the SPU
+detail page (Device tab, above the Journal) and the dashboard (/, top of page) for quick
+send-to-servicing. Files: new ServiceScanCard.svelte, src/routes/spu/[spuId]/+page.svelte,
+src/routes/+page.svelte. npm run check: my files clean; totals show +4 pre-existing-in-flight
+errors from the kanban session's uncommitted kanban-task.ts work (theirs, being fixed now) on top
+of the 10 baseline.
