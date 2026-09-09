@@ -12265,3 +12265,8 @@ What this deployment is for: status editing removed from SPU detail; ServiceScan
 ================================================================================
 ServiceScanCard gains a header ("Mark for servicing") — shows on the detail page + dashboard
 mounts; the servicing board keeps its own page header. npm run check: 10/434 — baseline.
+
+Deployment: production — building from the GitHub push to master (Vercel dashboard, commit below)
+Source: branch master @ merge of feat/spu-tweaks
+Retrieve this exact code: git log master --oneline
+What this deployment is for: Mark-for-servicing header on the scan card
