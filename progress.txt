@@ -12288,3 +12288,8 @@ servicing page gets SPU / SPU Servicing (+ page title fixed); validation layout 
 SPU Validation [/ <instrument>]. Files: SpuBreadcrumb.svelte (new), SpuMfgTabs.svelte,
 spu/mfg/servicing/+page.svelte (+server-side none), spu/[spuId]/+page.svelte,
 validation/+layout.svelte. npm run check: 10/434 — baseline.
+
+Deployment: production — building from the GitHub push to master (Vercel dashboard, commit below)
+Source: branch master @ merge of feat/spu-tweaks
+Retrieve this exact code: git log master --oneline
+What this deployment is for: servicing board Awaiting-intake section + SPU breadcrumbs
