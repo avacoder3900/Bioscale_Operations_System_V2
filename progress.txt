@@ -12233,3 +12233,8 @@ to fix in code — their lane.
 (2) /spu inventory gains a sortable Location column (after Status), fed by the SPU-INV-07
 location field ("R&D" on the 2 released units). Files: src/routes/spu/+page.server.ts, +page.svelte.
 npm run check: 10/434 — baseline.
+
+Deployment: production — building from the GitHub push to master (Vercel dashboard, commit below)
+Source: branch master @ merge of feat/spu-tweaks
+Retrieve this exact code: git log master --oneline
+What this deployment is for: SPU inventory Location column (CFD backfill was DB-side, pre-applied)
