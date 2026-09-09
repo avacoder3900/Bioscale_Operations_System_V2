@@ -2,6 +2,7 @@
 	import { enhance } from '$app/forms';
 	import { TronCard, TronButton, TronBadge } from '$lib/components/ui';
 	import SpuStatusBadge from '$lib/components/spu/SpuStatusBadge.svelte';
+	import SpuBreadcrumb from '$lib/components/spu/SpuBreadcrumb.svelte';
 	import ScanInput from '$lib/components/assembly/ScanInput.svelte';
 
 	let { data, form } = $props();
@@ -107,6 +108,14 @@
 		return row.recordId ?? `spu:${row.spuId}`;
 	}
 
+	// Real open jobs first, then units merely FLAGGED servicing with no job
+	// behind them — those are not group tasks (or jobs at all) and get their
+	// own clearly-labeled section below.
+	const orderedRows = $derived([
+		...data.rows.filter((r: { needsIntake: boolean }) => !r.needsIntake),
+		...data.rows.filter((r: { needsIntake: boolean }) => r.needsIntake)
+	]);
+
 	function toggle(row: { recordId: string | null; spuId: string }) {
 		const key = rowKey(row);
 		selectedId = selectedId === key ? null : key;
@@ -177,11 +186,12 @@
 </script>
 
 <svelte:head>
-	<title>Servicing — SPU Manufacturing</title>
+	<title>SPU Servicing</title>
 </svelte:head>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div class="space-y-6" onfocusin={onFocusIn} onfocusout={onFocusOut}>
+	<SpuBreadcrumb trail={[{ label: 'SPU Servicing' }]} />
 	<div class="flex flex-wrap items-center justify-between gap-3">
 		<div>
 			<h2 class="tron-text-primary text-2xl font-bold">Servicing</h2>
@@ -660,9 +670,20 @@
 		</TronCard>
 	{:else}
 		<div class="space-y-3">
-			{#each data.rows as row (rowKey(row))}
+			{#each orderedRows as row, i (rowKey(row))}
 				{@const key = rowKey(row)}
 				{@const expanded = selectedId === key}
+				{#if i === 0 && !row.needsIntake}
+					<h3 class="tron-text-muted text-sm font-bold uppercase">Open jobs</h3>
+				{/if}
+				{#if row.needsIntake && (i === 0 || !orderedRows[i - 1].needsIntake)}
+					<h3 class="tron-text-muted pt-2 text-sm font-bold uppercase">Awaiting intake</h3>
+					<p class="tron-text-muted text-xs">
+						These units carry the <span class="font-mono">servicing</span> status but no service job
+						has been opened for them — they are not group tasks. Scan a unit to open its job, or run
+						its next validation test to move it along.
+					</p>
+				{/if}
 				<TronCard class={expanded ? 'border-[var(--color-tron-cyan)]' : ''}>
 					<button
 						type="button"

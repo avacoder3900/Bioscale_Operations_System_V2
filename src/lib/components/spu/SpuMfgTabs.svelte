@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { page } from '$app/stores';
+	import SpuBreadcrumb from '$lib/components/spu/SpuBreadcrumb.svelte';
 
 	interface Props {
 		/** Hide the breadcrumb row when a parent layout already renders one. */
@@ -38,25 +39,13 @@
 </script>
 
 {#if showBreadcrumb}
-	<nav class="flex items-center gap-2 text-sm">
-		<a
-			href="/spu"
-			class="text-[var(--color-tron-text-secondary)] transition-colors hover:text-[var(--color-tron-cyan)]"
-		>
-			SPU
-		</a>
-		<span class="text-[var(--color-tron-text-secondary)]">/</span>
-		<a
-			href="/spu/mfg"
-			class="text-[var(--color-tron-text-secondary)] transition-colors hover:text-[var(--color-tron-cyan)]"
-		>
-			SPU Manufacturing
-		</a>
-		{#if currentLabel}
-			<span class="text-[var(--color-tron-text-secondary)]">/</span>
-			<span class="text-[var(--color-tron-cyan)]">{currentLabel}</span>
-		{/if}
-	</nav>
+	<!-- Post-restructure IA: Assembly is a primary SPU section; Barcodes is its
+	     child. "SPU Manufacturing" no longer exists as a nav concept. -->
+	<SpuBreadcrumb
+		trail={currentLabel === 'Barcodes'
+			? [{ label: 'SPU Assembly', href: '/assembly' }, { label: 'Barcodes' }]
+			: [{ label: 'SPU Assembly' }]}
+	/>
 {/if}
 
 <div class="flex flex-wrap gap-2 border-b border-[var(--color-tron-border)]">

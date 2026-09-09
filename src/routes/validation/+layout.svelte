@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
 	import { page } from '$app/stores';
+	import SpuBreadcrumb from '$lib/components/spu/SpuBreadcrumb.svelte';
 
 	interface Props {
 		children: Snippet;
@@ -39,9 +40,17 @@
 		return currentPath === item.href || currentPath.startsWith(item.href + '/');
 	}
 
+	// Breadcrumb: SPU / SPU Validation [/ <instrument section>]
+	const crumbTrail = $derived.by(() => {
+		const current = navItems.find((i) => isActive(i, $page.url.pathname));
+		const trail: { label: string; href?: string }[] = [{ label: 'SPU Validation', href: '/validation' }];
+		if (current && current.label !== 'Overview') trail.push({ label: current.label });
+		return trail;
+	});
 </script>
 
 <div class="space-y-6">
+	<SpuBreadcrumb trail={crumbTrail} />
 	<!-- Section tabs -->
 	<div class="flex gap-2 border-b border-[var(--color-tron-border)] pb-4">
 		{#each navItems as item (item.href)}
