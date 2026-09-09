@@ -38,6 +38,7 @@
 </script>
 
 <TronCard class="border-[var(--color-tron-cyan)]">
+	<h3 class="tron-text-primary mb-3 text-lg font-medium">Mark for servicing</h3>
 	<form
 		method="POST"
 		action="/spu/mfg/servicing?/scan"
