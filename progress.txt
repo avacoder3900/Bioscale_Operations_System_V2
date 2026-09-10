@@ -12557,3 +12557,22 @@ Deployment: production — building from the GitHub push to master (Vercel dashb
 Source: branch master @ commit 72fbe0f2 (feat/spu-tweaks merged with fleet-matrix sort #51 from master)
 Retrieve this exact code: git checkout master at commit 72fbe0f2
 What this deployment is for: optical group detail — replicates stacked per device
+
+================================================================================
+2026-09-10 — feat/spu-tweaks — optical group detail: replicate toggle, device exclusion, fitted Gaussian
+================================================================================
+Per Jacob on groups/<id>: (1) a switch above the Cartridges table hides the replicate rows and
+leaves the device-average header rows. (2) New "Device-level fit" card: each included device
+contributes three independent points — its replicate-mean A, B, C — a normal distribution is
+fitted to them (sample μ, σ; CV; per-channel n/mean/SD) and drawn as inline SVG: the fitted PDF,
+points ON the curve at their value (circle A / square B / triangle C, Tron cyan/orange/purple; red
+ring beyond ±2σ), a rug on the baseline, μ (green), ±1σ (faint), ±2σ (red dashed), ±3σ (dotted)
+cutoff lines with values, hover readout with z-score, a cutoff table (μ±1/2/3σ low/high), and an
+"Outside ±2σ" list. (3) "Excl." checkbox as the first column of each device header row — non-
+destructive exclusion from the fit (the group and its cartridges are untouched; Remove still
+exists per cartridge); everything in the fit card recomputes on click; excluded devices grey out;
+"Re-include all" button; remembered per group in localStorage. Group totals above stay
+cartridge-level (server report) — said so in the card caption.
+Palette note: dataviz validator on cyan/orange/purple vs #0a0a0f passes CVD (ΔE 26), normal-vision
+and contrast checks; only the lightness band fails, by design of the neon Tron theme — shape
+encoding added as the second cue. File: groups/[groupId]/+page.svelte. npm run check: 10/435.
