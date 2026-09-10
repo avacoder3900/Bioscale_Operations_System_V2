@@ -12409,3 +12409,28 @@ Deployment: production — building from the GitHub push to master (Vercel dashb
 Source: branch master @ commit a7109e35 (fast-forward of feat/spu-tweaks)
 Retrieve this exact code: git checkout master at commit a7109e35
 What this deployment is for: validation hub n/3 pill replaces the Overall column
+
+================================================================================
+2026-09-10 — feat/spu-tweaks — optical assign adopts manufacturing-state cartridges
+================================================================================
+Jacob pasted 62 barcodes into Optical Confirmation → Assign; 45 assigned, 19 skipped with "a
+non-optical cartridge already exists with this barcode". Checked: none are repeats within the batch —
+all 19 are cartridge_records born on the manufacturing line (16 `backing` from 2026-08-14/31, 3
+`wax_filled` from 2026-08-31), no assay, no run data, no reagent chain. The old guard refused ANY
+non-optical existing record to protect product carts, which also refused these perfectly runnable
+physical carts.
+- src/lib/server/optical-assign.ts (new): the assign logic extracted from the API endpoint (one
+  code path for page, API and scripts). New rule: an existing record is ADOPTED unless it has
+  already run (rawData.readings / underway|completed|cancelled|scrapped) or is linked to a
+  different assay. Adoption $sets only the link fields (assay, assayId/Name, program/experiment/
+  arm, status linked, priorStatus = old status, checkpoints.linked, assayCategory,
+  opticalTestCartridgeId, assayLoaded; serial/name/expiration only if absent) — backing/wax/
+  reagent blocks, checkpoints.created and reagentChain are untouched. Response gains `adopted[]`;
+  batch audit records it.
+- api/validation/optical-confirmation/assign/+server.ts: thin wrapper. Page action passes
+  `adopted` through; the success banner says how many were taken over and from which statuses.
+- scripts/assign-optical-adopt.ts: runs the same function from the CLI (--group, --as, --apply).
+DATA: ran it as user `jacob` for the 19 skipped barcodes into "9_10 group" → 19 adopted, 0
+skipped; the assign_batch group now holds 64 optical cartridges; sample check on a wax_filled one:
+status linked, priorStatus wax_filled, backing + waxFilling blocks intact, 4 BCODE steps embedded.
+npm run check: 10/435 — baseline.

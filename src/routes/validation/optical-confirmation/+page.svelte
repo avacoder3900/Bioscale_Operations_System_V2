@@ -25,6 +25,7 @@
 		form: {
 			success?: boolean; error?: string;
 			createdCount?: number; skipped?: Array<{ barcode: string; reason: string }>;
+			adopted?: Array<{ barcode: string; priorStatus: string }>;
 			bcodeSteps?: number; assayName?: string;
 			// group actions
 			groupSaved?: boolean; groupArchived?: boolean; groupError?: string;
@@ -220,6 +221,11 @@
 				<div class="rounded-lg bg-[var(--color-tron-green)]/10 p-4 text-sm text-[var(--color-tron-green)]">
 					Assigned <span class="font-semibold">{form.createdCount}</span> cartridge(s) of
 					<span class="font-semibold">{form.assayName}</span> — {form.bcodeSteps} BCODE steps embedded onto each.
+					{#if form.adopted && form.adopted.length > 0}
+						<div class="mt-1 text-xs tron-text-muted">
+							{form.adopted.length} of those were manufacturing cartridges taken over for optics (previously {[...new Set(form.adopted.map((a) => a.priorStatus))].join(', ')}) — their manufacturing lineage is kept.
+						</div>
+					{/if}
 					{#if form.skipped && form.skipped.length > 0}
 						<div class="mt-1 text-[var(--color-tron-orange)]">
 							Skipped {form.skipped.length}: {form.skipped.map((s) => `${s.barcode} (${s.reason})`).join('; ')}

@@ -183,6 +183,7 @@ export const actions: Actions = {
 		return {
 			success: true,
 			createdCount: data.createdCount,
+			adopted: data.adopted ?? [],
 			skipped: data.skipped ?? [],
 			bcodeSteps: data.bcodeSteps,
 			assayName: data.assay?.name ?? assayId
