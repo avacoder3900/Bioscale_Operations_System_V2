@@ -12319,3 +12319,29 @@ Deployment: production — building from the GitHub push to master (Vercel dashb
 Source: branch master @ commit 2f9061cf (fast-forward of feat/spu-tweaks)
 Retrieve this exact code: git checkout master at commit 2f9061cf
 What this deployment is for: reason required to open a service job (scan card everywhere + manual open)
+
+================================================================================
+2026-09-10 — feat/spu-tweaks — SPU Location editable on detail page; fleet set to R&D for assay push
+================================================================================
+Jacob wants to push the Gen 5 optical assay (A9EB41AD) to all 31 devices for the 62-cart optical
+confirmation run; the SPU firmware checksum-verifies the assay, so every unit must carry the record.
+The research app's push-assay (/api/push-assay, /devices) still selected SPUs by
+assignment.type='research' — the "released to R&D" concept SPU-INV-07 replaced with `location`.
+Census (new scripts/census-spu-fleet.ts, read-only): 74 SPUs, 32 active + Particle-linked
+(2 released / 10 servicing / 20 validating), 42 retired; only 16 carried the stale research flag;
+only 1 ACTIVE unit had location "R&D" (7 retired units did, from the migration). So the push would
+have hit a stale 16-unit list, not the fleet.
+(1) research-v2 (branch feat/push-assay-by-location @ ce17763, pushed, NOT merged — Jacob's
+    PR flow): new src/lib/server/rnd-fleet.ts defines the fleet as location≈R&D (accepts R&D,
+    R & D, RnD, R and D) + status≠retired + particleLink; push-assay and /devices both use it.
+(2) BIMS detail page: Location joins UDI/Barcode in the Device Information edit form
+    (updateIdentifiers reads `location`, blank clears; audit old/new includes it). Datalist of
+    locations already in use + "R&D" via new `knownLocations` in load.
+(3) DATA: scripts/set-spu-location-rnd.ts (dry-run/--apply) set location="R&D" on every active
+    SPU lacking one, one audit_log row each. Dry run listed 31; apply reported 30 writes; post-apply
+    census shows 0 active without a location and 32 active R&D (all of them) — end state correct,
+    the 30-vs-31 delta unexplained (one unit possibly written concurrently).
+Files: src/routes/spu/[spuId]/+page.server.ts, +page.svelte, scripts/census-spu-fleet.ts,
+scripts/set-spu-location-rnd.ts. npm run check: 10/435 — the +1 warning is the new
+`editLocation = $state(data.spu.location)` line, identical to the pre-existing editUdi/editBarcode
+warnings beside it.

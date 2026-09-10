@@ -25,6 +25,7 @@
 	let savingIdentifiers = $state(false);
 	let editUdi = $state(data.spu.udi);
 	let editBarcode = $state(data.spu.barcode ?? '');
+	let editLocation = $state(data.spu.location ?? '');
 	let pinging = $state(false);
 	let unlinking = $state(false);
 	let resyncingFlag = $state(false);
@@ -339,7 +340,7 @@
 				<div class="mb-4 flex items-center justify-between">
 					<h3 class="tron-text-primary text-lg font-medium">Device Information</h3>
 					{#if !editingIdentifiers}
-						<TronButton variant="ghost" onclick={() => { editingIdentifiers = true; editUdi = data.spu.udi; editBarcode = data.spu.barcode ?? ''; }} style="font-size: 0.75rem; padding: 4px 8px;">
+						<TronButton variant="ghost" onclick={() => { editingIdentifiers = true; editUdi = data.spu.udi; editBarcode = data.spu.barcode ?? ''; editLocation = data.spu.location ?? ''; }} style="font-size: 0.75rem; padding: 4px 8px;">
 							✏️ Edit
 						</TronButton>
 					{/if}
@@ -390,9 +391,22 @@
 							<dt class="tron-text-muted">Status</dt>
 							<dd><SpuStatusBadge status={data.spu.status} /></dd>
 						</div>
-						<div class="flex justify-between {editingIdentifiers ? 'opacity-40' : ''}">
-							<dt class="tron-text-muted">Location</dt>
-							<dd class="tron-text-primary">{data.spu.location ?? '—'}</dd>
+						<!-- Location is physical/organizational, not lifecycle. "R&D" is
+						     what the research app's assay push keys on. -->
+						<div class="flex items-center justify-between gap-3">
+							<dt class="tron-text-muted">
+								{#if editingIdentifiers}<label for="edit-location">Location</label>{:else}Location{/if}
+							</dt>
+							{#if editingIdentifiers}
+								<input id="edit-location" name="location" type="text" class="tron-input text-sm" list="known-locations" bind:value={editLocation} placeholder="R&D, Customer site, Bench 3…" style="min-height: 38px; max-width: 65%;" />
+								<datalist id="known-locations">
+									{#each data.knownLocations as loc (loc)}
+										<option value={loc}></option>
+									{/each}
+								</datalist>
+							{:else}
+								<dd class="tron-text-primary">{data.spu.location ?? '—'}</dd>
+							{/if}
 						</div>
 						<div class="flex justify-between {editingIdentifiers ? 'opacity-40' : ''}">
 							<dt class="tron-text-muted">Batch</dt>

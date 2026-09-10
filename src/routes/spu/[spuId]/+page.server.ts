@@ -47,6 +47,17 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 			.lean()
 		: [];
 
+	// Locations already in use across the fleet, offered as suggestions when
+	// editing this unit's Location. "R&D" is what the research app's assay
+	// push keys on, so it is always offered even before any unit carries it.
+	const knownLocations = [
+		...new Set<string>(
+			[...(await Spu.distinct('location', { location: { $nin: [null, ''] } })), 'R&D']
+				.map((l) => String(l).trim())
+				.filter(Boolean)
+		)
+	].sort((a, b) => a.localeCompare(b));
+
 	// Particle device lookup
 	let particleDevice = null;
 	if (s.particleLink?.particleDeviceId) {
@@ -74,6 +85,7 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 	const valMap = new Map(valUsers.map((u: any) => [u._id, u.username]));
 
 	return {
+		knownLocations,
 		spu: {
 			id: s._id,
 			udi: s.udi,
@@ -509,6 +521,9 @@ export const actions: Actions = {
 		const form = await request.formData();
 		const newUdi = form.get('udi')?.toString().trim();
 		const newBarcode = form.get('barcode')?.toString().trim() || null;
+		// Physical/organizational location (free-form; "R&D" makes the unit part
+		// of the research app's assay-push fleet). Blank clears it.
+		const newLocation = form.get('location')?.toString().trim() || null;
 
 		if (!newUdi) return fail(400, { error: 'UDI is required' });
 
@@ -522,9 +537,16 @@ export const actions: Actions = {
 			if (existing) return fail(400, { error: 'Another SPU already has this UDI' });
 		}
 
-		const oldData = { udi: (spu as any).udi, barcode: (spu as any).barcode };
+		const oldData = {
+			udi: (spu as any).udi,
+			barcode: (spu as any).barcode,
+			location: (spu as any).location ?? null
+		};
 		try {
-			await Spu.updateOne({ _id: params.spuId }, { $set: { udi: newUdi, barcode: newBarcode } });
+			await Spu.updateOne(
+				{ _id: params.spuId },
+				{ $set: { udi: newUdi, barcode: newBarcode, location: newLocation } }
+			);
 		} catch (err: any) {
 			console.error('[updateIdentifiers] Update failed:', err.message);
 			return fail(500, { error: err.message || 'Failed to update SPU' });
@@ -537,7 +559,7 @@ export const actions: Actions = {
 				recordId: params.spuId,
 				action: 'UPDATE',
 				oldData,
-				newData: { udi: newUdi, barcode: newBarcode },
+				newData: { udi: newUdi, barcode: newBarcode, location: newLocation },
 				changedBy: locals.user!.username ?? locals.user!._id
 			});
 		} catch (err: any) {
