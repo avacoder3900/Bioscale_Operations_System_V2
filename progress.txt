@@ -12598,3 +12598,7 @@ Retrieve this exact code: git checkout master at commit 4f219b7f
 What this deployment is for: fleet matrix sortable by unit number, date sort still the default
 2026-09-10 — feat/spu-tweaks — optical group detail: replicate toggle, device exclusion, fitted Gaussian
 =========================================================================
+Deployment: production — building from the GitHub push to master (Vercel dashboard, commit below)
+Source: branch master @ commit a6195d6e (feat/spu-tweaks)
+Retrieve this exact code: git checkout master at commit a6195d6e
+What this deployment is for: optical group detail — replicate toggle, device exclusion, fitted Gaussian
