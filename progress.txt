@@ -12552,3 +12552,8 @@ and Δ = max−min of the replicate overall ratios) with the replicate rows inde
 by run date. Devices sort by UDI; never-run carts (no device) sink to a "No device" block. The
 SPU column is gone (it's the header now). Client-side derivation only — the report contract and
 totals are untouched. File: groups/[groupId]/+page.svelte. npm run check: 10/435 — baseline.
+
+Deployment: production — building from the GitHub push to master (Vercel dashboard, commit below)
+Source: branch master @ commit 72fbe0f2 (feat/spu-tweaks merged with fleet-matrix sort #51 from master)
+Retrieve this exact code: git checkout master at commit 72fbe0f2
+What this deployment is for: optical group detail — replicates stacked per device
