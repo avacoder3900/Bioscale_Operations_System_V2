@@ -12541,3 +12541,14 @@ Deployment: production — building from the GitHub push to master (Vercel dashb
 Source: branch master @ commit 3f5012c9 (feat/spu-tweaks)
 Retrieve this exact code: git checkout master at commit 3f5012c9
 What this deployment is for: analysis groups newest first
+
+================================================================================
+2026-09-10 — feat/spu-tweaks — optical group detail: replicates stacked under one device header
+================================================================================
+Per Jacob on /validation/optical-confirmation/groups/<id>: a fleet batch is N carts per unit, and a
+flat list hides whether a unit's replicates agree. The Cartridges table now groups rows by SPU:
+one header row per device (UDI, replicate count, mean A/B/C across its replicates, mean overall,
+and Δ = max−min of the replicate overall ratios) with the replicate rows indented beneath, ordered
+by run date. Devices sort by UDI; never-run carts (no device) sink to a "No device" block. The
+SPU column is gone (it's the header now). Client-side derivation only — the report contract and
+totals are untouched. File: groups/[groupId]/+page.svelte. npm run check: 10/435 — baseline.

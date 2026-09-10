@@ -76,6 +76,52 @@
 	const rows = $derived(report.rows);
 	const totals = $derived(report.overall);
 
+	// ---- replicates stacked per device (2026-09-10, per Jacob) -----------------
+	// A fleet batch runs N carts on every unit; reading them as one flat list hides
+	// the question that matters — do a unit's replicates agree? Rows are grouped
+	// under one header per SPU with the device's replicate mean per channel, the
+	// overall mean, and the replicate spread (max − min of the overall ratios).
+	interface DeviceBlock {
+		udi: string | null;
+		rows: ReportRow[];
+		n: number;
+		meanByChannel: Record<Chan, number | null>;
+		mean: number | null;
+		spread: number | null;
+	}
+	function meanOf(vals: Array<number | null | undefined>): number | null {
+		const xs = vals.filter((v): v is number => v != null && Number.isFinite(v));
+		return xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null;
+	}
+	const blocks = $derived.by((): DeviceBlock[] => {
+		const byUdi = new Map<string | null, ReportRow[]>();
+		for (const r of rows) {
+			const k = r.spuUdi ?? null;
+			if (!byUdi.has(k)) byUdi.set(k, []);
+			byUdi.get(k)!.push(r);
+		}
+		const out: DeviceBlock[] = [];
+		for (const [udi, rs] of byUdi) {
+			rs.sort((a, b) => (data.runDates[a.id] ?? '').localeCompare(data.runDates[b.id] ?? ''));
+			const overalls = rs.map((r) => r.overallRatio).filter((v): v is number => v != null);
+			out.push({
+				udi,
+				rows: rs,
+				n: overalls.length,
+				meanByChannel: {
+					A: meanOf(rs.map((r) => r.ratioByChannel.A)),
+					B: meanOf(rs.map((r) => r.ratioByChannel.B)),
+					C: meanOf(rs.map((r) => r.ratioByChannel.C))
+				},
+				mean: meanOf(overalls),
+				spread: overalls.length >= 2 ? Math.max(...overalls) - Math.min(...overalls) : null
+			});
+		}
+		// By unit number; cartridges that never ran (no device) sink to the bottom.
+		out.sort((a, b) => (a.udi ?? '\uffff').localeCompare(b.udi ?? '\uffff'));
+		return out;
+	});
+
 	// The shipped cvThreshold default. Classic CV is outlier-sensitive and this view
 	// leads with it deliberately — the median column beside it is the skew check.
 	const CV_WARN = 15;
@@ -215,7 +261,7 @@
 	<!-- Cartridges -->
 	<div class="tron-card p-4">
 		<h2 class="tron-heading mb-3 text-sm font-semibold uppercase tracking-wide">
-			Cartridges ({rows.length})
+			Cartridges ({rows.length}) · {blocks.filter((b) => b.udi).length} devices
 		</h2>
 
 		{#if rows.length === 0}
@@ -232,7 +278,6 @@
 					<thead class="text-xs uppercase tracking-wide text-[var(--color-tron-text-secondary)]">
 						<tr class="border-b border-[var(--color-tron-border)]">
 							<th class="py-2 pr-4 font-medium">Barcode</th>
-							<th class="py-2 pr-4 font-medium">SPU</th>
 							<th class="py-2 pr-4 font-medium">A</th>
 							<th class="py-2 pr-4 font-medium">B</th>
 							<th class="py-2 pr-4 font-medium">C</th>
@@ -242,13 +287,34 @@
 						</tr>
 					</thead>
 					<tbody class="font-mono">
-						{#each rows as r (r.id)}
+						{#each blocks as blk (blk.udi ?? '__none__')}
+							<!-- Device header: one line per SPU with its replicate means and spread. -->
+							<tr class="border-b border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)]/60">
+								<td class="py-2 pr-4 font-sans">
+									<span class="font-mono text-sm font-bold text-[var(--color-tron-cyan)]">{blk.udi ?? 'No device (never ran)'}</span>
+									<span class="ml-2 text-[10px] uppercase text-[var(--color-tron-text-secondary)]">
+										{blk.rows.length} replicate{blk.rows.length === 1 ? '' : 's'}
+									</span>
+								</td>
+								{#each CHANNELS as c}
+									<td class="py-2 pr-4 text-xs text-[var(--color-tron-text-secondary)]" title={`Mean ${c} across this unit's replicates`}>
+										{fmt(blk.meanByChannel[c])}
+									</td>
+								{/each}
+								<td class="py-2 pr-4 text-sm font-semibold text-[var(--color-tron-green)]" title="Mean of this unit's replicate overall F7/F3">
+									{fmt(blk.mean, 3)}
+								</td>
+								<td class="py-2 pr-4 font-sans text-xs text-[var(--color-tron-text-secondary)]" colspan="2" title="Replicate spread: max − min of the overall F7/F3 across this unit's cartridges">
+									{#if blk.spread != null}Δ {fmt(blk.spread, 3)}{:else}—{/if}
+								</td>
+							</tr>
+							{#each blk.rows as r (r.id)}
 							<tr
 								class="border-b border-[var(--color-tron-border)]/50 {r.hasReadings
 									? ''
 									: 'opacity-60'}"
 							>
-								<td class="py-2 pr-4 text-xs">
+								<td class="py-2 pr-4 pl-6 text-xs">
 									<a
 										href={'/validation/optical-confirmation/' + r.id}
 										class="text-[var(--color-tron-cyan)] hover:underline">{r.label}</a
@@ -256,9 +322,6 @@
 									<span class="ml-1 text-[10px] text-[var(--color-tron-text-secondary)]">
 										{shortDate(data.runDates[r.id])}
 									</span>
-								</td>
-								<td class="py-2 pr-4 text-xs text-[var(--color-tron-text-secondary)]">
-									{r.spuUdi ?? '—'}
 								</td>
 								{#each CHANNELS as c}
 									{@const outlier = r.outlierChannels.includes(c)}
@@ -346,6 +409,7 @@
 									</form>
 								</td>
 							</tr>
+							{/each}
 						{/each}
 					</tbody>
 				</table>
