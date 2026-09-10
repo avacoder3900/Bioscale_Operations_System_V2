@@ -115,8 +115,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 				status: cycle.statuses.thermocouple,
 				mode: thermoMode,
 				sessionId: th.sessionId ?? null
-			},
-			overall
+			}
 		};
 	});
 

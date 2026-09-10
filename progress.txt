@@ -12396,3 +12396,11 @@ Deployment: production — building from the GitHub push to master (Vercel dashb
 Source: branch master @ commit a3b60776 (fast-forward of feat/spu-tweaks)
 Retrieve this exact code: git checkout master at commit a3b60776
 What this deployment is for: validation cycles (0/3 on servicing entry), hub n/3 + Release column
+
+================================================================================
+2026-09-10 — feat/spu-tweaks — validation hub: Overall column replaced by the inventory's n/3 pill
+================================================================================
+Per Jacob: drop the Overall badge entirely; the hub's second column is now "Validation" and renders
+the same green/red n/3 pill the /spu inventory uses (green only at 3/3). The server still computes
+cycle.overall internally for the Release gate; it just isn't sent to the page anymore. Files:
+src/routes/validation/+page.svelte, +page.server.ts. npm run check: 10/435 — baseline.

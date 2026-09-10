@@ -48,20 +48,9 @@
 		return 'neutral';
 	}
 
-	// Overall = the three instrument statuses for the CURRENT validation cycle
-	// folded together: all passed → "Complete", any failed → "failed", else
-	// "pending"; the n/3 beside it is how many have passed. The cycle resets
-	// to 0/3 when a unit enters servicing (spu-validation-cycle.ts).
-	// Cyan (info) rather than green keeps the per-modality green as the signal
-	// that an individual test passed.
-	function overallVariant(status: string): 'info' | 'error' | 'neutral' {
-		if (status === 'passed' || status === 'overridden') return 'info';
-		if (status === 'failed') return 'error';
-		return 'neutral';
-	}
-	function overallLabel(status: string): string {
-		return status === 'passed' || status === 'overridden' ? 'Complete' : status;
-	}
+	// Validation = how many of the three instruments have passed in the CURRENT
+	// cycle, rendered exactly like the inventory's pill. The cycle resets to
+	// 0/3 when a unit enters servicing (spu-validation-cycle.ts).
 
 	function fmtRatio(r: number | null): string {
 		return r == null ? '—' : r.toFixed(2);
@@ -121,7 +110,7 @@
 				<thead>
 					<tr class="border-b border-[var(--color-tron-border)] text-left">
 						<th class="py-2 pr-4 text-xs uppercase text-[var(--color-tron-text-secondary)]">Unit</th>
-						<th class="py-2 pr-4 text-xs uppercase text-[var(--color-tron-text-secondary)]">Overall</th>
+						<th class="py-2 pr-4 text-xs uppercase text-[var(--color-tron-text-secondary)]">Validation</th>
 						<th class="py-2 pr-4 text-xs uppercase text-[var(--color-tron-text-secondary)]">Lifecycle</th>
 						<th class="py-2 pr-4 text-xs uppercase text-[var(--color-tron-text-secondary)]">Magnetometer (gauss)</th>
 						<th class="py-2 pr-4 text-xs uppercase text-[var(--color-tron-text-secondary)]">Optics ratio A / B / C</th>
@@ -137,8 +126,13 @@
 								<a href="/spu/{r.id}" class="font-mono font-bold text-[var(--color-tron-cyan)] hover:underline">{r.udi}</a>
 							</td>
 							<td class="py-2.5 pr-4 whitespace-nowrap">
-								<TronBadge variant={overallVariant(r.overall)}>{overallLabel(r.overall)}</TronBadge>
-								<span class="tron-text-muted ml-2 font-mono text-xs" title="Validations passed this cycle">{r.passedCount}/{r.total}</span>
+								<span
+									class="inline-block rounded-full px-2 py-0.5 text-xs font-bold whitespace-nowrap"
+									style="color: {r.passedCount >= r.total ? 'var(--color-tron-green)' : 'var(--color-tron-red)'}; background: {r.passedCount >= r.total ? 'rgba(0,255,100,0.15)' : 'rgba(255,0,0,0.15)'};"
+									title="Validations passed this cycle"
+								>
+									{r.passedCount}/{r.total}
+								</span>
 							</td>
 							<td class="py-2.5 pr-4">
 								<TronBadge variant="neutral">{r.status}</TronBadge>
