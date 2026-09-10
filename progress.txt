@@ -12474,3 +12474,25 @@ Deployment: production — building from the GitHub push to master (Vercel dashb
 Source: branch master @ commit c8219a26 (feat/spu-tweaks merged with the duplicate-timestamp fix from master)
 Retrieve this exact code: git checkout master at commit c8219a26
 What this deployment is for: optical assign adopts manufacturing-state cartridges (adopted count on the page)
+
+================================================================================
+2026-09-10 — feat/spu-tweaks — optical carts rejected on-device: v92 service-mode gap (firmware)
+================================================================================
+Jacob ran one of the 64 optical confirmation carts and got the quick red reject blink (service
+mode). Diagnosis — FIRMWARE, not BIMS: committed v92 scan_barcode() classifies by length+prefix
+only (36 chars → BARCODE_TYPE_CARTRIDGE; MAG-/STRESS-TEST-/THERMO- prefixes for the others).
+BARCODE_TYPE_OPTICAL is defined in the .h but never returned. Optical validation carts are real
+production carts with ordinary UUID labels, so they classify as CARTRIDGE and hit the v92 gate at
+the top of `case BARCODE_TYPE_CARTRIDGE:` BEFORE the cloud validate that would reveal assay
+A9EB41AD. The SERVICE_MODE_ENFORCEMENT_HANDOFF spec assumed an OPTICAL type that doesn't exist.
+Fleet (Particle product endpoint): 31 units on v92, 1 (0256) on v93, all online — reproduces
+everywhere, and every active unit carries service_flag=1 since the fleet is `validating`.
+Fix spec written (uncommitted, for the firmware agent):
+brevitest-device/firmware/Docs/SERVICE_MODE_OPTICAL_GAP_HANDOFF.md — move the gate into
+response_validate_cartridge() after `assayId` is parsed; reject only when service_flag=1 AND the
+assay is not in a VALIDATION_ASSAY_IDS allowlist ({"A9EB41AD"}); remove the pre-cloud block;
+acceptance checklist included. Cost: a rejected customer cart now takes one cloud round trip.
+Interim (BIMS): new scripts/service-flag-fleet.ts — report / --clear (set_service 0 on every
+active unit) / --rearm (1 on every non-released unit); reads back the variable, records
+particleLink.serviceFlag* like service-flag.ts, audit row per unit. Report run: all 32 at flag=1.
+NOT cleared — waiting on Jacob's go (it switches the enforcement off fleet-wide for the run).
