@@ -12602,3 +12602,14 @@ Deployment: production — building from the GitHub push to master (Vercel dashb
 Source: branch master @ commit a6195d6e (feat/spu-tweaks)
 Retrieve this exact code: git checkout master at commit a6195d6e
 What this deployment is for: optical group detail — replicate toggle, device exclusion, fitted Gaussian
+
+================================================================================
+2026-09-10 — feat/spu-tweaks — gaussian fit polish after eyeballing production
+================================================================================
+Verified live in Chrome on 9_10 group (32 devices, 95 points, μ 8.179 σ 0.833, 3 points outside ±2σ
+— all three channels of 0250, an obvious problem device at z≈-4). Excluding 0250 via the checkbox
+recomputed on click: 31/32, 92 points, μ 8.291 σ 0.563, CV 6.8%, 4 outside ±2σ. Re-included
+afterwards (exclusions persist per group in the browser). Two fixes from the eyeball: the stat-tile
+labels rendered "Μ"/"Σ" because Tailwind `uppercase` capitalises Greek (labels now "MEAN μ" / "SD σ"
+/ "OUTSIDE ±2σ" without the transform), and the x-domain gains 4% padding so edge points no longer
+sit on the axis ends. File: groups/[groupId]/+page.svelte. npm run check: 10/435 — baseline.

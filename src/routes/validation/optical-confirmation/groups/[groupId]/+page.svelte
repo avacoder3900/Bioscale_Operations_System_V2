@@ -221,8 +221,11 @@
 		const { mean, sd, points } = fit;
 		if (mean == null || !sd || points.length < 3) return null;
 		const vals = points.map((p) => p.value);
-		const lo = Math.min(mean - 3.5 * sd, ...vals);
-		const hi = Math.max(mean + 3.5 * sd, ...vals);
+		const rawLo = Math.min(mean - 3.5 * sd, ...vals);
+		const rawHi = Math.max(mean + 3.5 * sd, ...vals);
+		const padding = (rawHi - rawLo || 1) * 0.04;
+		const lo = rawLo - padding;
+		const hi = rawHi + padding;
 		const span = hi - lo || 1;
 		const x = (v: number) => PAD.l + ((v - lo) / span) * PW;
 		const pdf = (v: number) => Math.exp(-0.5 * ((v - mean) / sd) ** 2) / (sd * Math.sqrt(2 * Math.PI));
@@ -418,11 +421,11 @@
 				<div class="font-mono text-lg tron-text-primary">{fit.n}</div>
 			</div>
 			<div class="rounded border border-[var(--color-tron-border)] p-2">
-				<div class="text-[10px] uppercase text-[var(--color-tron-text-secondary)]">μ</div>
+				<div class="text-[10px] text-[var(--color-tron-text-secondary)]">MEAN μ</div>
 				<div class="font-mono text-lg text-[var(--color-tron-green)]">{fmt(fit.mean, 3)}</div>
 			</div>
 			<div class="rounded border border-[var(--color-tron-border)] p-2">
-				<div class="text-[10px] uppercase text-[var(--color-tron-text-secondary)]">σ</div>
+				<div class="text-[10px] text-[var(--color-tron-text-secondary)]">SD σ</div>
 				<div class="font-mono text-lg tron-text-primary">{fmt(fit.sd, 3)}</div>
 			</div>
 			<div class="rounded border border-[var(--color-tron-border)] p-2">
@@ -430,7 +433,7 @@
 				<div class="font-mono text-lg {fit.cv != null && fit.cv > CV_WARN ? 'text-amber-400' : 'tron-text-primary'}">{pct(fit.cv)}</div>
 			</div>
 			<div class="rounded border border-[var(--color-tron-border)] p-2">
-				<div class="text-[10px] uppercase text-[var(--color-tron-text-secondary)]">Outside ±2σ</div>
+				<div class="text-[10px] text-[var(--color-tron-text-secondary)]">OUTSIDE ±2σ</div>
 				<div class="font-mono text-lg {fit.outside2.length ? 'text-[var(--color-tron-red)]' : 'tron-text-primary'}">{fit.outside2.length}</div>
 			</div>
 		</div>
@@ -533,7 +536,7 @@
 			</div>
 			{#if fit.outside2.length}
 				<div class="mt-3 text-xs">
-					<div class="mb-1 text-[10px] uppercase text-[var(--color-tron-text-secondary)]">Outside ±2σ</div>
+					<div class="mb-1 text-[10px] text-[var(--color-tron-text-secondary)]">OUTSIDE ±2σ</div>
 					<ul class="grid gap-x-6 gap-y-0.5 font-mono sm:grid-cols-2 lg:grid-cols-3">
 						{#each fit.outside2 as o (o.udi + o.channel)}
 							<li>
