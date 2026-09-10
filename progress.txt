@@ -12387,3 +12387,12 @@ Built:
   optical run via analyzeCartridge); audit row per unit; LED flag re-armed for units leaving
   released via the Particle API.
 npm run check: 10/435 — baseline (no new errors/warnings in touched files).
+
+DATA: scripts/reset-validation-cycles.ts --apply run after the push — see the dry-run table in the
+session; 7 status moves (0202, 0243 released→validating; 0210, 0222, 0223, 0226, 0252
+servicing→validating), 28 units recomputed, 4 unchanged (0214, 0245, 0248, 0250 never serviced).
+
+Deployment: production — building from the GitHub push to master (Vercel dashboard, commit below)
+Source: branch master @ commit a3b60776 (fast-forward of feat/spu-tweaks)
+Retrieve this exact code: git checkout master at commit a3b60776
+What this deployment is for: validation cycles (0/3 on servicing entry), hub n/3 + Release column
