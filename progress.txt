@@ -12432,7 +12432,7 @@ DATA: ran it as user `jacob` for the 19 skipped barcodes into "9_10 group" → 1
 skipped; the assign_batch group now holds 64 optical cartridges; sample check on a wax_filled one:
 status linked, priorStatus wax_filled, backing + waxFilling blocks intact, 4 BCODE steps embedded.
 npm run check: 10/435 — baseline.
-=======
+================================================================================
 2026-09-10 — fix/duplicate-timestamp-keys-blank-validation-pages — session pages blanked by
 duplicate reading timestamps
 ================================================================================
@@ -12574,7 +12574,7 @@ cartridge-level (server report) — said so in the card caption.
 Palette note: dataviz validator on cyan/orange/purple vs #0a0a0f passes CVD (ΔE 26), normal-vision
 and contrast checks; only the lightness band fails, by design of the neon Tron theme — shape
 encoding added as the second cue. File: groups/[groupId]/+page.svelte. npm run check: 10/435.
-=======
+================================================================================
 2026-09-10 — feat/fleet-matrix-sort-by-unit — fleet matrix sorts by unit
 ================================================================================
 The fleet matrix could only be read in the order the server returns it — most-recently-tested first
