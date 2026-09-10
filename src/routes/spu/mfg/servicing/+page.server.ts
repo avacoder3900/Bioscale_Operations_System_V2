@@ -675,13 +675,24 @@ export const actions: Actions = {
 			return fail(400, { error: 'SPU is finalized', scanned: code });
 		}
 
+		// Servicing is the one human-triggered status, so opening a job demands
+		// the human say WHY (Jacob, 2026-09-09). Resuming an existing job above
+		// needs nothing — the reason is already on record.
+		const reason = (form.get('reason')?.toString() ?? '').trim();
+		if (!reason) {
+			return fail(400, {
+				error: 'Say what this service is for — type a note, then scan again.',
+				scanned: code
+			});
+		}
+
 		const recordId = await createServiceJob(event, spu, {
 			// Deliberately un-triaged: the tech sets type and priority from the
 			// detail panel in one click once the unit is on the board.
 			serviceType: 'other',
 			priority: 'normal',
 			location: (form.get('location')?.toString() ?? '').trim(),
-			reason: ''
+			reason
 		});
 
 		return {
@@ -710,6 +721,7 @@ export const actions: Actions = {
 		const reason = (form.get('reason')?.toString() ?? '').trim();
 
 		if (!spuId) return fail(400, { error: 'Pick an SPU first' });
+		if (!reason) return fail(400, { error: 'Say what this service is for — a reason is required to open a job' });
 		const serviceType = SERVICE_TYPES.includes(serviceTypeRaw) ? serviceTypeRaw : 'other';
 		const priority = PRIORITIES.includes(priorityRaw) ? priorityRaw : 'normal';
 

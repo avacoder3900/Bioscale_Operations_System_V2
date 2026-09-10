@@ -12293,3 +12293,24 @@ Deployment: production — building from the GitHub push to master (Vercel dashb
 Source: branch master @ merge of feat/spu-tweaks
 Retrieve this exact code: git log master --oneline
 What this deployment is for: servicing board Awaiting-intake section + SPU breadcrumbs
+
+================================================================================
+2026-09-10 — feat/spu-tweaks — a reason is required to open a service job
+================================================================================
+Per Jacob (2026-09-09): servicing is the one human-triggered status, so opening a job must say
+WHY. Work was in flight when Jacob's machine shut off; reconstructed from the working tree and
+finished here.
+- ?/scan (servicing +page.server.ts): after the resume/finalized checks, a blank `reason` now
+  fails 400 ("Say what this service is for — type a note, then scan again.") and the typed
+  reason is stored on the new ServiceRecord instead of ''. Resuming an existing open job still
+  needs nothing — its reason is already on record.
+- ?/openService: blank reason fails 400 (applies to the "Start job without a scan" modal AND the
+  Awaiting-intake "Take unit in" forms). Both reason inputs are now `required` in the UI.
+- Servicing board scan card: "What's this service for?" text input under the scanner (the form
+  resets on success via use:enhance, so each unit gets its own note; a failed scan keeps it).
+- ServiceScanCard.svelte (mounted on SPU detail + dashboard): same reason input added, plus the
+  board's scanner-pause pattern (focusin/focusout → ScanInput disabled while typing, with the
+  "Scanner paused" hint) so the reason field is typeable at all. Without this, every new-job scan
+  from those mounts would have been rejected by the new server check.
+Files: src/routes/spu/mfg/servicing/+page.server.ts, +page.svelte,
+src/lib/components/spu/ServiceScanCard.svelte. npm run check: 10/434 — baseline.

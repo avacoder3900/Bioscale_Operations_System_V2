@@ -226,6 +226,17 @@
 				onScan={handleScan}
 				disabled={scanPaused || submitting}
 			/>
+			<div>
+				<label for="scan-reason" class="tron-text-muted mb-1 block text-xs uppercase">What's this service for?</label>
+				<input
+					id="scan-reason"
+					name="reason"
+					type="text"
+					class="tron-input w-full"
+					placeholder="Required to OPEN a new job — resuming an existing one needs no note"
+					style="min-height: 44px;"
+				/>
+			</div>
 		</form>
 
 		{#if scanPaused}
@@ -777,6 +788,7 @@
 												name="reason"
 												class="tron-input"
 												placeholder="Why is it in for service?"
+												required
 											/>
 										</div>
 										<div class="sm:col-span-2">
@@ -1346,6 +1358,7 @@
 						name="reason"
 						class="tron-input"
 						placeholder="Why is it in for service?"
+						required
 					/>
 				</div>
 
