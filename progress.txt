@@ -12411,8 +12411,6 @@ Retrieve this exact code: git checkout master at commit a7109e35
 What this deployment is for: validation hub n/3 pill replaces the Overall column
 
 ================================================================================
-2026-09-10 — feat/spu-tweaks — optical assign adopts manufacturing-state cartridges
-================================================================================
 Jacob pasted 62 barcodes into Optical Confirmation → Assign; 45 assigned, 19 skipped with "a
 non-optical cartridge already exists with this barcode". Checked: none are repeats within the batch —
 all 19 are cartridge_records born on the manufacturing line (16 `backing` from 2026-08-14/31, 3
@@ -12434,3 +12432,41 @@ DATA: ran it as user `jacob` for the 19 skipped barcodes into "9_10 group" → 1
 skipped; the assign_batch group now holds 64 optical cartridges; sample check on a wax_filled one:
 status linked, priorStatus wax_filled, backing + waxFilling blocks intact, 4 BCODE steps embedded.
 npm run check: 10/435 — baseline.
+=======
+2026-09-10 — fix/duplicate-timestamp-keys-blank-validation-pages — session pages blanked by
+duplicate reading timestamps
+================================================================================
+Opening a thermocouple session from the run log rendered a blank page. On a hard refresh the page
+appeared and then vanished under a second later; clicking through from the log went straight to
+blank. That split is the signature of a hydration crash — the SSR HTML paints, hydration throws,
+Svelte tears the tree down, and client-side navigation never paints the SSR HTML at all.
+
+Root cause: ThermocoupleChart keyed its data-point loop on the reading timestamp —
+{#each scales.sorted as reading (reading.timestamp)}. Timestamps are not unique. The logger samples
+faster than its timestamp resolution, so consecutive readings land on the same millisecond, Svelte
+raises each_key_duplicate, and the component tree is destroyed. It threw from the >50-readings
+branch, i.e. every real session. Checked against production data: recent sessions carry 600-800
+readings with 1-4 duplicate timestamps each (I0ZV5WLnRtXfhJMintvvX 635/1, 2CFNPeMSy5pBfTaF7OIY-
+764/4, 0FC-b6Nnu5Ooko_sHBLmx 618/4), so this fired on effectively every thermocouple record rather
+than at some edge.
+
+Fix: key by index. These loops draw static SVG points and table rows from an already-sorted array,
+so the key carried no meaning to begin with. Five other loops had the identical mistake and are
+fixed with it — ThermocoupleResult (renders on the same page, so fixing only the chart would have
+left it blank anyway), ThermocoupleTable, MagnetometerResult (two loops — the magnetometer session
+page had the same latent crash), and the ThermocoupleCapture / MagnetometerCapture live views.
+Files: src/lib/components/validation/thermocouple/{ThermocoupleChart,ThermocoupleResult,
+ThermocoupleTable,ThermocoupleCapture}.svelte, src/lib/components/validation/magnetometer/
+{MagnetometerResult,MagnetometerCapture}.svelte. npm run check: 10/435 — baseline.
+
+Worth recording for whoever meets this next: validate_each_keys only runs in dev builds. Production
+raises no console error and silently reconciles the DOM incorrectly instead, which is why the
+deployed symptom gave nothing to go on and reproducing it locally was what pinned it. Magnetometer
+session and capture pages were confirmed clean by Giovanni before the merge.
+
+Deployment: production — building from the GitHub push to master (Vercel dashboard, commit below)
+Source: branch master @ commit fbe1f585 (squash merge of PR #50)
+Retrieve this exact code: git checkout master at commit fbe1f585
+What this deployment is for: thermocouple/magnetometer session pages no longer blank on open
+2026-09-10 — feat/spu-tweaks — optical assign adopts manufacturing-state cartridges
+=========================================================================

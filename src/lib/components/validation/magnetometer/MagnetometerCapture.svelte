@@ -389,7 +389,7 @@
 							</tr>
 						</thead>
 						<tbody>
-							{#each capturedReadings.slice(-20) as reading, i (reading.timestamp)}
+							{#each capturedReadings.slice(-20) as reading, i (i)}
 								<tr class="border-t border-[var(--color-tron-border)]">
 									<td class="tron-text-muted p-2">{capturedReadings.length - 20 + i + 1}</td>
 									<td class="tron-heading p-2 font-medium">{formatMagnitude(reading.magnitude)}</td>

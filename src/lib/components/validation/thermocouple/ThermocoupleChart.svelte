@@ -222,9 +222,12 @@
 				<!-- Temperature line -->
 				<path d={temperaturePath} fill="none" stroke="var(--color-tron-cyan)" stroke-width="2" />
 
-				<!-- Data points (color-coded: red for out-of-range, cyan for in-range) -->
+				<!-- Data points (color-coded: red for out-of-range, cyan for in-range).
+				     Keyed by index, not timestamp: the logger can emit two readings with
+				     the same timestamp, and the duplicate key threw each_key_duplicate
+				     during hydration, which blanked the whole page. -->
 				{#if scales.sorted.length <= 50}
-					{#each scales.sorted as reading (reading.timestamp)}
+					{#each scales.sorted as reading, i (i)}
 						{@const outOfRange = isOutOfRange(reading.temperature)}
 						<circle
 							cx={scales.scaleX(reading.timestamp)}
@@ -235,7 +238,7 @@
 					{/each}
 				{:else}
 					<!-- For many readings, only highlight out-of-range points -->
-					{#each scales.sorted as reading (reading.timestamp)}
+					{#each scales.sorted as reading, i (i)}
 						{#if isOutOfRange(reading.temperature)}
 							<circle
 								cx={scales.scaleX(reading.timestamp)}
