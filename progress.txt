@@ -12314,3 +12314,8 @@ finished here.
   from those mounts would have been rejected by the new server check.
 Files: src/routes/spu/mfg/servicing/+page.server.ts, +page.svelte,
 src/lib/components/spu/ServiceScanCard.svelte. npm run check: 10/434 — baseline.
+
+Deployment: production — building from the GitHub push to master (Vercel dashboard, commit below)
+Source: branch master @ commit 2f9061cf (fast-forward of feat/spu-tweaks)
+Retrieve this exact code: git checkout master at commit 2f9061cf
+What this deployment is for: reason required to open a service job (scan card everywhere + manual open)
