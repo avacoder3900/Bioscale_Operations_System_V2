@@ -32,8 +32,10 @@ export const load: PageServerLoad = async ({ locals }) => {
 	requirePermission(locals.user, 'cartridge:read');
 	await connectDB();
 
-	// Analysis cohorts only. `assign_batch` groups are created by the assign endpoint
-	// and are deliberately invisible here (PRD §3).
+	// One kind of group (2026-09-10): the Group box on the assign form creates or
+	// joins an 'optical_analysis' group directly, so a named batch shows up here
+	// the moment it is assigned. Legacy 'assign_batch' groups were folded in by
+	// scripts/unify-optical-groups.ts and archived.
 	const groupDocs = await CartridgeGroup.find({
 		purpose: 'optical_analysis',
 		archivedAt: null

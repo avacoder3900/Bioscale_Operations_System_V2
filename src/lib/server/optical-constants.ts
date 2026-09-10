@@ -41,5 +41,8 @@ export function nextGroupColor(used: Array<string | null | undefined>): GroupCol
 	return free ?? GROUP_COLOR_KEYS[taken.size % GROUP_COLOR_KEYS.length];
 }
 
-/** Cap on how many cartridges one comparison may pull. Each carries ~126 readings. */
-export const MAX_COMPARE_CARTRIDGES = 60;
+/**
+ * Cap on how many cartridges one comparison may pull. Each carries ~126 readings.
+ * 130 fits two full fleet batches (2 carts × 32 units = 64) side by side.
+ */
+export const MAX_COMPARE_CARTRIDGES = 130;

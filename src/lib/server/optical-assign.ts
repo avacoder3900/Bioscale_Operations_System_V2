@@ -25,6 +25,7 @@ import {
 	AuditLog,
 	generateId
 } from '$lib/server/db';
+import { nextGroupColor } from '$lib/server/optical-constants';
 
 export interface AssignOpticalOpts {
 	assayId: string;
@@ -44,6 +45,7 @@ export interface AssignOpticalResult {
 	/** Subset of `created` that were existing manufacturing cartridges taken over. */
 	adopted: { barcode: string; priorStatus: string }[];
 	skipped: { barcode: string; reason: string }[];
+	/** The analysis group (Analysis Groups page) the batch was assigned into, if named. */
 	groupId: string | null;
 }
 
@@ -84,23 +86,34 @@ export async function assignOpticalCartridges(
 		barcodes = Array.from({ length: count }, (_, i) => `OPT-${assayId}-${String(i + 1).padStart(3, '0')}`);
 	}
 
-	// Optional group: create/lookup a CartridgeGroup by name.
-	// Scoped to purpose 'assign_batch' so an analysis cohort curated on the optical
-	// log (purpose 'optical_analysis') can never be silently adopted as an assign
-	// batch just because it happens to share a name.
+	// Optional group: the Group box on the assign form IS the analysis group
+	// (2026-09-10, per Jacob — no batch-vs-cohort distinction). Find or create the
+	// same-named 'optical_analysis' group; the assigned barcodes join its
+	// cartridgeIds below, so it shows up on Analysis Groups the moment the batch
+	// is assigned. (The old 'assign_batch' purpose is retired; see
+	// scripts/unify-optical-groups.ts for the one-time fold.)
 	let groupId: string | undefined;
 	const groupName = (opts.groupName ?? '').toString().trim();
 	if (groupName) {
 		const existing = await CartridgeGroup.findOne({
 			name: groupName,
-			purpose: { $ne: 'optical_analysis' }
-		}).lean();
+			purpose: 'optical_analysis',
+			archivedAt: null
+		})
+			.select('_id')
+			.lean();
 		if (existing) groupId = (existing as any)._id;
 		else {
+			const usedColors = (
+				await CartridgeGroup.find({ purpose: 'optical_analysis', archivedAt: null }).select('color').lean()
+			).map((g: any) => g.color);
 			const g = await CartridgeGroup.create({
 				_id: generateId(),
 				name: groupName,
-				purpose: 'assign_batch',
+				description: `Assigned batch — ${(assay as any).name ?? assayId}`,
+				color: nextGroupColor(usedColors),
+				purpose: 'optical_analysis',
+				cartridgeIds: [],
 				createdBy: opts.user._id
 			});
 			groupId = g._id;
@@ -259,6 +272,16 @@ export async function assignOpticalCartridges(
 		}
 
 		created.push({ _id, barcode, serialNumber });
+	}
+
+	// The assigned barcodes join the group's cohort (cartridge_records._id IS the
+	// barcode). Fresh assignments belong to no other group, so the one-group-per-
+	// cartridge rule of saveGroup holds without a $pull here.
+	if (groupId && created.length > 0) {
+		await CartridgeGroup.updateOne(
+			{ _id: groupId },
+			{ $addToSet: { cartridgeIds: { $each: created.map((c) => c.barcode) } } }
+		);
 	}
 
 	if (created.length > 0) {

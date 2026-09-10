@@ -12496,3 +12496,31 @@ Interim (BIMS): new scripts/service-flag-fleet.ts — report / --clear (set_serv
 active unit) / --rearm (1 on every non-released unit); reads back the variable, records
 particleLink.serviceFlag* like service-flag.ts, audit row per unit. Report run: all 32 at flag=1.
 NOT cleared — waiting on Jacob's go (it switches the enforcement off fleet-wide for the run).
+
+================================================================================
+2026-09-10 — feat/spu-tweaks — optical groups unified: a linked group IS an analysis group
+================================================================================
+Jacob: "9_10 group" didn't show on Optical Confirmation → Analysis Groups. Cause: the assign form's
+Group box created `assign_batch` groups (membership via optical_test_cartridges.groupId) while the
+Groups/Analyze pages only read `optical_analysis` groups (membership via cartridgeIds[]). Jacob's
+ruling: no distinction — a linked group is an analysis group.
+- src/lib/server/optical-assign.ts: the Group box now finds-or-creates the same-named
+  optical_analysis group (archivedAt null; colour from nextGroupColor) and $addToSets the assigned
+  barcodes into cartridgeIds. assign_batch is retired; no mirror/second group.
+- cartridge-group model: purpose default → optical_analysis (enum keeps assign_batch for legacy
+  docs); comment rewritten. groups/+page.server.ts comment updated.
+- optical-constants MAX_COMPARE_CARTRIDGES 60 → 130 (a full fleet batch is 64 = 2 × 32 units; two
+  batches side by side fit).
+- scripts/unify-optical-groups.ts (dry-run/--apply, applied): 18 legacy groups. Empty ones (b, a12,
+  a13, a14, a3, a4) archived. Batches whose carts all already sit in ONE hand-made group point at it
+  ("control for optics test 1" → "control group1", "test for 203" → "test group1"). "9_10 group"
+  merged into the analysis group created earlier today (64 carts). New analysis groups created for
+  a, a1, a2, a5, a6, testing, control (6 of 26 — the other 20 stay in "initial test data"), 244,
+  0257. optical_test_cartridges.groupId repointed; legacy docs archived with a note; audit row each.
+DATA also: optics→SPU sync run after the 62-cart batch finished (all 64 carts have readings, 2 per
+unit on all 32): 29 units updated (25 passed, 4 failed: 0221, 0256, 0217, 0248), 9 unchanged,
+3 with no in-cycle readings.
+FIRMWARE: the v92 optical-cart reject was fixed by the firmware agent from my spec and shipped as
+v94 (note added to SERVICE_MODE_OPTICAL_GAP_HANDOFF.md); the service-flag --clear interim was
+never needed and never run.
+npm run check: 10/435 — baseline.

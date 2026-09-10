@@ -4,11 +4,11 @@ import { generateId } from '../utils.js';
 /**
  * A named set of cartridges.
  *
- * Two distinct uses, told apart by `purpose`:
- *  - 'assign_batch'     — created by the optical-confirmation assign endpoint when
- *                         an operator types a group name while registering carts.
- *  - 'optical_analysis' — an analysis cohort curated by hand on the optical log,
- *                         used to compare groups of ratios against each other.
+ * One kind of group (2026-09-10, per Jacob — "a linked group IS an analysis
+ * group"): `purpose: 'optical_analysis'`, whether it was created by typing a name
+ * on the optical-confirmation assign form or curated by hand on the optical log.
+ * 'assign_batch' is a retired value: those groups were folded into same-named
+ * analysis groups and archived by scripts/unify-optical-groups.ts.
  *
  * Membership lives HERE, as `cartridgeIds`, and not on `OpticalTestCartridge.groupId`.
  * That field cannot represent an analysis cohort: only BIMS-*assigned* cartridges get
@@ -33,7 +33,7 @@ const cartridgeGroupSchema = new Schema(
 		purpose: {
 			type: String,
 			enum: ['assign_batch', 'optical_analysis'],
-			default: 'assign_batch'
+			default: 'optical_analysis'
 		},
 
 		/** cartridge_records._id — which, for optical cartridges, IS the scanned barcode. */
