@@ -12618,3 +12618,15 @@ Deployment: production — building from the GitHub push to master (Vercel dashb
 Source: branch master @ commit e5a58560 (feat/spu-tweaks)
 Retrieve this exact code: git checkout master at commit e5a58560
 What this deployment is for: gaussian fit label + axis padding polish
+
+================================================================================
+2026-09-10 — feat/spu-tweaks — manual fleet release (Jacob-approved, optical release logic pending rework)
+================================================================================
+Jacob: release every device except 217, 218, 229, 239, 245, 249, 250, 252, 255, 256, with a note that
+the release was manually approved before the optical release software was fully figured out.
+scripts/release-fleet-manual.ts (dry-run/--apply, applied as user jacob): of 32 active units, 10 held,
+6 already released via the hub button (0202, 0211, 0236, 0243, 0251, 0257), 16 released here
+bypassing the 3/3 gate — each gets statusTransitions validating→released, an audit row, a journal
+note ("Released — manually approved by Jacob on 2026-09-10, prior to the optical release software
+being fully figured out. Validation at release: n/3 (mag/thermo/optics)."), and set_service 0 on
+the device (yellow LED off; particleLink.serviceFlag* recorded). Fleet now: 22 released, 10 validating.
