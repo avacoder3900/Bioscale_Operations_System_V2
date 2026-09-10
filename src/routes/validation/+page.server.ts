@@ -1,6 +1,11 @@
+import { fail } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
-import { connectDB, Spu, ValidationSession } from '$lib/server/db';
-import type { PageServerLoad } from './$types';
+import { connectDB, Spu, ValidationSession, AuditLog, generateId } from '$lib/server/db';
+import { cycleSummary, inCurrentCycle } from '$lib/server/spu-validation-cycle';
+import { isLegalTransition } from '$lib/server/spu-status';
+import { syncServiceFlag } from '$lib/server/service-flag';
+import { appendSpuJournal } from '$lib/server/spu-journal';
+import type { Actions, PageServerLoad } from './$types';
 
 /**
  * SPU Validation hub (SPU-INV-11): the unified fleet view. Each instrument
@@ -28,8 +33,6 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 	const magBySpu = new Map<string, any>(latestMagSessions.map((m: any) => [m._id, m]));
 
-	const passedish = (st: string | undefined) => st === 'passed' || st === 'overridden';
-
 	// The mag wells grid: [{well, A, B, C}] of Z (gauss) values.
 	function magWells(raw: any): { well: number; A: number | null; B: number | null; C: number | null }[] | null {
 		if (!Array.isArray(raw) || raw.length === 0) return null;
@@ -49,25 +52,26 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 	const rows = (spus as any[]).map((s) => {
 		const v = s.validation ?? {};
+		// Only the current validation cycle counts (spu-validation-cycle.ts):
+		// a rollup from before the unit last entered servicing reads as pending,
+		// and its measurements are not shown as if they were current.
+		const cycle = cycleSummary(s);
+		const current = (rollup: any) => inCurrentCycle(rollup?.completedAt, s.validationResetAt);
 
-		const magRollupWells = magWells(v.magnetometer?.results);
-		const magSession = magBySpu.get(s._id);
+		const magRollupWells = current(v.magnetometer) ? magWells(v.magnetometer?.results) : null;
+		const rawMagSession = magBySpu.get(s._id);
+		const magSession = rawMagSession && inCurrentCycle(rawMagSession.at, s.validationResetAt) ? rawMagSession : null;
 		const wells = magRollupWells ?? magWells(magSession?.magResults);
-		const magStatus = v.magnetometer?.status ?? 'pending';
+		const magStatus = cycle.statuses.magnetometer;
 
-		const opt = v.spectrophotometer ?? {};
+		const opt = current(v.spectrophotometer) ? (v.spectrophotometer ?? {}) : {};
 		const ratios = opt.results?.ratioByChannel ?? null;
 
-		const th = v.thermocouple ?? {};
+		const th = current(v.thermocouple) ? (v.thermocouple ?? {}) : {};
 		const thermoMode =
 			th.results?.stats?.mode ?? th.results?.mode ?? th.results?.overallStats?.mode ?? null;
 
-		const statuses = [magStatus, th.status ?? 'pending', opt.status ?? 'pending'];
-		const overall = statuses.every(passedish)
-			? 'passed'
-			: statuses.some((x) => x === 'failed')
-				? 'failed'
-				: 'pending';
+		const overall = cycle.overall;
 
 		// Most recent test of ANY modality — drives the default sort.
 		const times = [
@@ -86,6 +90,11 @@ export const load: PageServerLoad = async ({ locals }) => {
 			id: s._id,
 			udi: s.udi,
 			status: s.status ?? 'draft',
+			passedCount: cycle.passed,
+			total: cycle.total,
+			// Passing validation qualifies validating → released; release itself
+			// is the manual act (the button in the last column).
+			canRelease: (s.status ?? 'draft') === 'validating' && overall === 'passed',
 			mag: {
 				status: magStatus,
 				wells,
@@ -94,7 +103,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 				fromSession: !magRollupWells && !!magSession
 			},
 			optics: {
-				status: opt.status ?? 'pending',
+				status: cycle.statuses.spectrophotometer,
 				ratios: ratios
 					? { A: ratios.A ?? null, B: ratios.B ?? null, C: ratios.C ?? null }
 					: null,
@@ -103,7 +112,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 				cartridgeBarcode: opt.results?.cartridgeBarcode ?? null
 			},
 			thermo: {
-				status: th.status ?? 'pending',
+				status: cycle.statuses.thermocouple,
 				mode: thermoMode,
 				sessionId: th.sessionId ?? null
 			},
@@ -115,6 +124,73 @@ export const load: PageServerLoad = async ({ locals }) => {
 	rows.sort((a, b) => (b.lastTestAt?.getTime() ?? 0) - (a.lastTestAt?.getTime() ?? 0));
 
 	return { rows: JSON.parse(JSON.stringify(rows)) };
+};
+
+export const actions: Actions = {
+	/**
+	 * Release a unit from the hub. Passing all three validations in the current
+	 * cycle is what qualifies a validating unit; pressing Release is the manual
+	 * act that moves it (SPU-INV-07 doctrine).
+	 */
+	release: async ({ request, locals }) => {
+		requirePermission(locals.user, 'spu:write');
+		await connectDB();
+
+		const form = await request.formData();
+		const spuId = form.get('spuId')?.toString() ?? '';
+		if (!spuId) return fail(400, { error: 'Missing SPU' });
+
+		const spu = (await Spu.findById(spuId)
+			.select('udi status finalizedAt validation validationResetAt')
+			.lean()) as any;
+		if (!spu) return fail(404, { error: 'SPU not found' });
+		if (spu.finalizedAt) return fail(400, { error: `${spu.udi} is finalized and cannot be modified` });
+
+		const from = spu.status ?? 'draft';
+		if (!isLegalTransition(from, 'released')) {
+			return fail(400, { error: `${spu.udi} is ${from} — only a validating unit can be released` });
+		}
+		const cycle = cycleSummary(spu);
+		if (cycle.overall !== 'passed') {
+			return fail(400, {
+				error: `${spu.udi} has ${cycle.passed}/${cycle.total} validations passed this cycle — all three must pass before release`
+			});
+		}
+
+		const who = { _id: locals.user!._id, username: locals.user!.username };
+		const now = new Date();
+		const reason = 'Released from the validation hub — 3/3 validations passed this cycle';
+		await Spu.updateOne(
+			{ _id: spuId, status: from },
+			{
+				$set: { status: 'released' },
+				$push: {
+					statusTransitions: { _id: generateId(), from, to: 'released', changedBy: who, changedAt: now, reason }
+				}
+			}
+		);
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'spus',
+			recordId: spuId,
+			action: 'UPDATE',
+			oldData: { status: from },
+			newData: { status: 'released' },
+			reason,
+			changedBy: who.username ?? who._id,
+			changedAt: now
+		});
+		await appendSpuJournal(
+			spuId,
+			'Released — magnetometer, thermocouple and optics all passed this validation cycle.',
+			who,
+			{ source: 'release' }
+		);
+		// Yellow-LED service flag off (SPU-INV-08) — best-effort, never blocks.
+		const serviceFlag = await syncServiceFlag(spuId);
+
+		return { released: true, udi: spu.udi, serviceFlag: serviceFlag.state };
+	}
 };
 
 export const config = { maxDuration: 60 };

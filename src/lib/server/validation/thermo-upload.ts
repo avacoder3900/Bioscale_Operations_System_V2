@@ -1,5 +1,6 @@
 import { ValidationSession, GeneratedBarcode, Spu, AuditLog, generateId } from '$lib/server/db';
 import { computeChannelStats, type ChannelStats } from '$lib/server/thermocouple-stats';
+import { inCurrentCycle } from '$lib/server/spu-validation-cycle';
 
 export interface ThermoReading {
 	timestamp: number;
@@ -244,7 +245,10 @@ export async function recordThermoVerdict(opts: {
 		}
 	);
 
-	if (session.spuId) {
+	// Readings uploaded before the unit's current validation cycle began (it
+	// went to servicing since) get their verdict on the session but earn no
+	// credit on the unit — the cycle needs a fresh thermocouple run.
+	if (session.spuId && inCurrentCycle(session.startedAt, spu?.validationResetAt)) {
 		await Spu.updateOne(
 			{ _id: session.spuId },
 			{

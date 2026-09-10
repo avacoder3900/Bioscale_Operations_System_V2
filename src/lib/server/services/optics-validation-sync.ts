@@ -1,6 +1,7 @@
 import { CartridgeRecord, Spu, AuditLog, generateId } from '$lib/server/db';
 import { analyzeCartridge } from '$lib/server/optical-analysis';
 import { OPTICAL_CARTRIDGE_FILTER } from '$lib/server/optical-constants';
+import { inCurrentCycle } from '$lib/server/spu-validation-cycle';
 
 /**
  * Optics → SPU validation write-back.
@@ -14,6 +15,8 @@ import { OPTICAL_CARTRIDGE_FILTER } from '$lib/server/optical-constants';
  * This sync derives the optics outcome per SPU from its LATEST analyzable run
  * (derive-on-read analyzeCartridge — F7/F3 ratios; warning=false → passed,
  * warning=true → failed) and writes it to validation.spectrophotometer.
+ * Only runs inside the unit's current validation cycle count (a run from
+ * before it last entered servicing is history — see spu-validation-cycle.ts).
  * Finalized SPUs are skipped (sacred). Idempotent: unchanged outcomes are
  * left untouched. Every change is audit-logged.
  */
@@ -55,7 +58,20 @@ export async function syncOpticsValidation(opts?: { spuUdi?: string }): Promise<
 	}
 
 	for (const [udi, runs] of byUdi) {
-		const latest = runs.find(
+		const spu = (await Spu.findOne({ udi })
+			.select('_id udi finalizedAt validationResetAt validation.spectrophotometer.status validation.spectrophotometer.sessionId')
+			.lean()) as any;
+		if (!spu) {
+			result.skippedNoSpu.push(udi);
+			continue;
+		}
+		if (spu.finalizedAt) {
+			result.skippedFinalized.push(udi);
+			continue;
+		}
+
+		const cycleRuns = runs.filter((c) => inCurrentCycle(c.createdAt, spu.validationResetAt));
+		const latest = cycleRuns.find(
 			(c) => Array.isArray(c.rawData?.readings) && c.rawData.readings.length > 0
 		);
 		if (!latest) {
@@ -65,18 +81,6 @@ export async function syncOpticsValidation(opts?: { spuUdi?: string }): Promise<
 		const analysis = analyzeCartridge(latest.rawData.readings);
 		if (!analysis) {
 			result.skippedNoReadings.push(udi);
-			continue;
-		}
-
-		const spu = (await Spu.findOne({ udi })
-			.select('_id udi finalizedAt validation.spectrophotometer.status validation.spectrophotometer.sessionId')
-			.lean()) as any;
-		if (!spu) {
-			result.skippedNoSpu.push(udi);
-			continue;
-		}
-		if (spu.finalizedAt) {
-			result.skippedFinalized.push(udi);
 			continue;
 		}
 
@@ -103,7 +107,7 @@ export async function syncOpticsValidation(opts?: { spuUdi?: string }): Promise<
 							serialNumber: latest.serialNumber ?? null,
 							ratioByChannel: analysis.ratioByChannel,
 							crossWellCv: analysis.crossWellCv,
-							runCount: runs.length
+							runCount: cycleRuns.length
 						},
 						failureReasons: analysis.warning ? analysis.reasons : [],
 						criteriaUsed: {

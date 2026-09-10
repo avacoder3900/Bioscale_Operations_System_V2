@@ -9,6 +9,7 @@ import { byId } from '$lib/server/db/native-helpers';
 import { isLegalTransition, LEGAL_TRANSITIONS, normalizeSpuStatus } from '$lib/server/spu-status';
 import { syncServiceFlag } from '$lib/server/service-flag';
 import { appendSpuJournal } from '$lib/server/spu-journal';
+import { beginValidationCycle, validationCycleResetFields } from '$lib/server/spu-validation-cycle';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals, params }) => {
@@ -606,6 +607,8 @@ export const actions: Actions = {
 				$push: { statusTransitions: transition }
 			}
 		);
+		// Entering servicing starts a new validation cycle (0/3).
+		if (newStatus === 'servicing') await beginValidationCycle(params.spuId, transition.changedAt);
 
 		// Audit log
 		await AuditLog.create({
@@ -687,7 +690,8 @@ export const actions: Actions = {
 				serviceRecords: record,
 				statusTransitions: { _id: generateId(), from: oldStatus, to: 'servicing', changedBy: operator, changedAt: now, reason: `Service #${cycle}: ${issue}` }
 			},
-			$set: { status: 'servicing', updatedAt: now }
+			// Entering servicing starts a new validation cycle (0/3).
+			$set: { status: 'servicing', updatedAt: now, ...validationCycleResetFields(now) }
 		});
 
 		await AuditLog.create({
@@ -700,8 +704,9 @@ export const actions: Actions = {
 		return { success: true, serviceOpened: true };
 	},
 
-	// Return a serviced unit — Phase B: record the fix, require re-validation,
-	// and reset the validation counter (prior validation records are preserved).
+	// Return a serviced unit — Phase B: record the fix and hand it back to
+	// validating. The validation cycle was already reset when the unit ENTERED
+	// servicing, so tests run during the service visit keep their credit.
 	returnService: async ({ request, locals, params }) => {
 		requirePermission(locals.user, 'spu:write');
 		await connectDB();
@@ -727,7 +732,6 @@ export const actions: Actions = {
 					'serviceRecords.$.returnedBy': operator,
 					'serviceRecords.$.returnedAt': now,
 					status: 'validating',
-					validationResetAt: now,
 					updatedAt: now
 				},
 				$push: {
@@ -738,8 +742,8 @@ export const actions: Actions = {
 
 		await AuditLog.create({
 			_id: generateId(), tableName: 'spus', recordId: params.spuId, action: 'UPDATE',
-			oldData: { status: oldStatus }, newData: { serviceCycle: open.cycle, fix, validationReset: now },
-			reason: `Service #${open.cycle} returned: ${fix}. Validation counter reset.`,
+			oldData: { status: oldStatus }, newData: { serviceCycle: open.cycle, fix },
+			reason: `Service #${open.cycle} returned: ${fix}. Re-validation required.`,
 			changedBy: locals.user!.username ?? locals.user!._id
 		});
 		await syncServiceFlag(params.spuId);

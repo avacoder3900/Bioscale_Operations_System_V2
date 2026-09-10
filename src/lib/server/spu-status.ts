@@ -22,6 +22,8 @@ export type SpuStatus = (typeof SPU_STATUSES)[number];
  * event that qualifies validating→released (release itself is manual).
  * Servicing intake is allowed from any active status (the board scans whatever
  * shows up on the bench), and service return re-enters at validating by default.
+ * Entering servicing starts a new validation cycle (0/3) — see
+ * spu-validation-cycle.ts — so a returned unit must pass all three again.
  */
 export const LEGAL_TRANSITIONS: Record<SpuStatus, SpuStatus[]> = {
 	// draft → validating covers auto-enter-validation (a test recorded on a

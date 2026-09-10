@@ -6,6 +6,7 @@ import { connectDB, Spu, ServiceRecord, ServiceGroup, AuditLog, generateId } fro
 import { RETURNABLE_STATUSES } from '$lib/server/spu-status';
 import { syncServiceFlag } from '$lib/server/service-flag';
 import { appendSpuJournal } from '$lib/server/spu-journal';
+import { beginValidationCycle } from '$lib/server/spu-validation-cycle';
 import type { Actions, PageServerLoad, RequestEvent } from './$types';
 
 /**
@@ -539,13 +540,16 @@ async function createServiceJob(
 				}
 			}
 		);
+		// Entering servicing starts a new validation cycle: 0/3, every
+		// instrument must pass again before release.
+		await beginValidationCycle(spu._id);
 		await writeAudit(event, {
 			tableName: 'spus',
 			recordId: spu._id,
 			action: 'UPDATE',
 			oldData: { status: oldStatus },
-			newData: { status: 'servicing' },
-			reason: `Service job opened (${serviceType})`
+			newData: { status: 'servicing', validationCycle: 'reset' },
+			reason: `Service job opened (${serviceType}) — validation cycle reset`
 		});
 		await syncServiceFlag(spu._id);
 	}

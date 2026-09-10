@@ -1,7 +1,22 @@
 <script lang="ts">
-	import { TronCard, TronBadge } from '$lib/components/ui';
+	import { enhance } from '$app/forms';
+	import { TronCard, TronBadge, TronButton } from '$lib/components/ui';
 
-	let { data } = $props();
+	let { data, form } = $props();
+
+	/** Row whose Release is in flight. */
+	let releasing = $state<string | null>(null);
+	function releaseHandler({ formData }: { formData: FormData }) {
+		releasing = formData.get('spuId')?.toString() ?? null;
+		return async ({ update }: { update: () => Promise<void> }) => {
+			await update();
+			releasing = null;
+		};
+	}
+	function releaseBlockedReason(r: { status: string; passedCount: number; total: number }): string {
+		if (r.status !== 'validating') return `Only a validating unit can be released (this one is ${r.status})`;
+		return `${r.passedCount}/${r.total} validations passed this cycle — all three must pass first`;
+	}
 
 	let expanded = $state<string | null>(null);
 	let search = $state('');
@@ -33,8 +48,10 @@
 		return 'neutral';
 	}
 
-	// Overall sits between the cyan UDI link and the grey lifecycle badge, and
-	// reads "Complete" rather than "passed" — a finished unit, not a graded one.
+	// Overall = the three instrument statuses for the CURRENT validation cycle
+	// folded together: all passed → "Complete", any failed → "failed", else
+	// "pending"; the n/3 beside it is how many have passed. The cycle resets
+	// to 0/3 when a unit enters servicing (spu-validation-cycle.ts).
 	// Cyan (info) rather than green keeps the per-modality green as the signal
 	// that an individual test passed.
 	function overallVariant(status: string): 'info' | 'error' | 'neutral' {
@@ -84,8 +101,14 @@
 		<p class="tron-text-muted mb-4 text-xs">
 			Magnetometer shows the Z (gauss) range — expand a row for every point. Optics shows the
 			average F7/F3 ratio per channel. Thermocouple shows the mode of the temperature plot.
+			Only the current validation cycle counts — it resets to 0/3 when a unit enters servicing.
 			Most recently tested first. Retired units are hidden.
 		</p>
+		{#if form?.error}
+			<p class="mb-3 text-sm text-[var(--color-tron-red)]">{form.error}</p>
+		{:else if form?.released}
+			<p class="mb-3 text-sm text-[var(--color-tron-cyan)]">{form.udi} released.</p>
+		{/if}
 		<input
 			type="text"
 			class="tron-input mb-4 w-full"
@@ -103,7 +126,8 @@
 						<th class="py-2 pr-4 text-xs uppercase text-[var(--color-tron-text-secondary)]">Magnetometer (gauss)</th>
 						<th class="py-2 pr-4 text-xs uppercase text-[var(--color-tron-text-secondary)]">Optics ratio A / B / C</th>
 						<th class="py-2 pr-4 text-xs uppercase text-[var(--color-tron-text-secondary)]">Thermo mode</th>
-						<th class="py-2 text-xs uppercase text-[var(--color-tron-text-secondary)]">Last test ▾</th>
+						<th class="py-2 pr-4 text-xs uppercase text-[var(--color-tron-text-secondary)]">Last test ▾</th>
+						<th class="py-2 text-xs uppercase text-[var(--color-tron-text-secondary)]">Release</th>
 					</tr>
 				</thead>
 				<tbody>
@@ -112,8 +136,9 @@
 							<td class="py-2.5 pr-4 whitespace-nowrap">
 								<a href="/spu/{r.id}" class="font-mono font-bold text-[var(--color-tron-cyan)] hover:underline">{r.udi}</a>
 							</td>
-							<td class="py-2.5 pr-4">
+							<td class="py-2.5 pr-4 whitespace-nowrap">
 								<TronBadge variant={overallVariant(r.overall)}>{overallLabel(r.overall)}</TronBadge>
+								<span class="tron-text-muted ml-2 font-mono text-xs" title="Validations passed this cycle">{r.passedCount}/{r.total}</span>
 							</td>
 							<td class="py-2.5 pr-4">
 								<TronBadge variant="neutral">{r.status}</TronBadge>
@@ -170,13 +195,27 @@
 									<span class="tron-text-muted ml-2">—</span>
 								{/if}
 							</td>
-							<td class="py-2.5 text-xs whitespace-nowrap {r.lastTestAt ? '' : 'tron-text-muted'}">
+							<td class="py-2.5 pr-4 text-xs whitespace-nowrap {r.lastTestAt ? '' : 'tron-text-muted'}">
 								{fmtLastTest(r.lastTestAt)}
+							</td>
+							<td class="py-2.5 whitespace-nowrap">
+								{#if r.status === 'released'}
+									<span class="tron-text-muted text-xs">released</span>
+								{:else}
+									<form method="POST" action="?/release" use:enhance={releaseHandler} class="inline">
+										<input type="hidden" name="spuId" value={r.id} />
+										<span title={r.canRelease ? 'Move this unit to released' : releaseBlockedReason(r)}>
+											<TronButton type="submit" size="sm" variant="primary" disabled={!r.canRelease || releasing === r.id}>
+												{releasing === r.id ? 'Releasing…' : 'Release'}
+											</TronButton>
+										</span>
+									</form>
+								{/if}
 							</td>
 						</tr>
 						{#if expanded === r.id && r.mag.wells}
 							<tr class="border-b border-[var(--color-tron-border)]">
-								<td colspan="7" class="bg-[var(--color-tron-bg-secondary)]/40 px-4 py-3">
+								<td colspan="8" class="bg-[var(--color-tron-bg-secondary)]/40 px-4 py-3">
 									<span class="tron-text-muted mb-2 block text-xs uppercase">Gauss (Z) at all points — {r.udi}</span>
 									<table class="text-xs">
 										<thead>
@@ -205,7 +244,7 @@
 							</tr>
 						{/if}
 					{:else}
-						<tr><td colspan="7" class="tron-text-muted py-8 text-center">No units{search.trim() ? ` match “${search}”` : ''}.</td></tr>
+						<tr><td colspan="8" class="tron-text-muted py-8 text-center">No units{search.trim() ? ` match “${search}”` : ''}.</td></tr>
 					{/each}
 				</tbody>
 			</table>

@@ -1,5 +1,6 @@
 import { requirePermission } from '$lib/server/permissions';
 import { connectDB, Spu } from '$lib/server/db';
+import { cycleSummary } from '$lib/server/spu-validation-cycle';
 import type { PageServerLoad } from './$types';
 
 // SPU inventory: every unit, for search + list access. Moved here from /spu/mfg (SPU-INV-02).
@@ -14,20 +15,11 @@ export const load: PageServerLoad = async ({ locals }) => {
 		.sort({ createdAt: -1 })
 		.lean();
 
-	const VALIDATION_KEYS = ['magnetometer', 'spectrophotometer', 'thermocouple'];
-
 	return {
 		spus: spus.map((s: any) => {
-			const v = s.validation ?? {};
-			// Validations completed before a service return don't count toward the current cycle.
-			const reset = s.validationResetAt ? new Date(s.validationResetAt).getTime() : null;
-			const validationPassed = VALIDATION_KEYS.filter((k) => {
-				const r = v[k];
-				const passed = r?.status === 'passed' || r?.status === 'overridden';
-				if (!passed) return false;
-				if (reset === null) return true;
-				return r.completedAt && new Date(r.completedAt).getTime() >= reset;
-			}).length;
+			// Only the current validation cycle counts (reset when the unit
+			// last entered servicing) — see spu-validation-cycle.ts.
+			const cycle = cycleSummary(s);
 			return {
 				id: s._id,
 				udi: s.udi,
@@ -38,8 +30,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 				owner: s.owner ?? null,
 				location: s.location ?? null,
 				batchNumber: s.batch?.batchNumber ?? null,
-				validationPassed,
-				validationTotal: VALIDATION_KEYS.length,
+				validationPassed: cycle.passed,
+				validationTotal: cycle.total,
 				createdAt: s.createdAt
 			};
 		})
