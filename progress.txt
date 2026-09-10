@@ -12470,3 +12470,7 @@ Retrieve this exact code: git checkout master at commit fbe1f585
 What this deployment is for: thermocouple/magnetometer session pages no longer blank on open
 2026-09-10 — feat/spu-tweaks — optical assign adopts manufacturing-state cartridges
 =========================================================================
+Deployment: production — building from the GitHub push to master (Vercel dashboard, commit below)
+Source: branch master @ commit c8219a26 (feat/spu-tweaks merged with the duplicate-timestamp fix from master)
+Retrieve this exact code: git checkout master at commit c8219a26
+What this deployment is for: optical assign adopts manufacturing-state cartridges (adopted count on the page)
