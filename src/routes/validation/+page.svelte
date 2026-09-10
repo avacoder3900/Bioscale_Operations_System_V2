@@ -21,14 +21,55 @@
 	let expanded = $state<string | null>(null);
 	let search = $state('');
 
-	// Rows arrive sorted most-recently-tested first; search filters within that.
+	// Rows arrive sorted most-recently-tested first, and that stays the default.
+	// Clicking a sortable header switches to it, matching how the SPU Inventory
+	// table toggles direction and shows an arrow.
+	type SortKey = 'lastTest' | 'unit';
+	let sortKey = $state<SortKey>('lastTest');
+	let sortDir = $state<'asc' | 'desc'>('desc');
+
+	function toggleSort(key: SortKey) {
+		if (sortKey === key) {
+			sortDir = sortDir === 'asc' ? 'desc' : 'asc';
+		} else {
+			sortKey = key;
+			// Units read naturally A->Z; dates read newest-first.
+			sortDir = key === 'unit' ? 'asc' : 'desc';
+		}
+	}
+
+	// Rows stay loosely typed here, as they were before: the table reads many more
+	// fields off each row than the sort does, and naming a narrow type would hide
+	// them from the markup.
 	const filteredRows = $derived.by(() => {
 		const q = search.trim().toLowerCase();
-		if (!q) return data.rows;
-		return data.rows.filter(
-			(r: { udi: string; status: string }) =>
-				r.udi.toLowerCase().includes(q) || r.status.toLowerCase().includes(q)
-		);
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		const rows: any[] = q
+			? data.rows.filter(
+					(r: { udi: string; status: string }) =>
+						r.udi.toLowerCase().includes(q) || r.status.toLowerCase().includes(q)
+				)
+			: data.rows;
+
+		// The server already returns most-recently-tested first, so leave that
+		// order exactly as-is when it is what was asked for.
+		if (sortKey === 'lastTest' && sortDir === 'desc') return rows;
+
+		const dir = sortDir === 'asc' ? 1 : -1;
+		return [...rows].sort((a: any, b: any) => {
+			if (sortKey === 'unit') {
+				// numeric so BT-M01-0000-0099 sorts before -0100, not after.
+				return a.udi.localeCompare(b.udi, undefined, { numeric: true }) * dir;
+			}
+			const at = a.lastTestAt ? new Date(a.lastTestAt).getTime() : null;
+			const bt = b.lastTestAt ? new Date(b.lastTestAt).getTime() : null;
+			// Never-tested units sink to the bottom in both directions rather than
+			// pretending to a date they do not have.
+			if (at === null && bt === null) return 0;
+			if (at === null) return 1;
+			if (bt === null) return -1;
+			return (at - bt) * dir;
+		});
 	});
 
 	function fmtLastTest(d: string | null): string {
@@ -109,13 +150,41 @@
 			<table class="w-full text-sm">
 				<thead>
 					<tr class="border-b border-[var(--color-tron-border)] text-left">
-						<th class="py-2 pr-4 text-xs uppercase text-[var(--color-tron-text-secondary)]">Unit</th>
+						<th
+							class="py-0 pr-4"
+							aria-sort={sortKey === 'unit' ? (sortDir === 'asc' ? 'ascending' : 'descending') : undefined}
+						>
+							<button
+								type="button"
+								class="flex items-center gap-1 py-2 text-xs uppercase transition-colors hover:text-[var(--color-tron-cyan)] {sortKey === 'unit' ? 'text-[var(--color-tron-cyan)]' : 'text-[var(--color-tron-text-secondary)]'}"
+								onclick={() => toggleSort('unit')}
+							>
+								Unit
+								{#if sortKey === 'unit'}
+									<span aria-hidden="true">{sortDir === 'asc' ? '▲' : '▼'}</span>
+								{/if}
+							</button>
+						</th>
 						<th class="py-2 pr-4 text-xs uppercase text-[var(--color-tron-text-secondary)]">Validation</th>
 						<th class="py-2 pr-4 text-xs uppercase text-[var(--color-tron-text-secondary)]">Lifecycle</th>
 						<th class="py-2 pr-4 text-xs uppercase text-[var(--color-tron-text-secondary)]">Magnetometer (gauss)</th>
 						<th class="py-2 pr-4 text-xs uppercase text-[var(--color-tron-text-secondary)]">Optics ratio A / B / C</th>
 						<th class="py-2 pr-4 text-xs uppercase text-[var(--color-tron-text-secondary)]">Thermo mode</th>
-						<th class="py-2 pr-4 text-xs uppercase text-[var(--color-tron-text-secondary)]">Last test ▾</th>
+						<th
+							class="py-0 pr-4"
+							aria-sort={sortKey === 'lastTest' ? (sortDir === 'asc' ? 'ascending' : 'descending') : undefined}
+						>
+							<button
+								type="button"
+								class="flex items-center gap-1 py-2 text-xs uppercase transition-colors hover:text-[var(--color-tron-cyan)] {sortKey === 'lastTest' ? 'text-[var(--color-tron-cyan)]' : 'text-[var(--color-tron-text-secondary)]'}"
+								onclick={() => toggleSort('lastTest')}
+							>
+								Last test
+								{#if sortKey === 'lastTest'}
+									<span aria-hidden="true">{sortDir === 'asc' ? '▲' : '▼'}</span>
+								{/if}
+							</button>
+						</th>
 						<th class="py-2 text-xs uppercase text-[var(--color-tron-text-secondary)]">Release</th>
 					</tr>
 				</thead>
