@@ -41,7 +41,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 		archivedAt: null
 	})
 		.select('_id name description color cartridgeIds createdAt')
-		.sort({ createdAt: 1 })
+		// Newest first — the group you just assigned is the one you came to analyze.
+		.sort({ createdAt: -1 })
 		.lean();
 
 	const groups = groupDocs.map((g: any) => {

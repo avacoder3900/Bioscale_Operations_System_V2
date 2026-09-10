@@ -71,7 +71,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 		archivedAt: null
 	})
 		.select('_id name description color cartridgeIds')
-		.sort({ createdAt: 1 })
+		.sort({ createdAt: -1 })
 		.lean();
 
 	const groups = groupDocs.map((g: any) => ({
