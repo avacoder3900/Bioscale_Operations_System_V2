@@ -12345,3 +12345,8 @@ Files: src/routes/spu/[spuId]/+page.server.ts, +page.svelte, scripts/census-spu-
 scripts/set-spu-location-rnd.ts. npm run check: 10/435 — the +1 warning is the new
 `editLocation = $state(data.spu.location)` line, identical to the pre-existing editUdi/editBarcode
 warnings beside it.
+
+Deployment: production — building from the GitHub push to master (Vercel dashboard, commit below)
+Source: branch master @ commit 1a3ca558 (fast-forward of feat/spu-tweaks)
+Retrieve this exact code: git checkout master at commit 1a3ca558
+What this deployment is for: editable SPU Location on the detail page (R&D fleet membership for assay push)
