@@ -12559,8 +12559,6 @@ Retrieve this exact code: git checkout master at commit 72fbe0f2
 What this deployment is for: optical group detail — replicates stacked per device
 
 ================================================================================
-2026-09-10 — feat/spu-tweaks — optical group detail: replicate toggle, device exclusion, fitted Gaussian
-================================================================================
 Per Jacob on groups/<id>: (1) a switch above the Cartridges table hides the replicate rows and
 leaves the device-average header rows. (2) New "Device-level fit" card: each included device
 contributes three independent points — its replicate-mean A, B, C — a normal distribution is
@@ -12576,3 +12574,27 @@ cartridge-level (server report) — said so in the card caption.
 Palette note: dataviz validator on cyan/orange/purple vs #0a0a0f passes CVD (ΔE 26), normal-vision
 and contrast checks; only the lightness band fails, by design of the neon Tron theme — shape
 encoding added as the second cue. File: groups/[groupId]/+page.svelte. npm run check: 10/435.
+=======
+2026-09-10 — feat/fleet-matrix-sort-by-unit — fleet matrix sorts by unit
+================================================================================
+The fleet matrix could only be read in the order the server returns it — most-recently-tested first
+— with no way to find a unit by number. Unit is now a sortable column behaving like the SPU
+Inventory table: click to sort, click again to reverse, active column turns cyan with an arrow. Last
+test is clickable too, otherwise there is no way back to the default order without reloading.
+
+The default is untouched: the page still opens most-recently-tested first with no arrow shown until
+a header is clicked, and that path returns the server's rows as-is rather than re-sorting them
+client-side. UDIs compare with { numeric: true } so BT-M01-0000-0099 sorts before -0100 (current
+UDIs are zero-padded, so this only matters if the padding ever changes), and units with no test sink
+to the bottom in both date directions rather than being read as the oldest — the same rule the
+magnetometer and thermocouple run logs use for readings with no recoverable timestamp.
+
+File: src/routes/validation/+page.svelte. npm run check: 10/435 — baseline. Preview build was
+confirmed green before merging, since a merge to master deploys production directly.
+
+Deployment: production — building from the GitHub push to master (Vercel dashboard, commit below)
+Source: branch master @ commit 4f219b7f (squash merge of PR #51)
+Retrieve this exact code: git checkout master at commit 4f219b7f
+What this deployment is for: fleet matrix sortable by unit number, date sort still the default
+2026-09-10 — feat/spu-tweaks — optical group detail: replicate toggle, device exclusion, fitted Gaussian
+=========================================================================
