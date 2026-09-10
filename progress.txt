@@ -12557,3 +12557,26 @@ Deployment: production — building from the GitHub push to master (Vercel dashb
 Source: branch master @ commit 72fbe0f2 (feat/spu-tweaks merged with fleet-matrix sort #51 from master)
 Retrieve this exact code: git checkout master at commit 72fbe0f2
 What this deployment is for: optical group detail — replicates stacked per device
+
+================================================================================
+2026-09-10 — feat/fleet-matrix-sort-by-unit — fleet matrix sorts by unit
+================================================================================
+The fleet matrix could only be read in the order the server returns it — most-recently-tested first
+— with no way to find a unit by number. Unit is now a sortable column behaving like the SPU
+Inventory table: click to sort, click again to reverse, active column turns cyan with an arrow. Last
+test is clickable too, otherwise there is no way back to the default order without reloading.
+
+The default is untouched: the page still opens most-recently-tested first with no arrow shown until
+a header is clicked, and that path returns the server's rows as-is rather than re-sorting them
+client-side. UDIs compare with { numeric: true } so BT-M01-0000-0099 sorts before -0100 (current
+UDIs are zero-padded, so this only matters if the padding ever changes), and units with no test sink
+to the bottom in both date directions rather than being read as the oldest — the same rule the
+magnetometer and thermocouple run logs use for readings with no recoverable timestamp.
+
+File: src/routes/validation/+page.svelte. npm run check: 10/435 — baseline. Preview build was
+confirmed green before merging, since a merge to master deploys production directly.
+
+Deployment: production — building from the GitHub push to master (Vercel dashboard, commit below)
+Source: branch master @ commit 4f219b7f (squash merge of PR #51)
+Retrieve this exact code: git checkout master at commit 4f219b7f
+What this deployment is for: fleet matrix sortable by unit number, date sort still the default
