@@ -12524,3 +12524,8 @@ FIRMWARE: the v92 optical-cart reject was fixed by the firmware agent from my sp
 v94 (note added to SERVICE_MODE_OPTICAL_GAP_HANDOFF.md); the service-flag --clear interim was
 never needed and never run.
 npm run check: 10/435 — baseline.
+
+Deployment: production — building from the GitHub push to master (Vercel dashboard, commit below)
+Source: branch master @ commit 7dca7988 (feat/spu-tweaks)
+Retrieve this exact code: git checkout master at commit 7dca7988
+What this deployment is for: assign-form groups are analysis groups; compare cap 130
