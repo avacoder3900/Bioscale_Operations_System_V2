@@ -12613,3 +12613,8 @@ afterwards (exclusions persist per group in the browser). Two fixes from the eye
 labels rendered "Μ"/"Σ" because Tailwind `uppercase` capitalises Greek (labels now "MEAN μ" / "SD σ"
 / "OUTSIDE ±2σ" without the transform), and the x-domain gains 4% padding so edge points no longer
 sit on the axis ends. File: groups/[groupId]/+page.svelte. npm run check: 10/435 — baseline.
+
+Deployment: production — building from the GitHub push to master (Vercel dashboard, commit below)
+Source: branch master @ commit e5a58560 (feat/spu-tweaks)
+Retrieve this exact code: git checkout master at commit e5a58560
+What this deployment is for: gaussian fit label + axis padding polish
