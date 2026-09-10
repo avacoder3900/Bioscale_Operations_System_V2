@@ -220,7 +220,7 @@
 							</tr>
 						</thead>
 						<tbody>
-							{#each [...readings].sort((a, b) => a.timestamp - b.timestamp) as reading, i (reading.timestamp)}
+							{#each [...readings].sort((a, b) => a.timestamp - b.timestamp) as reading, i (i)}
 								{@const inRange =
 									(minTemp === undefined || reading.temperature >= minTemp) &&
 									(maxTemp === undefined || reading.temperature <= maxTemp)}
