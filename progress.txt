@@ -12536,3 +12536,8 @@ What this deployment is for: assign-form groups are analysis groups; compare cap
 Per Jacob: Optical Confirmation → Analysis Groups (and the group list on the cartridge log) now sort
 createdAt descending so the batch just assigned is at the top. Files: groups/+page.server.ts,
 optical-confirmation/+page.server.ts. Sort-only change; check baseline.
+
+Deployment: production — building from the GitHub push to master (Vercel dashboard, commit below)
+Source: branch master @ commit 3f5012c9 (feat/spu-tweaks)
+Retrieve this exact code: git checkout master at commit 3f5012c9
+What this deployment is for: analysis groups newest first
