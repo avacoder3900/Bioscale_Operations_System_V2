@@ -10900,3 +10900,24 @@ MUST DO BEFORE A PRODUCTION WAX RUN ON R04: Deck Cal Studio -> deck-001 -> R04 -
 Fill motion on a few holes and confirm the tip hovers ~1mm above the rim (dispense_depth -1.0).
 The run-start freshness gate pushes this geometry to R04 automatically on the next wax run.
 Rollback: restore the backup json, or Undo in the Studio.
+================================================================================
+2026-09-14 — fix/studio-mount-default-right — Deck Cal Studio: default mount RIGHT (p20), tip type picks the mount
+================================================================================
+Operator noticed the deployed Studio labelled the p20 as being on the LEFT mount. Verified the
+real state first: live /pipettes on all three robots (IPs drifted to 172.16.202.x — B14 .117,
+B07 .123, R04 .124) shows p300 on LEFT everywhere, p20 on RIGHT on B07 + R04 (B14 carries a
+p1000 on the right). Every stored protocol analysis on every robot and both repo .py files agree:
+wax = p20_single_gen2 right, reagent = p300_single_gen2 left. So the robots/protocols were never
+wrong — the Studio's `desiredMount` simply defaulted to 'left' independently of the tip type, so
+"Tip type on left" + "p20 · wax" read as p20-on-left (and is exactly the 2026-08-28 B07 trap where
+a run opened on the left p300 could not pick up a p20 tip).
+Changes (src/routes/manufacturing/cart-mfg/deck-calibration/+page.svelte only):
+  - desiredMount defaults to 'right'.
+  - MOUNT_FOR_PROFILE {wax: right, reagent: left}; choosing a tip type while no run is open
+    re-selects that mount (and zAxis). Tip type stays an explicit operator choice — it still
+    starts null and probe Z / tiprack still derive from it, never from the mount.
+  - liveProfile derived from the connected pipetteName (p20 → wax, p300 → reagent). On connect,
+    and inline under the tip-type buttons, a mismatch (e.g. wax selected but a p300 answered on
+    the mount) is called out with the fix (reopen on the other mount or change tip type).
+  - Tip-type header shows the live pipette name once connected: "Tip type on right (p20_single_gen2)".
+npm run check: 11 errors / 433 warnings — identical to baseline, none in the edited file.

@@ -486,7 +486,23 @@
 	let stepSize = $state(1);
 	let zAxis = $state<'leftZ' | 'rightZ'>('leftZ');
 	// Which pipette to dial in with. Chosen before opening the run; locked while open.
-	let desiredMount = $state<'left' | 'right'>('left');
+	// Defaults to RIGHT: on this fleet the p20 (wax) rides the right mount and the
+	// p300 (reagent) the left (verified live on R04/B07 2026-09-14; the protocols
+	// load the same way). The tip-type buttons below re-pick the mount from this
+	// convention while no run is open, and the live pipette name is checked
+	// against the chosen tip type once the run connects.
+	let desiredMount = $state<'left' | 'right'>('right');
+	/** Fleet convention: which mount normally carries the pipette for a tip type. */
+	const MOUNT_FOR_PROFILE: Record<'wax' | 'reagent', 'left' | 'right'> = { wax: 'right', reagent: 'left' };
+	/** The tip type the LIVE pipette on the open run can actually pick up (p20 → wax, p300 → reagent). */
+	const liveProfile = $derived<'wax' | 'reagent' | null>(
+		!pipetteName ? null : /p20/i.test(pipetteName) ? 'wax' : /p300/i.test(pipetteName) ? 'reagent' : null
+	);
+	function chooseTipProfile(p: 'wax' | 'reagent') {
+		tipProfile = p;
+		// No run open yet: point the mount at where this pipette lives on the fleet.
+		if (!runId) { desiredMount = MOUNT_FOR_PROFILE[p]; zAxis = desiredMount === 'right' ? 'rightZ' : 'leftZ'; }
+	}
 	let liveX = $state<number | null>(null), liveY = $state<number | null>(null), liveZ = $state<number | null>(null);
 	let connecting = $state(false);
 	// Deck slot the labware sits in (for move-to-hole). Resolved/overridable; OT-2 slots 1-11.
@@ -556,6 +572,7 @@
 			loadedWells = null;
 			liveX = liveY = liveZ = null;
 			if (!pipetteId) errMsg = 'Maintenance run opened but no pipette loaded — jog/move will fail until a pipette is configured.';
+			else if (tipProfile && liveProfile && tipProfile !== liveProfile) errMsg = `Connected to a ${pipetteName} on the ${pipetteMount} mount, but the tip type is set to ${tipProfile === 'wax' ? 'p20 · wax' : 'p300 · reagent'}. Close the run and open it on the other mount, or change the tip type.`;
 			else msg = `Connected. pipette ${pipetteName} on ${pipetteMount}. If a tip is still on the pipette from an earlier session, remove it by hand before moving — a fresh session assumes a bare nozzle.`;
 		} catch (e) { errMsg = e instanceof Error ? e.message : String(e); } finally { connecting = false; }
 	}
@@ -1255,8 +1272,10 @@
 		<!-- Mount lives here (2026-08-28), not in the JOG panel: it decides which
 		     PIPETTE the maintenance run loads, so it is a before-you-open-the-run
 		     choice like labware/deck/robot. Down in JOG it read as a during-run
-		     control and was easy to miss — an operator opened a run on the default
-		     left mount (a p300 on B07) and then could not pick up a p20 tip. -->
+		     control and was easy to miss — an operator opened a run on the then-default
+		     left mount (a p300 on B07) and then could not pick up a p20 tip. The default
+		     is now RIGHT (where the p20 lives fleet-wide) and picking a tip type before
+		     opening the run re-selects the mount for that pipette. -->
 		<div class="text-xs" style="color: var(--color-tron-text-secondary)">Pipette mount
 			<div class="mt-1 flex overflow-hidden rounded border border-[var(--color-tron-border)] text-[11px]">
 				{#each [['left', 'Left'], ['right', 'Right']] as [m, lbl] (m)}
@@ -1462,20 +1481,22 @@
 						the pipettes are not fixed to mounts on this fleet.
 					-->
 					<div class="mb-2">
-						<div class="mb-1 text-[10px] uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Tip type on {desiredMount}</div>
+						<div class="mb-1 text-[10px] uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Tip type on {desiredMount}{#if runId && pipetteName} ({pipetteName}){/if}</div>
 						<div class="grid grid-cols-2 gap-2">
 							{#each [['wax', 'p20 · wax'], ['reagent', 'p300 · reagent']] as [p, lbl] (p)}
 								<button
 									type="button"
-									onclick={() => (tipProfile = p as 'wax' | 'reagent')}
+									onclick={() => chooseTipProfile(p as 'wax' | 'reagent')}
 									disabled={busy || hasTip}
-									title={hasTip ? 'Drop the tip before changing tip type' : 'Sets the tiprack and the calibration probe Z'}
+									title={hasTip ? 'Drop the tip before changing tip type' : runId ? 'Sets the tiprack and the calibration probe Z' : `Sets the tiprack and the calibration probe Z, and opens the run on the ${MOUNT_FOR_PROFILE[p as 'wax' | 'reagent']} mount`}
 									class="rounded border px-2 py-1.5 text-[11px] transition-colors disabled:opacity-40 {tipProfile === p ? 'border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/20 text-[var(--color-tron-cyan)]' : 'border-[var(--color-tron-border)] hover:border-[var(--color-tron-cyan)]/60'}"
 									style={tipProfile === p ? '' : 'color: var(--color-tron-text-secondary)'}>{lbl}</button>
 							{/each}
 						</div>
 						{#if !tipProfile}
 							<p class="mt-1 text-[10px] text-amber-300/90">Pick the tip type — probe depth differs by 6.309 mm and is never guessed.</p>
+						{:else if runId && liveProfile && liveProfile !== tipProfile}
+							<p class="mt-1 text-[10px] text-amber-300/90">The {pipetteMount} mount holds a {pipetteName}, which cannot use {tipProfile === 'wax' ? 'p20' : 'p300'} tips. Close the run and reopen it on the {pipetteMount === 'right' ? 'left' : 'right'} mount, or change the tip type.</p>
 						{/if}
 					</div>
 					<!--
