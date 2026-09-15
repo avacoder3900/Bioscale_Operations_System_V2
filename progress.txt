@@ -12630,3 +12630,18 @@ bypassing the 3/3 gate — each gets statusTransitions validating→released, an
 note ("Released — manually approved by Jacob on 2026-09-10, prior to the optical release software
 being fully figured out. Validation at release: n/3 (mag/thermo/optics)."), and set_service 0 on
 the device (yellow LED off; particleLink.serviceFlag* recorded). Fleet now: 22 released, 10 validating.
+
+================================================================================
+2026-09-15 — feat/spu-tweaks — Timing Belt Investigation: bench-sheet findings recorded
+================================================================================
+Jacob's handwritten notes for 31 units recorded into the "Timing Belt Investigation on all SPUs"
+service group via scripts/timing-belt-findings.ts (dry-run/--apply, applied as user jacob). The
+group had 23 open jobs, only 11 of them on the sheet; the 20 missing units were ADDED as
+ServiceRecords written directly (not via the board's enroll path, which would have flipped the
+released units to servicing and reset their validation cycles) — previousStatus = current status, so
+SPU status is untouched and a later close is a no-op on lifecycle. One finding per unit, note
+verbatim with the sheet's code prefix; outcome ok only for "no notes", issue otherwise (no severity
+grading — Jacob re-grades on the board). One group note explains the provenance. The 12 group
+members not on the sheet (0219 0220 0224 0225 0227 0228 0231 0232 0238 0240 0241 0242 — mostly
+retired units) untouched. Jobs left OPEN; group not closed. Flagged to Jacob: 0236 "length 248"
+recorded as written (probably 348); 0230/0217 codes unknown; 0229 code 51f34.
