@@ -12706,3 +12706,8 @@ F7/F3). Page copy on [id], groups/[groupId], groups/compare says "every scan pos
 window was asked for. optics-validation-sync idempotency now also compares ratioByChannel so the
 stored SPU results refresh when the analysis changes. Tests: optical-analysis.test.ts 35/35 (new
 (a0) default-all test; (a)/(r) pass windowK:10 explicitly). npm run check: 10/435 — baseline.
+
+Deployment: production — building from the GitHub push to master (Vercel dashboard, commit below)
+Source: branch master @ commit 0777295a (feat/spu-tweaks)
+Retrieve this exact code: git checkout master at commit 0777295a
+What this deployment is for: optical analysis over all 42 positions
