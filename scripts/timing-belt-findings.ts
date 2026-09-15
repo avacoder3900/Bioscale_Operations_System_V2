@@ -3,11 +3,17 @@
  *
  * Group: "Timing Belt Investigation on all SPUs" (service_groups, opened 2026-09-02).
  * For every unit on Jacob's sheet:
- *   - if the unit has no ServiceRecord in the group, one is CREATED directly —
- *     NOT via the board's enroll path, which would flip a released unit to
- *     `servicing` and reset its validation cycle. The record's previousStatus
- *     is the unit's CURRENT status, so a later close returns it unchanged.
- *     SPU status is never touched here.
+ *   - if the unit has no ServiceRecord in the group:
+ *       · an OPEN job with no group and no reason of its own (a bare scan-in)
+ *         JOINS the group (groupId set) — same as the board's enroll path;
+ *       · an OPEN job with its own reason (a different problem) is left in
+ *         place and the belt finding is recorded on it with a
+ *         "[Timing Belt Investigation]" prefix, so nothing is mislabelled;
+ *       · otherwise a record is CREATED directly — NOT via the board's enroll
+ *         path, which would flip a released unit to `servicing` and reset its
+ *         validation cycle (one open job per unit is enforced by a unique
+ *         index). previousStatus = the unit's CURRENT status, so a later close
+ *         returns it unchanged. SPU status is never touched here.
  *   - one finding is pushed with the note verbatim (prefixed by the code Jacob
  *     wrote beside the unit). Outcome: 'ok' when the sheet says "no notes",
  *     'issue' otherwise — no attempt to grade severity; Jacob re-grades on the board.
@@ -57,7 +63,8 @@ const SHEET: Array<[string, string, string]> = [
 	['0229', '51f34', 'no notes'],
 	['0252', '71AFC', 'swapped heater block, new magnets, timing belt length 351, lowered pulley, GNSS antenna overlapping with cellular, wifi antenna on the wrong side, new proximal, temp reading incorrect and light remains red in heat up stage, going really slow when optical reads are taken'],
 	['0239', '71A58', '20 tooth pulley, timing belt 349, grindy rail, wrong heater block, wifi antenna in wrong place, no beeper on a failed test'],
-	['0255', '71634', 'no screw attached to the heat block from one end, pulley was not leveled properly, timing belt length is 350, one screw missing from top of the main board']
+	['0255', '71634', 'no screw attached to the heat block from one end, pulley was not leveled properly, timing belt length is 350, one screw missing from top of the main board'],
+	['0250', '71a94', 'antenna overlap, thermistor pinched under stage screw, trash stage board, tight stage needs oil, heat shield very ugly, missing foot, 3d printed proximal, specs very misaligned, soldered limit switch, pulley lowered, missing bottom heat shield']
 ];
 
 async function main() {
@@ -85,10 +92,42 @@ async function main() {
 		if (spu.finalizedAt) { console.log(`${unit}  finalized — skipped`); continue; }
 
 		let rec: any = await records.findOne({ groupId: group._id, spuId: spu._id });
+		let how = rec ? (rec.status === 'open' ? 'in group' : `in group (${rec.status})`) : 'ADD to group';
+		let prefix = `[${code}]`;
+		let joinExisting: any = null;
+		if (!rec) {
+			// One open job per unit (unique index): reuse an existing open job.
+			const openElsewhere: any = await records.findOne({ spuId: spu._id, status: 'open' });
+			if (openElsewhere && openElsewhere.groupId && openElsewhere.groupId !== group._id) {
+				console.log(`${unit}  ${String(spu.status).padEnd(10)}  open job in ANOTHER group — skipped`);
+				continue;
+			}
+			if (openElsewhere && !openElsewhere.groupId) {
+				if (!(openElsewhere.reason ?? '').trim()) {
+					joinExisting = openElsewhere; // bare scan-in → joins the group
+					how = 'JOIN existing open job to group';
+				} else {
+					rec = openElsewhere; // different problem → finding recorded there, group untouched
+					prefix = `[Timing Belt Investigation] [${code}]`;
+					how = `finding on its own open job ("${openElsewhere.reason}")`;
+				}
+			}
+		}
 		const outcome = /^no notes$/i.test(note.trim()) ? 'ok' : 'issue';
-		const already = rec?.findings?.some((f: any) => typeof f.text === 'string' && f.text.startsWith(`[${code}]`));
-		console.log(`${unit}  ${String(spu.status).padEnd(10)}  ${rec ? (rec.status === 'open' ? 'in group' : `in group (${rec.status})`) : 'ADD to group'}  → ${already ? 'finding already recorded' : `finding (${outcome})`}`);
+		const target = rec ?? joinExisting;
+		const already = target?.findings?.some((f: any) => typeof f.text === 'string' && f.text.includes(`[${code}]`));
+		console.log(`${unit}  ${String(spu.status).padEnd(10)}  ${how}  → ${already ? 'finding already recorded' : `finding (${outcome})`}`);
 		if (!APPLY || already) continue;
+
+		if (joinExisting) {
+			await records.updateOne({ _id: joinExisting._id }, { $set: { groupId: group._id, updatedAt: now } });
+			await audit.insertOne({
+				_id: nanoid(), tableName: 'service_records', recordId: joinExisting._id, action: 'UPDATE',
+				newData: { groupId: group._id }, changedBy: who.username, changedAt: now,
+				reason: 'Timing Belt Investigation — existing open job joined to the group (bench sheet 2026-09-15)'
+			});
+			rec = joinExisting;
+		}
 
 		if (!rec) {
 			rec = {
@@ -126,7 +165,7 @@ async function main() {
 			created += 1;
 		}
 
-		const text = `[${code}] ${note}`;
+		const text = `${prefix} ${note}`;
 		await records.updateOne(
 			{ _id: rec._id },
 			{ $push: { findings: { _id: nanoid(), text, outcome, addedAt: now, addedBy: who } }, $set: { updatedAt: now } }
