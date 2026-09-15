@@ -12711,3 +12711,17 @@ Deployment: production — building from the GitHub push to master (Vercel dashb
 Source: branch master @ commit 0777295a (feat/spu-tweaks)
 Retrieve this exact code: git checkout master at commit 0777295a
 What this deployment is for: optical analysis over all 42 positions
+
+================================================================================
+2026-09-15 — feat/spu-tweaks — optics → SPU sync is manual only (nightly step removed)
+================================================================================
+After the all-positions change the per-reading ±2σ flag fired on 64/64 carts (the first 1–3
+positions of every sweep read low as the stage enters the well), so the sync marked the whole
+fleet optics-failed. Stored results were restored to the prior windowK=10 values (23 passed /
+4 failed — identical to the snapshot). Jacob: we don't yet know what a passing optical test is; the
+new data is for finding out; optics may say fail for now; and NOTHING should judge it on a timer.
+- api/cron/daily-digest: optics sync step removed.
+- /validation: "Sync optics to units" button (?/syncOptics, spu:write) runs syncOpticsValidation on
+  demand, audit row, banner with updated/passed/failed/unchanged/no-run counts. The agent API and
+  MCP sync tools still exist. Pass/fail rule left as deployed (channel CV / cross-well CV / per-
+  reading σ) pending the definition. npm run check: 10/435 — baseline.

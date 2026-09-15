@@ -32,16 +32,10 @@ async function runDigest(request: Request) {
 		console.error('[daily-digest] standing-target check failed:', e);
 	}
 
-	// Piggyback: mirror the latest optics run outcome into each SPU's
-	// validation.spectrophotometer block (idempotent; finalized SPUs skipped).
-	// Failure here must never block the digest itself.
-	try {
-		const { syncOpticsValidation } = await import('$lib/server/services/optics-validation-sync');
-		const r = await syncOpticsValidation();
-		if (r.updated.length) console.log('[daily-digest] optics sync updated:', r.updated);
-	} catch (e) {
-		console.error('[daily-digest] optics validation sync failed:', e);
-	}
+	// The optics → SPU write-back is NOT run here any more (Jacob, 2026-09-15):
+	// what a passing optical test means is still being worked out, so nothing
+	// judges optics on a timer. It is a manual button on /validation
+	// (?/syncOptics) and the sync-optics agent/MCP tools.
 
 	const settings = await NotificationSettings.findById('default').lean() as any;
 	if (settings?.enabled?.dailyDigest === false) {

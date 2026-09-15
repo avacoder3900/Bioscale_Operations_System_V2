@@ -5,6 +5,7 @@ import { cycleSummary, inCurrentCycle } from '$lib/server/spu-validation-cycle';
 import { isLegalTransition } from '$lib/server/spu-status';
 import { syncServiceFlag } from '$lib/server/service-flag';
 import { appendSpuJournal } from '$lib/server/spu-journal';
+import { syncOpticsValidation } from '$lib/server/services/optics-validation-sync';
 import type { Actions, PageServerLoad } from './$types';
 
 /**
@@ -126,6 +127,35 @@ export const load: PageServerLoad = async ({ locals }) => {
 };
 
 export const actions: Actions = {
+	/**
+	 * Manual optics → SPU write-back. Deliberately not on a timer (2026-09-15):
+	 * the pass/fail rule for an optical scan is still being defined, so a human
+	 * decides when the latest runs get judged onto the units.
+	 */
+	syncOptics: async ({ locals }) => {
+		requirePermission(locals.user, 'spu:write');
+		await connectDB();
+		const r = await syncOpticsValidation();
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'spus',
+			recordId: 'fleet',
+			action: 'UPDATE',
+			newData: { opticsSync: { updated: r.updated, unchanged: r.unchanged.length, noReadings: r.skippedNoReadings.length } },
+			reason: 'Manual optics → SPU sync from the validation hub',
+			changedBy: locals.user!.username ?? locals.user!._id,
+			changedAt: new Date()
+		});
+		return {
+			opticsSynced: true,
+			updated: r.updated.length,
+			unchanged: r.unchanged.length,
+			noReadings: r.skippedNoReadings.length,
+			passed: r.updated.filter((u) => u.status === 'passed').length,
+			failed: r.updated.filter((u) => u.status === 'failed').length
+		};
+	},
+
 	/**
 	 * Release a unit from the hub. Passing all three validations in the current
 	 * cycle is what qualifies a validating unit; pressing Release is the manual

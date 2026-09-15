@@ -13,6 +13,17 @@
 			releasing = null;
 		};
 	}
+	let syncing = $state(false);
+	function syncHandler() {
+		syncing = true;
+		return async ({ update }: { update: () => Promise<void> }) => {
+			try {
+				await update();
+			} finally {
+				syncing = false;
+			}
+		};
+	}
 	function releaseBlockedReason(r: { status: string; passedCount: number; total: number }): string {
 		if (r.status !== 'validating') return `Only a validating unit can be released (this one is ${r.status})`;
 		return `${r.passedCount}/${r.total} validations passed this cycle — all three must pass first`;
@@ -105,12 +116,22 @@
 </script>
 
 <div class="space-y-6">
-	<div>
-		<h1 class="text-xl font-bold text-[var(--color-tron-cyan)]">SPU Validation</h1>
-		<p class="tron-text-muted text-sm">
-			Fleet-wide validation status. Each instrument has its own page — this is where the whole
-			picture lives.
-		</p>
+	<div class="flex flex-wrap items-start justify-between gap-3">
+		<div>
+			<h1 class="text-xl font-bold text-[var(--color-tron-cyan)]">SPU Validation</h1>
+			<p class="tron-text-muted text-sm">
+				Fleet-wide validation status. Each instrument has its own page — this is where the whole
+				picture lives.
+			</p>
+		</div>
+		<!-- Optics is judged onto units only when a human says so — no timer. -->
+		<form method="POST" action="?/syncOptics" use:enhance={syncHandler}>
+			<span title="Write each unit's latest in-cycle optical run onto its validation record (pass/fail + ratios). Runs only when you press it.">
+				<TronButton type="submit" variant="ghost" disabled={syncing}>
+					{syncing ? 'Syncing optics…' : 'Sync optics to units'}
+				</TronButton>
+			</span>
+		</form>
 	</div>
 
 	<!-- Launchers -->
@@ -138,6 +159,10 @@
 			<p class="mb-3 text-sm text-[var(--color-tron-red)]">{form.error}</p>
 		{:else if form?.released}
 			<p class="mb-3 text-sm text-[var(--color-tron-cyan)]">{form.udi} released.</p>
+		{:else if form?.opticsSynced}
+			<p class="mb-3 text-sm text-[var(--color-tron-cyan)]">
+				Optics synced: {form.updated} unit{form.updated === 1 ? '' : 's'} updated ({form.passed} passed, {form.failed} failed), {form.unchanged} unchanged, {form.noReadings} with no run this cycle.
+			</p>
 		{/if}
 		<input
 			type="text"
