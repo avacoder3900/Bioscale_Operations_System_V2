@@ -12681,3 +12681,8 @@ toast ("Job closed — the write-up is in the unit's journal.", "Finding recorde
 … or the error text) — previously errors only rendered inside the scan card at the top, invisible
 from a panel. Verified locally: toast "Note added." with the panel still open and no button stuck.
 Test notes removed from 0212's job (audit rows). npm run check: 10/435 — baseline.
+
+Deployment: production — building from the GitHub push to master (Vercel dashboard, commit below)
+Source: branch master @ commit 7df6104b (feat/spu-tweaks)
+Retrieve this exact code: git checkout master at commit 7df6104b
+What this deployment is for: servicing board — stuck-submitting fix + action toasts
