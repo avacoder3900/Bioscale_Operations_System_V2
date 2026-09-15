@@ -12725,3 +12725,8 @@ new data is for finding out; optics may say fail for now; and NOTHING should jud
   demand, audit row, banner with updated/passed/failed/unchanged/no-run counts. The agent API and
   MCP sync tools still exist. Pass/fail rule left as deployed (channel CV / cross-well CV / per-
   reading σ) pending the definition. npm run check: 10/435 — baseline.
+
+Deployment: production — building from the GitHub push to master (Vercel dashboard, commit below)
+Source: branch master @ commit a0836c9b (feat/spu-tweaks)
+Retrieve this exact code: git checkout master at commit a0836c9b
+What this deployment is for: manual optics sync button; nightly optics judging removed
