@@ -41,7 +41,8 @@
 
 	const analysis = $derived(data.analysis);
 	const hasReadings = $derived(!!analysis && analysis.channels.length > 0);
-	const windowK = $derived(analysis?.windowK ?? 10);
+	const windowK = $derived(analysis?.windowK ?? 0);
+	const windowLabel = $derived(windowK > 0 ? `the last ${windowK} readings (endpoint window)` : 'every reading per channel (all scan positions)');
 
 	let rawOpen = $state(false);
 
@@ -177,7 +178,7 @@
 				<span class="text-[var(--color-tron-text-primary)]">
 					{analysis!.crossWellCv == null ? '—' : `${analysis!.crossWellCv.toFixed(1)}%`}
 				</span>
-				· stats over the last {windowK} readings (endpoint window)
+				· stats over {windowLabel}
 			</p>
 		{/if}
 	</div>
@@ -203,8 +204,8 @@
 
 	<!-- Footer note -->
 	<p class="text-xs text-[var(--color-tron-text-secondary)]">
-		F3 = 480 nm reference · F7 = 630 nm signal · stats over the last {windowK} readings (endpoint
-		window) · in-range band = mean ± 1σ · flags: CV>15%, point z>2σ, cross-channel CV>15% ·
+		F3 = 480 nm reference · F7 = 630 nm signal · stats over {windowLabel} · in-range band = mean ±
+		1σ · flags: CV>15%, point z>2σ, cross-channel CV>15% ·
 		Derived, non-destructive — the record is never modified.
 	</p>
 </div>

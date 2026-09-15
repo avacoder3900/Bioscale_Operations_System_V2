@@ -36,20 +36,35 @@ function flatCartridge(
 }
 
 describe('analyzeCartridge', () => {
-	it('(a) computes ratio/mode/sd/band + f3/f7 BandStats and honors the endpoint window', () => {
+	it('(a0) uses EVERY reading per channel by default (a scan is spatial, not kinetic)', () => {
+		// 12 readings on A: with no window every one of them counts, so the two
+		// ratio-10 readings pull the mean well above 2.
+		const aJunk = channelReadings('A', 10, [100, 100], 0);
+		const aRest = channelReadings('A', 10, Array(10).fill(20), 2);
+		const b = channelReadings('B', 10, Array(10).fill(20), 0);
+		const c = channelReadings('C', 10, Array(10).fill(20), 0);
+		const r = analyzeCartridge([...aJunk, ...aRest, ...b, ...c])!;
+		expect(r.windowK).toBe(0);
+		const chanA = r.channels.find((x) => x.channel === 'A')!;
+		expect(chanA.n).toBe(12);
+		expect(chanA.ratio).toBeCloseTo((10 * 2 + 2 * 10) / 12, 10);
+		expect(chanA.ratioSeries).toHaveLength(12);
+	});
+
+	it('(a) computes ratio/mode/sd/band + f3/f7 BandStats and honors an explicit endpoint window', () => {
 		// Channel A: 12 readings. First 2 are junk (ratio 10) and MUST be excluded by the
-		// last-windowK(=10) slice. Last 10 have f3=10 and f7 = six 20s, two 22s, two 18s.
+		// explicit last-windowK(=10) slice. Last 10 have f3=10 and f7 = six 20s, two 22s, two 18s.
 		const aJunk = channelReadings('A', 10, [100, 100], 0); // ratio 10 each
 		const aWindow = channelReadings('A', 10, [20, 20, 20, 20, 20, 20, 22, 22, 18, 18], 2);
 		// Channels B and C: 10 clean readings, ratio exactly 2.0.
 		const b = channelReadings('B', 10, Array(10).fill(20), 0);
 		const c = channelReadings('C', 10, Array(10).fill(20), 0);
 
-		const result = analyzeCartridge([...aJunk, ...aWindow, ...b, ...c]);
+		const result = analyzeCartridge([...aJunk, ...aWindow, ...b, ...c], { windowK: 10 });
 		expect(result).not.toBeNull();
 		const r = result!;
 
-		expect(r.profileName).toBe('Single Scan Cortisol');
+		expect(r.profileName).toBe('Gen 5 Optical Scan (all positions)');
 		expect(r.windowK).toBe(10);
 		expect(typeof r.computedAt).toBe('string');
 
@@ -136,7 +151,7 @@ describe('analyzeCartridge', () => {
 		const b = channelReadings('B', 10, Array(10).fill(20), 0);
 		const c = channelReadings('C', 10, Array(10).fill(20), 0);
 
-		const r = analyzeCartridge([...aJunk, ...aWindow, ...b, ...c])!;
+		const r = analyzeCartridge([...aJunk, ...aWindow, ...b, ...c], { windowK: 10 })!;
 		const chanA = r.channels.find((x) => x.channel === 'A')!;
 
 		expect(chanA.ratioSeries).toHaveLength(10);
@@ -578,7 +593,7 @@ describe('reportGroup', () => {
 		expect(rep.groupId).toBe('H');
 		expect(rep.groupName).toBe('Hand');
 		expect(rep.n).toBe(5);
-		expect(rep.windowK).toBe(10);
+		expect(rep.windowK).toBe(0);
 		expect(rep.rows.map((r) => r.overallRatio)).toEqual([1, 2, 3, 4, 5]);
 		expect(rep.rows.every((r) => r.wellsUsed === 3)).toBe(true);
 

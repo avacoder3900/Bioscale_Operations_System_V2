@@ -59,7 +59,7 @@ export async function syncOpticsValidation(opts?: { spuUdi?: string }): Promise<
 
 	for (const [udi, runs] of byUdi) {
 		const spu = (await Spu.findOne({ udi })
-			.select('_id udi finalizedAt validationResetAt validation.spectrophotometer.status validation.spectrophotometer.sessionId')
+			.select('_id udi finalizedAt validationResetAt validation.spectrophotometer.status validation.spectrophotometer.sessionId validation.spectrophotometer.results.ratioByChannel')
 			.lean()) as any;
 		if (!spu) {
 			result.skippedNoSpu.push(udi);
@@ -86,7 +86,12 @@ export async function syncOpticsValidation(opts?: { spuUdi?: string }): Promise<
 
 		const status = analysis.warning ? 'failed' : 'passed';
 		const existing = spu.validation?.spectrophotometer;
-		if (existing?.status === status && existing?.sessionId === latest._id) {
+		const sameRatios =
+			JSON.stringify(existing?.results?.ratioByChannel ?? null) ===
+			JSON.stringify(analysis.ratioByChannel);
+		// Idempotent only when nothing the record carries would change — the
+		// analysis itself can change (e.g. the 2026-09-15 all-positions fix).
+		if (existing?.status === status && existing?.sessionId === latest._id && sameRatios) {
 			result.unchanged.push(udi);
 			continue;
 		}

@@ -12686,3 +12686,23 @@ Deployment: production — building from the GitHub push to master (Vercel dashb
 Source: branch master @ commit 7df6104b (feat/spu-tweaks)
 Retrieve this exact code: git checkout master at commit 7df6104b
 What this deployment is for: servicing board — stuck-submitting fix + action toasts
+
+================================================================================
+2026-09-15 — feat/spu-tweaks — optical analysis uses ALL 42 scan positions (was the last 10)
+================================================================================
+Jacob challenged the numbers on the 9_10 group. Verified in code: analyzeCartridge sorted each
+channel's readings by number and kept only the last windowK=10 — an "endpoint window" inherited
+when the BIMS module was ported (2026-07-27) from research-v2's interpretation.ts (kinetic
+readout), NOT from the analysis profiles Jacob uses ("Standard - F7 Only", "Single Scan Cortisol"
+in analysis.ts, which use every reading in the scan group). An optical scan is a spatial sweep of
+42 positions × 3 sensors; positions 0–31 were being thrown away for every ratio, flag, group stat
+and the SPU optics pass/fail. In-memory recompute of 9_10 before changing anything: scans are
+nearly flat (|last10−first10| ≈ 4.1% of value), ratios move ~0.1–0.3 (mostly up), replicate pairs
+18 closer / 14 farther — the big replicate splits (0217 0218 0229 0239 0249 0250 0255) are real.
+Change (Jacob-approved): DEFAULT_OPTICAL_CONFIG.windowK 0 = every reading per channel (a positive
+windowK is still honoured as an explicit option; analyze page ?windowK= default 0, range 0–50);
+profileName → "Gen 5 Optical Scan (all positions)"; ratio math unchanged (mean of per-reading
+F7/F3). Page copy on [id], groups/[groupId], groups/compare says "every scan position" unless a
+window was asked for. optics-validation-sync idempotency now also compares ratioByChannel so the
+stored SPU results refresh when the analysis changes. Tests: optical-analysis.test.ts 35/35 (new
+(a0) default-all test; (a)/(r) pass windowK:10 explicitly). npm run check: 10/435 — baseline.

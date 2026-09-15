@@ -371,8 +371,7 @@
 		</div>
 		<p class="mt-3 text-xs text-[var(--color-tron-text-secondary)]">
 			Over each cartridge's overall F7/F3 — the mean of its available wells (A/B/C), missing wells
-			skipped rather than counted as zero. Endpoint window = the last {report.windowK} readings per
-			well.
+			skipped rather than counted as zero. {report.windowK > 0 ? `Endpoint window = the last ${report.windowK} readings per well.` : 'Every scan position per well is used.'}
 		</p>
 	</div>
 
@@ -776,7 +775,7 @@
 			on 3–4 points is noise, not a spread.
 		</p>
 		<p>
-			All values are raw F7/F3 with no calibration applied, computed over the last {report.windowK} readings
+			All values are raw F7/F3 with no calibration applied, computed over {report.windowK > 0 ? `the last ${report.windowK} readings` : 'every reading'}
 			of each well. Descriptive only — no statistical test is performed.
 		</p>
 	</div>

@@ -454,7 +454,7 @@
 
 			<p class="mt-3 text-xs text-[var(--color-tron-text-secondary)]">
 				n counts the cartridges that produced a usable value for that metric, which can be fewer
-				than the group's membership. Endpoint window: last {diff.windowK} readings per channel.
+				than the group's membership. {diff.windowK > 0 ? `Endpoint window: last ${diff.windowK} readings per channel.` : 'Every scan position per channel is used.'}
 				Δ CV is in <span class="font-semibold">percentage points</span> — CV is already a percentage,
 				so subtracting two of them cannot yield a percentage.
 			</p>

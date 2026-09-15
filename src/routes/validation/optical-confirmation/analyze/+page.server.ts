@@ -14,7 +14,7 @@ import type { PageServerLoad } from './$types';
 //                        "Analyze selected" button works unchanged
 //   &name=              display name for the ad-hoc set
 //   &k=                 outlier threshold in robust SDs (default 3.5)
-//   &windowK=           endpoint window size (default 10)
+//   &windowK=           endpoint window size (default 0 = every reading per channel)
 //
 // Opaque ids rather than a name:ids grammar — group names are free text and will
 // contain commas and colons.
@@ -61,7 +61,7 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 
 	const config = {
 		madThreshold: numParam(url.searchParams.get('k'), 3.5, 1, 10),
-		windowK: numParam(url.searchParams.get('windowK'), 10, 3, 50)
+		windowK: numParam(url.searchParams.get('windowK'), 0, 0, 50)
 	};
 
 	const empty = {

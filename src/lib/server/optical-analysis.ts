@@ -1,6 +1,13 @@
 // Optical confirmation analysis — pure, dependency-free, DERIVE-ON-READ only.
-// Never writes to the DB. Stats are computed over an ENDPOINT WINDOW = the last
-// windowK readings per channel, because readings are a kinetic curve.
+// Never writes to the DB.
+//
+// Stats are computed over ALL readings per channel (windowK = 0). An optical
+// scan is a spatial sweep — 42 stage positions, three sensors (A/B/C) read at
+// each — not a kinetic curve, so every position is a measurement of the well
+// and none is more "final" than another. The old default (last 10 readings per
+// channel, an "endpoint window" inherited from the cortisol kinetics) silently
+// threw away 32 of 42 positions; Jacob flagged it on 2026-09-15. A positive
+// windowK is still honoured as an explicit option.
 
 export interface OpticalConfig {
 	windowK: number;
@@ -17,7 +24,8 @@ export interface OpticalConfig {
 }
 
 export const DEFAULT_OPTICAL_CONFIG: OpticalConfig = {
-	windowK: 10,
+	/** 0 = every reading per channel (the whole scan). >0 = only the last K. */
+	windowK: 0,
 	cvThreshold: 15,
 	crossWellCvThreshold: 15,
 	zThreshold: 2,
@@ -109,7 +117,7 @@ export interface CartridgeAnalysis {
 }
 
 const CHANNELS: ReadonlyArray<'A' | 'B' | 'C'> = ['A', 'B', 'C'];
-const PROFILE_NAME = 'Single Scan Cortisol';
+const PROFILE_NAME = 'Gen 5 Optical Scan (all positions)';
 
 // ---- internal helpers -------------------------------------------------------
 
@@ -320,12 +328,12 @@ export function analyzeCartridge(
 	};
 
 	for (const channel of CHANNELS) {
-		// filter + sort ascending by (number ?? 0), take last windowK
+		// filter + sort ascending by (number ?? 0); every reading unless an explicit window was asked for
 		const forChannel = readings
 			.filter((r): r is Record<string, unknown> => !!r && typeof r === 'object')
 			.filter((r) => (r as Record<string, unknown>).channel === channel)
 			.sort((a, b) => (toNum(a.number) ?? 0) - (toNum(b.number) ?? 0));
-		const window = forChannel.slice(-windowK);
+		const window = windowK > 0 ? forChannel.slice(-windowK) : forChannel;
 		const n = window.length;
 
 		const f3Vals: number[] = [];
@@ -346,7 +354,7 @@ export function analyzeCartridge(
 		}
 
 		const series = ratioEntries.map((e) => e.v);
-		// The exportable per-reading dataset. Bounded at windowK (10) per well.
+		// The exportable per-reading dataset — one entry per position used.
 		const ratioSeries: RatioPoint[] = ratioEntries.map((e) => ({
 			number: e.number,
 			f3: e.f3,
