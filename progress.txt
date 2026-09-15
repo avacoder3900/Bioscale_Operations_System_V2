@@ -12651,3 +12651,18 @@ a bare ungrouped open job JOINS the group (0215); a job with its own reason keep
 gets the belt note as a finding prefixed "[Timing Belt Investigation]" (0212). Jacob added 0250
 mid-run (71a94). Re-run (idempotent) finished: sheet = 32 units; group now 43 jobs, 31 carrying a
 finding (24 issue / 7 ok), 0212's finding on its own job, 1 group note.
+
+================================================================================
+2026-09-15 — feat/spu-tweaks — Timing Belt group closed programmatically; Close button investigation
+================================================================================
+Jacob: "the close servicing button doesn't work" — close the Timing Belt jobs programmatically so
+they land in the device journals, and try to fix the button. Evidence: the database had NEVER seen
+a closed service job (0 closed records, 0 "Service job closed" audits, 0 service journal entries),
+and no findings/notes/changes had ever been recorded from the board's job panels either — only
+scans and group creation had ever succeeded from the UI.
+scripts/close-timing-belt-group.ts drives the board's REAL `closeService` action (imports `actions`
+from +page.server.ts, fake RequestEvent with Jacob's user) — pure close, every unit keeps its
+current status (22 released, 10 validating, 11 retired, 0236 stays at servicing for its own reason).
+Result: 43/43 closed with zero failures; 43 service journal entries written (one per unit, findings
+inline); group auto-closed "All units completed". So the server action is sound — the fault is on
+the page. Nested-form check: none. Next: reproduce in a logged-in browser against the dev server.
