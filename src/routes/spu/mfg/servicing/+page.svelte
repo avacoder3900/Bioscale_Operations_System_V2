@@ -137,13 +137,68 @@
 		return `${days} days`;
 	}
 
+	/**
+	 * One enhance handler for every form on the board. Two guarantees (2026-09-15,
+	 * after "the Close button doesn't work"): `submitting` can never stay stuck —
+	 * it is reset in `finally`, so one bad round-trip no longer disables every
+	 * button on the page — and a thrown server error surfaces as a toast instead
+	 * of navigating away to the error page.
+	 */
+	let actionError = $state<string | null>(null);
 	function submitHandler() {
 		submitting = true;
-		return async ({ update }: { update: () => Promise<void> }) => {
-			await update();
-			submitting = false;
+		actionError = null;
+		return async ({
+			result,
+			update
+		}: {
+			result: { type: string; error?: { message?: string } };
+			update: () => Promise<void>;
+		}) => {
+			try {
+				if (result.type === 'error') {
+					actionError = result.error?.message ?? 'The request failed. Nothing was saved.';
+					return;
+				}
+				await update();
+			} finally {
+				submitting = false;
+			}
 		};
 	}
+
+	// Every action result becomes a short toast at the bottom of the screen, so
+	// a submit from a job panel deep in the page is never silent. Before this,
+	// errors only rendered inside the scan card at the very top.
+	const OK_MESSAGES: Array<[string, string]> = [
+		['closed', 'Job closed — the write-up is in the unit\u2019s journal.'],
+		['groupClosed', 'Group task closed.'],
+		['found', 'Finding recorded.'],
+		['noted', 'Note added.'],
+		['moved', 'Location updated.'],
+		['updated', 'Job updated.'],
+		['partReplaced', 'Part replacement recorded.'],
+		['firmwareRecorded', 'Firmware change recorded.'],
+		['changeRecorded', 'Change recorded.'],
+		['opened', 'Job opened.'],
+		['groupCreated', 'Group task created.'],
+		['groupUpdated', 'Group updated.']
+	];
+	let toast = $state<{ kind: 'ok' | 'err'; text: string } | null>(null);
+	$effect(() => {
+		const f = form as Record<string, unknown> | null;
+		let next: { kind: 'ok' | 'err'; text: string } | null = null;
+		if (actionError) next = { kind: 'err', text: actionError };
+		else if (f?.error) next = { kind: 'err', text: String(f.error) };
+		else if (f?.success) {
+			const hit = OK_MESSAGES.find(([flag]) => f[flag]);
+			if (hit) next = { kind: 'ok', text: hit[1] };
+		}
+		if (!next) return;
+		toast = next;
+		const handle = setTimeout(() => (toast = null), 6000);
+		return () => clearTimeout(handle);
+	});
 
 	/**
 	 * A scan posts straight to the server, which either resumes the unit's open
@@ -188,6 +243,17 @@
 <svelte:head>
 	<title>SPU Servicing</title>
 </svelte:head>
+
+{#if toast}
+	<div
+		role="status"
+		aria-live="polite"
+		class="fixed bottom-6 left-1/2 z-50 -translate-x-1/2 rounded-lg border px-4 py-2 text-sm shadow-lg"
+		style="background: var(--color-tron-bg-card); border-color: {toast.kind === 'err' ? 'var(--color-tron-red)' : 'var(--color-tron-cyan)'}; color: {toast.kind === 'err' ? 'var(--color-tron-red)' : 'var(--color-tron-cyan)'};"
+	>
+		{toast.text}
+	</div>
+{/if}
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div class="space-y-6" onfocusin={onFocusIn} onfocusout={onFocusOut}>

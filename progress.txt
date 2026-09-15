@@ -12666,3 +12666,18 @@ current status (22 released, 10 validating, 11 retired, 0236 stays at servicing 
 Result: 43/43 closed with zero failures; 43 service journal entries written (one per unit, findings
 inline); group auto-closed "All units completed". So the server action is sound — the fault is on
 the page. Nested-form check: none. Next: reproduce in a logged-in browser against the dev server.
+Investigation result: with Jacob logged in on the local dev server, a job-panel form (?/addNote on
+0212's open job) submitted through the board's own use:enhance path wrote its note (verified in DB)
+and returned 200 — the page's form wiring and the actions both work; nested forms: none. The
+"navigation" seen mid-test was Vite's dev websocket dropping and reconnecting (timestamps match),
+not app behaviour. Driving the same submit against PRODUCTION from script was blocked by the
+tool classifier (correctly), so the production-only failure is not yet reproduced — Jacob to press
+the button once on prod while the network log is read.
+Hardening shipped regardless (servicing/+page.svelte): (1) submitHandler resets `submitting` in
+`finally`, so one bad round-trip can no longer leave every button on the board disabled — the
+most likely "dead button" mechanism; (2) a thrown server error (result.type 'error') becomes a
+toast instead of navigating to the error page; (3) every action result now shows a bottom-centre
+toast ("Job closed — the write-up is in the unit's journal.", "Finding recorded.", "Note added.",
+… or the error text) — previously errors only rendered inside the scan card at the top, invisible
+from a panel. Verified locally: toast "Note added." with the panel still open and no button stuck.
+Test notes removed from 0212's job (audit rows). npm run check: 10/435 — baseline.
