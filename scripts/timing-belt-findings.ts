@@ -59,7 +59,7 @@ const SHEET: Array<[string, string, string]> = [
 	['0249', '71b00', 'no notes'],
 	['0245', '7117c', 'channel A not aligned, timing belt length 349'],
 	['0256', '71b18', 'failing magnetometer on 9_10_26, timing belt 352, tight stage'],
-	['0236', '713B8', 'timing belt length 248 (as written — probably 348)'],
+	['0236', '713B8', 'timing belt length 348'], // sheet said 248; Jacob confirmed 348
 	['0229', '51f34', 'no notes'],
 	['0252', '71AFC', 'swapped heater block, new magnets, timing belt length 351, lowered pulley, GNSS antenna overlapping with cellular, wifi antenna on the wrong side, new proximal, temp reading incorrect and light remains red in heat up stage, going really slow when optical reads are taken'],
 	['0239', '71A58', '20 tooth pulley, timing belt 349, grindy rail, wrong heater block, wifi antenna in wrong place, no beeper on a failed test'],
