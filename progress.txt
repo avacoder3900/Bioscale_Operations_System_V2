@@ -12767,3 +12767,8 @@ BIMS:
   inline SVG line chart (one point per sweep, hover = value ± sd, t).
 Firmware v95 handoff and the blank-run webhook/page + sonic upload page are next.
 npm run check: 10/435 — baseline.
+
+Deployment: production — building from the GitHub push to master (Vercel dashboard, commit below)
+Source: branch master @ commit 7dd1f643 (feat/spu-tweaks)
+Retrieve this exact code: git checkout master at commit 7dd1f643
+What this deployment is for: optical assay dropdown (photobleach) + per-sweep photobleach trace
