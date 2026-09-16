@@ -4,12 +4,12 @@
 
 	interface Props {
 		data: {
-			assays: Array<{ id: string; name: string; skuCode: string; duration: number | null; bcodeSteps: number }>;
+			assays: Array<{ id: string; name: string; kind: 'scan' | 'photobleach' | null; label: string; skuCode: string; duration: number | null; bcodeSteps: number }>;
 			groups: Array<{
 				id: string; name: string; description: string | null; color: string; count: number;
 			}>;
 			cartridges: Array<{
-				id: string; barcode: string; assayName: string | null;
+				id: string; barcode: string; assayName: string | null; kind: 'scan' | 'photobleach' | null;
 				status: string; ran: boolean; assigned: boolean;
 				spuUdi: string | null; spuDeviceId: string | null;
 				group: { id: string; name: string; color: string } | null;
@@ -40,8 +40,10 @@
 
 	const GROUP_COLORS = ['cyan', 'green', 'purple', 'yellow', 'orange', 'blue'];
 
-	// Single optical assay — preselected, not user-changeable.
-	const assay = $derived(data.assays[0] ?? null);
+	// Which optical validation assay to assign. Single scan is the default; the
+	// photobleach assay (10 sweeps of one cartridge) is the other option.
+	let selectedAssayId = $state('');
+	const assay = $derived(data.assays.find((a) => a.id === selectedAssayId) ?? data.assays[0] ?? null);
 
 	let count = $state(1);
 	let barcodes = $state('');
@@ -172,10 +174,19 @@
 			}}
 			class="space-y-6"
 		>
-			<!-- Fixed assay (only one in use) -->
-			<input type="hidden" name="assayId" value={assay?.id ?? ''} />
 			<div>
-				<div class="tron-text-muted mb-2 block text-sm font-medium">Assay</div>
+				<label for="assay-select" class="tron-text-muted mb-2 block text-sm font-medium">Assay</label>
+				<select
+					id="assay-select"
+					name="assayId"
+					class="tron-select mb-3 w-full"
+					style="min-height: 44px;"
+					bind:value={selectedAssayId}
+				>
+					{#each data.assays as a (a.id)}
+						<option value={a.id}>{a.label} — {a.name}</option>
+					{/each}
+				</select>
 				{#if assay}
 					<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-tertiary)] px-4 py-3">
 						<div class="tron-text-primary font-medium">{assay.name}</div>
@@ -524,7 +535,13 @@
 								</td>
 								<td class="p-3">
 									{c.assayName ?? '—'}
-									{#if !c.assigned}
+									{#if c.kind === 'photobleach'}
+									<span
+										class="ml-1 rounded border border-[var(--color-tron-purple)] px-1.5 py-0.5 text-[10px] uppercase text-[var(--color-tron-purple)]"
+										title="Photobleach test: 10 sweeps of this one cartridge — open the barcode for the per-sweep trace"
+									>photobleach</span>
+								{/if}
+								{#if !c.assigned}
 										<span
 											class="ml-2 rounded-full border border-[var(--color-tron-border)] px-2 py-0.5 text-[10px] tracking-wide text-[var(--color-tron-text-secondary)]"
 											title="Ran the same optical assay but was not assigned through this page — shown as a comparator."

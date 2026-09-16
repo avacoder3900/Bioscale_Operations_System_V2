@@ -10,8 +10,9 @@ import {
 } from '$lib/server/db';
 import { analyzeCartridge } from '$lib/server/optical-analysis';
 import {
-	OPTICAL_ASSAY_ID,
+	OPTICAL_VALIDATION_ASSAYS,
 	OPTICAL_CARTRIDGE_FILTER,
+	opticalKindFor,
 	isGroupColorKey,
 	nextGroupColor
 } from '$lib/server/optical-constants';
@@ -47,10 +48,11 @@ export const load: PageServerLoad = async ({ locals }) => {
 	requirePermission(locals.user, 'cartridge:read');
 	await connectDB();
 
-	// Only the one optical assay we run.
-	const assays = await AssayDefinition.find({ _id: OPTICAL_ASSAY_ID })
+	// The optical validation assays, in registry order (single scan first).
+	const assayDocs = await AssayDefinition.find({ _id: { $in: OPTICAL_VALIDATION_ASSAYS.map((a) => a.id) } })
 		.select('name skuCode duration BCODE.code')
 		.lean();
+	const assays = OPTICAL_VALIDATION_ASSAYS.map((reg) => assayDocs.find((d: any) => d._id === reg.id)).filter(Boolean);
 
 	// Optical test cartridge log — read run status from cartridge_records (where the
 	// device/brevitest-cloud writes the run lifecycle: linked -> underway -> completed).
@@ -96,6 +98,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 		assays: assays.map((a: any) => ({
 			id: a._id,
 			name: a.name,
+			kind: opticalKindFor(a._id),
+			label: OPTICAL_VALIDATION_ASSAYS.find((r) => r.id === a._id)?.label ?? a.name,
 			skuCode: a.skuCode ?? a._id,
 			duration: a.duration ?? null,
 			bcodeSteps: Array.isArray(a.BCODE?.code) ? a.BCODE.code.length : 0
@@ -122,6 +126,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 				id: c._id,
 				barcode: c._id, // cartridge_records _id IS the scanned barcode
 				assayName: c.assayName ?? c.assayId ?? null,
+				kind: opticalKindFor(c.assayId),
 				// true = formally assigned as a validation cartridge via this page;
 				// false = same-assay run pulled in as a comparator.
 				assigned: c.assayCategory === 'optical_test',

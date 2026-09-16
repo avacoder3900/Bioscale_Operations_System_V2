@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
 	analyzeCartridge,
+	analyzePhotobleach,
 	analyzeGroupRobust,
 	compareGroups,
 	diffGroups,
@@ -835,5 +836,39 @@ describe('diffGroups', () => {
 
 		expect(JSON.parse(JSON.stringify(d))).toEqual(d);
 		assertAllFinite(d);
+	});
+});
+
+describe('analyzePhotobleach', () => {
+	function sweepReadings(sweep: number, ratio: number, base: number) {
+		// 10 positions × A/B/C, positions rising 475 → 4570 within a sweep, msec rising.
+		const out: Record<string, unknown>[] = [];
+		for (let i = 0; i < 10; i++) {
+			for (const channel of ['A', 'B', 'C']) {
+				out.push({ number: base + i, channel, position: 475 + i * 455, msec: 1000 * (sweep * 40 + i), f3: 100, f7: 100 * ratio });
+			}
+		}
+		return out;
+	}
+	it('splits sweeps on the stage-position reset and reports one point per channel per sweep', () => {
+		const readings = [0, 1, 2, 3].flatMap((s) => sweepReadings(s, 8 - s * 0.2, s * 10));
+		const r = analyzePhotobleach(readings)!;
+		expect(r.sweeps).toBe(4);
+		expect(r.chunkedFallback).toBe(false);
+		const a = r.channels.find((c: { channel: string }) => c.channel === 'A')!;
+		const ratios = a.points.map((p: { ratio: number | null }) => p.ratio);
+		expect(ratios).toHaveLength(4);
+		[8, 7.8, 7.6, 7.4].forEach((v, i) => expect(ratios[i]).toBeCloseTo(v, 10));
+		expect(a.points[0].n).toBe(10);
+		expect(a.dropPct).toBeCloseTo(-7.5, 5);
+		expect(a.slopePctPerSweep).toBeCloseTo(-2.5, 5);
+		expect(a.residualCv).toBeCloseTo(0, 5);
+		expect(a.points[1].tSec).toBeCloseTo(40 + 4.5, 5);
+	});
+	it('falls back to chunks of 10 when position never resets', () => {
+		const readings = [0, 1].flatMap((s) => sweepReadings(s, 8, s * 10).map((r) => ({ ...r, position: undefined })));
+		const r = analyzePhotobleach(readings)!;
+		expect(r.chunkedFallback).toBe(true);
+		expect(r.sweeps).toBe(2);
 	});
 });

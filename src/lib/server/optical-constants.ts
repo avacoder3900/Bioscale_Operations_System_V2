@@ -9,6 +9,26 @@
 export const OPTICAL_ASSAY_ID = 'A9EB41AD';
 
 /**
+ * The other optical validation assays (created 2026-09-15, scripts/create-validation-assays.ts).
+ *  - PHOTOBLEACH: 10 coarse sweeps of the same 4.1 mm with 30 s pauses; BIMS reads
+ *    each sweep as one point per channel (see analyzePhotobleach).
+ *  - BLANK: the single scan under its own id, run from a BLANK- barcode on a
+ *    reusable blank cartridge; results arrive over a webhook, never as a
+ *    cartridge record, so it is deliberately NOT in OPTICAL_CARTRIDGE_FILTER.
+ */
+export const PHOTOBLEACH_ASSAY_ID = 'AF233F18';
+export const BLANK_ASSAY_ID = 'A87934B1';
+
+export type OpticalKind = 'scan' | 'photobleach';
+export const OPTICAL_VALIDATION_ASSAYS: ReadonlyArray<{ id: string; kind: OpticalKind; label: string }> = [
+	{ id: OPTICAL_ASSAY_ID, kind: 'scan', label: 'Single scan (42 positions)' },
+	{ id: PHOTOBLEACH_ASSAY_ID, kind: 'photobleach', label: 'Photobleach (10 coarse sweeps, 30 s apart)' }
+];
+export function opticalKindFor(assayId: string | null | undefined): OpticalKind | null {
+	return OPTICAL_VALIDATION_ASSAYS.find((a) => a.id === assayId)?.kind ?? null;
+}
+
+/**
  * Mongo filter for "this is an optical cartridge".
  *
  * Two populations are merged so group analysis has a usable N:
@@ -19,7 +39,7 @@ export const OPTICAL_ASSAY_ID = 'A9EB41AD';
 // Not `as const`: that makes $or a readonly tuple, which Mongoose's Filter type
 // rejects because it expects a mutable array.
 export const OPTICAL_CARTRIDGE_FILTER: Record<string, unknown> = {
-	$or: [{ assayCategory: 'optical_test' }, { assayId: OPTICAL_ASSAY_ID }]
+	$or: [{ assayCategory: 'optical_test' }, { assayId: { $in: [OPTICAL_ASSAY_ID, PHOTOBLEACH_ASSAY_ID] } }]
 };
 
 /**

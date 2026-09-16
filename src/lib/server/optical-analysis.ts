@@ -1126,3 +1126,149 @@ export function diffGroups(
 		notes
 	};
 }
+
+// ---------------------------------------------------------------------------
+// Photobleach test (assay AF233F18, 2026-09-15): the same cartridge is swept
+// 10 times, 30 s apart, without being touched. Each sweep is 10 stage positions
+// × A/B/C. Quantum dots photobleach, so successive sweeps should drift down
+// SMOOTHLY; a noisy trace points at the instrument, not the chemistry. Each
+// sweep is one point per channel — never pooled into a single ratio.
+// ---------------------------------------------------------------------------
+
+export interface PhotobleachPoint {
+	sweep: number;
+	/** Mean F7/F3 over the sweep's positions. */
+	ratio: number | null;
+	sd: number | null;
+	n: number;
+	/** Seconds since the first reading of the test (device msec clock). */
+	tSec: number | null;
+}
+export interface PhotobleachChannel {
+	channel: 'A' | 'B' | 'C';
+	points: PhotobleachPoint[];
+	first: number | null;
+	last: number | null;
+	/** (last − first) / first × 100 — negative = bleaching. */
+	dropPct: number | null;
+	/** Least-squares slope of ratio vs sweep index, as % of the first sweep per sweep. */
+	slopePctPerSweep: number | null;
+	/** CV of the residuals around that line, % of the mean — the noise metric. */
+	residualCv: number | null;
+	/** Largest single-step jump between consecutive sweeps, % of the mean. */
+	maxStepPct: number | null;
+}
+export interface PhotobleachAnalysis {
+	sweeps: number;
+	channels: PhotobleachChannel[];
+	/** True when the sweeps could not be told apart (no position resets); the reading list was chunked by 10. */
+	chunkedFallback: boolean;
+}
+
+/**
+ * Split a channel's readings into sweeps. The stage returns to the start
+ * between sweeps, so a sweep boundary is where `position` drops. If the
+ * position field is missing or never drops, fall back to fixed chunks of
+ * `positionsPerSweep`.
+ */
+function splitSweeps(
+	readings: Array<Record<string, unknown>>,
+	positionsPerSweep = 10
+): { sweeps: Array<Array<Record<string, unknown>>>; fallback: boolean } {
+	const sweeps: Array<Array<Record<string, unknown>>> = [];
+	let current: Array<Record<string, unknown>> = [];
+	let prevPos: number | null = null;
+	let sawDrop = false;
+	for (const r of readings) {
+		const pos = toNum(r.position);
+		if (prevPos !== null && pos !== null && pos < prevPos) {
+			sawDrop = true;
+			if (current.length) sweeps.push(current);
+			current = [];
+		}
+		current.push(r);
+		prevPos = pos ?? prevPos;
+	}
+	if (current.length) sweeps.push(current);
+	if (sawDrop) return { sweeps, fallback: false };
+	const chunks: Array<Array<Record<string, unknown>>> = [];
+	for (let i = 0; i < readings.length; i += positionsPerSweep) chunks.push(readings.slice(i, i + positionsPerSweep));
+	return { sweeps: chunks, fallback: true };
+}
+
+export function analyzePhotobleach(readings: unknown[]): PhotobleachAnalysis | null {
+	if (!Array.isArray(readings) || readings.length === 0) return null;
+	const rows = readings.filter((r): r is Record<string, unknown> => !!r && typeof r === 'object');
+	const t0 = rows.map((r) => toNum(r.msec)).filter((v): v is number => v !== null).reduce((m, v) => Math.min(m, v), Infinity);
+
+	let sweepCount = 0;
+	let fallback = false;
+	const channels: PhotobleachChannel[] = [];
+	for (const channel of CHANNELS) {
+		const forChannel = rows
+			.filter((r) => r.channel === channel)
+			.sort((a, b) => (toNum(a.number) ?? 0) - (toNum(b.number) ?? 0));
+		if (forChannel.length === 0) continue;
+		const split = splitSweeps(forChannel);
+		fallback = fallback || split.fallback;
+		sweepCount = Math.max(sweepCount, split.sweeps.length);
+
+		const points: PhotobleachPoint[] = split.sweeps.map((sw, i) => {
+			const ratios: number[] = [];
+			const times: number[] = [];
+			for (const r of sw) {
+				const f3 = toNum(r.f3);
+				const f7 = toNum(r.f7);
+				if (f3 !== null && f3 > 0 && f7 !== null && Number.isFinite(f7 / f3)) ratios.push(f7 / f3);
+				const ms = toNum(r.msec);
+				if (ms !== null) times.push(ms);
+			}
+			return {
+				sweep: i + 1,
+				ratio: ratios.length ? mean(ratios) : null,
+				sd: ratios.length >= 2 ? sampleSD(ratios) : null,
+				n: ratios.length,
+				tSec: times.length && Number.isFinite(t0) ? (mean(times) - t0) / 1000 : null
+			};
+		});
+
+		const series = points.map((p) => p.ratio).filter((v): v is number => v !== null);
+		const first = series[0] ?? null;
+		const last = series.length ? series[series.length - 1] : null;
+		let slopePctPerSweep: number | null = null;
+		let residualCv: number | null = null;
+		let maxStepPct: number | null = null;
+		if (series.length >= 3 && first) {
+			const n = series.length;
+			const xs = series.map((_, i) => i);
+			const mx = mean(xs);
+			const my = mean(series);
+			let sxy = 0;
+			let sxx = 0;
+			for (let i = 0; i < n; i++) {
+				sxy += (xs[i] - mx) * (series[i] - my);
+				sxx += (xs[i] - mx) * (xs[i] - mx);
+			}
+			const slope = sxx ? sxy / sxx : 0;
+			const intercept = my - slope * mx;
+			const residuals = series.map((y, i) => y - (intercept + slope * i));
+			slopePctPerSweep = (slope / first) * 100;
+			residualCv = my ? (sampleSD(residuals) / Math.abs(my)) * 100 : null;
+			let maxStep = 0;
+			for (let i = 1; i < n; i++) maxStep = Math.max(maxStep, Math.abs(series[i] - series[i - 1]));
+			maxStepPct = my ? (maxStep / Math.abs(my)) * 100 : null;
+		}
+		channels.push({
+			channel,
+			points,
+			first,
+			last,
+			dropPct: first && last !== null ? ((last - first) / first) * 100 : null,
+			slopePctPerSweep,
+			residualCv,
+			maxStepPct
+		});
+	}
+	if (channels.length === 0) return null;
+	return { sweeps: sweepCount, channels, chunkedFallback: fallback };
+}

@@ -1,6 +1,6 @@
 import { CartridgeRecord, Spu, AuditLog, generateId } from '$lib/server/db';
 import { analyzeCartridge } from '$lib/server/optical-analysis';
-import { OPTICAL_CARTRIDGE_FILTER } from '$lib/server/optical-constants';
+import { OPTICAL_CARTRIDGE_FILTER, OPTICAL_ASSAY_ID } from '$lib/server/optical-constants';
 import { inCurrentCycle } from '$lib/server/spu-validation-cycle';
 
 /**
@@ -45,7 +45,7 @@ export async function syncOpticsValidation(opts?: { spuUdi?: string }): Promise<
 
 	// Newest-first per device: the first analyzable run per SPU wins.
 	const carts = (await CartridgeRecord.find(match)
-		.select('serialNumber createdAt device rawData')
+		.select('serialNumber createdAt device rawData assayId')
 		.sort({ createdAt: -1 })
 		.lean()) as any[];
 
@@ -70,7 +70,11 @@ export async function syncOpticsValidation(opts?: { spuUdi?: string }): Promise<
 			continue;
 		}
 
-		const cycleRuns = runs.filter((c) => inCurrentCycle(c.createdAt, spu.validationResetAt));
+		// Only the standard single scan judges a unit — a photobleach run is a
+		// different experiment (10 sweeps of one cartridge), never pooled here.
+		const cycleRuns = runs.filter(
+			(c) => c.assayId === OPTICAL_ASSAY_ID && inCurrentCycle(c.createdAt, spu.validationResetAt)
+		);
 		const latest = cycleRuns.find(
 			(c) => Array.isArray(c.rawData?.readings) && c.rawData.readings.length > 0
 		);

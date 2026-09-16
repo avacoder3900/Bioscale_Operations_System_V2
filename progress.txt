@@ -12730,3 +12730,40 @@ Deployment: production — building from the GitHub push to master (Vercel dashb
 Source: branch master @ commit a0836c9b (feat/spu-tweaks)
 Retrieve this exact code: git checkout master at commit a0836c9b
 What this deployment is for: manual optics sync button; nightly optics judging removed
+
+================================================================================
+2026-09-15 — feat/spu-tweaks — new validation assays (photobleach + blank) and the assay dropdown
+================================================================================
+Plan agreed with Jacob (2026-09-15) for four new optical/acoustic tests. Research done in the
+device firmware (brevitest-device, committed v92/v94), the live Lambda copy
+(docs/logging-middleware-update/index.mjs) and research-v2 rather than assumed:
+- The Lambda compiles assay.BCODE.code (JSON steps) to BCODE + checksum at load time, so an assay
+  is just an assay_definitions document; devices still need "Load Assay" from the research app.
+- Firmware caps a test at SPECTRO_MAX_READINGS=300 readings (one full 42-position scan = 126) and
+  uploads the whole test struct as ONE publish, so "10 full scans" cannot fit. single_reading() has
+  no bounds check (flagged for the firmware handoff). reading.number is uint8.
+- A cartridge barcode is single-use at the cloud (validate marks used; reset-cartridge only works
+  before completion). THERMO-/MAG- paths never touch the cloud. The device has no microphone.
+Created (scripts/create-validation-assays.ts, dry-run/--apply, copies A9EB41AD's document shape):
+- AF233F18 "Gen 5 Optical Photobleach - 10x Coarse Scans": 10 sweeps × 10 positions 455 µm apart
+  (same 4.1 mm as the 42×100 µm scan), stage returned each time, 30 s pauses (9), 300 readings —
+  exactly the cap; ≈5.7 min real. Each sweep = one point per channel in BIMS.
+- A87934B1 "Gen 5 Optical Blank Cartridge": A9EB41AD's scan verbatim under its own id; will be
+  triggered by a BLANK- barcode (firmware v95) and delivered by webhook, so it is NOT in
+  OPTICAL_CARTRIDGE_FILTER.
+- Sonic assay NOT created yet: with the wax wait and read blocks removed, A67AC662's moves+waits
+  alone are 255 s, so a strict 5-min target leaves 45 s of oscillation (cycles 2/29/17/116/17/41).
+  Waiting on Jacob for the length (script takes --sonic-target-s).
+BIMS:
+- optical-constants: PHOTOBLEACH_ASSAY_ID, BLANK_ASSAY_ID, OPTICAL_VALIDATION_ASSAYS registry
+  (+ opticalKindFor); OPTICAL_CARTRIDGE_FILTER now matches assayId ∈ {scan, photobleach}.
+- optical-analysis: analyzePhotobleach() splits each channel into sweeps where the stage position
+  resets (fallback: chunks of 10), one point per sweep (mean F7/F3, sd, n, t since start), and per
+  channel first/last/drop %, least-squares slope %/sweep, residual CV (the noise metric), max step.
+  2 new unit tests (37/37).
+- optics-validation-sync: only A9EB41AD runs judge a unit (photobleach runs never pooled).
+- /validation/optical-confirmation: assay <select> (single scan default, photobleach); log rows
+  carry a "photobleach" badge. Cartridge page: "Photobleach trace" card — per-channel table +
+  inline SVG line chart (one point per sweep, hover = value ± sd, t).
+Firmware v95 handoff and the blank-run webhook/page + sonic upload page are next.
+npm run check: 10/435 — baseline.
