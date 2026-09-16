@@ -12801,3 +12801,8 @@ thermocouple data.
   uploads nothing, allowlist += AF233F18/A87934B1/(sonic), single_reading() bounds guard, bench
   acceptance. Sonic assay id TBD (waiting on Jacob's length decision).
 npm run check: 10/435 — baseline.
+
+Deployment: production — building from the GitHub push to master (Vercel dashboard, commit below)
+Source: branch master @ commit 089b0658 (feat/spu-tweaks)
+Retrieve this exact code: git checkout master at commit 089b0658
+What this deployment is for: blank-run intake/page + sonic upload page
