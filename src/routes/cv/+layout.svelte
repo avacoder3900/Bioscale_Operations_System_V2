@@ -3,6 +3,7 @@
 	import { page } from '$app/stores';
 	import { enhance } from '$app/forms';
 	import GridBackground from '$lib/components/ui/GridBackground.svelte';
+	import { tablet } from '$lib/cv/tablet-mode.svelte';
 	import type { LayoutData } from './$types';
 
 	interface Props {
@@ -155,6 +156,20 @@
 							{/if}
 						</div>
 
+						<!-- Tablet-mode chip. Auto follows (pointer: coarse); the manual
+						     override is here because a touchscreen desktop monitor also
+						     reports coarse, and silently flipping that to touch would
+						     disable that operator's USB wedge scanner. -->
+						<button
+							type="button"
+							onclick={() => tablet.cycle()}
+							title="Tablet mode: {tablet.label}. Click to cycle Auto → Touch → Desktop."
+							class="rounded px-2 py-1.5 text-xs font-medium text-[var(--color-tron-text-secondary)] transition-colors
+								hover:bg-[var(--color-tron-bg-tertiary)] hover:text-[var(--color-tron-cyan)]"
+						>
+							{tablet.on ? '📱' : '🖥'}&nbsp;{tablet.label}
+						</button>
+
 						<!-- Logout -->
 						<form
 							method="POST"
@@ -183,7 +198,7 @@
 		</header>
 
 		<!-- Main Content -->
-		<main class="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+		<main class="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8" class:tablet-ui={tablet.on}>
 			{@render children()}
 		</main>
 	</div>

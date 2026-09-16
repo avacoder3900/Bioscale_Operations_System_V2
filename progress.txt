@@ -12806,3 +12806,76 @@ Deployment: production — building from the GitHub push to master (Vercel dashb
 Source: branch master @ commit 089b0658 (feat/spu-tweaks)
 Retrieve this exact code: git checkout master at commit 089b0658
 What this deployment is for: blank-run intake/page + sonic upload page
+
+================================================================================
+2026-09-16 — feat/cv-tablet-mode — tablet UI mode for the CV capture stations
+================================================================================
+Phase 1 of tablet mode: an operator carries an Android tablet, taps their station, and runs
+pick-station → capture → verdict entirely by touch. Scoped to /capture + /cv/* only; the
+manufacturing/inventory trees are untouched.
+
+The premise that made this cheap: the barcode scanner is attached to the Pi, not the tablet. In
+station mode /capture already sends {cmd:'trigger_scan'} over the WebSocket and the Pi scans and
+auto-captures, and the on-screen Capture button already calls the same handler as Space. So the
+roaming loop needed no keyboard at all — what blocked it was desktop-shaped layout and one
+actively hostile focus loop.
+
+- $lib/cv/tablet-mode.svelte.ts (new): device-scoped mode. Defaults to matchMedia('(pointer:
+  coarse)') with a 3-state auto|on|off override in localStorage — deliberately NOT on the user
+  record, because the same operator uses the bench desktop and the roaming tablet in one shift
+  and needs opposite modes. The override exists because a touchscreen desktop monitor also
+  reports coarse, and silently flipping that to touch would disable that operator's USB wedge
+  scanner. SSR-safe: `on` is false on the server, so first paint is always the desktop layout.
+  Lives in $lib/cv/ because $lib/stores and $lib/utils are frozen.
+- capture/+page.svelte — the crux. refocusScanner() re-focused a sr-only input every 500 ms; the
+  code's own comment already documented the symptom ("yanks the slider thumb and scrolls the
+  page to the refocused element — the screen moves on its own"). Now gated on a derived
+  wedgeActive = !tablet.on && !selectedStationId: the interval moved into a $effect and is never
+  installed in tablet or station mode, all four focus call sites route through one guarded
+  focusWedge() using preventScroll, and the hidden input is not rendered at all when it isn't the
+  scan path. The !selectedStationId term also fixes that scroll-jump for DESKTOP operators
+  driving a Pi station — the wedge was already dead weight there, since scans arrive over the
+  WebSocket as `scan` events. Verified Space still works on desktop in station mode: with the
+  input gone, focus rests on <body>, which is not in onGlobalKeydown's INPUT/TEXTAREA/SELECT
+  bail-out, so it still falls through to onStationSpace(). scanInputEl became $state now that it
+  mounts/unmounts at runtime.
+- Station lock vs. tablet sleep — pre-existing bug, found while scoping, NOT introduced here.
+  There is no server-side lock expiry: api/cv/stations/sweep only recomputes `status` and never
+  touches currentOperator, and the 60 s "heartbeat" is a WebSocket ping to the Pi, not a call to
+  BIMS, despite the comment above it claiming it "keeps the BIMS operator-lock alive (5-min
+  server timeout)" — that comment is stale and false on both counts. Release hangs off
+  beforeunload, which Android Chrome does not fire reliably when a tab backgrounds or the screen
+  sleeps, so a sleeping tablet would pin a station "in use" until someone force-released it.
+  Added a visibilitychange/pagehide handler gated on tablet.on (desktop keeps today's behaviour —
+  alt-tabbing away must not drop a bench operator's lock): on hide it releases the lock and drops
+  the WS/token so the Pi stops encoding MJPEG for a screen nobody is watching; on return it
+  re-claims via connectToStation(id, true), whose lock POST is an idempotent no-op for the same
+  user. The sturdier fix — a heartbeat-stamped lock with real server-side expiry — is NOT in this
+  branch; it changes a shared API and is waiting on sign-off.
+- ?station= deep link: capture/+page.server.ts validates it against the stations it just loaded
+  (same shape as the existing ?phase= / ?projectId= links) and seeds selectedStationId; onMount
+  then runs the existing onStationChange(), so the lock/token/WS path is completely untouched.
+- cv/stations: the 9-column table is unusable on touch and its only action was a small
+  "details →" link — the wrong destination for someone who walked up to a station. In tablet mode
+  it renders StationCard.svelte instead, leading with "Open capture →" to /capture?station=<id>.
+  cv/stations/+page.server.ts now also returns currentOperator._id and the user, because without
+  them a card literally cannot tell your own lock from someone else's; the card applies the same
+  offline||heldByOther rule as the /capture <select>, and your own lock reads "Resume capture →".
+- layout.css: .tablet-ui { --size-touch-target: 56px }, scoped to the wrapper deliberately. A
+  global @media (pointer: coarse) would have resized every control in /parts, /kanban and /spu on
+  any touch device. Inside the wrapper every .tron-button* / .tron-btn-* / .tron-input /
+  .tron-select picks it up for free. The Verdict/View chips are raw-utility buttons that miss
+  that, so they are sized explicitly.
+- +layout.svelte: the root header hid itself on /cv/* but not on /capture (a sibling route, not a
+  child of /cv, so it never inherited the CV layout) — walking CV → Capture flipped the entire
+  shell mid-workflow. Now matches both prefixes.
+
+Not done, Phase 2: landscape sticky action bar, camera-settings slider thumb sizing, microscope
+number-input steppers, recent-captures strip sizing. Not verified on real hardware yet — needs an
+Android tablet on Tailscale against a live Pi station.
+
+npm run check: 85/436. Baseline measured on this same worktree at the origin/master branch point
+BEFORE any edit was 85/435, so no new errors; the +1 warning is `data.initialStationId` "captures
+the initial value", the same intentional-seed pattern as the `data.initialPhase` line two rows
+above it. (Note for whoever logs next: recent entries record the baseline as 10/435 — the warning
+count matches exactly but the error count does not reproduce on current origin/master.)

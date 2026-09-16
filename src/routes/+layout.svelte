@@ -225,8 +225,11 @@
 <svelte:head><link rel="icon" href={favicon} /></svelte:head>
 <GridBackground>
 	<div class="min-h-screen">
-		<!-- Header — hidden on /cv routes (CV has its own layout header) -->
-		<header class="border-b border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)]" class:hidden={$page.url.pathname.startsWith('/cv')}>
+		<!-- Header — hidden on /cv routes (CV has its own layout header). /capture
+		     is a sibling route rather than a child of /cv, so it does not inherit
+		     the CV layout; without matching it here the whole shell flips when an
+		     operator walks CV → Capture mid-workflow. -->
+		<header class="border-b border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)]" class:hidden={$page.url.pathname.startsWith('/cv') || $page.url.pathname.startsWith('/capture')}>
 			<div class="mx-auto px-4 sm:px-6 lg:px-8">
 				<div class="flex h-14 items-center justify-between">
 					<a href="/" class="flex shrink-0 items-center gap-2">

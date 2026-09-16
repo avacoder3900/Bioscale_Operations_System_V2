@@ -39,6 +39,18 @@ body {
 	color: var(--color-tron-text);
 }
 
+/* ----------------------------------------------------------------------------
+   Tablet mode (CV capture stations)
+   ----------------------------------------------------------------------------
+   Scoped to a wrapper class ON PURPOSE. Redefining the touch target under a
+   global `@media (pointer: coarse)` would resize every control in /parts,
+   /kanban and /spu on any touch device — far outside this feature's scope.
+   Inside .tablet-ui, every .tron-button*/.tron-btn-*/.tron-input/.tron-select
+   picks up the larger target for free, and nothing outside it moves. */
+.tablet-ui {
+	--size-touch-target: 56px;
+}
+
 /* TRON Grid Background */
 .tron-grid-bg {
 	background-color: var(--color-tron-bg-primary);

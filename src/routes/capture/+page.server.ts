@@ -67,6 +67,16 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		? requestedPhase
 		: phases.includes('wax_filled') ? 'wax_filled' : (phases[0] ?? 'wax_filled');
 
+	// Optional deep-link context: /capture?station=<id>, used by the station
+	// cards in /cv/stations so a roaming operator lands already connected
+	// instead of hunting through the picker. Validated against the stations we
+	// just loaded so a stale bookmark can't select a phantom station.
+	const requestedStation = url.searchParams.get('station');
+	const initialStationId =
+		requestedStation && stations.some((s: any) => s._id === requestedStation)
+			? requestedStation
+			: null;
+
 	const requestedProjectId = url.searchParams.get('projectId');
 	let projectContext: {
 		id: string;
@@ -113,6 +123,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		stations: JSON.parse(JSON.stringify(stations)),
 		user: { _id: locals.user._id, username: locals.user.username },
 		initialPhase,
+		initialStationId,
 		projectContext,
 		deploymentsByPhase,
 		failureLabels

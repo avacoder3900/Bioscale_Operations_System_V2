@@ -60,6 +60,10 @@ export const load: PageServerLoad = async ({ locals }) => {
 		assignedPhase: s.assignedPhase ?? null,
 		currentOperator: s.currentOperator
 			? {
+					// _id is needed so the tablet station cards can tell "held by ME"
+					// (resumable) from "held by someone else" (blocked) — the same
+					// rule the station <select> in /capture applies.
+					_id: s.currentOperator._id ?? null,
 					username: s.currentOperator.username ?? '',
 					since: s.currentOperator.since
 						? new Date(s.currentOperator.since).toISOString()
@@ -77,7 +81,10 @@ export const load: PageServerLoad = async ({ locals }) => {
 		createdAt: s.createdAt ? new Date(s.createdAt).toISOString() : null
 	}));
 
-	return { stations };
+	return {
+		stations,
+		user: { _id: locals.user._id, username: locals.user.username }
+	};
 };
 
 export const config = { maxDuration: 60 };

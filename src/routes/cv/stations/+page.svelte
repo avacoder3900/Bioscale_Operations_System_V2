@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
 	import { invalidateAll } from '$app/navigation';
+	import { tablet } from '$lib/cv/tablet-mode.svelte';
+	import StationCard from '$lib/components/cv/StationCard.svelte';
 
 	let { data } = $props();
 
@@ -62,6 +64,15 @@
 				<code class="rounded bg-[var(--color-tron-bg-tertiary)] px-1">services/bims-capture-agent/RUNBOOK.md</code>
 				— `setup-station.sh` self-registers on first boot.
 			</p>
+		</div>
+	{:else if tablet.on}
+		<!-- Tablet: the 9-column table is unusable on touch, and its only action
+		     ("details →") is not what a roaming operator wants. Cards lead with
+		     "Open capture" instead. -->
+		<div class="grid gap-3 sm:grid-cols-2">
+			{#each data.stations as s (s.id)}
+				<StationCard station={s} currentUserId={data.user?._id ?? null} />
+			{/each}
 		</div>
 	{:else}
 		<div class="overflow-x-auto">

@@ -2,6 +2,7 @@
 	import { onMount, onDestroy } from 'svelte';
 	import { invalidateAll } from '$app/navigation';
 	import jsQR from 'jsqr';
+	import { tablet } from '$lib/cv/tablet-mode.svelte';
 
 	let { data } = $props();
 
@@ -33,7 +34,10 @@
 
 	// Scanner-wedge buffer
 	let scanInput = $state('');
-	let scanInputEl: HTMLInputElement | null = null;
+	// $state because the wedge input is now conditionally rendered (see
+	// wedgeActive): it mounts/unmounts at runtime, and onGlobalKeydown compares
+	// the event target against it, so the reference has to stay current.
+	let scanInputEl = $state<HTMLInputElement | null>(null);
 
 	// Camera
 	let videoEl: HTMLVideoElement | null = null;
@@ -74,8 +78,24 @@
 	// Remote Pi capture station. null = local USB camera (today's path).
 	// A real id swaps the video source to a WebRTC stream from that Pi —
 	// see onStationChange() and connectToStation().
-	let selectedStationId = $state<string | null>(null);
+	let selectedStationId = $state<string | null>(data.initialStationId ?? null);
 	const mjpegShowing = $derived(!!selectedStationId && !mjpegError && !!mjpegUrl);
+
+	// Is the USB keyboard wedge actually the scan path right now? Two ways it
+	// isn't:
+	//   • tablet mode — a roaming tablet has no keyboard attached at all;
+	//   • a Pi station is selected — scans arrive over the WebSocket as `scan`
+	//     events and never touch the hidden input. That is already true on
+	//     desktop today; the wedge is simply dead weight in station mode.
+	// Everything that focuses the hidden input gates on this, which is what
+	// stops the 500ms refocus loop from fighting touch input.
+	const wedgeActive = $derived(!tablet.on && !selectedStationId);
+
+	// There is no Space bar on a tablet, so don't tell the operator to press one.
+	const spaceHint = $derived(tablet.on ? '' : ' (Space)');
+	// Verdict/View chips are raw-utility buttons, so they miss the 56px bump that
+	// .tablet-ui gives every .tron-* control. Size them explicitly.
+	const chipClass = $derived(tablet.on ? 'px-4 py-3 text-base' : 'px-2 py-1 text-xs');
 	let ws: WebSocket | null = null;
 	let pc: RTCPeerConnection | null = null;
 	// Tracked separately so beforeunload + teardown can release the right
@@ -381,7 +401,7 @@
 		startSequence();
 	}
 
-	let refocusInterval: ReturnType<typeof setInterval> | null = null;
+	// (the wedge-refocus loop lives in a $effect keyed on wedgeActive — see below)
 
 	// Camera-driven auto-scan: jsQR decodes the live video feed every ~2s.
 	// New code → handleScan('auto') locks the cartridge + starts a fresh photo session.
@@ -1037,7 +1057,7 @@
 		} finally {
 			submitting = false;
 			// Refocus the scanner input so the next scan still wedges correctly.
-			scanInputEl?.focus();
+			focusWedge();
 		}
 	}
 
@@ -1074,7 +1094,7 @@
 		retakeInProgress = false;
 		showRetakeDialog = false;
 		scanInput = '';
-		scanInputEl?.focus();
+		focusWedge();
 	}
 
 	function onScanKeydown(e: KeyboardEvent) {
@@ -1105,8 +1125,17 @@
 		else capturePhoto();
 	}
 
+	// Single guarded entry point for every place that wants the wedge focused.
+	// preventScroll is what stops the browser scrolling the page to the sr-only
+	// input — the "screen moves on its own" symptom described below.
+	function focusWedge() {
+		if (!wedgeActive) return;
+		scanInputEl?.focus({ preventScroll: true });
+	}
+
 	function refocusScanner() {
 		// Keep scanner input always focused so wedge keystrokes land in it.
+		if (!wedgeActive) return;
 		if (scanInputEl && document.activeElement !== scanInputEl) {
 			// Don't steal focus from the camera selector, phase dropdown, or any
 			// other focused input (e.g. the camera-settings sliders). Stealing
@@ -1116,9 +1145,19 @@
 			// the activeElement !== scanInputEl guard above already excludes it.
 			const active = document.activeElement as HTMLElement;
 			if (active?.tagName === 'SELECT' || active?.tagName === 'BUTTON' || active?.tagName === 'INPUT') return;
-			scanInputEl.focus();
+			scanInputEl.focus({ preventScroll: true });
 		}
 	}
+
+	// The refocus loop is installed ONLY while the wedge is the scan path, so in
+	// tablet or station mode it never runs and cannot fight taps or scrolling.
+	// Keyed on wedgeActive, so switching the station picker back to Local
+	// restores it automatically.
+	$effect(() => {
+		if (!wedgeActive) return;
+		const id = setInterval(refocusScanner, 500);
+		return () => clearInterval(id);
+	});
 
 	function autoScanTick() {
 		if (!videoEl || !stream || submitting || showRetakeDialog) return;
@@ -1153,6 +1192,40 @@
 		handleScan(code, 'auto').catch(() => null);
 	}
 
+	// TABLET ONLY. Android Chrome does not reliably fire beforeunload when a tab
+	// is backgrounded or the screen sleeps, and there is NO server-side lock
+	// expiry (the sweep job only recomputes `status`, and the 60 s heartbeat is a
+	// WebSocket ping to the Pi, not a call to BIMS). So without this a sleeping
+	// tablet pins a station "in use" until someone force-releases it.
+	//
+	// Desktop deliberately keeps its current behaviour — alt-tabbing away must
+	// not drop a desktop operator's lock mid-session.
+	function onVisibilityChange() {
+		if (!tablet.on) return;
+		if (document.visibilityState === 'hidden') {
+			if (lockedStationId) {
+				const releaseId = lockedStationId;
+				lockedStationId = null;
+				fetch(`/api/cv/stations/${encodeURIComponent(releaseId)}/lock`, {
+					method: 'DELETE',
+					keepalive: true
+				}).catch(() => null);
+			}
+			// Drop the live transports too, so the Pi stops encoding MJPEG for a
+			// screen nobody is looking at (dual-encode has browned out a station
+			// PSU before). Nulling the token nulls mjpegUrl, which unmounts the img.
+			if (heartbeatInterval) { clearInterval(heartbeatInterval); heartbeatInterval = null; }
+			if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+			if (pc) { try { pc.close(); } catch { /* */ } pc = null; }
+			if (ws) { try { ws.close(); } catch { /* */ } ws = null; }
+			stationToken = null;
+		} else if (document.visibilityState === 'visible' && selectedStationId) {
+			// Re-claim and rebuild. connectToStation() re-POSTs the lock, which is
+			// an idempotent no-op server-side when we still hold it.
+			void connectToStation(selectedStationId, true);
+		}
+	}
+
 	function onBeforeUnload() {
 		if (lockedStationId) {
 			// keepalive lets the DELETE finish after the page unloads.
@@ -1167,9 +1240,11 @@
 		(async () => {
 			await refreshCameras();
 			await startCamera();
-			scanInputEl?.focus();
+			// ?station= deep link (tapping a card in /cv/stations) — claim and
+			// connect exactly as if the operator had picked it in the dropdown.
+			if (selectedStationId) await onStationChange();
+			focusWedge();
 		})();
-		refocusInterval = setInterval(refocusScanner, 500);
 		// Continuous jsQR auto-scan disabled per operator request — the 2 s
 		// camera-driven scan loop was overriding workflows when the wedge
 		// scanner was in continuous mode (double reads, ambient triggers).
@@ -1180,6 +1255,9 @@
 		// continuous behavior again.
 		if (typeof window !== 'undefined') {
 			window.addEventListener('beforeunload', onBeforeUnload);
+			// pagehide fires in cases beforeunload doesn't, notably on mobile.
+			window.addEventListener('pagehide', onBeforeUnload);
+			document.addEventListener('visibilitychange', onVisibilityChange);
 		}
 	});
 
@@ -1188,11 +1266,12 @@
 		// guard the window access — server has no window object.
 		if (typeof window !== 'undefined') {
 			window.removeEventListener('beforeunload', onBeforeUnload);
+			window.removeEventListener('pagehide', onBeforeUnload);
+			document.removeEventListener('visibilitychange', onVisibilityChange);
 		}
 		teardownStation();
 		stopCamera();
 		if (bannerTimer) clearTimeout(bannerTimer);
-		if (refocusInterval) clearInterval(refocusInterval);
 		if (scanLoopInterval) clearInterval(scanLoopInterval);
 		if (triggerScanTimer) clearTimeout(triggerScanTimer);
 	});
@@ -1200,7 +1279,7 @@
 
 <svelte:window onkeydown={onGlobalKeydown} />
 
-<div class="min-h-screen bg-[var(--color-tron-bg-primary)] p-4 sm:p-6">
+<div class="min-h-screen bg-[var(--color-tron-bg-primary)] p-4 sm:p-6" class:tablet-ui={tablet.on}>
 	<div class="mx-auto max-w-6xl space-y-4">
 		<header class="flex items-center justify-between">
 			<div>
@@ -1330,6 +1409,22 @@
 						</button>
 					{:else}
 						<div class="font-mono text-lg text-[var(--color-tron-red,#ff3366)]">⚠ Scan to start</div>
+					{/if}
+					{#if tablet.on}
+						<!-- Touch fallback. The wedge input is sr-only + inputmode="none",
+						     so on a tablet there is otherwise NO way to enter a cartridge
+						     id when the Pi's scanner misreads. Same submit path as the
+						     wedge (Enter → handleScan); pattern copied from /cv/induct. -->
+						<input
+							bind:value={scanInput}
+							onkeydown={onScanKeydown}
+							type="text"
+							autocomplete="off"
+							autocapitalize="off"
+							spellcheck="false"
+							placeholder="Scan or type a cartridge barcode, then Enter…"
+							class="tron-input mt-2 font-mono text-base"
+						/>
 					{/if}
 				</div>
 				<div>
@@ -1580,12 +1675,12 @@
 					: awaitingTriggeredScan
 						? 'Scanning…'
 						: !unlimitedCapture && sessionPhotos.length >= PHOTOS_PER_CARTRIDGE
-							? '↺ Retake (Space)'
+							? `↺ Retake${spaceHint}`
 							: selectedStationId && !cartridgeId
-								? '⎵ Scan + Capture (Space)'
+								? `⎵ Scan + Capture${spaceHint}`
 								: unlimitedCapture
-									? `📷 Capture ${sessionPhotos.length + 1} (Space)`
-									: '📷 Capture (Space)'}
+									? `📷 Capture ${sessionPhotos.length + 1}${spaceHint}`
+									: `📷 Capture${spaceHint}`}
 			</button>
 			<!-- Optional capture-time verdict (CV-PIPELINE-V2 Stage 2 entry point A).
 			     Tri-state: click the active button again to clear. Applies to the
@@ -1595,7 +1690,7 @@
 				<button
 					type="button"
 					onclick={() => toggleVerdict('approved')}
-					class="rounded border px-2 py-1 text-xs font-semibold
+					class="rounded border {chipClass} font-semibold
 						{verdict === 'approved'
 							? 'border-[var(--color-tron-green,#39ff14)] bg-[rgba(57,255,20,0.15)] text-[var(--color-tron-green,#39ff14)]'
 							: 'border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-green,#39ff14)] hover:text-[var(--color-tron-green,#39ff14)]'}"
@@ -1605,7 +1700,7 @@
 				<button
 					type="button"
 					onclick={() => toggleVerdict('rejected')}
-					class="rounded border px-2 py-1 text-xs font-semibold
+					class="rounded border {chipClass} font-semibold
 						{verdict === 'rejected'
 							? 'border-[var(--color-tron-red,#ff3366)] bg-[rgba(255,51,102,0.15)] text-[var(--color-tron-red,#ff3366)]'
 							: 'border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-red,#ff3366)] hover:text-[var(--color-tron-red,#ff3366)]'}"
@@ -1623,7 +1718,7 @@
 					<button
 						type="button"
 						onclick={() => toggleView('top')}
-						class="rounded border px-2 py-1 text-xs font-semibold
+						class="rounded border {chipClass} font-semibold
 							{captureView === 'top'
 								? 'border-[var(--color-tron-cyan)] bg-[rgba(0,255,255,0.15)] text-[var(--color-tron-cyan)]'
 								: 'border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]'}"
@@ -1633,7 +1728,7 @@
 					<button
 						type="button"
 						onclick={() => toggleView('bottom')}
-						class="rounded border px-2 py-1 text-xs font-semibold
+						class="rounded border {chipClass} font-semibold
 							{captureView === 'bottom'
 								? 'border-[var(--color-tron-cyan)] bg-[rgba(0,255,255,0.15)] text-[var(--color-tron-cyan)]'
 								: 'border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]'}"
@@ -1686,18 +1781,23 @@
 			</div>
 		{/if}
 
-		<!-- Hidden scanner-wedge input — autofocused; refocuses every 500ms -->
-		<input
-			bind:this={scanInputEl}
-			bind:value={scanInput}
-			onkeydown={onScanKeydown}
-			type="text"
-			autocomplete="off"
-			inputmode="none"
-			class="sr-only"
-			aria-hidden="true"
-			tabindex="-1"
-		/>
+		<!-- Hidden scanner-wedge input — autofocused; refocuses every 500ms.
+		     Only rendered while the wedge is actually the scan path: in tablet or
+		     station mode a focusable element that must never be focused is better
+		     removed than defended. -->
+		{#if wedgeActive}
+			<input
+				bind:this={scanInputEl}
+				bind:value={scanInput}
+				onkeydown={onScanKeydown}
+				type="text"
+				autocomplete="off"
+				inputmode="none"
+				class="sr-only"
+				aria-hidden="true"
+				tabindex="-1"
+			/>
+		{/if}
 
 		<!-- Recent captures strip -->
 		{#if recentCaptures.length > 0}
