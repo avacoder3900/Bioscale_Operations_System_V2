@@ -12772,3 +12772,32 @@ Deployment: production — building from the GitHub push to master (Vercel dashb
 Source: branch master @ commit 7dd1f643 (feat/spu-tweaks)
 Retrieve this exact code: git checkout master at commit 7dd1f643
 What this deployment is for: optical assay dropdown (photobleach) + per-sweep photobleach trace
+
+================================================================================
+2026-09-15 — feat/spu-tweaks — blank-cartridge intake + page, sonic upload page, firmware v95 handoff
+================================================================================
+Plan items 4–6. Jacob chose the firmware pattern (BLANK-/SONIC- barcode types like THERMO-/MAG-,
+no cartridge records, nothing to re-arm); sonic recordings are phone files dropped in like the
+thermocouple data.
+- src/lib/server/test-payload.ts: parser for the device's binary BrevitestTestRecord (68-byte header
+  + 32-byte readings), ported from the Lambda's parseByteArray; accepts Particle's
+  "data:application/octet-stream;base64,…" webhook form. Round-trip self-tested.
+- models/optical-blank-run.ts (optical_blank_runs): one append-only doc per blank scan — deviceId,
+  spuId/udi (looked up by particleLink), barcode (the BLANK- code), assayId, startTime, readings.
+- /api/particle/webhook: event `blank-test` → parse → OpticalBlankRun; DeviceEvent keeps a summary
+  (never the base64 blob); 400 if the bytes aren't a test record. Requires the Particle Console
+  webhook for `blank-test` → /api/particle/webhook with x-agent-api-key (OPS STEP, not yet done).
+- /validation/optical-confirmation/blank: per-device table (mean A/B/C across runs, run-to-run
+  repeatability CV), fleet spread across devices on the same cartridge, expandable per-run rows
+  (ratios, within-scan CV, cross-well CV, flags); empty state lists the four setup steps.
+- /validation/sonic: pick unit + upload phone recording (audio, ≤80 MB) + notes → R2
+  (sonic/<udi>/<ts>-<file>), ValidationSession type 'sonic' (results[0].rawData.r2Key…), audit,
+  SPU journal entry; list of recordings with signed 1-h URLs (inline <audio> + download).
+- Hub launchers + validation tab strip gain Sonic (tab) and Blank Cartridge (launcher); optical page
+  links to blank runs.
+- Firmware handoff (uncommitted, device repo): brevitest-device/firmware/Docs/
+  V95_BLANK_SONIC_BARCODES_HANDOFF.md — 13-char BLANK-/SONIC- classification, BLANK runs local
+  A87934B1 and publishes the test record as `blank-test`, SONIC runs the local sonic assay and
+  uploads nothing, allowlist += AF233F18/A87934B1/(sonic), single_reading() bounds guard, bench
+  acceptance. Sonic assay id TBD (waiting on Jacob's length decision).
+npm run check: 10/435 — baseline.

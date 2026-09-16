@@ -155,6 +155,7 @@
 	<!-- Header -->
 	<div>
 		<h1 class="tron-heading text-2xl font-bold">Optical Confirmation — Assign Validation Cartridges</h1>
+		<a href="/validation/optical-confirmation/blank" class="mt-1 inline-block text-sm text-[var(--color-tron-cyan)] hover:underline">Blank cartridge runs →</a>
 		<p class="tron-text-muted mt-1">
 			Assign the optical-confirmation assay to a cartridge. The assay's runnable program is
 			embedded onto the cartridge so the device can run it on scan.

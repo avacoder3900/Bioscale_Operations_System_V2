@@ -81,6 +81,7 @@ export { WorkflowViolation } from './workflow-violation.js';
 export { ServiceTicket } from './service-ticket.js';
 export { ServiceRecord, SERVICE_TYPES, SERVICE_PRIORITIES, FINDING_OUTCOMES } from './service-record.js';
 export { ServiceGroup } from './service-group.js';
+export { OpticalBlankRun } from './optical-blank-run.js';
 
 // Research-v2 collections — shared Mongo Atlas, BIMS reads only via Ask BIMS tools.
 export { Experiment } from './experiment.js';
