@@ -12879,3 +12879,16 @@ BEFORE any edit was 85/435, so no new errors; the +1 warning is `data.initialSta
 the initial value", the same intentional-seed pattern as the `data.initialPhase` line two rows
 above it. (Note for whoever logs next: recent entries record the baseline as 10/435 — the warning
 count matches exactly but the error count does not reproduce on current origin/master.)
+
+Deployment: preview — https://bioscale-operations-system-mongodb-b2rvdknbi-brevitest.vercel.app
+  (the same commit also resolved under a second Vercel scope:
+   https://bioscale-operations-system-mongodb-99h16zf6a.vercel.app — this repo builds under both
+   the brevitest team and a personal project, so two preview URLs are expected, not a mistake)
+Source: branch feat/cv-tablet-mode @ commit ba80ccf29
+Retrieve this exact code: git checkout feat/cv-tablet-mode at commit ba80ccf29
+  (or: git log feat/cv-tablet-mode --oneline to find it if the branch has since moved on)
+  Branch point: origin/master @ fb7bf0c8.
+What this deployment is for: tablet mode for the CV capture stations — touch-sized capture loop,
+tappable station cards with ?station= deep link, and the tablet lock-release fix. Build settled
+green (pending ×4 → success). NOT yet exercised on real hardware: needs an Android tablet on
+Tailscale against a live Pi station.
