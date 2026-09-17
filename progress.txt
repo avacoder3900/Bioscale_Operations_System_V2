@@ -12835,3 +12835,19 @@ Deployment: production — building from the GitHub push to master (Vercel dashb
 Source: branch master @ commit 65671954 (feat/spu-tweaks)
 Retrieve this exact code: git checkout master at commit 65671954
 What this deployment is for: Optical Bench page; "optical degradation" wording
+
+================================================================================
+2026-09-17 — feat/spu-tweaks — status check: what is testable; firmware handoff relabelled v96
+================================================================================
+Jacob asked what is ready to test for real. Verified: master == feat/spu-tweaks (b6a69fbb). The
+fleet (32/32 active) already runs a firmware labelled v95 that contains NONE of the handoff items
+(no BLANK-/SONIC- types, no blank-test publish, no laser_read/dark_read/laser_scan, allowlist still
+{A9EB41AD}) — the number was taken by other work, so the handoff is renamed
+V96_BLANK_SONIC_LASER_HANDOFF.md and every "v95" reference in it and in BIMS copy now says v96.
+The Lambda's adapter loads assays from Mongo assay_definitions first (verified in
+db-adapter.mjs), so the degradation assay needs NO middleware change. No load_assay device events
+in 14 days mention AF233F18/A87934B1 → the new assays are not on any unit yet (or the load_assay
+webhook isn't wired; either way: load them).
+READY NOW: optical degradation (AF233F18) on RELEASED units only, once the assay is loaded — the
+current firmware allowlist rejects it on validating units. NOT YET: blank barcode and laser/dark
+reads — both wait on v96 (+ the blank-test webhook). BIMS side of all three is live.
