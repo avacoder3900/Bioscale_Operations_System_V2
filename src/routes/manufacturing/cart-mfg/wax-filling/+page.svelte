@@ -203,7 +203,18 @@
 		// Only posted when the protocol declares the RTP (server filters by schema).
 		use_tip_calibration: true,
 		max_tip_adjust: 4.0,
-		run_calibration_check: false
+		run_calibration_check: false,
+		// Wax-source aspiration floor (2026-09-17). The protocol's own default is
+		// 1.5mm above the 2ml tube's defined bottom, and its liquid model ends the
+		// run at a hardcoded 50uL dead volume, so for roughly the last 18
+		// aspirations (the last 4-5 cartridges of carrier 3) the p20 tip rides the
+		// floor clamp — 1.5mm above the apex of a conical tube is inside the cone,
+		// the tip wall wedges, bends, and every fill after that lands off the hole
+		// (B07 deck-004, every run 2026-09-09..17: aspirate z walks -27.5 -> -37.1
+		// below the rim and pins at -37.1). 3.5mm clears the cone. The wax settings
+		// dead volume was raised to 150uL the same day so ~5.6mm of wax remains at
+		// the end of a run and the tip stays ~2mm submerged at this floor.
+		min_tip_clearance: 3.5
 	});
 
 	// Orchestrated scan-and-start (deck_load substage): one Start Run press

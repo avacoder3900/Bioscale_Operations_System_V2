@@ -12851,3 +12851,113 @@ webhook isn't wired; either way: load them).
 READY NOW: optical degradation (AF233F18) on RELEASED units only, once the assay is loaded — the
 current firmware allowlist rejects it on validating units. NOT YET: blank barcode and laser/dark
 reads — both wait on v96 (+ the blank-test webhook). BIMS side of all three is live.
+
+================================================================================
+2026-09-15 — fix/studio-mount-default-right — new PT-CT-112 thermoseal lot so WI-01 backing can scan carts
+================================================================================
+Alejandro asked for a new thermoseal lot on Cartridge Backing so cartridges could be scanned in.
+Root cause: WI-01's Thermoseal dropdown is built from receiving_lots (part PT-CT-112, status not
+rejected/returned) minus consumption/scrap inventory_transactions per lotId, and every one of the
+11 PT-CT-112 lots (Apr–May, last laser-cut batch 2026-05-22) was at 0 remaining — several were
+over-consumed (e.g. LOT-20260522-XQIF qty 184 / used 188). No laser-cut batch has been recorded
+since May, so nothing had replenished the list.
+Data change only (no code). Inserted via one-off script against the second-repo .env, mirroring
+laser-cutting/recordBatch + the 2026-08-25 ZEBRA-20260818-PTCT106 backfill:
+  - receiving_lots UO1HX33qBD5iS85LBmLyi: lotId/lotNumber LOT-20260915-4MWU, part PT-CT-112,
+    quantity 480 (placeholder = 30 sheets × 16 strips; NOT a counted batch — adjust `quantity`
+    if the physical strip count differs), status accepted, coc, operator "claude (req: alejandrov)".
+  - inventory_transactions LPMaRC_7XdlpWFmD7VUFk: creation +480 on PT-CT-112 (inventoryCount
+    −691 → −211; the count has been negative since the over-consumption above).
+  - audit_log INSERT row on receiving_lots/UO1HX33qBD5iS85LBmLyi with the reason.
+Verified with WI-01's own availability math: LOT-20260915-4MWU remaining 480 → it now appears in
+the Thermoseal Laser Cut Sheet dropdown / validates on scan. WI-01 does not submit a planned
+quantity, so the still-negative part inventoryCount does not block checkAndStart.
+Not fixed (systemic): the cut-thermoseal/laser-cutting pages have not been used since May, so
+PT-CT-112 lots only get created by hand; recording actual laser-cut batches would keep this from
+recurring.
+
+================================================================================
+2026-09-15 — fix/studio-mount-default-right — B07 wax run c4a9bb56 failed at carrier 3: calibrator USB drop, not a probe problem
+================================================================================
+Operator report: wax fill on B07 (deck-004, 24 carts, run c4a9bb56, started 16:47Z) filled rows 1-2
+fine, then "calibration failed twice" on row 3. Diagnosis from the robot (no code change):
+  - Run error: "Tip calibration REJECTED twice (serial write failed (X))" at 17:13:15Z. The
+    protocol comment before each reject was "Error writing to serial during X calibration:
+    (5, 'Input/output error')" — errno 5 on the calibrator handle, not an over-cap adjust.
+  - dmesg: the Particle Argon calibrator (2b04:c00c, usb 1-1.3) disconnected/re-enumerated at
+    17:11:21Z and 17:11:51Z — during the "carrier 2 done, remove cartridges" checkpoint pause
+    (17:11:12Z) — coming back as /dev/ttyACM0 while the run still held /dev/ttyACM1. It also
+    dropped at 16:12Z and 16:36Z (before the run). Both carrier-1/2 probes were normal (adjust
+    -2.5/+0.3, -2.8/+0.3; baseline -1.0/2.5).
+  - Fixture is healthy now: ttyACM0 answers C → "=-1.0:2.5", I → deck-004 particle id.
+  - Protocol gap: pick_up_and_calibrate_tip retries with a fresh tip on ANY reject, reusing the
+    dead serial handle, so a USB drop always burns 2 tips (C1, D1; tracker now index 4) and
+    fails. Not fixed: on "serial write failed" it should re-probe for the calibrator / pause for
+    reconnect instead. (memory: project-wax-calibrator-usb-drop-midrun)
+  - Recovery path given to operator: reseat cable → BIMS Abort (smart abort marks carts 1-16
+    wax_filled from the robot log, reverts 17-24 to backing) → new run, scan carts 17-24 with
+    Start at cartridge = 17.
+BIMS wax_filling_runs drZ95mY1yQ_cGB1yfVMDe still status Running (opentronsRunFinalStatus failed).
+
+================================================================================
+2026-09-17 — fix/studio-mount-default-right — deck-004 wax-hole Z flattened to 8.65 (B07 calibration, data only)
+================================================================================
+Alejandro, mid-calibration on B07/deck-004, asked whether every wax hole should share one Z, then
+asked for it to be applied. Analysis of the live Mongo def first: 288 wax holes (even cols) spanned
+z 8.495..8.790 (median 8.650; carrier 1 all 8.65, C2/C3 ±0.15 scatter), least-squares plane tilt
+0.02 mm across the whole deck, residual sd 0.05 mm — i.e. teaching noise, not geometry; fill hovers
+1 mm above the rim (dispense_depth −1) so ±0.15 mm is immaterial. Reagent holes (odd cols) spread
+2.35 mm (6.75..9.10) — NOT touched, flagged for a separate look.
+Applied via script mirroring applyDeckEditsPerWell (not raw-only): 136 wax wells moved to z=8.65
+(152 already there), X/Y untouched, reagent wells verified byte-identical, hasUnpublishedEdits=true,
+136 deck_calibration_edits rows (robotId B07, deckEquipmentId DECK-004, createdBy
+"claude (req: alejandrov)"), one audit_log deck_calibration_edit_batch row, local Opentrons labware
+JSON mirrored. Pre-change backup: calibration-backups/deck-004-pre-z-flatten-2026-09-17T20-40-52-780Z.json
+(untracked dir). Next B07 wax run's freshness gate will re-upload the def to the robot; the Studio
+needs a reload to show the new Z. No code change.
+
+================================================================================
+2026-09-17 — fix/studio-mount-default-right — B07 tip drop + home via bridge queue; B07 is on WiFi with ~90% packet loss
+================================================================================
+Alejandro asked for B07's p20 tip to be ejected and the gantry homed after Studio calibration. B07
+went dark from the lab Mac right after the 20:44Z protocol re-upload: ping 90-97% loss, :31950/:22
+connects timing out, while the bridge heartbeat kept arriving and SSH (when it got through) showed
+uptime 2.3 days, load 0.2, both services active — NOT a reboot. dmesg: eth0 (smsc95xx) never links,
+wlan0 is the live interface → B07 runs on WiFi and the link is badly degraded (R04 on the same LAN
+answered normally). Worked around it by queuing kind:'http' ot2_bridge_commands (deviceId
+ot2-b07-bridge; daemon executes against localhost and posts back over its own retrying outbound):
+verified no protocol run active (038d1800 succeeded), found the Studio maintenance run 77c28050 with
+p20 752ebc2c and a modelled tip (pickUpTip 20:16:31Z), then moveToAddressableAreaForDropTip
+(fixedTrash) → dropTipInPlace → home, all succeeded (21:1xZ). Maintenance run left open (it is the
+operator's Studio session). Follow-up: check B07's WiFi/AP or plug eth0 in — this loss profile is
+the likely root of today's "bridge did not respond" style timeouts on B07.
+
+================================================================================
+2026-09-17 — fix/wax-aspirate-floor-clearance — B07 tips bending in the wax tube at the end of a run: raise the aspiration floor to 3.5 mm
+================================================================================
+Operator report (alejandro): on B07/deck-004 wax runs the pipette goes too deep for the last 4-5
+cartridges of carrier 3, bends the tip, and those carts fill badly. Run logs (5171c73d today and
+038d1800 earlier, identical profile) show it is the WAX SOURCE TUBE, not the deck: every aspiration
+is from drybath A3; the tip's depth below the rim walks −27.48 → −37.10 mm over the run and pins at
+−37.10 for ~18 aspirations = wells ~220-288 = carrier-3 carts 20-24. −37.10 is exactly the protocol's
+floor clamp: tube bottom z 67.25 + min_tip_clearance 1.5 (rim 105.85). The 2 ml tube is conical, so
+1.5 mm above the apex is inside the cone and the p20 tip wall wedges. Dispense depth is unchanged
+(hover +1.0 at every hole incl. carrier 3) and deck-004 wax Z is flat at 8.65 — ruled out.
+Why it always ends on the floor: the .py models the liquid from a HARDCODED dead_volume = 50 uL
+(line 1485) → modelled surface 3.8 mm at the end → target 1.8 mm → clamped at 1.5. BIMS meanwhile
+told operators to load 541 uL (19.2 uL/cart from the 4×1.6 gate era + 80 dead) while the current
+gates 2.2/2.2/2.2/1.8 × 3 rows dispense 25.2 uL/cart = 604.8 uL per deck — the prompt was 64 uL
+short of what the run dispenses (operators were evidently overfilling by hand).
+Changes:
+  - src/routes/manufacturing/cart-mfg/wax-filling/+page.svelte: WAX_PARAM_DEFAULTS gains
+    min_tip_clearance: 3.5 (posted only when the protocol declares it; all three robots' wax
+    protocols do). No .py change, no re-upload needed — it is a run-time parameter.
+  - manufacturing_settings.waxFilling (data, audit-logged): waxPerCartridgeUl 19.2 → 25.2,
+    waxFillDeadVolumeUl 80 → 150. 24-cart fill prompt becomes 755 uL, leaving ~150 uL (≈5.6 mm) in
+    the tube at the end so the tip is ~2 mm submerged at the 3.5 mm floor. Clamp comments
+    ("Aspirate clamped to the tube floor") will now appear for roughly the last third of a run —
+    expected.
+Not done (follow-up): make the .py dead_volume an RTP fed from the BIMS setting so the liquid
+model matches what is actually loaded; that needs a protocol deploy to all three robots.
+npm run check: 10 errors / 435 warnings repo-wide, none in the touched file (all 10 pre-existing on
+master: r2.ts fetch overload, AskBimsWidget comparison, assembly/[sessionId] implicit-any x8).
