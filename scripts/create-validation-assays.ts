@@ -27,6 +27,7 @@
  *
  *   npx tsx scripts/create-validation-assays.ts            # dry run: prints steps + durations
  *   npx tsx scripts/create-validation-assays.ts --apply
+ *   npx tsx scripts/create-validation-assays.ts --only-sonic --apply   # the other two already exist
  */
 import mongoose from 'mongoose';
 import * as dotenv from 'dotenv';
@@ -34,6 +35,7 @@ dotenv.config();
 
 const APPLY = process.argv.includes('--apply');
 const SKIP_SONIC = process.argv.includes('--skip-sonic');
+const ONLY_SONIC = process.argv.includes('--only-sonic');
 const targetArg = process.argv.indexOf('--sonic-target-s');
 const SONIC_TARGET_S = targetArg >= 0 ? Number(process.argv[targetArg + 1]) : 300;
 
@@ -131,7 +133,7 @@ async function main() {
 		{ name: 'Sonic Fingerprint - Cortisol 5.6 Moves', code: sonicCode, base: cortisol,
 		  description: `Sonic fingerprint: the motion of A67AC662 (no wax wait, no sensor reads), every oscillation's cycles × ${k.toFixed(3)} to run ≈ ${SONIC_TARGET_S / 60} min. Triggered by a SONIC- barcode (firmware v96); the recording is uploaded by hand.` }
 	];
-	const defs = SKIP_SONIC ? allDefs.filter((d) => !d.name.startsWith('Sonic')) : allDefs;
+	const defs = ONLY_SONIC ? allDefs.filter((d) => d.name.startsWith('Sonic')) : SKIP_SONIC ? allDefs.filter((d) => !d.name.startsWith('Sonic')) : allDefs;
 
 	for (const d of defs) {
 		const dup = await assays.findOne({ name: d.name });
