@@ -12830,3 +12830,8 @@ DB and UI to match Jacob's wording), blank cart (A87934B1), dark read, laser-int
   table with unit filter. Clear errors when the unit lacks the function (needs v95), is busy, or has
   a cartridge in. Hub launcher + tab "Optical Bench".
 npm run check: 10/435 — baseline.
+
+Deployment: production — building from the GitHub push to master (Vercel dashboard, commit below)
+Source: branch master @ commit 65671954 (feat/spu-tweaks)
+Retrieve this exact code: git checkout master at commit 65671954
+What this deployment is for: Optical Bench page; "optical degradation" wording
