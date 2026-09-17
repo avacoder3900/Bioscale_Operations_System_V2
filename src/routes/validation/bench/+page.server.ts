@@ -20,7 +20,21 @@ import type { Actions, PageServerLoad } from './$types';
  * calls the function, polls the variable until that seq shows up, and stores
  * the result as a validation session against the unit. Contract:
  * brevitest-device/firmware/Docs/V96_BLANK_SONIC_LASER_HANDOFF.md, Change 6.
+ *
+ * The laser position is HARD-CODED IN FIRMWARE (Jacob, 2026-09-17): laser_read /
+ * dark_read with an empty argument read at OPTICAL_BENCH_LASER_POSITION (39500 µm,
+ * found on 0247 — the physical stop is between 39500 and 40500 on a fresh home)
+ * and the validator caps any position / scan end at OPTICAL_BENCH_POSITION_LIMIT
+ * (39500). BIMS never chooses the position: with default gain/astep/atime it
+ * sends no argument at all; only when those are overridden does it send the
+ * mirrored constant as the first CSV field (the parser stops at an empty field).
  */
+/** Mirrors OPTICAL_BENCH_LASER_POSITION / OPTICAL_BENCH_POSITION_LIMIT in brevitest-firmware.h. */
+const FIRMWARE_LASER_POSITION_UM = 39500;
+const FIRMWARE_POSITION_LIMIT_UM = 39500;
+const FIRMWARE_MAX_SCAN_POINTS = 12;
+/** OPTICAL_BENCH_GAIN_DEFAULT / SPECTRO_ASTEP_DEFAULT / SPECTRO_ATIME_DEFAULT. */
+const FIRMWARE_DEFAULTS = { gain: 1, astep: 999, atime: 49 } as const;
 const BENCH_TYPES = ['laser', 'dark', 'laser_scan'] as const;
 type BenchType = (typeof BENCH_TYPES)[number];
 const FN: Record<BenchType, string> = { laser: 'laser_read', dark: 'dark_read', laser_scan: 'laser_scan' };
@@ -31,7 +45,7 @@ const POLL_MAX = 24; // 36 s — a re-home + move + three reads is well under th
 function describeReturn(v: number): string | null {
 	if (v === -1) return 'The unit is busy (not idle). Wait for it to finish and try again.';
 	if (v === -2) return 'A cartridge is inserted. The bench reads need an empty slot.';
-	if (v === -3) return 'The unit rejected the arguments (position outside the stage travel, or too many scan points).';
+	if (v === -3) return `The unit rejected the arguments (scan end above ${FIRMWARE_POSITION_LIMIT_UM} µm, more than ${FIRMWARE_MAX_SCAN_POINTS} scan points, or gain/astep/atime out of range).`;
 	if (v < 0) return `The unit returned ${v}.`;
 	return null;
 }
@@ -54,14 +68,9 @@ export const load: PageServerLoad = async ({ locals }) => {
 	const users = userIds.length ? ((await User.find({ _id: { $in: userIds } }, { username: 1 }).lean()) as any[]) : [];
 	const nameOf = new Map(users.map((u) => [u._id, u.username]));
 
-	// The position each unit last used for a laser read — the found alignment.
-	const lastPos = new Map<string, number>();
-	for (const s of sessions) {
-		if (s.type === 'laser' && s.spuId && !lastPos.has(s.spuId) && typeof s.rawData?.pos === 'number') lastPos.set(s.spuId, s.rawData.pos);
-	}
-
 	return {
-		spus: spus.map((s) => ({ id: s._id, udi: s.udi, status: s.status, lastLaserPos: lastPos.get(s._id) ?? null })),
+		firmware: { laserPositionUm: FIRMWARE_LASER_POSITION_UM, positionLimitUm: FIRMWARE_POSITION_LIMIT_UM, maxScanPoints: FIRMWARE_MAX_SCAN_POINTS, defaults: FIRMWARE_DEFAULTS },
+		spus: spus.map((s) => ({ id: s._id, udi: s.udi, status: s.status })),
 		history: sessions.map((s) => ({
 			id: s._id as string,
 			type: s.type as BenchType,
@@ -87,23 +96,35 @@ export const actions: Actions = {
 			const v = Number(form.get(k)?.toString() ?? '');
 			return Number.isFinite(v) ? v : d;
 		};
-		const pos = num('pos', 21000);
-		const gain = num('gain', 1);
-		const astep = num('astep', 499);
-		const atime = num('atime', 49);
-		const start = num('start', pos - 2000);
-		const end = num('end', pos + 2000);
+		// Position is fixed in firmware — see the header comment. Kept in rawData so
+		// history rows and the journal line still say where the read happened.
+		const pos = FIRMWARE_LASER_POSITION_UM;
+		const gain = num('gain', FIRMWARE_DEFAULTS.gain);
+		const astep = num('astep', FIRMWARE_DEFAULTS.astep);
+		const atime = num('atime', FIRMWARE_DEFAULTS.atime);
+		const start = num('start', FIRMWARE_POSITION_LIMIT_UM - 4400);
+		const end = num('end', FIRMWARE_POSITION_LIMIT_UM);
 		const stepUm = num('stepUm', 400);
 
 		if (!spuId) return fail(400, { error: 'Pick a unit' });
+		if (gain < 0 || gain > 10) return fail(400, { error: 'Gain must be 0–10.' });
+		if (astep < 0 || astep > 65534 || atime < 0 || atime > 255) return fail(400, { error: 'astep must be 0–65534 and atime 0–255.' });
+		if (type === 'laser_scan') {
+			if (stepUm <= 0 || start < 0 || end < start) return fail(400, { error: 'Scan needs start ≥ 0, end ≥ start and a positive step.' });
+			if (end > FIRMWARE_POSITION_LIMIT_UM) return fail(400, { error: `Scan end cannot exceed ${FIRMWARE_POSITION_LIMIT_UM} µm — the physical stop is just past it and the firmware refuses anything higher.` });
+			if (Math.floor((end - start) / stepUm) + 1 > FIRMWARE_MAX_SCAN_POINTS) return fail(400, { error: `At most ${FIRMWARE_MAX_SCAN_POINTS} scan points per channel — widen the step.` });
+		}
 		const spu = (await Spu.findById(spuId).select('udi particleLink.particleDeviceId').lean()) as any;
 		if (!spu?.particleLink?.particleDeviceId) return fail(400, { error: 'That unit has no Particle device linked' });
 		const deviceId = spu.particleLink.particleDeviceId as string;
 
+		const usingDefaults = gain === FIRMWARE_DEFAULTS.gain && astep === FIRMWARE_DEFAULTS.astep && atime === FIRMWARE_DEFAULTS.atime;
 		const arg =
 			type === 'laser_scan'
 				? [start, end, stepUm, gain, astep, atime].join(',')
-				: [pos, gain, astep, atime].join(',');
+				: usingDefaults
+					? '' // empty arg → firmware reads at its own hard-coded position with its own defaults
+					: [pos, gain, astep, atime].join(',');
 
 		// 1. Trigger. The function returns the seq the result will carry.
 		let seq: number;

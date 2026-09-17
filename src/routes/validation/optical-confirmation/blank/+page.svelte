@@ -1,24 +1,23 @@
 <script lang="ts">
-	interface Stat { mean: number | null; sd: number | null; cv: number | null; n: number }
+	type Band = 'f1' | 'f2' | 'f3' | 'f4' | 'f5' | 'f6' | 'f7' | 'f8' | 'clear' | 'nir';
+	interface Channel { channel: 'A' | 'B' | 'C'; n: number; sums: Record<Band, number> }
 	interface Run {
-		id: string; spuUdi: string; barcode: string | null; startTime: string | null; receivedAt: string | null;
-		numberOfReadings: number;
-		ratio: { A: number | null; B: number | null; C: number | null };
-		channelCv: { A: number | null; B: number | null; C: number | null };
-		crossWellCv: number | null; warning: boolean; reasons: string[];
+		id: string; spuUdi: string; barcode: string | null; receivedAt: string | null;
+		durationS: number | null; numberOfReadings: number; partial: boolean; channels: Channel[];
 	}
 	interface Props {
 		data: {
-			devices: Array<{ udi: string; spuId: string | null; runs: Run[]; A: Stat; B: Stat; C: Stat; latest: string | null }>;
-			fleet: Array<{ channel: 'A' | 'B' | 'C'; n: number; mean: number | null; sd: number | null; cv: number | null }>;
+			devices: Array<{ udi: string; spuId: string | null; runs: Run[]; complete: number; latest: string | null }>;
 			total: number;
+			bands: Band[];
+			fullScanReadings: number;
 		};
 	}
 	let { data }: Props = $props();
-	const CH: Array<'A' | 'B' | 'C'> = ['A', 'B', 'C'];
-	const fmt = (v: number | null | undefined, dp = 2) => (v == null ? '—' : v.toFixed(dp));
-	const pct = (v: number | null | undefined, dp = 1) => (v == null ? '—' : `${v.toFixed(dp)}%`);
+	const BAND_LABEL: Record<Band, string> = { f1: 'F1 415', f2: 'F2 445', f3: 'F3 480', f4: 'F4 515', f5: 'F5 555', f6: 'F6 590', f7: 'F7 630', f8: 'F8 680', clear: 'Clear', nir: 'NIR' };
+	const CH_COLOR: Record<string, string> = { A: 'var(--color-tron-cyan)', B: 'var(--color-tron-orange)', C: 'var(--color-tron-purple)' };
 	const when = (iso: string | null) => (iso ? new Date(iso).toLocaleString() : '—');
+	const num = (v: number) => v.toLocaleString();
 	let open = $state<string | null>(null);
 </script>
 
@@ -29,8 +28,9 @@
 		<p class="tron-text-muted mt-1 text-sm">
 			One physical blank cartridge, scanned on unit after unit. The chemistry is held constant, so
 			whatever differs between rows is the instrument. Runs arrive from the device over the Particle
-			webhook (firmware v96, BLANK- barcode) — nothing to assign, link or re-arm. Raw F7/F3 over all
-			42 positions; nothing here is written back.
+			webhook (firmware v96, BLANK- barcode) — nothing to assign, link or re-arm. Each row is a
+			channel's raw band totals: the sum of every band over that channel's 42 reads, no ratio.
+			Nothing here is written back.
 		</p>
 	</div>
 
@@ -46,70 +46,64 @@
 		</div>
 	{:else}
 		<div class="tron-card p-4">
-			<h2 class="tron-heading mb-2 text-sm font-semibold uppercase tracking-wide">Across devices — latest run each</h2>
-			<table class="text-sm">
-				<thead class="text-[10px] uppercase text-[var(--color-tron-text-secondary)]">
-					<tr><th class="pr-6 text-left font-medium">Channel</th><th class="pr-6 text-left font-medium">Devices</th><th class="pr-6 text-left font-medium">Mean</th><th class="pr-6 text-left font-medium">SD</th><th class="text-left font-medium">CV</th></tr>
-				</thead>
-				<tbody class="font-mono tron-text-primary">
-					{#each data.fleet as f (f.channel)}
-						<tr><td class="pr-6">{f.channel}</td><td class="pr-6">{f.n}</td><td class="pr-6">{fmt(f.mean, 3)}</td><td class="pr-6">{fmt(f.sd, 3)}</td><td class={f.cv != null && f.cv > 15 ? 'text-amber-400' : ''}>{pct(f.cv)}</td></tr>
-					{/each}
-				</tbody>
-			</table>
-			<p class="tron-text-muted mt-2 text-xs">Same cartridge everywhere, so this spread is device-to-device difference, not chemistry.</p>
-		</div>
-
-		<div class="tron-card p-4">
 			<h2 class="tron-heading mb-3 text-sm font-semibold uppercase tracking-wide">Per device ({data.devices.length}) · {data.total} runs</h2>
 			<div class="overflow-x-auto">
-				<table class="w-full min-w-[56rem] text-sm">
+				<table class="w-full min-w-[40rem] text-sm">
 					<thead class="text-[10px] uppercase text-[var(--color-tron-text-secondary)]">
 						<tr class="border-b border-[var(--color-tron-border)]">
 							<th class="py-2 pr-4 text-left font-medium">Unit</th>
 							<th class="py-2 pr-4 text-left font-medium">Runs</th>
-							<th class="py-2 pr-4 text-left font-medium">A</th>
-							<th class="py-2 pr-4 text-left font-medium">B</th>
-							<th class="py-2 pr-4 text-left font-medium">C</th>
-							<th class="py-2 pr-4 text-left font-medium" title="Run-to-run CV of each channel on this unit">Repeatability A / B / C</th>
+							<th class="py-2 pr-4 text-left font-medium" title="Runs with all {data.fullScanReadings} readings (42 positions × 3 channels)">Complete</th>
 							<th class="py-2 text-left font-medium">Latest</th>
 						</tr>
 					</thead>
 					<tbody class="font-mono">
 						{#each data.devices as d (d.udi)}
 							<tr class="border-b border-[var(--color-tron-border)]/50 cursor-pointer hover:bg-[var(--color-tron-bg-secondary)]/40" onclick={() => (open = open === d.udi ? null : d.udi)}>
-								<td class="py-2 pr-4 font-bold text-[var(--color-tron-cyan)]">{d.spuId ? '' : ''}{d.udi} {open === d.udi ? '▴' : '▾'}</td>
+								<td class="py-2 pr-4 font-bold text-[var(--color-tron-cyan)]">{d.udi} {open === d.udi ? '▴' : '▾'}</td>
 								<td class="py-2 pr-4">{d.runs.length}</td>
-								{#each CH as ch}
-									<td class="py-2 pr-4 tron-text-primary">{fmt(d[ch].mean, 3)}</td>
-								{/each}
-								<td class="py-2 pr-4 text-xs">
-									{#each CH as ch, i}
-										<span class={d[ch].cv != null && d[ch].cv > 5 ? 'text-amber-400' : ''}>{pct(d[ch].cv)}</span>{i < 2 ? ' / ' : ''}
-									{/each}
-								</td>
+								<td class="py-2 pr-4 {d.complete < d.runs.length ? 'text-amber-400' : ''}">{d.complete}</td>
 								<td class="py-2 text-xs text-[var(--color-tron-text-secondary)]">{when(d.latest)}</td>
 							</tr>
 							{#if open === d.udi}
 								<tr class="border-b border-[var(--color-tron-border)]">
-									<td colspan="7" class="bg-[var(--color-tron-bg-secondary)]/40 px-4 py-3">
-										<table class="w-full text-xs">
-											<thead class="text-[10px] uppercase text-[var(--color-tron-text-secondary)]">
-												<tr><th class="pr-4 text-left font-medium">When</th><th class="pr-4 text-left font-medium">Blank code</th><th class="pr-4 text-left font-medium">A</th><th class="pr-4 text-left font-medium">B</th><th class="pr-4 text-left font-medium">C</th><th class="pr-4 text-left font-medium" title="Within-scan CV per channel">Scan CV A / B / C</th><th class="pr-4 text-left font-medium">Cross-well</th><th class="text-left font-medium">Flags</th></tr>
-											</thead>
-											<tbody class="font-mono tron-text-primary">
-												{#each d.runs as r (r.id)}
+									<td colspan="4" class="bg-[var(--color-tron-bg-secondary)]/40 px-4 py-3">
+										<div class="overflow-x-auto">
+											<table class="w-full min-w-[64rem] text-xs">
+												<thead class="text-[10px] uppercase text-[var(--color-tron-text-secondary)]">
 													<tr>
-														<td class="pr-4 py-0.5">{when(r.startTime)}</td>
-														<td class="pr-4 py-0.5">{r.barcode ?? '—'}</td>
-														{#each CH as ch}<td class="pr-4 py-0.5">{fmt(r.ratio[ch], 3)}</td>{/each}
-														<td class="pr-4 py-0.5">{pct(r.channelCv.A)} / {pct(r.channelCv.B)} / {pct(r.channelCv.C)}</td>
-														<td class="pr-4 py-0.5 {r.crossWellCv != null && r.crossWellCv > 15 ? 'text-amber-400' : ''}">{pct(r.crossWellCv)}</td>
-														<td class="py-0.5 font-sans text-[var(--color-tron-text-secondary)]" title={r.reasons.join('\n')}>{r.warning ? '⚠' : '—'}</td>
+														<th class="pr-4 text-left font-medium">Received</th>
+														<th class="pr-4 text-left font-medium">Blank code</th>
+														<th class="pr-3 text-left font-medium">Ch</th>
+														<th class="pr-3 text-right font-medium" title="Reads summed">n</th>
+														{#each data.bands as b (b)}<th class="pr-3 text-right font-medium">{BAND_LABEL[b]}</th>{/each}
 													</tr>
-												{/each}
-											</tbody>
-										</table>
+												</thead>
+												<tbody class="font-mono tron-text-primary">
+													{#each d.runs as r (r.id)}
+														{#if r.numberOfReadings === 0}
+															<tr class="border-t border-[var(--color-tron-border)]/40">
+																<td class="pr-4 py-1 text-[var(--color-tron-text-secondary)]">{when(r.receivedAt)}</td>
+																<td class="pr-4 py-1">{r.barcode ?? '—'}</td>
+																<td colspan={data.bands.length + 2} class="py-1 font-sans text-amber-400">No readings — the run was cancelled or cut short ({r.durationS ?? '?'} s).</td>
+															</tr>
+														{:else}
+															{#each r.channels as c, i (c.channel)}
+																<tr class={i === 0 ? 'border-t border-[var(--color-tron-border)]/40' : ''}>
+																	{#if i === 0}
+																		<td class="pr-4 py-0.5 align-top text-[var(--color-tron-text-secondary)]" rowspan="3">{when(r.receivedAt)}{#if r.partial}<span class="ml-1 text-amber-400" title="{r.numberOfReadings} of {data.fullScanReadings} readings">⚠ {r.numberOfReadings}</span>{/if}</td>
+																		<td class="pr-4 py-0.5 align-top" rowspan="3">{r.barcode ?? '—'}</td>
+																	{/if}
+																	<td class="pr-3 py-0.5"><span class="mr-1 inline-block h-2 w-2 rounded-full align-middle" style="background: {CH_COLOR[c.channel]}"></span>{c.channel}</td>
+																	<td class="pr-3 py-0.5 text-right text-[var(--color-tron-text-secondary)]">{c.n}</td>
+																	{#each data.bands as b (b)}<td class="pr-3 py-0.5 text-right">{num(c.sums[b])}</td>{/each}
+																</tr>
+															{/each}
+														{/if}
+													{/each}
+												</tbody>
+											</table>
+										</div>
 									</td>
 								</tr>
 							{/if}

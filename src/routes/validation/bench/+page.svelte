@@ -6,7 +6,8 @@
 	interface Result { seq?: number; kind?: string; pos?: number; gain?: number; astep?: number; atime?: number; ms?: number; temp?: number; start?: number; end?: number; step?: number; ch?: Chan[]; error?: string }
 	interface Props {
 		data: {
-			spus: Array<{ id: string; udi: string; status: string; lastLaserPos: number | null }>;
+			firmware: { laserPositionUm: number; positionLimitUm: number; maxScanPoints: number; defaults: { gain: number; astep: number; atime: number } };
+			spus: Array<{ id: string; udi: string; status: string }>;
 			history: Array<{ id: string; type: BenchType; spuId: string | null; spuUdi: string | null; by: string | null; at: string | null; result: Result | null }>;
 		};
 		form: { error?: string; ran?: boolean; type?: BenchType; spuUdi?: string; result?: Result } | null;
@@ -17,24 +18,22 @@
 	const TYPE_LABEL: Record<BenchType, string> = { laser: 'Laser into sensor', dark: 'Dark read', laser_scan: 'Find laser position (scan)' };
 	const CH_COLOR: Record<string, string> = { A: 'var(--color-tron-cyan)', B: 'var(--color-tron-orange)', C: 'var(--color-tron-purple)' };
 
+	const fw = $derived(data.firmware);
 	let spuId = $state('');
 	let type = $state<BenchType>('laser');
-	let pos = $state(21000);
-	let gain = $state(1);
-	let astep = $state(499);
-	let atime = $state(49);
-	let start = $state(19000);
-	let end = $state(23000);
+	let gain = $state(fw.defaults.gain);
+	let astep = $state(fw.defaults.astep);
+	let atime = $state(fw.defaults.atime);
+	// Scan defaults: the last 4.4 mm up to the firmware's ceiling, 12 points.
+	let start = $state(fw.positionLimitUm - 4400);
+	let end = $state(fw.positionLimitUm);
 	let stepUm = $state(400);
 	let running = $state(false);
 	let filterUdi = $state('');
 
-	const selected = $derived(data.spus.find((s) => s.id === spuId) ?? null);
-	// When a unit has a found laser position, default to it.
-	$effect(() => {
-		if (selected?.lastLaserPos != null) pos = selected.lastLaserPos;
-	});
 	const scanPoints = $derived(stepUm > 0 ? Math.floor((end - start) / stepUm) + 1 : 0);
+	const scanTooHigh = $derived(end > fw.positionLimitUm);
+	const scanBad = $derived(type === 'laser_scan' && (scanPoints > fw.maxScanPoints || scanTooHigh || scanPoints < 1));
 
 	const when = (iso: string | null) => (iso ? new Date(iso).toLocaleString() : '—');
 	const shown = $derived(filterUdi ? data.history.filter((h) => h.spuUdi === filterUdi) : data.history);
@@ -60,10 +59,11 @@
 	<div>
 		<h1 class="tron-heading text-2xl font-bold">Optical Bench</h1>
 		<p class="tron-text-muted mt-1 text-sm">
-			Cartridge-free reads. The stage carries the sensors and the lasers are fixed: at the right stage
-			position each sensor sits directly in its laser. Press Go and the unit re-homes, moves, reads, and
-			the result is stored against it as validation data. Needs firmware v96 and an empty cartridge
-			slot. Use the scan to find each unit's laser position, then read at it.
+			Cartridge-free reads. The stage carries the sensors and the lasers are fixed: at {fw.laserPositionUm} µm
+			each sensor sits directly in its laser. That position is hard-coded in firmware v96 — press Go and
+			the unit re-homes, moves there, reads, and the result is stored against it as validation data.
+			Needs firmware v96 and an empty cartridge slot. The scan sweeps photodiode vs. position up to the
+			same ceiling if you want to confirm the alignment on a unit.
 		</p>
 	</div>
 
@@ -88,7 +88,7 @@
 				<select id="bench-spu" name="spuId" bind:value={spuId} class="tron-select w-full" style="min-height: 44px;" required>
 					<option value="" disabled>Choose a unit…</option>
 					{#each data.spus as s (s.id)}
-						<option value={s.id}>{s.udi} — {s.status}{s.lastLaserPos != null ? ` · laser @ ${s.lastLaserPos} µm` : ''}</option>
+						<option value={s.id}>{s.udi} — {s.status}</option>
 					{/each}
 				</select>
 			</div>
@@ -111,19 +111,27 @@
 				<div><label for="b-end" class="tron-label">End µm</label><input id="b-end" name="end" type="number" bind:value={end} class="tron-input w-full" /></div>
 				<div><label for="b-step" class="tron-label">Step µm</label><input id="b-step" name="stepUm" type="number" bind:value={stepUm} class="tron-input w-full" /></div>
 			{:else}
-				<div><label for="b-pos" class="tron-label">Stage position µm</label><input id="b-pos" name="pos" type="number" bind:value={pos} class="tron-input w-full" /></div>
+				<div>
+					<span class="tron-label">Stage position</span>
+					<div class="tron-input flex w-full items-center justify-between opacity-80" style="min-height: 44px;" title="OPTICAL_BENCH_LASER_POSITION in firmware v96">
+						<span class="font-mono">{fw.laserPositionUm} µm</span>
+						<span class="tron-text-muted text-[10px] uppercase tracking-wide">fixed in firmware</span>
+					</div>
+				</div>
 			{/if}
 			<div><label for="b-gain" class="tron-label">Gain</label><input id="b-gain" name="gain" type="number" min="0" max="10" bind:value={gain} class="tron-input w-full" /></div>
 			<div><label for="b-astep" class="tron-label">Step (astep)</label><input id="b-astep" name="astep" type="number" bind:value={astep} class="tron-input w-full" /></div>
 			<div><label for="b-atime" class="tron-label">Time (atime)</label><input id="b-atime" name="atime" type="number" bind:value={atime} class="tron-input w-full" /></div>
 		</div>
 		{#if type === 'laser_scan'}
-			<p class="tron-text-muted text-xs {scanPoints > 12 ? 'text-amber-400' : ''}">{scanPoints} points per channel{scanPoints > 12 ? ' — the unit returns at most 12; widen the step' : ''}.</p>
+			<p class="tron-text-muted text-xs {scanBad ? 'text-amber-400' : ''}">
+				{scanPoints} points per channel{scanPoints > fw.maxScanPoints ? ` — the unit returns at most ${fw.maxScanPoints}; widen the step` : ''}{scanTooHigh ? ` — end cannot exceed ${fw.positionLimitUm} µm (the physical stop is just past it)` : ''}.
+			</p>
 		{:else}
-			<p class="tron-text-muted text-xs">Start with a low gain — a laser straight into the sensor clips at the assay's gain 7. 21000 µm is the cartridge read position; the sensor-under-laser position is what the scan finds.</p>
+			<p class="tron-text-muted text-xs">Gain {fw.defaults.gain}, astep {fw.defaults.astep}, atime {fw.defaults.atime} are the firmware defaults — leave them and the unit is sent no arguments at all. Start with a low gain: a laser straight into the sensor clips at the assay's gain 7.</p>
 		{/if}
 
-		<button type="submit" disabled={!spuId || running || (type === 'laser_scan' && scanPoints > 12)} class="w-full rounded-lg bg-[var(--color-tron-orange)] px-6 py-4 text-lg font-semibold text-[var(--color-tron-bg-primary)] hover:bg-[var(--color-tron-orange)]/90 disabled:cursor-not-allowed disabled:opacity-50" style="min-height: 44px">
+		<button type="submit" disabled={!spuId || running || scanBad} class="w-full rounded-lg bg-[var(--color-tron-orange)] px-6 py-4 text-lg font-semibold text-[var(--color-tron-bg-primary)] hover:bg-[var(--color-tron-orange)]/90 disabled:cursor-not-allowed disabled:opacity-50" style="min-height: 44px">
 			{running ? 'Running on the unit… (re-home, move, read)' : 'Go'}
 		</button>
 	</form>

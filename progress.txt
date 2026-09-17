@@ -12896,3 +12896,24 @@ gained a "Bench finding 2026-09-17" section. Needs rebuild + flash. BIMS webhook
 Jacob created the Particle Console blank-test webhook this session (never exercised yet — the device
 never published). No Lambda involvement: blank-test goes Particle → BIMS directly.
 Serial capture method: PowerShell System.IO.Ports on COM3 @115200 (device VID 2B04), tail -f + grep.
+
+================================================================================
+2026-09-17 — feat/spu-tweaks — bench page matches firmware (fixed laser position); blank page shows band sums
+================================================================================
+Blank runs are arriving (6 on 0247 after the DeviceState fix + Jacob's blank-test webhook).
+- /validation/bench: the firmware hard-codes the laser position (OPTICAL_BENCH_LASER_POSITION 39500,
+  found on 0247; OPTICAL_BENCH_POSITION_LIMIT 39500 caps pos / scan end; ≤12 scan points; defaults
+  gain 1 / astep 999 / atime 49 — the page said 21000 µm and astep 499). Position input removed and
+  shown read-only "39500 µm · fixed in firmware"; with default gain/astep/atime BIMS sends NO argument
+  (firmware parse_csv_ints stops at an empty field, so a position can't be omitted while passing
+  gain — the mirrored constant is sent only when those are overridden). Scan defaults 35100–39500
+  step 400 (12 pts), server + UI validate end ≤ 39500 and ≤ 12 points, per-unit "found position"
+  dropdown suffix and lastLaserPos removed. Constants mirrored in +page.server.ts with a comment.
+- /validation/optical-confirmation/blank: Jacob doesn't want the F7/F3 ratio — per run, each
+  channel's raw band TOTALS (sum of F1…F8, Clear, NIR over that channel's 42 reads, "the number
+  before the division"). Fleet-ratio and CV tables gone; per-device rows (runs, complete, latest)
+  expand to 3 channel rows per run × 10 band sums + n. Rows are ordered/labelled by receivedAt: the
+  record's start_time is the device's millis-since-boot (rendered as 1970). Runs with 0 readings
+  (cancelled / cut short) show one amber line; partial runs (<126 readings) flag the count.
+npm run check: 10/440 — errors at baseline (new warnings are the existing state_referenced_locally
+pattern on $state initialisers).
