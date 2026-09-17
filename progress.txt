@@ -12933,7 +12933,7 @@ operator's Studio session). Follow-up: check B07's WiFi/AP or plug eth0 in — t
 the likely root of today's "bridge did not respond" style timeouts on B07.
 
 ================================================================================
-2026-09-17 — fix/wax-aspirate-floor-clearance — B07 tips bending in the wax tube at the end of a run: raise the aspiration floor to 3.5 mm
+2026-09-17 — fix/wax-aspirate-floor-clearance — B07 tips bending in the wax tube at the end of a run: per-robot aspiration floor
 ================================================================================
 Operator report (alejandro): on B07/deck-004 wax runs the pipette goes too deep for the last 4-5
 cartridges of carrier 3, bends the tip, and those carts fill badly. Run logs (5171c73d today and
@@ -12943,21 +12943,37 @@ is from drybath A3; the tip's depth below the rim walks −27.48 → −37.10 mm
 floor clamp: tube bottom z 67.25 + min_tip_clearance 1.5 (rim 105.85). The 2 ml tube is conical, so
 1.5 mm above the apex is inside the cone and the p20 tip wall wedges. Dispense depth is unchanged
 (hover +1.0 at every hole incl. carrier 3) and deck-004 wax Z is flat at 8.65 — ruled out.
-Why it always ends on the floor: the .py models the liquid from a HARDCODED dead_volume = 50 uL
+Why every run ends on the floor: the .py models the liquid from a HARDCODED dead_volume = 50 uL
 (line 1485) → modelled surface 3.8 mm at the end → target 1.8 mm → clamped at 1.5. BIMS meanwhile
 told operators to load 541 uL (19.2 uL/cart from the 4×1.6 gate era + 80 dead) while the current
-gates 2.2/2.2/2.2/1.8 × 3 rows dispense 25.2 uL/cart = 604.8 uL per deck — the prompt was 64 uL
-short of what the run dispenses (operators were evidently overfilling by hand).
+gates 2.2/2.2/2.2/1.8 × 3 rows dispense 25.2 uL/cart = 604.8 uL per deck — 64 uL short of what the
+run dispenses (operators were evidently overfilling by hand).
+Why only B07 ("other robots are fine with 1.5"): R04's commanded path is byte-identical (same 72
+aspirates, same −37.1 pin), deck cals are pure rotations, pipettes report no tip-overlap table, and
+the p20 pipette-offset z difference (B07 +0.8 / R04 −0.9) goes the SAFE way for B07. The taught
+frames tell the story: B07 deck-004 taught wax Z 8.65 = the deck file's design Z (8.65-9.1) and B14
+deck-003 8.94 = design (8.8-9.1), but R04 deck-001 taught 3.76 vs design 7.4-7.75 (ialas −3.90 on
+08-06, jacob −4.40 on 09-15); R04 also still runs the default probe z 34.49 vs B07's probed 40.15.
+So R04's model thinks its tip is ~4-5 mm lower than it physically is: at the untaught wax tube its
+1.5 mm floor is really ~6 mm, and raising it would lift the tip OUT of the wax at run end. B07's
+frame is accurate, so 1.5 really is 1.5. The floor is therefore per robot, not a fleet default.
 Changes:
-  - src/routes/manufacturing/cart-mfg/wax-filling/+page.svelte: WAX_PARAM_DEFAULTS gains
-    min_tip_clearance: 3.5 (posted only when the protocol declares it; all three robots' wax
-    protocols do). No .py change, no re-upload needed — it is a run-time parameter.
-  - manufacturing_settings.waxFilling (data, audit-logged): waxPerCartridgeUl 19.2 → 25.2,
-    waxFillDeadVolumeUl 80 → 150. 24-cart fill prompt becomes 755 uL, leaving ~150 uL (≈5.6 mm) in
-    the tube at the end so the tip is ~2 mm submerged at the 3.5 mm floor. Clamp comments
-    ("Aspirate clamped to the tube floor") will now appear for roughly the last third of a run —
-    expected.
-Not done (follow-up): make the .py dead_volume an RTP fed from the BIMS setting so the liquid
-model matches what is actually loaded; that needs a protocol deploy to all three robots.
-npm run check: 10 errors / 435 warnings repo-wide, none in the touched file (all 10 pre-existing on
+  - src/lib/server/opentrons/calibration-rtps.ts: inject min_tip_clearance from the calibrator
+    fixture's new minTipClearanceWaxMm (wax-filling only, only when the .py declares it, clamped to
+    the declared min/max). Absent → nothing injected, .py default 1.5 stands (R04, B14).
+  - src/lib/server/db/models/tip-calibrator-fixture.ts: minTipClearanceWaxMm (Number, null).
+  - wax-filling/+page.svelte: WAX_PARAM_DEFAULTS comment only (an earlier commit on this branch
+    set a fleet-wide 3.5 there; reverted in favour of per-robot).
+  - Data (audit-logged): tip_calibrator_fixtures FNrWJ5pGKH7i87BKER7C_ (B07 / deck-004)
+    minTipClearanceWaxMm = 3.5. manufacturing_settings.waxFilling: waxPerCartridgeUl 19.2 → 25.2,
+    waxFillDeadVolumeUl 80 → 250 (24-cart prompt 541 → 855 uL): ~7.1 mm of wax left at the end so
+    R04's physically-high tip stays ~1 mm submerged at its 1.5 floor when the tube is loaded to the
+    prompt, and B07 at 3.5 is ~3.6 mm submerged. Clamp comments ("Aspirate clamped to the tube
+    floor") on B07 for the last third of a run are expected.
+  - Reagent fills untouched: injection is gated to processType 'wax-filling', the settings are
+    waxFilling.*, the deck-004 Z edit was even (wax) columns only.
+Follow-ups: (1) fix R04's Z frame properly — recalibrate its p20 pipette offset, then re-teach
+deck-001 + its probe height in ONE pass (never tipLength alone); (2) make the .py dead_volume an RTP
+fed from the BIMS setting (needs a protocol deploy to all three robots).
+npm run check: 10 errors / 435 warnings repo-wide, none in the touched files (all 10 pre-existing on
 master: r2.ts fetch overload, AskBimsWidget comparison, assembly/[sessionId] implicit-any x8).

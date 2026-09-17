@@ -203,18 +203,14 @@
 		// Only posted when the protocol declares the RTP (server filters by schema).
 		use_tip_calibration: true,
 		max_tip_adjust: 4.0,
-		run_calibration_check: false,
-		// Wax-source aspiration floor (2026-09-17). The protocol's own default is
-		// 1.5mm above the 2ml tube's defined bottom, and its liquid model ends the
-		// run at a hardcoded 50uL dead volume, so for roughly the last 18
-		// aspirations (the last 4-5 cartridges of carrier 3) the p20 tip rides the
-		// floor clamp — 1.5mm above the apex of a conical tube is inside the cone,
-		// the tip wall wedges, bends, and every fill after that lands off the hole
-		// (B07 deck-004, every run 2026-09-09..17: aspirate z walks -27.5 -> -37.1
-		// below the rim and pins at -37.1). 3.5mm clears the cone. The wax settings
-		// dead volume was raised to 150uL the same day so ~5.6mm of wax remains at
-		// the end of a run and the tip stays ~2mm submerged at this floor.
-		min_tip_clearance: 3.5
+		run_calibration_check: false
+		// min_tip_clearance (wax-tube aspiration floor) is deliberately NOT set
+		// here: it is per-robot. B07's Z frame is accurate, so the protocol's 1.5mm
+		// floor really is 1.5mm above a conical tube's apex and bends the tip on
+		// the last cartridges; R04's taught frame sits ~4-5mm below its deck's
+		// design height, so the same 1.5mm is physically ~6mm there and raising it
+		// would lift the tip out of the wax. The server injects the fixture's
+		// minTipClearanceWaxMm at startRun (calibration-rtps.ts), like max_tip_adjust.
 	});
 
 	// Orchestrated scan-and-start (deck_load substage): one Start Run press
