@@ -12878,3 +12878,21 @@ Jacob connected the lab ZT230 (serial 52J150301773) over USB; Browser Print 1.3.
   the assay must be pushed to each unit from the research app (Load Assay → Verify), same as
   A9EB41AD. Only the heat-cart (THERMO-) routine is hard-coded.
 npm run check: not run (script-only change in BIMS).
+
+================================================================================
+2026-09-17 — feat/spu-tweaks — blank cart bench: firmware state-machine bug found via serial (not BIMS)
+================================================================================
+Jacob's first BLANK-0000001 runs on v96: scan starts the assay, nothing reaches BIMS, unit "restarts"
+after the run. Evidence: 0 blank-test events/webhook_logs/blank runs in Atlas (the Lambda logs every
+webhook it sees and none carried a BLANK- record either), then a live COM3 serial capture:
+  Blank cartridge inserted → WARN Invalid state transition BARCODE_SCANNING→RUNNING_TEST → test runs
+  36 s → WARN Invalid state transition BARCODE_SCANNING→UPLOADING_RESULTS → reconnect → scan loop
+  re-reads the label → runs again.
+Root cause (device repo, firmware/src/DeviceState.cpp): can_transition_to() only allowed RUNNING_TEST
+from VALIDATING_CARTRIDGE; the v96 BLANK/SONIC dispatchers go straight from BARCODE_SCANNING, so the
+mode never changed, publish_upload_test() never ran, and the still-inserted cart was re-scanned.
+Fix applied in Jacob's working tree: BARCODE_SCANNING case now also allows RUNNING_TEST; handoff doc
+gained a "Bench finding 2026-09-17" section. Needs rebuild + flash. BIMS webhook handler untouched;
+Jacob created the Particle Console blank-test webhook this session (never exercised yet — the device
+never published). No Lambda involvement: blank-test goes Particle → BIMS directly.
+Serial capture method: PowerShell System.IO.Ports on COM3 @115200 (device VID 2B04), tail -f + grep.
