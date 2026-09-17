@@ -3,7 +3,7 @@
  * publishes as `upload-test` (BrevitestTestRecord, 9668 bytes: 68-byte header
  * + up to 300 × 32-byte readings). Ported from the Lambda middleware's
  * parseByteArray so BIMS can receive the same struct directly over a Particle
- * webhook for tests that never touch the cloud (blank-cartridge runs, v95).
+ * webhook for tests that never touch the cloud (blank-cartridge runs, v96).
  *
  * Particle delivers a BINARY publish to a webhook as the string
  * "data:application/octet-stream;base64,<payload>".

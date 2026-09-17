@@ -61,7 +61,7 @@ export const POST: RequestHandler = async ({ request }) => {
 		}
 	}
 
-	// Blank-cartridge run (firmware v95): the device publishes its binary test
+	// Blank-cartridge run (firmware v96): the device publishes its binary test
 	// record under `blank-test` instead of `upload-test`, so it never reaches
 	// the cloud middleware or a cartridge record. Store it as an optical blank
 	// run against the unit; the DeviceEvent keeps only a summary (not the blob).

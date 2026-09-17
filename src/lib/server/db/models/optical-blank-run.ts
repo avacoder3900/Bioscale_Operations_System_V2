@@ -2,7 +2,7 @@ import mongoose, { Schema } from 'mongoose';
 import { generateId } from '../utils.js';
 
 /**
- * One blank-cartridge optical run (2026-09-15 plan, firmware v95).
+ * One blank-cartridge optical run (2026-09-15 plan, firmware v96).
  *
  * A reusable BLANK cartridge is scanned on a unit; the firmware recognises the
  * BLANK- barcode type, runs the locally loaded blank assay (A87934B1) without

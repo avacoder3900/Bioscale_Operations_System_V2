@@ -26,7 +26,7 @@
 	<div>
 		<h1 class="tron-heading text-2xl font-bold">Sonic Fingerprint</h1>
 		<p class="tron-text-muted mt-1 text-sm">
-			Scan the SONIC- barcode on a unit (firmware v95) — it runs the motion-only assay, about five
+			Scan the SONIC- barcode on a unit (firmware v96) — it runs the motion-only assay, about five
 			minutes of the cortisol moves with no heat and no reads. Record the sound with a phone and drop
 			the file here against the unit. The recording is the record; waveform analysis comes once we
 			have a few to compare.

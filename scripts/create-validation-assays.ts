@@ -16,7 +16,7 @@
  *  2. BLANK — "Gen 5 Optical Blank Cartridge"
  *     The A9EB41AD scan verbatim under its own id, so blank-cartridge runs never
  *     mix with validation runs. Triggered by the BLANK- barcode type (firmware
- *     v95) and reported to BIMS over a Particle webhook, never via a cartridge
+ *     v96) and reported to BIMS over a Particle webhook, never via a cartridge
  *     record.
  *  3. SONIC — "Sonic Fingerprint - Cortisol 5.6 Moves"
  *     A67AC662's MOTION only: wax-melt delay and both sensor-read blocks removed,
@@ -127,9 +127,9 @@ async function main() {
 		{ name: 'Gen 5 Optical Photobleach - 10x Coarse Scans', code: photobleachCode, base: optical,
 		  description: `Photobleach test: ${SWEEPS} coarse sweeps (${POSITIONS} positions, ${STEP_UM} µm apart, same 4.1 mm as the 42-position scan) with 30 s pauses; each sweep = one point per channel. Based on A9EB41AD.` },
 		{ name: 'Gen 5 Optical Blank Cartridge', code: blankCode, base: optical,
-		  description: 'Blank-cartridge noise study: the Gen 5 optical scan verbatim, under its own id so blank runs never mix with validation runs. Triggered by a BLANK- barcode (firmware v95); results reach BIMS over a webhook.' },
+		  description: 'Blank-cartridge noise study: the Gen 5 optical scan verbatim, under its own id so blank runs never mix with validation runs. Triggered by a BLANK- barcode (firmware v96); results reach BIMS over a webhook.' },
 		{ name: 'Sonic Fingerprint - Cortisol 5.6 Moves', code: sonicCode, base: cortisol,
-		  description: `Sonic fingerprint: the motion of A67AC662 (no wax wait, no sensor reads), every oscillation's cycles × ${k.toFixed(3)} to run ≈ ${SONIC_TARGET_S / 60} min. Triggered by a SONIC- barcode (firmware v95); the recording is uploaded by hand.` }
+		  description: `Sonic fingerprint: the motion of A67AC662 (no wax wait, no sensor reads), every oscillation's cycles × ${k.toFixed(3)} to run ≈ ${SONIC_TARGET_S / 60} min. Triggered by a SONIC- barcode (firmware v96); the recording is uploaded by hand.` }
 	];
 	const defs = SKIP_SONIC ? allDefs.filter((d) => !d.name.startsWith('Sonic')) : allDefs;
 

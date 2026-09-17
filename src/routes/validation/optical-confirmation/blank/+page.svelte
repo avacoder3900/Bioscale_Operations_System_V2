@@ -29,7 +29,7 @@
 		<p class="tron-text-muted mt-1 text-sm">
 			One physical blank cartridge, scanned on unit after unit. The chemistry is held constant, so
 			whatever differs between rows is the instrument. Runs arrive from the device over the Particle
-			webhook (firmware v95, BLANK- barcode) — nothing to assign, link or re-arm. Raw F7/F3 over all
+			webhook (firmware v96, BLANK- barcode) — nothing to assign, link or re-arm. Raw F7/F3 over all
 			42 positions; nothing here is written back.
 		</p>
 	</div>
@@ -38,7 +38,7 @@
 		<div class="tron-card p-6 text-sm text-[var(--color-tron-text-secondary)]">
 			<p class="tron-text-primary font-medium">No blank runs yet.</p>
 			<ol class="mt-2 list-decimal space-y-1 pl-5">
-				<li>Units need firmware v95 (BLANK- barcode type) and the blank assay A87934B1 loaded from the research app's Devices page.</li>
+				<li>Units need firmware v96 (BLANK- barcode type) and the blank assay A87934B1 loaded from the research app's Devices page.</li>
 				<li>Label the blank cartridge with a BLANK-XXXXXXX code (13 characters, like a THERMO- label).</li>
 				<li>The Particle Console webhook for event <span class="font-mono">blank-test</span> must point at <span class="font-mono">/api/particle/webhook</span> with the agent API key header.</li>
 				<li>Scan the blank on a unit; the run shows up here when the device publishes it.</li>

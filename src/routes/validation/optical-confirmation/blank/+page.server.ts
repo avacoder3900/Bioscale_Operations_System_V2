@@ -6,7 +6,7 @@ import type { PageServerLoad } from './$types';
 /**
  * Blank-cartridge runs (2026-09-15 plan): the same physical blank cartridge is
  * scanned on unit after unit to look at instrument noise with the chemistry
- * held constant. Runs arrive over the Particle webhook (firmware v95, event
+ * held constant. Runs arrive over the Particle webhook (firmware v96, event
  * `blank-test`) and live in optical_blank_runs — no cartridge records, nothing
  * to link or re-arm. Derive-on-read: every number here is computed from the
  * stored readings, over all 42 positions, and never written back.

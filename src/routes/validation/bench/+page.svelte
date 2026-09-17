@@ -62,7 +62,7 @@
 		<p class="tron-text-muted mt-1 text-sm">
 			Cartridge-free reads. The stage carries the sensors and the lasers are fixed: at the right stage
 			position each sensor sits directly in its laser. Press Go and the unit re-homes, moves, reads, and
-			the result is stored against it as validation data. Needs firmware v95 and an empty cartridge
+			the result is stored against it as validation data. Needs firmware v96 and an empty cartridge
 			slot. Use the scan to find each unit's laser position, then read at it.
 		</p>
 	</div>

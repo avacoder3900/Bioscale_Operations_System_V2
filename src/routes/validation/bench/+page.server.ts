@@ -14,12 +14,12 @@ import type { Actions, PageServerLoad } from './$types';
  *  - dark   — same read with the lasers off (ambient / leakage)
  *  - scan   — photodiode + clear vs. stage position, to FIND the laser position
  *
- * Firmware v95 exposes cloud functions `laser_read` / `dark_read` / `laser_scan`
+ * Firmware v96 exposes cloud functions `laser_read` / `dark_read` / `laser_scan`
  * (deferred to the device main loop; the function returns the seq the result
  * will carry) and parks the result JSON in the `optical_bench` variable. BIMS
  * calls the function, polls the variable until that seq shows up, and stores
  * the result as a validation session against the unit. Contract:
- * brevitest-device/firmware/Docs/V95_BLANK_SONIC_BARCODES_HANDOFF.md, Change 6.
+ * brevitest-device/firmware/Docs/V96_BLANK_SONIC_LASER_HANDOFF.md, Change 6.
  */
 const BENCH_TYPES = ['laser', 'dark', 'laser_scan'] as const;
 type BenchType = (typeof BENCH_TYPES)[number];
@@ -113,7 +113,7 @@ export const actions: Actions = {
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
 			if (/not found/i.test(msg)) {
-				return fail(400, { error: `The unit has no "${FN[type]}" function — it needs firmware v95.` });
+				return fail(400, { error: `The unit has no "${FN[type]}" function — it needs firmware v96.` });
 			}
 			return fail(502, { error: `Could not reach the unit: ${msg}` });
 		}

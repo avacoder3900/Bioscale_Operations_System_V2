@@ -7,7 +7,7 @@ import type { Actions, PageServerLoad } from './$types';
 
 /**
  * Sonic fingerprint (2026-09-15 plan). Like the thermocouple test, the device
- * is triggered by a special barcode (SONIC-, firmware v95) and runs the
+ * is triggered by a special barcode (SONIC-, firmware v96) and runs the
  * motion-only assay; a person records the sound with a phone and drops the
  * file here against the unit. The recording is stored in R2 and the session
  * is the DHR record. Waveform analysis comes later, once we have recordings.
