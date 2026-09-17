@@ -113,7 +113,8 @@
 		{ href: '/validation/thermocouple', label: 'Thermocouple', desc: 'Upload a temperature dataset + verdict' },
 		{ href: '/validation/optical-confirmation', label: 'Optical Confirmation', desc: 'Assign + analyze optics cartridges' },
 		{ href: '/validation/optical-confirmation/blank', label: 'Blank Cartridge', desc: 'One blank cart on every unit — instrument noise' },
-		{ href: '/validation/sonic', label: 'Sonic Fingerprint', desc: 'Upload a phone recording of the motion assay' }
+		{ href: '/validation/sonic', label: 'Sonic Fingerprint', desc: 'Upload a phone recording of the motion assay' },
+		{ href: '/validation/bench', label: 'Optical Bench', desc: 'Laser-into-sensor and dark reads, no cartridge' }
 	];
 </script>
 

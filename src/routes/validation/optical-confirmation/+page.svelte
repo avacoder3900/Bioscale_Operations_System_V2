@@ -539,8 +539,8 @@
 									{#if c.kind === 'photobleach'}
 									<span
 										class="ml-1 rounded border border-[var(--color-tron-purple)] px-1.5 py-0.5 text-[10px] uppercase text-[var(--color-tron-purple)]"
-										title="Photobleach test: 10 sweeps of this one cartridge — open the barcode for the per-sweep trace"
-									>photobleach</span>
+										title="Optical degradation test: 10 sweeps of this one cartridge — open the barcode for the per-sweep trace"
+									>degradation</span>
 								{/if}
 								{#if !c.assigned}
 										<span

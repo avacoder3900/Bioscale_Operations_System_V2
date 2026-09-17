@@ -22,7 +22,7 @@ export const BLANK_ASSAY_ID = 'A87934B1';
 export type OpticalKind = 'scan' | 'photobleach';
 export const OPTICAL_VALIDATION_ASSAYS: ReadonlyArray<{ id: string; kind: OpticalKind; label: string }> = [
 	{ id: OPTICAL_ASSAY_ID, kind: 'scan', label: 'Single scan (42 positions)' },
-	{ id: PHOTOBLEACH_ASSAY_ID, kind: 'photobleach', label: 'Photobleach (10 coarse sweeps, 30 s apart)' }
+	{ id: PHOTOBLEACH_ASSAY_ID, kind: 'photobleach', label: 'Optical degradation (10 coarse sweeps, 30 s apart)' }
 ];
 export function opticalKindFor(assayId: string | null | undefined): OpticalKind | null {
 	return OPTICAL_VALIDATION_ASSAYS.find((a) => a.id === assayId)?.kind ?? null;

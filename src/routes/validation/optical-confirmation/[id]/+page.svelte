@@ -134,7 +134,7 @@
 		<!-- Photobleach: one point per channel per sweep -->
 		<div class="tron-card p-4">
 			<div class="mb-3 flex flex-wrap items-baseline justify-between gap-2">
-				<h2 class="tron-heading text-sm font-semibold uppercase tracking-wide">Photobleach trace — {pb.sweeps} sweeps</h2>
+				<h2 class="tron-heading text-sm font-semibold uppercase tracking-wide">Optical degradation trace — {pb.sweeps} sweeps</h2>
 				<span class="text-xs text-[var(--color-tron-text-secondary)]">
 					Same cartridge, same position, ~30 s apart. Each point = mean F7/F3 over that sweep's positions.
 					{#if pb.chunkedFallback}Sweep boundaries could not be read from the stage position — readings chunked by 10.{/if}

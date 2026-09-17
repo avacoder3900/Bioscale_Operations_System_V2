@@ -12806,3 +12806,27 @@ Deployment: production — building from the GitHub push to master (Vercel dashb
 Source: branch master @ commit 089b0658 (feat/spu-tweaks)
 Retrieve this exact code: git checkout master at commit 089b0658
 What this deployment is for: blank-run intake/page + sonic upload page
+
+================================================================================
+2026-09-17 — feat/spu-tweaks — Optical Bench (laser-into-sensor + dark reads + position scan)
+================================================================================
+Jacob's fifth optical test: no cartridge. The stage carries the SENSORS and the lasers are fixed,
+so at the right stage position each sensor sits in its laser. Answers: start with low gain; dark
+read as its own command; re-home before every read; results via a Particle variable that either
+BIMS or the Console can trigger, stored against the unit as validation data. The suite is now:
+optical confirmation (A9EB41AD), optical degradation (AF233F18 — renamed from "photobleach" in the
+DB and UI to match Jacob's wording), blank cart (A87934B1), dark read, laser-into-sensor read.
+- Firmware handoff (same doc, Change 6): cloud functions laser_read / dark_read / laser_scan
+  (deferred; return seq or -1 busy / -2 cartridge inserted / -3 bad args), re-home, refuse with a
+  cartridge, defaults gain 1; variable `optical_bench` JSON contract (kind, pos, gain, astep, atime,
+  ms, temp, ch[{c, pd, pd0, f[10 bands]}] / scan pts [[pos, pd, clear]] max 12/channel, error
+  field); bench acceptance steps 7–9.
+- /validation/bench: unit picker (Particle-linked, shows each unit's last laser position and
+  defaults to it), read type (laser / dark / scan), position or start/end/step, gain/astep/atime;
+  Go → callFunction → poll `optical_bench` every 1.5 s up to 36 s until seq matches → stored as
+  ValidationSession type laser | dark | laser_scan (rawData = device JSON + requested args),
+  audit row, SPU journal line. Result card: per-channel PD / PD dark / ten bands (clipped values
+  flagged red); scan: inline SVG PD-vs-position per channel with the peak per channel. History
+  table with unit filter. Clear errors when the unit lacks the function (needs v95), is busy, or has
+  a cartridge in. Hub launcher + tab "Optical Bench".
+npm run check: 10/435 — baseline.
