@@ -1017,17 +1017,21 @@ def run(protocol: protocol_api.ProtocolContext):
                 jump_frequency = 3    # every 3rd well, do an extra high move
                 jump_height = 60      # mm above well for the jump move
 
-                for run in range(runs):
-                    # ----- Determine which wells this run fills -----
-                    start_well = run * wells_per_run
-                    wells_this_run = destination_wells[start_well:start_well + wells_per_run]
-
-                    # Operator asked for a tip swap -> do it now, before aspirating
-                    # this batch (the tip is empty here). The new tip's probe adjust
+                # Cursor-driven, not `for run in range(runs)`: a mid-trip tip swap
+                # re-does the interrupted well and the rest of that trip, so the
+                # trip boundaries are no longer a fixed multiple of wells_per_run.
+                well_index = 0
+                run = 0
+                while well_index < len(destination_wells):
+                    # Operator asked for a tip swap between trips -> do it now, before
+                    # aspirating (the tip is empty here). The new tip's probe adjust
                     # replaces the old one for every dispense from here on.
                     _swap = take_tip_swap_request()
-                    if _swap and wells_this_run:
-                        adjust = do_tip_swap(_swap, wells_this_run[0].well_name)
+                    if _swap:
+                        adjust = do_tip_swap(_swap, destination_wells[well_index].well_name)
+
+                    # ----- Determine which wells this trip fills -----
+                    wells_this_run = destination_wells[well_index:well_index + wells_per_run]
 
                     # ----- Calculate total aspiration volume for this run -----
                     # = (number of wells × volume per well) + disposal + remainder
@@ -1035,8 +1039,10 @@ def run(protocol: protocol_api.ProtocolContext):
 
                     # ----- Safety checks -----
                     if aspirate_volume <= 0:
-                        protocol.comment('WARNING: Invalid aspirate volume, skipping this run')
-                        continue
+                        # `break`, not `continue`: the cursor has not advanced, so
+                        # continuing here would spin forever.
+                        protocol.comment('WARNING: Invalid aspirate volume, abandoning this source')
+                        break
                     if aspirate_volume > pipette_tip_capacity:
                         protocol.comment(f'WARNING: aspirate volume {aspirate_volume:.1f}uL exceeds tip capacity {pipette_tip_capacity}uL')
 
@@ -1099,7 +1105,16 @@ def run(protocol: protocol_api.ProtocolContext):
                     well_z_depth = -3.0        # mm below well top to dispense at
                     well_prejump_height = 5    # mm above well top for pre-jump move
 
-                    for well in wells_this_run:
+                    swap_at = None
+                    for idx, well in enumerate(wells_this_run):
+                        # Operator asked for a tip swap MID-TRIP: stop BEFORE this well.
+                        # The wells already done in this trip count; this one and the
+                        # rest of the trip are re-done with the new tip. (A bent tip
+                        # mid-trip was landing every remaining well off the hole.)
+                        _swap = take_tip_swap_request()
+                        if _swap:
+                            swap_at = (idx, _swap)
+                            break
                         # Every jump_frequency wells, do an extra high move to clear obstacles
                         if jump_count % jump_frequency == 0:
                             pipette.move_to(well.top(jump_height).move(types.Point(adjust['x'], adjust['y'], 0.0)))
@@ -1110,14 +1125,28 @@ def run(protocol: protocol_api.ProtocolContext):
                         jump_count += 1
                         dispensed_volume += well_volume
 
-                    # Blow out remaining liquid back into source tube
+                    # Blow out remaining liquid back into source tube. After a mid-trip
+                    # swap request this is what gives the un-dispensed reagent back.
                     pipette.blow_out(location=source_well.bottom(2.4))
 
                     # Update remaining source volume (only subtract what was actually dispensed)
                     source_volume -= dispensed_volume
 
-                    # Extra blow out between runs
-                    if run < runs - 1 or runs == 1:
+                    if swap_at is not None:
+                        # Tip is empty (blown out above). Swap + re-probe, then loop:
+                        # the next trip re-aspirates and starts at the interrupted well.
+                        _idx, _mode = swap_at
+                        well_index += _idx
+                        protocol.comment(f'TIP SWAP mid-trip: {_idx} well(s) of this trip kept, re-aspirating from {destination_wells[well_index].well_name}.')
+                        adjust = do_tip_swap(_mode, destination_wells[well_index].well_name)
+                        continue
+
+                    well_index += len(wells_this_run)
+                    run += 1
+
+                    # Extra blow out between trips (not after the final one). Expressed
+                    # against the cursor so a tip swap can't skew it.
+                    if well_index < len(destination_wells) or runs == 1:
                         pipette.blow_out(location=source_well.bottom(2.4))
 
                 pipette.drop_tip()

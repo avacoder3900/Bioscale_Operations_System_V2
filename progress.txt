@@ -13007,3 +13007,24 @@ upload_protocol with the full 19-def BIMS labware library, gated on the on-robot
     `node <scratch>/deploy-reagent-tipswap.cjs R04 B07` once idle, or Studio → Re-upload (reagent).
 BIMS side needs the branch merged to master to show the card.
 npm run check: 10 errors / 435 warnings repo-wide, none in the touched files (all pre-existing).
+
+================================================================================
+2026-09-18 — feat/reagent-tip-swap-v2 — reagent tip swap now per-well (mid-trip), redeployed to B14
+================================================================================
+Alejandro: "bent tip mid-trip has been a problem" — the trip-boundary check (above) meant up to 11
+wells landed off the hole after a bend. dispense_reagent's `for run in range(runs)` is now a cursor
+loop (`well_index`): the swap request is checked before each aspiration trip AND before every well
+inside a trip. Mid-trip: stop before that well, the normal blow-out returns the un-dispensed reagent
+to the source, do_tip_swap (rack or by hand + re-probe), then the loop re-aspirates and resumes at the
+interrupted well. Wells already dispensed in the trip are kept; nothing is double-filled. The
+zero-volume guard became `break` (a `continue` would spin with the cursor unmoved); the between-trip
+extra blow-out is expressed against the cursor. Same design as the never-merged
+origin/feat/reagent-tip-swap (f1a40d5f) from an earlier session, ported onto this branch — that
+branch was left untouched, which is why this one is `-v2`.
+Verification: py_compile OK; a replica of the loop's control flow unit-tested with swap requests at
+the first well, last well, back-to-back wells, before a trip, and on a short final trip — every well
+dispensed exactly once, in order, loop terminates. On-robot analysis clean.
+Deployment: stored as active OpentronProtocol op-497d804b0228056a (op-242bad05e1ff8052 → inactive).
+B14: protocol 957bb13a (was a4bae5eb). R04/B07 still mid-run — deploy pending (watch armed).
+Card wording on the reagent page updated ("stops before its next well … re-aspirates and continues
+at the exact well it stopped at").

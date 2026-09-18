@@ -824,8 +824,8 @@
 						<div>
 							<h3 class="text-sm font-semibold text-amber-200">Tip problem? Swap the tip without losing your place</h3>
 							<p class="mt-1 text-xs text-amber-200/80">
-								The robot finishes the batch it is on (the tip is blown out into the reagent tube), swaps the tip,
-								re-calibrates it, then aspirates the next batch and carries on at the next well. Works while running or paused.
+								The robot stops before its next well, blows what is left in the tip back into the reagent tube, swaps the tip,
+								re-calibrates it, then re-aspirates and continues at the exact well it stopped at. Works while running or paused.
 							</p>
 						</div>
 						<div class="flex flex-wrap gap-2">
