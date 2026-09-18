@@ -6,7 +6,8 @@ import {
 	CartridgeRecord,
 	CartridgeGroup,
 	AuditLog,
-	generateId
+	generateId,
+	OpticalBlankRun
 } from '$lib/server/db';
 import { analyzeCartridge } from '$lib/server/optical-analysis';
 import {
@@ -68,6 +69,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 	// Analysis cohorts. `?? []` because .lean() does NOT apply schema defaults, so
 	// groups created before cartridgeIds existed come back with the field missing.
+	const blankRunCount = await OpticalBlankRun.countDocuments();
+
 	const groupDocs = await CartridgeGroup.find({
 		purpose: 'optical_analysis',
 		archivedAt: null
@@ -104,6 +107,11 @@ export const load: PageServerLoad = async ({ locals }) => {
 			duration: a.duration ?? null,
 			bcodeSteps: Array.isArray(a.BCODE?.code) ? a.BCODE.code.length : 0
 		})),
+		// Blank-cartridge runs are NOT cartridge records and NOT a CartridgeGroup —
+		// they arrive over the Particle webhook into optical_blank_runs. The log
+		// surfaces them as a pill alongside the real groups purely so they are
+		// reachable from here; nothing about their storage is changed.
+		blankRunCount,
 		groups: groups.map((g) => ({
 			id: g.id,
 			name: g.name,

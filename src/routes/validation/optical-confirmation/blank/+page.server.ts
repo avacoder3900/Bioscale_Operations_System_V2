@@ -39,7 +39,27 @@ export const load: PageServerLoad = async ({ locals }) => {
 		const channels = CH.map((ch) => {
 			const mine = readings.filter((x) => x?.channel === ch);
 			const sums = Object.fromEntries(BANDS.map((b) => [b, mine.reduce((acc, x) => acc + (Number(x?.[b]) || 0), 0)])) as Record<Band, number>;
-			return { channel: ch, n: mine.length, sums };
+
+			// Band totals stay the headline figure (Jacob, 2026-09-17). The F7/F3
+			// ratio is derived alongside so a blank run can still be lined up against
+			// the other optical assays, which are all reported that way. Same
+			// definition analyzeCartridge() uses: per-reading f7/f3 where f3 > 0,
+			// then the mean — NOT the ratio of the summed bands, which would weight
+			// bright positions more heavily.
+			const perReading: number[] = [];
+			for (const x of mine) {
+				const f3 = Number(x?.f3);
+				const f7 = Number(x?.f7);
+				if (Number.isFinite(f3) && f3 > 0 && Number.isFinite(f7)) {
+					const v = f7 / f3;
+					if (Number.isFinite(v)) perReading.push(v);
+				}
+			}
+			const ratio = perReading.length
+				? perReading.reduce((a, b) => a + b, 0) / perReading.length
+				: null;
+
+			return { channel: ch, n: mine.length, sums, ratio, ratioN: perReading.length };
 		});
 		const n = (r.numberOfReadings ?? readings.length ?? 0) as number;
 		return {
