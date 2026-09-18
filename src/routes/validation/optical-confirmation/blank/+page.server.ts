@@ -18,8 +18,8 @@ import type { PageServerLoad } from './$types';
  * clock (it rendered as 1970), so rows are ordered and labelled by the moment
  * BIMS received the webhook.
  */
-export const BANDS = ['f1', 'f2', 'f3', 'f4', 'f5', 'f6', 'f7', 'f8', 'clear', 'nir'] as const;
-export type Band = (typeof BANDS)[number];
+const BANDS = ['f1', 'f2', 'f3', 'f4', 'f5', 'f6', 'f7', 'f8', 'clear', 'nir'] as const;
+type Band = (typeof BANDS)[number];
 const CH = ['A', 'B', 'C'] as const;
 /** One full scan: 42 positions × 3 channels. Fewer = the run was cut short. */
 const FULL_SCAN_READINGS = 126;

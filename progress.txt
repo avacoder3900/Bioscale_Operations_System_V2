@@ -12922,3 +12922,20 @@ Deployment: production — building from the GitHub push to master (Vercel dashb
 Source: branch master @ commit 907f755b (feat/spu-tweaks fast-forwarded, 3 commits)
 Retrieve this exact code: git checkout master at commit 907f755b
 What this deployment is for: bench page fixed laser position (39500 µm); blank page per-channel band sums; --only-sonic script
+
+================================================================================
+2026-09-18 — feat/spu-tweaks — build fix: production deploys of 907f755b/e5d8cac1 FAILED (invalid page export)
+================================================================================
+Jacob's screenshot still showed the old bench page (21000 µm / astep 499): the Vercel dashboard showed
+both master builds (907f755b, e5d8cac1) and their previews red after ~30 s, production still on
+e2f5b013 from last night. Local `npm run build` reproduced it:
+  Error: Invalid export 'BANDS' in src/routes/validation/optical-confirmation/blank/+page.server.ts
+SvelteKit only allows load/actions/config/... (or `_`-prefixed) exports from +page.server.ts; the
+blank page's server module exported the BANDS const (+ a type). Export removed. `npm run build`
+now passes (client + server "✓ built"). Lesson: run `npm run build`, not just `npm run check`,
+before pushing to master — svelte-check does not catch SvelteKit's export validation.
+
+Deployment: production — building from the GitHub push to master (Vercel dashboard, commit below)
+Source: branch master @ commit dd469f8b (feat/spu-tweaks fast-forwarded)
+Retrieve this exact code: git checkout master at commit dd469f8b
+What this deployment is for: replaces the failed 907f755b/e5d8cac1 deploys — bench fixed position + blank band sums
