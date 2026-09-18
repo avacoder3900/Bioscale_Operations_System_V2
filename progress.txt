@@ -12956,3 +12956,48 @@ Deployment: production — building from the GitHub push to master (Vercel dashb
 Source: branch master @ commit ba938949 (feat/spu-tweaks fast-forwarded)
 Retrieve this exact code: git checkout master at commit ba938949
 What this deployment is for: bench page with all four read settings fixed
+
+================================================================================
+2026-09-18 — feat/thermocouple-two-channels — the parser averaged the two probes into one
+================================================================================
+Alejandro: "the bims only displays one temperature and does not show the 2 channels."
+
+Root cause, one line in src/lib/server/validation/parse-thermo.ts: the parser DID detect both
+temperature columns, then averaged them into a single number per row
+("const temperature = temps.reduce((a,b)=>a+b,0) / temps.length"). Both probes were gone before
+the data reached the server, the DB or the page, so BIMS reported a temperature neither probe
+recorded. Production carries the fingerprint: stats quantized to 0.05 C (THERMO-000064:
+min 23.75, range 20.55, drift 16.55) — two probes logging at 0.1 C, halved.
+File layout confirmed with Alejandro: column A = time, B = probe 1, C = probe 2.
+
+Each column is now its own series end to end — parser -> upload -> stored session -> one chart
+and one full stat block per probe (mode/min/max/avg/stdDev/CV/range/drift/readings/duration),
+colour-coded and named from the file's own header. Split out of a single sorted row array, so a
+blank in one probe cannot shift the other. Stored as rawData.channelSeries +
+processedData.channelStats, written ONLY when there really are several probes: a single-probe
+upload persists exactly the document it always did, immutable audit row included.
+Also: the implausible-value guard now runs per column — it used to see only the mean, and a
+25 C probe beside a column of raw counts at 900 averages to a plausible 462, which would then
+have been stored and charted as a real measurement.
+
+Backward compatibility: the ~64 existing sessions have only the averaged series; their per-probe
+data was destroyed at parse time and CANNOT be recovered. They keep rendering as one chart with
+unchanged numbers (every reader is array-guarded and gates on length > 1). Re-upload the original
+file for any SPU where two-probe data matters.
+
+npm run check: no errors in any touched file (85 repo-wide errors are pre-existing — r2.ts,
+bims-mcp.ts missing deps). Unit tests: 173 pass, 18 of them new across parse-thermo.test.ts and
+parse-thermo-file.test.ts (real regression guards — `channels` did not exist before the fix).
+Local npm run build not attempted: it OOMs on this machine; the Vercel branch build is the gate.
+
+NOT fixed, pre-existing, needs its own decision: three regexes in parse-thermo.ts lost their
+backslashes in commit 44c1229d3 — /^(d{1,2}):(d{2})...s+(d{4})-.../ matches literal "d" and "s",
+never digits. The naive-date matchers therefore never fire and every timestamp falls through to
+Date.parse, silently bypassing the tzOffsetMinutes timezone fix those matchers exist to apply.
+
+Deployment: preview — Vercel built from the GitHub push (success, ref matches the commit below)
+Source: branch feat/thermocouple-two-channels @ commit 31e93335dbb9fa264ff740c8abade64df53545ce
+Retrieve this exact code: git checkout feat/thermocouple-two-channels at commit 31e93335
+Preview URL: https://bioscale-operations-system-mongodb-an1xs37j1.vercel.app
+What this deployment is for: two-channel thermocouple parsing, stats and charts — needs a real
+two-probe export uploaded against it to confirm before this goes near master
