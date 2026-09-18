@@ -13001,3 +13001,64 @@ Retrieve this exact code: git checkout feat/thermocouple-two-channels at commit 
 Preview URL: https://bioscale-operations-system-mongodb-an1xs37j1.vercel.app
 What this deployment is for: two-channel thermocouple parsing, stats and charts — needs a real
 two-probe export uploaded against it to confirm before this goes near master
+
+================================================================================
+2026-09-18 — master — two-channel thermocouple SHIPPED + 25 sessions backfilled
+================================================================================
+The two-channel parser fix (see the feat/thermocouple-two-channels entry above) went to
+master, and the historical sessions whose original export could be located were backfilled
+with their per-probe data.
+
+BACKFILL — 25 sessions across 12 units (212, 215, 217, 221, 223, 226, 230, 237, 244, 247,
+249, 252, 257). Method: every thermocouple export under Desktop/ and Downloads/ was parsed
+with the new parser; a file was accepted as the source of a session ONLY if its channel-mean
+reproduced that session's stored readings to within 0.005 C (in practice the match was exact,
+max diff 0.00e+0). That is proof of provenance, not a guess.
+
+Written (ADDITIVE ONLY):
+  results[].rawData.channelSeries       per-probe readings
+  results[].processedData.channelStats  per-probe statistics
+Untouched: rawData.readings, processedData.stats, passed, notes, barcode, the operator
+verdict, and the SPU rollup. The basis on which each session was judged is unchanged.
+Audit: one audit_logs row per session, action "thermocouple_channel_backfill", changedBy
+alejandrov, carrying the source filename and the per-probe stats.
+Rollback: $unset those two paths on the sessions named by that audit action. Nothing else
+was modified, so the undo is exact.
+
+Post-write verification: 26 sessions now carry channel data (25 backfilled + THERMO-000065,
+which was uploaded through the preview on the new code), 25 audit rows, and an independent
+integrity pass re-derived the channel mean for all 26 and compared it to the stored readings
+— 0 problems, verdicts and combined stats intact.
+
+DELIBERATELY EXCLUDED:
+  - 257/THERMO-000031 and 202/THERMO-000024. Both match "247 temp data.xlsx" — they carry
+    SPU 247's measurement. The first is the mis-attribution already named in the
+    thermo-upload.ts comments; 202/THERMO-000024 is the SAME bug and was NOT previously
+    recorded anywhere. Backfilling them would have dressed another unit's data up as
+    two-channel evidence for the wrong SPU. They need their own investigation.
+  - 33 sessions whose source file is not on this machine (245, 246, 248, 250, 251, 253, 255,
+    256, 203, 236, 211, 218, 229, 243, 205 and others). Their per-probe data was destroyed at
+    parse time and CANNOT be recovered from the stored average — one number from two. Only
+    the original export can restore them.
+
+FINDING worth acting on: across all 14 units with recoverable data, CH2 reads warmer than CH1
+in EVERY case, by 0.21-0.73 C on average. That is systematic, not noise, and it was invisible
+while BIMS averaged the probes. Units 237 (min 37.60 vs 36.40, drift 3.10 vs 4.70), 257 (min
+37.00 vs 38.10) and 230 (range 18.90 vs 19.90) show the probes disagreeing about the shape of
+the run, not merely its level.
+
+Tests: 173 unit tests pass (4 consecutive clean runs). One earlier run reported 1 failure that
+did not reproduce and could not be identified — that run took 14.5s against a normal ~5s, so it
+looks like a timing-sensitive pre-existing test flaking under load, not a regression; the new
+parser tests are pure and deterministic. Worth watching.
+npm run check: no errors in any touched file (85 repo-wide errors are pre-existing).
+
+Deployment: production — pushing master alone did NOT trigger a production build. Vercel had
+already built this exact tree as a preview, so it deduplicated: master carried the code while
+production kept serving the old bundle (last production build was 51f71f726, the pre-fix
+commit). This is the known dedup trap. This progress.txt commit changes the tree and is what
+actually forces the production build — verify a Production deployment appears for the commit
+below before believing prod is on the new code.
+Source: branch master @ commit <filled in below after push>
+What this deployment is for: two-channel thermocouple parsing, stats and charts in production,
+so the 25 backfilled sessions render per-probe instead of averaged
