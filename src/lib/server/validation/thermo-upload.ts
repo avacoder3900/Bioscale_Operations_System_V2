@@ -11,14 +11,43 @@ export interface ThermoStats extends ChannelStats {
 	durationMs: number;
 }
 
+/** A temperature column as uploaded: its own readings, its own statistics. */
+export interface ThermoChannelInput {
+	key: string;
+	label: string;
+	column: number;
+	readings: ThermoReading[];
+}
+
+export interface ThermoChannelStats {
+	key: string;
+	label: string;
+	column: number;
+	stats: ThermoStats;
+}
+
 export interface ThermoUploadOutcome {
 	sessionId: string;
 	barcode: string;
 	spuUdi: string;
 	stats: ThermoStats;
+	/** Per-column statistics; one entry for a single-probe file. */
+	channelStats: ThermoChannelStats[];
 	evaluated: boolean;
 	passed: boolean | null;
 	failureReasons: string[];
+}
+
+/** Unbounded stats — there is no acceptance range, so nothing is "out of range". */
+function statsFor(readings: ThermoReading[]): ThermoStats {
+	const temps = readings.map(r => r.temperature);
+	const durationMs = readings.length >= 2
+		? readings[readings.length - 1].timestamp - readings[0].timestamp
+		: 0;
+	return {
+		...computeChannelStats(temps, Number.NEGATIVE_INFINITY, Number.POSITIVE_INFINITY),
+		durationMs
+	};
 }
 
 /**
@@ -36,12 +65,18 @@ export interface ThermoUploadOutcome {
 export async function processThermoUpload(opts: {
 	spuId: string;
 	readings: ThermoReading[];
+	/**
+	 * One entry per temperature column in the file. A two-probe logger gives
+	 * two, and both are stored and summarised separately. Omitted (or a single
+	 * entry) behaves exactly as before.
+	 */
+	channels?: ThermoChannelInput[];
 	verdict?: 'passed' | 'failed' | null;
 	runId?: string;
 	fileName?: string | null;
 	user: { _id: string; username: string };
 }): Promise<{ error: string } | ThermoUploadOutcome> {
-	const { spuId, readings, verdict, runId, fileName, user } = opts;
+	const { spuId, readings, channels, verdict, runId, fileName, user } = opts;
 
 	if (!Array.isArray(readings) || readings.length === 0) {
 		return { error: 'No valid readings in uploaded data' };
@@ -53,20 +88,52 @@ export async function processThermoUpload(opts: {
 
 	const temps = readings.map(r => r.temperature);
 
+	// Per-column statistics. Two probes measure two places, so each gets its
+	// own min/max/mode/average rather than one number blended from both.
+	const channelList: ThermoChannelInput[] = channels?.length
+		? channels
+		: [{ key: 'ch1', label: 'Channel 1', column: 0, readings }];
+
 	// Sanity guard: a correct parse yields temperatures, not Excel date
 	// serials (~46,000) or row indexes. Reject implausible data instead of
 	// recording a garbage session (old sessions THERMO-000005/6 did exactly
 	// that: "temperatures" 1..493 from a row-index column).
-	const implausible = temps.filter(t => !isFinite(t) || t < -100 || t > 1000).length;
+	//
+	// Checked per column, not on the combined mean. Averaging hides exactly
+	// what this guard looks for: a genuine 25°C probe beside a column of raw
+	// counts reading 900 averages to a perfectly plausible 462, and the bad
+	// column would then be stored and charted as a real measurement.
+	const implausibleIn = (vals: number[]) =>
+		vals.filter(t => !isFinite(t) || t < -100 || t > 1000).length;
+	for (const c of channelList) {
+		const vals = c.readings.map(r => r.temperature);
+		if (vals.length === 0) continue;
+		const bad = implausibleIn(vals);
+		if (bad / vals.length > 0.2) {
+			return { error: `${c.label} does not look like temperatures (${bad} of ${vals.length} outside -100…1000°C) — check the file's column layout and re-upload` };
+		}
+	}
+	const implausible = implausibleIn(temps);
 	if (implausible / temps.length > 0.2) {
 		return { error: `Parsed values do not look like temperatures (${implausible} of ${temps.length} outside -100…1000°C) — check the file's column layout and re-upload` };
 	}
-	const durationMs = readings.length >= 2
-		? readings[readings.length - 1].timestamp - readings[0].timestamp
-		: 0;
 
 	// Unbounded: there is no range, so nothing is ever "out of range".
-	const stats = computeChannelStats(temps, Number.NEGATIVE_INFINITY, Number.POSITIVE_INFINITY);
+	const stats = statsFor(readings);
+	const channelStats: ThermoChannelStats[] = channelList.map(c => ({
+		key: c.key,
+		label: c.label,
+		column: c.column,
+		stats: statsFor(c.readings)
+	}));
+
+	// Written only when there really are several probes. For one probe the
+	// per-channel statistics are identical to `stats`, and a single-probe
+	// upload must persist exactly the document it persisted before this
+	// change — the audit row especially, which is immutable once written.
+	const multiChannel = channelList.length > 1;
+	const channelFields = multiChannel ? { channelStats } : {};
+
 	let passed: boolean | null = null;
 	let failureReasons: string[] = [];
 	let interpretation: string;
@@ -117,9 +184,28 @@ export async function processThermoUpload(opts: {
 		results: [{
 			_id: generateId(),
 			testType: 'thermocouple',
-			rawData: { readings },
+			rawData: {
+				readings,
+				// The per-probe series, kept whole — but only when there is more
+				// than one probe. For a single-probe file the series IS
+				// `readings`, and storing it twice would just double the document
+				// for nothing. Readers fall back to `readings` when this is absent,
+				// which is also what every session recorded before two-channel
+				// parsing has.
+				...(multiChannel
+					? {
+						channelSeries: channelList.map(c => ({
+							key: c.key,
+							label: c.label,
+							column: c.column,
+							readings: c.readings
+						}))
+					}
+					: {})
+			},
 			processedData: {
-				stats: { ...stats, durationMs },
+				stats: stats,
+				...channelFields,
 				interpretation,
 				failureReasons,
 				criteria: null
@@ -135,7 +221,7 @@ export async function processThermoUpload(opts: {
 	const rollup: Record<string, unknown> = {
 		'validation.thermocouple.sessionId': sessionId,
 		'validation.thermocouple.rawData': { readingCount: readings.length, fileName: fileName ?? null },
-		'validation.thermocouple.results': { ...stats, durationMs }
+		'validation.thermocouple.results': stats
 	};
 	if (judged) {
 		rollup['validation.thermocouple.status'] = passed ? 'passed' : 'failed';
@@ -162,7 +248,8 @@ export async function processThermoUpload(opts: {
 			evaluated: judged,
 			verdict: verdict ?? null,
 			passed,
-			stats: { ...stats, durationMs },
+			stats: stats,
+			...channelFields,
 			failureReasons
 		},
 		changedAt: new Date(),
@@ -173,7 +260,8 @@ export async function processThermoUpload(opts: {
 		sessionId,
 		barcode,
 		spuUdi: spu.udi,
-		stats: { ...stats, durationMs },
+		stats: stats,
+		channelStats,
 		evaluated: judged,
 		passed,
 		failureReasons

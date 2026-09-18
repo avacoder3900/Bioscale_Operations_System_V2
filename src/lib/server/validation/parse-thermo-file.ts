@@ -6,13 +6,16 @@
 // the defect that recorded SPU 247's measurement against SPU 257.
 
 import * as XLSX from 'xlsx';
-import { parseThermoRows, type ThermoReading } from './parse-thermo';
+import { parseThermoRows, type ThermoReading, type ThermoChannel } from './parse-thermo';
 
-export type { ThermoReading };
+export type { ThermoReading, ThermoChannel };
 
 export interface ThermoFileParse {
+	/** Combined series (mean across columns); for a one-probe file, the probe. */
 	readings: ThermoReading[];
-	/** e.g. "temperature from column B+C, time from column A" — shown to the operator. */
+	/** One series per temperature column — two entries for a two-probe logger. */
+	channels: ThermoChannel[];
+	/** e.g. "2 channels from columns B, C, time from column A" — shown to the operator. */
 	columnsNote: string;
 	rowCount: number;
 }
@@ -55,6 +58,7 @@ export function parseThermoFile(
 
 	return {
 		readings: parsed.readings,
+		channels: parsed.channels,
 		columnsNote: parsed.columnsNote,
 		rowCount: rows.length
 	};

@@ -27,18 +27,51 @@
 		durationMs: number;
 	}
 
+	interface ThermocoupleChannel {
+		key: string;
+		label: string;
+		readings: ThermocoupleReading[];
+		stats: ThermocoupleStats | null;
+	}
+
 	interface Props {
 		passed: boolean;
 		stats: ThermocoupleStats;
 		interpretation: string;
 		failureReasons: string[];
 		readings?: ThermocoupleReading[];
+		/**
+		 * One entry per probe. When given, each probe gets its own chart and its
+		 * own metrics; the pass/fail banner stays at session level. Omitted for
+		 * single-probe files and for sessions recorded before two-channel
+		 * parsing, which render the one combined series as before.
+		 */
+		channels?: ThermocoupleChannel[] | null;
 		minTemp?: number;
 		maxTemp?: number;
 	}
 
-	let { passed, stats, interpretation, failureReasons, readings, minTemp, maxTemp }: Props =
-		$props();
+	let {
+		passed,
+		stats,
+		interpretation,
+		failureReasons,
+		readings,
+		channels = null,
+		minTemp,
+		maxTemp
+	}: Props = $props();
+
+	// One colour per probe, matching the server-rendered channel charts.
+	const CHANNEL_COLORS = [
+		'var(--color-tron-cyan)',
+		'var(--color-tron-orange)',
+		'var(--color-tron-green)',
+		'var(--color-tron-purple)'
+	];
+	function channelColor(i: number): string {
+		return CHANNEL_COLORS[i % CHANNEL_COLORS.length];
+	}
 
 	// Show/hide raw data table
 	let showRawData = $state(false);
@@ -116,11 +149,7 @@
 		{/if}
 	</div>
 
-	<!-- Temperature Chart -->
-	{#if readings && readings.length > 0}
-		<ThermocoupleChart {readings} {minTemp} {maxTemp} showBands={true} />
-	{/if}
-
+	{#snippet metrics(stats: ThermocoupleStats)}
 	<!-- Key Metrics -->
 	<div class="grid gap-4 md:grid-cols-3">
 		<!-- Average Temperature -->
@@ -184,6 +213,45 @@
 			</div>
 		</div>
 	</div>
+	{/snippet}
+
+	{#if channels && channels.length > 0}
+		<!-- One block per probe: its own chart, then its own metrics. -->
+		{#each channels as channel, i (channel.key)}
+			<div class="space-y-4">
+				<div class="flex items-center gap-2">
+					<span
+						class="inline-block h-3 w-3 rounded-full"
+						style="background: {channelColor(i)}"
+					></span>
+					<h3 class="tron-heading font-semibold">{channel.label}</h3>
+				</div>
+
+				{#if channel.readings && channel.readings.length > 0}
+					<ThermocoupleChart
+						readings={channel.readings}
+						{minTemp}
+						{maxTemp}
+						showBands={true}
+						title="{channel.label} — Temperature Over Time"
+						lineColor={channelColor(i)}
+						seriesLabel={channel.label}
+					/>
+				{/if}
+
+				{#if channel.stats}
+					{@render metrics(channel.stats)}
+				{/if}
+			</div>
+		{/each}
+	{:else}
+		<!-- Temperature Chart -->
+		{#if readings && readings.length > 0}
+			<ThermocoupleChart {readings} {minTemp} {maxTemp} showBands={true} />
+		{/if}
+
+		{@render metrics(stats)}
+	{/if}
 
 	<!-- Expandable Raw Data -->
 	{#if readings && readings.length > 0}
@@ -208,7 +276,7 @@
 				</svg>
 			</button>
 
-			{#if showRawData}
+			{#snippet rawTable(rows: ThermocoupleReading[])}
 				<div class="max-h-64 overflow-y-auto border-t border-[var(--color-tron-border)]">
 					<table class="w-full text-sm">
 						<thead class="sticky top-0 bg-[var(--color-tron-bg-secondary)]">
@@ -220,7 +288,7 @@
 							</tr>
 						</thead>
 						<tbody>
-							{#each [...readings].sort((a, b) => a.timestamp - b.timestamp) as reading, i (i)}
+							{#each [...rows].sort((a, b) => a.timestamp - b.timestamp) as reading, i (i)}
 								{@const inRange =
 									(minTemp === undefined || reading.temperature >= minTemp) &&
 									(maxTemp === undefined || reading.temperature <= maxTemp)}
@@ -240,6 +308,28 @@
 						</tbody>
 					</table>
 				</div>
+			{/snippet}
+
+			{#if showRawData}
+				{#if channels && channels.length > 0}
+					<!-- A table per probe. A single merged table would have to show
+					     one temperature per row, which is the averaging this change
+					     removed. -->
+					{#each channels as channel, i (channel.key)}
+						<div class="border-t border-[var(--color-tron-border)]">
+							<div class="flex items-center gap-2 px-4 pt-3">
+								<span
+									class="inline-block h-3 w-3 rounded-full"
+									style="background: {channelColor(i)}"
+								></span>
+								<h4 class="tron-heading text-sm font-semibold">{channel.label}</h4>
+							</div>
+							{@render rawTable(channel.readings)}
+						</div>
+					{/each}
+				{:else}
+					{@render rawTable(readings ?? [])}
+				{/if}
 			{/if}
 		</div>
 	{/if}

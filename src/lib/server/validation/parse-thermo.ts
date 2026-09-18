@@ -11,8 +11,34 @@ export interface ThermoReading {
 	temperature: number;
 }
 
-export interface ThermoParseResult {
+/**
+ * One temperature column, kept whole.
+ *
+ * A two-probe logger writes a column per probe, and those are two different
+ * measurements of two different places — averaging them away (which this
+ * parser used to do) reports a temperature that no probe ever read. Each
+ * column is carried through as its own series so it can be charted and
+ * summarised on its own.
+ */
+export interface ThermoChannel {
+	/** Stable key in column order: ch1, ch2, … */
+	key: string;
+	/** Operator-facing name — the file's own header when it has one. */
+	label: string;
+	/** 0-based column index this series came from. */
+	column: number;
 	readings: ThermoReading[];
+}
+
+export interface ThermoParseResult {
+	/**
+	 * The combined series: per row, the mean across temperature columns. Kept
+	 * for the single-channel case (where it IS the channel) and as the fallback
+	 * for anything that predates per-channel data. Prefer `channels`.
+	 */
+	readings: ThermoReading[];
+	/** One entry per temperature column found; length 1 for a single-probe file. */
+	channels: ThermoChannel[];
 	error?: string;
 	// Which columns were used, for display ("temperature from column B")
 	tempColumns: number[];
@@ -130,13 +156,16 @@ function classifyColumn(values: unknown[]): ColClass {
 
 export function parseThermoRows(rows: unknown[][], tzOffsetMinutes?: number): ThermoParseResult {
 	const fail = (error: string): ThermoParseResult =>
-		({ readings: [], error, tempColumns: [], timeColumn: null, columnsNote: '' });
+		({ readings: [], channels: [], error, tempColumns: [], timeColumn: null, columnsNote: '' });
 
 	if (!rows || rows.length < 2) return fail('File has no data rows');
 
 	// Header/title hints from the first few rows (first 3 columns only)
 	const tempHints = new Set<number>();
 	const timeHints = new Set<number>();
+	// The header text that produced a temp hint, kept verbatim so a channel can
+	// be labelled the way the operator's own file labels it ("CH1", "Probe 2").
+	const headerText = new Map<number, string>();
 	for (const row of rows.slice(0, 5)) {
 		for (let col = 0; col < MAX_COLS; col++) {
 			const v = row?.[col];
@@ -145,6 +174,7 @@ export function parseThermoRows(rows: unknown[][], tzOffsetMinutes?: number): Th
 			if (!h || PLAIN_NUMBER.test(h)) continue;
 			if (h.includes('temp') || h.includes('°c') || h.includes('℃') || h.includes('celsius') || h.includes('温度') || /^ch\s?\d/.test(h)) {
 				tempHints.add(col);
+				if (!headerText.has(col)) headerText.set(col, v.trim());
 			}
 			if (h.includes('time') || h.includes('date') || h.includes('elapsed') || h.includes('timestamp')) {
 				timeHints.add(col);
@@ -188,16 +218,17 @@ export function parseThermoRows(rows: unknown[][], tzOffsetMinutes?: number): Th
 		: null;
 
 	const startTime = Date.now();
-	const readings: ThermoReading[] = [];
+	// Each row is kept with its per-column temperatures side by side, so the
+	// single sort below reorders every channel identically. Splitting first and
+	// sorting per channel would let the series drift out of step.
+	const parsedRows: Array<{ timestamp: number; temps: Array<number | null> }> = [];
 	for (let i = 0; i < rows.length; i++) {
 		const row = rows[i];
 		if (!row || row.length === 0) continue;
 
-		// Average across temperature columns (multi-channel exports); the
-		// typical single-channel file has exactly one.
-		const temps = tempCols.map(c => asNumber(row[c])).filter((n): n is number => n !== null);
-		if (temps.length === 0) continue; // header/title/blank rows fall out here
-		const temperature = temps.reduce((a, b) => a + b, 0) / temps.length;
+		const temps = tempCols.map(c => asNumber(row[c]));
+		// Header/title/blank rows carry no number in any temperature column.
+		if (temps.every(t => t === null)) continue;
 
 		let ts: number | null = null;
 		if (timeCol !== null) ts = parseDateLike(row[timeCol], tzOffsetMinutes);
@@ -205,19 +236,62 @@ export function parseThermoRows(rows: unknown[][], tzOffsetMinutes?: number): Th
 			const idx = asNumber(row[indexCol]);
 			if (idx !== null) ts = startTime + idx * 1000; // elapsed readings
 		}
-		if (ts === null) ts = startTime + readings.length * 1000;
+		if (ts === null) ts = startTime + parsedRows.length * 1000;
 
-		readings.push({ timestamp: ts, temperature });
+		parsedRows.push({ timestamp: ts, temps });
 	}
 
-	if (readings.length === 0) return fail('No valid temperature readings found in columns A–C');
+	if (parsedRows.length === 0) return fail('No valid temperature readings found in columns A–C');
 
-	readings.sort((a, b) => a.timestamp - b.timestamp);
+	parsedRows.sort((a, b) => a.timestamp - b.timestamp);
 
-	const columnsNote = `temperature from column ${tempCols.map(c => COL_NAMES[c]).join('+')}`
+	// One series per temperature column. A row missing this column's value
+	// contributes no point to this channel, but still counts for the others.
+	const rawChannels: ThermoChannel[] = tempCols.map((col, idx) => {
+		const readings: ThermoReading[] = [];
+		for (const r of parsedRows) {
+			const t = r.temps[idx];
+			if (t !== null) readings.push({ timestamp: r.timestamp, temperature: t });
+		}
+		const header = headerText.get(col);
+		return {
+			key: `ch${idx + 1}`,
+			label: header && header.length <= 24 ? header : `Channel ${idx + 1}`,
+			column: col,
+			readings
+		};
+	}).filter(c => c.readings.length > 0);
+
+	// Two columns can carry the same header ("Temp" twice), and a column whose
+	// header was missing or over-long falls back to a positional name while its
+	// sibling keeps the file's own. Either way the operator would be left with
+	// two blocks they cannot tell apart, so name the source column whenever the
+	// labels alone are not distinguishing.
+	const labelCounts = new Map<string, number>();
+	for (const c of rawChannels) labelCounts.set(c.label, (labelCounts.get(c.label) ?? 0) + 1);
+	const anyFallback = rawChannels.some(c => /^Channel \d+$/.test(c.label));
+	const channels: ThermoChannel[] = rawChannels.map(c => {
+		const ambiguous = (labelCounts.get(c.label) ?? 0) > 1 || (anyFallback && rawChannels.length > 1);
+		return ambiguous ? { ...c, label: `${c.label} (col ${COL_NAMES[c.column]})` } : c;
+	});
+
+	// The combined series — unchanged behaviour, and for a single-column file
+	// it is simply that column.
+	const readings: ThermoReading[] = parsedRows.map(r => {
+		const present = r.temps.filter((t): t is number => t !== null);
+		return {
+			timestamp: r.timestamp,
+			temperature: present.reduce((a, b) => a + b, 0) / present.length
+		};
+	});
+
+	const tempColsNote = channels.length > 1
+		? `${channels.length} channels from columns ${channels.map(c => COL_NAMES[c.column]).join(', ')}`
+		: `temperature from column ${tempCols.map(c => COL_NAMES[c]).join('+')}`;
+	const columnsNote = tempColsNote
 		+ (timeCol !== null ? `, time from column ${COL_NAMES[timeCol]}`
 			: indexCol !== null ? `, elapsed from column ${COL_NAMES[indexCol]}`
 			: ', 1 reading/sec assumed');
 
-	return { readings, tempColumns: tempCols, timeColumn: timeCol, columnsNote };
+	return { readings, channels, tempColumns: tempCols, timeColumn: timeCol, columnsNote };
 }

@@ -99,6 +99,7 @@ export const actions: Actions = {
 		const outcome = await processThermoUpload({
 			spuId,
 			readings: parsed.readings,
+			channels: parsed.channels,
 			fileName: file.name,
 			user: { _id: locals.user!._id, username: locals.user!.username }
 		});
@@ -112,7 +113,18 @@ export const actions: Actions = {
 			fileName: file.name,
 			columnsNote: parsed.columnsNote,
 			stats: outcome.stats,
-			series: thinSeries(parsed.readings, 800)
+			series: thinSeries(parsed.readings, 800),
+			// One chart per probe. The combined `series` above stays for the
+			// single-channel case and for anything that ignores channels.
+			channels: outcome.channelStats.map(cs => ({
+				key: cs.key,
+				label: cs.label,
+				stats: cs.stats,
+				series: thinSeries(
+					parsed.channels.find(c => c.key === cs.key)?.readings ?? parsed.readings,
+					800
+				)
+			}))
 		};
 	},
 
