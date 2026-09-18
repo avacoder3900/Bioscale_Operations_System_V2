@@ -1,6 +1,6 @@
 <script lang="ts">
 	type Band = 'f1' | 'f2' | 'f3' | 'f4' | 'f5' | 'f6' | 'f7' | 'f8' | 'clear' | 'nir';
-	interface Channel { channel: 'A' | 'B' | 'C'; n: number; sums: Record<Band, number> }
+	interface Channel { channel: 'A' | 'B' | 'C'; n: number; sums: Record<Band, number>; ratio: number | null; ratioN: number }
 	interface Run {
 		id: string; spuUdi: string; barcode: string | null; receivedAt: string | null;
 		durationS: number | null; numberOfReadings: number; partial: boolean; channels: Channel[];
@@ -77,6 +77,10 @@
 														<th class="pr-3 text-left font-medium">Ch</th>
 														<th class="pr-3 text-right font-medium" title="Reads summed">n</th>
 														{#each data.bands as b (b)}<th class="pr-3 text-right font-medium">{BAND_LABEL[b]}</th>{/each}
+														<th
+															class="pr-3 text-right font-medium text-[var(--color-tron-text-secondary)]"
+															title="Mean of the per-reading F7/F3 for this channel — the metric the other optical assays report. Band totals above are the primary figure for blanks."
+														>F7/F3</th>
 													</tr>
 												</thead>
 												<tbody class="font-mono tron-text-primary">
@@ -85,7 +89,7 @@
 															<tr class="border-t border-[var(--color-tron-border)]/40">
 																<td class="pr-4 py-1 text-[var(--color-tron-text-secondary)]">{when(r.receivedAt)}</td>
 																<td class="pr-4 py-1">{r.barcode ?? '—'}</td>
-																<td colspan={data.bands.length + 2} class="py-1 font-sans text-amber-400">No readings — the run was cancelled or cut short ({r.durationS ?? '?'} s).</td>
+																<td colspan={data.bands.length + 3} class="py-1 font-sans text-amber-400">No readings — the run was cancelled or cut short ({r.durationS ?? '?'} s).</td>
 															</tr>
 														{:else}
 															{#each r.channels as c, i (c.channel)}
@@ -97,6 +101,10 @@
 																	<td class="pr-3 py-0.5"><span class="mr-1 inline-block h-2 w-2 rounded-full align-middle" style="background: {CH_COLOR[c.channel]}"></span>{c.channel}</td>
 																	<td class="pr-3 py-0.5 text-right text-[var(--color-tron-text-secondary)]">{c.n}</td>
 																	{#each data.bands as b (b)}<td class="pr-3 py-0.5 text-right">{num(c.sums[b])}</td>{/each}
+																	<td
+																		class="pr-3 py-0.5 text-right text-[var(--color-tron-text-secondary)]"
+																		title={c.ratio === null ? 'No reading had a positive F3' : `mean of ${c.ratioN} per-reading ratios`}
+																	>{c.ratio === null ? '—' : c.ratio.toFixed(3)}</td>
 																</tr>
 															{/each}
 														{/if}

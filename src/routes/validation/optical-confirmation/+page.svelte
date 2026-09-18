@@ -8,6 +8,8 @@
 			groups: Array<{
 				id: string; name: string; description: string | null; color: string; count: number;
 			}>;
+			/** Blank-cartridge runs: not cartridge records, not a CartridgeGroup. */
+			blankRunCount: number;
 			cartridges: Array<{
 				id: string; barcode: string; assayName: string | null; kind: 'scan' | 'photobleach' | null;
 				status: string; ran: boolean; assigned: boolean;
@@ -419,7 +421,7 @@
 		</div>
 
 		<!-- Groups: pick which to compare, and filter the table -->
-		{#if data.groups.length > 0}
+		{#if data.groups.length > 0 || data.blankRunCount > 0}
 			<div class="flex flex-wrap items-center gap-3 border-b border-[var(--color-tron-border)] px-4 py-3">
 				<span class="text-xs uppercase tracking-wide text-[var(--color-tron-text-secondary)]">Groups</span>
 				<div class="flex flex-wrap items-center gap-2">
@@ -437,6 +439,18 @@
 							<GroupPill name={g.name} color={g.color} count={g.count} muted={!comparing.has(g.id)} />
 						</button>
 					{/each}
+					<!-- Blank cartridge runs are not a CartridgeGroup: they live in
+					     optical_blank_runs with no cartridge record, so this pill links to
+					     their raw data rather than joining the ratio-based comparison. -->
+					{#if data.blankRunCount > 0}
+						<a
+							href="/validation/optical-confirmation/blank"
+							title="Blank Cartridge Optical Scan — raw band totals per channel. Not part of the F7/F3 comparison."
+							class="rounded-full transition-opacity hover:opacity-80"
+						>
+							<GroupPill name="blank" color="blue" count={data.blankRunCount} muted />
+						</a>
+					{/if}
 				</div>
 
 				<div class="ml-auto flex flex-wrap items-center gap-2">
