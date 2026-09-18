@@ -12956,3 +12956,50 @@ Deployment: production — building from the GitHub push to master (Vercel dashb
 Source: branch master @ commit ba938949 (feat/spu-tweaks fast-forwarded)
 Retrieve this exact code: git checkout master at commit ba938949
 What this deployment is for: bench page with all four read settings fixed
+
+================================================================================
+2026-09-18 — feat/optical-add-to-existing-group — add cartridges to an EXISTING optical analysis group
+================================================================================
+The optical log could only ever make a NEW group. Selecting rows gave you one button, "Save as
+group", which demanded a name; the only way to land cartridges in a group that already existed was
+to type that group's name, collide, and click through the 409's "Add these N to ..." escape hatch.
+Operators were creating "group a", "group a run 2", "group a run 3" because adding to "group a" had
+no front door.
+
+The append itself was already built — saveGroup has taken mode=append + groupId since the 409 path
+was added. So no new action: a second writer would mean two audit trails for one mutation, which is
+exactly what groups/+page.server.ts's header warns against. What was missing was the way in.
+
+src/routes/validation/optical-confirmation/+page.server.ts
+  Hoisted the repeated `mode === 'append' && groupId` test into one `isAppend` flag (it drove the
+  branch, the AuditLog action CREATE/UPDATE, and the reason string, spelled out three times).
+  saveGroup now also returns:
+    - appended     — lets the page say "Added 4 to X" rather than "Saved group X"
+    - alreadyCount — $addToSet silently skips a cartridge already in the target, so addedCount can
+                     come back lower than what was selected. Without this the operator reads a
+                     partial failure where nothing failed.
+
+src/routes/validation/optical-confirmation/+page.svelte
+  New "Add to existing group" button beside "Save as group" in the sticky action bar, opening a
+  panel with a dropdown of the live analysis groups (each with its current count) that posts
+  mode=append to the same action. Disabled with a tooltip when no groups exist yet.
+  The panel states the consequences before you commit: what the target holds now vs. after, how
+  many of the selection are already in it and will be skipped, and — the one that matters — which
+  OTHER groups cartridges would be pulled out of. One cartridge belongs to exactly one group
+  (counting one twice would corrupt the between-group medians), so an append is also a move, and
+  that should never be a surprise. The two panels are mutually exclusive via openAdd/openNaming
+  since both write the same rows.
+
+Scope note: this works on purpose 'optical_analysis' groups — which, since 7dca7988 ("one kind of
+group"), is every optical group there is: 'assign_batch' is retired and the assign form's own
+"Group (optional)" field now writes an analysis group too. So the dropdown lists groups made either
+way, and a batch named on the assign form can be topped up from the log later.
+
+Rebased onto master (the branch it was written on was 62 commits behind; both files had moved
+upstream, and 7dca7988 landed in between). Both source files auto-merged with no conflict — only
+progress.txt collided, at the append point.
+npm run check: 10 errors / 437 warnings across 3350 files — baseline; zero errors and zero warnings
+in both touched files.
+
+Manual verification only — tests/contracts/ has no optical coverage (closest is
+10-cartridges.test.ts). Worth a contract test for the append / skip / move-out paths.

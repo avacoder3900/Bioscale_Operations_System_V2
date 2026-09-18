@@ -217,6 +217,10 @@ export const actions: Actions = {
 		const groupId = form.get('groupId')?.toString().trim();
 		const ids = parseIds(form.get('cartridgeIds'));
 
+		// Appending to a group the operator picked outright is the same write as the
+		// 409 "add to existing" escape hatch — one code path, one audit trail.
+		const isAppend = mode === 'append' && !!groupId;
+
 		if (ids.length === 0) {
 			return fail(400, { groupError: 'Select at least one cartridge first.' });
 		}
@@ -231,7 +235,7 @@ export const actions: Actions = {
 		}
 
 		let target: any;
-		if (mode === 'append' && groupId) {
+		if (isAppend) {
 			target = await CartridgeGroup.findOne({
 				_id: groupId,
 				purpose: 'optical_analysis',
@@ -311,22 +315,27 @@ export const actions: Actions = {
 			_id: generateId(),
 			tableName: 'cartridge_groups',
 			recordId: target._id,
-			action: mode === 'append' && groupId ? 'UPDATE' : 'CREATE',
+			action: isAppend ? 'UPDATE' : 'CREATE',
 			oldData: { cartridgeIds: before },
 			newData: { name: (after as any)?.name ?? name, cartridgeIds: afterIds },
 			changedBy: locals.user!._id,
 			changedAt: new Date(),
-			reason:
-				mode === 'append' && groupId
-					? 'Add cartridges to optical analysis group'
-					: 'Create optical analysis group'
+			reason: isAppend
+				? 'Add cartridges to optical analysis group'
+				: 'Create optical analysis group'
 		});
 
 		return {
 			groupSaved: true,
+			// Lets the page say "added to" rather than "saved" — an operator who just
+			// dropped 4 carts into an existing cohort should not read "Saved group".
+			appended: isAppend,
 			groupId: target._id as string,
 			groupName: ((after as any)?.name ?? name) as string,
 			addedCount: afterIds.length - before.length,
+			// Re-adding a cartridge that is already in the target is a no-op, not an
+			// error: $addToSet just skips it. Report it so the counts reconcile.
+			alreadyCount: checked.ids.filter((id) => before.includes(id)).length,
 			totalCount: afterIds.length,
 			movedFrom
 		};

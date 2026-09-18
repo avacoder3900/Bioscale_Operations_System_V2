@@ -29,8 +29,9 @@
 			bcodeSteps?: number; assayName?: string;
 			// group actions
 			groupSaved?: boolean; groupArchived?: boolean; groupError?: string;
+			appended?: boolean;
 			groupId?: string; groupName?: string;
-			addedCount?: number; totalCount?: number; removedCount?: number;
+			addedCount?: number; alreadyCount?: number; totalCount?: number; removedCount?: number;
 			movedFrom?: Array<{ name: string; count: number }>;
 			existingGroupId?: string; existingGroupName?: string;
 		} | null;
@@ -134,6 +135,40 @@
 		}
 		return [...counts.entries()].map(([name, count]) => ({ name, count }));
 	});
+
+	// ---- adding to an EXISTING group -----------------------------------------
+	// Same server action as "Save as group", with mode=append: one implementation,
+	// one audit trail. This just makes the append reachable without first colliding
+	// on a name.
+	let addOpen = $state(false);
+	let addTargetId = $state('');
+	let isAddingToGroup = $state(false);
+
+	const addTarget = $derived(data.groups.find((g) => g.id === addTargetId) ?? null);
+
+	/** Selected rows that are already in the target — $addToSet will no-op on these. */
+	const alreadyInTarget = $derived(
+		addTargetId
+			? data.cartridges.filter((c) => selected.has(c.id) && c.group?.id === addTargetId).length
+			: 0
+	);
+	const newToTarget = $derived(selectedCount - alreadyInTarget);
+
+	/** What the append would pull OUT of other groups (the target itself excluded). */
+	const wouldMoveToTarget = $derived(wouldMove.filter((m) => m.name !== addTarget?.name));
+
+	/** The two panels write the same rows, so only one may be open at a time. */
+	function openAdd() {
+		namingOpen = false;
+		addOpen = true;
+		if (!addTargetId || !data.groups.some((g) => g.id === addTargetId)) {
+			addTargetId = data.groups[0]?.id ?? '';
+		}
+	}
+	function openNaming() {
+		addOpen = false;
+		namingOpen = true;
+	}
 
 	// ---- compare selection ---------------------------------------------------
 	let comparing = $state<Set<string>>(new Set());
@@ -289,7 +324,18 @@
 				<div class="flex items-center gap-2">
 					<button
 						type="button"
-						onclick={() => (namingOpen = !namingOpen)}
+						onclick={() => (addOpen ? (addOpen = false) : openAdd())}
+						disabled={selectedCount < 1 || data.groups.length === 0}
+						title={data.groups.length === 0
+							? 'No analysis groups yet — create one first with "Save as group".'
+							: 'Add the checked cartridges to a group that already exists'}
+						class="rounded-lg border border-[var(--color-tron-cyan)]/50 px-4 py-2 text-sm font-semibold text-[var(--color-tron-cyan)] transition-all hover:bg-[var(--color-tron-cyan)]/10 disabled:cursor-not-allowed disabled:opacity-50"
+					>
+						{addOpen ? 'Cancel' : 'Add to existing group'}
+					</button>
+					<button
+						type="button"
+						onclick={() => (namingOpen ? (namingOpen = false) : openNaming())}
 						disabled={selectedCount < 1}
 						class="rounded-lg border border-[var(--color-tron-cyan)]/50 px-4 py-2 text-sm font-semibold text-[var(--color-tron-cyan)] transition-all hover:bg-[var(--color-tron-cyan)]/10 disabled:cursor-not-allowed disabled:opacity-50"
 					>
@@ -307,6 +353,75 @@
 					</a>
 				</div>
 			</div>
+
+			<!-- Add the current selection to a group that already exists -->
+			{#if addOpen && selectedCount > 0 && data.groups.length > 0}
+				<form
+					method="POST"
+					action="?/saveGroup"
+					use:enhance={() => {
+						isAddingToGroup = true;
+						return async ({ result, update }) => {
+							await update({ reset: false });
+							isAddingToGroup = false;
+							if (result.type === 'success') {
+								addOpen = false;
+								selected = new Set();
+							}
+						};
+					}}
+					class="mt-3 flex flex-wrap items-end gap-3 rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-tertiary)] p-3"
+				>
+					<!-- mode=append is what tells saveGroup to reuse groupId instead of
+					     creating a new group; no name/colour is sent, so the group keeps its own. -->
+					<input type="hidden" name="mode" value="append" />
+					<input type="hidden" name="cartridgeIds" value={selectedIds} />
+					<div class="min-w-[16rem] flex-1">
+						<label for="addTargetId" class="tron-text-muted mb-1 block text-xs font-medium">
+							Add to group
+						</label>
+						<select
+							id="addTargetId"
+							name="groupId"
+							required
+							bind:value={addTargetId}
+							class="tron-input w-full rounded-lg px-3 py-2 text-sm"
+						>
+							{#each data.groups as g (g.id)}
+								<option value={g.id}>{g.name} ({g.count})</option>
+							{/each}
+						</select>
+					</div>
+					<button
+						type="submit"
+						disabled={isAddingToGroup || !addTargetId || newToTarget < 1}
+						class="rounded-lg bg-[var(--color-tron-cyan)] px-4 py-2 text-sm font-semibold text-[var(--color-tron-bg-primary)] transition-all hover:bg-[var(--color-tron-cyan)]/90 disabled:cursor-not-allowed disabled:opacity-50"
+					>
+						{isAddingToGroup ? 'Adding…' : `Add ${newToTarget} cartridge(s)`}
+					</button>
+
+					{#if addTarget}
+						<p class="w-full text-xs text-[var(--color-tron-text-secondary)]">
+							"{addTarget.name}" holds {addTarget.count} cartridge(s) — it would hold
+							{addTarget.count + newToTarget} after this.
+						</p>
+					{/if}
+					{#if alreadyInTarget > 0}
+						<p class="w-full text-xs text-[var(--color-tron-text-secondary)]">
+							{alreadyInTarget} of the {selectedCount} selected {alreadyInTarget === 1
+								? 'is'
+								: 'are'} already in this group and will be skipped.
+						</p>
+					{/if}
+					{#if wouldMoveToTarget.length > 0}
+						<p class="w-full text-xs text-amber-400">
+							⚠ A cartridge can only be in one group. {wouldMoveToTarget
+								.map((m) => `${m.count} will move out of "${m.name}"`)
+								.join('; ')}.
+						</p>
+					{/if}
+				</form>
+			{/if}
 
 			<!-- Name the current selection as a group -->
 			{#if namingOpen && selectedCount > 0}
@@ -394,7 +509,7 @@
 							</form>
 							<button
 								type="button"
-								onclick={() => (namingOpen = true)}
+								onclick={openNaming}
 								class="rounded border border-[var(--color-tron-border)] px-3 py-1 text-xs text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)]"
 							>
 								Use a different name
@@ -406,9 +521,16 @@
 
 			{#if form?.groupSaved}
 				<div class="mt-3 rounded-lg bg-[var(--color-tron-green)]/10 p-3 text-sm text-[var(--color-tron-green)]">
-					Saved group <span class="font-semibold">"{form.groupName}"</span>{#if form.totalCount != null}
-						— {form.totalCount} cartridge(s){/if}{#if form.removedCount}
-						, removed {form.removedCount}{/if}.
+					{#if form.appended}
+						Added <span class="font-semibold">{form.addedCount}</span> cartridge(s) to
+						<span class="font-semibold">"{form.groupName}"</span>{#if form.totalCount != null}
+							— {form.totalCount} total{/if}{#if form.alreadyCount}
+							, {form.alreadyCount} already there{/if}.
+					{:else}
+						Saved group <span class="font-semibold">"{form.groupName}"</span>{#if form.totalCount != null}
+							— {form.totalCount} cartridge(s){/if}{#if form.removedCount}
+							, removed {form.removedCount}{/if}.
+					{/if}
 					{#if form.movedFrom && form.movedFrom.length > 0}
 						<span class="text-[var(--color-tron-orange)]">
 							{form.movedFrom.map((m) => `${m.count} moved from "${m.name}"`).join('; ')}.
