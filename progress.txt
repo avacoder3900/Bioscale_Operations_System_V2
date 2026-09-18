@@ -13025,6 +13025,8 @@ Verification: py_compile OK; a replica of the loop's control flow unit-tested wi
 the first well, last well, back-to-back wells, before a trip, and on a short final trip — every well
 dispensed exactly once, in order, loop terminates. On-robot analysis clean.
 Deployment: stored as active OpentronProtocol op-497d804b0228056a (op-242bad05e1ff8052 → inactive).
-B14: protocol 957bb13a (was a4bae5eb). R04/B07 still mid-run — deploy pending (watch armed).
+B14: protocol 957bb13a (was a4bae5eb). R04: b1b2eb9e (was a51878be) and B07: c138e2c4 (was 3ba126eb),
+both deployed once their 16:47Z wax runs finished (~17:3xZ); analysis ok / 0 errors / 28 RTPs on all three.
+All three robots now run the per-well tip-swap reagent protocol; BIMS card ships with the merge.
 Card wording on the reagent page updated ("stops before its next well … re-aspirates and continues
 at the exact well it stopped at").
