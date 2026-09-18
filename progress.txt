@@ -12939,3 +12939,20 @@ Deployment: production — building from the GitHub push to master (Vercel dashb
 Source: branch master @ commit dd469f8b (feat/spu-tweaks fast-forwarded)
 Retrieve this exact code: git checkout master at commit dd469f8b
 What this deployment is for: replaces the failed 907f755b/e5d8cac1 deploys — bench fixed position + blank band sums
+
+================================================================================
+2026-09-18 — feat/spu-tweaks — bench: gain 8 / astep 999 / atime 49 fixed too, no inputs
+================================================================================
+Jacob: hard-code the read settings in BIMS as well and don't offer them. Bench page now sends
+"39500,8,999,49" for laser/dark and "start,end,step,8,999,49" for scans — always explicit, because
+gain 8 is NOT the firmware default (OPTICAL_BENCH_GAIN_DEFAULT is 1) and the firmware CSV parser
+stops at an empty field. Gain/astep/atime inputs removed; a read-only "Fixed settings" strip shows
+39500 µm · gain 8 · astep 999 · atime 49. Scan start/end/step stay editable (end ≤ 39500, ≤ 12 pts).
+Values still recorded in each session's rawData.requested. Firmware untouched (its default gain 1
+only applies to calls with no argument, e.g. from the Particle Console).
+npm run build: passes. npm run check: 10/437 — baseline.
+
+Deployment: production — building from the GitHub push to master (Vercel dashboard, commit below)
+Source: branch master @ commit ba938949 (feat/spu-tweaks fast-forwarded)
+Retrieve this exact code: git checkout master at commit ba938949
+What this deployment is for: bench page with all four read settings fixed

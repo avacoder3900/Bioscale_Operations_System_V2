@@ -21,20 +21,22 @@ import type { Actions, PageServerLoad } from './$types';
  * the result as a validation session against the unit. Contract:
  * brevitest-device/firmware/Docs/V96_BLANK_SONIC_LASER_HANDOFF.md, Change 6.
  *
- * The laser position is HARD-CODED IN FIRMWARE (Jacob, 2026-09-17): laser_read /
- * dark_read with an empty argument read at OPTICAL_BENCH_LASER_POSITION (39500 µm,
- * found on 0247 — the physical stop is between 39500 and 40500 on a fresh home)
- * and the validator caps any position / scan end at OPTICAL_BENCH_POSITION_LIMIT
- * (39500). BIMS never chooses the position: with default gain/astep/atime it
- * sends no argument at all; only when those are overridden does it send the
- * mirrored constant as the first CSV field (the parser stops at an empty field).
+ * Every read parameter is FIXED (Jacob, 2026-09-17/18) — nothing on the page
+ * chooses them. Position 39500 µm is OPTICAL_BENCH_LASER_POSITION in firmware
+ * v96 (found on 0247; the physical stop is between 39500 and 40500 on a fresh
+ * home) and OPTICAL_BENCH_POSITION_LIMIT caps any position / scan end there.
+ * Gain 8, astep 999, atime 49 are the bench settings Jacob wants; the firmware's
+ * own defaults are gain 1 / 999 / 49, so BIMS always sends the full explicit
+ * argument string (the firmware's CSV parser stops at an empty field, so a
+ * position can't be omitted while passing gain). The scan keeps its start /
+ * end / step inputs — those are the one thing the operator actually varies.
  */
 /** Mirrors OPTICAL_BENCH_LASER_POSITION / OPTICAL_BENCH_POSITION_LIMIT in brevitest-firmware.h. */
 const FIRMWARE_LASER_POSITION_UM = 39500;
 const FIRMWARE_POSITION_LIMIT_UM = 39500;
 const FIRMWARE_MAX_SCAN_POINTS = 12;
-/** OPTICAL_BENCH_GAIN_DEFAULT / SPECTRO_ASTEP_DEFAULT / SPECTRO_ATIME_DEFAULT. */
-const FIRMWARE_DEFAULTS = { gain: 1, astep: 999, atime: 49 } as const;
+/** Fixed bench settings — sent on every call; the firmware's own defaults are gain 1 / astep 999 / atime 49. */
+const BENCH = { posUm: FIRMWARE_LASER_POSITION_UM, gain: 8, astep: 999, atime: 49 } as const;
 const BENCH_TYPES = ['laser', 'dark', 'laser_scan'] as const;
 type BenchType = (typeof BENCH_TYPES)[number];
 const FN: Record<BenchType, string> = { laser: 'laser_read', dark: 'dark_read', laser_scan: 'laser_scan' };
@@ -69,7 +71,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 	const nameOf = new Map(users.map((u) => [u._id, u.username]));
 
 	return {
-		firmware: { laserPositionUm: FIRMWARE_LASER_POSITION_UM, positionLimitUm: FIRMWARE_POSITION_LIMIT_UM, maxScanPoints: FIRMWARE_MAX_SCAN_POINTS, defaults: FIRMWARE_DEFAULTS },
+		bench: { ...BENCH, positionLimitUm: FIRMWARE_POSITION_LIMIT_UM, maxScanPoints: FIRMWARE_MAX_SCAN_POINTS },
 		spus: spus.map((s) => ({ id: s._id, udi: s.udi, status: s.status })),
 		history: sessions.map((s) => ({
 			id: s._id as string,
@@ -96,19 +98,14 @@ export const actions: Actions = {
 			const v = Number(form.get(k)?.toString() ?? '');
 			return Number.isFinite(v) ? v : d;
 		};
-		// Position is fixed in firmware — see the header comment. Kept in rawData so
-		// history rows and the journal line still say where the read happened.
-		const pos = FIRMWARE_LASER_POSITION_UM;
-		const gain = num('gain', FIRMWARE_DEFAULTS.gain);
-		const astep = num('astep', FIRMWARE_DEFAULTS.astep);
-		const atime = num('atime', FIRMWARE_DEFAULTS.atime);
+		// Position, gain, astep and atime are fixed — see the header comment. They are
+		// kept in rawData so history rows and the journal line say what was used.
+		const { posUm: pos, gain, astep, atime } = BENCH;
 		const start = num('start', FIRMWARE_POSITION_LIMIT_UM - 4400);
 		const end = num('end', FIRMWARE_POSITION_LIMIT_UM);
 		const stepUm = num('stepUm', 400);
 
 		if (!spuId) return fail(400, { error: 'Pick a unit' });
-		if (gain < 0 || gain > 10) return fail(400, { error: 'Gain must be 0–10.' });
-		if (astep < 0 || astep > 65534 || atime < 0 || atime > 255) return fail(400, { error: 'astep must be 0–65534 and atime 0–255.' });
 		if (type === 'laser_scan') {
 			if (stepUm <= 0 || start < 0 || end < start) return fail(400, { error: 'Scan needs start ≥ 0, end ≥ start and a positive step.' });
 			if (end > FIRMWARE_POSITION_LIMIT_UM) return fail(400, { error: `Scan end cannot exceed ${FIRMWARE_POSITION_LIMIT_UM} µm — the physical stop is just past it and the firmware refuses anything higher.` });
@@ -118,13 +115,12 @@ export const actions: Actions = {
 		if (!spu?.particleLink?.particleDeviceId) return fail(400, { error: 'That unit has no Particle device linked' });
 		const deviceId = spu.particleLink.particleDeviceId as string;
 
-		const usingDefaults = gain === FIRMWARE_DEFAULTS.gain && astep === FIRMWARE_DEFAULTS.astep && atime === FIRMWARE_DEFAULTS.atime;
+		// Always explicit: gain 8 is not the firmware default, and the CSV parser
+		// cannot skip the position field.
 		const arg =
 			type === 'laser_scan'
 				? [start, end, stepUm, gain, astep, atime].join(',')
-				: usingDefaults
-					? '' // empty arg → firmware reads at its own hard-coded position with its own defaults
-					: [pos, gain, astep, atime].join(',');
+				: [pos, gain, astep, atime].join(',');
 
 		// 1. Trigger. The function returns the seq the result will carry.
 		let seq: number;
