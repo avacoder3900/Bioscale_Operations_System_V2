@@ -12917,3 +12917,8 @@ Blank runs are arriving (6 on 0247 after the DeviceState fix + Jacob's blank-tes
   (cancelled / cut short) show one amber line; partial runs (<126 readings) flag the count.
 npm run check: 10/440 — errors at baseline (new warnings are the existing state_referenced_locally
 pattern on $state initialisers).
+
+Deployment: production — building from the GitHub push to master (Vercel dashboard, commit below)
+Source: branch master @ commit 907f755b (feat/spu-tweaks fast-forwarded, 3 commits)
+Retrieve this exact code: git checkout master at commit 907f755b
+What this deployment is for: bench page fixed laser position (39500 µm); blank page per-channel band sums; --only-sonic script
