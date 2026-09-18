@@ -1788,15 +1788,17 @@ export const actions: Actions = {
 		} catch (e) {
 			return fail(502, { error: `Could not reach the robot bridge: ${e instanceof Error ? e.message : 'unknown'}` });
 		}
+		// AuditLog's schema is tableName/recordId/changedBy/changedAt/newData — the
+		// previous shape (resourceType/username/details) was silently dropped by
+		// Mongoose, leaving rows with only an action and a time (found 2026-09-17).
 		await AuditLog.create({
 			_id: generateId(),
+			tableName: 'wax_filling_runs',
+			recordId: runId,
 			action: cancel ? 'wax_tip_swap_cancel' : 'wax_tip_swap_request',
-			resourceType: 'wax_filling_run',
-			resourceId: runId,
-			userId: locals.user._id,
-			username: locals.user.username,
-			timestamp: new Date(),
-			details: { mode, opentronsRunId: run.opentronsRunId ?? null }
+			changedBy: locals.user.username,
+			changedAt: new Date(),
+			newData: { mode, cancel, opentronsRunId: run.opentronsRunId ?? null, robotId: String(robotId) }
 		});
 		return { success: true, tipSwap: cancel ? 'cancelled' : mode };
 	},

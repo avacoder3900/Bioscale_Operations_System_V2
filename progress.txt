@@ -12977,3 +12977,33 @@ deck-001 + its probe height in ONE pass (never tipLength alone); (2) make the .p
 fed from the BIMS setting (needs a protocol deploy to all three robots).
 npm run check: 10 errors / 435 warnings repo-wide, none in the touched files (all 10 pre-existing on
 master: r2.ts fetch overload, AskBimsWidget comparison, assembly/[sessionId] implicit-any x8).
+
+================================================================================
+2026-09-18 — feat/reagent-tip-swap — mid-run "change tip" for reagent fills (protocol + BIMS card), deployed to B14
+================================================================================
+Alejandro asked for the wax page's mid-run tip swap on reagent fills too. Ported the 2026-08-18
+wax mechanism; the bridge daemon side (kind tip_swap_request → /data/ot2-bridge/tip-swap-request.json)
+is robot-level and already on all three robots, so nothing changed there.
+  - protocols/Reagent_Filling_GEN7.py: take_tip_swap_request() + stale-request cleanup right after
+    the carriage is loaded; pick_up_and_calibrate_tip(pick_up=True) gains the hand-inserted-tip mode
+    (probe only, tip length kept); do_tip_swap(mode, at_well) ('rack' = drop + next tracked tip +
+    probe, 'hand' = raise over the calibrator, pause, probe); dispense_reagent checks the request at
+    the top of EVERY aspiration batch (the tip is empty there — blown out into the source after the
+    previous batch) and swaps before aspirating, replacing `adjust` for the rest of that reagent.
+    apiLevel unchanged (2.19). py_compile OK.
+  - reagent-filling/+page.server.ts: requestTipSwap action (ReagentBatchRecord → Ot2BridgeCommand
+    tip_swap_request; audit row with the AuditLog model's real fields).
+  - reagent-filling/+page.svelte: same "Tip problem? Swap the tip without losing your place" card
+    under the embedded run controller while the run is live (rack / by hand / cancel), wording
+    adjusted for batch boundaries.
+  - wax-filling/+page.server.ts: requestTipSwap audit row now uses tableName/recordId/changedBy —
+    the old resourceType/username/details shape was dropped by the schema (rows had only an action).
+Deployment (protocol): stored as the active reagent-filling OpentronProtocol op-242bad05e1ff8052
+(older op-9a81e595 → inactive) so Studio Sync / any resync ships it. Pushed via bridge
+upload_protocol with the full 19-def BIMS labware library, gated on the on-robot analysis
+(result ok, 0 errors, 28 RTPs, p300 left):
+  - B14: protocol a4bae5eb (was 9ab15fa8), repointed 16:5xZ.
+  - R04 and B07 were mid-run (both started 16:47Z) and were deliberately NOT touched; deploy with
+    `node <scratch>/deploy-reagent-tipswap.cjs R04 B07` once idle, or Studio → Re-upload (reagent).
+BIMS side needs the branch merged to master to show the card.
+npm run check: 10 errors / 435 warnings repo-wide, none in the touched files (all pre-existing).

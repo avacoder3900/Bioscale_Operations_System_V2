@@ -556,6 +556,41 @@ def run(protocol: protocol_api.ProtocolContext):
         protocol.comment(f'Loaded carriage for particle ID: {particle_id}')
         protocol.comment(f'Applied robot offsets: x={robot_offsets["x"]}, y={robot_offsets["y"]}, z={robot_offsets["z"]}')
 
+        # ── Mid-run tip swap request (2026-09-18, ported from the wax protocol) ──
+        # BIMS ("Tip problem?" card on the reagent run page) asks the on-robot bridge
+        # daemon to write this file. dispense_reagent checks it before EVERY
+        # aspiration batch — the one moment the tip is empty (it was blown out into
+        # the source tube after the previous batch). When present the run swaps the
+        # tip (robot from the rack, or the operator by hand), re-probes it on the
+        # calibrator, then carries on with the very batch it was about to aspirate.
+        # Nothing skipped, nothing double-filled.
+        _TIP_SWAP_REQ = '/data/ot2-bridge/tip-swap-request.json'
+
+        def take_tip_swap_request():
+            """Return the requested mode ('rack' | 'hand') and consume the file, else None."""
+            if protocol.is_simulating():
+                return None
+            try:
+                import os as _os, json as _json
+                if not _os.path.exists(_TIP_SWAP_REQ):
+                    return None
+                mode = 'rack'
+                try:
+                    with open(_TIP_SWAP_REQ, 'r') as _f:
+                        mode = str((_json.load(_f) or {}).get('mode') or 'rack')
+                except Exception:
+                    pass
+                try:
+                    _os.remove(_TIP_SWAP_REQ)
+                except Exception:
+                    pass
+                return 'hand' if mode == 'hand' else 'rack'
+            except Exception:
+                return None
+
+        # A stale request left over from an earlier run must not fire now.
+        take_tip_swap_request()
+
         # Calibration check wells - 9 positions across the deck
         calibration_check_wells = ['W3', 'L5', 'B7', 'B15', 'L13', 'W11', 'W19', 'L21', 'B23']
         
@@ -597,7 +632,10 @@ def run(protocol: protocol_api.ProtocolContext):
             
             return True
 
-        def pick_up_and_calibrate_tip():
+        def pick_up_and_calibrate_tip(pick_up=True):
+            """pick_up=False: a tip was put on BY HAND while the API already models a
+            tip (has_tip stays True so the tip length is honoured) — skip drop/pick-up
+            and just probe. Used by the mid-run tip swap."""
             nonlocal _tip_index
             # PRD 6: calibrator point + probe Z are RTPs (defaults = previously
             # hardcoded values; z_cal for the 200uL VWR tip). Move points track
@@ -606,27 +644,28 @@ def run(protocol: protocol_api.ProtocolContext):
             cal_x = protocol.params.cal_x
             cal_y = protocol.params.cal_y
             z_cal = protocol.params.z_cal
-            
-            if (pipette.has_tip):
+
+            if pick_up and pipette.has_tip:
                 pipette.drop_tip()
 
             # Check if rack is exhausted before picking up
-            if not protocol.is_simulating() and _tip_index >= len(_all_tips):
+            if pick_up and not protocol.is_simulating() and _tip_index >= len(_all_tips):
                 protocol.pause('TIP TRACKER: tiprack exhausted — refill rack, enable "Tiprack Refilled" on next run, then click Resume to continue with current run from A1')
                 _tip_index = 0
                 pipette.starting_tip = _all_tips[0]
                 save_tip_state(0)
 
-            pipette.pick_up_tip()
+            if pick_up:
+                pipette.pick_up_tip()
 
-            # Persist immediately after pickup so an aborted run still advances the counter
-            if not protocol.is_simulating():
-                _tip_index += 1
-                save_tip_state(_tip_index)
-                if _tip_index < len(_all_tips):
-                    protocol.comment(f'TIP TRACKER: consumed tip {_all_tips[_tip_index - 1].well_name} — next tip will be {_all_tips[_tip_index].well_name} (index {_tip_index})')
-                else:
-                    protocol.comment(f'TIP TRACKER: consumed tip {_all_tips[_tip_index - 1].well_name} — rack now empty')
+                # Persist immediately after pickup so an aborted run still advances the counter
+                if not protocol.is_simulating():
+                    _tip_index += 1
+                    save_tip_state(_tip_index)
+                    if _tip_index < len(_all_tips):
+                        protocol.comment(f'TIP TRACKER: consumed tip {_all_tips[_tip_index - 1].well_name} — next tip will be {_all_tips[_tip_index].well_name} (index {_tip_index})')
+                    else:
+                        protocol.comment(f'TIP TRACKER: consumed tip {_all_tips[_tip_index - 1].well_name} — rack now empty')
 
             # Per-tip bend calibration is OPT-IN (use_tip_calibration). When disabled,
             # skip the physical X/Y limit-switch probe entirely and dispense at the
@@ -923,6 +962,25 @@ def run(protocol: protocol_api.ProtocolContext):
             return liquid_surface_z
 
 
+        def do_tip_swap(mode, at_well):
+            """Operator-requested mid-run tip swap (see take_tip_swap_request). Called
+            at an aspiration-batch boundary, so the tip is empty (blown out into the
+            source after the previous batch). 'rack' = robot drops the tip and takes
+            the next tracked one; 'hand' = operator pulls the old tip off and pushes a
+            new one on while the API keeps modelling a tip (so the tip length stays
+            right) — then re-probe either way and return the new adjust."""
+            protocol.comment(f'TIP SWAP requested from BIMS ({mode}) — will continue at well {at_well}.')
+            if mode == 'hand':
+                _cx, _cy, _cz = protocol.params.cal_x, protocol.params.cal_y, protocol.params.z_cal
+                pipette.move_to(types.Location(types.Point(x=_cx, y=_cy, z=_cz + 60), carriage), force_direct=True, speed=20)
+                protocol.pause(
+                    f'TIP SWAP (by hand): the pipette is raised over the calibrator. Pull the old tip '
+                    f'off and push a NEW tip firmly on, then click Resume — it will calibrate the new '
+                    f'tip and continue at well {at_well}. Cancel/Stop to end the run.'
+                )
+                return pick_up_and_calibrate_tip(pick_up=False)
+            return pick_up_and_calibrate_tip()
+
         def dispense_reagent(sources, wells, well_volume, source_volume, adjust, cartridges_per_deck):
             """
             Aspirates reagent from source tubes and dispenses into cartridge wells.
@@ -963,6 +1021,13 @@ def run(protocol: protocol_api.ProtocolContext):
                     # ----- Determine which wells this run fills -----
                     start_well = run * wells_per_run
                     wells_this_run = destination_wells[start_well:start_well + wells_per_run]
+
+                    # Operator asked for a tip swap -> do it now, before aspirating
+                    # this batch (the tip is empty here). The new tip's probe adjust
+                    # replaces the old one for every dispense from here on.
+                    _swap = take_tip_swap_request()
+                    if _swap and wells_this_run:
+                        adjust = do_tip_swap(_swap, wells_this_run[0].well_name)
 
                     # ----- Calculate total aspiration volume for this run -----
                     # = (number of wells × volume per well) + disposal + remainder
