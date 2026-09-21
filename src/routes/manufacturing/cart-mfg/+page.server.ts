@@ -311,7 +311,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 		: 0;
 
 	// Pre-barcode funnel (production buckets) for the summary module that sits
-	// above Pipeline Flow. Read-only; a bucket-collection hiccup must not take
+	// under the robot grid. Read-only; a bucket-collection hiccup must not take
 	// the rest of the dashboard down, hence the catch → null (module hides).
 	const bucketCounts = await stageCounts().catch(() => null);
 

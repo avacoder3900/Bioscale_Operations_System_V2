@@ -4393,3 +4393,8 @@ Retrieve this exact code: git checkout feat/bucket-system at commit a621288e
 What this deployment is for: the per-stage residual report (four "How many" rows, per-stage
   merge destinations). Supersedes the 201a639d preview.
 Build status: success (both scopes, 20:10Z).
+
+Follow-up 2026-09-21: Production Buckets card on /manufacturing/cart-mfg moved from above
+Pipeline Flow to directly beneath the Robot Status Grid (user request). Section order is now
+Alerts > Pipeline Flow > Robot Status Grid > Production Buckets > Ovens. Pure move, no content
+change; server comment updated. npm run check unchanged (10 / 434).
