@@ -55,8 +55,6 @@ const bucketCycleSchema = new Schema({
 	quantity: { type: Number, required: true },   // current count
 	openedQty: { type: Number, required: true },  // count at creation; shrinkage = openedQty − quantity
 	sourceLots: { type: [sourceLotSchema], default: [] },
-	pressEquipmentId: String,    // Equipment._id, set at unpressed → pressed
-	pressEquipmentName: String,  // denormalized for display (E-45 / E-46 per equipment datasheet)
 	status: {
 		type: String,
 		enum: ['open', 'consumed', 'scrapped'],

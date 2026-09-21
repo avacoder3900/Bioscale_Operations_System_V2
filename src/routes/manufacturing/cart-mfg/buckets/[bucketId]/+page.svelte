@@ -76,7 +76,6 @@
 									<span>opened by <span class="text-[var(--color-tron-text)]">{c.openedBy ?? '—'}</span></span>
 									{#if c.emptyConfirmedBy}<span>empty confirmed by <span class="text-[var(--color-tron-text)]">{c.emptyConfirmedBy}</span></span>{/if}
 									{#each c.sourceLots as l (l.partNumber + l.lotId)}<span>{l.partNumber} <span class="font-mono text-[var(--color-tron-text)]">{l.lotId}</span></span>{/each}
-									{#if c.pressEquipmentName}<span>press <span class="text-[var(--color-tron-text)]">{c.pressEquipmentName}</span></span>{/if}
 								</div>
 
 								{#if c.lots.length > 0}

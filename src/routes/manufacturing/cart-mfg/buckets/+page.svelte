@@ -11,7 +11,6 @@
 			focusStage: string | null;
 			board: { cycles: BoardCycle[]; available: BoardBucket[]; quarantined: BoardBucket[] };
 			counts: StageCounts;
-			presses: { name: string; equipmentId: string | null }[];
 			lots: Record<string, { lotId: string; remaining: number }[]>;
 			canAdjust: boolean;
 			scan: { kind: 'bucket' | 'search'; bucket?: any; cycle?: any; matches?: { bucketId: string; barcode: string | null; state: string; cycle: any }[] } | null;
@@ -341,7 +340,6 @@
 						</div>
 						<div class="mt-2 text-[10px] text-[var(--color-tron-text-secondary)]">
 							{#each c.sourceLots as l (l.partNumber + l.lotId)}<span class="mr-2">{l.partNumber} <span class="font-mono text-[var(--color-tron-text)]">{l.lotId}</span></span>{/each}
-							{#if c.pressEquipmentName}<span>press <span class="text-[var(--color-tron-text)]">{c.pressEquipmentName}</span></span>{/if}
 						</div>
 
 						{#if panel.mode === 'view'}
@@ -366,13 +364,7 @@
 							<form method="POST" action="?/advance" use:enhance={enhanceBusy} class="mt-3 space-y-3">
 								<input type="hidden" name="cycleId" value={c.cycleId} />
 								<p class="text-sm text-[var(--color-tron-text)]">Move the whole bucket ({c.quantity}) to <strong>{nextLabel(c.stage)}</strong>.</p>
-								{#if nxt === 'pressed'}
-									<label class="block">
-										<span class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Which press</span>
-										<input type="text" name="pressName" list="pressList" required placeholder="Press 1" class={inputCls} />
-										<datalist id="pressList">{#each data.presses as p (p.name)}<option value={p.name}></option>{/each}</datalist>
-									</label>
-								{:else if nxt === 'qr_pending'}
+								{#if nxt === 'qr_pending'}
 									<label class="block">
 										<span class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Barcode label lot (PT-CT-106) — {c.quantity} labels applied</span>
 										<select name="barcodeLotId" required class={inputCls}>

@@ -20,7 +20,7 @@
 import { connectDB } from '$lib/server/db/connection';
 import {
 	ProductionBucket, BucketCycle, BucketTransaction, AuditLog,
-	ReceivingLot, ManualCartridgeRemoval, Equipment, CartridgeRecord
+	ReceivingLot, ManualCartridgeRemoval, CartridgeRecord
 } from '$lib/server/db/models';
 import { generateId } from '$lib/server/db/utils';
 import { recordTransaction, resolvePartId } from './inventory-transaction';
@@ -39,15 +39,6 @@ export const STAGE_LABELS: Record<BucketStage, string> = {
 export const BUCKET_PREFIX = 'BKT';
 export const CARTRIDGE_BLANK_PART = 'PT-CT-104';
 export const BARCODE_LABEL_PART = 'PT-CT-106';
-
-// Presses registered in data/equipment-datasheets/BT.csv (rows 52–53). The
-// Equipment collection's equipmentType enum has no 'press', so these are
-// offered as suggestions; a matching Equipment doc (by name) is linked when
-// one exists.
-export const KNOWN_PRESSES = [
-	{ code: 'E-45', name: 'Press 1' },
-	{ code: 'E-46', name: 'Press 2' }
-];
 
 export type Operator = { _id: string; username: string };
 export type ResidualDisposition = 'merge' | 'scrap' | 'defer';
@@ -444,7 +435,6 @@ export async function startCycle(input: StartCycleInput): Promise<any> {
 export interface AdvanceCycleInput {
 	cycleId: string;
 	user: Operator;
-	pressName?: string;     // required for unpressed → pressed
 	barcodeLotId?: string;  // PT-CT-106 lot, required for pressed → qr_pending
 }
 
@@ -461,18 +451,8 @@ export async function advanceCycle(input: AdvanceCycleInput): Promise<any> {
 	const push: Record<string, unknown> = {};
 	let relatedId: string | undefined;
 
-	if (to === 'pressed') {
-		const pressName = (input.pressName ?? '').trim();
-		if (!pressName) throw new BucketError('Record which press was used.');
-		// Link an Equipment doc when the name matches one; the enum has no
-		// 'press' type, so the name is the only reliable handle.
-		const eq = await Equipment.findOne({ name: { $regex: `^${escapeRegExp(pressName)}$`, $options: 'i' } })
-			.select('_id name').lean() as any;
-		set.pressEquipmentName = eq?.name ?? pressName;
-		if (eq) set.pressEquipmentId = String(eq._id);
-		relatedId = eq ? String(eq._id) : undefined;
-	}
-
+	// unpressed → pressed records nothing extra (no press capture, no
+	// thermoseal debit — §3.4); it is a plain stage move.
 	if (to === 'qr_pending') {
 		const lotCheck = await validateReceivingLot(input.barcodeLotId ?? '', BARCODE_LABEL_PART);
 		if (!lotCheck.ok) throw new BucketError(lotCheck.reason);
@@ -855,7 +835,6 @@ export interface BoardCycle {
 	stageEnteredAt: string | null;
 	openedAt: string | null;
 	openedBy: string | null;
-	pressEquipmentName: string | null;
 	sourceLots: { partNumber: string; lotId: string }[];
 }
 
@@ -911,7 +890,6 @@ export async function boardData(): Promise<{ cycles: BoardCycle[]; available: Bo
 			stageEnteredAt: c.stageEnteredAt ? new Date(c.stageEnteredAt).toISOString() : null,
 			openedAt: c.openedAt ? new Date(c.openedAt).toISOString() : null,
 			openedBy: c.openedBy?.username ?? null,
-			pressEquipmentName: c.pressEquipmentName ?? null,
 			sourceLots: (c.sourceLots ?? []).map((l: any) => ({ partNumber: l.partNumber, lotId: l.lotId }))
 		})),
 		available: buckets.filter(b => b.state === 'available').map(toBucket),
@@ -931,19 +909,4 @@ export async function bucketHistory(bucketId: string): Promise<{ bucket: any; cy
 		ManualCartridgeRemoval.find({ bucketId: id }).sort({ removedAt: -1 }).lean()
 	]);
 	return { bucket, cycles, transactions, removals };
-}
-
-/** Presses to offer in the advance-to-pressed prompt: datasheet names + any Equipment named like a press. */
-export async function pressOptions(): Promise<{ name: string; equipmentId: string | null }[]> {
-	await connectDB();
-	const eq = await Equipment.find({ name: { $regex: 'press', $options: 'i' } }).select('_id name').lean() as any[];
-	const seen = new Set<string>();
-	const out: { name: string; equipmentId: string | null }[] = [];
-	for (const e of eq) {
-		if (e.name && !seen.has(e.name.toLowerCase())) { seen.add(e.name.toLowerCase()); out.push({ name: e.name, equipmentId: String(e._id) }); }
-	}
-	for (const p of KNOWN_PRESSES) {
-		if (!seen.has(p.name.toLowerCase())) { seen.add(p.name.toLowerCase()); out.push({ name: p.name, equipmentId: null }); }
-	}
-	return out;
 }

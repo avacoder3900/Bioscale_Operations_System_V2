@@ -4324,3 +4324,9 @@ What this deployment is for: verifying the Scrap / Adjust buttons open after a p
   the buckets board, and the Production Buckets card above Pipeline Flow on
   /manufacturing/cart-mfg. Supersedes the 1e3c796a preview.
 Build status: success (brevitest scope, 18:10Z).
+
+Follow-up 2026-09-21: "Which press" removed at user request. unpressed -> pressed is now a
+plain stage move: no prompt, no pressEquipment* fields on BucketCycle, pressOptions() and
+KNOWN_PRESSES deleted from bucket-service, press display dropped from the board panel, the
+history page and the pipeline rows (column relabelled "Source lots"). Plan doc sections 2.1,
+6.2 and 12.4 updated. npm run check unchanged (10 / 434, none in touched files).

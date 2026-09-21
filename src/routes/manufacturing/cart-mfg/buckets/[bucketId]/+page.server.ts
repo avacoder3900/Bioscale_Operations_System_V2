@@ -89,7 +89,6 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 			quantity: c.quantity,
 			openedQty: c.openedQty,
 			sourceLots: (c.sourceLots ?? []).map((l: any) => ({ partNumber: l.partNumber, lotId: l.lotId })),
-			pressEquipmentName: c.pressEquipmentName ?? null,
 			openedBy: c.openedBy?.username ?? null,
 			openedAt: iso(c.openedAt),
 			closedAt: iso(c.closedAt),

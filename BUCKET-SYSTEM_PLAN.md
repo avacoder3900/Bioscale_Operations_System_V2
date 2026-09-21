@@ -69,8 +69,10 @@ The `unpressed` / `pressed` vocabulary in this plan is therefore **invented by t
 Before build, confirm with operators that these names match what they say on the floor. If a
 paper SOP surfaces later, match its step names rather than keeping these.
 
-The `unpressed → pressed` transition should capture **which press** was used as an
-`Equipment._id`, exactly as `backing.ovenLocationId` captures the backing oven today.
+**Press capture was removed at the user's request (2026-09-21).** `unpressed → pressed` is a
+plain stage move: no press prompt, no `pressEquipment*` fields. If per-press traceability is
+ever wanted, this transition is where it would attach (mirroring `backing.ovenLocationId`),
+and the two presses are already in the equipment datasheet.
 
 ---
 
@@ -291,8 +293,8 @@ corrected by `adjust` plus a reason, not by moving backwards.
 
 ### 6.2 Advance
 
-Scan bucket → **Advance**. One step forward. `unpressed → pressed` additionally prompts for
-which press (E-45 / E-46). `pressed → qr_pending` debits −N `PT-CT-106`.
+Scan bucket → **Advance**. One step forward. `pressed → qr_pending` asks for the `PT-CT-106`
+lot and debits −N of it; the other two moves record nothing extra.
 
 ### 6.3 WI-01 handoff
 
@@ -512,7 +514,8 @@ path operators use today.
    Confirm a sensible standard fill count before printing labels.
 3. **How many physical tubs exist**, and do they need retroactive labeling of tubs already in
    service holding material?
-4. **Press capture granularity** — is recording E-45 vs E-46 enough, or are press
-   temperature/dwell parameters needed on the cycle? Currently out of scope.
+4. **Press capture** — removed entirely at the user's request (§2.1). Re-add at the
+   `unpressed → pressed` transition if per-press traceability or press parameters are ever
+   needed; no migration required since nothing was recorded.
 5. **Thermoseal** stays untouched (§3.4). If it later needs bucket-level tracking, the
    `unpressed → pressed` transition is where it would attach.

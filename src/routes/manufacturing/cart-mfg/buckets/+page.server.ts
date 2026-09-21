@@ -8,7 +8,7 @@ import { connectDB, ReceivingLot, InventoryTransaction } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
 import {
 	BucketError, BUCKET_STAGES, STAGE_LABELS, CARTRIDGE_BLANK_PART, BARCODE_LABEL_PART,
-	boardData, stageCounts, pressOptions, resolveScan, isBucketStage,
+	boardData, stageCounts, resolveScan, isBucketStage,
 	startCycle, advanceCycle, adjustCycle, scrapFromCycle, reportResidual, retireBucket
 } from '$lib/server/services/bucket-service';
 import type { Actions, PageServerLoad } from './$types';
@@ -50,10 +50,9 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	const focusStage = url.searchParams.get('stage') ?? '';
 	const q = url.searchParams.get('q') ?? '';
 
-	const [board, counts, presses, lots, scan] = await Promise.all([
+	const [board, counts, lots, scan] = await Promise.all([
 		boardData(),
 		stageCounts(),
-		pressOptions(),
 		availableLots([CARTRIDGE_BLANK_PART, BARCODE_LABEL_PART]),
 		q ? resolveScan(q) : Promise.resolve(null)
 	]);
@@ -63,7 +62,6 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		focusStage: focusStage === 'available' || isBucketStage(focusStage) ? focusStage : null,
 		board,
 		counts,
-		presses,
 		lots,
 		canAdjust: locals.user.roles.some(r => r.permissions.includes('manufacturing:admin') || r.permissions.includes('admin:full')),
 		scan: scan ? JSON.parse(JSON.stringify(scan)) : null,
@@ -108,7 +106,6 @@ export const actions: Actions = {
 		return wrap('advance', async () => {
 			const cycle = await advanceCycle({
 				cycleId: String(d.get('cycleId') ?? ''),
-				pressName: (d.get('pressName') as string | null) ?? undefined,
 				barcodeLotId: (d.get('barcodeLotId') as string | null) ?? undefined,
 				user: op(locals)
 			});

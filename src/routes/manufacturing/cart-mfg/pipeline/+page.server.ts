@@ -55,7 +55,7 @@ const bucketHeaders = [
 	{ key: 'id', label: 'Bucket' },
 	{ key: 'status', label: 'Pass' },
 	{ key: 'count', label: 'Cartridges' },
-	{ key: 'location', label: 'Press / lots' },
+	{ key: 'location', label: 'Source lots' },
 	{ key: 'operator', label: 'Opened by' },
 	{ key: 'when', label: 'Entered stage' },
 	{ key: 'elapsed', label: 'Dwell' }
@@ -179,10 +179,7 @@ async function loadBucketStage(stage: BucketStage, now: Date): Promise<PipelineR
 			idLabel: `${c.bucketId} #${c.cycleNumber}`,
 			status: `pass ${c.cycleNumber}`,
 			count: c.quantity,
-			location: [
-				c.pressEquipmentName ? `press ${c.pressEquipmentName}` : null,
-				...c.sourceLots.map(l => `${l.partNumber} ${l.lotId}`)
-			].filter(Boolean).join(' · ') || null,
+			location: c.sourceLots.map(l => `${l.partNumber} ${l.lotId}`).join(' · ') || null,
 			operator: c.openedBy,
 			when: c.stageEnteredAt,
 			elapsedMin: ageMin(c.stageEnteredAt, now),
