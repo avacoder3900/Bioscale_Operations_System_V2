@@ -4276,3 +4276,7 @@ What this deployment is for: QR-sticker labelling of buckets -- /manufacturing/p
 Build status: success (both scopes, GitHub Deployment statuses 17:48Z).
 Same caution as before: the preview writes to the configured Atlas database; assigning a
 sticker also records a real 1x PT-CT-106 consumption.
+
+Follow-up 2026-09-21: "Return to previous page" button on /manufacturing/print-bucket-labels
+(header, right). history.back() when there is history; direct opens fall back to the bucket
+board. npm run check unchanged (10 / 434, none in the file).

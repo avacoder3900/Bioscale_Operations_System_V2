@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { deserialize, enhance } from '$app/forms';
-	import { invalidateAll } from '$app/navigation';
+	import { goto, invalidateAll } from '$app/navigation';
 	import bwipjs from 'bwip-js/browser';
 
 	interface Props {
@@ -123,13 +123,28 @@
 	}
 	function printLabels() { window.print(); }
 
+	// This page lives outside the cart-mfg sidebar layout and is reached from
+	// the board, a bucket's history page, or a bookmark. Go back to wherever
+	// the operator came from; with no history (direct open), land on the board.
+	function goBack() {
+		if (typeof history !== 'undefined' && history.length > 1) history.back();
+		else goto('/manufacturing/cart-mfg/buckets');
+	}
+
 	const inputCls = 'mt-1 w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-2 py-1.5 text-sm';
 </script>
 
 <div class="space-y-5 p-4 print:p-0">
 	<div class="print:hidden space-y-4">
 		<div>
-			<h1 class="text-xl font-semibold" style="color: var(--color-tron-cyan)">Bucket Labels</h1>
+			<div class="flex flex-wrap items-center justify-between gap-2">
+				<h1 class="text-xl font-semibold" style="color: var(--color-tron-cyan)">Bucket Labels</h1>
+				<button type="button" onclick={goBack}
+					class="rounded border border-[var(--color-tron-border)] px-3 py-1.5 text-xs hover:border-[var(--color-tron-cyan)]/60"
+					style="color: var(--color-tron-text-secondary)">
+					← Return to previous page
+				</button>
+			</div>
 			<p class="mt-1 text-xs" style="color: var(--color-tron-text-secondary)">
 				A bucket's identity is its <code class="font-mono text-[11px]" style="color: var(--color-tron-cyan)">BKT-NNNNNN</code> id, permanently.
 				Label the tub either by <strong>assigning a QR sticker</strong> from the printed cartridge sheets (scan it onto the bucket)
