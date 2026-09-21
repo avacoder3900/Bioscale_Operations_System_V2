@@ -211,6 +211,23 @@ def add_parameters(parameters: protocol_api.Parameters):
         description="Tip-calibration probe Z (p300 200uL reagent tip).",
         default=40.8, minimum=0.0, maximum=200.0, unit="mm")
 
+    # Which tube rack holds the four reagents in slot 10 (2026-09-21). 'standard'
+    # is the 24-tube rack this protocol has always used (tubes D3-D6) and is
+    # byte-for-byte the old behaviour. 'incubator' loads the wax dry-bath block
+    # instead (same 2ml tubes, rim ~26mm higher, block 108mm tall) with the
+    # reagents in B1-B4 — a per-run choice, so the SHARED rack definitions are
+    # never edited to fake one robot's setup and the other robots are untouched.
+    parameters.add_str(
+        variable_name="tube_rack",
+        display_name="Reagent tube rack",
+        description="Slot-10 rack: standard 24-tube (D3-D6) or wax incubator block (B1-B4, heater OFF).",
+        choices=[
+            {"display_name": "Standard 24-tube rack (D3-D6)", "value": "standard"},
+            {"display_name": "Wax incubator block (B1-B4)", "value": "incubator"},
+        ],
+        default="standard",
+    )
+
 def run(protocol: protocol_api.ProtocolContext):
     # =====================================================================
     # AUTO-DETECT ROBOT & APPLY PER-ROBOT OFFSETS
@@ -263,7 +280,13 @@ def run(protocol: protocol_api.ProtocolContext):
                          f'x={robot_offsets["x"]}, y={robot_offsets["y"]}, z={robot_offsets["z"]}mm')
 
     offset = { 'x': 0, 'y': 0 }
-    tuberack = protocol.load_labware('custom_2ml_24_tube_rack', 10)
+    # Reagent tube rack per the run-time choice (see add_parameters). Both load
+    # names are literal so the BIMS bundler ships both definitions.
+    use_incubator_rack = (str(getattr(protocol.params, 'tube_rack', 'standard')) == 'incubator')
+    if use_incubator_rack:
+        tuberack = protocol.load_labware('cosmas_and_damian_drybath_tuberack', 10)
+    else:
+        tuberack = protocol.load_labware('custom_2ml_24_tube_rack', 10)
     tiprack = protocol.load_labware('cosmas_and_damian_biotix_96_200ul_tiprack', 11)
     pipette = protocol.load_instrument('p300_single_gen2', mount='left', tip_racks=[tiprack])
 
@@ -864,6 +887,19 @@ def run(protocol: protocol_api.ProtocolContext):
         # The liquid sits on top of this. Measured/calibrated value.
         tube_bottom_height = 48.20
 
+        # Incubator block: the constants above are the STANDARD rack's. The dry-bath
+        # tubes sit ~26mm higher, so take rim and bottom from the loaded labware
+        # (same convention the wax protocol uses). Commanded depths are relative
+        # to .top(), so rim/bottom only have to be consistent with each other —
+        # which the definition guarantees. The standard path is left untouched.
+        if use_incubator_rack:
+            _first_tube = tuberack['B1']
+            tube_rim_height = _first_tube.top().point.z
+            tube_bottom_height = _first_tube.bottom().point.z
+            protocol.comment(f'Reagent tube rack: WAX INCUBATOR BLOCK (B1-B4) — rim z={tube_rim_height:.2f}, bottom z={tube_bottom_height:.2f} from the loaded labware. Heater must be OFF.')
+        else:
+            protocol.comment('Reagent tube rack: standard 24-tube rack (D3-D6).')
+
         # ----- Tip Safety Limits -----
         # min_tip_clearance: mm above tube bottom the tip is allowed to go
         # This prevents the tip from crashing into the bottom of the tube
@@ -1265,24 +1301,18 @@ def run(protocol: protocol_api.ProtocolContext):
         #specify from 1 - 20 how many cartidges are to be filled
         cartridges_per_deck = protocol.params.cartridges
 
-        # Gen6: 4 reagent types - well_2 (beads)=D3, well_3 (wash)=D4, well_4 (wash)=D5, well_5 (elution)=D6
+        # Gen6: 4 reagent types - well_2 (beads), well_3 (tracer), well_4 (wash), well_5 (elution).
+        # Standard rack: D3-D6. Incubator block: B1-B4 (middle row; A3 is the wax tube's usual spot).
+        _tubes = ['B1', 'B2', 'B3', 'B4'] if use_incubator_rack else ['D3', 'D4', 'D5', 'D6']
         tube_locations = {
-            'well_2a': 'D3',
-            'well_2b': 'D3',
-            'well_2c': 'D3',
-            'well_3a': 'D4',
-            'well_3b': 'D4',
-            'well_3c': 'D4',
-            'well_4a': 'D5',
-            'well_4b': 'D5',
-            'well_4c': 'D5',
-            'well_5a': 'D6',
-            'well_5b': 'D6',
-            'well_5c': 'D6',
-            'well_2': 'D3',
-            'well_3': 'D4',
-            'well_4': 'D5',
-            'well_5': 'D6',
+            'well_2a': _tubes[0], 'well_2b': _tubes[0], 'well_2c': _tubes[0],
+            'well_3a': _tubes[1], 'well_3b': _tubes[1], 'well_3c': _tubes[1],
+            'well_4a': _tubes[2], 'well_4b': _tubes[2], 'well_4c': _tubes[2],
+            'well_5a': _tubes[3], 'well_5b': _tubes[3], 'well_5c': _tubes[3],
+            'well_2': _tubes[0],
+            'well_3': _tubes[1],
+            'well_4': _tubes[2],
+            'well_5': _tubes[3],
         }
 
         well_volumes = {
