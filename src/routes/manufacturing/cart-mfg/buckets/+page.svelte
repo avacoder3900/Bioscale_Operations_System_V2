@@ -2,7 +2,7 @@
 	import { enhance } from '$app/forms';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
-	import type { BoardBucket, BoardCycle, BucketStage, ChangeLogRow, StageCounts } from '$lib/server/services/bucket-service';
+	import type { BoardBucket, BoardCycle, BucketStage, ChangeLogRow, RegistryRow, StageCounts } from '$lib/server/services/bucket-service';
 
 	type ActionResult = { success?: boolean; error?: string; code?: string | null; [k: string]: unknown };
 	interface Props {
@@ -13,6 +13,7 @@
 			counts: StageCounts;
 			lots: Record<string, { lotId: string; remaining: number }[]>;
 			changeLog: ChangeLogRow[];
+			registry: RegistryRow[];
 			canAdjust: boolean;
 			scan: { kind: 'bucket' | 'search'; bucket?: any; cycle?: any; matches?: { bucketId: string; barcode: string | null; state: string; cycle: any }[] } | null;
 			scanQuery: string;
@@ -175,6 +176,29 @@
 		);
 	});
 	const discardedInLog = $derived(data.changeLog.filter(r => r.type === 'scrap').reduce((s, r) => s + Math.abs(r.qtyDelta), 0));
+
+	// ── bucket log (every bucket, every state — retired included) ───────────
+	let regState = $state<'all' | 'available' | 'in_use' | 'quarantined' | 'retired'>('all');
+	let regFilter = $state('');
+	const regCounts = $derived.by(() => {
+		const c: Record<string, number> = { available: 0, in_use: 0, quarantined: 0, retired: 0 };
+		for (const r of data.registry) c[r.state] = (c[r.state] ?? 0) + 1;
+		return c;
+	});
+	const filteredRegistry = $derived.by(() => {
+		const q = regFilter.trim().toLowerCase();
+		return data.registry.filter(r =>
+			(regState === 'all' || r.state === regState) &&
+			(!q || r.bucketId.toLowerCase().includes(q) || (r.barcode ?? '').toLowerCase().includes(q) || (r.homeLocation ?? '').toLowerCase().includes(q))
+		);
+	});
+	const regStateLabel: Record<string, string> = { available: 'Available', in_use: 'In use', quarantined: 'Quarantined', retired: 'Retired' };
+	const regStateTint: Record<string, string> = {
+		available: 'text-green-300 border-green-500/40 bg-green-900/20',
+		in_use: 'text-[var(--color-tron-cyan)] border-[var(--color-tron-cyan)]/40 bg-[var(--color-tron-cyan)]/10',
+		quarantined: 'text-[var(--color-tron-yellow)] border-[var(--color-tron-yellow)]/40 bg-[var(--color-tron-yellow)]/10',
+		retired: 'text-red-300 border-red-500/40 bg-red-900/20'
+	};
 
 	// One human line per ledger event: what happened and where it went.
 	function describe(r: ChangeLogRow): { event: string; moved: string; discarded: boolean } {
@@ -673,6 +697,79 @@
 										{#if r.type === 'consume' && r.relatedId}<a href="/manufacturing/cart-mfg/lots/{r.relatedId}" class="text-[var(--color-tron-cyan)] hover:underline">WI-01 batch</a>{#if r.reason} · {r.reason}{/if}
 										{:else}{r.journal ?? r.reason ?? ''}{/if}
 									</td>
+								</tr>
+							{/each}
+						</tbody>
+					</table>
+				</div>
+			{/if}
+		</div>
+	</details>
+
+	<!-- Bucket log — the full register: every bucket ever minted, in every
+	     state. The board above only shows idle and in-use tubs; retired ones
+	     exist nowhere else on this page. -->
+	<details class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)]">
+		<summary class="flex cursor-pointer flex-wrap items-center justify-between gap-2 px-4 py-3">
+			<span class="text-sm font-medium text-[var(--color-tron-text)]">Bucket log <span class="text-xs text-[var(--color-tron-text-secondary)]">({data.registry.length} bucket{data.registry.length === 1 ? '' : 's'})</span></span>
+			<span class="flex flex-wrap gap-1.5 text-[10px] uppercase tracking-wider">
+				{#each ['available', 'in_use', 'quarantined', 'retired'] as s (s)}
+					<span class="rounded border px-1.5 py-0.5 {regStateTint[s]}">{regCounts[s]} {regStateLabel[s]}</span>
+				{/each}
+			</span>
+		</summary>
+		<div class="border-t border-[var(--color-tron-border)] p-3">
+			<div class="mb-3 flex flex-wrap gap-2">
+				<select bind:value={regState}
+					class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-2 py-1.5 text-xs text-[var(--color-tron-text)] focus:border-[var(--color-tron-cyan)] focus:outline-none">
+					<option value="all">All statuses ({data.registry.length})</option>
+					{#each ['available', 'in_use', 'quarantined', 'retired'] as s (s)}
+						<option value={s}>{regStateLabel[s]} ({regCounts[s]})</option>
+					{/each}
+				</select>
+				<input type="text" bind:value={regFilter} placeholder="filter by bucket id, sticker, or home…"
+					class="w-full max-w-md flex-1 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-3 py-1.5 text-xs text-[var(--color-tron-text)] placeholder:text-[var(--color-tron-text-secondary)]/50 focus:border-[var(--color-tron-cyan)] focus:outline-none" />
+			</div>
+			{#if filteredRegistry.length === 0}
+				<p class="py-4 text-center text-xs text-[var(--color-tron-text-secondary)]">{data.registry.length === 0 ? 'No buckets minted yet.' : 'No buckets match.'}</p>
+			{:else}
+				<div class="overflow-x-auto">
+					<table class="w-full text-xs">
+						<thead>
+							<tr class="border-b border-[var(--color-tron-border)] text-left text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">
+								<th class="px-2 py-1">Bucket</th>
+								<th class="px-2 py-1">Status</th>
+								<th class="px-2 py-1">Right now</th>
+								<th class="px-2 py-1 text-right">Passes</th>
+								<th class="px-2 py-1">Sticker</th>
+								<th class="px-2 py-1">Home</th>
+								<th class="px-2 py-1">Last activity</th>
+								<th class="px-2 py-1">Minted</th>
+							</tr>
+						</thead>
+						<tbody>
+							{#each filteredRegistry as r (r.bucketId)}
+								<tr class="border-b border-[var(--color-tron-border)]/40 {r.state === 'retired' ? 'opacity-70' : ''}">
+									<td class="whitespace-nowrap px-2 py-1 font-mono"><a href="/manufacturing/cart-mfg/buckets/{r.bucketId}" class="text-[var(--color-tron-cyan)] hover:underline">{r.bucketId}</a></td>
+									<td class="whitespace-nowrap px-2 py-1"><span class="rounded border px-1.5 py-0.5 text-[10px] uppercase tracking-wider {regStateTint[r.state] ?? ''}">{regStateLabel[r.state] ?? r.state}</span></td>
+									<td class="px-2 py-1 text-[var(--color-tron-text-secondary)]">
+										{#if r.state === 'in_use' && r.current}
+											<span class="text-[var(--color-tron-text)]">{r.current.quantity}</span> at {labelFor(r.current.stage)} <span class="font-mono">#{r.current.cycleNumber}</span>
+										{:else if r.state === 'quarantined'}
+											<span class="text-[var(--color-tron-yellow)]">{r.residualNote ?? 'residual pending'}</span>
+										{:else if r.state === 'retired'}
+											<span class="text-red-300">{r.retiredReason ?? 'retired'}</span>{#if r.retiredAt} · {fmtAt(r.retiredAt)}{/if}
+										{:else if r.spotCheckPending}
+											empty — check pending
+										{:else}
+											empty
+										{/if}
+									</td>
+									<td class="whitespace-nowrap px-2 py-1 text-right tabular-nums text-[var(--color-tron-text)]">{r.cycleCount}</td>
+									<td class="whitespace-nowrap px-2 py-1 font-mono text-[var(--color-tron-text-secondary)]" title={r.barcode ?? ''}>{shortQr(r.barcode) ?? '—'}</td>
+									<td class="whitespace-nowrap px-2 py-1 text-[var(--color-tron-text-secondary)]">{r.homeLocation ?? '—'}</td>
+									<td class="whitespace-nowrap px-2 py-1 font-mono text-[10px] text-[var(--color-tron-text-secondary)]">{fmtAt(r.lastActivityAt)}</td>
+									<td class="whitespace-nowrap px-2 py-1 font-mono text-[10px] text-[var(--color-tron-text-secondary)]">{fmtAt(r.createdAt)}{r.createdBy ? ` · ${r.createdBy}` : ''}</td>
 								</tr>
 							{/each}
 						</tbody>

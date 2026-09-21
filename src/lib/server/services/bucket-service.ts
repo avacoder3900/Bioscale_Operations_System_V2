@@ -1022,6 +1022,59 @@ export async function changeLog(limit = 150): Promise<ChangeLogRow[]> {
 	}));
 }
 
+export interface RegistryRow {
+	bucketId: string;
+	barcode: string | null;
+	state: string; // 'available' | 'in_use' | 'quarantined' | 'retired'
+	cycleCount: number;
+	homeLocation: string | null;
+	spotCheckPending: boolean;
+	residualNote: string | null;
+	retiredAt: string | null;
+	retiredReason: string | null;
+	createdAt: string | null;
+	createdBy: string | null;
+	current: { cycleNumber: number; stage: BucketStage; quantity: number } | null; // open pass, if any
+	lastActivityAt: string | null; // newest ledger event for this bucket
+}
+
+/**
+ * Bucket log: every bucket ever minted, in every state — retired included —
+ * with what it holds right now and when it was last touched. The board shows
+ * only idle and in-use tubs; this is the full register.
+ */
+export async function bucketRegistry(): Promise<RegistryRow[]> {
+	await connectDB();
+	const [buckets, openCycles, lastTx] = await Promise.all([
+		ProductionBucket.find({}).sort({ _id: 1 }).lean() as any as Promise<any[]>,
+		BucketCycle.find({ status: 'open' }).select('bucketId cycleNumber stage quantity').lean() as any as Promise<any[]>,
+		BucketTransaction.aggregate([
+			{ $group: { _id: '$bucketId', last: { $max: '$createdAt' } } }
+		]) as any as Promise<any[]>
+	]);
+	const cycleByBucket = new Map(openCycles.map(c => [c.bucketId, c]));
+	const lastByBucket = new Map(lastTx.map(t => [t._id, t.last]));
+	const iso = (d: unknown) => (d ? new Date(d as string).toISOString() : null);
+	return buckets.map(b => {
+		const c = cycleByBucket.get(b._id);
+		return {
+			bucketId: b._id,
+			barcode: b.barcode ?? null,
+			state: b.state ?? 'available',
+			cycleCount: b.cycleCount ?? 0,
+			homeLocation: b.homeLocation ?? null,
+			spotCheckPending: !!b.spotCheckPending,
+			residualNote: b.residualNote ?? null,
+			retiredAt: iso(b.retiredAt),
+			retiredReason: b.retiredReason ?? null,
+			createdAt: iso(b.createdAt),
+			createdBy: b.createdBy?.username ?? null,
+			current: c && isBucketStage(c.stage) ? { cycleNumber: c.cycleNumber, stage: c.stage, quantity: c.quantity } : null,
+			lastActivityAt: iso(lastByBucket.get(b._id))
+		};
+	});
+}
+
 /** Full history for one tub: every cycle it has held, plus the ledger. */
 export async function bucketHistory(bucketId: string): Promise<{ bucket: any; cycles: any[]; transactions: any[]; removals: any[] } | null> {
 	await connectDB();
