@@ -4258,3 +4258,21 @@ print-bucket-labels/{+page.server.ts,+page.svelte} (rewritten), wi-01/{+page.ser
 npm run check (portable Node 22.12): 10 errors / 434 warnings, zero in any touched file --
 unchanged baseline. One warning I introduced (state_referenced_locally on the ?bucket=
 preset) fixed before commit.
+
+Commit: 634e9a37 on branch feat/bucket-system (author Samantha Wolf). Pushed; Vercel GitHub
+integration built both scopes (no local CLI deploy).
+
+Deployment: preview -- https://bioscale-operations-system-mongodb-7r65e8slp-brevitest.vercel.app
+  (brevitest scope -- the usable link; cookie-session gated, 302 to /login)
+Deployment: preview -- https://bioscale-operations-system-mongodb-brej71eca.vercel.app
+  (alejandro-valdezs-projects scope; behind Vercel SSO Deployment Protection)
+Source: branch feat/bucket-system @ commit 634e9a37
+Retrieve this exact code: git checkout feat/bucket-system at commit 634e9a37
+  (or: git log feat/bucket-system --oneline to find it if the branch has since moved on)
+What this deployment is for: QR-sticker labelling of buckets -- /manufacturing/print-bucket-labels
+  mint-then-scan-stickers queue, assign/replace on existing buckets, and the collision guard
+  (a bucket sticker scanned as a cartridge at WI-01 / cv/induct / quick-* must be refused with
+  a readable message). Supersedes the 23b1d6b9 preview.
+Build status: success (both scopes, GitHub Deployment statuses 17:48Z).
+Same caution as before: the preview writes to the configured Atlas database; assigning a
+sticker also records a real 1x PT-CT-106 consumption.
