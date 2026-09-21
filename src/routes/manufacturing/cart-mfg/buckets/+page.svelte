@@ -243,7 +243,7 @@
 		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3">
 			<p class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Available</p>
 			<p class="mt-1 text-2xl font-bold text-[var(--color-tron-text)]">{data.counts.available}</p>
-			<p class="text-[10px] text-[var(--color-tron-text-secondary)]">empty tubs</p>
+			<p class="text-[10px] text-[var(--color-tron-text-secondary)]">empty buckets</p>
 		</div>
 		{#each data.stages as s (s.key)}
 			<div class="rounded-lg border bg-[var(--color-tron-surface)] p-3 {stageTint[s.key]}">
@@ -290,7 +290,7 @@
 						</button>
 					{/each}
 					{#if data.board.available.length === 0 && data.board.quarantined.length === 0}
-						<p class="px-1 py-4 text-center text-[10px] text-[var(--color-tron-text-secondary)]">No empty tubs — <a href="/manufacturing/print-bucket-labels" class="text-[var(--color-tron-cyan)] hover:underline">mint labels</a></p>
+						<p class="px-1 py-4 text-center text-[10px] text-[var(--color-tron-text-secondary)]">No empty buckets — <a href="/manufacturing/print-bucket-labels" class="text-[var(--color-tron-cyan)] hover:underline">mint labels</a></p>
 					{/if}
 				</div>
 			</div>

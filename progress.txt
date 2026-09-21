@@ -4421,3 +4421,8 @@ Retrieve this exact code: git checkout feat/bucket-system at commit 1dca1661
 What this deployment is for: the "QR Scan-In Pending" stage label. Supersedes the 14d55fff
   preview.
 Build status: success (both scopes, 20:47Z).
+
+Follow-up 2026-09-21: Available card subtitle "empty tubs" -> "empty buckets" (user request) on
+the bucket board strip, the cart-mfg dashboard card and the cartridge-admin strip, plus the
+board's Available-column empty state ("No empty buckets"). No other "tub" wording changed.
+npm run check unchanged (10 / 434).
