@@ -25,6 +25,8 @@ const cartridgeRecordSchema = new Schema({
 		cartridgeBlankLot: String,   // PT-CT-104 input material lot
 		thermosealLot: String,       // PT-CT-112 input material lot
 		barcodeLabelLot: String,     // PT-CT-106 input material lot
+		bucketCycleId: String,       // BucketCycle._id — the real link to the pre-barcode bucket pass (BUCKET-SYSTEM_PLAN §3.2)
+		bucketBarcode: String,       // denormalized ProductionBucket._id for search; NOT unique across passes
 		ovenEntryTime: Date,         // when this cartridge was scanned into the backing oven
 		ovenExitTime: Date,          // when the cartridge left the oven onto a wax deck
 		ovenLocationId: String,      // Equipment._id of the backing oven (WAX-FLOW-2)
@@ -221,6 +223,7 @@ const cartridgeRecordSchema = new Schema({
 
 cartridgeRecordSchema.index({ status: 1 });
 cartridgeRecordSchema.index({ 'backing.lotId': 1 });
+cartridgeRecordSchema.index({ 'backing.bucketCycleId': 1 }, { sparse: true }); // bucket → cartridges (BUCKET-SYSTEM_PLAN)
 cartridgeRecordSchema.index({ status: 1, 'backing.ovenLocationId': 1 }); // WAX-FLOW-2: oven occupancy queries
 cartridgeRecordSchema.index({ 'waxFilling.runId': 1 });
 cartridgeRecordSchema.index({ 'reagentFilling.runId': 1 });

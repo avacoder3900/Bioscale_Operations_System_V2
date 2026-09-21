@@ -97,7 +97,7 @@
 				<div class="text-xs uppercase tracking-widest text-tron-text-secondary">Rows</div>
 				<div class="mt-1 text-3xl font-bold text-tron-text">{data.totalRows}</div>
 				<div class="text-xs text-tron-text-secondary">
-					{data.stage === 'backing' ? 'lots' : data.stage === 'wax_fill' || data.stage === 'reagent' ? 'runs' : data.stage === 'seal' ? 'batches' : 'fridges'}
+					{data.stage.startsWith('bucket_') ? 'buckets' : data.stage === 'backing' ? 'lots' : data.stage === 'wax_fill' || data.stage === 'reagent' ? 'runs' : data.stage === 'seal' ? 'batches' : 'fridges'}
 				</div>
 			</div>
 		</div>

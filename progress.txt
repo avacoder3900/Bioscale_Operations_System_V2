@@ -4031,3 +4031,156 @@ that control/, jog/, calibrate/ and runs/ all render under /manufacturing/cart-m
 Build status: success (both Vercel scopes). Preview is cookie-session gated — it 302s to
 /login, so the routes need a real login to confirm end to end; the arm itself will not
 respond until ROBOT_ARM_BASE_URL / ROBOT_ARM_API_KEY point at the Pi.
+
+================================================================================
+2026-09-21 — NEWDEV — bucket system designed; BUCKET-SYSTEM_PLAN.md written (no code yet)
+================================================================================
+Planning session only. Designed a barcode-tracked "bucket" system for counting cartridges
+through the four production stages that happen before a cartridge has a barcode and
+therefore before a CartridgeRecord exists: raw -> unpressed -> pressed -> qr_pending
+(stickers applied, awaiting WI-01 scan-in). Today everything upstream of WI-01 is a bare
+PartDefinition.inventoryCount scalar, so "how many are pressed right now" and "we started
+with 100 and got 97, where did 3 go" are unanswerable. Full spec is in
+BUCKET-SYSTEM_PLAN.md at the repo root; the decisions below are the ones that shape it.
+
+Reuse drives the data model. Buckets and their lot numbers are reusable once a pass has
+drained, which is exactly what the legacy BackingLot could never do because it used the
+scanned barcode as its _id (one barcode, one lifetime). So the container and the contents
+are split: ProductionBucket (_id = 'BKT-000123', permanent, state available/in_use/
+quarantined/retired) vs BucketCycle (nanoid _id, one pass, stage + quantity + ledger) with
+a partial unique index on { bucketId } where status='open' so a tub can never hold two
+open cycles. The operator only ever sees and scans the bare label; the '#7' cycle suffix
+appears only in history/DHR views. CartridgeRecord binds to the cycle id, never the bare
+barcode. Verified LotRecord.qrCodeRef's unique index is not a collision risk: WI-01 mints
+that itself as WI01-xxxx and the bucket label lands in the plain bucketBarcode field.
+
+Whole-bucket advancement only, with one exception: partial consumption at WI-01 is allowed
+(40 of 100 serialized, bucket stays open at 60 in the same stage) while partial advancement
+between stages is not. Auto-release at qty 0 with a deferred spot-check ("Confirmed empty"
+one-tap on the next cycle start, never blocking). If the tub is NOT empty, three
+dispositions: merge into another open cycle at the same stage, scrap with a required
+free-text journal (no reason codes, no approval at any quantity), or defer to quarantined.
+Residual scrap reuses ManualCartridgeRemoval (+bucketCycleId, +journal) so it shows up in
+the existing Recent Checkouts list untouched. A residual always means the closed cycle's
+count was wrong; the closed record is never rewritten, it gets a residualFound entry
+(corrections-not-mutations, same convention as the sacred docs).
+
+Explicitly out of scope: thermoseal. PT-CT-112 counts are not touched anywhere; the
+unpressed -> pressed transition debits nothing and WI-01 keeps debiting 112 as today.
+PT-CT-104 is debited at bucket create, PT-CT-106 moves from WI-01 to the pressed ->
+qr_pending transition (labels are on the cartridges by then). Buckets are the source of
+truth; part counts stay in sync through the existing recordTransaction service.
+
+No pressing SOP exists in the repo (searched docs/, protocols/, data/, root *.md), but the
+equipment is registered: E-45 "Press 1" and E-46 "Press 2", bench units at B-06
+(data/equipment-datasheets/BT.csv:52-53). The unpressed/pressed vocabulary is therefore
+invented by the plan and flagged for operator validation before the UI ships. The
+unpressed -> pressed transition captures which press as an Equipment._id, mirroring
+backing.ovenLocationId.
+
+UI: /manufacturing/cart-mfg/buckets as a five-column stage board (Available first) with a
+persistent scan/search rail; /buckets/[bucketId] for per-tub history; a read-only stage
+count strip above the In Process table on /cartridge-admin; four upstream stages added to
+the pipeline page; a BKT- label print flow with mint-new and reprint-existing modes.
+
+Build order in the plan puts WI-01 integration last and alone in its own commit -- it is
+the only step that touches a flow operators use today; everything before it is additive.
+
+Files touched: BUCKET-SYSTEM_PLAN.md (new). Nothing under src/ changed.
+npm run check: not run -- no Node.js on PATH in this session's shell. Only a markdown file
+was added, so the 46-error / 434-warning baseline from the 2026-07-28 entry is unaffected.
+Not committed yet.
+
+================================================================================
+2026-09-21 — feat/bucket-system — bucket system built (models, service, board, labels, WI-01, dashboard strip, pipeline)
+================================================================================
+Implemented BUCKET-SYSTEM_PLAN.md end to end on a new branch feat/bucket-system (cut from
+NEWDEV mid-session once the user asked whether this was on a separate branch — it wasn't;
+the uncommitted work moved over with the checkout). Nothing committed or pushed yet.
+
+New models: production-bucket.ts (the tub; _id = BKT-NNNNNN, state available/in_use/
+quarantined/retired, cycleCount, spotCheckPending, residualNote), bucket-cycle.ts (one
+pass; nanoid _id, stage raw/unpressed/pressed/qr_pending, quantity/openedQty, sourceLots,
+pressEquipment*, residualFound[], discrepancies[], stageEnteredAt; partial unique index
+on { bucketId } where status='open' so a tub can never hold two open cycles at the DB
+level), bucket-transaction.ts (immutable ledger via applyImmutableMiddleware). Exported
+from models/index.ts. Existing models gained fields only: LotRecord.bucketCycleId,
+CartridgeRecord.backing.{bucketCycleId,bucketBarcode} (+ sparse index),
+ManualCartridgeRemoval.{bucketCycleId,bucketId,journal}.
+
+src/lib/server/services/bucket-service.ts holds every transition (mint, startCycle,
+advanceCycle, adjustCycle, scrapFromCycle, consumeFromCycle, reportResidual, retireBucket)
+plus read models (boardData, stageCounts, bucketHistory, resolveScan, pressOptions). WI-01
+and the board share it; routes only parse forms and map BucketError -> fail(). Inventory
+rule as implemented: PT-CT-104 debited once at cycle open, PT-CT-106 once at
+pressed->qr_pending (operator scans the label lot there), PT-CT-112 untouched anywhere in
+bucket code. Scrap / adjust-down write NO InventoryTransaction (already debited on entry)
+— they go to the bucket ledger and ManualCartridgeRemoval. Adjust-up records the extra
+consumption. The plan's §8 table said scrap debits "the stage's part"; that was a
+double-count and §8 is corrected in the doc. WI-01's own pre-existing good+scrap
+consumption plus separate scrap tx double-debit is noted there and deliberately NOT
+touched.
+
+Routes: /manufacturing/cart-mfg/buckets (five-column board, Available first, quarantined
+tubs listed under it; right rail = scan box that resolves locally against the board and
+falls through to ?q= server search for retired/historical ids, short-list under it, and
+the action panel: start with spot-check "Is the tub empty?" Yes/No, advance with press
+name (datalist: Equipment named like a press + E-45 Press 1 / E-46 Press 2 from the
+datasheet CSV) or PT-CT-106 lot, scrap with required journal, adjust behind
+manufacturing:admin, residual report with merge/scrap/defer, retire behind admin).
+/buckets/[bucketId] full history: every pass with ledger, WI-01 batches, cartridges
+serialized (via backing.bucketCycleId), discrepancies, scrap journal, bucket events.
+/manufacturing/print-bucket-labels: mint 1-50 (each becomes an available bucket
+immediately) or reprint existing ids; bwip-js QR + text, 3-across print CSS. "Buckets"
+sidebar entry added after Laser Cut.
+
+WI-01 integration: config step gains an optional "Source bucket" (scan box + pick-list of
+open qr_pending cycles); choosing one locks lot1/lot3 to the cycle's source lots and
+disables those selects. checkAndStart accepts bucketId, overrides submitted lot1/lot3
+from the cycle, prefills quantity, prechecks only PT-CT-112, stamps
+LotRecord.bucketCycleId/bucketBarcode, echoes bucket + lots back. scanBackedCartridge
+stamps backing.bucketCycleId/bucketBarcode on each CartridgeRecord. confirmComplete for a
+bucket lot: scrapFromCycle(scrapCartridge) then consumeFromCycle(actualCount) — both
+non-blocking (a ledger mismatch is recorded as a note, never a 500), overrun recorded as
+a discrepancy, then withdraws PT-CT-112 only. Partial draws leave the cycle open at
+qr_pending; a drain auto-releases the tub with spotCheckPending. resumeLot echoes the
+bucket. Confirm-step summary strikes through cartridges/barcodes for bucket lots and
+explains why. Legacy manual-lot flow is unchanged when no bucket is chosen.
+
+Cartridge-admin: stageCounts() in load (wrapped in .catch so a bucket hiccup can't take
+the table down); strip above the filters: Available · Raw · Unpressed · Pressed · QR
+Pending (+ Quarantined when > 0), each tile deep-linking to the board with ?stage=.
+Pipeline page: four bucket_* stages prepended to STAGE_KEYS with their own headers and a
+loadBucketStage() rows adapter; row label switches to "buckets".
+
+Files touched (new): src/lib/server/db/models/{production-bucket,bucket-cycle,
+bucket-transaction}.ts, src/lib/server/services/bucket-service.ts,
+src/routes/manufacturing/cart-mfg/buckets/{+page.server.ts,+page.svelte},
+src/routes/manufacturing/cart-mfg/buckets/[bucketId]/{+page.server.ts,+page.svelte},
+src/routes/manufacturing/print-bucket-labels/{+page.server.ts,+page.svelte}.
+(modified): models/index.ts, cartridge-record.ts, lot-record.ts,
+manual-cartridge-removal.ts, cart-mfg/+layout.svelte, cart-mfg/wi-01/{+page.server.ts,
++page.svelte}, cartridge-admin/{+page.server.ts,+page.svelte},
+cart-mfg/pipeline/{+page.server.ts,+page.svelte}, BUCKET-SYSTEM_PLAN.md (§8).
+
+npm run check: NOT RUN — no Node.js on PATH in this session's shell (no Program Files
+nodejs, nvm, fnm, volta or scoop). This is a large TypeScript/Svelte change written
+without a compiler pass; expect svelte-check to surface type nits on the first run.
+Verified by inspection only: svelte control-block balance per file, import paths, and
+that every new export is reachable from $lib/server/db. Run `npm run check` before any
+deployment. No tests added — the repo's only harness is contract tests against a running
+app; bucket-service has no unit harness to slot into.
+
+Still open before operators touch it (plan §12): validate the unpressed/pressed
+vocabulary; decide standard bucket fill count; label tubs already in service.
+
+Follow-up 2026-09-21: npm run check RUN after all, via a portable Node 22.12.0 unzipped to
+%LOCALAPPDATA%\Temp
+22 (no system install, no PATH change; delete that folder to remove it)
+and `npm ci` (419 packages, node_modules is gitignored). First pass: 11 errors / 434
+warnings; exactly one error was ours (bucket-service.ts stageCounts: `any`-typed row._id not
+narrowed by the isBucketStage guard when used directly as an index) -- hoisted to a const.
+Second pass: 10 errors / 434 warnings, ZERO in any file this branch touched; zero warnings in
+the new files. The 10 are pre-existing (r2.ts Buffer/BodyInit, AskBimsWidget.svelte
+unreachable comparison, 8x implicit-any in assembly/[sessionId]/+page.svelte). Note the
+2026-07-28 entry quoted a 46-error baseline; on this machine with the lockfile it is 10.

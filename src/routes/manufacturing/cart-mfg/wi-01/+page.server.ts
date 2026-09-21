@@ -6,14 +6,24 @@
  *   1x Cartridge (PT-CT-104)
  *   1x Thermoseal Laser Cut Sheet (PT-CT-112)
  *   1x Barcode (PT-CT-106)
+ *
+ * Bucket-sourced batches (BUCKET-SYSTEM_PLAN.md §6.3): when the operator
+ * scans a production bucket at setup, its open qr_pending cycle supplies the
+ * count and the PT-CT-104 / PT-CT-106 lots, and those two parts are NOT
+ * withdrawn again at confirm — they were debited when the material entered
+ * the bucket and when labels were applied. PT-CT-112 is withdrawn as before.
  */
 import { redirect, fail } from '@sveltejs/kit';
 import {
 	connectDB, LotRecord, ProcessConfiguration,
 	PartDefinition, AuditLog, Equipment, CartridgeRecord, ReceivingLot,
-	InventoryTransaction, generateId
+	InventoryTransaction, BucketCycle, generateId
 } from '$lib/server/db';
 import { recordTransaction, resolvePartId } from '$lib/server/services/inventory-transaction';
+import {
+	BucketError, STAGE_LABELS, CARTRIDGE_BLANK_PART, BARCODE_LABEL_PART,
+	getOpenCycle, normalizeBucketId, consumeFromCycle, scrapFromCycle
+} from '$lib/server/services/bucket-service';
 import { nanoid } from 'nanoid';
 import type { PageServerLoad, Actions } from './$types';
 
@@ -121,8 +131,24 @@ export const load: PageServerLoad = async ({ locals }) => {
 	}
 	for (const pn of consumedPNs) availableLots[pn].sort((a, b) => b.remaining - a.remaining);
 
+	// Buckets ready to feed this station: open cycles at qr_pending. The UI
+	// offers them as a pick-list beside the scan box and locks lot1/lot3 to
+	// the cycle's source lots once one is chosen.
+	const qrPending = await BucketCycle.find({ status: 'open', stage: 'qr_pending' })
+		.select('_id bucketId cycleNumber quantity sourceLots')
+		.sort({ stageEnteredAt: 1 }).lean() as any[];
+	const qrPendingBuckets = qrPending.map((c: any) => ({
+		bucketId: c.bucketId,
+		cycleId: String(c._id),
+		cycleNumber: c.cycleNumber,
+		quantity: c.quantity,
+		lot1: (c.sourceLots ?? []).find((l: any) => l.partNumber === CARTRIDGE_BLANK_PART)?.lotId ?? null,
+		lot3: (c.sourceLots ?? []).find((l: any) => l.partNumber === BARCODE_LABEL_PART)?.lotId ?? null
+	}));
+
 	return {
 		availableLots,
+		qrPendingBuckets,
 		config: {
 			configId: String(c._id),
 			processName: c.processName ?? 'Cartridge Backing (WI-01)',
@@ -218,11 +244,12 @@ export const actions: Actions = {
 		// quantity is OPTIONAL (oven-session flow): the real count is reconciled
 		// from cartridges actually scanned into the oven at confirmComplete. When
 		// 0/absent we skip the upfront inventory precheck.
-		const quantity = Number(data.get('quantity') || 0);
-		const lot1 = (data.get('lot1') as string)?.trim() || '';
+		let quantity = Number(data.get('quantity') || 0);
+		let lot1 = (data.get('lot1') as string)?.trim() || '';
 		const lot2 = (data.get('lot2') as string)?.trim() || '';
-		const lot3 = (data.get('lot3') as string)?.trim() || '';
+		let lot3 = (data.get('lot3') as string)?.trim() || '';
 		const ovenId = (data.get('ovenId') as string)?.trim() || '';
+		const bucketIdRaw = (data.get('bucketId') as string)?.trim() || '';
 
 		// Oven is chosen once at setup and stored on the lot so the scan session
 		// (and any later resume) never re-asks for it (WI01-BACKING-FLOW-FIXES).
@@ -232,6 +259,30 @@ export const actions: Actions = {
 			$or: [{ _id: ovenId }, { barcode: ovenId }]
 		}).select('_id name barcode').lean() as any;
 		if (!oven) return fail(400, { checkAndStart: { error: `No oven found matching "${ovenId}"` } });
+
+		// Bucket-sourced batch: the open cycle at qr_pending is the source of
+		// truth for the count and the PT-CT-104 / PT-CT-106 lots. lot1/lot3
+		// submitted by the form are overridden so a stale dropdown can never
+		// disagree with what the bucket actually contains.
+		let bucketCycle: any = null;
+		if (bucketIdRaw) {
+			const bucketId = normalizeBucketId(bucketIdRaw);
+			bucketCycle = await getOpenCycle(bucketId);
+			if (!bucketCycle) {
+				return fail(400, { checkAndStart: { error: `Bucket ${bucketId} has no open cycle — nothing to draw from` } });
+			}
+			if (bucketCycle.stage !== 'qr_pending') {
+				return fail(400, { checkAndStart: { error: `Bucket ${bucketId} is at ${STAGE_LABELS[bucketCycle.stage as keyof typeof STAGE_LABELS] ?? bucketCycle.stage} — only QR Pending buckets feed WI-01` } });
+			}
+			const blankLot = (bucketCycle.sourceLots ?? []).find((l: any) => l.partNumber === CARTRIDGE_BLANK_PART)?.lotId;
+			const labelLot = (bucketCycle.sourceLots ?? []).find((l: any) => l.partNumber === BARCODE_LABEL_PART)?.lotId;
+			if (!blankLot || !labelLot) {
+				return fail(400, { checkAndStart: { error: `Bucket ${bucketId} is missing its source lots — open its history and check the cycle` } });
+			}
+			lot1 = blankLot;
+			lot3 = labelLot;
+			if (!quantity) quantity = Number(bucketCycle.quantity ?? 0);
+		}
 
 		// Defense-in-depth: re-validate each selected lot matches the part it
 		// represents (dropdowns are server-populated, but a forged form submission
@@ -259,7 +310,9 @@ export const actions: Actions = {
 			const partMap = new Map(parts.map((p: any) => [p.partNumber, p]));
 			const insufficient: { name: string; need: number; have: number }[] = [];
 
-			for (const cp of CONSUMED_PARTS) {
+			// Bucket-sourced: 104 and 106 already left inventory; only 112 is checked.
+			const precheckParts = bucketCycle ? CONSUMED_PARTS.filter(p => p.partNumber === 'PT-CT-112') : CONSUMED_PARTS;
+			for (const cp of precheckParts) {
 				const part = partMap.get(cp.partNumber);
 				const have = part?.inventoryCount ?? 0;
 				if (have < quantity) {
@@ -304,6 +357,7 @@ export const actions: Actions = {
 			inputLots,
 			backingOven: { ovenId: String(oven._id), ovenName: oven.name ?? oven.barcode ?? '' },
 			plannedQuantity: quantity,
+			...(bucketCycle ? { bucketCycleId: String(bucketCycle._id), bucketBarcode: bucketCycle.bucketId } : {}),
 			stepEntries: [],
 			cartridgeIds: []
 		});
@@ -315,7 +369,7 @@ export const actions: Actions = {
 			action: 'INSERT',
 			changedBy: locals.user?.username,
 			changedAt: new Date(),
-			newData: { quantity, inputLots: inputLots.map(l => l.barcode) }
+			newData: { quantity, inputLots: inputLots.map(l => l.barcode), bucketCycleId: bucketCycle ? String(bucketCycle._id) : undefined }
 		});
 
 		return {
@@ -326,7 +380,13 @@ export const actions: Actions = {
 				// Echo the oven so the scan session can lock it in without relying
 				// on client state surviving the form submit (WI01-BACKING-FLOW-FIXES).
 				ovenId: String(oven._id),
-				ovenName: oven.name ?? oven.barcode ?? ''
+				ovenName: oven.name ?? oven.barcode ?? '',
+				// Echo the bucket + the lots it dictated so the session shows them locked.
+				bucketId: bucketCycle?.bucketId ?? null,
+				bucketCycleNumber: bucketCycle?.cycleNumber ?? null,
+				bucketQty: bucketCycle?.quantity ?? null,
+				lot1,
+				lot3
 			}
 		};
 	},
@@ -386,6 +446,9 @@ export const actions: Actions = {
 				cartridgeBlankLot: lotByMaterial['Cartridge'] ?? null,
 				thermosealLot: lotByMaterial['Thermoseal Laser Cut Sheet'] ?? null,
 				barcodeLabelLot: lotByMaterial['Barcode'] ?? null,
+				// Bucket lineage: the cycle id is the real link (the barcode repeats across passes).
+				bucketCycleId: lot.bucketCycleId ?? null,
+				bucketBarcode: lot.bucketBarcode ?? null,
 				ovenEntryTime: now,
 				ovenLocationId: String(oven._id),
 				ovenLocationName: oven.name ?? oven.barcode ?? '',
@@ -551,8 +614,43 @@ export const actions: Actions = {
 			if (il?.materialName && il?.barcode) inputLotByMaterial[il.materialName] = il.barcode;
 		}
 
+		// Bucket-sourced batch: PT-CT-104 and PT-CT-106 were debited when the
+		// material entered the bucket / had labels applied, so only PT-CT-112
+		// is withdrawn below. The cycle is drawn down by what was actually
+		// scanned (+ cartridge scrap); a partial draw leaves it open at
+		// qr_pending with the remainder (BUCKET-SYSTEM_PLAN §3.1, §6.3).
+		// Scrap goes first so the ledger shows loss before consumption; both
+		// are non-blocking — a ledger mismatch is recorded, never a 500.
+		let bucketResult: { qtyBefore: number; qtyAfter: number; overrun: number } | null = null;
+		const bucketNotes: string[] = [];
+		if (lot.bucketCycleId) {
+			const operator = { _id: locals.user._id, username: locals.user.username };
+			if (scrapCartridge > 0) {
+				try {
+					await scrapFromCycle({
+						cycleId: lot.bucketCycleId, quantity: scrapCartridge,
+						journal: `WI-01 lot ${lotId}: ${scrapReason}`, user: operator, relatedId: lotId
+					});
+				} catch (e) {
+					if (!(e instanceof BucketError)) throw e;
+					bucketNotes.push(`Bucket ledger could not record ${scrapCartridge} scrapped: ${e.message}`);
+				}
+			}
+			try {
+				bucketResult = await consumeFromCycle({
+					cycleId: lot.bucketCycleId, quantity: actualCount, lotRecordId: lotId, user: operator
+				});
+			} catch (e) {
+				if (!(e instanceof BucketError)) throw e;
+				bucketNotes.push(`Bucket ledger could not record ${actualCount} consumed: ${e.message}`);
+			}
+		}
+		const partsToWithdraw = lot.bucketCycleId
+			? CONSUMED_PARTS.filter(p => p.partNumber === 'PT-CT-112')
+			: CONSUMED_PARTS;
+
 		// Withdraw each material: good count + that part's specific scrap
-		for (const cp of CONSUMED_PARTS) {
+		for (const cp of partsToWithdraw) {
 			const partScrap = perPartScrap[cp.partNumber] ?? 0;
 			const consumed = actualCount + partScrap;
 			const partId = await resolvePartId(cp.partNumber);
@@ -602,7 +700,10 @@ export const actions: Actions = {
 				scrapReason: scrapReason || undefined,
 				ovenId: ovenId || undefined,
 				notes: notes || undefined,
-				materialsConsumed: CONSUMED_PARTS.map(p => p.partNumber)
+				materialsConsumed: partsToWithdraw.map(p => p.partNumber),
+				bucketCycleId: lot.bucketCycleId ?? undefined,
+				bucket: bucketResult ?? undefined,
+				bucketNotes: bucketNotes.length ? bucketNotes : undefined
 			}
 		});
 
@@ -610,7 +711,11 @@ export const actions: Actions = {
 		return {
 			confirmComplete: {
 				success: true,
-				handoffPrompt: config?.handoffPrompt ?? 'Backed cartridges ready for wax filling.'
+				handoffPrompt: config?.handoffPrompt ?? 'Backed cartridges ready for wax filling.',
+				bucket: bucketResult
+					? { bucketId: lot.bucketBarcode ?? null, qtyBefore: bucketResult.qtyBefore, qtyAfter: bucketResult.qtyAfter, overrun: bucketResult.overrun }
+					: null,
+				bucketNotes
 			}
 		};
 	},
@@ -731,7 +836,9 @@ export const actions: Actions = {
 				ovenName,
 				// Re-hydrate the oven-scan list so already-scanned cartridges
 				// survive a page reload mid-batch (WAX-FLOW-2)
-				cartridgeIds: lot.cartridgeIds ?? []
+				cartridgeIds: lot.cartridgeIds ?? [],
+				// Bucket this batch draws from, if any, so the session shows it locked.
+				bucketId: lot.bucketBarcode ?? null
 			}
 		};
 	}

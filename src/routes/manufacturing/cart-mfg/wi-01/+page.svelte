@@ -14,6 +14,7 @@
 	}
 
 	interface LotOption { lotId: string; quantity: number; remaining: number }
+	interface BucketOption { bucketId: string; cycleId: string; cycleNumber: number; quantity: number; lot1: string | null; lot3: string | null }
 
 	interface Props {
 		data: {
@@ -25,6 +26,7 @@
 				inputMaterials: { partId: string; name: string; scanOrder: number }[];
 			} | null;
 			availableLots?: Record<string, LotOption[]>;
+			qrPendingBuckets?: BucketOption[];
 			recentLots: RecentLot[];
 			ovens?: { _id: string; name: string; barcode: string; status: string }[];
 			inventory: {
@@ -36,9 +38,9 @@
 			error?: string;
 		};
 		form: {
-			checkAndStart?: { success?: boolean; lotId?: string; error?: string };
-			confirmComplete?: { success?: boolean; handoffPrompt?: string; error?: string };
-			resumeLot?: { success?: boolean; lotId?: string; error?: string; cartridgeIds?: string[] };
+			checkAndStart?: { success?: boolean; lotId?: string; error?: string; bucketId?: string | null; bucketCycleNumber?: number | null; bucketQty?: number | null; lot1?: string; lot3?: string };
+			confirmComplete?: { success?: boolean; handoffPrompt?: string; error?: string; bucket?: { bucketId: string | null; qtyBefore: number; qtyAfter: number; overrun: number } | null; bucketNotes?: string[] };
+			resumeLot?: { success?: boolean; lotId?: string; error?: string; cartridgeIds?: string[]; bucketId?: string | null };
 		};
 	}
 
@@ -54,6 +56,28 @@
 	let ovenId = $state('');
 	let starting = $state(false);
 	let startError = $state('');
+
+	// Source bucket (BUCKET-SYSTEM_PLAN §6.3). Optional: when set, the bucket's
+	// open qr_pending cycle dictates lot1/lot3 and the count, and 104/106 are
+	// not re-withdrawn at confirm. Scan box + pick-list feed the same value.
+	let bucketId = $state('');
+	let bucketScan = $state('');
+	let bucketLocked = $state<{ bucketId: string; cycleNumber: number | null; quantity: number | null } | null>(null);
+	const selectedBucket = $derived((data.qrPendingBuckets ?? []).find((b) => b.bucketId === bucketId) ?? null);
+	$effect(() => {
+		if (selectedBucket) {
+			lot1 = selectedBucket.lot1 ?? '';
+			lot3 = selectedBucket.lot3 ?? '';
+		}
+	});
+	function applyBucketScan() {
+		const code = bucketScan.trim().toUpperCase();
+		if (!code) return;
+		const hit = (data.qrPendingBuckets ?? []).find((b) => b.bucketId === code);
+		if (hit) { bucketId = hit.bucketId; startError = ''; }
+		else startError = `${code} is not a bucket at QR Pending`;
+		bucketScan = '';
+	}
 
 	// Session state
 	let lotId = $state(''); // created LotRecord._id
@@ -77,7 +101,8 @@
 	const lots1 = $derived(data.availableLots?.['PT-CT-104'] ?? []);
 	const lots2 = $derived(data.availableLots?.['PT-CT-112'] ?? []);
 	const lots3 = $derived(data.availableLots?.['PT-CT-106'] ?? []);
-	const configReady = $derived(!!lot1 && !!lot2 && !!lot3 && !!ovenId);
+	// With a bucket, lot1/lot3 come from the cycle; the operator only picks thermoseal + oven.
+	const configReady = $derived(!!lot2 && !!ovenId && (bucketId ? true : (!!lot1 && !!lot3)));
 	const ovenName = $derived((data.ovens ?? []).find((o) => o._id === ovenId)?.name ?? ovenId);
 
 	const totalScrap = $derived(scrapCartridge + scrapThermoseal + scrapBarcode);
@@ -186,6 +211,12 @@
 				// Lock in the oven from the server response so the session never
 				// re-asks for it (don't rely on client state surviving the submit).
 				if (r.ovenId) ovenId = r.ovenId;
+				// Same for the bucket + the lots it dictated.
+				if (r.bucketId) {
+					bucketLocked = { bucketId: r.bucketId, cycleNumber: r.bucketCycleNumber ?? null, quantity: r.bucketQty ?? null };
+					if (r.lot1) lot1 = r.lot1;
+					if (r.lot3) lot3 = r.lot3;
+				}
 				step = 'session';
 				armScanning();
 			}
@@ -194,6 +225,13 @@
 			const r = form.confirmComplete as any;
 			if (r.success) {
 				handoffPrompt = r.handoffPrompt ?? 'Backed cartridges ready for wax filling.';
+				if (r.bucket) {
+					handoffPrompt += r.bucket.qtyAfter > 0
+						? ` Bucket ${r.bucket.bucketId} has ${r.bucket.qtyAfter} left at QR Pending.`
+						: ` Bucket ${r.bucket.bucketId} is drained and back in the available pool.`;
+					if (r.bucket.overrun > 0) handoffPrompt += ` Overrun: ${r.bucket.overrun} more scanned than the bucket recorded — logged as a discrepancy.`;
+				}
+				if (Array.isArray(r.bucketNotes) && r.bucketNotes.length) handoffPrompt += ` ${r.bucketNotes.join(' ')}`;
 				handoffOpen = true;
 			}
 		}
@@ -203,6 +241,7 @@
 				lotId = r.lotId;
 				// Recover the batch oven so the session shows it locked, never re-asks.
 				if (r.ovenId) ovenId = r.ovenId;
+				bucketLocked = r.bucketId ? { bucketId: r.bucketId, cycleNumber: null, quantity: null } : null;
 				scannedCarts = [...(r.cartridgeIds ?? [])].reverse();
 				step = 'session';
 				armScanning();
@@ -213,6 +252,7 @@
 	function resetAll() {
 		step = 'config';
 		lot1 = ''; lot2 = ''; lot3 = ''; ovenId = '';
+		bucketId = ''; bucketScan = ''; bucketLocked = null;
 		startError = '';
 		lotId = '';
 		scannedCarts = [];
@@ -272,17 +312,51 @@
 					<input type="hidden" name="lot2" value={lot2} />
 					<input type="hidden" name="lot3" value={lot3} />
 					<input type="hidden" name="ovenId" value={ovenId} />
+					<input type="hidden" name="bucketId" value={bucketId} />
 
 					<div class="space-y-4">
 						<div>
 							<p class="text-lg font-semibold text-[var(--color-tron-text)]">Set up batch</p>
-							<p class="text-xs text-[var(--color-tron-text-secondary)]">Pick the material lots + oven once, then rapid-fire scan cartridges.</p>
+							<p class="text-xs text-[var(--color-tron-text-secondary)]">Scan a bucket (or pick the material lots) + oven once, then rapid-fire scan cartridges.</p>
+						</div>
+
+						<!-- Source bucket — optional. A QR Pending bucket dictates the
+						     blank + label lots and the expected count; 104/106 are
+						     not re-withdrawn at confirm (BUCKET-SYSTEM_PLAN §6.3). -->
+						<div class="rounded border border-[var(--color-tron-cyan)]/40 bg-[var(--color-tron-cyan)]/5 p-3">
+							<div class="flex items-center justify-between">
+								<label for="bucketScan" class="block text-xs font-medium text-[var(--color-tron-cyan)]">Source bucket (QR Pending)</label>
+								<a href="/manufacturing/cart-mfg/buckets" class="text-[10px] text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)]">bucket board →</a>
+							</div>
+							{#if selectedBucket}
+								<div class="mt-2 flex items-center justify-between rounded bg-[var(--color-tron-bg-primary)] px-3 py-2">
+									<div>
+										<span class="font-mono text-sm text-[var(--color-tron-text)]">{selectedBucket.bucketId}</span>
+										<span class="ml-1 text-xs text-[var(--color-tron-text-secondary)]">#{selectedBucket.cycleNumber} · {selectedBucket.quantity} in tub</span>
+									</div>
+									<button type="button" onclick={() => { bucketId = ''; lot1 = ''; lot3 = ''; }} class="text-xs text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-error)]">clear</button>
+								</div>
+							{:else}
+								<div class="mt-2 grid gap-2 sm:grid-cols-2">
+									<input type="text" id="bucketScan" bind:value={bucketScan} autocomplete="off" placeholder="scan BKT-…"
+										onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); applyBucketScan(); } }}
+										class="w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-3 py-2 font-mono text-[var(--color-tron-text)] placeholder:text-[var(--color-tron-text-secondary)]/50" />
+									<select bind:value={bucketId} class="w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-3 py-2 text-[var(--color-tron-text)]">
+										<option value="">{(data.qrPendingBuckets ?? []).length ? '— or pick a bucket —' : 'No buckets at QR Pending'}</option>
+										{#each data.qrPendingBuckets ?? [] as b (b.bucketId)}
+											<option value={b.bucketId}>{b.bucketId} #{b.cycleNumber} — {b.quantity}</option>
+										{/each}
+									</select>
+								</div>
+								<p class="mt-1 text-[10px] text-[var(--color-tron-text-secondary)]">Leave empty to pick lots manually (legacy flow).</p>
+							{/if}
 						</div>
 
 						<div class="space-y-3">
 							<div>
-								<label for="lot1" class="block text-xs font-medium text-[var(--color-tron-text-secondary)]">Cartridge blank lot (PT-CT-104)</label>
-								<select id="lot1" bind:value={lot1} class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-3 py-2 text-[var(--color-tron-text)]">
+								<label for="lot1" class="block text-xs font-medium text-[var(--color-tron-text-secondary)]">Cartridge blank lot (PT-CT-104){#if selectedBucket} <span class="text-[var(--color-tron-cyan)]">— from bucket</span>{/if}</label>
+								<select id="lot1" bind:value={lot1} disabled={!!selectedBucket} class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-3 py-2 text-[var(--color-tron-text)] disabled:opacity-60">
+									{#if selectedBucket && lot1 && !lots1.some((l) => l.lotId === lot1)}<option value={lot1}>{lot1}</option>{/if}
 									<option value="">{lots1.length ? '— Select lot —' : 'No lots available'}</option>
 									{#each lots1 as l (l.lotId)}
 										<option value={l.lotId}>{l.lotId} — {l.remaining} left</option>
@@ -299,8 +373,9 @@
 								</select>
 							</div>
 							<div>
-								<label for="lot3" class="block text-xs font-medium text-[var(--color-tron-text-secondary)]">Barcode label lot (PT-CT-106)</label>
-								<select id="lot3" bind:value={lot3} class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-3 py-2 text-[var(--color-tron-text)]">
+								<label for="lot3" class="block text-xs font-medium text-[var(--color-tron-text-secondary)]">Barcode label lot (PT-CT-106){#if selectedBucket} <span class="text-[var(--color-tron-cyan)]">— from bucket</span>{/if}</label>
+								<select id="lot3" bind:value={lot3} disabled={!!selectedBucket} class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-3 py-2 text-[var(--color-tron-text)] disabled:opacity-60">
+									{#if selectedBucket && lot3 && !lots3.some((l) => l.lotId === lot3)}<option value={lot3}>{lot3}</option>{/if}
 									<option value="">{lots3.length ? '— Select lot —' : 'No lots available'}</option>
 									{#each lots3 as l (l.lotId)}
 										<option value={l.lotId}>{l.lotId} — {l.remaining} left</option>
@@ -370,6 +445,7 @@
 						{#if ovenId}
 							<div class="flex flex-wrap gap-x-4 gap-y-1 text-[var(--color-tron-text-secondary)]">
 								<span>Oven <span class="font-mono text-[var(--color-tron-text)]">{ovenName}</span></span>
+								{#if bucketLocked}<span>bucket <span class="font-mono text-[var(--color-tron-cyan)]">{bucketLocked.bucketId}</span>{#if bucketLocked.quantity != null} <span class="text-[var(--color-tron-text-secondary)]">({bucketLocked.quantity} in tub)</span>{/if}</span>{/if}
 								{#if lot1}<span>blank <span class="font-mono text-[var(--color-tron-text)]">{lot1}</span></span>{/if}
 								{#if lot2}<span>sheet <span class="font-mono text-[var(--color-tron-text)]">{lot2}</span></span>{/if}
 								{#if lot3}<span>label <span class="font-mono text-[var(--color-tron-text)]">{lot3}</span></span>{/if}
@@ -477,10 +553,15 @@
 						<div class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] p-3">
 							<p class="mb-2 text-center text-xs text-[var(--color-tron-text-secondary)]">Withdrawal summary</p>
 							<div class="grid grid-cols-3 gap-2 text-center text-sm">
-								<div><p class="text-xs text-[var(--color-tron-text-secondary)]">Cartridges</p><p class="font-bold text-[var(--color-tron-text)]">{scannedCarts.length + scrapCartridge}</p></div>
+								<div><p class="text-xs text-[var(--color-tron-text-secondary)]">Cartridges</p><p class="font-bold {bucketLocked ? 'text-[var(--color-tron-text-secondary)] line-through' : 'text-[var(--color-tron-text)]'}">{scannedCarts.length + scrapCartridge}</p></div>
 								<div><p class="text-xs text-[var(--color-tron-text-secondary)]">Thermoseal</p><p class="font-bold text-[var(--color-tron-text)]">{scannedCarts.length + scrapThermoseal}</p></div>
-								<div><p class="text-xs text-[var(--color-tron-text-secondary)]">Barcodes</p><p class="font-bold text-[var(--color-tron-text)]">{scannedCarts.length + scrapBarcode}</p></div>
+								<div><p class="text-xs text-[var(--color-tron-text-secondary)]">Barcodes</p><p class="font-bold {bucketLocked ? 'text-[var(--color-tron-text-secondary)] line-through' : 'text-[var(--color-tron-text)]'}">{scannedCarts.length + scrapBarcode}</p></div>
 							</div>
+							{#if bucketLocked}
+								<p class="mt-2 text-center text-[10px] text-[var(--color-tron-cyan)]">
+									Drawn from bucket <span class="font-mono">{bucketLocked.bucketId}</span> — cartridges and barcodes were already withdrawn when the bucket was filled and labeled; only thermoseal is withdrawn now. {scannedCarts.length} consumed{#if scrapCartridge > 0} + {scrapCartridge} scrapped{/if} come off the bucket.
+								</p>
+							{/if}
 						</div>
 
 						<div>

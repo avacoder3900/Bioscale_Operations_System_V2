@@ -16,12 +16,19 @@ import {
 import { requirePermission } from '$lib/server/permissions';
 import { getCheckedOutCartridgeIds } from '$lib/server/checkout-utils';
 import { ANY_TERMINAL } from '$lib/server/manufacturing/run-statuses';
+import { boardData, STAGE_LABELS as BUCKET_STAGE_LABELS, type BucketStage } from '$lib/server/services/bucket-service';
 import type { PageServerLoad } from './$types';
 
 export const config = { maxDuration: 60 };
 
-const STAGE_KEYS = ['backing', 'wax_fill', 'cooling', 'reagent', 'seal', 'store'] as const;
+// The four bucket_* stages are the pre-barcode funnel (BUCKET-SYSTEM_PLAN §9):
+// production buckets counted by cycle, upstream of everything serialized.
+const STAGE_KEYS = ['bucket_raw', 'bucket_unpressed', 'bucket_pressed', 'bucket_qr', 'backing', 'wax_fill', 'cooling', 'reagent', 'seal', 'store'] as const;
 type StageKey = (typeof STAGE_KEYS)[number];
+
+const BUCKET_STAGE_FOR_KEY: Partial<Record<StageKey, BucketStage>> = {
+	bucket_raw: 'raw', bucket_unpressed: 'unpressed', bucket_pressed: 'pressed', bucket_qr: 'qr_pending'
+};
 
 export interface PipelineRow {
 	id: string;             // primary identifier (lot id, run id, fridge name)
@@ -44,7 +51,37 @@ interface StageMeta {
 	headers: { key: string; label: string }[];
 }
 
+const bucketHeaders = [
+	{ key: 'id', label: 'Bucket' },
+	{ key: 'status', label: 'Pass' },
+	{ key: 'count', label: 'Cartridges' },
+	{ key: 'location', label: 'Press / lots' },
+	{ key: 'operator', label: 'Opened by' },
+	{ key: 'when', label: 'Entered stage' },
+	{ key: 'elapsed', label: 'Dwell' }
+];
+
 const STAGE_META: Record<StageKey, StageMeta> = {
+	bucket_raw: {
+		key: 'bucket_raw', label: 'Raw', color: 'tron-purple',
+		description: 'Production buckets holding raw cartridge blanks (PT-CT-104) — counted, not yet serialized. One row per open bucket cycle.',
+		headers: bucketHeaders
+	},
+	bucket_unpressed: {
+		key: 'bucket_unpressed', label: 'Unpressed', color: 'tron-blue',
+		description: 'Buckets staged for the press.',
+		headers: bucketHeaders
+	},
+	bucket_pressed: {
+		key: 'bucket_pressed', label: 'Pressed', color: 'tron-yellow',
+		description: 'Buckets off the press, awaiting barcode labels.',
+		headers: bucketHeaders
+	},
+	bucket_qr: {
+		key: 'bucket_qr', label: 'QR Pending', color: 'tron-cyan',
+		description: 'Buckets with barcode stickers applied, waiting to be scanned in at WI-01. WI-01 draws from these.',
+		headers: bucketHeaders
+	},
 	backing: {
 		key: 'backing', label: 'Backing', color: 'tron-purple',
 		description: 'Cartridges currently backing in ovens. Each cartridge is scanned in individually at WI-01 and exists as its own record; rows group them per WI-01 batch. Legacy backing-lot buckets are shown read-only until drained.',
@@ -131,6 +168,27 @@ function ageMin(ts: Date | string | null | undefined, now: Date): number | null 
 function shortId(id: string, n = 8): string {
 	if (!id) return '';
 	return id.length <= n + 3 ? id : `${id.slice(0, n)}…`;
+}
+
+async function loadBucketStage(stage: BucketStage, now: Date): Promise<PipelineRow[]> {
+	const { cycles } = await boardData();
+	return cycles
+		.filter(c => c.stage === stage)
+		.map(c => ({
+			id: c.bucketId,
+			idLabel: `${c.bucketId} #${c.cycleNumber}`,
+			status: `pass ${c.cycleNumber}`,
+			count: c.quantity,
+			location: [
+				c.pressEquipmentName ? `press ${c.pressEquipmentName}` : null,
+				...c.sourceLots.map(l => `${l.partNumber} ${l.lotId}`)
+			].filter(Boolean).join(' · ') || null,
+			operator: c.openedBy,
+			when: c.stageEnteredAt,
+			elapsedMin: ageMin(c.stageEnteredAt, now),
+			extras: { openedQty: c.openedQty, stage: BUCKET_STAGE_LABELS[stage] },
+			detailHref: `/manufacturing/cart-mfg/buckets/${encodeURIComponent(c.bucketId)}`
+		}));
 }
 
 async function loadBacking(now: Date, checkedOutIds: string[]): Promise<PipelineRow[]> {
@@ -381,7 +439,10 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	const now = new Date();
 	let rows: PipelineRow[] = [];
 
-	if (stage === 'backing') {
+	const bucketStage = BUCKET_STAGE_FOR_KEY[stage];
+	if (bucketStage) {
+		rows = await loadBucketStage(bucketStage, now);
+	} else if (stage === 'backing') {
 		const checkedOutIds = await getCheckedOutCartridgeIds();
 		rows = await loadBacking(now, checkedOutIds);
 	} else if (stage === 'wax_fill') {
