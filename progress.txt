@@ -4184,3 +4184,28 @@ Second pass: 10 errors / 434 warnings, ZERO in any file this branch touched; zer
 the new files. The 10 are pre-existing (r2.ts Buffer/BodyInit, AskBimsWidget.svelte
 unreachable comparison, 8x implicit-any in assembly/[sessionId]/+page.svelte). Note the
 2026-07-28 entry quoted a 46-error baseline; on this machine with the lockfile it is 10.
+
+Commit: 23b1d6b9 on branch feat/bucket-system (author Samantha Wolf <sw207@gmail.com>;
+identity passed via -c on the commit, no git config changed). Pushed to origin; Vercel GitHub
+integration deployed it to BOTH connected scopes (no local CLI deploy).
+
+Deployment: preview -- https://bioscale-operations-system-mongodb-p8aq9nhxn-brevitest.vercel.app
+  (brevitest scope; inspector https://vercel.com/brevitest/bioscale-operations-system-mongodb/8DDKMGxtTEkT3PuT3gjJccFZLf3E)
+Deployment: preview -- https://bioscale-operations-system-mongodb-r2its531x.vercel.app
+  (alejandro-valdezs-projects scope; inspector https://vercel.com/alejandro-valdezs-projects/bioscale-operations-system-mongodb/GhzaJxDGPeSZADKFZQxfedGkBiFr)
+Source: branch feat/bucket-system @ commit 23b1d6b9
+Retrieve this exact code: git checkout feat/bucket-system at commit 23b1d6b9
+  (or: git log feat/bucket-system --oneline to find it if the branch has since moved on)
+What this deployment is for: first look at the bucket system -- /manufacturing/cart-mfg/buckets
+  board + scan rail, /manufacturing/print-bucket-labels, /buckets/[bucketId] history, the WI-01
+  "Source bucket" pick-list, the cartridge-admin pre-barcode strip, and the four bucket stages on
+  /manufacturing/cart-mfg/pipeline. Never exercised against a database before this preview.
+Build status: success (both scopes, GitHub commit status "Deployment has completed" 17:19Z).
+Preview is cookie-session gated (302 to /login). CAUTION: the preview environment writes to
+whatever Atlas database it is configured with -- buckets minted / cycles started there are
+real records, and starting a cycle consumes real PT-CT-104 / PT-CT-106 lot quantity.
+The git-branch alias (…-git-feat-bucket-system-brevitest.vercel.app) did not resolve within
+8 min of the build; use the immutable URLs above.
+Verified: brevitest URL 302s to /login and /manufacturing/cart-mfg/buckets 302s to /login (route
+exists, no 404/500 pre-auth). The alejandro-valdezs-projects URL 302s to vercel.com/sso-api --
+that scope has Deployment Protection on, so it needs a Vercel login; use the brevitest link.
