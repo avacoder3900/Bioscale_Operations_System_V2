@@ -18,6 +18,10 @@ const manualCartridgeRemovalSchema = new Schema({
 	bucketCycleId: String,
 	bucketId: String,
 	journal: String,
+	// Set when the bucket pass this removal belongs to was voided (test data / wrong lot).
+	// The row is kept -- marked, never deleted.
+	voidedAt: Date,
+	voidReason: String,
 	reason: { type: String, required: true },
 	operator: operatorRef,
 	removedAt: { type: Date, required: true }

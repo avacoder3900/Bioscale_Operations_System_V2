@@ -1,6 +1,22 @@
 <script lang="ts">
-	let { data } = $props();
+	import { enhance } from '$app/forms';
+	import type { PageData } from './$types';
+
+	// The action returns either a success or a fail() shape; SvelteKit infers a
+	// union, so spell out one optional-field type instead of narrowing everywhere.
+	type VoidResult = {
+		success?: boolean;
+		error?: string;
+		cycleId?: string;
+		cycleNumber?: number;
+		restored?: { partNumber: string | null; lotId: string | null; quantity: number }[];
+		removalsMarked?: number;
+	};
+	interface Props { data: PageData; form: { voidPass?: VoidResult } | null }
+	let { data, form }: Props = $props();
 	let open = $state<Record<string, boolean>>({});
+	let voidingId = $state<string | null>(null);
+	let voidBusy = $state(false);
 
 	function fmt(iso: string | null): string {
 		if (!iso) return '—';
@@ -16,7 +32,8 @@
 	const txTint: Record<string, string> = {
 		create: 'text-green-300', advance: 'text-[var(--color-tron-cyan)]', consume: 'text-[var(--color-tron-cyan)]',
 		scrap: 'text-red-300', adjust: 'text-[var(--color-tron-yellow)]', merge_in: 'text-green-300', merge_out: 'text-[var(--color-tron-yellow)]',
-		release: 'text-[var(--color-tron-text-secondary)]', quarantine: 'text-[var(--color-tron-yellow)]', mint: 'text-[var(--color-tron-text-secondary)]', retire: 'text-red-300'
+		release: 'text-[var(--color-tron-text-secondary)]', quarantine: 'text-[var(--color-tron-yellow)]', mint: 'text-[var(--color-tron-text-secondary)]', retire: 'text-red-300',
+		void: 'text-[var(--color-tron-yellow)]', relabel: 'text-[var(--color-tron-text-secondary)]'
 	};
 </script>
 
@@ -52,6 +69,19 @@
 		</div>
 	</div>
 
+	{#if form?.voidPass?.success}
+		{@const v = form.voidPass}
+		<div class="rounded-lg border border-green-500/40 bg-green-900/15 p-3 text-xs text-green-300">
+			<strong>{data.bucket.bucketId} #{v.cycleNumber} voided.</strong>
+			{#if (v.restored ?? []).length > 0}
+				Returned to inventory: {#each v.restored ?? [] as r, i (i)}{i > 0 ? ', ' : ''}<span class="font-mono">{r.quantity}× {r.partNumber ?? 'part'}</span>{#if r.lotId} → lot <span class="font-mono">{r.lotId}</span>{/if}{/each}.
+			{:else}
+				No inventory debits were recorded against this pass, so nothing needed returning.
+			{/if}
+			{#if (v.removalsMarked ?? 0) > 0}{v.removalsMarked} scrap entr{v.removalsMarked === 1 ? 'y' : 'ies'} marked voided.{/if}
+		</div>
+	{/if}
+
 	<section>
 		<h2 class="mb-2 text-sm font-medium text-[var(--color-tron-text-secondary)]">Passes</h2>
 		{#if data.cycles.length === 0}
@@ -62,7 +92,7 @@
 					<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)]">
 						<button type="button" onclick={() => (open[c.cycleId] = !open[c.cycleId])} class="flex w-full flex-wrap items-center gap-x-4 gap-y-1 px-4 py-3 text-left">
 							<span class="font-mono text-base text-[var(--color-tron-text)]">{data.bucket.bucketId} <span class="text-[var(--color-tron-text-secondary)]">#{c.cycleNumber}</span></span>
-							<span class="rounded border px-2 py-0.5 text-[10px] uppercase tracking-wider {c.status === 'open' ? 'border-[var(--color-tron-cyan)]/40 text-[var(--color-tron-cyan)]' : c.status === 'scrapped' ? 'border-red-500/40 text-red-300' : 'border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)]'}">{c.status === 'open' ? c.stageLabel : c.status}</span>
+							<span class="rounded border px-2 py-0.5 text-[10px] uppercase tracking-wider {c.status === 'open' ? 'border-[var(--color-tron-cyan)]/40 text-[var(--color-tron-cyan)]' : c.status === 'scrapped' ? 'border-red-500/40 text-red-300' : c.status === 'voided' ? 'border-[var(--color-tron-yellow)]/50 text-[var(--color-tron-yellow)]' : 'border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)]'}">{c.status === 'open' ? c.stageLabel : c.status}</span>
 							<span class="text-sm text-[var(--color-tron-text)]">{c.status === 'open' ? c.quantity : c.openedQty} <span class="text-xs text-[var(--color-tron-text-secondary)]">{c.status === 'open' ? `in tub of ${c.openedQty}` : 'opened'}</span></span>
 							{#if c.cartridges.count > 0}<span class="text-xs text-[var(--color-tron-text-secondary)]">→ {c.cartridges.count} cartridge{c.cartridges.count === 1 ? '' : 's'} serialized</span>{/if}
 							{#if c.closedWithResidual}<span class="rounded bg-[var(--color-tron-yellow)]/20 px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-[var(--color-tron-yellow)]">residual found</span>{/if}
@@ -72,6 +102,39 @@
 
 						{#if open[c.cycleId]}
 							<div class="space-y-3 border-t border-[var(--color-tron-border)] px-4 py-3 text-xs">
+								{#if c.status === 'voided'}
+									<div class="rounded border border-[var(--color-tron-yellow)]/40 bg-[var(--color-tron-yellow)]/5 p-2 text-[var(--color-tron-yellow)]">
+										Voided {fmt(c.voidedAt)}{c.voidedBy ? ` by ${c.voidedBy}` : ''} — {c.voidReason ?? ''}. Its inventory debits were returned; the record is kept.
+									</div>
+								{:else if data.canVoid}
+									<!-- Void: for a pass that never really happened (test data, wrong lot).
+									     Refused server-side if cartridges were serialized from it. -->
+									{#if voidingId === c.cycleId}
+										<form method="POST" action="?/voidPass"
+											use:enhance={() => { voidBusy = true; return async ({ update }) => { await update({ reset: false }); voidBusy = false; voidingId = null; }; }}
+											class="rounded border border-[var(--color-tron-yellow)]/40 bg-[var(--color-tron-yellow)]/5 p-3 space-y-2">
+											<input type="hidden" name="cycleId" value={c.cycleId} />
+											<p class="text-[var(--color-tron-text)]">
+												Void <span class="font-mono">{data.bucket.bucketId} #{c.cycleNumber}</span>? Everything this pass took from inventory
+												(blanks at start, labels at QR Scan-In Pending) is returned to the <em>same lots</em>. The pass, its ledger and its
+												scrap entries are kept and marked voided. Not possible if cartridges were serialized from it.
+											</p>
+											<input type="text" name="reason" required placeholder="Why? e.g. test data from preview review"
+												class="w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-3 py-1.5 text-xs text-[var(--color-tron-text)] focus:border-[var(--color-tron-cyan)] focus:outline-none" />
+											<div class="flex gap-2">
+												<button type="submit" disabled={voidBusy} class="rounded border border-[var(--color-tron-yellow)]/60 bg-[var(--color-tron-yellow)]/15 px-3 py-1.5 font-semibold text-[var(--color-tron-yellow)] disabled:opacity-40">{voidBusy ? 'Voiding…' : 'Void pass & return inventory'}</button>
+												<button type="button" onclick={() => (voidingId = null)} class="rounded border border-[var(--color-tron-border)] px-3 py-1.5 text-[var(--color-tron-text-secondary)]">Cancel</button>
+											</div>
+										</form>
+									{:else}
+										<div class="flex justify-end">
+											<button type="button" onclick={() => (voidingId = c.cycleId)} class="rounded border border-[var(--color-tron-border)] px-2 py-1 text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-yellow)]/60 hover:text-[var(--color-tron-yellow)]">Void this pass…</button>
+										</div>
+									{/if}
+									{#if form?.voidPass?.error && form.voidPass.cycleId === c.cycleId}
+										<p class="text-[var(--color-tron-error)]">{form.voidPass.error}</p>
+									{/if}
+								{/if}
 								<div class="flex flex-wrap gap-x-4 gap-y-1 text-[var(--color-tron-text-secondary)]">
 									<span>opened by <span class="text-[var(--color-tron-text)]">{c.openedBy ?? '—'}</span></span>
 									{#if c.emptyConfirmedBy}<span>empty confirmed by <span class="text-[var(--color-tron-text)]">{c.emptyConfirmedBy}</span></span>{/if}
@@ -136,9 +199,9 @@
 			<h2 class="mb-2 text-sm font-medium text-[var(--color-tron-text-secondary)]">Scrap journal</h2>
 			<div class="space-y-2">
 				{#each data.removals as r (r.id)}
-					<div class="rounded border border-red-500/30 bg-red-900/10 p-3 text-xs">
+					<div class="rounded border border-red-500/30 bg-red-900/10 p-3 text-xs {r.voided ? 'opacity-60' : ''}">
 						<div class="flex items-center justify-between">
-							<span class="font-semibold text-red-300">{r.count} scrapped</span>
+							<span class="font-semibold text-red-300">{r.count} scrapped{#if r.voided} <span class="ml-1 rounded bg-[var(--color-tron-yellow)]/20 px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-[var(--color-tron-yellow)]">voided pass</span>{/if}</span>
 							<span class="text-[var(--color-tron-text-secondary)]">{r.operator ?? '—'} · {fmt(r.at)}</span>
 						</div>
 						<p class="mt-1 whitespace-pre-wrap text-[var(--color-tron-text)]">{r.journal}</p>

@@ -4,11 +4,15 @@
  * (via CartridgeRecord.backing.bucketCycleId — the real link, never the bare
  * barcode, since the barcode repeats across passes).
  */
-import { error, redirect } from '@sveltejs/kit';
+import { error, fail, redirect } from '@sveltejs/kit';
 import { connectDB, CartridgeRecord, LotRecord } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
-import { bucketHistory, STAGE_LABELS } from '$lib/server/services/bucket-service';
-import type { PageServerLoad } from './$types';
+import { bucketHistory, voidCycle, BucketError, STAGE_LABELS } from '$lib/server/services/bucket-service';
+import type { Actions, PageServerLoad } from './$types';
+
+function isBucketAdmin(user: App.Locals['user']): boolean {
+	return !!user?.roles.some(r => r.permissions.includes('manufacturing:admin') || r.permissions.includes('admin:full'));
+}
 
 export const load: PageServerLoad = async ({ locals, params }) => {
 	if (!locals.user) redirect(302, '/login');
@@ -67,6 +71,7 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 	});
 
 	return {
+		canVoid: isBucketAdmin(locals.user),
 		bucket: {
 			bucketId: h.bucket._id,
 			barcode: h.bucket.barcode ?? null,
@@ -94,6 +99,9 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 			closedAt: iso(c.closedAt),
 			emptyConfirmedBy: c.emptyConfirmedBy?.username ?? null,
 			closedWithResidual: !!c.closedWithResidual,
+			voidedAt: iso(c.voidedAt),
+			voidedBy: c.voidedBy?.username ?? null,
+			voidReason: c.voidReason ?? null,
 			residualFound: (c.residualFound ?? []).map((r: any) => ({ qty: r.qty, stage: r.stage, disposition: r.disposition, at: iso(r.at), by: r.by?.username ?? null })),
 			discrepancies: (c.discrepancies ?? []).map((d: any) => ({ type: d.type, qty: d.qty, note: d.note ?? null, at: iso(d.at) })),
 			cartridges: cartsByCycle.get(c._id) ?? { count: 0, ids: [] },
@@ -107,7 +115,35 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 			count: r.cartridgeCount ?? 0,
 			journal: r.journal ?? r.reason ?? '',
 			operator: r.operator?.username ?? null,
-			at: iso(r.removedAt)
+			at: iso(r.removedAt),
+			voided: !!r.voidedAt
 		}))
 	};
+};
+
+export const actions: Actions = {
+	/**
+	 * Void a pass that never really happened (test data / wrong lot) and return
+	 * what it took from inventory. Admin only — it moves real inventory numbers.
+	 */
+	voidPass: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		if (!isBucketAdmin(locals.user)) {
+			return fail(403, { voidPass: { error: 'Voiding a pass requires manufacturing:admin' } });
+		}
+		await connectDB();
+		const d = await request.formData();
+		const cycleId = String(d.get('cycleId') ?? '');
+		try {
+			const r = await voidCycle({
+				cycleId,
+				reason: String(d.get('reason') ?? ''),
+				user: { _id: locals.user._id, username: locals.user.username }
+			});
+			return { voidPass: { success: true, ...r } };
+		} catch (e) {
+			if (e instanceof BucketError) return fail(e.status, { voidPass: { error: e.message, cycleId } });
+			throw e;
+		}
+	}
 };

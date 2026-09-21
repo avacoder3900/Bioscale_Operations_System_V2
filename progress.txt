@@ -13540,3 +13540,40 @@ guarded paths in a table and tells the next person to search for upserts too.
 npm run check on the merged tree: 10 errors / 437 warnings. The 10 are the same pre-existing
 ones (r2.ts, AskBimsWidget.svelte, assembly/[sessionId]); none in any bucket-touched file; zero
 warnings in bucket files. 437 is master's own warning count (+3 vs NEWDEV).
+
+================================================================================
+2026-09-21 -- feat/bucket-system -- "Void this pass": reverse a test pass's inventory debits
+================================================================================
+User asked for a void-test-pass reversal before the PR to master. Built voidCycle() in
+bucket-service + "Void this pass..." on the bucket history page (manufacturing:admin, reason
+required).
+
+What a pass took is read from the inventory ledger itself: every bucket debit was already
+stamped manufacturingRunId = cycleId (start, labeling, adjust-up), so net debit per (part, lot)
+is a query. One compensating row per group: a NEGATIVE consumption against the SAME lot, with
+the model's existing retractedBy / retractedAt / retractionReason filled, plus $inc on
+PartDefinition.inventoryCount. Negative consumption (not an adjustment) is deliberate: the four
+per-lot "N left" computations (WI-01 x2, bucket board, opentron wax) sum consumption+scrap rows
+by lotId, so an adjustment would fix the part total but leave the lot looking consumed.
+Written directly rather than through recordTransaction, because recordTransaction applies
+Math.abs to a consumption and would have DEBITED again.
+
+Safety: refused with 409 if any CartridgeRecord has backing.bucketCycleId = this pass (that
+material was really used at WI-01). The cycle is flipped to status voided with a conditional
+findOneAndUpdate BEFORE compensations are written, so a double-submit cannot return inventory
+twice. Sticker-assignment debits are not reversed (stamped with the bucket id, and the sticker
+really is on the tub). Nothing is deleted: cycle keeps its record (+voidedAt/By/Reason/
+statusBeforeVoid), ledger gets a void row, the pass's ManualCartridgeRemoval rows get voidedAt,
+an open pass frees its tub (available, empty-check armed). Change log greys a voided pass's
+rows and no longer counts its discards in the "carts discarded" total.
+
+Files: bucket-cycle.ts (+voided status + void fields), bucket-transaction.ts (+void),
+manual-cartridge-removal.ts (+voidedAt/voidReason), bucket-service.ts, buckets/+page.svelte,
+buckets/[bucketId]/{+page.server.ts,+page.svelte}, BUCKET-SYSTEM_PLAN.md (header: branch facts;
+4.x schemas; 5.2; 9.2; 11 merge row; 12.2 rewritten as built; new 12.4 "known risks": the WI-01
+double-debit when the bucket is not selected, Can-Make understating, the broken cartridge-admin
+search link, Ask BIMS blind to buckets).
+
+npm run check (merged tree): 10 errors / 437 warnings, none in bucket-touched files. Ten TS
+errors I introduced (unnarrowed form union on the history page) fixed before commit.
+NOT YET EXERCISED against a database -- first real test is the preview.

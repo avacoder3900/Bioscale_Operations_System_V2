@@ -175,7 +175,8 @@
 			(r.reason ?? '').toLowerCase().includes(q)
 		);
 	});
-	const discardedInLog = $derived(data.changeLog.filter(r => r.type === 'scrap').reduce((s, r) => s + Math.abs(r.qtyDelta), 0));
+	// Discards on a voided pass never really happened — they don't count as loss.
+	const discardedInLog = $derived(data.changeLog.filter(r => r.type === 'scrap' && !r.cycleVoided).reduce((s, r) => s + Math.abs(r.qtyDelta), 0));
 
 	// ── bucket log (every bucket, every state — retired included) ───────────
 	let regState = $state<'all' | 'available' | 'in_use' | 'quarantined' | 'retired'>('all');
@@ -217,6 +218,7 @@
 			case 'release': return { event: 'Emptied', moved: `${from ?? '?'} → available`, discarded: false };
 			case 'quarantine': return { event: 'Quarantined', moved: `residual at ${from ?? '?'}`, discarded: false };
 			case 'retire': return { event: 'Retired', moved: 'label killed', discarded: false };
+			case 'void': return { event: 'Pass voided', moved: 'inventory returned', discarded: false };
 			default: return { event: r.type, moved: '', discarded: false };
 		}
 	}
@@ -681,8 +683,9 @@
 						</thead>
 						<tbody>
 							{#each filteredLog as r (r.id)}
-								{@const d = describe(r)}
-								<tr class="border-b border-[var(--color-tron-border)]/40 {d.discarded ? 'bg-red-900/10' : ''}">
+								{@const d0 = describe(r)}
+								{@const d = r.cycleVoided && d0.discarded ? { ...d0, event: 'Discarded (voided pass)', discarded: false } : d0}
+								<tr class="border-b border-[var(--color-tron-border)]/40 {d.discarded ? 'bg-red-900/10' : ''} {r.cycleVoided ? 'opacity-60' : ''}" title={r.cycleVoided ? 'This pass was voided — its inventory was returned' : ''}>
 									<td class="whitespace-nowrap px-2 py-1 font-mono text-[10px] text-[var(--color-tron-text-secondary)]">{fmtAt(r.at)}</td>
 									<td class="whitespace-nowrap px-2 py-1 font-mono">
 										<a href="/manufacturing/cart-mfg/buckets/{r.bucketId}" class="text-[var(--color-tron-cyan)] hover:underline">{r.bucketId}</a>{#if r.cycleNumber != null}<span class="text-[var(--color-tron-text-secondary)"> #{r.cycleNumber}</span>{/if}

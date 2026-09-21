@@ -1,7 +1,11 @@
 # Bucket System — Pre-Serialization WIP Tracking (as built)
 
 **Started:** 2026-09-21 · **Last updated:** 2026-09-21
-**Branch:** `feat/bucket-system` (cut from `NEWDEV`) — **not merged**
+**Branch:** `feat/bucket-system` — **not merged**. Cut from `NEWDEV`, which turned out to be 564
+commits behind production; `origin/master` was merged **into** this branch on 2026-09-21
+(`f0e9176a`), so it now sits on current production code, 0 behind `master`.
+**Production branch is `master`** (Vercel deploys prod from it). `NEWDEV` is GitHub's default but
+stale; `main` is older still.
 **Status:** Built and deployed to Vercel preview. Reviewed by the user on the preview only; never
 exercised in production, no automated tests. See §12 before merging.
 **Scope:** A barcode-tracked container system for counting cartridges through the four
@@ -203,7 +207,8 @@ stage              String   // 'raw' | 'unpressed' | 'pressed' | 'qr_pending'
 quantity           Number   // current count
 openedQty          Number   // count at creation (shrinkage visible by diff)
 sourceLots         [{ partNumber, lotId, scannedAt }]   // 104 at open; 106 added at labeling
-status             String   // 'open' | 'consumed' | 'scrapped'
+status             String   // 'open' | 'consumed' | 'scrapped' | 'voided'
+voidedAt, voidedBy, voidReason, statusBeforeVoid       // set by voidCycle() — §12.2
 emptyConfirmedBy   { _id, username }
 emptyConfirmedAt   Date
 closedWithResidual Boolean  // a residual was found after close — count-accuracy signal
@@ -234,7 +239,7 @@ Immutable ledger (`applyImmutableMiddleware`).
 ```ts
 _id, bucketId, cycleId?          // cycleId absent for bucket-only events
 type         // 'mint' | 'relabel' | 'create' | 'advance' | 'adjust' | 'scrap' | 'consume'
-             // | 'merge_in' | 'merge_out' | 'release' | 'quarantine' | 'retire'
+             // | 'merge_in' | 'merge_out' | 'release' | 'quarantine' | 'retire' | 'void'
 fromStage, toStage
 qtyBefore, qtyAfter, qtyDelta
 reason       // required for adjust
@@ -253,7 +258,7 @@ derived by replaying it — it feeds the change log, the history page and future
 |---|---|
 | `cartridge-record.ts` | `backing.bucketCycleId` (the real link, sparse index) and `backing.bucketBarcode` (denormalized BKT id, for search) |
 | `lot-record.ts` | `bucketCycleId` beside the previously unused `bucketBarcode` |
-| `manual-cartridge-removal.ts` | `bucketCycleId` (sparse index), `bucketId`, `journal` |
+| `manual-cartridge-removal.ts` | `bucketCycleId` (sparse index), `bucketId`, `journal`; `voidedAt` / `voidReason` when its pass is voided |
 
 `LotRecord.qrCodeRef` carries a unique index, but WI-01 mints that itself as `WI01-xxxx`; the
 reused bucket id lands in the plain non-unique `bucketBarcode` field. **No collision.** Verified.
@@ -289,6 +294,11 @@ raw ──→ unpressed ──→ pressed ──→ qr_pending ──→ consume
 ```
 
 One step forward only. No skipping, no reversing.
+
+Any pass — open or closed — can additionally be **voided** (`status: 'voided'`) by an admin when
+it never really happened: test data, or a cycle opened against the wrong lot. Voiding returns
+what the pass took from inventory and frees the tub if it was open (§12.2). It is refused if
+cartridges were serialized from the pass.
 
 ---
 
@@ -452,6 +462,8 @@ touched inventory. Reversing test activity means reversing the *start*, *labelin
 Full history for one tub (accepts BKT id or sticker): every pass, expandable to its ledger, the
 WI-01 batches it fed, the cartridges serialized from it (via `backing.bucketCycleId`),
 discrepancies and residuals; the scrap journal; bucket-level events (mint, relabel, retire).
+Admins get **Void this pass…** inside each expanded pass (§12.2); voided passes and their scrap
+entries are shown marked, never hidden.
 
 ### 9.3 Summary views (all read-only, all deep-link to the board)
 
@@ -561,6 +573,7 @@ last, then the read-only views — then iterated on the preview. Code commits on
 | `1dca1661` | Label: QR Pending → QR Scan-In Pending |
 | `e59307be` | Available card: "empty tubs" → "empty buckets" |
 | `b7e2c262` | Bucket log under the change log — every bucket, every status, retired included |
+| `f0e9176a` | **Merge of `origin/master` (564 commits) into the branch**; collision guard extended to `state-change`, `wax-filling` test-mode upsert and `reagent-filling` stub upsert; `findBucketLabels()` |
 
 `npm run check` after every change: **10 errors / 434 warnings, none in any file this branch
 touches.** The 10 are pre-existing (`r2.ts` Buffer/BodyInit, `AskBimsWidget.svelte` unreachable
@@ -584,17 +597,36 @@ comparison, 8× implicit-any in `assembly/[sessionId]/+page.svelte`). Note `prog
   with the second row's destination at the wrong stage → whole report refused, first destination's
   count unchanged; (c) advance with 2 discarded → change log shows a red −2 row then the move.
 
-### 12.2 Test data and inventory
+### 12.2 Test data and inventory — voiding a pass
 
 The previews write to whatever Atlas database the preview environment is configured with —
 **unconfirmed whether that is production.** Test cycles debited real `PT-CT-104` / `PT-CT-106`
-lot quantity (on start, labeling and sticker assignment — *not* on scrap, §8). A proposed
-**"Void test pass"** admin action — compensating entries for exactly what a cycle consumed,
-against the same lots, fixing both the part total and the per-lot remaining (an `adjustment`
-row alone does not offset the per-lot sum) — is **designed but not built**, awaiting: which
-database the preview uses, and whether any test buckets went through WI-01 (which also creates
-real `CartridgeRecord`s and consumes `PT-CT-112`). Ledger, audit log and removal rows are
-immutable by design and would be marked, not deleted.
+lot quantity (on start, labeling and sticker assignment — *not* on scrap, §8).
+
+**`voidCycle()` — built.** Admin-only (`manufacturing:admin`), from *Void this pass…* on the
+bucket history page, reason required.
+
+- **What it reverses** is read from the inventory ledger itself: every bucket debit is stamped
+  `manufacturingRunId = cycleId` (start, labeling, adjust-up), so the pass's net debit per
+  (part, lot) is a query, not a guess.
+- **How**: one compensating row per (part, lot) — a **negative `consumption`** against the same
+  lot, carrying the model's `retractedBy/At/retractionReason` — plus `$inc` on the part's
+  `inventoryCount`. The negative-consumption shape is deliberate: per-lot "N left" is computed
+  by summing consumption rows per lot, so an `adjustment` would fix the part total but leave the
+  lot looking consumed.
+- **Atomic claim**: the cycle is flipped to `voided` with a conditional update *before* any
+  compensation is written, so a double-submit cannot return inventory twice.
+- **Refused (409)** if any `CartridgeRecord` has `backing.bucketCycleId` = this pass — that
+  material was genuinely used. Test buckets that went through WI-01 therefore need manual
+  cleanup (the cartridges themselves, and the `PT-CT-112` WI-01 withdrew).
+- **Not reversed, by design**: QR-sticker assignments (stamped with the bucket id, and the
+  sticker really is on the tub).
+- **Nothing is deleted.** The pass keeps its record and ledger (`void` row added), its scrap
+  removals get `voidedAt`, the inventory ledger keeps both the debit and its retraction, and the
+  change log greys the pass's rows and stops counting its discards as loss. An open pass frees
+  its tub (`available`, empty-check armed).
+
+Recent Checkouts on `/manufacturing/cart-mfg/scrap` does not yet badge voided rows.
 
 ### 12.3 Decisions still needed from the floor
 
@@ -609,7 +641,23 @@ immutable by design and would be marked, not deleted.
    floor drains through the unchanged manual WI-01 flow. Walking existing tubs through the stages
    would put fake dwell times in an immutable ledger.
 
-### 12.4 Deferred / noted
+### 12.4 Known risks in how buckets meet the existing flows
+
+- **Double-debit when the bucket is not selected at WI-01.** A bucket's blanks were debited at
+  *start* and its labels at *labeling*. If that same physical material is run through WI-01's
+  manual path (no Source bucket chosen), WI-01 debits `PT-CT-104` and `PT-CT-106` **again** —
+  it has no way to know they came from a tub — and the bucket never drains, sitting at QR
+  Scan-In Pending forever. Nothing prevents this today. Options: a warning on WI-01 whenever
+  QR-pending buckets exist; or make the bucket mandatory once cutover is complete.
+- **WI-01's "Can Make" card and low-inventory banner understate.** They compute from part
+  inventory, which no longer includes blanks/labels sitting in buckets — even though QR-pending
+  carts are exactly what can be made next.
+- **Broken link.** Cartridge-admin search matches cartridge id and two legacy lot fields, not
+  `backing.bucketBarcode`, so the "+N more" link on a bucket's history page (which searches by
+  BKT id) finds nothing. One-line fix in `cartridge-admin/+page.server.ts`.
+- **Ask BIMS and the agent API do not know buckets exist.**
+
+### 12.5 Deferred / noted
 
 4. **Press capture** — removed (§2.1); re-add at `unpressed → pressed` if ever needed.
 5. **Thermoseal** — untouched (§3.4). If bucket-level tracking is wanted, it attaches at

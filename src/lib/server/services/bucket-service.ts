@@ -20,7 +20,8 @@
 import { connectDB } from '$lib/server/db/connection';
 import {
 	ProductionBucket, BucketCycle, BucketTransaction, AuditLog,
-	ReceivingLot, ManualCartridgeRemoval, CartridgeRecord
+	ReceivingLot, ManualCartridgeRemoval, CartridgeRecord,
+	InventoryTransaction, PartDefinition
 } from '$lib/server/db/models';
 import { generateId } from '$lib/server/db/utils';
 import { recordTransaction, resolvePartId } from './inventory-transaction';
@@ -88,7 +89,7 @@ interface TxInput {
 	bucketId: string;
 	cycleId?: string | null;
 	type: 'mint' | 'relabel' | 'create' | 'advance' | 'adjust' | 'scrap' | 'consume'
-		| 'merge_in' | 'merge_out' | 'release' | 'quarantine' | 'retire';
+		| 'merge_in' | 'merge_out' | 'release' | 'quarantine' | 'retire' | 'void';
 	fromStage?: string | null;
 	toStage?: string | null;
 	qtyBefore?: number;
@@ -722,6 +723,142 @@ export async function consumeFromCycle(input: ConsumeInput): Promise<{ qtyBefore
 	return { qtyBefore: before, qtyAfter: after, overrun };
 }
 
+// ── void a pass (§12.2) ───────────────────────────────────────────────────
+
+export interface VoidCycleInput {
+	cycleId: string;
+	reason: string;
+	user: Operator;
+}
+
+export interface VoidCycleResult {
+	cycleId: string;
+	bucketId: string;
+	cycleNumber: number;
+	restored: { partNumber: string | null; lotId: string | null; quantity: number }[];
+	removalsMarked: number;
+}
+
+/**
+ * Void a pass that never really happened — test data, or a cycle opened
+ * against the wrong lot — and give back exactly what it took from inventory.
+ *
+ * What a pass debited is read from the inventory ledger itself: every bucket
+ * debit is stamped manufacturingRunId = cycleId (start, labeling, adjust-up).
+ * Each (part, lot) group gets ONE compensating row: a NEGATIVE `consumption`
+ * against the same lot, marked with the model's retraction fields. That shape
+ * is deliberate — per-lot "N left" is computed by summing consumption rows
+ * per lot, so an `adjustment` row would fix the part total but leave the lot
+ * looking consumed. The part's inventoryCount is $inc'd by the same amount.
+ *
+ * NOT reversible here, by design:
+ *  - a pass that had cartridges serialized from it at WI-01 — that material
+ *    was genuinely used (refused with a 409);
+ *  - QR-sticker assignments (stamped with the bucket id, not a cycle) — the
+ *    sticker really is on the tub.
+ *
+ * Nothing is deleted. The cycle becomes status 'voided', its scrap removals
+ * are marked, the ledger gets a `void` row, and the inventory ledger keeps
+ * both the original debit and its retraction.
+ */
+export async function voidCycle(input: VoidCycleInput): Promise<VoidCycleResult> {
+	await connectDB();
+	const reason = (input.reason ?? '').trim();
+	if (!reason) throw new BucketError('Say why this pass is being voided.');
+	const cycle = await BucketCycle.findById(input.cycleId).lean() as any;
+	if (!cycle) throw new BucketError('Pass not found.', 404);
+	if (cycle.status === 'voided') throw new BucketError(`${cycleLabel(cycle.bucketId, cycle.cycleNumber)} is already voided.`, 409);
+
+	const serialized = await CartridgeRecord.countDocuments({ 'backing.bucketCycleId': cycle._id });
+	if (serialized > 0) {
+		throw new BucketError(
+			`${serialized} cartridge${serialized === 1 ? ' was' : 's were'} serialized from ${cycleLabel(cycle.bucketId, cycle.cycleNumber)} at WI-01 — that material was really used, so this pass cannot be voided.`,
+			409, 'SERIALIZED'
+		);
+	}
+
+	// Claim the void atomically so a double-submit cannot reverse twice.
+	const now = new Date();
+	const by = { _id: input.user._id, username: input.user.username };
+	const claimed = await BucketCycle.findOneAndUpdate(
+		{ _id: cycle._id, status: { $ne: 'voided' } },
+		{ $set: { status: 'voided', statusBeforeVoid: cycle.status, voidedAt: now, voidedBy: by, voidReason: reason, closedAt: cycle.closedAt ?? now } }
+	).lean();
+	if (!claimed) throw new BucketError(`${cycleLabel(cycle.bucketId, cycle.cycleNumber)} is already voided.`, 409);
+
+	// Net debit per (part, lot) for this pass, straight from the inventory ledger.
+	const debits = await InventoryTransaction.find({ manufacturingRunId: cycle._id, transactionType: 'consumption' })
+		.select('partDefinitionId lotId quantity').lean() as any[];
+	const groups = new Map<string, { partDefinitionId: string | null; lotId: string | null; net: number }>();
+	for (const d of debits) {
+		const key = `${d.partDefinitionId ?? ''}|${d.lotId ?? ''}`;
+		const g = groups.get(key) ?? { partDefinitionId: d.partDefinitionId ?? null, lotId: d.lotId ?? null, net: 0 };
+		g.net += Number(d.quantity ?? 0);
+		groups.set(key, g);
+	}
+
+	const label = cycleLabel(cycle.bucketId, cycle.cycleNumber);
+	const restored: VoidCycleResult['restored'] = [];
+	for (const g of groups.values()) {
+		if (!(g.net > 0)) continue;
+		let previousQuantity = 0;
+		let partNumber: string | null = null;
+		if (g.partDefinitionId) {
+			const part = await PartDefinition.findById(g.partDefinitionId).select('inventoryCount partNumber').lean() as any;
+			previousQuantity = part?.inventoryCount ?? 0;
+			partNumber = part?.partNumber ?? null;
+			await PartDefinition.updateOne({ _id: g.partDefinitionId }, { $inc: { inventoryCount: g.net } });
+		}
+		const note = `VOID ${label}: returned ${g.net}x ${partNumber ?? 'part'}${g.lotId ? ` to lot ${g.lotId}` : ''} — ${reason}`;
+		await InventoryTransaction.create({
+			_id: generateId(),
+			transactionType: 'consumption',
+			partDefinitionId: g.partDefinitionId ?? undefined,
+			lotId: g.lotId ?? undefined,
+			quantity: -g.net, // negative consumption: nets the lot's consumed total back down
+			previousQuantity,
+			newQuantity: previousQuantity + g.net,
+			manufacturingStep: 'backing',
+			manufacturingRunId: cycle._id,
+			operatorId: input.user._id,
+			operatorUsername: input.user.username,
+			performedBy: input.user.username,
+			performedAt: now,
+			notes: note,
+			reason: note,
+			retractedBy: input.user.username,
+			retractedAt: now,
+			retractionReason: reason
+		});
+		restored.push({ partNumber, lotId: g.lotId, quantity: g.net });
+	}
+
+	// An open pass was holding the tub — free it, with the empty check armed.
+	if (cycle.status === 'open') {
+		await ProductionBucket.updateOne(
+			{ _id: cycle.bucketId, currentCycleId: cycle._id },
+			{ $set: { state: 'available', currentCycleId: null, spotCheckPending: true } }
+		);
+	}
+
+	const marked = await ManualCartridgeRemoval.updateMany(
+		{ bucketCycleId: cycle._id, voidedAt: { $exists: false } },
+		{ $set: { voidedAt: now, voidReason: reason } }
+	);
+
+	await logTx({
+		bucketId: cycle.bucketId, cycleId: cycle._id, type: 'void',
+		fromStage: cycle.stage, toStage: cycle.stage, qtyBefore: cycle.quantity ?? 0, qtyAfter: 0,
+		reason: `${reason} — returned ${restored.map(r => `${r.quantity}x ${r.partNumber ?? 'part'}`).join(', ') || 'nothing (no debits found)'}`,
+		operator: input.user
+	});
+	await audit('bucket_cycles', cycle._id, 'VOID', input.user,
+		{ status: 'voided', restored, removalsMarked: marked.modifiedCount ?? 0 },
+		{ status: cycle.status, quantity: cycle.quantity }, reason);
+
+	return { cycleId: cycle._id, bucketId: cycle.bucketId, cycleNumber: cycle.cycleNumber, restored, removalsMarked: marked.modifiedCount ?? 0 };
+}
+
 // ── residual flow (§7) ────────────────────────────────────────────────────
 
 export interface ResidualItem {
@@ -1004,6 +1141,7 @@ export interface ChangeLogRow {
 	at: string | null;
 	bucketId: string;
 	cycleNumber: number | null; // null for bucket-only events (mint, relabel, retire)
+	cycleVoided: boolean;       // the pass was voided — its discards don't count as real loss
 	type: string;
 	fromStage: string | null;
 	toStage: string | null;
@@ -1026,14 +1164,16 @@ export async function changeLog(limit = 150): Promise<ChangeLogRow[]> {
 	const tx = await BucketTransaction.find({}).sort({ createdAt: -1 }).limit(limit).lean() as any[];
 	const cycleIds = Array.from(new Set(tx.map(t => t.cycleId).filter(Boolean)));
 	const cycles = cycleIds.length
-		? await BucketCycle.find({ _id: { $in: cycleIds } }).select('_id cycleNumber').lean() as any[]
+		? await BucketCycle.find({ _id: { $in: cycleIds } }).select('_id cycleNumber status').lean() as any[]
 		: [];
 	const numByCycle = new Map<string, number>(cycles.map(c => [c._id, c.cycleNumber]));
+	const voidedCycles = new Set<string>(cycles.filter(c => c.status === 'voided').map(c => c._id));
 	return tx.map(t => ({
 		id: t._id,
 		at: t.createdAt ? new Date(t.createdAt).toISOString() : null,
 		bucketId: t.bucketId,
 		cycleNumber: t.cycleId ? (numByCycle.get(t.cycleId) ?? null) : null,
+		cycleVoided: !!t.cycleId && voidedCycles.has(t.cycleId),
 		type: t.type,
 		fromStage: t.fromStage ?? null,
 		toStage: t.toStage ?? null,

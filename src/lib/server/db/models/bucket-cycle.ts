@@ -57,9 +57,16 @@ const bucketCycleSchema = new Schema({
 	sourceLots: { type: [sourceLotSchema], default: [] },
 	status: {
 		type: String,
-		enum: ['open', 'consumed', 'scrapped'],
+		// 'voided' = the pass never really happened (test data, or opened against
+		// the wrong lot). Its inventory debits were reversed by voidCycle(); the
+		// record and its ledger stay, marked, never deleted.
+		enum: ['open', 'consumed', 'scrapped', 'voided'],
 		default: 'open'
 	},
+	voidedAt: Date,
+	voidedBy: operatorRef,
+	voidReason: String,
+	statusBeforeVoid: String,
 	emptyConfirmedBy: operatorRef,
 	emptyConfirmedAt: Date,
 	closedWithResidual: { type: Boolean, default: false },
