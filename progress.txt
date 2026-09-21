@@ -4330,3 +4330,10 @@ plain stage move: no prompt, no pressEquipment* fields on BucketCycle, pressOpti
 KNOWN_PRESSES deleted from bucket-service, press display dropped from the board panel, the
 history page and the pipeline rows (column relabelled "Source lots"). Plan doc sections 2.1,
 6.2 and 12.4 updated. npm run check unchanged (10 / 434, none in touched files).
+Deployment: preview -- https://bioscale-operations-system-mongodb-l3vyhlfgk-brevitest.vercel.app
+  (brevitest scope; cookie-session gated, 302 to /login)
+Source: branch feat/bucket-system @ commit 7628a469
+Retrieve this exact code: git checkout feat/bucket-system at commit 7628a469
+What this deployment is for: Unpressed -> Pressed with no press prompt. Supersedes the
+  dd123ef6 preview.
+Build status: success (brevitest scope, 19:12Z).
