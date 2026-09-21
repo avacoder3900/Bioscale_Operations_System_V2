@@ -18,6 +18,22 @@ const validationSessionSchema = new Schema({
 	spuUdi: String, particleDeviceId: String,
 	rawData: Schema.Types.Mixed,
 	magResults: Schema.Types.Mixed,
+	// Per-well field magnitudes (chA_mag/chB_mag/chC_mag) ride inside magResults,
+	// which is Mixed and needs no declaration. This session-level rollup is a NEW
+	// TOP-LEVEL field, and strict mode drops undeclared top-level fields WITHOUT
+	// erroring — the same failure mode that quietly broke CV on main. It must stay
+	// declared here. See $lib/server/magnetometer-field.
+	fieldSummary: {
+		type: {
+			unit: String,
+			wellCount: Number,
+			minMag: Number,
+			maxMag: Number,
+			meanMag: Number
+		},
+		default: null,
+		_id: false
+	},
 	overallPassed: Boolean,
 	failureReasons: [String],
 	criteriaUsed: Schema.Types.Mixed,

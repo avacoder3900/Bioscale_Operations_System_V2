@@ -9,6 +9,7 @@
 		chA_Y: number | null; chB_Y: number | null; chC_Y: number | null;
 		chA_Z: number | null; chB_Z: number | null; chC_Z: number | null;
 		chA_T: number | null; chB_T: number | null; chC_T: number | null;
+		chA_mag: number | null; chB_mag: number | null; chC_mag: number | null;
 		[key: string]: any;
 	}
 
@@ -52,12 +53,6 @@
 
 	function fmt(v: number | null): string {
 		return v == null || Number.isNaN(v) ? '—' : v.toFixed(1);
-	}
-
-	function mag(x: number | null, y: number | null, z: number | null): number | null {
-		if (x == null || y == null || z == null) return null;
-		if (Number.isNaN(x) || Number.isNaN(y) || Number.isNaN(z)) return null;
-		return Math.sqrt(x * x + y * y + z * z);
 	}
 
 </script>
@@ -140,15 +135,15 @@
 										<td class="px-2 py-2 text-right font-mono tron-text-muted" style="border-left: 1px solid var(--color-tron-border);">{fmt(well.chA_X)}</td>
 										<td class="px-2 py-2 text-right font-mono tron-text-muted">{fmt(well.chA_Y)}</td>
 										<td class="px-2 py-2 text-right font-mono tron-text-primary">{fmt(well.chA_Z)}</td>
-										<td class="px-2 py-2 text-right font-mono font-bold tron-text-primary">{fmt(mag(well.chA_X, well.chA_Y, well.chA_Z))}</td>
+										<td class="px-2 py-2 text-right font-mono font-bold tron-text-primary">{fmt(well.chA_mag)}</td>
 										<td class="px-2 py-2 text-right font-mono tron-text-muted" style="border-left: 1px solid var(--color-tron-border);">{fmt(well.chB_X)}</td>
 										<td class="px-2 py-2 text-right font-mono tron-text-muted">{fmt(well.chB_Y)}</td>
 										<td class="px-2 py-2 text-right font-mono tron-text-primary">{fmt(well.chB_Z)}</td>
-										<td class="px-2 py-2 text-right font-mono font-bold tron-text-primary">{fmt(mag(well.chB_X, well.chB_Y, well.chB_Z))}</td>
+										<td class="px-2 py-2 text-right font-mono font-bold tron-text-primary">{fmt(well.chB_mag)}</td>
 										<td class="px-2 py-2 text-right font-mono tron-text-muted" style="border-left: 1px solid var(--color-tron-border);">{fmt(well.chC_X)}</td>
 										<td class="px-2 py-2 text-right font-mono tron-text-muted">{fmt(well.chC_Y)}</td>
 										<td class="px-2 py-2 text-right font-mono tron-text-primary">{fmt(well.chC_Z)}</td>
-										<td class="px-2 py-2 text-right font-mono font-bold tron-text-primary">{fmt(mag(well.chC_X, well.chC_Y, well.chC_Z))}</td>
+										<td class="px-2 py-2 text-right font-mono font-bold tron-text-primary">{fmt(well.chC_mag)}</td>
 									{/if}
 								</tr>
 							{/each}
