@@ -2,7 +2,7 @@
 	import { enhance } from '$app/forms';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
-	import type { BoardBucket, BoardCycle, BucketStage, StageCounts } from '$lib/server/services/bucket-service';
+	import type { BoardBucket, BoardCycle, BucketStage, ChangeLogRow, StageCounts } from '$lib/server/services/bucket-service';
 
 	type ActionResult = { success?: boolean; error?: string; code?: string | null; [k: string]: unknown };
 	interface Props {
@@ -12,6 +12,7 @@
 			board: { cycles: BoardCycle[]; available: BoardBucket[]; quarantined: BoardBucket[] };
 			counts: StageCounts;
 			lots: Record<string, { lotId: string; remaining: number }[]>;
+			changeLog: ChangeLogRow[];
 			canAdjust: boolean;
 			scan: { kind: 'bucket' | 'search'; bucket?: any; cycle?: any; matches?: { bucketId: string; barcode: string | null; state: string; cycle: any }[] } | null;
 			scanQuery: string;
@@ -147,6 +148,47 @@
 		}
 		if (form.residual?.success || form.retire?.success) panel = { kind: 'none' };
 	});
+
+	// ── change log ──────────────────────────────────────────────────────────
+	let logFilter = $state('');
+	const filteredLog = $derived.by(() => {
+		const q = logFilter.trim().toLowerCase();
+		if (!q) return data.changeLog;
+		return data.changeLog.filter(r =>
+			r.bucketId.toLowerCase().includes(q) ||
+			(r.operator ?? '').toLowerCase().includes(q) ||
+			r.type.includes(q) ||
+			(r.journal ?? '').toLowerCase().includes(q) ||
+			(r.reason ?? '').toLowerCase().includes(q)
+		);
+	});
+	const discardedInLog = $derived(data.changeLog.filter(r => r.type === 'scrap').reduce((s, r) => s + Math.abs(r.qtyDelta), 0));
+
+	// One human line per ledger event: what happened and where it went.
+	function describe(r: ChangeLogRow): { event: string; moved: string; discarded: boolean } {
+		const from = r.fromStage ? labelFor(r.fromStage) : null;
+		const to = r.toStage ? labelFor(r.toStage) : null;
+		switch (r.type) {
+			case 'mint': return { event: 'Minted', moved: 'new tub', discarded: false };
+			case 'relabel': return { event: 'Sticker', moved: r.reason ?? '', discarded: false };
+			case 'create': return { event: 'Started', moved: `→ ${to ?? 'Raw'}`, discarded: false };
+			case 'advance': return { event: 'Moved', moved: `${from ?? '?'} → ${to ?? '?'}`, discarded: false };
+			case 'consume': return { event: 'Drawn by WI-01', moved: `${from ?? 'QR Pending'} → serialized`, discarded: false };
+			case 'scrap': return { event: 'Discarded', moved: `at ${from ?? '?'}`, discarded: true };
+			case 'adjust': return { event: 'Count corrected', moved: `at ${from ?? '?'}`, discarded: false };
+			case 'merge_in': return { event: 'Residual received', moved: `at ${to ?? '?'}`, discarded: false };
+			case 'merge_out': return { event: 'Residual merged out', moved: `from ${from ?? '?'}`, discarded: false };
+			case 'release': return { event: 'Emptied', moved: `${from ?? '?'} → available`, discarded: false };
+			case 'quarantine': return { event: 'Quarantined', moved: `residual at ${from ?? '?'}`, discarded: false };
+			case 'retire': return { event: 'Retired', moved: 'label killed', discarded: false };
+			default: return { event: r.type, moved: '', discarded: false };
+		}
+	}
+	function fmtAt(iso: string | null): string {
+		if (!iso) return '—';
+		const d = new Date(iso);
+		return Number.isNaN(d.getTime()) ? '—' : d.toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' });
+	}
 
 	// enhance's default update() re-runs load on success and failure alike, so
 	// the board refreshes either way; reset:false keeps a failed form's values.
@@ -528,4 +570,62 @@
 			</div>
 		</aside>
 	</div>
+
+	<!-- Change log — every ledger event across all buckets, newest first.
+	     Collapsed by default; discards are flagged and totalled so a loss
+	     never hides inside a list of routine moves. -->
+	<details class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)]">
+		<summary class="flex cursor-pointer flex-wrap items-center justify-between gap-2 px-4 py-3">
+			<span class="text-sm font-medium text-[var(--color-tron-text)]">Change log <span class="text-xs text-[var(--color-tron-text-secondary)]">(last {data.changeLog.length} events)</span></span>
+			{#if discardedInLog > 0}
+				<span class="rounded border border-red-500/40 bg-red-900/20 px-2 py-0.5 text-[10px] uppercase tracking-wider text-red-300">{discardedInLog} cart{discardedInLog === 1 ? '' : 's'} discarded in this window</span>
+			{:else}
+				<span class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">no discards in this window</span>
+			{/if}
+		</summary>
+		<div class="border-t border-[var(--color-tron-border)] p-3">
+			<input type="text" bind:value={logFilter} placeholder="filter by bucket, operator, event, or note…"
+				class="mb-3 w-full max-w-md rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-3 py-1.5 text-xs text-[var(--color-tron-text)] placeholder:text-[var(--color-tron-text-secondary)]/50 focus:border-[var(--color-tron-cyan)] focus:outline-none" />
+			{#if filteredLog.length === 0}
+				<p class="py-4 text-center text-xs text-[var(--color-tron-text-secondary)]">{data.changeLog.length === 0 ? 'Nothing has happened yet.' : 'No events match the filter.'}</p>
+			{:else}
+				<div class="overflow-x-auto">
+					<table class="w-full text-xs">
+						<thead>
+							<tr class="border-b border-[var(--color-tron-border)] text-left text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">
+								<th class="px-2 py-1">When</th>
+								<th class="px-2 py-1">Lot</th>
+								<th class="px-2 py-1">Event</th>
+								<th class="px-2 py-1">Moved</th>
+								<th class="px-2 py-1 text-right">Carts</th>
+								<th class="px-2 py-1">By</th>
+								<th class="px-2 py-1">Note</th>
+							</tr>
+						</thead>
+						<tbody>
+							{#each filteredLog as r (r.id)}
+								{@const d = describe(r)}
+								<tr class="border-b border-[var(--color-tron-border)]/40 {d.discarded ? 'bg-red-900/10' : ''}">
+									<td class="whitespace-nowrap px-2 py-1 font-mono text-[10px] text-[var(--color-tron-text-secondary)]">{fmtAt(r.at)}</td>
+									<td class="whitespace-nowrap px-2 py-1 font-mono">
+										<a href="/manufacturing/cart-mfg/buckets/{r.bucketId}" class="text-[var(--color-tron-cyan)] hover:underline">{r.bucketId}</a>{#if r.cycleNumber != null}<span class="text-[var(--color-tron-text-secondary)"> #{r.cycleNumber}</span>{/if}
+									</td>
+									<td class="whitespace-nowrap px-2 py-1 font-semibold {d.discarded ? 'text-red-300' : 'text-[var(--color-tron-text)]'}">{d.event}</td>
+									<td class="whitespace-nowrap px-2 py-1 text-[var(--color-tron-text-secondary)]">{d.moved}</td>
+									<td class="whitespace-nowrap px-2 py-1 text-right tabular-nums {d.discarded ? 'text-red-300' : 'text-[var(--color-tron-text)]'}">
+										{#if d.discarded}−{Math.abs(r.qtyDelta)}{:else if r.type === 'consume'}−{Math.abs(r.qtyDelta)} <span class="text-[var(--color-tron-text-secondary)]">({r.qtyAfter} left)</span>{:else if r.qtyDelta !== 0}{r.qtyDelta > 0 ? '+' : ''}{r.qtyDelta}{:else if r.type === 'advance'}{r.qtyAfter}{:else}—{/if}
+									</td>
+									<td class="whitespace-nowrap px-2 py-1 text-[var(--color-tron-text-secondary)]">{r.operator ?? '—'}</td>
+									<td class="px-2 py-1 text-[var(--color-tron-text-secondary)]">
+										{#if r.type === 'consume' && r.relatedId}<a href="/manufacturing/cart-mfg/lots/{r.relatedId}" class="text-[var(--color-tron-cyan)] hover:underline">WI-01 batch</a>{#if r.reason} · {r.reason}{/if}
+										{:else}{r.journal ?? r.reason ?? ''}{/if}
+									</td>
+								</tr>
+							{/each}
+						</tbody>
+					</table>
+				</div>
+			{/if}
+		</div>
+	</details>
 </div>

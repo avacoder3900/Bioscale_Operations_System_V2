@@ -897,6 +897,54 @@ export async function boardData(): Promise<{ cycles: BoardCycle[]; available: Bo
 	};
 }
 
+export interface ChangeLogRow {
+	id: string;
+	at: string | null;
+	bucketId: string;
+	cycleNumber: number | null; // null for bucket-only events (mint, relabel, retire)
+	type: string;
+	fromStage: string | null;
+	toStage: string | null;
+	qtyBefore: number;
+	qtyAfter: number;
+	qtyDelta: number;
+	reason: string | null;
+	journal: string | null;
+	relatedId: string | null; // LotRecord._id on consume; removal id on scrap; peer cycle on merge
+	operator: string | null;
+}
+
+/**
+ * Board-wide change log (newest first): every ledger event across all
+ * buckets, with the pass number joined in so a row reads 'BKT-000123 #4'.
+ * The ledger is the source — nothing here is derived from current state.
+ */
+export async function changeLog(limit = 150): Promise<ChangeLogRow[]> {
+	await connectDB();
+	const tx = await BucketTransaction.find({}).sort({ createdAt: -1 }).limit(limit).lean() as any[];
+	const cycleIds = Array.from(new Set(tx.map(t => t.cycleId).filter(Boolean)));
+	const cycles = cycleIds.length
+		? await BucketCycle.find({ _id: { $in: cycleIds } }).select('_id cycleNumber').lean() as any[]
+		: [];
+	const numByCycle = new Map<string, number>(cycles.map(c => [c._id, c.cycleNumber]));
+	return tx.map(t => ({
+		id: t._id,
+		at: t.createdAt ? new Date(t.createdAt).toISOString() : null,
+		bucketId: t.bucketId,
+		cycleNumber: t.cycleId ? (numByCycle.get(t.cycleId) ?? null) : null,
+		type: t.type,
+		fromStage: t.fromStage ?? null,
+		toStage: t.toStage ?? null,
+		qtyBefore: t.qtyBefore ?? 0,
+		qtyAfter: t.qtyAfter ?? 0,
+		qtyDelta: t.qtyDelta ?? 0,
+		reason: t.reason ?? null,
+		journal: t.journal ?? null,
+		relatedId: t.relatedId ?? null,
+		operator: t.operator?.username ?? null
+	}));
+}
+
 /** Full history for one tub: every cycle it has held, plus the ledger. */
 export async function bucketHistory(bucketId: string): Promise<{ bucket: any; cycles: any[]; transactions: any[]; removals: any[] } | null> {
 	await connectDB();

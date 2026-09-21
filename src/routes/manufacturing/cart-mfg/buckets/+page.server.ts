@@ -8,7 +8,7 @@ import { connectDB, ReceivingLot, InventoryTransaction } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
 import {
 	BucketError, BUCKET_STAGES, STAGE_LABELS, CARTRIDGE_BLANK_PART, BARCODE_LABEL_PART,
-	boardData, stageCounts, resolveScan, isBucketStage,
+	boardData, stageCounts, resolveScan, isBucketStage, changeLog,
 	startCycle, advanceCycle, adjustCycle, scrapFromCycle, reportResidual, retireBucket
 } from '$lib/server/services/bucket-service';
 import type { Actions, PageServerLoad } from './$types';
@@ -50,11 +50,12 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	const focusStage = url.searchParams.get('stage') ?? '';
 	const q = url.searchParams.get('q') ?? '';
 
-	const [board, counts, lots, scan] = await Promise.all([
+	const [board, counts, lots, scan, log] = await Promise.all([
 		boardData(),
 		stageCounts(),
 		availableLots([CARTRIDGE_BLANK_PART, BARCODE_LABEL_PART]),
-		q ? resolveScan(q) : Promise.resolve(null)
+		q ? resolveScan(q) : Promise.resolve(null),
+		changeLog(150)
 	]);
 
 	return {
@@ -63,6 +64,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		board,
 		counts,
 		lots,
+		changeLog: log,
 		canAdjust: locals.user.roles.some(r => r.permissions.includes('manufacturing:admin') || r.permissions.includes('admin:full')),
 		scan: scan ? JSON.parse(JSON.stringify(scan)) : null,
 		scanQuery: q

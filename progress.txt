@@ -4337,3 +4337,12 @@ Retrieve this exact code: git checkout feat/bucket-system at commit 7628a469
 What this deployment is for: Unpressed -> Pressed with no press prompt. Supersedes the
   dd123ef6 preview.
 Build status: success (brevitest scope, 19:12Z).
+
+Follow-up 2026-09-21: expandable change log under the buckets board (user request: the lot,
+where it moved, who moved it, and whether carts were discarded). New changeLog(limit) read
+model in bucket-service returns the newest 150 BucketTransaction rows with the pass number
+joined in; the board renders them in a collapsed <details> under the grid: When / Lot
+(BKT id #pass, linked to history) / Event / Moved (from -> to stage) / Carts (delta, and
+remaining after a WI-01 draw) / By / Note (scrap journal; WI-01 batch link on consume).
+Discard rows are tinted red and the summary line totals carts discarded in the window;
+client-side filter by bucket, operator, event or note. npm run check unchanged (10 / 434).
