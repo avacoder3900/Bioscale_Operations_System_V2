@@ -39,6 +39,10 @@
 	let panel = $state<Panel>({ kind: 'none' });
 	// "Any carts discarded?" on the Advance form; reset whenever the mode changes.
 	let advanceDiscarded = $state(0);
+	// Residual report: which disposition is selected drives which inputs show.
+	let residualDisposition = $state<'merge' | 'scrap' | 'defer' | ''>('');
+	let residualCounts = $state<Record<string, number>>({ raw: 0, unpressed: 0, pressed: 0, qr_pending: 0 });
+	const residualTotal = $derived(Object.values(residualCounts).reduce((s, n) => s + (Number(n) || 0), 0));
 	let scanInput = $state('');
 	let shortList = $state<{ bucketId: string; state: string; hint: string }[]>([]);
 	let busy = $state(false);
@@ -74,8 +78,13 @@
 		if (panel.kind === 'cycle') panel = { kind: 'cycle', cycleId: panel.cycleId, mode };
 		advanceDiscarded = 0;
 	}
+	function openResidual(bucketId: string) {
+		residualDisposition = '';
+		residualCounts = { raw: 0, unpressed: 0, pressed: 0, qr_pending: 0 };
+		panel = { kind: 'residual', bucketId };
+	}
 	function openBucket(b: BoardBucket) {
-		if (b.state === 'quarantined') panel = { kind: 'residual', bucketId: b.bucketId };
+		if (b.state === 'quarantined') openResidual(b.bucketId);
 		else panel = { kind: 'start', bucketId: b.bucketId, step: b.spotCheckPending ? 'spot_check' : 'form' };
 	}
 
@@ -497,7 +506,7 @@
 						</div>
 						<div class="flex gap-2">
 							<a href="/manufacturing/cart-mfg/buckets/{b.bucketId}" class="text-[10px] text-[var(--color-tron-cyan)] hover:underline">history</a>
-							<button type="button" class="text-[10px] text-[var(--color-tron-text-secondary)] hover:underline" onclick={() => { panel = { kind: 'residual', bucketId: b.bucketId }; }}>report contents</button>
+							<button type="button" class="text-[10px] text-[var(--color-tron-text-secondary)] hover:underline" onclick={() => openResidual(b.bucketId)}>report contents</button>
 						</div>
 					</div>
 
@@ -507,7 +516,7 @@
 							<p class="mt-1 text-xs text-[var(--color-tron-text-secondary)]">Its last pass drained to zero. Look inside before filling.</p>
 							<div class="mt-3 grid grid-cols-2 gap-2">
 								<button type="button" class={btnPrimary} onclick={() => { panel = { kind: 'start', bucketId: b.bucketId, step: 'form' }; }}>Yes, empty</button>
-								<button type="button" class="w-full rounded-lg border border-[var(--color-tron-yellow)]/50 py-2.5 text-sm font-semibold text-[var(--color-tron-yellow)]" onclick={() => { panel = { kind: 'residual', bucketId: b.bucketId }; }}>No — there's some left</button>
+								<button type="button" class="w-full rounded-lg border border-[var(--color-tron-yellow)]/50 py-2.5 text-sm font-semibold text-[var(--color-tron-yellow)]" onclick={() => openResidual(b.bucketId)}>No — there's some left</button>
 							</div>
 						</div>
 					{:else}
@@ -543,37 +552,56 @@
 					</div>
 					<form method="POST" action="?/residual" use:enhance={enhanceBusy} class="mt-3 space-y-3">
 						<input type="hidden" name="bucketId" value={b.bucketId} />
-						<div class="grid grid-cols-2 gap-2">
-							<label class="block">
-								<span class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">How many</span>
-								<input type="number" name="quantity" min="1" required class={inputCls} />
-							</label>
-							<label class="block">
-								<span class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">At stage</span>
-								<select name="stage" required class={inputCls}>
-									{#each data.stages as s (s.key)}<option value={s.key} selected={s.key === (b.lastStage ?? 'raw')}>{s.label}</option>{/each}
-								</select>
-							</label>
+
+						<!-- One "How many" per stage — a tub can hold leftovers from several.
+						     With Merge selected, each stage with a count gets its own destination
+						     (it must be a bucket currently open at that same stage). -->
+						<div>
+							<p class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">How many, at each stage</p>
+							<div class="mt-1 space-y-1.5">
+								{#each data.stages as s (s.key)}
+									<div class="grid grid-cols-[1fr_72px] items-center gap-2">
+										<label for="qty_{s.key}" class="text-xs text-[var(--color-tron-text)]">
+											{s.label}{#if s.key === b.lastStage}<span class="ml-1 text-[9px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">last pass ended here</span>{/if}
+										</label>
+										<input id="qty_{s.key}" type="number" name="qty_{s.key}" min="0" bind:value={residualCounts[s.key]}
+											class="w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-2 py-1 text-right text-sm text-[var(--color-tron-text)] focus:border-[var(--color-tron-cyan)] focus:outline-none" />
+									</div>
+									{#if residualDisposition === 'merge' && (Number(residualCounts[s.key]) || 0) > 0}
+										<input type="text" name="dest_{s.key}" required placeholder="merge {residualCounts[s.key]} {s.label.toLowerCase()} into… (scan BKT- id or sticker)" autocomplete="off"
+											class="{inputCls} mt-0 font-mono text-xs" />
+									{/if}
+								{/each}
+							</div>
+							<p class="mt-1 text-right text-[10px] text-[var(--color-tron-text-secondary)]">Total <strong class="text-[var(--color-tron-text)]">{residualTotal}</strong></p>
 						</div>
+
 						<fieldset class="space-y-2">
-							<legend class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Disposition</legend>
-							<label class="flex items-start gap-2 rounded border border-[var(--color-tron-border)] p-2 text-xs text-[var(--color-tron-text)]">
-								<input type="radio" name="disposition" value="merge" class="mt-0.5" />
-								<span><strong>Merge</strong> into another bucket at the same stage<br />
-									<input type="text" name="destinationBucketId" placeholder="scan destination BKT-… or sticker" autocomplete="off" class="{inputCls} font-mono" /></span>
+							<legend class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Disposition (applies to all of the above)</legend>
+							<label class="flex items-start gap-2 rounded border p-2 text-xs text-[var(--color-tron-text)] {residualDisposition === 'merge' ? 'border-[var(--color-tron-cyan)]/60' : 'border-[var(--color-tron-border)]'}">
+								<input type="radio" name="disposition" value="merge" bind:group={residualDisposition} class="mt-0.5" />
+								<span><strong>Merge</strong> into buckets at the same stage — a destination box appears under each stage with a count</span>
 							</label>
-							<label class="flex items-start gap-2 rounded border border-[var(--color-tron-border)] p-2 text-xs text-[var(--color-tron-text)]">
-								<input type="radio" name="disposition" value="scrap" class="mt-0.5" />
-								<span><strong>Scrap</strong> — journal required<br />
-									<textarea name="journal" rows="2" placeholder="Why were these scrapped? (also used as the note for Defer)" class={inputCls}></textarea></span>
+							<label class="flex items-start gap-2 rounded border p-2 text-xs text-[var(--color-tron-text)] {residualDisposition === 'scrap' ? 'border-red-500/50' : 'border-[var(--color-tron-border)]'}">
+								<input type="radio" name="disposition" value="scrap" bind:group={residualDisposition} class="mt-0.5" />
+								<span><strong>Scrap</strong> all of the above — journal required</span>
 							</label>
-							<label class="flex items-start gap-2 rounded border border-[var(--color-tron-border)] p-2 text-xs text-[var(--color-tron-text)]">
-								<input type="radio" name="disposition" value="defer" class="mt-0.5" />
+							<label class="flex items-start gap-2 rounded border p-2 text-xs text-[var(--color-tron-text)] {residualDisposition === 'defer' ? 'border-[var(--color-tron-yellow)]/50' : 'border-[var(--color-tron-border)]'}">
+								<input type="radio" name="disposition" value="defer" bind:group={residualDisposition} class="mt-0.5" />
 								<span><strong>Defer</strong> — quarantine the tub until someone decides</span>
 							</label>
 						</fieldset>
+						{#if residualDisposition === 'scrap' || residualDisposition === 'defer'}
+							<label class="block">
+								<span class="text-[10px] uppercase tracking-wider {residualDisposition === 'scrap' ? 'text-red-300' : 'text-[var(--color-tron-text-secondary)]'}">{residualDisposition === 'scrap' ? 'Journal — why were they scrapped? (required)' : 'Note (optional)'}</span>
+								<textarea name="journal" rows="2" required={residualDisposition === 'scrap'} class={inputCls}></textarea>
+							</label>
+						{/if}
+						<p class="text-[10px] text-[var(--color-tron-text-secondary)]">Need to merge some and scrap the rest? Record one disposition, then open “report contents” again for the others.</p>
 						{#if form?.residual?.error}<p class="text-xs text-[var(--color-tron-error)]">{form.residual.error}</p>{/if}
-						<button type="submit" disabled={busy} class={btnPrimary}>{busy ? 'Saving…' : 'Record disposition'}</button>
+						<button type="submit" disabled={busy || residualTotal === 0 || !residualDisposition} class={residualDisposition === 'scrap' ? btnDanger : btnPrimary}>
+							{busy ? 'Saving…' : residualDisposition === 'merge' ? `Merge ${residualTotal}` : residualDisposition === 'scrap' ? `Scrap ${residualTotal} & journal` : residualDisposition === 'defer' ? `Quarantine tub (${residualTotal})` : 'Pick a disposition'}
+						</button>
 						<button type="button" class={btnGhost} onclick={() => { panel = { kind: 'none' }; }}>Cancel</button>
 					</form>
 

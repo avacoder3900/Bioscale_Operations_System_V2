@@ -4373,3 +4373,15 @@ Retrieve this exact code: git checkout feat/bucket-system at commit 201a639d
 What this deployment is for: the "Any carts discarded?" dropdown + required reason on every
   Advance step. Supersedes the 29e51136 preview.
 Build status: success (both scopes, 19:31Z).
+
+Follow-up 2026-09-21: residual report takes a count per stage (user request -- a tub can hold
+leftovers from different stages). reportResidual() now takes items[{stage, quantity,
+destinationBucketId?}] instead of one stage + quantity. The board form shows four "How many"
+rows (Raw / Unpressed / Pressed / QR Pending, the last pass's stage tagged), a running total,
+and one disposition for the whole report: Merge reveals a destination box under each stage
+with a count (each must be open at that same stage; ALL destinations are validated before
+anything is written, so a bad second row never leaves a half-applied report), Scrap writes one
+ManualCartridgeRemoval + scrap ledger row per stage under one required journal, Defer
+quarantines with a note listing the breakdown. residualFound / discrepancies get one entry
+per stage. Mixed dispositions = two reports (the form says so). Form action fields are
+qty_<stage> / dest_<stage>. npm run check unchanged (10 / 434).

@@ -167,16 +167,20 @@ export const actions: Actions = {
 		await connectDB();
 		const d = await request.formData();
 		return wrap('residual', async () => {
-			const stage = String(d.get('stage') ?? '');
-			if (!isBucketStage(stage)) throw new BucketError('Pick the stage the leftover cartridges are at.');
 			const disposition = String(d.get('disposition') ?? '');
 			if (disposition !== 'merge' && disposition !== 'scrap' && disposition !== 'defer') throw new BucketError('Choose a disposition.');
+			// One count (and, for merge, one destination) per stage: qty_<stage> / dest_<stage>.
+			const items = BUCKET_STAGES
+				.map(stage => ({
+					stage,
+					quantity: Number(d.get(`qty_${stage}`) ?? 0),
+					destinationBucketId: (d.get(`dest_${stage}`) as string | null) ?? undefined
+				}))
+				.filter(i => i.quantity !== 0);
 			const r = await reportResidual({
 				bucketId: String(d.get('bucketId') ?? ''),
-				quantity: Number(d.get('quantity') ?? 0),
-				stage,
+				items,
 				disposition,
-				destinationBucketId: (d.get('destinationBucketId') as string | null) ?? undefined,
 				journal: (d.get('journal') as string | null) ?? undefined,
 				user: op(locals)
 			});

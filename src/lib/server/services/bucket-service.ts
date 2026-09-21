@@ -699,20 +699,37 @@ export async function consumeFromCycle(input: ConsumeInput): Promise<{ qtyBefore
 
 // ── residual flow (§7) ────────────────────────────────────────────────────
 
+export interface ResidualItem {
+	stage: BucketStage;
+	quantity: number;
+	destinationBucketId?: string; // merge: per-stage destination (must be open at that stage)
+}
+
 export interface ResidualInput {
 	bucketId: string;
-	quantity: number;
-	stage: BucketStage;
+	items: ResidualItem[];        // one per stage found in the tub; zero-count stages omitted
 	disposition: ResidualDisposition;
-	destinationBucketId?: string; // merge
 	journal?: string;             // required for scrap; optional note for defer
 	user: Operator;
 }
 
+/**
+ * Residual flow (§7). A tub can hold leftovers from more than one stage, so
+ * the report is a list of {stage, quantity}. The disposition applies to the
+ * whole report; merge takes a destination per stage. Every destination is
+ * validated before anything is written, so a bad second row never leaves a
+ * half-applied report.
+ */
 export async function reportResidual(input: ResidualInput): Promise<{ bucket: any; prevCycle: any | null }> {
 	await connectDB();
-	const qty = assertPositiveInt(input.quantity, 'Residual count');
-	if (!isBucketStage(input.stage)) throw new BucketError('Pick the stage the leftover cartridges are at.');
+	const items = (input.items ?? [])
+		.map(i => ({ ...i, quantity: Number(i.quantity ?? 0) }))
+		.filter(i => i.quantity !== 0);
+	if (items.length === 0) throw new BucketError('Enter how many cartridges were found, for at least one stage.');
+	for (const i of items) {
+		if (!isBucketStage(i.stage)) throw new BucketError('Unknown stage in residual report.');
+		if (!Number.isInteger(i.quantity) || i.quantity < 0) throw new BucketError(`${STAGE_LABELS[i.stage]}: count must be 0 or a whole number.`);
+	}
 	const bucketId = await resolveBucketId(input.bucketId);
 	if (!bucketId) throw new BucketError(`"${(input.bucketId ?? '').trim()}" is not a known bucket.`, 404);
 
@@ -725,69 +742,88 @@ export async function reportResidual(input: ResidualInput): Promise<{ bucket: an
 	const prevCycle = await BucketCycle.findOne({ bucketId }).sort({ cycleNumber: -1 }).lean() as any;
 	const now = new Date();
 	const by = { _id: input.user._id, username: input.user.username };
-	const found: Record<string, unknown> = { qty, stage: input.stage, disposition: input.disposition, at: now, by };
-	let relatedId: string | undefined;
+	const total = items.reduce((s, i) => s + i.quantity, 0);
+	const breakdown = items.map(i => `${i.quantity} × ${STAGE_LABELS[i.stage]}`).join(', ');
+	const journal = (input.journal ?? '').trim();
+
+	// residualFound entries + discrepancy notes, one per stage, pushed at the end.
+	const found: Record<string, unknown>[] = [];
+	const discrepancies: Record<string, unknown>[] = [];
 
 	if (input.disposition === 'merge') {
-		const destRaw = (input.destinationBucketId ?? '').trim();
-		if (!destRaw) throw new BucketError('Scan the destination bucket.');
-		const destId = await resolveBucketId(destRaw);
-		if (!destId) throw new BucketError(`"${destRaw}" is not a known bucket.`, 404);
-		if (destId === bucketId) throw new BucketError('Destination must be a different bucket.');
-		const dest = await getOpenCycle(destId);
-		if (!dest) throw new BucketError(`Bucket ${destId} has no open cycle to merge into.`);
-		if (dest.stage !== input.stage) {
-			throw new BucketError(`Bucket ${destId} is at ${STAGE_LABELS[dest.stage as BucketStage]} — residuals can only merge into a bucket at ${STAGE_LABELS[input.stage]}.`);
+		// Validate every destination first — nothing is written until all pass.
+		const resolved: { item: ResidualItem; destId: string; dest: any }[] = [];
+		for (const item of items) {
+			const destRaw = (item.destinationBucketId ?? '').trim();
+			if (!destRaw) throw new BucketError(`${STAGE_LABELS[item.stage]}: scan the destination bucket.`);
+			const destId = await resolveBucketId(destRaw);
+			if (!destId) throw new BucketError(`${STAGE_LABELS[item.stage]}: "${destRaw}" is not a known bucket.`, 404);
+			if (destId === bucketId) throw new BucketError(`${STAGE_LABELS[item.stage]}: destination must be a different bucket.`);
+			const dest = await getOpenCycle(destId);
+			if (!dest) throw new BucketError(`${STAGE_LABELS[item.stage]}: bucket ${destId} has no open cycle to merge into.`);
+			if (dest.stage !== item.stage) {
+				throw new BucketError(`${STAGE_LABELS[item.stage]}: bucket ${destId} is at ${STAGE_LABELS[dest.stage as BucketStage]} — residuals can only merge into a bucket at the same stage.`);
+			}
+			resolved.push({ item, destId, dest });
 		}
-		await BucketCycle.updateOne({ _id: dest._id }, { $set: { quantity: dest.quantity + qty } });
-		await logTx({
-			bucketId: destId, cycleId: dest._id, type: 'merge_in',
-			fromStage: input.stage, toStage: input.stage, qtyBefore: dest.quantity, qtyAfter: dest.quantity + qty,
-			reason: `residual from ${bucketId}${prevCycle ? ` #${prevCycle.cycleNumber}` : ''}`,
-			relatedId: prevCycle?._id ?? bucketId, operator: input.user
-		});
-		await logTx({
-			bucketId, cycleId: prevCycle?._id ?? null, type: 'merge_out',
-			fromStage: input.stage, toStage: input.stage, qtyBefore: qty, qtyAfter: 0,
-			reason: `residual merged into ${cycleLabel(destId, dest.cycleNumber)}`,
-			relatedId: dest._id, operator: input.user
-		});
-		found.destinationCycleId = dest._id;
-		relatedId = dest._id;
-		await audit('bucket_cycles', dest._id, 'MERGE_IN', input.user, { from: bucketId, qty, quantity: dest.quantity + qty }, { quantity: dest.quantity });
+		for (const { item, destId, dest } of resolved) {
+			const qty = item.quantity;
+			await BucketCycle.updateOne({ _id: dest._id }, { $set: { quantity: dest.quantity + qty } });
+			await logTx({
+				bucketId: destId, cycleId: dest._id, type: 'merge_in',
+				fromStage: item.stage, toStage: item.stage, qtyBefore: dest.quantity, qtyAfter: dest.quantity + qty,
+				reason: `residual from ${bucketId}${prevCycle ? ` #${prevCycle.cycleNumber}` : ''}`,
+				relatedId: prevCycle?._id ?? bucketId, operator: input.user
+			});
+			await logTx({
+				bucketId, cycleId: prevCycle?._id ?? null, type: 'merge_out',
+				fromStage: item.stage, toStage: item.stage, qtyBefore: qty, qtyAfter: 0,
+				reason: `residual merged into ${cycleLabel(destId, dest.cycleNumber)}`,
+				relatedId: dest._id, operator: input.user
+			});
+			await audit('bucket_cycles', dest._id, 'MERGE_IN', input.user, { from: bucketId, qty, stage: item.stage, quantity: dest.quantity + qty }, { quantity: dest.quantity });
+			found.push({ qty, stage: item.stage, disposition: 'merge', destinationCycleId: dest._id, at: now, by });
+			discrepancies.push({ type: 'shortfall', qty, relatedId: dest._id, at: now, note: `${qty} × ${STAGE_LABELS[item.stage]} found in tub after close — merged into ${cycleLabel(destId, dest.cycleNumber)}` });
+		}
 	} else if (input.disposition === 'scrap') {
-		const journal = (input.journal ?? '').trim();
 		if (!journal) throw new BucketError('A journal entry describing why these were scrapped is required.');
-		const removalId = generateId();
-		await ManualCartridgeRemoval.create({
-			_id: removalId,
-			cartridgeIds: [],
-			bucketCycleId: prevCycle?._id,
-			bucketId,
-			cartridgeCount: qty,
-			reason: journal,
-			journal,
-			operator: by,
-			removedAt: now
-		});
-		await logTx({
-			bucketId, cycleId: prevCycle?._id ?? null, type: 'scrap',
-			fromStage: input.stage, toStage: input.stage, qtyBefore: qty, qtyAfter: 0,
-			reason: journal, journal, relatedId: removalId, operator: input.user
-		});
-		found.removalId = removalId;
-		relatedId = removalId;
+		for (const item of items) {
+			const qty = item.quantity;
+			const removalId = generateId();
+			await ManualCartridgeRemoval.create({
+				_id: removalId,
+				cartridgeIds: [],
+				bucketCycleId: prevCycle?._id,
+				bucketId,
+				cartridgeCount: qty,
+				reason: `${qty} × ${STAGE_LABELS[item.stage]}: ${journal}`,
+				journal,
+				operator: by,
+				removedAt: now
+			});
+			await logTx({
+				bucketId, cycleId: prevCycle?._id ?? null, type: 'scrap',
+				fromStage: item.stage, toStage: item.stage, qtyBefore: qty, qtyAfter: 0,
+				reason: journal, journal, relatedId: removalId, operator: input.user
+			});
+			found.push({ qty, stage: item.stage, disposition: 'scrap', removalId, at: now, by });
+			discrepancies.push({ type: 'shortfall', qty, relatedId: removalId, at: now, note: `${qty} × ${STAGE_LABELS[item.stage]} found in tub after close — scrapped` });
+		}
 	} else if (input.disposition === 'defer') {
-		const note = `${qty} × ${STAGE_LABELS[input.stage]}${input.journal?.trim() ? ` — ${input.journal.trim()}` : ''}`;
+		const note = `${breakdown}${journal ? ` — ${journal}` : ''}`;
 		await ProductionBucket.updateOne(
 			{ _id: bucketId },
 			{ $set: { state: 'quarantined', residualNote: note, spotCheckPending: false } }
 		);
-		await logTx({
-			bucketId, cycleId: prevCycle?._id ?? null, type: 'quarantine',
-			fromStage: input.stage, toStage: input.stage, qtyBefore: qty, qtyAfter: qty,
-			reason: note, operator: input.user
-		});
+		for (const item of items) {
+			await logTx({
+				bucketId, cycleId: prevCycle?._id ?? null, type: 'quarantine',
+				fromStage: item.stage, toStage: item.stage, qtyBefore: item.quantity, qtyAfter: item.quantity,
+				reason: note, operator: input.user
+			});
+			found.push({ qty: item.quantity, stage: item.stage, disposition: 'defer', at: now, by });
+			discrepancies.push({ type: 'shortfall', qty: item.quantity, at: now, note: `${item.quantity} × ${STAGE_LABELS[item.stage]} found in tub after close — deferred (quarantined)` });
+		}
 	} else {
 		throw new BucketError('Unknown disposition.');
 	}
@@ -805,18 +841,12 @@ export async function reportResidual(input: ResidualInput): Promise<{ bucket: an
 			{ _id: prevCycle._id },
 			{
 				$set: { closedWithResidual: true },
-				$push: {
-					residualFound: found,
-					discrepancies: {
-						type: 'shortfall', qty, relatedId, at: now,
-						note: `${qty} found in tub after close — dispositioned as ${input.disposition}`
-					}
-				}
+				$push: { residualFound: { $each: found }, discrepancies: { $each: discrepancies } }
 			}
 		);
-		await audit('bucket_cycles', prevCycle._id, 'RESIDUAL', input.user, found);
+		await audit('bucket_cycles', prevCycle._id, 'RESIDUAL', input.user, { items: found });
 	}
-	await audit('production_buckets', bucketId, 'RESIDUAL', input.user, { qty, stage: input.stage, disposition: input.disposition, relatedId });
+	await audit('production_buckets', bucketId, 'RESIDUAL', input.user, { total, breakdown, disposition: input.disposition });
 
 	return { bucket: await ProductionBucket.findById(bucketId).lean(), prevCycle: prevCycle ? await BucketCycle.findById(prevCycle._id).lean() : null };
 }
