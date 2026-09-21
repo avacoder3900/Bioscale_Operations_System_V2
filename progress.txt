@@ -4280,3 +4280,11 @@ sticker also records a real 1x PT-CT-106 consumption.
 Follow-up 2026-09-21: "Return to previous page" button on /manufacturing/print-bucket-labels
 (header, right). history.back() when there is history; direct opens fall back to the bucket
 board. npm run check unchanged (10 / 434, none in the file).
+Deployment: preview -- https://bioscale-operations-system-mongodb-o4e1vcefo-brevitest.vercel.app
+  (brevitest scope; the alejandro-valdezs-projects build is
+  https://bioscale-operations-system-mongodb-kkt95svdl.vercel.app, behind Vercel SSO)
+Source: branch feat/bucket-system @ commit 1e3c796a
+Retrieve this exact code: git checkout feat/bucket-system at commit 1e3c796a
+What this deployment is for: the return-to-previous-page button on the bucket labels page.
+  Supersedes the 634e9a37 preview; otherwise identical code.
+Build status: success (both scopes, 17:58Z).
