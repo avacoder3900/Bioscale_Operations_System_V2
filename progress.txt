@@ -4433,3 +4433,35 @@ Retrieve this exact code: git checkout feat/bucket-system at commit e59307be
 What this deployment is for: Available card subtitle "empty buckets". Supersedes the 1dca1661
   preview.
 Build status: success (brevitest scope, 21:07Z).
+
+================================================================================
+2026-09-21 -- feat/bucket-system -- bucket log added; BUCKET-SYSTEM_PLAN.md rewritten as the as-built spec
+================================================================================
+Bucket log (user request: a dropdown under the change log with the status of all buckets,
+retired included). New bucketRegistry() read model in bucket-service: every ProductionBucket in
+every state, joined with its open cycle (if any) and its newest ledger timestamp. The board
+renders it as a second collapsed <details> directly under the change log: header shows counts
+per status (Available / In use / Quarantined / Retired); rows give Bucket (linked to history) /
+Status badge / Right now (count + stage + pass for in-use, residual note for quarantined,
+reason + date for retired, "empty" or "check pending" for available) / Passes / Sticker / Home /
+Last activity / Minted. Filter by status and by text. Retired buckets appear nowhere else on
+the page, which is why this exists. Commit b7e2c262.
+
+BUCKET-SYSTEM_PLAN.md (user request: update the markdown file). It still said "Implementation
+not started" and described things that no longer exist (press fields on the cycle, a single-
+stage residual, print-only labels, scrap "writing down inventory"). Rewritten as the as-built
+spec with the SAME section numbers so code comments citing e.g. section 6.3 still resolve:
+status/branch header; stage table with UI labels; 3.1 adds discard-at-advance and the adjust
+rules; 3.2 identity-vs-label; section 4 matches the real schemas (barcode, stageEnteredAt,
+discrepancies, openedBy, ledger types mint/relabel/retire; press fields gone); 6.2 advance
+ordering; 6.3 WI-01 as the three-action flow it is, non-blocking bucket calls, deserialize fix;
+section 7 per-stage residual with validate-all-before-write; section 8 adds the sticker debit
+and the "scraps never touched inventory" consequence; section 9 board/rail/change log/bucket
+log, the ids-only panel and the bug it fixed, all three summary views, labels page; section 10
+full file list + permissions as built; section 11 is now a build history with every code
+commit and the 10 / 434 check baseline; section 12 is "read before merging": no automated
+tests, three deliberate manual checks, the unconfirmed preview database + the designed-but-
+unbuilt "Void test pass" reversal, floor decisions still needed, and deferred items (WI-01
+double-debit, adjust permission, tub wording, long label, public repo).
+
+npm run check: 10 errors / 434 warnings, none in touched files (baseline).
