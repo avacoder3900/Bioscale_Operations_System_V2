@@ -13586,3 +13586,14 @@ What this deployment is for: FIRST build of the bucket system on top of current 
   code (master @ f0f5773f). Proves the merged tree builds on Vercel. Superseded by the
   void-pass build that follows.
 Build status: success (brevitest scope, 22:03Z).
+
+Deployment: preview -- https://bioscale-operations-system-mongodb-1ltxi6kcm-brevitest.vercel.app
+  (brevitest scope; cookie-session gated, 302 to /login. The alejandro-valdezs-projects build
+  is https://bioscale-operations-system-mongodb-lfffbm9i4.vercel.app, behind Vercel SSO)
+Source: branch feat/bucket-system @ commit de2cd91a (code: merge f0e9176a + void 47a2a63d)
+Retrieve this exact code: git checkout feat/bucket-system at commit de2cd91a
+What this deployment is for: the bucket system on current production code (master merged in),
+  with the three extra collision guards and "Void this pass". This is the build to review
+  before opening the PR into master. voidCycle has NOT been exercised against a database yet --
+  void ONE test pass first and check the lot's "N left" before voiding the rest.
+Build status: success (both scopes, 22:20Z).
