@@ -69,6 +69,7 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 	return {
 		bucket: {
 			bucketId: h.bucket._id,
+			barcode: h.bucket.barcode ?? null,
 			state: h.bucket.state,
 			cycleCount: h.bucket.cycleCount ?? 0,
 			homeLocation: h.bucket.homeLocation ?? null,

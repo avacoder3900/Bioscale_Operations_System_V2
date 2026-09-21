@@ -421,18 +421,30 @@ Each tile deep-links into the bucket board filtered to that stage. Read-only gla
 happen on the operator page. `Available` is included because empty buckets ready to fill is a
 real constraint on starting work.
 
-### 9.4 Bucket label printing
+### 9.4 Bucket labels — QR sticker or printed BKT label
 
-Sibling flow to `/manufacturing/print-barcodes`, using the existing `generateBarcode()` counter
-with prefix `BKT`. Two modes:
+`/manufacturing/print-bucket-labels`. A bucket's **identity** is always its `BKT-NNNNNN` id
+(minted from the existing `generateBarcode()` counter). Its **physical label** is the
+operator's choice per bucket:
 
-- **Mint new** — a new tub enters service
-- **Reprint existing** — a scuffed label reprints **the same number**, since the barcode is now
-  a permanent container id
+- **Assign a QR sticker** (default) — scan one of the already-printed UUID stickers from the
+  Avery cartridge sheets onto the bucket. Stored on `ProductionBucket.barcode` (unique,
+  sparse). Consumes 1× `PT-CT-106`, since a sticker on a tub is one fewer for cartridges.
+  Minting in this mode queues the new ids so the operator scans one sticker per tub in
+  sequence; any bucket (new or old) can also be picked and assigned or **re-labelled** later.
+- **Print a BKT label** — render the ids for any adhesive stock, 3 across. **Reprint** renders
+  an existing id again; it never mints.
 
-`BKT-000001` sequential is deliberately distinguishable from cartridge barcodes, which are
-UUIDv4. Scanning a bucket into a cartridge field fails loudly instead of creating a phantom
-cartridge.
+Identity stays on `_id` deliberately: a scuffed sticker is *replaced* (`relabel` ledger
+event), not the bucket, so history survives. Every scan path resolves a code by `_id` first,
+then by `barcode` (`resolveBucketId`), so either label works at the board, WI-01, residual
+merge, retire, and the history page.
+
+**Collision guard.** A tub wearing a UUID sticker scans exactly like a cartridge. Every place
+a `CartridgeRecord` is born (WI-01 scan-in, `cv/induct`, the three quick-* tools) calls
+`assertNotBucketLabel()` and refuses a bucket's label with a 409, so a bucket sticker can never
+become a phantom cartridge id. Conversely, assigning refuses a code that is already a
+cartridge, another bucket's sticker, or a `BKT-` id.
 
 ---
 

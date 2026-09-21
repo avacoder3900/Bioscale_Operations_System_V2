@@ -17,12 +17,12 @@ import { redirect, fail } from '@sveltejs/kit';
 import {
 	connectDB, LotRecord, ProcessConfiguration,
 	PartDefinition, AuditLog, Equipment, CartridgeRecord, ReceivingLot,
-	InventoryTransaction, BucketCycle, generateId
+	InventoryTransaction, BucketCycle, ProductionBucket, generateId
 } from '$lib/server/db';
 import { recordTransaction, resolvePartId } from '$lib/server/services/inventory-transaction';
 import {
 	BucketError, STAGE_LABELS, CARTRIDGE_BLANK_PART, BARCODE_LABEL_PART,
-	getOpenCycle, normalizeBucketId, consumeFromCycle, scrapFromCycle
+	getOpenCycle, resolveBucketId, assertNotBucketLabel, consumeFromCycle, scrapFromCycle
 } from '$lib/server/services/bucket-service';
 import { nanoid } from 'nanoid';
 import type { PageServerLoad, Actions } from './$types';
@@ -137,8 +137,15 @@ export const load: PageServerLoad = async ({ locals }) => {
 	const qrPending = await BucketCycle.find({ status: 'open', stage: 'qr_pending' })
 		.select('_id bucketId cycleNumber quantity sourceLots')
 		.sort({ stageEnteredAt: 1 }).lean() as any[];
+	// Tubs may wear a UUID QR sticker instead of a printed BKT- label; the
+	// pick-list carries both so the scan box matches whichever is on the tub.
+	const stickerByBucket = new Map<string, string | null>(
+		(await ProductionBucket.find({ _id: { $in: qrPending.map((c: any) => c.bucketId) } }).select('_id barcode').lean() as any[])
+			.map((b: any) => [b._id, b.barcode ?? null])
+	);
 	const qrPendingBuckets = qrPending.map((c: any) => ({
 		bucketId: c.bucketId,
+		barcode: stickerByBucket.get(c.bucketId) ?? null,
 		cycleId: String(c._id),
 		cycleNumber: c.cycleNumber,
 		quantity: c.quantity,
@@ -266,7 +273,10 @@ export const actions: Actions = {
 		// disagree with what the bucket actually contains.
 		let bucketCycle: any = null;
 		if (bucketIdRaw) {
-			const bucketId = normalizeBucketId(bucketIdRaw);
+			const bucketId = await resolveBucketId(bucketIdRaw); // BKT- id or the tub's sticker
+			if (!bucketId) {
+				return fail(400, { checkAndStart: { error: `"${bucketIdRaw}" is not a known bucket` } });
+			}
 			bucketCycle = await getOpenCycle(bucketId);
 			if (!bucketCycle) {
 				return fail(400, { checkAndStart: { error: `Bucket ${bucketId} has no open cycle — nothing to draw from` } });
@@ -421,6 +431,15 @@ export const actions: Actions = {
 			$or: [{ _id: ovenId }, { barcode: ovenId }]
 		}).select('_id name barcode').lean() as any;
 		if (!oven) return fail(400, { scanBackedCartridge: { error: `No oven found matching "${ovenId}"` } });
+
+		// A tub wearing a UUID sticker scans exactly like a cartridge. Refuse it
+		// here so a bucket label can never become a phantom cartridge id.
+		try {
+			await assertNotBucketLabel(barcode);
+		} catch (e) {
+			if (e instanceof BucketError) return fail(409, { scanBackedCartridge: { error: e.message, barcode } });
+			throw e;
+		}
 
 		// Backing is the GENESIS of every cartridge record — a barcode may only be
 		// born once. Reject if a CartridgeRecord with this barcode already exists

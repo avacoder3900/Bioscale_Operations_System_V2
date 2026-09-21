@@ -47,7 +47,9 @@
 	});
 	const allIdleBuckets = $derived([...data.board.available, ...data.board.quarantined]);
 
-	function normalize(code: string): string { return code.trim().toUpperCase(); }
+	function shortQr(barcode: string | null): string | null {
+		return barcode ? (barcode.length > 12 ? `${barcode.slice(0, 8)}…` : barcode) : null;
+	}
 
 	function openCycle(c: BoardCycle) { panel = { kind: 'cycle', cycle: c, mode: 'view' }; }
 	function openBucket(b: BoardBucket) {
@@ -55,16 +57,25 @@
 		else panel = { kind: 'start', bucket: b, step: b.spotCheckPending ? 'spot_check' : 'form' };
 	}
 
+	// A tub is labelled either with its printed BKT- id or a UUID QR sticker
+	// (`barcode`); the scan box accepts both, exact first, then substring.
+	function matchesLabel(bucketId: string, barcode: string | null, code: string): boolean {
+		return bucketId === code.toUpperCase() || (barcode != null && barcode.toLowerCase() === code.toLowerCase());
+	}
+	function containsLabel(bucketId: string, barcode: string | null, code: string): boolean {
+		return bucketId.includes(code.toUpperCase()) || (barcode != null && barcode.toLowerCase().includes(code.toLowerCase()));
+	}
+
 	function resolveLocal(code: string): boolean {
-		const id = normalize(code);
-		if (!id) return false;
-		const cycle = data.board.cycles.find(c => c.bucketId === id);
+		const raw = code.trim();
+		if (!raw) return false;
+		const cycle = data.board.cycles.find(c => matchesLabel(c.bucketId, c.barcode, raw));
 		if (cycle) { openCycle(cycle); shortList = []; return true; }
-		const bucket = allIdleBuckets.find(b => b.bucketId === id);
+		const bucket = allIdleBuckets.find(b => matchesLabel(b.bucketId, b.barcode, raw));
 		if (bucket) { openBucket(bucket); shortList = []; return true; }
 		const hits = [
-			...data.board.cycles.filter(c => c.bucketId.includes(id)).map(c => ({ bucketId: c.bucketId, state: 'in_use', hint: `${labelFor(c.stage)} · ${c.quantity}` })),
-			...allIdleBuckets.filter(b => b.bucketId.includes(id)).map(b => ({ bucketId: b.bucketId, state: b.state, hint: b.state === 'quarantined' ? (b.residualNote ?? 'quarantined') : `available · ${b.cycleCount} passes` }))
+			...data.board.cycles.filter(c => containsLabel(c.bucketId, c.barcode, raw)).map(c => ({ bucketId: c.bucketId, state: 'in_use', hint: `${labelFor(c.stage)} · ${c.quantity}` })),
+			...allIdleBuckets.filter(b => containsLabel(b.bucketId, b.barcode, raw)).map(b => ({ bucketId: b.bucketId, state: b.state, hint: b.state === 'quarantined' ? (b.residualNote ?? 'quarantined') : `available · ${b.cycleCount} passes` }))
 		].slice(0, 8);
 		shortList = hits;
 		return hits.length > 0;
@@ -160,7 +171,7 @@
 			<p class="text-xs text-[var(--color-tron-text-secondary)]">Pre-barcode WIP: each card is one tub's current pass. Whole buckets advance; WI-01 draws from QR Pending.</p>
 		</div>
 		<div class="flex gap-2">
-			<a href="/manufacturing/print-bucket-labels" class={btnGhost}>Print labels</a>
+			<a href="/manufacturing/print-bucket-labels" class={btnGhost}>New buckets / labels</a>
 			<a href="/manufacturing/cart-mfg/wi-01" class={btnGhost}>WI-01 →</a>
 		</div>
 	</div>
@@ -203,7 +214,7 @@
 								<span class="font-mono text-sm text-[var(--color-tron-text)]">{b.bucketId}</span>
 								{#if b.spotCheckPending}<span class="rounded bg-[var(--color-tron-yellow)]/20 px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-[var(--color-tron-yellow)]" title="Confirm empty at next start">check</span>{/if}
 							</div>
-							<div class="mt-1 text-[10px] text-[var(--color-tron-text-secondary)]">{b.cycleCount} pass{b.cycleCount === 1 ? '' : 'es'}{b.homeLocation ? ` · ${b.homeLocation}` : ''}</div>
+							<div class="mt-1 text-[10px] text-[var(--color-tron-text-secondary)]">{b.cycleCount} pass{b.cycleCount === 1 ? '' : 'es'}{b.homeLocation ? ` · ${b.homeLocation}` : ''}{shortQr(b.barcode) ? ` · qr ${shortQr(b.barcode)}` : ''}</div>
 						</button>
 					{/each}
 					{#each data.board.quarantined as b (b.bucketId)}
@@ -238,7 +249,7 @@
 									<span class="text-lg font-bold text-[var(--color-tron-cyan)]">{c.quantity}</span>
 								</div>
 								<div class="mt-1 flex items-center justify-between text-[10px] text-[var(--color-tron-text-secondary)]">
-									<span>{dwell(c.stageEnteredAt)} here</span>
+									<span>{dwell(c.stageEnteredAt)} here{shortQr(c.barcode) ? ` · qr ${shortQr(c.barcode)}` : ''}</span>
 									{#if c.quantity !== c.openedQty}<span title="opened with {c.openedQty}">−{c.openedQty - c.quantity}</span>{/if}
 								</div>
 							</button>
@@ -397,6 +408,10 @@
 						<div>
 							<div class="font-mono text-lg text-[var(--color-tron-text)]">{b.bucketId}</div>
 							<div class="text-xs text-[var(--color-tron-text-secondary)]">available · {b.cycleCount} pass{b.cycleCount === 1 ? '' : 'es'}{b.homeLocation ? ` · ${b.homeLocation}` : ''}</div>
+							<div class="text-[10px] text-[var(--color-tron-text-secondary)]">
+								{#if b.barcode}sticker <span class="font-mono text-[var(--color-tron-text)]">{b.barcode}</span>{:else}no QR sticker — printed label only{/if}
+								· <a href="/manufacturing/print-bucket-labels?bucket={encodeURIComponent(b.bucketId)}" class="text-[var(--color-tron-cyan)] hover:underline">{b.barcode ? 'replace' : 'assign'} QR</a>
+							</div>
 						</div>
 						<div class="flex gap-2">
 							<a href="/manufacturing/cart-mfg/buckets/{b.bucketId}" class="text-[10px] text-[var(--color-tron-cyan)] hover:underline">history</a>

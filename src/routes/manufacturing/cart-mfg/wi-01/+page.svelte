@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { enhance } from '$app/forms';
+	import { deserialize, enhance } from '$app/forms';
 
 	interface RecentLot {
 		lotId: string;
@@ -14,7 +14,7 @@
 	}
 
 	interface LotOption { lotId: string; quantity: number; remaining: number }
-	interface BucketOption { bucketId: string; cycleId: string; cycleNumber: number; quantity: number; lot1: string | null; lot3: string | null }
+	interface BucketOption { bucketId: string; barcode: string | null; cycleId: string; cycleNumber: number; quantity: number; lot1: string | null; lot3: string | null }
 
 	interface Props {
 		data: {
@@ -71,11 +71,14 @@
 		}
 	});
 	function applyBucketScan() {
-		const code = bucketScan.trim().toUpperCase();
-		if (!code) return;
-		const hit = (data.qrPendingBuckets ?? []).find((b) => b.bucketId === code);
+		const raw = bucketScan.trim();
+		if (!raw) return;
+		// Match the printed BKT- id or the tub's UUID sticker (either case).
+		const hit = (data.qrPendingBuckets ?? []).find(
+			(b) => b.bucketId === raw.toUpperCase() || (b.barcode != null && b.barcode.toLowerCase() === raw.toLowerCase())
+		);
 		if (hit) { bucketId = hit.bucketId; startError = ''; }
-		else startError = `${code} is not a bucket at QR Pending`;
+		else startError = `${raw} is not a bucket at QR Pending`;
 		bucketScan = '';
 	}
 
@@ -143,13 +146,16 @@
 				body: fd,
 				headers: { 'x-sveltekit-action': 'true' }
 			});
-			const json = await res.json();
-			const payload = json?.data ?? json;
-			const inner = payload?.scanBackedCartridge ?? payload;
-			if (!res.ok || inner?.error) {
-				cartScanError = inner?.error ?? `Error ${res.status}`;
-			} else {
+			// Action responses are devalue-encoded — decode with deserialize() so a
+			// fail() message (e.g. "that's a bucket label") reaches the operator
+			// instead of a bare "Error 409".
+			const result = deserialize(await res.text());
+			if (result.type === 'success') {
 				scannedCarts = [barcode, ...scannedCarts];
+			} else if (result.type === 'failure') {
+				cartScanError = (result.data as any)?.scanBackedCartridge?.error ?? `Error ${result.status}`;
+			} else if (result.type === 'error') {
+				cartScanError = result.error?.message ?? 'Scan failed';
 			}
 		} catch (e) {
 			cartScanError = e instanceof Error ? e.message : 'Scan failed';
@@ -171,13 +177,13 @@
 				body: fd,
 				headers: { 'x-sveltekit-action': 'true' }
 			});
-			const json = await res.json();
-			const payload = json?.data ?? json;
-			const inner = payload?.removeBackedCartridge ?? payload;
-			if (!res.ok || inner?.error) {
-				cartScanError = inner?.error ?? `Error ${res.status}`;
-			} else {
+			const result = deserialize(await res.text());
+			if (result.type === 'success') {
 				scannedCarts = scannedCarts.filter((b) => b !== barcode);
+			} else if (result.type === 'failure') {
+				cartScanError = (result.data as any)?.removeBackedCartridge?.error ?? `Error ${result.status}`;
+			} else if (result.type === 'error') {
+				cartScanError = result.error?.message ?? 'Remove failed';
 			}
 		} catch (e) {
 			cartScanError = e instanceof Error ? e.message : 'Remove failed';

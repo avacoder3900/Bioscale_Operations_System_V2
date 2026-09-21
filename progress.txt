@@ -4209,3 +4209,52 @@ The git-branch alias (…-git-feat-bucket-system-brevitest.vercel.app) did not r
 Verified: brevitest URL 302s to /login and /manufacturing/cart-mfg/buckets 302s to /login (route
 exists, no 404/500 pre-auth). The alejandro-valdezs-projects URL 302s to vercel.com/sso-api --
 that scope has Deployment Protection on, so it needs a Vercel login; use the brevitest link.
+
+================================================================================
+2026-09-21 -- feat/bucket-system -- buckets labelled with existing QR stickers (or printed BKT labels)
+================================================================================
+User: "instead of printing bucket labels, I want to assign QR codes to newly minted buckets,
+or offer the choice to do either." Implemented as label-vs-identity: the BKT-NNNNNN id stays
+the permanent identity; a new ProductionBucket.barcode (unique, sparse) holds whichever
+sticker is on the tub -- typically one of the already-printed UUID QR stickers from the Avery
+cartridge sheets. Deliberately NOT the scanned UUID as _id: the print flow cannot reprint a
+specific UUID, so a scuffed sticker would have meant a new bucket and orphaned history.
+Now a scuffed sticker is replaced (ledger type relabel) and the id + history survive.
+
+bucket-service: resolveBucketId(code) = _id first, then barcode (matched as scanned and in
+both cases -- scanners disagree about hex case). Used by startCycle, reportResidual (bucket
+and merge destination), retireBucket, bucketHistory, resolveScan (fuzzy search now spans
+ids and stickers), and WI-01 checkAndStart. assignBucketBarcode() refuses a code that is
+already a CartridgeRecord, another bucket's sticker, or a BKT- id; consumes 1x PT-CT-106
+(a sticker on a tub is one fewer for cartridges; constant CONSUME_LABEL_ON_ASSIGN). boardData
+carries barcode on cycles and idle buckets so the board's scan rail resolves either label
+locally; WI-01's qrPendingBuckets carries it too.
+
+Collision guard: a tub wearing a UUID sticker scans exactly like a cartridge. New
+assertNotBucketLabel() is called at every CartridgeRecord genesis point found by grep --
+WI-01 scanBackedCartridge (409 with message), cv/induct (409), quick-reagent-test /
+quick-wax-fill / quick-wax-store (throws inside their per-barcode try, lands in their
+existing rejected/failed lists). Five sites; scripts/ excluded.
+
+Labels page (/manufacturing/print-bucket-labels, path kept, retitled "Bucket Labels"):
+mint N with a mode radio -- assign stickers (default) queues the new ids and the operator
+scans one sticker per tub in sequence; print renders BKT labels as before. Any bucket can be
+picked (or scanned by id or current sticker) to assign / replace; ?bucket= deep link from the
+board's start panel and the history page. Buckets-without-a-sticker list for catch-up.
+Reprint unchanged. The assign call goes through fetch so the queue survives.
+
+Found while doing this: WI-01's handleCartScan / removeCartScan read hand-fetched action
+responses as plain JSON, but SvelteKit action responses are devalue-encoded -- a fail()
+message never reached the operator (they got "Error 400/409"). Both now use deserialize()
+from $app/forms; the labels page does the same. Small, pre-existing, fixed because the new
+409 guard message is useless otherwise.
+
+Files: production-bucket.ts (+barcode, unique sparse index), bucket-transaction.ts (+relabel),
+bucket-service.ts, buckets/+page.svelte, buckets/[bucketId]/{+page.server.ts,+page.svelte},
+print-bucket-labels/{+page.server.ts,+page.svelte} (rewritten), wi-01/{+page.server.ts,
++page.svelte}, cv/induct/+page.server.ts, quick-{reagent-test,wax-fill,wax-store}/
++page.server.ts, BUCKET-SYSTEM_PLAN.md (section 9.4 rewritten).
+
+npm run check (portable Node 22.12): 10 errors / 434 warnings, zero in any touched file --
+unchanged baseline. One warning I introduced (state_referenced_locally on the ?bucket=
+preset) fixed before commit.

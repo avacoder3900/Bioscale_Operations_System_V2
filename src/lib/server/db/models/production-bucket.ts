@@ -11,6 +11,11 @@ import mongoose, { Schema } from 'mongoose';
  */
 const productionBucketSchema = new Schema({
 	_id: { type: String }, // 'BKT-000123' — minted by generateBarcode('BKT', 'bucket')
+	// The physical sticker on the tub, when it isn't a printed BKT- label:
+	// typically one of the UUID QR stickers from the Avery cartridge sheets.
+	// Identity stays on _id so a scuffed sticker is replaced, not the bucket.
+	// Every scan path resolves a code by _id first, then by this field.
+	barcode: { type: String },
 	state: {
 		type: String,
 		enum: ['available', 'in_use', 'quarantined', 'retired'],
@@ -31,6 +36,8 @@ const productionBucketSchema = new Schema({
 }, { timestamps: true });
 
 productionBucketSchema.index({ state: 1 });
+// One sticker → one bucket. Sparse so printed-label tubs (no sticker) don't collide on null.
+productionBucketSchema.index({ barcode: 1 }, { unique: true, sparse: true });
 
 export const ProductionBucket = mongoose.models.ProductionBucket
 	|| mongoose.model('ProductionBucket', productionBucketSchema, 'production_buckets');

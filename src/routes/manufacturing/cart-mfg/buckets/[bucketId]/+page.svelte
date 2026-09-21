@@ -39,12 +39,16 @@
 				{#if data.bucket.homeLocation} · home {data.bucket.homeLocation}{/if}
 				· minted {fmt(data.bucket.createdAt)}{#if data.bucket.createdBy} by {data.bucket.createdBy}{/if}
 			</p>
+			<p class="mt-1 text-xs text-[var(--color-tron-text-secondary)]">
+				{#if data.bucket.barcode}QR sticker <span class="font-mono text-[var(--color-tron-text)]">{data.bucket.barcode}</span>{:else}No QR sticker — printed BKT label only{/if}
+				{#if data.bucket.state !== 'retired'}· <a href="/manufacturing/print-bucket-labels?bucket={encodeURIComponent(data.bucket.bucketId)}" class="text-[var(--color-tron-cyan)] hover:underline">{data.bucket.barcode ? 'replace' : 'assign'} QR</a>{/if}
+			</p>
 			{#if data.bucket.residualNote}<p class="mt-1 text-xs text-[var(--color-tron-yellow)]">Quarantined: {data.bucket.residualNote}</p>{/if}
 			{#if data.bucket.retiredAt}<p class="mt-1 text-xs text-red-300">Retired {fmt(data.bucket.retiredAt)} — {data.bucket.retiredReason}</p>{/if}
 		</div>
 		<div class="flex gap-2">
 			<a href="/manufacturing/cart-mfg/buckets?q={encodeURIComponent(data.bucket.bucketId)}" class="rounded border border-[var(--color-tron-border)] px-3 py-1.5 text-xs text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]">Open on board</a>
-			<a href="/manufacturing/print-bucket-labels" class="rounded border border-[var(--color-tron-border)] px-3 py-1.5 text-xs text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]">Reprint label</a>
+			<a href="/manufacturing/print-bucket-labels?bucket={encodeURIComponent(data.bucket.bucketId)}" class="rounded border border-[var(--color-tron-border)] px-3 py-1.5 text-xs text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]">Label / QR</a>
 		</div>
 	</div>
 

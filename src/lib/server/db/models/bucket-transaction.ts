@@ -15,7 +15,7 @@ const bucketTransactionSchema = new Schema({
 	type: {
 		type: String,
 		enum: [
-			'mint', 'create', 'advance', 'adjust', 'scrap', 'consume',
+			'mint', 'relabel', 'create', 'advance', 'adjust', 'scrap', 'consume',
 			'merge_in', 'merge_out', 'release', 'quarantine', 'retire'
 		],
 		required: true

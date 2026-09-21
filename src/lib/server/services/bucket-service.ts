@@ -20,7 +20,7 @@
 import { connectDB } from '$lib/server/db/connection';
 import {
 	ProductionBucket, BucketCycle, BucketTransaction, AuditLog,
-	ReceivingLot, ManualCartridgeRemoval, Equipment
+	ReceivingLot, ManualCartridgeRemoval, Equipment, CartridgeRecord
 } from '$lib/server/db/models';
 import { generateId } from '$lib/server/db/utils';
 import { recordTransaction, resolvePartId } from './inventory-transaction';
@@ -96,7 +96,7 @@ function assertPositiveInt(n: unknown, label: string): number {
 interface TxInput {
 	bucketId: string;
 	cycleId?: string | null;
-	type: 'mint' | 'create' | 'advance' | 'adjust' | 'scrap' | 'consume'
+	type: 'mint' | 'relabel' | 'create' | 'advance' | 'adjust' | 'scrap' | 'consume'
 		| 'merge_in' | 'merge_out' | 'release' | 'quarantine' | 'retire';
 	fromStage?: string | null;
 	toStage?: string | null;
@@ -179,30 +179,60 @@ export async function getOpenCycle(bucketId: string): Promise<any | null> {
 	return BucketCycle.findOne({ bucketId, status: 'open' }).lean();
 }
 
+/**
+ * Resolve any scanned code to a bucket _id: the printed BKT- id first, then
+ * the assigned sticker (`barcode`). UUID stickers are matched as scanned and
+ * in both cases, since scanners disagree about hex case. Null = not a bucket.
+ */
+export async function resolveBucketId(code: string): Promise<string | null> {
+	await connectDB();
+	const raw = (code ?? '').trim();
+	if (!raw) return null;
+	const byId = await ProductionBucket.findById(raw.toUpperCase()).select('_id').lean() as any;
+	if (byId) return byId._id;
+	const byBarcode = await ProductionBucket.findOne({ barcode: { $in: [raw, raw.toLowerCase(), raw.toUpperCase()] } })
+		.select('_id').lean() as any;
+	return byBarcode ? byBarcode._id : null;
+}
+
+/**
+ * Guard for every place a CartridgeRecord is born. A bucket wearing a UUID
+ * sticker looks exactly like a cartridge to a scanner; without this, scanning
+ * a tub into a cartridge field would mint a phantom cartridge whose id is a
+ * bucket's label.
+ */
+export async function assertNotBucketLabel(code: string): Promise<void> {
+	const id = await resolveBucketId(code);
+	if (id) throw new BucketError(`${(code ?? '').trim()} is the label on production bucket ${id}, not a cartridge.`, 409, 'BUCKET_LABEL');
+}
+
 export interface ScanResolution {
 	kind: 'bucket' | 'search';
 	bucket?: any;
 	cycle?: any | null;
-	matches?: { bucketId: string; state: string; cycle: any | null }[];
+	matches?: { bucketId: string; barcode: string | null; state: string; cycle: any | null }[];
 }
 
 /**
- * One label, no modes (§9.1): an exact bucket id resolves to that bucket and
- * its open cycle (if any); anything else becomes a short search over bucket
- * ids so a partial scan or typed fragment still lands somewhere useful.
+ * One label, no modes (§9.1): an exact bucket id or assigned sticker resolves
+ * to that bucket and its open cycle (if any); anything else becomes a short
+ * search over ids and stickers so a partial scan or typed fragment still
+ * lands somewhere useful.
  */
 export async function resolveScan(code: string): Promise<ScanResolution> {
 	await connectDB();
-	const id = normalizeBucketId(code);
-	if (!id) return { kind: 'search', matches: [] };
+	const raw = (code ?? '').trim();
+	if (!raw) return { kind: 'search', matches: [] };
 
-	const bucket = await ProductionBucket.findById(id).lean() as any;
-	if (bucket) {
+	const id = await resolveBucketId(raw);
+	if (id) {
+		const bucket = await ProductionBucket.findById(id).lean() as any;
 		const cycle = await getOpenCycle(id);
 		return { kind: 'bucket', bucket, cycle };
 	}
 
-	const found = await ProductionBucket.find({ _id: { $regex: escapeRegExp(id), $options: 'i' } })
+	const rx = { $regex: escapeRegExp(raw), $options: 'i' };
+	const found = await ProductionBucket.find({ $or: [{ _id: rx }, { barcode: rx }] })
 		.sort({ _id: 1 }).limit(10).lean() as any[];
 	const openCycles = found.length
 		? await BucketCycle.find({ bucketId: { $in: found.map(b => b._id) }, status: 'open' }).lean() as any[]
@@ -210,7 +240,7 @@ export async function resolveScan(code: string): Promise<ScanResolution> {
 	const cycleByBucket = new Map(openCycles.map(c => [c.bucketId, c]));
 	return {
 		kind: 'search',
-		matches: found.map(b => ({ bucketId: b._id, state: b.state, cycle: cycleByBucket.get(b._id) ?? null }))
+		matches: found.map(b => ({ bucketId: b._id, barcode: b.barcode ?? null, state: b.state, cycle: cycleByBucket.get(b._id) ?? null }))
 	};
 }
 
@@ -244,6 +274,70 @@ export async function mintBuckets(count: number, user: Operator, homeLocation?: 
 	return ids;
 }
 
+// A sticker stuck on a tub is one fewer available for cartridges. PT-CT-106's
+// count is "printed labels on hand", so an assignment consumes one. No lotId —
+// which sheet the sticker came from isn't knowable at the tub.
+const CONSUME_LABEL_ON_ASSIGN = true;
+
+export interface AssignBarcodeInput {
+	bucketId: string; // BKT- id or the bucket's current sticker
+	barcode: string;  // the sticker being applied
+	user: Operator;
+}
+
+/**
+ * Put a QR sticker on a bucket, or replace the one it has (§9.4). The BKT- id
+ * is untouched, so history survives a relabel. Refuses a code that is already
+ * a cartridge, another bucket's sticker, or a BKT- id.
+ */
+export async function assignBucketBarcode(input: AssignBarcodeInput): Promise<{ bucketId: string; barcode: string; previous: string | null }> {
+	await connectDB();
+	const bucketId = await resolveBucketId(input.bucketId);
+	if (!bucketId) throw new BucketError(`"${(input.bucketId ?? '').trim()}" is not a known bucket.`, 404);
+	const bucket = await ProductionBucket.findById(bucketId).lean() as any;
+	if (bucket.state === 'retired') throw new BucketError(`Bucket ${bucketId} is retired.`);
+
+	const code = (input.barcode ?? '').trim();
+	if (!code) throw new BucketError('Scan the QR sticker.');
+	if (/^BKT-\d+$/i.test(code)) throw new BucketError('That is a printed bucket id, not a sticker — scan a QR sticker.');
+	if (bucket.barcode && bucket.barcode === code) throw new BucketError(`${code} is already on ${bucketId}.`);
+
+	const cart = await CartridgeRecord.findById(code).select('_id status').lean() as any;
+	if (cart) throw new BucketError(`${code} is already cartridge ${cart._id} (status ${cart.status ?? 'unknown'}) — use an unused sticker.`, 409);
+	const other = await ProductionBucket.findOne({ barcode: code, _id: { $ne: bucketId } }).select('_id').lean() as any;
+	if (other) throw new BucketError(`${code} is already on bucket ${other._id}.`, 409);
+
+	const previous: string | null = bucket.barcode ?? null;
+	try {
+		await ProductionBucket.updateOne({ _id: bucketId }, { $set: { barcode: code } });
+	} catch (e: any) {
+		if (e?.code === 11000) throw new BucketError(`${code} was just assigned to another bucket.`, 409);
+		throw e;
+	}
+
+	if (CONSUME_LABEL_ON_ASSIGN) {
+		const partId = await resolvePartId(BARCODE_LABEL_PART);
+		await recordTransaction({
+			transactionType: 'consumption',
+			partDefinitionId: partId ?? undefined,
+			quantity: 1,
+			manufacturingStep: 'backing',
+			manufacturingRunId: bucketId,
+			operatorId: input.user._id,
+			operatorUsername: input.user.username,
+			notes: `1x ${BARCODE_LABEL_PART} sticker ${code} ${previous ? `replaced ${previous} on` : 'assigned to'} bucket ${bucketId}`
+		});
+	}
+
+	await logTx({
+		bucketId, type: 'relabel',
+		reason: previous ? `sticker replaced: ${previous} → ${code}` : `sticker assigned: ${code}`,
+		relatedId: code, operator: input.user
+	});
+	await audit('production_buckets', bucketId, 'RELABEL', input.user, { barcode: code }, { barcode: previous });
+	return { bucketId, barcode: code, previous };
+}
+
 // ── cycle lifecycle ───────────────────────────────────────────────────────
 
 async function closeCycle(cycle: any, status: 'consumed' | 'scrapped', user: Operator, relatedId?: string): Promise<void> {
@@ -273,11 +367,11 @@ export interface StartCycleInput {
 
 export async function startCycle(input: StartCycleInput): Promise<any> {
 	await connectDB();
-	const bucketId = normalizeBucketId(input.bucketId);
 	const quantity = assertPositiveInt(input.quantity, 'Quantity');
+	const bucketId = await resolveBucketId(input.bucketId);
+	if (!bucketId) throw new BucketError(`"${(input.bucketId ?? '').trim()}" is not a bucket id or an assigned bucket sticker — mint or assign its label first.`, 404);
 
 	const bucket = await ProductionBucket.findById(bucketId).lean() as any;
-	if (!bucket) throw new BucketError(`Bucket "${bucketId}" does not exist — mint its label first.`, 404);
 	if (bucket.state === 'retired') throw new BucketError(`Bucket ${bucketId} is retired.`);
 	if (bucket.state === 'in_use') throw new BucketError(`Bucket ${bucketId} already holds an open cycle.`, 409);
 	if (bucket.state === 'quarantined') {
@@ -590,12 +684,12 @@ export interface ResidualInput {
 
 export async function reportResidual(input: ResidualInput): Promise<{ bucket: any; prevCycle: any | null }> {
 	await connectDB();
-	const bucketId = normalizeBucketId(input.bucketId);
 	const qty = assertPositiveInt(input.quantity, 'Residual count');
 	if (!isBucketStage(input.stage)) throw new BucketError('Pick the stage the leftover cartridges are at.');
+	const bucketId = await resolveBucketId(input.bucketId);
+	if (!bucketId) throw new BucketError(`"${(input.bucketId ?? '').trim()}" is not a known bucket.`, 404);
 
 	const bucket = await ProductionBucket.findById(bucketId).lean() as any;
-	if (!bucket) throw new BucketError(`Bucket "${bucketId}" does not exist.`, 404);
 	if (bucket.state === 'in_use') throw new BucketError(`Bucket ${bucketId} has an open cycle — use Adjust on that cycle instead of reporting a residual.`);
 	if (bucket.state === 'retired') throw new BucketError(`Bucket ${bucketId} is retired.`);
 
@@ -608,8 +702,10 @@ export async function reportResidual(input: ResidualInput): Promise<{ bucket: an
 	let relatedId: string | undefined;
 
 	if (input.disposition === 'merge') {
-		const destId = normalizeBucketId(input.destinationBucketId ?? '');
-		if (!destId) throw new BucketError('Scan the destination bucket.');
+		const destRaw = (input.destinationBucketId ?? '').trim();
+		if (!destRaw) throw new BucketError('Scan the destination bucket.');
+		const destId = await resolveBucketId(destRaw);
+		if (!destId) throw new BucketError(`"${destRaw}" is not a known bucket.`, 404);
 		if (destId === bucketId) throw new BucketError('Destination must be a different bucket.');
 		const dest = await getOpenCycle(destId);
 		if (!dest) throw new BucketError(`Bucket ${destId} has no open cycle to merge into.`);
@@ -700,9 +796,9 @@ export async function reportResidual(input: ResidualInput): Promise<{ bucket: an
 
 export async function retireBucket(bucketId: string, reason: string, user: Operator): Promise<void> {
 	await connectDB();
-	const id = normalizeBucketId(bucketId);
+	const id = await resolveBucketId(bucketId);
+	if (!id) throw new BucketError(`"${(bucketId ?? '').trim()}" is not a known bucket.`, 404);
 	const bucket = await ProductionBucket.findById(id).lean() as any;
-	if (!bucket) throw new BucketError(`Bucket "${id}" does not exist.`, 404);
 	if (bucket.state === 'in_use') throw new BucketError('Drain or scrap the open cycle before retiring this bucket.');
 	if (bucket.state === 'retired') throw new BucketError('Already retired.');
 	const why = (reason ?? '').trim();
@@ -751,6 +847,7 @@ export async function stageCounts(): Promise<StageCounts> {
 export interface BoardCycle {
 	cycleId: string;
 	bucketId: string;
+	barcode: string | null; // the tub's sticker, so the scan rail resolves either label
 	cycleNumber: number;
 	stage: BucketStage;
 	quantity: number;
@@ -764,6 +861,7 @@ export interface BoardCycle {
 
 export interface BoardBucket {
 	bucketId: string;
+	barcode: string | null;
 	state: string;
 	cycleCount: number;
 	spotCheckPending: boolean;
@@ -774,10 +872,12 @@ export interface BoardBucket {
 
 export async function boardData(): Promise<{ cycles: BoardCycle[]; available: BoardBucket[]; quarantined: BoardBucket[] }> {
 	await connectDB();
-	const [cycles, buckets] = await Promise.all([
+	const [cycles, buckets, inUse] = await Promise.all([
 		BucketCycle.find({ status: 'open' }).sort({ stageEnteredAt: 1 }).lean() as any as Promise<any[]>,
-		ProductionBucket.find({ state: { $in: ['available', 'quarantined'] } }).sort({ _id: 1 }).lean() as any as Promise<any[]>
+		ProductionBucket.find({ state: { $in: ['available', 'quarantined'] } }).sort({ _id: 1 }).lean() as any as Promise<any[]>,
+		ProductionBucket.find({ state: 'in_use' }).select('_id barcode').lean() as any as Promise<any[]>
 	]);
+	const barcodeByBucket = new Map<string, string | null>(inUse.map(b => [b._id, b.barcode ?? null]));
 	// Latest closed cycle per idle bucket → the stage its leftovers are most
 	// plausibly at. One aggregate instead of a query per bucket.
 	const lastStageByBucket = new Map<string, BucketStage>();
@@ -791,6 +891,7 @@ export async function boardData(): Promise<{ cycles: BoardCycle[]; available: Bo
 	}
 	const toBucket = (b: any): BoardBucket => ({
 		bucketId: b._id,
+		barcode: b.barcode ?? null,
 		state: b.state,
 		cycleCount: b.cycleCount ?? 0,
 		spotCheckPending: !!b.spotCheckPending,
@@ -802,6 +903,7 @@ export async function boardData(): Promise<{ cycles: BoardCycle[]; available: Bo
 		cycles: cycles.map(c => ({
 			cycleId: c._id,
 			bucketId: c.bucketId,
+			barcode: barcodeByBucket.get(c.bucketId) ?? null,
 			cycleNumber: c.cycleNumber,
 			stage: c.stage,
 			quantity: c.quantity,
@@ -820,9 +922,9 @@ export async function boardData(): Promise<{ cycles: BoardCycle[]; available: Bo
 /** Full history for one tub: every cycle it has held, plus the ledger. */
 export async function bucketHistory(bucketId: string): Promise<{ bucket: any; cycles: any[]; transactions: any[]; removals: any[] } | null> {
 	await connectDB();
-	const id = normalizeBucketId(bucketId);
+	const id = await resolveBucketId(bucketId); // accepts the BKT- id or the tub's sticker
+	if (!id) return null;
 	const bucket = await ProductionBucket.findById(id).lean() as any;
-	if (!bucket) return null;
 	const [cycles, transactions, removals] = await Promise.all([
 		BucketCycle.find({ bucketId: id }).sort({ cycleNumber: -1 }).lean(),
 		BucketTransaction.find({ bucketId: id }).sort({ createdAt: -1 }).limit(500).lean(),

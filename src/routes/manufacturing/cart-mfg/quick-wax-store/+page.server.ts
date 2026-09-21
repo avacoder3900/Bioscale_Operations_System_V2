@@ -14,6 +14,7 @@
 import { fail, redirect } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
 import { connectDB, CartridgeRecord, AuditLog, generateId } from '$lib/server/db';
+import { assertNotBucketLabel } from '$lib/server/services/bucket-service';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
@@ -53,6 +54,8 @@ export const actions: Actions = {
 				const cart = (await CartridgeRecord.findById(barcode).select('_id status').lean()) as any;
 
 				if (!cart) {
+					// A bucket's QR sticker must never be born as a cartridge (throws → failed below).
+					await assertNotBucketLabel(barcode);
 					// Barcode doesn't exist yet → originate a fresh cart straight at wax_stored.
 					await CartridgeRecord.create({
 						_id: barcode,

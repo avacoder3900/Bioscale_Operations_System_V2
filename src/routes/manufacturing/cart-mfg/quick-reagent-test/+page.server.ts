@@ -16,6 +16,7 @@
 import { fail, redirect } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
 import { connectDB, CartridgeRecord, AuditLog, generateId } from '$lib/server/db';
+import { assertNotBucketLabel } from '$lib/server/services/bucket-service';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
@@ -58,6 +59,8 @@ export const actions: Actions = {
 				// test fill without having gone through wax/backing first. Created,
 				// not rejected.
 				try {
+					// A bucket's QR sticker must never be born as a cartridge (throws → rejected below).
+					await assertNotBucketLabel(barcode);
 					await CartridgeRecord.create({
 						_id: barcode,
 						status: 'wax_ready',
