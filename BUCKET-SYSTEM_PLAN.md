@@ -574,6 +574,10 @@ last, then the read-only views — then iterated on the preview. Code commits on
 | `e59307be` | Available card: "empty tubs" → "empty buckets" |
 | `b7e2c262` | Bucket log under the change log — every bucket, every status, retired included |
 | `f0e9176a` | **Merge of `origin/master` (564 commits) into the branch**; collision guard extended to `state-change`, `wax-filling` test-mode upsert and `reagent-filling` stub upsert; `findBucketLabels()` |
+| `47a2a63d` | `voidCycle()` + *Void this pass…* — return a test pass's inventory debits (§12.2) |
+
+On the merged tree `npm run check` is **10 errors / 437 warnings** — the same ten pre-existing
+errors; 437 is master's own warning count. None in any bucket-touched file.
 
 `npm run check` after every change: **10 errors / 434 warnings, none in any file this branch
 touches.** The 10 are pre-existing (`r2.ts` Buffer/BodyInit, `AskBimsWidget.svelte` unreachable

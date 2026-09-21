@@ -13577,3 +13577,12 @@ search link, Ask BIMS blind to buckets).
 npm run check (merged tree): 10 errors / 437 warnings, none in bucket-touched files. Ten TS
 errors I introduced (unnarrowed form union on the history page) fixed before commit.
 NOT YET EXERCISED against a database -- first real test is the preview.
+
+Deployment: preview -- https://bioscale-operations-system-mongodb-mrf20irrq-brevitest.vercel.app
+  (brevitest scope; cookie-session gated, 302 to /login)
+Source: branch feat/bucket-system @ commit f0e9176a (the merge of origin/master)
+Retrieve this exact code: git checkout feat/bucket-system at commit f0e9176a
+What this deployment is for: FIRST build of the bucket system on top of current production
+  code (master @ f0f5773f). Proves the merged tree builds on Vercel. Superseded by the
+  void-pass build that follows.
+Build status: success (brevitest scope, 22:03Z).
