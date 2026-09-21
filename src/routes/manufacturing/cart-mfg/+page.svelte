@@ -190,6 +190,50 @@
 		</div>
 	{/if}
 
+	<!-- Production Buckets — pre-barcode funnel, upstream of everything in Pipeline
+	     Flow. Same counts and stages as the buckets board; each tile deep-links
+	     to the board filtered to that stage. Hidden if the bucket query failed. -->
+	{#if data.bucketCounts}
+		{@const bc = data.bucketCounts}
+		{@const bucketStages = [
+			{ key: 'available', label: 'Available', count: bc.available, sub: 'empty tubs', color: 'text-[var(--color-tron-text)]' },
+			{ key: 'raw', label: 'Raw', count: bc.stages.raw.cartridges, sub: `${bc.stages.raw.buckets} bucket${bc.stages.raw.buckets === 1 ? '' : 's'}`, color: 'text-[var(--color-tron-cyan)]' },
+			{ key: 'unpressed', label: 'Unpressed', count: bc.stages.unpressed.cartridges, sub: `${bc.stages.unpressed.buckets} bucket${bc.stages.unpressed.buckets === 1 ? '' : 's'}`, color: 'text-[var(--color-tron-cyan)]' },
+			{ key: 'pressed', label: 'Pressed', count: bc.stages.pressed.cartridges, sub: `${bc.stages.pressed.buckets} bucket${bc.stages.pressed.buckets === 1 ? '' : 's'}`, color: 'text-[var(--color-tron-cyan)]' },
+			{ key: 'qr_pending', label: 'QR Pending', count: bc.stages.qr_pending.cartridges, sub: `${bc.stages.qr_pending.buckets} bucket${bc.stages.qr_pending.buckets === 1 ? '' : 's'}`, color: 'text-[var(--color-tron-cyan)]' }
+		]}
+		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-4">
+			<div class="mb-4 flex items-center justify-between">
+				<h2 class="text-xs font-semibold uppercase tracking-widest text-[var(--color-tron-cyan)]">Production Buckets</h2>
+				<a href="/manufacturing/cart-mfg/buckets" class="text-xs text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)]">Open board →</a>
+			</div>
+			<div class="flex items-stretch gap-1 overflow-x-auto">
+				{#each bucketStages as stage, i (stage.key)}
+					<a href="/manufacturing/cart-mfg/buckets?stage={stage.key}" class="flex-1 min-w-[100px] text-center" title="Open the bucket board at {stage.label}">
+						<div class="rounded-lg bg-[var(--color-tron-bg-tertiary)] border border-[var(--color-tron-border)] p-3 h-full flex flex-col justify-center hover:border-[var(--color-tron-cyan)]/60">
+							<div class="text-xs font-semibold uppercase tracking-wide text-[var(--color-tron-text-secondary)]">{stage.label}</div>
+							<div class="mt-1 text-xl font-bold {stage.color}">{stage.count}</div>
+							<div class="text-xs text-[var(--color-tron-text-secondary)]">{stage.sub}</div>
+						</div>
+					</a>
+					{#if i < bucketStages.length - 1}
+						<div class="flex items-center text-[var(--color-tron-cyan)] text-lg font-bold select-none">▶</div>
+					{/if}
+				{/each}
+				{#if bc.quarantined > 0}
+					<div class="flex items-center text-[var(--color-tron-border)] text-lg select-none">│</div>
+					<a href="/manufacturing/cart-mfg/buckets?stage=available" class="flex-1 min-w-[100px] text-center" title="Buckets with undispositioned contents">
+						<div class="rounded-lg bg-[var(--color-tron-bg-tertiary)] border border-[var(--color-tron-yellow)]/40 p-3 h-full flex flex-col justify-center">
+							<div class="text-xs font-semibold uppercase tracking-wide text-[var(--color-tron-text-secondary)]">Quarantined</div>
+							<div class="mt-1 text-xl font-bold text-[var(--color-tron-yellow)]">{bc.quarantined}</div>
+							<div class="text-xs text-[var(--color-tron-text-secondary)]">need disposition</div>
+						</div>
+					</a>
+				{/if}
+			</div>
+		</div>
+	{/if}
+
 	<!-- Pipeline Flow Visualization -->
 	<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-4">
 		<h2 class="mb-4 text-xs font-semibold uppercase tracking-widest text-[var(--color-tron-cyan)]">Pipeline Flow</h2>

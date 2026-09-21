@@ -14,7 +14,7 @@
 			presses: { name: string; equipmentId: string | null }[];
 			lots: Record<string, { lotId: string; remaining: number }[]>;
 			canAdjust: boolean;
-			scan: { kind: 'bucket' | 'search'; bucket?: any; cycle?: any; matches?: { bucketId: string; state: string; cycle: any }[] } | null;
+			scan: { kind: 'bucket' | 'search'; bucket?: any; cycle?: any; matches?: { bucketId: string; barcode: string | null; state: string; cycle: any }[] } | null;
 			scanQuery: string;
 		};
 		form: {
@@ -25,18 +25,19 @@
 	let { data, form }: Props = $props();
 
 	// ── rail state ──────────────────────────────────────────────────────────
-	// One label, no modes: the scan box resolves against what the board
-	// already knows, so a tub in hand jumps straight to its card. Anything
-	// not on the board (retired, historical) falls through to the server via
-	// ?q= so past passes still show up in the short list.
-	let scanInput = $state('');
+	// The panel stores only ids + a mode. The live cycle / bucket objects are
+	// looked up from `data` with $derived, so a refetch after an action never
+	// leaves the rail holding a stale object — and there is no identity
+	// comparison between state proxies and data objects to get wrong.
+	type CycleMode = 'view' | 'advance' | 'adjust' | 'scrap';
 	type Panel =
 		| { kind: 'none' }
-		| { kind: 'cycle'; cycle: BoardCycle; mode: 'view' | 'advance' | 'adjust' | 'scrap' }
-		| { kind: 'start'; bucket: BoardBucket; step: 'spot_check' | 'form' }
-		| { kind: 'residual'; bucket: BoardBucket }
-		| { kind: 'retire'; bucket: BoardBucket };
+		| { kind: 'cycle'; cycleId: string; mode: CycleMode }
+		| { kind: 'start'; bucketId: string; step: 'spot_check' | 'form' }
+		| { kind: 'residual'; bucketId: string }
+		| { kind: 'retire'; bucketId: string };
 	let panel = $state<Panel>({ kind: 'none' });
+	let scanInput = $state('');
 	let shortList = $state<{ bucketId: string; state: string; hint: string }[]>([]);
 	let busy = $state(false);
 
@@ -47,14 +48,32 @@
 	});
 	const allIdleBuckets = $derived([...data.board.available, ...data.board.quarantined]);
 
+	// Narrow `panel` into a local before the .find() callbacks — TS drops the
+	// discriminant narrowing inside closures otherwise.
+	const panelCycle = $derived.by((): BoardCycle | null => {
+		const p = panel;
+		if (p.kind !== 'cycle') return null;
+		const id = p.cycleId;
+		return data.board.cycles.find(c => c.cycleId === id) ?? null;
+	});
+	const panelBucket = $derived.by((): BoardBucket | null => {
+		const p = panel;
+		if (p.kind !== 'start' && p.kind !== 'residual' && p.kind !== 'retire') return null;
+		const id = p.bucketId;
+		return allIdleBuckets.find(b => b.bucketId === id) ?? null;
+	});
+
 	function shortQr(barcode: string | null): string | null {
 		return barcode ? (barcode.length > 12 ? `${barcode.slice(0, 8)}…` : barcode) : null;
 	}
 
-	function openCycle(c: BoardCycle) { panel = { kind: 'cycle', cycle: c, mode: 'view' }; }
+	function openCycle(c: BoardCycle) { panel = { kind: 'cycle', cycleId: c.cycleId, mode: 'view' }; }
+	function setMode(mode: CycleMode) {
+		if (panel.kind === 'cycle') panel = { kind: 'cycle', cycleId: panel.cycleId, mode };
+	}
 	function openBucket(b: BoardBucket) {
-		if (b.state === 'quarantined') panel = { kind: 'residual', bucket: b };
-		else panel = { kind: 'start', bucket: b, step: b.spotCheckPending ? 'spot_check' : 'form' };
+		if (b.state === 'quarantined') panel = { kind: 'residual', bucketId: b.bucketId };
+		else panel = { kind: 'start', bucketId: b.bucketId, step: b.spotCheckPending ? 'spot_check' : 'form' };
 	}
 
 	// A tub is labelled either with its printed BKT- id or a UUID QR sticker
@@ -113,31 +132,21 @@
 		return `${Math.floor(h / 24)}d ${h % 24}h`;
 	}
 
-	// Keep the rail pointed at the same cycle across a reload after an action
-	// (board data is refetched by enhance; our local reference goes stale).
+	// React to each action result exactly once. `form` keeps the last result
+	// until the next action, so without this guard a stale `scrap.success`
+	// would keep snapping the panel back to view every time the operator
+	// tried to open Scrap or Adjust — the "unresponsive buttons" bug.
+	let handledForm: unknown = null;
 	$effect(() => {
-		if (panel.kind === 'cycle') {
-			const cur = panel.cycle;
-			const mode = panel.mode;
-			const fresh = data.board.cycles.find(c => c.cycleId === cur.cycleId);
-			const succeeded = !!(form?.advance?.success || form?.scrap?.success || form?.adjust?.success);
-			if (!fresh) {
-				// Cycle left the board (advanced past QR, drained, or scrapped out).
-				if (succeeded) panel = { kind: 'none' };
-			} else if (fresh !== cur) {
-				// Data refetched: keep the rail on the same cycle. Drop back to
-				// view only after a success — a failed action keeps its form
-				// open so the error stays visible.
-				panel = { kind: 'cycle', cycle: fresh, mode: succeeded ? 'view' : mode };
-			}
+		if (!form || form === handledForm) return;
+		handledForm = form;
+		if (form.advance?.success || form.scrap?.success || form.adjust?.success) {
+			if (panel.kind === 'cycle') setMode('view');
 		}
-		if (panel.kind === 'start' && form?.start?.success) {
-			const id = (form.start as any).bucketId as string;
-			const fresh = data.board.cycles.find(c => c.bucketId === id);
-			panel = fresh ? { kind: 'cycle', cycle: fresh, mode: 'view' } : { kind: 'none' };
+		if (form.start?.success && typeof form.start.cycleId === 'string') {
+			panel = { kind: 'cycle', cycleId: form.start.cycleId, mode: 'view' };
 		}
-		if (panel.kind === 'residual' && form?.residual?.success) panel = { kind: 'none' };
-		if (panel.kind === 'retire' && form?.retire?.success) panel = { kind: 'none' };
+		if (form.residual?.success || form.retire?.success) panel = { kind: 'none' };
 	});
 
 	// enhance's default update() re-runs load on success and failure alike, so
@@ -152,7 +161,7 @@
 
 	const inputCls = 'mt-1 w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-3 py-2 text-sm text-[var(--color-tron-text)] placeholder:text-[var(--color-tron-text-secondary)]/50 focus:border-[var(--color-tron-cyan)] focus:outline-none';
 	const btnPrimary = 'w-full rounded-lg bg-[var(--color-tron-cyan)] py-2.5 text-sm font-bold text-[var(--color-tron-bg-primary)] hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-30';
-	const btnGhost = 'rounded border border-[var(--color-tron-border)] px-3 py-1.5 text-xs text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]';
+	const btnGhost = 'rounded border border-[var(--color-tron-border)] px-3 py-1.5 text-xs text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)] disabled:cursor-not-allowed disabled:opacity-40';
 	const btnDanger = 'w-full rounded-lg border border-red-500/50 bg-red-900/20 py-2.5 text-sm font-semibold text-red-300 hover:bg-red-900/30 disabled:opacity-30';
 
 	const stageTint: Record<string, string> = {
@@ -209,7 +218,7 @@
 				<div class="space-y-2">
 					{#each data.board.available as b (b.bucketId)}
 						<button type="button" onclick={() => openBucket(b)}
-							class="w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-2 text-left hover:border-[var(--color-tron-cyan)]/60 {panel.kind === 'start' && panel.bucket.bucketId === b.bucketId ? 'ring-1 ring-[var(--color-tron-cyan)]' : ''}">
+							class="w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-2 text-left hover:border-[var(--color-tron-cyan)]/60 {panel.kind === 'start' && panel.bucketId === b.bucketId ? 'ring-1 ring-[var(--color-tron-cyan)]' : ''}">
 							<div class="flex items-center justify-between">
 								<span class="font-mono text-sm text-[var(--color-tron-text)]">{b.bucketId}</span>
 								{#if b.spotCheckPending}<span class="rounded bg-[var(--color-tron-yellow)]/20 px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-[var(--color-tron-yellow)]" title="Confirm empty at next start">check</span>{/if}
@@ -219,7 +228,7 @@
 					{/each}
 					{#each data.board.quarantined as b (b.bucketId)}
 						<button type="button" onclick={() => openBucket(b)}
-							class="w-full rounded border border-[var(--color-tron-yellow)]/50 bg-[var(--color-tron-yellow)]/5 p-2 text-left hover:border-[var(--color-tron-yellow)] {panel.kind === 'residual' && panel.bucket.bucketId === b.bucketId ? 'ring-1 ring-[var(--color-tron-yellow)]' : ''}">
+							class="w-full rounded border border-[var(--color-tron-yellow)]/50 bg-[var(--color-tron-yellow)]/5 p-2 text-left hover:border-[var(--color-tron-yellow)] {panel.kind === 'residual' && panel.bucketId === b.bucketId ? 'ring-1 ring-[var(--color-tron-yellow)]' : ''}">
 							<div class="flex items-center justify-between">
 								<span class="font-mono text-sm text-[var(--color-tron-text)]">{b.bucketId}</span>
 								<span class="rounded bg-[var(--color-tron-yellow)]/20 px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-[var(--color-tron-yellow)]">quarantined</span>
@@ -243,7 +252,7 @@
 					<div class="space-y-2">
 						{#each cyclesByStage[s.key] as c (c.cycleId)}
 							<button type="button" onclick={() => openCycle(c)}
-								class="w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-2 text-left hover:border-[var(--color-tron-cyan)]/60 {panel.kind === 'cycle' && panel.cycle.cycleId === c.cycleId ? 'ring-1 ring-[var(--color-tron-cyan)]' : ''}">
+								class="w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-2 text-left hover:border-[var(--color-tron-cyan)]/60 {panel.kind === 'cycle' && panel.cycleId === c.cycleId ? 'ring-1 ring-[var(--color-tron-cyan)]' : ''}">
 								<div class="flex items-baseline justify-between">
 									<span class="font-mono text-sm text-[var(--color-tron-text)]">{c.bucketId}</span>
 									<span class="text-lg font-bold text-[var(--color-tron-cyan)]">{c.quantity}</span>
@@ -266,7 +275,7 @@
 		<aside class="space-y-3">
 			<div class="rounded-lg border border-[var(--color-tron-cyan)]/40 bg-[var(--color-tron-surface)] p-3">
 				<label for="bucketScan" class="block text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Scan or search bucket</label>
-				<input id="bucketScan" type="text" bind:value={scanInput} autocomplete="off" placeholder="BKT-000123"
+				<input id="bucketScan" type="text" bind:value={scanInput} autocomplete="off" placeholder="BKT-000123 or sticker"
 					onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleScan(); } }}
 					oninput={() => { if (scanInput.trim().length >= 3) resolveLocal(scanInput); else shortList = []; }}
 					class="mt-1 w-full rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-bg-primary)] px-3 py-2.5 font-mono text-[var(--color-tron-text)] focus:border-[var(--color-tron-cyan)] focus:outline-none" />
@@ -312,98 +321,112 @@
 					<p class="py-6 text-center text-xs text-[var(--color-tron-text-secondary)]">Scan a bucket or pick a card.</p>
 
 				{:else if panel.kind === 'cycle'}
-					{@const c = panel.cycle}
-					{@const nxt = nextKey(c.stage)}
-					<div class="flex items-start justify-between">
-						<div>
-							<div class="font-mono text-lg text-[var(--color-tron-text)]">{c.bucketId} <span class="text-sm text-[var(--color-tron-text-secondary)]">#{c.cycleNumber}</span></div>
-							<div class="text-xs text-[var(--color-tron-text-secondary)]">{labelFor(c.stage)} · opened {c.openedAt ? new Date(c.openedAt).toLocaleString() : '—'}{c.openedBy ? ` · ${c.openedBy}` : ''}</div>
-						</div>
-						<a href="/manufacturing/cart-mfg/buckets/{c.bucketId}" class="text-[10px] text-[var(--color-tron-cyan)] hover:underline">history</a>
-					</div>
-					<div class="mt-3 grid grid-cols-3 gap-2 text-center">
-						<div class="rounded bg-[var(--color-tron-bg-primary)] p-2"><p class="text-[10px] text-[var(--color-tron-text-secondary)]">In tub</p><p class="text-xl font-bold text-[var(--color-tron-cyan)]">{c.quantity}</p></div>
-						<div class="rounded bg-[var(--color-tron-bg-primary)] p-2"><p class="text-[10px] text-[var(--color-tron-text-secondary)]">Opened</p><p class="text-xl font-bold text-[var(--color-tron-text)]">{c.openedQty}</p></div>
-						<div class="rounded bg-[var(--color-tron-bg-primary)] p-2"><p class="text-[10px] text-[var(--color-tron-text-secondary)]">Here</p><p class="text-xl font-bold text-[var(--color-tron-text)]">{dwell(c.stageEnteredAt)}</p></div>
-					</div>
-					<div class="mt-2 text-[10px] text-[var(--color-tron-text-secondary)]">
-						{#each c.sourceLots as l (l.partNumber + l.lotId)}<span class="mr-2">{l.partNumber} <span class="font-mono text-[var(--color-tron-text)]">{l.lotId}</span></span>{/each}
-						{#if c.pressEquipmentName}<span>press <span class="text-[var(--color-tron-text)]">{c.pressEquipmentName}</span></span>{/if}
-					</div>
-
-					{#if panel.mode === 'view'}
-						<div class="mt-3 space-y-2">
-							{#if nxt}
-								<button type="button" class={btnPrimary} onclick={() => { panel = { kind: 'cycle', cycle: c, mode: 'advance' }; }}>Advance → {nextLabel(c.stage)}</button>
-							{:else}
-								<a href="/manufacturing/cart-mfg/wi-01" class="block rounded-lg border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 py-2.5 text-center text-sm font-semibold text-[var(--color-tron-cyan)]">Ready for WI-01 — scan this bucket there</a>
-							{/if}
-							<div class="grid grid-cols-2 gap-2">
-								<button type="button" class={btnGhost} onclick={() => { panel = { kind: 'cycle', cycle: c, mode: 'scrap' }; }}>Scrap…</button>
-								<button type="button" class={btnGhost} disabled={!data.canAdjust} title={data.canAdjust ? '' : 'Requires manufacturing:admin'} onclick={() => { panel = { kind: 'cycle', cycle: c, mode: 'adjust' }; }}>Adjust count…</button>
+					{#if !panelCycle}
+						<p class="py-4 text-center text-xs text-[var(--color-tron-text-secondary)]">This pass is no longer on the board (drained, scrapped out, or refreshing).</p>
+						<button type="button" class={btnGhost} onclick={() => { panel = { kind: 'none' }; }}>Close</button>
+					{:else}
+						{@const c = panelCycle}
+						{@const nxt = nextKey(c.stage)}
+						<div class="flex items-start justify-between">
+							<div>
+								<div class="font-mono text-lg text-[var(--color-tron-text)]">{c.bucketId} <span class="text-sm text-[var(--color-tron-text-secondary)]">#{c.cycleNumber}</span></div>
+								<div class="text-xs text-[var(--color-tron-text-secondary)]">{labelFor(c.stage)} · opened {c.openedAt ? new Date(c.openedAt).toLocaleString() : '—'}{c.openedBy ? ` · ${c.openedBy}` : ''}</div>
 							</div>
+							<a href="/manufacturing/cart-mfg/buckets/{c.bucketId}" class="text-[10px] text-[var(--color-tron-cyan)] hover:underline">history</a>
+						</div>
+						<div class="mt-3 grid grid-cols-3 gap-2 text-center">
+							<div class="rounded bg-[var(--color-tron-bg-primary)] p-2"><p class="text-[10px] text-[var(--color-tron-text-secondary)]">In tub</p><p class="text-xl font-bold text-[var(--color-tron-cyan)]">{c.quantity}</p></div>
+							<div class="rounded bg-[var(--color-tron-bg-primary)] p-2"><p class="text-[10px] text-[var(--color-tron-text-secondary)]">Opened</p><p class="text-xl font-bold text-[var(--color-tron-text)]">{c.openedQty}</p></div>
+							<div class="rounded bg-[var(--color-tron-bg-primary)] p-2"><p class="text-[10px] text-[var(--color-tron-text-secondary)]">Here</p><p class="text-xl font-bold text-[var(--color-tron-text)]">{dwell(c.stageEnteredAt)}</p></div>
+						</div>
+						<div class="mt-2 text-[10px] text-[var(--color-tron-text-secondary)]">
+							{#each c.sourceLots as l (l.partNumber + l.lotId)}<span class="mr-2">{l.partNumber} <span class="font-mono text-[var(--color-tron-text)]">{l.lotId}</span></span>{/each}
+							{#if c.pressEquipmentName}<span>press <span class="text-[var(--color-tron-text)]">{c.pressEquipmentName}</span></span>{/if}
 						</div>
 
-					{:else if panel.mode === 'advance'}
-						<form method="POST" action="?/advance" use:enhance={enhanceBusy} class="mt-3 space-y-3">
-							<input type="hidden" name="cycleId" value={c.cycleId} />
-							<p class="text-sm text-[var(--color-tron-text)]">Move the whole bucket ({c.quantity}) to <strong>{nextLabel(c.stage)}</strong>.</p>
-							{#if nxt === 'pressed'}
-								<label class="block">
-									<span class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Which press</span>
-									<input type="text" name="pressName" list="pressList" required placeholder="Press 1" class={inputCls} />
-									<datalist id="pressList">{#each data.presses as p (p.name)}<option value={p.name}></option>{/each}</datalist>
-								</label>
-							{:else if nxt === 'qr_pending'}
-								<label class="block">
-									<span class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Barcode label lot (PT-CT-106) — {c.quantity} labels applied</span>
-									<select name="barcodeLotId" required class={inputCls}>
-										<option value="">{(data.lots['PT-CT-106'] ?? []).length ? '— Select lot —' : 'No label lots available'}</option>
-										{#each data.lots['PT-CT-106'] ?? [] as l (l.lotId)}<option value={l.lotId}>{l.lotId} — {l.remaining} left</option>{/each}
-									</select>
-								</label>
-							{/if}
-							{#if form?.advance?.error}<p class="text-xs text-[var(--color-tron-error)]">{form.advance.error}</p>{/if}
-							<button type="submit" disabled={busy} class={btnPrimary}>{busy ? 'Saving…' : `Confirm → ${nextLabel(c.stage)}`}</button>
-							<button type="button" class={btnGhost} onclick={() => { panel = { kind: 'cycle', cycle: c, mode: 'view' }; }}>Cancel</button>
-						</form>
+						{#if panel.mode === 'view'}
+							<div class="mt-3 space-y-2">
+								{#if nxt}
+									<button type="button" class={btnPrimary} onclick={() => setMode('advance')}>Advance → {nextLabel(c.stage)}</button>
+								{:else}
+									<a href="/manufacturing/cart-mfg/wi-01" class="block rounded-lg border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 py-2.5 text-center text-sm font-semibold text-[var(--color-tron-cyan)]">Ready for WI-01 — scan this bucket there</a>
+								{/if}
+								<div class="grid grid-cols-2 gap-2">
+									<button type="button" class={btnGhost} onclick={() => setMode('scrap')}>Scrap…</button>
+									<button type="button" class={btnGhost} disabled={!data.canAdjust} title={data.canAdjust ? '' : 'Count corrections require the manufacturing:admin permission'} onclick={() => setMode('adjust')}>
+										Adjust count…{#if !data.canAdjust}<span class="ml-1 text-[9px] uppercase tracking-wider">admin</span>{/if}
+									</button>
+								</div>
+								{#if !data.canAdjust}
+									<p class="text-[10px] text-[var(--color-tron-text-secondary)]">Adjust needs manufacturing:admin. To empty a bucket, use Scrap.</p>
+								{/if}
+							</div>
 
-					{:else if panel.mode === 'scrap'}
-						<form method="POST" action="?/scrap" use:enhance={enhanceBusy} class="mt-3 space-y-3">
-							<input type="hidden" name="cycleId" value={c.cycleId} />
-							<label class="block">
-								<span class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">How many scrapped (max {c.quantity})</span>
-								<input type="number" name="quantity" min="1" max={c.quantity} required class={inputCls} />
-							</label>
-							<label class="block">
-								<span class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Journal — why (required)</span>
-								<textarea name="journal" rows="3" required placeholder="What happened to them?" class={inputCls}></textarea>
-							</label>
-							{#if form?.scrap?.error}<p class="text-xs text-[var(--color-tron-error)]">{form.scrap.error}</p>{/if}
-							<button type="submit" disabled={busy} class={btnDanger}>{busy ? 'Saving…' : 'Scrap & journal'}</button>
-							<button type="button" class={btnGhost} onclick={() => { panel = { kind: 'cycle', cycle: c, mode: 'view' }; }}>Cancel</button>
-						</form>
+						{:else if panel.mode === 'advance'}
+							<form method="POST" action="?/advance" use:enhance={enhanceBusy} class="mt-3 space-y-3">
+								<input type="hidden" name="cycleId" value={c.cycleId} />
+								<p class="text-sm text-[var(--color-tron-text)]">Move the whole bucket ({c.quantity}) to <strong>{nextLabel(c.stage)}</strong>.</p>
+								{#if nxt === 'pressed'}
+									<label class="block">
+										<span class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Which press</span>
+										<input type="text" name="pressName" list="pressList" required placeholder="Press 1" class={inputCls} />
+										<datalist id="pressList">{#each data.presses as p (p.name)}<option value={p.name}></option>{/each}</datalist>
+									</label>
+								{:else if nxt === 'qr_pending'}
+									<label class="block">
+										<span class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Barcode label lot (PT-CT-106) — {c.quantity} labels applied</span>
+										<select name="barcodeLotId" required class={inputCls}>
+											<option value="">{(data.lots['PT-CT-106'] ?? []).length ? '— Select lot —' : 'No label lots available'}</option>
+											{#each data.lots['PT-CT-106'] ?? [] as l (l.lotId)}<option value={l.lotId}>{l.lotId} — {l.remaining} left</option>{/each}
+										</select>
+									</label>
+								{/if}
+								{#if form?.advance?.error}<p class="text-xs text-[var(--color-tron-error)]">{form.advance.error}</p>{/if}
+								<button type="submit" disabled={busy} class={btnPrimary}>{busy ? 'Saving…' : `Confirm → ${nextLabel(c.stage)}`}</button>
+								<button type="button" class={btnGhost} onclick={() => setMode('view')}>Cancel</button>
+							</form>
 
-					{:else if panel.mode === 'adjust'}
-						<form method="POST" action="?/adjust" use:enhance={enhanceBusy} class="mt-3 space-y-3">
-							<input type="hidden" name="cycleId" value={c.cycleId} />
-							<p class="text-xs text-[var(--color-tron-text-secondary)]">Physical recount disagrees with {c.quantity}. To empty a bucket use Scrap, so the loss gets a journal entry.</p>
-							<label class="block">
-								<span class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Actual count</span>
-								<input type="number" name="newQuantity" min="1" required class={inputCls} />
-							</label>
-							<label class="block">
-								<span class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Reason (required)</span>
-								<input type="text" name="reason" required class={inputCls} />
-							</label>
-							{#if form?.adjust?.error}<p class="text-xs text-[var(--color-tron-error)]">{form.adjust.error}</p>{/if}
-							<button type="submit" disabled={busy} class={btnPrimary}>{busy ? 'Saving…' : 'Correct count'}</button>
-							<button type="button" class={btnGhost} onclick={() => { panel = { kind: 'cycle', cycle: c, mode: 'view' }; }}>Cancel</button>
-						</form>
+						{:else if panel.mode === 'scrap'}
+							<form method="POST" action="?/scrap" use:enhance={enhanceBusy} class="mt-3 space-y-3">
+								<input type="hidden" name="cycleId" value={c.cycleId} />
+								<label class="block">
+									<span class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">How many scrapped (max {c.quantity})</span>
+									<input type="number" name="quantity" min="1" max={c.quantity} required class={inputCls} />
+								</label>
+								<label class="block">
+									<span class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Journal — why (required)</span>
+									<textarea name="journal" rows="3" required placeholder="What happened to them?" class={inputCls}></textarea>
+								</label>
+								{#if form?.scrap?.error}<p class="text-xs text-[var(--color-tron-error)]">{form.scrap.error}</p>{/if}
+								<button type="submit" disabled={busy} class={btnDanger}>{busy ? 'Saving…' : 'Scrap & journal'}</button>
+								<button type="button" class={btnGhost} onclick={() => setMode('view')}>Cancel</button>
+							</form>
+
+						{:else if panel.mode === 'adjust'}
+							<form method="POST" action="?/adjust" use:enhance={enhanceBusy} class="mt-3 space-y-3">
+								<input type="hidden" name="cycleId" value={c.cycleId} />
+								<p class="text-xs text-[var(--color-tron-text-secondary)]">Physical recount disagrees with {c.quantity}. To empty a bucket use Scrap, so the loss gets a journal entry.</p>
+								<label class="block">
+									<span class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Actual count</span>
+									<input type="number" name="newQuantity" min="1" required class={inputCls} />
+								</label>
+								<label class="block">
+									<span class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Reason (required)</span>
+									<input type="text" name="reason" required class={inputCls} />
+								</label>
+								{#if form?.adjust?.error}<p class="text-xs text-[var(--color-tron-error)]">{form.adjust.error}</p>{/if}
+								<button type="submit" disabled={busy} class={btnPrimary}>{busy ? 'Saving…' : 'Correct count'}</button>
+								<button type="button" class={btnGhost} onclick={() => setMode('view')}>Cancel</button>
+							</form>
+						{/if}
 					{/if}
 
+				{:else if !panelBucket}
+					<p class="py-4 text-center text-xs text-[var(--color-tron-text-secondary)]">This bucket is no longer idle (its cycle started, or the board is refreshing).</p>
+					<button type="button" class={btnGhost} onclick={() => { panel = { kind: 'none' }; }}>Close</button>
+
 				{:else if panel.kind === 'start'}
-					{@const b = panel.bucket}
+					{@const b = panelBucket}
 					<div class="flex items-start justify-between">
 						<div>
 							<div class="font-mono text-lg text-[var(--color-tron-text)]">{b.bucketId}</div>
@@ -415,7 +438,7 @@
 						</div>
 						<div class="flex gap-2">
 							<a href="/manufacturing/cart-mfg/buckets/{b.bucketId}" class="text-[10px] text-[var(--color-tron-cyan)] hover:underline">history</a>
-							<button type="button" class="text-[10px] text-[var(--color-tron-text-secondary)] hover:underline" onclick={() => { panel = { kind: 'residual', bucket: b }; }}>report contents</button>
+							<button type="button" class="text-[10px] text-[var(--color-tron-text-secondary)] hover:underline" onclick={() => { panel = { kind: 'residual', bucketId: b.bucketId }; }}>report contents</button>
 						</div>
 					</div>
 
@@ -424,8 +447,8 @@
 							<p class="text-sm font-semibold text-[var(--color-tron-text)]">Is the tub empty?</p>
 							<p class="mt-1 text-xs text-[var(--color-tron-text-secondary)]">Its last pass drained to zero. Look inside before filling.</p>
 							<div class="mt-3 grid grid-cols-2 gap-2">
-								<button type="button" class={btnPrimary} onclick={() => { panel = { kind: 'start', bucket: b, step: 'form' }; }}>Yes, empty</button>
-								<button type="button" class="w-full rounded-lg border border-[var(--color-tron-yellow)]/50 py-2.5 text-sm font-semibold text-[var(--color-tron-yellow)]" onclick={() => { panel = { kind: 'residual', bucket: b }; }}>No — there's some left</button>
+								<button type="button" class={btnPrimary} onclick={() => { panel = { kind: 'start', bucketId: b.bucketId, step: 'form' }; }}>Yes, empty</button>
+								<button type="button" class="w-full rounded-lg border border-[var(--color-tron-yellow)]/50 py-2.5 text-sm font-semibold text-[var(--color-tron-yellow)]" onclick={() => { panel = { kind: 'residual', bucketId: b.bucketId }; }}>No — there's some left</button>
 							</div>
 						</div>
 					{:else}
@@ -448,13 +471,13 @@
 							<button type="submit" disabled={busy} class={btnPrimary}>{busy ? 'Starting…' : 'Start cycle at Raw'}</button>
 							<div class="flex justify-between">
 								<button type="button" class={btnGhost} onclick={() => { panel = { kind: 'none' }; }}>Cancel</button>
-								<button type="button" class={btnGhost} disabled={!data.canAdjust} title={data.canAdjust ? '' : 'Requires manufacturing:admin'} onclick={() => { panel = { kind: 'retire', bucket: b }; }}>Retire…</button>
+								<button type="button" class={btnGhost} disabled={!data.canAdjust} title={data.canAdjust ? '' : 'Requires manufacturing:admin'} onclick={() => { panel = { kind: 'retire', bucketId: b.bucketId }; }}>Retire…</button>
 							</div>
 						</form>
 					{/if}
 
 				{:else if panel.kind === 'residual'}
-					{@const b = panel.bucket}
+					{@const b = panelBucket}
 					<div>
 						<div class="font-mono text-lg text-[var(--color-tron-text)]">{b.bucketId}</div>
 						<div class="text-xs text-[var(--color-tron-text-secondary)]">{b.state === 'quarantined' ? `quarantined · ${b.residualNote ?? ''}` : 'report leftover contents'}</div>
@@ -478,7 +501,7 @@
 							<label class="flex items-start gap-2 rounded border border-[var(--color-tron-border)] p-2 text-xs text-[var(--color-tron-text)]">
 								<input type="radio" name="disposition" value="merge" class="mt-0.5" />
 								<span><strong>Merge</strong> into another bucket at the same stage<br />
-									<input type="text" name="destinationBucketId" placeholder="scan destination BKT-…" autocomplete="off" class="{inputCls} font-mono" /></span>
+									<input type="text" name="destinationBucketId" placeholder="scan destination BKT-… or sticker" autocomplete="off" class="{inputCls} font-mono" /></span>
 							</label>
 							<label class="flex items-start gap-2 rounded border border-[var(--color-tron-border)] p-2 text-xs text-[var(--color-tron-text)]">
 								<input type="radio" name="disposition" value="scrap" class="mt-0.5" />
@@ -496,7 +519,7 @@
 					</form>
 
 				{:else if panel.kind === 'retire'}
-					{@const b = panel.bucket}
+					{@const b = panelBucket}
 					<form method="POST" action="?/retire" use:enhance={enhanceBusy} class="space-y-3">
 						<input type="hidden" name="bucketId" value={b.bucketId} />
 						<p class="font-mono text-lg text-[var(--color-tron-text)]">{b.bucketId}</p>
@@ -507,7 +530,7 @@
 						</label>
 						{#if form?.retire?.error}<p class="text-xs text-[var(--color-tron-error)]">{form.retire.error}</p>{/if}
 						<button type="submit" disabled={busy} class={btnDanger}>Retire bucket</button>
-						<button type="button" class={btnGhost} onclick={() => { panel = { kind: 'start', bucket: b, step: 'form' }; }}>Cancel</button>
+						<button type="button" class={btnGhost} onclick={() => { panel = { kind: 'start', bucketId: b.bucketId, step: 'form' }; }}>Cancel</button>
 					</form>
 				{/if}
 			</div>

@@ -4288,3 +4288,31 @@ Retrieve this exact code: git checkout feat/bucket-system at commit 1e3c796a
 What this deployment is for: the return-to-previous-page button on the bucket labels page.
   Supersedes the 634e9a37 preview; otherwise identical code.
 Build status: success (both scopes, 17:58Z).
+
+================================================================================
+2026-09-21 -- feat/bucket-system -- board Scrap/Adjust buttons fixed; buckets summary on cart-mfg dashboard
+================================================================================
+Bug (user report): on /manufacturing/cart-mfg/buckets the Scrap... and Adjust count... buttons
+did nothing. Root cause: SvelteKit keeps the last action result in `form` until the next
+action, and the rail's $effect treated any lingering form.advance/scrap/adjust.success as
+"reset the panel to view" on every panel change -- so after one successful Advance, every
+later click on Scrap or Adjust set the mode and the effect snapped it straight back. A second
+fragility compounded it: the effect compared cycle objects by identity (fresh !== cur) to
+detect refreshed data, which is unreliable across Svelte 5 state proxies. Fix: the panel now
+stores only cycleId / bucketId + mode; the live cycle / bucket is looked up from data with
+$derived.by (narrowed into a local first -- TS drops discriminant narrowing inside .find
+callbacks); the effect handles each form result exactly once via a handledForm guard. Panel
+renders a "no longer on the board / refreshing" state with Close when the id is not found.
+Adjust count is intentionally disabled without manufacturing:admin -- that is now shown on
+the button (ADMIN tag + a one-line hint) instead of only a hover tooltip.
+
+User request: a summarized buckets module on the cart manufacturing dashboard above Pipeline
+Flow. Added to /manufacturing/cart-mfg: "Production Buckets" card in the same tile/arrow style
+as Pipeline Flow -- Available > Raw > Unpressed > Pressed > QR Pending (cartridge count +
+bucket count per stage), Quarantined tile when > 0, every tile deep-links to the board
+?stage=, "Open board" link. Load calls stageCounts() with .catch(null) so the module hides
+rather than taking the dashboard down. Files: cart-mfg/{+page.server.ts,+page.svelte},
+buckets/+page.svelte (rewritten state model).
+
+npm run check: 10 errors / 434 warnings, none in touched files (baseline). Two TS errors I
+introduced mid-way (narrowing in $derived closures) fixed before commit.

@@ -7,6 +7,7 @@ import {
 } from '$lib/server/db';
 import { getCheckedOutCartridgeIds } from '$lib/server/checkout-utils';
 import { requirePermission } from '$lib/server/permissions';
+import { stageCounts } from '$lib/server/services/bucket-service';
 import type { PageServerLoad } from './$types';
 
 export const config = { maxDuration: 60 };
@@ -309,9 +310,15 @@ export const load: PageServerLoad = async ({ locals }) => {
 		? Math.round(((producedWeek - rejectedWeek) / producedWeek) * 1000) / 10
 		: 0;
 
+	// Pre-barcode funnel (production buckets) for the summary module that sits
+	// above Pipeline Flow. Read-only; a bucket-collection hiccup must not take
+	// the rest of the dashboard down, hence the catch → null (module hides).
+	const bucketCounts = await stageCounts().catch(() => null);
+
 	return JSON.parse(JSON.stringify({
 		robots: robotStatuses,
 		ovens: ovensWithContents,
+		bucketCounts,
 		pipeline: {
 			backing: {
 				inProgressLots: enrichedBackingLots.filter((bl) => !bl.isReady),
