@@ -4316,3 +4316,11 @@ buckets/+page.svelte (rewritten state model).
 
 npm run check: 10 errors / 434 warnings, none in touched files (baseline). Two TS errors I
 introduced mid-way (narrowing in $derived closures) fixed before commit.
+Deployment: preview -- https://bioscale-operations-system-mongodb-pmdeg4y79-brevitest.vercel.app
+  (brevitest scope; cookie-session gated, 302 to /login)
+Source: branch feat/bucket-system @ commit dd123ef6
+Retrieve this exact code: git checkout feat/bucket-system at commit dd123ef6
+What this deployment is for: verifying the Scrap / Adjust buttons open after a prior action on
+  the buckets board, and the Production Buckets card above Pipeline Flow on
+  /manufacturing/cart-mfg. Supersedes the 1e3c796a preview.
+Build status: success (brevitest scope, 18:10Z).
