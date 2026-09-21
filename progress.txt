@@ -4413,3 +4413,11 @@ cart-mfg dashboard card, pipeline stage meta, WI-01 source-bucket label / empty 
 handoff text, board change-log fallback, service error messages). The stored key stays
 qr_pending, so no data migration. Plan doc notes the rename; its ASCII sketches keep the old
 wording. npm run check unchanged (10 / 434).
+Deployment: preview -- https://bioscale-operations-system-mongodb-r2eogm0sq-brevitest.vercel.app
+  (brevitest scope; cookie-session gated, 302 to /login. The alejandro-valdezs-projects build
+  is https://bioscale-operations-system-mongodb-phrnbm23f.vercel.app, behind Vercel SSO)
+Source: branch feat/bucket-system @ commit 1dca1661
+Retrieve this exact code: git checkout feat/bucket-system at commit 1dca1661
+What this deployment is for: the "QR Scan-In Pending" stage label. Supersedes the 14d55fff
+  preview.
+Build status: success (both scopes, 20:47Z).
