@@ -4346,3 +4346,11 @@ joined in; the board renders them in a collapsed <details> under the grid: When 
 remaining after a WI-01 draw) / By / Note (scrap journal; WI-01 batch link on consume).
 Discard rows are tinted red and the summary line totals carts discarded in the window;
 client-side filter by bucket, operator, event or note. npm run check unchanged (10 / 434).
+Deployment: preview -- https://bioscale-operations-system-mongodb-jrzayj73o-brevitest.vercel.app
+  (brevitest scope; cookie-session gated, 302 to /login. The alejandro-valdezs-projects build
+  is https://bioscale-operations-system-mongodb-4weei2fj7.vercel.app, behind Vercel SSO)
+Source: branch feat/bucket-system @ commit 29e51136
+Retrieve this exact code: git checkout feat/bucket-system at commit 29e51136
+What this deployment is for: the expandable change log under the buckets board (lot, moved
+  from -> to, who, cart deltas, discards flagged + totalled). Supersedes the 7628a469 preview.
+Build status: success (both scopes, 19:23Z).
