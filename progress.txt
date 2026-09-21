@@ -4473,3 +4473,10 @@ Retrieve this exact code: git checkout feat/bucket-system at commit 0f923016
 What this deployment is for: the Bucket log dropdown under the change log (all buckets, all
   statuses, retired included). Supersedes the e59307be preview.
 Build status: success (brevitest scope, 21:47Z).
+
+Follow-up 2026-09-21: BUCKET-SYSTEM_PLAN.md corrected per the user -- bucket size does NOT have
+to match what the press handles in one run. Section 3.1 no longer says it should (a bucket can
+take several press runs and stays at unpressed until the operator advances it); section 12.3
+"Bucket sizing" no longer calls the tub "the press batch" or lists press capacity as a
+constraint -- sizing is unconstrained. That claim was mine from the design conversation, never
+the user's. Docs only; nothing under src changed, so npm run check not re-run.

@@ -88,8 +88,11 @@ recorded, so re-adding it needs no migration.
 
 ### 3.1 Whole-bucket advancement only
 
-A bucket advances between stages as a unit. A bucket is therefore the unit of work for every
-stage, and bucket size should match what the press handles in one run.
+A bucket advances between stages as a unit — the *record* moves as one, not the physical work.
+
+**Bucket size does NOT have to match what the press handles in one run.** A bucket can take
+several press runs; it simply stays at `unpressed` until the operator advances it, which they do
+once the whole bucket is pressed. Bucket size is a floor convenience, not a system constraint.
 
 Quantity still changes *within* a stage, three ways, all preserving the invariant:
 
@@ -583,8 +586,10 @@ immutable by design and would be marked, not deleted.
 1. **Stage vocabulary.** `unpressed` / `pressed` are invented (§2.1). Labels are free to change;
    keys are a migration once real data exists. Also confirm `raw` and `unpressed` are genuinely
    different places — every stage costs one scan per bucket per pass, forever.
-2. **Bucket sizing.** The tub is the press batch. Constraints: press capacity per run; WI-01
-   `maxBatchSize` (default 100); 80 stickers per Avery sheet. The start form has no default or cap.
+2. **Bucket sizing — unconstrained.** Bucket size does **not** have to match a press run (§3.1),
+   nor a WI-01 session (partial draws are allowed). The start form has no default or cap, which
+   is consistent with that. If the floor ever wants a standard fill count for convenience, it
+   would just be a default value on the form — nothing in the system depends on it.
 3. **Cutover.** Recommended go-forward only: new blanks enter buckets, material already on the
    floor drains through the unchanged manual WI-01 flow. Walking existing tubs through the stages
    would put fake dwell times in an immutable ledger.
