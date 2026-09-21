@@ -4365,3 +4365,11 @@ recorded for a move that then fails, and the label debit covers only carts that 
 Discarding all of them closes the pass as scrapped and skips the move; the button turns red
 and says so. Discards land in the ledger as scrap rows (journal prefixed "Discarded at X -> Y")
 so they show in the change log and in Recent Checkouts. npm run check unchanged (10 / 434).
+Deployment: preview -- https://bioscale-operations-system-mongodb-26568szbp-brevitest.vercel.app
+  (brevitest scope; cookie-session gated, 302 to /login. The alejandro-valdezs-projects build
+  is https://bioscale-operations-system-mongodb-keoirgy41.vercel.app, behind Vercel SSO)
+Source: branch feat/bucket-system @ commit 201a639d
+Retrieve this exact code: git checkout feat/bucket-system at commit 201a639d
+What this deployment is for: the "Any carts discarded?" dropdown + required reason on every
+  Advance step. Supersedes the 29e51136 preview.
+Build status: success (both scopes, 19:31Z).
