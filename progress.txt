@@ -4426,3 +4426,10 @@ Follow-up 2026-09-21: Available card subtitle "empty tubs" -> "empty buckets" (u
 the bucket board strip, the cart-mfg dashboard card and the cartridge-admin strip, plus the
 board's Available-column empty state ("No empty buckets"). No other "tub" wording changed.
 npm run check unchanged (10 / 434).
+Deployment: preview -- https://bioscale-operations-system-mongodb-bb1cg30b9-brevitest.vercel.app
+  (brevitest scope; cookie-session gated, 302 to /login)
+Source: branch feat/bucket-system @ commit e59307be
+Retrieve this exact code: git checkout feat/bucket-system at commit e59307be
+What this deployment is for: Available card subtitle "empty buckets". Supersedes the 1dca1661
+  preview.
+Build status: success (brevitest scope, 21:07Z).
