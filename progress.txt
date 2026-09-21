@@ -4398,3 +4398,11 @@ Follow-up 2026-09-21: Production Buckets card on /manufacturing/cart-mfg moved f
 Pipeline Flow to directly beneath the Robot Status Grid (user request). Section order is now
 Alerts > Pipeline Flow > Robot Status Grid > Production Buckets > Ovens. Pure move, no content
 change; server comment updated. npm run check unchanged (10 / 434).
+Deployment: preview -- https://bioscale-operations-system-mongodb-fs30k1xzb-brevitest.vercel.app
+  (brevitest scope; cookie-session gated, 302 to /login. The alejandro-valdezs-projects build
+  is https://bioscale-operations-system-mongodb-qslglk4je.vercel.app, behind Vercel SSO)
+Source: branch feat/bucket-system @ commit 14d55fff
+Retrieve this exact code: git checkout feat/bucket-system at commit 14d55fff
+What this deployment is for: Production Buckets card beneath the Robot Status Grid on
+  /manufacturing/cart-mfg. Supersedes the a621288e preview.
+Build status: success (both scopes, 20:38Z).
