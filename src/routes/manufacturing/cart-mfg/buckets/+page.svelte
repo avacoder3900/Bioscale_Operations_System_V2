@@ -185,7 +185,7 @@
 			case 'relabel': return { event: 'Sticker', moved: r.reason ?? '', discarded: false };
 			case 'create': return { event: 'Started', moved: `→ ${to ?? 'Raw'}`, discarded: false };
 			case 'advance': return { event: 'Moved', moved: `${from ?? '?'} → ${to ?? '?'}`, discarded: false };
-			case 'consume': return { event: 'Drawn by WI-01', moved: `${from ?? 'QR Pending'} → serialized`, discarded: false };
+			case 'consume': return { event: 'Drawn by WI-01', moved: `${from ?? 'QR Scan-In Pending'} → serialized`, discarded: false };
 			case 'scrap': return { event: 'Discarded', moved: `at ${from ?? '?'}`, discarded: true };
 			case 'adjust': return { event: 'Count corrected', moved: `at ${from ?? '?'}`, discarded: false };
 			case 'merge_in': return { event: 'Residual received', moved: `at ${to ?? '?'}`, discarded: false };
@@ -230,7 +230,7 @@
 	<div class="flex flex-wrap items-end justify-between gap-3">
 		<div>
 			<h1 class="text-2xl font-semibold text-[var(--color-tron-text)]">Production Buckets</h1>
-			<p class="text-xs text-[var(--color-tron-text-secondary)]">Pre-barcode WIP: each card is one tub's current pass. Whole buckets advance; WI-01 draws from QR Pending.</p>
+			<p class="text-xs text-[var(--color-tron-text-secondary)]">Pre-barcode WIP: each card is one tub's current pass. Whole buckets advance; WI-01 draws from QR Scan-In Pending.</p>
 		</div>
 		<div class="flex gap-2">
 			<a href="/manufacturing/print-bucket-labels" class={btnGhost}>New buckets / labels</a>

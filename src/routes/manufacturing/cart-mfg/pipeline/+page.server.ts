@@ -78,7 +78,7 @@ const STAGE_META: Record<StageKey, StageMeta> = {
 		headers: bucketHeaders
 	},
 	bucket_qr: {
-		key: 'bucket_qr', label: 'QR Pending', color: 'tron-cyan',
+		key: 'bucket_qr', label: 'QR Scan-In Pending', color: 'tron-cyan',
 		description: 'Buckets with barcode stickers applied, waiting to be scanned in at WI-01. WI-01 draws from these.',
 		headers: bucketHeaders
 	},

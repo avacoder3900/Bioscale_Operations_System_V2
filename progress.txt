@@ -4406,3 +4406,10 @@ Retrieve this exact code: git checkout feat/bucket-system at commit 14d55fff
 What this deployment is for: Production Buckets card beneath the Robot Status Grid on
   /manufacturing/cart-mfg. Supersedes the a621288e preview.
 Build status: success (both scopes, 20:38Z).
+
+Follow-up 2026-09-21: stage label "QR Pending" renamed to "QR Scan-In Pending" (user request).
+Display-only: STAGE_LABELS in bucket-service plus every hardcoded string (cartridge-admin strip,
+cart-mfg dashboard card, pipeline stage meta, WI-01 source-bucket label / empty state / errors /
+handoff text, board change-log fallback, service error messages). The stored key stays
+qr_pending, so no data migration. Plan doc notes the rename; its ASCII sketches keep the old
+wording. npm run check unchanged (10 / 434).

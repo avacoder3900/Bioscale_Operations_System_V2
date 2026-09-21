@@ -129,7 +129,7 @@
 			{ key: 'raw', label: 'Raw', value: bc.stages.raw.cartridges, sub: `${bc.stages.raw.buckets} bkt`, cls: 'text-[var(--color-tron-cyan)]' },
 			{ key: 'unpressed', label: 'Unpressed', value: bc.stages.unpressed.cartridges, sub: `${bc.stages.unpressed.buckets} bkt`, cls: 'text-[var(--color-tron-cyan)]' },
 			{ key: 'pressed', label: 'Pressed', value: bc.stages.pressed.cartridges, sub: `${bc.stages.pressed.buckets} bkt`, cls: 'text-[var(--color-tron-cyan)]' },
-			{ key: 'qr_pending', label: 'QR Pending', value: bc.stages.qr_pending.cartridges, sub: `${bc.stages.qr_pending.buckets} bkt`, cls: 'text-[var(--color-tron-cyan)]' }
+			{ key: 'qr_pending', label: 'QR Scan-In Pending', value: bc.stages.qr_pending.cartridges, sub: `${bc.stages.qr_pending.buckets} bkt`, cls: 'text-[var(--color-tron-cyan)]' }
 		]}
 		<div class="flex flex-wrap items-stretch gap-2">
 			<span class="self-center text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Pre-barcode</span>

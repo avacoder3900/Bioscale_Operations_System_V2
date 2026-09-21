@@ -263,7 +263,7 @@
 			{ key: 'raw', label: 'Raw', count: bc.stages.raw.cartridges, sub: `${bc.stages.raw.buckets} bucket${bc.stages.raw.buckets === 1 ? '' : 's'}`, color: 'text-[var(--color-tron-cyan)]' },
 			{ key: 'unpressed', label: 'Unpressed', count: bc.stages.unpressed.cartridges, sub: `${bc.stages.unpressed.buckets} bucket${bc.stages.unpressed.buckets === 1 ? '' : 's'}`, color: 'text-[var(--color-tron-cyan)]' },
 			{ key: 'pressed', label: 'Pressed', count: bc.stages.pressed.cartridges, sub: `${bc.stages.pressed.buckets} bucket${bc.stages.pressed.buckets === 1 ? '' : 's'}`, color: 'text-[var(--color-tron-cyan)]' },
-			{ key: 'qr_pending', label: 'QR Pending', count: bc.stages.qr_pending.cartridges, sub: `${bc.stages.qr_pending.buckets} bucket${bc.stages.qr_pending.buckets === 1 ? '' : 's'}`, color: 'text-[var(--color-tron-cyan)]' }
+			{ key: 'qr_pending', label: 'QR Scan-In Pending', count: bc.stages.qr_pending.cartridges, sub: `${bc.stages.qr_pending.buckets} bucket${bc.stages.qr_pending.buckets === 1 ? '' : 's'}`, color: 'text-[var(--color-tron-cyan)]' }
 		]}
 		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-4">
 			<div class="mb-4 flex items-center justify-between">

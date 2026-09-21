@@ -282,7 +282,7 @@ export const actions: Actions = {
 				return fail(400, { checkAndStart: { error: `Bucket ${bucketId} has no open cycle — nothing to draw from` } });
 			}
 			if (bucketCycle.stage !== 'qr_pending') {
-				return fail(400, { checkAndStart: { error: `Bucket ${bucketId} is at ${STAGE_LABELS[bucketCycle.stage as keyof typeof STAGE_LABELS] ?? bucketCycle.stage} — only QR Pending buckets feed WI-01` } });
+				return fail(400, { checkAndStart: { error: `Bucket ${bucketId} is at ${STAGE_LABELS[bucketCycle.stage as keyof typeof STAGE_LABELS] ?? bucketCycle.stage} — only QR Scan-In Pending buckets feed WI-01` } });
 			}
 			const blankLot = (bucketCycle.sourceLots ?? []).find((l: any) => l.partNumber === CARTRIDGE_BLANK_PART)?.lotId;
 			const labelLot = (bucketCycle.sourceLots ?? []).find((l: any) => l.partNumber === BARCODE_LABEL_PART)?.lotId;

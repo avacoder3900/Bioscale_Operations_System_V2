@@ -33,7 +33,7 @@ export const STAGE_LABELS: Record<BucketStage, string> = {
 	raw: 'Raw',
 	unpressed: 'Unpressed',
 	pressed: 'Pressed',
-	qr_pending: 'QR Pending'
+	qr_pending: 'QR Scan-In Pending'
 };
 
 export const BUCKET_PREFIX = 'BKT';
@@ -444,7 +444,7 @@ export async function advanceCycle(input: AdvanceCycleInput): Promise<any> {
 	if (!cycle || cycle.status !== 'open') throw new BucketError('Cycle is not open.', 404);
 	const from = cycle.stage as BucketStage;
 	const to = nextStage(from);
-	if (!to) throw new BucketError(`${cycleLabel(cycle.bucketId, cycle.cycleNumber)} is already at QR Pending — WI-01 consumes from here.`);
+	if (!to) throw new BucketError(`${cycleLabel(cycle.bucketId, cycle.cycleNumber)} is already at QR Scan-In Pending — WI-01 consumes from here.`);
 
 	const now = new Date();
 	const set: Record<string, unknown> = { stage: to, stageEnteredAt: now };
@@ -506,7 +506,7 @@ export async function advanceCycleWithDiscard(input: AdvanceWithDiscardInput):
 	const cycle = await BucketCycle.findById(input.cycleId).lean() as any;
 	if (!cycle || cycle.status !== 'open') throw new BucketError('Cycle is not open.', 404);
 	const to = nextStage(cycle.stage as BucketStage);
-	if (!to) throw new BucketError(`${cycleLabel(cycle.bucketId, cycle.cycleNumber)} is already at QR Pending — WI-01 consumes from here.`);
+	if (!to) throw new BucketError(`${cycleLabel(cycle.bucketId, cycle.cycleNumber)} is already at QR Scan-In Pending — WI-01 consumes from here.`);
 
 	const discarded = Number(input.discarded ?? 0);
 	if (!Number.isInteger(discarded) || discarded < 0) throw new BucketError('Discarded count must be 0 or a whole number.');
@@ -667,7 +667,7 @@ export async function consumeFromCycle(input: ConsumeInput): Promise<{ qtyBefore
 	const cycle = await BucketCycle.findById(input.cycleId).lean() as any;
 	if (!cycle || cycle.status !== 'open') throw new BucketError('Cycle is not open.', 404);
 	if (cycle.stage !== 'qr_pending') {
-		throw new BucketError(`${cycleLabel(cycle.bucketId, cycle.cycleNumber)} is at ${STAGE_LABELS[cycle.stage as BucketStage]} — only QR Pending buckets can be consumed at WI-01.`);
+		throw new BucketError(`${cycleLabel(cycle.bucketId, cycle.cycleNumber)} is at ${STAGE_LABELS[cycle.stage as BucketStage]} — only QR Scan-In Pending buckets can be consumed at WI-01.`);
 	}
 	const qty = assertPositiveInt(input.quantity, 'Consumed quantity');
 	const before: number = cycle.quantity;

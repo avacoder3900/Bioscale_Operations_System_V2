@@ -53,6 +53,11 @@ fresh and let the legacy rows drain.
 `qr_pending` means labels are physically ON the cartridges. The bucket holds known-but-
 unregistered barcodes; WI-01 scans each one to create the `CartridgeRecord`.
 
+**Display label:** this stage shows in the UI as **QR Scan-In Pending** (renamed from "QR
+Pending" on 2026-09-21 at the user's request — it says what the carts are waiting *for*). The
+stored key stays `qr_pending`; only `STAGE_LABELS` and hardcoded UI strings changed, so no data
+migration. Older sketches in this document still say "QR Pending".
+
 ### 2.1 Pressing — no SOP exists
 
 There is **no written SOP or work instruction for pressing anywhere in the repo** (searched
@@ -416,7 +421,7 @@ residual it has ever produced.
 Above the In Process table on `src/routes/cartridge-admin/+page.svelte`:
 
 ```
-Available 3 · Raw 420 · Unpressed 180 · Pressed 95 · QR Pending 60
+Available 3 · Raw 420 · Unpressed 180 · Pressed 95 · QR Scan-In Pending 60
 ```
 
 Each tile deep-links into the bucket board filtered to that stage. Read-only glance; all moves

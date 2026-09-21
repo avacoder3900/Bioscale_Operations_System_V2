@@ -78,7 +78,7 @@
 			(b) => b.bucketId === raw.toUpperCase() || (b.barcode != null && b.barcode.toLowerCase() === raw.toLowerCase())
 		);
 		if (hit) { bucketId = hit.bucketId; startError = ''; }
-		else startError = `${raw} is not a bucket at QR Pending`;
+		else startError = `${raw} is not a bucket at QR Scan-In Pending`;
 		bucketScan = '';
 	}
 
@@ -233,7 +233,7 @@
 				handoffPrompt = r.handoffPrompt ?? 'Backed cartridges ready for wax filling.';
 				if (r.bucket) {
 					handoffPrompt += r.bucket.qtyAfter > 0
-						? ` Bucket ${r.bucket.bucketId} has ${r.bucket.qtyAfter} left at QR Pending.`
+						? ` Bucket ${r.bucket.bucketId} has ${r.bucket.qtyAfter} left at QR Scan-In Pending.`
 						: ` Bucket ${r.bucket.bucketId} is drained and back in the available pool.`;
 					if (r.bucket.overrun > 0) handoffPrompt += ` Overrun: ${r.bucket.overrun} more scanned than the bucket recorded — logged as a discrepancy.`;
 				}
@@ -326,12 +326,12 @@
 							<p class="text-xs text-[var(--color-tron-text-secondary)]">Scan a bucket (or pick the material lots) + oven once, then rapid-fire scan cartridges.</p>
 						</div>
 
-						<!-- Source bucket — optional. A QR Pending bucket dictates the
+						<!-- Source bucket — optional. A QR Scan-In Pending bucket dictates the
 						     blank + label lots and the expected count; 104/106 are
 						     not re-withdrawn at confirm (BUCKET-SYSTEM_PLAN §6.3). -->
 						<div class="rounded border border-[var(--color-tron-cyan)]/40 bg-[var(--color-tron-cyan)]/5 p-3">
 							<div class="flex items-center justify-between">
-								<label for="bucketScan" class="block text-xs font-medium text-[var(--color-tron-cyan)]">Source bucket (QR Pending)</label>
+								<label for="bucketScan" class="block text-xs font-medium text-[var(--color-tron-cyan)]">Source bucket (QR Scan-In Pending)</label>
 								<a href="/manufacturing/cart-mfg/buckets" class="text-[10px] text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)]">bucket board →</a>
 							</div>
 							{#if selectedBucket}
@@ -348,7 +348,7 @@
 										onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); applyBucketScan(); } }}
 										class="w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-3 py-2 font-mono text-[var(--color-tron-text)] placeholder:text-[var(--color-tron-text-secondary)]/50" />
 									<select bind:value={bucketId} class="w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-3 py-2 text-[var(--color-tron-text)]">
-										<option value="">{(data.qrPendingBuckets ?? []).length ? '— or pick a bucket —' : 'No buckets at QR Pending'}</option>
+										<option value="">{(data.qrPendingBuckets ?? []).length ? '— or pick a bucket —' : 'No buckets at QR Scan-In Pending'}</option>
 										{#each data.qrPendingBuckets ?? [] as b (b.bucketId)}
 											<option value={b.bucketId}>{b.bucketId} #{b.cycleNumber} — {b.quantity}</option>
 										{/each}
