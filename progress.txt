@@ -4465,3 +4465,11 @@ unbuilt "Void test pass" reversal, floor decisions still needed, and deferred it
 double-debit, adjust permission, tub wording, long label, public repo).
 
 npm run check: 10 errors / 434 warnings, none in touched files (baseline).
+Deployment: preview -- https://bioscale-operations-system-mongodb-ml88ovk67-brevitest.vercel.app
+  (brevitest scope; cookie-session gated, 302 to /login)
+Source: branch feat/bucket-system @ commit 0f923016 (code change is b7e2c262; 0f923016 is the
+  doc rewrite + this log)
+Retrieve this exact code: git checkout feat/bucket-system at commit 0f923016
+What this deployment is for: the Bucket log dropdown under the change log (all buckets, all
+  statuses, retired included). Supersedes the e59307be preview.
+Build status: success (brevitest scope, 21:47Z).
