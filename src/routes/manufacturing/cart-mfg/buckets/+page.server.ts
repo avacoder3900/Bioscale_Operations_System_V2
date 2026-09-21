@@ -9,7 +9,7 @@ import { requirePermission } from '$lib/server/permissions';
 import {
 	BucketError, BUCKET_STAGES, STAGE_LABELS, CARTRIDGE_BLANK_PART, BARCODE_LABEL_PART,
 	boardData, stageCounts, resolveScan, isBucketStage, changeLog,
-	startCycle, advanceCycle, adjustCycle, scrapFromCycle, reportResidual, retireBucket
+	startCycle, advanceCycleWithDiscard, adjustCycle, scrapFromCycle, reportResidual, retireBucket
 } from '$lib/server/services/bucket-service';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -106,12 +106,22 @@ export const actions: Actions = {
 		await connectDB();
 		const d = await request.formData();
 		return wrap('advance', async () => {
-			const cycle = await advanceCycle({
+			const r = await advanceCycleWithDiscard({
 				cycleId: String(d.get('cycleId') ?? ''),
 				barcodeLotId: (d.get('barcodeLotId') as string | null) ?? undefined,
+				discarded: Number(d.get('discarded') ?? 0),
+				discardJournal: (d.get('discardJournal') as string | null) ?? undefined,
 				user: op(locals)
 			});
-			return { advance: { success: true, cycleId: cycle._id, stage: cycle.stage } };
+			return {
+				advance: {
+					success: true,
+					cycleId: r.cycle?._id ?? null,
+					stage: r.cycle?.stage ?? null,
+					discarded: r.discarded,
+					closed: r.closed
+				}
+			};
 		})();
 	},
 

@@ -487,6 +487,53 @@ export async function advanceCycle(input: AdvanceCycleInput): Promise<any> {
 	return BucketCycle.findById(cycle._id).lean();
 }
 
+export interface AdvanceWithDiscardInput extends AdvanceCycleInput {
+	discarded?: number;       // carts binned at this step, 0..quantity
+	discardJournal?: string;  // required when discarded > 0
+}
+
+/**
+ * The board's Advance step asks "Any carts discarded?" (§3.1 scrap, folded
+ * into the move). Everything is validated up front so a discard is never
+ * recorded for a move that then fails; the discard lands first so the
+ * PT-CT-106 debit at pressed → qr_pending covers only the carts that move.
+ * Discarding the whole tub closes the cycle as scrapped and skips the move.
+ */
+export async function advanceCycleWithDiscard(input: AdvanceWithDiscardInput):
+	Promise<{ cycle: any | null; discarded: number; closed: boolean }>
+{
+	await connectDB();
+	const cycle = await BucketCycle.findById(input.cycleId).lean() as any;
+	if (!cycle || cycle.status !== 'open') throw new BucketError('Cycle is not open.', 404);
+	const to = nextStage(cycle.stage as BucketStage);
+	if (!to) throw new BucketError(`${cycleLabel(cycle.bucketId, cycle.cycleNumber)} is already at QR Pending — WI-01 consumes from here.`);
+
+	const discarded = Number(input.discarded ?? 0);
+	if (!Number.isInteger(discarded) || discarded < 0) throw new BucketError('Discarded count must be 0 or a whole number.');
+	if (discarded > cycle.quantity) throw new BucketError(`Cannot discard ${discarded} — the bucket only holds ${cycle.quantity}.`);
+	const journal = (input.discardJournal ?? '').trim();
+	if (discarded > 0 && !journal) throw new BucketError('Say why the carts were discarded.');
+	if (to === 'qr_pending') {
+		const lotCheck = await validateReceivingLot(input.barcodeLotId ?? '', BARCODE_LABEL_PART);
+		if (!lotCheck.ok) throw new BucketError(lotCheck.reason);
+	}
+
+	if (discarded > 0) {
+		await scrapFromCycle({
+			cycleId: cycle._id, quantity: discarded,
+			journal: `Discarded at ${STAGE_LABELS[cycle.stage as BucketStage]} → ${STAGE_LABELS[to]}: ${journal}`,
+			user: input.user
+		});
+		if (discarded === cycle.quantity) {
+			// scrapFromCycle closed the cycle; nothing left to move.
+			return { cycle: await BucketCycle.findById(cycle._id).lean(), discarded, closed: true };
+		}
+	}
+
+	const advanced = await advanceCycle({ cycleId: cycle._id, barcodeLotId: input.barcodeLotId, user: input.user });
+	return { cycle: advanced, discarded, closed: false };
+}
+
 export interface AdjustCycleInput {
 	cycleId: string;
 	newQuantity: number;

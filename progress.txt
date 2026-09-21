@@ -4354,3 +4354,14 @@ Retrieve this exact code: git checkout feat/bucket-system at commit 29e51136
 What this deployment is for: the expandable change log under the buckets board (lot, moved
   from -> to, who, cart deltas, discards flagged + totalled). Supersedes the 7628a469 preview.
 Build status: success (both scopes, 19:23Z).
+
+Follow-up 2026-09-21: "Any carts discarded?" at every Advance step (user request). The board's
+Advance form gains a number dropdown 0..quantity (None / n / "n -- all of them"); > 0 reveals a
+required reason (journal stays the control, per the scrap decision). New
+advanceCycleWithDiscard() in bucket-service validates everything first (open cycle, next
+stage, count <= quantity, reason when > 0, PT-CT-106 lot when moving to qr_pending), then
+scrapFromCycle for the discards, then advanceCycle for the rest -- so a discard is never
+recorded for a move that then fails, and the label debit covers only carts that move.
+Discarding all of them closes the pass as scrapped and skips the move; the button turns red
+and says so. Discards land in the ledger as scrap rows (journal prefixed "Discarded at X -> Y")
+so they show in the change log and in Recent Checkouts. npm run check unchanged (10 / 434).

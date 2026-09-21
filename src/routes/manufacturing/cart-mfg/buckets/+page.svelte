@@ -37,6 +37,8 @@
 		| { kind: 'residual'; bucketId: string }
 		| { kind: 'retire'; bucketId: string };
 	let panel = $state<Panel>({ kind: 'none' });
+	// "Any carts discarded?" on the Advance form; reset whenever the mode changes.
+	let advanceDiscarded = $state(0);
 	let scanInput = $state('');
 	let shortList = $state<{ bucketId: string; state: string; hint: string }[]>([]);
 	let busy = $state(false);
@@ -70,6 +72,7 @@
 	function openCycle(c: BoardCycle) { panel = { kind: 'cycle', cycleId: c.cycleId, mode: 'view' }; }
 	function setMode(mode: CycleMode) {
 		if (panel.kind === 'cycle') panel = { kind: 'cycle', cycleId: panel.cycleId, mode };
+		advanceDiscarded = 0;
 	}
 	function openBucket(b: BoardBucket) {
 		if (b.state === 'quarantined') panel = { kind: 'residual', bucketId: b.bucketId };
@@ -405,10 +408,30 @@
 						{:else if panel.mode === 'advance'}
 							<form method="POST" action="?/advance" use:enhance={enhanceBusy} class="mt-3 space-y-3">
 								<input type="hidden" name="cycleId" value={c.cycleId} />
-								<p class="text-sm text-[var(--color-tron-text)]">Move the whole bucket ({c.quantity}) to <strong>{nextLabel(c.stage)}</strong>.</p>
+								<p class="text-sm text-[var(--color-tron-text)]">
+									Move the bucket to <strong>{nextLabel(c.stage)}</strong>
+									{#if advanceDiscarded > 0}— <strong class="text-[var(--color-tron-cyan)]">{c.quantity - advanceDiscarded}</strong> carts move, <strong class="text-red-300">{advanceDiscarded}</strong> discarded{:else}— all {c.quantity} carts{/if}.
+								</p>
+								<label class="block">
+									<span class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Any carts discarded?</span>
+									<select name="discarded" bind:value={advanceDiscarded} class={inputCls}>
+										{#each Array.from({ length: c.quantity + 1 }, (_, n) => n) as n (n)}
+											<option value={n}>{n === 0 ? 'None' : n === c.quantity ? `${n} — all of them` : n}</option>
+										{/each}
+									</select>
+								</label>
+								{#if advanceDiscarded > 0}
+									<label class="block">
+										<span class="text-[10px] uppercase tracking-wider text-red-300">Why were they discarded? (required)</span>
+										<input type="text" name="discardJournal" required placeholder="e.g. cracked in press" class={inputCls} />
+									</label>
+									{#if advanceDiscarded === c.quantity}
+										<p class="text-xs text-red-300">Discarding all {c.quantity} closes this pass and returns the tub to the available pool — nothing moves to {nextLabel(c.stage)}.</p>
+									{/if}
+								{/if}
 								{#if nxt === 'qr_pending'}
 									<label class="block">
-										<span class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Barcode label lot (PT-CT-106) — {c.quantity} labels applied</span>
+										<span class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Barcode label lot (PT-CT-106) — {c.quantity - advanceDiscarded} labels applied</span>
 										<select name="barcodeLotId" required class={inputCls}>
 											<option value="">{(data.lots['PT-CT-106'] ?? []).length ? '— Select lot —' : 'No label lots available'}</option>
 											{#each data.lots['PT-CT-106'] ?? [] as l (l.lotId)}<option value={l.lotId}>{l.lotId} — {l.remaining} left</option>{/each}
@@ -416,7 +439,9 @@
 									</label>
 								{/if}
 								{#if form?.advance?.error}<p class="text-xs text-[var(--color-tron-error)]">{form.advance.error}</p>{/if}
-								<button type="submit" disabled={busy} class={btnPrimary}>{busy ? 'Saving…' : `Confirm → ${nextLabel(c.stage)}`}</button>
+								<button type="submit" disabled={busy} class={advanceDiscarded === c.quantity ? btnDanger : btnPrimary}>
+									{busy ? 'Saving…' : advanceDiscarded === c.quantity ? `Discard all ${c.quantity} & close pass` : advanceDiscarded > 0 ? `Discard ${advanceDiscarded} & move ${c.quantity - advanceDiscarded} → ${nextLabel(c.stage)}` : `Confirm → ${nextLabel(c.stage)}`}
+								</button>
 								<button type="button" class={btnGhost} onclick={() => setMode('view')}>Cancel</button>
 							</form>
 
