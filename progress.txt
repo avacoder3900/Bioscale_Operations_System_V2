@@ -13062,3 +13062,29 @@ below before believing prod is on the new code.
 Source: branch master @ commit <filled in below after push>
 What this deployment is for: two-channel thermocouple parsing, stats and charts in production,
 so the 25 backfilled sessions render per-probe instead of averaged
+
+================================================================================
+2026-09-21 - feat/magnetometer-field-magnitude - per-channel X/Y/Z + |B| magnitude
+================================================================================
+Reworked the magnetometer session detail table (/validation/magnetometer/[sessionId]) to show
+the full field per channel instead of Z alone. Each channel now renders X, Y, Z and a computed
+magnitude |B| = sqrt(X^2 + Y^2 + Z^2), all in Gauss as reported by the magnetometer. Per
+request there is no pass/fail styling on the new columns - the numbers are the deliverable.
+Overall pass/fail and the failure-reason list are unchanged and still driven by the Z-only
+criteria (minZ/maxZ from Integration 'mag_criteria').
+
+Data note: the page renders session.magResults, which is Schema.Types.Mixed, so there is no
+strict-mode field dropping on write. parseMagValidation has extracted per-channel X/Y/Z since
+dd982309 (2026-03-05), so any session recorded after that date already carries X and Y and will
+populate the new columns. Wells with no reading render as an em dash, not 0.
+NOT yet verified against a live logged-in session: the BIMS MCP validation_tab endpoint projects
+Z only, so it could not confirm the stored X/Y. Confirm by opening a real session on the preview.
+
+svelte-check: clean on the touched file. Local production build not attempted (known OOM on this
+machine); the Vercel branch build is the gate and it went green.
+
+Deployment: preview - https://bioscale-operations-system-mongodb-fviowftbn-brevitest.vercel.app
+Source: branch feat/magnetometer-field-magnitude @ commit 5a3dffdb (code); this progress entry
+is the follow-up commit below.
+What this deployment is for: seeing the full XYZ field and magnitude per channel on the
+magnetometer results page, on a branch off master, before deciding whether it merges.
