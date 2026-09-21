@@ -4385,3 +4385,11 @@ ManualCartridgeRemoval + scrap ledger row per stage under one required journal, 
 quarantines with a note listing the breakdown. residualFound / discrepancies get one entry
 per stage. Mixed dispositions = two reports (the form says so). Form action fields are
 qty_<stage> / dest_<stage>. npm run check unchanged (10 / 434).
+Deployment: preview -- https://bioscale-operations-system-mongodb-7lvflr4k3-brevitest.vercel.app
+  (brevitest scope; cookie-session gated, 302 to /login. The alejandro-valdezs-projects build
+  is https://bioscale-operations-system-mongodb-lbrq3le6r.vercel.app, behind Vercel SSO)
+Source: branch feat/bucket-system @ commit a621288e
+Retrieve this exact code: git checkout feat/bucket-system at commit a621288e
+What this deployment is for: the per-stage residual report (four "How many" rows, per-stage
+  merge destinations). Supersedes the 201a639d preview.
+Build status: success (both scopes, 20:10Z).
