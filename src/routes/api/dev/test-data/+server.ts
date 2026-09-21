@@ -1,9 +1,11 @@
 import { json } from '@sveltejs/kit';
 import { connectDB, Consumable, Equipment, CartridgeRecord, LotRecord, WaxBatch, ReceivingLot, PartDefinition, generateId } from '$lib/server/db';
+import { isAdmin } from '$lib/server/permissions';
 import type { RequestHandler } from './$types';
 
 export const GET: RequestHandler = async ({ url, locals }) => {
 	if (!locals.user) return json({ error: 'Unauthorized' }, { status: 401 });
+	if (!isAdmin(locals.user)) return json({ error: 'Admin access required' }, { status: 403 });
 	await connectDB();
 	const type = url.searchParams.get('type');
 

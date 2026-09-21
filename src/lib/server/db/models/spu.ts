@@ -50,7 +50,11 @@ const spuSchema = new Schema({
 	particleLink: {
 		particleSerial: String, particleDeviceId: String,
 		linkedAt: Date, linkedBy: operatorRef,
-		previousSpuId: String, unlinkReason: String
+		previousSpuId: String, unlinkReason: String,
+		// Service-flag LED sync outcome (SPU-INV-08): last value pushed to the
+		// device and how the push went (synced|unlinked|unsupported|offline|error).
+		serviceFlag: Number, serviceFlagState: String,
+		serviceFlagSyncedAt: Date, serviceFlagError: String
 	},
 
 	validation: {
@@ -83,7 +87,14 @@ const spuSchema = new Schema({
 		assignedAt: Date, assignedBy: operatorRef
 	},
 
-	status: { type: String, enum: ['draft', 'assembling', 'assembled', 'validating', 'validated', 'released-rnd', 'released-manufacturing', 'released-field', 'deployed', 'servicing', 'retired', 'voided'] },
+	// Collapsed lifecycle (SPU-INV-07): draft → assembling → validating →
+	// released ⇄ servicing → retired. The vocabulary + legal-transition table
+	// live in src/lib/server/spu-status.ts — keep this enum in sync with it.
+	// NOTE: updateOne skips enum validators; app code enforces via that module.
+	status: { type: String, enum: ['draft', 'assembling', 'validating', 'released', 'servicing', 'retired'] },
+	// Physical/organizational location, not lifecycle ("R&D" etc.) — what the
+	// old released-rnd status encoded. Free-form for now.
+	location: String,
 	statusTransitions: [{
 		_id: { type: String, default: () => generateId() },
 		from: String,
@@ -124,13 +135,28 @@ const spuSchema = new Schema({
 		openedBy: operatorRef, openedAt: { type: Date, default: () => new Date() },
 		returnedBy: operatorRef, returnedAt: Date
 	}],
+	// Free-form device journal — append-only diary entries that carry the unit's
+	// story (context the structured fields can't hold). Never edited or deleted
+	// from the UI; corrections are new entries.
+	journal: [{
+		_id: { type: String, default: () => generateId() },
+		text: { type: String, required: true },
+		// Which system appended this entry (SPU-INV-10 unified journal):
+		// 'manual' (a person on the detail page), 'service' (servicing-board
+		// close), more kinds later. ref* points at the producing record.
+		source: { type: String, default: 'manual' },
+		refKind: String,
+		refId: String,
+		refLabel: String,
+		createdBy: operatorRef,
+		createdAt: { type: Date, default: () => new Date() }
+	}],
+
 	// Validations completed before this instant don't count toward the current
 	// N/3 (set when a serviced device is returned). Prior records are preserved.
 	validationResetAt: Date,
 
 	finalizedAt: Date,
-	voidedAt: Date,
-	voidReason: String,
 	corrections: [correctionSchema],
 	createdBy: String,
 	owner: String,

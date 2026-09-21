@@ -197,6 +197,31 @@ export async function assertNotBucketLabel(code: string): Promise<void> {
 	if (id) throw new BucketError(`${(code ?? '').trim()} is the label on production bucket ${id}, not a cartridge.`, 409, 'BUCKET_LABEL');
 }
 
+/**
+ * Batched form of the guard, for genesis paths that create many cartridges at
+ * once (deck loads that upsert stubs via bulkWrite). One query for the whole
+ * list; returns scanned code → bucket id for every code that is a bucket label.
+ *
+ * NOTE for whoever adds a new cartridge-creating path: search for
+ * `bulkWrite` + `upsert: true` / `$setOnInsert`, not just `.create(` — the
+ * first guard sweep missed two upsert paths for exactly that reason.
+ */
+export async function findBucketLabels(codes: string[]): Promise<Map<string, string>> {
+	await connectDB();
+	const out = new Map<string, string>();
+	const cleaned = Array.from(new Set((codes ?? []).map(c => (c ?? '').trim()).filter(Boolean)));
+	if (cleaned.length === 0) return out;
+	const ids = cleaned.map(c => c.toUpperCase());
+	const variants = Array.from(new Set(cleaned.flatMap(c => [c, c.toLowerCase(), c.toUpperCase()])));
+	const hits = await ProductionBucket.find({ $or: [{ _id: { $in: ids } }, { barcode: { $in: variants } }] })
+		.select('_id barcode').lean() as any[];
+	for (const c of cleaned) {
+		const hit = hits.find(h => h._id === c.toUpperCase() || (h.barcode && String(h.barcode).toLowerCase() === c.toLowerCase()));
+		if (hit) out.set(c, hit._id);
+	}
+	return out;
+}
+
 export interface ScanResolution {
 	kind: 'bucket' | 'search';
 	bucket?: any;

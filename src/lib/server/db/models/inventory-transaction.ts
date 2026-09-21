@@ -17,6 +17,7 @@ const inventoryTransactionSchema = new Schema({
 	// Traceability fields (PRD-3)
 	lotId: String,
 	cartridgeRecordId: String,
+	spuId: String,
 	manufacturingStep: {
 		type: String,
 		enum: ['cut_thermoseal', 'laser_cut', 'backing', 'wax_filling', 'reagent_filling',
@@ -37,6 +38,7 @@ const inventoryTransactionSchema = new Schema({
 inventoryTransactionSchema.index({ partDefinitionId: 1, performedAt: -1 });
 inventoryTransactionSchema.index({ lotId: 1 });
 inventoryTransactionSchema.index({ cartridgeRecordId: 1 });
+inventoryTransactionSchema.index({ spuId: 1 });
 inventoryTransactionSchema.index({ manufacturingStep: 1 });
 inventoryTransactionSchema.index({ manufacturingRunId: 1 });
 inventoryTransactionSchema.index({ transactionType: 1, performedAt: -1 });

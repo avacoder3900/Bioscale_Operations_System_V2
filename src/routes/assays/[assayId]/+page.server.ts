@@ -103,9 +103,11 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 };
 
 export const actions: Actions = {
+	// PERM-04 §B: assay lock/unlock is an admin gate (assay:lock). Admins pass via
+	// the gate (granted in PERM-02) or the admin:full+bims wildcard.
 	lock: async ({ params, locals }) => {
 		if (!locals.user) redirect(302, '/login');
-		requirePermission(locals.user, 'manufacturing:admin');
+		requirePermission(locals.user, 'assay:lock');
 		await connectDB();
 
 		await AssayDefinition.findOneAndUpdate(
@@ -130,7 +132,7 @@ export const actions: Actions = {
 
 	unlock: async ({ params, locals }) => {
 		if (!locals.user) redirect(302, '/login');
-		requirePermission(locals.user, 'manufacturing:admin');
+		requirePermission(locals.user, 'assay:lock');
 		await connectDB();
 
 		await AssayDefinition.findByIdAndUpdate(params.assayId, {

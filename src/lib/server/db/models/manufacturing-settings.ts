@@ -14,7 +14,15 @@ const manufacturingSettingsSchema = new Schema({
 		waxFillDeadVolumeUl: { type: Number, default: 80 }
 	},
 	reagentFilling: {
+		// Legacy flat rate. Superseded by the three tuning constants below, which
+		// account for how many reagent rows the operator actually selected. Kept
+		// only as a fallback for records written before the change.
 		fillTimePerCartridgeMin: Number,
+		// Run-duration model — see src/lib/manufacturing/reagent-run-estimate.ts.
+		// seconds = startup + rows × perRow + wellsFilled × perDispense
+		startupOverheadSec: Number,
+		secondsPerReagentGroup: Number,
+		secondsPerDispense: Number,
 		minCoolingTimeMin: Number,
 		// Top-seal deadline: minutes after run finishes before sealing is overdue.
 		// Warn-only (not blocking); operator can still seal past the deadline,

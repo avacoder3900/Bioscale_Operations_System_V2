@@ -14,9 +14,23 @@
 		minTemp?: number;
 		maxTemp?: number;
 		showBands?: boolean;
+		/** Heading above the chart — set per probe when charting two channels. */
+		title?: string;
+		/** Line/point colour, so two channels are told apart at a glance. */
+		lineColor?: string;
+		/** Legend name for the series. */
+		seriesLabel?: string;
 	}
 
-	let { readings, minTemp, maxTemp, showBands = true }: Props = $props();
+	let {
+		readings,
+		minTemp,
+		maxTemp,
+		showBands = true,
+		title = 'Temperature Over Time',
+		lineColor = 'var(--color-tron-cyan)',
+		seriesLabel = 'Temperature'
+	}: Props = $props();
 
 	// Chart dimensions (used as viewBox for responsive sizing)
 	const chartWidth = 600;
@@ -106,7 +120,7 @@
 </script>
 
 <div class="tron-card p-4">
-	<h3 class="tron-heading mb-4 font-semibold">Temperature Over Time</h3>
+	<h3 class="tron-heading mb-4 font-semibold">{title}</h3>
 
 	{#if readings && readings.length > 0 && chartScales}
 		{@const scales = chartScales}
@@ -220,22 +234,25 @@
 				/>
 
 				<!-- Temperature line -->
-				<path d={temperaturePath} fill="none" stroke="var(--color-tron-cyan)" stroke-width="2" />
+				<path d={temperaturePath} fill="none" stroke={lineColor} stroke-width="2" />
 
-				<!-- Data points (color-coded: red for out-of-range, cyan for in-range) -->
+				<!-- Data points (color-coded: red for out-of-range, cyan for in-range).
+				     Keyed by index, not timestamp: the logger can emit two readings with
+				     the same timestamp, and the duplicate key threw each_key_duplicate
+				     during hydration, which blanked the whole page. -->
 				{#if scales.sorted.length <= 50}
-					{#each scales.sorted as reading (reading.timestamp)}
+					{#each scales.sorted as reading, i (i)}
 						{@const outOfRange = isOutOfRange(reading.temperature)}
 						<circle
 							cx={scales.scaleX(reading.timestamp)}
 							cy={scales.scaleY(reading.temperature)}
 							r={outOfRange ? 4 : 3}
-							fill={outOfRange ? 'var(--color-tron-red)' : 'var(--color-tron-cyan)'}
+							fill={outOfRange ? 'var(--color-tron-red)' : lineColor}
 						/>
 					{/each}
 				{:else}
 					<!-- For many readings, only highlight out-of-range points -->
-					{#each scales.sorted as reading (reading.timestamp)}
+					{#each scales.sorted as reading, i (i)}
 						{#if isOutOfRange(reading.temperature)}
 							<circle
 								cx={scales.scaleX(reading.timestamp)}
@@ -300,8 +317,8 @@
 		<!-- Legend -->
 		<div class="mt-3 flex flex-wrap items-center justify-center gap-4 text-xs">
 			<div class="flex items-center gap-1.5">
-				<div class="h-0.5 w-4" style="background: var(--color-tron-cyan)"></div>
-				<span class="tron-text-muted">Temperature</span>
+				<div class="h-0.5 w-4" style="background: {lineColor}"></div>
+				<span class="tron-text-muted">{seriesLabel}</span>
 			</div>
 			{#if showBands && minTemp !== undefined && maxTemp !== undefined}
 				<div class="flex items-center gap-1.5">

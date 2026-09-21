@@ -7,6 +7,7 @@
  * cookie-based password check ("processadmin"), with a 24-hour session.
  */
 import { redirect, fail } from '@sveltejs/kit';
+import { env } from '$env/dynamic/private';
 import { requirePermission } from '$lib/server/permissions';
 import { getDemoAnalyticsPageData } from '$lib/server/analytics/demo-seed.js';
 import type { PageServerLoad, Actions } from './$types';
@@ -14,7 +15,6 @@ import type { PageServerLoad, Actions } from './$types';
 export const config = { maxDuration: 10 };
 
 const TRAINING_COOKIE = 'analysis-demo-training';
-const TRAINING_PASSWORD = 'processadmin';
 const TRAINING_COOKIE_MAX_AGE = 60 * 60 * 24; // 24 hours
 
 export const load: PageServerLoad = async ({ locals, cookies }) => {
@@ -41,7 +41,11 @@ export const actions: Actions = {
 	unlock: async ({ request, cookies }) => {
 		const form = await request.formData();
 		const password = form.get('password')?.toString() ?? '';
-		if (password !== TRAINING_PASSWORD) {
+		// Password lives in env (TRAINING_UNLOCK_PASSWORD), never in the repo. Unset = disabled.
+		if (!env.TRAINING_UNLOCK_PASSWORD) {
+			return fail(503, { error: 'Training mode is not configured (TRAINING_UNLOCK_PASSWORD unset).' });
+		}
+		if (password !== env.TRAINING_UNLOCK_PASSWORD) {
 			return fail(401, { error: 'Wrong password.' });
 		}
 		cookies.set(TRAINING_COOKIE, 'unlocked', {

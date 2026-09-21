@@ -2,6 +2,9 @@
 
 **Date:** 2026-06-11 · **Owner:** Jacob · **Status:** Approved (conversation 2026-06-11)
 **Depends on:** WAX-FLOW-2 (backing-lot scan removal)
+> **Amended 2026-08-17 by WAX-SIMPLIFY-1..3:** the run now ends at `wax_filled` (the fridge scan
+> at deck removal records location only — no `wax_stored` status); the QC/storage status steps
+> are gone (visual pass implicit; rejects via the Wax Reject page).
 
 ## Decisions (Jacob, 2026-06-11)
 

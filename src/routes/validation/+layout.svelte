@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
 	import { page } from '$app/stores';
+	import SpuBreadcrumb from '$lib/components/spu/SpuBreadcrumb.svelte';
 
 	interface Props {
 		children: Snippet;
@@ -8,21 +9,19 @@
 
 	let { children }: Props = $props();
 
+	// The validation section stands on its own (the SPU Manufacturing tab strip
+	// is deprecated here) — Overview is the fleet hub at /validation.
 	const navItems = [
 		{
-			href: '/validation/runs',
-			label: 'Runs',
-			icon: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4'
+			href: '/validation',
+			label: 'Overview',
+			exact: true,
+			icon: 'M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z'
 		},
 		{
 			href: '/validation/magnetometer',
 			label: 'Magnetometer',
 			icon: 'M13 10V3L4 14h7v7l9-11h-7z'
-		},
-		{
-			href: '/validation/spectrophotometer',
-			label: 'Spectrophotometer',
-			icon: 'M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z'
 		},
 		{
 			href: '/validation/thermocouple',
@@ -33,52 +32,39 @@
 			href: '/validation/optical-confirmation',
 			label: 'Optical Confirmation',
 			icon: 'M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z M15 12a3 3 0 11-6 0 3 3 0 016 0z'
+		},
+		{
+			href: '/validation/bench',
+			label: 'Optical Bench',
+			icon: 'M13 10V3L4 14h7v7l9-11h-7z'
+		},
+		{
+			href: '/validation/sonic',
+			label: 'Sonic',
+			icon: 'M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2z'
 		}
 	];
 
-	function isActive(href: string, currentPath: string, exact = false): boolean {
-		if (exact) return currentPath === href;
-		return currentPath.startsWith(href);
+	function isActive(item: { href: string; exact?: boolean }, currentPath: string): boolean {
+		if (item.exact) return currentPath === item.href;
+		return currentPath === item.href || currentPath.startsWith(item.href + '/');
 	}
 
-	function getSectionName(path: string): string {
-		if (path.includes('/runs')) return 'Runs';
-		if (path.includes('/spectrophotometer')) return 'Spectrophotometer';
-		if (path.includes('/thermocouple')) return 'Thermocouple';
-		if (path.includes('/magnetometer')) return 'Magnetometer';
-		if (path.includes('/optical-confirmation')) return 'Optical Confirmation';
-		return 'Dashboard';
-	}
-
-	let currentSection = $derived(getSectionName($page.url.pathname));
+	// Breadcrumb: SPU / SPU Validation [/ <instrument section>]
+	const crumbTrail = $derived.by(() => {
+		const current = navItems.find((i) => isActive(i, $page.url.pathname));
+		const trail: { label: string; href?: string }[] = [{ label: 'SPU Validation', href: '/validation' }];
+		if (current && current.label !== 'Overview') trail.push({ label: current.label });
+		return trail;
+	});
 </script>
 
 <div class="space-y-6">
-	<!-- Breadcrumb -->
-	<nav class="flex items-center gap-2 text-sm">
-		<a
-			href='/'
-			class="text-[var(--color-tron-text-secondary)] transition-colors hover:text-[var(--color-tron-cyan)]"
-		>
-			SPU
-		</a>
-		<span class="text-[var(--color-tron-text-secondary)]">/</span>
-		<a
-			href="/validation"
-			class="text-[var(--color-tron-text-secondary)] transition-colors hover:text-[var(--color-tron-cyan)]"
-		>
-			Validation
-		</a>
-		{#if currentSection !== 'Dashboard'}
-			<span class="text-[var(--color-tron-text-secondary)]">/</span>
-			<span class="text-[var(--color-tron-cyan)]">{currentSection}</span>
-		{/if}
-	</nav>
-
-	<!-- Sub-navigation tabs -->
+	<SpuBreadcrumb trail={crumbTrail} />
+	<!-- Section tabs -->
 	<div class="flex gap-2 border-b border-[var(--color-tron-border)] pb-4">
 		{#each navItems as item (item.href)}
-			{@const active = isActive(item.href, $page.url.pathname)}
+			{@const active = isActive(item, $page.url.pathname)}
 			<a
 				href={item.href}
 				class="flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-all duration-200

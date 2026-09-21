@@ -35,6 +35,26 @@ def add_parameters(parameters: protocol_api.Parameters):
     )
 
     parameters.add_bool(
+        variable_name="use_tip_calibration",
+        display_name="USE TIP CALIBRATION",
+        description="OFF = dispense at nominal well position. ON = shift X/Y by the calibrator tip-bend probe.",
+        default=False
+    )
+
+    # Any adjust larger than this is rejected as a bad probe (missed switch,
+    # bad baseline, bent tip). Ported from the wax protocol 2026-08-27; the
+    # per-robot ceiling is injected by BIMS (TipCalibratorFixture.maxTipAdjust).
+    parameters.add_float(
+        variable_name="max_tip_adjust",
+        display_name="Max tip adjust (mm)",
+        description="Reject a tip-calibration adjust larger than this in X or Y (retry, never dispense with it).",
+        default=4.0,
+        minimum=0.3,
+        maximum=8.0,
+        unit="mm",
+    )
+
+    parameters.add_bool(
         variable_name="tiprack_refilled",
         display_name="Tiprack Refilled",
         description="Set to True if you have refilled the tiprack. Resets tip tracking to position A1.",
@@ -206,10 +226,23 @@ def run(protocol: protocol_api.ProtocolContext):
     # =====================================================================
     import socket
     
+    # ZEROED 2026-08-20. This table is a DEAD FALLBACK and must stay all-zero.
+    #
+    # The deck definition is the only source of hole positions and the per-tip
+    # calibrator probe is the only correction applied on top of it. This table
+    # predates that rule: it shifts ALL labware for a robot, so any non-zero
+    # value here double-counts geometry the Deck Calibration Studio already
+    # tuned. B07 carried real values and they are now 0 — BIMS forces
+    # bims_native=True and sends zeros, so the table was already unreachable in
+    # practice; zeroing it means even a protocol that somehow ran without the
+    # BIMS parameters cannot move the pipette off the taught position.
+    #
+    # Do not "calibrate a new robot" by adding numbers here. Tune the deck in
+    # the Studio; that is what the fill actually uses.
     ROBOT_OFFSETS = {
         'muddy-water':       { 'name': 'Left (B14)',   'x': 0.0, 'y': 0.0, 'z': 0.0 },
         'OT2CEP20210817R04': { 'name': 'Middle (R04)', 'x': 0.0, 'y': 0.0, 'z': 0.0 },
-        'hidden-leaf':       { 'name': 'Right (B07)',  'x': 0.2, 'y': -0.35, 'z': -0.35 },
+        'hidden-leaf':       { 'name': 'Right (B07)',  'x': 0.0, 'y': 0.0, 'z': 0.0 },
     }
     DEFAULT_OFFSETS = { 'name': 'Unknown', 'x': 0.0, 'y': 0.0, 'z': 0.0 }
     
@@ -436,53 +469,83 @@ def run(protocol: protocol_api.ProtocolContext):
             ser = _find_calibrator(wait_s=8)
     
     try:
-        # Read offset data with retry logic
-        try:
-            serial_write_with_retry(ser, b'C')
-            offset_data_raw = serial_read_with_retry(ser)
-            offset_data = str(offset_data_raw).split(':')
-            if len(offset_data) >= 2:
-                offset['x'] = float(offset_data[0][2:])
-                offset['y'] = float(offset_data[1][:-5])
-                protocol.comment(f'Offset calibration: x={offset["x"]}, y={offset["y"]}')
-            else:
-                raise ValueError('Invalid offset data format')
-        except Exception as e:
-            # Do NOT bail the run here. The 'C' baseline read can come back blank or
-            # malformed even when the calibrator is otherwise fine — operators have
-            # resumed past this in the Opentrons app and the run + per-tip probe still
-            # work. Pause so the operator can choose to continue, then proceed with a
-            # zero baseline (the per-tip X/Y probe below still runs; in bims_native mode
-            # the global offset is applied separately via set_offset). Never `return`.
-            protocol.pause(
-                f'Could not read offset calibration ({str(e)}). '
-                f'Click Resume to START THE RUN ANYWAY (zero baseline; per-tip '
-                f'calibration still runs), or Cancel/Stop to end.'
-            )
-            offset['x'] = 0.0
-            offset['y'] = 0.0
-            protocol.comment('Continuing without serial offset baseline — using x=0.0, y=0.0.')
-
-        # Read particle ID (which carriage/deck is loaded) with retry-on-resume —
-        # never bail to an empty run. 'I' is reliable in practice; if it ever returns
-        # garbage the operator can Resume to re-read (or Cancel/Stop to end).
-        carriage = None
-        while carriage is None:
+        # The 'C' offset baseline only feeds the per-tip X/Y probe below, so when
+        # tip calibration is disabled there is nothing to read — skip the serial
+        # exchange (and its could-not-read pause) entirely.
+        if not protocol.params.use_tip_calibration:
+            protocol.comment('Tip calibration disabled — skipping offset baseline read (x=0.0, y=0.0).')
+        else:
+            # Read offset data with retry logic
             try:
-                serial_write_with_retry(ser, b'I')
-                particle_id_raw = serial_read_with_retry(ser)
-                # Decode bytes to string and strip whitespace/newlines, then extract 24-character ID
-                particle_id = particle_id_raw.decode('utf-8', errors='ignore').strip()[:24]
-                if particle_id not in carriages:
-                    raise ValueError(f'Unknown particle ID: {particle_id}')
-                carriage = carriages[particle_id]
+                serial_write_with_retry(ser, b'C')
+                offset_data_raw = serial_read_with_retry(ser)
+                # Regex, not positional slicing: some calibrator fixtures prefix
+                # the bend reply (B07 answers b'= -0.2:2.3\r\n' where the others
+                # answer bare b'-4.5:0.8\r\n'). The old str(bytes)[2:] parsing
+                # raised on the prefix, forcing a zero-baseline run whose per-tip
+                # adjust was wrong by the whole baseline (2.3mm y on B07).
+                import re as _re_cal
+                _m = _re_cal.search(rb'(-?\d+(?:\.\d+)?)\s*:\s*(-?\d+(?:\.\d+)?)', offset_data_raw or b'')
+                if _m:
+                    offset['x'] = float(_m.group(1))
+                    offset['y'] = float(_m.group(2))
+                    protocol.comment(f'Offset calibration: x={offset["x"]}, y={offset["y"]}')
+                else:
+                    raise ValueError(f'Invalid offset data format: {offset_data_raw!r}')
             except Exception as e:
-                if protocol.is_simulating():
-                    return  # analysis pass: don't loop on a (no-op) pause
+                # Do NOT bail the run here. The 'C' baseline read can come back blank or
+                # malformed even when the calibrator is otherwise fine — operators have
+                # resumed past this in the Opentrons app and the run + per-tip probe still
+                # work. Pause so the operator can choose to continue, then proceed with a
+                # zero baseline (the per-tip X/Y probe below still runs; in bims_native mode
+                # the global offset is applied separately via set_offset). Never `return`.
                 protocol.pause(
-                    f'Could not read the deck/particle ID ({str(e)}). Check the '
-                    f'calibrator, then click Resume to retry (or Cancel/Stop to end).'
+                    f'Could not read offset calibration ({str(e)}). '
+                    f'Click Resume to START THE RUN ANYWAY (zero baseline; per-tip '
+                    f'calibration still runs), or Cancel/Stop to end.'
                 )
+                offset['x'] = 0.0
+                offset['y'] = 0.0
+                protocol.comment('Continuing without serial offset baseline — using x=0.0, y=0.0.')
+
+        # Read particle ID (which carriage/deck is loaded). The calibrator's USB
+        # serial ALSO carries the Particle device's system log ("0014455145 [system]
+        # INFO ..."), so a single readline() after 'I' often returns a log line
+        # instead of the ID — that is what forced operators to hit Resume 5-10 times
+        # per run on R04. Instead: drain the backlog, send 'I', then scan every line
+        # that arrives in a short window for a KNOWN carriage ID, retrying a few
+        # times internally before involving the operator.
+        def _read_particle_id(attempts=4, window_s=2.5):
+            for _attempt in range(attempts):
+                try:
+                    ser.reset_input_buffer()
+                    serial_write_with_retry(ser, b'I')
+                    _deadline = time.time() + window_s
+                    _buf = ''
+                    while time.time() < _deadline:
+                        _line = ser.readline()
+                        if not _line:
+                            continue
+                        _buf += _line.decode('utf-8', errors='ignore')
+                        for _pid in carriages:
+                            if _pid in _buf:
+                                return _pid
+                except Exception as e:
+                    protocol.comment(f'Particle ID read attempt {_attempt + 1} failed: {str(e)}')
+            return None
+
+        carriage = None
+        particle_id = _read_particle_id()
+        while particle_id is None:
+            if protocol.is_simulating():
+                return  # analysis pass: don't loop on a (no-op) pause
+            protocol.pause(
+                'Could not read the deck/particle ID from the calibrator (no known '
+                'deck ID in its serial output). Check the calibrator, then click '
+                'Resume to retry (or Cancel/Stop to end).'
+            )
+            particle_id = _read_particle_id()
+        carriage = carriages[particle_id]
         protocol.move_labware(labware=carriage, new_location=1)
         # Apply per-robot offsets to all well positions on this labware
         carriage.set_offset(
@@ -565,68 +628,166 @@ def run(protocol: protocol_api.ProtocolContext):
                 else:
                     protocol.comment(f'TIP TRACKER: consumed tip {_all_tips[_tip_index - 1].well_name} — rack now empty')
 
-            pipette.move_to(types.Location(types.Point(x=cal_x, y=cal_y, z=z_cal), carriage), speed=None)
+            # Per-tip bend calibration is OPT-IN (use_tip_calibration). When disabled,
+            # skip the physical X/Y limit-switch probe entirely and dispense at the
+            # nominal well position — no probe-derived shift. A miscalibrated/faulty
+            # calibrator returns bad offsets that push the tip off the target hole, so
+            # OFF restores nominal positioning. The tip is already picked up and the tip
+            # tracker already advanced above, so returning here loses nothing but the probe.
+            if not protocol.params.use_tip_calibration:
+                protocol.comment('Per-tip calibration DISABLED — nominal position, no X/Y probe.')
+                return { 'x': 0.0, 'y': 0.0 }
 
-            x_pos = cal_x - 1.4
-            y_pos = cal_y - 7.0
-            pipette.move_to(types.Location(types.Point(x=x_pos, y=y_pos, z=z_cal), carriage), force_direct=True, speed=20)
-            limit_reached = False
-            shift = 0.1
-            try:
-                serial_write_with_retry(ser, b'X')
-            except Exception as e:
-                protocol.pause(f'Error writing to serial during X calibration: {str(e)} - click Resume to continue')
-                return { 'x': 0, 'y': 0 }
-            
-            while (not limit_reached):
-                pipette.move_to(types.Location(types.Point(x=x_pos - shift, y=y_pos, z=z_cal), carriage), force_direct=True, speed=5)
-                shift += 0.1
-                if (shift > 5):
-                    protocol.pause('Unable to calibrate X axis, xOffset=' + str(x_pos + shift) + ' - click Resume to end')
-                    break
-                # Direct read with very short timeout for fast calibration
-                original_timeout = ser.timeout
-                ser.timeout = 0.01
+            # ── No-tip recovery + adjust guard (ported from the wax protocol, 2026-08-27) ──
+            # The OT-2 has no tip sensor; this probe IS the tip check. A probe that
+            # never reaches a limit switch = no tip (or tip not touching): lift clear,
+            # pause for a hand-inserted tip, and retry — NEVER return the junk walk.
+            # (The old code paused "Unable to calibrate X axis" and, on Resume,
+            # returned baseline−5.1 and applied it to every dispense.)
+            max_adjust = float(protocol.params.max_tip_adjust)
+
+            def _probe_once():
+                """One X+Y probe with the REAGENT recipe. Returns (adjust, ok, reason).
+                Never pauses; always retracts off the fixture before returning."""
+                pipette.move_to(types.Location(types.Point(x=cal_x, y=cal_y, z=z_cal), carriage), speed=None)
+
+                x_pos = cal_x - 1.4
+                y_pos = cal_y - 7.0
+                pipette.move_to(types.Location(types.Point(x=x_pos, y=y_pos, z=z_cal), carriage), force_direct=True, speed=20)
+                limit_reached = False
+                shift = 0.1
                 try:
-                    response = ser.read(1)
-                    limit_reached = response == b'X'
-                finally:
-                    ser.timeout = original_timeout
-            
-            xOffset = round(offset['x'] - shift, 1)
-            x_pos = cal_x + 8.829
-            y_pos = cal_y - 7.5
-            pipette.move_to(types.Location(types.Point(x=x_pos, y=y_pos, z=z_cal), carriage), force_direct=True, speed=20)
-            limit_reached = False
-            shift = 0.1
-            
-            try:
-                serial_write_with_retry(ser, b'Y')
-            except Exception as e:
-                protocol.pause(f'Error writing to serial during Y calibration: {str(e)} - click Resume to continue')
-                return { 'x': xOffset, 'y': 0 }
-            
-            while (not limit_reached):
-                pipette.move_to(types.Location(types.Point(x=x_pos, y=y_pos - shift, z=z_cal), carriage), force_direct=True, speed=5)
-                shift += 0.1
-                if (shift > 5):
-                    protocol.pause('Unable to calibrate Y axis, yOffset=' + str(y_pos - shift) + ' - click Resume to continue')
-                    break
-                # Direct read with very short timeout for fast calibration
-                original_timeout = ser.timeout
-                ser.timeout = 0.01
-                try:
-                    response = ser.read(1)
-                    limit_reached = response == b'Y'
-                finally:
-                    ser.timeout = original_timeout
+                    serial_write_with_retry(ser, b'X')
+                except Exception as e:
+                    protocol.comment(f'Error writing to serial during X calibration: {str(e)}')
+                    return { 'x': 0.0, 'y': 0.0 }, False, 'serial write failed (X)'
 
-            yOffset = round(offset['y'] - shift, 1)
+                while (not limit_reached):
+                    pipette.move_to(types.Location(types.Point(x=x_pos - shift, y=y_pos, z=z_cal), carriage), force_direct=True, speed=5)
+                    shift += 0.1
+                    if (shift > 5):
+                        break
+                    original_timeout = ser.timeout
+                    ser.timeout = 0.01
+                    try:
+                        response = ser.read(1)
+                        limit_reached = response == b'X'
+                    finally:
+                        ser.timeout = original_timeout
+                x_ok = limit_reached
+                xOffset = round(offset['x'] - shift, 1)
 
-            pipette.move_to(types.Location(types.Point(x=cal_x, y=cal_y, z=z_cal), carriage), force_direct=True, speed=20)
-            pipette.move_to(types.Location(types.Point(x=cal_x, y=cal_y, z=z_cal + 20), carriage), force_direct=True, speed=20)
-            
-            return { 'x': xOffset, 'y': yOffset }
+                yOffset = 0.0
+                y_ok = False
+                if x_ok:
+                    x_pos = cal_x + 8.829
+                    y_pos = cal_y - 7.5
+                    pipette.move_to(types.Location(types.Point(x=x_pos, y=y_pos, z=z_cal), carriage), force_direct=True, speed=20)
+                    limit_reached = False
+                    shift = 0.1
+                    try:
+                        serial_write_with_retry(ser, b'Y')
+                    except Exception as e:
+                        protocol.comment(f'Error writing to serial during Y calibration: {str(e)}')
+                        return { 'x': xOffset, 'y': 0.0 }, False, 'serial write failed (Y)'
+
+                    while (not limit_reached):
+                        pipette.move_to(types.Location(types.Point(x=x_pos, y=y_pos - shift, z=z_cal), carriage), force_direct=True, speed=5)
+                        shift += 0.1
+                        if (shift > 5):
+                            break
+                        original_timeout = ser.timeout
+                        ser.timeout = 0.01
+                        try:
+                            response = ser.read(1)
+                            limit_reached = response == b'Y'
+                        finally:
+                            ser.timeout = original_timeout
+                    y_ok = limit_reached
+                    yOffset = round(offset['y'] - shift, 1)
+
+                # Retract off the fixture (reagent retract point), then lift.
+                pipette.move_to(types.Location(types.Point(x=cal_x, y=cal_y, z=z_cal), carriage), force_direct=True, speed=20)
+                pipette.move_to(types.Location(types.Point(x=cal_x, y=cal_y, z=z_cal + 20), carriage), force_direct=True, speed=20)
+
+                adj = { 'x': xOffset, 'y': yOffset }
+                if not x_ok:
+                    return adj, False, 'X limit switch not reached within 5mm'
+                if not y_ok:
+                    return adj, False, 'Y limit switch not reached within 5mm'
+                if abs(xOffset) > max_adjust or abs(yOffset) > max_adjust:
+                    return adj, False, f'adjust ({xOffset}, {yOffset}) exceeds max_tip_adjust {max_adjust}mm'
+                return adj, True, ''
+
+            def _fresh_tip(tag):
+                """Drop whatever is (or isn't) on the nozzle and pick up the next tracked tip."""
+                nonlocal _tip_index
+                if pipette.has_tip:
+                    pipette.drop_tip()
+                if not protocol.is_simulating() and _tip_index >= len(_all_tips):
+                    protocol.pause('TIP TRACKER: tiprack exhausted — refill rack, enable "Tiprack Refilled" on next run, then click Resume to continue with current run from A1')
+                    _tip_index = 0
+                    pipette.starting_tip = _all_tips[0]
+                    save_tip_state(0)
+                pipette.pick_up_tip()
+                if not protocol.is_simulating():
+                    _tip_index += 1
+                    save_tip_state(_tip_index)
+                    protocol.comment(f'TIP TRACKER: consumed tip {_all_tips[_tip_index - 1].well_name} ({tag}) — index {_tip_index}')
+
+            def _no_tip_prompt(attempt, why):
+                """Missed switch = no tip on the nozzle (or not touching). Lift clear and
+                pause until the operator pushes a tip on by hand. Nothing is dispensed
+                and no rack position is consumed while this loops."""
+                pipette.move_to(types.Location(types.Point(x=cal_x, y=cal_y, z=z_cal + 60), carriage), force_direct=True, speed=20)
+                protocol.comment(f'WARNING: NO TIP DETECTED on the pipette (attempt {attempt}: {why}).')
+                protocol.pause(
+                    f'NO TIP DETECTED (attempt {attempt}: {why}). The pipette is raised over the '
+                    f'calibrator. Push a tip firmly onto the pipette BY HAND (or check the tip rack), '
+                    f'then click Resume to calibrate that tip. Cancel/Stop to end the run.'
+                )
+
+            # First attempt with the tip just picked up.
+            adj, ok, why = _probe_once()
+            if ok:
+                protocol.comment(f'Tip calibration OK: adjust x={adj["x"]}, y={adj["y"]}')
+                return adj
+
+            # Missed switch → hand-insert loop until a probe succeeds or the operator cancels.
+            attempt = 1
+            while not ok and 'not reached' in why:
+                _no_tip_prompt(attempt, why)
+                adj, ok, why = _probe_once()
+                attempt += 1
+                if ok:
+                    protocol.comment(f'Tip calibration OK on hand-inserted tip (attempt {attempt}): adjust x={adj["x"]}, y={adj["y"]}')
+                    return adj
+
+            # Over-cap with a tip on → one fresh rack-tip retry.
+            protocol.comment(f'Tip calibration REJECTED ({why}) — retrying with a fresh tip.')
+            _fresh_tip('retry')
+            adj, ok, why = _probe_once()
+            if ok:
+                protocol.comment(f'Tip calibration OK on retry: adjust x={adj["x"]}, y={adj["y"]}')
+                return adj
+            attempt = 1
+            while not ok and 'not reached' in why:
+                _no_tip_prompt(attempt, why)
+                adj, ok, why = _probe_once()
+                attempt += 1
+                if ok:
+                    protocol.comment(f'Tip calibration OK on hand-inserted tip (attempt {attempt}): adjust x={adj["x"]}, y={adj["y"]}')
+                    return adj
+
+            # NO NOMINAL FALLBACK — the reagent holes are taught tip-neutral, so
+            # "nominal" is a known-wrong position, not a safe degraded mode (same
+            # doctrine as the wax protocol since 2026-08-20).
+            raise RuntimeError(
+                f'Tip calibration REJECTED twice ({why}). Refusing to continue at nominal: '
+                f'the reagent holes are taught tip-neutral, so nominal is a known-wrong '
+                f'position. Check the calibrator fixture, or raise the max tip adjust for '
+                f'this robot in BIMS if the reading is genuinely normal for it, then re-run.'
+            )
 
         # =====================================================================
         # ASPIRATION HEIGHT SYSTEM

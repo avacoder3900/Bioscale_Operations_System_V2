@@ -4,6 +4,7 @@ import {
 	connectDB, KanbanTask, Equipment, PartDefinition,
 	ProductionRun, AuditLog, ApprovalRequest
 } from '$lib/server/db';
+import { ALL_STATUSES } from '$lib/shared/kanban-status';
 import type { RequestHandler } from './$types';
 
 export const GET: RequestHandler = async ({ request }) => {
@@ -12,7 +13,7 @@ export const GET: RequestHandler = async ({ request }) => {
 
 	const [
 		taskTotal,
-		taskBacklog, taskReady, taskWip, taskWaiting, taskDone,
+		statusAgg,
 		recentTasks,
 		eqTotal, eqActive, eqMaintenance, eqOffline,
 		lowStockParts, totalParts,
@@ -21,14 +22,13 @@ export const GET: RequestHandler = async ({ request }) => {
 		pendingApprovals
 	] = await Promise.all([
 		KanbanTask.countDocuments({ archived: { $ne: true } }),
-		KanbanTask.countDocuments({ status: 'backlog', archived: { $ne: true } }),
-		KanbanTask.countDocuments({ status: 'ready', archived: { $ne: true } }),
-		KanbanTask.countDocuments({ status: 'wip', archived: { $ne: true } }),
-		KanbanTask.countDocuments({ status: 'waiting', archived: { $ne: true } }),
-		KanbanTask.countDocuments({ status: 'done', archived: { $ne: true } }),
+		KanbanTask.aggregate([
+			{ $match: { archived: { $ne: true } } },
+			{ $group: { _id: '$status', count: { $sum: 1 } } }
+		]),
 		KanbanTask.find({ archived: { $ne: true } })
 			.sort({ updatedAt: -1 }).limit(5)
-			.select('_id title status prioritized assignee updatedAt').lean(),
+			.select('_id title status assignee updatedAt').lean(),
 		Equipment.countDocuments(),
 		Equipment.countDocuments({ status: 'active' }),
 		Equipment.countDocuments({ status: 'maintenance' }),
@@ -41,14 +41,20 @@ export const GET: RequestHandler = async ({ request }) => {
 		ApprovalRequest.countDocuments({ status: 'pending' })
 	]);
 
+	const byStatus: Record<string, number> = {};
+	for (const s of ALL_STATUSES) byStatus[s] = 0;
+	for (const row of statusAgg as any[]) {
+		if (row._id in byStatus) byStatus[row._id] = row.count;
+	}
+
 	return json({
 		success: true,
 		data: {
 			tasks: {
 				total: taskTotal,
-				byStatus: { backlog: taskBacklog, ready: taskReady, wip: taskWip, waiting: taskWaiting, done: taskDone },
+				byStatus,
 				recent: (recentTasks as any[]).map(t => ({
-					id: t._id, title: t.title, status: t.status, prioritized: t.prioritized ?? false,
+					id: t._id, title: t.title, status: t.status,
 					assignee: t.assignee, updatedAt: t.updatedAt
 				}))
 			},

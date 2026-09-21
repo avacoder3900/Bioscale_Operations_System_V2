@@ -10,8 +10,10 @@
  *   Request Format: JSON
  */
 import { json } from '@sveltejs/kit';
-import { connectDB, DeviceEvent, ParticleDevice, generateId } from '$lib/server/db';
+import { connectDB, DeviceEvent, ParticleDevice, Spu, OpticalBlankRun, generateId } from '$lib/server/db';
 import { requireAgentApiKey } from '$lib/server/api-auth';
+import { syncServiceFlag } from '$lib/server/service-flag';
+import { parseTestPayload } from '$lib/server/test-payload';
 import type { RequestHandler } from './$types';
 
 export const POST: RequestHandler = async ({ request }) => {
@@ -59,6 +61,43 @@ export const POST: RequestHandler = async ({ request }) => {
 		}
 	}
 
+	// Blank-cartridge run (firmware v96): the device publishes its binary test
+	// record under `blank-test` instead of `upload-test`, so it never reaches
+	// the cloud middleware or a cartridge record. Store it as an optical blank
+	// run against the unit; the DeviceEvent keeps only a summary (not the blob).
+	let blankRunId: string | null = null;
+	if ((eventName === 'blank-test' || eventName === 'bioscale/blank-test') && typeof eventData === 'string') {
+		const payload = parseTestPayload(eventData);
+		if (!payload) {
+			return json({ error: 'blank-test payload is not a test record' }, { status: 400 });
+		}
+		const spu = (await Spu.findOne({ 'particleLink.particleDeviceId': deviceId })
+			.select('_id udi')
+			.lean()) as any;
+		blankRunId = generateId();
+		await OpticalBlankRun.create({
+			_id: blankRunId,
+			deviceId,
+			spuId: spu?._id ?? null,
+			spuUdi: spu?.udi ?? null,
+			barcode: payload.cartridgeId || null,
+			assayId: payload.assayId || null,
+			startTime: payload.startTime ? new Date(payload.startTime * 1000) : null,
+			durationS: payload.duration,
+			numberOfReadings: payload.numberOfReadings,
+			checksum: payload.checksum,
+			readings: payload.readings,
+			publishedAt: publishedAt ? new Date(publishedAt) : null
+		});
+		parsedData = {
+			blankRun: blankRunId,
+			cartridgeUuid: payload.cartridgeId,
+			assayId: payload.assayId,
+			numberOfReadings: payload.numberOfReadings,
+			spuUdi: spu?.udi ?? null
+		};
+	}
+
 	// Create immutable device event
 	await DeviceEvent.create({
 		_id: generateId(),
@@ -82,5 +121,16 @@ export const POST: RequestHandler = async ({ request }) => {
 		}
 	);
 
-	return json({ success: true, event: eventType, deviceId });
+	// Device came (back) online → re-push the service-flag LED bit so a status
+	// change made while it was unplugged takes effect now (SPU-INV-08).
+	// Requires a Particle Console webhook on event `spark/status` with the
+	// agent API key header.
+	if (eventName === 'spark/status' && String(eventData).trim() === 'online') {
+		const spu = (await Spu.findOne({ 'particleLink.particleDeviceId': deviceId })
+			.select('_id')
+			.lean()) as any;
+		if (spu) await syncServiceFlag(spu._id);
+	}
+
+	return json({ success: true, event: eventType, deviceId, ...(blankRunId ? { blankRunId } : {}) });
 };

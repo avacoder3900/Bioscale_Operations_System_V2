@@ -29,6 +29,23 @@ const opentronsRunRecordSchema = new Schema({
 		},
 	}],
 
+	// Deck geometry provenance (DECK-CAL). Which physical deck the operator
+	// selected, which labware definition that deck is bound to, and the exact
+	// version + content hash of the geometry in play. Without this, "the tip went
+	// to the wrong place" is unanswerable after the fact — the definition is
+	// edited in place, so by the time anyone investigates, the coordinates that
+	// ran no longer exist anywhere.
+	deckGeometry: {
+		_id: false,
+		deckId: String,
+		deckLoadName: String,
+		particleDeviceId: String,
+		definitionVersion: Number,
+		definitionHash: String,
+		wellCount: Number,
+		warning: String
+	},
+
 	// Run lifecycle
 	status: {
 		type: String,
@@ -63,6 +80,9 @@ const opentronsRunRecordSchema = new Schema({
 opentronsRunRecordSchema.index({ manufacturingRunId: 1 });
 opentronsRunRecordSchema.index({ robotId: 1, status: 1 });
 opentronsRunRecordSchema.index({ opentronsRunId: 1 }, { unique: true, sparse: true });
+// The health-poller singleton filters by status alone every 15s — without a
+// status-prefix index that was a permanent COLLSCAN (Atlas alert, 2026-07-31).
+opentronsRunRecordSchema.index({ status: 1 });
 
 export const OpentronsRunRecord = mongoose.models.OpentronsRunRecord
 	|| mongoose.model('OpentronsRunRecord', opentronsRunRecordSchema, 'opentrons_run_records');

@@ -7,12 +7,10 @@ import type { RequestHandler } from './$types';
 const MIN_AGE_MS = 24 * 60 * 60 * 1000;
 
 function authenticate(request: Request): void {
+	// CRON_SECRET Bearer (Vercel sends it automatically when the env var is set)
+	// or the agent API key. No user-agent fallback — that header is forgeable.
 	const auth = request.headers.get('authorization')?.replace('Bearer ', '');
 	if (env.CRON_SECRET && auth === env.CRON_SECRET) return;
-	if (request.method === 'GET') {
-		const ua = request.headers.get('user-agent') ?? '';
-		if (ua.startsWith('vercel-cron/')) return;
-	}
 	requireAgentApiKey(request);
 }
 

@@ -67,9 +67,11 @@ export async function loadUnifiedActivity(
 		waxStoredCartIds.push(String(c._id));
 		events.push({
 			at: c.waxStorage?.recordedAt ?? new Date(),
-			kind: 'cartridge_wax_stored',
+			// WAX-SIMPLIFY-1: the fridge scan no longer changes status — this is the
+			// "wax-filled cart placed in this fridge" event, keyed on waxStorage.recordedAt.
+			kind: 'cartridge_wax_filled',
 			source: 'cartridge_records',
-			summary: `Cartridge ${c._id} wax-stored (operator: ${c.waxStorage?.operator?.username ?? 'unknown'})`,
+			summary: `Cartridge ${c._id} wax-filled → placed in fridge (operator: ${c.waxStorage?.operator?.username ?? 'unknown'})`,
 			payload: { cartridgeId: c._id }
 		});
 	}

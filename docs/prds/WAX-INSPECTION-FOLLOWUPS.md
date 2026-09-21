@@ -1,5 +1,9 @@
 # PRD: Wax-inspection follow-ups (1 & 2)
 
+> **Superseded 2026-08-17 by WAX-SIMPLIFY-1..3** — the wax_stored → wax_qc → verdict flow these
+> follow-ups clean up around no longer exists (visual pass is implicit at `wax_filled`; rejects
+> via the Wax Reject page). Kept for history only.
+
 Follow-ups to WAX-INSPECTION-READY-REJECTED. Now that judging happens at
 `/wax-inspect` (wax_stored → wax_qc → wax_ready/wax_rejected), clean up the
 leftovers.

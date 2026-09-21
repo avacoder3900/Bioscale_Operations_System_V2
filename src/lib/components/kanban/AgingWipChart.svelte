@@ -1,10 +1,12 @@
 <script lang="ts">
+	import { AGING_THRESHOLDS, STATUS_META, type KanbanStatus, type AgingLevel } from '$lib/shared/kanban-status';
+
 	interface AgingWipRow {
 		taskId: string;
 		title: string;
 		status: string;
 		daysInStatus: number;
-		severity: 'normal' | 'warning' | 'critical';
+		severity: AgingLevel;
 		statusColor: string;
 	}
 
@@ -16,12 +18,12 @@
 
 	let maxDays = $derived(rows.reduce((m, r) => Math.max(m, r.daysInStatus), 1));
 
-	const statusLegend = [
-		{ status: 'backlog', label: 'Backlog', color: '#a0a0a0' },
-		{ status: 'ready', label: 'Ready', color: '#00d4ff' },
-		{ status: 'wip', label: 'WIP', color: '#ff6600' },
-		{ status: 'waiting', label: 'Waiting', color: '#ff3366' }
-	];
+	// Only statuses that age appear in the legend.
+	const statusLegend = (Object.keys(AGING_THRESHOLDS) as KanbanStatus[]).map((status) => ({
+		status,
+		label: STATUS_META[status].label,
+		color: STATUS_META[status].color
+	}));
 </script>
 
 <div class="tron-card p-4">

@@ -258,7 +258,7 @@
 						</tr>
 					</thead>
 					<tbody>
-						{#each sortedReadings as reading, i (reading.timestamp)}
+						{#each sortedReadings as reading, i (i)}
 							{@const inRange = isInRange(reading.temperature)}
 							<tr
 								class="border-t border-[var(--color-tron-border)] transition-colors

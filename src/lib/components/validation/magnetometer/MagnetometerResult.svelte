@@ -282,7 +282,7 @@
 					</text>
 
 					<!-- Out-of-spec points -->
-					{#each sortedReadings as reading (reading.timestamp)}
+					{#each sortedReadings as reading, i (i)}
 						{#if isOutOfSpec(reading)}
 							<circle
 								cx={chartScales.scaleX(reading.timestamp)}
@@ -500,7 +500,7 @@
 							</tr>
 						</thead>
 						<tbody>
-							{#each readings as reading, i (reading.timestamp)}
+							{#each readings as reading, i (i)}
 								{@const outOfSpec = isOutOfSpec(reading)}
 								<tr
 									class="border-t border-[var(--color-tron-border)] {outOfSpec

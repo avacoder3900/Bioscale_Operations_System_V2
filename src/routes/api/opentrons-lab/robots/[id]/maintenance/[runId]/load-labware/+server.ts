@@ -10,6 +10,7 @@ import type { RequestHandler } from './$types';
 import { requirePermission } from '$lib/server/permissions';
 import { getRobot } from '$lib/server/opentrons/proxy';
 import { connectDB, LabwareDefinition } from '$lib/server/db';
+import { resolveLabwareDefinition } from '$lib/server/services/deck-calibration/resolve';
 import { registerLabwareDefinition, loadLabwareInRun } from '$lib/server/opentrons/maintenance';
 
 // Registers the full (576-well) deck def + loadLabware over the bridge — two
@@ -29,11 +30,24 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 	if (!loadName || typeof loadName !== 'string') error(400, 'loadName required');
 
 	await connectDB();
-	const def = (await LabwareDefinition.findOne({ loadName }).lean()) as any;
-	if (!def?.definition) error(404, `Labware definition "${loadName}" not found`);
+	let def: any;
+	try {
+		({ doc: def } = await resolveLabwareDefinition(loadName, {
+			namespace: body?.namespace ?? null,
+			version: body?.version != null ? Number(body.version) : null,
+			strict: true
+		}));
+	} catch (e) {
+		throw error(404, e instanceof Error ? e.message : `Labware definition "${loadName}" not found`);
+	}
 
-	const namespace = body?.namespace ?? def.namespace ?? def.definition?.namespace;
-	const version = Number(body?.version ?? def.version ?? def.definition?.version ?? 1);
+	// Identity must come from the blob we are about to register, not from the
+	// Mongo columns. registerLabwareDefinition sends `def.definition`, and the
+	// robot indexes it by the namespace/version INSIDE that JSON — so if the
+	// columns ever drift from the blob, loadLabware would ask for a definition
+	// the robot does not have under that URI.
+	const namespace = def.definition?.namespace ?? def.namespace;
+	const version = Number(def.definition?.version ?? def.version ?? 1);
 
 	try {
 		await registerLabwareDefinition(robot, params.runId, def.definition);

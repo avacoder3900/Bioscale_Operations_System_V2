@@ -1,4 +1,5 @@
 import { redirect } from '@sveltejs/kit';
+import { isCureComplete, cureRemainingMin } from '$lib/server/manufacturing/cure-time';
 import {
 	connectDB, WaxFillingRun, ReagentBatchRecord, CartridgeRecord,
 	BackingLot, LaserCutBatch, Consumable, LotRecord, ManufacturingSettings,
@@ -8,6 +9,7 @@ import {
 import { getCheckedOutCartridgeIds } from '$lib/server/checkout-utils';
 import { requirePermission } from '$lib/server/permissions';
 import { stageCounts } from '$lib/server/services/bucket-service';
+import { WAX_STAGE_STATUSES } from '$lib/shared/cartridge-wax-status';
 import type { PageServerLoad } from './$types';
 
 export const config = { maxDuration: 60 };
@@ -136,7 +138,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 	const backingBatchRows = (backingCartGroups as any[]).map((g: any) => {
 		const entryMs = g.oldestEntry ? new Date(g.oldestEntry).getTime() : 0;
 		const elapsedMin = entryMs ? (now - entryMs) / 60000 : 0;
-		const isReady = elapsedMin >= minOvenTimeMin;
+		const isReady = isCureComplete(g.oldestEntry, minOvenTimeMin, now);
 		return {
 			lotId: String(g._id?.lotId ?? 'unknown'),
 			cartridgeCount: g.count ?? 0,
@@ -145,7 +147,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 			ovenLocationName: g.ovenLocationName ?? null,
 			ovenEntryTime: g.oldestEntry ? new Date(g.oldestEntry).toISOString() : null,
 			elapsedMin: Math.floor(elapsedMin),
-			remainingMin: Math.max(0, Math.ceil(minOvenTimeMin - elapsedMin)),
+			remainingMin: cureRemainingMin(g.oldestEntry, minOvenTimeMin, now),
 			isReady,
 			operatorUsername: g.operatorUsername ?? null,
 			legacy: false
@@ -165,8 +167,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 			ovenLocationName: bl.ovenLocationName ?? null,
 			ovenEntryTime: bl.ovenEntryTime ? new Date(bl.ovenEntryTime).toISOString() : null,
 			elapsedMin: Math.floor(elapsedMin),
-			remainingMin: Math.max(0, Math.ceil(minOvenTimeMin - elapsedMin)),
-			isReady: elapsedMin >= minOvenTimeMin,
+			remainingMin: cureRemainingMin(bl.ovenEntryTime, minOvenTimeMin, now),
+			isReady: isCureComplete(bl.ovenEntryTime, minOvenTimeMin, now),
 			operatorUsername: bl.operator?.username ?? null,
 			legacy: true
 		};
@@ -212,7 +214,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 	// Post-OT-2 / on the Opentron Control queue — run still exists but robot
 	// is free for a new filling run.
 	const WAX_POST_OT2_QUEUED = ['QC', 'Storage', 'qc', 'storage'];
-	const REAGENT_POST_OT2_QUEUED = ['Top Sealing', 'Storage'];
+	// Reagent runs have no post-OT-2 queue (REAGENT-TOPSEAL-IMPLICIT): Running
+	// is the terminal stage, so a reagent run is either active or done.
 
 	const robotUtilMap = new Map<string, number>();
 	for (const r of [...(robotUtilWax as any[]), ...(robotUtilReagent as any[])]) {
@@ -240,10 +243,6 @@ export const load: PageServerLoad = async ({ locals }) => {
 			// Control for post-OT-2 handling.
 			status = 'available';
 			displayStatus = `Available — Wax queued (${waxRun.status})`;
-			robotPhysicallyFree = true;
-		} else if (reagentRun && REAGENT_POST_OT2_QUEUED.includes(reagentRun.status)) {
-			status = 'available';
-			displayStatus = `Available — Reagent queued (${reagentRun.status})`;
 			robotPhysicallyFree = true;
 		} else {
 			status = 'available';
@@ -300,7 +299,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 		agg.filter((a) => statuses.includes(a._id)).reduce((s, a) => s + a.count, 0);
 	const completedStatuses = ['completed', 'Completed'];
 	const activeStatuses = ['Setup', 'Loading', 'Running', 'setup', 'loading', 'running',
-		'Awaiting Removal', 'QC', 'Storage', 'Inspection', 'Top Sealing'];
+		'Awaiting Removal', 'QC', 'Storage', 'Inspection'];
 	const abortedStatuses = ['aborted', 'Aborted', 'cancelled', 'Cancelled'];
 
 	const yieldPercent = producedToday > 0
@@ -330,7 +329,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 			waxFilling: {
 				inProgress: phaseMap.get('wax_filling') ?? 0,
 				waxFilled: phaseMap.get('wax_filled') ?? 0,
-				waxStored: phaseMap.get('wax_stored') ?? 0
+				// Wax-stage carts eligible for reagent filling (WAX-SIMPLIFY-3)
+				waxStage: WAX_STAGE_STATUSES.reduce((s, st) => s + (phaseMap.get(st) ?? 0), 0)
 			},
 			reagentFilling: {
 				inProgress: phaseMap.get('reagent_filling') ?? 0,

@@ -569,7 +569,7 @@
 							</tr>
 						</thead>
 						<tbody>
-							{#each capturedReadings.slice(-15) as reading, i (reading.timestamp)}
+							{#each capturedReadings.slice(-15) as reading, i (i)}
 								{@const inRange =
 									reading.temperature >= config.minTemp && reading.temperature <= config.maxTemp}
 								<tr class="border-t border-[var(--color-tron-border)]">

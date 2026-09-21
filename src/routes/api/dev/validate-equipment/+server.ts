@@ -1,6 +1,7 @@
 import { json } from '@sveltejs/kit';
 import { connectDB, Equipment, EquipmentLocation, CartridgeRecord } from '$lib/server/db';
 import { checkDeckConflict, checkTrayConflict } from '$lib/server/manufacturing/resource-locks';
+import { isReagentEligible } from '$lib/shared/cartridge-wax-status';
 import type { RequestHandler } from './$types';
 
 export const GET: RequestHandler = async ({ url, locals }) => {
@@ -77,18 +78,11 @@ export const GET: RequestHandler = async ({ url, locals }) => {
 				return json({ error: `Cartridge "${id}" not found. It must go through wax filling first.`, isNew: true }, { status: 404 });
 			}
 			const phase = (cart as any).status;
-			// Only wax-inspected & passed carts may enter reagent filling
-			// (WAX-INSPECTION-READY-REJECTED). wax_stored/wax_qc still need inspection.
-			if (phase !== 'wax_ready') {
-				const hint =
-					phase === 'wax_rejected'
-						? 'it was rejected at wax inspection'
-						: phase === 'wax_qc'
-							? 'it is photographed but not yet passed at wax inspection'
-							: phase === 'wax_stored'
-								? 'it still needs wax inspection (photo + verdict)'
-								: `it is in phase "${phase}"`;
-				return json({ error: `Cartridge "${id}" is not wax_ready — ${hint}.` }, { status: 400 });
+			// WAX-SIMPLIFY-3: wax_filled | wax_ready may enter reagent filling. Same
+			// helper as the reagent-filling startRun gate so the two never disagree.
+			const gate = isReagentEligible(phase);
+			if (!gate.ok) {
+				return json({ error: `Cartridge "${id}" can't be reagent-filled — ${gate.hint}.` }, { status: 400 });
 			}
 			return json({ valid: true, id, isNew: false, phase });
 		}

@@ -31,10 +31,28 @@ async function safeActive() {
 	}
 }
 
-export const load: PageServerLoad = async ({ locals }) => {
+/**
+ * Identifier the 2s pose poll invalidates. Without it the poll has to use
+ * invalidateAll(), which re-runs the arm +layout.server.ts too — so watching
+ * the pose drift would also re-request the camera list and the preflight from
+ * the Pi every two seconds, forever, on the one tab where the operator is most
+ * likely to be actively moving the arm.
+ */
+// NOT exported. SvelteKit validates the export surface of +page.server.ts and
+// rejects anything outside {load, actions, prerender, csr, ssr, trailingSlash,
+// config, entries} or an underscore prefix — an arbitrary named export fails
+// the build with "Invalid export". svelte-check does not catch this, so it
+// only shows up in a real build. Exporting it would buy nothing anyway: a
+// +page.server.ts module cannot be imported into client code, so the .svelte
+// side has to repeat the literal regardless.
+const ARM_POSE_DEP = 'arm:pose';
+
+export const load: PageServerLoad = async ({ locals, depends }) => {
 	if (!locals.user) redirect(302, '/login');
 	requirePermission(locals.user, 'manufacturing:read');
 	await connectDB();
+
+	depends(ARM_POSE_DEP);
 
 	const [poseResult, active] = await Promise.all([safePose(), safeActive()]);
 	return { pose: poseResult.pose, poseError: poseResult.error, active };

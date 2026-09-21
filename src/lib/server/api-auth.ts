@@ -30,3 +30,16 @@ export function requireAgentApiKey(request: Request): void {
 		throw error(401, 'Invalid or missing API key');
 	}
 }
+
+/**
+ * Boolean variant for dual-mode endpoints (agent key OR session auth).
+ * Same timing-safe comparison as requireAgentApiKey, without throwing.
+ */
+export function isAgentApiKey(request: Request): boolean {
+	try {
+		requireAgentApiKey(request);
+		return true;
+	} catch {
+		return false;
+	}
+}

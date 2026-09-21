@@ -90,13 +90,11 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 		.map((c: any) => ({
 			cartridgeId: String(c._id),
 			qcStatus: c.waxQc?.status ?? 'Accepted',
-			// Derive UI "stored" state from waxStorage.recordedAt rather than status.
-			// status stays 'wax_filled' until completeRun (deferred commit, see
-			// 581c0d7), but the operator-facing UI needs to show storage as recorded
-			// the moment recordBatchStorage writes the fields — otherwise the
-			// CompletionStorage component never transitions to its review state and
-			// the Complete Run button stays disabled.
-			currentInventory: c.waxStorage?.recordedAt ? 'wax_stored' : (c.status ?? 'wax_filled'),
+			// UI location label derived from waxStorage.recordedAt, NOT a status:
+			// 'Stored' = fridge recorded, else the cart's status (wax_filled = still on
+			// deck). WAX-SIMPLIFY-1: wax_filled is the stored state — there is no
+			// wax_stored status anymore; the fridge is a location field.
+			currentInventory: c.waxStorage?.recordedAt ? 'Stored' : (c.status ?? 'wax_filled'),
 			storageLocation: c.waxStorage?.location ?? null
 		}));
 
@@ -512,9 +510,8 @@ export const actions: Actions = {
 
 		// Guard: completeQC must have landed before storage. If any cart is still
 		// at status='wax_filling', writing waxStorage now would leave it stranded
-		// — completeRun's wax_filled→wax_stored flip is filtered on status, so the
-		// cart would sit at 'wax_filling' with waxStorage set forever. Caused a
-		// 37-cart incident on 2026-05-04 when completeQC 500'd mid-action.
+		// at 'wax_filling' with waxStorage set (completeQC is what lands wax_filled).
+		// Caused a 37-cart incident on 2026-05-04 when completeQC 500'd mid-action.
 		const stillFilling = await CartridgeRecord.find({
 			_id: { $in: cartridgeIds },
 			status: 'wax_filling'
@@ -547,10 +544,9 @@ export const actions: Actions = {
 		// S2b: resolve cooling tray here too so waxStorage.coolingTrayId is canonical Equipment._id
 		const resolvedTrayId = coolingTrayId ? await resolveCoolingTrayId(coolingTrayId) : null;
 		if (safeIds.length > 0) {
-			// Storage fields are written here (fridge, tray, operator, timestamp)
-			// but status stays at 'wax_filled' until completeRun commits the whole
-			// batch. This prevents reagent filling from picking up cartridges
-			// before the wax run is closed — see recent state-machine fix.
+			// Storage fields are written here (fridge, tray, operator, timestamp).
+			// Status stays 'wax_filled' — WAX-SIMPLIFY-1: wax_filled IS the stored
+			// state; the fridge is a location field, not a status.
 			const bulkOps = safeIds.map((cid: string) => ({
 				updateOne: {
 					filter: { _id: cid, 'waxStorage.recordedAt': { $exists: false } },
@@ -562,7 +558,7 @@ export const actions: Actions = {
 							'waxStorage.operator': { _id: locals.user!._id, username: locals.user!.username },
 							'waxStorage.timestamp': now,
 							'waxStorage.recordedAt': now
-							// status intentionally NOT set — completeRun does the wax_stored flip.
+							// status intentionally NOT set — wax_filled is terminal for the wax stage.
 						}
 					}
 				}
@@ -588,7 +584,7 @@ export const actions: Actions = {
 				action: 'UPDATE',
 				changedBy: locals.user?.username,
 				changedAt: now,
-				newData: { status: 'wax_stored', location, count: safeIds.length, skippedLockedCount: blockedDetails.length }
+				newData: { status: 'wax_filled', waxStorageRecorded: true, location, count: safeIds.length, skippedLockedCount: blockedDetails.length }
 			});
 		}
 
@@ -704,14 +700,10 @@ export const actions: Actions = {
 		const cartridgeCount = run?.cartridgeIds?.length ?? 0;
 		const operatorRef = { _id: locals.user._id, username: locals.user.username };
 
-		// Commit point: flip every cartridge in the run that has its waxStorage
-		// recorded from status='wax_filled' → 'wax_stored'. This is the gate
-		// that prevents reagent filling from picking up cartridges before the
-		// wax run is explicitly completed. Filter on waxStorage.recordedAt so
-		// we don't promote cartridges that never made it through fridge assign.
-		// Locked carts (linked/underway/completed/voided/scrapped) are already
-		// excluded by the status='wax_filled' filter, but we still call the
-		// helper so improper-order attempts are logged + visible on cart-admin.
+		// Commit point. WAX-SIMPLIFY-1: cartridges stay at 'wax_filled' (the stored
+		// state — no wax_stored status anymore); the fridge is already recorded on
+		// waxStorage by recordBatchStorage. We still run the lock helper so
+		// improper-order attempts are logged + visible on cart-admin.
 		if (run?.cartridgeIds?.length) {
 			await protectLockedCarts(
 				run.cartridgeIds,
@@ -719,19 +711,11 @@ export const actions: Actions = {
 				runId,
 				{ _id: locals.user._id, username: locals.user.username }
 			);
-			await CartridgeRecord.updateMany(
-				{
-					_id: { $in: run.cartridgeIds },
-					status: 'wax_filled',
-					'waxStorage.recordedAt': { $exists: true }
-				},
-				{ $set: { status: 'wax_stored' } }
-			);
 		}
 
 		// Best-effort tail: equipment usage log, inventory consumption,
 		// lifecycle notifications, audit log. Status is already 'completed'
-		// and cartridges are 'wax_stored' — a failure here doesn't undo the
+		// and cartridges are 'wax_filled' — a failure here doesn't undo the
 		// run, so log loudly and let the operator see the redirect instead
 		// of a 500 on a run that's already done.
 		try {

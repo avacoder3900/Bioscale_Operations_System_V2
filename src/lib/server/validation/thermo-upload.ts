@@ -1,6 +1,6 @@
 import { ValidationSession, GeneratedBarcode, Spu, AuditLog, generateId } from '$lib/server/db';
 import { computeChannelStats, type ChannelStats } from '$lib/server/thermocouple-stats';
-import type { ThermoCriteria } from './thermo-criteria.js';
+import { inCurrentCycle } from '$lib/server/spu-validation-cycle';
 
 export interface ThermoReading {
 	timestamp: number;
@@ -11,60 +11,72 @@ export interface ThermoStats extends ChannelStats {
 	durationMs: number;
 }
 
+/** A temperature column as uploaded: its own readings, its own statistics. */
+export interface ThermoChannelInput {
+	key: string;
+	label: string;
+	column: number;
+	readings: ThermoReading[];
+}
+
+export interface ThermoChannelStats {
+	key: string;
+	label: string;
+	column: number;
+	stats: ThermoStats;
+}
+
 export interface ThermoUploadOutcome {
 	sessionId: string;
 	barcode: string;
 	spuUdi: string;
 	stats: ThermoStats;
+	/** Per-column statistics; one entry for a single-probe file. */
+	channelStats: ThermoChannelStats[];
 	evaluated: boolean;
 	passed: boolean | null;
 	failureReasons: string[];
 }
 
-export interface ThermoEvalOutcome {
-	sessionId: string;
-	stats: ThermoStats;
-	passed: boolean;
-	failureReasons: string[];
-	criteria: ThermoCriteria;
-}
-
-function evaluateReadings(temps: number[], criteria: ThermoCriteria) {
-	const stats = computeChannelStats(temps, criteria.minTemp, criteria.maxTemp);
-	const passed = stats.outOfRangeCount === 0;
-	const failureReasons: string[] = [];
-	if (temps.some(t => t < criteria.minTemp)) {
-		failureReasons.push(`${temps.filter(t => t < criteria.minTemp).length} reading(s) below minimum ${criteria.minTemp}°C`);
-	}
-	if (temps.some(t => t > criteria.maxTemp)) {
-		failureReasons.push(`${temps.filter(t => t > criteria.maxTemp).length} reading(s) above maximum ${criteria.maxTemp}°C`);
-	}
-	const interpretation = passed
-		? `All ${temps.length} readings within acceptable range (${criteria.minTemp}°C - ${criteria.maxTemp}°C)`
-		: `${stats.outOfRangeCount} of ${temps.length} readings outside acceptable range`;
-	return { stats, passed, failureReasons, interpretation };
+/** Unbounded stats — there is no acceptance range, so nothing is "out of range". */
+function statsFor(readings: ThermoReading[]): ThermoStats {
+	const temps = readings.map(r => r.temperature);
+	const durationMs = readings.length >= 2
+		? readings[readings.length - 1].timestamp - readings[0].timestamp
+		: 0;
+	return {
+		...computeChannelStats(temps, Number.NEGATIVE_INFINITY, Number.POSITIVE_INFINITY),
+		durationMs
+	};
 }
 
 /**
- * The thermocouple upload pipeline (extracted verbatim from the standalone
- * /validation/thermocouple `upload` action): stats → THERMO- barcode →
+ * The thermocouple upload pipeline: stats → THERMO- barcode →
  * ValidationSession → spu.validation.thermocouple rollup → audit.
  *
- * With `criteria` set, behavior is identical to the standalone page: pass/fail
- * is computed at upload. With `criteria: null` (validation-run uploads while
- * the standard range is unconfigured), the data is recorded but NOT judged:
- * the session is left 'in_progress' and the SPU rollup status stays 'pending'
- * until evaluateThermoSession() runs (VALIDATION-05: upload ≠ pass).
+ * There is no acceptance range. Nothing is auto-judged and nothing waits on a
+ * range being configured: the operator's Pass/Fail IS the record. Stats are
+ * always computed for them to judge on.
+ *
+ *  - no `verdict`: the readings are stored and the session sits 'in_progress'
+ *    until someone records a call (from the run board, or the session page).
+ *  - `verdict`: judged on the spot, exactly as recordThermoVerdict() would.
  */
 export async function processThermoUpload(opts: {
 	spuId: string;
 	readings: ThermoReading[];
-	criteria: ThermoCriteria | null;
+	/**
+	 * One entry per temperature column in the file. A two-probe logger gives
+	 * two, and both are stored and summarised separately. Omitted (or a single
+	 * entry) behaves exactly as before.
+	 */
+	channels?: ThermoChannelInput[];
+	verdict?: 'passed' | 'failed' | null;
 	runId?: string;
 	fileName?: string | null;
 	user: { _id: string; username: string };
 }): Promise<{ error: string } | ThermoUploadOutcome> {
-	const { spuId, readings, criteria, runId, fileName, user } = opts;
+	const { spuId, readings, channels, verdict, runId, fileName, user } = opts;
 
 	if (!Array.isArray(readings) || readings.length === 0) {
 		return { error: 'No valid readings in uploaded data' };
@@ -76,33 +88,67 @@ export async function processThermoUpload(opts: {
 
 	const temps = readings.map(r => r.temperature);
 
+	// Per-column statistics. Two probes measure two places, so each gets its
+	// own min/max/mode/average rather than one number blended from both.
+	const channelList: ThermoChannelInput[] = channels?.length
+		? channels
+		: [{ key: 'ch1', label: 'Channel 1', column: 0, readings }];
+
 	// Sanity guard: a correct parse yields temperatures, not Excel date
 	// serials (~46,000) or row indexes. Reject implausible data instead of
 	// recording a garbage session (old sessions THERMO-000005/6 did exactly
 	// that: "temperatures" 1..493 from a row-index column).
-	const implausible = temps.filter(t => !isFinite(t) || t < -100 || t > 1000).length;
+	//
+	// Checked per column, not on the combined mean. Averaging hides exactly
+	// what this guard looks for: a genuine 25°C probe beside a column of raw
+	// counts reading 900 averages to a perfectly plausible 462, and the bad
+	// column would then be stored and charted as a real measurement.
+	const implausibleIn = (vals: number[]) =>
+		vals.filter(t => !isFinite(t) || t < -100 || t > 1000).length;
+	for (const c of channelList) {
+		const vals = c.readings.map(r => r.temperature);
+		if (vals.length === 0) continue;
+		const bad = implausibleIn(vals);
+		if (bad / vals.length > 0.2) {
+			return { error: `${c.label} does not look like temperatures (${bad} of ${vals.length} outside -100…1000°C) — check the file's column layout and re-upload` };
+		}
+	}
+	const implausible = implausibleIn(temps);
 	if (implausible / temps.length > 0.2) {
 		return { error: `Parsed values do not look like temperatures (${implausible} of ${temps.length} outside -100…1000°C) — check the file's column layout and re-upload` };
 	}
-	const durationMs = readings.length >= 2
-		? readings[readings.length - 1].timestamp - readings[0].timestamp
-		: 0;
 
-	let stats: ChannelStats;
+	// Unbounded: there is no range, so nothing is ever "out of range".
+	const stats = statsFor(readings);
+	const channelStats: ThermoChannelStats[] = channelList.map(c => ({
+		key: c.key,
+		label: c.label,
+		column: c.column,
+		stats: statsFor(c.readings)
+	}));
+
+	// Written only when there really are several probes. For one probe the
+	// per-channel statistics are identical to `stats`, and a single-probe
+	// upload must persist exactly the document it persisted before this
+	// change — the audit row especially, which is immutable once written.
+	const multiChannel = channelList.length > 1;
+	const channelFields = multiChannel ? { channelStats } : {};
+
 	let passed: boolean | null = null;
 	let failureReasons: string[] = [];
 	let interpretation: string;
-	if (criteria) {
-		const ev = evaluateReadings(temps, criteria);
-		stats = ev.stats;
-		passed = ev.passed;
-		failureReasons = ev.failureReasons;
-		interpretation = ev.interpretation;
+	if (verdict) {
+		passed = verdict === 'passed';
+		interpretation = passed
+			? `${readings.length} readings — passed on operator review of the min/max/mode shown`
+			: `${readings.length} readings — failed on operator review of the min/max/mode shown`;
+		if (!passed) failureReasons = ['Failed on operator review'];
 	} else {
-		// No acceptance range yet — stats only, no out-of-range judgment.
-		stats = computeChannelStats(temps, Number.NEGATIVE_INFINITY, Number.POSITIVE_INFINITY);
-		interpretation = `${readings.length} readings uploaded, awaiting evaluation against the standard acceptance range`;
+		interpretation = `${readings.length} readings uploaded — awaiting the operator's Pass/Fail`;
 	}
+
+	// A session is complete once a person has judged it.
+	const judged = !!verdict;
 
 	const barcodeDoc = await GeneratedBarcode.findOneAndUpdate(
 		{ prefix: 'THERMO' },
@@ -125,7 +171,7 @@ export async function processThermoUpload(opts: {
 	await ValidationSession.create({
 		_id: sessionId,
 		type: 'thermo',
-		status: criteria ? (passed ? 'completed' : 'failed') : 'in_progress',
+		status: judged ? (passed ? 'completed' : 'failed') : 'in_progress',
 		userId: user._id,
 		generatedBarcodeId: barcodeId,
 		barcode,
@@ -133,17 +179,36 @@ export async function processThermoUpload(opts: {
 		spuUdi: spu.udi,
 		runId: runId ?? null,
 		startedAt: new Date(readings[0].timestamp),
-		completedAt: criteria ? new Date() : null,
-		config: criteria ? { minTemp: criteria.minTemp, maxTemp: criteria.maxTemp } : {},
+		completedAt: judged ? new Date() : null,
+		config: {},
 		results: [{
 			_id: generateId(),
 			testType: 'thermocouple',
-			rawData: { readings },
+			rawData: {
+				readings,
+				// The per-probe series, kept whole — but only when there is more
+				// than one probe. For a single-probe file the series IS
+				// `readings`, and storing it twice would just double the document
+				// for nothing. Readers fall back to `readings` when this is absent,
+				// which is also what every session recorded before two-channel
+				// parsing has.
+				...(multiChannel
+					? {
+						channelSeries: channelList.map(c => ({
+							key: c.key,
+							label: c.label,
+							column: c.column,
+							readings: c.readings
+						}))
+					}
+					: {})
+			},
 			processedData: {
-				stats: { ...stats, durationMs },
+				stats: stats,
+				...channelFields,
 				interpretation,
 				failureReasons,
-				criteria: criteria ? { minTemp: criteria.minTemp, maxTemp: criteria.maxTemp } : null
+				criteria: null
 			},
 			passed,
 			notes: interpretation,
@@ -152,19 +217,22 @@ export async function processThermoUpload(opts: {
 	});
 
 	// SPU rollup: sacred-gated write first (may throw on finalized), audit after.
-	// Rollup status enum has no 'uploaded' — it stays 'pending' until evaluation.
+	// Rollup status enum has no 'uploaded' — it stays 'pending' until judged.
 	const rollup: Record<string, unknown> = {
 		'validation.thermocouple.sessionId': sessionId,
 		'validation.thermocouple.rawData': { readingCount: readings.length, fileName: fileName ?? null },
-		'validation.thermocouple.results': { ...stats, durationMs }
+		'validation.thermocouple.results': stats
 	};
-	if (criteria) {
+	if (judged) {
 		rollup['validation.thermocouple.status'] = passed ? 'passed' : 'failed';
 		rollup['validation.thermocouple.completedAt'] = new Date();
 		rollup['validation.thermocouple.failureReasons'] = failureReasons;
-		rollup['validation.thermocouple.criteriaUsed'] = { minTemp: criteria.minTemp, maxTemp: criteria.maxTemp };
 	}
 	await Spu.updateOne({ _id: spuId }, { $set: rollup });
+
+	// Evidence drives the evidence state (SPU-INV-12).
+	const { autoEnterValidating } = await import('$lib/server/spu-auto-validate');
+	await autoEnterValidating(spuId, 'thermocouple', user);
 
 	await AuditLog.create({
 		_id: generateId(),
@@ -177,9 +245,11 @@ export async function processThermoUpload(opts: {
 			barcode,
 			runId: runId ?? null,
 			fileName: fileName ?? null,
-			evaluated: !!criteria,
+			evaluated: judged,
+			verdict: verdict ?? null,
 			passed,
-			stats: { ...stats, durationMs },
+			stats: stats,
+			...channelFields,
 			failureReasons
 		},
 		changedAt: new Date(),
@@ -190,72 +260,91 @@ export async function processThermoUpload(opts: {
 		sessionId,
 		barcode,
 		spuUdi: spu.udi,
-		stats: { ...stats, durationMs },
-		evaluated: !!criteria,
+		stats: stats,
+		channelStats,
+		evaluated: judged,
 		passed,
 		failureReasons
 	};
 }
 
-/**
- * VALIDATION-05: judge an already-uploaded thermocouple session against an
- * acceptance range. Re-runs computeChannelStats over the stored readings,
- * completes the session, and flips the SPU rollup to passed/failed.
- */
-export async function evaluateThermoSession(opts: {
+export interface ThermoVerdictOutcome {
 	sessionId: string;
-	criteria: ThermoCriteria;
+	barcode: string | null;
+	spuUdi: string | null;
+	passed: boolean;
+	stats: ThermoStats | null;
+	failureReasons: string[];
+}
+
+/**
+ * Record the operator's binary Pass/Fail against a session that has already
+ * been uploaded and is awaiting judgment.
+ *
+ * The verdict is keyed on the session `_id`, so it lands on the readings that
+ * were actually stored under it. There is no longer any path by which a
+ * verdict reaches a different SPU's data than the data shown beside it — which
+ * is how THERMO-000031 came to carry SPU 247's measurement.
+ *
+ * Also sets top-level `overallPassed`, which the upload path never did.
+ */
+export async function recordThermoVerdict(opts: {
+	sessionId: string;
+	verdict: 'passed' | 'failed';
 	user: { _id: string; username: string };
-}): Promise<{ error: string } | ThermoEvalOutcome> {
-	const { sessionId, criteria, user } = opts;
+}): Promise<{ error: string } | ThermoVerdictOutcome> {
+	const { sessionId, verdict, user } = opts;
+	const passed = verdict === 'passed';
 
 	const session = await ValidationSession.findById(sessionId).lean() as any;
 	if (!session) return { error: 'Validation session not found' };
+	if (session.type !== 'thermo') return { error: 'That session is not a thermocouple session' };
+
 	const result = session.results?.find((r: any) => r.testType === 'thermocouple');
-	const readings: ThermoReading[] = result?.rawData?.readings ?? [];
-	if (readings.length === 0) return { error: 'Session has no stored readings to evaluate' };
+	if (!result) return { error: 'That session has no thermocouple result to judge' };
+	if (result.passed === true || result.passed === false) {
+		return { error: 'That session already carries a verdict' };
+	}
 
 	const spu = session.spuId ? await Spu.findById(session.spuId).lean() as any : null;
 	if (spu?.finalizedAt) return { error: 'SPU is finalized and cannot be modified' };
 
-	const temps = readings.map(r => r.temperature);
-	const durationMs = readings.length >= 2
-		? readings[readings.length - 1].timestamp - readings[0].timestamp
-		: 0;
-	const { stats, passed, failureReasons, interpretation } = evaluateReadings(temps, criteria);
-	const previousPassed = result?.passed ?? null;
+	const stats: ThermoStats | null = result.processedData?.stats ?? null;
+	const readingCount = stats?.readingCount ?? result.rawData?.readings?.length ?? 0;
+	const interpretation = passed
+		? `${readingCount} readings — passed on operator review of the min/max/mode shown`
+		: `${readingCount} readings — failed on operator review of the min/max/mode shown`;
+	const failureReasons = passed ? [] : ['Failed on operator review'];
+	const now = new Date();
 
 	await ValidationSession.updateOne(
 		{ _id: sessionId, 'results._id': result._id },
 		{
 			$set: {
 				status: passed ? 'completed' : 'failed',
-				completedAt: new Date(),
+				completedAt: now,
 				overallPassed: passed,
 				failureReasons,
-				criteriaUsed: { minTemp: criteria.minTemp, maxTemp: criteria.maxTemp },
-				config: { minTemp: criteria.minTemp, maxTemp: criteria.maxTemp },
 				'results.$.passed': passed,
 				'results.$.notes': interpretation,
-				'results.$.processedData.stats': { ...stats, durationMs },
 				'results.$.processedData.interpretation': interpretation,
-				'results.$.processedData.failureReasons': failureReasons,
-				'results.$.processedData.criteria': { minTemp: criteria.minTemp, maxTemp: criteria.maxTemp }
+				'results.$.processedData.failureReasons': failureReasons
 			}
 		}
 	);
 
-	if (session.spuId) {
+	// Readings uploaded before the unit's current validation cycle began (it
+	// went to servicing since) get their verdict on the session but earn no
+	// credit on the unit — the cycle needs a fresh thermocouple run.
+	if (session.spuId && inCurrentCycle(session.startedAt, spu?.validationResetAt)) {
 		await Spu.updateOne(
 			{ _id: session.spuId },
 			{
 				$set: {
 					'validation.thermocouple.status': passed ? 'passed' : 'failed',
 					'validation.thermocouple.sessionId': sessionId,
-					'validation.thermocouple.completedAt': new Date(),
-					'validation.thermocouple.results': { ...stats, durationMs },
-					'validation.thermocouple.failureReasons': failureReasons,
-					'validation.thermocouple.criteriaUsed': { minTemp: criteria.minTemp, maxTemp: criteria.maxTemp }
+					'validation.thermocouple.completedAt': now,
+					'validation.thermocouple.failureReasons': failureReasons
 				}
 			}
 		);
@@ -265,19 +354,26 @@ export async function evaluateThermoSession(opts: {
 		_id: generateId(),
 		tableName: 'validation_sessions',
 		recordId: sessionId,
-		action: 'thermocouple_validation_evaluated',
-		oldData: { passed: previousPassed },
+		action: 'thermocouple_validation_verdict',
 		newData: {
 			spuId: session.spuId ?? null,
 			spuUdi: session.spuUdi ?? null,
-			criteria: { minTemp: criteria.minTemp, maxTemp: criteria.maxTemp },
+			barcode: session.barcode ?? null,
+			verdict,
 			passed,
-			stats: { ...stats, durationMs },
+			stats,
 			failureReasons
 		},
-		changedAt: new Date(),
+		changedAt: now,
 		changedBy: user.username
 	});
 
-	return { sessionId, stats: { ...stats, durationMs }, passed, failureReasons, criteria };
+	return {
+		sessionId,
+		barcode: session.barcode ?? null,
+		spuUdi: session.spuUdi ?? null,
+		passed,
+		stats,
+		failureReasons
+	};
 }

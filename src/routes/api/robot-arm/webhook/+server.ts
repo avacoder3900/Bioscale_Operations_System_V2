@@ -54,7 +54,7 @@ function inferType(eventType: string): string | undefined {
 	if (eventType.startsWith('record.')) return 'record';
 	if (eventType.startsWith('replay.')) return 'replay';
 	if (eventType.startsWith('calibrate.')) return 'calibrate';
-	if (eventType.startsWith('task.')) return 'teleop'; // generic protocol run, treated as teleop for now
+	if (eventType.startsWith('task.')) return 'task';
 	return undefined;
 }
 

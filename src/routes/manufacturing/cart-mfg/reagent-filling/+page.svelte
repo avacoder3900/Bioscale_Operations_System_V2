@@ -12,7 +12,8 @@
 	import RunExecution from '$lib/components/manufacturing/reagent-filling/RunExecution.svelte';
 	import ProtocolStartPanel from '$lib/components/manufacturing/ProtocolStartPanel.svelte';
 	import EmbeddedRunController from '$lib/components/manufacturing/EmbeddedRunController.svelte';
-	// Top Sealing + Storage happen on Opentron Control post-OT-2 queue, not here.
+	// REAGENT-TOPSEAL-IMPLICIT: there is no post-OT-2 queue. Run completion ends
+	// the run; top sealing is implicit; the next touch is the Reagent Inspect photo.
 
 	let { data } = $props();
 
@@ -25,8 +26,8 @@
 	let showResetModal = $state(false);
 
 	// Inspection (and its holding-tray scan) moved off this page — see
-	// REAGENT-INSPECT-AFTER-TOPSEAL. The run now ends at Run; sealing happens on
-	// Opentron Control and inspection on the Reagent Inspect page.
+	// REAGENT-INSPECT-AFTER-TOPSEAL. The run now ends at Run; top sealing is
+	// implicit (REAGENT-TOPSEAL-IMPLICIT) and inspection happens on Reagent Inspect.
 
 	// Admin override state
 	let showOverrideModal = $state(false);
@@ -45,10 +46,9 @@
 		}
 	});
 
-	// Reagent-filling page owns Setup → Load → Run (3 stages). Inspection moved
-	// off this page (REAGENT-INSPECT-AFTER-TOPSEAL): a completed run goes straight
-	// to Top Sealing on Opentron Control, then the Reagent Inspect page; both live
-	// on the post-OT-2 queue, reached after the run finishes here.
+	// Reagent-filling page owns Setup → Load → Run (3 stages). Completing the
+	// run here finishes it (status Completed, carts reagent_filled); the carts
+	// are top-sealed off-page and photographed on the Reagent Inspect page.
 	const STAGES = ['Setup', 'Loading', 'Running'] as const;
 	type Stage = (typeof STAGES)[number];
 
@@ -76,6 +76,19 @@
 	// starts hands-off with those values. Client-only — a reload re-shows the step.
 	let paramsReady = $state(false);
 	let capturedParamsFd = $state<FormData | null>(null);
+	/**
+	 * Cartridge count from the captured protocol params (set BEFORE scanning).
+	 * Passed to DeckLoadingGrid so the auto-sweep only walks that many
+	 * positions on a partial fill — previously the sweep always walked all 24
+	 * and spent a full scan-timeout on every empty slot. (After the scan,
+	 * startRunWithCapturedParams still overwrites param_cartridges with the
+	 * real scanned count, so the run itself is driven by what was scanned.)
+	 */
+	const plannedScanCount = $derived.by(() => {
+		const raw = capturedParamsFd?.get('param_cartridges')?.toString();
+		const n = raw ? Math.floor(Number(raw)) : NaN;
+		return Number.isFinite(n) && n >= 1 && n <= 24 ? n : null;
+	});
 	// "Run again" stashes the prior run's params here so the fresh run skips the
 	// param step and lands straight on barcode scanning (the per-run reset below
 	// reapplies it instead of clearing).
@@ -91,6 +104,9 @@
 			if (runAgainParamsFd && rid) {
 				capturedParamsFd = runAgainParamsFd;
 				paramsReady = true;
+				// Run-again skips the params panel, so persist the carried-over
+				// count for the NEW run here (activeRunId is the new run now).
+				persistPlannedCount(runAgainParamsFd);
 				runAgainParamsFd = null;
 			} else {
 				paramsReady = false;
@@ -104,8 +120,39 @@
 	// (survives reload). Gates the Complete + Run-again controls on Running.
 	let runFinishedLocal = $state(false);
 	const runFinished = $derived(runFinishedLocal || !!data.runState.opentronsRunFinalStatus);
+	/**
+	 * Terminal but not successful. The finish controls used to present a failed
+	 * run exactly like a good one — green "batch completed", Done front and
+	 * centre — and Done stamps every cartridge reagent_filled (2026-08-31).
+	 */
+	const runFailed = $derived(
+		!!data.runState.opentronsRunFinalStatus &&
+			!['succeeded', 'completed'].includes(String(data.runState.opentronsRunFinalStatus).toLowerCase())
+	);
 
-	// "Run again": complete the just-finished run (→ Top Sealing, robot freed),
+	// The robot's own status, reported by EmbeddedRunController. Used to hold the
+	// run clock while the robot is paused — paused time isn't fill time.
+	let robotStatus = $state<string | null>(null);
+
+	/**
+	 * Run-time parameters BIMS pre-selects for a reagent run, overriding the .py's
+	 * own defaults. These seed the form; the operator can still change any of them.
+	 *
+	 * use_tip_calibration: the protocol declares it `default=False`, so operators
+	 * were ticking it on before every single run — 59 of the last 60 reagent runs
+	 * across all three robots had it on, the one exception being a cancelled run.
+	 * Pre-selecting it matches what the line actually does. Deliberately NOT in
+	 * contextReadonly: a flaky tip calibrator is a real failure mode, and turning
+	 * this off is the documented workaround (it falls back to nominal well
+	 * positions), so the operator has to keep that escape hatch.
+	 *
+	 * Kept as one frozen constant rather than an inline literal so the pre-scan
+	 * panel gets a stable object identity: ProtocolStartPanel re-seeds the whole
+	 * form whenever contextValues changes, which would wipe an operator's edits.
+	 */
+	const REAGENT_PARAM_DEFAULTS = Object.freeze({ use_tip_calibration: true });
+
+	// "Run again": complete the just-finished run (→ Completed, robot freed),
 	// then start a fresh run on the same robot reusing the same assay + protocol
 	// params — landing on barcode scanning. Mirrors the wax flow.
 	async function handleRunAgain() {
@@ -116,7 +163,7 @@
 		runAgainParamsFd = capturedParamsFd;
 		runFinishedLocal = false;
 		// 1) Complete the current run — robotReleasedAt frees the robot and the
-		//    page load drops it as active (status → Top Sealing).
+		//    page load drops it as active (status → Completed).
 		await submitForm('completeRunFilling');
 		if (errorMsg) { runAgainParamsFd = null; return; }
 		// 2) Create a fresh run on the same robot with the same assay.
@@ -128,9 +175,31 @@
 		//    paramsReady + capturedParamsFd → substage advances to barcode scan.
 	}
 
+	/**
+	 * Persist the planned count server-side the moment params are confirmed, so
+	 * the barcode sweep no longer depends on this tab keeping its state (a
+	 * reload / second tab / fast Run-again lost capturedParamsFd and the sweep
+	 * walked all 24 positions — seen 08-24 and again 08-27 on R04).
+	 * Fire-and-forget: the client-side cap still works when this races.
+	 */
+	function persistPlannedCount(fd: FormData | null) {
+		const raw = fd?.get('param_cartridges')?.toString();
+		const n = raw ? Math.floor(Number(raw)) : NaN;
+		if (!data.activeRunId || !Number.isFinite(n) || n < 1 || n > 24) return;
+		const body = new FormData();
+		body.set('runId', data.activeRunId);
+		body.set('plannedCartridgeCount', String(n));
+		fetch('?/savePlannedCount', {
+			method: 'POST',
+			body,
+			headers: { 'x-sveltekit-action': 'true' }
+		}).catch((e) => console.warn('[reagent] savePlannedCount failed', e));
+	}
+
 	function handleParamsConfirmed(fd: FormData) {
 		capturedParamsFd = fd;
 		paramsReady = true; // advance from params step to Barcode Scanning
+		persistPlannedCount(fd);
 	}
 
 	async function startRunWithCapturedParams() {
@@ -149,7 +218,18 @@
 			});
 			const txt = await res.text();
 			if (!res.ok || txt.includes('"type":"failure"')) {
-				errorMsg = 'Auto-start with your parameters failed — start the run manually below.';
+				// Show the server's own reason (2026-08-28) — the generic message hid
+				// actionable errors and made a failed auto-start look like a loop.
+				let detail = '';
+				try {
+					const parsed = JSON.parse(txt);
+					const raw = typeof parsed?.data === 'string' ? JSON.parse(parsed.data) : parsed?.data;
+					const found = Array.isArray(raw) ? raw.find((v: unknown) => typeof v === 'string' && v.length > 3) : raw?.error;
+					if (typeof found === 'string') detail = found;
+				} catch { /* fall back to the generic message */ }
+				errorMsg = detail
+					? `Auto-start failed: ${detail}`
+					: 'Auto-start with your parameters failed — start the run manually below.';
 				pendingStage = null;
 			}
 			await invalidateAll();
@@ -240,8 +320,8 @@
 
 	// Timeline bubbles (4): the Loading stage is split into "Barcode Scanning"
 	// (deck + cartridge scan, cartridges===0) and "Reagent Prep" (cartridges>0).
-	// Inspection moved off this page — the run ends at Run (then Top Sealing →
-	// Reagent Inspect on the post-OT-2 queue).
+	// Inspection moved off this page — the run ends at Run (then implicit top
+	// seal → Reagent Inspect).
 	const TIMELINE = ['Reagent Fill Setup', 'Barcode Scanning', 'Reagent Prep', 'Run'] as const;
 	const currentBubbleIndex = $derived.by(() => {
 		const s = stage;
@@ -343,6 +423,16 @@
 					pendingOverrideData = extraData;
 				}
 				showError(serverError);
+				submitting = false;
+				return;
+			}
+
+			// recordRunFinished: the server finalizes the batch and frees the robot
+			// the moment the .py succeeds. Skip the refresh — a reload here would
+			// drop the (now Completed) run from page state and wipe the finished
+			// panel before the operator sees it. Complete / Run again both remain
+			// valid: they're idempotent against an already-Completed run.
+			if (action === 'recordRunFinished') {
 				submitting = false;
 				return;
 			}
@@ -602,6 +692,7 @@
 			<ProtocolStartPanel
 				robot={{ _id: data.opentronsRobotId, name: data.robotId }}
 				protocols={data.robotProtocols}
+				contextValues={REAGENT_PARAM_DEFAULTS}
 				lastTipState={data.lastTipState}
 				submitting={submitting}
 				formAction="?/startRun"
@@ -633,9 +724,12 @@
 		<!-- Step 3: Deck + cartridge scan. On complete, auto-start the run with the
 		     params + batch captured before scanning — straight into filling, no button. -->
 		<DeckLoadingGrid
+			plannedCartridgeCount={plannedScanCount}
 			onComplete={async ({ deckId, cartridgeScans }) => {
 				await submitForm('loadDeck', { deckId, cartridgeScans: JSON.stringify(cartridgeScans) });
 				// Hands-off auto-start (mirror wax): scan was the last manual step.
+				// The !errorMsg guard is load-bearing — never start a run whose deck
+				// load did not commit.
 				if (!errorMsg && reagentBatchConfirmed && capturedParamsFd) {
 					await startRunWithCapturedParams();
 				}
@@ -664,7 +758,7 @@
 				<ProtocolStartPanel
 					robot={{ _id: data.opentronsRobotId, name: data.robotId }}
 					protocols={data.robotProtocols}
-					contextValues={{ cartridges: data.cartridges.length }}
+					contextValues={{ ...REAGENT_PARAM_DEFAULTS, cartridges: data.cartridges.length }}
 					contextReadonly={['cartridges']}
 					lastTipState={data.lastTipState}
 					submitting={submitting}
@@ -683,9 +777,11 @@
 				robotId={data.opentronsRobotId}
 				robotName={data.runState.assayTypeName ?? 'Reagent Run'}
 				opentronsRunId={data.runState.opentronsRunId}
+				onStatusChange={(status) => { robotStatus = status; }}
 				onComplete={(status) => {
-					// The .py landed terminal — reveal the run-complete controls. The
-					// run does NOT auto-advance; the operator sends it on or re-runs.
+					// The .py landed terminal — reveal the run-complete controls.
+					// recordRunFinished auto-finalizes a succeeded run server-side
+					// (carts stamped, robot freed); the panel below is confirmation.
 					runFinishedLocal = true;
 					submitForm('recordRunFinished', {
 						runId: data.activeRunId ?? '',
@@ -704,6 +800,11 @@
 				cartridgeCount={previewParam ? 8 : (data.runState.cartridgeCount ?? 0)}
 				runStartTime={new Date(data.runState.runStartTime ?? Date.now())}
 				runEndTime={new Date(data.runState.runEndTime ?? (Date.now() + 600000))}
+				protocolParameters={data.runState.protocolParameters}
+				robotFinished={runFinished}
+				finalStatus={data.runState.opentronsRunFinalStatus}
+				paused={robotStatus === 'paused'}
+				autoCompleteOnExpiry={!data.runState.opentronsRunId}
 				onTimerComplete={() => { runFinishedLocal = true; }}
 				onAbort={(reason, photoUrl) => submitForm('abortRun', { reason, photoUrl: photoUrl ?? '' })}
 				readonly={isViewingPast}
@@ -711,28 +812,38 @@
 		{:else}
 			<!-- Run has been started but the server hasn't written runEndTime yet.
 			     Show a brief "starting" state instead of a misleading flat-10-min
-			     fallback countdown (the real timer = start + cartridges × fillTime). -->
+			     fallback estimate (see lib/manufacturing/reagent-run-estimate.ts). -->
 			<div class="flex flex-col items-center gap-2 rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-6 text-center">
 				<h2 class="text-lg font-semibold text-[var(--color-tron-text)]">Starting run…</h2>
 				<p class="text-sm text-[var(--color-tron-text-secondary)]">Creating the protocol run on the robot — the countdown will appear once it begins.</p>
 			</div>
 		{/if}
 
-		<!-- Run-complete controls (REAGENT-INSPECT-AFTER-TOPSEAL): appear only once
-		     the .py finishes. Inspection is no longer here — the batch goes to Top
-		     Sealing, and Run again starts a fresh batch with the same parameters. -->
+		<!-- Run-complete controls: appear only once the .py finishes. A succeeded
+		     run is already finalized server-side (carts → reagent_filled, robot
+		     freed); Done just clears the page. Run again starts a fresh batch
+		     with the same parameters. -->
 		{#if !isViewingPast && (previewParam || runFinished)}
 			<div class="mt-4 flex flex-col items-center gap-3 rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4">
-				<p class="text-sm text-[var(--color-tron-text-secondary)]">
-					Run finished. Send this batch to Top Sealing, or run another batch with the same parameters.
-				</p>
+				{#if runFailed}
+					<p class="text-sm text-red-300">
+						The robot ended in "{data.runState.opentronsRunFinalStatus}" — these cartridges were NOT
+						reagent-filled. Fix the cause shown above, then run them again. Only press Done if you
+						have confirmed the reagent actually went in; it marks all
+						{data.runState.cartridgeCount ?? 0} cartridges as reagent-filled.
+					</p>
+				{:else}
+					<p class="text-sm text-[var(--color-tron-text-secondary)]">
+						Run finished — batch completed and the robot is free. Top-seal the cartridges, then photograph on Reagent Inspect. Or run another batch with the same parameters.
+					</p>
+				{/if}
 				<button
 					type="button"
-					onclick={() => submitForm('completeRunFilling')}
+					onclick={() => submitForm('completeRunFilling', runFailed ? { confirmDespiteFailure: 'true' } : {})}
 					disabled={submitting}
 					class="min-h-[44px] w-full max-w-sm rounded-lg border border-green-500/50 bg-green-900/20 px-8 py-3 text-base font-bold text-green-400 transition-all hover:bg-green-900/30 disabled:opacity-50"
 				>
-					Complete — send to Top Sealing
+					Done
 				</button>
 				<button
 					type="button"

@@ -17,6 +17,9 @@
 				status: string;
 				startedAt: string | null;
 				completedAt: string | null;
+				/** When the test actually ran on the device. Null = genuinely unknown. */
+				testRanAt: string | null;
+				pullDelaySeconds: number | null;
 				barcode: string | null;
 				username: string | null;
 				spuUdi: string | null;
@@ -200,13 +203,28 @@
 					<span class="tron-text-primary font-mono font-medium">{data.session.spuUdi ?? 'N/A'}</span>
 				</div>
 				<div>
-					<span class="tron-text-muted block text-xs uppercase">Started</span>
+					<span class="tron-text-muted block text-xs uppercase">Test run</span>
 					<span class="tron-text-primary font-medium">
-						{data.session.startedAt ? new Date(data.session.startedAt).toLocaleString() : '—'}
+						{#if data.session.testRanAt}
+							{new Date(data.session.testRanAt).toLocaleString()}
+							{#if data.session.pullDelaySeconds != null && data.session.pullDelaySeconds > 3600}
+								<span
+									style="color: var(--color-tron-orange);"
+									title="The device was still holding this result when BIMS read it, so it was already stale at that point."
+								>⚠</span>
+							{/if}
+						{:else}
+							<span
+								class="tron-text-muted"
+								title="This payload carries no timestamp (legacy format), so the run time is genuinely unknown. It is deliberately not filled in with the time the data was recorded."
+							>unknown</span>
+						{/if}
 					</span>
 				</div>
 				<div>
-					<span class="tron-text-muted block text-xs uppercase">Completed</span>
+					<!-- Distinct from the above: the magnet_validation variable holds an
+					     earlier run_test, so reading it is not measuring it. -->
+					<span class="tron-text-muted block text-xs uppercase">Recorded in BIMS</span>
 					<span class="tron-text-primary font-medium">
 						{data.session.completedAt ? new Date(data.session.completedAt).toLocaleString() : '—'}
 					</span>

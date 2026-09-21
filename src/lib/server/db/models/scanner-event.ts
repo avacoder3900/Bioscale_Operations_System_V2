@@ -25,6 +25,12 @@ const scannerEventSchema = new Schema({
 scannerEventSchema.index({ deviceId: 1, receivedAt: -1 });
 scannerEventSchema.index({ eventType: 1, receivedAt: -1 });
 scannerEventSchema.index({ receivedAt: -1 });
+// Scanner telemetry is a debugging flight recorder, not a system of record —
+// real traceability lives in cartridge_records / audit_log. 30-day TTL keeps
+// the debugging window and caps the collection (was 1.5M docs, 2026-07-31).
+// Heartbeats are additionally upserted as one doc per device (see the event
+// ingest endpoint), so they no longer accumulate at all.
+scannerEventSchema.index({ receivedAt: 1 }, { expireAfterSeconds: 30 * 24 * 3600 });
 
 export const ScannerEvent = mongoose.models.ScannerEvent
 	|| mongoose.model('ScannerEvent', scannerEventSchema, 'scanner_events');

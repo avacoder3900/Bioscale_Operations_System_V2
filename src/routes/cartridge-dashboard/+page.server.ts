@@ -2,6 +2,7 @@ import { redirect } from '@sveltejs/kit';
 import { connectDB, CartridgeRecord, Equipment, BackingLot, WaxFillingRun, ReagentBatchRecord } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
 import { getCheckedOutCartridgeIds } from '$lib/server/checkout-utils';
+import { WAX_STAGE_STATUSES } from '$lib/shared/cartridge-wax-status';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
@@ -89,7 +90,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 	// Storage distribution — merge three fridge buckets so totals match the
 	// physical occupancy used elsewhere (/inventory/fridge-storage,
 	// /equipment/activity, /equipment/fridges-ovens):
-	//   wax_accepted (status='wax_stored')          — keyed by waxStorage.location
+	//   wax_accepted (status∈WAX_STAGE_STATUSES)     — keyed by waxStorage.location
 	//   wax_scrapped (status='scrapped' + waxStorage.location set) — QA quarantine
 	//   reagent      (status∈{stored,reagent_filled}) — keyed by storage.fridgeName
 	// Oven occupancy (WAX-FLOW-2): cartridges in the backing oven are individual
@@ -98,7 +99,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 	// — nothing writes to BackingLot any more.
 	const [waxAcceptedCountsAgg, waxScrappedCountsAgg, reagentStorageCounts, backingCartOccupancyAgg, legacyOvenOccupancyAgg] = await Promise.all([
 		CartridgeRecord.aggregate([
-			{ $match: { 'waxStorage.location': { $exists: true }, status: 'wax_stored', _id: { $nin: checkedOutIds } } },
+			{ $match: { 'waxStorage.location': { $exists: true }, status: { $in: [...WAX_STAGE_STATUSES] }, _id: { $nin: checkedOutIds } } },
 			{ $group: { _id: '$waxStorage.location', count: { $sum: 1 } } }
 		]),
 		CartridgeRecord.aggregate([
@@ -152,7 +153,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 	// status again (WAX-FLOW-2, per-cartridge oven scans) so it's already in
 	// phaseCounts — add the legacy BackingLot.cartridgeCount sum on top until
 	// those buckets drain.
-	const phaseOrder = ['backing', 'wax_filled', 'wax_stored', 'wax_qc', 'wax_ready', 'wax_rejected', 'reagent_filled', 'inspected', 'sealed', 'reagent_qc', 'reagent_ready', 'reagent_rejected', 'cured', 'stored', 'released', 'shipped'];
+	const phaseOrder = ['backing', 'wax_filled', 'wax_qc', 'wax_ready', 'wax_rejected', 'reagent_filled', 'inspected', 'sealed', 'reagent_qc', 'reagent_ready', 'reagent_rejected', 'cured', 'stored', 'released', 'shipped'];
 	const phaseMap = new Map((phaseCounts as any[]).map((p: any) => [p._id, p.count]));
 	const legacyBackingCount = (legacyOvenOccupancyAgg as any[]).reduce((s, o: any) => s + (o.count ?? 0), 0);
 	phaseMap.set('backing', (phaseMap.get('backing') ?? 0) + legacyBackingCount);

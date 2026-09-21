@@ -2,12 +2,18 @@
  * Box OAuth 2.0 callback handler.
  * Receives the authorization code after user grants access in the Box consent screen.
  */
-import { redirect } from '@sveltejs/kit';
+import { redirect, error } from '@sveltejs/kit';
 import { connectDB, Integration, AuditLog, generateId } from '$lib/server/db';
+import { isAdmin } from '$lib/server/permissions';
 import { exchangeCode } from '$lib/server/box';
 import type { RequestHandler } from './$types';
 
 export const GET: RequestHandler = async ({ url, locals }) => {
+	// Only an authenticated admin may complete the OAuth exchange — an anonymous
+	// caller with a valid ?code= could otherwise overwrite the org's Box tokens.
+	if (!locals.user) throw redirect(302, '/login');
+	if (!isAdmin(locals.user)) throw error(403, 'Admin access required to connect Box');
+
 	const code = url.searchParams.get('code');
 	const errorParam = url.searchParams.get('error');
 
@@ -50,17 +56,14 @@ export const GET: RequestHandler = async ({ url, locals }) => {
 		});
 	}
 
-	// Audit log
-	if (locals.user) {
-		await AuditLog.create({
-			_id: generateId(),
-			tableName: 'integrations',
-			recordId: existing?._id ?? 'new',
-			action: existing ? 'UPDATE' : 'INSERT',
-			newData: { type: 'box', connected: true },
-			changedBy: locals.user.username ?? locals.user._id
-		});
-	}
+	await AuditLog.create({
+		_id: generateId(),
+		tableName: 'integrations',
+		recordId: existing?._id ?? 'new',
+		action: existing ? 'UPDATE' : 'INSERT',
+		newData: { type: 'box', connected: true },
+		changedBy: locals.user.username ?? locals.user._id
+	});
 
 	throw redirect(303, '/parts');
 };

@@ -6,11 +6,17 @@ import {
 	OpentronsRobot, Ot2BridgeCommand
 } from '$lib/server/db';
 import { recordTransaction, resolvePartId } from '$lib/server/services/inventory-transaction';
+import { findBucketLabels } from '$lib/server/services/bucket-service';
 import { checkRobotConflict, checkDeckConflict, checkTrayConflict } from '$lib/server/manufacturing/resource-locks';
 import { WAX_PAGE_OWNED } from '$lib/server/manufacturing/run-statuses';
-import { resolveFridgeId } from '$lib/server/services/equipment-resolve';
 import { getRobot, robotGet, robotPost, bridgeDeviceIdForRobot } from '$lib/server/opentrons/proxy';
 import { calibrationRtpValues } from '$lib/server/opentrons/calibration-rtps';
+import { ensureFreshRunProtocol } from '$lib/server/opentrons/protocol-freshness';
+import { resolveDeckBinding, DeckBindingError } from '$lib/server/services/deck-calibration/run-guard';
+import { isHardenedRobot } from '$lib/server/services/deck-calibration/rollout';
+import { OpentronsRunRecord } from '$lib/server/db';
+import { estimateReagentRunSeconds } from '$lib/manufacturing/reagent-run-estimate';
+import { isReagentEligible } from '$lib/shared/cartridge-wax-status';
 import type { PageServerLoad, Actions } from './$types';
 
 // Extend Vercel serverless timeout to 60s
@@ -22,7 +28,7 @@ const TERMINAL = new Set(['completed', 'aborted', 'voided', 'cancelled', 'Comple
 function toStage(status: string | null | undefined): string | null {
 	if (!status) return null;
 	// Already a UI stage
-	if (['Setup', 'Loading', 'Running', 'Inspection', 'Top Sealing', 'Storage'].includes(status)) return status;
+	if (['Setup', 'Loading', 'Running'].includes(status)) return status;
 	// Legacy mapping
 	const map: Record<string, string> = {
 		setup: 'Setup', running: 'Running'
@@ -49,7 +55,6 @@ function emptyReagentState(robotId: string, loadError?: string) {
 		assayTypes: [] as { id: string; name: string; skuCode: string | null; isActive: boolean; reagents: { wellPosition: number; reagentName: string }[] }[],
 		reagentDefinitions: [] as { id: string; reagentName: string; wellPosition: number | null; volumeMicroliters: number | null; isActive: boolean }[],
 		cartridges: [] as any[],
-		currentSealBatch: null as null | { batchId: string; firstScanTime: string | null; cartridgeIds: string[] },
 		rejectionCodes: [] as any[],
 		tubes: [] as { id: string; reagentName: string; volume: number }[],
 		reagentPrepDone: false,
@@ -114,14 +119,10 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 			}))
 		}));
 
-		// This page owns stages Setup → Loading → Running → Inspection.
-		// Pre-OT-2 stages have robotReleasedAt unset; Inspection is post-OT-2
-		// (completeRunFilling sets robotReleasedAt) but still renders here.
-		// The filter is status-based, not robotReleasedAt-based, so an
-		// Inspection run keeps loading its cartridges on this page after the
-		// OT-2 handoff. Inspection moved off this page (REAGENT-INSPECT-AFTER-TOPSEAL):
-		// a completed run goes straight to Top Sealing on Opentron Control, so
-		// Inspection / Top Sealing / Storage runs live there and must NOT match.
+		// This page owns stages Setup → Loading → Running. Running is terminal:
+		// completeRunFilling marks the run Completed (REAGENT-TOPSEAL-IMPLICIT),
+		// so a completed run must NOT match here. Legacy 'Inspection' /
+		// 'Top Sealing' / 'Storage' runs (pre-migration) are not page-owned either.
 		const PAGE_OWNED_STATUSES = ['Setup', 'Loading', 'Running', 'setup', 'running'];
 		let activeRun: any = null;
 		if (robotId) {
@@ -129,6 +130,39 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 				'robot._id': robotId,
 				status: { $in: PAGE_OWNED_STATUSES }
 			}).sort({ createdAt: -1 }).lean().catch(() => null);
+		}
+
+		// SELF-HEAL (2026-08-28, parity with wax): finalize a finished run on
+		// the next visit if no browser tab was alive to do it — the robot must
+		// not stay locked (and the carts unstamped) because a tab closed at the
+		// wrong moment. Handles both a stamped-but-never-completed run and one
+		// where even the final status was never recorded (polls the robot).
+		if (activeRun && ['Running', 'running'].includes(activeRun.status)) {
+			try {
+				let final = String(activeRun.opentronsRunFinalStatus ?? '').toLowerCase();
+				if (!final && activeRun.opentronsRunId) {
+					const rRobot = await getRobot(activeRun.robot?._id);
+					if (rRobot) {
+						const rs = await robotGet(rRobot, `/runs/${activeRun.opentronsRunId}`);
+						if (rs.ok) final = String(((await rs.json())?.data?.status ?? '')).toLowerCase();
+					}
+					if (final === 'succeeded') {
+						await ReagentBatchRecord.findByIdAndUpdate(activeRun._id, {
+							$set: { opentronsRunFinalStatus: final }
+						});
+					}
+				}
+				if (final === 'succeeded') {
+					await finalizeReagentRun(
+						String(activeRun._id),
+						{ _id: locals.user._id, username: locals.user.username },
+						'auto (load reconcile)'
+					);
+					activeRun = null; // page renders idle — run is done
+				}
+			} catch (e) {
+				console.error('[reagent load] run reconcile failed:', e instanceof Error ? e.message : e);
+			}
 		}
 
 		// Robot's uploaded protocols (parameter schemas) + the most recent
@@ -210,27 +244,10 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 			deckPosition: cf.deckPosition ?? null,
 			inspectionStatus: cf.inspectionStatus ?? 'Pending',
 			inspectionReason: cf.inspectionReason ?? null,
-			topSealBatchId: cf.topSealBatchId ?? null,
 			inspectedBy: cf.inspectedBy?.username ?? null,
 			currentStatus: cf.inspectionStatus ?? 'Pending',
 			storageLocation: cf.storageLocation ?? null
 		}));
-
-		// Current active seal batch (in_progress)
-		const currentSealBatch = (() => {
-			const batches = activeRun?.sealBatches ?? [];
-			const inProgress = batches.find((b: any) => b.status === 'in_progress');
-			if (!inProgress) return null;
-			const cartridgeIds = (inProgress.cartridgeIds ?? []).map(String);
-			return {
-				batchId: String(inProgress._id),
-				topSealLotId: inProgress.topSealLotId ?? '',
-				scannedCount: cartridgeIds.length,
-				totalTarget: 12,
-				firstScanTime: inProgress.firstScanTime ? new Date(inProgress.firstScanTime).toISOString() : null,
-				cartridgeIds
-			};
-		})();
 
 		// Tube records (reagent prep)
 		const tubes = (activeRun?.tubeRecords ?? []).map((t: any) => ({
@@ -312,7 +329,6 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 			assayTypes,
 			reagentDefinitions,
 			cartridges,
-			currentSealBatch,
 			rejectionCodes,
 			tubes,
 			// Reagent-batch prep state, server-derived so it survives a reload (the
@@ -332,33 +348,6 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 		return emptyReagentState(robotId, 'Failed to load reagent filling data. Please refresh the page.');
 	}
 };
-
-/**
- * Resolve the active run for a post-OT-2 action on this page.
- *
- * Why this exists: once completeRunFilling sets robotReleasedAt, the page's
- * load filter excludes the run from activeRun, so `data.activeRunId` on the
- * client becomes null and submitForm posts `runId=''`. The client page still
- * optimistically shows Inspection/Top Sealing/Storage (pendingStage isn't
- * cleared for those actions), so the operator clicks through and hits these
- * actions with an empty runId — producing a spurious "Run not found".
- *
- * When runId from the form is empty, fall back to the most recent post-OT-2
- * run for this robot. The client sends robotId in every submitForm call.
- */
-const POST_OT2_STATUSES = ['Inspection', 'Top Sealing', 'Storage'];
-async function resolveRunId(data: FormData): Promise<string | null> {
-	const runId = (data.get('runId') as string | null)?.trim() ?? '';
-	if (runId) return runId;
-	const robotId = (data.get('robotId') as string | null)?.trim() ?? '';
-	if (!robotId) return null;
-	const run = await ReagentBatchRecord.findOne({
-		'robot._id': robotId,
-		status: { $in: POST_OT2_STATUSES },
-		robotReleasedAt: { $exists: true }
-	}).sort({ createdAt: -1 }).select('_id').lean() as any;
-	return run ? String(run._id) : null;
-}
 
 /**
  * Best-effort stop of the OT-2 run backing a reagent run, BEFORE marking it
@@ -388,6 +377,166 @@ async function stopRobotRun(run: any): Promise<string | null> {
 	} catch (e) {
 		return `Couldn't reach the robot to stop the run (${e instanceof Error ? e.message : 'unknown'}) — confirm on the device.`;
 	}
+}
+
+/**
+ * Statuses a cartridge can legitimately hold while it waits for its reagent
+ * fill to be recorded. finalizeReagentRun only advances `status` from these —
+ * a cart that has already moved on (linked into a research experiment,
+ * underway, completed) keeps its status and only gains the reagentFilling
+ * stamp. Guards against a deferred completion regressing live experiment
+ * carts (2026-08-28: a Complete clicked 2h after the run knocked 22
+ * experiment-350 carts from linked/tested back to reagent_filled).
+ */
+const PRE_REAGENT_STATUSES = ['backing', 'wax_filled', 'wax_qc', 'wax_ready', 'wax_stored'];
+
+/**
+ * Finalize a reagent run (REAGENT-TOPSEAL-IMPLICIT): run → Completed, robot
+ * released, cartridges stamped reagent_filled, tube + top-seal inventory
+ * consumed. Idempotent — callable from recordRunFinished (auto, the moment
+ * the .py succeeds), the load-time reconcile, and the manual Complete button.
+ */
+async function finalizeReagentRun(
+	runId: string,
+	user: { _id: string; username: string },
+	trigger: string
+): Promise<{ ok: true } | { notFound: true }> {
+	const now = new Date();
+
+	// Idempotency: auto-complete, load reconcile, and the button can race.
+	const existing = await ReagentBatchRecord.findById(runId).select('status finalizedAt').lean() as any;
+	if (!existing) return { notFound: true };
+	if (existing.status === 'Completed' || existing.finalizedAt) return { ok: true };
+
+	const run = await ReagentBatchRecord.findByIdAndUpdate(runId, {
+		$set: {
+			status: 'Completed',
+			finalizedAt: now,
+			runEndTime: now,
+			// Robot is physically free as of now — releases the robot lock so
+			// the next wax/reagent run can start.
+			robotReleasedAt: now
+		}
+	}, { new: true }).lean() as any;
+
+	// Write reagentFilling phase to cartridges (WRITE-ONCE). Research runs
+	// leave assayType null on each cartridge — downstream UIs must treat
+	// reagentFilling.isResearch === true as "assay intentionally blank".
+	if (run?.cartridgesFilled?.length) {
+		const isResearch = run.isResearch === true;
+		const bulkOps = run.cartridgesFilled.flatMap((cf: any) => {
+			const stamp = {
+				'reagentFilling.runId': run._id,
+				'reagentFilling.robotId': run.robot?._id,
+				'reagentFilling.robotName': run.robot?.name,
+				'reagentFilling.assayType': isResearch ? null : run.assayType,
+				'reagentFilling.isResearch': isResearch,
+				'reagentFilling.deckPosition': cf.deckPosition,
+				'reagentFilling.tubeRecords': run.tubeRecords,
+				'reagentFilling.operator': run.operator,
+				'reagentFilling.fillDate': now,
+				'reagentFilling.recordedAt': now
+			};
+			return [
+				{
+					updateOne: {
+						filter: {
+							_id: cf.cartridgeId,
+							'reagentFilling.recordedAt': { $exists: false },
+							status: { $in: PRE_REAGENT_STATUSES }
+						},
+						update: { $set: { ...stamp, status: 'reagent_filled' } }
+					}
+				},
+				// Cart already moved past the fill (e.g. linked into a research
+				// experiment while the run sat unfinalized): record the fill
+				// data but leave its status alone.
+				{
+					updateOne: {
+						filter: {
+							_id: cf.cartridgeId,
+							'reagentFilling.recordedAt': { $exists: false },
+							status: { $nin: PRE_REAGENT_STATUSES }
+						},
+						update: { $set: stamp }
+					}
+				}
+			];
+		});
+		await CartridgeRecord.bulkWrite(bulkOps);
+
+		// Consume 2ml tubes (PT-CT-107) — FLAT 4 TUBES PER RUN regardless of
+		// cartridge count (1–24). Research runs consume the same 4 tubes.
+		// TODO: revisit — eventually the tube count should vary per assay
+		// (e.g., # of reagents × batch size) rather than a flat 4.
+		const tubePartId = await resolvePartId('PT-CT-107');
+		await recordTransaction({
+			transactionType: 'consumption',
+			partDefinitionId: tubePartId ?? undefined,
+			quantity: 4,
+			manufacturingStep: 'reagent_filling',
+			manufacturingRunId: String(run._id),
+			operatorId: run.operator?._id,
+			operatorUsername: run.operator?.username,
+			notes: run.isResearch
+				? `Reagent filling run — 4x 2ml tubes (research run, ${run.cartridgesFilled.length} cartridges)`
+				: `Reagent filling run — 4x 2ml tubes (assay: ${run.assayType?.name ?? 'unknown'}, ${run.cartridgesFilled.length} cartridges)`
+		});
+
+		// Consume top-seal cut sheets (PT-CT-113) — implicit top seal. One
+		// sheet seals up to `topSealCutting.cartridgesPerSheet` carts (default
+		// 12); partial sheets count as fully consumed. This used to happen per
+		// seal batch on the (now removed) Top Sealing step; deducting at fill
+		// completion may slightly over-count when operators split batches,
+		// which is acceptable (decision 2026-08-19 — cut sheets are cheap).
+		// No lot linkage: the sheet lot is no longer scanned.
+		const cutSheetPartId = await resolvePartId('PT-CT-113');
+		if (cutSheetPartId) {
+			const settingsDoc = await ManufacturingSettings.findById('default').lean().catch(() => null) as any;
+			const perSheet = Math.max(1, Number(settingsDoc?.topSealCutting?.cartridgesPerSheet ?? 12));
+			const sheets = Math.ceil(run.cartridgesFilled.length / perSheet);
+			await recordTransaction({
+				transactionType: 'consumption',
+				partDefinitionId: cutSheetPartId,
+				quantity: sheets,
+				manufacturingStep: 'top_seal',
+				manufacturingRunId: String(run._id),
+				operatorId: run.operator?._id,
+				operatorUsername: run.operator?.username,
+				notes: `Reagent filling run complete — ${sheets} top-seal cut sheet(s) for ${run.cartridgesFilled.length} cartridges (implicit top seal, ${perSheet}/sheet)`
+			});
+		}
+	}
+
+	// Deck usage log (was in the old completeRun action on Opentron Control).
+	if (run?.deckId) {
+		const cartridgeCount = run?.cartridgesFilled?.length ?? 0;
+		await Equipment.findByIdAndUpdate(run.deckId, {
+			$set: { lastUsed: now },
+			$push: {
+				usageLog: {
+					_id: generateId(),
+					usageType: 'run_complete', runId: run._id,
+					quantityChanged: cartridgeCount,
+					operator: { _id: user._id, username: user.username },
+					notes: `Reagent filling run complete — ${cartridgeCount} cartridges filled`,
+					createdAt: now
+				}
+			}
+		}).catch((e: unknown) => console.error('[reagent-filling] deck usageLog failed:', e));
+	}
+
+	await AuditLog.create({
+		_id: generateId(),
+		tableName: 'reagent_batch_records',
+		recordId: runId,
+		action: 'UPDATE',
+		changedBy: user.username,
+		changedAt: now,
+		newData: { status: 'Completed', cartridgeStatus: 'reagent_filled', trigger }
+	});
+
+	return { ok: true };
 }
 
 export const actions: Actions = {
@@ -428,7 +577,6 @@ export const actions: Actions = {
 			status: 'Loading',
 			tubeRecords: [],
 			cartridgesFilled: [],
-			sealBatches: [],
 			setupTimestamp: new Date()
 		});
 
@@ -474,6 +622,28 @@ export const actions: Actions = {
 	},
 
 	/** Record reagent preparation (tubes) */
+	/**
+	 * Persist the operator's planned cartridge count the moment the params step is
+	 * confirmed (BEFORE any scan). The auto barcode sweep previously relied on the
+	 * browser tab still holding the params FormData — a reload, a second tab, or a
+	 * fast Run-again lost it and the sweep walked all 24 positions (seen 08-24 and
+	 * again 08-27 on R04 with 20 selected). The sweep endpoint now reads this
+	 * server-side value and clamps its default instead of trusting tab state.
+	 */
+	savePlannedCount: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		await connectDB();
+		const data = await request.formData();
+		const runId = data.get('runId')?.toString();
+		const n = Math.floor(Number(data.get('plannedCartridgeCount')));
+		if (!runId) return fail(400, { error: 'Missing runId' });
+		if (!Number.isFinite(n) || n < 1 || n > 24) return fail(400, { error: 'plannedCartridgeCount must be 1-24' });
+		await ReagentBatchRecord.findByIdAndUpdate(runId, {
+			$set: { plannedCartridgeCount: n, plannedCountAt: new Date() }
+		});
+		return { success: true, plannedCartridgeCount: n };
+	},
+
 	recordReagentPrep: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
 		await connectDB();
@@ -618,18 +788,20 @@ export const actions: Actions = {
 				return fail(400, { error: `Cartridge ${missingIds[0]} not found. Must complete wax filling first.` });
 			}
 
-			// Hard state-machine gate: cartridge MUST be at status='wax_ready'
-			// before reagent filling can begin — i.e. it completed wax filling
-			// (→ wax_stored) AND passed wax inspection (wax_stored → wax_qc →
-			// wax_ready). Per the model's documented flow, only wax_ready feeds
-			// reagent. NOTE: this previously checked wax_stored, which rejected
-			// every inspected cart (a stale gate from before wax inspection was
-			// added). Applies to both research and production reagent runs.
-			const notReady = (existingCartridges as any[]).filter((c: any) => c.status !== 'wax_ready');
+			// Hard state-machine gate (WAX-SIMPLIFY-3): cartridge must be in the wax
+			// stage — wax_filled or wax_ready — to enter reagent filling. Visual wax
+			// pass is implicit; only wax_rejected carts are turned away. Same helper
+			// as validate-equipment's live scan check so the two gates never disagree.
+			// Applies to both research and production reagent runs.
+			const notReady = (existingCartridges as any[])
+				.map((c: any) => ({ c, gate: isReagentEligible(c.status) }))
+				.filter((x) => !x.gate.ok);
 			if (notReady.length > 0) {
-				const details = notReady.map((c: any) => `${c._id} (status=${c.status ?? 'none'})`).join(', ');
+				const details = notReady
+					.map((x) => `${x.c._id} — ${(x.gate as { hint: string }).hint}`)
+					.join('; ');
 				return fail(400, {
-					error: `Cartridge(s) not ready for reagent filling — must be 'wax_ready' (wax filled + inspection passed) first. Complete wax filling and wax inspection before scanning: ${details}`
+					error: `Cartridge(s) can't be reagent-filled — must be wax_filled or wax_ready: ${details}`
 				});
 			}
 		}
@@ -657,6 +829,15 @@ export const actions: Actions = {
 		// always has a coherent status — never 'backing' (that's reserved for the
 		// pre-individuation aggregate count on BackingLot).
 		if (cartridgesFilled.length > 0) {
+			// The upsert below creates a stub for any scanned id that doesn't
+			// exist yet — so a production bucket's label must be refused first,
+			// or a tub's UUID QR sticker would be born as a cartridge
+			// (BUCKET-SYSTEM_PLAN §9.4).
+			const bucketLabels = await findBucketLabels(cartridgesFilled.map((cf: any) => cf.cartridgeId));
+			if (bucketLabels.size > 0) {
+				const details = [...bucketLabels].map(([code, b]) => `${code} is the label on bucket ${b}`).join('; ');
+				return fail(400, { error: `Not cartridges — ${details}. Remove them from the deck scan.` });
+			}
 			const ops = cartridgesFilled.map((cf: any) => ({
 				updateOne: {
 					filter: { _id: cf.cartridgeId },
@@ -712,16 +893,37 @@ export const actions: Actions = {
 		const robot = await getRobot(robotId);
 		if (!robot) return fail(404, { error: `Robot ${robotId} not found / not active` });
 
-		// Resolve protocol on the robot for type coercion.
-		const robotDoc = await OpentronsRobot.findById(robotId).lean() as any;
-		const protocol = (robotDoc?.protocols ?? []).find(
-			(p: any) => p.opentronsProtocolId === opentronsProtocolId
-		);
-		if (!protocol) {
-			return fail(400, {
-				error: `Protocol ${opentronsProtocolId} isn't uploaded to this robot. Upload it via /opentrons/devices first.`
+		// Deck identity guard. BIMS knows which deck the operator selected; the
+		// robot picks its cartridge-deck definition independently, from a Particle
+		// id it reads over serial. Prove the selected deck is actually bound to a
+		// real definition before moving a pipette — an unbound or dangling deck is
+		// how a calibrated deck ends up filling at someone else's coordinates.
+		let deckBinding;
+		try {
+			deckBinding = await resolveDeckBinding(run?.deckId ?? null, {
+				enforce: isHardenedRobot(robot)
+			});
+		} catch (e) {
+			if (e instanceof DeckBindingError) return fail(400, { error: e.message });
+			throw e;
+		}
+		if (deckBinding.warning) console.warn('[reagent-filling startRun] ' + deckBinding.warning);
+
+
+		// Freshness gate: resolve the robot's CURRENT reagent protocol server-side
+		// and prove its bundled deck calibration matches live Mongo; auto-resync if
+		// not. The posted opentronsProtocolId is intentionally NOT trusted — a page
+		// loaded before a Sync would post the older upload, which still exists on
+		// the robot and would silently run stale geometry.
+		let protocol: { opentronsProtocolId: string; parametersSchema: any[] | null };
+		try {
+			protocol = await ensureFreshRunProtocol(robot, String(robotId), 'reagent-filling', locals.user.username);
+		} catch (e) {
+			return fail(502, {
+				error: `Deck-calibration freshness check failed: ${e instanceof Error ? e.message : 'unknown'}`
 			});
 		}
+		const runProtocolId = protocol.opentronsProtocolId;
 
 		const paramSchema = (protocol.parametersSchema ?? []) as Array<{
 			variableName: string;
@@ -752,7 +954,13 @@ export const actions: Actions = {
 
 		// PRD 6: inject BIMS-native calibration params (global offset + calibrator
 		// point) for robots with a captured offset. No-op for the pre-cutover .py.
-		const calRtps = await calibrationRtpValues(String(robotId), 'reagent-filling', paramSchema as any);
+		// Deck-keyed calibrator (2026-08-28): the fixture is bolted to the carriage,
+		// so the run gets the point taught for the deck that is physically mounted —
+		// deckBinding.particleDeviceId is the same id the .py reads at run start.
+		const calRtps = await calibrationRtpValues(String(robotId), 'reagent-filling', paramSchema as any, {
+			deckKey: deckBinding.particleDeviceId,
+			deckLoadName: deckBinding.deckLoadName
+		});
 		Object.assign(runTimeParameterValues, calRtps);
 		Object.assign(protocolParameters, calRtps);
 
@@ -761,7 +969,7 @@ export const actions: Actions = {
 		try {
 			const createRes = await robotPost(robot, '/runs', {
 				data: {
-					protocolId: opentronsProtocolId,
+					protocolId: runProtocolId,
 					...(Object.keys(runTimeParameterValues).length ? { runTimeParameterValues } : {})
 				}
 			});
@@ -773,6 +981,30 @@ export const actions: Actions = {
 			const createBody = await createRes.json();
 			opentronsRunId = createBody?.data?.id;
 			if (!opentronsRunId) return fail(502, { error: 'Robot returned no run id' });
+
+		// Geometry provenance. Record exactly which deck definition, at which
+		// version and content hash, this run was started against — the definition
+		// is edited in place, so these coordinates stop existing the moment anyone
+		// jogs the deck again.
+		try {
+			await OpentronsRunRecord.create({
+				_id: generateId(),
+				manufacturingRunId: String(runId),
+				manufacturingRunType: 'reagent-filling',
+				robotId: String(robotId),
+				robotName: robot.name ?? null,
+				opentronsRunId,
+				opentronsProtocolId: runProtocolId,
+				runtimeParameters: runTimeParameterValues,
+				deckGeometry: deckBinding,
+				status: 'created',
+				robotCreatedAt: new Date(),
+				startedBy: locals.user.username
+			});
+		} catch (e) {
+			// Provenance must never block a fill that the robot already accepted.
+			console.error('[reagent-filling startRun] could not write run record:', e instanceof Error ? e.message : e);
+		}
 		} catch (err) {
 			return fail(502, {
 				error: `Couldn't reach robot: ${err instanceof Error ? err.message : 'unknown'}`
@@ -833,13 +1065,18 @@ export const actions: Actions = {
 				}
 				: { nextTipIndex: 0, hostname: null, capturedAt: new Date() };
 
-		// Compute end-time estimate from settings (used by the existing UI).
+		// Estimated finish time. Driven by how many wells the selected reagent rows
+		// will actually fill, not by cartridge count alone — see
+		// src/lib/manufacturing/reagent-run-estimate.ts for the model and the fit.
 		const settingsDoc = await ManufacturingSettings.findById('default').lean() as any;
-		const fillTime = settingsDoc?.reagentFilling?.fillTimePerCartridgeMin ?? 0.5;
 		const cartridgeCount = run.cartridgeCount ?? run.cartridgesFilled?.length ?? 0;
-		const runDurationMs = cartridgeCount * fillTime * 60 * 1000;
+		const estimate = estimateReagentRunSeconds(
+			protocolParameters,
+			cartridgeCount,
+			settingsDoc?.reagentFilling
+		);
 		const runStartTime = new Date();
-		const runEndTime = new Date(runStartTime.getTime() + runDurationMs);
+		const runEndTime = new Date(runStartTime.getTime() + estimate.seconds * 1000);
 
 		await ReagentBatchRecord.findByIdAndUpdate(runId, {
 			$set: {
@@ -877,7 +1114,7 @@ export const actions: Actions = {
 	 * embedded controller observes terminal status). Stamps
 	 * pipetteTipState.after and consumed onto the ReagentBatchRecord;
 	 * does NOT advance the reagent state machine — the operator still
-	 * walks Inspection via the existing completeRunFilling flow.
+	 * clicks Complete (completeRunFilling) to finish the run.
 	 */
 	recordRunFinished: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
@@ -959,516 +1196,74 @@ export const actions: Actions = {
 			}
 		});
 
-		return { success: true, consumed, nextTipIndex: finalIndex };
+		// AUTO-COMPLETE (2026-08-28, parity with wax): a reagent run that lands
+		// `succeeded` IS done — finalize immediately so the robot frees the
+		// moment the .py finishes instead of waiting for a Complete click. A
+		// deferred click used to hold the robot AND restamp carts hours later
+		// over statuses they'd gained in a research experiment meanwhile.
+		// Stopped/failed runs are left Running for cancel/abort.
+		if (finalStatus === 'succeeded') {
+			await finalizeReagentRun(
+				runId,
+				{ _id: locals.user._id, username: locals.user.username },
+				'auto (run finished)'
+			);
+		}
+
+		return { success: true, consumed, nextTipIndex: finalIndex, autoCompleted: finalStatus === 'succeeded' };
 	},
 
-	/** Complete run filling — move to Inspection */
+	/**
+	 * Complete run filling (REAGENT-TOPSEAL-IMPLICIT) — see finalizeReagentRun
+	 * for the actual work (run → Completed, carts → reagent_filled, tube +
+	 * cut-sheet inventory). Since 2026-08-28 a succeeded run auto-finalizes in
+	 * recordRunFinished / the load reconcile, so this button is usually just an
+	 * idempotent confirm; it still commits non-succeeded runs on operator
+	 * judgment and legacy runs finished before auto-complete shipped.
+	 */
 	completeRunFilling: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
 		await connectDB();
 
 		const data = await request.formData();
 		const runId = data.get('runId') as string;
-		const now = new Date();
 
-		const run = await ReagentBatchRecord.findByIdAndUpdate(runId, {
-			$set: {
-				// Inspection moved off this page (REAGENT-INSPECT-AFTER-TOPSEAL): a
-				// completed run goes straight to Top Sealing on Opentron Control;
-				// reagent inspection happens later on the Reagent Inspect page.
-				status: 'Top Sealing',
-				runEndTime: now,
-				// Robot is physically free as of now — releases the robot lock so
-				// the next wax/reagent run can start while sealing/storage continue
-				// detached on Opentron Control.
-				robotReleasedAt: now
-			}
-		}, { new: true }).lean() as any;
-
-		// Write reagentFilling phase to cartridges (WRITE-ONCE). Research runs
-		// leave assayType null on each cartridge — downstream UIs must treat
-		// reagentFilling.isResearch === true as "assay intentionally blank".
-		if (run?.cartridgesFilled?.length) {
-			const isResearch = run.isResearch === true;
-			const bulkOps = run.cartridgesFilled.map((cf: any) => ({
-				updateOne: {
-					filter: { _id: cf.cartridgeId, 'reagentFilling.recordedAt': { $exists: false } },
-					update: {
-						$set: {
-							'reagentFilling.runId': run._id,
-							'reagentFilling.robotId': run.robot?._id,
-							'reagentFilling.robotName': run.robot?.name,
-							'reagentFilling.assayType': isResearch ? null : run.assayType,
-							'reagentFilling.isResearch': isResearch,
-							'reagentFilling.deckPosition': cf.deckPosition,
-							'reagentFilling.tubeRecords': run.tubeRecords,
-							'reagentFilling.operator': run.operator,
-							'reagentFilling.fillDate': now,
-							'reagentFilling.recordedAt': now,
-							status: 'reagent_filled'
-						}
-					}
-				}
-			}));
-			await CartridgeRecord.bulkWrite(bulkOps);
-
-			// Consume 2ml tubes (PT-CT-107) — FLAT 4 TUBES PER RUN regardless of
-			// cartridge count (1–24). Research runs consume the same 4 tubes.
-			// TODO: revisit — eventually the tube count should vary per assay
-			// (e.g., # of reagents × batch size) rather than a flat 4.
-			const tubePartId = await resolvePartId('PT-CT-107');
-			await recordTransaction({
-				transactionType: 'consumption',
-				partDefinitionId: tubePartId ?? undefined,
-				quantity: 4,
-				manufacturingStep: 'reagent_filling',
-				manufacturingRunId: String(run._id),
-				operatorId: run.operator?._id,
-				operatorUsername: run.operator?.username,
-				notes: run.isResearch
-					? `Reagent filling run — 4x 2ml tubes (research run, ${run.cartridgesFilled.length} cartridges)`
-					: `Reagent filling run — 4x 2ml tubes (assay: ${run.assayType?.name ?? 'unknown'}, ${run.cartridgesFilled.length} cartridges)`
+		// GUARD (2026-08-31): finalizing stamps every cartridge reagent_filled.
+		// A run that ended in `failed` may not have dispensed anything at all —
+		// B14 errored during tip calibration, before the first aspirate, and the
+		// page still offered a green "batch completed / Done". Committing that
+		// would push 20 unfilled cartridges downstream as filled. Require an
+		// explicit acknowledgement for any non-succeeded run; the happy path
+		// (recordRunFinished's auto-finalize, and Done after a clean run) is
+		// untouched.
+		const acknowledged = data.get('confirmDespiteFailure')?.toString() === 'true';
+		const runDoc = (await ReagentBatchRecord.findById(runId)
+			.select('opentronsRunFinalStatus cartridgesFilled').lean()) as any;
+		const finalStatus = String(runDoc?.opentronsRunFinalStatus ?? '').toLowerCase();
+		if (finalStatus && !['succeeded', 'completed'].includes(finalStatus) && !acknowledged) {
+			return fail(400, {
+				error:
+					`This run ended in "${finalStatus}" — the robot may not have filled any cartridges. ` +
+					`Completing it would mark all ${runDoc?.cartridgesFilled?.length ?? 0} as reagent-filled. ` +
+					`Fix the cause and re-run them, or confirm explicitly if you have verified the reagent went in.`,
+				requiresFailureAck: true
 			});
 		}
 
-		await AuditLog.create({
-			_id: generateId(),
-			tableName: 'reagent_batch_records',
-			recordId: runId,
-			action: 'UPDATE',
-			changedBy: locals.user?.username,
-			changedAt: now,
-			newData: { status: 'Top Sealing' }
-		});
-
-		// Robot is now free. The page's load function will no longer find this run
-		// as "active" (robotReleasedAt filters it out), so invalidateAll() will
-		// reset the page to "Start new run". The post-OT-2 steps (inspect/seal/
-		// store) are accessible from Opentron Control.
-		return { success: true };
-	},
-
-	/** Complete inspection batch — mark cartridges and move to Top Sealing */
-	completeInspectionBatch: async ({ request, locals }) => {
-		if (!locals.user) redirect(302, '/login');
-		await connectDB();
-
-		const data = await request.formData();
-		const runId = await resolveRunId(data);
-		const rejectedCartridgesRaw = data.get('rejectedCartridges') as string;
-		const trayId = ((data.get('trayId') as string | null) ?? '').trim() || undefined;
-		const now = new Date();
-
-		let rejectedCartridges: { cartridgeId: string; reason: string; status: string }[] = [];
-		if (rejectedCartridgesRaw) {
-			try { rejectedCartridges = JSON.parse(rejectedCartridgesRaw); } catch { /* ignore */ }
-		}
-
-		if (!runId) return fail(404, { error: 'Run not found' });
-		const run = await ReagentBatchRecord.findById(runId).lean() as any;
-		if (!run) return fail(404, { error: 'Run not found' });
-
-		// Tray conflict runs at scan time (see /api/dev/validate-equipment
-		// ?type=tray). No duplicate check here.
-
-		// Build update for each cartridge's inspection status
-		const rejectedMap = new Map(rejectedCartridges.map((c: any) => [c.cartridgeId, c]));
-		const updatedCartridges = (run.cartridgesFilled ?? []).map((cf: any) => {
-			const rejected = rejectedMap.get(cf.cartridgeId);
-			if (rejected) {
-				return {
-					...cf,
-					inspectionStatus: rejected.status ?? 'Rejected',
-					inspectionReason: rejected.reason ?? null,
-					inspectedBy: { _id: locals.user!._id, username: locals.user!.username },
-					inspectedAt: now
-				};
-			}
-			return { ...cf, inspectionStatus: cf.inspectionStatus === 'Pending' ? 'Accepted' : cf.inspectionStatus, inspectedBy: { _id: locals.user!._id, username: locals.user!.username }, inspectedAt: now };
-		});
-
-		const updateFields: Record<string, any> = {
-			cartridgesFilled: updatedCartridges,
-			status: 'Top Sealing'
-		};
-		if (trayId) updateFields.trayId = trayId;
-		await ReagentBatchRecord.findByIdAndUpdate(runId, { $set: updateFields });
-
-		// Write reagentInspection to CartridgeRecord (WRITE-ONCE for rejected)
-		for (const rej of rejectedCartridges) {
-			await CartridgeRecord.findOneAndUpdate(
-				{ _id: rej.cartridgeId, 'reagentInspection.recordedAt': { $exists: false } },
-				{
-					$set: {
-						'reagentInspection.status': rej.status ?? 'Rejected',
-						'reagentInspection.reason': rej.reason ?? undefined,
-						'reagentInspection.operator': { _id: locals.user!._id, username: locals.user!.username },
-						'reagentInspection.timestamp': now,
-						'reagentInspection.recordedAt': now,
-						status: 'scrapped',
-						voidedAt: now,
-						voidReason: `Reagent inspection rejection: ${rej.reason ?? 'unspecified'}`
-					}
-				}
-			);
-
-			// Record scrap transaction for rejected cartridge
-			await recordTransaction({
-				transactionType: 'scrap',
-				cartridgeRecordId: rej.cartridgeId,
-				quantity: 1,
-				manufacturingStep: 'reagent_filling',
-				manufacturingRunId: runId,
-				operatorId: locals.user._id,
-				operatorUsername: locals.user.username,
-				scrapReason: rej.reason ?? 'Reagent inspection rejection',
-				scrapCategory: 'reagent_defect',
-				notes: `Reagent inspection rejection: ${rej.reason ?? 'No reason provided'}`
-			});
-		}
-
-		return { success: true };
-	},
-
-	/** Alias for completeInspectionBatch */
-	completeInspection: async ({ request, locals }) => {
-		// Delegate to completeInspectionBatch
-		if (!locals.user) redirect(302, '/login');
-		await connectDB();
-
-		const data = await request.formData();
-		const runId = await resolveRunId(data);
-		if (!runId) return fail(404, { error: 'Run not found' });
-		await ReagentBatchRecord.findByIdAndUpdate(runId, { $set: { status: 'Top Sealing' } });
-		return { success: true };
-	},
-
-	/** Create a top seal batch */
-	createTopSealBatch: async ({ request, locals }) => {
-		if (!locals.user) redirect(302, '/login');
-		await connectDB();
-
-		const data = await request.formData();
-		const runId = await resolveRunId(data);
-		const topSealLotId = data.get('topSealLotId') as string;
-
-		if (!topSealLotId?.trim()) return fail(400, { error: 'Top seal lot ID is required' });
-		if (!runId) return fail(404, { error: 'Run not found' });
-
-		const batchId = generateId();
-		const now = new Date();
-
-		await ReagentBatchRecord.findByIdAndUpdate(runId, {
-			$push: {
-				sealBatches: {
-					_id: batchId,
-					topSealLotId: topSealLotId.trim(),
-					operator: { _id: locals.user!._id, username: locals.user!.username },
-					firstScanTime: now,
-					cartridgeIds: [],
-					status: 'in_progress'
-				}
-			}
-		});
-
-		return { success: true, batchId };
-	},
-
-	/** Scan a cartridge into a seal batch */
-	scanCartridgeForSeal: async ({ request, locals }) => {
-		if (!locals.user) redirect(302, '/login');
-		await connectDB();
-
-		const data = await request.formData();
-		const runId = await resolveRunId(data);
-		const batchId = data.get('batchId') as string;
-		const cartridgeRecordId = data.get('cartridgeRecordId') as string;
-
-		if (!cartridgeRecordId) return fail(400, { error: 'Cartridge ID required' });
-		if (!runId) return fail(404, { error: 'Run not found' });
-
-		// Mark cartridge in the sealBatch as scanned
-		await ReagentBatchRecord.findOneAndUpdate(
-			{ _id: runId, 'sealBatches._id': batchId },
-			{ $addToSet: { 'sealBatches.$.cartridgeIds': cartridgeRecordId } }
+		// Normally a no-op confirm: recordRunFinished already finalized the run
+		// the moment the .py succeeded. Still does the real work for runs that
+		// ended in a non-succeeded state the operator EXPLICITLY commits (see
+		// the guard above), and for legacy runs finished before auto-complete.
+		const res = await finalizeReagentRun(
+			runId,
+			{ _id: locals.user._id, username: locals.user.username },
+			'manual Complete'
 		);
+		if ('notFound' in res) return fail(404, { error: 'Run not found' });
 
-		// Mark the cartridgeFilled entry with topSealBatchId
-		await ReagentBatchRecord.findOneAndUpdate(
-			{ _id: runId, 'cartridgesFilled.cartridgeId': cartridgeRecordId },
-			{ $set: { 'cartridgesFilled.$.topSealBatchId': batchId } }
-		);
-
-		return { success: true };
-	},
-
-	/** Complete a seal batch */
-	completeSealBatch: async ({ request, locals }) => {
-		if (!locals.user) redirect(302, '/login');
-		await connectDB();
-
-		const data = await request.formData();
-		const runId = await resolveRunId(data);
-		const batchId = data.get('batchId') as string;
-		const now = new Date();
-
-		if (!runId) return fail(404, { error: 'Run not found' });
-
-		const run = await ReagentBatchRecord.findOneAndUpdate(
-			{ _id: runId, 'sealBatches._id': batchId },
-			{
-				$set: {
-					'sealBatches.$.status': 'completed',
-					'sealBatches.$.completionTime': now
-				}
-			},
-			{ new: true }
-		).lean() as any;
-
-		// Write topSeal phase to each cartridge in the batch (WRITE-ONCE)
-		const batch = (run?.sealBatches ?? []).find((b: any) => String(b._id) === batchId);
-		if (batch?.cartridgeIds?.length) {
-			const bulkOps = batch.cartridgeIds.map((cid: string) => ({
-				updateOne: {
-					filter: { _id: cid, 'topSeal.recordedAt': { $exists: false } },
-					update: {
-						$set: {
-							'topSeal.batchId': batchId,
-							'topSeal.topSealLotId': batch.topSealLotId,
-							'topSeal.operator': { _id: locals.user!._id, username: locals.user!.username },
-							'topSeal.timestamp': now,
-							'topSeal.recordedAt': now,
-							status: 'sealed'
-						}
-					}
-				}
-			}));
-			await CartridgeRecord.bulkWrite(bulkOps);
-
-			// Consume 1 cut sheet (PT-CT-113) per batch — one sheet seals up
-			// to 12 cartridges. Previously this looped 1× PT-CT-103 per
-			// cartridge, which was wrong on two counts: (1) PT-CT-103 is the
-			// roll, already consumed at cut time; (2) consumption is
-			// per-sheet, not per-cartridge. Partial sheets still count as
-			// fully consumed — you can't un-peel a liner.
-			const cutSheetPartId = await resolvePartId('PT-CT-113');
-			if (cutSheetPartId) {
-				await recordTransaction({
-					transactionType: 'consumption',
-					partDefinitionId: cutSheetPartId,
-					quantity: 1,
-					manufacturingStep: 'top_seal',
-					manufacturingRunId: runId,
-					operatorId: locals.user._id,
-					operatorUsername: locals.user.username,
-					lotId: batch.topSealLotId ?? undefined,
-					notes: `Top seal batch ${batchId}: 1 sheet consumed from lot ${batch.topSealLotId ?? 'unknown'} (${batch.cartridgeIds.length} cartridges sealed)`
-				});
-			}
-
-			await AuditLog.create({
-				_id: generateId(),
-				tableName: 'reagent_batch_records',
-				recordId: runId,
-				action: 'UPDATE',
-				changedBy: locals.user?.username,
-				changedAt: now,
-				newData: { sealBatchId: batchId, status: 'completed', topSealLotId: batch.topSealLotId }
-			});
-		}
-
-		return { success: true };
-	},
-
-	/** Transition from Top Sealing to Storage */
-	/** Reject a cartridge during top sealing */
-	rejectAtSeal: async ({ request, locals }) => {
-		if (!locals.user) redirect(302, '/login');
-		await connectDB();
-
-		const data = await request.formData();
-		const runId = await resolveRunId(data);
-		const cartridgeId = data.get('cartridgeId') as string;
-		const now = new Date();
-
-		if (!cartridgeId) return fail(400, { error: 'Cartridge ID required' });
-		if (!runId) return fail(404, { error: 'Run not found' });
-
-		// Update inspection status to Rejected in the run's cartridgesFilled
-		await ReagentBatchRecord.findOneAndUpdate(
-			{ _id: runId, 'cartridgesFilled.cartridgeId': cartridgeId },
-			{
-				$set: {
-					'cartridgesFilled.$.inspectionStatus': 'Rejected',
-					'cartridgesFilled.$.inspectionReason': 'Rejected at top sealing',
-					'cartridgesFilled.$.inspectedBy': { _id: locals.user!._id, username: locals.user!.username },
-					'cartridgesFilled.$.inspectedAt': now
-				}
-			}
-		);
-
-		// Update CartridgeRecord
-		await CartridgeRecord.findOneAndUpdate(
-			{ _id: cartridgeId },
-			{ $set: { status: 'scrapped', voidedAt: now, voidReason: 'Rejected at top sealing' } }
-		);
-
-		await recordTransaction({
-			transactionType: 'scrap',
-			cartridgeRecordId: cartridgeId,
-			quantity: 1,
-			manufacturingStep: 'top_seal',
-			manufacturingRunId: runId,
-			operatorId: locals.user._id,
-			operatorUsername: locals.user.username,
-			scrapReason: 'Rejected at top sealing',
-			scrapCategory: 'seal_failure',
-			notes: 'Top seal rejection'
-		});
-
-		return { success: true };
-	},
-
-	transitionToStorage: async ({ request, locals }) => {
-		if (!locals.user) redirect(302, '/login');
-		await connectDB();
-
-		const data = await request.formData();
-		const runId = await resolveRunId(data);
-		if (!runId) return fail(404, { error: 'Run not found' });
-
-		await ReagentBatchRecord.findByIdAndUpdate(runId, { $set: { status: 'Storage' } });
-		return { success: true };
-	},
-
-	/** Record batch storage */
-	recordBatchStorage: async ({ request, locals }) => {
-		if (!locals.user) redirect(302, '/login');
-		await connectDB();
-
-		const data = await request.formData();
-		const runId = await resolveRunId(data);
-		const cartridgeIdsRaw = data.get('cartridgeIds') as string;
-		const location = data.get('location') as string;
-		const now = new Date();
-
-		if (!runId) return fail(404, { error: 'Run not found' });
-
-		let cartridgeIds: string[] = [];
-		try { cartridgeIds = JSON.parse(cartridgeIdsRaw); } catch { /* ignore */ }
-
-		if (cartridgeIds.length > 0) {
-			// S1a: resolve the scanned fridge reference (barcode, name, or _id)
-			// to the canonical Equipment._id. Fail the action if unresolved so
-			// we don't write a raw string into the authoritative fridgeId field.
-			const resolvedFridgeId = await resolveFridgeId(location);
-			if (!resolvedFridgeId) {
-				return fail(400, { error: `Unknown fridge: ${location}` });
-			}
-
-			// Update storage location in cartridgesFilled
-			for (const cid of cartridgeIds) {
-				await ReagentBatchRecord.findOneAndUpdate(
-					{ _id: runId, 'cartridgesFilled.cartridgeId': cid },
-					{
-						$set: {
-							'cartridgesFilled.$.storageLocation': location,
-							'cartridgesFilled.$.storedAt': now
-						}
-					}
-				);
-			}
-
-			// Write storage phase to CartridgeRecord
-			const bulkOps = cartridgeIds.map((cid: string) => ({
-				updateOne: {
-					filter: { _id: cid, 'storage.recordedAt': { $exists: false } },
-					update: {
-						$set: {
-							'storage.fridgeName': location,              // raw input — denormalized display snapshot
-							'storage.fridgeId': resolvedFridgeId,        // Equipment._id (authoritative — S1a)
-							'storage.locationId': resolvedFridgeId,      // Equipment._id (kept in sync — S1a)
-							'storage.operator': { _id: locals.user!._id, username: locals.user!.username },
-							'storage.timestamp': now,
-							'storage.recordedAt': now,
-							status: 'stored'
-						}
-					}
-				}
-			}));
-			await CartridgeRecord.bulkWrite(bulkOps);
-
-			// Record storage transactions
-			for (const cid of cartridgeIds) {
-				await recordTransaction({
-					transactionType: 'creation',
-					cartridgeRecordId: cid,
-					quantity: 1,
-					manufacturingStep: 'storage',
-					manufacturingRunId: runId,
-					operatorId: locals.user._id,
-					operatorUsername: locals.user.username,
-					notes: `Stored in ${location}`
-				});
-			}
-
-			await AuditLog.create({
-				_id: generateId(),
-				tableName: 'cartridge_records',
-				recordId: cartridgeIds[0] ?? 'batch',
-				action: 'UPDATE',
-				changedBy: locals.user?.username,
-				changedAt: now,
-				newData: { status: 'stored', location, count: cartridgeIds.length }
-			});
-		}
-
-		return { success: true };
-	},
-
-	/** Complete the run */
-	completeRun: async ({ request, locals }) => {
-		if (!locals.user) redirect(302, '/login');
-		await connectDB();
-
-		const data = await request.formData();
-		const runId = await resolveRunId(data);
-		const now = new Date();
-
-		if (!runId) return fail(404, { error: 'Run not found' });
-
-		const run = await ReagentBatchRecord.findByIdAndUpdate(runId, {
-			$set: { status: 'Completed', finalizedAt: now, runEndTime: now }
-		}, { new: true }).lean() as any;
-
-		// Update deck usage if deckId is set
-		if (run?.deckId) {
-			const cartridgeCount = run?.cartridgesFilled?.length ?? 0;
-			await Equipment.findByIdAndUpdate(run.deckId, {
-				$set: { lastUsed: now },
-				$push: {
-					usageLog: {
-						_id: generateId(),
-						usageType: 'run_complete', runId: run._id,
-						quantityChanged: cartridgeCount,
-						operator: { _id: locals.user!._id, username: locals.user!.username },
-						notes: `Reagent filling run complete — ${cartridgeCount} cartridges filled`,
-						createdAt: now
-					}
-				}
-			});
-		}
-
-		await AuditLog.create({
-			_id: generateId(),
-			tableName: 'reagent_batch_records',
-			recordId: runId,
-			action: 'UPDATE',
-			changedBy: locals.user?.username,
-			changedAt: now,
-			newData: { status: 'Completed' }
-		});
-
+		// Robot is now free and the run is terminal. The page's load function
+		// will no longer find this run as "active", so invalidateAll() resets the
+		// page to "Start new run". Next BIMS touch for these carts: Reagent Inspect.
 		return { success: true };
 	},
 
@@ -1483,11 +1278,11 @@ export const actions: Actions = {
 		const now = new Date();
 
 		// Once the OT-2 has finished (robotReleasedAt set), the run is committed
-		// and can no longer be cancelled. Per-cartridge rejection at inspection
-		// or sealing remains available.
+		// and can no longer be cancelled. Per-cartridge rejection happens later
+		// on the Reagent Inspect page.
 		const existing = await ReagentBatchRecord.findById(runId).select('robotReleasedAt opentronsRunId robot').lean() as any;
 		if (existing?.robotReleasedAt) {
-			return fail(400, { error: 'Cannot cancel: the OT-2 has already completed this run. Reject individual cartridges at inspection or sealing instead.' });
+			return fail(400, { error: 'Cannot cancel: the OT-2 has already completed this run. Reject individual cartridges on Reagent Inspect instead.' });
 		}
 
 		// Actually halt the OT-2 first — otherwise the robot keeps running.
@@ -1569,7 +1364,7 @@ export const actions: Actions = {
 		return { success: true, warning: abortRobotWarning ?? undefined };
 	},
 
-	/** Reset to deck loading — clear cartridges and seal batches, go back to Loading */
+	/** Reset to deck loading — clear cartridges, go back to Loading */
 	resetToLoading: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
 		await connectDB();
@@ -1592,7 +1387,6 @@ export const actions: Actions = {
 			$set: {
 				cartridgesFilled: [],
 				cartridgeCount: 0,
-				sealBatches: [],
 				deckId: undefined,
 				status: 'Loading'
 			},
@@ -1611,7 +1405,7 @@ export const actions: Actions = {
 		const runId = data.get('runId') as string;
 		const targetStage = data.get('targetStage') as string;
 
-		const validStages = ['Setup', 'Loading', 'Running', 'Inspection', 'Top Sealing', 'Storage'];
+		const validStages = ['Setup', 'Loading', 'Running'];
 		if (!validStages.includes(targetStage)) {
 			return fail(400, { error: `Invalid target stage: ${targetStage}` });
 		}

@@ -25,7 +25,7 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 	const spuList = spus.map((s: any) => s as any);
 	const stats = {
 		total: spuList.length,
-		completed: spuList.filter((s) => s.assemblyStatus === 'completed' || s.status === 'assembled').length,
+		completed: spuList.filter((s) => s.assemblyStatus === 'completed').length,
 		inProgress: spuList.filter((s) => s.assemblyStatus === 'in_progress').length,
 		pending: spuList.filter((s) => !s.assemblyStatus || s.assemblyStatus === 'created').length
 	};

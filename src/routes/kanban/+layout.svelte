@@ -1,7 +1,7 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
-	import { page } from '$app/stores';
 	import GridBackground from '$lib/components/ui/GridBackground.svelte';
+	import KanbanNav from '$lib/components/kanban/KanbanNav.svelte';
 
 	interface Props {
 		children: Snippet;
@@ -11,39 +11,8 @@
 	}
 
 	let { children, data }: Props = $props();
-
-	const navItems = [
-		{
-			href: '/kanban',
-			label: 'Board',
-			icon: 'M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7'
-		},
-		{
-			href: '/kanban/analytics',
-			label: 'Analytics',
-			icon: 'M3 3v18h18M7 17l4-4 4 4 6-6'
-		},
-		{
-			href: '/kanban/list',
-			label: 'List',
-			icon: 'M4 6h16M4 10h16M4 14h16M4 18h16'
-		},
-		{
-			href: '/kanban/projects',
-			label: 'Projects',
-			icon: 'M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z'
-		},
-		{
-			href: '/kanban/archived',
-			label: 'Archive',
-			icon: 'M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4'
-		}
-	];
-
-	function isActive(href: string, currentPath: string): boolean {
-		if (href === '/kanban') return currentPath === '/kanban';
-		return currentPath.startsWith(href);
-	}
+	// KB2-15: the old secondary header nav (Analytics | Projects | Archive) is
+	// gone — every destination lives on the single KanbanNav row below.
 </script>
 
 <GridBackground>
@@ -75,34 +44,13 @@
 							<p class="tron-text-muted text-xs">Task Management</p>
 						</div>
 					</div>
-					<nav class="flex items-center gap-1">
-						{#each navItems as item}
-							{@const active = isActive(item.href, $page.url.pathname)}
-							<a
-								href={item.href}
-								class="flex min-h-[var(--size-touch-target)] items-center gap-2 rounded-lg px-4 py-2 transition-all duration-200
-									{active
-									? 'bg-[var(--color-tron-cyan)] text-[var(--color-tron-bg-primary)]'
-									: 'text-[var(--color-tron-text-secondary)] hover:bg-[var(--color-tron-bg-tertiary)] hover:text-[var(--color-tron-cyan)]'}"
-							>
-								<svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-									<path
-										stroke-linecap="round"
-										stroke-linejoin="round"
-										stroke-width="2"
-										d={item.icon}
-									/>
-								</svg>
-								<span class="font-medium">{item.label}</span>
-							</a>
-						{/each}
-					</nav>
 				</div>
 			</div>
 		</header>
 
 		<!-- Main Content -->
 		<main class="mx-auto max-w-[90rem] px-4 py-8 sm:px-6 lg:px-8">
+			<KanbanNav />
 			{@render children()}
 		</main>
 	</div>

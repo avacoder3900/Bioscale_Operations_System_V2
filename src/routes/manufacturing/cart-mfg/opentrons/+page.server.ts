@@ -22,8 +22,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 	// Filling-page-owned stages — while a run is in these, the operator is
 	// actively handling it on the filling page and the robot is unavailable.
-	// Runs past these (QC/Storage wax; Top Sealing/Storage reagent) live on
-	// Opentron Control and don't block new filling runs.
+	// Wax runs past these (QC/Storage) live on Opentron Control and don't
+	// block new filling runs. Reagent runs end at Running (no post-OT-2 queue).
 	const WAX_PAGE_OWNED = ['Setup', 'Loading', 'Running', 'Awaiting Removal',
 		'setup', 'loading', 'running', 'awaiting_removal', 'cooling'];
 	const REAGENT_PAGE_OWNED = ['Setup', 'Loading', 'Running', 'Inspection',

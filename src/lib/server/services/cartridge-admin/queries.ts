@@ -6,8 +6,7 @@ export type LifecycleStage =
 	| 'backing'
 	| 'wax_filling'
 	| 'wax_filled'
-	| 'wax_stored'
-	| 'wax_qc'
+	| 'wax_qc' // retired (WAX-SIMPLIFY-2) — historical rows only
 	| 'wax_ready'
 	| 'wax_rejected'
 	| 'reagent_filled'
@@ -37,7 +36,6 @@ export const LIFECYCLE_STAGES: LifecycleStage[] = [
 	'backing',
 	'wax_filling',
 	'wax_filled',
-	'wax_stored',
 	'wax_qc',
 	'wax_ready',
 	'wax_rejected',

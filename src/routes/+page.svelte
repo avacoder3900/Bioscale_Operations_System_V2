@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { TronCard, TronBadge } from '$lib/components/ui';
+	import ServiceScanCard from '$lib/components/spu/ServiceScanCard.svelte';
 
 	let { data } = $props();
 
@@ -42,6 +43,12 @@
 		return new Date(date).toLocaleDateString();
 	}
 </script>
+
+<!-- Quick send-to-servicing: the servicing board's own scan element, right on
+     the dashboard — scan a unit and its service job opens/resumes. -->
+<div class="mb-6">
+	<ServiceScanCard />
+</div>
 
 <div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)]">
 		<button type="button" onclick={() => { cartCollapsed = !cartCollapsed; }} class="flex w-full items-center justify-between p-4">

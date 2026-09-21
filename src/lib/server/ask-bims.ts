@@ -17,6 +17,7 @@ import { loadUnifiedRuns } from './analytics/runs-feed';
 import { capability, tTest, linearRegression } from './analytics/stats';
 import { hasPermission } from './permissions';
 import { getCheckedOutCartridgeIds } from './checkout-utils';
+import { WAX_STAGE_STATUSES } from '$lib/shared/cartridge-wax-status';
 import { TIER_1_REFERENCE } from './ask-bims-tier1';
 import { searchDocs } from './docs-search';
 import { lookupEquipment } from './equipment-datasheets';
@@ -405,7 +406,7 @@ Don't use for: counts/aggregates (use count_cartridges_by_status — it returns 
 			type: 'object',
 			properties: {
 				cartridgeId: { type: 'string' },
-				status: { type: 'string', description: 'backing | wax_filling | wax_stored | reagent_filled | etc.' },
+				status: { type: 'string', description: 'backing | wax_filling | wax_filled | wax_ready | wax_rejected | reagent_filled | etc. (wax_filled IS the stored state — no wax_stored)' },
 				runId: { type: 'string', description: 'Filter to cartridges produced by a specific WaxFillingRun' },
 				limit: { type: 'number' }
 			}
@@ -461,8 +462,8 @@ Caveat: waxFilling.waxSourceLot is optional in WaxFillingRun and may be null on 
 		description: `Count cartridges grouped by status, optionally filtered to a recent time window.
 Source: CartridgeRecord aggregation.
 
-Use when: "how many cartridges did we make today", "current state of the floor", "cart counts", and per rule 9 **"how many cartridges can I [action] right now"** (count the upstream-queue status, e.g. status='backing' for "fill with wax", status='wax_stored' for "reagent-fill", status='released' for "ship").
-Don't use for: a list of specific cartridges (use find_cartridges); cartridges in storage specifically (use list_cartridges_in_storage — pre-filtered to 'wax_stored'); multi-barcode lookup (use bulk_cartridge_status); WAX VOLUME / material inventory (use get_wax_tube_inventory — different concept, see rule 9).`,
+Use when: "how many cartridges did we make today", "current state of the floor", "cart counts", and per rule 9 **"how many cartridges can I [action] right now"** (count the upstream-queue status, e.g. status='backing' for "fill with wax", status IN ('wax_filled','wax_ready') for "reagent-fill", status='released' for "ship").
+Don't use for: a list of specific cartridges (use find_cartridges); cartridges in a fridge specifically (use list_cartridges_in_storage — pre-filtered to wax_filled/wax_ready with a fridge scan); multi-barcode lookup (use bulk_cartridge_status); WAX VOLUME / material inventory (use get_wax_tube_inventory — different concept, see rule 9).`,
 		input_schema: {
 			type: 'object',
 			properties: {
@@ -494,10 +495,10 @@ Don't use for: historical runs / "what ran today" (use list_recent_runs — wide
 	},
 	{
 		name: 'list_cartridges_in_storage',
-		description: `Cartridges currently in wax_stored status, optionally filtered to a fridge.
-Source: CartridgeRecord with status=wax_stored.
+		description: `Wax-stage cartridges (status wax_filled or wax_ready) that have been scanned into a fridge, optionally filtered to one fridge. wax_filled IS the stored state (WAX-SIMPLIFY-1) — there is no separate wax_stored status.
+Source: CartridgeRecord with status IN (wax_filled, wax_ready) AND waxStorage.location set.
 
-Use when: "what's in storage", "carts in the freezer", "stored carts in fridge X" — pre-filtered to CartridgeRecord.status='wax_stored'.
+Use when: "what's in storage", "carts in the freezer", "stored carts in fridge X", "wax-filled carts ready for reagent".
 Don't use for: generic cartridge filter (use find_cartridges with status filter — supports any status); count-only (use count_cartridges_by_status); reagent/chemical inventory in a fridge (use list_reagent_inventory or lookup_chemical respectively); current fridge TEMP (use get_current_temperatures); equipment registry (use list_equipment).`,
 		input_schema: {
 			type: 'object',
@@ -2110,7 +2111,10 @@ async function runTool(name: string, input: any, ctx: ToolContext = {}): Promise
 			};
 		}
 		case 'list_cartridges_in_storage': {
-			const filter: any = { status: 'wax_stored' };
+			const filter: any = {
+				status: { $in: [...WAX_STAGE_STATUSES] },
+				'waxStorage.location': { $exists: true, $ne: null }
+			};
 			if (input.fridgeId) filter['waxStorage.locationId'] = input.fridgeId;
 			const limit = Math.min(input.limit ?? 50, 500);
 			const carts = await CartridgeRecord.find(filter)
@@ -2130,7 +2134,7 @@ async function runTool(name: string, input: any, ctx: ToolContext = {}): Promise
 				totalReturned: Math.min(carts.length, limit),
 				truncated,
 				totalAvailable: truncated ? `>${limit}` : carts.length,
-				source: 'CartridgeRecord where status=wax_stored',
+				source: 'CartridgeRecord where status in (wax_filled, wax_ready) and waxStorage.location set',
 				sourceUrl: '/cartridge-admin/storage'
 			};
 		}
@@ -5505,7 +5509,7 @@ ACCURACY DISCIPLINE — read carefully:
 
 Mapping (action → status to count via count_cartridges_by_status or find_cartridges):
 - "fill with wax" / "wax-fill" / "run on the OT-2 for wax" → status: 'backing' (backed carts ready for wax filling)
-- "fill with reagent" / "reagent-fill" → status: 'wax_stored' (wax-filled-and-stored carts ready for reagent)
+- "fill with reagent" / "reagent-fill" → status: 'wax_filled' OR 'wax_ready' (sum both — wax_filled IS the stored state; wax_rejected carts are excluded)
 - "QC" / "inspect" / "release" → status corresponds to the upstream phase of that QC step
 - "ship" → status: 'released' (passed QA/QC, ready for packaging)
 - "test" / "run on the SPU" → status: 'linked' (assay loaded, ready for device run)

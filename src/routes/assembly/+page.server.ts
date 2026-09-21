@@ -3,6 +3,7 @@ import { requirePermission } from '$lib/server/permissions';
 import { connectDB, AssemblySession, Spu, User, generateId, AuditLog } from '$lib/server/db';
 import { generateNextSpuUdi } from '$lib/server/services/udi-generator';
 import { getActiveSpuWorkInstruction } from '$lib/server/services/spu-work-instruction';
+import { syncServiceFlag } from '$lib/server/service-flag';
 import type { Actions, PageServerLoad } from './$types';
 
 const STALE_DRAFT_MS = 24 * 60 * 60 * 1000;
@@ -29,8 +30,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 	const candidateSpus = await Spu.find({
 		'statusTransitions.reason': 'auto_created_assembly_tab',
-		finalizedAt: null,
-		voidedAt: null
+		finalizedAt: null
 	})
 		.sort({ createdAt: -1 })
 		.limit(50)
@@ -246,6 +246,7 @@ export const actions: Actions = {
 				}
 			}
 		);
+		await syncServiceFlag(spuId);
 
 		await AuditLog.create({
 			_id: generateId(),

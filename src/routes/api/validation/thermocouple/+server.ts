@@ -154,6 +154,12 @@ async function handleXlsxUpload(request: Request, locals: App.Locals) {
 		}
 	);
 
+	// Evidence drives the evidence state (SPU-INV-12).
+	{
+		const { autoEnterValidating } = await import('$lib/server/spu-auto-validate');
+		await autoEnterValidating(spuId, 'thermocouple', { _id: locals.user!._id, username: locals.user!.username });
+	}
+
 	// Audit log
 	await AuditLog.create({
 		_id: generateId(),

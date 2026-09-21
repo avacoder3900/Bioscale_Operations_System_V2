@@ -87,8 +87,9 @@
 
 	function phaseBadge(phase: string | null): string {
 		switch (phase) {
-			case 'wax_stored': return 'bg-amber-900/30 text-amber-300 border-amber-500/30';
+			case 'wax_stored': return 'bg-amber-900/30 text-amber-300 border-amber-500/30'; // legacy rows
 			case 'wax_filled': return 'bg-yellow-900/30 text-yellow-300 border-yellow-500/30';
+			case 'wax_ready': return 'bg-lime-900/30 text-lime-300 border-lime-500/30';
 			case 'reagent_filled': return 'bg-purple-900/30 text-purple-300 border-purple-500/30';
 			case 'stored': return 'bg-green-900/30 text-green-300 border-green-500/30';
 			case 'inspected': return 'bg-blue-900/30 text-blue-300 border-blue-500/30';

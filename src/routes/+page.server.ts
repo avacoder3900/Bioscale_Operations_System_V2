@@ -7,7 +7,10 @@ import {
 	OpentronsRobot, WaxFillingRun, ReagentBatchRecord, AssayDefinition, PartDefinition, BackingLot
 } from '$lib/server/db';
 import { getCheckedOutCartridgeIds } from '$lib/server/checkout-utils';
+import { isSpuStatus, isLegalTransition } from '$lib/server/spu-status';
+import { syncServiceFlag } from '$lib/server/service-flag';
 import { WAX_FILLING_ACTIVE } from '$lib/server/manufacturing/run-statuses';
+import { WAX_STAGE_STATUSES } from '$lib/shared/cartridge-wax-status';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals, url }) => {
@@ -16,7 +19,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 
 	// Manually checked-out cartridges are physically removed from fridges
 	// but preserve their scrapped/accepted quality markers. Exclude them
-	// from every fridge/wax_stored occupancy aggregation below.
+	// from every fridge/wax-stage occupancy aggregation below.
 	const checkedOutIds = await getCheckedOutCartridgeIds();
 
 	const stateFilter = url.searchParams.get('state');
@@ -185,7 +188,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 				storageCounts = await (async () => {
 					const [waxCounts, reagentCounts] = await Promise.all([
 						CartridgeRecord.aggregate([
-							{ $match: { 'waxStorage.location': { $exists: true }, status: 'wax_stored', _id: { $nin: checkedOutIds } } },
+							{ $match: { 'waxStorage.location': { $exists: true }, status: { $in: [...WAX_STAGE_STATUSES] }, _id: { $nin: checkedOutIds } } },
 							{ $group: { _id: '$waxStorage.location', count: { $sum: 1 } } }
 						]),
 						CartridgeRecord.aggregate([
@@ -203,7 +206,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 				// Map from barcode/name key → actual _id for detail links
 				const fridgeIdMap = new Map((fridges as any[]).map((f: any) => [f.barcode ?? f.name ?? String(f._id), String(f._id)]));
 
-				const phaseOrder = ['backing', 'wax_filled', 'wax_stored', 'wax_qc', 'wax_ready', 'wax_rejected', 'reagent_filled', 'inspected', 'sealed', 'reagent_qc', 'reagent_ready', 'reagent_rejected', 'cured', 'stored', 'released', 'shipped'];
+				const phaseOrder = ['backing', 'wax_filled', 'wax_qc', 'wax_ready', 'wax_rejected', 'reagent_filled', 'inspected', 'sealed', 'reagent_qc', 'reagent_ready', 'reagent_rejected', 'cured', 'stored', 'released', 'shipped'];
 				const phaseMap = new Map((phaseCounts as any[]).map((p: any) => [p._id, p.count]));
 				// 'backing' isn't a CartridgeRecord status anymore — aggregate BackingLot.
 				const backingAgg = await BackingLot.aggregate([
@@ -226,14 +229,15 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 				[fridgeCapacityAgg, allRobots, activeWaxRuns, allAssays,
 					cartridgeBomItems, dailyThroughputAgg, recentWaxRuns, recentReagentRuns, consumableCountsAgg
 				] = await Promise.all([
-					// Count ALL cartridges physically present in a fridge — wax_stored
-					// (post-QC), scrapped (QA quarantine, still occupies the slot), and
-					// reagent stored. Matches occupancy logic in /equipment/activity and
-					// /inventory/fridge-storage so capacity utilisation is consistent.
+					// Count ALL cartridges physically present in a fridge — wax-stage
+					// (wax_filled/wax_ready with a fridge location), scrapped (QA quarantine,
+					// still occupies the slot), and reagent stored. Matches occupancy logic in
+					// /equipment/activity and /inventory/fridge-storage so capacity utilisation
+					// is consistent.
 					(async () => {
 						const [waxCounts, scrappedCounts, storedCounts] = await Promise.all([
 							CartridgeRecord.aggregate([
-								{ $match: { status: 'wax_stored', 'waxStorage.location': { $exists: true }, _id: { $nin: checkedOutIds } } },
+								{ $match: { status: { $in: [...WAX_STAGE_STATUSES] }, 'waxStorage.location': { $exists: true }, _id: { $nin: checkedOutIds } } },
 								{ $group: { _id: '$waxStorage.location', count: { $sum: 1 } } }
 							]),
 							CartridgeRecord.aggregate([
@@ -557,7 +561,9 @@ export const actions: Actions = {
 			}
 		}
 
-		await Spu.updateOne({ _id: spuId }, { $set: { assignment, status: 'assigned' } });
+		// Assignment is not a lifecycle status (SPU-INV-07 removed the rogue
+		// out-of-enum 'assigned' write that used to ride along here).
+		await Spu.updateOne({ _id: spuId }, { $set: { assignment } });
 		return { assignSuccess: true };
 	},
 
@@ -575,12 +581,14 @@ export const actions: Actions = {
 		const newStatus = form.get('status')?.toString();
 		if (!spuId || !newStatus) return fail(400, { error: 'SPU ID and status required' });
 
-		const validStatuses = ['draft', 'assembling', 'assembled', 'validating', 'validated', 'assigned', 'deployed', 'servicing', 'retired', 'voided'];
-		if (!validStatuses.includes(newStatus)) return fail(400, { error: 'Invalid status' });
+		if (!isSpuStatus(newStatus)) return fail(400, { error: 'Invalid status' });
 
 		const spu = await Spu.findById(spuId);
 		if (!spu) return fail(404, { error: 'SPU not found' });
 		if ((spu as any).finalizedAt) return fail(400, { error: 'SPU is finalized' });
+		if (!isLegalTransition((spu as any).status ?? 'draft', newStatus)) {
+			return fail(400, { error: `Illegal transition: ${(spu as any).status ?? 'draft'} → ${newStatus}` });
+		}
 
 		await Spu.updateOne({ _id: spuId }, { $set: { status: newStatus } });
 
@@ -595,7 +603,10 @@ export const actions: Actions = {
 			changedBy: locals.user!.username ?? locals.user!._id
 		});
 
-		return { statusUpdateSuccess: true, updatedStatus: newStatus };
+		// Push the yellow-LED service flag (SPU-INV-08) — best-effort, never blocks.
+		const serviceFlag = await syncServiceFlag(spuId);
+
+		return { statusUpdateSuccess: true, updatedStatus: newStatus, serviceFlag };
 	}
 };
 

@@ -57,7 +57,7 @@
 		return Number.isNaN(d.getTime()) ? '—' : d.toLocaleString();
 	}
 
-	const STAGES: LifecycleStage[] = ['backing', 'wax_filled', 'wax_stored', 'wax_qc', 'wax_ready', 'wax_rejected', 'reagent_filled', 'inspected', 'sealed', 'reagent_qc', 'reagent_ready', 'reagent_rejected', 'cured', 'stored', 'released', 'shipped', 'assay_loaded', 'testing', 'completed', 'voided'];
+	const STAGES: LifecycleStage[] = ['backing', 'wax_filled', 'wax_qc', 'wax_ready', 'wax_rejected', 'reagent_filled', 'inspected', 'sealed', 'reagent_qc', 'reagent_ready', 'reagent_rejected', 'cured', 'stored', 'released', 'shipped', 'assay_loaded', 'testing', 'completed', 'voided'];
 
 	function stageLabel(stage: string): string {
 		return stage.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());

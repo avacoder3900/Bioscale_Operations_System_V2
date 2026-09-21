@@ -2,6 +2,7 @@ export const config = { maxDuration: 60 };
 import { error } from '@sveltejs/kit';
 import { connectDB, Equipment, EquipmentLocation, CartridgeRecord, WaxFillingRun, BackingLot } from '$lib/server/db';
 import { getCheckedOutCartridgeIds } from '$lib/server/checkout-utils';
+import { WAX_STAGE_STATUSES } from '$lib/shared/cartridge-wax-status';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ params }) => {
@@ -75,7 +76,7 @@ export const load: PageServerLoad = async ({ params }) => {
 	// reference. Scrapped wax cartridges remain in the fridge as QA quarantine
 	// (until manually checked out), so they're included in ACTIVE_WAX.
 	// Matches /inventory/fridge-storage + /equipment/activity filters.
-	const ACTIVE_WAX = ['wax_stored', 'scrapped'];
+	const ACTIVE_WAX = [...WAX_STAGE_STATUSES, 'scrapped'];
 	const ACTIVE_REAGENT = ['stored', 'reagent_filled', 'released', 'linked', 'inspected', 'sealed', 'cured'];
 	const [cartridgesRaw, waxRunsRaw] = await Promise.all([
 		CartridgeRecord.find({
@@ -138,7 +139,7 @@ export const load: PageServerLoad = async ({ params }) => {
 			? (c.waxStorage?.operator?.username ?? null)
 			: (c.storage?.operator?.username ?? null);
 
-		// Wax bucket splits into accepted (status=wax_stored) vs scrapped
+		// Wax bucket splits into accepted (status∈WAX_STAGE_STATUSES) vs scrapped
 		// (status=scrapped). Scrapped cartridges still occupy the fridge as
 		// QA quarantine until manual checkout.
 		let storageType: 'wax_accepted' | 'wax_scrapped' | 'reagent' | 'unknown';

@@ -47,10 +47,16 @@ export const WAX_NON_TERMINAL = [
 	'setup', 'loading', 'running', 'awaiting_removal', 'cooling', 'qc', 'storage'
 ] as const;
 
-/** Reagent run statuses that are not terminal. */
+/**
+ * Reagent run statuses that are not terminal.
+ * 'Top Sealing' / 'Storage' (and lowercase variants) were retired by
+ * REAGENT-TOPSEAL-IMPLICIT (2026-08-19): a reagent run ends at Running →
+ * Completed. Historical rows were migrated to Completed by
+ * scripts/migrate-retire-top-sealing.ts.
+ */
 export const REAGENT_NON_TERMINAL = [
-	'Setup', 'Loading', 'Running', 'Inspection', 'Top Sealing', 'Storage',
-	'setup', 'loading', 'running', 'inspection', 'top_sealing', 'storage'
+	'Setup', 'Loading', 'Running', 'Inspection',
+	'setup', 'loading', 'running', 'inspection'
 ] as const;
 
 // === Terminal sets — for wax AND reagent ===

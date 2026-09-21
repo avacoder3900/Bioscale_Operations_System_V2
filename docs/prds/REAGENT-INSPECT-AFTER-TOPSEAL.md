@@ -1,5 +1,10 @@
 # PRD: Reagent-fill inspection moves after Cut Top Seal (+ reagent Run-again)
 
+> **Superseded in part (2026-08-19, `REAGENT-TOPSEAL-IMPLICIT.md`):** the `sealed` hop is
+> retired. Top sealing is implicit after reagent fill; the Reagent Inspect photo now takes
+> `reagent_filled → reagent_qc` directly. The verdict flow (reagent_qc → reagent_ready |
+> reagent_rejected) is unchanged. Lifecycle text below is historical.
+
 ## Intent (from Jacob)
 Reagent post-run inspection does NOT belong on the reagent-filling run page.
 Remove it. Add a dedicated **Reagent Inspect** step that runs AFTER **Cut Top

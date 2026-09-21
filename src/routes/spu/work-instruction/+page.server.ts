@@ -193,6 +193,10 @@ export const actions: Actions = {
 				audit
 			};
 		} catch (err: any) {
+			// SvelteKit control-flow throws (error(403) from requirePermission,
+			// redirects) must propagate — converting them to fail(500) masked
+			// permission denials as server errors.
+			if (err && typeof err === 'object' && 'status' in err) throw err;
 			audit.failure = 'top-level-throw';
 			audit.fatalError = err?.message ?? String(err);
 			audit.fatalStack = (err?.stack ?? '').toString().slice(0, 1500);

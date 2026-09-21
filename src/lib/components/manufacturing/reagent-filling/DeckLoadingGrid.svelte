@@ -6,6 +6,14 @@
 
 	interface Props {
 		onComplete: (data: { deckId: string; cartridgeScans: CartridgeScan[] }) => void;
+		/**
+		 * Cartridge count the operator set in the protocol-params step (partial
+		 * fills). Seeds the auto-sweep slot cap so the scanner only walks the
+		 * positions that actually hold cartridges — without it the sweep walked
+		 * all 24 taught positions and burned the full scan window on every empty
+		 * slot. The operator can still override in the Count box.
+		 */
+		plannedCartridgeCount?: number | null;
 		readonly?: boolean;
 		focusPaused?: boolean;
 		// OpentronsRobot._id (or legacy Equipment robot id) — when set, the
@@ -16,7 +24,7 @@
 		runId?: string | null;
 	}
 
-	let { onComplete, readonly: isReadonly = false, focusPaused = false, robotId = null, runId = null }: Props = $props();
+	let { onComplete, readonly: isReadonly = false, focusPaused = false, robotId = null, runId = null, plannedCartridgeCount = null }: Props = $props();
 
 	// 8 rows x 3 cols, vertical snake: Col1 down, Col2 up, Col3 down
 	const GRID_ROWS = [
@@ -50,6 +58,13 @@
 	let failedSlots = $state<Set<number>>(new SvelteSet());
 	let sweepFailures = $state<Array<{ slotIndex: number; message: string }>>([]);
 	let sweepCount = $state<number>(TOTAL_POSITIONS);
+	// Seed (and follow) the planned partial-fill count. Reactive rather than an
+	// initial-value capture so a count that lands after mount still applies;
+	// never fights the operator mid-sweep.
+	$effect(() => {
+		const n = plannedCartridgeCount != null ? Math.floor(plannedCartridgeCount) : null;
+		if (n != null && n >= 1 && n <= TOTAL_POSITIONS && !sweepInFlight) sweepCount = n;
+	});
 	let expandedSlot = $state<number | null>(null);
 	let expandedInput = $state('');
 	let expandedOverride = $state(false);
@@ -172,6 +187,7 @@
 			}
 			await autoSweepCartridges();
 			if (deckId && failedSlots.size === 0 && filledCount > 0) {
+				if (needsCheck && !(await runDeferredCheck())) return;
 				onComplete({ deckId, cartridgeScans: denseScans() });
 			}
 		} finally {
@@ -204,15 +220,10 @@
 				error: `Cartridge "${scanned}" already scanned (slot ${dupIndex + 1})`
 			};
 		}
-		try {
-			const res = await fetch(`/api/dev/validate-equipment?type=cartridge&id=${encodeURIComponent(scanned)}&context=reagent`);
-			const result = await res.json();
-			if (!res.ok || result.error) {
-				return { ok: false, error: result.error ?? `Cartridge "${scanned}" not found. It must go through wax filling first.` };
-			}
-		} catch {
-			return { ok: false, error: 'Validation service unavailable, cannot proceed' };
-		}
+		// SCAN-THEN-CHECK: no per-scan server validation. All guards above are
+		// local and instant; existence/phase checks (wax_filled etc.) run as one
+		// batch in runDeferredCheck() at the boundary.
+		checkedAt = null;
 		const next = scans.slice();
 		next[targetSlot] = { cartridgeId: scanned };
 		scans = next;
@@ -236,6 +247,8 @@
 			if (r.ok) {
 				deckError = '';
 				playBeep(true);
+				// A full deck is itself a boundary — validate now, not 24 scans later.
+				if (isFull) await runDeferredCheck();
 			} else {
 				deckError = r.error ?? 'Scan failed';
 				playBeep(false);
@@ -506,10 +519,65 @@
 		return scans.filter((s): s is CartridgeScan => s !== null);
 	}
 
-	function confirmPartialLoad() {
-		if (filledCount > 0) {
-			onComplete({ deckId, cartridgeScans: denseScans() });
+	// SCAN-THEN-CHECK (ported from the wax grid, 2026-08-28). Every cartridge
+	// scan used to block on a per-scan server round-trip (~250ms warm, 1-3s on a
+	// serverless cold start) — the "laggy scanning" complaint — and rapid scans
+	// could race into the same slot. Scans are now accepted locally and
+	// validated as ONE batch query at the boundary (deck full / continue).
+	// `checkedAt` marks the current scan set as validated; any new scan clears it.
+	let checkedAt = $state<number | null>(null);
+	let checking = $state(false);
+	const needsCheck = $derived(filledCount > 0 && checkedAt === null);
+
+	async function runDeferredCheck(): Promise<boolean> {
+		if (checking) return false;
+		const entries = scans
+			.map((s, slotIndex) => (s ? { slotIndex, cartridgeId: s.cartridgeId } : null))
+			.filter((e): e is { slotIndex: number; cartridgeId: string } => e !== null);
+		if (entries.length === 0) return false;
+		checking = true;
+		try {
+			const res = await fetch('/api/manufacturing/cartridge-scan-check', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ barcodes: entries.map((e) => e.cartridgeId), context: 'reagent' })
+			});
+			const data = await res.json();
+			if (!res.ok) {
+				deckError = data?.error ?? 'Scan check failed';
+				playBeep(false);
+				return false;
+			}
+			const results = (data.results ?? []) as Array<{ ok: boolean; error?: string }>;
+			const failures = entries
+				.map((e, i) => ({ slotIndex: e.slotIndex, message: results[i]?.error ?? 'Validation failed' }))
+				.filter((_, i) => !results[i]?.ok);
+			if (failures.length > 0) {
+				failedSlots = new SvelteSet(failures.map((f) => f.slotIndex));
+				sweepFailures = failures.map((f) => ({ slotIndex: f.slotIndex, message: f.message }));
+				const n = failures.length;
+				deckError = `${n} cartridge${n === 1 ? '' : 's'} failed the check — clear the highlighted slot${n === 1 ? '' : 's'} and re-scan.`;
+				playBeep(false);
+				return false;
+			}
+			failedSlots = new SvelteSet();
+			sweepFailures = [];
+			deckError = '';
+			checkedAt = Date.now();
+			return true;
+		} catch {
+			deckError = 'Validation service unavailable, cannot proceed';
+			playBeep(false);
+			return false;
+		} finally {
+			checking = false;
 		}
+	}
+
+	async function confirmPartialLoad() {
+		if (filledCount === 0 || checking) return;
+		if (needsCheck && !(await runDeferredCheck())) return;
+		onComplete({ deckId, cartridgeScans: denseScans() });
 	}
 
 	function undoLastScan() {

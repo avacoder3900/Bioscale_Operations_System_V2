@@ -9,12 +9,12 @@ export const load: PageServerLoad = async ({ locals }) => {
 	if (!locals.user) redirect(302, '/login');
 	requirePermission(locals.user, 'manufacturing:admin');
 
+	// Pruned 2026-08-28: cooling/QC/lockout timers, temperatures and per-deck
+	// volumes belonged to retired workflow stages and gated nothing — only the
+	// fields the live wax flow actually reads remain.
 	const defaultSettings = {
 		minOvenTimeMin: 60, runDurationMin: 45, removeDeckWarningMin: 5,
-		coolingWarningMin: 30, deckLockoutMin: 60,
-		minCoolingBeforeQcMin: 2, // hard block: QC can't run until this many min after cooling confirmed
-		incubatorTempC: 37, heaterTempC: 65,
-		waxPerDeckUl: 5000, tubeCapacityUl: 20000, waxPerCartridgeUl: 19.2, cartridgesPerColumn: 8,
+		waxPerCartridgeUl: 19.2,
 		waxFillDeadVolumeUl: 80 // added on top of waxPerCartridgeUl × count for the 2ml tube fill (WAX-FLOW-3)
 	};
 
@@ -37,15 +37,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 				minOvenTimeMin: wax.minOvenTimeMin ?? defaultSettings.minOvenTimeMin,
 				runDurationMin: wax.runDurationMin ?? defaultSettings.runDurationMin,
 				removeDeckWarningMin: wax.removeDeckWarningMin ?? defaultSettings.removeDeckWarningMin,
-				coolingWarningMin: wax.coolingWarningMin ?? defaultSettings.coolingWarningMin,
-				deckLockoutMin: wax.deckLockoutMin ?? defaultSettings.deckLockoutMin,
-				minCoolingBeforeQcMin: wax.minCoolingBeforeQcMin ?? defaultSettings.minCoolingBeforeQcMin,
-				incubatorTempC: wax.incubatorTempC ?? defaultSettings.incubatorTempC,
-				heaterTempC: wax.heaterTempC ?? defaultSettings.heaterTempC,
-				waxPerDeckUl: wax.waxPerDeckUl ?? defaultSettings.waxPerDeckUl,
-				tubeCapacityUl: wax.tubeCapacityUl ?? defaultSettings.tubeCapacityUl,
 				waxPerCartridgeUl: wax.waxPerCartridgeUl ?? defaultSettings.waxPerCartridgeUl,
-				cartridgesPerColumn: wax.cartridgesPerColumn ?? defaultSettings.cartridgesPerColumn,
 				waxFillDeadVolumeUl: wax.waxFillDeadVolumeUl ?? defaultSettings.waxFillDeadVolumeUl
 			},
 			rejectionReasons
@@ -71,15 +63,7 @@ export const actions: Actions = {
 			{ key: 'minOvenTimeMin', min: 1, max: 1440 },
 			{ key: 'runDurationMin', min: 1, max: 120 },
 			{ key: 'removeDeckWarningMin', min: 1, max: 60 },
-			{ key: 'coolingWarningMin', min: 1, max: 120 },
-			{ key: 'deckLockoutMin', min: 1, max: 120 },
-			{ key: 'minCoolingBeforeQcMin', min: 0, max: 120 },
-			{ key: 'incubatorTempC', min: 20, max: 200 },
-			{ key: 'heaterTempC', min: 20, max: 200 },
-			{ key: 'waxPerDeckUl', min: 1, max: 10000 },
-			{ key: 'tubeCapacityUl', min: 1, max: 50000 },
 			{ key: 'waxPerCartridgeUl', min: 1, max: 1000 },
-			{ key: 'cartridgesPerColumn', min: 1, max: 24 },
 			{ key: 'waxFillDeadVolumeUl', min: 0, max: 2000 }
 		];
 

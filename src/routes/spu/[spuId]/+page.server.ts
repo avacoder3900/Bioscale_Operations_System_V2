@@ -2,9 +2,14 @@ import { fail, error } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
 import {
 	connectDB, Spu, Batch, User, Customer, AssemblySession,
-	ElectronicSignature, AuditLog, ParticleDevice, ValidationSession, generateId
+	ElectronicSignature, AuditLog, ParticleDevice, ValidationSession, CartridgeRecord, generateId
 } from '$lib/server/db';
+import { OPTICAL_CARTRIDGE_FILTER } from '$lib/server/optical-constants';
 import { byId } from '$lib/server/db/native-helpers';
+import { isLegalTransition, LEGAL_TRANSITIONS, normalizeSpuStatus } from '$lib/server/spu-status';
+import { syncServiceFlag } from '$lib/server/service-flag';
+import { appendSpuJournal } from '$lib/server/spu-journal';
+import { beginValidationCycle, validationCycleResetFields } from '$lib/server/spu-validation-cycle';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals, params }) => {
@@ -21,13 +26,38 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 		s.batch?._id ? Batch.findById(s.batch._id).lean() : null,
 		AssemblySession.find({ spuId: params.spuId }).sort({ createdAt: -1 }).lean(),
 		ElectronicSignature.find({ entityId: params.spuId }).sort({ signedAt: -1 }).lean(),
-		AuditLog.find({ entityId: params.spuId }).sort({ createdAt: -1 }).limit(50).lean(),
+		// Writers key SPU audit rows as {tableName:'spus', recordId} — the old
+		// {entityId} filter matched a field no row has and always returned [].
+		AuditLog.find({ tableName: 'spus', recordId: params.spuId }).sort({ changedAt: -1 }).limit(50).lean(),
 		Customer.find({ status: 'active' }, { name: 1 }).lean(),
 		ValidationSession.find({ spuId: params.spuId })
 			.select('_id type status startedAt completedAt overallPassed failureReasons criteriaUsed magResults override userId rawData')
 			.sort({ createdAt: -1 })
 			.lean()
 	]);
+
+	// Spectrophotometer runs are cartridge_records keyed by device.name (the SPU
+	// UDI), NOT validation_sessions. That is why the Validation Session History
+	// showed nothing for spectrophotometer even while the rollup read PASS —
+	// the history only ever queried ValidationSession.
+	const opticalRuns = s.udi
+		? await CartridgeRecord.find({ ...OPTICAL_CARTRIDGE_FILTER, 'device.name': s.udi })
+			.select('_id serialNumber assayName status statusUpdatedOn createdAt')
+			.sort({ createdAt: -1 })
+			.limit(25)
+			.lean()
+		: [];
+
+	// Locations already in use across the fleet, offered as suggestions when
+	// editing this unit's Location. "R&D" is what the research app's assay
+	// push keys on, so it is always offered even before any unit carries it.
+	const knownLocations = [
+		...new Set<string>(
+			[...(await Spu.distinct('location', { location: { $nin: [null, ''] } })), 'R&D']
+				.map((l) => String(l).trim())
+				.filter(Boolean)
+		)
+	].sort((a, b) => a.localeCompare(b));
 
 	// Particle device lookup
 	let particleDevice = null;
@@ -46,7 +76,7 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 	const sigMap = new Map(sigUsers.map((u: any) => [u._id, u.username]));
 
 	// Audit trail user lookup
-	const auditUserIds = [...new Set(auditTrail.map((a: any) => a.userId).filter(Boolean))];
+	const auditUserIds = [...new Set(auditTrail.map((a: any) => a.changedBy).filter(Boolean))];
 	const auditUsers = auditUserIds.length ? await User.find({ _id: { $in: auditUserIds } }, { username: 1 }).lean() : [];
 	const auditMap = new Map(auditUsers.map((u: any) => [u._id, u.username]));
 
@@ -56,11 +86,13 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 	const valMap = new Map(valUsers.map((u: any) => [u._id, u.username]));
 
 	return {
+		knownLocations,
 		spu: {
 			id: s._id,
 			udi: s.udi,
 			barcode: s.barcode ?? null,
 			status: s.status ?? 'draft',
+			location: s.location ?? null,
 			deviceState: s.deviceState ?? '',
 			owner: s.owner ?? null,
 			ownerNotes: s.ownerNotes ?? null,
@@ -104,7 +136,20 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 				openedAt: r.openedAt ?? null,
 				returnedByName: r.returnedBy?.username ?? null,
 				returnedAt: r.returnedAt ?? null
-			}))
+			})),
+			// Where this unit may legally transition next (drives the dropdown).
+			legalNextStatuses: LEGAL_TRANSITIONS[normalizeSpuStatus(s.status)],
+			// Newest entry first — entries are pushed chronologically.
+			journal: (s.journal ?? [])
+				.map((j: any) => ({
+					id: j._id,
+					text: j.text ?? '',
+					source: j.source ?? 'manual',
+					refLabel: j.refLabel ?? null,
+					createdByName: j.createdBy?.username ?? null,
+					createdAt: j.createdAt ?? null
+				}))
+				.reverse()
 		},
 		attachments: (s.attachments ?? []).map((a: any) => {
 			// Parse a capped preview (header + up to 50 rows) for inline viewing.
@@ -142,7 +187,11 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 					spuId: params.spuId,
 					particleDeviceId: s.particleLink.particleDeviceId,
 					particleSerial: s.particleLink.particleSerial ?? null,
-					linkedAt: s.particleLink.linkedAt
+					linkedAt: s.particleLink.linkedAt,
+					serviceFlag: s.particleLink.serviceFlag ?? null,
+					serviceFlagState: s.particleLink.serviceFlagState ?? null,
+					serviceFlagSyncedAt: s.particleLink.serviceFlagSyncedAt ?? null,
+					serviceFlagError: s.particleLink.serviceFlagError ?? null
 				}
 			: null,
 		particleDevice: particleDevice
@@ -219,13 +268,22 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 				originalResult: v.override.originalResult
 			} : null
 		})),
+		opticalRuns: (opticalRuns as any[]).map((c: any) => ({
+			id: c._id,
+			serialNumber: c.serialNumber ?? null,
+			assayName: c.assayName ?? null,
+			status: c.status ?? null,
+			createdAt: c.createdAt ?? null,
+			completedAt: c.statusUpdatedOn ?? null
+		})),
 		auditTrail: auditTrail.map((a: any) => ({
 			id: a._id,
 			action: a.action ?? '',
 			reason: a.reason ?? null,
 			oldData: a.oldData ?? null,
 			newData: a.newData ?? null,
-			changedBy: auditMap.get(a.userId) ?? auditMap.get(a.changedBy) ?? 'System',
+			// changedBy usually holds a username already; map only when it's a user _id.
+			changedBy: auditMap.get(a.changedBy) ?? a.changedBy ?? 'System',
 			changedAt: a.changedAt ?? a.createdAt
 		}))
 	};
@@ -274,6 +332,71 @@ export const actions: Actions = {
 		await connectDB();
 		await Spu.updateOne({ _id: params.spuId }, { $unset: { particleLink: '' } });
 		return { success: true };
+	},
+
+	addJournalEntry: async ({ request, locals, params }) => {
+		requirePermission(locals.user, 'spu:write');
+		await connectDB();
+		const form = await request.formData();
+		const text = form.get('text')?.toString().trim();
+		if (!text) return fail(400, { error: 'Journal entry cannot be empty' });
+		if (text.length > 5000) return fail(400, { error: 'Journal entry too long (max 5000 characters)' });
+
+		const result = await appendSpuJournal(
+			params.spuId,
+			text,
+			{ _id: locals.user!._id, username: locals.user!.username }
+		);
+		if (!result.ok) return fail(result.error === 'SPU not found' ? 404 : 500, { error: result.error ?? 'Failed to add entry' });
+
+		return { journalSuccess: true };
+	},
+
+	pingDevice: async ({ locals, params }) => {
+		requirePermission(locals.user, 'spu:write');
+		await connectDB();
+		const spu = await Spu.findById(params.spuId).select('particleLink').lean() as any;
+		const deviceId = spu?.particleLink?.particleDeviceId;
+		if (!deviceId) return fail(400, { error: 'No Particle device linked' });
+
+		const { pingDevice } = await import('$lib/server/particle');
+		try {
+			const result = await pingDevice(deviceId);
+			return { message: result.online ? 'Device is online.' : 'Device did not respond — offline.' };
+		} catch (err) {
+			return fail(502, { error: err instanceof Error ? err.message : 'Ping failed' });
+		}
+	},
+
+	renameDevice: async ({ request, locals, params }) => {
+		requirePermission(locals.user, 'spu:write');
+		await connectDB();
+		const form = await request.formData();
+		const name = form.get('name')?.toString().trim();
+		if (!name) return fail(400, { error: 'Name is required' });
+
+		const spu = await Spu.findById(params.spuId).select('particleLink').lean() as any;
+		const deviceId = spu?.particleLink?.particleDeviceId;
+		if (!deviceId) return fail(400, { error: 'No Particle device linked' });
+
+		const { renameDevice, getDevice } = await import('$lib/server/particle');
+		try {
+			const oldName = (await getDevice(deviceId)).name;
+			await renameDevice(deviceId, name);
+			await ParticleDevice.updateOne({ particleDeviceId: deviceId }, { $set: { name } });
+			await AuditLog.create({
+				_id: generateId(),
+				tableName: 'spus',
+				recordId: params.spuId,
+				action: 'UPDATE',
+				oldData: { particleDeviceName: oldName },
+				newData: { particleDeviceName: name },
+				changedBy: locals.user!.username ?? locals.user!._id
+			});
+			return { message: `Device renamed to ${name}.` };
+		} catch (err) {
+			return fail(502, { error: err instanceof Error ? err.message : 'Rename failed' });
+		}
 	},
 
 	uploadCsv: async ({ request, locals, params }) => {
@@ -344,7 +467,7 @@ export const actions: Actions = {
 		return { deleteSuccess: true };
 	},
 
-	// updateAssignment removed — release status (released-rnd/manufacturing/field) via transitionStatus
+	// updateAssignment removed — releasing is a validating → released transitionStatus call
 
 	updateAssemblyStatus: async ({ request, locals, params }) => {
 		requirePermission(locals.user, 'spu:write');
@@ -383,10 +506,13 @@ export const actions: Actions = {
 					signedAt: new Date()
 				};
 			}
-			updates.status = 'assembled';
+			// Border status collapsed (SPU-INV-07): completing assembly moves the
+			// unit into validation; assemblyStatus records that assembly is done.
+			updates.status = 'validating';
 		}
 
 		await Spu.updateOne({ _id: params.spuId }, { $set: updates });
+		if (updates.status) await syncServiceFlag(params.spuId);
 		return { success: true };
 	},
 
@@ -396,6 +522,9 @@ export const actions: Actions = {
 		const form = await request.formData();
 		const newUdi = form.get('udi')?.toString().trim();
 		const newBarcode = form.get('barcode')?.toString().trim() || null;
+		// Physical/organizational location (free-form; "R&D" makes the unit part
+		// of the research app's assay-push fleet). Blank clears it.
+		const newLocation = form.get('location')?.toString().trim() || null;
 
 		if (!newUdi) return fail(400, { error: 'UDI is required' });
 
@@ -409,9 +538,16 @@ export const actions: Actions = {
 			if (existing) return fail(400, { error: 'Another SPU already has this UDI' });
 		}
 
-		const oldData = { udi: (spu as any).udi, barcode: (spu as any).barcode };
+		const oldData = {
+			udi: (spu as any).udi,
+			barcode: (spu as any).barcode,
+			location: (spu as any).location ?? null
+		};
 		try {
-			await Spu.updateOne({ _id: params.spuId }, { $set: { udi: newUdi, barcode: newBarcode } });
+			await Spu.updateOne(
+				{ _id: params.spuId },
+				{ $set: { udi: newUdi, barcode: newBarcode, location: newLocation } }
+			);
 		} catch (err: any) {
 			console.error('[updateIdentifiers] Update failed:', err.message);
 			return fail(500, { error: err.message || 'Failed to update SPU' });
@@ -424,7 +560,7 @@ export const actions: Actions = {
 				recordId: params.spuId,
 				action: 'UPDATE',
 				oldData,
-				newData: { udi: newUdi, barcode: newBarcode },
+				newData: { udi: newUdi, barcode: newBarcode, location: newLocation },
 				changedBy: locals.user!.username ?? locals.user!._id
 			});
 		} catch (err: any) {
@@ -449,6 +585,11 @@ export const actions: Actions = {
 
 		const oldStatus = (spu as any).status ?? 'draft';
 		if (oldStatus === newStatus) return fail(400, { error: 'Status is already ' + newStatus });
+		// App-level enforcement — the schema enum can't do it (updateOne skips
+		// validators). This action is the UI's only generic status writer.
+		if (!isLegalTransition(oldStatus, newStatus)) {
+			return fail(400, { error: `Illegal transition: ${oldStatus} → ${newStatus}` });
+		}
 
 		const transition = {
 			_id: generateId(),
@@ -466,6 +607,8 @@ export const actions: Actions = {
 				$push: { statusTransitions: transition }
 			}
 		);
+		// Entering servicing starts a new validation cycle (0/3).
+		if (newStatus === 'servicing') await beginValidationCycle(params.spuId, transition.changedAt);
 
 		// Audit log
 		await AuditLog.create({
@@ -478,7 +621,17 @@ export const actions: Actions = {
 			changedBy: locals.user!.username ?? locals.user!._id
 		});
 
-		return { success: true, transitionSuccess: true };
+		// Push the yellow-LED service flag (SPU-INV-08) — best-effort, never blocks.
+		const serviceFlag = await syncServiceFlag(params.spuId);
+
+		return { success: true, transitionSuccess: true, serviceFlag };
+	},
+
+	resyncServiceFlag: async ({ locals, params }) => {
+		requirePermission(locals.user, 'spu:write');
+		await connectDB();
+		const serviceFlag = await syncServiceFlag(params.spuId);
+		return { serviceFlagResynced: true, serviceFlag };
 	},
 
 	deleteSpu: async ({ locals, params }) => {
@@ -537,7 +690,8 @@ export const actions: Actions = {
 				serviceRecords: record,
 				statusTransitions: { _id: generateId(), from: oldStatus, to: 'servicing', changedBy: operator, changedAt: now, reason: `Service #${cycle}: ${issue}` }
 			},
-			$set: { status: 'servicing', updatedAt: now }
+			// Entering servicing starts a new validation cycle (0/3).
+			$set: { status: 'servicing', updatedAt: now, ...validationCycleResetFields(now) }
 		});
 
 		await AuditLog.create({
@@ -546,11 +700,13 @@ export const actions: Actions = {
 			reason: `Service #${cycle} opened: ${issue}`,
 			changedBy: locals.user!.username ?? locals.user!._id
 		});
+		await syncServiceFlag(params.spuId);
 		return { success: true, serviceOpened: true };
 	},
 
-	// Return a serviced unit — Phase B: record the fix, require re-validation,
-	// and reset the validation counter (prior validation records are preserved).
+	// Return a serviced unit — Phase B: record the fix and hand it back to
+	// validating. The validation cycle was already reset when the unit ENTERED
+	// servicing, so tests run during the service visit keep their credit.
 	returnService: async ({ request, locals, params }) => {
 		requirePermission(locals.user, 'spu:write');
 		await connectDB();
@@ -576,7 +732,6 @@ export const actions: Actions = {
 					'serviceRecords.$.returnedBy': operator,
 					'serviceRecords.$.returnedAt': now,
 					status: 'validating',
-					validationResetAt: now,
 					updatedAt: now
 				},
 				$push: {
@@ -587,10 +742,20 @@ export const actions: Actions = {
 
 		await AuditLog.create({
 			_id: generateId(), tableName: 'spus', recordId: params.spuId, action: 'UPDATE',
-			oldData: { status: oldStatus }, newData: { serviceCycle: open.cycle, fix, validationReset: now },
-			reason: `Service #${open.cycle} returned: ${fix}. Validation counter reset.`,
+			oldData: { status: oldStatus }, newData: { serviceCycle: open.cycle, fix },
+			reason: `Service #${open.cycle} returned: ${fix}. Re-validation required.`,
 			changedBy: locals.user!.username ?? locals.user!._id
 		});
+		await syncServiceFlag(params.spuId);
+
+		// Unified journal (SPU-INV-10): the quick service flow's story too.
+		await appendSpuJournal(
+			params.spuId,
+			`Service #${open.cycle} returned — re-validation required.\nIssue: ${open.issue ?? '—'}\nFix: ${fix}`,
+			operator,
+			{ source: 'service', refKind: 'inline_service', refId: open._id, refLabel: `Service #${open.cycle}` }
+		);
+
 		return { success: true, serviceReturned: true };
 	}
 };

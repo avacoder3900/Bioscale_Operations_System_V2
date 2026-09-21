@@ -3,8 +3,10 @@ import { json } from '@sveltejs/kit';
 export const config = {
 	maxDuration: 60
 };
-import { connectDB, ValidationSession, Integration, generateId } from '$lib/server/db';
+import { connectDB, ValidationSession, Integration, Spu, generateId } from '$lib/server/db';
 import { getVariable } from '$lib/server/particle';
+import { extractMagTestTime } from '$lib/server/magnetometer-time';
+import { autoEnterValidating } from '$lib/server/spu-auto-validate';
 import type { RequestHandler } from './$types';
 import crypto from 'crypto';
 
@@ -96,13 +98,19 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 
 		const overallPassed = failureReasons.length === 0;
 
+		// When the test actually ran on the device, as opposed to when this poll
+		// happened to notice it. See $lib/server/magnetometer-time.
+		const pulledAt = new Date();
+		const testTime = extractMagTestTime(rawResult);
+
 		const sessionId = generateId();
 		await ValidationSession.create({
 			_id: sessionId,
 			type: 'mag',
 			status: overallPassed ? 'completed' : 'failed',
-			startedAt: new Date(),
-			completedAt: new Date(),
+			startedAt: pulledAt,
+			completedAt: pulledAt,
+			testRanAt: testTime?.at ?? null,
 			userId: locals.user._id,
 			spuUdi: spuUdi,
 			spuId: spuId,
@@ -115,6 +123,30 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			source: 'auto-poll'
 		});
 
+		// Roll the result up onto the SPU DHR — the poll path used to create
+		// sessions that never touched the unit's record at all. Both outcomes
+		// are recorded; qcStatus is only promoted on a pass (same rules as the
+		// manual read on /validation/magnetometer).
+		if (spuId) {
+			await Spu.updateOne({ _id: spuId }, {
+				$set: {
+					'validation.magnetometer': {
+						status: overallPassed ? 'passed' : 'failed',
+						sessionId,
+						completedAt: pulledAt,
+						testRanAt: testTime?.at ?? null,
+						rawData: rawResult,
+						results: parsed,
+						failureReasons: overallPassed ? [] : failureReasons,
+						criteriaUsed: { minZ, maxZ }
+					},
+					...(overallPassed ? { qcStatus: 'passed' } : {})
+				}
+			});
+			// Evidence drives the evidence state (SPU-INV-12).
+			await autoEnterValidating(spuId, 'magnetometer', { _id: locals.user._id, username: locals.user.username });
+		}
+
 		return json({
 			status: 'new_result',
 			hash: currentHash,
@@ -124,7 +156,9 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 				overallPassed,
 				failureCount: failureReasons.length,
 				wellCount: parsed.length,
-				completedAt: new Date().toISOString(),
+				testRanAt: testTime?.at.toISOString() ?? null,
+				pulledAt: pulledAt.toISOString(),
+				completedAt: pulledAt.toISOString(),
 				spuUdi
 			}
 		});

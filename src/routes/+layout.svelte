@@ -1,6 +1,7 @@
 <script lang="ts">
 	import './layout.css';
 	import favicon from '$lib/assets/favicon.svg';
+	import { untrack } from 'svelte';
 	import type { Snippet } from 'svelte';
 	import { page, navigating } from '$app/stores';
 	import { enhance } from '$app/forms';
@@ -38,7 +39,11 @@
 		}
 	});
 
-	type NavItem = { href: string; label: string; icon: string };
+	// sectionPaths: sibling route trees that belong to this nav item's section but
+	// keep their own URLs (e.g. SPU Mfg owns Assembly / Work Instructions / Validation).
+	// exact: opt out of prefix matching, so an item like /spu does not stay lit
+	// on subroutes that belong to other nav items (/spu/mfg/*, /spu/cleaning).
+	type NavItem = { href: string; label: string; icon: string; sectionPaths?: string[]; exact?: boolean };
 	type NavGroup = { label: string; icon: string; items: NavItem[] };
 
 	const topItems: NavItem[] = [
@@ -56,16 +61,44 @@
 
 	const navGroups: NavGroup[] = [
 		{
+			label: 'SPU',
+			icon: 'M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z',
+			items: [
+				{
+					href: '/spu',
+					label: 'SPU Inventory',
+					exact: true,
+					icon: 'M4 6h16M4 10h16M4 14h16M4 18h16'
+				},
+				{
+					href: '/assembly',
+					label: 'SPU Assembly',
+					icon: 'M11 4a2 2 0 114 0v1a1 1 0 001 1h3a1 1 0 011 1v3a1 1 0 01-1 1h-1a2 2 0 100 4h1a1 1 0 011 1v3a1 1 0 01-1 1h-3a1 1 0 01-1-1v-1a2 2 0 10-4 0v1a1 1 0 01-1 1H7a1 1 0 01-1-1v-3a1 1 0 00-1-1H4a2 2 0 110-4h1a1 1 0 001-1V7a1 1 0 011-1h3a1 1 0 001-1V4z',
+					// Barcodes is part of the assembly process (child page for now).
+					// NOTE: not '/spu/mfg' itself — that prefix would also claim the
+					// servicing subroute; the /spu/mfg redirect lands here anyway.
+					sectionPaths: ['/spu/mfg/barcodes']
+				},
+				{
+					href: '/spu/mfg/servicing',
+					label: 'SPU Servicing',
+					icon: 'M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z'
+				},
+				{
+					href: '/validation',
+					label: 'SPU Validation',
+					icon: 'M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z'
+				}
+			]
+		},
+		{
 			label: 'Manufacturing',
 			icon: 'M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35',
 			items: [
-				{ href: '/spu/mfg', label: 'SPU Mfg', icon: 'M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z' },
 				{ href: '/manufacturing/cart-mfg', label: 'Cart Mfg', icon: 'M4 5a1 1 0 011-1h14a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM4 13a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1v-6zM16 13a1 1 0 011-1h2a1 1 0 011 1v6a1 1 0 01-1 1h-2a1 1 0 01-1-1v-6z' },
 				{ href: '/manufacturing/reagent-lots', label: 'Reagent Lots', icon: 'M9 2v6M15 2v6M9 8h6M7 8h10a2 2 0 012 2v9a3 3 0 01-3 3H8a3 3 0 01-3-3v-9a2 2 0 012-2z' },
 				{ href: '/manufacturing/print-barcodes', label: 'Print Barcodes', icon: 'M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z' },
-				{ href: '/assembly', label: 'SPU Assembly', icon: 'M11 4a2 2 0 114 0v1a1 1 0 001 1h3a1 1 0 011 1v3a1 1 0 01-1 1h-1a2 2 0 100 4h1a1 1 0 011 1v3a1 1 0 01-1 1h-3a1 1 0 01-1-1v-1a2 2 0 10-4 0v1a1 1 0 01-1 1H7a1 1 0 01-1-1v-3a1 1 0 00-1-1H4a2 2 0 110-4h1a1 1 0 001-1V7a1 1 0 011-1h3a1 1 0 001-1V4z' },
-				{ href: '/documents/instructions', label: 'Work Instructions', icon: 'M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z' },
-				{ href: '/validation', label: 'Validation', icon: 'M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z' },
+				{ href: '/manufacturing/print-barcodes/zebra', label: 'Print Barcodes (Zebra)', icon: 'M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z' },
 				{ href: '/cv', label: 'Computer Vision', icon: 'M15 12a3 3 0 11-6 0 3 3 0 016 0z M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z' },
 				{ href: '/shipping', label: 'Shipping', icon: 'M13 16V6a1 1 0 00-1-1H4a1 1 0 00-1 1v10a1 1 0 001 1h1m8-1a1 1 0 01-1 1H9m4-1V8a1 1 0 011-1h2.586a1 1 0 01.707.293l3.414 3.414a1 1 0 01.293.707V16a1 1 0 01-1 1h-1m-6-1a1 1 0 001 1h1M5 17a2 2 0 104 0m-4 0a2 2 0 114 0m6 0a2 2 0 104 0m-4 0a2 2 0 114 0' },
 				{ href: '/opentrons-clone', label: 'Opentron Clone', icon: 'M9 3h6m-3 0v4m-5 2h10a2 2 0 012 2v9a2 2 0 01-2 2H7a2 2 0 01-2-2v-9a2 2 0 012-2zm2 4h6m-6 4h6m-6 4h3' }
@@ -95,6 +128,7 @@
 			icon: 'M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z',
 			items: [
 				{ href: '/equipment/activity', label: 'Equipment', icon: 'M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35' },
+				{ href: '/spu/cleaning', label: 'Cleaning', icon: 'M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z' },
 				{ href: '/devices', label: 'Devices', icon: 'M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z' },
 				{ href: '/test-results', label: 'Test Results', icon: 'M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z' }
 			]
@@ -128,17 +162,23 @@
 
 	let expandedGroups = $state(new Set<string>());
 
+	// Auto-expand the group that owns the current page. `untrack` matters:
+	// without it the effect depends on expandedGroups itself, so every caret
+	// click re-ran it and instantly re-expanded the active group — collapsing
+	// the group you were "in" looked broken / cross-wired with other groups.
 	$effect(() => {
 		const current = $page.url.pathname;
-		for (const group of filteredGroups) {
-			for (const item of group.items) {
-				const match = item.href === '/' ? current === '/' : current.startsWith(item.href);
-				if (match) {
+		const groups = filteredGroups;
+		untrack(() => {
+			let changed = false;
+			for (const group of groups) {
+				if (!expandedGroups.has(group.label) && group.items.some((item) => matchesItem(item, current))) {
 					expandedGroups.add(group.label);
-					break;
+					changed = true;
 				}
 			}
-		}
+			if (changed) expandedGroups = new Set(expandedGroups);
+		});
 	});
 
 	function toggleGroup(label: string) {
@@ -158,16 +198,21 @@
 	const activeLabel = $derived.by(() => {
 		const current = $page.url.pathname;
 		for (const item of allNavItems) {
-			if (item.href === '/') {
-				if (current === '/') return item.label;
-			} else if (current.startsWith(item.href)) {
-				return item.label;
-			}
+			if (matchesItem(item, current)) return item.label;
 		}
 		return 'Navigate';
 	});
 
+	function matchesItem(item: NavItem, currentPath: string): boolean {
+		if (item.href === '/') return currentPath === '/';
+		if (item.exact) return currentPath === item.href;
+		const paths = [item.href, ...(item.sectionPaths ?? [])];
+		return paths.some((p) => currentPath === p || currentPath.startsWith(p + '/'));
+	}
+
 	function isActive(href: string, currentPath: string): boolean {
+		const item = allNavItems.find((i) => i.href === href);
+		if (item) return matchesItem(item, currentPath);
 		if (href === '/') return currentPath === '/';
 		return currentPath.startsWith(href);
 	}

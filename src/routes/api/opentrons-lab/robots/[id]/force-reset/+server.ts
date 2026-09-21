@@ -18,7 +18,7 @@ export const config = { maxDuration: 60 };
 
 // A robot is "locked" in the Run Wizard while a run sits in one of these statuses.
 const WAX_PAGE_OWNED = ['Setup', 'Loading', 'Running', 'Awaiting Removal', 'Cooling', 'QC', 'Storage'];
-const REAGENT_PAGE_OWNED = ['Setup', 'Loading', 'Running', 'Inspection', 'Top Sealing', 'Storage'];
+const REAGENT_PAGE_OWNED = ['Setup', 'Loading', 'Running', 'Inspection'];
 
 export const POST: RequestHandler = async ({ params, locals }) => {
 	if (!locals.user) error(401, 'Not authenticated');

@@ -1,7 +1,7 @@
 import { fail, redirect } from '@sveltejs/kit';
+import { env } from '$env/dynamic/private';
 import type { Actions, PageServerLoad } from './$types';
 
-const PASSWORD = 'opadmin';
 const COOKIE_NAME = 'ot_operator_auth';
 const COOKIE_VALUE = 'ok';
 const TTL_SECONDS = 8 * 60 * 60;
@@ -19,7 +19,11 @@ export const actions: Actions = {
 		const form = await request.formData();
 		const password = form.get('password')?.toString() ?? '';
 		const next = form.get('next')?.toString() || url.searchParams.get('next') || '/opentrons-clone';
-		if (password !== PASSWORD) {
+		// Password lives in env (OT_OPERATOR_PASSWORD), never in the repo. Unset = disabled.
+		if (!env.OT_OPERATOR_PASSWORD) {
+			return fail(503, { error: 'Operator login is not configured (OT_OPERATOR_PASSWORD unset)' });
+		}
+		if (password !== env.OT_OPERATOR_PASSWORD) {
 			return fail(401, { error: 'Wrong password' });
 		}
 		cookies.set(COOKIE_NAME, COOKIE_VALUE, {

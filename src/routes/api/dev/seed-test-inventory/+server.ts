@@ -1,6 +1,7 @@
 import { json } from '@sveltejs/kit';
 import { connectDB, generateId, Consumable, Equipment, LotRecord, CartridgeRecord, EquipmentLocation } from '$lib/server/db';
 import { WaxFillingRun } from '$lib/server/db/models/wax-filling-run.js';
+import { isAdmin } from '$lib/server/permissions';
 import type { RequestHandler } from './$types';
 
 const TEST_PREFIX = 'TEST-';
@@ -8,6 +9,7 @@ const COUNT = 200;
 
 export const POST: RequestHandler = async ({ locals }) => {
 	if (!locals.user) return json({ error: 'Unauthorized' }, { status: 401 });
+	if (!isAdmin(locals.user)) return json({ error: 'Admin access required' }, { status: 403 });
 	await connectDB();
 
 	const results: Record<string, number | string[]> = {};

@@ -13,6 +13,8 @@
  */
 
 import { connectDB, OpentronsRobot, Ot2BridgeCommand, ScannerEvent, generateId, LabwareDefinition } from '$lib/server/db';
+import { labwareNamesReferencedBy } from './labware-refs';
+import { isHardenedRobot, rolloutNote } from '$lib/server/services/deck-calibration/rollout';
 
 const DEFAULT_PORT = 31950;
 
@@ -308,14 +310,71 @@ async function directUpload(robot: any, fileName: string, bytes: Uint8Array, lab
  * the bridge (cloud → daemon) or direct (lab LAN) transport automatically.
  */
 export async function robotUploadProtocol(robot: any, fileName: string, bytes: Uint8Array): Promise<UploadedProtocol> {
-	// Bundle the BIMS-managed labware library so the robot resolves a protocol's
-	// custom labware at run time (the OT-2 resolves from what's bundled at upload).
+	// Bundle the BIMS-managed labware the protocol actually loads, so the robot
+	// resolves its custom labware at run time (the OT-2 resolves from what's
+	// bundled at upload).
+	//
+	// This used to ship the ENTIRE library on every upload. That was wasteful and
+	// unsafe: two definitions sharing a loadName produce the same multipart
+	// filename, and which one the robot keeps is undefined — so a stale copy
+	// could silently win over freshly-calibrated geometry. Narrowing to the
+	// referenced set, and hard-failing on ambiguity, removes that class of bug.
 	await connectDB();
-	const defs = await LabwareDefinition.find().select('fileName loadName definition').lean() as any[];
+	// Gated per robot: narrowing can fail an upload that previously succeeded
+	// (missing or ambiguous definition), so it stays off until a robot is opted in.
+	const narrow = isHardenedRobot(robot);
+	const referenced = narrow ? labwareNamesReferencedBy(new TextDecoder().decode(bytes)) : [];
+	console.log(`[opentrons] ${fileName}: ${rolloutNote(robot)}`);
+
+	let defs: any[];
+	if (referenced.length) {
+		defs = await LabwareDefinition.find({ loadName: { $in: referenced } })
+			.select('fileName loadName namespace version definition')
+			.lean() as any[];
+
+		const found = new Set(defs.map((d) => String(d.loadName)));
+		const missing = referenced.filter((n) => !found.has(n));
+		if (missing.length) {
+			throw new Error(
+				`Protocol ${fileName} loads labware missing from the BIMS library: ${missing.join(', ')}. ` +
+					`Upload the definition(s) before deploying this protocol.`
+			);
+		}
+		const byName = new Map<string, number>();
+		for (const d of defs) byName.set(String(d.loadName), (byName.get(String(d.loadName)) ?? 0) + 1);
+		const ambiguous = [...byName.entries()].filter(([, c]) => c > 1);
+		if (ambiguous.length) {
+			throw new Error(
+				`Refusing to upload: ${ambiguous.map(([n, c]) => `${n} matches ${c} definitions`).join('; ')}. ` +
+					`The robot would keep an arbitrary one. Archive the duplicates first.`
+			);
+		}
+	} else {
+		// Legacy path: the whole library. Also the fallback when narrowing is on but
+		// nothing parsed — better a fat bundle than a protocol with no custom labware.
+		if (narrow) console.warn(`[opentrons] ${fileName}: no load_labware calls parsed; bundling full library`);
+		defs = await LabwareDefinition.find().select('fileName loadName namespace version definition').lean() as any[];
+	}
+
 	const labware = defs.map((d) => {
 		const fn = (d.fileName && String(d.fileName).endsWith('.json')) ? String(d.fileName) : `${d.loadName}.json`;
 		return { fileName: fn, json: JSON.stringify(d.definition) };
 	});
+
+	// Two parts with the same filename in one multipart body = undefined winner.
+	const seen = new Map<string, string>();
+	for (const d of defs) {
+		const fn = (d.fileName && String(d.fileName).endsWith('.json')) ? String(d.fileName) : `${d.loadName}.json`;
+		const prev = seen.get(fn);
+		if (prev && prev !== d.loadName) {
+			throw new Error(
+				`Refusing to upload: "${prev}" and "${d.loadName}" both bundle as "${fn}". ` +
+					`Rename one definition's fileName so the robot cannot keep the wrong geometry.`
+			);
+		}
+		seen.set(fn, String(d.loadName));
+	}
+	console.log(`[opentrons] ${fileName}: bundling ${labware.length} labware def(s): ${defs.map((d) => d.loadName).join(', ')}`);
 
 	if (resolveTransport() === 'bridge') {
 		const fileB64 = Buffer.from(bytes).toString('base64');

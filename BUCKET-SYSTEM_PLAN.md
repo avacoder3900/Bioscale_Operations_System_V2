@@ -479,12 +479,27 @@ Identity stays on `_id` deliberately: the print flow cannot reprint a specific U
 sticker is *replaced* (`relabel` ledger event) and history survives. `resolveBucketId()` — `_id`
 first, then `barcode`, matched in either case — backs every scan path.
 
-**Collision guard.** A tub wearing a UUID sticker scans exactly like a cartridge.
-`assertNotBucketLabel()` is called at every place a `CartridgeRecord` is born — WI-01 scan-in,
-`cv/induct`, `quick-reagent-test`, `quick-wax-fill`, `quick-wax-store` — and refuses a bucket's
-label with a readable 409. Conversely, assignment refuses a code that is already a cartridge,
-another bucket's sticker, or a `BKT-` id. **This guard is the only thing between a bucket
-sticker and a phantom cartridge; any new cartridge-genesis path must call it.**
+**Collision guard.** A tub wearing a UUID sticker scans exactly like a cartridge, so every place
+a `CartridgeRecord` can be born refuses a bucket's label with a readable message. As of the
+merge with `master` (2026-09-21) those places are:
+
+| Genesis path | How it creates | Guard |
+|---|---|---|
+| WI-01 `scanBackedCartridge` | `.create()` | `assertNotBucketLabel` → 409 |
+| `cv/induct` | `.create()` | `assertNotBucketLabel` → 409 |
+| `quick-wax-fill` | `.create()` | `assertNotBucketLabel` (its catch surfaces the message) |
+| `state-change` ("Create unknown barcodes") | `.create()` | `resolveBucketId` → rejected row |
+| `wax-filling` deck load, **test mode** | `bulkWrite` **upsert** | `findBucketLabels` → 400 |
+| `reagent-filling` deck load (stub for unknown ids) | `bulkWrite` **upsert** | `findBucketLabels` → 400 |
+
+`quick-reagent-test` became a redirect to `state-change` on master and `quick-wax-store` was
+deleted there, so their guards went with them. Conversely, assignment refuses a code that is
+already a cartridge, another bucket's sticker, or a `BKT-` id.
+
+**This guard is the only thing between a bucket sticker and a phantom cartridge; any new
+cartridge-genesis path must call it.** When looking for such paths, search for `bulkWrite` with
+`upsert: true` / `$setOnInsert` as well as `.create(` — the first sweep searched only for
+`.create(` and missed both upsert paths above; they were found during the master merge.
 
 ---
 

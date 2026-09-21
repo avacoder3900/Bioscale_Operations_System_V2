@@ -20,6 +20,55 @@
 	let confirming = $state(false);
 	let addError = $state<string | null>(null);
 
+	// ── Preview expiry ───────────────────────────────────────────────────
+	// A minted preview holds a `reserved` BarcodeSheetBatch row that the
+	// server will only let you confirm once, and only before expiresAt. This
+	// countdown is UX ONLY — it exists so an operator who left a tab open
+	// overnight finds out before they walk to the printer, not after. It is
+	// deliberately NOT the safety mechanism: the browser clock can be wrong,
+	// the tab can be throttled while backgrounded, and the page can be
+	// restored from bfcache with a frozen timer. The atomic claim in
+	// ?/addToInventory is what actually prevents a stale window from
+	// double-committing.
+	let nowMs = $state(Date.now());
+	const expiresAtMs = $derived(
+		form && 'success' in form && form.success ? (form.expiresAtMs ?? null) : null
+	);
+	const msLeft = $derived(expiresAtMs === null ? null : expiresAtMs - nowMs);
+	// The server rejected the claim as expired. It is the authority — a client
+	// whose clock runs slow can still think there's time left, so this latches
+	// the expired UI regardless of what the countdown believes.
+	let serverExpired = $state(false);
+	const previewExpired = $derived(serverExpired || (msLeft !== null && msLeft <= 0));
+
+	// Tick only while a live preview is on screen; a bare setInterval here
+	// would keep firing on the empty form forever.
+	$effect(() => {
+		// Re-runs whenever a new batch is minted (new expiresAtMs), which is
+		// exactly when a latched server verdict from the previous batch has to
+		// be cleared — otherwise one expiry would poison every later preview.
+		serverExpired = false;
+		if (expiresAtMs === null) return;
+		nowMs = Date.now();
+		const id = setInterval(() => (nowMs = Date.now()), 1000);
+		// Backgrounded tabs get throttled to ~1/min, so resync on return
+		// rather than letting the displayed clock drift behind reality.
+		const resync = () => (nowMs = Date.now());
+		document.addEventListener('visibilitychange', resync);
+		window.addEventListener('pageshow', resync);
+		return () => {
+			clearInterval(id);
+			document.removeEventListener('visibilitychange', resync);
+			window.removeEventListener('pageshow', resync);
+		};
+	});
+
+	const countdownLabel = $derived.by(() => {
+		if (msLeft === null || msLeft <= 0) return '';
+		const total = Math.ceil(msLeft / 1000);
+		return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
+	});
+
 	// ── Printed-label layout calibration ─────────────────────────────────
 	// Operator-adjustable alignment so the rendered sheet can be nudged to
 	// match the physical Avery 94102 stickers without a code change. Defaults
@@ -69,6 +118,16 @@
 	// confirms or discards the batch.
 	function printAndReset() {
 		if (printing) return;
+		// Refuse to send an expired preview to the printer at all. Printing it
+		// would burn a physical sheet whose labels the server will then refuse
+		// to add to inventory — the worst outcome, because the operator ends up
+		// holding real stickers that BIMS has no record of.
+		if (previewExpired) {
+			addError =
+				'This preview expired before it was printed. Generate a fresh batch — nothing was printed or counted.';
+			showAddPrompt = true;
+			return;
+		}
 		printing = true;
 		const cleanup = () => {
 			window.removeEventListener('afterprint', cleanup);
@@ -256,8 +315,9 @@
 			<h1 class="text-xl font-semibold" style="color: var(--color-tron-cyan)">Print Cartridge Barcodes</h1>
 			<p class="mt-1 text-xs" style="color: var(--color-tron-text-secondary)">
 				Avery 94102 — 8&times;10 grid, 80 labels per sheet (¾&quot; square). Each print mints fresh
-				<code class="font-mono text-[11px]" style="color: var(--color-tron-cyan)">CART-NNNNNN</code>
-				barcodes; uniqueness is enforced atomically against existing cartridges.
+				UUID barcodes; uniqueness is enforced atomically against existing cartridges.
+				Printing to the Zebra ZT230 roll printer instead? Use the
+				<a href="/manufacturing/print-barcodes/zebra" class="underline" style="color: var(--color-tron-cyan)">Zebra page</a>.
 			</p>
 		</div>
 
@@ -443,13 +503,25 @@
 					Review the {form.sheetsToPrint ?? 1}-sheet simulation below — clicking Print Sheet will print all {form.sheetsToPrint ?? 1} pages in one job.
 				</div>
 
+				{#if previewExpired}
+					<div class="rounded border border-amber-500/50 bg-amber-900/20 p-2 text-xs text-amber-200">
+						This preview has expired and can no longer be printed or counted. Generate a new
+						batch — no sheets or labels were deducted.
+					</div>
+				{:else if countdownLabel}
+					<div class="text-[11px]" style="color: var(--color-tron-text-secondary)">
+						Preview expires in <strong class="font-mono" style="color: var(--color-tron-text)">{countdownLabel}</strong>
+						— print and confirm before then, or generate a fresh batch.
+					</div>
+				{/if}
+
 				<button
 					type="button"
 					onclick={printAndReset}
-					disabled={printing}
+					disabled={printing || previewExpired}
 					class="rounded border border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)] px-4 py-2 text-sm font-semibold text-black hover:opacity-90 disabled:opacity-50"
 				>
-					{printing ? 'Printing…' : 'Print Sheet'}
+					{#if previewExpired}Expired — generate a new batch{:else if printing}Printing…{:else}Print Sheet{/if}
 				</button>
 			</div>
 		{/if}
@@ -527,7 +599,7 @@
      No:   discards the minted batch (UUIDs are stateless; nothing to
            clean up) and resets the page. -->
 {#if showAddPrompt && form && 'barcodes' in form && form.barcodes?.length}
-	{@const f = form as { barcodes: string[]; sheetsToPrint?: number; skip?: number; firstSheetCount?: number }}
+	{@const f = form as { barcodes: string[]; batchId?: string; sheetsToPrint?: number; skip?: number; firstSheetCount?: number }}
 	<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 print:hidden">
 		<div class="w-full max-w-md rounded-lg border border-[var(--color-tron-cyan)]/40 bg-[var(--color-tron-surface)] p-5 shadow-2xl">
 			<h3 class="text-lg font-semibold" style="color: var(--color-tron-cyan)">Add to inventory?</h3>
@@ -542,6 +614,18 @@
 			<p class="mt-2 text-xs" style="color: var(--color-tron-text-secondary)">
 				Choose <em>No</em> if the print failed, was cancelled, or you don't want to count this batch.
 			</p>
+
+			{#if previewExpired}
+				<div class="mt-3 rounded border border-amber-500/50 bg-amber-900/20 p-2 text-xs text-amber-200">
+					This preview expired, so it can no longer be added to inventory. If a sheet was
+					printed, <strong>discard it</strong> — those labels were never recorded and must not be
+					put on cartridges. Then generate a fresh batch.
+				</div>
+			{:else if countdownLabel}
+				<p class="mt-3 text-xs" style="color: var(--color-tron-text-secondary)">
+					Expires in <strong class="font-mono">{countdownLabel}</strong>
+				</p>
+			{/if}
 
 			{#if addError}
 				<div class="mt-3 rounded border border-red-500/50 bg-red-900/20 p-2 text-xs text-red-300">
@@ -564,6 +648,7 @@
 							await goto($page.url.pathname, { invalidateAll: true, replaceState: true });
 						} else if (result.type === 'failure') {
 							addError = (result.data as any)?.addError ?? 'Failed to add to inventory';
+							if ((result.data as any)?.addExpired) serverExpired = true;
 							confirming = false;
 						} else {
 							confirming = false;
@@ -571,6 +656,7 @@
 					};
 				}}
 			>
+				<input type="hidden" name="batchId" value={f.batchId ?? ''} />
 				<input type="hidden" name="sheetsToPrint" value={f.sheetsToPrint ?? 1} />
 				<input type="hidden" name="totalLabels" value={f.barcodes.length} />
 				<input type="hidden" name="skip" value={f.skip ?? 0} />
@@ -588,10 +674,10 @@
 				</button>
 				<button
 					type="submit"
-					disabled={confirming}
+					disabled={confirming || previewExpired}
 					class="rounded border border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)] px-4 py-2 text-sm font-semibold text-black hover:opacity-90 disabled:opacity-50"
 				>
-					{confirming ? 'Adding…' : 'Yes, add to inventory'}
+					{#if previewExpired}Expired{:else if confirming}Adding…{:else}Yes, add to inventory{/if}
 				</button>
 			</form>
 		</div>

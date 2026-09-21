@@ -41,7 +41,10 @@ const reagentBatchRecordSchema = new Schema({
 		enum: [
 			// Legacy values (keep for existing data)
 			'setup', 'running', 'completed', 'aborted', 'voided',
-			// Full workflow stages
+			// Full workflow stages. 'Inspection' (REAGENT-INSPECT-AFTER-TOPSEAL) and
+			// 'Top Sealing' / 'Storage' (REAGENT-TOPSEAL-IMPLICIT, 2026-08-19) are
+			// retired — kept so historical rows validate. Live flow: Setup →
+			// Loading → Running → Completed.
 			'Setup', 'Loading', 'Running', 'Inspection', 'Top Sealing', 'Storage',
 			// Terminal states (PascalCase)
 			'Completed', 'Aborted', 'Cancelled'
@@ -102,6 +105,11 @@ const reagentBatchRecordSchema = new Schema({
 	// Mixed because protocol parameter schemas evolve; the reagent protocol's
 	// add_parameters() is the source of truth for valid keys.
 	protocolParameters: Schema.Types.Mixed,
+	// Operator's planned cartridge count, saved at the params step BEFORE any
+	// scan — the scanner sweep clamps its default walk to this so a lost browser
+	// tab state can no longer make it sweep all 24 positions on a partial fill.
+	plannedCartridgeCount: Number,
+	plannedCountAt: Date,
 	// OT-2 run id (UUID, returned by `POST /runs` on the robot). Lets us
 	// pull commands/errors from the robot for this specific run.
 	opentronsRunId: String,
@@ -129,9 +137,12 @@ reagentBatchRecordSchema.index({ status: 1, createdAt: -1 });
 reagentBatchRecordSchema.index({ 'cartridgesFilled.cartridgeId': 1 });
 
 // Robot + deck are held through the filling-page-owned stages only.
-// Once status passes those (Top Sealing / Storage), the deck is off and
-// free to reuse — but cartridges still sit on the holding tray through
-// Storage, so the tray uniqueness window is wider (non-terminal).
+// REAGENT-TOPSEAL-IMPLICIT: 'Top Sealing' / 'Storage' are retired (a run ends at
+// Running → Completed), so in practice the two windows below are the same. The
+// retired values are deliberately KEPT in the partialFilterExpression — changing
+// it would make Mongoose's index sync conflict with the existing
+// `tray_active_unique` index in Atlas (same name, different options). They are
+// inert: nothing writes those statuses any more.
 const REAGENT_PAGE_OWNED = ['Setup', 'Loading', 'Running', 'Inspection',
 	'setup', 'loading', 'running', 'inspection'];
 const REAGENT_NON_TERMINAL = ['Setup', 'Loading', 'Running', 'Inspection', 'Top Sealing', 'Storage',

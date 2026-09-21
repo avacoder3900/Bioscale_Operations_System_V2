@@ -91,11 +91,21 @@ export const actions: Actions = {
 		);
 
 		try {
-			const result = await syncDevices();
+			const result = await syncDevices({ _id: locals.user!._id, username: locals.user!.username });
+			const suffix = result.created.length ? ` Created ${result.created.length} new SPU(s).` : '';
 			if (result.errors.length) {
-				return { success: true, message: `Synced ${result.synced} device(s) with ${result.errors.length} error(s).` };
+				return {
+					success: true,
+					message: `Synced ${result.synced} device(s) with ${result.errors.length} error(s).${suffix}`,
+					created: result.created,
+					errors: result.errors
+				};
 			}
-			return { success: true, message: `Successfully synced ${result.synced} device(s).` };
+			return {
+				success: true,
+				message: `Successfully synced ${result.synced} device(s).${suffix}`,
+				created: result.created
+			};
 		} catch (err) {
 			await Integration.updateOne(
 				{ type: 'particle' },
@@ -110,8 +120,9 @@ export const actions: Actions = {
 		await connectDB();
 
 		try {
-			const result = await linkDevicesToSpus();
+			const result = await linkDevicesToSpus({ _id: locals.user!._id, username: locals.user!.username });
 			const parts = [];
+			if (result.created.length) parts.push(`${result.created.length} SPU(s) auto-created`);
 			if (result.linked) parts.push(`${result.linked} SPU(s) linked`);
 			if (result.alreadyLinked) parts.push(`${result.alreadyLinked} already linked`);
 			if (result.unmatched.length) parts.push(`${result.unmatched.length} unmatched`);
@@ -120,6 +131,8 @@ export const actions: Actions = {
 			return {
 				success: true,
 				message: parts.join(', ') + '.',
+				created: result.created,
+				errors: result.errors,
 				unmatched: result.unmatched
 			};
 		} catch (err) {

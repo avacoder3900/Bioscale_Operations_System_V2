@@ -44,7 +44,6 @@
 				finalized: boolean;
 				prior: Record<string, { status: string; sessionId: string | null; completedAt: string | null; failureReasons: string[] } | null>;
 			}>;
-			thermoCriteria: { minTemp: number; maxTemp: number } | null;
 		};
 		form: {
 			error?: string;
@@ -74,7 +73,13 @@
 	let editingName = $state(false);
 
 	// Per-SPU parsed thermo file (readings JSON + name) for the upload forms
-	let thermoParsed = $state<Record<string, { readingsJson: string; fileName: string; count: number }>>({});
+	// Which SPUs have a file staged on their picker. Only the filename is kept —
+	// the file itself rides on the form input and is read by the server, so the
+	// board never holds a parsed copy that could be posted under another SPU.
+	let thermoStaged = $state<Record<string, string>>({});
+	// The logger writes naive wall-clock text; the server needs the operator's
+	// zone to resolve it onto the same timeline as existing sessions.
+	let tzOffset = $state(new Date().getTimezoneOffset());
 
 	// Live refresh: re-fetch run data every 10s (when the tab is visible) so
 	// validations completed elsewhere — another tab, another operator, the
@@ -226,16 +231,11 @@
 		</div>
 	{/if}
 
-	{#if !data.thermoCriteria}
-		<div class="rounded-lg border border-[var(--color-tron-orange)]/30 bg-[var(--color-tron-orange)]/10 p-4 text-sm text-[var(--color-tron-orange)]">
-			The standard thermocouple acceptance range is not configured yet — uploads are recorded as
-			<span class="font-semibold">uploaded</span> and can be evaluated once the range is set.
-		</div>
-	{:else}
-		<p class="tron-text-muted text-sm">
-			Thermocouple acceptance range: {data.thermoCriteria.minTemp}°C – {data.thermoCriteria.maxTemp}°C
-		</p>
-	{/if}
+	<p class="tron-text-muted text-sm">
+		Thermocouple data is judged by the operator — upload the readings, then Pass or Fail
+		the SPU on the min/max/mode shown. That verdict is the record; there is no automatic
+		acceptance range.
+	</p>
 
 	<!-- SPU × step matrix -->
 	<div class="tron-card overflow-x-auto">
@@ -308,25 +308,26 @@
 										</span>
 									{/if}
 									{#if step === 'thermocouple' && cell.status === 'uploaded' && inProgress}
-										<!-- Verdict on the displayed values (manual until the
-										     larger-dataset acceptance range is defined) -->
+										<!-- The verdict on the displayed values. This IS the
+										     judgment — it goes through recordThermoVerdict, so the
+										     session and the SPU rollup are judged with the cell. -->
 										<div class="flex gap-2">
 											<form method="POST" action="?/recordStepResult" use:enhance>
 												<input type="hidden" name="spuId" value={member.spuId} />
 												<input type="hidden" name="step" value={step} />
 												<input type="hidden" name="outcome" value="passed" />
-												<input type="hidden" name="notes" value="Approved on mode/min/max review" />
+												<input type="hidden" name="notes" value="Passed on operator review of min/max/mode" />
 												<button type="submit" class="rounded-lg bg-[var(--color-tron-green)] px-3 py-1.5 text-xs font-semibold text-[var(--color-tron-bg-primary)] hover:bg-[var(--color-tron-green)]/90">
-													Approve
+													Pass
 												</button>
 											</form>
 											<form method="POST" action="?/recordStepResult" use:enhance>
 												<input type="hidden" name="spuId" value={member.spuId} />
 												<input type="hidden" name="step" value={step} />
 												<input type="hidden" name="outcome" value="failed" />
-												<input type="hidden" name="notes" value="Rejected on mode/min/max review" />
+												<input type="hidden" name="notes" value="Failed on operator review of min/max/mode" />
 												<button type="submit" class="rounded-lg border border-[var(--color-tron-red)]/50 px-3 py-1.5 text-xs font-semibold text-[var(--color-tron-red)] hover:bg-[var(--color-tron-red)]/10">
-													Reject
+													Fail
 												</button>
 											</form>
 										</div>
@@ -372,12 +373,6 @@
 												<button type="button" onclick={() => togglePanel(`${panelKey}:upload`)} class="text-xs text-[var(--color-tron-orange)] hover:underline">
 													{cell.status === 'not_started' ? 'Upload data' : cell.status === 'uploaded' ? 'Re-upload' : 'Run again'}
 												</button>
-												{#if cell.status === 'uploaded' && data.thermoCriteria}
-													<form method="POST" action="?/evaluateThermo" use:enhance>
-														<input type="hidden" name="spuId" value={member.spuId} />
-														<button type="submit" class="text-xs text-[var(--color-tron-cyan)] hover:underline">Evaluate</button>
-													</form>
-												{/if}
 											{:else if step === 'magnetometer'}
 												<a href="/validation/magnetometer?udi={encodeURIComponent(member.udi)}&runId={run._id}" class="text-xs text-[var(--color-tron-orange)] hover:underline">
 													{cell.status === 'not_started' || cell.status === 'in_progress' ? 'Run test →' : 'Run again →'}
@@ -395,18 +390,20 @@
 
 									<!-- Thermo upload panel -->
 									{#if openPanel === `${panelKey}:upload` && step === 'thermocouple' && inProgress}
-										<form method="POST" action="?/uploadThermo" use:enhance={submitAndClose} class="mt-2 w-64 space-y-2 rounded-lg border border-[var(--color-tron-border)] p-3">
+										<form method="POST" action="?/uploadThermo" enctype="multipart/form-data" use:enhance={submitAndClose} class="mt-2 w-64 space-y-2 rounded-lg border border-[var(--color-tron-border)] p-3">
 											<input type="hidden" name="spuId" value={member.spuId} />
-											<input type="hidden" name="readings" value={thermoParsed[member.spuId]?.readingsJson ?? ''} />
-											<input type="hidden" name="fileName" value={thermoParsed[member.spuId]?.fileName ?? ''} />
+											<input type="hidden" name="tzOffset" value={tzOffset} />
 											<ThermoFileUpload
 												compact
-												onparsed={(p) => thermoParsed[member.spuId] = { readingsJson: p.readingsJson, fileName: p.fileName, count: p.readings.length }}
-												onclear={() => delete thermoParsed[member.spuId]}
+												name="file"
+												onfile={(f) => {
+													if (f) thermoStaged[member.spuId] = f.name;
+													else delete thermoStaged[member.spuId];
+												}}
 											/>
 											<button
 												type="submit"
-												disabled={!thermoParsed[member.spuId]}
+												disabled={!thermoStaged[member.spuId]}
 												class="w-full rounded-lg bg-[var(--color-tron-orange)] px-3 py-2 text-xs font-semibold text-[var(--color-tron-bg-primary)] disabled:cursor-not-allowed disabled:opacity-50"
 											>
 												Upload for {member.udi}
@@ -438,14 +435,12 @@
 						<td class="p-3">
 							<span class="tron-heading font-medium">{passedCount(member)}/{run.steps.length}</span>
 							{#if allPassed(member) && data.spuById[member.spuId]?.status === 'validating'}
-								<form method="POST" action="?/markValidated" use:enhance class="mt-1">
-									<input type="hidden" name="spuId" value={member.spuId} />
-									<button type="submit" class="rounded-lg bg-[var(--color-tron-green)] px-3 py-1.5 text-xs font-semibold text-[var(--color-tron-bg-primary)] hover:bg-[var(--color-tron-green)]/90">
-										Mark validated
-									</button>
-								</form>
-							{:else if data.spuById[member.spuId]?.status === 'validated'}
-								<span class="block text-xs text-[var(--color-tron-green)]">validated ✓</span>
+								<span class="block text-xs text-[var(--color-tron-green)]">all steps passed ✓</span>
+								<a href="/spu/{member.spuId}" class="block text-xs text-[var(--color-tron-cyan)] hover:underline">
+									Release on SPU page →
+								</a>
+							{:else if data.spuById[member.spuId]?.status === 'released'}
+								<span class="block text-xs text-[var(--color-tron-green)]">released ✓</span>
 							{/if}
 						</td>
 

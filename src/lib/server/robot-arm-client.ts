@@ -159,6 +159,52 @@ export interface PortStatus {
 	diagnosis?: string;
 }
 
+// GET /health/preflight — the Pi's own readiness assessment. Every check
+// carries a human-readable `detail`; `diagnosis` names the concrete fix when
+// a port is misconfigured. We render both verbatim rather than re-deriving
+// them in TypeScript, so the two can't drift.
+export interface PreflightCheck {
+	ok: boolean;
+	detail: string;
+	configured?: string;
+	value?: boolean;
+}
+
+export interface ArmPreflight {
+	ok: boolean;
+	service: string;
+	version: string;
+	checks: {
+		fastapi?: PreflightCheck;
+		api_key_configured?: PreflightCheck;
+		leader_port?: PreflightCheck;
+		follower_port?: PreflightCheck;
+		// dry_run.ok is always true — dry-run vs live is a config choice, not a
+		// fault. The state we care about is `value`.
+		dry_run?: PreflightCheck;
+	};
+	candidates?: PortCandidate[];
+	diagnosis?: string;
+	active: { run_id: string; kind: string } | null;
+}
+
+// GET /tasks — the registry parsed from the Pi's src/config/tasks.yaml.
+export interface ArmTask {
+	name: string;
+	version?: string;
+	module?: string;
+	class?: string;
+	description?: string;
+}
+
+// POST /tasks/{name}/run
+export interface ArmTaskStarted {
+	run_id: string;
+	status: string;
+	task_name: string;
+	lot_id: string | null;
+}
+
 export interface SyncZeroRecord {
 	version: string;
 	captured_at: string;
@@ -182,6 +228,117 @@ export interface CalibrationStatus {
 		follower: (number | null)[];
 	} | null;
 	live_error?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Multi-pose joint map (v2 calibration)
+//
+// Sync-zero above captures ONE matched pose and can only ever produce an
+// offset. The joint map captures several poses across each joint's travel and
+// least-squares fits a per-joint scale + offset, which is what actually
+// corrects the leader/follower gearing mismatch (1/345 vs 1/191 vs 1/147).
+// ---------------------------------------------------------------------------
+
+/**
+ * Per-joint trustworthiness of the fitted slope. Mirrors `_fit_one` in
+ * src/utils/joint_map.py on the Pi. Anything other than `ok` means that
+ * joint fell back to scale=1.0 (mirror) with an averaged offset — safe, but
+ * not calibrated. The UI must say which, and why.
+ */
+export type JointFitStatus =
+	| 'ok'
+	| 'no_fit'
+	| 'single_pose'
+	| 'insufficient_range'
+	| 'implausible_scale';
+
+export interface CapturedPose {
+	index: number;
+	captured_at: string;
+	captured_by: TriggeredBy | null;
+	leader: number[];
+	follower: number[];
+}
+
+export interface JointMapFit {
+	scale: number[];
+	offset: number[];
+	residual_max: number[];
+	status: JointFitStatus[];
+	joint_names: string[];
+	n_poses: number;
+	fitted_at: string;
+}
+
+export interface JointMapRecord {
+	version: string;
+	joint_names: string[];
+	poses: CapturedPose[];
+	fit: JointMapFit;
+}
+
+export interface JointMapStatus {
+	map: JointMapRecord | null;
+	live: {
+		joint_names: string[];
+		leader: (number | null)[];
+		follower: (number | null)[];
+		predicted_follower: (number | null)[];
+		/** follower − predicted. Growing with travel ⇒ scale still wrong. */
+		tracking_error: (number | null)[];
+	} | null;
+	live_error: string | null;
+}
+
+// Camera status, mirroring robot-arm/src/server/cameras.py CameraWorker.status().
+// Every field here is reported by the Pi; none of it is inferred or persisted.
+export interface CameraStatus {
+	name: string;
+	device: string | null;
+	running: boolean;
+	requested: { width: number; height: number; fps: number; quality: number };
+	/** [h, w, channels] of the last decoded frame; null before the first frame. */
+	actual_size: number[] | null;
+	frames: number;
+	last_frame_age_s: number | null;
+	stale: boolean;
+	error: string | null;
+}
+
+/**
+ * Fetch raw (non-JSON) bytes from the Pi — currently only camera JPEGs.
+ *
+ * Deliberately separate from robotArmFetch, which JSON.parses every body and
+ * would corrupt a JPEG. Returns the bytes plus the upstream content type so
+ * the proxy route can pass both through unchanged; nothing here re-encodes.
+ */
+export async function robotArmFetchBytes(
+	path: string,
+	opts: { timeoutMs?: number } = {}
+): Promise<{ bytes: ArrayBuffer; contentType: string }> {
+	const apiKey = env.ROBOT_ARM_API_KEY;
+	if (!apiKey) throw new Error('ROBOT_ARM_API_KEY not set in env');
+
+	const controller = new AbortController();
+	const timeout = setTimeout(() => controller.abort(), opts.timeoutMs ?? 5000);
+	try {
+		const res = await fetch(`${baseUrl()}${path}`, {
+			method: 'GET',
+			headers: { 'x-api-key': apiKey },
+			signal: controller.signal
+		});
+		if (!res.ok) {
+			// Error bodies from FastAPI are small JSON/text, safe to read as text.
+			const text = await res.text().catch(() => '');
+			throw new Error(`robot-arm ${res.status}: ${text.slice(0, 200)}`);
+		}
+		return {
+			bytes: await res.arrayBuffer(),
+			contentType: res.headers.get('content-type') ?? 'image/jpeg'
+		};
+	} finally {
+		clearTimeout(timeout);
+	}
 }
 
 export const robotArm = {
@@ -235,10 +392,41 @@ export const robotArm = {
 	listRecordings: () => robotArmFetch<{ recordings: RecordingMeta[] }>('/recordings'),
 	health: () => robotArmFetch<{ status: string; service: string; version: string }>('/health'),
 
+	// Connection health for the ARM-01 panel. Enumerating serial ports is
+	// slower than a bare /health, so give it more room than the 5s default
+	// without going all the way to the 15s used for calibration.
+	// Default 8s suits a page load that exists to diagnose the arm. The ARM-02
+	// layout load overrides it to 3s: it renders on all four tabs, so it must
+	// never be the thing that stalls a page. Safe to call often — the Pi only
+	// checks port *presence* against comports(), it never opens the bus, so
+	// this cannot contend with the calibrate load's servo traffic.
+	preflight: (opts: { timeoutMs?: number } = {}) =>
+		robotArmFetch<ArmPreflight>('/health/preflight', { timeoutMs: opts.timeoutMs ?? 8000 }),
+
+	listTasks: () => robotArmFetch<{ tasks: ArmTask[] }>('/tasks'),
+
+	// Task startup does hardware preflight on the Pi before returning, so it
+	// gets the same 15s allowance as the calibration calls above.
+	startTask: (
+		name: string,
+		body: { lot_id?: string | null; triggered_by?: TriggeredBy; auto_confirm?: boolean } = {}
+	) =>
+		robotArmFetch<ArmTaskStarted>(`/tasks/${encodeURIComponent(name)}/run`, {
+			method: 'POST',
+			body,
+			timeoutMs: 15000
+		}),
+
+	// Live budget is 10s, not 15s: the calibrate load awaits getActive (5s),
+	// then this, then getJointMap sequentially — the serial bus is
+	// single-owner so they cannot be parallelised. 5+10+10=25s has to stay
+	// under the adapter's maxDuration of 30 in svelte.config.js, or Vercel
+	// kills the invocation with a bare 504 and the live_error banner these
+	// wrappers exist to render never gets a chance to.
 	getCalibration: (opts: { live?: boolean } = {}) =>
 		robotArmFetch<CalibrationStatus>(
 			`/calibrate/sync${opts.live ? '?live=true' : ''}`,
-			{ timeoutMs: opts.live ? 15000 : 5000 }
+			{ timeoutMs: opts.live ? 10000 : 5000 }
 		),
 	captureCalibration: (body: { triggered_by?: TriggeredBy } = {}) =>
 		robotArmFetch<SyncZeroRecord>('/calibrate/sync', {
@@ -250,5 +438,85 @@ export const robotArm = {
 		robotArmFetch<{ removed: boolean }>('/calibrate/sync', {
 			method: 'DELETE',
 			timeoutMs: 5000
-		})
+		}),
+
+	// --- multi-pose joint map ---
+
+	// 10s live, for the shared-deadline reason documented on getCalibration.
+	getJointMap: (opts: { live?: boolean } = {}) =>
+		robotArmFetch<JointMapStatus>(`/calibrate/map${opts.live ? '?live=true' : ''}`, {
+			timeoutMs: opts.live ? 10000 : 5000
+		}),
+
+	// Capture opens both buses and briefly holds follower torque before
+	// reading, so it needs the same 15s allowance as a sync-zero capture.
+	capturePose: (body: { triggered_by?: TriggeredBy } = {}) =>
+		robotArmFetch<JointMapRecord>('/calibrate/map/poses', {
+			method: 'POST',
+			body,
+			timeoutMs: 15000
+		}),
+
+	// Delete and clear only touch disk (they refit from saved poses), so the
+	// default timeout is plenty.
+	deletePose: (index: number) =>
+		robotArmFetch<JointMapRecord>(`/calibrate/map/poses/${index}`, {
+			method: 'DELETE',
+			timeoutMs: 5000
+		}),
+	clearJointMap: () =>
+		robotArmFetch<{ removed: boolean }>('/calibrate/map', {
+			method: 'DELETE',
+			timeoutMs: 5000
+		}),
+
+	// --- Cameras (ARM-02) -------------------------------------------------
+	//
+	// listCameras is safe to call from a layout load on every arm page view:
+	// cameras.py:408-411 documents that status "deliberately does *not* start
+	// workers — polling status should never power on a camera as a side
+	// effect". It also touches no serial bus, so it cannot contend with the
+	// calibrate load's 25s of servo traffic (see the getCalibration note).
+	//
+	// Short timeout on purpose: this runs in a layout load that renders on
+	// all four arm tabs, so it must never be the thing that stalls a page.
+	// app.py:857-860 returns an *envelope* — `{"cameras": [...]}` — not a bare
+	// array. Unwrap it here so callers get the array their types promise: the
+	// generic on robotArmFetch is an unchecked cast, so getting this wrong is
+	// invisible to `npm run check` and only shows up as a render-time
+	// "cameras.find is not a function" 500.
+	listCameras: async (): Promise<CameraStatus[]> => {
+		const body = await robotArmFetch<{ cameras?: CameraStatus[] }>('/cameras', {
+			timeoutMs: 3000
+		});
+		return Array.isArray(body?.cameras) ? body.cameras : [];
+	},
+
+	// One JPEG, whatever the worker's latest frame is. The Pi answers from a
+	// slot rather than waiting on the camera, so this returns fast or not at
+	// all; 4s is generous and keeps a wedged camera from pinning the function.
+	getCameraSnapshot: (name: string) =>
+		robotArmFetchBytes(`/cameras/${encodeURIComponent(name)}/snapshot.jpg`, {
+			timeoutMs: 4000
+		}),
+
+	/**
+	 * Exchange the API key for a short-lived, camera-only token the browser
+	 * can put in a stream URL (ARM-02 mode B).
+	 *
+	 * The snapshot proxy above exists because the browser cannot authenticate
+	 * to the Pi. This is the other half of that story: for viewers who *can*
+	 * reach the Pi directly, one token turns the feed into a real MJPEG stream
+	 * instead of a sequence of stills, at ~1 round trip instead of ~1 per frame.
+	 *
+	 * The API key still never leaves the server — only this token does, and it
+	 * reads pixels, cannot move the arm, and expires in minutes (app.py's auth
+	 * note covers the reasoning). Callers must treat the result as a credential:
+	 * never log it, never cache it.
+	 */
+	mintStreamToken: () =>
+		robotArmFetch<{ stream_token?: string; stream_token_expires_in_s?: number }>(
+			'/cameras/auth',
+			{ method: 'POST', timeoutMs: 4000 }
+		)
 };
