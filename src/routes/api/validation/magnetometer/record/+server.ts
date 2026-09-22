@@ -8,7 +8,11 @@ export const config = {
 };
 
 /**
- * Server-side magnetometer capture sweep.
+ * Server-side magnetometer capture (remote record).
+ *
+ * NOT the firmware stage sweep (serial cmd 77) -- that is a USB-only bench
+ * diagnostic with no cloud function. This reads the existing magnet test's
+ * `magnet_validation` variable and records it.
  *
  * Reads magnet_validation off each target device and stores a ValidationSession
  * when the data is new, with no browser session involved — this is the path that
@@ -23,9 +27,9 @@ export const config = {
  *   { "spuId": "..." }               explicit SPU _id
  *   { "all": true }                  every SPU carrying a Particle device id
  */
-const DEFAULT_SWEEP_UDI = 'BT-M01-0000-0253';
+const DEFAULT_RECORD_UDI = 'BT-M01-0000-0253';
 
-async function handleSweep(params: {
+async function handleRecord(params: {
 	udi?: string;
 	udis?: string[];
 	spuId?: string;
@@ -44,7 +48,7 @@ async function handleSweep(params: {
 	} else if (params.udis?.length) {
 		query.udi = { $in: params.udis };
 	} else {
-		query.udi = params.udi ?? DEFAULT_SWEEP_UDI;
+		query.udi = params.udi ?? DEFAULT_RECORD_UDI;
 	}
 
 	const targets = await Spu.find(query)
@@ -55,7 +59,7 @@ async function handleSweep(params: {
 		return {
 			ok: false,
 			error: 'No SPUs matched with a Particle device id',
-			query: params.all ? 'all' : (params.spuId ?? params.udis ?? params.udi ?? DEFAULT_SWEEP_UDI),
+			query: params.all ? 'all' : (params.spuId ?? params.udis ?? params.udi ?? DEFAULT_RECORD_UDI),
 			swept: 0,
 			results: []
 		};
@@ -78,7 +82,7 @@ async function handleSweep(params: {
 			spuUdi: spu.udi,
 			particleDeviceId,
 			actor,
-			source: 'auto-sweep'
+			source: 'auto-record'
 		});
 
 		if (result.status === 'new_result' && result.session) {
@@ -90,10 +94,10 @@ async function handleSweep(params: {
 				resourceType: 'validation_session',
 				resourceId: result.session.id,
 				userId: actor?._id ?? null,
-				username: actor?.username ?? 'system:mag-sweep',
+				username: actor?.username ?? 'system:mag-record',
 				timestamp: new Date(),
 				details: {
-					via: 'magnetometer-sweep',
+					via: 'magnetometer-record',
 					spuId: spu._id,
 					spuUdi: spu.udi,
 					particleDeviceId,
@@ -141,7 +145,7 @@ export const POST: RequestHandler = async ({ request }) => {
 		// empty body is fine — falls through to the default target
 	}
 
-	const result = await handleSweep({
+	const result = await handleRecord({
 		udi: body.udi,
 		udis: body.udis,
 		spuId: body.spuId,
@@ -151,13 +155,13 @@ export const POST: RequestHandler = async ({ request }) => {
 	return json(result, result.ok ? undefined : { status: 404 });
 };
 
-/** GET form so the sweep can be triggered with a plain curl. */
+/** GET form so a bench capture can be triggered with a plain curl. */
 export const GET: RequestHandler = async ({ request, url }) => {
 	if (!authorized(request)) {
 		return json({ error: 'Unauthorized' }, { status: 401 });
 	}
 
-	const result = await handleSweep({
+	const result = await handleRecord({
 		udi: url.searchParams.get('udi') ?? undefined,
 		spuId: url.searchParams.get('spuId') ?? undefined,
 		all: url.searchParams.get('all') === 'true'

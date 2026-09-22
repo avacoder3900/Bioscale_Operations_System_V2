@@ -8,9 +8,14 @@
  * instead of the third.
  *
  * Callers:
- *   - poll/+server.ts   browser-driven, actor = locals.user, source 'auto-poll'
- *   - sweep/+server.ts  API-key driven, actor resolved from the last active
- *                       BIMS session, source 'auto-sweep'
+ *   - poll/+server.ts    browser-driven, actor = locals.user, source 'auto-poll'
+ *   - record/+server.ts  API-key driven, actor resolved from the last active
+ *                        BIMS session, source 'auto-record'
+ *
+ * Note this reads the `magnet_validation` cloud variable, i.e. the output of the
+ * EXISTING magnet test. It has nothing to do with the firmware stage sweep
+ * (serial cmd 77), which is a bench diagnostic and is deliberately not reachable
+ * from BIMS. An earlier name for the record route implied otherwise.
  */
 import crypto from 'crypto';
 import { connectDB, ValidationSession, Integration, Spu, Session, User, generateId } from '$lib/server/db';
@@ -33,9 +38,10 @@ export interface IngestOptions {
 	/** Who the resulting ValidationSession is attributed to. May be null — userId
 	 *  is not required on validationSessionSchema. */
 	actor: IngestActor | null;
-	/** Stored on the session so cron-captured runs stay distinguishable from
-	 *  operator-captured ones. */
-	source: 'auto-poll' | 'auto-sweep';
+	/** Stored on the session so bench-captured runs stay distinguishable from
+	 *  operator-captured ones. Must match validationSessionSchema.source's enum
+	 *  or Mongoose rejects the write. */
+	source: 'auto-poll' | 'auto-record';
 }
 
 export interface IngestResult {
