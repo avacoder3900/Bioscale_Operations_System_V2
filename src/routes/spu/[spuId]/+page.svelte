@@ -217,6 +217,30 @@
 				: 'pending'
 	);
 
+	// Server-computed: which of the six offered validation tests have a run newer
+	// than the servicing reset. Not the same list as VALIDATION_TESTS above —
+	// that one is the three modalities that carry a pass/fail verdict.
+	const validationSince = $derived(
+		data.validationSince ?? { tests: [], ran: 0, passed: 0, total: 6, resetAt: null }
+	);
+
+	// Red / amber / green per test. Colour is never the only carrier — each dot
+	// keeps its name beside it and states its meaning in the tooltip and to
+	// screen readers, so this still reads correctly colour-blind.
+	const DOT = {
+		needed: { color: 'var(--color-tron-red)', label: 'needs test' },
+		ran: { color: 'var(--color-tron-yellow)', label: 'ran, not passed' },
+		passed: { color: 'var(--color-tron-green)', label: 'passed' }
+	} as const;
+	function dot(state: string) {
+		return DOT[state as keyof typeof DOT] ?? DOT.needed;
+	}
+	function dotTitle(t: { name: string; state: string; graded: boolean; lastRunAt: string | null }) {
+		const when = t.lastRunAt ? `last run ${formatDate(t.lastRunAt)}` : 'no run on record';
+		const how = t.graded ? '' : ' (capture only — records no pass/fail)';
+		return `${t.name}: ${dot(t.state).label}${how} — ${when}`;
+	}
+
 	// Only transitions legal from the current status (SPU-INV-07), server-computed.
 
 	// Includes legacy (pre-collapse) values so the transition history renders.
@@ -467,8 +491,39 @@
 							class="rounded-full px-2 py-0.5 font-bold"
 							style="color: {validationOverall === 'passed' ? 'var(--color-tron-green)' : validationOverall === 'failed' ? 'var(--color-tron-red)' : 'var(--color-tron-orange)'}; background: rgba(128,128,128,0.12);"
 						>{validationOverall.toUpperCase()}</span>
+						<span
+							class="rounded-full px-2 py-0.5 font-bold"
+							title="Validation tests green since this unit was last sent to servicing"
+							style="color: {validationSince.passed >= validationSince.total ? 'var(--color-tron-green)' : validationSince.passed > 0 ? 'var(--color-tron-orange)' : 'var(--color-tron-red)'}; background: rgba(128,128,128,0.12);"
+						>{validationSince.passed}/{validationSince.total}</span>
 						<a href="/validation" class="hover:underline" style="color: var(--color-tron-cyan);">Hub &rarr;</a>
 					</span>
+				</div>
+
+				<!-- Status of each of the six tests since the servicing button was
+				     pressed: red needs running, amber ran without passing, green is
+				     good. Blank/sonic/bench record no verdict, so for them the capture
+				     itself is the green state — they can never sit amber. -->
+				<div class="mb-4 rounded-lg border p-3" style="border-color: var(--color-tron-border); background: var(--color-tron-bg-secondary);">
+					<div class="tron-text-muted mb-2 text-xs">
+						{#if validationSince.resetAt}
+							Since servicing started {formatDate(validationSince.resetAt)}
+						{:else}
+							Never serviced — every test ever run on this unit counts
+						{/if}
+					</div>
+					<div class="flex flex-wrap gap-x-4 gap-y-2">
+						{#each validationSince.tests as t (t.key)}
+							<span class="flex items-center gap-1.5 text-xs" title={dotTitle(t)}>
+								<span
+									class="inline-block h-2.5 w-2.5 shrink-0 rounded-full"
+									style="background: {dot(t.state).color}; box-shadow: 0 0 6px {dot(t.state).color};"
+								></span>
+								<span class="sr-only">{dot(t.state).label}:</span>
+								<span style="color: {t.state === 'needed' ? 'var(--color-tron-text-secondary)' : 'var(--color-tron-text)'};">{t.name}</span>
+							</span>
+						{/each}
+					</div>
 				</div>
 				<!-- One column per modality, read left to right: Magnetometer,
 				     Spectrophotometer, Thermocouple. Each stacks its own reading so the
