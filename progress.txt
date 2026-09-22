@@ -13121,3 +13121,37 @@ Deployment: preview - https://bioscale-operations-system-mongodb-l7uzfiwcb.verce
 Source: branch feat/magnetometer-field-magnitude @ commit 4733e3fce310ceee86d33705ec51b971a4b5ff59
 What this deployment is for: testing the real post-merge combination on a branch preview BEFORE
 anything goes to master. Explicitly NOT a production deploy - master is untouched.
+
+================================================================================
+2026-09-22 - master - PRODUCTION: magnetometer field magnitude |B|
+================================================================================
+Merged feat/magnetometer-field-magnitude into master. This is the production release of the
+magnetometer field work: per-channel X/Y/Z plus computed |B| = sqrt(X^2 + Y^2 + Z^2) on both the
+session detail table and the fetch-results page, |B| persisted at ingest, and an API-key
+magnetometer sweep/record endpoint. 16 files, +1132/-266.
+
+DEDUP TRAP - READ THIS BEFORE BELIEVING PROD IS UPDATED
+The branch had master merged into it first, so the merge commit 9db6a3a3 carries tree
+a205cd6a9402e35dda3b8c72253ff25951d78c2c, which is byte-identical to the tree Vercel had already
+built as a preview. An identical tree is the exact condition under which Vercel silently skips
+the production build: master ends up holding the new code while production keeps serving the old
+bundle, and no deployment status appears at all. This progress.txt commit deliberately changes
+the tree so the production build is actually forced. Verify a deployment with environment
+'Production - bioscale-operations-system-mongodb' exists for the FINAL commit on master (the one
+that includes this entry), not merely for the merge commit.
+
+Pre-merge verification: merge was clean (ort, 0 conflicts), branch was 0 behind / 7 ahead of
+origin/master. svelte-check on the merged tree = 130 errors, and all 9 above the 121 branch
+baseline were attributed to master's own commits (8 in routes/spu/+page.svelte, 1 in
+routes/spu/[spuId]/+page.svelte), none to this feature. The 2 errors in the magnetometer session
+page are pre-existing: the template has used well.error since 7c01942b while the local MagWell
+interface never declared an 'error' field. Type-check only; vite build does not typecheck.
+Local production build not attempted (known OOM on this machine).
+
+Previous master tip:  5ddb3d422a39edfd724b35f086997666f4b4fa7e
+Merge commit:         9db6a3a34145ec00a9ba61fd791702de97c0ae25
+Feature branch tip:   437a45e3afd8867a9184f1026b034672b56d1c44
+Deployment: production - https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ the commit carrying this entry
+What this deployment is for: making |B| field magnitude visible in production on the
+magnetometer results pages, and persisting it at ingest so it is searchable per SPU.
