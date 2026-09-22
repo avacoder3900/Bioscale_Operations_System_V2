@@ -13071,3 +13071,31 @@ Files:
 npm run check: 10 errors / 437 warnings — identical to baseline (stash-compared).
 Next: 5000-label production run via scripts/zebra-bulk-print.mts once Jacob confirms roll
 capacity and the recording user.
+
+================================================================================
+2026-09-22 — feat/spu-tweaks — 5000-label ZT230 production run complete (25 × 200), all audits clean
+================================================================================
+Run zebra-bulk-2026-09-22 via scripts/zebra-bulk-print.mts --as=jacob --total=5000 --batch=200,
+on the lab ZT230 (52j150301773, USB) with the new 2026-09-22 layout (commit 6f20e893). ~1 min per
+batch; every batch drained with no paper/ribbon/head flags and confirmed atomically. Mid-run
+(batch 22) Claude Code reaped the wrapper shell for low system memory; the node process itself
+survived and finished unattended — no batch was left reserved-but-printed.
+
+Final audit (script) + independent re-check (read-only, from the written UUID list):
+- 5000 UUIDs, 5000 unique; 0 on cartridge_records; 0 on optical_test_cartridges;
+  0 overlap with the 5,510 ids held by the 39 pre-existing barcode_sheet_batches (any status);
+  each of the 5000 in exactly one batch; 25 batches status=printed; 25 audit_log rows tagged
+  newData.bulkRun=zebra-bulk-2026-09-22 (one per batch, calibration JSON embedded).
+- PT-CT-106: 1691 → 6643. The 48-label gap vs +5000 is two concurrent WI-01 consumptions
+  (19:49:53Z −24, 20:24:43Z −24 — normal lab throughput), so the ledger reconciles exactly.
+- UUID list: %LOCALAPPDATA%\BIMS\zebra-runs\zebra-bulk-2026-09-22-1790106567226.txt
+- Batch ids: mfWgjjyeePGzeI7YOglZw uGvtgcK6RPDEZrAfbm5ij 3PCAV0JMlRKvRjGk-FvYD X8TaKdfIvQEUKxUmWtuov
+  WIazgaUNQ9EzsTL5HUh7g w88Q3K68LUj-Chr0pjOVN O1E3WWom0Ansm32_jlTVu _UkL6daDhvFDjrcLAvcKH
+  t0nzgmiHavBKDtHQjRwKh BA2N3_T4TZqEKi4veAWb1 daIkEAmS9U8kvDXdlQsHJ 0IQj4vlabEAGPqPtpW7_z
+  piWL6GT7JLIOwcLKG5FW6 Qy228vOOeTW2JGqQuryL4 NckdRD657qPzmFGsmEZen sFa-05OuZgAl3LKzqPw8L
+  Qd6qlJvZXU28PmuNehO_m Qc8R3w08joluxs3jUaOGO JCrb3LofEr7Z3Fnqw8sM7 wmryJHvPzD4Nz6MG0tBnD
+  mx6N5K7pLghgiiQ5cjKDG -L5PgM-EEe92MxMPQ5BN- u87ejvZryjl9kKm_A0_9r 43-0eIyNqvMGLcIuh0yXY
+  XqxcTQMP4TCWwhgY2vUCl
+Before the run: 40 unminted random test labels (the 20-label alignment job sent twice) + ~12 more
+from the layout dial-in — all to be destroyed, none in BIMS.
+No code changed in this entry. npm run check: n/a.
