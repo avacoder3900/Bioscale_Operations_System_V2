@@ -104,7 +104,7 @@
 			case 'owner':
 				return s.owner?.toLowerCase() ?? null;
 			case 'validation':
-				return s.validationPassed;
+				return s.validationSincePassed;
 			case 'created':
 				return s.createdAt ? new Date(s.createdAt).getTime() : null;
 		}
@@ -154,6 +154,20 @@
 	function fmtDate(d: string | Date | null | undefined): string {
 		if (!d) return '—';
 		return new Date(d).toLocaleDateString();
+	}
+
+	// Red / amber / green per test, matching the unit page's tracker exactly
+	// (see /spu/[spuId] DOT). Colour is never the only carrier: every dot names
+	// itself and its meaning in the tooltip and to screen readers.
+	const DOT = {
+		needed: { color: 'var(--color-tron-red)', label: 'needs test' },
+		ran: { color: 'var(--color-tron-yellow)', label: 'ran, not passed' },
+		passed: { color: 'var(--color-tron-green)', label: 'passed' }
+	} as const;
+	const dotColor = (state: string) => (DOT[state as keyof typeof DOT] ?? DOT.needed).color;
+	function dotTitle(t: { name: string; state: string; lastRunAt: string | null }) {
+		const label = (DOT[t.state as keyof typeof DOT] ?? DOT.needed).label;
+		return `${t.name}: ${label} — ${t.lastRunAt ? `last run ${fmtDate(t.lastRunAt)}` : 'no run on record'}`;
 	}
 
 	const COLUMNS: { key: SortKey; label: string }[] = [
@@ -266,7 +280,7 @@
 					</thead>
 					<tbody>
 						{#each filtered as s (s.id)}
-							{@const valComplete = s.validationPassed >= s.validationTotal}
+							{@const valComplete = s.validationSincePassed >= s.validationSinceTotal}
 							{@const d = dev(s)}
 							<tr
 								class="cursor-pointer border-b border-[var(--color-tron-border)] transition-colors last:border-0 hover:bg-[var(--color-tron-bg-secondary)]"
@@ -310,11 +324,37 @@
 								<td class="py-2.5 pr-4">{s.batchNumber ?? '—'}</td>
 								<td class="py-2.5 pr-4">{s.owner ?? '—'}</td>
 								<td class="py-2.5 pr-4">
+									<!-- Six dots = the six validation tests, in the same order and with
+									     the same colours as the unit page, so a card and the unit it
+									     links to can never tell different stories. Retired units are
+									     dimmed: their counts are history, not work outstanding. -->
 									<span
-										class="inline-block rounded-full px-2 py-0.5 text-xs font-bold whitespace-nowrap"
-										style="color: {valComplete ? 'var(--color-tron-green)' : 'var(--color-tron-red)'}; background: {valComplete ? 'rgba(0,255,100,0.15)' : 'rgba(255,0,0,0.15)'};"
+										class="inline-flex items-center gap-1.5 whitespace-nowrap"
+										class:opacity-40={s.status === 'retired'}
 									>
-										{s.validationPassed}/{s.validationTotal}
+										<span class="inline-flex gap-1" aria-hidden="true">
+											{#each s.validationTests as t (t.key)}
+												<span
+													class="inline-block h-2 w-2 rounded-full"
+													style="background: {dotColor(t.state)};"
+													title={dotTitle(t)}
+												></span>
+											{/each}
+										</span>
+										<span
+											class="text-xs font-bold"
+											style="color: {valComplete
+												? 'var(--color-tron-green)'
+												: s.validationSincePassed > 0
+													? 'var(--color-tron-orange)'
+													: 'var(--color-tron-red)'};"
+										>
+											{s.validationSincePassed}/{s.validationSinceTotal}
+										</span>
+									</span>
+									<span class="sr-only">
+										{#each s.validationTests as t (t.key)}{dotTitle(t)}.
+										{/each}
 									</span>
 								</td>
 								<td class="py-2.5 whitespace-nowrap text-xs">{fmtDate(s.createdAt)}</td>
