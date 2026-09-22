@@ -94,7 +94,7 @@
 	});
 
 	// ── Calibration (per browser, like the Avery page) ───────────────────
-	const CALIB_KEY = 'zebraLabelCalib.v3'; // v3: 0.74×0.787 / gap 0.187 / y=-8 (ruler-measured 2026-08-18)
+	const CALIB_KEY = 'zebraLabelCalib.v4'; // v4: x=-16 / y=-14, QR up 4, 12-dot spaced UDI (bench 2026-09-22); v3 was the 2026-08-18 ruler set
 	function loadCalib(): Partial<ZebraLabelConfig> | null {
 		if (typeof localStorage === 'undefined') return null;
 		try {
@@ -305,11 +305,18 @@
 			if (g.textLines > 0) {
 				const code = codes[col];
 				const half = Math.ceil(code.length / 2);
-				ctx.font = `${g.textFont * S}px courier, monospace`;
+				ctx.font = `bold ${g.textFont * S}px arial, sans-serif`;
 				ctx.textAlign = 'left';
-				const lineH = Math.round(g.textFont * 1.1) * S;
-				ctx.fillText(code.slice(0, half), ox + g.qrLeft * S, oy + g.textTop * S);
-				ctx.fillText(code.slice(half), ox + g.qrLeft * S, oy + g.textTop * S + lineH);
+				ctx.textBaseline = 'top';
+				const lineH = Math.round(g.textFont * 1.05) * S;
+				for (const [i, line] of [code.slice(0, half), code.slice(half)].entries()) {
+					let x = ox + g.textLeft * S;
+					for (const ch of line) {
+						const hy = ch === '-';
+						ctx.fillText(ch, x + (hy ? g.hyphenNudge * S : 0), oy + g.textTop * S + i * lineH);
+						x += (hy ? g.hyphenPitch : g.charPitch) * S;
+					}
+				}
 			}
 		}
 	});

@@ -12956,3 +12956,118 @@ Deployment: production — building from the GitHub push to master (Vercel dashb
 Source: branch master @ commit ba938949 (feat/spu-tweaks fast-forwarded)
 Retrieve this exact code: git checkout master at commit ba938949
 What this deployment is for: bench page with all four read settings fixed
+
+================================================================================
+2026-09-18 — feat/spu-tweaks — optical QC analysis session (read-only) + one group-membership data fix
+================================================================================
+No code changed. Read-only analysis of production optical data, delivered as two private
+Claude artifacts: the 9_10 optical confirmation group (per unit+channel: direct-laser F1,
+blank-cartridge ΣF1–F8, F7/F3 per replicate) and the 9_18 optical degradation group
+(F7/F3 for each of the 10 repeat scans per unit+channel, plus laser / blank / dark reads).
+Findings worth keeping: 9_10 bad replication tracks the cartridge, not the optics (all three
+channels move together, laser output identical, the low cart has 7–10% in-scan CV; the same
+units are quiet — 0.2–0.85% read-to-read — in 9_18); each channel carries a repeatable offset
+of roughly ±5–10% that survives a change of cartridge (9_10 → 9_18 per-channel r = 0.48,
+n = 67); blank-scan profile differences are mostly 415 nm laser leak mixed into a constant
+plastic-fluorescence hump; F7/F3 climbs ~9% over ten scans because F3 fades faster than F7.
+Observed, not fixed: three identical optical_blank_runs docs for 0247 on 09-17 (same device
+msec) — the blank-test webhook can store one run more than once.
+
+Data change (production, at Jacob's request): cartridge 62332fd4-c5af-42e1-8866-15f17aa82aec
+(second degradation replicate on BT-M01-0000-0245) appended to cartridge_groups
+mYGXZidxJytwh4FF7uNBr "9_18 optical degradation" (31 → 32 members) by a one-off script that
+mirrors the saveGroup append action; audit_log entry FZ6FwV8FtzjUtrKWSTxop. cartridge_records
+untouched. Root cause of it being missing: the 36-cart AF233F18 batch was assigned with the
+Group box empty and the group was hand-curated at 16:58 from the 31 that had run — group
+membership is a static id list, nothing adds later runs. Still outside the group: 29fc1fa5…
+(completed on 0256) and three assigned-but-unrun carts.
+`npm run check`: not run (no code touched).
+
+================================================================================
+2026-09-18 — feat/spu-tweaks — optical variance deep dive, continued (read-only analysis, no code)
+================================================================================
+Still no code changes. Pulled raw per-reading data for every optical analysis group plus the
+cortisol stability lot (serial A67AC662-41434773772-*, arms Day 2/8/15; 42 baseline + 42 test
+readings per channel) and two new 9/18 groups ("testing variance between single scans 9_18" and
+its relabelled-rescan twin "test 2 variance single scan 9_18"). Read the firmware read path
+(brevitest-device firmware, take_spectrophotometer_reading: F1–F4 and F5–F8 are two sequential
+~70 ms exposures after a 20 ms laser warm-up) to test an electrical/timing cause — ruled out.
+What held up after several corrections: F3 tracks F7 at r≈0.9 but only ~80–94% as far, so the
+ratio leaks ~20% of any light-level change; a separate 480-centred component moves on its own
+and carries most of the ratio error; same-cartridge reinsertion is ~4%/read; each channel has a
+fixed ±4.5% offset and a fixed F6/F7 fingerprint; empty-well baseline F3 (~24 counts/read) is a
+channel property (day-to-day r=0.83) and subtracting it changes dose separation more than
+precision (pooled CV 10.1% → 9.7%). Stability lot: net 480 per 1,000 counts of 630 falls
+92 → 76 → 64 (day 2/8/15, zero cortisol) with F6/F7 and F8/F7 flat on identical channels (0223),
+matching the faster 480 fade within a ten-scan run (83% vs 90% remaining).
+Artifacts published privately to Jacob's account (rescan comparison, 480-vs-630 stability, and
+the degradation page gained raw F7/F3 + all-band sheets). Findings also saved to Claude memory.
+`npm run check`: not run (no code touched).
+
+================================================================================
+2026-09-22 — feat/spu-tweaks — 9/21 fleet check analysis: optical QC vs cortisol assay vs mag/thermo (read-only)
+================================================================================
+No code changes. Joined four sources per device+channel and published a private artifact
+("Device Channel Cartridge"): optical group i7eRG7SkU1Z7lWnz3fL89 (29 devices, one cart
+reinserted 3x, 10 scans each), experiment 357 assay at zero cortisol (lot
+A67AC662-42005406718, 27 devices x 3 carts, 42 baseline + 42 test readings), latest mag
+session per device (validation_sessions type 'mag', magResults Z per well/channel) and latest
+thermo session stats. Variance split of log F7/F3: optical = device 2.7 / channel 4.1 /
+reinsertion 4.0 %; assay = device 7.0 / channel 4.2 / cartridge 5.0 % (device 4.0 % once 0236
+is removed — its assay failed with ~1/9 the normal light and F7 already in an "empty-well"
+baseline, while its optical QC was normal). Optical→assay: device means r=0.29, within-device
+channel pattern r=0.39 (14/25 same-highest channel), reinsertion CV vs cartridge CV r=0.08.
+Magnet Z, heater temp (all 44.8–44.9 °C) and thermocouple stats do not predict the assay
+ratio (|r| ≤ 0.2). 14 assay wells flagged >3.5 robust SD as cartridge/fluidics faults.
+`npm run check`: not run (no code touched).
+
+================================================================================
+2026-09-22 — feat/spu-tweaks — calibration feasibility + thermocouple two-sensor findings (read-only)
+================================================================================
+No code changes. Artifact "Device Channel Cartridge" revised: per-channel device chart as % of
+fleet mean (hollow optical rings over assay dots), two-sensor thermocouple section (per-sensor
+modes recomputed from rawData.channelSeries) plus a merged-mode panel for all 20 devices, and
+the device heater reading removed everywhere (Jacob: thermocouple tool is temperature truth).
+Finding: the current thermo upload parser (src/lib/server/validation/parse-thermo.ts ~L196-200,
+restored 2026-09-08 in 8c94ba39) averages the two sensor columns into one series before
+storing, so Sept 8-10 sessions (16 of 27 fleet-check devices) have no per-sensor data; fix +
+re-upload would recover it. Neither sensor's mode nor the merged mode correlates with the
+assay ratio (|r| <= 0.07).
+Calibration: a channel's zero-cortisol offset does NOT transfer across lots/weeks (stability
+lot Sept 4-17 vs exp 357 Sept 21, 27 channel-days, r = -0.26; applying it worsens spread
+7.6 -> 9.7%), while within 357 the device effect is real (split-half r = 0.74) -> device x day
+effect, not a fixed device property. No instrument measure predicts it (LOO R2 <= 0.01). The
+0.8-baseline algorithm is a per-cartridge light-level correction (adjustment tracks F7 level
+r = -0.82), helps at low signal, not device scatter. Jacob's 5-device exclusion list for
+correlation work: 0214, 0222, 0236, 0250, 0251.
+`npm run check`: not run (no code touched).
+
+================================================================================
+2026-09-22 — feat/spu-tweaks — ZT230 re-calibration on a fresh roll + bigger, spaced UDI text
+================================================================================
+Live session at the printer (lab ZT230 52J150301773 over USB, Browser Print 1.3.2). Printed
+alignment rows + random unminted test labels through scripts/zebra-send.ts; nothing minted, no
+DB writes. The August offsets (x +7, y 0) put the design 2.91 mm right / 1.78 mm low of the
+die-cut on this roll → new defaults x -16 (^LS16), y -14 (^LT-14). Alignment then held over a
+20-row check (the 20-label job was accidentally sent twice → 40 test labels, all discarded).
+
+UDI text was hard to read (bold condensed ^A0 at 10 dots; digits bled together). Dialled in
+over six prints: QR lifted 4 dots (top 32 → 28) to buy room; UDI font 10 → 12 dots; every
+character now placed as its own ^FO field at a fixed 7.3-dot pitch (ZPL has no tracking
+command for ^A0), hyphens in a narrower 6.5-dot cell nudged 0.5 right so they sit centred.
+Text block starts 3 dots left of the QR; last char of a line starts ≤142/150, bottom at 154/160.
+
+Files:
+- src/lib/zebra/cartridge-label-zpl.ts — ZT230_2X_075_DEFAULTS offsets; computeGeometry gains
+  qrLift, textFont 0.06", textLeft/charPitch/hyphenPitch/hyphenNudge; labelFields emits
+  per-character fields (no ^FB for the UDI any more).
+- src/lib/zebra/cartridge-label-zpl.test.ts — updated for the new geometry + a test pinning the
+  2026-09-22 values and the per-character placement (12/12 pass).
+- src/routes/manufacturing/print-barcodes/zebra/+page.svelte — CALIB_KEY v3 → v4 so browsers
+  holding the August offsets in localStorage pick up the new defaults; preview draws the
+  per-character layout.
+- scripts/zebra-send.ts — --x/--y now default to the calibrated defaults instead of 0 (the old
+  default silently dropped the +7 and was a trap).
+npm run check: 10 errors / 437 warnings — identical to baseline (stash-compared).
+Next: 5000-label production run via scripts/zebra-bulk-print.mts once Jacob confirms roll
+capacity and the recording user.
