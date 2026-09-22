@@ -18,6 +18,7 @@
 				spuUdi: string | null;
 				spuId: string | null;
 				username: string | null;
+				// Field magnitude sqrt(x²+y²+z²) in gauss, not Z alone.
 				gaussMin: number | null;
 				gaussMax: number | null;
 			}>;
@@ -58,8 +59,8 @@
 		return new Date(dateStr).toLocaleString();
 	}
 
-	function formatGauss(z: number | null): string {
-		return z === null ? '—' : String(z);
+	function formatGauss(g: number | null): string {
+		return g === null || Number.isNaN(g) ? '—' : g.toFixed(1);
 	}
 
 	function getResultBadge(passed: boolean | null, status: string) {
@@ -76,12 +77,12 @@
 	}
 
 	function exportToCsv() {
-		const headers = ['UDI', 'User', 'Gauss Min', 'Gauss Max', 'Result', 'Date'];
+		const headers = ['UDI', 'User', 'Field Min (G)', 'Field Max (G)', 'Result', 'Date'];
 		const rows = sessions.map((s) => [
 			s.spuUdi ?? '',
 			s.username ?? '',
-			s.gaussMin ?? '',
-			s.gaussMax ?? '',
+			s.gaussMin === null ? '' : s.gaussMin.toFixed(1),
+			s.gaussMax === null ? '' : s.gaussMax.toFixed(1),
 			s.passed === true ? 'Passed' : s.passed === false ? 'Failed' : 'Pending',
 			s.testRanAt ? formatDateTime(s.testRanAt) : ''
 		]);
@@ -160,8 +161,8 @@
 								</span>
 							</th>
 						<th class="tron-text-muted px-4 py-3 text-left text-xs font-medium uppercase">User</th>
-						<th class="tron-text-muted px-4 py-3 text-left text-xs font-medium uppercase">Gauss Min</th>
-						<th class="tron-text-muted px-4 py-3 text-left text-xs font-medium uppercase">Gauss Max</th>
+						<th class="tron-text-muted px-4 py-3 text-left text-xs font-medium uppercase">Field Min (G)</th>
+						<th class="tron-text-muted px-4 py-3 text-left text-xs font-medium uppercase">Field Max (G)</th>
 						<th class="tron-text-muted px-4 py-3 text-left text-xs font-medium uppercase">Result</th>
 						<th class="tron-text-muted px-4 py-3 text-left text-xs font-medium uppercase">Test Results</th>
 										</tr>

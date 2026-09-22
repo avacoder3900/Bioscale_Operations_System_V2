@@ -18,9 +18,33 @@ const validationSessionSchema = new Schema({
 	spuUdi: String, particleDeviceId: String,
 	rawData: Schema.Types.Mixed,
 	magResults: Schema.Types.Mixed,
+	// Per-well field magnitudes (chA_mag/chB_mag/chC_mag) ride inside magResults,
+	// which is Mixed and needs no declaration. This session-level rollup is a NEW
+	// TOP-LEVEL field, and strict mode drops undeclared top-level fields WITHOUT
+	// erroring — the same failure mode that quietly broke CV on main. It must stay
+	// declared here. See $lib/server/magnetometer-field.
+	fieldSummary: {
+		type: {
+			unit: String,
+			wellCount: Number,
+			minMag: Number,
+			maxMag: Number,
+			meanMag: Number
+		},
+		default: null,
+		_id: false
+	},
 	overallPassed: Boolean,
 	failureReasons: [String],
 	criteriaUsed: Schema.Types.Mixed,
+	// How this session got created. Same strict-mode trap as fieldSummary above:
+	// magnetometer-ingest has always passed this to ValidationSession.create and
+	// Mongoose has always dropped it on the floor, silently, for want of this line.
+	//   auto-poll    browser-driven poll, actor is the logged-in user
+	//   auto-record  API-key remote read, no browser session involved
+	// Left undefined (not null) when unset — undefined skips enum validation, so
+	// the other writers that never set a source keep working untouched.
+	source: { type: String, enum: ['auto-poll', 'auto-record'] },
 	barcode: String,
 	results: [{
 		_id: { type: String, default: () => generateId() },

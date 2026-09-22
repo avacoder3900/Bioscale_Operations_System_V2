@@ -62,7 +62,11 @@ const spuSchema = new Schema({
 		magnetometer: {
 			status: { type: String, enum: ['pending', 'passed', 'failed'], default: 'pending' },
 			sessionId: String, completedAt: Date, rawData: Schema.Types.Mixed,
-			results: Schema.Types.Mixed, failureReasons: [String], criteriaUsed: Schema.Types.Mixed
+			results: Schema.Types.Mixed, failureReasons: [String], criteriaUsed: Schema.Types.Mixed,
+			// Per-well magnitudes ride inside `results` (Mixed). This session-level
+			// rollup mirror is a NEW field and strict mode would drop it silently
+			// without this line. See $lib/server/magnetometer-field.
+			fieldSummary: Schema.Types.Mixed
 		},
 		thermocouple: {
 			status: { type: String, enum: ['pending', 'passed', 'failed'], default: 'pending' },

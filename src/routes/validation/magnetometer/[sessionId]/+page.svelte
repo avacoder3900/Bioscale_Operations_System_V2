@@ -5,8 +5,11 @@
 
 	interface MagWell {
 		well: number;
+		chA_X: number | null; chB_X: number | null; chC_X: number | null;
+		chA_Y: number | null; chB_Y: number | null; chC_Y: number | null;
 		chA_Z: number | null; chB_Z: number | null; chC_Z: number | null;
 		chA_T: number | null; chB_T: number | null; chC_T: number | null;
+		chA_mag: number | null; chB_mag: number | null; chC_mag: number | null;
 		[key: string]: any;
 	}
 
@@ -45,20 +48,29 @@
 	let { data, form }: Props = $props();
 	let readingResults = $state(false);
 
-	const wells = (data.result?.processedData?.metrics ?? []) as MagWell[];
+	const rawWells = (data.result?.processedData?.metrics ?? []) as MagWell[];
 	const failureReasons = data.result?.processedData?.failureReasons ?? [];
 
-	function zColor(z: number | null): string {
-		if (z === null) return 'var(--color-tron-text-secondary)';
-		if (z >= 3900 && z <= 4500) return 'var(--color-tron-green)';
-		return 'var(--color-tron-red)';
+	// |B| = sqrt(X^2 + Y^2 + Z^2). Prefer the magnitude stored at ingest, but derive it
+	// from the raw components when it is absent, so older sessions — and any session
+	// whose stored magnitude went missing — still render a field value.
+	function magnitude(x: number | null, y: number | null, z: number | null): number | null {
+		if (x == null || y == null || z == null) return null;
+		if (Number.isNaN(x) || Number.isNaN(y) || Number.isNaN(z)) return null;
+		return Math.sqrt(x * x + y * y + z * z);
 	}
 
-	function zBg(z: number | null): string {
-		if (z === null) return 'transparent';
-		if (z >= 3900 && z <= 4500) return 'rgba(0,255,128,0.08)';
-		return 'rgba(255,0,0,0.08)';
+	const wells = rawWells.map((w) => ({
+		...w,
+		chA_mag: w.chA_mag ?? magnitude(w.chA_X, w.chA_Y, w.chA_Z),
+		chB_mag: w.chB_mag ?? magnitude(w.chB_X, w.chB_Y, w.chB_Z),
+		chC_mag: w.chC_mag ?? magnitude(w.chC_X, w.chC_Y, w.chC_Z)
+	}));
+
+	function fmt(v: number | null): string {
+		return v == null || Number.isNaN(v) ? '—' : v.toFixed(1);
 	}
+
 </script>
 
 <div class="space-y-6">
@@ -102,35 +114,52 @@
 		<!-- Z-Values Results Table -->
 		<TronCard>
 			<div class="p-4">
-				<h3 class="tron-text-primary mb-3 font-bold">Z-Axis Readings (Gauss)</h3>
+				<h3 class="tron-text-primary mb-3 font-bold">Magnetic Field Readings (Gauss)</h3>
 				<div class="overflow-x-auto">
 					<table class="w-full text-sm">
 						<thead>
+							<tr class="tron-text-muted" style="border-color: var(--color-tron-border);">
+								<th class="px-2 py-2 text-left" rowspan="2">Well</th>
+								<th class="px-2 py-2 text-center" colspan="4" style="border-left: 1px solid var(--color-tron-border);">Channel A</th>
+								<th class="px-2 py-2 text-center" colspan="4" style="border-left: 1px solid var(--color-tron-border);">Channel B</th>
+								<th class="px-2 py-2 text-center" colspan="4" style="border-left: 1px solid var(--color-tron-border);">Channel C</th>
+							</tr>
 							<tr class="tron-text-muted border-b" style="border-color: var(--color-tron-border);">
-								<th class="px-3 py-2 text-left">Well</th>
-								<th class="px-3 py-2 text-center">Ch A (Z)</th>
-								<th class="px-3 py-2 text-center">Ch B (Z)</th>
-								<th class="px-3 py-2 text-center">Ch C (Z)</th>
+								<th class="px-2 py-1 text-right" style="border-left: 1px solid var(--color-tron-border);">X</th>
+								<th class="px-2 py-1 text-right">Y</th>
+								<th class="px-2 py-1 text-right">Z</th>
+								<th class="px-2 py-1 text-right">|B|</th>
+								<th class="px-2 py-1 text-right" style="border-left: 1px solid var(--color-tron-border);">X</th>
+								<th class="px-2 py-1 text-right">Y</th>
+								<th class="px-2 py-1 text-right">Z</th>
+								<th class="px-2 py-1 text-right">|B|</th>
+								<th class="px-2 py-1 text-right" style="border-left: 1px solid var(--color-tron-border);">X</th>
+								<th class="px-2 py-1 text-right">Y</th>
+								<th class="px-2 py-1 text-right">Z</th>
+								<th class="px-2 py-1 text-right">|B|</th>
 							</tr>
 						</thead>
 						<tbody>
 							{#each wells as well (well.well)}
 								<tr class="border-b" style="border-color: var(--color-tron-border);">
-									<td class="px-3 py-3 font-mono font-bold tron-text-primary">{well.well}</td>
+									<td class="px-2 py-2 font-mono font-bold tron-text-primary">{well.well}</td>
 									{#if well.error}
-										<td colspan="3" class="px-3 py-3 text-center text-sm" style="color: var(--color-tron-red);">
+										<td colspan="12" class="px-3 py-3 text-center text-sm" style="color: var(--color-tron-red);">
 											⚠️ {well.error}
 										</td>
 									{:else}
-										<td class="px-3 py-3 text-center font-mono font-bold" style="color: {zColor(well.chA_Z)}; background: {zBg(well.chA_Z)};">
-											{well.chA_Z ?? '—'}
-										</td>
-										<td class="px-3 py-3 text-center font-mono font-bold" style="color: {zColor(well.chB_Z)}; background: {zBg(well.chB_Z)};">
-											{well.chB_Z ?? '—'}
-										</td>
-										<td class="px-3 py-3 text-center font-mono font-bold" style="color: {zColor(well.chC_Z)}; background: {zBg(well.chC_Z)};">
-											{well.chC_Z ?? '—'}
-										</td>
+										<td class="px-2 py-2 text-right font-mono tron-text-muted" style="border-left: 1px solid var(--color-tron-border);">{fmt(well.chA_X)}</td>
+										<td class="px-2 py-2 text-right font-mono tron-text-muted">{fmt(well.chA_Y)}</td>
+										<td class="px-2 py-2 text-right font-mono tron-text-primary">{fmt(well.chA_Z)}</td>
+										<td class="px-2 py-2 text-right font-mono font-bold tron-text-primary">{fmt(well.chA_mag)}</td>
+										<td class="px-2 py-2 text-right font-mono tron-text-muted" style="border-left: 1px solid var(--color-tron-border);">{fmt(well.chB_X)}</td>
+										<td class="px-2 py-2 text-right font-mono tron-text-muted">{fmt(well.chB_Y)}</td>
+										<td class="px-2 py-2 text-right font-mono tron-text-primary">{fmt(well.chB_Z)}</td>
+										<td class="px-2 py-2 text-right font-mono font-bold tron-text-primary">{fmt(well.chB_mag)}</td>
+										<td class="px-2 py-2 text-right font-mono tron-text-muted" style="border-left: 1px solid var(--color-tron-border);">{fmt(well.chC_X)}</td>
+										<td class="px-2 py-2 text-right font-mono tron-text-muted">{fmt(well.chC_Y)}</td>
+										<td class="px-2 py-2 text-right font-mono tron-text-primary">{fmt(well.chC_Z)}</td>
+										<td class="px-2 py-2 text-right font-mono font-bold tron-text-primary">{fmt(well.chC_mag)}</td>
 									{/if}
 								</tr>
 							{/each}
@@ -138,7 +167,7 @@
 					</table>
 				</div>
 				<p class="tron-text-muted mt-3 text-xs">
-					Green = within range (3900–4500) · Red = outside range
+					All values in Gauss, as reported by the magnetometer. |B| = √(X² + Y² + Z²).
 				</p>
 			</div>
 		</TronCard>
