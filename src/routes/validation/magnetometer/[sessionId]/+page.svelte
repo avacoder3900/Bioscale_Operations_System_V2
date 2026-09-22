@@ -48,8 +48,24 @@
 	let { data, form }: Props = $props();
 	let readingResults = $state(false);
 
-	const wells = (data.result?.processedData?.metrics ?? []) as MagWell[];
+	const rawWells = (data.result?.processedData?.metrics ?? []) as MagWell[];
 	const failureReasons = data.result?.processedData?.failureReasons ?? [];
+
+	// |B| = sqrt(X^2 + Y^2 + Z^2). Prefer the magnitude stored at ingest, but derive it
+	// from the raw components when it is absent, so older sessions — and any session
+	// whose stored magnitude went missing — still render a field value.
+	function magnitude(x: number | null, y: number | null, z: number | null): number | null {
+		if (x == null || y == null || z == null) return null;
+		if (Number.isNaN(x) || Number.isNaN(y) || Number.isNaN(z)) return null;
+		return Math.sqrt(x * x + y * y + z * z);
+	}
+
+	const wells = rawWells.map((w) => ({
+		...w,
+		chA_mag: w.chA_mag ?? magnitude(w.chA_X, w.chA_Y, w.chA_Z),
+		chB_mag: w.chB_mag ?? magnitude(w.chB_X, w.chB_Y, w.chB_Z),
+		chC_mag: w.chC_mag ?? magnitude(w.chC_X, w.chC_Y, w.chC_Z)
+	}));
 
 	function fmt(v: number | null): string {
 		return v == null || Number.isNaN(v) ? '—' : v.toFixed(1);

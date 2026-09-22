@@ -20,6 +20,15 @@
 
 	const selectedSpu = $derived(data.spus.find(s => s.id === selectedSpuId));
 
+	// |B| = sqrt(X^2 + Y^2 + Z^2), in Gauss as reported by the magnetometer.
+	// Display-only: null unless all three components are real numbers.
+	function magnitude(x: unknown, y: unknown, z: unknown): number | null {
+		if (typeof x !== 'number' || !Number.isFinite(x)) return null;
+		if (typeof y !== 'number' || !Number.isFinite(y)) return null;
+		if (typeof z !== 'number' || !Number.isFinite(z)) return null;
+		return Math.sqrt(x * x + y * y + z * z);
+	}
+
 	function formatDate(date: string | null): string {
 		if (!date) return '—';
 		return new Date(date).toLocaleString();
@@ -152,6 +161,9 @@
 									<th>Ch A (Z)</th>
 									<th>Ch B (Z)</th>
 									<th>Ch C (Z)</th>
+									<th>Ch A |B|</th>
+									<th>Ch B |B|</th>
+									<th>Ch C |B|</th>
 								</tr>
 							</thead>
 							<tbody>
@@ -168,11 +180,18 @@
 												{/if}
 											</td>
 										{/each}
+										{#each ['A', 'B', 'C'] as ch}
+											{@const b = magnitude(well[`ch${ch}_X`], well[`ch${ch}_Y`], well[`ch${ch}_Z`])}
+											<td class="font-mono font-bold tron-text-primary">
+												{b !== null ? b.toFixed(1) : '—'}
+											</td>
+										{/each}
 									</tr>
 								{/each}
 							</tbody>
 						</table>
 					</div>
+					<p class="tron-text-muted text-xs">|B| = √(X² + Y² + Z²) — all values in Gauss, as reported by the magnetometer.</p>
 
 					{#if form.failureReasons?.length > 0}
 						<div class="space-y-1">
