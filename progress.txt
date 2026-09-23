@@ -13918,3 +13918,14 @@ with every production batch; treat as indicative and re-count in rolls when need
 BUCKET-SYSTEM_PLAN.md 12.4 records the decision. PR #60 (production WI-01 -> roll-length
 consumption) stays open but PARKED -- not to be merged unless the drift becomes a problem.
 npm run check: 12 errors / 438 warnings (baseline), none in touched files.
+Deployment: preview -- https://bioscale-operations-system-mongodb-nrynbplxc-brevitest.vercel.app
+  (brevitest scope; cookie-session gated, 302 to /login)
+Source: branch feat/bucket-system @ commit cde19dd8
+Retrieve this exact code: git checkout feat/bucket-system at commit cde19dd8
+What this deployment is for: the yellow "Thermoseal Inventory is Not Synced Between Systems"
+  card above the Thermoseal card on the bucket board. Everything else as the 1x99fvfkv preview.
+Build status: success (login 200, ~17:05Z).
+Direction (user): thermoseal stock is ultimately UNIVERSAL -- one roll-based count for
+  production WI-01 and buckets. PR #60 is that bridge; parked only to stop churning the live
+  number during development, to be merged later. No master merges into this branch until the
+  final build.

@@ -375,8 +375,11 @@ the floor creates a real card and sends real mail on the next board load.
   withdraws one PT-CT-112 *unit* per cartridge; this branch counts rolls by length. Every
   production WI-01 batch drags the roll count down (1 → −23 was seen on 2026-09-23). User
   decision: leave production alone for now; the board carries a yellow "not synced" card and the
-  count is re-counted in rolls when needed. A hotfix that moves production WI-01 to roll-length
-  consumption exists as **PR #60** (parked, not merged) if the drift becomes a problem.
+  count is re-counted in rolls when needed. **End state (user, 2026-09-23): thermoseal stock is
+  universal — one roll-based count consumed by both production WI-01 and the buckets.** The
+  hotfix that moves production WI-01 to roll-length
+  consumption is **PR #60** — parked until development settles (to stop churning the live
+  number), then merged.
 - **Roll accounting is trust-based**: 3.75 cm is an average; the roll gauge drifts from reality
   over ~1700 carts. A "retire roll early / mark roll exhausted" admin action does not exist yet —
   if a roll runs out before the gauge says so, the operator's only option today is to let the
