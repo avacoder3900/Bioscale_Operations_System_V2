@@ -76,12 +76,15 @@
 			if (!res.ok || body.error) {
 				cartridgeLookupError = body.error ?? `Cartridge "${code}" not found.`;
 			} else {
+				// /api/cv/lookup-cartridge returns `status` (the CV cartridge-first refactor
+				// dropped currentPhase/nextPhase/isNew/isComplete); derive the display here.
+				const status: string = body.currentPhase ?? body.status ?? 'unknown';
 				cartridgeLookupResult = {
 					cartridgeRecordId: body.cartridgeRecordId ?? code,
-					currentPhase: body.currentPhase ?? 'unknown',
-					nextPhase: body.nextPhase ?? null,
+					currentPhase: status,
+					nextPhase: body.nextPhase ?? nextStepFor(status),
 					isNew: !!body.isNew,
-					isComplete: !!body.isComplete
+					isComplete: !!body.isComplete || ['stored', 'released', 'shipped', 'completed'].includes(status)
 				};
 			}
 		} catch {
@@ -96,6 +99,21 @@
 			e.preventDefault();
 			runCartridgeLookup();
 		}
+	}
+
+	// Main-line order of a cartridge's status, for "should be at" after a lookup.
+	// Buckets (raw → unpressed → pressed) feed WI-01 (backing = In Oven), then wax,
+	// reagent, seal, store. Side statuses (QC/rejected/scrapped/voided) have no next.
+	const STATUS_ORDER = ['raw', 'unpressed', 'pressed', 'backing', 'wax_filling', 'wax_filled', 'wax_ready', 'reagent_filling', 'reagent_filled', 'inspected', 'sealed', 'cured', 'stored', 'released', 'shipped'];
+	const STATUS_NEXT_LABEL: Record<string, string> = {
+		raw: 'Unpressed (advance the bucket)', unpressed: 'Pressed (advance the bucket)', pressed: 'In Oven (WI-01 draws the bucket)',
+		backing: 'Wax filling', wax_filling: 'Wax-filled', wax_filled: 'Wax ready', wax_ready: 'Reagent filling',
+		reagent_filling: 'Reagent-filled', reagent_filled: 'Inspected', inspected: 'Sealed', sealed: 'Cured', cured: 'Stored', stored: 'Released', released: 'Shipped'
+	};
+	function nextStepFor(status: string): string | null {
+		if (STATUS_NEXT_LABEL[status]) return STATUS_NEXT_LABEL[status];
+		const i = STATUS_ORDER.indexOf(status);
+		return i >= 0 && i < STATUS_ORDER.length - 1 ? STATUS_ORDER[i + 1] : null;
 	}
 
 	function phaseBadgeColor(phase: string): string {
