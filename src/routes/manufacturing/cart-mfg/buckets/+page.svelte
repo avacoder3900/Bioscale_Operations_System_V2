@@ -487,17 +487,35 @@
 					</div>
 					<div class="space-y-2">
 						{#each cyclesByStage[s.key] as c (c.cycleId)}
-							<button type="button" onclick={() => openCycle(c)}
-								class="w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-2 text-left hover:border-[var(--color-tron-cyan)]/60 {panel.kind === 'cycle' && panel.cycleId === c.cycleId ? 'ring-1 ring-[var(--color-tron-cyan)]' : ''}">
-								<div class="flex items-baseline justify-between">
-									<span class="font-mono text-sm text-[var(--color-tron-text)]">{shortQr(c.barcode) ?? c.bucketId}</span>
-									<span class="text-lg font-bold text-[var(--color-tron-cyan)]">{c.quantity}</span>
-								</div>
-								<div class="mt-1 flex items-center justify-between text-[10px] text-[var(--color-tron-text-secondary)]">
-									<span>{c.bucketId} #{c.cycleNumber} · {dwell(c.stageEnteredAt)}</span>
-									{#if c.stage !== 'raw' && c.quantity !== c.openedQty}<span title="left Raw with {c.openedQty}">−{c.openedQty - c.quantity}</span>{/if}
-								</div>
-							</button>
+							<!-- Card = open-the-panel button + an expandable list of the carts inside
+							     (a sibling <details>, not nested in the button). -->
+							<div class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] hover:border-[var(--color-tron-cyan)]/60 {panel.kind === 'cycle' && panel.cycleId === c.cycleId ? 'ring-1 ring-[var(--color-tron-cyan)]' : ''}">
+								<button type="button" onclick={() => openCycle(c)} class="w-full p-2 text-left">
+									<div class="flex items-baseline justify-between">
+										<span class="font-mono text-sm text-[var(--color-tron-text)]">{shortQr(c.barcode) ?? c.bucketId}</span>
+										<span class="text-lg font-bold text-[var(--color-tron-cyan)]">{c.quantity}</span>
+									</div>
+									<div class="mt-1 flex items-center justify-between text-[10px] text-[var(--color-tron-text-secondary)]">
+										<span>{c.bucketId} #{c.cycleNumber} · {dwell(c.stageEnteredAt)}</span>
+										{#if c.stage !== 'raw' && c.quantity !== c.openedQty}<span title="left Raw with {c.openedQty}">−{c.openedQty - c.quantity}</span>{/if}
+									</div>
+								</button>
+								<details class="border-t border-[var(--color-tron-border)]/40 px-2 py-1">
+									<summary class="cursor-pointer select-none text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]">{c.cartridgeIds.length} cart{c.cartridgeIds.length === 1 ? '' : 's'} inside</summary>
+									{#if c.cartridgeIds.length === 0}
+										<p class="py-1 text-[10px] text-[var(--color-tron-text-secondary)]">none scanned in yet</p>
+									{:else}
+										<ul class="mt-1 max-h-40 space-y-0.5 overflow-y-auto">
+											{#each c.cartridgeIds as id, i (id)}
+												<li class="flex items-center justify-between gap-2 text-[10px]">
+													<span class="text-[var(--color-tron-text-secondary)]">{i + 1}.</span>
+													<a href="/cartridge-admin?search={encodeURIComponent(id)}" class="min-w-0 flex-1 truncate font-mono text-[var(--color-tron-text)] hover:text-[var(--color-tron-cyan)]" title={id}>{id}</a>
+												</li>
+											{/each}
+										</ul>
+									{/if}
+								</details>
+							</div>
 						{/each}
 						{#if cyclesByStage[s.key].length === 0}
 							<p class="px-1 py-4 text-center text-[10px] text-[var(--color-tron-text-secondary)]">empty</p>
