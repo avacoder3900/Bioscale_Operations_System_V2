@@ -14153,3 +14153,30 @@ hint when the suggestion is an empty bucket, and a "mint a new bucket" hint (Min
 Available) when nothing exists -- the Move button is disabled until every stage has a
 destination; option 2 "Discard": journal required, shell + label scrapped.
 Check (svelte-kit sync + svelte-check direct): 12 errors / 438 warnings (baseline).
+
+================================================================================
+2026-09-23 — feat/bucket-system — Thermoseal stock note removed again (redundant); -77 explained
+================================================================================
+User: "Remove the current thermoseal stock underneath rolls on hand, as it is redundant." The
+note added earlier today above "Development settings" is gone; the Rolls-on-hand tile (pinned
+value, live value inside the dev toggles) already carries the number. ThermosealStatus
+.liveCountAt and the PartDefinition.lastPhysicalCountAt select went with it — nothing else read
+them. The yellow "not synced" card now names the build that is actually draining the shelf:
+"the build live on master still withdraws one PT-CT-112 unit per cart out of this same
+database".
+Why the live count is negative — user, 2026-09-23: "the -77 comes from the current active build
+that's live on master. this is an artifact that will not go away until this build is ready to be
+shipped." So it is expected, it is not a bucket-flow bug, and PT-CT-112 should NOT be re-counted
+to make it look right; it resolves when this branch ships (PR #60 moves production WI-01 to
+roll-length consumption). Recorded in BUCKET-SYSTEM_PLAN.md §3.4 (cutover) and §12.4 (known
+risks), and §3.4's bullet now records that the note existed and was removed the same day.
+Where thermoseal inventory actually moves (asked in the same session): only openRoll() in
+thermoseal-service.ts records a transaction (-1 PT-CT-112, manufacturingRunId = the roll), via
+consumeThermoseal() from advanceCycle() on Raw → Unpressed; per-cart length is just
+ThermosealRoll.consumedCm. PT-CT-112 is created upstream at laser-cutting (PT-CT-111 in),
+which is fed by cut-thermoseal (PT-CT-101 roll in). WI-01 withdraws nothing.
+Files: src/routes/manufacturing/cart-mfg/buckets/+page.svelte (note removed, yellow card
+wording — swept into the concurrent session's 4522ba63), src/lib/server/services/
+thermoseal-service.ts (8e3e8a67), BUCKET-SYSTEM_PLAN.md, progress.txt.
+Check (svelte-kit sync + svelte-check direct): 12 errors / 438 warnings (baseline), none in
+touched files.

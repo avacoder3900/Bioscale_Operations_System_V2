@@ -375,7 +375,7 @@ a bucket member from its pass. No inventory moves. Unknown barcodes are refused 
 | `9b06e601` | **Master Override** page — scan a bucket, force it to any phase (§9.5) |
 | `fdf00c8e` | **Quarantine category removed** (§3.6/§3.7); `/cartridge-admin` *Available* tile dropped from the bucket strip (§9.3) |
 | `64f52310` | **Current thermoseal stock note** above "Development settings" (§3.4); `ThermosealStatus.liveCountAt` |
-| *(next)* | Note removed again as redundant with the *Rolls on hand* tile (user); `liveCountAt` reverted; yellow card names `master` as the build draining the shelf |
+| `4522ba63` / `8e3e8a67` | Note removed again as redundant with the *Rolls on hand* tile (user); `liveCountAt` reverted; yellow card names `master` as the build draining the shelf |
 
 `npm run check` after v2: **12 errors / 438 warnings** — the same 12 pre-existing (`r2.ts`,
 `AskBimsWidget.svelte`, 8× `assembly/[sessionId]`, 2× `validation/magnetometer/[sessionId]`
