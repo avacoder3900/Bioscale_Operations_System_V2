@@ -13155,6 +13155,349 @@ Deployment: production - https://bioscale-operations-system-mongodb.vercel.app
 Source: branch master @ the commit carrying this entry
 What this deployment is for: making |B| field magnitude visible in production on the
 magnetometer results pages, and persisting it at ingest so it is searchable per SPU.
+
+================================================================================
+2026-09-23 — feat/post-mortem-camera-settings — camera settings panel on Post-Mortem Inspect
+================================================================================
+A collapsible Camera settings panel below the Capture button, built from what the selected camera
+actually reports rather than a fixed list. getCapabilities() differs per device and per browser, and
+the existing LIZA tuning applies through an `advanced` array that SILENTLY DROPS anything
+unsupported — so a hardcoded panel would show controls that quietly do nothing. Ranges render as
+sliders with that camera's own min/max/step, enums as selects, booleans as checkboxes. Covers
+exposure mode/time/compensation, iso, focus mode/distance, white balance mode, colour temperature,
+brightness, contrast, saturation, sharpness, zoom, pan, tilt, torch. Aperture is not offered: no
+such constraint exists in the web API and these cameras have a fixed one.
+
+Applying uses a bare constraint, not `advanced`, so a refused setting surfaces as an error instead
+of being silently ignored — that silence is the confusion the panel exists to remove.
+
+frameRate is deliberately excluded. Found by testing: its reported min is 0 on many cameras,
+applying 0 stalls the track, and no later value recovers it — only restarting the stream does. It is
+a format property, not an image setting. Dead controls are filtered too (ranges where min === max,
+single-option enums).
+
+A "What this camera reported" list shows every returned capability and marks which are adjustable,
+because otherwise "no adjustable settings" is indistinguishable from a broken panel — and built-in
+laptop webcams, which expose only format properties, show exactly that.
+
+The inline LIZA tuning is extracted to one LIZA_TUNING constant so the panel's Reset restores
+precisely what startCamera() applies. Changes are session-only; a reload returns to the
+production-validated setup the CV model was tuned against. Panel visibility uses a new `cameraLive`
+flag because `stream` is deliberately not $state in this file.
+
+File: src/routes/manufacturing/cart-mfg/post-mortem-inspect/+page.svelte. npm run check: 12/437 —
+this master's baseline, none in the touched file. NOTE the baseline is 12, not the 10 of last week:
+two errors in validation/magnetometer/[sessionId]/+page.svelte arrived independently on master.
+
+NOT exercised in practice: the only adjustable property on the dev laptop was frameRate, which this
+removes; its integrated webcam exposes no image controls. Sliders to be tested on a station camera.
+
+Deployment: production — building from the GitHub push to master (Vercel dashboard, commit below)
+Source: branch master @ commit 1f882604 (squash merge of PR #55)
+Retrieve this exact code: git checkout master at commit 1f882604
+What this deployment is for: camera settings panel on Post-Mortem Inspect
+
+================================================================================
+2026-09-23 — feat/station-camera-settings — station camera explained; capture settings editable
+================================================================================
+The camera settings panel rendered blank on a Pi station and said nothing about why. Two causes.
+
+First a real gap: readCameraCapabilities() was only called on the local USB path, never when a
+station's remote track arrived, so the panel had nothing to show and no explanation. It now runs on
+both, and a cameraSource flag ('usb' | 'station' | null) tracks which path feeds the preview.
+
+Second, the substance: a station's video is a REMOTE WebRTC track. getCapabilities() and
+applyConstraints() only ever control a local getUserMedia track, and the camera is on the Pi, so no
+browser control can reach it — a property of WebRTC, not a configuration problem. Confirmed two
+ways: the station WS protocol handles only hello / sdp_answer / ice_candidate / scan, and
+CaptureStation stores no camera config, just cameraOk/scannerOk/ledOk. The panel now says so
+instead of appearing broken.
+
+The other half is where those settings actually belong. CvProject.captureSettings already modelled
+them — the same knobs as camera_capture.py's tuning panel (exposure, whiteBalance, brightness,
+contrast, gain, sharpness, claheStrength, per-channel colour correction), applied by the station
+agent through OpenCV. Nothing in the app had ever exposed the field. The panel now edits it for
+projects deployed at post_mortem and PATCHes /api/cv/projects/[id], which already accepted
+captureSettings, so no API change was needed. Saving is explicit rather than per-slider, unlike the
+browser-side panel: the values are persisted, shared across everyone using the project, and the
+deployed model was trained against them.
+
+TWO LIMITS, both unresolved: no CvProject currently deploys at post_mortem (checked against the
+database), so the station editor has no data to render yet — built and typechecked but unexercised.
+And nothing in src/ reads captureSettings; the consumer is agent.py, outside this repo, so whether
+a saved value is honoured by the station is unverified from here.
+
+Files: src/routes/manufacturing/cart-mfg/post-mortem-inspect/{+page.svelte,+page.server.ts}.
+npm run check: 12/437 — this master's baseline, none in the touched files.
+
+Deployment: production — building from the GitHub push to master (Vercel dashboard, commit below)
+Source: branch master @ commit f8df7757 (squash merge of PR #56)
+Retrieve this exact code: git checkout master at commit f8df7757
+What this deployment is for: station camera explanation + CvProject captureSettings editor
+
+================================================================================
+2026-09-23 — fix/camera-exposure-and-defaults — exposure actually applies; reset buttons
+================================================================================
+Exposure could not be changed from the Post-Mortem Inspect settings panel even with the mode set to
+manual. Three causes, stacked.
+
+exposureTime was sent on its own. Most cameras ignore it unless exposureMode is manual in the SAME
+constraint set — choosing manual in the dropdown first is not always enough, as some drivers revert.
+Dependent properties now carry their prerequisite, and only where the camera reports offering that
+mode: exposureTime / exposureCompensation / iso bring exposureMode, focusDistance brings focusMode,
+colorTemperature brings whiteBalanceMode.
+
+Nothing verified the value took. applyConstraints() resolves happily while the camera clamps or
+ignores the request, so a silently rejected setting looked successful — most likely what was being
+seen. Settings are re-read afterwards and compared against the request; a mismatch is reported with
+the likely reason, naming the mode still overriding it where that is the cause.
+
+Bare constraints were the only attempt. Some drivers refuse a bare constraint they accept inside
+`advanced`. Now tries bare first (a genuine refusal stays visible, which is why bare was chosen)
+then falls back to `advanced` before reporting failure.
+
+Also fills the gap after the last slider: "Reset all to defaults" sits in the grid, so an odd number
+of controls leaves no hole; it restores the validated LIZA tuning and re-reads what stuck, and the
+old standalone button is removed as a duplicate. The station section gains its own reset loading the
+CvProject.captureSettings schema defaults, staged as a draft so saving stays explicit.
+
+File: src/routes/manufacturing/cart-mfg/post-mortem-inspect/+page.svelte. npm run check: 12/437 —
+this master's baseline, none in the touched file. NOT exercised against a camera: whether a given
+unit now honours exposure is what the new mismatch message exists to answer.
+
+Deployment: production — building from the GitHub push to master (Vercel dashboard, commit below)
+Source: branch master @ commit a092d05f (squash merge of PR #57)
+Retrieve this exact code: git checkout master at commit a092d05f
+What this deployment is for: camera exposure fix + reset-to-defaults buttons
+
+================================================================================
+2026-09-23 — fix/camera-footer-always — camera footer on stations; manual exposure sequencing
+================================================================================
+Two problems reported from a station, both real.
+
+The reset button and the capability list could not be seen. The footer holding them was gated on
+cameraSource === 'usb', so on a station — where working out what the camera offers matters most — it
+never rendered. Now renders for any live camera, and the empty-capability copy distinguishes a
+station's remote track (an empty set is expected: nothing local to query) from a local camera whose
+driver exposes nothing.
+
+Exposure still would not hold on manual. The previous fix (#57) sent mode and value in one
+constraint set; some drivers accept that, but UVC cameras commonly apply the mode AFTER the value
+and discard the value. The mode is now applied first, in its own call, with a short settle before
+the value is sent, and still included alongside it for drivers that prefer them together.
+
+File: src/routes/manufacturing/cart-mfg/post-mortem-inspect/+page.svelte. npm run check: 12/437 —
+this master's baseline, none in the touched file.
+
+STILL UNOBSERVED: no camera on the dev machine exposes exposure control, so the sequencing change is
+reasoned rather than tested. The capability list and the "asked for X, camera settled on Y" message
+exist to make the answer visible on a machine that has one. Fourth camera deploy in a row shipped
+without hardware confirmation; #58 existed because #57 shipped an unreachable button, and this one
+because #58 gated its footer to the wrong path.
+
+Deployment: production — building from the GitHub push to master (Vercel dashboard, commit below)
+Source: branch master @ commit 671b220a (squash merge of PR #59)
+Retrieve this exact code: git checkout master at commit 671b220a
+What this deployment is for: station camera footer visibility + manual exposure sequencing
+
+================================================================================
+2026-09-23 — fix/capture-station-camera-panel — station camera panel no longer vanishes
+================================================================================
+The Pi station camera settings panel on /capture disappeared entirely in the project capture flow.
+Its gate was {#if selectedStationId && cameraParamsKnown.length > 0}, and cameraParamsKnown is only
+filled when the agent answers get_camera_params over the station socket. Until that reply lands — or
+if it never does — a connected station with working video looked exactly like no station at all, so
+the feature read as missing rather than waiting.
+
+Gated on selectedStationId alone now. With no parameters reported the panel explains that state and
+offers "Ask the station again", which re-sends the request. Adds "Reset all to defaults" in the
+footer, preferring the default the agent reports alongside each range and falling back to the
+midpoint of known bounds only where none was offered; "Re-read from station" pulls current values
+back. Notes inline that Auto Exposure must be 1 (manual) before an exposure value will hold, since
+the driver ignores exposure while it is on 3 (auto).
+
+CONTEXT WORTH KEEPING: this is the panel the original camera reports were about. auto_exposure
+1-vs-3 is a V4L2 value that exists only here, not in the browser-constraint panel built earlier on
+post-mortem-inspect. That panel is correct about what it reports — a station's remote WebRTC track
+exposes only facingMode and resizeMode, confirmed on hardware — but was never going to reach the
+station's camera. Four deploys (#55-#59) went to the wrong page before that was traced.
+
+File: src/routes/capture/+page.svelte. npm run check: 12/437 — this master's baseline, none in the
+touched file. Not verified against a station from here: whether an exposure value holds once Auto
+Exposure is manual depends on agent.py and the driver, both outside this repo.
+
+Deployment: production — building from the GitHub push to master (Vercel dashboard, commit below)
+Source: branch master @ commit 0784b5e8 (squash merge of PR #61)
+Retrieve this exact code: git checkout master at commit 0784b5e8
+What this deployment is for: station camera panel visibility, defaults and retry on /capture
+
+================================================================================
+2026-09-23 — fix/capture-exposure-range — exposure slider used the wrong V4L2 units
+================================================================================
+The exposure slider read 5000 on a -13..0 track and changing it did nothing.
+
+V4L2 exposes exposure two ways: a log2 scale (-13..0, what OpenCV's CAP_PROP_EXPOSURE reports on
+some backends) and EXPOSURE_ABSOLUTE in 100 microsecond units (1..10000). CAMERA_PARAM_LABELS
+hardcoded the log scale as its fallback, so on a camera using the absolute one the agent reported
+5000 against a -13..0 slider: the thumb could never reach the real value, and every value the slider
+did send was out of range and silently ignored. That is why exposure appeared broken while
+auto/manual switching worked — the mode change was valid, the value never was.
+
+Bounds now come from paramBounds(): the agent's range when it reports one, else the label fallback,
+then widened to contain the reported value whenever that value falls outside it. A value the bounds
+cannot represent proves the bounds are wrong. Exposure above zero is treated as the absolute scale
+explicitly, and the caption under each slider says which range is in play, including when inferred.
+Checked directly: 5000 -> 1..10000 inferred; -5 -> -13..0 default; brightness 128 unchanged.
+
+Reset also stopped inventing defaults. It fell back to the midpoint of the bounds where the agent
+reported none — not a default at all; on brightness that is 128, which washed the image out
+("way too bright"). It now restores only parameters the station reports a default for and says how
+many it left alone.
+
+File: src/routes/capture/+page.svelte. npm run check: 12/437 — this master's baseline, none in the
+touched file.
+
+Deployment: production — building from the GitHub push to master (Vercel dashboard, commit below)
+Source: branch master @ commit 721de162 (squash merge of PR #62)
+Retrieve this exact code: git checkout master at commit 721de162
+What this deployment is for: exposure slider units fix + honest reset defaults on /capture
+
+================================================================================
+2026-09-23 — feat/capture-liza-defaults — Reset all to defaults restores the LIZA setup
+================================================================================
+"Defaults" meant the camera's own factory values, which is not what an operator wants on this page:
+the imaging was dialled in against the LIZA setup in camera_capture.py, mirrored by
+CvProject.captureSettings' schema defaults. The button now restores auto_exposure 1 (manual),
+brightness 128, contrast 128, gain 0, sharpness 128, auto_wb 0 (manual), wb_temperature 4000. The
+camera's factory values stay reachable as a separate "Camera factory defaults" button — the only
+route back to a hardware baseline, so losing it would be worse than the problem being solved.
+
+Exposure is CONVERTED rather than copied. camera_capture.py sets CAP_PROP_EXPOSURE = -5, the OpenCV
+log2 convention: 2^-5 s = 31.25 ms. A camera reporting EXPOSURE_ABSOLUTE wants that in 100
+microsecond units, so ~313. Sending -5 to an absolute-scale camera is out of range and silently
+ignored — the bug fixed in #62 — so the value is derived from the scale the camera actually uses and
+the note says when a conversion happened. Auto-exposure goes manual before the value, so it holds.
+
+Three documented settings are deliberately not sent: CLAHE strength and the per-channel colour
+corrections are post-processing in the capture script with nothing on the station to receive them,
+and GAMMA is omitted because the script's 0.85 is a post-processing exponent while the station's
+`gamma` is a V4L2 range of 1..500 — same name, unrelated meaning. The note lists whatever the
+station does not offer rather than failing quietly.
+
+Also worth recording: the ORIGINAL per-station values are NOT recoverable. set_camera_param goes
+over the WS to the agent and is applied live via v4l2; nothing in the app persists it, CaptureStation
+stores no camera values, and there is no AuditLog trail. The LIZA numbers are the documented
+reference setup, not a snapshot of what any given station had.
+
+File: src/routes/capture/+page.svelte. npm run check: 12/437 — this master's baseline, none in the
+touched file. Conversion checked: 2^-5 s = 31.25 ms = 313 in 100 us units.
+
+Deployment: production — building from the GitHub push to master (Vercel dashboard, commit below)
+Source: branch master @ commit 8119a4b6 (squash merge of PR #63)
+Retrieve this exact code: git checkout master at commit 8119a4b6
+What this deployment is for: LIZA setup restored by Reset all to defaults on /capture
+
+================================================================================
+2026-09-23 — master — all 2026-09-23 camera settings work reverted
+================================================================================
+Reverted today's camera settings changes at the operator's request. The three affected files are
+restored byte-for-byte to d3936846, their state before any of it: src/routes/capture/+page.svelte
+and src/routes/manufacturing/cart-mfg/post-mortem-inspect/{+page.svelte,+page.server.ts}. Reverted
+PRs: #55 1f882604, #56 f8df7757, #57 a092d05f, #58 8ea69ff1, #59 671b220a, #61 0784b5e8,
+#62 721de162, #63 8119a4b6. Only those commits ever touched those files — checked per path — so
+nothing else is affected.
+
+The work is preserved outside the repo at Documents/Brevitest/camera-work-2026-09-23/: a combined
+patch, one patch per PR for piecemeal re-application, and a README covering what each change did.
+The combined patch was verified with git apply --check against the reverted tree before committing,
+so restoring it is one command rather than a reconstruction.
+
+What goes away with it, in case it is wanted back sooner: the /capture station panel returns to
+vanishing whenever the agent has not answered get_camera_params, and the exposure slider returns to
+assuming the log2 V4L2 scale — the reason it read 5000 on a -13..0 track and ignored every value it
+sent. Both were pre-existing bugs that today's work diagnosed rather than introduced.
+
+The deployment entries above for those PRs are left in place: they record what was deployed at the
+time. This entry records the revert.
+
+npm run check: 12/437 — unchanged from this master's baseline.
+
+Deployment: production — building from the GitHub push to master (Vercel dashboard, commit below)
+Source: branch master @ commit faeac667 (squash merge of PR #64)
+Retrieve this exact code: git checkout master at commit faeac667
+What this deployment is for: reverting all 2026-09-23 camera settings work
+
+================================================================================
+2026-09-23 — feat/station-camera-shared — shared station camera panel, measured ranges
+================================================================================
+Adds the Pi station camera menu to Post-Mortem Inspect and reworks how the sliders pick their
+bounds — the reason several appeared to stop working partway along.
+
+The ranges were guesses. Most controls fell back to 0..255, so the thumb kept travelling long after
+the camera stopped responding. Operator's bench measurements are now the fallback: brightness 0..64,
+contrast 0..64, gain 0..100, sharpness 0..6, gamma 72..500, hue -40..40.
+
+Bounds resolve in priority order: the range the agent reports for that control, else the measured
+fallback, else widened to contain the current value when it falls outside — a value the bounds
+cannot represent proves the bounds are wrong. That last rule stops a camera reporting
+EXPOSURE_ABSOLUTE (100 us units, e.g. 5000) being shown on a -13..0 log2 slider it can neither
+display nor drive. Each slider states which of the three it used, so a wrong range is visible.
+
+Controls answering -1 (V4L2 "unsupported") are listed rather than rendered: autofocus reports -1 on
+this camera, and a slider for it invites chasing something that will never move. Focus and aperture
+are set on the lens.
+
+Two rescue buttons sit above the sliders — Auto Exposure on, Auto White Balance on — because a dark
+or colour-cast feed is the state most worth being one click from, and a manual exposure left behind
+by an earlier session is exactly how a feed ends up dark.
+
+Both pages render the same component (src/lib/components/capture/StationCameraSettings.svelte) so
+the ranges live in one place. Post-mortem-inspect gained the protocol it lacked: get_camera_params
+on hello, plus camera_params and camera_param_set handlers.
+
+Files: src/lib/components/capture/StationCameraSettings.svelte (new), src/routes/capture/+page.svelte,
+src/routes/manufacturing/cart-mfg/post-mortem-inspect/+page.svelte. npm run check: 12/437 — this
+master's baseline, none in any touched file. Not exercised against a station from here; the measured
+ranges reflect one camera, and the agent's reported range still wins wherever it provides one.
+
+Deployment: production — building from the GitHub push to master (Vercel dashboard, commit below)
+Source: branch master @ commit ece1125e (squash merge of PR #65)
+Retrieve this exact code: git checkout master at commit ece1125e
+What this deployment is for: station camera panel on post-mortem-inspect + corrected slider ranges
+
+================================================================================
+2026-09-23 — fix/camera-exposure-sequencing — typed exposure entry, write sequencing, report
+================================================================================
+Exposure stays pinned at 1 on the station camera. Three changes: two aimed at making it settable,
+one at showing where the refusal happens when it is not.
+
+Exposure gets a number box beside the slider. The values worth using are specific — 333 is four
+whole 8.333 ms flicker cycles — and awkward to hit by dragging. The box deliberately accepts values
+outside the slider bounds and lets the camera decide, since those bounds are a guess on a camera
+that reports no range of its own.
+
+Writes to exposure are sequenced. Each slider previously fired an independent set_camera_param with
+no ordering, so an exposure write could land while the camera was still in auto-exposure and be
+discarded without trace. Dragging or typing exposure now re-asserts auto_exposure 1 first and sends
+the value 150 ms later. Harmless when it is already manual.
+
+Adds a collapsible report of exactly what the station sent: every control with its value and the
+range the agent reported, or "(none reported)". That separates two failures which look identical
+from the page — an agent that never queried a range for exposure, and a camera actively refusing the
+write. Both are station-side.
+
+File: src/lib/components/capture/StationCameraSettings.svelte. npm run check: 12/437 — this master's
+baseline, none in the touched file.
+
+STANDING UNKNOWN: exposure has never been observed changing on this camera. power_line_frequency did
+not appear in the operator's control list, so it exposes no V4L2 anti-flicker either; exposure in
+whole flicker cycles is the remaining route for the strobing. Whether the write is refused by the
+agent or the driver cannot be determined from this repo — agent.py is not in it.
+
+Deployment: production — building from the GitHub push to master (Vercel dashboard, commit below)
+Source: branch master @ commit dad97833 (squash merge of PR #67)
+Retrieve this exact code: git checkout master at commit dad97833
+What this deployment is for: typed exposure entry + write sequencing + station capability report
 2026-09-21 — NEWDEV — bucket system designed; BUCKET-SYSTEM_PLAN.md written (no code yet)
 ================================================================================
 Planning session only. Designed a barcode-tracked "bucket" system for counting cartridges
