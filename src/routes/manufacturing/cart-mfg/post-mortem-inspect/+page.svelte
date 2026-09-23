@@ -506,9 +506,26 @@
 		const value = isRange(cap) ? Number(raw) : raw;
 		camApplyError = null;
 
-		// Carry the prerequisite mode along, where the camera offers it.
-		const set: Record<string, unknown> = { [key]: value };
+		// Put the camera in manual FIRST, in its own call, and let it settle before
+		// sending the value. Bundling both into one constraint set is accepted by
+		// some drivers and quietly ignored by others — UVC cameras in particular
+		// tend to apply the mode after the value, so the value is discarded.
 		const modeKey = REQUIRES_MANUAL[key];
+		if (modeKey && Array.isArray(camCaps[modeKey]) && camCaps[modeKey].includes('manual')) {
+			const current = (track.getSettings?.() as any)?.[modeKey];
+			if (current !== 'manual') {
+				try {
+					await track.applyConstraints({ [modeKey]: 'manual' } as MediaTrackConstraints);
+					// Some drivers need a moment before they will honour the new value.
+					await new Promise((r) => setTimeout(r, 120));
+				} catch {
+					// Reported below if the value then fails to take.
+				}
+			}
+		}
+
+		const set: Record<string, unknown> = { [key]: value };
+		// Still send the mode alongside, for drivers that want them together.
 		if (modeKey && Array.isArray(camCaps[modeKey]) && camCaps[modeKey].includes('manual')) {
 			set[modeKey] = 'manual';
 		}
@@ -1302,10 +1319,11 @@
 							</div>
 						{/if}
 
-						<!-- Always rendered for a local camera, including when nothing is
-						     adjustable: that is exactly the case where an operator needs to see
-						     what the camera reported and to restore the defaults. -->
-						{#if cameraSource === 'usb'}
+						<!-- Rendered for ANY live camera, local or station, and whether or not
+						     anything is adjustable. Gating this on the USB path was the bug that
+						     hid the reset button and the capability list on a station, which is
+						     precisely where they are needed to work out what the camera offers. -->
+						{#if cameraLive}
 							<div class="mt-4 border-t border-[var(--color-tron-border)] pt-3">
 								{#if !capsSupported}
 									<p class="text-xs text-[var(--color-tron-yellow,#facc15)]">
