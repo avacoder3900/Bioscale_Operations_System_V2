@@ -13858,3 +13858,16 @@ touched files.
 NOTE on deployments: Vercel's GitHub integration had produced no preview for 3f4f49f3,
 f681ab63 or 90bb9a25 as of 16:10Z; master builds (PR #57, 16:05-16:07Z) were running at the
 time. Deployment entries follow once the integration reports one -- NOT deploying from local.
+
+Deployment: preview -- https://bioscale-operations-system-mongodb-3wwlqe4vg.vercel.app
+Source: branch feat/bucket-system @ commit 1b7a5e1e
+Retrieve this exact code: git checkout feat/bucket-system at commit 1b7a5e1e
+  (or: git log feat/bucket-system --oneline to find it if the branch has since moved on)
+What this deployment is for: the v2 bucket restructure (carts born at bucket scan-in, Raw ->
+  Unpressed -> Pressed -> In Oven, QR-only minting, shells, oven tracking removed) plus
+  thermoseal roll tracking with the restock-notifications development toggle OFF. Supersedes
+  the fe947207 preview. Earlier same-day commits: 3f4f49f3 and f681ab63 got no Vercel build
+  of their own (integration coalesced them); 90bb9a25 built at
+  https://bioscale-operations-system-mongodb-pib089b4c.vercel.app (16:12Z, success).
+Build status: success (16:15Z). PT-CT-112 is at 1 roll -> the Thermoseal card shows the
+  red below-floor state; no card/email while the toggle is off.
