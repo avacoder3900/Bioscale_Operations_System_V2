@@ -14,6 +14,10 @@
  *
  * Consumption happens in bucket-service.advanceCycle (raw → unpressed) via
  * consumeThermoseal(); voidCycle credits the length back via creditThermoseal().
+ *
+ * DEVELOPMENT TOGGLE (ManufacturingSettings.thermoseal.notificationsEnabled,
+ * default OFF): the floor rule's kanban card + email. Roll tracking itself —
+ * consumption, roll pulls, the board gauge — always runs.
  */
 import {
 	connectDB, generateId, ManufacturingSettings, PartDefinition, ReceivingLot, ThermosealRoll,
@@ -26,12 +30,14 @@ import { ensureThermosealRestockCard } from '$lib/server/kanban/standing';
 export const THERMOSEAL_PART = 'PT-CT-112';
 
 export const THERMOSEAL_DEFAULTS = {
+	notificationsEnabled: false,
 	cmPerCartridge: 3.75,
 	rollLengthCm: 6500,       // 65 m
 	minRollsInInventory: 2
 } as const;
 
 export interface ThermosealConfig {
+	notificationsEnabled: boolean;  // development toggle — restock card + email
 	cmPerCartridge: number;
 	rollLengthCm: number;
 	minRollsInInventory: number;
@@ -54,10 +60,32 @@ export async function thermosealConfig(): Promise<ThermosealConfig> {
 	const t = s?.thermoseal ?? {};
 	const num = (v: unknown, d: number) => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : d);
 	return {
+		notificationsEnabled: t.notificationsEnabled === true,
 		cmPerCartridge: num(t.cmPerCartridge, THERMOSEAL_DEFAULTS.cmPerCartridge),
 		rollLengthCm: num(t.rollLengthCm, THERMOSEAL_DEFAULTS.rollLengthCm),
 		minRollsInInventory: num(t.minRollsInInventory, THERMOSEAL_DEFAULTS.minRollsInInventory)
 	};
+}
+
+/** Flip the notifications development toggle (admin). Audited. */
+export async function setThermosealToggles(input: { notificationsEnabled: boolean; user: Operator }): Promise<ThermosealConfig> {
+	await connectDB();
+	const before = await thermosealConfig();
+	await ManufacturingSettings.updateOne(
+		{ _id: 'default' },
+		{ $set: { 'thermoseal.notificationsEnabled': input.notificationsEnabled, updatedAt: new Date() } },
+		{ upsert: true }
+	);
+	const after = await thermosealConfig();
+	await AuditLog.create({
+		_id: generateId(),
+		userId: input.user._id, username: input.user.username,
+		action: 'THERMOSEAL_TOGGLES', collectionName: 'manufacturing_settings', documentId: 'default',
+		changedAt: new Date(),
+		oldData: { notificationsEnabled: before.notificationsEnabled },
+		newData: { notificationsEnabled: after.notificationsEnabled }
+	});
+	return after;
 }
 
 /** cm a bucket of `cartridges` will take when it enters Unpressed. */
@@ -264,7 +292,8 @@ export async function checkFloor(input: { user?: Operator; cfg?: ThermosealConfi
 	const rollsOnHand = Number(part.inventoryCount ?? 0);
 	const below = rollsOnHand < cfg.minRollsInInventory;
 	const result: FloorCheck = { rollsOnHand, minRolls: cfg.minRollsInInventory, below, kanbanTaskId: null, kanbanCreated: false, emailSent: false };
-	if (!below || input.notify === false) return result;
+	// Development toggle: no card, no email until notifications are switched on.
+	if (!below || input.notify === false || !cfg.notificationsEnabled) return result;
 
 	try {
 		const card = await ensureThermosealRestockCard({

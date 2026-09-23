@@ -16,7 +16,7 @@
 			changeLog: ChangeLogRow[];
 			registry: RegistryRow[];
 			thermoseal: {
-				config: { cmPerCartridge: number; rollLengthCm: number; minRollsInInventory: number };
+				config: { notificationsEnabled: boolean; cmPerCartridge: number; rollLengthCm: number; minRollsInInventory: number };
 				roll: { id: string; lotId: string | null; lengthCm: number; consumedCm: number; remainingCm: number; remainingCartridges: number; openedAt: string | null; openedBy: string | null } | null;
 				rollsOnHand: number; minRolls: number; belowFloor: boolean;
 				nextLot: { lotId: string; remaining: number } | null;
@@ -28,7 +28,7 @@
 		};
 		form: {
 			start?: ActionResult; advance?: ActionResult; scrap?: ActionResult;
-			residual?: ActionResult; retire?: ActionResult;
+			residual?: ActionResult; retire?: ActionResult; thermosealToggles?: ActionResult;
 		} | null;
 	}
 	let { data, form }: Props = $props();
@@ -367,9 +367,23 @@
 		{@const pct = ts.roll ? Math.max(0, Math.min(100, Math.round((ts.roll.remainingCm / ts.roll.lengthCm) * 100))) : 0}
 		<div class="rounded-lg border {ts.belowFloor ? 'border-red-500/60' : 'border-[var(--color-tron-border)]'} bg-[var(--color-tron-bg-secondary)] p-3">
 			<div class="flex flex-wrap items-center justify-between gap-2">
-				<h2 class="text-xs font-semibold uppercase tracking-widest text-[var(--color-tron-cyan)]">Thermoseal (PT-CT-112)</h2>
+				<h2 class="text-xs font-semibold uppercase tracking-widest text-[var(--color-tron-cyan)]">
+					Thermoseal (PT-CT-112)
+					{#if !ts.config.notificationsEnabled}<span class="ml-2 rounded bg-[var(--color-tron-bg-tertiary)] px-1.5 py-0.5 text-[9px] normal-case tracking-normal text-[var(--color-tron-text-secondary)]">restock notifications off — development</span>{/if}
+				</h2>
 				<span class="text-[10px] text-[var(--color-tron-text-secondary)]">{ts.config.cmPerCartridge} cm per cart · {fmtM(ts.config.rollLengthCm)} per roll · consumed at Raw → Unpressed</span>
 			</div>
+			<!-- Development toggle (admin): the restock card + email. Roll tracking itself always runs. -->
+			<form method="POST" action="?/thermosealToggles" use:enhance={enhanceBusy} class="mt-2 flex flex-wrap items-center gap-4 text-xs">
+				<label class="flex items-center gap-2 {data.canAdmin ? '' : 'opacity-60'}">
+					<input type="checkbox" name="notificationsEnabled" value="1" checked={ts.config.notificationsEnabled} disabled={!data.canAdmin || busy} class="accent-[var(--color-tron-cyan)]" />
+					<span class="text-[var(--color-tron-text)]">Restock notifications</span>
+					<span class="text-[var(--color-tron-text-secondary)]">— kanban card + email when rolls in inventory &lt; {ts.minRolls}</span>
+				</label>
+				{#if data.canAdmin}<button type="submit" disabled={busy} class={btnGhost}>{busy ? 'Saving…' : 'Apply'}</button>{:else}<span class="text-[10px] text-[var(--color-tron-text-secondary)]">manufacturing:admin to change</span>{/if}
+				{#if form?.thermosealToggles?.error}<span class="text-[var(--color-tron-error)]">{form.thermosealToggles.error}</span>{/if}
+				{#if form?.thermosealToggles?.success}<span class="text-[var(--color-tron-cyan)]">Saved.</span>{/if}
+			</form>
 			<div class="mt-2 grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto_auto]">
 				<div>
 					{#if ts.roll}
@@ -398,7 +412,9 @@
 			</div>
 			{#if ts.belowFloor}
 				<p class="mt-2 text-xs text-red-300">
-					Below the {ts.minRolls}-roll floor — {ts.openRestockTaskId ? 'a restock card is open on the' : 'the next roll pull will add a restock card to the'} <a href="/kanban" class="underline">kanban board</a> and email the low-inventory list. Receive new rolls to clear it.
+					Below the {ts.minRolls}-roll floor —
+					{#if !ts.config.notificationsEnabled}restock notifications are switched off (development), so no card or email is sent.
+					{:else}{ts.openRestockTaskId ? 'a restock card is open on the' : 'a restock card will be added to the'} <a href="/kanban" class="underline">kanban board</a> and the low-inventory list emailed. Receive new rolls to clear it.{/if}
 				</p>
 			{/if}
 		</div>

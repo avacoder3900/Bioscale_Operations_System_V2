@@ -11,7 +11,7 @@ import {
 	boardData, stageCounts, resolveScan, isBucketStage, changeLog, bucketRegistry,
 	startCycle, scanCartIn, unscanCart, advanceCycle, scrapCarts, reportResidual, retireBucket
 } from '$lib/server/services/bucket-service';
-import { thermosealStatus, checkFloor } from '$lib/server/services/thermoseal-service';
+import { thermosealStatus, checkFloor, setThermosealToggles } from '$lib/server/services/thermoseal-service';
 import type { Actions, PageServerLoad } from './$types';
 
 export const config = { maxDuration: 60 };
@@ -134,6 +134,20 @@ export const actions: Actions = {
 		return wrap('unscan', async () => {
 			const cycle = await unscanCart({ cycleId: String(d.get('cycleId') ?? ''), barcode: String(d.get('barcode') ?? ''), user: op(locals) });
 			return { unscan: { success: true, barcode: String(d.get('barcode') ?? ''), quantity: cycle?.quantity ?? 0 } };
+		})();
+	},
+
+	// Development toggle for the thermoseal restock notifications (kanban card + email) — admin.
+	thermosealToggles: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'manufacturing:write');
+		const isAdmin = locals.user.roles.some(r => r.permissions.includes('manufacturing:admin') || r.permissions.includes('admin:full'));
+		if (!isAdmin) return fail(403, { thermosealToggles: { error: 'Changing the thermoseal toggles requires manufacturing:admin' } });
+		await connectDB();
+		const d = await request.formData();
+		return wrap('thermosealToggles', async () => {
+			const cfg = await setThermosealToggles({ notificationsEnabled: d.get('notificationsEnabled') === '1', user: op(locals) });
+			return { thermosealToggles: { success: true, notificationsEnabled: cfg.notificationsEnabled } };
 		})();
 	},
 
