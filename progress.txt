@@ -13234,3 +13234,38 @@ Deployment: production — building from the GitHub push to master (Vercel dashb
 Source: branch master @ commit f8df7757 (squash merge of PR #56)
 Retrieve this exact code: git checkout master at commit f8df7757
 What this deployment is for: station camera explanation + CvProject captureSettings editor
+
+================================================================================
+2026-09-23 — fix/camera-exposure-and-defaults — exposure actually applies; reset buttons
+================================================================================
+Exposure could not be changed from the Post-Mortem Inspect settings panel even with the mode set to
+manual. Three causes, stacked.
+
+exposureTime was sent on its own. Most cameras ignore it unless exposureMode is manual in the SAME
+constraint set — choosing manual in the dropdown first is not always enough, as some drivers revert.
+Dependent properties now carry their prerequisite, and only where the camera reports offering that
+mode: exposureTime / exposureCompensation / iso bring exposureMode, focusDistance brings focusMode,
+colorTemperature brings whiteBalanceMode.
+
+Nothing verified the value took. applyConstraints() resolves happily while the camera clamps or
+ignores the request, so a silently rejected setting looked successful — most likely what was being
+seen. Settings are re-read afterwards and compared against the request; a mismatch is reported with
+the likely reason, naming the mode still overriding it where that is the cause.
+
+Bare constraints were the only attempt. Some drivers refuse a bare constraint they accept inside
+`advanced`. Now tries bare first (a genuine refusal stays visible, which is why bare was chosen)
+then falls back to `advanced` before reporting failure.
+
+Also fills the gap after the last slider: "Reset all to defaults" sits in the grid, so an odd number
+of controls leaves no hole; it restores the validated LIZA tuning and re-reads what stuck, and the
+old standalone button is removed as a duplicate. The station section gains its own reset loading the
+CvProject.captureSettings schema defaults, staged as a draft so saving stays explicit.
+
+File: src/routes/manufacturing/cart-mfg/post-mortem-inspect/+page.svelte. npm run check: 12/437 —
+this master's baseline, none in the touched file. NOT exercised against a camera: whether a given
+unit now honours exposure is what the new mismatch message exists to answer.
+
+Deployment: production — building from the GitHub push to master (Vercel dashboard, commit below)
+Source: branch master @ commit a092d05f (squash merge of PR #57)
+Retrieve this exact code: git checkout master at commit a092d05f
+What this deployment is for: camera exposure fix + reset-to-defaults buttons
