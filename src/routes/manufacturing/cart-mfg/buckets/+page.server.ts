@@ -1,5 +1,5 @@
 /**
- * Bucket board — stage columns + scan rail (BUCKET-SYSTEM_PLAN.md §9.1).
+ * Bucket board — stage columns + scan rail (BUCKET-SYSTEM_PLAN.md v2 §9.1).
  * Every mutation goes through bucket-service; this file only parses forms,
  * enforces permissions and maps BucketError → fail().
  */
@@ -7,10 +7,11 @@ import { fail, redirect } from '@sveltejs/kit';
 import { connectDB, ReceivingLot, InventoryTransaction } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
 import {
-	BucketError, BUCKET_STAGES, STAGE_LABELS, CARTRIDGE_BLANK_PART, BARCODE_LABEL_PART,
+	BucketError, BUCKET_STAGES, STAGE_LABELS, IN_OVEN_LABEL, SHELL_PART, LABEL_PART, THERMOSEAL_PART,
 	boardData, stageCounts, resolveScan, isBucketStage, changeLog, bucketRegistry,
-	startCycle, advanceCycleWithDiscard, adjustCycle, scrapFromCycle, reportResidual, retireBucket
+	startCycle, scanCartIn, unscanCart, advanceCycle, scrapCarts, reportResidual, retireBucket
 } from '$lib/server/services/bucket-service';
+import { thermosealStatus } from '$lib/server/services/thermoseal-service';
 import type { Actions, PageServerLoad } from './$types';
 
 export const config = { maxDuration: 60 };
@@ -20,7 +21,7 @@ function op(locals: App.Locals): Op {
 	return { _id: locals.user!._id, username: locals.user!.username };
 }
 
-/** Same per-lot remaining math WI-01 uses for its dropdowns. */
+/** Same per-lot remaining math WI-01 used: lot quantity minus consumption+scrap rows. */
 async function availableLots(partNumbers: string[]) {
 	const lots = await ReceivingLot.find({
 		'part.partNumber': { $in: partNumbers },
@@ -50,24 +51,27 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	const focusStage = url.searchParams.get('stage') ?? '';
 	const q = url.searchParams.get('q') ?? '';
 
-	const [board, counts, lots, scan, log, registry] = await Promise.all([
+	const [board, counts, lots, scan, log, registry, thermoseal] = await Promise.all([
 		boardData(),
 		stageCounts(),
-		availableLots([CARTRIDGE_BLANK_PART, BARCODE_LABEL_PART]),
+		availableLots([SHELL_PART, LABEL_PART, THERMOSEAL_PART]),
 		q ? resolveScan(q) : Promise.resolve(null),
 		changeLog(150),
-		bucketRegistry()
+		bucketRegistry(),
+		thermosealStatus().catch(() => null)
 	]);
 
 	return {
 		stages: BUCKET_STAGES.map(s => ({ key: s, label: STAGE_LABELS[s] })),
-		focusStage: focusStage === 'available' || isBucketStage(focusStage) ? focusStage : null,
+		inOvenLabel: IN_OVEN_LABEL,
+		focusStage: focusStage === 'available' || focusStage === 'in_oven' || isBucketStage(focusStage) ? focusStage : null,
 		board,
 		counts,
 		lots,
 		changeLog: log,
 		registry,
-		canAdjust: locals.user.roles.some(r => r.permissions.includes('manufacturing:admin') || r.permissions.includes('admin:full')),
+		thermoseal,
+		canAdmin: locals.user.roles.some(r => r.permissions.includes('manufacturing:admin') || r.permissions.includes('admin:full')),
 		scan: scan ? JSON.parse(JSON.stringify(scan)) : null,
 		scanQuery: q
 	};
@@ -84,6 +88,10 @@ function wrap(key: string, fn: () => Promise<Record<string, unknown>>) {
 	};
 }
 
+function codesFrom(raw: FormDataEntryValue | null): string[] {
+	return String(raw ?? '').split(/[\s,]+/).map(s => s.trim()).filter(Boolean);
+}
+
 export const actions: Actions = {
 	start: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
@@ -93,12 +101,36 @@ export const actions: Actions = {
 		return wrap('start', async () => {
 			const cycle = await startCycle({
 				bucketId: String(d.get('bucketId') ?? ''),
-				quantity: Number(d.get('quantity') ?? 0),
-				sourceLotId: String(d.get('sourceLotId') ?? ''),
+				shellLotId: String(d.get('shellLotId') ?? ''),
+				labelLotId: String(d.get('labelLotId') ?? ''),
 				emptyConfirmed: d.get('emptyConfirmed') === '1',
 				user: op(locals)
 			});
 			return { start: { success: true, cycleId: cycle._id, bucketId: cycle.bucketId, cycleNumber: cycle.cycleNumber } };
+		})();
+	},
+
+	// Called via fetch from the Raw panel's scan box (one cart per call) so the
+	// rail can keep scanning without a full form round-trip.
+	scanIn: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'manufacturing:write');
+		await connectDB();
+		const d = await request.formData();
+		return wrap('scanIn', async () => {
+			const r = await scanCartIn({ cycleId: String(d.get('cycleId') ?? ''), barcode: String(d.get('barcode') ?? ''), user: op(locals) });
+			return { scanIn: { success: true, barcode: r.barcode, quantity: r.cycle?.quantity ?? 0 } };
+		})();
+	},
+
+	unscan: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'manufacturing:write');
+		await connectDB();
+		const d = await request.formData();
+		return wrap('unscan', async () => {
+			const cycle = await unscanCart({ cycleId: String(d.get('cycleId') ?? ''), barcode: String(d.get('barcode') ?? ''), user: op(locals) });
+			return { unscan: { success: true, barcode: String(d.get('barcode') ?? ''), quantity: cycle?.quantity ?? 0 } };
 		})();
 	},
 
@@ -108,42 +140,20 @@ export const actions: Actions = {
 		await connectDB();
 		const d = await request.formData();
 		return wrap('advance', async () => {
-			const r = await advanceCycleWithDiscard({
+			const r = await advanceCycle({
 				cycleId: String(d.get('cycleId') ?? ''),
-				barcodeLotId: (d.get('barcodeLotId') as string | null) ?? undefined,
-				discarded: Number(d.get('discarded') ?? 0),
+				thermosealLotId: (d.get('thermosealLotId') as string | null) ?? undefined,
+				discardedIds: codesFrom(d.get('discardedIds')),
 				discardJournal: (d.get('discardJournal') as string | null) ?? undefined,
 				user: op(locals)
 			});
-			return {
-				advance: {
-					success: true,
-					cycleId: r.cycle?._id ?? null,
-					stage: r.cycle?.stage ?? null,
-					discarded: r.discarded,
-					closed: r.closed
-				}
-			};
-		})();
-	},
-
-	adjust: async ({ request, locals }) => {
-		if (!locals.user) redirect(302, '/login');
-		// Count corrections change numbers without physical justification —
-		// the one action on this page held above plain write.
-		if (!locals.user.roles.some(r => r.permissions.includes('manufacturing:admin') || r.permissions.includes('admin:full'))) {
-			return fail(403, { adjust: { error: 'Count corrections require manufacturing:admin' } });
-		}
-		await connectDB();
-		const d = await request.formData();
-		return wrap('adjust', async () => {
-			const cycle = await adjustCycle({
-				cycleId: String(d.get('cycleId') ?? ''),
-				newQuantity: Number(d.get('newQuantity') ?? 0),
-				reason: String(d.get('reason') ?? ''),
-				user: op(locals)
-			});
-			return { adjust: { success: true, cycleId: cycle._id, quantity: cycle.quantity } };
+			return { advance: {
+				success: true, cycleId: r.cycle?._id ?? null, stage: r.cycle?.stage ?? null, discarded: r.discarded, closed: r.closed,
+				thermoseal: r.thermoseal ? {
+					cm: r.thermoseal.cm, rollsOpened: r.thermoseal.rollsOpened.length,
+					alert: r.thermoseal.alert?.below ? { rollsOnHand: r.thermoseal.alert.rollsOnHand, minRolls: r.thermoseal.alert.minRolls, kanbanCreated: r.thermoseal.alert.kanbanCreated, emailSent: r.thermoseal.alert.emailSent } : null
+				} : null
+			} };
 		})();
 	},
 
@@ -153,13 +163,13 @@ export const actions: Actions = {
 		await connectDB();
 		const d = await request.formData();
 		return wrap('scrap', async () => {
-			const { cycle, removalId } = await scrapFromCycle({
+			const r = await scrapCarts({
 				cycleId: String(d.get('cycleId') ?? ''),
-				quantity: Number(d.get('quantity') ?? 0),
+				barcodes: codesFrom(d.get('barcodes')),
 				journal: String(d.get('journal') ?? ''),
 				user: op(locals)
 			});
-			return { scrap: { success: true, cycleId: cycle?._id ?? null, quantity: cycle?.quantity ?? 0, status: cycle?.status ?? null, removalId } };
+			return { scrap: { success: true, cycleId: r.cycle?._id ?? null, quantity: r.cycle?.quantity ?? 0, status: r.cycle?.status ?? null, scrapped: r.scrapped.length } };
 		})();
 	},
 
@@ -171,18 +181,11 @@ export const actions: Actions = {
 		return wrap('residual', async () => {
 			const disposition = String(d.get('disposition') ?? '');
 			if (disposition !== 'merge' && disposition !== 'scrap' && disposition !== 'defer') throw new BucketError('Choose a disposition.');
-			// One count (and, for merge, one destination) per stage: qty_<stage> / dest_<stage>.
-			const items = BUCKET_STAGES
-				.map(stage => ({
-					stage,
-					quantity: Number(d.get(`qty_${stage}`) ?? 0),
-					destinationBucketId: (d.get(`dest_${stage}`) as string | null) ?? undefined
-				}))
-				.filter(i => i.quantity !== 0);
 			const r = await reportResidual({
 				bucketId: String(d.get('bucketId') ?? ''),
-				items,
+				barcodes: codesFrom(d.get('barcodes')),
 				disposition,
+				destinationBucketId: (d.get('destinationBucketId') as string | null) ?? undefined,
 				journal: (d.get('journal') as string | null) ?? undefined,
 				user: op(locals)
 			});

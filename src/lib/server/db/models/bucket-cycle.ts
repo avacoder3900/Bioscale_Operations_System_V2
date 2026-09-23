@@ -4,18 +4,20 @@ import { generateId } from '../utils.js';
 const operatorRef = { _id: String, username: String };
 
 /**
- * BucketCycle — one pass of material through the pre-serialization stages
- * (BUCKET-SYSTEM_PLAN.md §4.2). _id is a nanoid so every pass is a permanent,
- * unambiguous record even though the bucket barcode repeats. Displayed as
- * 'BKT-000123 #7' in history views only; operators never scan a suffix.
+ * BucketCycle — one pass of cartridges through a production bucket
+ * (BUCKET-SYSTEM_PLAN.md v2). _id is a nanoid so every pass is a permanent,
+ * unambiguous record even though the bucket id repeats. Displayed as
+ * 'BKT-000123 #7' in history views only; operators scan the tub's QR sticker.
  *
- * Invariant: a cycle is at exactly one stage and advances as a whole. The
- * quantity changes within a stage only via adjust / scrap / merge, and via
- * WI-01 consumption at qr_pending (partial consumption is allowed, partial
- * advancement is not — §3.1).
+ * v2 (2026-09-23): a pass is a MEMBERSHIP LIST, not a count. Each cartridge
+ * is serialized (CartridgeRecord created at status 'raw') the moment its QR
+ * sticker is scanned into the bucket; `cartridgeIds` holds the members and
+ * `quantity` is kept equal to its length for the board and counts. Advancing
+ * the bucket advances every member's status. WI-01 draws members out to
+ * 'backing' (In Oven); the pass closes when the last one leaves.
  */
 const sourceLotSchema = new Schema({
-	partNumber: String,   // 'PT-CT-104' | 'PT-CT-106'
+	partNumber: String,   // 'PT-CT-104' shell | 'PT-CT-106' label | 'PT-CT-112' thermoseal
 	lotId: String,        // ReceivingLot.lotId (scanned barcode)
 	scannedAt: Date
 }, { _id: false });
@@ -23,6 +25,7 @@ const sourceLotSchema = new Schema({
 const residualFoundSchema = new Schema({
 	qty: Number,
 	stage: String,
+	cartridgeIds: { type: [String], default: [] },
 	disposition: { type: String, enum: ['merge', 'scrap', 'defer'] },
 	destinationCycleId: String, // set on merge
 	removalId: String,          // ManualCartridgeRemoval._id on scrap
@@ -30,15 +33,12 @@ const residualFoundSchema = new Schema({
 	by: operatorRef
 }, { _id: false });
 
-// Count discrepancies discovered against this cycle. 'overrun' = WI-01
-// scanned more cartridges than the cycle said it held; 'shortfall' = a
-// residual was found after the cycle closed (so fewer went in than
-// recorded). §7.1: the residual disposition links back here so the gap
-// closes with a cause attached instead of staying an unexplained variance.
+// Count discrepancies discovered against this cycle. 'shortfall' = leftover
+// cartridges were found in the tub after the pass closed.
 const discrepancySchema = new Schema({
 	type: { type: String, enum: ['overrun', 'shortfall'] },
 	qty: Number,
-	relatedId: String, // LotRecord._id (overrun) or removal / destination cycle id (shortfall)
+	relatedId: String,
 	at: Date,
 	note: String
 }, { _id: false });
@@ -49,12 +49,21 @@ const bucketCycleSchema = new Schema({
 	cycleNumber: { type: Number, required: true }, // → 'BKT-000123 #7'
 	stage: {
 		type: String,
-		enum: ['raw', 'unpressed', 'pressed', 'qr_pending'],
+		enum: ['raw', 'unpressed', 'pressed', 'qr_pending'], // qr_pending: v1 only, kept so old rows validate
 		required: true
 	},
-	quantity: { type: Number, required: true },   // current count
-	openedQty: { type: Number, required: true },  // count at creation; shrinkage = openedQty − quantity
+	cartridgeIds: { type: [String], default: [] }, // members currently in the tub (v2)
+	quantity: { type: Number, required: true },    // == cartridgeIds.length (denormalized for counts)
+	openedQty: { type: Number, required: true },   // members when the pass first left Raw (shrinkage = openedQty − quantity)
 	sourceLots: { type: [sourceLotSchema], default: [] },
+	// Thermoseal taken at raw → unpressed (BUCKET-SYSTEM_PLAN v2 §3.4): total cm
+	// and the roll segments it came from, so voidCycle can credit the length back.
+	thermoseal: {
+		cm: Number,
+		cartridges: Number,
+		segments: { type: [{ _id: false, rollId: String, cm: Number }], default: undefined },
+		consumedAt: Date
+	},
 	status: {
 		type: String,
 		// 'voided' = the pass never really happened (test data, or opened against
@@ -87,6 +96,7 @@ bucketCycleSchema.index(
 );
 bucketCycleSchema.index({ stage: 1, status: 1 });
 bucketCycleSchema.index({ bucketId: 1, cycleNumber: -1 });
+bucketCycleSchema.index({ cartridgeIds: 1 });
 
 export const BucketCycle = mongoose.models.BucketCycle
 	|| mongoose.model('BucketCycle', bucketCycleSchema, 'bucket_cycles');

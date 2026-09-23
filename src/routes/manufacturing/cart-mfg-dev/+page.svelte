@@ -289,13 +289,13 @@
 				<div class="tron-card-interactive" role="button" tabindex="0"
 					onclick={() => toggleCard('backing')} onkeydown={(e) => handleKeydown(e, 'backing')}>
 					<div class="flex items-center justify-between">
-						<span class="text-xs font-semibold uppercase text-tron-text-secondary">Backing</span>
+						<span class="text-xs font-semibold uppercase text-tron-text-secondary">In Oven</span>
 						{#if data.pipeline.backing.readyLots?.length}
 							<span class="tron-badge tron-badge-success">{data.pipeline.backing.readyLots.length} ready</span>
 						{/if}
 					</div>
 					<div class="mt-1 text-lg font-bold text-tron-text">{data.pipeline.backing.backedTotal} <span class="text-xs font-normal text-tron-text-secondary">backed</span></div>
-					<div class="text-xs text-tron-text-secondary">{data.pipeline.backing.totalReadyCartridges} ready &middot; {data.pipeline.backing.inProgressLots?.length ?? 0} in oven</div>
+					<div class="text-xs text-tron-text-secondary">all ready for wax filling</div>
 					<a href="/manufacturing/cart-mfg/wi-01" class="mt-2 block text-xs text-tron-cyan hover:underline" onclick={(e) => e.stopPropagation()}>&rarr; WI-01</a>
 					{#if expandedCard === 'backing'}
 						<div class="mt-3 border-t border-tron-border pt-3">
@@ -303,7 +303,7 @@
 								<div class="flex justify-between text-xs text-tron-text-secondary mb-1">
 									<span>{lot.lotId} &middot; {lot.cartridgeCount}</span>
 									<span class={lot.isReady ? 'text-tron-green font-medium' : 'text-tron-yellow'}>
-										{#if lot.isReady}Ready{:else}{lot.remainingMin}m{/if}
+										Ready
 									</span>
 								</div>
 							{:else}

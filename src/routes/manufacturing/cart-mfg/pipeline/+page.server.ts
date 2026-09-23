@@ -9,10 +9,10 @@
  * `extra` map on each row.
  */
 import { redirect } from '@sveltejs/kit';
-import { isCureComplete, cureRemainingMin } from '$lib/server/manufacturing/cure-time';
+
 import {
 	connectDB, BackingLot, WaxFillingRun, ReagentBatchRecord, CartridgeRecord,
-	Equipment, ManufacturingSettings
+	Equipment
 } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
 import { getCheckedOutCartridgeIds } from '$lib/server/checkout-utils';
@@ -23,13 +23,14 @@ import type { PageServerLoad } from './$types';
 
 export const config = { maxDuration: 60 };
 
-// The four bucket_* stages are the pre-barcode funnel (BUCKET-SYSTEM_PLAN §9):
-// production buckets counted by cycle, upstream of everything serialized.
-const STAGE_KEYS = ['bucket_raw', 'bucket_unpressed', 'bucket_pressed', 'bucket_qr', 'backing', 'wax_fill', 'cooling', 'reagent', 'seal', 'store'] as const;
+// The three bucket_* stages are the production-bucket funnel (BUCKET-SYSTEM_PLAN
+// v2 §9): cartridges are born at Raw when scanned into a bucket and move with
+// it, then WI-01 draws them into 'backing' ("In Oven").
+const STAGE_KEYS = ['bucket_raw', 'bucket_unpressed', 'bucket_pressed', 'backing', 'wax_fill', 'cooling', 'reagent', 'seal', 'store'] as const;
 type StageKey = (typeof STAGE_KEYS)[number];
 
 const BUCKET_STAGE_FOR_KEY: Partial<Record<StageKey, BucketStage>> = {
-	bucket_raw: 'raw', bucket_unpressed: 'unpressed', bucket_pressed: 'pressed', bucket_qr: 'qr_pending'
+	bucket_raw: 'raw', bucket_unpressed: 'unpressed', bucket_pressed: 'pressed'
 };
 
 export interface PipelineRow {
@@ -66,36 +67,30 @@ const bucketHeaders = [
 const STAGE_META: Record<StageKey, StageMeta> = {
 	bucket_raw: {
 		key: 'bucket_raw', label: 'Raw', color: 'tron-purple',
-		description: 'Production buckets holding raw cartridge blanks (PT-CT-104) — counted, not yet serialized. One row per open bucket cycle.',
+		description: 'Production buckets being filled: raw shells (PT-CT-104) with QR stickers on, scanned in one at a time. Each scan is a cartridge\'s birth. One row per open bucket pass.',
 		headers: bucketHeaders
 	},
 	bucket_unpressed: {
 		key: 'bucket_unpressed', label: 'Unpressed', color: 'tron-blue',
-		description: 'Buckets staged for the press.',
+		description: 'Buckets staged for the press (thermoseal consumed at this step).',
 		headers: bucketHeaders
 	},
 	bucket_pressed: {
 		key: 'bucket_pressed', label: 'Pressed', color: 'tron-yellow',
-		description: 'Buckets off the press, awaiting barcode labels.',
-		headers: bucketHeaders
-	},
-	bucket_qr: {
-		key: 'bucket_qr', label: 'QR Scan-In Pending', color: 'tron-cyan',
-		description: 'Buckets with barcode stickers applied, waiting to be scanned in at WI-01. WI-01 draws from these.',
+		description: 'Buckets off the press, ready for WI-01 to draw into the oven.',
 		headers: bucketHeaders
 	},
 	backing: {
-		key: 'backing', label: 'Backing', color: 'tron-purple',
-		description: 'Cartridges currently backing in ovens. Each cartridge is scanned in individually at WI-01 and exists as its own record; rows group them per WI-01 batch. Legacy backing-lot buckets are shown read-only until drained.',
+		key: 'backing', label: 'In Oven', color: 'tron-purple',
+		description: 'Cartridges drawn into the oven at WI-01 (status backing), grouped per WI-01 batch. No oven or cure time is tracked — every cartridge here is ready for wax filling. Legacy backing-lot buckets are shown read-only until drained.',
 		headers: [
 			{ key: 'id', label: 'Lot' },
 			{ key: 'status', label: 'Status' },
 			{ key: 'count', label: 'Cartridges' },
-			{ key: 'location', label: 'Oven' },
+			{ key: 'location', label: 'From bucket' },
 			{ key: 'operator', label: 'Operator' },
-			{ key: 'when', label: 'Entered' },
-			{ key: 'elapsed', label: 'Elapsed' },
-			{ key: 'ready', label: 'Ready?' }
+			{ key: 'when', label: 'Latest scan' },
+			{ key: 'elapsed', label: 'Age' }
 		]
 	},
 	wax_fill: {
@@ -191,73 +186,57 @@ async function loadBucketStage(stage: BucketStage, now: Date): Promise<PipelineR
 }
 
 async function loadBacking(now: Date, checkedOutIds: string[]): Promise<PipelineRow[]> {
-	// WAX-FLOW-2: cartridges at the backing stage are individual CartridgeRecords
-	// (status='backing'), scanned in one-by-one at WI-01. One row per WI-01 batch.
-	// Legacy BackingLot aggregate buckets (no per-cartridge records) are appended
-	// read-only until drained — nothing writes to BackingLot any more.
-	const [groups, legacyLots, settings] = await Promise.all([
+	// "In Oven" = status 'backing'. Cartridges arrive here from a pressed
+	// production bucket at WI-01; rows group them per WI-01 batch. Backing-oven
+	// tracking and the cure-time gate were removed app-wide (2026-09-23) — no
+	// oven column, no readiness. Legacy BackingLot aggregates are appended
+	// read-only until drained.
+	const [groups, legacyLots] = await Promise.all([
 		CartridgeRecord.aggregate([
 			{ $match: { status: 'backing', _id: { $nin: checkedOutIds } } },
 			{ $group: {
 				_id: '$backing.parentLotRecordId',
 				count: { $sum: 1 },
-				oldestEntry: { $min: '$backing.ovenEntryTime' },
-				ovenNames: { $addToSet: '$backing.ovenLocationName' },
+				newest: { $max: '$backing.recordedAt' },
+				buckets: { $addToSet: '$backing.bucketBarcode' },
 				operator: { $last: '$backing.operator.username' }
 			} },
-			{ $sort: { oldestEntry: -1 } }
+			{ $sort: { newest: -1 } }
 		]) as any as Promise<any[]>,
 		BackingLot.find({
 			status: { $in: ['in_oven', 'ready', 'created'] },
 			cartridgeCount: { $gt: 0 }
-		}).sort({ ovenEntryTime: -1 }).lean() as any as Promise<any[]>,
-		ManufacturingSettings.findById('default').select('waxFilling.minOvenTimeMin').lean() as any as Promise<any>
+		}).sort({ createdAt: -1 }).lean() as any as Promise<any[]>
 	]);
-	const minOvenMin: number = settings?.waxFilling?.minOvenTimeMin ?? 30;
 
 	const batchRows: PipelineRow[] = groups.map((g: any) => {
 		const lotId = String(g._id ?? 'unknown');
-		const elapsed = ageMin(g.oldestEntry, now);
-		const ready = isCureComplete(g.oldestEntry, minOvenMin, now.getTime());
 		return {
 			id: lotId,
 			idLabel: shortId(lotId, 12),
-			status: ready ? 'ready' : 'in_oven',
+			status: 'in_oven',
 			count: g.count ?? 0,
-			location: (g.ovenNames ?? []).filter(Boolean).join(', ') || null,
+			location: (g.buckets ?? []).filter(Boolean).join(', ') || null,
 			operator: g.operator ?? null,
-			when: g.oldestEntry ? new Date(g.oldestEntry).toISOString() : null,
-			elapsedMin: elapsed,
-			extras: {
-				ready: ready ? 'yes' : 'no',
-				minOvenMin,
-				remainingMin: ready || elapsed == null ? 0 : Math.max(0, minOvenMin - elapsed)
-			},
+			when: g.newest ? new Date(g.newest).toISOString() : null,
+			elapsedMin: ageMin(g.newest, now),
+			extras: {},
 			detailHref: `/manufacturing/cart-mfg/lots/${encodeURIComponent(lotId)}`
 		};
 	});
 
-	const legacyRows: PipelineRow[] = legacyLots.map((l: any) => {
-		const elapsed = ageMin(l.ovenEntryTime, now);
-		const ready = elapsed != null && elapsed >= minOvenMin;
-		return {
-			id: String(l._id),
-			idLabel: `${shortId(String(l._id), 12)} (legacy bucket)`,
-			status: l.status ?? 'unknown',
-			count: l.cartridgeCount ?? 0,
-			location: l.ovenLocationName ?? l.ovenLocationId ?? null,
-			operator: l.operator?.username ?? null,
-			when: l.ovenEntryTime ? new Date(l.ovenEntryTime).toISOString() : null,
-			elapsedMin: elapsed,
-			extras: {
-				ready: ready ? 'yes' : (l.status === 'consumed' ? '—' : 'no'),
-				minOvenMin,
-				remainingMin: ready || elapsed == null ? 0 : Math.max(0, minOvenMin - elapsed),
-				legacy: 'legacy bucket'
-			},
-			detailHref: null
-		};
-	});
+	const legacyRows: PipelineRow[] = legacyLots.map((l: any) => ({
+		id: String(l._id),
+		idLabel: `${shortId(String(l._id), 12)} (legacy bucket)`,
+		status: l.status ?? 'unknown',
+		count: l.cartridgeCount ?? 0,
+		location: null,
+		operator: l.operator?.username ?? null,
+		when: l.createdAt ? new Date(l.createdAt).toISOString() : null,
+		elapsedMin: ageMin(l.createdAt, now),
+		extras: { legacy: 'legacy bucket' },
+		detailHref: null
+	}));
 
 	return [...batchRows, ...legacyRows];
 }

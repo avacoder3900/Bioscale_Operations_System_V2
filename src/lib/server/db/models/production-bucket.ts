@@ -23,7 +23,7 @@ const productionBucketSchema = new Schema({
 	},
 	currentCycleId: { type: String, default: null }, // BucketCycle._id while in_use
 	cycleCount: { type: Number, default: 0 },        // monotonic; $inc on every cycle open
-	homeLocation: String,                            // shelf label or Equipment._id
+	homeLocation: String,                            // LEGACY (v1) — no longer collected or shown
 	// Set on auto-release (cycle drained to 0). The next Start Cycle shows a
 	// one-tap "Confirmed empty" that clears it — never blocks (§3.5).
 	spotCheckPending: { type: Boolean, default: false },

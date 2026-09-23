@@ -13739,3 +13739,93 @@ What this deployment is for: the new inventory rule -- no debit on bucket entry,
   Supersedes the de2cd91a preview. Worth verifying: start a cycle and confirm the PT-CT-104
   lot's "N left" does NOT move; discard 1 and confirm it DOES move by 1.
 Build status: success (brevitest scope, 14:10Z).
+
+================================================================================
+2026-09-23 -- feat/bucket-system -- second master merge; PR #54 opened into master
+================================================================================
+Merged origin/master (magnetometer field-magnitude, SPU validation tracker) into the branch
+at 33a937a4 -- conflicts only in progress.txt (both appended; kept master's then ours) and a
+couple of import lines (kept both). Branch is 0 behind master, 33 ahead. Opened PR #54
+(feat/bucket-system -> master, +5130/-38): https://github.com/avacoder3900/Bioscale_Operations_System_V2/pull/54
+npm run check on the merged tree: 12 errors / 437 warnings -- 10 pre-existing plus 2 that came
+in from master (validation/magnetometer/[sessionId]); none in any bucket file.
+(This entry was written late -- the commit that should have carried it was blocked at the time.)
+
+================================================================================
+2026-09-23 -- feat/bucket-system -- v2 restructure: carts born at bucket scan-in, Raw->Unpressed->Pressed->In Oven, QR-only minting, "shells", oven tracking removed app-wide
+================================================================================
+Structural rework requested by the user (four points) plus the follow-up decisions: keep WI-01
+fed from buckets; thermoseal consumed at the Unpressed step; reuse status 'backing' labelled
+"In Oven"; oven removal is app-wide; the BKT id stays internal behind the QR label.
+
+1. MINTING. One bucket per QR scan at /manufacturing/cart-mfg/buckets/new (create, or replace a
+   sticker via ?bucket=BKT-...; "Return to previous page"). No printing, no location.
+   src/routes/manufacturing/print-bucket-labels/ deleted. homeLocation is LEGACY on the model.
+2. "Blanks" -> "shells" everywhere in the bucket context (SHELL_PART = PT-CT-104). The optical
+   "Blank Cartridge" concept and the cartridgeBlankLot schema field are untouched on purpose.
+3. ORDER OF OPERATIONS. The QR sticker now goes on the RAW shell and the cart is scanned into a
+   Raw bucket -- that scan creates the CartridgeRecord (status 'raw') and debits 1 shell + 1
+   label. BucketCycle carries cartridgeIds (membership); advancing sets every member's status
+   (raw -> unpressed -> pressed). WI-01 is now bucket-fed: pick a Pressed bucket, scan members
+   (or Take all) -> they leave the bucket and become 'backing' = "In Oven". The old QR Scan-In
+   Pending stage is gone (enum value kept for v1 rows). Discards/scrap/residual are scan-based
+   (ids), not counts. Un-scan a mis-scan while Raw (record deleted, debits retracted).
+   CartridgeRecord: status enum gains raw/unpressed/pressed; bucket{bucketId,cycleId,
+   scannedInAt,scannedInBy} sub-doc; LifecycleStage type + cartridge-admin STAGES gain the three
+   keys; 'backing' displays as "In Oven"; strips on cartridge-admin and the cart-mfg dashboard
+   show Available/Raw/Unpressed/Pressed/In Oven; pipeline stage keys are
+   bucket_raw/bucket_unpressed/bucket_pressed/backing.
+4. OVEN TRACKING + TIME GATING REMOVED app-wide: WI-01 no longer picks an oven; backing.oven*/
+   ovenEntryTime are LEGACY (never written; backing.recordedAt is the scan time);
+   src/lib/server/manufacturing/cure-time.ts deleted; minOvenTimeMin removed from the wax-filling
+   and opentron-control settings pages; wax-filling deck loading no longer computes ready/
+   under-time; dashboard Ovens section removed; pipeline In Oven view has no Oven/Ready columns
+   and no ManufacturingSettings read; lots/[lotId] shows the source bucket instead of an oven;
+   cart-mfg-dev tile is "In Oven". Left alone: post-wax-run oven placement (PostRunCooling /
+   ovenPlacement), reagent ovenCure step, ovens as equipment, legacy read-only aggregates on
+   equipment/cartridge-dashboard/DHR/traceability.
+
+Files: models (bucket-cycle, bucket-transaction, cartridge-record, production-bucket,
+queries.ts LifecycleStage), bucket-service.ts (rewritten), buckets/ board + history + new/,
+wi-01 server+svelte (rewritten), wax-filling server, cart-mfg dashboard server+svelte,
+cart-mfg-dev, pipeline server+svelte, both settings pages, lots/[lotId], cartridge-admin svelte.
+BUCKET-SYSTEM_PLAN.md rewritten as the v2 as-built spec (same section numbers; v1->v2 table at
+the top).
+
+================================================================================
+2026-09-23 -- feat/bucket-system -- thermoseal roll tracking: 3.75 cm per cart, 65 m rolls, 2-roll floor with kanban restock card + email
+================================================================================
+User request, built on top of the v2 Unpressed step. PT-CT-112 is now stocked in ROLLS and
+consumed by LENGTH:
+- New model ThermosealRoll (thermoseal_rolls): lengthCm, consumedCm, status active/exhausted/
+  retired, lotId, openedBy/At, openedForCycleId, inventoryTxId. One roll active at a time.
+- New src/lib/server/services/thermoseal-service.ts: thermosealConfig() (defaults 3.75 cm per
+  cart, 6500 cm per roll, floor 2; overridable via ManufacturingSettings.thermoseal),
+  consumeThermoseal() (members x 3.75 cm off the open roll, rolling onto a freshly pulled roll
+  as needed -- the first advance ever pulls the first roll), openRoll() (the only place the
+  PT-CT-112 count moves: one -1 consumption with manufacturingRunId = roll id, lot = the one
+  scanned on the form or else the oldest accepted lot with stock by the ledger),
+  creditThermoseal() (void gives the length back to the roll; an opened roll is never returned
+  to stock), checkFloor() (rolls on hand < 2 -> one kanban restock card, idempotent on
+  sourceRef thermoseal-restock:<partId>, + email to the lowInventory list only on the pull that
+  created the card), thermosealStatus() for the board.
+- kanban/standing.ts: ensureThermosealRestockCard() -- same auto-commit pattern as the parts
+  reorder cards; class of service expedite; body carries the lead-time warning from
+  PartDefinition.leadTimeDays (generic warning when unset).
+- notifications.ts: notifyThermosealLow() via Resend to NotificationSettings.lowInventory.
+- bucket-service.ts: advanceCycle raw->unpressed calls consumeThermoseal (the interim
+  1-unit-per-cart debit is gone); the thermoseal lot is optional on the advance form and only
+  used when a new roll is pulled; BucketCycle.thermoseal{cm,cartridges,segments,consumedAt};
+  the advance ledger row's reason carries the cm/roll note. partsAtStage() no longer lists
+  PT-CT-112 -- a discarded cart does NOT return thermoseal length (and previously would have
+  scrapped a whole "unit" per cart). voidCycle credits the segments back
+  (thermosealCreditedCm in the result; shown on the history page).
+- Board UI: Thermoseal card under the stage strip (open roll gauge in m / ~carts left / lot,
+  rolls in inventory vs floor in red when below, next-roll lot, restock state with kanban
+  link); advance form previews "N cm comes off the open roll" and asks for a lot only when a
+  roll will be pulled; after-advance banner reports cm taken, rolls pulled, and the floor
+  alert (card created / already open, email sent).
+CUTOVER FLAG: PT-CT-112 inventoryCount is -427 right now (interim per-cart debits). Reset it by
+a physical count IN ROLLS before the first v2 advance, or the first roll pull fires the floor
+rule against nonsense -- and previews share the kanban board + email list with production.
+npm run check: 12 errors / 438 warnings -- the same 12 pre-existing, none in touched files.

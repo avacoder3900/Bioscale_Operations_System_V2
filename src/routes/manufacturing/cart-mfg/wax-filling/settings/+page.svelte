@@ -12,7 +12,6 @@
 	interface Props {
 		data: {
 			settings: {
-				minOvenTimeMin: number;
 				runDurationMin: number;
 				removeDeckWarningMin: number;
 				waxPerCartridgeUl: number;
@@ -53,7 +52,6 @@
 		{
 			group: 'Time Parameters',
 			items: [
-				{ key: 'minOvenTimeMin', label: 'Min Oven Time', unit: 'min', min: 1, max: 1440 },
 				{ key: 'runDurationMin', label: 'Run Duration', unit: 'min', min: 1, max: 120 },
 				{ key: 'removeDeckWarningMin', label: 'Remove Deck Warning', unit: 'min', min: 1, max: 60 },
 			]

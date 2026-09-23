@@ -15,7 +15,7 @@ const bucketTransactionSchema = new Schema({
 	type: {
 		type: String,
 		enum: [
-			'mint', 'relabel', 'create', 'advance', 'adjust', 'scrap', 'consume',
+			'mint', 'relabel', 'create', 'scan_in', 'unscan', 'advance', 'adjust', 'scrap', 'consume',
 			'merge_in', 'merge_out', 'release', 'quarantine', 'retire', 'void'
 		],
 		required: true
@@ -28,6 +28,7 @@ const bucketTransactionSchema = new Schema({
 	reason: String,    // required for adjust / scrap
 	journal: String,   // required free text for residual scrap (§3.6)
 	relatedId: String, // LotRecord._id on consume; peer cycleId on merge; removal id on scrap
+	cartridgeIds: { type: [String], default: undefined }, // the cartridges this event touched (v2)
 	operator: { _id: String, username: String },
 	createdAt: { type: Date, default: Date.now }
 }, { timestamps: false });

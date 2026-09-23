@@ -13,7 +13,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 	// volumes belonged to retired workflow stages and gated nothing — only the
 	// fields the live wax flow actually reads remain.
 	const defaultSettings = {
-		minOvenTimeMin: 60, runDurationMin: 45, removeDeckWarningMin: 5,
+		runDurationMin: 45, removeDeckWarningMin: 5,
 		waxPerCartridgeUl: 19.2,
 		waxFillDeadVolumeUl: 80 // added on top of waxPerCartridgeUl × count for the 2ml tube fill (WAX-FLOW-3)
 	};
@@ -34,7 +34,6 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 		return {
 			settings: {
-				minOvenTimeMin: wax.minOvenTimeMin ?? defaultSettings.minOvenTimeMin,
 				runDurationMin: wax.runDurationMin ?? defaultSettings.runDurationMin,
 				removeDeckWarningMin: wax.removeDeckWarningMin ?? defaultSettings.removeDeckWarningMin,
 				waxPerCartridgeUl: wax.waxPerCartridgeUl ?? defaultSettings.waxPerCartridgeUl,
@@ -60,7 +59,6 @@ export const actions: Actions = {
 		const update: Record<string, any> = {};
 
 		const fields: { key: string; min: number; max: number }[] = [
-			{ key: 'minOvenTimeMin', min: 1, max: 1440 },
 			{ key: 'runDurationMin', min: 1, max: 120 },
 			{ key: 'removeDeckWarningMin', min: 1, max: 60 },
 			{ key: 'waxPerCartridgeUl', min: 1, max: 1000 },

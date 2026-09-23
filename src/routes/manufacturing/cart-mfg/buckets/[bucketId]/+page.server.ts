@@ -7,7 +7,7 @@
 import { error, fail, redirect } from '@sveltejs/kit';
 import { connectDB, CartridgeRecord, LotRecord } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
-import { bucketHistory, voidCycle, BucketError, STAGE_LABELS } from '$lib/server/services/bucket-service';
+import { bucketHistory, voidCycle, BucketError, STAGE_LABELS, IN_OVEN_LABEL } from '$lib/server/services/bucket-service';
 import type { Actions, PageServerLoad } from './$types';
 
 function isBucketAdmin(user: App.Locals['user']): boolean {
@@ -26,15 +26,15 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 	const [cartAgg, lots] = await Promise.all([
 		cycleIds.length
 			? CartridgeRecord.aggregate([
-				{ $match: { 'backing.bucketCycleId': { $in: cycleIds } } },
-				{ $group: { _id: '$backing.bucketCycleId', count: { $sum: 1 }, ids: { $push: '$_id' } } }
+				{ $match: { $or: [{ 'bucket.cycleId': { $in: cycleIds } }, { 'backing.bucketCycleId': { $in: cycleIds } }] } },
+				{ $group: { _id: { $ifNull: ['$bucket.cycleId', '$backing.bucketCycleId'] }, count: { $sum: 1 }, ids: { $push: '$_id' }, inOven: { $sum: { $cond: [{ $in: ['$status', ['raw', 'unpressed', 'pressed', 'scrapped', 'voided']] }, 0, 1] } } } }
 			]) as any as Promise<any[]>
 			: Promise.resolve([]),
 		cycleIds.length
 			? LotRecord.find({ bucketCycleId: { $in: cycleIds } }).select('_id bucketCycleId outputLotNumber status quantityProduced').lean() as any as Promise<any[]>
 			: Promise.resolve([])
 	]);
-	const cartsByCycle = new Map(cartAgg.map(r => [r._id, { count: r.count, ids: (r.ids as string[]).slice(0, 12) }]));
+	const cartsByCycle = new Map(cartAgg.map(r => [r._id, { count: r.count, inOven: r.inOven ?? 0, ids: (r.ids as string[]).slice(0, 12) }]));
 	const lotsByCycle = new Map<string, any[]>();
 	for (const l of lots) {
 		const arr = lotsByCycle.get(l.bucketCycleId) ?? [];
@@ -72,6 +72,7 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 
 	return {
 		canVoid: isBucketAdmin(locals.user),
+		inOvenLabel: IN_OVEN_LABEL,
 		bucket: {
 			bucketId: h.bucket._id,
 			barcode: h.bucket.barcode ?? null,
@@ -89,7 +90,8 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 			cycleId: c._id,
 			cycleNumber: c.cycleNumber,
 			stage: c.stage,
-			stageLabel: STAGE_LABELS[c.stage as keyof typeof STAGE_LABELS] ?? c.stage,
+			stageLabel: STAGE_LABELS[c.stage as keyof typeof STAGE_LABELS] ?? (c.stage === 'qr_pending' ? 'QR Scan-In Pending (v1)' : c.stage),
+			cartridgeIds: (c.cartridgeIds ?? []) as string[],
 			status: c.status,
 			quantity: c.quantity,
 			openedQty: c.openedQty,
@@ -104,7 +106,7 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 			voidReason: c.voidReason ?? null,
 			residualFound: (c.residualFound ?? []).map((r: any) => ({ qty: r.qty, stage: r.stage, disposition: r.disposition, at: iso(r.at), by: r.by?.username ?? null })),
 			discrepancies: (c.discrepancies ?? []).map((d: any) => ({ type: d.type, qty: d.qty, note: d.note ?? null, at: iso(d.at) })),
-			cartridges: cartsByCycle.get(c._id) ?? { count: 0, ids: [] },
+			cartridges: cartsByCycle.get(c._id) ?? { count: 0, inOven: 0, ids: [] },
 			lots: lotsByCycle.get(c._id) ?? [],
 			transactions: (txByCycle.get(c._id) ?? []).map(tx)
 		})),

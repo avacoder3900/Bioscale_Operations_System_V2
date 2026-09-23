@@ -11,6 +11,7 @@
 		cycleNumber?: number;
 		restored?: { partNumber: string | null; lotId: string | null; quantity: number }[];
 		removalsMarked?: number;
+		thermosealCreditedCm?: number;
 	};
 	interface Props { data: PageData; form: { voidPass?: VoidResult } | null }
 	let { data, form }: Props = $props();
@@ -57,15 +58,15 @@
 				· minted {fmt(data.bucket.createdAt)}{#if data.bucket.createdBy} by {data.bucket.createdBy}{/if}
 			</p>
 			<p class="mt-1 text-xs text-[var(--color-tron-text-secondary)]">
-				{#if data.bucket.barcode}QR sticker <span class="font-mono text-[var(--color-tron-text)]">{data.bucket.barcode}</span>{:else}No QR sticker — printed BKT label only{/if}
-				{#if data.bucket.state !== 'retired'}· <a href="/manufacturing/print-bucket-labels?bucket={encodeURIComponent(data.bucket.bucketId)}" class="text-[var(--color-tron-cyan)] hover:underline">{data.bucket.barcode ? 'replace' : 'assign'} QR</a>{/if}
+				{#if data.bucket.barcode}Sticker <span class="font-mono text-[var(--color-tron-text)]">{data.bucket.barcode}</span>{:else}No sticker on record{/if}
+				{#if data.bucket.state !== 'retired'}· <a href="/manufacturing/cart-mfg/buckets/new?bucket={encodeURIComponent(data.bucket.bucketId)}" class="text-[var(--color-tron-cyan)] hover:underline">replace sticker</a>{/if}
 			</p>
 			{#if data.bucket.residualNote}<p class="mt-1 text-xs text-[var(--color-tron-yellow)]">Quarantined: {data.bucket.residualNote}</p>{/if}
 			{#if data.bucket.retiredAt}<p class="mt-1 text-xs text-red-300">Retired {fmt(data.bucket.retiredAt)} — {data.bucket.retiredReason}</p>{/if}
 		</div>
 		<div class="flex gap-2">
 			<a href="/manufacturing/cart-mfg/buckets?q={encodeURIComponent(data.bucket.bucketId)}" class="rounded border border-[var(--color-tron-border)] px-3 py-1.5 text-xs text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]">Open on board</a>
-			<a href="/manufacturing/print-bucket-labels?bucket={encodeURIComponent(data.bucket.bucketId)}" class="rounded border border-[var(--color-tron-border)] px-3 py-1.5 text-xs text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]">Label / QR</a>
+			<a href="/manufacturing/cart-mfg/buckets/new?bucket={encodeURIComponent(data.bucket.bucketId)}" class="rounded border border-[var(--color-tron-border)] px-3 py-1.5 text-xs text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]">Replace sticker</a>
 		</div>
 	</div>
 
@@ -77,6 +78,9 @@
 				Returned to inventory: {#each v.restored ?? [] as r, i (i)}{i > 0 ? ', ' : ''}<span class="font-mono">{r.quantity}× {r.partNumber ?? 'part'}</span>{#if r.lotId} → lot <span class="font-mono">{r.lotId}</span>{/if}{/each}.
 			{:else}
 				No inventory debits were recorded against this pass, so nothing needed returning.
+			{/if}
+			{#if (v.thermosealCreditedCm ?? 0) > 0}
+				{v.thermosealCreditedCm} cm of thermoseal was credited back to its roll (an opened roll is never returned to stock).
 			{/if}
 			{#if (v.removalsMarked ?? 0) > 0}{v.removalsMarked} scrap entr{v.removalsMarked === 1 ? 'y' : 'ies'} marked voided.{/if}
 		</div>
@@ -93,8 +97,8 @@
 						<button type="button" onclick={() => (open[c.cycleId] = !open[c.cycleId])} class="flex w-full flex-wrap items-center gap-x-4 gap-y-1 px-4 py-3 text-left">
 							<span class="font-mono text-base text-[var(--color-tron-text)]">{data.bucket.bucketId} <span class="text-[var(--color-tron-text-secondary)]">#{c.cycleNumber}</span></span>
 							<span class="rounded border px-2 py-0.5 text-[10px] uppercase tracking-wider {c.status === 'open' ? 'border-[var(--color-tron-cyan)]/40 text-[var(--color-tron-cyan)]' : c.status === 'scrapped' ? 'border-red-500/40 text-red-300' : c.status === 'voided' ? 'border-[var(--color-tron-yellow)]/50 text-[var(--color-tron-yellow)]' : 'border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)]'}">{c.status === 'open' ? c.stageLabel : c.status}</span>
-							<span class="text-sm text-[var(--color-tron-text)]">{c.status === 'open' ? c.quantity : c.openedQty} <span class="text-xs text-[var(--color-tron-text-secondary)]">{c.status === 'open' ? `in tub of ${c.openedQty}` : 'opened'}</span></span>
-							{#if c.cartridges.count > 0}<span class="text-xs text-[var(--color-tron-text-secondary)]">→ {c.cartridges.count} cartridge{c.cartridges.count === 1 ? '' : 's'} serialized</span>{/if}
+							<span class="text-sm text-[var(--color-tron-text)]">{c.status === 'open' ? c.quantity : c.openedQty} <span class="text-xs text-[var(--color-tron-text-secondary)]">{c.status === 'open' ? 'carts in bucket' : 'carts when it left Raw'}</span></span>
+							{#if c.cartridges.inOven > 0}<span class="text-xs text-[var(--color-tron-text-secondary)]">→ {c.cartridges.inOven} into the oven</span>{/if}
 							{#if c.closedWithResidual}<span class="rounded bg-[var(--color-tron-yellow)]/20 px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-[var(--color-tron-yellow)]">residual found</span>{/if}
 							{#if c.discrepancies.some((d: any) => d.type === 'overrun')}<span class="rounded bg-[var(--color-tron-yellow)]/20 px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-[var(--color-tron-yellow)]">overrun</span>{/if}
 							<span class="ml-auto text-xs text-[var(--color-tron-text-secondary)]">{fmt(c.openedAt)}{c.closedAt ? ` → ${fmt(c.closedAt)}` : ''}</span>
@@ -116,8 +120,8 @@
 											<input type="hidden" name="cycleId" value={c.cycleId} />
 											<p class="text-[var(--color-tron-text)]">
 												Void <span class="font-mono">{data.bucket.bucketId} #{c.cycleNumber}</span>? Everything this pass took from inventory
-												(blanks at start, labels at QR Scan-In Pending) is returned to the <em>same lots</em>. The pass, its ledger and its
-												scrap entries are kept and marked voided. Not possible if cartridges were serialized from it.
+												(shells and labels at scan-in, discards) is returned to the <em>same lots</em>, the thermoseal length goes back on its roll, and its carts are voided. The pass, its ledger and its
+												scrap entries are kept and marked voided. Not possible once any of its carts went into the oven.
 											</p>
 											<input type="text" name="reason" required placeholder="Why? e.g. test data from preview review"
 												class="w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-3 py-1.5 text-xs text-[var(--color-tron-text)] focus:border-[var(--color-tron-cyan)] focus:outline-none" />
@@ -154,7 +158,7 @@
 
 								{#if c.cartridges.count > 0}
 									<div>
-										<p class="mb-1 text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Cartridges ({c.cartridges.count})</p>
+										<p class="mb-1 text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Carts born in this pass ({c.cartridges.count})</p>
 										<div class="flex flex-wrap gap-1">
 											{#each c.cartridges.ids as id (id)}<a href="/cartridge-admin/dhr/{id}" class="rounded bg-[var(--color-tron-bg-primary)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--color-tron-cyan)] hover:underline">{id.slice(0, 8)}…</a>{/each}
 											{#if c.cartridges.count > c.cartridges.ids.length}<a href="/cartridge-admin?search={encodeURIComponent(data.bucket.bucketId)}" class="px-1.5 py-0.5 text-[10px] text-[var(--color-tron-text-secondary)] hover:underline">+{c.cartridges.count - c.cartridges.ids.length} more</a>{/if}
