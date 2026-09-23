@@ -1152,3 +1152,88 @@ export async function bucketHistory(bucketId: string): Promise<{ bucket: any; cy
 	]);
 	return { bucket, cycles, transactions, removals };
 }
+
+// ── manual override (State Change page) ────────────────────────────────────
+
+export interface OverrideInput {
+	barcode: string;
+	target: string;               // any CartridgeRecord status; bucket stages need destinationBucketId
+	destinationBucketId?: string; // bucket (QR or BKT id) whose open pass is at `target`
+	reason?: string;
+	user: Operator;
+}
+
+/**
+ * Manual override from /manufacturing/cart-mfg/state-change: move ONE cart to
+ * any status while keeping bucket membership honest.
+ *   - target is a bucket stage → the cart joins the destination bucket's open
+ *     pass (which must already be at that stage), leaving its old pass if any;
+ *   - target is anything else → the cart leaves its pass (if it was in one).
+ * A pass emptied this way closes like a consumed one (tub back to Available,
+ * empty-check armed). No inventory moves — an override is bookkeeping, not
+ * production. Unknown barcodes are refused for bucket stages: scanning a cart
+ * into a bucket on the board is what debits its shell + label.
+ */
+export async function overrideCartStage(input: OverrideInput): Promise<{ from: string; to: string; fromCycle: string | null; toCycle: string | null }> {
+	await connectDB();
+	const barcode = (input.barcode ?? '').trim();
+	const target = (input.target ?? '').trim();
+	const cart = await CartridgeRecord.findById(barcode).select('_id status bucket').lean() as any;
+	if (!cart) throw new BucketError(`${barcode} is not a known cartridge${isBucketStage(target) ? ' — scan it into a bucket on the board instead' : ''}.`, 404);
+	const from: string = cart.status ?? 'none';
+	const now = new Date();
+	const by = { _id: input.user._id, username: input.user.username };
+	const why = (input.reason ?? '').trim();
+	const note = `Manual override: ${from} → ${target}${why ? `: ${why}` : ''}`;
+
+	const current = await BucketCycle.findOne({ status: 'open', cartridgeIds: barcode }).lean() as any;
+
+	let dest: any = null;
+	if (isBucketStage(target)) {
+		const destRaw = (input.destinationBucketId ?? '').trim();
+		if (!destRaw) throw new BucketError(`Moving to ${STAGE_LABELS[target]} needs a destination bucket whose open pass is at ${STAGE_LABELS[target]}.`);
+		const destId = await resolveBucketId(destRaw);
+		if (!destId) throw new BucketError(`"${destRaw}" is not a known bucket.`, 404);
+		dest = await getOpenCycle(destId);
+		if (!dest) throw new BucketError(`Bucket ${destId} has no open pass.`);
+		if (dest.stage !== target) throw new BucketError(`${cycleLabel(destId, dest.cycleNumber)} is at ${STAGE_LABELS[dest.stage as BucketStage]}, not ${STAGE_LABELS[target]}.`);
+		if (current && current._id === dest._id && from === target) {
+			return { from, to: target, fromCycle: current._id, toCycle: dest._id };
+		}
+	}
+
+	// Leave the old pass (if the destination is a different pass, or a non-bucket status).
+	if (current && (!dest || current._id !== dest._id)) {
+		const before: number = current.quantity ?? 0;
+		const after = Math.max(0, before - 1);
+		await BucketCycle.updateOne({ _id: current._id }, { $pull: { cartridgeIds: barcode }, $set: { quantity: after } });
+		await logTx({
+			bucketId: current.bucketId, cycleId: current._id, type: 'merge_out', fromStage: current.stage, toStage: dest ? dest.stage : current.stage,
+			qtyBefore: before, qtyAfter: after, reason: dest ? `override → ${cycleLabel(dest.bucketId, dest.cycleNumber)}${why ? `: ${why}` : ''}` : `override → ${target}${why ? `: ${why}` : ''}`,
+			relatedId: dest?._id, cartridgeIds: [barcode], operator: input.user
+		});
+		if (after === 0) await closeCycle({ ...current, quantity: 0 }, 'consumed', input.user, dest?._id);
+	}
+
+	const set: Record<string, unknown> = { status: target, priorStatus: from, statusUpdatedOn: now.toISOString() };
+	if (dest) {
+		if (!current || current._id !== dest._id) {
+			const before: number = dest.quantity ?? 0;
+			await BucketCycle.updateOne({ _id: dest._id }, { $addToSet: { cartridgeIds: barcode }, $set: { quantity: before + 1 } });
+			await logTx({
+				bucketId: dest.bucketId, cycleId: dest._id, type: 'merge_in', fromStage: dest.stage, toStage: dest.stage,
+				qtyBefore: before, qtyAfter: before + 1, reason: `override from ${current ? cycleLabel(current.bucketId, current.cycleNumber) : from}${why ? `: ${why}` : ''}`,
+				relatedId: current?._id, cartridgeIds: [barcode], operator: input.user
+			});
+		}
+		set.bucket = { bucketId: dest.bucketId, cycleId: dest._id, scannedInAt: cart.bucket?.scannedInAt ?? now, scannedInBy: cart.bucket?.scannedInBy ?? by };
+		set['backing.bucketCycleId'] = dest._id;
+		set['backing.bucketBarcode'] = dest.bucketId;
+	}
+	await CartridgeRecord.updateOne(
+		{ _id: barcode },
+		{ $set: set, $push: { notes: { _id: generateId(), body: note, phase: 'bucket', author: by, createdAt: now } } }
+	);
+	await audit('cartridge_records', barcode, 'OVERRIDE', input.user, { status: target, cycleId: dest?._id ?? null }, { status: from, cycleId: current?._id ?? null }, why || undefined);
+	return { from, to: target, fromCycle: current?._id ?? null, toCycle: dest?._id ?? null };
+}

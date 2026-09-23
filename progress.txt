@@ -13965,3 +13965,20 @@ and moved UNDER the Unpressed column (where it is consumed), with the yellow not
 directly above it; the admin toggles (notifications, rolls-on-hand pin) fold into a
 "Development settings" <details>. The advance-result banner stays above the board.
 npm run check: 12 errors / 438 warnings (baseline), none in touched files.
+
+================================================================================
+2026-09-23 -- feat/bucket-system -- State Change page made bucket-aware (manual override for bucket stages)
+================================================================================
+User asked for a manual override page to move carts to any stage. One already exists:
+/manufacturing/cart-mfg/state-change (sidebar "State Change") -- bulk-scan barcodes, pick any
+schema status. It was not bucket-aware: setting a cart to raw/unpressed/pressed (or out of
+them) changed only CartridgeRecord.status and left BucketCycle.cartridgeIds disagreeing.
+Added bucket-service.overrideCartStage(): target = bucket stage -> the cart joins the chosen
+destination bucket's open pass (must be at that stage; merge_in ledger row), leaving its old
+pass (merge_out; an emptied pass closes like a consumed one); target = anything else -> the
+cart leaves its pass. Status, priorStatus, bucket sub-doc, note and audit (OVERRIDE) written
+together. No inventory moves. Unknown barcodes are refused for bucket stages (scanning into a
+bucket on the board is what debits parts). State Change page: statuses flagged "bucket
+stage"; a Destination bucket select (open passes at the target stage) appears for bucket
+targets and is required; explanatory copy for both directions.
+npm run check: 12 errors / 438 warnings (baseline), none in touched files.
