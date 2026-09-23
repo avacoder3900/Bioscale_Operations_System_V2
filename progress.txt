@@ -13982,3 +13982,12 @@ bucket on the board is what debits parts). State Change page: statuses flagged "
 stage"; a Destination bucket select (open passes at the target stage) appears for bucket
 targets and is required; explanatory copy for both directions.
 npm run check: 12 errors / 438 warnings (baseline), none in touched files.
+
+Deployment: preview -- https://bioscale-operations-system-mongodb-o3wyz8hek-brevitest.vercel.app
+  (brevitest scope; cookie-session gated, 302 to /login)
+Source: branch feat/bucket-system @ commit c0664759
+Retrieve this exact code: git checkout feat/bucket-system at commit c0664759
+What this deployment is for: board restructure -- Mint New Bucket card under Available,
+  inventory note removed, Retire bucket on the bucket page, compact thermoseal tile + yellow
+  not-synced card under Unpressed. (The bucket-aware State Change override is da0daa9f, next.)
+Build status: success (login 200).
