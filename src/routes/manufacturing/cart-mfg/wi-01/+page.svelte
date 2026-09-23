@@ -27,6 +27,7 @@
 			} | null;
 			availableLots?: Record<string, LotOption[]>;
 			qrPendingBuckets?: BucketOption[];
+			bucketsDebitInventory?: boolean;
 			recentLots: RecentLot[];
 			ovens?: { _id: string; name: string; barcode: string; status: string }[];
 			inventory: {
@@ -64,6 +65,9 @@
 	let bucketScan = $state('');
 	let bucketLocked = $state<{ bucketId: string; cycleNumber: number | null; quantity: number | null } | null>(null);
 	const selectedBucket = $derived((data.qrPendingBuckets ?? []).find((b) => b.bucketId === bucketId) ?? null);
+	// Only when buckets debit inventory upstream are 104/106 skipped at confirm.
+	// Today they don't, so a bucket-sourced batch withdraws all three like any other.
+	const bucketSkipsDebit = $derived(!!bucketLocked && !!data.bucketsDebitInventory);
 	$effect(() => {
 		if (selectedBucket) {
 			lot1 = selectedBucket.lot1 ?? '';
@@ -327,8 +331,9 @@
 						</div>
 
 						<!-- Source bucket — optional. A QR Scan-In Pending bucket dictates the
-						     blank + label lots and the expected count; 104/106 are
-						     not re-withdrawn at confirm (BUCKET-SYSTEM_PLAN §6.3). -->
+						     blank + label lots and the expected count, and its count is
+						     drawn down by what gets scanned. Inventory is withdrawn here
+						     in full either way (BUCKET-SYSTEM_PLAN §6.3, §8). -->
 						<div class="rounded border border-[var(--color-tron-cyan)]/40 bg-[var(--color-tron-cyan)]/5 p-3">
 							<div class="flex items-center justify-between">
 								<label for="bucketScan" class="block text-xs font-medium text-[var(--color-tron-cyan)]">Source bucket (QR Scan-In Pending)</label>
@@ -559,13 +564,19 @@
 						<div class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] p-3">
 							<p class="mb-2 text-center text-xs text-[var(--color-tron-text-secondary)]">Withdrawal summary</p>
 							<div class="grid grid-cols-3 gap-2 text-center text-sm">
-								<div><p class="text-xs text-[var(--color-tron-text-secondary)]">Cartridges</p><p class="font-bold {bucketLocked ? 'text-[var(--color-tron-text-secondary)] line-through' : 'text-[var(--color-tron-text)]'}">{scannedCarts.length + scrapCartridge}</p></div>
+								<div><p class="text-xs text-[var(--color-tron-text-secondary)]">Cartridges</p><p class="font-bold {bucketSkipsDebit ? 'text-[var(--color-tron-text-secondary)] line-through' : 'text-[var(--color-tron-text)]'}">{scannedCarts.length + scrapCartridge}</p></div>
 								<div><p class="text-xs text-[var(--color-tron-text-secondary)]">Thermoseal</p><p class="font-bold text-[var(--color-tron-text)]">{scannedCarts.length + scrapThermoseal}</p></div>
-								<div><p class="text-xs text-[var(--color-tron-text-secondary)]">Barcodes</p><p class="font-bold {bucketLocked ? 'text-[var(--color-tron-text-secondary)] line-through' : 'text-[var(--color-tron-text)]'}">{scannedCarts.length + scrapBarcode}</p></div>
+								<div><p class="text-xs text-[var(--color-tron-text-secondary)]">Barcodes</p><p class="font-bold {bucketSkipsDebit ? 'text-[var(--color-tron-text-secondary)] line-through' : 'text-[var(--color-tron-text)]'}">{scannedCarts.length + scrapBarcode}</p></div>
 							</div>
 							{#if bucketLocked}
 								<p class="mt-2 text-center text-[10px] text-[var(--color-tron-cyan)]">
-									Drawn from bucket <span class="font-mono">{bucketLocked.bucketId}</span> — cartridges and barcodes were already withdrawn when the bucket was filled and labeled; only thermoseal is withdrawn now. {scannedCarts.length} consumed{#if scrapCartridge > 0} + {scrapCartridge} scrapped{/if} come off the bucket.
+									Drawn from bucket <span class="font-mono">{bucketLocked.bucketId}</span> —
+									{#if bucketSkipsDebit}
+										cartridges and barcodes were already withdrawn when the bucket was filled and labeled; only thermoseal is withdrawn now.
+									{:else}
+										buckets don't debit inventory, so all three parts are withdrawn here for what you scanned.
+									{/if}
+									{scannedCarts.length} scanned{#if scrapCartridge > 0} + {scrapCartridge} scrapped{/if} come off the bucket's count.
 								</p>
 							{/if}
 						</div>

@@ -175,7 +175,7 @@
 					<legend class="text-[10px] uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Label them by</legend>
 					<label class="flex items-start gap-2 rounded border p-2 text-xs {mode === 'assign' ? 'border-[var(--color-tron-cyan)]/60 bg-[var(--color-tron-cyan)]/5' : 'border-[var(--color-tron-border)]'}" style="color: var(--color-tron-text)">
 						<input type="radio" name="mode" value="assign" bind:group={mode} class="mt-0.5" />
-						<span><strong>Assigning QR stickers</strong> — after minting, scan one sticker per tub from the printed sheets. Consumes 1× PT-CT-106 per bucket.</span>
+						<span><strong>Assigning QR stickers</strong> — after minting, scan one sticker per tub from the printed sheets. No inventory is debited.</span>
 					</label>
 					<label class="flex items-start gap-2 rounded border p-2 text-xs {mode === 'print' ? 'border-[var(--color-tron-cyan)]/60 bg-[var(--color-tron-cyan)]/5' : 'border-[var(--color-tron-border)]'}" style="color: var(--color-tron-text)">
 						<input type="radio" name="mode" value="print" bind:group={mode} class="mt-0.5" />

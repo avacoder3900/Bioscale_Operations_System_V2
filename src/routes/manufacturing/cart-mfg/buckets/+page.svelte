@@ -264,6 +264,13 @@
 		</div>
 	</div>
 
+	<!-- Buckets track count and location only. The WI-01 scan-in is the single
+	     source of truth for inventory (BUCKET-SYSTEM_PLAN §8). -->
+	<div class="rounded-lg border border-[var(--color-tron-yellow)]/60 bg-[var(--color-tron-yellow)]/10 px-4 py-2.5 text-sm font-semibold text-[var(--color-tron-yellow)]" role="note">
+		⚠ Inventory is not Debited Until Carts are Scanned in
+		<span class="ml-1 font-normal text-[var(--color-tron-yellow)]/80">— buckets track counts and location only; the WI-01 scan-in is what withdraws stock. The one exception: carts <em>discarded</em> here are removed from inventory the moment they're discarded, since they will never reach a scan-in. Discards remove the cartridge blank (and the barcode label once applied) but <strong>not thermoseal</strong> — thermoseal is only ever withdrawn at WI-01 scan-in.</span>
+	</div>
+
 	<!-- Stage strip -->
 	<div class="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
 		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3">
@@ -466,7 +473,7 @@
 								{/if}
 								{#if nxt === 'qr_pending'}
 									<label class="block">
-										<span class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Barcode label lot (PT-CT-106) — {c.quantity - advanceDiscarded} labels applied</span>
+										<span class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Barcode label lot (PT-CT-106) — {c.quantity - advanceDiscarded} labels applied · recorded for WI-01, not debited</span>
 										<select name="barcodeLotId" required class={inputCls}>
 											<option value="">{(data.lots['PT-CT-106'] ?? []).length ? '— Select lot —' : 'No label lots available'}</option>
 											{#each data.lots['PT-CT-106'] ?? [] as l (l.lotId)}<option value={l.lotId}>{l.lotId} — {l.remaining} left</option>{/each}
@@ -551,7 +558,7 @@
 							<input type="hidden" name="emptyConfirmed" value={b.spotCheckPending ? '1' : '0'} />
 							{#if b.spotCheckPending}<p class="text-[10px] text-[var(--color-tron-text-secondary)]">✓ Confirmed empty — recorded on this pass.</p>{/if}
 							<label class="block">
-								<span class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Cartridge blank lot (PT-CT-104)</span>
+								<span class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Cartridge blank lot (PT-CT-104) · recorded for WI-01, not debited</span>
 								<select name="sourceLotId" required class={inputCls}>
 									<option value="">{(data.lots['PT-CT-104'] ?? []).length ? '— Select lot —' : 'No lots available'}</option>
 									{#each data.lots['PT-CT-104'] ?? [] as l (l.lotId)}<option value={l.lotId}>{l.lotId} — {l.remaining} left</option>{/each}

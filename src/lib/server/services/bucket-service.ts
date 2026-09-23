@@ -6,16 +6,25 @@
  * exactly one code path per transition. Do not duplicate transition logic
  * into route actions.
  *
- * Inventory rules (§3.3, §3.4, §8):
- *   - PT-CT-104 is debited ONCE, when the cycle opens at `raw`.
- *   - PT-CT-106 is debited ONCE, at pressed → qr_pending (labels applied).
- *   - PT-CT-112 (thermoseal) is never touched here — WI-01 keeps debiting it.
- *   - Scrap / adjust-down inside a bucket write NO InventoryTransaction: the
- *     units were already removed from part inventory when they entered the
- *     bucket. They are recorded on the bucket ledger (and, for scrap, as a
- *     ManualCartridgeRemoval) so loss is visible without double-debiting.
- *   - Adjust-UP records an extra consumption for the delta, because more
- *     material left part inventory than the cycle originally recorded.
+ * Inventory rules (§3.3, §8) — CURRENT (user decision 2026-09-21):
+ *   BUCKETS DO NOT DEBIT INVENTORY. Inventory is debited only when carts are
+ *   scanned in at WI-01 — "let the manual scan-in be the truth". A bucket is
+ *   a count-and-location tracker; WI-01 withdraws PT-CT-104 / 112 / 106 for
+ *   what is actually scanned, whether or not a source bucket was selected.
+ *   The one exception (user decision 2026-09-23): DISCARDS DO remove stock.
+ *   A cart discarded in a bucket never reaches a scan-in, so scrap / discard
+ *   at advance / residual scrap write a real `scrap` InventoryTransaction
+ *   for what the cart is at that stage (see debitDiscard). WI-01's own
+ *   confirm-step scrap is excluded (skipInventory) because that page
+ *   withdraws it itself.
+ *
+ *   The switch is BUCKETS_DEBIT_INVENTORY below. Every would-be debit goes
+ *   through debitInventory(), which no-ops while it is false. Flipping it to
+ *   true restores the original model: PT-CT-104 debited once at cycle open,
+ *   PT-CT-106 once at pressed → qr_pending, +delta on adjust-up, 1x PT-CT-106
+ *   per QR sticker assigned — and WI-01 then withdraws PT-CT-112 only for
+ *   bucket-sourced batches (it reads the same constant).
+ *   PT-CT-112 (thermoseal) is never touched here under either setting.
  */
 import { connectDB } from '$lib/server/db/connection';
 import {
@@ -24,8 +33,65 @@ import {
 	InventoryTransaction, PartDefinition
 } from '$lib/server/db/models';
 import { generateId } from '$lib/server/db/utils';
-import { recordTransaction, resolvePartId } from './inventory-transaction';
+import { recordTransaction, resolvePartId, type RecordTransactionParams } from './inventory-transaction';
 import { generateBarcode } from './barcode-generator';
+
+/**
+ * false = buckets never move inventory; WI-01 scan-in is the only debit
+ * (user decision 2026-09-21, "for now"). WI-01 reads this too, so the two
+ * sides can never disagree about who debits what.
+ */
+export const BUCKETS_DEBIT_INVENTORY: boolean = false; // typed boolean, not the literal `false`, so conditions on it aren't flagged as constant
+
+/** Every bucket-side ENTRY debit (start / labeling / adjust-up / sticker) goes through here so one switch governs them all. */
+async function debitInventory(params: RecordTransactionParams): Promise<void> {
+	if (!BUCKETS_DEBIT_INVENTORY) return;
+	await recordTransaction(params);
+}
+
+/**
+ * Discards are the one bucket event that DOES remove stock (user decision
+ * 2026-09-23: "when discarding carts, remove the cart from inventory").
+ * A cart discarded in a bucket never reaches the WI-01 scan-in, so this is
+ * its only chance to leave inventory. It debits what the cart physically is
+ * at that stage: a PT-CT-104 blank, plus a PT-CT-106 label once it is at
+ * qr_pending. Thermoseal is never touched (§3.4). Lots come from the cycle's
+ * own sourceLots so per-lot "N left" stays right.
+ *
+ * Mirror-image of the entry switch: while buckets don't debit on entry, a
+ * discard must; if BUCKETS_DEBIT_INVENTORY is ever turned back on, the units
+ * already left inventory on entry and this becomes a no-op — never both.
+ */
+async function debitDiscard(opts: {
+	stage: BucketStage;
+	quantity: number;
+	sourceLots: { partNumber?: string; lotId?: string }[];
+	cycleId: string | null;
+	label: string; // e.g. 'BKT-000123 #4'
+	reason: string;
+	user: Operator;
+}): Promise<void> {
+	if (BUCKETS_DEBIT_INVENTORY) return;
+	const lotFor = (pn: string) => opts.sourceLots.find(l => l.partNumber === pn)?.lotId;
+	const parts: string[] = [CARTRIDGE_BLANK_PART];
+	if (opts.stage === 'qr_pending') parts.push(BARCODE_LABEL_PART);
+	for (const partNumber of parts) {
+		const partId = await resolvePartId(partNumber);
+		await recordTransaction({
+			transactionType: 'scrap',
+			partDefinitionId: partId ?? undefined,
+			lotId: lotFor(partNumber),
+			quantity: opts.quantity,
+			manufacturingStep: 'scrap',
+			manufacturingRunId: opts.cycleId ?? undefined,
+			operatorId: opts.user._id,
+			operatorUsername: opts.user.username,
+			scrapReason: opts.reason,
+			scrapCategory: 'other',
+			notes: `Bucket ${opts.label}: ${opts.quantity}x ${partNumber} discarded at ${STAGE_LABELS[opts.stage]} — ${opts.reason}`
+		});
+	}
+}
 
 export const BUCKET_STAGES = ['raw', 'unpressed', 'pressed', 'qr_pending'] as const;
 export type BucketStage = (typeof BUCKET_STAGES)[number];
@@ -334,7 +400,7 @@ export async function assignBucketBarcode(input: AssignBarcodeInput): Promise<{ 
 
 	if (CONSUME_LABEL_ON_ASSIGN) {
 		const partId = await resolvePartId(BARCODE_LABEL_PART);
-		await recordTransaction({
+		await debitInventory({
 			transactionType: 'consumption',
 			partDefinitionId: partId ?? undefined,
 			quantity: 1,
@@ -435,7 +501,7 @@ export async function startCycle(input: StartCycleInput): Promise<any> {
 
 	// The ONLY PT-CT-104 debit for these units (§8).
 	const partId = await resolvePartId(CARTRIDGE_BLANK_PART);
-	await recordTransaction({
+	await debitInventory({
 		transactionType: 'consumption',
 		partDefinitionId: partId ?? undefined,
 		lotId: lotCheck.lot.lotId,
@@ -487,7 +553,7 @@ export async function advanceCycle(input: AdvanceCycleInput): Promise<any> {
 		// The ONLY PT-CT-106 debit for these units — WI-01 must NOT debit it
 		// again for a bucket-sourced batch (§6.3).
 		const partId = await resolvePartId(BARCODE_LABEL_PART);
-		await recordTransaction({
+		await debitInventory({
 			transactionType: 'consumption',
 			partDefinitionId: partId ?? undefined,
 			lotId: lotCheck.lot.lotId,
@@ -586,7 +652,7 @@ export async function adjustCycle(input: AdjustCycleInput): Promise<any> {
 		// label time. Record the extra consumption against the same lots.
 		const blankLot = (cycle.sourceLots ?? []).find((l: any) => l.partNumber === CARTRIDGE_BLANK_PART)?.lotId;
 		const blankPartId = await resolvePartId(CARTRIDGE_BLANK_PART);
-		await recordTransaction({
+		await debitInventory({
 			transactionType: 'consumption',
 			partDefinitionId: blankPartId ?? undefined,
 			lotId: blankLot,
@@ -600,7 +666,7 @@ export async function adjustCycle(input: AdjustCycleInput): Promise<any> {
 		if (cycle.stage === 'qr_pending') {
 			const labelLot = (cycle.sourceLots ?? []).find((l: any) => l.partNumber === BARCODE_LABEL_PART)?.lotId;
 			const labelPartId = await resolvePartId(BARCODE_LABEL_PART);
-			await recordTransaction({
+			await debitInventory({
 				transactionType: 'consumption',
 				partDefinitionId: labelPartId ?? undefined,
 				lotId: labelLot,
@@ -631,13 +697,15 @@ export interface ScrapInput {
 	quantity: number;
 	journal: string;
 	user: Operator;
-	relatedId?: string; // LotRecord._id when scrapped during WI-01
+	relatedId?: string;      // LotRecord._id when scrapped during WI-01
+	skipInventory?: boolean; // WI-01 confirm withdraws its own scrap — don't charge it here too
 }
 
 /**
  * Units lost from an open cycle. Writes a ManualCartridgeRemoval so the
- * loss shows in Recent Checkouts next to every other removal; writes NO
- * InventoryTransaction (already debited at open / label time).
+ * loss shows in Recent Checkouts next to every other removal, and — unless
+ * the caller withdraws inventory itself (WI-01) — a scrap transaction that
+ * removes the discarded carts from stock (see debitDiscard).
  */
 export async function scrapFromCycle(input: ScrapInput): Promise<{ cycle: any; removalId: string }> {
 	await connectDB();
@@ -661,6 +729,13 @@ export async function scrapFromCycle(input: ScrapInput): Promise<{ cycle: any; r
 		operator: { _id: input.user._id, username: input.user.username },
 		removedAt: now
 	});
+
+	if (!input.skipInventory) {
+		await debitDiscard({
+			stage: cycle.stage, quantity: qty, sourceLots: cycle.sourceLots ?? [],
+			cycleId: cycle._id, label: cycleLabel(cycle.bucketId, cycle.cycleNumber), reason: journal, user: input.user
+		});
+	}
 
 	const after = cycle.quantity - qty;
 	await BucketCycle.updateOne({ _id: cycle._id }, { $set: { quantity: after } });
@@ -786,13 +861,15 @@ export async function voidCycle(input: VoidCycleInput): Promise<VoidCycleResult>
 	).lean();
 	if (!claimed) throw new BucketError(`${cycleLabel(cycle.bucketId, cycle.cycleNumber)} is already voided.`, 409);
 
-	// Net debit per (part, lot) for this pass, straight from the inventory ledger.
-	const debits = await InventoryTransaction.find({ manufacturingRunId: cycle._id, transactionType: 'consumption' })
-		.select('partDefinitionId lotId quantity').lean() as any[];
-	const groups = new Map<string, { partDefinitionId: string | null; lotId: string | null; net: number }>();
+	// Net debit per (type, part, lot) for this pass, straight from the inventory
+	// ledger: entry consumptions (if the switch was on) AND discard scraps.
+	const debits = await InventoryTransaction.find({ manufacturingRunId: cycle._id, transactionType: { $in: ['consumption', 'scrap'] } })
+		.select('transactionType partDefinitionId lotId quantity').lean() as any[];
+	const groups = new Map<string, { type: 'consumption' | 'scrap'; partDefinitionId: string | null; lotId: string | null; net: number }>();
 	for (const d of debits) {
-		const key = `${d.partDefinitionId ?? ''}|${d.lotId ?? ''}`;
-		const g = groups.get(key) ?? { partDefinitionId: d.partDefinitionId ?? null, lotId: d.lotId ?? null, net: 0 };
+		const type = d.transactionType === 'scrap' ? 'scrap' : 'consumption';
+		const key = `${type}|${d.partDefinitionId ?? ''}|${d.lotId ?? ''}`;
+		const g = groups.get(key) ?? { type, partDefinitionId: d.partDefinitionId ?? null, lotId: d.lotId ?? null, net: 0 };
 		g.net += Number(d.quantity ?? 0);
 		groups.set(key, g);
 	}
@@ -809,10 +886,12 @@ export async function voidCycle(input: VoidCycleInput): Promise<VoidCycleResult>
 			partNumber = part?.partNumber ?? null;
 			await PartDefinition.updateOne({ _id: g.partDefinitionId }, { $inc: { inventoryCount: g.net } });
 		}
-		const note = `VOID ${label}: returned ${g.net}x ${partNumber ?? 'part'}${g.lotId ? ` to lot ${g.lotId}` : ''} — ${reason}`;
+		const note = `VOID ${label}: returned ${g.net}x ${partNumber ?? 'part'}${g.lotId ? ` to lot ${g.lotId}` : ''}${g.type === 'scrap' ? ' (discard reversed)' : ''} — ${reason}`;
+		// Same type as the row being reversed: per-lot math sums consumption+scrap
+		// together, so a negative of either nets the lot back out.
 		await InventoryTransaction.create({
 			_id: generateId(),
-			transactionType: 'consumption',
+			transactionType: g.type,
 			partDefinitionId: g.partDefinitionId ?? undefined,
 			lotId: g.lotId ?? undefined,
 			quantity: -g.net, // negative consumption: nets the lot's consumed total back down
@@ -962,6 +1041,15 @@ export async function reportResidual(input: ResidualInput): Promise<{ bucket: an
 				journal,
 				operator: by,
 				removedAt: now
+			});
+			// Residual scrap removes the carts from stock too. Lots come from the
+			// pass they most plausibly belong to; a never-cycled tub has none, so
+			// the part total still moves but no lot is named.
+			await debitDiscard({
+				stage: item.stage, quantity: qty, sourceLots: prevCycle?.sourceLots ?? [],
+				cycleId: prevCycle?._id ?? null,
+				label: prevCycle ? cycleLabel(bucketId, prevCycle.cycleNumber) : bucketId,
+				reason: `residual: ${journal}`, user: input.user
 			});
 			await logTx({
 				bucketId, cycleId: prevCycle?._id ?? null, type: 'scrap',

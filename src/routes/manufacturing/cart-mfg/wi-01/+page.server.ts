@@ -9,9 +9,15 @@
  *
  * Bucket-sourced batches (BUCKET-SYSTEM_PLAN.md §6.3): when the operator
  * scans a production bucket at setup, its open qr_pending cycle supplies the
- * count and the PT-CT-104 / PT-CT-106 lots, and those two parts are NOT
- * withdrawn again at confirm — they were debited when the material entered
- * the bucket and when labels were applied. PT-CT-112 is withdrawn as before.
+ * count and the PT-CT-104 / PT-CT-106 lots, and the bucket's count is drawn
+ * down by what is scanned.
+ *
+ * Inventory: buckets do NOT debit inventory (BUCKETS_DEBIT_INVENTORY = false,
+ * user decision 2026-09-21) — this page's scan-in is the single source of
+ * truth, so ALL THREE parts are withdrawn here for what was actually scanned,
+ * exactly as in the manual flow, whether or not a bucket was selected. Only if
+ * that switch is ever turned back on does a bucket-sourced batch withdraw
+ * PT-CT-112 alone.
  */
 import { redirect, fail } from '@sveltejs/kit';
 import {
@@ -21,7 +27,7 @@ import {
 } from '$lib/server/db';
 import { recordTransaction, resolvePartId } from '$lib/server/services/inventory-transaction';
 import {
-	BucketError, STAGE_LABELS, CARTRIDGE_BLANK_PART, BARCODE_LABEL_PART,
+	BucketError, STAGE_LABELS, CARTRIDGE_BLANK_PART, BARCODE_LABEL_PART, BUCKETS_DEBIT_INVENTORY,
 	getOpenCycle, resolveBucketId, assertNotBucketLabel, consumeFromCycle, scrapFromCycle
 } from '$lib/server/services/bucket-service';
 import { nanoid } from 'nanoid';
@@ -156,6 +162,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 	return {
 		availableLots,
 		qrPendingBuckets,
+		bucketsDebitInventory: BUCKETS_DEBIT_INVENTORY,
 		config: {
 			configId: String(c._id),
 			processName: c.processName ?? 'Cartridge Backing (WI-01)',
@@ -320,8 +327,12 @@ export const actions: Actions = {
 			const partMap = new Map(parts.map((p: any) => [p.partNumber, p]));
 			const insufficient: { name: string; need: number; have: number }[] = [];
 
-			// Bucket-sourced: 104 and 106 already left inventory; only 112 is checked.
-			const precheckParts = bucketCycle ? CONSUMED_PARTS.filter(p => p.partNumber === 'PT-CT-112') : CONSUMED_PARTS;
+			// Buckets don't debit inventory, so a bucket-sourced batch needs stock of
+			// all three parts like any other. (Only with the switch on would 104/106
+			// have left inventory upstream, leaving just 112 to check.)
+			const precheckParts = bucketCycle && BUCKETS_DEBIT_INVENTORY
+				? CONSUMED_PARTS.filter(p => p.partNumber === 'PT-CT-112')
+				: CONSUMED_PARTS;
 			for (const cp of precheckParts) {
 				const part = partMap.get(cp.partNumber);
 				const have = part?.inventoryCount ?? 0;
@@ -633,11 +644,11 @@ export const actions: Actions = {
 			if (il?.materialName && il?.barcode) inputLotByMaterial[il.materialName] = il.barcode;
 		}
 
-		// Bucket-sourced batch: PT-CT-104 and PT-CT-106 were debited when the
-		// material entered the bucket / had labels applied, so only PT-CT-112
-		// is withdrawn below. The cycle is drawn down by what was actually
-		// scanned (+ cartridge scrap); a partial draw leaves it open at
-		// qr_pending with the remainder (BUCKET-SYSTEM_PLAN §3.1, §6.3).
+		// Bucket-sourced batch: the cycle's COUNT is drawn down by what was
+		// actually scanned (+ cartridge scrap); a partial draw leaves it open at
+		// qr_pending with the remainder (BUCKET-SYSTEM_PLAN §3.1, §6.3). That is
+		// bookkeeping on the bucket only — inventory is withdrawn below, in full,
+		// because this scan-in is the single source of truth for inventory.
 		// Scrap goes first so the ledger shows loss before consumption; both
 		// are non-blocking — a ledger mismatch is recorded, never a 500.
 		let bucketResult: { qtyBefore: number; qtyAfter: number; overrun: number } | null = null;
@@ -648,7 +659,9 @@ export const actions: Actions = {
 				try {
 					await scrapFromCycle({
 						cycleId: lot.bucketCycleId, quantity: scrapCartridge,
-						journal: `WI-01 lot ${lotId}: ${scrapReason}`, user: operator, relatedId: lotId
+						journal: `WI-01 lot ${lotId}: ${scrapReason}`, user: operator, relatedId: lotId,
+						// This page withdraws its own scrap below — don't charge it twice.
+						skipInventory: true
 					});
 				} catch (e) {
 					if (!(e instanceof BucketError)) throw e;
@@ -664,7 +677,8 @@ export const actions: Actions = {
 				bucketNotes.push(`Bucket ledger could not record ${actualCount} consumed: ${e.message}`);
 			}
 		}
-		const partsToWithdraw = lot.bucketCycleId
+		// All three parts, bucket or not — unless buckets are debiting upstream.
+		const partsToWithdraw = lot.bucketCycleId && BUCKETS_DEBIT_INVENTORY
 			? CONSUMED_PARTS.filter(p => p.partNumber === 'PT-CT-112')
 			: CONSUMED_PARTS;
 

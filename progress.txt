@@ -13597,3 +13597,43 @@ What this deployment is for: the bucket system on current production code (maste
   before opening the PR into master. voidCycle has NOT been exercised against a database yet --
   void ONE test pass first and check the lot's "N left" before voiding the rest.
 Build status: success (both scopes, 22:20Z).
+
+================================================================================
+2026-09-23 -- feat/bucket-system -- buckets no longer debit inventory on entry; discards do; yellow note
+================================================================================
+User decisions: (1) "do not debit from inventory at the creation of a bucket. Only debit when
+QR codes are scanned in. Let the manual scan-in be the truth" + a yellow note on the Buckets
+tab saying "Inventory is not Debited Until Carts are Scanned in"; (2) "when discarding carts,
+remove the cart from inventory"; (3) thermoseal on discards: "don't worry about that for now,
+but include it in the yellow note".
+
+Entry debits OFF: new BUCKETS_DEBIT_INVENTORY = false in bucket-service; every entry debit
+(start PT-CT-104, labeling PT-CT-106, adjust-up, 1x sticker) now routes through
+debitInventory(), a no-op while the switch is false. Code kept, not deleted ("for now").
+WI-01 reads the same constant: a bucket-sourced batch now withdraws ALL THREE parts for what
+was scanned, exactly like the manual flow (was: PT-CT-112 only), and its inventory precheck
+covers all three again. Confirm screen no longer strikes through cartridges/barcodes; summary
+text says buckets don't debit. Labels page stops claiming a sticker consumes a label; start
+and labeling forms say "recorded for WI-01, not debited". Side effect, welcome: the WI-01
+double-debit risk (bucket not selected) is gone -- nothing is charged twice any more; only the
+bucket's COUNT fails to drain in that case. WI-01 Can-Make is accurate again.
+
+Discards ON: new debitDiscard() writes a real scrap InventoryTransaction for every discard
+path -- board Scrap, "Any carts discarded?" at Advance, residual Scrap -- since a cart
+discarded in a bucket never reaches a scan-in. Debits PT-CT-104, plus PT-CT-106 once the cart
+is at qr_pending, against the cycle's own sourceLots so per-lot "N left" stays right.
+Thermoseal untouched (accepted). Mirror of the entry switch: no-op if BUCKETS_DEBIT_INVENTORY
+is ever turned back on, so a cart is charged exactly once under either model. WI-01's
+confirm-step bucket scrap passes skipInventory: true because that page withdraws its own scrap
+(would otherwise have been charged three times: here, WI-01 consumption, WI-01 scrap tx).
+voidCycle() now reads consumption AND scrap rows and reverses each with a negative row of the
+same type, so voiding a pass also hands back what its discards took.
+
+Yellow note on /manufacturing/cart-mfg/buckets, above the stage strip: the requested headline,
+then: buckets track counts/location only; WI-01 scan-in withdraws stock; discards are the one
+exception and remove blank (+ label once applied) but NOT thermoseal, which is only ever
+withdrawn at WI-01 scan-in. BUCKET-SYSTEM_PLAN.md 3.3 / 6.x / 8 / 12.2 / 12.4 rewritten to
+match (12.4: double-debit and Can-Make risks marked resolved by this decision).
+
+npm run check (merged tree): 10 errors / 437 warnings, none in touched files (baseline).
+Not exercised against a database.

@@ -135,12 +135,36 @@ could be March's pass or June's. Mitigated, not eliminated, by:
 If an auditor ever requires globally unique upstream lot numbers, the cycle id is already the
 unique key — only the display layer would change.
 
-### 3.3 Buckets are the source of truth; part counts stay in sync
+### 3.3 Buckets do not debit inventory — the WI-01 scan-in is the truth
 
-Bucket sum per stage is authoritative. The two transitions that take material out of part
-inventory write an `InventoryTransaction` via the existing `recordTransaction` service, so
-`PT-CT-104` / `PT-CT-106` counts, the inventory pages and low-stock alerts keep working
-untouched (§8).
+**User decision, 2026-09-21 ("for now"):** *do not debit inventory at the creation of a bucket;
+only debit when QR codes are scanned in; let the manual scan-in be the truth.*
+
+A bucket is a **count-and-location tracker only**. Inventory moves in exactly one place: WI-01's
+confirm step, which withdraws `PT-CT-104` / `PT-CT-112` / `PT-CT-106` for what was actually
+scanned — identically whether or not a source bucket was selected. The Buckets tab carries a
+yellow note saying so: **"Inventory is not Debited Until Carts are Scanned in."**
+
+This replaced the original model, in which buckets debited `PT-CT-104` at start and `PT-CT-106`
+at labeling and WI-01 then skipped those two parts for bucket-sourced batches. The original code
+is kept behind one switch — `BUCKETS_DEBIT_INVENTORY` in `bucket-service.ts`, read by WI-01 too
+so the two sides can never disagree — and every bucket-side debit goes through
+`debitInventory()`, which no-ops while it is `false`.
+
+What the change buys: **the WI-01 double-debit risk is gone** (forgetting to select the bucket no
+longer charges anything twice), and WI-01's "Can Make" card is accurate again because bucketed
+material is still in part inventory.
+
+**The one exception — discards (user decision 2026-09-23: "when discarding carts, remove the
+cart from inventory").** A cart discarded in a bucket will never reach a scan-in, so the discard
+is its only chance to leave inventory. Every discard path — Scrap on the board, *Any carts
+discarded?* at Advance, and residual Scrap — writes a real `scrap` `InventoryTransaction` via
+`debitDiscard()`: `PT-CT-104` for the blank, plus `PT-CT-106` once the cart is at `qr_pending`
+(label applied), against the cycle's own source lots so per-lot "N left" stays right. Thermoseal
+is never touched (§3.4). WI-01's confirm-step scrap is excluded (`skipInventory`) because that
+page withdraws it itself. `debitDiscard()` is the mirror-image of the entry switch: it is a
+no-op if `BUCKETS_DEBIT_INVENTORY` is ever turned back on, so a cart is charged exactly once
+under either model.
 
 ### 3.4 Thermoseal is out of scope
 
@@ -310,7 +334,7 @@ cartridges were serialized from the pass.
 2. If `spotCheckPending` → *Is the tub empty?* (§3.5 / §7)
 3. Choose the `PT-CT-104` lot (validated the same way WI-01 validates lots). Enter the count.
 4. Writes: `BucketCycle` at `raw`; bucket → `in_use`, `$inc cycleCount`; `create` ledger row;
-   `InventoryTransaction` −N `PT-CT-104` against that lot; `AuditLog`.
+   `AuditLog`. **No inventory transaction** (§3.3) — the lot is recorded so WI-01 can prefill it.
 
 ### 6.2 Advance (with discard)
 
@@ -320,7 +344,8 @@ cartridges were serialized from the pass.
 1. **Validate everything first** — cycle open, a next stage exists, count ≤ quantity, reason
    present when > 0, label lot valid when moving to `qr_pending`.
 2. Record the discard (`scrapFromCycle`), so a discard is never written for a move that fails.
-3. Advance the remainder. The `PT-CT-106` debit therefore covers only carts that actually move.
+3. Advance the remainder. (The label lot is recorded, not debited — §3.3. With the switch on,
+   this ordering is what makes the `PT-CT-106` debit cover only carts that actually move.)
 
 `raw → unpressed` and `unpressed → pressed` record nothing beyond the stage change.
 
@@ -331,13 +356,14 @@ is **unchanged** when no bucket is chosen.
 
 - **`checkAndStart`** — optional *Source bucket* (scan box + pick-list of open `qr_pending`
   cycles; matches BKT id or sticker). The cycle's source lots **override** the submitted
-  `lot1`/`lot3`, the count prefills, the inventory precheck covers `PT-CT-112` only, and
-  `LotRecord.bucketCycleId` / `bucketBarcode` are stamped.
+  `lot1`/`lot3`, the count prefills, the inventory precheck covers all three parts (buckets
+  don't debit — §3.3), and `LotRecord.bucketCycleId` / `bucketBarcode` are stamped.
 - **`scanBackedCartridge`** — stamps `backing.bucketCycleId` / `bucketBarcode` on each new
   `CartridgeRecord`; refuses a bucket's own sticker (§9.4 collision guard).
 - **`confirmComplete`** — for a bucket lot: `scrapFromCycle(scrapCartridge)` then
-  `consumeFromCycle(scannedCount)`, then withdraws **`PT-CT-112` only** (104 and 106 were
-  debited upstream). Both bucket calls are **non-blocking**: a ledger mismatch is surfaced as a
+  `consumeFromCycle(scannedCount)` draw the bucket's *count* down; then **all three parts are
+  withdrawn for what was scanned, exactly as in the manual flow** — the scan-in is the single
+  source of truth for inventory (§3.3). Both bucket calls are **non-blocking**: a ledger mismatch is surfaced as a
   note in the handoff dialog, never a 500. Scanning *more* than the cycle held is recorded as an
   `overrun` discrepancy, never blocked — the scans are the physical truth.
 - At `quantity 0`: cycle → `consumed`, bucket → `available` + `spotCheckPending`.
@@ -389,27 +415,29 @@ stage, and `closedWithResidual: true`. That makes "which stages leak count accur
 
 ## 8. Inventory effects
 
-| Transition | InventoryTransaction |
-|---|---|
-| start → `raw` | −N `PT-CT-104` against the chosen lot — the **only** 104 debit for these units |
-| `raw → unpressed` | none |
-| `unpressed → pressed` | **none** — thermoseal out of scope (§3.4) |
-| `pressed → qr_pending` | −N `PT-CT-106` against the chosen label lot — the **only** 106 debit |
-| assign / replace a QR sticker | −1 `PT-CT-106` (no lot — which sheet it came from isn't knowable); constant `CONSUME_LABEL_ON_ASSIGN` |
-| WI-01 consume | none for 104/106; `PT-CT-112` withdrawn exactly as before |
-| scrap / discard / residual scrap | **none** — the units left part inventory when they entered the bucket; recorded on the ledger + `ManualCartridgeRemoval` so loss is visible without double-debiting |
-| adjust **down** | none — ledger only |
-| adjust **up** | −delta `PT-CT-104` (and −delta `PT-CT-106` at `qr_pending`) |
-| merge | none — material moves between buckets |
+**Current (`BUCKETS_DEBIT_INVENTORY = false`, §3.3): no bucket event touches inventory.**
+
+| Event | InventoryTransaction — **now** | — if the switch is turned back on |
+|---|---|---|
+| start → `raw` | **none** (lot recorded for WI-01 prefill only) | −N `PT-CT-104` against the chosen lot |
+| `raw → unpressed` | none | none |
+| `unpressed → pressed` | none | none — thermoseal out of scope (§3.4) |
+| `pressed → qr_pending` | **none** (label lot recorded only) | −N `PT-CT-106` against the label lot |
+| assign / replace a QR sticker | **none** | −1 `PT-CT-106` |
+| **WI-01 confirm** | **−scanned of `PT-CT-104`, `112` and `106`, bucket or not — the single source of truth** | `PT-CT-112` only for bucket-sourced batches |
+| scrap / discard / residual scrap | **−N `scrap` of `PT-CT-104` (+ `PT-CT-106` at `qr_pending`) against the cycle's lots** — the cart's only exit from inventory (§3.3) | none — already debited on entry |
+| adjust down / up | none | none / −delta |
+| merge | none | none |
 
 > The plan originally had scrap debiting "the stage's part" a second time; that double-counts and
 > was corrected before build. WI-01's own confirm step has the same double-debit pattern today
 > (consumption of good+scrap *and* a separate scrap tx). Pre-existing, deliberately not touched —
 > worth its own ticket.
 
-**Consequence for cleanup:** "returning scraps to inventory" is the wrong frame — scraps never
-touched inventory. Reversing test activity means reversing the *start*, *labeling* and
-*sticker* debits (§12.2).
+**Consequence for cleanup:** passes created *before* this change (commits up to `47a2a63d`) did
+debit inventory at start, labeling and sticker assignment. `voidCycle()` (§12.2) still returns
+those, because it reads what a pass debited from the inventory ledger rather than assuming —
+and for the same reason it correctly returns nothing for passes created since.
 
 ---
 
@@ -611,8 +639,9 @@ lot quantity (on start, labeling and sticker assignment — *not* on scrap, §8)
 bucket history page, reason required.
 
 - **What it reverses** is read from the inventory ledger itself: every bucket debit is stamped
-  `manufacturingRunId = cycleId` (start, labeling, adjust-up), so the pass's net debit per
-  (part, lot) is a query, not a guess.
+  `manufacturingRunId = cycleId` — entry consumptions (when the switch was on) *and* discard
+  scraps — so the pass's net debit per (type, part, lot) is a query, not a guess. Each group is
+  reversed with a negative row of the same type.
 - **How**: one compensating row per (part, lot) — a **negative `consumption`** against the same
   lot, carrying the model's `retractedBy/At/retractionReason` — plus `$inc` on the part's
   `inventoryCount`. The negative-consumption shape is deliberate: per-lot "N left" is computed
@@ -647,15 +676,19 @@ Recent Checkouts on `/manufacturing/cart-mfg/scrap` does not yet badge voided ro
 
 ### 12.4 Known risks in how buckets meet the existing flows
 
-- **Double-debit when the bucket is not selected at WI-01.** A bucket's blanks were debited at
-  *start* and its labels at *labeling*. If that same physical material is run through WI-01's
-  manual path (no Source bucket chosen), WI-01 debits `PT-CT-104` and `PT-CT-106` **again** —
-  it has no way to know they came from a tub — and the bucket never drains, sitting at QR
-  Scan-In Pending forever. Nothing prevents this today. Options: a warning on WI-01 whenever
-  QR-pending buckets exist; or make the bucket mandatory once cutover is complete.
-- **WI-01's "Can Make" card and low-inventory banner understate.** They compute from part
-  inventory, which no longer includes blanks/labels sitting in buckets — even though QR-pending
-  carts are exactly what can be made next.
+- ~~**Double-debit when the bucket is not selected at WI-01.**~~ **Resolved by §3.3** — buckets no
+  longer debit, so WI-01 charges once whether or not the bucket is selected. What remains is
+  bookkeeping only: if the bucket isn't selected, **its count never drains** and it sits at QR
+  Scan-In Pending with carts that are no longer physically there. Inventory is right; the bucket
+  is wrong. A reminder on WI-01 when QR-pending buckets exist would help. (The double-debit
+  returns if `BUCKETS_DEBIT_INVENTORY` is ever switched back on.)
+- ~~**WI-01's "Can Make" card understates.**~~ **Resolved by §3.3** — bucketed material is still
+  in part inventory.
+- ~~**Upstream discards are never debited.**~~ **Resolved 2026-09-23** — discards now write a
+  `scrap` transaction (§3.3, §8). What they do *not* debit is thermoseal (§3.4): if the press
+  bonds it, a cart discarded after pressing takes a `PT-CT-112` with it that inventory never sees.
+  **User: "don't worry about that for now"** — accepted; the yellow note on the Buckets tab
+  states it so operators know thermoseal is only ever withdrawn at WI-01 scan-in.
 - **Broken link.** Cartridge-admin search matches cartridge id and two legacy lot fields, not
   `backing.bucketBarcode`, so the "+N more" link on a bucket's history page (which searches by
   BKT id) finds nothing. One-line fix in `cartridge-admin/+page.server.ts`.
