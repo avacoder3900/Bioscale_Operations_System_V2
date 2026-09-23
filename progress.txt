@@ -14074,3 +14074,35 @@ Source: branch feat/bucket-system @ commit 58161745
 Retrieve this exact code: git checkout feat/bucket-system at commit 58161745
 What this deployment is for: inline Mint New Bucket / Replace sticker on the board card.
 Build status: success (login 200).
+
+================================================================================
+2026-09-23 — feat/bucket-system — Thermoseal: current stock note above Development settings
+================================================================================
+User: "Give current thermoseal stock as a note above the development settings, and mention
+this is the accurate count according to the current system." On the board's Thermoseal card
+(under Unpressed), a note now sits directly above the "Development settings" <details>: the
+live PT-CT-112 inventoryCount, the open roll's remainder (m + ≈ carts), the next lot's
+remaining units, and when PT-CT-112 was last physically counted — labelled as the accurate
+count according to the current system, so the pinned development value on the Rolls-on-hand
+tile can't be mistaken for it. When the live count is negative the note explains why (WI-01
+still debits one unit per cart against a shelf this board never restocks, §12.4); when the pin
+is on it names the pinned value it stands in for.
+Files: src/routes/manufacturing/cart-mfg/buckets/+page.svelte (the note),
+src/lib/server/services/thermoseal-service.ts (selects PartDefinition.lastPhysicalCountAt,
+surfaces it as ThermosealStatus.liveCountAt), BUCKET-SYSTEM_PLAN.md (§3.4 note + cutover
+drift, §9.1 card contents, §9.3 cartridge-admin strip, changelog rows for c0664759/da0daa9f,
+9b06e601, fdf00c8e, 64f52310).
+Live count at the time of writing: PT-CT-112 = -77 (MCP parts_lookup), last physical count
+2026-09-23 16:35 UTC — 1 roll was counted in that morning's cutover and WI-01 has withdrawn 78
+units since.
+npm run check: NOT RUN — node/npm are not on PATH in this session's shell. The change is one
+Svelte block plus three lines of service code; baseline remains 12 errors / 438 warnings from
+the previous entries. Worth re-running in a shell that has node before this goes to master.
+
+Deployment: preview — pending. Pushed to GitHub as commit 64f52310 on feat/bucket-system; the
+  Vercel GitHub integration builds the preview. URL not recorded here — neither the gh CLI nor
+  a Vercel token is available in this session, so it must be read off the Vercel dashboard (or
+  pasted here) and logged in this entry.
+Source: branch feat/bucket-system @ commit 64f52310
+Retrieve this exact code: git checkout feat/bucket-system at commit 64f52310
+What this deployment is for: the thermoseal current-stock note above Development settings.
