@@ -14119,3 +14119,11 @@ the retire click never starts a pass; the card rings when either its start or re
 open. Also fixed a type error that came in with the concurrent session's 64f52310 (page renders
 ts.liveCountAt but the thermoseal type lacked it) -- one line in the same file.
 Check (svelte-kit sync + svelte-check direct): 12 errors / 438 warnings (baseline).
+
+Deployment: preview -- https://bioscale-operations-system-mongodb-axu9a3d11-brevitest.vercel.app
+  (brevitest scope; cookie-session gated, 302 to /login)
+Source: branch feat/bucket-system @ commit 7cf55d4d
+Retrieve this exact code: git checkout feat/bucket-system at commit 7cf55d4d
+What this deployment is for: Retire control on each Available bucket card (+ liveCountAt type
+  fix); includes the concurrent session's current-stock note (64f52310).
+Build status: success (login 200).
