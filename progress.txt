@@ -14189,3 +14189,10 @@ What this deployment is for: the leftover-cart flow (scan -> stage + suggested b
   Discard). Worth trying: leftover at a stage with no open pass -> the panel offers this bucket
   as an empty one and opens a new pass at that stage; with no empty buckets -> mint hint.
 Build status: success (login 200).
+
+================================================================================
+2026-09-23 -- feat/bucket-system -- Cart admin button in the board header
+================================================================================
+User: "add a cart admin button next to master override." Board header now reads New bucket ·
+Master override (admin) · Cart admin (-> /cartridge-admin) · WI-01. Link only; no logic.
+Check: 12 errors / 438 warnings (baseline).

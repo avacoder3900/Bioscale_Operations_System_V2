@@ -380,6 +380,7 @@
 		<div class="flex gap-2">
 			<a href="/manufacturing/cart-mfg/buckets/new" class={btnGhost}>New bucket</a>
 			{#if data.canAdmin}<a href="/manufacturing/cart-mfg/buckets/override" class="rounded border border-red-500/40 px-3 py-1.5 text-xs text-red-300 hover:bg-red-900/20" title="Move a bucket to any phase, bypassing the flow (admin)">Master override</a>{/if}
+			<a href="/cartridge-admin" class={btnGhost} title="Cartridge admin — search, filter by stage, per-cart detail">Cart admin</a>
 			<a href="/manufacturing/cart-mfg/wi-01" class={btnGhost}>WI-01 →</a>
 		</div>
 	</div>
