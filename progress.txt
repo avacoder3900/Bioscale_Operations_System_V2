@@ -13991,3 +13991,12 @@ What this deployment is for: board restructure -- Mint New Bucket card under Ava
   inventory note removed, Retire bucket on the bucket page, compact thermoseal tile + yellow
   not-synced card under Unpressed. (The bucket-aware State Change override is da0daa9f, next.)
 Build status: success (login 200).
+
+Deployment: preview -- https://bioscale-operations-system-mongodb-61jc5egeh-brevitest.vercel.app
+  (brevitest scope; cookie-session gated, 302 to /login)
+Source: branch feat/bucket-system @ commit da0daa9f
+Retrieve this exact code: git checkout feat/bucket-system at commit da0daa9f
+What this deployment is for: bucket-aware State Change (manual override): destination bucket
+  picker for bucket-stage targets; leaving a bucket stage removes the cart from its pass.
+  Includes the c0664759 board restructure.
+Build status: success (login 200).
