@@ -27,11 +27,21 @@
 			scanQuery: string;
 		};
 		form: {
+			mint?: ActionResult; relabel?: ActionResult;
 			start?: ActionResult; advance?: ActionResult; scrap?: ActionResult;
 			residual?: ActionResult; retire?: ActionResult; thermosealToggles?: ActionResult;
 		} | null;
 	}
 	let { data, form }: Props = $props();
+
+	// Mint New Bucket card (inline, §9.4): 'mint' scans one QR; 'replace' scans the
+	// bucket's current sticker (or BKT id) then the new one.
+	let mintMode = $state<'mint' | 'replace'>('mint');
+	let mintQr = $state('');
+	let relabelBucket = $state('');
+	let relabelQr = $state('');
+	let mintBusy = $state(false);
+	const enhanceMint = () => { mintBusy = true; return async ({ update }: { update: (o?: { reset?: boolean }) => Promise<void> }) => { await update({ reset: false }); mintBusy = false; mintQr = ''; relabelQr = ''; }; };
 
 	// Thermoseal (BUCKET-SYSTEM_PLAN v2 §3.4): length a raw → unpressed move will take.
 	function thermosealCm(carts: number): number {
@@ -384,12 +394,32 @@
 						<p class="px-1 py-4 text-center text-[10px] text-[var(--color-tron-text-secondary)]">No empty buckets.</p>
 					{/if}
 				</div>
-				<!-- Mint New Bucket (BUCKET-SYSTEM_PLAN v2 §9.4) -->
+				<!-- Mint New Bucket (BUCKET-SYSTEM_PLAN v2 §9.4) — inline: no page change -->
 				<div class="mt-3 rounded border border-dashed border-[var(--color-tron-cyan)]/40 bg-[var(--color-tron-surface)] p-2">
-					<p class="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-tron-cyan)]">Mint New Bucket</p>
-					<p class="mt-1 text-[10px] text-[var(--color-tron-text-secondary)]">Scan one QR sticker → a new bucket, ready under Available.</p>
-					<a href="/manufacturing/cart-mfg/buckets/new" class="mt-2 block rounded bg-[var(--color-tron-cyan)] px-2 py-1.5 text-center text-xs font-bold text-[var(--color-tron-bg-primary)] hover:opacity-90">Mint new bucket →</a>
-					<a href="/manufacturing/cart-mfg/buckets/new#replace" class="mt-1.5 block rounded border border-[var(--color-tron-border)] px-2 py-1.5 text-center text-[10px] text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-cyan)]/60 hover:text-[var(--color-tron-text)]">Replace a damaged sticker</a>
+					<div class="flex items-center justify-between">
+						<p class="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-tron-cyan)]">{mintMode === 'mint' ? 'Mint New Bucket' : 'Replace Sticker'}</p>
+						<button type="button" class="text-[10px] text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)]" onclick={() => { mintMode = mintMode === 'mint' ? 'replace' : 'mint'; }}>
+							{mintMode === 'mint' ? 'Replace a damaged sticker' : '← Mint new bucket'}
+						</button>
+					</div>
+					{#if mintMode === 'mint'}
+						<form method="POST" action="?/mint" use:enhance={enhanceMint} class="mt-1.5 space-y-1.5">
+							<p class="text-[10px] text-[var(--color-tron-text-secondary)]">Scan one QR sticker → a new bucket, ready here under Available.</p>
+							<input type="text" name="qr" bind:value={mintQr} autocomplete="off" placeholder="scan new sticker…" class="{inputCls} font-mono" />
+							{#if form?.mint?.error}<p class="text-[10px] text-[var(--color-tron-error)]">{form.mint.error}</p>{/if}
+							{#if form?.mint?.success}<p class="text-[10px] text-green-300">Minted <span class="font-mono">{form.mint.bucketId}</span> — sticker <span class="font-mono">{String(form.mint.barcode ?? '').slice(0, 8)}…</span></p>{/if}
+							<button type="submit" disabled={mintBusy || !mintQr.trim()} class="w-full rounded bg-[var(--color-tron-cyan)] px-2 py-1.5 text-center text-xs font-bold text-[var(--color-tron-bg-primary)] hover:opacity-90 disabled:opacity-50">{mintBusy ? 'Minting…' : 'Mint bucket'}</button>
+						</form>
+					{:else}
+						<form method="POST" action="?/relabel" use:enhance={enhanceMint} class="mt-1.5 space-y-1.5">
+							<p class="text-[10px] text-[var(--color-tron-text-secondary)]">The bucket keeps its id and history; only the label changes.</p>
+							<input type="text" name="bucketId" bind:value={relabelBucket} autocomplete="off" placeholder="scan current sticker or BKT id…" class="{inputCls} font-mono" />
+							<input type="text" name="qr" bind:value={relabelQr} autocomplete="off" placeholder="scan new sticker…" class="{inputCls} font-mono" />
+							{#if form?.relabel?.error}<p class="text-[10px] text-[var(--color-tron-error)]">{form.relabel.error}</p>{/if}
+							{#if form?.relabel?.success}<p class="text-[10px] text-green-300"><span class="font-mono">{form.relabel.bucketId}</span> now wears <span class="font-mono">{String(form.relabel.barcode ?? '').slice(0, 8)}…</span></p>{/if}
+							<button type="submit" disabled={mintBusy || !relabelBucket.trim() || !relabelQr.trim()} class="w-full rounded border border-[var(--color-tron-cyan)]/60 px-2 py-1.5 text-center text-xs font-bold text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-50">{mintBusy ? 'Replacing…' : 'Replace sticker'}</button>
+						</form>
+					{/if}
 				</div>
 			</div>
 
