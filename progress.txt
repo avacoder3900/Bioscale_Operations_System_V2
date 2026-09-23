@@ -13871,3 +13871,10 @@ What this deployment is for: the v2 bucket restructure (carts born at bucket sca
   https://bioscale-operations-system-mongodb-pib089b4c.vercel.app (16:12Z, success).
 Build status: success (16:15Z). PT-CT-112 is at 1 roll -> the Thermoseal card shows the
   red below-floor state; no card/email while the toggle is off.
+  NOTE (16:25Z): this URL is from the alejandro-valdezs-projects Vercel project, which has
+  Deployment Protection on (302 to vercel.com/sso-api). The brevitest team project -- whose
+  open -brevitest previews were reviewed on 09-21/22 -- built master today (PR #57) but built
+  NONE of this branch's five commits. Latest personal-project preview: 161844f2 at
+  https://bioscale-operations-system-mongodb-h2lwva4z6.vercel.app (success, also protected).
+  To resolve: fix the brevitest project's branch previews in the Vercel dashboard, or relax
+  Deployment Protection on the personal project. No local deploy.
