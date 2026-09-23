@@ -302,6 +302,27 @@
 		stationMsg = null;
 	}
 
+	/** CvProject.captureSettings schema defaults — what a new project is given. */
+	const CAPTURE_DEFAULTS: Record<string, number> = {
+		exposure: -5,
+		whiteBalance: 4000,
+		brightness: 128,
+		contrast: 128,
+		gain: 0,
+		sharpness: 128,
+		claheStrength: 2.0,
+		redCorrection: 0.85,
+		greenCorrection: 0.9,
+		blueCorrection: 1.0
+	};
+
+	/** Load the defaults into the draft — still needs an explicit Save. */
+	function resetStationDraft() {
+		stationDraft = { ...stationDraft, ...CAPTURE_DEFAULTS };
+		stationDirty = true;
+		stationMsg = { kind: 'ok', text: 'Defaults loaded — not saved yet.' };
+	}
+
 	async function saveStationSettings() {
 		const p = stationProject;
 		if (!p) return;
@@ -461,22 +482,65 @@
 		}
 	}
 
+	/**
+	 * Properties the camera will not honour on their own: the matching mode has
+	 * to be manual, and it has to be in the SAME constraint set. Sending
+	 * exposureTime alone is the classic case — the call resolves and the value
+	 * never changes, because auto-exposure is still driving.
+	 */
+	const REQUIRES_MANUAL: Record<string, string> = {
+		exposureTime: 'exposureMode',
+		exposureCompensation: 'exposureMode',
+		iso: 'exposureMode',
+		focusDistance: 'focusMode',
+		colorTemperature: 'whiteBalanceMode'
+	};
+
 	async function applyCameraSetting(key: string, raw: string | number | boolean) {
 		const track = stream?.getVideoTracks?.()[0];
 		if (!track) return;
 		const cap = camCaps[key];
 		const value = isRange(cap) ? Number(raw) : raw;
 		camApplyError = null;
+
+		// Carry the prerequisite mode along, where the camera offers it.
+		const set: Record<string, unknown> = { [key]: value };
+		const modeKey = REQUIRES_MANUAL[key];
+		if (modeKey && Array.isArray(camCaps[modeKey]) && camCaps[modeKey].includes('manual')) {
+			set[modeKey] = 'manual';
+		}
+
+		let applied = false;
 		try {
-			// Not `advanced`: that silently ignores whatever it cannot satisfy, which
-			// is exactly the failure mode this panel exists to expose. A bare
-			// constraint rejects instead, so a setting that did not take says so.
-			await track.applyConstraints({ [key]: value } as MediaTrackConstraints);
-			camValues = { ...camValues, ...(track.getSettings?.() ?? {}) };
-		} catch (e) {
-			camApplyError = `${LABELS[key] ?? key}: ${e instanceof Error ? e.message : String(e)}`;
-			// Snap the control back to what the camera is really doing.
-			camValues = { ...camValues, ...(track.getSettings?.() ?? {}) };
+			// Bare first: it REJECTS what it cannot do, so a genuine refusal is
+			// visible rather than silently swallowed.
+			await track.applyConstraints(set as MediaTrackConstraints);
+			applied = true;
+		} catch {
+			// Some drivers refuse a bare constraint they will accept inside
+			// `advanced`. Worth a second attempt before reporting failure.
+			try {
+				await track.applyConstraints({ advanced: [set as MediaTrackConstraintSet] });
+				applied = true;
+			} catch (e2) {
+				camApplyError = `${LABELS[key] ?? key}: ${e2 instanceof Error ? e2.message : String(e2)}`;
+			}
+		}
+
+		// applyConstraints can resolve happily while the camera clamps or ignores
+		// the value, so trust getSettings() rather than the absence of a throw.
+		const after = track.getSettings?.() ?? {};
+		camValues = { ...camValues, ...after };
+
+		if (applied && !camApplyError && isRange(cap)) {
+			const actual = Number((after as any)[key]);
+			if (Number.isFinite(actual) && Math.abs(actual - Number(value)) > (cap.step ?? 1) / 2) {
+				camApplyError =
+					`${LABELS[key] ?? key}: asked for ${value}, camera settled on ${actual}` +
+					(modeKey && (after as any)[modeKey] && (after as any)[modeKey] !== 'manual'
+						? ` — ${LABELS[modeKey] ?? modeKey} is still "${(after as any)[modeKey]}", so it is overriding the value.`
+						: ' — the camera clamped or ignored it.');
+			}
 		}
 	}
 
@@ -1155,6 +1219,14 @@
 										>
 											{stationSaving ? 'Saving…' : stationDirty ? 'Save to project' : 'Saved'}
 										</button>
+										<button
+											type="button"
+											onclick={resetStationDraft}
+											disabled={stationSaving}
+											class="rounded border border-[var(--color-tron-cyan)] px-3 py-1.5 text-xs text-[var(--color-tron-cyan)] hover:bg-[rgba(0,255,255,0.1)] disabled:opacity-40"
+										>
+											Reset all to defaults
+										</button>
 										<span class="text-[10px] text-[var(--color-tron-text-secondary)]">
 											Persisted on the CV project and shared by everyone using it. The deployed
 											model was trained against the current values — changing them changes what
@@ -1224,6 +1296,17 @@
 										{/if}
 									</div>
 								{/each}
+
+								<!-- Sits in the grid so an odd number of sliders leaves no gap. -->
+								<div class="flex items-end">
+									<button
+										type="button"
+										onclick={resetCameraTuning}
+										class="w-full rounded border border-[var(--color-tron-cyan)] px-3 py-2 text-xs font-bold text-[var(--color-tron-cyan)] hover:bg-[rgba(0,255,255,0.1)]"
+									>
+										Reset all to defaults
+									</button>
+								</div>
 							</div>
 						{/if}
 
@@ -1254,13 +1337,6 @@
 						{/if}
 
 						<div class="mt-4 flex items-center gap-3 border-t border-[var(--color-tron-border)] pt-3">
-							<button
-								type="button"
-								onclick={resetCameraTuning}
-								class="rounded border border-[var(--color-tron-cyan)] px-3 py-1.5 text-xs text-[var(--color-tron-cyan)] hover:bg-[rgba(0,255,255,0.1)]"
-							>
-								Reset to validated defaults
-							</button>
 							<span class="text-[10px] text-[var(--color-tron-text-secondary)]">
 								Session only — not saved. Reloading restores the validated setup, which the
 								CV model was tuned against.
