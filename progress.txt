@@ -14106,3 +14106,15 @@ Deployment: preview — pending. Pushed to GitHub as commit 64f52310 on feat/buc
 Source: branch feat/bucket-system @ commit 64f52310
 Retrieve this exact code: git checkout feat/bucket-system at commit 64f52310
 What this deployment is for: the thermoseal current-stock note above Development settings.
+
+================================================================================
+2026-09-23 -- feat/bucket-system -- Retire button on each Available bucket card
+================================================================================
+User: "I want the retire bucket button to be available on the bucket's card on the main
+production buckets page." Each Available card is now a div holding the open-panel button
+plus (admin only) a small red Retire control in its footer that opens the existing retire
+panel in the rail (reason required, ?/retire). Two sibling buttons rather than a nested one, so
+the retire click never starts a pass; the card rings when either its start or retire panel is
+open. Also fixed a type error that came in with the concurrent session's 64f52310 (page renders
+ts.liveCountAt but the thermoseal type lacked it) -- one line in the same file.
+Check (svelte-kit sync + svelte-check direct): 12 errors / 438 warnings (baseline).

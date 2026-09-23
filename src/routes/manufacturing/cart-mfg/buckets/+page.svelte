@@ -18,7 +18,7 @@
 			thermoseal: {
 				config: { notificationsEnabled: boolean; rollsOnHandPinned: boolean; rollsOnHandOverride: number; cmPerCartridge: number; rollLengthCm: number; minRollsInInventory: number };
 				roll: { id: string; lotId: string | null; lengthCm: number; consumedCm: number; remainingCm: number; remainingCartridges: number; openedAt: string | null; openedBy: string | null } | null;
-				rollsOnHand: number; rollsOnHandLive: number; minRolls: number; belowFloor: boolean;
+				rollsOnHand: number; rollsOnHandLive: number; liveCountAt: string | null; minRolls: number; belowFloor: boolean;
 				nextLot: { lotId: string; remaining: number } | null;
 				openRestockTaskId: string | null; rollsExhausted: number;
 			} | null;
@@ -371,14 +371,23 @@
 				</div>
 				<div class="space-y-2">
 					{#each data.board.available as b (b.bucketId)}
-						<button type="button" onclick={() => openBucket(b)}
-							class="w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-2 text-left hover:border-[var(--color-tron-cyan)]/60 {panel.kind === 'start' && panel.bucketId === b.bucketId ? 'ring-1 ring-[var(--color-tron-cyan)]' : ''}">
-							<div class="flex items-center justify-between">
-								<span class="font-mono text-sm text-[var(--color-tron-text)]">{shortQr(b.barcode) ?? b.bucketId}</span>
-								{#if b.spotCheckPending}<span class="rounded bg-[var(--color-tron-yellow)]/20 px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-[var(--color-tron-yellow)]" title="Confirm empty at next start">check</span>{/if}
-							</div>
-							<div class="mt-1 text-[10px] text-[var(--color-tron-text-secondary)]">{b.bucketId} · {b.cycleCount} pass{b.cycleCount === 1 ? '' : 'es'}</div>
-						</button>
+						<!-- Card = open-the-start-panel button + (admin) Retire control. Two buttons
+						     side by side rather than nested, so the retire click never starts a pass. -->
+						<div class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] hover:border-[var(--color-tron-cyan)]/60 {(panel.kind === 'start' || panel.kind === 'retire') && panel.bucketId === b.bucketId ? 'ring-1 ring-[var(--color-tron-cyan)]' : ''}">
+							<button type="button" onclick={() => openBucket(b)} class="w-full p-2 text-left">
+								<div class="flex items-center justify-between">
+									<span class="font-mono text-sm text-[var(--color-tron-text)]">{shortQr(b.barcode) ?? b.bucketId}</span>
+									{#if b.spotCheckPending}<span class="rounded bg-[var(--color-tron-yellow)]/20 px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-[var(--color-tron-yellow)]" title="Confirm empty at next start">check</span>{/if}
+								</div>
+								<div class="mt-1 text-[10px] text-[var(--color-tron-text-secondary)]">{b.bucketId} · {b.cycleCount} pass{b.cycleCount === 1 ? '' : 'es'}</div>
+							</button>
+							{#if data.canAdmin}
+								<div class="flex justify-end border-t border-[var(--color-tron-border)]/40 px-2 py-1">
+									<button type="button" onclick={() => { panel = { kind: 'retire', bucketId: b.bucketId }; resetLists(); }}
+										class="text-[10px] uppercase tracking-wider text-red-300/80 hover:text-red-300" title="Retire this bucket (kill the label) — reason required">Retire</button>
+								</div>
+							{/if}
+						</div>
 					{/each}
 					{#each data.board.quarantined as b (b.bucketId)}
 						<button type="button" onclick={() => openBucket(b)}
