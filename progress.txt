@@ -13906,3 +13906,15 @@ materialsConsumed [104, 112, 106]. Production WI-01 still debits one PT-CT-112 P
 Samantha Wolf). This will recur on every production WI-01 batch until feat/bucket-system
 merges, or until master's WI-01 stops charging PT-CT-112 per cart (hotfix candidate --
 user's call).
+
+================================================================================
+2026-09-23 -- feat/bucket-system -- yellow "Thermoseal Inventory is Not Synced Between Systems" card; production knock-down parked
+================================================================================
+User: "ignore WI-01 thermoseal knock down per cart for now, and include a yellow card saying
+the two systems are not currently synced." Added a second yellow note on the bucket board,
+directly above the Thermoseal card: production WI-01 still withdraws one PT-CT-112 unit per
+cartridge while this board counts rolls by length, so the rolls-in-inventory figure drifts
+with every production batch; treat as indicative and re-count in rolls when needed.
+BUCKET-SYSTEM_PLAN.md 12.4 records the decision. PR #60 (production WI-01 -> roll-length
+consumption) stays open but PARKED -- not to be merged unless the drift becomes a problem.
+npm run check: 12 errors / 438 warnings (baseline), none in touched files.

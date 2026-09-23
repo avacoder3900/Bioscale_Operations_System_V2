@@ -361,6 +361,14 @@
 		</div>
 	{/if}
 
+	<!-- Thermoseal counts are NOT synced with production (BUCKET-SYSTEM_PLAN v2 §3.4 / §12.4):
+	     production WI-01 still withdraws one PT-CT-112 unit per cartridge, this board counts
+	     rolls by length. User decision 2026-09-23: leave production alone for now, say so here. -->
+	<div class="rounded-lg border border-[var(--color-tron-yellow)]/60 bg-[var(--color-tron-yellow)]/10 px-4 py-2.5 text-sm font-semibold text-[var(--color-tron-yellow)]" role="note">
+		⚠ Thermoseal Inventory is Not Synced Between Systems
+		<span class="ml-1 font-normal text-[var(--color-tron-yellow)]/80">— production WI-01 (Cartridge Back) still withdraws one PT-CT-112 <em>unit</em> per cartridge scanned, while this board counts thermoseal in <em>rolls</em> consumed by length (3.75 cm per cart). The "rolls in inventory" figure below will drift with every production WI-01 batch until the two are unified; treat it as indicative and re-count in rolls when needed.</span>
+	</div>
+
 	<!-- Thermoseal roll (BUCKET-SYSTEM_PLAN v2 §3.4): consumed by length at raw → unpressed -->
 	{#if data.thermoseal}
 		{@const ts = data.thermoseal}
