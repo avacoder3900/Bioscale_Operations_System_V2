@@ -13898,3 +13898,11 @@ What this deployment is for: REVIEW THIS ONE -- v2 buckets + thermoseal rolls wi
 Lookup rule for next time: GET /deployments?sha=<FULL sha> (auth header; unauthenticated
   calls hit the rate limit and return empty), then /deployments/<id>/statuses and take the
   environment_url containing '-brevitest'. The no-suffix URL is the personal project (SSO).
+
+PT-CT-112 drift (16:35Z): the count went 1 -> -23 within minutes of the reset. Cause: jacob
+ran WI-01 on PRODUCTION (master) at 16:16Z -- lot 5TJYPolqO0sT18Odg0upf, 24 carts,
+materialsConsumed [104, 112, 106]. Production WI-01 still debits one PT-CT-112 PER CART
+(legacy rule; this branch's WI-01 debits nothing). Re-counted to 1 roll (record_physical_count,
+Samantha Wolf). This will recur on every production WI-01 batch until feat/bucket-system
+merges, or until master's WI-01 stops charging PT-CT-112 per cart (hotfix candidate --
+user's call).
