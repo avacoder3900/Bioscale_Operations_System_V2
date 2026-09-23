@@ -13299,3 +13299,34 @@ Deployment: production — building from the GitHub push to master (Vercel dashb
 Source: branch master @ commit 671b220a (squash merge of PR #59)
 Retrieve this exact code: git checkout master at commit 671b220a
 What this deployment is for: station camera footer visibility + manual exposure sequencing
+
+================================================================================
+2026-09-23 — fix/capture-station-camera-panel — station camera panel no longer vanishes
+================================================================================
+The Pi station camera settings panel on /capture disappeared entirely in the project capture flow.
+Its gate was {#if selectedStationId && cameraParamsKnown.length > 0}, and cameraParamsKnown is only
+filled when the agent answers get_camera_params over the station socket. Until that reply lands — or
+if it never does — a connected station with working video looked exactly like no station at all, so
+the feature read as missing rather than waiting.
+
+Gated on selectedStationId alone now. With no parameters reported the panel explains that state and
+offers "Ask the station again", which re-sends the request. Adds "Reset all to defaults" in the
+footer, preferring the default the agent reports alongside each range and falling back to the
+midpoint of known bounds only where none was offered; "Re-read from station" pulls current values
+back. Notes inline that Auto Exposure must be 1 (manual) before an exposure value will hold, since
+the driver ignores exposure while it is on 3 (auto).
+
+CONTEXT WORTH KEEPING: this is the panel the original camera reports were about. auto_exposure
+1-vs-3 is a V4L2 value that exists only here, not in the browser-constraint panel built earlier on
+post-mortem-inspect. That panel is correct about what it reports — a station's remote WebRTC track
+exposes only facingMode and resizeMode, confirmed on hardware — but was never going to reach the
+station's camera. Four deploys (#55-#59) went to the wrong page before that was traced.
+
+File: src/routes/capture/+page.svelte. npm run check: 12/437 — this master's baseline, none in the
+touched file. Not verified against a station from here: whether an exposure value holds once Auto
+Exposure is manual depends on agent.py and the driver, both outside this repo.
+
+Deployment: production — building from the GitHub push to master (Vercel dashboard, commit below)
+Source: branch master @ commit 0784b5e8 (squash merge of PR #61)
+Retrieve this exact code: git checkout master at commit 0784b5e8
+What this deployment is for: station camera panel visibility, defaults and retry on /capture
