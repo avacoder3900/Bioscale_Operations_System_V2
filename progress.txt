@@ -14232,3 +14232,11 @@ eligibility per cart) and its ?/residualLookup action are removed from the board
 server still validates every cart on submit; lookupResidualCart() stays in the service unused.
 ASSUMPTION stated to the user: Merge still needs the carts scanned because membership is by
 id -- there is no count-only merge. Spec 7 rewritten. Check: 12 errors / 438 warnings.
+
+Deployment: preview -- https://bioscale-operations-system-mongodb-iwlwzsiak-brevitest.vercel.app
+  (brevitest scope; cookie-session gated, 302 to /login)
+Source: branch feat/bucket-system @ commit 77961393
+Retrieve this exact code: git checkout feat/bucket-system at commit 77961393
+What this deployment is for: the simplified leftover screen (Merge at the bucket's last stage /
+  Discard with bulk QR scan + journal).
+Build status: success (login 200).
