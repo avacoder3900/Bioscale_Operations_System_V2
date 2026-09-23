@@ -13299,3 +13299,25 @@ Deployment: production — building from the GitHub push to master (Vercel dashb
 Source: branch master @ commit 671b220a (squash merge of PR #59)
 Retrieve this exact code: git checkout master at commit 671b220a
 What this deployment is for: station camera footer visibility + manual exposure sequencing
+
+================================================================================
+2026-09-23 -- hotfix/thermoseal-roll-consumption -- production WI-01: thermoseal by roll length, not one unit per cartridge
+================================================================================
+Root cause of the PT-CT-112 drift seen today (1 -> -23 after a 24-cart WI-01 batch): master's
+WI-01 confirmComplete withdrew actualCount + scrapThermoseal UNITS of PT-CT-112 per lot, but
+PT-CT-112 is stocked in 65 m ROLLS. User rule: "Thermoseal stock should not be counted from
+individual cart, but instead after the entire length of roll has been consumed."
+Hotfix on master (cut from 8ea69ff1), porting the roll service from feat/bucket-system as the
+SAME files so the later merge is clean: models/thermoseal-roll.ts (new), services/
+thermoseal-service.ts (new), ManufacturingSettings.thermoseal block, kanban/standing.ts
+ensureThermosealRestockCard + sweep hook, notifications.ts notifyThermosealLow, index export.
+WI-01 server: PT-CT-112 now goes through consumeThermoseal(cartridges = good + scrapped
+sheets) -> 3.75 cm each off the open roll; a roll is pulled from inventory (-1, recorded
+against the roll id) only when the open one runs out; the scanned PT-CT-112 lot is where the
+next roll comes from. Load computes thermoseal capacity in CARTRIDGES (open-roll remainder +
+rolls on shelf x 1733) so "Can Make" is no longer capped at the roll count; the card shows
+open-roll metres and rolls on shelf vs the 2-roll floor; withdrawal summary shows cm.
+Restock notifications (kanban card + email) are behind the development toggle, default OFF.
+npm run check: 12 errors / 437 warnings on this branch = master's own baseline (an earlier 13th
+was a stale generated type before svelte-kit sync); none in touched files.
+PR #60 opened: https://github.com/avacoder3900/Bioscale_Operations_System_V2/pull/60 (hotfix -> master).

@@ -184,6 +184,56 @@ async function spawnPartReorder(part: any): Promise<string> {
 	return created._id;
 }
 
+/**
+ * Thermoseal restock (BUCKET-SYSTEM_PLAN v2 §3.4). PT-CT-112 is consumed by
+ * length against an open roll; the inventory count moves only when a roll is
+ * pulled. The floor is "always ≥ minRolls rolls on the shelf": when a pull
+ * leaves fewer, one auto-committed restock card is spawned (idempotent on
+ * sourceRef thermoseal-restock:<partId>) and the card body carries the lead
+ * time warning. Returns the open card id (existing or new).
+ */
+export async function ensureThermosealRestockCard(input: {
+	partId: string;
+	partNumber: string;
+	name?: string | null;
+	rollsOnHand: number;
+	minRolls: number;
+	leadTimeDays?: number | null;
+	supplier?: string | null;
+	minimumOrderQty?: number | null;
+}): Promise<{ taskId: string; created: boolean }> {
+	await connectDB();
+	const sourceRef = `thermoseal-restock:${input.partId}`;
+	const existing = await openSupplyCardId(sourceRef);
+	if (existing) return { taskId: existing, created: false };
+
+	const orderQty = Math.max(input.minimumOrderQty ?? 0, input.minRolls - input.rollsOnHand, 1);
+	const lead = input.leadTimeDays && input.leadTimeDays > 0
+		? `Supplier lead time is ${input.leadTimeDays} day${input.leadTimeDays === 1 ? '' : 's'} — order today so the shelf is never empty.`
+		: 'Lead time applies — no lead time is recorded on the part; order today so the shelf is never empty.';
+	const created: any = await createKanbanItem({
+		title: `Restock thermoseal ${input.partNumber} — ${input.rollsOnHand} roll${input.rollsOnHand === 1 ? '' : 's'} on hand (min ${input.minRolls})`,
+		description: `Thermoseal ${input.partNumber}${input.name ? ` (${input.name})` : ''} is at ${input.rollsOnHand} roll${input.rollsOnHand === 1 ? '' : 's'} in inventory — below the ${input.minRolls}-roll floor (BUCKET-SYSTEM_PLAN v2 §3.4). ${lead} Order at least ${orderQty} roll${orderQty === 1 ? '' : 's'}${input.supplier ? ` from ${input.supplier}` : ''}.`,
+		actor: { username: SUPPLY_ACTOR, via: 'system' },
+		itemType: 'chore',
+		origin: 'planned',
+		source: 'thermoseal-restock',
+		sourceRef,
+		tags: ['thermoseal', 'restock']
+	});
+	await shapeAndCommit({
+		taskId: created._id,
+		shape: {
+			sizeClass: 'short',
+			classOfService: 'expedite',
+			dorDeliverable: `PO placed for ≥ ${orderQty} × ${input.partNumber}; rolls received and ${input.partNumber} inventory back to ≥ ${input.minRolls} (currently ${input.rollsOnHand}); verify: receipt transaction logged`,
+			tags: ['thermoseal', 'restock']
+		},
+		autoCommit: true
+	});
+	return { taskId: created._id, created: true };
+}
+
 async function openSupplyCardId(sourceRef: string): Promise<string | null> {
 	const open: any = await KanbanTask.findOne({ sourceRef, status: { $ne: 'done' }, archived: false })
 		.select('_id status')
@@ -283,6 +333,14 @@ export async function standingStatus(opts?: { spawn?: boolean; actorUsername?: s
 	}
 
 	const partsReorder = await partsReorderSweep({ spawn: opts?.spawn });
+	if (opts?.spawn) {
+		// Thermoseal floor (BUCKET-SYSTEM_PLAN v2 §3.4) rides the same tick so a
+		// shelf below 2 rolls gets its card even if nobody opens the bucket board.
+		// Lazy import: thermoseal-service imports this module.
+		await import('$lib/server/services/thermoseal-service')
+			.then(({ checkFloor }) => checkFloor({}))
+			.catch((e) => console.error('[kanban/standing] thermoseal floor check failed:', e));
+	}
 	return { targets: rows, partsReorder };
 }
 

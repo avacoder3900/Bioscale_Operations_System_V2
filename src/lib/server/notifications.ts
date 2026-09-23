@@ -248,6 +248,56 @@ export const notifyLowInventory = safely(async (part: {
 	});
 });
 
+// ---------- Thermoseal rolls (BUCKET-SYSTEM_PLAN v2 §3.4) ----------
+
+/**
+ * Fired when pulling a thermoseal roll leaves fewer than the required number
+ * of rolls on the shelf — or when the floor check finds it already there (board
+ * load, supply sweep). Same recipient list as low inventory. Not gated by
+ * shouldWarnLowInventory — the roll floor is its own rule.
+ */
+export const notifyThermosealLow = safely(async (payload: {
+	partId: string;
+	partNumber: string;
+	name?: string | null;
+	rollsOnHand: number;
+	minRolls: number;
+	leadTimeDays?: number | null;
+	supplier?: string | null;
+	kanbanTaskId?: string | null;
+	pulledBy?: string | null;
+}) => {
+	const { enabled, emails } = await getNotificationRecipients('lowInventory');
+	if (!enabled || emails.length === 0) return { sent: false, skipped: 'no_recipients' as const };
+
+	const base = process.env.BIMS_BASE_URL ?? '';
+	const lead = payload.leadTimeDays && payload.leadTimeDays > 0
+		? `Supplier lead time is <strong>${payload.leadTimeDays} day${payload.leadTimeDays === 1 ? '' : 's'}</strong> — order now so production never waits on thermoseal.`
+		: 'Lead time applies (no lead time is recorded on the part) — order now so production never waits on thermoseal.';
+	return sendEmail({
+		to: emails,
+		subject: `[BIMS] Thermoseal low: ${payload.partNumber} — ${payload.rollsOnHand} roll${payload.rollsOnHand === 1 ? '' : 's'} left (min ${payload.minRolls})`,
+		tag: 'thermoseal_low',
+		html: renderEmailHtml({
+			title: 'Thermoseal Restock Needed',
+			preheader: `${payload.partNumber} is below the ${payload.minRolls}-roll floor`,
+			bodyHtml: `
+				<p>Thermoseal inventory is below the required minimum${payload.pulledBy ? ' after a roll was pulled from inventory at the press' : ''}.</p>
+				<table style="border-collapse:collapse;margin:12px 0;width:100%;font-size:13px;">
+					<tr><td style="padding:4px 8px;color:#9ca3af;">Part</td><td style="padding:4px 8px;"><strong>${payload.partNumber}</strong>${payload.name ? ` — ${payload.name}` : ''}</td></tr>
+					<tr><td style="padding:4px 8px;color:#9ca3af;">Rolls on hand</td><td style="padding:4px 8px;color:#f87171;"><strong>${payload.rollsOnHand}</strong> (minimum ${payload.minRolls})</td></tr>
+					${payload.supplier ? `<tr><td style="padding:4px 8px;color:#9ca3af;">Supplier</td><td style="padding:4px 8px;">${payload.supplier}</td></tr>` : ''}
+					${payload.pulledBy ? `<tr><td style="padding:4px 8px;color:#9ca3af;">Roll pulled by</td><td style="padding:4px 8px;">${payload.pulledBy}</td></tr>` : ''}
+					${payload.kanbanTaskId ? `<tr><td style="padding:4px 8px;color:#9ca3af;">Kanban</td><td style="padding:4px 8px;"><a href="${base}/kanban" style="color:#22d3ee;">Restock card on the board</a></td></tr>` : ''}
+				</table>
+				<p>${lead}</p>
+			`,
+			ctaText: 'Open part',
+			ctaUrl: `${base}/parts/${payload.partId}`
+		})
+	});
+});
+
 // ---------- Run complete / aborted ----------
 
 export const notifyRunLifecycle = safely(async (payload: {

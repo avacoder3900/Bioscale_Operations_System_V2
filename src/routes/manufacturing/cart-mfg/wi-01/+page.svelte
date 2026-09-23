@@ -33,6 +33,11 @@
 				barcodeLabels: { name: string; quantity: number; unit: string };
 				individualBacks: { name: string; quantity: number; unit: string };
 			};
+			// Thermoseal is consumed by roll length (thermoseal-service); shown under the capacity card.
+			thermoseal?: {
+				rollsOnHand: number; minRolls: number; belowFloor: boolean; cmPerCartridge: number;
+				openRoll: { remainingCm: number; remainingCartridges: number; lotId: string | null } | null;
+			} | null;
 			error?: string;
 		};
 		form: {
@@ -251,6 +256,7 @@
 			<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4">
 				<p class="text-xs font-medium text-[var(--color-tron-text-secondary)]">{data.inventory.cutThermosealStrips.name}</p>
 				<p class="mt-1 text-2xl font-bold text-[var(--color-tron-text)]">{data.inventory.cutThermosealStrips.quantity}<span class="text-sm font-normal text-[var(--color-tron-text-secondary)]"> {data.inventory.cutThermosealStrips.unit}</span></p>
+				{#if data.thermoseal}<p class="mt-1 text-[10px] text-[var(--color-tron-text-secondary)]">{data.thermoseal.openRoll ? `open roll ${(data.thermoseal.openRoll.remainingCm / 100).toFixed(2)} m left` : 'no roll open'} · <span class={data.thermoseal.belowFloor ? 'text-red-300' : ''}>{data.thermoseal.rollsOnHand} roll{data.thermoseal.rollsOnHand === 1 ? '' : 's'} on shelf (min {data.thermoseal.minRolls})</span></p>{/if}
 			</div>
 			<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4">
 				<p class="text-xs font-medium text-[var(--color-tron-text-secondary)]">{data.inventory.barcodeLabels.name}</p>
@@ -478,7 +484,7 @@
 							<p class="mb-2 text-center text-xs text-[var(--color-tron-text-secondary)]">Withdrawal summary</p>
 							<div class="grid grid-cols-3 gap-2 text-center text-sm">
 								<div><p class="text-xs text-[var(--color-tron-text-secondary)]">Cartridges</p><p class="font-bold text-[var(--color-tron-text)]">{scannedCarts.length + scrapCartridge}</p></div>
-								<div><p class="text-xs text-[var(--color-tron-text-secondary)]">Thermoseal</p><p class="font-bold text-[var(--color-tron-text)]">{scannedCarts.length + scrapThermoseal}</p></div>
+								<div><p class="text-xs text-[var(--color-tron-text-secondary)]">Thermoseal</p><p class="font-bold text-[var(--color-tron-text)]">{((scannedCarts.length + scrapThermoseal) * (data.thermoseal?.cmPerCartridge ?? 3.75)).toFixed(2)} cm</p><p class="text-[10px] text-[var(--color-tron-text-secondary)]">off the open roll</p></div>
 								<div><p class="text-xs text-[var(--color-tron-text-secondary)]">Barcodes</p><p class="font-bold text-[var(--color-tron-text)]">{scannedCarts.length + scrapBarcode}</p></div>
 							</div>
 						</div>
