@@ -13271,6 +13271,36 @@ Retrieve this exact code: git checkout master at commit a092d05f
 What this deployment is for: camera exposure fix + reset-to-defaults buttons
 
 ================================================================================
+2026-09-23 — fix/camera-footer-always — camera footer on stations; manual exposure sequencing
+================================================================================
+Two problems reported from a station, both real.
+
+The reset button and the capability list could not be seen. The footer holding them was gated on
+cameraSource === 'usb', so on a station — where working out what the camera offers matters most — it
+never rendered. Now renders for any live camera, and the empty-capability copy distinguishes a
+station's remote track (an empty set is expected: nothing local to query) from a local camera whose
+driver exposes nothing.
+
+Exposure still would not hold on manual. The previous fix (#57) sent mode and value in one
+constraint set; some drivers accept that, but UVC cameras commonly apply the mode AFTER the value
+and discard the value. The mode is now applied first, in its own call, with a short settle before
+the value is sent, and still included alongside it for drivers that prefer them together.
+
+File: src/routes/manufacturing/cart-mfg/post-mortem-inspect/+page.svelte. npm run check: 12/437 —
+this master's baseline, none in the touched file.
+
+STILL UNOBSERVED: no camera on the dev machine exposes exposure control, so the sequencing change is
+reasoned rather than tested. The capability list and the "asked for X, camera settled on Y" message
+exist to make the answer visible on a machine that has one. Fourth camera deploy in a row shipped
+without hardware confirmation; #58 existed because #57 shipped an unreachable button, and this one
+because #58 gated its footer to the wrong path.
+
+Deployment: production — building from the GitHub push to master (Vercel dashboard, commit below)
+Source: branch master @ commit 671b220a (squash merge of PR #59)
+Retrieve this exact code: git checkout master at commit 671b220a
+What this deployment is for: station camera footer visibility + manual exposure sequencing
+
+================================================================================
 2026-09-23 -- hotfix/thermoseal-roll-consumption -- production WI-01: thermoseal by roll length, not one unit per cartridge
 ================================================================================
 Root cause of the PT-CT-112 drift seen today (1 -> -23 after a 24-cart WI-01 batch): master's
