@@ -59,6 +59,25 @@
 
 	function drag(prop: string, value: number) {
 		requested = { ...requested, [prop]: value };
+
+		/**
+		 * UVC drivers reject a write to exposure while auto-exposure is driving,
+		 * and several re-assert auto on their own between writes. Each slider
+		 * previously fired an independent set_camera_param with no ordering, so an
+		 * exposure write could land while the camera was still in auto and be
+		 * discarded — the camera keeps its own value and the request vanishes.
+		 *
+		 * Re-assert manual immediately before the value, then send the value once
+		 * the camera has had a moment to switch. Harmless when it is already
+		 * manual; the write it enables is the point.
+		 */
+		if (prop === 'exposure' && known.includes('auto_exposure')) {
+			onSet('auto_exposure', 1);
+			requested = { ...requested, auto_exposure: 1 };
+			setTimeout(() => onSet(prop, value), 150);
+			return;
+		}
+
 		onSet(prop, value);
 	}
 
@@ -154,6 +173,20 @@
 		return `${ms.toFixed(1)} ms = ${cycles.toFixed(2)} flicker cycles at ${MAINS_HZ} Hz — try ${safe} for a whole number.`;
 	}
 
+	/**
+	 * Exactly what the station reported, per control. When a slider will not
+	 * move, this is what distinguishes "the agent has no writable range for it"
+	 * from "the camera is refusing the write" — and it is what whoever maintains
+	 * agent.py will need.
+	 */
+	const rawReport = $derived(
+		known.map((prop) => ({
+			prop,
+			value: params[prop],
+			range: ranges[prop] ? JSON.stringify(ranges[prop]) : '(none reported)'
+		}))
+	);
+
 	const shown = $derived(known.filter((p) => !isUnavailable(p)));
 	const unavailable = $derived(known.filter((p) => isUnavailable(p)));
 
@@ -197,6 +230,24 @@
 										<span class="text-[var(--color-tron-cyan)]">{params[prop] ?? '?'}</span>
 									{/if}
 								</span>
+								{#if prop === 'exposure'}
+									<!-- Typed entry as well as the slider: the useful exposure values are
+									     specific numbers (whole flicker cycles, e.g. 333) that are fiddly
+									     to hit by dragging, and the slider bounds are a guess on a camera
+									     that reports no range — so the box deliberately accepts values
+									     outside them and lets the camera decide. -->
+									<input
+										type="number"
+										aria-label="Exposure value"
+										class="tron-input ml-2 w-24 px-1 py-0.5 text-right font-mono text-xs"
+										value={positionOf(prop, b.lo)}
+										step={b.step}
+										onchange={(e) => {
+											const v = Number(e.currentTarget.value);
+											if (Number.isFinite(v)) drag(prop, v);
+										}}
+									/>
+								{/if}
 							</div>
 							<input
 								id={`cam-${prop}`}
@@ -222,6 +273,23 @@
 						</div>
 					{/each}
 				</div>
+
+				<details class="mt-4">
+					<summary class="cursor-pointer text-xs text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)]">
+						What the station reported ({rawReport.length} controls)
+					</summary>
+					<ul class="mt-2 space-y-0.5 font-mono text-[10px] text-[var(--color-tron-text-secondary)]">
+						{#each rawReport as r (r.prop)}
+							<li>{r.prop} = {r.value} &middot; range {r.range}</li>
+						{/each}
+					</ul>
+					<p class="mt-1 text-[10px] text-[var(--color-tron-text-secondary)]">
+						A control with no reported range is one the agent never queried a range
+						for. If a slider will not move, compare the value here against what was
+						requested — the camera keeping its own value means the write was refused
+						on the station, which is an agent or driver matter rather than this page.
+					</p>
+				</details>
 
 				{#if unavailable.length > 0}
 					<p class="mt-3 text-[10px] text-[var(--color-tron-text-secondary)]">
