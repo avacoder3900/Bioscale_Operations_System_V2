@@ -13196,3 +13196,41 @@ Deployment: production — building from the GitHub push to master (Vercel dashb
 Source: branch master @ commit 1f882604 (squash merge of PR #55)
 Retrieve this exact code: git checkout master at commit 1f882604
 What this deployment is for: camera settings panel on Post-Mortem Inspect
+
+================================================================================
+2026-09-23 — feat/station-camera-settings — station camera explained; capture settings editable
+================================================================================
+The camera settings panel rendered blank on a Pi station and said nothing about why. Two causes.
+
+First a real gap: readCameraCapabilities() was only called on the local USB path, never when a
+station's remote track arrived, so the panel had nothing to show and no explanation. It now runs on
+both, and a cameraSource flag ('usb' | 'station' | null) tracks which path feeds the preview.
+
+Second, the substance: a station's video is a REMOTE WebRTC track. getCapabilities() and
+applyConstraints() only ever control a local getUserMedia track, and the camera is on the Pi, so no
+browser control can reach it — a property of WebRTC, not a configuration problem. Confirmed two
+ways: the station WS protocol handles only hello / sdp_answer / ice_candidate / scan, and
+CaptureStation stores no camera config, just cameraOk/scannerOk/ledOk. The panel now says so
+instead of appearing broken.
+
+The other half is where those settings actually belong. CvProject.captureSettings already modelled
+them — the same knobs as camera_capture.py's tuning panel (exposure, whiteBalance, brightness,
+contrast, gain, sharpness, claheStrength, per-channel colour correction), applied by the station
+agent through OpenCV. Nothing in the app had ever exposed the field. The panel now edits it for
+projects deployed at post_mortem and PATCHes /api/cv/projects/[id], which already accepted
+captureSettings, so no API change was needed. Saving is explicit rather than per-slider, unlike the
+browser-side panel: the values are persisted, shared across everyone using the project, and the
+deployed model was trained against them.
+
+TWO LIMITS, both unresolved: no CvProject currently deploys at post_mortem (checked against the
+database), so the station editor has no data to render yet — built and typechecked but unexercised.
+And nothing in src/ reads captureSettings; the consumer is agent.py, outside this repo, so whether
+a saved value is honoured by the station is unverified from here.
+
+Files: src/routes/manufacturing/cart-mfg/post-mortem-inspect/{+page.svelte,+page.server.ts}.
+npm run check: 12/437 — this master's baseline, none in the touched files.
+
+Deployment: production — building from the GitHub push to master (Vercel dashboard, commit below)
+Source: branch master @ commit f8df7757 (squash merge of PR #56)
+Retrieve this exact code: git checkout master at commit f8df7757
+What this deployment is for: station camera explanation + CvProject captureSettings editor
