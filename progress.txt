@@ -14038,3 +14038,17 @@ Retrieve this exact code: git checkout feat/bucket-system at commit fdf00c8e
 What this deployment is for: Master Override page (9b06e601) + Quarantine category removed
   (fdf00c8e), on top of the board restructure and bucket-aware State Change.
 Build status: success (login 200).
+
+================================================================================
+2026-09-23 — feat/bucket-system — cartridge-admin bucket strip: "Available" tile removed
+================================================================================
+User: "In Cartridge Admin, remove the Available card from the buckets strip and only report
+on RAW UNPRESSED PRESSED and IN OVEN." Dropped the `available` entry from the strip array in
+src/routes/cartridge-admin/+page.svelte, so the funnel now reads Raw → Unpressed → Pressed →
+In Oven only (deep-links unchanged). `bc.available` is still returned by stageCounts() and
+still shown on the bucket board's own stage strip — only the cartridge-admin tile is gone.
+This edit landed in the working tree before the Quarantine-removal commit and was committed
+with it as part of fdf00c8e; no separate code commit. Already carried by the fdf00c8e
+preview (https://bioscale-operations-system-mongodb-2bvfrqg3z-brevitest.vercel.app),
+re-checked live: /cartridge-admin → 302 /login (deployment healthy). npm run check not re-run
+for this one-line change; baseline remains 12 errors / 438 warnings.
