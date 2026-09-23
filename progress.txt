@@ -14067,3 +14067,10 @@ Tooling note: the portable Node's npm broke (node-gyp module missing from the Te
 checks now run as node node_modules/@sveltejs/kit/svelte-kit.js sync && node
 node_modules/svelte-check/bin/svelte-check --threshold error --output machine.
 Check: 12 errors / 438 warnings (baseline), none in touched files.
+
+Deployment: preview -- https://bioscale-operations-system-mongodb-rgjz4i09x-brevitest.vercel.app
+  (brevitest scope; cookie-session gated, 302 to /login)
+Source: branch feat/bucket-system @ commit 58161745
+Retrieve this exact code: git checkout feat/bucket-system at commit 58161745
+What this deployment is for: inline Mint New Bucket / Replace sticker on the board card.
+Build status: success (login 200).
