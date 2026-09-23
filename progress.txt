@@ -14217,3 +14217,18 @@ Source: branch feat/bucket-system @ commit 78b18bb9
 Retrieve this exact code: git checkout feat/bucket-system at commit 78b18bb9
 What this deployment is for: header button -> Cart state change; otherwise the 4522ba63 build.
 Build status: success (login 200).
+
+================================================================================
+2026-09-23 -- feat/bucket-system -- leftover screen simplified: Merge or Discard
+================================================================================
+User: "Simplify the left over screen. Instead, just ask to merge or discard, when merging,
+display the last stage the cart was in, when discarding require cart qr scan in. bulk
+discard is allowed." Panel now opens with two buttons, Merge / Discard. Merge: shows the
+bucket's last stage (BoardBucket.lastStage = its previous pass's stage), one Merge-into
+select suggested from the board (open pass at that stage -> empty bucket incl. this one, which
+opens a new pass at that stage -> mint hint with the button disabled), then the cart scan
+list. Discard: bulk QR scan list + journal (required). The per-scan lookup (status badge /
+eligibility per cart) and its ?/residualLookup action are removed from the board; the
+server still validates every cart on submit; lookupResidualCart() stays in the service unused.
+ASSUMPTION stated to the user: Merge still needs the carts scanned because membership is by
+id -- there is no count-only merge. Spec 7 rewritten. Check: 12 errors / 438 warnings.

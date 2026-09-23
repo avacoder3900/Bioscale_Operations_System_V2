@@ -10,7 +10,7 @@ import {
 	BucketError, BUCKET_STAGES, STAGE_LABELS, IN_OVEN_LABEL, SHELL_PART, LABEL_PART, THERMOSEAL_PART,
 	boardData, stageCounts, resolveScan, isBucketStage, changeLog, bucketRegistry,
 	startCycle, scanCartIn, unscanCart, advanceCycle, scrapCarts, reportResidual, retireBucket,
-	createBucket, replaceBucketSticker, lookupResidualCart
+	createBucket, replaceBucketSticker
 } from '$lib/server/services/bucket-service';
 import { thermosealStatus, checkFloor, setThermosealToggles } from '$lib/server/services/thermoseal-service';
 import type { Actions, PageServerLoad } from './$types';
@@ -219,17 +219,6 @@ export const actions: Actions = {
 			});
 			return { scrap: { success: true, cycleId: r.cycle?._id ?? null, quantity: r.cycle?.quantity ?? 0, status: r.cycle?.status ?? null, scrapped: r.scrapped.length } };
 		})();
-	},
-
-	// Leftover flow: fetch per scan — what is this cart, and is it eligible? The
-	// board suggests the destination from the answer (v2 §7).
-	residualLookup: async ({ request, locals }) => {
-		if (!locals.user) redirect(302, '/login');
-		requirePermission(locals.user, 'manufacturing:read');
-		await connectDB();
-		const d = await request.formData();
-		const r = await lookupResidualCart(String(d.get('barcode') ?? ''));
-		return { residualLookup: r };
 	},
 
 	residual: async ({ request, locals }) => {

@@ -260,21 +260,22 @@ Scan-based (§3.6). A residual is always a **membership discrepancy** — the sc
 real records whose status says which stage they were at — so merge/scrap act on ids, and the
 `residualFound` block on the previous pass records the ids and disposition.
 
-**Leftover flow as built (2026-09-23).** From *Report leftover carts* on an Available bucket:
+**Leftover flow as built (2026-09-23, simplified the same day).** From *Report leftover carts*
+on an Available bucket, the panel asks **Merge or Discard** first:
 
-1. **Scan each cart** → `lookupResidualCart()` reports its **stage** and eligibility (known
-   cart, still Raw/Unpressed/Pressed, not a member of an open pass; bucket labels refused).
-   Ineligible scans stay in the list marked with the reason and are excluded from the action.
-2. **Two options:**
-   - **Move into a bucket** — per stage the board **suggests** a destination: an **open pass at
-     that stage** first; else an **empty bucket** (this bucket itself first — the carts are
-     already in it), where a **new pass opens at the carts' stage** holding them (`openedQty` =
-     n, source lots carried over from the pass they were found after, nothing debited); else
-     the panel says to **mint a new bucket** (Mint card under Available) and the Move button
-     stays disabled. The operator can pick any other valid destination from the select.
-     Ledger: `create` (new pass) and/or `merge_in` per destination, one `merge_out` on the
-     reported bucket. All destinations validate before any write (`moves[]` per cart).
-   - **Discard** — journal required; shell + label scrapped from inventory (§8).
+- **Merge** — shows the **last stage this bucket's carts were in** (its previous pass's stage)
+  and one *Merge into* picker suggested from the board: an **open pass at that stage** first;
+  else an **empty bucket** (this bucket itself first — the carts are already in it), where a
+  **new pass opens at that stage** holding them (`openedQty` = n, source lots carried over,
+  nothing debited); else a **mint a new bucket** hint and the button stays disabled. Then the
+  carts are scanned (they are tracked by id, so the records must be named) and merged. The
+  server validates every cart on submit (known, still at that stage, not in an open pass).
+  Ledger: `create` (new pass) or `merge_in`, plus one `merge_out` on the reported bucket.
+- **Discard** — **bulk QR scan** of every cart being discarded + journal (required); shell +
+  label scrapped from inventory (§8).
+
+`lookupResidualCart()` (per-scan eligibility preview) remains in the service but the board no
+longer calls it — validation happens on submit.
 
 ## 8. Inventory effects
 
