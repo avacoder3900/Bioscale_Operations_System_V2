@@ -41,7 +41,13 @@ const auditRunSchema = new Schema({
 	by: operatorRef,
 	scanned: { type: [String], default: [] },   // every code scanned in the tub
 	present: { type: [String], default: [] },   // members that were found
-	missing: { type: [String], default: [] },   // members that were NOT scanned (still members)
+	missing: { type: [String], default: [] },   // members that were NOT scanned (see missingActions)
+	// What the operator chose for a missing member: scrapped, or taken off the pass
+	// as a loose cart. A member with no entry here stayed on the pass.
+	missingActions: {
+		type: [{ _id: false, barcode: String, action: { type: String, enum: ['discard', 'release'] } }],
+		default: []
+	},
 	foreign: {
 		type: [{
 			_id: false,

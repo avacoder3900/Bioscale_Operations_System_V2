@@ -1067,7 +1067,10 @@ export interface AuditCycleInput {
 	scanned: string[];                                            // every code scanned in the tub
 	moves?: { barcode: string; destinationBucketId: string }[];    // foreign carts → where they belong
 	discards?: string[];                                          // foreign carts to scrap
-	journal?: string;                                             // required when anything is discarded
+	// Members that were not in the tub: keep them on the pass (default), scrap them,
+	// or take them off the pass without scrapping (they are somewhere else).
+	missingActions?: { barcode: string; action: 'discard' | 'release' }[];
+	journal?: string;                                             // required when anything is removed
 	user: Operator;
 }
 
@@ -1080,6 +1083,8 @@ export interface AuditCycleResult {
 	missing: string[];
 	moved: { barcode: string; fromCycleId: string | null; destinationBucketId: string; destinationCycleId: string; newPass: boolean; returned: boolean }[];
 	discarded: string[];
+	missingDiscarded: string[];   // members not found, scrapped
+	missingReleased: string[];    // members not found, taken off the pass as loose carts
 	quantityAfter: number;
 }
 
@@ -1107,8 +1112,14 @@ export async function auditCycle(input: AuditCycleInput): Promise<AuditCycleResu
 	const undecided = foreign.filter(id => !discards.includes(id) && !moves.some(m => m.barcode === id));
 	if (undecided.length) throw new BucketError(`Say what happens to: ${undecided.join(', ')} — move each one to a bucket or discard it.`);
 
+	const missingActions = (input.missingActions ?? []).filter(m => missing.includes(m.barcode));
+	const missingDiscards = missingActions.filter(m => m.action === 'discard').map(m => m.barcode);
+	const missingReleases = missingActions.filter(m => m.action === 'release').map(m => m.barcode);
+
 	const journal = (input.journal ?? '').trim();
-	if (discards.length && !journal) throw new BucketError('A journal entry describing why these were discarded is required.');
+	if ((discards.length || missingDiscards.length || missingReleases.length) && !journal) {
+		throw new BucketError('A journal entry describing why carts were discarded or taken off the pass is required.');
+	}
 
 	// Validate every foreign cart before writing anything.
 	const carts = foreign.length
@@ -1238,11 +1249,46 @@ export async function auditCycle(input: AuditCycleInput): Promise<AuditCycleResu
 		}
 	}
 
+	// Members that were not in the tub and the operator chose to remove. Scrapped
+	// carts leave the pass and give their parts back as scrap; released carts leave
+	// the pass and stay alive as loose carts (the leftover flow can re-home them).
+	if (missingDiscards.length || missingReleases.length) {
+		const goneIds = [...missingDiscards, ...missingReleases];
+		const before = cycle.quantity ?? members.length;
+		await BucketCycle.updateOne(
+			{ _id: cycle._id },
+			{ $pull: { cartridgeIds: { $in: goneIds } }, $set: { quantity: Math.max(0, before - goneIds.length) } }
+		);
+		if (missingDiscards.length) {
+			removalId = removalId ?? generateId();
+			const stage = cycle.stage as BucketStage;
+			await CartridgeRecord.updateMany(
+				{ _id: { $in: missingDiscards } },
+				{ $set: { status: 'scrapped', statusUpdatedOn: now.toISOString() }, $push: { notes: { _id: generateId(), body: `Not found in bucket ${cycle.bucketId} during an audit, written off: ${journal}`, phase: 'bucket', author: by, createdAt: now } } }
+			);
+			await ManualCartridgeRemoval.create({
+				_id: generateId(), cartridgeIds: missingDiscards, bucketCycleId: cycle._id, bucketId: cycle.bucketId,
+				cartridgeCount: missingDiscards.length, reason: `audit: not in the tub — ${journal}`, journal, operator: by, removedAt: now
+			});
+			for (const pn of partsAtStage(stage)) {
+				await debitScrap(pn, lotFor(cycle.sourceLots, pn), missingDiscards.length, cycle._id, input.user, `audit write-off: ${journal}`, `Audit of ${cycle.bucketId}: ${missingDiscards.length}x ${pn} at ${STAGE_LABELS[stage]} written off (not in the tub) — ${journal}`);
+			}
+			await logTx({ bucketId: cycle.bucketId, cycleId: cycle._id, type: 'scrap', fromStage: cycle.stage, toStage: cycle.stage, qtyBefore: before, qtyAfter: Math.max(0, before - missingDiscards.length), reason: `audit: ${missingDiscards.length} member(s) not in the tub, written off: ${journal}`, journal, cartridgeIds: missingDiscards, operator: input.user });
+		}
+		if (missingReleases.length) {
+			await CartridgeRecord.updateMany(
+				{ _id: { $in: missingReleases } },
+				{ $set: { statusUpdatedOn: now.toISOString() }, $push: { notes: { _id: generateId(), body: `Not found in bucket ${cycle.bucketId} during an audit, taken off the pass: ${journal}`, phase: 'bucket', author: by, createdAt: now } } }
+			);
+			await logTx({ bucketId: cycle.bucketId, cycleId: cycle._id, type: 'unscan', fromStage: cycle.stage, toStage: cycle.stage, qtyBefore: before, qtyAfter: Math.max(0, before - goneIds.length), reason: `audit: ${missingReleases.length} member(s) not in the tub, taken off the pass (still loose): ${journal}`, journal, cartridgeIds: missingReleases, operator: input.user });
+		}
+	}
+
 	// The audited pass itself: members never scanned stay members; the run is recorded.
 	const after = await BucketCycle.findById(cycle._id).select('cartridgeIds quantity').lean() as any;
 	const quantityAfter = (after?.cartridgeIds ?? []).length;
 	const record = {
-		at: now, by, scanned, present, missing,
+		at: now, by, scanned, present, missing, missingActions,
 		foreign: [
 			...moved.map(m => ({ barcode: m.barcode, action: m.returned ? 'returned' : 'moved', fromCycleId: m.fromCycleId ?? undefined, destinationBucketId: m.destinationBucketId, destinationCycleId: m.destinationCycleId })),
 			...discards.map(barcode => ({ barcode, action: 'discarded', fromCycleId: homeOf.get(barcode)?._id ?? undefined }))
@@ -1254,7 +1300,10 @@ export async function auditCycle(input: AuditCycleInput): Promise<AuditCycleResu
 			$set: { quantity: quantityAfter },
 			$push: {
 				audits: record,
-				...(missing.length ? { discrepancies: { type: 'shortfall', qty: missing.length, at: now, note: `audit: ${missing.length} member(s) not found in the tub` } } : {})
+				...(missing.length ? { discrepancies: { type: 'shortfall', qty: missing.length, at: now, note: `audit: ${missing.length} member(s) not found in the tub`
+					+ (missingDiscards.length ? `, ${missingDiscards.length} written off` : '')
+					+ (missingReleases.length ? `, ${missingReleases.length} taken off the pass` : '')
+					+ (missing.length - missingDiscards.length - missingReleases.length > 0 ? `, ${missing.length - missingDiscards.length - missingReleases.length} left on the pass` : '') } } : {})
 			}
 		}
 	);
@@ -1264,6 +1313,8 @@ export async function auditCycle(input: AuditCycleInput): Promise<AuditCycleResu
 		qtyBefore: cycle.quantity ?? members.length, qtyAfter: quantityAfter,
 		reason: `audit: ${present.length}/${members.length} members found`
 			+ (missing.length ? `, ${missing.length} missing` : '')
+			+ (missingDiscards.length ? `, ${missingDiscards.length} written off` : '')
+			+ (missingReleases.length ? `, ${missingReleases.length} taken off the pass` : '')
 			+ (moved.length ? `, ${moved.length} moved out` : '')
 			+ (discards.length ? `, ${discards.length} discarded` : ''),
 		journal: journal || undefined,
@@ -1275,7 +1326,8 @@ export async function auditCycle(input: AuditCycleInput): Promise<AuditCycleResu
 
 	return {
 		cycleId: cycle._id, bucketId: cycle.bucketId, cycleNumber: cycle.cycleNumber,
-		expected: members.length, present, missing, moved, discarded: discards, quantityAfter
+		expected: members.length, present, missing, moved, discarded: discards,
+		missingDiscarded: missingDiscards, missingReleased: missingReleases, quantityAfter
 	};
 }
 

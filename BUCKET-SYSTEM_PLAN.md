@@ -372,9 +372,21 @@ cart out of the pass that held it (`merge_out` on that pass) and adds it to the 
 other discard: status `scrapped`, a `ManualCartridgeRemoval`, and shell + label scrapped from
 inventory at the cart's stage.
 
-Members that were never scanned are **missing**: they stay on the pass, the audit records them,
-and a `shortfall` discrepancy is pushed onto the cycle. An audit never silently rewrites the
-count (§7.1) — to remove a missing cart the operator still uses *Discard carts…*.
+Members that were never scanned are listed as **missing** as soon as the first scan lands, one
+row each, and every one gets a choice (user, 2026-09-23) — *Keep* (default), *Write off* or
+*Take off pass*, with a bulk control for all three:
+
+| Choice | What it does |
+|---|---|
+| **Keep** | stays a member; the audit records it as missing and the count does not move |
+| **Write off** | gone for good: off the pass, status `scrapped`, a `ManualCartridgeRemoval`, shell + label scrapped from inventory at the pass's stage (`scrap` ledger row) |
+| **Take off pass** | it is somewhere else: off the pass, still a live cart, so the leftover flow or another bucket's audit can re-home it (`unscan` ledger row) |
+
+Anything removed needs the journal, and the panel says what the count will drop to. A
+`shortfall` discrepancy is still pushed onto the cycle, naming how many were kept, written off
+and taken off. Nothing is removed unless the operator picks it — an audit never silently
+rewrites the count (§7.1). When the panel drops back to the pass view, a **Last audit** box
+summarises the run and lists anything still missing and still on the pass.
 
 Every run appends to `BucketCycle.audits` and writes one `audit` ledger row carrying every
 scanned id, plus an `AUDIT` audit-log entry. Submitting needs `manufacturing:write`; the
@@ -413,6 +425,7 @@ per-scan lookup only needs `manufacturing:read`.
 | `4522ba63` / `8e3e8a67` | Note removed again as redundant with the *Rolls on hand* tile (user); `liveCountAt` reverted; yellow card names `master` as the build draining the shelf |
 | `d7e0fe78` | **Find a cart** box under the board — `cartStatusLine()` + `?/cartLookup`, one line of status (§9.1) |
 | `3e7bebca` | **Audit a bucket** — scan every cart, move or discard what does not belong (§9.8) |
+| *(next)* | Audit: missing members listed per cart with Keep / Write off / Take off pass, + Last audit summary (§9.8) |
 
 `npm run check` after v2: **12 errors / 438 warnings** — the same 12 pre-existing (`r2.ts`,
 `AskBimsWidget.svelte`, 8× `assembly/[sessionId]`, 2× `validation/magnetometer/[sessionId]`

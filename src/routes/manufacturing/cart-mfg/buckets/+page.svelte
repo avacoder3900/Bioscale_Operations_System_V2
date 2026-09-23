@@ -171,11 +171,17 @@
 	let auditError = $state('');
 	let auditAction = $state<Record<string, 'move' | 'discard'>>({});   // barcode → what happens to it
 	let auditDest = $state<Record<string, string>>({});                 // barcode → destination bucket
+	type MissingAction = 'keep' | 'discard' | 'release';
+	let auditMissingAction = $state<Record<string, MissingAction>>({}); // member not found → what happens to it
 	const auditForeign = $derived(auditScans.filter(a => a.finding === 'foreign'));
 	const auditIneligible = $derived(auditScans.filter(a => a.finding === 'ineligible' || a.finding === 'unknown' || a.finding === 'bucket'));
 	const auditPresent = $derived(auditScans.filter(a => a.finding === 'member').map(a => a.barcode));
 	const auditMissing = $derived((panelCycle?.cartridgeIds ?? []).filter(id => !auditPresent.includes(id)));
 	const auditDiscards = $derived(auditForeign.filter(a => auditAction[a.barcode] === 'discard').map(a => a.barcode));
+	const auditMissingActions = $derived(auditMissing
+		.filter(id => auditMissingAction[id] && auditMissingAction[id] !== 'keep')
+		.map(id => ({ barcode: id, action: auditMissingAction[id] as 'discard' | 'release' })));
+	const auditRemovedMissing = $derived(auditMissingActions.length);
 	// Where a foreign cart can go: its own open pass first, then open passes at its
 	// stage, then empty buckets (a new pass opens there at the cart's stage).
 	function auditOptions(a: AuditScan): { bucketId: string; label: string }[] {
@@ -200,7 +206,7 @@
 	const auditReady = $derived(auditScans.length > 0
 		&& auditIneligible.length === 0
 		&& auditMoves.every(m => !!m.destinationBucketId));
-	function resetAudit() { auditScans = []; auditInput = ''; auditError = ''; auditAction = {}; auditDest = {}; }
+	function resetAudit() { auditScans = []; auditInput = ''; auditError = ''; auditAction = {}; auditDest = {}; auditMissingAction = {}; }
 	function openAudit(c: BoardCycle) {
 		panel = { kind: 'cycle', cycleId: c.cycleId, mode: 'audit' };
 		resetLists();
@@ -752,6 +758,20 @@
 									{/if}
 								</div>
 							{/if}
+							{#if form?.audit?.success && (form.audit as any).result?.cycleId === c.cycleId}
+								{@const r = (form.audit as any).result}
+								<div class="mt-3 rounded border border-[var(--color-tron-cyan)]/40 bg-[var(--color-tron-cyan)]/5 p-2 text-[10px] text-[var(--color-tron-text-secondary)]">
+									<p class="text-[10px] uppercase tracking-wider text-[var(--color-tron-cyan)]">Last audit</p>
+									<p class="mt-0.5 text-[var(--color-tron-text)]">{r.present.length} of {r.expected} found{#if r.moved.length}, {r.moved.length} moved out{/if}{#if r.discarded.length}, {r.discarded.length} discarded{/if}{#if r.missingDiscarded.length}, {r.missingDiscarded.length} written off{/if}{#if r.missingReleased.length}, {r.missingReleased.length} taken off the pass{/if}.</p>
+									{#if r.missing.length > r.missingDiscarded.length + r.missingReleased.length}
+										{@const left = r.missing.filter((id: string) => !r.missingDiscarded.includes(id) && !r.missingReleased.includes(id))}
+										<p class="mt-0.5 text-[var(--color-tron-yellow)]">Still missing and still on the pass: {left.length}</p>
+										<ul class="mt-0.5 max-h-20 space-y-0.5 overflow-y-auto">
+											{#each left as id (id)}<li class="truncate font-mono" title={id}>{id}</li>{/each}
+										</ul>
+									{/if}
+								</div>
+							{/if}
 							<div class="mt-3 space-y-2">
 								{#if nxt}
 									<button type="button" class={btnPrimary} disabled={c.quantity === 0} onclick={() => setMode('advance')}>Advance → {nextLabel(c.stage)}</button>
@@ -832,6 +852,7 @@
 								<input type="hidden" name="scanned" value={auditScans.map(a => a.barcode).join(',')} />
 								<input type="hidden" name="discards" value={auditDiscards.join(',')} />
 								<input type="hidden" name="moves" value={JSON.stringify(auditMoves)} />
+								<input type="hidden" name="missingActions" value={JSON.stringify(auditMissingActions)} />
 
 								<div class="rounded border border-[var(--color-tron-cyan)]/40 bg-[var(--color-tron-cyan)]/5 p-2">
 									<p class="text-xs text-[var(--color-tron-text)]">Scan <strong>every</strong> cart in this bucket.</p>
@@ -888,19 +909,50 @@
 								{/if}
 
 								{#if auditMissing.length > 0 && auditScans.length > 0}
+									<!-- Missing members: on the pass but not in the tub. Each one can stay
+									     (default), be written off, or be taken off the pass as a loose cart. -->
 									<div class="rounded border border-[var(--color-tron-yellow)]/40 bg-[var(--color-tron-yellow)]/5 p-2">
-										<p class="text-[10px] uppercase tracking-wider text-[var(--color-tron-yellow)]">{auditMissing.length} member{auditMissing.length === 1 ? '' : 's'} not scanned</p>
-										<p class="mt-0.5 text-[10px] text-[var(--color-tron-text-secondary)]">They stay on the pass and the audit records them as missing. Keep scanning, or submit and chase them with <em>Discard carts…</em>.</p>
-										<ul class="mt-1 max-h-24 space-y-0.5 overflow-y-auto">
-											{#each auditMissing as id (id)}<li class="truncate font-mono text-[10px] text-[var(--color-tron-text-secondary)]" title={id}>{id}</li>{/each}
+										<p class="text-[10px] uppercase tracking-wider text-[var(--color-tron-yellow)]">{auditMissing.length} member{auditMissing.length === 1 ? '' : 's'} missing — on the pass, not in the tub</p>
+										<p class="mt-0.5 text-[10px] text-[var(--color-tron-text-secondary)]">Keep scanning if they are still coming. Anything left as <em>keep</em> stays on the pass and is recorded as missing.</p>
+										{#if auditMissing.length > 1}
+											<div class="mt-1 flex flex-wrap items-center gap-1 text-[10px]">
+												<span class="text-[var(--color-tron-text-secondary)]">All:</span>
+												<button type="button" onclick={() => { auditMissingAction = Object.fromEntries(auditMissing.map(id => [id, 'keep'])); }} class="rounded border border-[var(--color-tron-border)] px-1.5 py-0.5 text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]">keep</button>
+												<button type="button" onclick={() => { auditMissingAction = Object.fromEntries(auditMissing.map(id => [id, 'discard'])); }} class="rounded border border-red-500/40 px-1.5 py-0.5 text-red-300">write off</button>
+												<button type="button" onclick={() => { auditMissingAction = Object.fromEntries(auditMissing.map(id => [id, 'release'])); }} class="rounded border border-[var(--color-tron-cyan)]/40 px-1.5 py-0.5 text-[var(--color-tron-cyan)]">take off pass</button>
+											</div>
+										{/if}
+										<ul class="mt-1.5 max-h-48 space-y-1 overflow-y-auto">
+											{#each auditMissing as id (id)}
+												{@const act = auditMissingAction[id] ?? 'keep'}
+												<li class="rounded bg-[var(--color-tron-bg-primary)] px-2 py-1">
+													<div class="flex flex-wrap items-center justify-between gap-2">
+														<span class="min-w-0 flex-1 truncate font-mono text-[10px] text-[var(--color-tron-text)]" title={id}>{id}</span>
+														<span class="flex shrink-0 gap-1">
+															<button type="button" onclick={() => { auditMissingAction = { ...auditMissingAction, [id]: 'keep' }; }}
+																class="rounded border px-1.5 py-0.5 text-[10px] {act === 'keep' ? 'border-[var(--color-tron-cyan)]/60 text-[var(--color-tron-cyan)]' : 'border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)]'}"
+																title="Leave it on the pass; the audit records it as missing">Keep</button>
+															<button type="button" onclick={() => { auditMissingAction = { ...auditMissingAction, [id]: 'discard' }; }}
+																class="rounded border px-1.5 py-0.5 text-[10px] {act === 'discard' ? 'border-red-500/60 text-red-300' : 'border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)]'}"
+																title="Gone for good: scrapped off the pass, shell + label written off inventory">Write off</button>
+															<button type="button" onclick={() => { auditMissingAction = { ...auditMissingAction, [id]: 'release' }; }}
+																class="rounded border px-1.5 py-0.5 text-[10px] {act === 'release' ? 'border-[var(--color-tron-yellow)]/60 text-[var(--color-tron-yellow)]' : 'border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)]'}"
+																title="It is somewhere else: off this pass, still a live cart another bucket can take in">Take off pass</button>
+														</span>
+													</div>
+												</li>
+											{/each}
 										</ul>
+										{#if auditRemovedMissing > 0}
+											<p class="mt-1 text-[10px] text-[var(--color-tron-yellow)]">{auditRemovedMissing} missing cart{auditRemovedMissing === 1 ? '' : 's'} will leave this pass — the count drops to {Math.max(0, c.quantity - auditRemovedMissing)}.</p>
+										{/if}
 									</div>
 								{/if}
 
-								{#if auditDiscards.length > 0}
+								{#if auditDiscards.length > 0 || auditRemovedMissing > 0}
 									<label class="block">
-										<span class="text-[10px] uppercase tracking-wider text-red-300">Journal — why are {auditDiscards.length} cart{auditDiscards.length === 1 ? '' : 's'} discarded? (required)</span>
-										<textarea name="journal" rows="2" required class={inputCls}></textarea>
+										<span class="text-[10px] uppercase tracking-wider text-red-300">Journal — required ({[auditDiscards.length ? `${auditDiscards.length} discarded` : '', auditRemovedMissing ? `${auditRemovedMissing} missing removed` : ''].filter(Boolean).join(', ')})</span>
+										<textarea name="journal" rows="2" required placeholder="What happened to them?" class={inputCls}></textarea>
 									</label>
 								{/if}
 								{#if auditIneligible.length > 0}
@@ -908,7 +960,10 @@
 								{/if}
 								{#if form?.audit?.error}<p class="text-xs text-[var(--color-tron-error)]">{form.audit.error}</p>{/if}
 								<button type="submit" disabled={busy || !auditReady} class={btnPrimary}>
-									{busy ? 'Saving…' : auditForeign.length > 0 ? `Finish audit — ${auditMoves.length} moved, ${auditDiscards.length} discarded` : `Finish audit — ${auditPresent.length} of ${c.cartridgeIds.length} found`}
+									{busy ? 'Saving…' : `Finish audit — ${auditPresent.length}/${c.cartridgeIds.length} found`
+										+ (auditMoves.length ? `, ${auditMoves.length} moved` : '')
+										+ (auditDiscards.length ? `, ${auditDiscards.length} discarded` : '')
+										+ (auditRemovedMissing ? `, ${auditRemovedMissing} missing removed` : '')}
 								</button>
 								<button type="button" class={btnGhost} onclick={() => { resetAudit(); setMode('view'); }}>Cancel</button>
 							</form>

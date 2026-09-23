@@ -123,11 +123,17 @@ export const actions: Actions = {
 			if (raw) {
 				try { moves = JSON.parse(raw); } catch { throw new BucketError('Could not read the move list — reload the board and scan again.'); }
 			}
+			let missingActions: { barcode: string; action: 'discard' | 'release' }[] = [];
+			const rawMissing = String(d.get('missingActions') ?? '').trim();
+			if (rawMissing) {
+				try { missingActions = JSON.parse(rawMissing); } catch { throw new BucketError('Could not read the missing-cart list — reload the board and scan again.'); }
+			}
 			const r = await auditCycle({
 				cycleId: String(d.get('cycleId') ?? ''),
 				scanned: codesFrom(d.get('scanned')),
 				discards: codesFrom(d.get('discards')),
 				moves,
+				missingActions,
 				journal: String(d.get('journal') ?? ''),
 				user: op(locals)
 			});
