@@ -239,6 +239,96 @@
 		sharpness: 128
 	} as const;
 
+	// ── Station capture settings (CvProject.captureSettings) ────────────────
+	// The station camera cannot be driven from the browser — see cameraSource.
+	// What CAN be changed is the CV project's captureSettings, which the station
+	// agent applies through OpenCV (the same knobs as camera_capture.py's tuning
+	// panel). These are PERSISTED and shared, and the deployed model was trained
+	// against them, so saving is explicit rather than live-applied per slider.
+
+	type CaptureSettingField = {
+		key: string;
+		label: string;
+		min: number;
+		max: number;
+		step: number;
+		hint?: string;
+	};
+
+	/** Ranges follow OpenCV's UVC conventions and camera_capture.py's defaults. */
+	const CAPTURE_FIELDS: CaptureSettingField[] = [
+		{ key: 'exposure', label: 'Exposure', min: -13, max: 0, step: 1, hint: 'OpenCV UVC scale — more negative is a shorter exposure. Default -5.' },
+		{ key: 'whiteBalance', label: 'White balance', min: 2000, max: 8000, step: 100, hint: 'Kelvin. Default 4000.' },
+		{ key: 'brightness', label: 'Brightness', min: 0, max: 255, step: 1 },
+		{ key: 'contrast', label: 'Contrast', min: 0, max: 255, step: 1 },
+		{ key: 'gain', label: 'Gain', min: 0, max: 255, step: 1, hint: 'Raises noise as well as signal. Default 0.' },
+		{ key: 'sharpness', label: 'Sharpness', min: 0, max: 255, step: 1 },
+		{ key: 'claheStrength', label: 'CLAHE strength', min: 0, max: 8, step: 0.1, hint: 'Local contrast in post-processing, not a camera control.' },
+		{ key: 'redCorrection', label: 'Red correction', min: 0.5, max: 1.5, step: 0.01 },
+		{ key: 'greenCorrection', label: 'Green correction', min: 0.5, max: 1.5, step: 0.01 },
+		{ key: 'blueCorrection', label: 'Blue correction', min: 0.5, max: 1.5, step: 0.01 }
+	];
+
+	/** Projects deploying at post_mortem that carry capture settings. */
+	const tunableProjects = $derived(
+		(data.deployedProjects ?? []).filter((p: any) => p && p.captureSettings)
+	);
+	let stationProjectId = $state<string | null>(null);
+	const stationProject = $derived(
+		tunableProjects.find((p: any) => p.id === stationProjectId) ?? tunableProjects[0] ?? null
+	);
+
+	/** Working copy; only written back to the project on an explicit Save. */
+	let stationDraft = $state<Record<string, any>>({});
+	let stationDirty = $state(false);
+	let stationSaving = $state(false);
+	let stationMsg = $state<{ kind: 'ok' | 'err'; text: string } | null>(null);
+	let stationLoadedFor: string | null = null;
+
+	$effect(() => {
+		const p = stationProject;
+		if (!p) return;
+		// Re-seed only when the selected project changes, so typing is not clobbered.
+		if (stationLoadedFor === p.id) return;
+		stationLoadedFor = p.id;
+		stationDraft = { ...(p.captureSettings ?? {}) };
+		stationDirty = false;
+		stationMsg = null;
+	});
+
+	function setStationField(key: string, raw: string | number) {
+		stationDraft = { ...stationDraft, [key]: Number(raw) };
+		stationDirty = true;
+		stationMsg = null;
+	}
+
+	async function saveStationSettings() {
+		const p = stationProject;
+		if (!p) return;
+		stationSaving = true;
+		stationMsg = null;
+		try {
+			const res = await fetch(`/api/cv/projects/${p.id}`, {
+				method: 'PATCH',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ captureSettings: stationDraft })
+			});
+			if (!res.ok) {
+				const body = await res.json().catch(() => ({}));
+				throw new Error(body?.error ?? `HTTP ${res.status}`);
+			}
+			stationDirty = false;
+			stationMsg = {
+				kind: 'ok',
+				text: 'Saved. The station applies these on its next capture — nothing changes the live preview.'
+			};
+		} catch (e) {
+			stationMsg = { kind: 'err', text: e instanceof Error ? e.message : String(e) };
+		} finally {
+			stationSaving = false;
+		}
+	}
+
 	// ── Camera settings panel ───────────────────────────────────────────────
 	// Driven by what the selected camera actually reports, not a fixed list:
 	// MediaStreamTrack.getCapabilities() differs per device and per browser, and
@@ -294,6 +384,14 @@
 	// keys off this flag instead — changing stream's reactivity would ripple
 	// through the capture and Pi-station plumbing.
 	let cameraLive = $state(false);
+	/**
+	 * Which path is feeding the preview. It matters: a Pi station's video arrives
+	 * as a REMOTE WebRTC track, and getCapabilities()/applyConstraints() only ever
+	 * control a local getUserMedia track. The camera is on the Pi, so there is
+	 * nothing on this end to configure — the panel has to say so rather than
+	 * render blank.
+	 */
+	let cameraSource = $state<'usb' | 'station' | null>(null);
 	let settingsOpen = $state(false);
 	let camCaps = $state<Record<string, any>>({});
 	let camValues = $state<Record<string, any>>({});
@@ -418,6 +516,7 @@
 			};
 			stream = await navigator.mediaDevices.getUserMedia(constraints);
 			cameraLive = true;
+			cameraSource = 'usb';
 
 			// LIZA tuning — production-validated setup for this hardware.
 			// Unsupported settings are silently skipped by the `advanced` array.
@@ -460,6 +559,7 @@
 			stream.getTracks().forEach((t) => t.stop());
 			stream = null;
 			cameraLive = false;
+			cameraSource = null;
 		}
 		if (videoEl) videoEl.srcObject = null;
 	}
@@ -484,6 +584,7 @@
 			stream.getTracks().forEach((t) => t.stop());
 			stream = null;
 			cameraLive = false;
+			cameraSource = null;
 		}
 		if (videoEl) videoEl.srcObject = null;
 		if (lockedStationId) {
@@ -609,6 +710,10 @@
 			if (!remoteStream) return;
 			stream = remoteStream;
 			cameraLive = true;
+			cameraSource = 'station';
+			// Read them anyway: a remote track reports next to nothing, and showing
+			// that emptiness honestly is the point.
+			readCameraCapabilities();
 			if (videoEl) {
 				videoEl.srcObject = remoteStream;
 				videoEl.play().catch(() => null);
@@ -963,13 +1068,102 @@
 					onclick={() => (settingsOpen = !settingsOpen)}
 					class="flex w-full items-center justify-between px-4 py-2 text-sm text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)]"
 				>
-					<span>Camera settings{supportedKeys.length ? ` (${supportedKeys.length} adjustable)` : ""}</span>
+					<span>
+						Camera settings{cameraSource === 'station'
+							? ' — station camera'
+							: supportedKeys.length ? ` (${supportedKeys.length} adjustable)` : ''}
+					</span>
 					<span aria-hidden="true">{settingsOpen ? '▴' : '▾'}</span>
 				</button>
 
 				{#if settingsOpen}
 					<div class="border-t border-[var(--color-tron-border)] p-4">
-						{#if supportedKeys.length === 0}
+						{#if cameraSource === 'station'}
+							<div class="rounded border border-[var(--color-tron-yellow,#facc15)] bg-[rgba(250,204,21,0.06)] p-3">
+								<p class="text-xs text-[var(--color-tron-text-secondary)]">
+									<span class="font-bold text-[var(--color-tron-yellow,#facc15)]">This is a station camera.</span>
+									Its video arrives over WebRTC from the Pi, so the camera itself is on the
+									station — not on this machine. Browser camera controls only reach a local
+									USB camera, so nothing here can change it.
+								</p>
+								<p class="mt-2 text-xs text-[var(--color-tron-text-secondary)]">
+									Station capture settings live on the CV project
+									(<span class="font-mono">captureSettings</span>: exposure, white balance,
+									brightness, contrast, gain, sharpness), which the station agent applies
+									through OpenCV. To tune this camera from the browser instead, plug it
+									directly into this machine and pick it under the USB camera above.
+								</p>
+							</div>
+							
+							<!-- What CAN be changed for a station: the CV project capture settings the
+							     agent applies via OpenCV. Persisted and shared, so Save is explicit. -->
+							{#if stationProject}
+								<div class="mt-4">
+									<div class="flex flex-wrap items-center justify-between gap-2">
+										<h4 class="text-sm font-bold text-[var(--color-tron-cyan)]">Station capture settings</h4>
+										{#if tunableProjects.length > 1}
+											<select
+												class="tron-input text-xs"
+												value={stationProject.id}
+												onchange={(e) => (stationProjectId = e.currentTarget.value)}
+											>
+												{#each tunableProjects as p (p.id)}<option value={p.id}>{p.name}</option>{/each}
+											</select>
+										{:else}
+											<span class="text-xs text-[var(--color-tron-text-secondary)]">{stationProject.name}</span>
+										{/if}
+									</div>
+
+									<div class="mt-3 grid gap-4 sm:grid-cols-2">
+										{#each CAPTURE_FIELDS as f (f.key)}
+											<div>
+												<label for="cs-{f.key}" class="block text-xs text-[var(--color-tron-text-secondary)]">{f.label}</label>
+												<div class="mt-1 flex items-center gap-2">
+													<input
+														id="cs-{f.key}"
+														type="range"
+														class="w-full"
+														min={f.min}
+														max={f.max}
+														step={f.step}
+														value={stationDraft[f.key] ?? f.min}
+														oninput={(e) => setStationField(f.key, e.currentTarget.value)}
+													/>
+													<span class="w-14 shrink-0 text-right font-mono text-xs text-[var(--color-tron-cyan)]">
+														{stationDraft[f.key] ?? "—"}
+													</span>
+												</div>
+												{#if f.hint}
+													<div class="text-[10px] text-[var(--color-tron-text-secondary)]">{f.hint}</div>
+												{/if}
+											</div>
+										{/each}
+									</div>
+
+									{#if stationMsg}
+										<p class="mt-3 text-xs {stationMsg.kind === 'ok' ? 'text-[var(--color-tron-green,#39ff14)]' : 'text-[var(--color-tron-red,#ff3366)]'}">
+											{stationMsg.text}
+										</p>
+									{/if}
+
+									<div class="mt-3 flex flex-wrap items-center gap-3">
+										<button
+											type="button"
+											onclick={saveStationSettings}
+											disabled={!stationDirty || stationSaving}
+											class="rounded bg-[var(--color-tron-cyan)] px-3 py-1.5 text-xs font-bold text-[var(--color-tron-bg-primary)] disabled:opacity-40"
+										>
+											{stationSaving ? 'Saving…' : stationDirty ? 'Save to project' : 'Saved'}
+										</button>
+										<span class="text-[10px] text-[var(--color-tron-text-secondary)]">
+											Persisted on the CV project and shared by everyone using it. The deployed
+											model was trained against the current values — changing them changes what
+											it sees.
+										</span>
+									</div>
+								</div>
+							{/if}
+						{:else if supportedKeys.length === 0}
 							<p class="text-xs text-[var(--color-tron-text-secondary)]">
 								This camera reports no adjustable image settings — only format properties
 								like resolution. Built-in laptop webcams are usually like this; the UVC
