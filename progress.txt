@@ -13878,3 +13878,23 @@ Build status: success (16:15Z). PT-CT-112 is at 1 roll -> the Thermoseal card sh
   https://bioscale-operations-system-mongodb-h2lwva4z6.vercel.app (success, also protected).
   To resolve: fix the brevitest project's branch previews in the Vercel dashboard, or relax
   Deployment Protection on the personal project. No local deploy.
+
+CORRECTION (16:45Z) to the two entries above: the brevitest team project DID build every
+push today. Both Vercel projects write onto the SAME GitHub deployment record (two statuses
+each), and the lookup was taking the first status -- always the personal-scope one. The
+open, login-page previews (brevitest scope; cookie-session gated, 302 to /login) are:
+  33a937a4 (master merge #2)            https://bioscale-operations-system-mongodb-9kdywufuw-brevitest.vercel.app
+  3f4f49f3 (v2 restructure + rolls)     https://bioscale-operations-system-mongodb-9uiiyzdwy-brevitest.vercel.app
+  f681ab63 (floor check on load/sweep)  https://bioscale-operations-system-mongodb-3px6bg5to-brevitest.vercel.app
+  90bb9a25 (notifications toggle)       https://bioscale-operations-system-mongodb-f0ip8bpfv-brevitest.vercel.app
+  1b7a5e1e (docs)                       https://bioscale-operations-system-mongodb-f614gsnyt-brevitest.vercel.app
+  161844f2 (docs)                       https://bioscale-operations-system-mongodb-ovmtxgrfk-brevitest.vercel.app
+  ba694651 (docs)                       https://bioscale-operations-system-mongodb-1x99fvfkv-brevitest.vercel.app
+Deployment: preview -- https://bioscale-operations-system-mongodb-1x99fvfkv-brevitest.vercel.app
+Source: branch feat/bucket-system @ commit ba694651 (code identical to 90bb9a25)
+Retrieve this exact code: git checkout feat/bucket-system at commit ba694651
+What this deployment is for: REVIEW THIS ONE -- v2 buckets + thermoseal rolls with the
+  restock-notifications toggle off; PT-CT-112 at 1 roll. All builds: success.
+Lookup rule for next time: GET /deployments?sha=<FULL sha> (auth header; unauthenticated
+  calls hit the rate limit and return empty), then /deployments/<id>/statuses and take the
+  environment_url containing '-brevitest'. The no-suffix URL is the personal project (SSO).
