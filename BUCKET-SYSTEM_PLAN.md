@@ -429,7 +429,7 @@ per-scan lookup only needs `manufacturing:read`.
 | `d7e0fe78` | **Find a cart** box under the board — `cartStatusLine()` + `?/cartLookup`, one line of status (§9.1) |
 | `3e7bebca` | **Audit a bucket** — scan every cart, move or discard what does not belong (§9.8) |
 | `f21ed50a` | Audit: missing members listed per cart with Keep / Write off / Take off pass, + Last audit summary (§9.8) |
-| *(next)* | Audit: only the cart just scanned is displayed; strays needing a decision stay listed (§9.8) |
+| `6baff520` | Audit: only the cart just scanned is displayed; strays needing a decision stay listed (§9.8) |
 
 `npm run check` after v2: **12 errors / 438 warnings** — the same 12 pre-existing (`r2.ts`,
 `AskBimsWidget.svelte`, 8× `assembly/[sessionId]`, 2× `validation/magnetometer/[sessionId]`
