@@ -14210,3 +14210,10 @@ Build status: success (login 200).
 User: "remove cart admin, link to cart state change." The header button now goes to
 /manufacturing/cart-mfg/state-change (per-cart status moves, bucket-aware). Header: New bucket ·
 Master override (admin) · Cart state change · WI-01. Check: 12 errors / 438 warnings (baseline).
+
+Deployment: preview -- https://bioscale-operations-system-mongodb-8lpquack7-brevitest.vercel.app
+  (brevitest scope; cookie-session gated, 302 to /login)
+Source: branch feat/bucket-system @ commit 78b18bb9
+Retrieve this exact code: git checkout feat/bucket-system at commit 78b18bb9
+What this deployment is for: header button -> Cart state change; otherwise the 4522ba63 build.
+Build status: success (login 200).
