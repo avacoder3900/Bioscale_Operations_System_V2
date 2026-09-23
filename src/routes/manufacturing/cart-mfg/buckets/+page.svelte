@@ -16,9 +16,9 @@
 			changeLog: ChangeLogRow[];
 			registry: RegistryRow[];
 			thermoseal: {
-				config: { notificationsEnabled: boolean; cmPerCartridge: number; rollLengthCm: number; minRollsInInventory: number };
+				config: { notificationsEnabled: boolean; rollsOnHandPinned: boolean; rollsOnHandOverride: number; cmPerCartridge: number; rollLengthCm: number; minRollsInInventory: number };
 				roll: { id: string; lotId: string | null; lengthCm: number; consumedCm: number; remainingCm: number; remainingCartridges: number; openedAt: string | null; openedBy: string | null } | null;
-				rollsOnHand: number; minRolls: number; belowFloor: boolean;
+				rollsOnHand: number; rollsOnHandLive: number; minRolls: number; belowFloor: boolean;
 				nextLot: { lotId: string; remaining: number } | null;
 				openRestockTaskId: string | null; rollsExhausted: number;
 			} | null;
@@ -366,7 +366,7 @@
 	     rolls by length. User decision 2026-09-23: leave production alone for now, say so here. -->
 	<div class="rounded-lg border border-[var(--color-tron-yellow)]/60 bg-[var(--color-tron-yellow)]/10 px-4 py-2.5 text-sm font-semibold text-[var(--color-tron-yellow)]" role="note">
 		⚠ Thermoseal Inventory is Not Synced Between Systems
-		<span class="ml-1 font-normal text-[var(--color-tron-yellow)]/80">— production WI-01 (Cartridge Back) still withdraws one PT-CT-112 <em>unit</em> per cartridge scanned, while this board counts thermoseal in <em>rolls</em> consumed by length (3.75 cm per cart). The "rolls in inventory" figure below will drift with every production WI-01 batch until the two are unified; treat it as indicative and re-count in rolls when needed.</span>
+		<span class="ml-1 font-normal text-[var(--color-tron-yellow)]/80">— production WI-01 (Cartridge Back) still withdraws one PT-CT-112 <em>unit</em> per cartridge scanned, while this board counts thermoseal in <em>rolls</em> consumed by length (3.75 cm per cart). The "rolls in inventory" figure below is therefore <em>pinned</em> for development (see the pin control on the Thermoseal card) rather than read from the live count, until the two are unified.</span>
 	</div>
 
 	<!-- Thermoseal roll (BUCKET-SYSTEM_PLAN v2 §3.4): consumed by length at raw → unpressed -->
@@ -387,6 +387,12 @@
 					<input type="checkbox" name="notificationsEnabled" value="1" checked={ts.config.notificationsEnabled} disabled={!data.canAdmin || busy} class="accent-[var(--color-tron-cyan)]" />
 					<span class="text-[var(--color-tron-text)]">Restock notifications</span>
 					<span class="text-[var(--color-tron-text-secondary)]">— kanban card + email when rolls in inventory &lt; {ts.minRolls}</span>
+				</label>
+				<label class="flex items-center gap-2 {data.canAdmin ? '' : 'opacity-60'}">
+					<input type="checkbox" name="rollsOnHandPinned" value="1" checked={ts.config.rollsOnHandPinned} disabled={!data.canAdmin || busy} class="accent-[var(--color-tron-cyan)]" />
+					<span class="text-[var(--color-tron-text)]">Pin rolls on hand at</span>
+					<input type="number" name="rollsOnHandOverride" min="0" step="1" value={ts.config.rollsOnHandOverride} disabled={!data.canAdmin || busy} class="w-16 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-2 py-0.5 text-[var(--color-tron-text)]" />
+					<span class="text-[var(--color-tron-text-secondary)]">— development; live count is {ts.rollsOnHandLive}</span>
 				</label>
 				{#if data.canAdmin}<button type="submit" disabled={busy} class={btnGhost}>{busy ? 'Saving…' : 'Apply'}</button>{:else}<span class="text-[10px] text-[var(--color-tron-text-secondary)]">manufacturing:admin to change</span>{/if}
 				{#if form?.thermosealToggles?.error}<span class="text-[var(--color-tron-error)]">{form.thermosealToggles.error}</span>{/if}
@@ -410,7 +416,7 @@
 				<div class="rounded border {ts.belowFloor ? 'border-red-500/60 bg-red-900/20' : 'border-[var(--color-tron-border)] bg-[var(--color-tron-surface)]'} px-3 py-2 text-center">
 					<p class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Rolls in inventory</p>
 					<p class="text-2xl font-bold {ts.belowFloor ? 'text-red-300' : 'text-[var(--color-tron-text)]'}">{ts.rollsOnHand}</p>
-					<p class="text-[10px] text-[var(--color-tron-text-secondary)]">minimum {ts.minRolls}</p>
+					<p class="text-[10px] text-[var(--color-tron-text-secondary)]">minimum {ts.minRolls}{#if ts.config.rollsOnHandPinned} · <span title="Development pin — the live PT-CT-112 count is {ts.rollsOnHandLive}">pinned</span>{/if}</p>
 				</div>
 				<div class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] px-3 py-2 text-center">
 					<p class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Next roll from</p>

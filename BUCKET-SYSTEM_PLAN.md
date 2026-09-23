@@ -102,6 +102,7 @@ PT-CT-112 is stocked in **rolls** and used by **length**:
 | Floor: rolls that must stay in inventory | **2** | `…thermoseal.minRollsInInventory` |
 | When consumed | **Raw → Unpressed**, members × 3.75 cm | `bucket-service.advanceCycle` → `consumeThermoseal` |
 | **Development toggle** — restock notifications | **OFF** by default | `…thermoseal.notificationsEnabled`; admin checkbox on the board's Thermoseal card |
+| **Development pin** — rolls on hand shown/used by the board | **pinned at 1** by default | `…thermoseal.rollsOnHandPinned` / `rollsOnHandOverride`; admin control on the same card. Unpin to follow the live PT-CT-112 count (meaningless in rolls until PR #60 lands) |
 
 - `ThermosealRoll` (`thermoseal_rolls`) is one physical roll: `lengthCm`, `consumedCm`,
   `status` active | exhausted | retired, `lotId`, `openedBy/At`, `openedForCycleId`,

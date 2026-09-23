@@ -146,8 +146,14 @@ export const actions: Actions = {
 		await connectDB();
 		const d = await request.formData();
 		return wrap('thermosealToggles', async () => {
-			const cfg = await setThermosealToggles({ notificationsEnabled: d.get('notificationsEnabled') === '1', user: op(locals) });
-			return { thermosealToggles: { success: true, notificationsEnabled: cfg.notificationsEnabled } };
+			const pinRaw = String(d.get('rollsOnHandOverride') ?? '').trim();
+			const cfg = await setThermosealToggles({
+				notificationsEnabled: d.get('notificationsEnabled') === '1',
+				rollsOnHandPinned: d.get('rollsOnHandPinned') === '1',
+				rollsOnHandOverride: pinRaw === '' ? undefined : Number(pinRaw),
+				user: op(locals)
+			});
+			return { thermosealToggles: { success: true, notificationsEnabled: cfg.notificationsEnabled, rollsOnHandPinned: cfg.rollsOnHandPinned, rollsOnHandOverride: cfg.rollsOnHandOverride } };
 		})();
 	},
 

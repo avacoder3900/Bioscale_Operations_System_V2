@@ -13929,3 +13929,18 @@ Direction (user): thermoseal stock is ultimately UNIVERSAL -- one roll-based cou
   production WI-01 and buckets. PR #60 is that bridge; parked only to stop churning the live
   number during development, to be merged later. No master merges into this branch until the
   final build.
+
+================================================================================
+2026-09-23 -- feat/bucket-system -- thermoseal rolls-on-hand pinned at 1 on the bucket board (development)
+================================================================================
+User: "Keep Thermoseal inventory set to 1 on the bucket page." Because production WI-01 still
+churns the live PT-CT-112 count per cart (not synced), the board now uses a DEVELOPMENT PIN:
+ManufacturingSettings.thermoseal.rollsOnHandPinned (default true) / rollsOnHandOverride
+(default 1). thermosealStatus() and checkFloor() read the pin while pinned; the card shows
+"pinned" and the live count in the control's caption (rollsOnHandLive). Admin form on the
+Thermoseal card: Pin rolls on hand at [n] + the existing Restock notifications checkbox,
+?/thermosealToggles (audited THERMOSEAL_TOGGLES with old/new for all three). Unpin to follow
+the live count once the systems are unified (PR #60). Roll pulls still write the -1 ledger row
+against the real part; the pin is display/floor-rule only. Yellow not-synced card reworded to
+point at the pin. Spec 3.4 table updated.
+npm run check: 12 errors / 438 warnings (baseline), none in touched files.

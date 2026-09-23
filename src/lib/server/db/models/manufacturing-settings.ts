@@ -39,6 +39,11 @@ const manufacturingSettingsSchema = new Schema({
 	// thermoseal-service.ts; these override when set.
 	thermoseal: {
 		notificationsEnabled: Boolean, // development toggle: kanban restock card + email only when true (default off)
+		// Development pin: while pinned, the bucket board shows/uses this rolls-on-hand
+		// figure instead of the live PT-CT-112 count (production WI-01 still churns
+		// that count per cart — not synced). Defaults: pinned, 1 roll.
+		rollsOnHandPinned: Boolean,
+		rollsOnHandOverride: Number,
 		cmPerCartridge: Number,      // default 3.75 cm (averaged for excess)
 		rollLengthCm: Number,        // default 6500 cm (65 m per roll)
 		minRollsInInventory: Number  // default 2 — restock alert when on-hand drops below

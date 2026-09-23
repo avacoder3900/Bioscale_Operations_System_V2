@@ -18,6 +18,13 @@
  * DEVELOPMENT TOGGLE (ManufacturingSettings.thermoseal.notificationsEnabled,
  * default OFF): the floor rule's kanban card + email. Roll tracking itself —
  * consumption, roll pulls, the board gauge — always runs.
+ *
+ * DEVELOPMENT PIN (thermoseal.rollsOnHandPinned / rollsOnHandOverride, default
+ * pinned at 1): the rolls-on-hand figure the board and the floor rule use.
+ * Production WI-01 still withdraws one PT-CT-112 unit per cartridge, so the
+ * live count is meaningless in rolls until the systems are unified (PR #60);
+ * the user asked for the board to hold at 1 meanwhile. Unpin to follow the
+ * live count.
  */
 import {
 	connectDB, generateId, ManufacturingSettings, PartDefinition, ReceivingLot, ThermosealRoll,
@@ -31,6 +38,8 @@ export const THERMOSEAL_PART = 'PT-CT-112';
 
 export const THERMOSEAL_DEFAULTS = {
 	notificationsEnabled: false,
+	rollsOnHandPinned: true,
+	rollsOnHandOverride: 1,
 	cmPerCartridge: 3.75,
 	rollLengthCm: 6500,       // 65 m
 	minRollsInInventory: 2
@@ -38,6 +47,8 @@ export const THERMOSEAL_DEFAULTS = {
 
 export interface ThermosealConfig {
 	notificationsEnabled: boolean;  // development toggle — restock card + email
+	rollsOnHandPinned: boolean;     // development pin — board uses rollsOnHandOverride, not the live count
+	rollsOnHandOverride: number;
 	cmPerCartridge: number;
 	rollLengthCm: number;
 	minRollsInInventory: number;
@@ -61,31 +72,46 @@ export async function thermosealConfig(): Promise<ThermosealConfig> {
 	const num = (v: unknown, d: number) => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : d);
 	return {
 		notificationsEnabled: t.notificationsEnabled === true,
+		rollsOnHandPinned: typeof t.rollsOnHandPinned === 'boolean' ? t.rollsOnHandPinned : THERMOSEAL_DEFAULTS.rollsOnHandPinned,
+		rollsOnHandOverride: typeof t.rollsOnHandOverride === 'number' && Number.isFinite(t.rollsOnHandOverride) && t.rollsOnHandOverride >= 0
+			? Math.floor(t.rollsOnHandOverride) : THERMOSEAL_DEFAULTS.rollsOnHandOverride,
 		cmPerCartridge: num(t.cmPerCartridge, THERMOSEAL_DEFAULTS.cmPerCartridge),
 		rollLengthCm: num(t.rollLengthCm, THERMOSEAL_DEFAULTS.rollLengthCm),
 		minRollsInInventory: num(t.minRollsInInventory, THERMOSEAL_DEFAULTS.minRollsInInventory)
 	};
 }
 
-/** Flip the notifications development toggle (admin). Audited. */
-export async function setThermosealToggles(input: { notificationsEnabled: boolean; user: Operator }): Promise<ThermosealConfig> {
+/** Development toggles: notifications on/off, and the rolls-on-hand pin (admin). Audited. */
+export async function setThermosealToggles(input: {
+	notificationsEnabled: boolean;
+	rollsOnHandPinned?: boolean;
+	rollsOnHandOverride?: number;
+	user: Operator;
+}): Promise<ThermosealConfig> {
 	await connectDB();
 	const before = await thermosealConfig();
-	await ManufacturingSettings.updateOne(
-		{ _id: 'default' },
-		{ $set: { 'thermoseal.notificationsEnabled': input.notificationsEnabled, updatedAt: new Date() } },
-		{ upsert: true }
-	);
+	const set: Record<string, unknown> = { 'thermoseal.notificationsEnabled': input.notificationsEnabled, updatedAt: new Date() };
+	if (typeof input.rollsOnHandPinned === 'boolean') set['thermoseal.rollsOnHandPinned'] = input.rollsOnHandPinned;
+	if (typeof input.rollsOnHandOverride === 'number' && Number.isFinite(input.rollsOnHandOverride) && input.rollsOnHandOverride >= 0) {
+		set['thermoseal.rollsOnHandOverride'] = Math.floor(input.rollsOnHandOverride);
+	}
+	await ManufacturingSettings.updateOne({ _id: 'default' }, { $set: set }, { upsert: true });
 	const after = await thermosealConfig();
+	const pick = (c: ThermosealConfig) => ({ notificationsEnabled: c.notificationsEnabled, rollsOnHandPinned: c.rollsOnHandPinned, rollsOnHandOverride: c.rollsOnHandOverride });
 	await AuditLog.create({
 		_id: generateId(),
 		userId: input.user._id, username: input.user.username,
 		action: 'THERMOSEAL_TOGGLES', collectionName: 'manufacturing_settings', documentId: 'default',
 		changedAt: new Date(),
-		oldData: { notificationsEnabled: before.notificationsEnabled },
-		newData: { notificationsEnabled: after.notificationsEnabled }
+		oldData: pick(before),
+		newData: pick(after)
 	});
 	return after;
+}
+
+/** Rolls on hand as the bucket system sees it: the development pin while pinned, else the live part count. */
+function rollsOnHandFor(cfg: ThermosealConfig, part: any | null): number {
+	return cfg.rollsOnHandPinned ? cfg.rollsOnHandOverride : Number(part?.inventoryCount ?? 0);
 }
 
 /** cm a bucket of `cartridges` will take when it enters Unpressed. */
@@ -289,7 +315,7 @@ export async function checkFloor(input: { user?: Operator; cfg?: ThermosealConfi
 	const cfg = input.cfg ?? await thermosealConfig();
 	const part = await thermosealPart();
 	if (!part) return null;
-	const rollsOnHand = Number(part.inventoryCount ?? 0);
+	const rollsOnHand = rollsOnHandFor(cfg, part);
 	const below = rollsOnHand < cfg.minRollsInInventory;
 	const result: FloorCheck = { rollsOnHand, minRolls: cfg.minRollsInInventory, below, kanbanTaskId: null, kanbanCreated: false, emailSent: false };
 	// Development toggle: no card, no email until notifications are switched on.
@@ -333,6 +359,7 @@ export interface ThermosealStatus {
 		openedBy: string | null;
 	} | null;
 	rollsOnHand: number;
+	rollsOnHandLive: number;   // the raw PT-CT-112 count (what production is doing to it)
 	minRolls: number;
 	belowFloor: boolean;
 	nextLot: { lotId: string; remaining: number } | null;
@@ -352,7 +379,8 @@ export async function thermosealStatus(): Promise<ThermosealStatus> {
 		const open = await KanbanTask.findOne({ sourceRef: `thermoseal-restock:${part._id}`, status: { $ne: 'done' }, archived: false }).select('_id').lean() as any;
 		openRestockTaskId = open?._id ?? null;
 	}
-	const rollsOnHand = Number(part?.inventoryCount ?? 0);
+	const rollsOnHand = rollsOnHandFor(cfg, part);
+	const rollsOnHandLive = Number(part?.inventoryCount ?? 0);
 	const remainingCm = roll ? round2(roll.lengthCm - roll.consumedCm) : 0;
 	return {
 		config: cfg,
@@ -363,6 +391,7 @@ export async function thermosealStatus(): Promise<ThermosealStatus> {
 			openedBy: roll.openedBy?.username ?? null
 		} : null,
 		rollsOnHand,
+		rollsOnHandLive,
 		minRolls: cfg.minRollsInInventory,
 		belowFloor: rollsOnHand < cfg.minRollsInInventory,
 		nextLot,
