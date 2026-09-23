@@ -18,7 +18,7 @@
 			thermoseal: {
 				config: { notificationsEnabled: boolean; rollsOnHandPinned: boolean; rollsOnHandOverride: number; cmPerCartridge: number; rollLengthCm: number; minRollsInInventory: number };
 				roll: { id: string; lotId: string | null; lengthCm: number; consumedCm: number; remainingCm: number; remainingCartridges: number; openedAt: string | null; openedBy: string | null } | null;
-				rollsOnHand: number; rollsOnHandLive: number; liveCountAt: string | null; minRolls: number; belowFloor: boolean;
+				rollsOnHand: number; rollsOnHandLive: number; minRolls: number; belowFloor: boolean;
 				nextLot: { lotId: string; remaining: number } | null;
 				openRestockTaskId: string | null; rollsExhausted: number;
 			} | null;
@@ -79,6 +79,60 @@
 	let listInput = $state('');
 	let residualDisposition = $state<'merge' | 'scrap' | ''>('');
 
+	// Leftover flow (v2 §7): each scan is looked up (status + eligibility) and the
+	// board suggests where it goes — an open pass at its stage → an empty bucket
+	// (a new pass opens there at the cart's stage) → mint one.
+	type ResidualCart = { barcode: string; stage: string | null; ok: boolean; reason?: string };
+	let residualCarts = $state<ResidualCart[]>([]);
+	let residualScan = $state('');
+	let residualScanBusy = $state(false);
+	let residualScanError = $state('');
+	let residualDest = $state<Record<string, string>>({}); // stage → destination bucketId (operator's pick)
+	const residualOk = $derived(residualCarts.filter(c => c.ok && c.stage));
+	const residualStages = $derived([...new Set(residualOk.map(c => c.stage as string))]);
+	// Options per stage: open passes at that stage first, then empty buckets (this one first — the carts are already in it).
+	function residualOptions(stage: string, self: string): { bucketId: string; label: string; newPass: boolean }[] {
+		const open = data.board.cycles.filter(c => c.stage === stage).map(c => ({ bucketId: c.bucketId, label: `${shortQr(c.barcode) ?? c.bucketId} · ${c.bucketId} #${c.cycleNumber} · ${c.quantity} cart${c.quantity === 1 ? '' : 's'} at ${stageLabel(stage)}`, newPass: false }));
+		const empties = [...data.board.available].sort((a, b) => (a.bucketId === self ? -1 : b.bucketId === self ? 1 : 0))
+			.map(b => ({ bucketId: b.bucketId, label: `${shortQr(b.barcode) ?? b.bucketId} · ${b.bucketId} — empty, start a new pass at ${stageLabel(stage)}${b.bucketId === self ? ' (this bucket)' : ''}`, newPass: true }));
+		return [...open, ...empties];
+	}
+	function stageLabel(stage: string): string { return data.stages.find(s => s.key === stage)?.label ?? stage; }
+	function residualDestFor(stage: string, self: string): string {
+		const opts = residualOptions(stage, self);
+		const picked = residualDest[stage];
+		return picked && opts.some(o => o.bucketId === picked) ? picked : (opts[0]?.bucketId ?? '');
+	}
+	const residualMoves = $derived.by(() => {
+		const self = panel.kind === 'residual' ? panel.bucketId : '';
+		return residualOk.map(c => ({ barcode: c.barcode, destinationBucketId: residualDestFor(c.stage as string, self) }));
+	});
+	const residualMergeReady = $derived(residualOk.length > 0 && residualMoves.every(m => !!m.destinationBucketId));
+	async function scanResidualCart() {
+		const code = residualScan.trim();
+		if (!code || residualScanBusy) return;
+		residualScan = ''; residualScanError = '';
+		if (residualCarts.some(c => c.barcode === code)) { residualScanError = `${code} is already in the list`; return; }
+		residualScanBusy = true;
+		try {
+			const fd = new FormData();
+			fd.set('barcode', code);
+			const res = await fetch('?/residualLookup', { method: 'POST', body: fd, headers: { 'x-sveltekit-action': 'true' } });
+			const result = deserialize(await res.text());
+			if (result.type === 'success') {
+				const r = (result.data as any)?.residualLookup as ResidualCart | undefined;
+				if (r) residualCarts = [...residualCarts, { barcode: r.barcode, stage: r.stage, ok: r.ok, reason: r.reason }];
+			} else if (result.type === 'failure') residualScanError = (result.data as any)?.error ?? `Error ${result.status}`;
+			else if (result.type === 'error') residualScanError = result.error?.message ?? 'Lookup failed';
+		} catch (e) {
+			residualScanError = e instanceof Error ? e.message : 'Lookup failed';
+		} finally {
+			residualScanBusy = false;
+			setTimeout(() => document.getElementById('residualScan')?.focus(), 30);
+		}
+	}
+	function removeResidualCart(code: string) { residualCarts = residualCarts.filter(c => c.barcode !== code); }
+
 	// Raw-stage scan-in (fetch per cart so the box stays hot).
 	let cartScan = $state('');
 	let cartScanBusy = $state(false);
@@ -108,7 +162,7 @@
 	function shortQr(barcode: string | null): string | null {
 		return barcode ? (barcode.length > 12 ? `${barcode.slice(0, 8)}…` : barcode) : null;
 	}
-	function resetLists() { discardList = []; scrapList = []; residualList = []; listInput = ''; residualDisposition = ''; cartScanError = ''; cartScanOk = ''; }
+	function resetLists() { discardList = []; scrapList = []; residualList = []; listInput = ''; residualDisposition = ''; residualCarts = []; residualScan = ''; residualScanError = ''; residualDest = {}; cartScanError = ''; cartScanOk = ''; }
 
 	function openCycle(c: BoardCycle) { panel = { kind: 'cycle', cycleId: c.cycleId, mode: 'view' }; resetLists(); if (c.stage === 'raw') focusCartScan(); }
 	function setMode(mode: CycleMode) {
@@ -463,7 +517,7 @@
 						<!-- Thermoseal lives under Unpressed because that is where it is consumed (v2 §3.4).
 						     Yellow card first: counts are NOT synced with production WI-01 (§12.4). -->
 						<div class="mt-3 rounded border border-[var(--color-tron-yellow)]/60 bg-[var(--color-tron-yellow)]/10 px-2 py-1.5 text-[10px] text-[var(--color-tron-yellow)]" role="note">
-							<strong>⚠ Thermoseal inventory is not synced between systems</strong> — production WI-01 still withdraws one PT-CT-112 <em>unit</em> per cart; this board counts rolls by length (3.75 cm per cart). Rolls on hand is pinned for development.
+							<strong>⚠ Thermoseal inventory is not synced between systems</strong> — the build live on <code>master</code> still withdraws one PT-CT-112 <em>unit</em> per cart out of this same database; this board counts rolls by length (3.75 cm per cart). Rolls on hand is pinned for development.
 						</div>
 						<div class="mt-2 rounded border {ts.belowFloor ? 'border-red-500/60' : 'border-[var(--color-tron-border)]'} bg-[var(--color-tron-surface)] p-2 text-[10px]">
 							<div class="flex items-center justify-between">
@@ -496,17 +550,6 @@
 							{#if ts.belowFloor}
 								<p class="mt-1 text-red-300">Below the {ts.minRolls}-roll floor — {#if !ts.config.notificationsEnabled}notifications off (development), nothing sent.{:else}{ts.openRestockTaskId ? 'restock card open on the' : 'a restock card goes to the'} <a href="/kanban" class="underline">kanban board</a> + email.{/if}</p>
 							{/if}
-							<!-- Current stock note (user, 2026-09-23): the live PT-CT-112 figure, stated as the
-							     system's own count, sits directly above the development toggles (v2 §3.4). -->
-							<div class="mt-2 rounded border border-[var(--color-tron-cyan)]/40 bg-[var(--color-tron-bg-tertiary)] px-2 py-1.5" role="note">
-								<p class="uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Current thermoseal stock</p>
-								<p class="mt-0.5 text-[var(--color-tron-text)]">
-									<span class="font-mono text-sm font-bold {ts.rollsOnHandLive < 0 ? 'text-red-300' : 'text-[var(--color-tron-cyan)]'}">{ts.rollsOnHandLive}</span> PT-CT-112 on hand{#if ts.roll}, plus <span class="font-mono">{fmtM(ts.roll.remainingCm)}</span> (≈{ts.roll.remainingCartridges} carts) left on the open roll{/if}{#if ts.nextLot}, {ts.nextLot.remaining} left in lot {ts.nextLot.lotId}{/if}.
-								</p>
-								<p class="mt-0.5 text-[var(--color-tron-text-secondary)]">
-									This is the accurate count according to the current system — the live PT-CT-112 inventory figure exactly as the system holds it right now{#if ts.liveCountAt}, last physically counted {fmtAt(ts.liveCountAt)}{/if}.{#if ts.rollsOnHandLive < 0} It is negative because production WI-01 keeps withdrawing one unit per cart against a shelf this board has not restocked (see the notice above).{/if}{#if ts.config.rollsOnHandPinned} The <em>Rolls on hand</em> tile above shows the pinned development value ({ts.rollsOnHand}) instead.{/if}
-								</p>
-							</div>
 							<!-- Development settings (admin): notifications toggle + rolls-on-hand pin -->
 							<details class="mt-2">
 								<summary class="cursor-pointer text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]">Development settings</summary>
@@ -743,38 +786,89 @@
 					{@const b = panelBucket}
 					<div>
 						<div class="font-mono text-lg text-[var(--color-tron-text)]">{shortQr(b.barcode) ?? b.bucketId}</div>
-						<div class="text-xs text-[var(--color-tron-text-secondary)]">{b.state === 'quarantined' ? `quarantined · ${b.residualNote ?? ''}` : 'report leftover carts'}</div>
+						<div class="text-xs text-[var(--color-tron-text-secondary)]">{b.state === 'quarantined' ? `quarantined · ${b.residualNote ?? ''}` : 'leftover carts found in this bucket'}</div>
 					</div>
 					<form method="POST" action="?/residual" use:enhance={enhanceBusy} class="mt-3 space-y-3">
 						<input type="hidden" name="bucketId" value={b.bucketId} />
-						<input type="hidden" name="barcodes" value={residualList.join(',')} />
+						<input type="hidden" name="barcodes" value={residualOk.map(c => c.barcode).join(',')} />
+						<input type="hidden" name="moves" value={residualDisposition === 'merge' ? JSON.stringify(residualMoves) : ''} />
+
+						<!-- 1. Scan each leftover cart: the lookup reports its stage and eligibility. -->
 						<div>
 							<span class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Scan each leftover cart</span>
-							{@render scanList('residual', residualList, 'scan a leftover cart…')}
+							<input id="residualScan" type="text" bind:value={residualScan} autocomplete="off" placeholder="scan a leftover cart…" disabled={residualScanBusy}
+								onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); scanResidualCart(); } }} class={scanCls} />
+							{#if residualScanError}<p class="mt-1 text-[10px] text-[var(--color-tron-error)]">{residualScanError}</p>{/if}
+							{#if residualCarts.length > 0}
+								<ul class="mt-2 max-h-44 space-y-1 overflow-y-auto">
+									{#each residualCarts as c (c.barcode)}
+										<li class="rounded bg-[var(--color-tron-bg-primary)] px-2 py-1 {c.ok ? '' : 'opacity-70'}">
+											<div class="flex items-center justify-between gap-2">
+												<span class="truncate font-mono text-xs text-[var(--color-tron-text)]">{c.barcode}</span>
+												<span class="flex shrink-0 items-center gap-2">
+													{#if c.ok && c.stage}<span class="rounded border px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-[var(--color-tron-text)] {stageTint[c.stage] ?? ''}">{stageLabel(c.stage)}</span>{:else}<span class="rounded border border-red-500/40 px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-red-300">not eligible</span>{/if}
+													<button type="button" onclick={() => removeResidualCart(c.barcode)} class="text-xs text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-error)]">remove</button>
+												</span>
+											</div>
+											{#if !c.ok && c.reason}<p class="mt-0.5 text-[10px] text-red-300">{c.reason}</p>{/if}
+										</li>
+									{/each}
+								</ul>
+							{/if}
+							<p class="mt-1 text-right text-[10px] text-[var(--color-tron-text-secondary)]">{residualOk.length} eligible{#if residualCarts.length !== residualOk.length} · {residualCarts.length - residualOk.length} not{/if}</p>
 						</div>
+
+						<!-- 2. Two options: move them into a bucket (suggested from what exists), or discard. -->
 						<fieldset class="space-y-2">
-							<legend class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Disposition (applies to all scanned)</legend>
-							<label class="flex items-start gap-2 rounded border p-2 text-xs text-[var(--color-tron-text)] {residualDisposition === 'merge' ? 'border-[var(--color-tron-cyan)]/60' : 'border-[var(--color-tron-border)]'}">
-								<input type="radio" name="disposition" value="merge" bind:group={residualDisposition} class="mt-0.5" />
-								<span><strong>Merge</strong> into another open bucket — the carts take that bucket's stage<br />
-									{#if residualDisposition === 'merge'}<input type="text" name="destinationBucketId" required placeholder="scan destination bucket…" autocomplete="off" class="{inputCls} font-mono" />{/if}</span>
+							<legend class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">What happens to them</legend>
+							<label class="block rounded border p-2 text-xs text-[var(--color-tron-text)] {residualDisposition === 'merge' ? 'border-[var(--color-tron-cyan)]/60' : 'border-[var(--color-tron-border)]'}">
+								<span class="flex items-start gap-2">
+									<input type="radio" name="disposition" value="merge" bind:group={residualDisposition} class="mt-0.5" />
+									<span><strong>Move into a bucket</strong> — suggested from what is on the board right now</span>
+								</span>
+								{#if residualDisposition === 'merge'}
+									<div class="mt-2 space-y-2">
+										{#if residualOk.length === 0}
+											<p class="text-[10px] text-[var(--color-tron-text-secondary)]">Scan an eligible cart first.</p>
+										{/if}
+										{#each residualStages as stage (stage)}
+											{@const opts = residualOptions(stage, b.bucketId)}
+											{@const n = residualOk.filter(c => c.stage === stage).length}
+											<div class="rounded border border-[var(--color-tron-border)]/60 p-2">
+												<p class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">{n} × {stageLabel(stage)} →</p>
+												{#if opts.length > 0}
+													<select value={residualDestFor(stage, b.bucketId)} onchange={(e) => { residualDest = { ...residualDest, [stage]: (e.currentTarget as HTMLSelectElement).value }; }} class="{inputCls} text-xs">
+														{#each opts as o (o.bucketId)}<option value={o.bucketId}>{o.label}</option>{/each}
+													</select>
+													{#if opts[0].newPass}
+														<p class="mt-1 text-[10px] text-[var(--color-tron-yellow)]">No open pass is at {stageLabel(stage)} — suggesting an empty bucket: a new pass opens there at {stageLabel(stage)} with these carts. Nothing is debited.</p>
+													{:else}
+														<p class="mt-1 text-[10px] text-[var(--color-tron-text-secondary)]">Suggested: the open pass at {stageLabel(stage)}. Empty buckets are further down the list.</p>
+													{/if}
+												{:else}
+													<p class="mt-1 text-[10px] text-[var(--color-tron-yellow)]">No open pass at {stageLabel(stage)} and no empty bucket — <strong>mint a new bucket</strong> (Mint New Bucket card under Available); it will appear here as soon as it exists.</p>
+												{/if}
+											</div>
+										{/each}
+									</div>
+								{/if}
 							</label>
 							<label class="flex items-start gap-2 rounded border p-2 text-xs text-[var(--color-tron-text)] {residualDisposition === 'scrap' ? 'border-red-500/50' : 'border-[var(--color-tron-border)]'}">
 								<input type="radio" name="disposition" value="scrap" bind:group={residualDisposition} class="mt-0.5" />
-								<span><strong>Discard</strong> them — journal required</span>
+								<span><strong>Discard</strong> them — shell and label are scrapped from inventory; journal required</span>
 							</label>
 						</fieldset>
 						{#if residualDisposition === 'scrap'}
 							<label class="block">
-								<span class="text-[10px] uppercase tracking-wider {residualDisposition === 'scrap' ? 'text-red-300' : 'text-[var(--color-tron-text-secondary)]'}">{residualDisposition === 'scrap' ? 'Journal — why? (required)' : 'Note (optional)'}</span>
-								<textarea name="journal" rows="2" required={residualDisposition === 'scrap'} class={inputCls}></textarea>
+								<span class="text-[10px] uppercase tracking-wider text-red-300">Journal — why? (required)</span>
+								<textarea name="journal" rows="2" required class={inputCls}></textarea>
 							</label>
 						{/if}
 						{#if form?.residual?.error}<p class="text-xs text-[var(--color-tron-error)]">{form.residual.error}</p>{/if}
-						<button type="submit" disabled={busy || residualList.length === 0 || !residualDisposition} class={residualDisposition === 'scrap' ? btnDanger : btnPrimary}>
-							{busy ? 'Saving…' : residualDisposition === 'merge' ? `Merge ${residualList.length}` : residualDisposition === 'scrap' ? `Discard ${residualList.length} & journal` : 'Pick a disposition'}
+						<button type="submit" disabled={busy || residualOk.length === 0 || !residualDisposition || (residualDisposition === 'merge' && !residualMergeReady)} class={residualDisposition === 'scrap' ? btnDanger : btnPrimary}>
+							{busy ? 'Saving…' : residualDisposition === 'merge' ? (residualMergeReady ? `Move ${residualOk.length} into bucket${residualStages.length === 1 ? '' : 's'}` : 'No bucket to move into — mint one') : residualDisposition === 'scrap' ? `Discard ${residualOk.length} & journal` : 'Pick an option'}
 						</button>
-						<button type="button" class={btnGhost} onclick={() => { panel = { kind: 'none' }; }}>Cancel</button>
+						<button type="button" class={btnGhost} onclick={() => { panel = { kind: 'none' }; resetLists(); }}>Cancel</button>
 					</form>
 
 				{:else if panel.kind === 'retire'}

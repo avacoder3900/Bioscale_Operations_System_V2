@@ -10,7 +10,7 @@ import {
 	BucketError, BUCKET_STAGES, STAGE_LABELS, IN_OVEN_LABEL, SHELL_PART, LABEL_PART, THERMOSEAL_PART,
 	boardData, stageCounts, resolveScan, isBucketStage, changeLog, bucketRegistry,
 	startCycle, scanCartIn, unscanCart, advanceCycle, scrapCarts, reportResidual, retireBucket,
-	createBucket, replaceBucketSticker
+	createBucket, replaceBucketSticker, lookupResidualCart
 } from '$lib/server/services/bucket-service';
 import { thermosealStatus, checkFloor, setThermosealToggles } from '$lib/server/services/thermoseal-service';
 import type { Actions, PageServerLoad } from './$types';
@@ -221,6 +221,17 @@ export const actions: Actions = {
 		})();
 	},
 
+	// Leftover flow: fetch per scan — what is this cart, and is it eligible? The
+	// board suggests the destination from the answer (v2 §7).
+	residualLookup: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'manufacturing:read');
+		await connectDB();
+		const d = await request.formData();
+		const r = await lookupResidualCart(String(d.get('barcode') ?? ''));
+		return { residualLookup: r };
+	},
+
 	residual: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
 		requirePermission(locals.user, 'manufacturing:write');
@@ -229,11 +240,19 @@ export const actions: Actions = {
 		return wrap('residual', async () => {
 			const disposition = String(d.get('disposition') ?? '');
 			if (disposition !== 'merge' && disposition !== 'scrap') throw new BucketError('Choose a disposition.');
+			// moves: JSON [{ barcode, destinationBucketId }] from the board's per-stage pickers.
+			let moves: { barcode: string; destinationBucketId: string }[] | undefined;
+			const movesRaw = String(d.get('moves') ?? '').trim();
+			if (movesRaw) {
+				try { moves = JSON.parse(movesRaw); } catch { throw new BucketError('Bad destination list.'); }
+				if (!Array.isArray(moves)) throw new BucketError('Bad destination list.');
+			}
 			const r = await reportResidual({
 				bucketId: String(d.get('bucketId') ?? ''),
 				barcodes: codesFrom(d.get('barcodes')),
 				disposition,
 				destinationBucketId: (d.get('destinationBucketId') as string | null) ?? undefined,
+				moves,
 				journal: (d.get('journal') as string | null) ?? undefined,
 				user: op(locals)
 			});

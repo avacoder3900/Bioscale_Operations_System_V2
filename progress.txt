@@ -14130,3 +14130,26 @@ Retrieve this exact code: git checkout feat/bucket-system at commit 7cf55d4d
 What this deployment is for: Retire control on each Available bucket card (+ liveCountAt type
   fix); includes the concurrent session's current-stock note (64f52310).
 Build status: success (login 200).
+
+================================================================================
+2026-09-23 -- feat/bucket-system -- leftover-cart flow: scan reports stage + suggests a bucket; Move or Discard
+================================================================================
+User spec: discarding carts at the leftover phase requires a scan-in; the scan reports the
+cart's status and suggests a box to move it to -- an open pass at that stage, else an
+available (empty) box, else mint a new box; the other option is a straight discard. Two
+options on the card, the merge one depending on what buckets exist.
+Service: lookupResidualCart(barcode) -> { status, stage, ok, reason } (known cart, still at a
+bucket stage, not a member of an open pass; bucket labels refused). reportResidual merge now
+takes per-cart moves [{barcode, destinationBucketId}] (legacy single destination kept): all
+destinations validated before any write; an open pass must be at the carts' stage; an EMPTY
+bucket (incl. the reported bucket itself) gets a NEW pass opened at the carts' stage holding
+them (openedQty = n, sourceLots carried over from the pass they were found after, emptyConfirmed
+stamped; 'create' + per-destination 'merge_in' ledger rows, one 'merge_out' on the reported
+bucket). Nothing is debited. If the reported bucket itself gets the new pass it stays in_use.
+Board: ?/residualLookup fetch per scan; the panel lists each cart with its stage badge (or
+'not eligible' + reason); option 1 "Move into a bucket": per stage a select defaulting to the
+suggestion (open pass at that stage first, then empty buckets with this bucket first), yellow
+hint when the suggestion is an empty bucket, and a "mint a new bucket" hint (Mint card under
+Available) when nothing exists -- the Move button is disabled until every stage has a
+destination; option 2 "Discard": journal required, shell + label scrapped.
+Check (svelte-kit sync + svelte-check direct): 12 errors / 438 warnings (baseline).

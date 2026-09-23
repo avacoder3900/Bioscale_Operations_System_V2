@@ -131,24 +131,21 @@ PT-CT-112 is stocked in **rolls** and used by **length**:
   inventory vs. the floor, the lot the next roll would come from, and the restock state. The
   advance form previews "N cm comes off the open roll" and only asks for a lot when a new roll
   will be pulled.
-- **Current stock note (2026-09-23).** Directly above "Development settings" on that card, a
-  note states the stock *the system itself holds*: the live `PT-CT-112` `inventoryCount`
-  (`thermosealStatus().rollsOnHandLive`), the open roll's remainder (m + ≈ carts), the next
-  lot's remaining units, and **when PT-CT-112 was last physically counted**
-  (`PartDefinition.lastPhysicalCountAt`, surfaced as `ThermosealStatus.liveCountAt`). It is
-  labelled *the accurate count according to the current system*, so the pinned development
-  value on the *Rolls on hand* tile is never mistaken for the real one. When the live count is
-  negative the note says why (WI-01's per-unit withdrawals against a shelf this board has not
-  restocked — §12.4); when the pin is on it names the pinned value it is standing in for.
+- **Current stock, and why it is negative.** The live `PT-CT-112` count sits on the *Rolls on
+  hand* tile (pinned value shown, live value in "Development settings"), and the yellow card
+  above it names the build that is draining it. A fuller "current stock" note was added above
+  "Development settings" on 2026-09-23 and **removed the same day as redundant with that tile**
+  (user) — `ThermosealStatus.liveCountAt` went with it.
 
 **Cutover:** PT-CT-112 `inventoryCount` was −427 from the interim per-cart debits; a physical
 count of **1 roll** was recorded on 2026-09-23 (MCP `record_physical_count`, Samantha Wolf).
 The shelf is therefore already below the floor; the restock card + email stay off until the
 development toggle is switched on. The part is named "Thermoseal Laser Cut sheet" in parts; the
 unit of measure should read "roll". The count has drifted negative again since — **−77 on
-2026-09-23** (last physical count 2026-09-23 16:35 UTC) — because WI-01 keeps debiting one unit
-per cart (§12.4); that live figure is what the current-stock note above "Development settings"
-reports.
+2026-09-23** (last physical count 2026-09-23 16:35 UTC) — because the build live on `master`
+keeps debiting one unit per cart out of the same database (§12.4). **User, 2026-09-23: that is
+a known artifact of the live build and will not go away until this branch ships** — do not
+chase it, and do not re-count PT-CT-112 to make it look right.
 
 ### 3.5 Auto-release with deferred spot-check
 
@@ -263,6 +260,22 @@ Scan-based (§3.6). A residual is always a **membership discrepancy** — the sc
 real records whose status says which stage they were at — so merge/scrap act on ids, and the
 `residualFound` block on the previous pass records the ids and disposition.
 
+**Leftover flow as built (2026-09-23).** From *Report leftover carts* on an Available bucket:
+
+1. **Scan each cart** → `lookupResidualCart()` reports its **stage** and eligibility (known
+   cart, still Raw/Unpressed/Pressed, not a member of an open pass; bucket labels refused).
+   Ineligible scans stay in the list marked with the reason and are excluded from the action.
+2. **Two options:**
+   - **Move into a bucket** — per stage the board **suggests** a destination: an **open pass at
+     that stage** first; else an **empty bucket** (this bucket itself first — the carts are
+     already in it), where a **new pass opens at the carts' stage** holding them (`openedQty` =
+     n, source lots carried over from the pass they were found after, nothing debited); else
+     the panel says to **mint a new bucket** (Mint card under Available) and the Move button
+     stays disabled. The operator can pick any other valid destination from the select.
+     Ledger: `create` (new pass) and/or `merge_in` per destination, one `merge_out` on the
+     reported bucket. All destinations validate before any write (`moves[]` per cart).
+   - **Discard** — journal required; shell + label scrapped from inventory (§8).
+
 ## 8. Inventory effects
 
 | Event | PT-CT-104 shell | PT-CT-106 label | PT-CT-112 thermoseal |
@@ -286,9 +299,7 @@ Stage strip (Available · Raw · Unpressed · Pressed · **In Oven** (links to
 `/cartridge-admin?stage=backing`)) → 4-column board (Available / Raw / Unpressed / Pressed).
 Under **Available**: the **Mint New Bucket** card (→ `/buckets/new`, and *Replace a damaged
 sticker* → `/buckets/new#replace`). Under **Unpressed**: the yellow *thermoseal not synced* card
-and the compact **Thermoseal tile** (§3.4; the **current stock note** — live PT-CT-112 count,
-last physical count, open-roll remainder — sits directly above the admin toggles inside
-"Development settings"). Header
+and the compact **Thermoseal tile** (§3.4; admin toggles inside "Development settings"). Header
 buttons: *New bucket*, *Master override* (admin, §9.5), *WI-01 →*. Rail (start, scan-in box with
 mis-scan, advance with discards, scrap by scan, residual by scan, retire) → expandable **change log** (lot, move,
 who, discards, thermoseal note) → **bucket log** (every bucket incl. retired). `?stage=` focuses
@@ -364,6 +375,7 @@ a bucket member from its pass. No inventory moves. Unknown barcodes are refused 
 | `9b06e601` | **Master Override** page — scan a bucket, force it to any phase (§9.5) |
 | `fdf00c8e` | **Quarantine category removed** (§3.6/§3.7); `/cartridge-admin` *Available* tile dropped from the bucket strip (§9.3) |
 | `64f52310` | **Current thermoseal stock note** above "Development settings" (§3.4); `ThermosealStatus.liveCountAt` |
+| *(next)* | Note removed again as redundant with the *Rolls on hand* tile (user); `liveCountAt` reverted; yellow card names `master` as the build draining the shelf |
 
 `npm run check` after v2: **12 errors / 438 warnings** — the same 12 pre-existing (`r2.ts`,
 `AskBimsWidget.svelte`, 8× `assembly/[sessionId]`, 2× `validation/magnetometer/[sessionId]`
@@ -419,7 +431,10 @@ the floor creates a real card and sends real mail on the next board load.
   `ovenEntryTime`; they show nothing for v2 carts, which is correct, but they are dead weight.
 - **Thermoseal is not synced with production (2026-09-23).** Production WI-01 on `master` still
   withdraws one PT-CT-112 *unit* per cartridge; this branch counts rolls by length. Every
-  production WI-01 batch drags the roll count down (1 → −23 was seen on 2026-09-23). User
+  production WI-01 batch drags the roll count down (1 → −23 → **−77**, all on 2026-09-23). **User, 2026-09-23: the negative number is a known
+  artifact of the build live on `master` and persists until this branch ships** — it is not a
+  fault of the bucket flow, and re-counting PT-CT-112 only resets it until the next production
+  batch. User
   decision: leave production alone for now; the board carries a yellow "not synced" card and the
   count is re-counted in rolls when needed. **End state (user, 2026-09-23): thermoseal stock is
   universal — one roll-based count consumed by both production WI-01 and the buckets.** The
