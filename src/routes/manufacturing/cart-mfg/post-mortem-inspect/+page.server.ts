@@ -61,15 +61,12 @@ export const load: PageServerLoad = async ({ locals }) => {
 		deployAtPhases: PHASE,
 		activeModelVersion: { $ne: null }
 	})
-		.select('_id name activeModelVersion captureSettings')
+		.select('_id name activeModelVersion')
 		.lean() as any[];
 	const deployedProjects = deployedRaw.map((p: any) => ({
 		id: p._id,
 		name: p.name ?? '(unnamed project)',
-		version: p.activeModelVersion,
-		// The station camera is configured here, not in the browser: the agent
-		// applies these through OpenCV (see camera_capture.py's tuning panel).
-		captureSettings: p.captureSettings ?? null
+		version: p.activeModelVersion
 	}));
 
 	// Last 50 post_mortem inspections (newest first), joined with their CvImage

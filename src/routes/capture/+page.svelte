@@ -162,163 +162,6 @@
 		gamma: { label: 'Gamma', min: 1, max: 500 }
 	};
 
-	/**
-	 * Ask the station for its camera parameters again. The panel used to vanish
-	 * entirely when this answer never arrived — a selected station with an agent
-	 * that had not replied looked identical to no station at all.
-	 */
-	/**
-	 * Slider bounds that can actually represent the value the camera reports.
-	 *
-	 * V4L2 exposes exposure two different ways: a log2 scale (-13..0, what
-	 * OpenCV's CAP_PROP_EXPOSURE gives on some backends) and EXPOSURE_ABSOLUTE
-	 * in 100 microsecond units (1..10000). Our fallback label assumed the log
-	 * scale, so on a camera using the absolute one the agent reported values
-	 * like 5000 against a -13..0 slider: the thumb could never reach the real
-	 * value, and every value the slider DID send was out of range and ignored.
-	 * That is why exposure appeared to do nothing.
-	 *
-	 * A reported value outside the bounds proves the bounds are wrong, so widen
-	 * them to contain it rather than trusting the guess.
-	 */
-	function paramBounds(prop: string, value: number | undefined) {
-		const r = cameraParamRanges[prop];
-		const cfg = CAMERA_PARAM_LABELS[prop];
-		let lo = r?.min ?? cfg?.min ?? 0;
-		let hi = r?.max ?? cfg?.max ?? 255;
-		let source = r ? (r.source === 'v4l2' ? 'camera range' : 'default range') : 'default range';
-
-		if (typeof value === 'number' && Number.isFinite(value) && (value < lo || value > hi)) {
-			if (prop === 'exposure' && value > 0) {
-				// Absolute exposure, in 100 us units.
-				lo = 1;
-				hi = Math.max(10000, value);
-			} else {
-				lo = Math.min(lo, value);
-				hi = Math.max(hi, value);
-			}
-			source = 'range inferred from the reported value';
-		}
-
-		const step = r?.step ?? cfg?.step ?? 1;
-		return { lo, hi, step, source };
-	}
-
-	function requestCameraParams() {
-		if (!ws || ws.readyState !== WebSocket.OPEN) return;
-		try {
-			ws.send(JSON.stringify({ cmd: 'get_camera_params' }));
-		} catch {
-			// The WS banner already reports a dead socket.
-		}
-	}
-
-	/**
-	 * Back to each parameter's default. Prefers the value the agent reported
-	 * alongside the range; falls back to the midpoint of the known bounds only
-	 * where the agent offered none, since guessing a default is worse than
-	 * leaving a parameter alone.
-	 */
-	let cameraResetNote = $state<string | null>(null);
-
-	/**
-	 * The documented LIZA setup — camera_capture.py's tuning panel, mirrored by
-	 * CvProject.captureSettings' schema defaults. These are the values the
-	 * imaging was originally dialled in against, which is what "defaults" means
-	 * to an operator here; the camera's own factory defaults are a separate
-	 * button, since they are a different thing.
-	 *
-	 * Only genuine V4L2 camera controls appear. CLAHE strength and the per-channel
-	 * colour corrections are post-processing in the capture script, not camera
-	 * parameters, so there is nothing on the station to send them to. GAMMA is
-	 * deliberately omitted too: the script's 0.85 is a post-processing exponent,
-	 * while the station's `gamma` control is a V4L2 range of 1..500 — same name,
-	 * unrelated meaning.
-	 */
-	const LIZA_STATION_DEFAULTS: Record<string, number> = {
-		auto_exposure: 1, // manual, so an exposure value will hold
-		brightness: 128,
-		contrast: 128,
-		gain: 0,
-		sharpness: 128,
-		auto_wb: 0, // manual, since white balance is set explicitly below
-		wb_temperature: 4000
-	};
-
-	/** LIZA's EXPOSURE, on the log2 scale camera_capture.py uses. */
-	const LIZA_EXPOSURE_LOG2 = -5;
-
-	/**
-	 * LIZA's exposure expressed in this camera's units.
-	 *
-	 * camera_capture.py sets CAP_PROP_EXPOSURE = -5, the OpenCV log2 convention:
-	 * the exposure time is 2^-5 s = 31.25 ms. A camera reporting
-	 * EXPOSURE_ABSOLUTE wants that in 100 microsecond units, so 31250 us / 100 =
-	 * ~313. Without the conversion, -5 sent to an absolute-scale camera is out of
-	 * range and silently ignored — the bug fixed in #62.
-	 */
-	function lizaExposureFor(current: number | undefined): { value: number; derived: boolean } {
-		const b = paramBounds('exposure', current);
-		const absoluteScale = b.hi > 0;
-		if (!absoluteScale) return { value: LIZA_EXPOSURE_LOG2, derived: false };
-		const seconds = Math.pow(2, LIZA_EXPOSURE_LOG2);
-		const hundredsOfMicros = Math.round((seconds * 1_000_000) / 100);
-		return { value: Math.min(Math.max(hundredsOfMicros, b.lo), b.hi), derived: true };
-	}
-
-	/** Restore the documented LIZA setup, for the parameters this station has. */
-	function applyLizaDefaults() {
-		const applied: string[] = [];
-		const missing: string[] = [];
-
-		for (const [prop, value] of Object.entries(LIZA_STATION_DEFAULTS)) {
-			if (!cameraParamsKnown.includes(prop)) {
-				missing.push(prop);
-				continue;
-			}
-			setCameraParam(prop, value);
-			applied.push(prop);
-		}
-
-		let note = '';
-		if (cameraParamsKnown.includes('exposure')) {
-			// After auto_exposure has gone manual above, so the value can hold.
-			const e = lizaExposureFor(cameraParams['exposure']);
-			setCameraParam('exposure', e.value);
-			applied.push('exposure');
-			note = e.derived
-				? ` Exposure set to ${e.value} — LIZA's -5 converted from the log2 scale (2^-5 s) into this camera's 100 microsecond units.`
-				: ` Exposure set to ${e.value} on the log2 scale.`;
-		} else {
-			missing.push('exposure');
-		}
-
-		cameraResetNote =
-			`Applied the LIZA setup to ${applied.length} parameter(s).${note}` +
-			(missing.length ? ` Not offered by this station: ${missing.join(', ')}.` : '') +
-			' CLAHE and the colour corrections are post-processing, not camera controls.';
-	}
-
-	/** The camera's own factory defaults, as the station reports them. */
-	function resetCameraParams() {
-		// Only parameters the agent gives a real default for. Falling back to the
-		// midpoint of the bounds is not a default — on brightness that is 128,
-		// which washed the image out.
-		let skipped = 0;
-		for (const prop of cameraParamsKnown) {
-			const target = cameraParamRanges[prop]?.default;
-			if (target === undefined) {
-				skipped++;
-				continue;
-			}
-			setCameraParam(prop, target);
-		}
-		cameraResetNote =
-			skipped === 0
-				? "Restored the camera's own defaults for every parameter."
-				: `Restored the camera's own defaults. ${skipped} parameter(s) report none and were left alone.`;
-	}
-
 	function setCameraParam(prop: string, value: number) {
 		if (!ws || ws.readyState !== WebSocket.OPEN) return;
 		// Optimistic local update so the slider feels responsive; the WS
@@ -1589,7 +1432,7 @@
 		<!-- Remote camera tuning (Pi station only). Collapsible to keep the
 		     main capture flow uncluttered; expand when an operator needs to
 		     dial in exposure / focus / white balance for the room. -->
-		{#if selectedStationId}
+		{#if selectedStationId && cameraParamsKnown.length > 0}
 			<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)]">
 				<button
 					type="button"
@@ -1607,30 +1450,13 @@
 					</svg>
 				</button>
 				{#if cameraParamsExpanded}
-					{#if cameraParamsKnown.length === 0}
-						<div class="border-t border-[var(--color-tron-border)] p-4">
-							<p class="text-xs text-[var(--color-tron-yellow,#facc15)]">
-								The station has not reported its camera parameters yet. The agent answers
-								<span class="font-mono">get_camera_params</span> over the station socket;
-								until it does there is nothing to adjust. This panel used to disappear
-								entirely in this state, which looked like the feature was missing.
-							</p>
-							<button
-								type="button"
-								onclick={requestCameraParams}
-								class="mt-3 rounded border border-[var(--color-tron-cyan)] px-3 py-1.5 text-xs font-bold text-[var(--color-tron-cyan)] hover:bg-[rgba(0,255,255,0.1)]"
-							>
-								Ask the station again
-							</button>
-						</div>
-					{:else}
 					<div class="grid gap-3 border-t border-[var(--color-tron-border)] p-4 sm:grid-cols-2">
 						{#each cameraParamsKnown as prop (prop)}
 							{@const cfg = CAMERA_PARAM_LABELS[prop]}
-							{@const b = paramBounds(prop, cameraParams[prop])}
-							{@const lo = b.lo}
-							{@const hi = b.hi}
-							{@const step = b.step}
+							{@const r = cameraParamRanges[prop]}
+							{@const lo = r?.min ?? cfg?.min ?? 0}
+							{@const hi = r?.max ?? cfg?.max ?? 255}
+							{@const step = r?.step ?? cfg?.step ?? 1}
 							{@const label = cfg?.label ?? prop}
 							<div>
 								<div class="flex items-baseline justify-between gap-2">
@@ -1655,46 +1481,12 @@
 								     "camera" = true V4L2 range, "default" = advisory fallback. -->
 								<div class="flex justify-between text-[10px] text-[var(--color-tron-text-secondary)]">
 									<span class="font-mono">{lo}</span>
-									<span>{b.source}</span>
+									<span>{r ? (r.source === 'v4l2' ? 'camera range' : 'default range') : 'default range'}</span>
 									<span class="font-mono">{hi}</span>
 								</div>
 							</div>
 						{/each}
 					</div>
-					<div class="flex flex-wrap items-center gap-3 border-t border-[var(--color-tron-border)] px-4 py-3">
-						<button
-							type="button"
-							onclick={applyLizaDefaults}
-							title="The documented LIZA setup from camera_capture.py — the values the imaging was dialled in against"
-							class="rounded border border-[var(--color-tron-cyan)] px-3 py-1.5 text-xs font-bold text-[var(--color-tron-cyan)] hover:bg-[rgba(0,255,255,0.1)]"
-						>
-							Reset all to defaults
-						</button>
-						<button
-							type="button"
-							onclick={resetCameraParams}
-							title="The camera's own factory defaults, as the station reports them"
-							class="rounded border border-[var(--color-tron-border)] px-3 py-1.5 text-xs text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)]"
-						>
-							Camera factory defaults
-						</button>
-						<button
-							type="button"
-							onclick={requestCameraParams}
-							class="rounded border border-[var(--color-tron-border)] px-3 py-1.5 text-xs text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)]"
-						>
-							Re-read from station
-						</button>
-						{#if cameraResetNote}
-							<span class="text-[10px] text-[var(--color-tron-green,#39ff14)]">{cameraResetNote}</span>
-						{/if}
-						<span class="text-[10px] text-[var(--color-tron-text-secondary)]">
-							Values are applied on the station itself. A slider that snaps back was
-							refused by the camera — for exposure, set Auto Exposure to 1 (manual)
-							first, since the driver ignores an exposure value while it is on 3 (auto).
-						</span>
-					</div>
-					{/if}
 				{/if}
 			</div>
 		{/if}
