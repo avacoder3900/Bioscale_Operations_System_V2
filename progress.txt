@@ -13361,3 +13361,38 @@ Deployment: production — building from the GitHub push to master (Vercel dashb
 Source: branch master @ commit 721de162 (squash merge of PR #62)
 Retrieve this exact code: git checkout master at commit 721de162
 What this deployment is for: exposure slider units fix + honest reset defaults on /capture
+
+================================================================================
+2026-09-23 — feat/capture-liza-defaults — Reset all to defaults restores the LIZA setup
+================================================================================
+"Defaults" meant the camera's own factory values, which is not what an operator wants on this page:
+the imaging was dialled in against the LIZA setup in camera_capture.py, mirrored by
+CvProject.captureSettings' schema defaults. The button now restores auto_exposure 1 (manual),
+brightness 128, contrast 128, gain 0, sharpness 128, auto_wb 0 (manual), wb_temperature 4000. The
+camera's factory values stay reachable as a separate "Camera factory defaults" button — the only
+route back to a hardware baseline, so losing it would be worse than the problem being solved.
+
+Exposure is CONVERTED rather than copied. camera_capture.py sets CAP_PROP_EXPOSURE = -5, the OpenCV
+log2 convention: 2^-5 s = 31.25 ms. A camera reporting EXPOSURE_ABSOLUTE wants that in 100
+microsecond units, so ~313. Sending -5 to an absolute-scale camera is out of range and silently
+ignored — the bug fixed in #62 — so the value is derived from the scale the camera actually uses and
+the note says when a conversion happened. Auto-exposure goes manual before the value, so it holds.
+
+Three documented settings are deliberately not sent: CLAHE strength and the per-channel colour
+corrections are post-processing in the capture script with nothing on the station to receive them,
+and GAMMA is omitted because the script's 0.85 is a post-processing exponent while the station's
+`gamma` is a V4L2 range of 1..500 — same name, unrelated meaning. The note lists whatever the
+station does not offer rather than failing quietly.
+
+Also worth recording: the ORIGINAL per-station values are NOT recoverable. set_camera_param goes
+over the WS to the agent and is applied live via v4l2; nothing in the app persists it, CaptureStation
+stores no camera values, and there is no AuditLog trail. The LIZA numbers are the documented
+reference setup, not a snapshot of what any given station had.
+
+File: src/routes/capture/+page.svelte. npm run check: 12/437 — this master's baseline, none in the
+touched file. Conversion checked: 2^-5 s = 31.25 ms = 313 in 100 us units.
+
+Deployment: production — building from the GitHub push to master (Vercel dashboard, commit below)
+Source: branch master @ commit 8119a4b6 (squash merge of PR #63)
+Retrieve this exact code: git checkout master at commit 8119a4b6
+What this deployment is for: LIZA setup restored by Reset all to defaults on /capture
