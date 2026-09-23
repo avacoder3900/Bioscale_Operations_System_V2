@@ -1041,6 +1041,32 @@
 	// tip type and re-run without ever thinking about what is in slot 11. The rack
 	// comes from tiprackForProfile (the operator's explicit choice), not master's
 	// tiprackForMount, which inferred it from the mount.
+	// Next rack position after `w`, column-major (A1 → B1 … H1 → A2 …), wrapping
+	// after H12. The Studio never wrote back to the protocols' tip tracker, so a
+	// second pick-up in one session used to aim at the well it had just emptied.
+	function nextTipWell(w: string): string {
+		const m = /^([A-H])(\d{1,2})$/.exec(w.trim().toUpperCase());
+		if (!m) return 'A1';
+		const rowI = 'ABCDEFGH'.indexOf(m[1]);
+		let col = parseInt(m[2], 10);
+		if (rowI < 7) return `${'ABCDEFGH'[rowI + 1]}${col}`;
+		col = col >= 12 ? 1 : col + 1;
+		return `A${col}`;
+	}
+
+	/** Drop the modelled tip into the trash. Resolves false when the engine modelled none. */
+	async function doDropTip(): Promise<boolean> {
+		const res = await fetch(`/api/opentrons-lab/robots/${selectedRobotId}/maintenance/${runId}/drop-tip`, {
+			method: 'POST',
+			credentials: 'same-origin',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ pipetteId })
+		});
+		const body = await res.json().catch(() => ({}) as any);
+		if (!res.ok) throw new Error(body?.message || `HTTP ${res.status}`);
+		return !!body?.dropped;
+	}
+
 	async function doPickUp(allowRecover: boolean) {
 		const res = await fetch(
 			`/api/opentrons-lab/robots/${selectedRobotId}/maintenance/${runId}/pick-up-tip`,
@@ -1051,8 +1077,19 @@
 				body: JSON.stringify({ pipetteId, tiprackLoadName: tiprackForProfile, slot: '11', tipWell })
 			}
 		);
-		if (res.ok) return;
+		if (res.ok) {
+			// The rack position is spent: aim the next pick-up at the next one.
+			tipWell = nextTipWell(tipWell);
+			return;
+		}
 		const body = await res.json().catch(() => ({}) as any);
+		if (res.status === 409 && body?.code === 'TIP_ALREADY_ATTACHED' && allowRecover) {
+			// The run still models a tip (typically one that was then swapped by hand).
+			// Drop it in the trash so the press can happen, then retry once.
+			msg = 'The run still had a tip modelled — dropping it in the trash first…';
+			await doDropTip();
+			return doPickUp(false);
+		}
 		if (res.status === 409 && body?.code === 'SLOT_OCCUPIED' && allowRecover) {
 			msg = 'Slot 11 had another rack loaded — reopening the run to free it…';
 			await stopMaintenance();
@@ -1098,8 +1135,29 @@
 		clearMsg(); busy = true;
 		msg = 'Loading tiprack & picking up a tip…';
 		try {
+			const from = tipWell;
 			await doPickUpTip();
-			msg = `Picked up a tip (${tiprackForProfile} ${tipWell}). No calibration run — use "Calibrate tip" for that, or move to a hole.`;
+			msg = `Picked up a tip (${tiprackForProfile} ${from}). No calibration run — use "Calibrate tip" for that, or move to a hole.`;
+		} catch (e) { errMsg = e instanceof Error ? e.message : String(e); } finally { busy = false; }
+	}
+
+	// "Swap tip": drop the current tip in the trash and take the next fresh one from
+	// the rack, without a hand swap (2026-09-23). A hand-swapped tip is invisible to
+	// the engine, which is how "same Z, different depth" happened on B14 — this keeps
+	// the modelled tip and the real tip the same object. The probe adjust belongs to
+	// the old tip, so it is cleared: Calibrate tip again before teaching with it.
+	async function swapTipAction() {
+		if (!runId || !pipetteId) { errMsg = 'Open a maintenance run first'; return; }
+		if (!tiprackForProfile) { errMsg = 'Pick the tip type first (p20/wax or p300/reagent)'; return; }
+		clearMsg(); busy = true;
+		msg = 'Dropping the current tip in the trash…';
+		try {
+			const dropped = await doDropTip();
+			hasTip = false; tipAdjust = null; nominal = null; refWell = null;
+			const from = tipWell;
+			msg = dropped ? `Dropped. Picking up a fresh tip (${tiprackForProfile} ${from})…` : `No tip was modelled (a hand-fitted tip must come off by hand). Picking up ${tiprackForProfile} ${from}…`;
+			await doPickUpTip();
+			msg = `Fresh tip on (${tiprackForProfile} ${from}). Its bend is unknown — run "Calibrate tip" before capturing, or move to a hole to eyeball it.`;
 		} catch (e) { errMsg = e instanceof Error ? e.message : String(e); } finally { busy = false; }
 	}
 
@@ -1517,6 +1575,9 @@
 						belief, and an operator recovering from a dropped or broken tip has to be
 						able to pick another one up without reopening the run.
 					-->
+					<button type="button" onclick={swapTipAction} disabled={!pipetteId || busy || !tipProfile} class="mt-1 w-full rounded border border-amber-400/50 bg-amber-900/15 px-2 py-1.5 text-[11px] font-semibold text-amber-200 hover:bg-amber-900/25 disabled:opacity-40" title="Drops the current tip in the trash, then picks the next fresh one from slot 11. Clears the probe adjust — Calibrate tip again before capturing.">
+						Swap tip — drop it, take a fresh one from the rack
+					</button>
 					<button type="button" onclick={pickUpTipAction} disabled={!pipetteId || busy || !tipProfile} class="mt-1 w-full rounded border border-[var(--color-tron-cyan)]/40 px-2 py-1.5 text-[11px] text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40" title="Just picks up a tip of the selected type from slot 11 — no travel to the calibrator, no probe.">
 						{hasTip ? 'Pick up tip (another one)' : 'Pick up tip (no probe)'}
 					</button>

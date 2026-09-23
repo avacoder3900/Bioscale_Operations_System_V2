@@ -13140,3 +13140,38 @@ deck-001's x/y/z for all 288 odd-column wells (he will fine-tune from there): me
 288 history rows + audit; backup calibration-backups/deck-004-pre-copy-reagent-from-deck-001-2026-09-21T19-33-07-416Z.json.
 WARNING given: +3.9 mm in X is well outside a 1.8 mm hole — Studio Move-to-hole/fine-tune before any
 B07 reagent run. The next B07 wax run's freshness gate will re-upload (odd columns changed; wax unaffected).
+
+================================================================================
+2026-09-22 — feat/reagent-tip-swap-v2 — new PT-CT-112 thermoseal lot (LOT-20260915-4MWU exhausted)
+================================================================================
+Same situation as 09-15: the placeholder thermoseal lot's 480 strips were consumed (−22 remaining
+after today's four backing batches), so WI-01 had nothing to select. Created another accepted
+PT-CT-112 ReceivingLot (480 strips, placeholder count) + creation inventory transaction + audit row,
+via the same script pattern. Systemic gap unchanged: no laser-cut batch has been recorded since May,
+so PT-CT-112 lots only exist when created by hand.
+
+================================================================================
+2026-09-23 — feat/reagent-tip-swap-v2 — Studio "Swap tip" (drop in trash + fresh from rack) and an honest pick-up endpoint
+================================================================================
+B14 calibration confusion today: "Z 9 hovered this morning, now Z 9 is in the hole", then "pick up
+tip says it picked up but the pipette stays above the rack". Robot log: the maintenance run open
+since 15:02Z still modelled the tip picked at 15:04; the operator had swapped tips by hand (the
+engine can't see that), so every later pickUpTip was REFUSED ("Cannot perform pick_up_tip with a tip
+already attached") — and the pick-up-tip endpoint treated that refusal as SUCCESS, so the Studio
+said "picked up" while the press never happened. (Also a one-off "ALARM: Homing fail" on X at
+18:07:42Z that cleared on the next home; noted for the shift log.)
+Changes (alejandro asked for a robot-side tip change so nobody has to fit tips by hand):
+  - lib/server/opentrons/maintenance.ts: dropTipInTrash() (moveToAddressableAreaForDropTip
+    fixedTrash + dropTipInPlace, same commands the fill protocols use).
+  - api/.../maintenance/[runId]/drop-tip: new POST endpoint → {dropped:true|false} (false when the
+    engine models no tip — a hand-fitted tip must come off by hand).
+  - api/.../maintenance/[runId]/pick-up-tip: "tip already attached" now returns 409
+    TIP_ALREADY_ATTACHED instead of being swallowed as success.
+  - deck-calibration/+page.svelte: "Swap tip — drop it, take a fresh one from the rack" button
+    (drop → pick next well → clears tipAdjust/nominal → prompts Calibrate tip); doPickUp handles
+    TIP_ALREADY_ATTACHED by dropping first and retrying; tipWell auto-advances column-major after
+    every successful pick-up (it used to aim at A1 every time — the well it had just emptied).
+Not done: the Studio still doesn't advance the protocols' on-robot tip tracker
+(/data/tip_tracker_<host>.json), so tips it consumes are unknown to the next fill run.
+npm run check: 10 errors / 435 warnings repo-wide after `svelte-kit sync` (the new route needs its
+generated $types), none in the touched files — same pre-existing set as before.

@@ -479,6 +479,23 @@ export async function moveToWell(
 
 /** Pick up a tip from a (loaded) tiprack — so the operator dials in with a tip on,
  *  matching the real fill/calibration workflow. */
+/**
+ * Drop whatever tip the run models into the fixed trash (the same two commands
+ * the fill protocols use), so the operator can take a fresh one from the rack
+ * without a hand swap. The engine refuses when it models NO tip — callers treat
+ * that as "nothing to drop".
+ */
+export async function dropTipInTrash(robot: RobotRef, runId: string, pipetteId: string): Promise<void> {
+	await sendMaintenanceCommand(
+		robot,
+		runId,
+		'moveToAddressableAreaForDropTip',
+		{ pipetteId, addressableAreaName: 'fixedTrash', offset: { x: 0, y: 0, z: 0 }, alternateDropLocation: false },
+		{ waitUntilComplete: true, timeoutMs: 30_000 }
+	);
+	await sendMaintenanceCommand(robot, runId, 'dropTipInPlace', { pipetteId }, { waitUntilComplete: true, timeoutMs: 30_000 });
+}
+
 export async function pickUpTip(
 	robot: RobotRef,
 	runId: string,
