@@ -14297,3 +14297,10 @@ body.currentPhase ?? body.status; "should be at" derived locally from a main-lin
 order (raw -> unpressed -> pressed -> backing (In Oven) -> wax -> reagent -> seal -> store)
 with readable labels, e.g. pressed -> "In Oven (WI-01 draws the bucket)"; complete =
 stored/released/shipped/completed. Endpoint untouched. Check: 12 errors / 438 warnings.
+
+Deployment: preview -- https://bioscale-operations-system-mongodb-5fp36pzbt-brevitest.vercel.app
+  (brevitest scope; cookie-session gated, 302 to /login)
+Source: branch feat/bucket-system @ commit 4070afbd
+Retrieve this exact code: git checkout feat/bucket-system at commit 4070afbd
+What this deployment is for: dashboard cart lookup shows the real status + next step.
+Build status: success (login 200).
