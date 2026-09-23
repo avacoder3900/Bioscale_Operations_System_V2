@@ -13637,3 +13637,12 @@ match (12.4: double-debit and Can-Make risks marked resolved by this decision).
 
 npm run check (merged tree): 10 errors / 437 warnings, none in touched files (baseline).
 Not exercised against a database.
+Deployment: preview -- https://bioscale-operations-system-mongodb-327939rtz-brevitest.vercel.app
+  (brevitest scope; cookie-session gated, 302 to /login)
+Source: branch feat/bucket-system @ commit fe947207
+Retrieve this exact code: git checkout feat/bucket-system at commit fe947207
+What this deployment is for: the new inventory rule -- no debit on bucket entry, discards
+  remove carts from inventory, yellow note (incl. thermoseal exception) on the Buckets tab.
+  Supersedes the de2cd91a preview. Worth verifying: start a cycle and confirm the PT-CT-104
+  lot's "N left" does NOT move; discard 1 and confirm it DOES move by 1.
+Build status: success (brevitest scope, 14:10Z).
