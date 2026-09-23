@@ -13,6 +13,7 @@
 	 */
 	import { onMount, onDestroy } from 'svelte';
 	import PhotoAnnotatorModal from '$lib/components/PhotoAnnotatorModal.svelte';
+	import StationCameraSettings from '$lib/components/capture/StationCameraSettings.svelte';
 
 	let { data } = $props();
 
@@ -56,6 +57,38 @@
 	let cameras = $state<MediaDeviceInfo[]>([]);
 	let selectedCameraId = $state<string | null>(null);
 	let cameraError = $state<string | null>(null);
+
+	// ── Station camera parameters ───────────────────────────────────────────
+	// Same protocol /capture uses: the agent answers {cmd: 'get_camera_params'}
+	// with {event: 'camera_params', params, known, ranges}, and each change goes
+	// back as {cmd: 'set_camera_param'}. The camera lives on the Pi, so this is
+	// the only route to it — browser constraints reach a local camera only.
+	let cameraParams = $state<Record<string, number>>({});
+	let cameraParamsKnown = $state<string[]>([]);
+	let cameraParamRanges = $state<Record<string, any>>({});
+	const cameraParamThrottle: Record<string, ReturnType<typeof setTimeout>> = {};
+
+	function requestCameraParams() {
+		try {
+			ws?.send(JSON.stringify({ cmd: 'get_camera_params' }));
+		} catch {
+			// A dead socket is already surfaced by the station banner.
+		}
+	}
+
+	function setCameraParam(prop: string, value: number) {
+		// Optimistic, so the slider tracks the thumb; the agent's reply corrects it
+		// to whatever the camera actually accepted.
+		cameraParams = { ...cameraParams, [prop]: value };
+		if (cameraParamThrottle[prop]) clearTimeout(cameraParamThrottle[prop]);
+		cameraParamThrottle[prop] = setTimeout(() => {
+			try {
+				ws?.send(JSON.stringify({ cmd: 'set_camera_param', prop, value }));
+			} catch {
+				// As above.
+			}
+		}, 100);
+	}
 
 	// ── Remote Pi capture station ───────────────────────────────────────────
 	let selectedStationId = $state<string | null>(null);
@@ -396,7 +429,21 @@
 			let msg: any;
 			try { msg = JSON.parse(ev.data); } catch { return; }
 
+			if (msg.event === 'camera_params' && msg.params) {
+				cameraParams = msg.params;
+				cameraParamsKnown = Array.isArray(msg.known) ? msg.known : Object.keys(msg.params);
+				cameraParamRanges = msg.ranges && typeof msg.ranges === 'object' ? msg.ranges : {};
+				return;
+			}
+
+			if (msg.event === 'camera_param_set' && typeof msg.prop === 'string') {
+				cameraParams = { ...cameraParams, [msg.prop]: msg.value };
+				return;
+			}
+
 			if (msg.event === 'hello') {
+				// The agent only volunteers these on request.
+				requestCameraParams();
 				try {
 					await startWebRtcOffer(sock);
 				} catch (e) {
@@ -785,6 +832,18 @@
 				<div class="text-xs text-[var(--color-tron-text-secondary)]">Scan a cartridge to enable capture</div>
 			{/if}
 		</div>
+
+		<!-- Station camera tuning. Only for a Pi station: the camera is on the
+		     Pi, so this is the only route to it. -->
+		{#if selectedStationId}
+			<StationCameraSettings
+				params={cameraParams}
+				ranges={cameraParamRanges}
+				known={cameraParamsKnown}
+				onSet={setCameraParam}
+				onRefresh={requestCameraParams}
+			/>
+		{/if}
 
 		<!-- Verdict banner — the headline result for the LATEST capture (advisory only) -->
 		{#if verdict.state !== 'idle'}

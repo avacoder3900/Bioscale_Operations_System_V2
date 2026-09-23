@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
+	import StationCameraSettings from '$lib/components/capture/StationCameraSettings.svelte';
 	import { invalidateAll } from '$app/navigation';
 	import jsQR from 'jsqr';
 
@@ -1429,66 +1430,17 @@
 			{/if}
 		</div>
 
-		<!-- Remote camera tuning (Pi station only). Collapsible to keep the
-		     main capture flow uncluttered; expand when an operator needs to
-		     dial in exposure / focus / white balance for the room. -->
-		{#if selectedStationId && cameraParamsKnown.length > 0}
-			<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)]">
-				<button
-					type="button"
-					onclick={() => (cameraParamsExpanded = !cameraParamsExpanded)}
-					class="flex w-full items-center justify-between rounded-t-lg px-4 py-2 text-left text-sm font-medium text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-bg-tertiary)]"
-				>
-					<span>🎛 Camera settings (Pi station)</span>
-					<svg
-						class="h-4 w-4 transition-transform {cameraParamsExpanded ? 'rotate-180' : ''}"
-						fill="none"
-						viewBox="0 0 24 24"
-						stroke="currentColor"
-					>
-						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
-					</svg>
-				</button>
-				{#if cameraParamsExpanded}
-					<div class="grid gap-3 border-t border-[var(--color-tron-border)] p-4 sm:grid-cols-2">
-						{#each cameraParamsKnown as prop (prop)}
-							{@const cfg = CAMERA_PARAM_LABELS[prop]}
-							{@const r = cameraParamRanges[prop]}
-							{@const lo = r?.min ?? cfg?.min ?? 0}
-							{@const hi = r?.max ?? cfg?.max ?? 255}
-							{@const step = r?.step ?? cfg?.step ?? 1}
-							{@const label = cfg?.label ?? prop}
-							<div>
-								<div class="flex items-baseline justify-between gap-2">
-									<label for={`cp-${prop}`} class="text-xs text-[var(--color-tron-text-secondary)]">
-										{label}
-									</label>
-									<span class="font-mono text-xs text-[var(--color-tron-cyan)]">
-										{cameraParams[prop] ?? '?'}
-									</span>
-								</div>
-								<input
-									id={`cp-${prop}`}
-									type="range"
-									min={lo}
-									max={hi}
-									{step}
-									value={cameraParams[prop] ?? lo}
-									oninput={(e) => setCameraParam(prop, Number((e.currentTarget as HTMLInputElement).value))}
-									class="w-full"
-								/>
-								<!-- Real editable bounds so the operator can see what's adjustable.
-								     "camera" = true V4L2 range, "default" = advisory fallback. -->
-								<div class="flex justify-between text-[10px] text-[var(--color-tron-text-secondary)]">
-									<span class="font-mono">{lo}</span>
-									<span>{r ? (r.source === 'v4l2' ? 'camera range' : 'default range') : 'default range'}</span>
-									<span class="font-mono">{hi}</span>
-								</div>
-							</div>
-						{/each}
-					</div>
-				{/if}
-			</div>
+		<!-- Remote camera tuning (Pi station only). Shared with post-mortem-inspect
+		     so the measured ranges live in one place: the earlier 0..255 guesses
+		     let sliders travel well past where the camera stopped responding. -->
+		{#if selectedStationId}
+			<StationCameraSettings
+				params={cameraParams}
+				ranges={cameraParamRanges}
+				known={cameraParamsKnown}
+				onSet={setCameraParam}
+				onRefresh={() => { try { ws?.send(JSON.stringify({ cmd: "get_camera_params" })); } catch { /* dead socket already flagged */ } }}
+			/>
 		{/if}
 
 		<!-- Microscope sequence (station mode + 'sequence' capability only). A timed
