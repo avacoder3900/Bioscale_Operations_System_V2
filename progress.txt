@@ -14304,3 +14304,46 @@ Source: branch feat/bucket-system @ commit 4070afbd
 Retrieve this exact code: git checkout feat/bucket-system at commit 4070afbd
 What this deployment is for: dashboard cart lookup shows the real status + next step.
 Build status: success (login 200).
+
+================================================================================
+2026-09-23 — feat/bucket-system — Audit a bucket: scan every cart, move or discard strays
+================================================================================
+User: "I want to add an audit feature to the bucket cards. Hit audit and it will prompt you to
+scan every cart in that bucket. If any carts are found to not belong in that bucket, they can
+either be discarded or moved to where they belong." Every pass card on the board now has an
+Audit control under its cart list; it opens the rail in a new 'audit' mode.
+Flow: scan each cart in the tub → ?/auditScan classifies it live (auditScan() in
+bucket-service) as "belongs here" (member of this pass), "wrong tub" (a pre-oven cart that is
+not a member — the note names the pass it IS a member of, when it has one), or "cannot handle"
+(past the buckets, unknown code, or a bucket sticker; those must be removed from the list
+before submitting). Each "wrong tub" cart gets Move or Discard. Move offers its own open pass
+first (already a member there, so putting it back is recorded, not rewritten), then open passes
+at the cart's stage, then empty buckets (a fresh pass opens at that stage; nothing debited).
+Submit → auditCycle(): validates everything first, then pulls each moved cart out of the pass
+that held it (merge_out) and adds it to the destination (merge_in, or create for a new pass);
+discards need a journal and scrap shell + label at the cart's stage with a
+ManualCartridgeRemoval, like every other discard. Members never scanned are reported as
+missing: they STAY on the pass, get a 'shortfall' discrepancy, and the UI tells the operator to
+chase them with Discard carts… — an audit never silently rewrites the count (§7.1).
+Records: BucketCycle.audits[] (scanned/present/missing/foreign with per-cart action and
+destination), one 'audit' ledger row carrying every scanned id, an AUDIT audit-log entry, plus
+the usual rows on every pass touched. ?/auditScan needs manufacturing:read, ?/audit needs
+manufacturing:write.
+Files: src/lib/server/services/bucket-service.ts (auditScan, auditCycle, AuditScanResult,
+AuditCycleInput/Result, 'audit' ledger type), src/lib/server/db/models/bucket-cycle.ts
+(auditRunSchema + audits[]), bucket-transaction.ts ('audit' in the enum),
+src/routes/manufacturing/cart-mfg/buckets/+page.server.ts (auditScan + audit actions),
++page.svelte (audit mode, per-scan classification list, Move/Discard per cart, missing-member
+panel), BUCKET-SYSTEM_PLAN.md (new §9.8, §4.2 audits[], §4.3 ledger types, §9.1).
+Check (svelte-kit sync + svelte-check direct): 12 errors / 438 warnings (baseline), none in
+touched files. Two errors were introduced and fixed on the way: a broken comment in
+bucket-cycle.ts and the audit state block sitting above panelCycle's declaration.
+NOT yet exercised against real data — no bucket has been audited on the preview; the flow is
+type-checked only.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-9uu4dkbuk-brevitest.vercel.app
+  (brevitest scope; cookie-session gated, 302 to /login)
+Source: branch feat/bucket-system @ commit 3e7bebca
+Retrieve this exact code: git checkout feat/bucket-system at commit 3e7bebca
+What this deployment is for: the bucket audit (§9.8), on top of the Find a cart box (d7e0fe78).
+Build status: success (login 200; /manufacturing/cart-mfg/buckets 302 to /login).
