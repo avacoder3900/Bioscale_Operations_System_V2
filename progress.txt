@@ -14196,3 +14196,10 @@ Build status: success (login 200).
 User: "add a cart admin button next to master override." Board header now reads New bucket ·
 Master override (admin) · Cart admin (-> /cartridge-admin) · WI-01. Link only; no logic.
 Check: 12 errors / 438 warnings (baseline).
+
+Deployment: preview -- https://bioscale-operations-system-mongodb-at3u0tkoz-brevitest.vercel.app
+  (brevitest scope; cookie-session gated, 302 to /login)
+Source: branch feat/bucket-system @ commit fb6b3f1f
+Retrieve this exact code: git checkout feat/bucket-system at commit fb6b3f1f
+What this deployment is for: Cart admin button in the board header; otherwise the 4522ba63 build.
+Build status: success (login 200).
