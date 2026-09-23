@@ -13396,3 +13396,33 @@ Deployment: production — building from the GitHub push to master (Vercel dashb
 Source: branch master @ commit 8119a4b6 (squash merge of PR #63)
 Retrieve this exact code: git checkout master at commit 8119a4b6
 What this deployment is for: LIZA setup restored by Reset all to defaults on /capture
+
+================================================================================
+2026-09-23 — master — all 2026-09-23 camera settings work reverted
+================================================================================
+Reverted today's camera settings changes at the operator's request. The three affected files are
+restored byte-for-byte to d3936846, their state before any of it: src/routes/capture/+page.svelte
+and src/routes/manufacturing/cart-mfg/post-mortem-inspect/{+page.svelte,+page.server.ts}. Reverted
+PRs: #55 1f882604, #56 f8df7757, #57 a092d05f, #58 8ea69ff1, #59 671b220a, #61 0784b5e8,
+#62 721de162, #63 8119a4b6. Only those commits ever touched those files — checked per path — so
+nothing else is affected.
+
+The work is preserved outside the repo at Documents/Brevitest/camera-work-2026-09-23/: a combined
+patch, one patch per PR for piecemeal re-application, and a README covering what each change did.
+The combined patch was verified with git apply --check against the reverted tree before committing,
+so restoring it is one command rather than a reconstruction.
+
+What goes away with it, in case it is wanted back sooner: the /capture station panel returns to
+vanishing whenever the agent has not answered get_camera_params, and the exposure slider returns to
+assuming the log2 V4L2 scale — the reason it read 5000 on a -13..0 track and ignored every value it
+sent. Both were pre-existing bugs that today's work diagnosed rather than introduced.
+
+The deployment entries above for those PRs are left in place: they record what was deployed at the
+time. This entry records the revert.
+
+npm run check: 12/437 — unchanged from this master's baseline.
+
+Deployment: production — building from the GitHub push to master (Vercel dashboard, commit below)
+Source: branch master @ commit faeac667 (squash merge of PR #64)
+Retrieve this exact code: git checkout master at commit faeac667
+What this deployment is for: reverting all 2026-09-23 camera settings work
