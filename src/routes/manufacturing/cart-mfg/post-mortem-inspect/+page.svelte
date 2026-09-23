@@ -222,6 +222,179 @@
 		}
 	}
 
+	/**
+	 * LIZA tuning — production-validated setup for this hardware, applied on every
+	 * camera start. Kept as one constant so the settings panel's Reset restores
+	 * exactly what startCamera() applies.
+	 */
+	const LIZA_TUNING = {
+		exposureMode: 'manual',
+		exposureCompensation: -5,
+		focusMode: 'manual',
+		whiteBalanceMode: 'manual',
+		colorTemperature: 4000,
+		brightness: 128,
+		contrast: 128,
+		saturation: 128,
+		sharpness: 128
+	} as const;
+
+	// ── Camera settings panel ───────────────────────────────────────────────
+	// Driven by what the selected camera actually reports, not a fixed list:
+	// MediaStreamTrack.getCapabilities() differs per device and per browser, and
+	// the LIZA tuning below applies its values through an `advanced` array, which
+	// SILENTLY DROPS anything unsupported. So a hardcoded panel would show
+	// controls that quietly do nothing. Here every control is rendered from a
+	// reported capability, with that camera's own min/max/step.
+	//
+	// Session-only: nothing is persisted. The LIZA values are marked
+	// production-validated and feed a CV model, so a reload returns to them.
+
+	/** Capability keys worth offering, in the order they are shown. */
+	const TUNABLE = [
+		'exposureMode', 'exposureTime', 'exposureCompensation', 'iso',
+		'focusMode', 'focusDistance',
+		'whiteBalanceMode', 'colorTemperature',
+		'brightness', 'contrast', 'saturation', 'sharpness',
+		'zoom', 'pan', 'tilt', 'torch'
+		// frameRate is deliberately absent: its reported min is 0 on many cameras,
+		// applying 0 stalls the track, and no later value brings it back. It is a
+		// format property rather than an image setting.
+	] as const;
+	type TunableKey = (typeof TUNABLE)[number];
+
+	const LABELS: Record<string, string> = {
+		exposureMode: 'Exposure mode',
+		exposureTime: 'Shutter (exposure time)',
+		exposureCompensation: 'Exposure compensation',
+		iso: 'ISO',
+		focusMode: 'Focus mode',
+		focusDistance: 'Focus distance',
+		whiteBalanceMode: 'White balance mode',
+		colorTemperature: 'Colour temperature',
+		brightness: 'Brightness',
+		contrast: 'Contrast',
+		saturation: 'Saturation',
+		sharpness: 'Sharpness',
+		zoom: 'Zoom',
+		pan: 'Pan',
+		tilt: 'Tilt',
+		torch: 'Torch'
+	};
+
+	/** Units/notes shown under a control where the raw number is misleading. */
+	const HINTS: Record<string, string> = {
+		exposureTime: 'In 100 µs steps — 100 = 10 ms. Needs exposure mode: manual.',
+		focusDistance: 'Needs focus mode: manual.',
+		colorTemperature: 'Kelvin. Needs white balance mode: manual.',
+		iso: 'Many USB webcams do not expose ISO at all.'
+	};
+
+	// `stream` is deliberately not $state in this file, so the panel's visibility
+	// keys off this flag instead — changing stream's reactivity would ripple
+	// through the capture and Pi-station plumbing.
+	let cameraLive = $state(false);
+	let settingsOpen = $state(false);
+	let camCaps = $state<Record<string, any>>({});
+	let camValues = $state<Record<string, any>>({});
+	let camApplyError = $state<string | null>(null);
+
+	/** Numeric range capability, e.g. { min, max, step }. */
+	function isRange(c: any): boolean {
+		// min === max means the camera reports the property but pins it — a slider
+		// there would move and change nothing.
+		return (
+			c && typeof c === 'object' && !Array.isArray(c) &&
+			typeof c.min === 'number' && typeof c.max === 'number' && c.max > c.min
+		);
+	}
+	/** Enumerated capability, e.g. ['none','manual','continuous']. */
+	function isEnum(c: any): boolean {
+		return Array.isArray(c) && c.length > 1 && typeof c[0] === 'string';
+	}
+	function isBool(c: any): boolean {
+		return Array.isArray(c) && c.some((v) => typeof v === 'boolean');
+	}
+
+	/** Which tunables this camera actually reports — the panel is built from this. */
+	const supportedKeys = $derived(
+		TUNABLE.filter((k) => {
+			const c = camCaps[k];
+			return isRange(c) || isEnum(c) || isBool(c);
+		})
+	);
+
+	/**
+	 * Everything the camera reported, formatted for display — including the
+	 * properties this panel does not offer. Without it, "no adjustable settings"
+	 * is indistinguishable from a broken panel, and the whole point here is to
+	 * show what a given camera can actually do.
+	 */
+	const reportedCapabilities = $derived(
+		Object.entries(camCaps)
+			.filter(([k]) => k !== 'deviceId' && k !== 'groupId')
+			.map(([k, v]) => {
+				let shape: string;
+				if (Array.isArray(v)) shape = v.join(' | ');
+				else if (v && typeof v === 'object' && 'min' in v) shape = `${(v as any).min}–${(v as any).max}`;
+				else shape = String(v);
+				return { key: k, shape, tunable: (supportedKeys as readonly string[]).includes(k) };
+			})
+			.sort((a, b) => Number(b.tunable) - Number(a.tunable) || a.key.localeCompare(b.key))
+	);
+
+	function readCameraCapabilities() {
+		camApplyError = null;
+		const track = stream?.getVideoTracks?.()[0];
+		if (!track) {
+			camCaps = {};
+			camValues = {};
+			return;
+		}
+		try {
+			camCaps = typeof track.getCapabilities === 'function' ? { ...track.getCapabilities() } : {};
+			camValues = typeof track.getSettings === 'function' ? { ...track.getSettings() } : {};
+		} catch (e) {
+			// Firefox has no getCapabilities; the panel then reports nothing tunable
+			// rather than pretending otherwise.
+			camCaps = {};
+			camValues = {};
+			camApplyError = e instanceof Error ? e.message : String(e);
+		}
+	}
+
+	async function applyCameraSetting(key: string, raw: string | number | boolean) {
+		const track = stream?.getVideoTracks?.()[0];
+		if (!track) return;
+		const cap = camCaps[key];
+		const value = isRange(cap) ? Number(raw) : raw;
+		camApplyError = null;
+		try {
+			// Not `advanced`: that silently ignores whatever it cannot satisfy, which
+			// is exactly the failure mode this panel exists to expose. A bare
+			// constraint rejects instead, so a setting that did not take says so.
+			await track.applyConstraints({ [key]: value } as MediaTrackConstraints);
+			camValues = { ...camValues, ...(track.getSettings?.() ?? {}) };
+		} catch (e) {
+			camApplyError = `${LABELS[key] ?? key}: ${e instanceof Error ? e.message : String(e)}`;
+			// Snap the control back to what the camera is really doing.
+			camValues = { ...camValues, ...(track.getSettings?.() ?? {}) };
+		}
+	}
+
+	/** Back to the production-validated LIZA setup, then re-read what stuck. */
+	async function resetCameraTuning() {
+		const track = stream?.getVideoTracks?.()[0];
+		if (!track) return;
+		camApplyError = null;
+		try {
+			await track.applyConstraints({ advanced: [LIZA_TUNING as MediaTrackConstraintSet] });
+		} catch (e) {
+			camApplyError = e instanceof Error ? e.message : String(e);
+		}
+		readCameraCapabilities();
+	}
+
 	// ── USB camera ──────────────────────────────────────────────────────────
 	async function refreshCameras() {
 		try {
@@ -244,6 +417,7 @@
 				audio: false
 			};
 			stream = await navigator.mediaDevices.getUserMedia(constraints);
+			cameraLive = true;
 
 			// LIZA tuning — production-validated setup for this hardware.
 			// Unsupported settings are silently skipped by the `advanced` array.
@@ -251,24 +425,15 @@
 			if (track) {
 				try {
 					await track.applyConstraints({
-						advanced: [
-							{
-								exposureMode: 'manual',
-								exposureCompensation: -5,
-								focusMode: 'manual',
-								whiteBalanceMode: 'manual',
-								colorTemperature: 4000,
-								brightness: 128,
-								contrast: 128,
-								saturation: 128,
-								sharpness: 128
-							} as MediaTrackConstraintSet
-						]
+						advanced: [LIZA_TUNING as MediaTrackConstraintSet]
 					});
 				} catch (e) {
 					console.warn('[post-mortem-inspect] LIZA tuning applyConstraints skipped:', e);
 				}
 			}
+
+			// Populate the settings panel from this camera's real capabilities.
+			readCameraCapabilities();
 
 			if (videoEl) {
 				videoEl.srcObject = stream;
@@ -294,6 +459,7 @@
 		if (stream) {
 			stream.getTracks().forEach((t) => t.stop());
 			stream = null;
+			cameraLive = false;
 		}
 		if (videoEl) videoEl.srcObject = null;
 	}
@@ -317,6 +483,7 @@
 		if (stream) {
 			stream.getTracks().forEach((t) => t.stop());
 			stream = null;
+			cameraLive = false;
 		}
 		if (videoEl) videoEl.srcObject = null;
 		if (lockedStationId) {
@@ -441,6 +608,7 @@
 			const remoteStream = event.streams[0];
 			if (!remoteStream) return;
 			stream = remoteStream;
+			cameraLive = true;
 			if (videoEl) {
 				videoEl.srcObject = remoteStream;
 				videoEl.play().catch(() => null);
@@ -785,6 +953,129 @@
 				<div class="text-xs text-[var(--color-tron-text-secondary)]">Scan a cartridge to enable capture</div>
 			{/if}
 		</div>
+
+		<!-- Camera settings. Built from this camera's reported capabilities, so it
+		     shows only controls that actually do something on this hardware. -->
+		{#if cameraLive}
+			<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)]">
+				<button
+					type="button"
+					onclick={() => (settingsOpen = !settingsOpen)}
+					class="flex w-full items-center justify-between px-4 py-2 text-sm text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)]"
+				>
+					<span>Camera settings{supportedKeys.length ? ` (${supportedKeys.length} adjustable)` : ""}</span>
+					<span aria-hidden="true">{settingsOpen ? '▴' : '▾'}</span>
+				</button>
+
+				{#if settingsOpen}
+					<div class="border-t border-[var(--color-tron-border)] p-4">
+						{#if supportedKeys.length === 0}
+							<p class="text-xs text-[var(--color-tron-text-secondary)]">
+								This camera reports no adjustable image settings — only format properties
+								like resolution. Built-in laptop webcams are usually like this; the UVC
+								inspection cameras expose exposure, focus and white balance. Browsers other
+								than Chrome/Edge often report nothing at all.
+							</p>
+						{:else}
+							<div class="grid gap-4 sm:grid-cols-2">
+								{#each supportedKeys as key (key)}
+									{@const cap = camCaps[key]}
+									<div>
+										<label for="cam-{key}" class="block text-xs text-[var(--color-tron-text-secondary)]">
+											{LABELS[key] ?? key}
+										</label>
+
+										{#if isEnum(cap)}
+											<select
+												id="cam-{key}"
+												class="tron-input mt-1 w-full text-sm"
+												value={camValues[key] ?? ""}
+												onchange={(e) => applyCameraSetting(key, e.currentTarget.value)}
+											>
+												{#each cap as opt (opt)}<option value={opt}>{opt}</option>{/each}
+											</select>
+										{:else if isBool(cap)}
+											<label class="mt-1 flex items-center gap-2 text-sm">
+												<input
+													id="cam-{key}"
+													type="checkbox"
+													checked={!!camValues[key]}
+													onchange={(e) => applyCameraSetting(key, e.currentTarget.checked)}
+												/>
+												<span class="text-[var(--color-tron-text-secondary)]">{camValues[key] ? "on" : "off"}</span>
+											</label>
+										{:else}
+											<div class="mt-1 flex items-center gap-2">
+												<input
+													id="cam-{key}"
+													type="range"
+													class="w-full"
+													min={cap.min}
+													max={cap.max}
+													step={cap.step ?? 1}
+													value={camValues[key] ?? cap.min}
+													oninput={(e) => applyCameraSetting(key, e.currentTarget.value)}
+												/>
+												<span class="w-16 shrink-0 text-right font-mono text-xs text-[var(--color-tron-cyan)]">
+													{camValues[key] ?? "—"}
+												</span>
+											</div>
+											<div class="text-[10px] text-[var(--color-tron-text-secondary)]">
+												range {cap.min}–{cap.max}{cap.step ? ` step ${cap.step}` : ""}
+											</div>
+										{/if}
+
+										{#if HINTS[key]}
+											<div class="mt-0.5 text-[10px] text-[var(--color-tron-text-secondary)]">{HINTS[key]}</div>
+										{/if}
+									</div>
+								{/each}
+							</div>
+						{/if}
+
+						<!-- What the camera reported, adjustable or not. This is the answer to
+						     "what can I change on this camera". -->
+						{#if reportedCapabilities.length > 0}
+							<details class="mt-4">
+								<summary class="cursor-pointer text-xs text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)]">
+									What this camera reported ({reportedCapabilities.length})
+								</summary>
+								<ul class="mt-2 space-y-0.5 font-mono text-[10px]">
+									{#each reportedCapabilities as c (c.key)}
+										<li class={c.tunable ? "text-[var(--color-tron-cyan)]" : "text-[var(--color-tron-text-secondary)]"}>
+											{c.tunable ? '●' : '○'} {c.key}: {c.shape}
+										</li>
+									{/each}
+								</ul>
+								<p class="mt-1 text-[10px] text-[var(--color-tron-text-secondary)]">
+									● adjustable here · ○ reported but fixed, or a format property
+								</p>
+							</details>
+						{/if}
+
+						{#if camApplyError}
+							<p class="mt-3 text-xs text-[var(--color-tron-red,#ff3366)]">
+								The camera refused that setting — {camApplyError}
+							</p>
+						{/if}
+
+						<div class="mt-4 flex items-center gap-3 border-t border-[var(--color-tron-border)] pt-3">
+							<button
+								type="button"
+								onclick={resetCameraTuning}
+								class="rounded border border-[var(--color-tron-cyan)] px-3 py-1.5 text-xs text-[var(--color-tron-cyan)] hover:bg-[rgba(0,255,255,0.1)]"
+							>
+								Reset to validated defaults
+							</button>
+							<span class="text-[10px] text-[var(--color-tron-text-secondary)]">
+								Session only — not saved. Reloading restores the validated setup, which the
+								CV model was tuned against.
+							</span>
+						</div>
+					</div>
+				{/if}
+			</div>
+		{/if}
 
 		<!-- Verdict banner — the headline result for the LATEST capture (advisory only) -->
 		{#if verdict.state !== 'idle'}
