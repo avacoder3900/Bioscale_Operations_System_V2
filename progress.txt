@@ -13330,3 +13330,34 @@ Deployment: production — building from the GitHub push to master (Vercel dashb
 Source: branch master @ commit 0784b5e8 (squash merge of PR #61)
 Retrieve this exact code: git checkout master at commit 0784b5e8
 What this deployment is for: station camera panel visibility, defaults and retry on /capture
+
+================================================================================
+2026-09-23 — fix/capture-exposure-range — exposure slider used the wrong V4L2 units
+================================================================================
+The exposure slider read 5000 on a -13..0 track and changing it did nothing.
+
+V4L2 exposes exposure two ways: a log2 scale (-13..0, what OpenCV's CAP_PROP_EXPOSURE reports on
+some backends) and EXPOSURE_ABSOLUTE in 100 microsecond units (1..10000). CAMERA_PARAM_LABELS
+hardcoded the log scale as its fallback, so on a camera using the absolute one the agent reported
+5000 against a -13..0 slider: the thumb could never reach the real value, and every value the slider
+did send was out of range and silently ignored. That is why exposure appeared broken while
+auto/manual switching worked — the mode change was valid, the value never was.
+
+Bounds now come from paramBounds(): the agent's range when it reports one, else the label fallback,
+then widened to contain the reported value whenever that value falls outside it. A value the bounds
+cannot represent proves the bounds are wrong. Exposure above zero is treated as the absolute scale
+explicitly, and the caption under each slider says which range is in play, including when inferred.
+Checked directly: 5000 -> 1..10000 inferred; -5 -> -13..0 default; brightness 128 unchanged.
+
+Reset also stopped inventing defaults. It fell back to the midpoint of the bounds where the agent
+reported none — not a default at all; on brightness that is 128, which washed the image out
+("way too bright"). It now restores only parameters the station reports a default for and says how
+many it left alone.
+
+File: src/routes/capture/+page.svelte. npm run check: 12/437 — this master's baseline, none in the
+touched file.
+
+Deployment: production — building from the GitHub push to master (Vercel dashboard, commit below)
+Source: branch master @ commit 721de162 (squash merge of PR #62)
+Retrieve this exact code: git checkout master at commit 721de162
+What this deployment is for: exposure slider units fix + honest reset defaults on /capture
