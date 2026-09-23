@@ -37,6 +37,32 @@
 	let note = $state<string | null>(null);
 
 	/**
+	 * What the operator has dragged each slider to, kept separate from what the
+	 * camera reports. The slider used to be driven straight from `params`, so
+	 * when the camera refused a change its reply overwrote the drag and the thumb
+	 * snapped back — indistinguishable from a dead control. Now the thumb always
+	 * moves, and a refusal is visible as the camera's value differing from the
+	 * request instead of silently winning.
+	 */
+	let requested = $state<Record<string, number>>({});
+
+	function positionOf(prop: string, fallback: number): number {
+		return requested[prop] ?? params[prop] ?? fallback;
+	}
+
+	/** The camera settled somewhere other than what was asked for. */
+	function refused(prop: string): boolean {
+		const want = requested[prop];
+		const got = params[prop];
+		return typeof want === 'number' && typeof got === 'number' && want !== got;
+	}
+
+	function drag(prop: string, value: number) {
+		requested = { ...requested, [prop]: value };
+		onSet(prop, value);
+	}
+
+	/**
 	 * Bench-measured bounds, used only where the agent reports no range. These
 	 * replace earlier guesses (0..255 for most controls) that let sliders travel
 	 * far past the point where the camera stopped responding — brightness and
@@ -55,7 +81,11 @@
 		auto_wb: { min: 0, max: 1, step: 1 },
 		wb_temperature: { min: 2800, max: 6500 },
 		focus: { min: 0, max: 255 },
-		autofocus: { min: 0, max: 1, step: 1 }
+		autofocus: { min: 0, max: 1, step: 1 },
+		// V4L2 anti-flicker. 0 disabled, 1 = 50 Hz mains, 2 = 60 Hz mains. When the
+		// camera supports it this is the proper fix for banding under mains-powered
+		// lamps: the driver constrains exposure to whole flicker cycles itself.
+		power_line_frequency: { min: 0, max: 2, step: 1 }
 	};
 
 	const LABELS: Record<string, string> = {
@@ -71,7 +101,8 @@
 		auto_wb: 'Auto White Balance (0=manual, 1=auto)',
 		wb_temperature: 'White Balance (K)',
 		focus: 'Focus',
-		autofocus: 'Autofocus'
+		autofocus: 'Autofocus',
+		power_line_frequency: 'Anti-flicker (0=off, 1=50Hz, 2=60Hz)'
 	};
 
 	/**
@@ -99,21 +130,33 @@
 		return { lo, hi, step: reported?.step ?? fb?.step ?? 1, source };
 	}
 
+	/**
+	 * Mains-powered lamps pulse at twice the supply frequency — 120 Hz on 60 Hz
+	 * mains, one cycle every 8.333 ms. An exposure covering a whole number of
+	 * those cycles collects the same light in every row, so the banding cancels;
+	 * a fractional one does not. A battery torch is DC and has no ripple at all,
+	 * which is why the Glossday shows no strobing.
+	 *
+	 * Only meaningful for EXPOSURE_ABSOLUTE, where the unit is 100 microseconds.
+	 */
+	const MAINS_HZ = 60;
+	const FLICKER_CYCLE_MS = 1000 / (MAINS_HZ * 2);
+
+	function flickerNote(exposureValue: number | undefined): string | null {
+		if (typeof exposureValue !== 'number' || !Number.isFinite(exposureValue) || exposureValue <= 0) return null;
+		const ms = exposureValue / 10; // 100 us units -> ms
+		const cycles = ms / FLICKER_CYCLE_MS;
+		const nearest = Math.max(1, Math.round(cycles));
+		const safe = Math.round(nearest * FLICKER_CYCLE_MS * 10);
+		if (Math.abs(cycles - nearest) < 0.02) {
+			return `${ms.toFixed(1)} ms = ${nearest} flicker cycle(s) at ${MAINS_HZ} Hz — banding cancels.`;
+		}
+		return `${ms.toFixed(1)} ms = ${cycles.toFixed(2)} flicker cycles at ${MAINS_HZ} Hz — try ${safe} for a whole number.`;
+	}
+
 	const shown = $derived(known.filter((p) => !isUnavailable(p)));
 	const unavailable = $derived(known.filter((p) => isUnavailable(p)));
 
-	/** Auto-exposure back on — the one control that reliably rescues a dark feed. */
-	function autoExposureOn() {
-		if (!known.includes('auto_exposure')) return;
-		onSet('auto_exposure', 3);
-		note = 'Auto Exposure set to 3 (auto). The feed should recover within a second or two.';
-	}
-
-	function autoWhiteBalanceOn() {
-		if (!known.includes('auto_wb')) return;
-		onSet('auto_wb', 1);
-		note = 'Auto White Balance set to 1 (auto).';
-	}
 </script>
 
 <div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)]">
@@ -135,38 +178,6 @@
 					does there is nothing to adjust.
 				</p>
 			{:else}
-				<!-- Rescue buttons first: a dark or colour-cast feed is the state an
-				     operator most needs to get out of quickly. -->
-				<div class="mb-4 flex flex-wrap items-center gap-2">
-					{#if known.includes('auto_exposure')}
-						<button
-							type="button"
-							onclick={autoExposureOn}
-							class="rounded border border-[var(--color-tron-cyan)] px-3 py-1.5 text-xs font-bold text-[var(--color-tron-cyan)] hover:bg-[rgba(0,255,255,0.1)]"
-						>
-							Auto Exposure on
-						</button>
-					{/if}
-					{#if known.includes('auto_wb')}
-						<button
-							type="button"
-							onclick={autoWhiteBalanceOn}
-							class="rounded border border-[var(--color-tron-border)] px-3 py-1.5 text-xs text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)]"
-						>
-							Auto White Balance on
-						</button>
-					{/if}
-					{#if onRefresh}
-						<button
-							type="button"
-							onclick={onRefresh}
-							class="rounded border border-[var(--color-tron-border)] px-3 py-1.5 text-xs text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)]"
-						>
-							Re-read from station
-						</button>
-					{/if}
-				</div>
-
 				{#if note}
 					<p class="mb-3 text-xs text-[var(--color-tron-green,#39ff14)]">{note}</p>
 				{/if}
@@ -179,8 +190,12 @@
 								<label for={`cam-${prop}`} class="text-xs text-[var(--color-tron-text-secondary)]">
 									{LABELS[prop] ?? prop}
 								</label>
-								<span class="font-mono text-xs text-[var(--color-tron-cyan)]">
-									{params[prop] ?? '?'}
+								<span class="font-mono text-xs">
+									{#if refused(prop)}
+										<span class="text-[var(--color-tron-red,#ff3366)]">{requested[prop]} &rarr; camera {params[prop]}</span>
+									{:else}
+										<span class="text-[var(--color-tron-cyan)]">{params[prop] ?? '?'}</span>
+									{/if}
 								</span>
 							</div>
 							<input
@@ -189,8 +204,8 @@
 								min={b.lo}
 								max={b.hi}
 								step={b.step}
-								value={params[prop] ?? b.lo}
-								oninput={(e) => onSet(prop, Number(e.currentTarget.value))}
+								value={positionOf(prop, b.lo)}
+								oninput={(e) => drag(prop, Number(e.currentTarget.value))}
 								class="w-full"
 							/>
 							<div class="flex justify-between text-[10px] text-[var(--color-tron-text-secondary)]">
@@ -198,6 +213,12 @@
 								<span>{b.source}</span>
 								<span class="font-mono">{b.hi}</span>
 							</div>
+							{#if prop === 'exposure'}
+								{@const fn = flickerNote(params[prop])}
+								{#if fn}
+									<div class="mt-0.5 text-[10px] text-[var(--color-tron-yellow,#facc15)]">{fn}</div>
+								{/if}
+							{/if}
 						</div>
 					{/each}
 				</div>
