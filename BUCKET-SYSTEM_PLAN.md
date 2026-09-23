@@ -356,7 +356,10 @@ a bucket member from its pass. No inventory moves. Unknown barcodes are refused 
 ### 9.8 Audit a bucket (2026-09-23)
 
 **Audit** on any pass card opens the rail in audit mode: the operator scans *every* cart in the
-tub and each scan is classified live (`?/auditScan` → `auditScan()`):
+tub and each scan is classified live (`?/auditScan` → `auditScan()`). **Only the cart just
+scanned is shown** (user, 2026-09-23) — a *Just scanned* line with its verdict and an *undo* —
+so a 40-cart tub does not become a 40-row list. The counter above it is the tick-off; scans
+that still need a decision stay listed under it, newest first and ringed:
 
 | Scan | Shown as | What can be done |
 |---|---|---|
@@ -426,6 +429,7 @@ per-scan lookup only needs `manufacturing:read`.
 | `d7e0fe78` | **Find a cart** box under the board — `cartStatusLine()` + `?/cartLookup`, one line of status (§9.1) |
 | `3e7bebca` | **Audit a bucket** — scan every cart, move or discard what does not belong (§9.8) |
 | `f21ed50a` | Audit: missing members listed per cart with Keep / Write off / Take off pass, + Last audit summary (§9.8) |
+| *(next)* | Audit: only the cart just scanned is displayed; strays needing a decision stay listed (§9.8) |
 
 `npm run check` after v2: **12 errors / 438 warnings** — the same 12 pre-existing (`r2.ts`,
 `AskBimsWidget.svelte`, 8× `assembly/[sessionId]`, 2× `validation/magnetometer/[sessionId]`

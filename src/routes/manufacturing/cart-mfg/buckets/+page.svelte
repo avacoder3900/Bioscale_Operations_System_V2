@@ -182,6 +182,10 @@
 		.filter(id => auditMissingAction[id] && auditMissingAction[id] !== 'keep')
 		.map(id => ({ barcode: id, action: auditMissingAction[id] as 'discard' | 'release' })));
 	const auditRemovedMissing = $derived(auditMissingActions.length);
+	// Only the cart just scanned is shown while scanning; carts that still need a
+	// decision (wrong tub / cannot handle) stay listed, newest first.
+	const auditLast = $derived(auditScans.length > 0 ? auditScans[auditScans.length - 1] : null);
+	const auditPending = $derived([...auditScans].reverse().filter(a => a.finding !== 'member'));
 	// Where a foreign cart can go: its own open pass first, then open passes at its
 	// stage, then empty buckets (a new pass opens there at the cart's stage).
 	function auditOptions(a: AuditScan): { bucketId: string; label: string }[] {
@@ -867,45 +871,68 @@
 									{#if auditError}<p class="mt-1 text-xs text-[var(--color-tron-error)]">{auditError}</p>{/if}
 								</div>
 
-								{#if auditScans.length > 0}
-									<ul class="max-h-56 space-y-1 overflow-y-auto">
-										{#each auditScans as a (a.barcode)}
-											<li class="rounded bg-[var(--color-tron-bg-primary)] px-2 py-1">
-												<div class="flex items-center justify-between gap-2">
-													<span class="truncate font-mono text-xs text-[var(--color-tron-text)]" title={a.barcode}>{a.barcode}</span>
-													<span class="flex shrink-0 items-center gap-2">
-														{#if a.finding === 'member'}<span class="rounded border border-green-500/40 px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-green-300">belongs here</span>
-														{:else if a.finding === 'foreign'}<span class="rounded border border-[var(--color-tron-yellow)]/50 px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-[var(--color-tron-yellow)]">wrong tub</span>
-														{:else}<span class="rounded border border-red-500/40 px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-red-300">cannot handle</span>{/if}
-														<button type="button" onclick={() => { auditScans = auditScans.filter(x => x.barcode !== a.barcode); }} class="text-[10px] text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-error)]">remove</button>
-													</span>
-												</div>
-												{#if a.finding !== 'member'}<p class="mt-0.5 text-[10px] {a.finding === 'foreign' ? 'text-[var(--color-tron-text-secondary)]' : 'text-red-300'}">{a.note}</p>{/if}
-												{#if a.finding === 'foreign'}
-													{@const act = auditAction[a.barcode] ?? 'move'}
-													<div class="mt-1 flex flex-wrap items-center gap-2">
-														<div class="flex gap-1">
-															<button type="button" onclick={() => { auditAction = { ...auditAction, [a.barcode]: 'move' }; }}
-																class="rounded border px-2 py-0.5 text-[10px] {act === 'move' ? 'border-[var(--color-tron-cyan)]/60 text-[var(--color-tron-cyan)]' : 'border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)]'}">Move</button>
-															<button type="button" onclick={() => { auditAction = { ...auditAction, [a.barcode]: 'discard' }; }}
-																class="rounded border px-2 py-0.5 text-[10px] {act === 'discard' ? 'border-red-500/60 text-red-300' : 'border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)]'}">Discard</button>
-														</div>
-														{#if act === 'move'}
-															{@const opts = auditOptions(a)}
-															{#if opts.length > 0}
-																<select value={auditDestFor(a)} onchange={(e) => { auditDest = { ...auditDest, [a.barcode]: (e.currentTarget as HTMLSelectElement).value }; }}
-																	class="{inputCls} flex-1 text-[10px]">
-																	{#each opts as o (o.bucketId)}<option value={o.bucketId}>{o.label}</option>{/each}
-																</select>
-															{:else}
-																<span class="text-[10px] text-[var(--color-tron-yellow)]">Nowhere to put it — mint a bucket or discard it.</span>
-															{/if}
-														{/if}
+								<!-- Just the cart that was scanned: the tick-off list is the counter above. -->
+								{#if auditLast}
+									{@const a = auditLast}
+									<div class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-2 py-1.5">
+										<div class="flex items-center justify-between gap-2">
+											<span class="min-w-0">
+												<span class="block text-[9px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Just scanned</span>
+												<span class="block truncate font-mono text-xs text-[var(--color-tron-text)]" title={a.barcode}>{a.barcode}</span>
+											</span>
+											<span class="flex shrink-0 items-center gap-2">
+												{#if a.finding === 'member'}<span class="rounded border border-green-500/40 px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-green-300">belongs here</span>
+												{:else if a.finding === 'foreign'}<span class="rounded border border-[var(--color-tron-yellow)]/50 px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-[var(--color-tron-yellow)]">wrong tub</span>
+												{:else}<span class="rounded border border-red-500/40 px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-red-300">cannot handle</span>{/if}
+												<button type="button" onclick={() => { auditScans = auditScans.slice(0, -1); }} class="text-[10px] text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-error)]" title="Undo this scan">undo</button>
+											</span>
+										</div>
+										{#if a.finding !== 'member'}<p class="mt-0.5 text-[10px] {a.finding === 'foreign' ? 'text-[var(--color-tron-text-secondary)]' : 'text-red-300'}">{a.note}</p>{/if}
+									</div>
+								{/if}
+
+								<!-- Everything that still needs the operator: never more than the strays. -->
+								{#if auditPending.length > 0}
+									<div>
+										<p class="text-[10px] uppercase tracking-wider text-[var(--color-tron-yellow)]">{auditPending.length} scan{auditPending.length === 1 ? '' : 's'} need{auditPending.length === 1 ? 's' : ''} a decision</p>
+										<ul class="mt-1 max-h-56 space-y-1 overflow-y-auto">
+											{#each auditPending as a (a.barcode)}
+												<li class="rounded bg-[var(--color-tron-bg-primary)] px-2 py-1 {a.barcode === auditLast?.barcode ? 'ring-1 ring-[var(--color-tron-cyan)]/50' : ''}">
+													<div class="flex items-center justify-between gap-2">
+														<span class="truncate font-mono text-xs text-[var(--color-tron-text)]" title={a.barcode}>{a.barcode}</span>
+														<span class="flex shrink-0 items-center gap-2">
+															{#if a.finding === 'foreign'}<span class="rounded border border-[var(--color-tron-yellow)]/50 px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-[var(--color-tron-yellow)]">wrong tub</span>
+															{:else}<span class="rounded border border-red-500/40 px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-red-300">cannot handle</span>{/if}
+															<button type="button" onclick={() => { auditScans = auditScans.filter(x => x.barcode !== a.barcode); }} class="text-[10px] text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-error)]">remove</button>
+														</span>
 													</div>
-												{/if}
-											</li>
-										{/each}
-									</ul>
+													<p class="mt-0.5 text-[10px] {a.finding === 'foreign' ? 'text-[var(--color-tron-text-secondary)]' : 'text-red-300'}">{a.note}</p>
+													{#if a.finding === 'foreign'}
+														{@const act = auditAction[a.barcode] ?? 'move'}
+														<div class="mt-1 flex flex-wrap items-center gap-2">
+															<div class="flex gap-1">
+																<button type="button" onclick={() => { auditAction = { ...auditAction, [a.barcode]: 'move' }; }}
+																	class="rounded border px-2 py-0.5 text-[10px] {act === 'move' ? 'border-[var(--color-tron-cyan)]/60 text-[var(--color-tron-cyan)]' : 'border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)]'}">Move</button>
+																<button type="button" onclick={() => { auditAction = { ...auditAction, [a.barcode]: 'discard' }; }}
+																	class="rounded border px-2 py-0.5 text-[10px] {act === 'discard' ? 'border-red-500/60 text-red-300' : 'border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)]'}">Discard</button>
+															</div>
+															{#if act === 'move'}
+																{@const opts = auditOptions(a)}
+																{#if opts.length > 0}
+																	<select value={auditDestFor(a)} onchange={(e) => { auditDest = { ...auditDest, [a.barcode]: (e.currentTarget as HTMLSelectElement).value }; }}
+																		class="{inputCls} flex-1 text-[10px]">
+																		{#each opts as o (o.bucketId)}<option value={o.bucketId}>{o.label}</option>{/each}
+																	</select>
+																{:else}
+																	<span class="text-[10px] text-[var(--color-tron-yellow)]">Nowhere to put it — mint a bucket or discard it.</span>
+																{/if}
+															{/if}
+														</div>
+													{/if}
+												</li>
+											{/each}
+										</ul>
+									</div>
 								{/if}
 
 								{#if auditMissing.length > 0 && auditScans.length > 0}
