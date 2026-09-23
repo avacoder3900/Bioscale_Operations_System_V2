@@ -14030,3 +14030,11 @@ still be resolved via merge/scrap) and the bucket-log state filter. No new bucke
 quarantined. BUCKET-SYSTEM_PLAN.md: 3.6/3.7/5.1/9.1 updated; new 9.5 Master Override, 9.6
 bucket-aware State Change, 9.7 retire on the bucket page.
 npm run check: 12 errors / 438 warnings (baseline), none in touched files.
+
+Deployment: preview -- https://bioscale-operations-system-mongodb-2bvfrqg3z-brevitest.vercel.app
+  (brevitest scope; cookie-session gated, 302 to /login)
+Source: branch feat/bucket-system @ commit fdf00c8e
+Retrieve this exact code: git checkout feat/bucket-system at commit fdf00c8e
+What this deployment is for: Master Override page (9b06e601) + Quarantine category removed
+  (fdf00c8e), on top of the board restructure and bucket-aware State Change.
+Build status: success (login 200).
