@@ -13426,3 +13426,41 @@ Deployment: production — building from the GitHub push to master (Vercel dashb
 Source: branch master @ commit faeac667 (squash merge of PR #64)
 Retrieve this exact code: git checkout master at commit faeac667
 What this deployment is for: reverting all 2026-09-23 camera settings work
+
+================================================================================
+2026-09-23 — feat/station-camera-shared — shared station camera panel, measured ranges
+================================================================================
+Adds the Pi station camera menu to Post-Mortem Inspect and reworks how the sliders pick their
+bounds — the reason several appeared to stop working partway along.
+
+The ranges were guesses. Most controls fell back to 0..255, so the thumb kept travelling long after
+the camera stopped responding. Operator's bench measurements are now the fallback: brightness 0..64,
+contrast 0..64, gain 0..100, sharpness 0..6, gamma 72..500, hue -40..40.
+
+Bounds resolve in priority order: the range the agent reports for that control, else the measured
+fallback, else widened to contain the current value when it falls outside — a value the bounds
+cannot represent proves the bounds are wrong. That last rule stops a camera reporting
+EXPOSURE_ABSOLUTE (100 us units, e.g. 5000) being shown on a -13..0 log2 slider it can neither
+display nor drive. Each slider states which of the three it used, so a wrong range is visible.
+
+Controls answering -1 (V4L2 "unsupported") are listed rather than rendered: autofocus reports -1 on
+this camera, and a slider for it invites chasing something that will never move. Focus and aperture
+are set on the lens.
+
+Two rescue buttons sit above the sliders — Auto Exposure on, Auto White Balance on — because a dark
+or colour-cast feed is the state most worth being one click from, and a manual exposure left behind
+by an earlier session is exactly how a feed ends up dark.
+
+Both pages render the same component (src/lib/components/capture/StationCameraSettings.svelte) so
+the ranges live in one place. Post-mortem-inspect gained the protocol it lacked: get_camera_params
+on hello, plus camera_params and camera_param_set handlers.
+
+Files: src/lib/components/capture/StationCameraSettings.svelte (new), src/routes/capture/+page.svelte,
+src/routes/manufacturing/cart-mfg/post-mortem-inspect/+page.svelte. npm run check: 12/437 — this
+master's baseline, none in any touched file. Not exercised against a station from here; the measured
+ranges reflect one camera, and the agent's reported range still wins wherever it provides one.
+
+Deployment: production — building from the GitHub push to master (Vercel dashboard, commit below)
+Source: branch master @ commit ece1125e (squash merge of PR #65)
+Retrieve this exact code: git checkout master at commit ece1125e
+What this deployment is for: station camera panel on post-mortem-inspect + corrected slider ranges
