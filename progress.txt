@@ -14240,3 +14240,40 @@ Retrieve this exact code: git checkout feat/bucket-system at commit 77961393
 What this deployment is for: the simplified leftover screen (Merge at the bucket's last stage /
   Discard with bulk QR scan + journal).
 Build status: success (login 200).
+
+================================================================================
+2026-09-23 -- feat/bucket-system -- expandable cart list on each bucket card
+================================================================================
+User: "add an expandable list in each bucket's card showing the carts inside." Every pass card
+in the Raw / Unpressed / Pressed columns now has a <details> footer "N carts inside" that
+expands to the numbered list of member cartridge ids (scrollable past ~10; each links to
+cartridge-admin search). Card restructured to a div with the open-panel button + the details as
+siblings (not nested). Available buckets are empty by definition, so no list there.
+Check: 12 errors / 438 warnings (baseline).
+
+================================================================================
+2026-09-23 — feat/bucket-system — Find a cart: QR box under the board, one line of status
+================================================================================
+User: "Add a cart QR search below the main workflow. Just a QR code entry field and a single
+line of text reporting cart status." Below the board + rail on
+/manufacturing/cart-mfg/buckets: a "Find a cart" input (Enter or the Find button) that posts to
+the new read-only ?/cartLookup action and prints one line, e.g.
+  ABC123 · Unpressed · in bucket BKT-000123 #4 (Unpressed) · since 9/23/2026, 2:10 PM
+In Oven carts also carry their WI-01 lot; a cart whose pass has closed reads "last seen in
+bucket … , pass closed". A bucket sticker scanned there is named as a bucket instead of
+"not found", and an unknown code explains that a cart exists once it is scanned into a bucket
+at Raw. Nothing is written, no panel opens, no invalidateAll.
+Files: src/lib/server/services/bucket-service.ts (cartStatusLine(), CartStatusLine),
+src/routes/manufacturing/cart-mfg/buckets/+page.server.ts (cartLookup action,
+manufacturing:read), src/routes/manufacturing/cart-mfg/buckets/+page.svelte (state + findCart()
++ the card), BUCKET-SYSTEM_PLAN.md §9.1 + changelog.
+Check (svelte-kit sync + svelte-check direct): 12 errors / 438 warnings (baseline), none in
+touched files.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-nfyla6y1s-brevitest.vercel.app
+  (brevitest scope; cookie-session gated, 302 to /login)
+Source: branch feat/bucket-system @ commit d7e0fe78
+Retrieve this exact code: git checkout feat/bucket-system at commit d7e0fe78
+What this deployment is for: the Find a cart QR search under the board (also carries the
+  leftover-screen simplification 77961393 and the thermoseal note removal).
+Build status: success (login 200; /manufacturing/cart-mfg/buckets 302 to /login).
