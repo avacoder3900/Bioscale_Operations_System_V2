@@ -333,6 +333,14 @@ export async function standingStatus(opts?: { spawn?: boolean; actorUsername?: s
 	}
 
 	const partsReorder = await partsReorderSweep({ spawn: opts?.spawn });
+	if (opts?.spawn) {
+		// Thermoseal floor (BUCKET-SYSTEM_PLAN v2 §3.4) rides the same tick so a
+		// shelf below 2 rolls gets its card even if nobody opens the bucket board.
+		// Lazy import: thermoseal-service imports this module.
+		await import('$lib/server/services/thermoseal-service')
+			.then(({ checkFloor }) => checkFloor({}))
+			.catch((e) => console.error('[kanban/standing] thermoseal floor check failed:', e));
+	}
 	return { targets: rows, partsReorder };
 }
 

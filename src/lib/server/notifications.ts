@@ -252,7 +252,8 @@ export const notifyLowInventory = safely(async (part: {
 
 /**
  * Fired when pulling a thermoseal roll leaves fewer than the required number
- * of rolls on the shelf. Same recipient list as low inventory. Not gated by
+ * of rolls on the shelf — or when the floor check finds it already there (board
+ * load, supply sweep). Same recipient list as low inventory. Not gated by
  * shouldWarnLowInventory — the roll floor is its own rule.
  */
 export const notifyThermosealLow = safely(async (payload: {
@@ -281,7 +282,7 @@ export const notifyThermosealLow = safely(async (payload: {
 			title: 'Thermoseal Restock Needed',
 			preheader: `${payload.partNumber} is below the ${payload.minRolls}-roll floor`,
 			bodyHtml: `
-				<p>A thermoseal roll was just pulled from inventory at the press and the shelf is now below the required minimum.</p>
+				<p>Thermoseal inventory is below the required minimum${payload.pulledBy ? ' after a roll was pulled from inventory at the press' : ''}.</p>
 				<table style="border-collapse:collapse;margin:12px 0;width:100%;font-size:13px;">
 					<tr><td style="padding:4px 8px;color:#9ca3af;">Part</td><td style="padding:4px 8px;"><strong>${payload.partNumber}</strong>${payload.name ? ` — ${payload.name}` : ''}</td></tr>
 					<tr><td style="padding:4px 8px;color:#9ca3af;">Rolls on hand</td><td style="padding:4px 8px;color:#f87171;"><strong>${payload.rollsOnHand}</strong> (minimum ${payload.minRolls})</td></tr>

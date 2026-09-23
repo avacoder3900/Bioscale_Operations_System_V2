@@ -11,7 +11,7 @@ import {
 	boardData, stageCounts, resolveScan, isBucketStage, changeLog, bucketRegistry,
 	startCycle, scanCartIn, unscanCart, advanceCycle, scrapCarts, reportResidual, retireBucket
 } from '$lib/server/services/bucket-service';
-import { thermosealStatus } from '$lib/server/services/thermoseal-service';
+import { thermosealStatus, checkFloor } from '$lib/server/services/thermoseal-service';
 import type { Actions, PageServerLoad } from './$types';
 
 export const config = { maxDuration: 60 };
@@ -58,7 +58,10 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		q ? resolveScan(q) : Promise.resolve(null),
 		changeLog(150),
 		bucketRegistry(),
-		thermosealStatus().catch(() => null)
+		// Floor rule runs here too, not only on a roll pull: a shelf that is already
+		// below the minimum (receiving, physical count) gets its one restock card +
+		// email the next time anyone opens the board. Idempotent.
+		checkFloor({ user: op(locals) }).catch(() => null).then(() => thermosealStatus()).catch(() => null)
 	]);
 
 	return {
