@@ -14277,3 +14277,10 @@ Retrieve this exact code: git checkout feat/bucket-system at commit d7e0fe78
 What this deployment is for: the Find a cart QR search under the board (also carries the
   leftover-screen simplification 77961393 and the thermoseal note removal).
 Build status: success (login 200; /manufacturing/cart-mfg/buckets 302 to /login).
+
+Deployment: preview -- https://bioscale-operations-system-mongodb-9u8sa676k-brevitest.vercel.app
+  (brevitest scope; cookie-session gated, 302 to /login)
+Source: branch feat/bucket-system @ commit 940d54be
+Retrieve this exact code: git checkout feat/bucket-system at commit 940d54be
+What this deployment is for: expandable "N carts inside" list on each pass card.
+Build status: success (login 200).
