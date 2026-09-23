@@ -417,6 +417,8 @@
 	let camCaps = $state<Record<string, any>>({});
 	let camValues = $state<Record<string, any>>({});
 	let camApplyError = $state<string | null>(null);
+	/** False when the browser has no getCapabilities at all (Firefox, Safari). */
+	let capsSupported = $state(true);
 
 	/** Numeric range capability, e.g. { min, max, step }. */
 	function isRange(c: any): boolean {
@@ -471,7 +473,8 @@
 			return;
 		}
 		try {
-			camCaps = typeof track.getCapabilities === 'function' ? { ...track.getCapabilities() } : {};
+			capsSupported = typeof track.getCapabilities === 'function';
+			camCaps = capsSupported ? { ...track.getCapabilities() } : {};
 			camValues = typeof track.getSettings === 'function' ? { ...track.getSettings() } : {};
 		} catch (e) {
 			// Firefox has no getCapabilities; the panel then reports nothing tunable
@@ -1296,38 +1299,50 @@
 										{/if}
 									</div>
 								{/each}
-
-								<!-- Sits in the grid so an odd number of sliders leaves no gap. -->
-								<div class="flex items-end">
-									<button
-										type="button"
-										onclick={resetCameraTuning}
-										class="w-full rounded border border-[var(--color-tron-cyan)] px-3 py-2 text-xs font-bold text-[var(--color-tron-cyan)] hover:bg-[rgba(0,255,255,0.1)]"
-									>
-										Reset all to defaults
-									</button>
-								</div>
 							</div>
 						{/if}
 
-						<!-- What the camera reported, adjustable or not. This is the answer to
-						     "what can I change on this camera". -->
-						{#if reportedCapabilities.length > 0}
-							<details class="mt-4">
-								<summary class="cursor-pointer text-xs text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)]">
-									What this camera reported ({reportedCapabilities.length})
-								</summary>
-								<ul class="mt-2 space-y-0.5 font-mono text-[10px]">
-									{#each reportedCapabilities as c (c.key)}
-										<li class={c.tunable ? "text-[var(--color-tron-cyan)]" : "text-[var(--color-tron-text-secondary)]"}>
-											{c.tunable ? '●' : '○'} {c.key}: {c.shape}
-										</li>
-									{/each}
-								</ul>
-								<p class="mt-1 text-[10px] text-[var(--color-tron-text-secondary)]">
-									● adjustable here · ○ reported but fixed, or a format property
-								</p>
-							</details>
+						<!-- Always rendered for a local camera, including when nothing is
+						     adjustable: that is exactly the case where an operator needs to see
+						     what the camera reported and to restore the defaults. -->
+						{#if cameraSource === 'usb'}
+							<div class="mt-4 border-t border-[var(--color-tron-border)] pt-3">
+								{#if !capsSupported}
+									<p class="text-xs text-[var(--color-tron-yellow,#facc15)]">
+										This browser cannot query camera capabilities at all
+										(<span class="font-mono">getCapabilities</span> is missing). Chrome or Edge
+										are needed for camera controls; Firefox and Safari report nothing.
+									</p>
+								{:else if reportedCapabilities.length === 0}
+									<p class="text-xs text-[var(--color-tron-yellow,#facc15)]">
+										The camera returned an empty capability set — it exposes no controls to the
+										browser at all, not even resolution. That is a driver or hardware limit, not
+										something this page can work around.
+									</p>
+								{:else}
+									<p class="text-xs text-[var(--color-tron-text-secondary)]">What this camera reported:</p>
+									<ul class="mt-1 grid gap-x-4 font-mono text-[10px] sm:grid-cols-2">
+										{#each reportedCapabilities as c (c.key)}
+											<li class={c.tunable ? "text-[var(--color-tron-cyan)]" : "text-[var(--color-tron-text-secondary)]"}>
+												{c.tunable ? '●' : '○'} {c.key}: {c.shape}
+											</li>
+										{/each}
+									</ul>
+									<p class="mt-1 text-[10px] text-[var(--color-tron-text-secondary)]">
+										● adjustable here · ○ reported but fixed, or a format property.
+										No exposure entry means this camera does not offer exposure control to the
+										browser — nothing on this page can change it.
+									</p>
+								{/if}
+
+								<button
+									type="button"
+									onclick={resetCameraTuning}
+									class="mt-3 rounded border border-[var(--color-tron-cyan)] px-3 py-1.5 text-xs font-bold text-[var(--color-tron-cyan)] hover:bg-[rgba(0,255,255,0.1)]"
+								>
+									Reset all to defaults
+								</button>
+							</div>
 						{/if}
 
 						{#if camApplyError}
