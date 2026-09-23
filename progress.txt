@@ -13288,5 +13288,6 @@ next roll comes from. Load computes thermoseal capacity in CARTRIDGES (open-roll
 rolls on shelf x 1733) so "Can Make" is no longer capped at the roll count; the card shows
 open-roll metres and rolls on shelf vs the 2-roll floor; withdrawal summary shows cm.
 Restock notifications (kanban card + email) are behind the development toggle, default OFF.
-npm run check: 13 errors / 437 warnings on this branch = master's own baseline (the 13th is
-opentron-control/settings minOvenTimeMin typing, pre-existing on master); none in touched files.
+npm run check: 12 errors / 437 warnings on this branch = master's own baseline (an earlier 13th
+was a stale generated type before svelte-kit sync); none in touched files.
+PR #60 opened: https://github.com/avacoder3900/Bioscale_Operations_System_V2/pull/60 (hotfix -> master).
