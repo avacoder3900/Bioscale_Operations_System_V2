@@ -13464,3 +13464,37 @@ Deployment: production — building from the GitHub push to master (Vercel dashb
 Source: branch master @ commit ece1125e (squash merge of PR #65)
 Retrieve this exact code: git checkout master at commit ece1125e
 What this deployment is for: station camera panel on post-mortem-inspect + corrected slider ranges
+
+================================================================================
+2026-09-23 — fix/camera-exposure-sequencing — typed exposure entry, write sequencing, report
+================================================================================
+Exposure stays pinned at 1 on the station camera. Three changes: two aimed at making it settable,
+one at showing where the refusal happens when it is not.
+
+Exposure gets a number box beside the slider. The values worth using are specific — 333 is four
+whole 8.333 ms flicker cycles — and awkward to hit by dragging. The box deliberately accepts values
+outside the slider bounds and lets the camera decide, since those bounds are a guess on a camera
+that reports no range of its own.
+
+Writes to exposure are sequenced. Each slider previously fired an independent set_camera_param with
+no ordering, so an exposure write could land while the camera was still in auto-exposure and be
+discarded without trace. Dragging or typing exposure now re-asserts auto_exposure 1 first and sends
+the value 150 ms later. Harmless when it is already manual.
+
+Adds a collapsible report of exactly what the station sent: every control with its value and the
+range the agent reported, or "(none reported)". That separates two failures which look identical
+from the page — an agent that never queried a range for exposure, and a camera actively refusing the
+write. Both are station-side.
+
+File: src/lib/components/capture/StationCameraSettings.svelte. npm run check: 12/437 — this master's
+baseline, none in the touched file.
+
+STANDING UNKNOWN: exposure has never been observed changing on this camera. power_line_frequency did
+not appear in the operator's control list, so it exposes no V4L2 anti-flicker either; exposure in
+whole flicker cycles is the remaining route for the strobing. Whether the write is refused by the
+agent or the driver cannot be determined from this repo — agent.py is not in it.
+
+Deployment: production — building from the GitHub push to master (Vercel dashboard, commit below)
+Source: branch master @ commit dad97833 (squash merge of PR #67)
+Retrieve this exact code: git checkout master at commit dad97833
+What this deployment is for: typed exposure entry + write sequencing + station capability report
