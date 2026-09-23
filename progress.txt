@@ -13829,3 +13829,32 @@ CUTOVER FLAG: PT-CT-112 inventoryCount is -427 right now (interim per-cart debit
 a physical count IN ROLLS before the first v2 advance, or the first roll pull fires the floor
 rule against nonsense -- and previews share the kanban board + email list with production.
 npm run check: 12 errors / 438 warnings -- the same 12 pre-existing, none in touched files.
+
+================================================================================
+2026-09-23 -- feat/bucket-system -- thermoseal: floor check on board load + supply sweep; development toggle for restock notifications; PT-CT-112 physical count
+================================================================================
+Three follow-ups to the thermoseal roll system (same day):
+
+1. f681ab63 -- the 2-roll floor is evaluated on bucket-board load and in the kanban supply
+   sweep (standingStatus with spawn:true -> daily cron + Queue page), not only on a roll pull.
+   The user reported the shelf is already at 1 roll, so a pull-only trigger would never have
+   fired. checkFloor is idempotent on the open card; the email wording no longer assumes a
+   pull just happened. Lazy import in standing.ts avoids the thermoseal<->standing cycle.
+2. 90bb9a25 -- DEVELOPMENT TOGGLE, per the user: "toggle is just for sending notifications to
+   kanban and email for now. I still wanna see status on the card."
+   ManufacturingSettings.thermoseal.notificationsEnabled (default OFF) gates checkFloor's
+   kanban card + email. Roll tracking itself (3.75 cm per cart at Unpressed, roll pulls, the
+   board gauge, the floor state shown in red) always runs. Admin checkbox on the board's
+   Thermoseal card -> ?/thermosealToggles (manufacturing:admin, audited THERMOSEAL_TOGGLES);
+   the card carries a "restock notifications off -- development" badge while off, and the
+   below-floor line says so instead of promising a card/email. An intermediate version also
+   had a "roll tracking" switch; removed at the user's clarification before it was deployed.
+3. PT-CT-112 physical count recorded through the BIMS MCP (record_physical_count, actor
+   Samantha Wolf): -427 -> 1 roll. The -427 was the interim per-cart debit; the count is now
+   in ROLLS. Because the shelf is below the 2-roll floor, the board shows the red floor state
+   immediately; no card/email is sent while the toggle is off.
+npm run check after each: 12 errors / 438 warnings -- the same 12 pre-existing, none in
+touched files.
+NOTE on deployments: Vercel's GitHub integration had produced no preview for 3f4f49f3,
+f681ab63 or 90bb9a25 as of 16:10Z; master builds (PR #57, 16:05-16:07Z) were running at the
+time. Deployment entries follow once the integration reports one -- NOT deploying from local.

@@ -101,6 +101,7 @@ PT-CT-112 is stocked in **rolls** and used by **length**:
 | Length per roll | **65 m = 6500 cm** (≈ 1733 carts) | `…thermoseal.rollLengthCm` |
 | Floor: rolls that must stay in inventory | **2** | `…thermoseal.minRollsInInventory` |
 | When consumed | **Raw → Unpressed**, members × 3.75 cm | `bucket-service.advanceCycle` → `consumeThermoseal` |
+| **Development toggle** — restock notifications | **OFF** by default | `…thermoseal.notificationsEnabled`; admin checkbox on the board's Thermoseal card |
 
 - `ThermosealRoll` (`thermoseal_rolls`) is one physical roll: `lengthCm`, `consumedCm`,
   `status` active | exhausted | retired, `lotId`, `openedBy/At`, `openedForCycleId`,
@@ -112,8 +113,10 @@ PT-CT-112 is stocked in **rolls** and used by **length**:
   PT-CT-112 lot with stock** (FIFO by the ledger).
 - A bucket larger than the roll's remainder rolls over onto the next roll (and again if needed);
   the pass records `thermoseal.segments = [{ rollId, cm }]`.
-- **Floor rule.** After every pull `checkFloor()` reads PT-CT-112 `inventoryCount` (rolls). If it
-  is below `minRollsInInventory`:
+- **Floor rule.** `checkFloor()` runs after every pull, on every bucket-board load and in the
+  kanban supply sweep (daily cron / Queue page). It reads PT-CT-112 `inventoryCount` (rolls);
+  the board always shows the below-floor state. **Only while the notifications toggle is on**,
+  a shelf below `minRollsInInventory` also gets:
   1. one **kanban restock card** is spawned through the existing supply autopilot
      (`kanban/standing.ensureThermosealRestockCard`): chore, class of service *expedite*,
      auto-committed to the ready queue, idempotent on `sourceRef thermoseal-restock:<partId>`,
@@ -128,10 +131,11 @@ PT-CT-112 is stocked in **rolls** and used by **length**:
   advance form previews "N cm comes off the open roll" and only asks for a lot when a new roll
   will be pulled.
 
-**Cutover note:** PT-CT-112 `inventoryCount` was −427 on 2026-09-23 from the interim per-cart
-debits. It must be reset by a physical count **in rolls** before the first v2 advance, otherwise
-the first pull fires the floor rule against nonsense. The part is named "Thermoseal Laser Cut
-sheet" in parts; the unit of measure should read "roll".
+**Cutover:** PT-CT-112 `inventoryCount` was −427 from the interim per-cart debits; a physical
+count of **1 roll** was recorded on 2026-09-23 (MCP `record_physical_count`, Samantha Wolf).
+The shelf is therefore already below the floor; the restock card + email stay off until the
+development toggle is switched on. The part is named "Thermoseal Laser Cut sheet" in parts; the
+unit of measure should read "roll".
 
 ### 3.5 Auto-release with deferred spot-check
 
@@ -311,7 +315,9 @@ sticker*. "← Return to previous page." The v1 `print-bucket-labels` page is de
 | `47a2a63d` | `voidCycle()` + *Void this pass…* |
 | `fe947207` | No debit on bucket entry; discards remove carts from inventory; yellow note |
 | `33a937a4` | Second merge of `origin/master` (magnetometer, SPU validation tracker); PR #54 opened |
-| *(this commit)* | **v2**: cart membership model, QR-only minting, shells wording, Raw → Unpressed → Pressed → In Oven, app-wide oven/cure removal, **thermoseal rolls + 2-roll floor with kanban card + email** |
+| `3f4f49f3` | **v2**: cart membership model, QR-only minting, shells wording, Raw → Unpressed → Pressed → In Oven, app-wide oven/cure removal, **thermoseal rolls + 2-roll floor with kanban card + email** |
+| `f681ab63` | Floor check on board load + supply sweep (shelf already below the floor) |
+| `90bb9a25` | Development toggle: restock notifications off by default; roll tracking always on |
 
 `npm run check` after v2: **12 errors / 438 warnings** — the same 12 pre-existing (`r2.ts`,
 `AskBimsWidget.svelte`, 8× `assembly/[sessionId]`, 2× `validation/magnetometer/[sessionId]`
@@ -342,9 +348,9 @@ negative rows of the same type, credits thermoseal length to its rolls, voids th
 (never deletes), marks its removals, frees the tub. Refused if any member went past the buckets.
 **Not reversed:** roll pulls (the roll is open), sticker assignments.
 
-**Before the first v2 advance on shared data: reset PT-CT-112 to a physical count in rolls**
-(§3.4 cutover note). The preview shares the kanban board and the email list with production —
-a test pull below the floor will create a real card and send real mail.
+PT-CT-112 was reset to 1 roll on 2026-09-23 (§3.4). The preview shares the kanban board and the
+email list with production — **switching the notifications toggle on** while the shelf is below
+the floor creates a real card and sends real mail on the next board load.
 
 ### 12.3 Decisions still needed from the floor
 
@@ -353,7 +359,8 @@ a test pull below the floor will create a real card and send real mail.
 3. Cutover — go-forward only: new shells enter buckets; material already on the floor drains
    through the legacy paths.
 4. Thermoseal constants — 3.75 cm / 65 m / floor 2 are in `ManufacturingSettings.thermoseal`
-   (no UI yet; defaults in code). Confirm `leadTimeDays` and `supplier` are filled on the
+   (no UI yet; defaults in code). **Notifications toggle is off** — turn it on when the build is
+   ready for real restock cards and mail. Confirm `leadTimeDays` and `supplier` are filled on the
    PT-CT-112 part so the restock card and email carry a real lead time.
 
 ### 12.4 Known risks
