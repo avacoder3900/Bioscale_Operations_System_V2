@@ -13944,3 +13944,10 @@ the live count once the systems are unified (PR #60). Roll pulls still write the
 against the real part; the pin is display/floor-rule only. Yellow not-synced card reworded to
 point at the pin. Spec 3.4 table updated.
 npm run check: 12 errors / 438 warnings (baseline), none in touched files.
+Deployment: preview -- https://bioscale-operations-system-mongodb-5gi1il2ib-brevitest.vercel.app
+  (brevitest scope; cookie-session gated, 302 to /login)
+Source: branch feat/bucket-system @ commit 9e71e9c9
+Retrieve this exact code: git checkout feat/bucket-system at commit 9e71e9c9
+What this deployment is for: the rolls-on-hand development pin (board holds thermoseal at 1;
+  admin control on the Thermoseal card; live count shown in the caption) + reworded not-synced card.
+Build status: success (login 200).
