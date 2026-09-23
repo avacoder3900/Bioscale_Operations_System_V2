@@ -1,6 +1,6 @@
 # Bucket System — Production Buckets, v2 (as built)
 
-**Started:** 2026-09-21 · **Last updated:** 2026-09-23 (v2 restructure + thermoseal rolls)
+**Started:** 2026-09-21 · **Last updated:** 2026-09-23 (v2 restructure + thermoseal rolls; quarantine removed; thermoseal current-stock note)
 **Branch:** `feat/bucket-system` — **PR #54 open into `master`**
 (https://github.com/avacoder3900/Bioscale_Operations_System_V2/pull/54). `origin/master` has
 been merged into this branch twice (last `33a937a4`); it sits on current production code.
@@ -131,12 +131,24 @@ PT-CT-112 is stocked in **rolls** and used by **length**:
   inventory vs. the floor, the lot the next roll would come from, and the restock state. The
   advance form previews "N cm comes off the open roll" and only asks for a lot when a new roll
   will be pulled.
+- **Current stock note (2026-09-23).** Directly above "Development settings" on that card, a
+  note states the stock *the system itself holds*: the live `PT-CT-112` `inventoryCount`
+  (`thermosealStatus().rollsOnHandLive`), the open roll's remainder (m + ≈ carts), the next
+  lot's remaining units, and **when PT-CT-112 was last physically counted**
+  (`PartDefinition.lastPhysicalCountAt`, surfaced as `ThermosealStatus.liveCountAt`). It is
+  labelled *the accurate count according to the current system*, so the pinned development
+  value on the *Rolls on hand* tile is never mistaken for the real one. When the live count is
+  negative the note says why (WI-01's per-unit withdrawals against a shelf this board has not
+  restocked — §12.4); when the pin is on it names the pinned value it is standing in for.
 
 **Cutover:** PT-CT-112 `inventoryCount` was −427 from the interim per-cart debits; a physical
 count of **1 roll** was recorded on 2026-09-23 (MCP `record_physical_count`, Samantha Wolf).
 The shelf is therefore already below the floor; the restock card + email stay off until the
 development toggle is switched on. The part is named "Thermoseal Laser Cut sheet" in parts; the
-unit of measure should read "roll".
+unit of measure should read "roll". The count has drifted negative again since — **−77 on
+2026-09-23** (last physical count 2026-09-23 16:35 UTC) — because WI-01 keeps debiting one unit
+per cart (§12.4); that live figure is what the current-stock note above "Development settings"
+reports.
 
 ### 3.5 Auto-release with deferred spot-check
 
@@ -274,7 +286,9 @@ Stage strip (Available · Raw · Unpressed · Pressed · **In Oven** (links to
 `/cartridge-admin?stage=backing`)) → 4-column board (Available / Raw / Unpressed / Pressed).
 Under **Available**: the **Mint New Bucket** card (→ `/buckets/new`, and *Replace a damaged
 sticker* → `/buckets/new#replace`). Under **Unpressed**: the yellow *thermoseal not synced* card
-and the compact **Thermoseal tile** (§3.4; admin toggles inside "Development settings"). Header
+and the compact **Thermoseal tile** (§3.4; the **current stock note** — live PT-CT-112 count,
+last physical count, open-roll remainder — sits directly above the admin toggles inside
+"Development settings"). Header
 buttons: *New bucket*, *Master override* (admin, §9.5), *WI-01 →*. Rail (start, scan-in box with
 mis-scan, advance with discards, scrap by scan, residual by scan, retire) → expandable **change log** (lot, move,
 who, discards, thermoseal note) → **bucket log** (every bucket incl. retired). `?stage=` focuses
@@ -287,7 +301,9 @@ thermoseal cm, ledger rows, *Replace sticker* link, *Void this pass…* (admin).
 
 ### 9.3 Summary views (read-only, deep-link to the board)
 
-- `/cartridge-admin` strip: Available · Raw · Unpressed · Pressed · **In Oven** (filters the page).
+- `/cartridge-admin` strip: Raw · Unpressed · Pressed · **In Oven** (filters the page). The
+  *Available* tile was removed 2026-09-23 (user: report only the four production stages); the
+  board's own strip (§9.1) still counts Available buckets.
 - `/manufacturing/cart-mfg` **Production Buckets** card beneath the robot grid, same tiles.
 - `/manufacturing/cart-mfg/pipeline?stage=bucket_raw|bucket_unpressed|bucket_pressed|backing`.
 
@@ -344,6 +360,9 @@ a bucket member from its pass. No inventory moves. Unknown barcodes are refused 
 | `3f4f49f3` | **v2**: cart membership model, QR-only minting, shells wording, Raw → Unpressed → Pressed → In Oven, app-wide oven/cure removal, **thermoseal rolls + 2-roll floor with kanban card + email** |
 | `f681ab63` | Floor check on board load + supply sweep (shelf already below the floor) |
 | `90bb9a25` | Development toggle: restock notifications off by default; roll tracking always on |
+| `c0664759` / `da0daa9f` | Board restructure (Mint card, retire, thermoseal tile) · bucket-aware State Change override (§9.6) |
+| `9b06e601` | **Master Override** page — scan a bucket, force it to any phase (§9.5) |
+| `fdf00c8e` | **Quarantine category removed** (§3.6/§3.7); `/cartridge-admin` *Available* tile dropped from the bucket strip (§9.3) |
 
 `npm run check` after v2: **12 errors / 438 warnings** — the same 12 pre-existing (`r2.ts`,
 `AskBimsWidget.svelte`, 8× `assembly/[sessionId]`, 2× `validation/magnetometer/[sessionId]`

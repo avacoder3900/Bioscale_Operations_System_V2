@@ -487,6 +487,17 @@
 							{#if ts.belowFloor}
 								<p class="mt-1 text-red-300">Below the {ts.minRolls}-roll floor — {#if !ts.config.notificationsEnabled}notifications off (development), nothing sent.{:else}{ts.openRestockTaskId ? 'restock card open on the' : 'a restock card goes to the'} <a href="/kanban" class="underline">kanban board</a> + email.{/if}</p>
 							{/if}
+							<!-- Current stock note (user, 2026-09-23): the live PT-CT-112 figure, stated as the
+							     system's own count, sits directly above the development toggles (v2 §3.4). -->
+							<div class="mt-2 rounded border border-[var(--color-tron-cyan)]/40 bg-[var(--color-tron-bg-tertiary)] px-2 py-1.5" role="note">
+								<p class="uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Current thermoseal stock</p>
+								<p class="mt-0.5 text-[var(--color-tron-text)]">
+									<span class="font-mono text-sm font-bold {ts.rollsOnHandLive < 0 ? 'text-red-300' : 'text-[var(--color-tron-cyan)]'}">{ts.rollsOnHandLive}</span> PT-CT-112 on hand{#if ts.roll}, plus <span class="font-mono">{fmtM(ts.roll.remainingCm)}</span> (≈{ts.roll.remainingCartridges} carts) left on the open roll{/if}{#if ts.nextLot}, {ts.nextLot.remaining} left in lot {ts.nextLot.lotId}{/if}.
+								</p>
+								<p class="mt-0.5 text-[var(--color-tron-text-secondary)]">
+									This is the accurate count according to the current system — the live PT-CT-112 inventory figure exactly as the system holds it right now{#if ts.liveCountAt}, last physically counted {fmtAt(ts.liveCountAt)}{/if}.{#if ts.rollsOnHandLive < 0} It is negative because production WI-01 keeps withdrawing one unit per cart against a shelf this board has not restocked (see the notice above).{/if}{#if ts.config.rollsOnHandPinned} The <em>Rolls on hand</em> tile above shows the pinned development value ({ts.rollsOnHand}) instead.{/if}
+								</p>
+							</div>
 							<!-- Development settings (admin): notifications toggle + rolls-on-hand pin -->
 							<details class="mt-2">
 								<summary class="cursor-pointer text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]">Development settings</summary>
