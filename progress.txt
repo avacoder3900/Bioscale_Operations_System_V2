@@ -13951,3 +13951,17 @@ Retrieve this exact code: git checkout feat/bucket-system at commit 9e71e9c9
 What this deployment is for: the rolls-on-hand development pin (board holds thermoseal at 1;
   admin control on the Thermoseal card; live count shown in the caption) + reworded not-synced card.
 Build status: success (login 200).
+
+================================================================================
+2026-09-23 -- feat/bucket-system -- board: Mint New Bucket card, inventory note removed, retire on bucket page, compact thermoseal under Unpressed
+================================================================================
+User additions: (1) "Mint New Bucket" card beneath the Available column: scan-one-QR blurb,
+"Mint new bucket" button -> /buckets/new and "Replace a damaged sticker" -> /buckets/new#replace
+(the replace form got id="replace"). (2) The "Inventory is not Debited Until Carts are Scanned
+in" yellow note is removed. (3) "Retire bucket..." on the bucket history page ([bucketId]):
+admin-only (reuses canVoid), hidden while in_use, reason required, ?/retire action calling
+retireBucket(); success banner; nothing deleted. (4) Thermoseal card shrunk to a compact tile
+and moved UNDER the Unpressed column (where it is consumed), with the yellow not-synced warning
+directly above it; the admin toggles (notifications, rolls-on-hand pin) fold into a
+"Development settings" <details>. The advance-result banner stays above the board.
+npm run check: 12 errors / 438 warnings (baseline), none in touched files.

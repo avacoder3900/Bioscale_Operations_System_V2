@@ -319,12 +319,6 @@
 		</div>
 	</div>
 
-	<!-- Inventory rule (BUCKET-SYSTEM_PLAN v2 §3.3 / §8) -->
-	<div class="rounded-lg border border-[var(--color-tron-yellow)]/60 bg-[var(--color-tron-yellow)]/10 px-4 py-2.5 text-sm font-semibold text-[var(--color-tron-yellow)]" role="note">
-		⚠ Inventory is not Debited Until Carts are Scanned in
-		<span class="ml-1 font-normal text-[var(--color-tron-yellow)]/80">— each cart scanned into a bucket takes one shell and one label; moving a bucket to Unpressed takes {data.thermoseal?.config.cmPerCartridge ?? 3.75} cm of thermoseal per cart off the open roll (a roll leaves inventory only when the previous one runs out); a discarded cart takes back its shell and label. WI-01 (In Oven) debits nothing.</span>
-	</div>
-
 	<!-- Stage strip -->
 	<div class="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
 		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3">
@@ -361,79 +355,6 @@
 		</div>
 	{/if}
 
-	<!-- Thermoseal counts are NOT synced with production (BUCKET-SYSTEM_PLAN v2 §3.4 / §12.4):
-	     production WI-01 still withdraws one PT-CT-112 unit per cartridge, this board counts
-	     rolls by length. User decision 2026-09-23: leave production alone for now, say so here. -->
-	<div class="rounded-lg border border-[var(--color-tron-yellow)]/60 bg-[var(--color-tron-yellow)]/10 px-4 py-2.5 text-sm font-semibold text-[var(--color-tron-yellow)]" role="note">
-		⚠ Thermoseal Inventory is Not Synced Between Systems
-		<span class="ml-1 font-normal text-[var(--color-tron-yellow)]/80">— production WI-01 (Cartridge Back) still withdraws one PT-CT-112 <em>unit</em> per cartridge scanned, while this board counts thermoseal in <em>rolls</em> consumed by length (3.75 cm per cart). The "rolls in inventory" figure below is therefore <em>pinned</em> for development (see the pin control on the Thermoseal card) rather than read from the live count, until the two are unified.</span>
-	</div>
-
-	<!-- Thermoseal roll (BUCKET-SYSTEM_PLAN v2 §3.4): consumed by length at raw → unpressed -->
-	{#if data.thermoseal}
-		{@const ts = data.thermoseal}
-		{@const pct = ts.roll ? Math.max(0, Math.min(100, Math.round((ts.roll.remainingCm / ts.roll.lengthCm) * 100))) : 0}
-		<div class="rounded-lg border {ts.belowFloor ? 'border-red-500/60' : 'border-[var(--color-tron-border)]'} bg-[var(--color-tron-bg-secondary)] p-3">
-			<div class="flex flex-wrap items-center justify-between gap-2">
-				<h2 class="text-xs font-semibold uppercase tracking-widest text-[var(--color-tron-cyan)]">
-					Thermoseal (PT-CT-112)
-					{#if !ts.config.notificationsEnabled}<span class="ml-2 rounded bg-[var(--color-tron-bg-tertiary)] px-1.5 py-0.5 text-[9px] normal-case tracking-normal text-[var(--color-tron-text-secondary)]">restock notifications off — development</span>{/if}
-				</h2>
-				<span class="text-[10px] text-[var(--color-tron-text-secondary)]">{ts.config.cmPerCartridge} cm per cart · {fmtM(ts.config.rollLengthCm)} per roll · consumed at Raw → Unpressed</span>
-			</div>
-			<!-- Development toggle (admin): the restock card + email. Roll tracking itself always runs. -->
-			<form method="POST" action="?/thermosealToggles" use:enhance={enhanceBusy} class="mt-2 flex flex-wrap items-center gap-4 text-xs">
-				<label class="flex items-center gap-2 {data.canAdmin ? '' : 'opacity-60'}">
-					<input type="checkbox" name="notificationsEnabled" value="1" checked={ts.config.notificationsEnabled} disabled={!data.canAdmin || busy} class="accent-[var(--color-tron-cyan)]" />
-					<span class="text-[var(--color-tron-text)]">Restock notifications</span>
-					<span class="text-[var(--color-tron-text-secondary)]">— kanban card + email when rolls in inventory &lt; {ts.minRolls}</span>
-				</label>
-				<label class="flex items-center gap-2 {data.canAdmin ? '' : 'opacity-60'}">
-					<input type="checkbox" name="rollsOnHandPinned" value="1" checked={ts.config.rollsOnHandPinned} disabled={!data.canAdmin || busy} class="accent-[var(--color-tron-cyan)]" />
-					<span class="text-[var(--color-tron-text)]">Pin rolls on hand at</span>
-					<input type="number" name="rollsOnHandOverride" min="0" step="1" value={ts.config.rollsOnHandOverride} disabled={!data.canAdmin || busy} class="w-16 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-2 py-0.5 text-[var(--color-tron-text)]" />
-					<span class="text-[var(--color-tron-text-secondary)]">— development; live count is {ts.rollsOnHandLive}</span>
-				</label>
-				{#if data.canAdmin}<button type="submit" disabled={busy} class={btnGhost}>{busy ? 'Saving…' : 'Apply'}</button>{:else}<span class="text-[10px] text-[var(--color-tron-text-secondary)]">manufacturing:admin to change</span>{/if}
-				{#if form?.thermosealToggles?.error}<span class="text-[var(--color-tron-error)]">{form.thermosealToggles.error}</span>{/if}
-				{#if form?.thermosealToggles?.success}<span class="text-[var(--color-tron-cyan)]">Saved.</span>{/if}
-			</form>
-			<div class="mt-2 grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto_auto]">
-				<div>
-					{#if ts.roll}
-						<div class="flex items-baseline justify-between text-sm">
-							<span class="text-[var(--color-tron-text)]">Open roll <span class="font-mono text-xs text-[var(--color-tron-text-secondary)]">{ts.roll.id.slice(0, 8)}</span>{#if ts.roll.lotId} <span class="text-xs text-[var(--color-tron-text-secondary)]">· lot {ts.roll.lotId}</span>{/if}</span>
-							<span class="font-mono text-[var(--color-tron-text)]">{fmtM(ts.roll.remainingCm)} <span class="text-xs text-[var(--color-tron-text-secondary)]">left · ≈{ts.roll.remainingCartridges} carts</span></span>
-						</div>
-						<div class="mt-1 h-2 w-full overflow-hidden rounded bg-[var(--color-tron-bg-tertiary)]">
-							<div class="h-full {pct <= 10 ? 'bg-red-400' : pct <= 25 ? 'bg-[var(--color-tron-yellow)]' : 'bg-[var(--color-tron-cyan)]'}" style="width: {pct}%"></div>
-						</div>
-						<p class="mt-1 text-[10px] text-[var(--color-tron-text-secondary)]">{ts.roll.consumedCm} cm used of {ts.roll.lengthCm} cm{#if ts.roll.openedBy} · opened by {ts.roll.openedBy}{/if}{#if ts.roll.openedAt} {new Date(ts.roll.openedAt).toLocaleDateString()}{/if}</p>
-					{:else}
-						<p class="text-sm text-[var(--color-tron-text-secondary)]">No roll open — the first move to Unpressed pulls one from inventory{#if ts.nextLot} (lot {ts.nextLot.lotId}){/if}.</p>
-					{/if}
-				</div>
-				<div class="rounded border {ts.belowFloor ? 'border-red-500/60 bg-red-900/20' : 'border-[var(--color-tron-border)] bg-[var(--color-tron-surface)]'} px-3 py-2 text-center">
-					<p class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Rolls in inventory</p>
-					<p class="text-2xl font-bold {ts.belowFloor ? 'text-red-300' : 'text-[var(--color-tron-text)]'}">{ts.rollsOnHand}</p>
-					<p class="text-[10px] text-[var(--color-tron-text-secondary)]">minimum {ts.minRolls}{#if ts.config.rollsOnHandPinned} · <span title="Development pin — the live PT-CT-112 count is {ts.rollsOnHandLive}">pinned</span>{/if}</p>
-				</div>
-				<div class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] px-3 py-2 text-center">
-					<p class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Next roll from</p>
-					<p class="font-mono text-sm text-[var(--color-tron-text)]">{ts.nextLot?.lotId ?? '—'}</p>
-					<p class="text-[10px] text-[var(--color-tron-text-secondary)]">{ts.nextLot ? `${ts.nextLot.remaining} left in lot` : 'no lot with stock'}</p>
-				</div>
-			</div>
-			{#if ts.belowFloor}
-				<p class="mt-2 text-xs text-red-300">
-					Below the {ts.minRolls}-roll floor —
-					{#if !ts.config.notificationsEnabled}restock notifications are switched off (development), so no card or email is sent.
-					{:else}{ts.openRestockTaskId ? 'a restock card is open on the' : 'a restock card will be added to the'} <a href="/kanban" class="underline">kanban board</a> and the low-inventory list emailed. Receive new rolls to clear it.{/if}
-				</p>
-			{/if}
-		</div>
-	{/if}
-
 	<div class="grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
 		<!-- Board -->
 		<div class="grid grid-cols-1 gap-3 md:grid-cols-4">
@@ -464,8 +385,15 @@
 						</button>
 					{/each}
 					{#if data.board.available.length === 0 && data.board.quarantined.length === 0}
-						<p class="px-1 py-4 text-center text-[10px] text-[var(--color-tron-text-secondary)]">No empty buckets — <a href="/manufacturing/cart-mfg/buckets/new" class="text-[var(--color-tron-cyan)] hover:underline">create one</a></p>
+						<p class="px-1 py-4 text-center text-[10px] text-[var(--color-tron-text-secondary)]">No empty buckets.</p>
 					{/if}
+				</div>
+				<!-- Mint New Bucket (BUCKET-SYSTEM_PLAN v2 §9.4) -->
+				<div class="mt-3 rounded border border-dashed border-[var(--color-tron-cyan)]/40 bg-[var(--color-tron-surface)] p-2">
+					<p class="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-tron-cyan)]">Mint New Bucket</p>
+					<p class="mt-1 text-[10px] text-[var(--color-tron-text-secondary)]">Scan one QR sticker → a new bucket, ready under Available.</p>
+					<a href="/manufacturing/cart-mfg/buckets/new" class="mt-2 block rounded bg-[var(--color-tron-cyan)] px-2 py-1.5 text-center text-xs font-bold text-[var(--color-tron-bg-primary)] hover:opacity-90">Mint new bucket →</a>
+					<a href="/manufacturing/cart-mfg/buckets/new#replace" class="mt-1.5 block rounded border border-[var(--color-tron-border)] px-2 py-1.5 text-center text-[10px] text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-cyan)]/60 hover:text-[var(--color-tron-text)]">Replace a damaged sticker</a>
 				</div>
 			</div>
 
@@ -493,6 +421,68 @@
 							<p class="px-1 py-4 text-center text-[10px] text-[var(--color-tron-text-secondary)]">empty</p>
 						{/if}
 					</div>
+
+					{#if s.key === 'unpressed' && data.thermoseal}
+						{@const ts = data.thermoseal}
+						{@const pct = ts.roll ? Math.max(0, Math.min(100, Math.round((ts.roll.remainingCm / ts.roll.lengthCm) * 100))) : 0}
+						<!-- Thermoseal lives under Unpressed because that is where it is consumed (v2 §3.4).
+						     Yellow card first: counts are NOT synced with production WI-01 (§12.4). -->
+						<div class="mt-3 rounded border border-[var(--color-tron-yellow)]/60 bg-[var(--color-tron-yellow)]/10 px-2 py-1.5 text-[10px] text-[var(--color-tron-yellow)]" role="note">
+							<strong>⚠ Thermoseal inventory is not synced between systems</strong> — production WI-01 still withdraws one PT-CT-112 <em>unit</em> per cart; this board counts rolls by length (3.75 cm per cart). Rolls on hand is pinned for development.
+						</div>
+						<div class="mt-2 rounded border {ts.belowFloor ? 'border-red-500/60' : 'border-[var(--color-tron-border)]'} bg-[var(--color-tron-surface)] p-2 text-[10px]">
+							<div class="flex items-center justify-between">
+								<span class="font-semibold uppercase tracking-wider text-[var(--color-tron-cyan)]">Thermoseal PT-CT-112</span>
+								{#if !ts.config.notificationsEnabled}<span class="rounded bg-[var(--color-tron-bg-tertiary)] px-1 py-0.5 text-[9px] text-[var(--color-tron-text-secondary)]" title="Restock notifications are off (development)">alerts off</span>{/if}
+							</div>
+							{#if ts.roll}
+								<div class="mt-1 flex items-baseline justify-between">
+									<span class="text-[var(--color-tron-text-secondary)]">Open roll <span class="font-mono">{ts.roll.id.slice(0, 8)}</span></span>
+									<span class="font-mono text-[var(--color-tron-text)]">{fmtM(ts.roll.remainingCm)} · ≈{ts.roll.remainingCartridges} carts</span>
+								</div>
+								<div class="mt-1 h-1.5 w-full overflow-hidden rounded bg-[var(--color-tron-bg-tertiary)]">
+									<div class="h-full {pct <= 10 ? 'bg-red-400' : pct <= 25 ? 'bg-[var(--color-tron-yellow)]' : 'bg-[var(--color-tron-cyan)]'}" style="width: {pct}%"></div>
+								</div>
+							{:else}
+								<p class="mt-1 text-[var(--color-tron-text-secondary)]">No roll open — the first move to Unpressed pulls one{#if ts.nextLot} (lot {ts.nextLot.lotId}){/if}.</p>
+							{/if}
+							<div class="mt-2 grid grid-cols-2 gap-1">
+								<div class="rounded border {ts.belowFloor ? 'border-red-500/60 bg-red-900/20' : 'border-[var(--color-tron-border)]'} px-2 py-1 text-center">
+									<p class="uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Rolls on hand</p>
+									<p class="text-lg font-bold leading-tight {ts.belowFloor ? 'text-red-300' : 'text-[var(--color-tron-text)]'}">{ts.rollsOnHand}</p>
+									<p class="text-[var(--color-tron-text-secondary)]">min {ts.minRolls}{#if ts.config.rollsOnHandPinned} · <span title="Development pin — live PT-CT-112 count is {ts.rollsOnHandLive}">pinned</span>{/if}</p>
+								</div>
+								<div class="rounded border border-[var(--color-tron-border)] px-2 py-1 text-center">
+									<p class="uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Next roll from</p>
+									<p class="truncate font-mono text-[var(--color-tron-text)]" title={ts.nextLot?.lotId ?? ''}>{ts.nextLot?.lotId ?? '—'}</p>
+									<p class="text-[var(--color-tron-text-secondary)]">{ts.nextLot ? `${ts.nextLot.remaining} left in lot` : 'no lot with stock'}</p>
+								</div>
+							</div>
+							{#if ts.belowFloor}
+								<p class="mt-1 text-red-300">Below the {ts.minRolls}-roll floor — {#if !ts.config.notificationsEnabled}notifications off (development), nothing sent.{:else}{ts.openRestockTaskId ? 'restock card open on the' : 'a restock card goes to the'} <a href="/kanban" class="underline">kanban board</a> + email.{/if}</p>
+							{/if}
+							<!-- Development settings (admin): notifications toggle + rolls-on-hand pin -->
+							<details class="mt-2">
+								<summary class="cursor-pointer text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]">Development settings</summary>
+								<form method="POST" action="?/thermosealToggles" use:enhance={enhanceBusy} class="mt-1.5 space-y-1.5">
+									<label class="flex items-center gap-1.5 {data.canAdmin ? '' : 'opacity-60'}">
+										<input type="checkbox" name="notificationsEnabled" value="1" checked={ts.config.notificationsEnabled} disabled={!data.canAdmin || busy} class="accent-[var(--color-tron-cyan)]" />
+										<span class="text-[var(--color-tron-text)]">Restock notifications</span>
+									</label>
+									<label class="flex items-center gap-1.5 {data.canAdmin ? '' : 'opacity-60'}">
+										<input type="checkbox" name="rollsOnHandPinned" value="1" checked={ts.config.rollsOnHandPinned} disabled={!data.canAdmin || busy} class="accent-[var(--color-tron-cyan)]" />
+										<span class="text-[var(--color-tron-text)]">Pin rolls at</span>
+										<input type="number" name="rollsOnHandOverride" min="0" step="1" value={ts.config.rollsOnHandOverride} disabled={!data.canAdmin || busy} class="w-14 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-1.5 py-0.5 text-[var(--color-tron-text)]" />
+										<span class="text-[var(--color-tron-text-secondary)]">live {ts.rollsOnHandLive}</span>
+									</label>
+									<p class="text-[var(--color-tron-text-secondary)]">{ts.config.cmPerCartridge} cm per cart · {fmtM(ts.config.rollLengthCm)} per roll</p>
+									{#if data.canAdmin}<button type="submit" disabled={busy} class={btnGhost}>{busy ? 'Saving…' : 'Apply'}</button>{:else}<span class="text-[var(--color-tron-text-secondary)]">manufacturing:admin to change</span>{/if}
+									{#if form?.thermosealToggles?.error}<span class="text-[var(--color-tron-error)]">{form.thermosealToggles.error}</span>{/if}
+									{#if form?.thermosealToggles?.success}<span class="text-[var(--color-tron-cyan)]">Saved.</span>{/if}
+								</form>
+							</details>
+						</div>
+					{/if}
 				</div>
 			{/each}
 		</div>

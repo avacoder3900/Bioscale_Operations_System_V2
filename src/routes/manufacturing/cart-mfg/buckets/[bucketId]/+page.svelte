@@ -13,11 +13,16 @@
 		removalsMarked?: number;
 		thermosealCreditedCm?: number;
 	};
-	interface Props { data: PageData; form: { voidPass?: VoidResult } | null }
+	type RetireResult = { success?: boolean; error?: string };
+	interface Props { data: PageData; form: { voidPass?: VoidResult; retire?: RetireResult } | null }
 	let { data, form }: Props = $props();
 	let open = $state<Record<string, boolean>>({});
 	let voidingId = $state<string | null>(null);
 	let voidBusy = $state(false);
+	// Retire (kill the label) — admin, empty bucket only; reason required.
+	let retireOpen = $state(false);
+	let retireBusy = $state(false);
+	const canRetire = $derived(data.canVoid && data.bucket.state !== 'retired' && data.bucket.state !== 'in_use');
 
 	function fmt(iso: string | null): string {
 		if (!iso) return '—';
@@ -65,10 +70,36 @@
 			{#if data.bucket.retiredAt}<p class="mt-1 text-xs text-red-300">Retired {fmt(data.bucket.retiredAt)} — {data.bucket.retiredReason}</p>{/if}
 		</div>
 		<div class="flex gap-2">
+			{#if canRetire}
+				<button type="button" onclick={() => (retireOpen = !retireOpen)} class="rounded border border-red-500/40 px-3 py-1.5 text-xs text-red-300 hover:bg-red-900/20">Retire bucket…</button>
+			{:else if data.canVoid && data.bucket.state === 'in_use'}
+				<span class="self-center text-[10px] text-[var(--color-tron-text-secondary)]" title="Empty or discard the open pass first">in use — cannot retire</span>
+			{/if}
 			<a href="/manufacturing/cart-mfg/buckets?q={encodeURIComponent(data.bucket.bucketId)}" class="rounded border border-[var(--color-tron-border)] px-3 py-1.5 text-xs text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]">Open on board</a>
 			<a href="/manufacturing/cart-mfg/buckets/new?bucket={encodeURIComponent(data.bucket.bucketId)}" class="rounded border border-[var(--color-tron-border)] px-3 py-1.5 text-xs text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]">Replace sticker</a>
 		</div>
 	</div>
+
+	{#if form?.retire?.success}
+		<div class="rounded-lg border border-red-500/40 bg-red-900/15 p-3 text-xs text-red-300">
+			<strong>{data.bucket.bucketId} retired.</strong> Its label is dead; the history below is kept. It no longer appears on the board except in the bucket log.
+		</div>
+	{:else if retireOpen && canRetire}
+		<form method="POST" action="?/retire" use:enhance={() => { retireBusy = true; return async ({ update }) => { await update({ reset: false }); retireBusy = false; retireOpen = false; }; }}
+			class="rounded-lg border border-red-500/40 bg-red-900/10 p-4 space-y-3">
+			<p class="text-sm font-medium text-red-300">Retire {data.bucket.bucketId}?</p>
+			<p class="text-xs text-[var(--color-tron-text-secondary)]">The bucket leaves service and its sticker stops resolving. Nothing is deleted — every pass, ledger row and cartridge link stays. This cannot be undone from the UI.</p>
+			<label class="block">
+				<span class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Reason (required)</span>
+				<input type="text" name="reason" required placeholder="e.g. cracked tub" class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-3 py-2 text-sm text-[var(--color-tron-text)]" />
+			</label>
+			{#if form?.retire?.error}<p class="text-xs text-[var(--color-tron-error)]">{form.retire.error}</p>{/if}
+			<div class="flex gap-2">
+				<button type="submit" disabled={retireBusy} class="rounded bg-red-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-red-500 disabled:opacity-50">{retireBusy ? 'Retiring…' : 'Retire bucket'}</button>
+				<button type="button" onclick={() => (retireOpen = false)} class="rounded border border-[var(--color-tron-border)] px-3 py-1.5 text-xs text-[var(--color-tron-text-secondary)]">Cancel</button>
+			</div>
+		</form>
+	{/if}
 
 	{#if form?.voidPass?.success}
 		{@const v = form.voidPass}

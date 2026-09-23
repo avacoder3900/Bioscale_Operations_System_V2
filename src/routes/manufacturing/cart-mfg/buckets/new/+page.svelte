@@ -68,8 +68,8 @@
 			</button>
 		</form>
 
-		<!-- Replace a damaged sticker -->
-		<form
+		<!-- Replace a damaged sticker (linked from the board as #replace) -->
+		<form id="replace"
 			method="POST"
 			action="?/replace"
 			use:enhance={() => { busy = true; return async ({ update }) => { await update({ reset: false }); busy = false; replaceQr = ''; }; }}

@@ -7,7 +7,7 @@
 import { error, fail, redirect } from '@sveltejs/kit';
 import { connectDB, CartridgeRecord, LotRecord } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
-import { bucketHistory, voidCycle, BucketError, STAGE_LABELS, IN_OVEN_LABEL } from '$lib/server/services/bucket-service';
+import { bucketHistory, voidCycle, retireBucket, BucketError, STAGE_LABELS, IN_OVEN_LABEL } from '$lib/server/services/bucket-service';
 import type { Actions, PageServerLoad } from './$types';
 
 function isBucketAdmin(user: App.Locals['user']): boolean {
@@ -145,6 +145,23 @@ export const actions: Actions = {
 			return { voidPass: { success: true, ...r } };
 		} catch (e) {
 			if (e instanceof BucketError) return fail(e.status, { voidPass: { error: e.message, cycleId } });
+			throw e;
+		}
+	},
+
+	/** Retire this bucket (kill the label). Admin only; the tub must be empty. */
+	retire: async ({ request, locals, params }) => {
+		if (!locals.user) redirect(302, '/login');
+		if (!isBucketAdmin(locals.user)) {
+			return fail(403, { retire: { error: 'Retiring a bucket requires manufacturing:admin' } });
+		}
+		await connectDB();
+		const d = await request.formData();
+		try {
+			await retireBucket(params.bucketId, String(d.get('reason') ?? ''), { _id: locals.user._id, username: locals.user.username });
+			return { retire: { success: true } };
+		} catch (e) {
+			if (e instanceof BucketError) return fail(e.status, { retire: { error: e.message } });
 			throw e;
 		}
 	}
