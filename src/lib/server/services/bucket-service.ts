@@ -317,6 +317,49 @@ export async function findBucketLabels(codes: string[]): Promise<Map<string, str
 	return out;
 }
 
+export interface CartStatusLine {
+	found: boolean;
+	cartridgeId: string | null;
+	line: string;
+}
+
+/**
+ * One-line status for a scanned cart QR (board lookup box, §9.1). Read-only:
+ * the operator scans a cart and gets back where it is, nothing else. A bucket
+ * sticker scanned here is reported as such rather than "not found".
+ */
+export async function cartStatusLine(code: string): Promise<CartStatusLine> {
+	await connectDB();
+	const raw = (code ?? '').trim();
+	if (!raw) return { found: false, cartridgeId: null, line: 'Scan a cart QR.' };
+
+	const cart = await CartridgeRecord.findById(raw)
+		.select('_id status statusUpdatedOn bucket backing').lean() as any;
+	if (!cart) {
+		const bucketId = await resolveBucketId(raw);
+		if (bucketId) return { found: false, cartridgeId: null, line: `${raw} is bucket ${bucketId}, not a cart — use the bucket scan box above.` };
+		return { found: false, cartridgeId: null, line: `No cart with code ${raw}. A cart exists once it is scanned into a bucket at Raw.` };
+	}
+
+	const status = String(cart.status ?? '');
+	const label = isBucketStage(status) ? STAGE_LABELS[status as BucketStage]
+		: status === IN_OVEN_STATUS ? IN_OVEN_LABEL
+		: status || 'unknown';
+
+	const parts: string[] = [`${cart._id} · ${label}`];
+	if (cart.bucket?.cycleId) {
+		const cycle = await BucketCycle.findById(cart.bucket.cycleId).select('bucketId cycleNumber stage status').lean() as any;
+		if (cycle) {
+			const where = `bucket ${cycle.bucketId} #${cycle.cycleNumber}`;
+			parts.push(cycle.status === 'open' ? `in ${where} (${STAGE_LABELS[cycle.stage as BucketStage] ?? cycle.stage})` : `last seen in ${where}, pass closed`);
+		}
+	}
+	if (status === IN_OVEN_STATUS && cart.backing?.parentLotRecordId) parts.push(`WI-01 lot ${cart.backing.parentLotRecordId}`);
+	if (cart.statusUpdatedOn) parts.push(`since ${new Date(cart.statusUpdatedOn).toLocaleString()}`);
+
+	return { found: true, cartridgeId: cart._id, line: parts.join(' · ') };
+}
+
 export interface ScanResolution {
 	kind: 'bucket' | 'search';
 	bucket?: any;

@@ -97,6 +97,34 @@
 		return residualDest && opts.some(o => o.bucketId === residualDest) ? residualDest : (opts[0]?.bucketId ?? '');
 	}
 
+	// Cart QR search under the board: read-only, one line back (?/cartLookup).
+	let cartFind = $state('');
+	let cartFindBusy = $state(false);
+	let cartFindLine = $state('');
+	let cartFindOk = $state(true);
+	async function findCart() {
+		const code = cartFind.trim();
+		if (!code || cartFindBusy) return;
+		cartFindBusy = true;
+		try {
+			const fd = new FormData();
+			fd.set('barcode', code);
+			const res = await fetch('?/cartLookup', { method: 'POST', body: fd, headers: { 'x-sveltekit-action': 'true' } });
+			const result = deserialize(await res.text());
+			if (result.type === 'success') {
+				const r = (result.data as any)?.cartLookup;
+				cartFindOk = !!r?.found;
+				cartFindLine = r?.line ?? 'No answer from the server.';
+			} else if (result.type === 'failure') { cartFindOk = false; cartFindLine = (result.data as any)?.cartLookup?.error ?? `Error ${result.status}`; }
+			else if (result.type === 'error') { cartFindOk = false; cartFindLine = result.error?.message ?? 'Lookup failed'; }
+		} catch (e) {
+			cartFindOk = false;
+			cartFindLine = e instanceof Error ? e.message : 'Lookup failed';
+		} finally {
+			cartFindBusy = false;
+		}
+	}
+
 	// Raw-stage scan-in (fetch per cart so the box stays hot).
 	let cartScan = $state('');
 	let cartScanBusy = $state(false);
@@ -831,6 +859,23 @@
 				{/if}
 			</div>
 		</aside>
+	</div>
+
+	<!-- Cart QR search (user, 2026-09-23): scan a cart, get one line telling you
+	     where it is. Read-only — it moves nothing and opens no panel. -->
+	<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3">
+		<label for="cartFind" class="block text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Find a cart</label>
+		<div class="mt-1 flex flex-wrap items-center gap-2">
+			<input id="cartFind" type="text" bind:value={cartFind} autocomplete="off" disabled={cartFindBusy}
+				placeholder="scan a cart QR…"
+				onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); findCart(); } }}
+				class="min-h-[44px] w-full max-w-sm rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-3 py-2 font-mono text-sm text-[var(--color-tron-text)] placeholder:font-sans placeholder:text-[var(--color-tron-text-secondary)]/50 focus:border-[var(--color-tron-cyan)] focus:outline-none" />
+			<button type="button" onclick={findCart} disabled={cartFindBusy || !cartFind.trim()}
+				class="min-h-[44px] rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 px-4 text-sm font-medium text-[var(--color-tron-cyan)] disabled:opacity-50">{cartFindBusy ? 'Looking…' : 'Find'}</button>
+			{#if cartFindLine}
+				<p class="text-xs {cartFindOk ? 'text-[var(--color-tron-text)]' : 'text-[var(--color-tron-yellow)]'}">{cartFindLine}</p>
+			{/if}
+		</div>
 	</div>
 
 	<!-- Change log -->

@@ -10,7 +10,7 @@ import {
 	BucketError, BUCKET_STAGES, STAGE_LABELS, IN_OVEN_LABEL, SHELL_PART, LABEL_PART, THERMOSEAL_PART,
 	boardData, stageCounts, resolveScan, isBucketStage, changeLog, bucketRegistry,
 	startCycle, scanCartIn, unscanCart, advanceCycle, scrapCarts, reportResidual, retireBucket,
-	createBucket, replaceBucketSticker
+	createBucket, replaceBucketSticker, cartStatusLine
 } from '$lib/server/services/bucket-service';
 import { thermosealStatus, checkFloor, setThermosealToggles } from '$lib/server/services/thermoseal-service';
 import type { Actions, PageServerLoad } from './$types';
@@ -97,6 +97,19 @@ function codesFrom(raw: FormDataEntryValue | null): string[] {
 }
 
 export const actions: Actions = {
+	// Cart QR lookup under the board (§9.1): read-only, one line back. Any
+	// signed-in reader can use it — nothing is written and nothing moves.
+	cartLookup: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'manufacturing:read');
+		await connectDB();
+		const d = await request.formData();
+		return wrap('cartLookup', async () => {
+			const r = await cartStatusLine(String(d.get('barcode') ?? ''));
+			return { cartLookup: { success: true, found: r.found, line: r.line } };
+		})();
+	},
+
 	// Mint a bucket from one scanned QR, inline on the board (Mint New Bucket card).
 	mint: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');

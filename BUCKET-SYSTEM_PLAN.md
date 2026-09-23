@@ -305,6 +305,10 @@ buttons: *New bucket*, *Master override* (admin, §9.5), *WI-01 →*. Rail (star
 mis-scan, advance with discards, scrap by scan, residual by scan, retire) → expandable **change log** (lot, move,
 who, discards, thermoseal note) → **bucket log** (every bucket incl. retired). `?stage=` focuses
 a column; `?q=` resolves a scan (bucket QR, BKT id, or cartridge id → its bucket).
+Below the board + rail: **Find a cart** — scan a cart QR, get one line back (cart id · status
+label · its bucket and pass, the WI-01 lot when it is In Oven, and when the status last
+changed). Read-only, `?/cartLookup` → `cartStatusLine()`; a bucket sticker scanned there is
+named as a bucket rather than reported missing (user, 2026-09-23).
 
 ### 9.2 `/manufacturing/cart-mfg/buckets/[bucketId]`
 
