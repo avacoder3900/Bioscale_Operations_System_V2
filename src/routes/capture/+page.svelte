@@ -162,6 +162,40 @@
 		gamma: { label: 'Gamma', min: 1, max: 500 }
 	};
 
+	/**
+	 * Ask the station for its camera parameters again. The panel used to vanish
+	 * entirely when this answer never arrived — a selected station with an agent
+	 * that had not replied looked identical to no station at all.
+	 */
+	function requestCameraParams() {
+		if (!ws || ws.readyState !== WebSocket.OPEN) return;
+		try {
+			ws.send(JSON.stringify({ cmd: 'get_camera_params' }));
+		} catch {
+			// The WS banner already reports a dead socket.
+		}
+	}
+
+	/**
+	 * Back to each parameter's default. Prefers the value the agent reported
+	 * alongside the range; falls back to the midpoint of the known bounds only
+	 * where the agent offered none, since guessing a default is worse than
+	 * leaving a parameter alone.
+	 */
+	function resetCameraParams() {
+		for (const prop of cameraParamsKnown) {
+			const r = cameraParamRanges[prop];
+			const cfg = CAMERA_PARAM_LABELS[prop];
+			const fallbackLo = r?.min ?? cfg?.min;
+			const fallbackHi = r?.max ?? cfg?.max;
+			let target = r?.default;
+			if (target === undefined && fallbackLo !== undefined && fallbackHi !== undefined) {
+				target = Math.round((fallbackLo + fallbackHi) / 2);
+			}
+			if (target !== undefined) setCameraParam(prop, target);
+		}
+	}
+
 	function setCameraParam(prop: string, value: number) {
 		if (!ws || ws.readyState !== WebSocket.OPEN) return;
 		// Optimistic local update so the slider feels responsive; the WS
@@ -1432,7 +1466,7 @@
 		<!-- Remote camera tuning (Pi station only). Collapsible to keep the
 		     main capture flow uncluttered; expand when an operator needs to
 		     dial in exposure / focus / white balance for the room. -->
-		{#if selectedStationId && cameraParamsKnown.length > 0}
+		{#if selectedStationId}
 			<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)]">
 				<button
 					type="button"
@@ -1450,6 +1484,23 @@
 					</svg>
 				</button>
 				{#if cameraParamsExpanded}
+					{#if cameraParamsKnown.length === 0}
+						<div class="border-t border-[var(--color-tron-border)] p-4">
+							<p class="text-xs text-[var(--color-tron-yellow,#facc15)]">
+								The station has not reported its camera parameters yet. The agent answers
+								<span class="font-mono">get_camera_params</span> over the station socket;
+								until it does there is nothing to adjust. This panel used to disappear
+								entirely in this state, which looked like the feature was missing.
+							</p>
+							<button
+								type="button"
+								onclick={requestCameraParams}
+								class="mt-3 rounded border border-[var(--color-tron-cyan)] px-3 py-1.5 text-xs font-bold text-[var(--color-tron-cyan)] hover:bg-[rgba(0,255,255,0.1)]"
+							>
+								Ask the station again
+							</button>
+						</div>
+					{:else}
 					<div class="grid gap-3 border-t border-[var(--color-tron-border)] p-4 sm:grid-cols-2">
 						{#each cameraParamsKnown as prop (prop)}
 							{@const cfg = CAMERA_PARAM_LABELS[prop]}
@@ -1487,6 +1538,28 @@
 							</div>
 						{/each}
 					</div>
+					<div class="flex flex-wrap items-center gap-3 border-t border-[var(--color-tron-border)] px-4 py-3">
+						<button
+							type="button"
+							onclick={resetCameraParams}
+							class="rounded border border-[var(--color-tron-cyan)] px-3 py-1.5 text-xs font-bold text-[var(--color-tron-cyan)] hover:bg-[rgba(0,255,255,0.1)]"
+						>
+							Reset all to defaults
+						</button>
+						<button
+							type="button"
+							onclick={requestCameraParams}
+							class="rounded border border-[var(--color-tron-border)] px-3 py-1.5 text-xs text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)]"
+						>
+							Re-read from station
+						</button>
+						<span class="text-[10px] text-[var(--color-tron-text-secondary)]">
+							Values are applied on the station itself. A slider that snaps back was
+							refused by the camera — for exposure, set Auto Exposure to 1 (manual)
+							first, since the driver ignores an exposure value while it is on 3 (auto).
+						</span>
+					</div>
+					{/if}
 				{/if}
 			</div>
 		{/if}
