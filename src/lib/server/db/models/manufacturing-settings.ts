@@ -35,6 +35,14 @@ const manufacturingSettingsSchema = new Schema({
 		cartridgesPerLaserCutSheet: Number, sheetsPerLaserBatch: Number,
 		defaultLaserTools: String, defaultCuttingProgramLink: String
 	},
+	// Thermoseal roll tracking (BUCKET-SYSTEM_PLAN v2 §3.4). Defaults live in
+	// thermoseal-service.ts; these override when set.
+	thermoseal: {
+		notificationsEnabled: Boolean, // development toggle: kanban restock card + email only when true (default off)
+		cmPerCartridge: Number,      // default 3.75 cm (averaged for excess)
+		rollLengthCm: Number,        // default 6500 cm (65 m per roll)
+		minRollsInInventory: Number  // default 2 — restock alert when on-hand drops below
+	},
 	rejectionReasonCodes: [{ _id: false, code: String, label: String, processType: String, sortOrder: Number }],
 	temperatureAlerts: {
 		emailRecipients: [String]

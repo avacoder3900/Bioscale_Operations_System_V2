@@ -4,7 +4,10 @@
  *
  * Materials consumed per cartridge:
  *   1x Cartridge (PT-CT-104)
- *   1x Thermoseal Laser Cut Sheet (PT-CT-112)
+ *   3.75 cm of Thermoseal (PT-CT-112) — by LENGTH off the open roll, not one
+ *      unit per cartridge. PT-CT-112 inventory is counted in ROLLS (65 m); a roll
+ *      leaves inventory only when the previous one is used up
+ *      (thermoseal-service.ts; hotfix 2026-09-23 — 24 carts had taken 24 "rolls").
  *   1x Barcode (PT-CT-106)
  */
 import { redirect, fail } from '@sveltejs/kit';
@@ -14,6 +17,7 @@ import {
 	InventoryTransaction, generateId
 } from '$lib/server/db';
 import { recordTransaction, resolvePartId } from '$lib/server/services/inventory-transaction';
+import { consumeThermoseal, thermosealStatus, ThermosealError, THERMOSEAL_PART } from '$lib/server/services/thermoseal-service';
 import { nanoid } from 'nanoid';
 import type { PageServerLoad, Actions } from './$types';
 
@@ -97,6 +101,15 @@ export const load: PageServerLoad = async ({ locals }) => {
 	const partByPN = new Map((parts as any[]).map((p: any) => [p.partNumber, p]));
 	const partQty = (pn: string) => (partByPN.get(pn) as any)?.inventoryCount ?? 0;
 
+	// Thermoseal capacity in CARTRIDGES: what is left on the open roll plus the
+	// unopened rolls on the shelf. The raw PT-CT-112 count is rolls, so feeding
+	// it into "Can Make" as-is would cap the batch at the roll count.
+	const ts = await thermosealStatus().catch(() => null);
+	const perRoll = ts ? Math.floor(ts.config.rollLengthCm / ts.config.cmPerCartridge) : 0;
+	const thermosealCarts = ts
+		? (ts.roll?.remainingCartridges ?? 0) + Math.max(0, ts.rollsOnHand) * perRoll
+		: 0;
+
 	// Available input lots per consumed part, for the batch-setup dropdowns.
 	// remaining = lot.quantity − Σ(consumption/scrap tx against that lotId).
 	const consumedPNs = CONSUMED_PARTS.map((p) => p.partNumber);
@@ -156,9 +169,14 @@ export const load: PageServerLoad = async ({ locals }) => {
 		inventory: {
 			rawCartridges: { name: 'Cartridges', quantity: partQty('PT-CT-104'), unit: 'pcs' },
 			barcodeLabels: { name: 'Barcodes', quantity: partQty('PT-CT-106'), unit: 'pcs' },
-			individualBacks: { name: 'Laser Cut Backs', quantity: partQty('PT-CT-112'), unit: 'pcs' },
-			cutThermosealStrips: { name: 'Thermoseal Laser Cut Sheets', quantity: partQty('PT-CT-112'), unit: 'pcs' }
-		}
+			individualBacks: { name: 'Thermoseal rolls on shelf', quantity: partQty('PT-CT-112'), unit: 'rolls' },
+			cutThermosealStrips: { name: 'Thermoseal (roll length)', quantity: thermosealCarts, unit: 'carts' }
+		},
+		thermoseal: ts ? {
+			rollsOnHand: ts.rollsOnHand, minRolls: ts.minRolls, belowFloor: ts.belowFloor,
+			cmPerCartridge: ts.config.cmPerCartridge,
+			openRoll: ts.roll ? { remainingCm: ts.roll.remainingCm, remainingCartridges: ts.roll.remainingCartridges, lotId: ts.roll.lotId } : null
+		} : null
 	};
 };
 
@@ -552,11 +570,31 @@ export const actions: Actions = {
 		}
 
 		// Withdraw each material: good count + that part's specific scrap
+		let thermosealUsed: { cm: number; segments: { rollId: string; cm: number }[]; rollsOpened: string[] } | null = null;
 		for (const cp of CONSUMED_PARTS) {
 			const partScrap = perPartScrap[cp.partNumber] ?? 0;
 			const consumed = actualCount + partScrap;
 			const partId = await resolvePartId(cp.partNumber);
 			const inputLotBarcode = inputLotByMaterial[cp.name];
+
+			if (cp.partNumber === THERMOSEAL_PART) {
+				// By length off the open roll (good + scrapped sheets both used
+				// length). The roll pull, when one happens, is the only PT-CT-112
+				// inventory movement and is recorded against the roll, not this lot.
+				try {
+					const r = await consumeThermoseal({
+						cartridges: consumed,
+						user: { _id: locals.user._id, username: locals.user.username },
+						cycleId: lotId,
+						lotId: inputLotBarcode
+					});
+					thermosealUsed = { cm: r.cm, segments: r.segments, rollsOpened: r.rollsOpened };
+				} catch (e) {
+					if (e instanceof ThermosealError) return fail(e.status, { confirmComplete: { error: `Thermoseal: ${e.message}` } });
+					throw e;
+				}
+				continue;
+			}
 
 			await recordTransaction({
 				transactionType: 'consumption',
@@ -602,7 +640,8 @@ export const actions: Actions = {
 				scrapReason: scrapReason || undefined,
 				ovenId: ovenId || undefined,
 				notes: notes || undefined,
-				materialsConsumed: CONSUMED_PARTS.map(p => p.partNumber)
+				materialsConsumed: CONSUMED_PARTS.map(p => p.partNumber),
+				thermoseal: thermosealUsed ?? undefined
 			}
 		});
 
