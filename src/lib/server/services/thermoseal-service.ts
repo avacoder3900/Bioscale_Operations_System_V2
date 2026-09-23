@@ -154,7 +154,7 @@ export async function defaultThermosealLot(): Promise<{ lotId: string; remaining
 
 async function thermosealPart(): Promise<any | null> {
 	return PartDefinition.findOne({ partNumber: THERMOSEAL_PART })
-		.select('_id partNumber name inventoryCount lastPhysicalCountAt minimumOrderQty leadTimeDays supplier').lean();
+		.select('_id partNumber name inventoryCount minimumOrderQty leadTimeDays supplier').lean();
 }
 
 /**
@@ -360,7 +360,6 @@ export interface ThermosealStatus {
 	} | null;
 	rollsOnHand: number;
 	rollsOnHandLive: number;   // the raw PT-CT-112 count (what production is doing to it)
-	liveCountAt: string | null;  // when PT-CT-112 was last physically counted
 	minRolls: number;
 	belowFloor: boolean;
 	nextLot: { lotId: string; remaining: number } | null;
@@ -382,7 +381,6 @@ export async function thermosealStatus(): Promise<ThermosealStatus> {
 	}
 	const rollsOnHand = rollsOnHandFor(cfg, part);
 	const rollsOnHandLive = Number(part?.inventoryCount ?? 0);
-	const liveCountAt = part?.lastPhysicalCountAt ? new Date(part.lastPhysicalCountAt).toISOString() : null;
 	const remainingCm = roll ? round2(roll.lengthCm - roll.consumedCm) : 0;
 	return {
 		config: cfg,
@@ -394,7 +392,6 @@ export async function thermosealStatus(): Promise<ThermosealStatus> {
 		} : null,
 		rollsOnHand,
 		rollsOnHandLive,
-		liveCountAt,
 		minRolls: cfg.minRollsInInventory,
 		belowFloor: rollsOnHand < cfg.minRollsInInventory,
 		nextLot,
