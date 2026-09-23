@@ -14016,3 +14016,17 @@ Ledger row (advance / consume), each cart's note and the audit entry (FORCE_PHAS
 MASTER OVERRIDE + the reason. Page shows a live preview of what the scanned code resolves to
 and a table of open passes with a "use" shortcut. Spec 9.5 to be added on the next spec pass.
 npm run check: 12 errors / 438 warnings (baseline), none in touched files.
+
+================================================================================
+2026-09-23 -- feat/bucket-system -- Quarantine category removed; spec 9.5-9.7 (master override, bucket-aware State Change, retire)
+================================================================================
+User: "Remove Quarantine Category." Removed the Quarantined tile from the board's stage strip
+(strip is now 5 tiles), the Quarantined tiles on the cart-mfg dashboard and cartridge-admin
+strips, and the "Defer -- quarantine the bucket" disposition from the residual report (merge /
+scrap only; ResidualDisposition narrowed; the server refuses 'defer' with a clear message).
+Kept for legacy rows: the 'quarantined' bucket state + 'quarantine' ledger type in the models,
+the quarantined entries under Available on the board (so any legacy quarantined bucket can
+still be resolved via merge/scrap) and the bucket-log state filter. No new bucket can become
+quarantined. BUCKET-SYSTEM_PLAN.md: 3.6/3.7/5.1/9.1 updated; new 9.5 Master Override, 9.6
+bucket-aware State Change, 9.7 retire on the bucket page.
+npm run check: 12 errors / 438 warnings (baseline), none in touched files.

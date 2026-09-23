@@ -57,7 +57,7 @@ export const LABEL_PART = 'PT-CT-106';
 export const THERMOSEAL_PART = 'PT-CT-112';
 
 export type Operator = { _id: string; username: string };
-export type ResidualDisposition = 'merge' | 'scrap' | 'defer';
+export type ResidualDisposition = 'merge' | 'scrap'; // 'defer' (quarantine) removed 2026-09-23
 
 export class BucketError extends Error {
 	status: number;
@@ -865,15 +865,15 @@ export async function reportResidual(input: ResidualInput): Promise<{ bucket: an
 		await logTx({ bucketId, cycleId: prevCycle?._id ?? null, type: 'scrap', qtyBefore: qty, qtyAfter: 0, reason: journal, journal, relatedId: removalId, cartridgeIds: ids, operator: input.user });
 		found.removalId = removalId;
 		relatedId = removalId;
-	} else if (input.disposition === 'defer') {
-		const note = `${qty} cart${qty === 1 ? '' : 's'} (${ids.slice(0, 4).map(i => i.slice(0, 8)).join(', ')}${ids.length > 4 ? '…' : ''})${journal ? ` — ${journal}` : ''}`;
-		await ProductionBucket.updateOne({ _id: bucketId }, { $set: { state: 'quarantined', residualNote: note, spotCheckPending: false } });
-		await logTx({ bucketId, cycleId: prevCycle?._id ?? null, type: 'quarantine', qtyBefore: qty, qtyAfter: qty, reason: note, cartridgeIds: ids, operator: input.user });
+	} else if ((input.disposition as string) === 'defer') {
+		// Quarantine was removed as a category (user, 2026-09-23). Legacy quarantined
+		// buckets still resolve through merge / scrap; nothing new is quarantined.
+		throw new BucketError('Quarantine was removed — merge the leftover carts into a bucket or discard them.');
 	} else {
 		throw new BucketError('Unknown disposition.');
 	}
 
-	if (input.disposition !== 'defer') {
+	{
 		await ProductionBucket.updateOne({ _id: bucketId }, { $set: { state: 'available', spotCheckPending: false }, $unset: { residualNote: 1 } });
 	}
 	// Never rewrite the closed cycle's quantity (§7.1) — append what was found.

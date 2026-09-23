@@ -129,7 +129,6 @@
 	{#if data.bucketCounts}
 		{@const bc = data.bucketCounts}
 		{@const strip = [
-			{ key: 'available', label: 'Available', value: bc.available, sub: 'empty buckets', cls: 'text-[var(--color-tron-text)]' },
 			{ key: 'raw', label: 'Raw', value: bc.stages.raw.cartridges, sub: `${bc.stages.raw.buckets} bkt`, cls: 'text-[var(--color-tron-cyan)]' },
 			{ key: 'unpressed', label: 'Unpressed', value: bc.stages.unpressed.cartridges, sub: `${bc.stages.unpressed.buckets} bkt`, cls: 'text-[var(--color-tron-cyan)]' },
 			{ key: 'pressed', label: 'Pressed', value: bc.stages.pressed.cartridges, sub: `${bc.stages.pressed.buckets} bkt`, cls: 'text-[var(--color-tron-cyan)]' },
@@ -146,13 +145,6 @@
 					<span class="text-[10px] text-[var(--color-tron-text-secondary)]">{t.sub}</span>
 				</a>
 			{/each}
-			{#if bc.quarantined > 0}
-				<a href="/manufacturing/cart-mfg/buckets?stage=available" class="flex min-w-[96px] flex-col rounded border border-[var(--color-tron-yellow)]/40 bg-[var(--color-tron-surface)] px-3 py-1.5" title="Buckets with undispositioned contents">
-					<span class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Quarantined</span>
-					<span class="text-lg font-bold leading-tight text-[var(--color-tron-yellow)]">{bc.quarantined}</span>
-					<span class="text-[10px] text-[var(--color-tron-text-secondary)]">need disposition</span>
-				</a>
-			{/if}
 		</div>
 	{/if}
 

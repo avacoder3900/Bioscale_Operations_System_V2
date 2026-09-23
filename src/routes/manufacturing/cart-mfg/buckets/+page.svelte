@@ -67,7 +67,7 @@
 	let scrapList = $state<string[]>([]);
 	let residualList = $state<string[]>([]);
 	let listInput = $state('');
-	let residualDisposition = $state<'merge' | 'scrap' | 'defer' | ''>('');
+	let residualDisposition = $state<'merge' | 'scrap' | ''>('');
 
 	// Raw-stage scan-in (fetch per cart so the box stays hot).
 	let cartScan = $state('');
@@ -321,7 +321,7 @@
 	</div>
 
 	<!-- Stage strip -->
-	<div class="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+	<div class="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
 		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3">
 			<p class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Available</p>
 			<p class="mt-1 text-2xl font-bold text-[var(--color-tron-text)]">{data.counts.available}</p>
@@ -339,11 +339,6 @@
 			<p class="mt-1 text-2xl font-bold text-[var(--color-tron-purple)]">{data.counts.inOven}</p>
 			<p class="text-[10px] text-[var(--color-tron-text-secondary)]">carts · via WI-01</p>
 		</a>
-		<div class="rounded-lg border border-[var(--color-tron-yellow)]/40 bg-[var(--color-tron-surface)] p-3">
-			<p class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Quarantined</p>
-			<p class="mt-1 text-2xl font-bold text-[var(--color-tron-yellow)]">{data.counts.quarantined}</p>
-			<p class="text-[10px] text-[var(--color-tron-text-secondary)]">need disposition</p>
-		</div>
 	</div>
 
 	{#if advanceThermoseal}
@@ -718,12 +713,8 @@
 								<input type="radio" name="disposition" value="scrap" bind:group={residualDisposition} class="mt-0.5" />
 								<span><strong>Discard</strong> them — journal required</span>
 							</label>
-							<label class="flex items-start gap-2 rounded border p-2 text-xs text-[var(--color-tron-text)] {residualDisposition === 'defer' ? 'border-[var(--color-tron-yellow)]/50' : 'border-[var(--color-tron-border)]'}">
-								<input type="radio" name="disposition" value="defer" bind:group={residualDisposition} class="mt-0.5" />
-								<span><strong>Defer</strong> — quarantine the bucket until someone decides</span>
-							</label>
 						</fieldset>
-						{#if residualDisposition === 'scrap' || residualDisposition === 'defer'}
+						{#if residualDisposition === 'scrap'}
 							<label class="block">
 								<span class="text-[10px] uppercase tracking-wider {residualDisposition === 'scrap' ? 'text-red-300' : 'text-[var(--color-tron-text-secondary)]'}">{residualDisposition === 'scrap' ? 'Journal — why? (required)' : 'Note (optional)'}</span>
 								<textarea name="journal" rows="2" required={residualDisposition === 'scrap'} class={inputCls}></textarea>
@@ -731,7 +722,7 @@
 						{/if}
 						{#if form?.residual?.error}<p class="text-xs text-[var(--color-tron-error)]">{form.residual.error}</p>{/if}
 						<button type="submit" disabled={busy || residualList.length === 0 || !residualDisposition} class={residualDisposition === 'scrap' ? btnDanger : btnPrimary}>
-							{busy ? 'Saving…' : residualDisposition === 'merge' ? `Merge ${residualList.length}` : residualDisposition === 'scrap' ? `Discard ${residualList.length} & journal` : residualDisposition === 'defer' ? `Quarantine bucket (${residualList.length})` : 'Pick a disposition'}
+							{busy ? 'Saving…' : residualDisposition === 'merge' ? `Merge ${residualList.length}` : residualDisposition === 'scrap' ? `Discard ${residualList.length} & journal` : 'Pick a disposition'}
 						</button>
 						<button type="button" class={btnGhost} onclick={() => { panel = { kind: 'none' }; }}>Cancel</button>
 					</form>

@@ -146,13 +146,14 @@ When WI-01 draws the last member, the pass closes and the bucket returns to *Ava
 ### 3.6 Residual disposition — free text, no approval
 
 "No" at the spot-check (or *Report leftover carts* any time) opens a **scan-based** residual
-report: scan each leftover cart, then **merge** into an open pass at that cart's stage, **scrap**
-(journal required), or **defer** (bucket quarantined with the note). Whole report validates
-before anything is written.
+report: scan each leftover cart, then **merge** into an open pass at that cart's stage or **scrap**
+(journal required). Whole report validates before anything is written. **Quarantine ("defer")
+was removed as a category on 2026-09-23** — the enum values and the `quarantine` ledger type
+stay for legacy rows, and any bucket still marked quarantined resolves through merge / scrap.
 
 ### 3.7 Residual reporting is available anytime
 
-From the rail on any Available or Quarantined bucket.
+From the rail on any Available bucket.
 
 ### 3.8 Oven tracking and time gating removed app-wide (2026-09-23)
 
@@ -208,8 +209,7 @@ in `reason` and the first roll id in `relatedId`.
 ### 5.1 Bucket
 
 `available —start→ in_use —last member drawn / all discarded→ available (spotCheckPending)`;
-`available|in_use —residual defer→ quarantined —residual resolved→ available`;
-`available|quarantined —retire (admin)→ retired`.
+`available —retire (admin)→ retired`. (`quarantined` is legacy only — no transition into it.)
 
 ### 5.2 Pass
 
@@ -270,10 +270,13 @@ lot quantity − Σ consumption/scrap rows for that lot.
 
 ### 9.1 `/manufacturing/cart-mfg/buckets` — board, rail, thermoseal, logs
 
-Yellow inventory note → stage strip (Available · Raw · Unpressed · Pressed · **In Oven** (links
-to `/cartridge-admin?stage=backing`) · Quarantined) → **Thermoseal card** (§3.4) → 4-column
-board (Available / Raw / Unpressed / Pressed) + rail (start, scan-in box with mis-scan, advance
-with discards, scrap by scan, residual by scan, retire) → expandable **change log** (lot, move,
+Stage strip (Available · Raw · Unpressed · Pressed · **In Oven** (links to
+`/cartridge-admin?stage=backing`)) → 4-column board (Available / Raw / Unpressed / Pressed).
+Under **Available**: the **Mint New Bucket** card (→ `/buckets/new`, and *Replace a damaged
+sticker* → `/buckets/new#replace`). Under **Unpressed**: the yellow *thermoseal not synced* card
+and the compact **Thermoseal tile** (§3.4; admin toggles inside "Development settings"). Header
+buttons: *New bucket*, *Master override* (admin, §9.5), *WI-01 →*. Rail (start, scan-in box with
+mis-scan, advance with discards, scrap by scan, residual by scan, retire) → expandable **change log** (lot, move,
 who, discards, thermoseal note) → **bucket log** (every bucket incl. retired). `?stage=` focuses
 a column; `?q=` resolves a scan (bucket QR, BKT id, or cartridge id → its bucket).
 
@@ -292,6 +295,28 @@ thermoseal cm, ledger rows, *Replace sticker* link, *Void this pass…* (admin).
 
 Scan the sticker → `BKT-NNNNNN` minted with that `barcode`. `?bucket=BKT-…` presets *Replace
 sticker*. "← Return to previous page." The v1 `print-bucket-labels` page is deleted.
+
+### 9.5 `/manufacturing/cart-mfg/buckets/override` — Master Override (admin)
+
+Scan a bucket, pick **Raw / Unpressed / Pressed / In Oven**, give a reason → `forceBucketPhase()`
+puts its open pass there, **bypassing the flow**: no thermoseal consumption, no discard prompt,
+no forward-only order (backwards is allowed), and *In Oven* moves every member to `backing` with
+no WI-01 session or LotRecord and closes the pass like a consumed one. Nothing is debited or
+credited. The ledger row, each cart's note and the audit entry (`FORCE_PHASE`) all say
+**MASTER OVERRIDE** plus the reason. Live preview of what the scanned code resolves to; table of
+open passes with a *use* shortcut. Linked from the board header (red button) and `?bucket=`.
+
+### 9.6 `/manufacturing/cart-mfg/state-change` — per-cart manual override (bucket-aware)
+
+The pre-existing bulk State Change page now routes bucket stages through
+`overrideCartStage()`: a target of Raw / Unpressed / Pressed requires a **destination bucket**
+(only open passes at that stage are offered) and the cart joins that pass (`merge_in`), leaving
+its old one (`merge_out`; an emptied pass closes like a consumed one); any other target removes
+a bucket member from its pass. No inventory moves. Unknown barcodes are refused for bucket stages.
+
+### 9.7 Bucket page — retire
+
+*Retire bucket…* on `/buckets/[bucketId]` (admin, reason required, hidden while in use).
 
 ## 10. Files
 

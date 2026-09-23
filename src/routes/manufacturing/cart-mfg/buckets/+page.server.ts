@@ -203,7 +203,7 @@ export const actions: Actions = {
 		const d = await request.formData();
 		return wrap('residual', async () => {
 			const disposition = String(d.get('disposition') ?? '');
-			if (disposition !== 'merge' && disposition !== 'scrap' && disposition !== 'defer') throw new BucketError('Choose a disposition.');
+			if (disposition !== 'merge' && disposition !== 'scrap') throw new BucketError('Choose a disposition.');
 			const r = await reportResidual({
 				bucketId: String(d.get('bucketId') ?? ''),
 				barcodes: codesFrom(d.get('barcodes')),

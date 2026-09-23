@@ -271,16 +271,6 @@
 						<div class="flex items-center text-[var(--color-tron-cyan)] text-lg font-bold select-none">▶</div>
 					{/if}
 				{/each}
-				{#if bc.quarantined > 0}
-					<div class="flex items-center text-[var(--color-tron-border)] text-lg select-none">│</div>
-					<a href="/manufacturing/cart-mfg/buckets?stage=available" class="flex-1 min-w-[100px] text-center" title="Buckets with undispositioned contents">
-						<div class="rounded-lg bg-[var(--color-tron-bg-tertiary)] border border-[var(--color-tron-yellow)]/40 p-3 h-full flex flex-col justify-center">
-							<div class="text-xs font-semibold uppercase tracking-wide text-[var(--color-tron-text-secondary)]">Quarantined</div>
-							<div class="mt-1 text-xl font-bold text-[var(--color-tron-yellow)]">{bc.quarantined}</div>
-							<div class="text-xs text-[var(--color-tron-text-secondary)]">need disposition</div>
-						</div>
-					</a>
-				{/if}
 			</div>
 		</div>
 	{/if}
