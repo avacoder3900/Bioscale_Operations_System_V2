@@ -14000,3 +14000,19 @@ What this deployment is for: bucket-aware State Change (manual override): destin
   picker for bucket-stage targets; leaving a bucket stage removes the cart from its pass.
   Includes the c0664759 board restructure.
 Build status: success (login 200).
+
+================================================================================
+2026-09-23 -- feat/bucket-system -- Master Override: scan a bucket, force it to any phase
+================================================================================
+User: "Create a master system to move buckets to any phase by scanning in and bypass the
+system." New page /manufacturing/cart-mfg/buckets/override (admin; linked from the board
+header as a red "Master override" button, and ?bucket= preset). Scan the bucket sticker or
+BKT id, pick Raw / Unpressed / Pressed / In Oven, give a reason, Force move. Service
+forceBucketPhase(): open pass required; stage set directly (backwards allowed), openedQty
+fixed when leaving Raw as in advanceCycle, every member cart's status follows; In Oven sets all
+members to backing with backing.* stamped (no WI-01 session, no LotRecord) and closes the pass
+like a consumed one. NO thermoseal consumption, no discard prompt, no inventory movement.
+Ledger row (advance / consume), each cart's note and the audit entry (FORCE_PHASE) all carry
+MASTER OVERRIDE + the reason. Page shows a live preview of what the scanned code resolves to
+and a table of open passes with a "use" shortcut. Spec 9.5 to be added on the next spec pass.
+npm run check: 12 errors / 438 warnings (baseline), none in touched files.

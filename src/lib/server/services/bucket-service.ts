@@ -1237,3 +1237,92 @@ export async function overrideCartStage(input: OverrideInput): Promise<{ from: s
 	await audit('cartridge_records', barcode, 'OVERRIDE', input.user, { status: target, cycleId: dest?._id ?? null }, { status: from, cycleId: current?._id ?? null }, why || undefined);
 	return { from, to: target, fromCycle: current?._id ?? null, toCycle: dest?._id ?? null };
 }
+
+// ── master override (whole bucket) ─────────────────────────────────────────
+
+export const FORCE_TARGETS = ['raw', 'unpressed', 'pressed', 'in_oven'] as const;
+export type ForceTarget = (typeof FORCE_TARGETS)[number];
+export const FORCE_TARGET_LABELS: Record<ForceTarget, string> = { raw: 'Raw', unpressed: 'Unpressed', pressed: 'Pressed', in_oven: IN_OVEN_LABEL };
+
+export interface ForceBucketInput {
+	bucket: string;        // QR sticker or BKT id, scanned
+	target: ForceTarget;
+	reason: string;        // required
+	user: Operator;
+}
+
+export interface ForceBucketResult {
+	bucketId: string; cycleId: string; cycleNumber: number;
+	from: BucketStage; to: ForceTarget; members: number; closed: boolean;
+}
+
+/**
+ * MASTER OVERRIDE (/manufacturing/cart-mfg/buckets/override, admin only): scan
+ * a bucket and put its open pass at ANY phase, bypassing the normal flow —
+ * no thermoseal consumption, no "any carts discarded?", no forward-only order.
+ * Every member cart's status follows the bucket. `in_oven` empties the pass
+ * into 'backing' (In Oven) without a WI-01 session or LotRecord and closes it
+ * like a consumed pass. Nothing is debited or credited; the ledger row, the
+ * cart notes and the audit entry all say MASTER OVERRIDE so it can never be
+ * mistaken for production flow.
+ */
+export async function forceBucketPhase(input: ForceBucketInput): Promise<ForceBucketResult> {
+	await connectDB();
+	const reason = (input.reason ?? '').trim();
+	if (!reason) throw new BucketError('A reason is required for a master override.');
+	if (!(FORCE_TARGETS as readonly string[]).includes(input.target)) throw new BucketError(`Unknown phase "${input.target}".`);
+	const id = await resolveBucketId(input.bucket);
+	if (!id) throw new BucketError(`"${(input.bucket ?? '').trim()}" is not a known bucket.`, 404);
+	const cycle = await getOpenCycle(id);
+	if (!cycle) throw new BucketError(`Bucket ${id} has no open pass — start one on the board first.`);
+
+	const from = cycle.stage as BucketStage;
+	const ids: string[] = cycle.cartridgeIds ?? [];
+	const now = new Date();
+	const by = { _id: input.user._id, username: input.user.username };
+	const label = cycleLabel(id, cycle.cycleNumber);
+	const toLabel = FORCE_TARGET_LABELS[input.target];
+	const noteBody = `MASTER OVERRIDE ${label}: ${STAGE_LABELS[from]} → ${toLabel}: ${reason}`;
+	const cartNote = { _id: generateId(), body: noteBody, phase: 'bucket', author: by, createdAt: now };
+
+	if (input.target === 'in_oven') {
+		if (ids.length === 0) throw new BucketError(`${label} has no carts to put in the oven.`);
+		await CartridgeRecord.updateMany(
+			{ _id: { $in: ids } },
+			{
+				$set: {
+					status: IN_OVEN_STATUS, priorStatus: from, statusUpdatedOn: now.toISOString(),
+					'backing.recordedAt': now, 'backing.operator': by, 'backing.bucketCycleId': cycle._id, 'backing.bucketBarcode': id
+				},
+				$push: { notes: cartNote }
+			}
+		);
+		await logTx({
+			bucketId: id, cycleId: cycle._id, type: 'consume', fromStage: from, toStage: from,
+			qtyBefore: ids.length, qtyAfter: 0, reason: `MASTER OVERRIDE → ${toLabel} (no WI-01 session, no lot): ${reason}`,
+			cartridgeIds: ids, operator: input.user
+		});
+		await closeCycle({ ...cycle, quantity: 0 }, 'consumed', input.user);
+		await audit('bucket_cycles', cycle._id, 'FORCE_PHASE', input.user, { to: 'in_oven', members: ids.length }, { stage: from }, reason);
+		return { bucketId: id, cycleId: cycle._id, cycleNumber: cycle.cycleNumber, from, to: input.target, members: ids.length, closed: true };
+	}
+
+	const to = input.target as BucketStage;
+	if (to === from) throw new BucketError(`${label} is already at ${STAGE_LABELS[to]}.`);
+	const set: Record<string, unknown> = { stage: to, stageEnteredAt: now };
+	if (from === 'raw') set.openedQty = ids.length; // same rule as advanceCycle: fixed when leaving Raw
+	await BucketCycle.updateOne({ _id: cycle._id }, { $set: set });
+	if (ids.length) {
+		await CartridgeRecord.updateMany(
+			{ _id: { $in: ids } },
+			{ $set: { status: to, priorStatus: from, statusUpdatedOn: now.toISOString() }, $push: { notes: cartNote } }
+		);
+	}
+	await logTx({
+		bucketId: id, cycleId: cycle._id, type: 'advance', fromStage: from, toStage: to,
+		qtyBefore: ids.length, qtyAfter: ids.length, reason: `MASTER OVERRIDE (no thermoseal, no discards): ${reason}`,
+		cartridgeIds: ids, operator: input.user
+	});
+	await audit('bucket_cycles', cycle._id, 'FORCE_PHASE', input.user, { stage: to, members: ids.length }, { stage: from }, reason);
+	return { bucketId: id, cycleId: cycle._id, cycleNumber: cycle.cycleNumber, from, to: input.target, members: ids.length, closed: false };
+}
