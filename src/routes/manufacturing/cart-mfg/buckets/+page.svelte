@@ -30,6 +30,7 @@
 			mint?: ActionResult; relabel?: ActionResult;
 			start?: ActionResult; advance?: ActionResult; scrap?: ActionResult;
 			residual?: ActionResult; retire?: ActionResult; thermosealToggles?: ActionResult;
+			auditScan?: ActionResult; audit?: ActionResult;
 		} | null;
 	}
 	let { data, form }: Props = $props();
@@ -59,7 +60,7 @@
 	// The panel stores only ids + a mode; the live cycle / bucket objects are
 	// looked up from `data` with $derived, so a refetch never leaves the rail
 	// holding a stale object.
-	type CycleMode = 'view' | 'advance' | 'scrap';
+	type CycleMode = 'view' | 'advance' | 'scrap' | 'audit';
 	type Panel =
 		| { kind: 'none' }
 		| { kind: 'cycle'; cycleId: string; mode: CycleMode }
@@ -150,6 +151,85 @@
 		const id = p.bucketId;
 		return allIdleBuckets.find(b => b.bucketId === id) ?? null;
 	});
+
+	// Audit (§9.8): scan the tub empty, then say what happens to anything that
+	// does not belong. Each scan is classified server-side (?/auditScan) so the
+	// operator sees "belongs here" / "wrong tub" as they go.
+	type AuditScan = {
+		barcode: string;
+		finding: 'member' | 'foreign' | 'ineligible' | 'unknown' | 'bucket';
+		status: string | null;
+		stage: BucketStage | null;
+		homeBucketId: string | null;
+		homeCycleId: string | null;
+		homeLabel: string | null;
+		note: string;
+	};
+	let auditScans = $state<AuditScan[]>([]);
+	let auditInput = $state('');
+	let auditBusy = $state(false);
+	let auditError = $state('');
+	let auditAction = $state<Record<string, 'move' | 'discard'>>({});   // barcode → what happens to it
+	let auditDest = $state<Record<string, string>>({});                 // barcode → destination bucket
+	const auditForeign = $derived(auditScans.filter(a => a.finding === 'foreign'));
+	const auditIneligible = $derived(auditScans.filter(a => a.finding === 'ineligible' || a.finding === 'unknown' || a.finding === 'bucket'));
+	const auditPresent = $derived(auditScans.filter(a => a.finding === 'member').map(a => a.barcode));
+	const auditMissing = $derived((panelCycle?.cartridgeIds ?? []).filter(id => !auditPresent.includes(id)));
+	const auditDiscards = $derived(auditForeign.filter(a => auditAction[a.barcode] === 'discard').map(a => a.barcode));
+	// Where a foreign cart can go: its own open pass first, then open passes at its
+	// stage, then empty buckets (a new pass opens there at the cart's stage).
+	function auditOptions(a: AuditScan): { bucketId: string; label: string }[] {
+		if (!a.stage) return [];
+		const opts: { bucketId: string; label: string }[] = [];
+		if (a.homeBucketId) opts.push({ bucketId: a.homeBucketId, label: `back to ${a.homeLabel} — where it is already a member` });
+		for (const o of residualOptions(a.stage, '')) {
+			if (o.bucketId === a.homeBucketId) continue;
+			if (panelCycle && o.bucketId === panelCycle.bucketId) continue;
+			opts.push({ bucketId: o.bucketId, label: o.label });
+		}
+		return opts;
+	}
+	function auditDestFor(a: AuditScan): string {
+		const opts = auditOptions(a);
+		const picked = auditDest[a.barcode];
+		return picked && opts.some(o => o.bucketId === picked) ? picked : (opts[0]?.bucketId ?? '');
+	}
+	const auditMoves = $derived(auditForeign
+		.filter(a => (auditAction[a.barcode] ?? 'move') === 'move')
+		.map(a => ({ barcode: a.barcode, destinationBucketId: auditDestFor(a) })));
+	const auditReady = $derived(auditScans.length > 0
+		&& auditIneligible.length === 0
+		&& auditMoves.every(m => !!m.destinationBucketId));
+	function resetAudit() { auditScans = []; auditInput = ''; auditError = ''; auditAction = {}; auditDest = {}; }
+	function openAudit(c: BoardCycle) {
+		panel = { kind: 'cycle', cycleId: c.cycleId, mode: 'audit' };
+		resetLists();
+		setTimeout(() => document.getElementById('auditScan')?.focus(), 30);
+	}
+	async function scanForAudit() {
+		const code = auditInput.trim();
+		if (!code || auditBusy || panel.kind !== 'cycle') return;
+		auditInput = ''; auditError = '';
+		if (auditScans.some(a => a.barcode === code)) { auditError = `${code} was already scanned.`; return; }
+		auditBusy = true;
+		try {
+			const fd = new FormData();
+			fd.set('cycleId', panel.cycleId);
+			fd.set('barcode', code);
+			const res = await fetch('?/auditScan', { method: 'POST', body: fd, headers: { 'x-sveltekit-action': 'true' } });
+			const result = deserialize(await res.text());
+			if (result.type === 'success') {
+				const r = (result.data as any)?.auditScan?.scan as AuditScan | undefined;
+				if (r) auditScans = [...auditScans, r];
+			} else if (result.type === 'failure') auditError = (result.data as any)?.auditScan?.error ?? `Error ${result.status}`;
+			else if (result.type === 'error') auditError = result.error?.message ?? 'Scan failed';
+		} catch (e) {
+			auditError = e instanceof Error ? e.message : 'Scan failed';
+		} finally {
+			auditBusy = false;
+			setTimeout(() => document.getElementById('auditScan')?.focus(), 30);
+		}
+	}
 
 	function shortQr(barcode: string | null): string | null {
 		return barcode ? (barcode.length > 12 ? `${barcode.slice(0, 8)}…` : barcode) : null;
@@ -268,6 +348,7 @@
 		if (!form || form === handledForm) return;
 		handledForm = form;
 		if (form.advance?.success || form.scrap?.success) { if (panel.kind === 'cycle') setMode('view'); }
+		if (form.audit?.success) { resetAudit(); if (panel.kind === 'cycle') setMode('view'); }
 		if (form.start?.success && typeof form.start.cycleId === 'string') { panel = { kind: 'cycle', cycleId: form.start.cycleId, mode: 'view' }; resetLists(); focusCartScan(); }
 		if (form.residual?.success || form.retire?.success) { panel = { kind: 'none' }; resetLists(); }
 	});
@@ -515,6 +596,11 @@
 										</ul>
 									{/if}
 								</details>
+								<div class="flex justify-end border-t border-[var(--color-tron-border)]/40 px-2 py-1">
+									<button type="button" onclick={() => openAudit(c)}
+										class="text-[10px] uppercase tracking-wider text-[var(--color-tron-cyan)]/80 hover:text-[var(--color-tron-cyan)]"
+										title="Scan every cart in this bucket; anything that does not belong is moved or discarded">Audit</button>
+								</div>
 							</div>
 						{/each}
 						{#if cyclesByStage[s.key].length === 0}
@@ -735,6 +821,96 @@
 								{#if form?.scrap?.error}<p class="text-xs text-[var(--color-tron-error)]">{form.scrap.error}</p>{/if}
 								<button type="submit" disabled={busy || scrapList.length === 0} class={btnDanger}>{busy ? 'Saving…' : `Discard ${scrapList.length} & journal`}</button>
 								<button type="button" class={btnGhost} onclick={() => setMode('view')}>Cancel</button>
+							</form>
+
+						{:else if panel.mode === 'audit'}
+							<!-- Audit (§9.8): scan the tub empty. Members tick off; anything else is
+							     moved to where it belongs or discarded. Members never scanned are
+							     reported as missing and stay on the pass. -->
+							<form method="POST" action="?/audit" use:enhance={enhanceBusy} class="mt-3 space-y-3">
+								<input type="hidden" name="cycleId" value={c.cycleId} />
+								<input type="hidden" name="scanned" value={auditScans.map(a => a.barcode).join(',')} />
+								<input type="hidden" name="discards" value={auditDiscards.join(',')} />
+								<input type="hidden" name="moves" value={JSON.stringify(auditMoves)} />
+
+								<div class="rounded border border-[var(--color-tron-cyan)]/40 bg-[var(--color-tron-cyan)]/5 p-2">
+									<p class="text-xs text-[var(--color-tron-text)]">Scan <strong>every</strong> cart in this bucket.</p>
+									<p class="mt-0.5 text-[10px] text-[var(--color-tron-text-secondary)]">{auditPresent.length} of {c.cartridgeIds.length} found · {auditForeign.length} do not belong{#if auditMissing.length > 0} · {auditMissing.length} not scanned yet{/if}</p>
+								</div>
+
+								<div>
+									<label for="auditScan" class="text-[10px] uppercase tracking-wider text-[var(--color-tron-cyan)]">Scan a cart</label>
+									<input id="auditScan" type="text" bind:value={auditInput} autocomplete="off" disabled={auditBusy} placeholder="scan cart QR…"
+										onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); scanForAudit(); } }} class={scanCls} />
+									{#if auditBusy}<p class="mt-1 text-[10px] text-[var(--color-tron-text-secondary)]">Checking…</p>{/if}
+									{#if auditError}<p class="mt-1 text-xs text-[var(--color-tron-error)]">{auditError}</p>{/if}
+								</div>
+
+								{#if auditScans.length > 0}
+									<ul class="max-h-56 space-y-1 overflow-y-auto">
+										{#each auditScans as a (a.barcode)}
+											<li class="rounded bg-[var(--color-tron-bg-primary)] px-2 py-1">
+												<div class="flex items-center justify-between gap-2">
+													<span class="truncate font-mono text-xs text-[var(--color-tron-text)]" title={a.barcode}>{a.barcode}</span>
+													<span class="flex shrink-0 items-center gap-2">
+														{#if a.finding === 'member'}<span class="rounded border border-green-500/40 px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-green-300">belongs here</span>
+														{:else if a.finding === 'foreign'}<span class="rounded border border-[var(--color-tron-yellow)]/50 px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-[var(--color-tron-yellow)]">wrong tub</span>
+														{:else}<span class="rounded border border-red-500/40 px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-red-300">cannot handle</span>{/if}
+														<button type="button" onclick={() => { auditScans = auditScans.filter(x => x.barcode !== a.barcode); }} class="text-[10px] text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-error)]">remove</button>
+													</span>
+												</div>
+												{#if a.finding !== 'member'}<p class="mt-0.5 text-[10px] {a.finding === 'foreign' ? 'text-[var(--color-tron-text-secondary)]' : 'text-red-300'}">{a.note}</p>{/if}
+												{#if a.finding === 'foreign'}
+													{@const act = auditAction[a.barcode] ?? 'move'}
+													<div class="mt-1 flex flex-wrap items-center gap-2">
+														<div class="flex gap-1">
+															<button type="button" onclick={() => { auditAction = { ...auditAction, [a.barcode]: 'move' }; }}
+																class="rounded border px-2 py-0.5 text-[10px] {act === 'move' ? 'border-[var(--color-tron-cyan)]/60 text-[var(--color-tron-cyan)]' : 'border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)]'}">Move</button>
+															<button type="button" onclick={() => { auditAction = { ...auditAction, [a.barcode]: 'discard' }; }}
+																class="rounded border px-2 py-0.5 text-[10px] {act === 'discard' ? 'border-red-500/60 text-red-300' : 'border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)]'}">Discard</button>
+														</div>
+														{#if act === 'move'}
+															{@const opts = auditOptions(a)}
+															{#if opts.length > 0}
+																<select value={auditDestFor(a)} onchange={(e) => { auditDest = { ...auditDest, [a.barcode]: (e.currentTarget as HTMLSelectElement).value }; }}
+																	class="{inputCls} flex-1 text-[10px]">
+																	{#each opts as o (o.bucketId)}<option value={o.bucketId}>{o.label}</option>{/each}
+																</select>
+															{:else}
+																<span class="text-[10px] text-[var(--color-tron-yellow)]">Nowhere to put it — mint a bucket or discard it.</span>
+															{/if}
+														{/if}
+													</div>
+												{/if}
+											</li>
+										{/each}
+									</ul>
+								{/if}
+
+								{#if auditMissing.length > 0 && auditScans.length > 0}
+									<div class="rounded border border-[var(--color-tron-yellow)]/40 bg-[var(--color-tron-yellow)]/5 p-2">
+										<p class="text-[10px] uppercase tracking-wider text-[var(--color-tron-yellow)]">{auditMissing.length} member{auditMissing.length === 1 ? '' : 's'} not scanned</p>
+										<p class="mt-0.5 text-[10px] text-[var(--color-tron-text-secondary)]">They stay on the pass and the audit records them as missing. Keep scanning, or submit and chase them with <em>Discard carts…</em>.</p>
+										<ul class="mt-1 max-h-24 space-y-0.5 overflow-y-auto">
+											{#each auditMissing as id (id)}<li class="truncate font-mono text-[10px] text-[var(--color-tron-text-secondary)]" title={id}>{id}</li>{/each}
+										</ul>
+									</div>
+								{/if}
+
+								{#if auditDiscards.length > 0}
+									<label class="block">
+										<span class="text-[10px] uppercase tracking-wider text-red-300">Journal — why are {auditDiscards.length} cart{auditDiscards.length === 1 ? '' : 's'} discarded? (required)</span>
+										<textarea name="journal" rows="2" required class={inputCls}></textarea>
+									</label>
+								{/if}
+								{#if auditIneligible.length > 0}
+									<p class="text-xs text-red-300">Remove the scans the board cannot handle before submitting.</p>
+								{/if}
+								{#if form?.audit?.error}<p class="text-xs text-[var(--color-tron-error)]">{form.audit.error}</p>{/if}
+								<button type="submit" disabled={busy || !auditReady} class={btnPrimary}>
+									{busy ? 'Saving…' : auditForeign.length > 0 ? `Finish audit — ${auditMoves.length} moved, ${auditDiscards.length} discarded` : `Finish audit — ${auditPresent.length} of ${c.cartridgeIds.length} found`}
+								</button>
+								<button type="button" class={btnGhost} onclick={() => { resetAudit(); setMode('view'); }}>Cancel</button>
 							</form>
 						{/if}
 					{/if}

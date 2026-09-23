@@ -10,7 +10,7 @@ import {
 	BucketError, BUCKET_STAGES, STAGE_LABELS, IN_OVEN_LABEL, SHELL_PART, LABEL_PART, THERMOSEAL_PART,
 	boardData, stageCounts, resolveScan, isBucketStage, changeLog, bucketRegistry,
 	startCycle, scanCartIn, unscanCart, advanceCycle, scrapCarts, reportResidual, retireBucket,
-	createBucket, replaceBucketSticker, cartStatusLine
+	createBucket, replaceBucketSticker, cartStatusLine, auditScan, auditCycle
 } from '$lib/server/services/bucket-service';
 import { thermosealStatus, checkFloor, setThermosealToggles } from '$lib/server/services/thermoseal-service';
 import type { Actions, PageServerLoad } from './$types';
@@ -97,6 +97,44 @@ function codesFrom(raw: FormDataEntryValue | null): string[] {
 }
 
 export const actions: Actions = {
+	// Audit (§9.8) — one scan at a time while the operator empties the tub:
+	// is this cart a member of the pass, or does it not belong here?
+	auditScan: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'manufacturing:read');
+		await connectDB();
+		const d = await request.formData();
+		return wrap('auditScan', async () => {
+			const r = await auditScan(String(d.get('cycleId') ?? ''), String(d.get('barcode') ?? ''));
+			return { auditScan: { success: true, scan: r } };
+		})();
+	},
+
+	// Audit, submitted: members not scanned are reported, and every cart that
+	// does not belong is moved to where it does or discarded.
+	audit: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'manufacturing:write');
+		await connectDB();
+		const d = await request.formData();
+		return wrap('audit', async () => {
+			let moves: { barcode: string; destinationBucketId: string }[] = [];
+			const raw = String(d.get('moves') ?? '').trim();
+			if (raw) {
+				try { moves = JSON.parse(raw); } catch { throw new BucketError('Could not read the move list — reload the board and scan again.'); }
+			}
+			const r = await auditCycle({
+				cycleId: String(d.get('cycleId') ?? ''),
+				scanned: codesFrom(d.get('scanned')),
+				discards: codesFrom(d.get('discards')),
+				moves,
+				journal: String(d.get('journal') ?? ''),
+				user: op(locals)
+			});
+			return { audit: { success: true, result: r } };
+		})();
+	},
+
 	// Cart QR lookup under the board (§9.1): read-only, one line back. Any
 	// signed-in reader can use it — nothing is written and nothing moves.
 	cartLookup: async ({ request, locals }) => {

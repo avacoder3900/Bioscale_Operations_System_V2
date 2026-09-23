@@ -33,6 +33,28 @@ const residualFoundSchema = new Schema({
 	by: operatorRef
 }, { _id: false });
 
+// A physical audit of the tub (§9.8): every cart scanned against the pass's
+// members. Append-only — an audit never rewrites quantity; what it moved or
+// discarded is in the ledger next to it.
+const auditRunSchema = new Schema({
+	at: Date,
+	by: operatorRef,
+	scanned: { type: [String], default: [] },   // every code scanned in the tub
+	present: { type: [String], default: [] },   // members that were found
+	missing: { type: [String], default: [] },   // members that were NOT scanned (still members)
+	foreign: {
+		type: [{
+			_id: false,
+			barcode: String,
+			action: { type: String, enum: ['moved', 'discarded', 'returned'] },
+			fromCycleId: String,             // the open pass it was a member of, if any
+			destinationBucketId: String,     // 'moved'
+			destinationCycleId: String
+		}],
+		default: []
+	}
+}, { _id: false });
+
 // Count discrepancies discovered against this cycle. 'shortfall' = leftover
 // cartridges were found in the tub after the pass closed.
 const discrepancySchema = new Schema({
@@ -81,6 +103,7 @@ const bucketCycleSchema = new Schema({
 	closedWithResidual: { type: Boolean, default: false },
 	residualFound: { type: [residualFoundSchema], default: [] },
 	discrepancies: { type: [discrepancySchema], default: [] },
+	audits: { type: [auditRunSchema], default: [] },
 	openedBy: operatorRef,
 	openedAt: Date,
 	stageEnteredAt: Date, // set on create and on every advance — dwell time without replaying the ledger

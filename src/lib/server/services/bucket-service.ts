@@ -97,7 +97,7 @@ interface TxInput {
 	bucketId: string;
 	cycleId?: string | null;
 	type: 'mint' | 'relabel' | 'create' | 'scan_in' | 'unscan' | 'advance' | 'scrap' | 'consume'
-		| 'merge_in' | 'merge_out' | 'release' | 'quarantine' | 'retire' | 'void';
+		| 'merge_in' | 'merge_out' | 'release' | 'quarantine' | 'retire' | 'void' | 'audit';
 	fromStage?: string | null;
 	toStage?: string | null;
 	qtyBefore?: number;
@@ -1010,6 +1010,273 @@ export async function reportResidual(input: ResidualInput): Promise<{ bucket: an
 	}
 	await audit('production_buckets', bucketId, 'RESIDUAL', input.user, { cartridgeIds: ids, disposition: input.disposition, relatedId });
 	return { bucket: await ProductionBucket.findById(bucketId).lean(), prevCycle: prevCycle ? await BucketCycle.findById(prevCycle._id).lean() : null };
+}
+
+// ── bucket audit (§9.8) ───────────────────────────────────────────────────
+
+export interface AuditScanResult {
+	barcode: string;
+	finding: 'member' | 'foreign' | 'ineligible' | 'unknown' | 'bucket';
+	status: string | null;
+	stage: BucketStage | null;
+	homeBucketId: string | null;   // the open pass this cart is a member of, if any
+	homeCycleId: string | null;
+	homeLabel: string | null;
+	note: string;
+}
+
+/** One scan during an audit, classified before anything is written. */
+export async function auditScan(cycleId: string, barcode: string): Promise<AuditScanResult> {
+	await connectDB();
+	const code = (barcode ?? '').trim();
+	const base = { barcode: code, status: null, stage: null, homeBucketId: null, homeCycleId: null, homeLabel: null };
+	if (!code) return { ...base, finding: 'unknown', note: 'Empty scan.' };
+
+	const cycle = await BucketCycle.findById(cycleId).select('_id bucketId cycleNumber cartridgeIds').lean() as any;
+	if (!cycle) throw new BucketError('That pass no longer exists — reload the board.', 404);
+
+	const asBucket = await resolveBucketId(code);
+	if (asBucket) return { ...base, finding: 'bucket', note: `${code} is bucket ${asBucket}, not a cart.` };
+
+	const cart = await CartridgeRecord.findById(code).select('_id status').lean() as any;
+	if (!cart) return { ...base, finding: 'unknown', note: `${code} is not a known cartridge — it was never scanned into a bucket.` };
+
+	const status = String(cart.status ?? '');
+	if ((cycle.cartridgeIds ?? []).includes(code)) {
+		return { ...base, status, stage: isBucketStage(status) ? status as BucketStage : null, finding: 'member', note: `${code} belongs here.` };
+	}
+
+	const home = await BucketCycle.findOne({ status: 'open', cartridgeIds: code }).select('_id bucketId cycleNumber stage').lean() as any;
+	const homeLabel = home ? cycleLabel(home.bucketId, home.cycleNumber) : null;
+	const homeBits = { homeBucketId: home?.bucketId ?? null, homeCycleId: home?._id ?? null, homeLabel };
+
+	if (!isBucketStage(status)) {
+		return { ...base, ...homeBits, status, finding: 'ineligible',
+			note: `${code} is ${status || 'unknown'} — past the buckets. Take it out of the tub; the board will not move it.` };
+	}
+	return {
+		barcode: code, finding: 'foreign', status, stage: status as BucketStage, ...homeBits,
+		note: home
+			? `${code} is a member of ${homeLabel} (${STAGE_LABELS[home.stage as BucketStage]}) — wrong tub.`
+			: `${code} is ${STAGE_LABELS[status as BucketStage]} and is on no open pass.`
+	};
+}
+
+export interface AuditCycleInput {
+	cycleId: string;
+	scanned: string[];                                            // every code scanned in the tub
+	moves?: { barcode: string; destinationBucketId: string }[];    // foreign carts → where they belong
+	discards?: string[];                                          // foreign carts to scrap
+	journal?: string;                                             // required when anything is discarded
+	user: Operator;
+}
+
+export interface AuditCycleResult {
+	cycleId: string;
+	bucketId: string;
+	cycleNumber: number;
+	expected: number;
+	present: string[];
+	missing: string[];
+	moved: { barcode: string; fromCycleId: string | null; destinationBucketId: string; destinationCycleId: string; newPass: boolean; returned: boolean }[];
+	discarded: string[];
+	quantityAfter: number;
+}
+
+/**
+ * Audit an open pass: the operator scans every cart in the tub, and each code
+ * that is not a member is either moved to where it belongs or discarded.
+ * Members that were never scanned are reported as missing and stay members —
+ * an audit never silently rewrites the count (§7.1). Everything is validated
+ * before the first write.
+ */
+export async function auditCycle(input: AuditCycleInput): Promise<AuditCycleResult> {
+	await connectDB();
+	const cycle = await BucketCycle.findById(input.cycleId).lean() as any;
+	if (!cycle) throw new BucketError('Pass not found.', 404);
+	if (cycle.status !== 'open') throw new BucketError('That pass is closed — audit an open pass.');
+
+	const scanned = cleanCodes(input.scanned);
+	const members: string[] = cycle.cartridgeIds ?? [];
+	const present = members.filter(id => scanned.includes(id));
+	const missing = members.filter(id => !scanned.includes(id));
+	const foreign = scanned.filter(id => !members.includes(id));
+
+	const discards = cleanCodes(input.discards).filter(id => foreign.includes(id));
+	const moves = (input.moves ?? []).filter(m => foreign.includes(m.barcode) && !discards.includes(m.barcode));
+	const undecided = foreign.filter(id => !discards.includes(id) && !moves.some(m => m.barcode === id));
+	if (undecided.length) throw new BucketError(`Say what happens to: ${undecided.join(', ')} — move each one to a bucket or discard it.`);
+
+	const journal = (input.journal ?? '').trim();
+	if (discards.length && !journal) throw new BucketError('A journal entry describing why these were discarded is required.');
+
+	// Validate every foreign cart before writing anything.
+	const carts = foreign.length
+		? await CartridgeRecord.find({ _id: { $in: foreign } }).select('_id status').lean() as any[]
+		: [];
+	const byId = new Map<string, any>(carts.map(c => [c._id, c]));
+	const unknown = foreign.filter(id => !byId.has(id));
+	if (unknown.length) throw new BucketError(`Not known cartridges: ${unknown.join(', ')}`);
+	const tooFar = carts.filter(c => !isBucketStage(c.status));
+	if (tooFar.length) throw new BucketError(`Past the buckets, so the board will not move them: ${tooFar.map(c => `${c._id} (${c.status})`).join(', ')} — take them out of the tub.`);
+
+	// Where each foreign cart is a member today (so it can be pulled out of that pass).
+	const homes = foreign.length
+		? await BucketCycle.find({ status: 'open', cartridgeIds: { $in: foreign } }).select('_id bucketId cycleNumber stage quantity cartridgeIds').lean() as any[]
+		: [];
+	const homeOf = new Map<string, any>();
+	for (const h of homes) for (const id of (h.cartridgeIds ?? [])) if (foreign.includes(id)) homeOf.set(id, h);
+
+	// Resolve + check every destination first.
+	type Plan = { destId: string; ids: string[]; stage: BucketStage; open: any | null; bucket: any };
+	const groups = new Map<string, string[]>();
+	for (const m of moves) {
+		const destId = await resolveBucketId((m.destinationBucketId ?? '').trim());
+		if (!destId) throw new BucketError(`"${m.destinationBucketId}" is not a known bucket.`, 404);
+		groups.set(destId, [...(groups.get(destId) ?? []), m.barcode]);
+	}
+	const plans: Plan[] = [];
+	for (const [destId, ids] of groups) {
+		const stages = new Set(ids.map(id => byId.get(id).status as BucketStage));
+		if (stages.size > 1) throw new BucketError(`Carts going to ${destId} are at different stages (${[...stages].map(st => STAGE_LABELS[st]).join(', ')}) — one destination per stage.`);
+		const stage = [...stages][0];
+		const bucket = await ProductionBucket.findById(destId).lean() as any;
+		if (!bucket) throw new BucketError(`Bucket ${destId} not found.`, 404);
+		if (bucket.state === 'retired') throw new BucketError(`Bucket ${destId} is retired.`);
+		const open = await getOpenCycle(destId);
+		if (open) {
+			if (open.stage !== stage) throw new BucketError(`${cycleLabel(destId, open.cycleNumber)} is at ${STAGE_LABELS[open.stage as BucketStage]}, but those carts are ${STAGE_LABELS[stage]}.`);
+		} else if (bucket.state !== 'available') {
+			throw new BucketError(`Bucket ${destId} is ${bucket.state} and has no open pass.`);
+		}
+		plans.push({ destId, ids, stage, open, bucket });
+	}
+
+	const now = new Date();
+	const by = { _id: input.user._id, username: input.user.username };
+	const auditNote = `audit of ${cycleLabel(cycle.bucketId, cycle.cycleNumber)}`;
+	const moved: AuditCycleResult['moved'] = [];
+
+	for (const plan of plans) {
+		// A cart already on the destination pass is simply put back in the right tub:
+		// nothing to write but the audit trail.
+		const alreadyThere = plan.open ? plan.ids.filter(id => homeOf.get(id)?._id === plan.open._id) : [];
+		const toMove = plan.ids.filter(id => !alreadyThere.includes(id));
+		for (const id of alreadyThere) {
+			moved.push({ barcode: id, fromCycleId: plan.open._id, destinationBucketId: plan.destId, destinationCycleId: plan.open._id, newPass: false, returned: true });
+		}
+		// Pull each moved cart out of the pass it is a member of today.
+		for (const id of toMove) {
+			const home = homeOf.get(id);
+			if (!home) continue;
+			const before = home.quantity ?? (home.cartridgeIds ?? []).length;
+			await BucketCycle.updateOne({ _id: home._id }, { $pull: { cartridgeIds: id }, $set: { quantity: Math.max(0, before - 1) } });
+			await logTx({ bucketId: home.bucketId, cycleId: home._id, type: 'merge_out', fromStage: home.stage, toStage: home.stage, qtyBefore: before, qtyAfter: Math.max(0, before - 1), reason: `${id} found in ${cycle.bucketId} during an audit → ${plan.destId}`, cartridgeIds: [id], operator: input.user });
+			home.quantity = Math.max(0, before - 1);
+		}
+		if (toMove.length === 0) continue;
+
+		if (plan.open) {
+			const before = plan.open.quantity ?? 0;
+			await BucketCycle.updateOne({ _id: plan.open._id }, { $addToSet: { cartridgeIds: { $each: toMove } }, $set: { quantity: before + toMove.length } });
+			await CartridgeRecord.updateMany(
+				{ _id: { $in: toMove } },
+				{ $set: { statusUpdatedOn: now.toISOString(), 'bucket.bucketId': plan.destId, 'bucket.cycleId': plan.open._id, 'backing.bucketCycleId': plan.open._id, 'backing.bucketBarcode': plan.destId } }
+			);
+			await logTx({ bucketId: plan.destId, cycleId: plan.open._id, type: 'merge_in', fromStage: plan.stage, toStage: plan.stage, qtyBefore: before, qtyAfter: before + toMove.length, reason: `${auditNote}: ${toMove.length} cart(s) put back where they belong`, cartridgeIds: toMove, operator: input.user });
+			await audit('bucket_cycles', plan.open._id, 'AUDIT_MERGE_IN', input.user, { from: cycle.bucketId, cartridgeIds: toMove, quantity: before + toMove.length }, { quantity: before });
+			for (const id of toMove) moved.push({ barcode: id, fromCycleId: homeOf.get(id)?._id ?? null, destinationBucketId: plan.destId, destinationCycleId: plan.open._id, newPass: false, returned: false });
+		} else {
+			// Empty bucket: open a fresh pass at the carts' stage. Nothing is debited —
+			// these carts were paid for when they were first scanned in.
+			const cycleNumber = (plan.bucket.cycleCount ?? 0) + 1;
+			const newCycleId = generateId();
+			await BucketCycle.create({
+				_id: newCycleId, bucketId: plan.destId, cycleNumber, stage: plan.stage,
+				cartridgeIds: toMove, quantity: toMove.length, openedQty: toMove.length,
+				sourceLots: (cycle.sourceLots ?? []).map((l: any) => ({ partNumber: l.partNumber, lotId: l.lotId, scannedAt: l.scannedAt ?? now })),
+				status: 'open', openedBy: by, openedAt: now, stageEnteredAt: now,
+				emptyConfirmedBy: by, emptyConfirmedAt: now
+			});
+			await ProductionBucket.updateOne({ _id: plan.destId }, { $set: { state: 'in_use', currentCycleId: newCycleId, cycleCount: cycleNumber, spotCheckPending: false }, $unset: { residualNote: 1 } });
+			await CartridgeRecord.updateMany(
+				{ _id: { $in: toMove } },
+				{ $set: { statusUpdatedOn: now.toISOString(), 'bucket.bucketId': plan.destId, 'bucket.cycleId': newCycleId, 'backing.bucketCycleId': newCycleId, 'backing.bucketBarcode': plan.destId } }
+			);
+			await logTx({ bucketId: plan.destId, cycleId: newCycleId, type: 'create', fromStage: plan.stage, toStage: plan.stage, qtyBefore: 0, qtyAfter: toMove.length, reason: `pass opened at ${STAGE_LABELS[plan.stage]} from carts found in ${cycle.bucketId} during an audit`, relatedId: cycle._id, cartridgeIds: toMove, operator: input.user });
+			await audit('bucket_cycles', newCycleId, 'CREATE', input.user, { bucketId: plan.destId, cycleNumber, stage: plan.stage, cartridgeIds: toMove, fromAuditOf: cycle.bucketId });
+			for (const id of toMove) moved.push({ barcode: id, fromCycleId: homeOf.get(id)?._id ?? null, destinationBucketId: plan.destId, destinationCycleId: newCycleId, newPass: true, returned: false });
+		}
+	}
+
+	// Discards: scrapped as whatever they are, out of whatever pass holds them.
+	let removalId: string | undefined;
+	if (discards.length) {
+		removalId = generateId();
+		for (const id of discards) {
+			const home = homeOf.get(id);
+			if (!home) continue;
+			const before = home.quantity ?? (home.cartridgeIds ?? []).length;
+			await BucketCycle.updateOne({ _id: home._id }, { $pull: { cartridgeIds: id }, $set: { quantity: Math.max(0, before - 1) } });
+			await logTx({ bucketId: home.bucketId, cycleId: home._id, type: 'scrap', fromStage: home.stage, toStage: home.stage, qtyBefore: before, qtyAfter: Math.max(0, before - 1), reason: `${id} found in ${cycle.bucketId} during an audit and discarded: ${journal}`, journal, relatedId: removalId, cartridgeIds: [id], operator: input.user });
+			home.quantity = Math.max(0, before - 1);
+		}
+		await CartridgeRecord.updateMany(
+			{ _id: { $in: discards } },
+			{ $set: { status: 'scrapped', statusUpdatedOn: now.toISOString() }, $push: { notes: { _id: generateId(), body: `Found in bucket ${cycle.bucketId} during an audit, discarded: ${journal}`, phase: 'bucket', author: by, createdAt: now } } }
+		);
+		await ManualCartridgeRemoval.create({ _id: removalId, cartridgeIds: discards, bucketCycleId: cycle._id, bucketId: cycle.bucketId, cartridgeCount: discards.length, reason: journal, journal, operator: by, removedAt: now });
+		const byStage = new Map<BucketStage, number>();
+		for (const id of discards) {
+			const st = byId.get(id).status as BucketStage;
+			byStage.set(st, (byStage.get(st) ?? 0) + 1);
+		}
+		for (const [stage, n] of byStage) {
+			for (const pn of partsAtStage(stage)) {
+				await debitScrap(pn, lotFor(cycle.sourceLots, pn), n, cycle._id, input.user, `audit discard: ${journal}`, `Audit of ${cycle.bucketId}: ${n}x ${pn} at ${STAGE_LABELS[stage]} scrapped — ${journal}`);
+			}
+		}
+	}
+
+	// The audited pass itself: members never scanned stay members; the run is recorded.
+	const after = await BucketCycle.findById(cycle._id).select('cartridgeIds quantity').lean() as any;
+	const quantityAfter = (after?.cartridgeIds ?? []).length;
+	const record = {
+		at: now, by, scanned, present, missing,
+		foreign: [
+			...moved.map(m => ({ barcode: m.barcode, action: m.returned ? 'returned' : 'moved', fromCycleId: m.fromCycleId ?? undefined, destinationBucketId: m.destinationBucketId, destinationCycleId: m.destinationCycleId })),
+			...discards.map(barcode => ({ barcode, action: 'discarded', fromCycleId: homeOf.get(barcode)?._id ?? undefined }))
+		]
+	};
+	await BucketCycle.updateOne(
+		{ _id: cycle._id },
+		{
+			$set: { quantity: quantityAfter },
+			$push: {
+				audits: record,
+				...(missing.length ? { discrepancies: { type: 'shortfall', qty: missing.length, at: now, note: `audit: ${missing.length} member(s) not found in the tub` } } : {})
+			}
+		}
+	);
+	await logTx({
+		bucketId: cycle.bucketId, cycleId: cycle._id, type: 'audit',
+		fromStage: cycle.stage, toStage: cycle.stage,
+		qtyBefore: cycle.quantity ?? members.length, qtyAfter: quantityAfter,
+		reason: `audit: ${present.length}/${members.length} members found`
+			+ (missing.length ? `, ${missing.length} missing` : '')
+			+ (moved.length ? `, ${moved.length} moved out` : '')
+			+ (discards.length ? `, ${discards.length} discarded` : ''),
+		journal: journal || undefined,
+		relatedId: removalId,
+		cartridgeIds: scanned,
+		operator: input.user
+	});
+	await audit('bucket_cycles', cycle._id, 'AUDIT', input.user, record);
+
+	return {
+		cycleId: cycle._id, bucketId: cycle.bucketId, cycleNumber: cycle.cycleNumber,
+		expected: members.length, present, missing, moved, discarded: discards, quantityAfter
+	};
 }
 
 export async function retireBucket(bucketId: string, reason: string, user: Operator): Promise<void> {

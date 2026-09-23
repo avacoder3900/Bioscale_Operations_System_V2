@@ -191,14 +191,16 @@ for v1 rows) · **`cartridgeIds: string[]`** (members) · `quantity` (= length) 
 (fixed when leaving Raw; shrinkage = openedQty − quantity) · `sourceLots[{partNumber, lotId,
 scannedAt}]` · **`thermoseal { cm, cartridges, segments[{rollId, cm}], consumedAt }`** · `status`
 open | consumed | scrapped | voided (+ `voidedAt/By/Reason`, `statusBeforeVoid`) ·
-`residualFound { cartridgeIds, disposition, … }` · `discrepancies[]` · `stageEnteredAt` ·
+`residualFound { cartridgeIds, disposition, … }` · `discrepancies[]` ·
+**`audits[{ at, by, scanned[], present[], missing[], foreign[{barcode, action, fromCycleId,
+destinationBucketId, destinationCycleId}] }]`** (§9.8) · `stageEnteredAt` ·
 `openedBy/At`, `closedAt`. Partial unique index `{bucketId}` where `status: 'open'`; index
 `{cartridgeIds: 1}`.
 
 ### 4.3 `BucketTransaction` → `bucket_transactions` (immutable)
 
 Types: `mint, relabel, create, scan_in, unscan, advance, adjust, scrap, consume, merge_in,
-merge_out, release, quarantine, retire, void`. Carries `cartridgeIds` for the rows that touch
+merge_out, release, quarantine, retire, void, audit`. Carries `cartridgeIds` for the rows that touch
 carts. The `advance` row into Unpressed stores the thermoseal note (cm, roll ids, rolls pulled)
 in `reason` and the first roll id in `relatedId`.
 
@@ -299,7 +301,8 @@ lot quantity − Σ consumption/scrap rows for that lot.
 Stage strip (Available · Raw · Unpressed · Pressed · **In Oven** (links to
 `/cartridge-admin?stage=backing`)) → 4-column board (Available / Raw / Unpressed / Pressed).
 Under **Available**: the **Mint New Bucket** card (→ `/buckets/new`, and *Replace a damaged
-sticker* → `/buckets/new#replace`). Under **Unpressed**: the yellow *thermoseal not synced* card
+sticker* → `/buckets/new#replace`). Every pass card carries **Audit** (§9.8) under its cart list.
+Under **Unpressed**: the yellow *thermoseal not synced* card
 and the compact **Thermoseal tile** (§3.4; admin toggles inside "Development settings"). Header
 buttons: *New bucket*, *Master override* (admin, §9.5), *WI-01 →*. Rail (start, scan-in box with
 mis-scan, advance with discards, scrap by scan, residual by scan, retire) → expandable **change log** (lot, move,
@@ -349,6 +352,33 @@ a bucket member from its pass. No inventory moves. Unknown barcodes are refused 
 ### 9.7 Bucket page — retire
 
 *Retire bucket…* on `/buckets/[bucketId]` (admin, reason required, hidden while in use).
+
+### 9.8 Audit a bucket (2026-09-23)
+
+**Audit** on any pass card opens the rail in audit mode: the operator scans *every* cart in the
+tub and each scan is classified live (`?/auditScan` → `auditScan()`):
+
+| Scan | Shown as | What can be done |
+|---|---|---|
+| a member of this pass | *belongs here* | ticked off |
+| a pre-oven cart that is not a member | *wrong tub* — names the pass it is a member of, if any | **Move** to a destination, or **Discard** |
+| past the buckets, unknown, or a bucket sticker | *cannot handle* | must be removed from the list before submitting |
+
+Move destinations for a foreign cart: **its own open pass first** (it is already a member there
+— putting it back is recorded, not re-written), then open passes at the cart's stage, then
+empty buckets (a fresh pass opens there at that stage; nothing is debited). A move pulls the
+cart out of the pass that held it (`merge_out` on that pass) and adds it to the destination
+(`merge_in`, or `create` for a new pass). **Discard** requires a journal and behaves like any
+other discard: status `scrapped`, a `ManualCartridgeRemoval`, and shell + label scrapped from
+inventory at the cart's stage.
+
+Members that were never scanned are **missing**: they stay on the pass, the audit records them,
+and a `shortfall` discrepancy is pushed onto the cycle. An audit never silently rewrites the
+count (§7.1) — to remove a missing cart the operator still uses *Discard carts…*.
+
+Every run appends to `BucketCycle.audits` and writes one `audit` ledger row carrying every
+scanned id, plus an `AUDIT` audit-log entry. Submitting needs `manufacturing:write`; the
+per-scan lookup only needs `manufacturing:read`.
 
 ## 10. Files
 
