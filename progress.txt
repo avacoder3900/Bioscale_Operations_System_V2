@@ -13155,3 +13155,44 @@ Deployment: production - https://bioscale-operations-system-mongodb.vercel.app
 Source: branch master @ the commit carrying this entry
 What this deployment is for: making |B| field magnitude visible in production on the
 magnetometer results pages, and persisting it at ingest so it is searchable per SPU.
+
+================================================================================
+2026-09-23 — feat/post-mortem-camera-settings — camera settings panel on Post-Mortem Inspect
+================================================================================
+A collapsible Camera settings panel below the Capture button, built from what the selected camera
+actually reports rather than a fixed list. getCapabilities() differs per device and per browser, and
+the existing LIZA tuning applies through an `advanced` array that SILENTLY DROPS anything
+unsupported — so a hardcoded panel would show controls that quietly do nothing. Ranges render as
+sliders with that camera's own min/max/step, enums as selects, booleans as checkboxes. Covers
+exposure mode/time/compensation, iso, focus mode/distance, white balance mode, colour temperature,
+brightness, contrast, saturation, sharpness, zoom, pan, tilt, torch. Aperture is not offered: no
+such constraint exists in the web API and these cameras have a fixed one.
+
+Applying uses a bare constraint, not `advanced`, so a refused setting surfaces as an error instead
+of being silently ignored — that silence is the confusion the panel exists to remove.
+
+frameRate is deliberately excluded. Found by testing: its reported min is 0 on many cameras,
+applying 0 stalls the track, and no later value recovers it — only restarting the stream does. It is
+a format property, not an image setting. Dead controls are filtered too (ranges where min === max,
+single-option enums).
+
+A "What this camera reported" list shows every returned capability and marks which are adjustable,
+because otherwise "no adjustable settings" is indistinguishable from a broken panel — and built-in
+laptop webcams, which expose only format properties, show exactly that.
+
+The inline LIZA tuning is extracted to one LIZA_TUNING constant so the panel's Reset restores
+precisely what startCamera() applies. Changes are session-only; a reload returns to the
+production-validated setup the CV model was tuned against. Panel visibility uses a new `cameraLive`
+flag because `stream` is deliberately not $state in this file.
+
+File: src/routes/manufacturing/cart-mfg/post-mortem-inspect/+page.svelte. npm run check: 12/437 —
+this master's baseline, none in the touched file. NOTE the baseline is 12, not the 10 of last week:
+two errors in validation/magnetometer/[sessionId]/+page.svelte arrived independently on master.
+
+NOT exercised in practice: the only adjustable property on the dev laptop was frameRate, which this
+removes; its integrated webcam exposes no image controls. Sliders to be tested on a station camera.
+
+Deployment: production — building from the GitHub push to master (Vercel dashboard, commit below)
+Source: branch master @ commit 1f882604 (squash merge of PR #55)
+Retrieve this exact code: git checkout master at commit 1f882604
+What this deployment is for: camera settings panel on Post-Mortem Inspect
