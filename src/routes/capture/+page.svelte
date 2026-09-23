@@ -221,10 +221,89 @@
 	 */
 	let cameraResetNote = $state<string | null>(null);
 
+	/**
+	 * The documented LIZA setup — camera_capture.py's tuning panel, mirrored by
+	 * CvProject.captureSettings' schema defaults. These are the values the
+	 * imaging was originally dialled in against, which is what "defaults" means
+	 * to an operator here; the camera's own factory defaults are a separate
+	 * button, since they are a different thing.
+	 *
+	 * Only genuine V4L2 camera controls appear. CLAHE strength and the per-channel
+	 * colour corrections are post-processing in the capture script, not camera
+	 * parameters, so there is nothing on the station to send them to. GAMMA is
+	 * deliberately omitted too: the script's 0.85 is a post-processing exponent,
+	 * while the station's `gamma` control is a V4L2 range of 1..500 — same name,
+	 * unrelated meaning.
+	 */
+	const LIZA_STATION_DEFAULTS: Record<string, number> = {
+		auto_exposure: 1, // manual, so an exposure value will hold
+		brightness: 128,
+		contrast: 128,
+		gain: 0,
+		sharpness: 128,
+		auto_wb: 0, // manual, since white balance is set explicitly below
+		wb_temperature: 4000
+	};
+
+	/** LIZA's EXPOSURE, on the log2 scale camera_capture.py uses. */
+	const LIZA_EXPOSURE_LOG2 = -5;
+
+	/**
+	 * LIZA's exposure expressed in this camera's units.
+	 *
+	 * camera_capture.py sets CAP_PROP_EXPOSURE = -5, the OpenCV log2 convention:
+	 * the exposure time is 2^-5 s = 31.25 ms. A camera reporting
+	 * EXPOSURE_ABSOLUTE wants that in 100 microsecond units, so 31250 us / 100 =
+	 * ~313. Without the conversion, -5 sent to an absolute-scale camera is out of
+	 * range and silently ignored — the bug fixed in #62.
+	 */
+	function lizaExposureFor(current: number | undefined): { value: number; derived: boolean } {
+		const b = paramBounds('exposure', current);
+		const absoluteScale = b.hi > 0;
+		if (!absoluteScale) return { value: LIZA_EXPOSURE_LOG2, derived: false };
+		const seconds = Math.pow(2, LIZA_EXPOSURE_LOG2);
+		const hundredsOfMicros = Math.round((seconds * 1_000_000) / 100);
+		return { value: Math.min(Math.max(hundredsOfMicros, b.lo), b.hi), derived: true };
+	}
+
+	/** Restore the documented LIZA setup, for the parameters this station has. */
+	function applyLizaDefaults() {
+		const applied: string[] = [];
+		const missing: string[] = [];
+
+		for (const [prop, value] of Object.entries(LIZA_STATION_DEFAULTS)) {
+			if (!cameraParamsKnown.includes(prop)) {
+				missing.push(prop);
+				continue;
+			}
+			setCameraParam(prop, value);
+			applied.push(prop);
+		}
+
+		let note = '';
+		if (cameraParamsKnown.includes('exposure')) {
+			// After auto_exposure has gone manual above, so the value can hold.
+			const e = lizaExposureFor(cameraParams['exposure']);
+			setCameraParam('exposure', e.value);
+			applied.push('exposure');
+			note = e.derived
+				? ` Exposure set to ${e.value} — LIZA's -5 converted from the log2 scale (2^-5 s) into this camera's 100 microsecond units.`
+				: ` Exposure set to ${e.value} on the log2 scale.`;
+		} else {
+			missing.push('exposure');
+		}
+
+		cameraResetNote =
+			`Applied the LIZA setup to ${applied.length} parameter(s).${note}` +
+			(missing.length ? ` Not offered by this station: ${missing.join(', ')}.` : '') +
+			' CLAHE and the colour corrections are post-processing, not camera controls.';
+	}
+
+	/** The camera's own factory defaults, as the station reports them. */
 	function resetCameraParams() {
-		// Only parameters the agent gave a real default for. The previous version
-		// fell back to the midpoint of the bounds, which is not a default at all —
-		// on brightness that is 128, which washed the image out.
+		// Only parameters the agent gives a real default for. Falling back to the
+		// midpoint of the bounds is not a default — on brightness that is 128,
+		// which washed the image out.
 		let skipped = 0;
 		for (const prop of cameraParamsKnown) {
 			const target = cameraParamRanges[prop]?.default;
@@ -236,8 +315,8 @@
 		}
 		cameraResetNote =
 			skipped === 0
-				? 'Restored every parameter the station reports a default for.'
-				: `Restored the station's defaults. ${skipped} parameter(s) have no reported default and were left alone.`;
+				? "Restored the camera's own defaults for every parameter."
+				: `Restored the camera's own defaults. ${skipped} parameter(s) report none and were left alone.`;
 	}
 
 	function setCameraParam(prop: string, value: number) {
@@ -1585,10 +1664,19 @@
 					<div class="flex flex-wrap items-center gap-3 border-t border-[var(--color-tron-border)] px-4 py-3">
 						<button
 							type="button"
-							onclick={resetCameraParams}
+							onclick={applyLizaDefaults}
+							title="The documented LIZA setup from camera_capture.py — the values the imaging was dialled in against"
 							class="rounded border border-[var(--color-tron-cyan)] px-3 py-1.5 text-xs font-bold text-[var(--color-tron-cyan)] hover:bg-[rgba(0,255,255,0.1)]"
 						>
 							Reset all to defaults
+						</button>
+						<button
+							type="button"
+							onclick={resetCameraParams}
+							title="The camera's own factory defaults, as the station reports them"
+							class="rounded border border-[var(--color-tron-border)] px-3 py-1.5 text-xs text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)]"
+						>
+							Camera factory defaults
 						</button>
 						<button
 							type="button"
