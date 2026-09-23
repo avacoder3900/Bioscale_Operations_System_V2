@@ -167,6 +167,43 @@
 	 * entirely when this answer never arrived — a selected station with an agent
 	 * that had not replied looked identical to no station at all.
 	 */
+	/**
+	 * Slider bounds that can actually represent the value the camera reports.
+	 *
+	 * V4L2 exposes exposure two different ways: a log2 scale (-13..0, what
+	 * OpenCV's CAP_PROP_EXPOSURE gives on some backends) and EXPOSURE_ABSOLUTE
+	 * in 100 microsecond units (1..10000). Our fallback label assumed the log
+	 * scale, so on a camera using the absolute one the agent reported values
+	 * like 5000 against a -13..0 slider: the thumb could never reach the real
+	 * value, and every value the slider DID send was out of range and ignored.
+	 * That is why exposure appeared to do nothing.
+	 *
+	 * A reported value outside the bounds proves the bounds are wrong, so widen
+	 * them to contain it rather than trusting the guess.
+	 */
+	function paramBounds(prop: string, value: number | undefined) {
+		const r = cameraParamRanges[prop];
+		const cfg = CAMERA_PARAM_LABELS[prop];
+		let lo = r?.min ?? cfg?.min ?? 0;
+		let hi = r?.max ?? cfg?.max ?? 255;
+		let source = r ? (r.source === 'v4l2' ? 'camera range' : 'default range') : 'default range';
+
+		if (typeof value === 'number' && Number.isFinite(value) && (value < lo || value > hi)) {
+			if (prop === 'exposure' && value > 0) {
+				// Absolute exposure, in 100 us units.
+				lo = 1;
+				hi = Math.max(10000, value);
+			} else {
+				lo = Math.min(lo, value);
+				hi = Math.max(hi, value);
+			}
+			source = 'range inferred from the reported value';
+		}
+
+		const step = r?.step ?? cfg?.step ?? 1;
+		return { lo, hi, step, source };
+	}
+
 	function requestCameraParams() {
 		if (!ws || ws.readyState !== WebSocket.OPEN) return;
 		try {
@@ -182,18 +219,25 @@
 	 * where the agent offered none, since guessing a default is worse than
 	 * leaving a parameter alone.
 	 */
+	let cameraResetNote = $state<string | null>(null);
+
 	function resetCameraParams() {
+		// Only parameters the agent gave a real default for. The previous version
+		// fell back to the midpoint of the bounds, which is not a default at all —
+		// on brightness that is 128, which washed the image out.
+		let skipped = 0;
 		for (const prop of cameraParamsKnown) {
-			const r = cameraParamRanges[prop];
-			const cfg = CAMERA_PARAM_LABELS[prop];
-			const fallbackLo = r?.min ?? cfg?.min;
-			const fallbackHi = r?.max ?? cfg?.max;
-			let target = r?.default;
-			if (target === undefined && fallbackLo !== undefined && fallbackHi !== undefined) {
-				target = Math.round((fallbackLo + fallbackHi) / 2);
+			const target = cameraParamRanges[prop]?.default;
+			if (target === undefined) {
+				skipped++;
+				continue;
 			}
-			if (target !== undefined) setCameraParam(prop, target);
+			setCameraParam(prop, target);
 		}
+		cameraResetNote =
+			skipped === 0
+				? 'Restored every parameter the station reports a default for.'
+				: `Restored the station's defaults. ${skipped} parameter(s) have no reported default and were left alone.`;
 	}
 
 	function setCameraParam(prop: string, value: number) {
@@ -1504,10 +1548,10 @@
 					<div class="grid gap-3 border-t border-[var(--color-tron-border)] p-4 sm:grid-cols-2">
 						{#each cameraParamsKnown as prop (prop)}
 							{@const cfg = CAMERA_PARAM_LABELS[prop]}
-							{@const r = cameraParamRanges[prop]}
-							{@const lo = r?.min ?? cfg?.min ?? 0}
-							{@const hi = r?.max ?? cfg?.max ?? 255}
-							{@const step = r?.step ?? cfg?.step ?? 1}
+							{@const b = paramBounds(prop, cameraParams[prop])}
+							{@const lo = b.lo}
+							{@const hi = b.hi}
+							{@const step = b.step}
 							{@const label = cfg?.label ?? prop}
 							<div>
 								<div class="flex items-baseline justify-between gap-2">
@@ -1532,7 +1576,7 @@
 								     "camera" = true V4L2 range, "default" = advisory fallback. -->
 								<div class="flex justify-between text-[10px] text-[var(--color-tron-text-secondary)]">
 									<span class="font-mono">{lo}</span>
-									<span>{r ? (r.source === 'v4l2' ? 'camera range' : 'default range') : 'default range'}</span>
+									<span>{b.source}</span>
 									<span class="font-mono">{hi}</span>
 								</div>
 							</div>
@@ -1553,6 +1597,9 @@
 						>
 							Re-read from station
 						</button>
+						{#if cameraResetNote}
+							<span class="text-[10px] text-[var(--color-tron-green,#39ff14)]">{cameraResetNote}</span>
+						{/if}
 						<span class="text-[10px] text-[var(--color-tron-text-secondary)]">
 							Values are applied on the station itself. A slider that snaps back was
 							refused by the camera — for exposure, set Auto Exposure to 1 (manual)
