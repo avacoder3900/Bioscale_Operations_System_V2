@@ -13062,6 +13062,99 @@ below before believing prod is on the new code.
 Source: branch master @ commit <filled in below after push>
 What this deployment is for: two-channel thermocouple parsing, stats and charts in production,
 so the 25 backfilled sessions render per-probe instead of averaged
+
+================================================================================
+2026-09-21 - feat/magnetometer-field-magnitude - per-channel X/Y/Z + |B| magnitude
+================================================================================
+Reworked the magnetometer session detail table (/validation/magnetometer/[sessionId]) to show
+the full field per channel instead of Z alone. Each channel now renders X, Y, Z and a computed
+magnitude |B| = sqrt(X^2 + Y^2 + Z^2), all in Gauss as reported by the magnetometer. Per
+request there is no pass/fail styling on the new columns - the numbers are the deliverable.
+Overall pass/fail and the failure-reason list are unchanged and still driven by the Z-only
+criteria (minZ/maxZ from Integration 'mag_criteria').
+
+Data note: the page renders session.magResults, which is Schema.Types.Mixed, so there is no
+strict-mode field dropping on write. parseMagValidation has extracted per-channel X/Y/Z since
+dd982309 (2026-03-05), so any session recorded after that date already carries X and Y and will
+populate the new columns. Wells with no reading render as an em dash, not 0.
+NOT yet verified against a live logged-in session: the BIMS MCP validation_tab endpoint projects
+Z only, so it could not confirm the stored X/Y. Confirm by opening a real session on the preview.
+
+svelte-check: clean on the touched file. Local production build not attempted (known OOM on this
+machine); the Vercel branch build is the gate and it went green.
+
+Deployment: preview - https://bioscale-operations-system-mongodb-fviowftbn-brevitest.vercel.app
+Source: branch feat/magnetometer-field-magnitude @ commit 5a3dffdb (code); this progress entry
+is the follow-up commit below.
+What this deployment is for: seeing the full XYZ field and magnitude per channel on the
+magnetometer results page, on a branch off master, before deciding whether it merges.
+
+================================================================================
+2026-09-22 - feat/magnetometer-field-magnitude - master merged in, |B| on run page
+================================================================================
+Merged origin/master into the branch (merge 'ort', no conflicts) so the preview reflects what
+the branch would actually look like on top of current master. Before this the branch was 5
+commits BEHIND master, which meant the earlier preview was not representative of a post-merge
+state. Now 0 behind / 6 ahead. Master's incoming work (spu-validation-cycle.ts and the SPU
+pages) is disjoint from every magnetometer file, so nothing in this feature was touched.
+
+|B| is now also rendered on the fetch-results page (/validation/magnetometer/run), not just the
+session detail table, so the magnitude is visible in the same area as the magnet results.
+
+svelte-check attribution for the merged tree - 130 errors total, up from the 121 branch baseline.
+All 9 of the new ones belong to master's commits, not to this feature:
+  8  src/routes/spu/+page.svelte          (came in with master)
+  1  src/routes/spu/[spuId]/+page.svelte  (came in with master)
+Magnetometer files: run/+page.svelte is clean (0). [sessionId]/+page.svelte has 2, and both are
+PRE-EXISTING, not introduced here - the template has referenced well.error since commit 7c01942b
+while the local MagWell interface never declared an 'error' field. The .map() that computes the
+magnitude only changed the wording of that diagnostic (named type -> expanded inferred type).
+Fixing it is a one-line 'error?: string' on MagWell; deliberately NOT done here because it was
+outside what was asked. These are type-check only and do not block the build (vite build does
+not typecheck), which is why previews have been going green against the 121 baseline all along.
+
+Local production build not attempted (known OOM on this machine); the Vercel branch build is the
+gate and it went green - success held across 10 consecutive polls, so this is not the known
+spurious failure-then-success pattern.
+
+Deployment: preview - https://bioscale-operations-system-mongodb-l7uzfiwcb.vercel.app
+Source: branch feat/magnetometer-field-magnitude @ commit 4733e3fce310ceee86d33705ec51b971a4b5ff59
+What this deployment is for: testing the real post-merge combination on a branch preview BEFORE
+anything goes to master. Explicitly NOT a production deploy - master is untouched.
+
+================================================================================
+2026-09-22 - master - PRODUCTION: magnetometer field magnitude |B|
+================================================================================
+Merged feat/magnetometer-field-magnitude into master. This is the production release of the
+magnetometer field work: per-channel X/Y/Z plus computed |B| = sqrt(X^2 + Y^2 + Z^2) on both the
+session detail table and the fetch-results page, |B| persisted at ingest, and an API-key
+magnetometer sweep/record endpoint. 16 files, +1132/-266.
+
+DEDUP TRAP - READ THIS BEFORE BELIEVING PROD IS UPDATED
+The branch had master merged into it first, so the merge commit 9db6a3a3 carries tree
+a205cd6a9402e35dda3b8c72253ff25951d78c2c, which is byte-identical to the tree Vercel had already
+built as a preview. An identical tree is the exact condition under which Vercel silently skips
+the production build: master ends up holding the new code while production keeps serving the old
+bundle, and no deployment status appears at all. This progress.txt commit deliberately changes
+the tree so the production build is actually forced. Verify a deployment with environment
+'Production - bioscale-operations-system-mongodb' exists for the FINAL commit on master (the one
+that includes this entry), not merely for the merge commit.
+
+Pre-merge verification: merge was clean (ort, 0 conflicts), branch was 0 behind / 7 ahead of
+origin/master. svelte-check on the merged tree = 130 errors, and all 9 above the 121 branch
+baseline were attributed to master's own commits (8 in routes/spu/+page.svelte, 1 in
+routes/spu/[spuId]/+page.svelte), none to this feature. The 2 errors in the magnetometer session
+page are pre-existing: the template has used well.error since 7c01942b while the local MagWell
+interface never declared an 'error' field. Type-check only; vite build does not typecheck.
+Local production build not attempted (known OOM on this machine).
+
+Previous master tip:  5ddb3d422a39edfd724b35f086997666f4b4fa7e
+Merge commit:         9db6a3a34145ec00a9ba61fd791702de97c0ae25
+Feature branch tip:   437a45e3afd8867a9184f1026b034672b56d1c44
+Deployment: production - https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ the commit carrying this entry
+What this deployment is for: making |B| field magnitude visible in production on the
+magnetometer results pages, and persisting it at ingest so it is searchable per SPU.
 2026-09-21 — NEWDEV — bucket system designed; BUCKET-SYSTEM_PLAN.md written (no code yet)
 ================================================================================
 Planning session only. Designed a barcode-tracked "bucket" system for counting cartridges

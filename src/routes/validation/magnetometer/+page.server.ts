@@ -29,21 +29,77 @@ export const load: PageServerLoad = async ({ locals }) => {
 		: [];
 	const userMap = new Map(users.map((u) => [u._id, u.username]));
 
-	/** Lowest / highest Z (gauss) across every well and channel in a run. */
-	function gaussRange(raw: any): { min: number | null; max: number | null } {
-		if (!Array.isArray(raw) || raw.length === 0) return { min: null, max: null };
-		const zs = raw
-			.flatMap((w: any) => [w?.chA_Z, w?.chB_Z, w?.chC_Z])
-			.filter((z: any): z is number => typeof z === 'number');
-		if (!zs.length) return { min: null, max: null };
-		return { min: Math.min(...zs), max: Math.max(...zs) };
+	/** A finite number, or null. Guards every magnitude against NaN/Infinity. */
+	function num(v: any): number | null {
+		return typeof v === 'number' && Number.isFinite(v) ? v : null;
+	}
+
+	function range(values: number[]): { min: number | null; max: number | null } {
+		if (!values.length) return { min: null, max: null };
+		return { min: Math.min(...values), max: Math.max(...values) };
+	}
+
+	const CHANNELS = ['chA', 'chB', 'chC'] as const;
+
+	/**
+	 * Lowest / highest FIELD MAGNITUDE (gauss) across every well and channel.
+	 *
+	 * This column used to project Z alone, which is why the list disagreed with
+	 * the detail page (which derives sqrt(x² + y² + z²)). Preference order, best
+	 * source first:
+	 *   1. fieldSummary.minMag / maxMag — precomputed at ingest.
+	 *   2. per-well chA_mag / chB_mag / chC_mag — stored per-channel magnitudes.
+	 *   3. sqrt(x² + y² + z²) from the stored components — every run written
+	 *      before magnitudes were persisted, i.e. the common case until the
+	 *      separate backfill runs.
+	 *   4. Z alone — the previous behaviour, kept so a run carrying only Z still
+	 *      renders a number instead of going blank.
+	 *
+	 * magResults is Schema.Types.Mixed, so a legacy or malformed payload carries
+	 * no shape guarantee: anything unusable falls through to { null, null } and
+	 * renders as '—', exactly like the old null return. It must never throw out
+	 * of the load function and 500 the whole list.
+	 */
+	function fieldRange(summary: any, raw: any): { min: number | null; max: number | null } {
+		try {
+			const summaryMin = num(summary?.minMag);
+			const summaryMax = num(summary?.maxMag);
+			if (summaryMin !== null || summaryMax !== null) {
+				return { min: summaryMin, max: summaryMax };
+			}
+
+			if (!Array.isArray(raw) || raw.length === 0) return { min: null, max: null };
+
+			const stored: number[] = raw.flatMap((w: any) =>
+				CHANNELS.map((c) => num(w?.[`${c}_mag`])).filter((m): m is number => m !== null)
+			);
+			if (stored.length) return range(stored);
+
+			const derived: number[] = raw.flatMap((w: any) =>
+				CHANNELS.map((c) => {
+					const x = num(w?.[`${c}_X`]);
+					const y = num(w?.[`${c}_Y`]);
+					const z = num(w?.[`${c}_Z`]);
+					if (x === null || y === null || z === null) return null;
+					return num(Math.sqrt(x * x + y * y + z * z));
+				}).filter((m): m is number => m !== null)
+			);
+			if (derived.length) return range(derived);
+
+			const zOnly: number[] = raw.flatMap((w: any) =>
+				CHANNELS.map((c) => num(w?.[`${c}_Z`])).filter((z): z is number => z !== null)
+			);
+			return range(zOnly);
+		} catch {
+			return { min: null, max: null };
+		}
 	}
 
 	const mapped = sessions.map((s) => {
 		const result = (s.results ?? [])[0] as any;
 		const processed = result?.processedData ?? {};
 		const wells = s.magResults ?? processed?.magResults ?? null;
-		const { min, max } = gaussRange(wells);
+		const { min, max } = fieldRange(s.fieldSummary ?? processed?.fieldSummary, wells);
 
 		// When the test actually ran on the device — NOT when it was pulled into
 		// BIMS; those differ by days on some units. Stored testRanAt first, else
@@ -63,6 +119,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 			spuUdi: s.spuUdi ?? null,
 			spuId: s.spuId ?? null,
 			username: userMap.get(s.userId) ?? null,
+			// Field magnitude in gauss — NOT Z alone, despite the legacy key names.
 			gaussMin: min,
 			gaussMax: max
 		};

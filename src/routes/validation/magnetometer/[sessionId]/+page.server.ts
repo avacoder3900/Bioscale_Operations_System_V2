@@ -6,6 +6,58 @@ import { getVariable } from '$lib/server/particle';
 import { extractMagTestTime, pullDelaySeconds } from '$lib/server/magnetometer-time';
 import type { Actions, PageServerLoad } from './$types';
 
+// --------------------------------------------------------------- field magnitude
+// |B| = sqrt(X^2 + Y^2 + Z^2) over the X/Y/Z the magnetometer reports, in gauss
+// (the unit the raw values are already in — no conversion is applied). The keys
+// written here must stay identical to the ones the poll ingest path writes:
+// per-well chA_mag/chB_mag/chC_mag, plus a top-level fieldSummary.
+const MAG_UNIT = 'gauss' as const;
+
+interface FieldSummary {
+	unit: typeof MAG_UNIT;
+	wellCount: number;
+	minMag: number | null;
+	maxMag: number | null;
+	meanMag: number | null;
+}
+
+/** Null if any component is missing or non-finite. Never NaN. */
+function fieldMagnitude(x: unknown, y: unknown, z: unknown): number | null {
+	if (typeof x !== 'number' || typeof y !== 'number' || typeof z !== 'number') return null;
+	if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) return null;
+	const m = Math.sqrt(x * x + y * y + z * z);
+	return Number.isFinite(m) ? m : null;
+}
+
+/** Stored magnitude when present, else derived from stored X/Y/Z, else null. */
+function resolveMag(well: any, ch: 'A' | 'B' | 'C'): number | null {
+	const stored = well?.[`ch${ch}_mag`];
+	if (typeof stored === 'number' && Number.isFinite(stored)) return stored;
+	return fieldMagnitude(well?.[`ch${ch}_X`], well?.[`ch${ch}_Y`], well?.[`ch${ch}_Z`]);
+}
+
+function withMagnitudes(wells: any[]): any[] {
+	return wells.map((w) => ({
+		...w,
+		chA_mag: resolveMag(w, 'A'),
+		chB_mag: resolveMag(w, 'B'),
+		chC_mag: resolveMag(w, 'C')
+	}));
+}
+
+function summarizeField(wells: any[]): FieldSummary {
+	const mags = wells
+		.flatMap((w) => [resolveMag(w, 'A'), resolveMag(w, 'B'), resolveMag(w, 'C')])
+		.filter((m): m is number => typeof m === 'number');
+	return {
+		unit: MAG_UNIT,
+		wellCount: wells.length,
+		minMag: mags.length ? Math.min(...mags) : null,
+		maxMag: mags.length ? Math.max(...mags) : null,
+		meanMag: mags.length ? mags.reduce((a, b) => a + b, 0) / mags.length : null
+	};
+}
+
 export const load: PageServerLoad = async ({ locals, params }) => {
 	requirePermission(locals.user, 'spu:read');
 	await connectDB();
@@ -20,6 +72,14 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 	const derivedTime = extractMagTestTime(session.rawData);
 	const testRanAt: Date | null = session.testRanAt ?? derivedTime?.at ?? null;
 	const recordedAt: Date | null = session.completedAt ?? session.createdAt ?? null;
+
+	// Magnitude is resolved here, not in the browser: stored chX_mag wins, and
+	// pre-magnitude sessions fall back to a derivation from their stored X/Y/Z.
+	const wells = Array.isArray(session.magResults)
+		? (JSON.parse(JSON.stringify(withMagnitudes(session.magResults))) as any[])
+		: null;
+	const fieldSummary: FieldSummary | null =
+		session.fieldSummary ?? (wells ? summarizeField(wells) : null);
 
 	return {
 		session: {
@@ -52,7 +112,8 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 			testType: 'magnetometer',
 			rawData: session.rawData ?? null,
 			processedData: {
-				metrics: session.magResults,
+				metrics: wells ?? session.magResults,
+				fieldSummary,
 				interpretation: session.overallPassed ? 'All Z values within acceptable range' : 'One or more Z values outside acceptable range',
 				failureReasons: session.failureReasons ?? []
 			},
@@ -101,6 +162,11 @@ export const actions: Actions = {
 
 			const overallPassed = failureReasons.length === 0;
 
+			// Same key shape the poll ingest writes, so a session re-read from this
+			// page is not magnitude-less: per-well chX_mag + top-level fieldSummary.
+			const magResults = withMagnitudes(parsed);
+			const fieldSummary = summarizeField(magResults);
+
 			await ValidationSession.updateOne(
 				{ _id: params.sessionId },
 				{
@@ -110,7 +176,8 @@ export const actions: Actions = {
 						// The device's own run time for this payload, not the re-read time.
 						testRanAt: extractMagTestTime(rawResult)?.at ?? null,
 						rawData: rawResult,
-						magResults: parsed,
+						magResults,
+						fieldSummary,
 						overallPassed,
 						failureReasons,
 						criteriaUsed: { minZ, maxZ }

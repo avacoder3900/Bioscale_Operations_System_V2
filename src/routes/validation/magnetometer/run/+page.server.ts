@@ -3,6 +3,7 @@ import { requirePermission } from '$lib/server/permissions';
 import { connectDB, ValidationSession, Spu, Integration, AuditLog, generateId } from '$lib/server/db';
 import { getVariable } from '$lib/server/particle';
 import { extractMagTestTime, pullDelaySeconds } from '$lib/server/magnetometer-time';
+import { withFieldMagnitudes, summarizeField, type MagWellMagnitudes } from '$lib/server/magnetometer-field';
 import { autoEnterValidating } from '$lib/server/spu-auto-validate';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -92,6 +93,10 @@ export const actions: Actions = {
 			const pulledAt = new Date();
 			const testTime = extractMagTestTime(rawResult);
 
+			// Session-level field rollup — declared on both schemas, otherwise
+			// Mongoose strict mode drops it without a word.
+			const fieldSummary = summarizeField(parsed);
+
 			const sessionId = generateId();
 			await ValidationSession.create({
 				_id: sessionId,
@@ -106,6 +111,7 @@ export const actions: Actions = {
 				particleDeviceId: spu.particleLink.particleDeviceId,
 				rawData: rawResult,
 				magResults: parsed,
+				fieldSummary,
 				overallPassed,
 				failureReasons,
 				criteriaUsed: { minZ, maxZ }
@@ -127,6 +133,7 @@ export const actions: Actions = {
 						testRanAt: testTime?.at ?? null,
 						rawData: rawResult,
 						results: parsed,
+						fieldSummary,
 						failureReasons: overallPassed ? [] : failureReasons,
 						criteriaUsed: { minZ, maxZ }
 					},
@@ -151,7 +158,8 @@ export const actions: Actions = {
 					sessionId,
 					overallPassed,
 					failureReasons: failureReasons.length > 0 ? failureReasons : undefined,
-					criteriaUsed: { minZ, maxZ }
+					criteriaUsed: { minZ, maxZ },
+					fieldSummary
 				},
 				changedAt: new Date(),
 				changedBy: locals.user!._id,
@@ -166,6 +174,7 @@ export const actions: Actions = {
 				failureReasons,
 				criteriaUsed: { minZ, maxZ },
 				magResults: parsed,
+				fieldSummary,
 				rawData: rawResult,
 				// The time the TEST ran — this is what the page shows. Null when the
 				// payload has no timestamp, in which case the UI says so rather than
@@ -203,16 +212,24 @@ export const actions: Actions = {
 	}
 };
 
-interface MagWellResult {
+interface MagWellRaw {
 	well: number;
 	chA_T: number | null; chA_X: number | null; chA_Y: number | null; chA_Z: number | null;
 	chB_T: number | null; chB_X: number | null; chB_Y: number | null; chB_Z: number | null;
 	chC_T: number | null; chC_X: number | null; chC_Y: number | null; chC_Z: number | null;
 }
 
+/** Same stored shape as the poll endpoint: components plus derived |B|. */
+type MagWellResult = MagWellRaw & MagWellMagnitudes;
+
+// NOTE: this parser is deliberately NOT merged with the poll endpoint's. They
+// disagree on more than formatting — the poll one flags per-well error text,
+// range-checks the well number and pads the run out to 5 wells, this one does
+// none of that. Only the magnitude derivation is shared, so the two paths write
+// identical field keys without silently changing what either one parses.
 function parseMagValidation(raw: string): MagWellResult[] {
 	const lines = raw.split('\n').map(l => l.trim()).filter(l => l.length > 0);
-	const results: MagWellResult[] = [];
+	const results: MagWellRaw[] = [];
 
 	for (const line of lines) {
 		const match = line.match(/^(\d+)\t/);
@@ -233,7 +250,8 @@ function parseMagValidation(raw: string): MagWellResult[] {
 		});
 	}
 
-	return results;
+	// |B| derived once here so it is stored, not recomputed in the browser.
+	return withFieldMagnitudes(results);
 }
 
 export const config = { maxDuration: 60 };

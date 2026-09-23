@@ -12,11 +12,53 @@ import { analyzeCartridge, reportGroup } from '$lib/server/optical-analysis';
 import { OPTICAL_CARTRIDGE_FILTER } from '$lib/server/optical-constants';
 import type { RequestHandler } from './$types';
 
+// ------------------------------------------------------------ field magnitude
+// |B| = sqrt(X^2 + Y^2 + Z^2) per channel, in gauss — the same unit the stored
+// X/Y/Z already carry, so no conversion is applied. Ingest persists chX_mag per
+// well plus a session-level fieldSummary; the derive-on-read fallback keeps
+// sessions recorded before that from reading back magnitude-less. Never NaN.
+const FIELD_UNIT = 'gauss';
+
+function magAxis(well: any, key: string): number | null {
+	const v = well?.[key];
+	return typeof v === 'number' && Number.isFinite(v) ? v : null;
+}
+
+/** Stored magnitude when present, else derived from stored X/Y/Z, else null. */
+function channelMag(well: any, ch: 'A' | 'B' | 'C'): number | null {
+	const stored = magAxis(well, `ch${ch}_mag`);
+	if (stored !== null) return stored;
+	const x = magAxis(well, `ch${ch}_X`);
+	const y = magAxis(well, `ch${ch}_Y`);
+	const z = magAxis(well, `ch${ch}_Z`);
+	if (x === null || y === null || z === null) return null;
+	const m = Math.sqrt(x * x + y * y + z * z);
+	return Number.isFinite(m) ? m : null;
+}
+
+function fieldSummaryFor(wells: unknown) {
+	const list = Array.isArray(wells) ? wells : [];
+	const mags: number[] = [];
+	for (const well of list) {
+		for (const ch of ['A', 'B', 'C'] as const) {
+			const m = channelMag(well, ch);
+			if (m !== null) mags.push(m);
+		}
+	}
+	return {
+		unit: FIELD_UNIT,
+		wellCount: list.length,
+		minMag: mags.length ? Math.min(...mags) : null,
+		maxMag: mags.length ? Math.max(...mags) : null,
+		meanMag: mags.length ? mags.reduce((a, b) => a + b, 0) / mags.length : null
+	};
+}
+
 /**
  * Mirror of the BIMS Validation section for agents — one endpoint per sub-tab:
  *
  * - tab=runs                 → /validation/runs board (per-SPU step matrix)
- * - tab=magnetometer         → /validation/magnetometer sessions (per-well Z table)
+ * - tab=magnetometer         → /validation/magnetometer sessions (per-well X/Y/Z + |B| table)
  * - tab=thermocouple         → /validation/thermocouple sessions (temperature stats)
  * - tab=optical-confirmation → /validation/optical-confirmation log; with
  *   group=<name> the group workspace report (robust group stats + outliers)
@@ -150,7 +192,7 @@ export const GET: RequestHandler = async ({ request, url }) => {
 		if (range) filter.createdAt = range;
 		const docs = (await ValidationSession.find(filter)
 			.select(
-				'type spuId spuUdi barcode particleDeviceId status startedAt completedAt testRanAt overallPassed failureReasons override createdAt runId magResults criteriaUsed results'
+				'type spuId spuUdi barcode particleDeviceId status startedAt completedAt testRanAt overallPassed failureReasons override createdAt runId magResults fieldSummary criteriaUsed results'
 			)
 			.sort({ createdAt: -1 })
 			.limit(limit)
@@ -182,14 +224,25 @@ export const GET: RequestHandler = async ({ request, url }) => {
 				return {
 					...base,
 					criteria,
+					fieldSummary:
+						d.fieldSummary ?? (Array.isArray(d.magResults) ? fieldSummaryFor(d.magResults) : null),
 					wells: Array.isArray(d.magResults)
 						? d.magResults.map((w: any) => ({
 								well: w.well,
+								chA_X: magAxis(w, 'chA_X'),
+								chA_Y: magAxis(w, 'chA_Y'),
 								chA_Z: w.chA_Z ?? null,
+								chA_mag: channelMag(w, 'A'),
 								chA_pass: inRange(w.chA_Z),
+								chB_X: magAxis(w, 'chB_X'),
+								chB_Y: magAxis(w, 'chB_Y'),
 								chB_Z: w.chB_Z ?? null,
+								chB_mag: channelMag(w, 'B'),
 								chB_pass: inRange(w.chB_Z),
+								chC_X: magAxis(w, 'chC_X'),
+								chC_Y: magAxis(w, 'chC_Y'),
 								chC_Z: w.chC_Z ?? null,
+								chC_mag: channelMag(w, 'C'),
 								chC_pass: inRange(w.chC_Z)
 							}))
 						: []

@@ -2,14 +2,15 @@ import { fail, error } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
 import {
 	connectDB, Spu, Batch, User, Customer, AssemblySession,
-	ElectronicSignature, AuditLog, ParticleDevice, ValidationSession, CartridgeRecord, generateId
+	ElectronicSignature, AuditLog, ParticleDevice, ValidationSession, CartridgeRecord,
+	OpticalBlankRun, generateId
 } from '$lib/server/db';
 import { OPTICAL_CARTRIDGE_FILTER } from '$lib/server/optical-constants';
 import { byId } from '$lib/server/db/native-helpers';
 import { isLegalTransition, LEGAL_TRANSITIONS, normalizeSpuStatus } from '$lib/server/spu-status';
 import { syncServiceFlag } from '$lib/server/service-flag';
 import { appendSpuJournal } from '$lib/server/spu-journal';
-import { beginValidationCycle, validationCycleResetFields } from '$lib/server/spu-validation-cycle';
+import { beginValidationCycle, validationCycleResetFields, runsSinceServicing } from '$lib/server/spu-validation-cycle';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals, params }) => {
@@ -47,6 +48,29 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 			.limit(25)
 			.lean()
 		: [];
+
+	// Blank-cartridge runs live in optical_blank_runs (Particle `blank-test`
+	// webhook), not validation_sessions — and older rows were written before
+	// spuId was resolved, carrying only the UDI. Match either so a unit's
+	// history isn't silently half-empty. start_time is device millis, so
+	// receivedAt is the only real clock here.
+	const latestBlankRun = (await OpticalBlankRun.findOne({
+		$or: [{ spuId: params.spuId }, ...(s.udi ? [{ spuUdi: s.udi }] : [])]
+	})
+		.select('receivedAt publishedAt')
+		.sort({ receivedAt: -1 })
+		.lean()) as any;
+
+	// Which of the six validation tests have run since this unit was last sent
+	// to servicing. Capture-only tests (blank/sonic/bench) have no verdict, so
+	// this counts runs, not passes — the pass/fail rollup is separate and still
+	// what gates release.
+	const validationSince = runsSinceServicing({
+		validation: s.validation ?? null,
+		validationResetAt: s.validationResetAt ?? null,
+		sessions: validationSessions as any[],
+		blankRunAt: latestBlankRun?.receivedAt ?? latestBlankRun?.publishedAt ?? null
+	});
 
 	// Locations already in use across the fleet, offered as suggestions when
 	// editing this unit's Location. "R&D" is what the research app's assay
@@ -87,6 +111,7 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 
 	return {
 		knownLocations,
+		validationSince,
 		spu: {
 			id: s._id,
 			udi: s.udi,
