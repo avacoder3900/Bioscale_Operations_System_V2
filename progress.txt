@@ -14180,3 +14180,12 @@ wording — swept into the concurrent session's 4522ba63), src/lib/server/servic
 thermoseal-service.ts (8e3e8a67), BUCKET-SYSTEM_PLAN.md, progress.txt.
 Check (svelte-kit sync + svelte-check direct): 12 errors / 438 warnings (baseline), none in
 touched files.
+
+Deployment: preview -- https://bioscale-operations-system-mongodb-30wt2bjsm-brevitest.vercel.app
+  (brevitest scope; cookie-session gated, 302 to /login)
+Source: branch feat/bucket-system @ commit 4522ba63
+Retrieve this exact code: git checkout feat/bucket-system at commit 4522ba63
+What this deployment is for: the leftover-cart flow (scan -> stage + suggested bucket; Move or
+  Discard). Worth trying: leftover at a stage with no open pass -> the panel offers this bucket
+  as an empty one and opens a new pass at that stage; with no empty buckets -> mint hint.
+Build status: success (login 200).
