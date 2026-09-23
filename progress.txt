@@ -14347,3 +14347,39 @@ Source: branch feat/bucket-system @ commit 3e7bebca
 Retrieve this exact code: git checkout feat/bucket-system at commit 3e7bebca
 What this deployment is for: the bucket audit (§9.8), on top of the Find a cart box (d7e0fe78).
 Build status: success (login 200; /manufacturing/cart-mfg/buckets 302 to /login).
+
+================================================================================
+2026-09-23 — feat/bucket-system — Audit: missing members listed, with an option to remove them
+================================================================================
+User: "I want missing carts to display when they are missing from an audit, and I want to be
+given the option to remove them." The audit panel's missing block is now a list — one row per
+member that is on the pass but was not scanned — and each row has three choices, with a bulk
+control when there is more than one:
+  Keep (default)     stays a member; recorded as missing, count unchanged
+  Write off          gone for good: off the pass, status 'scrapped', ManualCartridgeRemoval,
+                     shell + label scrapped from inventory at the pass's stage ('scrap' row)
+  Take off pass      it is elsewhere: off the pass, still a live cart, so the leftover flow or
+                     another bucket's audit can re-home it ('unscan' row)
+Either removal requires the journal (shared with the foreign-cart discards), and the panel
+shows what the count will drop to. The shortfall discrepancy now spells out how many were kept,
+written off and taken off; BucketCycle.audits[].missingActions records the per-cart choice.
+After submitting, the panel drops back to the pass view and a "Last audit" box summarises the
+run (found / moved / discarded / written off / taken off) and lists anything still missing and
+still on the pass.
+Files: src/lib/server/services/bucket-service.ts (auditCycle: missingActions input,
+missingDiscarded/missingReleased in the result, the two removal paths, richer shortfall +
+ledger text), src/lib/server/db/models/bucket-cycle.ts (missingActions on auditRunSchema),
+buckets/+page.server.ts (missingActions parsed off the form), buckets/+page.svelte (per-cart
+Keep/Write off/Take off pass, bulk row, journal wording, submit label, Last audit box),
+BUCKET-SYSTEM_PLAN.md §9.8 + changelog.
+Check (svelte-kit sync + svelte-check direct): 12 errors / 438 warnings (baseline), none in
+touched files. One error on the way: {@const act: T = …} does not narrow in svelte2tsx, so the
+state map is typed 'keep' | 'discard' | 'release' and Keep writes 'keep' instead of deleting.
+Still NOT exercised against real data.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-4xna902op-brevitest.vercel.app
+  (brevitest scope; cookie-session gated, 302 to /login)
+Source: branch feat/bucket-system @ commit f21ed50a
+Retrieve this exact code: git checkout feat/bucket-system at commit f21ed50a
+What this deployment is for: the audit's missing-member list and its remove options (§9.8).
+Build status: success (login 200; /manufacturing/cart-mfg/buckets 302 to /login).
