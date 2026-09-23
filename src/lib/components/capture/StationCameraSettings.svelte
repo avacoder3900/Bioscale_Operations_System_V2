@@ -82,28 +82,38 @@
 	}
 
 	/**
-	 * Bench-measured bounds, used only where the agent reports no range. These
-	 * replace earlier guesses (0..255 for most controls) that let sliders travel
-	 * far past the point where the camera stopped responding — brightness and
-	 * contrast silently ignored anything over 64, for instance.
+	 * The original wide bounds, restored at the operator's request.
+	 *
+	 * These were briefly narrowed to bench-measured limits (brightness and
+	 * contrast 0..64, gain 0..100, sharpness 0..6, gamma 72..500, hue -40..40)
+	 * because the sliders travelled past where the camera stopped responding.
+	 * That turned out to cost more than it gave: capping brightness at 64 removed
+	 * the higher values that were the reliable way back to a visible feed, and
+	 * gamma is the control actually used to rescue a blown-out image.
+	 *
+	 * The measured limits are still true — a slider past them does nothing — but
+	 * they are not enforced, and the number box beside each slider accepts values
+	 * outside them regardless. Wherever the agent reports a real range, that
+	 * still wins over anything here.
+	 *
+	 * exposure stays on the -13..0 log2 scale deliberately: on this camera a
+	 * negative value is what produces the long 5000 exposure, and positive values
+	 * are refused. It is the only way to reach a bright feed by dragging.
 	 */
 	const FALLBACK_RANGES: Record<string, CamRange> = {
-		brightness: { min: 0, max: 64 },
-		contrast: { min: 0, max: 64 },
-		saturation: { min: 0, max: 128 },
-		hue: { min: -40, max: 40 },
-		gain: { min: 0, max: 100 },
-		gamma: { min: 72, max: 500 },
-		sharpness: { min: 0, max: 6 },
-		exposure: { min: 1, max: 10000 },
+		brightness: { min: 0, max: 255 },
+		contrast: { min: 0, max: 255 },
+		saturation: { min: 0, max: 255 },
+		hue: { min: -180, max: 180 },
+		gain: { min: 0, max: 255 },
+		gamma: { min: 1, max: 500 },
+		sharpness: { min: 0, max: 255 },
+		exposure: { min: -13, max: 0 },
 		auto_exposure: { min: 1, max: 3, step: 1 },
 		auto_wb: { min: 0, max: 1, step: 1 },
 		wb_temperature: { min: 2800, max: 6500 },
 		focus: { min: 0, max: 255 },
 		autofocus: { min: 0, max: 1, step: 1 },
-		// V4L2 anti-flicker. 0 disabled, 1 = 50 Hz mains, 2 = 60 Hz mains. When the
-		// camera supports it this is the proper fix for banding under mains-powered
-		// lamps: the driver constrains exposure to whole flicker cycles itself.
 		power_line_frequency: { min: 0, max: 2, step: 1 }
 	};
 
@@ -230,24 +240,22 @@
 										<span class="text-[var(--color-tron-cyan)]">{params[prop] ?? '?'}</span>
 									{/if}
 								</span>
-								{#if prop === 'exposure'}
-									<!-- Typed entry as well as the slider: the useful exposure values are
-									     specific numbers (whole flicker cycles, e.g. 333) that are fiddly
-									     to hit by dragging, and the slider bounds are a guess on a camera
-									     that reports no range — so the box deliberately accepts values
-									     outside them and lets the camera decide. -->
-									<input
-										type="number"
-										aria-label="Exposure value"
-										class="tron-input ml-2 w-24 px-1 py-0.5 text-right font-mono text-xs"
-										value={positionOf(prop, b.lo)}
-										step={b.step}
-										onchange={(e) => {
-											const v = Number(e.currentTarget.value);
-											if (Number.isFinite(v)) drag(prop, v);
-										}}
-									/>
-								{/if}
+								<!-- Typed entry beside every slider. The values that matter are often
+								     specific — a gamma that balances a blown-out feed, or an exposure on
+								     a whole flicker cycle — and awkward to hit by dragging. The box
+								     accepts values outside the slider bounds and lets the camera decide,
+								     since those bounds are a guess wherever the agent reports no range. -->
+								<input
+									type="number"
+									aria-label={`${LABELS[prop] ?? prop} value`}
+									class="tron-input ml-2 w-24 px-1 py-0.5 text-right font-mono text-xs"
+									value={positionOf(prop, b.lo)}
+									step={b.step}
+									onchange={(e) => {
+										const v = Number(e.currentTarget.value);
+										if (Number.isFinite(v)) drag(prop, v);
+									}}
+								/>
 							</div>
 							<input
 								id={`cam-${prop}`}
