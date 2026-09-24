@@ -32,6 +32,15 @@ export const GET: RequestHandler = async ({ locals, url }) => {
 	const spuId = url.searchParams.get('spuId');
 	if (!spuId) throw error(400, 'spuId is required');
 
+	// Whether the CALLER has observed the device drop offline during this run.
+	// The endpoint is stateless and each poll is a fresh snapshot, so it cannot
+	// see the offline window itself — but the page polling every ~18s can, and
+	// that transition is the only positive proof a sweep is genuinely running.
+	// Absent (null) means the caller did not say; only an explicit 'false' is
+	// treated as "definitely never went offline".
+	const sawOfflineRaw = url.searchParams.get('sawOffline');
+	const sawOffline = sawOfflineRaw === null ? null : sawOfflineRaw === 'true';
+
 	const sinceRaw = url.searchParams.get('since');
 	const since = sinceRaw ? new Date(sinceRaw) : null;
 	if (since && Number.isNaN(since.getTime())) throw error(400, 'since is not a valid date');
@@ -106,12 +115,32 @@ export const GET: RequestHandler = async ({ locals, url }) => {
 	}
 
 	if (mode === DEVICE_MODE_IDLE) {
+		// A sweep BLOCKS the device's main loop, so a real one always drags the
+		// device offline for its whole duration. If the caller has been polling
+		// throughout and never once saw it drop, the sweep did not run — it was
+		// rejected on the device after run_sweep had already returned 1 (no
+		// magnetometer connected is the usual cause).
+		//
+		// Reporting that as "uploading" is what this endpoint used to do, and it is
+		// actively harmful: it told an operator to keep waiting for 22 minutes on a
+		// run that had died within seconds. Absence of the offline transition is
+		// positive evidence of failure, not of progress.
+		if (sawOffline === false) {
+			return json({
+				status: 'not_running',
+				elapsedMs,
+				deviceOnline: true,
+				deviceMode: mode,
+				note: 'The device never went offline, so no sweep is running — a sweep blocks the device for its entire duration. It was almost certainly refused on the device: check that the magnetometer jig is inserted AND that the regular validation has run, which is what establishes the BLE link.'
+			});
+		}
+
 		return json({
 			status: stale ? 'stale' : 'uploading',
 			elapsedMs,
 			deviceOnline: true,
 			deviceMode: mode,
-			note: 'Device is idle and online but no sweep has been stored yet — it is most likely still uploading.'
+			note: 'Device is back online and idle but no sweep has been stored yet — most likely still uploading its chunks.'
 		});
 	}
 

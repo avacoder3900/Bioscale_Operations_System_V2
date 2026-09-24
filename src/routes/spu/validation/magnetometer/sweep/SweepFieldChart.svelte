@@ -28,6 +28,10 @@
 		baseline?: number | null;
 		amplitude?: number | null;
 		fwhm?: number | null;
+		peakAtWindowEdge?: boolean | null;
+		forceIndex?: number | null;
+		gradBzdz?: number | null;
+		byAtPeakPct?: number | null;
 		halfMaxLeftY?: number | null;
 		halfMaxRightY?: number | null;
 		clipped?: boolean | null;
@@ -66,11 +70,46 @@
 	 * categorical trio (validated all-pairs for CVD against this dark surface) at a
 	 * lighter weight, so dominance is carried by weight + chroma, not hue alone.
 	 */
-	const SERIES: { key: SeriesKey; label: string; color: string; width: number; opacity: number }[] = [
-		{ key: 'bx', label: 'bx', color: '#3987e5', width: 1.2, opacity: 0.8 },
-		{ key: 'by', label: 'by', color: '#d95926', width: 1.2, opacity: 0.8 },
-		{ key: 'bz', label: 'bz', color: '#199e70', width: 1.2, opacity: 0.8 },
-		{ key: 'mag', label: 'B', color: '#e0e0e0', width: 2.2, opacity: 1 }
+	const SERIES: {
+		key: SeriesKey;
+		label: string;
+		color: string;
+		width: number;
+		opacity: number;
+		hint: string;
+	}[] = [
+		{
+			key: 'bx',
+			label: 'bx',
+			color: '#3987e5',
+			width: 1.2,
+			opacity: 0.8,
+			hint: 'Field ALONG the direction of travel. Swings symmetrically through zero exactly as the well passes the magnet centre, so its zero-crossing locates the magnet far more precisely than the flat top of the |B| peak.'
+		},
+		{
+			key: 'by',
+			label: 'by',
+			color: '#d95926',
+			width: 1.2,
+			opacity: 0.8,
+			hint: 'Field ACROSS the direction of travel. Should stay near zero — a well centred over its magnet has almost no sideways field. A large by means lateral misalignment.'
+		},
+		{
+			key: 'bz',
+			label: 'bz',
+			color: '#199e70',
+			width: 1.2,
+			opacity: 0.8,
+			hint: 'Field THROUGH the well — the axis that pulls beads down. The dominant component, and the one the pass/fail criteria are written against.'
+		},
+		{
+			key: 'mag',
+			label: 'B',
+			color: '#e0e0e0',
+			width: 2.2,
+			opacity: 1,
+			hint: 'Total field magnitude, sqrt(bx^2+by^2+bz^2). Independent of how the sensor is rotated, so it is the fairest single number for "how much field is here".'
+		}
 	];
 
 	function num(v: unknown): number | null {
@@ -476,7 +515,7 @@
 			class="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 px-1 text-[11px] text-slate-300 dark:text-slate-300"
 		>
 			{#each SERIES as s (s.key)}
-				<span class="inline-flex items-center gap-1.5">
+				<span class="inline-flex cursor-help items-center gap-1.5" title={s.hint}>
 					<span
 						class="inline-block rounded-sm"
 						style="width:12px;height:{s.key === 'mag'
@@ -546,6 +585,16 @@
 			</div>
 		{:else}
 			<div class="mt-2 border-t border-slate-700/60 pt-2">
+				{#if profile.peakAtWindowEdge}
+					<p
+						class="mb-2 rounded border border-amber-500/50 bg-amber-500/10 px-2 py-1.5 text-[11px] text-amber-300"
+					>
+						<strong>No peak inside this window.</strong> The maximum landed on the first or
+						last stage position, so there is no data on one side of it — this is usually the
+						high point of a flat baseline because the well's magnet was never swept past.
+						Widen the sweep range to cover this well before reading any value below.
+					</p>
+				{/if}
 				<dl class="grid grid-cols-2 gap-x-3 gap-y-1 text-xs sm:grid-cols-3">
 					<div>
 						<dt class="text-slate-400 dark:text-slate-400">Peak y</dt>
@@ -572,9 +621,31 @@
 						</dd>
 					</div>
 					<div>
-						<dt class="text-slate-400 dark:text-slate-400">FWHM</dt>
-						<dd class="tabular-nums text-slate-200 dark:text-slate-200">
+						<!-- Highlighted: width IS the gradient. A normal peak with a wide
+						     FWHM pulls beads weakly, and a peak-only threshold misses it. -->
+						<dt class="cursor-help text-slate-400 dark:text-slate-400" title="Full width at half maximum: how WIDE the peak is. Width is the gradient. A normal peak height with a wide FWHM means a slack field gradient, which pulls beads weakly even though the peak passes a height threshold.">FWHM</dt>
+						<dd class="font-semibold tabular-nums text-slate-100 dark:text-slate-100">
 							{profile.fwhm == null ? '—' : fmtInt(profile.fwhm) + ' µm'}
+						</dd>
+					</div>
+					<div>
+						<!-- Bead pull ~ B x dB/dz. This is the number that separates a magnet
+						     that looks fine from one that actually pulls. Relative index, not N. -->
+						<dt class="cursor-help text-slate-400 dark:text-slate-400" title="Force on a magnetic bead scales with B x dB/dz, not with B alone. dB/dz is recovered from div(B)=0 using the measured along-travel slope of bx. A RELATIVE index for ranking wells and channels, not newtons.">Bead pull (B·dB/dz)</dt>
+						<dd class="font-semibold tabular-nums text-slate-100 dark:text-slate-100">
+							{profile.forceIndex == null ? '—' : fmtInt(profile.forceIndex)}
+						</dd>
+					</div>
+					<div>
+						<!-- By is transverse: near zero when the well is centred over the
+						     magnet, large when it is laterally misaligned. -->
+						<dt class="cursor-help text-slate-400 dark:text-slate-400" title="Share of the field that is sideways at the peak. Near zero when the well sits centred over its magnet. Turns amber past 8%, which indicates lateral misalignment.">By / |B| at peak</dt>
+						<dd
+							class="font-semibold tabular-nums"
+							class:text-slate-100={(profile.byAtPeakPct ?? 0) < 8}
+							class:text-amber-400={(profile.byAtPeakPct ?? 0) >= 8}
+						>
+							{profile.byAtPeakPct == null ? '—' : fmt(profile.byAtPeakPct, 2) + ' %'}
 						</dd>
 					</div>
 					<div>
@@ -584,6 +655,37 @@
 						</dd>
 					</div>
 				</dl>
+
+				<details class="mt-2 text-[11px] text-slate-400 dark:text-slate-400">
+					<summary class="cursor-pointer select-none hover:text-slate-200">
+						What am I looking at?
+					</summary>
+					<div class="mt-1.5 space-y-1.5 border-l border-slate-700/60 pl-2">
+						<p>
+							The stage carries the sensor jig past a fixed magnet, so each trace is a
+							field component measured as the well travels through the field. The magnets
+							do not move.
+						</p>
+						<p>
+							<span class="text-slate-200">bz</span> is the pull axis and the tallest trace.
+							<span class="text-slate-200">bx</span> runs along travel and crosses zero at the
+							magnet centre — a far sharper position marker than the peak itself.
+							<span class="text-slate-200">by</span> is sideways and should stay flat and small.
+							<span class="text-slate-200">|B|</span> is the total, immune to sensor rotation.
+						</p>
+						<p>
+							<span class="text-slate-200">Peak height alone is not enough.</span> Bead force
+							goes as B x dB/dz, so a magnet sitting further away can hit a normal peak while
+							pulling weakly — it shows up as a wide FWHM and a low bead-pull index, not as a
+							low peak. Compare those two across wells and channels, not the peak on its own.
+						</p>
+						<p>
+							Peak position repeats within one seating of the jig, but shifts if it is
+							re-seated. Judge alignment by even SPACING between wells and by symmetry, not
+							by absolute position.
+						</p>
+					</div>
+				</details>
 			</div>
 		{/if}
 	{/if}

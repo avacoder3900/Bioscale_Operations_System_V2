@@ -44,6 +44,11 @@ export const ROW_FIELDS_WITH_SD = 18;
 
 export const MAX_ROWS = 20000;
 
+/** Half-width of the window used to take dBx/dy at the peak. Wide enough to
+ *  average out rep noise, narrow enough to stay in the linear zero-crossing
+ *  region rather than bending into the shoulders. */
+const BEAD_PULL_WINDOW_UM = 1500;
+
 export type Agg = { y: number; bx: number; by: number; bz: number; t: number; mag: number; reps: number };
 
 /** Mean each component over reps at a given stage position, then derive |B|. */
@@ -162,6 +167,7 @@ export function profile(series: Agg[]) {
 	};
 
 	const fit = travelLimited ? fitRisingTail() : null;
+	const pull = beadPull(series, peakIdx);
 
 	return {
 		peakY: peak.y,
@@ -180,10 +186,82 @@ export function profile(series: Agg[]) {
 		yMax: series[series.length - 1].y,
 		travelLimited,
 		edge,
+		// The maximum sits on the first or last sample of the swept window. A real
+		// peak has data on BOTH sides of it; a maximum at the edge is usually just
+		// the highest point of a flat noise trace, because the well's magnet was
+		// never in range. Reporting that as peakY gives a real-looking number for
+		// something that was never measured — e.g. a 20000..21000 window returns
+		// "peaks" at exactly 20000/21000 for every well whose magnet is elsewhere.
+		// Deliberately factual: it does not claim to know whether a magnet exists,
+		// only that the window did not contain a maximum.
+		peakAtWindowEdge: peakIdx === 0 || peakIdx === series.length - 1,
 		slopePerMm: fit ? fit.slopePerMm : null,
 		slopeR2: fit ? fit.slopeR2 : null,
 		slopeSpanY: fit ? fit.slopeSpanY : null,
-		method: travelLimited ? ('slope' as const) : ('peak' as const)
+		method: travelLimited ? ('slope' as const) : ('peak' as const),
+
+		// --- bead pull -------------------------------------------------------
+		// Force on a magnetic bead scales with B x (dB/dz), NOT with B alone. A
+		// magnet with a healthy peak field but a slack gradient — a wider gap, a
+		// chip, a tilt — passes a peak-only threshold while pulling beads weakly.
+		// That is the whole reason the sweep exists rather than a five-point read.
+		dBxdTravel: pull.dBxdTravel,
+		gradBzdz: pull.gradBzdz,
+		forceIndex: pull.forceIndex,
+		// |By| as a share of |B| at the peak. By is the transverse component, so
+		// it should be near zero when the well sits centred over the magnet; a
+		// large share means lateral misalignment.
+		byAtPeakPct: pull.byAtPeakPct
+	};
+}
+
+/**
+ * Bead-pull metrics derived from the along-travel field profile.
+ *
+ * The stage has no Z axis, so dBz/dz cannot be measured directly. It is
+ * recovered from div(B) = 0:
+ *
+ *     dBz/dz = -(dBx/dx + dBy/dy)
+ *
+ * The sweep travels along the field's x axis — that is the axis on which Bx
+ * swings antisymmetrically through zero at the peak — so dBx/dx IS measurable
+ * here. dBy/dy is not, and is ASSUMED equal to dBx/dx, which holds for an
+ * axially symmetric magnet near its axis. That gives dBz/dz = -2 dBx/dx.
+ *
+ * THAT ASSUMPTION IS THE WEAKEST LINK. If the magnet is markedly non-symmetric
+ * about the travel axis the factor of 2 is wrong, and forceIndex is then valid
+ * for COMPARING cells against each other but not as an absolute figure.
+ *
+ * forceIndex is deliberately a relative index, not newtons: the Z channel is
+ * inflated ~4x (zscale 0.25) and no bead moment is involved. Use it to rank
+ * wells and channels, not to predict a force.
+ */
+function beadPull(series: Agg[], peakIdx: number) {
+	const none = { dBxdTravel: null, gradBzdz: null, forceIndex: null, byAtPeakPct: null };
+	const peak = series[peakIdx];
+	if (!peak) return none;
+
+	// Least-squares dBx/dy over a window centred on the peak, which is where Bx
+	// crosses zero and is steepest — the best-conditioned place to take it.
+	const seg = series.filter((p) => Math.abs(p.y - peak.y) <= BEAD_PULL_WINDOW_UM);
+	if (seg.length < 3) return none;
+
+	const n = seg.length;
+	const myY = seg.reduce((s, p) => s + p.y, 0) / n;
+	const mBx = seg.reduce((s, p) => s + p.bx, 0) / n;
+	const sxx = seg.reduce((s, p) => s + (p.y - myY) ** 2, 0);
+	if (sxx <= 0) return none;
+	const slope = seg.reduce((s, p) => s + (p.y - myY) * (p.bx - mBx), 0) / sxx;
+	if (!Number.isFinite(slope)) return none;
+
+	const grad = -2 * slope;
+	const bmag = Math.hypot(peak.bx, peak.by, peak.bz);
+
+	return {
+		dBxdTravel: Number(slope.toFixed(5)),
+		gradBzdz: Number(grad.toFixed(5)),
+		forceIndex: Number(Math.abs(peak.bz * grad).toFixed(1)),
+		byAtPeakPct: bmag > 0 ? Number(((Math.abs(peak.by) / bmag) * 100).toFixed(2)) : null
 	};
 }
 

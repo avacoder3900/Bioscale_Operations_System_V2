@@ -49,7 +49,7 @@
 	const SWEEP_POLL_MS = 18000;
 
 	type SweepStatus = {
-		status: 'running' | 'uploading' | 'complete' | 'stale' | 'unknown';
+		status: 'running' | 'uploading' | 'complete' | 'stale' | 'unknown' | 'not_running';
 		elapsedMs?: number | null;
 		deviceOnline?: boolean;
 		deviceMode?: number | null;
@@ -66,12 +66,18 @@
 	let sweepWatch = $state<{ spuId: string; udi: string; since: string } | null>(null);
 	let sweepStatus = $state<SweepStatus | null>(null);
 	let sweepElapsedMs = $state(0);
+	// A sweep blocks the device, so a real one ALWAYS takes it offline. Remembering
+	// that transition is what lets the server tell "still uploading" apart from
+	// "never ran" — the endpoint is stateless and cannot see it.
+	let sweepSawOffline = $state(false);
 
 	// A derived boolean, not a read of sweepStatus directly, so the polling effect
 	// re-runs only when the watch actually ends — reading sweepStatus would restart
 	// the interval on every poll.
 	const sweepFinished = $derived(
-		sweepStatus?.status === 'complete' || sweepStatus?.status === 'stale'
+		sweepStatus?.status === 'complete' ||
+			sweepStatus?.status === 'stale' ||
+			sweepStatus?.status === 'not_running'
 	);
 
 	// Slow network poll.
@@ -82,9 +88,12 @@
 		const interval = setInterval(async () => {
 			try {
 				const res = await fetch(
-					`/api/validation/magnetometer/sweep-status?spuId=${encodeURIComponent(watch.spuId)}&since=${encodeURIComponent(watch.since)}`
+					`/api/validation/magnetometer/sweep-status?spuId=${encodeURIComponent(watch.spuId)}&since=${encodeURIComponent(watch.since)}&sawOffline=${sweepSawOffline}`
 				);
-				if (res.ok) sweepStatus = await res.json();
+				if (res.ok) {
+					sweepStatus = await res.json();
+					if (sweepStatus?.deviceOnline === false) sweepSawOffline = true;
+				}
 			} catch {
 				// Silent on purpose. The device is offline and the network unreliable
 				// for most of the run, so a failed poll is expected — keep polling.
@@ -256,7 +265,8 @@
 						const d = result.data as any;
 						sweepStatus = null;
 						sweepElapsedMs = 0;
-						sweepWatch = {
+						sweepSawOffline = false;
+				sweepWatch = {
 							spuId: queuedSpuId,
 							udi: d.sweepUdi,
 							// Prefer a server-stamped queue time when one is returned; the
@@ -314,6 +324,18 @@
 						<strong>No sweep data after {formatElapsed(sweepElapsedMs)}.</strong>
 						A run this old with nothing stored has almost certainly died rather than being
 						slow. Check the device and queue the sweep again.
+					</div>
+				{:else if sweepStatus?.status === 'not_running'}
+					<div
+						class="rounded border p-3 text-sm"
+						style="border-color: var(--color-tron-orange); color: var(--color-tron-orange);"
+					>
+						<strong>No sweep is running.</strong>
+						The device never went offline, and a sweep blocks it for the whole run — so it
+						was refused on the device after being queued. The usual cause is the
+						magnetometer not being BLE-connected: insert the jig
+						<em>and run the regular magnetometer test</em>, which is what establishes the
+						link, then queue the sweep again.
 					</div>
 				{:else if sweepStatus?.status === 'unknown'}
 					<div
