@@ -15922,3 +15922,36 @@ freshness by the filename epoch, NOT by channel temperature: 244's record was 0.
 min old while reading 21-26C simply because the unit was cold.
 
 No code changed in this entry.
+Final audit (script) + independent re-check (read-only, from the written UUID list):
+- 5000 UUIDs, 5000 unique; 0 on cartridge_records; 0 on optical_test_cartridges;
+  0 overlap with the 5,510 ids held by the 39 pre-existing barcode_sheet_batches (any status);
+  each of the 5000 in exactly one batch; 25 batches status=printed; 25 audit_log rows tagged
+  newData.bulkRun=zebra-bulk-2026-09-22 (one per batch, calibration JSON embedded).
+- PT-CT-106: 1691 → 6643. The 48-label gap vs +5000 is two concurrent WI-01 consumptions
+  (19:49:53Z −24, 20:24:43Z −24 — normal lab throughput), so the ledger reconciles exactly.
+- UUID list: %LOCALAPPDATA%\BIMS\zebra-runs\zebra-bulk-2026-09-22-1790106567226.txt
+- Batch ids: mfWgjjyeePGzeI7YOglZw uGvtgcK6RPDEZrAfbm5ij 3PCAV0JMlRKvRjGk-FvYD X8TaKdfIvQEUKxUmWtuov
+  WIazgaUNQ9EzsTL5HUh7g w88Q3K68LUj-Chr0pjOVN O1E3WWom0Ansm32_jlTVu _UkL6daDhvFDjrcLAvcKH
+  t0nzgmiHavBKDtHQjRwKh BA2N3_T4TZqEKi4veAWb1 daIkEAmS9U8kvDXdlQsHJ 0IQj4vlabEAGPqPtpW7_z
+  piWL6GT7JLIOwcLKG5FW6 Qy228vOOeTW2JGqQuryL4 NckdRD657qPzmFGsmEZen sFa-05OuZgAl3LKzqPw8L
+  Qd6qlJvZXU28PmuNehO_m Qc8R3w08joluxs3jUaOGO JCrb3LofEr7Z3Fnqw8sM7 wmryJHvPzD4Nz6MG0tBnD
+  mx6N5K7pLghgiiQ5cjKDG -L5PgM-EEe92MxMPQ5BN- u87ejvZryjl9kKm_A0_9r 43-0eIyNqvMGLcIuh0yXY
+  XqxcTQMP4TCWwhgY2vUCl
+Before the run: 40 unminted random test labels (the 20-label alignment job sent twice) + ~12 more
+from the layout dial-in — all to be destroyed, none in BIMS.
+No code changed in this entry. npm run check: n/a.
+
+================================================================================
+2026-09-24 — feat/research-analysis-mcp — research analysis + calibration MCP tools via proxy to brevitest-research-v2
+================================================================================
+Research-v2 DOMAIN-30 (analysis v3) exposes /api/agent/analysis/* and /api/agent/calibration/*.
+BIMS now proxies the allowlisted subset (analysis/, calibration/) at /api/agent/research/[...path]
+(src/lib/server/research-proxy.ts; RESEARCH_API_URL + optional RESEARCH_AGENT_API_KEY, falls back to
+AGENT_API_KEY) and registers 18 research_* MCP tools in bims-mcp.ts (server version 3.6.0): catalog,
+list/get/validate profiles, find cartridges, preview (dry run), view, save draft, activate, archive,
+run (confirmed gate), attach profile to assay, list lots, list/get curves, fit (draft), activate curve,
+quantify (confirmed gate). Writes go through machineWrite with actor. Docs: docs/MCP-SERVER.md.
+Tests: src/lib/server/research-proxy.test.ts (unit, 15 cases incl. dot-segment rejection);
+tests/contracts/12-research-analysis.test.ts (401 / 404 allowlist / 200-or-503 catalog).
+npm run test:unit: 174 pass. npm run check: 11 errors — unchanged from feat/spu-tweaks baseline.
+
