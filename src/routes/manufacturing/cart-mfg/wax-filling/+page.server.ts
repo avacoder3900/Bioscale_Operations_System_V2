@@ -4,7 +4,7 @@ import mongoose from 'mongoose';
 import {
 	connectDB, WaxFillingRun, CartridgeRecord, Consumable, ManufacturingSettings, generateId,
 	Equipment, EquipmentLocation, AuditLog, BackingLot, WaxBatch, ReceivingLot,
-	OpentronsRobot, ManualCartridgeRemoval, Ot2BridgeCommand
+	OpentronsRobot, ManualCartridgeRemoval, Ot2BridgeCommand, TipCalibratorFixture
 } from '$lib/server/db';
 import { recordTransaction, resolvePartId } from '$lib/server/services/inventory-transaction';
 import { resolveFridgeId, resolveCoolingTrayId, resolveDeckId } from '$lib/server/services/equipment-resolve';
@@ -124,7 +124,11 @@ function emptyState(robotId: string, loadError: string | null = null) {
 			nextTipIndex: number | null;
 			hostname: string | null;
 			capturedAt: string | null;
-		}
+		},
+		// Per-robot wax-tube aspiration floor (fixture.minTipClearanceWaxMm), for DISPLAY
+		// on the parameters form. The value that runs is injected server-side at
+		// startRun by calibrationRtpValues regardless of what the form shows.
+		waxFloorMm: null as number | null
 	};
 }
 
@@ -273,6 +277,22 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 
 		// Last known tip state for this robot — derived from the most recent
 		// completed wax run. null on first-ever use; protocol falls back to A1.
+		// Wax-tube aspiration floor to SHOW on the form (2026-09-24). The parameters
+		// step runs before the deck is scanned, so prefer the fixture of the run's
+		// deck when known, else any fixture on this robot that carries a floor.
+		// Display only: startRun re-resolves by deck and injects the real value.
+		let waxFloorMm: number | null = null;
+		try {
+			let fx: any = null;
+			if (run?.deckId) {
+				const deckEq = await Equipment.findById(run.deckId).select('deckLoadName').lean() as any;
+				if (deckEq?.deckLoadName) fx = await TipCalibratorFixture.findOne({ deckLoadName: deckEq.deckLoadName }).select('minTipClearanceWaxMm').lean();
+			}
+			if (!fx) fx = await TipCalibratorFixture.findOne({ robotId: String(robotId), minTipClearanceWaxMm: { $ne: null } }).select('minTipClearanceWaxMm').lean();
+			const v = Number((fx as any)?.minTipClearanceWaxMm);
+			if (Number.isFinite(v) && v > 0) waxFloorMm = v;
+		} catch { /* display only */ }
+
 		const lastTipState = (lastTipRun as any)?.pipetteTipState?.after
 			? {
 				nextTipIndex: (lastTipRun as any).pipetteTipState.after.nextTipIndex ?? null,
@@ -417,7 +437,8 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 			opentronsRobotId: robotId,
 			// Last completed run's post-run tip-tracker snapshot (if any),
 			// to seed the "next tip / tips remaining" readout on the panel.
-			lastTipState
+			lastTipState,
+			waxFloorMm
 		};
 	} catch (err) {
 		console.error('[WAX-FILLING PAGE] Load error:', err instanceof Error ? err.message : err);

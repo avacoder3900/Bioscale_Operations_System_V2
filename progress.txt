@@ -13865,3 +13865,21 @@ What this deployment is for: B07 wax floor injected from the fixture (no more ty
 problem?" swap card on the reagent run page; "Reagent tube rack" dropdown on the reagent start form;
 Studio "Swap tip" button + honest pick-up (409 TIP_ALREADY_ATTACHED) + auto-advancing tip well.
 Operators must reload open BIMS tabs (Studio: reload closes the jog run; edits are already saved).
+
+================================================================================
+2026-09-24 — master — wax start form now shows the per-robot tube floor (was displaying 1.5 while 3.5 ran)
+================================================================================
+Alejandro: "the min tip clearance on B07 is still 1.5". It was display only: the form seeds from the
+protocol schema default, while calibrationRtpValues injects the fixture's 3.5 at Start Run after the
+form is posted (yesterday's 17:22Z run recorded 3.5 because he typed it). Fix: wax-filling load looks
+up the fixture floor (run's deck if scanned, else any fixture on the robot carrying
+minTipClearanceWaxMm) and returns `waxFloorMm`; the page merges it into the ProtocolStartPanel
+contextValues so the field shows 3.5 on B07 (and stays 1.5 on R04, which has no fixture floor). The
+value that runs is unchanged. The page keeps a hand-written Props data interface, which is why the
+first check flagged the new field — added there.
+npm run check: 12 errors repo-wide, all pre-existing on master (10 baseline + 2 in
+validation/magnetometer/[sessionId] from yesterday's validation merge), none in the touched files.
+
+Deployment: production — Vercel auto-deploy from the master push
+Source: branch master @ this commit
+What this deployment is for: the wax parameters form on B07 displays the 3.5 mm floor it will run.

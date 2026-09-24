@@ -84,6 +84,8 @@
 				hostname: string | null;
 				capturedAt: string | null;
 			} | null;
+			/** Per-robot wax-tube floor (fixture.minTipClearanceWaxMm) shown on the form; the run gets it injected at start regardless. */
+			waxFloorMm?: number | null;
 		};
 	}
 
@@ -1198,7 +1200,7 @@
 				<ProtocolStartPanel
 						robot={{ _id: data.opentronsRobotId, name: data.robotName }}
 						protocols={data.robotProtocols}
-						contextValues={{ ...WAX_PARAM_DEFAULTS, cartridges: data.runState.plannedCartridgeCount ?? 24 }}
+						contextValues={{ ...WAX_PARAM_DEFAULTS, ...(data.waxFloorMm != null ? { min_tip_clearance: data.waxFloorMm } : {}), cartridges: data.runState.plannedCartridgeCount ?? 24 }}
 						contextReadonly={['cartridges']}
 						lastTipState={data.lastTipState}
 						submitting={submitting}
@@ -1239,7 +1241,7 @@
 				<ProtocolStartPanel
 						robot={{ _id: data.opentronsRobotId, name: data.robotName }}
 						protocols={data.robotProtocols}
-						contextValues={{ ...WAX_PARAM_DEFAULTS, cartridges: data.runState.plannedCartridgeCount ?? 24 }}
+						contextValues={{ ...WAX_PARAM_DEFAULTS, ...(data.waxFloorMm != null ? { min_tip_clearance: data.waxFloorMm } : {}), cartridges: data.runState.plannedCartridgeCount ?? 24 }}
 						contextReadonly={['cartridges']}
 						lastTipState={data.lastTipState}
 						submitting={submitting}
@@ -1313,7 +1315,7 @@
 				<ProtocolStartPanel
 						robot={{ _id: data.opentronsRobotId, name: data.robotName }}
 						protocols={data.robotProtocols}
-						contextValues={{ ...WAX_PARAM_DEFAULTS, cartridges: data.runState.plannedCartridgeCount ?? 24 }}
+						contextValues={{ ...WAX_PARAM_DEFAULTS, ...(data.waxFloorMm != null ? { min_tip_clearance: data.waxFloorMm } : {}), cartridges: data.runState.plannedCartridgeCount ?? 24 }}
 						contextReadonly={['cartridges']}
 						lastTipState={data.lastTipState}
 						submitting={submitting || orchestrating}
