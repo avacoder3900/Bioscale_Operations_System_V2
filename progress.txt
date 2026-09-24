@@ -14215,6 +14215,6 @@ file. The sync matters: after a git mv of a route, a bare svelte-check reports
 phantom "Cannot find module './$types'" errors for the moved directories.
 
 Deployment: production -- building from the GitHub push to master (Vercel dashboard, commit below)
-Source: branch master @ commit <filled in below>
-Retrieve this exact code: git checkout master at the commit below
+Source: branch master @ commit b1dc9bf8
+Retrieve this exact code: git checkout master at commit b1dc9bf8
 What this deployment is for: magnetometer sweep + fetch + export consolidated onto /validation; /spu/validation orphan tree removed
