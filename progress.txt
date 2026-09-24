@@ -14090,3 +14090,61 @@ npm run check: 12 errors repo-wide, all pre-existing, none in the touched file.
 Deployment: production — Vercel auto-deploy from the master push
 Source: branch master @ this commit
 What this deployment is for: Calibrate tip travels to the calibrator after a Swap tip instead of probing over the rack.
+
+================================================================================
+2026-09-24 — master — sweep run end to end on v98; bead-pull metric on the graphs
+================================================================================
+SPU 255 ran a full sweep through the complete v98 toolchain and the result is in
+BIMS. 196 stage positions x 5 wells x 8 reps, SWPEND rows=7840 good=7840
+ms=1143621 (19.06 min, zero dropped reads), captured over serial and filed as
+ValidationSession t2tTZmd1FIlzGkwydO6Fl.
+
+THE PATH IS SERIAL, DELIBERATELY. Firmware v98 can upload the sweep itself in
+chunked Particle publishes, but a full sweep is ~110 publishes -- ~220 data
+operations once the webhook's response event is counted -- against zero for a
+serial capture. Serial also files the full 8-rep raw data rather than the
+per-position means the upload downsamples to, so it is both cheaper and better.
+One command does it: Desktop/spu-sweep-tools/run-sweep.ps1 sweeps, captures and
+pushes to /api/agent/validation/mag-sweep. No Particle webhook was created.
+
+A webhook WAS briefly created at account scope and it never fired: SPU 255 is a
+Product 32546 device, and product devices publish to the PRODUCT event stream,
+which an account-scoped integration never sees (logs and errors both empty). The
+existing blank-test webhook is the working template if this is ever revisited --
+product_id 32546, same URL, x-agent-api-key header.
+
+BEAD PULL is now computed and highlighted, and it immediately found something.
+Force on a bead scales with B x dB/dz, not B alone. dBz/dz is recovered from
+div(B)=0: the sweep travels along the field's x axis so dBx/dx is measurable,
+and dBy/dy is assumed equal to it (axial symmetry), giving dBz/dz = -2 dBx/dx.
+On 255, channel C has the HIGHEST peak field and the LOWEST pull, ~29% under
+channel A:
+   channel   peak Bz       bead pull
+   A         4132-4173     2063-2263
+   B         4120-4218     1891-2163
+   C         4157-4192     1435-1721
+Peak-only reading calls all fifteen cells healthy. Worth checking against a
+second SPU before concluding it is specific to 255 rather than jig geometry.
+
+PEAK POSITION SHIFTS BETWEEN SEATINGS. Two full sweeps hours apart gave
+5400/13400/21400/29400/37400 and 6000/13800/21800/30000/38000 -- every well
++400..600um, spacing unchanged at ~8000um. Judge alignment by spacing and
+symmetry, never by absolute y.
+
+Also fixed: the sweep-status poller reported "uploading" whenever the device was
+online and idle with nothing stored, which is equally consistent with a sweep
+that died in seconds -- it told an operator to wait 22 minutes on a run that had
+already failed. It now takes a sawOffline flag from the caller and reports
+not_running. And a maximum landing on the first or last swept position is
+flagged peakAtWindowEdge: a 20000..21000 window returned real-looking "peaks" at
+exactly 20000/21000 for every well whose magnet was elsewhere.
+
+File: src/lib/server/validation/mag-sweep.ts,
+src/routes/api/validation/magnetometer/sweep-status/+server.ts,
+src/routes/spu/validation/magnetometer/{+page.svelte,sweep/SweepFieldChart.svelte}.
+svelte-check --threshold error: 122, none in the touched files.
+
+Deployment: production -- building from the GitHub push to master (Vercel dashboard, commit below)
+Source: branch master @ commit 1cddb46b
+Retrieve this exact code: git checkout master at commit 1cddb46b
+What this deployment is for: bead-pull (B x dB/dz) and by/|B| on the sweep graphs, FWHM highlighted, trace explanations, edge-peak warning, poller not_running fix
