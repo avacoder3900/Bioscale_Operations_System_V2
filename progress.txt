@@ -13883,3 +13883,48 @@ validation/magnetometer/[sessionId] from yesterday's validation merge), none in 
 Deployment: production — Vercel auto-deploy from the master push
 Source: branch master @ this commit
 What this deployment is for: the wax parameters form on B07 displays the 3.5 mm floor it will run.
+
+2026-09-24 — master — magnetometer SPU-vs-SPU comparison + sweep viewer
+================================================================================
+Three new routes, all additive. Nothing existing was modified.
+
+compare/ ranks every SPU that has magnetometer runs by its deviation from the
+fleet median, across 5 wells x 3 channels, and defaults to SPU 255. 38 SPUs, 700
+sessions.
+
+The load-bearing detail: |B| is DERIVED as sqrt(X^2+Y^2+Z^2), not read from a
+stored field. A ch*_mag field exists on only 20 of 3515 magResult rows (0.6%),
+while X/Y/Z are present on all of them. The first cut read ch*_mag and 36 of the
+38 SPUs rendered as blank — including 255. Where both exist the derived and
+stored values agree to 9.1e-13, so deriving it is both correct and the only way
+most of the fleet shows up at all.
+
+What that surfaced on 255: every one of its 15 well/channel cells sits BELOW the
+fleet median, none above. Mean |B| 3932.4, delta -168.9, rank 13/38. The deficit
+grows monotonically with well index and channel B is worst at every well, which
+is the signature of a geometric problem (tilt or seating), not a dead sensor.
+Worth noting 209 reads 787.3 against a ~4100 fleet norm — that is not an offset,
+that is a unit reading almost no field.
+
+sweep/ is a viewer for magnetometer stage sweeps (ValidationSession type
+'mag_sweep'). ZERO such documents exist yet, so it renders its empty state until
+something ingests one. Shipped deliberately ahead of its data.
+
+api/agent/validation/mag-sweep ingests serial sweep captures, resolving the SPU
+by udi/barcode/_id or a unique udi suffix and REJECTING ambiguous tokens rather
+than guessing. Not yet exercised against live data.
+
+Caveat for whoever reads this next: src/routes/spu/validation/ does not
+otherwise exist on master — the whole validation section lives only on
+feat/cleaning-calendar. These three pages therefore inherit
+src/routes/spu/+layout.svelte and have NO validation-section nav entry. They are
+reachable by URL only. That is expected, not an oversight.
+
+File: src/routes/spu/validation/magnetometer/{compare,sweep}/**,
+src/routes/api/agent/validation/mag-sweep/+server.ts.
+svelte-check --threshold error: clean in all touched paths.
+
+Deployment: production — building from the GitHub push to master (Vercel dashboard, commit below)
+Source: branch master @ commit f8e34013
+Retrieve this exact code: git checkout master at commit f8e34013
+What this deployment is for: magnetometer SPU-vs-SPU comparison page, sweep viewer, and the sweep ingest endpoint
