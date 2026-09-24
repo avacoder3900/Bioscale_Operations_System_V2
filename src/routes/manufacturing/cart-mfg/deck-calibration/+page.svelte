@@ -1010,6 +1010,12 @@
 				await refreshPosition();
 			}
 			// Step 2 — travel, unless the operator already jogged onto the fixture.
+			// The probe runs from wherever the pipette IS (attached mode), so this
+			// decision must use the live position, not the last one this page saw.
+			// After a Swap tip the stored position was still the calibrator from
+			// before the swap → travel skipped → probe walked at the tip rack (R04,
+			// 2026-09-24). Always re-read before deciding.
+			await refreshPosition();
 			if (!pickedUpNow && atCalibratorNow()) {
 				msg = 'Already on the calibrator — probing from the jogged position…';
 			} else {
@@ -1120,6 +1126,9 @@
 		if (!tiprackForProfile) throw new Error('Pick the tip type first (p20/wax or p300/reagent) — it is not inferred from the mount');
 		await doPickUp(true);
 		hasTip = true;
+		// The pipette is now over the tip rack: refresh so "at calibrator?" checks
+		// and the position readout can't act on a pre-pick-up position.
+		await refreshPosition();
 		// Tip state just changed → any nominal taken without the tip is now a
 		// different frame. Force a fresh Move-to-hole before the next capture.
 		nominal = null; refWell = null;

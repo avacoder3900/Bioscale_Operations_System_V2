@@ -14071,3 +14071,22 @@ npm run check: 12 errors repo-wide, all pre-existing, none in the touched files.
 Deployment: production — Vercel auto-deploy from the master push
 Source: branch master @ this commit
 What this deployment is for: WI-01 Remove actually removes a mis-scan; merged double-barcodes are split and scanned separately.
+
+================================================================================
+2026-09-24 — master — Studio Calibrate-tip after a Swap tip probed at the tip rack (stale "at calibrator" check)
+================================================================================
+Alejandro (R04): Swap tip picked a new tip fine, then Calibrate tip "started calibrating at the tip
+box". Bridge log 19:57:18Z: "probing from x=146.88 y=291.74 (tip was at z=149.93)" — the daemon's
+ATTACHED mode probes from wherever the pipette currently is; the Studio is supposed to move it to the
+calibrator first unless atCalibratorNow(). That check used liveX/liveY, last refreshed at the
+calibrator before the swap, so it said "already there", skipped the travel, and the daemon walked X
+and Y 5 mm over the rack (no switch, failed cleanly, no alarm — z_cal 40.8 is above the rack).
+Fix (deck-calibration/+page.svelte): calibrateTip re-reads the live position before deciding;
+doPickUpTip refreshes the position after every pick-up (so Swap tip / Pick up tip can't leave a
+stale "at calibrator"). Daemon-side belt-and-braces (attached mode: travel to the cal point when the
+current XY is > a few mm from it) goes with the pending daemon bundle (faster probe, tracker bump).
+npm run check: 12 errors repo-wide, all pre-existing, none in the touched file.
+
+Deployment: production — Vercel auto-deploy from the master push
+Source: branch master @ this commit
+What this deployment is for: Calibrate tip travels to the calibrator after a Swap tip instead of probing over the rack.
