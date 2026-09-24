@@ -13099,3 +13099,18 @@ Final audit (script) + independent re-check (read-only, from the written UUID li
 Before the run: 40 unminted random test labels (the 20-label alignment job sent twice) + ~12 more
 from the layout dial-in — all to be destroyed, none in BIMS.
 No code changed in this entry. npm run check: n/a.
+
+================================================================================
+2026-09-24 — feat/research-analysis-mcp — research analysis + calibration MCP tools via proxy to brevitest-research-v2
+================================================================================
+Research-v2 DOMAIN-30 (analysis v3) exposes /api/agent/analysis/* and /api/agent/calibration/*.
+BIMS now proxies the allowlisted subset (analysis/, calibration/) at /api/agent/research/[...path]
+(src/lib/server/research-proxy.ts; RESEARCH_API_URL + optional RESEARCH_AGENT_API_KEY, falls back to
+AGENT_API_KEY) and registers 18 research_* MCP tools in bims-mcp.ts (server version 3.6.0): catalog,
+list/get/validate profiles, find cartridges, preview (dry run), view, save draft, activate, archive,
+run (confirmed gate), attach profile to assay, list lots, list/get curves, fit (draft), activate curve,
+quantify (confirmed gate). Writes go through machineWrite with actor. Docs: docs/MCP-SERVER.md.
+Tests: src/lib/server/research-proxy.test.ts (unit, 15 cases incl. dot-segment rejection);
+tests/contracts/12-research-analysis.test.ts (401 / 404 allowlist / 200-or-503 catalog).
+npm run test:unit: 174 pass. npm run check: 11 errors — unchanged from feat/spu-tweaks baseline.
+
