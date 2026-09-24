@@ -29,6 +29,7 @@ export { Batch } from './batch.js';
 export { ProductionRun } from './production-run.js';
 export { GeneratedBarcode } from './generated-barcode.js';
 export { ValidationSession } from './validation-session.js';
+export { SweepUpload } from './sweep-upload.js';
 export { WaxFillingRun } from './wax-filling-run.js';
 export { ProcessConfiguration } from './process-configuration.js';
 export { ManufacturingSettings } from './manufacturing-settings.js';

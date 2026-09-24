@@ -5,7 +5,7 @@ import { applyImmutableMiddleware } from '../middleware/immutable.js';
 const deviceEventSchema = new Schema({
 	_id: { type: String, default: () => generateId() },
 	deviceId: String,
-	eventType: { type: String, enum: ['validate', 'load_assay', 'upload', 'reset', 'error'] },
+	eventType: { type: String, enum: ['validate', 'load_assay', 'upload', 'reset', 'error', 'mag_sweep_chunk'] },
 	eventData: Schema.Types.Mixed, cartridgeUuid: String,
 	success: Boolean, errorMessage: String,
 	createdAt: { type: Date, default: Date.now }
