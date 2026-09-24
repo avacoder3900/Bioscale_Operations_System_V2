@@ -46,7 +46,7 @@
 	interface Props {
 		data: {
 			sessions?: SessionListItem[] | null;
-			session?: SessionMeta | null;
+			selected?: SessionMeta | null;
 			magResults?: MagResults | null;
 			series?: Record<string, Record<string, Point[]>> | null;
 		};
@@ -55,7 +55,7 @@
 	let { data }: Props = $props();
 
 	const sessions = $derived(data.sessions ?? []);
-	const session = $derived(data.session ?? null);
+	const session = $derived(data.selected ?? null);
 	const magResults = $derived(data.magResults ?? null);
 
 	/** Object keys survive JSON as strings, so every lookup goes through String(). */

@@ -12,49 +12,98 @@ import type { PageServerLoad } from './$types';
  * from the verbatim rawData capture. That aggregation is duplicated below rather
  * than imported: the ingest endpoint is owned elsewhere and this page must not
  * drag a route handler into its import graph.
+ *
+ * Row layout is NOT fixed. `rawData.format` discriminates between at least two
+ * shapes today:
+ *   'spu-mag-sweep/v1'       — bench pusher, per-rep raw rows
+ *   'spu-mag-sweep-means/v1' — firmware v98 device upload, per-position means + SD
+ * `rawData.fields[]` is always present in every format and is the authoritative,
+ * ordered column-header list, so columns are resolved BY NAME from it rather than
+ * by hardcoded offset — that's what makes this format-agnostic instead of tied to
+ * whichever layout happened to exist first. `magResults.wells[well][channel]` is
+ * unchanged across formats.
  */
-
-// Field offsets within a stored row: [0]=y(microns) [1]=well [2]=rep then (t,x,y,z) per channel.
-const ROW_Y = 0;
-const ROW_WELL = 1;
-const CHANNELS = [
-	{ ch: 'A', t: 3, x: 4, y: 5, z: 6 },
-	{ ch: 'B', t: 7, x: 8, y: 9, z: 10 },
-	{ ch: 'C', t: 11, x: 12, y: 13, z: 14 }
-] as const;
 
 const SESSION_LIST_LIMIT = 50;
 
 type SeriesPoint = { y: number; bx: number; by: number; bz: number; mag: number };
 type SeriesByWell = Record<string, Record<string, SeriesPoint[]>>;
 
+interface RawSweepData {
+	format?: unknown;
+	fields?: unknown;
+	rows?: unknown;
+}
+
+type ChannelCols = { x: number; y: number; z: number };
+
+/**
+ * Resolve the stage-position column, the well column, and per-channel x/y/z
+ * field-component columns from `fields[]` by exact name match — known names
+ * today are 'y', 'well', and `x${ch}`/`y${ch}`/`z${ch}` per channel (see the
+ * ingest endpoint's own `fields` array for 'spu-mag-sweep/v1'). Any column
+ * that can't be found is left unresolved rather than guessed at; callers must
+ * drop what they can't resolve instead of falling back to a positional offset.
+ */
+function resolveColumns(
+	fields: unknown,
+	channels: string[]
+): { yIdx: number; wellIdx: number; perChannel: Map<string, ChannelCols> } | null {
+	if (!Array.isArray(fields)) return null;
+
+	const indexOf = (name: string): number => (fields as unknown[]).indexOf(name);
+
+	const yIdx = indexOf('y');
+	const wellIdx = indexOf('well');
+	if (yIdx < 0 || wellIdx < 0) return null;
+
+	const perChannel = new Map<string, ChannelCols>();
+	for (const ch of channels) {
+		const x = indexOf(`x${ch}`);
+		const y = indexOf(`y${ch}`);
+		const z = indexOf(`z${ch}`);
+		// Degrade honestly: a channel missing any of its three components is
+		// dropped, not reconstructed from a guessed offset.
+		if (x < 0 || y < 0 || z < 0) continue;
+		perChannel.set(ch, { x, y, z });
+	}
+
+	return { yIdx, wellIdx, perChannel };
+}
+
 /**
  * Mirrors the ingest endpoint's aggregation: group by (well, channel) then by
- * stage position, MEAN each component over the reps sharing that position, and
- * derive |B| from the averaged components (not by averaging magnitudes).
+ * stage position, MEAN each component over the rows sharing that position, and
+ * derive |B| from the averaged components (not by averaging magnitudes). This
+ * is format-agnostic: for per-rep rows the mean is over reps; for per-position
+ * rows (already one row per position) it's a no-op mean of one.
  */
-function buildSeries(rawRows: unknown): SeriesByWell {
+function buildSeries(rawData: RawSweepData | null | undefined, channels: string[]): SeriesByWell {
 	const out: SeriesByWell = {};
-	if (!Array.isArray(rawRows)) return out;
+	const rows = rawData?.rows;
+	if (!Array.isArray(rows)) return out;
+
+	const cols = resolveColumns(rawData?.fields, channels);
+	if (!cols) return out;
 
 	// "well|channel" -> stage y -> running component sums
 	const acc = new Map<string, Map<number, { bx: number; by: number; bz: number; n: number }>>();
 
-	for (const row of rawRows as unknown[]) {
+	for (const row of rows as unknown[]) {
 		if (!Array.isArray(row)) continue;
 		const r = row as number[];
 
-		const y = Number(r[ROW_Y]);
-		const well = Number(r[ROW_WELL]);
+		const y = Number(r[cols.yIdx]);
+		const well = Number(r[cols.wellIdx]);
 		if (!Number.isFinite(y) || !Number.isFinite(well)) continue;
 
-		for (const c of CHANNELS) {
-			const bx = Number(r[c.x]);
-			const by = Number(r[c.y]);
-			const bz = Number(r[c.z]);
+		for (const [ch, idx] of cols.perChannel) {
+			const bx = Number(r[idx.x]);
+			const by = Number(r[idx.y]);
+			const bz = Number(r[idx.z]);
 			if (!Number.isFinite(bx) || !Number.isFinite(by) || !Number.isFinite(bz)) continue;
 
-			const key = `${well}|${c.ch}`;
+			const key = `${well}|${ch}`;
 			let byPos = acc.get(key);
 			if (!byPos) {
 				byPos = new Map();
@@ -144,6 +193,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 			startedAt: 1,
 			completedAt: 1,
 			magResults: 1,
+			'rawData.format': 1,
 			'rawData.fields': 1,
 			'rawData.rows': 1
 		}
@@ -178,6 +228,6 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 					durationMs: mag.durationMs ?? null
 				}
 			: null,
-		series: buildSeries(full.rawData?.rows)
+		series: buildSeries(full.rawData, mag?.channels ?? [])
 	}));
 };

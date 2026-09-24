@@ -44,6 +44,7 @@ export { ProductionRun } from './production-run.js';
 export { GeneratedBarcode } from './generated-barcode.js';
 export { ValidationSession } from './validation-session.js';
 export { ValidationRun, VALIDATION_RUN_STEPS, STEP_LABELS } from './validation-run.js';
+export { SweepUpload } from './sweep-upload.js';
 export { WaxFillingRun } from './wax-filling-run.js';
 export { WaxBatch } from './wax-batch.js';
 export { ProcessConfiguration } from './process-configuration.js';
