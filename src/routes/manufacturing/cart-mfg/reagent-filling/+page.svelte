@@ -135,6 +135,35 @@
 	let robotStatus = $state<string | null>(null);
 
 	/**
+	 * Mid-run tip swap (2026-09-18, mirrors wax-filling). Sends a request to the
+	 * on-robot bridge; the running reagent protocol picks it up before its next
+	 * aspiration batch, swaps the tip (from the rack, or by hand), re-probes it and
+	 * continues with that batch.
+	 */
+	let tipSwapStatus = $state<'' | 'sending' | 'rack' | 'hand' | 'cancelled' | 'error'>('');
+	async function requestTipSwap(mode: 'rack' | 'hand' | 'cancel') {
+		if (!data.activeRunId) return;
+		tipSwapStatus = 'sending';
+		try {
+			const fd = new FormData();
+			fd.set('runId', data.activeRunId);
+			fd.set('mode', mode === 'cancel' ? 'rack' : mode);
+			fd.set('cancel', mode === 'cancel' ? 'true' : 'false');
+			const res = await fetch('?/requestTipSwap', {
+				method: 'POST',
+				body: fd,
+				headers: { 'x-sveltekit-action': 'true' }
+			});
+			const json = await res.json();
+			if (!res.ok || json?.type === 'failure') throw new Error(json?.data?.error ?? `HTTP ${res.status}`);
+			tipSwapStatus = mode === 'cancel' ? 'cancelled' : mode;
+		} catch (e) {
+			console.error('[reagent] tip swap request failed', e);
+			tipSwapStatus = 'error';
+		}
+	}
+
+	/**
 	 * Run-time parameters BIMS pre-selects for a reagent run, overriding the .py's
 	 * own defaults. These seed the form; the operator can still change any of them.
 	 *
@@ -789,6 +818,51 @@
 					});
 				}}
 			/>
+			{#if !runFinished}
+				<div class="mt-3 rounded-lg border border-amber-500/40 bg-amber-900/10 p-4">
+					<div class="flex flex-wrap items-center justify-between gap-3">
+						<div>
+							<h3 class="text-sm font-semibold text-amber-200">Tip problem? Swap the tip without losing your place</h3>
+							<p class="mt-1 text-xs text-amber-200/80">
+								The robot stops before its next well, blows what is left in the tip back into the reagent tube, swaps the tip,
+								re-calibrates it, then re-aspirates and continues at the exact well it stopped at. Works while running or paused.
+							</p>
+						</div>
+						<div class="flex flex-wrap gap-2">
+							<button type="button"
+								class="rounded-md border border-amber-400/60 bg-amber-500/20 px-3 py-1.5 text-sm font-medium text-amber-100 hover:bg-amber-500/30 disabled:opacity-50"
+								disabled={tipSwapStatus === 'sending'}
+								onclick={() => requestTipSwap('rack')}>
+								Swap tip — robot picks a new one
+							</button>
+							<button type="button"
+								class="rounded-md border border-amber-400/60 bg-amber-500/20 px-3 py-1.5 text-sm font-medium text-amber-100 hover:bg-amber-500/30 disabled:opacity-50"
+								disabled={tipSwapStatus === 'sending'}
+								onclick={() => requestTipSwap('hand')}>
+								Swap tip — I'll put one on by hand
+							</button>
+							{#if tipSwapStatus === 'rack' || tipSwapStatus === 'hand'}
+								<button type="button"
+									class="rounded-md border border-[var(--color-tron-border)] px-3 py-1.5 text-sm text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]"
+									onclick={() => requestTipSwap('cancel')}>
+									Cancel request
+								</button>
+							{/if}
+						</div>
+					</div>
+					{#if tipSwapStatus === 'sending'}
+						<p class="mt-2 text-xs text-amber-200/80">Sending to the robot…</p>
+					{:else if tipSwapStatus === 'rack'}
+						<p class="mt-2 text-xs text-emerald-300">Requested. The robot will stop before its next aspiration, drop the tip, pick a fresh one from the rack, calibrate it and continue. If the run is paused, press Resume.</p>
+					{:else if tipSwapStatus === 'hand'}
+						<p class="mt-2 text-xs text-emerald-300">Requested. The robot will stop before its next aspiration, raise the pipette over the calibrator and pause — pull the old tip off, push a new one on, then press Resume. It calibrates the new tip and continues. If the run is paused now, press Resume first so it can reach that point.</p>
+					{:else if tipSwapStatus === 'cancelled'}
+						<p class="mt-2 text-xs text-[var(--color-tron-text-secondary)]">Request cancelled (only if the robot hadn't acted on it yet).</p>
+					{:else if tipSwapStatus === 'error'}
+						<p class="mt-2 text-xs text-red-300">Could not send the request to the robot bridge — try again, or Pause and swap the tip when the run reaches its next tip change.</p>
+					{/if}
+				</div>
+			{/if}
 		{/if}
 		{#if data.runState.runEndTime || previewParam}
 			<RunExecution

@@ -13526,3 +13526,327 @@ Deployment: production — building from the GitHub push to master (Vercel dashb
 Source: branch master @ commit 9b00987a (squash merge of PR #68)
 Retrieve this exact code: git checkout master at commit 9b00987a
 What this deployment is for: typed entry on all camera controls + original slider ranges restored
+
+================================================================================
+2026-09-15 — fix/studio-mount-default-right — new PT-CT-112 thermoseal lot so WI-01 backing can scan carts
+================================================================================
+Alejandro asked for a new thermoseal lot on Cartridge Backing so cartridges could be scanned in.
+Root cause: WI-01's Thermoseal dropdown is built from receiving_lots (part PT-CT-112, status not
+rejected/returned) minus consumption/scrap inventory_transactions per lotId, and every one of the
+11 PT-CT-112 lots (Apr–May, last laser-cut batch 2026-05-22) was at 0 remaining — several were
+over-consumed (e.g. LOT-20260522-XQIF qty 184 / used 188). No laser-cut batch has been recorded
+since May, so nothing had replenished the list.
+Data change only (no code). Inserted via one-off script against the second-repo .env, mirroring
+laser-cutting/recordBatch + the 2026-08-25 ZEBRA-20260818-PTCT106 backfill:
+  - receiving_lots UO1HX33qBD5iS85LBmLyi: lotId/lotNumber LOT-20260915-4MWU, part PT-CT-112,
+    quantity 480 (placeholder = 30 sheets × 16 strips; NOT a counted batch — adjust `quantity`
+    if the physical strip count differs), status accepted, coc, operator "claude (req: alejandrov)".
+  - inventory_transactions LPMaRC_7XdlpWFmD7VUFk: creation +480 on PT-CT-112 (inventoryCount
+    −691 → −211; the count has been negative since the over-consumption above).
+  - audit_log INSERT row on receiving_lots/UO1HX33qBD5iS85LBmLyi with the reason.
+Verified with WI-01's own availability math: LOT-20260915-4MWU remaining 480 → it now appears in
+the Thermoseal Laser Cut Sheet dropdown / validates on scan. WI-01 does not submit a planned
+quantity, so the still-negative part inventoryCount does not block checkAndStart.
+Not fixed (systemic): the cut-thermoseal/laser-cutting pages have not been used since May, so
+PT-CT-112 lots only get created by hand; recording actual laser-cut batches would keep this from
+recurring.
+
+================================================================================
+2026-09-15 — fix/studio-mount-default-right — B07 wax run c4a9bb56 failed at carrier 3: calibrator USB drop, not a probe problem
+================================================================================
+Operator report: wax fill on B07 (deck-004, 24 carts, run c4a9bb56, started 16:47Z) filled rows 1-2
+fine, then "calibration failed twice" on row 3. Diagnosis from the robot (no code change):
+  - Run error: "Tip calibration REJECTED twice (serial write failed (X))" at 17:13:15Z. The
+    protocol comment before each reject was "Error writing to serial during X calibration:
+    (5, 'Input/output error')" — errno 5 on the calibrator handle, not an over-cap adjust.
+  - dmesg: the Particle Argon calibrator (2b04:c00c, usb 1-1.3) disconnected/re-enumerated at
+    17:11:21Z and 17:11:51Z — during the "carrier 2 done, remove cartridges" checkpoint pause
+    (17:11:12Z) — coming back as /dev/ttyACM0 while the run still held /dev/ttyACM1. It also
+    dropped at 16:12Z and 16:36Z (before the run). Both carrier-1/2 probes were normal (adjust
+    -2.5/+0.3, -2.8/+0.3; baseline -1.0/2.5).
+  - Fixture is healthy now: ttyACM0 answers C → "=-1.0:2.5", I → deck-004 particle id.
+  - Protocol gap: pick_up_and_calibrate_tip retries with a fresh tip on ANY reject, reusing the
+    dead serial handle, so a USB drop always burns 2 tips (C1, D1; tracker now index 4) and
+    fails. Not fixed: on "serial write failed" it should re-probe for the calibrator / pause for
+    reconnect instead. (memory: project-wax-calibrator-usb-drop-midrun)
+  - Recovery path given to operator: reseat cable → BIMS Abort (smart abort marks carts 1-16
+    wax_filled from the robot log, reverts 17-24 to backing) → new run, scan carts 17-24 with
+    Start at cartridge = 17.
+BIMS wax_filling_runs drZ95mY1yQ_cGB1yfVMDe still status Running (opentronsRunFinalStatus failed).
+
+================================================================================
+2026-09-17 — fix/studio-mount-default-right — deck-004 wax-hole Z flattened to 8.65 (B07 calibration, data only)
+================================================================================
+Alejandro, mid-calibration on B07/deck-004, asked whether every wax hole should share one Z, then
+asked for it to be applied. Analysis of the live Mongo def first: 288 wax holes (even cols) spanned
+z 8.495..8.790 (median 8.650; carrier 1 all 8.65, C2/C3 ±0.15 scatter), least-squares plane tilt
+0.02 mm across the whole deck, residual sd 0.05 mm — i.e. teaching noise, not geometry; fill hovers
+1 mm above the rim (dispense_depth −1) so ±0.15 mm is immaterial. Reagent holes (odd cols) spread
+2.35 mm (6.75..9.10) — NOT touched, flagged for a separate look.
+Applied via script mirroring applyDeckEditsPerWell (not raw-only): 136 wax wells moved to z=8.65
+(152 already there), X/Y untouched, reagent wells verified byte-identical, hasUnpublishedEdits=true,
+136 deck_calibration_edits rows (robotId B07, deckEquipmentId DECK-004, createdBy
+"claude (req: alejandrov)"), one audit_log deck_calibration_edit_batch row, local Opentrons labware
+JSON mirrored. Pre-change backup: calibration-backups/deck-004-pre-z-flatten-2026-09-17T20-40-52-780Z.json
+(untracked dir). Next B07 wax run's freshness gate will re-upload the def to the robot; the Studio
+needs a reload to show the new Z. No code change.
+
+================================================================================
+2026-09-17 — fix/studio-mount-default-right — B07 tip drop + home via bridge queue; B07 is on WiFi with ~90% packet loss
+================================================================================
+Alejandro asked for B07's p20 tip to be ejected and the gantry homed after Studio calibration. B07
+went dark from the lab Mac right after the 20:44Z protocol re-upload: ping 90-97% loss, :31950/:22
+connects timing out, while the bridge heartbeat kept arriving and SSH (when it got through) showed
+uptime 2.3 days, load 0.2, both services active — NOT a reboot. dmesg: eth0 (smsc95xx) never links,
+wlan0 is the live interface → B07 runs on WiFi and the link is badly degraded (R04 on the same LAN
+answered normally). Worked around it by queuing kind:'http' ot2_bridge_commands (deviceId
+ot2-b07-bridge; daemon executes against localhost and posts back over its own retrying outbound):
+verified no protocol run active (038d1800 succeeded), found the Studio maintenance run 77c28050 with
+p20 752ebc2c and a modelled tip (pickUpTip 20:16:31Z), then moveToAddressableAreaForDropTip
+(fixedTrash) → dropTipInPlace → home, all succeeded (21:1xZ). Maintenance run left open (it is the
+operator's Studio session). Follow-up: check B07's WiFi/AP or plug eth0 in — this loss profile is
+the likely root of today's "bridge did not respond" style timeouts on B07.
+
+================================================================================
+2026-09-17 — fix/wax-aspirate-floor-clearance — B07 tips bending in the wax tube at the end of a run: per-robot aspiration floor
+================================================================================
+Operator report (alejandro): on B07/deck-004 wax runs the pipette goes too deep for the last 4-5
+cartridges of carrier 3, bends the tip, and those carts fill badly. Run logs (5171c73d today and
+038d1800 earlier, identical profile) show it is the WAX SOURCE TUBE, not the deck: every aspiration
+is from drybath A3; the tip's depth below the rim walks −27.48 → −37.10 mm over the run and pins at
+−37.10 for ~18 aspirations = wells ~220-288 = carrier-3 carts 20-24. −37.10 is exactly the protocol's
+floor clamp: tube bottom z 67.25 + min_tip_clearance 1.5 (rim 105.85). The 2 ml tube is conical, so
+1.5 mm above the apex is inside the cone and the p20 tip wall wedges. Dispense depth is unchanged
+(hover +1.0 at every hole incl. carrier 3) and deck-004 wax Z is flat at 8.65 — ruled out.
+Why every run ends on the floor: the .py models the liquid from a HARDCODED dead_volume = 50 uL
+(line 1485) → modelled surface 3.8 mm at the end → target 1.8 mm → clamped at 1.5. BIMS meanwhile
+told operators to load 541 uL (19.2 uL/cart from the 4×1.6 gate era + 80 dead) while the current
+gates 2.2/2.2/2.2/1.8 × 3 rows dispense 25.2 uL/cart = 604.8 uL per deck — 64 uL short of what the
+run dispenses (operators were evidently overfilling by hand).
+Why only B07 ("other robots are fine with 1.5"): R04's commanded path is byte-identical (same 72
+aspirates, same −37.1 pin), deck cals are pure rotations, pipettes report no tip-overlap table, and
+the p20 pipette-offset z difference (B07 +0.8 / R04 −0.9) goes the SAFE way for B07. The taught
+frames tell the story: B07 deck-004 taught wax Z 8.65 = the deck file's design Z (8.65-9.1) and B14
+deck-003 8.94 = design (8.8-9.1), but R04 deck-001 taught 3.76 vs design 7.4-7.75 (ialas −3.90 on
+08-06, jacob −4.40 on 09-15); R04 also still runs the default probe z 34.49 vs B07's probed 40.15.
+So R04's model thinks its tip is ~4-5 mm lower than it physically is: at the untaught wax tube its
+1.5 mm floor is really ~6 mm, and raising it would lift the tip OUT of the wax at run end. B07's
+frame is accurate, so 1.5 really is 1.5. The floor is therefore per robot, not a fleet default.
+Changes:
+  - src/lib/server/opentrons/calibration-rtps.ts: inject min_tip_clearance from the calibrator
+    fixture's new minTipClearanceWaxMm (wax-filling only, only when the .py declares it, clamped to
+    the declared min/max). Absent → nothing injected, .py default 1.5 stands (R04, B14).
+  - src/lib/server/db/models/tip-calibrator-fixture.ts: minTipClearanceWaxMm (Number, null).
+  - wax-filling/+page.svelte: WAX_PARAM_DEFAULTS comment only (an earlier commit on this branch
+    set a fleet-wide 3.5 there; reverted in favour of per-robot).
+  - Data (audit-logged): tip_calibrator_fixtures FNrWJ5pGKH7i87BKER7C_ (B07 / deck-004)
+    minTipClearanceWaxMm = 3.5. manufacturing_settings.waxFilling: waxPerCartridgeUl 19.2 → 25.2,
+    waxFillDeadVolumeUl 80 → 250 (24-cart prompt 541 → 855 uL): ~7.1 mm of wax left at the end so
+    R04's physically-high tip stays ~1 mm submerged at its 1.5 floor when the tube is loaded to the
+    prompt, and B07 at 3.5 is ~3.6 mm submerged. Clamp comments ("Aspirate clamped to the tube
+    floor") on B07 for the last third of a run are expected.
+  - Reagent fills untouched: injection is gated to processType 'wax-filling', the settings are
+    waxFilling.*, the deck-004 Z edit was even (wax) columns only.
+Follow-ups: (1) fix R04's Z frame properly — recalibrate its p20 pipette offset, then re-teach
+deck-001 + its probe height in ONE pass (never tipLength alone); (2) make the .py dead_volume an RTP
+fed from the BIMS setting (needs a protocol deploy to all three robots).
+npm run check: 10 errors / 435 warnings repo-wide, none in the touched files (all 10 pre-existing on
+master: r2.ts fetch overload, AskBimsWidget comparison, assembly/[sessionId] implicit-any x8).
+
+================================================================================
+2026-09-18 — feat/reagent-tip-swap — mid-run "change tip" for reagent fills (protocol + BIMS card), deployed to B14
+================================================================================
+Alejandro asked for the wax page's mid-run tip swap on reagent fills too. Ported the 2026-08-18
+wax mechanism; the bridge daemon side (kind tip_swap_request → /data/ot2-bridge/tip-swap-request.json)
+is robot-level and already on all three robots, so nothing changed there.
+  - protocols/Reagent_Filling_GEN7.py: take_tip_swap_request() + stale-request cleanup right after
+    the carriage is loaded; pick_up_and_calibrate_tip(pick_up=True) gains the hand-inserted-tip mode
+    (probe only, tip length kept); do_tip_swap(mode, at_well) ('rack' = drop + next tracked tip +
+    probe, 'hand' = raise over the calibrator, pause, probe); dispense_reagent checks the request at
+    the top of EVERY aspiration batch (the tip is empty there — blown out into the source after the
+    previous batch) and swaps before aspirating, replacing `adjust` for the rest of that reagent.
+    apiLevel unchanged (2.19). py_compile OK.
+  - reagent-filling/+page.server.ts: requestTipSwap action (ReagentBatchRecord → Ot2BridgeCommand
+    tip_swap_request; audit row with the AuditLog model's real fields).
+  - reagent-filling/+page.svelte: same "Tip problem? Swap the tip without losing your place" card
+    under the embedded run controller while the run is live (rack / by hand / cancel), wording
+    adjusted for batch boundaries.
+  - wax-filling/+page.server.ts: requestTipSwap audit row now uses tableName/recordId/changedBy —
+    the old resourceType/username/details shape was dropped by the schema (rows had only an action).
+Deployment (protocol): stored as the active reagent-filling OpentronProtocol op-242bad05e1ff8052
+(older op-9a81e595 → inactive) so Studio Sync / any resync ships it. Pushed via bridge
+upload_protocol with the full 19-def BIMS labware library, gated on the on-robot analysis
+(result ok, 0 errors, 28 RTPs, p300 left):
+  - B14: protocol a4bae5eb (was 9ab15fa8), repointed 16:5xZ.
+  - R04 and B07 were mid-run (both started 16:47Z) and were deliberately NOT touched; deploy with
+    `node <scratch>/deploy-reagent-tipswap.cjs R04 B07` once idle, or Studio → Re-upload (reagent).
+BIMS side needs the branch merged to master to show the card.
+npm run check: 10 errors / 435 warnings repo-wide, none in the touched files (all pre-existing).
+
+================================================================================
+2026-09-18 — feat/reagent-tip-swap-v2 — reagent tip swap now per-well (mid-trip), redeployed to B14
+================================================================================
+Alejandro: "bent tip mid-trip has been a problem" — the trip-boundary check (above) meant up to 11
+wells landed off the hole after a bend. dispense_reagent's `for run in range(runs)` is now a cursor
+loop (`well_index`): the swap request is checked before each aspiration trip AND before every well
+inside a trip. Mid-trip: stop before that well, the normal blow-out returns the un-dispensed reagent
+to the source, do_tip_swap (rack or by hand + re-probe), then the loop re-aspirates and resumes at the
+interrupted well. Wells already dispensed in the trip are kept; nothing is double-filled. The
+zero-volume guard became `break` (a `continue` would spin with the cursor unmoved); the between-trip
+extra blow-out is expressed against the cursor. Same design as the never-merged
+origin/feat/reagent-tip-swap (f1a40d5f) from an earlier session, ported onto this branch — that
+branch was left untouched, which is why this one is `-v2`.
+Verification: py_compile OK; a replica of the loop's control flow unit-tested with swap requests at
+the first well, last well, back-to-back wells, before a trip, and on a short final trip — every well
+dispensed exactly once, in order, loop terminates. On-robot analysis clean.
+Deployment: stored as active OpentronProtocol op-497d804b0228056a (op-242bad05e1ff8052 → inactive).
+B14: protocol 957bb13a (was a4bae5eb). R04: b1b2eb9e (was a51878be) and B07: c138e2c4 (was 3ba126eb),
+both deployed once their 16:47Z wax runs finished (~17:3xZ); analysis ok / 0 errors / 28 RTPs on all three.
+All three robots now run the per-well tip-swap reagent protocol; BIMS card ships with the merge.
+Card wording on the reagent page updated ("stops before its next well … re-aspirates and continues
+at the exact well it stopped at").
+
+================================================================================
+2026-09-18 — feat/reagent-tip-swap-v2 — deck-004 carrier-3 last row (A18-A24) wax holes y 0.50 → 0.00 (data only)
+================================================================================
+Alejandro: the last fill on the last cartridge of carrier 3 ("channel C" on the cartridge = deck row A,
+the protocol's Channel-A pattern) keeps missing the wax holes, still on today's runs with the 3.5 mm
+tube floor, and the tip is not bending in the tube. Geometry audit of deck-004: every in-cartridge
+wax row pitch is exactly 9.00 mm EXCEPT B→A; row A sits at y=0.50 on all three carriers regardless of
+each carrier's cartridge position (B rows 9.60 / 9.40 / 9.00) — the signature of the old y-floor
+clamp (see deckcal-bounds-guard-corruption). Carrier 3 is the one whose true row A is at 0.00, so it
+carried the full 0.5 mm +y error (carriers 1/2: 0.1 mm). Reagent row A on carrier 3 shows the same
+compression (8.8 mm pitch) — NOT changed. Applied via the per-well engine mirror: A18/A20/A22/A24
+dy −0.5 → y 0.00 (x/z untouched), 4 deck_calibration_edits rows + audit, hasUnpublishedEdits set,
+local Opentrons JSON mirrored. Backup calibration-backups/deck-004-pre-rowA-c3-2026-09-18T17-37-37-444Z.json.
+Next B07 wax run's freshness gate re-uploads it; Studio Move-to-hole A24 vs B24 recommended to confirm.
+
+================================================================================
+2026-09-18 — feat/reagent-tip-swap-v2 — deck-004 A18-A24 wax holes y 0.00 → 0.25 (operator-checked split)
+================================================================================
+Alejandro checked the 0.00 position on B07 and found it still slightly off, so the carrier-3 last-row
+wax holes were moved to the midpoint between the clamped 0.50 and the pitch-derived 0.00: A18/A20/A22/A24
+dy +0.25 → y 0.25 (x/z untouched). Same engine-mirror path (4 deck_calibration_edits rows, audit,
+hasUnpublishedEdits, local JSON mirrored). Backup calibration-backups/deck-004-pre-rowA-c3-split-2026-09-18T19-33-36-868Z.json.
+Freshness gate ships it on the next B07 wax run; re-check A24 vs B24 in the Studio after the next fill.
+
+================================================================================
+2026-09-21 — feat/reagent-tip-swap-v2 — deck-003 (B14) reagent-hole Z flattened to 8.25 (data only)
+================================================================================
+Alejandro asked why deck-003's reagent Z values were "all different". Audit: design file has every
+reagent hole at 8.81-9.10 (flat) and the never-jogged wax holes still sit at 8.80-9.10; live reagent Z
+ranged 6.15..8.76 with 44 distinct values — the residue of ~100 Z jog batches since 2026-06-24 (ialas
+06-24 +3.1 global then per-cartridge −1.0..−3.5; alejandro 06-26..30 per-cartridge ±0.1-1.2 plus
+June-29 ±5/10/15 test moves not fully reverted; 07-17 +1.0/−1.0; 07-27 ialas carrier-3 +1.0; 07-31 −0.7
+global; jacob 09-21 +0.1 on 12 wells). Six June-29 leftovers on carrier-1 rows A/B sat at 6.15-7.65
+(dispense hover +2 → tip at/near the rim there). Carrier medians were 8.25 / 8.20 / 8.70.
+Applied via the per-well engine mirror: all 288 reagent (odd-col) holes → z 8.25 (228 changed, 60
+already there), X/Y untouched, wax holes verified byte-identical, hasUnpublishedEdits set, local
+Opentrons JSON mirrored, 228 deck_calibration_edits rows + audit. Backup
+calibration-backups/deck-003-pre-reagent-z-flatten-2026-09-21T15-26-22-554Z.json.
+Open question: carrier 3 was deliberately +0.5 (ialas 07-27). Verify with Studio Move-to-hole on a
+carrier-3 reagent hole vs carrier 1; restore 8.70 on cols 17-23 if it physically sits higher. Next B14
+reagent run's freshness gate re-uploads the def.
+
+================================================================================
+2026-09-21 — feat/reagent-tip-swap-v2 — deck-003 (B14) reagent holes snapped to operator reference grid (data only)
+================================================================================
+Alejandro's model: rows share one Y across the deck; X per carrier with two sets (odd cartridges
+1,3,5,7 vs even 2,4,6,8 — alternate cartridges are mounted 180° apart, so column lines zigzag).
+Dry-run first (gridfit-refs-dryrun.cjs): carrier Y offsets on this deck are ≤0.03 mm for reagent, so
+no per-carrier Y term. References he trusts: carrier 1 (all rows → row template 256.47…3.32), each
+carrier's first cartridge (rows X,W,V → odd X sets), and even-cartridge first columns 201.43 (C2) /
+350.07 (C3); C1 even = its taught mean; +6.0 mm/col. Applied to the 288 REAGENT holes via the engine
+mirror: 276 moved (104 >0.5 mm, 24 >1.0 mm, max 1.32 — carrier-3 cartridge 3 rows R/Q/P which had
+been hand-jogged as a unit in July). X/Y only; Z stays 8.25; wax holes verified byte-identical.
+276 deck_calibration_edits rows + audit, hasUnpublishedEdits set, local JSON mirrored. Backup
+calibration-backups/deck-003-pre-reagent-grid-2026-09-21T15-58-00-854Z.json. Recommend Move-to-hole
+on R17 (biggest move) + one even cartridge on carriers 2/3 before the next B14 reagent run.
+
+Deployment: robot protocol — B14 reagent-filling re-uploaded with the new deck-003 grid bundled:
+protocol 42f131d5 (was 957bb13a), analysis ok / 0 errors / 28 RTPs; on-robot bundle verified
+(U9 201.43, U17 350.07, R17 y 188.17, all reagent z 8.25). Same per-well tip-swap .py
+(op-497d804b0228056a). Requested by alejandro so the calibration is used regardless of which app starts the run.
+
+================================================================================
+2026-09-21 — feat/reagent-tip-swap-v2 — B07 "calibrator not being read" = tip problem, not the calibrator (click test + bridge probe)
+================================================================================
+B07 wax run b4f9d6a0 (16:45Z) paused six times on "NO TIP DETECTED (X limit switch not reached within
+5mm)" even with tips pushed on by hand; operator suspected the calibrator / its C string. Findings:
+  - Serial link + string fine: 'C' → "=-1.0:2.5", 'I' → deck-004 particle id, every read.
+  - Hand click test (/data/calibrator-click-test.py on the robot, arms X then Y and counts bytes):
+    X 3/3 presses, Y 3/3 presses registered. Both switches work. (First attempt died mid-Y because
+    the Argon dropped off USB at 16:58:42Z — its 3rd drop today; it re-enumerated on a new ttyACM,
+    leaving the paused run holding "/dev/ttyACM0 (deleted)" → that run could never resume.)
+  - Probe geometry unchanged: today's paused run and the 15:48Z successful run 129e18a2 sent the
+    identical probe moves (125.181/173.247/z 40.15 → walk from 124.581,166.747) with the same tiprack.
+  - Bridge calibrate_tip (standalone, right p20, wax recipe, tip B1) after the run was aborted:
+    adjust x −2.4 / y +0.2, both limits reached — same as this morning (−2.4/−0.3).
+Conclusion: the calibrator and fixture are fine; the 16:45 failures were the tip (A1 pickup / hand-
+seated tips not reaching the switch lever). Tip tracker bumped 1 → 2 (B1 consumed by the probe); the
+probe tip is still on the p20 (tipKept) — operator to remove by hand before the next run.
+Recurring physical issue: B07's Argon USB drops whenever the fixture/deck is handled (3× today,
+4× on 09-17) — reseat/replace the cable.
+
+================================================================================
+2026-09-21 — feat/reagent-tip-swap-v2 — reagent protocol: per-run tube-rack choice (standard rack | wax incubator block), deployed to B07 ONLY
+================================================================================
+Alejandro wants to run reagent fills on B07 from the wax incubator (dry-bath) block instead of the
+24-tube rack. Re-teaching custom_2ml_24_tube_rack's D3-D6 was rejected: (1) the def's zDimension stays
+79.45 while the block is 108 mm tall → the p300 would arc across slot 10 into the block; (2) the rack
+definition is SHARED by all three robots and the run-start freshness gate would push the fake geometry
+to R04/B14 mid-campaign. Instead: new RTP `tube_rack` (str, choices standard|incubator, default
+standard). 'incubator' loads cosmas_and_damian_drybath_tuberack in slot 10 (true height), maps the
+four reagents to B1-B4 (A3 is the wax tube's spot), and takes tube rim/bottom from the loaded labware
+(the reagent .py hardcodes rim 89 / bottom 48.2 for the standard rack — those constants are untouched,
+so 'standard' is byte-for-byte the old behaviour). Tip tracking unchanged (tip rack in slot 11).
+Heater must be OFF. BIMS: ProtocolStartPanel renders `choices` RTPs as a <select> (needs the branch
+merged; until then the form shows a text field — type exactly `incubator`).
+Deploy: first attempt rejected by the robot's analysis (ParameterNameError: description > 100 chars) —
+the gate refused to repoint; description shortened to 82 chars; stored as active OpentronProtocol
+op-015681796c96e631 (the rejected op-e5ab281b5ca2daf8 and per-well op-497d804b0228056a → inactive).
+B07: protocol 406d5877 (was c138e2c4), analysis ok / 0 errors / 29 RTPs. R04 and B14 NOT touched (big
+fill in progress on the line); they keep b1b2eb9e / 42f131d5; a later resync would give them the same
+.py with the default 'standard' path.
+
+Also (data, at alejandro's request, before the above): deck-004 reagent holes overwritten with
+deck-001's x/y/z for all 288 odd-column wells (he will fine-tune from there): mean delta x +3.90
+(range +3.05..+4.75), y +0.18 (−1.10..+1.05), z −0.43 (−0.80..+1.55). Wax holes verified untouched.
+288 history rows + audit; backup calibration-backups/deck-004-pre-copy-reagent-from-deck-001-2026-09-21T19-33-07-416Z.json.
+WARNING given: +3.9 mm in X is well outside a 1.8 mm hole — Studio Move-to-hole/fine-tune before any
+B07 reagent run. The next B07 wax run's freshness gate will re-upload (odd columns changed; wax unaffected).
+
+================================================================================
+2026-09-22 — feat/reagent-tip-swap-v2 — new PT-CT-112 thermoseal lot (LOT-20260915-4MWU exhausted)
+================================================================================
+Same situation as 09-15: the placeholder thermoseal lot's 480 strips were consumed (−22 remaining
+after today's four backing batches), so WI-01 had nothing to select. Created another accepted
+PT-CT-112 ReceivingLot (480 strips, placeholder count) + creation inventory transaction + audit row,
+via the same script pattern. Systemic gap unchanged: no laser-cut batch has been recorded since May,
+so PT-CT-112 lots only exist when created by hand.
+
+================================================================================
+2026-09-23 — feat/reagent-tip-swap-v2 — Studio "Swap tip" (drop in trash + fresh from rack) and an honest pick-up endpoint
+================================================================================
+B14 calibration confusion today: "Z 9 hovered this morning, now Z 9 is in the hole", then "pick up
+tip says it picked up but the pipette stays above the rack". Robot log: the maintenance run open
+since 15:02Z still modelled the tip picked at 15:04; the operator had swapped tips by hand (the
+engine can't see that), so every later pickUpTip was REFUSED ("Cannot perform pick_up_tip with a tip
+already attached") — and the pick-up-tip endpoint treated that refusal as SUCCESS, so the Studio
+said "picked up" while the press never happened. (Also a one-off "ALARM: Homing fail" on X at
+18:07:42Z that cleared on the next home; noted for the shift log.)
+Changes (alejandro asked for a robot-side tip change so nobody has to fit tips by hand):
+  - lib/server/opentrons/maintenance.ts: dropTipInTrash() (moveToAddressableAreaForDropTip
+    fixedTrash + dropTipInPlace, same commands the fill protocols use).
+  - api/.../maintenance/[runId]/drop-tip: new POST endpoint → {dropped:true|false} (false when the
+    engine models no tip — a hand-fitted tip must come off by hand).
+  - api/.../maintenance/[runId]/pick-up-tip: "tip already attached" now returns 409
+    TIP_ALREADY_ATTACHED instead of being swallowed as success.
+  - deck-calibration/+page.svelte: "Swap tip — drop it, take a fresh one from the rack" button
+    (drop → pick next well → clears tipAdjust/nominal → prompts Calibrate tip); doPickUp handles
+    TIP_ALREADY_ATTACHED by dropping first and retrying; tipWell auto-advances column-major after
+    every successful pick-up (it used to aim at A1 every time — the well it had just emptied).
+Not done: the Studio still doesn't advance the protocols' on-robot tip tracker
+(/data/tip_tracker_<host>.json), so tips it consumes are unknown to the next fill run.
+npm run check: 10 errors / 435 warnings repo-wide after `svelte-kit sync` (the new route needs its
+generated $types), none in the touched files — same pre-existing set as before.

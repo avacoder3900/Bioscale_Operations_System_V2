@@ -204,6 +204,13 @@
 		use_tip_calibration: true,
 		max_tip_adjust: 4.0,
 		run_calibration_check: false
+		// min_tip_clearance (wax-tube aspiration floor) is deliberately NOT set
+		// here: it is per-robot. B07's Z frame is accurate, so the protocol's 1.5mm
+		// floor really is 1.5mm above a conical tube's apex and bends the tip on
+		// the last cartridges; R04's taught frame sits ~4-5mm below its deck's
+		// design height, so the same 1.5mm is physically ~6mm there and raising it
+		// would lift the tip out of the wax. The server injects the fixture's
+		// minTipClearanceWaxMm at startRun (calibration-rtps.ts), like max_tip_adjust.
 	});
 
 	// Orchestrated scan-and-start (deck_load substage): one Start Run press
