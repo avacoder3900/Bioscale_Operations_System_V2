@@ -7,7 +7,7 @@ import type { RequestHandler } from './$types';
 /**
  * Single-sweep magnetometer export.
  *
- * GET /spu/validation/magnetometer/sweep/export?sessionId=...
+ * GET /validation/magnetometer/sweep/export?sessionId=...
  *
  * Sweeps land as ValidationSession documents with a top-level `type: 'mag_sweep'`
  * ('magnetometer_sweep' is only the nested results[0].testType — matching on

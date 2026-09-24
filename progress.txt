@@ -14148,3 +14148,73 @@ Deployment: production -- building from the GitHub push to master (Vercel dashbo
 Source: branch master @ commit 1cddb46b
 Retrieve this exact code: git checkout master at commit 1cddb46b
 What this deployment is for: bead-pull (B x dB/dz) and by/|B| on the sweep graphs, FWHM highlighted, trace explanations, edge-peak warning, poller not_running fix
+
+================================================================================
+2026-09-24 — master — magnetometer sweep moved onto /validation; the orphan tree is gone
+================================================================================
+THE "FETCH RESULTS BUTTON IS BROKEN" REPORT WAS A 404, NOT A DATA FAULT. Every
+link in the chain was verified working against SPU 255 on live hardware: the
+device returns a clean 504-byte magnet_validation payload (5 wells x 3 channels),
+the parser reads all 5 wells and 12 values each, the Particle lookup reports
+online:true/connected:true, and extractMagTestTime resolves the filename epoch to
+a real date. The action read the device, wrote the ValidationSession, updated the
+SPU and wrote the audit entry -- and then redirected to
+/spu/validation/magnetometer/<sessionId>, which does not exist on master. The
+operator saw a 404 and reported the button as dead. The session from that click
+is in the database, passing, with all five wells.
+
+ROOT CAUSE: TWO MAGNETOMETER ROUTE TREES. master carried both
+/spu/validation/magnetometer and /validation/magnetometer. The /spu one was
+ORPHANED -- no nav entry, no inbound href anywhere in src -- left behind by the
+route restructure in 7c01942b, which deleted its [sessionId] detail page and
+never restored it. The stage-sweep feature had been built into that dead tree, so
+it was unreachable in the app and its redirect target had been deleted out from
+under it.
+
+Consolidated onto /validation, which is the real tree (it owns +layout.svelte and
+the thermocouple / optical-confirmation / runs / bench / sonic siblings):
+  - sweep/, compare/ and export/ moved under src/routes/validation/magnetometer/
+  - the sweep trigger, queue card and progress poller ported onto
+    /validation/magnetometer/run, which already had the SPU picker and the
+    working fetch action
+  - the multi-SPU Export Readings picker ported too rather than dropped
+  - src/routes/spu/validation deleted outright
+Nav needs no change: +layout.svelte matches on the /validation/magnetometer
+prefix, so the sub-pages light the Magnetometer tab correctly.
+
+Four defects found on the way and fixed:
+  - readFromDevice WRITES validation.magnetometer and can promote qcStatus, but
+    had no finalizedAt guard, while runSweep -- which writes no SPU field at all
+    -- did. Exactly inverted. The sacred middleware blocked the write anyway, but
+    surfaced it as an opaque caught exception instead of a clear message.
+  - a redundant dynamic import of getDevice shadowed the static one after the
+    port widened it.
+  - the single-sweep .xlsx endpoint had ZERO callers: the sweep viewer never
+    linked its own export, so it was reachable only by typing the URL. It shipped
+    that way in the old tree too. Now linked from the session header.
+  - the /spu/validation contract test asserted 200 on a path that has no page at
+    HEAD; repointed to /validation.
+
+NOT fixed, surfaced for an owner (all pre-existing, none caused by this move):
+  - Spu.validation.magnetometer has NO testRanAt in its schema (spu.ts), so
+    readFromDevice's testRanAt write is silently dropped by Mongoose strict mode
+    on every run and the DHR never records the real test time. ValidationSession
+    declares it; the SPU sub-schema does not.
+  - the runSweep and readFromDevice AuditLog writes both pass entityId, which is
+    not a declared path on auditLogSchema and is dropped. Harmless -- recordId
+    carries the same value and is indexed -- but AuditLog is immutable, so any
+    schema change there is px-off solo work.
+  - /validation/magnetometer/compare still has no inbound link from anywhere.
+  - [sessionId]/+page.svelte:146,148 read well.error, which the parser does write
+    but the load's row type does not declare. Type-only, 2 of the 121 baseline.
+
+Verified by a 4-agent workflow (1 planner, 3 executors; run wf_180fdea3-d02).
+Type gate: npx svelte-kit sync && svelte-check --tsconfig ./tsconfig.json
+--threshold error -> 121 errors, unchanged from baseline, ZERO in any touched
+file. The sync matters: after a git mv of a route, a bare svelte-check reports
+phantom "Cannot find module './$types'" errors for the moved directories.
+
+Deployment: production -- building from the GitHub push to master (Vercel dashboard, commit below)
+Source: branch master @ commit <filled in below>
+Retrieve this exact code: git checkout master at the commit below
+What this deployment is for: magnetometer sweep + fetch + export consolidated onto /validation; /spu/validation orphan tree removed

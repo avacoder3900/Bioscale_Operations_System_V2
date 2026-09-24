@@ -7,7 +7,7 @@ import type { RequestHandler } from './$types';
 /**
  * Multi-SPU magnetometer export.
  *
- * GET /spu/validation/magnetometer/export?spuIds=a,b,c
+ * GET /validation/magnetometer/export?spuIds=a,b,c
  *
  * Returns a single .xlsx with two sheets over the SAME rows, because the two
  * shapes answer different questions:

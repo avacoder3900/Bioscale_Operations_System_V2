@@ -122,7 +122,7 @@
 
 <div class="space-y-6">
 	<a
-		href="/spu/validation/magnetometer"
+		href="/validation/magnetometer"
 		class="inline-flex items-center gap-2 text-sm text-slate-400 transition-colors hover:text-[var(--color-tron-cyan)] dark:text-slate-400"
 	>
 		<svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
@@ -191,6 +191,13 @@
 				{/each}
 			</dl>
 		</section>
+
+		<a
+			href="/validation/magnetometer/sweep/export?sessionId={encodeURIComponent(session._id)}"
+			class="inline-block rounded border border-slate-700/60 px-3 py-2 text-xs text-slate-300 hover:border-slate-500 hover:text-slate-100"
+		>
+			Export this sweep (.xlsx)
+		</a>
 
 		{#if !hasGrid}
 			<p class="rounded-lg border border-slate-700/60 bg-slate-900/40 p-6 text-sm text-slate-400">
