@@ -13968,3 +13968,78 @@ npm run check: 12 errors repo-wide, all pre-existing (10 baseline + 2 magnetomet
 Deployment: production — Vercel auto-deploy from the master push
 Source: branch master @ this commit
 What this deployment is for: Studio pick-ups land on a rack position that still has a tip (B14: D4).
+
+================================================================================
+2026-09-24 — master — magnetometer sweep: run_sweep from BIMS, v98 on hardware
+================================================================================
+The stage sweep is no longer bench-only. Firmware v98 exposes it as a Particle
+cloud function, BIMS can queue it from the magnetometer page, and the chunked
+result has a path back into a ValidationSession.
+
+FIRMWARE v98 (repo brevitest-device-SPU_Firmware_v72_AV, branch
+feat/magnetometer-sweep-v97, commit 16ecf7c8). run_sweep validates its
+"y0,y1,dy,n,settle" arg, sets deferred_sweep and returns — it cannot run inline
+because a cloud function must return in ~10s and a sweep takes ~19 minutes.
+Return contract is deliberately tight: 1 = queued, negative = rejected, and 0 is
+never returned, because BIMS decides from it whether to write an immutable audit
+entry. The upload is downsampled to per-position means (~84.5 KB / ~109 chunks /
+~1.8 min) — raw 8-rep output would be ~674 KB, i.e. ~14 min of publishing on top
+of the sweep. Values are fixed-point x100 integers; there is no %f anywhere in
+that tree. Compiled clean for msom/6.3.3 (flash 141994, RAM 43548); sqrt is the
+first math-library call in the project and links without incident.
+
+VERIFIED ON HARDWARE. SPU 255 flashed to v98, reports firmware_version 98, and
+run_sweep appears in its function list (15, up from 14). Called from the cloud it
+returned 1 in ~500ms, and — the one genuinely untested assumption in the design —
+the deferred sweep DOES fire from loop()'s IDLE branch. Serial capture:
+  Magnetometer sweep requested via cloud function: y0=20000 y1=21000 dy=200 n=3 settle=250 points=6
+  Magnetometer not found
+  SWPERR  no_magnetometer
+  Deferred sweep produced no rows to upload
+Failure path is clean: no partial upload, no session written. The only reason it
+produced nothing is that the jig was not BLE-connected.
+
+Worth recording because it cost time: an earlier run of this same test appeared
+to show the deferred sweep never firing. That was a test-harness fault — the
+serial listener omitted DtrEnable, and Particle's USB CDC discards output when
+DTR is not asserted. The device had been talking the whole time.
+
+BIMS SIDE. Four independent gates gate the button: device online, firmware >= 98
+(read from the Particle device API — there is no cloud variable for the version),
+device in IDLE (the deferred sweep only runs from that branch, so on a non-idle
+device run_sweep returns 1 and nothing happens), and return value strictly 1.
+Ingest descales using the scale declared in the payload header rather than a
+hardcoded divisor — getting that wrong leaves every value 100x out while the
+profiles still compute, which is worse than an error. A sweep never touches
+qcStatus or validation.magnetometer.status; it is characterisation, not a gate.
+
+Sweep chunk ingest now lives in src/lib/server/validation/mag-sweep-ingest.ts
+rather than inline in the webhook route. That route is under active development
+for optical blank runs and the spark/status service-flag re-push, and inlining
+~250 lines of sweep logic would make every future merge a conflict. The route
+recognises a chunk event and returns early into the module.
+
+Also fixed here: src/routes/api/particle/status/+server.ts was assigning
+d.firmware_version to a string-typed field. That broke when firmware_version was
+widened to number|string in 4406a96a (product devices report it as a number —
+255 returns 98). Vercel never caught it because vite build does not type-check.
+
+Files: src/lib/server/validation/mag-sweep-ingest.ts (new),
+src/routes/api/particle/webhook/+server.ts, src/routes/api/particle/status/+server.ts.
+npx svelte-check --threshold error: 122 errors, none in the touched files
+(was 126 before the four fixed here).
+
+STILL REQUIRED for a button-triggered sweep to land data: a Particle webhook
+integration on event bioscale/mag_sweep_chunk pointing at
+/api/particle/webhook with the agent API key header. There are currently ZERO
+integrations on the account, so chunk events dissolve.
+
+Deployment: production — building from the GitHub push to master (Vercel dashboard, commit below)
+Source: branch master @ commit 4406a96a
+Retrieve this exact code: git checkout master at commit 4406a96a
+What this deployment is for: magnetometer sweep UI — Queue Sweep button, progress poller, sweep viewer, compare page, XLSX exports
+
+Deployment: preview — https://bioscale-operations-system-mongodb-lyqeb33nj.vercel.app
+Source: branch feat/cleaning-calendar @ commit f70f4540
+Retrieve this exact code: git checkout feat/cleaning-calendar at commit f70f4540
+What this deployment is for: same sweep work on the branch, before it was cherry-picked to master
