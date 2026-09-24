@@ -13850,3 +13850,18 @@ Not done: the Studio still doesn't advance the protocols' on-robot tip tracker
 (/data/tip_tracker_<host>.json), so tips it consumes are unknown to the next fill run.
 npm run check: 10 errors / 435 warnings repo-wide after `svelte-kit sync` (the new route needs its
 generated $types), none in the touched files — same pre-existing set as before.
+
+================================================================================
+2026-09-24 — master — production deploy: per-robot wax floor, reagent tip swap, tube-rack choice, Studio swap-tip
+================================================================================
+Merged feat/reagent-tip-swap-v2 (which carries fix/wax-aspirate-floor-clearance) into master at
+alejandro's request, merge commit 7ddb65fb. progress.txt was the only overlap with master's
+2026-09-23 camera/validation commits; resolved by keeping both sides' entries. No code overlap.
+
+Deployment: production — Vercel auto-deploy from the master push
+Source: branch master @ commit 7ddb65fb
+Retrieve this exact code: git checkout master at commit 7ddb65fb
+What this deployment is for: B07 wax floor injected from the fixture (no more typing 3.5); "Tip
+problem?" swap card on the reagent run page; "Reagent tube rack" dropdown on the reagent start form;
+Studio "Swap tip" button + honest pick-up (409 TIP_ALREADY_ATTACHED) + auto-advancing tip well.
+Operators must reload open BIMS tabs (Studio: reload closes the jog run; edits are already saved).
