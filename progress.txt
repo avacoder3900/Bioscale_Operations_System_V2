@@ -13498,3 +13498,31 @@ Deployment: production — building from the GitHub push to master (Vercel dashb
 Source: branch master @ commit dad97833 (squash merge of PR #67)
 Retrieve this exact code: git checkout master at commit dad97833
 What this deployment is for: typed exposure entry + write sequencing + station capability report
+
+================================================================================
+2026-09-24 — feat/camera-numeric-entry-all — typed entry everywhere; original ranges restored
+================================================================================
+Every control now has a number box beside its slider, not just exposure. Gamma matters most: on
+this camera exposure has only two effective states, so gamma is what actually rescues a blown-out
+or dark feed, and it wants a typed value rather than a drag. The box accepts values outside the
+slider bounds and lets the camera decide.
+
+The bench-measured caps are reverted at the operator's request. Narrowing brightness and contrast to
+0..64, gain to 0..100, sharpness to 0..6, gamma to 72..500 and hue to -40..40 described the camera
+accurately but cost more than it gave: capping brightness at 64 removed the higher values that were
+the reliable route back to a visible feed. The measured limits remain true — a slider past them does
+nothing — but are no longer enforced. A range reported by the agent still wins over either set.
+
+OBSERVED EXPOSURE BEHAVIOUR on this camera, worth recording: any negative value produces a long 5000
+exposure (blown out but live); any positive value above 1 is refused and it sits at 1 (black). Two
+states, nothing between. exposure is therefore NOT a usable brightness control here, which is why
+gamma is the lever. The -13..0 scale is kept deliberately so dragging can at least reach the bright
+state.
+
+File: src/lib/components/capture/StationCameraSettings.svelte. npm run check: 12/437 — this master's
+baseline, none in the touched file.
+
+Deployment: production — building from the GitHub push to master (Vercel dashboard, commit below)
+Source: branch master @ commit 9b00987a (squash merge of PR #68)
+Retrieve this exact code: git checkout master at commit 9b00987a
+What this deployment is for: typed entry on all camera controls + original slider ranges restored
