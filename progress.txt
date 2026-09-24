@@ -13928,3 +13928,43 @@ Deployment: production — building from the GitHub push to master (Vercel dashb
 Source: branch master @ commit f8e34013
 Retrieve this exact code: git checkout master at commit f8e34013
 What this deployment is for: magnetometer SPU-vs-SPU comparison page, sweep viewer, and the sweep ingest endpoint
+
+================================================================================
+2026-09-24 — master — new PT-CT-104 cartridge lot (both real lots exhausted)
+================================================================================
+Alejandro couldn't scan carts into the oven: WI-01's Cartridge dropdown was empty — 9b968611 (1500)
+and 6271346a (200) fully consumed, only PLACEHOLDER-CT-104-20260422 with 1 left. Created an accepted
+CoC ReceivingLot for PT-CT-104 (1000, placeholder count) + receipt inventory transaction + audit via a
+generalized create-backing-lot script. Thermoseal LOT-20260922-EYGJ has 108 left (~1 day); barcodes
+ZEBRA-20260922-PTCT106 4983 left. Real cartridge receipts should go through Receiving so this stops
+being manual.
+
+================================================================================
+2026-09-24 — master — Studio pick-up aims at the rack's next FRESH tip (was always A1)
+================================================================================
+Alejandro: "whenever B14 needs a new tip during a calibration run it doesn't go deep enough; a fresh
+run's first pick-up always works". Robot log: every pick-up today pressed to the same Z (14.5),
+including the four that worked inside the reagent run — so depth was fine. The difference was the
+rack position: the protocols pick from their tracker (B14 reagent tracker index 27 → D4, columns
+1-4 spent), the Studio hard-coded tipWell 'A1' (then B1, C1 after the 09-23 auto-advance) — all
+empty positions, so the press found nothing.
+Changes:
+  - lib/server/opentrons/tip-cursor.ts: wellFromIndex/indexFromWell (column-major A1..H1, A2..),
+    profileForTiprack (20ul → wax), nextStudioTipWell(robotId, profile) = newer of the latest run's
+    pipetteTipState.after (ReagentBatchRecord for reagent, WaxFillingRun for wax — what the on-robot
+    tracker holds after a run) and the Studio's own cursor; recordStudioTipPickup advances that cursor.
+  - opentrons-robot model: studioTip (Mixed) { wax|reagent: { index, at, lastWell } }.
+  - deck-calibration load returns nextTipWells per robot/profile; the page seeds tipWell from it
+    whenever robot or tip type changes, shows "Pick from [well] · next fresh: X · run/studio", lets
+    the operator overtype it, and has "Refilled → A1". pick-up-tip advances the cursor server-side
+    and returns nextTipWell, which the page adopts.
+Preview from the run records: B14 reagent → D4 (matches /data/tip_tracker_reagent_muddy-water.json
+index 27), B07 reagent F2 / wax G4, R04 reagent E4 / wax G3.
+Still not done: Studio pick-ups are unknown to the ROBOT's tracker (needs a daemon command to bump
+the file), so after Studio work either refill the rack or expect the protocol's hand-insert prompt
+on the positions the Studio used.
+npm run check: 12 errors repo-wide, all pre-existing (10 baseline + 2 magnetometer), none in the touched files.
+
+Deployment: production — Vercel auto-deploy from the master push
+Source: branch master @ this commit
+What this deployment is for: Studio pick-ups land on a rack position that still has a tip (B14: D4).

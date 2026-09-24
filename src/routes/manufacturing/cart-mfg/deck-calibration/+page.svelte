@@ -928,6 +928,16 @@
 	// (or the calibration Z) from desiredMount loaded the wrong definition and
 	// probed at the wrong depth. Starts null so nothing can proceed on a guess.
 	let tipProfile = $state<'wax' | 'reagent' | null>(null);
+	// Seed the rack position from where the robot's tracker / Studio cursor says the
+	// next FRESH tip is, whenever the robot or tip type changes. The operator can
+	// still overtype it (e.g. after refilling the rack → A1).
+	const suggestedTipWell = $derived(
+		tipProfile && selectedRobotId ? (data.nextTipWells?.[selectedRobotId]?.[tipProfile] ?? null) : null
+	);
+	$effect(() => {
+		const sw = suggestedTipWell;
+		if (sw?.well) tipWell = sw.well;
+	});
 	const tiprackForProfile = $derived(
 		tipProfile === 'wax'
 			? 'cosmasanddamian_96_tiprack_20ul'
@@ -1078,8 +1088,10 @@
 			}
 		);
 		if (res.ok) {
-			// The rack position is spent: aim the next pick-up at the next one.
-			tipWell = nextTipWell(tipWell);
+			// The rack position is spent: aim the next pick-up at the next one (the
+			// server's cursor answer wins so a reload lands on the same position).
+			const ok = await res.json().catch(() => ({}) as any);
+			tipWell = ok?.nextTipWell || nextTipWell(tipWell);
 			return;
 		}
 		const body = await res.json().catch(() => ({}) as any);
@@ -1534,6 +1546,18 @@
 						</div>
 						{#if !tipProfile}
 							<p class="mt-1 text-[10px] text-amber-300/90">Pick the tip type — probe depth differs by 6.309 mm and is never guessed.</p>
+						{:else}
+							<!-- Rack position the next pick-up presses into. Seeded from the robot's
+							     tip tracker (last run) or the Studio's own cursor, whichever is newer,
+							     because A1 is usually long gone on a working rack. -->
+							<div class="mt-1 flex items-center gap-2 text-[10px]" style="color: var(--color-tron-text-secondary)">
+								<span>Pick from</span>
+								<input type="text" bind:value={tipWell} disabled={busy} class="w-12 rounded border border-[var(--color-tron-border)] bg-black/40 px-1 py-0.5 text-center font-mono text-[11px]" style="color: var(--color-tron-text)" title="Rack position of the next fresh tip (column-major: A1..H1, A2..). Overtype if the rack was reloaded." />
+								{#if suggestedTipWell}
+									<span title="Where the robot's last run ({suggestedTipWell.source === 'run' ? 'tip tracker' : suggestedTipWell.source}) says the next fresh tip is">next fresh: <span class="font-mono">{suggestedTipWell.well}</span> · {suggestedTipWell.source}</span>
+								{/if}
+								<button type="button" onclick={() => (tipWell = 'A1')} disabled={busy} class="rounded border border-[var(--color-tron-border)] px-1.5 py-0.5 hover:border-[var(--color-tron-cyan)]/60" title="Rack was refilled — start from A1 again">Refilled → A1</button>
+							</div>
 						{/if}
 					</div>
 					<!--

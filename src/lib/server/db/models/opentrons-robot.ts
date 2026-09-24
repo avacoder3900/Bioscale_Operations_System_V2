@@ -8,6 +8,9 @@ const opentronsRobotSchema = new Schema({
 	// OT2-BRIDGE-1: deviceId the on-robot bridge daemon polls with
 	// (ot2-<slot>-bridge). Falls back to derivation from name when unset.
 	bridgeDeviceId: String,
+	// Deck Calibration Studio tip cursor per profile: { wax|reagent: { index, at, lastWell } }.
+	// Advanced on every Studio pick-up so a session never aims at a spent rack position.
+	studioTip: Schema.Types.Mixed,
 	firmwareVersion: String, apiVersion: String, robotModel: String, robotSerial: String,
 	lastHealthAt: Date, lastHealthOk: Boolean, source: String,
 	protocols: [{
