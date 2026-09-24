@@ -14043,3 +14043,31 @@ Deployment: preview — https://bioscale-operations-system-mongodb-lyqeb33nj.ver
 Source: branch feat/cleaning-calendar @ commit f70f4540
 Retrieve this exact code: git checkout feat/cleaning-calendar at commit f70f4540
 What this deployment is for: same sweep work on the branch, before it was cherry-picked to master
+
+================================================================================
+2026-09-24 — master — WI-01 "Remove" never worked (sacred middleware blocks deletes); merged-barcode scans split
+================================================================================
+Alejandro: the scanner sometimes reads two cartridge labels as one 72-character code, and "Remove"
+on the backing page does nothing. Findings: 87 cartridge_records have merged ids (57 still 'backing',
+30 'linked' test artifacts from Aug); for 56 of the 57 both halves also exist as proper records, so
+the merged ones are junk. "Remove" has ZERO successful audit rows ever: CartridgeRecord carries
+applySacredMiddleware, whose deleteOne/deleteMany/findOneAndDelete hooks throw unconditionally, so the
+action's CartridgeRecord.deleteOne threw a 500 on every press. The wax cancel/abort paths' deleteMany
+(test-mode synthetics) hit the same wall — throwing AFTER the abort was recorded.
+Changes:
+  - lib/server/services/cartridge-hard-delete.ts: hardDeleteUnfinalizedCartridges(filter, {reason,
+    user}) — driver-level delete restricted to docs with no finalizedAt and status backing|wax_filling,
+    one AuditLog DELETE row per id; splitMergedBarcodes() (72/108-char UUID multiples).
+  - wi-01/+page.server.ts: removeBackedCartridge uses the helper (still requires status 'backing' and
+    the same parent lot); scanBackedCartridge rejects a merged code outright.
+  - wi-01/+page.svelte: handleCartScan splits a merged input into its UUIDs, drops repeats, and scans
+    each separately (message tells the operator it did).
+  - wax-filling/+page.server.ts: cancelRun/abortRun synthetic cleanup via the helper.
+Not done: bulk removal of the 57 existing merged 'backing' records (blocked by the session's
+permission policy as a mass delete) — operator can Remove them individually now, or authorize the
+bulk script (backup + audit prepared).
+npm run check: 12 errors repo-wide, all pre-existing, none in the touched files.
+
+Deployment: production — Vercel auto-deploy from the master push
+Source: branch master @ this commit
+What this deployment is for: WI-01 Remove actually removes a mis-scan; merged double-barcodes are split and scanned separately.

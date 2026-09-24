@@ -15,6 +15,7 @@ import { checkRobotConflict, checkDeckConflict, checkTrayConflict } from '$lib/s
 import { protectLockedCarts, LOCKED_STATUSES } from '$lib/server/manufacturing/locked-cartridges';
 import { getRobot, robotGet, robotPost, bridgeDeviceIdForRobot } from '$lib/server/opentrons/proxy';
 import { calibrationRtpValues } from '$lib/server/opentrons/calibration-rtps';
+import { hardDeleteUnfinalizedCartridges } from '$lib/server/services/cartridge-hard-delete';
 import { ensureFreshRunProtocol } from '$lib/server/opentrons/protocol-freshness';
 import { resolveDeckBinding, DeckBindingError } from '$lib/server/services/deck-calibration/run-guard';
 import { isHardenedRobot } from '$lib/server/services/deck-calibration/rollout';
@@ -1659,11 +1660,13 @@ export const actions: Actions = {
 				},
 				{ $set: { status: 'backing' }, $unset: { waxFilling: '', 'backing.ovenExitTime': '' } }
 			);
-			await CartridgeRecord.deleteMany({
-				_id: { $in: cancelScannedIds },
-				'waxFilling.runId': runId,
-				status: 'wax_filling'
-			});
+			// Test-mode synthetics (no parentLotRecordId) — hard-deleted through the
+			// driver: Model.deleteMany is blocked by the sacred middleware and used to
+			// throw here AFTER the abort had already been recorded.
+			await hardDeleteUnfinalizedCartridges(
+				{ _id: { $in: cancelScannedIds }, 'waxFilling.runId': runId, status: 'wax_filling' },
+				{ reason: 'Wax run cancelled — synthetic (test-mode) cartridge removed', user: locals.user, oldData: { runId } }
+			);
 		}
 
 		await AuditLog.create({
@@ -1740,11 +1743,10 @@ export const actions: Actions = {
 				},
 				{ $set: { status: 'backing' }, $unset: { waxFilling: '', 'backing.ovenExitTime': '' } }
 			);
-			await CartridgeRecord.deleteMany({
-				_id: { $in: abortScannedIds },
-				'waxFilling.runId': runId,
-				status: 'wax_filling'
-			});
+			await hardDeleteUnfinalizedCartridges(
+				{ _id: { $in: abortScannedIds }, 'waxFilling.runId': runId, status: 'wax_filling' },
+				{ reason: 'Wax run aborted — synthetic (test-mode) cartridge removed', user: locals.user, oldData: { runId } }
+			);
 		}
 
 		await AuditLog.create({

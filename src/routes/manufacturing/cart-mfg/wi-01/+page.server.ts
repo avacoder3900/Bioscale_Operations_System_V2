@@ -14,6 +14,7 @@ import {
 	InventoryTransaction, generateId
 } from '$lib/server/db';
 import { recordTransaction, resolvePartId } from '$lib/server/services/inventory-transaction';
+import { hardDeleteUnfinalizedCartridges, splitMergedBarcodes } from '$lib/server/services/cartridge-hard-delete';
 import { nanoid } from 'nanoid';
 import type { PageServerLoad, Actions } from './$types';
 
@@ -348,6 +349,12 @@ export const actions: Actions = {
 
 		if (!lotId) return fail(400, { scanBackedCartridge: { error: 'Lot ID required' } });
 		if (!barcode) return fail(400, { scanBackedCartridge: { error: 'Cartridge barcode required' } });
+		// A fast scanner can glue two labels into one 72-character string. The page
+		// splits those before posting; this is the backstop so a merged code can never
+		// become a cartridge record again (87 of them had, 2026-09-24).
+		if (splitMergedBarcodes(barcode)) {
+			return fail(400, { scanBackedCartridge: { error: `Two barcodes were read as one (${barcode.length} characters). Scan one cartridge at a time.`, barcode } });
+		}
 		if (!ovenId) return fail(400, { scanBackedCartridge: { error: 'Select an oven before scanning' } });
 
 		const lot = await LotRecord.findById(lotId).lean() as any;
@@ -436,19 +443,15 @@ export const actions: Actions = {
 			return fail(400, { removeBackedCartridge: { error: 'Cartridge is not an unconfirmed scan of this lot' } });
 		}
 
-		await CartridgeRecord.deleteOne({ _id: barcode });
+		// Model.deleteOne is blocked by the sacred middleware (it threw on every press
+		// of "Remove" until 2026-09-24); the helper deletes an unconfirmed backing
+		// record through the driver and audits it.
+		const removed = await hardDeleteUnfinalizedCartridges(
+			{ _id: barcode, status: 'backing', 'backing.parentLotRecordId': lotId },
+			{ reason: 'Operator removed mis-scanned cartridge before batch confirm', user: locals.user, oldData: { parentLotRecordId: lotId } }
+		);
+		if (removed.length === 0) return fail(400, { removeBackedCartridge: { error: 'Cartridge could not be removed — reload and try again' } });
 		await LotRecord.findByIdAndUpdate(lotId, { $pull: { cartridgeIds: barcode } });
-
-		await AuditLog.create({
-			_id: generateId(),
-			tableName: 'cartridge_records',
-			recordId: barcode,
-			action: 'DELETE',
-			changedBy: locals.user.username,
-			changedAt: new Date(),
-			oldData: { status: 'backing', parentLotRecordId: lotId },
-			reason: 'Operator removed mis-scanned cartridge before batch confirm'
-		});
 
 		return { removeBackedCartridge: { success: true, barcode } };
 	},
