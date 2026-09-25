@@ -15958,3 +15958,9 @@ Build status: failure on the GitHub deployment record (6665661108) for both the 
   the code compiles; only adapter-vercel's file trace failed locally, on C:\swapfile.sys,
   which is a Windows artefact. Re-pushing with this log entry to see whether the failure
   repeats.
+  → Cause found: the four wi-01/ deletions had been staged with `git rm` but were no longer in
+  the index when 6f323765 was committed (this checkout is shared with other sessions), so HEAD
+  still carried src/routes/manufacturing/cart-mfg/wi-01/, whose +page.server.ts imports
+  IN_OVEN_STATUS / IN_OVEN_LABEL from bucket-service — both renamed in that commit. Rollup
+  fails on a missing named export; the local build passed only because the working copy had
+  the files gone. Fixed by committing the deletions (next entry's commit).
