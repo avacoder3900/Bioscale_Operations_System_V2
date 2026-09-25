@@ -344,11 +344,51 @@ export async function standingStatus(opts?: { spawn?: boolean; actorUsername?: s
 	return { targets: rows, partsReorder };
 }
 
+// Coalescing state for requestSupplyCheckForPart, per part, per process.
+const supplyCheck = new Map<string, { last: number; timer: ReturnType<typeof setTimeout> | null }>();
+const SUPPLY_COALESCE_MS = 1_500;      // a burst of scans folds into one trailing check
+const SUPPLY_IMMEDIATE_AFTER_MS = 30_000; // ...but an isolated decrement still checks at once
+
+/**
+ * Coalescing front door for checkSupplyForPart (added 2026-09-25).
+ *
+ * The raw check is 4+ queries and the inventory path fired it once per debit —
+ * two per bucket scan-in, unawaited. At a rapid scanning pace those piled up
+ * against a 10-socket pool and starved the scans themselves. This fires
+ * immediately when the part has been quiet, and otherwise schedules ONE trailing
+ * check shortly after the last decrement, which sees the final count. Nothing is
+ * dropped: a burst still gets a check, just one instead of forty.
+ *
+ * Synchronous and never throws, so it is safe to call fire-and-forget.
+ */
+export function requestSupplyCheckForPart(partDefinitionId: string): void {
+	const now = Date.now();
+	let s = supplyCheck.get(partDefinitionId);
+	if (!s) {
+		s = { last: 0, timer: null };
+		supplyCheck.set(partDefinitionId, s);
+	}
+	const state = s;
+	if (!state.timer && now - state.last >= SUPPLY_IMMEDIATE_AFTER_MS) {
+		state.last = now;
+		void checkSupplyForPart(partDefinitionId);
+		return;
+	}
+	if (state.timer) clearTimeout(state.timer);
+	state.timer = setTimeout(() => {
+		state.timer = null;
+		state.last = Date.now();
+		void checkSupplyForPart(partDefinitionId);
+	}, SUPPLY_COALESCE_MS);
+}
+
 /**
  * KB2-13 event-driven trigger: called (fire-and-forget) by the inventory
  * transaction service after a stock decrement. Checks the part-reorder rule
  * for THAT part plus any active part_stock standing targets pointing at it.
  * Must never throw into the caller.
+ *
+ * Callers on a hot path should go through requestSupplyCheckForPart instead.
  */
 export async function checkSupplyForPart(partDefinitionId: string): Promise<void> {
 	try {

@@ -61,8 +61,11 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		bucketRegistry(),
 		// Floor rule runs here too, not only on a roll pull: a shelf that is already
 		// below the minimum (receiving, physical count) gets its one restock card +
-		// email the next time anyone opens the board. Idempotent.
-		checkFloor({ user: op(locals) }).catch(() => null).then(() => thermosealStatus()).catch(() => null)
+		// email the next time anyone opens the board. Idempotent. Throttled per
+		// process (2026-09-25) so the board's background refresh during a scanning
+		// run does not re-run the rule between carts — it is a backstop, and a roll
+		// pull still runs it unthrottled.
+		checkFloor({ user: op(locals), throttleMs: 60_000 }).catch(() => null).then(() => thermosealStatus()).catch(() => null)
 	]);
 
 	return {
@@ -180,7 +183,7 @@ export const actions: Actions = {
 		const d = await request.formData();
 		return wrap('scanIn', async () => {
 			const r = await scanCartIn({ cycleId: String(d.get('cycleId') ?? ''), barcode: String(d.get('barcode') ?? ''), user: op(locals) });
-			return { scanIn: { success: true, barcode: r.barcode, quantity: r.cycle?.quantity ?? 0 } };
+			return { scanIn: { success: true, barcode: r.barcode, quantity: r.quantity } };
 		})();
 	},
 
@@ -190,8 +193,8 @@ export const actions: Actions = {
 		await connectDB();
 		const d = await request.formData();
 		return wrap('unscan', async () => {
-			const cycle = await unscanCart({ cycleId: String(d.get('cycleId') ?? ''), barcode: String(d.get('barcode') ?? ''), user: op(locals) });
-			return { unscan: { success: true, barcode: String(d.get('barcode') ?? ''), quantity: cycle?.quantity ?? 0 } };
+			const r = await unscanCart({ cycleId: String(d.get('cycleId') ?? ''), barcode: String(d.get('barcode') ?? ''), user: op(locals) });
+			return { unscan: { success: true, barcode: r.barcode, quantity: r.quantity } };
 		})();
 	},
 

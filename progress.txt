@@ -15596,3 +15596,94 @@ PRODUCTION MERGE: not done in this session. PR #54 is mergeable/clean (85 commit
 ([Merge Without Review]) — it needs the user to press Merge on PR #54, or to allow that action.
 Nothing about the bucket flow has been exercised against real data yet (audit, leftover flow,
 Find a cart, thermoseal rolls) — first production use is also its first real test.
+
+================================================================================
+2026-09-25 — feat/bucket-system — Scan-in lag audit: queue + overlay, two real bugs fixed
+================================================================================
+User asked for the whole bucket system to be audited for lag, "especially at the barcode scan in
+page for raw/barcoded — these scan ins should happen at a quick rapid pace, resist lag". Audited
+bucket-service.ts, thermoseal-service.ts, all four /buckets routes, wi-01, and the shared paths
+they lean on (inventory-transaction, notifications, hooks, root + cart-mfg layouts, the
+sacred/immutable middleware, model indexes). No local .env, so nothing could be TIMED against
+Atlas — every figure below is a static count of round trips and collection scans read off the code.
+
+WHAT WAS WRONG (one scan = ~20 sequential round trips, then a full board reload)
+  - The board's scan box awaited invalidateAll() after every cart. That re-ran the root layout
+    (2 sequential Integration.findOne), the cart-mfg layout and the board load — ~25 queries.
+    Three of them get slower forever: changeLog()'s find({}).sort({createdAt:-1}) had NO index
+    that could serve a bare createdAt sort (COLLSCAN of a collection every scan appends to);
+    bucketRegistry()'s bare $group/$max was an unconditional COLLSCAN; availableLots() (and
+    thermoseal's defaultThermosealLot) aggregate every consumption/scrap row for the shell/label
+    lots — two rows per cartridge ever scanned in. Cart #200 was measurably slower than cart #1.
+  - scanCartIn awaited ~18 queries in series, several of them pointless: resolveBucketId spent two
+    queries, recordTransaction read the part before writing it, shouldWarnLowInventory re-read
+    NotificationSettings up to 4x per scan, and the function ended with a BucketCycle.findById
+    whose result the client never read.
+  - Two unawaited checkSupplyForPart() calls per scan (one per debit), ~8 background queries each
+    burst, competing with the next scan for a 10-socket pool.
+  - The input was disabled={cartScanBusy}. A disabled input loses focus and a gun keeps typing, so
+    keystrokes in that window were dropped — or partially captured after the 60ms refocus and
+    submitted truncated.
+
+TWO BUGS FOUND THAT ARE NOT ABOUT SPEED
+  - The mis-scan button had NEVER worked. unscanCart called CartridgeRecord.deleteOne, and in
+    Mongoose 9 schema.pre('deleteOne') with no options is QUERY middleware (confirmed in
+    node_modules/mongoose/lib/schema.js:699 — _getDocumentMiddleware filters deleteOne out unless
+    {document:true}), so the sacred middleware's unconditional delete hook fired and threw a 500.
+    cartridge-hard-delete.ts's own header already documented this for WI-01's Remove button.
+    Worse, the client had branches for 'success' and 'failure' but none for 'error', so the
+    operator clicked mis-scan and nothing happened at all — no message. It threw before any state
+    changed, so no partial writes were ever left behind.
+  - recordTransaction decremented inventoryCount by read-compute-$set, not $inc. Two operators
+    scanning at once both debited PT-CT-104 from the same stale read and the second write clobbered
+    the first — counts drift high, silently. retract() already used $inc; the main debit did not.
+    Rapid concurrent scanning is exactly what triggers it. Noted in the plan doc as a data risk:
+    counts recorded before today may sit high, and the InventoryTransaction ledger is the
+    authority for repairing any part that looks wrong.
+
+WHAT WAS CHANGED
+  buckets/+page.svelte — scan box never disabled; Enter drains it onto scanQueue and returns; one
+    pumpCartScans worker posts in order, each queue entry carrying its own cycleId so switching
+    buckets mid-drain still lands earlier carts correctly; membership overlay (scanAdded /
+    scanRemoved → overlay() → boardCycles) replaces the per-cart refetch, and is self-healing so a
+    refetch may land at any time; ONE debounced invalidateAll 2.5s after scanning stops; failed
+    scans stack in a dismissible list instead of being overwritten by the next success; merged
+    double-reads split client-side (matching WI-01); stage tile counts include the overlay delta;
+    unscan got its missing 'error' branch. Every read of an open pass now goes through boardCycles.
+  bucket-service.ts — scanCartIn: three guards in one Promise.all, five writes in another (the
+    CartridgeRecord create stays ordered before the debits), trailing findById dropped, returns
+    {quantity, barcode}. unscanCart: goes through hardDeleteUnfinalizedCartridges, parallel
+    retracts, returns {quantity, barcode}. resolveBucketId: one indexed $or instead of two queries
+    (on every scan-in AND every audit scan). bucketRegistry: $sort before $group so it rides the
+    existing {bucketId,createdAt} index as a distinct scan.
+  inventory-transaction.ts — findOneAndUpdate/$inc debit (one round trip, no lost update);
+    resolvePartId dedupes in-flight lookups so the two parallel debits share one query.
+  notifications.ts — 15s in-process cache for the low-inventory settings doc (was up to 4 reads
+    per scan).
+  kanban/standing.ts — new requestSupplyCheckForPart(): fires immediately when the part has been
+    quiet 30s, otherwise coalesces a burst into ONE trailing check 1.5s after the last decrement,
+    which sees the final count. Nothing is dropped, and 40 scans cost one check instead of 80.
+  models — bucket-transaction: index({createdAt:-1}). inventory-transaction:
+    index({lotId,transactionType,quantity}) so the per-lot remaining aggregate is covered by the
+    index and fetches no documents.
+  thermoseal-service.ts — checkFloor takes throttleMs; the board passes 60s so the background
+    refresh does not re-run the floor rule between carts. A roll pull still runs it unthrottled.
+  cartridge-hard-delete.ts — optional `statuses` whitelist so 'barcoded' can be deleted by the
+    mis-scan path.
+  BUCKET-SYSTEM_PLAN.md — new §6.2.1 "Scanning pace — the hot path" with the rules for anyone
+    touching it, §6.2 corrected, two new §12.4 risks, §10 row for the shared files, changelog row.
+
+DELIBERATELY NOT CHANGED
+  auditCycle's per-stray loops (2 round trips each) look like an N+1 worth batching, but they
+  mutate home.quantity in memory between iterations so that two strays sharing a home pass compute
+  the right qtyBefore. The sequential shape is load-bearing — parallelising would corrupt the
+  count. Left alone and noted.
+
+Check (svelte-check direct; svelte-kit sync still cannot run — portable node in Temp is the arm64
+build while node_modules carries @rollup/rollup-win32-x64-msvc): 12 errors / 441 warnings, the
+same 12 baseline errors (r2.ts, AskBimsWidget, 8x assembly/[sessionId], 2x
+validation/magnetometer/[sessionId]), none in any file touched here.
+
+Not deployed from this session — no preview was created, so there is no deployment entry to log.
+Nothing here has been exercised against real data; the scan-in rebuild in particular wants a real
+gun and a real tub before it is trusted.

@@ -377,12 +377,26 @@ export async function shouldWarnLowWax(remainingVolumeUl: number): Promise<boole
 	return remainingVolumeUl <= threshold;
 }
 
+// The low-inventory settings doc is read up to twice per debit (once for the new
+// count, once for the old) and every bucket scan-in makes two debits. A short
+// in-process cache turns four reads per scan into none; 15s is well inside the
+// time it takes anyone to notice a settings change.
+let lowInvSettings: { at: number; doc: any } | null = null;
+const LOW_INV_SETTINGS_TTL_MS = 15_000;
+
+async function lowInventorySettings(): Promise<any> {
+	if (lowInvSettings && Date.now() - lowInvSettings.at < LOW_INV_SETTINGS_TTL_MS) return lowInvSettings.doc;
+	await connectDB();
+	const doc = await NotificationSettings.findById('default').select('lowInventoryPercentThreshold enabled').lean();
+	lowInvSettings = { at: Date.now(), doc };
+	return doc;
+}
+
 export async function shouldWarnLowInventory(params: {
 	inventoryCount: number;
 	minimumOrderQty?: number;
 }): Promise<boolean> {
-	await connectDB();
-	const s = await NotificationSettings.findById('default').select('lowInventoryPercentThreshold enabled').lean() as any;
+	const s = await lowInventorySettings() as any;
 	if (s?.enabled?.lowInventory === false) return false;
 	const pct = s?.lowInventoryPercentThreshold ?? 20;
 	if (!params.minimumOrderQty || params.minimumOrderQty <= 0) return false;

@@ -242,9 +242,40 @@ confirm empty if `spotCheckPending`. Opens at Barcoded with 0 members. Nothing i
 
 ### 6.2 Scan carts in (Barcoded only)
 
-Scan a QR sticker → `scanCartIn`: the sticker must not be a bucket label (collision guard) or an
-existing cartridge; a `CartridgeRecord` is created at `barcoded` with `bucket.*`; 1 × shell + 1 ×
-label debited. A mis-scan button un-scans (record deleted, debits retracted).
+Scan a QR sticker → `scanCartIn`: the sticker must not be a bucket label (collision guard), a
+merged double-read, or an existing cartridge; a `CartridgeRecord` is created at `barcoded` with
+`bucket.*`; 1 × shell + 1 × label debited. A mis-scan button un-scans (record deleted, debits
+retracted) — see §6.2.1 for why that delete needs the driver-level path.
+
+#### 6.2.1 Scanning pace — the hot path (2026-09-25)
+
+Scan-in is the one bucket flow an operator runs *at speed*: a gun, one cart after another, no
+pauses. It was audited end to end for lag on 2026-09-25 and rebuilt around that. Rules for anyone
+touching it:
+
+- **The scan box never blocks and is never `disabled`.** A barcode gun is a keyboard — it types
+  ~36 characters and hits Enter whether or not the page is ready, and a disabled input loses focus,
+  so the characters go nowhere. Enter drains the box onto `scanQueue` and returns; one worker
+  (`pumpCartScans`) posts the queue in order. Each queue entry carries its own `cycleId`, so
+  opening a different bucket mid-drain still lands the earlier carts in the right tub.
+- **No `invalidateAll()` between carts.** It re-ran the root layout, the cart-mfg layout and the
+  board load — ~25 queries, three of which scan collections that every scan-in makes bigger, so
+  cart #200 was slower than cart #1. Instead the board keeps a **membership overlay**
+  (`scanAdded` / `scanRemoved`, keyed by cycle id) that every read of an open pass goes through
+  (`boardCycles`), and **one** refetch lands 2.5 s after scanning stops. The overlay is
+  self-healing — once the server knows an id, the overlay entry for it is a harmless duplicate —
+  so a refetch may land at any moment, including mid-queue.
+- **Failed scans stack up** under the box rather than showing one line: with a queue, the next
+  cart's success would otherwise erase the error and the cart would be silently lost.
+- **A merged double-read is split client-side** and both carts are scanned, matching WI-01.
+  `assertNotMergedBarcode` stays as the server backstop.
+- **Inside `scanCartIn`,** the three guards (pass, bucket-label collision, "already a cart") run in
+  one `Promise.all`, and so do the five writes after the `CartridgeRecord` is created. The
+  cartridge record is still created *before* the debits — nothing may be debited for a cart that
+  was not born — but the write group beyond that is unordered. It returns the new count only; it
+  does **not** re-read the pass.
+- **Do not add a sequential `await` to this path** without checking whether it can join one of
+  those groups. The count went from ~20 round trips per scan to ~7.
 
 ### 6.3 Advance (with discard)
 
@@ -417,6 +448,7 @@ per-scan lookup only needs `manufacturing:read`.
 | `src/routes/manufacturing/cart-mfg/buckets/…` | board, history, `new/` |
 | `src/routes/manufacturing/cart-mfg/wi-01/…` | bucket-fed WI-01 |
 | `src/routes/cartridge-admin/…`, `cart-mfg/+page*`, `cart-mfg-dev/…`, `cart-mfg/pipeline/…`, `cart-mfg/wax-filling/…`, `cart-mfg/lots/[lotId]/…`, both settings pages | oven removal / In Oven wording / stage strips |
+| Shared code on the scan-in hot path (§6.2.1) — `services/inventory-transaction.ts` (`$inc` debit, part-id cache), `notifications.ts` (`shouldWarnLowInventory` settings cache), `kanban/standing.ts` (`requestSupplyCheckForPart`), `services/cartridge-hard-delete.ts` (`statuses` whitelist), `db/models/inventory-transaction.ts` + `bucket-transaction.ts` (indexes) | **not bucket-only files** — every debit in the app goes through them. Changed 2026-09-25 for scan-in pace; check other callers before changing further. |
 | Collision guard (`assertNotBucketLabel` / `findBucketLabels`) | every `CartridgeRecord` genesis path: bucket scan-in, `cv/induct`, `quick-wax-fill`, `state-change`, wax-filling test-mode upsert, reagent-filling stub upsert. **Search for new upserts when adding genesis paths.** |
 
 ## 11. Build history
@@ -441,6 +473,7 @@ per-scan lookup only needs `manufacturing:read`.
 | `5a01239f` | **Inline Mint card removed** from the board (§9.1/§9.4) — one way in: the *New bucket* button → `/buckets/new`; board `?/mint` + `?/relabel` actions deleted |
 | `f21ed50a` | Audit: missing members listed per cart with Keep / Write off / Take off pass, + Last audit summary (§9.8) |
 | `6baff520` | Audit: only the cart just scanned is displayed; strays needing a decision stay listed (§9.8) |
+| _(this change)_ | **Scan-in lag audit + rebuild** (§6.2.1): queue + membership overlay instead of `invalidateAll()` per cart, input never disabled, client-side merged-read split, batched guards/writes in `scanCartIn`, `resolveBucketId` one query; **mis-scan button fixed** (it had never worked — sacred delete hook); `recordTransaction` now `$inc` (lost-update fix); `createdAt` + `{lotId,transactionType,quantity}` indexes; `checkFloor` throttled on board load; supply check coalesced |
 | `5a01239f` | **`raw` → `barcoded` rename** (§2): stage key, labels, `CartridgeRecord.status`, `LifecycleStage`, pipeline `bucket_barcoded`; old `raw` kept in both enums for historical rows; `scripts/migrate-bucket-raw-to-barcoded.ts` (`--plan` / `--apply`, not yet run). Code swept into the ship-build merge commit; this doc row is the follow-up. |
 
 `npm run check` after v2: **12 errors / 438 warnings** — the same 12 pre-existing (`r2.ts`,
@@ -507,6 +540,20 @@ the floor creates a real card and sends real mail on the next board load.
   hotfix that moves production WI-01 to roll-length
   consumption is **PR #60** — parked until development settles (to stop churning the live
   number), then merged.
+- **Inventory counts recorded before 2026-09-25 may sit high.** `recordTransaction` decremented
+  `PartDefinition.inventoryCount` by read-compute-`$set`, so two operators debiting the same part
+  at the same moment both worked from the same stale read and the second write erased the first.
+  It is `$inc` now, but nothing repairs the drift retroactively; the `InventoryTransaction` ledger
+  is complete and authoritative, so a physical count (or a re-sum of the ledger) is the fix for
+  any part that looks wrong. Shells (PT-CT-104) and labels (PT-CT-106) are the most exposed,
+  since a bucket scan-in debits both and scanning is the fastest thing anyone does.
+- **Mongoose 9: `schema.pre('deleteOne')` is QUERY middleware**, so the sacred middleware's delete
+  hook fires on `Model.deleteOne()`. Anything that reaches for `CartridgeRecord.deleteOne` /
+  `deleteMany` throws a 500 (`lib/schema.js` `_getDocumentMiddleware` filters `deleteOne` out
+  unless `{ document: true }` was passed). The board's mis-scan button had never once worked for
+  this reason, and the client had no `'error'` branch so the operator saw nothing at all — both
+  fixed 2026-09-25. Use `hardDeleteUnfinalizedCartridges` (driver-level, audited, takes a
+  `statuses` whitelist), never the model's own delete methods.
 - **Roll accounting is trust-based**: 3.75 cm is an average; the roll gauge drifts from reality
   over ~1700 carts. A "retire roll early / mark roll exhausted" admin action does not exist yet —
   if a roll runs out before the gauge says so, the operator's only option today is to let the

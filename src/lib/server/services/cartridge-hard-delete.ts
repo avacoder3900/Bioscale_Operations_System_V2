@@ -16,13 +16,25 @@ const DELETABLE_STATUSES = new Set(['backing', 'wax_filling']);
 
 export async function hardDeleteUnfinalizedCartridges(
 	filter: Record<string, unknown>,
-	opts: { reason: string; user?: { _id?: string; username?: string }; oldData?: Record<string, unknown> }
+	opts: {
+		reason: string;
+		user?: { _id?: string; username?: string };
+		oldData?: Record<string, unknown>;
+		/**
+		 * Override the default deletable statuses. The bucket board's mis-scan
+		 * button passes ['barcoded']: a cart un-scanned while its pass is still at
+		 * Barcoded was born seconds ago and nothing downstream references it
+		 * (bucket-service.unscanCart, which re-checks membership first).
+		 */
+		statuses?: string[];
+	}
 ): Promise<string[]> {
 	await connectDB();
+	const deletable = opts.statuses?.length ? new Set(opts.statuses) : DELETABLE_STATUSES;
 	const docs = (await CartridgeRecord.find({ ...filter, finalizedAt: { $in: [null, undefined] } })
 		.select('_id status')
 		.lean()) as Array<{ _id: string; status?: string }>;
-	const ids = docs.filter((d) => DELETABLE_STATUSES.has(String(d.status))).map((d) => String(d._id));
+	const ids = docs.filter((d) => deletable.has(String(d.status))).map((d) => String(d._id));
 	if (ids.length === 0) return [];
 	// Driver-level: the model's own delete methods are hook-blocked. Ids are nanoid strings.
 	await CartridgeRecord.collection.deleteMany({ _id: { $in: ids } } as any);

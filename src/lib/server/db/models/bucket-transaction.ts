@@ -36,6 +36,11 @@ const bucketTransactionSchema = new Schema({
 bucketTransactionSchema.index({ cycleId: 1, createdAt: 1 });
 bucketTransactionSchema.index({ bucketId: 1, createdAt: -1 });
 bucketTransactionSchema.index({ type: 1, createdAt: -1 });
+// The board's change log is `find({}).sort({ createdAt: -1 }).limit(150)` — none
+// of the compound indexes above can serve a bare createdAt sort, so that was a
+// full collection scan on every board load, over a collection every scan-in
+// appends to. Added 2026-09-25.
+bucketTransactionSchema.index({ createdAt: -1 });
 
 applyImmutableMiddleware(bucketTransactionSchema);
 

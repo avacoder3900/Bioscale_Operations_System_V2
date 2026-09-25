@@ -78,7 +78,7 @@
 	function stageLabel(stage: string | null | undefined): string { return stage ? (data.stages.find(s => s.key === stage)?.label ?? stage) : '—'; }
 	// Destinations for a stage: open passes at that stage first, then empty buckets (this one first — the carts are already in it).
 	function residualOptions(stage: string, self: string): { bucketId: string; label: string; newPass: boolean }[] {
-		const open = data.board.cycles.filter(c => c.stage === stage).map(c => ({ bucketId: c.bucketId, label: `${shortQr(c.barcode) ?? c.bucketId} · ${c.bucketId} #${c.cycleNumber} · ${c.quantity} cart${c.quantity === 1 ? '' : 's'} at ${stageLabel(stage)}`, newPass: false }));
+		const open = boardCycles.filter(c => c.stage === stage).map(c => ({ bucketId: c.bucketId, label: `${shortQr(c.barcode) ?? c.bucketId} · ${c.bucketId} #${c.cycleNumber} · ${c.quantity} cart${c.quantity === 1 ? '' : 's'} at ${stageLabel(stage)}`, newPass: false }));
 		const empties = [...data.board.available].sort((a, b) => (a.bucketId === self ? -1 : b.bucketId === self ? 1 : 0))
 			.map(b => ({ bucketId: b.bucketId, label: `${shortQr(b.barcode) ?? b.bucketId} · ${b.bucketId} — empty, start a new pass at ${stageLabel(stage)}${b.bucketId === self ? ' (this bucket)' : ''}`, newPass: true }));
 		return [...open, ...empties];
@@ -116,15 +116,58 @@
 		}
 	}
 
-	// Barcoded-stage scan-in (fetch per cart so the box stays hot).
+	// ── Barcoded-stage scan-in ──────────────────────────────────────────────
+	// Rewritten 2026-09-25 for scanning pace. A barcode gun is a keyboard: it
+	// types ~36 characters and hits Enter whether or not the page is ready. The
+	// old box disabled itself for the round trip AND awaited invalidateAll()
+	// (~25 queries, three of them growing collection scans) before it would take
+	// another cart, so keystrokes landing in that window were dropped or
+	// truncated. Now: the input is never disabled, Enter drains it instantly onto
+	// a queue, one worker posts the queue in order, and the board is corrected
+	// locally by an overlay instead of being refetched between carts.
 	let cartScan = $state('');
-	let cartScanBusy = $state(false);
 	let cartScanError = $state('');
 	let cartScanOk = $state('');
+	// Each entry carries its own cycleId: if the operator opens a different bucket
+	// while the queue is still draining, carts already scanned still land in the
+	// bucket they were scanned into.
+	let scanQueue = $state<{ code: string; cycleId: string }[]>([]);
+	let scanFailures = $state<{ code: string; error: string }[]>([]);
+	let pumping = false;
+	// cycleId → ids scanned in / un-scanned since the last server read. Kept as an
+	// overlay rather than written into `data` so a refetch can land at any moment:
+	// once the server knows an id, the overlay entry for it is a harmless
+	// duplicate, so this never needs clearing and can never disagree with `data`.
+	let scanAdded = $state<Record<string, string[]>>({});
+	let scanRemoved = $state<Record<string, string[]>>({});
+
+	function overlay(c: BoardCycle): BoardCycle {
+		const added = scanAdded[c.cycleId];
+		const removed = scanRemoved[c.cycleId];
+		if (!added?.length && !removed?.length) return c;
+		const gone = new Set(removed ?? []);
+		const ids = c.cartridgeIds.filter(id => !gone.has(id));
+		const seen = new Set(ids);
+		for (const id of added ?? []) if (!seen.has(id) && !gone.has(id)) { ids.push(id); seen.add(id); }
+		return { ...c, cartridgeIds: ids, quantity: ids.length };
+	}
+	// Every read of an open pass goes through here, so the card, the rail and the
+	// audit's "missing members" list all see the same membership.
+	const boardCycles = $derived(data.board.cycles.map(overlay));
+	// What the overlay adds to each stage's cartridge tile, so the count ticks up
+	// with the scans instead of waiting for the next refresh.
+	const stageCartDelta = $derived.by(() => {
+		const d: Record<string, number> = { barcoded: 0, unpressed: 0, pressed: 0 };
+		for (const base of data.board.cycles) {
+			const live = boardCycles.find(c => c.cycleId === base.cycleId);
+			if (live && d[base.stage] !== undefined) d[base.stage] += live.quantity - base.quantity;
+		}
+		return d;
+	});
 
 	const cyclesByStage = $derived.by(() => {
 		const m: Record<BucketStage, BoardCycle[]> = { barcoded: [], unpressed: [], pressed: [] };
-		for (const c of data.board.cycles) m[c.stage]?.push(c);
+		for (const c of boardCycles) m[c.stage]?.push(c);
 		return m;
 	});
 	const allIdleBuckets = $derived([...data.board.available, ...data.board.quarantined]);
@@ -133,7 +176,7 @@
 		const p = panel;
 		if (p.kind !== 'cycle') return null;
 		const id = p.cycleId;
-		return data.board.cycles.find(c => c.cycleId === id) ?? null;
+		return boardCycles.find(c => c.cycleId === id) ?? null;
 	});
 	const panelBucket = $derived.by((): BoardBucket | null => {
 		const p = panel;
@@ -234,7 +277,7 @@
 	function shortQr(barcode: string | null): string | null {
 		return barcode ? (barcode.length > 12 ? `${barcode.slice(0, 8)}…` : barcode) : null;
 	}
-	function resetLists() { discardList = []; scrapList = []; residualList = []; listInput = ''; residualDisposition = ''; residualDest = ''; cartScanError = ''; cartScanOk = ''; }
+	function resetLists() { discardList = []; scrapList = []; residualList = []; listInput = ''; residualDisposition = ''; residualDest = ''; cartScanError = ''; cartScanOk = ''; scanFailures = []; }
 
 	function openCycle(c: BoardCycle) { panel = { kind: 'cycle', cycleId: c.cycleId, mode: 'view' }; resetLists(); if (c.stage === 'barcoded') focusCartScan(); }
 	function setMode(mode: CycleMode) {
@@ -257,12 +300,12 @@
 	function resolveLocal(code: string): boolean {
 		const raw = code.trim();
 		if (!raw) return false;
-		const cycle = data.board.cycles.find(c => matchesLabel(c.bucketId, c.barcode, raw));
+		const cycle = boardCycles.find(c => matchesLabel(c.bucketId, c.barcode, raw));
 		if (cycle) { openCycle(cycle); shortList = []; return true; }
 		const bucket = allIdleBuckets.find(b => matchesLabel(b.bucketId, b.barcode, raw));
 		if (bucket) { openBucket(bucket); shortList = []; return true; }
 		const hits = [
-			...data.board.cycles.filter(c => containsLabel(c.bucketId, c.barcode, raw)).map(c => ({ bucketId: c.bucketId, state: 'in_use', hint: `${labelFor(c.stage)} · ${c.quantity}` })),
+			...boardCycles.filter(c => containsLabel(c.bucketId, c.barcode, raw)).map(c => ({ bucketId: c.bucketId, state: 'in_use', hint: `${labelFor(c.stage)} · ${c.quantity}` })),
 			...allIdleBuckets.filter(b => containsLabel(b.bucketId, b.barcode, raw)).map(b => ({ bucketId: b.bucketId, state: b.state, hint: b.state === 'quarantined' ? (b.residualNote ?? 'quarantined') : `available · ${b.cycleCount} passes` }))
 		].slice(0, 8);
 		shortList = hits;
@@ -310,36 +353,113 @@
 	}
 
 	function focusCartScan() { setTimeout(() => document.getElementById('cartScan')?.focus(), 60); }
-	async function scanCartIntoBucket() {
-		const code = cartScan.trim();
-		if (!code || cartScanBusy || panel.kind !== 'cycle') return;
-		cartScanBusy = true; cartScanError = ''; cartScanOk = ''; cartScan = '';
+
+	// A fast gun can glue two 36-character labels into one read. WI-01 learned
+	// this the hard way (87 merged codes became cartridge records before the
+	// backstop landed); split and scan each rather than refusing both.
+	function splitMerged(raw: string): string[] {
+		const v = raw.trim();
+		if (v.length <= 36 || v.length % 36 !== 0) return [v];
+		const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+		const parts: string[] = [];
+		for (let i = 0; i < v.length; i += 36) parts.push(v.slice(i, i + 36));
+		return parts.every(p => uuid.test(p)) ? [...new Set(parts)] : [v];
+	}
+
+	// The board's read models (change log, registry, per-lot remaining) are too
+	// heavy to sit between two carts, but they should not go stale for long
+	// either — so one refetch lands after scanning stops, never during it.
+	let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+	function scheduleBoardRefresh() {
+		if (refreshTimer) clearTimeout(refreshTimer);
+		refreshTimer = setTimeout(() => {
+			refreshTimer = null;
+			if (scanQueue.length === 0 && !pumping) void invalidateAll();
+		}, 2500);
+	}
+
+	/** Enter in the scan box: drain it immediately, queue the code, keep the box hot. */
+	function enqueueCartScan() {
+		const raw = cartScan.trim();
+		cartScan = '';
+		if (!raw || panel.kind !== 'cycle') return;
+		const cycleId = panel.cycleId;
+		const codes = splitMerged(raw);
+		if (codes.length > 1) cartScanOk = `${codes.length} labels read as one — scanning them separately.`;
+		const members = new Set(panelCycle?.cartridgeIds ?? []);
+		for (const code of codes) {
+			if (members.has(code)) { cartScanError = `${code} is already in this bucket.`; continue; }
+			if (scanQueue.some(q => q.code === code)) { cartScanError = `${code} is already queued.`; continue; }
+			cartScanError = '';
+			scanQueue = [...scanQueue, { code, cycleId }];
+		}
+		void pumpCartScans();
+	}
+
+	/** One worker drains the queue in scan order; new codes appended mid-flight are picked up. */
+	async function pumpCartScans() {
+		if (pumping) return;
+		pumping = true;
 		try {
-			const fd = new FormData();
-			fd.set('cycleId', panel.cycleId);
-			fd.set('barcode', code);
-			const res = await fetch('?/scanIn', { method: 'POST', body: fd, headers: { 'x-sveltekit-action': 'true' } });
-			const result = deserialize(await res.text());
-			if (result.type === 'success') { cartScanOk = `${code} scanned in`; await invalidateAll(); }
-			else if (result.type === 'failure') cartScanError = (result.data as any)?.scanIn?.error ?? `Error ${result.status}`;
-			else if (result.type === 'error') cartScanError = result.error?.message ?? 'Scan failed';
-		} catch (e) {
-			cartScanError = e instanceof Error ? e.message : 'Scan failed';
+			while (scanQueue.length > 0) {
+				const { code, cycleId } = scanQueue[0];
+				try {
+					const fd = new FormData();
+					fd.set('cycleId', cycleId);
+					fd.set('barcode', code);
+					const res = await fetch('?/scanIn', { method: 'POST', body: fd, headers: { 'x-sveltekit-action': 'true' } });
+					const result = deserialize(await res.text());
+					if (result.type === 'success') {
+						scanAdded = { ...scanAdded, [cycleId]: [...(scanAdded[cycleId] ?? []), code] };
+						scanRemoved = { ...scanRemoved, [cycleId]: (scanRemoved[cycleId] ?? []).filter(c => c !== code) };
+						cartScanOk = `${code} scanned in`;
+					} else {
+						const msg = result.type === 'failure'
+							? ((result.data as any)?.scanIn?.error ?? `Error ${result.status}`)
+							: (result.type === 'error' ? (result.error?.message ?? 'Scan failed') : 'Scan failed');
+						// Queued scans must never fail silently: the next cart's
+						// success would overwrite a single error line, so failures
+						// stack up under the box until they are dismissed.
+						scanFailures = [...scanFailures, { code, error: msg }];
+						cartScanError = msg;
+					}
+				} catch (e) {
+					const msg = e instanceof Error ? e.message : 'Scan failed';
+					scanFailures = [...scanFailures, { code, error: msg }];
+					cartScanError = msg;
+				}
+				scanQueue = scanQueue.slice(1); // codes appended while that POST ran are kept
+			}
 		} finally {
-			cartScanBusy = false;
-			focusCartScan();
+			pumping = false;
+			scheduleBoardRefresh();
 		}
 	}
+
 	async function unscanCartFromBucket(code: string) {
 		if (panel.kind !== 'cycle') return;
+		const cycleId = panel.cycleId;
 		cartScanError = ''; cartScanOk = '';
-		const fd = new FormData();
-		fd.set('cycleId', panel.cycleId);
-		fd.set('barcode', code);
-		const res = await fetch('?/unscan', { method: 'POST', body: fd, headers: { 'x-sveltekit-action': 'true' } });
-		const result = deserialize(await res.text());
-		if (result.type === 'success') { cartScanOk = `${code} removed`; await invalidateAll(); }
-		else if (result.type === 'failure') cartScanError = (result.data as any)?.unscan?.error ?? `Error ${result.status}`;
+		try {
+			const fd = new FormData();
+			fd.set('cycleId', cycleId);
+			fd.set('barcode', code);
+			const res = await fetch('?/unscan', { method: 'POST', body: fd, headers: { 'x-sveltekit-action': 'true' } });
+			const result = deserialize(await res.text());
+			if (result.type === 'success') {
+				scanRemoved = { ...scanRemoved, [cycleId]: [...(scanRemoved[cycleId] ?? []), code] };
+				scanAdded = { ...scanAdded, [cycleId]: (scanAdded[cycleId] ?? []).filter(c => c !== code) };
+				cartScanOk = `${code} removed`;
+				scheduleBoardRefresh();
+			} else if (result.type === 'failure') cartScanError = (result.data as any)?.unscan?.error ?? `Error ${result.status}`;
+			// The mis-scan button used to have no branch here at all, so the 500 the
+			// sacred delete hook threw showed the operator nothing (fixed 2026-09-25
+			// along with the hook itself).
+			else if (result.type === 'error') cartScanError = result.error?.message ?? 'Removing that cart failed';
+			else cartScanError = 'Removing that cart failed';
+		} catch (e) {
+			cartScanError = e instanceof Error ? e.message : 'Removing that cart failed';
+		}
 	}
 
 	// React to each action result exactly once (form keeps the last result).
@@ -468,7 +588,9 @@
 		{#each data.stages as s (s.key)}
 			<div class="rounded-lg border bg-[var(--color-tron-surface)] p-3 {stageTint[s.key]}">
 				<p class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">{s.label}</p>
-				<p class="mt-1 text-2xl font-bold text-[var(--color-tron-cyan)]">{data.counts.stages[s.key].cartridges}</p>
+				<!-- + the scan-in overlay, so the tile ticks up with the gun rather than
+				     waiting for the next board refresh. -->
+				<p class="mt-1 text-2xl font-bold text-[var(--color-tron-cyan)]">{data.counts.stages[s.key].cartridges + (stageCartDelta[s.key] ?? 0)}</p>
 				<p class="text-[10px] text-[var(--color-tron-text-secondary)]">{data.counts.stages[s.key].buckets} bucket{data.counts.stages[s.key].buckets === 1 ? '' : 's'}</p>
 			</div>
 		{/each}
@@ -708,11 +830,28 @@
 								<!-- Barcoded = filling. Scan shells in; each scan is a cartridge's birth. -->
 								<div class="mt-3">
 									<label for="cartScan" class="text-[10px] uppercase tracking-wider text-[var(--color-tron-cyan)]">Scan carts into this bucket</label>
-									<input id="cartScan" type="text" bind:value={cartScan} autocomplete="off" disabled={cartScanBusy} placeholder="scan cart QR…"
-										onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); scanCartIntoBucket(); } }} class={scanCls} />
-									{#if cartScanBusy}<p class="mt-1 text-[10px] text-[var(--color-tron-text-secondary)]">Recording…</p>{/if}
+									<!-- Never disabled: a disabled input loses focus, and the gun keeps
+									     typing regardless. Enter queues and returns immediately. -->
+									<input id="cartScan" type="text" bind:value={cartScan} autocomplete="off" placeholder="scan cart QR…"
+										onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); enqueueCartScan(); } }} class={scanCls} />
+									{#if scanQueue.length > 0}
+										<p class="mt-1 text-[10px] text-[var(--color-tron-cyan)]">Recording… {scanQueue.length} queued — keep scanning</p>
+									{/if}
 									{#if cartScanOk}<p class="mt-1 text-[10px] text-green-300">{cartScanOk}</p>{/if}
-									{#if cartScanError}<p class="mt-1 text-xs text-[var(--color-tron-error)]">{cartScanError}</p>{/if}
+									{#if cartScanError && scanFailures.length === 0}<p class="mt-1 text-xs text-[var(--color-tron-error)]">{cartScanError}</p>{/if}
+									{#if scanFailures.length > 0}
+										<div class="mt-1 rounded border border-[var(--color-tron-error)]/50 bg-[var(--color-tron-error)]/10 p-1.5">
+											<div class="flex items-center justify-between">
+												<span class="text-[10px] uppercase tracking-wider text-[var(--color-tron-error)]">{scanFailures.length} scan{scanFailures.length === 1 ? '' : 's'} did not take</span>
+												<button type="button" onclick={() => { scanFailures = []; cartScanError = ''; }} class="text-[10px] text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]">dismiss</button>
+											</div>
+											<ul class="mt-1 space-y-0.5">
+												{#each scanFailures as f, i (f.code + i)}
+													<li class="text-[10px] text-[var(--color-tron-error)]"><span class="font-mono">{f.code}</span> — {f.error}</li>
+												{/each}
+											</ul>
+										</div>
+									{/if}
 									{#if c.cartridgeIds.length > 0}
 										<ul class="mt-2 max-h-40 space-y-1 overflow-y-auto">
 											{#each [...c.cartridgeIds].reverse() as id (id)}

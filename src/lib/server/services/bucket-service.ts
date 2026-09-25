@@ -35,7 +35,7 @@ import {
 } from '$lib/server/db/models';
 import { generateId } from '$lib/server/db/utils';
 import { recordTransaction, resolvePartId } from './inventory-transaction';
-import { splitMergedBarcodes } from './cartridge-hard-delete';
+import { splitMergedBarcodes, hardDeleteUnfinalizedCartridges } from './cartridge-hard-delete';
 import { generateBarcode } from './barcode-generator';
 import { consumeThermoseal, creditThermoseal, ThermosealError, type ConsumeResult } from './thermoseal-service';
 
@@ -276,11 +276,14 @@ export async function resolveBucketId(code: string): Promise<string | null> {
 	await connectDB();
 	const raw = (code ?? '').trim();
 	if (!raw) return null;
-	const byId = await ProductionBucket.findById(raw.toUpperCase()).select('_id').lean() as any;
-	if (byId) return byId._id;
-	const byBarcode = await ProductionBucket.findOne({ barcode: { $in: [raw, raw.toLowerCase(), raw.toUpperCase()] } })
-		.select('_id').lean() as any;
-	return byBarcode ? byBarcode._id : null;
+	// ONE query, not two (perf, 2026-09-25): this sits on every scan-in and every
+	// audit scan, so the id probe and the sticker probe go together. Both fields
+	// are indexed, so this is an index OR, and the two can never collide — a
+	// sticker matching /^BKT-\d+$/ is refused by assertStickerFree.
+	const hit = await ProductionBucket.findOne({
+		$or: [{ _id: raw.toUpperCase() }, { barcode: { $in: [raw, raw.toLowerCase(), raw.toUpperCase()] } }]
+	}).select('_id').lean() as any;
+	return hit ? hit._id : null;
 }
 
 /**
@@ -571,17 +574,26 @@ export interface ScanCartInput {
  * is already a cartridge or a bucket's sticker. Debits one shell + one label
  * against the pass's lots.
  */
-export async function scanCartIn(input: ScanCartInput): Promise<{ cycle: any; barcode: string }> {
+export async function scanCartIn(input: ScanCartInput): Promise<{ quantity: number; barcode: string }> {
 	assertNotMergedBarcode(input.barcode ?? '');
-	await connectDB();
-	const cycle = await BucketCycle.findById(input.cycleId).lean() as any;
-	if (!cycle || cycle.status !== 'open') throw new BucketError('Pass is not open.', 404);
-	if (cycle.stage !== 'barcoded') throw new BucketError(`${cycleLabel(cycle.bucketId, cycle.cycleNumber)} is at ${STAGE_LABELS[cycle.stage as BucketStage]} — carts can only be scanned in while a bucket is at Barcoded.`);
 	const barcode = (input.barcode ?? '').trim();
 	if (!barcode) throw new BucketError('Scan the cartridge QR.');
 	if (/^BKT-\d+$/i.test(barcode)) throw new BucketError('That is a bucket id, not a cartridge sticker.');
-	await assertNotBucketLabel(barcode);
-	const existing = await CartridgeRecord.findById(barcode).select('_id status bucket').lean() as any;
+	await connectDB();
+
+	// PERF (2026-09-25): these three reads are independent — the pass, the
+	// bucket-label collision guard (§10) and "is this sticker already a cart".
+	// Awaiting them in series was most of the scan's latency; the operator is
+	// scanning shells at a rapid pace, so the guards go together.
+	const [cycle, bucketLabelId, existing] = await Promise.all([
+		BucketCycle.findById(input.cycleId).lean() as Promise<any>,
+		resolveBucketId(barcode),
+		CartridgeRecord.findById(barcode).select('_id status bucket').lean() as Promise<any>
+	]);
+
+	if (!cycle || cycle.status !== 'open') throw new BucketError('Pass is not open.', 404);
+	if (cycle.stage !== 'barcoded') throw new BucketError(`${cycleLabel(cycle.bucketId, cycle.cycleNumber)} is at ${STAGE_LABELS[cycle.stage as BucketStage]} — carts can only be scanned in while a bucket is at Barcoded.`);
+	if (bucketLabelId) throw new BucketError(`${barcode} is the QR sticker on production bucket ${bucketLabelId}, not a cartridge.`, 409, 'BUCKET_LABEL');
 	if (existing) {
 		const where = existing.bucket?.bucketId ? ` (in bucket ${existing.bucket.bucketId})` : '';
 		throw new BucketError(`${barcode} already exists as a cartridge with status "${existing.status ?? 'unknown'}"${where} — a sticker is born once.`, 409);
@@ -609,15 +621,25 @@ export async function scanCartIn(input: ScanCartInput): Promise<{ cycle: any; ba
 		throw e;
 	}
 	const before: number = cycle.quantity ?? 0;
-	await BucketCycle.updateOne({ _id: cycle._id }, { $addToSet: { cartridgeIds: barcode }, $inc: { quantity: 1 } });
-
 	const label = cycleLabel(cycle.bucketId, cycle.cycleNumber);
-	await debit(SHELL_PART, shellLot, 1, cycle._id, input.user, `Scan-in ${barcode} into ${label}: 1x ${SHELL_PART} shell from lot ${shellLot ?? '(none)'}`);
-	await debit(LABEL_PART, labelLot, 1, cycle._id, input.user, `Scan-in ${barcode} into ${label}: 1x ${LABEL_PART} label from lot ${labelLot ?? '(none)'}`);
 
-	await logTx({ bucketId: cycle.bucketId, cycleId: cycle._id, type: 'scan_in', fromStage: 'barcoded', toStage: 'barcoded', qtyBefore: before, qtyAfter: before + 1, cartridgeIds: [barcode], operator: input.user });
-	await audit('cartridge_records', barcode, 'INSERT', input.user, { status: 'barcoded', bucketId: cycle.bucketId, cycleId: cycle._id });
-	return { cycle: await BucketCycle.findById(cycle._id).lean(), barcode };
+	// PERF (2026-09-25): membership, the two debits and the two log rows do not
+	// depend on each other, so they go in one round trip group instead of six in
+	// series. The membership update is first in the list so that if the group
+	// does fail part-way the pass is the likeliest thing to be right; a partial
+	// failure here needs the same manual repair it always did (void the pass, or
+	// un-scan the cart) — the cartridge record above is the one ordering that
+	// still matters, since nothing may be debited for a cart that was not born.
+	await Promise.all([
+		BucketCycle.updateOne({ _id: cycle._id }, { $addToSet: { cartridgeIds: barcode }, $inc: { quantity: 1 } }),
+		debit(SHELL_PART, shellLot, 1, cycle._id, input.user, `Scan-in ${barcode} into ${label}: 1x ${SHELL_PART} shell from lot ${shellLot ?? '(none)'}`),
+		debit(LABEL_PART, labelLot, 1, cycle._id, input.user, `Scan-in ${barcode} into ${label}: 1x ${LABEL_PART} label from lot ${labelLot ?? '(none)'}`),
+		logTx({ bucketId: cycle.bucketId, cycleId: cycle._id, type: 'scan_in', fromStage: 'barcoded', toStage: 'barcoded', qtyBefore: before, qtyAfter: before + 1, cartridgeIds: [barcode], operator: input.user }),
+		audit('cartridge_records', barcode, 'INSERT', input.user, { status: 'barcoded', bucketId: cycle.bucketId, cycleId: cycle._id })
+	]);
+	// No re-read of the pass: the caller only needs the new count, and the board
+	// tracks its own membership between refreshes (§9.1).
+	return { quantity: before + 1, barcode };
 }
 
 /**
@@ -625,28 +647,45 @@ export async function scanCartIn(input: ScanCartInput): Promise<{ cycle: any; ba
  * deleted (it was born seconds ago and has no history) and the shell + label
  * debits are retracted.
  */
-export async function unscanCart(input: ScanCartInput): Promise<any> {
+export async function unscanCart(input: ScanCartInput): Promise<{ quantity: number; barcode: string }> {
+	const barcode = (input.barcode ?? '').trim();
 	await connectDB();
-	const cycle = await BucketCycle.findById(input.cycleId).lean() as any;
+	const [cycle, cart] = await Promise.all([
+		BucketCycle.findById(input.cycleId).lean() as Promise<any>,
+		CartridgeRecord.findById(barcode).select('status bucket').lean() as Promise<any>
+	]);
 	if (!cycle || cycle.status !== 'open') throw new BucketError('Pass is not open.', 404);
 	if (cycle.stage !== 'barcoded') throw new BucketError('Carts can only be un-scanned while the bucket is at Barcoded — after that, use Discard.');
-	const barcode = (input.barcode ?? '').trim();
 	if (!(cycle.cartridgeIds ?? []).includes(barcode)) throw new BucketError(`${barcode} is not in ${cycleLabel(cycle.bucketId, cycle.cycleNumber)}.`);
-	const cart = await CartridgeRecord.findById(barcode).select('status bucket').lean() as any;
 	if (!cart || cart.status !== 'barcoded' || cart.bucket?.cycleId !== cycle._id) throw new BucketError(`${barcode} is no longer a barcoded member of this pass.`);
 
-	await CartridgeRecord.deleteOne({ _id: barcode });
-	const before: number = cycle.quantity ?? 0;
-	await BucketCycle.updateOne({ _id: cycle._id }, { $pull: { cartridgeIds: barcode }, $inc: { quantity: -1 } });
-
+	// The CartridgeRecord model carries the sacred middleware, whose delete hooks
+	// throw unconditionally — and in Mongoose 9 `pre('deleteOne')` with no
+	// options is QUERY middleware, so `CartridgeRecord.deleteOne()` fired it and
+	// this button had never once worked (it 500'd; the board swallowed it).
+	// hardDeleteUnfinalizedCartridges is the one sanctioned driver-level path and
+	// writes the AuditLog row itself. Bug found 2026-09-25.
 	const label = cycleLabel(cycle.bucketId, cycle.cycleNumber);
-	for (const pn of [SHELL_PART, LABEL_PART]) {
-		const partId = await resolvePartId(pn);
-		await retract('consumption', partId, lotFor(cycle.sourceLots, pn) ?? null, 1, cycle._id, input.user, `Un-scan ${barcode} from ${label}: 1x ${pn} returned`);
-	}
-	await logTx({ bucketId: cycle.bucketId, cycleId: cycle._id, type: 'unscan', fromStage: 'barcoded', toStage: 'barcoded', qtyBefore: before, qtyAfter: Math.max(0, before - 1), cartridgeIds: [barcode], reason: 'mis-scan removed', operator: input.user });
-	await audit('cartridge_records', barcode, 'DELETE', input.user, undefined, { status: 'barcoded', cycleId: cycle._id }, 'Operator removed mis-scanned cartridge while bucket at Barcoded');
-	return BucketCycle.findById(cycle._id).lean();
+	const removed = await hardDeleteUnfinalizedCartridges(
+		{ _id: barcode },
+		{
+			statuses: ['barcoded'],
+			reason: 'Operator removed mis-scanned cartridge while bucket at Barcoded',
+			user: input.user,
+			oldData: { cycleId: cycle._id, bucketId: cycle.bucketId }
+		}
+	);
+	if (removed.length === 0) throw new BucketError(`${barcode} could not be removed — reload the board and try again.`, 409);
+
+	const before: number = cycle.quantity ?? 0;
+	const [shellPartId, labelPartId] = await Promise.all([resolvePartId(SHELL_PART), resolvePartId(LABEL_PART)]);
+	await Promise.all([
+		BucketCycle.updateOne({ _id: cycle._id }, { $pull: { cartridgeIds: barcode }, $inc: { quantity: -1 } }),
+		retract('consumption', shellPartId, lotFor(cycle.sourceLots, SHELL_PART) ?? null, 1, cycle._id, input.user, `Un-scan ${barcode} from ${label}: 1x ${SHELL_PART} returned`),
+		retract('consumption', labelPartId, lotFor(cycle.sourceLots, LABEL_PART) ?? null, 1, cycle._id, input.user, `Un-scan ${barcode} from ${label}: 1x ${LABEL_PART} returned`),
+		logTx({ bucketId: cycle.bucketId, cycleId: cycle._id, type: 'unscan', fromStage: 'barcoded', toStage: 'barcoded', qtyBefore: before, qtyAfter: Math.max(0, before - 1), cartridgeIds: [barcode], reason: 'mis-scan removed', operator: input.user })
+	]);
+	return { quantity: Math.max(0, before - 1), barcode };
 }
 
 export interface ScrapInput {
@@ -1578,7 +1617,14 @@ export async function bucketRegistry(): Promise<RegistryRow[]> {
 	const [buckets, openCycles, lastTx] = await Promise.all([
 		ProductionBucket.find({}).sort({ _id: 1 }).lean() as any as Promise<any[]>,
 		BucketCycle.find({ status: 'open' }).select('bucketId cycleNumber stage quantity').lean() as any as Promise<any[]>,
-		BucketTransaction.aggregate([{ $group: { _id: '$bucketId', last: { $max: '$createdAt' } } }]) as any as Promise<any[]>
+		// $sort before $group so this rides the { bucketId: 1, createdAt: -1 }
+		// index as a distinct scan and takes the first row per bucket. A bare
+		// $group/$max was an unconditional collection scan on every board load
+		// (perf, 2026-09-25).
+		BucketTransaction.aggregate([
+			{ $sort: { bucketId: 1, createdAt: -1 } },
+			{ $group: { _id: '$bucketId', last: { $first: '$createdAt' } } }
+		]) as any as Promise<any[]>
 	]);
 	const cycleByBucket = new Map(openCycles.map(c => [c.bucketId, c]));
 	const lastByBucket = new Map(lastTx.map(t => [t._id, t.last]));

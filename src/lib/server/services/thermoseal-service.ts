@@ -295,6 +295,9 @@ export async function creditThermoseal(input: { segments: { rollId: string; cm: 
 
 // ── floor rule ────────────────────────────────────────────────────────────
 
+// Last time the floor rule actually ran in this process — see checkFloor's throttleMs.
+let lastFloorCheckAt = 0;
+
 export interface FloorCheck {
 	rollsOnHand: number;
 	minRolls: number;
@@ -310,7 +313,20 @@ export interface FloorCheck {
  * call is the one that spawned the card, so a shelf that stays low does not
  * re-mail on every pull; the open card is the standing reminder.
  */
-export async function checkFloor(input: { user?: Operator; cfg?: ThermosealConfig; notify?: boolean }): Promise<FloorCheck | null> {
+export async function checkFloor(input: {
+	user?: Operator;
+	cfg?: ThermosealConfig;
+	notify?: boolean;
+	/**
+	 * Skip entirely if the rule already ran this recently in this process. The
+	 * bucket board passes this: the floor rule is a backstop that wants to run on
+	 * a page open, not on every board refresh while someone scans carts in.
+	 * A roll pull omits it — that check must always run.
+	 */
+	throttleMs?: number;
+}): Promise<FloorCheck | null> {
+	if (input.throttleMs && Date.now() - lastFloorCheckAt < input.throttleMs) return null;
+	lastFloorCheckAt = Date.now();
 	await connectDB();
 	const cfg = input.cfg ?? await thermosealConfig();
 	const part = await thermosealPart();

@@ -4,6 +4,10 @@ import { notifyLowInventory, shouldWarnLowInventory } from '$lib/server/notifica
 
 // Cache partDefinitionId lookups by partNumber (stable across requests in same process)
 const partNumberCache = new Map<string, string | null>();
+// In-flight lookups, so two callers resolving the same part in the same tick
+// (a bucket scan-in debits its shell and its label in parallel) share one query
+// instead of both missing the cache.
+const partNumberInFlight = new Map<string, Promise<string | null>>();
 
 /**
  * Look up a PartDefinition _id by partNumber (e.g. 'PT-CT-104').
@@ -11,10 +15,20 @@ const partNumberCache = new Map<string, string | null>();
  */
 export async function resolvePartId(partNumber: string): Promise<string | null> {
 	if (partNumberCache.has(partNumber)) return partNumberCache.get(partNumber)!;
-	const part = await PartDefinition.findOne({ partNumber }).select('_id').lean() as any;
-	const id = part ? String(part._id) : null;
-	partNumberCache.set(partNumber, id);
-	return id;
+	const pending = partNumberInFlight.get(partNumber);
+	if (pending) return pending;
+	const lookup = (async () => {
+		try {
+			const part = await PartDefinition.findOne({ partNumber }).select('_id').lean() as any;
+			const id = part ? String(part._id) : null;
+			partNumberCache.set(partNumber, id);
+			return id;
+		} finally {
+			partNumberInFlight.delete(partNumber);
+		}
+	})();
+	partNumberInFlight.set(partNumber, lookup);
+	return lookup;
 }
 
 export interface RecordTransactionParams {
@@ -45,31 +59,39 @@ export async function recordTransaction(params: RecordTransactionParams): Promis
 
 	// Update part inventory count if partDefinitionId is provided
 	if (params.partDefinitionId) {
-		const part = await PartDefinition.findById(params.partDefinitionId).lean() as any;
-		previousQuantity = part?.inventoryCount ?? 0;
+		const delta =
+			params.transactionType === 'consumption' || params.transactionType === 'scrap'
+				? -Math.abs(params.quantity)
+				: params.transactionType === 'creation' || params.transactionType === 'receipt'
+					? Math.abs(params.quantity)
+					: params.quantity; // adjustment: signed
 
-		if (params.transactionType === 'consumption' || params.transactionType === 'scrap') {
-			newQuantity = previousQuantity - Math.abs(params.quantity);
-		} else if (params.transactionType === 'creation' || params.transactionType === 'receipt') {
-			newQuantity = previousQuantity + Math.abs(params.quantity);
-		} else {
-			// adjustment: quantity can be positive or negative
-			newQuantity = previousQuantity + params.quantity;
+		// $inc in one round trip, NOT read-then-$set (fixed 2026-09-25). The old
+		// read-compute-$set lost updates: two operators scanning carts into two
+		// buckets at the same moment both debited PT-CT-104 from the same stale
+		// read and the second write clobbered the first, so the shell count
+		// drifted high with no trace. The post-write doc gives newQuantity, and
+		// previousQuantity is derived from it rather than read separately.
+		const part = await PartDefinition.findOneAndUpdate(
+			{ _id: params.partDefinitionId },
+			{ $inc: { inventoryCount: delta } },
+			{ new: true, lean: true }
+		) as any;
+		if (part) {
+			newQuantity = Number(part.inventoryCount ?? 0);
+			previousQuantity = newQuantity - delta;
 		}
 
-		await PartDefinition.updateOne(
-			{ _id: params.partDefinitionId },
-			{ $set: { inventoryCount: newQuantity } }
-		);
-
-		// KB2-13 supply loop: a stock decrement immediately re-checks the
-		// part-reorder rule + any part_stock standing targets for THIS part.
-		// Fire-and-forget with a lazy import — the supply autopilot must never
-		// throw into (or slow) the transaction-recording path.
-		if (newQuantity < previousQuantity) {
+		// KB2-13 supply loop: a stock decrement re-checks the part-reorder rule +
+		// any part_stock standing targets for THIS part. Coalesced per part (see
+		// requestSupplyCheckForPart) so a burst of scans costs one check, taken
+		// after the last decrement, instead of one per scan competing with the
+		// scans themselves for the connection pool. Lazy import — the supply
+		// autopilot must never throw into (or slow) the transaction path.
+		if (part && delta < 0) {
 			const partId = String(params.partDefinitionId);
 			import('$lib/server/kanban/standing')
-				.then(({ checkSupplyForPart }) => checkSupplyForPart(partId))
+				.then(({ requestSupplyCheckForPart }) => requestSupplyCheckForPart(partId))
 				.catch((e) => console.error('[inventory-transaction] supply check failed:', e));
 		}
 
