@@ -432,7 +432,7 @@ per-scan lookup only needs `manufacturing:read`.
 | `4522ba63` / `8e3e8a67` | Note removed again as redundant with the *Rolls on hand* tile (user); `liveCountAt` reverted; yellow card names `master` as the build draining the shelf |
 | `d7e0fe78` | **Find a cart** box under the board — `cartStatusLine()` + `?/cartLookup`, one line of status (§9.1) |
 | `3e7bebca` | **Audit a bucket** — scan every cart, move or discard what does not belong (§9.8) |
-| _pending_ | **Inline Mint card removed** from the board (§9.1/§9.4) — one way in: the *New bucket* button → `/buckets/new`; board `?/mint` + `?/relabel` actions deleted |
+| `5a01239f` | **Inline Mint card removed** from the board (§9.1/§9.4) — one way in: the *New bucket* button → `/buckets/new`; board `?/mint` + `?/relabel` actions deleted |
 | `f21ed50a` | Audit: missing members listed per cart with Keep / Write off / Take off pass, + Last audit summary (§9.8) |
 | `6baff520` | Audit: only the cart just scanned is displayed; strays needing a decision stay listed (§9.8) |
 

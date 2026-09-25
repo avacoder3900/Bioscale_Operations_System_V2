@@ -15469,3 +15469,30 @@ Source: branch feat/bucket-system @ commit 6baff520
 Retrieve this exact code: git checkout feat/bucket-system at commit 6baff520
 What this deployment is for: the audit panel showing only the cart just scanned (§9.8).
 Build status: success (login 200; /manufacturing/cart-mfg/buckets 302 to /login).
+
+================================================================================
+2026-09-25 — feat/bucket-system — inline Mint card removed from the board
+================================================================================
+User: "I want to remove the mint new bucket card, I want only the new bucket page to exist as
+well as the existing 'new bucket' button on the main page." The dashed **Mint New Bucket /
+Replace Sticker** card that sat under the Available column is gone. Minting a bucket and
+replacing a damaged sticker now happen in exactly one place — /manufacturing/cart-mfg/buckets/new
+— reached from the *New bucket* button that was already in the board header (and from *Replace
+sticker* on a bucket's own page, which already deep-linked there with ?bucket=). Nothing about
+minting itself changed; only the second, inline entry point was deleted.
+Removed with it: the card's client state (mintMode / mintQr / relabelBucket / relabelQr /
+mintBusy / enhanceMint), the mint? and relabel? entries in the page's form prop type, and the
+board's now-unreachable ?/mint and ?/relabel actions plus their createBucket /
+replaceBucketSticker imports — both service functions are still used by buckets/new, which owns
+the surviving forms. The leftover/residual panel's "no empty bucket" hint used to send the
+operator to "the Mint New Bucket card under Available"; it now links to /buckets/new.
+Files: src/routes/manufacturing/cart-mfg/buckets/+page.svelte, .../buckets/+page.server.ts,
+BUCKET-SYSTEM_PLAN.md §7 + §9.1 + §9.4 + changelog.
+Check (svelte-kit sync + svelte-check direct): 12 errors / 441 warnings — the documented
+baseline (r2.ts, AskBimsWidget, 8x assembly/[sessionId], 2x validation/magnetometer/
+[sessionId]), none in the touched files.
+Note on how this landed: the code + plan-doc edits were made in a shared worktree while another
+session was renaming the raw stage to barcoded, and they were swept into that session's commit
+5a01239f ("Merge origin/master into feat/bucket-system for the ship build"), already pushed.
+This entry and the changelog sha stamp are the follow-up; no separate code commit exists for the
+Mint card removal. No deployment was created by this session.
