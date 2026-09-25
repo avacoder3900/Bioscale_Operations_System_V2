@@ -15860,3 +15860,65 @@ Deployment: production — building from the GitHub push to master (Vercel dashb
 Source: branch master @ commit 9c2d8b30
 Retrieve this exact code: git checkout master at commit 9c2d8b30
 What this deployment is for: sweep coverage refusal + reachable sweep/compare pages
+
+================================================================================
+2026-09-25 — master — four units swept; the channel deficit is the JIG, not the SPUs
+================================================================================
+Swept 247 (session va9dLUSqBUvwpBlip4P3h) and 244 (session -i9MMeJJg_CH7qIJEBEH9),
+both good=7840, zero dropouts. With 226 and 255 that is four clean units.
+
+BEAD PULL |B x dB/dz|, mean over usable wells (edge peaks excluded):
+    unit     ch A     ch B     ch C    B vs A    C vs A
+    226       1864     1394     1424    -25.2%    -23.6%
+    244       1963     1666     1221    -15.2%    -37.8%
+    247       1957     1671     1076    -14.6%    -45.0%   (well 5 excluded)
+    255       2141     1998     1525     -6.7%    -28.8%
+    channel A spread ACROSS units: 14.8%
+
+Channel A is strongest and channel C weakest on ALL FOUR units, C down 24-45%,
+while channel A compared across units is tight at 14.8%. Magnet variation would
+put the weakest channel in a random position per unit; instead the ordering is
+identical every time and the same channel is stable unit to unit. The SAME JIG
+was used on all four, so this is predominantly the jig's own sensor geometry --
+channel C's sensor almost certainly sits at a different height relative to the
+magnet plane and therefore sees a flatter gradient.
+
+CORRECTION to the 2026-09-25 entry above: that entry framed the A-vs-C gap as
+evidence peak-only QC hides a quarter-scale spread in real bead force. With four
+units it is clear the within-unit channel gap is mostly FIXTURE, not SPU. Compare
+the same channel across units (meaningful); do not compare C against A within a
+unit and conclude a magnet is weak. Cheap test to settle it: re-sweep one SPU
+with a different jig, or rotate the jig 180 degrees. If the deficit follows the
+jig it is geometry; if it stays with the physical channel position, it is the
+magnet row.
+
+247 HAS A REAL POSITIONAL DEFECT, and it is not strength. Peak spacing runs
+8000 / 13400 / 8000 um -- well 3 and everything after it sit +5400um from an even
+cadence (226 is 8000 x4 exactly; 255 varies +/-200, one dy step; 244 is 8000 x4
+exactly). Well 3's peak field is healthy at 4373/4388/4260, in line with wells
+1/2/4, so the magnet is fine and the regular test fails it only because the test
+samples off-centre. Well 5 on 247 is unmeasurable: carried +5400 along, its peak
+lands past the 40000 sweep end and past the ~40800 real travel limit, so its
+1834 @ y=40000 is rising flank. The new gate handles that correctly -- coverage
+was complete, so peakAtWindowEdge fires but peakUnreliable does NOT, which is the
+intended distinction between "window missed the magnet" and "link died".
+
+STILL OPEN, and the firmware says so itself (brevitest-firmware.h:219): which
+stage geometry is correct is unresolved -- "the measured well_move[] puts the
+wells at 2825-18800 um, the nominal one at 4800-37000 um. A sweep this wide finds
+the peaks empirically and settles the question." Four units of empirical peaks
+now exist (226 5400-37400, 255 6000-38000, 244 5600-37600, 247 6200-35600+), all
+spanning the NOMINAL range. An earlier attempt here to explain 247's failing well
+3 via park positions did NOT reconcile: firmware parks compute to
+5650/13550/21200/29800/37600 (start 12800 + cumulative well_move
+{-7150,7900,7650,8600,7800}), yet the sweep reads only ~655 for sensor 3 at
+y=21200 while the regular test reported 3848. That mapping is wrong somewhere and
+needs a bench check, not more inference.
+
+Operational notes: the serial port renumbers constantly (COM7 -> COM8 -> COM20 ->
+COM8 -> COM12 -> COM11 across one session) -- let run-sweep.ps1 auto-detect it
+rather than passing a value read even a minute earlier. And judge mag-record
+freshness by the filename epoch, NOT by channel temperature: 244's record was 0.9
+min old while reading 21-26C simply because the unit was cold.
+
+No code changed in this entry.
