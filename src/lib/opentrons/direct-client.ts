@@ -43,9 +43,35 @@ export interface RobotSessionState {
 	fellBack: boolean;
 	/** Robot is set up for tailnet (so "Retry direct" is meaningful). */
 	tailnetConfigured: boolean;
+	/**
+	 * Chrome's Local Network Access permission for THIS BIMS origin. A public site
+	 * (vercel.app) reaching a private address (Tailscale 100.x) needs a one-time
+	 * "allow" per origin; until granted, Chrome holds the request, which looks
+	 * exactly like an unreachable robot. 'unsupported' = browser has no such gate.
+	 */
+	browserPermission?: LocalNetworkPermission;
+	/** The operator must click "allow direct" (a user gesture) to grant it. */
+	needsPermission?: boolean;
 	directUrl?: string;
 	/** Latency of the last successful direct probe/call, ms. */
 	latencyMs?: number;
+}
+
+export type LocalNetworkPermission = 'granted' | 'prompt' | 'denied' | 'unsupported';
+
+/** Chrome ≥ 142 gates public-site → private-network requests behind a permission. */
+export async function queryLocalNetworkPermission(): Promise<LocalNetworkPermission> {
+	const perms = typeof navigator !== 'undefined' ? (navigator as any).permissions : undefined;
+	if (!perms?.query) return 'unsupported';
+	for (const name of ['local-network-access', 'local-network']) {
+		try {
+			const st = (await perms.query({ name })).state;
+			if (st === 'granted' || st === 'prompt' || st === 'denied') return st;
+		} catch {
+			/* unknown permission name in this browser — try the next */
+		}
+	}
+	return 'unsupported';
 }
 
 export interface DirectCallRow {
@@ -68,6 +94,8 @@ export interface SessionOptions {
 	refreshMs?: number;
 	/** How often to flush the direct-call log. 0 = flush only on close(). */
 	flushMs?: number;
+	/** Injectable for tests; defaults to queryLocalNetworkPermission. */
+	permissionQuery?: () => Promise<LocalNetworkPermission>;
 }
 
 const API = (robotId: string) => `/api/opentrons-lab/robots/${encodeURIComponent(robotId)}`;
@@ -117,7 +145,8 @@ export class RobotSession {
 	readonly robotId: string;
 	readonly sessionId = newSessionId();
 	private readonly fetchImpl: typeof fetch;
-	private readonly opts: Required<Omit<SessionOptions, 'fetchImpl'>>;
+	private readonly opts: Required<Omit<SessionOptions, 'fetchImpl' | 'permissionQuery'>>;
+	private readonly permissionQuery: () => Promise<LocalNetworkPermission>;
 	private _state: RobotSessionState;
 	private listeners = new Set<(s: RobotSessionState) => void>();
 	private log: DirectCallRow[] = [];
@@ -129,6 +158,7 @@ export class RobotSession {
 	constructor(robotId: string, options: SessionOptions = {}) {
 		this.robotId = robotId;
 		this.fetchImpl = options.fetchImpl ?? ((...a: Parameters<typeof fetch>) => fetch(...a));
+		this.permissionQuery = options.permissionQuery ?? queryLocalNetworkPermission;
 		this.opts = {
 			probeTimeoutMs: options.probeTimeoutMs ?? 1500,
 			refreshMs: options.refreshMs ?? 5000,
@@ -179,22 +209,42 @@ export class RobotSession {
 			return this._state;
 		}
 		this.set({ tailnetConfigured: true, directUrl: conn.directUrl, busy: conn.busy ?? null });
-		await this.probeAndSet(conn.directUrl);
 		if (typeof window !== 'undefined') window.addEventListener('pagehide', this.onPageHide);
+		const perm = await this.permissionQuery();
+		this.set({ browserPermission: perm });
+		if (perm === 'prompt') {
+			// Probing now would just hang behind a permission prompt Chrome won't show
+			// without a click. Stay on the queue and offer the button.
+			this.set({
+				transport: 'queue',
+				needsPermission: true,
+				reason: 'queue — this browser needs a one-time permission to reach the robot on Tailscale (click "allow direct")'
+			});
+			return this._state;
+		}
+		if (perm === 'denied') {
+			this.set({
+				transport: 'queue',
+				reason: 'queue — this browser blocked local-network access for BIMS (site settings → Local network access → Allow, then reload)'
+			});
+			return this._state;
+		}
+		await this.probeAndSet(conn.directUrl);
 		return this._state;
 	}
 
-	private async probeAndSet(directUrl: string) {
+	private async probeAndSet(directUrl: string, timeoutMs = this.opts.probeTimeoutMs) {
 		const t0 = Date.now();
 		try {
 			const res = await this.fetchImpl(`${directUrl}/health`, {
 				headers: { 'opentrons-version': '3' },
-				signal: AbortSignal.timeout(this.opts.probeTimeoutMs)
+				signal: AbortSignal.timeout(timeoutMs)
 			});
 			if (!res.ok) throw new Error(`robot /health returned ${res.status}`);
 			this.set({
 				transport: 'direct',
 				fellBack: false,
+				needsPermission: false,
 				latencyMs: Date.now() - t0,
 				reason: 'direct — this browser talks to the robot over Tailscale'
 			});
@@ -207,10 +257,17 @@ export class RobotSession {
 		}
 	}
 
-	/** Operator-initiated: try the direct line again after a fallback. */
+	/**
+	 * Operator-initiated (call it from a click): try the direct line again after a
+	 * fallback, or grant the browser's local-network permission. When a permission
+	 * answer is pending, wait long enough for the operator to click Allow.
+	 */
 	async retryDirect(): Promise<RobotSessionState> {
 		if (!this._state.directUrl) return this._state;
-		await this.probeAndSet(this._state.directUrl);
+		const waitForPrompt = this._state.browserPermission === 'prompt';
+		await this.probeAndSet(this._state.directUrl, waitForPrompt ? 60_000 : this.opts.probeTimeoutMs);
+		const perm = await this.permissionQuery();
+		this.set({ browserPermission: perm, needsPermission: perm === 'prompt' && this._state.transport !== 'direct' });
 		return this._state;
 	}
 

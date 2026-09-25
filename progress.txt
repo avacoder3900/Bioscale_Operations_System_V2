@@ -15925,3 +15925,16 @@ Retrieve this exact code: git checkout feat/ot2-tailnet-direct at commit 34c6c58
 What this deployment is for: OT2-TAILNET-4 B14 pilot — inert until Vercel Preview env
   OT2_TAILNET_ROBOT_IDS=b14 is set (+ redeploy) and B14's Connection is set to Tailnet on the edit
   page. Smoke: /opentrons/connectivity + the new API routes answer 302 unauthenticated (no 500s).
+
+2026-09-25 (later) — feat/ot2-tailnet-direct — fix: Chrome Local Network Access held every direct call
+First real test on the preview: /opentrons/connectivity showed B14 "Allowed here: yes" but the
+browser probe timed out, while curl from the same PC got /health in 0.47 s. Root cause (verified in
+Chrome 153 on alejandros-pc): Chrome's Local Network Access gate — a public origin (*.vercel.app)
+reaching a private address (Tailscale 100.x) needs a one-time per-origin permission; while it is
+'prompt' Chrome HOLDS the request (a non-gesture fetch shows no prompt), which is indistinguishable
+from an unreachable robot. Fix: the session now queries the permission first — 'prompt' → stay on
+queue WITHOUT probing and offer an "allow direct" button (the click's probe waits up to 60 s for the
+operator's Allow); 'denied' → queue with the site-settings instructions. Connectivity page gets an
+"Allow direct link" banner. Permission is per origin: production's address is stable, but every
+preview URL is a new origin (use the branch alias URL for repeat testing).
+test:unit 213/213 (+2); npm run check 87 errors = baseline.

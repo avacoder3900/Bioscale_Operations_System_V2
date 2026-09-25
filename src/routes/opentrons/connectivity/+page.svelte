@@ -5,19 +5,22 @@
 -->
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { queryLocalNetworkPermission, type LocalNetworkPermission } from '$lib/opentrons/direct-client';
 
 	let { data } = $props();
 
 	type Probe = { state: 'idle' | 'probing' | 'ok' | 'fail'; ms?: number; detail?: string };
 	let probes = $state<Record<string, Probe>>({});
+	/** Chrome's Local Network Access permission for THIS BIMS address. */
+	let permission = $state<LocalNetworkPermission>('unsupported');
 
-	async function probe(robotId: string, directUrl: string) {
+	async function probe(robotId: string, directUrl: string, timeoutMs = 3000) {
 		probes[robotId] = { state: 'probing' };
 		const t0 = performance.now();
 		try {
 			const res = await fetch(`${directUrl}/health`, {
 				headers: { 'opentrons-version': '3' },
-				signal: AbortSignal.timeout(3000)
+				signal: AbortSignal.timeout(timeoutMs)
 			});
 			const ms = Math.round(performance.now() - t0);
 			if (!res.ok) {
@@ -34,11 +37,17 @@
 		}
 	}
 
-	function probeAll() {
-		for (const r of data.robots) if (r.directUrl) void probe(r.robotId, r.directUrl);
+	async function probeAll(timeoutMs = 3000) {
+		permission = await queryLocalNetworkPermission();
+		if (permission === 'prompt' && timeoutMs === 3000) return; // needs a click — see allowDirect()
+		await Promise.all(data.robots.filter((r) => r.directUrl).map((r) => probe(r.robotId, r.directUrl!, timeoutMs)));
+		permission = await queryLocalNetworkPermission();
 	}
 
-	onMount(probeAll);
+	/** From a click, so Chrome may show its "access devices on your network" prompt; wait for the answer. */
+	const allowDirect = () => void probeAll(60_000);
+
+	onMount(() => void probeAll());
 
 	const ago = (ms: number | null | undefined) =>
 		ms == null ? '—' : ms < 60_000 ? `${Math.round(ms / 1000)}s ago` : `${Math.round(ms / 60_000)}m ago`;
@@ -58,12 +67,29 @@
 		</div>
 		<button
 			type="button"
-			onclick={probeAll}
+			onclick={() => void probeAll()}
 			class="rounded border border-[var(--color-tron-border)] px-3 py-1.5 text-sm text-[var(--color-tron-text)] hover:border-[var(--color-tron-cyan)]"
 		>
 			Probe again
 		</button>
 	</div>
+
+	{#if permission === 'prompt'}
+		<div class="flex items-center justify-between gap-4 rounded-lg border border-amber-500/40 bg-amber-900/20 p-3 text-sm text-amber-200">
+			<span>
+				This browser has not yet allowed BIMS to reach robots on your network (Chrome "Local network access", asked once per
+				BIMS address). Until it does, every robot here stays on the queue.
+			</span>
+			<button type="button" onclick={allowDirect} class="shrink-0 rounded border border-amber-400/60 px-3 py-1.5 text-amber-100 hover:bg-amber-800/40">
+				Allow direct link
+			</button>
+		</div>
+	{:else if permission === 'denied'}
+		<div class="rounded-lg border border-red-500/40 bg-red-900/20 p-3 text-sm text-red-200">
+			This browser blocked BIMS from reaching devices on your network. Click the icon left of the address bar → Site settings →
+			<strong>Local network access → Allow</strong>, then reload. Robots stay on the queue until then.
+		</div>
+	{/if}
 
 	<div class="overflow-x-auto rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)]">
 		<table class="w-full text-sm">
@@ -105,6 +131,8 @@
 						<td class="px-3 py-2">
 							{#if !r.directUrl}
 								<span class="text-[var(--color-tron-text-secondary)]">—</span>
+							{:else if !p && permission === 'prompt'}
+								<span class="text-amber-300">needs browser permission</span>
 							{:else if !p || p.state === 'probing'}
 								<span class="text-[var(--color-tron-text-secondary)]">probing…</span>
 							{:else if p.state === 'ok'}

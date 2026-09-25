@@ -26,7 +26,7 @@ function fakeFetch(handler: Handler) {
 }
 
 const connTailnet = (busy: unknown = null) => res(200, { transport: 'tailnet', directUrl: DIRECT, reason: 'tailnet', busy });
-const opts = { refreshMs: 0, flushMs: 0 };
+const opts = { refreshMs: 0, flushMs: 0, permissionQuery: async () => 'granted' as const };
 
 describe('opening the session', () => {
 	it('tailnet + reachable robot → direct', async () => {
@@ -207,5 +207,30 @@ describe('fetchRoute (pages that already call BIMS routes)', () => {
 		await s.fetchRoute('/api/opentrons-lab/robots/b07/maintenance/m1/jog', { method: 'POST', body: JSON.stringify({ pipetteId: 'p', axis: 'x', distance: 1 }) });
 		expect(ff.urls).toContain('/api/opentrons-lab/robots/b07/maintenance/m1/jog');
 		expect(ff.urls.some((u) => u.startsWith(DIRECT) && u.includes('maintenance_runs'))).toBe(false);
+	});
+});
+
+describe("Chrome's Local Network Access permission", () => {
+	it("unanswered → stays on queue WITHOUT probing, offers allow; the click's probe then goes direct", async () => {
+		let perm: 'prompt' | 'granted' = 'prompt';
+		const ff = fakeFetch((url) => (url.endsWith('/connection') ? connTailnet() : res(200, { name: 'B14' })));
+		const s = new RobotSession('b14', { refreshMs: 0, flushMs: 0, fetchImpl: ff.f, permissionQuery: async () => perm });
+		await s.open();
+		expect(s.state.transport).toBe('queue');
+		expect(s.state.needsPermission).toBe(true);
+		expect(ff.urls.some((u) => u.startsWith(DIRECT))).toBe(false);
+		perm = 'granted'; // operator clicked Allow in Chrome's prompt
+		await s.retryDirect();
+		expect(s.state.transport).toBe('direct');
+		expect(s.state.needsPermission).toBe(false);
+	});
+
+	it('denied → queue with instructions, no probe', async () => {
+		const ff = fakeFetch((url) => (url.endsWith('/connection') ? connTailnet() : res(200, {})));
+		const s = new RobotSession('b14', { refreshMs: 0, flushMs: 0, fetchImpl: ff.f, permissionQuery: async () => 'denied' });
+		await s.open();
+		expect(s.state.transport).toBe('queue');
+		expect(s.state.reason).toContain('Local network access');
+		expect(ff.urls.some((u) => u.startsWith(DIRECT))).toBe(false);
 	});
 });

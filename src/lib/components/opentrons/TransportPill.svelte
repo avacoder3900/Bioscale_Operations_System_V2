@@ -5,6 +5,8 @@
                      the gantry, so motion is going through the queue
     queue   grey   — the Vercel queue (today's path); tooltip says why
   After a fallback, offers "retry direct" (the session never flips back by itself).
+  When Chrome's Local Network Access permission is still unanswered for this BIMS
+  address, offers "allow direct" — the click is what lets Chrome show its prompt.
 -->
 <script lang="ts">
 	import type { RobotSessionState } from '$lib/opentrons/direct-client';
@@ -49,7 +51,9 @@
 	<span class="rounded-full border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider {cls}" {title} data-transport={kind}>
 		{label}
 	</span>
-	{#if state?.fellBack && state.tailnetConfigured && onRetry}
+	{#if state?.needsPermission && state.tailnetConfigured && onRetry}
+		<button type="button" class="text-[10px] text-[var(--color-tron-cyan)] hover:underline" title="Chrome asks once per BIMS address whether it may reach devices on your network — click, then choose Allow." onclick={onRetry}>allow direct</button>
+	{:else if state?.fellBack && state.tailnetConfigured && onRetry}
 		<button type="button" class="text-[10px] text-[var(--color-tron-cyan)] hover:underline" onclick={onRetry}>retry direct</button>
 	{/if}
 </span>
