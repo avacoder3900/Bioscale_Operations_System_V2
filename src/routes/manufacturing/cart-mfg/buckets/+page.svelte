@@ -928,6 +928,7 @@
 											class="w-full rounded-lg border border-[var(--color-tron-purple)]/60 bg-[var(--color-tron-purple)]/10 py-2.5 text-center text-sm font-semibold text-[var(--color-tron-purple)] hover:bg-[var(--color-tron-purple)]/20 disabled:opacity-50"
 											title="Free the carts from this bucket and return it to Available; the carts stay backed until wax filling scans them">{busy ? 'Moving…' : `Move to oven (${c.quantity} cart${c.quantity === 1 ? '' : 's'})`}</button>
 									</form>
+									<p class="text-[10px] text-[var(--color-tron-text-secondary)]">Frees these carts from the bucket and returns it to Available. Carts stay backed until wax filling scans them in.</p>
 									{#if form?.moveToOven?.error}<p class="text-xs text-[var(--color-tron-error)]">{form.moveToOven.error}</p>{/if}
 									<a href="/manufacturing/cart-mfg/wax-filling" class="block text-center text-[10px] text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)]">Wax filling →</a>
 								{/if}

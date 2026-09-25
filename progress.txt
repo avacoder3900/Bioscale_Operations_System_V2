@@ -16220,3 +16220,7 @@ What this deployment is for: the simplified Backed stage — plain "Backed" besi
   filling scans them in. Supersedes the d8928c7f preview.
   Smoke: /login 200; /manufacturing/cart-mfg/buckets 302 to /login.
 Build status: success (GitHub deployment 6669562389, both projects).
+
+Follow-up (same day): one-line helper under the Move to oven button (wording confirmed by the
+user): "Frees these carts from the bucket and returns it to Available. Carts stay backed until wax
+filling scans them in." Board svelte only; check unchanged (12 baseline errors).
