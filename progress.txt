@@ -16224,3 +16224,11 @@ Build status: success (GitHub deployment 6669562389, both projects).
 Follow-up (same day): one-line helper under the Move to oven button (wording confirmed by the
 user): "Frees these carts from the bucket and returns it to Available. Carts stay backed until wax
 filling scans them in." Board svelte only; check unchanged (12 baseline errors).
+
+Deployment: preview — https://bioscale-operations-system-mongodb-rdpsoj69v-brevitest.vercel.app
+  (brevitest scope; cookie-session gated, 302 to /login)
+Source: branch feat/bucket-system @ commit 1590a96b
+Retrieve this exact code: git checkout feat/bucket-system at commit 1590a96b
+  (or: git log feat/bucket-system --oneline to find it if the branch has since moved on)
+What this deployment is for: the helper line under Move to oven. Smoke: /login 200; buckets 302.
+Build status: success (GitHub deployment 6670000921, both projects).
