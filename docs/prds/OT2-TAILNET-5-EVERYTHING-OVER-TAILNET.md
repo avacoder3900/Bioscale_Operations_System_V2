@@ -136,7 +136,41 @@ Each lifecycle action becomes **server prepare, then robot half (either line), t
 ### 7.4 Pages that call the robot from the server (the "RAW" paths)
 - **`/opentrons/devices/[robotId]`** (health, pipettes, runs) and the protocol list: loads move to the browser through the session with read verbs (`robot.health`, `robot.pipettes`, `run.list`, `protocol.list`). The server load stops calling the robot. This **fixes them on Vercel**.
 - **`protocols/[protocolId]/deploy`**: becomes §7.2.
-- **`/opentrons-clone/**`**: **decision needed (Q1)**. Port it onto the session (large: data-files, LPC, settings) or retire it; nothing in the fill workflow uses it.
+- **`/opentrons-clone/**`: moved onto the tailnet and kept as the full Opentrons UI** (decided by the user 2026-09-25; see §7.8).
+
+### 7.8 The Opentrons UI (`/opentrons-clone`) over the tailnet
+
+**Facts (explorer, 2026-09-25).**
+- About 5.1k lines: 11 pages, plus 7 `/api/opentrons-clone/**` endpoints, plus `client.ts` (openapi-fetch) and `maintenance-clone.ts`.
+- **It writes nothing to BIMS.** There is no AuditLog and no model writes (`maintenance-clone.ts:10`, "no AuditLog — per guardrails").
+- Every robot call is a server-side `fetch http://${robot.ip}:31950` (`client.ts:30`), so the whole UI is **broken on Vercel today**.
+- Its only server responsibilities are:
+  - the BIMS login + `manufacturing:read` gate;
+  - the operator-password cookie (`+layout.server.ts`);
+  - the robot list from Mongo.
+
+**Design: the UI becomes a browser app on the robot session.**
+1. **`$lib/opentrons/robot-client.ts` (isomorphic).** It is today's `createRobotClient` (openapi-fetch + `opentrons-version` middleware) with an **injected `fetch`**:
+   - Browser: `session.robotFetch`, i.e. `https://ot2-<slot>.tailf65a70.ts.net` via the tracked direct transport (logged to `ot2_direct_calls`).
+   - Queue fallback: a relay fetch (item 3).
+
+   `client.ts` becomes a thin server wrapper over it (scripts and any leftover server use).
+2. **Each `/opentrons-clone/[robotId]/**` route turns its `+page.server.ts` into:**
+   - a `+page.ts` load with `export const ssr = false`, which calls the robot from the browser through the robot client;
+   - client functions for its form actions (upload/delete protocol, create run, run actions, LPC offsets, data files, client data, settings, error recovery, system time).
+
+   The `+layout.server.ts` gate stays on the server, unchanged: BIMS auth plus operator cookie plus the Mongo robot list. The pages keep their markup; only data loading and actions move.
+3. **Queue fallback for computers not on the tailnet.** A generic relay, `POST /api/opentrons-lab/robots/[id]/relay {method, path, body}` (`manufacturing:write`; GET-only paths allowed with `manufacturing:read`), runs one `kind:'http'` bridge command. It is the same capability the clone has today, but over the queue.
+   - Binary and multipart operations (protocol upload, data-file upload/download, log download) are **tailnet-only**. On the queue line they show "needs Tailscale", except protocol upload, which reuses §7.2's `upload_protocol` bridge kind.
+4. **The seven `/api/opentrons-clone/**` endpoints become direct browser calls** through the robot client:
+   - downloads use a blob URL from a direct fetch;
+   - the LPC maintenance endpoints reuse TAILNET-4's `mx.*` verbs where they match (open/close/labware), plus a generic `mx.command` verb for LPC's arbitrary maintenance commands.
+
+   The endpoints are then deleted.
+5. **Health.** The clone's `robot-health` store (frozen; the SSE from the retired poller) is replaced *in the clone's pages* by the session state and `/health` polling. The frozen store file itself is not modified; the clone simply stops importing it.
+6. **Pill + permission.** The clone layout shows the TransportPill per robot and the "allow direct" prompt (Chrome Local Network Access), like every other robot page.
+
+**Pre-existing weakness to fix while here (Q4):** the operator gate cookie is the constant `'ok'` (`+layout.server.ts:5-6`), so anyone who sets that cookie passes. Replace it with a signed, expiring session cookie.
 
 ### 7.5 The session and the pill
 - **One `RobotSession`** covers the robot API (`/`) and the daemon (`/bridge`); both are on the same origin, so there is one permission prompt and one pill.
@@ -176,10 +210,14 @@ Every `scripts/*` that dials `http://<robot>.local:31950` accepts `ROBOT_HOST=ht
 | **S7** | Device page + protocol list load via the session | `/opentrons/devices/<B14>` shows live health/pipettes/runs **on Vercel** (broken today). |
 | **S8** | Retire the health poller + SSE; move `OpentronsRunRecord` status into the confirms | No `setInterval` robot polling remains server-side. Run records still reach terminal states. |
 | **S9** | Scripts accept the tailnet `ROBOT_HOST` | `deploy-wax-tipcal-guards.cjs` against `https://ot2-b14.tailf65a70.ts.net` works from `alejandros-pc` off the robot LAN. |
-| **S10** | `/opentrons-clone` decision executed (Q1) | Ported or removed; no RAW robot calls left in `src/`. A grep for `http://${robot.ip}` returns nothing. |
+| **S10a** | `robot-client.ts` (isomorphic openapi-fetch, injected fetch) + generic `/relay` + `mx.command` verb | Unit: the same client call produces the same robot request on direct fetch and on the relay. Relay GET needs `manufacturing:read`, and mutating relay calls need `write`. |
+| **S10b** | Clone pages ported to `+page.ts` (`ssr=false`) + client actions: robot home, runs, run detail, protocols, protocol detail, labware, data files, settings | On **Vercel**, B14 via the tailnet: every clone page loads live robot data (broken today). Actions (home, lights, identify, upload/delete protocol, create run, play/pause/stop, data-file upload/download, settings) work, and each call lands in `ot2_direct_calls`. |
+| **S10c** | LPC page onto the session (`mx.*` + `mx.command`) | A full LPC pass on B14 from a tailnet browser: offsets applied to the run as today. |
+| **S10d** | Delete `/api/opentrons-clone/**`; the clone stops importing the frozen `robot-health` store; pill + allow-direct in the clone layout; signed operator cookie (Q4) | A grep for `http://${robot.ip}` / `robotBaseUrl(` in `src/routes` returns nothing. The operator gate rejects a hand-set `ot_operator_auth=ok` cookie. |
 
 ## 10. Open Questions / Risks
-- **Q1 (user): `/opentrons-clone`.** Port it onto the tailnet session, or retire it? It duplicates the Opentrons App, isn't used by fill or calibration, and is the largest remaining direct-IP surface.
+- **Q1: DECIDED (user, 2026-09-25).** Move `/opentrons-clone` onto the tailnet and keep it as the Opentrons UI (§7.8, S10a–d).
+- **Q4: the operator gate cookie is the constant `'ok'`.** Fix it as part of S10d (signed, expiring cookie). The password itself isn't changed.
 - **Q2 (user): `tailnet-only` robots?** Once S1–S7 land, should a robot be allowed to *refuse* the queue line? That would make queue use from a computer not on Tailscale an explicit error rather than a slow fallback. It would be a third `connection.mode`. It's the strictest reading of "everything through Tailscale", but a lab PC without Tailscale could then not run that robot at all.
 - **Q3: trust boundary on confirms.** The server records robot observations the browser reports, such as tips used and filled wells. Where the stakes are high (cart states, inventory), should the confirm re-read the robot? It can't from Vercel, so the options are either to accept the browser's report or to have the daemon post the same observation independently for a cross-check. Recommendation: the daemon cross-check for `filledWells` only.
 - **R1: the robot API is still unauthenticated and echoes any origin.** `/bridge` adds token auth for daemon jobs, but `:31950` itself is still open to any tailnet device. TAILNET-3 S4 (ACLs) remains the control. Consider putting `:31950` behind the same token proxy later.
@@ -218,8 +256,11 @@ The tailnet ACLs (TAILNET-3 S4, though a strong prerequisite for S5's value), th
 | Modify | `scripts/ot2-bridge.py` (`/bridge` job server, token check, shared worker queue) |
 | Modify | `scripts/ot2-tailscale.service` / provision script (`serve --set-path=/bridge`) |
 | Modify | `src/routes/opentrons/devices/[robotId]/+page.{server.ts,svelte}`, `robots/[id]/protocols`, `protocols/[protocolId]/deploy` |
-| Remove | `src/lib/server/opentrons/health-poller.ts`, `api/opentrons-lab/robots/health-stream` (after Q1) |
+| Remove | `src/lib/server/opentrons/health-poller.ts`, `api/opentrons-lab/robots/health-stream` (once the clone no longer uses them, S10d) |
+| Add | `src/lib/opentrons/robot-client.ts`; `src/routes/api/opentrons-lab/robots/[id]/relay/+server.ts` |
+| Modify | `src/routes/opentrons-clone/[robotId]/**`: `+page.server.ts` → `+page.ts` (`ssr=false`) + client actions; `+layout.svelte` (pill); `+layout.server.ts` (signed operator cookie) |
+| Remove | `src/routes/api/opentrons-clone/**` (7 endpoints), after S10b–c |
 | Modify | `scripts/{deploy-*-tipcal-guards.cjs, sync-robot-protocols.ts, upload-local-protocols-to-all-robots.ts, list-robot-protocols.ts, prune-robot-protocols.ts, diag-probe-ot2-protocols.ts}` |
 
 ## Appendix B — Suggested build order
-S1 → S2 (Finish/Cancel: smallest, highest value, no daemon change) → S3 (Start + upload; fixes the timeout) → S4 → S5 (daemon, which needs a robot redeploy) → S6 → S7 → S9 → S8 → S10.
+S1 → S2 (Finish/Cancel: smallest, highest value, no daemon change) → S3 (Start + upload; fixes the timeout) → S4 → S10a–b (the Opentrons UI; independent of the daemon, and it fixes a page that is broken on Vercel today) → S5 (daemon, which needs a robot redeploy) → S6 → S7 → S10c–d → S9 → S8.
