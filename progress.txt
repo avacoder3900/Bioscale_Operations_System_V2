@@ -16162,3 +16162,15 @@ BUCKET-SYSTEM_PLAN.md.
 Check (svelte-kit sync + svelte-check direct): 12 errors / 431 warnings — the documented baseline,
 none in any file touched. No data migration: existing closed passes and loose backed carts are
 unaffected; only new Move to oven clicks write the stamps.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-bxqfenbpd-brevitest.vercel.app
+  (brevitest scope; cookie-session gated, 302 to /login)
+Source: branch feat/bucket-system @ commit d8928c7f
+Retrieve this exact code: git checkout feat/bucket-system at commit d8928c7f
+  (or: git log feat/bucket-system --oneline to find it if the branch has since moved on)
+What this deployment is for: the Backed column beside Pressed under its new name, and the
+  Move to oven button on a backed pass — click it and confirm the pass leaves the board, the
+  bucket shows in Available (with the "check" badge), the change log reads "Moved to oven",
+  the Backed tile no longer counts those carts, and wax filling still loads them by scan.
+  Smoke: /login 200; /manufacturing/cart-mfg/buckets 302 https://bioscale-operations-system-mongodb-bxqfenbpd-brevitest.vercel.app/login.
+Build status: success (GitHub deployment 6669296713, both projects).
