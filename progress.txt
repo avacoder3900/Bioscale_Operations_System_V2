@@ -16073,3 +16073,17 @@ Retrieve this exact code: git checkout feat/bucket-system at commit d74a85b2
 What this deployment is for: the cart-mfg dashboard with a single Backed card (Production
   Buckets strip only). Smoke: /login 200; /manufacturing/cart-mfg 302 to /login as expected.
 Build status: success (GitHub deployment 6666318730, both projects).
+
+Deployment: preview — https://bioscale-operations-system-mongodb-14pteaoxz-brevitest.vercel.app
+  (brevitest scope; cookie-session gated, 302 to /login)
+Source: branch feat/bucket-system @ commit f50dc517
+Retrieve this exact code: git checkout feat/bucket-system at commit f50dc517
+  (or: git log feat/bucket-system --oneline to find it if the branch has since moved on)
+What this deployment is for: the thermoseal overhaul above — the board's Thermoseal tile now
+  reads the live PT-CT-101 roll count (no pin, no yellow card); an advance Barcoded → Unpressed
+  that pulls a roll must write −1 against PT-CT-101 (not PT-CT-112); cut-thermoseal, WI-02 and
+  laser-cutting record runs without moving any part. Run scripts/migrate-thermoseal-roll-only.ts
+  --plan / --apply against the DB before judging the tile's number, then record a physical count
+  of rolls on PT-CT-101.
+  Smoke: /login 200; /manufacturing/cart-mfg/buckets 302 https://bioscale-operations-system-mongodb-14pteaoxz-brevitest.vercel.app/login; /manufacturing/cart-mfg/laser-cutting 302 https://bioscale-operations-system-mongodb-14pteaoxz-brevitest.vercel.app/login.
+Build status: success (GitHub deployment 6666250259, both projects).
