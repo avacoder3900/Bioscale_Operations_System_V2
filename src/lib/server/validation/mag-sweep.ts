@@ -368,6 +368,27 @@ function noiseFrom(series: Agg[], sds: Map<number, number>, peakY: number) {
 export function summarise(clean: number[][], end?: SweepEnd) {
 	const series = aggregate(clean);
 	const sdByKey = collectSd(clean);
+
+	// --- coverage ---------------------------------------------------------
+	// SWPEND declares how many rows the device ATTEMPTED and how many were good.
+	// A read the magnetometer never answered is written NOCHAR, which has no
+	// numeric fields, so it is dropped before it ever reaches here — it arrives
+	// as an ABSENT row, not a zero. That is the dangerous part: a run that lost
+	// its second half looks exactly like a complete, shorter sweep. The declared
+	// totals are the only way to tell the two apart, so compare them.
+	//
+	// Measured on SPU 239 (2026-09-25): the BLE link dropped at y=34000 and every
+	// later read failed, losing 1225 of 7840 rows. Well 5's real peak lives at
+	// ~37800, entirely inside the dead zone, so its highest SURVIVING sample was
+	// reported as a peak of 1424 against ~4300 on a healthy unit. Nothing in the
+	// stored profile said otherwise.
+	const rowsReported = typeof end?.rows === 'number' ? end.rows : null;
+	const goodReported = typeof end?.good === 'number' ? end.good : null;
+	const rowsMissing = rowsReported !== null ? Math.max(0, rowsReported - clean.length) : null;
+	const coverage = rowsReported ? clean.length / rowsReported : null;
+	// null = the device never told us, which is NOT the same as complete.
+	const coverageComplete = rowsMissing === null ? null : rowsMissing === 0;
+
 	const wells: Record<string, unknown> = {};
 	for (const [key, s] of series) {
 		const [well, ch] = key.split('|');
@@ -375,7 +396,16 @@ export function summarise(clean: number[][], end?: SweepEnd) {
 		if (!p) continue;
 		const sds = sdByKey.get(key);
 		const noise = sds && sds.size > 0 ? noiseFrom(s, sds, p.peakY) : null;
-		((wells[well] ??= {}) as Record<string, unknown>)[ch] = noise ? { ...p, noise } : p;
+		// A maximum on the edge of SURVIVING data, in a run that is known to have
+		// lost rows, is not a measurement: the samples that would have beaten it
+		// are the ones that went missing. Flagged rather than deleted, because the
+		// trace up to the cutoff is still real and worth plotting.
+		const peakUnreliable = coverageComplete === false && p.peakAtWindowEdge;
+		((wells[well] ??= {}) as Record<string, unknown>)[ch] = {
+			...p,
+			...(noise ? { noise } : {}),
+			peakUnreliable
+		};
 	}
 
 	const wellNumbers = [...new Set(clean.map((r) => r[ROW_WELL]))].sort((a, b) => a - b);
@@ -388,8 +418,13 @@ export function summarise(clean: number[][], end?: SweepEnd) {
 			wellNumbers,
 			channels: CHANNELS.map((c) => c.ch),
 			rowsIngested: clean.length,
-			rowsReported: end?.rows ?? null,
-			goodReported: end?.good ?? null,
+			rowsReported,
+			goodReported,
+			// Explicit, so a consumer never has to re-derive it and never has to
+			// guess what a missing field meant.
+			rowsMissing,
+			coverage,
+			coverageComplete,
 			durationMs: end?.ms ?? null
 		}
 	};
