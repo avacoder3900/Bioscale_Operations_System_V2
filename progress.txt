@@ -15496,3 +15496,97 @@ session was renaming the raw stage to barcoded, and they were swept into that se
 5a01239f ("Merge origin/master into feat/bucket-system for the ship build"), already pushed.
 This entry and the changelog sha stamp are the follow-up; no separate code commit exists for the
 Mint card removal. No deployment was created by this session.
+
+================================================================================
+2026-09-25 — feat/bucket-system — bucket stage renamed: raw → barcoded
+================================================================================
+User: "Rename every instance of 'raw' in the bucket system to 'barcoded'." The first bucket
+stage is now named for what has happened to the shell — a QR/barcode label is on it — rather
+than for the material it was cut from. Renamed the stage key `raw` → `barcoded` and the label
+"Raw" → "Barcoded" everywhere the bucket domain uses them:
+  - bucket-service.ts: BUCKET_STAGES, STAGE_LABELS, FORCE_TARGETS, FORCE_TARGET_LABELS, every
+    `stage !== 'raw'` / `from === 'raw'` guard, the `status: 'raw'` writes at cartridge birth,
+    the logTx fromStage/toStage values, and all operator-facing error strings ("...can only be
+    scanned in while a bucket is at Barcoded").
+  - Models: BucketCycle.stage enum, CartridgeRecord.status enum (both gain `barcoded`).
+  - cartridge-admin/queries.ts LifecycleStage; /cartridge-admin + /manufacturing/cart-mfg stage
+    strips (bc.stages.barcoded); state-change page copy; buckets board, [bucketId] page and
+    override page; pipeline `bucket_raw` StageKey → `bucket_barcoded` (label "Barcoded").
+Deliberately NOT renamed, and why: (a) local string-parsing variables literally named `raw`
+(`const raw = (code ?? '').trim()`, `movesRaw`, `pinRaw`, `destRaw`) — these mean "raw input
+string", not the stage; renaming them to `barcoded` would be false. (b) Unrelated `raw`
+elsewhere in the app (CV processingMode, Raw BCODE, Raw Data panels, raw-materials copy).
+(c) Prose about the physical "raw shell" was reworded to just "shell" — a shell is not barcoded
+until the sticker goes on, so "barcoded shell" would have been wrong.
+Back-compat: `raw` is KEPT in both enums (BucketCycle.stage, CartridgeRecord.status) so
+pre-rename rows still validate — the same treatment `qr_pending` and `wax_qc` already get.
+Nothing writes `raw` any more. NOTE this matters: stageCounts() filters through isBucketStage(),
+so any row still stored as `raw` silently stops counting on the board until migrated.
+New: scripts/migrate-bucket-raw-to-barcoded.ts (--plan / --apply, house pattern) moves
+bucket_cycles.stage, cartridge_records.status and bucket_transactions.fromStage/toStage from
+`raw` to `barcoded` via the raw driver (cartridge_records is sacred, bucket_transactions is
+immutable) and writes one summary audit_logs row. NOT RUN YET — no MONGODB_URI in this
+environment; run --plan first against Atlas.
+Files: src/lib/server/services/bucket-service.ts, src/lib/server/db/models/bucket-cycle.ts,
+src/lib/server/db/models/cartridge-record.ts, src/lib/server/services/cartridge-admin/queries.ts,
+src/routes/cartridge-admin/+page.svelte, src/routes/manufacturing/cart-mfg/+page.svelte,
+.../cart-mfg/pipeline/+page.server.ts, .../cart-mfg/state-change/+page.svelte,
+.../cart-mfg/buckets/{+page.server.ts,+page.svelte,[bucketId]/*,override/+page.svelte},
+BUCKET-SYSTEM_PLAN.md §2 (rename note) + changelog, scripts/migrate-bucket-raw-to-barcoded.ts.
+Check (svelte-kit sync + svelte-check direct, portable Node 22.12 re-downloaded to
+%LOCALAPPDATA%\Temp\n22 — the old copy had been cleaned out): 12 errors / 441 warnings, the
+documented baseline; zero problems in any touched bucket file.
+Note on how this landed: shared worktree again. The src edits above were made while another
+session was removing the inline Mint card, and both sessions' working-tree changes were swept
+into that session's commit 5a01239f ("Merge origin/master into feat/bucket-system for the ship
+build"), already pushed — neither parent of that merge contains `barcoded`. So the code rename
+is committed but has no commit of its own, and it went out WITHOUT the plan-doc update that
+CLAUDE.md requires in the same commit. The BUCKET-SYSTEM_PLAN.md §2 note, the changelog row and
+the migration script are still uncommitted as of this entry. No deployment was created by this
+session.
+
+================================================================================
+2026-09-25 — feat/bucket-system — Ship build: master merged in, WI-01 collision resolved
+================================================================================
+User: "I want to push this to main and ship it." Production is master (CLAUDE.md), and PR #54
+(feat/bucket-system → master) is the traceable path, so this is the final master merge the
+branch had been holding off on.
+Two merges were needed: origin/master moved twice during the build (6c1c95eb, then 4bac0c08).
+The first merge (35b48fd5) took only progress.txt. The second hit REAL conflicts in WI-01,
+because master has no bucket system at all and its WI-01 had evolved the opposite way:
+  master                              this branch
+  cart is born AT WI-01 (genesis)     cart is born at bucket scan-in (Raw)
+  oven selected before scanning       oven/cure tracking removed app-wide
+  Remove hard-deletes the record      Remove returns the cart to its bucket pass
+  merged-double-barcode guard         (none)
+  (b787076d, 2026-09-24, after 87 merged codes became cartridge records)
+User's decision: the bucket-fed WI-01 ships, and master's barcode guard is carried across
+rather than lost. Resolution (5a01239f):
+  - every WI-01 conflict resolved to the branch side; master's oven-first session and
+    hard-delete Remove are gone with it (no stale ovenId/Equipment references left).
+  - splitMergedBarcodes() still backstops the scanBackedCartridge action, and the page keeps
+    master's client-side splitMerged() (kept master's copy, dropped my duplicate).
+  - NEW: the same guard now covers bucket scan-in — assertNotMergedBarcode() in bucket-service,
+    called from scanCartIn(), because that is where carts are born in this design and the
+    guard would otherwise protect the wrong door.
+  - progress.txt: both logs kept, master's entries first.
+Check (svelte-kit sync + svelte-check direct): 12 errors / 441 warnings — same 12 baseline
+errors, none in touched files (warnings +3 from master's new files).
+Local `vite build` could NOT run: the portable node in Temp is now the arm64 build while
+node_modules carries @rollup/rollup-win32-x64-msvc, so rollup fails to load. Vercel's build of
+the exact ship commit is the check that matters and it passed (below).
+
+Deployment: preview — https://bioscale-operations-system-mongodb-2qlsinz36-brevitest.vercel.app
+  (brevitest scope; cookie-session gated, 302 to /login)
+Source: branch feat/bucket-system @ commit 5a01239f
+Retrieve this exact code: git checkout feat/bucket-system at commit 5a01239f
+What this deployment is for: the SHIP BUILD — the exact tree proposed for master. Smoke: /login
+  200, /manufacturing/cart-mfg/buckets, /manufacturing/cart-mfg/wi-01 and /cartridge-admin all
+  302 to /login as expected.
+Build status: success.
+
+PRODUCTION MERGE: not done in this session. PR #54 is mergeable/clean (85 commits, 49 files,
++7822/−1456) and ready, but the merge call was refused by the harness permission classifier
+([Merge Without Review]) — it needs the user to press Merge on PR #54, or to allow that action.
+Nothing about the bucket flow has been exercised against real data yet (audit, leftover flow,
+Find a cart, thermoseal rolls) — first production use is also its first real test.
