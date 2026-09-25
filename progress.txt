@@ -16448,3 +16448,27 @@ per-unit QC metric. The test that settles it: sweep one SPU twice, re-seating th
 jig between runs.
 
 No code changed in this entry.
+
+================================================================================
+2026-09-25 — feat/bucket-system — Ship: merge origin/master, then feat/bucket-system → master
+================================================================================
+User: "ship the build". PR #54 had already been merged into master (1dc287e7), so master carried
+the bucket system up to that point; the branch was 23 commits ahead (today's thermoseal overhaul,
+Backed / Move to oven / In oven, and the docs entries) and master 9 ahead (research-analysis MCP
+tools + proxy, magnetometer sweep docs, redeploy chores).
+
+Merge of origin/master into the branch (b4c13606): one conflict, progress.txt, resolved by keeping
+both sides in order (HEAD entries, then master's). Everything else auto-merged (docs/MCP-SERVER.md,
+bims-mcp.ts, research-proxy.ts + test, sweep page, contract test 12).
+
+Check on the merged tree: 14 errors / 431 warnings = the 12 documented baseline errors + 2 new ones
+in src/lib/server/research-proxy.ts (28:33, 34:32 — `process.env` typed against a `{ RESEARCH_API_URL?
+… }` shape). Both come in unchanged from master (the file is byte-identical to origin/master) and
+master has built and deployed with them, so they are master's baseline now, not a merge fault.
+None in any bucket / thermoseal file.
+
+Ship path (CLAUDE.md: never deploy from local): push the branch → confirm the brevitest preview
+builds → `git push origin feat/bucket-system:master` (fast-forward; master becomes b4c13606 + these
+docs commits) → Vercel's GitHub integration builds production from master. Migration scripts
+(migrate-bucket-raw-to-barcoded, migrate-thermoseal-roll-only) are still NOT run — no MONGODB_URI
+in this checkout; both are --plan / --apply and safe to run after the deploy.
