@@ -1,5 +1,7 @@
 # OT2-TAILNET-1 — Put the OT-2 Pis on the tailnet (HTTPS front for :31950)
 
+> **2026-09-25:** Rollout order and provisioning are superseded by `OT2-TAILNET-3-FLEET-ONBOARDING.md` — **B14 first**, via `scripts/ot2-tailnet-provision.sh`. Decisions below still stand.
+
 **Date:** 2026-08-17 · **Owner:** Jacob (lab) · **Status:** Approved · **Parent:** `OT2-TAILNET-0-PLAN.md`
 
 ## Goal

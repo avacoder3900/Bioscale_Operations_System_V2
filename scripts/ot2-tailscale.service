@@ -1,0 +1,32 @@
+# Tailscale on the OT-2's internal Pi — systemd unit (OT2-TAILNET-3).
+#
+# Binaries + state live on /data (survives reboots and Opentrons OS updates).
+# userspace-networking: the Opentrons kernel lacks policy routing (netlink "create table:
+# invalid argument" under kernel TUN). SSH + serve work fine in userspace mode.
+# Install (OT-2 root filesystem is read-only — remount first), same as ot2-bridge.service:
+#   mount -o remount,rw /
+#   cp /data/tailscale/ot2-tailscale.service /etc/systemd/system/
+#   systemctl daemon-reload
+#   systemctl enable --now ot2-tailscale
+#   mount -o remount,ro /
+#
+# Logs: journalctl -u ot2-tailscale -f
+# CLI:  /data/tailscale/tailscale --socket=/data/tailscale/tailscaled.sock status
+
+[Unit]
+Description=Tailscale node agent (BIMS OT-2 tailnet access)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+ExecStart=/data/tailscale/tailscaled --state=/data/tailscale/tailscaled.state --socket=/data/tailscale/tailscaled.sock --port=41641 --tun=userspace-networking
+ExecStopPost=/data/tailscale/tailscaled --cleanup
+Restart=on-failure
+RestartSec=5
+RuntimeDirectory=tailscale
+StateDirectory=tailscale
+CacheDirectory=tailscale
+
+[Install]
+WantedBy=multi-user.target

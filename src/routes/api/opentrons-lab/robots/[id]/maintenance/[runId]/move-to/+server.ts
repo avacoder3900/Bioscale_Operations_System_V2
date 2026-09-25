@@ -5,16 +5,16 @@
  *         minimumZHeight?: number, forceDirect?: boolean, speed?: number }
  */
 
-import { json, error } from '@sveltejs/kit';
+import { error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { requirePermission } from '$lib/server/permissions';
 import { getRobot } from '$lib/server/opentrons/proxy';
-import { moveTo } from '$lib/server/opentrons/maintenance';
+import { verbResponse } from '$lib/server/opentrons/transport';
 
-// Safe-arc move (lift, travel, descend) over the bridge can take longer than
-// Vercel's ~10s default — this is what "Move to hole" uses. Give it headroom.
 export const config = { maxDuration: 60 };
 
+// Validation + robot command + response shape live in $lib/opentrons/ot2-protocol
+// ('mx.moveTo'), shared with the browser's tailnet line (OT2-TAILNET-4).
 export const POST: RequestHandler = async ({ params, locals, request }) => {
 	if (!locals.user) error(401, 'Not authenticated');
 	requirePermission(locals.user, 'manufacturing:write');
@@ -22,39 +22,6 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 	const robot = await getRobot(params.id);
 	if (!robot) error(404, 'Robot not found');
 
-	const body = await request.json().catch(() => ({} as any));
-	const pipetteId = body?.pipetteId;
-	const x = body?.x;
-	const y = body?.y;
-	const z = body?.z;
-	const minimumZHeight = body?.minimumZHeight;
-	const forceDirect = body?.forceDirect;
-	const speed = body?.speed;
-
-	if (!pipetteId || typeof pipetteId !== 'string') error(400, 'pipetteId required');
-	if (typeof x !== 'number' || !Number.isFinite(x)) error(400, 'x must be a finite number');
-	if (typeof y !== 'number' || !Number.isFinite(y)) error(400, 'y must be a finite number');
-	if (typeof z !== 'number' || !Number.isFinite(z)) error(400, 'z must be a finite number');
-	if (speed !== undefined && (typeof speed !== 'number' || !Number.isFinite(speed) || speed <= 0)) {
-		error(400, 'speed must be a positive finite number (mm/s)');
-	}
-
-	try {
-		await moveTo(
-			robot,
-			params.runId,
-			pipetteId,
-			{ x, y, z },
-			{
-				minimumZHeight: typeof minimumZHeight === 'number' ? minimumZHeight : undefined,
-				forceDirect: typeof forceDirect === 'boolean' ? forceDirect : undefined,
-				speed: typeof speed === 'number' ? speed : undefined
-			}
-		);
-		return json({ ok: true });
-	} catch (e) {
-		if ((e as any).status) throw e;
-		console.error('[API] maintenance move-to error:', e instanceof Error ? e.message : e);
-		error(502, e instanceof Error ? e.message : 'Failed to move robot');
-	}
+	const body = await request.json().catch(() => ({}) as any);
+	return verbResponse(robot, 'mx.moveTo', { ...body, runId: params.runId });
 };

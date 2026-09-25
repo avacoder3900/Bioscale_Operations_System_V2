@@ -2,6 +2,8 @@
 	import { onDestroy } from 'svelte';
 	import { invalidateAll, goto } from '$app/navigation';
 	import { enhance } from '$app/forms';
+	import { RobotSession, type RobotSessionState } from '$lib/opentrons/direct-client';
+	import TransportPill from '$lib/components/opentrons/TransportPill.svelte';
 
 	let { data, form } = $props();
 
@@ -69,11 +71,26 @@
 		lastInfo = null;
 	}
 
+	// OT2-TAILNET-4: jog / move / position / home go on this robot's line (direct
+	// over Tailscale when available); every other call is a plain BIMS fetch.
+	let robotSession: RobotSession | null = null;
+	let robotConn = $state<RobotSessionState | null>(null);
+	$effect(() => {
+		const id = robot?._id;
+		if (!id) return;
+		const s = new RobotSession(id);
+		robotSession = s;
+		s.subscribe((st) => (robotConn = st));
+		void s.open();
+		return () => s.close();
+	});
+
 	async function api(path: string, init?: RequestInit): Promise<any> {
 		const method = init?.method ?? 'GET';
 		let res: Response;
 		try {
-			res = await fetch(path, {
+			const doFetch = robotSession ? robotSession.fetchRoute.bind(robotSession) : fetch;
+			res = await doFetch(path, {
 				...init,
 				credentials: 'same-origin',
 				headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) }
@@ -433,6 +450,7 @@
 			<h1 class="text-2xl font-bold" style="color: var(--color-tron-cyan)">Teach: {set.title}</h1>
 			<p class="mt-1 text-xs" style="color: var(--color-tron-text-secondary)">
 				Robot: <span class="font-semibold">{robot.name}</span>
+				<TransportPill state={robotConn} onRetry={() => void robotSession?.retryDirect()} />
 				{robot.ip ? `· ${robot.ip}` : ''} · {set.positionCount} slots · {taughtCount} taught
 				{#if set.isDefault}<span class="ml-2 rounded bg-[var(--color-tron-cyan)]/20 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-[var(--color-tron-cyan)]">default</span>{/if}
 			</p>

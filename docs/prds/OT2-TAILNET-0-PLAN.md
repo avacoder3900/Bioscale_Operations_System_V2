@@ -1,5 +1,7 @@
 # OT2-TAILNET-0 — Plan: direct OT-2 control over Tailscale (queue as fallback)
 
+> **2026-09-25:** Rollout order and provisioning are superseded by `OT2-TAILNET-3-FLEET-ONBOARDING.md` — **B14 first**, via `scripts/ot2-tailnet-provision.sh`. Decisions below still stand.
+
 **Date:** 2026-08-17 · **Owner:** Jacob · **Status:** Approved in conversation 2026-08-17 (this write-up is the record) · **Author:** Claude w/ Jacob & Alejandro
 
 ## Why

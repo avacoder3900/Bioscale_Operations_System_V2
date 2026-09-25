@@ -5,6 +5,8 @@
 	 * (maintenance run, mirrors scanner-position teaching) + apply-offset-to-group.
 	 */
 	import { onDestroy } from 'svelte';
+	import { RobotSession, type RobotSessionState } from '$lib/opentrons/direct-client';
+	import TransportPill from '$lib/components/opentrons/TransportPill.svelte';
 	import { goto, invalidateAll } from '$app/navigation';
 	import { deserialize } from '$app/forms';
 	import { page } from '$app/stores';
@@ -519,8 +521,25 @@
 	// pre-edit deck, so "Move to hole" would use stale coords until the deck is reloaded.
 	let deckDirty = $state(false);
 
+	// OT2-TAILNET-4: one robot session per selected robot. Jog / move / position /
+	// home / drop-tip go on its line (direct over Tailscale when available); every
+	// other call is a plain BIMS fetch. Re-created when the robot changes.
+	let robotSession: RobotSession | null = null;
+	let robotConn = $state<RobotSessionState | null>(null);
+	$effect(() => {
+		const id = selectedRobotId;
+		if (!id) return;
+		const s = new RobotSession(id);
+		robotSession = s;
+		s.subscribe((st) => (robotConn = st));
+		void s.open();
+		return () => s.close();
+	});
+	const robotFetch = (path: string, init: RequestInit) =>
+		robotSession ? robotSession.fetchRoute(path, init) : fetch(path, init);
+
 	async function api(path: string, init?: RequestInit): Promise<any> {
-		const res = await fetch(path, { ...init, credentials: 'same-origin', headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) } });
+		const res = await robotFetch(path, { ...init, credentials: 'same-origin', headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) } });
 		const text = await res.text();
 		let body: any = null;
 		try { body = text ? JSON.parse(text) : null; } catch { body = text; }
@@ -1072,7 +1091,7 @@
 
 	/** Drop the modelled tip into the trash. Resolves false when the engine modelled none. */
 	async function doDropTip(): Promise<boolean> {
-		const res = await fetch(`/api/opentrons-lab/robots/${selectedRobotId}/maintenance/${runId}/drop-tip`, {
+		const res = await robotFetch(`/api/opentrons-lab/robots/${selectedRobotId}/maintenance/${runId}/drop-tip`, {
 			method: 'POST',
 			credentials: 'same-origin',
 			headers: { 'Content-Type': 'application/json' },
@@ -1330,6 +1349,7 @@
 			<select bind:value={selectedRobotId} class="mt-1 block rounded border border-[var(--color-tron-border)] bg-black/30 px-2 py-1.5 text-xs" style="color: var(--color-tron-text)">
 				{#each robots as r (r._id)}<option value={r._id}>{r.name}{r.isActive ? '' : ' (inactive)'}</option>{/each}
 			</select>
+			<span class="mt-1 block"><TransportPill state={robotConn} onRetry={() => void robotSession?.retryDirect()} /></span>
 		</label>
 		<!-- Mount lives here (2026-08-28), not in the JOG panel: it decides which
 		     PIPETTE the maintenance run loads, so it is a before-you-open-the-run

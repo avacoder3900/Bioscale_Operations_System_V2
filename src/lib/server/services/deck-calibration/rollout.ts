@@ -22,26 +22,29 @@
  * whether the guard would have fired before you turn it on.
  */
 
-/** Robot identifiers the hardening is enabled for. Empty set = disabled everywhere. */
-export function hardenedRobotTokens(): Set<string> {
-	const raw = process.env.DECK_HARDENING_ROBOT_IDS ?? '';
+/** Parse a comma-separated robot-token env value into a lowercase set. */
+export function parseRobotTokens(raw: string | undefined): Set<string> {
 	return new Set(
-		raw
+		(raw ?? '')
 			.split(',')
 			.map((s) => s.trim().toLowerCase())
 			.filter(Boolean)
 	);
 }
 
+/** Robot identifiers the hardening is enabled for. Empty set = disabled everywhere. */
+export function hardenedRobotTokens(): Set<string> {
+	return parseRobotTokens(process.env.DECK_HARDENING_ROBOT_IDS);
+}
+
 /**
- * Is the new behaviour live for this robot?
- *
- * Matches the robot's `_id`, its `name`, or its `legacyRobotId`, case-
- * insensitively — an operator setting this reaches for "R04", not a nanoid, and
- * a rollout flag that is easy to set wrong is worse than no flag.
+ * Does this robot match any token? Matches the robot's `_id`, `name`,
+ * `legacyRobotId` or `robotSerial`, case-insensitively — an operator setting a
+ * rollout flag reaches for "R04", not a nanoid, and a flag that is easy to set
+ * wrong is worse than no flag. Shared by every per-robot staged rollout
+ * (DECK_HARDENING_ROBOT_IDS, OT2_TAILNET_ROBOT_IDS).
  */
-export function isHardenedRobot(robot: unknown): boolean {
-	const tokens = hardenedRobotTokens();
+export function robotMatchesTokens(robot: unknown, tokens: Set<string>): boolean {
 	if (!tokens.size) return false;
 
 	const r = (robot ?? {}) as Record<string, unknown>;
@@ -61,6 +64,11 @@ export function isHardenedRobot(robot: unknown): boolean {
 		}
 	}
 	return false;
+}
+
+/** Is the deck-hardening behaviour live for this robot? */
+export function isHardenedRobot(robot: unknown): boolean {
+	return robotMatchesTokens(robot, hardenedRobotTokens());
 }
 
 function escapeRe(s: string): string {

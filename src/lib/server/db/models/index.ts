@@ -61,6 +61,7 @@ export { OpentronsRobot } from './opentrons-robot.js';
 export { OpentronsScannerPositionSet } from './opentrons-scanner-position-set.js';
 export { OpentronsScannerSweepRun } from './opentrons-scanner-sweep-run.js';
 export { Ot2BridgeCommand } from './ot2-bridge-command.js';
+export { Ot2DirectCall } from './ot2-direct-call.js';
 export { OpentronProtocol } from './opentrons-protocol.js';
 export { OpentronsRunRecord } from './opentrons-run-record.js';
 export { Consumable } from './consumable.js';

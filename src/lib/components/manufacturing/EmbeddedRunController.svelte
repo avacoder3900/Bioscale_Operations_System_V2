@@ -4,8 +4,10 @@
   Mirrors the relevant pieces of /opentrons/runs/[runId]/+page.svelte
   (status display, current-command, play / pause / resume / cancel buttons)
   but stays in-page so wax / reagent filling don't lose their context.
-  All actions go through the same /api/opentrons-lab/robots/:id/runs/:rid
-  endpoints the clone already uses.
+  All actions go through a robot session ($lib/opentrons/direct-client): straight
+  to the robot over Tailscale when this robot + deployment + computer allow it
+  (OT2-TAILNET-4), otherwise the same /api/opentrons-lab/robots/:id/runs/:rid
+  endpoints as before. Both lines return identical responses.
 
   When the run reaches a terminal status (succeeded / stopped / failed),
   onComplete is called once with the final status. The parent decides
@@ -22,6 +24,8 @@
 -->
 <script lang="ts">
 	import { onDestroy } from 'svelte';
+	import { RobotSession, type RobotSessionState } from '$lib/opentrons/direct-client';
+	import TransportPill from '$lib/components/opentrons/TransportPill.svelte';
 
 	let {
 		robotId,
@@ -83,6 +87,11 @@
 	let lastNotifiedStatus: string | null = null;
 	let pollHandle: ReturnType<typeof setTimeout> | null = null;
 	let destroyed = false;
+	/** The line this page uses to reach the robot — decided once, shown in the pill. */
+	let session: RobotSession | null = null;
+	let conn = $state<RobotSessionState | null>(null);
+	/** A LAN round trip is cheap: poll faster on the direct line so pauses show sooner. */
+	const DIRECT_POLL_MS = 1000;
 
 	const TERMINAL = new Set(['succeeded', 'failed', 'stopped']);
 	// Every hop in the bridge chain budgets 30s for one round trip: the daemon's
@@ -128,7 +137,8 @@
 	}
 
 	function schedulePoll() {
-		if (!destroyed) pollHandle = setTimeout(poll, pollMs);
+		const every = conn?.transport === 'direct' ? Math.min(pollMs, DIRECT_POLL_MS) : pollMs;
+		if (!destroyed) pollHandle = setTimeout(poll, every);
 	}
 	// Force an immediate reconcile poll (e.g. right after a control action) rather
 	// than waiting for the next tick.
@@ -142,7 +152,7 @@
 		// and never overwrite the optimistic status with an older reading.
 		if (actionInFlight) { schedulePoll(); return; }
 		try {
-			const res = await fetch(`/api/opentrons-lab/robots/${robotId}/runs/${opentronsRunId}`, {
+			const res = await robotSession().call('run.get', { rid: opentronsRunId }, {
 				signal: AbortSignal.timeout(POLL_TIMEOUT_MS)
 			});
 			if (res.ok) {
@@ -229,15 +239,9 @@
 		else if (action === 'stop') runStatus = 'stop-requested';
 
 		try {
-			const res = await fetch(
-				`/api/opentrons-lab/robots/${robotId}/runs/${opentronsRunId}/actions`,
-				{
-					method: 'POST',
-					headers: { 'Content-Type': 'application/json' },
-					body: JSON.stringify({ action }),
-					signal: AbortSignal.timeout(ACTION_TIMEOUT_MS)
-				}
-			);
+			const res = await robotSession().call('run.action', { rid: opentronsRunId, action }, {
+				signal: AbortSignal.timeout(ACTION_TIMEOUT_MS)
+			});
 			const body = await res.json().catch(() => ({}));
 			if (res.ok) {
 				lastError = null;
@@ -258,7 +262,7 @@
 			}
 		} catch (err) {
 			lastError = (err as any)?.name === 'TimeoutError'
-				? 'Action timed out (bridge slow) — re-checking status'
+				? `Action timed out${conn?.transport === 'direct' ? '' : ' (bridge slow)'} — re-checking status`
 				: err instanceof Error ? err.message : 'Action failed';
 		} finally {
 			actionInFlight = null;
@@ -314,8 +318,22 @@
 		return `${m}m ${s.toString().padStart(2, '0')}s`;
 	});
 
-	// Boot: start polling. onDestroy clears the timer.
+	/**
+	 * The session is created on first use (client-side only). Calls made while it
+	 * is still deciding go through the BIMS route, so nothing waits on the probe.
+	 */
+	function robotSession(): RobotSession {
+		if (!session) {
+			session = new RobotSession(robotId);
+			session.subscribe((st) => (conn = st));
+			void session.open();
+		}
+		return session;
+	}
+
+	// Boot: open the robot session and start polling. onDestroy clears both.
 	$effect(() => {
+		robotSession();
 		if (!pollHandle) poll();
 	});
 
@@ -325,6 +343,7 @@
 			clearTimeout(pollHandle);
 			pollHandle = null;
 		}
+		session?.close();
 	});
 
 	// An action the operator pressed reports straight away — they are waiting on it.
@@ -357,7 +376,10 @@
 
 <div class="space-y-4 rounded-xl border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-5">
 	<div class="flex items-baseline justify-between">
-		<h3 class="text-lg font-semibold text-[var(--color-tron-text)]">Running on {robotName}</h3>
+		<h3 class="flex items-baseline gap-2 text-lg font-semibold text-[var(--color-tron-text)]">
+			Running on {robotName}
+			<TransportPill state={conn} onRetry={() => void session?.retryDirect()} />
+		</h3>
 		<span
 			class="rounded-full border px-3 py-1 text-xs font-medium uppercase tracking-wider {statusColor(
 				displayStatus

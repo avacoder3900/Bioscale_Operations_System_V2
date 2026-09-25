@@ -15860,3 +15860,60 @@ Deployment: production — building from the GitHub push to master (Vercel dashb
 Source: branch master @ commit 9c2d8b30
 Retrieve this exact code: git checkout master at commit 9c2d8b30
 What this deployment is for: sweep coverage refusal + reachable sweep/compare pages
+
+================================================================================
+2026-09-25 — feat/ot2-tailnet-direct — OT2-TAILNET-4: BIMS talks to OT-2s over Tailscale (B14 pilot), one protocol / two transports
+================================================================================
+B14 is on the tailnet (ot2-b14, https://ot2-b14.tailf65a70.ts.net — see OT2-TAILNET-3 §13 for the
+hands-on log: SSH key via /server/ssh_keys (RSA only), tailscale 1.102.4 userspace mode under
+/data/tailscale, systemd unit scripts/ot2-tailscale.service, serve :443 -> :31950, CORS echoes any
+origin). This branch makes BIMS use it without mixing lines and without touching B07/R04.
+
+Design (docs/prds/OT2-TAILNET-4-DIRECT-TRANSPORT.md):
+- ONE implementation of each interactive verb: src/lib/opentrons/ot2-protocol.ts (isomorphic)
+  holds run.get / run.action (resume->play, 4xx->409 conflict) and the maintenance motion verbs
+  (sendMaintenanceCommand incl. the failed-201 check, leftZ->z, drop-tip no-tip rule, the routes'
+  validation messages). MOVED from the route handlers + maintenance.ts, not copied. The BIMS
+  routes now run it over serverTransport (proxy.ts -> queue on Vercel); the browser runs the same
+  function over fetch(directUrl). Same status + JSON either way.
+- TWO keys before any robot goes direct: OpentronsRobot.connection.mode='tailnet' + valid
+  directUrl (per robot, set on /opentrons/devices/[id]/edit, AuditLog 'connection_update') AND
+  env OT2_TAILNET_ROBOT_IDS lists it (per deployment; same matching as DECK_HARDENING_ROBOT_IDS —
+  rollout.ts now exports robotMatchesTokens/parseRobotTokens for both). Unset = all queue.
+  Previews share prod Mongo, so the env key is what makes Preview the test environment.
+- Browser session (src/lib/opentrons/direct-client.ts): decides the line ONCE per page
+  (/connection + a 1.5 s /health probe from THIS computer); a direct no-answer falls back to the
+  queue for the rest of the page, visibly, retrying that call via BIMS — except a relative jog,
+  which is never retried (could double-move). Robot 4xx/5xx is an answer, not a failover. Re-reads
+  /connection every 5 s: busy flag (claimed sweep/deck_scan/calibrate_tip -> motion via queue)
+  and the per-robot kill switch.
+- Trace: new ot2_direct_calls collection (Ot2DirectCall, 3-day TTL like Ot2BridgeCommand),
+  batch-posted by the browser to POST /api/opentrons-lab/robots/[id]/direct-calls.
+- UI: TransportPill (direct / busy / queue + retry) in EmbeddedRunController (wax + reagent fill)
+  and the deck-calibration studio + scanner-positions teach page; new /opentrons/connectivity
+  fleet page (line in use + why, live probe from this browser, bridge heartbeat, direct calls 24h);
+  Connection section on the robot edit page; Connectivity item in the OT-2 sidebar.
+- Stays on the queue by design: anything writing BIMS records (start/cancel/finish run, maint
+  open/close, load-labware, pick-up-tip, force-reset, protocol upload) and all daemon jobs.
+  RAW direct-IP paths (opentrons-clone etc.) untouched — out of scope.
+
+Files: new src/lib/opentrons/{ot2-protocol,direct-client}.ts (+tests),
+src/lib/server/opentrons/{transport,connection}.ts (+test), models/ot2-direct-call.ts,
+api/opentrons-lab/robots/[id]/{connection,direct-calls}, routes/opentrons/connectivity,
+components/opentrons/TransportPill.svelte. Modified: opentrons-robot model (+connection),
+models/index, maintenance.ts (motion delegates), rollout.ts (shared token matcher), the 8 run/
+maintenance-motion routes (now thin), edit page, EmbeddedRunController, deck-calibration +
+scanner-positions pages, opentrons +layout.svelte.
+
+Tests: npm run test:unit 211/211 (46 new: protocol parity vs old route behaviour, the two-key
+gate incl. "B07/R04 can never resolve tailnet", session failover/sticky/jog-no-retry/busy/
+queue-never-leaves-origin). Also ran runVerb against the REAL B14 over the tailnet (read-only:
+/health, GET /runs 564 ms, run.get of a missing run -> robot's 404 body passed through as 200,
+same as the route).
+npm run check: 87 errors — identical to this worktree's pre-change baseline (the 75+ extra vs the
+logged 12 are "Cannot find module" from a junctioned node_modules that predates master's new deps
+— @modelcontextprotocol/server, zod, xyflow — none in touched files). 441 warnings, unchanged.
+
+NOT DONE / needs the user: Vercel Preview env OT2_TAILNET_ROBOT_IDS=b14 (Production stays unset);
+set B14's Connection on the edit page; hardware test on a real run; tailnet ACL (TAILNET-3 S4) —
+until then any tailnet device can reach B14's unauthenticated API.

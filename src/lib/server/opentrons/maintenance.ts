@@ -14,9 +14,11 @@
 
 import { robotPost, robotGet, robotDelete } from './proxy';
 import { isHardenedRobot } from '$lib/server/services/deck-calibration/rollout';
+import * as ot2 from '$lib/opentrons/ot2-protocol';
+import { serverTransport } from './transport';
 
 /** Axis names accepted by moveRelative on OT-2 (left/right Z is per pipette mount) */
-export type JogAxis = 'x' | 'y' | 'leftZ' | 'rightZ';
+export type JogAxis = ot2.JogAxis;
 
 export type RobotRef = { ip: string; port?: number | null };
 
@@ -134,9 +136,9 @@ export async function closeMaintenanceRun(robot: RobotRef, runId: string): Promi
 }
 
 /**
- * Send a command into a maintenance run. waitUntilComplete=true makes the
- * robot block until the command settles before returning, which is what
- * jog/move callers want (so the response position is final).
+ * Send a command into a maintenance run (waitUntilComplete, failed-201 detection).
+ * Moved to $lib/opentrons/ot2-protocol so the browser's tailnet line runs the
+ * exact same code; this wrapper keeps the server call signature.
  */
 export async function sendMaintenanceCommand(
 	robot: RobotRef,
@@ -145,43 +147,7 @@ export async function sendMaintenanceCommand(
 	params: Record<string, unknown>,
 	opts: { waitUntilComplete?: boolean; timeoutMs?: number } = {}
 ): Promise<any> {
-	const waitUntilComplete = opts.waitUntilComplete ?? true;
-	const timeoutMs = opts.timeoutMs ?? 30_000;
-	const qs = new URLSearchParams();
-	if (waitUntilComplete) qs.set('waitUntilComplete', 'true');
-	if (timeoutMs) qs.set('timeout', String(timeoutMs));
-	const path = `/maintenance_runs/${runId}/commands?${qs.toString()}`;
-	// Client HTTP timeout must exceed the robot-side waitUntilComplete hold
-	// (timeoutMs) or slow commands like home abort early as "fetch failed".
-	const res = await robotPost(robot as any, path, {
-		data: { commandType, intent: 'setup', params }
-	}, { timeoutMs: timeoutMs + 10_000 });
-	if (!res.ok) {
-		const body: any = await res.json().catch(() => ({}));
-		// Opentrons command errors use {errors:[{detail}]}; FastAPI request-validation
-		// (422) uses {detail:[{loc,msg}]} — surface the field path so "field required"
-		// is actually diagnosable instead of a bare message.
-		const fastapiDetail = Array.isArray(body?.detail)
-			? body.detail.map((d: any) => `${(d?.loc ?? []).join('.')}: ${d?.msg ?? ''}`).join('; ')
-			: typeof body?.detail === 'string'
-				? body.detail
-				: null;
-		const detail = body?.errors?.[0]?.detail ?? fastapiDetail ?? body?.message;
-		throw new Error(`${commandType}: ${detail ?? `robot returned ${res.status}`}`);
-	}
-	// CRITICAL: the OT-2 returns HTTP 201 even when a command failed; the
-	// per-command status lives at body.data.status. A "failed" status with
-	// no http error here is the difference between a sweep that silently
-	// no-ops the gantry and one that fails loudly. Detect it.
-	const body: any = await res.json();
-	const innerStatus = body?.data?.status;
-	if (innerStatus === 'failed') {
-		const err = body?.data?.error ?? {};
-		const detail = err.detail ?? err.errorType ?? 'unknown command failure';
-		const type = err.errorType ? `[${err.errorType}] ` : '';
-		throw new Error(`${commandType} failed: ${type}${detail}`);
-	}
-	return body;
+	return ot2.sendMaintenanceCommand(serverTransport(robot), runId, commandType, params, opts);
 }
 
 /**
@@ -247,53 +213,21 @@ export async function loadPipetteInRun(
 	return pid;
 }
 
-/** Home all axes (or a specific subset).
- *  The schema marks `axes` optional ("omit = home all"), but some OT-2 firmware
- *  rejects an empty params object with a "field required" validation error, so we
- *  ALWAYS send the explicit full OT-2 axis set when no subset is given. */
-const OT2_ALL_AXES = ['x', 'y', 'leftZ', 'rightZ', 'leftPlunger', 'rightPlunger'] as const;
+/** Home all axes (or a subset) — see ot2-protocol.home. */
 export async function home(
 	robot: RobotRef,
 	runId: string,
 	axes?: Array<'x' | 'y' | 'leftZ' | 'rightZ' | 'leftPlunger' | 'rightPlunger'>
 ): Promise<void> {
-	await sendMaintenanceCommand(
-		robot,
-		runId,
-		'home',
-		{ axes: axes ?? [...OT2_ALL_AXES] },
-		{ waitUntilComplete: true, timeoutMs: 60_000 }
-	);
+	await ot2.home(serverTransport(robot), runId, axes);
 }
 
-/** Jog (relative move) on a single axis.
- *  The caller may pass leftZ/rightZ (the home-style MotorAxis), but moveRelative's
- *  axis is a MovementAxis ('x'|'y'|'z') — the mount is already fixed by pipetteId,
- *  so map both Z variants to 'z'. (leftZ/rightZ here caused "input should be
- *  'x','y' or 'z'" from the robot.) */
-export async function jog(
-	robot: RobotRef,
-	runId: string,
-	pipetteId: string,
-	axis: JogAxis,
-	distance: number
-): Promise<void> {
-	const moveAxis = axis === 'leftZ' || axis === 'rightZ' ? 'z' : axis;
-	await sendMaintenanceCommand(
-		robot,
-		runId,
-		'moveRelative',
-		{ pipetteId, axis: moveAxis, distance },
-		{ waitUntilComplete: true, timeoutMs: 30_000 }
-	);
+/** Jog (relative move) on a single axis — see ot2-protocol.jog (leftZ/rightZ → z). */
+export async function jog(robot: RobotRef, runId: string, pipetteId: string, axis: JogAxis, distance: number): Promise<void> {
+	await ot2.jog(serverTransport(robot), runId, pipetteId, axis, distance);
 }
 
-/**
- * Move to absolute deck coordinates. forceDirect defaults to true here
- * because scanner sweeps don't pick up tips, don't transport liquid, and
- * don't otherwise need the safety-arc routing — direct point-to-point cuts
- * ~0.5-1s off every slot transition.
- */
+/** Move to absolute deck coordinates (forceDirect defaults true) — see ot2-protocol.moveTo. */
 export async function moveTo(
 	robot: RobotRef,
 	runId: string,
@@ -301,48 +235,16 @@ export async function moveTo(
 	coords: { x: number; y: number; z: number },
 	opts: { minimumZHeight?: number; forceDirect?: boolean; speed?: number } = {}
 ): Promise<void> {
-	const forceDirect = opts.forceDirect ?? true;
-	await sendMaintenanceCommand(
-		robot,
-		runId,
-		'moveToCoordinates',
-		{
-			pipetteId,
-			coordinates: coords,
-			...(opts.minimumZHeight !== undefined ? { minimumZHeight: opts.minimumZHeight } : {}),
-			// Optional max travel speed (mm/s). Used to mimic the fill motion in the
-			// deck-calibration "Fill motion" tool; omitted → robot default speed.
-			...(opts.speed !== undefined ? { speed: opts.speed } : {}),
-			forceDirect
-		},
-		{ waitUntilComplete: true, timeoutMs: 30_000 }
-	);
+	await ot2.moveTo(serverTransport(robot), runId, pipetteId, coords, opts);
 }
 
-/**
- * Read current gantry position from the robot (deck coordinates).
- * The OT-2 surfaces this via GET /robot/positions which returns multiple
- * named positions; the "current" position is the one most recently moved to.
- * We expose savePosition + getRunPosition off the maintenance run instead.
- */
+/** Current gantry position via savePosition — see ot2-protocol.getCurrentPosition. */
 export async function getCurrentPosition(
 	robot: RobotRef,
 	runId: string,
 	pipetteId: string
 ): Promise<{ x: number; y: number; z: number } | null> {
-	// savePosition is the maintenance-run command that records the current head
-	// position and returns it in the command result. Calling this gives us a
-	// reliable XYZ readback after jog/move commands.
-	const result = (await sendMaintenanceCommand(
-		robot,
-		runId,
-		'savePosition',
-		{ pipetteId },
-		{ waitUntilComplete: true, timeoutMs: 10_000 }
-	)) as { data?: { result?: { position?: { x: number; y: number; z: number } } } };
-	const p = result?.data?.result?.position;
-	if (!p) return null;
-	return { x: p.x, y: p.y, z: p.z };
+	return ot2.getCurrentPosition(serverTransport(robot), runId, pipetteId);
 }
 
 /**
@@ -443,14 +345,7 @@ export async function loadLabwareInRun(
 	return id;
 }
 
-/**
- * Move the pipette to a well's nominal position (default: just above the well top).
- * Travels as a SAFE ARC, not a straight line: with forceDirect=false the OT-2 lifts
- * to `minimumZHeight` (deck Z, mm) first, moves over the target in XY, then descends.
- * This avoids dragging the tip across cartridges/structures between holes. The
- * caller passes a high minimumZHeight (≈80mm above the holes) so the lift always
- * clears the deck.
- */
+/** Move to a well via the safe arc — see ot2-protocol.moveToWell. */
 export async function moveToWell(
 	robot: RobotRef,
 	runId: string,
@@ -459,43 +354,16 @@ export async function moveToWell(
 	wellName: string,
 	opts: { zOffsetMm?: number; minimumZHeight?: number; xOffsetMm?: number; yOffsetMm?: number } = {}
 ): Promise<void> {
-	await sendMaintenanceCommand(
-		robot,
-		runId,
-		'moveToWell',
-		{
-			pipetteId,
-			labwareId,
-			wellName,
-			// x/y offset = tip-cal adjust folded in → one move to well+adjust.
-			wellLocation: { origin: 'top', offset: { x: opts.xOffsetMm ?? 0, y: opts.yOffsetMm ?? 0, z: opts.zOffsetMm ?? 2 } },
-			// false ⇒ travel via the safe arc (up to minimumZHeight, over, down).
-			forceDirect: false,
-			...(opts.minimumZHeight !== undefined ? { minimumZHeight: opts.minimumZHeight } : {})
-		},
-		{ waitUntilComplete: true, timeoutMs: 30_000 }
-	);
+	await ot2.moveToWell(serverTransport(robot), runId, pipetteId, labwareId, wellName, opts);
+}
+
+/** Drop whatever tip the run models into the fixed trash — see ot2-protocol.dropTipInTrash. */
+export async function dropTipInTrash(robot: RobotRef, runId: string, pipetteId: string): Promise<void> {
+	await ot2.dropTipInTrash(serverTransport(robot), runId, pipetteId);
 }
 
 /** Pick up a tip from a (loaded) tiprack — so the operator dials in with a tip on,
  *  matching the real fill/calibration workflow. */
-/**
- * Drop whatever tip the run models into the fixed trash (the same two commands
- * the fill protocols use), so the operator can take a fresh one from the rack
- * without a hand swap. The engine refuses when it models NO tip — callers treat
- * that as "nothing to drop".
- */
-export async function dropTipInTrash(robot: RobotRef, runId: string, pipetteId: string): Promise<void> {
-	await sendMaintenanceCommand(
-		robot,
-		runId,
-		'moveToAddressableAreaForDropTip',
-		{ pipetteId, addressableAreaName: 'fixedTrash', offset: { x: 0, y: 0, z: 0 }, alternateDropLocation: false },
-		{ waitUntilComplete: true, timeoutMs: 30_000 }
-	);
-	await sendMaintenanceCommand(robot, runId, 'dropTipInPlace', { pipetteId }, { waitUntilComplete: true, timeoutMs: 30_000 });
-}
-
 export async function pickUpTip(
 	robot: RobotRef,
 	runId: string,
