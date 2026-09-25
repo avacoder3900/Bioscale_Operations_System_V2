@@ -23,15 +23,27 @@ let _client: S3Client | null = null;
 function getClient(): S3Client {
 	if (_client) return _client;
 
-	const accountId = env.R2_ACCOUNT_ID;
+	const accountId = (env.R2_ACCOUNT_ID ?? '').trim();
 	if (!accountId) throw new Error('R2_ACCOUNT_ID is not configured');
+	// The account ID becomes part of the TLS hostname. Anything that is not the 32-hex
+	// Cloudflare account ID (a pasted URL, a bucket name, a stray character) makes Cloudflare
+	// reject the handshake with TLS alert 40 — an opaque "EPROTO ... handshake failure" instead
+	// of a readable error. Fail early with the real cause.
+	if (!/^[0-9a-f]{32}$/i.test(accountId)) {
+		throw new Error(
+			`R2_ACCOUNT_ID must be the 32-character hex Cloudflare account ID (got "${accountId.slice(0, 12)}…", ${accountId.length} chars)`
+		);
+	}
 
 	_client = new S3Client({
 		region: 'auto',
 		endpoint: `https://${accountId}.r2.cloudflarestorage.com`,
+		// Path-style keeps the bucket out of the hostname (<account>.r2.cloudflarestorage.com/<bucket>),
+		// so a bucket name with a dot can never produce a hostname Cloudflare has no certificate for.
+		forcePathStyle: true,
 		credentials: {
-			accessKeyId: env.R2_ACCESS_KEY_ID!,
-			secretAccessKey: env.R2_SECRET_ACCESS_KEY!
+			accessKeyId: (env.R2_ACCESS_KEY_ID ?? '').trim(),
+			secretAccessKey: (env.R2_SECRET_ACCESS_KEY ?? '').trim()
 		},
 		requestChecksumCalculation: 'WHEN_REQUIRED',
 		responseChecksumValidation: 'WHEN_REQUIRED'
@@ -41,7 +53,7 @@ function getClient(): S3Client {
 }
 
 function getBucket(): string {
-	const bucket = env.R2_BUCKET_NAME;
+	const bucket = (env.R2_BUCKET_NAME ?? '').trim();
 	if (!bucket) throw new Error('R2_BUCKET_NAME is not configured');
 	return bucket;
 }

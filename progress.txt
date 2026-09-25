@@ -16510,3 +16510,33 @@ What this deployment is for: the shipped bucket-system build — WI-01 gone (rou
 Build status: success (GitHub deployment 6670170690, Production – bioscale-operations-system-mongodb).
 Still to do by hand (need MONGODB_URI): scripts/migrate-bucket-raw-to-barcoded.ts --plan/--apply
   and scripts/migrate-thermoseal-roll-only.ts --plan/--apply.
+
+================================================================================
+2026-09-25 — feat/bucket-system — R2 client: TLS alert 40 on sonic upload → readable error + path-style
+================================================================================
+User hit "Upload to storage failed: write EPROTO ... ssl3_read_bytes:ssl/tls alert handshake
+failure ... SSL alert number 40" on the sonic recording page. That is Cloudflare refusing the TLS
+handshake (alert 40 = handshake_failure) because the SNI hostname matched none of its certificates —
+nothing to do with credentials, permissions, or the file (those come back as HTTP 403/404).
+The AWS SDK client in src/lib/server/r2.ts uses virtual-hosted addressing, so the host it dials is
+<R2_BUCKET_NAME>.<R2_ACCOUNT_ID>.r2.cloudflarestorage.com. Confirmed with curl from this machine:
+  brevitest-cv.7bd6a45c….r2.cloudflarestorage.com → HTTP 400 (TLS fine)
+  brevitest-cv.not-an-account-id.r2.cloudflarestorage.com → TLS handshake failure
+  a.b.7bd6a45c….r2.cloudflarestorage.com (dotted bucket) → TLS handshake failure
+So the deployed env that produced the error has an R2_ACCOUNT_ID that is not the 32-hex account ID
+(pasted URL / bucket name / stray char / different value on preview vs production), or a bucket
+name with a dot. Cannot read the Vercel env from here (no CLI, no .vercel link) — needs a look in
+the Vercel dashboard for the environment the user was on.
+
+src/lib/server/r2.ts (the client shared by COC processing, receiving, api/r2/files, sonic):
+- R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME are trimmed.
+- R2_ACCOUNT_ID must match /^[0-9a-f]{32}$/ or getClient() throws
+  "R2_ACCOUNT_ID must be the 32-character hex Cloudflare account ID (got "…", N chars)" — so the
+  sonic page's red banner names the real cause instead of an EPROTO string.
+- forcePathStyle: true → requests go to <account>.r2.cloudflarestorage.com/<bucket>/<key>
+  (verified via an SDK finalizeRequest middleware), so the bucket name can never end up in the
+  TLS hostname. R2 supports path-style; presigned download URLs from getSignedDownloadUrl are
+  path-style too.
+svelte-check: 14 errors = the 12-error baseline + 2 pre-existing in research-proxy.ts; the
+r2.ts baseline error is in services/r2.ts (the raw-S3v4 client), untouched.
+Left alone: src/routes/validation/sonic/+page.svelte has another session's uncommitted edits.
