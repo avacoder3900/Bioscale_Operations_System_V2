@@ -15945,3 +15945,16 @@ produced ([bucketId] page seeing the old `inOven` field) went away.
 
 Not exercised on a preview yet (see plan §12.4): Pressed → Backed advance, a deck load from a
 backed bucket closing the pass, and a cancel reopening it.
+
+Deployment: preview — FAILED (both Vercel projects) for commit 6f323765
+Source: branch feat/bucket-system @ commit 6f323765
+Retrieve this exact code: git checkout feat/bucket-system at commit 6f323765
+What this deployment is for: the Backed stage / WI-01 removal above.
+Build status: failure on the GitHub deployment record (6665661108) for both the brevitest and
+  the personal project, no log text reachable from here (Vercel logs need the dashboard or a
+  Vercel token; the harness refused the credential lookup). `vite build` was reproduced
+  locally for the first time on this machine (arm64 rollup/esbuild/lightningcss/oxide/sharp
+  binaries dropped into node_modules) and the client + server bundles build clean in 31 s —
+  the code compiles; only adapter-vercel's file trace failed locally, on C:\swapfile.sys,
+  which is a Windows artefact. Re-pushing with this log entry to see whether the failure
+  repeats.
