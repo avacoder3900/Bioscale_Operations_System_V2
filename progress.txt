@@ -16232,3 +16232,219 @@ Retrieve this exact code: git checkout feat/bucket-system at commit 1590a96b
   (or: git log feat/bucket-system --oneline to find it if the branch has since moved on)
 What this deployment is for: the helper line under Move to oven. Smoke: /login 200; buckets 302.
 Build status: success (GitHub deployment 6670000921, both projects).
+2026-09-25 — master — BIMS refuses sweep peaks measured from a dead BLE link
+================================================================================
+SPU 239 swept to SWPEND rows=7840 good=6615 and BIMS showed it as an ordinary
+result. It was not. The magnetometer's BLE link died at y=34000 and never
+recovered -- 0 failures below 33800, partial at 34000, then 40/40 failures at
+every position from 34200 to 40000, losing 1225 rows. Well 5's real peak lives at
+~37800, entirely inside that dead zone, so its highest SURVIVING sample was
+reported as a peak of 1424 against ~4300 on a healthy unit. Wells 1-4 peak below
+the cutoff and are fine.
+
+THE FAILURE IS INVISIBLE BY CONSTRUCTION. A read the magnetometer never answers
+is written NOCHAR, has no numeric fields, and is dropped by the pusher before it
+reaches the API -- so it arrives ABSENT, not zero. An incomplete run therefore
+looks EXACTLY like a complete, shorter one. The device declares its own totals in
+SWPEND and summarise() already stored rowsReported/goodReported; nothing ever
+compared them.
+
+Now it does. summarise() computes rowsMissing/coverage/coverageComplete and marks
+a channel peakUnreliable when the run lost rows AND that maximum sits on the edge
+of surviving data -- the samples that would have beaten it are the missing ones.
+Checked by running the real module over both real captures: 239 flags exactly
+well 5 A/B/C at y=34000 (84.4% coverage) and leaves wells 1-4 alone; 226 flags
+nothing at 100% coverage. No false positives.
+
+Coverage is also DERIVED ON READ, so sessions ingested before the fix -- including
+the 239 run that exposed it -- are flagged without rewriting history.
+coverageComplete is null, never true, when the device declared no total: unknown
+is not an all-clear. The viewer shows a coverage stat and refuses the affected
+numbers outright, naming the wells and stating plainly that they are not
+measurements.
+
+REACHABILITY: /validation/magnetometer now links Stage sweeps and Compare SPUs.
+Both pages were live but had NO inbound link from anywhere in src -- the sweep
+viewer could only be reached by typing the URL.
+
+RUNNING A SWEEP FROM BIMS still does not deliver data, by choice. The Queue Sweep
+button genuinely starts the run on a v98 device, but the firmware returns the
+profile as ~110 chunked Particle.publish events and there is no product-scoped
+webhook to receive them (these are Product 32546 devices, which publish to the
+product stream). Creating one costs ~110 publishes per sweep, ~220 data operations
+with response events, against ZERO for serial -- and serial files the full 8-rep
+data rather than the per-position means the upload downsamples to. Serial remains
+the only path that delivers, deliberately.
+
+Rebased onto the PR #54 (bucket system) merge, 92 commits, zero overlap with any
+magnetometer or validation file. svelte-check --threshold error: 13 on this base
+(PR #54 lowered it from 122), zero from these changes; the only magnetometer
+errors are the two pre-existing ones in [sessionId]/+page.svelte, where the load's
+row type omits the optional `error` field the parser writes.
+
+Deployment: production — building from the GitHub push to master (Vercel dashboard, commit below)
+Source: branch master @ commit 9c2d8b30
+Retrieve this exact code: git checkout master at commit 9c2d8b30
+What this deployment is for: sweep coverage refusal + reachable sweep/compare pages
+
+================================================================================
+2026-09-25 — master — four units swept; the channel deficit is the JIG, not the SPUs
+================================================================================
+Swept 247 (session va9dLUSqBUvwpBlip4P3h) and 244 (session -i9MMeJJg_CH7qIJEBEH9),
+both good=7840, zero dropouts. With 226 and 255 that is four clean units.
+
+BEAD PULL |B x dB/dz|, mean over usable wells (edge peaks excluded):
+    unit     ch A     ch B     ch C    B vs A    C vs A
+    226       1864     1394     1424    -25.2%    -23.6%
+    244       1963     1666     1221    -15.2%    -37.8%
+    247       1957     1671     1076    -14.6%    -45.0%   (well 5 excluded)
+    255       2141     1998     1525     -6.7%    -28.8%
+    channel A spread ACROSS units: 14.8%
+
+Channel A is strongest and channel C weakest on ALL FOUR units, C down 24-45%,
+while channel A compared across units is tight at 14.8%. Magnet variation would
+put the weakest channel in a random position per unit; instead the ordering is
+identical every time and the same channel is stable unit to unit. The SAME JIG
+was used on all four, so this is predominantly the jig's own sensor geometry --
+channel C's sensor almost certainly sits at a different height relative to the
+magnet plane and therefore sees a flatter gradient.
+
+CORRECTION to the 2026-09-25 entry above: that entry framed the A-vs-C gap as
+evidence peak-only QC hides a quarter-scale spread in real bead force. With four
+units it is clear the within-unit channel gap is mostly FIXTURE, not SPU. Compare
+the same channel across units (meaningful); do not compare C against A within a
+unit and conclude a magnet is weak. Cheap test to settle it: re-sweep one SPU
+with a different jig, or rotate the jig 180 degrees. If the deficit follows the
+jig it is geometry; if it stays with the physical channel position, it is the
+magnet row.
+
+247 HAS A REAL POSITIONAL DEFECT, and it is not strength. Peak spacing runs
+8000 / 13400 / 8000 um -- well 3 and everything after it sit +5400um from an even
+cadence (226 is 8000 x4 exactly; 255 varies +/-200, one dy step; 244 is 8000 x4
+exactly). Well 3's peak field is healthy at 4373/4388/4260, in line with wells
+1/2/4, so the magnet is fine and the regular test fails it only because the test
+samples off-centre. Well 5 on 247 is unmeasurable: carried +5400 along, its peak
+lands past the 40000 sweep end and past the ~40800 real travel limit, so its
+1834 @ y=40000 is rising flank. The new gate handles that correctly -- coverage
+was complete, so peakAtWindowEdge fires but peakUnreliable does NOT, which is the
+intended distinction between "window missed the magnet" and "link died".
+
+STILL OPEN, and the firmware says so itself (brevitest-firmware.h:219): which
+stage geometry is correct is unresolved -- "the measured well_move[] puts the
+wells at 2825-18800 um, the nominal one at 4800-37000 um. A sweep this wide finds
+the peaks empirically and settles the question." Four units of empirical peaks
+now exist (226 5400-37400, 255 6000-38000, 244 5600-37600, 247 6200-35600+), all
+spanning the NOMINAL range. An earlier attempt here to explain 247's failing well
+3 via park positions did NOT reconcile: firmware parks compute to
+5650/13550/21200/29800/37600 (start 12800 + cumulative well_move
+{-7150,7900,7650,8600,7800}), yet the sweep reads only ~655 for sensor 3 at
+y=21200 while the regular test reported 3848. That mapping is wrong somewhere and
+needs a bench check, not more inference.
+
+Operational notes: the serial port renumbers constantly (COM7 -> COM8 -> COM20 ->
+COM8 -> COM12 -> COM11 across one session) -- let run-sweep.ps1 auto-detect it
+rather than passing a value read even a minute earlier. And judge mag-record
+freshness by the filename epoch, NOT by channel temperature: 244's record was 0.9
+min old while reading 21-26C simply because the unit was cold.
+
+No code changed in this entry.
+Final audit (script) + independent re-check (read-only, from the written UUID list):
+- 5000 UUIDs, 5000 unique; 0 on cartridge_records; 0 on optical_test_cartridges;
+  0 overlap with the 5,510 ids held by the 39 pre-existing barcode_sheet_batches (any status);
+  each of the 5000 in exactly one batch; 25 batches status=printed; 25 audit_log rows tagged
+  newData.bulkRun=zebra-bulk-2026-09-22 (one per batch, calibration JSON embedded).
+- PT-CT-106: 1691 → 6643. The 48-label gap vs +5000 is two concurrent WI-01 consumptions
+  (19:49:53Z −24, 20:24:43Z −24 — normal lab throughput), so the ledger reconciles exactly.
+- UUID list: %LOCALAPPDATA%\BIMS\zebra-runs\zebra-bulk-2026-09-22-1790106567226.txt
+- Batch ids: mfWgjjyeePGzeI7YOglZw uGvtgcK6RPDEZrAfbm5ij 3PCAV0JMlRKvRjGk-FvYD X8TaKdfIvQEUKxUmWtuov
+  WIazgaUNQ9EzsTL5HUh7g w88Q3K68LUj-Chr0pjOVN O1E3WWom0Ansm32_jlTVu _UkL6daDhvFDjrcLAvcKH
+  t0nzgmiHavBKDtHQjRwKh BA2N3_T4TZqEKi4veAWb1 daIkEAmS9U8kvDXdlQsHJ 0IQj4vlabEAGPqPtpW7_z
+  piWL6GT7JLIOwcLKG5FW6 Qy228vOOeTW2JGqQuryL4 NckdRD657qPzmFGsmEZen sFa-05OuZgAl3LKzqPw8L
+  Qd6qlJvZXU28PmuNehO_m Qc8R3w08joluxs3jUaOGO JCrb3LofEr7Z3Fnqw8sM7 wmryJHvPzD4Nz6MG0tBnD
+  mx6N5K7pLghgiiQ5cjKDG -L5PgM-EEe92MxMPQ5BN- u87ejvZryjl9kKm_A0_9r 43-0eIyNqvMGLcIuh0yXY
+  XqxcTQMP4TCWwhgY2vUCl
+Before the run: 40 unminted random test labels (the 20-label alignment job sent twice) + ~12 more
+from the layout dial-in — all to be destroyed, none in BIMS.
+No code changed in this entry. npm run check: n/a.
+
+================================================================================
+2026-09-24 — feat/research-analysis-mcp — research analysis + calibration MCP tools via proxy to brevitest-research-v2
+================================================================================
+Research-v2 DOMAIN-30 (analysis v3) exposes /api/agent/analysis/* and /api/agent/calibration/*.
+BIMS now proxies the allowlisted subset (analysis/, calibration/) at /api/agent/research/[...path]
+(src/lib/server/research-proxy.ts; RESEARCH_API_URL + optional RESEARCH_AGENT_API_KEY, falls back to
+AGENT_API_KEY) and registers 18 research_* MCP tools in bims-mcp.ts (server version 3.6.0): catalog,
+list/get/validate profiles, find cartridges, preview (dry run), view, save draft, activate, archive,
+run (confirmed gate), attach profile to assay, list lots, list/get curves, fit (draft), activate curve,
+quantify (confirmed gate). Writes go through machineWrite with actor. Docs: docs/MCP-SERVER.md.
+Tests: src/lib/server/research-proxy.test.ts (unit, 15 cases incl. dot-segment rejection);
+tests/contracts/12-research-analysis.test.ts (401 / 404 allowlist / 200-or-503 catalog).
+npm run test:unit: 174 pass. npm run check: 11 errors — unchanged from feat/spu-tweaks baseline.
+
+
+================================================================================
+2026-09-25 — master — DEPLOY: research analysis MCP tools (bims-operations 3.6.0)
+================================================================================
+Source: branch master @ commit faea623d (cherry-pick of feat/research-analysis-mcp 61560f31 onto master)
+Retrieve this exact code: git checkout master at commit faea623d
+Adds /api/agent/research/[...path] proxy + 18 research_* MCP tools. Requires RESEARCH_API_URL on Vercel
+(set 2026-09-25 by Alejandro). No manufacturing behaviour changed. Deployed via GitHub integration on push.
+
+================================================================================
+2026-09-25 — master — seven units swept: the mag test reads the flank, not the peak
+================================================================================
+Swept 218 (8loq-7xGVyX6ShKpPRFVb), 229 (pek3cX8mVZt0FcIHrmkPs) and 215
+(YPssyKzEPL2mVflJgEjRi), all good=7840. With 226, 244, 247 and 255 that is seven
+units, six of them clean and one (239) rejected by the new coverage gate.
+
+THE HEADLINE: NOT ONE OF THE SEVEN HAS A WEAK MAGNET. Every cell that failed or
+nearly failed the regular test is comfortably above the 3900 floor AT ITS ACTUAL
+PEAK. The test is sampling roughly a millimetre off the magnet centre and losing
+236-500 gauss to the flank:
+
+    unit  cell      true peak   test read   deficit   off-centre
+    218   w3 ch B        4080        3844     -236 G    ~903 um
+    229   w3 ch B        4233        3932     -301 G   ~1075 um
+    215   w2 ch A        4293        3912     -381 G   ~1148 um
+    215   w2 ch B        4372        3960     -412 G   ~1171 um
+    215   w2 ch C        4364        3864     -500 G   ~1320 um
+
+218 FAILED and 229 PASSED BY 32 GAUSS on essentially identical hardware. The
+threshold is currently sorting units by how a positioning error interacts with
+whichever channel happens to sit lowest, not by whether the magnet is adequate.
+
+WHY IT VARIES BY UNIT: the firmware parks at FIXED positions, but the magnet row
+does not sit in the same place on every unit. Well 1's peak across the seven:
+226 5400, 229 5600, 244 5600, 215 5800, 218 6000, 255 6000, 247 6200 -- an 800um
+spread. That spread, stacked on a systematic ~1mm park offset, decides how far
+down the flank each unit is read. Which cell then fails is near enough arbitrary.
+
+Two failure signatures were distinguished and neither is a bad magnet:
+  - 218 and 229: channel B runs ~5-6% below A and C across EVERY well; well 3 is
+    the weakest of the five, so it is the cell that crosses the line. Spacing on
+    both is a clean 8000um x4.
+  - 215: well 2 is low across ALL THREE channels in the regular test, which looked
+    like a genuinely weak magnet -- it is not. Its true peaks are 4293/4372/4364,
+    in line with wells 1/3/4/5 on the same unit. Predicted weak magnet; wrong.
+
+THE ONE REAL PHYSICAL DEFECT REMAINS 247: peak spacing 8000/13400/8000, well 3
+and everything after sitting +5400um from an even cadence, with a healthy peak
+field. That is a positioning fault, not a magnet to replace.
+
+HONEST LIMIT: the profile is symmetric about the peak, so the reported value
+crosses it on BOTH sides. The MAGNITUDE of the offset is solid; which side the
+test parks on is not determinable from the value alone. That needs the park
+geometry settled -- the same question the firmware already flags as open at
+brevitest-firmware.h:219 (measured well_move[] vs nominal). Seven units of
+empirical peaks now exist to settle it with.
+
+CORRECTION to the previous entry: it reported channel A bead pull as tight across
+units at 14.8%. Adding 218 takes that to 46.3% -- the claim does not survive.
+Peak FIELD is the tight quantity (ch A 5.7%, ch B 7.3%, ch C 4.3% across five
+units); the bead-pull spread is ~7x larger than the field spread it is derived
+from, which points at the gradient inference being sensitive to jig seating
+rather than at real magnet differences. Bead pull is NOT yet a trustworthy
+per-unit QC metric. The test that settles it: sweep one SPU twice, re-seating the
+jig between runs.
+
+No code changed in this entry.

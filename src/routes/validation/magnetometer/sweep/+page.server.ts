@@ -219,15 +219,81 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		},
 		magResults: mag
 			? {
-					wells: mag.wells ?? {},
+					wells: flagUnreliablePeaks(mag.wells, deriveCoverage(mag).coverageComplete),
 					wellNumbers: mag.wellNumbers ?? [],
 					channels: mag.channels ?? [],
 					rowsIngested: mag.rowsIngested ?? null,
 					rowsReported: mag.rowsReported ?? null,
 					goodReported: mag.goodReported ?? null,
+					// Coverage, so the page can refuse to present a peak computed from
+					// a run that lost rows. DERIVED ON READ when absent: sessions
+					// ingested before these fields existed still stored rowsReported
+					// and rowsIngested, which is everything the comparison needs. That
+					// matters - the run that exposed this problem (SPU 239, BLE died at
+					// y=34000) was ingested before the fix and would otherwise render
+					// as if nothing were wrong. Nothing historical is rewritten.
+					...deriveCoverage(mag),
 					durationMs: mag.durationMs ?? null
 				}
 			: null,
 		series: buildSeries(full.rawData, mag?.channels ?? [])
 	}));
 };
+
+/**
+ * Coverage for a stored sweep, preferring what was written at ingest and falling
+ * back to a derivation for older sessions.
+ *
+ * A read the magnetometer never answered is written NOCHAR by the firmware, has no
+ * numeric fields, and is dropped before storage - so it is ABSENT, not zero. An
+ * incomplete run therefore looks exactly like a complete, shorter one unless the
+ * device's own declared total is compared against what actually landed.
+ *
+ * Returns coverageComplete: null when the device never declared a total. Null is
+ * UNKNOWN and must not be rendered as an all-clear.
+ */
+function deriveCoverage(mag: any): {
+	rowsMissing: number | null;
+	coverage: number | null;
+	coverageComplete: boolean | null;
+} {
+	if (typeof mag?.coverageComplete === 'boolean') {
+		return {
+			rowsMissing: mag.rowsMissing ?? null,
+			coverage: mag.coverage ?? null,
+			coverageComplete: mag.coverageComplete
+		};
+	}
+	const reported = typeof mag?.rowsReported === 'number' ? mag.rowsReported : null;
+	const ingested = typeof mag?.rowsIngested === 'number' ? mag.rowsIngested : null;
+	if (reported === null || ingested === null) {
+		return { rowsMissing: null, coverage: null, coverageComplete: null };
+	}
+	const rowsMissing = Math.max(0, reported - ingested);
+	return {
+		rowsMissing,
+		coverage: reported > 0 ? ingested / reported : null,
+		coverageComplete: rowsMissing === 0
+	};
+}
+
+/**
+ * Mark peaks that sit on the edge of the data that SURVIVED, for sessions stored
+ * before the flag existed. Same rule as the ingest: only meaningful once the run is
+ * known to have lost rows, because in a complete sweep an edge peak is a different
+ * (and milder) problem - a window that missed the magnet, not a link that died.
+ */
+function flagUnreliablePeaks(wells: any, coverageComplete: boolean | null): any {
+	if (coverageComplete !== false || !wells || typeof wells !== 'object') return wells ?? {};
+	const out: Record<string, Record<string, unknown>> = {};
+	for (const [well, chs] of Object.entries(wells as Record<string, any>)) {
+		out[well] = {};
+		for (const [ch, p] of Object.entries((chs ?? {}) as Record<string, any>)) {
+			out[well][ch] =
+				p && typeof p === 'object' && p.peakUnreliable === undefined
+					? { ...p, peakUnreliable: !!p.peakAtWindowEdge }
+					: p;
+		}
+	}
+	return out;
+}

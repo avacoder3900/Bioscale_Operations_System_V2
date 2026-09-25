@@ -17,6 +17,10 @@
 	}
 
 	interface Profile {
+		// Set when the run lost rows AND this maximum sits on the edge of the data
+		// that survived - i.e. the samples that would have beaten it are the missing
+		// ones, so the number is not a measurement.
+		peakUnreliable?: boolean | null;
 		peakY?: number | null;
 		peakMag?: number | null;
 		travelLimited?: boolean | null;
@@ -40,6 +44,11 @@
 		rowsIngested?: number | null;
 		rowsReported?: number | null;
 		goodReported?: number | null;
+		// Coverage. null = the device never declared its totals (older sessions),
+		// which is NOT the same as a complete run.
+		rowsMissing?: number | null;
+		coverage?: number | null;
+		coverageComplete?: boolean | null;
 		durationMs?: number | null;
 	}
 
@@ -110,8 +119,40 @@
 		{ label: 'Rows ingested', value: fmtCount(magResults?.rowsIngested) },
 		{ label: 'Rows reported', value: fmtCount(magResults?.rowsReported) },
 		{ label: 'Good reported', value: fmtCount(magResults?.goodReported) },
+		{ label: 'Coverage', value: fmtCoverage(magResults?.coverage) },
 		{ label: 'Duration', value: fmtDuration(magResults?.durationMs) }
 	]);
+
+	function fmtCoverage(c: number | null | undefined): string {
+		if (typeof c !== 'number' || !Number.isFinite(c)) return '-';
+		return (c * 100).toFixed(1) + '%';
+	}
+
+	// A run that lost rows. Explicitly `=== false`: null means the device never
+	// declared its totals (older sessions), which is not the same as complete and
+	// must not be rendered as an all-clear.
+	const coverageIncomplete = $derived(magResults?.coverageComplete === false);
+
+	// Channels whose maximum sits on the edge of the data that SURVIVED. The
+	// samples that would have beaten it are the ones that went missing, so the
+	// number is not a measurement and is not presented as one.
+	const unreliablePeaks = $derived.by(() => {
+		const out: { well: string; ch: string; peakY: number | null }[] = [];
+		const wells = (magResults?.wells ?? {}) as Record<string, Record<string, any>>;
+		for (const [well, chs] of Object.entries(wells)) {
+			for (const [ch, p] of Object.entries(chs ?? {})) {
+				if (p?.peakUnreliable) out.push({ well, ch, peakY: p?.peakY ?? null });
+			}
+		}
+		return out.sort((a, b) => Number(a.well) - Number(b.well) || a.ch.localeCompare(b.ch));
+	});
+
+	// Where the data actually stops being trustworthy.
+	const cutoffY = $derived(
+		unreliablePeaks.length
+			? unreliablePeaks.map((u) => u.peakY).filter((y): y is number => typeof y === 'number').sort((a, b) => a - b)[0] ?? null
+			: null
+	);
 
 	const hasGrid = $derived(wellNumbers.length > 0 && channels.length > 0);
 </script>
@@ -198,6 +239,44 @@
 		>
 			Export this sweep (.xlsx)
 		</a>
+
+		{#if coverageIncomplete}
+			<section
+				class="rounded-lg border p-4 text-sm"
+				style="border-color: var(--color-tron-red, #f87171); color: var(--color-tron-red, #f87171);"
+			>
+				<strong class="block text-base">
+					Incomplete sweep - {fmtCount(magResults?.rowsMissing)} of {fmtCount(
+						magResults?.rowsReported
+					)} rows never arrived ({fmtCoverage(magResults?.coverage)} coverage).
+				</strong>
+				<p class="mt-2 text-slate-300">
+					The magnetometer stopped answering partway through the run. A failed read is
+					recorded as NOCHAR and carries no numbers, so those samples are ABSENT here
+					rather than zero - which is why an incomplete run otherwise looks identical to
+					a complete, shorter one.
+					{#if cutoffY !== null}
+						The surviving data stops at y = {cutoffY} um.
+					{/if}
+				</p>
+				{#if unreliablePeaks.length}
+					<p class="mt-2 text-slate-300">
+						These peaks are <strong>not measurements</strong> and must not be read as
+						field strength - each is only the highest sample that survived before the
+						link failed, and the samples that would have beaten it are the missing ones:
+					</p>
+					<ul class="mt-1 list-disc pl-5 text-slate-300">
+						{#each unreliablePeaks as u (u.well + u.ch)}
+							<li>Well {u.well}, channel {u.ch}{#if u.peakY !== null} - reported peak at y = {u.peakY} um, the edge of surviving data{/if}</li>
+						{/each}
+					</ul>
+				{/if}
+				<p class="mt-2 text-slate-300">
+					The wells that are not listed peaked inside the good range and are fine. Re-run
+					the sweep once the BLE link is solid to recover the rest.
+				</p>
+			</section>
+		{/if}
 
 		{#if !hasGrid}
 			<p class="rounded-lg border border-slate-700/60 bg-slate-900/40 p-6 text-sm text-slate-400">
