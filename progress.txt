@@ -15870,3 +15870,12 @@ Check (svelte-check direct; svelte-kit sync still cannot run — rollup arm64 na
 missing): 14 errors / 431 warnings. 12 are the documented baseline; the other 2 are
 `wentOn` in buckets/[bucketId]/+page.svelte from the other session's uncommitted edits, not
 from this change. Both files touched here: 0 errors.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-q6w3ut7o1-brevitest.vercel.app
+  (brevitest scope; cookie-session gated, 302 to /login)
+Source: branch feat/bucket-system @ commit b741ba62
+Retrieve this exact code: git checkout feat/bucket-system at commit b741ba62
+  (or: git log feat/bucket-system --oneline to find it if the branch has since moved on)
+What this deployment is for: the leftover panel's "Where does this cart belong?" search —
+  open an Available bucket → Report leftover carts, scan a cart above Merge / Discard, and the
+  line should name the open pass it is a member of (membership-first cartStatusLine()).
