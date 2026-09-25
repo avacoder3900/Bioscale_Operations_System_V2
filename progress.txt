@@ -16064,3 +16064,12 @@ links to the board); removed the top-row stat (row is 5 tiles now) and the Pipel
 Files: src/routes/manufacturing/cart-mfg/+page.svelte, BUCKET-SYSTEM_PLAN.md.
 Check (svelte-check direct): 12 errors / 431 warnings — baseline (the other session's five
 thermoseal errors from the previous entry are gone from the tree).
+
+Deployment: preview — https://bioscale-operations-system-mongodb-hraj2rm8v-brevitest.vercel.app
+  (brevitest scope; cookie-session gated, 302 to /login)
+Source: branch feat/bucket-system @ commit d74a85b2
+Retrieve this exact code: git checkout feat/bucket-system at commit d74a85b2
+  (or: git log feat/bucket-system --oneline to find it if the branch has since moved on)
+What this deployment is for: the cart-mfg dashboard with a single Backed card (Production
+  Buckets strip only). Smoke: /login 200; /manufacturing/cart-mfg 302 to /login as expected.
+Build status: success (GitHub deployment 6666318730, both projects).
