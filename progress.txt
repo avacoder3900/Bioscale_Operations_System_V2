@@ -15804,3 +15804,37 @@ Build status: success.
 
 PR #54 remains open and mergeable/clean. The merge call is still refused by the harness
 permission classifier ([Merge Without Review]) — it needs the user's click or an allow rule.
+
+================================================================================
+2026-09-25 — feat/bucket-system — PR #54 conflict cleared (progress.txt append-vs-append)
+================================================================================
+User: GitHub reported merge conflicts on PR #54. master had moved two commits past the
+branch's last master merge (4bac0c08): 49d758f6 (countdown + progress bar on the running
+magnetometer sweep) and 8e3dd077 (its log entry). Those two commits touch exactly two files,
+and only progress.txt collided — both sides append at the same offset (after the base file's
+line 14220) with zero deletions on either side, master adding 65 lines and this branch 1519,
+so git could not choose an order. Nothing was actually in contention.
+Resolved in 6fef266e by keeping both, master's entry first (the convention 5a01239f set), plus
+the ==== separator line that was missing above the bucket block so both entries are well
+formed. Verified: no conflict markers left, both sides' content present, final length exactly
+base + master's 65 + the separator + the branch's 1519.
+src/routes/validation/magnetometer/run/+page.svelte merged clean — this branch never touches
+it.
+Check (svelte-check direct): 12 errors / 441 warnings — the documented baseline, none in any
+bucket file. `svelte-kit sync` and `vite build` still cannot run here (portable Node in Temp is
+the arm64 build, node_modules carries @rollup/rollup-win32-x64-msvc, so rollup will not load);
+svelte-check does not need rollup and this merge added no routes, so the generated types were
+already current.
+PR #54 head is now 6fef266e and GitHub reported mergeable again. Still open, still needing the
+user's Merge click — and still gated on the raw -> barcoded Atlas migration
+(scripts/migrate-bucket-raw-to-barcoded.ts --plan, then --apply), which has never been run.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-7ugq3eent-brevitest.vercel.app
+  (brevitest scope; cookie-session gated, 302 to /login)
+Source: branch feat/bucket-system @ commit 6fef266e
+Retrieve this exact code: git checkout feat/bucket-system at commit 6fef266e
+  (or: git log feat/bucket-system --oneline to find it if the branch has since moved on)
+What this deployment is for: the conflict-free PR #54 head — the bucket system plus master's
+  sweep countdown. Smoke: /login 200; buckets, buckets/new, wi-01 and validation/magnetometer/
+  run all 302 to /login as expected.
+Build status: success (GitHub deployment 6664045320, state success).
