@@ -15917,3 +15917,11 @@ logged 12 are "Cannot find module" from a junctioned node_modules that predates 
 NOT DONE / needs the user: Vercel Preview env OT2_TAILNET_ROBOT_IDS=b14 (Production stays unset);
 set B14's Connection on the edit page; hardware test on a real run; tailnet ACL (TAILNET-3 S4) —
 until then any tailnet device can reach B14's unauthenticated API.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-puiscpnib.vercel.app
+Source: branch feat/ot2-tailnet-direct @ commit 34c6c58d7
+Retrieve this exact code: git checkout feat/ot2-tailnet-direct at commit 34c6c58d7
+  (or: git log feat/ot2-tailnet-direct --oneline to find it if the branch has since moved on)
+What this deployment is for: OT2-TAILNET-4 B14 pilot — inert until Vercel Preview env
+  OT2_TAILNET_ROBOT_IDS=b14 is set (+ redeploy) and B14's Connection is set to Tailnet on the edit
+  page. Smoke: /opentrons/connectivity + the new API routes answer 302 unauthenticated (no 500s).
