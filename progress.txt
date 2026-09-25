@@ -16586,3 +16586,25 @@ What this deployment is for: sonic upload should now reach R2 despite the malfor
   (account ID recovered by r2-account.ts). GitHub deployment 6670725299.
   Smoke: /login 200; /validation/sonic 302 (auth redirect expected). An actual upload needs a login,
   so the user tests that; if it still fails, the banner names the values the resolver saw.
+
+================================================================================
+2026-09-25 — feat/bucket-system — sonic upload: go through the Cloudflare Worker, S3 creds are wrong too
+================================================================================
+With the account ID recovered (ab2530e8) the TLS handshake now succeeds and R2 itself answers —
+with HTTP 400 "Credential access key has length 24, should be 32". R2 access key IDs are 32 hex;
+the deployed R2_ACCESS_KEY_ID is something else (24 chars — likely a wrong paste). No code can
+recover a credential, but the S3 path is not the only way in: the CV capture flow stores photos
+in production through the Cloudflare Worker (R2_WORKER_URL + X-Upload-Secret; native R2 binding,
+no S3 credentials), and that works today.
+
+src/routes/validation/sonic/+page.server.ts:
+- storeRecording(): if R2_WORKER_URL is set, uploadViaWorker() first; on failure (or when the
+  Worker is not configured) fall back to the SDK uploadFile(). Both failures are joined in the
+  banner ("worker: …; S3: …") so the next diagnosis is one screenshot.
+- recordingUrl(): Worker /file/<key> URL when R2_WORKER_URL is set (same as CV photos),
+  otherwise the presigned S3 URL (which the bad access key would also break).
+- The 80 MB MAX_BYTES / 4.5 MB Vercel body cap situation is unchanged (see the 4.5 MB entry).
+Caveat: R2_WORKER_URL / R2_UPLOAD_SECRET are Production-scoped in Vercel (see the "VERCEL
+PREVIEW ENV" note above, ~line 2152), so a branch preview cannot exercise the Worker path — it
+falls back to S3 and shows the same access-key error. The real test is production (master).
+svelte-check: 14 errors — baseline. Left alone: +page.svelte (another session's uncommitted edits).
