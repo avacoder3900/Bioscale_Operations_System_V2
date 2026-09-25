@@ -93,10 +93,9 @@
 	let cartFindBusy = $state(false);
 	let cartFindLine = $state('');
 	let cartFindOk = $state(true);
-	async function findCart() {
-		const code = cartFind.trim();
-		if (!code || cartFindBusy) return;
-		cartFindBusy = true;
+	// One read-only lookup, shared by the board box and the leftover panel's
+	// "where does it belong?" search: scan a cart, get one line back.
+	async function lookupCart(code: string): Promise<{ ok: boolean; line: string }> {
 		try {
 			const fd = new FormData();
 			fd.set('barcode', code);
@@ -104,15 +103,46 @@
 			const result = deserialize(await res.text());
 			if (result.type === 'success') {
 				const r = (result.data as any)?.cartLookup;
-				cartFindOk = !!r?.found;
-				cartFindLine = r?.line ?? 'No answer from the server.';
-			} else if (result.type === 'failure') { cartFindOk = false; cartFindLine = (result.data as any)?.cartLookup?.error ?? `Error ${result.status}`; }
-			else if (result.type === 'error') { cartFindOk = false; cartFindLine = result.error?.message ?? 'Lookup failed'; }
+				return { ok: !!r?.found, line: r?.line ?? 'No answer from the server.' };
+			}
+			if (result.type === 'failure') return { ok: false, line: (result.data as any)?.cartLookup?.error ?? `Error ${result.status}` };
+			if (result.type === 'error') return { ok: false, line: result.error?.message ?? 'Lookup failed' };
+			return { ok: false, line: 'Lookup failed' };
 		} catch (e) {
-			cartFindOk = false;
-			cartFindLine = e instanceof Error ? e.message : 'Lookup failed';
+			return { ok: false, line: e instanceof Error ? e.message : 'Lookup failed' };
+		}
+	}
+	async function findCart() {
+		const code = cartFind.trim();
+		if (!code || cartFindBusy) return;
+		cartFindBusy = true;
+		try {
+			const r = await lookupCart(code);
+			cartFindOk = r.ok;
+			cartFindLine = r.line;
 		} finally {
 			cartFindBusy = false;
+		}
+	}
+
+	// Leftover panel search (user, 2026-09-25): a cart found in an empty tub —
+	// where does it belong? Same lookup, its own box so it sits next to the
+	// Merge / Discard choice it informs. Read-only; adds nothing to the list.
+	let whereFind = $state('');
+	let whereBusy = $state(false);
+	let whereLine = $state('');
+	let whereOk = $state(true);
+	async function findWhere() {
+		const code = whereFind.trim();
+		if (!code || whereBusy) return;
+		whereBusy = true;
+		try {
+			const r = await lookupCart(code);
+			whereOk = r.ok;
+			whereLine = r.line;
+		} finally {
+			whereBusy = false;
+			setTimeout(() => (document.getElementById('whereFind') as HTMLInputElement | null)?.select(), 30);
 		}
 	}
 
@@ -277,7 +307,7 @@
 	function shortQr(barcode: string | null): string | null {
 		return barcode ? (barcode.length > 12 ? `${barcode.slice(0, 8)}…` : barcode) : null;
 	}
-	function resetLists() { discardList = []; scrapList = []; residualList = []; listInput = ''; residualDisposition = ''; residualDest = ''; cartScanError = ''; cartScanOk = ''; scanFailures = []; }
+	function resetLists() { discardList = []; scrapList = []; residualList = []; listInput = ''; residualDisposition = ''; residualDest = ''; cartScanError = ''; cartScanOk = ''; scanFailures = []; whereFind = ''; whereLine = ''; whereOk = true; }
 
 	function openCycle(c: BoardCycle) { panel = { kind: 'cycle', cycleId: c.cycleId, mode: 'view' }; resetLists(); if (c.stage === 'barcoded') focusCartScan(); }
 	function setMode(mode: CycleMode) {
@@ -1162,6 +1192,24 @@
 						<div class="font-mono text-lg text-[var(--color-tron-text)]">{shortQr(b.barcode) ?? b.bucketId}</div>
 						<div class="text-xs text-[var(--color-tron-text-secondary)]">leftover carts found in this bucket</div>
 					</div>
+
+					<!-- 0. Where does this cart belong? (user, 2026-09-25) Scan a leftover and
+					     get one line back: the open pass it is a member of, or that it is on
+					     none. Read-only — it does not add the cart to the list below. -->
+					<div class="mt-3 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-2">
+						<label for="whereFind" class="block text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Where does this cart belong?</label>
+						<div class="mt-1 flex gap-2">
+							<input id="whereFind" type="text" bind:value={whereFind} autocomplete="off" disabled={whereBusy}
+								placeholder="scan a cart to locate it…"
+								onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); findWhere(); } }} class={scanCls} />
+							<button type="button" onclick={findWhere} disabled={whereBusy || !whereFind.trim()}
+								class="shrink-0 rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 px-3 text-xs font-medium text-[var(--color-tron-cyan)] disabled:opacity-50">{whereBusy ? '…' : 'Find'}</button>
+						</div>
+						{#if whereLine}
+							<p class="mt-1 text-xs {whereOk ? 'text-[var(--color-tron-text)]' : 'text-[var(--color-tron-yellow)]'}">{whereLine}</p>
+						{/if}
+					</div>
+
 					<form method="POST" action="?/residual" use:enhance={enhanceBusy} class="mt-3 space-y-3">
 						<input type="hidden" name="bucketId" value={b.bucketId} />
 						<input type="hidden" name="barcodes" value={residualList.join(',')} />

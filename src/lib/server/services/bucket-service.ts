@@ -362,12 +362,20 @@ export async function cartStatusLine(code: string): Promise<CartStatusLine> {
 		: status || 'unknown';
 
 	const parts: string[] = [`${cart._id} · ${label}`];
-	if (cart.bucket?.cycleId) {
+	// Where it belongs = the open pass whose member list names it (2026-09-25, for
+	// the leftover panel's search). Membership is the authority, not the cart's own
+	// `bucket.cycleId`, which an audit "take off pass" or a merge can leave stale.
+	const home = await BucketCycle.findOne({ status: 'open', cartridgeIds: cart._id }).select('bucketId cycleNumber stage').lean() as any;
+	if (home) {
+		parts.push(`belongs in bucket ${home.bucketId} #${home.cycleNumber} (${STAGE_LABELS[home.stage as BucketStage] ?? home.stage})`);
+	} else if (cart.bucket?.cycleId) {
 		const cycle = await BucketCycle.findById(cart.bucket.cycleId).select('bucketId cycleNumber stage status').lean() as any;
 		if (cycle) {
 			const where = `bucket ${cycle.bucketId} #${cycle.cycleNumber}`;
-			parts.push(cycle.status === 'open' ? `in ${where} (${STAGE_LABELS[cycle.stage as BucketStage] ?? cycle.stage})` : `last seen in ${where}, pass closed`);
+			parts.push(cycle.status === 'open' ? `on no open pass — last in ${where}, taken off` : `last seen in ${where}, pass closed`);
 		}
+	} else if (isBucketStage(status)) {
+		parts.push('on no open pass');
 	}
 	if (status === IN_OVEN_STATUS && cart.backing?.parentLotRecordId) parts.push(`WI-01 lot ${cart.backing.parentLotRecordId}`);
 	if (cart.statusUpdatedOn) parts.push(`since ${new Date(cart.statusUpdatedOn).toLocaleString()}`);

@@ -15838,3 +15838,35 @@ What this deployment is for: the conflict-free PR #54 head — the bucket system
   sweep countdown. Smoke: /login 200; buckets, buckets/new, wi-01 and validation/magnetometer/
   run all 302 to /login as expected.
 Build status: success (GitHub deployment 6664045320, state success).
+================================================================================
+2026-09-25 — feat/bucket-system — Leftover panel: "Where does this cart belong?" search
+================================================================================
+User: "for the left over card, i want to have a simple search function to locate where the card
+belongs." The leftover (residual) panel asked Merge or Discard straight away, and the only way
+to learn where a stray cart came from was the Find-a-cart box at the bottom of the board, out
+of sight from the rail.
+Built: a small read-only search box at the top of the leftover panel, above the Merge / Discard
+choice. Scan (or type) one cart, press Enter or Find, and one line comes back:
+"<cart> · <stage> · belongs in bucket BKT-… #n (<stage>) · since <time>", or "on no open pass —
+last in bucket BKT-… #n, taken off" / "last seen in bucket …, pass closed" / "on no open pass".
+It reuses ?/cartLookup → cartStatusLine(); nothing is written and the cart is not added to the
+merge/discard scan list — it only tells the operator which choice fits. The input re-selects
+itself after each answer so a gun can scan the next cart straight away.
+cartStatusLine() itself now answers from open-pass membership first (BucketCycle.findOne
+{status:'open', cartridgeIds}) and only falls back to the cart's own bucket.cycleId for
+"last seen". Root cause for that change: an audit "Take off pass" or a merge_out leaves
+bucket.cycleId pointing at a pass the cart is no longer a member of, so the old line could
+name a bucket the cart does not belong to.
+Files: src/lib/server/services/bucket-service.ts (cartStatusLine), src/routes/manufacturing/
+cart-mfg/buckets/+page.svelte (lookupCart() shared helper, findWhere + whereFind/whereLine
+state, resetLists clears it, the box in the residual panel), BUCKET-SYSTEM_PLAN.md (§7, §9.1,
+changelog row).
+Staged for commit as only these hunks (blob written straight into the index from HEAD +
+this change): another session has ~17 files of uncommitted work in this checkout (backing
+stage, wi-01 route deletion, IN_OVEN→BACKED rename) that shares both of these files and is
+not part of this change. Commit + push are left to the user: no git identity is configured in
+this shell and the session was not allowed to pass one inline.
+Check (svelte-check direct; svelte-kit sync still cannot run — rollup arm64 native module
+missing): 14 errors / 431 warnings. 12 are the documented baseline; the other 2 are
+`wentOn` in buckets/[bucketId]/+page.svelte from the other session's uncommitted edits, not
+from this change. Both files touched here: 0 errors.

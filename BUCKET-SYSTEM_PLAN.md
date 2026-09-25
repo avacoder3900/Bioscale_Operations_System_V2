@@ -313,6 +313,15 @@ on an Available bucket, the panel asks **Merge or Discard** first:
 - **Discard** — **bulk QR scan** of every cart being discarded + journal (required); shell +
   label scrapped from inventory (§8).
 
+**Where does this cart belong? (user, 2026-09-25).** Above the Merge / Discard choice the panel
+carries a small search box: scan (or type) one leftover cart and get one line back — the open
+pass it is still a member of (`belongs in bucket BKT-… #n (stage)`), or that it is on no open
+pass (with the pass it was last in, if any). Read-only, same `?/cartLookup` → `cartStatusLine()`
+as the board's *Find a cart* box (§9.1); it does not add the cart to the scan list, it only tells
+the operator which choice fits. `cartStatusLine()` now answers from open-pass **membership**
+(`BucketCycle.cartridgeIds`) first and falls back to the cart's own `bucket.cycleId` for
+"last seen", since an audit *Take off pass* or a merge can leave that field stale.
+
 `lookupResidualCart()` (per-scan eligibility preview) remains in the service but the board no
 longer calls it — validation happens on submit.
 
@@ -347,9 +356,11 @@ mis-scan, advance with discards, scrap by scan, residual by scan, retire) → ex
 who, discards, thermoseal note) → **bucket log** (every bucket incl. retired). `?stage=` focuses
 a column; `?q=` resolves a scan (bucket QR, BKT id, or cartridge id → its bucket).
 Below the board + rail: **Find a cart** — scan a cart QR, get one line back (cart id · status
-label · its bucket and pass, the WI-01 lot when it is In Oven, and when the status last
-changed). Read-only, `?/cartLookup` → `cartStatusLine()`; a bucket sticker scanned there is
-named as a bucket rather than reported missing (user, 2026-09-23).
+label · the open pass it **belongs in** by membership, or "on no open pass" + where it was last
+seen, the WI-01 lot when it is In Oven, and when the status last changed). Read-only,
+`?/cartLookup` → `cartStatusLine()`; a bucket sticker scanned there is named as a bucket
+rather than reported missing (user, 2026-09-23). The same lookup sits inside the leftover panel
+as *Where does this cart belong?* (§7, 2026-09-25).
 
 ### 9.2 `/manufacturing/cart-mfg/buckets/[bucketId]`
 
@@ -474,6 +485,7 @@ per-scan lookup only needs `manufacturing:read`.
 | `f21ed50a` | Audit: missing members listed per cart with Keep / Write off / Take off pass, + Last audit summary (§9.8) |
 | `6baff520` | Audit: only the cart just scanned is displayed; strays needing a decision stay listed (§9.8) |
 | _(this change)_ | **Scan-in lag audit + rebuild** (§6.2.1): queue + membership overlay instead of `invalidateAll()` per cart, input never disabled, client-side merged-read split, batched guards/writes in `scanCartIn`, `resolveBucketId` one query; **mis-scan button fixed** (it had never worked — sacred delete hook); `recordTransaction` now `$inc` (lost-update fix); `createdAt` + `{lotId,transactionType,quantity}` indexes; `checkFloor` throttled on board load; supply check coalesced |
+| _(this change)_ | **Leftover panel: *Where does this cart belong?*** search (§7) — scan one leftover, one line back naming the open pass it is a member of; `cartStatusLine()` answers from `BucketCycle.cartridgeIds` membership first (§9.1) |
 | `5a01239f` | **`raw` → `barcoded` rename** (§2): stage key, labels, `CartridgeRecord.status`, `LifecycleStage`, pipeline `bucket_barcoded`; old `raw` kept in both enums for historical rows; `scripts/migrate-bucket-raw-to-barcoded.ts` (`--plan` / `--apply`, not yet run). Code swept into the ship-build merge commit; this doc row is the follow-up. |
 
 `npm run check` after v2: **12 errors / 438 warnings** — the same 12 pre-existing (`r2.ts`,
