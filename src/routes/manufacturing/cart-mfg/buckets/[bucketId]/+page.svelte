@@ -129,7 +129,7 @@
 							<span class="font-mono text-base text-[var(--color-tron-text)]">{data.bucket.bucketId} <span class="text-[var(--color-tron-text-secondary)]">#{c.cycleNumber}</span></span>
 							<span class="rounded border px-2 py-0.5 text-[10px] uppercase tracking-wider {c.status === 'open' ? 'border-[var(--color-tron-cyan)]/40 text-[var(--color-tron-cyan)]' : c.status === 'scrapped' ? 'border-red-500/40 text-red-300' : c.status === 'voided' ? 'border-[var(--color-tron-yellow)]/50 text-[var(--color-tron-yellow)]' : 'border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)]'}">{c.status === 'open' ? c.stageLabel : c.status}</span>
 							<span class="text-sm text-[var(--color-tron-text)]">{c.status === 'open' ? c.quantity : c.openedQty} <span class="text-xs text-[var(--color-tron-text-secondary)]">{c.status === 'open' ? 'carts in bucket' : 'carts when it left Barcoded'}</span></span>
-							{#if c.cartridges.inOven > 0}<span class="text-xs text-[var(--color-tron-text-secondary)]">→ {c.cartridges.inOven} into the oven</span>{/if}
+							{#if c.cartridges.wentOn > 0}<span class="text-xs text-[var(--color-tron-text-secondary)]">→ {c.cartridges.wentOn} on to wax filling</span>{/if}
 							{#if c.closedWithResidual}<span class="rounded bg-[var(--color-tron-yellow)]/20 px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-[var(--color-tron-yellow)]">residual found</span>{/if}
 							{#if c.discrepancies.some((d: any) => d.type === 'overrun')}<span class="rounded bg-[var(--color-tron-yellow)]/20 px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-[var(--color-tron-yellow)]">overrun</span>{/if}
 							<span class="ml-auto text-xs text-[var(--color-tron-text-secondary)]">{fmt(c.openedAt)}{c.closedAt ? ` → ${fmt(c.closedAt)}` : ''}</span>
@@ -178,7 +178,7 @@
 
 								{#if c.lots.length > 0}
 									<div>
-										<p class="mb-1 text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">WI-01 batches</p>
+										<p class="mb-1 text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">WI-01 batches (legacy — page removed 2026-09-25)</p>
 										<ul class="space-y-0.5">
 											{#each c.lots as l (l.lotId)}
 												<li><a href="/manufacturing/cart-mfg/lots/{l.lotId}" class="font-mono text-[var(--color-tron-cyan)] hover:underline">{l.outputLotNumber ?? l.lotId}</a> <span class="text-[var(--color-tron-text-secondary)]">· {l.status ?? '—'}{l.quantityProduced != null ? ` · ${l.quantityProduced} produced` : ''}</span></li>

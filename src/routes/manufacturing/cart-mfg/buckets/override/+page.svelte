@@ -36,7 +36,7 @@
 
 	const inputCls = 'mt-1 w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-3 py-2 text-sm text-[var(--color-tron-text)] focus:border-[var(--color-tron-cyan)] focus:outline-none';
 	const tint: Record<string, string> = {
-		barcoded: 'border-slate-500/40 text-slate-300', unpressed: 'border-sky-500/40 text-sky-300', pressed: 'border-amber-500/40 text-amber-300', in_oven: 'border-purple-500/40 text-purple-300'
+		barcoded: 'border-slate-500/40 text-slate-300', unpressed: 'border-sky-500/40 text-sky-300', pressed: 'border-amber-500/40 text-amber-300', backing: 'border-purple-500/40 text-purple-300'
 	};
 </script>
 
@@ -55,7 +55,7 @@
 	</div>
 
 	<div class="rounded-lg border border-red-500/50 bg-red-900/15 px-4 py-2.5 text-sm text-red-200" role="note">
-		<strong>Bypasses the normal flow.</strong> No thermoseal is consumed, no "any carts discarded?" is asked, the phase order is not enforced (a bucket can go backwards), and <em>In Oven</em> skips the WI-01 session and its lot. Nothing is debited or credited. Every move is written to the bucket ledger, each cart's notes and the audit log as <span class="font-mono">MASTER OVERRIDE</span>. Admin only.
+		<strong>Bypasses the normal flow.</strong> No thermoseal is consumed, no "any carts discarded?" is asked, and the phase order is not enforced (a bucket can go backwards). Nothing is debited or credited. Every move is written to the bucket ledger, each cart's notes and the audit log as <span class="font-mono">MASTER OVERRIDE</span>. Admin only.
 	</div>
 
 	{#if !data.canOverride}
@@ -101,7 +101,7 @@
 					</label>
 				{/each}
 			</div>
-			{#if target === 'in_oven'}<p class="mt-1 text-[10px] text-[var(--color-tron-text-secondary)]">All carts become In Oven (status backing) with no WI-01 lot; the pass closes.</p>{/if}
+			{#if target === 'backing'}<p class="mt-1 text-[10px] text-[var(--color-tron-text-secondary)]">All carts become Backed (status backing) and stay in the bucket; wax filling draws them from there.</p>{/if}
 		</div>
 
 		<label class="block">

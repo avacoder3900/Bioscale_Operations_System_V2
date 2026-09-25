@@ -29,7 +29,7 @@
 	function statusClass(status: string): string {
 		const s = String(status).toLowerCase();
 		if (s === 'ready' || s === 'completed' || s === 'stored' || s === 'cooling') return 'text-tron-green';
-		if (s === 'in_oven' || s === 'running' || s === 'sealed') return 'text-tron-cyan';
+		if (s === 'in_oven' || s === 'awaiting oven' || s === 'running' || s === 'sealed') return 'text-tron-cyan';
 		if (s === 'consumed') return 'text-tron-text-secondary';
 		if (s === 'aborted' || s === 'cancelled' || s === 'voided' || s === 'rejected') return 'text-tron-red';
 		if (s === 'setup' || s === 'loading' || s === 'awaiting removal' || s === 'qc' || s === 'storage') return 'text-tron-yellow';

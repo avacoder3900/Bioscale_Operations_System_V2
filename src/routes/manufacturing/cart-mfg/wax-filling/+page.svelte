@@ -65,6 +65,8 @@
 			}[];
 			backedReadyCount: number;
 			backedTotalCount: number;
+			backedBuckets: { bucketId: string; cycleNumber: number; count: number; backedAt: string | null }[];
+			backedLabel: string;
 			rejectionCodes: RejectionReasonCode[];
 			fridges: {
 				id: string;
@@ -135,9 +137,9 @@
 	let showCancelModal = $state(false);
 	let cancelReason = $state('');
 
-	// Test Mode removed from the UI — cartridges always come from real WI-01
-	// backing now. Kept as a constant false so the loadDeck call sites compile
-	// without synthesizing test cartridges.
+	// Test Mode removed from the UI — cartridges always come from a real
+	// "Backed, awaiting oven" production bucket now. Kept as a constant false so
+	// the loadDeck call sites compile without synthesizing test cartridges.
 	const testMode = false;
 
 	// WAX-FLOW-STREAMLINE: the cartridge-layout grid (DeckLoadingGrid) is the single
@@ -1324,6 +1326,24 @@
 						onSubmitIntercept={handleScanAndStart}
 					/>
 				</div>
+
+				<!-- Which tubs are waiting (BUCKET-SYSTEM_PLAN v2 §6.4, 2026-09-25): the
+				     operator puts a backed bucket in the oven, then scans its carts onto the
+				     deck; that deck load draws them out of the bucket. No oven is chosen and
+				     nothing is time-gated. -->
+				{#if !isPreviewOrPast}
+					<div class="rounded-lg border border-[var(--color-tron-purple)]/40 bg-[var(--color-tron-purple)]/5 px-3 py-2 text-xs text-[var(--color-tron-text-secondary)]">
+						<span class="font-semibold uppercase tracking-wider text-[var(--color-tron-purple)]">{data.backedLabel}</span>
+						{#if data.backedBuckets.length === 0}
+							<span class="ml-2">no buckets waiting{#if data.backedTotalCount > 0} · {data.backedTotalCount} loose backed cart{data.backedTotalCount === 1 ? '' : 's'} (not in a bucket) can still be scanned{/if}.</span>
+						{:else}
+							<span class="ml-2">
+								{#each data.backedBuckets as b, i (b.bucketId + b.cycleNumber)}{#if i > 0}, {/if}<a href="/manufacturing/cart-mfg/buckets/{b.bucketId}" class="font-mono text-[var(--color-tron-text)] hover:text-[var(--color-tron-cyan)]">{b.bucketId}</a> ({b.count}){/each}
+								— put the tub in the oven, then scan its carts onto the deck.
+							</span>
+						{/if}
+					</div>
+				{/if}
 
 				<details bind:open={manualFallbackOpen} class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)]">
 					<summary class="cursor-pointer px-4 py-3 text-sm font-medium text-[var(--color-tron-text-secondary)] transition-colors hover:text-[var(--color-tron-text)]">

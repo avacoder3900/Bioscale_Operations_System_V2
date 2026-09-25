@@ -23,9 +23,11 @@ import type { PageServerLoad } from './$types';
 
 export const config = { maxDuration: 60 };
 
-// The three bucket_* stages are the production-bucket funnel (BUCKET-SYSTEM_PLAN
-// v2 §9): cartridges are born at Barcoded when scanned into a bucket and move with
-// it, then WI-01 draws them into 'backing' ("In Oven").
+// The bucket_* stages are the production-bucket funnel (BUCKET-SYSTEM_PLAN v2 §9):
+// cartridges are born at Barcoded when scanned into a bucket and move with it
+// through Pressed to 'backing' ("Backed, awaiting oven"), where the tub waits for
+// the wax-fill operator. The 'backing' view lists those buckets plus any loose
+// backed carts (legacy WI-01 draws) and legacy BackingLot aggregates.
 const STAGE_KEYS = ['bucket_barcoded', 'bucket_unpressed', 'bucket_pressed', 'backing', 'wax_fill', 'cooling', 'reagent', 'seal', 'store'] as const;
 type StageKey = (typeof STAGE_KEYS)[number];
 
@@ -77,19 +79,19 @@ const STAGE_META: Record<StageKey, StageMeta> = {
 	},
 	bucket_pressed: {
 		key: 'bucket_pressed', label: 'Pressed', color: 'tron-yellow',
-		description: 'Buckets off the press, ready for WI-01 to draw into the oven.',
+		description: 'Buckets off the press. Advance to "Backed, awaiting oven" on the bucket board.',
 		headers: bucketHeaders
 	},
 	backing: {
-		key: 'backing', label: 'In Oven', color: 'tron-purple',
-		description: 'Cartridges drawn into the oven at WI-01 (status backing), grouped per WI-01 batch. No oven or cure time is tracked — every cartridge here is ready for wax filling. Legacy backing-lot buckets are shown read-only until drained.',
+		key: 'backing', label: 'Backed, awaiting oven', color: 'tron-purple',
+		description: 'Backed buckets waiting for the wax-fill operator to put them in the oven and scan their carts onto a deck (status backing). No oven or cure time is tracked — every cartridge here is ready for wax filling. Loose backed carts (drawn by the old WI-01 page) and legacy backing-lot aggregates are shown until drained.',
 		headers: [
-			{ key: 'id', label: 'Lot' },
+			{ key: 'id', label: 'Bucket / lot' },
 			{ key: 'status', label: 'Status' },
 			{ key: 'count', label: 'Cartridges' },
-			{ key: 'location', label: 'From bucket' },
+			{ key: 'location', label: 'Source' },
 			{ key: 'operator', label: 'Operator' },
-			{ key: 'when', label: 'Latest scan' },
+			{ key: 'when', label: 'Backed at' },
 			{ key: 'elapsed', label: 'Age' }
 		]
 	},
@@ -186,12 +188,14 @@ async function loadBucketStage(stage: BucketStage, now: Date): Promise<PipelineR
 }
 
 async function loadBacking(now: Date, checkedOutIds: string[]): Promise<PipelineRow[]> {
-	// "In Oven" = status 'backing'. Cartridges arrive here from a pressed
-	// production bucket at WI-01; rows group them per WI-01 batch. Backing-oven
-	// tracking and the cure-time gate were removed app-wide (2026-09-23) — no
-	// oven column, no readiness. Legacy BackingLot aggregates are appended
-	// read-only until drained.
-	const [groups, legacyLots] = await Promise.all([
+	// "Backed, awaiting oven" = bucket stage / status 'backing'. Since 2026-09-25 a
+	// backed cart sits in its bucket until wax filling draws it: one row per backed
+	// bucket pass, then loose backed carts (drawn by the old WI-01 page, grouped
+	// per WI-01 batch), then legacy BackingLot aggregates read-only until drained.
+	// Backing-oven tracking and the cure-time gate were removed app-wide
+	// (2026-09-23) — no oven column, no readiness.
+	const [{ cycles }, groups, legacyLots] = await Promise.all([
+		boardData(),
 		CartridgeRecord.aggregate([
 			{ $match: { status: 'backing', _id: { $nin: checkedOutIds } } },
 			{ $group: {
@@ -199,7 +203,8 @@ async function loadBacking(now: Date, checkedOutIds: string[]): Promise<Pipeline
 				count: { $sum: 1 },
 				newest: { $max: '$backing.recordedAt' },
 				buckets: { $addToSet: '$backing.bucketBarcode' },
-				operator: { $last: '$backing.operator.username' }
+				operator: { $last: '$backing.operator.username' },
+				ids: { $push: '$_id' }
 			} },
 			{ $sort: { newest: -1 } }
 		]) as any as Promise<any[]>,
@@ -209,20 +214,38 @@ async function loadBacking(now: Date, checkedOutIds: string[]): Promise<Pipeline
 		}).sort({ createdAt: -1 }).lean() as any as Promise<any[]>
 	]);
 
-	const batchRows: PipelineRow[] = groups.map((g: any) => {
-		const lotId = String(g._id ?? 'unknown');
-		return {
-			id: lotId,
-			idLabel: shortId(lotId, 12),
-			status: 'in_oven',
-			count: g.count ?? 0,
+	const backedCycles = cycles.filter(c => c.stage === 'backing');
+	const inBucket = new Set<string>(backedCycles.flatMap(c => c.cartridgeIds));
+	const bucketRows: PipelineRow[] = backedCycles.map(c => ({
+		id: c.bucketId,
+		idLabel: `${c.bucketId} #${c.cycleNumber}`,
+		status: 'awaiting oven',
+		count: c.quantity,
+		location: c.sourceLots.map(l => `${l.partNumber} ${l.lotId}`).join(' · ') || null,
+		operator: c.openedBy,
+		when: c.stageEnteredAt,
+		elapsedMin: ageMin(c.stageEnteredAt, now),
+		extras: { openedQty: c.openedQty },
+		detailHref: `/manufacturing/cart-mfg/buckets/${encodeURIComponent(c.bucketId)}`
+	}));
+
+	// Loose backed carts: at 'backing' but not a member of any open backed pass.
+	const batchRows: PipelineRow[] = groups.flatMap((g: any) => {
+		const loose = (g.ids as string[]).filter(id => !inBucket.has(id)).length;
+		if (loose === 0) return [];
+		const lotId = g._id ? String(g._id) : null;
+		return [{
+			id: lotId ?? 'loose',
+			idLabel: lotId ? `${shortId(lotId, 12)} (legacy WI-01)` : 'loose (no bucket)',
+			status: 'loose',
+			count: loose,
 			location: (g.buckets ?? []).filter(Boolean).join(', ') || null,
 			operator: g.operator ?? null,
 			when: g.newest ? new Date(g.newest).toISOString() : null,
 			elapsedMin: ageMin(g.newest, now),
 			extras: {},
-			detailHref: `/manufacturing/cart-mfg/lots/${encodeURIComponent(lotId)}`
-		};
+			detailHref: lotId ? `/manufacturing/cart-mfg/lots/${encodeURIComponent(lotId)}` : '/cartridge-admin?stage=backing'
+		}];
 	});
 
 	const legacyRows: PipelineRow[] = legacyLots.map((l: any) => ({
@@ -238,7 +261,7 @@ async function loadBacking(now: Date, checkedOutIds: string[]): Promise<Pipeline
 		detailHref: null
 	}));
 
-	return [...batchRows, ...legacyRows];
+	return [...bucketRows, ...batchRows, ...legacyRows];
 }
 
 async function loadWaxFill(now: Date): Promise<PipelineRow[]> {

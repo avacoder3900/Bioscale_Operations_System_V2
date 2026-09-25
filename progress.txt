@@ -15879,3 +15879,69 @@ Retrieve this exact code: git checkout feat/bucket-system at commit b741ba62
 What this deployment is for: the leftover panel's "Where does this cart belong?" search —
   open an Available bucket → Report leftover carts, scan a cart above Merge / Discard, and the
   line should name the open pass it is a member of (membership-first cartStatusLine()).
+
+================================================================================
+2026-09-25 — feat/bucket-system — WI-01 page removed; buckets end at "Backed, awaiting oven"
+================================================================================
+User: after Pressed, carts should just sit in a "Backed, awaiting oven" category instead of
+going through the WI-01 "Cartridge Back" page (scan bucket → Start session → Start scanning →
+Take all → Finish session → Confirm batch → Done: seven clicks and a LotRecord per batch, all
+to land a cart at status 'backing'). Oven placement and time gating stay disabled — not
+modelled, may return later. On the floor: press → tub waits on the shelf → the wax-fill
+operator puts it in the oven and scans its carts onto the deck.
+
+Built (BUCKET-SYSTEM_PLAN.md §2, §5.2, §6.3, §6.4, §9, §10, §11, §12.4 — same commit):
+- Fourth bucket stage `backing` ("Backed, awaiting oven"): BUCKET_STAGES + STAGE_LABELS in
+  bucket-service.ts, BucketCycle.stage enum. The stage key IS the cart status wax filling
+  already accepts, so the mirror rule (cart status == bucket stage) holds and nothing
+  downstream (wax filling, pipeline, dashboard, cartridge-admin, ask-bims counts) had to learn
+  a new status. IN_OVEN_STATUS/IN_OVEN_LABEL → BACKED_STATUS/BACKED_LABEL/BACKED_STAGE.
+- advanceCycle: Pressed → Backed is a normal advance; it stamps backing.recordedAt/operator/
+  bucketCycleId/bucketBarcode on the members (what WI-01 wrote, minus the lot). At Backed the
+  card shows "Ready for the oven → wax filling" (link) instead of Advance.
+- consumeCarts now requires stage 'backing' and takes waxRunId (ledger relatedId). Its only
+  caller is wax filling's loadDeck: after the existing status validation it groups the scans
+  by open pass and draws them out BEFORE the wax_filling status write, so a bucket refusal
+  leaves the cart untouched. Loose backed carts (not in any open pass — the ~all existing
+  'backing' rows drawn by the old page, override results, returns to a busy tub) load with no
+  bucket write. Last member out → pass consumed, tub auto-released, as before.
+- New returnCarts (bucket-service) + revertToBacked (wax-filling server) for cancel/abort:
+  real carts go back to 'backing' AND back into their pass, reopening a consumed pass at
+  Backed when the tub is still available; if the tub started a newer pass the cart stays loose
+  (warned in the log). The old revert only recognised WI-01 carts (backing.parentLotRecordId)
+  and hard-deleted everything else as a test synthetic — a bucket-born cart would have been
+  DELETED on cancel. Fixed: synthetics are now flagged backing.synthetic at creation, and the
+  revert keeps any cart with a bucket.cycleId or a WI-01 lot.
+- StageCounts.inOven → looseBacked (backing carts minus those in open backed passes); board
+  and cartridge-admin show a "Backed, no bucket" tile only when > 0.
+- Master override: 'in_oven' target removed; Backed is an ordinary target and the pass stays
+  open there (it used to close the pass with no lot). FORCE_TARGETS = BUCKET_STAGES.
+- Wax-filling page: purple line above the deck grid lists the backed buckets (tub id + count)
+  and says "put the tub in the oven, then scan its carts onto the deck". Error text for an
+  unknown/wrong-status scan points at the bucket board instead of WI-01.
+- Pipeline `backing` view: backed bucket passes first (status "awaiting oven", links to the
+  bucket page), then loose carts grouped per legacy WI-01 batch, then legacy BackingLots.
+- Deleted src/routes/manufacturing/cart-mfg/wi-01/ (page + steps editor); Cartridge Back nav
+  entry and its Edit Steps subnav removed from cart-mfg/+layout.svelte; board's "WI-01 →"
+  button → "Wax filling →". Old LotRecords stay readable (lots page; bucket history under
+  "WI-01 batches (legacy)"). cart-mfg dashboard, cart-mfg-dev, cartridge-admin, [bucketId],
+  override, state-change wording updated ("In Oven" → "Backed, awaiting oven").
+- No data migration: existing 'backing' carts are simply loose; existing Pressed passes get
+  one more Advance before wax filling can draw from them.
+
+Files: src/lib/server/services/bucket-service.ts, src/lib/server/db/models/bucket-cycle.ts,
+src/routes/manufacturing/cart-mfg/{+layout.svelte,+page.svelte,buckets/+page.server.ts,
+buckets/+page.svelte,buckets/[bucketId]/+page.server.ts,buckets/[bucketId]/+page.svelte,
+buckets/override/+page.svelte,pipeline/+page.server.ts,pipeline/+page.svelte,
+state-change/+page.server.ts,state-change/+page.svelte,wax-filling/+page.server.ts,
+wax-filling/+page.svelte}, src/routes/manufacturing/cart-mfg-dev/+page.svelte,
+src/routes/cartridge-admin/+page.svelte, BUCKET-SYSTEM_PLAN.md; wi-01/ deleted.
+
+Check (svelte-check direct, portable arm64 Node): 12 errors / 431 warnings — the documented
+baseline, none in any file touched. `svelte-kit sync` still cannot run here (rollup native
+module), so the .svelte-kit/types proxies for the five edited server files were regenerated by
+hand with the same transform and the stale wi-01 proxies deleted; the two phantom errors that
+produced ([bucketId] page seeing the old `inOven` field) went away.
+
+Not exercised on a preview yet (see plan §12.4): Pressed → Backed advance, a deck load from a
+backed bucket closing the pass, and a cancel reopening it.

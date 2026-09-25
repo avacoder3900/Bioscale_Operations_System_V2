@@ -8,7 +8,7 @@
 	interface Props {
 		data: {
 			stages: { key: BucketStage; label: string }[];
-			inOvenLabel: string;
+			backedLabel: string;
 			focusStage: string | null;
 			board: { cycles: BoardCycle[]; available: BoardBucket[]; quarantined: BoardBucket[] };
 			counts: StageCounts;
@@ -187,7 +187,7 @@
 	// What the overlay adds to each stage's cartridge tile, so the count ticks up
 	// with the scans instead of waiting for the next refresh.
 	const stageCartDelta = $derived.by(() => {
-		const d: Record<string, number> = { barcoded: 0, unpressed: 0, pressed: 0 };
+		const d: Record<string, number> = { barcoded: 0, unpressed: 0, pressed: 0, backing: 0 };
 		for (const base of data.board.cycles) {
 			const live = boardCycles.find(c => c.cycleId === base.cycleId);
 			if (live && d[base.stage] !== undefined) d[base.stage] += live.quantity - base.quantity;
@@ -196,7 +196,7 @@
 	});
 
 	const cyclesByStage = $derived.by(() => {
-		const m: Record<BucketStage, BoardCycle[]> = { barcoded: [], unpressed: [], pressed: [] };
+		const m: Record<BucketStage, BoardCycle[]> = { barcoded: [], unpressed: [], pressed: [], backing: [] };
 		for (const c of boardCycles) m[c.stage]?.push(c);
 		return m;
 	});
@@ -352,12 +352,12 @@
 		scanInput = '';
 	}
 
-	function labelFor(stage: string): string { return data.stages.find(s => s.key === stage)?.label ?? (stage === 'backing' ? data.inOvenLabel : stage); }
+	function labelFor(stage: string): string { return data.stages.find(s => s.key === stage)?.label ?? stage; }
 	function nextKey(stage: BucketStage): BucketStage | null {
 		const i = data.stages.findIndex(s => s.key === stage);
 		return i >= 0 && i < data.stages.length - 1 ? data.stages[i + 1].key : null;
 	}
-	function nextLabel(stage: BucketStage): string { const k = nextKey(stage); return k ? labelFor(k) : data.inOvenLabel; }
+	function nextLabel(stage: BucketStage): string { const k = nextKey(stage); return k ? labelFor(k) : 'Wax filling'; }
 	function dwell(iso: string | null): string {
 		if (!iso) return '—';
 		const min = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 60000));
@@ -530,7 +530,7 @@
 			case 'scan_in': return { event: 'Cart scanned in', moved: 'at Barcoded', discarded: false };
 			case 'unscan': return { event: 'Mis-scan removed', moved: 'at Barcoded', discarded: false };
 			case 'advance': return { event: 'Moved', moved: `${from ?? '?'} → ${to ?? '?'}`, discarded: false };
-			case 'consume': return { event: `Drawn by WI-01 → ${data.inOvenLabel}`, moved: `${from ?? 'Pressed'} → ${data.inOvenLabel}`, discarded: false };
+			case 'consume': return { event: 'Drawn to wax filling', moved: `${from ?? data.backedLabel} → wax filling`, discarded: false };
 			case 'scrap': return { event: 'Discarded', moved: `at ${from ?? '?'}`, discarded: true };
 			case 'adjust': return { event: 'Count corrected', moved: `at ${from ?? '?'}`, discarded: false };
 			case 'merge_in': return { event: 'Residual received', moved: `at ${to ?? '?'}`, discarded: false };
@@ -573,7 +573,7 @@
 	const btnPrimary = 'w-full rounded-lg bg-[var(--color-tron-cyan)] py-2.5 text-sm font-bold text-[var(--color-tron-bg-primary)] hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-30';
 	const btnGhost = 'rounded border border-[var(--color-tron-border)] px-3 py-1.5 text-xs text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)] disabled:cursor-not-allowed disabled:opacity-40';
 	const btnDanger = 'w-full rounded-lg border border-red-500/50 bg-red-900/20 py-2.5 text-sm font-semibold text-red-300 hover:bg-red-900/30 disabled:opacity-30';
-	const stageTint: Record<string, string> = { available: 'border-[var(--color-tron-border)]', barcoded: 'border-gray-500/40', unpressed: 'border-blue-500/40', pressed: 'border-amber-500/40', in_oven: 'border-[var(--color-tron-purple)]/50' };
+	const stageTint: Record<string, string> = { available: 'border-[var(--color-tron-border)]', barcoded: 'border-gray-500/40', unpressed: 'border-blue-500/40', pressed: 'border-amber-500/40', backing: 'border-[var(--color-tron-purple)]/50' };
 </script>
 
 {#snippet scanList(target: 'discard' | 'scrap' | 'residual', list: string[], placeholder: string)}
@@ -598,18 +598,18 @@
 	<div class="flex flex-wrap items-end justify-between gap-3">
 		<div>
 			<h1 class="text-2xl font-semibold text-[var(--color-tron-text)]">Production Buckets</h1>
-			<p class="text-xs text-[var(--color-tron-text-secondary)]">Stick a QR on each shell and scan it into a bucket. Whole buckets move Barcoded → Unpressed → Pressed; WI-01 draws them into the oven.</p>
+			<p class="text-xs text-[var(--color-tron-text-secondary)]">Stick a QR on each shell and scan it into a bucket. Whole buckets move Barcoded → Unpressed → Pressed → {data.backedLabel}; the wax-fill operator puts a backed bucket in the oven and scans its carts onto the deck.</p>
 		</div>
 		<div class="flex gap-2">
 			<a href="/manufacturing/cart-mfg/buckets/new" class={btnGhost}>New bucket</a>
 			{#if data.canAdmin}<a href="/manufacturing/cart-mfg/buckets/override" class="rounded border border-red-500/40 px-3 py-1.5 text-xs text-red-300 hover:bg-red-900/20" title="Move a bucket to any phase, bypassing the flow (admin)">Master override</a>{/if}
 			<a href="/manufacturing/cart-mfg/state-change" class={btnGhost} title="Move individual carts to any status (bucket stages ask for a destination bucket)">Cart state change</a>
-			<a href="/manufacturing/cart-mfg/wi-01" class={btnGhost}>WI-01 →</a>
+			<a href="/manufacturing/cart-mfg/wax-filling" class={btnGhost}>Wax filling →</a>
 		</div>
 	</div>
 
 	<!-- Stage strip -->
-	<div class="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
+	<div class="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-{data.counts.looseBacked > 0 ? 6 : 5}">
 		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3">
 			<p class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Available</p>
 			<p class="mt-1 text-2xl font-bold text-[var(--color-tron-text)]">{data.counts.available}</p>
@@ -624,11 +624,16 @@
 				<p class="text-[10px] text-[var(--color-tron-text-secondary)]">{data.counts.stages[s.key].buckets} bucket{data.counts.stages[s.key].buckets === 1 ? '' : 's'}</p>
 			</div>
 		{/each}
-		<a href="/cartridge-admin?stage=backing" class="rounded-lg border bg-[var(--color-tron-surface)] p-3 hover:border-[var(--color-tron-purple)] {stageTint.in_oven}" title="Cartridges drawn into the oven by WI-01">
-			<p class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">{data.inOvenLabel}</p>
-			<p class="mt-1 text-2xl font-bold text-[var(--color-tron-purple)]">{data.counts.inOven}</p>
-			<p class="text-[10px] text-[var(--color-tron-text-secondary)]">carts · via WI-01</p>
-		</a>
+		{#if data.counts.looseBacked > 0}
+			<!-- Backed carts that are not in any bucket: drawn by the old WI-01 page before
+			     2026-09-25, forced by an override, or handed back by a wax run to a tub that
+			     had moved on. Wax filling still accepts them. -->
+			<a href="/cartridge-admin?stage=backing" class="rounded-lg border border-dashed bg-[var(--color-tron-surface)] p-3 hover:border-[var(--color-tron-purple)] {stageTint.backing}" title="Backed carts that are not in a bucket (legacy WI-01 draws, overrides). Still loadable at wax filling.">
+				<p class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Backed, no bucket</p>
+				<p class="mt-1 text-2xl font-bold text-[var(--color-tron-purple)]">{data.counts.looseBacked}</p>
+				<p class="text-[10px] text-[var(--color-tron-text-secondary)]">loose carts · legacy</p>
+			</a>
+		{/if}
 	</div>
 
 	{#if advanceThermoseal}
@@ -834,7 +839,7 @@
 
 				{:else if panel.kind === 'cycle'}
 					{#if !panelCycle}
-						<p class="py-4 text-center text-xs text-[var(--color-tron-text-secondary)]">This pass is no longer on the board (drawn into the oven, emptied, or refreshing).</p>
+						<p class="py-4 text-center text-xs text-[var(--color-tron-text-secondary)]">This pass is no longer on the board (drawn to wax filling, emptied, or refreshing).</p>
 						<button type="button" class={btnGhost} onclick={() => { panel = { kind: 'none' }; }}>Close</button>
 					{:else}
 						{@const c = panelCycle}
@@ -912,7 +917,9 @@
 								{#if nxt}
 									<button type="button" class={btnPrimary} disabled={c.quantity === 0} onclick={() => setMode('advance')}>Advance → {nextLabel(c.stage)}</button>
 								{:else}
-									<a href="/manufacturing/cart-mfg/wi-01" class="block rounded-lg border border-[var(--color-tron-purple)]/60 bg-[var(--color-tron-purple)]/10 py-2.5 text-center text-sm font-semibold text-[var(--color-tron-purple)]">Ready for WI-01 → {data.inOvenLabel}</a>
+									<!-- Backed is the end of the bucket. No click here: the wax-fill operator puts the
+									     tub in the oven and scans its carts onto the deck, which draws them out. -->
+									<a href="/manufacturing/cart-mfg/wax-filling" class="block rounded-lg border border-[var(--color-tron-purple)]/60 bg-[var(--color-tron-purple)]/10 py-2.5 text-center text-sm font-semibold text-[var(--color-tron-purple)]" title="Scan this bucket's carts onto a deck at wax filling — that draws them out of the bucket">Ready for the oven → wax filling</a>
 								{/if}
 								<button type="button" class="{btnGhost} w-full" disabled={c.quantity === 0} onclick={() => setMode('scrap')}>Discard carts…</button>
 							</div>
@@ -1331,7 +1338,7 @@
 								</td>
 								<td class="whitespace-nowrap px-2 py-1 text-[var(--color-tron-text-secondary)]">{r.operator ?? '—'}</td>
 								<td class="px-2 py-1 text-[var(--color-tron-text-secondary)]" title={r.cartridgeIds.join(', ')}>
-									{#if r.type === 'consume' && r.relatedId}<a href="/manufacturing/cart-mfg/lots/{r.relatedId}" class="text-[var(--color-tron-cyan)] hover:underline">WI-01 batch</a>{#if r.reason} · {r.reason}{/if}
+									{#if r.type === 'consume' && r.relatedId}<span class="font-mono text-[10px]" title="Wax run / legacy WI-01 batch id">{r.relatedId.length > 14 ? r.relatedId.slice(0, 12) + '…' : r.relatedId}</span>{#if r.reason} · {r.reason}{/if}
 									{:else}{r.journal ?? r.reason ?? ''}{/if}
 									{#if r.cartridgeIds.length > 0 && r.cartridgeIds.length <= 3}<span class="ml-1 font-mono text-[10px]">{r.cartridgeIds.map(i => i.slice(0, 8)).join(', ')}</span>{:else if r.cartridgeIds.length > 3}<span class="ml-1 font-mono text-[10px]">{r.cartridgeIds.length} carts</span>{/if}
 								</td>

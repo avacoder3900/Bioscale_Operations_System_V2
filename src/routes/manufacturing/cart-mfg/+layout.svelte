@@ -14,7 +14,6 @@
 		{ href: '/manufacturing/cart-mfg/cut-thermoseal', label: 'Cut Thermoseal', icon: 'M14.121 14.121L19 19m-7-7l7-7m-7 7l-2.879 2.879M12 12L9.121 9.121m0 5.758a3 3 0 10-4.242 4.243 3 3 0 004.242-4.242zm0-5.758a3 3 0 10-4.242-4.243 3 3 0 004.242 4.243z' },
 		{ href: '/manufacturing/cart-mfg/laser-cutting', label: 'Laser Cut', icon: 'M13 10V3L4 14h7v7l9-11h-7z' },
 		{ href: '/manufacturing/cart-mfg/buckets', label: 'Buckets', icon: 'M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4' },
-		{ href: '/manufacturing/cart-mfg/wi-01', label: 'Cartridge Back', icon: 'M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10' },
 		{ href: '/manufacturing/cart-mfg/wax-creation', label: 'Wax Creation', icon: 'M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM12 7v5m-2.5-2.5h5' },
 		{ href: '/manufacturing/cart-mfg/wax-filling', label: 'Wax Filling', icon: 'M19 14l-7 7m0 0l-7-7m7 7V3' },
 		// WAX-SIMPLIFY-2: Wax Inspect (CV) is out of the menu but still reachable by URL.
@@ -88,16 +87,8 @@
 		</nav>
 
 		{#if data.isAdmin}
-			{#if $page.url.pathname.startsWith('/manufacturing/cart-mfg/wi-01') || $page.url.pathname.startsWith('/manufacturing/cart-mfg/wi-02')}
+			{#if $page.url.pathname.startsWith('/manufacturing/cart-mfg/wi-02')}
 				<div class="border-t border-[var(--color-tron-border)] p-2 mt-2">
-					{#if $page.url.pathname.startsWith('/manufacturing/cart-mfg/wi-01')}
-						<a href="/manufacturing/cart-mfg/wi-01/steps"
-							class="nav-label block rounded px-2.5 py-1.5 text-xs transition-colors {$page.url.pathname === '/manufacturing/cart-mfg/wi-01/steps'
-								? 'text-[var(--color-tron-cyan)]'
-								: 'text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)]'}">
-							Edit Steps
-						</a>
-					{/if}
 					{#if $page.url.pathname.startsWith('/manufacturing/cart-mfg/wi-02')}
 						<a href="/manufacturing/cart-mfg/wi-02/steps"
 							class="nav-label block rounded px-2.5 py-1.5 text-xs transition-colors {$page.url.pathname === '/manufacturing/cart-mfg/wi-02/steps'

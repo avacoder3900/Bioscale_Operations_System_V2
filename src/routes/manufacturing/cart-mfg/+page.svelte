@@ -102,12 +102,12 @@
 	}
 
 	// Main-line order of a cartridge's status, for "should be at" after a lookup.
-	// Buckets (barcoded → unpressed → pressed) feed WI-01 (backing = In Oven), then wax,
-	// reagent, seal, store. Side statuses (QC/rejected/scrapped/voided) have no next.
+	// Buckets (barcoded → unpressed → pressed → backing = "Backed, awaiting oven") feed wax
+	// filling directly, then reagent, seal, store. Side statuses (QC/rejected/scrapped/voided) have no next.
 	const STATUS_ORDER = ['barcoded', 'unpressed', 'pressed', 'backing', 'wax_filling', 'wax_filled', 'wax_ready', 'reagent_filling', 'reagent_filled', 'inspected', 'sealed', 'cured', 'stored', 'released', 'shipped'];
 	const STATUS_NEXT_LABEL: Record<string, string> = {
-		barcoded: 'Unpressed (advance the bucket)', unpressed: 'Pressed (advance the bucket)', pressed: 'In Oven (WI-01 draws the bucket)',
-		backing: 'Wax filling', wax_filling: 'Wax-filled', wax_filled: 'Wax ready', wax_ready: 'Reagent filling',
+		barcoded: 'Unpressed (advance the bucket)', unpressed: 'Pressed (advance the bucket)', pressed: 'Backed, awaiting oven (advance the bucket)',
+		backing: 'Wax filling (scan onto a deck)', wax_filling: 'Wax-filled', wax_filled: 'Wax ready', wax_ready: 'Reagent filling',
 		reagent_filling: 'Reagent-filled', reagent_filled: 'Inspected', inspected: 'Sealed', sealed: 'Cured', cured: 'Stored', stored: 'Released', released: 'Shipped'
 	};
 	function nextStepFor(status: string): string | null {
@@ -151,9 +151,9 @@
 	<!-- Top row: Shift summary stats -->
 	<div class="grid grid-cols-2 gap-3 lg:grid-cols-6">
 		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-3 text-center">
-			<div class="text-xs font-medium text-[var(--color-tron-text-secondary)] uppercase tracking-wide">In Oven</div>
+			<div class="text-xs font-medium text-[var(--color-tron-text-secondary)] uppercase tracking-wide">Backed</div>
 			<div class="mt-1 text-2xl font-bold text-[var(--color-tron-purple)]">{data.pipeline.backing.totalReadyCartridges}</div>
-			<div class="text-xs text-[var(--color-tron-text-secondary)]">backed, ready for wax</div>
+			<div class="text-xs text-[var(--color-tron-text-secondary)]">awaiting oven, ready for wax</div>
 		</div>
 		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-3 text-center">
 			<div class="text-xs font-medium text-[var(--color-tron-text-secondary)] uppercase tracking-wide">Started Today</div>
@@ -259,8 +259,8 @@
 		{/each}
 	</div>
 
-	<!-- Production Buckets — Barcoded → Unpressed → Pressed → In Oven, upstream of Pipeline
-	     Flow. Same counts and stages as the buckets board; each tile deep-links
+	<!-- Production Buckets — Barcoded → Unpressed → Pressed → Backed (awaiting oven), upstream
+	     of Pipeline Flow. Same counts and stages as the buckets board; each tile deep-links
 	     to the board filtered to that stage. Hidden if the bucket query failed. -->
 	{#if data.bucketCounts}
 		{@const bc = data.bucketCounts}
@@ -269,7 +269,7 @@
 			{ key: 'barcoded', label: 'Barcoded', count: bc.stages.barcoded.cartridges, sub: `${bc.stages.barcoded.buckets} bucket${bc.stages.barcoded.buckets === 1 ? '' : 's'}`, color: 'text-[var(--color-tron-cyan)]' },
 			{ key: 'unpressed', label: 'Unpressed', count: bc.stages.unpressed.cartridges, sub: `${bc.stages.unpressed.buckets} bucket${bc.stages.unpressed.buckets === 1 ? '' : 's'}`, color: 'text-[var(--color-tron-cyan)]' },
 			{ key: 'pressed', label: 'Pressed', count: bc.stages.pressed.cartridges, sub: `${bc.stages.pressed.buckets} bucket${bc.stages.pressed.buckets === 1 ? '' : 's'}`, color: 'text-[var(--color-tron-cyan)]' },
-			{ key: 'backing', label: 'In Oven', count: bc.inOven, sub: 'at WI-01', color: 'text-[var(--color-tron-purple)]' }
+			{ key: 'backing', label: 'Backed, awaiting oven', count: bc.stages.backing.cartridges, sub: `${bc.stages.backing.buckets} bucket${bc.stages.backing.buckets === 1 ? '' : 's'}${bc.looseBacked > 0 ? ` · +${bc.looseBacked} loose` : ''}`, color: 'text-[var(--color-tron-purple)]' }
 		]}
 		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-4">
 			<div class="mb-4 flex items-center justify-between">
@@ -278,7 +278,7 @@
 			</div>
 			<div class="flex items-stretch gap-1 overflow-x-auto">
 				{#each bucketStages as stage, i (stage.key)}
-					<a href={stage.key === 'backing' ? '/cartridge-admin?stage=backing' : `/manufacturing/cart-mfg/buckets?stage=${stage.key}`} class="flex-1 min-w-[100px] text-center" title={stage.key === 'backing' ? 'Show cartridges in the oven' : `Open the bucket board at ${stage.label}`}>
+					<a href={`/manufacturing/cart-mfg/buckets?stage=${stage.key}`} class="flex-1 min-w-[100px] text-center" title={`Open the bucket board at ${stage.label}`}>
 						<div class="rounded-lg bg-[var(--color-tron-bg-tertiary)] border border-[var(--color-tron-border)] p-3 h-full flex flex-col justify-center hover:border-[var(--color-tron-cyan)]/60">
 							<div class="text-xs font-semibold uppercase tracking-wide text-[var(--color-tron-text-secondary)]">{stage.label}</div>
 							<div class="mt-1 text-xl font-bold {stage.color}">{stage.count}</div>

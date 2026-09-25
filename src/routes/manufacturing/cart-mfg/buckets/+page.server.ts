@@ -7,7 +7,7 @@ import { fail, redirect } from '@sveltejs/kit';
 import { connectDB, ReceivingLot, InventoryTransaction } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
 import {
-	BucketError, BUCKET_STAGES, STAGE_LABELS, IN_OVEN_LABEL, SHELL_PART, LABEL_PART, THERMOSEAL_PART,
+	BucketError, BUCKET_STAGES, STAGE_LABELS, BACKED_LABEL, SHELL_PART, LABEL_PART, THERMOSEAL_PART,
 	boardData, stageCounts, resolveScan, isBucketStage, changeLog, bucketRegistry,
 	startCycle, scanCartIn, unscanCart, advanceCycle, scrapCarts, reportResidual, retireBucket,
 	cartStatusLine, auditScan, auditCycle
@@ -70,8 +70,8 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 
 	return {
 		stages: BUCKET_STAGES.map(s => ({ key: s, label: STAGE_LABELS[s] })),
-		inOvenLabel: IN_OVEN_LABEL,
-		focusStage: focusStage === 'available' || focusStage === 'in_oven' || isBucketStage(focusStage) ? focusStage : null,
+		backedLabel: BACKED_LABEL,
+		focusStage: focusStage === 'available' || isBucketStage(focusStage) ? focusStage : null,
 		board,
 		counts,
 		lots,

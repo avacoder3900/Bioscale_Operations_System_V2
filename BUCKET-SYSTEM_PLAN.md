@@ -1,6 +1,6 @@
 # Bucket System — Production Buckets, v2 (as built)
 
-**Started:** 2026-09-21 · **Last updated:** 2026-09-23 (v2 restructure + thermoseal rolls; quarantine removed; thermoseal current-stock note)
+**Started:** 2026-09-21 · **Last updated:** 2026-09-25 (WI-01 page removed; fourth bucket stage **Backed, awaiting oven**; wax filling draws from the bucket)
 **Branch:** `feat/bucket-system` — **PR #54 open into `master`**
 (https://github.com/avacoder3900/Bioscale_Operations_System_V2/pull/54). `origin/master` has
 been merged into this branch twice (last `33a937a4`); it sits on current production code.
@@ -8,11 +8,13 @@ been merged into this branch twice (last `33a937a4`); it sits on current product
 stale; `main` is older still.
 **Status:** Built and type-checked; deployed to Vercel preview via the GitHub integration only.
 Reviewed by the user on previews; never exercised in production; no automated tests. See §12.
-**Scope:** QR-labelled production buckets that carry cartridges through the three stages before
-WI-01 — **Barcoded → Unpressed → Pressed** — after which WI-01 draws them into the oven (**In Oven**
-= status `backing`). A cartridge is *born* when its QR sticker is scanned into a bucket. The
+**Scope:** QR-labelled production buckets that carry cartridges through four stages —
+**Barcoded → Unpressed → Pressed → Backed, awaiting oven** (status `backing`) — after which the
+wax-fill operator puts the tub in the oven and scans its carts onto a deck; that deck load draws
+them out of the bucket. A cartridge is *born* when its QR sticker is scanned into a bucket. The
 system also owns **thermoseal roll tracking** (§3.4) and removed oven/cure-time tracking
-app-wide (§3.8).
+app-wide (§3.8). **2026-09-25:** the WI-01 "Cartridge Back" page and its per-session
+`LotRecord` were removed (§6.4) — they were a second, redundant handoff.
 
 This document describes what is built. Section numbers are unchanged from the original plan so
 code comments citing e.g. "§6.3" still resolve; where v2 replaced a v1 behaviour the text says
@@ -51,11 +53,22 @@ written by the bucket system.
 |---|---|---|
 | `barcoded` | Barcoded | Shells with QR stickers on, scanned into the bucket one at a time |
 | `unpressed` | Unpressed | Bucket staged for the press. **Thermoseal is consumed here** (§3.4) |
-| `pressed` | Pressed | Off the press; WI-01 may draw from it |
-| — | In Oven | `CartridgeRecord.status = 'backing'`. Not a bucket stage: WI-01 scanned it out |
+| `pressed` | Pressed | Off the press |
+| `backing` | Backed, awaiting oven | Tub on the shelf, waiting for the wax-fill operator. **End of the bucket:** wax filling's deck load draws carts out (§6.4). The stage key is the cart status wax filling already accepts |
 
 Each cartridge's `status` mirrors its bucket's stage while it is a member, so
-`/cartridge-admin?stage=barcoded|unpressed|pressed` filters real records.
+`/cartridge-admin?stage=barcoded|unpressed|pressed|backing` filters real records.
+
+> **Backed stage added 2026-09-25.** Before this, Pressed was the end of the bucket and a
+> separate WI-01 page (scan bucket → session → scan/take-all → confirm) moved carts to `backing`
+> one batch at a time, creating a `LotRecord` per session. The user judged the oven structure
+> redundant and too many clicks: after pressing, carts just sit in a "backed" holding phase until
+> the wax-fill operator places them in the oven and loads the deck. **Oven placement and time
+> gating are disabled, not modelled** — nothing records which oven or when; it may return later.
+> A cart at `backing` that is *not* a member of an open pass is a **loose backed cart** (drawn
+> by the old WI-01 page before the change, forced by an override, or handed back by a cancelled
+> wax run to a tub that had moved on); wax filling still accepts it, and the board/admin strips
+> count it separately (`StageCounts.looseBacked`).
 
 > **Renamed 2026-09-25: `raw` → `barcoded`.** The first stage is named for what has happened to
 > the shell (a QR/barcode label is on it), not for the material it was cut from. The old value
@@ -74,8 +87,8 @@ Each cartridge's `status` mirrors its bucket's stage while it is a member, so
 
 A bucket moves as a unit. At every advance the operator is asked **"Any carts discarded?"** and
 scans each discarded cart; those are scrapped (§8) before the move so the rest move together.
-Bucket size does **not** have to match a press run or a WI-01 session; WI-01 may draw part of
-a bucket (partial consumption) and the remainder stays Pressed.
+Bucket size does **not** have to match a press run or a wax deck (24 carts); a deck load may
+draw part of a backed bucket (partial consumption) and the remainder stays Backed.
 
 ### 3.2 Buckets and their ids are reusable
 
@@ -93,7 +106,7 @@ Yellow note on the board: **"Inventory is not Debited Until Carts are Scanned in
   debits are retracted (negative rows of the same type, §8).
 - A discarded cart (at advance, via *Scrap*, or as a residual) writes a `scrap` transaction for
   its shell and label. **Thermoseal length is not returned** — it is consumed material.
-- WI-01 (In Oven) debits nothing.
+- Pressed → Backed and the wax-fill draw debit nothing.
 
 ### 3.4 Thermoseal — consumed by length off a roll (2026-09-23)
 
@@ -155,7 +168,7 @@ chase it, and do not re-count PT-CT-112 to make it look right.
 
 ### 3.5 Auto-release with deferred spot-check
 
-When WI-01 draws the last member, the pass closes and the bucket returns to *Available* with
+When wax filling draws the last member, the pass closes and the bucket returns to *Available* with
 `spotCheckPending`; the next *Start* asks "Is the tub empty?".
 
 ### 3.6 Residual disposition — free text, no approval
@@ -172,8 +185,9 @@ From the rail on any Available bucket.
 
 ### 3.8 Oven tracking and time gating removed app-wide (2026-09-23)
 
-- WI-01 no longer picks an oven; `backing.oven*` and `ovenEntryTime` are **LEGACY** fields (kept
-  for old rows, never written). `backing.recordedAt` is the scan time.
+- No step picks an oven; `backing.oven*` and `ovenEntryTime` are **LEGACY** fields (kept
+  for old rows, never written). `backing.recordedAt` is the time the bucket was advanced to
+  Backed (was the WI-01 scan time until 2026-09-25).
 - `cure-time.ts` deleted; `minOvenTimeMin` removed from both settings pages (field kept on the
   model for old docs); wax-filling deck loading no longer computes "ready"/under-time; the
   cart-mfg dashboard's Ovens section is gone; the pipeline's In Oven view has no Oven/Ready
@@ -230,7 +244,8 @@ in `reason` and the first roll id in `relatedId`.
 
 ### 5.2 Pass
 
-`open@barcoded —advance→ open@unpressed —advance→ open@pressed —WI-01 draws all→ consumed`;
+`open@barcoded —advance→ open@unpressed —advance→ open@pressed —advance→ open@backing —wax filling loads the last member→ consumed`;
+`consumed@backing —wax run cancelled/aborted, tub still free→ open@backing` (`returnCarts`, §6.4);
 `open —all members discarded→ scrapped`; `open|consumed|scrapped —void (admin)→ voided`.
 
 ## 6. Flows
@@ -281,17 +296,35 @@ touching it:
 
 "Any carts discarded?" scan list + journal → discards scrapped first → all remaining members'
 `status` follows the bucket. **Barcoded → Unpressed** additionally runs `consumeThermoseal` (§3.4)
-and shows the result banner (cm taken, rolls pulled, floor alert). **Pressed** is the end of the
-bucket: WI-01 draws from it.
+and shows the result banner (cm taken, rolls pulled, floor alert). **Pressed → Backed** stamps
+`backing.recordedAt/operator/bucketCycleId/bucketBarcode` on every member (what WI-01 used to
+write, minus the lot) so the pipeline, dashboard and DHR can group backed carts by pass.
+**Backed** is the end of the bucket: the card shows *Ready for the oven → wax filling* instead
+of an Advance button.
 
-### 6.4 WI-01 handoff (bucket-fed)
+### 6.4 Wax-fill handoff (2026-09-25; replaced the WI-01 page)
 
-`/manufacturing/cart-mfg/wi-01`: scan or pick a **Pressed** bucket → session lists its members →
-scan each one (or *Take all*) → the cart leaves the bucket (`consumeCarts`) and becomes
-`backing` (In Oven) with `backing.recordedAt/operator/bucketCycleId/bucketBarcode` and a
-`LotRecord` per session. Confirm-complete scraps any carts scanned but binned. No oven, no
-inventory withdrawal, no time gate. Removing a scanned cart from the session puts it back into
-the bucket (reopens the pass if it had closed).
+`/manufacturing/cart-mfg/wax-filling`: a purple line above the deck grid lists the **Backed**
+buckets (`backedBuckets`, tub id + count) — the operator puts the tub in the oven, then scans
+its carts onto the deck as before. `loadDeck` validates each scan (must exist, must be at
+`backing`), then groups the scans by open pass and calls `consumeCarts` per pass **before** the
+status write; a bucket refusal leaves the cart untouched. Carts not in any open pass (loose,
+§2) load without a bucket write. The pass closes (`consumed`) and the tub auto-releases when
+the last member is loaded. Ledger row: `consume` with `relatedId` = the wax run id.
+
+**Cancel / abort** (`revertToBacked` in the wax-filling server): real carts go back to
+`backing` and `returnCarts` puts them back into their pass — reopening a consumed pass at Backed
+if the tub is still `available`; if the tub already started a newer pass the cart stays loose
+(logged, still loadable). Test-mode synthetics (`backing.synthetic: true`, or neither a bucket
+nor a WI-01 lot) are hard-deleted as before.
+
+**Removed:** `src/routes/manufacturing/cart-mfg/wi-01/` (page + steps editor), the *Cartridge
+Back* nav entry, the board's *WI-01 →* button. `LotRecord`s written by the old page stay
+readable on `/manufacturing/cart-mfg/lots/[lotId]` and on the bucket history page under
+*WI-01 batches (legacy)*. The `backing` `ProcessConfiguration` row is no longer edited anywhere.
+`IN_OVEN_STATUS` / `IN_OVEN_LABEL` became `BACKED_STATUS` / `BACKED_LABEL` (`BACKED_STAGE` is
+the stage key); the override's `in_oven` target is gone — Backed is an ordinary target and the
+pass stays open there.
 
 ## 7. Residual flow
 
@@ -334,7 +367,7 @@ longer calls it — validation happens on submit.
 | Un-scan (Barcoded) | +1 (negative `consumption`) | +1 | — |
 | Barcoded → Unpressed | — | — | **members × 3.75 cm off the open roll**; −1 roll `consumption` only when a roll is pulled (`manufacturingRunId = roll id`) |
 | Discard / scrap / residual scrap | −1 `scrap` | −1 `scrap` | — (length not returned) |
-| WI-01 draw (In Oven) | — | — | — |
+| Pressed → Backed · wax-fill draw | — | — | — |
 | Void pass | net consumption + scrap returned per lot | same | cm credited to roll(s); pulled rolls stay pulled |
 
 All bucket debits carry `manufacturingRunId = cycleId` except roll pulls. Per-lot "N left" =
@@ -344,36 +377,42 @@ lot quantity − Σ consumption/scrap rows for that lot.
 
 ### 9.1 `/manufacturing/cart-mfg/buckets` — board, rail, thermoseal, logs
 
-Stage strip (Available · Barcoded · Unpressed · Pressed · **In Oven** (links to
-`/cartridge-admin?stage=backing`)) → 4-column board (Available / Barcoded / Unpressed / Pressed).
+Stage strip (Available · Barcoded · Unpressed · Pressed · **Backed, awaiting oven** · *Backed, no
+bucket* (loose carts, shown only when > 0, links to `/cartridge-admin?stage=backing`)) →
+5-column board (Available / Barcoded / Unpressed / Pressed / Backed).
 Under **Available**: empty buckets only — minting lives on `/buckets/new` (§9.4), reached from
 the header *New bucket* button; there is no inline mint card on the board. Every pass card
 carries **Audit** (§9.8) under its cart list.
 Under **Unpressed**: the yellow *thermoseal not synced* card
 and the compact **Thermoseal tile** (§3.4; admin toggles inside "Development settings"). Header
-buttons: *New bucket*, *Master override* (admin, §9.5), *WI-01 →*. Rail (start, scan-in box with
+buttons: *New bucket*, *Master override* (admin, §9.5), *Wax filling →*. Rail (start, scan-in box with
 mis-scan, advance with discards, scrap by scan, residual by scan, retire) → expandable **change log** (lot, move,
 who, discards, thermoseal note) → **bucket log** (every bucket incl. retired). `?stage=` focuses
 a column; `?q=` resolves a scan (bucket QR, BKT id, or cartridge id → its bucket).
 Below the board + rail: **Find a cart** — scan a cart QR, get one line back (cart id · status
 label · the open pass it **belongs in** by membership, or "on no open pass" + where it was last
-seen, the WI-01 lot when it is In Oven, and when the status last changed). Read-only,
+seen, "loose backed cart" or the legacy WI-01 lot when it is at `backing` outside a pass, and
+when the status last changed). Read-only,
 `?/cartLookup` → `cartStatusLine()`; a bucket sticker scanned there is named as a bucket
 rather than reported missing (user, 2026-09-23). The same lookup sits inside the leftover panel
 as *Where does this cart belong?* (§7, 2026-09-25).
 
 ### 9.2 `/manufacturing/cart-mfg/buckets/[bucketId]`
 
-Passes with per-pass cartridges (in bucket / → into the oven / scrapped), source lots,
+Passes with per-pass cartridges (in bucket / → on to wax filling / scrapped), source lots,
 thermoseal cm, ledger rows, *Replace sticker* link, *Void this pass…* (admin).
 
 ### 9.3 Summary views (read-only, deep-link to the board)
 
-- `/cartridge-admin` strip: Barcoded · Unpressed · Pressed · **In Oven** (filters the page). The
-  *Available* tile was removed 2026-09-23 (user: report only the four production stages); the
+- `/cartridge-admin` strip: Barcoded · Unpressed · Pressed · **Backed, awaiting oven** (all link to
+  the board) + *Backed, no bucket* when loose carts exist (filters the page to `backing`). The
+  *Available* tile was removed 2026-09-23 (user: report only the production stages); the
   board's own strip (§9.1) still counts Available buckets.
-- `/manufacturing/cart-mfg` **Production Buckets** card beneath the robot grid, same tiles.
-- `/manufacturing/cart-mfg/pipeline?stage=bucket_raw|bucket_unpressed|bucket_pressed|backing`.
+- `/manufacturing/cart-mfg` **Production Buckets** card beneath the robot grid, same tiles; the
+  top-row *Backed* stat counts every cart at `backing`.
+- `/manufacturing/cart-mfg/pipeline?stage=bucket_barcoded|bucket_unpressed|bucket_pressed|backing`.
+  The `backing` view lists backed bucket passes first, then loose carts grouped per legacy
+  WI-01 batch, then legacy `BackingLot` aggregates.
 
 ### 9.4 `/manufacturing/cart-mfg/buckets/new` — mint one bucket from one QR
 
@@ -385,18 +424,18 @@ sticker — the board's inline Mint card was removed on 2026-09-25, along with i
 
 ### 9.5 `/manufacturing/cart-mfg/buckets/override` — Master Override (admin)
 
-Scan a bucket, pick **Barcoded / Unpressed / Pressed / In Oven**, give a reason → `forceBucketPhase()`
-puts its open pass there, **bypassing the flow**: no thermoseal consumption, no discard prompt,
-no forward-only order (backwards is allowed), and *In Oven* moves every member to `backing` with
-no WI-01 session or LotRecord and closes the pass like a consumed one. Nothing is debited or
-credited. The ledger row, each cart's note and the audit entry (`FORCE_PHASE`) all say
+Scan a bucket, pick **Barcoded / Unpressed / Pressed / Backed, awaiting oven**, give a reason →
+`forceBucketPhase()` puts its open pass there, **bypassing the flow**: no thermoseal
+consumption, no discard prompt, no forward-only order (backwards is allowed). The pass stays
+open at the target (Backed included — it gets the same `backing.*` stamp as a normal advance and
+wax filling draws from it). Nothing is debited or credited. The ledger row, each cart's note and the audit entry (`FORCE_PHASE`) all say
 **MASTER OVERRIDE** plus the reason. Live preview of what the scanned code resolves to; table of
 open passes with a *use* shortcut. Linked from the board header (red button) and `?bucket=`.
 
 ### 9.6 `/manufacturing/cart-mfg/state-change` — per-cart manual override (bucket-aware)
 
 The pre-existing bulk State Change page now routes bucket stages through
-`overrideCartStage()`: a target of Barcoded / Unpressed / Pressed requires a **destination bucket**
+`overrideCartStage()`: a target of Barcoded / Unpressed / Pressed / Backed requires a **destination bucket**
 (only open passes at that stage are offered) and the cart joins that pass (`merge_in`), leaving
 its old one (`merge_out`; an emptied pass closes like a consumed one); any other target removes
 a bucket member from its pass. No inventory moves. Unknown barcodes are refused for bucket stages.
@@ -452,13 +491,14 @@ per-scan lookup only needs `manufacturing:read`.
 | File | Role |
 |---|---|
 | `src/lib/server/db/models/production-bucket.ts`, `bucket-cycle.ts`, `bucket-transaction.ts`, **`thermoseal-roll.ts`** | models |
-| `src/lib/server/services/bucket-service.ts` | all bucket logic (create, sticker, start, scanIn/unscan, scrap, advance, consume, residual, retire, void, counts, board, logs) |
+| `src/lib/server/services/bucket-service.ts` | all bucket logic (create, sticker, start, scanIn/unscan, scrap, advance, consume, **returnCarts**, residual, retire, void, counts, board, logs) |
 | **`src/lib/server/services/thermoseal-service.ts`** | config, roll open/consume/credit, floor rule, board status |
 | `src/lib/server/kanban/standing.ts` → `ensureThermosealRestockCard` | restock card via the supply autopilot |
 | `src/lib/server/notifications.ts` → `notifyThermosealLow` | Resend email to the low-inventory list |
 | `src/routes/manufacturing/cart-mfg/buckets/…` | board, history, `new/` |
-| `src/routes/manufacturing/cart-mfg/wi-01/…` | bucket-fed WI-01 |
-| `src/routes/cartridge-admin/…`, `cart-mfg/+page*`, `cart-mfg-dev/…`, `cart-mfg/pipeline/…`, `cart-mfg/wax-filling/…`, `cart-mfg/lots/[lotId]/…`, both settings pages | oven removal / In Oven wording / stage strips |
+| ~~`src/routes/manufacturing/cart-mfg/wi-01/…`~~ | **deleted 2026-09-25** (§6.4) |
+| `src/routes/manufacturing/cart-mfg/wax-filling/+page.server.ts` | `loadDeck` → `consumeCarts` per backed pass; `revertToBacked` (cancel/abort) → `returnCarts`; `backedBuckets` in load |
+| `src/routes/cartridge-admin/…`, `cart-mfg/+page*`, `cart-mfg/+layout.svelte`, `cart-mfg-dev/…`, `cart-mfg/pipeline/…`, `cart-mfg/wax-filling/+page.svelte`, `cart-mfg/lots/[lotId]/…`, both settings pages | oven removal / Backed wording / stage strips / nav |
 | Shared code on the scan-in hot path (§6.2.1) — `services/inventory-transaction.ts` (`$inc` debit, part-id cache), `notifications.ts` (`shouldWarnLowInventory` settings cache), `kanban/standing.ts` (`requestSupplyCheckForPart`), `services/cartridge-hard-delete.ts` (`statuses` whitelist), `db/models/inventory-transaction.ts` + `bucket-transaction.ts` (indexes) | **not bucket-only files** — every debit in the app goes through them. Changed 2026-09-25 for scan-in pace; check other callers before changing further. |
 | Collision guard (`assertNotBucketLabel` / `findBucketLabels`) | every `CartridgeRecord` genesis path: bucket scan-in, `cv/induct`, `quick-wax-fill`, `state-change`, wax-filling test-mode upsert, reagent-filling stub upsert. **Search for new upserts when adding genesis paths.** |
 
@@ -487,6 +527,7 @@ per-scan lookup only needs `manufacturing:read`.
 | _(this change)_ | **Scan-in lag audit + rebuild** (§6.2.1): queue + membership overlay instead of `invalidateAll()` per cart, input never disabled, client-side merged-read split, batched guards/writes in `scanCartIn`, `resolveBucketId` one query; **mis-scan button fixed** (it had never worked — sacred delete hook); `recordTransaction` now `$inc` (lost-update fix); `createdAt` + `{lotId,transactionType,quantity}` indexes; `checkFloor` throttled on board load; supply check coalesced |
 | _(this change)_ | **Leftover panel: *Where does this cart belong?*** search (§7) — scan one leftover, one line back naming the open pass it is a member of; `cartStatusLine()` answers from `BucketCycle.cartridgeIds` membership first (§9.1) |
 | `5a01239f` | **`raw` → `barcoded` rename** (§2): stage key, labels, `CartridgeRecord.status`, `LifecycleStage`, pipeline `bucket_barcoded`; old `raw` kept in both enums for historical rows; `scripts/migrate-bucket-raw-to-barcoded.ts` (`--plan` / `--apply`, not yet run). Code swept into the ship-build merge commit; this doc row is the follow-up. |
+| _(this change)_ | **WI-01 page removed; fourth stage "Backed, awaiting oven"** (§2, §5.2, §6.3, §6.4, §9): `BUCKET_STAGES` + `BucketCycle.stage` gain `backing`; Pressed → Backed is a normal advance (with the `backing.*` stamp); wax filling's `loadDeck` draws carts out of the pass (`consumeCarts` now requires Backed, `relatedId` = wax run); cancel/abort return them (`returnCarts`, new); `StageCounts.inOven` → `looseBacked`; override `in_oven` target dropped; nav, board, admin strip, dashboard, dev dashboard, pipeline `backing` view relabelled. No data migration: existing `backing` carts are loose and still loadable. |
 
 `npm run check` after v2: **12 errors / 438 warnings** — the same 12 pre-existing (`r2.ts`,
 `AskBimsWidget.svelte`, 8× `assembly/[sessionId]`, 2× `validation/magnetometer/[sessionId]`
@@ -533,6 +574,16 @@ the floor creates a real card and sends real mail on the next board load.
    PT-CT-112 part so the restock card and email carry a real lead time.
 
 ### 12.4 Known risks
+
+- **Backed stage is untested end to end** (2026-09-25). Not yet exercised on a preview: advance
+  Pressed → Backed; load a deck from a backed bucket and confirm the pass closes and the tub
+  returns to Available; cancel that run and confirm the pass reopens at Backed with the carts
+  back in it. `revertToBacked` swallows a `returnCarts` failure (logs it) so a cancel can never
+  be blocked by bucket bookkeeping — check the server log if a cancelled run's carts show as
+  loose.
+- **`consumeCarts` callers:** only wax filling's `loadDeck` now. Any other page that moves a cart
+  out of `backing` (quick-wax-fill, state-change, cv/induct) leaves it a member of its pass
+  unless it goes through `overrideCartStage`; the board's Audit (§9.8) will surface those.
 
 - **Cartridge-admin search** matches cartridge id and legacy lot fields, not
   `backing.bucketBarcode` / `bucket.bucketId` — the history page's "+N more" link finds nothing.

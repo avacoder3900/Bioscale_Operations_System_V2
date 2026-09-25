@@ -7,7 +7,8 @@ import {
 	OpentronsRobot, ManualCartridgeRemoval, Ot2BridgeCommand, TipCalibratorFixture
 } from '$lib/server/db';
 import { recordTransaction, resolvePartId } from '$lib/server/services/inventory-transaction';
-import { findBucketLabels } from '$lib/server/services/bucket-service';
+import { findBucketLabels, consumeCarts, returnCarts, BucketError, BACKED_STAGE, BACKED_LABEL } from '$lib/server/services/bucket-service';
+import { BucketCycle } from '$lib/server/db';
 import { resolveFridgeId, resolveCoolingTrayId, resolveDeckId } from '$lib/server/services/equipment-resolve';
 import { isAdmin } from '$lib/server/permissions';
 import { User } from '$lib/server/db';
@@ -111,6 +112,8 @@ function emptyState(robotId: string, loadError: string | null = null) {
 		backedOvens: [] as { ovenId: string; ovenName: string; total: number; ready: number }[],
 		backedReadyCount: 0,
 		backedTotalCount: 0,
+		backedBuckets: [] as { bucketId: string; cycleNumber: number; count: number; backedAt: string | null }[],
+		backedLabel: BACKED_LABEL,
 		waxLots: [] as { barcode: string; label: string; remainingVolumeUl: number; source: string }[],
 		rejectionCodes: [] as any[],
 		fridges: [] as { id: string; displayName: string; barcode: string }[],
@@ -336,12 +339,22 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 			}))
 		];
 
-		// Backed cartridges ("In Oven", status 'backing'). Backing-oven tracking
-		// and the cure-time gate were removed app-wide (2026-09-23, BUCKET-SYSTEM_PLAN
-		// v2): no oven grouping, no readiness — every backed cartridge is loadable.
-		const backedTotalCount = await CartridgeRecord.countDocuments({ status: 'backing' }).catch(() => 0);
+		// Backed cartridges (status 'backing'). Backing-oven tracking and the
+		// cure-time gate were removed app-wide (2026-09-23, BUCKET-SYSTEM_PLAN v2):
+		// no oven grouping, no readiness — every backed cartridge is loadable.
+		// Since 2026-09-25 backed carts sit in their production bucket ("Backed,
+		// awaiting oven"); loadDeck draws them out of it. `backedBuckets` lists
+		// those tubs so the operator knows which to fetch.
+		const [backedTotalCount, backedCycles] = await Promise.all([
+			CartridgeRecord.countDocuments({ status: 'backing' }).catch(() => 0),
+			BucketCycle.find({ status: 'open', stage: BACKED_STAGE }).select('bucketId cycleNumber quantity stageEnteredAt').sort({ stageEnteredAt: 1 }).lean().catch(() => [] as any[])
+		]);
 		const backedReadyCount = backedTotalCount;
 		const backedOvens: { ovenId: string; ovenName: string; total: number; ready: number }[] = [];
+		const backedBuckets = (backedCycles as any[]).map((c: any) => ({
+			bucketId: String(c.bucketId), cycleNumber: Number(c.cycleNumber ?? 0), count: Number(c.quantity ?? 0),
+			backedAt: c.stageEnteredAt ? new Date(c.stageEnteredAt).toISOString() : null
+		}));
 
 		// Wax lot dropdown (WAX-FLOW-3): in-house WaxBatches + purchased
 		// PT-CT-114 receiving lots with remaining volume. Few of these ever
@@ -405,6 +418,8 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 			backedOvens,
 			backedReadyCount,
 			backedTotalCount,
+			backedBuckets,
+			backedLabel: BACKED_LABEL,
 			waxLots: JSON.parse(JSON.stringify(waxLots)),
 			rejectionCodes,
 			fridges,
@@ -486,6 +501,53 @@ async function stopRobotRun(run: any): Promise<string | null> {
 	} catch (e) {
 		return `Couldn't reach the robot to stop the run (${e instanceof Error ? e.message : 'unknown'}) — confirm on the device.`;
 	}
+}
+
+/**
+ * Cancel/abort: carts scanned onto the deck never got wax-filled. Real carts
+ * (born in a production bucket, or drawn by the old WI-01 page) go back to
+ * 'backing' and — via bucket-service.returnCarts — back into the bucket pass
+ * they were drawn from, reopening it if the tub is free. Test-mode synthetics
+ * (flagged backing.synthetic, or with neither a bucket nor a WI-01 lot) are
+ * hard-deleted through the driver: Model.deleteMany is blocked by the sacred
+ * middleware and used to throw here AFTER the abort had already been recorded.
+ */
+async function revertToBacked(
+	scannedIds: string[],
+	runId: string,
+	reason: string,
+	user: { _id: string; username: string },
+	verb: 'cancelled' | 'aborted'
+): Promise<void> {
+	const real = await CartridgeRecord.find({
+		_id: { $in: scannedIds },
+		'waxFilling.runId': runId,
+		status: 'wax_filling',
+		'backing.synthetic': { $ne: true },
+		$or: [
+			{ 'bucket.cycleId': { $exists: true, $ne: null } },
+			{ 'backing.parentLotRecordId': { $exists: true, $ne: null } }
+		]
+	}).select('_id').lean() as any[];
+	const realIds = real.map((c: any) => String(c._id));
+	if (realIds.length > 0) {
+		await CartridgeRecord.updateMany(
+			{ _id: { $in: realIds } },
+			{ $set: { status: 'backing' }, $unset: { waxFilling: '' } }
+		);
+		try {
+			const r = await returnCarts({ barcodes: realIds, waxRunId: runId, reason, user: { _id: user._id, username: user.username } });
+			if (r.loose.length > 0) console.warn(`[wax ${verb}] ${r.loose.length} cart(s) returned loose at 'backing' (their bucket pass could not be reopened): ${r.loose.join(', ')}`);
+		} catch (e) {
+			// The carts are already back at 'backing' (loadable); a bucket bookkeeping
+			// failure must not undo the cancel.
+			console.error(`[wax ${verb}] returnCarts failed:`, e instanceof Error ? e.message : e);
+		}
+	}
+	await hardDeleteUnfinalizedCartridges(
+		{ _id: { $in: scannedIds }, 'waxFilling.runId': runId, status: 'wax_filling' },
+		{ reason: `Wax run ${verb} — synthetic (test-mode) cartridge removed`, user, oldData: { runId } }
+	);
 }
 
 /**
@@ -810,10 +872,12 @@ export const actions: Actions = {
 		const run = await WaxFillingRun.findById(runId).lean() as any;
 		if (!run) return fail(404, { error: 'Run not found' });
 
-		// Cartridges arrive here at status 'backing' ("In Oven"), drawn out of a
-		// pressed production bucket at WI-01. loadDeck validates each scan against
-		// those records. Backing-oven tracking and the cure-time gate were removed
-		// app-wide (2026-09-23) — nothing here reads oven entry time any more.
+		// Cartridges arrive here at status 'backing' ("Backed, awaiting oven"),
+		// still sitting in their production bucket. loadDeck validates each scan
+		// against those records and then draws the members out of their bucket
+		// pass (consumeCarts) — the deck load IS the handoff since 2026-09-25.
+		// Backing-oven tracking and the cure-time gate were removed app-wide
+		// (2026-09-23) — nothing here reads oven entry time any more.
 		if (cartridgeIds.length > 0) {
 			const now = new Date();
 
@@ -853,7 +917,8 @@ export const actions: Actions = {
 								_id: cid,
 								status: 'backing',
 								'backing.operator': { _id: locals.user!._id, username: locals.user!.username },
-								'backing.recordedAt': now
+								'backing.recordedAt': now,
+								'backing.synthetic': true // test-mode only; cancel/abort hard-deletes these
 							}
 						},
 						upsert: true
@@ -873,10 +938,29 @@ export const actions: Actions = {
 			}
 
 			if (missing.length > 0) {
-				return fail(400, { error: `Cartridge(s) not found in backing: ${missing.join(', ')}. Draw them into the oven at Cartridge Back (WI-01) first.` });
+				return fail(400, { error: `Cartridge(s) not found: ${missing.join(', ')}. A cart exists once it is scanned into a production bucket; advance its bucket to "${BACKED_LABEL}" on the bucket board first.` });
 			}
 			if (wrongStatus.length > 0) {
-				return fail(400, { error: `Cartridge(s) not available for wax filling: ${wrongStatus.map((w) => `${w.id} (${w.status})`).join(', ')}.` });
+				return fail(400, { error: `Cartridge(s) not available for wax filling: ${wrongStatus.map((w) => `${w.id} (${w.status})`).join(', ')}. Only carts in a "${BACKED_LABEL}" bucket (status backing) can be loaded.` });
+			}
+
+			// Draw the members out of their backed bucket pass. Carts that are not in
+			// any open pass (legacy WI-01 draws, overrides, returns to a busy tub) are
+			// loose and load without a bucket write. Done BEFORE the status write so a
+			// bucket refusal leaves the cart untouched; if the status write fails after
+			// this, the cart is merely loose at 'backing' and still loadable.
+			const memberCycles = await BucketCycle.find({ status: 'open', cartridgeIds: { $in: cartridgeIds } })
+				.select('_id bucketId cycleNumber stage cartridgeIds').lean() as any[];
+			const scanSet = new Set(cartridgeIds);
+			for (const cyc of memberCycles) {
+				const members = (cyc.cartridgeIds as string[]).filter((id) => scanSet.has(id));
+				if (members.length === 0) continue;
+				try {
+					await consumeCarts({ cycleId: String(cyc._id), barcodes: members, waxRunId: runId, user: { _id: locals.user._id, username: locals.user.username } });
+				} catch (e) {
+					if (e instanceof BucketError) return fail(e.status, { error: `Bucket ${cyc.bucketId} #${cyc.cycleNumber}: ${e.message}` });
+					throw e;
+				}
 			}
 
 			const ops = cartridgeIds.map((cid: string, idx: number) => ({
@@ -1588,27 +1672,10 @@ export const actions: Actions = {
 			}
 		}
 
-		// Cartridges scanned onto the deck never actually got wax-filled.
-		// WI-01-originated carts go back to 'backing' (the operator returns
-		// them to the oven; their original ovenEntryTime is preserved).
-		// Test-mode synthetics (no parentLotRecordId) are deleted.
+		// Cartridges scanned onto the deck never actually got wax-filled: they go
+		// back to 'backing' and back into their bucket pass (see revertToBacked).
 		if (cancelScannedIds.length > 0) {
-			await CartridgeRecord.updateMany(
-				{
-					_id: { $in: cancelScannedIds },
-					'waxFilling.runId': runId,
-					status: 'wax_filling',
-					'backing.parentLotRecordId': { $exists: true, $ne: null }
-				},
-				{ $set: { status: 'backing' }, $unset: { waxFilling: '' } }
-			);
-			// Test-mode synthetics (no parentLotRecordId) — hard-deleted through the
-			// driver: Model.deleteMany is blocked by the sacred middleware and used to
-			// throw here AFTER the abort had already been recorded.
-			await hardDeleteUnfinalizedCartridges(
-				{ _id: { $in: cancelScannedIds }, 'waxFilling.runId': runId, status: 'wax_filling' },
-				{ reason: 'Wax run cancelled — synthetic (test-mode) cartridge removed', user: locals.user, oldData: { runId } }
-			);
+			await revertToBacked(cancelScannedIds, runId, `run cancelled: ${reason}`, locals.user, 'cancelled');
 		}
 
 		await AuditLog.create({
@@ -1674,21 +1741,9 @@ export const actions: Actions = {
 			}
 		}
 
-		// Same revert semantics as cancelRun — see comment there.
+		// Same revert semantics as cancelRun — see revertToBacked.
 		if (abortScannedIds.length > 0) {
-			await CartridgeRecord.updateMany(
-				{
-					_id: { $in: abortScannedIds },
-					'waxFilling.runId': runId,
-					status: 'wax_filling',
-					'backing.parentLotRecordId': { $exists: true, $ne: null }
-				},
-				{ $set: { status: 'backing' }, $unset: { waxFilling: '' } }
-			);
-			await hardDeleteUnfinalizedCartridges(
-				{ _id: { $in: abortScannedIds }, 'waxFilling.runId': runId, status: 'wax_filling' },
-				{ reason: 'Wax run aborted — synthetic (test-mode) cartridge removed', user: locals.user, oldData: { runId } }
-			);
+			await revertToBacked(abortScannedIds, runId, `run aborted: ${reason}`, locals.user, 'aborted');
 		}
 
 		await AuditLog.create({

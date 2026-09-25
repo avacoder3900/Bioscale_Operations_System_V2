@@ -289,14 +289,14 @@
 				<div class="tron-card-interactive" role="button" tabindex="0"
 					onclick={() => toggleCard('backing')} onkeydown={(e) => handleKeydown(e, 'backing')}>
 					<div class="flex items-center justify-between">
-						<span class="text-xs font-semibold uppercase text-tron-text-secondary">In Oven</span>
+						<span class="text-xs font-semibold uppercase text-tron-text-secondary">Backed, awaiting oven</span>
 						{#if data.pipeline.backing.readyLots?.length}
 							<span class="tron-badge tron-badge-success">{data.pipeline.backing.readyLots.length} ready</span>
 						{/if}
 					</div>
 					<div class="mt-1 text-lg font-bold text-tron-text">{data.pipeline.backing.backedTotal} <span class="text-xs font-normal text-tron-text-secondary">backed</span></div>
 					<div class="text-xs text-tron-text-secondary">all ready for wax filling</div>
-					<a href="/manufacturing/cart-mfg/wi-01" class="mt-2 block text-xs text-tron-cyan hover:underline" onclick={(e) => e.stopPropagation()}>&rarr; WI-01</a>
+					<a href="/manufacturing/cart-mfg/buckets?stage=backing" class="mt-2 block text-xs text-tron-cyan hover:underline" onclick={(e) => e.stopPropagation()}>&rarr; Buckets</a>
 					{#if expandedCard === 'backing'}
 						<div class="mt-3 border-t border-tron-border pt-3">
 							{#each [...(data.pipeline.backing.readyLots ?? []), ...(data.pipeline.backing.inProgressLots ?? [])] as lot}
