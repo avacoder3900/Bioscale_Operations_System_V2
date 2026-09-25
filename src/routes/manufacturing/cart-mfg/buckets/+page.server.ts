@@ -224,7 +224,6 @@ export const actions: Actions = {
 		return wrap('advance', async () => {
 			const r = await advanceCycle({
 				cycleId: String(d.get('cycleId') ?? ''),
-				thermosealLotId: (d.get('thermosealLotId') as string | null) ?? undefined,
 				discardedIds: codesFrom(d.get('discardedIds')),
 				discardJournal: (d.get('discardJournal') as string | null) ?? undefined,
 				user: op(locals)

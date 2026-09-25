@@ -16093,3 +16093,21 @@ being set to 1 by physical count through the MCP (record_physical_count; needs t
 username to attribute it, asked). Plan §3.4 cutover text + §12.4 and the migration script's
 closing message updated to say so. With the 2-roll floor the board tile will read below floor
 until a delivery; notifications are off, so no restock card or email fires.
+
+================================================================================
+2026-09-25 — feat/bucket-system — advance form: thermoseal preview + lot picker removed
+================================================================================
+User: "when moving a bucket from barcoded to unpressed I want to remove the thermoseal check and
+text box. this can occur in the background but causes too much friction for the user." The
+Barcoded → Unpressed confirm on the bucket board showed a "Thermoseal: N cm (carts × 3.75 cm)
+comes off the open roll (X m left) / A new roll will be pulled" box and, whenever a roll pull
+was coming, a "Lot the new roll comes from" select. Both are gone: the form is now the same for
+every stage (discard scan list + journal + Confirm). Nothing changed in what happens on submit —
+advanceCycle still runs consumeThermoseal (§3.4) for members × 3.75 cm, pulls a roll FIFO from
+the oldest accepted PT-CT-101 lot when the open one runs out, and the post-move banner (cm
+taken, rolls pulled, floor alert) and the Thermoseal tile under Unpressed still report it.
+?/advance no longer reads thermosealLotId (advanceCycle keeps the optional parameter for other
+callers); the board's thermosealCm() helper was dropped. Plan §3.4 / §6.3 / changelog updated.
+Files: src/routes/manufacturing/cart-mfg/buckets/+page.svelte, .../buckets/+page.server.ts,
+BUCKET-SYSTEM_PLAN.md.
+Check (svelte-check direct): 12 errors / 431 warnings — baseline.

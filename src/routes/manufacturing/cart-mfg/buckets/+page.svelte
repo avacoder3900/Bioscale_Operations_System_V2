@@ -35,11 +35,6 @@
 	}
 	let { data, form }: Props = $props();
 
-	// Thermoseal (BUCKET-SYSTEM_PLAN v2 §3.4): length a barcoded → unpressed move will take.
-	function thermosealCm(carts: number): number {
-		const per = data.thermoseal?.config.cmPerCartridge ?? 3.75;
-		return Math.round(carts * per * 100) / 100;
-	}
 	function fmtM(cm: number): string { return `${(cm / 100).toFixed(2)} m`; }
 	const advanceThermoseal = $derived.by(() => {
 		const a = form?.advance;
@@ -924,25 +919,6 @@
 										<input type="text" name="discardJournal" required placeholder="e.g. cracked in press" class={inputCls} />
 									</label>
 									{#if discardList.length >= c.quantity}<p class="text-xs text-red-300">Discarding every cart closes this pass — nothing moves to {nextLabel(c.stage)}.</p>{/if}
-								{/if}
-								{#if nxt === 'unpressed'}
-									{@const movingCarts = Math.max(0, c.quantity - discardList.length)}
-									{@const needCm = thermosealCm(movingCarts)}
-									{@const leftCm = data.thermoseal?.roll?.remainingCm ?? 0}
-									<div class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] px-3 py-2 text-xs text-[var(--color-tron-text-secondary)]">
-										Thermoseal: <span class="font-mono text-[var(--color-tron-text)]">{needCm} cm</span> ({movingCarts} × {data.thermoseal?.config.cmPerCartridge ?? 3.75} cm) comes off the open roll
-										{#if data.thermoseal?.roll}({fmtM(leftCm)} left){/if}.
-										{#if !data.thermoseal?.roll || needCm > leftCm}<span class="text-[var(--color-tron-yellow)]">A new roll will be pulled from inventory.</span>{/if}
-									</div>
-									{#if !data.thermoseal?.roll || needCm > leftCm}
-										<label class="block">
-											<span class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Lot the new roll comes from (optional — oldest lot with stock if left blank)</span>
-											<select name="thermosealLotId" class={inputCls}>
-												<option value="">{data.thermoseal?.nextLot ? `Default: ${data.thermoseal.nextLot.lotId}` : '— No lot (part count only) —'}</option>
-												{#each data.lots[data.thermoseal?.partNumber ?? ''] ?? [] as l (l.lotId)}<option value={l.lotId}>{l.lotId} — {l.remaining} left</option>{/each}
-											</select>
-										</label>
-									{/if}
 								{/if}
 								{#if form?.advance?.error}<p class="text-xs text-[var(--color-tron-error)]">{form.advance.error}</p>{/if}
 								<button type="submit" disabled={busy} class={discardList.length >= c.quantity ? btnDanger : btnPrimary}>
