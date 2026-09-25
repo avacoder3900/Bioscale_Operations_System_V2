@@ -42,6 +42,7 @@ import {
 } from '$lib/server/services/deck-calibration/deck-versions';
 import { isDeckLoadName } from '$lib/server/services/deck-calibration/resolve';
 import { isHardenedRobot } from '$lib/server/services/deck-calibration/rollout';
+import { nextStudioTipWell } from '$lib/server/opentrons/tip-cursor';
 import { DeckVersion } from '$lib/server/db';
 import type { PageServerLoad, Actions } from './$types';
 
@@ -248,8 +249,19 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 				.lean()) as any)
 		: null;
 
+	// Where the next fresh tip is on each robot's rack, per tip type — so a Studio
+	// pick-up aims at a position that still has a tip in it (see tip-cursor.ts).
+	const nextTipWells: Record<string, Record<'wax' | 'reagent', { well: string; source: string }>> = {};
+	for (const r of robots) {
+		try {
+			const [wax, reagent] = await Promise.all([nextStudioTipWell(r._id, 'wax'), nextStudioTipWell(r._id, 'reagent')]);
+			nextTipWells[r._id] = { wax: { well: wax.well, source: wax.source }, reagent: { well: reagent.well, source: reagent.source } };
+		} catch { /* display only */ }
+	}
+
 	return {
 		kind,
+		nextTipWells,
 		versions: JSON.parse(JSON.stringify(versions)),
 		liveVersion: selectedDef?.version ?? null,
 		lastPublishedVersion: selectedDef?.lastPublishedVersion ?? null,

@@ -12,6 +12,7 @@ import { getRobot } from '$lib/server/opentrons/proxy';
 import { connectDB, LabwareDefinition } from '$lib/server/db';
 import { resolveLabwareDefinition } from '$lib/server/services/deck-calibration/resolve';
 import { registerLabwareDefinition, loadLabwareInRun, pickUpTip, SlotOccupiedError } from '$lib/server/opentrons/maintenance';
+import { profileForTiprack, recordStudioTipPickup } from '$lib/server/opentrons/tip-cursor';
 
 export const config = { maxDuration: 60 };
 
@@ -49,12 +50,21 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 		try {
 			await pickUpTip(robot, params.runId, pipetteId, tiprackLabwareId, tipWell);
 		} catch (tipErr) {
-			// In a reused run the pipette may already hold a tip — that's the desired
-			// end state, so treat "tip already attached" as success instead of erroring.
+			// The engine refuses a pick-up while it still models a tip. This used to be
+			// swallowed as "success" (2026-09-23: the Studio said "picked up a tip" while
+			// the pipette parked above the rack and seated nothing — the operator had
+			// swapped the tip by hand, so the model and reality had diverged). Report it
+			// with a stable code so the client can drop first (or reopen the run).
 			const msg = tipErr instanceof Error ? tipErr.message : String(tipErr);
-			if (!/tip.*(attach|present|already)|already.*tip|should not have a tip/i.test(msg)) throw tipErr;
+			if (/tip.*(attach|present|already)|already.*tip|should not have a tip/i.test(msg)) {
+				return json({ code: 'TIP_ALREADY_ATTACHED', message: msg, tiprackLabwareId }, { status: 409 });
+			}
+			throw tipErr;
 		}
-		return json({ tiprackLabwareId });
+		// Advance the Studio's per-robot tip cursor so the next pick-up aims past this well.
+		let nextTipWell: string | null = null;
+		try { nextTipWell = await recordStudioTipPickup(String(robot._id), profileForTiprack(tiprackLoadName), tipWell); } catch { /* best-effort */ }
+		return json({ tiprackLabwareId, nextTipWell });
 	} catch (e) {
 		// A different rack occupies slot 11 (e.g. the reagent rack from an earlier
 		// calibration step in this same run). The slot can't be freed in place, so

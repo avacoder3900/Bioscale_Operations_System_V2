@@ -7,11 +7,11 @@
  * into route actions.
  *
  * v2 model (user decision 2026-09-23):
- *   - The FIRST step is putting a QR sticker on each raw shell and scanning it
+ *   - The FIRST step is putting a QR sticker on each shell and scanning it
  *     into a bucket. That scan is the cartridge's birth: a CartridgeRecord is
- *     created at status 'raw'. A bucket pass is therefore a MEMBERSHIP LIST of
+ *     created at status 'barcoded'. A bucket pass is therefore a MEMBERSHIP LIST of
  *     cartridge ids, not a count.
- *   - Stages: raw → unpressed → pressed inside the bucket, then WI-01 draws
+ *   - Stages: barcoded → unpressed → pressed inside the bucket, then WI-01 draws
  *     cartridges out to 'backing', displayed as "In Oven". No oven equipment,
  *     no oven entry time, no cure-time gate anywhere.
  *   - Advancing a bucket advances every member's status. Discards, residuals
@@ -20,12 +20,12 @@
  *
  * Inventory (the scan-in is the truth):
  *   - scan a cart into a bucket  → −1 PT-CT-104 (shell) and −1 PT-CT-106 (label)
- *   - raw → unpressed            → thermoseal by LENGTH: members × 3.75 cm off the open
+ *   - barcoded → unpressed            → thermoseal by LENGTH: members × 3.75 cm off the open
  *                                  roll; a roll pull (−1 PT-CT-112) only when one runs out
  *   - discard / residual scrap   → scrap of what the cart physically is at that
  *                                  stage (shell + label; thermoseal length is not returned)
  *   - WI-01 draw                 → nothing; everything was debited upstream
- *   - un-scan a mis-scanned raw cart → the shell + label debits are retracted
+ *   - un-scan a mis-scanned barcoded cart → the shell + label debits are retracted
  */
 import { connectDB } from '$lib/server/db/connection';
 import {
@@ -35,14 +35,15 @@ import {
 } from '$lib/server/db/models';
 import { generateId } from '$lib/server/db/utils';
 import { recordTransaction, resolvePartId } from './inventory-transaction';
+import { splitMergedBarcodes } from './cartridge-hard-delete';
 import { generateBarcode } from './barcode-generator';
 import { consumeThermoseal, creditThermoseal, ThermosealError, type ConsumeResult } from './thermoseal-service';
 
-export const BUCKET_STAGES = ['raw', 'unpressed', 'pressed'] as const;
+export const BUCKET_STAGES = ['barcoded', 'unpressed', 'pressed'] as const;
 export type BucketStage = (typeof BUCKET_STAGES)[number];
 
 export const STAGE_LABELS: Record<BucketStage, string> = {
-	raw: 'Raw',
+	barcoded: 'Barcoded',
 	unpressed: 'Unpressed',
 	pressed: 'Pressed'
 };
@@ -288,6 +289,17 @@ export async function resolveBucketId(code: string): Promise<string | null> {
  * a tub into a cartridge field would mint a phantom cartridge whose id is a
  * bucket's label.
  */
+/**
+ * A fast scanner can read two 36-character labels as one string. Carts are born
+ * at bucket scan-in now, so the backstop master added at WI-01 (2026-09-24, after
+ * 87 merged codes became cartridge records) belongs here too.
+ */
+export function assertNotMergedBarcode(code: string): void {
+	if (splitMergedBarcodes(code ?? '')) {
+		throw new BucketError(`Two barcodes were read as one (${(code ?? '').trim().length} characters). Scan one cart at a time.`);
+	}
+}
+
 export async function assertNotBucketLabel(code: string): Promise<void> {
 	const id = await resolveBucketId(code);
 	if (id) throw new BucketError(`${(code ?? '').trim()} is the QR sticker on production bucket ${id}, not a cartridge.`, 409, 'BUCKET_LABEL');
@@ -338,7 +350,7 @@ export async function cartStatusLine(code: string): Promise<CartStatusLine> {
 	if (!cart) {
 		const bucketId = await resolveBucketId(raw);
 		if (bucketId) return { found: false, cartridgeId: null, line: `${raw} is bucket ${bucketId}, not a cart — use the bucket scan box above.` };
-		return { found: false, cartridgeId: null, line: `No cart with code ${raw}. A cart exists once it is scanned into a bucket at Raw.` };
+		return { found: false, cartridgeId: null, line: `No cart with code ${raw}. A cart exists once it is scanned into a bucket at Barcoded.` };
 	}
 
 	const status = String(cart.status ?? '');
@@ -486,7 +498,7 @@ export interface StartCycleInput {
 }
 
 /**
- * Open a pass at Raw with zero members. Shells are then scanned in one at a
+ * Open a pass at Barcoded with zero members. Shells are then scanned in one at a
  * time (scanCartIn). The shell and label lots are fixed here so every scan
  * debits against the same lots.
  */
@@ -518,7 +530,7 @@ export async function startCycle(input: StartCycleInput): Promise<any> {
 			_id: cycleId,
 			bucketId,
 			cycleNumber,
-			stage: 'raw',
+			stage: 'barcoded',
 			cartridgeIds: [],
 			quantity: 0,
 			openedQty: 0,
@@ -543,7 +555,7 @@ export async function startCycle(input: StartCycleInput): Promise<any> {
 		{ _id: bucketId },
 		{ $set: { state: 'in_use', currentCycleId: cycleId, spotCheckPending: false }, $inc: { cycleCount: 1 } }
 	);
-	await logTx({ bucketId, cycleId, type: 'create', fromStage: null, toStage: 'raw', qtyBefore: 0, qtyAfter: 0, relatedId: shell.lot.lotId, operator: input.user });
+	await logTx({ bucketId, cycleId, type: 'create', fromStage: null, toStage: 'barcoded', qtyBefore: 0, qtyAfter: 0, relatedId: shell.lot.lotId, operator: input.user });
 	await audit('bucket_cycles', cycleId, 'INSERT', input.user, { bucketId, cycleNumber, shellLot: shell.lot.lotId, labelLot: label.lot.lotId, emptyConfirmed: !!bucket.spotCheckPending });
 	return BucketCycle.findById(cycleId).lean();
 }
@@ -555,15 +567,16 @@ export interface ScanCartInput {
 }
 
 /**
- * The cartridge's birth. Only while the pass is at Raw. Refuses a code that
+ * The cartridge's birth. Only while the pass is at Barcoded. Refuses a code that
  * is already a cartridge or a bucket's sticker. Debits one shell + one label
  * against the pass's lots.
  */
 export async function scanCartIn(input: ScanCartInput): Promise<{ cycle: any; barcode: string }> {
+	assertNotMergedBarcode(input.barcode ?? '');
 	await connectDB();
 	const cycle = await BucketCycle.findById(input.cycleId).lean() as any;
 	if (!cycle || cycle.status !== 'open') throw new BucketError('Pass is not open.', 404);
-	if (cycle.stage !== 'raw') throw new BucketError(`${cycleLabel(cycle.bucketId, cycle.cycleNumber)} is at ${STAGE_LABELS[cycle.stage as BucketStage]} — carts can only be scanned in while a bucket is at Raw.`);
+	if (cycle.stage !== 'barcoded') throw new BucketError(`${cycleLabel(cycle.bucketId, cycle.cycleNumber)} is at ${STAGE_LABELS[cycle.stage as BucketStage]} — carts can only be scanned in while a bucket is at Barcoded.`);
 	const barcode = (input.barcode ?? '').trim();
 	if (!barcode) throw new BucketError('Scan the cartridge QR.');
 	if (/^BKT-\d+$/i.test(barcode)) throw new BucketError('That is a bucket id, not a cartridge sticker.');
@@ -581,7 +594,7 @@ export async function scanCartIn(input: ScanCartInput): Promise<{ cycle: any; ba
 	try {
 		await CartridgeRecord.create({
 			_id: barcode,
-			status: 'raw',
+			status: 'barcoded',
 			statusUpdatedOn: now.toISOString(),
 			bucket: { bucketId: cycle.bucketId, cycleId: cycle._id, scannedInAt: now, scannedInBy: op },
 			backing: {
@@ -602,13 +615,13 @@ export async function scanCartIn(input: ScanCartInput): Promise<{ cycle: any; ba
 	await debit(SHELL_PART, shellLot, 1, cycle._id, input.user, `Scan-in ${barcode} into ${label}: 1x ${SHELL_PART} shell from lot ${shellLot ?? '(none)'}`);
 	await debit(LABEL_PART, labelLot, 1, cycle._id, input.user, `Scan-in ${barcode} into ${label}: 1x ${LABEL_PART} label from lot ${labelLot ?? '(none)'}`);
 
-	await logTx({ bucketId: cycle.bucketId, cycleId: cycle._id, type: 'scan_in', fromStage: 'raw', toStage: 'raw', qtyBefore: before, qtyAfter: before + 1, cartridgeIds: [barcode], operator: input.user });
-	await audit('cartridge_records', barcode, 'INSERT', input.user, { status: 'raw', bucketId: cycle.bucketId, cycleId: cycle._id });
+	await logTx({ bucketId: cycle.bucketId, cycleId: cycle._id, type: 'scan_in', fromStage: 'barcoded', toStage: 'barcoded', qtyBefore: before, qtyAfter: before + 1, cartridgeIds: [barcode], operator: input.user });
+	await audit('cartridge_records', barcode, 'INSERT', input.user, { status: 'barcoded', bucketId: cycle.bucketId, cycleId: cycle._id });
 	return { cycle: await BucketCycle.findById(cycle._id).lean(), barcode };
 }
 
 /**
- * Undo a mis-scan while the pass is still at Raw: the cartridge record is
+ * Undo a mis-scan while the pass is still at Barcoded: the cartridge record is
  * deleted (it was born seconds ago and has no history) and the shell + label
  * debits are retracted.
  */
@@ -616,11 +629,11 @@ export async function unscanCart(input: ScanCartInput): Promise<any> {
 	await connectDB();
 	const cycle = await BucketCycle.findById(input.cycleId).lean() as any;
 	if (!cycle || cycle.status !== 'open') throw new BucketError('Pass is not open.', 404);
-	if (cycle.stage !== 'raw') throw new BucketError('Carts can only be un-scanned while the bucket is at Raw — after that, use Discard.');
+	if (cycle.stage !== 'barcoded') throw new BucketError('Carts can only be un-scanned while the bucket is at Barcoded — after that, use Discard.');
 	const barcode = (input.barcode ?? '').trim();
 	if (!(cycle.cartridgeIds ?? []).includes(barcode)) throw new BucketError(`${barcode} is not in ${cycleLabel(cycle.bucketId, cycle.cycleNumber)}.`);
 	const cart = await CartridgeRecord.findById(barcode).select('status bucket').lean() as any;
-	if (!cart || cart.status !== 'raw' || cart.bucket?.cycleId !== cycle._id) throw new BucketError(`${barcode} is no longer a raw member of this pass.`);
+	if (!cart || cart.status !== 'barcoded' || cart.bucket?.cycleId !== cycle._id) throw new BucketError(`${barcode} is no longer a barcoded member of this pass.`);
 
 	await CartridgeRecord.deleteOne({ _id: barcode });
 	const before: number = cycle.quantity ?? 0;
@@ -631,8 +644,8 @@ export async function unscanCart(input: ScanCartInput): Promise<any> {
 		const partId = await resolvePartId(pn);
 		await retract('consumption', partId, lotFor(cycle.sourceLots, pn) ?? null, 1, cycle._id, input.user, `Un-scan ${barcode} from ${label}: 1x ${pn} returned`);
 	}
-	await logTx({ bucketId: cycle.bucketId, cycleId: cycle._id, type: 'unscan', fromStage: 'raw', toStage: 'raw', qtyBefore: before, qtyAfter: Math.max(0, before - 1), cartridgeIds: [barcode], reason: 'mis-scan removed', operator: input.user });
-	await audit('cartridge_records', barcode, 'DELETE', input.user, undefined, { status: 'raw', cycleId: cycle._id }, 'Operator removed mis-scanned cartridge while bucket at Raw');
+	await logTx({ bucketId: cycle.bucketId, cycleId: cycle._id, type: 'unscan', fromStage: 'barcoded', toStage: 'barcoded', qtyBefore: before, qtyAfter: Math.max(0, before - 1), cartridgeIds: [barcode], reason: 'mis-scan removed', operator: input.user });
+	await audit('cartridge_records', barcode, 'DELETE', input.user, undefined, { status: 'barcoded', cycleId: cycle._id }, 'Operator removed mis-scanned cartridge while bucket at Barcoded');
 	return BucketCycle.findById(cycle._id).lean();
 }
 
@@ -718,7 +731,7 @@ export interface AdvanceCycleInput {
  * Move the whole bucket one stage forward. Discards are recorded first (so a
  * discard is never written for a move that then fails, and the thermoseal
  * debit covers only carts that move), then every remaining member's status
- * follows the bucket. raw → unpressed takes members × 3.75 cm of thermoseal
+ * follows the bucket. barcoded → unpressed takes members × 3.75 cm of thermoseal
  * off the open roll (thermoseal-service); the roll pull, if one happens, is
  * where PT-CT-112 inventory actually moves.
  */
@@ -756,7 +769,7 @@ export async function advanceCycle(input: AdvanceCycleInput): Promise<{ cycle: a
 	const moving: string[] = fresh.cartridgeIds ?? [];
 	const now = new Date();
 	const set: Record<string, unknown> = { stage: to, stageEnteredAt: now };
-	if (from === 'raw') set.openedQty = moving.length; // the pass's "opened with" count is fixed when it leaves Raw
+	if (from === 'barcoded') set.openedQty = moving.length; // the pass's "opened with" count is fixed when it leaves Barcoded
 	const push: Record<string, unknown> = {};
 	let thermoseal: ConsumeResult | null = null;
 	if (to === 'unpressed') {
@@ -862,7 +875,7 @@ export async function lookupResidualCart(barcode: string): Promise<ResidualLooku
 
 /**
  * Leftovers found in a tub. Each scanned code must be a known cartridge that
- * is still pre-oven (raw / unpressed / pressed) and not a member of any open
+ * is still pre-oven (barcoded / unpressed / pressed) and not a member of any open
  * pass — i.e. it got left behind. Merge moves them into another open bucket
  * (they take that bucket's stage); scrap discards them; defer quarantines the
  * tub with the list in the note. Everything is validated before any write.
@@ -1683,9 +1696,9 @@ export async function overrideCartStage(input: OverrideInput): Promise<{ from: s
 
 // ── master override (whole bucket) ─────────────────────────────────────────
 
-export const FORCE_TARGETS = ['raw', 'unpressed', 'pressed', 'in_oven'] as const;
+export const FORCE_TARGETS = ['barcoded', 'unpressed', 'pressed', 'in_oven'] as const;
 export type ForceTarget = (typeof FORCE_TARGETS)[number];
-export const FORCE_TARGET_LABELS: Record<ForceTarget, string> = { raw: 'Raw', unpressed: 'Unpressed', pressed: 'Pressed', in_oven: IN_OVEN_LABEL };
+export const FORCE_TARGET_LABELS: Record<ForceTarget, string> = { barcoded: 'Barcoded', unpressed: 'Unpressed', pressed: 'Pressed', in_oven: IN_OVEN_LABEL };
 
 export interface ForceBucketInput {
 	bucket: string;        // QR sticker or BKT id, scanned
@@ -1753,7 +1766,7 @@ export async function forceBucketPhase(input: ForceBucketInput): Promise<ForceBu
 	const to = input.target as BucketStage;
 	if (to === from) throw new BucketError(`${label} is already at ${STAGE_LABELS[to]}.`);
 	const set: Record<string, unknown> = { stage: to, stageEnteredAt: now };
-	if (from === 'raw') set.openedQty = ids.length; // same rule as advanceCycle: fixed when leaving Raw
+	if (from === 'barcoded') set.openedQty = ids.length; // same rule as advanceCycle: fixed when leaving Barcoded
 	await BucketCycle.updateOne({ _id: cycle._id }, { $set: set });
 	if (ids.length) {
 		await CartridgeRecord.updateMany(

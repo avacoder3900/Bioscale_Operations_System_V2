@@ -36,7 +36,7 @@
 
 	const inputCls = 'mt-1 w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-3 py-2 text-sm text-[var(--color-tron-text)] focus:border-[var(--color-tron-cyan)] focus:outline-none';
 	const tint: Record<string, string> = {
-		raw: 'border-slate-500/40 text-slate-300', unpressed: 'border-sky-500/40 text-sky-300', pressed: 'border-amber-500/40 text-amber-300', in_oven: 'border-purple-500/40 text-purple-300'
+		barcoded: 'border-slate-500/40 text-slate-300', unpressed: 'border-sky-500/40 text-sky-300', pressed: 'border-amber-500/40 text-amber-300', in_oven: 'border-purple-500/40 text-purple-300'
 	};
 </script>
 

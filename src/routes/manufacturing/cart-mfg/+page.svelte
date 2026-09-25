@@ -104,7 +104,7 @@
 	// Main-line order of a cartridge's status, for "should be at" after a lookup.
 	// Buckets (raw → unpressed → pressed) feed WI-01 (backing = In Oven), then wax,
 	// reagent, seal, store. Side statuses (QC/rejected/scrapped/voided) have no next.
-	const STATUS_ORDER = ['raw', 'unpressed', 'pressed', 'backing', 'wax_filling', 'wax_filled', 'wax_ready', 'reagent_filling', 'reagent_filled', 'inspected', 'sealed', 'cured', 'stored', 'released', 'shipped'];
+	const STATUS_ORDER = ['barcoded', 'unpressed', 'pressed', 'backing', 'wax_filling', 'wax_filled', 'wax_ready', 'reagent_filling', 'reagent_filled', 'inspected', 'sealed', 'cured', 'stored', 'released', 'shipped'];
 	const STATUS_NEXT_LABEL: Record<string, string> = {
 		raw: 'Unpressed (advance the bucket)', unpressed: 'Pressed (advance the bucket)', pressed: 'In Oven (WI-01 draws the bucket)',
 		backing: 'Wax filling', wax_filling: 'Wax-filled', wax_filled: 'Wax ready', wax_ready: 'Reagent filling',
@@ -259,14 +259,14 @@
 		{/each}
 	</div>
 
-	<!-- Production Buckets — Raw → Unpressed → Pressed → In Oven, upstream of Pipeline
+	<!-- Production Buckets — Barcoded → Unpressed → Pressed → In Oven, upstream of Pipeline
 	     Flow. Same counts and stages as the buckets board; each tile deep-links
 	     to the board filtered to that stage. Hidden if the bucket query failed. -->
 	{#if data.bucketCounts}
 		{@const bc = data.bucketCounts}
 		{@const bucketStages = [
 			{ key: 'available', label: 'Available', count: bc.available, sub: 'empty buckets', color: 'text-[var(--color-tron-text)]' },
-			{ key: 'raw', label: 'Raw', count: bc.stages.raw.cartridges, sub: `${bc.stages.raw.buckets} bucket${bc.stages.raw.buckets === 1 ? '' : 's'}`, color: 'text-[var(--color-tron-cyan)]' },
+			{ key: 'barcoded', label: 'Barcoded', count: bc.stages.barcoded.cartridges, sub: `${bc.stages.barcoded.buckets} bucket${bc.stages.barcoded.buckets === 1 ? '' : 's'}`, color: 'text-[var(--color-tron-cyan)]' },
 			{ key: 'unpressed', label: 'Unpressed', count: bc.stages.unpressed.cartridges, sub: `${bc.stages.unpressed.buckets} bucket${bc.stages.unpressed.buckets === 1 ? '' : 's'}`, color: 'text-[var(--color-tron-cyan)]' },
 			{ key: 'pressed', label: 'Pressed', count: bc.stages.pressed.cartridges, sub: `${bc.stages.pressed.buckets} bucket${bc.stages.pressed.buckets === 1 ? '' : 's'}`, color: 'text-[var(--color-tron-cyan)]' },
 			{ key: 'backing', label: 'In Oven', count: bc.inOven, sub: 'at WI-01', color: 'text-[var(--color-tron-purple)]' }

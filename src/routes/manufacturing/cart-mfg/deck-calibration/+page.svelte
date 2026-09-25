@@ -928,6 +928,16 @@
 	// (or the calibration Z) from desiredMount loaded the wrong definition and
 	// probed at the wrong depth. Starts null so nothing can proceed on a guess.
 	let tipProfile = $state<'wax' | 'reagent' | null>(null);
+	// Seed the rack position from where the robot's tracker / Studio cursor says the
+	// next FRESH tip is, whenever the robot or tip type changes. The operator can
+	// still overtype it (e.g. after refilling the rack → A1).
+	const suggestedTipWell = $derived(
+		tipProfile && selectedRobotId ? (data.nextTipWells?.[selectedRobotId]?.[tipProfile] ?? null) : null
+	);
+	$effect(() => {
+		const sw = suggestedTipWell;
+		if (sw?.well) tipWell = sw.well;
+	});
 	const tiprackForProfile = $derived(
 		tipProfile === 'wax'
 			? 'cosmasanddamian_96_tiprack_20ul'
@@ -1000,6 +1010,12 @@
 				await refreshPosition();
 			}
 			// Step 2 — travel, unless the operator already jogged onto the fixture.
+			// The probe runs from wherever the pipette IS (attached mode), so this
+			// decision must use the live position, not the last one this page saw.
+			// After a Swap tip the stored position was still the calibrator from
+			// before the swap → travel skipped → probe walked at the tip rack (R04,
+			// 2026-09-24). Always re-read before deciding.
+			await refreshPosition();
 			if (!pickedUpNow && atCalibratorNow()) {
 				msg = 'Already on the calibrator — probing from the jogged position…';
 			} else {
@@ -1041,6 +1057,32 @@
 	// tip type and re-run without ever thinking about what is in slot 11. The rack
 	// comes from tiprackForProfile (the operator's explicit choice), not master's
 	// tiprackForMount, which inferred it from the mount.
+	// Next rack position after `w`, column-major (A1 → B1 … H1 → A2 …), wrapping
+	// after H12. The Studio never wrote back to the protocols' tip tracker, so a
+	// second pick-up in one session used to aim at the well it had just emptied.
+	function nextTipWell(w: string): string {
+		const m = /^([A-H])(\d{1,2})$/.exec(w.trim().toUpperCase());
+		if (!m) return 'A1';
+		const rowI = 'ABCDEFGH'.indexOf(m[1]);
+		let col = parseInt(m[2], 10);
+		if (rowI < 7) return `${'ABCDEFGH'[rowI + 1]}${col}`;
+		col = col >= 12 ? 1 : col + 1;
+		return `A${col}`;
+	}
+
+	/** Drop the modelled tip into the trash. Resolves false when the engine modelled none. */
+	async function doDropTip(): Promise<boolean> {
+		const res = await fetch(`/api/opentrons-lab/robots/${selectedRobotId}/maintenance/${runId}/drop-tip`, {
+			method: 'POST',
+			credentials: 'same-origin',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ pipetteId })
+		});
+		const body = await res.json().catch(() => ({}) as any);
+		if (!res.ok) throw new Error(body?.message || `HTTP ${res.status}`);
+		return !!body?.dropped;
+	}
+
 	async function doPickUp(allowRecover: boolean) {
 		const res = await fetch(
 			`/api/opentrons-lab/robots/${selectedRobotId}/maintenance/${runId}/pick-up-tip`,
@@ -1051,8 +1093,21 @@
 				body: JSON.stringify({ pipetteId, tiprackLoadName: tiprackForProfile, slot: '11', tipWell })
 			}
 		);
-		if (res.ok) return;
+		if (res.ok) {
+			// The rack position is spent: aim the next pick-up at the next one (the
+			// server's cursor answer wins so a reload lands on the same position).
+			const ok = await res.json().catch(() => ({}) as any);
+			tipWell = ok?.nextTipWell || nextTipWell(tipWell);
+			return;
+		}
 		const body = await res.json().catch(() => ({}) as any);
+		if (res.status === 409 && body?.code === 'TIP_ALREADY_ATTACHED' && allowRecover) {
+			// The run still models a tip (typically one that was then swapped by hand).
+			// Drop it in the trash so the press can happen, then retry once.
+			msg = 'The run still had a tip modelled — dropping it in the trash first…';
+			await doDropTip();
+			return doPickUp(false);
+		}
 		if (res.status === 409 && body?.code === 'SLOT_OCCUPIED' && allowRecover) {
 			msg = 'Slot 11 had another rack loaded — reopening the run to free it…';
 			await stopMaintenance();
@@ -1071,6 +1126,9 @@
 		if (!tiprackForProfile) throw new Error('Pick the tip type first (p20/wax or p300/reagent) — it is not inferred from the mount');
 		await doPickUp(true);
 		hasTip = true;
+		// The pipette is now over the tip rack: refresh so "at calibrator?" checks
+		// and the position readout can't act on a pre-pick-up position.
+		await refreshPosition();
 		// Tip state just changed → any nominal taken without the tip is now a
 		// different frame. Force a fresh Move-to-hole before the next capture.
 		nominal = null; refWell = null;
@@ -1098,8 +1156,29 @@
 		clearMsg(); busy = true;
 		msg = 'Loading tiprack & picking up a tip…';
 		try {
+			const from = tipWell;
 			await doPickUpTip();
-			msg = `Picked up a tip (${tiprackForProfile} ${tipWell}). No calibration run — use "Calibrate tip" for that, or move to a hole.`;
+			msg = `Picked up a tip (${tiprackForProfile} ${from}). No calibration run — use "Calibrate tip" for that, or move to a hole.`;
+		} catch (e) { errMsg = e instanceof Error ? e.message : String(e); } finally { busy = false; }
+	}
+
+	// "Swap tip": drop the current tip in the trash and take the next fresh one from
+	// the rack, without a hand swap (2026-09-23). A hand-swapped tip is invisible to
+	// the engine, which is how "same Z, different depth" happened on B14 — this keeps
+	// the modelled tip and the real tip the same object. The probe adjust belongs to
+	// the old tip, so it is cleared: Calibrate tip again before teaching with it.
+	async function swapTipAction() {
+		if (!runId || !pipetteId) { errMsg = 'Open a maintenance run first'; return; }
+		if (!tiprackForProfile) { errMsg = 'Pick the tip type first (p20/wax or p300/reagent)'; return; }
+		clearMsg(); busy = true;
+		msg = 'Dropping the current tip in the trash…';
+		try {
+			const dropped = await doDropTip();
+			hasTip = false; tipAdjust = null; nominal = null; refWell = null;
+			const from = tipWell;
+			msg = dropped ? `Dropped. Picking up a fresh tip (${tiprackForProfile} ${from})…` : `No tip was modelled (a hand-fitted tip must come off by hand). Picking up ${tiprackForProfile} ${from}…`;
+			await doPickUpTip();
+			msg = `Fresh tip on (${tiprackForProfile} ${from}). Its bend is unknown — run "Calibrate tip" before capturing, or move to a hole to eyeball it.`;
 		} catch (e) { errMsg = e instanceof Error ? e.message : String(e); } finally { busy = false; }
 	}
 
@@ -1476,6 +1555,18 @@
 						</div>
 						{#if !tipProfile}
 							<p class="mt-1 text-[10px] text-amber-300/90">Pick the tip type — probe depth differs by 6.309 mm and is never guessed.</p>
+						{:else}
+							<!-- Rack position the next pick-up presses into. Seeded from the robot's
+							     tip tracker (last run) or the Studio's own cursor, whichever is newer,
+							     because A1 is usually long gone on a working rack. -->
+							<div class="mt-1 flex items-center gap-2 text-[10px]" style="color: var(--color-tron-text-secondary)">
+								<span>Pick from</span>
+								<input type="text" bind:value={tipWell} disabled={busy} class="w-12 rounded border border-[var(--color-tron-border)] bg-black/40 px-1 py-0.5 text-center font-mono text-[11px]" style="color: var(--color-tron-text)" title="Rack position of the next fresh tip (column-major: A1..H1, A2..). Overtype if the rack was reloaded." />
+								{#if suggestedTipWell}
+									<span title="Where the robot's last run ({suggestedTipWell.source === 'run' ? 'tip tracker' : suggestedTipWell.source}) says the next fresh tip is">next fresh: <span class="font-mono">{suggestedTipWell.well}</span> · {suggestedTipWell.source}</span>
+								{/if}
+								<button type="button" onclick={() => (tipWell = 'A1')} disabled={busy} class="rounded border border-[var(--color-tron-border)] px-1.5 py-0.5 hover:border-[var(--color-tron-cyan)]/60" title="Rack was refilled — start from A1 again">Refilled → A1</button>
+							</div>
 						{/if}
 					</div>
 					<!--
@@ -1517,6 +1608,9 @@
 						belief, and an operator recovering from a dropped or broken tip has to be
 						able to pick another one up without reopening the run.
 					-->
+					<button type="button" onclick={swapTipAction} disabled={!pipetteId || busy || !tipProfile} class="mt-1 w-full rounded border border-amber-400/50 bg-amber-900/15 px-2 py-1.5 text-[11px] font-semibold text-amber-200 hover:bg-amber-900/25 disabled:opacity-40" title="Drops the current tip in the trash, then picks the next fresh one from slot 11. Clears the probe adjust — Calibrate tip again before capturing.">
+						Swap tip — drop it, take a fresh one from the rack
+					</button>
 					<button type="button" onclick={pickUpTipAction} disabled={!pipetteId || busy || !tipProfile} class="mt-1 w-full rounded border border-[var(--color-tron-cyan)]/40 px-2 py-1.5 text-[11px] text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40" title="Just picks up a tip of the selected type from slot 11 — no travel to the calibrator, no probe.">
 						{hasTip ? 'Pick up tip (another one)' : 'Pick up tip (no probe)'}
 					</button>

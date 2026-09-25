@@ -4,7 +4,7 @@ import mongoose from 'mongoose';
 import {
 	connectDB, WaxFillingRun, CartridgeRecord, Consumable, ManufacturingSettings, generateId,
 	Equipment, EquipmentLocation, AuditLog, BackingLot, WaxBatch, ReceivingLot,
-	OpentronsRobot, ManualCartridgeRemoval, Ot2BridgeCommand
+	OpentronsRobot, ManualCartridgeRemoval, Ot2BridgeCommand, TipCalibratorFixture
 } from '$lib/server/db';
 import { recordTransaction, resolvePartId } from '$lib/server/services/inventory-transaction';
 import { findBucketLabels } from '$lib/server/services/bucket-service';
@@ -16,6 +16,7 @@ import { checkRobotConflict, checkDeckConflict, checkTrayConflict } from '$lib/s
 import { protectLockedCarts, LOCKED_STATUSES } from '$lib/server/manufacturing/locked-cartridges';
 import { getRobot, robotGet, robotPost, bridgeDeviceIdForRobot } from '$lib/server/opentrons/proxy';
 import { calibrationRtpValues } from '$lib/server/opentrons/calibration-rtps';
+import { hardDeleteUnfinalizedCartridges } from '$lib/server/services/cartridge-hard-delete';
 import { ensureFreshRunProtocol } from '$lib/server/opentrons/protocol-freshness';
 import { resolveDeckBinding, DeckBindingError } from '$lib/server/services/deck-calibration/run-guard';
 import { isHardenedRobot } from '$lib/server/services/deck-calibration/rollout';
@@ -125,7 +126,11 @@ function emptyState(robotId: string, loadError: string | null = null) {
 			nextTipIndex: number | null;
 			hostname: string | null;
 			capturedAt: string | null;
-		}
+		},
+		// Per-robot wax-tube aspiration floor (fixture.minTipClearanceWaxMm), for DISPLAY
+		// on the parameters form. The value that runs is injected server-side at
+		// startRun by calibrationRtpValues regardless of what the form shows.
+		waxFloorMm: null as number | null
 	};
 }
 
@@ -274,6 +279,22 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 
 		// Last known tip state for this robot — derived from the most recent
 		// completed wax run. null on first-ever use; protocol falls back to A1.
+		// Wax-tube aspiration floor to SHOW on the form (2026-09-24). The parameters
+		// step runs before the deck is scanned, so prefer the fixture of the run's
+		// deck when known, else any fixture on this robot that carries a floor.
+		// Display only: startRun re-resolves by deck and injects the real value.
+		let waxFloorMm: number | null = null;
+		try {
+			let fx: any = null;
+			if (run?.deckId) {
+				const deckEq = await Equipment.findById(run.deckId).select('deckLoadName').lean() as any;
+				if (deckEq?.deckLoadName) fx = await TipCalibratorFixture.findOne({ deckLoadName: deckEq.deckLoadName }).select('minTipClearanceWaxMm').lean();
+			}
+			if (!fx) fx = await TipCalibratorFixture.findOne({ robotId: String(robotId), minTipClearanceWaxMm: { $ne: null } }).select('minTipClearanceWaxMm').lean();
+			const v = Number((fx as any)?.minTipClearanceWaxMm);
+			if (Number.isFinite(v) && v > 0) waxFloorMm = v;
+		} catch { /* display only */ }
+
 		const lastTipState = (lastTipRun as any)?.pipetteTipState?.after
 			? {
 				nextTipIndex: (lastTipRun as any).pipetteTipState.after.nextTipIndex ?? null,
@@ -396,7 +417,8 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 			opentronsRobotId: robotId,
 			// Last completed run's post-run tip-tracker snapshot (if any),
 			// to seed the "next tip / tips remaining" readout on the panel.
-			lastTipState
+			lastTipState,
+			waxFloorMm
 		};
 	} catch (err) {
 		console.error('[WAX-FILLING PAGE] Load error:', err instanceof Error ? err.message : err);
@@ -1580,11 +1602,13 @@ export const actions: Actions = {
 				},
 				{ $set: { status: 'backing' }, $unset: { waxFilling: '' } }
 			);
-			await CartridgeRecord.deleteMany({
-				_id: { $in: cancelScannedIds },
-				'waxFilling.runId': runId,
-				status: 'wax_filling'
-			});
+			// Test-mode synthetics (no parentLotRecordId) — hard-deleted through the
+			// driver: Model.deleteMany is blocked by the sacred middleware and used to
+			// throw here AFTER the abort had already been recorded.
+			await hardDeleteUnfinalizedCartridges(
+				{ _id: { $in: cancelScannedIds }, 'waxFilling.runId': runId, status: 'wax_filling' },
+				{ reason: 'Wax run cancelled — synthetic (test-mode) cartridge removed', user: locals.user, oldData: { runId } }
+			);
 		}
 
 		await AuditLog.create({
@@ -1661,11 +1685,10 @@ export const actions: Actions = {
 				},
 				{ $set: { status: 'backing' }, $unset: { waxFilling: '' } }
 			);
-			await CartridgeRecord.deleteMany({
-				_id: { $in: abortScannedIds },
-				'waxFilling.runId': runId,
-				status: 'wax_filling'
-			});
+			await hardDeleteUnfinalizedCartridges(
+				{ _id: { $in: abortScannedIds }, 'waxFilling.runId': runId, status: 'wax_filling' },
+				{ reason: 'Wax run aborted — synthetic (test-mode) cartridge removed', user: locals.user, oldData: { runId } }
+			);
 		}
 
 		await AuditLog.create({
@@ -1727,15 +1750,17 @@ export const actions: Actions = {
 		} catch (e) {
 			return fail(502, { error: `Could not reach the robot bridge: ${e instanceof Error ? e.message : 'unknown'}` });
 		}
+		// AuditLog's schema is tableName/recordId/changedBy/changedAt/newData — the
+		// previous shape (resourceType/username/details) was silently dropped by
+		// Mongoose, leaving rows with only an action and a time (found 2026-09-17).
 		await AuditLog.create({
 			_id: generateId(),
+			tableName: 'wax_filling_runs',
+			recordId: runId,
 			action: cancel ? 'wax_tip_swap_cancel' : 'wax_tip_swap_request',
-			resourceType: 'wax_filling_run',
-			resourceId: runId,
-			userId: locals.user._id,
-			username: locals.user.username,
-			timestamp: new Date(),
-			details: { mode, opentronsRunId: run.opentronsRunId ?? null }
+			changedBy: locals.user.username,
+			changedAt: new Date(),
+			newData: { mode, cancel, opentronsRunId: run.opentronsRunId ?? null, robotId: String(robotId) }
 		});
 		return { success: true, tipSwap: cancel ? 'cancelled' : mode };
 	},

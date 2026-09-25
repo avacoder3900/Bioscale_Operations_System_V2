@@ -142,7 +142,7 @@
 			</p>
 		</label>
 	{:else if target}
-		<p class="text-[10px]" style="color: var(--color-tron-text-secondary)">A cart that is currently in a bucket (Raw / Unpressed / Pressed) is removed from its bucket's pass when moved here.</p>
+		<p class="text-[10px]" style="color: var(--color-tron-text-secondary)">A cart that is currently in a bucket (Barcoded / Unpressed / Pressed) is removed from its bucket's pass when moved here.</p>
 	{/if}
 
 	<label class="block">

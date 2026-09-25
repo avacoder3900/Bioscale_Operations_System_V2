@@ -27,7 +27,6 @@
 			scanQuery: string;
 		};
 		form: {
-			mint?: ActionResult; relabel?: ActionResult;
 			start?: ActionResult; advance?: ActionResult; scrap?: ActionResult;
 			residual?: ActionResult; retire?: ActionResult; thermosealToggles?: ActionResult;
 			auditScan?: ActionResult; audit?: ActionResult;
@@ -35,16 +34,7 @@
 	}
 	let { data, form }: Props = $props();
 
-	// Mint New Bucket card (inline, §9.4): 'mint' scans one QR; 'replace' scans the
-	// bucket's current sticker (or BKT id) then the new one.
-	let mintMode = $state<'mint' | 'replace'>('mint');
-	let mintQr = $state('');
-	let relabelBucket = $state('');
-	let relabelQr = $state('');
-	let mintBusy = $state(false);
-	const enhanceMint = () => { mintBusy = true; return async ({ update }: { update: (o?: { reset?: boolean }) => Promise<void> }) => { await update({ reset: false }); mintBusy = false; mintQr = ''; relabelQr = ''; }; };
-
-	// Thermoseal (BUCKET-SYSTEM_PLAN v2 §3.4): length a raw → unpressed move will take.
+	// Thermoseal (BUCKET-SYSTEM_PLAN v2 §3.4): length a barcoded → unpressed move will take.
 	function thermosealCm(carts: number): number {
 		const per = data.thermoseal?.config.cmPerCartridge ?? 3.75;
 		return Math.round(carts * per * 100) / 100;
@@ -126,14 +116,14 @@
 		}
 	}
 
-	// Raw-stage scan-in (fetch per cart so the box stays hot).
+	// Barcoded-stage scan-in (fetch per cart so the box stays hot).
 	let cartScan = $state('');
 	let cartScanBusy = $state(false);
 	let cartScanError = $state('');
 	let cartScanOk = $state('');
 
 	const cyclesByStage = $derived.by(() => {
-		const m: Record<BucketStage, BoardCycle[]> = { raw: [], unpressed: [], pressed: [] };
+		const m: Record<BucketStage, BoardCycle[]> = { barcoded: [], unpressed: [], pressed: [] };
 		for (const c of data.board.cycles) m[c.stage]?.push(c);
 		return m;
 	});
@@ -246,7 +236,7 @@
 	}
 	function resetLists() { discardList = []; scrapList = []; residualList = []; listInput = ''; residualDisposition = ''; residualDest = ''; cartScanError = ''; cartScanOk = ''; }
 
-	function openCycle(c: BoardCycle) { panel = { kind: 'cycle', cycleId: c.cycleId, mode: 'view' }; resetLists(); if (c.stage === 'raw') focusCartScan(); }
+	function openCycle(c: BoardCycle) { panel = { kind: 'cycle', cycleId: c.cycleId, mode: 'view' }; resetLists(); if (c.stage === 'barcoded') focusCartScan(); }
 	function setMode(mode: CycleMode) {
 		if (panel.kind === 'cycle') panel = { kind: 'cycle', cycleId: panel.cycleId, mode };
 		resetLists();
@@ -386,9 +376,9 @@
 		switch (r.type) {
 			case 'mint': return { event: 'Bucket created', moved: r.reason ?? '', discarded: false };
 			case 'relabel': return { event: 'Sticker', moved: r.reason ?? '', discarded: false };
-			case 'create': return { event: 'Pass opened', moved: '→ Raw', discarded: false };
-			case 'scan_in': return { event: 'Cart scanned in', moved: 'at Raw', discarded: false };
-			case 'unscan': return { event: 'Mis-scan removed', moved: 'at Raw', discarded: false };
+			case 'create': return { event: 'Pass opened', moved: '→ Barcoded', discarded: false };
+			case 'scan_in': return { event: 'Cart scanned in', moved: 'at Barcoded', discarded: false };
+			case 'unscan': return { event: 'Mis-scan removed', moved: 'at Barcoded', discarded: false };
 			case 'advance': return { event: 'Moved', moved: `${from ?? '?'} → ${to ?? '?'}`, discarded: false };
 			case 'consume': return { event: `Drawn by WI-01 → ${data.inOvenLabel}`, moved: `${from ?? 'Pressed'} → ${data.inOvenLabel}`, discarded: false };
 			case 'scrap': return { event: 'Discarded', moved: `at ${from ?? '?'}`, discarded: true };
@@ -433,7 +423,7 @@
 	const btnPrimary = 'w-full rounded-lg bg-[var(--color-tron-cyan)] py-2.5 text-sm font-bold text-[var(--color-tron-bg-primary)] hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-30';
 	const btnGhost = 'rounded border border-[var(--color-tron-border)] px-3 py-1.5 text-xs text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)] disabled:cursor-not-allowed disabled:opacity-40';
 	const btnDanger = 'w-full rounded-lg border border-red-500/50 bg-red-900/20 py-2.5 text-sm font-semibold text-red-300 hover:bg-red-900/30 disabled:opacity-30';
-	const stageTint: Record<string, string> = { available: 'border-[var(--color-tron-border)]', raw: 'border-gray-500/40', unpressed: 'border-blue-500/40', pressed: 'border-amber-500/40', in_oven: 'border-[var(--color-tron-purple)]/50' };
+	const stageTint: Record<string, string> = { available: 'border-[var(--color-tron-border)]', barcoded: 'border-gray-500/40', unpressed: 'border-blue-500/40', pressed: 'border-amber-500/40', in_oven: 'border-[var(--color-tron-purple)]/50' };
 </script>
 
 {#snippet scanList(target: 'discard' | 'scrap' | 'residual', list: string[], placeholder: string)}
@@ -458,7 +448,7 @@
 	<div class="flex flex-wrap items-end justify-between gap-3">
 		<div>
 			<h1 class="text-2xl font-semibold text-[var(--color-tron-text)]">Production Buckets</h1>
-			<p class="text-xs text-[var(--color-tron-text-secondary)]">Stick a QR on each raw shell and scan it into a bucket. Whole buckets move Raw → Unpressed → Pressed; WI-01 draws them into the oven.</p>
+			<p class="text-xs text-[var(--color-tron-text-secondary)]">Stick a QR on each shell and scan it into a bucket. Whole buckets move Barcoded → Unpressed → Pressed; WI-01 draws them into the oven.</p>
 		</div>
 		<div class="flex gap-2">
 			<a href="/manufacturing/cart-mfg/buckets/new" class={btnGhost}>New bucket</a>
@@ -541,33 +531,6 @@
 						<p class="px-1 py-4 text-center text-[10px] text-[var(--color-tron-text-secondary)]">No empty buckets.</p>
 					{/if}
 				</div>
-				<!-- Mint New Bucket (BUCKET-SYSTEM_PLAN v2 §9.4) — inline: no page change -->
-				<div class="mt-3 rounded border border-dashed border-[var(--color-tron-cyan)]/40 bg-[var(--color-tron-surface)] p-2">
-					<div class="flex items-center justify-between">
-						<p class="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-tron-cyan)]">{mintMode === 'mint' ? 'Mint New Bucket' : 'Replace Sticker'}</p>
-						<button type="button" class="text-[10px] text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)]" onclick={() => { mintMode = mintMode === 'mint' ? 'replace' : 'mint'; }}>
-							{mintMode === 'mint' ? 'Replace a damaged sticker' : '← Mint new bucket'}
-						</button>
-					</div>
-					{#if mintMode === 'mint'}
-						<form method="POST" action="?/mint" use:enhance={enhanceMint} class="mt-1.5 space-y-1.5">
-							<p class="text-[10px] text-[var(--color-tron-text-secondary)]">Scan one QR sticker → a new bucket, ready here under Available.</p>
-							<input type="text" name="qr" bind:value={mintQr} autocomplete="off" placeholder="scan new sticker…" class="{inputCls} font-mono" />
-							{#if form?.mint?.error}<p class="text-[10px] text-[var(--color-tron-error)]">{form.mint.error}</p>{/if}
-							{#if form?.mint?.success}<p class="text-[10px] text-green-300">Minted <span class="font-mono">{form.mint.bucketId}</span> — sticker <span class="font-mono">{String(form.mint.barcode ?? '').slice(0, 8)}…</span></p>{/if}
-							<button type="submit" disabled={mintBusy || !mintQr.trim()} class="w-full rounded bg-[var(--color-tron-cyan)] px-2 py-1.5 text-center text-xs font-bold text-[var(--color-tron-bg-primary)] hover:opacity-90 disabled:opacity-50">{mintBusy ? 'Minting…' : 'Mint bucket'}</button>
-						</form>
-					{:else}
-						<form method="POST" action="?/relabel" use:enhance={enhanceMint} class="mt-1.5 space-y-1.5">
-							<p class="text-[10px] text-[var(--color-tron-text-secondary)]">The bucket keeps its id and history; only the label changes.</p>
-							<input type="text" name="bucketId" bind:value={relabelBucket} autocomplete="off" placeholder="scan current sticker or BKT id…" class="{inputCls} font-mono" />
-							<input type="text" name="qr" bind:value={relabelQr} autocomplete="off" placeholder="scan new sticker…" class="{inputCls} font-mono" />
-							{#if form?.relabel?.error}<p class="text-[10px] text-[var(--color-tron-error)]">{form.relabel.error}</p>{/if}
-							{#if form?.relabel?.success}<p class="text-[10px] text-green-300"><span class="font-mono">{form.relabel.bucketId}</span> now wears <span class="font-mono">{String(form.relabel.barcode ?? '').slice(0, 8)}…</span></p>{/if}
-							<button type="submit" disabled={mintBusy || !relabelBucket.trim() || !relabelQr.trim()} class="w-full rounded border border-[var(--color-tron-cyan)]/60 px-2 py-1.5 text-center text-xs font-bold text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-50">{mintBusy ? 'Replacing…' : 'Replace sticker'}</button>
-						</form>
-					{/if}
-				</div>
 			</div>
 
 			{#each data.stages as s (s.key)}
@@ -588,7 +551,7 @@
 									</div>
 									<div class="mt-1 flex items-center justify-between text-[10px] text-[var(--color-tron-text-secondary)]">
 										<span>{c.bucketId} #{c.cycleNumber} · {dwell(c.stageEnteredAt)}</span>
-										{#if c.stage !== 'raw' && c.quantity !== c.openedQty}<span title="left Raw with {c.openedQty}">−{c.openedQty - c.quantity}</span>{/if}
+										{#if c.stage !== 'barcoded' && c.quantity !== c.openedQty}<span title="left Barcoded with {c.openedQty}">−{c.openedQty - c.quantity}</span>{/if}
 									</div>
 								</button>
 								<details class="border-t border-[var(--color-tron-border)]/40 px-2 py-1">
@@ -733,7 +696,7 @@
 						</div>
 						<div class="mt-3 grid grid-cols-3 gap-2 text-center">
 							<div class="rounded bg-[var(--color-tron-bg-primary)] p-2"><p class="text-[10px] text-[var(--color-tron-text-secondary)]">Carts</p><p class="text-xl font-bold text-[var(--color-tron-cyan)]">{c.quantity}</p></div>
-							<div class="rounded bg-[var(--color-tron-bg-primary)] p-2"><p class="text-[10px] text-[var(--color-tron-text-secondary)]">Left Raw with</p><p class="text-xl font-bold text-[var(--color-tron-text)]">{c.stage === 'raw' ? '—' : c.openedQty}</p></div>
+							<div class="rounded bg-[var(--color-tron-bg-primary)] p-2"><p class="text-[10px] text-[var(--color-tron-text-secondary)]">Left Barcoded with</p><p class="text-xl font-bold text-[var(--color-tron-text)]">{c.stage === 'barcoded' ? '—' : c.openedQty}</p></div>
 							<div class="rounded bg-[var(--color-tron-bg-primary)] p-2"><p class="text-[10px] text-[var(--color-tron-text-secondary)]">Here</p><p class="text-xl font-bold text-[var(--color-tron-text)]">{dwell(c.stageEnteredAt)}</p></div>
 						</div>
 						<div class="mt-2 text-[10px] text-[var(--color-tron-text-secondary)]">
@@ -741,8 +704,8 @@
 						</div>
 
 						{#if panel.mode === 'view'}
-							{#if c.stage === 'raw'}
-								<!-- Raw = filling. Scan shells in; each scan is a cartridge's birth. -->
+							{#if c.stage === 'barcoded'}
+								<!-- Barcoded = filling. Scan shells in; each scan is a cartridge's birth. -->
 								<div class="mt-3">
 									<label for="cartScan" class="text-[10px] uppercase tracking-wider text-[var(--color-tron-cyan)]">Scan carts into this bucket</label>
 									<input id="cartScan" type="text" bind:value={cartScan} autocomplete="off" disabled={cartScanBusy} placeholder="scan cart QR…"
@@ -1094,7 +1057,7 @@
 									<p class="text-[10px] text-[var(--color-tron-yellow)]">No open pass is at {stageLabel(last)} — an empty bucket is suggested: a new pass opens there at {stageLabel(last)} with these carts. Nothing is debited.</p>
 								{/if}
 							{:else}
-								<p class="text-xs text-[var(--color-tron-yellow)]">No open pass at {stageLabel(last)} and no empty bucket — <strong>mint a new bucket</strong> (Mint New Bucket card under Available); it will appear here as soon as it exists.</p>
+								<p class="text-xs text-[var(--color-tron-yellow)]">No open pass at {stageLabel(last)} and no empty bucket — <strong>mint a new bucket</strong> (<a href="/manufacturing/cart-mfg/buckets/new" class="underline">New bucket</a>); it will appear here as soon as it exists.</p>
 							{/if}
 							<div>
 								<span class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Scan the carts being merged</span>

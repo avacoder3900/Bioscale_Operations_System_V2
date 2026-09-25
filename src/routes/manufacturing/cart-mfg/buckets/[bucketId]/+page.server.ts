@@ -27,7 +27,7 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 		cycleIds.length
 			? CartridgeRecord.aggregate([
 				{ $match: { $or: [{ 'bucket.cycleId': { $in: cycleIds } }, { 'backing.bucketCycleId': { $in: cycleIds } }] } },
-				{ $group: { _id: { $ifNull: ['$bucket.cycleId', '$backing.bucketCycleId'] }, count: { $sum: 1 }, ids: { $push: '$_id' }, inOven: { $sum: { $cond: [{ $in: ['$status', ['raw', 'unpressed', 'pressed', 'scrapped', 'voided']] }, 0, 1] } } } }
+				{ $group: { _id: { $ifNull: ['$bucket.cycleId', '$backing.bucketCycleId'] }, count: { $sum: 1 }, ids: { $push: '$_id' }, inOven: { $sum: { $cond: [{ $in: ['$status', ['barcoded', 'raw', 'unpressed', 'pressed', 'scrapped', 'voided']] }, 0, 1] } } } }
 			]) as any as Promise<any[]>
 			: Promise.resolve([]),
 		cycleIds.length

@@ -23,6 +23,7 @@ import {
 	BucketError, STAGE_LABELS, IN_OVEN_STATUS, IN_OVEN_LABEL, SHELL_PART, LABEL_PART, THERMOSEAL_PART,
 	getOpenCycle, resolveBucketId, consumeCarts, scrapCarts, cycleLabel
 } from '$lib/server/services/bucket-service';
+import { splitMergedBarcodes } from '$lib/server/services/cartridge-hard-delete';
 import { nanoid } from 'nanoid';
 import type { PageServerLoad, Actions } from './$types';
 
@@ -174,6 +175,13 @@ export const actions: Actions = {
 		const barcode = (data.get('barcode') as string)?.trim() || '';
 		if (!lotId) return fail(400, { scanBackedCartridge: { error: 'Lot ID required' } });
 		if (!barcode) return fail(400, { scanBackedCartridge: { error: 'Cartridge barcode required' } });
+		// A fast scanner can glue two labels into one 72-character string. The page
+		// splits those before posting; this is the backstop so a merged code can never
+		// become a cartridge record again (87 of them had, 2026-09-24 — carried over
+		// from master's WI-01 when the bucket flow replaced it).
+		if (splitMergedBarcodes(barcode)) {
+			return fail(400, { scanBackedCartridge: { error: `Two barcodes were read as one (${barcode.length} characters). Scan one cartridge at a time.`, barcode } });
+		}
 
 		const lot = await LotRecord.findById(lotId).lean() as any;
 		if (!lot) return fail(404, { scanBackedCartridge: { error: 'Lot not found' } });

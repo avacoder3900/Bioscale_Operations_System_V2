@@ -10,7 +10,7 @@ const operatorRef = { _id: String, username: String };
  * 'BKT-000123 #7' in history views only; operators scan the tub's QR sticker.
  *
  * v2 (2026-09-23): a pass is a MEMBERSHIP LIST, not a count. Each cartridge
- * is serialized (CartridgeRecord created at status 'raw') the moment its QR
+ * is serialized (CartridgeRecord created at status 'barcoded') the moment its QR
  * sticker is scanned into the bucket; `cartridgeIds` holds the members and
  * `quantity` is kept equal to its length for the board and counts. Advancing
  * the bucket advances every member's status. WI-01 draws members out to
@@ -77,14 +77,14 @@ const bucketCycleSchema = new Schema({
 	cycleNumber: { type: Number, required: true }, // → 'BKT-000123 #7'
 	stage: {
 		type: String,
-		enum: ['raw', 'unpressed', 'pressed', 'qr_pending'], // qr_pending: v1 only, kept so old rows validate
+		enum: ['barcoded', 'raw', 'unpressed', 'pressed', 'qr_pending'], // 'raw' + qr_pending: pre-rename & v1 values, kept so old rows validate
 		required: true
 	},
 	cartridgeIds: { type: [String], default: [] }, // members currently in the tub (v2)
 	quantity: { type: Number, required: true },    // == cartridgeIds.length (denormalized for counts)
-	openedQty: { type: Number, required: true },   // members when the pass first left Raw (shrinkage = openedQty − quantity)
+	openedQty: { type: Number, required: true },   // members when the pass first left Barcoded (shrinkage = openedQty − quantity)
 	sourceLots: { type: [sourceLotSchema], default: [] },
-	// Thermoseal taken at raw → unpressed (BUCKET-SYSTEM_PLAN v2 §3.4): total cm
+	// Thermoseal taken at barcoded → unpressed (BUCKET-SYSTEM_PLAN v2 §3.4): total cm
 	// and the roll segments it came from, so voidCycle can credit the length back.
 	thermoseal: {
 		cm: Number,

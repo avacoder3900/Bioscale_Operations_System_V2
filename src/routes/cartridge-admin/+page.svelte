@@ -57,7 +57,7 @@
 		return Number.isNaN(d.getTime()) ? '—' : d.toLocaleString();
 	}
 
-	const STAGES: LifecycleStage[] = ['raw', 'unpressed', 'pressed', 'backing', 'wax_filled', 'wax_qc', 'wax_ready', 'wax_rejected', 'reagent_filled', 'inspected', 'sealed', 'reagent_qc', 'reagent_ready', 'reagent_rejected', 'cured', 'stored', 'released', 'shipped', 'assay_loaded', 'testing', 'completed', 'voided'];
+	const STAGES: LifecycleStage[] = ['barcoded', 'unpressed', 'pressed', 'backing', 'wax_filled', 'wax_qc', 'wax_ready', 'wax_rejected', 'reagent_filled', 'inspected', 'sealed', 'reagent_qc', 'reagent_ready', 'reagent_rejected', 'cured', 'stored', 'released', 'shipped', 'assay_loaded', 'testing', 'completed', 'voided'];
 
 	function stageLabel(stage: string): string {
 		if (stage === 'backing') return 'In Oven'; // BUCKET-SYSTEM_PLAN v2: backing == In Oven
@@ -124,12 +124,12 @@
 <div class="space-y-4">
 	<PartsNav />
 
-	<!-- Production-bucket funnel (BUCKET-SYSTEM_PLAN v2 §9.3): Raw → Unpressed → Pressed → In Oven.
+	<!-- Production-bucket funnel (BUCKET-SYSTEM_PLAN v2 §9.3): Barcoded → Unpressed → Pressed → In Oven.
 	     Bucket tiles deep-link into the board; In Oven filters this page to status backing. -->
 	{#if data.bucketCounts}
 		{@const bc = data.bucketCounts}
 		{@const strip = [
-			{ key: 'raw', label: 'Raw', value: bc.stages.raw.cartridges, sub: `${bc.stages.raw.buckets} bkt`, cls: 'text-[var(--color-tron-cyan)]' },
+			{ key: 'barcoded', label: 'Barcoded', value: bc.stages.barcoded.cartridges, sub: `${bc.stages.barcoded.buckets} bkt`, cls: 'text-[var(--color-tron-cyan)]' },
 			{ key: 'unpressed', label: 'Unpressed', value: bc.stages.unpressed.cartridges, sub: `${bc.stages.unpressed.buckets} bkt`, cls: 'text-[var(--color-tron-cyan)]' },
 			{ key: 'pressed', label: 'Pressed', value: bc.stages.pressed.cartridges, sub: `${bc.stages.pressed.buckets} bkt`, cls: 'text-[var(--color-tron-cyan)]' },
 			{ key: 'backing', label: 'In Oven', value: bc.inOven, sub: 'at WI-01', cls: 'text-[var(--color-tron-purple)]' }

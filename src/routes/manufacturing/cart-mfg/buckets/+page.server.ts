@@ -10,7 +10,7 @@ import {
 	BucketError, BUCKET_STAGES, STAGE_LABELS, IN_OVEN_LABEL, SHELL_PART, LABEL_PART, THERMOSEAL_PART,
 	boardData, stageCounts, resolveScan, isBucketStage, changeLog, bucketRegistry,
 	startCycle, scanCartIn, unscanCart, advanceCycle, scrapCarts, reportResidual, retireBucket,
-	createBucket, replaceBucketSticker, cartStatusLine, auditScan, auditCycle
+	cartStatusLine, auditScan, auditCycle
 } from '$lib/server/services/bucket-service';
 import { thermosealStatus, checkFloor, setThermosealToggles } from '$lib/server/services/thermoseal-service';
 import type { Actions, PageServerLoad } from './$types';
@@ -154,30 +154,6 @@ export const actions: Actions = {
 		})();
 	},
 
-	// Mint a bucket from one scanned QR, inline on the board (Mint New Bucket card).
-	mint: async ({ request, locals }) => {
-		if (!locals.user) redirect(302, '/login');
-		requirePermission(locals.user, 'manufacturing:write');
-		await connectDB();
-		const d = await request.formData();
-		return wrap('mint', async () => {
-			const r = await createBucket({ qr: String(d.get('qr') ?? ''), user: op(locals) });
-			return { mint: { success: true, bucketId: r.bucketId, barcode: r.barcode } };
-		})();
-	},
-
-	// Replace a damaged sticker, inline on the board. The bucket keeps its id + history.
-	relabel: async ({ request, locals }) => {
-		if (!locals.user) redirect(302, '/login');
-		requirePermission(locals.user, 'manufacturing:write');
-		await connectDB();
-		const d = await request.formData();
-		return wrap('relabel', async () => {
-			const r = await replaceBucketSticker({ bucketId: String(d.get('bucketId') ?? ''), qr: String(d.get('qr') ?? ''), user: op(locals) });
-			return { relabel: { success: true, bucketId: r.bucketId, barcode: r.barcode, previous: r.previous ?? null } };
-		})();
-	},
-
 	start: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
 		requirePermission(locals.user, 'manufacturing:write');
@@ -195,7 +171,7 @@ export const actions: Actions = {
 		})();
 	},
 
-	// Called via fetch from the Raw panel's scan box (one cart per call) so the
+	// Called via fetch from the Barcoded panel's scan box (one cart per call) so the
 	// rail can keep scanning without a full form round-trip.
 	scanIn: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');

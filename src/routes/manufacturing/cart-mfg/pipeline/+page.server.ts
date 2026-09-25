@@ -24,13 +24,13 @@ import type { PageServerLoad } from './$types';
 export const config = { maxDuration: 60 };
 
 // The three bucket_* stages are the production-bucket funnel (BUCKET-SYSTEM_PLAN
-// v2 §9): cartridges are born at Raw when scanned into a bucket and move with
+// v2 §9): cartridges are born at Barcoded when scanned into a bucket and move with
 // it, then WI-01 draws them into 'backing' ("In Oven").
-const STAGE_KEYS = ['bucket_raw', 'bucket_unpressed', 'bucket_pressed', 'backing', 'wax_fill', 'cooling', 'reagent', 'seal', 'store'] as const;
+const STAGE_KEYS = ['bucket_barcoded', 'bucket_unpressed', 'bucket_pressed', 'backing', 'wax_fill', 'cooling', 'reagent', 'seal', 'store'] as const;
 type StageKey = (typeof STAGE_KEYS)[number];
 
 const BUCKET_STAGE_FOR_KEY: Partial<Record<StageKey, BucketStage>> = {
-	bucket_raw: 'raw', bucket_unpressed: 'unpressed', bucket_pressed: 'pressed'
+	bucket_barcoded: 'barcoded', bucket_unpressed: 'unpressed', bucket_pressed: 'pressed'
 };
 
 export interface PipelineRow {
@@ -65,9 +65,9 @@ const bucketHeaders = [
 ];
 
 const STAGE_META: Record<StageKey, StageMeta> = {
-	bucket_raw: {
-		key: 'bucket_raw', label: 'Raw', color: 'tron-purple',
-		description: 'Production buckets being filled: raw shells (PT-CT-104) with QR stickers on, scanned in one at a time. Each scan is a cartridge\'s birth. One row per open bucket pass.',
+	bucket_barcoded: {
+		key: 'bucket_barcoded', label: 'Barcoded', color: 'tron-purple',
+		description: 'Production buckets being filled: shells (PT-CT-104) with QR stickers on, scanned in one at a time. Each scan is a cartridge\'s birth. One row per open bucket pass.',
 		headers: bucketHeaders
 	},
 	bucket_unpressed: {

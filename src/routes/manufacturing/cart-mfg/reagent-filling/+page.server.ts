@@ -1397,6 +1397,52 @@ export const actions: Actions = {
 	},
 
 	/** Force advance to a specific stage (admin skip) */
+	/**
+	 * Mid-run tip swap (2026-09-18, mirrors wax-filling). Asks the on-robot
+	 * bridge daemon to write a request file that the running reagent protocol
+	 * polls before every aspiration batch. The protocol then swaps the tip
+	 * (mode 'rack' = robot takes the next tracked tip; 'hand' = pauses for the
+	 * operator to push one on), re-probes it on the calibrator, and continues
+	 * with the batch it was about to aspirate. Works running or paused.
+	 */
+	requestTipSwap: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		await connectDB();
+		const data = await request.formData();
+		const runId = data.get('runId')?.toString();
+		const mode = data.get('mode')?.toString() === 'hand' ? 'hand' : 'rack';
+		const cancel = data.get('cancel')?.toString() === 'true';
+		if (!runId) return fail(400, { error: 'Missing runId' });
+		const run = await ReagentBatchRecord.findById(runId).lean() as any;
+		if (!run) return fail(404, { error: 'Run not found' });
+		const robotId = run.robot?._id;
+		const robot = robotId ? await OpentronsRobot.findById(robotId).lean() as any : null;
+		if (!robot) return fail(400, { error: 'Run has no OT-2 robot' });
+		try {
+			await Ot2BridgeCommand.create({
+				_id: generateId(),
+				robotId: String(robotId),
+				deviceId: bridgeDeviceIdForRobot(robot as any),
+				kind: 'tip_swap_request',
+				payload: { mode, cancel, runId: run.opentronsRunId ?? null, requestedBy: locals.user.username },
+				ttlMs: 120_000,
+				requestedBy: locals.user.username
+			});
+		} catch (e) {
+			return fail(502, { error: `Could not reach the robot bridge: ${e instanceof Error ? e.message : 'unknown'}` });
+		}
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'reagent_batch_records',
+			recordId: runId,
+			action: cancel ? 'reagent_tip_swap_cancel' : 'reagent_tip_swap_request',
+			changedBy: locals.user.username,
+			changedAt: new Date(),
+			newData: { mode, cancel, opentronsRunId: run.opentronsRunId ?? null, robotId: String(robotId) }
+		});
+		return { success: true, tipSwap: cancel ? 'cancelled' : mode };
+	},
+
 	forceAdvanceStage: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
 		await connectDB();

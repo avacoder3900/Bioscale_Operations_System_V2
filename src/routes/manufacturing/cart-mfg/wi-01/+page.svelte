@@ -68,9 +68,28 @@
 		return deserialize(await res.text());
 	}
 
+	// A fast scanner sometimes delivers two labels as one 72-character string (or the
+	// same label twice). Split into UUID-sized chunks, drop repeats, and scan each.
+	function splitMerged(raw: string): string[] {
+		const v = raw.trim();
+		if (v.length <= 36 || v.length % 36 !== 0) return [v];
+		const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+		const parts: string[] = [];
+		for (let i = 0; i < v.length; i += 36) parts.push(v.slice(i, i + 36));
+		return parts.every((p) => uuid.test(p)) ? [...new Set(parts)] : [v];
+	}
+
 	async function handleCartScan() {
-		const barcode = cartScanInput.trim();
-		if (!barcode || cartScanBusy) return;
+		const raw = cartScanInput.trim();
+		if (!raw || cartScanBusy) return;
+		const parts = splitMerged(raw);
+		if (parts.length > 1) {
+			cartScanInput = '';
+			cartScanError = `Two barcodes were read as one — scanning them separately (${parts.length}).`;
+			for (const q of parts) { cartScanInput = q; await handleCartScan(); }
+			return;
+		}
+		const barcode = raw;
 		if (scannedCarts.includes(barcode)) { cartScanError = `${barcode} already scanned in this batch`; cartScanInput = ''; return; }
 		cartScanBusy = true; cartScanError = ''; cartScanInput = '';
 		try {

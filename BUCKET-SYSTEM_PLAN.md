@@ -269,7 +269,7 @@ on an Available bucket, the panel asks **Merge or Discard** first:
   and one *Merge into* picker suggested from the board: an **open pass at that stage** first;
   else an **empty bucket** (this bucket itself first — the carts are already in it), where a
   **new pass opens at that stage** holding them (`openedQty` = n, source lots carried over,
-  nothing debited); else a **mint a new bucket** hint and the button stays disabled. Then the
+  nothing debited); else a **mint a new bucket** hint linking to `/buckets/new` and the button stays disabled. Then the
   carts are scanned (they are tracked by id, so the records must be named) and merged. The
   server validates every cart on submit (known, still at that stage, not in an open pass).
   Ledger: `create` (new pass) or `merge_in`, plus one `merge_out` on the reported bucket.
@@ -300,8 +300,9 @@ lot quantity − Σ consumption/scrap rows for that lot.
 
 Stage strip (Available · Raw · Unpressed · Pressed · **In Oven** (links to
 `/cartridge-admin?stage=backing`)) → 4-column board (Available / Raw / Unpressed / Pressed).
-Under **Available**: the **Mint New Bucket** card (→ `/buckets/new`, and *Replace a damaged
-sticker* → `/buckets/new#replace`). Every pass card carries **Audit** (§9.8) under its cart list.
+Under **Available**: empty buckets only — minting lives on `/buckets/new` (§9.4), reached from
+the header *New bucket* button; there is no inline mint card on the board. Every pass card
+carries **Audit** (§9.8) under its cart list.
 Under **Unpressed**: the yellow *thermoseal not synced* card
 and the compact **Thermoseal tile** (§3.4; admin toggles inside "Development settings"). Header
 buttons: *New bucket*, *Master override* (admin, §9.5), *WI-01 →*. Rail (start, scan-in box with
@@ -329,7 +330,10 @@ thermoseal cm, ledger rows, *Replace sticker* link, *Void this pass…* (admin).
 ### 9.4 `/manufacturing/cart-mfg/buckets/new` — mint one bucket from one QR
 
 Scan the sticker → `BKT-NNNNNN` minted with that `barcode`. `?bucket=BKT-…` presets *Replace
-sticker*. "← Return to previous page." The v1 `print-bucket-labels` page is deleted.
+sticker*. "← Return to previous page." The v1 `print-bucket-labels` page is deleted. This page
+(plus the board's *New bucket* header button) is the **only** way to mint a bucket or replace a
+sticker — the board's inline Mint card was removed on 2026-09-25, along with its `?/mint` and
+`?/relabel` actions.
 
 ### 9.5 `/manufacturing/cart-mfg/buckets/override` — Master Override (admin)
 
@@ -428,6 +432,7 @@ per-scan lookup only needs `manufacturing:read`.
 | `4522ba63` / `8e3e8a67` | Note removed again as redundant with the *Rolls on hand* tile (user); `liveCountAt` reverted; yellow card names `master` as the build draining the shelf |
 | `d7e0fe78` | **Find a cart** box under the board — `cartStatusLine()` + `?/cartLookup`, one line of status (§9.1) |
 | `3e7bebca` | **Audit a bucket** — scan every cart, move or discard what does not belong (§9.8) |
+| _pending_ | **Inline Mint card removed** from the board (§9.1/§9.4) — one way in: the *New bucket* button → `/buckets/new`; board `?/mint` + `?/relabel` actions deleted |
 | `f21ed50a` | Audit: missing members listed per cart with Keep / Write off / Take off pass, + Last audit summary (§9.8) |
 | `6baff520` | Audit: only the cart just scanned is displayed; strays needing a decision stay listed (§9.8) |
 
