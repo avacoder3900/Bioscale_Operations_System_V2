@@ -15955,3 +15955,11 @@ Tests: src/lib/server/research-proxy.test.ts (unit, 15 cases incl. dot-segment r
 tests/contracts/12-research-analysis.test.ts (401 / 404 allowlist / 200-or-503 catalog).
 npm run test:unit: 174 pass. npm run check: 11 errors — unchanged from feat/spu-tweaks baseline.
 
+
+================================================================================
+2026-09-25 — master — DEPLOY: research analysis MCP tools (bims-operations 3.6.0)
+================================================================================
+Source: branch master @ commit faea623d (cherry-pick of feat/research-analysis-mcp 61560f31 onto master)
+Retrieve this exact code: git checkout master at commit faea623d
+Adds /api/agent/research/[...path] proxy + 18 research_* MCP tools. Requires RESEARCH_API_URL on Vercel
+(set 2026-09-25 by Alejandro). No manufacturing behaviour changed. Deployed via GitHub integration on push.
