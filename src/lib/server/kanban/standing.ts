@@ -184,6 +184,56 @@ async function spawnPartReorder(part: any): Promise<string> {
 	return created._id;
 }
 
+/**
+ * Thermoseal restock (BUCKET-SYSTEM_PLAN v2 §3.4). PT-CT-112 is consumed by
+ * length against an open roll; the inventory count moves only when a roll is
+ * pulled. The floor is "always ≥ minRolls rolls on the shelf": when a pull
+ * leaves fewer, one auto-committed restock card is spawned (idempotent on
+ * sourceRef thermoseal-restock:<partId>) and the card body carries the lead
+ * time warning. Returns the open card id (existing or new).
+ */
+export async function ensureThermosealRestockCard(input: {
+	partId: string;
+	partNumber: string;
+	name?: string | null;
+	rollsOnHand: number;
+	minRolls: number;
+	leadTimeDays?: number | null;
+	supplier?: string | null;
+	minimumOrderQty?: number | null;
+}): Promise<{ taskId: string; created: boolean }> {
+	await connectDB();
+	const sourceRef = `thermoseal-restock:${input.partId}`;
+	const existing = await openSupplyCardId(sourceRef);
+	if (existing) return { taskId: existing, created: false };
+
+	const orderQty = Math.max(input.minimumOrderQty ?? 0, input.minRolls - input.rollsOnHand, 1);
+	const lead = input.leadTimeDays && input.leadTimeDays > 0
+		? `Supplier lead time is ${input.leadTimeDays} day${input.leadTimeDays === 1 ? '' : 's'} — order today so the shelf is never empty.`
+		: 'Lead time applies — no lead time is recorded on the part; order today so the shelf is never empty.';
+	const created: any = await createKanbanItem({
+		title: `Restock thermoseal ${input.partNumber} — ${input.rollsOnHand} roll${input.rollsOnHand === 1 ? '' : 's'} on hand (min ${input.minRolls})`,
+		description: `Thermoseal ${input.partNumber}${input.name ? ` (${input.name})` : ''} is at ${input.rollsOnHand} roll${input.rollsOnHand === 1 ? '' : 's'} in inventory — below the ${input.minRolls}-roll floor (BUCKET-SYSTEM_PLAN v2 §3.4). ${lead} Order at least ${orderQty} roll${orderQty === 1 ? '' : 's'}${input.supplier ? ` from ${input.supplier}` : ''}.`,
+		actor: { username: SUPPLY_ACTOR, via: 'system' },
+		itemType: 'chore',
+		origin: 'planned',
+		source: 'thermoseal-restock',
+		sourceRef,
+		tags: ['thermoseal', 'restock']
+	});
+	await shapeAndCommit({
+		taskId: created._id,
+		shape: {
+			sizeClass: 'short',
+			classOfService: 'expedite',
+			dorDeliverable: `PO placed for ≥ ${orderQty} × ${input.partNumber}; rolls received and ${input.partNumber} inventory back to ≥ ${input.minRolls} (currently ${input.rollsOnHand}); verify: receipt transaction logged`,
+			tags: ['thermoseal', 'restock']
+		},
+		autoCommit: true
+	});
+	return { taskId: created._id, created: true };
+}
+
 async function openSupplyCardId(sourceRef: string): Promise<string | null> {
 	const open: any = await KanbanTask.findOne({ sourceRef, status: { $ne: 'done' }, archived: false })
 		.select('_id status')
@@ -283,7 +333,53 @@ export async function standingStatus(opts?: { spawn?: boolean; actorUsername?: s
 	}
 
 	const partsReorder = await partsReorderSweep({ spawn: opts?.spawn });
+	if (opts?.spawn) {
+		// Thermoseal floor (BUCKET-SYSTEM_PLAN v2 §3.4) rides the same tick so a
+		// shelf below 2 rolls gets its card even if nobody opens the bucket board.
+		// Lazy import: thermoseal-service imports this module.
+		await import('$lib/server/services/thermoseal-service')
+			.then(({ checkFloor }) => checkFloor({}))
+			.catch((e) => console.error('[kanban/standing] thermoseal floor check failed:', e));
+	}
 	return { targets: rows, partsReorder };
+}
+
+// Coalescing state for requestSupplyCheckForPart, per part, per process.
+const supplyCheck = new Map<string, { last: number; timer: ReturnType<typeof setTimeout> | null }>();
+const SUPPLY_COALESCE_MS = 1_500;      // a burst of scans folds into one trailing check
+const SUPPLY_IMMEDIATE_AFTER_MS = 30_000; // ...but an isolated decrement still checks at once
+
+/**
+ * Coalescing front door for checkSupplyForPart (added 2026-09-25).
+ *
+ * The raw check is 4+ queries and the inventory path fired it once per debit —
+ * two per bucket scan-in, unawaited. At a rapid scanning pace those piled up
+ * against a 10-socket pool and starved the scans themselves. This fires
+ * immediately when the part has been quiet, and otherwise schedules ONE trailing
+ * check shortly after the last decrement, which sees the final count. Nothing is
+ * dropped: a burst still gets a check, just one instead of forty.
+ *
+ * Synchronous and never throws, so it is safe to call fire-and-forget.
+ */
+export function requestSupplyCheckForPart(partDefinitionId: string): void {
+	const now = Date.now();
+	let s = supplyCheck.get(partDefinitionId);
+	if (!s) {
+		s = { last: 0, timer: null };
+		supplyCheck.set(partDefinitionId, s);
+	}
+	const state = s;
+	if (!state.timer && now - state.last >= SUPPLY_IMMEDIATE_AFTER_MS) {
+		state.last = now;
+		void checkSupplyForPart(partDefinitionId);
+		return;
+	}
+	if (state.timer) clearTimeout(state.timer);
+	state.timer = setTimeout(() => {
+		state.timer = null;
+		state.last = Date.now();
+		void checkSupplyForPart(partDefinitionId);
+	}, SUPPLY_COALESCE_MS);
 }
 
 /**
@@ -291,6 +387,8 @@ export async function standingStatus(opts?: { spawn?: boolean; actorUsername?: s
  * transaction service after a stock decrement. Checks the part-reorder rule
  * for THAT part plus any active part_stock standing targets pointing at it.
  * Must never throw into the caller.
+ *
+ * Callers on a hot path should go through requestSupplyCheckForPart instead.
  */
 export async function checkSupplyForPart(partDefinitionId: string): Promise<void> {
 	try {

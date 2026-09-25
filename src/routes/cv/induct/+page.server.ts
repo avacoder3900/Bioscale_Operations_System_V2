@@ -28,6 +28,7 @@
 import { error, fail, redirect } from '@sveltejs/kit';
 import { hasPermission } from '$lib/server/permissions';
 import { connectDB, CartridgeRecord, AuditLog, generateId } from '$lib/server/db';
+import { assertNotBucketLabel, BucketError } from '$lib/server/services/bucket-service';
 import type { PageServerLoad, Actions } from './$types';
 
 // The three destinations an operator can induct a cartridge toward, each mapped
@@ -162,6 +163,15 @@ export const actions: Actions = {
 				phaseHistory: summarizePhaseHistory(existing),
 				noteCount: Array.isArray(existing.notes) ? existing.notes.length : 0
 			};
+		}
+
+		// A production bucket wearing a UUID QR sticker scans exactly like a
+		// cartridge — refuse it before it can be born as a phantom cartridge.
+		try {
+			await assertNotBucketLabel(barcode);
+		} catch (e) {
+			if (e instanceof BucketError) return fail(409, { error: e.message });
+			throw e;
 		}
 
 		// Originate a brand-new cartridge directly at the chosen ready-for status.

@@ -7,7 +7,6 @@ import type { PageServerLoad } from './$types';
 export const config = { maxDuration: 60 };
 
 const waxDefaults = {
-	minOvenTimeMin: 60,
 	runDurationMin: 45,
 	removeDeckWarningMin: 5,
 	coolingWarningMin: 30,
@@ -46,7 +45,6 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 		return {
 			wax: {
-				minOvenTimeMin: wax.minOvenTimeMin ?? waxDefaults.minOvenTimeMin,
 				runDurationMin: wax.runDurationMin ?? waxDefaults.runDurationMin,
 				removeDeckWarningMin: wax.removeDeckWarningMin ?? waxDefaults.removeDeckWarningMin,
 				coolingWarningMin: wax.coolingWarningMin ?? waxDefaults.coolingWarningMin,

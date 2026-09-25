@@ -18,17 +18,32 @@ const correctionSchema = new Schema({
 const cartridgeRecordSchema = new Schema({
 	_id: { type: String, default: () => generateId() },
 
+	// Production bucket the cartridge was scanned into at birth (BUCKET-SYSTEM_PLAN
+	// v2, 2026-09-23): a cartridge is serialized the moment its QR sticker is
+	// scanned into a bucket at status 'barcoded', then travels barcoded → unpressed →
+	// pressed inside that bucket until WI-01 draws it out to 'backing' (In Oven).
+	bucket: {
+		bucketId: String,            // ProductionBucket._id ('BKT-000123') — the tub, reusable
+		cycleId: String,             // BucketCycle._id — the pass; the real link (bucket ids repeat)
+		scannedInAt: Date,
+		scannedInBy: operatorRef
+	},
+
 	backing: {
 		lotId: String,               // LEGACY: BackingLot._id (bucket barcode) — not written since WAX-FLOW-2
 		parentLotRecordId: String,   // LotRecord._id — the WI-01 batch
 		lotQrCode: String,           // LotRecord.qrCodeRef
-		cartridgeBlankLot: String,   // PT-CT-104 input material lot
+		cartridgeBlankLot: String,   // PT-CT-104 shell lot (field name kept for stored data; UI says "shell")
 		thermosealLot: String,       // PT-CT-112 input material lot
 		barcodeLabelLot: String,     // PT-CT-106 input material lot
-		ovenEntryTime: Date,         // when this cartridge was scanned into the backing oven
-		ovenExitTime: Date,          // when the cartridge left the oven onto a wax deck
-		ovenLocationId: String,      // Equipment._id of the backing oven (WAX-FLOW-2)
-		ovenLocationName: String,    // denormalized oven name for display (WAX-FLOW-2)
+		bucketCycleId: String,       // BucketCycle._id the cartridge was drawn from at WI-01
+		bucketBarcode: String,       // denormalized ProductionBucket._id for search; NOT unique across passes
+		// LEGACY (backing-oven tracking removed 2026-09-23, BUCKET-SYSTEM_PLAN v2):
+		// no longer written; kept so historical records still validate.
+		ovenEntryTime: Date,
+		ovenExitTime: Date,
+		ovenLocationId: String,
+		ovenLocationName: String,
 		operator: operatorRef,
 		recordedAt: Date
 	},
@@ -166,6 +181,12 @@ const cartridgeRecordSchema = new Schema({
 			// wax_filled IS the stored state; visual pass is implicit; Wax Reject page →
 			// wax_rejected. wax_filled | wax_ready → reagent. `wax_qc` is retired but kept
 			// in the enum so historical rows still validate; `wax_stored` is migrated away.
+			// Pre-backing bucket stages (BUCKET-SYSTEM_PLAN v2): a cartridge is born at
+			// 'barcoded' when its QR sticker is scanned into a production bucket and moves
+			// with the bucket. 'backing' is displayed as "In Oven" — WI-01 draws
+			// cartridges out of a pressed bucket into it.
+			'barcoded', 'unpressed', 'pressed',
+			'raw', // pre-rename value (BUCKET-SYSTEM_PLAN), kept so historical rows still validate
 			'backing', 'wax_filling', 'wax_filled', 'wax_qc', 'wax_ready', 'wax_rejected', 'reagent_filling', 'reagent_filled',
 			// Reagent inspection flow (REAGENT-TOPSEAL-IMPLICIT, supersedes
 			// REAGENT-INSPECT-AFTER-TOPSEAL): reagent_filled IS the post-fill resting
@@ -230,6 +251,8 @@ const cartridgeRecordSchema = new Schema({
 
 cartridgeRecordSchema.index({ status: 1 });
 cartridgeRecordSchema.index({ 'backing.lotId': 1 });
+cartridgeRecordSchema.index({ 'backing.bucketCycleId': 1 }, { sparse: true }); // bucket → cartridges drawn at WI-01
+cartridgeRecordSchema.index({ 'bucket.cycleId': 1 }, { sparse: true });         // bucket pass → its member cartridges (v2)
 cartridgeRecordSchema.index({ status: 1, 'backing.ovenLocationId': 1 }); // WAX-FLOW-2: oven occupancy queries
 cartridgeRecordSchema.index({ 'waxFilling.runId': 1 });
 cartridgeRecordSchema.index({ 'reagentFilling.runId': 1 });

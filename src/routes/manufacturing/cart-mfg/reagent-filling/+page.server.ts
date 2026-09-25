@@ -6,6 +6,7 @@ import {
 	OpentronsRobot, Ot2BridgeCommand
 } from '$lib/server/db';
 import { recordTransaction, resolvePartId } from '$lib/server/services/inventory-transaction';
+import { findBucketLabels } from '$lib/server/services/bucket-service';
 import { checkRobotConflict, checkDeckConflict, checkTrayConflict } from '$lib/server/manufacturing/resource-locks';
 import { WAX_PAGE_OWNED } from '$lib/server/manufacturing/run-statuses';
 import { getRobot, robotGet, robotPost, bridgeDeviceIdForRobot } from '$lib/server/opentrons/proxy';
@@ -828,6 +829,15 @@ export const actions: Actions = {
 		// always has a coherent status — never 'backing' (that's reserved for the
 		// pre-individuation aggregate count on BackingLot).
 		if (cartridgesFilled.length > 0) {
+			// The upsert below creates a stub for any scanned id that doesn't
+			// exist yet — so a production bucket's label must be refused first,
+			// or a tub's UUID QR sticker would be born as a cartridge
+			// (BUCKET-SYSTEM_PLAN §9.4).
+			const bucketLabels = await findBucketLabels(cartridgesFilled.map((cf: any) => cf.cartridgeId));
+			if (bucketLabels.size > 0) {
+				const details = [...bucketLabels].map(([code, b]) => `${code} is the label on bucket ${b}`).join('; ');
+				return fail(400, { error: `Not cartridges — ${details}. Remove them from the deck scan.` });
+			}
 			const ops = cartridgesFilled.map((cf: any) => ({
 				updateOne: {
 					filter: { _id: cf.cartridgeId },

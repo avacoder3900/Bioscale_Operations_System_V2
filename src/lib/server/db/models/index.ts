@@ -162,3 +162,9 @@ export { AskBimsFeedback } from './ask-bims-feedback.js';
 
 // Ask BIMS — voice transcription cost telemetry (Phase M.1, 2026-05-13)
 export { AskBimsTranscribeLog } from './ask-bims-transcribe-log.js';
+
+// Production buckets — pre-serialization WIP tracking (BUCKET-SYSTEM_PLAN.md)
+export { ProductionBucket } from './production-bucket.js';
+export { BucketCycle } from './bucket-cycle.js';
+export { BucketTransaction } from './bucket-transaction.js';
+export { ThermosealRoll } from './thermoseal-roll.js';

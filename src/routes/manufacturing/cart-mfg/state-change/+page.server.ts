@@ -14,10 +14,17 @@
  *    barcodes" opts in to originating them directly at the target status.
  *  - Every changed cartridge gets `priorStatus`, a phase-scoped note, and an
  *    AuditLog row.
+ *  - Bucket stages (barcoded / unpressed / pressed) are bucket MEMBERSHIP, not just a
+ *    status: moving a cart into one needs a destination bucket whose open pass
+ *    is at that stage, and moving a cart out of one removes it from its pass.
+ *    Both go through bucket-service.overrideCartStage so the board stays honest.
+ *    No inventory moves either way. Unknown barcodes cannot be created at a
+ *    bucket stage — scanning into a bucket on the board is what debits parts.
  */
 import { fail, redirect } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
 import { connectDB, CartridgeRecord, AuditLog, generateId } from '$lib/server/db';
+import { resolveBucketId, overrideCartStage, boardData, isBucketStage, BucketError, BUCKET_STAGES, STAGE_LABELS } from '$lib/server/services/bucket-service';
 import type { PageServerLoad, Actions } from './$types';
 
 /** The status enum, read straight off the schema — single source of truth. */
@@ -31,9 +38,10 @@ export const load: PageServerLoad = async ({ locals }) => {
 	requirePermission(locals.user, 'manufacturing:read');
 	await connectDB();
 
-	const [total, byStatus] = await Promise.all([
+	const [total, byStatus, board] = await Promise.all([
 		CartridgeRecord.estimatedDocumentCount(),
-		CartridgeRecord.aggregate([{ $group: { _id: '$status', n: { $sum: 1 } } }])
+		CartridgeRecord.aggregate([{ $group: { _id: '$status', n: { $sum: 1 } } }]),
+		boardData().catch(() => ({ cycles: [] as any[] }))
 	]);
 
 	const counts: Record<string, number> = {};
@@ -41,7 +49,17 @@ export const load: PageServerLoad = async ({ locals }) => {
 		if (row._id) counts[row._id] = row.n;
 	}
 
-	return { statuses: statusList(), total, counts };
+	return {
+		statuses: statusList(),
+		total,
+		counts,
+		bucketStages: [...BUCKET_STAGES] as string[],
+		stageLabels: STAGE_LABELS as Record<string, string>,
+		// Open passes, for the destination picker when the target is a bucket stage.
+		openPasses: board.cycles.map((c: any) => ({
+			cycleId: c.cycleId, bucketId: c.bucketId, barcode: c.barcode ?? null, cycleNumber: c.cycleNumber, stage: c.stage, quantity: c.quantity
+		}))
+	};
 };
 
 export const actions: Actions = {
@@ -56,9 +74,13 @@ export const actions: Actions = {
 		const createUnknown = data.get('createUnknown') === 'on';
 		const clearReagentFill = data.get('clearReagentFill') === 'on';
 		const reason = ((data.get('reason') as string) ?? '').trim();
+		const destinationBucketId = ((data.get('destinationBucketId') as string) ?? '').trim();
 
 		if (!statusList().includes(target)) {
 			return fail(400, { error: `Pick a target status (got "${target || 'none'}")` });
+		}
+		if (isBucketStage(target) && !destinationBucketId) {
+			return fail(400, { error: `${STAGE_LABELS[target]} is a bucket stage — pick the destination bucket (its open pass must be at ${STAGE_LABELS[target]}).` });
 		}
 
 		// Split on any whitespace/newlines (scanner sends barcode + Enter), trim, dedup.
@@ -79,9 +101,34 @@ export const actions: Actions = {
 				| { _id: string; status?: string }
 				| null;
 
+			// Bucket-aware path: into a bucket stage, or out of one (the cart is a
+			// member of an open pass). Membership + status move together.
+			if (cart && (isBucketStage(target) || isBucketStage(cart.status))) {
+				try {
+					const r = await overrideCartStage({ barcode, target, destinationBucketId: destinationBucketId || undefined, reason, user: op });
+					if (r.from === r.to && r.fromCycle === r.toCycle) unchanged.push({ barcode, reason: `already ${target}${r.toCycle ? ' in that bucket' : ''}` });
+					else changed.push({ barcode, from: r.from });
+				} catch (e) {
+					rejected.push({ barcode, reason: e instanceof BucketError ? e.message : 'override failed' });
+				}
+				continue;
+			}
+			if (!cart && isBucketStage(target)) {
+				rejected.push({ barcode, reason: 'unknown barcode — scan it into a bucket on the board (that is what debits its shell + label)' });
+				continue;
+			}
+
 			if (!cart) {
 				if (!createUnknown) {
 					rejected.push({ barcode, reason: 'unknown barcode — not in the system' });
+					continue;
+				}
+				// A production bucket wearing a UUID QR sticker scans exactly like a
+				// cartridge (BUCKET-SYSTEM_PLAN §9.4). Refuse it here, outside the
+				// try, so the operator sees why instead of "could not originate".
+				const bucketId = await resolveBucketId(barcode);
+				if (bucketId) {
+					rejected.push({ barcode, reason: `label on production bucket ${bucketId} — not a cartridge` });
 					continue;
 				}
 				try {

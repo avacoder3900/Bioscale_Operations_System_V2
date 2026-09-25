@@ -14283,3 +14283,1524 @@ Deployment: production — building from the GitHub push to master (Vercel dashb
 Source: branch master @ commit 49d758f6
 Retrieve this exact code: git checkout master at commit 49d758f6
 What this deployment is for: countdown + progress bar on the running magnetometer sweep card
+
+================================================================================
+2026-09-21 — NEWDEV — bucket system designed; BUCKET-SYSTEM_PLAN.md written (no code yet)
+================================================================================
+Planning session only. Designed a barcode-tracked "bucket" system for counting cartridges
+through the four production stages that happen before a cartridge has a barcode and
+therefore before a CartridgeRecord exists: raw -> unpressed -> pressed -> qr_pending
+(stickers applied, awaiting WI-01 scan-in). Today everything upstream of WI-01 is a bare
+PartDefinition.inventoryCount scalar, so "how many are pressed right now" and "we started
+with 100 and got 97, where did 3 go" are unanswerable. Full spec is in
+BUCKET-SYSTEM_PLAN.md at the repo root; the decisions below are the ones that shape it.
+
+Reuse drives the data model. Buckets and their lot numbers are reusable once a pass has
+drained, which is exactly what the legacy BackingLot could never do because it used the
+scanned barcode as its _id (one barcode, one lifetime). So the container and the contents
+are split: ProductionBucket (_id = 'BKT-000123', permanent, state available/in_use/
+quarantined/retired) vs BucketCycle (nanoid _id, one pass, stage + quantity + ledger) with
+a partial unique index on { bucketId } where status='open' so a tub can never hold two
+open cycles. The operator only ever sees and scans the bare label; the '#7' cycle suffix
+appears only in history/DHR views. CartridgeRecord binds to the cycle id, never the bare
+barcode. Verified LotRecord.qrCodeRef's unique index is not a collision risk: WI-01 mints
+that itself as WI01-xxxx and the bucket label lands in the plain bucketBarcode field.
+
+Whole-bucket advancement only, with one exception: partial consumption at WI-01 is allowed
+(40 of 100 serialized, bucket stays open at 60 in the same stage) while partial advancement
+between stages is not. Auto-release at qty 0 with a deferred spot-check ("Confirmed empty"
+one-tap on the next cycle start, never blocking). If the tub is NOT empty, three
+dispositions: merge into another open cycle at the same stage, scrap with a required
+free-text journal (no reason codes, no approval at any quantity), or defer to quarantined.
+Residual scrap reuses ManualCartridgeRemoval (+bucketCycleId, +journal) so it shows up in
+the existing Recent Checkouts list untouched. A residual always means the closed cycle's
+count was wrong; the closed record is never rewritten, it gets a residualFound entry
+(corrections-not-mutations, same convention as the sacred docs).
+
+Explicitly out of scope: thermoseal. PT-CT-112 counts are not touched anywhere; the
+unpressed -> pressed transition debits nothing and WI-01 keeps debiting 112 as today.
+PT-CT-104 is debited at bucket create, PT-CT-106 moves from WI-01 to the pressed ->
+qr_pending transition (labels are on the cartridges by then). Buckets are the source of
+truth; part counts stay in sync through the existing recordTransaction service.
+
+No pressing SOP exists in the repo (searched docs/, protocols/, data/, root *.md), but the
+equipment is registered: E-45 "Press 1" and E-46 "Press 2", bench units at B-06
+(data/equipment-datasheets/BT.csv:52-53). The unpressed/pressed vocabulary is therefore
+invented by the plan and flagged for operator validation before the UI ships. The
+unpressed -> pressed transition captures which press as an Equipment._id, mirroring
+backing.ovenLocationId.
+
+UI: /manufacturing/cart-mfg/buckets as a five-column stage board (Available first) with a
+persistent scan/search rail; /buckets/[bucketId] for per-tub history; a read-only stage
+count strip above the In Process table on /cartridge-admin; four upstream stages added to
+the pipeline page; a BKT- label print flow with mint-new and reprint-existing modes.
+
+Build order in the plan puts WI-01 integration last and alone in its own commit -- it is
+the only step that touches a flow operators use today; everything before it is additive.
+
+Files touched: BUCKET-SYSTEM_PLAN.md (new). Nothing under src/ changed.
+npm run check: not run -- no Node.js on PATH in this session's shell. Only a markdown file
+was added, so the 46-error / 434-warning baseline from the 2026-07-28 entry is unaffected.
+Not committed yet.
+
+================================================================================
+2026-09-21 — feat/bucket-system — bucket system built (models, service, board, labels, WI-01, dashboard strip, pipeline)
+================================================================================
+Implemented BUCKET-SYSTEM_PLAN.md end to end on a new branch feat/bucket-system (cut from
+NEWDEV mid-session once the user asked whether this was on a separate branch — it wasn't;
+the uncommitted work moved over with the checkout). Nothing committed or pushed yet.
+
+New models: production-bucket.ts (the tub; _id = BKT-NNNNNN, state available/in_use/
+quarantined/retired, cycleCount, spotCheckPending, residualNote), bucket-cycle.ts (one
+pass; nanoid _id, stage raw/unpressed/pressed/qr_pending, quantity/openedQty, sourceLots,
+pressEquipment*, residualFound[], discrepancies[], stageEnteredAt; partial unique index
+on { bucketId } where status='open' so a tub can never hold two open cycles at the DB
+level), bucket-transaction.ts (immutable ledger via applyImmutableMiddleware). Exported
+from models/index.ts. Existing models gained fields only: LotRecord.bucketCycleId,
+CartridgeRecord.backing.{bucketCycleId,bucketBarcode} (+ sparse index),
+ManualCartridgeRemoval.{bucketCycleId,bucketId,journal}.
+
+src/lib/server/services/bucket-service.ts holds every transition (mint, startCycle,
+advanceCycle, adjustCycle, scrapFromCycle, consumeFromCycle, reportResidual, retireBucket)
+plus read models (boardData, stageCounts, bucketHistory, resolveScan, pressOptions). WI-01
+and the board share it; routes only parse forms and map BucketError -> fail(). Inventory
+rule as implemented: PT-CT-104 debited once at cycle open, PT-CT-106 once at
+pressed->qr_pending (operator scans the label lot there), PT-CT-112 untouched anywhere in
+bucket code. Scrap / adjust-down write NO InventoryTransaction (already debited on entry)
+— they go to the bucket ledger and ManualCartridgeRemoval. Adjust-up records the extra
+consumption. The plan's §8 table said scrap debits "the stage's part"; that was a
+double-count and §8 is corrected in the doc. WI-01's own pre-existing good+scrap
+consumption plus separate scrap tx double-debit is noted there and deliberately NOT
+touched.
+
+Routes: /manufacturing/cart-mfg/buckets (five-column board, Available first, quarantined
+tubs listed under it; right rail = scan box that resolves locally against the board and
+falls through to ?q= server search for retired/historical ids, short-list under it, and
+the action panel: start with spot-check "Is the tub empty?" Yes/No, advance with press
+name (datalist: Equipment named like a press + E-45 Press 1 / E-46 Press 2 from the
+datasheet CSV) or PT-CT-106 lot, scrap with required journal, adjust behind
+manufacturing:admin, residual report with merge/scrap/defer, retire behind admin).
+/buckets/[bucketId] full history: every pass with ledger, WI-01 batches, cartridges
+serialized (via backing.bucketCycleId), discrepancies, scrap journal, bucket events.
+/manufacturing/print-bucket-labels: mint 1-50 (each becomes an available bucket
+immediately) or reprint existing ids; bwip-js QR + text, 3-across print CSS. "Buckets"
+sidebar entry added after Laser Cut.
+
+WI-01 integration: config step gains an optional "Source bucket" (scan box + pick-list of
+open qr_pending cycles); choosing one locks lot1/lot3 to the cycle's source lots and
+disables those selects. checkAndStart accepts bucketId, overrides submitted lot1/lot3
+from the cycle, prefills quantity, prechecks only PT-CT-112, stamps
+LotRecord.bucketCycleId/bucketBarcode, echoes bucket + lots back. scanBackedCartridge
+stamps backing.bucketCycleId/bucketBarcode on each CartridgeRecord. confirmComplete for a
+bucket lot: scrapFromCycle(scrapCartridge) then consumeFromCycle(actualCount) — both
+non-blocking (a ledger mismatch is recorded as a note, never a 500), overrun recorded as
+a discrepancy, then withdraws PT-CT-112 only. Partial draws leave the cycle open at
+qr_pending; a drain auto-releases the tub with spotCheckPending. resumeLot echoes the
+bucket. Confirm-step summary strikes through cartridges/barcodes for bucket lots and
+explains why. Legacy manual-lot flow is unchanged when no bucket is chosen.
+
+Cartridge-admin: stageCounts() in load (wrapped in .catch so a bucket hiccup can't take
+the table down); strip above the filters: Available · Raw · Unpressed · Pressed · QR
+Pending (+ Quarantined when > 0), each tile deep-linking to the board with ?stage=.
+Pipeline page: four bucket_* stages prepended to STAGE_KEYS with their own headers and a
+loadBucketStage() rows adapter; row label switches to "buckets".
+
+Files touched (new): src/lib/server/db/models/{production-bucket,bucket-cycle,
+bucket-transaction}.ts, src/lib/server/services/bucket-service.ts,
+src/routes/manufacturing/cart-mfg/buckets/{+page.server.ts,+page.svelte},
+src/routes/manufacturing/cart-mfg/buckets/[bucketId]/{+page.server.ts,+page.svelte},
+src/routes/manufacturing/print-bucket-labels/{+page.server.ts,+page.svelte}.
+(modified): models/index.ts, cartridge-record.ts, lot-record.ts,
+manual-cartridge-removal.ts, cart-mfg/+layout.svelte, cart-mfg/wi-01/{+page.server.ts,
++page.svelte}, cartridge-admin/{+page.server.ts,+page.svelte},
+cart-mfg/pipeline/{+page.server.ts,+page.svelte}, BUCKET-SYSTEM_PLAN.md (§8).
+
+npm run check: NOT RUN — no Node.js on PATH in this session's shell (no Program Files
+nodejs, nvm, fnm, volta or scoop). This is a large TypeScript/Svelte change written
+without a compiler pass; expect svelte-check to surface type nits on the first run.
+Verified by inspection only: svelte control-block balance per file, import paths, and
+that every new export is reachable from $lib/server/db. Run `npm run check` before any
+deployment. No tests added — the repo's only harness is contract tests against a running
+app; bucket-service has no unit harness to slot into.
+
+Still open before operators touch it (plan §12): validate the unpressed/pressed
+vocabulary; decide standard bucket fill count; label tubs already in service.
+
+Follow-up 2026-09-21: npm run check RUN after all, via a portable Node 22.12.0 unzipped to
+%LOCALAPPDATA%\Temp
+22 (no system install, no PATH change; delete that folder to remove it)
+and `npm ci` (419 packages, node_modules is gitignored). First pass: 11 errors / 434
+warnings; exactly one error was ours (bucket-service.ts stageCounts: `any`-typed row._id not
+narrowed by the isBucketStage guard when used directly as an index) -- hoisted to a const.
+Second pass: 10 errors / 434 warnings, ZERO in any file this branch touched; zero warnings in
+the new files. The 10 are pre-existing (r2.ts Buffer/BodyInit, AskBimsWidget.svelte
+unreachable comparison, 8x implicit-any in assembly/[sessionId]/+page.svelte). Note the
+2026-07-28 entry quoted a 46-error baseline; on this machine with the lockfile it is 10.
+
+Commit: 23b1d6b9 on branch feat/bucket-system (author Samantha Wolf <sw207@gmail.com>;
+identity passed via -c on the commit, no git config changed). Pushed to origin; Vercel GitHub
+integration deployed it to BOTH connected scopes (no local CLI deploy).
+
+Deployment: preview -- https://bioscale-operations-system-mongodb-p8aq9nhxn-brevitest.vercel.app
+  (brevitest scope; inspector https://vercel.com/brevitest/bioscale-operations-system-mongodb/8DDKMGxtTEkT3PuT3gjJccFZLf3E)
+Deployment: preview -- https://bioscale-operations-system-mongodb-r2its531x.vercel.app
+  (alejandro-valdezs-projects scope; inspector https://vercel.com/alejandro-valdezs-projects/bioscale-operations-system-mongodb/GhzaJxDGPeSZADKFZQxfedGkBiFr)
+Source: branch feat/bucket-system @ commit 23b1d6b9
+Retrieve this exact code: git checkout feat/bucket-system at commit 23b1d6b9
+  (or: git log feat/bucket-system --oneline to find it if the branch has since moved on)
+What this deployment is for: first look at the bucket system -- /manufacturing/cart-mfg/buckets
+  board + scan rail, /manufacturing/print-bucket-labels, /buckets/[bucketId] history, the WI-01
+  "Source bucket" pick-list, the cartridge-admin pre-barcode strip, and the four bucket stages on
+  /manufacturing/cart-mfg/pipeline. Never exercised against a database before this preview.
+Build status: success (both scopes, GitHub commit status "Deployment has completed" 17:19Z).
+Preview is cookie-session gated (302 to /login). CAUTION: the preview environment writes to
+whatever Atlas database it is configured with -- buckets minted / cycles started there are
+real records, and starting a cycle consumes real PT-CT-104 / PT-CT-106 lot quantity.
+The git-branch alias (…-git-feat-bucket-system-brevitest.vercel.app) did not resolve within
+8 min of the build; use the immutable URLs above.
+Verified: brevitest URL 302s to /login and /manufacturing/cart-mfg/buckets 302s to /login (route
+exists, no 404/500 pre-auth). The alejandro-valdezs-projects URL 302s to vercel.com/sso-api --
+that scope has Deployment Protection on, so it needs a Vercel login; use the brevitest link.
+
+================================================================================
+2026-09-21 -- feat/bucket-system -- buckets labelled with existing QR stickers (or printed BKT labels)
+================================================================================
+User: "instead of printing bucket labels, I want to assign QR codes to newly minted buckets,
+or offer the choice to do either." Implemented as label-vs-identity: the BKT-NNNNNN id stays
+the permanent identity; a new ProductionBucket.barcode (unique, sparse) holds whichever
+sticker is on the tub -- typically one of the already-printed UUID QR stickers from the Avery
+cartridge sheets. Deliberately NOT the scanned UUID as _id: the print flow cannot reprint a
+specific UUID, so a scuffed sticker would have meant a new bucket and orphaned history.
+Now a scuffed sticker is replaced (ledger type relabel) and the id + history survive.
+
+bucket-service: resolveBucketId(code) = _id first, then barcode (matched as scanned and in
+both cases -- scanners disagree about hex case). Used by startCycle, reportResidual (bucket
+and merge destination), retireBucket, bucketHistory, resolveScan (fuzzy search now spans
+ids and stickers), and WI-01 checkAndStart. assignBucketBarcode() refuses a code that is
+already a CartridgeRecord, another bucket's sticker, or a BKT- id; consumes 1x PT-CT-106
+(a sticker on a tub is one fewer for cartridges; constant CONSUME_LABEL_ON_ASSIGN). boardData
+carries barcode on cycles and idle buckets so the board's scan rail resolves either label
+locally; WI-01's qrPendingBuckets carries it too.
+
+Collision guard: a tub wearing a UUID sticker scans exactly like a cartridge. New
+assertNotBucketLabel() is called at every CartridgeRecord genesis point found by grep --
+WI-01 scanBackedCartridge (409 with message), cv/induct (409), quick-reagent-test /
+quick-wax-fill / quick-wax-store (throws inside their per-barcode try, lands in their
+existing rejected/failed lists). Five sites; scripts/ excluded.
+
+Labels page (/manufacturing/print-bucket-labels, path kept, retitled "Bucket Labels"):
+mint N with a mode radio -- assign stickers (default) queues the new ids and the operator
+scans one sticker per tub in sequence; print renders BKT labels as before. Any bucket can be
+picked (or scanned by id or current sticker) to assign / replace; ?bucket= deep link from the
+board's start panel and the history page. Buckets-without-a-sticker list for catch-up.
+Reprint unchanged. The assign call goes through fetch so the queue survives.
+
+Found while doing this: WI-01's handleCartScan / removeCartScan read hand-fetched action
+responses as plain JSON, but SvelteKit action responses are devalue-encoded -- a fail()
+message never reached the operator (they got "Error 400/409"). Both now use deserialize()
+from $app/forms; the labels page does the same. Small, pre-existing, fixed because the new
+409 guard message is useless otherwise.
+
+Files: production-bucket.ts (+barcode, unique sparse index), bucket-transaction.ts (+relabel),
+bucket-service.ts, buckets/+page.svelte, buckets/[bucketId]/{+page.server.ts,+page.svelte},
+print-bucket-labels/{+page.server.ts,+page.svelte} (rewritten), wi-01/{+page.server.ts,
++page.svelte}, cv/induct/+page.server.ts, quick-{reagent-test,wax-fill,wax-store}/
++page.server.ts, BUCKET-SYSTEM_PLAN.md (section 9.4 rewritten).
+
+npm run check (portable Node 22.12): 10 errors / 434 warnings, zero in any touched file --
+unchanged baseline. One warning I introduced (state_referenced_locally on the ?bucket=
+preset) fixed before commit.
+
+Commit: 634e9a37 on branch feat/bucket-system (author Samantha Wolf). Pushed; Vercel GitHub
+integration built both scopes (no local CLI deploy).
+
+Deployment: preview -- https://bioscale-operations-system-mongodb-7r65e8slp-brevitest.vercel.app
+  (brevitest scope -- the usable link; cookie-session gated, 302 to /login)
+Deployment: preview -- https://bioscale-operations-system-mongodb-brej71eca.vercel.app
+  (alejandro-valdezs-projects scope; behind Vercel SSO Deployment Protection)
+Source: branch feat/bucket-system @ commit 634e9a37
+Retrieve this exact code: git checkout feat/bucket-system at commit 634e9a37
+  (or: git log feat/bucket-system --oneline to find it if the branch has since moved on)
+What this deployment is for: QR-sticker labelling of buckets -- /manufacturing/print-bucket-labels
+  mint-then-scan-stickers queue, assign/replace on existing buckets, and the collision guard
+  (a bucket sticker scanned as a cartridge at WI-01 / cv/induct / quick-* must be refused with
+  a readable message). Supersedes the 23b1d6b9 preview.
+Build status: success (both scopes, GitHub Deployment statuses 17:48Z).
+Same caution as before: the preview writes to the configured Atlas database; assigning a
+sticker also records a real 1x PT-CT-106 consumption.
+
+Follow-up 2026-09-21: "Return to previous page" button on /manufacturing/print-bucket-labels
+(header, right). history.back() when there is history; direct opens fall back to the bucket
+board. npm run check unchanged (10 / 434, none in the file).
+Deployment: preview -- https://bioscale-operations-system-mongodb-o4e1vcefo-brevitest.vercel.app
+  (brevitest scope; the alejandro-valdezs-projects build is
+  https://bioscale-operations-system-mongodb-kkt95svdl.vercel.app, behind Vercel SSO)
+Source: branch feat/bucket-system @ commit 1e3c796a
+Retrieve this exact code: git checkout feat/bucket-system at commit 1e3c796a
+What this deployment is for: the return-to-previous-page button on the bucket labels page.
+  Supersedes the 634e9a37 preview; otherwise identical code.
+Build status: success (both scopes, 17:58Z).
+
+================================================================================
+2026-09-21 -- feat/bucket-system -- board Scrap/Adjust buttons fixed; buckets summary on cart-mfg dashboard
+================================================================================
+Bug (user report): on /manufacturing/cart-mfg/buckets the Scrap... and Adjust count... buttons
+did nothing. Root cause: SvelteKit keeps the last action result in `form` until the next
+action, and the rail's $effect treated any lingering form.advance/scrap/adjust.success as
+"reset the panel to view" on every panel change -- so after one successful Advance, every
+later click on Scrap or Adjust set the mode and the effect snapped it straight back. A second
+fragility compounded it: the effect compared cycle objects by identity (fresh !== cur) to
+detect refreshed data, which is unreliable across Svelte 5 state proxies. Fix: the panel now
+stores only cycleId / bucketId + mode; the live cycle / bucket is looked up from data with
+$derived.by (narrowed into a local first -- TS drops discriminant narrowing inside .find
+callbacks); the effect handles each form result exactly once via a handledForm guard. Panel
+renders a "no longer on the board / refreshing" state with Close when the id is not found.
+Adjust count is intentionally disabled without manufacturing:admin -- that is now shown on
+the button (ADMIN tag + a one-line hint) instead of only a hover tooltip.
+
+User request: a summarized buckets module on the cart manufacturing dashboard above Pipeline
+Flow. Added to /manufacturing/cart-mfg: "Production Buckets" card in the same tile/arrow style
+as Pipeline Flow -- Available > Raw > Unpressed > Pressed > QR Pending (cartridge count +
+bucket count per stage), Quarantined tile when > 0, every tile deep-links to the board
+?stage=, "Open board" link. Load calls stageCounts() with .catch(null) so the module hides
+rather than taking the dashboard down. Files: cart-mfg/{+page.server.ts,+page.svelte},
+buckets/+page.svelte (rewritten state model).
+
+npm run check: 10 errors / 434 warnings, none in touched files (baseline). Two TS errors I
+introduced mid-way (narrowing in $derived closures) fixed before commit.
+Deployment: preview -- https://bioscale-operations-system-mongodb-pmdeg4y79-brevitest.vercel.app
+  (brevitest scope; cookie-session gated, 302 to /login)
+Source: branch feat/bucket-system @ commit dd123ef6
+Retrieve this exact code: git checkout feat/bucket-system at commit dd123ef6
+What this deployment is for: verifying the Scrap / Adjust buttons open after a prior action on
+  the buckets board, and the Production Buckets card above Pipeline Flow on
+  /manufacturing/cart-mfg. Supersedes the 1e3c796a preview.
+Build status: success (brevitest scope, 18:10Z).
+
+Follow-up 2026-09-21: "Which press" removed at user request. unpressed -> pressed is now a
+plain stage move: no prompt, no pressEquipment* fields on BucketCycle, pressOptions() and
+KNOWN_PRESSES deleted from bucket-service, press display dropped from the board panel, the
+history page and the pipeline rows (column relabelled "Source lots"). Plan doc sections 2.1,
+6.2 and 12.4 updated. npm run check unchanged (10 / 434, none in touched files).
+Deployment: preview -- https://bioscale-operations-system-mongodb-l3vyhlfgk-brevitest.vercel.app
+  (brevitest scope; cookie-session gated, 302 to /login)
+Source: branch feat/bucket-system @ commit 7628a469
+Retrieve this exact code: git checkout feat/bucket-system at commit 7628a469
+What this deployment is for: Unpressed -> Pressed with no press prompt. Supersedes the
+  dd123ef6 preview.
+Build status: success (brevitest scope, 19:12Z).
+
+Follow-up 2026-09-21: expandable change log under the buckets board (user request: the lot,
+where it moved, who moved it, and whether carts were discarded). New changeLog(limit) read
+model in bucket-service returns the newest 150 BucketTransaction rows with the pass number
+joined in; the board renders them in a collapsed <details> under the grid: When / Lot
+(BKT id #pass, linked to history) / Event / Moved (from -> to stage) / Carts (delta, and
+remaining after a WI-01 draw) / By / Note (scrap journal; WI-01 batch link on consume).
+Discard rows are tinted red and the summary line totals carts discarded in the window;
+client-side filter by bucket, operator, event or note. npm run check unchanged (10 / 434).
+Deployment: preview -- https://bioscale-operations-system-mongodb-jrzayj73o-brevitest.vercel.app
+  (brevitest scope; cookie-session gated, 302 to /login. The alejandro-valdezs-projects build
+  is https://bioscale-operations-system-mongodb-4weei2fj7.vercel.app, behind Vercel SSO)
+Source: branch feat/bucket-system @ commit 29e51136
+Retrieve this exact code: git checkout feat/bucket-system at commit 29e51136
+What this deployment is for: the expandable change log under the buckets board (lot, moved
+  from -> to, who, cart deltas, discards flagged + totalled). Supersedes the 7628a469 preview.
+Build status: success (both scopes, 19:23Z).
+
+Follow-up 2026-09-21: "Any carts discarded?" at every Advance step (user request). The board's
+Advance form gains a number dropdown 0..quantity (None / n / "n -- all of them"); > 0 reveals a
+required reason (journal stays the control, per the scrap decision). New
+advanceCycleWithDiscard() in bucket-service validates everything first (open cycle, next
+stage, count <= quantity, reason when > 0, PT-CT-106 lot when moving to qr_pending), then
+scrapFromCycle for the discards, then advanceCycle for the rest -- so a discard is never
+recorded for a move that then fails, and the label debit covers only carts that move.
+Discarding all of them closes the pass as scrapped and skips the move; the button turns red
+and says so. Discards land in the ledger as scrap rows (journal prefixed "Discarded at X -> Y")
+so they show in the change log and in Recent Checkouts. npm run check unchanged (10 / 434).
+Deployment: preview -- https://bioscale-operations-system-mongodb-26568szbp-brevitest.vercel.app
+  (brevitest scope; cookie-session gated, 302 to /login. The alejandro-valdezs-projects build
+  is https://bioscale-operations-system-mongodb-keoirgy41.vercel.app, behind Vercel SSO)
+Source: branch feat/bucket-system @ commit 201a639d
+Retrieve this exact code: git checkout feat/bucket-system at commit 201a639d
+What this deployment is for: the "Any carts discarded?" dropdown + required reason on every
+  Advance step. Supersedes the 29e51136 preview.
+Build status: success (both scopes, 19:31Z).
+
+Follow-up 2026-09-21: residual report takes a count per stage (user request -- a tub can hold
+leftovers from different stages). reportResidual() now takes items[{stage, quantity,
+destinationBucketId?}] instead of one stage + quantity. The board form shows four "How many"
+rows (Raw / Unpressed / Pressed / QR Pending, the last pass's stage tagged), a running total,
+and one disposition for the whole report: Merge reveals a destination box under each stage
+with a count (each must be open at that same stage; ALL destinations are validated before
+anything is written, so a bad second row never leaves a half-applied report), Scrap writes one
+ManualCartridgeRemoval + scrap ledger row per stage under one required journal, Defer
+quarantines with a note listing the breakdown. residualFound / discrepancies get one entry
+per stage. Mixed dispositions = two reports (the form says so). Form action fields are
+qty_<stage> / dest_<stage>. npm run check unchanged (10 / 434).
+Deployment: preview -- https://bioscale-operations-system-mongodb-7lvflr4k3-brevitest.vercel.app
+  (brevitest scope; cookie-session gated, 302 to /login. The alejandro-valdezs-projects build
+  is https://bioscale-operations-system-mongodb-lbrq3le6r.vercel.app, behind Vercel SSO)
+Source: branch feat/bucket-system @ commit a621288e
+Retrieve this exact code: git checkout feat/bucket-system at commit a621288e
+What this deployment is for: the per-stage residual report (four "How many" rows, per-stage
+  merge destinations). Supersedes the 201a639d preview.
+Build status: success (both scopes, 20:10Z).
+
+Follow-up 2026-09-21: Production Buckets card on /manufacturing/cart-mfg moved from above
+Pipeline Flow to directly beneath the Robot Status Grid (user request). Section order is now
+Alerts > Pipeline Flow > Robot Status Grid > Production Buckets > Ovens. Pure move, no content
+change; server comment updated. npm run check unchanged (10 / 434).
+Deployment: preview -- https://bioscale-operations-system-mongodb-fs30k1xzb-brevitest.vercel.app
+  (brevitest scope; cookie-session gated, 302 to /login. The alejandro-valdezs-projects build
+  is https://bioscale-operations-system-mongodb-qslglk4je.vercel.app, behind Vercel SSO)
+Source: branch feat/bucket-system @ commit 14d55fff
+Retrieve this exact code: git checkout feat/bucket-system at commit 14d55fff
+What this deployment is for: Production Buckets card beneath the Robot Status Grid on
+  /manufacturing/cart-mfg. Supersedes the a621288e preview.
+Build status: success (both scopes, 20:38Z).
+
+Follow-up 2026-09-21: stage label "QR Pending" renamed to "QR Scan-In Pending" (user request).
+Display-only: STAGE_LABELS in bucket-service plus every hardcoded string (cartridge-admin strip,
+cart-mfg dashboard card, pipeline stage meta, WI-01 source-bucket label / empty state / errors /
+handoff text, board change-log fallback, service error messages). The stored key stays
+qr_pending, so no data migration. Plan doc notes the rename; its ASCII sketches keep the old
+wording. npm run check unchanged (10 / 434).
+Deployment: preview -- https://bioscale-operations-system-mongodb-r2eogm0sq-brevitest.vercel.app
+  (brevitest scope; cookie-session gated, 302 to /login. The alejandro-valdezs-projects build
+  is https://bioscale-operations-system-mongodb-phrnbm23f.vercel.app, behind Vercel SSO)
+Source: branch feat/bucket-system @ commit 1dca1661
+Retrieve this exact code: git checkout feat/bucket-system at commit 1dca1661
+What this deployment is for: the "QR Scan-In Pending" stage label. Supersedes the 14d55fff
+  preview.
+Build status: success (both scopes, 20:47Z).
+
+Follow-up 2026-09-21: Available card subtitle "empty tubs" -> "empty buckets" (user request) on
+the bucket board strip, the cart-mfg dashboard card and the cartridge-admin strip, plus the
+board's Available-column empty state ("No empty buckets"). No other "tub" wording changed.
+npm run check unchanged (10 / 434).
+Deployment: preview -- https://bioscale-operations-system-mongodb-bb1cg30b9-brevitest.vercel.app
+  (brevitest scope; cookie-session gated, 302 to /login)
+Source: branch feat/bucket-system @ commit e59307be
+Retrieve this exact code: git checkout feat/bucket-system at commit e59307be
+What this deployment is for: Available card subtitle "empty buckets". Supersedes the 1dca1661
+  preview.
+Build status: success (brevitest scope, 21:07Z).
+
+================================================================================
+2026-09-21 -- feat/bucket-system -- bucket log added; BUCKET-SYSTEM_PLAN.md rewritten as the as-built spec
+================================================================================
+Bucket log (user request: a dropdown under the change log with the status of all buckets,
+retired included). New bucketRegistry() read model in bucket-service: every ProductionBucket in
+every state, joined with its open cycle (if any) and its newest ledger timestamp. The board
+renders it as a second collapsed <details> directly under the change log: header shows counts
+per status (Available / In use / Quarantined / Retired); rows give Bucket (linked to history) /
+Status badge / Right now (count + stage + pass for in-use, residual note for quarantined,
+reason + date for retired, "empty" or "check pending" for available) / Passes / Sticker / Home /
+Last activity / Minted. Filter by status and by text. Retired buckets appear nowhere else on
+the page, which is why this exists. Commit b7e2c262.
+
+BUCKET-SYSTEM_PLAN.md (user request: update the markdown file). It still said "Implementation
+not started" and described things that no longer exist (press fields on the cycle, a single-
+stage residual, print-only labels, scrap "writing down inventory"). Rewritten as the as-built
+spec with the SAME section numbers so code comments citing e.g. section 6.3 still resolve:
+status/branch header; stage table with UI labels; 3.1 adds discard-at-advance and the adjust
+rules; 3.2 identity-vs-label; section 4 matches the real schemas (barcode, stageEnteredAt,
+discrepancies, openedBy, ledger types mint/relabel/retire; press fields gone); 6.2 advance
+ordering; 6.3 WI-01 as the three-action flow it is, non-blocking bucket calls, deserialize fix;
+section 7 per-stage residual with validate-all-before-write; section 8 adds the sticker debit
+and the "scraps never touched inventory" consequence; section 9 board/rail/change log/bucket
+log, the ids-only panel and the bug it fixed, all three summary views, labels page; section 10
+full file list + permissions as built; section 11 is now a build history with every code
+commit and the 10 / 434 check baseline; section 12 is "read before merging": no automated
+tests, three deliberate manual checks, the unconfirmed preview database + the designed-but-
+unbuilt "Void test pass" reversal, floor decisions still needed, and deferred items (WI-01
+double-debit, adjust permission, tub wording, long label, public repo).
+
+npm run check: 10 errors / 434 warnings, none in touched files (baseline).
+Deployment: preview -- https://bioscale-operations-system-mongodb-ml88ovk67-brevitest.vercel.app
+  (brevitest scope; cookie-session gated, 302 to /login)
+Source: branch feat/bucket-system @ commit 0f923016 (code change is b7e2c262; 0f923016 is the
+  doc rewrite + this log)
+Retrieve this exact code: git checkout feat/bucket-system at commit 0f923016
+What this deployment is for: the Bucket log dropdown under the change log (all buckets, all
+  statuses, retired included). Supersedes the e59307be preview.
+Build status: success (brevitest scope, 21:47Z).
+
+Follow-up 2026-09-21: BUCKET-SYSTEM_PLAN.md corrected per the user -- bucket size does NOT have
+to match what the press handles in one run. Section 3.1 no longer says it should (a bucket can
+take several press runs and stays at unpressed until the operator advances it); section 12.3
+"Bucket sizing" no longer calls the tub "the press batch" or lists press capacity as a
+constraint -- sizing is unconstrained. That claim was mine from the design conversation, never
+the user's. Docs only; nothing under src changed, so npm run check not re-run.
+
+================================================================================
+2026-09-21 -- feat/bucket-system -- merged origin/master in (564 commits); collision guard extended to 3 more genesis paths
+================================================================================
+User asked how to get the bucket system to "main". Finding: production deploys from master
+(tip 2026-09-18); feat/bucket-system was cut from NEWDEV, which is 564 commits BEHIND master
+(NEWDEV tip 2026-07-28; "main" is stale at 2026-06-15). So the bucket work had never been
+built or type-checked against current production code. Merged origin/master INTO the feature
+branch (production untouched) so the preview finally runs buckets on top of real prod code.
+
+5 conflicts: progress.txt (both sides appended -- master's entries kept first, the 09-21
+bucket entries after); cart-mfg/+page.server.ts and pipeline/+page.server.ts (each side added
+one import line -- kept both); quick-reagent-test/+page.server.ts (master turned it into a
+308 redirect to the new /manufacturing/cart-mfg/state-change tool -- took master's);
+quick-wax-store/+page.server.ts (deleted on master -- accepted the deletion). WI-01 did not
+change on master, so the riskiest integration carried over untouched. npm ci re-run against
+master's lockfile (442 packages).
+
+Collision guard re-swept on the merged code, this time searching bulkWrite upserts as well
+as .create( -- the original sweep searched only .create( and MISSED two paths that existed
+all along. Three unguarded genesis paths found and closed: (1) state-change "Create unknown
+barcodes" (new on master; guarded OUTSIDE its try so the operator sees the reason instead of
+"could not originate"); (2) wax-filling deck load in test mode, which upserts synthetic
+cartridges for unknown barcodes; (3) reagent-filling deck load, which upserts a stub for any
+scanned id that does not exist. New batched helper findBucketLabels(codes) in bucket-service
+(one query per deck) backs (2) and (3). BUCKET-SYSTEM_PLAN.md section 9.4 now lists all six
+guarded paths in a table and tells the next person to search for upserts too.
+
+npm run check on the merged tree: 10 errors / 437 warnings. The 10 are the same pre-existing
+ones (r2.ts, AskBimsWidget.svelte, assembly/[sessionId]); none in any bucket-touched file; zero
+warnings in bucket files. 437 is master's own warning count (+3 vs NEWDEV).
+
+================================================================================
+2026-09-21 -- feat/bucket-system -- "Void this pass": reverse a test pass's inventory debits
+================================================================================
+User asked for a void-test-pass reversal before the PR to master. Built voidCycle() in
+bucket-service + "Void this pass..." on the bucket history page (manufacturing:admin, reason
+required).
+
+What a pass took is read from the inventory ledger itself: every bucket debit was already
+stamped manufacturingRunId = cycleId (start, labeling, adjust-up), so net debit per (part, lot)
+is a query. One compensating row per group: a NEGATIVE consumption against the SAME lot, with
+the model's existing retractedBy / retractedAt / retractionReason filled, plus $inc on
+PartDefinition.inventoryCount. Negative consumption (not an adjustment) is deliberate: the four
+per-lot "N left" computations (WI-01 x2, bucket board, opentron wax) sum consumption+scrap rows
+by lotId, so an adjustment would fix the part total but leave the lot looking consumed.
+Written directly rather than through recordTransaction, because recordTransaction applies
+Math.abs to a consumption and would have DEBITED again.
+
+Safety: refused with 409 if any CartridgeRecord has backing.bucketCycleId = this pass (that
+material was really used at WI-01). The cycle is flipped to status voided with a conditional
+findOneAndUpdate BEFORE compensations are written, so a double-submit cannot return inventory
+twice. Sticker-assignment debits are not reversed (stamped with the bucket id, and the sticker
+really is on the tub). Nothing is deleted: cycle keeps its record (+voidedAt/By/Reason/
+statusBeforeVoid), ledger gets a void row, the pass's ManualCartridgeRemoval rows get voidedAt,
+an open pass frees its tub (available, empty-check armed). Change log greys a voided pass's
+rows and no longer counts its discards in the "carts discarded" total.
+
+Files: bucket-cycle.ts (+voided status + void fields), bucket-transaction.ts (+void),
+manual-cartridge-removal.ts (+voidedAt/voidReason), bucket-service.ts, buckets/+page.svelte,
+buckets/[bucketId]/{+page.server.ts,+page.svelte}, BUCKET-SYSTEM_PLAN.md (header: branch facts;
+4.x schemas; 5.2; 9.2; 11 merge row; 12.2 rewritten as built; new 12.4 "known risks": the WI-01
+double-debit when the bucket is not selected, Can-Make understating, the broken cartridge-admin
+search link, Ask BIMS blind to buckets).
+
+npm run check (merged tree): 10 errors / 437 warnings, none in bucket-touched files. Ten TS
+errors I introduced (unnarrowed form union on the history page) fixed before commit.
+NOT YET EXERCISED against a database -- first real test is the preview.
+
+Deployment: preview -- https://bioscale-operations-system-mongodb-mrf20irrq-brevitest.vercel.app
+  (brevitest scope; cookie-session gated, 302 to /login)
+Source: branch feat/bucket-system @ commit f0e9176a (the merge of origin/master)
+Retrieve this exact code: git checkout feat/bucket-system at commit f0e9176a
+What this deployment is for: FIRST build of the bucket system on top of current production
+  code (master @ f0f5773f). Proves the merged tree builds on Vercel. Superseded by the
+  void-pass build that follows.
+Build status: success (brevitest scope, 22:03Z).
+
+Deployment: preview -- https://bioscale-operations-system-mongodb-1ltxi6kcm-brevitest.vercel.app
+  (brevitest scope; cookie-session gated, 302 to /login. The alejandro-valdezs-projects build
+  is https://bioscale-operations-system-mongodb-lfffbm9i4.vercel.app, behind Vercel SSO)
+Source: branch feat/bucket-system @ commit de2cd91a (code: merge f0e9176a + void 47a2a63d)
+Retrieve this exact code: git checkout feat/bucket-system at commit de2cd91a
+What this deployment is for: the bucket system on current production code (master merged in),
+  with the three extra collision guards and "Void this pass". This is the build to review
+  before opening the PR into master. voidCycle has NOT been exercised against a database yet --
+  void ONE test pass first and check the lot's "N left" before voiding the rest.
+Build status: success (both scopes, 22:20Z).
+
+================================================================================
+2026-09-23 -- feat/bucket-system -- buckets no longer debit inventory on entry; discards do; yellow note
+================================================================================
+User decisions: (1) "do not debit from inventory at the creation of a bucket. Only debit when
+QR codes are scanned in. Let the manual scan-in be the truth" + a yellow note on the Buckets
+tab saying "Inventory is not Debited Until Carts are Scanned in"; (2) "when discarding carts,
+remove the cart from inventory"; (3) thermoseal on discards: "don't worry about that for now,
+but include it in the yellow note".
+
+Entry debits OFF: new BUCKETS_DEBIT_INVENTORY = false in bucket-service; every entry debit
+(start PT-CT-104, labeling PT-CT-106, adjust-up, 1x sticker) now routes through
+debitInventory(), a no-op while the switch is false. Code kept, not deleted ("for now").
+WI-01 reads the same constant: a bucket-sourced batch now withdraws ALL THREE parts for what
+was scanned, exactly like the manual flow (was: PT-CT-112 only), and its inventory precheck
+covers all three again. Confirm screen no longer strikes through cartridges/barcodes; summary
+text says buckets don't debit. Labels page stops claiming a sticker consumes a label; start
+and labeling forms say "recorded for WI-01, not debited". Side effect, welcome: the WI-01
+double-debit risk (bucket not selected) is gone -- nothing is charged twice any more; only the
+bucket's COUNT fails to drain in that case. WI-01 Can-Make is accurate again.
+
+Discards ON: new debitDiscard() writes a real scrap InventoryTransaction for every discard
+path -- board Scrap, "Any carts discarded?" at Advance, residual Scrap -- since a cart
+discarded in a bucket never reaches a scan-in. Debits PT-CT-104, plus PT-CT-106 once the cart
+is at qr_pending, against the cycle's own sourceLots so per-lot "N left" stays right.
+Thermoseal untouched (accepted). Mirror of the entry switch: no-op if BUCKETS_DEBIT_INVENTORY
+is ever turned back on, so a cart is charged exactly once under either model. WI-01's
+confirm-step bucket scrap passes skipInventory: true because that page withdraws its own scrap
+(would otherwise have been charged three times: here, WI-01 consumption, WI-01 scrap tx).
+voidCycle() now reads consumption AND scrap rows and reverses each with a negative row of the
+same type, so voiding a pass also hands back what its discards took.
+
+Yellow note on /manufacturing/cart-mfg/buckets, above the stage strip: the requested headline,
+then: buckets track counts/location only; WI-01 scan-in withdraws stock; discards are the one
+exception and remove blank (+ label once applied) but NOT thermoseal, which is only ever
+withdrawn at WI-01 scan-in. BUCKET-SYSTEM_PLAN.md 3.3 / 6.x / 8 / 12.2 / 12.4 rewritten to
+match (12.4: double-debit and Can-Make risks marked resolved by this decision).
+
+npm run check (merged tree): 10 errors / 437 warnings, none in touched files (baseline).
+Not exercised against a database.
+Deployment: preview -- https://bioscale-operations-system-mongodb-327939rtz-brevitest.vercel.app
+  (brevitest scope; cookie-session gated, 302 to /login)
+Source: branch feat/bucket-system @ commit fe947207
+Retrieve this exact code: git checkout feat/bucket-system at commit fe947207
+What this deployment is for: the new inventory rule -- no debit on bucket entry, discards
+  remove carts from inventory, yellow note (incl. thermoseal exception) on the Buckets tab.
+  Supersedes the de2cd91a preview. Worth verifying: start a cycle and confirm the PT-CT-104
+  lot's "N left" does NOT move; discard 1 and confirm it DOES move by 1.
+Build status: success (brevitest scope, 14:10Z).
+
+================================================================================
+2026-09-23 -- feat/bucket-system -- second master merge; PR #54 opened into master
+================================================================================
+Merged origin/master (magnetometer field-magnitude, SPU validation tracker) into the branch
+at 33a937a4 -- conflicts only in progress.txt (both appended; kept master's then ours) and a
+couple of import lines (kept both). Branch is 0 behind master, 33 ahead. Opened PR #54
+(feat/bucket-system -> master, +5130/-38): https://github.com/avacoder3900/Bioscale_Operations_System_V2/pull/54
+npm run check on the merged tree: 12 errors / 437 warnings -- 10 pre-existing plus 2 that came
+in from master (validation/magnetometer/[sessionId]); none in any bucket file.
+(This entry was written late -- the commit that should have carried it was blocked at the time.)
+
+================================================================================
+2026-09-23 -- feat/bucket-system -- v2 restructure: carts born at bucket scan-in, Raw->Unpressed->Pressed->In Oven, QR-only minting, "shells", oven tracking removed app-wide
+================================================================================
+Structural rework requested by the user (four points) plus the follow-up decisions: keep WI-01
+fed from buckets; thermoseal consumed at the Unpressed step; reuse status 'backing' labelled
+"In Oven"; oven removal is app-wide; the BKT id stays internal behind the QR label.
+
+1. MINTING. One bucket per QR scan at /manufacturing/cart-mfg/buckets/new (create, or replace a
+   sticker via ?bucket=BKT-...; "Return to previous page"). No printing, no location.
+   src/routes/manufacturing/print-bucket-labels/ deleted. homeLocation is LEGACY on the model.
+2. "Blanks" -> "shells" everywhere in the bucket context (SHELL_PART = PT-CT-104). The optical
+   "Blank Cartridge" concept and the cartridgeBlankLot schema field are untouched on purpose.
+3. ORDER OF OPERATIONS. The QR sticker now goes on the RAW shell and the cart is scanned into a
+   Raw bucket -- that scan creates the CartridgeRecord (status 'raw') and debits 1 shell + 1
+   label. BucketCycle carries cartridgeIds (membership); advancing sets every member's status
+   (raw -> unpressed -> pressed). WI-01 is now bucket-fed: pick a Pressed bucket, scan members
+   (or Take all) -> they leave the bucket and become 'backing' = "In Oven". The old QR Scan-In
+   Pending stage is gone (enum value kept for v1 rows). Discards/scrap/residual are scan-based
+   (ids), not counts. Un-scan a mis-scan while Raw (record deleted, debits retracted).
+   CartridgeRecord: status enum gains raw/unpressed/pressed; bucket{bucketId,cycleId,
+   scannedInAt,scannedInBy} sub-doc; LifecycleStage type + cartridge-admin STAGES gain the three
+   keys; 'backing' displays as "In Oven"; strips on cartridge-admin and the cart-mfg dashboard
+   show Available/Raw/Unpressed/Pressed/In Oven; pipeline stage keys are
+   bucket_raw/bucket_unpressed/bucket_pressed/backing.
+4. OVEN TRACKING + TIME GATING REMOVED app-wide: WI-01 no longer picks an oven; backing.oven*/
+   ovenEntryTime are LEGACY (never written; backing.recordedAt is the scan time);
+   src/lib/server/manufacturing/cure-time.ts deleted; minOvenTimeMin removed from the wax-filling
+   and opentron-control settings pages; wax-filling deck loading no longer computes ready/
+   under-time; dashboard Ovens section removed; pipeline In Oven view has no Oven/Ready columns
+   and no ManufacturingSettings read; lots/[lotId] shows the source bucket instead of an oven;
+   cart-mfg-dev tile is "In Oven". Left alone: post-wax-run oven placement (PostRunCooling /
+   ovenPlacement), reagent ovenCure step, ovens as equipment, legacy read-only aggregates on
+   equipment/cartridge-dashboard/DHR/traceability.
+
+Files: models (bucket-cycle, bucket-transaction, cartridge-record, production-bucket,
+queries.ts LifecycleStage), bucket-service.ts (rewritten), buckets/ board + history + new/,
+wi-01 server+svelte (rewritten), wax-filling server, cart-mfg dashboard server+svelte,
+cart-mfg-dev, pipeline server+svelte, both settings pages, lots/[lotId], cartridge-admin svelte.
+BUCKET-SYSTEM_PLAN.md rewritten as the v2 as-built spec (same section numbers; v1->v2 table at
+the top).
+
+================================================================================
+2026-09-23 -- feat/bucket-system -- thermoseal roll tracking: 3.75 cm per cart, 65 m rolls, 2-roll floor with kanban restock card + email
+================================================================================
+User request, built on top of the v2 Unpressed step. PT-CT-112 is now stocked in ROLLS and
+consumed by LENGTH:
+- New model ThermosealRoll (thermoseal_rolls): lengthCm, consumedCm, status active/exhausted/
+  retired, lotId, openedBy/At, openedForCycleId, inventoryTxId. One roll active at a time.
+- New src/lib/server/services/thermoseal-service.ts: thermosealConfig() (defaults 3.75 cm per
+  cart, 6500 cm per roll, floor 2; overridable via ManufacturingSettings.thermoseal),
+  consumeThermoseal() (members x 3.75 cm off the open roll, rolling onto a freshly pulled roll
+  as needed -- the first advance ever pulls the first roll), openRoll() (the only place the
+  PT-CT-112 count moves: one -1 consumption with manufacturingRunId = roll id, lot = the one
+  scanned on the form or else the oldest accepted lot with stock by the ledger),
+  creditThermoseal() (void gives the length back to the roll; an opened roll is never returned
+  to stock), checkFloor() (rolls on hand < 2 -> one kanban restock card, idempotent on
+  sourceRef thermoseal-restock:<partId>, + email to the lowInventory list only on the pull that
+  created the card), thermosealStatus() for the board.
+- kanban/standing.ts: ensureThermosealRestockCard() -- same auto-commit pattern as the parts
+  reorder cards; class of service expedite; body carries the lead-time warning from
+  PartDefinition.leadTimeDays (generic warning when unset).
+- notifications.ts: notifyThermosealLow() via Resend to NotificationSettings.lowInventory.
+- bucket-service.ts: advanceCycle raw->unpressed calls consumeThermoseal (the interim
+  1-unit-per-cart debit is gone); the thermoseal lot is optional on the advance form and only
+  used when a new roll is pulled; BucketCycle.thermoseal{cm,cartridges,segments,consumedAt};
+  the advance ledger row's reason carries the cm/roll note. partsAtStage() no longer lists
+  PT-CT-112 -- a discarded cart does NOT return thermoseal length (and previously would have
+  scrapped a whole "unit" per cart). voidCycle credits the segments back
+  (thermosealCreditedCm in the result; shown on the history page).
+- Board UI: Thermoseal card under the stage strip (open roll gauge in m / ~carts left / lot,
+  rolls in inventory vs floor in red when below, next-roll lot, restock state with kanban
+  link); advance form previews "N cm comes off the open roll" and asks for a lot only when a
+  roll will be pulled; after-advance banner reports cm taken, rolls pulled, and the floor
+  alert (card created / already open, email sent).
+CUTOVER FLAG: PT-CT-112 inventoryCount is -427 right now (interim per-cart debits). Reset it by
+a physical count IN ROLLS before the first v2 advance, or the first roll pull fires the floor
+rule against nonsense -- and previews share the kanban board + email list with production.
+npm run check: 12 errors / 438 warnings -- the same 12 pre-existing, none in touched files.
+
+================================================================================
+2026-09-23 -- feat/bucket-system -- thermoseal: floor check on board load + supply sweep; development toggle for restock notifications; PT-CT-112 physical count
+================================================================================
+Three follow-ups to the thermoseal roll system (same day):
+
+1. f681ab63 -- the 2-roll floor is evaluated on bucket-board load and in the kanban supply
+   sweep (standingStatus with spawn:true -> daily cron + Queue page), not only on a roll pull.
+   The user reported the shelf is already at 1 roll, so a pull-only trigger would never have
+   fired. checkFloor is idempotent on the open card; the email wording no longer assumes a
+   pull just happened. Lazy import in standing.ts avoids the thermoseal<->standing cycle.
+2. 90bb9a25 -- DEVELOPMENT TOGGLE, per the user: "toggle is just for sending notifications to
+   kanban and email for now. I still wanna see status on the card."
+   ManufacturingSettings.thermoseal.notificationsEnabled (default OFF) gates checkFloor's
+   kanban card + email. Roll tracking itself (3.75 cm per cart at Unpressed, roll pulls, the
+   board gauge, the floor state shown in red) always runs. Admin checkbox on the board's
+   Thermoseal card -> ?/thermosealToggles (manufacturing:admin, audited THERMOSEAL_TOGGLES);
+   the card carries a "restock notifications off -- development" badge while off, and the
+   below-floor line says so instead of promising a card/email. An intermediate version also
+   had a "roll tracking" switch; removed at the user's clarification before it was deployed.
+3. PT-CT-112 physical count recorded through the BIMS MCP (record_physical_count, actor
+   Samantha Wolf): -427 -> 1 roll. The -427 was the interim per-cart debit; the count is now
+   in ROLLS. Because the shelf is below the 2-roll floor, the board shows the red floor state
+   immediately; no card/email is sent while the toggle is off.
+npm run check after each: 12 errors / 438 warnings -- the same 12 pre-existing, none in
+touched files.
+NOTE on deployments: Vercel's GitHub integration had produced no preview for 3f4f49f3,
+f681ab63 or 90bb9a25 as of 16:10Z; master builds (PR #57, 16:05-16:07Z) were running at the
+time. Deployment entries follow once the integration reports one -- NOT deploying from local.
+
+Deployment: preview -- https://bioscale-operations-system-mongodb-3wwlqe4vg.vercel.app
+Source: branch feat/bucket-system @ commit 1b7a5e1e
+Retrieve this exact code: git checkout feat/bucket-system at commit 1b7a5e1e
+  (or: git log feat/bucket-system --oneline to find it if the branch has since moved on)
+What this deployment is for: the v2 bucket restructure (carts born at bucket scan-in, Raw ->
+  Unpressed -> Pressed -> In Oven, QR-only minting, shells, oven tracking removed) plus
+  thermoseal roll tracking with the restock-notifications development toggle OFF. Supersedes
+  the fe947207 preview. Earlier same-day commits: 3f4f49f3 and f681ab63 got no Vercel build
+  of their own (integration coalesced them); 90bb9a25 built at
+  https://bioscale-operations-system-mongodb-pib089b4c.vercel.app (16:12Z, success).
+Build status: success (16:15Z). PT-CT-112 is at 1 roll -> the Thermoseal card shows the
+  red below-floor state; no card/email while the toggle is off.
+  NOTE (16:25Z): this URL is from the alejandro-valdezs-projects Vercel project, which has
+  Deployment Protection on (302 to vercel.com/sso-api). The brevitest team project -- whose
+  open -brevitest previews were reviewed on 09-21/22 -- built master today (PR #57) but built
+  NONE of this branch's five commits. Latest personal-project preview: 161844f2 at
+  https://bioscale-operations-system-mongodb-h2lwva4z6.vercel.app (success, also protected).
+  To resolve: fix the brevitest project's branch previews in the Vercel dashboard, or relax
+  Deployment Protection on the personal project. No local deploy.
+
+CORRECTION (16:45Z) to the two entries above: the brevitest team project DID build every
+push today. Both Vercel projects write onto the SAME GitHub deployment record (two statuses
+each), and the lookup was taking the first status -- always the personal-scope one. The
+open, login-page previews (brevitest scope; cookie-session gated, 302 to /login) are:
+  33a937a4 (master merge #2)            https://bioscale-operations-system-mongodb-9kdywufuw-brevitest.vercel.app
+  3f4f49f3 (v2 restructure + rolls)     https://bioscale-operations-system-mongodb-9uiiyzdwy-brevitest.vercel.app
+  f681ab63 (floor check on load/sweep)  https://bioscale-operations-system-mongodb-3px6bg5to-brevitest.vercel.app
+  90bb9a25 (notifications toggle)       https://bioscale-operations-system-mongodb-f0ip8bpfv-brevitest.vercel.app
+  1b7a5e1e (docs)                       https://bioscale-operations-system-mongodb-f614gsnyt-brevitest.vercel.app
+  161844f2 (docs)                       https://bioscale-operations-system-mongodb-ovmtxgrfk-brevitest.vercel.app
+  ba694651 (docs)                       https://bioscale-operations-system-mongodb-1x99fvfkv-brevitest.vercel.app
+Deployment: preview -- https://bioscale-operations-system-mongodb-1x99fvfkv-brevitest.vercel.app
+Source: branch feat/bucket-system @ commit ba694651 (code identical to 90bb9a25)
+Retrieve this exact code: git checkout feat/bucket-system at commit ba694651
+What this deployment is for: REVIEW THIS ONE -- v2 buckets + thermoseal rolls with the
+  restock-notifications toggle off; PT-CT-112 at 1 roll. All builds: success.
+Lookup rule for next time: GET /deployments?sha=<FULL sha> (auth header; unauthenticated
+  calls hit the rate limit and return empty), then /deployments/<id>/statuses and take the
+  environment_url containing '-brevitest'. The no-suffix URL is the personal project (SSO).
+
+PT-CT-112 drift (16:35Z): the count went 1 -> -23 within minutes of the reset. Cause: jacob
+ran WI-01 on PRODUCTION (master) at 16:16Z -- lot 5TJYPolqO0sT18Odg0upf, 24 carts,
+materialsConsumed [104, 112, 106]. Production WI-01 still debits one PT-CT-112 PER CART
+(legacy rule; this branch's WI-01 debits nothing). Re-counted to 1 roll (record_physical_count,
+Samantha Wolf). This will recur on every production WI-01 batch until feat/bucket-system
+merges, or until master's WI-01 stops charging PT-CT-112 per cart (hotfix candidate --
+user's call).
+
+================================================================================
+2026-09-23 -- feat/bucket-system -- yellow "Thermoseal Inventory is Not Synced Between Systems" card; production knock-down parked
+================================================================================
+User: "ignore WI-01 thermoseal knock down per cart for now, and include a yellow card saying
+the two systems are not currently synced." Added a second yellow note on the bucket board,
+directly above the Thermoseal card: production WI-01 still withdraws one PT-CT-112 unit per
+cartridge while this board counts rolls by length, so the rolls-in-inventory figure drifts
+with every production batch; treat as indicative and re-count in rolls when needed.
+BUCKET-SYSTEM_PLAN.md 12.4 records the decision. PR #60 (production WI-01 -> roll-length
+consumption) stays open but PARKED -- not to be merged unless the drift becomes a problem.
+npm run check: 12 errors / 438 warnings (baseline), none in touched files.
+Deployment: preview -- https://bioscale-operations-system-mongodb-nrynbplxc-brevitest.vercel.app
+  (brevitest scope; cookie-session gated, 302 to /login)
+Source: branch feat/bucket-system @ commit cde19dd8
+Retrieve this exact code: git checkout feat/bucket-system at commit cde19dd8
+What this deployment is for: the yellow "Thermoseal Inventory is Not Synced Between Systems"
+  card above the Thermoseal card on the bucket board. Everything else as the 1x99fvfkv preview.
+Build status: success (login 200, ~17:05Z).
+Direction (user): thermoseal stock is ultimately UNIVERSAL -- one roll-based count for
+  production WI-01 and buckets. PR #60 is that bridge; parked only to stop churning the live
+  number during development, to be merged later. No master merges into this branch until the
+  final build.
+
+================================================================================
+2026-09-23 -- feat/bucket-system -- thermoseal rolls-on-hand pinned at 1 on the bucket board (development)
+================================================================================
+User: "Keep Thermoseal inventory set to 1 on the bucket page." Because production WI-01 still
+churns the live PT-CT-112 count per cart (not synced), the board now uses a DEVELOPMENT PIN:
+ManufacturingSettings.thermoseal.rollsOnHandPinned (default true) / rollsOnHandOverride
+(default 1). thermosealStatus() and checkFloor() read the pin while pinned; the card shows
+"pinned" and the live count in the control's caption (rollsOnHandLive). Admin form on the
+Thermoseal card: Pin rolls on hand at [n] + the existing Restock notifications checkbox,
+?/thermosealToggles (audited THERMOSEAL_TOGGLES with old/new for all three). Unpin to follow
+the live count once the systems are unified (PR #60). Roll pulls still write the -1 ledger row
+against the real part; the pin is display/floor-rule only. Yellow not-synced card reworded to
+point at the pin. Spec 3.4 table updated.
+npm run check: 12 errors / 438 warnings (baseline), none in touched files.
+Deployment: preview -- https://bioscale-operations-system-mongodb-5gi1il2ib-brevitest.vercel.app
+  (brevitest scope; cookie-session gated, 302 to /login)
+Source: branch feat/bucket-system @ commit 9e71e9c9
+Retrieve this exact code: git checkout feat/bucket-system at commit 9e71e9c9
+What this deployment is for: the rolls-on-hand development pin (board holds thermoseal at 1;
+  admin control on the Thermoseal card; live count shown in the caption) + reworded not-synced card.
+Build status: success (login 200).
+
+================================================================================
+2026-09-23 -- feat/bucket-system -- board: Mint New Bucket card, inventory note removed, retire on bucket page, compact thermoseal under Unpressed
+================================================================================
+User additions: (1) "Mint New Bucket" card beneath the Available column: scan-one-QR blurb,
+"Mint new bucket" button -> /buckets/new and "Replace a damaged sticker" -> /buckets/new#replace
+(the replace form got id="replace"). (2) The "Inventory is not Debited Until Carts are Scanned
+in" yellow note is removed. (3) "Retire bucket..." on the bucket history page ([bucketId]):
+admin-only (reuses canVoid), hidden while in_use, reason required, ?/retire action calling
+retireBucket(); success banner; nothing deleted. (4) Thermoseal card shrunk to a compact tile
+and moved UNDER the Unpressed column (where it is consumed), with the yellow not-synced warning
+directly above it; the admin toggles (notifications, rolls-on-hand pin) fold into a
+"Development settings" <details>. The advance-result banner stays above the board.
+npm run check: 12 errors / 438 warnings (baseline), none in touched files.
+
+================================================================================
+2026-09-23 -- feat/bucket-system -- State Change page made bucket-aware (manual override for bucket stages)
+================================================================================
+User asked for a manual override page to move carts to any stage. One already exists:
+/manufacturing/cart-mfg/state-change (sidebar "State Change") -- bulk-scan barcodes, pick any
+schema status. It was not bucket-aware: setting a cart to raw/unpressed/pressed (or out of
+them) changed only CartridgeRecord.status and left BucketCycle.cartridgeIds disagreeing.
+Added bucket-service.overrideCartStage(): target = bucket stage -> the cart joins the chosen
+destination bucket's open pass (must be at that stage; merge_in ledger row), leaving its old
+pass (merge_out; an emptied pass closes like a consumed one); target = anything else -> the
+cart leaves its pass. Status, priorStatus, bucket sub-doc, note and audit (OVERRIDE) written
+together. No inventory moves. Unknown barcodes are refused for bucket stages (scanning into a
+bucket on the board is what debits parts). State Change page: statuses flagged "bucket
+stage"; a Destination bucket select (open passes at the target stage) appears for bucket
+targets and is required; explanatory copy for both directions.
+npm run check: 12 errors / 438 warnings (baseline), none in touched files.
+
+Deployment: preview -- https://bioscale-operations-system-mongodb-o3wyz8hek-brevitest.vercel.app
+  (brevitest scope; cookie-session gated, 302 to /login)
+Source: branch feat/bucket-system @ commit c0664759
+Retrieve this exact code: git checkout feat/bucket-system at commit c0664759
+What this deployment is for: board restructure -- Mint New Bucket card under Available,
+  inventory note removed, Retire bucket on the bucket page, compact thermoseal tile + yellow
+  not-synced card under Unpressed. (The bucket-aware State Change override is da0daa9f, next.)
+Build status: success (login 200).
+
+Deployment: preview -- https://bioscale-operations-system-mongodb-61jc5egeh-brevitest.vercel.app
+  (brevitest scope; cookie-session gated, 302 to /login)
+Source: branch feat/bucket-system @ commit da0daa9f
+Retrieve this exact code: git checkout feat/bucket-system at commit da0daa9f
+What this deployment is for: bucket-aware State Change (manual override): destination bucket
+  picker for bucket-stage targets; leaving a bucket stage removes the cart from its pass.
+  Includes the c0664759 board restructure.
+Build status: success (login 200).
+
+================================================================================
+2026-09-23 -- feat/bucket-system -- Master Override: scan a bucket, force it to any phase
+================================================================================
+User: "Create a master system to move buckets to any phase by scanning in and bypass the
+system." New page /manufacturing/cart-mfg/buckets/override (admin; linked from the board
+header as a red "Master override" button, and ?bucket= preset). Scan the bucket sticker or
+BKT id, pick Raw / Unpressed / Pressed / In Oven, give a reason, Force move. Service
+forceBucketPhase(): open pass required; stage set directly (backwards allowed), openedQty
+fixed when leaving Raw as in advanceCycle, every member cart's status follows; In Oven sets all
+members to backing with backing.* stamped (no WI-01 session, no LotRecord) and closes the pass
+like a consumed one. NO thermoseal consumption, no discard prompt, no inventory movement.
+Ledger row (advance / consume), each cart's note and the audit entry (FORCE_PHASE) all carry
+MASTER OVERRIDE + the reason. Page shows a live preview of what the scanned code resolves to
+and a table of open passes with a "use" shortcut. Spec 9.5 to be added on the next spec pass.
+npm run check: 12 errors / 438 warnings (baseline), none in touched files.
+
+================================================================================
+2026-09-23 -- feat/bucket-system -- Quarantine category removed; spec 9.5-9.7 (master override, bucket-aware State Change, retire)
+================================================================================
+User: "Remove Quarantine Category." Removed the Quarantined tile from the board's stage strip
+(strip is now 5 tiles), the Quarantined tiles on the cart-mfg dashboard and cartridge-admin
+strips, and the "Defer -- quarantine the bucket" disposition from the residual report (merge /
+scrap only; ResidualDisposition narrowed; the server refuses 'defer' with a clear message).
+Kept for legacy rows: the 'quarantined' bucket state + 'quarantine' ledger type in the models,
+the quarantined entries under Available on the board (so any legacy quarantined bucket can
+still be resolved via merge/scrap) and the bucket-log state filter. No new bucket can become
+quarantined. BUCKET-SYSTEM_PLAN.md: 3.6/3.7/5.1/9.1 updated; new 9.5 Master Override, 9.6
+bucket-aware State Change, 9.7 retire on the bucket page.
+npm run check: 12 errors / 438 warnings (baseline), none in touched files.
+
+Deployment: preview -- https://bioscale-operations-system-mongodb-2bvfrqg3z-brevitest.vercel.app
+  (brevitest scope; cookie-session gated, 302 to /login)
+Source: branch feat/bucket-system @ commit fdf00c8e
+Retrieve this exact code: git checkout feat/bucket-system at commit fdf00c8e
+What this deployment is for: Master Override page (9b06e601) + Quarantine category removed
+  (fdf00c8e), on top of the board restructure and bucket-aware State Change.
+Build status: success (login 200).
+
+================================================================================
+2026-09-23 — feat/bucket-system — cartridge-admin bucket strip: "Available" tile removed
+================================================================================
+User: "In Cartridge Admin, remove the Available card from the buckets strip and only report
+on RAW UNPRESSED PRESSED and IN OVEN." Dropped the `available` entry from the strip array in
+src/routes/cartridge-admin/+page.svelte, so the funnel now reads Raw → Unpressed → Pressed →
+In Oven only (deep-links unchanged). `bc.available` is still returned by stageCounts() and
+still shown on the bucket board's own stage strip — only the cartridge-admin tile is gone.
+This edit landed in the working tree before the Quarantine-removal commit and was committed
+with it as part of fdf00c8e; no separate code commit. Already carried by the fdf00c8e
+preview (https://bioscale-operations-system-mongodb-2bvfrqg3z-brevitest.vercel.app),
+re-checked live: /cartridge-admin → 302 /login (deployment healthy). npm run check not re-run
+for this one-line change; baseline remains 12 errors / 438 warnings.
+
+================================================================================
+2026-09-23 -- feat/bucket-system -- Mint New Bucket + replace sticker are inline on the board card
+================================================================================
+User: "I want the bucket mint to happen within that card instead of opening a new page, same
+with replace a damaged sticker." The Mint New Bucket card under Available now holds the forms:
+default mode scans one QR -> ?/mint (createBucket) and reports the BKT id + sticker; the
+"Replace a damaged sticker" toggle swaps the card to current-sticker/BKT + new-sticker inputs
+-> ?/relabel (replaceBucketSticker). Both use use:enhance with reset:false, clear the scan
+fields after success, and the board refreshes in place (new bucket appears under Available).
+/buckets/new still exists (history page + Master override deep links use it).
+Tooling note: the portable Node's npm broke (node-gyp module missing from the Temp install);
+checks now run as node node_modules/@sveltejs/kit/svelte-kit.js sync && node
+node_modules/svelte-check/bin/svelte-check --threshold error --output machine.
+Check: 12 errors / 438 warnings (baseline), none in touched files.
+
+Deployment: preview -- https://bioscale-operations-system-mongodb-rgjz4i09x-brevitest.vercel.app
+  (brevitest scope; cookie-session gated, 302 to /login)
+Source: branch feat/bucket-system @ commit 58161745
+Retrieve this exact code: git checkout feat/bucket-system at commit 58161745
+What this deployment is for: inline Mint New Bucket / Replace sticker on the board card.
+Build status: success (login 200).
+
+================================================================================
+2026-09-23 — feat/bucket-system — Thermoseal: current stock note above Development settings
+================================================================================
+User: "Give current thermoseal stock as a note above the development settings, and mention
+this is the accurate count according to the current system." On the board's Thermoseal card
+(under Unpressed), a note now sits directly above the "Development settings" <details>: the
+live PT-CT-112 inventoryCount, the open roll's remainder (m + ≈ carts), the next lot's
+remaining units, and when PT-CT-112 was last physically counted — labelled as the accurate
+count according to the current system, so the pinned development value on the Rolls-on-hand
+tile can't be mistaken for it. When the live count is negative the note explains why (WI-01
+still debits one unit per cart against a shelf this board never restocks, §12.4); when the pin
+is on it names the pinned value it stands in for.
+Files: src/routes/manufacturing/cart-mfg/buckets/+page.svelte (the note),
+src/lib/server/services/thermoseal-service.ts (selects PartDefinition.lastPhysicalCountAt,
+surfaces it as ThermosealStatus.liveCountAt), BUCKET-SYSTEM_PLAN.md (§3.4 note + cutover
+drift, §9.1 card contents, §9.3 cartridge-admin strip, changelog rows for c0664759/da0daa9f,
+9b06e601, fdf00c8e, 64f52310).
+Live count at the time of writing: PT-CT-112 = -77 (MCP parts_lookup), last physical count
+2026-09-23 16:35 UTC — 1 roll was counted in that morning's cutover and WI-01 has withdrawn 78
+units since.
+npm run check (portable node + svelte-check): 12 errors / 438 warnings — baseline, none in
+touched files. The first run showed 14: the page declares its own Props.data shape, so
+ThermosealStatus.liveCountAt had to be added there too; the concurrent session hit the same
+two errors and fixed them in 7cf55d4d ("type fix for liveCountAt"), and the re-run is clean.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-cp5qp5i7z-brevitest.vercel.app
+  (brevitest scope; cookie-session gated, 302 to /login)
+Source: branch feat/bucket-system @ commit b0a8f7d7 (app code identical to 7cf55d4d; 700d08c1
+  and b0a8f7d7 are progress-log-only commits)
+Retrieve this exact code: git checkout feat/bucket-system at commit b0a8f7d7
+  (the note itself came in with 64f52310, its Props type fix with 7cf55d4d)
+What this deployment is for: the thermoseal current-stock note above Development settings, on
+  top of the Retire control on Available cards.
+Build status: success (login 200; /manufacturing/cart-mfg/buckets and /cartridge-admin both
+  302 to /login as expected).
+
+================================================================================
+2026-09-23 -- feat/bucket-system -- Retire button on each Available bucket card
+================================================================================
+User: "I want the retire bucket button to be available on the bucket's card on the main
+production buckets page." Each Available card is now a div holding the open-panel button
+plus (admin only) a small red Retire control in its footer that opens the existing retire
+panel in the rail (reason required, ?/retire). Two sibling buttons rather than a nested one, so
+the retire click never starts a pass; the card rings when either its start or retire panel is
+open. Also fixed a type error that came in with the concurrent session's 64f52310 (page renders
+ts.liveCountAt but the thermoseal type lacked it) -- one line in the same file.
+Check (svelte-kit sync + svelte-check direct): 12 errors / 438 warnings (baseline).
+
+Deployment: preview -- https://bioscale-operations-system-mongodb-axu9a3d11-brevitest.vercel.app
+  (brevitest scope; cookie-session gated, 302 to /login)
+Source: branch feat/bucket-system @ commit 7cf55d4d
+Retrieve this exact code: git checkout feat/bucket-system at commit 7cf55d4d
+What this deployment is for: Retire control on each Available bucket card (+ liveCountAt type
+  fix); includes the concurrent session's current-stock note (64f52310).
+Build status: success (login 200).
+
+================================================================================
+2026-09-23 -- feat/bucket-system -- leftover-cart flow: scan reports stage + suggests a bucket; Move or Discard
+================================================================================
+User spec: discarding carts at the leftover phase requires a scan-in; the scan reports the
+cart's status and suggests a box to move it to -- an open pass at that stage, else an
+available (empty) box, else mint a new box; the other option is a straight discard. Two
+options on the card, the merge one depending on what buckets exist.
+Service: lookupResidualCart(barcode) -> { status, stage, ok, reason } (known cart, still at a
+bucket stage, not a member of an open pass; bucket labels refused). reportResidual merge now
+takes per-cart moves [{barcode, destinationBucketId}] (legacy single destination kept): all
+destinations validated before any write; an open pass must be at the carts' stage; an EMPTY
+bucket (incl. the reported bucket itself) gets a NEW pass opened at the carts' stage holding
+them (openedQty = n, sourceLots carried over from the pass they were found after, emptyConfirmed
+stamped; 'create' + per-destination 'merge_in' ledger rows, one 'merge_out' on the reported
+bucket). Nothing is debited. If the reported bucket itself gets the new pass it stays in_use.
+Board: ?/residualLookup fetch per scan; the panel lists each cart with its stage badge (or
+'not eligible' + reason); option 1 "Move into a bucket": per stage a select defaulting to the
+suggestion (open pass at that stage first, then empty buckets with this bucket first), yellow
+hint when the suggestion is an empty bucket, and a "mint a new bucket" hint (Mint card under
+Available) when nothing exists -- the Move button is disabled until every stage has a
+destination; option 2 "Discard": journal required, shell + label scrapped.
+Check (svelte-kit sync + svelte-check direct): 12 errors / 438 warnings (baseline).
+
+================================================================================
+2026-09-23 — feat/bucket-system — Thermoseal stock note removed again (redundant); -77 explained
+================================================================================
+User: "Remove the current thermoseal stock underneath rolls on hand, as it is redundant." The
+note added earlier today above "Development settings" is gone; the Rolls-on-hand tile (pinned
+value, live value inside the dev toggles) already carries the number. ThermosealStatus
+.liveCountAt and the PartDefinition.lastPhysicalCountAt select went with it — nothing else read
+them. The yellow "not synced" card now names the build that is actually draining the shelf:
+"the build live on master still withdraws one PT-CT-112 unit per cart out of this same
+database".
+Why the live count is negative — user, 2026-09-23: "the -77 comes from the current active build
+that's live on master. this is an artifact that will not go away until this build is ready to be
+shipped." So it is expected, it is not a bucket-flow bug, and PT-CT-112 should NOT be re-counted
+to make it look right; it resolves when this branch ships (PR #60 moves production WI-01 to
+roll-length consumption). Recorded in BUCKET-SYSTEM_PLAN.md §3.4 (cutover) and §12.4 (known
+risks), and §3.4's bullet now records that the note existed and was removed the same day.
+Where thermoseal inventory actually moves (asked in the same session): only openRoll() in
+thermoseal-service.ts records a transaction (-1 PT-CT-112, manufacturingRunId = the roll), via
+consumeThermoseal() from advanceCycle() on Raw → Unpressed; per-cart length is just
+ThermosealRoll.consumedCm. PT-CT-112 is created upstream at laser-cutting (PT-CT-111 in),
+which is fed by cut-thermoseal (PT-CT-101 roll in). WI-01 withdraws nothing.
+Files: src/routes/manufacturing/cart-mfg/buckets/+page.svelte (note removed, yellow card
+wording — swept into the concurrent session's 4522ba63), src/lib/server/services/
+thermoseal-service.ts (8e3e8a67), BUCKET-SYSTEM_PLAN.md, progress.txt.
+Check (svelte-kit sync + svelte-check direct): 12 errors / 438 warnings (baseline), none in
+touched files.
+
+Deployment: preview -- https://bioscale-operations-system-mongodb-30wt2bjsm-brevitest.vercel.app
+  (brevitest scope; cookie-session gated, 302 to /login)
+Source: branch feat/bucket-system @ commit 4522ba63
+Retrieve this exact code: git checkout feat/bucket-system at commit 4522ba63
+What this deployment is for: the leftover-cart flow (scan -> stage + suggested bucket; Move or
+  Discard). Worth trying: leftover at a stage with no open pass -> the panel offers this bucket
+  as an empty one and opens a new pass at that stage; with no empty buckets -> mint hint.
+Build status: success (login 200).
+
+================================================================================
+2026-09-23 -- feat/bucket-system -- Cart admin button in the board header
+================================================================================
+User: "add a cart admin button next to master override." Board header now reads New bucket ·
+Master override (admin) · Cart admin (-> /cartridge-admin) · WI-01. Link only; no logic.
+Check: 12 errors / 438 warnings (baseline).
+
+Deployment: preview -- https://bioscale-operations-system-mongodb-at3u0tkoz-brevitest.vercel.app
+  (brevitest scope; cookie-session gated, 302 to /login)
+Source: branch feat/bucket-system @ commit fb6b3f1f
+Retrieve this exact code: git checkout feat/bucket-system at commit fb6b3f1f
+What this deployment is for: Cart admin button in the board header; otherwise the 4522ba63 build.
+Build status: success (login 200).
+
+================================================================================
+2026-09-23 -- feat/bucket-system -- header button: Cart admin -> Cart state change
+================================================================================
+User: "remove cart admin, link to cart state change." The header button now goes to
+/manufacturing/cart-mfg/state-change (per-cart status moves, bucket-aware). Header: New bucket ·
+Master override (admin) · Cart state change · WI-01. Check: 12 errors / 438 warnings (baseline).
+
+Deployment: preview -- https://bioscale-operations-system-mongodb-8lpquack7-brevitest.vercel.app
+  (brevitest scope; cookie-session gated, 302 to /login)
+Source: branch feat/bucket-system @ commit 78b18bb9
+Retrieve this exact code: git checkout feat/bucket-system at commit 78b18bb9
+What this deployment is for: header button -> Cart state change; otherwise the 4522ba63 build.
+Build status: success (login 200).
+
+================================================================================
+2026-09-23 -- feat/bucket-system -- leftover screen simplified: Merge or Discard
+================================================================================
+User: "Simplify the left over screen. Instead, just ask to merge or discard, when merging,
+display the last stage the cart was in, when discarding require cart qr scan in. bulk
+discard is allowed." Panel now opens with two buttons, Merge / Discard. Merge: shows the
+bucket's last stage (BoardBucket.lastStage = its previous pass's stage), one Merge-into
+select suggested from the board (open pass at that stage -> empty bucket incl. this one, which
+opens a new pass at that stage -> mint hint with the button disabled), then the cart scan
+list. Discard: bulk QR scan list + journal (required). The per-scan lookup (status badge /
+eligibility per cart) and its ?/residualLookup action are removed from the board; the
+server still validates every cart on submit; lookupResidualCart() stays in the service unused.
+ASSUMPTION stated to the user: Merge still needs the carts scanned because membership is by
+id -- there is no count-only merge. Spec 7 rewritten. Check: 12 errors / 438 warnings.
+
+Deployment: preview -- https://bioscale-operations-system-mongodb-iwlwzsiak-brevitest.vercel.app
+  (brevitest scope; cookie-session gated, 302 to /login)
+Source: branch feat/bucket-system @ commit 77961393
+Retrieve this exact code: git checkout feat/bucket-system at commit 77961393
+What this deployment is for: the simplified leftover screen (Merge at the bucket's last stage /
+  Discard with bulk QR scan + journal).
+Build status: success (login 200).
+
+================================================================================
+2026-09-23 -- feat/bucket-system -- expandable cart list on each bucket card
+================================================================================
+User: "add an expandable list in each bucket's card showing the carts inside." Every pass card
+in the Raw / Unpressed / Pressed columns now has a <details> footer "N carts inside" that
+expands to the numbered list of member cartridge ids (scrollable past ~10; each links to
+cartridge-admin search). Card restructured to a div with the open-panel button + the details as
+siblings (not nested). Available buckets are empty by definition, so no list there.
+Check: 12 errors / 438 warnings (baseline).
+
+================================================================================
+2026-09-23 — feat/bucket-system — Find a cart: QR box under the board, one line of status
+================================================================================
+User: "Add a cart QR search below the main workflow. Just a QR code entry field and a single
+line of text reporting cart status." Below the board + rail on
+/manufacturing/cart-mfg/buckets: a "Find a cart" input (Enter or the Find button) that posts to
+the new read-only ?/cartLookup action and prints one line, e.g.
+  ABC123 · Unpressed · in bucket BKT-000123 #4 (Unpressed) · since 9/23/2026, 2:10 PM
+In Oven carts also carry their WI-01 lot; a cart whose pass has closed reads "last seen in
+bucket … , pass closed". A bucket sticker scanned there is named as a bucket instead of
+"not found", and an unknown code explains that a cart exists once it is scanned into a bucket
+at Raw. Nothing is written, no panel opens, no invalidateAll.
+Files: src/lib/server/services/bucket-service.ts (cartStatusLine(), CartStatusLine),
+src/routes/manufacturing/cart-mfg/buckets/+page.server.ts (cartLookup action,
+manufacturing:read), src/routes/manufacturing/cart-mfg/buckets/+page.svelte (state + findCart()
++ the card), BUCKET-SYSTEM_PLAN.md §9.1 + changelog.
+Check (svelte-kit sync + svelte-check direct): 12 errors / 438 warnings (baseline), none in
+touched files.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-nfyla6y1s-brevitest.vercel.app
+  (brevitest scope; cookie-session gated, 302 to /login)
+Source: branch feat/bucket-system @ commit d7e0fe78
+Retrieve this exact code: git checkout feat/bucket-system at commit d7e0fe78
+What this deployment is for: the Find a cart QR search under the board (also carries the
+  leftover-screen simplification 77961393 and the thermoseal note removal).
+Build status: success (login 200; /manufacturing/cart-mfg/buckets 302 to /login).
+
+Deployment: preview -- https://bioscale-operations-system-mongodb-9u8sa676k-brevitest.vercel.app
+  (brevitest scope; cookie-session gated, 302 to /login)
+Source: branch feat/bucket-system @ commit 940d54be
+Retrieve this exact code: git checkout feat/bucket-system at commit 940d54be
+What this deployment is for: expandable "N carts inside" list on each pass card.
+Build status: success (login 200).
+
+================================================================================
+2026-09-23 -- feat/bucket-system -- fix: dashboard cart lookup showed "current phase: unknown"
+================================================================================
+User asked why the cart barcode search on the cart-mfg dashboard reports every cart as
+phase unknown. Root cause (pre-existing on master, not the bucket work): the dashboard calls
+/api/cv/lookup-cartridge and reads body.currentPhase/nextPhase/isNew/isComplete, but the CV
+cartridge-first refactor (398f02c2) rewrote that endpoint to return status only, so the
+client fell back to 'unknown' for everything. Fix in cart-mfg/+page.svelte: current phase =
+body.currentPhase ?? body.status; "should be at" derived locally from a main-line status
+order (raw -> unpressed -> pressed -> backing (In Oven) -> wax -> reagent -> seal -> store)
+with readable labels, e.g. pressed -> "In Oven (WI-01 draws the bucket)"; complete =
+stored/released/shipped/completed. Endpoint untouched. Check: 12 errors / 438 warnings.
+
+Deployment: preview -- https://bioscale-operations-system-mongodb-5fp36pzbt-brevitest.vercel.app
+  (brevitest scope; cookie-session gated, 302 to /login)
+Source: branch feat/bucket-system @ commit 4070afbd
+Retrieve this exact code: git checkout feat/bucket-system at commit 4070afbd
+What this deployment is for: dashboard cart lookup shows the real status + next step.
+Build status: success (login 200).
+
+================================================================================
+2026-09-23 — feat/bucket-system — Audit a bucket: scan every cart, move or discard strays
+================================================================================
+User: "I want to add an audit feature to the bucket cards. Hit audit and it will prompt you to
+scan every cart in that bucket. If any carts are found to not belong in that bucket, they can
+either be discarded or moved to where they belong." Every pass card on the board now has an
+Audit control under its cart list; it opens the rail in a new 'audit' mode.
+Flow: scan each cart in the tub → ?/auditScan classifies it live (auditScan() in
+bucket-service) as "belongs here" (member of this pass), "wrong tub" (a pre-oven cart that is
+not a member — the note names the pass it IS a member of, when it has one), or "cannot handle"
+(past the buckets, unknown code, or a bucket sticker; those must be removed from the list
+before submitting). Each "wrong tub" cart gets Move or Discard. Move offers its own open pass
+first (already a member there, so putting it back is recorded, not rewritten), then open passes
+at the cart's stage, then empty buckets (a fresh pass opens at that stage; nothing debited).
+Submit → auditCycle(): validates everything first, then pulls each moved cart out of the pass
+that held it (merge_out) and adds it to the destination (merge_in, or create for a new pass);
+discards need a journal and scrap shell + label at the cart's stage with a
+ManualCartridgeRemoval, like every other discard. Members never scanned are reported as
+missing: they STAY on the pass, get a 'shortfall' discrepancy, and the UI tells the operator to
+chase them with Discard carts… — an audit never silently rewrites the count (§7.1).
+Records: BucketCycle.audits[] (scanned/present/missing/foreign with per-cart action and
+destination), one 'audit' ledger row carrying every scanned id, an AUDIT audit-log entry, plus
+the usual rows on every pass touched. ?/auditScan needs manufacturing:read, ?/audit needs
+manufacturing:write.
+Files: src/lib/server/services/bucket-service.ts (auditScan, auditCycle, AuditScanResult,
+AuditCycleInput/Result, 'audit' ledger type), src/lib/server/db/models/bucket-cycle.ts
+(auditRunSchema + audits[]), bucket-transaction.ts ('audit' in the enum),
+src/routes/manufacturing/cart-mfg/buckets/+page.server.ts (auditScan + audit actions),
++page.svelte (audit mode, per-scan classification list, Move/Discard per cart, missing-member
+panel), BUCKET-SYSTEM_PLAN.md (new §9.8, §4.2 audits[], §4.3 ledger types, §9.1).
+Check (svelte-kit sync + svelte-check direct): 12 errors / 438 warnings (baseline), none in
+touched files. Two errors were introduced and fixed on the way: a broken comment in
+bucket-cycle.ts and the audit state block sitting above panelCycle's declaration.
+NOT yet exercised against real data — no bucket has been audited on the preview; the flow is
+type-checked only.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-9uu4dkbuk-brevitest.vercel.app
+  (brevitest scope; cookie-session gated, 302 to /login)
+Source: branch feat/bucket-system @ commit 3e7bebca
+Retrieve this exact code: git checkout feat/bucket-system at commit 3e7bebca
+What this deployment is for: the bucket audit (§9.8), on top of the Find a cart box (d7e0fe78).
+Build status: success (login 200; /manufacturing/cart-mfg/buckets 302 to /login).
+
+================================================================================
+2026-09-23 — feat/bucket-system — Audit: missing members listed, with an option to remove them
+================================================================================
+User: "I want missing carts to display when they are missing from an audit, and I want to be
+given the option to remove them." The audit panel's missing block is now a list — one row per
+member that is on the pass but was not scanned — and each row has three choices, with a bulk
+control when there is more than one:
+  Keep (default)     stays a member; recorded as missing, count unchanged
+  Write off          gone for good: off the pass, status 'scrapped', ManualCartridgeRemoval,
+                     shell + label scrapped from inventory at the pass's stage ('scrap' row)
+  Take off pass      it is elsewhere: off the pass, still a live cart, so the leftover flow or
+                     another bucket's audit can re-home it ('unscan' row)
+Either removal requires the journal (shared with the foreign-cart discards), and the panel
+shows what the count will drop to. The shortfall discrepancy now spells out how many were kept,
+written off and taken off; BucketCycle.audits[].missingActions records the per-cart choice.
+After submitting, the panel drops back to the pass view and a "Last audit" box summarises the
+run (found / moved / discarded / written off / taken off) and lists anything still missing and
+still on the pass.
+Files: src/lib/server/services/bucket-service.ts (auditCycle: missingActions input,
+missingDiscarded/missingReleased in the result, the two removal paths, richer shortfall +
+ledger text), src/lib/server/db/models/bucket-cycle.ts (missingActions on auditRunSchema),
+buckets/+page.server.ts (missingActions parsed off the form), buckets/+page.svelte (per-cart
+Keep/Write off/Take off pass, bulk row, journal wording, submit label, Last audit box),
+BUCKET-SYSTEM_PLAN.md §9.8 + changelog.
+Check (svelte-kit sync + svelte-check direct): 12 errors / 438 warnings (baseline), none in
+touched files. One error on the way: {@const act: T = …} does not narrow in svelte2tsx, so the
+state map is typed 'keep' | 'discard' | 'release' and Keep writes 'keep' instead of deleting.
+Still NOT exercised against real data.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-4xna902op-brevitest.vercel.app
+  (brevitest scope; cookie-session gated, 302 to /login)
+Source: branch feat/bucket-system @ commit f21ed50a
+Retrieve this exact code: git checkout feat/bucket-system at commit f21ed50a
+What this deployment is for: the audit's missing-member list and its remove options (§9.8).
+Build status: success (login 200; /manufacturing/cart-mfg/buckets 302 to /login).
+
+================================================================================
+2026-09-23 — feat/bucket-system — Audit panel: only the cart just scanned is displayed
+================================================================================
+User: "When auditing, only display the cart just scanned as to avoid clutter." The running list
+of every scan is gone. The panel now shows a single "Just scanned" line — the code, its verdict
+badge (belongs here / wrong tub / cannot handle), the explanation when it is not a member, and
+an undo that drops that scan. The tick-off is the counter above it (N of M found · K do not
+belong · missing). Scans that still need the operator (wrong tub, cannot handle) stay listed
+under it, newest first, with the newest ringed — they are the work, not clutter, and they are
+bounded by the number of strays rather than the size of the tub. The missing-member block and
+the Last audit box are unchanged.
+Files: src/routes/manufacturing/cart-mfg/buckets/+page.svelte (auditLast / auditPending
+derived, Just-scanned card, pending-decision list), BUCKET-SYSTEM_PLAN.md §9.8 + changelog.
+Check (svelte-kit sync + svelte-check direct): 12 errors / 438 warnings (baseline), none in
+touched files.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-m1us0watw-brevitest.vercel.app
+  (brevitest scope; cookie-session gated, 302 to /login)
+Source: branch feat/bucket-system @ commit 6baff520
+Retrieve this exact code: git checkout feat/bucket-system at commit 6baff520
+What this deployment is for: the audit panel showing only the cart just scanned (§9.8).
+Build status: success (login 200; /manufacturing/cart-mfg/buckets 302 to /login).
+
+================================================================================
+2026-09-25 — feat/bucket-system — inline Mint card removed from the board
+================================================================================
+User: "I want to remove the mint new bucket card, I want only the new bucket page to exist as
+well as the existing 'new bucket' button on the main page." The dashed **Mint New Bucket /
+Replace Sticker** card that sat under the Available column is gone. Minting a bucket and
+replacing a damaged sticker now happen in exactly one place — /manufacturing/cart-mfg/buckets/new
+— reached from the *New bucket* button that was already in the board header (and from *Replace
+sticker* on a bucket's own page, which already deep-linked there with ?bucket=). Nothing about
+minting itself changed; only the second, inline entry point was deleted.
+Removed with it: the card's client state (mintMode / mintQr / relabelBucket / relabelQr /
+mintBusy / enhanceMint), the mint? and relabel? entries in the page's form prop type, and the
+board's now-unreachable ?/mint and ?/relabel actions plus their createBucket /
+replaceBucketSticker imports — both service functions are still used by buckets/new, which owns
+the surviving forms. The leftover/residual panel's "no empty bucket" hint used to send the
+operator to "the Mint New Bucket card under Available"; it now links to /buckets/new.
+Files: src/routes/manufacturing/cart-mfg/buckets/+page.svelte, .../buckets/+page.server.ts,
+BUCKET-SYSTEM_PLAN.md §7 + §9.1 + §9.4 + changelog.
+Check (svelte-kit sync + svelte-check direct): 12 errors / 441 warnings — the documented
+baseline (r2.ts, AskBimsWidget, 8x assembly/[sessionId], 2x validation/magnetometer/
+[sessionId]), none in the touched files.
+Note on how this landed: the code + plan-doc edits were made in a shared worktree while another
+session was renaming the raw stage to barcoded, and they were swept into that session's commit
+5a01239f ("Merge origin/master into feat/bucket-system for the ship build"), already pushed.
+This entry and the changelog sha stamp are the follow-up; no separate code commit exists for the
+Mint card removal. No deployment was created by this session.
+
+================================================================================
+2026-09-25 — feat/bucket-system — bucket stage renamed: raw → barcoded
+================================================================================
+User: "Rename every instance of 'raw' in the bucket system to 'barcoded'." The first bucket
+stage is now named for what has happened to the shell — a QR/barcode label is on it — rather
+than for the material it was cut from. Renamed the stage key `raw` → `barcoded` and the label
+"Raw" → "Barcoded" everywhere the bucket domain uses them:
+  - bucket-service.ts: BUCKET_STAGES, STAGE_LABELS, FORCE_TARGETS, FORCE_TARGET_LABELS, every
+    `stage !== 'raw'` / `from === 'raw'` guard, the `status: 'raw'` writes at cartridge birth,
+    the logTx fromStage/toStage values, and all operator-facing error strings ("...can only be
+    scanned in while a bucket is at Barcoded").
+  - Models: BucketCycle.stage enum, CartridgeRecord.status enum (both gain `barcoded`).
+  - cartridge-admin/queries.ts LifecycleStage; /cartridge-admin + /manufacturing/cart-mfg stage
+    strips (bc.stages.barcoded); state-change page copy; buckets board, [bucketId] page and
+    override page; pipeline `bucket_raw` StageKey → `bucket_barcoded` (label "Barcoded").
+Deliberately NOT renamed, and why: (a) local string-parsing variables literally named `raw`
+(`const raw = (code ?? '').trim()`, `movesRaw`, `pinRaw`, `destRaw`) — these mean "raw input
+string", not the stage; renaming them to `barcoded` would be false. (b) Unrelated `raw`
+elsewhere in the app (CV processingMode, Raw BCODE, Raw Data panels, raw-materials copy).
+(c) Prose about the physical "raw shell" was reworded to just "shell" — a shell is not barcoded
+until the sticker goes on, so "barcoded shell" would have been wrong.
+Back-compat: `raw` is KEPT in both enums (BucketCycle.stage, CartridgeRecord.status) so
+pre-rename rows still validate — the same treatment `qr_pending` and `wax_qc` already get.
+Nothing writes `raw` any more. NOTE this matters: stageCounts() filters through isBucketStage(),
+so any row still stored as `raw` silently stops counting on the board until migrated.
+New: scripts/migrate-bucket-raw-to-barcoded.ts (--plan / --apply, house pattern) moves
+bucket_cycles.stage, cartridge_records.status and bucket_transactions.fromStage/toStage from
+`raw` to `barcoded` via the raw driver (cartridge_records is sacred, bucket_transactions is
+immutable) and writes one summary audit_logs row. NOT RUN YET — no MONGODB_URI in this
+environment; run --plan first against Atlas.
+A word-boundary sweep at the end caught what a plain grep for "raw" had buried under "draws" /
+"drawn": STATUS_NEXT_LABEL on /manufacturing/cart-mfg is keyed by cartridge status, and its
+`raw:` key would have silently stopped resolving once the status was renamed — the "should be
+at" line after a cart lookup would have gone blank for every barcoded cart. Fixed, plus three
+stale stage comments (thermoseal-service.ts, cart-mfg/+page.svelte, state-change/+page.server.ts).
+Files: src/lib/server/services/bucket-service.ts, src/lib/server/services/thermoseal-service.ts,
+src/lib/server/db/models/bucket-cycle.ts,
+src/lib/server/db/models/cartridge-record.ts, src/lib/server/services/cartridge-admin/queries.ts,
+src/routes/cartridge-admin/+page.svelte, src/routes/manufacturing/cart-mfg/+page.svelte,
+.../cart-mfg/pipeline/+page.server.ts, .../cart-mfg/state-change/+page.svelte,
+.../cart-mfg/buckets/{+page.server.ts,+page.svelte,[bucketId]/*,override/+page.svelte},
+BUCKET-SYSTEM_PLAN.md §2 (rename note) + changelog, scripts/migrate-bucket-raw-to-barcoded.ts.
+Check (svelte-kit sync + svelte-check direct, portable Node 22.12 re-downloaded to
+%LOCALAPPDATA%\Temp\n22 — the old copy had been cleaned out): 12 errors / 441 warnings, the
+documented baseline; zero problems in any touched bucket file.
+Note on how this landed: shared worktree again. The src edits above were made while another
+session was removing the inline Mint card, and both sessions' working-tree changes were swept
+into that session's commit 5a01239f ("Merge origin/master into feat/bucket-system for the ship
+build"), already pushed — neither parent of that merge contains `barcoded`. So the code rename
+is committed but has no commit of its own, and it went out WITHOUT the plan-doc update that
+CLAUDE.md requires in the same commit. The BUCKET-SYSTEM_PLAN.md §2 note, the changelog row and
+the migration script are still uncommitted as of this entry. No deployment was created by this
+session.
+
+================================================================================
+2026-09-25 — feat/bucket-system — Ship build: master merged in, WI-01 collision resolved
+================================================================================
+User: "I want to push this to main and ship it." Production is master (CLAUDE.md), and PR #54
+(feat/bucket-system → master) is the traceable path, so this is the final master merge the
+branch had been holding off on.
+Two merges were needed: origin/master moved twice during the build (6c1c95eb, then 4bac0c08).
+The first merge (35b48fd5) took only progress.txt. The second hit REAL conflicts in WI-01,
+because master has no bucket system at all and its WI-01 had evolved the opposite way:
+  master                              this branch
+  cart is born AT WI-01 (genesis)     cart is born at bucket scan-in (Raw)
+  oven selected before scanning       oven/cure tracking removed app-wide
+  Remove hard-deletes the record      Remove returns the cart to its bucket pass
+  merged-double-barcode guard         (none)
+  (b787076d, 2026-09-24, after 87 merged codes became cartridge records)
+User's decision: the bucket-fed WI-01 ships, and master's barcode guard is carried across
+rather than lost. Resolution (5a01239f):
+  - every WI-01 conflict resolved to the branch side; master's oven-first session and
+    hard-delete Remove are gone with it (no stale ovenId/Equipment references left).
+  - splitMergedBarcodes() still backstops the scanBackedCartridge action, and the page keeps
+    master's client-side splitMerged() (kept master's copy, dropped my duplicate).
+  - NEW: the same guard now covers bucket scan-in — assertNotMergedBarcode() in bucket-service,
+    called from scanCartIn(), because that is where carts are born in this design and the
+    guard would otherwise protect the wrong door.
+  - progress.txt: both logs kept, master's entries first.
+Check (svelte-kit sync + svelte-check direct): 12 errors / 441 warnings — same 12 baseline
+errors, none in touched files (warnings +3 from master's new files).
+Local `vite build` could NOT run: the portable node in Temp is now the arm64 build while
+node_modules carries @rollup/rollup-win32-x64-msvc, so rollup fails to load. Vercel's build of
+the exact ship commit is the check that matters and it passed (below).
+
+Deployment: preview — https://bioscale-operations-system-mongodb-2qlsinz36-brevitest.vercel.app
+  (brevitest scope; cookie-session gated, 302 to /login)
+Source: branch feat/bucket-system @ commit 5a01239f
+Retrieve this exact code: git checkout feat/bucket-system at commit 5a01239f
+What this deployment is for: the SHIP BUILD — the exact tree proposed for master. Smoke: /login
+  200, /manufacturing/cart-mfg/buckets, /manufacturing/cart-mfg/wi-01 and /cartridge-admin all
+  302 to /login as expected.
+Build status: success.
+
+PRODUCTION MERGE: not done in this session. PR #54 is mergeable/clean (85 commits, 49 files,
++7822/−1456) and ready, but the merge call was refused by the harness permission classifier
+([Merge Without Review]) — it needs the user to press Merge on PR #54, or to allow that action.
+Nothing about the bucket flow has been exercised against real data yet (audit, leftover flow,
+Find a cart, thermoseal rolls) — first production use is also its first real test.
+
+================================================================================
+2026-09-25 — feat/bucket-system — Scan-in lag audit: queue + overlay, two real bugs fixed
+================================================================================
+User asked for the whole bucket system to be audited for lag, "especially at the barcode scan in
+page for raw/barcoded — these scan ins should happen at a quick rapid pace, resist lag". Audited
+bucket-service.ts, thermoseal-service.ts, all four /buckets routes, wi-01, and the shared paths
+they lean on (inventory-transaction, notifications, hooks, root + cart-mfg layouts, the
+sacred/immutable middleware, model indexes). No local .env, so nothing could be TIMED against
+Atlas — every figure below is a static count of round trips and collection scans read off the code.
+
+WHAT WAS WRONG (one scan = ~20 sequential round trips, then a full board reload)
+  - The board's scan box awaited invalidateAll() after every cart. That re-ran the root layout
+    (2 sequential Integration.findOne), the cart-mfg layout and the board load — ~25 queries.
+    Three of them get slower forever: changeLog()'s find({}).sort({createdAt:-1}) had NO index
+    that could serve a bare createdAt sort (COLLSCAN of a collection every scan appends to);
+    bucketRegistry()'s bare $group/$max was an unconditional COLLSCAN; availableLots() (and
+    thermoseal's defaultThermosealLot) aggregate every consumption/scrap row for the shell/label
+    lots — two rows per cartridge ever scanned in. Cart #200 was measurably slower than cart #1.
+  - scanCartIn awaited ~18 queries in series, several of them pointless: resolveBucketId spent two
+    queries, recordTransaction read the part before writing it, shouldWarnLowInventory re-read
+    NotificationSettings up to 4x per scan, and the function ended with a BucketCycle.findById
+    whose result the client never read.
+  - Two unawaited checkSupplyForPart() calls per scan (one per debit), ~8 background queries each
+    burst, competing with the next scan for a 10-socket pool.
+  - The input was disabled={cartScanBusy}. A disabled input loses focus and a gun keeps typing, so
+    keystrokes in that window were dropped — or partially captured after the 60ms refocus and
+    submitted truncated.
+
+TWO BUGS FOUND THAT ARE NOT ABOUT SPEED
+  - The mis-scan button had NEVER worked. unscanCart called CartridgeRecord.deleteOne, and in
+    Mongoose 9 schema.pre('deleteOne') with no options is QUERY middleware (confirmed in
+    node_modules/mongoose/lib/schema.js:699 — _getDocumentMiddleware filters deleteOne out unless
+    {document:true}), so the sacred middleware's unconditional delete hook fired and threw a 500.
+    cartridge-hard-delete.ts's own header already documented this for WI-01's Remove button.
+    Worse, the client had branches for 'success' and 'failure' but none for 'error', so the
+    operator clicked mis-scan and nothing happened at all — no message. It threw before any state
+    changed, so no partial writes were ever left behind.
+  - recordTransaction decremented inventoryCount by read-compute-$set, not $inc. Two operators
+    scanning at once both debited PT-CT-104 from the same stale read and the second write clobbered
+    the first — counts drift high, silently. retract() already used $inc; the main debit did not.
+    Rapid concurrent scanning is exactly what triggers it. Noted in the plan doc as a data risk:
+    counts recorded before today may sit high, and the InventoryTransaction ledger is the
+    authority for repairing any part that looks wrong.
+
+WHAT WAS CHANGED
+  buckets/+page.svelte — scan box never disabled; Enter drains it onto scanQueue and returns; one
+    pumpCartScans worker posts in order, each queue entry carrying its own cycleId so switching
+    buckets mid-drain still lands earlier carts correctly; membership overlay (scanAdded /
+    scanRemoved → overlay() → boardCycles) replaces the per-cart refetch, and is self-healing so a
+    refetch may land at any time; ONE debounced invalidateAll 2.5s after scanning stops; failed
+    scans stack in a dismissible list instead of being overwritten by the next success; merged
+    double-reads split client-side (matching WI-01); stage tile counts include the overlay delta;
+    unscan got its missing 'error' branch. Every read of an open pass now goes through boardCycles.
+  bucket-service.ts — scanCartIn: three guards in one Promise.all, five writes in another (the
+    CartridgeRecord create stays ordered before the debits), trailing findById dropped, returns
+    {quantity, barcode}. unscanCart: goes through hardDeleteUnfinalizedCartridges, parallel
+    retracts, returns {quantity, barcode}. resolveBucketId: one indexed $or instead of two queries
+    (on every scan-in AND every audit scan). bucketRegistry: $sort before $group so it rides the
+    existing {bucketId,createdAt} index as a distinct scan.
+  inventory-transaction.ts — findOneAndUpdate/$inc debit (one round trip, no lost update);
+    resolvePartId dedupes in-flight lookups so the two parallel debits share one query.
+  notifications.ts — 15s in-process cache for the low-inventory settings doc (was up to 4 reads
+    per scan).
+  kanban/standing.ts — new requestSupplyCheckForPart(): fires immediately when the part has been
+    quiet 30s, otherwise coalesces a burst into ONE trailing check 1.5s after the last decrement,
+    which sees the final count. Nothing is dropped, and 40 scans cost one check instead of 80.
+  models — bucket-transaction: index({createdAt:-1}). inventory-transaction:
+    index({lotId,transactionType,quantity}) so the per-lot remaining aggregate is covered by the
+    index and fetches no documents.
+  thermoseal-service.ts — checkFloor takes throttleMs; the board passes 60s so the background
+    refresh does not re-run the floor rule between carts. A roll pull still runs it unthrottled.
+  cartridge-hard-delete.ts — optional `statuses` whitelist so 'barcoded' can be deleted by the
+    mis-scan path.
+  BUCKET-SYSTEM_PLAN.md — new §6.2.1 "Scanning pace — the hot path" with the rules for anyone
+    touching it, §6.2 corrected, two new §12.4 risks, §10 row for the shared files, changelog row.
+
+DELIBERATELY NOT CHANGED
+  auditCycle's per-stray loops (2 round trips each) look like an N+1 worth batching, but they
+  mutate home.quantity in memory between iterations so that two strays sharing a home pass compute
+  the right qtyBefore. The sequential shape is load-bearing — parallelising would corrupt the
+  count. Left alone and noted.
+
+Check (svelte-check direct; svelte-kit sync still cannot run — portable node in Temp is the arm64
+build while node_modules carries @rollup/rollup-win32-x64-msvc): 12 errors / 441 warnings, the
+same 12 baseline errors (r2.ts, AskBimsWidget, 8x assembly/[sessionId], 2x
+validation/magnetometer/[sessionId]), none in any file touched here.
+
+Not deployed from this session — no preview was created, so there is no deployment entry to log.
+Nothing here has been exercised against real data; the scan-in rebuild in particular wants a real
+gun and a real tub before it is trusted.
+
+================================================================================
+2026-09-25 — feat/bucket-system — Ship audit: branch quiet, code clean, migration outstanding
+================================================================================
+User: "Wait for the other sessions to finish, audit new pushes for errors, push build."
+Waited: polled origin/feat/bucket-system once a minute; the tip has been 0c6af66c for 10+
+minutes with no new pushes, so the concurrent sessions are done.
+
+AUDITED what landed after the last independently verified commit (6baff520):
+1. My own merge commit 5a01239f swept TWO other sessions' uncommitted work out of the shared
+   worktree, neither of which I had reviewed at the time. Both turned out to be complete:
+   a. Inline Mint / Replace-Sticker card removed from the board. Verified: no `?/mint` or
+      `?/relabel` actions and no mint state left on the board, /buckets/new still owns
+      createBucket + replaceBucketSticker, the header's New bucket link works, and the two
+      remaining `case 'mint'` / `case 'relabel'` arms are change-log LABELS for historical
+      ledger rows — correct to keep.
+   b. The first bucket stage was renamed raw → barcoded across models, service, board,
+      cartridge-admin, pipeline (`bucket_raw` → `bucket_barcoded`) and state-change. Verified:
+      both enums still accept 'raw' so pre-rename rows validate, the [bucketId] aggregation
+      matches both, and the only other 'raw' hits in src are unrelated (CV processingMode,
+      reagent classification).
+2. Docs-only commits since (d926b8e3, 0c6af66c) — changelog sha stamp + progress entries.
+3. svelte-check on the tip: 12 errors / 441 warnings — the documented baseline, none in any
+   bucket file. (Run standalone: `svelte-kit sync` and `vite build` can no longer run in this
+   environment — the portable Node in Temp is now the arm64 build while node_modules carries
+   @rollup/rollup-win32-x64-msvc, so rollup will not load. svelte-check does not need it.)
+
+OPEN ITEM — DATA MIGRATION, blocks a clean ship:
+scripts/migrate-bucket-raw-to-barcoded.ts has NOT been run (the session that wrote it had no
+MONGODB_URI; neither do I, and bucket_cycles is not reachable through the BIMS MCP, so I could
+not even count the affected rows). Until it runs against Atlas, any bucket pass still stored
+with stage 'raw' DISAPPEARS from the board: stageCounts() drops it through isBucketStage(), and
+the board page buckets cycles by the three current stage keys, so a 'raw' pass falls through
+the optional chain. Same for carts whose status is still 'raw' in the cartridge-admin strip.
+Previews have been running against the production Atlas database all along, so real rows at the
+old value are likely. Order of operations: run `npx tsx scripts/migrate-bucket-raw-to-barcoded.ts
+--plan` (read-only, prints the counts), then `--apply`, then merge PR #54 — or merge first and
+apply immediately after, accepting that rows are invisible in between.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-j7rpabmlj-brevitest.vercel.app
+  (brevitest scope; cookie-session gated, 302 to /login)
+Source: branch feat/bucket-system @ commit 0c6af66c
+Retrieve this exact code: git checkout feat/bucket-system at commit 0c6af66c
+What this deployment is for: the audited ship candidate — everything both sessions pushed, with
+  master (4bac0c08) merged in. Smoke: /login 200; buckets, buckets/new, wi-01, cartridge-admin
+  and pipeline all 302 to /login as expected.
+Build status: success.
+
+PR #54 remains open and mergeable/clean. The merge call is still refused by the harness
+permission classifier ([Merge Without Review]) — it needs the user's click or an allow rule.

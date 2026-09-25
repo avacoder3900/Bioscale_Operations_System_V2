@@ -37,10 +37,6 @@
 			<h3 class="mb-2 text-xs font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Timers</h3>
 			<div class="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3">
 				<div class="rounded border border-[var(--color-tron-border)] p-3">
-					<div class="text-[10px] uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Minimum oven cure time</div>
-					<div class="mt-1 font-mono text-lg" style="color: var(--color-tron-text)">{data.wax.minOvenTimeMin} <span class="text-xs">min</span></div>
-				</div>
-				<div class="rounded border border-[var(--color-tron-border)] p-3">
 					<div class="text-[10px] uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Run duration (expected)</div>
 					<div class="mt-1 font-mono text-lg" style="color: var(--color-tron-text)">{data.wax.runDurationMin} <span class="text-xs">min</span></div>
 				</div>

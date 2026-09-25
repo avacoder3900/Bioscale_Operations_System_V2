@@ -57,13 +57,17 @@
 		return Number.isNaN(d.getTime()) ? '—' : d.toLocaleString();
 	}
 
-	const STAGES: LifecycleStage[] = ['backing', 'wax_filled', 'wax_qc', 'wax_ready', 'wax_rejected', 'reagent_filled', 'inspected', 'sealed', 'reagent_qc', 'reagent_ready', 'reagent_rejected', 'cured', 'stored', 'released', 'shipped', 'assay_loaded', 'testing', 'completed', 'voided'];
+	const STAGES: LifecycleStage[] = ['barcoded', 'unpressed', 'pressed', 'backing', 'wax_filled', 'wax_qc', 'wax_ready', 'wax_rejected', 'reagent_filled', 'inspected', 'sealed', 'reagent_qc', 'reagent_ready', 'reagent_rejected', 'cured', 'stored', 'released', 'shipped', 'assay_loaded', 'testing', 'completed', 'voided'];
 
 	function stageLabel(stage: string): string {
+		if (stage === 'backing') return 'In Oven'; // BUCKET-SYSTEM_PLAN v2: backing == In Oven
 		return stage.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
 	}
 
 	const stageColors: Record<string, string> = {
+		raw: 'bg-slate-900/50 text-slate-300 border-slate-500/30',
+		unpressed: 'bg-sky-900/50 text-sky-300 border-sky-500/30',
+		pressed: 'bg-amber-900/50 text-amber-300 border-amber-500/30',
 		backing: 'bg-gray-900/50 text-gray-300 border-gray-500/30',
 		wax_filled: 'bg-blue-900/50 text-blue-300 border-blue-500/30',
 		wax_stored: 'bg-violet-900/50 text-violet-300 border-violet-500/30',
@@ -119,6 +123,31 @@
 
 <div class="space-y-4">
 	<PartsNav />
+
+	<!-- Production-bucket funnel (BUCKET-SYSTEM_PLAN v2 §9.3): Barcoded → Unpressed → Pressed → In Oven.
+	     Bucket tiles deep-link into the board; In Oven filters this page to status backing. -->
+	{#if data.bucketCounts}
+		{@const bc = data.bucketCounts}
+		{@const strip = [
+			{ key: 'barcoded', label: 'Barcoded', value: bc.stages.barcoded.cartridges, sub: `${bc.stages.barcoded.buckets} bkt`, cls: 'text-[var(--color-tron-cyan)]' },
+			{ key: 'unpressed', label: 'Unpressed', value: bc.stages.unpressed.cartridges, sub: `${bc.stages.unpressed.buckets} bkt`, cls: 'text-[var(--color-tron-cyan)]' },
+			{ key: 'pressed', label: 'Pressed', value: bc.stages.pressed.cartridges, sub: `${bc.stages.pressed.buckets} bkt`, cls: 'text-[var(--color-tron-cyan)]' },
+			{ key: 'backing', label: 'In Oven', value: bc.inOven, sub: 'at WI-01', cls: 'text-[var(--color-tron-purple)]' }
+		]}
+		<div class="flex flex-wrap items-stretch gap-2">
+			<span class="self-center text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Buckets</span>
+			{#each strip as t (t.key)}
+				<a href={t.key === 'backing' ? '/cartridge-admin?stage=backing' : `/manufacturing/cart-mfg/buckets?stage=${t.key}`}
+					class="flex min-w-[96px] flex-col rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] px-3 py-1.5 hover:border-[var(--color-tron-cyan)]/60"
+					title={t.key === 'backing' ? 'Show cartridges in the oven' : `Open the bucket board at ${t.label}`}>
+					<span class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">{t.label}</span>
+					<span class="text-lg font-bold leading-tight {t.cls}">{t.value}</span>
+					<span class="text-[10px] text-[var(--color-tron-text-secondary)]">{t.sub}</span>
+				</a>
+			{/each}
+		</div>
+	{/if}
+
 	<!-- Search + Filters -->
 	<div class="flex flex-wrap gap-2">
 		<div class="flex flex-1 gap-2">

@@ -19,6 +19,10 @@
 	let createUnknown = $state(false);
 	let clearReagentFill = $state(false);
 	let reason = $state('');
+	// Bucket stages need a destination bucket (its open pass at that stage).
+	let destinationBucketId = $state('');
+	const isBucketTarget = $derived((data.bucketStages as string[]).includes(target));
+	const passesAtTarget = $derived(isBucketTarget ? (data.openPasses as any[]).filter((p) => p.stage === target) : []);
 	let busy = $state(false);
 	let result = $state<{
 		target: string;
@@ -35,6 +39,7 @@
 
 	async function changeState() {
 		if (!target) { errMsg = 'Pick a target status'; return; }
+		if (isBucketTarget && !destinationBucketId) { errMsg = `${data.stageLabels[target] ?? target} is a bucket stage — pick the destination bucket`; return; }
 		if (scanned.length === 0) { errMsg = 'Scan at least one barcode'; return; }
 		errMsg = null;
 		busy = true;
@@ -43,6 +48,7 @@
 			fd.set('barcodes', text);
 			fd.set('targetStatus', target);
 			if (createUnknown) fd.set('createUnknown', 'on');
+			if (isBucketTarget && destinationBucketId) fd.set('destinationBucketId', destinationBucketId);
 			if (clearReagentFill) fd.set('clearReagentFill', 'on');
 			if (reason.trim()) fd.set('reason', reason.trim());
 			const res = await fetch('?/changeState', {
@@ -111,10 +117,33 @@
 		>
 			<option value="">— pick a status —</option>
 			{#each data.statuses as s (s)}
-				<option value={s}>{s}{data.counts[s] ? ` (${data.counts[s]} now)` : ''}</option>
+				<option value={s}>{s}{(data.bucketStages as string[]).includes(s) ? ' · bucket stage' : ''}{data.counts[s] ? ` (${data.counts[s]} now)` : ''}</option>
 			{/each}
 		</select>
 	</label>
+
+	{#if isBucketTarget}
+		<label class="block">
+			<span class="text-xs font-medium uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">
+				Destination bucket — its open pass must be at {data.stageLabels[target] ?? target}
+			</span>
+			<select
+				bind:value={destinationBucketId}
+				class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-black/40 px-3 py-2 font-mono text-sm"
+				style="color: var(--color-tron-text)"
+			>
+				<option value="">{passesAtTarget.length ? '— pick a bucket —' : `— no open pass is at ${data.stageLabels[target] ?? target} —`}</option>
+				{#each passesAtTarget as p (p.cycleId)}
+					<option value={p.bucketId}>{p.bucketId} #{p.cycleNumber}{p.barcode ? ` · ${p.barcode.slice(0, 8)}…` : ''} · {p.quantity} cart{p.quantity === 1 ? '' : 's'}</option>
+				{/each}
+			</select>
+			<p class="mt-1 text-[10px]" style="color: var(--color-tron-text-secondary)">
+				The carts join that bucket's pass (and leave their old one). Nothing is debited — an override is bookkeeping. Unknown barcodes are refused here; scan them into a bucket on the <a href="/manufacturing/cart-mfg/buckets" class="underline">board</a> instead.
+			</p>
+		</label>
+	{:else if target}
+		<p class="text-[10px]" style="color: var(--color-tron-text-secondary)">A cart that is currently in a bucket (Barcoded / Unpressed / Pressed) is removed from its bucket's pass when moved here.</p>
+	{/if}
 
 	<label class="block">
 		<span class="text-xs font-medium uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">

@@ -30,6 +30,7 @@ const lotRecordSchema = new Schema({
 	},
 	scrapReason: String,
 	bucketBarcode: String,
+	bucketCycleId: String, // BucketCycle._id when WI-01 drew this batch from a production bucket (BUCKET-SYSTEM_PLAN §6.3)
 	notes: String,
 
 	// Oven chosen at WI-01 batch setup (checkAndStart). Lets a resumed scan

@@ -1,5 +1,5 @@
 import { redirect, fail } from '@sveltejs/kit';
-import { isCureComplete } from '$lib/server/manufacturing/cure-time';
+
 import mongoose from 'mongoose';
 import {
 	connectDB, WaxFillingRun, CartridgeRecord, Consumable, ManufacturingSettings, generateId,
@@ -7,6 +7,7 @@ import {
 	OpentronsRobot, ManualCartridgeRemoval, Ot2BridgeCommand, TipCalibratorFixture
 } from '$lib/server/db';
 import { recordTransaction, resolvePartId } from '$lib/server/services/inventory-transaction';
+import { findBucketLabels } from '$lib/server/services/bucket-service';
 import { resolveFridgeId, resolveCoolingTrayId, resolveDeckId } from '$lib/server/services/equipment-resolve';
 import { isAdmin } from '$lib/server/permissions';
 import { User } from '$lib/server/db';
@@ -335,33 +336,12 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 			}))
 		];
 
-		// Backed cartridges in ovens (per-cartridge, WAX-FLOW-2 — replaces the
-		// retired BackingLot aggregate). Grouped by oven for the deck-load hint.
-		const minOvenTimeMin = wax.minOvenTimeMin ?? 60;
-		const now = Date.now();
-		const backedCartsRaw = await CartridgeRecord.find(
-			{ status: 'backing' },
-			{ _id: 1, 'backing.ovenEntryTime': 1, 'backing.ovenLocationId': 1, 'backing.ovenLocationName': 1 }
-		).lean().catch(() => []);
-
-		const ovenGroupMap = new Map<string, { ovenId: string; ovenName: string; total: number; ready: number }>();
-		let backedReadyCount = 0;
-		for (const c of backedCartsRaw as any[]) {
-			const entry = c.backing?.ovenEntryTime ? new Date(c.backing.ovenEntryTime).getTime() : 0;
-			const isReady = isCureComplete(c.backing?.ovenEntryTime, minOvenTimeMin, now);
-			if (isReady) backedReadyCount++;
-			const key = c.backing?.ovenLocationId ?? 'unknown';
-			const g = ovenGroupMap.get(key) ?? {
-				ovenId: key,
-				ovenName: c.backing?.ovenLocationName ?? 'Unknown oven',
-				total: 0,
-				ready: 0
-			};
-			g.total++;
-			if (isReady) g.ready++;
-			ovenGroupMap.set(key, g);
-		}
-		const backedOvens = [...ovenGroupMap.values()].sort((a, b) => a.ovenName.localeCompare(b.ovenName));
+		// Backed cartridges ("In Oven", status 'backing'). Backing-oven tracking
+		// and the cure-time gate were removed app-wide (2026-09-23, BUCKET-SYSTEM_PLAN
+		// v2): no oven grouping, no readiness — every backed cartridge is loadable.
+		const backedTotalCount = await CartridgeRecord.countDocuments({ status: 'backing' }).catch(() => 0);
+		const backedReadyCount = backedTotalCount;
+		const backedOvens: { ovenId: string; ovenName: string; total: number; ready: number }[] = [];
 
 		// Wax lot dropdown (WAX-FLOW-3): in-house WaxBatches + purchased
 		// PT-CT-114 receiving lots with remaining volume. Few of these ever
@@ -424,11 +404,10 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 			tubeData,
 			backedOvens,
 			backedReadyCount,
-			backedTotalCount: (backedCartsRaw as any[]).length,
+			backedTotalCount,
 			waxLots: JSON.parse(JSON.stringify(waxLots)),
 			rejectionCodes,
 			fridges,
-			minOvenTimeMin,
 			// --- OT-2 Start Run panel inputs ---
 			// The robot's uploaded protocols (with parameter schemas) for the
 			// picker. Empty if the robot hasn't been hydrated.
@@ -508,7 +487,6 @@ async function stopRobotRun(run: any): Promise<string | null> {
 		return `Couldn't reach the robot to stop the run (${e instanceof Error ? e.message : 'unknown'}) — confirm on the device.`;
 	}
 }
-
 
 /**
  * Flip a run's carts wax_filling → wax_filled with the full waxFilling phase
@@ -832,46 +810,41 @@ export const actions: Actions = {
 		const run = await WaxFillingRun.findById(runId).lean() as any;
 		if (!run) return fail(404, { error: 'Run not found' });
 
-		// WAX-FLOW-2: cartridges were already originated at WI-01 backing
-		// (status 'backing', full lineage + oven entry time on the record).
-		// loadDeck validates each scan against those records and gates on the
-		// per-cartridge minimum oven time.
+		// Cartridges arrive here at status 'backing' ("In Oven"), drawn out of a
+		// pressed production bucket at WI-01. loadDeck validates each scan against
+		// those records. Backing-oven tracking and the cure-time gate were removed
+		// app-wide (2026-09-23) — nothing here reads oven entry time any more.
 		if (cartridgeIds.length > 0) {
 			const now = new Date();
-			const settingsDocLd = await ManufacturingSettings.findById('default')
-				.select('waxFilling.minOvenTimeMin').lean() as any;
-			const minOvenTimeMin: number = settingsDocLd?.waxFilling?.minOvenTimeMin ?? 60;
 
 			const existingCarts = await CartridgeRecord.find(
 				{ _id: { $in: cartridgeIds } },
-				{ _id: 1, status: 1, 'backing.ovenEntryTime': 1, 'waxFilling.runId': 1 }
+				{ _id: 1, status: 1, 'waxFilling.runId': 1 }
 			).lean() as any[];
 			const cartById = new Map(existingCarts.map((c: any) => [String(c._id), c]));
 
 			const missing: string[] = [];
 			const wrongStatus: { id: string; status: string }[] = [];
-			const underTime: { id: string; remainingMin: number }[] = [];
 			for (const cid of cartridgeIds) {
 				const c = cartById.get(cid);
 				if (!c) { missing.push(cid); continue; }
 				// Idempotent retry: already stamped onto this run by a prior submit
 				if (c.status === 'wax_filling' && c.waxFilling?.runId === runId) continue;
 				if (c.status !== 'backing') { wrongStatus.push({ id: cid, status: c.status ?? '(none)' }); continue; }
-				// CURE-TIME GATE SUSPENDED 2026-08-28 (operator decision). Nothing
-				// blocks on oven time any more; the shortfall is still MEASURED so it
-				// lands in the audit trail and so reinstating the gate is a one-line
-				// change (turn the `underTime` list back into a fail()).
-				const entry = c.backing?.ovenEntryTime ? new Date(c.backing.ovenEntryTime).getTime() : 0;
-				const elapsedMin = entry ? (now.getTime() - entry) / 60000 : 0;
-				if (!entry || elapsedMin < minOvenTimeMin) {
-					underTime.push({ id: cid, remainingMin: Math.ceil(Math.max(0, minOvenTimeMin - elapsedMin)) });
-				}
 			}
 
 			// Test mode: synthesize backed carts for unknown barcodes so the
 			// flow can be exercised end-to-end without WI-01. Synthetic carts
 			// have no backing.parentLotRecordId — cancel/abort deletes them.
 			if (missing.length > 0 && testMode) {
+				// Never synthesize a cartridge from a production bucket's label —
+				// a tub wearing a UUID QR sticker scans exactly like a cartridge
+				// (BUCKET-SYSTEM_PLAN §9.4).
+				const bucketLabels = await findBucketLabels(missing);
+				if (bucketLabels.size > 0) {
+					const details = [...bucketLabels].map(([code, b]) => `${code} is the label on bucket ${b}`).join('; ');
+					return fail(400, { error: `Not cartridges — ${details}. Remove them from the deck scan.` });
+				}
 				await CartridgeRecord.bulkWrite(missing.map((cid) => ({
 					updateOne: {
 						filter: { _id: cid },
@@ -879,7 +852,6 @@ export const actions: Actions = {
 							$setOnInsert: {
 								_id: cid,
 								status: 'backing',
-								'backing.ovenEntryTime': new Date(now.getTime() - minOvenTimeMin * 60000),
 								'backing.operator': { _id: locals.user!._id, username: locals.user!.username },
 								'backing.recordedAt': now
 							}
@@ -901,34 +873,10 @@ export const actions: Actions = {
 			}
 
 			if (missing.length > 0) {
-				return fail(400, { error: `Cartridge(s) not found in backing: ${missing.join(', ')}. Scan them into the oven at Cartridge Back (WI-01) first.` });
+				return fail(400, { error: `Cartridge(s) not found in backing: ${missing.join(', ')}. Draw them into the oven at Cartridge Back (WI-01) first.` });
 			}
 			if (wrongStatus.length > 0) {
 				return fail(400, { error: `Cartridge(s) not available for wax filling: ${wrongStatus.map((w) => `${w.id} (${w.status})`).join(', ')}.` });
-			}
-			// Oven cure time is NO LONGER ENFORCED (2026-08-28, operator: "completely
-			// abolish the heating/oven timing requirement for wax carts — we might
-			// reinstate it later"). Previously this refused the deck load and offered
-			// an admin override; carts backed minutes earlier could not be filled.
-			// The shortfall is still recorded on the run and in the audit log, so the
-			// data to reinstate the gate (and to see how often it would have fired)
-			// keeps accruing. To bring it back: return fail() here again — the client
-			// already handles `requiresOverride` and the admin re-auth modal is intact.
-			if (underTime.length > 0) {
-				const worst = Math.max(...underTime.map((u) => u.remainingMin));
-				console.log(`[loadDeck] cure-time gate suspended — proceeding with ${underTime.length} cartridge(s) under ${minOvenTimeMin} min (worst ${worst} min short)`);
-				try {
-					await AuditLog.create({
-						_id: generateId(),
-						tableName: 'cartridge_records',
-						recordId: runId,
-						action: 'UPDATE',
-						changedBy: locals.user.username,
-						changedAt: now,
-						reason: `Cure-time gate suspended — ${underTime.length} cartridge(s) loaded under the ${minOvenTimeMin} min oven time (worst ${worst} min short)`,
-						newData: { cureGateSuspended: true, minOvenTimeMin, cartridges: underTime }
-					});
-				} catch { /* never block the load on the note */ }
 			}
 
 			const ops = cartridgeIds.map((cid: string, idx: number) => ({
@@ -937,8 +885,6 @@ export const actions: Actions = {
 					update: {
 						$set: {
 							status: 'wax_filling',
-							// Cartridge is leaving the backing oven onto the deck
-							'backing.ovenExitTime': now,
 							'waxFilling.runId': runId,
 							'waxFilling.deckId': deckId ?? null,
 							'waxFilling.robotId': run.robot?._id ?? null,
@@ -1059,7 +1005,6 @@ export const actions: Actions = {
 			throw e;
 		}
 		if (deckBinding.warning) console.warn('[wax-filling startRun] ' + deckBinding.warning);
-
 
 		// Freshness gate: resolve the robot's CURRENT wax protocol server-side and
 		// prove its bundled deck calibration matches live Mongo; auto-resync if
@@ -1389,7 +1334,6 @@ export const actions: Actions = {
 		return { success: true, consumed, nextTipIndex: finalIndex, advanced, autoCompleted: finalStatus === 'succeeded' };
 	},
 
-
 	/**
 	 * Confirm deck removed + store in one commit (WAX-SIMPLIFY-1: deck-removed →
 	 * fridge → wax_filled). Replaces the old cooling → completeQC → recordStorage →
@@ -1506,8 +1450,6 @@ export const actions: Actions = {
 
 		return { success: true };
 	},
-
-
 
 	/** Reset run back to Loading stage (deck loading) — clears deckId and cartridges so operator can re-scan */
 	resetToLoading: async ({ request, locals }) => {
@@ -1658,7 +1600,7 @@ export const actions: Actions = {
 					status: 'wax_filling',
 					'backing.parentLotRecordId': { $exists: true, $ne: null }
 				},
-				{ $set: { status: 'backing' }, $unset: { waxFilling: '', 'backing.ovenExitTime': '' } }
+				{ $set: { status: 'backing' }, $unset: { waxFilling: '' } }
 			);
 			// Test-mode synthetics (no parentLotRecordId) — hard-deleted through the
 			// driver: Model.deleteMany is blocked by the sacred middleware and used to
@@ -1741,7 +1683,7 @@ export const actions: Actions = {
 					status: 'wax_filling',
 					'backing.parentLotRecordId': { $exists: true, $ne: null }
 				},
-				{ $set: { status: 'backing' }, $unset: { waxFilling: '', 'backing.ovenExitTime': '' } }
+				{ $set: { status: 'backing' }, $unset: { waxFilling: '' } }
 			);
 			await hardDeleteUnfinalizedCartridges(
 				{ _id: { $in: abortScannedIds }, 'waxFilling.runId': runId, status: 'wax_filling' },
@@ -1766,9 +1708,6 @@ export const actions: Actions = {
 
 		return { success: true, warning: abortRobotWarning ?? undefined };
 	},
-
-
-
 
 	/**
 	 * Save an operator-entered note against the wax run. Append-only metadata —

@@ -1,11 +1,8 @@
 <script lang="ts">
-	import { SvelteSet } from 'svelte/reactivity';
 
 	let { data } = $props();
 
 	let dismissedAlerts = $state<Set<number>>(new Set());
-	let expandedOvens = $state<SvelteSet<string>>(new SvelteSet());
-	let expandedLots = $state<SvelteSet<string>>(new SvelteSet());
 
 	// Cartridge search state
 	let cartridgeInput = $state('');
@@ -19,15 +16,6 @@
 	let cartridgeLookupError = $state('');
 	let cartridgeLookupBusy = $state(false);
 
-	function toggleOven(id: string) {
-		if (expandedOvens.has(id)) expandedOvens.delete(id);
-		else expandedOvens.add(id);
-	}
-
-	function toggleLot(lotId: string) {
-		if (expandedLots.has(lotId)) expandedLots.delete(lotId);
-		else expandedLots.add(lotId);
-	}
 
 	function robotStatusBorder(status: string): string {
 		if (status.startsWith('running')) return 'border-l-[var(--color-tron-yellow)]';
@@ -68,7 +56,7 @@
 	});
 
 	const pipelineStages = $derived([
-		{ label: 'Backing', count: data.pipeline.backing.backedTotal, sub: `${data.pipeline.backing.totalReadyCartridges} ready`, color: 'text-[var(--color-tron-purple)]' },
+		{ label: 'In Oven', count: data.pipeline.backing.backedTotal, sub: 'backed', color: 'text-[var(--color-tron-purple)]' },
 		{ label: 'Wax Fill', count: data.pipeline.waxFilling.inProgress, sub: 'filling', color: 'text-[var(--color-tron-yellow)]' },
 		{ label: 'Wax-Filled', count: data.pipeline.waxFilling.waxStage, sub: 'ready for reagent', color: 'text-[var(--color-tron-blue)]' },
 		{ label: 'Reagent', count: data.pipeline.reagentFilling.inProgress + data.pipeline.reagentFilling.reagentFilled, sub: `${data.pipeline.reagentFilling.inProgress} filling`, color: 'text-[var(--color-tron-orange)]' },
@@ -88,12 +76,15 @@
 			if (!res.ok || body.error) {
 				cartridgeLookupError = body.error ?? `Cartridge "${code}" not found.`;
 			} else {
+				// /api/cv/lookup-cartridge returns `status` (the CV cartridge-first refactor
+				// dropped currentPhase/nextPhase/isNew/isComplete); derive the display here.
+				const status: string = body.currentPhase ?? body.status ?? 'unknown';
 				cartridgeLookupResult = {
 					cartridgeRecordId: body.cartridgeRecordId ?? code,
-					currentPhase: body.currentPhase ?? 'unknown',
-					nextPhase: body.nextPhase ?? null,
+					currentPhase: status,
+					nextPhase: body.nextPhase ?? nextStepFor(status),
 					isNew: !!body.isNew,
-					isComplete: !!body.isComplete
+					isComplete: !!body.isComplete || ['stored', 'released', 'shipped', 'completed'].includes(status)
 				};
 			}
 		} catch {
@@ -108,6 +99,21 @@
 			e.preventDefault();
 			runCartridgeLookup();
 		}
+	}
+
+	// Main-line order of a cartridge's status, for "should be at" after a lookup.
+	// Buckets (barcoded → unpressed → pressed) feed WI-01 (backing = In Oven), then wax,
+	// reagent, seal, store. Side statuses (QC/rejected/scrapped/voided) have no next.
+	const STATUS_ORDER = ['barcoded', 'unpressed', 'pressed', 'backing', 'wax_filling', 'wax_filled', 'wax_ready', 'reagent_filling', 'reagent_filled', 'inspected', 'sealed', 'cured', 'stored', 'released', 'shipped'];
+	const STATUS_NEXT_LABEL: Record<string, string> = {
+		barcoded: 'Unpressed (advance the bucket)', unpressed: 'Pressed (advance the bucket)', pressed: 'In Oven (WI-01 draws the bucket)',
+		backing: 'Wax filling', wax_filling: 'Wax-filled', wax_filled: 'Wax ready', wax_ready: 'Reagent filling',
+		reagent_filling: 'Reagent-filled', reagent_filled: 'Inspected', inspected: 'Sealed', sealed: 'Cured', cured: 'Stored', stored: 'Released', released: 'Shipped'
+	};
+	function nextStepFor(status: string): string | null {
+		if (STATUS_NEXT_LABEL[status]) return STATUS_NEXT_LABEL[status];
+		const i = STATUS_ORDER.indexOf(status);
+		return i >= 0 && i < STATUS_ORDER.length - 1 ? STATUS_ORDER[i + 1] : null;
 	}
 
 	function phaseBadgeColor(phase: string): string {
@@ -145,9 +151,9 @@
 	<!-- Top row: Shift summary stats -->
 	<div class="grid grid-cols-2 gap-3 lg:grid-cols-6">
 		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-3 text-center">
-			<div class="text-xs font-medium text-[var(--color-tron-text-secondary)] uppercase tracking-wide">Raw Cartridges</div>
+			<div class="text-xs font-medium text-[var(--color-tron-text-secondary)] uppercase tracking-wide">In Oven</div>
 			<div class="mt-1 text-2xl font-bold text-[var(--color-tron-purple)]">{data.pipeline.backing.totalReadyCartridges}</div>
-			<div class="text-xs text-[var(--color-tron-text-secondary)]">backed &amp; ready</div>
+			<div class="text-xs text-[var(--color-tron-text-secondary)]">backed, ready for wax</div>
 		</div>
 		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-3 text-center">
 			<div class="text-xs font-medium text-[var(--color-tron-text-secondary)] uppercase tracking-wide">Started Today</div>
@@ -253,79 +259,39 @@
 		{/each}
 	</div>
 
-	<!-- Ovens section — real IDs, collapsible contents, lot IDs collapsed by default -->
-	<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)]">
-		<h2 class="border-b border-[var(--color-tron-border)] px-4 py-3 text-xs font-semibold uppercase tracking-widest text-[var(--color-tron-cyan)]">Ovens</h2>
-		{#if data.ovens.length === 0}
-			<p class="px-4 py-6 text-center text-sm text-[var(--color-tron-text-secondary)]">No ovens configured.</p>
-		{:else}
-			<div class="divide-y divide-[var(--color-tron-border)]">
-				{#each data.ovens as oven (oven.id)}
-					{@const isOpen = expandedOvens.has(oven.id)}
-					<div>
-						<button
-							type="button"
-							class="flex w-full items-center justify-between px-4 py-3 text-left transition-colors hover:bg-[var(--color-tron-bg-tertiary)]"
-							onclick={() => toggleOven(oven.id)}
-						>
-							<div class="flex items-center gap-3">
-								<span class="text-[var(--color-tron-cyan)] text-sm">{isOpen ? '▼' : '▶'}</span>
-								<span class="font-mono text-sm font-semibold text-[var(--color-tron-text)]">{oven.displayName}</span>
-								<span class="text-xs text-[var(--color-tron-text-secondary)]">({oven.lotCount} lots · {oven.totalCartridges} cartridges)</span>
-							</div>
-							{#if oven.readyLotCount > 0}
-								<span class="rounded border border-[var(--color-tron-green)]/50 bg-[var(--color-tron-green)]/10 px-2 py-0.5 text-[10px] font-bold text-[var(--color-tron-green)]">{oven.readyLotCount} READY</span>
-							{/if}
-						</button>
-						{#if isOpen}
-							<div class="bg-[var(--color-tron-bg-tertiary)] px-4 pb-3">
-								{#if oven.lots.length === 0}
-									<p class="py-2 text-xs text-[var(--color-tron-text-secondary)]">Oven is empty.</p>
-								{:else}
-									<div class="space-y-1">
-										{#each oven.lots as lot (lot.lotId)}
-											{@const lotOpen = expandedLots.has(lot.lotId)}
-											<div class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)]">
-												<div class="flex items-center justify-between px-3 py-2">
-													<div class="flex min-w-0 items-center gap-2">
-														<button
-															type="button"
-															class="text-[var(--color-tron-cyan)] text-xs hover:text-[var(--color-tron-text)]"
-															onclick={() => toggleLot(lot.lotId)}
-															aria-label={lotOpen ? 'Collapse lot' : 'Expand lot'}
-														>{lotOpen ? '▼' : '▶'}</button>
-														<a
-															href="/manufacturing/cart-mfg/lots/{lot.lotId}"
-															class="font-mono text-xs font-semibold text-[var(--color-tron-cyan)] hover:underline"
-														>{lot.lotId}</a>
-														<span class="text-[10px] text-[var(--color-tron-text-secondary)]">· {lot.cartridgeCount} cartridges</span>
-													</div>
-													{#if lot.isReady}
-														<span class="rounded border border-[var(--color-tron-green)]/50 bg-[var(--color-tron-green)]/10 px-1.5 py-0.5 text-[10px] font-bold text-[var(--color-tron-green)]">READY</span>
-													{:else}
-														<span class="text-[10px] text-[var(--color-tron-yellow)]">{lot.remainingMin} min left</span>
-													{/if}
-												</div>
-												{#if lotOpen}
-													<div class="border-t border-[var(--color-tron-border)] px-3 py-2 text-[11px] text-[var(--color-tron-text-secondary)] space-y-0.5">
-														<div>Status: <span class="text-[var(--color-tron-text)]">{lot.status}</span></div>
-														<div>Operator: <span class="text-[var(--color-tron-text)]">{lot.operatorUsername ?? '—'}</span></div>
-														<div>Elapsed: <span class="text-[var(--color-tron-text)]">{lot.elapsedMin} min</span></div>
-														<div>Entry: <span class="text-[var(--color-tron-text)]">{lot.ovenEntryTime ? new Date(lot.ovenEntryTime).toLocaleString() : '—'}</span></div>
-														<div class="pt-1"><a href="/manufacturing/cart-mfg/lots/{lot.lotId}" class="text-[var(--color-tron-cyan)] hover:underline">→ Open lot detail page</a></div>
-													</div>
-												{/if}
-											</div>
-										{/each}
-									</div>
-								{/if}
-							</div>
-						{/if}
-					</div>
+	<!-- Production Buckets — Barcoded → Unpressed → Pressed → In Oven, upstream of Pipeline
+	     Flow. Same counts and stages as the buckets board; each tile deep-links
+	     to the board filtered to that stage. Hidden if the bucket query failed. -->
+	{#if data.bucketCounts}
+		{@const bc = data.bucketCounts}
+		{@const bucketStages = [
+			{ key: 'available', label: 'Available', count: bc.available, sub: 'empty buckets', color: 'text-[var(--color-tron-text)]' },
+			{ key: 'barcoded', label: 'Barcoded', count: bc.stages.barcoded.cartridges, sub: `${bc.stages.barcoded.buckets} bucket${bc.stages.barcoded.buckets === 1 ? '' : 's'}`, color: 'text-[var(--color-tron-cyan)]' },
+			{ key: 'unpressed', label: 'Unpressed', count: bc.stages.unpressed.cartridges, sub: `${bc.stages.unpressed.buckets} bucket${bc.stages.unpressed.buckets === 1 ? '' : 's'}`, color: 'text-[var(--color-tron-cyan)]' },
+			{ key: 'pressed', label: 'Pressed', count: bc.stages.pressed.cartridges, sub: `${bc.stages.pressed.buckets} bucket${bc.stages.pressed.buckets === 1 ? '' : 's'}`, color: 'text-[var(--color-tron-cyan)]' },
+			{ key: 'backing', label: 'In Oven', count: bc.inOven, sub: 'at WI-01', color: 'text-[var(--color-tron-purple)]' }
+		]}
+		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-4">
+			<div class="mb-4 flex items-center justify-between">
+				<h2 class="text-xs font-semibold uppercase tracking-widest text-[var(--color-tron-cyan)]">Production Buckets</h2>
+				<a href="/manufacturing/cart-mfg/buckets" class="text-xs text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)]">Open board →</a>
+			</div>
+			<div class="flex items-stretch gap-1 overflow-x-auto">
+				{#each bucketStages as stage, i (stage.key)}
+					<a href={stage.key === 'backing' ? '/cartridge-admin?stage=backing' : `/manufacturing/cart-mfg/buckets?stage=${stage.key}`} class="flex-1 min-w-[100px] text-center" title={stage.key === 'backing' ? 'Show cartridges in the oven' : `Open the bucket board at ${stage.label}`}>
+						<div class="rounded-lg bg-[var(--color-tron-bg-tertiary)] border border-[var(--color-tron-border)] p-3 h-full flex flex-col justify-center hover:border-[var(--color-tron-cyan)]/60">
+							<div class="text-xs font-semibold uppercase tracking-wide text-[var(--color-tron-text-secondary)]">{stage.label}</div>
+							<div class="mt-1 text-xl font-bold {stage.color}">{stage.count}</div>
+							<div class="text-xs text-[var(--color-tron-text-secondary)]">{stage.sub}</div>
+						</div>
+					</a>
+					{#if i < bucketStages.length - 1}
+						<div class="flex items-center text-[var(--color-tron-cyan)] text-lg font-bold select-none">▶</div>
+					{/if}
 				{/each}
 			</div>
-		{/if}
-	</section>
+		</div>
+	{/if}
 
 	<!-- Cartridge Barcode Search — replaces Register Backing Lot -->
 	<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)]">

@@ -3,6 +3,11 @@
  */
 
 export type LifecycleStage =
+	// Production-bucket stages (BUCKET-SYSTEM_PLAN v2): a cartridge is born at
+	// 'barcoded' when scanned into a bucket and moves with it until WI-01 → 'backing'.
+	| 'barcoded'
+	| 'unpressed'
+	| 'pressed'
 	| 'backing'
 	| 'wax_filling'
 	| 'wax_filled'

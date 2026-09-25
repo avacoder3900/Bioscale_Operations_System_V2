@@ -97,7 +97,7 @@
 				<div class="text-xs uppercase tracking-widest text-tron-text-secondary">Rows</div>
 				<div class="mt-1 text-3xl font-bold text-tron-text">{data.totalRows}</div>
 				<div class="text-xs text-tron-text-secondary">
-					{data.stage === 'backing' ? 'lots' : data.stage === 'wax_fill' || data.stage === 'reagent' ? 'runs' : data.stage === 'seal' ? 'batches' : 'fridges'}
+					{data.stage.startsWith('bucket_') ? 'buckets' : data.stage === 'backing' ? 'batches' : data.stage === 'wax_fill' || data.stage === 'reagent' ? 'runs' : data.stage === 'seal' ? 'batches' : 'fridges'}
 				</div>
 			</div>
 		</div>
@@ -139,16 +139,6 @@
 											<span class="text-xs font-mono text-tron-text-secondary">{formatWhen(row.when)}</span>
 										{:else if h.key === 'elapsed'}
 											<span class="text-xs tabular-nums text-tron-text-secondary">{formatElapsed(row.elapsedMin)}</span>
-										{:else if h.key === 'ready'}
-											{#if row.extras.ready === 'yes'}
-												<span class="rounded border border-green-500/40 bg-green-900/20 px-2 py-0.5 text-[10px] uppercase tracking-wider text-green-300">Ready</span>
-											{:else if row.extras.ready === '—'}
-												<span class="text-xs text-tron-text-secondary">—</span>
-											{:else}
-												<span class="text-xs text-tron-text-secondary">
-													{row.extras.remainingMin}m left
-												</span>
-											{/if}
 										{:else}
 											<span class="text-xs text-tron-text-secondary">{row.extras[h.key] ?? '—'}</span>
 										{/if}

@@ -1,59 +1,33 @@
 /**
- * WI-01: Cartridge Backing
- * Simplified flow: Start → Qty + Scan Lots → Check Inventory → Work → Confirm → Withdraw
+ * WI-01: Cartridge Back — "In Oven" (BUCKET-SYSTEM_PLAN.md v2 §6.3).
  *
- * Materials consumed per cartridge:
- *   1x Cartridge (PT-CT-104)
- *   1x Thermoseal Laser Cut Sheet (PT-CT-112)
- *   1x Barcode (PT-CT-106)
+ * v2 (2026-09-23): fed from production buckets only. Cartridges are already
+ * serialized (born at bucket scan-in) and already paid for (shell + label at
+ * scan-in, thermoseal at Unpressed), so this step:
+ *   1. picks a PRESSED bucket (scan its sticker),
+ *   2. scans its cartridges into the oven one at a time — or takes them all,
+ *   3. confirms: the scanned cartridges move to status 'backing' (displayed
+ *      "In Oven"), the bucket's count drains, and a LotRecord ties the batch
+ *      together for traceability.
+ *
+ * No oven is selected, no oven entry time is recorded and nothing gates on
+ * cure time (backing-oven tracking removed app-wide, 2026-09-23). No
+ * inventory is withdrawn here. The legacy manual path (pick three lots, scan
+ * unknown barcodes) is gone — a barcode that was never scanned into a bucket
+ * is refused; use State Change for anomalies.
  */
 import { redirect, fail } from '@sveltejs/kit';
+import { connectDB, LotRecord, ProcessConfiguration, AuditLog, CartridgeRecord, BucketCycle, ProductionBucket, generateId } from '$lib/server/db';
+import { requirePermission } from '$lib/server/permissions';
 import {
-	connectDB, LotRecord, ProcessConfiguration,
-	PartDefinition, AuditLog, Equipment, CartridgeRecord, ReceivingLot,
-	InventoryTransaction, generateId
-} from '$lib/server/db';
-import { recordTransaction, resolvePartId } from '$lib/server/services/inventory-transaction';
-import { hardDeleteUnfinalizedCartridges, splitMergedBarcodes } from '$lib/server/services/cartridge-hard-delete';
+	BucketError, STAGE_LABELS, IN_OVEN_STATUS, IN_OVEN_LABEL, SHELL_PART, LABEL_PART, THERMOSEAL_PART,
+	getOpenCycle, resolveBucketId, consumeCarts, scrapCarts, cycleLabel
+} from '$lib/server/services/bucket-service';
+import { splitMergedBarcodes } from '$lib/server/services/cartridge-hard-delete';
 import { nanoid } from 'nanoid';
 import type { PageServerLoad, Actions } from './$types';
 
 const PROCESS_TYPE = 'backing';
-
-// Part numbers consumed per cartridge (1:1 ratio each)
-const CONSUMED_PARTS = [
-	{ partNumber: 'PT-CT-104', name: 'Cartridge' },
-	{ partNumber: 'PT-CT-112', name: 'Thermoseal Laser Cut Sheet' },
-	{ partNumber: 'PT-CT-106', name: 'Barcode' }
-];
-
-/**
- * Validate that a scanned lot barcode belongs to the expected part. Used
- * inline during the scan step so operators cannot mis-scan a Cartridge
- * lot into the Thermoseal slot (etc.).
- *
- * A lot is considered valid when a ReceivingLot exists with matching
- * lotId and part.partNumber, and its status is not 'rejected'/'returned'.
- */
-async function validateLotForPart(lotId: string, partNumber: string):
-	Promise<{ ok: true; lot: any } | { ok: false; reason: string }>
-{
-	if (!lotId) return { ok: false, reason: 'Barcode is empty.' };
-	const lot = await ReceivingLot.findOne({ lotId }).lean() as any;
-	if (!lot) {
-		return { ok: false, reason: `Lot "${lotId}" is not in the receiving system.` };
-	}
-	if (lot.part?.partNumber !== partNumber) {
-		return {
-			ok: false,
-			reason: `Lot "${lotId}" is ${lot.part?.partNumber ?? 'an unknown part'} — expected ${partNumber}.`
-		};
-	}
-	if (lot.status === 'rejected' || lot.status === 'returned') {
-		return { ok: false, reason: `Lot "${lotId}" has status "${lot.status}" and cannot be consumed.` };
-	}
-	return { ok: true, lot };
-}
 
 function generateOutputLot(): string {
 	const now = new Date();
@@ -61,82 +35,48 @@ function generateOutputLot(): string {
 	return `LOT-${ds}-${nanoid(4).toUpperCase()}`;
 }
 
+async function pressedBuckets() {
+	const cycles = await BucketCycle.find({ status: 'open', stage: 'pressed' })
+		.select('_id bucketId cycleNumber quantity cartridgeIds sourceLots')
+		.sort({ stageEnteredAt: 1 }).lean() as any[];
+	const stickers = new Map<string, string | null>(
+		(await ProductionBucket.find({ _id: { $in: cycles.map(c => c.bucketId) } }).select('_id barcode').lean() as any[])
+			.map((b: any) => [b._id, b.barcode ?? null])
+	);
+	return cycles.map((c: any) => ({
+		bucketId: c.bucketId,
+		barcode: stickers.get(c.bucketId) ?? null,
+		cycleId: String(c._id),
+		cycleNumber: c.cycleNumber,
+		quantity: c.quantity ?? 0,
+		cartridgeIds: (c.cartridgeIds ?? []) as string[],
+		shellLot: (c.sourceLots ?? []).find((l: any) => l.partNumber === SHELL_PART)?.lotId ?? null,
+		labelLot: (c.sourceLots ?? []).find((l: any) => l.partNumber === LABEL_PART)?.lotId ?? null,
+		thermosealLot: (c.sourceLots ?? []).find((l: any) => l.partNumber === THERMOSEAL_PART)?.lotId ?? null
+	}));
+}
+
 export const load: PageServerLoad = async ({ locals }) => {
 	if (!locals.user) redirect(302, '/login');
+	requirePermission(locals.user, 'manufacturing:read');
 	await connectDB();
 
-	const [config, recentLots, parts, ovens] = await Promise.all([
+	const [config, recentLots, buckets, inOven] = await Promise.all([
 		ProcessConfiguration.findOne({ processType: PROCESS_TYPE }).lean(),
-		LotRecord.find({ 'processConfig.processType': PROCESS_TYPE })
-			.sort({ createdAt: -1 }).limit(20).lean(),
-		PartDefinition.find({ bomType: 'cartridge', isActive: true }).lean(),
-		Equipment.find({
-			equipmentType: 'oven',
-			status: { $in: ['active', 'available', 'in_use'] }
-		}).select('_id name barcode status').lean()
+		LotRecord.find({ 'processConfig.processType': PROCESS_TYPE }).sort({ createdAt: -1 }).limit(20).lean(),
+		pressedBuckets(),
+		CartridgeRecord.countDocuments({ status: IN_OVEN_STATUS })
 	]);
-
-	if (!config) {
-		return {
-			config: null,
-			availableLots: { 'PT-CT-104': [], 'PT-CT-112': [], 'PT-CT-106': [] },
-			processSteps: [],
-			lotStepEntries: [],
-			recentLots: [],
-			ovens: [],
-			inventory: {
-				rawCartridges: { name: 'Cartridges', quantity: 0, unit: 'pcs' },
-				barcodeLabels: { name: 'Barcodes', quantity: 0, unit: 'pcs' },
-				individualBacks: { name: 'Laser Cut Backs', quantity: 0, unit: 'pcs' },
-				cutThermosealStrips: { name: 'Thermoseal Laser Cut Sheets', quantity: 0, unit: 'pcs' }
-			},
-			error: 'No backing process configuration found'
-		};
-	}
-
 	const c = config as any;
-	const partByPN = new Map((parts as any[]).map((p: any) => [p.partNumber, p]));
-	const partQty = (pn: string) => (partByPN.get(pn) as any)?.inventoryCount ?? 0;
-
-	// Available input lots per consumed part, for the batch-setup dropdowns.
-	// remaining = lot.quantity − Σ(consumption/scrap tx against that lotId).
-	const consumedPNs = CONSUMED_PARTS.map((p) => p.partNumber);
-	const recvLots = await ReceivingLot.find({
-		'part.partNumber': { $in: consumedPNs },
-		status: { $nin: ['rejected', 'returned'] }
-	}).select('lotId part.partNumber quantity').lean() as any[];
-	const consumedAgg = await InventoryTransaction.aggregate([
-		{ $match: { lotId: { $in: recvLots.map((l) => l.lotId) }, transactionType: { $in: ['consumption', 'scrap'] } } },
-		{ $group: { _id: '$lotId', total: { $sum: '$quantity' } } }
-	]);
-	const consumedByLot = new Map((consumedAgg as any[]).map((c2: any) => [c2._id, Math.abs(c2.total ?? 0)]));
-	const availableLots: Record<string, { lotId: string; quantity: number; remaining: number }[]> = {
-		'PT-CT-104': [], 'PT-CT-112': [], 'PT-CT-106': []
-	};
-	for (const l of recvLots) {
-		const pn = l.part?.partNumber;
-		if (!availableLots[pn]) continue;
-		const qty = Number(l.quantity ?? 0);
-		const remaining = Math.max(0, qty - (consumedByLot.get(l.lotId) ?? 0));
-		if (remaining > 0) availableLots[pn].push({ lotId: l.lotId, quantity: qty, remaining });
-	}
-	for (const pn of consumedPNs) availableLots[pn].sort((a, b) => b.remaining - a.remaining);
 
 	return {
-		availableLots,
 		config: {
-			configId: String(c._id),
-			processName: c.processName ?? 'Cartridge Backing (WI-01)',
-			maxBatchSize: c.maxBatchSize ?? 100,
-			handoffPrompt: c.handoffPrompt ?? 'Backed cartridges ready for wax filling.',
-			inputMaterials: (c.inputMaterials ?? []).map((m: any, i: number) => ({
-				partId: m.partDefinitionId ?? '',
-				name: m.name ?? `Input ${i + 1}`,
-				scanOrder: m.scanOrder ?? i + 1
-			}))
+			processName: c?.processName ?? 'Cartridge Backing (WI-01)',
+			handoffPrompt: c?.handoffPrompt ?? 'Backed cartridges ready for wax filling.'
 		},
-		processSteps: [],
-		lotStepEntries: [],
+		inOvenLabel: IN_OVEN_LABEL,
+		inOvenCount: inOven,
+		pressedBuckets: buckets,
 		recentLots: (recentLots as any[]).map((l: any) => ({
 			lotId: String(l._id),
 			bucketBarcode: l.bucketBarcode ?? null,
@@ -147,473 +87,274 @@ export const load: PageServerLoad = async ({ locals }) => {
 			status: l.status ?? 'unknown',
 			createdAt: l.createdAt?.toISOString?.() ?? '',
 			finishTime: l.finishTime?.toISOString?.() ?? null
-		})),
-		ovens: (ovens as any[]).map((o: any) => ({
-			_id: String(o._id),
-			name: o.name ?? '',
-			barcode: o.barcode ?? '',
-			status: o.status ?? ''
-		})),
-		inventory: {
-			rawCartridges: { name: 'Cartridges', quantity: partQty('PT-CT-104'), unit: 'pcs' },
-			barcodeLabels: { name: 'Barcodes', quantity: partQty('PT-CT-106'), unit: 'pcs' },
-			individualBacks: { name: 'Laser Cut Backs', quantity: partQty('PT-CT-112'), unit: 'pcs' },
-			cutThermosealStrips: { name: 'Thermoseal Laser Cut Sheets', quantity: partQty('PT-CT-112'), unit: 'pcs' }
-		}
+		}))
 	};
 };
 
 export const actions: Actions = {
 	/**
-	 * Validate a single scanned lot barcode against the part it should
-	 * belong to. Called inline from the scan step so a mis-scan never
-	 * reaches checkAndStart.
-	 */
-	validateLot: async ({ request, locals }) => {
-		if (!locals.user) redirect(302, '/login');
-		await connectDB();
-		const data = await request.formData();
-		const lotId = (data.get('lotId') as string)?.trim() ?? '';
-		const partNumber = (data.get('partNumber') as string)?.trim() ?? '';
-		const check = await validateLotForPart(lotId, partNumber);
-		if (!check.ok) {
-			return fail(400, { validateLot: { ok: false, partNumber, lotId, reason: check.reason } });
-		}
-
-		// Per-lot remaining = lot.quantity - sum of consumption/scrap transactions
-		// against this lotId. Without this, the inventory cards above show the
-		// part-total (e.g. 1550 across all PT-CT-104 lots) and the operator has
-		// no way to tell whether THIS lot can cover their planned batch.
-		// Aggregating raw quantity field with Math.abs handles both sign
-		// conventions historically used by recordTransaction.
-		const consumed = await InventoryTransaction.aggregate([
-			{ $match: { lotId, transactionType: { $in: ['consumption', 'scrap'] } } },
-			{ $group: { _id: null, total: { $sum: '$quantity' } } }
-		]);
-		const consumedAbs = Math.abs((consumed[0] as any)?.total ?? 0);
-		const lotQty = Number(check.lot.quantity ?? 0);
-		const lotRemaining = Math.max(0, lotQty - consumedAbs);
-
-		return {
-			validateLot: {
-				ok: true,
-				partNumber,
-				lotId,
-				partName: check.lot.part?.name ?? '',
-				lotQuantity: lotQty,
-				lotConsumed: consumedAbs,
-				lotRemaining
-			}
-		};
-	},
-
-	/**
-	 * Check inventory for the requested quantity, create lot, and start batch.
-	 * Validates that all 3 materials have enough stock before proceeding.
+	 * Start a batch from a pressed bucket. Creates the LotRecord (traceability +
+	 * the WI01- QR ref) with the bucket's lots copied in, and returns the
+	 * bucket's member list so the session can validate scans client-side too.
 	 */
 	checkAndStart: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'manufacturing:write');
 		await connectDB();
 
 		const data = await request.formData();
-		// quantity is OPTIONAL (oven-session flow): the real count is reconciled
-		// from cartridges actually scanned into the oven at confirmComplete. When
-		// 0/absent we skip the upfront inventory precheck.
-		const quantity = Number(data.get('quantity') || 0);
-		const lot1 = (data.get('lot1') as string)?.trim() || '';
-		const lot2 = (data.get('lot2') as string)?.trim() || '';
-		const lot3 = (data.get('lot3') as string)?.trim() || '';
-		const ovenId = (data.get('ovenId') as string)?.trim() || '';
+		const bucketIdRaw = (data.get('bucketId') as string)?.trim() || '';
+		if (!bucketIdRaw) return fail(400, { checkAndStart: { error: 'Scan the bucket first' } });
+		const bucketId = await resolveBucketId(bucketIdRaw);
+		if (!bucketId) return fail(400, { checkAndStart: { error: `"${bucketIdRaw}" is not a known bucket` } });
+		const cycle = await getOpenCycle(bucketId);
+		if (!cycle) return fail(400, { checkAndStart: { error: `Bucket ${bucketId} has no open pass — nothing to put in the oven` } });
+		if (cycle.stage !== 'pressed') {
+			return fail(400, { checkAndStart: { error: `Bucket ${bucketId} is at ${STAGE_LABELS[cycle.stage as keyof typeof STAGE_LABELS] ?? cycle.stage} — only Pressed buckets go into the oven` } });
+		}
+		if ((cycle.cartridgeIds ?? []).length === 0) return fail(400, { checkAndStart: { error: `Bucket ${bucketId} is empty` } });
 
-		// Oven is chosen once at setup and stored on the lot so the scan session
-		// (and any later resume) never re-asks for it (WI01-BACKING-FLOW-FIXES).
-		if (!ovenId) return fail(400, { checkAndStart: { error: 'Select an oven before starting' } });
-		const oven = await Equipment.findOne({
-			equipmentType: 'oven',
-			$or: [{ _id: ovenId }, { barcode: ovenId }]
-		}).select('_id name barcode').lean() as any;
-		if (!oven) return fail(400, { checkAndStart: { error: `No oven found matching "${ovenId}"` } });
-
-		// Defense-in-depth: re-validate each selected lot matches the part it
-		// represents (dropdowns are server-populated, but a forged form submission
-		// could still slip through).
-		const scanChecks: Array<[string, string, string]> = [
-			['PT-CT-104', 'Cartridge', lot1],
-			['PT-CT-112', 'Thermoseal Laser Cut Sheet', lot2],
-			['PT-CT-106', 'Barcode', lot3]
-		];
-		for (const [partNumber, label, lotId] of scanChecks) {
-			const check = await validateLotForPart(lotId, partNumber);
-			if (!check.ok) {
-				return fail(400, { checkAndStart: { error: `${label}: ${check.reason}` } });
-			}
+		// One in-progress batch per pass: resume it instead of opening another.
+		const existing = await LotRecord.findOne({ bucketCycleId: String(cycle._id), status: 'In Progress' }).select('_id').lean() as any;
+		if (existing) {
+			return fail(409, { checkAndStart: { error: `Bucket ${bucketId} already has an in-progress batch (${existing._id}) — resume it below`, resumeLotId: String(existing._id) } });
 		}
 
-		// Upfront inventory precheck only when a planned quantity was given.
-		if (quantity > 0) {
-			const parts = await PartDefinition.find({
-				partNumber: { $in: CONSUMED_PARTS.map(p => p.partNumber) },
-				bomType: 'cartridge',
-				isActive: true
-			}).lean() as any[];
-
-			const partMap = new Map(parts.map((p: any) => [p.partNumber, p]));
-			const insufficient: { name: string; need: number; have: number }[] = [];
-
-			for (const cp of CONSUMED_PARTS) {
-				const part = partMap.get(cp.partNumber);
-				const have = part?.inventoryCount ?? 0;
-				if (have < quantity) {
-					insufficient.push({ name: cp.name, need: quantity, have });
-				}
-			}
-
-			if (insufficient.length > 0) {
-				return fail(400, {
-					checkAndStart: {
-						error: 'Insufficient inventory for this batch size',
-						insufficient
-					}
-				});
-			}
-		}
-
-		// Create lot record with auto-generated QR
 		const config = await ProcessConfiguration.findOne({ processType: PROCESS_TYPE }).lean() as any;
 		const lotId = generateId();
-		const qrCodeRef = `WI01-${nanoid(8).toUpperCase()}`;
-		const outputLotNumber = generateOutputLot();
-
+		const now = new Date();
+		const lots = (cycle.sourceLots ?? []) as { partNumber?: string; lotId?: string }[];
 		const inputLots = [
-			{ materialName: 'Cartridge', barcode: lot1, scanOrder: 1, scannedAt: new Date() },
-			{ materialName: 'Thermoseal Laser Cut Sheet', barcode: lot2, scanOrder: 2, scannedAt: new Date() },
-			{ materialName: 'Barcode', barcode: lot3, scanOrder: 3, scannedAt: new Date() }
+			{ materialName: 'Cartridge', barcode: lots.find(l => l.partNumber === SHELL_PART)?.lotId ?? '', scanOrder: 1, scannedAt: now },
+			{ materialName: 'Thermoseal Laser Cut Sheet', barcode: lots.find(l => l.partNumber === THERMOSEAL_PART)?.lotId ?? '', scanOrder: 2, scannedAt: now },
+			{ materialName: 'Barcode', barcode: lots.find(l => l.partNumber === LABEL_PART)?.lotId ?? '', scanOrder: 3, scannedAt: now }
 		].filter(l => l.barcode);
 
 		await LotRecord.create({
 			_id: lotId,
-			qrCodeRef,
-			outputLotNumber,
-			processConfig: config ? {
-				_id: config._id,
-				processName: config.processName,
-				processType: config.processType
-			} : undefined,
+			qrCodeRef: `WI01-${nanoid(8).toUpperCase()}`,
+			outputLotNumber: generateOutputLot(),
+			processConfig: config ? { _id: config._id, processName: config.processName, processType: config.processType } : undefined,
 			operator: { _id: locals.user._id, username: locals.user.username },
 			status: 'In Progress',
-			startTime: new Date(),
+			startTime: now,
 			inputLots,
-			backingOven: { ovenId: String(oven._id), ovenName: oven.name ?? oven.barcode ?? '' },
-			plannedQuantity: quantity,
+			plannedQuantity: (cycle.cartridgeIds ?? []).length,
+			bucketCycleId: String(cycle._id),
+			bucketBarcode: cycle.bucketId,
 			stepEntries: [],
 			cartridgeIds: []
 		});
-
 		await AuditLog.create({
-			_id: generateId(),
-			tableName: 'lot_records',
-			recordId: lotId,
-			action: 'INSERT',
-			changedBy: locals.user?.username,
-			changedAt: new Date(),
-			newData: { quantity, inputLots: inputLots.map(l => l.barcode) }
+			_id: generateId(), tableName: 'lot_records', recordId: lotId, action: 'INSERT',
+			changedBy: locals.user.username, changedAt: now,
+			newData: { bucketId: cycle.bucketId, bucketCycleId: String(cycle._id), members: (cycle.cartridgeIds ?? []).length }
 		});
 
 		return {
 			checkAndStart: {
-				success: true,
-				lotId,
-				plannedQty: quantity,
-				// Echo the oven so the scan session can lock it in without relying
-				// on client state surviving the form submit (WI01-BACKING-FLOW-FIXES).
-				ovenId: String(oven._id),
-				ovenName: oven.name ?? oven.barcode ?? ''
+				success: true, lotId,
+				bucketId: cycle.bucketId, cycleId: String(cycle._id), cycleNumber: cycle.cycleNumber,
+				members: (cycle.cartridgeIds ?? []) as string[]
 			}
 		};
 	},
 
 	/**
-	 * Scan one backed cartridge into the oven (WAX-FLOW-2). This is the point
-	 * of individuation: the scan originates the CartridgeRecord with status
-	 * 'backing', full material lineage from the parent LotRecord, and the oven
-	 * entry timestamp. Replaces the retired BackingLot aggregate.
+	 * Scan one cartridge from the bucket into the oven. It must be a member of
+	 * the batch's bucket pass at status 'pressed'. Moves it to 'backing'
+	 * (In Oven), stamps the lot, and draws it out of the bucket.
 	 */
 	scanBackedCartridge: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'manufacturing:write');
 		await connectDB();
 
 		const data = await request.formData();
 		const lotId = (data.get('lotId') as string)?.trim() || '';
 		const barcode = (data.get('barcode') as string)?.trim() || '';
-		const ovenId = (data.get('ovenId') as string)?.trim() || '';
-
 		if (!lotId) return fail(400, { scanBackedCartridge: { error: 'Lot ID required' } });
 		if (!barcode) return fail(400, { scanBackedCartridge: { error: 'Cartridge barcode required' } });
 		// A fast scanner can glue two labels into one 72-character string. The page
 		// splits those before posting; this is the backstop so a merged code can never
-		// become a cartridge record again (87 of them had, 2026-09-24).
+		// become a cartridge record again (87 of them had, 2026-09-24 — carried over
+		// from master's WI-01 when the bucket flow replaced it).
 		if (splitMergedBarcodes(barcode)) {
 			return fail(400, { scanBackedCartridge: { error: `Two barcodes were read as one (${barcode.length} characters). Scan one cartridge at a time.`, barcode } });
 		}
-		if (!ovenId) return fail(400, { scanBackedCartridge: { error: 'Select an oven before scanning' } });
 
 		const lot = await LotRecord.findById(lotId).lean() as any;
 		if (!lot) return fail(404, { scanBackedCartridge: { error: 'Lot not found' } });
-		if (lot.status !== 'In Progress') {
-			return fail(400, { scanBackedCartridge: { error: `Lot is "${lot.status}" — only In Progress lots accept scans` } });
+		if (lot.status !== 'In Progress') return fail(400, { scanBackedCartridge: { error: `Lot is "${lot.status}" — only In Progress lots accept scans` } });
+		if (!lot.bucketCycleId) return fail(400, { scanBackedCartridge: { error: 'This batch has no bucket — start again from a pressed bucket' } });
+
+		const cart = await CartridgeRecord.findById(barcode).select('status bucket').lean() as any;
+		if (!cart) return fail(404, { scanBackedCartridge: { error: `${barcode} was never scanned into a bucket — it can't go into the oven`, barcode } });
+		if (cart.bucket?.cycleId !== lot.bucketCycleId) {
+			return fail(409, { scanBackedCartridge: { error: `${barcode} is not in bucket ${lot.bucketBarcode ?? ''} — it belongs to ${cart.bucket?.bucketId ?? 'no bucket'} (status ${cart.status})`, barcode } });
+		}
+		if (cart.status !== 'pressed') {
+			return fail(409, { scanBackedCartridge: { error: `${barcode} is ${cart.status === IN_OVEN_STATUS ? `already ${IN_OVEN_LABEL}` : `at ${cart.status}, not pressed`}`, barcode } });
 		}
 
-		const oven = await Equipment.findOne({
-			equipmentType: 'oven',
-			$or: [{ _id: ovenId }, { barcode: ovenId }]
-		}).select('_id name barcode').lean() as any;
-		if (!oven) return fail(400, { scanBackedCartridge: { error: `No oven found matching "${ovenId}"` } });
-
-		// Backing is the GENESIS of every cartridge record — a barcode may only be
-		// born once. Reject if a CartridgeRecord with this barcode already exists
-		// at ANY status (WI01-BACKING-FLOW-FIXES change 3).
-		const existing = await CartridgeRecord.findById(barcode).select('status').lean() as any;
-		if (existing) {
-			return fail(409, { scanBackedCartridge: { error: `Cartridge ${barcode} already exists in the system (status "${existing.status}"). Backing must be the first record for a barcode — this one is already in use.`, barcode } });
+		try {
+			await consumeCarts({ cycleId: lot.bucketCycleId, barcodes: [barcode], lotRecordId: lotId, user: { _id: locals.user._id, username: locals.user.username } });
+		} catch (e) {
+			if (e instanceof BucketError) return fail(e.status, { scanBackedCartridge: { error: e.message, barcode } });
+			throw e;
 		}
-
-		// Material lineage from the parent LotRecord's input scans
-		const lotByMaterial: Record<string, string | undefined> = {};
-		for (const il of (lot.inputLots ?? []) as Array<{ materialName?: string; barcode?: string }>) {
-			if (il?.materialName && il?.barcode) lotByMaterial[il.materialName] = il.barcode;
-		}
-
 		const now = new Date();
-		await CartridgeRecord.create({
-			_id: barcode,
-			status: 'backing',
-			backing: {
-				parentLotRecordId: lotId,
-				lotQrCode: lot.qrCodeRef ?? null,
-				cartridgeBlankLot: lotByMaterial['Cartridge'] ?? null,
-				thermosealLot: lotByMaterial['Thermoseal Laser Cut Sheet'] ?? null,
-				barcodeLabelLot: lotByMaterial['Barcode'] ?? null,
-				ovenEntryTime: now,
-				ovenLocationId: String(oven._id),
-				ovenLocationName: oven.name ?? oven.barcode ?? '',
-				operator: { _id: locals.user._id, username: locals.user.username },
-				recordedAt: now
-			}
-		});
-
+		await CartridgeRecord.updateOne(
+			{ _id: barcode },
+			{ $set: {
+				status: IN_OVEN_STATUS, statusUpdatedOn: now.toISOString(), priorStatus: 'pressed',
+				'backing.parentLotRecordId': lotId, 'backing.lotQrCode': lot.qrCodeRef ?? null,
+				'backing.bucketCycleId': lot.bucketCycleId, 'backing.bucketBarcode': lot.bucketBarcode ?? null,
+				'backing.operator': { _id: locals.user._id, username: locals.user.username }, 'backing.recordedAt': now
+			} }
+		);
 		await LotRecord.findByIdAndUpdate(lotId, { $addToSet: { cartridgeIds: barcode } });
-
 		await AuditLog.create({
-			_id: generateId(),
-			tableName: 'cartridge_records',
-			recordId: barcode,
-			action: 'INSERT',
-			changedBy: locals.user.username,
-			changedAt: now,
-			newData: { status: 'backing', parentLotRecordId: lotId, ovenLocationId: String(oven._id) }
+			_id: generateId(), tableName: 'cartridge_records', recordId: barcode, action: 'PHASE_ADVANCE',
+			changedBy: locals.user.username, changedAt: now,
+			newData: { from: 'pressed', to: IN_OVEN_STATUS, parentLotRecordId: lotId, bucketCycleId: lot.bucketCycleId }
 		});
-
 		const updated = await LotRecord.findById(lotId).select('cartridgeIds').lean() as any;
-		return {
-			scanBackedCartridge: {
-				success: true,
-				barcode,
-				ovenName: oven.name ?? '',
-				scannedCount: updated?.cartridgeIds?.length ?? 0
-			}
-		};
+		return { scanBackedCartridge: { success: true, barcode, scannedCount: updated?.cartridgeIds?.length ?? 0 } };
 	},
 
 	/**
-	 * Undo a mis-scan before the batch is confirmed: deletes the just-created
-	 * 'backing' CartridgeRecord and pulls it off the LotRecord.
+	 * Everything still in the bucket goes into the oven at once — for the
+	 * common case where the whole tub goes in together.
+	 */
+	takeAll: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'manufacturing:write');
+		await connectDB();
+		const data = await request.formData();
+		const lotId = (data.get('lotId') as string)?.trim() || '';
+		const lot = await LotRecord.findById(lotId).lean() as any;
+		if (!lot || lot.status !== 'In Progress' || !lot.bucketCycleId) return fail(400, { takeAll: { error: 'No in-progress bucket batch' } });
+		const cycle = await BucketCycle.findById(lot.bucketCycleId).lean() as any;
+		const remaining: string[] = cycle?.cartridgeIds ?? [];
+		if (remaining.length === 0) return fail(400, { takeAll: { error: 'The bucket is already empty' } });
+		const op = { _id: locals.user._id, username: locals.user.username };
+		try {
+			await consumeCarts({ cycleId: lot.bucketCycleId, barcodes: remaining, lotRecordId: lotId, user: op });
+		} catch (e) {
+			if (e instanceof BucketError) return fail(e.status, { takeAll: { error: e.message } });
+			throw e;
+		}
+		const now = new Date();
+		await CartridgeRecord.updateMany(
+			{ _id: { $in: remaining }, status: 'pressed' },
+			{ $set: {
+				status: IN_OVEN_STATUS, statusUpdatedOn: now.toISOString(), priorStatus: 'pressed',
+				'backing.parentLotRecordId': lotId, 'backing.lotQrCode': lot.qrCodeRef ?? null,
+				'backing.bucketCycleId': lot.bucketCycleId, 'backing.bucketBarcode': lot.bucketBarcode ?? null,
+				'backing.operator': op, 'backing.recordedAt': now
+			} }
+		);
+		await LotRecord.findByIdAndUpdate(lotId, { $addToSet: { cartridgeIds: { $each: remaining } } });
+		await AuditLog.create({
+			_id: generateId(), tableName: 'lot_records', recordId: lotId, action: 'TAKE_ALL',
+			changedBy: locals.user.username, changedAt: now, newData: { cartridgeIds: remaining, to: IN_OVEN_STATUS }
+		});
+		const updated = await LotRecord.findById(lotId).select('cartridgeIds').lean() as any;
+		return { takeAll: { success: true, taken: remaining, scannedCount: updated?.cartridgeIds?.length ?? 0 } };
+	},
+
+	/**
+	 * Undo a scan before confirm: the cartridge goes back to 'pressed' and
+	 * back into the bucket. (Membership is restored directly — consumeCarts has
+	 * no inverse — and the pass is reopened if the scan had drained it.)
 	 */
 	removeBackedCartridge: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'manufacturing:write');
 		await connectDB();
-
 		const data = await request.formData();
 		const lotId = (data.get('lotId') as string)?.trim() || '';
 		const barcode = (data.get('barcode') as string)?.trim() || '';
 		if (!lotId || !barcode) return fail(400, { removeBackedCartridge: { error: 'Lot ID and barcode required' } });
-
-		const cart = await CartridgeRecord.findById(barcode).select('status backing.parentLotRecordId').lean() as any;
-		if (!cart) return fail(404, { removeBackedCartridge: { error: 'Cartridge not found' } });
-		if (cart.status !== 'backing' || cart.backing?.parentLotRecordId !== lotId) {
-			return fail(400, { removeBackedCartridge: { error: 'Cartridge is not an unconfirmed scan of this lot' } });
-		}
-
-		// Model.deleteOne is blocked by the sacred middleware (it threw on every press
-		// of "Remove" until 2026-09-24); the helper deletes an unconfirmed backing
-		// record through the driver and audits it.
-		const removed = await hardDeleteUnfinalizedCartridges(
-			{ _id: barcode, status: 'backing', 'backing.parentLotRecordId': lotId },
-			{ reason: 'Operator removed mis-scanned cartridge before batch confirm', user: locals.user, oldData: { parentLotRecordId: lotId } }
-		);
-		if (removed.length === 0) return fail(400, { removeBackedCartridge: { error: 'Cartridge could not be removed — reload and try again' } });
+		const lot = await LotRecord.findById(lotId).lean() as any;
+		if (!lot || lot.status !== 'In Progress') return fail(400, { removeBackedCartridge: { error: 'Batch is not in progress' } });
+		if (!(lot.cartridgeIds ?? []).includes(barcode)) return fail(400, { removeBackedCartridge: { error: 'Cartridge is not in this batch' } });
+		const now = new Date();
+		await CartridgeRecord.updateOne({ _id: barcode, status: IN_OVEN_STATUS }, { $set: { status: 'pressed', statusUpdatedOn: now.toISOString() }, $unset: { 'backing.parentLotRecordId': '', 'backing.lotQrCode': '', 'backing.operator': '', 'backing.recordedAt': '' } });
 		await LotRecord.findByIdAndUpdate(lotId, { $pull: { cartridgeIds: barcode } });
-
+		if (lot.bucketCycleId) {
+			await BucketCycle.updateOne({ _id: lot.bucketCycleId }, { $addToSet: { cartridgeIds: barcode }, $inc: { quantity: 1 }, $set: { status: 'open', closedAt: null } });
+			await ProductionBucket.updateOne({ _id: lot.bucketBarcode }, { $set: { state: 'in_use', currentCycleId: lot.bucketCycleId, spotCheckPending: false } });
+		}
+		await AuditLog.create({
+			_id: generateId(), tableName: 'cartridge_records', recordId: barcode, action: 'GO_BACK',
+			changedBy: locals.user.username, changedAt: now, oldData: { status: IN_OVEN_STATUS, parentLotRecordId: lotId },
+			reason: 'Operator removed mis-scanned cartridge before batch confirm'
+		});
 		return { removeBackedCartridge: { success: true, barcode } };
 	},
 
 	/**
-	 * Confirm batch completion + withdraw all 3 materials. Each cartridge
-	 * consumes 1x Cartridge, 1x Thermoseal, 1x Barcode. The good count is the
-	 * number of cartridges actually scanned into the oven (WAX-FLOW-2) — no
-	 * aggregate BackingLot is created any more.
+	 * Confirm the batch. Cartridges scrapped at the oven door are discarded
+	 * from the bucket pass (journal = the scrap reason). Nothing is withdrawn
+	 * from inventory here — every part was consumed upstream; the discard
+	 * itself scraps what the cart physically was.
 	 */
 	confirmComplete: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'manufacturing:write');
 		await connectDB();
 
 		const data = await request.formData();
-		const lotId = data.get('lotId') as string;
-		const scrapCartridge = Number(data.get('scrapCartridge') || 0);
-		const scrapThermoseal = Number(data.get('scrapThermoseal') || 0);
-		const scrapBarcode = Number(data.get('scrapBarcode') || 0);
+		const lotId = (data.get('lotId') as string)?.trim() || '';
+		const scrapIds = String(data.get('scrapIds') ?? '').split(/[\s,]+/).map(s => s.trim()).filter(Boolean);
 		const scrapReason = (data.get('scrapReason') as string)?.trim() || '';
 		const notes = (data.get('notes') as string)?.trim() || '';
-
-		const totalScrap = scrapCartridge + scrapThermoseal + scrapBarcode;
-
 		if (!lotId) return fail(400, { confirmComplete: { error: 'Lot ID required' } });
-		if (totalScrap > 0 && !scrapReason) {
-			return fail(400, { confirmComplete: { error: 'Scrap reason is required when any parts are scrapped' } });
-		}
+		if (scrapIds.length > 0 && !scrapReason) return fail(400, { confirmComplete: { error: 'Scrap reason is required when any cartridges are scrapped' } });
 
 		const lot = await LotRecord.findById(lotId).lean() as any;
 		if (!lot) return fail(404, { confirmComplete: { error: 'Lot not found' } });
-		if (lot.status === 'Completed') {
-			// Idempotency: a double-submit (e.g. SvelteKit action fetch retried)
-			// would otherwise produce duplicate consumption + scrap transactions.
-			// See inventory-transactions audit trail for the 2026-04-13
-			// KnvhBjHKSC0jStX1rQw4s lot that was superseded for this reason.
-			return fail(409, { confirmComplete: { error: 'Lot already completed' } });
-		}
-
-		// Good count = cartridges actually scanned into the oven. The scans are
-		// the source of truth — no manually-entered count, no bucket aggregate.
+		if (lot.status === 'Completed') return fail(409, { confirmComplete: { error: 'Lot already completed' } });
 		const actualCount = (lot.cartridgeIds ?? []).length;
-		if (actualCount <= 0) {
-			return fail(400, { confirmComplete: { error: 'No cartridges scanned — scan each backed cartridge into the oven first' } });
-		}
+		if (actualCount <= 0) return fail(400, { confirmComplete: { error: 'No cartridges scanned — scan carts from the bucket into the oven first' } });
 
-		// Oven for the lot-level placement record: taken from the scanned
-		// cartridges (they all carry backing.ovenLocationId from the scan step).
-		const firstCart = await CartridgeRecord.findById(lot.cartridgeIds[0])
-			.select('backing.ovenLocationId backing.ovenLocationName').lean() as any;
-		const ovenId = firstCart?.backing?.ovenLocationId ?? null;
-		const ovenName = firstCart?.backing?.ovenLocationName ?? '';
+		const op = { _id: locals.user._id, username: locals.user.username };
+		const bucketNotes: string[] = [];
+		if (scrapIds.length > 0 && lot.bucketCycleId) {
+			try {
+				await scrapCarts({ cycleId: lot.bucketCycleId, barcodes: scrapIds, journal: `WI-01 lot ${lotId}: ${scrapReason}`, user: op, relatedId: lotId });
+			} catch (e) {
+				if (!(e instanceof BucketError)) throw e;
+				bucketNotes.push(`Bucket could not record the scrap: ${e.message}`);
+			}
+		}
 
 		const now = new Date();
 		const startTime = lot.startTime ?? now;
-		const cycleTime = Math.round((now.getTime() - startTime.getTime()) / 1000);
-
-		// Per-part scrap counts: each material consumed = good + its scrap
-		const perPartScrap: Record<string, number> = {
-			'PT-CT-104': scrapCartridge,
-			'PT-CT-112': scrapThermoseal,
-			'PT-CT-106': scrapBarcode
-		};
-
-		// Each cartridge was already individuated as a CartridgeRecord
-		// (status 'backing') by scanBackedCartridge — no BackingLot aggregate
-		// is created any more (WAX-FLOW-2).
-
-		// Finalize lot. cartridgeIds was populated scan-by-scan.
 		await LotRecord.findByIdAndUpdate(lotId, {
 			$set: {
-				status: 'Completed',
-				finishTime: now,
-				cycleTime,
-				quantityProduced: actualCount,
-				scrapCount: totalScrap,
-				scrapDetail: { cartridge: scrapCartridge, thermoseal: scrapThermoseal, barcode: scrapBarcode },
-				scrapReason: scrapReason || undefined,
-				ovenEntryTime: now,
-				...(ovenId ? {
-					ovenPlacement: {
-						ovenId,
-						ovenBarcode: ovenName,
-						placedAt: now,
-						placedBy: { _id: locals.user._id, username: locals.user.username }
-					}
-				} : {}),
-				notes: notes || undefined
+				status: 'Completed', finishTime: now, cycleTime: Math.round((now.getTime() - startTime.getTime()) / 1000),
+				quantityProduced: actualCount, scrapCount: scrapIds.length,
+				scrapDetail: { cartridge: scrapIds.length, thermoseal: 0, barcode: 0 },
+				scrapReason: scrapReason || undefined, notes: notes || undefined
 			}
 		});
-
-		// Build a materialName → input ReceivingLot barcode map from the
-		// LotRecord we created at checkAndStart. Each consumption / scrap tx
-		// gets the actual input lot stamped on it so per-lot remaining math
-		// works AND the inventory-transactions UI can show "consumed from
-		// lot X." Until this fix, lotId was never written and per-lot
-		// remaining always equaled the original lot quantity.
-		const inputLotByMaterial: Record<string, string | undefined> = {};
-		for (const il of (lot.inputLots ?? []) as Array<{ materialName?: string; barcode?: string }>) {
-			if (il?.materialName && il?.barcode) inputLotByMaterial[il.materialName] = il.barcode;
-		}
-
-		// Withdraw each material: good count + that part's specific scrap
-		for (const cp of CONSUMED_PARTS) {
-			const partScrap = perPartScrap[cp.partNumber] ?? 0;
-			const consumed = actualCount + partScrap;
-			const partId = await resolvePartId(cp.partNumber);
-			const inputLotBarcode = inputLotByMaterial[cp.name];
-
-			await recordTransaction({
-				transactionType: 'consumption',
-				partDefinitionId: partId ?? undefined,
-				lotId: inputLotBarcode,
-				quantity: consumed,
-				manufacturingStep: 'backing',
-				manufacturingRunId: lotId,
-				operatorId: locals.user._id,
-				operatorUsername: locals.user.username,
-				notes: `WI-01 lot ${lotId}: ${consumed}x ${cp.name} (${actualCount} good + ${partScrap} scrapped) from input lot ${inputLotBarcode ?? '(unknown)'}`
-			});
-
-			// Separate scrap transaction for this part if any were scrapped
-			if (partScrap > 0) {
-				await recordTransaction({
-					transactionType: 'scrap',
-					partDefinitionId: partId ?? undefined,
-					lotId: inputLotBarcode,
-					quantity: partScrap,
-					manufacturingStep: 'backing',
-					manufacturingRunId: lotId,
-					operatorId: locals.user._id,
-					operatorUsername: locals.user.username,
-					scrapReason,
-					scrapCategory: 'other',
-					notes: `WI-01 lot ${lotId}: ${partScrap}x ${cp.name} scrapped from input lot ${inputLotBarcode ?? '(unknown)'} — ${scrapReason}`
-				});
-			}
-		}
-
 		await AuditLog.create({
-			_id: generateId(),
-			tableName: 'lot_records',
-			recordId: lotId,
-			action: 'UPDATE',
-			changedBy: locals.user?.username,
-			changedAt: new Date(),
-			newData: {
-				actualCount,
-				cartridgeIds: lot.cartridgeIds ?? [],
-				scrapDetail: { cartridge: scrapCartridge, thermoseal: scrapThermoseal, barcode: scrapBarcode },
-				scrapReason: scrapReason || undefined,
-				ovenId: ovenId || undefined,
-				notes: notes || undefined,
-				materialsConsumed: CONSUMED_PARTS.map(p => p.partNumber)
-			}
+			_id: generateId(), tableName: 'lot_records', recordId: lotId, action: 'UPDATE',
+			changedBy: locals.user.username, changedAt: now,
+			newData: { actualCount, cartridgeIds: lot.cartridgeIds ?? [], scrapIds, scrapReason: scrapReason || undefined, notes: notes || undefined, bucketCycleId: lot.bucketCycleId, inventoryWithdrawn: 'none — consumed upstream in the bucket', bucketNotes: bucketNotes.length ? bucketNotes : undefined }
 		});
 
+		const cycle = lot.bucketCycleId ? await BucketCycle.findById(lot.bucketCycleId).select('quantity status bucketId cycleNumber').lean() as any : null;
 		const config = await ProcessConfiguration.findOne({ processType: PROCESS_TYPE }).lean() as any;
 		return {
 			confirmComplete: {
 				success: true,
-				handoffPrompt: config?.handoffPrompt ?? 'Backed cartridges ready for wax filling.'
+				handoffPrompt: config?.handoffPrompt ?? 'Backed cartridges ready for wax filling.',
+				bucket: cycle ? { bucketId: lot.bucketBarcode ?? cycle.bucketId, label: cycleLabel(cycle.bucketId, cycle.cycleNumber), qtyAfter: cycle.quantity ?? 0, closed: cycle.status !== 'open' } : null,
+				bucketNotes
 			}
 		};
 	},
@@ -621,120 +362,71 @@ export const actions: Actions = {
 	/** Append a timestamped note to an in-progress lot */
 	addSessionNote: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'manufacturing:write');
 		await connectDB();
-
 		const data = await request.formData();
 		const lotId = data.get('lotId') as string;
 		const note = (data.get('note') as string)?.trim() || '';
-
 		if (!lotId) return fail(400, { addSessionNote: { error: 'Lot ID required' } });
 		if (!note) return fail(400, { addSessionNote: { error: 'Note text is required' } });
-
 		const lot = await LotRecord.findById(lotId).lean() as any;
 		if (!lot) return fail(404, { addSessionNote: { error: 'Lot not found' } });
-
-		const timestamp = new Date().toISOString();
-		const entry = `[${timestamp}] (${locals.user.username}) ${note}`;
+		const entry = `[${new Date().toISOString()}] (${locals.user.username}) ${note}`;
 		const updatedNotes = lot.notes ? `${lot.notes}\n${entry}` : entry;
-
 		await LotRecord.findByIdAndUpdate(lotId, { $set: { notes: updatedNotes } });
-
-		await AuditLog.create({
-			_id: generateId(),
-			tableName: 'lot_records',
-			recordId: lotId,
-			action: 'UPDATE',
-			changedBy: locals.user?.username,
-			changedAt: new Date(),
-			newData: { noteAdded: entry }
-		});
-
+		await AuditLog.create({ _id: generateId(), tableName: 'lot_records', recordId: lotId, action: 'UPDATE', changedBy: locals.user.username, changedAt: new Date(), newData: { noteAdded: entry } });
 		return { addSessionNote: { success: true, notes: updatedNotes } };
 	},
 
 	/**
-	 * Delete an in-progress lot. Only allowed when status='In Progress' —
-	 * completed lots are immutable (consumed inventory, registered BackingLot).
-	 * No inventory was withdrawn yet at the In Progress stage (withdrawal
-	 * happens in confirmComplete), so deletion just removes the LotRecord
-	 * stub and audit-logs the discard.
+	 * Discard an in-progress batch. Any cartridges already scanned go back to
+	 * 'pressed' and back into their bucket, so nothing is stranded.
 	 */
 	deleteLot: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'manufacturing:write');
 		await connectDB();
-
 		const data = await request.formData();
 		const lotId = data.get('lotId') as string;
 		if (!lotId) return fail(400, { deleteLot: { error: 'Lot ID required' } });
-
 		const lot = await LotRecord.findById(lotId).lean() as any;
 		if (!lot) return fail(404, { deleteLot: { error: 'Lot not found' } });
-		if (lot.status !== 'In Progress') {
-			return fail(400, { deleteLot: { error: `Cannot delete lot in status "${lot.status}". Only In Progress lots can be deleted.` } });
-		}
+		if (lot.status !== 'In Progress') return fail(400, { deleteLot: { error: `Cannot delete lot in status "${lot.status}". Only In Progress lots can be deleted.` } });
 
+		const scanned: string[] = lot.cartridgeIds ?? [];
+		if (scanned.length && lot.bucketCycleId) {
+			const now = new Date();
+			await CartridgeRecord.updateMany({ _id: { $in: scanned }, status: IN_OVEN_STATUS }, { $set: { status: 'pressed', statusUpdatedOn: now.toISOString() }, $unset: { 'backing.parentLotRecordId': '', 'backing.lotQrCode': '', 'backing.operator': '', 'backing.recordedAt': '' } });
+			await BucketCycle.updateOne({ _id: lot.bucketCycleId }, { $addToSet: { cartridgeIds: { $each: scanned } }, $inc: { quantity: scanned.length }, $set: { status: 'open', closedAt: null } });
+			await ProductionBucket.updateOne({ _id: lot.bucketBarcode }, { $set: { state: 'in_use', currentCycleId: lot.bucketCycleId, spotCheckPending: false } });
+		}
 		await AuditLog.create({
-			_id: generateId(),
-			tableName: 'lot_records',
-			recordId: lotId,
-			action: 'DELETE',
-			changedBy: locals.user.username,
-			changedAt: new Date(),
-			oldData: {
-				status: lot.status,
-				plannedQuantity: lot.plannedQuantity,
-				operator: lot.operator,
-				inputLots: (lot.inputLots ?? []).map((l: any) => ({ materialName: l.materialName, barcode: l.barcode })),
-				startTime: lot.startTime
-			},
+			_id: generateId(), tableName: 'lot_records', recordId: lotId, action: 'DELETE',
+			changedBy: locals.user.username, changedAt: new Date(),
+			oldData: { status: lot.status, plannedQuantity: lot.plannedQuantity, operator: lot.operator, bucketCycleId: lot.bucketCycleId, returnedToBucket: scanned },
 			reason: 'Operator-initiated discard of in-progress backing batch'
 		});
-
 		await LotRecord.deleteOne({ _id: lotId });
-
 		return { deleteLot: { success: true, lotId } };
 	},
 
 	/** Resume an in-progress lot */
 	resumeLot: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'manufacturing:write');
 		await connectDB();
-
 		const data = await request.formData();
 		const lotId = data.get('lotId') as string;
 		if (!lotId) return fail(400, { resumeLot: { error: 'Lot ID required' } });
-
 		const lot = await LotRecord.findById(lotId).lean() as any;
 		if (!lot) return fail(404, { resumeLot: { error: 'Lot not found' } });
-		// A finished batch (confirm & withdraw -> Completed, or aborted/cancelled)
-		// is terminal — it can never be resumed (WI01-BACKING-FLOW-FIXES).
-		if (lot.status !== 'In Progress') {
-			return fail(400, { resumeLot: { error: `This batch is "${lot.status}" — finished batches cannot be resumed.` } });
-		}
-
-		// Recover the batch oven so the resumed session shows it locked instead
-		// of re-asking (WI01-BACKING-FLOW-FIXES). Prefer the oven stored at
-		// setup; for legacy lots without it, derive from the first scanned cart.
-		let ovenId: string = lot.backingOven?.ovenId ?? '';
-		let ovenName: string = lot.backingOven?.ovenName ?? '';
-		if (!ovenId && (lot.cartridgeIds ?? []).length > 0) {
-			const firstCart = await CartridgeRecord.findById(lot.cartridgeIds[0])
-				.select('backing.ovenLocationId backing.ovenLocationName').lean() as any;
-			ovenId = firstCart?.backing?.ovenLocationId ?? '';
-			ovenName = firstCart?.backing?.ovenLocationName ?? '';
-		}
-
+		if (lot.status !== 'In Progress') return fail(400, { resumeLot: { error: `This batch is "${lot.status}" — finished batches cannot be resumed.` } });
+		const cycle = lot.bucketCycleId ? await BucketCycle.findById(lot.bucketCycleId).select('bucketId cycleNumber cartridgeIds').lean() as any : null;
 		return {
 			resumeLot: {
-				success: true,
-				lotId,
-				resumeStep: 'working',
-				plannedQty: lot.plannedQuantity ?? 1,
-				ovenId,
-				ovenName,
-				// Re-hydrate the oven-scan list so already-scanned cartridges
-				// survive a page reload mid-batch (WAX-FLOW-2)
-				cartridgeIds: lot.cartridgeIds ?? []
+				success: true, lotId, cartridgeIds: lot.cartridgeIds ?? [],
+				bucketId: lot.bucketBarcode ?? null, cycleId: lot.bucketCycleId ?? null, cycleNumber: cycle?.cycleNumber ?? null,
+				members: (cycle?.cartridgeIds ?? []) as string[]
 			}
 		};
 	}
