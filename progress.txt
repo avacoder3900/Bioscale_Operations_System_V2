@@ -16616,3 +16616,25 @@ What this deployment is for: build check of the Worker-first sonic upload. GitHu
   6670864534. Smoke: /login 200; /validation/sonic 302. NOT a functional test — previews lack
   R2_WORKER_URL, so an upload here still falls back to S3 and hits the access-key error.
   Functional test requires production (master). Awaiting the user's go.
+
+================================================================================
+2026-09-25 — master — Ship: R2 account-ID recovery + Worker-first sonic upload to production
+================================================================================
+User chose to ship (option 1). origin/master fast-forwarded 9aa11bda → c6861be7 (no merge commit;
+the branch already contained master). Seven commits: 80b106d4 (R2 fail-fast + path-style),
+163735a8, 17f044d6 (logs), ab2530e8 (account-ID recovery), 6e9005fc (log), 5e09125d (sonic via
+Worker, S3 fallback), c6861be7 (log). Reason: the Worker variables are Production-scoped, so this
+is the only environment where the sonic upload can be exercised at all.
+Deployment: production — https://bioscale-operations-system-mongodb-rgqqid2ct-brevitest.vercel.app
+Source: branch master (= feat/bucket-system) @ commit c6861be7
+Retrieve this exact code: git checkout master at commit c6861be7
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: sonic recording upload should now store through the Cloudflare Worker
+  despite the wrong R2_ACCOUNT_ID / R2_ACCESS_KEY_ID in the Vercel env. GitHub deployment
+  6670920736 (Production – bioscale-operations-system-mongodb).
+  Smoke on the deployment URL: /login 200; /validation/sonic 302 → login; buckets 302 → login.
+  Functional test (an actual upload, needs a login) is the user's next step.
+Still owed: the Vercel variables themselves. R2_ACCOUNT_ID is not the bare 32-hex account ID
+(recovered in code, warning logged once per cold start) and R2_ACCESS_KEY_ID is 24 chars (R2
+needs 32) — anything still on the S3 path (COC photos via src/lib/server/r2.ts, api/r2/files,
+receiving) is broken until someone with brevitest team access fixes both.
