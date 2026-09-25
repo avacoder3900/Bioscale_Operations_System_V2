@@ -15804,3 +15804,59 @@ Build status: success.
 
 PR #54 remains open and mergeable/clean. The merge call is still refused by the harness
 permission classifier ([Merge Without Review]) — it needs the user's click or an allow rule.
+
+================================================================================
+2026-09-25 — master — BIMS refuses sweep peaks measured from a dead BLE link
+================================================================================
+SPU 239 swept to SWPEND rows=7840 good=6615 and BIMS showed it as an ordinary
+result. It was not. The magnetometer's BLE link died at y=34000 and never
+recovered -- 0 failures below 33800, partial at 34000, then 40/40 failures at
+every position from 34200 to 40000, losing 1225 rows. Well 5's real peak lives at
+~37800, entirely inside that dead zone, so its highest SURVIVING sample was
+reported as a peak of 1424 against ~4300 on a healthy unit. Wells 1-4 peak below
+the cutoff and are fine.
+
+THE FAILURE IS INVISIBLE BY CONSTRUCTION. A read the magnetometer never answers
+is written NOCHAR, has no numeric fields, and is dropped by the pusher before it
+reaches the API -- so it arrives ABSENT, not zero. An incomplete run therefore
+looks EXACTLY like a complete, shorter one. The device declares its own totals in
+SWPEND and summarise() already stored rowsReported/goodReported; nothing ever
+compared them.
+
+Now it does. summarise() computes rowsMissing/coverage/coverageComplete and marks
+a channel peakUnreliable when the run lost rows AND that maximum sits on the edge
+of surviving data -- the samples that would have beaten it are the missing ones.
+Checked by running the real module over both real captures: 239 flags exactly
+well 5 A/B/C at y=34000 (84.4% coverage) and leaves wells 1-4 alone; 226 flags
+nothing at 100% coverage. No false positives.
+
+Coverage is also DERIVED ON READ, so sessions ingested before the fix -- including
+the 239 run that exposed it -- are flagged without rewriting history.
+coverageComplete is null, never true, when the device declared no total: unknown
+is not an all-clear. The viewer shows a coverage stat and refuses the affected
+numbers outright, naming the wells and stating plainly that they are not
+measurements.
+
+REACHABILITY: /validation/magnetometer now links Stage sweeps and Compare SPUs.
+Both pages were live but had NO inbound link from anywhere in src -- the sweep
+viewer could only be reached by typing the URL.
+
+RUNNING A SWEEP FROM BIMS still does not deliver data, by choice. The Queue Sweep
+button genuinely starts the run on a v98 device, but the firmware returns the
+profile as ~110 chunked Particle.publish events and there is no product-scoped
+webhook to receive them (these are Product 32546 devices, which publish to the
+product stream). Creating one costs ~110 publishes per sweep, ~220 data operations
+with response events, against ZERO for serial -- and serial files the full 8-rep
+data rather than the per-position means the upload downsamples to. Serial remains
+the only path that delivers, deliberately.
+
+Rebased onto the PR #54 (bucket system) merge, 92 commits, zero overlap with any
+magnetometer or validation file. svelte-check --threshold error: 13 on this base
+(PR #54 lowered it from 122), zero from these changes; the only magnetometer
+errors are the two pre-existing ones in [sessionId]/+page.svelte, where the load's
+row type omits the optional `error` field the parser writes.
+
+Deployment: production — building from the GitHub push to master (Vercel dashboard, commit below)
+Source: branch master @ commit 9c2d8b30
+Retrieve this exact code: git checkout master at commit 9c2d8b30
+What this deployment is for: sweep coverage refusal + reachable sweep/compare pages
