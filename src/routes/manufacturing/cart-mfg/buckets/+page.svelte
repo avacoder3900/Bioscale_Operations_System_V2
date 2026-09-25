@@ -609,7 +609,7 @@
 	</div>
 
 	<!-- Stage strip -->
-	<div class="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-{data.counts.looseBacked > 0 ? 6 : 5}">
+	<div class="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
 		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3">
 			<p class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Available</p>
 			<p class="mt-1 text-2xl font-bold text-[var(--color-tron-text)]">{data.counts.available}</p>
@@ -624,16 +624,6 @@
 				<p class="text-[10px] text-[var(--color-tron-text-secondary)]">{data.counts.stages[s.key].buckets} bucket{data.counts.stages[s.key].buckets === 1 ? '' : 's'}</p>
 			</div>
 		{/each}
-		{#if data.counts.looseBacked > 0}
-			<!-- Backed carts that are not in any bucket: drawn by the old WI-01 page before
-			     2026-09-25, forced by an override, or handed back by a wax run to a tub that
-			     had moved on. Wax filling still accepts them. -->
-			<a href="/cartridge-admin?stage=backing" class="rounded-lg border border-dashed bg-[var(--color-tron-surface)] p-3 hover:border-[var(--color-tron-purple)] {stageTint.backing}" title="Backed carts that are not in a bucket (legacy WI-01 draws, overrides). Still loadable at wax filling.">
-				<p class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Backed, no bucket</p>
-				<p class="mt-1 text-2xl font-bold text-[var(--color-tron-purple)]">{data.counts.looseBacked}</p>
-				<p class="text-[10px] text-[var(--color-tron-text-secondary)]">loose carts · legacy</p>
-			</a>
-		{/if}
 	</div>
 
 	{#if advanceThermoseal}

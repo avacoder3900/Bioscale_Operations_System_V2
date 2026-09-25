@@ -1334,14 +1334,7 @@
 				{#if !isPreviewOrPast}
 					<div class="rounded-lg border border-[var(--color-tron-purple)]/40 bg-[var(--color-tron-purple)]/5 px-3 py-2 text-xs text-[var(--color-tron-text-secondary)]">
 						<span class="font-semibold uppercase tracking-wider text-[var(--color-tron-purple)]">{data.backedLabel}</span>
-						{#if data.backedBuckets.length === 0}
-							<span class="ml-2">no buckets waiting{#if data.backedTotalCount > 0} · {data.backedTotalCount} loose backed cart{data.backedTotalCount === 1 ? '' : 's'} (not in a bucket) can still be scanned{/if}.</span>
-						{:else}
-							<span class="ml-2">
-								{#each data.backedBuckets as b, i (b.bucketId + b.cycleNumber)}{#if i > 0}, {/if}<a href="/manufacturing/cart-mfg/buckets/{b.bucketId}" class="font-mono text-[var(--color-tron-text)] hover:text-[var(--color-tron-cyan)]">{b.bucketId}</a> ({b.count}){/each}
-								— put the tub in the oven, then scan its carts onto the deck.
-							</span>
-						{/if}
+						<span class="ml-2">{data.backedTotalCount} cart{data.backedTotalCount === 1 ? '' : 's'}{#if data.backedBuckets.length > 0} in {#each data.backedBuckets as b, i (b.bucketId + b.cycleNumber)}{#if i > 0}, {/if}<a href="/manufacturing/cart-mfg/buckets/{b.bucketId}" class="font-mono text-[var(--color-tron-text)] hover:text-[var(--color-tron-cyan)]">{b.bucketId}</a> ({b.count}){/each}{/if} — put the tub in the oven, then scan its carts onto the deck.</span>
 					</div>
 				{/if}
 

@@ -15977,3 +15977,22 @@ What this deployment is for: the "Backed, awaiting oven" stage replacing the WI-
   /manufacturing/cart-mfg/wi-01 also 302s (the route is gone — an unauthenticated request never
   reaches the 404).
 Build status: success (GitHub deployment 6665949610, both projects).
+
+================================================================================
+2026-09-25 — feat/bucket-system — "Backed, no bucket" tile removed; one Backed category
+================================================================================
+User: move everything from "Backed, no bucket" into "Backed, awaiting oven" and remove the
+separate tile — redundant. Done: StageCounts.looseBacked is gone; stages.backing.cartridges
+is now the count of EVERY cart at status 'backing' (in a pass or not), buckets = open backed
+passes. Board strip back to five tiles; cartridge-admin strip's Backed tile shows the full
+count and filters the page to status backing; dashboard sub-label no longer says "+N loose";
+wax-filling hint reads "<N> carts in BKT-… (n), … — put the tub in the oven…"; pipeline
+backing view rows for carts outside a pass are labelled by their legacy WI-01 batch with
+status "awaiting oven" (no "loose"); cartStatusLine no longer appends "loose backed cart".
+Plan doc §2 note, §6.4, §9.1, §9.3, §11, §12.4 updated.
+Files: src/lib/server/services/bucket-service.ts, src/routes/manufacturing/cart-mfg/
+{+page.svelte,buckets/+page.svelte,pipeline/+page.server.ts,wax-filling/+page.svelte},
+src/routes/cartridge-admin/+page.svelte, BUCKET-SYSTEM_PLAN.md.
+Check (svelte-check direct): 17 errors — the 12 baseline plus 5 in thermoseal-service.ts and
+buckets/+page.server.ts (`rollsOnHandPinned` / `rollsOnHandOverride`) that belong to another
+session's uncommitted thermoseal work in this shared checkout; not staged here, not mine.

@@ -84,7 +84,7 @@ const STAGE_META: Record<StageKey, StageMeta> = {
 	},
 	backing: {
 		key: 'backing', label: 'Backed, awaiting oven', color: 'tron-purple',
-		description: 'Backed buckets waiting for the wax-fill operator to put them in the oven and scan their carts onto a deck (status backing). No oven or cure time is tracked — every cartridge here is ready for wax filling. Loose backed carts (drawn by the old WI-01 page) and legacy backing-lot aggregates are shown until drained.',
+		description: 'Backed buckets waiting for the wax-fill operator to put them in the oven and scan their carts onto a deck (status backing). No oven or cure time is tracked — every cartridge here is ready for wax filling. Carts backed by the old WI-01 page and legacy backing-lot aggregates are listed in the same category until drained.',
 		headers: [
 			{ key: 'id', label: 'Bucket / lot' },
 			{ key: 'status', label: 'Status' },
@@ -229,16 +229,17 @@ async function loadBacking(now: Date, checkedOutIds: string[]): Promise<Pipeline
 		detailHref: `/manufacturing/cart-mfg/buckets/${encodeURIComponent(c.bucketId)}`
 	}));
 
-	// Loose backed carts: at 'backing' but not a member of any open backed pass.
+	// Backed carts that are not members of an open pass (drawn by the old WI-01
+	// page before 2026-09-25): same category, one row per legacy WI-01 batch.
 	const batchRows: PipelineRow[] = groups.flatMap((g: any) => {
-		const loose = (g.ids as string[]).filter(id => !inBucket.has(id)).length;
-		if (loose === 0) return [];
+		const n = (g.ids as string[]).filter(id => !inBucket.has(id)).length;
+		if (n === 0) return [];
 		const lotId = g._id ? String(g._id) : null;
 		return [{
-			id: lotId ?? 'loose',
-			idLabel: lotId ? `${shortId(lotId, 12)} (legacy WI-01)` : 'loose (no bucket)',
-			status: 'loose',
-			count: loose,
+			id: lotId ?? 'no-bucket',
+			idLabel: lotId ? `${shortId(lotId, 12)} (WI-01 batch)` : 'carts without a bucket',
+			status: 'awaiting oven',
+			count: n,
 			location: (g.buckets ?? []).filter(Boolean).join(', ') || null,
 			operator: g.operator ?? null,
 			when: g.newest ? new Date(g.newest).toISOString() : null,

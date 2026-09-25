@@ -269,7 +269,7 @@
 			{ key: 'barcoded', label: 'Barcoded', count: bc.stages.barcoded.cartridges, sub: `${bc.stages.barcoded.buckets} bucket${bc.stages.barcoded.buckets === 1 ? '' : 's'}`, color: 'text-[var(--color-tron-cyan)]' },
 			{ key: 'unpressed', label: 'Unpressed', count: bc.stages.unpressed.cartridges, sub: `${bc.stages.unpressed.buckets} bucket${bc.stages.unpressed.buckets === 1 ? '' : 's'}`, color: 'text-[var(--color-tron-cyan)]' },
 			{ key: 'pressed', label: 'Pressed', count: bc.stages.pressed.cartridges, sub: `${bc.stages.pressed.buckets} bucket${bc.stages.pressed.buckets === 1 ? '' : 's'}`, color: 'text-[var(--color-tron-cyan)]' },
-			{ key: 'backing', label: 'Backed, awaiting oven', count: bc.stages.backing.cartridges, sub: `${bc.stages.backing.buckets} bucket${bc.stages.backing.buckets === 1 ? '' : 's'}${bc.looseBacked > 0 ? ` · +${bc.looseBacked} loose` : ''}`, color: 'text-[var(--color-tron-purple)]' }
+			{ key: 'backing', label: 'Backed, awaiting oven', count: bc.stages.backing.cartridges, sub: `${bc.stages.backing.buckets} bucket${bc.stages.backing.buckets === 1 ? '' : 's'}`, color: 'text-[var(--color-tron-purple)]' }
 		]}
 		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-4">
 			<div class="mb-4 flex items-center justify-between">

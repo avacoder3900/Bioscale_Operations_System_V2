@@ -125,22 +125,21 @@
 	<PartsNav />
 
 	<!-- Production-bucket funnel (BUCKET-SYSTEM_PLAN v2 §9.3): Barcoded → Unpressed → Pressed → Backed.
-	     Bucket tiles deep-link into the board; the loose tile (legacy WI-01 draws) filters this page to status backing. -->
+	     Tiles deep-link into the board; Backed counts every cart at status backing and filters this page. -->
 	{#if data.bucketCounts}
 		{@const bc = data.bucketCounts}
 		{@const strip = [
 			{ key: 'barcoded', label: 'Barcoded', value: bc.stages.barcoded.cartridges, sub: `${bc.stages.barcoded.buckets} bkt`, cls: 'text-[var(--color-tron-cyan)]' },
 			{ key: 'unpressed', label: 'Unpressed', value: bc.stages.unpressed.cartridges, sub: `${bc.stages.unpressed.buckets} bkt`, cls: 'text-[var(--color-tron-cyan)]' },
 			{ key: 'pressed', label: 'Pressed', value: bc.stages.pressed.cartridges, sub: `${bc.stages.pressed.buckets} bkt`, cls: 'text-[var(--color-tron-cyan)]' },
-			{ key: 'backing', label: 'Backed, awaiting oven', value: bc.stages.backing.cartridges, sub: `${bc.stages.backing.buckets} bkt`, cls: 'text-[var(--color-tron-purple)]' },
-			...(bc.looseBacked > 0 ? [{ key: 'loose', label: 'Backed, no bucket', value: bc.looseBacked, sub: 'legacy · loose', cls: 'text-[var(--color-tron-purple)]' }] : [])
+			{ key: 'backing', label: 'Backed, awaiting oven', value: bc.stages.backing.cartridges, sub: `${bc.stages.backing.buckets} bkt`, cls: 'text-[var(--color-tron-purple)]' }
 		]}
 		<div class="flex flex-wrap items-stretch gap-2">
 			<span class="self-center text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Buckets</span>
 			{#each strip as t (t.key)}
-				<a href={t.key === 'loose' ? '/cartridge-admin?stage=backing' : `/manufacturing/cart-mfg/buckets?stage=${t.key}`}
+				<a href={t.key === 'backing' ? '/cartridge-admin?stage=backing' : `/manufacturing/cart-mfg/buckets?stage=${t.key}`}
 					class="flex min-w-[96px] flex-col rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] px-3 py-1.5 hover:border-[var(--color-tron-cyan)]/60"
-					title={t.key === 'loose' ? 'Backed carts that are not in a bucket (drawn by the old WI-01 page)' : `Open the bucket board at ${t.label}`}>
+					title={t.key === 'backing' ? 'Show every backed cartridge' : `Open the bucket board at ${t.label}`}>
 					<span class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">{t.label}</span>
 					<span class="text-lg font-bold leading-tight {t.cls}">{t.value}</span>
 					<span class="text-[10px] text-[var(--color-tron-text-secondary)]">{t.sub}</span>

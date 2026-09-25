@@ -56,9 +56,9 @@ export const STAGE_LABELS: Record<BucketStage, string> = {
 /**
  * The last bucket stage. Cart status 'backing' is what wax filling's deck load
  * accepts, so the bucket stage uses the same key and the cart mirrors it like
- * every other stage. Carts at 'backing' that are NOT members of an open pass
- * are "loose" (drawn by the old WI-01 page, or forced by an override) and are
- * still loadable at wax filling.
+ * every other stage. Every cart at 'backing' counts as Backed, awaiting oven —
+ * whether or not it is still a member of an open pass (carts drawn by the old
+ * WI-01 page before 2026-09-25 are not); all of them load at wax filling.
  */
 export const BACKED_STAGE: BucketStage = 'backing';
 export const BACKED_STATUS = 'backing';
@@ -389,7 +389,6 @@ export async function cartStatusLine(code: string): Promise<CartStatusLine> {
 		parts.push('on no open pass');
 	}
 	if (status === BACKED_STATUS && cart.backing?.parentLotRecordId) parts.push(`WI-01 lot ${cart.backing.parentLotRecordId} (legacy)`);
-	if (status === BACKED_STATUS && !cart.bucket?.cycleId) parts.push('not in a bucket — loose backed cart');
 	if (cart.statusUpdatedOn) parts.push(`since ${new Date(cart.statusUpdatedOn).toLocaleString()}`);
 
 	return { found: true, cartridgeId: cart._id, line: parts.join(' · ') };
@@ -1569,9 +1568,12 @@ export async function voidCycle(input: VoidCycleInput): Promise<VoidCycleResult>
 // ── read models ───────────────────────────────────────────────────────────
 
 export interface StageCounts {
+	/**
+	 * Per stage: open passes and their member carts. Backed is the exception —
+	 * its `cartridges` is EVERY cart at status 'backing', in a bucket or not
+	 * (user, 2026-09-25: one category, no separate "no bucket" count).
+	 */
 	stages: Record<BucketStage, { buckets: number; cartridges: number }>;
-	/** Carts at 'backing' that are not in any open pass (legacy WI-01 draws, overrides, wax-run returns to a busy tub). Still loadable at wax filling. */
-	looseBacked: number;
 	available: number;
 	inUse: number;
 	quarantined: number;
@@ -1590,9 +1592,10 @@ export async function stageCounts(): Promise<StageCounts> {
 		const stage: unknown = row._id;
 		if (isBucketStage(stage)) stages[stage] = { buckets: row.buckets ?? 0, cartridges: row.cartridges ?? 0 };
 	}
+	stages.backing.cartridges = backedTotal;
 	const byState = new Map(bucketAgg.map(r => [r._id, r.n ?? 0]));
 	return {
-		stages, looseBacked: Math.max(0, backedTotal - stages.backing.cartridges),
+		stages,
 		available: byState.get('available') ?? 0,
 		inUse: byState.get('in_use') ?? 0,
 		quarantined: byState.get('quarantined') ?? 0,
