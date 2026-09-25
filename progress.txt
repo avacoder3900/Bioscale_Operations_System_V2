@@ -16208,3 +16208,15 @@ BUCKET-SYSTEM_PLAN.md.
 
 Check (svelte-kit sync + svelte-check direct): 12 errors / 431 warnings — the documented baseline,
 none in any file touched.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-8x4uz3jcx-brevitest.vercel.app
+  (brevitest scope; cookie-session gated, 302 to /login)
+Source: branch feat/bucket-system @ commit 1d3d1a3e
+Retrieve this exact code: git checkout feat/bucket-system at commit 1d3d1a3e
+  (or: git log feat/bucket-system --oneline to find it if the branch has since moved on)
+What this deployment is for: the simplified Backed stage — plain "Backed" beside Pressed, Move to
+  oven on a backed pass frees the carts and returns the bucket to Available (carts stay backed),
+  and the "In oven · N carts" dropdown at the bottom of the Backed column lists them until wax
+  filling scans them in. Supersedes the d8928c7f preview.
+  Smoke: /login 200; /manufacturing/cart-mfg/buckets 302 to /login.
+Build status: success (GitHub deployment 6669562389, both projects).
