@@ -16111,3 +16111,6 @@ callers); the board's thermosealCm() helper was dropped. Plan §3.4 / §6.3 / ch
 Files: src/routes/manufacturing/cart-mfg/buckets/+page.svelte, .../buckets/+page.server.ts,
 BUCKET-SYSTEM_PLAN.md.
 Check (svelte-check direct): 12 errors / 431 warnings — baseline.
+  → Done: PT-CT-101 physical count recorded via MCP record_physical_count, 113 → 1 roll
+  (delta −112), actor/performedBy Samantha Wolf, 2026-09-25. The board tile now reads 1 roll,
+  below the 2-roll floor; notifications are off so nothing fires.
