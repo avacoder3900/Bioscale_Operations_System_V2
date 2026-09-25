@@ -15963,3 +15963,62 @@ Source: branch master @ commit faea623d (cherry-pick of feat/research-analysis-m
 Retrieve this exact code: git checkout master at commit faea623d
 Adds /api/agent/research/[...path] proxy + 18 research_* MCP tools. Requires RESEARCH_API_URL on Vercel
 (set 2026-09-25 by Alejandro). No manufacturing behaviour changed. Deployed via GitHub integration on push.
+
+================================================================================
+2026-09-25 — master — seven units swept: the mag test reads the flank, not the peak
+================================================================================
+Swept 218 (8loq-7xGVyX6ShKpPRFVb), 229 (pek3cX8mVZt0FcIHrmkPs) and 215
+(YPssyKzEPL2mVflJgEjRi), all good=7840. With 226, 244, 247 and 255 that is seven
+units, six of them clean and one (239) rejected by the new coverage gate.
+
+THE HEADLINE: NOT ONE OF THE SEVEN HAS A WEAK MAGNET. Every cell that failed or
+nearly failed the regular test is comfortably above the 3900 floor AT ITS ACTUAL
+PEAK. The test is sampling roughly a millimetre off the magnet centre and losing
+236-500 gauss to the flank:
+
+    unit  cell      true peak   test read   deficit   off-centre
+    218   w3 ch B        4080        3844     -236 G    ~903 um
+    229   w3 ch B        4233        3932     -301 G   ~1075 um
+    215   w2 ch A        4293        3912     -381 G   ~1148 um
+    215   w2 ch B        4372        3960     -412 G   ~1171 um
+    215   w2 ch C        4364        3864     -500 G   ~1320 um
+
+218 FAILED and 229 PASSED BY 32 GAUSS on essentially identical hardware. The
+threshold is currently sorting units by how a positioning error interacts with
+whichever channel happens to sit lowest, not by whether the magnet is adequate.
+
+WHY IT VARIES BY UNIT: the firmware parks at FIXED positions, but the magnet row
+does not sit in the same place on every unit. Well 1's peak across the seven:
+226 5400, 229 5600, 244 5600, 215 5800, 218 6000, 255 6000, 247 6200 -- an 800um
+spread. That spread, stacked on a systematic ~1mm park offset, decides how far
+down the flank each unit is read. Which cell then fails is near enough arbitrary.
+
+Two failure signatures were distinguished and neither is a bad magnet:
+  - 218 and 229: channel B runs ~5-6% below A and C across EVERY well; well 3 is
+    the weakest of the five, so it is the cell that crosses the line. Spacing on
+    both is a clean 8000um x4.
+  - 215: well 2 is low across ALL THREE channels in the regular test, which looked
+    like a genuinely weak magnet -- it is not. Its true peaks are 4293/4372/4364,
+    in line with wells 1/3/4/5 on the same unit. Predicted weak magnet; wrong.
+
+THE ONE REAL PHYSICAL DEFECT REMAINS 247: peak spacing 8000/13400/8000, well 3
+and everything after sitting +5400um from an even cadence, with a healthy peak
+field. That is a positioning fault, not a magnet to replace.
+
+HONEST LIMIT: the profile is symmetric about the peak, so the reported value
+crosses it on BOTH sides. The MAGNITUDE of the offset is solid; which side the
+test parks on is not determinable from the value alone. That needs the park
+geometry settled -- the same question the firmware already flags as open at
+brevitest-firmware.h:219 (measured well_move[] vs nominal). Seven units of
+empirical peaks now exist to settle it with.
+
+CORRECTION to the previous entry: it reported channel A bead pull as tight across
+units at 14.8%. Adding 218 takes that to 46.3% -- the claim does not survive.
+Peak FIELD is the tight quantity (ch A 5.7%, ch B 7.3%, ch C 4.3% across five
+units); the bead-pull spread is ~7x larger than the field spread it is derived
+from, which points at the gradient inference being sensitive to jig seating
+rather than at real magnet differences. Bead pull is NOT yet a trustworthy
+per-unit QC metric. The test that settles it: sweep one SPU twice, re-seating the
+jig between runs.
+
+No code changed in this entry.
