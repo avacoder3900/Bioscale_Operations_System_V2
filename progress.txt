@@ -16549,3 +16549,6 @@ What this deployment is for: R2 client fix — sonic upload should now show the 
   GitHub deployment 6670220704. Smoke: /login 200; /validation/sonic 302 (auth redirect expected).
   Still needed by hand: check R2_ACCOUNT_ID / R2_BUCKET_NAME in the Vercel env for the environment
   the user was on — the code can only report a bad value, not correct it.
+Outcome: user confirmed on the preview — the banner now reads "R2_ACCOUNT_ID must be the
+  32-character hex Cloudflare account ID …", so the TLS alert 40 was a bad R2_ACCOUNT_ID in the
+  Vercel env, not code. Fix the variable in the Vercel dashboard for that environment and redeploy.
