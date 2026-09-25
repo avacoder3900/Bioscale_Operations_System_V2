@@ -15938,3 +15938,28 @@ operator's Allow); 'denied' → queue with the site-settings instructions. Conne
 "Allow direct link" banner. Permission is per origin: production's address is stable, but every
 preview URL is a new origin (use the branch alias URL for repeat testing).
 test:unit 213/213 (+2); npm run check 87 errors = baseline.
+
+================================================================================
+2026-09-25 — feat/ot2-tailnet-direct — OT2-TAILNET-4 option 1: maintenance open/close, load-labware, pick-up-tip over the tailnet
+================================================================================
+Preview test by the user worked (B14 direct; jog 270 ms avg / position 74 ms avg over 67 calls, 0
+failures). Remaining studio calls that still went through the queue are now on the robot's line too.
+
+Pattern: each verb = ROBOT half (in $lib/opentrons/ot2-protocol, run over either line) + BIMS half
+(always server). Moved into ot2-protocol from maintenance.ts: SlotOccupiedError, clearStaleProtocolRun
+(never stops an ACTIVE run), open/closeMaintenanceRun, discoverPipette, loadPipetteInRun,
+registerLabwareDefinition, loadLabwareInRun (hardened rule now an explicit flag the server decides),
+pickUpTip; new verbs mx.open / mx.close / mx.loadLabware / mx.pickUpTip. Ot2Transport gained delete.
+BIMS half: new src/lib/server/opentrons/maintenance-records.ts — resolveLabwareForRobot (definition +
+blob identity, as the routes did) and applyMaintenanceRecord (AuditLog maintenance_run_open/close with
+line:'queue'|'tailnet'; studio tip-cursor advance → nextTipWell). The four routes are now thin
+(verbResponse writes the record inline). The browser gets the same halves via two new endpoints:
+GET /api/opentrons-lab/labware/resolve and POST /api/opentrons-lab/robots/[id]/direct-record.
+/connection now also returns `hardened` (DECK_HARDENING_ROBOT_IDS) so both lines apply the same rule.
+Session: resolves the definition before, posts the record after; a record failure never turns a
+robot success into an error (recordError field). pick-up-tip joins jog as never-auto-retried on
+failover. All maintenance verbs defer to the queue while a sweep/deck-scan/tip-cal runs. Studio page
+pick-up-tip now via the session; the page-UNLOAD close stays a same-origin keepalive to BIMS (the one
+request that reliably survives the page closing).
+test:unit 227/227 (+14); npm run check 87 = baseline. Read-only hardware: shared discoverPipette vs
+B14 over the tailnet → p300_single_gen2/left in 556 ms (B14 had a maintenance run left open).

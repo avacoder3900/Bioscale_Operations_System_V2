@@ -21,8 +21,11 @@
  * components keep their existing response handling.
  */
 import {
+	DEFINITION_VERBS,
 	MOTION_VERBS,
+	NO_RETRY_VERBS,
 	browserTransport,
+	maintenanceRecordFor,
 	runVerb,
 	verbRoute,
 	type Ot2Transport,
@@ -52,6 +55,8 @@ export interface RobotSessionState {
 	browserPermission?: LocalNetworkPermission;
 	/** The operator must click "allow direct" (a user gesture) to grant it. */
 	needsPermission?: boolean;
+	/** DECK_HARDENING_ROBOT_IDS status from BIMS — the labware reuse rule. */
+	hardened?: boolean;
 	directUrl?: string;
 	/** Latency of the last successful direct probe/call, ms. */
 	latencyMs?: number;
@@ -100,24 +105,34 @@ export interface SessionOptions {
 
 const API = (robotId: string) => `/api/opentrons-lab/robots/${encodeURIComponent(robotId)}`;
 
-/** The maintenance motion routes a session can serve on the robot's line. */
-const MX_ROUTE = /^\/api\/opentrons-lab\/robots\/([^/?#]+)\/maintenance\/([^/?#]+)\/(jog|position|move-to|move-to-well|home|drop-tip)$/;
+/** The maintenance routes a session can serve on the robot's line. */
+const MX_OPEN = /^\/api\/opentrons-lab\/robots\/([^/?#]+)\/maintenance$/;
+const MX_RUN = /^\/api\/opentrons-lab\/robots\/([^/?#]+)\/maintenance\/([^/?#]+)$/;
+const MX_ROUTE = /^\/api\/opentrons-lab\/robots\/([^/?#]+)\/maintenance\/([^/?#]+)\/(jog|position|move-to|move-to-well|home|drop-tip|load-labware|pick-up-tip)$/;
 const MX_VERB: Record<string, Ot2Verb> = {
 	jog: 'mx.jog',
 	position: 'mx.position',
 	'move-to': 'mx.moveTo',
 	'move-to-well': 'mx.moveToWell',
 	home: 'mx.home',
-	'drop-tip': 'mx.dropTip'
+	'drop-tip': 'mx.dropTip',
+	'load-labware': 'mx.loadLabware',
+	'pick-up-tip': 'mx.pickUpTip'
 };
 
-/** Map a BIMS maintenance-motion route (POST) to its shared verb, or null. */
-export function routeToVerb(path: string, method = 'GET'): { robotId: string; runId: string; verb: Ot2Verb } | null {
-	if (method.toUpperCase() !== 'POST') return null;
-	const m = MX_ROUTE.exec(path);
-	if (!m) return null;
-	return { robotId: decodeURIComponent(m[1]), runId: decodeURIComponent(m[2]), verb: MX_VERB[m[3]] };
+/** Map a BIMS maintenance route to its shared verb, or null (= a plain BIMS fetch). */
+export function routeToVerb(path: string, method = 'GET'): { robotId: string; runId?: string; verb: Ot2Verb } | null {
+	const m = method.toUpperCase();
+	const dec = decodeURIComponent;
+	let hit: RegExpExecArray | null;
+	if (m === 'POST' && (hit = MX_OPEN.exec(path))) return { robotId: dec(hit[1]), verb: 'mx.open' };
+	if (m === 'DELETE' && (hit = MX_RUN.exec(path))) return { robotId: dec(hit[1]), runId: dec(hit[2]), verb: 'mx.close' };
+	if (m === 'POST' && (hit = MX_ROUTE.exec(path))) return { robotId: dec(hit[1]), runId: dec(hit[2]), verb: MX_VERB[hit[3]] };
+	return null;
 }
+
+/** Fields the browser adds for the robot half; never sent to a BIMS route. */
+const LINE_ONLY_ARGS = ['rid', 'runId', 'definition', 'labwareNamespace', 'labwareVersion', 'hardened'];
 
 function newSessionId(): string {
 	try {
@@ -208,7 +223,7 @@ export class RobotSession {
 			});
 			return this._state;
 		}
-		this.set({ tailnetConfigured: true, directUrl: conn.directUrl, busy: conn.busy ?? null });
+		this.set({ tailnetConfigured: true, directUrl: conn.directUrl, busy: conn.busy ?? null, hardened: conn.hardened === true });
 		if (typeof window !== 'undefined') window.addEventListener('pagehide', this.onPageHide);
 		const perm = await this.permissionQuery();
 		this.set({ browserPermission: perm });
@@ -291,7 +306,7 @@ export class RobotSession {
 				this.set({ transport: 'queue', fellBack: true, busy: conn.busy ?? null, reason: conn.reason });
 				return;
 			}
-			this.set({ busy: conn.busy ?? null });
+			this.set({ busy: conn.busy ?? null, hardened: conn.hardened === true });
 		} catch {
 			/* a missed refresh changes nothing */
 		}
@@ -303,22 +318,76 @@ export class RobotSession {
 
 	/**
 	 * Run a verb on this robot. `args` = the route's path params (rid / runId)
-	 * plus its JSON body fields. Returns what the BIMS route returns.
+	 * plus its JSON body fields. Returns what the BIMS route returns — including
+	 * the BIMS half (audit row, tip cursor) when the robot half ran directly.
 	 */
 	async call(verb: Ot2Verb, args: Record<string, unknown>, init: { signal?: AbortSignal } = {}): Promise<Response> {
 		const s = this._state;
 		const motionWhileBusy = MOTION_VERBS.has(verb) && !!s.busy;
-		if (s.transport === 'direct' && s.directUrl && !motionWhileBusy) {
-			return this.callDirect(verb, args, s.directUrl, init.signal);
+		if (!(s.transport === 'direct' && s.directUrl && !motionWhileBusy)) {
+			return this.callRoute(verb, args, init.signal);
 		}
-		return this.callRoute(verb, args, init.signal);
+
+		// BIMS half BEFORE the robot: the labware definition to register.
+		let robotArgs = args;
+		if (DEFINITION_VERBS.has(verb)) {
+			const resolved = await this.resolveDefinition(verb, args, init.signal);
+			if (resolved instanceof Response) return resolved; // 400/404 exactly as the route would
+			robotArgs = { ...args, ...resolved, hardened: s.hardened === true };
+		}
+
+		const out = await this.callDirect(verb, robotArgs, s.directUrl, init.signal);
+		if (out.line === 'queue') return out.res; // fell back: the route wrote its own records
+
+		// BIMS half AFTER the robot: audit row / tip cursor, same writer as the route.
+		const rec = maintenanceRecordFor(verb, robotArgs, out.result);
+		if (!rec) return jsonResponse(out.result.status, out.result.body);
+		let extra: Record<string, unknown> = {};
+		try {
+			const res = await this.fetchImpl(`${API(this.robotId)}/direct-record`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ record: rec })
+			});
+			if (!res.ok) throw new Error(`BIMS answered ${res.status}`);
+			extra = await res.json();
+		} catch (e) {
+			// The robot already acted; never report that as a failure. Say what's missing.
+			const msg = e instanceof Error ? e.message : String(e);
+			console.warn(`[robot-session] ${rec.event} not recorded in BIMS:`, msg);
+			extra = { recordError: `robot OK, but BIMS did not record ${rec.event}: ${msg}` };
+		}
+		return jsonResponse(out.result.status, { ...(out.result.body as object), ...extra });
+	}
+
+	/** Same lookup the load-labware / pick-up-tip routes do, via GET /labware/resolve. */
+	private async resolveDefinition(
+		verb: Ot2Verb,
+		args: Record<string, unknown>,
+		signal?: AbortSignal
+	): Promise<Response | Record<string, unknown>> {
+		const loadName = verb === 'mx.pickUpTip' ? args.tiprackLoadName : args.loadName;
+		if (verb === 'mx.pickUpTip' && (!args.pipetteId || typeof args.pipetteId !== 'string')) {
+			return jsonResponse(400, { message: 'pipetteId required' });
+		}
+		if (!loadName || typeof loadName !== 'string') {
+			return jsonResponse(400, { message: verb === 'mx.pickUpTip' ? 'tiprackLoadName required' : 'loadName required' });
+		}
+		const q = new URLSearchParams({ loadName });
+		if (verb === 'mx.loadLabware') {
+			if (typeof args.namespace === 'string' && args.namespace) q.set('namespace', args.namespace);
+			if (args.version != null) q.set('version', String(args.version));
+		}
+		const res = await this.fetchImpl(`/api/opentrons-lab/labware/resolve?${q}`, { signal });
+		if (!res.ok) return res;
+		return (await res.json()) as Record<string, unknown>;
 	}
 
 	/**
-	 * Drop-in for fetch() on pages that already call the BIMS routes: a POST to one
-	 * of THIS robot's maintenance-motion routes runs on the session's line; any
-	 * other request (open/close run, load labware, pick up tip, …) is a plain fetch
-	 * to BIMS — those write BIMS records and stay on the queue by design.
+	 * Drop-in for fetch() on pages that already call the BIMS routes: this robot's
+	 * maintenance routes (open, close, load labware, pick up tip, jog, move,
+	 * position, home, drop tip) run on the session's line; any other request is a
+	 * plain fetch to BIMS.
 	 */
 	fetchRoute(path: string, init: RequestInit = {}): Promise<Response> {
 		const hit = routeToVerb(path, init.method ?? 'GET');
@@ -329,13 +398,13 @@ export class RobotSession {
 		} catch {
 			/* the route would reject it too; runVerb validates */
 		}
-		return this.call(hit.verb, { ...body, runId: hit.runId }, { signal: init.signal ?? undefined });
+		return this.call(hit.verb, { ...body, ...(hit.runId ? { runId: hit.runId } : {}) }, { signal: init.signal ?? undefined });
 	}
 
 	/** The queue line: the existing BIMS API route, unchanged. */
 	private callRoute(verb: Ot2Verb, args: Record<string, unknown>, signal?: AbortSignal): Promise<Response> {
 		const { method, path } = verbRoute(verb, args);
-		const { rid: _rid, runId: _runId, ...body } = args;
+		const body = Object.fromEntries(Object.entries(args).filter(([k]) => !LINE_ONLY_ARGS.includes(k)));
 		return this.fetchImpl(`${API(this.robotId)}${path}`, {
 			method,
 			...(method === 'POST'
@@ -350,7 +419,7 @@ export class RobotSession {
 		args: Record<string, unknown>,
 		directUrl: string,
 		signal?: AbortSignal
-	): Promise<Response> {
+	): Promise<{ line: 'direct'; result: { status: number; body: unknown } } | { line: 'queue'; res: Response }> {
 		let lineError: string | null = null;
 		const base = browserTransport(directUrl, (input, init) =>
 			this.fetchImpl(input, { ...init, signal: withCallerSignal(init?.signal as AbortSignal, signal) })
@@ -358,7 +427,7 @@ export class RobotSession {
 		// Wrap the transport so each robot request is traced and a no-answer is
 		// told apart from a robot answering with an error.
 		const track =
-			(method: 'GET' | 'POST', send: () => Promise<Response>, path: string) =>
+			(method: 'GET' | 'POST' | 'DELETE', send: () => Promise<Response>, path: string) =>
 			async (): Promise<Response> => {
 				const t0 = Date.now();
 				const at = new Date().toISOString();
@@ -378,7 +447,8 @@ export class RobotSession {
 			};
 		const tracked: Ot2Transport = {
 			get: (path, o) => track('GET', () => base.get(path, o), path)(),
-			post: (path, body, o) => track('POST', () => base.post(path, body, o), path)()
+			post: (path, body, o) => track('POST', () => base.post(path, body, o), path)(),
+			delete: (path, o) => track('DELETE', () => base.delete(path, o), path)()
 		};
 
 		const r = await runVerb(tracked, verb, args);
@@ -389,17 +459,20 @@ export class RobotSession {
 		}
 		if (lineError) {
 			this.fallBack(`direct link failed: ${lineError}`);
-			// A relative jog may have landed even though the answer was lost —
-			// retrying it would move the gantry twice. Everything else is safe
-			// to repeat (reads, absolute moves, home, play/pause/stop).
-			if (verb === 'mx.jog') {
-				return jsonResponse(502, {
-					message: 'Direct link to the robot was lost during this jog. It was NOT retried (it may have moved). Check the position, then jog again — now via BIMS.'
-				});
+			// A relative jog or a tip pick-up may have landed even though the answer
+			// was lost — repeating it would move twice / waste a tip. Everything else
+			// is safe to repeat (reads, open/close, absolute moves, home, play/pause/stop).
+			if (NO_RETRY_VERBS.has(verb)) {
+				return {
+					line: 'queue',
+					res: jsonResponse(502, {
+						message: `Direct link to the robot was lost during this ${verb === 'mx.jog' ? 'jog' : 'tip pick-up'}. It was NOT retried (it may have happened). Check the robot, then try again — now via BIMS.`
+					})
+				};
 			}
-			return this.callRoute(verb, args, signal);
+			return { line: 'queue', res: await this.callRoute(verb, args, signal) };
 		}
-		return jsonResponse(r.status, r.body);
+		return { line: 'direct', result: r };
 	}
 
 	private record(row: Omit<DirectCallRow, 'sessionId'>) {

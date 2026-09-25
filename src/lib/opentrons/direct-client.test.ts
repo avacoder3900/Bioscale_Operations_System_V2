@@ -166,16 +166,18 @@ describe('direct sessions', () => {
 });
 
 describe('fetchRoute (pages that already call BIMS routes)', () => {
-	it('maps only POSTs to the six motion routes', () => {
+	it('maps the maintenance routes to verbs; anything else stays a plain BIMS fetch', () => {
 		expect(routeToVerb('/api/opentrons-lab/robots/b14/maintenance/m1/jog', 'POST')).toEqual({ robotId: 'b14', runId: 'm1', verb: 'mx.jog' });
 		expect(routeToVerb('/api/opentrons-lab/robots/b14/maintenance/m1/move-to-well', 'POST')?.verb).toBe('mx.moveToWell');
-		expect(routeToVerb('/api/opentrons-lab/robots/b14/maintenance/m1/pick-up-tip', 'POST')).toBeNull(); // writes studioTip → BIMS
-		expect(routeToVerb('/api/opentrons-lab/robots/b14/maintenance/m1/load-labware', 'POST')).toBeNull();
-		expect(routeToVerb('/api/opentrons-lab/robots/b14/maintenance', 'POST')).toBeNull(); // open run → AuditLog
-		expect(routeToVerb('/api/opentrons-lab/robots/b14/maintenance/m1', 'DELETE')).toBeNull();
+		expect(routeToVerb('/api/opentrons-lab/robots/b14/maintenance', 'POST')).toEqual({ robotId: 'b14', verb: 'mx.open' });
+		expect(routeToVerb('/api/opentrons-lab/robots/b14/maintenance/m1', 'DELETE')).toEqual({ robotId: 'b14', runId: 'm1', verb: 'mx.close' });
+		expect(routeToVerb('/api/opentrons-lab/robots/b14/maintenance/m1/pick-up-tip', 'POST')?.verb).toBe('mx.pickUpTip');
+		expect(routeToVerb('/api/opentrons-lab/robots/b14/maintenance/m1/load-labware', 'POST')?.verb).toBe('mx.loadLabware');
+		expect(routeToVerb('/api/opentrons-lab/robots/b14/runs', 'POST')).toBeNull(); // Start Run → BIMS
+		expect(routeToVerb('/api/scanner/sweep', 'POST')).toBeNull();
 	});
 
-	it('motion goes on the robot line; open/close/pick-up stay plain BIMS fetches', async () => {
+	it('jog: robot line direct', async () => {
 		const ff = fakeFetch((url) => {
 			if (url.endsWith('/connection')) return connTailnet();
 			if (url === `${DIRECT}/health`) return res(200, {});
@@ -190,10 +192,96 @@ describe('fetchRoute (pages that already call BIMS routes)', () => {
 		});
 		expect(await jog.json()).toEqual({ ok: true });
 		expect(ff.urls).toContain(`${DIRECT}/maintenance_runs/m1/commands?waitUntilComplete=true&timeout=30000`);
-		await s.fetchRoute('/api/opentrons-lab/robots/b14/maintenance/m1/pick-up-tip', { method: 'POST', body: '{}' });
-		await s.fetchRoute('/api/opentrons-lab/robots/b14/maintenance', { method: 'POST', body: '{}' });
-		expect(ff.urls).toContain('/api/opentrons-lab/robots/b14/maintenance/m1/pick-up-tip');
-		expect(ff.urls).toContain('/api/opentrons-lab/robots/b14/maintenance');
+	});
+
+	it('open over the tailnet: robot half direct, AuditLog half via /direct-record', async () => {
+		const records: any[] = [];
+		const ff = fakeFetch((url, init) => {
+			if (url.endsWith('/connection')) return connTailnet();
+			if (url === `${DIRECT}/health`) return res(200, {});
+			if (url === `${DIRECT}/pipettes`) return res(200, { left: { name: 'p20_single_gen2' } });
+			if (url === `${DIRECT}/maintenance_runs`) return res(201, { data: { id: 'm7' } });
+			if (url.endsWith('/direct-record')) {
+				records.push(JSON.parse(String(init?.body)));
+				return res(200, {});
+			}
+			if (url.startsWith(DIRECT)) return res(201, { data: { status: 'succeeded', result: { pipetteId: 'pp' } } });
+			return res(500, { unexpected: url });
+		});
+		const s = new RobotSession('b14', { ...opts, fetchImpl: ff.f });
+		await s.open();
+		const r = await s.fetchRoute('/api/opentrons-lab/robots/b14/maintenance', { method: 'POST', body: JSON.stringify({ mount: 'left' }) });
+		expect(await r.json()).toEqual({ runId: 'm7', pipetteId: 'pp', pipetteName: 'p20_single_gen2', mount: 'left' });
+		expect(records).toEqual([{ record: { event: 'maintenance_run_open', runId: 'm7', pipetteId: 'pp', pipetteName: 'p20_single_gen2', mount: 'left' } }]);
+		expect(ff.urls).not.toContain('/api/opentrons-lab/robots/b14/maintenance'); // the queue route was not used
+	});
+
+	it('pick-up-tip over the tailnet: definition from BIMS, robot direct, cursor via /direct-record', async () => {
+		const DEF = { namespace: 'opentrons', version: 1 };
+		const ff = fakeFetch((url) => {
+			if (url.endsWith('/connection')) return res(200, { transport: 'tailnet', directUrl: DIRECT, reason: 't', busy: null, hardened: true });
+			if (url === `${DIRECT}/health`) return res(200, {});
+			if (url.startsWith('/api/opentrons-lab/labware/resolve?')) return res(200, { definition: DEF, labwareNamespace: 'opentrons', labwareVersion: 1 });
+			if (url.endsWith('/direct-record')) return res(200, { nextTipWell: 'D1' });
+			if (url === `${DIRECT}/maintenance_runs/m1`) return res(200, { data: { labware: [] } });
+			if (url.endsWith('/labware_definitions')) return res(201, {});
+			return res(201, { data: { status: 'succeeded', result: { labwareId: 'rack' } } });
+		});
+		const s = new RobotSession('b14', { ...opts, fetchImpl: ff.f });
+		await s.open();
+		const r = await s.fetchRoute('/api/opentrons-lab/robots/b14/maintenance/m1/pick-up-tip', {
+			method: 'POST',
+			body: JSON.stringify({ pipetteId: 'p', tiprackLoadName: 'opentrons_96_tiprack_20ul', slot: '11', tipWell: 'C1' })
+		});
+		expect(await r.json()).toEqual({ tiprackLabwareId: 'rack', nextTipWell: 'D1' });
+		expect(ff.urls).toContain('/api/opentrons-lab/labware/resolve?loadName=opentrons_96_tiprack_20ul');
+	});
+
+	it('unknown labware → the resolver 404 comes back as-is, robot untouched', async () => {
+		const ff = fakeFetch((url) => {
+			if (url.endsWith('/connection')) return connTailnet();
+			if (url === `${DIRECT}/health`) return res(200, {});
+			if (url.startsWith('/api/opentrons-lab/labware/resolve?')) return res(404, { message: 'Labware definition "nope" not found' });
+			return res(200, {});
+		});
+		const s = new RobotSession('b14', { ...opts, fetchImpl: ff.f });
+		await s.open();
+		const r = await s.fetchRoute('/api/opentrons-lab/robots/b14/maintenance/m1/load-labware', { method: 'POST', body: JSON.stringify({ loadName: 'nope' }) });
+		expect(r.status).toBe(404);
+		expect(ff.urls.some((u) => u.includes('maintenance_runs'))).toBe(false);
+	});
+
+	it('a BIMS record that fails to save never turns a robot success into a failure', async () => {
+		const ff = fakeFetch((url) => {
+			if (url.endsWith('/connection')) return connTailnet();
+			if (url === `${DIRECT}/health`) return res(200, {});
+			if (url.endsWith('/direct-record')) return res(500, {});
+			return res(404, {}); // DELETE of an already-gone run is fine
+		});
+		const s = new RobotSession('b14', { ...opts, fetchImpl: ff.f });
+		await s.open();
+		const r = await s.fetchRoute('/api/opentrons-lab/robots/b14/maintenance/m1', { method: 'DELETE' });
+		expect(r.status).toBe(200);
+		expect((await r.json()).recordError).toContain('maintenance_run_close');
+	});
+
+	it('a tip pick-up that lost its answer is not retried', async () => {
+		const ff = fakeFetch((url) => {
+			if (url.endsWith('/connection')) return connTailnet();
+			if (url === `${DIRECT}/health`) return res(200, {});
+			if (url.startsWith('/api/opentrons-lab/labware/resolve?')) return res(200, { definition: {}, labwareNamespace: 'o', labwareVersion: 1 });
+			if (url.startsWith('/api/')) return res(200, { via: 'queue' });
+			throw new TypeError('Failed to fetch');
+		});
+		const s = new RobotSession('b14', { ...opts, fetchImpl: ff.f });
+		await s.open();
+		const r = await s.fetchRoute('/api/opentrons-lab/robots/b14/maintenance/m1/pick-up-tip', {
+			method: 'POST',
+			body: JSON.stringify({ pipetteId: 'p', tiprackLoadName: 'r' })
+		});
+		expect(r.status).toBe(502);
+		expect(ff.urls).not.toContain('/api/opentrons-lab/robots/b14/maintenance/m1/pick-up-tip');
+		expect(s.state.transport).toBe('queue');
 	});
 
 	it("another robot's route is never served by this session's line", async () => {

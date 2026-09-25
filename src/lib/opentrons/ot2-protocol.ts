@@ -24,6 +24,7 @@
 export interface Ot2Transport {
 	get(path: string, opts?: { timeoutMs?: number }): Promise<Response>;
 	post(path: string, body?: unknown, opts?: { timeoutMs?: number }): Promise<Response>;
+	delete(path: string, opts?: { timeoutMs?: number }): Promise<Response>;
 }
 
 /** Exactly the HTTP status + JSON body the equivalent BIMS API route returns. */
@@ -32,6 +33,10 @@ export type VerbResult = { status: number; body: unknown };
 export type Ot2Verb =
 	| 'run.get'
 	| 'run.action'
+	| 'mx.open'
+	| 'mx.close'
+	| 'mx.loadLabware'
+	| 'mx.pickUpTip'
 	| 'mx.jog'
 	| 'mx.position'
 	| 'mx.moveTo'
@@ -39,8 +44,15 @@ export type Ot2Verb =
 	| 'mx.home'
 	| 'mx.dropTip';
 
-/** Verbs that move the gantry — deferred to the queue while a daemon job runs. */
+/**
+ * Verbs that move the gantry or take over the maintenance-run engine — deferred
+ * to the queue while a daemon job (sweep / deck scan / tip cal) holds the robot.
+ */
 export const MOTION_VERBS: ReadonlySet<Ot2Verb> = new Set([
+	'mx.open',
+	'mx.close',
+	'mx.loadLabware',
+	'mx.pickUpTip',
 	'mx.jog',
 	'mx.moveTo',
 	'mx.moveToWell',
@@ -48,8 +60,18 @@ export const MOTION_VERBS: ReadonlySet<Ot2Verb> = new Set([
 	'mx.dropTip'
 ]);
 
+/**
+ * Verbs whose effect cannot safely be repeated if the answer was lost: a
+ * relative jog would move twice; a second pick-up would find the first tip on
+ * and make the client drop a fresh one. Never auto-retried on failover.
+ */
+export const NO_RETRY_VERBS: ReadonlySet<Ot2Verb> = new Set(['mx.jog', 'mx.pickUpTip']);
+
+/** Verbs that need a labware definition from BIMS before touching the robot. */
+export const DEFINITION_VERBS: ReadonlySet<Ot2Verb> = new Set(['mx.loadLabware', 'mx.pickUpTip']);
+
 /** BIMS API route path for a verb (relative to /api/opentrons-lab/robots/:id). */
-export function verbRoute(verb: Ot2Verb, args: Record<string, unknown>): { method: 'GET' | 'POST'; path: string } {
+export function verbRoute(verb: Ot2Verb, args: Record<string, unknown>): { method: 'GET' | 'POST' | 'DELETE'; path: string } {
 	const rid = encodeURIComponent(String(args.rid ?? ''));
 	const mr = encodeURIComponent(String(args.runId ?? ''));
 	switch (verb) {
@@ -57,6 +79,14 @@ export function verbRoute(verb: Ot2Verb, args: Record<string, unknown>): { metho
 			return { method: 'GET', path: `/runs/${rid}` };
 		case 'run.action':
 			return { method: 'POST', path: `/runs/${rid}/actions` };
+		case 'mx.open':
+			return { method: 'POST', path: `/maintenance` };
+		case 'mx.close':
+			return { method: 'DELETE', path: `/maintenance/${mr}` };
+		case 'mx.loadLabware':
+			return { method: 'POST', path: `/maintenance/${mr}/load-labware` };
+		case 'mx.pickUpTip':
+			return { method: 'POST', path: `/maintenance/${mr}/pick-up-tip` };
 		case 'mx.jog':
 			return { method: 'POST', path: `/maintenance/${mr}/jog` };
 		case 'mx.position':
@@ -277,6 +307,260 @@ export async function dropTipInTrash(t: Ot2Transport, runId: string, pipetteId: 
 	await sendMaintenanceCommand(t, runId, 'dropTipInPlace', { pipetteId }, { waitUntilComplete: true, timeoutMs: 30_000 });
 }
 
+// ── maintenance-run lifecycle + labware (was maintenance.ts) ────────────────
+
+/**
+ * Thrown by loadLabwareInRun when the target slot already holds a DIFFERENT
+ * labware in this maintenance run (e.g. the reagent tiprack was loaded to
+ * calibrate it, then a wax tip pickup wants the 20µL rack in the same slot 11).
+ * The OT-2 has no gripper and moveLabware/offDeck pauses the run, so the slot
+ * can't be freed in place — the caller recovers by opening a fresh run instead
+ * of leaking a raw LocationIsOccupiedError to the operator.
+ */
+export class SlotOccupiedError extends Error {
+	readonly code = 'SLOT_OCCUPIED';
+	constructor(
+		readonly slot: string,
+		readonly existingLoadName: string,
+		readonly wantedLoadName: string
+	) {
+		super(
+			`Slot ${slot} already holds ${existingLoadName}; cannot load ${wantedLoadName} there. ` +
+				`Reopen the maintenance run to clear it.`
+		);
+		this.name = 'SlotOccupiedError';
+	}
+}
+
+// A protocol run left non-terminal (commonly a `paused` run from the off-deck
+// initial pause that was never resumed/closed) keeps holding the OT-2 run
+// engine, so the robot refuses new maintenance runs with this error. We
+// auto-clear the stale run and retry — the same self-heal the bridge daemon
+// does for deck-scan/sweep (scripts/ot2-bridge.py).
+const PROTOCOL_RUN_CONFLICT = 'protocol run is active';
+const ACTIVE_RUN_STATES = new Set(['running', 'finishing']);
+const TERMINAL_RUN_STATES = new Set(['stopped', 'failed', 'succeeded']);
+
+async function currentProtocolRun(t: Ot2Transport): Promise<{ id: string; status: string | null } | null> {
+	const res = await t.get('/runs');
+	if (!res.ok) return null;
+	const body = (await res.json().catch(() => ({}))) as any;
+	const href: string = body?.links?.current?.href ?? '';
+	const curId = href ? href.split('/').pop() ?? null : null;
+	if (!curId) return null;
+	const run = (body?.data ?? []).find((r: any) => r.id === curId);
+	return { id: curId, status: run?.status ?? null };
+}
+
+/**
+ * Free the run engine when a non-terminal protocol run is blocking a new
+ * maintenance run. Throws if the blocking run is genuinely ACTIVE
+ * (running/finishing) — we never silently kill a live run.
+ */
+async function clearStaleProtocolRun(t: Ot2Transport): Promise<void> {
+	const run = await currentProtocolRun(t);
+	if (!run) return;
+	const status = (run.status ?? '').toLowerCase();
+	if (TERMINAL_RUN_STATES.has(status)) return; // terminal-but-current doesn't block
+	if (ACTIVE_RUN_STATES.has(status)) {
+		throw new Error(`Robot has an ACTIVE protocol run (status=${status}) — stop that run before opening a maintenance run.`);
+	}
+	// Stale: paused / idle / blocked-by-open-door / stop-requested / awaiting-recovery
+	await t.post(`/runs/${run.id}/actions`, { data: { actionType: 'stop' } }).catch(() => {});
+	for (let i = 0; i < 6; i++) {
+		const cur = await currentProtocolRun(t);
+		if (!cur || TERMINAL_RUN_STATES.has((cur.status ?? '').toLowerCase())) break;
+		await new Promise((r) => setTimeout(r, 500));
+	}
+	await t.delete(`/runs/${run.id}`).catch(() => {});
+}
+
+/** Open a new maintenance run. Returns the run id. */
+export async function openMaintenanceRun(t: Ot2Transport): Promise<{ runId: string }> {
+	// OT-2 maintenance_runs endpoint is JSON:API style — requires the `data`
+	// envelope even when there are no attributes. Empty body returns
+	// `Field required` at /data.
+	const open = async () => t.post('/maintenance_runs', { data: {} });
+	let res = await open();
+	if (!res.ok) {
+		const body = (await res.json().catch(() => ({}))) as any;
+		const detail = body?.errors?.[0]?.detail ?? `Robot returned ${res.status} on /maintenance_runs`;
+		if (String(detail).toLowerCase().includes(PROTOCOL_RUN_CONFLICT)) {
+			await clearStaleProtocolRun(t); // throws if genuinely active
+			res = await open();
+			if (!res.ok) {
+				const retryBody = (await res.json().catch(() => ({}))) as any;
+				throw new Error(retryBody?.errors?.[0]?.detail ?? `Robot returned ${res.status} on /maintenance_runs`);
+			}
+		} else {
+			throw new Error(detail);
+		}
+	}
+	const body = (await res.json()) as { data?: { id?: string } };
+	const runId = body?.data?.id;
+	if (!runId) throw new Error('Robot did not return a maintenance run id');
+	return { runId };
+}
+
+/** Close (delete) a maintenance run. Best-effort — does not throw on 404. */
+export async function closeMaintenanceRun(t: Ot2Transport, runId: string): Promise<void> {
+	const res = await t.delete(`/maintenance_runs/${runId}`);
+	if (!res.ok && res.status !== 404) {
+		const body = await res.json().catch(() => ({}));
+		throw new Error((body as any)?.errors?.[0]?.detail ?? `Robot returned ${res.status} on close maintenance run`);
+	}
+}
+
+/**
+ * Discover an available pipette on the robot. Prefers left mount.
+ * Returns the OT-2's pipette name (e.g. 'p20_single_gen2') and mount.
+ */
+export async function discoverPipette(
+	t: Ot2Transport,
+	preferredMount?: 'left' | 'right' | null
+): Promise<{ pipetteName: string; mount: 'left' | 'right' } | null> {
+	try {
+		const res = await t.get('/pipettes');
+		if (!res.ok) return null;
+		const body = (await res.json()) as Record<string, { name?: string; model?: string }>;
+		// /pipettes returns { left: {name|model, ...}, right: {...} }. We need the
+		// `name` (technical id like 'p20_single_gen2'); `model` is also accepted
+		// as a fallback. Honor preferredMount when both mounts are populated.
+		const mounts: Array<'left' | 'right'> =
+			preferredMount === 'left' ? ['left', 'right'] : preferredMount === 'right' ? ['right', 'left'] : ['left', 'right'];
+		for (const m of mounts) {
+			const entry = body?.[m];
+			if (entry?.name) return { pipetteName: entry.name, mount: m };
+		}
+		for (const m of mounts) {
+			const entry = body?.[m];
+			if (entry?.model) return { pipetteName: entry.model, mount: m };
+		}
+		return null;
+	} catch (e) {
+		// Log the underlying reason; still return null so the caller proceeds to
+		// openMaintenanceRun, which will surface the same error.
+		console.warn('[discoverPipette] failed:', e instanceof Error ? e.message : e);
+		return null;
+	}
+}
+
+/** Load a pipette into the maintenance run; returns the run-scoped pipetteId. */
+export async function loadPipetteInRun(t: Ot2Transport, runId: string, pipetteName: string, mount: 'left' | 'right'): Promise<string> {
+	const result = (await sendMaintenanceCommand(t, runId, 'loadPipette', { pipetteName, mount }, { waitUntilComplete: true })) as {
+		data?: { result?: { pipetteId?: string } };
+	};
+	const pid = result?.data?.result?.pipetteId;
+	if (!pid) throw new Error('loadPipette did not return a pipetteId');
+	return pid;
+}
+
+/** Register a custom labware definition onto a maintenance run. */
+export async function registerLabwareDefinition(t: Ot2Transport, runId: string, definition: unknown): Promise<void> {
+	const res = await t.post(`/maintenance_runs/${runId}/labware_definitions`, { data: definition });
+	if (!res.ok) {
+		const body = await res.json().catch(() => ({}));
+		throw new Error((body as any)?.errors?.[0]?.detail ?? `Robot returned ${res.status} registering labware definition`);
+	}
+}
+
+async function loadedLabwareAtSlot(
+	t: Ot2Transport,
+	runId: string,
+	slot: string
+): Promise<{ id: string; loadName: string; definitionUri: string | null } | null> {
+	const res = await t.get(`/maintenance_runs/${runId}`);
+	if (!res.ok) return null;
+	const body = (await res.json().catch(() => ({}))) as any;
+	const lw = (body?.data?.labware ?? []) as Array<any>;
+	const match = lw.find((x) => String(x?.location?.slotName ?? '') === String(slot));
+	return match?.id ? { id: match.id, loadName: match.loadName, definitionUri: match.definitionUri ?? null } : null;
+}
+
+/**
+ * Load an (already-registered) labware def into the run at a slot; returns labwareId.
+ * Idempotent: reuses the slot's labware when it is the same one. `hardened`
+ * (the robot's DECK_HARDENING_ROBOT_IDS status, decided by BIMS) makes reuse
+ * require the full namespace/loadName/version identity, so a deck edit can't
+ * leave the run bound to stale geometry.
+ */
+export async function loadLabwareInRun(
+	t: Ot2Transport,
+	runId: string,
+	args: { namespace: string; loadName: string; version: number; slot: string },
+	opts: { hardened: boolean }
+): Promise<string> {
+	const existing = await loadedLabwareAtSlot(t, runId, args.slot).catch(() => null);
+	const wantUri = `${args.namespace}/${args.loadName}/${args.version}`;
+	if (existing && existing.loadName === args.loadName) {
+		// On a robot that is not opted in, keep the old loadName-only reuse.
+		if (!opts.hardened) return existing.id;
+		if (!existing.definitionUri || existing.definitionUri === wantUri) return existing.id;
+		// Same labware, different version: stale geometry — make the caller reopen.
+		throw new SlotOccupiedError(args.slot, existing.definitionUri, wantUri);
+	}
+	// A DIFFERENT labware already occupies the slot — it can't be freed in place.
+	if (existing && existing.loadName !== args.loadName) {
+		throw new SlotOccupiedError(args.slot, existing.loadName, args.loadName);
+	}
+	const result = (await sendMaintenanceCommand(
+		t,
+		runId,
+		'loadLabware',
+		{ location: { slotName: args.slot }, loadName: args.loadName, namespace: args.namespace, version: args.version },
+		{ waitUntilComplete: true, timeoutMs: 30_000 }
+	)) as { data?: { result?: { labwareId?: string } } };
+	const id = result?.data?.result?.labwareId;
+	if (!id) throw new Error('loadLabware did not return a labwareId');
+	return id;
+}
+
+/** Pick up a tip from a (loaded) tiprack. */
+export async function pickUpTip(t: Ot2Transport, runId: string, pipetteId: string, labwareId: string, wellName: string): Promise<void> {
+	await sendMaintenanceCommand(
+		t,
+		runId,
+		'pickUpTip',
+		{ pipetteId, labwareId, wellName, wellLocation: { origin: 'top', offset: { x: 0, y: 0, z: 0 } } },
+		{ waitUntilComplete: true, timeoutMs: 30_000 }
+	);
+}
+
+/**
+ * Identity must come from the blob the robot indexes, not the DB columns — the
+ * BIMS resolver (resolveLabwareForRobot) computes it once and passes it as
+ * labwareNamespace / labwareVersion alongside the definition.
+ */
+function labwareIdentity(args: Record<string, unknown>) {
+	const d = (args.definition ?? {}) as any;
+	return {
+		namespace: String(args.labwareNamespace ?? d.namespace ?? ''),
+		version: Number(args.labwareVersion ?? d.version ?? 1)
+	};
+}
+
+// ── BIMS-side records that follow a successful robot verb ───────────────────
+
+/**
+ * What BIMS must record after a verb succeeds on the robot. The server writes
+ * it (src/lib/server/opentrons/maintenance-records.ts) whichever line ran the
+ * robot part: the queue route calls it directly, the browser posts it to
+ * /direct-record. Null when the verb records nothing.
+ */
+export type MaintenanceRecord =
+	| { event: 'maintenance_run_open'; runId: string; pipetteId?: string; pipetteName?: string; mount?: string }
+	| { event: 'maintenance_run_close'; runId: string }
+	| { event: 'studio_tip_pickup'; tiprackLoadName: string; tipWell: string };
+
+export function maintenanceRecordFor(verb: Ot2Verb, args: Record<string, unknown>, r: VerbResult): MaintenanceRecord | null {
+	if (r.status >= 300) return null;
+	const b = (r.body ?? {}) as any;
+	if (verb === 'mx.open') return { event: 'maintenance_run_open', runId: b.runId, pipetteId: b.pipetteId, pipetteName: b.pipetteName, mount: b.mount };
+	if (verb === 'mx.close') return { event: 'maintenance_run_close', runId: String(args.runId) };
+	if (verb === 'mx.pickUpTip') return { event: 'studio_tip_pickup', tiprackLoadName: String(args.tiprackLoadName), tipWell: String(args.tipWell ?? 'A1') };
+	return null;
+}
+
 // ── verb dispatcher (validation + response shaping, was the route handlers) ─
 
 /**
@@ -292,8 +576,93 @@ export async function runVerb(t: Ot2Transport, verb: Ot2Verb, args: Record<strin
 			return runAction(t, String(args.rid), args.action);
 	}
 
+	if (verb === 'mx.open') {
+		// We deliberately do NOT trust a caller-supplied pipetteName (it may be a
+		// human label like "20 microliter"); the technical name comes from the
+		// robot's /pipettes, honouring the requested mount as a preference.
+		const requestedMount = args.mount === 'left' || args.mount === 'right' ? args.mount : undefined;
+		let pipetteName: string | undefined;
+		let mount: 'left' | 'right' | undefined = requestedMount;
+		try {
+			const discovered = await discoverPipette(t, requestedMount ?? null);
+			if (discovered) {
+				pipetteName = discovered.pipetteName;
+				mount = discovered.mount;
+			}
+			const { runId } = await openMaintenanceRun(t);
+			let pipetteId: string | undefined;
+			if (pipetteName && mount) {
+				try {
+					pipetteId = await loadPipetteInRun(t, runId, pipetteName, mount);
+				} catch (e) {
+					// Return the run anyway so the caller can still home or close it.
+					console.warn('[maintenance] loadPipette failed:', e instanceof Error ? e.message : e);
+				}
+			}
+			return ok({ runId, pipetteId, pipetteName, mount });
+		} catch (e) {
+			return fail(502, msgOf(e, 'Failed to open maintenance run'));
+		}
+	}
+
 	const runId = String(args.runId);
 	const pipetteId = args.pipetteId;
+
+	if (verb === 'mx.close') {
+		try {
+			await closeMaintenanceRun(t, runId);
+			return ok({ ok: true });
+		} catch (e) {
+			return fail(502, msgOf(e, 'Failed to close maintenance run'));
+		}
+	}
+
+	if (verb === 'mx.loadLabware') {
+		const loadName = args.loadName;
+		if (!loadName || typeof loadName !== 'string') return fail(400, 'loadName required');
+		if (!args.definition) return fail(400, 'definition required (resolve the labware in BIMS first)');
+		const { namespace, version } = labwareIdentity(args);
+		const slot = String(args.slot ?? '1');
+		try {
+			await registerLabwareDefinition(t, runId, args.definition);
+			const labwareId = await loadLabwareInRun(t, runId, { namespace, loadName, version, slot }, { hardened: args.hardened === true });
+			return ok({ labwareId });
+		} catch (e) {
+			return fail(502, msgOf(e, 'Failed to load labware'));
+		}
+	}
+
+	if (verb === 'mx.pickUpTip') {
+		const tiprackLoadName = args.tiprackLoadName;
+		if (!pipetteId || typeof pipetteId !== 'string') return fail(400, 'pipetteId required');
+		if (!tiprackLoadName || typeof tiprackLoadName !== 'string') return fail(400, 'tiprackLoadName required');
+		if (!args.definition) return fail(400, 'definition required (resolve the tiprack in BIMS first)');
+		const { namespace, version } = labwareIdentity(args);
+		const slot = String(args.slot ?? '11');
+		const tipWell = String(args.tipWell ?? 'A1');
+		try {
+			await registerLabwareDefinition(t, runId, args.definition);
+			// loadLabwareInRun is idempotent (reuses the slot if already loaded).
+			const tiprackLabwareId = await loadLabwareInRun(t, runId, { namespace, loadName: tiprackLoadName, version, slot }, { hardened: args.hardened === true });
+			try {
+				await pickUpTip(t, runId, pipetteId, tiprackLabwareId, tipWell);
+			} catch (tipErr) {
+				// The engine refuses a pick-up while it still models a tip. Report it with
+				// a stable code so the client can drop first (or reopen the run) — never
+				// swallow it as success (2026-09-23: Studio said "picked up" and seated nothing).
+				const msg = tipErr instanceof Error ? tipErr.message : String(tipErr);
+				if (/tip.*(attach|present|already)|already.*tip|should not have a tip/i.test(msg)) {
+					return { status: 409, body: { code: 'TIP_ALREADY_ATTACHED', message: msg, tiprackLabwareId } };
+				}
+				throw tipErr;
+			}
+			return ok({ tiprackLabwareId });
+		} catch (e) {
+			// A different rack occupies the slot: the client reopens the run and retries.
+			if (e instanceof SlotOccupiedError) return { status: 409, body: { code: e.code, message: e.message } };
+			return fail(502, msgOf(e, 'Failed to pick up tip'));
+		}
+	}
 
 	if (verb === 'mx.home') {
 		const axes = Array.isArray(args.axes) ? (args.axes as HomeAxis[]) : undefined;
@@ -398,6 +767,12 @@ export function browserTransport(directUrl: string, fetchImpl: typeof fetch = fe
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json', 'opentrons-version': '3' },
 				body: body !== undefined ? JSON.stringify(body) : undefined,
+				signal: signalFor(opts?.timeoutMs)
+			}),
+		delete: (path, opts) =>
+			fetchImpl(`${base}${path}`, {
+				method: 'DELETE',
+				headers: { 'opentrons-version': '3' },
 				signal: signalFor(opts?.timeoutMs)
 			})
 	};

@@ -1103,7 +1103,7 @@
 	}
 
 	async function doPickUp(allowRecover: boolean) {
-		const res = await fetch(
+		const res = await robotFetch(
 			`/api/opentrons-lab/robots/${selectedRobotId}/maintenance/${runId}/pick-up-tip`,
 			{
 				method: 'POST',
@@ -1299,6 +1299,8 @@
 	onDestroy(() => {
 		if (runId) {
 			try {
+				// Page unload: a same-origin keepalive request to BIMS is what reliably
+				// survives the page closing, so this one close stays on the queue line.
 				fetch(`/api/opentrons-lab/robots/${selectedRobotId}/maintenance/${runId}`, { method: 'DELETE', credentials: 'same-origin', keepalive: true });
 			} catch { /* best-effort */ }
 		}

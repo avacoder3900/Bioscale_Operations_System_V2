@@ -7,7 +7,7 @@
 import { describe, it, expect } from 'vitest';
 import { runVerb, verbRoute, browserTransport, type Ot2Transport } from './ot2-protocol';
 
-type Call = { method: 'GET' | 'POST'; path: string; body?: any; timeoutMs?: number };
+type Call = { method: 'GET' | 'POST' | 'DELETE'; path: string; body?: any; timeoutMs?: number };
 
 function robot(respond: (c: Call) => Response | Promise<Response>) {
 	const calls: Call[] = [];
@@ -19,6 +19,11 @@ function robot(respond: (c: Call) => Response | Promise<Response>) {
 		},
 		post: async (path, body, o) => {
 			const c: Call = { method: 'POST', path, body, timeoutMs: o?.timeoutMs };
+			calls.push(c);
+			return respond(c);
+		},
+		delete: async (path) => {
+			const c: Call = { method: 'DELETE', path };
 			calls.push(c);
 			return respond(c);
 		}

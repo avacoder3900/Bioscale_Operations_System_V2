@@ -2,7 +2,7 @@
  * Which line should the browser use for this robot? (OT2-TAILNET-4)
  * GET /api/opentrons-lab/robots/:id/connection
  *
- * → { transport: 'tailnet'|'queue', directUrl?, reason, busy: { kind, since } | null }
+ * → { transport: 'tailnet'|'queue', directUrl?, reason, hardened, busy: { kind, since } | null }
  *
  * The browser session ($lib/opentrons/direct-client) calls this once per page,
  * then probes directUrl itself — only the browser can tell whether IT is on the
@@ -17,6 +17,7 @@ import { requirePermission } from '$lib/server/permissions';
 import { connectDB, Ot2BridgeCommand } from '$lib/server/db';
 import { getRobot } from '$lib/server/opentrons/proxy';
 import { resolveRobotConnection } from '$lib/server/opentrons/connection';
+import { isHardenedRobot } from '$lib/server/services/deck-calibration/rollout';
 
 /** Daemon jobs that hold the gantry for longer than one command. */
 const LONG_JOB_KINDS = ['sweep', 'deck_scan', 'calibrate_tip'];
@@ -49,6 +50,9 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 		transport: conn.transport,
 		directUrl: conn.directUrl,
 		reason: conn.reason,
+		// DECK_HARDENING_ROBOT_IDS status — the labware verbs' reuse rule, decided here
+		// so the browser's tailnet line applies exactly the rule the queue route would.
+		hardened: isHardenedRobot(robot),
 		busy: job ? { kind: job.kind, since: job.claimedAt ?? job.createdAt } : null
 	});
 };
