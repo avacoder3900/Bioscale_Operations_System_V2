@@ -16578,3 +16578,11 @@ svelte-check: 14 errors — same as the baseline (the services/r2.ts one is the 
   → BodyInit fetch overload at line ~162, untouched).
 Dashboard fix still owed: whoever administers the brevitest Vercel team should set R2_ACCOUNT_ID to
 the bare 32-hex value so the warning stops firing.
+Deployment: preview — https://bioscale-operations-system-mongodb-hp2tyem6f-brevitest.vercel.app
+Source: branch feat/bucket-system @ commit ab2530e8
+Retrieve this exact code: git checkout feat/bucket-system at commit ab2530e8
+  (or: git log feat/bucket-system --oneline to find it if the branch has since moved on)
+What this deployment is for: sonic upload should now reach R2 despite the malformed R2_ACCOUNT_ID
+  (account ID recovered by r2-account.ts). GitHub deployment 6670725299.
+  Smoke: /login 200; /validation/sonic 302 (auth redirect expected). An actual upload needs a login,
+  so the user tests that; if it still fails, the banner names the values the resolver saw.
