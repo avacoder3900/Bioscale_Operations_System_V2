@@ -16087,3 +16087,9 @@ What this deployment is for: the thermoseal overhaul above — the board's Therm
   of rolls on PT-CT-101.
   Smoke: /login 200; /manufacturing/cart-mfg/buckets 302 https://bioscale-operations-system-mongodb-14pteaoxz-brevitest.vercel.app/login; /manufacturing/cart-mfg/laser-cutting 302 https://bioscale-operations-system-mongodb-14pteaoxz-brevitest.vercel.app/login.
 Build status: success (GitHub deployment 6666250259, both projects).
+
+Follow-up (same day): user — "we have exactly 1 roll on hand not 113". PT-CT-101's count is
+being set to 1 by physical count through the MCP (record_physical_count; needs the BIMS
+username to attribute it, asked). Plan §3.4 cutover text + §12.4 and the migration script's
+closing message updated to say so. With the 2-roll floor the board tile will read below floor
+until a delivery; notifications are off, so no restock card or email fires.

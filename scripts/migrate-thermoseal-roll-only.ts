@@ -7,8 +7,8 @@
  * longer write inventory. This script lines the data up with it:
  *
  *   part_definitions PT-CT-101   name → "Thermoseal Roll", unitOfMeasure → "roll"
- *                                (the count itself is NOT touched — record a
- *                                physical count in rolls after this runs)
+ *                                (the count itself is NOT touched — the physical
+ *                                count of 1 roll was recorded separately on 2026-09-25)
  *   part_definitions PT-CT-111   isActive → false  (Thermoseal Cut Sheet — stale)
  *   part_definitions PT-CT-112   isActive → false  (Thermoseal Laser Cut sheet — stale;
  *                                the −228 count is left as-is, it is no longer read)
@@ -92,7 +92,7 @@ async function main() {
 		reason: 'BUCKET-SYSTEM_PLAN §3.4 (2026-09-25): thermoseal is one roll-counted part moved only by the bucket board'
 	} as any);
 	console.log(`\n--apply: ${ROLL_PART} renamed (${r1.modifiedCount}), ${r2.modifiedCount} part(s) retired, ${r3.modifiedCount} roll doc(s) relabelled.`);
-	console.log('Next: record a physical count of rolls on PT-CT-101 (MCP record_physical_count or the parts page).');
+	console.log('Check that PT-CT-101 inventoryCount is the physical roll count (1 roll on 2026-09-25); if not, record a physical count.');
 	await mongoose.disconnect();
 }
 

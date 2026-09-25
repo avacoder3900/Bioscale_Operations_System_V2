@@ -145,8 +145,10 @@ sheet at all, that inventory is now stale."**
   `status` active | exhausted | retired, `lotId`, `openedBy/At`, `openedForCycleId`,
   `inventoryTxId`. At most one roll is `active`. `partNumber` defaults to PT-CT-101.
 - **A roll is pulled from inventory only when the open roll runs out** (or on the very first
-  advance). The lot is the one scanned on the advance form (optional) or else the **oldest
-  accepted PT-CT-101 lot with stock** (FIFO by the ledger). Voiding a pass never puts an opened
+  advance). The lot is always the **oldest accepted PT-CT-101 lot with stock** (FIFO by the
+  ledger) — the advance form no longer offers a lot picker (user, 2026-09-25: "this can occur
+  in the background but causes too much friction"); `advanceCycle` still accepts
+  `thermosealLotId` for callers that want to name one. Voiding a pass never puts an opened
   roll back on the shelf.
 - A bucket larger than the roll's remainder rolls over onto the next roll (and again if needed);
   the pass records `thermoseal.segments = [{ rollId, cm }]`.
@@ -161,15 +163,18 @@ sheet at all, that inventory is now stale."**
   exhausted roll becomes active again only if no other roll is open.
 - The board's **Thermoseal tile** (under Unpressed): open roll gauge (m left, ≈ carts left, lot),
   rolls on hand (live PT-CT-101) vs. the floor, the lot the next roll would come from, restock
-  state, and the notifications toggle under "Development settings". The advance form previews
-  "N cm comes off the open roll" and only asks for a lot when a new roll will be pulled.
+  state, and the notifications toggle under "Development settings". The advance form shows
+  nothing about thermoseal — the length comes off in the background; the tile and the
+  post-move banner are the only places it surfaces.
 
 **Cutover — `scripts/migrate-thermoseal-roll-only.ts` (`--plan` / `--apply`, not yet run):**
 renames PT-CT-101 to "Thermoseal Roll" with `unitOfMeasure: 'roll'`, sets PT-CT-111 and PT-CT-112
 `isActive: false`, relabels existing `thermoseal_rolls` to PT-CT-101, and reports any open
 restock card for the old part id. It does **not** touch any count: after it runs, **record a
-physical count of rolls on PT-CT-101** (its count was 113 "ea" on 2026-09-25 from the old
-cut-thermoseal debits; PT-CT-112's −228 is left behind and no longer read). Until this branch
+physical count of rolls on PT-CT-101** — **user, 2026-09-25: exactly 1 roll on hand**, not the
+113 "ea" the part read from the old cut-thermoseal debits; that count is recorded via the MCP
+`record_physical_count` (see progress.txt for the timestamp), and with the 2-roll floor the tile
+shows *below floor* until rolls are received (notifications off, so no card or mail); PT-CT-112's −228 is left behind and no longer read). Until this branch
 ships, the live `master` build keeps debiting PT-CT-112 per cart — that part is now retired
 here and nothing on this branch reads it, so the drift is invisible to the board (§12.4).
 
@@ -303,7 +308,8 @@ touching it:
 
 "Any carts discarded?" scan list + journal → discards scrapped first → all remaining members'
 `status` follows the bucket. **Barcoded → Unpressed** additionally runs `consumeThermoseal` (§3.4)
-and shows the result banner (cm taken, rolls pulled, floor alert). **Pressed → Backed** stamps
+silently — nothing about thermoseal appears on the form itself — and shows the result banner
+(cm taken, rolls pulled, floor alert) after the move. **Pressed → Backed** stamps
 `backing.recordedAt/operator/bucketCycleId/bucketBarcode` on every member (what WI-01 used to
 write, minus the lot) so the pipeline, dashboard and DHR can group backed carts by pass.
 **Backed** is the end of the bucket: the card shows *Ready for the oven → wax filling* instead
@@ -537,6 +543,7 @@ per-scan lookup only needs `manufacturing:read`.
 | `5a01239f` | **`raw` → `barcoded` rename** (§2): stage key, labels, `CartridgeRecord.status`, `LifecycleStage`, pipeline `bucket_barcoded`; old `raw` kept in both enums for historical rows; `scripts/migrate-bucket-raw-to-barcoded.ts` (`--plan` / `--apply`, not yet run). Code swept into the ship-build merge commit; this doc row is the follow-up. |
 | _(this change)_ | **WI-01 page removed; fourth stage "Backed, awaiting oven"** (§2, §5.2, §6.3, §6.4, §9): `BUCKET_STAGES` + `BucketCycle.stage` gain `backing`; Pressed → Backed is a normal advance (with the `backing.*` stamp); wax filling's `loadDeck` draws carts out of the pass (`consumeCarts` now requires Backed, `relatedId` = wax run); cancel/abort return them (`returnCarts`, new); `StageCounts.inOven` dropped (the Backed stage count is every cart at `backing`); override `in_oven` target dropped; nav, board, admin strip, dashboard, dev dashboard, pipeline `backing` view relabelled. No data migration: existing `backing` carts count as Backed and are still loadable. A short-lived "Backed, no bucket" tile/count was removed the same day at the user's request. |
 | _(this change)_ | **Thermoseal: one part, rolls only, bucket phase only** (§3.4): `THERMOSEAL_PART` → PT-CT-101 (owned by `thermoseal-service`, re-exported by `bucket-service`); development pin removed (schema, service, board action, tile); yellow "not synced" card removed; `cut-thermoseal`, `wi-02`, `laser-cutting` no longer write inventory (PT-CT-101 / 111 / 112 / `ManufacturingMaterial`), laser-cutting inventory tile dropped; consumables overview stops deriving "individual backs"; `scripts/migrate-thermoseal-roll-only.ts` (`--plan` / `--apply`, not yet run) |
+| _(this change)_ | **Advance form: thermoseal preview + lot picker removed** (§3.4, §6.3) — the "N cm comes off the open roll" box and the "Lot the new roll comes from" select are gone from the Barcoded → Unpressed confirm; consumption is unchanged and runs in the background (FIFO lot); `?/advance` no longer reads `thermosealLotId`; board `thermosealCm()` helper dropped |
 
 `npm run check` after v2: **12 errors / 438 warnings** — the same 12 pre-existing (`r2.ts`,
 `AskBimsWidget.svelte`, 8× `assembly/[sessionId]`, 2× `validation/magnetometer/[sessionId]`
@@ -609,7 +616,8 @@ the floor creates a real card and sends real mail on the next board load.
   production alone, which still stands. PR #60 (production WI-01 → roll length) is superseded by
   this branch shipping.
 - **PT-CT-101's count needs a physical count in rolls** after `scripts/migrate-thermoseal-roll-only.ts`
-  runs: it reads 113 "ea" from the old cut-thermoseal debits and has never been counted as rolls.
+  runs — done by hand first: user reported exactly 1 roll on hand (2026-09-25); the 113 "ea" it
+  read before came from the old cut-thermoseal debits. Below the 2-roll floor until a delivery.
 - **Inventory counts recorded before 2026-09-25 may sit high.** `recordTransaction` decremented
   `PartDefinition.inventoryCount` by read-compute-`$set`, so two operators debiting the same part
   at the same moment both worked from the same stale read and the second write erased the first.
