@@ -16540,3 +16540,12 @@ src/lib/server/r2.ts (the client shared by COC processing, receiving, api/r2/fil
 svelte-check: 14 errors = the 12-error baseline + 2 pre-existing in research-proxy.ts; the
 r2.ts baseline error is in services/r2.ts (the raw-S3v4 client), untouched.
 Left alone: src/routes/validation/sonic/+page.svelte has another session's uncommitted edits.
+Deployment: preview — https://bioscale-operations-system-mongodb-5r6iyguvg-brevitest.vercel.app
+Source: branch feat/bucket-system @ commit 80b106d4
+Retrieve this exact code: git checkout feat/bucket-system at commit 80b106d4
+  (or: git log feat/bucket-system --oneline to find it if the branch has since moved on)
+What this deployment is for: R2 client fix — sonic upload should now show the real R2 env problem
+  (bad R2_ACCOUNT_ID) instead of "EPROTO … SSL alert number 40", and uploads go path-style.
+  GitHub deployment 6670220704. Smoke: /login 200; /validation/sonic 302 (auth redirect expected).
+  Still needed by hand: check R2_ACCOUNT_ID / R2_BUCKET_NAME in the Vercel env for the environment
+  the user was on — the code can only report a bad value, not correct it.
