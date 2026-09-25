@@ -16552,3 +16552,29 @@ What this deployment is for: R2 client fix — sonic upload should now show the 
 Outcome: user confirmed on the preview — the banner now reads "R2_ACCOUNT_ID must be the
   32-character hex Cloudflare account ID …", so the TLS alert 40 was a bad R2_ACCOUNT_ID in the
   Vercel env, not code. Fix the variable in the Vercel dashboard for that environment and redeploy.
+
+================================================================================
+2026-09-25 — feat/bucket-system — R2: recover the account ID when R2_ACCOUNT_ID is malformed (no Vercel access)
+================================================================================
+Follow-up to the alert-40 entry above. The preview confirmed the deployed R2_ACCOUNT_ID is not the
+bare 32-hex account ID, and nobody with Vercel dashboard access is available to fix the variable.
+The user chose the code-side recovery ("option 2") over waiting.
+
+New src/lib/server/r2-account.ts — resolveR2AccountId(raw, publicUrl):
+  1. R2_ACCOUNT_ID is exactly 32 hex → use it (trimmed, lower-cased).
+  2. R2_ACCOUNT_ID contains a 32-hex run (pasted dashboard URL etc.) → extract it.
+  3. R2_PUBLIC_URL contains a 32-hex run that is not a `pub-<hash>.r2.dev` subdomain → use it
+     (pub- hashes are per-bucket, not the account, so they are refused).
+  4. Otherwise throw naming both values.
+  resolveR2AccountIdFromEnv(env) wraps it and console.warns once when a fallback was used, so
+  Vercel function logs show which source fed the endpoint. The account ID is public (it is in every
+  R2 URL), so this leaks nothing. Exercised against 6 inputs (exact, padded/upper, URL-embedded,
+  public-URL, pub-hash, empty) — all as intended.
+src/lib/server/r2.ts (AWS SDK client) and src/lib/server/services/r2.ts (raw S3v4 client) both
+  build their endpoint from the resolver now; the strict 32-hex throw from the previous entry is
+  replaced by the resolver's throw. services/r2.ts also trims its env values and no longer lists
+  R2_ACCOUNT_ID in its "credentials not configured" message (the resolver reports that case).
+svelte-check: 14 errors — same as the baseline (the services/r2.ts one is the pre-existing Buffer
+  → BodyInit fetch overload at line ~162, untouched).
+Dashboard fix still owed: whoever administers the brevitest Vercel team should set R2_ACCOUNT_ID to
+the bare 32-hex value so the warning stops firing.

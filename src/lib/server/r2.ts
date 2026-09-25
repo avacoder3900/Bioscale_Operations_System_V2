@@ -17,23 +17,18 @@ import {
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { env } from '$env/dynamic/private';
+import { resolveR2AccountIdFromEnv } from './r2-account';
 
 let _client: S3Client | null = null;
 
 function getClient(): S3Client {
 	if (_client) return _client;
 
-	const accountId = (env.R2_ACCOUNT_ID ?? '').trim();
-	if (!accountId) throw new Error('R2_ACCOUNT_ID is not configured');
-	// The account ID becomes part of the TLS hostname. Anything that is not the 32-hex
-	// Cloudflare account ID (a pasted URL, a bucket name, a stray character) makes Cloudflare
-	// reject the handshake with TLS alert 40 — an opaque "EPROTO ... handshake failure" instead
-	// of a readable error. Fail early with the real cause.
-	if (!/^[0-9a-f]{32}$/i.test(accountId)) {
-		throw new Error(
-			`R2_ACCOUNT_ID must be the 32-character hex Cloudflare account ID (got "${accountId.slice(0, 12)}…", ${accountId.length} chars)`
-		);
-	}
+	// The account ID becomes part of the TLS hostname; a value that is not the bare 32-hex
+	// Cloudflare account ID makes Cloudflare reject the handshake with TLS alert 40. The resolver
+	// salvages the ID from a malformed variable or from R2_PUBLIC_URL, and throws a readable
+	// error when it cannot. See r2-account.ts.
+	const accountId = resolveR2AccountIdFromEnv(env);
 
 	_client = new S3Client({
 		region: 'auto',
