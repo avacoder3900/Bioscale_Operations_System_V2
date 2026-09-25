@@ -102,11 +102,11 @@
 	}
 
 	// Main-line order of a cartridge's status, for "should be at" after a lookup.
-	// Buckets (raw → unpressed → pressed) feed WI-01 (backing = In Oven), then wax,
+	// Buckets (barcoded → unpressed → pressed) feed WI-01 (backing = In Oven), then wax,
 	// reagent, seal, store. Side statuses (QC/rejected/scrapped/voided) have no next.
 	const STATUS_ORDER = ['barcoded', 'unpressed', 'pressed', 'backing', 'wax_filling', 'wax_filled', 'wax_ready', 'reagent_filling', 'reagent_filled', 'inspected', 'sealed', 'cured', 'stored', 'released', 'shipped'];
 	const STATUS_NEXT_LABEL: Record<string, string> = {
-		raw: 'Unpressed (advance the bucket)', unpressed: 'Pressed (advance the bucket)', pressed: 'In Oven (WI-01 draws the bucket)',
+		barcoded: 'Unpressed (advance the bucket)', unpressed: 'Pressed (advance the bucket)', pressed: 'In Oven (WI-01 draws the bucket)',
 		backing: 'Wax filling', wax_filling: 'Wax-filled', wax_filled: 'Wax ready', wax_ready: 'Reagent filling',
 		reagent_filling: 'Reagent-filled', reagent_filled: 'Inspected', inspected: 'Sealed', sealed: 'Cured', cured: 'Stored', stored: 'Released', released: 'Shipped'
 	};

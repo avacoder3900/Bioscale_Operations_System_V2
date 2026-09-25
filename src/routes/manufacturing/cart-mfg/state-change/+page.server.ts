@@ -14,7 +14,7 @@
  *    barcodes" opts in to originating them directly at the target status.
  *  - Every changed cartridge gets `priorStatus`, a phase-scoped note, and an
  *    AuditLog row.
- *  - Bucket stages (raw / unpressed / pressed) are bucket MEMBERSHIP, not just a
+ *  - Bucket stages (barcoded / unpressed / pressed) are bucket MEMBERSHIP, not just a
  *    status: moving a cart into one needs a destination bucket whose open pass
  *    is at that stage, and moving a cart out of one removes it from its pass.
  *    Both go through bucket-service.overrideCartStage so the board stays honest.

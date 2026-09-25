@@ -15527,7 +15527,13 @@ bucket_cycles.stage, cartridge_records.status and bucket_transactions.fromStage/
 `raw` to `barcoded` via the raw driver (cartridge_records is sacred, bucket_transactions is
 immutable) and writes one summary audit_logs row. NOT RUN YET — no MONGODB_URI in this
 environment; run --plan first against Atlas.
-Files: src/lib/server/services/bucket-service.ts, src/lib/server/db/models/bucket-cycle.ts,
+A word-boundary sweep at the end caught what a plain grep for "raw" had buried under "draws" /
+"drawn": STATUS_NEXT_LABEL on /manufacturing/cart-mfg is keyed by cartridge status, and its
+`raw:` key would have silently stopped resolving once the status was renamed — the "should be
+at" line after a cart lookup would have gone blank for every barcoded cart. Fixed, plus three
+stale stage comments (thermoseal-service.ts, cart-mfg/+page.svelte, state-change/+page.server.ts).
+Files: src/lib/server/services/bucket-service.ts, src/lib/server/services/thermoseal-service.ts,
+src/lib/server/db/models/bucket-cycle.ts,
 src/lib/server/db/models/cartridge-record.ts, src/lib/server/services/cartridge-admin/queries.ts,
 src/routes/cartridge-admin/+page.svelte, src/routes/manufacturing/cart-mfg/+page.svelte,
 .../cart-mfg/pipeline/+page.server.ts, .../cart-mfg/state-change/+page.svelte,

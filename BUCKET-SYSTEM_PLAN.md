@@ -9,7 +9,7 @@ stale; `main` is older still.
 **Status:** Built and type-checked; deployed to Vercel preview via the GitHub integration only.
 Reviewed by the user on previews; never exercised in production; no automated tests. See §12.
 **Scope:** QR-labelled production buckets that carry cartridges through the three stages before
-WI-01 — **Raw → Unpressed → Pressed** — after which WI-01 draws them into the oven (**In Oven**
+WI-01 — **Barcoded → Unpressed → Pressed** — after which WI-01 draws them into the oven (**In Oven**
 = status `backing`). A cartridge is *born* when its QR sticker is scanned into a bucket. The
 system also owns **thermoseal roll tracking** (§3.4) and removed oven/cure-time tracking
 app-wide (§3.8).
@@ -22,8 +22,8 @@ so. Per-change narrative and every preview URL live in `progress.txt`.
 
 | v1 (2026-09-21/22) | v2 |
 |---|---|
-| Buckets counted *unserialized* blanks; the cartridge was born at WI-01 scan-in | The cartridge is born at **bucket scan-in** (status `raw`); buckets hold a **membership list** of cartridge ids |
-| Stages Raw → Unpressed → Pressed → **QR Scan-In Pending** | Stages **Raw → Unpressed → Pressed**, then **In Oven** (`backing`) via WI-01 |
+| Buckets counted *unserialized* blanks; the cartridge was born at WI-01 scan-in | The cartridge is born at **bucket scan-in** (status `barcoded`); buckets hold a **membership list** of cartridge ids |
+| Stages Barcoded → Unpressed → Pressed → **QR Scan-In Pending** | Stages **Barcoded → Unpressed → Pressed**, then **In Oven** (`backing`) via WI-01 |
 | Mint many buckets, print BKT barcode labels, home location | Mint **one bucket at a time from one QR scan**; no printing, no location |
 | "Blanks" (PT-CT-104) | **"Shells"** (PT-CT-104). The unrelated optical "Blank Cartridge" and the `cartridgeBlankLot` field name are untouched |
 | Thermoseal: one PT-CT-112 unit per cart at Unpressed (interim) | Thermoseal **by length off a roll** (§3.4); rolls pulled from inventory; 2-roll floor with kanban + email |
@@ -36,7 +36,7 @@ so. Per-change narrative and every preview URL live in `progress.txt`.
 Before v1 nothing tracked material between receiving and the WI-01 scan: shells (PT-CT-104)
 and labels (PT-CT-106) left inventory only when WI-01 scanned a cartridge, so pressing WIP was
 invisible, discards before WI-01 were never debited, and "how many carts are on the floor" was a
-walk. v2 goes further: because the QR sticker goes on the **raw** shell, the cartridge record
+walk. v2 goes further: because the QR sticker goes on the bare shell, the cartridge record
 exists from the first stage and every later system (cartridge-admin, traceability, DHR) sees it.
 
 ### 1.1 The dead ancestor
@@ -49,13 +49,19 @@ written by the bucket system.
 
 | Key | Label | What is physically true |
 |---|---|---|
-| `raw` | Raw | Shells with QR stickers on, scanned into the bucket one at a time |
+| `barcoded` | Barcoded | Shells with QR stickers on, scanned into the bucket one at a time |
 | `unpressed` | Unpressed | Bucket staged for the press. **Thermoseal is consumed here** (§3.4) |
 | `pressed` | Pressed | Off the press; WI-01 may draw from it |
 | — | In Oven | `CartridgeRecord.status = 'backing'`. Not a bucket stage: WI-01 scanned it out |
 
 Each cartridge's `status` mirrors its bucket's stage while it is a member, so
-`/cartridge-admin?stage=raw|unpressed|pressed` filters real records.
+`/cartridge-admin?stage=barcoded|unpressed|pressed` filters real records.
+
+> **Renamed 2026-09-25: `raw` → `barcoded`.** The first stage is named for what has happened to
+> the shell (a QR/barcode label is on it), not for the material it was cut from. The old value
+> `raw` stays in the `BucketCycle.stage` and `CartridgeRecord.status` enums so pre-rename rows
+> still validate; `scripts/migrate-bucket-raw-to-barcoded.ts` moves live rows over. Nothing
+> should write `raw` again.
 
 ### 2.1 Pressing — no SOP exists
 
@@ -81,9 +87,9 @@ a bucket (partial consumption) and the remainder stays Pressed.
 
 Yellow note on the board: **"Inventory is not Debited Until Carts are Scanned in."**
 
-- Scanning a cart into a Raw bucket debits **1 × PT-CT-104 (shell) + 1 × PT-CT-106 (label)**
+- Scanning a cart into a Barcoded bucket debits **1 × PT-CT-104 (shell) + 1 × PT-CT-106 (label)**
   from the lots chosen when the pass was started, and creates the `CartridgeRecord`.
-- A mis-scan can be **un-scanned** while the pass is still Raw: the record is deleted and both
+- A mis-scan can be **un-scanned** while the pass is still Barcoded: the record is deleted and both
   debits are retracted (negative rows of the same type, §8).
 - A discarded cart (at advance, via *Scrap*, or as a residual) writes a `scrap` transaction for
   its shell and label. **Thermoseal length is not returned** — it is consumed material.
@@ -100,7 +106,7 @@ PT-CT-112 is stocked in **rolls** and used by **length**:
 | Length per cartridge (averaged for excess) | **3.75 cm** | `ManufacturingSettings.thermoseal.cmPerCartridge` (default in `thermoseal-service.ts`) |
 | Length per roll | **65 m = 6500 cm** (≈ 1733 carts) | `…thermoseal.rollLengthCm` |
 | Floor: rolls that must stay in inventory | **2** | `…thermoseal.minRollsInInventory` |
-| When consumed | **Raw → Unpressed**, members × 3.75 cm | `bucket-service.advanceCycle` → `consumeThermoseal` |
+| When consumed | **Barcoded → Unpressed**, members × 3.75 cm | `bucket-service.advanceCycle` → `consumeThermoseal` |
 | **Development toggle** — restock notifications | **OFF** by default | `…thermoseal.notificationsEnabled`; admin checkbox on the board's Thermoseal card |
 | **Development pin** — rolls on hand shown/used by the board | **pinned at 1** by default | `…thermoseal.rollsOnHandPinned` / `rollsOnHandOverride`; admin control on the same card. Unpin to follow the live PT-CT-112 count (meaningless in rolls until PR #60 lands) |
 
@@ -186,9 +192,9 @@ retired · `currentCycleId` · `cycleCount` · `spotCheckPending` · `residualNo
 
 ### 4.2 `BucketCycle` → `bucket_cycles`
 
-`bucketId` · `cycleNumber` · `stage` raw | unpressed | pressed (`qr_pending` kept in the enum
+`bucketId` · `cycleNumber` · `stage` barcoded | unpressed | pressed (`qr_pending` kept in the enum
 for v1 rows) · **`cartridgeIds: string[]`** (members) · `quantity` (= length) · `openedQty`
-(fixed when leaving Raw; shrinkage = openedQty − quantity) · `sourceLots[{partNumber, lotId,
+(fixed when leaving Barcoded; shrinkage = openedQty − quantity) · `sourceLots[{partNumber, lotId,
 scannedAt}]` · **`thermoseal { cm, cartridges, segments[{rollId, cm}], consumedAt }`** · `status`
 open | consumed | scrapped | voided (+ `voidedAt/By/Reason`, `statusBeforeVoid`) ·
 `residualFound { cartridgeIds, disposition, … }` · `discrepancies[]` ·
@@ -206,14 +212,14 @@ in `reason` and the first roll id in `relatedId`.
 
 ### 4.4 Changes to existing models (fields only)
 
-- `CartridgeRecord`: status enum gains `raw, unpressed, pressed` (before `backing`);
+- `CartridgeRecord`: status enum gains `barcoded, unpressed, pressed` (before `backing`);
   `bucket { bucketId, cycleId, scannedInAt, scannedInBy }`; `backing.bucketCycleId/bucketBarcode`;
   oven fields LEGACY. Index `{ 'bucket.cycleId': 1 }` sparse.
 - `ManualCartridgeRemoval`: `bucketCycleId`, `bucketId`, `journal`, `voidedAt`, `voidReason`.
 - `LotRecord`: `bucketCycleId`.
 - `ManufacturingSettings.thermoseal { cmPerCartridge, rollLengthCm, minRollsInInventory }`.
 - **New** `ThermosealRoll` (§3.4).
-- `cartridge-admin/queries.ts` `LifecycleStage` gains `raw | unpressed | pressed`.
+- `cartridge-admin/queries.ts` `LifecycleStage` gains `barcoded | unpressed | pressed`.
 
 ## 5. State machines
 
@@ -224,7 +230,7 @@ in `reason` and the first roll id in `relatedId`.
 
 ### 5.2 Pass
 
-`open@raw —advance→ open@unpressed —advance→ open@pressed —WI-01 draws all→ consumed`;
+`open@barcoded —advance→ open@unpressed —advance→ open@pressed —WI-01 draws all→ consumed`;
 `open —all members discarded→ scrapped`; `open|consumed|scrapped —void (admin)→ voided`.
 
 ## 6. Flows
@@ -232,18 +238,18 @@ in `reason` and the first roll id in `relatedId`.
 ### 6.1 Start a pass
 
 Rail → pick an Available bucket → choose the **shell lot (104)** and **label lot (106)** →
-confirm empty if `spotCheckPending`. Opens at Raw with 0 members. Nothing is debited yet.
+confirm empty if `spotCheckPending`. Opens at Barcoded with 0 members. Nothing is debited yet.
 
-### 6.2 Scan carts in (Raw only)
+### 6.2 Scan carts in (Barcoded only)
 
 Scan a QR sticker → `scanCartIn`: the sticker must not be a bucket label (collision guard) or an
-existing cartridge; a `CartridgeRecord` is created at `raw` with `bucket.*`; 1 × shell + 1 ×
+existing cartridge; a `CartridgeRecord` is created at `barcoded` with `bucket.*`; 1 × shell + 1 ×
 label debited. A mis-scan button un-scans (record deleted, debits retracted).
 
 ### 6.3 Advance (with discard)
 
 "Any carts discarded?" scan list + journal → discards scrapped first → all remaining members'
-`status` follows the bucket. **Raw → Unpressed** additionally runs `consumeThermoseal` (§3.4)
+`status` follows the bucket. **Barcoded → Unpressed** additionally runs `consumeThermoseal` (§3.4)
 and shows the result banner (cm taken, rolls pulled, floor alert). **Pressed** is the end of the
 bucket: WI-01 draws from it.
 
@@ -284,9 +290,9 @@ longer calls it — validation happens on submit.
 | Event | PT-CT-104 shell | PT-CT-106 label | PT-CT-112 thermoseal |
 |---|---|---|---|
 | Start pass | — | — | — |
-| Scan cart in (Raw) | −1 `consumption` | −1 `consumption` | — |
-| Un-scan (Raw) | +1 (negative `consumption`) | +1 | — |
-| Raw → Unpressed | — | — | **members × 3.75 cm off the open roll**; −1 roll `consumption` only when a roll is pulled (`manufacturingRunId = roll id`) |
+| Scan cart in (Barcoded) | −1 `consumption` | −1 `consumption` | — |
+| Un-scan (Barcoded) | +1 (negative `consumption`) | +1 | — |
+| Barcoded → Unpressed | — | — | **members × 3.75 cm off the open roll**; −1 roll `consumption` only when a roll is pulled (`manufacturingRunId = roll id`) |
 | Discard / scrap / residual scrap | −1 `scrap` | −1 `scrap` | — (length not returned) |
 | WI-01 draw (In Oven) | — | — | — |
 | Void pass | net consumption + scrap returned per lot | same | cm credited to roll(s); pulled rolls stay pulled |
@@ -298,8 +304,8 @@ lot quantity − Σ consumption/scrap rows for that lot.
 
 ### 9.1 `/manufacturing/cart-mfg/buckets` — board, rail, thermoseal, logs
 
-Stage strip (Available · Raw · Unpressed · Pressed · **In Oven** (links to
-`/cartridge-admin?stage=backing`)) → 4-column board (Available / Raw / Unpressed / Pressed).
+Stage strip (Available · Barcoded · Unpressed · Pressed · **In Oven** (links to
+`/cartridge-admin?stage=backing`)) → 4-column board (Available / Barcoded / Unpressed / Pressed).
 Under **Available**: empty buckets only — minting lives on `/buckets/new` (§9.4), reached from
 the header *New bucket* button; there is no inline mint card on the board. Every pass card
 carries **Audit** (§9.8) under its cart list.
@@ -321,7 +327,7 @@ thermoseal cm, ledger rows, *Replace sticker* link, *Void this pass…* (admin).
 
 ### 9.3 Summary views (read-only, deep-link to the board)
 
-- `/cartridge-admin` strip: Raw · Unpressed · Pressed · **In Oven** (filters the page). The
+- `/cartridge-admin` strip: Barcoded · Unpressed · Pressed · **In Oven** (filters the page). The
   *Available* tile was removed 2026-09-23 (user: report only the four production stages); the
   board's own strip (§9.1) still counts Available buckets.
 - `/manufacturing/cart-mfg` **Production Buckets** card beneath the robot grid, same tiles.
@@ -337,7 +343,7 @@ sticker — the board's inline Mint card was removed on 2026-09-25, along with i
 
 ### 9.5 `/manufacturing/cart-mfg/buckets/override` — Master Override (admin)
 
-Scan a bucket, pick **Raw / Unpressed / Pressed / In Oven**, give a reason → `forceBucketPhase()`
+Scan a bucket, pick **Barcoded / Unpressed / Pressed / In Oven**, give a reason → `forceBucketPhase()`
 puts its open pass there, **bypassing the flow**: no thermoseal consumption, no discard prompt,
 no forward-only order (backwards is allowed), and *In Oven* moves every member to `backing` with
 no WI-01 session or LotRecord and closes the pass like a consumed one. Nothing is debited or
@@ -348,7 +354,7 @@ open passes with a *use* shortcut. Linked from the board header (red button) and
 ### 9.6 `/manufacturing/cart-mfg/state-change` — per-cart manual override (bucket-aware)
 
 The pre-existing bulk State Change page now routes bucket stages through
-`overrideCartStage()`: a target of Raw / Unpressed / Pressed requires a **destination bucket**
+`overrideCartStage()`: a target of Barcoded / Unpressed / Pressed requires a **destination bucket**
 (only open passes at that stage are offered) and the cart joins that pass (`merge_in`), leaving
 its old one (`merge_out`; an emptied pass closes like a consumed one); any other target removes
 a bucket member from its pass. No inventory moves. Unknown barcodes are refused for bucket stages.
@@ -422,7 +428,7 @@ per-scan lookup only needs `manufacturing:read`.
 | `47a2a63d` | `voidCycle()` + *Void this pass…* |
 | `fe947207` | No debit on bucket entry; discards remove carts from inventory; yellow note |
 | `33a937a4` | Second merge of `origin/master` (magnetometer, SPU validation tracker); PR #54 opened |
-| `3f4f49f3` | **v2**: cart membership model, QR-only minting, shells wording, Raw → Unpressed → Pressed → In Oven, app-wide oven/cure removal, **thermoseal rolls + 2-roll floor with kanban card + email** |
+| `3f4f49f3` | **v2**: cart membership model, QR-only minting, shells wording, Barcoded → Unpressed → Pressed → In Oven, app-wide oven/cure removal, **thermoseal rolls + 2-roll floor with kanban card + email** |
 | `f681ab63` | Floor check on board load + supply sweep (shelf already below the floor) |
 | `90bb9a25` | Development toggle: restock notifications off by default; roll tracking always on |
 | `c0664759` / `da0daa9f` | Board restructure (Mint card, retire, thermoseal tile) · bucket-aware State Change override (§9.6) |
@@ -435,6 +441,7 @@ per-scan lookup only needs `manufacturing:read`.
 | `5a01239f` | **Inline Mint card removed** from the board (§9.1/§9.4) — one way in: the *New bucket* button → `/buckets/new`; board `?/mint` + `?/relabel` actions deleted |
 | `f21ed50a` | Audit: missing members listed per cart with Keep / Write off / Take off pass, + Last audit summary (§9.8) |
 | `6baff520` | Audit: only the cart just scanned is displayed; strays needing a decision stay listed (§9.8) |
+| `5a01239f` | **`raw` → `barcoded` rename** (§2): stage key, labels, `CartridgeRecord.status`, `LifecycleStage`, pipeline `bucket_barcoded`; old `raw` kept in both enums for historical rows; `scripts/migrate-bucket-raw-to-barcoded.ts` (`--plan` / `--apply`, not yet run). Code swept into the ship-build merge commit; this doc row is the follow-up. |
 
 `npm run check` after v2: **12 errors / 438 warnings** — the same 12 pre-existing (`r2.ts`,
 `AskBimsWidget.svelte`, 8× `assembly/[sessionId]`, 2× `validation/magnetometer/[sessionId]`
@@ -451,7 +458,7 @@ from master). None in any file this branch touches.
   across two rolls; the floor rule firing exactly once per shelf drop.
 - **Exercised only by the user on Vercel previews.** Nothing has run in production.
 - **Deliberate checks before merge:** (a) scan a bucket's own QR as a cart → refused naming the
-  bucket; (b) advance Raw → Unpressed with the roll near empty → banner says a roll was pulled,
+  bucket; (b) advance Barcoded → Unpressed with the roll near empty → banner says a roll was pulled,
   ledger shows one −1 PT-CT-112 against the roll id, `thermoseal.segments` has two entries;
   (c) with PT-CT-112 at 2 rolls, pull one → kanban card appears once, email logged once (see
   `/admin/notifications` audit), a second pull adds no second card; (d) void that pass → cm

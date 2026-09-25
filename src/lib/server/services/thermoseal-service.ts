@@ -12,7 +12,7 @@
  *     the shelf. A pull that leaves fewer spawns one kanban restock card
  *     (lead-time warning in the body) and emails the low-inventory list.
  *
- * Consumption happens in bucket-service.advanceCycle (raw → unpressed) via
+ * Consumption happens in bucket-service.advanceCycle (barcoded → unpressed) via
  * consumeThermoseal(); voidCycle credits the length back via creditThermoseal().
  *
  * DEVELOPMENT TOGGLE (ManufacturingSettings.thermoseal.notificationsEnabled,
