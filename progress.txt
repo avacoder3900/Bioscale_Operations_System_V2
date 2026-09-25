@@ -14218,3 +14218,68 @@ Deployment: production -- building from the GitHub push to master (Vercel dashbo
 Source: branch master @ commit b1dc9bf8
 Retrieve this exact code: git checkout master at commit b1dc9bf8
 What this deployment is for: magnetometer sweep + fetch + export consolidated onto /validation; /spu/validation orphan tree removed
+
+================================================================================
+2026-09-25 — master — sweep countdown; 226 swept clean; bead pull differs by channel
+================================================================================
+SWEEP RAN END TO END ON A SECOND UNIT. SPU 226 (fw v98, Device OS 6.3.5) swept
+over serial on COM7: SWPEND rows=7840 good=7840 ms=1136429 (18.94 min, zero
+dropped reads), pushed straight into BIMS as session RBOSlcB1LFKdGzlp8sCom. Well
+peaks at 5400/13400/21400/29400/37400, spacing a clean 8000um. Well 5 is CLIPPED
+(no FWHM) because its tail runs past the 40000 travel limit, same as 255. This is
+the first run of the consolidated /validation build against a unit other than 255
+and the ingest path worked untouched.
+
+BEAD PULL IS NOT UNIFORM ACROSS CHANNELS, ON EITHER UNIT. Recomputed from both
+raw captures rather than from earlier notes (mean |Bz_peak * dBz/dz| over 5 wells):
+    channel    SPU 226    SPU 255
+    A             1864       2141
+    B             1394       1998
+    C             1424       1525
+    C vs A      -23.6%     -28.7%
+Channel A is strongest on BOTH units by 24-29%, which points at jig or fixture
+geometry rather than a defect in either SPU. The ordering underneath differs
+though -- 255 declines smoothly A > B > C, while on 226 B and C are both ~25%
+down and roughly equal -- so it is not one single mechanism.
+
+WHY THIS MATTERS FOR QC: peak field says everything is fine. Peak Bz sits in a
+~100 gauss band across all 30 cells (4225-4326 on 226, 4120-4218 on 255), well
+inside the 3900-4500 criteria, so every cell passes. The actual force on a bead
+still varies by a quarter. Peak-only acceptance cannot see this.
+
+Also worth a bench look: on 226 the three channels peak at STAGGERED positions --
+A 5400, B 5600, C 5800, a consistent 200um step repeated identically across all
+five wells -- while on 255 all three coincide. A monotonic A->B->C stagger is the
+signature of the jig sitting slightly yawed relative to travel. Suggestive, not
+proven: 200um is exactly one dy step, the sampling floor. But noise does not
+repeat the same direction five times.
+
+SPU 239 COULD NOT BE SWEPT. It reported SWPERR no_magnetometer within seconds --
+the firmware checks for the BLE magnetometer at brevitest-firmware.ino:2174
+before the stage moves, so nothing was wasted. The unit has been stuck in
+DeviceMode 5 (VALIDATING_MAGNETOMETER) across repeated polls and its stored
+magnet_validation is from 2026-09-04 at 25C ambient, i.e. no live BLE link. That
+is what it looks like when the jig is not physically seated. Note its serial port
+enumerated as COM8, not COM7 -- always re-read the port after a swap.
+
+UI: the sweep card showed elapsed time only, which tells an operator nothing about
+how long to keep hands off. It now shows a remaining-time countdown, a progress
+bar, and an explicit overtime state that says "running long, not yet failed"
+instead of freezing at 0:00 -- a frozen zero reads as "done", and an operator who
+believes a live sweep has hung will power-cycle the unit and destroy the run. The
+estimate mirrors SWEEP_DURATION_MINUTES and is labelled an estimate; the run is
+over when a session lands, never when the countdown expires.
+
+run-sweep.ps1 also gained a real ETA (percent, time left, wall-clock ETA) computed
+from the row count the device itself declares in SWPBEGIN (points x wells x n), so
+it self-corrects if the firmware retunes its defaults. That file lives in
+Desktop/spu-sweep-tools, which is untracked, so that change is LOCAL ONLY and is
+not carried by this commit.
+
+svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --threshold error: 122,
+unchanged from baseline, zero in the changed file.
+
+Deployment: production — building from the GitHub push to master (Vercel dashboard, commit below)
+Source: branch master @ commit 49d758f6
+Retrieve this exact code: git checkout master at commit 49d758f6
+What this deployment is for: countdown + progress bar on the running magnetometer sweep card
