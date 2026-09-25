@@ -15687,3 +15687,53 @@ validation/magnetometer/[sessionId]), none in any file touched here.
 Not deployed from this session — no preview was created, so there is no deployment entry to log.
 Nothing here has been exercised against real data; the scan-in rebuild in particular wants a real
 gun and a real tub before it is trusted.
+
+================================================================================
+2026-09-25 — feat/bucket-system — Ship audit: branch quiet, code clean, migration outstanding
+================================================================================
+User: "Wait for the other sessions to finish, audit new pushes for errors, push build."
+Waited: polled origin/feat/bucket-system once a minute; the tip has been 0c6af66c for 10+
+minutes with no new pushes, so the concurrent sessions are done.
+
+AUDITED what landed after the last independently verified commit (6baff520):
+1. My own merge commit 5a01239f swept TWO other sessions' uncommitted work out of the shared
+   worktree, neither of which I had reviewed at the time. Both turned out to be complete:
+   a. Inline Mint / Replace-Sticker card removed from the board. Verified: no `?/mint` or
+      `?/relabel` actions and no mint state left on the board, /buckets/new still owns
+      createBucket + replaceBucketSticker, the header's New bucket link works, and the two
+      remaining `case 'mint'` / `case 'relabel'` arms are change-log LABELS for historical
+      ledger rows — correct to keep.
+   b. The first bucket stage was renamed raw → barcoded across models, service, board,
+      cartridge-admin, pipeline (`bucket_raw` → `bucket_barcoded`) and state-change. Verified:
+      both enums still accept 'raw' so pre-rename rows validate, the [bucketId] aggregation
+      matches both, and the only other 'raw' hits in src are unrelated (CV processingMode,
+      reagent classification).
+2. Docs-only commits since (d926b8e3, 0c6af66c) — changelog sha stamp + progress entries.
+3. svelte-check on the tip: 12 errors / 441 warnings — the documented baseline, none in any
+   bucket file. (Run standalone: `svelte-kit sync` and `vite build` can no longer run in this
+   environment — the portable Node in Temp is now the arm64 build while node_modules carries
+   @rollup/rollup-win32-x64-msvc, so rollup will not load. svelte-check does not need it.)
+
+OPEN ITEM — DATA MIGRATION, blocks a clean ship:
+scripts/migrate-bucket-raw-to-barcoded.ts has NOT been run (the session that wrote it had no
+MONGODB_URI; neither do I, and bucket_cycles is not reachable through the BIMS MCP, so I could
+not even count the affected rows). Until it runs against Atlas, any bucket pass still stored
+with stage 'raw' DISAPPEARS from the board: stageCounts() drops it through isBucketStage(), and
+the board page buckets cycles by the three current stage keys, so a 'raw' pass falls through
+the optional chain. Same for carts whose status is still 'raw' in the cartridge-admin strip.
+Previews have been running against the production Atlas database all along, so real rows at the
+old value are likely. Order of operations: run `npx tsx scripts/migrate-bucket-raw-to-barcoded.ts
+--plan` (read-only, prints the counts), then `--apply`, then merge PR #54 — or merge first and
+apply immediately after, accepting that rows are invisible in between.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-j7rpabmlj-brevitest.vercel.app
+  (brevitest scope; cookie-session gated, 302 to /login)
+Source: branch feat/bucket-system @ commit 0c6af66c
+Retrieve this exact code: git checkout feat/bucket-system at commit 0c6af66c
+What this deployment is for: the audited ship candidate — everything both sessions pushed, with
+  master (4bac0c08) merged in. Smoke: /login 200; buckets, buckets/new, wi-01, cartridge-admin
+  and pipeline all 302 to /login as expected.
+Build status: success.
+
+PR #54 remains open and mergeable/clean. The merge call is still refused by the harness
+permission classifier ([Merge Without Review]) — it needs the user's click or an allow rule.
