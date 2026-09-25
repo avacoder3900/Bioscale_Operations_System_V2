@@ -16174,3 +16174,37 @@ What this deployment is for: the Backed column beside Pressed under its new name
   the Backed tile no longer counts those carts, and wax filling still loads them by scan.
   Smoke: /login 200; /manufacturing/cart-mfg/buckets 302 https://bioscale-operations-system-mongodb-bxqfenbpd-brevitest.vercel.app/login.
 Build status: success (GitHub deployment 6669296713, both projects).
+
+================================================================================
+2026-09-25 — feat/bucket-system — Simplified: "Backed", Move to oven frees carts + returns bucket, "In oven" dropdown
+================================================================================
+User: "this has become overcomplicated. Just name it backed and when it passes to the next phase
+all it should functionally do is move the bucket back to available, and free all of the carts
+from that location. have a short drop down list of 'in oven' but do not create a separate card
+for this. Carts will leave this status when they get scanned in for wax filling. functionally the
+cart statuses will all remain the same. pressed -> backed -> wax filled. Backed in the bucket
+system just refers to a storage system." Supersedes the previous entry (d8928c7f). Plan §2 /
+§6.5 / §11 rewritten to match.
+
+- Stage label is "Backed" everywhere (board, strip, dashboard, cartridge-admin, pipeline, dev
+  dashboard, override, wax-filling copy). Five-column board grid kept so Backed sits beside Pressed.
+- moveToOven now writes nothing on the carts: it stamps ovenReleasedAt/By on the pass, logs one
+  'oven' change-log row + MOVE_TO_OVEN audit, closes the pass 'consumed' and returns the bucket to
+  Available. The backing.movedToOvenAt/By cart fields from d8928c7f are removed from the schema
+  and the service (never written on a preview click before this commit, so no data to clean).
+- stageCounts.backing is back to every cart at 'backing' (one category); the history page marks
+  a released pass's carts as "went on" via the pass's ovenReleasedAt instead of a cart stamp.
+- New inOvenCarts() (bucket-service): backed carts on no open pass, count + up to 200 ids.
+  The board's Backed column ends with a dashed <details> "In oven · N carts" listing them —
+  a dropdown, not a card. Carts leave it when wax filling scans them in (status → wax_filling),
+  which is unchanged.
+
+Files: src/lib/server/services/bucket-service.ts, src/lib/server/db/models/{bucket-cycle,
+cartridge-record}.ts, src/routes/manufacturing/cart-mfg/buckets/{+page.server.ts,+page.svelte,
+[bucketId]/+page.server.ts}, src/routes/manufacturing/cart-mfg/{+page.svelte,pipeline/
++page.server.ts,wax-filling/+page.server.ts,wax-filling/+page.svelte},
+src/routes/manufacturing/cart-mfg-dev/+page.svelte, src/routes/cartridge-admin/+page.svelte,
+BUCKET-SYSTEM_PLAN.md.
+
+Check (svelte-kit sync + svelte-check direct): 12 errors / 431 warnings — the documented baseline,
+none in any file touched.

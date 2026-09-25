@@ -14,7 +14,7 @@ const operatorRef = { _id: String, username: String };
  * sticker is scanned into the bucket; `cartridgeIds` holds the members and
  * `quantity` is kept equal to its length for the board and counts. Advancing
  * the bucket advances every member's status. The last stage is 'backing'
- * ("Backed, Checked, and Waiting for Oven"); "Move to oven" releases every member at once, or wax filling's deck load draws members out of it
+ * ("Backed"); "Move to oven" releases every member at once, or wax filling's deck load draws members out of it
  * and the pass closes when the last one leaves (2026-09-25 — replaced the
  * WI-01 page). Oven placement and cure time are not tracked.
  */

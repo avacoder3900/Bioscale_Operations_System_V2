@@ -38,11 +38,6 @@ const cartridgeRecordSchema = new Schema({
 		barcodeLabelLot: String,     // PT-CT-106 input material lot
 		bucketCycleId: String,       // BucketCycle._id the cartridge was drawn from at WI-01
 		bucketBarcode: String,       // denormalized ProductionBucket._id for search; NOT unique across passes
-		// "Move to oven" on the bucket board (2026-09-25): the cart left its bucket for
-		// the oven. Status stays 'backing' (no oven status — user); this stamp is what
-		// takes it off the "Waiting for Oven" tile and out of returnCarts.
-		movedToOvenAt: Date,
-		movedToOvenBy: { _id: String, username: String },
 		// LEGACY (backing-oven tracking removed 2026-09-23, BUCKET-SYSTEM_PLAN v2):
 		// no longer written; kept so historical records still validate.
 		ovenEntryTime: Date,

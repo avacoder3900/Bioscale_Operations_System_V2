@@ -25,7 +25,7 @@ export const config = { maxDuration: 60 };
 
 // The bucket_* stages are the production-bucket funnel (BUCKET-SYSTEM_PLAN v2 §9):
 // cartridges are born at Barcoded when scanned into a bucket and move with it
-// through Pressed to 'backing' ("Backed, Checked, and Waiting for Oven"), where the tub waits for
+// through Pressed to 'backing' ("Backed"), where the tub waits for
 // the wax-fill operator. The 'backing' view lists those buckets plus any loose
 // backed carts (legacy WI-01 draws) and legacy BackingLot aggregates.
 const STAGE_KEYS = ['bucket_barcoded', 'bucket_unpressed', 'bucket_pressed', 'backing', 'wax_fill', 'cooling', 'reagent', 'seal', 'store'] as const;
@@ -79,11 +79,11 @@ const STAGE_META: Record<StageKey, StageMeta> = {
 	},
 	bucket_pressed: {
 		key: 'bucket_pressed', label: 'Pressed', color: 'tron-yellow',
-		description: 'Buckets off the press. Advance to "Backed, Checked, and Waiting for Oven" on the bucket board.',
+		description: 'Buckets off the press. Advance to "Backed" on the bucket board.',
 		headers: bucketHeaders
 	},
 	backing: {
-		key: 'backing', label: 'Backed, Checked, and Waiting for Oven', color: 'tron-purple',
+		key: 'backing', label: 'Backed', color: 'tron-purple',
 		description: 'Backed buckets waiting for the wax-fill operator to put them in the oven and scan their carts onto a deck (status backing). No oven or cure time is tracked — every cartridge here is ready for wax filling. Carts backed by the old WI-01 page and legacy backing-lot aggregates are listed in the same category until drained.',
 		headers: [
 			{ key: 'id', label: 'Bucket / lot' },
@@ -188,7 +188,7 @@ async function loadBucketStage(stage: BucketStage, now: Date): Promise<PipelineR
 }
 
 async function loadBacking(now: Date, checkedOutIds: string[]): Promise<PipelineRow[]> {
-	// "Backed, Checked, and Waiting for Oven" = bucket stage / status 'backing'. A
+	// "Backed" = bucket stage / status 'backing'. A
 	// backed cart sits in its bucket until "Move to oven" releases the pass (or wax
 	// filling draws it): one row per backed bucket pass, then loose backed carts
 	// (moved to the oven, or drawn by the old WI-01 page — grouped per WI-01

@@ -873,7 +873,7 @@ export const actions: Actions = {
 		const run = await WaxFillingRun.findById(runId).lean() as any;
 		if (!run) return fail(404, { error: 'Run not found' });
 
-		// Cartridges arrive here at status 'backing' ("Backed, Checked, and Waiting for Oven"),
+		// Cartridges arrive here at status 'backing' ("Backed"),
 		// still sitting in their production bucket. loadDeck validates each scan
 		// against those records and then draws the members out of their bucket
 		// pass (consumeCarts) — the deck load IS the handoff since 2026-09-25.

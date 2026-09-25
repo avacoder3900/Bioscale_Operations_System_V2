@@ -10,7 +10,7 @@ import {
 	BucketError, BUCKET_STAGES, STAGE_LABELS, BACKED_LABEL, SHELL_PART, LABEL_PART, THERMOSEAL_PART,
 	boardData, stageCounts, resolveScan, isBucketStage, changeLog, bucketRegistry,
 	startCycle, scanCartIn, unscanCart, advanceCycle, scrapCarts, reportResidual, retireBucket,
-	cartStatusLine, auditScan, auditCycle, moveToOven
+	cartStatusLine, auditScan, auditCycle, moveToOven, inOvenCarts
 } from '$lib/server/services/bucket-service';
 import { thermosealStatus, checkFloor, setThermosealToggles } from '$lib/server/services/thermoseal-service';
 import type { Actions, PageServerLoad } from './$types';
@@ -52,7 +52,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	const focusStage = url.searchParams.get('stage') ?? '';
 	const q = url.searchParams.get('q') ?? '';
 
-	const [board, counts, lots, scan, log, registry, thermoseal] = await Promise.all([
+	const [board, counts, lots, scan, log, registry, thermoseal, inOven] = await Promise.all([
 		boardData(),
 		stageCounts(),
 		availableLots([SHELL_PART, LABEL_PART, THERMOSEAL_PART]),
@@ -65,7 +65,9 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		// process (2026-09-25) so the board's background refresh during a scanning
 		// run does not re-run the rule between carts — it is a backstop, and a roll
 		// pull still runs it unthrottled.
-		checkFloor({ user: op(locals), throttleMs: 60_000 }).catch(() => null).then(() => thermosealStatus()).catch(() => null)
+		checkFloor({ user: op(locals), throttleMs: 60_000 }).catch(() => null).then(() => thermosealStatus()).catch(() => null),
+		// "In oven" dropdown inside the Backed column: backed carts on no open pass.
+		inOvenCarts().catch(() => ({ count: 0, ids: [] as string[] }))
 	]);
 
 	return {
@@ -78,6 +80,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		changeLog: log,
 		registry,
 		thermoseal,
+		inOven,
 		canAdmin: locals.user.roles.some(r => r.permissions.includes('manufacturing:admin') || r.permissions.includes('admin:full')),
 		scan: scan ? JSON.parse(JSON.stringify(scan)) : null,
 		scanQuery: q
@@ -238,8 +241,8 @@ export const actions: Actions = {
 		})();
 	},
 
-	// "Move to oven": the backed pass's carts leave the bucket system all at once
-	// (status stays 'backing'), the pass closes, the bucket returns to Available.
+	// "Move to oven": frees the carts from the bucket (they stay 'backing' until wax
+	// filling scans them in) and returns the bucket to Available. Nothing else.
 	moveToOven: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
 		requirePermission(locals.user, 'manufacturing:write');

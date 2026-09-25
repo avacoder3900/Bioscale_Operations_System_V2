@@ -28,8 +28,9 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 			? CartridgeRecord.aggregate([
 				{ $match: { $or: [{ 'bucket.cycleId': { $in: cycleIds } }, { 'backing.bucketCycleId': { $in: cycleIds } }] } },
 				// wentOn = carts that left the bucket for wax filling (or further). 'backing' is
-				// still a bucket stage, so a backed cart in the tub does not count.
-				{ $group: { _id: { $ifNull: ['$bucket.cycleId', '$backing.bucketCycleId'] }, count: { $sum: 1 }, ids: { $push: '$_id' }, wentOn: { $sum: { $cond: [{ $and: [{ $in: ['$status', ['barcoded', 'raw', 'unpressed', 'pressed', 'backing', 'scrapped', 'voided']] }, { $not: ['$backing.movedToOvenAt'] }] }, 0, 1] } } } }
+				// still a bucket stage, so a backed cart in the tub does not count — unless the
+				// pass was released by Move to oven (ovenReleasedAt), handled below.
+				{ $group: { _id: { $ifNull: ['$bucket.cycleId', '$backing.bucketCycleId'] }, count: { $sum: 1 }, ids: { $push: '$_id' }, wentOn: { $sum: { $cond: [{ $in: ['$status', ['barcoded', 'raw', 'unpressed', 'pressed', 'backing', 'scrapped', 'voided']] }, 0, 1] } } } }
 			]) as any as Promise<any[]>
 			: Promise.resolve([]),
 		cycleIds.length
@@ -107,7 +108,11 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 			voidReason: c.voidReason ?? null,
 			residualFound: (c.residualFound ?? []).map((r: any) => ({ qty: r.qty, stage: r.stage, disposition: r.disposition, at: iso(r.at), by: r.by?.username ?? null })),
 			discrepancies: (c.discrepancies ?? []).map((d: any) => ({ type: d.type, qty: d.qty, note: d.note ?? null, at: iso(d.at) })),
-			cartridges: cartsByCycle.get(c._id) ?? { count: 0, wentOn: 0, ids: [] },
+			cartridges: (() => {
+				const cc = cartsByCycle.get(c._id) ?? { count: 0, wentOn: 0, ids: [] };
+				// Move to oven freed every cart at once: they all went on, whatever their status.
+				return c.ovenReleasedAt ? { ...cc, wentOn: cc.count } : cc;
+			})(),
 			lots: lotsByCycle.get(c._id) ?? [],
 			transactions: (txByCycle.get(c._id) ?? []).map(tx)
 		})),

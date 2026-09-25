@@ -23,6 +23,7 @@
 				nextLot: { lotId: string; remaining: number } | null;
 				openRestockTaskId: string | null; rollsExhausted: number;
 			} | null;
+			inOven: { count: number; ids: string[] };
 			canAdmin: boolean;
 			scan: { kind: 'bucket' | 'search'; bucket?: any; cycle?: any; matches?: { bucketId: string; barcode: string | null; state: string; cycle: any }[] } | null;
 			scanQuery: string;
@@ -595,7 +596,7 @@
 	<div class="flex flex-wrap items-end justify-between gap-3">
 		<div>
 			<h1 class="text-2xl font-semibold text-[var(--color-tron-text)]">Production Buckets</h1>
-			<p class="text-xs text-[var(--color-tron-text-secondary)]">Stick a QR on each shell and scan it into a bucket. Whole buckets move Barcoded → Unpressed → Pressed → {data.backedLabel}; <em>Move to oven</em> releases the carts from the bucket (they stay backed and go on to wax filling) and the bucket returns to Available.</p>
+			<p class="text-xs text-[var(--color-tron-text-secondary)]">Stick a QR on each shell and scan it into a bucket. Whole buckets move Barcoded → Unpressed → Pressed → {data.backedLabel}; <em>Move to oven</em> frees the carts from the bucket and returns it to Available. Carts stay backed until wax filling scans them in.</p>
 		</div>
 		<div class="flex gap-2">
 			<a href="/manufacturing/cart-mfg/buckets/new" class={btnGhost}>New bucket</a>
@@ -723,6 +724,23 @@
 						{#if cyclesByStage[s.key].length === 0}
 							<p class="px-1 py-4 text-center text-[10px] text-[var(--color-tron-text-secondary)]">empty</p>
 						{/if}
+						{#if s.key === 'backing'}
+							<!-- "In oven": backed carts freed from their bucket (Move to oven), still 'backing'
+							     until wax filling scans them in. A dropdown here, not a card (user, 2026-09-25). -->
+							<details class="rounded border border-dashed border-[var(--color-tron-purple)]/40 px-2 py-1">
+								<summary class="cursor-pointer select-none text-[10px] uppercase tracking-wider text-[var(--color-tron-purple)] hover:text-[var(--color-tron-text)]">In oven · {data.inOven.count} cart{data.inOven.count === 1 ? '' : 's'}</summary>
+								{#if data.inOven.count === 0}
+									<p class="py-1 text-[10px] text-[var(--color-tron-text-secondary)]">none — carts land here when a Backed bucket is moved to the oven, and leave when wax filling scans them.</p>
+								{:else}
+									<ul class="mt-1 max-h-40 space-y-0.5 overflow-y-auto">
+										{#each data.inOven.ids as id (id)}
+											<li><a href="/cartridge-admin?search={encodeURIComponent(id)}" class="block truncate font-mono text-[10px] text-[var(--color-tron-text)] hover:text-[var(--color-tron-cyan)]" title={id}>{id}</a></li>
+										{/each}
+									</ul>
+									{#if data.inOven.count > data.inOven.ids.length}<p class="mt-1 text-[10px] text-[var(--color-tron-text-secondary)]">+{data.inOven.count - data.inOven.ids.length} more</p>{/if}
+								{/if}
+							</details>
+						{/if}
 					</div>
 
 					{#if s.key === 'unpressed' && data.thermoseal}
@@ -820,7 +838,7 @@
 						{#if form?.moveToOven?.success}
 							{@const m = form.moveToOven as any}
 							<div class="rounded border border-[var(--color-tron-purple)]/60 bg-[var(--color-tron-purple)]/10 p-2 text-xs text-[var(--color-tron-text)]" role="status">
-								<strong class="text-[var(--color-tron-purple)]">Moved to oven.</strong> {m.released} cart{m.released === 1 ? '' : 's'} released from {m.bucketId} #{m.cycleNumber} — they stay <em>backed</em> and load at <a href="/manufacturing/cart-mfg/wax-filling" class="underline">wax filling</a>; the bucket is back in Available.
+								<strong class="text-[var(--color-tron-purple)]">Moved to oven.</strong> {m.released} cart{m.released === 1 ? '' : 's'} freed from {m.bucketId} #{m.cycleNumber}; the bucket is back in Available. They stay backed (see <em>In oven</em> under Backed) until <a href="/manufacturing/cart-mfg/wax-filling" class="underline">wax filling</a> scans them.
 							</div>
 						{:else}
 							<p class="py-4 text-center text-xs text-[var(--color-tron-text-secondary)]">This pass is no longer on the board (moved to the oven, drawn to wax filling, emptied, or refreshing).</p>
@@ -902,14 +920,13 @@
 								{#if nxt}
 									<button type="button" class={btnPrimary} disabled={c.quantity === 0} onclick={() => setMode('advance')}>Advance → {nextLabel(c.stage)}</button>
 								{:else}
-									<!-- Backed is the end of the bucket. Move to oven releases every cart from the
-									     bucket at once (status stays backed — no oven status), closes the pass and
-									     returns the bucket to Available (user, 2026-09-25). -->
+									<!-- Backed is the end of the bucket. Move to oven frees the carts from the bucket
+									     and returns it to Available — nothing else (user, 2026-09-25). -->
 									<form method="POST" action="?/moveToOven" use:enhance={enhanceBusy}>
 										<input type="hidden" name="cycleId" value={c.cycleId} />
 										<button type="submit" disabled={busy || c.quantity === 0}
 											class="w-full rounded-lg border border-[var(--color-tron-purple)]/60 bg-[var(--color-tron-purple)]/10 py-2.5 text-center text-sm font-semibold text-[var(--color-tron-purple)] hover:bg-[var(--color-tron-purple)]/20 disabled:opacity-50"
-											title="Put this bucket in the oven: its carts leave the bucket (they stay backed) and the bucket returns to Available">{busy ? 'Moving…' : `Move to oven (${c.quantity} cart${c.quantity === 1 ? '' : 's'})`}</button>
+											title="Free the carts from this bucket and return it to Available; the carts stay backed until wax filling scans them">{busy ? 'Moving…' : `Move to oven (${c.quantity} cart${c.quantity === 1 ? '' : 's'})`}</button>
 									</form>
 									{#if form?.moveToOven?.error}<p class="text-xs text-[var(--color-tron-error)]">{form.moveToOven.error}</p>{/if}
 									<a href="/manufacturing/cart-mfg/wax-filling" class="block text-center text-[10px] text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)]">Wax filling →</a>
