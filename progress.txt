@@ -16127,3 +16127,38 @@ What this deployment is for: the bucket board's Barcoded → Unpressed confirm w
 Build status: success (GitHub deployment 6668992657).
 Note: the plan-doc edits for this change (§3.4, §6.3, changelog row) were swept into the
   concurrent session's commit 69bc8d65 before cb28e181 was made; they are on origin either way.
+
+================================================================================
+2026-09-25 — feat/bucket-system — "Backed, Checked, and Waiting for Oven" + Move to oven
+================================================================================
+User: move the Backed card back next to Pressed; rename it "Backed, Checked, and Waiting for
+Oven"; a Move to oven button frees the carts from the bucket so they go on to the steps outside
+the bucket system, the bucket returns to Available, and the carts just keep the backed status —
+no extra status. Plan §2 / §6.5 (new) / §9.1 / §11 updated.
+
+Layout: the board grid was md:grid-cols-4 for five columns, so Backed wrapped under Available on
+tablet-and-up; it is md:grid-cols-5 now and Backed sits beside Pressed. STAGE_LABELS.backing is the
+new name, and the literal copies on the dashboard, cartridge-admin strip, pipeline, dev dashboard
+and override page follow it.
+
+Move to oven: bucket-service.moveToOven (board action ?/moveToOven, the Backed pass panel's
+primary button, replacing the "Ready for the oven → wax filling" link). Requires an open pass at
+'backing'; stamps every member backing.movedToOvenAt / movedToOvenBy (status stays 'backing');
+sets ovenReleasedAt / ovenReleasedBy on the pass; one 'oven' change-log row (new
+BucketTransaction type; board log reads "Moved to oven"); MOVE_TO_OVEN audit; closeCycle
+'consumed' → tub back to Available with the usual deferred spot-check. returnCarts treats an
+oven-released pass as loose, so a cancelled wax run never reopens it. stageCounts.backing (board
+strip, dashboard, cartridge-admin) now excludes carts with movedToOvenAt — they are no longer
+waiting for the oven; the bucket history page counts them as "went on". Wax filling is untouched:
+moved carts are loose backed carts and load exactly like the legacy WI-01 draws.
+
+Files: src/lib/server/services/bucket-service.ts, src/lib/server/db/models/{bucket-cycle,
+bucket-transaction,cartridge-record}.ts, src/routes/manufacturing/cart-mfg/buckets/{+page.server.ts,
++page.svelte,[bucketId]/+page.server.ts}, src/routes/manufacturing/cart-mfg/{+page.svelte,
+pipeline/+page.server.ts,wax-filling/+page.server.ts,wax-filling/+page.svelte},
+src/routes/manufacturing/cart-mfg-dev/+page.svelte, src/routes/cartridge-admin/+page.svelte,
+BUCKET-SYSTEM_PLAN.md.
+
+Check (svelte-kit sync + svelte-check direct): 12 errors / 431 warnings — the documented baseline,
+none in any file touched. No data migration: existing closed passes and loose backed carts are
+unaffected; only new Move to oven clicks write the stamps.

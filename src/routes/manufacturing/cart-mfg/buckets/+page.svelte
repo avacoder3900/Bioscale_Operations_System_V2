@@ -29,7 +29,7 @@
 		};
 		form: {
 			start?: ActionResult; advance?: ActionResult; scrap?: ActionResult;
-			residual?: ActionResult; retire?: ActionResult; thermosealToggles?: ActionResult;
+			residual?: ActionResult; retire?: ActionResult; thermosealToggles?: ActionResult; moveToOven?: ActionResult;
 			auditScan?: ActionResult; audit?: ActionResult;
 		} | null;
 	}
@@ -527,6 +527,7 @@
 			case 'unscan': return { event: 'Mis-scan removed', moved: 'at Barcoded', discarded: false };
 			case 'advance': return { event: 'Moved', moved: `${from ?? '?'} → ${to ?? '?'}`, discarded: false };
 			case 'consume': return { event: 'Drawn to wax filling', moved: `${from ?? data.backedLabel} → wax filling`, discarded: false };
+			case 'oven': return { event: 'Moved to oven', moved: `${from ?? data.backedLabel} → oven (carts released from the bucket)`, discarded: false };
 			case 'scrap': return { event: 'Discarded', moved: `at ${from ?? '?'}`, discarded: true };
 			case 'adjust': return { event: 'Count corrected', moved: `at ${from ?? '?'}`, discarded: false };
 			case 'merge_in': return { event: 'Residual received', moved: `at ${to ?? '?'}`, discarded: false };
@@ -594,7 +595,7 @@
 	<div class="flex flex-wrap items-end justify-between gap-3">
 		<div>
 			<h1 class="text-2xl font-semibold text-[var(--color-tron-text)]">Production Buckets</h1>
-			<p class="text-xs text-[var(--color-tron-text-secondary)]">Stick a QR on each shell and scan it into a bucket. Whole buckets move Barcoded → Unpressed → Pressed → {data.backedLabel}; the wax-fill operator puts a backed bucket in the oven and scans its carts onto the deck.</p>
+			<p class="text-xs text-[var(--color-tron-text-secondary)]">Stick a QR on each shell and scan it into a bucket. Whole buckets move Barcoded → Unpressed → Pressed → {data.backedLabel}; <em>Move to oven</em> releases the carts from the bucket (they stay backed and go on to wax filling) and the bucket returns to Available.</p>
 		</div>
 		<div class="flex gap-2">
 			<a href="/manufacturing/cart-mfg/buckets/new" class={btnGhost}>New bucket</a>
@@ -633,8 +634,8 @@
 	{/if}
 
 	<div class="grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
-		<!-- Board -->
-		<div class="grid grid-cols-1 gap-3 md:grid-cols-4">
+		<!-- Board: five columns so Backed sits beside Pressed (user, 2026-09-25). -->
+		<div class="grid grid-cols-1 gap-3 md:grid-cols-5">
 			<div class="rounded-lg border bg-[var(--color-tron-bg-secondary)] p-2 {data.focusStage === 'available' ? 'ring-1 ring-[var(--color-tron-cyan)]' : 'border-[var(--color-tron-border)]'}">
 				<div class="flex items-center justify-between px-1 pb-2">
 					<span class="text-xs font-semibold uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Available</span>
@@ -816,7 +817,14 @@
 
 				{:else if panel.kind === 'cycle'}
 					{#if !panelCycle}
-						<p class="py-4 text-center text-xs text-[var(--color-tron-text-secondary)]">This pass is no longer on the board (drawn to wax filling, emptied, or refreshing).</p>
+						{#if form?.moveToOven?.success}
+							{@const m = form.moveToOven as any}
+							<div class="rounded border border-[var(--color-tron-purple)]/60 bg-[var(--color-tron-purple)]/10 p-2 text-xs text-[var(--color-tron-text)]" role="status">
+								<strong class="text-[var(--color-tron-purple)]">Moved to oven.</strong> {m.released} cart{m.released === 1 ? '' : 's'} released from {m.bucketId} #{m.cycleNumber} — they stay <em>backed</em> and load at <a href="/manufacturing/cart-mfg/wax-filling" class="underline">wax filling</a>; the bucket is back in Available.
+							</div>
+						{:else}
+							<p class="py-4 text-center text-xs text-[var(--color-tron-text-secondary)]">This pass is no longer on the board (moved to the oven, drawn to wax filling, emptied, or refreshing).</p>
+						{/if}
 						<button type="button" class={btnGhost} onclick={() => { panel = { kind: 'none' }; }}>Close</button>
 					{:else}
 						{@const c = panelCycle}
@@ -894,9 +902,17 @@
 								{#if nxt}
 									<button type="button" class={btnPrimary} disabled={c.quantity === 0} onclick={() => setMode('advance')}>Advance → {nextLabel(c.stage)}</button>
 								{:else}
-									<!-- Backed is the end of the bucket. No click here: the wax-fill operator puts the
-									     tub in the oven and scans its carts onto the deck, which draws them out. -->
-									<a href="/manufacturing/cart-mfg/wax-filling" class="block rounded-lg border border-[var(--color-tron-purple)]/60 bg-[var(--color-tron-purple)]/10 py-2.5 text-center text-sm font-semibold text-[var(--color-tron-purple)]" title="Scan this bucket's carts onto a deck at wax filling — that draws them out of the bucket">Ready for the oven → wax filling</a>
+									<!-- Backed is the end of the bucket. Move to oven releases every cart from the
+									     bucket at once (status stays backed — no oven status), closes the pass and
+									     returns the bucket to Available (user, 2026-09-25). -->
+									<form method="POST" action="?/moveToOven" use:enhance={enhanceBusy}>
+										<input type="hidden" name="cycleId" value={c.cycleId} />
+										<button type="submit" disabled={busy || c.quantity === 0}
+											class="w-full rounded-lg border border-[var(--color-tron-purple)]/60 bg-[var(--color-tron-purple)]/10 py-2.5 text-center text-sm font-semibold text-[var(--color-tron-purple)] hover:bg-[var(--color-tron-purple)]/20 disabled:opacity-50"
+											title="Put this bucket in the oven: its carts leave the bucket (they stay backed) and the bucket returns to Available">{busy ? 'Moving…' : `Move to oven (${c.quantity} cart${c.quantity === 1 ? '' : 's'})`}</button>
+									</form>
+									{#if form?.moveToOven?.error}<p class="text-xs text-[var(--color-tron-error)]">{form.moveToOven.error}</p>{/if}
+									<a href="/manufacturing/cart-mfg/wax-filling" class="block text-center text-[10px] text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)]">Wax filling →</a>
 								{/if}
 								<button type="button" class="{btnGhost} w-full" disabled={c.quantity === 0} onclick={() => setMode('scrap')}>Discard carts…</button>
 							</div>

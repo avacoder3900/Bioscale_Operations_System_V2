@@ -103,11 +103,11 @@
 	}
 
 	// Main-line order of a cartridge's status, for "should be at" after a lookup.
-	// Buckets (barcoded → unpressed → pressed → backing = "Backed, awaiting oven") feed wax
+	// Buckets (barcoded → unpressed → pressed → backing = "Backed, Checked, and Waiting for Oven") feed wax
 	// filling directly, then reagent, seal, store. Side statuses (QC/rejected/scrapped/voided) have no next.
 	const STATUS_ORDER = ['barcoded', 'unpressed', 'pressed', 'backing', 'wax_filling', 'wax_filled', 'wax_ready', 'reagent_filling', 'reagent_filled', 'inspected', 'sealed', 'cured', 'stored', 'released', 'shipped'];
 	const STATUS_NEXT_LABEL: Record<string, string> = {
-		barcoded: 'Unpressed (advance the bucket)', unpressed: 'Pressed (advance the bucket)', pressed: 'Backed, awaiting oven (advance the bucket)',
+		barcoded: 'Unpressed (advance the bucket)', unpressed: 'Pressed (advance the bucket)', pressed: 'Backed, Checked, and Waiting for Oven (advance the bucket)',
 		backing: 'Wax filling (scan onto a deck)', wax_filling: 'Wax-filled', wax_filled: 'Wax ready', wax_ready: 'Reagent filling',
 		reagent_filling: 'Reagent-filled', reagent_filled: 'Inspected', inspected: 'Sealed', sealed: 'Cured', cured: 'Stored', stored: 'Released', released: 'Shipped'
 	};
@@ -256,7 +256,7 @@
 		{/each}
 	</div>
 
-	<!-- Production Buckets — Barcoded → Unpressed → Pressed → Backed (awaiting oven), upstream
+	<!-- Production Buckets — Barcoded → Unpressed → Pressed → Backed, Checked, and Waiting for Oven, upstream
 	     of Pipeline Flow. Same counts and stages as the buckets board; each tile deep-links
 	     to the board filtered to that stage. Hidden if the bucket query failed. -->
 	{#if data.bucketCounts}
@@ -266,7 +266,7 @@
 			{ key: 'barcoded', label: 'Barcoded', count: bc.stages.barcoded.cartridges, sub: `${bc.stages.barcoded.buckets} bucket${bc.stages.barcoded.buckets === 1 ? '' : 's'}`, color: 'text-[var(--color-tron-cyan)]' },
 			{ key: 'unpressed', label: 'Unpressed', count: bc.stages.unpressed.cartridges, sub: `${bc.stages.unpressed.buckets} bucket${bc.stages.unpressed.buckets === 1 ? '' : 's'}`, color: 'text-[var(--color-tron-cyan)]' },
 			{ key: 'pressed', label: 'Pressed', count: bc.stages.pressed.cartridges, sub: `${bc.stages.pressed.buckets} bucket${bc.stages.pressed.buckets === 1 ? '' : 's'}`, color: 'text-[var(--color-tron-cyan)]' },
-			{ key: 'backing', label: 'Backed, awaiting oven', count: bc.stages.backing.cartridges, sub: `${bc.stages.backing.buckets} bucket${bc.stages.backing.buckets === 1 ? '' : 's'}`, color: 'text-[var(--color-tron-purple)]' }
+			{ key: 'backing', label: 'Backed, Checked, and Waiting for Oven', count: bc.stages.backing.cartridges, sub: `${bc.stages.backing.buckets} bucket${bc.stages.backing.buckets === 1 ? '' : 's'}`, color: 'text-[var(--color-tron-purple)]' }
 		]}
 		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-4">
 			<div class="mb-4 flex items-center justify-between">

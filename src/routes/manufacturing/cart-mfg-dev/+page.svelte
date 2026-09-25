@@ -289,7 +289,7 @@
 				<div class="tron-card-interactive" role="button" tabindex="0"
 					onclick={() => toggleCard('backing')} onkeydown={(e) => handleKeydown(e, 'backing')}>
 					<div class="flex items-center justify-between">
-						<span class="text-xs font-semibold uppercase text-tron-text-secondary">Backed, awaiting oven</span>
+						<span class="text-xs font-semibold uppercase text-tron-text-secondary">Backed, Checked, and Waiting for Oven</span>
 						{#if data.pipeline.backing.readyLots?.length}
 							<span class="tron-badge tron-badge-success">{data.pipeline.backing.readyLots.length} ready</span>
 						{/if}

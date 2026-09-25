@@ -138,7 +138,7 @@
 	let cancelReason = $state('');
 
 	// Test Mode removed from the UI — cartridges always come from a real
-	// "Backed, awaiting oven" production bucket now. Kept as a constant false so
+	// "Backed, Checked, and Waiting for Oven" production bucket now. Kept as a constant false so
 	// the loadDeck call sites compile without synthesizing test cartridges.
 	const testMode = false;
 

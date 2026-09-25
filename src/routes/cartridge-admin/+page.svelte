@@ -60,7 +60,7 @@
 	const STAGES: LifecycleStage[] = ['barcoded', 'unpressed', 'pressed', 'backing', 'wax_filled', 'wax_qc', 'wax_ready', 'wax_rejected', 'reagent_filled', 'inspected', 'sealed', 'reagent_qc', 'reagent_ready', 'reagent_rejected', 'cured', 'stored', 'released', 'shipped', 'assay_loaded', 'testing', 'completed', 'voided'];
 
 	function stageLabel(stage: string): string {
-		if (stage === 'backing') return 'Backed, awaiting oven'; // BUCKET-SYSTEM_PLAN v2 §2: last bucket stage
+		if (stage === 'backing') return 'Backed, Checked, and Waiting for Oven'; // BUCKET-SYSTEM_PLAN v2 §2: last bucket stage
 		return stage.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
 	}
 
@@ -132,7 +132,7 @@
 			{ key: 'barcoded', label: 'Barcoded', value: bc.stages.barcoded.cartridges, sub: `${bc.stages.barcoded.buckets} bkt`, cls: 'text-[var(--color-tron-cyan)]' },
 			{ key: 'unpressed', label: 'Unpressed', value: bc.stages.unpressed.cartridges, sub: `${bc.stages.unpressed.buckets} bkt`, cls: 'text-[var(--color-tron-cyan)]' },
 			{ key: 'pressed', label: 'Pressed', value: bc.stages.pressed.cartridges, sub: `${bc.stages.pressed.buckets} bkt`, cls: 'text-[var(--color-tron-cyan)]' },
-			{ key: 'backing', label: 'Backed, awaiting oven', value: bc.stages.backing.cartridges, sub: `${bc.stages.backing.buckets} bkt`, cls: 'text-[var(--color-tron-purple)]' }
+			{ key: 'backing', label: 'Backed, Checked, and Waiting for Oven', value: bc.stages.backing.cartridges, sub: `${bc.stages.backing.buckets} bkt`, cls: 'text-[var(--color-tron-purple)]' }
 		]}
 		<div class="flex flex-wrap items-stretch gap-2">
 			<span class="self-center text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Buckets</span>

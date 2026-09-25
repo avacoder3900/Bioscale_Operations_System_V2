@@ -10,7 +10,7 @@ import {
 	BucketError, BUCKET_STAGES, STAGE_LABELS, BACKED_LABEL, SHELL_PART, LABEL_PART, THERMOSEAL_PART,
 	boardData, stageCounts, resolveScan, isBucketStage, changeLog, bucketRegistry,
 	startCycle, scanCartIn, unscanCart, advanceCycle, scrapCarts, reportResidual, retireBucket,
-	cartStatusLine, auditScan, auditCycle
+	cartStatusLine, auditScan, auditCycle, moveToOven
 } from '$lib/server/services/bucket-service';
 import { thermosealStatus, checkFloor, setThermosealToggles } from '$lib/server/services/thermoseal-service';
 import type { Actions, PageServerLoad } from './$types';
@@ -235,6 +235,19 @@ export const actions: Actions = {
 					alert: r.thermoseal.alert?.below ? { rollsOnHand: r.thermoseal.alert.rollsOnHand, minRolls: r.thermoseal.alert.minRolls, kanbanCreated: r.thermoseal.alert.kanbanCreated, emailSent: r.thermoseal.alert.emailSent } : null
 				} : null
 			} };
+		})();
+	},
+
+	// "Move to oven": the backed pass's carts leave the bucket system all at once
+	// (status stays 'backing'), the pass closes, the bucket returns to Available.
+	moveToOven: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'manufacturing:write');
+		await connectDB();
+		const d = await request.formData();
+		return wrap('moveToOven', async () => {
+			const r = await moveToOven({ cycleId: String(d.get('cycleId') ?? ''), user: op(locals) });
+			return { moveToOven: { success: true, cycleId: r.cycleId, bucketId: r.bucketId, cycleNumber: r.cycleNumber, released: r.released.length } };
 		})();
 	},
 

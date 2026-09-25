@@ -342,9 +342,10 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 		// Backed cartridges (status 'backing'). Backing-oven tracking and the
 		// cure-time gate were removed app-wide (2026-09-23, BUCKET-SYSTEM_PLAN v2):
 		// no oven grouping, no readiness — every backed cartridge is loadable.
-		// Since 2026-09-25 backed carts sit in their production bucket ("Backed,
-		// awaiting oven"); loadDeck draws them out of it. `backedBuckets` lists
-		// those tubs so the operator knows which to fetch.
+		// Backed carts sit in their production bucket ("Backed, Checked, and Waiting
+		// for Oven") until the board's "Move to oven" releases them (they stay at
+		// 'backing', loose) or loadDeck draws them out. `backedBuckets` lists the
+		// tubs still holding carts so the operator knows which to fetch.
 		const [backedTotalCount, backedCycles] = await Promise.all([
 			CartridgeRecord.countDocuments({ status: 'backing' }).catch(() => 0),
 			BucketCycle.find({ status: 'open', stage: BACKED_STAGE }).select('bucketId cycleNumber quantity stageEnteredAt').sort({ stageEnteredAt: 1 }).lean().catch(() => [] as any[])
@@ -872,7 +873,7 @@ export const actions: Actions = {
 		const run = await WaxFillingRun.findById(runId).lean() as any;
 		if (!run) return fail(404, { error: 'Run not found' });
 
-		// Cartridges arrive here at status 'backing' ("Backed, awaiting oven"),
+		// Cartridges arrive here at status 'backing' ("Backed, Checked, and Waiting for Oven"),
 		// still sitting in their production bucket. loadDeck validates each scan
 		// against those records and then draws the members out of their bucket
 		// pass (consumeCarts) — the deck load IS the handoff since 2026-09-25.

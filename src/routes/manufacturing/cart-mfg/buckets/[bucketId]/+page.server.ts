@@ -29,7 +29,7 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 				{ $match: { $or: [{ 'bucket.cycleId': { $in: cycleIds } }, { 'backing.bucketCycleId': { $in: cycleIds } }] } },
 				// wentOn = carts that left the bucket for wax filling (or further). 'backing' is
 				// still a bucket stage, so a backed cart in the tub does not count.
-				{ $group: { _id: { $ifNull: ['$bucket.cycleId', '$backing.bucketCycleId'] }, count: { $sum: 1 }, ids: { $push: '$_id' }, wentOn: { $sum: { $cond: [{ $in: ['$status', ['barcoded', 'raw', 'unpressed', 'pressed', 'backing', 'scrapped', 'voided']] }, 0, 1] } } } }
+				{ $group: { _id: { $ifNull: ['$bucket.cycleId', '$backing.bucketCycleId'] }, count: { $sum: 1 }, ids: { $push: '$_id' }, wentOn: { $sum: { $cond: [{ $and: [{ $in: ['$status', ['barcoded', 'raw', 'unpressed', 'pressed', 'backing', 'scrapped', 'voided']] }, { $not: ['$backing.movedToOvenAt'] }] }, 0, 1] } } } }
 			]) as any as Promise<any[]>
 			: Promise.resolve([]),
 		cycleIds.length
