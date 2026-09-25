@@ -16114,3 +16114,16 @@ Check (svelte-check direct): 12 errors / 431 warnings — baseline.
   → Done: PT-CT-101 physical count recorded via MCP record_physical_count, 113 → 1 roll
   (delta −112), actor/performedBy Samantha Wolf, 2026-09-25. The board tile now reads 1 roll,
   below the 2-roll floor; notifications are off so nothing fires.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-45v83t241-brevitest.vercel.app
+  (brevitest scope; cookie-session gated, 302 to /login)
+Source: branch feat/bucket-system @ commit cb28e181
+Retrieve this exact code: git checkout feat/bucket-system at commit cb28e181
+  (or: git log feat/bucket-system --oneline to find it if the branch has since moved on)
+What this deployment is for: the bucket board's Barcoded → Unpressed confirm with no thermoseal
+  box and no lot select — just the discard scan list and Confirm. After a move, the banner above
+  the board should still report the cm taken / rolls pulled. Smoke: /login 200;
+  /manufacturing/cart-mfg/buckets 302 to /login as expected.
+Build status: success (GitHub deployment 6668992657).
+Note: the plan-doc edits for this change (§3.4, §6.3, changelog row) were swept into the
+  concurrent session's commit 69bc8d65 before cb28e181 was made; they are on origin either way.
