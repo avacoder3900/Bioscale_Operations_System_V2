@@ -15996,3 +15996,13 @@ src/routes/cartridge-admin/+page.svelte, BUCKET-SYSTEM_PLAN.md.
 Check (svelte-check direct): 17 errors — the 12 baseline plus 5 in thermoseal-service.ts and
 buckets/+page.server.ts (`rollsOnHandPinned` / `rollsOnHandOverride`) that belong to another
 session's uncommitted thermoseal work in this shared checkout; not staged here, not mine.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-gds0xhjy3-brevitest.vercel.app
+  (brevitest scope; cookie-session gated, 302 to /login)
+Source: branch feat/bucket-system @ commit 340096a6
+Retrieve this exact code: git checkout feat/bucket-system at commit 340096a6
+  (or: git log feat/bucket-system --oneline to find it if the branch has since moved on)
+What this deployment is for: one Backed category — the board and cartridge-admin strips show
+  "Backed, awaiting oven" counting every backed cart, no "Backed, no bucket" tile.
+  Smoke: /login 200; buckets and cartridge-admin 302 to /login as expected.
+Build status: success (GitHub deployment 6666159248).
