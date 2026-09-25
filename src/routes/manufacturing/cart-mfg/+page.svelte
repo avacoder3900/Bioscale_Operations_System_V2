@@ -55,8 +55,9 @@
 		return [...map.values()];
 	});
 
+	// Starts at Wax Fill: the Backed stage is the last tile of the Production Buckets
+	// strip further down, so repeating it here was a third copy of the same count.
 	const pipelineStages = $derived([
-		{ label: 'In Oven', count: data.pipeline.backing.backedTotal, sub: 'backed', color: 'text-[var(--color-tron-purple)]' },
 		{ label: 'Wax Fill', count: data.pipeline.waxFilling.inProgress, sub: 'filling', color: 'text-[var(--color-tron-yellow)]' },
 		{ label: 'Wax-Filled', count: data.pipeline.waxFilling.waxStage, sub: 'ready for reagent', color: 'text-[var(--color-tron-blue)]' },
 		{ label: 'Reagent', count: data.pipeline.reagentFilling.inProgress + data.pipeline.reagentFilling.reagentFilled, sub: `${data.pipeline.reagentFilling.inProgress} filling`, color: 'text-[var(--color-tron-orange)]' },
@@ -148,13 +149,9 @@
 		</nav>
 	</div>
 
-	<!-- Top row: Shift summary stats -->
-	<div class="grid grid-cols-2 gap-3 lg:grid-cols-6">
-		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-3 text-center">
-			<div class="text-xs font-medium text-[var(--color-tron-text-secondary)] uppercase tracking-wide">Backed</div>
-			<div class="mt-1 text-2xl font-bold text-[var(--color-tron-purple)]">{data.pipeline.backing.totalReadyCartridges}</div>
-			<div class="text-xs text-[var(--color-tron-text-secondary)]">awaiting oven, ready for wax</div>
-		</div>
+	<!-- Top row: Shift summary stats. The backed count lives only on the Production
+	     Buckets strip below (user, 2026-09-25: one Backed card, not three). -->
+	<div class="grid grid-cols-2 gap-3 lg:grid-cols-5">
 		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-3 text-center">
 			<div class="text-xs font-medium text-[var(--color-tron-text-secondary)] uppercase tracking-wide">Started Today</div>
 			<div class="mt-1 text-2xl font-bold text-[var(--color-tron-cyan)]">{data.todayStats.waxRuns.completed + data.todayStats.waxRuns.inProgress + data.todayStats.waxRuns.aborted + data.todayStats.reagentRuns.completed + data.todayStats.reagentRuns.inProgress + data.todayStats.reagentRuns.aborted}</div>

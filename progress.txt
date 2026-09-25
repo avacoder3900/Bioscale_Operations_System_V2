@@ -16051,3 +16051,16 @@ scripts/migrate-thermoseal-roll-only.ts (new), BUCKET-SYSTEM_PLAN.md.
 Check (svelte-kit sync + svelte-check direct, portable arm64 Node): 12 errors / 431 warnings —
 the documented baseline (r2.ts, AskBimsWidget, 8× assembly/[sessionId], 2× validation/
 magnetometer/[sessionId]); none in any file touched.
+
+================================================================================
+2026-09-25 — feat/bucket-system — dashboard: one Backed card
+================================================================================
+User: remove the redundant extra "Backed, awaiting oven" card. The cart-mfg dashboard showed
+the backed count three times — the top-row "Backed" shift stat, the Pipeline Flow strip's
+leading card (still labelled "In Oven"), and the Production Buckets strip's "Backed, awaiting
+oven" tile. Kept the Production Buckets tile (it is the stage's home, next to Pressed, and
+links to the board); removed the top-row stat (row is 5 tiles now) and the Pipeline Flow entry
+(the flow starts at Wax Fill). Plan §9.3 updated.
+Files: src/routes/manufacturing/cart-mfg/+page.svelte, BUCKET-SYSTEM_PLAN.md.
+Check (svelte-check direct): 12 errors / 431 warnings — baseline (the other session's five
+thermoseal errors from the previous entry are gone from the tree).

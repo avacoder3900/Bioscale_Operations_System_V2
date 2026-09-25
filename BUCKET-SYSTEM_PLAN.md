@@ -414,8 +414,10 @@ thermoseal cm, ledger rows, *Replace sticker* link, *Void this pass…* (admin).
   oven** (every cart at `backing`; filters the page to `backing`). The
   *Available* tile was removed 2026-09-23 (user: report only the production stages); the
   board's own strip (§9.1) still counts Available buckets.
-- `/manufacturing/cart-mfg` **Production Buckets** card beneath the robot grid, same tiles; the
-  top-row *Backed* stat counts every cart at `backing`.
+- `/manufacturing/cart-mfg` **Production Buckets** card beneath the robot grid, same tiles. This
+  is the dashboard's only Backed card: the top-row *Backed* stat and the Pipeline Flow strip's
+  leading *In Oven* card were removed 2026-09-25 (user: redundant) — Pipeline Flow now starts
+  at Wax Fill.
 - `/manufacturing/cart-mfg/pipeline?stage=bucket_barcoded|bucket_unpressed|bucket_pressed|backing`.
   The `backing` view lists backed bucket passes first, then carts outside a pass grouped per
   legacy WI-01 batch (same status, "awaiting oven"), then legacy `BackingLot` aggregates.
