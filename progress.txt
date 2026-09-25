@@ -16608,3 +16608,11 @@ Caveat: R2_WORKER_URL / R2_UPLOAD_SECRET are Production-scoped in Vercel (see th
 PREVIEW ENV" note above, ~line 2152), so a branch preview cannot exercise the Worker path — it
 falls back to S3 and shows the same access-key error. The real test is production (master).
 svelte-check: 14 errors — baseline. Left alone: +page.svelte (another session's uncommitted edits).
+Deployment: preview — https://bioscale-operations-system-mongodb-afy4ml066-brevitest.vercel.app
+Source: branch feat/bucket-system @ commit 5e09125d
+Retrieve this exact code: git checkout feat/bucket-system at commit 5e09125d
+  (or: git log feat/bucket-system --oneline to find it if the branch has since moved on)
+What this deployment is for: build check of the Worker-first sonic upload. GitHub deployment
+  6670864534. Smoke: /login 200; /validation/sonic 302. NOT a functional test — previews lack
+  R2_WORKER_URL, so an upload here still falls back to S3 and hits the access-key error.
+  Functional test requires production (master). Awaiting the user's go.
