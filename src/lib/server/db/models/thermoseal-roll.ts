@@ -2,14 +2,15 @@ import mongoose, { Schema } from 'mongoose';
 import { generateId } from '../utils.js';
 
 /**
- * ThermosealRoll — one physical roll of thermoseal (PT-CT-112) that has been
- * pulled from inventory and opened at the press (BUCKET-SYSTEM_PLAN v2 §3.4).
+ * ThermosealRoll — one physical roll of thermoseal (THERMOSEAL_PART, PT-CT-101)
+ * that has been pulled from inventory and opened at the press (BUCKET-SYSTEM_PLAN
+ * v2 §3.4).
  *
- * Inventory for PT-CT-112 is counted in ROLLS. Consumption is tracked in
+ * Thermoseal inventory is counted ONLY in ROLLS. Consumption is tracked in
  * centimetres against the open roll: every cartridge that enters Unpressed
  * takes `cmPerCartridge` (3.75 cm) off `consumedCm`. When the roll's length
  * is used up it becomes 'exhausted' and the next roll is pulled — that pull
- * is the only moment the PT-CT-112 inventory count moves (−1 roll, one
+ * is the only moment the thermoseal inventory count moves (−1 roll, one
  * InventoryTransaction whose manufacturingRunId is the roll id, so voiding a
  * bucket pass never gives a physically opened roll back to stock).
  *
@@ -17,7 +18,7 @@ import { generateId } from '../utils.js';
  */
 const thermosealRollSchema = new Schema({
 	_id: { type: String, default: () => generateId() },
-	partNumber: { type: String, default: 'PT-CT-112' },
+	partNumber: { type: String, default: 'PT-CT-101' },
 	lotId: String,                 // ReceivingLot.lotId the roll was pulled from (when known)
 	lengthCm: { type: Number, required: true },   // full length when opened (65 m = 6500 cm)
 	consumedCm: { type: Number, default: 0 },

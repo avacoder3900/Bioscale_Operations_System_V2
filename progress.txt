@@ -16006,3 +16006,48 @@ What this deployment is for: one Backed category — the board and cartridge-adm
   "Backed, awaiting oven" counting every backed cart, no "Backed, no bucket" tile.
   Smoke: /login 200; buckets and cartridge-admin 302 to /login as expected.
 Build status: success (GitHub deployment 6666159248).
+
+================================================================================
+2026-09-25 — feat/bucket-system — Thermoseal overhaul: one part, rolls only, bucket phase only
+================================================================================
+User: "completely overhaul the thermoseal inventory so that it ONLY counts at the bucket phase,
+and that it is only counted by the roll … we do not need to track the laser cut sheet at all,
+that inventory is now stale." Plan §3.4 rewritten; §8 / §9.1 / §11 / §12.2 / §12.3 / §12.4 updated.
+
+Before: three thermoseal parts moved inventory in three places. cut-thermoseal debited a
+PT-CT-101 roll per run and created PT-CT-111 cut sheets; laser-cutting consumed PT-CT-111 and
+created PT-CT-112 "laser cut sheets" as strips (×16 per sheet) plus a ReceivingLot mirror and a
+legacy ManufacturingMaterial counter; wi-02 wrote an orphan "strips" creation row; the bucket
+board pulled rolls against PT-CT-112 (the strip part, −228 today, and the part the live master
+WI-01 still debits per cart), hiding that behind a development pin that held "rolls on hand" at 1.
+
+After: THERMOSEAL_PART = PT-CT-101 (the roll SKU receiving books rolls into; "Thermoseal", 113
+"ea" today), owned by thermoseal-service and re-exported by bucket-service. The bucket board's
+roll pull (openRoll, −1 consumption, manufacturingRunId = roll id) is the only manufacturing step
+that moves it. cut-thermoseal, wi-02 and laser-cutting write no inventory at all (run/batch logs
+only; laser-cutting's inventory tile and ManufacturingMaterial produce block removed; the
+consumables overview no longer derives "individual backs" from a sheet count and its Cut/Laser/
+Backing rows are relabelled). The development pin (rollsOnHandPinned / rollsOnHandOverride) is
+gone from the settings schema, the service, the board action and the tile — setThermosealToggles
+$unsets it; the tile shows the live PT-CT-101 count and the yellow "not synced" card is gone
+(nothing on this branch reads PT-CT-112 any more). ThermosealStatus gained partNumber and lost
+rollsOnHandLive. Restock card / email / floor rule unchanged apart from the part.
+
+Data: scripts/migrate-thermoseal-roll-only.ts (--plan / --apply, NOT run — no MONGODB_URI in
+this checkout) renames PT-CT-101 → "Thermoseal Roll" (uom "roll"), sets PT-CT-111 / PT-CT-112
+isActive:false, relabels thermoseal_rolls to PT-CT-101, reports any open restock card for the old
+part id, writes one AuditLog summary row. It touches no count: PT-CT-101 needs a physical count
+in rolls after it runs.
+
+Files: src/lib/server/services/{thermoseal-service,bucket-service}.ts,
+src/lib/server/db/models/{manufacturing-settings,thermoseal-roll,bucket-cycle}.ts,
+src/lib/server/kanban/standing.ts, src/lib/server/ask-bims-tier1.ts,
+src/routes/manufacturing/cart-mfg/buckets/{+page.server.ts,+page.svelte},
+src/routes/manufacturing/cart-mfg/{cut-thermoseal,wi-02,laser-cutting}/+page.server.ts,
+src/routes/manufacturing/cart-mfg/laser-cutting/+page.svelte,
+src/routes/manufacturing/consumables/{+page.server.ts,+page.svelte},
+scripts/migrate-thermoseal-roll-only.ts (new), BUCKET-SYSTEM_PLAN.md.
+
+Check (svelte-kit sync + svelte-check direct, portable arm64 Node): 12 errors / 431 warnings —
+the documented baseline (r2.ts, AskBimsWidget, 8× assembly/[sessionId], 2× validation/
+magnetometer/[sessionId]); none in any file touched.

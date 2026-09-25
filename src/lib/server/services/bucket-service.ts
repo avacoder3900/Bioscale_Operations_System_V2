@@ -25,7 +25,8 @@
  * Inventory (the scan-in is the truth):
  *   - scan a cart into a bucket  → −1 PT-CT-104 (shell) and −1 PT-CT-106 (label)
  *   - barcoded → unpressed            → thermoseal by LENGTH: members × 3.75 cm off the open
- *                                  roll; a roll pull (−1 PT-CT-112) only when one runs out
+ *                                  roll; a roll pull (−1 THERMOSEAL_PART roll) only when one
+ *                                  runs out — the ONLY place thermoseal inventory moves
  *   - discard / residual scrap   → scrap of what the cart physically is at that
  *                                  stage (shell + label; thermoseal length is not returned)
  *   - wax-fill draw (deck load)  → nothing; everything was debited upstream
@@ -41,7 +42,7 @@ import { generateId } from '$lib/server/db/utils';
 import { recordTransaction, resolvePartId } from './inventory-transaction';
 import { splitMergedBarcodes, hardDeleteUnfinalizedCartridges } from './cartridge-hard-delete';
 import { generateBarcode } from './barcode-generator';
-import { consumeThermoseal, creditThermoseal, ThermosealError, type ConsumeResult } from './thermoseal-service';
+import { consumeThermoseal, creditThermoseal, ThermosealError, THERMOSEAL_PART, type ConsumeResult } from './thermoseal-service';
 
 export const BUCKET_STAGES = ['barcoded', 'unpressed', 'pressed', 'backing'] as const;
 export type BucketStage = (typeof BUCKET_STAGES)[number];
@@ -67,7 +68,8 @@ export const BACKED_LABEL = STAGE_LABELS.backing;
 export const BUCKET_PREFIX = 'BKT';
 export const SHELL_PART = 'PT-CT-104';
 export const LABEL_PART = 'PT-CT-106';
-export const THERMOSEAL_PART = 'PT-CT-112';
+// The thermoseal roll part is owned by thermoseal-service (one part, counted in rolls).
+export { THERMOSEAL_PART };
 
 export type Operator = { _id: string; username: string };
 export type ResidualDisposition = 'merge' | 'scrap'; // 'defer' (quarantine) removed 2026-09-23
@@ -780,7 +782,7 @@ export async function scrapCarts(input: ScrapInput): Promise<{ cycle: any; remov
 export interface AdvanceCycleInput {
 	cycleId: string;
 	user: Operator;
-	thermosealLotId?: string;   // PT-CT-112 lot to pull the NEXT roll from, if one is opened (optional; FIFO default)
+	thermosealLotId?: string;   // THERMOSEAL_PART lot to pull the NEXT roll from, if one is opened (optional; FIFO default)
 	discardedIds?: string[];    // carts binned at this step (scanned)
 	discardJournal?: string;    // required when discardedIds is non-empty
 }
@@ -791,7 +793,7 @@ export interface AdvanceCycleInput {
  * debit covers only carts that move), then every remaining member's status
  * follows the bucket. barcoded → unpressed takes members × 3.75 cm of thermoseal
  * off the open roll (thermoseal-service); the roll pull, if one happens, is
- * where PT-CT-112 inventory actually moves.
+ * where thermoseal inventory actually moves.
  */
 export async function advanceCycle(input: AdvanceCycleInput): Promise<{ cycle: any | null; discarded: number; closed: boolean; thermoseal: ConsumeResult | null }> {
 	await connectDB();
@@ -1538,7 +1540,7 @@ export async function voidCycle(input: VoidCycleInput): Promise<VoidCycleResult>
 	}
 
 	// Thermoseal was taken by length, not as a debit on this pass — credit the
-	// segments back to their rolls. The roll pull itself (−1 PT-CT-112) stays:
+	// segments back to their rolls. The roll pull itself (−1 roll) stays:
 	// that roll is physically open on the press.
 	const thermosealCreditedCm = cycle.thermoseal?.segments?.length
 		? await creditThermoseal({ segments: cycle.thermoseal.segments, user: input.user, reason: `VOID ${label}: ${reason}` })

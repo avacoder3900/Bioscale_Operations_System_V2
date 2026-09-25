@@ -199,6 +199,7 @@ export const actions: Actions = {
 	},
 
 	// Development toggle for the thermoseal restock notifications (kanban card + email) — admin.
+	// (The rolls-on-hand pin was removed 2026-09-25; the board follows the live roll count.)
 	thermosealToggles: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
 		requirePermission(locals.user, 'manufacturing:write');
@@ -207,14 +208,11 @@ export const actions: Actions = {
 		await connectDB();
 		const d = await request.formData();
 		return wrap('thermosealToggles', async () => {
-			const pinRaw = String(d.get('rollsOnHandOverride') ?? '').trim();
 			const cfg = await setThermosealToggles({
 				notificationsEnabled: d.get('notificationsEnabled') === '1',
-				rollsOnHandPinned: d.get('rollsOnHandPinned') === '1',
-				rollsOnHandOverride: pinRaw === '' ? undefined : Number(pinRaw),
 				user: op(locals)
 			});
-			return { thermosealToggles: { success: true, notificationsEnabled: cfg.notificationsEnabled, rollsOnHandPinned: cfg.rollsOnHandPinned, rollsOnHandOverride: cfg.rollsOnHandOverride } };
+			return { thermosealToggles: { success: true, notificationsEnabled: cfg.notificationsEnabled } };
 		})();
 	},
 

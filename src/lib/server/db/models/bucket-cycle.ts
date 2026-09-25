@@ -19,7 +19,7 @@ const operatorRef = { _id: String, username: String };
  * WI-01 page). Oven placement and cure time are not tracked.
  */
 const sourceLotSchema = new Schema({
-	partNumber: String,   // 'PT-CT-104' shell | 'PT-CT-106' label | 'PT-CT-112' thermoseal
+	partNumber: String,   // 'PT-CT-104' shell | 'PT-CT-106' label | THERMOSEAL_PART roll (PT-CT-101)
 	lotId: String,        // ReceivingLot.lotId (scanned barcode)
 	scannedAt: Date
 }, { _id: false });

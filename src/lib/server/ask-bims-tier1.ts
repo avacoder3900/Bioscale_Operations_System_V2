@@ -148,7 +148,8 @@ Research-only collections (shared Mongo with brevitest-research-v2 — readable 
 § 3. CARTRIDGE LIFECYCLE (the golden thread)
 
 Mfg path (operations app + Lambda):
-  raw materials → [WI-02 thermoseal cut] → [WI-01 backing → LotRecord+CartridgeRecord.backing]
+  raw materials → [bucket board: scan-in, press (thermoseal by roll length), backed]
+    (thermoseal inventory = rolls on PT-CT-101, moved only by the board's roll pull; WI-02 cut / laser cut are run logs, not inventory)
   → [Wax Filling → WaxFillingRun + cart.waxFilling]
   → [Wax QC] → [Wax Storage] → [Reagent Filling → ReagentBatchRecord + cart.reagentFilling]
   → (top seal, implicit) → [Reagent Inspect photo → reagent_qc → reagent_ready|reagent_rejected] → [Cold Storage]

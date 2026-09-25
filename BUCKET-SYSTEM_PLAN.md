@@ -111,63 +111,67 @@ Yellow note on the board: **"Inventory is not Debited Until Carts are Scanned in
   its shell and label. **Thermoseal length is not returned** — it is consumed material.
 - Pressed → Backed and the wax-fill draw debit nothing.
 
-### 3.4 Thermoseal — consumed by length off a roll (2026-09-23)
+### 3.4 Thermoseal — ONE part, counted ONLY in rolls, moved ONLY at the bucket phase (2026-09-25)
 
-*Replaces v1's "out of scope" and the interim one-unit-per-cart debit.*
+*Replaces v1's "out of scope", the interim one-unit-per-cart debit, and the 2026-09-23 roll model
+that still sat on PT-CT-112 next to a per-cart production debit and a laser-cut sheet count.*
 
-PT-CT-112 is stocked in **rolls** and used by **length**:
+**User, 2026-09-25: "completely overhaul the thermoseal inventory so that it ONLY counts at the
+bucket phase, and that it is only counted by the roll … we do not need to track the laser cut
+sheet at all, that inventory is now stale."**
 
 | Rule | Value | Where |
 |---|---|---|
-| Length per cartridge (averaged for excess) | **3.75 cm** | `ManufacturingSettings.thermoseal.cmPerCartridge` (default in `thermoseal-service.ts`) |
+| The thermoseal part | **PT-CT-101 "Thermoseal Roll"** (`THERMOSEAL_PART`) — the roll SKU receiving books rolls into | `thermoseal-service.ts`; re-exported by `bucket-service.ts` |
+| Unit of the count | **rolls**, nothing else | `PartDefinition.inventoryCount`, `unitOfMeasure: 'roll'` |
+| What moves the count | **only** the bucket board's roll pull (`openRoll`, −1 `consumption`, `manufacturingRunId = roll id`) and receiving | — |
+| Length per cartridge (averaged for excess) | **3.75 cm** | `ManufacturingSettings.thermoseal.cmPerCartridge` |
 | Length per roll | **65 m = 6500 cm** (≈ 1733 carts) | `…thermoseal.rollLengthCm` |
 | Floor: rolls that must stay in inventory | **2** | `…thermoseal.minRollsInInventory` |
-| When consumed | **Barcoded → Unpressed**, members × 3.75 cm | `bucket-service.advanceCycle` → `consumeThermoseal` |
-| **Development toggle** — restock notifications | **OFF** by default | `…thermoseal.notificationsEnabled`; admin checkbox on the board's Thermoseal card |
-| **Development pin** — rolls on hand shown/used by the board | **pinned at 1** by default | `…thermoseal.rollsOnHandPinned` / `rollsOnHandOverride`; admin control on the same card. Unpin to follow the live PT-CT-112 count (meaningless in rolls until PR #60 lands) |
+| When length is consumed | **Barcoded → Unpressed**, members × 3.75 cm | `bucket-service.advanceCycle` → `consumeThermoseal` |
+| **Development toggle** — restock notifications | **OFF** by default | `…thermoseal.notificationsEnabled`; admin checkbox on the board's Thermoseal tile |
 
+- **Retired: PT-CT-111 "Thermoseal Cut Sheet" and PT-CT-112 "Thermoseal Laser Cut sheet".** No
+  page writes to them any more. `cut-thermoseal` (roll −1 / cut sheets +N), `wi-02` (orphan
+  "strips" creation) and `laser-cutting` (cut sheets −N / laser-cut strips +N×16 / ReceivingLot
+  mirror / legacy `ManufacturingMaterial` "laser cut substrates" counter) are **run logs only**;
+  their inventory tiles are gone. Wax filling never touched thermoseal. The consumables overview
+  no longer derives "individual backs" from a sheet count.
+- **The development pin is gone.** `rollsOnHandPinned` / `rollsOnHandOverride` were removed from
+  the settings schema, the service, the board action and the tile; `setThermosealToggles`
+  `$unset`s them. The tile shows the live PT-CT-101 count. The yellow "not synced" card is gone
+  with it — the board no longer reads the part the live `master` build debits per cart.
 - `ThermosealRoll` (`thermoseal_rolls`) is one physical roll: `lengthCm`, `consumedCm`,
   `status` active | exhausted | retired, `lotId`, `openedBy/At`, `openedForCycleId`,
-  `inventoryTxId`. At most one roll is `active`.
+  `inventoryTxId`. At most one roll is `active`. `partNumber` defaults to PT-CT-101.
 - **A roll is pulled from inventory only when the open roll runs out** (or on the very first
-  advance). The pull is one `consumption` of quantity 1 against PT-CT-112, `manufacturingRunId =
-  roll id` — *not* the bucket pass — so voiding a pass never puts an opened roll back on the
-  shelf. The lot is the one scanned on the advance form (optional) or else the **oldest accepted
-  PT-CT-112 lot with stock** (FIFO by the ledger).
+  advance). The lot is the one scanned on the advance form (optional) or else the **oldest
+  accepted PT-CT-101 lot with stock** (FIFO by the ledger). Voiding a pass never puts an opened
+  roll back on the shelf.
 - A bucket larger than the roll's remainder rolls over onto the next roll (and again if needed);
   the pass records `thermoseal.segments = [{ rollId, cm }]`.
-- **Floor rule.** `checkFloor()` runs after every pull, on every bucket-board load and in the
-  kanban supply sweep (daily cron / Queue page). It reads PT-CT-112 `inventoryCount` (rolls);
-  the board always shows the below-floor state. **Only while the notifications toggle is on**,
-  a shelf below `minRollsInInventory` also gets:
-  1. one **kanban restock card** is spawned through the existing supply autopilot
-     (`kanban/standing.ensureThermosealRestockCard`): chore, class of service *expedite*,
-     auto-committed to the ready queue, idempotent on `sourceRef thermoseal-restock:<partId>`,
-     body carries the **lead-time warning** (`PartDefinition.leadTimeDays` if set);
-  2. the **low-inventory email list** (`NotificationSettings.lowInventory`, sent via Resend) gets
-     `notifyThermosealLow` — only on the pull that *created* the card, so a shelf that stays low
-     does not re-mail on every roll; the open card is the standing reminder.
+- **Floor rule.** `checkFloor()` runs after every pull, on every bucket-board load (throttled) and
+  in the kanban supply sweep. It reads PT-CT-101 `inventoryCount` (rolls); the board always shows
+  the below-floor state. **Only while the notifications toggle is on**, a shelf below
+  `minRollsInInventory` also gets one **kanban restock card** (`ensureThermosealRestockCard`,
+  idempotent on `sourceRef thermoseal-restock:<partId>`, lead-time warning in the body) and one
+  email to the **low-inventory list** (`notifyThermosealLow`, only on the pull that created the
+  card).
 - **Void** (§12.2) credits the pass's segments back to their rolls (`creditThermoseal`); an
   exhausted roll becomes active again only if no other roll is open.
-- The board shows a **Thermoseal card**: open roll gauge (m left, ≈ carts left, lot), rolls in
-  inventory vs. the floor, the lot the next roll would come from, and the restock state. The
-  advance form previews "N cm comes off the open roll" and only asks for a lot when a new roll
-  will be pulled.
-- **Current stock, and why it is negative.** The live `PT-CT-112` count sits on the *Rolls on
-  hand* tile (pinned value shown, live value in "Development settings"), and the yellow card
-  above it names the build that is draining it. A fuller "current stock" note was added above
-  "Development settings" on 2026-09-23 and **removed the same day as redundant with that tile**
-  (user) — `ThermosealStatus.liveCountAt` went with it.
+- The board's **Thermoseal tile** (under Unpressed): open roll gauge (m left, ≈ carts left, lot),
+  rolls on hand (live PT-CT-101) vs. the floor, the lot the next roll would come from, restock
+  state, and the notifications toggle under "Development settings". The advance form previews
+  "N cm comes off the open roll" and only asks for a lot when a new roll will be pulled.
 
-**Cutover:** PT-CT-112 `inventoryCount` was −427 from the interim per-cart debits; a physical
-count of **1 roll** was recorded on 2026-09-23 (MCP `record_physical_count`, Samantha Wolf).
-The shelf is therefore already below the floor; the restock card + email stay off until the
-development toggle is switched on. The part is named "Thermoseal Laser Cut sheet" in parts; the
-unit of measure should read "roll". The count has drifted negative again since — **−77 on
-2026-09-23** (last physical count 2026-09-23 16:35 UTC) — because the build live on `master`
-keeps debiting one unit per cart out of the same database (§12.4). **User, 2026-09-23: that is
-a known artifact of the live build and will not go away until this branch ships** — do not
-chase it, and do not re-count PT-CT-112 to make it look right.
+**Cutover — `scripts/migrate-thermoseal-roll-only.ts` (`--plan` / `--apply`, not yet run):**
+renames PT-CT-101 to "Thermoseal Roll" with `unitOfMeasure: 'roll'`, sets PT-CT-111 and PT-CT-112
+`isActive: false`, relabels existing `thermoseal_rolls` to PT-CT-101, and reports any open
+restock card for the old part id. It does **not** touch any count: after it runs, **record a
+physical count of rolls on PT-CT-101** (its count was 113 "ea" on 2026-09-25 from the old
+cut-thermoseal debits; PT-CT-112's −228 is left behind and no longer read). Until this branch
+ships, the live `master` build keeps debiting PT-CT-112 per cart — that part is now retired
+here and nothing on this branch reads it, so the drift is invisible to the board (§12.4).
 
 ### 3.5 Auto-release with deferred spot-check
 
@@ -363,7 +367,7 @@ longer calls it — validation happens on submit.
 
 ## 8. Inventory effects
 
-| Event | PT-CT-104 shell | PT-CT-106 label | PT-CT-112 thermoseal |
+| Event | PT-CT-104 shell | PT-CT-106 label | PT-CT-101 thermoseal roll (the only thermoseal part) |
 |---|---|---|---|
 | Start pass | — | — | — |
 | Scan cart in (Barcoded) | −1 `consumption` | −1 `consumption` | — |
@@ -386,8 +390,8 @@ tile counts every cart at `backing`, its bucket sub-count the open backed passes
 Under **Available**: empty buckets only — minting lives on `/buckets/new` (§9.4), reached from
 the header *New bucket* button; there is no inline mint card on the board. Every pass card
 carries **Audit** (§9.8) under its cart list.
-Under **Unpressed**: the yellow *thermoseal not synced* card
-and the compact **Thermoseal tile** (§3.4; admin toggles inside "Development settings"). Header
+Under **Unpressed**: the compact **Thermoseal tile** (§3.4; live PT-CT-101 roll count, notifications
+toggle inside "Development settings"; the "not synced" card and the rolls-on-hand pin are gone). Header
 buttons: *New bucket*, *Master override* (admin, §9.5), *Wax filling →*. Rail (start, scan-in box with
 mis-scan, advance with discards, scrap by scan, residual by scan, retire) → expandable **change log** (lot, move,
 who, discards, thermoseal note) → **bucket log** (every bucket incl. retired). `?stage=` focuses
@@ -530,6 +534,7 @@ per-scan lookup only needs `manufacturing:read`.
 | _(this change)_ | **Leftover panel: *Where does this cart belong?*** search (§7) — scan one leftover, one line back naming the open pass it is a member of; `cartStatusLine()` answers from `BucketCycle.cartridgeIds` membership first (§9.1) |
 | `5a01239f` | **`raw` → `barcoded` rename** (§2): stage key, labels, `CartridgeRecord.status`, `LifecycleStage`, pipeline `bucket_barcoded`; old `raw` kept in both enums for historical rows; `scripts/migrate-bucket-raw-to-barcoded.ts` (`--plan` / `--apply`, not yet run). Code swept into the ship-build merge commit; this doc row is the follow-up. |
 | _(this change)_ | **WI-01 page removed; fourth stage "Backed, awaiting oven"** (§2, §5.2, §6.3, §6.4, §9): `BUCKET_STAGES` + `BucketCycle.stage` gain `backing`; Pressed → Backed is a normal advance (with the `backing.*` stamp); wax filling's `loadDeck` draws carts out of the pass (`consumeCarts` now requires Backed, `relatedId` = wax run); cancel/abort return them (`returnCarts`, new); `StageCounts.inOven` dropped (the Backed stage count is every cart at `backing`); override `in_oven` target dropped; nav, board, admin strip, dashboard, dev dashboard, pipeline `backing` view relabelled. No data migration: existing `backing` carts count as Backed and are still loadable. A short-lived "Backed, no bucket" tile/count was removed the same day at the user's request. |
+| _(this change)_ | **Thermoseal: one part, rolls only, bucket phase only** (§3.4): `THERMOSEAL_PART` → PT-CT-101 (owned by `thermoseal-service`, re-exported by `bucket-service`); development pin removed (schema, service, board action, tile); yellow "not synced" card removed; `cut-thermoseal`, `wi-02`, `laser-cutting` no longer write inventory (PT-CT-101 / 111 / 112 / `ManufacturingMaterial`), laser-cutting inventory tile dropped; consumables overview stops deriving "individual backs"; `scripts/migrate-thermoseal-roll-only.ts` (`--plan` / `--apply`, not yet run) |
 
 `npm run check` after v2: **12 errors / 438 warnings** — the same 12 pre-existing (`r2.ts`,
 `AskBimsWidget.svelte`, 8× `assembly/[sessionId]`, 2× `validation/magnetometer/[sessionId]`
@@ -547,8 +552,8 @@ from master). None in any file this branch touches.
 - **Exercised only by the user on Vercel previews.** Nothing has run in production.
 - **Deliberate checks before merge:** (a) scan a bucket's own QR as a cart → refused naming the
   bucket; (b) advance Barcoded → Unpressed with the roll near empty → banner says a roll was pulled,
-  ledger shows one −1 PT-CT-112 against the roll id, `thermoseal.segments` has two entries;
-  (c) with PT-CT-112 at 2 rolls, pull one → kanban card appears once, email logged once (see
+  ledger shows one −1 PT-CT-101 against the roll id, `thermoseal.segments` has two entries;
+  (c) with PT-CT-101 at 2 rolls, pull one → kanban card appears once, email logged once (see
   `/admin/notifications` audit), a second pull adds no second card; (d) void that pass → cm
   credited, roll count unchanged.
 
@@ -573,7 +578,7 @@ the floor creates a real card and sends real mail on the next board load.
 4. Thermoseal constants — 3.75 cm / 65 m / floor 2 are in `ManufacturingSettings.thermoseal`
    (no UI yet; defaults in code). **Notifications toggle is off** — turn it on when the build is
    ready for real restock cards and mail. Confirm `leadTimeDays` and `supplier` are filled on the
-   PT-CT-112 part so the restock card and email carry a real lead time.
+   PT-CT-101 part so the restock card and email carry a real lead time.
 
 ### 12.4 Known risks
 
@@ -593,18 +598,16 @@ the floor creates a real card and sends real mail on the next board load.
 - **Legacy oven readers** (`equipment-status.ts`, `equipment-activity.ts`, cartridge-dashboard,
   equipment location pages, DHR/traceability JSON) still read `backing.ovenLocationId` /
   `ovenEntryTime`; they show nothing for v2 carts, which is correct, but they are dead weight.
-- **Thermoseal is not synced with production (2026-09-23).** Production WI-01 on `master` still
-  withdraws one PT-CT-112 *unit* per cartridge; this branch counts rolls by length. Every
-  production WI-01 batch drags the roll count down (1 → −23 → **−77**, all on 2026-09-23). **User, 2026-09-23: the negative number is a known
-  artifact of the build live on `master` and persists until this branch ships** — it is not a
-  fault of the bucket flow, and re-counting PT-CT-112 only resets it until the next production
-  batch. User
-  decision: leave production alone for now; the board carries a yellow "not synced" card and the
-  count is re-counted in rolls when needed. **End state (user, 2026-09-23): thermoseal stock is
-  universal — one roll-based count consumed by both production WI-01 and the buckets.** The
-  hotfix that moves production WI-01 to roll-length
-  consumption is **PR #60** — parked until development settles (to stop churning the live
-  number), then merged.
+- **Thermoseal on the live `master` build (updated 2026-09-25).** Production WI-01 on `master`
+  still withdraws one PT-CT-112 *unit* per cartridge out of the shared database. Since the
+  2026-09-25 overhaul (§3.4) nothing on this branch reads PT-CT-112 — the roll part is
+  PT-CT-101 and PT-CT-112 is retired — so that drift no longer shows on the board. It ends when
+  this branch ships and replaces WI-01. History: the 2026-09-23 roll model sat on PT-CT-112 and
+  went 1 → −23 → −77 → −228 from the production debits; the user's call then was to leave
+  production alone, which still stands. PR #60 (production WI-01 → roll length) is superseded by
+  this branch shipping.
+- **PT-CT-101's count needs a physical count in rolls** after `scripts/migrate-thermoseal-roll-only.ts`
+  runs: it reads 113 "ea" from the old cut-thermoseal debits and has never been counted as rolls.
 - **Inventory counts recorded before 2026-09-25 may sit high.** `recordTransaction` decremented
   `PartDefinition.inventoryCount` by read-compute-`$set`, so two operators debiting the same part
   at the same moment both worked from the same stale read and the second write erased the first.

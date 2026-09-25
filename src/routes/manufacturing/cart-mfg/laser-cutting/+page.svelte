@@ -30,14 +30,8 @@
 		defaultCuttingProgramLink: string | null;
 	}
 
-	interface InventoryItem {
-		name: string;
-		quantity: number;
-		unit: string;
-	}
-
 	interface Props {
-		data: { batches: Batch[]; stats: Stats; defaults: Defaults; inventory: { laserCutSheets: InventoryItem } };
+		data: { batches: Batch[]; stats: Stats; defaults: Defaults };
 		form: { success?: boolean; defaultsSaved?: boolean; error?: string } | null;
 	}
 
@@ -124,14 +118,8 @@
 		</form>
 	{/if}
 
-	<!-- Inventory -->
-	<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4">
-		<p class="text-xs font-medium text-[var(--color-tron-text-secondary)]">Output: {data.inventory.laserCutSheets.name}</p>
-		<p class="mt-1 text-2xl font-bold text-[var(--color-tron-text)]">
-			{data.inventory.laserCutSheets.quantity}
-			<span class="text-sm font-normal text-[var(--color-tron-text-secondary)]">{data.inventory.laserCutSheets.unit}</span>
-		</p>
-	</div>
+	<!-- No inventory tile (2026-09-25): laser-cut sheets are not tracked inventory any more;
+	     thermoseal is counted in rolls at the bucket board only. -->
 
 	<!-- Stats -->
 	<div class="grid grid-cols-2 gap-3 sm:grid-cols-5">
