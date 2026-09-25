@@ -16472,3 +16472,41 @@ builds → `git push origin feat/bucket-system:master` (fast-forward; master bec
 docs commits) → Vercel's GitHub integration builds production from master. Migration scripts
 (migrate-bucket-raw-to-barcoded, migrate-thermoseal-roll-only) are still NOT run — no MONGODB_URI
 in this checkout; both are --plan / --apply and safe to run after the deploy.
+
+================================================================================
+2026-09-25 — feat/bucket-system — sonic upload: 4.5 MB note + visible failure message
+================================================================================
+Why the sonic fingerprint page "wasn't logging" uploads: Vercel rejects request bodies over
+4.5 MB (FUNCTION_PAYLOAD_TOO_LARGE) before the SvelteKit action ever runs, so the page's 80 MB
+promise and the action's 80 MB check were both unreachable for a real phone recording. The 413
+comes back as plain text, enhance can't deserialize it, and the result fell through as a generic
+error with nothing useful on screen. Production DB check (BIMS MCP saved queries): zero sonic
+validation_sessions and zero sonic_recording_upload audit rows — no upload has ever completed.
+
+src/routes/validation/sonic/+page.svelte only:
+- Helper note now says "up to 4.5 MB" (was 80 MB).
+- File picker rejects >4.5 MB client-side with a red "Upload failed: <name> is N MB, over the
+  4.5 MB limit…" message and keeps the submit button disabled.
+- enhance callback handles result.type === 'error': 413 (or the JSON-parse failure it produces)
+  → "Upload failed: the file is over the 4.5 MB limit and was rejected before it reached the
+  server."; any other error → "Upload failed (HTTP n): <msg>. The recording was not stored."
+  Shown in the same red banner as form.error instead of dropping to the error page.
+Server MAX_BYTES in +page.server.ts still reads 80 MB (unreachable; left as-is). Real fix for
+large recordings is a presigned PUT straight to R2 + a small record action (needs bucket CORS).
+svelte-check: 14 errors — the 12-error baseline plus 2 pre-existing in research-proxy.ts, none
+in the sonic page. Not committed.
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+  (deployment URL https://bioscale-operations-system-mongodb-ki9sipr5t-brevitest.vercel.app)
+Source: branch master (fast-forwarded from feat/bucket-system) @ commit c326f293
+Retrieve this exact code: git checkout master at commit c326f293
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: the shipped bucket-system build — WI-01 gone (route 302s to /login
+  before a 404 for an anonymous request), thermoseal as one roll part (PT-CT-101, 1 roll on hand),
+  Backed / Move to oven / In oven, plus master's research-analysis tools. Preview of the same commit
+  (brevitest 6670139519) built and smoked first; production is GitHub deployment 6670170690.
+  Smoke on the deployment URL: /login 200; /manufacturing/cart-mfg/buckets 302 to /login;
+  production alias /login 200.
+Build status: success (GitHub deployment 6670170690, Production – bioscale-operations-system-mongodb).
+Still to do by hand (need MONGODB_URI): scripts/migrate-bucket-raw-to-barcoded.ts --plan/--apply
+  and scripts/migrate-thermoseal-roll-only.ts --plan/--apply.
