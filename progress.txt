@@ -15964,3 +15964,16 @@ Build status: failure on the GitHub deployment record (6665661108) for both the 
   IN_OVEN_STATUS / IN_OVEN_LABEL from bucket-service — both renamed in that commit. Rollup
   fails on a missing named export; the local build passed only because the working copy had
   the files gone. Fixed by committing the deletions (next entry's commit).
+
+Deployment: preview — https://bioscale-operations-system-mongodb-aop3mpege-brevitest.vercel.app
+  (brevitest scope; cookie-session gated, 302 to /login)
+Source: branch feat/bucket-system @ commit de4ee2fa
+Retrieve this exact code: git checkout feat/bucket-system at commit de4ee2fa
+  (or: git log feat/bucket-system --oneline to find it if the branch has since moved on)
+What this deployment is for: the "Backed, awaiting oven" stage replacing the WI-01 page —
+  advance a Pressed bucket to Backed, then load a wax deck from it and confirm the pass closes;
+  cancel that run and confirm the pass reopens with the carts back in it.
+  Smoke: /login 200; buckets, wax-filling, pipeline?stage=backing 302 to /login as expected;
+  /manufacturing/cart-mfg/wi-01 also 302s (the route is gone — an unauthenticated request never
+  reaches the 404).
+Build status: success (GitHub deployment 6665949610, both projects).
