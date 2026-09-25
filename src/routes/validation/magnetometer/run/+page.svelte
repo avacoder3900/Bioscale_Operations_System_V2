@@ -48,6 +48,12 @@
 	// Particle API, so there is nothing to gain from a tight loop.
 	const SWEEP_POLL_MS = 18000;
 
+	/** Mirrors SWEEP_DURATION_MINUTES on the server. This is an ESTIMATE, and the
+	 *  countdown built on it is a comfort indicator and nothing more: the run is over
+	 *  when a session LANDS, never when this reaches zero. Treating zero as an endpoint
+	 *  is how an operator talks themselves into power-cycling a unit mid-sweep. */
+	const SWEEP_EXPECTED_MS = 19 * 60 * 1000;
+
 	type SweepStatus = {
 		status: 'running' | 'uploading' | 'complete' | 'stale' | 'unknown' | 'not_running';
 		elapsedMs?: number | null;
@@ -79,6 +85,12 @@
 			sweepStatus?.status === 'stale' ||
 			sweepStatus?.status === 'not_running'
 	);
+
+	const sweepRemainingMs = $derived(Math.max(0, SWEEP_EXPECTED_MS - sweepElapsedMs));
+	const sweepPct = $derived(Math.min(100, (sweepElapsedMs / SWEEP_EXPECTED_MS) * 100));
+	// Past the estimate with nothing landed yet. A frozen 0:00 would read as "done",
+	// so say it is running long instead.
+	const sweepOvertime = $derived(sweepElapsedMs >= SWEEP_EXPECTED_MS);
 
 	// Slow network poll.
 	$effect(() => {
@@ -496,8 +508,37 @@
 					>
 						<strong>
 							⏳ Sweep {sweepStatus?.status === 'uploading' ? 'uploading' : 'in progress'} on
-							{sweepWatch.udi} — {formatElapsed(sweepElapsedMs)} elapsed
+							{sweepWatch.udi}
 						</strong>
+						<br />
+						{#if sweepStatus?.status === 'uploading'}
+							{formatElapsed(sweepElapsedMs)} elapsed — rows are being ingested now.
+						{:else if sweepOvertime}
+							{formatElapsed(sweepElapsedMs)} elapsed, past the ~{Math.round(
+								SWEEP_EXPECTED_MS / 60000
+							)} min estimate. Still waiting on the device — not yet a failure.
+						{:else}
+							<span class="text-base font-semibold tabular-nums">
+								{formatElapsed(sweepRemainingMs)} remaining
+							</span>
+							· {formatElapsed(sweepElapsedMs)} elapsed of ~{Math.round(
+								SWEEP_EXPECTED_MS / 60000
+							)} min
+						{/if}
+						<div
+							class="mt-2 h-1.5 w-full overflow-hidden rounded"
+							style="background: color-mix(in srgb, var(--color-tron-cyan) 20%, transparent);"
+							role="progressbar"
+							aria-valuenow={Math.round(sweepPct)}
+							aria-valuemin="0"
+							aria-valuemax="100"
+							aria-label="Sweep progress, estimated from elapsed time"
+						>
+							<div
+								class="h-full rounded transition-[width] duration-1000 ease-linear"
+								style="width: {sweepPct}%; background: var(--color-tron-cyan);"
+							></div>
+						</div>
 						<br />
 						{#if sweepStatus?.note}
 							{sweepStatus.note}
