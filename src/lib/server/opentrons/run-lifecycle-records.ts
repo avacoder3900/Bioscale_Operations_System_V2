@@ -56,6 +56,7 @@ import {
 } from '$lib/opentrons/ot2-protocol';
 import { getRobot, bridgeDeviceIdForRobot } from './proxy';
 import { serverTransport } from './transport';
+import { bridgeJobGate } from './bridge-token';
 import { calibrationRtpValues } from './calibration-rtps';
 import {
 	currentProtocolEntry,
@@ -710,7 +711,12 @@ async function auditPendingResync(kind: FillKind, run: any, username: string, li
  *   created  the robot accepted POST /runs → OpentronsRunRecord (+ the verified
  *            resync's AuditLog), intent remembers the run id
  *   played   play accepted → auto_resume_run, run status Running, AuditLog,
- *            intent cleared
+ *            intent cleared. auto_resume_run goes to the daemon's queue as an
+ *            Ot2BridgeCommand — EXCEPT on the tailnet line when the browser
+ *            holds a bridge client (opts.bridgeJobs) and this deployment allows
+ *            daemon jobs (bridgeJobGate): then NO command is created and the
+ *            result carries `job: {jobId, kind:'auto_resume_run', payload}` for
+ *            the browser to submit to /bridge (OT2-TAILNET-5 S3/S6).
  *   failed   the start stopped → intent cleared (kept when the create answer
  *            was lost: the reconcile rules the run in or out)
  * Idempotent: a repeated `played` for the run already Running is a success.
@@ -721,7 +727,8 @@ export async function startConfirm(
 	token: string,
 	obs: StartConfirmObs,
 	user: User,
-	line: Line
+	line: Line,
+	opts: { bridgeJobs?: boolean } = {}
 ): Promise<Record<string, unknown> | ActionFail> {
 	await connectDB();
 	const run = (await model(kind).findById(runId).lean()) as any;
@@ -799,20 +806,30 @@ export async function startConfirm(
 	// Auto-resume the protocol's initial off-deck "confirm deck loaded" pause
 	// on the robot. The operator is routed to the gallery and won't be on the
 	// run page to click Resume, so the daemon watches the run and resumes the
-	// first pause once. Fire-and-forget. (Both lines, until TAILNET-5 S6.)
-	try {
-		await Ot2BridgeCommand.create({
-			_id: generateId(),
-			robotId,
-			deviceId: bridgeDeviceIdForRobot((robot ?? run.robot ?? {}) as any),
-			kind: 'auto_resume_run',
-			payload: { runId: opentronsRunId },
-			ttlMs: 120_000,
-			requestedBy: user.username
-		});
-	} catch (e) {
-		console.warn(`[${kind === 'wax' ? 'startRun' : 'reagent startRun'}] could not enqueue auto_resume_run:`, e instanceof Error ? e.message : e);
+	// first pause once. Fire-and-forget. On the tailnet line with a browser
+	// bridge client the browser submits it to /bridge (no queue row); every
+	// other start (queue line, reconcile, no bridge) enqueues it as before.
+	const autoResumeJob =
+		line === 'tailnet' && opts.bridgeJobs === true && robot && bridgeJobGate(robot as any).ok
+			? { jobId: generateId(), kind: 'auto_resume_run' as const, payload: { runId: opentronsRunId } }
+			: null;
+	if (!autoResumeJob) {
+		try {
+			await Ot2BridgeCommand.create({
+				_id: generateId(),
+				robotId,
+				deviceId: bridgeDeviceIdForRobot((robot ?? run.robot ?? {}) as any),
+				kind: 'auto_resume_run',
+				payload: { runId: opentronsRunId },
+				ttlMs: 120_000,
+				requestedBy: user.username
+			});
+		} catch (e) {
+			console.warn(`[${kind === 'wax' ? 'startRun' : 'reagent startRun'}] could not enqueue auto_resume_run:`, e instanceof Error ? e.message : e);
+		}
 	}
+	const viaBridge = autoResumeJob ? { autoResumeJobId: autoResumeJob.jobId } : {};
+	const withJob = autoResumeJob ? { job: autoResumeJob } : {};
 
 	// Carry the previous run's tip state forward as this run's "before"
 	// snapshot. If the operator checked tiprack_refilled, the protocol
@@ -859,10 +876,10 @@ export async function startConfirm(
 			action: 'UPDATE',
 			changedBy: user.username,
 			changedAt: now,
-			newData: { status: 'Running', opentronsRunId, protocolParameters, pipetteTipBefore: beforeSnap.nextTipIndex, line }
+			newData: { status: 'Running', opentronsRunId, protocolParameters, pipetteTipBefore: beforeSnap.nextTipIndex, line, ...viaBridge }
 		});
 		await setRunRecordStatus(runId, opentronsRunId, 'running', now);
-		return { success: true, opentronsRunId };
+		return { success: true, opentronsRunId, ...withJob };
 	}
 
 	// Estimated finish time. Driven by how many wells the selected reagent rows
@@ -892,10 +909,10 @@ export async function startConfirm(
 		action: 'UPDATE',
 		changedBy: user.username,
 		changedAt: runStartTime,
-		newData: { status: 'Running', runStartTime, opentronsRunId, protocolParameters, pipetteTipBefore: beforeSnap.nextTipIndex, line }
+		newData: { status: 'Running', runStartTime, opentronsRunId, protocolParameters, pipetteTipBefore: beforeSnap.nextTipIndex, line, ...viaBridge }
 	});
 	await setRunRecordStatus(runId, opentronsRunId, 'running', runStartTime);
-	return { success: true, opentronsRunId };
+	return { success: true, opentronsRunId, ...withJob };
 }
 
 /**
@@ -1365,7 +1382,8 @@ export function validStartObs(v: unknown): StartConfirmObs | null {
  *   startPrepare       guards + RTP → startIntent; {token, protocolId, expectedWells, runTimeParameterValues}
  *   startBundle        {runId, token, staleDetail} → {bundle} (only when the check found stale)
  *   startRecordResync  the start form + {token, uploaded, from, reason} → {runTimeParameterValues}
- *   startConfirm       {runId, token, obs} (phase created | played | failed)
+ *   startConfirm       {runId, token, obs, bridgeJobs?} (phase created | played | failed);
+ *                      bridgeJobs='1' + line tailnet → played returns the auto_resume_run job
  *   finishConfirm      {runId, finalStatus, tips}
  *   cancelConfirm      {runId, reason, stopWarning, filledWells}
  *   abortConfirm       {runId, reason, photoUrl, stopWarning, filledWells}
@@ -1417,7 +1435,9 @@ export function lifecycleActions(kind: FillKind) {
 			const obs = validStartObs(jsonField(form, 'obs'));
 			if (!runId || !token) return fail(400, { error: 'runId and token are required' });
 			if (!obs) return fail(400, { error: 'start observation is malformed' });
-			const r = await startConfirm(kind, runId, token, obs, user, validLine(form.get('line')));
+			const r = await startConfirm(kind, runId, token, obs, user, validLine(form.get('line')), {
+				bridgeJobs: form.get('bridgeJobs') === '1'
+			});
 			if (isActionFail(r)) return failOut(r);
 			return r;
 		},

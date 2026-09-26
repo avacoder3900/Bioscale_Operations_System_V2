@@ -1,12 +1,13 @@
 /**
  * The OpentronsScannerSweepRun update for ONE daemon sweep-progress body.
  *
- * This is the exact mapping /api/agent/ot2/commands/[id]/progress applies
- * inline (same fields, same caps, same enum guards), extracted so the
- * tailnet-line sibling /api/agent/ot2/jobs/[jobId]/progress writes the SAME
- * rows. Keep the two in lockstep; the commands route is intentionally not
- * edited in this change (queue line byte-identical) — folding it onto this
- * helper is a follow-up.
+ * The ONE mapping for both lines: the queue-line route
+ * /api/agent/ot2/commands/[id]/progress and the tailnet-line sibling
+ * /api/agent/ot2/jobs/[jobId]/progress both write exactly this document (same
+ * fields, same caps, same enum guards, same key order). It was extracted
+ * verbatim from the commands route; commands/[id]/progress/progress.test.ts
+ * pins its output field for field, so any change here is a change to the
+ * queue line's records too.
  */
 export function sweepProgressUpdate(body: any, now: Date): Record<string, unknown> {
 	const set: Record<string, unknown> = {};

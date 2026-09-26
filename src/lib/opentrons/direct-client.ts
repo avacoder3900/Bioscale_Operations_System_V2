@@ -23,6 +23,10 @@
  * robotFetch() (OT2-TAILNET-5) is the raw, tracked robot request the isomorphic
  * robot-client (openapi-fetch) runs over: direct → the robot origin; queue (or
  * after a fallback) → the BIMS relay, which runs one queue command.
+ *
+ * bridge() (OT2-TAILNET-5 §7.3/§7.5) is the session's ONE daemon-job client
+ * (/bridge on the same robot origin): shared token, job starts traced and never
+ * retried, and a running gantry job sets state.busy. Null = take the queue path.
  */
 import {
 	DEFINITION_VERBS,
@@ -35,6 +39,16 @@ import {
 	type Ot2Transport,
 	type Ot2Verb
 } from './ot2-protocol';
+import {
+	BRIDGE_TERMINAL,
+	BRIDGE_TOKEN_KINDS,
+	BridgeError,
+	createBridgeClient,
+	type BridgeClient,
+	type BridgeJob,
+	type BridgeJobStatus,
+	type RobotFetch
+} from './bridge-client';
 
 export type SessionTransport = 'direct' | 'queue';
 
@@ -44,7 +58,11 @@ export interface RobotSessionState {
 	transport: SessionTransport | 'opening';
 	/** Human-readable why — shown as the pill tooltip. */
 	reason: string;
-	/** A daemon job holding the gantry (sweep / deck scan / tip calibrate), if any. */
+	/**
+	 * A daemon job holding the gantry (sweep / deck scan / tip calibrate), if any:
+	 * a queue job BIMS reports on /connection, or a /bridge job this session's
+	 * bridge() client started / is watching (that one wins while it runs).
+	 */
 	busy: { kind: string; since: string } | null;
 	/** True once a direct call failed and the session moved to the queue. */
 	fellBack: boolean;
@@ -61,6 +79,12 @@ export interface RobotSessionState {
 	needsPermission?: boolean;
 	/** DECK_HARDENING_ROBOT_IDS status from BIMS — the labware reuse rule. */
 	hardened?: boolean;
+	/**
+	 * /connection `bridgeJobs` (OT2-TAILNET-5): this deployment can mint /bridge
+	 * tokens for this robot (two-key tailnet gate + OT2_BRIDGE_TOKEN_SECRET).
+	 * Re-read on every /connection refresh. bridge() needs it true.
+	 */
+	bridgeJobs?: boolean;
 	directUrl?: string;
 	/** Latency of the last successful direct probe/call, ms. */
 	latencyMs?: number;
@@ -153,7 +177,16 @@ const NO_RETRY_WHAT: Record<string, string> = {
 	'mx.pickUpTip': 'tip pick-up',
 	'run.create': 'run creation',
 	'run.uploadProtocol': 'protocol upload',
-	'mx.command': 'maintenance command'
+	'mx.command': 'maintenance command',
+	// Daemon job starts through bridge() — the /direct-calls verb 'bridge:<kind>'.
+	'bridge:sweep': 'sweep start',
+	'bridge:deck_scan': 'deck scan start',
+	'bridge:calibrate_tip': 'tip calibration start',
+	'bridge:tip_swap_request': 'tip swap request',
+	'bridge:restart_robot_server': 'robot-server restart',
+	'bridge:auto_resume_run': 'auto-resume request',
+	'bridge:scan': 'test scan',
+	'bridge:control': 'job pause / resume / cancel'
 };
 export function noRetryLabel(verb: string): string {
 	return NO_RETRY_WHAT[verb] ?? (verb.startsWith('raw:') ? `robot request (${verb.slice(4)})` : verb);
@@ -167,6 +200,45 @@ export type RobotFetchInit = RequestInit & { timeoutMs?: number };
 
 const RAW_DEFAULT_TIMEOUT_MS = 30_000;
 const USED_VIA_MAX = 40;
+
+/**
+ * Verbs that defer to the queue while a daemon job holds the gantry: the
+ * motion verbs, plus mx.command (LPC's arbitrary maintenance commands move the
+ * gantry too; over robotFetch they were relayed while busy — keep that).
+ */
+const BUSY_DEFER_VERBS: ReadonlySet<string> = new Set<string>([...MOTION_VERBS, 'mx.command']);
+
+/**
+ * /bridge job kinds that hold the gantry, so a running one sets state.busy —
+ * the same kinds the /connection route reports as busy for the queue line
+ * (LONG_JOB_KINDS there). tip_swap_request (a file write) and auto_resume_run
+ * (a run watcher; the operator's pause/stop must never wait behind it) do not.
+ */
+export const BRIDGE_BUSY_KINDS: ReadonlySet<string> = new Set(['sweep', 'deck_scan', 'calibrate_tip']);
+
+/** A watched bridge job older than this no longer counts as busy (as /connection's BUSY_MAX_AGE_MS). */
+const BRIDGE_BUSY_MAX_AGE_MS = 30 * 60 * 1000;
+
+const BRIDGE_CONTROL_RE = /^\/bridge\/jobs\/[^/]+\/control$/;
+
+/** The /direct-calls verb for a /bridge request that STARTS or steers a job, else null. */
+export function bridgeCallLabel(method: string, path: string, body: unknown): string | null {
+	if (method.toUpperCase() !== 'POST') return null;
+	const bare = path.split(/[?#]/)[0];
+	if (bare === '/bridge/scan') return 'bridge:scan';
+	if (bare === '/bridge/jobs') {
+		let kind = 'job';
+		try {
+			const k = typeof body === 'string' ? JSON.parse(body)?.kind : undefined;
+			if (typeof k === 'string' && k) kind = k;
+		} catch {
+			/* not JSON — the daemon will refuse it; still trace the attempt */
+		}
+		return `bridge:${kind}`.slice(0, 40);
+	}
+	if (BRIDGE_CONTROL_RE.test(bare)) return 'bridge:control';
+	return null;
+}
 
 /**
  * '/runs/3f2a…/actions?x=1' → '/runs/:id/actions'. A segment counts as an id
@@ -236,6 +308,12 @@ export class RobotSession {
 	private flushTimer: ReturnType<typeof setInterval> | null = null;
 	private closed = false;
 	private onPageHide = () => void this.flush(true);
+	/** The ONE /bridge client (bridge()), created lazily. */
+	private bridgeClient: BridgeClient | null = null;
+	/** Non-terminal gantry jobs seen through bridgeClient: jobId → busy entry. */
+	private bridgeBusy = new Map<string, { kind: string; since: string; seenAt: number }>();
+	/** The busy BIMS last reported on /connection (queue jobs). */
+	private serverBusy: RobotSessionState['busy'] = null;
 
 	constructor(robotId: string, options: SessionOptions = {}) {
 		this.robotId = robotId;
@@ -286,11 +364,19 @@ export class RobotSession {
 				transport: 'queue',
 				reason: conn?.reason ?? 'queue — connection info unavailable',
 				busy: conn?.busy ?? null,
-				tailnetConfigured: false
+				tailnetConfigured: false,
+				bridgeJobs: false
 			});
 			return this._state;
 		}
-		this.set({ tailnetConfigured: true, directUrl: conn.directUrl, busy: conn.busy ?? null, hardened: conn.hardened === true });
+		this.serverBusy = conn.busy ?? null;
+		this.set({
+			tailnetConfigured: true,
+			directUrl: conn.directUrl,
+			busy: this.effectiveBusy(),
+			hardened: conn.hardened === true,
+			bridgeJobs: conn.bridgeJobs === true
+		});
 		if (typeof window !== 'undefined') window.addEventListener('pagehide', this.onPageHide);
 		const perm = await this.permissionQuery();
 		this.set({ browserPermission: perm });
@@ -369,11 +455,12 @@ export class RobotSession {
 			const res = await this.fetchImpl(`${API(this.robotId)}/connection`);
 			if (!res.ok) return;
 			const conn = await res.json();
+			this.serverBusy = conn.busy ?? null;
 			if (conn.transport !== 'tailnet') {
-				this.set({ transport: 'queue', fellBack: true, busy: conn.busy ?? null, reason: conn.reason });
+				this.set({ transport: 'queue', fellBack: true, busy: this.effectiveBusy(), reason: conn.reason, bridgeJobs: false });
 				return;
 			}
-			this.set({ busy: conn.busy ?? null, hardened: conn.hardened === true });
+			this.set({ busy: this.effectiveBusy(), hardened: conn.hardened === true, bridgeJobs: conn.bridgeJobs === true });
 		} catch {
 			/* a missed refresh changes nothing */
 		}
@@ -390,7 +477,7 @@ export class RobotSession {
 	 */
 	async call(verb: Ot2Verb, args: Record<string, unknown>, init: { signal?: AbortSignal } = {}): Promise<Response> {
 		const s = this._state;
-		const motionWhileBusy = MOTION_VERBS.has(verb) && !!s.busy;
+		const motionWhileBusy = BUSY_DEFER_VERBS.has(verb) && !!s.busy;
 		if (!(s.transport === 'direct' && s.directUrl && !motionWhileBusy)) {
 			this.noteLine(verb, 'queue');
 			return this.callRoute(verb, args, init.signal);
@@ -664,8 +751,176 @@ export class RobotSession {
 		if (this.refreshTimer) clearInterval(this.refreshTimer);
 		if (this.flushTimer) clearInterval(this.flushTimer);
 		if (typeof window !== 'undefined') window.removeEventListener('pagehide', this.onPageHide);
+		this.bridgeClient = null;
+		this.bridgeBusy.clear();
 		void this.flush(true);
 		this.listeners.clear();
+	}
+
+	// ── /bridge: daemon jobs over the tailnet (OT2-TAILNET-5 §7.3, §7.5, S6) ──
+
+	/**
+	 * The session's daemon-job client, or null.
+	 *
+	 * PUBLIC API (pages code against exactly this):
+	 *
+	 *   session.bridge(): BridgeClient | null
+	 *
+	 *   Non-null ONLY while state.transport === 'direct' && state.bridgeJobs === true
+	 *   (bridgeJobs = the /connection answer: the two-key tailnet gate AND
+	 *   OT2_BRIDGE_TOKEN_SECRET on this deployment, re-read on every refresh).
+	 *   null tells the page to take its UNCHANGED queue path. Ask at the moment
+	 *   you start a job: it turns null after a fallback, the kill switch, or close().
+	 *
+	 *   Created lazily, ONCE per session; every call returns the same object
+	 *   (also after a fallback + a successful retryDirect()). It implements
+	 *   bridge-client's BridgeClient with no signature change: token,
+	 *   invalidateToken, submitJob(kind, payload, opts?), submit(job:
+	 *   BridgeJobDescriptor), getJob(jobId), pollJob(jobId, onProgress?,
+	 *   {intervalMs, timeoutMs, signal, maxMisses}), control(jobId,
+	 *   'pause'|'resume'|'cancel'), testScan({source, contextRef}), health(), probe().
+	 *
+	 *   - ONE token for every job kind + 'scan' (kinds: BRIDGE_TOKEN_KINDS), from
+	 *     GET /api/opentrons-lab/robots/[id]/bridge-token on first use, refreshed
+	 *     before exp (bridge-client's refreshMarginS).
+	 *   - Its robot fetch is DIRECT ONLY (state.directUrl + '/bridge/…'). It never
+	 *     falls back to /relay and never flips the session's line, so a daemon
+	 *     job is never silently moved onto the queue.
+	 *   - submitJob / submit / testScan (and control) log ONE row each to
+	 *     /direct-calls: verb 'bridge:<kind>' | 'bridge:scan' | 'bridge:control',
+	 *     with status / ok / latency (status 0 + error when nothing answered).
+	 *     getJob / pollJob / health / probe are not logged (polls would flood it).
+	 *   - Starts are NEVER auto-retried and NEVER re-routed (NO_RETRY semantics;
+	 *     noRetryLabel('bridge:<kind>') names them for a message). On failure they
+	 *     throw BridgeError exactly as bridge-client does; code 'network' means no
+	 *     answer — the job MAY have landed, so getJob(<the jobId you sent>) before
+	 *     doing anything else.
+	 *   - While a sweep / deck_scan / calibrate_tip job seen through this client
+	 *     (submit result, getJob, every pollJob progress, control) is
+	 *     non-terminal, state.busy = { kind, since }: motion verbs (and mx.command)
+	 *     and mutating raw calls defer to the queue exactly as for a queue job. A
+	 *     BRIDGE_TERMINAL status, or a 404 for that job, clears it.
+	 *   - close() drops the client and any busy it set.
+	 *
+	 * Pages without a session of their own (the layout's restart button, the
+	 * scanner-test page): const s = await openRobotSession(robotId);
+	 * const b = s.bridge(); if (b) { … } else { <queue path> } … s.close().
+	 */
+	bridge(): BridgeClient | null {
+		if (this.closed) return null;
+		const s = this._state;
+		if (s.transport !== 'direct' || s.bridgeJobs !== true || !s.directUrl) return null;
+		if (!this.bridgeClient) this.bridgeClient = this.makeBridgeClient();
+		return this.bridgeClient;
+	}
+
+	/** Queue busy from BIMS, overridden by a running gantry job of our own. */
+	private effectiveBusy(): RobotSessionState['busy'] {
+		const now = Date.now();
+		for (const [id, b] of this.bridgeBusy) {
+			if (now - b.seenAt > BRIDGE_BUSY_MAX_AGE_MS) this.bridgeBusy.delete(id);
+		}
+		const mine = this.bridgeBusy.values().next().value;
+		return mine ? { kind: mine.kind, since: mine.since } : this.serverBusy;
+	}
+
+	private applyBusy() {
+		const next = this.effectiveBusy();
+		const cur = this._state.busy;
+		if (cur?.kind === next?.kind && cur?.since === next?.since) return;
+		this.set({ busy: next });
+	}
+
+	/** What the bridge client saw of a job: busy while a gantry job runs. */
+	private observeJob(jobId: string, kind: string | undefined, status: BridgeJobStatus | undefined) {
+		if (this.closed || !jobId) return;
+		if (!status || BRIDGE_TERMINAL.includes(status)) {
+			if (this.bridgeBusy.delete(jobId)) this.applyBusy();
+			return;
+		}
+		const known = this.bridgeBusy.get(jobId);
+		if (known) {
+			known.seenAt = Date.now();
+			return;
+		}
+		if (!kind || !BRIDGE_BUSY_KINDS.has(kind)) return;
+		this.bridgeBusy.set(jobId, { kind, since: new Date().toISOString(), seenAt: Date.now() });
+		this.applyBusy();
+	}
+
+	/** Direct-only fetch to the daemon on the robot origin; traces starts + control. */
+	private bridgeFetch: RobotFetch = async (path, init = {}) => {
+		const directUrl = this._state.directUrl;
+		if (!directUrl) throw new TypeError('no direct URL for this robot');
+		const { timeoutMs, ...rest } = init;
+		const method = (rest.method ?? 'GET').toUpperCase();
+		const label = bridgeCallLabel(method, path, rest.body);
+		const t0 = Date.now();
+		const at = new Date().toISOString();
+		try {
+			const res = await this.fetchImpl(`${directUrl}${path}`, {
+				...rest,
+				method,
+				signal: withCallerSignal(AbortSignal.timeout(timeoutMs ?? RAW_DEFAULT_TIMEOUT_MS), rest.signal ?? undefined)
+			});
+			if (label) {
+				this.record({ verb: label, method, path, status: res.status, ok: res.ok, latencyMs: Date.now() - t0, at });
+				this.noteLine(label, 'tailscale');
+			}
+			return res;
+		} catch (e) {
+			if (label) {
+				const msg = e instanceof Error ? e.message : String(e);
+				this.record({ verb: label, method, path, status: 0, ok: false, latencyMs: Date.now() - t0, error: msg, at });
+				this.noteLine(label, 'tailscale');
+			}
+			throw e;
+		}
+	};
+
+	private makeBridgeClient(): BridgeClient {
+		const inner = createBridgeClient({
+			robotId: this.robotId,
+			robotFetch: this.bridgeFetch,
+			bimsFetch: (input, init) => this.fetchImpl(input, init),
+			kinds: BRIDGE_TOKEN_KINDS
+		});
+		const seen = (jobId: string, job: BridgeJob): BridgeJob => {
+			this.observeJob(job?.jobId ?? jobId, job?.kind, job?.status);
+			return job;
+		};
+		const gone = (jobId: string, e: unknown): never => {
+			if (e instanceof BridgeError && e.code === 'not_found') this.observeJob(jobId, undefined, undefined);
+			throw e;
+		};
+		const submitJob: BridgeClient['submitJob'] = async (kind, payload, opts) => {
+			const out = await inner.submitJob(kind, payload, opts);
+			this.observeJob(out.jobId, kind, out.status);
+			return out;
+		};
+		return {
+			robotId: inner.robotId,
+			token: () => inner.token(),
+			invalidateToken: () => inner.invalidateToken(),
+			submitJob,
+			submit: (job) => submitJob(job.kind, job.payload, { jobId: job.jobId }),
+			getJob: (jobId) => inner.getJob(jobId).then((j) => seen(jobId, j), (e) => gone(jobId, e)),
+			pollJob: (jobId, onProgress, opts) =>
+				inner
+					.pollJob(
+						jobId,
+						(j) => {
+							seen(jobId, j);
+							onProgress?.(j);
+						},
+						opts
+					)
+					.then((j) => seen(jobId, j), (e) => gone(jobId, e)),
+			control: (jobId, action) => inner.control(jobId, action).then((j) => seen(jobId, j), (e) => gone(jobId, e)),
+			testScan: (opts) => inner.testScan(opts),
+			health: () => inner.health(),
+			probe: (timeoutMs) => inner.probe(timeoutMs)
+		};
 	}
 }
 

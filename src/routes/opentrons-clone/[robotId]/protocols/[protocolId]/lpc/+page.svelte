@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onDestroy, onMount } from 'svelte';
 	import { goto } from '$app/navigation';
-	import { maintenanceCommand } from '$lib/opentrons/robot-client';
+	import { ALLOWED_COMMAND_TYPES, isAllowedCommandType } from '$lib/opentrons/robot-client';
 	import { cloneLine } from '../../../../clone-session';
 
 	let { data } = $props();
@@ -92,7 +92,8 @@
 	// Robot command helpers — over the page's robot session (OT2-TAILNET-5 S10c).
 	// Open / close / custom-labware load are the shared TAILNET-4 verbs
 	// (mx.open / mx.close / mx.loadLabware, which also write their BIMS records);
-	// LPC's arbitrary commands are robot-client's maintenanceCommand (mx.command).
+	// LPC's arbitrary commands are the shared mx.command verb (session.call), so
+	// the queue fallback is POST /verb like the other verbs — not the raw relay.
 	// --------------------------------------------------------------------------
 	const robotId = data.robot._id;
 	const line = cloneLine(robotId);
@@ -123,13 +124,23 @@
 		payload: Record<string, unknown>,
 		timeoutMs?: number
 	): Promise<Record<string, unknown>> {
-		const result = await maintenanceCommand(
-			(p, i) => line.session.robotFetch(p, i),
-			runId,
-			payload as { commandType: string; params?: Record<string, unknown> },
-			timeoutMs ? { timeoutMs } : {}
+		const commandType = payload.commandType;
+		// LPC's allow-list, checked before the robot is touched (as before).
+		if (!isAllowedCommandType(commandType)) {
+			throw new Error(`commandType must be one of: ${ALLOWED_COMMAND_TYPES.join(', ')}`);
+		}
+		const body = await verbJson(
+			await line.session.call('mx.command', {
+				runId,
+				commandType,
+				params: (payload.params as Record<string, unknown> | undefined) ?? {},
+				...(timeoutMs ? { timeoutMs } : {})
+			}),
+			commandType
 		);
-		return (result?.result as Record<string, unknown> | undefined) ?? {};
+		const result = body?.command as { result?: Record<string, unknown> | null } | null | undefined;
+		if (!result) throw new Error(`${commandType}: robot answered without a command`);
+		return (result.result as Record<string, unknown> | undefined) ?? {};
 	}
 
 	function parseDefinitionUri(uri: string): { namespace: string; loadName: string; version: number } {

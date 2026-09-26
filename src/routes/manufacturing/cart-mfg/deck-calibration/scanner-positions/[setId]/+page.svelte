@@ -3,6 +3,7 @@
 	import { invalidateAll, goto } from '$app/navigation';
 	import { enhance } from '$app/forms';
 	import { RobotSession, type RobotSessionState } from '$lib/opentrons/direct-client';
+	import { testScanOverBridge } from '$lib/opentrons/studio-bridge-jobs';
 	import TransportPill from '$lib/components/opentrons/TransportPill.svelte';
 
 	let { data, form } = $props();
@@ -256,6 +257,32 @@
 		testScanError = null;
 		testScanInFlight = true;
 		testScanLatest = null;
+		// OT2-TAILNET-5 S6: on the tailnet line the scan runs on the robot's daemon
+		// (/bridge/scan) from this browser; null = the queue line, exactly as before.
+		const bridge = robotSession?.bridge() ?? null;
+		if (bridge) {
+			if (testScanPollTimer) clearInterval(testScanPollTimer);
+			testScanPollTimer = null;
+			pendingTriggerId = null;
+			try {
+				const out = await testScanOverBridge(bridge, {
+					deviceId,
+					robotId: robot._id,
+					source: 'test',
+					contextRef: `teach:${set._id}:${selectedSlot}`
+				});
+				if (out.barcode && !out.error) {
+					testScanLatest = { barcode: out.barcode, receivedAt: out.receivedAt };
+				} else {
+					testScanError = out.error || 'scanner returned error';
+				}
+			} catch (e) {
+				testScanError = e instanceof Error ? e.message : String(e);
+			} finally {
+				testScanInFlight = false;
+			}
+			return;
+		}
 		try {
 			const res = await api('/api/scanner/trigger', {
 				method: 'POST',

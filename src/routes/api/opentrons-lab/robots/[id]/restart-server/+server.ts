@@ -14,6 +14,11 @@
  * the browser to POST to the robot daemon's /bridge/jobs, where the same
  * restart handler (with its restart-storm guard) runs. 409 when the robot is
  * not on the tailnet line here (two-key gate), or this deployment has no OT2_BRIDGE_TOKEN_SECRET (bridgeJobGate). No flag = today's behaviour.
+ *
+ * TAILNET ABANDON: `{ line: 'tailnet', phase: 'abandon', jobId, error }` — the
+ * browser's /bridge submit failed after the prepare. Nothing ran on the robot;
+ * AuditLog 'restart_robot_server_submit_failed' records that the audited
+ * restart never reached it (no retry, no queue re-send).
  */
 
 import { json, error } from '@sveltejs/kit';
@@ -53,12 +58,27 @@ export const POST: RequestHandler = async ({ params, locals, request, url }) => 
 	if (!robot) error(404, 'Robot not found');
 
 	// Only read a body when the query flag is absent — today's callers send none.
-	const tailnet =
-		url.searchParams.get('line') === 'tailnet' ||
-		isTailnetLineRequest(await request.json().catch(() => null), null);
+	const body: any = url.searchParams.get('line') === 'tailnet' ? null : await request.json().catch(() => null);
+	const tailnet = url.searchParams.get('line') === 'tailnet' || isTailnetLineRequest(body, null);
 
 	await connectDB();
 	const deviceId = bridgeDeviceIdForRobot(robot);
+
+	if (tailnet && body?.phase === 'abandon') {
+		const jobId = body?.jobId?.toString() ?? '';
+		if (!/^[A-Za-z0-9_-]{6,64}$/.test(jobId)) error(400, 'jobId required to abandon a tailnet restart');
+		const reason = (typeof body?.error === 'string' && body.error.trim() ? body.error.trim() : 'bridge submit failed').slice(0, 500);
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'opentrons_robots',
+			recordId: String(robot._id),
+			action: 'restart_robot_server_submit_failed',
+			newData: { deviceId, commandId: null, bridgeJobId: jobId, line: 'tailnet', error: reason },
+			changedAt: new Date(),
+			changedBy: user.username
+		});
+		return json({ success: true, abandoned: true });
+	}
 
 	if (tailnet) {
 		const gate = bridgeJobGate(robot);

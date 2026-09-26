@@ -14,6 +14,10 @@
  * the trigger loop runs (same ScannerPort lock) and posts the same ScannerEvent
  * to /api/agent/scanner/event, so /api/scanner/events shows it as before.
  * 409 when the robot is not on the tailnet line here (two-key gate), or this deployment has no OT2_BRIDGE_TOKEN_SECRET (bridgeJobGate).
+ * The browser half is $lib/opentrons/studio-bridge-jobs testScanOverBridge
+ * (prepare → /bridge/scan, never retried → the ScannerEvent read back from
+ * /api/scanner/events by metadata.bridgeScanId). The tailnet prepare writes
+ * nothing, so a failed scan leaves no row to close.
  */
 import { json, error } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';

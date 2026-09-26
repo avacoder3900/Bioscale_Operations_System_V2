@@ -213,8 +213,10 @@ export function robotFetchTransport(raw: RawRobotFetch): Ot2Transport {
 }
 
 /**
- * Enqueue one command on a maintenance run and wait for it (the S10a
- * `mx.command` capability, used by LPC). The robot request itself is the ONE
+ * Enqueue one command on a maintenance run and wait for it, over a raw
+ * robotFetch. (LPC no longer uses this: since OT2-TAILNET-5 round 2 it calls
+ * session.call('mx.command', …), whose queue fallback is POST /verb; it still
+ * checks ALLOWED_COMMAND_TYPES from here first.) The robot request itself is the ONE
  * shared implementation — ot2-protocol's sendMaintenanceCommand, the same code
  * the queue routes and the `mx.command` verb run — here over the session's
  * robotFetch. This adds only LPC's commandType allow-list and the result shape.

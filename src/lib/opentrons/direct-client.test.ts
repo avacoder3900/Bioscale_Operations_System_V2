@@ -487,4 +487,272 @@ describe('the no-retry message names the verb', () => {
 		await s.call('run.action', { rid: 'r1', action: 'pause' });
 		expect(s.state.usedVia).toEqual({ tailscale: ['run.action'], queue: [] });
 	});
+
+	it('names the daemon job starts', () => {
+		expect(noRetryLabel('bridge:sweep')).toBe('sweep start');
+		expect(noRetryLabel('bridge:restart_robot_server')).toBe('robot-server restart');
+		expect(noRetryLabel('bridge:scan')).toBe('test scan');
+	});
+});
+
+// ── OT2-TAILNET-5 G3: PUT over the session (clone clientData / system time) ──
+
+describe('robotFetch PUT', () => {
+	const RELAY = '/api/opentrons-lab/robots/b14/relay';
+	it('queue line: PUT + JSON body ride the relay as {method:"PUT", path, body}', async () => {
+		const sent: any[] = [];
+		const ff = fakeFetch((url, init) => {
+			if (url.endsWith('/connection')) return res(200, { transport: 'queue', reason: 'queue', busy: null });
+			if (url === RELAY) {
+				sent.push(JSON.parse(String(init?.body)));
+				return res(200, { data: {} });
+			}
+			return res(500, { unexpected: url });
+		});
+		const s = new RobotSession('b14', { ...opts, fetchImpl: ff.f });
+		await s.open();
+		await s.robotFetch('/clientData/k', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: { a: 1 } }) });
+		await s.robotFetch('/system/time', { method: 'PUT', body: JSON.stringify({ data: { systemTime: 'T' } }) });
+		expect(sent).toEqual([
+			{ method: 'PUT', path: '/clientData/k', body: { data: { a: 1 } } },
+			{ method: 'PUT', path: '/system/time', body: { data: { systemTime: 'T' } } }
+		]);
+		expect(ff.urls.some((u) => u.startsWith(DIRECT))).toBe(false);
+	});
+
+	it('direct line: a PUT with no answer is not repeated through the relay (502)', async () => {
+		let opened = false;
+		const ff = fakeFetch((url) => {
+			if (url.endsWith('/connection')) return connTailnet();
+			if (!opened && url === `${DIRECT}/health`) return res(200, {});
+			if (url.startsWith('/api/')) return res(200, { via: 'bims' });
+			throw new TypeError('Failed to fetch');
+		});
+		const s = new RobotSession('b14', { ...opts, fetchImpl: ff.f });
+		await s.open();
+		opened = true;
+		const r = await s.robotFetch('/system/time', { method: 'PUT', body: JSON.stringify({ data: { systemTime: 'T' } }) });
+		expect(r.status).toBe(502);
+		expect(ff.urls).not.toContain(RELAY);
+	});
+});
+
+// ── OT2-TAILNET-5 G2: the session's ONE /bridge client ─────────────────────────
+
+describe('RobotSession.bridge()', () => {
+	const TOKEN_URL = '/api/opentrons-lab/robots/b14/bridge-token';
+	const job = (over: Record<string, unknown> = {}) => ({
+		jobId: 'j1',
+		kind: 'sweep',
+		status: 'running',
+		progress: { slotsDone: 0, currentSlotIndex: null, scans: [], slotErrors: [], log: [], final: null, updates: 0 },
+		result: null,
+		error: null,
+		pauseRequested: false,
+		cancelRequested: false,
+		queuePosition: 0,
+		createdAt: 1,
+		startedAt: 1,
+		finishedAt: null,
+		requestedBy: 'op',
+		...over
+	});
+
+	type Daemon = (url: string, init?: RequestInit) => Response | Promise<Response>;
+	async function session(opt: { conn?: () => Response; daemon?: Daemon } = {}) {
+		const posted: any[] = [];
+		const tokenUrls: string[] = [];
+		const daemonCalls: { url: string; init?: RequestInit }[] = [];
+		let opened = false;
+		const ff = fakeFetch((url, init) => {
+			if (url.endsWith('/connection')) {
+				return (opt.conn ?? (() => res(200, { transport: 'tailnet', directUrl: DIRECT, reason: 't', busy: null, bridgeJobs: true })))();
+			}
+			if (!opened && url === `${DIRECT}/health`) return res(200, {});
+			if (url.startsWith(TOKEN_URL)) {
+				tokenUrls.push(url);
+				return res(200, { token: `tok${tokenUrls.length}`, exp: Math.floor(Date.now() / 1000) + 300 });
+			}
+			if (url.endsWith('/direct-calls')) {
+				posted.push(...JSON.parse(String(init?.body)).calls);
+				return res(200, {});
+			}
+			if (url.startsWith(`${DIRECT}/bridge/`)) {
+				daemonCalls.push({ url, init });
+				return (opt.daemon ?? (() => res(202, { jobId: 'j1', status: 'queued', position: 0 })))(url, init);
+			}
+			if (url.startsWith('/api/')) return res(200, { via: 'queue', url });
+			return res(201, { data: { status: 'succeeded' } });
+		});
+		const s = new RobotSession('b14', { ...opts, fetchImpl: ff.f });
+		await s.open();
+		opened = true;
+		return { s, urls: ff.urls, posted, tokenUrls, daemonCalls };
+	}
+
+	it('queue line → null (the page keeps its unchanged queue path); nothing but BIMS is called', async () => {
+		const { s, urls } = await session({
+			conn: () => res(200, { transport: 'queue', reason: 'queue', busy: null, bridgeJobs: false })
+		});
+		expect(s.state.transport).toBe('queue');
+		expect(s.state.bridgeJobs).toBe(false);
+		expect(s.bridge()).toBeNull();
+		expect(urls.every((u) => u.startsWith('/api/'))).toBe(true);
+	});
+
+	it('direct but bridgeJobs false / absent (no token secret here) → null', async () => {
+		for (const extra of [{ bridgeJobs: false }, {}]) {
+			const { s } = await session({ conn: () => res(200, { transport: 'tailnet', directUrl: DIRECT, reason: 't', busy: null, ...extra }) });
+			expect(s.state.transport).toBe('direct');
+			expect(s.bridge()).toBeNull();
+		}
+	});
+
+	it('direct + bridgeJobs → the SAME client every call; null after a fallback or close()', async () => {
+		const { s } = await session();
+		const b = s.bridge();
+		expect(b).not.toBeNull();
+		expect(s.bridge()).toBe(b);
+		expect(b!.robotId).toBe('b14');
+		(s as any).fallBack('test');
+		expect(s.bridge()).toBeNull();
+		s.close();
+		expect(s.bridge()).toBeNull();
+	});
+
+	it('the /connection refresh keeps bridgeJobs current (kill switch → null)', async () => {
+		let bridgeJobs = true;
+		const { s } = await session({ conn: () => res(200, { transport: 'tailnet', directUrl: DIRECT, reason: 't', busy: null, bridgeJobs }) });
+		expect(s.bridge()).not.toBeNull();
+		bridgeJobs = false;
+		await (s as any).refresh();
+		expect(s.state.bridgeJobs).toBe(false);
+		expect(s.bridge()).toBeNull();
+	});
+
+	it('ONE token fetch (all kinds + scan) shared by every job kind and the test-scan', async () => {
+		const { s, tokenUrls, daemonCalls } = await session({
+			daemon: (url) =>
+				url.endsWith('/bridge/scan')
+					? res(200, { scanId: 's1', barcode: 'B1', rawPayload: 'B1', error: null, eventPosted: true })
+					: res(202, { jobId: 'j1', status: 'queued', position: 0 })
+		});
+		const b = s.bridge()!;
+		await b.submitJob('sweep', { sweepRunId: 'sw1' });
+		await b.submit({ kind: 'deck_scan', payload: {}, jobId: 'j2' });
+		await b.submitJob('tip_swap_request', { mode: 'rack' });
+		await b.testScan({ source: 'test' });
+		expect(tokenUrls).toHaveLength(1);
+		const kinds = decodeURIComponent(tokenUrls[0].split('kinds=')[1]).split(',');
+		expect(kinds).toEqual(['sweep', 'deck_scan', 'calibrate_tip', 'tip_swap_request', 'restart_robot_server', 'auto_resume_run', 'scan']);
+		expect(daemonCalls.every((c) => new Headers(c.init?.headers).get('authorization') === 'Bearer tok1')).toBe(true);
+		expect(JSON.parse(String(daemonCalls[1].init?.body))).toEqual({ kind: 'deck_scan', payload: {}, jobId: 'j2' });
+	});
+
+	it('each start / test-scan logs ONE /direct-calls row (bridge:<kind>, status, ok); polls do not', async () => {
+		const { s, posted } = await session({
+			daemon: (url, init) => {
+				if (url.endsWith('/bridge/scan')) return res(200, { scanId: 's1', barcode: null, rawPayload: null, error: 'no read', eventPosted: true });
+				if (init?.method === 'GET') return res(200, job({ status: 'completed' }));
+				return res(202, { jobId: 'j1', status: 'queued', position: 0 });
+			}
+		});
+		const b = s.bridge()!;
+		await b.submitJob('sweep', {});
+		await b.pollJob('j1', undefined, { intervalMs: 1 });
+		await b.getJob('j1');
+		await b.testScan();
+		await s.flush();
+		expect(posted.map((c) => c.verb)).toEqual(['bridge:sweep', 'bridge:scan']);
+		expect(posted[0]).toMatchObject({ method: 'POST', path: '/bridge/jobs', status: 202, ok: true, sessionId: s.sessionId });
+		expect(posted[1]).toMatchObject({ method: 'POST', path: '/bridge/scan', status: 200, ok: true });
+		expect(s.state.usedVia?.tailscale).toEqual(expect.arrayContaining(['bridge:sweep', 'bridge:scan']));
+	});
+
+	it('a start with no answer is NEVER retried, never relayed, never moves the session: BridgeError network + one row', async () => {
+		const { s, urls, posted, daemonCalls } = await session({
+			daemon: () => {
+				throw new TypeError('Failed to fetch');
+			}
+		});
+		const b = s.bridge()!;
+		await expect(b.submitJob('calibrate_tip', { x: 1 }, { jobId: 'jc' })).rejects.toMatchObject({ name: 'BridgeError', code: 'network' });
+		expect(daemonCalls).toHaveLength(1);
+		expect(urls.some((u) => u.endsWith('/relay') || u.includes('/api/scanner/'))).toBe(false);
+		expect(s.state.transport).toBe('direct'); // the line is the page's call()/robotFetch business, not the job's
+		expect(s.state.busy).toBeNull(); // nothing known to be running
+		await s.flush();
+		expect(posted).toEqual([expect.objectContaining({ verb: 'bridge:calibrate_tip', status: 0, ok: false, error: 'Failed to fetch' })]);
+		// The caller may then look the job up on the same client.
+		expect(s.bridge()).toBe(b);
+	});
+
+	it('a daemon refusal (e.g. 403 scope) throws BridgeError with the status, logged, not retried', async () => {
+		const { s, posted, daemonCalls } = await session({ daemon: () => res(403, { error: "token does not allow 'sweep'" }) });
+		await expect(s.bridge()!.submitJob('sweep', {})).rejects.toMatchObject({ code: 'forbidden', status: 403 });
+		expect(daemonCalls).toHaveLength(1);
+		await s.flush();
+		expect(posted[0]).toMatchObject({ verb: 'bridge:sweep', status: 403, ok: false });
+	});
+
+	it('a running gantry job sets busy (motion + mx.command defer to the queue), a terminal status clears it', async () => {
+		let status = 'running';
+		const { s, urls } = await session({
+			daemon: (_u, init) => (init?.method === 'GET' ? res(200, job({ status })) : res(202, { jobId: 'j1', status: 'queued', position: 0 }))
+		});
+		const b = s.bridge()!;
+		await b.submitJob('sweep', { sweepRunId: 'sw1' });
+		expect(s.state.busy).toMatchObject({ kind: 'sweep', since: expect.any(String) });
+		const since = s.state.busy!.since;
+
+		await s.call('mx.moveTo', { runId: 'm1', pipetteId: 'p', x: 1, y: 2, z: 3 });
+		expect(urls).toContain('/api/opentrons-lab/robots/b14/maintenance/m1/move-to');
+		await s.call('mx.command', { runId: 'm1', commandType: 'home', params: {} });
+		expect(urls.some((u) => u.startsWith('/api/opentrons-lab/robots/b14/verb?verb=mx.command'))).toBe(true);
+
+		// A /connection refresh (no queue job) does not clear our own job's busy.
+		await (s as any).refresh();
+		expect(s.state.busy).toEqual({ kind: 'sweep', since });
+
+		const seen: string[] = [];
+		const p = b.pollJob('j1', (j) => seen.push(j.status), { intervalMs: 1 });
+		await new Promise((r) => setTimeout(r, 5));
+		status = 'completed';
+		const final = await p;
+		expect(final.status).toBe('completed');
+		expect(seen.at(-1)).toBe('completed');
+		expect(s.state.busy).toBeNull();
+
+		// Motion is direct again.
+		const before = urls.length;
+		await s.call('mx.moveTo', { runId: 'm1', pipetteId: 'p', x: 1, y: 2, z: 3 });
+		expect(urls.slice(before).some((u) => u.startsWith(`${DIRECT}/maintenance_runs/m1/commands`))).toBe(true);
+	});
+
+	it('non-gantry jobs (tip swap, auto-resume) do not set busy; a 404 for a watched job clears it', async () => {
+		let getStatus = 200;
+		const { s } = await session({
+			daemon: (url, init) => {
+				if (init?.method === 'GET') return getStatus === 404 ? res(404, { error: 'unknown job' }) : res(200, job({ jobId: 'jd', kind: 'deck_scan' }));
+				const kind = JSON.parse(String(init?.body)).kind;
+				return res(202, { jobId: kind === 'deck_scan' ? 'jd' : 'jx', status: 'queued', position: 0 });
+			}
+		});
+		const b = s.bridge()!;
+		await b.submitJob('tip_swap_request', { mode: 'rack' });
+		await b.submitJob('auto_resume_run', { runId: 'r1' });
+		expect(s.state.busy).toBeNull();
+		await b.submitJob('deck_scan', {});
+		expect(s.state.busy?.kind).toBe('deck_scan');
+		getStatus = 404;
+		await expect(b.getJob('jd')).rejects.toMatchObject({ code: 'not_found' });
+		expect(s.state.busy).toBeNull();
+	});
+
+	it('a job already terminal at submit (duplicate jobId) never marks busy', async () => {
+		const { s } = await session({ daemon: () => res(200, { jobId: 'j1', status: 'completed', position: null, duplicate: true }) });
+		const out = await s.bridge()!.submitJob('sweep', {}, { jobId: 'j1' });
+		expect(out.duplicate).toBe(true);
+		expect(s.state.busy).toBeNull();
+	});
 });

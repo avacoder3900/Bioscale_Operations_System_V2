@@ -79,6 +79,10 @@ vi.mock('$lib/server/db', () => ({
 }));
 vi.mock('./proxy', () => ({ getRobot: async (id: string) => ({ _id: id, name: 'Robot 1 B14', ip: 'x' }), bridgeDeviceIdForRobot: () => 'ot2-b14-bridge' }));
 vi.mock('./transport', () => ({ serverTransport: () => ({}) }));
+const gateMock = vi.hoisted(() => ({ ok: true }));
+vi.mock('./bridge-token', () => ({
+	bridgeJobGate: () => (gateMock.ok ? { ok: true, directUrl: 'https://ot2-b14.example' } : { ok: false, reason: 'no secret' })
+}));
 const runVerbMock = vi.hoisted(() => ({ fn: null as null | ((...a: any[]) => Promise<any>) }));
 vi.mock('$lib/opentrons/ot2-protocol', async (importOriginal) => {
 	const m: any = await importOriginal();
@@ -117,6 +121,7 @@ beforeEach(() => {
 	db.audits.length = 0;
 	db.runRecords.length = 0;
 	db.updateMatched = 1;
+	gateMock.ok = true;
 	vi.spyOn(console, 'log').mockImplementation(() => {});
 	vi.spyOn(console, 'error').mockImplementation(() => {});
 });
@@ -278,6 +283,41 @@ describe('startConfirm', () => {
 		expect(upd.args[1].$unset).toEqual({ startIntent: '' });
 		expect(db.writes.find((w) => w.model === 'bridge')!.args[0]).toMatchObject({ kind: 'auto_resume_run', payload: { runId: 'ot-9' } });
 		expect(db.audits.at(-1)!.newData).toMatchObject({ status: 'Running', opentronsRunId: 'ot-9', line: 'tailnet' });
+	});
+
+	it('tailnet + a browser bridge client: played returns the auto_resume_run job and creates NO queue command', async () => {
+		db.reagent.set('R3', { _id: 'R3', robot: { _id: 'rb', name: 'B14' }, startIntent: intent({ opentronsRunId: 'ot-7' }) });
+		const r = (await startConfirm('reagent', 'R3', 'tok', { phase: 'played', opentronsRunId: 'ot-7' }, USER, 'tailnet', { bridgeJobs: true })) as any;
+		expect(r).toMatchObject({ success: true, opentronsRunId: 'ot-7', job: { jobId: 'gen', kind: 'auto_resume_run', payload: { runId: 'ot-7' } } });
+		expect(db.writes.some((w) => w.model === 'bridge')).toBe(false);
+		expect(db.audits.at(-1)!.newData).toMatchObject({ status: 'Running', line: 'tailnet', autoResumeJobId: 'gen' });
+	});
+
+	it('the queue command stays whenever the browser cannot submit: queue line, no bridge client, or no daemon-job gate', async () => {
+		const cases: Array<[any, any]> = [
+			['queue', { bridgeJobs: true }],
+			['tailnet', {}],
+			['tailnet', { bridgeJobs: true, gate: false }]
+		];
+		for (const [line, o] of cases) {
+			db.writes.length = 0;
+			db.audits.length = 0;
+			gateMock.ok = o.gate !== false;
+			db.wax.set('W5', { _id: 'W5', robot: { _id: 'rb' }, startIntent: intent({ opentronsRunId: 'ot-5' }) });
+			const r = (await startConfirm('wax', 'W5', 'tok', { phase: 'played', opentronsRunId: 'ot-5' }, USER, line, { bridgeJobs: o.bridgeJobs })) as any;
+			expect(r).toEqual({ success: true, opentronsRunId: 'ot-5' });
+			expect(db.writes.filter((w) => w.model === 'bridge')).toHaveLength(1);
+			expect(db.audits.at(-1)!.newData).not.toHaveProperty('autoResumeJobId');
+		}
+	});
+
+	it('the startConfirm action reads bridgeJobs=1 from the form', async () => {
+		db.wax.set('W6', { _id: 'W6', robot: { _id: 'rb' }, startIntent: intent({ opentronsRunId: 'ot-6' }) });
+		const r = (await lifecycleActions('wax').startConfirm(
+			ev({ runId: 'W6', token: 'tok', obs: JSON.stringify({ phase: 'played', opentronsRunId: 'ot-6' }), line: 'tailnet', bridgeJobs: '1' })
+		)) as any;
+		expect(r.job).toMatchObject({ kind: 'auto_resume_run', payload: { runId: 'ot-6' } });
+		expect(db.writes.some((w) => w.model === 'bridge')).toBe(false);
 	});
 
 	it('a repeated played for the run already Running is a success (the intent is gone)', async () => {

@@ -16,6 +16,13 @@
 		type StartStepId,
 		type StartStepStatus
 	} from '$lib/opentrons/ot2-protocol';
+	import {
+		deckScanOverBridge,
+		startSweepOverBridge,
+		followSweep,
+		tipSwapOverBridge,
+		TERMINAL_SWEEP
+	} from '$lib/opentrons/fill-bridge-jobs';
 	import type { RejectionReasonCode } from '$lib/server/db/schema';
 
 	interface Props {
@@ -117,6 +124,24 @@
 	async function requestTipSwap(mode: 'rack' | 'hand' | 'cancel') {
 		if (!data.runState.runId) return;
 		tipSwapStatus = 'sending';
+		// Tailnet line (OT2-TAILNET-5 S6): the same ?/requestTipSwap audit, then
+		// the job goes to the robot daemon's /bridge — no queue row.
+		const bridge = lifecycleSession?.bridge() ?? null;
+		if (bridge) {
+			const r = await tipSwapOverBridge(bridge, postLifecycleAction, {
+				runId: data.runState.runId,
+				mode: mode === 'cancel' ? 'rack' : mode,
+				cancel: mode === 'cancel' ? 'true' : 'false'
+			});
+			if (r.ok) {
+				tipSwapStatus = mode === 'cancel' ? 'cancelled' : mode;
+				tipSwapAt = Date.now();
+			} else {
+				console.error('[wax] tip swap request failed', r.error);
+				tipSwapStatus = 'error';
+			}
+			return;
+		}
 		try {
 			const fd = new FormData();
 			fd.set('runId', data.runState.runId);
@@ -305,7 +330,17 @@
 			// (a) Deck barcode — synchronous gantry scan, up to ~45s server-side.
 			setOrchStep('deck', 'active', 'Robot is scanning the deck barcode…');
 			let deckBarcode = '';
-			try {
+			// Tailnet line (OT2-TAILNET-5 S6): both robot scans run as daemon jobs
+			// over /bridge ($lib/opentrons/fill-bridge-jobs); null = the queue line.
+			const bridge = lifecycleSession?.bridge() ?? null;
+			if (bridge) {
+				const r = await deckScanOverBridge(bridge, data.robotId);
+				if (!r.ok) {
+					failOrchStep('deck', r.error);
+					return;
+				}
+				deckBarcode = r.barcode;
+			} else try {
 				const res = await fetch('/api/scanner/deck-scan', {
 					method: 'POST',
 					headers: { 'content-type': 'application/json' },
@@ -334,34 +369,65 @@
 			setOrchStep('sweep', 'active', 'Starting cartridge sweep…');
 			let scans: { slotIndex: number; barcode: string }[] = [];
 			try {
-				const res = await fetch('/api/scanner/sweep', {
-					method: 'POST',
-					headers: { 'content-type': 'application/json' },
-					body: JSON.stringify({
+				let snap: any = null;
+				if (bridge) {
+					const started = await startSweepOverBridge(bridge, {
 						robotId: data.robotId,
 						source: 'wax_filling',
 						contextRef: runId,
 						maxSlots: planned
-					})
-				});
-				if (!res.ok) {
-					failOrchStep('sweep', await apiErrorMessage(res));
-					return;
-				}
-				const { sweepRunId, slotsTotal } = await res.json();
-				const deadline = Date.now() + 5 * 60 * 1000;
-				let snap: any = null;
-				while (Date.now() < deadline) {
-					await new Promise((r) => setTimeout(r, 1500));
-					const poll = await fetch(`/api/scanner/sweep/${sweepRunId}`);
-					if (!poll.ok) {
-						failOrchStep('sweep', await apiErrorMessage(poll));
+					});
+					if (!started.ok) {
+						failOrchStep('sweep', started.error);
 						return;
 					}
-					snap = await poll.json();
-					const total = snap.slotsTotal ?? slotsTotal ?? planned;
-					setOrchStep('sweep', 'active', `Scanning… slot ${Math.min((snap.slotsDone ?? 0) + 1, total)}/${total}`);
-					if (['completed', 'errored', 'cancelled'].includes(snap.status)) break;
+					const followed = await followSweep({
+						bridge,
+						sweepRunId: started.sweepRunId,
+						jobId: started.jobId,
+						slotsTotal: started.slotsTotal ?? planned,
+						intervalMs: 1500,
+						timeoutMs: 5 * 60 * 1000,
+						onSnapshot: (s) => {
+							const total = s.slotsTotal ?? started.slotsTotal ?? planned;
+							setOrchStep('sweep', 'active', `Scanning… slot ${Math.min((s.slotsDone ?? 0) + 1, total)}/${total}`);
+							return TERMINAL_SWEEP.includes(s.status);
+						}
+					});
+					if (!followed.ok && !followed.timedOut) {
+						failOrchStep('sweep', followed.error);
+						return;
+					}
+					snap = followed.snapshot;
+				} else {
+					const res = await fetch('/api/scanner/sweep', {
+						method: 'POST',
+						headers: { 'content-type': 'application/json' },
+						body: JSON.stringify({
+							robotId: data.robotId,
+							source: 'wax_filling',
+							contextRef: runId,
+							maxSlots: planned
+						})
+					});
+					if (!res.ok) {
+						failOrchStep('sweep', await apiErrorMessage(res));
+						return;
+					}
+					const { sweepRunId, slotsTotal } = await res.json();
+					const deadline = Date.now() + 5 * 60 * 1000;
+					while (Date.now() < deadline) {
+						await new Promise((r) => setTimeout(r, 1500));
+						const poll = await fetch(`/api/scanner/sweep/${sweepRunId}`);
+						if (!poll.ok) {
+							failOrchStep('sweep', await apiErrorMessage(poll));
+							return;
+						}
+						snap = await poll.json();
+						const total = snap.slotsTotal ?? slotsTotal ?? planned;
+						setOrchStep('sweep', 'active', `Scanning… slot ${Math.min((snap.slotsDone ?? 0) + 1, total)}/${total}`);
+						if (['completed', 'errored', 'cancelled'].includes(snap.status)) break;
+					}
 				}
 				if (!snap || !['completed', 'errored', 'cancelled'].includes(snap.status)) {
 					failOrchStep('sweep', 'Timed out waiting for the cartridge sweep (5 min)');
@@ -972,7 +1038,7 @@
 			{ id: 'creating', label: 'Creating run', status: 'pending', detail: '', line: '' },
 			{ id: 'running', label: 'Running', status: 'pending', detail: '', line: '' }
 		];
-		const r = await startRunTwoPhase({ form: fd, post: postLifecycleAction, session, onStep: onStartStep });
+		const r = await startRunTwoPhase({ form: fd, post: postLifecycleAction, session, onStep: onStartStep, bridge: session.bridge() });
 		if (r.ok) {
 			startSteps = [];
 			return null;
@@ -1540,6 +1606,7 @@
 							suppressFocus={showCancelModal || showOverrideModal || !manualFallbackOpen}
 							robotId={data.robotId}
 							runId={data.runState.runId ?? null}
+							session={lifecycleSession}
 						/>
 					</div>
 				</details>
@@ -1554,6 +1621,7 @@
 					suppressFocus={showCancelModal || showOverrideModal}
 					robotId={data.robotId}
 					runId={data.runState.runId ?? null}
+					session={lifecycleSession}
 				/>
 			{/if}
 		{:else if displayStage === 'Running'}

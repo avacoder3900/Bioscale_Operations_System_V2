@@ -1,12 +1,24 @@
 /**
  * GET  /api/scanner/sweep/<id>            — current snapshot for polling
  * POST /api/scanner/sweep/<id>            — control: { action: 'cancel' | 'pause' | 'resume' }
+ *
+ * TAILNET LINE (OT2-TAILNET-5 S6) — only for a SweepRun the tailnet prepare
+ * created (doc.line === 'tailnet'); a queue SweepRun is handled exactly as before:
+ *   - pause / resume set the same flags + log (the daemon ORs them with its
+ *     /bridge control flags on every progress report);
+ *   - cancel terminal-izes the run the same way, but there is no queue command
+ *     to expire and the maintenance-run close is NOT relayed through the queue:
+ *     the daemon closes its own run when it stops (the browser also cancels the
+ *     /bridge job directly);
+ *   - { action: 'abandon', line: 'tailnet', jobId, error } — the browser's
+ *     bridge submit failed after the prepare: the SweepRun (never reported on)
+ *     is closed 'errored' with the reason, plus AuditLog 'sweep_submit_failed'.
  */
 
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { requirePermission } from '$lib/server/permissions';
-import { connectDB, OpentronsScannerSweepRun, Ot2BridgeCommand } from '$lib/server/db';
+import { connectDB, OpentronsScannerSweepRun, Ot2BridgeCommand, AuditLog, generateId } from '$lib/server/db';
 import { getRobot, robotGet } from '$lib/server/opentrons/proxy';
 import { closeMaintenanceRun } from '$lib/server/opentrons/maintenance';
 
@@ -127,6 +139,46 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 	if (['completed', 'cancelled', 'errored'].includes(doc.status)) {
 		error(409, `Sweep is already ${doc.status} — no control action accepted.`);
 	}
+	const tailnetRun = doc.line === 'tailnet';
+
+	if (action === 'abandon' && tailnetRun) {
+		// The prepare wrote this run; the browser could not hand the job to the
+		// robot's /bridge. Close it now instead of leaving it 'running' until the
+		// 30-min unreported sweep check. Refused once the daemon has reported —
+		// then the job IS running and only cancel applies.
+		const jobId = body?.jobId?.toString() ?? '';
+		if (!jobId || jobId !== doc.bridgeJobId) error(400, 'jobId does not match this sweep run');
+		if (doc.bridgeLastReportAt) error(409, 'The robot is already running this sweep — cancel it instead.');
+		const reason = (typeof body?.error === 'string' && body.error.trim() ? body.error.trim() : 'bridge submit failed').slice(0, 500);
+		const now = new Date();
+		const closed = await OpentronsScannerSweepRun.findOneAndUpdate(
+			{ _id: params.id, status: { $in: ['running', 'paused'] }, bridgeLastReportAt: { $exists: false } },
+			{
+				$set: { status: 'errored', completedAt: now, abortReason: reason },
+				$push: { log: { ts: now, level: 'error', message: `Not started: ${reason}` } }
+			},
+			{ new: true }
+		).lean();
+		if (!closed) error(409, 'The sweep changed state — reload it.');
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'opentrons_scanner_sweeps',
+			recordId: doc.positionSetId,
+			action: 'sweep_submit_failed',
+			newData: {
+				sweepRunId: doc._id,
+				robotId: doc.robotId,
+				bridgeJobId: jobId,
+				line: 'tailnet',
+				source: doc.source,
+				contextRef: doc.contextRef,
+				error: reason
+			},
+			changedAt: now,
+			changedBy: locals.user.username
+		});
+		return json(pickSnapshot(closed));
+	}
 
 	if (action === 'cancel') {
 		// Step 1: flip the flags + immediately terminal the sweep doc. Cancel
@@ -150,11 +202,26 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 			}
 		});
 
+		if (tailnetRun) {
+			// Tailnet line: no Ot2BridgeCommand exists, and the robot cleanup must
+			// not ride the queue. The daemon's next report gets a 409 (terminal
+			// run) and stops; it closes its maintenance run on the way out.
+			await OpentronsScannerSweepRun.findByIdAndUpdate(params.id, {
+				$push: {
+					log: {
+						ts: new Date(),
+						level: 'info',
+						message: `Tailnet sweep (job ${doc.bridgeJobId}): the robot's bridge daemon stops the walk and closes its maintenance run.`
+					}
+				}
+			});
+		}
+
 		// Step 2: expire any live bridge command for this sweep. A dead daemon
 		// must not strand the command in the queue (pending), and a daemon that
 		// claims/continues it late gets a 409 from the progress endpoint once
 		// the command is terminal — so the cancelled sweep can't resurrect.
-		await Ot2BridgeCommand.updateMany(
+		if (!tailnetRun) await Ot2BridgeCommand.updateMany(
 			{
 				kind: 'sweep',
 				status: { $in: ['pending', 'claimed'] },
@@ -176,7 +243,7 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 		// in-flight motion command on a wedged daemon fail fast ("run not
 		// found"). robotGet/closeMaintenanceRun are transport-aware, so this
 		// works both direct (lab LAN) and via kind:'http' bridge commands.
-		const robot = await getRobot(doc.robotId);
+		const robot = tailnetRun ? null : await getRobot(doc.robotId);
 		if (robot) {
 			try {
 				const cr = await robotGet(robot as any, '/maintenance_runs/current_run');

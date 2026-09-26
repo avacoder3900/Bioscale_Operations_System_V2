@@ -4,6 +4,8 @@
 	import { page } from '$app/stores';
 	import { goto, invalidateAll } from '$app/navigation';
 	import { resolve } from '$app/paths';
+	import { openRobotSession } from '$lib/opentrons/direct-client';
+	import { restartServerOverBridge } from '$lib/opentrons/fill-bridge-jobs';
 	import type { RobotRunState, RobotHealthSummary } from '$lib/server/services/wax-filling/robots';
 
 	interface Props {
@@ -86,6 +88,19 @@
 		restartingId = robotId;
 		restartMsg = '';
 		try {
+			// Tailnet line (OT2-TAILNET-5 S6): the restart is a daemon job over
+			// /bridge (BIMS audits it first). Otherwise today's queue POST.
+			const session = await openRobotSession(robotId);
+			try {
+				const bridge = session.bridge();
+				if (bridge) {
+					const r = await restartServerOverBridge(bridge, robotId);
+					restartMsg = r.ok ? r.message : r.error;
+					return;
+				}
+			} finally {
+				session.close();
+			}
 			const res = await fetch(`/api/opentrons-lab/robots/${robotId}/restart-server`, { method: 'POST' });
 			const body = await res.json().catch(() => ({}));
 			restartMsg = res.ok ? (body.message ?? 'Restart sent.') : (body.message ?? body.error ?? 'Restart failed.');

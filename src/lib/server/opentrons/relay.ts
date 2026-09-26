@@ -6,13 +6,14 @@
  *
  * A browser that can't reach the robot over Tailscale (or fell back) sends each
  * robot-client request here instead. It runs exactly ONE robot request through
- * the existing proxy.ts exports — robotGet / robotPost / robotPatch /
+ * the existing proxy.ts exports — robotGet / robotPost / robotPatch / robotPut /
  * robotDelete — which on Vercel become one kind:'http' Ot2BridgeCommand, the
  * same as every other queue call. Nothing here re-implements robot logic.
  *
- *   GET                  manufacturing:read
- *   POST / PATCH / DELETE manufacturing:write, plus an AuditLog row 'robot_relay'
- *   PUT / other          405 — proxy.ts has no robotPut, so those need Tailscale
+ *   GET                        manufacturing:read
+ *   POST / PATCH / PUT / DELETE manufacturing:write, plus an AuditLog row 'robot_relay'
+ *                              (PUT: the Opentrons UI's /clientData/{key} and /system/time)
+ *   anything else              405 — needs Tailscale
  *
  * Paths are sanity-checked: must start with '/', no scheme / host ('//x',
  * 'http:'), no '..' segment, no backslash or control characters.
@@ -20,9 +21,9 @@
 import { json, error } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
 import { connectDB, AuditLog, generateId } from '$lib/server/db';
-import { getRobot, robotGet, robotPost, robotPatch, robotDelete } from './proxy';
+import { getRobot, robotGet, robotPost, robotPatch, robotPut, robotDelete } from './proxy';
 
-export const RELAY_METHODS = ['GET', 'POST', 'PATCH', 'DELETE'] as const;
+export const RELAY_METHODS = ['GET', 'POST', 'PATCH', 'PUT', 'DELETE'] as const;
 export type RelayMethod = (typeof RELAY_METHODS)[number];
 
 export type RelayRequest = { method: RelayMethod; path: string; body?: unknown };
@@ -86,6 +87,9 @@ export async function relayToRobot(robot: any, req: RelayRequest): Promise<{ sta
 				break;
 			case 'PATCH':
 				res = await robotPatch(robot, req.path, req.body);
+				break;
+			case 'PUT':
+				res = await robotPut(robot, req.path, req.body);
 				break;
 			case 'DELETE':
 				res = await robotDelete(robot, req.path);

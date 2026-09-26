@@ -169,6 +169,24 @@ export async function robotPatch(robot: any, path: string, body?: unknown): Prom
 	});
 }
 
+/**
+ * Proxy a PUT request to the robot — same shape and transport switch as
+ * robotPatch (one kind:'http' queue command on Vercel). The relay uses it for
+ * the Opentrons UI's PUT /clientData/{key} and PUT /system/time (OT2-TAILNET-5).
+ */
+export async function robotPut(robot: any, path: string, body?: unknown): Promise<Response> {
+	if (resolveTransport() === 'bridge') return bridgeFetch(robot, 'PUT', path, body);
+	const url = `${robotBaseUrl(robot)}${path}`;
+	return robotFetch(url, {
+		method: 'PUT',
+		headers: {
+			'Content-Type': 'application/json',
+			'opentrons-version': '3'
+		},
+		body: body !== undefined ? JSON.stringify(body) : undefined
+	});
+}
+
 /** Proxy a DELETE request to the robot */
 export async function robotDelete(robot: any, path: string): Promise<Response> {
 	if (resolveTransport() === 'bridge') return bridgeFetch(robot, 'DELETE', path);

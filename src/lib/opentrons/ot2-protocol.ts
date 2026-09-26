@@ -20,6 +20,9 @@
  * behaviour byte-identical when editing.
  */
 
+import type { BridgeClient } from './bridge-client';
+import { submitAutoResume } from './fill-bridge-jobs';
+
 /** Minimal transport. Both implementations return a native Response. */
 export interface Ot2Transport {
 	get(path: string, opts?: { timeoutMs?: number }): Promise<Response>;
@@ -1491,17 +1494,25 @@ export function formFields(fd: FormData | Record<string, string>): Record<string
  * run.uploadProtocol → ?/startRecordResync → run.ensureFresh verify) →
  * run.create → ?/startConfirm(created) → run.action play → ?/startConfirm(played).
  * Every server call is short; the long upload + analysis wait run on the robot line.
+ *
+ * `bridge` (the session's daemon client, RobotSession.bridge()): when set, the
+ * confirms say so (`bridgeJobs: '1'`) and a tailnet `played` confirm returns an
+ * `auto_resume_run` job INSTEAD of enqueueing a queue command; it is submitted
+ * here fire-and-forget — never awaited, never retried, never failing the start.
+ * Without it the confirm enqueues the queue command exactly as before.
  */
 export async function startRunTwoPhase(o: {
 	form: FormData | Record<string, string>;
 	post: ActionPoster;
 	session: VerbSession;
 	onStep?: StartRunSteps['onStep'];
+	bridge?: BridgeClient | null;
 }): Promise<SequenceResult> {
 	const form = formFields(o.form);
 	const runId = form.runId ?? '';
 	const line = lineOf(o.session);
-	return startRunSequence({
+	const bridge = o.bridge ?? null;
+	const r = await startRunSequence({
 		prepare: async () => {
 			const r = await o.post('startPrepare', { ...form, line });
 			return r.ok ? (r.data as StartPrepared) : stepErr(r);
@@ -1522,12 +1533,14 @@ export async function startRunTwoPhase(o: {
 			return r.ok ? { runTimeParameterValues: (r.data?.runTimeParameterValues ?? {}) as Record<string, unknown> } : stepErr(r);
 		},
 		confirm: async (token, obs) => {
-			const r = await o.post('startConfirm', { runId, token, obs: JSON.stringify(obs), line });
+			const r = await o.post('startConfirm', { runId, token, obs: JSON.stringify(obs), line, ...(bridge ? { bridgeJobs: '1' } : {}) });
 			return r.ok ? ((r.data ?? {}) as Record<string, unknown>) : stepErr(r);
 		},
 		verb: sessionVerb(o.session),
 		onStep: o.onStep
 	});
+	if (r.ok && bridge && r.result?.job) void submitAutoResume(bridge, r.result.job);
+	return r;
 }
 
 /** Finish over the session: run.commands + the tip parse, then ?/finishConfirm. */

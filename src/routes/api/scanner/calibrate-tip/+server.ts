@@ -37,7 +37,12 @@
  *     snapshot { jobId, status, result, error }. The inputs are re-resolved
  *     here (never trusted from the browser) and the SAME completion half runs:
  *     readProbeResult, AuditLog 'calibrate_tip' (stamped line:'tailnet'), the
- *     same ProbeResponse shape.
+ *     same ProbeResponse shape. Idempotent per jobId: a second confirm returns
+ *     the recorded reading (+ duplicate: true) and writes no second AuditLog.
+ *   The browser half lives in $lib/opentrons/studio-bridge-jobs
+ *   (calibrateTipOverBridge): prepare → /bridge submit (never retried) →
+ *   /bridge/jobs/:id progress → confirm. Prepare writes nothing, so a failed
+ *   submit leaves no row to close.
  *   409 when the robot is not on the tailnet line here (two-key gate), or this deployment has no OT2_BRIDGE_TOKEN_SECRET (bridgeJobGate).
  */
 import { json, error } from '@sveltejs/kit';
@@ -266,6 +271,29 @@ export const POST: RequestHandler = async ({ request, locals, url }) => {
 		}
 		const jobId = body?.jobId?.toString() ?? '';
 		if (!JOB_ID_RE.test(jobId)) error(400, 'jobId required to confirm a tailnet tip calibration');
+		// Idempotent confirm (R2): a repeated confirm for the same /bridge job —
+		// e.g. the browser retrying after a lost answer — returns the reading
+		// already recorded instead of writing a second 'calibrate_tip' AuditLog.
+		const recorded = (await AuditLog.findOne({
+			tableName: 'ot2_bridge_jobs',
+			recordId: jobId,
+			action: 'calibrate_tip'
+		})
+			.select('newData')
+			.lean()) as any;
+		if (recorded?.newData) {
+			const d = recorded.newData;
+			return json({
+				success: true,
+				probed: d.probed ?? null,
+				probedSource: d.probedSource ?? null,
+				adjust: d.adjust ?? null,
+				calibrator: d.calibrator ?? calibrator,
+				calibratorSource: d.calibratorSource ?? calibratorSource,
+				result: d.result,
+				duplicate: true
+			});
+		}
 		if (body?.status !== 'completed') {
 			return json(
 				noReading(

@@ -3,7 +3,7 @@
  * POST /api/opentrons-lab/robots/:id/relay   Body: { method, path, body? }
  *   → the robot's status + JSON body (one kind:'http' queue command on Vercel)
  *
- * GET needs manufacturing:read; POST/PATCH/DELETE need manufacturing:write and
+ * GET needs manufacturing:read; POST/PATCH/PUT/DELETE need manufacturing:write and
  * write an AuditLog row ('robot_relay'). Logic: $lib/server/opentrons/relay.ts.
  */
 import type { RequestHandler } from './$types';

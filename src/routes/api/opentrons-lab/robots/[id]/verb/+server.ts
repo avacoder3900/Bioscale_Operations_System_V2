@@ -13,6 +13,7 @@
 import { error, json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { requirePermission } from '$lib/server/permissions';
+import { connectDB, AuditLog, generateId } from '$lib/server/db';
 import { getRobot } from '$lib/server/opentrons/proxy';
 import { verbResponse } from '$lib/server/opentrons/transport';
 import { LIFECYCLE_VERBS, READ_ONLY_VERBS, type Ot2Verb } from '$lib/opentrons/ot2-protocol';
@@ -39,5 +40,29 @@ export const POST: RequestHandler = async ({ params, locals, request, url }) => 
 	if (rid) args.rid = rid;
 	if (runId) args.runId = runId;
 
-	return verbResponse(robot, verb as Ot2Verb, args, { username: locals.user.username });
+	const res = await verbResponse(robot, verb as Ot2Verb, args, { username: locals.user.username });
+
+	// mx.command is LPC's arbitrary maintenance command. Its queue fallback used
+	// to be the raw relay, which audits every mutating robot call ('robot_relay');
+	// keep that record now that it rides this route. (The other lifecycle verbs
+	// are recorded by their page's confirm step.)
+	if (verb === 'mx.command') {
+		await connectDB();
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'opentrons_robots',
+			recordId: String(robot._id),
+			action: 'robot_verb',
+			newData: {
+				verb,
+				runId: typeof args.runId === 'string' ? args.runId : null,
+				commandType: typeof args.commandType === 'string' ? args.commandType : null,
+				status: res.status,
+				line: 'queue'
+			},
+			changedAt: new Date(),
+			changedBy: locals.user.username
+		});
+	}
+	return res;
 };

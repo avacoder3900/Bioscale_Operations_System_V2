@@ -22,6 +22,7 @@
 		type StartStepId,
 		type StartStepStatus
 	} from '$lib/opentrons/ot2-protocol';
+	import { tipSwapOverBridge } from '$lib/opentrons/fill-bridge-jobs';
 	// REAGENT-TOPSEAL-IMPLICIT: there is no post-OT-2 queue. Run completion ends
 	// the run; top sealing is implicit; the next touch is the Reagent Inspect photo.
 
@@ -154,6 +155,23 @@
 	async function requestTipSwap(mode: 'rack' | 'hand' | 'cancel') {
 		if (!data.activeRunId) return;
 		tipSwapStatus = 'sending';
+		// Tailnet line (OT2-TAILNET-5 S6): the same ?/requestTipSwap audit, then
+		// the job goes to the robot daemon's /bridge — no queue row.
+		const bridge = lifecycleSession?.bridge() ?? null;
+		if (bridge) {
+			const r = await tipSwapOverBridge(bridge, postLifecycleAction, {
+				runId: data.activeRunId,
+				mode: mode === 'cancel' ? 'rack' : mode,
+				cancel: mode === 'cancel' ? 'true' : 'false'
+			});
+			if (r.ok) {
+				tipSwapStatus = mode === 'cancel' ? 'cancelled' : mode;
+			} else {
+				console.error('[reagent] tip swap request failed', r.error);
+				tipSwapStatus = 'error';
+			}
+			return;
+		}
 		try {
 			const fd = new FormData();
 			fd.set('runId', data.activeRunId);
@@ -585,7 +603,7 @@
 			{ id: 'creating', label: 'Creating run', status: 'pending', detail: '', line: '' },
 			{ id: 'running', label: 'Running', status: 'pending', detail: '', line: '' }
 		];
-		const r = await startRunTwoPhase({ form: fd, post: postLifecycleAction, session, onStep: onStartStep });
+		const r = await startRunTwoPhase({ form: fd, post: postLifecycleAction, session, onStep: onStartStep, bridge: session.bridge() });
 		if (r.ok) {
 			startSteps = [];
 			return null;
@@ -961,6 +979,7 @@
 			focusPaused={showCancelModal}
 			robotId={data.robotId}
 			runId={data.activeRunId ?? null}
+			session={lifecycleSession}
 		/>
 
 	{:else if displayStage === 'Loading' && data.cartridges.length > 0 && reagentBatchConfirmed}

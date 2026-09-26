@@ -15,6 +15,7 @@ import { notifyLowWaxBatch, notifyRunLifecycle, shouldWarnLowWax } from '$lib/se
 import { checkRobotConflict, checkDeckConflict, checkTrayConflict } from '$lib/server/manufacturing/resource-locks';
 import { protectLockedCarts, LOCKED_STATUSES } from '$lib/server/manufacturing/locked-cartridges';
 import { getRobot, robotGet, bridgeDeviceIdForRobot } from '$lib/server/opentrons/proxy';
+import { bridgeJobGate } from '$lib/server/opentrons/bridge-token';
 import { requirePermission } from '$lib/server/permissions';
 // OT2-TAILNET-5 §7.1: the run lifecycle's BIMS halves (moved out of this file,
 // unchanged) + the prepare/confirm actions the tailnet line calls.
@@ -1119,6 +1120,56 @@ export const actions: Actions = {
 		const robotId = run.robot?._id;
 		const robot = robotId ? await OpentronsRobot.findById(robotId).lean() as any : null;
 		if (!robot) return fail(400, { error: 'Run has no OT-2 robot' });
+		if (data.get('line')?.toString() === 'tailnet') {
+			// OT2-TAILNET-5 S6: the tailnet prepare. Same guards and the same
+			// AuditLog row (stamped line + bridgeJobId), but NO Ot2BridgeCommand —
+			// the browser submits the returned job to the robot daemon's /bridge.
+			// {phase:'abandon'} records that the browser's submit failed.
+			requirePermission(locals.user, 'manufacturing:write');
+			const now = new Date();
+			if (data.get('phase')?.toString() === 'abandon') {
+				const bridgeJobId = data.get('bridgeJobId')?.toString() ?? '';
+				if (!/^[A-Za-z0-9_-]{6,64}$/.test(bridgeJobId)) return fail(400, { error: 'bridgeJobId is required' });
+				await AuditLog.create({
+					_id: generateId(),
+					tableName: 'wax_filling_runs',
+					recordId: runId,
+					action: 'wax_tip_swap_submit_failed',
+					changedBy: locals.user.username,
+					changedAt: now,
+					newData: {
+						opentronsRunId: run.opentronsRunId ?? null,
+						robotId: String(robotId),
+						line: 'tailnet',
+						bridgeJobId,
+						error: (data.get('error')?.toString() ?? '').slice(0, 500) || 'bridge submit failed'
+					}
+				});
+				return { success: true, abandoned: true };
+			}
+			const gate = bridgeJobGate(robot);
+			if (!gate.ok) return fail(409, { error: gate.reason });
+			const bridgeJobId = generateId();
+			await AuditLog.create({
+				_id: generateId(),
+				tableName: 'wax_filling_runs',
+				recordId: runId,
+				action: cancel ? 'wax_tip_swap_cancel' : 'wax_tip_swap_request',
+				changedBy: locals.user.username,
+				changedAt: now,
+				newData: { mode, cancel, opentronsRunId: run.opentronsRunId ?? null, robotId: String(robotId), line: 'tailnet', bridgeJobId }
+			});
+			return {
+				success: true,
+				tipSwap: cancel ? 'cancelled' : mode,
+				line: 'tailnet',
+				job: {
+					jobId: bridgeJobId,
+					kind: 'tip_swap_request',
+					payload: { mode, cancel, runId: run.opentronsRunId ?? null, requestedBy: locals.user.username }
+				}
+			};
+		}
 		try {
 			await Ot2BridgeCommand.create({
 				_id: generateId(),

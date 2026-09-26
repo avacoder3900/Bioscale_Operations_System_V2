@@ -7,6 +7,7 @@
 	import { onDestroy } from 'svelte';
 	import { RobotSession, type RobotSessionState } from '$lib/opentrons/direct-client';
 	import { uploadBundle, sessionVerb, isStepError, type ProtocolUploadBundle } from '$lib/opentrons/ot2-protocol';
+	import { calibrateTipOverBridge } from '$lib/opentrons/studio-bridge-jobs';
 	import TransportPill from '$lib/components/opentrons/TransportPill.svelte';
 	import { goto, invalidateAll } from '$app/navigation';
 	import { deserialize } from '$app/forms';
@@ -1079,7 +1080,17 @@
 			// applyCalibratorOverride lays it over the stored fixture axis by axis, so the
 			// probe happens at the live field values without writing a thing to Mongo.
 			// Its z is the PROBE Z -- the touch-off depth -- never the approach height.
-			const res = await api('/api/scanner/calibrate-tip', { method: 'POST', body: JSON.stringify({ robotId: selectedRobotId, deckLoadName: kind === 'deck' ? data.selected : null, mount: desiredMount, tipProfile, tipWell, runId, pipetteId, calibrator: { x: calX, y: calY, z: probeZNow } }) });
+			const calRequest = { robotId: selectedRobotId, deckLoadName: kind === 'deck' ? data.selected : null, mount: desiredMount, tipProfile, tipWell, runId, pipetteId, calibrator: { x: calX, y: calY, z: probeZNow } };
+			// OT2-TAILNET-5 S6: on the tailnet line (the session hands out a /bridge
+			// client) the probe runs as a daemon job from this browser — BIMS prepares
+			// and records it, progress comes live from the robot. null = the queue
+			// line, exactly as before.
+			const bridge = robotSession?.bridge() ?? null;
+			const res = bridge
+				? await calibrateTipOverBridge(bridge, calRequest, {
+						onProgress: (t) => (msg = `Calibrating tip on the fixture via Tailscale… ${t}`)
+					})
+				: await api('/api/scanner/calibrate-tip', { method: 'POST', body: JSON.stringify(calRequest) });
 			if (res?.adjust && typeof res.adjust.x === 'number') {
 				tipAdjust = { x: res.adjust.x, y: res.adjust.y };
 				// The probe moved the gantry and changed the applied adjust → any prior
@@ -1087,7 +1098,7 @@
 				nominal = null; refWell = null;
 				await refreshPosition();
 				msg = `Tip calibrated: adjust x=${tipAdjust.x} y=${tipAdjust.y}. Tip kept on; applied to every move-to while tuning. Move to a hole to set a fresh nominal.`;
-			} else { errMsg = 'Calibration returned no adjust'; }
+			} else { errMsg = (bridge && typeof res?.error === 'string' && res.error) || 'Calibration returned no adjust'; }
 		} catch (e) { errMsg = e instanceof Error ? e.message : String(e); } finally { busy = false; calibrating = false; }
 	}
 

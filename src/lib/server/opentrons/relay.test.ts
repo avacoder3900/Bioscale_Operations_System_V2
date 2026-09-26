@@ -1,7 +1,7 @@
 /**
  * The generic robot relay (OT2-TAILNET-5 §7.8.3 / S10a): the queue line for raw
  * robot-client calls.
- *   - GET needs manufacturing:read; POST/PATCH/DELETE need manufacturing:write
+ *   - GET needs manufacturing:read; POST/PATCH/PUT/DELETE need manufacturing:write
  *   - paths are robot-origin paths only (no scheme/host, no '..')
  *   - exactly ONE robot request through the existing proxy.ts exports
  *   - a mutating call writes an AuditLog row 'robot_relay'
@@ -22,6 +22,7 @@ vi.mock('./proxy', () => {
 		robotGet: rec('robotGet'),
 		robotPost: rec('robotPost'),
 		robotPatch: rec('robotPatch'),
+		robotPut: rec('robotPut'),
 		robotDelete: rec('robotDelete')
 	};
 });
@@ -69,7 +70,7 @@ beforeEach(() => {
 describe('relay permissions', () => {
 	it('GET needs manufacturing:read; mutating methods need manufacturing:write', () => {
 		expect(relayPermission('GET')).toBe('manufacturing:read');
-		for (const m of ['POST', 'PATCH', 'DELETE'] as const) expect(relayPermission(m)).toBe('manufacturing:write');
+		for (const m of ['POST', 'PATCH', 'PUT', 'DELETE'] as const) expect(relayPermission(m)).toBe('manufacturing:write');
 	});
 
 	it('no user → 401; no manufacturing:read → 403; nothing reaches the robot', async () => {
@@ -86,8 +87,8 @@ describe('relay permissions', () => {
 		expect(audits).toEqual([]); // reads are not audited
 	});
 
-	it('a reader cannot POST / PATCH / DELETE (403, robot untouched, no audit)', async () => {
-		for (const method of ['POST', 'PATCH', 'DELETE']) {
+	it('a reader cannot POST / PATCH / PUT / DELETE (403, robot untouched, no audit)', async () => {
+		for (const method of ['POST', 'PATCH', 'PUT', 'DELETE']) {
 			expect(await status(handleRelay(ev(READER, { method, path: '/robot/lights', body: { on: true } })))).toBe(403);
 		}
 		expect(calls).toEqual([]);
@@ -143,11 +144,49 @@ describe('relay: one robot request through proxy.ts + AuditLog on mutation', () 
 		expect(audits[0].newData.status).toBe(502);
 	});
 
-	it('PUT (no proxy.ts robotPut) → 405 "use Tailscale", nothing sent', async () => {
-		const r = await handleRelay(ev(WRITER, { method: 'PUT', path: '/system/time', body: {} }));
-		expect(r.status).toBe(405);
-		expect((await r.json()).message).toContain('Tailscale');
+	it('PUT relayed + audited: → robotPut with the JSON body, robot status + body verbatim', async () => {
+		robotAnswer = async () => new Response(JSON.stringify({ data: { systemTime: '2026-09-26T12:00:00Z' } }), { status: 200 });
+		const r = await handleRelay(ev(WRITER, { method: 'put', path: '/system/time', body: { data: { systemTime: '2026-09-26T12:00:00Z' } } }));
+		expect(r.status).toBe(200);
+		expect(r.headers.get('x-ot2-line')).toBe('queue');
+		expect(await r.json()).toEqual({ data: { systemTime: '2026-09-26T12:00:00Z' } });
+		expect(calls).toEqual([
+			{ fn: 'robotPut', robot: expect.objectContaining({ _id: 'b14' }), path: '/system/time', body: { data: { systemTime: '2026-09-26T12:00:00Z' } } }
+		]);
+		expect(audits).toHaveLength(1);
+		expect(audits[0]).toMatchObject({
+			_id: 'nanoid_audit_1',
+			action: 'robot_relay',
+			tableName: 'opentrons_robots',
+			recordId: 'b14',
+			changedBy: 'writer',
+			newData: { method: 'PUT', path: '/system/time', status: 200, line: 'queue' }
+		});
+	});
+
+	it("clientData PUT (the clone's 'set client data') relays the {data} dict and is audited", async () => {
+		robotAnswer = async () => new Response(JSON.stringify({ data: { operator: 'ana' } }), { status: 201 });
+		const r = await handleRelay(ev(WRITER, { method: 'PUT', path: '/clientData/bims%20key', body: { data: { operator: 'ana' } } }));
+		expect(r.status).toBe(201);
+		expect(calls).toEqual([{ fn: 'robotPut', robot: expect.anything(), path: '/clientData/bims%20key', body: { data: { operator: 'ana' } } }]);
+		expect(audits[0].newData).toEqual({ method: 'PUT', path: '/clientData/bims%20key', status: 201, line: 'queue' });
+	});
+
+	it('a PUT the robot refuses is the robot answer, still audited', async () => {
+		robotAnswer = async () => new Response(JSON.stringify({ errors: [{ detail: 'clientData must be a dict' }] }), { status: 422 });
+		const r = await handleRelay(ev(WRITER, { method: 'PUT', path: '/clientData/k', body: { data: 1 } }));
+		expect(r.status).toBe(422);
+		expect(audits[0].newData.status).toBe(422);
+	});
+
+	it('any other method (HEAD, OPTIONS, TRACE) → 405 "use Tailscale", nothing sent, no audit', async () => {
+		for (const method of ['HEAD', 'OPTIONS', 'TRACE']) {
+			const r = await handleRelay(ev(WRITER, { method, path: '/health' }));
+			expect(r.status).toBe(405);
+			expect((await r.json()).message).toContain('Tailscale');
+		}
 		expect(calls).toEqual([]);
+		expect(audits).toEqual([]);
 	});
 
 	it('a 204 answer carries no body', async () => {

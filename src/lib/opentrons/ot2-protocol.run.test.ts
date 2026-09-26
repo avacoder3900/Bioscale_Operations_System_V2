@@ -551,6 +551,64 @@ describe('tailnet drivers', () => {
 		expect(s.calls.map((c) => c.verb)).toEqual(['run.ensureFresh', 'run.create', 'run.action']);
 	});
 
+	it('with a bridge: confirms carry bridgeJobs=1 and the played job is submitted fire-and-forget', async () => {
+		const posts: Array<{ action: string; fields: Record<string, string> }> = [];
+		const s = fakeSession((verb) =>
+			verb === 'run.ensureFresh'
+				? { status: 200, body: { ok: true, detail: 'fresh' } }
+				: verb === 'run.create'
+					? { status: 200, body: { opentronsRunId: 'run-8' } }
+					: { status: 200, body: { ok: true } }
+		);
+		const job = { jobId: 'job-auto-1', kind: 'auto_resume_run', payload: { runId: 'run-8' } };
+		const post = async (action: string, fields: Record<string, string>) => {
+			posts.push({ action, fields });
+			if (action === 'startPrepare') {
+				return { ok: true as const, data: { token: 't1', processType: 'wax-filling', protocolId: 'p1', expectedWells: {}, runTimeParameterValues: {} } };
+			}
+			const played = action === 'startConfirm' && JSON.parse(fields.obs).phase === 'played';
+			return { ok: true as const, data: played ? { success: true, opentronsRunId: 'run-8', job } : { success: true } };
+		};
+		let release!: () => void;
+		const submitted: unknown[] = [];
+		const bridge = {
+			submit: vi.fn(async (j: unknown) => {
+				submitted.push(j);
+				await new Promise<void>((r) => (release = r));
+				throw new Error('daemon down');
+			})
+		} as any;
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		const r = await startRunTwoPhase({ form: { runId: 'RUN2' }, post, session: s, bridge });
+		// The start resolved while the submit is still pending: it never waits on it.
+		expect(r).toMatchObject({ ok: true, opentronsRunId: 'run-8' });
+		expect(posts.filter((p) => p.action === 'startConfirm').every((p) => p.fields.bridgeJobs === '1')).toBe(true);
+		await new Promise((res) => setTimeout(res, 0));
+		expect(submitted).toEqual([job]);
+		release();
+		await new Promise((res) => setTimeout(res, 0));
+		expect(bridge.submit).toHaveBeenCalledTimes(1); // never retried
+		expect(warn).toHaveBeenCalled();
+		warn.mockRestore();
+	});
+
+	it('without a bridge the confirms are exactly as before and nothing is submitted', async () => {
+		const posts: Array<{ action: string; fields: Record<string, string> }> = [];
+		const s = fakeSession((verb) =>
+			verb === 'run.create' ? { status: 200, body: { opentronsRunId: 'run-9' } } : { status: 200, body: { ok: true } }
+		);
+		const post = async (action: string, fields: Record<string, string>) => {
+			posts.push({ action, fields });
+			if (action === 'startPrepare') {
+				return { ok: true as const, data: { token: 't1', processType: 'wax-filling', protocolId: 'p1', expectedWells: {}, runTimeParameterValues: {} } };
+			}
+			return { ok: true as const, data: { success: true, job: { jobId: 'job-x', kind: 'auto_resume_run', payload: { runId: 'run-9' } } } };
+		};
+		const r = await startRunTwoPhase({ form: { runId: 'RUN3' }, post, session: s, bridge: null });
+		expect(r.ok).toBe(true);
+		for (const p of posts.filter((x) => x.action === 'startConfirm')) expect(Object.keys(p.fields).sort()).toEqual(['line', 'obs', 'runId', 'token']);
+	});
+
 	it('finish and stop send only observations to the confirms', async () => {
 		const posts: Array<{ action: string; fields: Record<string, string> }> = [];
 		const post = async (action: string, fields: Record<string, string>) => {

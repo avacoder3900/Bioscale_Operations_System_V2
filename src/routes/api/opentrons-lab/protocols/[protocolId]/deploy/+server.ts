@@ -116,7 +116,11 @@ async function recordDeployment(
 		analysisStatus,
 		analysisErrors,
 		deployedAt: new Date(),
-		deployedBy: username
+		deployedBy: username,
+		// The line rides on the deployment only for a tailnet upload; the queue
+		// path's entry stays field-for-field what it always was (its line is
+		// still in the AuditLog row below, as before).
+		...(line === 'tailnet' ? { line } : {})
 	};
 
 	await OpentronProtocol.updateOne({ _id: protocol._id }, { $push: { deployments: deployment } });

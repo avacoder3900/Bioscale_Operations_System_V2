@@ -15994,3 +15994,29 @@ NOT verified on hardware (no robot calls, no redeploy): all robot ACs. Known gap
 not yet submit sweeps/deck-scan/calibrate-tip/tip-swap/auto-resume/restart to /bridge; relay lacks PUT;
 LPC still uses robot-client maintenanceCommand instead of session mx.command.
 Needs the user: OT2_BRIDGE_TOKEN_SECRET (Preview env + B14 via provision script); B14 daemon redeploy.
+
+================================================================================
+2026-09-26 — feat/ot2-tailnet-direct — OT2-TAILNET-5 round 2 (workflow): every daemon job on the tailnet line
+================================================================================
+Workflow ot2-tailnet-everything-r2 (run wf_3d323c13-e5c; 1 planner + 3 executors). First attempt died
+mid-edit on a pxpipe proxy outage (502 upstream unreachable) — resumed the same run with the plan
+cached; executors reviewed and finished the partial edits.
+U1 session/bridge/relay/LPC: RobotSession.bridge() — ONE BridgeClient per session, non-null only when
+the line is direct AND /connection says bridgeJobs (bridgeJobGate: tailnet robot + allowed here +
+OT2_BRIDGE_TOKEN_SECRET); one token across kinds; job starts logged as 'bridge:<kind>' in
+ot2_direct_calls, never retried or re-routed to the queue; gantry jobs set session busy. proxy.ts
+robotPut + relay PUT (clone clientData / system time over the queue). LPC uses session.call
+('mx.command') so its fallback is POST /verb. OpentronProtocol.deployments[].line. Queue progress
+route golden-tested against the shared sweepProgressUpdate.
+U2 fill pages: sweeps + deck scan (both DeckLoadingGrids, wax orchestration), tip swap, auto_resume
+after a tailnet start confirm, robot-server restart — on the tailnet line: server prepare (BIMS rows
+first) -> bridge submit -> live /bridge/jobs progress -> server record; queue line unchanged.
+New src/lib/opentrons/fill-bridge-jobs.ts.
+U3 studio + scanner tools: calibrate-tip and test-scans (scanner-positions teach, opentron-control
+scanner-test) over /bridge; new src/lib/opentrons/studio-bridge-jobs.ts; connectivity 'jobs:' line.
+test:unit 486/486 (29 files); daemon python 19 OK; npm run check 87 = baseline.
+NOT verified on hardware: needs OT2_BRIDGE_TOKEN_SECRET (Preview env + B14 via
+scripts/ot2-tailnet-provision.sh) and the B14 daemon redeploy — both awaiting the user.
+Known leftovers: no unit tests for the tailnet abandon branches in sweep/[id], restart-server and
+the tip-swap prepares; deck-calibration doesn't abort pollJob on unmount (matches queue behaviour);
+run-lifecycle.pollRunStatus is now dead code.

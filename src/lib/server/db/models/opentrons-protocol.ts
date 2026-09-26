@@ -25,6 +25,10 @@ const opentronsProtocolSchema = new Schema({
 		analysisErrors: [String],
 		deployedAt: Date,
 		deployedBy: String,
+		// OT2-TAILNET-5 S4: which line did the upload. Set only by the tailnet
+		// confirm (a browser upload over Tailscale); absent = the server/queue line,
+		// so queue-line deployments keep exactly the fields they always had.
+		line: { type: String, enum: ['queue', 'tailnet'] },
 	}],
 
 	// Runtime parameter schema (extracted from analysis)

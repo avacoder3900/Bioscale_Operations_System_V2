@@ -53,6 +53,23 @@
 		if (!r.bridgeJobsHere) return 'version needs this robot on the tailnet line here';
 		return '';
 	}
+	/**
+	 * Which line a robot page's daemon jobs take from THIS browser. The session
+	 * submits them to /bridge only when this deployment allows daemon jobs for the
+	 * robot (bridgeJobsHere = bridgeJobGate, the same gate as /connection's
+	 * bridgeJobs) AND this computer reaches the robot directly.
+	 */
+	function daemonJobsLine(r: (typeof data.robots)[number], direct: boolean): string {
+		if (!r.bridgeJobsHere) return 'BIMS queue';
+		return direct ? 'Tailscale (/bridge)' : 'BIMS queue (this computer is not on the direct line)';
+	}
+	function daemonJobsTitle(r: (typeof data.robots)[number]): string {
+		if (r.bridgeJobsHere) return 'Daemon jobs are allowed over Tailscale for this robot on this deployment';
+		if (r.transport !== 'tailnet') return `Daemon jobs stay on the BIMS queue: ${r.reason}`;
+		return data.bridge.secretSet
+			? 'Daemon jobs stay on the BIMS queue here'
+			: 'Daemon jobs stay on the BIMS queue: OT2_BRIDGE_TOKEN_SECRET is not set on this deployment';
+	}
 	/** Chrome's Local Network Access permission for THIS BIMS address. */
 	let permission = $state<LocalNetworkPermission>('unsupported');
 
@@ -224,6 +241,10 @@
 										: 'unreachable from this computer'}
 								</div>
 							{/if}
+							<!-- OT2-TAILNET-5 S6: where a page's daemon jobs (sweep, deck scan, tip calibrate, tip swap, restart, test-scan) go from this browser. -->
+							<div class="mt-1 max-w-xs text-[11px] text-[var(--color-tron-text-secondary)]" title={daemonJobsTitle(r)}>
+								jobs: {daemonJobsLine(r, direct)}
+							</div>
 						</td>
 						<td class="px-3 py-2">
 							{#if r.bridge}

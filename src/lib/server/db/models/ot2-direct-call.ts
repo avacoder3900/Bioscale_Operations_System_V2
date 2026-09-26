@@ -14,7 +14,7 @@ const ot2DirectCallSchema = new Schema({
 	_id: { type: String, default: () => generateId() },
 	robotId: String,          // OpentronsRobot._id
 	sessionId: String,        // one per page session (see $lib/opentrons/direct-client)
-	verb: String,             // ot2-protocol verb, e.g. 'run.action', 'mx.jog'
+	verb: String,             // ot2-protocol verb, e.g. 'run.action', 'mx.jog'; 'raw:GET /runs'; daemon job starts 'bridge:<kind>' / 'bridge:scan' / 'bridge:control'
 	method: String,           // robot HTTP method
 	path: String,             // robot path, e.g. /runs/<rid>/actions
 	status: Number,           // robot HTTP status (0 = no response / network error)
