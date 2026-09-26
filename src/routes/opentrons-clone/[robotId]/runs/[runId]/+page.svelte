@@ -1,9 +1,17 @@
 <script lang="ts">
-	import { enhance } from '$app/forms';
+	import { cloneForm, guardWrite, type CloneFormResult } from '../../../clone-form';
+	import { cloneLine } from '../../../clone-session';
+	import { runActions } from '../../../clone-api';
 	import { invalidateAll } from '$app/navigation';
 	import { onMount, onDestroy } from 'svelte';
 
-	let { data, form } = $props();
+	let { data } = $props();
+
+	// OT2-TAILNET-5 S10b: actions run in the browser over the robot session.
+	let form = $state<CloneFormResult>(null);
+	const line = $derived(cloneLine(data.robot._id));
+	const actions = $derived(guardWrite(data.canWrite, runActions(line, data.runId)));
+	const onResult = (r: CloneFormResult) => (form = r);
 
 	function fmtDate(iso: string | null | undefined): string {
 		if (!iso) return '—';
@@ -32,9 +40,12 @@
 	let poll: ReturnType<typeof setInterval> | null = null;
 	const ACTIVE = ['running', 'paused', 'finishing', 'awaiting-recovery', 'idle'];
 
+	// Over the BIMS queue each refresh is 4 queue commands — poll slower there.
+	const pollMs = () => (line.session.state.transport === 'direct' ? 3000 : 10000);
+
 	onMount(() => {
 		if (data.run && ACTIVE.includes(data.run.status)) {
-			poll = setInterval(() => invalidateAll(), 3000);
+			poll = setInterval(() => invalidateAll(), pollMs());
 		}
 	});
 	onDestroy(() => {
@@ -44,7 +55,7 @@
 	// Restart polling if status flips between fetches
 	$effect(() => {
 		const active = data.run && ACTIVE.includes(data.run.status);
-		if (active && !poll) poll = setInterval(() => invalidateAll(), 3000);
+		if (active && !poll) poll = setInterval(() => invalidateAll(), pollMs());
 		if (!active && poll) {
 			clearInterval(poll);
 			poll = null;
@@ -102,9 +113,7 @@
 				<form
 					method="POST"
 					action="?/action"
-					use:enhance={() => async ({ result }) => {
-						if (result.type === 'success') await invalidateAll();
-					}}
+					use:cloneForm={{ actions, onResult }}
 					class="inline"
 				>
 					<input type="hidden" name="actionType" value={actionType} />
@@ -212,7 +221,7 @@
 		{/if}
 		<details class="text-sm">
 			<summary class="cursor-pointer text-gray-600">Apply a per-run offset (advanced)</summary>
-			<form method="POST" action="?/applyOffset" use:enhance class="mt-2 grid grid-cols-1 md:grid-cols-5 gap-2">
+			<form method="POST" action="?/applyOffset" use:cloneForm={{ actions, onResult }} class="mt-2 grid grid-cols-1 md:grid-cols-5 gap-2">
 				<input name="definitionUri" placeholder="opentrons/..." class="border rounded px-2 py-1 text-xs md:col-span-2" required />
 				<input name="slotName" placeholder="Slot (e.g. 1)" class="border rounded px-2 py-1 text-xs" required />
 				<div class="grid grid-cols-3 gap-1 md:col-span-2">
@@ -238,7 +247,7 @@
 
 	<section class="bg-white border rounded-lg p-4">
 		<h3 class="font-semibold mb-2 text-red-700">Danger zone</h3>
-		<form method="POST" action="?/delete" use:enhance>
+		<form method="POST" action="?/delete" use:cloneForm={{ actions, onResult }}>
 			<button
 				type="submit"
 				onclick={(e) => {

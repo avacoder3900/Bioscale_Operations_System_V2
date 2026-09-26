@@ -1,27 +1,65 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
-	import {
-		robotHealthStates,
-		sseConnected,
-		connectHealthSSE,
-		disconnectHealthSSE,
-		type RobotHealth
-	} from '$lib/stores/robot-health';
+	import { invalidate } from '$app/navigation';
+	import TransportPill from '$lib/components/opentrons/TransportPill.svelte';
+	import { RobotSession, type RobotSessionState } from '$lib/opentrons/direct-client';
+	import { readRobotHealth, healthFromHeartbeat } from './clone-api';
 
 	let { data } = $props();
 
-	onMount(() => connectHealthSSE());
-	onDestroy(() => disconnectHealthSSE());
+	// OT2-TAILNET-5 §7.8.5 / §7.6: the in-memory server poller and its SSE are
+	// retired. Every 15 s: a robot on the direct line is read from THIS browser
+	// over Tailscale (/health + current run); a robot on the queue line shows
+	// the daemon heartbeat (re-read from Mongo) — never a /health poll through
+	// the queue, which would sit in front of real jobs.
+	type RobotHealth = Awaited<ReturnType<typeof readRobotHealth>> & { robotId: string };
+	const POLL_MS = 15_000;
+	let directHealth = $state<Record<string, RobotHealth>>({});
+	let conns = $state<Record<string, RobotSessionState>>({});
+	let sseConnected = $state(false);
+	let sessions: RobotSession[] = [];
+	let timer: ReturnType<typeof setInterval> | null = null;
+
+	async function pollAll() {
+		let anyQueue = false;
+		await Promise.all(
+			sessions.map(async (s) => {
+				if (s.state.transport !== 'direct') {
+					anyQueue = true;
+					return;
+				}
+				const h = await readRobotHealth((p, i) => s.robotFetch(p, i));
+				directHealth[s.robotId] = { robotId: s.robotId, ...h };
+			})
+		);
+		if (anyQueue) await invalidate('clone:heartbeat').catch(() => {});
+		sseConnected = true;
+	}
+
+	onMount(() => {
+		sessions = data.robots.map((r: { _id: string }) => new RobotSession(r._id));
+		for (const s of sessions) s.subscribe((st) => (conns[s.robotId] = st));
+		void Promise.all(sessions.map((s) => s.open())).then(async () => {
+			await pollAll();
+			timer = setInterval(() => void pollAll(), POLL_MS);
+		});
+	});
+	onDestroy(() => {
+		if (timer) clearInterval(timer);
+		for (const s of sessions) s.close();
+	});
 
 	function healthFor(robotId: string): RobotHealth | undefined {
-		return $robotHealthStates.find((h) => h.robotId === robotId);
+		if (conns[robotId]?.transport === 'direct' && directHealth[robotId]) return directHealth[robotId];
+		const beat = data.heartbeat?.[robotId];
+		return beat ? { robotId, ...healthFromHeartbeat(beat) } : undefined;
 	}
 </script>
 
 <div class="mb-4 flex items-center justify-between">
 	<h2 class="text-xl font-semibold">Robots</h2>
-	<span class="text-xs {$sseConnected ? 'text-green-600' : 'text-amber-600'}">
-		{$sseConnected ? '● Live' : '○ Reconnecting…'}
+	<span class="text-xs {sseConnected ? 'text-green-600' : 'text-amber-600'}">
+		{sseConnected ? '● Live' : '○ Connecting…'}
 	</span>
 </div>
 
@@ -37,7 +75,7 @@
 				class="block bg-white border rounded-lg p-4 hover:shadow transition"
 			>
 				<div class="flex items-center justify-between mb-2">
-					<h3 class="font-semibold">{robot.name}</h3>
+					<h3 class="font-semibold">{robot.name} <TransportPill state={conns[robot._id] ?? null} /></h3>
 					<span class="text-xs px-2 py-0.5 rounded-full {online ? 'bg-green-100 text-green-700' : health ? 'bg-red-100 text-red-700' : 'bg-gray-100 text-gray-500'}">
 						{#if !health}—{:else if online}Online{:else}Offline{/if}
 					</span>

@@ -1,8 +1,19 @@
 <script lang="ts">
-	import { enhance } from '$app/forms';
-	import { invalidateAll } from '$app/navigation';
+	import { cloneForm, guardWrite, type CloneFormResult } from '../clone-form';
+	import { cloneLine } from '../clone-session';
+	import { overviewActions, downloadFile } from '../clone-api';
 
-	let { data, form } = $props();
+	let { data } = $props();
+
+	// OT2-TAILNET-5 S10b: actions run in the browser over the robot session.
+	let form = $state<CloneFormResult>(null);
+	const line = $derived(cloneLine(data.robot._id));
+	const actions = $derived(guardWrite(data.canWrite, overviewActions(line)));
+	const onResult = (r: CloneFormResult) => (form = r);
+	async function downloadLog(log: string) {
+		const err = await downloadFile(line, `/logs/${encodeURIComponent(log)}?records=5000`, log, 'text/plain');
+		if (err) form = { error: `Log download failed — ${err}` };
+	}
 
 	const STALE_DAYS = 60;
 
@@ -70,9 +81,7 @@
 		<form
 			method="POST"
 			action="?/home"
-			use:enhance={() => async ({ result }) => {
-				if (result.type === 'success') await invalidateAll();
-			}}
+			use:cloneForm={{ actions, onResult }}
 			class="flex items-center gap-1"
 		>
 			<input type="hidden" name="target" value="robot" />
@@ -91,7 +100,7 @@
 		<form
 			method="POST"
 			action="?/home"
-			use:enhance
+			use:cloneForm={{ actions, onResult }}
 			class="flex items-center gap-1"
 		>
 			<input type="hidden" name="target" value="pipette" />
@@ -106,7 +115,7 @@
 			</button>
 		</form>
 
-		<form method="POST" action="?/home" use:enhance class="flex items-center gap-1">
+		<form method="POST" action="?/home" use:cloneForm={{ actions, onResult }} class="flex items-center gap-1">
 			<input type="hidden" name="target" value="pipette" />
 			<input type="hidden" name="mount" value="right" />
 			<button
@@ -122,9 +131,7 @@
 		<form
 			method="POST"
 			action="?/lights"
-			use:enhance={() => async ({ result }) => {
-				if (result.type === 'success') await invalidateAll();
-			}}
+			use:cloneForm={{ actions, onResult }}
 			class="flex items-center gap-1"
 		>
 			<input type="hidden" name="on" value={data.lightsOn ? 'false' : 'true'} />
@@ -137,7 +144,7 @@
 			</button>
 		</form>
 
-		<form method="POST" action="?/identify" use:enhance class="flex items-center gap-1">
+		<form method="POST" action="?/identify" use:cloneForm={{ actions, onResult }} class="flex items-center gap-1">
 			<input type="hidden" name="seconds" value="10" />
 			<button
 				type="submit"
@@ -168,9 +175,8 @@
 	<div class="flex flex-wrap gap-2 text-sm">
 		{#each ['api.log', 'server.log', 'serial.log', 'update_server.log'] as log (log)}
 			<a
-				href={`/api/opentrons-clone/robots/${data.robot._id}/logs/${log}?records=5000`}
-				target="_blank"
-				rel="noopener"
+				href={`#${log}`}
+				onclick={(e) => { e.preventDefault(); void downloadLog(log); }}
 				class="px-3 py-1 bg-gray-100 hover:bg-gray-200 rounded text-xs font-mono"
 			>
 				{log}

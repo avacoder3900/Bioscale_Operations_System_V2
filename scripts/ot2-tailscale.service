@@ -12,6 +12,17 @@
 #
 # Logs: journalctl -u ot2-tailscale -f
 # CLI:  /data/tailscale/tailscale --socket=/data/tailscale/tailscaled.sock status
+#
+# HTTPS mounts on https://ot2-<slot>.tailf65a70.ts.net (OT2-TAILNET-3 + -5):
+#   /        -> http://localhost:31950   robot-server API (TAILNET-3)
+#   /bridge  -> http://127.0.0.1:31960   ot2-bridge.py job server (TAILNET-5 S5)
+# `serve --bg` persists in tailscaled.state, so these ExecStartPost lines only
+# re-assert it (idempotent) after a state reset. Both are "-"-prefixed: a node
+# that is not logged in yet (first boot, before `tailscale up`) must not fail
+# the unit. /bridge is only mounted on a robot whose /data/ot2-bridge/.env has
+# BRIDGE_TOKEN_SECRET, i.e. one that runs ot2-bridge 1.1+ with the job server —
+# so installing this unit on a robot still on the old daemon changes nothing.
+# scripts/ot2-tailnet-provision.sh applies the same two mounts directly.
 
 [Unit]
 Description=Tailscale node agent (BIMS OT-2 tailnet access)
@@ -21,6 +32,8 @@ Wants=network-online.target
 [Service]
 Type=notify
 ExecStart=/data/tailscale/tailscaled --state=/data/tailscale/tailscaled.state --socket=/data/tailscale/tailscaled.sock --port=41641 --tun=userspace-networking
+ExecStartPost=-/data/tailscale/tailscale --socket=/data/tailscale/tailscaled.sock serve --bg --https=443 http://localhost:31950
+ExecStartPost=-/bin/sh -c 'grep -q "^BRIDGE_TOKEN_SECRET=..*" /data/ot2-bridge/.env 2>/dev/null && exec /data/tailscale/tailscale --socket=/data/tailscale/tailscaled.sock serve --bg --https=443 --set-path=/bridge http://127.0.0.1:31960'
 ExecStopPost=/data/tailscale/tailscaled --cleanup
 Restart=on-failure
 RestartSec=5

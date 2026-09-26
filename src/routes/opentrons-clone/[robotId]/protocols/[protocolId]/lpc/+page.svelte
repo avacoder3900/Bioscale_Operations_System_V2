@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { onDestroy, onMount } from 'svelte';
 	import { goto } from '$app/navigation';
+	import { maintenanceCommand } from '$lib/opentrons/robot-client';
+	import { cloneLine } from '../../../../clone-session';
 
 	let { data } = $props();
 
@@ -87,30 +89,30 @@
 	let busyLabel = $state<string>('');
 
 	// --------------------------------------------------------------------------
-	// Server command helpers
+	// Robot command helpers — over the page's robot session (OT2-TAILNET-5 S10c).
+	// Open / close / custom-labware load are the shared TAILNET-4 verbs
+	// (mx.open / mx.close / mx.loadLabware, which also write their BIMS records);
+	// LPC's arbitrary commands are robot-client's maintenanceCommand (mx.command).
 	// --------------------------------------------------------------------------
 	const robotId = data.robot._id;
+	const line = cloneLine(robotId);
 
-	async function createSession(): Promise<string> {
-		const res = await fetch(`/api/opentrons-clone/robots/${robotId}/maintenance`, {
-			method: 'POST'
-		});
-		if (!res.ok) {
-			const body = await res.json().catch(() => ({}));
-			throw new Error(body?.error || `Failed to create maintenance run (${res.status})`);
-		}
-		const body = await res.json();
-		const id = body?.data?.id;
-		if (!id) throw new Error('Maintenance run response missing id');
-		return id;
+	async function verbJson(res: Response, what: string): Promise<any> {
+		const body = await res.json().catch(() => ({}));
+		if (!res.ok) throw new Error(body?.message || body?.error || `${what} failed (${res.status})`);
+		return body;
+	}
+
+	/** Open a maintenance run with the protocol's pipette mount; returns {runId, pipetteId?, pipetteName?}. */
+	async function createSession(mount: 'left' | 'right'): Promise<{ runId: string; pipetteId?: string; pipetteName?: string; mount?: string }> {
+		const body = await verbJson(await line.session.call('mx.open', { mount }), 'Create maintenance run');
+		if (!body?.runId) throw new Error('Maintenance run response missing id');
+		return body;
 	}
 
 	async function endSession(id: string): Promise<void> {
 		try {
-			await fetch(
-				`/api/opentrons-clone/robots/${robotId}/maintenance?id=${encodeURIComponent(id)}`,
-				{ method: 'DELETE' }
-			);
+			await line.session.call('mx.close', { runId: id });
 		} catch {
 			// swallow — tear-down is best-effort
 		}
@@ -121,21 +123,13 @@
 		payload: Record<string, unknown>,
 		timeoutMs?: number
 	): Promise<Record<string, unknown>> {
-		const url = timeoutMs
-			? `/api/opentrons-clone/robots/${robotId}/maintenance/${encodeURIComponent(runId)}/command?timeoutMs=${timeoutMs}`
-			: `/api/opentrons-clone/robots/${robotId}/maintenance/${encodeURIComponent(runId)}/command`;
-		const res = await fetch(url, {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify(payload)
-		});
-		if (!res.ok) {
-			const body = await res.json().catch(() => ({}));
-			throw new Error(body?.error || `Command ${payload.commandType} failed (${res.status})`);
-		}
-		const body = await res.json();
-		const result = (body?.data as { result?: Record<string, unknown> } | undefined)?.result ?? {};
-		return result;
+		const result = await maintenanceCommand(
+			(p, i) => line.session.robotFetch(p, i),
+			runId,
+			payload as { commandType: string; params?: Record<string, unknown> },
+			timeoutMs ? { timeoutMs } : {}
+		);
+		return (result?.result as Record<string, unknown> | undefined) ?? {};
 	}
 
 	function parseDefinitionUri(uri: string): { namespace: string; loadName: string; version: number } {
@@ -146,19 +140,21 @@
 		return { namespace: parts[0], loadName: parts[1], version };
 	}
 
-	async function registerLabwareDef(runId: string, definition: unknown): Promise<void> {
-		const res = await fetch(
-			`/api/opentrons-clone/robots/${robotId}/maintenance/${encodeURIComponent(runId)}/labware-definitions`,
-			{
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify(definition)
-			}
+	/**
+	 * Custom (non-'opentrons') labware: mx.loadLabware resolves the definition
+	 * from BIMS, registers it on the run and loads it (was: the Mac's local
+	 * labware folder, which Vercel doesn't have). Returns the runtime labwareId.
+	 */
+	async function loadCustomLabware(
+		runId: string,
+		lw: { namespace: string; loadName: string; version: number; slot: string }
+	): Promise<string> {
+		const body = await verbJson(
+			await line.session.call('mx.loadLabware', { runId, loadName: lw.loadName, namespace: lw.namespace, version: lw.version, slot: lw.slot }),
+			`Load ${lw.loadName}`
 		);
-		if (!res.ok) {
-			const body = await res.json().catch(() => ({}));
-			throw new Error(body?.error || `Failed to register labware definition (${res.status})`);
-		}
+		if (!body?.labwareId) throw new Error(`loadLabware did not return a labwareId for ${lw.loadName}`);
+		return body.labwareId;
 	}
 
 	// --------------------------------------------------------------------------
@@ -172,7 +168,14 @@
 		busyLabel = 'Creating maintenance run';
 		let createdId: string | null = null;
 		try {
-			createdId = await createSession();
+			// Load the first protocol pipette — LPC uses one "measuring" pipette.
+			// Multi-pipette protocols still get offsets from one pass; operators can
+			// rerun LPC after swapping the primary. mx.open loads the pipette the
+			// robot reports on that mount.
+			const pip = requiredPipettes[0];
+			lpcPipette = { mount: pip.mount, pipetteName: pip.pipetteName };
+			const opened = await createSession(pip.mount);
+			createdId = opened.runId;
 			mrId = createdId;
 
 			// Home every axis before any coordinated motion. The OT-2 refuses
@@ -183,47 +186,43 @@
 			busyLabel = 'Homing robot';
 			await sendCommand(createdId, { commandType: 'home', params: {} }, 60_000);
 
-			// Load the first protocol pipette — LPC uses one "measuring" pipette.
-			// Multi-pipette protocols still get offsets from one pass; operators can
-			// rerun LPC after swapping the primary.
-			const pip = requiredPipettes[0];
-			lpcPipette = { mount: pip.mount, pipetteName: pip.pipetteName };
-			busyLabel = `Loading ${pip.pipetteName} on ${pip.mount}`;
-			const pipRes = await sendCommand(createdId, {
-				commandType: 'loadPipette',
-				params: { mount: pip.mount, pipetteName: pip.pipetteName }
-			});
-			const pipId = (pipRes as { pipetteId?: string }).pipetteId;
+			let pipId = opened.mount === pip.mount ? opened.pipetteId : undefined;
+			if (opened.mount && opened.mount !== pip.mount) {
+				throw new Error(`Protocol needs a pipette on ${pip.mount}; the robot reports one on ${opened.mount} only`);
+			}
+			if (!pipId) {
+				busyLabel = `Loading ${pip.pipetteName} on ${pip.mount}`;
+				const pipRes = await sendCommand(createdId, {
+					commandType: 'loadPipette',
+					params: { mount: pip.mount, pipetteName: pip.pipetteName }
+				});
+				pipId = (pipRes as { pipetteId?: string }).pipetteId;
+			}
 			if (!pipId) throw new Error('loadPipette did not return a pipetteId');
 			runtimePipetteId = pipId;
 
-			// Register any custom (non-standard) labware definitions onto the
-			// maintenance session first. Without this, loadLabware for a
-			// Brevitest cartridge / wax tray etc. will fail — the session
-			// only knows standard Opentrons labware out of the box.
-			const customDefs = (data as { customLabwareDefs?: Record<string, unknown> }).customLabwareDefs ?? {};
-			for (const lw of slotLabware) {
-				const def = customDefs[lw.definitionUri];
-				if (!def) continue;
-				busyLabel = `Registering labware ${lw.loadName}`;
-				await registerLabwareDef(createdId, def);
-			}
-
 			// Load every slot-based labware the protocol uses so we can moveToWell.
+			// Standard Opentrons labware is known to the robot; custom labware
+			// (Brevitest cartridges, wax trays, …) is registered from BIMS first.
 			for (const lw of slotLabware) {
 				busyLabel = `Loading ${lw.loadName} in slot ${lw.location?.slotName}`;
 				const { namespace, loadName, version } = parseDefinitionUri(lw.definitionUri);
-				const lwRes = await sendCommand(createdId, {
-					commandType: 'loadLabware',
-					params: {
-						location: { slotName: lw.location!.slotName },
-						loadName,
-						namespace,
-						version,
-						displayName: lw.displayName ?? undefined
-					}
-				});
-				const lwId = (lwRes as { labwareId?: string }).labwareId;
+				let lwId: string | undefined;
+				if (namespace !== 'opentrons') {
+					lwId = await loadCustomLabware(createdId, { namespace, loadName, version, slot: lw.location!.slotName as string });
+				} else {
+					const lwRes = await sendCommand(createdId, {
+						commandType: 'loadLabware',
+						params: {
+							location: { slotName: lw.location!.slotName },
+							loadName,
+							namespace,
+							version,
+							displayName: lw.displayName ?? undefined
+						}
+					});
+					lwId = (lwRes as { labwareId?: string }).labwareId;
+				}
 				if (!lwId) throw new Error(`loadLabware did not return a labwareId for ${lw.loadName}`);
 				runtimeLabwareIds[lw.id] = lwId;
 			}
@@ -508,9 +507,12 @@
 	// --------------------------------------------------------------------------
 	function beforeUnloadTearDown() {
 		if (!mrId) return;
-		const url = `/api/opentrons-clone/robots/${robotId}/maintenance?id=${encodeURIComponent(mrId)}`;
+		// Page unload: a same-origin keepalive request to BIMS is what reliably
+		// survives the page closing, so this one close uses the BIMS route (the
+		// queue line of mx.close), exactly as the Studio page does.
+		const url = `/api/opentrons-lab/robots/${encodeURIComponent(robotId)}/maintenance/${encodeURIComponent(mrId)}`;
 		try {
-			fetch(url, { method: 'DELETE', keepalive: true });
+			fetch(url, { method: 'DELETE', credentials: 'same-origin', keepalive: true });
 		} catch {
 			// ignore
 		}

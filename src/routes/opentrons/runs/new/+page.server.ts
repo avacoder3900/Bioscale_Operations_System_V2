@@ -12,39 +12,6 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 
 	const robots = await OpentronsRobot.find({ isActive: true }).lean();
 
-	let protocol: any = null;
-	let analysis: any = null;
-
-	if (preselectedRobotId && preselectedProtocolId) {
-		const robot = robots.find((r: any) => r._id === preselectedRobotId) as any;
-		if (robot) {
-			try {
-				const resp = await fetch(
-					`http://${robot.ip}:${robot.port ?? 31950}/protocols/${preselectedProtocolId}`,
-					{ signal: AbortSignal.timeout(3000) }
-				);
-				if (resp.ok) {
-					const data = await resp.json();
-					protocol = data.data ?? data;
-
-					const analyses = protocol.analysisSummaries ?? [];
-					if (analyses.length > 0) {
-						const latestId = analyses[analyses.length - 1].id;
-						try {
-							const aResp = await fetch(
-								`http://${robot.ip}:${robot.port ?? 31950}/protocols/${preselectedProtocolId}/analyses/${latestId}`,
-								{ signal: AbortSignal.timeout(3000) }
-							);
-							if (aResp.ok) {
-								analysis = (await aResp.json()).data ?? null;
-							}
-						} catch { /* ignore */ }
-					}
-				}
-			} catch { /* robot offline */ }
-		}
-	}
-
 	return {
 		preselectedRobotId,
 		preselectedProtocolId,
@@ -54,9 +21,10 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 			ip: r.ip ?? '',
 			lastHealthOk: r.lastHealthOk ?? false
 		})),
-		protocol,
-		analysis
+		// OT2-TAILNET-5 S7: the preselected protocol + analysis are read in the
+		// browser (+page.ts) over the robot session.
+		protocol: null as any,
+		analysis: null as any
 	};
 };
 
-export const config = { maxDuration: 60 };

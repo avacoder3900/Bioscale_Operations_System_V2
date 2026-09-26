@@ -9,20 +9,30 @@
  * Run:
  *   npx tsx scripts/upload-local-protocols-to-all-robots.ts          # dry run
  *   UPLOAD_APPLY=1 npx tsx scripts/upload-local-protocols-to-all-robots.ts  # do it
+ *
+ * One robot over the tailnet (OT2-TAILNET-5 S9), from any tailnet machine:
+ *   ROBOT_HOST=https://ot2-b14.tailf65a70.ts.net npx tsx scripts/upload-local-protocols-to-all-robots.ts
+ * ROBOT_HOST replaces the lab-LAN list below with that one robot (a bare
+ * host/IP still means http://<host>:31950). Unset = unchanged.
  */
 
 import { readFile, readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
+import robotHost from './ot2-robot-host.cjs';
+
+const { robotUrl, robotHostFromEnv } = robotHost;
 
 const LOCAL_ROOT = join(homedir(), 'Library', 'Application Support', 'Opentrons', 'protocols');
 const LOCAL_LABWARE_ROOT = join(homedir(), 'Library', 'Application Support', 'Opentrons', 'labware');
 
-const ROBOTS = [
+const ALL_ROBOTS = [
 	{ name: 'Robot 1 (muddy-water / B14)', host: 'muddy-water.local' },
 	{ name: 'Robot 2 (R04)', host: 'OT2CEP20210817R04.local' },
 	{ name: 'Robot 3 (hidden-leaf / B07)', host: 'hidden-leaf.local' }
 ];
+const ROBOT_HOST = robotHostFromEnv();
+const ROBOTS = ROBOT_HOST ? [{ name: 'ROBOT_HOST', host: ROBOT_HOST }] : ALL_ROBOTS;
 
 const APPLY = process.env.UPLOAD_APPLY === '1';
 
@@ -94,7 +104,7 @@ async function uploadOne(
 	}
 	const totalFiles = 1 + labwareFiles.length;
 	try {
-		const res = await fetch(`http://${host}:31950/protocols`, {
+		const res = await fetch(robotUrl(host, '/protocols'), {
 			method: 'POST',
 			headers: { 'opentrons-version': '*' },
 			body: form,

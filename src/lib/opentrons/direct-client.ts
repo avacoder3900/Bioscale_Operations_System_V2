@@ -19,6 +19,10 @@
  * Every call returns a Response with the same status + JSON body the BIMS route
  * would have returned (both lines run $lib/opentrons/ot2-protocol runVerb), so
  * components keep their existing response handling.
+ *
+ * robotFetch() (OT2-TAILNET-5) is the raw, tracked robot request the isomorphic
+ * robot-client (openapi-fetch) runs over: direct → the robot origin; queue (or
+ * after a fallback) → the BIMS relay, which runs one queue command.
  */
 import {
 	DEFINITION_VERBS,
@@ -60,6 +64,11 @@ export interface RobotSessionState {
 	directUrl?: string;
 	/** Latency of the last successful direct probe/call, ms. */
 	latencyMs?: number;
+	/**
+	 * Which verbs this page actually ran on each line (first use order) — the
+	 * pill tooltip lists them. Raw robot calls appear as 'raw:GET /health'.
+	 */
+	usedVia?: { tailscale: string[]; queue: string[] };
 }
 
 export type LocalNetworkPermission = 'granted' | 'prompt' | 'denied' | 'unsupported';
@@ -133,6 +142,64 @@ export function routeToVerb(path: string, method = 'GET'): { robotId: string; ru
 
 /** Fields the browser adds for the robot half; never sent to a BIMS route. */
 const LINE_ONLY_ARGS = ['rid', 'runId', 'definition', 'labwareNamespace', 'labwareVersion', 'hardened'];
+
+/**
+ * How the no-retry message names the action. Keyed by string so verbs added to
+ * NO_RETRY_VERBS later (run.create, run.uploadProtocol, mx.command) read well
+ * without this file importing names that may not exist yet.
+ */
+const NO_RETRY_WHAT: Record<string, string> = {
+	'mx.jog': 'jog',
+	'mx.pickUpTip': 'tip pick-up',
+	'run.create': 'run creation',
+	'run.uploadProtocol': 'protocol upload',
+	'mx.command': 'maintenance command'
+};
+export function noRetryLabel(verb: string): string {
+	return NO_RETRY_WHAT[verb] ?? (verb.startsWith('raw:') ? `robot request (${verb.slice(4)})` : verb);
+}
+function noRetryMessage(verb: string): string {
+	return `Direct link to the robot was lost during this ${noRetryLabel(verb)}. It was NOT retried (it may have happened). Check the robot, then try again — now via BIMS.`;
+}
+
+/** Init for RobotSession.robotFetch: a fetch init plus a transport timeout. */
+export type RobotFetchInit = RequestInit & { timeoutMs?: number };
+
+const RAW_DEFAULT_TIMEOUT_MS = 30_000;
+const USED_VIA_MAX = 40;
+
+/**
+ * '/runs/3f2a…/actions?x=1' → '/runs/:id/actions'. A segment counts as an id
+ * when it has a digit and is ≥ 8 chars (uuids, nanoids, robot hashes).
+ */
+export function rawPathTemplate(path: string): string {
+	const bare = path.split(/[?#]/)[0];
+	return bare
+		.split('/')
+		.map((seg) => (seg.length >= 8 && /\d/.test(seg) ? ':id' : seg))
+		.join('/');
+}
+
+/** The /direct-calls verb for a raw call: 'raw:' + METHOD + ' ' + template, ≤ 40 chars. */
+export function rawVerbLabel(method: string, path: string): string {
+	return `raw:${method.toUpperCase()} ${rawPathTemplate(path)}`.slice(0, 40);
+}
+
+function isBinaryBody(body: unknown): boolean {
+	if (body == null || typeof body === 'string') return false;
+	if (typeof FormData !== 'undefined' && body instanceof FormData) return true;
+	if (typeof Blob !== 'undefined' && body instanceof Blob) return true;
+	if (body instanceof ArrayBuffer || ArrayBuffer.isView(body)) return true;
+	if (typeof ReadableStream !== 'undefined' && body instanceof ReadableStream) return true;
+	if (typeof URLSearchParams !== 'undefined' && body instanceof URLSearchParams) return true;
+	return true; // anything else is not a JSON string — the relay can't carry it
+}
+
+/** A caller asking for a non-JSON answer (a log file, a download) needs the direct line. */
+function wantsBinaryAnswer(headers: Headers): boolean {
+	const accept = headers.get('accept');
+	return !!accept && !/json|\*\/\*/i.test(accept);
+}
 
 function newSessionId(): string {
 	try {
@@ -325,6 +392,7 @@ export class RobotSession {
 		const s = this._state;
 		const motionWhileBusy = MOTION_VERBS.has(verb) && !!s.busy;
 		if (!(s.transport === 'direct' && s.directUrl && !motionWhileBusy)) {
+			this.noteLine(verb, 'queue');
 			return this.callRoute(verb, args, init.signal);
 		}
 
@@ -337,6 +405,7 @@ export class RobotSession {
 		}
 
 		const out = await this.callDirect(verb, robotArgs, s.directUrl, init.signal);
+		this.noteLine(verb, out.line === 'direct' ? 'tailscale' : 'queue');
 		if (out.line === 'queue') return out.res; // fell back: the route wrote its own records
 
 		// BIMS half AFTER the robot: audit row / tip cursor, same writer as the route.
@@ -459,20 +528,112 @@ export class RobotSession {
 		}
 		if (lineError) {
 			this.fallBack(`direct link failed: ${lineError}`);
-			// A relative jog or a tip pick-up may have landed even though the answer
-			// was lost — repeating it would move twice / waste a tip. Everything else
-			// is safe to repeat (reads, open/close, absolute moves, home, play/pause/stop).
+			// A NO_RETRY verb (relative jog, tip pick-up, run creation, …) may have
+			// landed even though the answer was lost — repeating it would act twice.
+			// Everything else is safe to repeat (reads, open/close, absolute moves,
+			// home, play/pause/stop).
 			if (NO_RETRY_VERBS.has(verb)) {
-				return {
-					line: 'queue',
-					res: jsonResponse(502, {
-						message: `Direct link to the robot was lost during this ${verb === 'mx.jog' ? 'jog' : 'tip pick-up'}. It was NOT retried (it may have happened). Check the robot, then try again — now via BIMS.`
-					})
-				};
+				return { line: 'queue', res: jsonResponse(502, { message: noRetryMessage(verb) }) };
 			}
 			return { line: 'queue', res: await this.callRoute(verb, args, signal) };
 		}
 		return { line: 'direct', result: r };
+	}
+
+	/**
+	 * Raw, tracked robot request (OT2-TAILNET-5) — what the isomorphic
+	 * robot-client (openapi-fetch) runs over in the browser. `path` is on the
+	 * robot origin: '/health', '/runs?pageLength=10', later '/bridge/…'.
+	 *
+	 *   direct line  directUrl + path, with 'opentrons-version: 3' unless the
+	 *                caller set one (and Content-Type: application/json for a
+	 *                string body without one; never for FormData / binary).
+	 *                Logged to /direct-calls as 'raw:METHOD /template'.
+	 *   queue line   POST /api/opentrons-lab/robots/:id/relay {method, path, body}
+	 *                — one queue command, answered with the robot's status + JSON.
+	 *
+	 * A direct request with no answer switches the page to the queue (sticky,
+	 * like call()). A GET is then retried through the relay; a mutating request
+	 * is NOT (it may have happened) and answers 502. Binary / multipart bodies
+	 * and non-JSON answers (Accept: text/…, octet-stream) can't ride the relay:
+	 * on the queue line they answer 409 "needs Tailscale".
+	 * While a daemon job holds the gantry, mutating raw calls go through the
+	 * relay so the queue serialises them with the job (the busy guard).
+	 */
+	async robotFetch(path: string, init: RobotFetchInit = {}): Promise<Response> {
+		if (typeof path !== 'string' || !path.startsWith('/') || path.startsWith('//')) {
+			return jsonResponse(400, { message: `robotFetch path must start with "/" (got ${JSON.stringify(path)})` });
+		}
+		const { timeoutMs, ...rest } = init;
+		const method = (rest.method ?? 'GET').toUpperCase();
+		const mutating = method !== 'GET' && method !== 'HEAD';
+		const headers = new Headers(rest.headers ?? undefined);
+		const binary = isBinaryBody(rest.body) || wantsBinaryAnswer(headers);
+		const verb = rawVerbLabel(method, path);
+		const s = this._state;
+		const busyMutation = mutating && !!s.busy && !binary;
+
+		if (s.transport === 'direct' && s.directUrl && !busyMutation) {
+			if (!headers.has('opentrons-version')) headers.set('opentrons-version', '3');
+			if (typeof rest.body === 'string' && !headers.has('content-type')) headers.set('content-type', 'application/json');
+			const caller = rest.signal ?? undefined;
+			const t0 = Date.now();
+			const at = new Date().toISOString();
+			try {
+				const res = await this.fetchImpl(`${s.directUrl}${path}`, {
+					...rest,
+					method,
+					headers,
+					signal: withCallerSignal(AbortSignal.timeout(timeoutMs ?? RAW_DEFAULT_TIMEOUT_MS), caller)
+				});
+				const latencyMs = Date.now() - t0;
+				this.record({ verb, method, path, status: res.status, ok: res.ok, latencyMs, at });
+				if (res.ok) this.set({ latencyMs });
+				this.noteLine(verb, 'tailscale');
+				return res;
+			} catch (e) {
+				const msg = e instanceof Error ? e.message : String(e);
+				this.record({ verb, method, path, status: 0, ok: false, latencyMs: Date.now() - t0, error: msg, at });
+				// The caller's own timeout/abort is not a line failure — surface it as-is.
+				if (caller?.aborted) throw caller.reason ?? e;
+				this.fallBack(`direct link failed: ${msg}`);
+				if (mutating) {
+					this.noteLine(verb, 'queue');
+					return jsonResponse(502, { message: noRetryMessage(verb) });
+				}
+				// A read is safe to repeat: fall through to the relay.
+			}
+		}
+
+		this.noteLine(verb, 'queue');
+		if (binary) {
+			return jsonResponse(409, {
+				message: `needs Tailscale — ${method} ${rawPathTemplate(path)} carries a file, which the BIMS queue can't relay. Use a computer on the tailnet (${this._state.reason}).`,
+				needsTailscale: true
+			});
+		}
+		let body: unknown = undefined;
+		if (typeof rest.body === 'string' && rest.body.length) {
+			try {
+				body = JSON.parse(rest.body);
+			} catch {
+				return jsonResponse(400, { message: 'the BIMS queue relays JSON bodies only' });
+			}
+		}
+		return this.fetchImpl(`${API(this.robotId)}/relay`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ method, path, ...(body !== undefined ? { body } : {}) }),
+			signal: rest.signal ?? undefined
+		});
+	}
+
+	/** Remember which line a verb ran on (pill tooltip). Only notifies on a new entry. */
+	private noteLine(verb: string, line: 'tailscale' | 'queue') {
+		const cur = this._state.usedVia ?? { tailscale: [], queue: [] };
+		if (cur[line].includes(verb)) return;
+		const next = { ...cur, [line]: [...cur[line], verb].slice(-USED_VIA_MAX) };
+		this.set({ usedVia: next });
 	}
 
 	private record(row: Omit<DirectCallRow, 'sessionId'>) {

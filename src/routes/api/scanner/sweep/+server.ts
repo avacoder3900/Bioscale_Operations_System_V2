@@ -19,6 +19,15 @@
  * OpentronsScannerSweepRun doc and echoes pauseRequested/cancelRequested —
  * so the existing client flow (poll GET /api/scanner/sweep/<id>, POST
  * cancel/pause/resume) keeps working unchanged.
+ *
+ * TAILNET PREPARE (OT2-TAILNET-5 S6, opt-in): body `line: 'tailnet'` (or
+ * ?line=tailnet) runs the same guards and writes the same SweepRun + AuditLog
+ * (stamped line:'tailnet', bridgeJobId), but does NOT enqueue a command. It
+ * returns `job: { jobId, kind: 'sweep', payload }` for the browser to POST to
+ * the robot daemon's /bridge/jobs; the daemon reports progress to
+ * /api/agent/ot2/jobs/<jobId>/progress, which writes the same SweepRun rows.
+ * 409 when the robot is not on the tailnet line here (two-key gate), or this deployment has no OT2_BRIDGE_TOKEN_SECRET (bridgeJobGate). Without
+ * the flag this route is byte-identical to the queue line.
  */
 
 import { json, error } from '@sveltejs/kit';
@@ -34,6 +43,7 @@ import {
 	generateId
 } from '$lib/server/db';
 import { getRobot, bridgeDeviceIdForRobot } from '$lib/server/opentrons/proxy';
+import { bridgeJobGate, isTailnetLineRequest } from '$lib/server/opentrons/bridge-token';
 
 const VALID_SOURCES = new Set(['wax_filling', 'reagent_filling', 'manual', 'test']);
 // The daemon must claim the sweep command within this window; after that the
@@ -57,12 +67,13 @@ async function resolveRobot(rawId: string) {
 	return byLegacy || null;
 }
 
-export const POST: RequestHandler = async ({ request, locals }) => {
+export const POST: RequestHandler = async ({ request, locals, url }) => {
 	if (!locals.user) error(401, 'Not authenticated');
 	requirePermission(locals.user, 'manufacturing:write');
 	const user = locals.user;
 
 	const body = await request.json().catch(() => ({} as any));
+	const tailnet = isTailnetLineRequest(body, url);
 	const robotId = body?.robotId?.toString().trim();
 	const positionSetId = body?.positionSetId?.toString().trim() || null;
 	const source = VALID_SOURCES.has(body?.source) ? body.source : 'manual';
@@ -86,6 +97,10 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 
 	const robot = await resolveRobot(robotId);
 	if (!robot) error(404, 'Robot not found');
+	if (tailnet) {
+		const gate = bridgeJobGate(robot);
+		if (!gate.ok) error(409, gate.reason);
+	}
 	const opentronsRobotId = robot._id as string;
 	const deviceId =
 		body?.deviceId?.toString().trim() || deviceIdForRobot(robot.name as string | undefined);
@@ -196,6 +211,10 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		}
 	}
 
+	// Tailnet line: the job id the browser will submit under, known up front so
+	// the daemon's reports (keyed by job id) can find this SweepRun.
+	const bridgeJobId = tailnet ? generateId() : null;
+
 	const sweepRun = await OpentronsScannerSweepRun.create({
 		_id: generateId(),
 		robotId: opentronsRobotId,
@@ -217,7 +236,8 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			}
 		],
 		requestedBy: user._id,
-		requestedByUsername: user.username
+		requestedByUsername: user.username,
+		...(tailnet ? { line: 'tailnet', bridgeJobId } : {})
 	});
 
 	// Enqueue ONE bridge command — the daemon executes the whole walk locally
@@ -228,6 +248,57 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		return { slotIndex, x: p.x, y: p.y, z: p.z };
 	});
 
+	const sweepPayload = {
+		sweepRunId: sweepRun._id,
+		positions: walkedPositions,
+		pipetteMount: set.pipetteMount ?? 'left',
+		pipetteName: set.pipetteName ?? null,
+		scanTimeoutS: 3,
+		retryOnce: true
+	};
+
+	if (tailnet) {
+		await OpentronsScannerSweepRun.findByIdAndUpdate(sweepRun._id, {
+			$push: {
+				log: {
+					ts: new Date(),
+					level: 'info',
+					message: `Sweep prepared for the tailnet line — the browser submits it to bridge daemon ${bridgeDeviceId} (job ${bridgeJobId}).`
+				}
+			}
+		});
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'opentrons_scanner_sweeps',
+			recordId: set._id,
+			action: 'sweep_enqueued',
+			newData: {
+				sweepRunId: sweepRun._id,
+				robotId: opentronsRobotId,
+				positionSetId: set._id,
+				deviceId,
+				bridgeDeviceId,
+				commandId: null,
+				bridgeJobId,
+				line: 'tailnet',
+				source,
+				contextRef,
+				slotsWalked: slotsToWalk
+			},
+			changedAt: new Date(),
+			changedBy: user.username
+		});
+		return json({
+			sweepRunId: sweepRun._id,
+			robotId: opentronsRobotId,
+			positionSetId: set._id,
+			positionSetTitle: set.title,
+			slotsTotal: slotsToWalk,
+			line: 'tailnet',
+			job: { jobId: bridgeJobId, kind: 'sweep', payload: sweepPayload }
+		});
+	}
+
 	let command: any;
 	try {
 		command = await Ot2BridgeCommand.create({
@@ -235,14 +306,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			robotId: opentronsRobotId,
 			deviceId: bridgeDeviceId,
 			kind: 'sweep',
-			payload: {
-				sweepRunId: sweepRun._id,
-				positions: walkedPositions,
-				pipetteMount: set.pipetteMount ?? 'left',
-				pipetteName: set.pipetteName ?? null,
-				scanTimeoutS: 3,
-				retryOnce: true
-			},
+			payload: sweepPayload,
 			ttlMs: SWEEP_COMMAND_TTL_MS,
 			requestedBy: user.username
 		});

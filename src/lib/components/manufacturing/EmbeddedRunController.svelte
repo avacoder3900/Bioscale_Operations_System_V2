@@ -21,6 +21,9 @@
     onComplete       (status, run) => void; called once when the run lands
                      in a terminal state
     pollMs           polling cadence (default 2000)
+    session          optional: the page's own RobotSession (OT2-TAILNET-5), so the
+                     run controls and the page's lifecycle confirms share ONE line.
+                     Not closed here when passed in — the page owns it.
 -->
 <script lang="ts">
 	import { onDestroy } from 'svelte';
@@ -33,7 +36,8 @@
 		opentronsRunId,
 		onComplete,
 		onStatusChange,
-		pollMs = 2000
+		pollMs = 2000,
+		session: sharedSession = null
 	} = $props<{
 		robotId: string;
 		robotName?: string;
@@ -46,6 +50,7 @@
 		 */
 		onStatusChange?: (status: string) => void;
 		pollMs?: number;
+		session?: RobotSession | null;
 	}>();
 
 	let run = $state<any>(null);
@@ -89,6 +94,7 @@
 	let destroyed = false;
 	/** The line this page uses to reach the robot — decided once, shown in the pill. */
 	let session: RobotSession | null = null;
+	let unsubscribeShared: (() => void) | null = null;
 	let conn = $state<RobotSessionState | null>(null);
 	/** A LAN round trip is cheap: poll faster on the direct line so pauses show sooner. */
 	const DIRECT_POLL_MS = 1000;
@@ -323,12 +329,16 @@
 	 * is still deciding go through the BIMS route, so nothing waits on the probe.
 	 */
 	function robotSession(): RobotSession {
-		if (!session) {
-			session = new RobotSession(robotId);
-			session.subscribe((st) => (conn = st));
-			void session.open();
+		if (session) return session;
+		const s: RobotSession = sharedSession ?? new RobotSession(robotId);
+		session = s;
+		if (sharedSession) {
+			unsubscribeShared = s.subscribe((st) => (conn = st));
+		} else {
+			s.subscribe((st) => (conn = st));
+			void s.open();
 		}
-		return session;
+		return s;
 	}
 
 	// Boot: open the robot session and start polling. onDestroy clears both.
@@ -343,7 +353,9 @@
 			clearTimeout(pollHandle);
 			pollHandle = null;
 		}
-		session?.close();
+		// A session the page passed in is the page's to close.
+		unsubscribeShared?.();
+		if (session && session !== sharedSession) session.close();
 	});
 
 	// An action the operator pressed reports straight away — they are waiting on it.

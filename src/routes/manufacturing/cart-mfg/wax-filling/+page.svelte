@@ -7,6 +7,15 @@
 	import RunExecution from '$lib/components/manufacturing/wax-filling/RunExecution.svelte';
 	import ProtocolStartPanel from '$lib/components/manufacturing/ProtocolStartPanel.svelte';
 	import EmbeddedRunController from '$lib/components/manufacturing/EmbeddedRunController.svelte';
+	import { RobotSession, type RobotSessionState } from '$lib/opentrons/direct-client';
+	import {
+		startRunTwoPhase,
+		finishRunTwoPhase,
+		stopRunTwoPhase,
+		type ActionPoster,
+		type StartStepId,
+		type StartStepStatus
+	} from '$lib/opentrons/ot2-protocol';
 	import type { RejectionReasonCode } from '$lib/server/db/schema';
 
 	interface Props {
@@ -31,6 +40,8 @@
 				opentronsRunId?: string | null;
 				opentronsRunFinalStatus?: string | null;
 				protocolParameters?: Record<string, unknown> | null;
+				/** OT2-TAILNET-5: a start intent older than 10 min ("start interrupted — check robot"). */
+				startInterrupted?: string | null;
 			};
 			settings: {
 				runDurationMin: number;
@@ -401,7 +412,16 @@
 			// (d) startRun — POST the panel's captured FormData (protocol +
 			// params) the same way submitAction posts actions.
 			setOrchStep('start', 'active', 'Starting protocol on the robot…');
-			try {
+			if (lifecycleDirect) {
+				// Tailnet line: no 45 s abort — the upload + analysis wait run on the robot line.
+				formData.set('runId', runId);
+				const err = await startRunDirect(formData);
+				if (err) {
+					errorMsg = err;
+					setOrchStep('start', 'failed', err);
+					return;
+				}
+			} else try {
 				formData.set('runId', runId);
 				const controller = new AbortController();
 				const timeout = setTimeout(() => controller.abort(), 45000);
@@ -691,6 +711,24 @@
 		capturedParamsFd.set('runId', data.runState.runId);
 		submitting = true;
 		pendingStage = 'Running';
+		if (lifecycleDirect) {
+			try {
+				const err = await startRunDirect(capturedParamsFd);
+				if (err) {
+					errorMsg = `Auto-start failed: ${err}`;
+					pendingStage = null;
+					autoStartPending = false;
+				}
+				await invalidateAll();
+				if (data.runState.hasActiveRun && data.runState.stage !== 'Loading') pendingStage = null;
+			} catch (e) {
+				errorMsg = e instanceof Error ? e.message : 'Run start failed';
+				pendingStage = null;
+			} finally {
+				submitting = false;
+			}
+			return;
+		}
 		try {
 			const res = await fetch('?/startRun', {
 				method: 'POST',
@@ -782,7 +820,7 @@
 		columnsCompleted: number;
 	}) {
 		if (data.runState.runId) {
-			submitAction('abortRun', {
+			stopRunViaLine('abort', {
 				runId: data.runState.runId,
 				usableCartridgeIds: JSON.stringify(result.usableCartridgeIds),
 				scrapCartridgeIds: JSON.stringify(result.scrapCartridgeIds),
@@ -795,7 +833,7 @@
 	async function handleCancelRun() {
 		if (!data.runState.runId || !cancelReason.trim()) return;
 		showCancelModal = false;
-		await submitAction('cancelRun', {
+		await stopRunViaLine('cancel', {
 			runId: data.runState.runId,
 			reason: cancelReason.trim()
 		});
@@ -861,6 +899,145 @@
 	let runFinishedLocal = $state(false);
 	const runFinished = $derived(runFinishedLocal || !!data.runState.opentronsRunFinalStatus);
 
+	// ── OT2-TAILNET-5 §7.1: this page's robot line for the run lifecycle ──────
+	// One RobotSession per page (shared with the embedded run controller). When
+	// it is on the direct line, Start / Finish / Cancel / Abort run as server
+	// prepare → the robot half over Tailscale → server confirm (the shared drivers
+	// in $lib/opentrons/ot2-protocol). Otherwise the page calls the same single
+	// ?/startRun, ?/recordRunFinished, ?/cancelRun, ?/abortRun actions as before.
+	const lifecycleRobotId = $derived(previewParam ? '' : (data.opentronsRobotId ?? ''));
+	let lifecycleSession = $state.raw<RobotSession | null>(null);
+	let lifecycleConn = $state<RobotSessionState | null>(null);
+	$effect(() => {
+		const id = lifecycleRobotId;
+		if (!id) return;
+		const s = new RobotSession(id);
+		lifecycleSession = s;
+		const off = s.subscribe((st) => (lifecycleConn = st));
+		void s.open();
+		return () => {
+			off();
+			s.close();
+			if (lifecycleSession === s) lifecycleSession = null;
+		};
+	});
+	const lifecycleDirect = $derived(lifecycleConn?.transport === 'direct');
+
+	/** A page form action as the drivers call it (fields in, data or error out). */
+	const postLifecycleAction: ActionPoster = async (action, fields) => {
+		const fd = new FormData();
+		for (const [k, v] of Object.entries(fields)) fd.set(k, v);
+		try {
+			const res = await fetch(`?/${action}`, {
+				method: 'POST',
+				body: fd,
+				headers: { 'x-sveltekit-action': 'true' },
+				signal: AbortSignal.timeout(30_000)
+			});
+			const text = await res.text();
+			const result = deserialize(text);
+			if (result.type === 'success') return { ok: true, data: result.data ?? {} };
+			if (result.type === 'failure') {
+				return { ok: false, status: result.status, error: String((result.data as any)?.error ?? parseActionError(text, res.status)) };
+			}
+			if (result.type === 'error') return { ok: false, status: result.status ?? 500, error: result.error?.message ?? 'Action failed' };
+			return { ok: false, status: res.status, error: `Action failed (HTTP ${res.status})` };
+		} catch (e) {
+			return { ok: false, status: 0, error: e instanceof Error ? e.message : 'Request failed' };
+		}
+	};
+
+	/** The start checklist (PRD §8): each step says which line it ran on. */
+	type StartUiStep = { id: 'checking' | 'uploading' | 'creating' | 'running'; label: string; status: 'pending' | 'active' | 'done' | 'failed' | 'skipped'; detail: string; line: string };
+	let startSteps = $state<StartUiStep[]>([]);
+	const lineLabel = () => (lifecycleSession?.state.transport === 'direct' ? 'via Tailscale' : 'via BIMS queue');
+	function onStartStep(step: StartStepId, status: StartStepStatus, detail?: string) {
+		// 'verifying' (the post-upload freshness proof) is part of the upload step.
+		const id = step === 'verifying' ? 'uploading' : step;
+		if (step === 'verifying' && status === 'skipped') return;
+		startSteps = startSteps.map((s) =>
+			s.id === id
+				? { ...s, status: step === 'verifying' && status === 'active' ? 'active' : status, detail: detail ?? (step === 'verifying' && status === 'active' ? 'verifying the fresh upload…' : s.detail), line: lineLabel() }
+				: s
+		);
+	}
+
+	/** Start over the direct line. Resolves null on success, else the error to show. */
+	async function startRunDirect(fd: FormData): Promise<string | null> {
+		const session = lifecycleSession;
+		if (!session) return 'Robot session is not open';
+		startSteps = [
+			{ id: 'checking', label: 'Checking protocol', status: 'pending', detail: '', line: '' },
+			{ id: 'uploading', label: 'Uploading protocol (only if needed)', status: 'pending', detail: '', line: '' },
+			{ id: 'creating', label: 'Creating run', status: 'pending', detail: '', line: '' },
+			{ id: 'running', label: 'Running', status: 'pending', detail: '', line: '' }
+		];
+		const r = await startRunTwoPhase({ form: fd, post: postLifecycleAction, session, onStep: onStartStep });
+		if (r.ok) {
+			startSteps = [];
+			return null;
+		}
+		return r.error;
+	}
+
+	/** Finish / cancel / abort over the direct line; same UI contract as submitAction. */
+	async function lifecycleDirectAction(fn: () => Promise<{ ok: true; data: any } | { ok: false; error: string; status: number }>) {
+		if (submitting) return;
+		submitting = true;
+		errorMsg = '';
+		try {
+			const r = await fn();
+			if (!r.ok) errorMsg = r.error;
+			// (a stop `warning` is not surfaced — same as the queue line's submit)
+			await invalidateAll();
+		} finally {
+			submitting = false;
+		}
+	}
+
+	async function recordRunFinishedViaLine(status: string) {
+		const rid = data.runState.opentronsRunId;
+		const session = lifecycleSession;
+		if (lifecycleDirect && session && rid && data.runState.runId) {
+			const runId = data.runState.runId;
+			await lifecycleDirectAction(() => finishRunTwoPhase({ runId, rid, finalStatus: status, post: postLifecycleAction, session }));
+			return;
+		}
+		await submitAction('recordRunFinished', { runId: data.runState.runId ?? '', finalStatus: status });
+	}
+
+	async function stopRunViaLine(action: 'cancel' | 'abort', fields: Record<string, string>) {
+		const rid = data.runState.opentronsRunId ?? null;
+		const session = lifecycleSession;
+		if (lifecycleDirect && session && rid && data.runState.runId) {
+			const runId = data.runState.runId;
+			await lifecycleDirectAction(() =>
+				stopRunTwoPhase({ action, runId, rid, readFilledWells: true, fields, post: postLifecycleAction, session })
+			);
+			return;
+		}
+		await submitAction(action === 'cancel' ? 'cancelRun' : 'abortRun', { ...fields, runId: data.runState.runId ?? '' });
+	}
+
+	/** The ready-to-run panel's Start, on the direct line only (queue = its native form POST). */
+	async function startFromPanelDirect(fd: FormData) {
+		if (submitting || !data.runState.runId) return;
+		fd.set('runId', data.runState.runId);
+		submitting = true;
+		errorMsg = '';
+		pendingStage = 'Running';
+		try {
+			const err = await startRunDirect(fd);
+			if (err) {
+				errorMsg = err;
+				pendingStage = null;
+			}
+			await invalidateAll();
+			if (data.runState.hasActiveRun && data.runState.stage !== 'Loading') pendingStage = null;
+		} finally {
+			submitting = false;
+		}
+	}
 </script>
 
 <div class="space-y-6">
@@ -926,6 +1103,30 @@
 					Dismiss
 				</button>
 			</div>
+		</div>
+	{/if}
+
+	{#if data.runState.startInterrupted}
+		<div class="rounded border border-amber-500/40 bg-amber-900/20 px-4 py-3 text-sm text-amber-200">
+			{data.runState.startInterrupted}
+		</div>
+	{/if}
+
+	{#if startSteps.length > 0}
+		<div class="space-y-2 rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4">
+			{#each startSteps as step (step.id)}
+				<div class="flex items-start gap-3">
+					<span class="mt-0.5 w-4 shrink-0 text-center text-sm font-bold {step.status === 'done' ? 'text-green-400' : step.status === 'failed' ? 'text-red-400' : step.status === 'active' ? 'text-[var(--color-tron-cyan)]' : 'text-[var(--color-tron-text-secondary)]'}">
+						{step.status === 'done' ? '✓' : step.status === 'failed' ? '✗' : step.status === 'active' ? '…' : step.status === 'skipped' ? '–' : '·'}
+					</span>
+					<div class="min-w-0 flex-1 text-sm">
+						<span class={step.status === 'failed' ? 'text-red-300' : 'text-[var(--color-tron-text)]'}>{step.label}</span>
+						{#if step.status === 'skipped'}<span class="text-xs text-[var(--color-tron-text-secondary)]"> — not needed</span>{/if}
+						{#if step.line}<span class="text-xs text-[var(--color-tron-text-secondary)]"> · {step.line}</span>{/if}
+						{#if step.detail}<p class="text-xs {step.status === 'failed' ? 'text-red-400/80' : 'text-[var(--color-tron-text-secondary)]'}">{step.detail}</p>{/if}
+					</div>
+				</div>
+			{/each}
 		</div>
 	{/if}
 
@@ -1208,6 +1409,7 @@
 						extraHidden={{ runId: data.runState.runId ?? '', ...(testFillNoCarts ? { testFillNoCartridges: 'true' } : {}) }}
 						autoStart={autoStartPending}
 						onAutoStarted={() => (autoStartPending = false)}
+						onSubmitIntercept={lifecycleDirect ? startFromPanelDirect : undefined}
 					/>
 
 					<div class="flex justify-center">
@@ -1360,15 +1562,13 @@
 					robotId={data.opentronsRobotId}
 					robotName={data.robotName}
 					opentronsRunId={data.runState.opentronsRunId}
+					session={lifecycleSession}
 					onComplete={async (status) => {
 						// Stamp pipetteTipState.after + consumed. A clean completion
 						// ALSO auto-advances every cart to wax_filled and completes
 						// the run server-side (2026-08-28) — no deck-removed step.
 						runFinishedLocal = true;
-						await submitAction('recordRunFinished', {
-							runId: data.runState.runId ?? '',
-							finalStatus: status
-						});
+						await recordRunFinishedViaLine(status);
 						if (status === 'succeeded') await invalidateAll();
 					}}
 				/>

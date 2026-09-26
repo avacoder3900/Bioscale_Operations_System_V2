@@ -5,13 +5,19 @@
  */
 import { json } from '@sveltejs/kit';
 import { runVerb, maintenanceRecordFor, type Ot2Transport, type Ot2Verb } from '$lib/opentrons/ot2-protocol';
-import { robotGet, robotPost, robotDelete } from './proxy';
+import { robotGet, robotPost, robotDelete, robotPostMultipart } from './proxy';
 import { applyMaintenanceRecord } from './maintenance-records';
 
 export function serverTransport(robot: { ip: string; port?: number | null }): Ot2Transport {
 	return {
 		get: (path) => robotGet(robot as any, path),
-		post: (path, body, opts) => robotPost(robot as any, path, body, opts),
+		// A FormData body is the protocol upload ('run.uploadProtocol'): it goes to
+		// proxy.ts's multipart path, which on Vercel is the same `upload_protocol`
+		// bridge job the queue always used — never JSON-stringified into kind:'http'.
+		post: (path, body, opts) =>
+			typeof FormData !== 'undefined' && body instanceof FormData
+				? robotPostMultipart(robot as any, path, body, opts)
+				: robotPost(robot as any, path, body, opts),
 		delete: (path) => robotDelete(robot as any, path)
 	};
 }

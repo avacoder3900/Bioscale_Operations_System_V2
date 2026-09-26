@@ -7,7 +7,7 @@
  *   - motion defers to the queue while a daemon job holds the gantry
  */
 import { describe, it, expect } from 'vitest';
-import { RobotSession, routeToVerb } from './direct-client';
+import { RobotSession, routeToVerb, noRetryLabel } from './direct-client';
 
 const DIRECT = 'https://ot2-b14.tailf65a70.ts.net';
 const res = (status: number, body: unknown) =>
@@ -320,5 +320,171 @@ describe("Chrome's Local Network Access permission", () => {
 		expect(s.state.transport).toBe('queue');
 		expect(s.state.reason).toContain('Local network access');
 		expect(ff.urls.some((u) => u.startsWith(DIRECT))).toBe(false);
+	});
+});
+
+// ── OT2-TAILNET-5: robotFetch (the raw tracked request robot-client runs over) ──
+
+describe('robotFetch', () => {
+	const RELAY = '/api/opentrons-lab/robots/b14/relay';
+
+	async function session(robotHandler: Handler, conn: () => Response = () => connTailnet()) {
+		const posted: any[] = [];
+		let opened = false;
+		const ff = fakeFetch((url, init) => {
+			if (url.endsWith('/connection')) return conn();
+			if (!opened && url === `${DIRECT}/health`) return res(200, {}); // the open() probe
+			if (url.endsWith('/direct-calls')) {
+				posted.push(JSON.parse(String(init?.body)));
+				return res(200, {});
+			}
+			if (url === RELAY) return res(200, { via: 'relay', sent: JSON.parse(String(init?.body)) });
+			if (url.startsWith('/api/')) return res(200, { via: 'bims', url });
+			return robotHandler(url, init);
+		});
+		const s = new RobotSession('b14', { ...opts, fetchImpl: ff.f });
+		await s.open();
+		opened = true;
+		return { s, urls: ff.urls, posted };
+	}
+
+	it('direct: sends to the robot origin with opentrons-version 3 + JSON content type, and logs the call', async () => {
+		const seen: { url: string; init?: RequestInit }[] = [];
+		const { s, posted } = await session((url, init) => {
+			seen.push({ url, init });
+			return res(200, { ok: 1 });
+		});
+		const r = await s.robotFetch('/robot/lights', { method: 'POST', body: JSON.stringify({ on: true }) });
+		expect(r.status).toBe(200);
+		const call = seen.find((c) => c.url === `${DIRECT}/robot/lights`)!;
+		const h = new Headers(call.init!.headers);
+		expect(h.get('opentrons-version')).toBe('3');
+		expect(h.get('content-type')).toBe('application/json');
+		expect(call.init!.method).toBe('POST');
+		await s.flush();
+		expect(posted[0].calls).toEqual([
+			expect.objectContaining({ verb: 'raw:POST /robot/lights', method: 'POST', path: '/robot/lights', status: 200, ok: true })
+		]);
+		expect(s.state.usedVia?.tailscale).toContain('raw:POST /robot/lights');
+	});
+
+	it("keeps a caller's opentrons-version; FormData gets no JSON content type", async () => {
+		const seen: RequestInit[] = [];
+		const { s } = await session((_u, init) => {
+			seen.push(init!);
+			return res(201, {});
+		});
+		const fd = new FormData();
+		fd.append('files', new Blob(['x']), 'p.py');
+		await s.robotFetch('/protocols', { method: 'POST', headers: { 'opentrons-version': '*' }, body: fd });
+		const h = new Headers(seen.at(-1)!.headers);
+		expect(h.get('opentrons-version')).toBe('*');
+		expect(h.get('content-type')).toBeNull();
+		expect(seen.at(-1)!.body).toBe(fd);
+	});
+
+	it('the /direct-calls verb is a path template, ≤ 40 chars', async () => {
+		const { s, posted } = await session(() => res(200, {}));
+		await s.robotFetch('/runs/3f2a9c1e-77aa-4b1d-9d7e-000000000001/commands?pageLength=10');
+		await s.flush();
+		expect(posted[0].calls[0].verb).toBe('raw:GET /runs/:id/commands');
+		expect(posted[0].calls[0].verb.length).toBeLessThanOrEqual(40);
+	});
+
+	it('queue: goes through the BIMS relay as {method, path, body}, never the robot', async () => {
+		const { s, urls } = await session(() => res(500, { unexpected: true }), () => res(200, { transport: 'queue', reason: 'queue', busy: null }));
+		const r = await s.robotFetch('/settings', { method: 'POST', body: JSON.stringify({ id: 'a', value: true }) });
+		expect(await r.json()).toEqual({ via: 'relay', sent: { method: 'POST', path: '/settings', body: { id: 'a', value: true } } });
+		expect(urls.some((u) => u.startsWith(DIRECT))).toBe(false);
+		expect(s.state.usedVia?.queue).toContain('raw:POST /settings');
+	});
+
+	it('queue: a multipart body or a file download answers 409 "needs Tailscale" without calling anything', async () => {
+		const { s, urls } = await session(() => res(500, {}), () => res(200, { transport: 'queue', reason: 'queue', busy: null }));
+		const before = urls.length;
+		const up = await s.robotFetch('/dataFiles', { method: 'POST', body: new FormData() });
+		expect(up.status).toBe(409);
+		expect((await up.json()).message).toContain('needs Tailscale');
+		const dl = await s.robotFetch('/logs/api.log?records=5000', { headers: { Accept: 'text/plain' } });
+		expect(dl.status).toBe(409);
+		expect(urls.length).toBe(before);
+	});
+
+	it('fallback: a GET with no answer is retried once via the relay, and the session stays on the queue', async () => {
+		const { s, urls } = await session(() => {
+			throw new TypeError('Failed to fetch');
+		});
+		const r = await s.robotFetch('/health');
+		expect(await r.json()).toMatchObject({ via: 'relay', sent: { method: 'GET', path: '/health' } });
+		expect(s.state.transport).toBe('queue');
+		expect(s.state.fellBack).toBe(true);
+		const before = urls.length;
+		await s.robotFetch('/pipettes');
+		expect(urls.slice(before)).toEqual([RELAY]); // sticky: no direct attempt
+	});
+
+	it('fallback: a mutating request with no answer is NOT retried (it may have happened) → 502', async () => {
+		const { s, urls } = await session(() => {
+			throw new TypeError('Failed to fetch');
+		});
+		const r = await s.robotFetch('/runs', { method: 'POST', body: JSON.stringify({ data: { protocolId: 'p' } }) });
+		expect(r.status).toBe(502);
+		expect((await r.json()).message).toContain('NOT retried');
+		expect(urls).not.toContain(RELAY);
+		expect(s.state.transport).toBe('queue');
+	});
+
+	it('fallback is logged to /direct-calls with the error', async () => {
+		const { s, posted } = await session(() => {
+			throw new TypeError('Failed to fetch');
+		});
+		await s.robotFetch('/health');
+		await s.flush();
+		expect(posted[0].calls[0]).toMatchObject({ verb: 'raw:GET /health', status: 0, ok: false, error: 'Failed to fetch' });
+	});
+
+	it("a robot 4xx is an answer: stays direct, no relay", async () => {
+		const { s, urls } = await session(() => res(404, { errors: [{ detail: 'nope' }] }));
+		const r = await s.robotFetch('/runs/abc12345678');
+		expect(r.status).toBe(404);
+		expect(s.state.transport).toBe('direct');
+		expect(urls).not.toContain(RELAY);
+	});
+
+	it('while a daemon job holds the gantry, mutating raw calls go through the relay; reads stay direct', async () => {
+		const { s, urls } = await session(() => res(200, {}), () => connTailnet({ kind: 'sweep', since: 'now' }));
+		await s.robotFetch('/robot/home', { method: 'POST', body: JSON.stringify({ target: 'robot' }) });
+		expect(urls).toContain(RELAY);
+		expect(urls).not.toContain(`${DIRECT}/robot/home`);
+		await s.robotFetch('/health');
+		expect(urls.filter((u) => u === `${DIRECT}/health`).length).toBeGreaterThanOrEqual(2); // probe + read
+	});
+
+	it('rejects a path that is not on the robot origin', async () => {
+		const { s } = await session(() => res(200, {}));
+		expect((await s.robotFetch('https://evil.example/x')).status).toBe(400);
+		expect((await s.robotFetch('//evil.example/x')).status).toBe(400);
+	});
+});
+
+describe('the no-retry message names the verb', () => {
+	it('keeps the TAILNET-4 wording for jog / tip pick-up and reads well for the new verbs', () => {
+		expect(noRetryLabel('mx.jog')).toBe('jog');
+		expect(noRetryLabel('mx.pickUpTip')).toBe('tip pick-up');
+		expect(noRetryLabel('run.create')).toBe('run creation');
+		expect(noRetryLabel('run.uploadProtocol')).toBe('protocol upload');
+		expect(noRetryLabel('mx.command')).toBe('maintenance command');
+	});
+
+	it('call() records which line each verb ran on (pill tooltip)', async () => {
+		const ff = fakeFetch((url) => {
+			if (url.endsWith('/connection')) return connTailnet();
+			if (url === `${DIRECT}/health`) return res(200, {});
+			return res(201, {});
+		});
+		const s = new RobotSession('b14', { ...opts, fetchImpl: ff.f });
+		await s.open();
+		await s.call('run.action', { rid: 'r1', action: 'pause' });
+		expect(s.state.usedVia).toEqual({ tailscale: ['run.action'], queue: [] });
 	});
 });

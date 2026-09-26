@@ -14,6 +14,9 @@ import { closeMaintenanceRun } from '$lib/server/opentrons/maintenance';
 // which can take tens of seconds when the daemon is slow to claim.
 export const config = { maxDuration: 60 };
 
+// A tailnet sweep with no daemon report after this long is stranded (see GET).
+const TAILNET_UNREPORTED_MS = 30 * 60_000;
+
 function pickSnapshot(doc: any) {
 	return {
 		_id: doc._id,
@@ -36,7 +39,11 @@ function pickSnapshot(doc: any) {
 		startedAt: doc.startedAt,
 		completedAt: doc.completedAt,
 		abortReason: doc.abortReason,
-		requestedByUsername: doc.requestedByUsername
+		requestedByUsername: doc.requestedByUsername,
+		// Tailnet line only (undefined, so absent from the JSON, on queue runs):
+		// lets a page reattach to the daemon job via /bridge/jobs/<bridgeJobId>.
+		line: doc.line,
+		bridgeJobId: doc.bridgeJobId
 	};
 }
 
@@ -52,7 +59,35 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 	// daemon polls or a caller waits — a sweep has neither, so a dead daemon
 	// would leave the run "running" forever. The UI polls this snapshot, so
 	// detect the stranded command here and fail the run visibly.
-	if (doc.status === 'running') {
+	if (doc.status === 'running' && doc.line === 'tailnet') {
+		// Tailnet line (OT2-TAILNET-5 S6): there is no command to inspect. A run
+		// the daemon never reported on within a generous window (it may queue
+		// behind a long job on the robot's single worker) was never submitted to
+		// /bridge, or never started there — fail it visibly. A daemon that starts
+		// it later gets a 409 from the jobs progress route and stops.
+		const age = Date.now() - new Date(doc.createdAt ?? doc.startedAt).getTime();
+		if (!doc.bridgeLastReportAt && age > TAILNET_UNREPORTED_MS) {
+			const now = new Date();
+			doc = (await OpentronsScannerSweepRun.findOneAndUpdate(
+				{ _id: params.id, status: 'running', bridgeLastReportAt: { $exists: false } },
+				{
+					$set: {
+						status: 'errored',
+						completedAt: now,
+						abortReason: "The robot's bridge never reported on this sweep — was it submitted over Tailscale?"
+					},
+					$push: {
+						log: {
+							ts: now,
+							level: 'error',
+							message: `No report from the bridge daemon for tailnet job ${doc.bridgeJobId} within ${Math.round(TAILNET_UNREPORTED_MS / 60_000)} min`
+						}
+					}
+				},
+				{ new: true }
+			).lean()) as any ?? (await OpentronsScannerSweepRun.findById(params.id).lean());
+		}
+	} else if (doc.status === 'running') {
 		const cmd = await Ot2BridgeCommand.findOne({ kind: 'sweep', 'payload.sweepRunId': params.id })
 			.sort({ createdAt: -1 }).select('status createdAt ttlMs').lean() as any;
 		const overdue = cmd?.status === 'pending'

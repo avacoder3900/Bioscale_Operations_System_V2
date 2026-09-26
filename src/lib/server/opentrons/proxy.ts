@@ -15,6 +15,7 @@
 import { connectDB, OpentronsRobot, Ot2BridgeCommand, ScannerEvent, generateId, LabwareDefinition } from '$lib/server/db';
 import { labwareNamesReferencedBy } from './labware-refs';
 import { isHardenedRobot, rolloutNote } from '$lib/server/services/deck-calibration/rollout';
+import { runVerb, PRE_ANALYZED_FIELD, type ProtocolUploadBundle } from '$lib/opentrons/ot2-protocol';
 
 const DEFAULT_PORT = 31950;
 
@@ -207,7 +208,16 @@ export async function updateRobotHealth(
 	);
 }
 
-// Protocol upload (OT2-BRIDGE-3) ----------------------------------------------
+// Protocol upload (OT2-BRIDGE-3, split for OT2-TAILNET-5 §7.2) ----------------
+//
+// An upload is two halves:
+//   assembleProtocolUpload()  BIMS half — the .py + the labware it loads, from
+//                             Mongo (hardened robots: only referenced loadNames)
+//   'run.uploadProtocol'      robot half, in $lib/opentrons/ot2-protocol — the
+//                             multipart POST /protocols + analysis wait, run over
+//                             either line. On the queue line that POST lands in
+//                             robotPostMultipart() below, which keeps the
+//                             `upload_protocol` bridge job exactly as before.
 
 /** Normalized result of uploading + analyzing a protocol on a robot. */
 export interface UploadedProtocol {
@@ -216,27 +226,13 @@ export interface UploadedProtocol {
 	parametersSchema: unknown;
 	labwareDefinitions: unknown;
 	pipettesRequired: unknown;
+	analysisErrors?: string[];
 }
 
 // The bridged upload waits for the daemon to upload AND analyze on-robot, which
 // takes longer than the 30s http relay. Keep under the endpoint's maxDuration
 // (120s) and over the daemon's analysis budget (~60s).
 const UPLOAD_BRIDGE_TIMEOUT_MS = 110_000;
-const ANALYSIS_POLL_MS = 2000;
-const ANALYSIS_BUDGET_MS = 60_000;
-
-/** Pull params/labware/pipettes out of a robot analysis (handles both the
- *  inlined-result and detail-by-id shapes across robot-server versions). */
-function parseAnalysis(detail: any): Pick<UploadedProtocol, 'parametersSchema' | 'labwareDefinitions' | 'pipettesRequired'> {
-	// runTimeParameters/labware/pipettes are top-level on the analysis; `result`
-	// is a string verdict (e.g. "ok"), so only treat it as the body if it's an object.
-	const body = (detail?.result && typeof detail.result === 'object') ? detail.result : (detail ?? {});
-	return {
-		parametersSchema: body.runTimeParameters ?? null,
-		labwareDefinitions: body.labware ?? null,
-		pipettesRequired: body.pipettes ?? null
-	};
-}
 
 /** Relay an upload_protocol command through the bridge and await the daemon's
  *  result. Mirrors bridgeFetch but with a file payload and a longer deadline. */
@@ -268,62 +264,66 @@ async function bridgeUpload(robot: any, fileName: string, fileB64: string, labwa
 	throw new Error(`upload failed: robot bridge "${deviceId}" did not respond within ${UPLOAD_BRIDGE_TIMEOUT_MS / 1000}s`);
 }
 
-/** Upload + analyze directly against the robot's HTTP API (local-dev transport). */
-async function directUpload(robot: any, fileName: string, bytes: Uint8Array, labware: { fileName: string; json: string }[]): Promise<UploadedProtocol> {
-	const base = robotBaseUrl(robot);
-	const form = new FormData();
-	form.append('files', new Blob([bytes as BlobPart], { type: 'text/x-python' }), fileName);
-	// Bundle the BIMS labware library so the robot resolves custom labware.
-	for (const lw of labware) {
-		form.append('files', new Blob([lw.json], { type: 'application/json' }), lw.fileName);
-	}
-	const res = await robotFetch(`${base}/protocols`, { method: 'POST', headers: { 'opentrons-version': '*' }, body: form });
-	if (!res.ok) throw new Error(`robot upload failed (${res.status})`);
-	const pid = ((await res.json())?.data)?.id;
-	if (!pid) throw new Error('robot did not return a protocol id');
+const blobB64 = async (b: Blob) => Buffer.from(new Uint8Array(await b.arrayBuffer())).toString('base64');
 
-	let analysisStatus = 'pending';
-	let parsed: any = { parametersSchema: null, labwareDefinitions: null, pipettesRequired: null };
-	const deadline = Date.now() + ANALYSIS_BUDGET_MS;
-	while (Date.now() < deadline) {
-		await new Promise((r) => setTimeout(r, ANALYSIS_POLL_MS));
-		const ar = await robotFetch(`${base}/protocols/${pid}/analyses`, { headers: { 'opentrons-version': '*' } }).catch(() => null);
-		if (!ar || !ar.ok) continue;
-		const analyses = (await ar.json())?.data ?? [];
-		if (!analyses.length) continue;
-		const latest = analyses[analyses.length - 1];
-		if (latest.status === 'completed') {
-			let detail: any = latest;
-			const dr = await robotFetch(`${base}/protocols/${pid}/analyses/${latest.id}`, { headers: { 'opentrons-version': '*' } }).catch(() => null);
-			if (dr && dr.ok) detail = (await dr.json())?.data ?? latest;
-			parsed = parseAnalysis(detail);
-			analysisStatus = 'completed';
-			break;
-		}
-		if (latest.status === 'failed') { analysisStatus = 'failed'; break; }
+/**
+ * The server line's multipart POST (serverTransport routes a FormData body
+ * here). Only POST /protocols is multipart on the OT-2.
+ *  - bridge: the parts (the .py first, then labware JSON — buildProtocolForm's
+ *    order) become the same `upload_protocol` job payload as before; the daemon
+ *    uploads AND waits for the analysis, so the answer carries it pre-analyzed.
+ *  - direct (lab LAN): the multipart POST itself, `opentrons-version: *`.
+ */
+export async function robotPostMultipart(robot: any, path: string, form: FormData, opts: { timeoutMs?: number } = {}): Promise<Response> {
+	if (resolveTransport() === 'bridge') {
+		if (path !== '/protocols') throw new Error(`multipart ${path} is not supported over the bridge`);
+		const parts = form.getAll('files').filter((p): p is File => typeof p !== 'string');
+		const [py, ...rest] = parts;
+		if (!py) throw new Error('upload has no protocol file');
+		const fileB64 = await blobB64(py);
+		const labwareB64 = await Promise.all(rest.map(async (l) => ({ fileName: l.name, b64: await blobB64(l) })));
+		const body = await bridgeUpload(robot, py.name, fileB64, labwareB64);
+		const pid = body?.opentronsProtocolId ?? body?.id;
+		if (!pid) throw new Error(`bridge upload returned no protocol id: ${JSON.stringify(body)?.slice(0, 200)}`);
+		const analyzed: UploadedProtocol = {
+			opentronsProtocolId: pid,
+			analysisStatus: body?.analysisStatus ?? 'unknown',
+			parametersSchema: body?.parametersSchema ?? null,
+			labwareDefinitions: body?.labwareDefinitions ?? null,
+			pipettesRequired: body?.pipettesRequired ?? null,
+			...(Array.isArray(body?.analysisErrors) ? { analysisErrors: body.analysisErrors } : {})
+		};
+		return new Response(JSON.stringify({ data: { id: pid }, [PRE_ANALYZED_FIELD]: analyzed }), {
+			status: 201,
+			headers: { 'content-type': 'application/json' }
+		});
 	}
-	return { opentronsProtocolId: pid, analysisStatus, ...parsed };
+	return robotFetch(
+		`${robotBaseUrl(robot)}${path}`,
+		{ method: 'POST', headers: { 'opentrons-version': '*' }, body: form },
+		opts.timeoutMs
+	);
 }
 
 /**
- * Upload a protocol .py to a robot and return its analyzed metadata, choosing
- * the bridge (cloud → daemon) or direct (lab LAN) transport automatically.
+ * BIMS half of an upload: the .py plus the BIMS-managed labware it actually
+ * loads, so the robot resolves its custom labware at run time (the OT-2
+ * resolves from what's bundled at upload). `source` is the .py text (stored
+ * protocols) or its exact bytes (an uploaded file).
+ *
+ * This used to ship the ENTIRE library on every upload. That was wasteful and
+ * unsafe: two definitions sharing a loadName produce the same multipart
+ * filename, and which one the robot keeps is undefined — so a stale copy
+ * could silently win over freshly-calibrated geometry. Narrowing to the
+ * referenced set, and hard-failing on ambiguity, removes that class of bug.
  */
-export async function robotUploadProtocol(robot: any, fileName: string, bytes: Uint8Array): Promise<UploadedProtocol> {
-	// Bundle the BIMS-managed labware the protocol actually loads, so the robot
-	// resolves its custom labware at run time (the OT-2 resolves from what's
-	// bundled at upload).
-	//
-	// This used to ship the ENTIRE library on every upload. That was wasteful and
-	// unsafe: two definitions sharing a loadName produce the same multipart
-	// filename, and which one the robot keeps is undefined — so a stale copy
-	// could silently win over freshly-calibrated geometry. Narrowing to the
-	// referenced set, and hard-failing on ambiguity, removes that class of bug.
+export async function assembleProtocolUpload(robot: any, fileName: string, source: string | Uint8Array): Promise<ProtocolUploadBundle> {
 	await connectDB();
+	const text = typeof source === 'string' ? source : new TextDecoder().decode(source);
 	// Gated per robot: narrowing can fail an upload that previously succeeded
 	// (missing or ambiguous definition), so it stays off until a robot is opted in.
 	const narrow = isHardenedRobot(robot);
-	const referenced = narrow ? labwareNamesReferencedBy(new TextDecoder().decode(bytes)) : [];
+	const referenced = narrow ? labwareNamesReferencedBy(text) : [];
 	console.log(`[opentrons] ${fileName}: ${rolloutNote(robot)}`);
 
 	let defs: any[];
@@ -376,19 +376,27 @@ export async function robotUploadProtocol(robot: any, fileName: string, bytes: U
 	}
 	console.log(`[opentrons] ${fileName}: bundling ${labware.length} labware def(s): ${defs.map((d) => d.loadName).join(', ')}`);
 
-	if (resolveTransport() === 'bridge') {
-		const fileB64 = Buffer.from(bytes).toString('base64');
-		const labwareB64 = labware.map((l) => ({ fileName: l.fileName, b64: Buffer.from(l.json).toString('base64') }));
-		const body = await bridgeUpload(robot, fileName, fileB64, labwareB64);
-		const pid = body?.opentronsProtocolId ?? body?.id;
-		if (!pid) throw new Error(`bridge upload returned no protocol id: ${JSON.stringify(body)?.slice(0, 200)}`);
-		return {
-			opentronsProtocolId: pid,
-			analysisStatus: body?.analysisStatus ?? 'unknown',
-			parametersSchema: body?.parametersSchema ?? null,
-			labwareDefinitions: body?.labwareDefinitions ?? null,
-			pipettesRequired: body?.pipettesRequired ?? null
-		};
-	}
-	return directUpload(robot, fileName, bytes, labware);
+	return typeof source === 'string'
+		? { fileName, fileContent: source, labware }
+		: { fileName, fileB64: Buffer.from(source).toString('base64'), labware };
+}
+
+/**
+ * Upload a protocol .py to a robot and return its analyzed metadata over the
+ * server line (the bridge on Vercel, direct on the lab LAN). Same result and
+ * error messages as before the split: assembly here, the transfer in the shared
+ * 'run.uploadProtocol' verb (the tailnet line runs that verb in the browser).
+ */
+export async function robotUploadProtocol(robot: any, fileName: string, bytes: Uint8Array): Promise<UploadedProtocol> {
+	const bundle = await assembleProtocolUpload(robot, fileName, bytes);
+	return uploadAssembledProtocol(robot, bundle);
+}
+
+/** Run the robot half of an assembled upload over the server line; throws on failure. */
+export async function uploadAssembledProtocol(robot: any, bundle: ProtocolUploadBundle): Promise<UploadedProtocol> {
+	// transport.ts imports this module; a lazy import keeps the graph acyclic.
+	const { serverTransport } = await import('./transport');
+	const r = await runVerb(serverTransport(robot), 'run.uploadProtocol', bundle as unknown as Record<string, unknown>);
+	if (r.status !== 200) throw new Error((r.body as any)?.message ?? 'Failed to upload protocol');
+	return r.body as UploadedProtocol;
 }

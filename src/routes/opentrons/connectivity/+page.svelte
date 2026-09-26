@@ -6,11 +6,53 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { queryLocalNetworkPermission, type LocalNetworkPermission } from '$lib/opentrons/direct-client';
+	import { createBridgeClient, plainRobotFetch, type BridgeClient, type BridgeProbe } from '$lib/opentrons/bridge-client';
 
 	let { data } = $props();
 
 	type Probe = { state: 'idle' | 'probing' | 'ok' | 'fail'; ms?: number; detail?: string };
 	let probes = $state<Record<string, Probe>>({});
+
+	/** Daemon column (OT2-TAILNET-5 §8): /bridge on the robot's own tailnet origin, from THIS browser. */
+	type Daemon =
+		| { phase: 'probing' }
+		| { phase: 'done'; probe: BridgeProbe; version?: string; healthMs?: number; healthError?: string };
+	let daemons = $state<Record<string, Daemon>>({});
+	// One client per robot so a health-only token (audit-logged when minted) is
+	// reused across "Probe again" clicks until it nears expiry.
+	const bridgeClients = new Map<string, BridgeClient>();
+
+	async function probeDaemon(r: (typeof data.robots)[number], timeoutMs: number) {
+		if (!r.directUrl) return;
+		daemons[r.robotId] = { phase: 'probing' };
+		let client = bridgeClients.get(r.robotId);
+		if (!client) {
+			client = createBridgeClient({ robotId: r.robotId, robotFetch: plainRobotFetch(r.directUrl), kinds: [] });
+			bridgeClients.set(r.robotId, client);
+		}
+		// 1. No token: is /bridge served on this origin at all? (+ latency)
+		const probe = await client.probe(timeoutMs);
+		const result: Extract<Daemon, { phase: 'done' }> = { phase: 'done', probe };
+		// 2. With a health-only token, when this deployment can mint one for this
+		//    robot: the daemon's version + authenticated latency.
+		if (probe.served && data.bridge.canMintTokens && r.bridgeJobsHere) {
+			try {
+				const h = await client.health();
+				result.version = h.body.version;
+				result.healthMs = h.latencyMs;
+			} catch (e) {
+				result.healthError = e instanceof Error ? e.message : String(e);
+			}
+		}
+		daemons[r.robotId] = result;
+	}
+
+	function daemonAuthHint(r: (typeof data.robots)[number]): string {
+		if (!data.bridge.canMintTokens) return 'version needs manufacturing:write (a bridge token)';
+		if (!data.bridge.secretSet) return 'version needs OT2_BRIDGE_TOKEN_SECRET on this deployment';
+		if (!r.bridgeJobsHere) return 'version needs this robot on the tailnet line here';
+		return '';
+	}
 	/** Chrome's Local Network Access permission for THIS BIMS address. */
 	let permission = $state<LocalNetworkPermission>('unsupported');
 
@@ -40,7 +82,11 @@
 	async function probeAll(timeoutMs = 3000) {
 		permission = await queryLocalNetworkPermission();
 		if (permission === 'prompt' && timeoutMs === 3000) return; // needs a click — see allowDirect()
-		await Promise.all(data.robots.filter((r) => r.directUrl).map((r) => probe(r.robotId, r.directUrl!, timeoutMs)));
+		await Promise.all(
+			data.robots
+				.filter((r) => r.directUrl)
+				.flatMap((r) => [probe(r.robotId, r.directUrl!, timeoutMs), probeDaemon(r, timeoutMs)])
+		);
 		permission = await queryLocalNetworkPermission();
 	}
 
@@ -100,6 +146,7 @@
 					<th class="px-3 py-2">Robot set to</th>
 					<th class="px-3 py-2">Allowed here</th>
 					<th class="px-3 py-2">From this browser</th>
+					<th class="px-3 py-2" title="The robot's bridge daemon (/bridge on the tailnet URL), probed from this browser">Daemon</th>
 					<th class="px-3 py-2">Bridge heartbeat</th>
 					<th class="px-3 py-2">Direct calls 24 h</th>
 				</tr>
@@ -107,6 +154,7 @@
 			<tbody>
 				{#each data.robots as r (r.robotId)}
 					{@const p = probes[r.robotId]}
+					{@const d = daemons[r.robotId]}
 					{@const direct = r.transport === 'tailnet' && p?.state === 'ok'}
 					<tr class="border-b border-[var(--color-tron-border)] last:border-0 align-top">
 						<td class="px-3 py-2">
@@ -141,6 +189,40 @@
 							{:else}
 								<span class="text-red-400">✗</span>
 								<div class="text-[11px] text-[var(--color-tron-text-secondary)]">{p.detail}</div>
+							{/if}
+						</td>
+						<td class="px-3 py-2">
+							{#if !r.directUrl}
+								<span class="text-[var(--color-tron-text-secondary)]">—</span>
+							{:else if !d && permission === 'prompt'}
+								<span class="text-amber-300">needs browser permission</span>
+							{:else if !d || d.phase === 'probing'}
+								<span class="text-[var(--color-tron-text-secondary)]">probing…</span>
+							{:else if d.probe.served}
+								{#if d.version}
+									<span class="text-green-400">✓ {d.healthMs} ms</span>
+									<div class="font-mono text-[11px] text-[var(--color-tron-text-secondary)]">{d.version}</div>
+								{:else if d.probe.state === 'disabled'}
+									<span class="text-amber-300">/bridge served, job server off</span>
+									<div class="text-[11px] text-[var(--color-tron-text-secondary)]">no BRIDGE_TOKEN_SECRET on the robot</div>
+								{:else}
+									<span class="text-green-400">✓ /bridge served · {d.probe.latencyMs} ms</span>
+									<div class="text-[11px] text-[var(--color-tron-text-secondary)]">
+										{d.healthError ? `health: ${d.healthError}` : daemonAuthHint(r)}
+									</div>
+								{/if}
+							{:else if d.probe.state === 'not-served'}
+								<span class="text-[var(--color-tron-text-secondary)]">✗ /bridge not served</span>
+								<div class="text-[11px] text-[var(--color-tron-text-secondary)]">
+									robot answered {d.probe.status} — old daemon or no serve mount (ot2-tailnet-provision.sh)
+								</div>
+							{:else}
+								<span class="text-red-400">✗</span>
+								<div class="max-w-xs text-[11px] text-[var(--color-tron-text-secondary)]">
+									{p?.state === 'ok'
+										? 'robot API answers but /bridge gave no readable reply — daemon down, or this BIMS address is not on its CORS list'
+										: 'unreachable from this computer'}
+								</div>
 							{/if}
 						</td>
 						<td class="px-3 py-2">

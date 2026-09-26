@@ -22,14 +22,29 @@
  *   ROBOT=b14 node scripts/deploy-wax-tipcal-guards.cjs      # other robot
  *   DEPLOY_APPLY=1 node scripts/deploy-wax-tipcal-guards.cjs # + repoint in Mongo
  *
+ * Over the tailnet (OT2-TAILNET-5 S9), from any tailnet machine off the lab LAN:
+ *   ROBOT=b14 ROBOT_HOST=https://ot2-b14.tailf65a70.ts.net node scripts/deploy-wax-tipcal-guards.cjs
+ *   ROBOT=b14 ROBOT_HOST=tailnet node scripts/deploy-wax-tipcal-guards.cjs   # same, URL built from ROBOT
+ * ROBOT_HOST may still be a bare host/IP (-> http://<host>:31950, today's form).
+ * Off the lab Mac, set MONGODB_URI (or BIMS_ENV_FILE); the Mac paths below are
+ * only the default where they exist.
+ *
  * Run scripts/set-stored-wax-py.cjs FIRST so the freshness gate's auto-resync
  * rebuilds from the same .py (otherwise a later def change would downgrade the code).
  */
 const fs = require('fs');
 const path = require('path');
-const mongoose = require('/Users/brevitest/Bioscale_Operations_System_V2/node_modules/mongoose');
+const { robotUrl } = require('./ot2-robot-host.cjs');
 
-const MONGODB_URI = fs.readFileSync('/Users/brevitest/Bioscale_Operations_System_V2/.env', 'utf8')
+// The lab Mac's checkout is the default (unchanged). Elsewhere (e.g. a tailnet
+// PC running this against ROBOT_HOST) fall back to this repo's node_modules and
+// .env, or MONGODB_URI / BIMS_ENV_FILE from the environment (the Mac keeps
+// reading its .env exactly as before).
+const MAC_ROOT = '/Users/brevitest/Bioscale_Operations_System_V2';
+const ROOT = fs.existsSync(MAC_ROOT) ? MAC_ROOT : path.resolve(__dirname, '..');
+const mongoose = require(fs.existsSync(path.join(ROOT, 'node_modules', 'mongoose')) ? path.join(ROOT, 'node_modules', 'mongoose') : 'mongoose');
+
+const MONGODB_URI = (ROOT !== MAC_ROOT && process.env.MONGODB_URI) || fs.readFileSync(process.env.BIMS_ENV_FILE || path.join(ROOT, '.env'), 'utf8')
   .split('\n').find((l) => l.trim().startsWith('MONGODB_URI'))
   .split('=').slice(1).join('=').trim().replace(/^["']|["']$/g, '');
 
@@ -41,12 +56,14 @@ const ROBOTS = {
 const R = ROBOTS[(process.env.ROBOT || 'b07').toLowerCase()];
 if (!R) throw new Error('ROBOT must be b07|b14|r04');
 const HOST = process.env.ROBOT_HOST || R.host;
+// http://<host>:31950 on the LAN, or the https tailnet origin with no port (ot2-robot-host.cjs).
+const RURL = (p) => robotUrl(HOST, p, { slot: process.env.ROBOT || 'b07' });
 const REPO = path.resolve(__dirname, '..');
 const H = { 'opentrons-version': '*' };
 const APPLY = process.env.DEPLOY_APPLY === '1';
 const REQUIRED_RTPS = ['bims_native', 'dispense_depth', 'use_tip_calibration', 'max_tip_adjust', 'run_calibration_check', 'resume_cartridge', 'resume_hole', 'wells_per_tip', 'pause_between_carriers', 'min_tip_clearance'];
 
-const rget = (p) => fetch(`http://${HOST}:31950${p}`, { headers: H, signal: AbortSignal.timeout(90000) }).then((r) => r.json());
+const rget = (p) => fetch(RURL(p), { headers: H, signal: AbortSignal.timeout(90000) }).then((r) => r.json());
 
 async function labwareDefsOfProtocol(pid) {
   const list = (await rget(`/protocols/${pid}/analyses`))?.data ?? [];
@@ -93,14 +110,14 @@ async function main() {
   const form = new FormData();
   form.append('files', new Blob([pyBuf], { type: 'text/x-python' }), 'Wax_Filling_GEN7_Cartridge.py');
   for (const lw of labware) form.append('files', new Blob([lw.json], { type: 'application/json' }), lw.fileName);
-  const up = await fetch(`http://${HOST}:31950/protocols`, { method: 'POST', headers: H, body: form, signal: AbortSignal.timeout(180000) });
+  const up = await fetch(RURL('/protocols'), { method: 'POST', headers: H, body: form, signal: AbortSignal.timeout(180000) });
   const upBody = await up.json();
   if (!up.ok) throw new Error(`upload failed ${up.status}: ${JSON.stringify(upBody).slice(0, 300)}`);
   const pid = upBody?.data?.id;
   console.log(`  uploaded protocolId=${pid}`);
   const cleanup = async (why) => {
     console.log(`  removing rejected upload ${pid} (${why})`);
-    await fetch(`http://${HOST}:31950/protocols/${pid}`, { method: 'DELETE', headers: H }).catch(() => {});
+    await fetch(RURL(`/protocols/${pid}`), { method: 'DELETE', headers: H }).catch(() => {});
   };
 
   let params = null, analysis = null, status = 'pending';

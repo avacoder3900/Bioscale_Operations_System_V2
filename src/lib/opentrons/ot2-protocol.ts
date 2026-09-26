@@ -42,7 +42,29 @@ export type Ot2Verb =
 	| 'mx.moveTo'
 	| 'mx.moveToWell'
 	| 'mx.home'
-	| 'mx.dropTip';
+	| 'mx.dropTip'
+	// OT2-TAILNET-5 S1: the fill-page run lifecycle + protocol upload.
+	| 'run.list'
+	| 'run.create'
+	| 'run.stop'
+	| 'run.commands'
+	| 'run.ensureFresh'
+	| 'run.uploadProtocol'
+	| 'mx.command';
+
+/** The OT2-TAILNET-5 verbs, served on the queue line by POST /verb (not a route each). */
+export const LIFECYCLE_VERBS: ReadonlySet<Ot2Verb> = new Set([
+	'run.list',
+	'run.create',
+	'run.stop',
+	'run.commands',
+	'run.ensureFresh',
+	'run.uploadProtocol',
+	'mx.command'
+]);
+
+/** Lifecycle verbs that only read the robot (manufacturing:read on the queue route). */
+export const READ_ONLY_VERBS: ReadonlySet<Ot2Verb> = new Set(['run.list', 'run.commands', 'run.ensureFresh']);
 
 /**
  * Verbs that move the gantry or take over the maintenance-run engine — deferred
@@ -65,7 +87,16 @@ export const MOTION_VERBS: ReadonlySet<Ot2Verb> = new Set([
  * relative jog would move twice; a second pick-up would find the first tip on
  * and make the client drop a fresh one. Never auto-retried on failover.
  */
-export const NO_RETRY_VERBS: ReadonlySet<Ot2Verb> = new Set(['mx.jog', 'mx.pickUpTip']);
+export const NO_RETRY_VERBS: ReadonlySet<Ot2Verb> = new Set([
+	'mx.jog',
+	'mx.pickUpTip',
+	// A second POST /runs makes a second robot run; a second upload a second
+	// protocol; an arbitrary maintenance command may be relative. Reads and
+	// stops (run.list / run.commands / run.ensureFresh / run.stop) are safe.
+	'run.create',
+	'run.uploadProtocol',
+	'mx.command'
+]);
 
 /** Verbs that need a labware definition from BIMS before touching the robot. */
 export const DEFINITION_VERBS: ReadonlySet<Ot2Verb> = new Set(['mx.loadLabware', 'mx.pickUpTip']);
@@ -99,6 +130,21 @@ export function verbRoute(verb: Ot2Verb, args: Record<string, unknown>): { metho
 			return { method: 'POST', path: `/maintenance/${mr}/home` };
 		case 'mx.dropTip':
 			return { method: 'POST', path: `/maintenance/${mr}/drop-tip` };
+		case 'run.list':
+		case 'run.create':
+		case 'run.stop':
+		case 'run.commands':
+		case 'run.ensureFresh':
+		case 'run.uploadProtocol':
+		case 'mx.command': {
+			// One queue route for every lifecycle verb. The verb and the path params
+			// ride in the query string: the session strips rid/runId from the JSON
+			// body it forwards (they are line-only args for the maintenance routes).
+			const q = new URLSearchParams({ verb });
+			if (args.rid != null && args.rid !== '') q.set('rid', String(args.rid));
+			if (args.runId != null && args.runId !== '') q.set('runId', String(args.runId));
+			return { method: 'POST', path: `/verb?${q.toString()}` };
+		}
 	}
 }
 
@@ -341,15 +387,24 @@ const PROTOCOL_RUN_CONFLICT = 'protocol run is active';
 const ACTIVE_RUN_STATES = new Set(['running', 'finishing']);
 const TERMINAL_RUN_STATES = new Set(['stopped', 'failed', 'succeeded']);
 
-async function currentProtocolRun(t: Ot2Transport): Promise<{ id: string; status: string | null } | null> {
-	const res = await t.get('/runs');
-	if (!res.ok) return null;
-	const body = (await res.json().catch(() => ({}))) as any;
+/**
+ * The robot's CURRENT run from a GET /runs body: `links.current.href` names it,
+ * and its row in `data` carries the status. Null when the robot has no current run.
+ */
+export function currentRunFromList(body: any): { id: string; status: string | null; run: any | null } | null {
 	const href: string = body?.links?.current?.href ?? '';
 	const curId = href ? href.split('/').pop() ?? null : null;
 	if (!curId) return null;
 	const run = (body?.data ?? []).find((r: any) => r.id === curId);
-	return { id: curId, status: run?.status ?? null };
+	return { id: curId, status: run?.status ?? null, run: run ?? null };
+}
+
+async function currentProtocolRun(t: Ot2Transport): Promise<{ id: string; status: string | null } | null> {
+	const res = await t.get('/runs');
+	if (!res.ok) return null;
+	const body = (await res.json().catch(() => ({}))) as any;
+	const cur = currentRunFromList(body);
+	return cur ? { id: cur.id, status: cur.status } : null;
 }
 
 /**
@@ -574,6 +629,20 @@ export async function runVerb(t: Ot2Transport, verb: Ot2Verb, args: Record<strin
 			return runGet(t, String(args.rid));
 		case 'run.action':
 			return runAction(t, String(args.rid), args.action);
+		case 'run.list':
+			return runList(t);
+		case 'run.create':
+			return runCreate(t, args.protocolId, args.runTimeParameterValues);
+		case 'run.stop':
+			return runStop(t, args.rid);
+		case 'run.commands':
+			return runCommands(t, args.rid, args.pageLength, args.maxPages);
+		case 'run.ensureFresh':
+			return runEnsureFresh(t, args);
+		case 'run.uploadProtocol':
+			return runUploadProtocol(t, args);
+		case 'mx.command':
+			return mxCommand(t, args);
 	}
 
 	if (verb === 'mx.open') {
@@ -748,6 +817,787 @@ export async function runVerb(t: Ot2Transport, verb: Ot2Verb, args: Record<strin
 	return fail(400, `unknown verb ${verb}`);
 }
 
+// ── run lifecycle (OT2-TAILNET-5 S1: moved out of the fill-page servers,
+//    protocol-freshness.ts and proxy.ts — same requests, same messages) ──────
+
+/** A robot run command as the fill-page parsers read it. */
+export type RunCommand = { commandType: string; params?: { message?: string } & Record<string, unknown> };
+
+const isFormData = (v: unknown): v is FormData => typeof FormData !== 'undefined' && v instanceof FormData;
+
+async function runList(t: Ot2Transport): Promise<VerbResult> {
+	try {
+		const res = await t.get('/runs');
+		if (!res.ok) return fail(502, `Robot returned ${res.status} listing runs`);
+		const body = (await res.json().catch(() => ({}))) as any;
+		const cur = currentRunFromList(body);
+		const runs = ((body?.data ?? []) as any[]).map((r) => ({
+			id: r?.id ?? null,
+			status: r?.status ?? null,
+			protocolId: r?.protocolId ?? null,
+			createdAt: r?.createdAt ?? null,
+			current: r?.current === true || (!!cur && r?.id === cur.id)
+		}));
+		return ok({
+			currentRunId: cur?.id ?? null,
+			current: cur
+				? { id: cur.id, status: cur.status, protocolId: cur.run?.protocolId ?? null, createdAt: cur.run?.createdAt ?? null }
+				: null,
+			links: body?.links ?? null,
+			runs
+		});
+	} catch (e) {
+		return fail(502, `Failed to reach robot: ${msgOf(e, 'unknown')}`);
+	}
+}
+
+/** POST /runs — was the fill pages' startRun "Create the OT-2 run" block. */
+async function runCreate(t: Ot2Transport, protocolId: unknown, rtp: unknown): Promise<VerbResult> {
+	if (!protocolId || typeof protocolId !== 'string') return fail(400, 'protocolId required');
+	if (rtp != null && (typeof rtp !== 'object' || Array.isArray(rtp))) return fail(400, 'runTimeParameterValues must be an object');
+	const runTimeParameterValues = (rtp ?? {}) as Record<string, unknown>;
+	try {
+		const createRes = await t.post('/runs', {
+			data: {
+				protocolId,
+				...(Object.keys(runTimeParameterValues).length ? { runTimeParameterValues } : {})
+			}
+		});
+		if (!createRes.ok) {
+			const body = await createRes.json().catch(() => ({}));
+			const detail = (body as any).errors?.[0]?.detail ?? `Robot returned ${createRes.status}`;
+			return { status: 502, body: { message: `Couldn't create run on robot: ${detail}`, robotStatus: createRes.status } };
+		}
+		const createBody = await createRes.json();
+		const opentronsRunId = createBody?.data?.id;
+		if (!opentronsRunId) return fail(502, 'Robot returned no run id');
+		return ok({ opentronsRunId });
+	} catch (err) {
+		return fail(502, `Couldn't reach robot: ${err instanceof Error ? err.message : 'unknown'}`);
+	}
+}
+
+/**
+ * Stop a run — was stopRobotRun() in both fill pages. A run that is already
+ * finished / cleared (404, 409, "not found|not allowed|terminal") counts as
+ * stopped. Never fails: the operator's cancel must not be blocked by the robot;
+ * a stop that can't be confirmed comes back as `warning` for the page to show.
+ */
+async function runStop(t: Ot2Transport, rid: unknown): Promise<VerbResult> {
+	if (!rid || typeof rid !== 'string') return fail(400, 'rid required');
+	try {
+		const res = await t.post(`/runs/${rid}/actions`, { data: { actionType: 'stop' } });
+		if (res.ok) return ok({ stopped: true, warning: null });
+		const body = await res.json().catch(() => ({}));
+		const detail = (body as any)?.errors?.[0]?.detail ?? `robot returned ${res.status}`;
+		// Already finished/cleared → nothing to stop, treat as success.
+		if (res.status === 404 || res.status === 409 || /not found|not allowed|terminal/i.test(String(detail))) {
+			return ok({ stopped: false, alreadyTerminal: true, warning: null });
+		}
+		return ok({ stopped: false, warning: `Couldn't stop the run on the robot (${detail}) — confirm on the device.` });
+	} catch (e) {
+		return ok({
+			stopped: false,
+			warning: `Couldn't reach the robot to stop the run (${e instanceof Error ? e.message : 'unknown'}) — confirm on the device.`
+		});
+	}
+}
+
+/** Paging used by the finish parse (one big page) — recordRunFinished's request. */
+export const FINISH_COMMANDS_PAGING = { pageLength: 10000, maxPages: 1 } as const;
+/** Paging used by the wax filled-wells parse — cartsFilledPerRobotLog's loop. */
+export const FILLED_WELLS_PAGING = { pageLength: 999, maxPages: 5 } as const;
+
+/**
+ * GET /runs/{id}/commands, paged exactly as the fill pages did: cursor 0, then
+ * advance by the page's length until meta.totalLength or an empty page. A
+ * non-OK page ends the read with what was collected (the old loops `break`).
+ */
+async function runCommands(t: Ot2Transport, rid: unknown, pageLengthArg: unknown, maxPagesArg: unknown): Promise<VerbResult> {
+	if (!rid || typeof rid !== 'string') return fail(400, 'rid required');
+	const pageLength =
+		isFiniteNum(pageLengthArg) && pageLengthArg > 0 ? Math.min(10000, Math.floor(pageLengthArg)) : FINISH_COMMANDS_PAGING.pageLength;
+	const maxPages = isFiniteNum(maxPagesArg) && maxPagesArg > 0 ? Math.min(10, Math.floor(maxPagesArg)) : FINISH_COMMANDS_PAGING.maxPages;
+	const commands: RunCommand[] = [];
+	let robotStatus: number | null = null;
+	let cursor = 0;
+	try {
+		for (let page = 0; page < maxPages; page++) {
+			const res = await t.get(`/runs/${rid}/commands?cursor=${cursor}&pageLength=${pageLength}`);
+			if (!res.ok) {
+				robotStatus = res.status;
+				break;
+			}
+			const body = await res.json();
+			const cmds = ((body as any)?.data ?? []) as RunCommand[];
+			// Only what the parsers read: keeps the queue relay and the browser light.
+			for (const c of cmds) commands.push({ commandType: c?.commandType, params: c?.params });
+			const total = (body as any)?.meta?.totalLength ?? 0;
+			cursor += cmds.length;
+			if (cursor >= total || cmds.length === 0) break;
+		}
+	} catch (e) {
+		return fail(502, `Failed to read run commands: ${msgOf(e, 'unknown')}`);
+	}
+	return ok({ commands, robotStatus });
+}
+
+/**
+ * Tip tracker parse — was inline in both fill pages' recordRunFinished.
+ * The protocol logs "TIP TRACKER: consumed tip A37 — next tip will be A38 (index 24)"
+ * and "TIP TRACKER: starting from tip A37 (index 24)"; the LAST one wins.
+ */
+export function parseTipTracker(commands: RunCommand[]): { nextTipIndex: number | null; pickUpTipCount: number } {
+	let nextTipIndex: number | null = null;
+	let pickUpTipCount = 0;
+	for (const cmd of commands ?? []) {
+		if (cmd?.commandType === 'pickUpTip') pickUpTipCount += 1;
+		if (cmd?.commandType === 'comment' && cmd.params?.message) {
+			const m = String(cmd.params.message).match(/TIP TRACKER:[\s\S]*?\(index (\d+)\)/);
+			if (m) nextTipIndex = parseInt(m[1], 10);
+		}
+	}
+	return { nextTipIndex, pickUpTipCount };
+}
+
+/**
+ * Wells the wax protocol reports it dispensed into ("Dispensed …uL into well X2"
+ * comments), first-seen order, de-duplicated. Was the parse inside
+ * cartsFilledPerRobotLog; the cart arithmetic is cartsFilledFromWells.
+ */
+export function parseFilledWells(commands: RunCommand[]): string[] {
+	const seen = new Set<string>();
+	const out: string[] = [];
+	for (const c of commands ?? []) {
+		if (c?.commandType !== 'comment') continue;
+		const m = c.params?.message?.match(/Dispensed [\d.]+uL into well ([A-X])(\d+)/);
+		if (!m) continue;
+		const well = m[1] + parseInt(m[2], 10);
+		if (seen.has(well)) continue;
+		seen.add(well);
+		out.push(well);
+	}
+	return out;
+}
+
+/** A well token as parseFilledWells emits it. */
+export const FILLED_WELL_RE = /^([A-X])(\d{1,2})$/;
+
+/**
+ * Which deck positions (1..24) the robot FINISHED: a cart counts only when every
+ * well its row-pattern selection expects got a dispense (4 wax columns × the
+ * active row patterns, default 3). Order = first cart seen, as before.
+ */
+export function cartsFilledFromWells(wells: string[], protocolParameters: Record<string, unknown> | null | undefined): number[] {
+	const wellsPerCart = new Map<number, Set<string>>();
+	for (const w of wells ?? []) {
+		const m = FILLED_WELL_RE.exec(String(w));
+		if (!m) continue;
+		const row = m[1];
+		const col = parseInt(m[2], 10);
+		// carrier from column (wax = even cols 2-24), cart row-band from letter.
+		const carrier = Math.floor((col - 1) / 8); // 0,1,2
+		const band = Math.floor('XWVUTSRQPONMLKJIHGFEDCBA'.indexOf(row) / 3); // 0..7 (X,W,V=0 … C,B,A=7)
+		const cart = carrier * 8 + band + 1; // 1..24
+		if (!wellsPerCart.has(cart)) wellsPerCart.set(cart, new Set());
+		wellsPerCart.get(cart)!.add(row + col);
+	}
+	const pp = (protocolParameters ?? {}) as Record<string, unknown>;
+	const patterns = ['row_pattern_0', 'row_pattern_1', 'row_pattern_2'].filter((k) => pp[k] !== false).length || 3;
+	const expected = 4 * patterns;
+	const filled: number[] = [];
+	for (const [cart, ws] of wellsPerCart) if (ws.size >= expected) filled.push(cart);
+	return filled;
+}
+
+/** loadName → wellName → {x,y,z}: the live Mongo geometry a run bundle must carry. */
+export type ExpectedWells = Record<string, Record<string, { x?: number; y?: number; z?: number }>>;
+
+const FRESH_TOL = 1e-6;
+
+/**
+ * Compare the labware definitions a protocol upload actually resolved (from its
+ * on-robot analysis) against the expected (live Mongo) wells. Only loadNames in
+ * `expected` are compared. Throws when the analysis can't be fetched. Moved
+ * from protocol-freshness.ts bundledDefsMatchMongo.
+ */
+async function bundledDefsMatch(
+	t: Ot2Transport,
+	protocolId: string,
+	expected: ExpectedWells,
+	waitForCompletedMs = 0
+): Promise<{ ok: boolean; detail: string }> {
+	const deadline = Date.now() + waitForCompletedMs;
+	let analysisId: string | null = null;
+	for (;;) {
+		const listRes = await t.get(`/protocols/${protocolId}/analyses`);
+		if (!listRes.ok) throw new Error(`robot returned ${listRes.status} listing analyses`);
+		const list = ((await listRes.json()) as any)?.data ?? [];
+		const completed = list.filter((a: any) => a.status === 'completed');
+		if (completed.length) {
+			analysisId = completed[completed.length - 1].id;
+			break;
+		}
+		if (list.some((a: any) => a.status === 'failed')) throw new Error('protocol analysis failed');
+		if (Date.now() >= deadline) throw new Error('no completed analysis for protocol');
+		await new Promise((r) => setTimeout(r, 3000));
+	}
+	const detRes = await t.get(`/protocols/${protocolId}/analyses/${analysisId}`);
+	if (!detRes.ok) throw new Error(`robot returned ${detRes.status} fetching analysis`);
+	const det = ((await detRes.json()) as any)?.data;
+	if ((det?.errors ?? []).length) throw new Error('protocol analysis completed with errors');
+
+	const has = (k: string) => Object.prototype.hasOwnProperty.call(expected, k);
+	let checked = 0;
+	for (const c of det?.commands ?? []) {
+		if (c.commandType !== 'loadLabware') continue;
+		const def = c.result?.definition;
+		const loadName = def?.parameters?.loadName;
+		if (!loadName || !has(loadName)) continue;
+		const want = expected[loadName] ?? {};
+		const got = def.wells ?? {};
+		for (const wn of Object.keys(want)) {
+			const w = want[wn] ?? {};
+			const g = got[wn];
+			if (!g) return { ok: false, detail: `${loadName} ${wn} missing from bundled def` };
+			if (
+				Math.abs((g.x ?? 0) - (w.x ?? 0)) > FRESH_TOL ||
+				Math.abs((g.y ?? 0) - (w.y ?? 0)) > FRESH_TOL ||
+				Math.abs((g.z ?? 0) - (w.z ?? 0)) > FRESH_TOL
+			) {
+				return { ok: false, detail: `${loadName} ${wn} bundled (${g.x},${g.y},${g.z}) != current (${w.x},${w.y},${w.z})` };
+			}
+		}
+		checked++;
+	}
+	if (!checked) return { ok: false, detail: 'analysis resolved no BIMS-managed labware' };
+	return { ok: true, detail: `${checked} BIMS labware defs verified current` };
+}
+
+/** 200 {ok, detail} when the comparison ran; 502 {message} when it couldn't. */
+async function runEnsureFresh(t: Ot2Transport, args: Record<string, unknown>): Promise<VerbResult> {
+	const protocolId = args.protocolId;
+	if (!protocolId || typeof protocolId !== 'string') return fail(400, 'protocolId required');
+	const expected = args.expectedWells;
+	if (!expected || typeof expected !== 'object' || Array.isArray(expected)) return fail(400, 'expectedWells required');
+	const wait = isFiniteNum(args.waitForCompletedMs) ? Math.max(0, Math.min(180_000, args.waitForCompletedMs)) : 0;
+	try {
+		return ok(await bundledDefsMatch(t, protocolId, expected as ExpectedWells, wait));
+	} catch (e) {
+		return fail(502, msgOf(e, 'freshness check failed'));
+	}
+}
+
+/** Normalized result of uploading + analyzing a protocol on a robot. */
+export interface UploadedProtocolResult {
+	opentronsProtocolId: string;
+	analysisStatus: string;
+	parametersSchema: unknown;
+	labwareDefinitions: unknown;
+	pipettesRequired: unknown;
+	/** Analysis error details when analysisStatus is 'failed' (deploy records them). */
+	analysisErrors?: string[];
+}
+
+/** What the server assembles for an upload: the .py + the BIMS labware it loads. */
+export interface ProtocolUploadBundle {
+	fileName: string;
+	/** The .py as text (stored protocols, the browser) … */
+	fileContent?: string;
+	/** … or its exact bytes, base64 (an uploaded file, byte-for-byte). */
+	fileB64?: string;
+	labware: { fileName: string; json: string }[];
+}
+
+/**
+ * A server transport that already did the upload AND the analysis wait (the
+ * queue's `upload_protocol` bridge job) answers POST /protocols with this field;
+ * the verb then skips its own analysis poll, so the queue path is unchanged.
+ */
+export const PRE_ANALYZED_FIELD = 'bimsUpload';
+
+export const UPLOAD_POST_TIMEOUT_MS = 110_000;
+const ANALYSIS_POLL_MS = 2000;
+const ANALYSIS_BUDGET_MS = 60_000;
+
+/** Pull params/labware/pipettes out of a robot analysis (handles both the
+ *  inlined-result and detail-by-id shapes across robot-server versions). */
+export function parseAnalysis(detail: any): Pick<UploadedProtocolResult, 'parametersSchema' | 'labwareDefinitions' | 'pipettesRequired'> {
+	// runTimeParameters/labware/pipettes are top-level on the analysis; `result`
+	// is a string verdict (e.g. "ok"), so only treat it as the body if it's an object.
+	const body = detail?.result && typeof detail.result === 'object' ? detail.result : (detail ?? {});
+	return {
+		parametersSchema: body.runTimeParameters ?? null,
+		labwareDefinitions: body.labware ?? null,
+		pipettesRequired: body.pipettes ?? null
+	};
+}
+
+function b64ToBytes(b64: string): Uint8Array {
+	const bin = atob(b64);
+	const out = new Uint8Array(bin.length);
+	for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+	return out;
+}
+
+/** The multipart body the OT-2 wants: the .py first, then each labware JSON. */
+export function buildProtocolForm(bundle: ProtocolUploadBundle): FormData {
+	const form = new FormData();
+	const py: BlobPart = bundle.fileB64 != null ? (b64ToBytes(bundle.fileB64) as BlobPart) : String(bundle.fileContent ?? '');
+	form.append('files', new Blob([py], { type: 'text/x-python' }), bundle.fileName);
+	// Bundle the BIMS labware library so the robot resolves custom labware.
+	for (const lw of bundle.labware ?? []) {
+		form.append('files', new Blob([lw.json], { type: 'application/json' }), lw.fileName);
+	}
+	return form;
+}
+
+/**
+ * Multipart POST /protocols + wait for the analysis — the robot half of
+ * proxy.ts robotUploadProtocol (was directUpload). The bundle is assembled by
+ * the server (proxy.ts assembleProtocolUpload); only the transfer runs here.
+ */
+async function runUploadProtocol(t: Ot2Transport, args: Record<string, unknown>): Promise<VerbResult> {
+	const fileName = args.fileName;
+	if (!fileName || typeof fileName !== 'string') return fail(400, 'fileName required');
+	if (typeof args.fileContent !== 'string' && typeof args.fileB64 !== 'string') return fail(400, 'fileContent or fileB64 required');
+	const labware = Array.isArray(args.labware) ? (args.labware as any[]) : [];
+	if (labware.some((l) => !l || typeof l.fileName !== 'string' || typeof l.json !== 'string')) {
+		return fail(400, 'labware entries need fileName + json');
+	}
+	try {
+		const form = buildProtocolForm({
+			fileName,
+			fileContent: typeof args.fileContent === 'string' ? args.fileContent : undefined,
+			fileB64: typeof args.fileB64 === 'string' ? args.fileB64 : undefined,
+			labware
+		});
+		const res = await t.post('/protocols', form, { timeoutMs: UPLOAD_POST_TIMEOUT_MS });
+		if (!res.ok) throw new Error(`robot upload failed (${res.status})`);
+		const posted = (await res.json()) as any;
+		if (posted?.[PRE_ANALYZED_FIELD]) return ok(posted[PRE_ANALYZED_FIELD]);
+		const pid = posted?.data?.id;
+		if (!pid) throw new Error('robot did not return a protocol id');
+
+		let analysisStatus = 'pending';
+		let analysisErrors: string[] | undefined;
+		let parsed: any = { parametersSchema: null, labwareDefinitions: null, pipettesRequired: null };
+		const deadline = Date.now() + ANALYSIS_BUDGET_MS;
+		while (Date.now() < deadline) {
+			await new Promise((r) => setTimeout(r, ANALYSIS_POLL_MS));
+			const ar = await t.get(`/protocols/${pid}/analyses`).catch(() => null);
+			if (!ar || !ar.ok) continue;
+			const analyses = ((await ar.json()) as any)?.data ?? [];
+			if (!analyses.length) continue;
+			const latest = analyses[analyses.length - 1];
+			if (latest.status === 'completed') {
+				let detail: any = latest;
+				const dr = await t.get(`/protocols/${pid}/analyses/${latest.id}`).catch(() => null);
+				if (dr && dr.ok) detail = ((await dr.json()) as any)?.data ?? latest;
+				parsed = parseAnalysis(detail);
+				analysisStatus = 'completed';
+				break;
+			}
+			if (latest.status === 'failed') {
+				analysisStatus = 'failed';
+				analysisErrors = ((latest.errors ?? []) as any[]).map((e) => e?.detail ?? e?.errorType ?? 'Unknown');
+				break;
+			}
+		}
+		return ok({ opentronsProtocolId: pid, analysisStatus, ...parsed, ...(analysisErrors ? { analysisErrors } : {}) });
+	} catch (e) {
+		return fail(502, msgOf(e, 'Failed to upload protocol'));
+	}
+}
+
+/** Generic maintenance command (LPC and other arbitrary commands, S10c). */
+async function mxCommand(t: Ot2Transport, args: Record<string, unknown>): Promise<VerbResult> {
+	const runId = args.runId;
+	const commandType = args.commandType;
+	if (!runId || typeof runId !== 'string') return fail(400, 'runId required');
+	if (!commandType || typeof commandType !== 'string') return fail(400, 'commandType required');
+	const params =
+		args.params && typeof args.params === 'object' && !Array.isArray(args.params) ? (args.params as Record<string, unknown>) : {};
+	const timeoutMs = isFiniteNum(args.timeoutMs) && args.timeoutMs > 0 ? Math.min(120_000, args.timeoutMs) : undefined;
+	try {
+		const body = await sendMaintenanceCommand(t, runId, commandType, params, {
+			waitUntilComplete: args.waitUntilComplete !== false,
+			timeoutMs
+		});
+		return ok({ ok: true, command: body?.data ?? null });
+	} catch (e) {
+		return fail(502, msgOf(e, `Failed to run ${commandType}`));
+	}
+}
+
+// ── two-phase run lifecycle sequences (OT2-TAILNET-5 §7.1) ─────────────────
+//
+// Each fill-page lifecycle action is "server prepare → robot half → server
+// confirm". The ORDER of those steps lives here, once, for both lines:
+//   queue line   the page's single server action runs the sequence with
+//                verb = runVerb(serverTransport(robot)) and steps = direct calls
+//   tailnet line the page runs the same sequence with verb = session.call and
+//                steps = the ?/start… form actions
+// A step returning {error} stops the sequence; its message is what the page shows.
+
+export type Line = 'queue' | 'tailnet';
+export type ProcessType = 'wax-filling' | 'reagent-filling';
+export type StepError = { error: string; status?: number };
+export const isStepError = (v: unknown): v is StepError => !!v && typeof (v as any).error === 'string';
+
+/** A verb call as a sequence sees it. `lineLost` = the direct line dropped mid-call. */
+export type SequenceVerb = (verb: Ot2Verb, args: Record<string, unknown>) => Promise<VerbResult & { lineLost?: boolean }>;
+
+export type StartStepId = 'checking' | 'uploading' | 'verifying' | 'creating' | 'running';
+export type StartStepStatus = 'active' | 'done' | 'failed' | 'skipped';
+
+export interface StartPrepared {
+	token: string;
+	processType: ProcessType;
+	/** The robot's CURRENT protocol entry (the posted id is never trusted). */
+	protocolId: string | null;
+	expectedWells: ExpectedWells;
+	/** RTP values for protocolId's schema; null when there is no current entry. */
+	runTimeParameterValues: Record<string, unknown> | null;
+}
+
+export type StartConfirmObs =
+	| { phase: 'created'; opentronsRunId: string; protocolId: string }
+	| { phase: 'played'; opentronsRunId: string }
+	| { phase: 'failed'; stage: 'freshness' | 'create' | 'play'; message: string; opentronsRunId?: string; uncertain?: boolean };
+
+export interface StartRunSteps {
+	prepare(): Promise<StartPrepared | StepError>;
+	/** The stored .py + labware bundle to re-sync with (only called when stale). */
+	bundle(token: string, staleDetail: string): Promise<ProtocolUploadBundle | StepError>;
+	/** Record the fresh upload on the robot doc; returns the RTP values for its schema. */
+	recordResync(
+		token: string,
+		uploaded: UploadedProtocolResult,
+		from: string | null,
+		reason: string
+	): Promise<{ runTimeParameterValues: Record<string, unknown> } | StepError>;
+	confirm(token: string, obs: StartConfirmObs): Promise<Record<string, unknown> | StepError>;
+	verb: SequenceVerb;
+	onStep?(step: StartStepId, status: StartStepStatus, detail?: string): void;
+}
+
+export type SequenceResult =
+	| { ok: true; opentronsRunId: string; result: Record<string, unknown> }
+	| { ok: false; error: string; status: number };
+
+const bodyMsg = (r: VerbResult, fallback: string) => {
+	const b = (r.body ?? {}) as any;
+	return typeof b.message === 'string' && b.message ? b.message : typeof b.detail === 'string' && b.detail ? b.detail : fallback;
+};
+
+/**
+ * Start a fill run: freshness gate (auto-resync when stale), create, play. The
+ * same steps, order and messages the fill pages' startRun had.
+ */
+export async function startRunSequence(s: StartRunSteps): Promise<SequenceResult> {
+	const step = (id: StartStepId, st: StartStepStatus, d?: string) => s.onStep?.(id, st, d);
+	const prepared = await s.prepare();
+	if (isStepError(prepared)) return { ok: false, error: prepared.error, status: prepared.status ?? 400 };
+	const { token, processType, expectedWells } = prepared;
+
+	const failStart = async (obs: Extract<StartConfirmObs, { phase: 'failed' }>, status = 502): Promise<SequenceResult> => {
+		await s.confirm(token, obs).catch(() => null);
+		return { ok: false, error: obs.message, status };
+	};
+	const freshFail = (msg: string, at: StartStepId) => {
+		step(at, 'failed', msg);
+		return failStart({ phase: 'failed', stage: 'freshness', message: `Deck-calibration freshness check failed: ${msg}` });
+	};
+
+	// 1. Freshness: prove the robot's current bundle carries live calibration.
+	step('checking', 'active');
+	let protocolId = prepared.protocolId;
+	let rtp = prepared.runTimeParameterValues;
+	let staleDetail = 'no protocol entry on robot';
+	let fresh = false;
+	if (protocolId) {
+		const r = await s.verb('run.ensureFresh', { protocolId, expectedWells });
+		const b = (r.body ?? {}) as any;
+		if (r.status === 200 && b.ok === true) fresh = true;
+		else staleDetail = r.status === 200 ? String(b.detail) : `could not verify bundle: ${bodyMsg(r, 'unknown')}`;
+	}
+	if (fresh) {
+		step('checking', 'done');
+		step('uploading', 'skipped');
+		step('verifying', 'skipped');
+	} else {
+		step('checking', 'done', `stale: ${staleDetail}`);
+		// 2. Stale / unverifiable → re-upload the stored .py with the LIVE defs.
+		step('uploading', 'active');
+		const bundle = await s.bundle(token, staleDetail);
+		if (isStepError(bundle)) return freshFail(bundle.error, 'uploading');
+		const up = await s.verb('run.uploadProtocol', bundle as unknown as Record<string, unknown>);
+		if (up.status !== 200) return freshFail(bodyMsg(up, 'upload failed'), 'uploading');
+		const uploaded = up.body as UploadedProtocolResult;
+		const rec = await s.recordResync(token, uploaded, protocolId, staleDetail);
+		if (isStepError(rec)) return freshFail(rec.error, 'uploading');
+		step('uploading', 'done');
+		// Hard gate: prove the FRESH upload carries the live calibration.
+		step('verifying', 'active');
+		const v = await s.verb('run.ensureFresh', {
+			protocolId: uploaded.opentronsProtocolId,
+			expectedWells,
+			waitForCompletedMs: 120_000
+		});
+		if (v.status !== 200) return freshFail(bodyMsg(v, 'verify failed'), 'verifying');
+		if ((v.body as any)?.ok !== true) {
+			return freshFail(`re-synced ${processType} protocol still doesn't match live calibration: ${(v.body as any)?.detail}`, 'verifying');
+		}
+		step('verifying', 'done');
+		protocolId = uploaded.opentronsProtocolId;
+		rtp = rec.runTimeParameterValues;
+	}
+
+	// 3. Create the OT-2 run.
+	step('creating', 'active');
+	const c = await s.verb('run.create', { protocolId, runTimeParameterValues: rtp ?? {} });
+	const opentronsRunId = (c.body as any)?.opentronsRunId as string | undefined;
+	if (c.status !== 200 || !opentronsRunId) {
+		const message = bodyMsg(c, "Couldn't create run on robot");
+		step('creating', 'failed', message);
+		// The answer was lost but the POST may have landed: keep the start intent
+		// so the page's reconcile finds (or rules out) the robot run.
+		return failStart({ phase: 'failed', stage: 'create', message, uncertain: c.lineLost === true });
+	}
+	const created = await s.confirm(token, { phase: 'created', opentronsRunId, protocolId: protocolId as string });
+	if (isStepError(created)) {
+		step('creating', 'failed', created.error);
+		return { ok: false, error: created.error, status: created.status ?? 502 };
+	}
+	step('creating', 'done');
+
+	// 4. Start execution.
+	step('running', 'active');
+	const p = await s.verb('run.action', { rid: opentronsRunId, action: 'play' });
+	if (p.status !== 200) {
+		const b = (p.body ?? {}) as any;
+		// A robot answer carries `detail`; a transport failure only a message.
+		const message =
+			typeof b.detail === 'string'
+				? `Created run ${opentronsRunId} but couldn't start it: ${b.detail}${processType === 'wax-filling' ? '. Operator can play it from the device page.' : '.'}`
+				: `Created run ${opentronsRunId} but couldn't start it: ${bodyMsg(p, 'unknown')}`;
+		step('running', 'failed', message);
+		return failStart({ phase: 'failed', stage: 'play', message, opentronsRunId });
+	}
+	const played = await s.confirm(token, { phase: 'played', opentronsRunId });
+	if (isStepError(played)) {
+		step('running', 'failed', played.error);
+		return { ok: false, error: played.error, status: played.status ?? 502 };
+	}
+	step('running', 'done');
+	return { ok: true, opentronsRunId, result: played };
+}
+
+/** What the finish confirm is told: the robot's final status + the tip parse. */
+export interface FinishObservation {
+	finalStatus: string;
+	tips: { nextTipIndex: number | null; pickUpTipCount: number };
+}
+
+/**
+ * Robot half of Finish: read the run's commands (one 10k page, as before) and
+ * parse the tip tracker. A failed read yields the empty parse, exactly as the
+ * old catch / `if (cmdRes.ok)` did.
+ */
+export async function observeRunFinished(verb: SequenceVerb, rid: string, finalStatus: string): Promise<FinishObservation> {
+	const r = await verb('run.commands', { rid, ...FINISH_COMMANDS_PAGING });
+	const commands = r.status === 200 ? (((r.body as any)?.commands ?? []) as RunCommand[]) : [];
+	return { finalStatus: String(finalStatus ?? '').toLowerCase(), tips: parseTipTracker(commands) };
+}
+
+/** What the cancel/abort confirm is told. filledWells null = not read / read failed. */
+export interface StopObservation {
+	stopWarning: string | null;
+	filledWells: string[] | null;
+}
+
+/**
+ * Robot half of Cancel/Abort: stop the run (404/409/terminal = stopped), then,
+ * for wax runs with carts, read which wells the robot finished.
+ */
+export async function observeRunStopped(verb: SequenceVerb, rid: string, opts: { readFilledWells: boolean }): Promise<StopObservation> {
+	const st = await verb('run.stop', { rid });
+	const b = (st.body ?? {}) as any;
+	const stopWarning =
+		st.status === 200
+			? typeof b.warning === 'string'
+				? b.warning
+				: null
+			: `Couldn't reach the robot to stop the run (${bodyMsg(st, 'unknown')}) — confirm on the device.`;
+	let filledWells: string[] | null = null;
+	if (opts.readFilledWells) {
+		const r = await verb('run.commands', { rid, ...FILLED_WELLS_PAGING });
+		if (r.status === 200) filledWells = parseFilledWells(((r.body as any)?.commands ?? []) as RunCommand[]);
+	}
+	return { stopWarning, filledWells };
+}
+
+// ── tailnet-line drivers (OT2-TAILNET-5 §7.1) ──────────────────────────────
+//
+// What a fill page runs when its robot session is on the direct line. They only
+// wire the page's I/O (its form actions, its session) into the sequences above;
+// the order, the verbs and the parsers are the same objects the queue line uses
+// inside its single server action. No robot logic lives in a component.
+
+/** Posts one of the page's form actions; resolves its data or its error. */
+export type ActionPoster = (
+	action: string,
+	fields: Record<string, string>
+) => Promise<{ ok: true; data: any } | { ok: false; error: string; status: number }>;
+
+/** The part of a RobotSession ($lib/opentrons/direct-client) a driver needs. */
+export interface VerbSession {
+	call(verb: Ot2Verb, args: Record<string, unknown>, init?: { signal?: AbortSignal }): Promise<Response>;
+	readonly state: { transport: string; fellBack?: boolean };
+}
+
+/** The line a confirm is stamped with: the session's line at that moment. */
+export const lineOf = (s: VerbSession | null | undefined): Line => (s?.state.transport === 'direct' ? 'tailnet' : 'queue');
+
+/**
+ * A session's call() as a SequenceVerb. `lineLost` = this very call is what
+ * dropped the direct line (the session answered a NO_RETRY verb with 502 and
+ * did not repeat it), so the robot may have acted even though we have no answer.
+ */
+export function sessionVerb(session: VerbSession): SequenceVerb {
+	return async (verb, args) => {
+		const wasFallenBack = session.state.fellBack === true;
+		const res = await session.call(verb, args);
+		const body = await res.json().catch(() => ({}));
+		return { status: res.status, body, lineLost: !wasFallenBack && session.state.fellBack === true };
+	};
+}
+
+const stepErr = (r: { error: string; status: number }): StepError => ({ error: r.error, status: r.status });
+
+/** FormData (the start panel's form) → the plain string fields an action takes. */
+export function formFields(fd: FormData | Record<string, string>): Record<string, string> {
+	if (typeof FormData !== 'undefined' && fd instanceof FormData) {
+		const out: Record<string, string> = {};
+		for (const [k, v] of fd.entries()) if (typeof v === 'string') out[k] = v;
+		return out;
+	}
+	return { ...(fd as Record<string, string>) };
+}
+
+/**
+ * Start over the session: ?/startPrepare → run.ensureFresh (→ ?/startBundle →
+ * run.uploadProtocol → ?/startRecordResync → run.ensureFresh verify) →
+ * run.create → ?/startConfirm(created) → run.action play → ?/startConfirm(played).
+ * Every server call is short; the long upload + analysis wait run on the robot line.
+ */
+export async function startRunTwoPhase(o: {
+	form: FormData | Record<string, string>;
+	post: ActionPoster;
+	session: VerbSession;
+	onStep?: StartRunSteps['onStep'];
+}): Promise<SequenceResult> {
+	const form = formFields(o.form);
+	const runId = form.runId ?? '';
+	const line = lineOf(o.session);
+	return startRunSequence({
+		prepare: async () => {
+			const r = await o.post('startPrepare', { ...form, line });
+			return r.ok ? (r.data as StartPrepared) : stepErr(r);
+		},
+		bundle: async (token, staleDetail) => {
+			const r = await o.post('startBundle', { runId, token, staleDetail });
+			return r.ok ? (r.data?.bundle as ProtocolUploadBundle) : stepErr(r);
+		},
+		recordResync: async (token, uploaded, from, reason) => {
+			const r = await o.post('startRecordResync', {
+				...form,
+				token,
+				uploaded: JSON.stringify(uploaded),
+				from: from ?? '',
+				reason,
+				line
+			});
+			return r.ok ? { runTimeParameterValues: (r.data?.runTimeParameterValues ?? {}) as Record<string, unknown> } : stepErr(r);
+		},
+		confirm: async (token, obs) => {
+			const r = await o.post('startConfirm', { runId, token, obs: JSON.stringify(obs), line });
+			return r.ok ? ((r.data ?? {}) as Record<string, unknown>) : stepErr(r);
+		},
+		verb: sessionVerb(o.session),
+		onStep: o.onStep
+	});
+}
+
+/** Finish over the session: run.commands + the tip parse, then ?/finishConfirm. */
+export async function finishRunTwoPhase(o: {
+	runId: string;
+	rid: string;
+	finalStatus: string;
+	post: ActionPoster;
+	session: VerbSession;
+}) {
+	const line = lineOf(o.session);
+	const obs = await observeRunFinished(sessionVerb(o.session), o.rid, o.finalStatus);
+	return o.post('finishConfirm', { runId: o.runId, finalStatus: obs.finalStatus, tips: JSON.stringify(obs.tips), line });
+}
+
+/**
+ * Cancel / abort over the session: run.stop (+ the wax filled-wells read), then
+ * ?/cancelConfirm | ?/abortConfirm with the observation. `fields` = the page's
+ * own form fields (reason, photoUrl, …), passed through unchanged.
+ */
+export async function stopRunTwoPhase(o: {
+	action: 'cancel' | 'abort';
+	runId: string;
+	rid: string | null;
+	readFilledWells: boolean;
+	fields?: Record<string, string>;
+	post: ActionPoster;
+	session: VerbSession;
+}) {
+	const line = lineOf(o.session);
+	const obs: StopObservation = o.rid
+		? await observeRunStopped(sessionVerb(o.session), o.rid, { readFilledWells: o.readFilledWells })
+		: { stopWarning: null, filledWells: null };
+	return o.post(o.action === 'cancel' ? 'cancelConfirm' : 'abortConfirm', {
+		...(o.fields ?? {}),
+		runId: o.runId,
+		stopWarning: obs.stopWarning ?? '',
+		filledWells: JSON.stringify(obs.filledWells),
+		line
+	});
+}
+
+/** Run one assembled upload over a verb line; the uploaded protocol or its error. */
+export async function uploadBundle(verb: SequenceVerb, bundle: ProtocolUploadBundle): Promise<UploadedProtocolResult | StepError> {
+	const r = await verb('run.uploadProtocol', bundle as unknown as Record<string, unknown>);
+	if (r.status !== 200) return { error: bodyMsg(r, 'Failed to upload protocol'), status: r.status };
+	return r.body as UploadedProtocolResult;
+}
+
+/**
+ * The shape a browser-reported upload result must have before a server records
+ * it (confirm halves of S4). Null when malformed.
+ */
+export function validUploadedResult(v: unknown): UploadedProtocolResult | null {
+	const u = v as any;
+	if (!u || typeof u !== 'object') return null;
+	if (typeof u.opentronsProtocolId !== 'string' || !/^[A-Za-z0-9_-]{1,100}$/.test(u.opentronsProtocolId)) return null;
+	if (typeof u.analysisStatus !== 'string' || u.analysisStatus.length > 40) return null;
+	if (u.parametersSchema != null && !Array.isArray(u.parametersSchema)) return null;
+	if (u.analysisErrors != null && (!Array.isArray(u.analysisErrors) || u.analysisErrors.some((e: unknown) => typeof e !== 'string'))) return null;
+	return {
+		opentronsProtocolId: u.opentronsProtocolId,
+		analysisStatus: u.analysisStatus,
+		parametersSchema: u.parametersSchema ?? null,
+		labwareDefinitions: u.labwareDefinitions ?? null,
+		pipettesRequired: u.pipettesRequired ?? null,
+		...(Array.isArray(u.analysisErrors) ? { analysisErrors: (u.analysisErrors as string[]).slice(0, 50) } : {})
+	};
+}
+
 // ── browser transport ──────────────────────────────────────────────────────
 
 /**
@@ -763,12 +1613,22 @@ export function browserTransport(directUrl: string, fetchImpl: typeof fetch = fe
 		get: (path, opts) =>
 			fetchImpl(`${base}${path}`, { headers: { 'opentrons-version': '3' }, signal: signalFor(opts?.timeoutMs) }),
 		post: (path, body, opts) =>
-			fetchImpl(`${base}${path}`, {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json', 'opentrons-version': '3' },
-				body: body !== undefined ? JSON.stringify(body) : undefined,
-				signal: signalFor(opts?.timeoutMs)
-			}),
+			isFormData(body)
+				? // Multipart (protocol upload): no JSON content-type — the browser sets
+					// the multipart boundary itself. Same `opentrons-version: *` the
+					// server's direct upload always sent.
+					fetchImpl(`${base}${path}`, {
+						method: 'POST',
+						headers: { 'opentrons-version': '*' },
+						body,
+						signal: signalFor(opts?.timeoutMs)
+					})
+				: fetchImpl(`${base}${path}`, {
+						method: 'POST',
+						headers: { 'Content-Type': 'application/json', 'opentrons-version': '3' },
+						body: body !== undefined ? JSON.stringify(body) : undefined,
+						signal: signalFor(opts?.timeoutMs)
+					}),
 		delete: (path, opts) =>
 			fetchImpl(`${base}${path}`, {
 				method: 'DELETE',

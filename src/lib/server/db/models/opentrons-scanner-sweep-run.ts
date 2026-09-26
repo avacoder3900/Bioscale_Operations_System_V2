@@ -83,7 +83,20 @@ const sweepRunSchema = new Schema(
 		abortReason: String,
 
 		requestedBy: String,
-		requestedByUsername: String
+		requestedByUsername: String,
+
+		// OT2-TAILNET-5 S6. Unset = the queue line (an Ot2BridgeCommand carries
+		// the sweep, exactly as before). 'tailnet' = the browser submitted the
+		// sweep straight to the robot daemon's /bridge job server; bridgeJobId is
+		// that job's id, and the daemon reports progress to
+		// /api/agent/ot2/jobs/<bridgeJobId>/progress instead of the commands route.
+		line: { type: String, enum: ['tailnet'] },
+		bridgeJobId: { type: String, index: { sparse: true } },
+		// Last time the daemon reported on the tailnet job (jobs progress route).
+		// Never set = the browser never submitted the job, or the robot never
+		// started it; GET /api/scanner/sweep/<id> errors such a run after a
+		// generous window instead of leaving it 'running' forever.
+		bridgeLastReportAt: Date
 	},
 	{ timestamps: true }
 );

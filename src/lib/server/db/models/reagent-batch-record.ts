@@ -9,6 +9,25 @@ const correctionSchema = new Schema({
 	reason: String, correctedBy: operatorRef, correctedAt: Date, approvedBy: operatorRef, approvedAt: Date
 }, { _id: false });
 
+/**
+ * Crash-safe marker for the two-phase run start (OT2-TAILNET-5 §7.1). Written by
+ * the start prepare, cleared by the confirm; if the page dies in between, the
+ * load reconcile finds the robot's run (or rules it out) from this. createArgs
+ * holds the server-computed POST /runs arguments, so a confirm never trusts
+ * RTP values from the browser.
+ */
+const startIntentSchema = new Schema({
+	token: String,
+	requestedAt: Date,
+	requestedBy: { _id: String, username: String },
+	line: String, // 'queue' | 'tailnet'
+	opentronsRunId: String,
+	confirmedAt: Date,
+	createArgs: Schema.Types.Mixed,
+	resync: Schema.Types.Mixed,
+	uncertainAt: Date
+}, { _id: false });
+
 const reagentBatchRecordSchema = new Schema({
 	_id: { type: String, default: () => generateId() },
 	runNumber: String,
@@ -127,7 +146,9 @@ const reagentBatchRecordSchema = new Schema({
 		after:  { nextTipIndex: Number, hostname: String, capturedAt: Date },
 		consumed: Number,
 		rackRefilledDuringRun: Boolean
-	}
+	},
+	// Two-phase start marker (OT2-TAILNET-5). Unset except while a start is in flight.
+	startIntent: { type: startIntentSchema, default: undefined },
 }, { timestamps: true });
 
 reagentBatchRecordSchema.index({ 'assayType._id': 1, status: 1 });

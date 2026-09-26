@@ -17,6 +17,15 @@ Three loops (threads):
      so per-slot rescans + teach test-scans keep working untouched.
   3. Heartbeat every HEARTBEAT_INTERVAL_S with metadata.health = the robot's
      local GET /health snapshot.
+  4. (OT2-TAILNET-5 S5, optional) the /bridge job server — a stdlib
+     ThreadingHTTPServer on 127.0.0.1:31960 that Tailscale serves at
+     https://ot2-<slot>.tailf65a70.ts.net/bridge/. A browser on the tailnet
+     submits the SAME job kinds straight to the robot. Direct jobs enter the
+     SAME in-process queue as the long-polled commands and run on the SAME
+     single worker, through the SAME handlers — so queue and /bridge jobs are
+     strictly serial. Only started when BRIDGE_TOKEN_SECRET is set; without it
+     the daemon behaves exactly like 1.0 (no listening socket at all). See the
+     "Tailnet job server" section below for the endpoint + token contract.
 
 Configuration (env vars; run.sh sources .env):
   BIMS_BASE_URL             e.g. https://bims.brevitest.com         (required)
@@ -31,12 +40,23 @@ Configuration (env vars; run.sh sources .env):
   TRIGGER_POLL_INTERVAL_MS  default 500 (legacy trigger queue poll)
   HEARTBEAT_INTERVAL_S      default 10
   SCAN_TIMEOUT_S            default 3 (max wait for serial response)
+  BRIDGE_TOKEN_SECRET       OT2_BRIDGE_TOKEN_SECRET value from BIMS env. Set =
+                            the /bridge job server starts. Unset = no job
+                            server (queue line only, byte-identical to 1.0).
+  BRIDGE_ROBOT_ID           optional: the robot's BIMS _id. When set, a /bridge
+                            token must also carry this robotId (deviceId =
+                            BRIDGE_DEVICE_ID is always checked).
+  BRIDGE_JOB_SERVER_PORT    default 31960 (bound on 127.0.0.1 only)
+  BRIDGE_ALLOWED_ORIGINS    optional comma list of extra exact CORS origins
 
 Dependencies (Python 3.7+):
   pip install pyserial requests
 
 Run:
   python3 ot2-bridge.py     (normally via run.sh / ot2-bridge.service)
+  python3 ot2-bridge.py --mint-token sweep,scan
+                            print a 5-min /bridge token signed with
+                            BRIDGE_TOKEN_SECRET for THIS robot (curl smoke test)
 """
 
 import os
@@ -45,11 +65,17 @@ import glob
 import re
 import time
 import json
+import hmac
 import base64
+import hashlib
+import secrets
 import signal
 import logging
 import threading
 import subprocess
+import urllib.parse
+from collections import OrderedDict, deque
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Optional, Tuple
 
 try:
@@ -65,7 +91,9 @@ except ImportError:
     sys.exit(1)
 
 
-VERSION = "ot2-bridge/1.0"
+# 1.1 = OT2-TAILNET-5 S5: the optional /bridge job server + the shared worker
+# queue. The long-poll, the handlers and every BIMS report are unchanged.
+VERSION = "ot2-bridge/1.1"
 
 # Waveshare GM-class trigger command (returns decoded payload over serial).
 # 0x7E 0x00 0x08 0x01 0x00 0x02 0x01 0xAB 0xCD
@@ -108,6 +136,15 @@ HEARTBEAT_INTERVAL = int(os.environ.get("HEARTBEAT_INTERVAL_S", "10"))
 # scanner scan for up to that long; a 3s window cut off decodes that landed at
 # 3-5s (marginally-aimed positions) and reported them as "empty (ACK only)".
 SCAN_TIMEOUT = float(os.environ.get("SCAN_TIMEOUT_S", "5.5"))
+
+# /bridge job server (OT2-TAILNET-5 S5). Empty secret = the server never starts.
+BRIDGE_TOKEN_SECRET = os.environ.get("BRIDGE_TOKEN_SECRET", "")
+BRIDGE_ROBOT_ID = os.environ.get("BRIDGE_ROBOT_ID", "")
+JOB_SERVER_HOST = "127.0.0.1"  # never 0.0.0.0 — Tailscale serve is the only way in
+JOB_SERVER_PORT = int(os.environ.get("BRIDGE_JOB_SERVER_PORT", "31960"))
+BRIDGE_ALLOWED_ORIGINS = tuple(
+    o.strip().rstrip("/") for o in os.environ.get("BRIDGE_ALLOWED_ORIGINS", "").split(",") if o.strip()
+)
 
 # A scanner USB re-enumeration (bumped cable, flaky hub) invalidates the open
 # file handle. Reads/writes on the dead fd raise termios.error/OSError — NOT
@@ -235,6 +272,12 @@ def _poll_command() -> Optional[dict]:
 def _post_result(command_id: str, payload: dict) -> bool:
     """Complete/fail a command. Retries a couple of times — losing a result
     leaves the BIMS caller hanging until its own timeout."""
+    # A /bridge job running on the worker reports to its own sibling endpoint
+    # (and its local job record). Queue commands never match — this is a
+    # thread-local lookup that is None outside a direct job.
+    job = _direct_job_for(command_id)
+    if job is not None:
+        return _report_direct_result(job, payload)
     url = "{}/api/agent/ot2/commands/{}/result".format(BIMS_BASE_URL, command_id)
     for attempt in range(3):
         try:
@@ -254,6 +297,9 @@ def _post_progress(command_id: str, payload: dict) -> Tuple[bool, bool]:
     """POST sweep progress; returns (pauseRequested, cancelRequested) echoed
     by BIMS. A 409 means the command went terminal server-side — treat as
     cancel. Network blips return (False, False) so one drop doesn't abort."""
+    job = _direct_job_for(command_id)
+    if job is not None:
+        return _report_direct_progress(job, payload)
     url = "{}/api/agent/ot2/commands/{}/progress".format(BIMS_BASE_URL, command_id)
     try:
         r = requests.post(url, headers=_bims_headers(), data=json.dumps(payload), timeout=10)
@@ -1674,18 +1720,809 @@ def execute_command(cmd: dict, port: ScannerPort) -> None:
         _post_result(command_id, {"ok": False, "error": "unknown command kind: {}".format(kind)})
 
 
+# Tailnet job server (OT2-TAILNET-5 S5) ----------------------------------------
+#
+# A browser on the tailnet reaches this daemon through Tailscale serve:
+#
+#   tailscale serve --bg --https=443 --set-path=/bridge http://127.0.0.1:31960
+#
+# Tailscale strips the mount point before proxying (…/bridge/jobs arrives here
+# as /jobs), but this server accepts BOTH forms — with and without the /bridge
+# prefix — so a serve config that forwards the full path works too.
+#
+# Endpoints (all JSON; all need `Authorization: Bearer <token>`):
+#   GET  /bridge/health               cached heartbeat body + daemon version + queue
+#   POST /bridge/jobs                 {kind, payload, jobId?} -> 202 {jobId, status, position}
+#   GET  /bridge/jobs/<id>            -> {jobId, kind, status, progress, result, error, …}
+#   POST /bridge/jobs/<id>/control    {action: pause|resume|cancel} -> the job snapshot
+#   POST /bridge/scan                 {source?, contextRef?} -> {barcode, rawPayload, error}
+#   OPTIONS *                         CORS preflight (no token needed)
+#
+# Status codes: 401 missing/bad/expired token · 403 token valid but wrong robot
+# or kind (scope), or a disallowed Origin · 404 unknown path/job · 409 control
+# not possible in the job's state · 413 body too large · 503 BRIDGE_TOKEN_SECRET
+# unset (the server is not normally started at all in that case).
+#
+# TOKEN WIRE FORMAT — must match src/lib/server/opentrons/bridge-token.ts:
+#   a compact JWS / JWT, HS256:
+#     token   = B64U(header) "." B64U(claims) "." B64U(HMAC_SHA256(secret, B64U(header) "." B64U(claims)))
+#     header  = {"alg":"HS256","typ":"JWT"}   (exactly these bytes when BIMS signs)
+#     claims  = {"aud":"ot2-bridge","robotId":<BIMS robot _id>,"deviceId":<bridge device id>,
+#                "kinds":[<job kinds>],"sub":<username>,"iat":<unix s>,"exp":<unix s>,"jti":<id>}
+#   B64U = base64url, no "=" padding; JSON is compact (no spaces); secret is the
+#   UTF-8 bytes of BRIDGE_TOKEN_SECRET (= BIMS OT2_BRIDGE_TOKEN_SECRET). The
+#   signature is checked over the token's own bytes, so key order never matters
+#   to the verifier. Checks: signature (hmac.compare_digest), alg == HS256,
+#   aud == "ot2-bridge", exp (+30 s clock leeway), deviceId == BRIDGE_DEVICE_ID,
+#   robotId == BRIDGE_ROBOT_ID when that is set, and the requested kind in kinds.
+#   The shared test vector lives in both test files (test_ot2_bridge_server.py,
+#   bridge-token.test.ts).
+
+DIRECT_JOB_KINDS = ("sweep", "deck_scan", "calibrate_tip", "tip_swap_request",
+                    "restart_robot_server", "auto_resume_run")
+# 'scan' is the /bridge/scan test-scan; it is a token kind, not a queued job.
+TOKEN_KINDS = DIRECT_JOB_KINDS + ("scan",)
+TOKEN_AUDIENCE = "ot2-bridge"
+TOKEN_TTL_S = 300
+TOKEN_LEEWAY_S = 30
+JOB_ID_RE = re.compile(r"^[A-Za-z0-9_-]{6,64}$")
+MAX_BODY_BYTES = 2 * 1024 * 1024  # calibrate_tip carries a tiprack definition
+FINISHED_JOBS_KEPT = 50
+JOB_TERMINAL = ("completed", "failed", "cancelled")
+PROGRESS_LOG_KEPT = 200
+
+# The last heartbeat body (heartbeat_loop fills it); /bridge/health serves it.
+_LAST_HEARTBEAT = {"at": None, "metadata": None}
+
+# Set on the worker thread while a DIRECT job executes; the report hooks at the
+# top of _post_result/_post_progress read it. Queue commands never see it.
+_worker_ctx = threading.local()
+
+
+def _direct_job_for(command_id: str):
+    job = getattr(_worker_ctx, "direct_job", None)
+    if job is not None and job.id == command_id:
+        return job
+    return None
+
+
+class DirectJob:
+    """One /bridge job: its local, browser-pollable state. The authoritative
+    record is still BIMS (OpentronsScannerSweepRun / AuditLog via the jobs
+    endpoints) — this is the no-Vercel-hop live view."""
+
+    def __init__(self, job_id: str, kind: str, payload: dict, requested_by: Optional[str] = None):
+        self.id = job_id
+        self.kind = kind
+        self.payload = payload or {}
+        self.requested_by = requested_by
+        self.status = "queued"
+        self.progress = {"slotsDone": 0, "currentSlotIndex": None, "scans": [],
+                         "slotErrors": [], "log": [], "final": None, "updates": 0}
+        self.result = None
+        self.error = None
+        self.created_at = time.time()
+        self.started_at = None
+        self.finished_at = None
+        self.pause_requested = False
+        self.cancel_requested = False
+        self.lock = threading.Lock()
+
+    def is_terminal(self) -> bool:
+        return self.status in JOB_TERMINAL
+
+    def mark_running(self) -> None:
+        with self.lock:
+            self.status = "running"
+            self.started_at = time.time()
+
+    def record_progress(self, payload: dict) -> None:
+        with self.lock:
+            p = self.progress
+            p["updates"] += 1
+            if isinstance(payload.get("slotsDone"), int):
+                p["slotsDone"] = payload["slotsDone"]
+            if isinstance(payload.get("currentSlotIndex"), int):
+                p["currentSlotIndex"] = payload["currentSlotIndex"]
+            if isinstance(payload.get("scan"), dict):
+                p["scans"].append(payload["scan"])
+            if isinstance(payload.get("slotError"), dict):
+                p["slotErrors"].append(payload["slotError"])
+            for entry in (payload.get("log") or [])[:20]:
+                if isinstance(entry, dict):
+                    p["log"].append({"ts": time.time(), "level": entry.get("level", "info"),
+                                     "message": entry.get("message", "")})
+            del p["log"][:-PROGRESS_LOG_KEPT]
+            if isinstance(payload.get("final"), dict):
+                p["final"] = payload["final"]
+
+    def record_result(self, payload: dict) -> None:
+        with self.lock:
+            if payload.get("ok"):
+                body = payload.get("body")
+                self.result = body
+                self.error = None
+                cancelled = isinstance(body, dict) and body.get("status") == "cancelled"
+                self.status = "cancelled" if cancelled else "completed"
+            else:
+                self.error = str(payload.get("error") or "failed")
+                self.status = "failed"
+            self.finished_at = time.time()
+
+    def snapshot(self, position: Optional[int] = None) -> dict:
+        with self.lock:
+            return {
+                "jobId": self.id, "kind": self.kind, "status": self.status,
+                "progress": json.loads(json.dumps(self.progress)),
+                "result": self.result, "error": self.error,
+                "pauseRequested": self.pause_requested, "cancelRequested": self.cancel_requested,
+                "queuePosition": position,
+                "createdAt": self.created_at, "startedAt": self.started_at, "finishedAt": self.finished_at,
+                "requestedBy": self.requested_by,
+            }
+
+
+class JobRegistry:
+    def __init__(self):
+        self._jobs = OrderedDict()
+        self._lock = threading.Lock()
+
+    def add(self, job: DirectJob) -> Tuple[DirectJob, bool]:
+        """Register; returns (job, duplicate). A re-submit of a known jobId gets
+        the EXISTING job back and never runs twice."""
+        with self._lock:
+            existing = self._jobs.get(job.id)
+            if existing is not None:
+                return existing, True
+            self._jobs[job.id] = job
+            self._prune()
+            return job, False
+
+    def get(self, job_id: str) -> Optional[DirectJob]:
+        with self._lock:
+            return self._jobs.get(job_id)
+
+    def _prune(self) -> None:
+        finished = [j for j in self._jobs.values() if j.is_terminal()]
+        for j in finished[:max(0, len(finished) - FINISHED_JOBS_KEPT)]:
+            self._jobs.pop(j.id, None)
+
+
+DIRECT_JOBS = JobRegistry()
+
+
+def _jobs_url(job_id: str, leaf: str) -> str:
+    return "{}/api/agent/ot2/jobs/{}/{}".format(BIMS_BASE_URL, urllib.parse.quote(job_id, safe=""), leaf)
+
+
+def _report_direct_progress(job: DirectJob, payload: dict) -> Tuple[bool, bool]:
+    """A direct job's progress: update the local record (what the browser polls
+    on /bridge/jobs/<id>), then post the SAME body to BIMS
+    /api/agent/ot2/jobs/<id>/progress so OpentronsScannerSweepRun keeps updating
+    with the browser closed. Pause/cancel = local /control flags OR BIMS flags,
+    with the same error semantics as _post_progress."""
+    job.record_progress(payload)
+    bims_pause, bims_cancel = False, False
+    if BIMS_BASE_URL:
+        body = dict(payload)
+        body.update({"deviceId": BRIDGE_DEVICE_ID, "kind": job.kind})
+        try:
+            r = requests.post(_jobs_url(job.id, "progress"), headers=_bims_headers(),
+                              data=json.dumps(body), timeout=10)
+            try:
+                rb = r.json() or {}
+            except Exception:
+                rb = {}
+            if r.status_code >= 400:
+                log.warning("job progress POST %s: %s", r.status_code, r.text[:200])
+                bims_pause, bims_cancel = bool(rb.get("pauseRequested")), bool(rb.get("cancelRequested", True))
+            else:
+                bims_pause, bims_cancel = bool(rb.get("pauseRequested")), bool(rb.get("cancelRequested"))
+        except Exception as e:
+            log.warning("job progress POST failed: %s", e)
+    if bims_cancel:
+        job.cancel_requested = True
+    return (job.pause_requested or bims_pause), (job.cancel_requested or bims_cancel)
+
+
+def _report_direct_result(job: DirectJob, payload: dict) -> bool:
+    """A direct job's result: local record first (the browser sees it at once),
+    then BIMS /api/agent/ot2/jobs/<id>/result with _post_result's retry rules."""
+    job.record_result(payload)
+    if not BIMS_BASE_URL:
+        return True
+    body = dict(payload)
+    body.update({"deviceId": BRIDGE_DEVICE_ID, "kind": job.kind})
+    url = _jobs_url(job.id, "result")
+    for attempt in range(3):
+        try:
+            r = requests.post(url, headers=_bims_headers(), data=json.dumps(body), timeout=10)
+            if r.status_code < 500:
+                if r.status_code >= 400:
+                    log.warning("job result POST %s for %s: %s", r.status_code, job.id, r.text[:200])
+                return r.status_code < 400
+        except Exception as e:
+            log.warning("job result POST failed (attempt %d): %s", attempt + 1, e)
+        time.sleep(2)
+    return False
+
+
+def _finish_cancelled_before_start(job: DirectJob) -> None:
+    """A job cancelled while still queued never touches the robot. A sweep still
+    closes its BIMS SweepRun (it was created 'running' by the prepare half)."""
+    log.info("direct job %s (%s) cancelled before start", job.id, job.kind)
+    if job.kind == "sweep":
+        _report_direct_progress(job, {
+            "sweepRunId": (job.payload or {}).get("sweepRunId"), "slotsDone": 0,
+            "final": {"status": "cancelled", "abortReason": "cancelled before start"},
+            "log": [{"level": "warn", "message": "Sweep cancelled before it started."}],
+        })
+    _report_direct_result(job, {"ok": True, "status": 200,
+                                "body": {"status": "cancelled", "cancelledBeforeStart": True}})
+
+
+# Token ---------------------------------------------------------------------
+class TokenError(Exception):
+    def __init__(self, status: int, message: str):
+        super().__init__(message)
+        self.status = status
+        self.message = message
+
+
+_JWT_HEADER_JSON = '{"alg":"HS256","typ":"JWT"}'
+_B64U_RE = re.compile(r"^[A-Za-z0-9_-]*$")
+
+
+def _b64url_encode(raw: bytes) -> str:
+    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+
+
+def _b64url_decode(seg: str) -> bytes:
+    if not isinstance(seg, str) or not _B64U_RE.match(seg):
+        raise ValueError("not base64url")
+    return base64.urlsafe_b64decode(seg + "=" * (-len(seg) % 4))
+
+
+def sign_bridge_token(claims: dict, secret: str) -> str:
+    """Byte-for-byte the same as BIMS signBridgeToken (bridge-token.ts) for the
+    same claims in the same key order. BIMS mints real tokens; this exists for
+    the shared test vector and the --mint-token smoke test."""
+    header = _b64url_encode(_JWT_HEADER_JSON.encode("ascii"))
+    body = _b64url_encode(json.dumps(claims, separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
+    signing_input = header + "." + body
+    sig = hmac.new(secret.encode("utf-8"), signing_input.encode("ascii"), hashlib.sha256).digest()
+    return signing_input + "." + _b64url_encode(sig)
+
+
+def verify_bridge_token(token: str, secret: str, device_id: str, robot_id: Optional[str] = None,
+                        kind: Optional[str] = None, now: Optional[float] = None) -> dict:
+    """Return the claims, or raise TokenError(401|403|503). 401 = no/bad/expired
+    token; 403 = a genuine token scoped to another robot or other kinds."""
+    if not secret:
+        raise TokenError(503, "job server disabled (BRIDGE_TOKEN_SECRET unset)")
+    if not token:
+        raise TokenError(401, "missing bearer token")
+    parts = token.split(".")
+    if len(parts) != 3:
+        raise TokenError(401, "malformed token")
+    head, body, sig = parts
+    try:
+        expected = hmac.new(secret.encode("utf-8"), (head + "." + body).encode("ascii"), hashlib.sha256).digest()
+        given = _b64url_decode(sig)
+    except Exception:
+        raise TokenError(401, "malformed token")
+    if not hmac.compare_digest(expected, given):
+        raise TokenError(401, "bad token signature")
+    try:
+        header = json.loads(_b64url_decode(head).decode("utf-8"))
+        claims = json.loads(_b64url_decode(body).decode("utf-8"))
+    except Exception:
+        raise TokenError(401, "malformed token")
+    if not isinstance(header, dict) or header.get("alg") != "HS256" or not isinstance(claims, dict):
+        raise TokenError(401, "malformed token")
+    if claims.get("aud") != TOKEN_AUDIENCE:
+        raise TokenError(401, "token is not a bridge token")
+    exp = claims.get("exp")
+    if isinstance(exp, bool) or not isinstance(exp, (int, float)):
+        raise TokenError(401, "token has no exp")
+    if (time.time() if now is None else now) > exp + TOKEN_LEEWAY_S:
+        raise TokenError(401, "token expired")
+    kinds = claims.get("kinds")
+    if not isinstance(kinds, list):
+        raise TokenError(401, "token has no kinds")
+    if claims.get("deviceId") != device_id or (robot_id and claims.get("robotId") != robot_id):
+        raise TokenError(403, "token is for another robot")
+    if kind is not None and kind not in kinds:
+        raise TokenError(403, "token does not allow '{}'".format(kind))
+    return claims
+
+
+# CORS ----------------------------------------------------------------------
+# Only BIMS may read /bridge responses from a browser. The token is the real
+# gate (a page must hold a BIMS session to mint one); this is defence in depth.
+_ORIGIN_PATTERNS = (
+    re.compile(r"^https://bioscale-operations-system-mongodb\.vercel\.app$"),  # production
+    re.compile(r"^https://[a-z0-9-]+-brevitest\.vercel\.app$"),                # previews (team brevitest)
+    re.compile(r"^http://localhost(:[0-9]{1,5})?$"),                           # local dev
+)
+
+
+def _bims_origin() -> Optional[str]:
+    """The origin of BIMS_BASE_URL — whatever BIMS this daemon reports to."""
+    try:
+        u = urllib.parse.urlsplit(BIMS_BASE_URL)
+        if u.scheme in ("http", "https") and u.netloc:
+            return "{}://{}".format(u.scheme, u.netloc)
+    except Exception:
+        pass
+    return None
+
+
+def origin_allowed(origin: Optional[str], extra: tuple = ()) -> bool:
+    if not origin:
+        return False
+    origin = origin.strip()
+    if origin in extra:
+        return True
+    return any(p.match(origin) for p in _ORIGIN_PATTERNS)
+
+
+# HTTP server ---------------------------------------------------------------
+class JobServerContext:
+    """Everything the request handler needs; built once in main() (and by the
+    tests with fakes)."""
+
+    def __init__(self, work: "WorkQueue", port, secret: str, device_id: str, robot_id: str = "",
+                 scanner_device_id: str = "", extra_origins: tuple = (), registry: Optional[JobRegistry] = None):
+        self.work = work
+        self.port = port
+        self.secret = secret
+        self.device_id = device_id
+        self.robot_id = robot_id or None
+        self.scanner_device_id = scanner_device_id
+        self.extra_origins = tuple(extra_origins)
+        self.registry = registry or DIRECT_JOBS
+
+    def submit(self, kind: str, payload: dict, job_id: Optional[str], requested_by: Optional[str]) -> Tuple[DirectJob, bool, Optional[int]]:
+        job, duplicate = self.registry.add(DirectJob(job_id or ("job_" + secrets.token_hex(10)),
+                                                    kind, payload, requested_by))
+        if duplicate:
+            return job, True, self.position(job)
+        position = self.work.put({"source": "direct", "job": job})
+        log.info("/bridge job %s (%s) queued at position %d by %s", job.id, kind, position, requested_by)
+        return job, False, position
+
+    def position(self, job: DirectJob) -> Optional[int]:
+        return self.work.position(lambda i: i.get("source") == "direct" and i.get("job") is job)
+
+    def control(self, job: DirectJob, action: str) -> Tuple[int, dict]:
+        if job.is_terminal():
+            return 409, {"error": "job is already {}".format(job.status)}
+        if action == "cancel":
+            removed = self.work.remove(lambda i: i.get("source") == "direct" and i.get("job") is job)
+            job.cancel_requested = True
+            job.pause_requested = False
+            if removed is not None:
+                # Never started: it is cancelled NOW for the browser; the BIMS
+                # reports (sweep final + job result) go out off the request thread.
+                job.record_result({"ok": True, "status": 200,
+                                   "body": {"status": "cancelled", "cancelledBeforeStart": True}})
+                threading.Thread(target=self._finish_removed, args=(job,), daemon=True).start()
+            elif job.status == "running" and job.kind != "sweep":
+                job.cancel_requested = False
+                return 409, {"error": "a running {} cannot be interrupted".format(job.kind)}
+            return 200, job.snapshot(self.position(job))
+        if job.kind != "sweep":
+            return 409, {"error": "{} only applies to a sweep".format(action)}
+        job.pause_requested = (action == "pause")
+        return 200, job.snapshot(self.position(job))
+
+    @staticmethod
+    def _finish_removed(job: DirectJob) -> None:
+        _worker_ctx.direct_job = job
+        try:
+            _finish_cancelled_before_start(job)
+        finally:
+            _worker_ctx.direct_job = None
+
+    def health(self) -> dict:
+        hb = dict(_LAST_HEARTBEAT)
+        return {
+            "ok": True, "service": "ot2-bridge", "version": VERSION, "jobServer": True,
+            "deviceId": self.device_id, "robotId": self.robot_id,
+            "heartbeat": hb.get("metadata"),
+            "heartbeatAgeS": (round(time.time() - hb["at"], 1) if hb.get("at") else None),
+            "serialOpen": bool(self.port.is_open()) if self.port is not None else False,
+            "serialPort": getattr(self.port, "port", None),
+            "queue": self.work.describe(),
+        }
+
+    def test_scan(self, body: dict) -> dict:
+        """The trigger loop's test-scan, on demand. Same ScannerPort (so the same
+        lock — never concurrent with a sweep's scan), same ScannerEvent report
+        to BIMS; metadata carries the scan id instead of a triggerId."""
+        source = body.get("source") if body.get("source") in ("test", "wax_filling", "reagent_filling", "manual") else "test"
+        ctx_ref = body.get("contextRef") if isinstance(body.get("contextRef"), str) else None
+        scan_id = "scan_" + secrets.token_hex(8)
+        text, raw, err = self.port.trigger_and_read()
+        event = {
+            "deviceId": self.scanner_device_id,
+            "source": source,
+            "contextRef": ctx_ref,
+            "rawPayload": raw,
+            "metadata": {"bridgeScanId": scan_id, "line": "tailnet"},
+        }
+        if err:
+            event.update({"eventType": "error", "errorMessage": err})
+        else:
+            event.update({"eventType": "scan", "barcode": text})
+        posted = _post_event(event) if BIMS_BASE_URL else False
+        return {"scanId": scan_id, "barcode": text, "rawPayload": raw, "error": err, "eventPosted": posted}
+
+
+class BridgeRequestHandler(BaseHTTPRequestHandler):
+    server_version = "ot2-bridge"
+
+    @property
+    def ctx(self) -> JobServerContext:
+        return self.server.ctx  # type: ignore[attr-defined]
+
+    def log_message(self, fmt, *args):  # route http.server's stderr log into ours
+        log.info("bridge-http " + fmt, *args)
+
+    def _path(self) -> str:
+        path = urllib.parse.urlsplit(self.path).path
+        if path == "/bridge" or path.startswith("/bridge/"):
+            path = path[len("/bridge"):]
+        return path.rstrip("/") or "/"
+
+    def _origin_ok(self) -> bool:
+        return origin_allowed(self.headers.get("Origin"), self.ctx.extra_origins)
+
+    def _send(self, status: int, body: dict) -> None:
+        data = json.dumps(body).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-store")
+        if self._origin_ok():
+            self.send_header("Access-Control-Allow-Origin", self.headers.get("Origin").strip())
+            self.send_header("Vary", "Origin")
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _preamble(self) -> bool:
+        """Origin + enabled checks shared by every non-preflight request. A
+        request with no Origin (curl, scripts) passes — the token still gates it."""
+        if self.headers.get("Origin") and not self._origin_ok():
+            self._send(403, {"error": "origin not allowed", "service": "ot2-bridge"})
+            return False
+        if not self.ctx.secret:
+            self._send(503, {"error": "job server disabled (BRIDGE_TOKEN_SECRET unset)", "service": "ot2-bridge"})
+            return False
+        return True
+
+    def _auth(self, kind: Optional[str] = None) -> Optional[dict]:
+        header = self.headers.get("Authorization") or ""
+        token = header[7:].strip() if header[:7].lower() == "bearer " else ""
+        try:
+            return verify_bridge_token(token, self.ctx.secret, self.ctx.device_id, self.ctx.robot_id, kind)
+        except TokenError as e:
+            self._send(e.status, {"error": e.message, "service": "ot2-bridge"})
+            return None
+
+    def _scope(self, claims: dict, kind: str) -> bool:
+        if kind in (claims.get("kinds") or []):
+            return True
+        self._send(403, {"error": "token does not allow '{}'".format(kind), "service": "ot2-bridge"})
+        return False
+
+    def _json_body(self) -> Optional[dict]:
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            length = -1
+        if length < 0 or length > MAX_BODY_BYTES:
+            self._send(413 if length > 0 else 400, {"error": "bad or oversized body"})
+            return None
+        raw = self.rfile.read(length) if length else b""
+        if not raw:
+            return {}
+        try:
+            body = json.loads(raw.decode("utf-8"))
+        except Exception:
+            self._send(400, {"error": "invalid JSON body"})
+            return None
+        if not isinstance(body, dict):
+            self._send(400, {"error": "JSON body must be an object"})
+            return None
+        return body
+
+    def do_OPTIONS(self):
+        if not self._origin_ok():
+            self._send(403, {"error": "origin not allowed", "service": "ot2-bridge"})
+            return
+        self.send_response(204)
+        self.send_header("Access-Control-Allow-Origin", self.headers.get("Origin").strip())
+        self.send_header("Vary", "Origin")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type")
+        self.send_header("Access-Control-Max-Age", "600")
+        # Chrome Private/Local Network Access preflight (public site -> 100.x).
+        if (self.headers.get("Access-Control-Request-Private-Network") or "").lower() == "true":
+            self.send_header("Access-Control-Allow-Private-Network", "true")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def do_GET(self):
+        path = self._path()
+        if path == "/health":
+            if not self._preamble():
+                return
+            if self._auth() is None:
+                return
+            self._send(200, self.ctx.health())
+            return
+        m = re.match(r"^/jobs/([A-Za-z0-9_-]{1,64})$", path)
+        if m:
+            if not self._preamble():
+                return
+            claims = self._auth()
+            if claims is None:
+                return
+            job = self.ctx.registry.get(m.group(1))
+            if job is None:
+                self._send(404, {"error": "unknown job"})
+                return
+            if not self._scope(claims, job.kind):
+                return
+            self._send(200, job.snapshot(self.ctx.position(job)))
+            return
+        self._send(404, {"error": "not found", "service": "ot2-bridge"})
+
+    def do_POST(self):
+        path = self._path()
+        m = re.match(r"^/jobs/([A-Za-z0-9_-]{1,64})/control$", path)
+        if path not in ("/jobs", "/scan") and not m:
+            self._send(404, {"error": "not found", "service": "ot2-bridge"})
+            return
+        if not self._preamble():
+            return
+        claims = self._auth()
+        if claims is None:
+            return
+        body = self._json_body()
+        if body is None:
+            return
+
+        if path == "/jobs":
+            kind = body.get("kind")
+            if kind not in DIRECT_JOB_KINDS:
+                self._send(400, {"error": "kind must be one of {}".format(", ".join(DIRECT_JOB_KINDS))})
+                return
+            if not self._scope(claims, kind):
+                return
+            payload = body.get("payload") if body.get("payload") is not None else {}
+            if not isinstance(payload, dict):
+                self._send(400, {"error": "payload must be an object"})
+                return
+            job_id = body.get("jobId")
+            if job_id is not None and (not isinstance(job_id, str) or not JOB_ID_RE.match(job_id)):
+                self._send(400, {"error": "jobId must match [A-Za-z0-9_-]{6,64}"})
+                return
+            job, duplicate, position = self.ctx.submit(kind, payload, job_id, claims.get("sub"))
+            if duplicate and job.kind != kind:
+                self._send(409, {"error": "jobId already used for a {} job".format(job.kind)})
+                return
+            self._send(200 if duplicate else 202, {"jobId": job.id, "kind": job.kind, "status": job.status,
+                                                   "position": position, "duplicate": duplicate})
+            return
+
+        if path == "/scan":
+            if not self._scope(claims, "scan"):
+                return
+            self._send(200, self.ctx.test_scan(body))
+            return
+
+        job = self.ctx.registry.get(m.group(1))
+        if job is None:
+            self._send(404, {"error": "unknown job"})
+            return
+        if not self._scope(claims, job.kind):
+            return
+        action = body.get("action")
+        if action not in ("pause", "resume", "cancel"):
+            self._send(400, {"error": "action must be pause, resume or cancel"})
+            return
+        status, out = self.ctx.control(job, action)
+        self._send(status, out)
+
+
+class BridgeJobServer(ThreadingHTTPServer):
+    daemon_threads = True
+    allow_reuse_address = True
+
+    def __init__(self, address, ctx: JobServerContext):
+        super().__init__(address, BridgeRequestHandler)
+        self.ctx = ctx
+
+
+def start_job_server(ctx: JobServerContext, host: str = JOB_SERVER_HOST,
+                     port: int = JOB_SERVER_PORT) -> Optional[BridgeJobServer]:
+    """Start the /bridge server on its own thread. A bind failure is logged and
+    swallowed — the queue line must keep working whatever happens here."""
+    if not ctx.secret:
+        log.info("/bridge job server not started: BRIDGE_TOKEN_SECRET unset")
+        return None
+    try:
+        server = BridgeJobServer((host, port), ctx)
+    except Exception as e:
+        log.error("/bridge job server failed to bind %s:%d: %s — queue line unaffected", host, port, e)
+        return None
+    threading.Thread(target=server.serve_forever, name="bridge-http", daemon=True).start()
+    log.info("/bridge job server listening on http://%s:%d (tailscale serve --set-path=/bridge)",
+             host, server.server_address[1])
+    return server
+
+
 # Main loops ------------------------------------------------------------------
-def command_loop(port: ScannerPort, stop: threading.Event) -> None:
-    """Single worker: one command executes at a time; the long-poll resumes
-    after completion."""
+class WorkQueue:
+    """The ONE queue feeding the ONE command worker (OT2-TAILNET-5 §7.3).
+
+    Long-polled Ot2BridgeCommands and /bridge direct jobs are both items here,
+    run FIFO by arrival by a single worker thread — so a queue command and a
+    direct job can never execute concurrently, which is the property the 1.0
+    single-threaded command loop gave us.
+
+    The long-poll only asks BIMS for the next command when the worker is idle
+    AND nothing is waiting here (wait_idle), exactly like 1.0 polled only after
+    the previous command returned — so a claimed command never sits in this
+    queue behind a long local backlog while BIMS thinks it is running. The one
+    residual overlap: a direct job submitted while a long-poll is already held
+    open runs first, and a command that poll then returns waits behind it.
+    """
+
+    def __init__(self):
+        self._cv = threading.Condition()
+        self._items = deque()
+        self._busy = None  # the item the worker is executing, or None
+
+    def put(self, item: dict) -> int:
+        """Append; returns the 1-based position (1 = next to run)."""
+        with self._cv:
+            self._items.append(item)
+            self._cv.notify_all()
+            return len(self._items)
+
+    def take(self, stop: threading.Event, wait_s: float = 0.5) -> Optional[dict]:
+        with self._cv:
+            while not self._items and not stop.is_set():
+                self._cv.wait(wait_s)
+            if not self._items:
+                return None
+            item = self._items.popleft()
+            self._busy = item
+            return item
+
+    def task_done(self) -> None:
+        with self._cv:
+            self._busy = None
+            self._cv.notify_all()
+
+    def remove(self, predicate) -> Optional[dict]:
+        """Remove (and return) the first WAITING item matching predicate. The
+        running item is never removed."""
+        with self._cv:
+            for item in list(self._items):
+                if predicate(item):
+                    self._items.remove(item)
+                    self._cv.notify_all()
+                    return item
+            return None
+
+    def position(self, predicate) -> Optional[int]:
+        """0 = running now, n = n-th waiting, None = not here."""
+        with self._cv:
+            if self._busy is not None and predicate(self._busy):
+                return 0
+            for i, item in enumerate(self._items):
+                if predicate(item):
+                    return i + 1
+            return None
+
+    def idle(self) -> bool:
+        with self._cv:
+            return self._busy is None and not self._items
+
+    def wait_idle(self, stop: threading.Event, timeout: float = 1.0) -> bool:
+        deadline = time.time() + timeout
+        with self._cv:
+            while (self._busy is not None or self._items) and not stop.is_set():
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    return False
+                self._cv.wait(min(remaining, 0.5))
+            return self._busy is None and not self._items
+
+    def describe(self) -> dict:
+        with self._cv:
+            def one(item):
+                if item is None:
+                    return None
+                if item.get("source") == "direct":
+                    return {"source": "direct", "id": item["job"].id, "kind": item["job"].kind}
+                cmd = item.get("cmd") or {}
+                return {"source": "queue", "id": cmd.get("_id"), "kind": cmd.get("kind")}
+            return {"busy": one(self._busy), "waiting": [one(i) for i in self._items]}
+
+
+def command_poll_loop(work: WorkQueue, stop: threading.Event) -> None:
+    """The long-poll half of 1.0's command_loop: ask BIMS for the next command
+    only when the worker is idle, hand it to the ONE worker."""
     while not stop.is_set():
+        if not work.wait_idle(stop, timeout=1.0):
+            continue
+        if stop.is_set():
+            break
         try:
             cmd = _poll_command()
             if cmd:
-                execute_command(cmd, port)
+                work.put({"source": "queue", "cmd": cmd})
         except Exception as e:
             log.warning("command loop error: %s", e)
             stop.wait(ERROR_BACKOFF_S)
+
+
+def run_work_item(item: dict, port: ScannerPort) -> None:
+    """Execute one queue item on the worker thread. Queue commands go through
+    execute_command exactly as in 1.0; direct jobs go through the SAME
+    execute_command with the job id as the command id, and the thread-local
+    marker routes that job's _post_result/_post_progress to the jobs endpoints."""
+    if item.get("source") != "direct":
+        execute_command(item["cmd"], port)
+        return
+    job = item["job"]
+    _worker_ctx.direct_job = job
+    try:
+        if job.cancel_requested:
+            _finish_cancelled_before_start(job)
+            return
+        job.mark_running()
+        try:
+            execute_command({"_id": job.id, "kind": job.kind, "payload": job.payload}, port)
+        except Exception as e:
+            log.error("direct job %s (%s) raised: %s", job.id, job.kind, e)
+            _post_result(job.id, {"ok": False, "error": str(e)})
+        if not job.is_terminal():
+            # Every handler posts a result; this is a belt-and-braces close so a
+            # browser polling /bridge/jobs/<id> never waits forever.
+            job.record_result({"ok": False, "error": "handler returned without a result"})
+    finally:
+        _worker_ctx.direct_job = None
+
+
+def command_worker_loop(port: ScannerPort, work: WorkQueue, stop: threading.Event) -> None:
+    """The ONE worker: one item (queue command or direct job) at a time."""
+    while not stop.is_set():
+        item = work.take(stop)
+        if item is None:
+            continue
+        try:
+            run_work_item(item, port)
+        except Exception as e:
+            log.warning("command loop error: %s", e)
+            stop.wait(ERROR_BACKOFF_S)
+        finally:
+            work.task_done()
+
+
+def command_loop(port: ScannerPort, stop: threading.Event, work: Optional["WorkQueue"] = None) -> None:
+    """1.0-compatible entry point: long-poll + one worker over one queue."""
+    work = work or WorkQueue()
+    poller = threading.Thread(target=command_poll_loop, args=(work, stop), name="command-poll", daemon=True)
+    poller.start()
+    command_worker_loop(port, work, stop)
+    poller.join(timeout=2)
 
 
 def trigger_loop(port: ScannerPort, stop: threading.Event) -> None:
@@ -1738,16 +2575,20 @@ def trigger_loop(port: ScannerPort, stop: threading.Event) -> None:
 def heartbeat_loop(port: ScannerPort, stop: threading.Event) -> None:
     while not stop.is_set():
         try:
+            metadata = {
+                "health": robot_health(),
+                "engine": engine_health(),
+                "version": VERSION,
+                "serialOpen": port.is_open(),
+                "serialPort": port.port
+            }
+            # GET /bridge/health answers from this cache — instant, and the
+            # same body BIMS sees — instead of re-probing the robot per request.
+            _LAST_HEARTBEAT.update({"at": time.time(), "metadata": metadata})
             _post_event({
                 "deviceId": BRIDGE_DEVICE_ID,
                 "eventType": "heartbeat",
-                "metadata": {
-                    "health": robot_health(),
-                    "engine": engine_health(),
-                    "version": VERSION,
-                    "serialOpen": port.is_open(),
-                    "serialPort": port.port
-                }
+                "metadata": metadata
             })
         except Exception as e:
             log.warning("heartbeat loop error: %s", e)
@@ -1772,13 +2613,24 @@ def main() -> None:
     signal.signal(signal.SIGTERM, _shutdown)
     signal.signal(signal.SIGINT, _shutdown)
 
+    work = WorkQueue()
     threads = [
-        threading.Thread(target=command_loop, args=(port, stop), name="command", daemon=True),
+        threading.Thread(target=command_poll_loop, args=(work, stop), name="command-poll", daemon=True),
+        threading.Thread(target=command_worker_loop, args=(port, work, stop), name="command", daemon=True),
         threading.Thread(target=trigger_loop, args=(port, stop), name="trigger", daemon=True),
         threading.Thread(target=heartbeat_loop, args=(port, stop), name="heartbeat", daemon=True),
     ]
     for t in threads:
         t.start()
+
+    job_server = None
+    if BRIDGE_TOKEN_SECRET:
+        job_server = start_job_server(JobServerContext(
+            work=work, port=port, secret=BRIDGE_TOKEN_SECRET, device_id=BRIDGE_DEVICE_ID,
+            robot_id=BRIDGE_ROBOT_ID, scanner_device_id=SCANNER_DEVICE_ID,
+            extra_origins=BRIDGE_ALLOWED_ORIGINS + tuple(o for o in (_bims_origin(),) if o)))
+    else:
+        log.info("/bridge job server disabled (BRIDGE_TOKEN_SECRET unset) — queue line only")
 
     try:
         while not stop.is_set():
@@ -1787,11 +2639,41 @@ def main() -> None:
         stop.set()
 
     log.info("Shutting down")
+    if job_server is not None:
+        try:
+            job_server.shutdown()
+            job_server.server_close()
+        except Exception:
+            pass
     port.close()
     for t in threads:
         t.join(timeout=2)
     log.info("Stopped")
 
 
+def mint_token_cli(argv: list) -> int:
+    """`ot2-bridge.py --mint-token sweep,scan [ttl_s]` — print a token for THIS
+    robot signed with BRIDGE_TOKEN_SECRET. For the curl smoke test only; BIMS
+    mints the real ones (GET /api/opentrons-lab/robots/<id>/bridge-token)."""
+    if not BRIDGE_TOKEN_SECRET or not BRIDGE_DEVICE_ID:
+        print("BRIDGE_TOKEN_SECRET and BRIDGE_DEVICE_ID must be set (source .env first)", file=sys.stderr)
+        return 2
+    kinds = [k for k in (argv[0] if argv else "").split(",") if k]
+    bad = [k for k in kinds if k not in TOKEN_KINDS]
+    if bad:
+        print("unknown kind(s): {} (allowed: {})".format(",".join(bad), ",".join(TOKEN_KINDS)), file=sys.stderr)
+        return 2
+    ttl = int(argv[1]) if len(argv) > 1 else TOKEN_TTL_S
+    now = int(time.time())
+    print(sign_bridge_token(OrderedDict([
+        ("aud", TOKEN_AUDIENCE), ("robotId", BRIDGE_ROBOT_ID), ("deviceId", BRIDGE_DEVICE_ID),
+        ("kinds", kinds), ("sub", "cli-smoke-test"), ("iat", now), ("exp", now + ttl),
+        ("jti", secrets.token_hex(8)),
+    ]), BRIDGE_TOKEN_SECRET))
+    return 0
+
+
 if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] == "--mint-token":
+        sys.exit(mint_token_cli(sys.argv[2:]))
     main()

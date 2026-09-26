@@ -15963,3 +15963,34 @@ pick-up-tip now via the session; the page-UNLOAD close stays a same-origin keepa
 request that reliably survives the page closing).
 test:unit 227/227 (+14); npm run check 87 = baseline. Read-only hardware: shared discoverPipette vs
 B14 over the tailnet → p300_single_gen2/left in 556 ms (B14 had a maintenance run left open).
+
+================================================================================
+2026-09-25/26 — feat/ot2-tailnet-direct — OT2-TAILNET-5 round 1 (workflow): fill lifecycle, Opentrons UI, daemon /bridge
+================================================================================
+Built via workflow ot2-tailnet-everything (run wf_9dda6c50-350; 1 planner + 3 executors on disjoint
+file contracts; ~659k output tokens). PRD docs/prds/OT2-TAILNET-5-EVERYTHING-OVER-TAILNET.md.
+Unit 1 fill lifecycle (S1-S4 + S8 run-record half): new shared verbs run.list/create/stop/commands/
+ensureFresh/uploadProtocol + mx.command and the tip-tracker / filled-well parsers in ot2-protocol.ts;
+multipart via FormData (serverTransport routes it to proxy's upload path, so the queue still uses the
+upload_protocol bridge kind); queue route POST /api/opentrons-lab/robots/[id]/verb (allowlisted);
+run-lifecycle-records.ts holds the BIMS halves split from the wax/reagent page servers (idempotent
+confirms, line stamped in AuditLog); startIntent subdoc on WaxFillingRun/ReagentBatchRecord + load
+reconcile + 'start interrupted' banner; prepare/confirm actions and page wiring; deck-cal Sync,
+robots/[id]/protocols POST and protocols/deploy on the same shape; robots/[id]/protocols GET via robotGet.
+Unit 2 Opentrons UI (S7, S8 poller half, S10a-d): isomorphic robot-client.ts (openapi-fetch, injected
+fetch), RobotSession.robotFetch, generic /relay queue route, every /opentrons-clone page + the legacy
+/opentrons device/run/protocol pages load in the browser via the session; /api/opentrons-clone/**
+removed; health-poller + health-stream SSE retired; signed expiring operator cookie (a hand-set 'ok'
+no longer passes).
+Unit 3 daemon (S5, S6 server halves, S9): ot2-bridge.py /bridge ThreadingHTTPServer on 127.0.0.1:31960
+with HMAC token + CORS allowlist + ONE WorkQueue shared with the long-poll; bridge-token lib + route;
+browser bridge-client.ts; jobs sweep-progress endpoints; provision script scripts/ot2-tailnet-provision.sh
+(serve --set-path=/bridge, secret via stdin); scripts accept tailnet ROBOT_HOST (ot2-robot-host.cjs);
+connectivity page Daemon column.
+Integration: main loop fixed 5 type errors (env typing into operatorCookieSecret, 2 test call sites).
+test:unit 386/386 (24 files); python -m unittest test_ot2_bridge_server 19 OK; npm run check 87 =
+baseline, 0 in feature files.
+NOT verified on hardware (no robot calls, no redeploy): all robot ACs. Known gaps for round 2: pages do
+not yet submit sweeps/deck-scan/calibrate-tip/tip-swap/auto-resume/restart to /bridge; relay lacks PUT;
+LPC still uses robot-client maintenanceCommand instead of session mx.command.
+Needs the user: OT2_BRIDGE_TOKEN_SECRET (Preview env + B14 via provision script); B14 daemon redeploy.

@@ -9,13 +9,20 @@ import { recordTransaction, resolvePartId } from '$lib/server/services/inventory
 import { findBucketLabels } from '$lib/server/services/bucket-service';
 import { checkRobotConflict, checkDeckConflict, checkTrayConflict } from '$lib/server/manufacturing/resource-locks';
 import { WAX_PAGE_OWNED } from '$lib/server/manufacturing/run-statuses';
-import { getRobot, robotGet, robotPost, bridgeDeviceIdForRobot } from '$lib/server/opentrons/proxy';
-import { calibrationRtpValues } from '$lib/server/opentrons/calibration-rtps';
-import { ensureFreshRunProtocol } from '$lib/server/opentrons/protocol-freshness';
-import { resolveDeckBinding, DeckBindingError } from '$lib/server/services/deck-calibration/run-guard';
-import { isHardenedRobot } from '$lib/server/services/deck-calibration/rollout';
-import { OpentronsRunRecord } from '$lib/server/db';
-import { estimateReagentRunSeconds } from '$lib/manufacturing/reagent-run-estimate';
+import { getRobot, robotGet, bridgeDeviceIdForRobot } from '$lib/server/opentrons/proxy';
+import { requirePermission } from '$lib/server/permissions';
+// OT2-TAILNET-5 §7.1: the run lifecycle's BIMS halves (moved out of this file,
+// unchanged) + the prepare/confirm actions the tailnet line calls.
+import {
+	finalizeReagentRun,
+	startRunQueue,
+	recordRunFinishedQueue,
+	stopRunQueue,
+	reconcileStartIntent,
+	setRunRecordStatus,
+	lifecycleActions,
+	isActionFail
+} from '$lib/server/opentrons/run-lifecycle-records';
 import { isReagentEligible } from '$lib/shared/cartridge-wax-status';
 import type { PageServerLoad, Actions } from './$types';
 
@@ -49,7 +56,8 @@ function emptyReagentState(robotId: string, loadError?: string) {
 			cartridgeCount: 0, runStartTime: null, runEndTime: null,
 			opentronsRunId: null as string | null,
 			opentronsRunFinalStatus: null as string | null,
-			protocolParameters: null as Record<string, unknown> | null
+			protocolParameters: null as Record<string, unknown> | null,
+			startInterrupted: null as string | null
 		},
 		activeReagentLots: {} as Record<string, any[]>,
 		assayTypes: [] as { id: string; name: string; skuCode: string | null; isActive: boolean; reagents: { wellPosition: number; reagentName: string }[] }[],
@@ -78,6 +86,7 @@ function emptyReagentState(robotId: string, loadError?: string) {
 
 export const load: PageServerLoad = async ({ locals, url, parent }) => {
 	if (!locals.user) redirect(302, '/login');
+	requirePermission(locals.user, 'reagentFilling:read');
 
 	// Get robotId from layout before DB calls
 	let layoutData: Awaited<ReturnType<typeof parent>>;
@@ -132,6 +141,16 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 			}).sort({ createdAt: -1 }).lean().catch(() => null);
 		}
 
+		// Two-phase start (OT2-TAILNET-5): a start whose page died between "robot
+		// started" and "confirm" left startIntent set. Find the robot's run and
+		// confirm it, or clear the intent once nothing can still be in flight.
+		let startInterrupted: string | null = null;
+		if (activeRun?.startIntent?.token) {
+			const rec = await reconcileStartIntent('reagent', activeRun, { _id: locals.user._id, username: locals.user.username });
+			startInterrupted = rec.banner;
+			if (rec.changed) activeRun = await ReagentBatchRecord.findById(activeRun._id).lean().catch(() => activeRun);
+		}
+
 		// SELF-HEAL (2026-08-28, parity with wax): finalize a finished run on
 		// the next visit if no browser tab was alive to do it — the robot must
 		// not stay locked (and the carts unstamped) because a tab closed at the
@@ -158,6 +177,7 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 						{ _id: locals.user._id, username: locals.user.username },
 						'auto (load reconcile)'
 					);
+					await setRunRecordStatus(String(activeRun._id), activeRun.opentronsRunId, 'succeeded');
 					activeRun = null; // page renders idle — run is done
 				}
 			} catch (e) {
@@ -233,9 +253,11 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 				// Terminal .py status (stamped by recordRunFinished) — gates the
 				// run-complete UI (Complete + Run again) on the Running stage, on reload too.
 				opentronsRunFinalStatus: activeRun.opentronsRunFinalStatus ?? null,
-				protocolParameters: activeRun.protocolParameters ?? null
+				protocolParameters: activeRun.protocolParameters ?? null,
+				// "start interrupted — check robot" (a start intent older than 10 min).
+				startInterrupted
 			}
-			: { hasActiveRun: false, stage: null, assayTypeName: null, assayTypeId: null, isResearch: false, cartridgeCount: 0, runStartTime: null, runEndTime: null, opentronsRunId: null, opentronsRunFinalStatus: null, protocolParameters: null };
+			: { hasActiveRun: false, stage: null, assayTypeName: null, assayTypeId: null, isResearch: false, cartridgeCount: 0, runStartTime: null, runEndTime: null, opentronsRunId: null, opentronsRunFinalStatus: null, protocolParameters: null, startInterrupted: null };
 
 		// Serialize cartridges
 		const cartridges = (activeRun?.cartridgesFilled ?? []).map((cf: any) => ({
@@ -349,195 +371,8 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 	}
 };
 
-/**
- * Best-effort stop of the OT-2 run backing a reagent run, BEFORE marking it
- * aborted/cancelled in BIMS. Without this the UI exited but the robot kept
- * running. Resilient: never-started, already-terminal, or unreachable cases
- * don't block the operator. Returns a warning string when the stop couldn't be
- * confirmed, else null. `run` must be selected with `opentronsRunId` + `robot`.
- */
-async function stopRobotRun(run: any): Promise<string | null> {
-	const opentronsRunId: string | undefined = run?.opentronsRunId;
-	const robotId: string | undefined = run?.robot?._id;
-	if (!opentronsRunId || !robotId) return null; // never started on a robot
-
-	try {
-		const robot = await getRobot(robotId);
-		if (!robot) return `Robot ${robotId} is offline — confirm the run is stopped on the device.`;
-		const res = await robotPost(robot, `/runs/${opentronsRunId}/actions`, {
-			data: { actionType: 'stop' }
-		});
-		if (res.ok) return null;
-		const body = await res.json().catch(() => ({}));
-		const detail = (body as any)?.errors?.[0]?.detail ?? `robot returned ${res.status}`;
-		if (res.status === 404 || res.status === 409 || /not found|not allowed|terminal/i.test(String(detail))) {
-			return null;
-		}
-		return `Couldn't stop the run on the robot (${detail}) — confirm on the device.`;
-	} catch (e) {
-		return `Couldn't reach the robot to stop the run (${e instanceof Error ? e.message : 'unknown'}) — confirm on the device.`;
-	}
-}
-
-/**
- * Statuses a cartridge can legitimately hold while it waits for its reagent
- * fill to be recorded. finalizeReagentRun only advances `status` from these —
- * a cart that has already moved on (linked into a research experiment,
- * underway, completed) keeps its status and only gains the reagentFilling
- * stamp. Guards against a deferred completion regressing live experiment
- * carts (2026-08-28: a Complete clicked 2h after the run knocked 22
- * experiment-350 carts from linked/tested back to reagent_filled).
- */
-const PRE_REAGENT_STATUSES = ['backing', 'wax_filled', 'wax_qc', 'wax_ready', 'wax_stored'];
-
-/**
- * Finalize a reagent run (REAGENT-TOPSEAL-IMPLICIT): run → Completed, robot
- * released, cartridges stamped reagent_filled, tube + top-seal inventory
- * consumed. Idempotent — callable from recordRunFinished (auto, the moment
- * the .py succeeds), the load-time reconcile, and the manual Complete button.
- */
-async function finalizeReagentRun(
-	runId: string,
-	user: { _id: string; username: string },
-	trigger: string
-): Promise<{ ok: true } | { notFound: true }> {
-	const now = new Date();
-
-	// Idempotency: auto-complete, load reconcile, and the button can race.
-	const existing = await ReagentBatchRecord.findById(runId).select('status finalizedAt').lean() as any;
-	if (!existing) return { notFound: true };
-	if (existing.status === 'Completed' || existing.finalizedAt) return { ok: true };
-
-	const run = await ReagentBatchRecord.findByIdAndUpdate(runId, {
-		$set: {
-			status: 'Completed',
-			finalizedAt: now,
-			runEndTime: now,
-			// Robot is physically free as of now — releases the robot lock so
-			// the next wax/reagent run can start.
-			robotReleasedAt: now
-		}
-	}, { new: true }).lean() as any;
-
-	// Write reagentFilling phase to cartridges (WRITE-ONCE). Research runs
-	// leave assayType null on each cartridge — downstream UIs must treat
-	// reagentFilling.isResearch === true as "assay intentionally blank".
-	if (run?.cartridgesFilled?.length) {
-		const isResearch = run.isResearch === true;
-		const bulkOps = run.cartridgesFilled.flatMap((cf: any) => {
-			const stamp = {
-				'reagentFilling.runId': run._id,
-				'reagentFilling.robotId': run.robot?._id,
-				'reagentFilling.robotName': run.robot?.name,
-				'reagentFilling.assayType': isResearch ? null : run.assayType,
-				'reagentFilling.isResearch': isResearch,
-				'reagentFilling.deckPosition': cf.deckPosition,
-				'reagentFilling.tubeRecords': run.tubeRecords,
-				'reagentFilling.operator': run.operator,
-				'reagentFilling.fillDate': now,
-				'reagentFilling.recordedAt': now
-			};
-			return [
-				{
-					updateOne: {
-						filter: {
-							_id: cf.cartridgeId,
-							'reagentFilling.recordedAt': { $exists: false },
-							status: { $in: PRE_REAGENT_STATUSES }
-						},
-						update: { $set: { ...stamp, status: 'reagent_filled' } }
-					}
-				},
-				// Cart already moved past the fill (e.g. linked into a research
-				// experiment while the run sat unfinalized): record the fill
-				// data but leave its status alone.
-				{
-					updateOne: {
-						filter: {
-							_id: cf.cartridgeId,
-							'reagentFilling.recordedAt': { $exists: false },
-							status: { $nin: PRE_REAGENT_STATUSES }
-						},
-						update: { $set: stamp }
-					}
-				}
-			];
-		});
-		await CartridgeRecord.bulkWrite(bulkOps);
-
-		// Consume 2ml tubes (PT-CT-107) — FLAT 4 TUBES PER RUN regardless of
-		// cartridge count (1–24). Research runs consume the same 4 tubes.
-		// TODO: revisit — eventually the tube count should vary per assay
-		// (e.g., # of reagents × batch size) rather than a flat 4.
-		const tubePartId = await resolvePartId('PT-CT-107');
-		await recordTransaction({
-			transactionType: 'consumption',
-			partDefinitionId: tubePartId ?? undefined,
-			quantity: 4,
-			manufacturingStep: 'reagent_filling',
-			manufacturingRunId: String(run._id),
-			operatorId: run.operator?._id,
-			operatorUsername: run.operator?.username,
-			notes: run.isResearch
-				? `Reagent filling run — 4x 2ml tubes (research run, ${run.cartridgesFilled.length} cartridges)`
-				: `Reagent filling run — 4x 2ml tubes (assay: ${run.assayType?.name ?? 'unknown'}, ${run.cartridgesFilled.length} cartridges)`
-		});
-
-		// Consume top-seal cut sheets (PT-CT-113) — implicit top seal. One
-		// sheet seals up to `topSealCutting.cartridgesPerSheet` carts (default
-		// 12); partial sheets count as fully consumed. This used to happen per
-		// seal batch on the (now removed) Top Sealing step; deducting at fill
-		// completion may slightly over-count when operators split batches,
-		// which is acceptable (decision 2026-08-19 — cut sheets are cheap).
-		// No lot linkage: the sheet lot is no longer scanned.
-		const cutSheetPartId = await resolvePartId('PT-CT-113');
-		if (cutSheetPartId) {
-			const settingsDoc = await ManufacturingSettings.findById('default').lean().catch(() => null) as any;
-			const perSheet = Math.max(1, Number(settingsDoc?.topSealCutting?.cartridgesPerSheet ?? 12));
-			const sheets = Math.ceil(run.cartridgesFilled.length / perSheet);
-			await recordTransaction({
-				transactionType: 'consumption',
-				partDefinitionId: cutSheetPartId,
-				quantity: sheets,
-				manufacturingStep: 'top_seal',
-				manufacturingRunId: String(run._id),
-				operatorId: run.operator?._id,
-				operatorUsername: run.operator?.username,
-				notes: `Reagent filling run complete — ${sheets} top-seal cut sheet(s) for ${run.cartridgesFilled.length} cartridges (implicit top seal, ${perSheet}/sheet)`
-			});
-		}
-	}
-
-	// Deck usage log (was in the old completeRun action on Opentron Control).
-	if (run?.deckId) {
-		const cartridgeCount = run?.cartridgesFilled?.length ?? 0;
-		await Equipment.findByIdAndUpdate(run.deckId, {
-			$set: { lastUsed: now },
-			$push: {
-				usageLog: {
-					_id: generateId(),
-					usageType: 'run_complete', runId: run._id,
-					quantityChanged: cartridgeCount,
-					operator: { _id: user._id, username: user.username },
-					notes: `Reagent filling run complete — ${cartridgeCount} cartridges filled`,
-					createdAt: now
-				}
-			}
-		}).catch((e: unknown) => console.error('[reagent-filling] deck usageLog failed:', e));
-	}
-
-	await AuditLog.create({
-		_id: generateId(),
-		tableName: 'reagent_batch_records',
-		recordId: runId,
-		action: 'UPDATE',
-		changedBy: user.username,
-		changedAt: now,
-		newData: { status: 'Completed', cartridgeStatus: 'reagent_filled', trigger }
-	});
-
-	return { ok: true };
-}
+// stopRobotRun, PRE_REAGENT_STATUSES and finalizeReagentRun moved to
+// $lib/server/opentrons/run-lifecycle-records (the stop is the shared 'run.stop' verb).
 
 export const actions: Actions = {
 	/** Create a new run */
@@ -875,238 +710,19 @@ export const actions: Actions = {
 	 * onto the ReagentBatchRecord. Status flips Loading→Running atomically
 	 * with the OT-2 work.
 	 */
+	/**
+	 * Start the run — the queue line's single action. Same guards, freshness gate
+	 * (auto-resync when stale), create, play and records as before, now composed
+	 * from the shared prepare → robot half (runVerb over the server transport) →
+	 * confirm. The tailnet line runs the same steps via ?/startPrepare … ?/startConfirm.
+	 */
 	startRun: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
 		await connectDB();
-
 		const data = await request.formData();
-		const runId = data.get('runId') as string;
-		const opentronsProtocolId = data.get('opentronsProtocolId')?.toString();
-		if (!runId) return fail(400, { error: 'runId is required' });
-		if (!opentronsProtocolId) return fail(400, { error: 'opentronsProtocolId is required (pick a protocol)' });
-
-		const run = await ReagentBatchRecord.findById(runId).lean() as any;
-		if (!run) return fail(404, { error: 'Reagent run not found' });
-		const robotId = run.robot?._id;
-		if (!robotId) return fail(400, { error: 'Reagent run has no robot assigned' });
-
-		const robot = await getRobot(robotId);
-		if (!robot) return fail(404, { error: `Robot ${robotId} not found / not active` });
-
-		// Deck identity guard. BIMS knows which deck the operator selected; the
-		// robot picks its cartridge-deck definition independently, from a Particle
-		// id it reads over serial. Prove the selected deck is actually bound to a
-		// real definition before moving a pipette — an unbound or dangling deck is
-		// how a calibrated deck ends up filling at someone else's coordinates.
-		let deckBinding;
-		try {
-			deckBinding = await resolveDeckBinding(run?.deckId ?? null, {
-				enforce: isHardenedRobot(robot)
-			});
-		} catch (e) {
-			if (e instanceof DeckBindingError) return fail(400, { error: e.message });
-			throw e;
-		}
-		if (deckBinding.warning) console.warn('[reagent-filling startRun] ' + deckBinding.warning);
-
-
-		// Freshness gate: resolve the robot's CURRENT reagent protocol server-side
-		// and prove its bundled deck calibration matches live Mongo; auto-resync if
-		// not. The posted opentronsProtocolId is intentionally NOT trusted — a page
-		// loaded before a Sync would post the older upload, which still exists on
-		// the robot and would silently run stale geometry.
-		let protocol: { opentronsProtocolId: string; parametersSchema: any[] | null };
-		try {
-			protocol = await ensureFreshRunProtocol(robot, String(robotId), 'reagent-filling', locals.user.username);
-		} catch (e) {
-			return fail(502, {
-				error: `Deck-calibration freshness check failed: ${e instanceof Error ? e.message : 'unknown'}`
-			});
-		}
-		const runProtocolId = protocol.opentronsProtocolId;
-
-		const paramSchema = (protocol.parametersSchema ?? []) as Array<{
-			variableName: string;
-			type?: 'int' | 'float' | 'bool' | 'str';
-			default?: unknown;
-		}>;
-
-		const runTimeParameterValues: Record<string, number | string | boolean> = {};
-		const protocolParameters: Record<string, number | string | boolean> = {};
-		for (const def of paramSchema) {
-			const raw = data.get(`param_${def.variableName}`);
-			if (raw === null) {
-				if (def.default !== undefined && def.default !== null) {
-					runTimeParameterValues[def.variableName] = def.default as any;
-					protocolParameters[def.variableName] = def.default as any;
-				}
-				continue;
-			}
-			let value: number | string | boolean;
-			const s = raw.toString();
-			if (def.type === 'bool') value = s === 'true' || s === 'on';
-			else if (def.type === 'int') value = parseInt(s, 10);
-			else if (def.type === 'float') value = parseFloat(s);
-			else value = s;
-			runTimeParameterValues[def.variableName] = value;
-			protocolParameters[def.variableName] = value;
-		}
-
-		// PRD 6: inject BIMS-native calibration params (global offset + calibrator
-		// point) for robots with a captured offset. No-op for the pre-cutover .py.
-		// Deck-keyed calibrator (2026-08-28): the fixture is bolted to the carriage,
-		// so the run gets the point taught for the deck that is physically mounted —
-		// deckBinding.particleDeviceId is the same id the .py reads at run start.
-		const calRtps = await calibrationRtpValues(String(robotId), 'reagent-filling', paramSchema as any, {
-			deckKey: deckBinding.particleDeviceId,
-			deckLoadName: deckBinding.deckLoadName
-		});
-		Object.assign(runTimeParameterValues, calRtps);
-		Object.assign(protocolParameters, calRtps);
-
-		// Create the OT-2 run.
-		let opentronsRunId: string;
-		try {
-			const createRes = await robotPost(robot, '/runs', {
-				data: {
-					protocolId: runProtocolId,
-					...(Object.keys(runTimeParameterValues).length ? { runTimeParameterValues } : {})
-				}
-			});
-			if (!createRes.ok) {
-				const body = await createRes.json().catch(() => ({}));
-				const detail = (body as any).errors?.[0]?.detail ?? `Robot returned ${createRes.status}`;
-				return fail(502, { error: `Couldn't create run on robot: ${detail}` });
-			}
-			const createBody = await createRes.json();
-			opentronsRunId = createBody?.data?.id;
-			if (!opentronsRunId) return fail(502, { error: 'Robot returned no run id' });
-
-		// Geometry provenance. Record exactly which deck definition, at which
-		// version and content hash, this run was started against — the definition
-		// is edited in place, so these coordinates stop existing the moment anyone
-		// jogs the deck again.
-		try {
-			await OpentronsRunRecord.create({
-				_id: generateId(),
-				manufacturingRunId: String(runId),
-				manufacturingRunType: 'reagent-filling',
-				robotId: String(robotId),
-				robotName: robot.name ?? null,
-				opentronsRunId,
-				opentronsProtocolId: runProtocolId,
-				runtimeParameters: runTimeParameterValues,
-				deckGeometry: deckBinding,
-				status: 'created',
-				robotCreatedAt: new Date(),
-				startedBy: locals.user.username
-			});
-		} catch (e) {
-			// Provenance must never block a fill that the robot already accepted.
-			console.error('[reagent-filling startRun] could not write run record:', e instanceof Error ? e.message : e);
-		}
-		} catch (err) {
-			return fail(502, {
-				error: `Couldn't reach robot: ${err instanceof Error ? err.message : 'unknown'}`
-			});
-		}
-
-		// Start execution.
-		try {
-			const playRes = await robotPost(robot, `/runs/${opentronsRunId}/actions`, {
-				data: { actionType: 'play' }
-			});
-			if (!playRes.ok) {
-				const body = await playRes.json().catch(() => ({}));
-				const detail = (body as any).errors?.[0]?.detail ?? `Robot returned ${playRes.status}`;
-				return fail(502, {
-					error: `Created run ${opentronsRunId} but couldn't start it: ${detail}.`
-				});
-			}
-		} catch (err) {
-			return fail(502, {
-				error: `Created run ${opentronsRunId} but couldn't start it: ${err instanceof Error ? err.message : 'unknown'}`
-			});
-		}
-
-		// Auto-resume the protocol's initial off-deck "confirm deck loaded" pause
-		// on the robot — operators shouldn't have to click Resume to confirm a
-		// deck that's already loaded. Fire-and-forget; the daemon resumes the
-		// first pause once. (Mirrors wax-filling startRun.)
-		try {
-			await Ot2BridgeCommand.create({
-				_id: generateId(),
-				robotId: String(robotId),
-				deviceId: bridgeDeviceIdForRobot(robot as any),
-				kind: 'auto_resume_run',
-				payload: { runId: opentronsRunId },
-				ttlMs: 120_000,
-				requestedBy: locals.user.username
-			});
-		} catch (e) {
-			console.warn('[reagent startRun] could not enqueue auto_resume_run:', e instanceof Error ? e.message : e);
-		}
-
-		// Carry previous reagent run's tip state forward as this run's "before".
-		const prevTipRun = await ReagentBatchRecord.findOne({
-			'robot._id': robotId,
-			'pipetteTipState.after.nextTipIndex': { $exists: true },
-			_id: { $ne: runId }
-		}).sort({ runEndTime: -1 }).select('pipetteTipState').lean() as any;
-
-		const refilled = protocolParameters.tiprack_refilled === true;
-		const beforeSnap = refilled
-			? { nextTipIndex: 0, hostname: prevTipRun?.pipetteTipState?.after?.hostname ?? null, capturedAt: new Date() }
-			: prevTipRun?.pipetteTipState?.after
-				? {
-					nextTipIndex: prevTipRun.pipetteTipState.after.nextTipIndex ?? 0,
-					hostname: prevTipRun.pipetteTipState.after.hostname ?? null,
-					capturedAt: new Date()
-				}
-				: { nextTipIndex: 0, hostname: null, capturedAt: new Date() };
-
-		// Estimated finish time. Driven by how many wells the selected reagent rows
-		// will actually fill, not by cartridge count alone — see
-		// src/lib/manufacturing/reagent-run-estimate.ts for the model and the fit.
-		const settingsDoc = await ManufacturingSettings.findById('default').lean() as any;
-		const cartridgeCount = run.cartridgeCount ?? run.cartridgesFilled?.length ?? 0;
-		const estimate = estimateReagentRunSeconds(
-			protocolParameters,
-			cartridgeCount,
-			settingsDoc?.reagentFilling
-		);
-		const runStartTime = new Date();
-		const runEndTime = new Date(runStartTime.getTime() + estimate.seconds * 1000);
-
-		await ReagentBatchRecord.findByIdAndUpdate(runId, {
-			$set: {
-				status: 'Running',
-				runStartTime,
-				runEndTime,
-				opentronsRunId,
-				protocolParameters,
-				'pipetteTipState.before': beforeSnap,
-				'pipetteTipState.rackRefilledDuringRun': refilled
-			}
-		});
-
-		await AuditLog.create({
-			_id: generateId(),
-			tableName: 'reagent_batch_records',
-			recordId: runId,
-			action: 'UPDATE',
-			changedBy: locals.user?.username,
-			changedAt: runStartTime,
-			newData: {
-				status: 'Running',
-				runStartTime,
-				opentronsRunId,
-				protocolParameters,
-				pipetteTipBefore: beforeSnap.nextTipIndex
-			}
-		});
-
-		return { success: true, opentronsRunId };
+		const r = await startRunQueue('reagent', data, { _id: locals.user._id, username: locals.user.username });
+		if (isActionFail(r)) return fail(r.fail.status, { error: r.fail.error });
+		return r;
 	},
 
 	/**
@@ -1123,94 +739,9 @@ export const actions: Actions = {
 		const data = await request.formData();
 		const runId = data.get('runId') as string;
 		const finalStatus = (data.get('finalStatus')?.toString() ?? '').toLowerCase();
-		if (!runId) return fail(400, { error: 'runId is required' });
-
-		const run = await ReagentBatchRecord.findById(runId).lean() as any;
-		if (!run) return fail(404, { error: 'Reagent run not found' });
-		if (!run.opentronsRunId) return fail(400, { error: 'This reagent run has no OT-2 run linked' });
-		if (run.pipetteTipState?.after?.nextTipIndex != null) {
-			return { success: true, alreadyRecorded: true };
-		}
-
-		const robot = await getRobot(run.robot?._id);
-		if (!robot) return fail(404, { error: 'Robot no longer reachable' });
-
-		let nextTipIndex: number | null = null;
-		let pickUpTipCount = 0;
-		try {
-			const cmdRes = await robotGet(
-				robot,
-				`/runs/${run.opentronsRunId}/commands?cursor=0&pageLength=10000`
-			);
-			if (cmdRes.ok) {
-				const cmdBody = await cmdRes.json();
-				const commands = (cmdBody.data ?? []) as Array<{
-					commandType: string;
-					params?: { message?: string };
-				}>;
-				for (const cmd of commands) {
-					if (cmd.commandType === 'pickUpTip') pickUpTipCount += 1;
-					if (cmd.commandType === 'comment' && cmd.params?.message) {
-						const m = cmd.params.message.match(/TIP TRACKER:[\s\S]*?\(index (\d+)\)/);
-						if (m) nextTipIndex = parseInt(m[1], 10);
-					}
-				}
-			}
-		} catch (err) {
-			console.error('[REAGENT-FILLING] recordRunFinished: command fetch failed:', err);
-		}
-
-		const now = new Date();
-		const before = run.pipetteTipState?.before?.nextTipIndex ?? 0;
-		const refilledMidRun = !!run.pipetteTipState?.rackRefilledDuringRun;
-		const finalIndex = nextTipIndex ?? before + pickUpTipCount;
-		const consumed = refilledMidRun
-			? Math.max(0, 96 - before) + finalIndex
-			: Math.max(0, finalIndex - before);
-
-		await ReagentBatchRecord.findByIdAndUpdate(runId, {
-			$set: {
-				// Persist the terminal .py status on the run so the Running stage can
-				// reveal the Complete + Run-again controls after the protocol finishes.
-				opentronsRunFinalStatus: finalStatus || 'unknown',
-				'pipetteTipState.after': {
-					nextTipIndex: finalIndex,
-					hostname: run.pipetteTipState?.before?.hostname ?? null,
-					capturedAt: now
-				},
-				'pipetteTipState.consumed': consumed
-			}
-		});
-
-		await AuditLog.create({
-			_id: generateId(),
-			tableName: 'reagent_batch_records',
-			recordId: runId,
-			action: 'UPDATE',
-			changedBy: locals.user?.username,
-			changedAt: now,
-			newData: {
-				opentronsRunFinalStatus: finalStatus || 'unknown',
-				pipetteTipAfter: finalIndex,
-				pipetteTipConsumed: consumed
-			}
-		});
-
-		// AUTO-COMPLETE (2026-08-28, parity with wax): a reagent run that lands
-		// `succeeded` IS done — finalize immediately so the robot frees the
-		// moment the .py finishes instead of waiting for a Complete click. A
-		// deferred click used to hold the robot AND restamp carts hours later
-		// over statuses they'd gained in a research experiment meanwhile.
-		// Stopped/failed runs are left Running for cancel/abort.
-		if (finalStatus === 'succeeded') {
-			await finalizeReagentRun(
-				runId,
-				{ _id: locals.user._id, username: locals.user.username },
-				'auto (run finished)'
-			);
-		}
-
-		return { success: true, consumed, nextTipIndex: finalIndex, autoCompleted: finalStatus === 'succeeded' };
+		const r = await recordRunFinishedQueue('reagent', runId, finalStatus, { _id: locals.user._id, username: locals.user.username });
+		if (isActionFail(r)) return fail(r.fail.status, { error: r.fail.error });
+		return r;
 	},
 
 	/**
@@ -1275,45 +806,10 @@ export const actions: Actions = {
 		const data = await request.formData();
 		const runId = data.get('runId') as string;
 		const reason = (data.get('reason') as string) || 'Cancelled by operator';
-		const now = new Date();
-
-		// Once the OT-2 has finished (robotReleasedAt set), the run is committed
-		// and can no longer be cancelled. Per-cartridge rejection happens later
-		// on the Reagent Inspect page.
-		const existing = await ReagentBatchRecord.findById(runId).select('robotReleasedAt opentronsRunId robot').lean() as any;
-		if (existing?.robotReleasedAt) {
-			return fail(400, { error: 'Cannot cancel: the OT-2 has already completed this run. Reject individual cartridges on Reagent Inspect instead.' });
-		}
-
-		// Actually halt the OT-2 first — otherwise the robot keeps running.
-		const cancelRobotWarning = await stopRobotRun(existing);
-
-		await ReagentBatchRecord.findByIdAndUpdate(runId, {
-			$set: { status: 'Cancelled', abortReason: reason, runEndTime: now }
-		});
-
-		// Clean up cartridges that were in reagent_filling phase for this run
-		await CartridgeRecord.bulkWrite([{
-			updateMany: {
-				filter: { 'reagentFilling.runId': runId, status: 'reagent_filling' },
-				update: {
-					$set: { status: 'wax_filled' },
-					$unset: { reagentFilling: '' }
-				}
-			}
-		}]);
-
-		await AuditLog.create({
-			_id: generateId(),
-			tableName: 'reagent_batch_records',
-			recordId: runId,
-			action: 'UPDATE',
-			changedBy: locals.user?.username,
-			changedAt: now,
-			newData: { status: 'Cancelled', abortReason: reason }
-		});
-
-		return { success: true, warning: cancelRobotWarning ?? undefined };
+		// Halts the OT-2 first ('run.stop'), then records — see stopConfirm.
+		const r = await stopRunQueue('reagent', 'cancel', runId, { reason }, { _id: locals.user._id, username: locals.user.username });
+		if (isActionFail(r)) return fail(r.fail.status, { error: r.fail.error });
+		return r;
 	},
 
 	/** Abort a run */
@@ -1325,44 +821,14 @@ export const actions: Actions = {
 		const runId = data.get('runId') as string;
 		const reason = (data.get('reason') as string) || 'Aborted';
 		const photoUrl = (data.get('photoUrl') as string) || undefined;
-		const now = new Date();
-
-		// Actually halt the OT-2 first — otherwise the robot keeps running.
-		const abortTarget = await ReagentBatchRecord.findById(runId).select('opentronsRunId robot').lean() as any;
-		const abortRobotWarning = await stopRobotRun(abortTarget);
-
-		await ReagentBatchRecord.findByIdAndUpdate(runId, {
-			$set: {
-				status: 'Aborted',
-				abortReason: reason,
-				abortPhotoUrl: photoUrl,
-				runEndTime: now
-			}
-		});
-
-		// Clean up cartridges that were in reagent_filling phase for this run
-		await CartridgeRecord.bulkWrite([{
-			updateMany: {
-				filter: { 'reagentFilling.runId': runId, status: 'reagent_filling' },
-				update: {
-					$set: { status: 'wax_filled' },
-					$unset: { reagentFilling: '' }
-				}
-			}
-		}]);
-
-		await AuditLog.create({
-			_id: generateId(),
-			tableName: 'reagent_batch_records',
-			recordId: runId,
-			action: 'UPDATE',
-			changedBy: locals.user?.username,
-			changedAt: now,
-			newData: { status: 'Aborted', abortReason: reason }
-		});
-
-		return { success: true, warning: abortRobotWarning ?? undefined };
+		const r = await stopRunQueue('reagent', 'abort', runId, { reason, photoUrl }, { _id: locals.user._id, username: locals.user.username });
+		if (isActionFail(r)) return fail(r.fail.status, { error: r.fail.error });
+		return r;
 	},
+
+	// OT2-TAILNET-5 two-phase lifecycle (tailnet line): startPrepare, startBundle,
+	// startRecordResync, startConfirm, finishConfirm, cancelConfirm, abortConfirm.
+	...lifecycleActions('reagent'),
 
 	/** Reset to deck loading — clear cartridges, go back to Loading */
 	resetToLoading: async ({ request, locals }) => {

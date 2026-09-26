@@ -5,6 +5,7 @@
                      the gantry, so motion is going through the queue
     queue   grey   — the Vercel queue (today's path); tooltip says why
   After a fallback, offers "retry direct" (the session never flips back by itself).
+  The tooltip also lists the verbs this page ran "via Tailscale" / "via BIMS queue".
   When Chrome's Local Network Access permission is still unanswered for this BIMS
   address, offers "allow direct" — the click is what lets Chrome show its prompt.
 -->
@@ -33,10 +34,20 @@
 						: 'queue'
 					: '…'
 	);
-	let title = $derived(
+	let why = $derived(
 		kind === 'busy'
 			? `Direct link up, but a ${state?.busy?.kind} job is running on the robot — motion goes through the queue so it can't collide with it.`
 			: (state?.reason ?? 'checking connection…')
+	);
+	// OT2-TAILNET-5 §8: which verbs this page ran on each line.
+	let title = $derived(
+		[
+			why,
+			state?.usedVia?.tailscale?.length ? `via Tailscale: ${state.usedVia.tailscale.join(', ')}` : '',
+			state?.usedVia?.queue?.length ? `via BIMS queue: ${state.usedVia.queue.join(', ')}` : ''
+		]
+			.filter(Boolean)
+			.join('\n')
 	);
 	let cls = $derived(
 		kind === 'direct'

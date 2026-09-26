@@ -6,6 +6,7 @@
 	 */
 	import { onDestroy } from 'svelte';
 	import { RobotSession, type RobotSessionState } from '$lib/opentrons/direct-client';
+	import { uploadBundle, sessionVerb, isStepError, type ProtocolUploadBundle } from '$lib/opentrons/ot2-protocol';
 	import TransportPill from '$lib/components/opentrons/TransportPill.svelte';
 	import { goto, invalidateAll } from '$app/navigation';
 	import { deserialize } from '$app/forms';
@@ -476,8 +477,37 @@
 	async function syncToRobot() {
 		if (!selectedRobotId) { errMsg = 'Pick a robot'; return; }
 		if (!confirm(`Re-upload the ${syncWhich} protocol(s) to ${robot?.name} with the corrected deck?`)) return;
-		const r = await postAction('sync', { robotId: selectedRobotId, which: syncWhich });
+		const r = robotSession?.state.transport === 'direct' ? await syncOverSession(robotSession) : await postAction('sync', { robotId: selectedRobotId, which: syncWhich });
 		if (r) msg = (r.results ?? []).map((x: any) => `${x.processType}: ${x.ok ? '✓' : '✗'} ${x.detail}`).join(' · ');
+	}
+
+	/**
+	 * OT2-TAILNET-5 S4: Sync on the tailnet line. BIMS prepares the bundles
+	 * (?/syncPrepare, DB only), this browser uploads each straight to the robot
+	 * (the shared 'run.uploadProtocol' verb, long analysis wait included), and BIMS
+	 * records them (?/syncConfirm). Same records + AuditLog as ?/sync.
+	 */
+	async function syncOverSession(s: RobotSession) {
+		const prep = await postAction('syncPrepare', { robotId: selectedRobotId, which: syncWhich });
+		if (!prep) return null;
+		busy = true;
+		msg = 'Uploading to the robot over Tailscale…';
+		const uploads: Record<string, unknown>[] = [];
+		try {
+			for (const u of (prep.uploads ?? []) as { processType: string; fileName: string; bundle: ProtocolUploadBundle }[]) {
+				const up = await uploadBundle(sessionVerb(s), u.bundle).catch((e) => ({ error: e instanceof Error ? e.message : 'Upload failed' }));
+				uploads.push(isStepError(up) ? { processType: u.processType, fileName: u.fileName, error: up.error } : { processType: u.processType, fileName: u.fileName, uploaded: up });
+			}
+		} finally {
+			busy = false;
+		}
+		return postAction('syncConfirm', {
+			robotId: selectedRobotId,
+			which: syncWhich,
+			results: JSON.stringify(prep.results ?? []),
+			publishedVersions: JSON.stringify(prep.publishedVersions ?? []),
+			uploads: JSON.stringify(uploads)
+		});
 	}
 
 	// ── Maintenance-run jog (mirror scanner-position teaching) ───────────────────

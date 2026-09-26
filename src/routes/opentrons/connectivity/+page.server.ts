@@ -7,9 +7,10 @@
  */
 import { redirect } from '@sveltejs/kit';
 import { connectDB, OpentronsRobot, Ot2DirectCall } from '$lib/server/db';
-import { requirePermission } from '$lib/server/permissions';
+import { hasPermission, requirePermission } from '$lib/server/permissions';
 import { getRobotsHealth } from '$lib/server/opentrons/health';
 import { resolveRobotConnection, tailnetAllowedHere, tailnetRobotTokens } from '$lib/server/opentrons/connection';
+import { bridgeJobGate, bridgeTokenSecret } from '$lib/server/opentrons/bridge-token';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
@@ -48,6 +49,13 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 	return {
 		deploymentTokens: [...tailnetRobotTokens()],
+		// Daemon column (OT2-TAILNET-5 §8): the page may ask for a health-only
+		// /bridge token (manufacturing:write, audit-logged) to read the daemon's
+		// version; without one it still shows whether /bridge is served.
+		bridge: {
+			secretSet: bridgeTokenSecret() !== null,
+			canMintTokens: hasPermission(locals.user, 'manufacturing:write')
+		},
 		robots: robots.map((r) => {
 			const id = String(r._id);
 			const eff = resolveRobotConnection(r);
@@ -62,6 +70,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 				allowedHere: tailnetAllowedHere(r),
 				transport: eff.transport,
 				reason: eff.reason,
+				// true = the bridge-token route would mint for this robot here.
+				bridgeJobsHere: bridgeJobGate(r).ok,
 				bridge: h ? { status: h.status, label: h.label, lastBeatMsAgo: h.lastBeatMsAgo } : null,
 				calls24h: s ? { calls: s.calls, errors: s.errors, avgLatencyMs: Math.round(s.avgLatencyMs ?? 0), last: s.last } : null
 			};

@@ -27,6 +27,18 @@
  * for. Synchronous wait (~probe is ~1-2min); a bridge that never answers comes
  * back as { success: false, probed: null, error } rather than an HTTP throw, so
  * the wizard can show the operator what happened instead of a red 504.
+ *
+ * TAILNET LINE (OT2-TAILNET-5 S6, opt-in via body `line: 'tailnet'`):
+ *   phase 'prepare' (default) -> the same guards, tiprack + calibrator
+ *     resolution and payload as the queue line, but no queue write; returns
+ *     { success, line, job: { jobId, kind: 'calibrate_tip', payload },
+ *       calibrator, calibratorSource } for the browser to POST to /bridge/jobs.
+ *   phase 'confirm' -> send the SAME request body again plus the /bridge job
+ *     snapshot { jobId, status, result, error }. The inputs are re-resolved
+ *     here (never trusted from the browser) and the SAME completion half runs:
+ *     readProbeResult, AuditLog 'calibrate_tip' (stamped line:'tailnet'), the
+ *     same ProbeResponse shape.
+ *   409 when the robot is not on the tailnet line here (two-key gate), or this deployment has no OT2_BRIDGE_TOKEN_SECRET (bridgeJobGate).
  */
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
@@ -40,6 +52,7 @@ import {
 	generateId
 } from '$lib/server/db';
 import { getRobot, bridgeDeviceIdForRobot } from '$lib/server/opentrons/proxy';
+import { bridgeJobGate, isTailnetLineRequest } from '$lib/server/opentrons/bridge-token';
 import {
 	TIP_PROFILE,
 	asTipProfile,
@@ -97,12 +110,69 @@ const noReading = (
 	calibratorSource
 });
 
-export const POST: RequestHandler = async ({ request, locals }) => {
+const JOB_ID_RE = /^[A-Za-z0-9_-]{6,64}$/;
+
+/**
+ * The completion half, shared by both lines: turn the daemon's result body into
+ * the wizard's ProbeResponse and audit a real reading. Never fills `probed` in
+ * with the commanded point.
+ */
+async function completeProbe(
+	resultBody: unknown,
+	ctx: {
+		calibrator: CalPoint;
+		calibratorSource: CalSource;
+		audit: { tableName: string; recordId: string; newData: Record<string, unknown> };
+		username: string;
+	}
+): Promise<ProbeResponse> {
+	const { calibrator, calibratorSource } = ctx;
+	// The reading, straight from the robot. Null when it sent nothing usable.
+	const { probed, probedSource, adjust } = readProbeResult(resultBody, calibrator);
+	if (!adjust) {
+		return noReading(
+			'The robot finished the probe but reported no measurement — nothing was taught. Check the calibrator wiring and try again.',
+			calibrator,
+			calibratorSource
+		);
+	}
+	await AuditLog.create({
+		_id: generateId(),
+		tableName: ctx.audit.tableName,
+		recordId: ctx.audit.recordId,
+		action: 'calibrate_tip',
+		newData: {
+			...ctx.audit.newData,
+			calibrator,
+			calibratorSource,
+			adjust,
+			probed,
+			probedSource,
+			result: resultBody
+		},
+		changedAt: new Date(),
+		changedBy: ctx.username
+	});
+	// No fixture write here — the page persists the taught point via
+	// its saveCalibrator action once the operator accepts this reading.
+	return {
+		success: true,
+		probed,
+		probedSource,
+		adjust,
+		calibrator,
+		calibratorSource,
+		result: resultBody
+	};
+}
+
+export const POST: RequestHandler = async ({ request, locals, url }) => {
 	if (!locals.user) error(401, 'Not authenticated');
 	requirePermission(locals.user, 'manufacturing:write');
 	const user = locals.user;
 
 	const body = await request.json().catch(() => ({}) as any);
+	const tailnet = isTailnetLineRequest(body, url);
 	const robotId = body?.robotId?.toString().trim();
 	// Both of these fail CLOSED. `mount` used to silently fall back to 'left'
 	// for any unrecognised value, and the calibration Z used to be derived from
@@ -131,6 +201,10 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		robot = (await OpentronsRobot.findOne({ legacyRobotId: robotId, isActive: { $ne: false } }).lean()) as any;
 	}
 	if (!robot) error(404, 'Robot not found');
+	if (tailnet) {
+		const gate = bridgeJobGate(robot);
+		if (!gate.ok) error(409, gate.reason);
+	}
 
 	await connectDB();
 
@@ -156,34 +230,72 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 	const { x: calX, y: calY, z: zCal } = calibrator;
 
 	const deviceId = bridgeDeviceIdForRobot(robot);
+	const calibratePayload = {
+		pipetteMount: mount,
+		// Which fill's probe recipe the daemon must use. The X probe starts
+		// from a different point in the wax and reagent protocols, and the
+		// adjust is a function of travel-to-switch — so measuring a reagent
+		// tip against the wax start biases it ~0.8mm, wider than a 1.8mm
+		// hole's radius. The daemon can infer this from the tiprack, but
+		// sending it explicitly means a renamed rack can never silently
+		// change how a deck is taught.
+		// On this side the profile IS the operator's explicit choice, not a lookup.
+		profile: tipProfile,
+		calibrator: { x: calX, y: calY, z: zCal },
+		tiprack: {
+			definition: tipDef.definition,
+			namespace: tipDef.namespace ?? '',
+			loadName: tipSpec.loadName,
+			version: tipDef.version ?? 1,
+			slot: '11',
+			tipWell
+		},
+		// Present → daemon probes inside this run and keeps the tip on.
+		...(studioRunId && studioPipetteId ? { runId: studioRunId, pipetteId: studioPipetteId } : {})
+	};
+
+	if (tailnet) {
+		if (body?.phase !== 'confirm') {
+			return json({
+				success: true,
+				line: 'tailnet',
+				job: { jobId: generateId(), kind: 'calibrate_tip', payload: calibratePayload },
+				calibrator,
+				calibratorSource
+			});
+		}
+		const jobId = body?.jobId?.toString() ?? '';
+		if (!JOB_ID_RE.test(jobId)) error(400, 'jobId required to confirm a tailnet tip calibration');
+		if (body?.status !== 'completed') {
+			return json(
+				noReading(
+					(typeof body?.error === 'string' && body.error) ||
+						`Tip calibration ${body?.status ?? 'failed'} on the robot — nothing was taught.`,
+					calibrator,
+					calibratorSource
+				)
+			);
+		}
+		return json(
+			await completeProbe(body?.result, {
+				calibrator,
+				calibratorSource,
+				audit: {
+					tableName: 'ot2_bridge_jobs',
+					recordId: jobId,
+					newData: { robotId: String(robot._id), deviceId, mount, bridgeJobId: jobId, line: 'tailnet' }
+				},
+				username: user.username
+			})
+		);
+	}
+
 	const cmd = await Ot2BridgeCommand.create({
 		_id: generateId(),
 		robotId: String(robot._id),
 		deviceId,
 		kind: 'calibrate_tip',
-		payload: {
-			pipetteMount: mount,
-			// Which fill's probe recipe the daemon must use. The X probe starts
-			// from a different point in the wax and reagent protocols, and the
-			// adjust is a function of travel-to-switch — so measuring a reagent
-			// tip against the wax start biases it ~0.8mm, wider than a 1.8mm
-			// hole's radius. The daemon can infer this from the tiprack, but
-			// sending it explicitly means a renamed rack can never silently
-			// change how a deck is taught.
-			// On this side the profile IS the operator's explicit choice, not a lookup.
-			profile: tipProfile,
-			calibrator: { x: calX, y: calY, z: zCal },
-			tiprack: {
-				definition: tipDef.definition,
-				namespace: tipDef.namespace ?? '',
-				loadName: tipSpec.loadName,
-				version: tipDef.version ?? 1,
-				slot: '11',
-				tipWell
-			},
-			// Present → daemon probes inside this run and keeps the tip on.
-			...(studioRunId && studioPipetteId ? { runId: studioRunId, pipetteId: studioPipetteId } : {})
-		},
+		payload: calibratePayload,
 		ttlMs: COMMAND_TTL_MS,
 		requestedBy: user.username
 	});
@@ -193,49 +305,18 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		const doc = (await Ot2BridgeCommand.findById(cmd._id).select('status result error').lean()) as any;
 
 		if (doc?.status === 'completed') {
-			const resultBody = doc.result?.body;
-			// The reading, straight from the robot. Null when it sent nothing usable.
-			const { probed, probedSource, adjust } = readProbeResult(resultBody, calibrator);
-			if (!adjust) {
-				return json(
-					noReading(
-						'The robot finished the probe but reported no measurement — nothing was taught. Check the calibrator wiring and try again.',
-						calibrator,
-						calibratorSource
-					)
-				);
-			}
-			await AuditLog.create({
-				_id: generateId(),
-				tableName: 'ot2_bridge_commands',
-				recordId: cmd._id,
-				action: 'calibrate_tip',
-				newData: {
-					robotId: String(robot._id),
-					deviceId,
-					mount,
+			return json(
+				await completeProbe(doc.result?.body, {
 					calibrator,
 					calibratorSource,
-					adjust,
-					probed,
-					probedSource,
-					result: resultBody
-				},
-				changedAt: new Date(),
-				changedBy: user.username
-			});
-			// No fixture write here — the page persists the taught point via
-			// its saveCalibrator action once the operator accepts this reading.
-			const ok: ProbeResponse = {
-				success: true,
-				probed,
-				probedSource,
-				adjust,
-				calibrator,
-				calibratorSource,
-				result: resultBody
-			};
-			return json(ok);
+					audit: {
+						tableName: 'ot2_bridge_commands',
+						recordId: cmd._id,
+						newData: { robotId: String(robot._id), deviceId, mount }
+					},
+					username: user.username
+				})
+			);
 		}
 		if (doc?.status === 'failed' || doc?.status === 'expired') {
 			return json(
