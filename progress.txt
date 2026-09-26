@@ -16020,3 +16020,10 @@ scripts/ot2-tailnet-provision.sh) and the B14 daemon redeploy — both awaiting 
 Known leftovers: no unit tests for the tailnet abandon branches in sweep/[id], restart-server and
 the tip-swap prepares; deck-calibration doesn't abort pollJob on unmount (matches queue behaviour);
 run-lifecycle.pollRunStatus is now dead code.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-kt456enng-brevitest.vercel.app
+Source: branch feat/ot2-tailnet-direct @ commit 617e0d3a1
+Retrieve this exact code: git checkout feat/ot2-tailnet-direct at commit 617e0d3a1
+  (or: git log feat/ot2-tailnet-direct --oneline to find it if the branch has since moved on)
+What this deployment is for: OT2-TAILNET-5 rounds 1+2 (fill lifecycle, Opentrons UI, daemon jobs over
+  the tailnet). Daemon-job paths inert until OT2_BRIDGE_TOKEN_SECRET is set and B14's daemon redeployed.
