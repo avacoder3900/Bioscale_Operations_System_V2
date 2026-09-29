@@ -16685,3 +16685,10 @@ Retrieve this exact code: git checkout feat/post-mortem-tablet-ui-2 at commit 4b
   (or: git log feat/post-mortem-tablet-ui-2 --oneline to find it if the branch has since moved on)
 What this deployment is for: on-tablet check of the round-2 touch layout before it goes to master.
   GitHub deployment 6745630040. Smoke: /login 302.
+Deployment: production — https://bioscale-operations-system-mongodb-qytoyvanc-brevitest.vercel.app
+Source: branch master (= feat/post-mortem-tablet-ui-2) @ commit 592b1ee7
+Retrieve this exact code: git checkout master at commit 592b1ee7
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: round-2 touch layout for Post-Mortem Inspect, shipped to production at
+  the user's request for on-tablet testing (the preview is behind Vercel SSO, which tablets can't pass).
+  GitHub deployment 6746198009 (Production). Smoke: /login 200.
