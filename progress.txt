@@ -16679,3 +16679,9 @@ as the round-1 entry above — mouse-driven desktops/laptops are unchanged:
 Verified all touch utilities are emitted inside @media(pointer:coarse) and that the touch `:block`
 rule follows the base `.hidden` rule in the compiled CSS (so it wins on tablets). `npm run check`:
 13 errors (baseline 14), none in the touched file. Vite compile succeeds.
+Deployment: preview — https://bioscale-operations-system-mongodb-4nfu4y9jn.vercel.app
+Source: branch feat/post-mortem-tablet-ui-2 @ commit 4b4063a8
+Retrieve this exact code: git checkout feat/post-mortem-tablet-ui-2 at commit 4b4063a8
+  (or: git log feat/post-mortem-tablet-ui-2 --oneline to find it if the branch has since moved on)
+What this deployment is for: on-tablet check of the round-2 touch layout before it goes to master.
+  GitHub deployment 6745630040. Smoke: /login 302.
