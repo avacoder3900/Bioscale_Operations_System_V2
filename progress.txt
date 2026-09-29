@@ -16664,3 +16664,18 @@ Retrieve this exact code: git checkout master at commit 993354fe
 What this deployment is for: tablet (touch) layout for Post-Mortem Inspect — full-width, ~2x-tall
   Capture button; BIMS header + cart-mfg sidebar hidden on touch devices. GitHub deployment
   6745259760 (Production). Smoke: /login 200. On-tablet check is the user's next step.
+
+================================================================================
+2026-09-29 — feat/post-mortem-tablet-ui-2 — Post-Mortem Inspect: tablet layout, round 2
+================================================================================
+More touch-only (`pointer: coarse`) layout changes to post-mortem-inspect/+page.svelte, same gating
+as the round-1 entry above — mouse-driven desktops/laptops are unchanged:
+  - Camera (USB device) selector hidden.
+  - Locked cartridge ID shrunk from text-lg to text-xs, matching the "completed · scanned …" line.
+  - Header description paragraph ("Scan each cartridge that has been ran…") hidden.
+  - Deployment-status notice ("No model is deployed…" / "Inference active") moved below the Pi
+    station camera settings. Implemented as a {#snippet} rendered twice — once in the original spot
+    (hidden on touch) and once after StationCameraSettings (shown only on touch).
+Verified all touch utilities are emitted inside @media(pointer:coarse) and that the touch `:block`
+rule follows the base `.hidden` rule in the compiled CSS (so it wins on tablets). `npm run check`:
+13 errors (baseline 14), none in the touched file. Vite compile succeeds.
