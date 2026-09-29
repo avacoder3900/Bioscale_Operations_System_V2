@@ -16657,3 +16657,10 @@ the compiled CSS. `npm run check`: 13 errors (baseline 14), none in touched file
 vite compile succeeds; the adapter-vercel packaging step OOMs on this Windows machine even with
 --max-old-space-size=8192 (environmental, unrelated to this change — Vercel builds on Linux).
 Pushed to master at the user's explicit request so production deploys for tablet testing.
+Deployment: production — https://bioscale-operations-system-mongodb-7lvbyhjik-brevitest.vercel.app
+Source: branch master (= feat/post-mortem-tablet-ui) @ commit 993354fe
+Retrieve this exact code: git checkout master at commit 993354fe
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: tablet (touch) layout for Post-Mortem Inspect — full-width, ~2x-tall
+  Capture button; BIMS header + cart-mfg sidebar hidden on touch devices. GitHub deployment
+  6745259760 (Production). Smoke: /login 200. On-tablet check is the user's next step.
