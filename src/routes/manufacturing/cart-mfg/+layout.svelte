@@ -40,6 +40,12 @@
 		{ href: '/manufacturing/cart-mfg/analysis', label: 'Analysis', icon: 'M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z' }
 	];
 
+	// Tablets at Post-Mortem Inspect are single-purpose stations — drop the
+	// sidebar on touch devices there. Mouse-driven desktops keep it.
+	const hideSidebarOnTouch = $derived(
+		$page.url.pathname.startsWith('/manufacturing/cart-mfg/post-mortem-inspect')
+	);
+
 	function isActive(href: string, currentPath: string, exact = false): boolean {
 		if (exact) return currentPath === href;
 		return currentPath.startsWith(href);
@@ -66,7 +72,7 @@
 
 <div class="flex">
 	<!-- Sidebar: icons only, expand on hover -->
-	<aside class="mfg-sidebar sticky top-14 h-[calc(100vh-3.5rem)] shrink-0 overflow-hidden border-r border-[var(--color-tron-border)] bg-[var(--color-tron-bg)]">
+	<aside class="mfg-sidebar sticky top-14 h-[calc(100vh-3.5rem)] shrink-0 overflow-hidden border-r border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] {hideSidebarOnTouch ? '[@media(pointer:coarse)]:hidden' : ''}">
 		<nav class="flex flex-col gap-0.5 px-0.5 pt-2">
 			{#each navItems as item}
 				{@const active = isActive(item.href, $page.url.pathname, item.exact)}

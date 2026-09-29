@@ -16638,3 +16638,22 @@ Still owed: the Vercel variables themselves. R2_ACCOUNT_ID is not the bare 32-he
 (recovered in code, warning logged once per cold start) and R2_ACCESS_KEY_ID is 24 chars (R2
 needs 32) — anything still on the S3 path (COC photos via src/lib/server/r2.ts, api/r2/files,
 receiving) is broken until someone with brevitest team access fixes both.
+
+================================================================================
+2026-09-29 — feat/post-mortem-tablet-ui → master — Post-Mortem Inspect: tablet (touch) layout
+================================================================================
+Tablets are being introduced as single-purpose Post-Mortem Inspect stations (browser pointed at the
+URL, nothing else). Two tablet-only UI changes, gated on the CSS `pointer: coarse` media query (a
+touch-primary device) — NOT user-agent sniffing (iPad Safari reports as desktop Mac) and NOT a width
+breakpoint (would catch narrow laptop windows). Mouse-driven desktops/laptops render exactly as before.
+  - post-mortem-inspect/+page.svelte: Capture button spans the video-feed width (w-full) and is ~2x
+    as tall (py-3 → py-9, ~52px → ~100px); the action bar stacks (flex-col) so the "Scan a cartridge"
+    hint sits under the button.
+  - routes/+layout.svelte: top BIMS header hidden on touch devices, on post-mortem-inspect only.
+  - manufacturing/cart-mfg/+layout.svelte: cart-mfg icon sidebar hidden on touch devices, on
+    post-mortem-inspect only.
+Verified the five `[@media(pointer:coarse)]:*` utilities are emitted inside @media(pointer:coarse) in
+the compiled CSS. `npm run check`: 13 errors (baseline 14), none in touched files. `npm run build`:
+vite compile succeeds; the adapter-vercel packaging step OOMs on this Windows machine even with
+--max-old-space-size=8192 (environmental, unrelated to this change — Vercel builds on Linux).
+Pushed to master at the user's explicit request so production deploys for tablet testing.

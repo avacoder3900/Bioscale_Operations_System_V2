@@ -818,13 +818,14 @@
 			{/if}
 		</div>
 
-		<!-- Action bar -->
-		<div class="flex items-center justify-between gap-3">
+		<!-- Action bar. On touch devices (tablets) the button spans the video
+		     width at ~2x height so it's an easy thumb target. -->
+		<div class="flex items-center justify-between gap-3 [@media(pointer:coarse)]:flex-col [@media(pointer:coarse)]:items-stretch">
 			<button
 				type="button"
 				onclick={() => capturePhoto()}
 				disabled={submitting || !stream || !cartridgeId}
-				class="rounded bg-[var(--color-tron-cyan)] px-6 py-3 text-lg font-bold text-[var(--color-tron-bg-primary)] disabled:opacity-40"
+				class="rounded bg-[var(--color-tron-cyan)] px-6 py-3 text-lg font-bold text-[var(--color-tron-bg-primary)] disabled:opacity-40 [@media(pointer:coarse)]:w-full [@media(pointer:coarse)]:py-9"
 			>
 				{submitting ? 'Capturing…' : '📷 Capture (Space)'}
 			</button>
