@@ -16901,3 +16901,133 @@ Retrieve this exact code: git checkout feat/badge-system at commit 55809e9e
   (or: git log feat/badge-system --oneline to find it if the branch has since moved on)
 What this deployment is for: the admin-only "Badge required" link sits beside "Wax filling →" in
 the bucket board header.
+2026-09-29 — feat/post-mortem-tablet-ui → master — Post-Mortem Inspect: tablet (touch) layout
+================================================================================
+Tablets are being introduced as single-purpose Post-Mortem Inspect stations (browser pointed at the
+URL, nothing else). Two tablet-only UI changes, gated on the CSS `pointer: coarse` media query (a
+touch-primary device) — NOT user-agent sniffing (iPad Safari reports as desktop Mac) and NOT a width
+breakpoint (would catch narrow laptop windows). Mouse-driven desktops/laptops render exactly as before.
+  - post-mortem-inspect/+page.svelte: Capture button spans the video-feed width (w-full) and is ~2x
+    as tall (py-3 → py-9, ~52px → ~100px); the action bar stacks (flex-col) so the "Scan a cartridge"
+    hint sits under the button.
+  - routes/+layout.svelte: top BIMS header hidden on touch devices, on post-mortem-inspect only.
+  - manufacturing/cart-mfg/+layout.svelte: cart-mfg icon sidebar hidden on touch devices, on
+    post-mortem-inspect only.
+Verified the five `[@media(pointer:coarse)]:*` utilities are emitted inside @media(pointer:coarse) in
+the compiled CSS. `npm run check`: 13 errors (baseline 14), none in touched files. `npm run build`:
+vite compile succeeds; the adapter-vercel packaging step OOMs on this Windows machine even with
+--max-old-space-size=8192 (environmental, unrelated to this change — Vercel builds on Linux).
+Pushed to master at the user's explicit request so production deploys for tablet testing.
+Deployment: production — https://bioscale-operations-system-mongodb-7lvbyhjik-brevitest.vercel.app
+Source: branch master (= feat/post-mortem-tablet-ui) @ commit 993354fe
+Retrieve this exact code: git checkout master at commit 993354fe
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: tablet (touch) layout for Post-Mortem Inspect — full-width, ~2x-tall
+  Capture button; BIMS header + cart-mfg sidebar hidden on touch devices. GitHub deployment
+  6745259760 (Production). Smoke: /login 200. On-tablet check is the user's next step.
+
+================================================================================
+2026-09-29 — feat/post-mortem-tablet-ui-2 — Post-Mortem Inspect: tablet layout, round 2
+================================================================================
+More touch-only (`pointer: coarse`) layout changes to post-mortem-inspect/+page.svelte, same gating
+as the round-1 entry above — mouse-driven desktops/laptops are unchanged:
+  - Camera (USB device) selector hidden.
+  - Locked cartridge ID shrunk from text-lg to text-xs, matching the "completed · scanned …" line.
+  - Header description paragraph ("Scan each cartridge that has been ran…") hidden.
+  - Deployment-status notice ("No model is deployed…" / "Inference active") moved below the Pi
+    station camera settings. Implemented as a {#snippet} rendered twice — once in the original spot
+    (hidden on touch) and once after StationCameraSettings (shown only on touch).
+Verified all touch utilities are emitted inside @media(pointer:coarse) and that the touch `:block`
+rule follows the base `.hidden` rule in the compiled CSS (so it wins on tablets). `npm run check`:
+13 errors (baseline 14), none in the touched file. Vite compile succeeds.
+Deployment: preview — https://bioscale-operations-system-mongodb-4nfu4y9jn.vercel.app
+Source: branch feat/post-mortem-tablet-ui-2 @ commit 4b4063a8
+Retrieve this exact code: git checkout feat/post-mortem-tablet-ui-2 at commit 4b4063a8
+  (or: git log feat/post-mortem-tablet-ui-2 --oneline to find it if the branch has since moved on)
+What this deployment is for: on-tablet check of the round-2 touch layout before it goes to master.
+  GitHub deployment 6745630040. Smoke: /login 302.
+Deployment: production — https://bioscale-operations-system-mongodb-qytoyvanc-brevitest.vercel.app
+Source: branch master (= feat/post-mortem-tablet-ui-2) @ commit 592b1ee7
+Retrieve this exact code: git checkout master at commit 592b1ee7
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: round-2 touch layout for Post-Mortem Inspect, shipped to production at
+  the user's request for on-tablet testing (the preview is behind Vercel SSO, which tablets can't pass).
+  GitHub deployment 6746198009 (Production). Smoke: /login 200.
+
+================================================================================
+2026-09-30 — feat/post-mortem-tablet-swap → master — Post-Mortem Inspect: tablet swap test
+================================================================================
+Touch-only (`pointer: coarse`) layout test for landscape tablets, requested by the user to see how it
+reads on-device: the Cartridge/Station context bar and the Capture action bar swap places. Touch order
+is now Capture → video → context bar. Implemented without duplicating markup (the context bar holds
+bound <select>s with ids and the <video> is bind:this): the three blocks are wrapped in a container
+that stays `space-y-4` on desktop (identical layout) and becomes `flex flex-col gap-4 space-y-0` on
+touch, with `order-1/2/3` on action bar / video / context bar. Verified in compiled CSS: order, flex
+and gap rules sit inside @media(pointer:coarse), and the touch `space-y-0` rule follows the base
+`space-y-4` rule (same :where specificity, so it wins on tablets). `npm run check`: 13 errors
+(baseline 14), none in the touched file. Vite compile succeeds.
+Pushed to master at the user's explicit request for on-tablet testing.
+Deployment: production — https://bioscale-operations-system-mongodb-k5sgndw7d-brevitest.vercel.app
+Source: branch master (= feat/post-mortem-tablet-swap) @ commit 2d6ba750
+Retrieve this exact code: git checkout master at commit 2d6ba750
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: on-tablet test of the Capture ↔ cartridge/station bar swap (touch only).
+  GitHub deployment 6762152984 (Production). Smoke: /login 200.
+
+================================================================================
+2026-09-30 — feat/post-mortem-tablet-hide-askbims → master — Post-Mortem Inspect: vertical Capture bar
+================================================================================
+More touch-only (`pointer: coarse`) changes for the landscape tablets; mouse-driven desktops unchanged.
+  - routes/+layout.svelte: Ask BIMS widget hidden on touch devices at post-mortem-inspect (wrapped in a
+    div hidden via the same path check as the header; the widget's panels are position:fixed inside
+    its own markup, no portal, so the wrapper hides all of it). Renamed hideHeaderOnTouch →
+    hideChromeOnTouch since it now covers both.
+  - post-mortem-inspect/+page.svelte: the tablet layout switches from the flex/order swap to a grid —
+    `grid-cols-[6.25vw_1fr]`: a vertical Capture bar 1/16 of the screen wide, full video height, left
+    of the video; the cartridge/station bar spans both columns below. The button shows only 📷 on
+    touch (no "Capture (Space)" text — no keyboard; pulses while submitting; aria-label="Capture"),
+    and the "Scan a cartridge to enable capture" hint is hidden.
+Verified all touch utilities in compiled CSS inside @media(pointer:coarse). `npm run check`: 13 errors
+(baseline 14), none in touched files. Vite compile succeeds.
+Pushed to master at the user's explicit request for on-tablet testing.
+Deployment: production — https://bioscale-operations-system-mongodb-kirgbmbfs-brevitest.vercel.app
+Source: branch master (= feat/post-mortem-tablet-hide-askbims) @ commit 1bfef4a4
+Retrieve this exact code: git checkout master at commit 1bfef4a4
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: on-tablet test of the vertical 📷 Capture bar left of the video and the
+  hidden Ask BIMS widget (touch only). GitHub deployment 6762758302 (Production). Smoke: /login 200.
+
+================================================================================
+2026-09-30 — feat/post-mortem-mjpeg-snapshot → master — Post-Mortem Inspect: MJPEG view + clean stills
+================================================================================
+Ported /capture's fast station pathway to post-mortem-inspect/+page.svelte (desktop + tablet — a
+quality change, not layout). Previously this page streamed WebRTC/VP8 (aiortc, blocky on motion) and
+took photos by drawing that decoded VP8 frame to a canvas, so compression artifacts were baked in.
+  - Live view: <img src="https://<station>/preview.mjpg?token=…&fps=15&q=80"> (per-frame JPEG).
+  - Photos: fetch https://<station>/snapshot.jpg?q=92 — a camera frame that never touched the
+    video encoder.
+  - Fallback to the old WebRTC feed (the priority for older agents, e.g. station 2 on the June
+    `bims-capture-agent` branch, which 404s both endpoints): MJPEG <img> onerror OR no painted frame
+    within 8 s (watchdog on naturalWidth) → mjpegError → WebRTC offer. Snapshot failure → same
+    fallback, then waits up to 10 s for the WebRTC stream and takes that press's photo from it.
+  - Single-encoder rule kept (dual VP8+JPEG browned out station 3's PSU): the 'hello' handler only
+    negotiates WebRTC once MJPEG has failed.
+  - Snapshot auth: station JWTs expire in 5 min and the agent's 401 has no CORS header (browser
+    reports a network error, not a status), so a separate snapshot token is re-minted after 4 min
+    and once more on any failure. Kept apart from stationToken so re-minting doesn't restart the
+    MJPEG stream. (/capture has no refresh — its snapshots after 5 min on one connection will fail;
+    not changed here.)
+  - `stream` made $state so the Capture button enables when a fallback WebRTC stream lands.
+`npm run check`: 13 errors (baseline 14), none in the touched file; warnings 431 → 430.
+Local vite build skipped (slow on this machine); Vercel's branch build used as the compile gate
+before fast-forwarding master. Pushed to master at the user's explicit request.
+Deployment: preview — https://bioscale-operations-system-mongodb-2kolo85qw-brevitest.vercel.app
+Source: branch feat/post-mortem-mjpeg-snapshot @ commit b2b650c6
+What this deployment is for: compile gate before fast-forwarding master (GitHub deployment 6763652294).
+Deployment: production — https://bioscale-operations-system-mongodb-erfdocqo8-brevitest.vercel.app
+Source: branch master (= feat/post-mortem-mjpeg-snapshot) @ commit b2b650c6
+Retrieve this exact code: git checkout master at commit b2b650c6
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: on-station test of the MJPEG view + /snapshot.jpg stills on Post-Mortem
+  Inspect (station 3 = new path; station 2 = WebRTC fallback until its agent is updated).
+  GitHub deployment 6763725750 (Production). Smoke: /login 200.

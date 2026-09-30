@@ -9,7 +9,9 @@
 	 * model's verdict lands. The photo is saved to the cartridge's photos[]; the
 	 * cartridge status is NOT changed — it stays `completed`. Any model verdict is
 	 * advisory only (no scan-gated accept/reject here).
-	 * Capture/station plumbing mirrors /reagent-inspect (the proven implementation).
+	 * Capture/station plumbing mirrors /reagent-inspect (the proven implementation),
+	 * plus /capture's fast MJPEG view + /snapshot.jpg stills for Pi stations, with
+	 * automatic fallback to the WebRTC feed on agents that lack them.
 	 */
 	import { onMount, onDestroy } from 'svelte';
 	import PhotoAnnotatorModal from '$lib/components/PhotoAnnotatorModal.svelte';
@@ -53,7 +55,8 @@
 
 	// ── Camera (local USB path) ─────────────────────────────────────────────
 	let videoEl: HTMLVideoElement | null = null;
-	let stream: MediaStream | null = null;
+	// Reactive so the Capture button enables when a (fallback) WebRTC stream lands.
+	let stream = $state<MediaStream | null>(null);
 	let cameras = $state<MediaDeviceInfo[]>([]);
 	let selectedCameraId = $state<string | null>(null);
 	let cameraError = $state<string | null>(null);
@@ -102,6 +105,136 @@
 
 	// Persistent "your station went offline" banner (separate from flash).
 	let stationDownAt = $state<{ name: string; at: number } | null>(null);
+
+	// ── Fast MJPEG view + clean snapshots, with WebRTC as the safety net ────
+	// Same pathway as /capture: the agent's /preview.mjpg is per-frame JPEG (no
+	// VP8 motion blockiness, ~35 ms vs ~260 ms lag) and /snapshot.jpg returns a
+	// camera frame that never went through the video encoder. Single-encoder
+	// rule: the Pi must never run VP8 + JPEG at once (dual encode browned out
+	// station 3's PSU), so WebRTC is only negotiated AFTER the MJPEG view has
+	// failed — onerror, or no first frame within MJPEG_FIRST_FRAME_MS. Older
+	// agents without these endpoints (e.g. station 2) land on WebRTC exactly
+	// as before.
+	let stationToken = $state<string | null>(null);
+	let stationHostname = $state<string | null>(null);
+	let mjpegError = $state(false);
+	let mjpegImgEl = $state<HTMLImageElement | null>(null);
+	let mjpegWatchdog: ReturnType<typeof setTimeout> | null = null;
+	const MJPEG_FPS = 15;
+	const MJPEG_QUALITY = 80;
+	const MJPEG_FIRST_FRAME_MS = 8000;
+	const WEBRTC_FALLBACK_WAIT_MS = 10_000;
+	const mjpegUrl = $derived(
+		stationToken && stationHostname
+			? `https://${stationHostname}/preview.mjpg?token=${encodeURIComponent(stationToken)}&fps=${MJPEG_FPS}&q=${MJPEG_QUALITY}`
+			: null
+	);
+	const mjpegShowing = $derived(!!selectedStationId && !mjpegError && !!mjpegUrl);
+
+	function clearMjpegWatchdog() {
+		if (mjpegWatchdog) { clearTimeout(mjpegWatchdog); mjpegWatchdog = null; }
+	}
+
+	// Drop the MJPEG view for this station and bring the classic WebRTC feed up.
+	function fallBackToWebRtc(reason: string) {
+		clearMjpegWatchdog();
+		if (mjpegError) return;
+		mjpegError = true;
+		console.warn('[post-mortem-inspect] MJPEG fallback:', reason);
+		flashBanner('info', 'Fast preview unavailable on this station — using the standard video feed.', 4000);
+		startWebRtcIfNeeded();
+	}
+
+	// If the WS isn't open yet, the 'hello' handler starts the offer instead.
+	function startWebRtcIfNeeded() {
+		if (!pc && ws && ws.readyState === WebSocket.OPEN) {
+			startWebRtcOffer(ws).catch((e) =>
+				flashBanner('err', `WebRTC offer failed: ${e instanceof Error ? e.message : e}`)
+			);
+		}
+	}
+
+	// Arm the first-frame watchdog whenever a new MJPEG URL starts showing: a
+	// stream that neither errors nor paints (stalled proxy, half-open socket)
+	// must not leave the operator staring at a blank pane.
+	$effect(() => {
+		const url = mjpegUrl;
+		clearMjpegWatchdog();
+		if (!url || mjpegError) return;
+		mjpegWatchdog = setTimeout(() => {
+			mjpegWatchdog = null;
+			if (mjpegUrl === url && !mjpegError && !(mjpegImgEl && mjpegImgEl.naturalWidth > 0)) {
+				fallBackToWebRtc(`no frame within ${MJPEG_FIRST_FRAME_MS} ms`);
+			}
+		}, MJPEG_FIRST_FRAME_MS);
+		return clearMjpegWatchdog;
+	});
+
+	async function waitForStream(ms: number): Promise<boolean> {
+		const until = Date.now() + ms;
+		while (Date.now() < until) {
+			if (stream && videoEl && videoEl.videoWidth > 0) return true;
+			await new Promise((r) => setTimeout(r, 250));
+		}
+		return false;
+	}
+
+	// Snapshot auth. Station JWTs live 5 min, and the agent's 401 carries no
+	// CORS header — the browser surfaces it as a network error, not a status —
+	// so reactive "retry on 401" can't work. Instead keep a snapshot-only token
+	// (separate from stationToken, whose change would restart the MJPEG
+	// stream), re-mint it before it ages out, and retry once with a fresh one
+	// on any failure.
+	let snapshotToken: string | null = null;
+	let snapshotTokenAt = 0;
+	const SNAPSHOT_TOKEN_MAX_AGE_MS = 4 * 60_000;
+
+	async function mintSnapshotToken(stationId: string): Promise<string | null> {
+		try {
+			const tokRes = await fetch(`/api/cv/stations/${encodeURIComponent(stationId)}/token`);
+			if (!tokRes.ok) return null;
+			const fresh = (await tokRes.json())?.token;
+			if (!fresh) return null;
+			snapshotToken = fresh;
+			snapshotTokenAt = Date.now();
+			return fresh;
+		} catch {
+			return null;
+		}
+	}
+
+	// /snapshot.jpg — a clean camera frame. Returns null on any failure; the
+	// caller then falls back to the WebRTC feed.
+	async function fetchStationSnapshot(stationId: string): Promise<Blob | null> {
+		const hostname = stationHostname;
+		if (!hostname) return null;
+		const attempt = async (token: string): Promise<Blob | null> => {
+			try {
+				const res = await fetch(
+					`https://${hostname}/snapshot.jpg?token=${encodeURIComponent(token)}&q=92`,
+					{ cache: 'no-store' }
+				);
+				if (!res.ok) {
+					console.warn('[post-mortem-inspect] snapshot failed: HTTP', res.status);
+					return null;
+				}
+				const blob = await res.blob();
+				return blob.size > 0 ? blob : null;
+			} catch (e) {
+				console.warn('[post-mortem-inspect] snapshot failed:', e);
+				return null;
+			}
+		};
+
+		const fresh = snapshotToken && Date.now() - snapshotTokenAt < SNAPSHOT_TOKEN_MAX_AGE_MS;
+		const token = fresh ? snapshotToken : await mintSnapshotToken(stationId);
+		if (!token) return null;
+		const blob = await attempt(token);
+		if (blob) return blob;
+		// One retry with a brand-new token (covers expiry and clock skew).
+		const retryToken = await mintSnapshotToken(stationId);
+		return retryToken ? attempt(retryToken) : null;
+	}
 
 	// ── Transient status banner ─────────────────────────────────────────────
 	let banner = $state<{ kind: 'ok' | 'err' | 'info'; text: string } | null>(null);
@@ -345,6 +478,13 @@
 
 	function teardownStation() {
 		if (heartbeatInterval) { clearInterval(heartbeatInterval); heartbeatInterval = null; }
+		clearMjpegWatchdog();
+		// Nulling these unmounts the MJPEG <img>, which closes its stream.
+		stationToken = null;
+		stationHostname = null;
+		mjpegError = false;
+		snapshotToken = null;
+		snapshotTokenAt = 0;
 		if (pc) { try { pc.close(); } catch { /* */ } pc = null; }
 		if (ws) { try { ws.close(); } catch { /* */ } ws = null; }
 		if (stream) {
@@ -396,6 +536,12 @@
 			const tokBody = await tokRes.json();
 			token = tokBody.token;
 			if (!token) throw new Error('empty token');
+			// Starts the MJPEG view; WebRTC waits until it has failed.
+			mjpegError = false;
+			stationToken = token;
+			stationHostname = station.hostname;
+			snapshotToken = token;
+			snapshotTokenAt = Date.now();
 		} catch (e) {
 			flashBanner('err', `Failed to fetch station token: ${e instanceof Error ? e.message : e}`);
 			selectedStationId = null;
@@ -444,10 +590,14 @@
 			if (msg.event === 'hello') {
 				// The agent only volunteers these on request.
 				requestCameraParams();
-				try {
-					await startWebRtcOffer(sock);
-				} catch (e) {
-					flashBanner('err', `WebRTC offer failed: ${e instanceof Error ? e.message : e}`);
+				// Single-encoder: negotiate WebRTC only if the MJPEG view already
+				// failed; otherwise fallBackToWebRtc() starts it if/when it does.
+				if (mjpegError && !pc) {
+					try {
+						await startWebRtcOffer(sock);
+					} catch (e) {
+						flashBanner('err', `WebRTC offer failed: ${e instanceof Error ? e.message : e}`);
+					}
 				}
 				return;
 			}
@@ -514,7 +664,9 @@
 			flashBanner('err', 'Scan a cartridge first');
 			return;
 		}
-		if (!videoEl || !stream) {
+		// While the MJPEG view is showing there is no WebRTC stream to canvas —
+		// the photo comes from the agent's /snapshot.jpg instead.
+		if (!mjpegShowing && (!videoEl || !stream)) {
 			flashBanner('err', 'Camera not running');
 			return;
 		}
@@ -524,16 +676,33 @@
 		verdict = { state: 'capturing' };
 		shadowNote = null;
 		try {
-			const canvas = document.createElement('canvas');
-			canvas.width = videoEl.videoWidth;
-			canvas.height = videoEl.videoHeight;
-			const ctx = canvas.getContext('2d');
-			if (!ctx) throw new Error('canvas 2d context unavailable');
-			ctx.drawImage(videoEl, 0, 0, canvas.width, canvas.height);
+			let blob: Blob | null = null;
 
-			const blob: Blob = await new Promise((resolve, reject) => {
-				canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('toBlob failed'))), 'image/jpeg', 0.92);
-			});
+			if (mjpegShowing && selectedStationId) {
+				blob = await fetchStationSnapshot(selectedStationId);
+				if (!blob) {
+					// Snapshot didn't work on this station — switch to the classic
+					// feed and take this same photo from it once it's up.
+					fallBackToWebRtc('snapshot unavailable');
+					if (!(await waitForStream(WEBRTC_FALLBACK_WAIT_MS))) {
+						throw new Error('Station photo failed and the standard video feed did not start — try again');
+					}
+				}
+			}
+
+			if (!blob) {
+				if (!videoEl || !stream) throw new Error('Camera not running');
+				const canvas = document.createElement('canvas');
+				canvas.width = videoEl.videoWidth;
+				canvas.height = videoEl.videoHeight;
+				const ctx = canvas.getContext('2d');
+				if (!ctx) throw new Error('canvas 2d context unavailable');
+				ctx.drawImage(videoEl, 0, 0, canvas.width, canvas.height);
+
+				blob = await new Promise<Blob>((resolve, reject) => {
+					canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('toBlob failed'))), 'image/jpeg', 0.92);
+				});
+			}
 
 			const form = new FormData();
 			form.append('file', blob, 'capture.jpg');
@@ -701,7 +870,7 @@
 		<header class="flex items-center justify-between">
 			<div>
 				<h1 class="text-2xl font-bold text-[var(--color-tron-cyan)]">Post-Mortem Inspect</h1>
-				<p class="text-xs text-[var(--color-tron-text-secondary)]">
+				<p class="text-xs text-[var(--color-tron-text-secondary)] [@media(pointer:coarse)]:hidden">
 					Scan each cartridge that has been ran, press Space to photograph it, and the deployed model's PASS/FAIL verdict appears below. The photo is saved to the cartridge — its status stays <span class="font-mono">completed</span> (post-mortem photos don't change cartridge state).
 				</p>
 			</div>
@@ -710,7 +879,9 @@
 			</div>
 		</header>
 
-		<!-- Deployment status: yellow notice when nothing is deployed at post_mortem -->
+		<!-- Deployment status: yellow notice when nothing is deployed at post_mortem.
+		     Desktop shows it here; touch devices show it below the camera settings. -->
+		{#snippet deploymentStatus()}
 		{#if !data.modelDeployed}
 			<div class="rounded border border-[var(--color-tron-yellow,#facc15)] bg-[rgba(250,204,21,0.08)] p-3 text-sm text-[var(--color-tron-yellow,#facc15)]">
 				<span class="font-semibold">No model is deployed at the post_mortem phase — captures will save without inference.</span>
@@ -729,6 +900,8 @@
 				{/each}
 			</div>
 		{/if}
+		{/snippet}
+		<div class="[@media(pointer:coarse)]:hidden">{@render deploymentStatus()}</div>
 
 		<!-- Persistent reject banner: cartridge missing or wrong status -->
 		{#if rejectBanner}
@@ -755,13 +928,17 @@
 			</div>
 		{/if}
 
+		<!-- Context bar + video + action bar. On touch devices (tablets) this becomes
+		     a grid: a narrow vertical Capture bar (1/16 of the screen width) left of
+		     the video, with the context bar spanning below. Desktop keeps DOM order. -->
+		<div class="space-y-4 [@media(pointer:coarse)]:grid [@media(pointer:coarse)]:grid-cols-[6.25vw_1fr] [@media(pointer:coarse)]:gap-4 [@media(pointer:coarse)]:space-y-0">
 		<!-- Context bar: sticky cartridge + station + camera -->
-		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-4">
+		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-4 [@media(pointer:coarse)]:col-span-2 [@media(pointer:coarse)]:row-start-2">
 			<div class="flex flex-wrap items-center gap-4">
 				<div class="min-w-[200px] flex-1">
 					<div class="text-xs uppercase text-[var(--color-tron-text-secondary)]">Cartridge</div>
 					{#if cartridgeId}
-						<div class="font-mono text-lg text-[var(--color-tron-green,#39ff14)]">🟢 {cartridgeId}</div>
+						<div class="font-mono text-lg text-[var(--color-tron-green,#39ff14)] [@media(pointer:coarse)]:text-xs">🟢 {cartridgeId}</div>
 						<div class="text-xs text-[var(--color-tron-text-secondary)]">
 							{cartridgeStatus ?? 'unknown'}{#if scannedAt} · scanned {new Date(scannedAt).toLocaleTimeString()}{/if}
 						</div>
@@ -795,7 +972,7 @@
 						{/each}
 					</select>
 				</div>
-				<div>
+				<div class="[@media(pointer:coarse)]:hidden">
 					<label for="cam-sel" class="block text-xs uppercase text-[var(--color-tron-text-secondary)]">Camera</label>
 					<select id="cam-sel" bind:value={selectedCameraId} onchange={() => startCamera()} class="tron-input" disabled={!!selectedStationId}>
 						{#each cameras as c (c.deviceId)}
@@ -807,30 +984,47 @@
 		</div>
 
 		<!-- Video pane -->
-		<div class="rounded-lg border border-[var(--color-tron-border)] bg-black p-2">
+		<div class="rounded-lg border border-[var(--color-tron-border)] bg-black p-2 [@media(pointer:coarse)]:col-start-2 [@media(pointer:coarse)]:row-start-1">
 			{#if cameraError}
 				<div class="flex aspect-video items-center justify-center text-[var(--color-tron-red,#ff3366)]">
 					{cameraError}
 				</div>
 			{:else}
+				{#if mjpegShowing}
+					<!-- Fast MJPEG view. The <video> below stays mounted but hidden;
+					     it takes over (WebRTC) if this errors or never paints. -->
+					<img
+						bind:this={mjpegImgEl}
+						src={mjpegUrl}
+						alt="Live station preview"
+						class="aspect-video w-full rounded object-contain"
+						onload={clearMjpegWatchdog}
+						onerror={() => fallBackToWebRtc('preview stream error')}
+					/>
+				{/if}
 				<!-- svelte-ignore a11y_media_has_caption -->
-				<video bind:this={videoEl} class="aspect-video w-full rounded" playsinline autoplay muted></video>
+				<video bind:this={videoEl} class="aspect-video w-full rounded {mjpegShowing ? 'hidden' : ''}" playsinline autoplay muted></video>
 			{/if}
 		</div>
 
-		<!-- Action bar -->
-		<div class="flex items-center justify-between gap-3">
+		<!-- Action bar. On touch devices (tablets) the button is a full-height
+		     vertical bar left of the video showing only the camera emoji (no
+		     keyboard, so no "(Space)"), and the scan hint is hidden. -->
+		<div class="flex items-center justify-between gap-3 [@media(pointer:coarse)]:col-start-1 [@media(pointer:coarse)]:row-start-1 [@media(pointer:coarse)]:items-stretch">
 			<button
 				type="button"
 				onclick={() => capturePhoto()}
-				disabled={submitting || !stream || !cartridgeId}
-				class="rounded bg-[var(--color-tron-cyan)] px-6 py-3 text-lg font-bold text-[var(--color-tron-bg-primary)] disabled:opacity-40"
+				disabled={submitting || (!stream && !mjpegShowing) || !cartridgeId}
+				aria-label="Capture"
+				class="rounded bg-[var(--color-tron-cyan)] px-6 py-3 text-lg font-bold text-[var(--color-tron-bg-primary)] disabled:opacity-40 [@media(pointer:coarse)]:w-full [@media(pointer:coarse)]:px-0 [@media(pointer:coarse)]:text-3xl"
 			>
-				{submitting ? 'Capturing…' : '📷 Capture (Space)'}
+				<span class="[@media(pointer:coarse)]:hidden">{submitting ? 'Capturing…' : '📷 Capture (Space)'}</span>
+				<span class="hidden [@media(pointer:coarse)]:inline {submitting ? 'animate-pulse' : ''}">📷</span>
 			</button>
 			{#if !cartridgeId}
-				<div class="text-xs text-[var(--color-tron-text-secondary)]">Scan a cartridge to enable capture</div>
+				<div class="text-xs text-[var(--color-tron-text-secondary)] [@media(pointer:coarse)]:hidden">Scan a cartridge to enable capture</div>
 			{/if}
+		</div>
 		</div>
 
 		<!-- Station camera tuning. Only for a Pi station: the camera is on the
@@ -844,6 +1038,7 @@
 				onRefresh={requestCameraParams}
 			/>
 		{/if}
+		<div class="hidden [@media(pointer:coarse)]:block">{@render deploymentStatus()}</div>
 
 		<!-- Verdict banner — the headline result for the LATEST capture (advisory only) -->
 		{#if verdict.state !== 'idle'}
