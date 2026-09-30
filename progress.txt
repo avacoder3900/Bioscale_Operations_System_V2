@@ -17070,3 +17070,10 @@ like the other two — scan a QR, assign a nickname. Branch cut from origin/mast
   previous name; fields clear and refocus after success.
 - BUCKET-SYSTEM_PLAN.md sections 4.1 / 9.4 + section 11 row.
 svelte-check: 14 errors, the pre-existing baseline.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-kzlm679py-brevitest.vercel.app
+Source: branch feat/bucket-nickname-block @ commit 1fb8240c
+Retrieve this exact code: git checkout feat/bucket-nickname-block at commit 1fb8240c
+  (or: git log feat/bucket-nickname-block --oneline to find it if the branch has since moved on)
+What this deployment is for: PR #70 — the "Nickname a bucket" third block on /buckets/new; mint
+form back to badge + sticker.
