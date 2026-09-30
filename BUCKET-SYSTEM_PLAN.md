@@ -221,8 +221,8 @@ unused in v2).
 board cards, panels and the registry, with the BKT id always underneath. Display only: nothing
 resolves a *scan* by nickname (`resolveBucketId` is unchanged), so a typo can never send carts into
 the wrong bucket; the board's scan box and `resolveScan` list it as a *search* hit. Unique
-(case-insensitive) among non-retired buckets — a retired tub releases its name. Set optionally at
-mint (§9.4) or any time from the history page (§9.2) by any `manufacturing:write` user, in any state
+(case-insensitive) among non-retired buckets — a retired tub releases its name. Set from the *Nickname a bucket* block on
+`/buckets/new` (§9.4) or any time from the history page (§9.2) by any `manufacturing:write` user, in any state
 but retired; blank clears it. Every set/change/clear is a `nickname` ledger row + `NICKNAME` audit.
 
 ### 4.2 `BucketCycle` → `bucket_cycles`
@@ -471,9 +471,10 @@ hidden on a retired bucket). With a nickname the header reads *Big Blue* with th
 Scan your badge (2026-09-30, when *Require badge* is on), then the sticker → `BKT-NNNNNN` minted
 with that `barcode`; `createdBy` and the `mint` row's `operator` are the badge holder, `enteredBy`
 the session. The badge field keeps its value across creates so one person can mint several tubs;
-a badge scanned into the sticker field, or into any cart field, is refused. An optional **Nickname**
-box sits under the sticker (2026-09-30, §4.1): type it before scanning if you want one — the gun's
-Enter on the sticker still submits — and it clears after each create. `?bucket=BKT-…` presets
+a badge scanned into the sticker field, or into any cart field, is refused. Nicknames are **not**
+taken here (user, 2026-09-30): the page's third block, **Nickname a bucket** (`?/nickname`, §4.1),
+is scan the sticker → type the name → *Set nickname*; an empty name is *Clear nickname*. The gun's
+Enter on the sticker jumps to the name field. `?bucket=BKT-…` presets
 *Replace sticker*. "← Return to previous page." The v1 `print-bucket-labels` page is deleted. This page
 (plus the board's *New bucket* header button) is the **only** way to mint a bucket or replace a
 sticker — the board's inline Mint card was removed on 2026-09-25, along with its `?/mint` and
@@ -591,6 +592,8 @@ per-scan lookup only needs `manufacturing:read`.
 
 | _(feat/badge-system)_ | **Operator badges at mint + start-pass** (§6.1, §9.4; design and build layout in `BADGE-SYSTEM_PLAN.md` Part 2): `createBucket` / `startCycle` take a scanned `badge`; `requireBadge()` resolves it (or falls back to the session when the admin-only *Require badge* switch at `/admin/badges` is off) and refuses a holder without `manufacturing:write`; `startCycle` opens a `Custody` row (`custodyId` on the cycle) that `closeCycle` / `voidCycle` release; every ledger row now carries `enteredBy` + `attribution`; `scanCartIn`, `assertStickerFree`, `auditScan` refuse a badge code; `resolveScan` names the holder when a badge lands in the bucket box. New: `operator-badge.ts`, `custody.ts`, `badge-service.ts`, `/admin/badges` (portal + CR80 print). |
 | _(feat/badge-system)_ | **Bucket nicknames** (§4.1, §9.2, §9.4): `ProductionBucket.nickname` (optional, ≤30, unique among non-retired, case-insensitive); `setBucketNickname()` + `?/nickname` on the history page (any `manufacturing:write` user, blank clears, refused on retired); optional Nickname box on `/buckets/new` (`createBucket` takes `nickname`); board cards/panels headline the nickname over the sticker via `nameOf()`, registry gains a Nickname column, board scan box + `resolveScan` search by it (never an exact resolve — `resolveBucketId` unchanged); new `nickname` ledger type + `NICKNAME` audit. |
+
+| _(feat/bucket-nickname-block)_ | **Nickname moved out of the mint form** (§9.4): the mint block is back to badge + sticker; a third block *Nickname a bucket* on `/buckets/new` (scan sticker → name → `?/nickname` → `setBucketNickname`) sits beside *Create* and *Replace sticker*. Clearing = empty name. History-page rename unchanged. |
 
 `npm run check` after v2: **12 errors / 438 warnings** — the same 12 pre-existing (`r2.ts`,
 `AskBimsWidget.svelte`, 8× `assembly/[sessionId]`, 2× `validation/magnetometer/[sessionId]`
