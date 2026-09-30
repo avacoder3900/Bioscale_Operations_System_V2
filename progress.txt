@@ -16924,3 +16924,36 @@ Retrieve this exact code: git checkout feat/ot2-tailnet-direct at commit 0b4f925
   (or: git log feat/ot2-tailnet-direct --oneline to find it if the branch has since moved on)
 What this deployment is for: first preview with OT2_BRIDGE_TOKEN_SECRET — B14 tailnet-line test.
 Deployment: robot — B14 / muddy-water / ot2-b14.tailf65a70.ts.net, ot2-bridge 1.1 + /bridge serve path.
+
+================================================================================
+2026-09-30 — feat/ot2-tailnet-direct — run-integrity pass (daemon 1.2 on B14) after a tailnet line audit
+================================================================================
+Audit (3 read-only passes over the branch): fill-page start/pause/resume/finish/cancel, protocol import,
+deck-cal Sync, LPC/maintenance, device live reads, opentrons-clone, tip-cal, deck scan, test scan all go
+direct over Tailscale with queue fallback. Queue-only still: legacy /opentrons runs/new + run-detail
+controls, device identify/home/lights, protocol delete, force-reset, per-slot ScannerTrigger rescans,
+page-load reconciles (server-initiated). Live CORS preflight from the branch preview origin passes on the
+robot API (/runs, /protocols) and /bridge/jobs.
+Run-integrity fixes (user priority: no stalls, no resets from connection errors), commit 6002a7024:
+- DAEMON clear_stale_protocol_run used to STOP any paused run the operator didn't pause — incl. the
+  protocol's own protocol.pause() ("tiprack exhausted") and the start-of-run pause — whenever a
+  scan/sweep/calibration opened a maintenance run. Now only stop-requested or idle>10min runs are cleared.
+- DAEMON robot-server restart: auto-heal refuses unless /runs is readable and holds no live run; the
+  manual button refuses a readable live run. auto_resume_run idempotent (declines after >1 'play') and on
+  its own thread (no longer blocks the serial worker 75 s). /bridge sweep progress cancels only on an
+  explicit cancelRequested:true — 404 from a deployment without the jobs routes used to kill every sweep.
+- BIMS: ?/autoResumeFallback when the /bridge auto-resume hand-off fails; browser auto-resume checks the
+  robot action log; RobotSession self-heals a fallback every 30 s (re-reads /connection first);
+  restart over Tailscale reports the daemon's refusal.
+Tests: daemon 29 OK (+10), test:unit 508/508, npm run check 106 = baseline.
+B14: ot2-bridge 1.2 deployed (robot idle; 1.1 kept as ot2-bridge.py.v1.1.bak, 1.0 as .v1.0.bak), md5
+0e380b34…, /bridge/health 200 with token (jobServer, serialOpen, engineOk), 401 without.
+Still open: B14 BIMS_BASE_URL → old feature preview (no jobs routes: sweep won't record in BIMS);
+queue-line stale-bundle start can exceed the 60 s action; /bridge jobs are in daemon memory only;
+/bridge busy state not shared across browsers; legacy /opentrons pages still queue-only.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-git-feat-ot-2ae11c-brevitest.vercel.app
+Source: branch feat/ot2-tailnet-direct @ commit 6002a7024
+Retrieve this exact code: git checkout feat/ot2-tailnet-direct at commit 6002a7024
+What this deployment is for: run-integrity fixes on the tailnet line.
+Deployment: robot — B14 / ot2-b14.tailf65a70.ts.net, ot2-bridge 1.2 (scripts/ot2-bridge.py @ 6002a7024).
