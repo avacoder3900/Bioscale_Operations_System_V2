@@ -16878,3 +16878,10 @@ Where it shows / is set:
 - BUCKET-SYSTEM_PLAN.md: §4.1 (field + rules), §4.3 (type), §9.2, §9.4, §11 row, header date.
 svelte-check: 14 errors before and after — all pre-existing (r2.ts, research-proxy.ts,
 AskBimsWidget, 8× assembly/[sessionId], 2× validation/magnetometer/[sessionId]); none in these files.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-9bxtxuv6a-brevitest.vercel.app
+Source: branch feat/badge-system @ commit d7146e64
+Retrieve this exact code: git checkout feat/badge-system at commit d7146e64
+  (or: git log feat/badge-system --oneline to find it if the branch has since moved on)
+What this deployment is for: bucket nicknames — optional Nickname box on /buckets/new, add/rename on
+/buckets/[bucketId], nickname headlines on the board cards/panels, registry Nickname column + search.
