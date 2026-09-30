@@ -759,8 +759,12 @@
 			</div>
 		{/if}
 
+		<!-- Context bar + video + action bar. On touch devices (tablets) this becomes
+		     a flex column and the context bar and action bar swap places via `order`
+		     (Capture on top, context bar under the video). Desktop keeps DOM order. -->
+		<div class="space-y-4 [@media(pointer:coarse)]:flex [@media(pointer:coarse)]:flex-col [@media(pointer:coarse)]:gap-4 [@media(pointer:coarse)]:space-y-0">
 		<!-- Context bar: sticky cartridge + station + camera -->
-		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-4">
+		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-4 [@media(pointer:coarse)]:order-3">
 			<div class="flex flex-wrap items-center gap-4">
 				<div class="min-w-[200px] flex-1">
 					<div class="text-xs uppercase text-[var(--color-tron-text-secondary)]">Cartridge</div>
@@ -811,7 +815,7 @@
 		</div>
 
 		<!-- Video pane -->
-		<div class="rounded-lg border border-[var(--color-tron-border)] bg-black p-2">
+		<div class="rounded-lg border border-[var(--color-tron-border)] bg-black p-2 [@media(pointer:coarse)]:order-2">
 			{#if cameraError}
 				<div class="flex aspect-video items-center justify-center text-[var(--color-tron-red,#ff3366)]">
 					{cameraError}
@@ -824,7 +828,7 @@
 
 		<!-- Action bar. On touch devices (tablets) the button spans the video
 		     width at ~2x height so it's an easy thumb target. -->
-		<div class="flex items-center justify-between gap-3 [@media(pointer:coarse)]:flex-col [@media(pointer:coarse)]:items-stretch">
+		<div class="flex items-center justify-between gap-3 [@media(pointer:coarse)]:order-1 [@media(pointer:coarse)]:flex-col [@media(pointer:coarse)]:items-stretch">
 			<button
 				type="button"
 				onclick={() => capturePhoto()}
@@ -836,6 +840,7 @@
 			{#if !cartridgeId}
 				<div class="text-xs text-[var(--color-tron-text-secondary)]">Scan a cartridge to enable capture</div>
 			{/if}
+		</div>
 		</div>
 
 		<!-- Station camera tuning. Only for a Pi station: the camera is on the

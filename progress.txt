@@ -16692,3 +16692,17 @@ Retrieve this exact code: git checkout master at commit 592b1ee7
 What this deployment is for: round-2 touch layout for Post-Mortem Inspect, shipped to production at
   the user's request for on-tablet testing (the preview is behind Vercel SSO, which tablets can't pass).
   GitHub deployment 6746198009 (Production). Smoke: /login 200.
+
+================================================================================
+2026-09-30 — feat/post-mortem-tablet-swap → master — Post-Mortem Inspect: tablet swap test
+================================================================================
+Touch-only (`pointer: coarse`) layout test for landscape tablets, requested by the user to see how it
+reads on-device: the Cartridge/Station context bar and the Capture action bar swap places. Touch order
+is now Capture → video → context bar. Implemented without duplicating markup (the context bar holds
+bound <select>s with ids and the <video> is bind:this): the three blocks are wrapped in a container
+that stays `space-y-4` on desktop (identical layout) and becomes `flex flex-col gap-4 space-y-0` on
+touch, with `order-1/2/3` on action bar / video / context bar. Verified in compiled CSS: order, flex
+and gap rules sit inside @media(pointer:coarse), and the touch `space-y-0` rule follows the base
+`space-y-4` rule (same :where specificity, so it wins on tablets). `npm run check`: 13 errors
+(baseline 14), none in the touched file. Vite compile succeeds.
+Pushed to master at the user's explicit request for on-tablet testing.
