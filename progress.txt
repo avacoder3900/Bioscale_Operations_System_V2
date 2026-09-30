@@ -17055,3 +17055,18 @@ Retrieve this exact code: git checkout feat/badge-system at commit 0b16a321
   (or: git log feat/badge-system --oneline to find it if the branch has since moved on)
 What this deployment is for: the final-build merge of origin/master into feat/badge-system — the
 exact tree PR #69 proposes for master (badge system + bucket nicknames + master's Post-Mortem work).
+
+================================================================================
+2026-09-30 — feat/bucket-nickname-block — /buckets/new: nickname is its own block, not part of mint
+================================================================================
+User (after PR #69 merged): instead of the nickname field under bucket creation, make a third block
+like the other two — scan a QR, assign a nickname. Branch cut from origin/master (a80ef0fd).
+- new/+page.server.ts: create no longer reads `nickname`; new `?/nickname` action calls
+  setBucketNickname (manufacturing:write). createBucket's optional nickname param is left in the
+  service (unused by this page now).
+- new/+page.svelte: nickname input and state removed from the Create form; grid is lg:grid-cols-3;
+  third form "Nickname a bucket": bucket sticker/id field (Enter jumps to the name field) + name
+  field; button reads Set nickname / Clear nickname (empty name clears); success line shows the
+  previous name; fields clear and refocus after success.
+- BUCKET-SYSTEM_PLAN.md sections 4.1 / 9.4 + section 11 row.
+svelte-check: 14 errors, the pre-existing baseline.

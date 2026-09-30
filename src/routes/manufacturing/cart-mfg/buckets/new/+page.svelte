@@ -9,15 +9,17 @@
 			presetBucket: string | null;
 			recent: { bucketId: string; barcode: string | null; nickname: string | null; state: string; cycleCount: number; createdAt: string | null; createdBy: string | null }[];
 		};
-		form: { create?: Result; replace?: Result } | null;
+		form: { create?: Result; replace?: Result; nickname?: Result } | null;
 	}
 	let { data, form }: Props = $props();
 
 	let qr = $state('');
 	let badge = $state('');
-	let nickname = $state(''); // optional; clears after each create like the sticker does
 	let replaceBucket = $state('');
 	let replaceQr = $state('');
+	// Third block: scan a bucket, name it.
+	let nickBucket = $state('');
+	let nickname = $state('');
 	let busy = $state(false);
 	let presetApplied = $state(false);
 
@@ -40,10 +42,13 @@
 	// (one person mints several tubs in a row) — unless the badge was the problem.
 	function afterCreate(result: { type: string; data?: any }) {
 		qr = '';
-		if (result.type === 'success') nickname = '';
 		const code = result.type === 'failure' ? result.data?.create?.code : null;
 		if (code && String(code).startsWith('BADGE')) { badge = ''; focusBadge(); }
 		else focusQr();
+	}
+	// A gun sends Enter after the bucket's QR: jump to the name field instead of submitting.
+	function nickBucketKeydown(e: KeyboardEvent) {
+		if (e.key === 'Enter') { e.preventDefault(); setTimeout(() => document.getElementById('nickname')?.focus(), 60); }
 	}
 	function goBack() {
 		if (typeof history !== 'undefined' && history.length > 1) history.back();
@@ -62,7 +67,7 @@
 		<button type="button" onclick={goBack} class="rounded border border-[var(--color-tron-border)] px-3 py-1.5 text-xs text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-cyan)]/60">← Return to previous page</button>
 	</div>
 
-	<div class="grid gap-4 lg:grid-cols-2">
+	<div class="grid gap-4 lg:grid-cols-3">
 		<!-- Create -->
 		<form
 			method="POST"
@@ -83,17 +88,10 @@
 				<span class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">{badgeRequired ? '2 · ' : ''}Scan the tub's QR sticker</span>
 				<input id="qr" type="text" name="qr" bind:value={qr} autocomplete="off" placeholder="scan…" class="{inputCls} {!badgeRequired || badge.trim() ? 'border-[var(--color-tron-cyan)]/60 ring-1 ring-[var(--color-tron-cyan)]/30' : ''}" />
 			</label>
-			<!-- Optional nickname (2026-09-30). Sits after the sticker so the gun's Enter on
-			     the QR still submits; type it first if you want one. Editable later on the
-			     bucket's history page. -->
-			<label class="block">
-				<span class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Nickname <span class="normal-case tracking-normal">(optional — e.g. “Big Blue”)</span></span>
-				<input type="text" name="nickname" bind:value={nickname} maxlength="30" autocomplete="off" placeholder="a name for the floor…" class="{inputCls} font-sans" />
-			</label>
 			{#if form?.create?.error}<p class="text-xs text-[var(--color-tron-error)]">{form.create.error}</p>{/if}
 			{#if form?.create?.success}
 				<p class="rounded border border-green-500/40 bg-green-900/15 p-2 text-xs text-green-300">
-					Bucket created — {#if form.create.nickname}<strong>{form.create.nickname}</strong>, {/if}sticker <span class="font-mono">{form.create.barcode}</span>
+					Bucket created — sticker <span class="font-mono">{form.create.barcode}</span>
 					<span class="text-[var(--color-tron-text-secondary)]">(internal id {form.create.bucketId})</span>{#if form.create.operator}, minted by <strong>{form.create.operator}</strong>{form.create.method === 'badge' ? ' (badge)' : ''}{/if}. It's on the board under <strong>Available</strong>.
 				</p>
 			{/if}
@@ -127,6 +125,35 @@
 			{/if}
 			<button type="submit" disabled={busy || !replaceBucket.trim() || !replaceQr.trim()} class="w-full rounded-lg border border-[var(--color-tron-border)] py-2.5 text-sm font-semibold text-[var(--color-tron-text)] hover:border-[var(--color-tron-cyan)]/60 disabled:opacity-30">
 				Replace sticker
+			</button>
+		</form>
+
+		<!-- Nickname a bucket (2026-09-30): its own block, same shape as the other two.
+		     Scan the tub, type a name. An empty name clears the nickname. -->
+		<form id="nickname"
+			method="POST"
+			action="?/nickname"
+			use:enhance={() => { busy = true; return async ({ update, result }) => { await update({ reset: false }); busy = false; if (result.type === 'success') { nickBucket = ''; nickname = ''; setTimeout(() => document.getElementById('nickBucket')?.focus(), 60); } }; }}
+			class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4 space-y-3"
+		>
+			<p class="text-sm font-medium text-[var(--color-tron-text)]">Nickname a bucket</p>
+			<p class="text-[10px] text-[var(--color-tron-text-secondary)]">A name for the floor, shown on the board next to the sticker. Leave the name empty to clear it.</p>
+			<label class="block">
+				<span class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Bucket — scan its sticker (or type its internal id)</span>
+				<input id="nickBucket" type="text" name="bucketId" bind:value={nickBucket} onkeydown={nickBucketKeydown} autocomplete="off" placeholder="scan sticker…" class={inputCls} />
+			</label>
+			<label class="block">
+				<span class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Nickname <span class="normal-case tracking-normal">(e.g. “Big Blue”)</span></span>
+				<input id="nickname" type="text" name="nickname" bind:value={nickname} maxlength="30" autocomplete="off" placeholder="a name for the floor…" class="{inputCls} font-sans" />
+			</label>
+			{#if form?.nickname?.error}<p class="text-xs text-[var(--color-tron-error)]">{form.nickname.error}</p>{/if}
+			{#if form?.nickname?.success}
+				<p class="rounded border border-green-500/40 bg-green-900/15 p-2 text-xs text-green-300">
+					{#if form.nickname.nickname}{form.nickname.bucketId} is now <strong>{form.nickname.nickname}</strong>{#if form.nickname.previous} (was {form.nickname.previous}){/if}.{:else}Nickname cleared from {form.nickname.bucketId}{#if form.nickname.previous} (was {form.nickname.previous}){/if}.{/if}
+				</p>
+			{/if}
+			<button type="submit" disabled={busy || !nickBucket.trim()} class="w-full rounded-lg border border-[var(--color-tron-border)] py-2.5 text-sm font-semibold text-[var(--color-tron-text)] hover:border-[var(--color-tron-cyan)]/60 disabled:opacity-30">
+				{nickname.trim() ? 'Set nickname' : 'Clear nickname'}
 			</button>
 		</form>
 	</div>

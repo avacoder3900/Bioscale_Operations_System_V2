@@ -7,7 +7,7 @@
 import { fail, redirect } from '@sveltejs/kit';
 import { connectDB, ProductionBucket } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
-import { BucketError, createBucket, replaceBucketSticker } from '$lib/server/services/bucket-service';
+import { BucketError, createBucket, replaceBucketSticker, setBucketNickname } from '$lib/server/services/bucket-service';
 import { badgeMode } from '$lib/server/services/badge-service';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -47,15 +47,35 @@ export const actions: Actions = {
 		await connectDB();
 		const d = await request.formData();
 		try {
+			// Nickname is no longer taken here (user, 2026-09-30) — it has its own
+			// block below (?/nickname) so the mint stays "scan the sticker, nothing else".
 			const r = await createBucket({
 				qr: String(d.get('qr') ?? ''),
 				badge: String(d.get('badge') ?? ''),
-				nickname: String(d.get('nickname') ?? ''), // optional (2026-09-30)
 				user: { _id: locals.user._id, username: locals.user.username }
 			});
 			return { create: { success: true, ...r } };
 		} catch (e) {
-			if (e instanceof BucketError) return fail(e.status, { create: { error: e.message } });
+			if (e instanceof BucketError) return fail(e.status, { create: { error: e.message, code: e.code ?? null } });
+			throw e;
+		}
+	},
+
+	// Third block: scan a bucket's QR, give it a nickname (or clear it with an empty name).
+	nickname: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'manufacturing:write');
+		await connectDB();
+		const d = await request.formData();
+		try {
+			const r = await setBucketNickname({
+				bucketId: String(d.get('bucketId') ?? ''),
+				nickname: String(d.get('nickname') ?? ''),
+				user: { _id: locals.user._id, username: locals.user.username }
+			});
+			return { nickname: { success: true, ...r } };
+		} catch (e) {
+			if (e instanceof BucketError) return fail(e.status, { nickname: { error: e.message } });
 			throw e;
 		}
 	},
