@@ -16760,3 +16760,13 @@ took photos by drawing that decoded VP8 frame to a canvas, so compression artifa
 `npm run check`: 13 errors (baseline 14), none in the touched file; warnings 431 → 430.
 Local vite build skipped (slow on this machine); Vercel's branch build used as the compile gate
 before fast-forwarding master. Pushed to master at the user's explicit request.
+Deployment: preview — https://bioscale-operations-system-mongodb-2kolo85qw-brevitest.vercel.app
+Source: branch feat/post-mortem-mjpeg-snapshot @ commit b2b650c6
+What this deployment is for: compile gate before fast-forwarding master (GitHub deployment 6763652294).
+Deployment: production — https://bioscale-operations-system-mongodb-erfdocqo8-brevitest.vercel.app
+Source: branch master (= feat/post-mortem-mjpeg-snapshot) @ commit b2b650c6
+Retrieve this exact code: git checkout master at commit b2b650c6
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: on-station test of the MJPEG view + /snapshot.jpg stills on Post-Mortem
+  Inspect (station 3 = new path; station 2 = WebRTC fallback until its agent is updated).
+  GitHub deployment 6763725750 (Production). Smoke: /login 200.
