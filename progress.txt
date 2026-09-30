@@ -17185,3 +17185,55 @@ Retrieve this exact code: git checkout feat/badge-gated-steps at commit aa8206aa
   (or: git log feat/badge-gated-steps --oneline to find it if the branch has since moved on)
 What this deployment is for: PR #71 — badge asked for at scan-in, discards and Move to oven; not at
 mint or start-pass. Needs an issued badge (Badge Portal) to click through the three gates.
+2026-09-30 — feat/post-mortem-tablet-fullscreen → master — Post-Mortem Inspect: tablet fullscreen mode
+================================================================================
+Third layout for Post-Mortem Inspect (desktop → tablet/touch → fullscreen), requested after tablet
+testing. A touch-only "⛶ Fullscreen" button in the page header enters it:
+  - The context/video/action wrapper becomes `fixed inset-0 z-[60]` black grid
+    `grid-cols-[6.25vw_1fr] grid-rows-[minmax(0,1fr)]`: the vertical 📷 Capture bar | the live feed
+    (MJPEG <img> or WebRTC <video>, `h-full w-full object-contain`). Cartridge/station bar hidden.
+    Existing elements are restyled, not duplicated (the <video> is bind:this with a live srcObject).
+  - Also calls document.documentElement.requestFullscreen({navigationUI:'hide'}) to drop Android's
+    address/status bars. A `fullscreenchange` to non-fullscreen (back gesture) leaves the layout. If
+    the browser refuses (e.g. iPad Safari), the layout still fills the viewport and a small ✕ exit
+    appears (only in that case). Body scroll is locked while active; fullscreen is exited on destroy.
+Scanner handling is unchanged (wedge input + Pi scanner via WS still lock cartridges while in fullscreen).
+`npm run check`: 13 errors (baseline), no new warnings. Vercel branch build used as the compile gate.
+Pushed to master at the user's explicit request.
+Deployment: preview — https://bioscale-operations-system-mongodb-kxq1lt5lj-brevitest.vercel.app
+Source: branch feat/post-mortem-tablet-fullscreen @ commit e48b2d39
+What this deployment is for: compile gate before fast-forwarding master (GitHub deployment 6769691890).
+Deployment: production — https://bioscale-operations-system-mongodb-iwifl3s5n-brevitest.vercel.app
+Source: branch master (= feat/post-mortem-tablet-fullscreen) @ commit e48b2d39
+Retrieve this exact code: git checkout master at commit e48b2d39
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: on-tablet test of the Post-Mortem fullscreen mode (feed + Capture only).
+  GitHub deployment 6769733121 (Production). Smoke: /login 200.
+
+================================================================================
+2026-09-30 — feat/post-mortem-fullscreen-bars → master — Post-Mortem fullscreen: two bars + cartridge strip
+================================================================================
+Follow-up to the fullscreen mode (post-mortem-inspect/+page.svelte, fullscreen layout only; the
+desktop and regular tablet layouts are untouched):
+  - Grid is now `grid-cols-[6.25vw_minmax(0,1fr)_6.25vw] grid-rows-[minmax(0,1fr)_auto]`: a 📷
+    Capture bar down each edge (row-span-2; the right one is a second button with the same
+    onclick/disabled/pulse as the left), feed in the middle.
+  - Feed pinned to the top of the screen (`items-start` + `object-top` on the MJPEG <img> and the
+    WebRTC <video>) instead of vertically centred.
+  - Compact one-line cartridge strip under the feed with the same content as the context bar's
+    Cartridge block: "⚠ Scan to start · Accepts: completed · linked" before a scan, "🟢 <id> ·
+    <status> · scanned <time> [Release]" after. The reject reason (wrong status / not found) is shown
+    there too, since the normal red reject banner sits behind the fullscreen layout.
+  - The fallback ✕ exit (only when browser fullscreen is refused) moved to the top-left of the feed
+    so it doesn't sit on the right bar.
+`npm run check`: 13 errors (baseline), no new warnings. Vercel branch build used as the compile gate.
+Pushed to master at the user's explicit request.
+Deployment: preview — https://bioscale-operations-system-mongodb-o18pfm400-brevitest.vercel.app
+Source: branch feat/post-mortem-fullscreen-bars @ commit 5cf92d30
+What this deployment is for: compile gate before fast-forwarding master (GitHub deployment 6769964104).
+Deployment: production — https://bioscale-operations-system-mongodb-8ellsnuv7-brevitest.vercel.app
+Source: branch master (= feat/post-mortem-fullscreen-bars) @ commit 5cf92d30
+Retrieve this exact code: git checkout master at commit 5cf92d30
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: on-tablet test of the two Capture bars, top-aligned feed and cartridge
+  strip in fullscreen. GitHub deployment 6769996539 (Production). Smoke: /login 200.
