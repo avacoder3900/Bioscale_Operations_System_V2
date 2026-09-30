@@ -760,11 +760,11 @@
 		{/if}
 
 		<!-- Context bar + video + action bar. On touch devices (tablets) this becomes
-		     a flex column and the context bar and action bar swap places via `order`
-		     (Capture on top, context bar under the video). Desktop keeps DOM order. -->
-		<div class="space-y-4 [@media(pointer:coarse)]:flex [@media(pointer:coarse)]:flex-col [@media(pointer:coarse)]:gap-4 [@media(pointer:coarse)]:space-y-0">
+		     a grid: a narrow vertical Capture bar (1/16 of the screen width) left of
+		     the video, with the context bar spanning below. Desktop keeps DOM order. -->
+		<div class="space-y-4 [@media(pointer:coarse)]:grid [@media(pointer:coarse)]:grid-cols-[6.25vw_1fr] [@media(pointer:coarse)]:gap-4 [@media(pointer:coarse)]:space-y-0">
 		<!-- Context bar: sticky cartridge + station + camera -->
-		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-4 [@media(pointer:coarse)]:order-3">
+		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-4 [@media(pointer:coarse)]:col-span-2 [@media(pointer:coarse)]:row-start-2">
 			<div class="flex flex-wrap items-center gap-4">
 				<div class="min-w-[200px] flex-1">
 					<div class="text-xs uppercase text-[var(--color-tron-text-secondary)]">Cartridge</div>
@@ -815,7 +815,7 @@
 		</div>
 
 		<!-- Video pane -->
-		<div class="rounded-lg border border-[var(--color-tron-border)] bg-black p-2 [@media(pointer:coarse)]:order-2">
+		<div class="rounded-lg border border-[var(--color-tron-border)] bg-black p-2 [@media(pointer:coarse)]:col-start-2 [@media(pointer:coarse)]:row-start-1">
 			{#if cameraError}
 				<div class="flex aspect-video items-center justify-center text-[var(--color-tron-red,#ff3366)]">
 					{cameraError}
@@ -826,19 +826,22 @@
 			{/if}
 		</div>
 
-		<!-- Action bar. On touch devices (tablets) the button spans the video
-		     width at ~2x height so it's an easy thumb target. -->
-		<div class="flex items-center justify-between gap-3 [@media(pointer:coarse)]:order-1 [@media(pointer:coarse)]:flex-col [@media(pointer:coarse)]:items-stretch">
+		<!-- Action bar. On touch devices (tablets) the button is a full-height
+		     vertical bar left of the video showing only the camera emoji (no
+		     keyboard, so no "(Space)"), and the scan hint is hidden. -->
+		<div class="flex items-center justify-between gap-3 [@media(pointer:coarse)]:col-start-1 [@media(pointer:coarse)]:row-start-1 [@media(pointer:coarse)]:items-stretch">
 			<button
 				type="button"
 				onclick={() => capturePhoto()}
 				disabled={submitting || !stream || !cartridgeId}
-				class="rounded bg-[var(--color-tron-cyan)] px-6 py-3 text-lg font-bold text-[var(--color-tron-bg-primary)] disabled:opacity-40 [@media(pointer:coarse)]:w-full [@media(pointer:coarse)]:py-9"
+				aria-label="Capture"
+				class="rounded bg-[var(--color-tron-cyan)] px-6 py-3 text-lg font-bold text-[var(--color-tron-bg-primary)] disabled:opacity-40 [@media(pointer:coarse)]:w-full [@media(pointer:coarse)]:px-0 [@media(pointer:coarse)]:text-3xl"
 			>
-				{submitting ? 'Capturing…' : '📷 Capture (Space)'}
+				<span class="[@media(pointer:coarse)]:hidden">{submitting ? 'Capturing…' : '📷 Capture (Space)'}</span>
+				<span class="hidden [@media(pointer:coarse)]:inline {submitting ? 'animate-pulse' : ''}">📷</span>
 			</button>
 			{#if !cartridgeId}
-				<div class="text-xs text-[var(--color-tron-text-secondary)]">Scan a cartridge to enable capture</div>
+				<div class="text-xs text-[var(--color-tron-text-secondary)] [@media(pointer:coarse)]:hidden">Scan a cartridge to enable capture</div>
 			{/if}
 		</div>
 		</div>

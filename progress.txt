@@ -16712,3 +16712,20 @@ Retrieve this exact code: git checkout master at commit 2d6ba750
   (or: git log master --oneline to find it if the branch has since moved on)
 What this deployment is for: on-tablet test of the Capture ↔ cartridge/station bar swap (touch only).
   GitHub deployment 6762152984 (Production). Smoke: /login 200.
+
+================================================================================
+2026-09-30 — feat/post-mortem-tablet-hide-askbims → master — Post-Mortem Inspect: vertical Capture bar
+================================================================================
+More touch-only (`pointer: coarse`) changes for the landscape tablets; mouse-driven desktops unchanged.
+  - routes/+layout.svelte: Ask BIMS widget hidden on touch devices at post-mortem-inspect (wrapped in a
+    div hidden via the same path check as the header; the widget's panels are position:fixed inside
+    its own markup, no portal, so the wrapper hides all of it). Renamed hideHeaderOnTouch →
+    hideChromeOnTouch since it now covers both.
+  - post-mortem-inspect/+page.svelte: the tablet layout switches from the flex/order swap to a grid —
+    `grid-cols-[6.25vw_1fr]`: a vertical Capture bar 1/16 of the screen wide, full video height, left
+    of the video; the cartridge/station bar spans both columns below. The button shows only 📷 on
+    touch (no "Capture (Space)" text — no keyboard; pulses while submitting; aria-label="Capture"),
+    and the "Scan a cartridge to enable capture" hint is hidden.
+Verified all touch utilities in compiled CSS inside @media(pointer:coarse). `npm run check`: 13 errors
+(baseline 14), none in touched files. Vite compile succeeds.
+Pushed to master at the user's explicit request for on-tablet testing.
