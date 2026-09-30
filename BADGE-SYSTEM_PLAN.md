@@ -1,5 +1,3 @@
-| `src/routes/admin/badges/print/+page.server.ts`, `+page.svelte` | **new** — batch print sheet (`?ids=`) |
-| `src/lib/components/admin/BadgeCard.svelte` | **new** — the CR80 card, shared by both print pages |
 # Badge System — Operator Identity for the Bucket System (design discussion)
 
 **Status:** Part 1 = design discussion (2026-09-23). Part 2 = v1 build layout (2026-09-30), **built the same day on `feat/badge-system`** — see §20 for what changed between layout and code.
@@ -571,6 +569,8 @@ moved here so the gate is one `isAdmin()` check in one route rather than two.
 | `src/routes/admin/+layout.server.ts`, `+layout.svelte` | Badges tab |
 | `src/routes/admin/badges/+page.server.ts`, `+page.svelte` | **new** — portal + **Require badge** toggle (`setBadgeMode`, `isAdmin` gate) |
 | `src/routes/admin/badges/[badgeId]/print/+page.server.ts`, `+page.svelte` | **new** — print |
+| `src/routes/admin/badges/print/+page.server.ts`, `+page.svelte` | **new** — batch print sheet (`?ids=`) |
+| `src/lib/components/admin/BadgeCard.svelte` | **new** — the CR80 card, shared by both print pages |
 | `src/routes/manufacturing/cart-mfg/buckets/new/+page.server.ts`, `+page.svelte` | badge field |
 | `src/routes/manufacturing/cart-mfg/buckets/+page.server.ts`, `+page.svelte` | badge on `?/start`, `badgeMode` in load, read-only "Badge required" note on the board |
 | `BUCKET-SYSTEM_PLAN.md` | one build-history row + §6.1 / §9.4 notes, same commit as the bucket-side code |

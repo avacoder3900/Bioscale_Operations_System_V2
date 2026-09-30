@@ -16798,3 +16798,10 @@ badge-service: getBadges(ids) (selection order kept, unknown ids dropped) and bu
 takes one id or a list (updateMany; the sheet bumps each active badge once). Admin gate is the same
 isAdmin() as the rest of the portal. BADGE-SYSTEM_PLAN.md sections 17.2 / 18 / 20 updated.
 svelte-check: 14 errors before and after, all pre-existing; none in these files.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-fwo6hu6tt-brevitest.vercel.app
+Source: branch feat/badge-system @ commit 38347977
+Retrieve this exact code: git checkout feat/badge-system at commit 38347977
+  (or: git log feat/badge-system --oneline to find it if the branch has since moved on)
+What this deployment is for: batch print — build a list on /admin/badges (dropdown / name search /
+add all) and print every card on one sheet at /admin/badges/print?ids=…
