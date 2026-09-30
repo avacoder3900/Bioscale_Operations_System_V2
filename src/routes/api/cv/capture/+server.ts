@@ -62,10 +62,23 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		throw error(403, 'Forbidden');
 	}
 
+	// Per-step timings, returned as `timingsMs` so capture pages can show where
+	// a slow capture spends its time. Measurement only — no behaviour change.
+	const t0 = performance.now();
+	let tLap = t0;
+	const timingsMs: Record<string, number> = {};
+	const lap = (step: string) => {
+		const now = performance.now();
+		timingsMs[step] = (timingsMs[step] ?? 0) + Math.round(now - tLap);
+		tLap = now;
+	};
+
 	await connectDB();
+	lap('connect');
 
 	try {
 		const formData = await request.formData();
+		lap('parse');
 		const file = formData.get('file') as File | null;
 		const cartridgeId = formData.get('cartridgeId')?.toString().trim();
 		const phase = formData.get('phase')?.toString().trim();
@@ -141,8 +154,10 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 
 		const seq = updated.photoSequence;
 		const cartridgeImageNumber = `${cartridgeId}_${pad(seq)}`;
+		lap('db');
 
 		const buffer = Buffer.from(await file.arrayBuffer());
+		lap('parse');
 
 		// Resolve the camera view (CV-PIPELINE-V2 top/bottom split). The manual
 		// toggle always wins; when it's unset, auto-classify from barcode presence
@@ -157,6 +172,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 				viewSource = 'barcode-auto';
 			}
 		}
+		lap('barcode');
 
 		// Pre-warm the training-embedding cache while the pixels are already in
 		// memory (~150ms) — so training never has to re-fetch this photo from R2
@@ -168,6 +184,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		} catch (e) {
 			console.error('[capture] embed cache-warm failed:', e instanceof Error ? e.message : e);
 		}
+		lap('embed');
 
 		const imageId = generateId();
 		const filenameFromClient = file.name || `${cartridgeImageNumber}.jpg`;
@@ -176,6 +193,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 
 		await uploadViaWorker(buffer, key, contentType);
 		const publicUrl = getR2Url(key);
+		lap('storage');
 
 		const capturedAt = new Date();
 		await CvImage.create({
@@ -275,6 +293,9 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			});
 		}
 
+		lap('db');
+		timingsMs.total = Math.round(performance.now() - t0);
+
 		// Fire-and-forget: any project deploying at this phase runs inference.
 		// Errors are swallowed inside runPhaseInference — capture response always
 		// succeeds regardless of inference state.
@@ -296,6 +317,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			filePath: key,
 			view: effectiveView ?? null,
 			viewSource: viewSource ?? null,
+			timingsMs,
 			...(warning ? { warning } : {})
 		}, { status: 201 });
 	} catch (e: any) {

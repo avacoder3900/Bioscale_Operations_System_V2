@@ -189,6 +189,24 @@
 	let snapshotTokenAt = 0;
 	const SNAPSHOT_TOKEN_MAX_AGE_MS = 4 * 60_000;
 
+	// Background renewal: re-mint every 3.5 min while a station's MJPEG view is
+	// up, so the token is always under SNAPSHOT_TOKEN_MAX_AGE_MS and a Capture
+	// tap never waits on a token round trip. Renewal never touches stationToken,
+	// so the live stream is not restarted.
+	let snapshotRenewTimer: ReturnType<typeof setInterval> | null = null;
+	const SNAPSHOT_TOKEN_RENEW_MS = 3.5 * 60_000;
+
+	function stopSnapshotRenewal() {
+		if (snapshotRenewTimer) { clearInterval(snapshotRenewTimer); snapshotRenewTimer = null; }
+	}
+
+	function startSnapshotRenewal(stationId: string) {
+		stopSnapshotRenewal();
+		snapshotRenewTimer = setInterval(() => {
+			if (selectedStationId === stationId && mjpegShowing) void mintSnapshotToken(stationId);
+		}, SNAPSHOT_TOKEN_RENEW_MS);
+	}
+
 	async function mintSnapshotToken(stationId: string): Promise<string | null> {
 		try {
 			const tokRes = await fetch(`/api/cv/stations/${encodeURIComponent(stationId)}/token`);
@@ -527,6 +545,7 @@
 		mjpegError = false;
 		snapshotToken = null;
 		snapshotTokenAt = 0;
+		stopSnapshotRenewal();
 		if (pc) { try { pc.close(); } catch { /* */ } pc = null; }
 		if (ws) { try { ws.close(); } catch { /* */ } ws = null; }
 		if (stream) {
@@ -584,6 +603,7 @@
 			stationHostname = station.hostname;
 			snapshotToken = token;
 			snapshotTokenAt = Date.now();
+			startSnapshotRenewal(stationId);
 		} catch (e) {
 			flashBanner('err', `Failed to fetch station token: ${e instanceof Error ? e.message : e}`);
 			selectedStationId = null;
@@ -699,6 +719,54 @@
 		}
 	}
 
+	// ── Capture timing readout (diagnostics only) ───────────────────────────
+	// Splits a capture into: getting the photo (station snapshot or video-feed
+	// frame), the network leg (upload + response, i.e. round trip minus server
+	// time) and the server's own steps (the endpoint's `timingsMs`).
+	type CaptureTiming = {
+		source: 'station' | 'feed';
+		photoMs: number;
+		roundTripMs: number;
+		serverMs: number | null;
+		steps: Record<string, number> | null;
+		totalMs: number;
+	};
+	let lastTiming = $state<CaptureTiming | null>(null);
+
+	function secs(ms: number): string {
+		return `${(ms / 1000).toFixed(2)} s`;
+	}
+
+	const timingLong = $derived.by(() => {
+		const t = lastTiming;
+		if (!t) return '';
+		const net = t.serverMs != null ? Math.max(0, t.roundTripMs - t.serverMs) : null;
+		const steps = t.steps
+			? Object.entries(t.steps)
+				.filter(([k, v]) => k !== 'total' && v > 0)
+				.map(([k, v]) => `${k} ${secs(v)}`)
+				.join(', ')
+			: '';
+		return [
+			`photo ${secs(t.photoMs)} (${t.source === 'station' ? 'station snapshot' : 'video feed'})`,
+			net != null ? `network ${secs(net)}` : `upload ${secs(t.roundTripMs)}`,
+			t.serverMs != null ? `server ${secs(t.serverMs)}${steps ? ` (${steps})` : ''}` : null,
+			`total ${secs(t.totalMs)}`
+		].filter(Boolean).join(' · ');
+	});
+
+	const timingShort = $derived.by(() => {
+		const t = lastTiming;
+		if (!t) return '';
+		const net = t.serverMs != null ? Math.max(0, t.roundTripMs - t.serverMs) : null;
+		return [
+			`photo ${secs(t.photoMs)}`,
+			net != null ? `net ${secs(net)}` : `upload ${secs(t.roundTripMs)}`,
+			t.serverMs != null ? `server ${secs(t.serverMs)}` : null,
+			`total ${secs(t.totalMs)}`
+		].filter(Boolean).join(' · ');
+	});
+
 	// ── Capture → poll → (advisory) verdict ─────────────────────────────────
 	async function capturePhoto() {
 		if (submitting) return;
@@ -717,11 +785,14 @@
 		const mySeq = ++pollSeq;
 		verdict = { state: 'capturing' };
 		shadowNote = null;
+		const tStart = performance.now();
+		let photoSource: CaptureTiming['source'] = 'feed';
 		try {
 			let blob: Blob | null = null;
 
 			if (mjpegShowing && selectedStationId) {
 				blob = await fetchStationSnapshot(selectedStationId);
+				if (blob) photoSource = 'station';
 				if (!blob) {
 					// Snapshot didn't work on this station — switch to the classic
 					// feed and take this same photo from it once it's up.
@@ -746,17 +817,33 @@
 				});
 			}
 
+			const photoMs = performance.now() - tStart;
+
 			const form = new FormData();
 			form.append('file', blob, 'capture.jpg');
 			form.append('cartridgeId', cartridgeId);
 			form.append('phase', PHASE);
 
+			const tUpload = performance.now();
 			const res = await fetch('/api/cv/capture', { method: 'POST', body: form });
 			if (!res.ok) {
 				const body = await res.json().catch(() => ({}));
 				throw new Error(body.error || `HTTP ${res.status}`);
 			}
 			const result = await res.json();
+			const tDone = performance.now();
+
+			const serverSteps: Record<string, number> | null =
+				result.timingsMs && typeof result.timingsMs === 'object' ? result.timingsMs : null;
+			lastTiming = {
+				source: photoSource,
+				photoMs,
+				roundTripMs: tDone - tUpload,
+				serverMs: typeof serverSteps?.total === 'number' ? serverSteps.total : null,
+				steps: serverSteps,
+				totalMs: tDone - tStart
+			};
+			console.info('[post-mortem-inspect] capture timing:', timingLong, { ...lastTiming, bytes: blob.size });
 
 			// Prepend live row to the session feed; the poll patches it in place.
 			const row: FeedRow = {
@@ -1136,7 +1223,20 @@
 				✕
 			</button>
 		{/if}
+		{#if fullscreen && lastTiming}
+			<!-- Capture timing (diagnostics): top-right corner of the feed. -->
+			<div class="pointer-events-none absolute right-[calc(6.25vw+1rem)] top-3 rounded bg-black/60 px-2 py-0.5 font-mono text-[10px] text-white/80">
+				{timingShort}
+			</div>
+		{/if}
 		</div>
+
+		<!-- Capture timing (diagnostics) for the desktop / regular tablet layouts. -->
+		{#if lastTiming && !fullscreen}
+			<div class="font-mono text-[11px] text-[var(--color-tron-text-secondary)]">
+				Last capture: {timingLong}
+			</div>
+		{/if}
 
 		<!-- Station camera tuning. Only for a Pi station: the camera is on the
 		     Pi, so this is the only route to it. -->

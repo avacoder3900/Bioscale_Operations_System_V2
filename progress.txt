@@ -17131,3 +17131,23 @@ Retrieve this exact code: git checkout master at commit 5cf92d30
   (or: git log master --oneline to find it if the branch has since moved on)
 What this deployment is for: on-tablet test of the two Capture bars, top-aligned feed and cartridge
   strip in fullscreen. GitHub deployment 6769996539 (Production). Smoke: /login 200.
+
+================================================================================
+2026-09-30 — feat/capture-timing-token-renewal → master — Capture timing readout + background token renewal
+================================================================================
+Diagnostics for the tablet capture-lag report (Tailscale already confirmed direct: Pi→lab-tab-1
+`tailscale ping` = via 172.16.202.244, 7 ms). No change to what a capture does or how many photos
+one tap makes.
+  - api/cv/capture/+server.ts: per-step lap timers, returned additively as `timingsMs`
+    { connect, parse, db, barcode, embed, storage, total } in the existing 201 response. Nothing
+    else in the handler changed; other capture pages ignore the new field.
+  - post-mortem-inspect/+page.svelte: each capture records photo time (station /snapshot.jpg or
+    video-feed frame), round trip to /api/cv/capture, and server time → "network" = round trip −
+    server. Shown as "Last capture: …" under the capture area (desktop + tablet) and as a compact
+    tag top-right of the feed in fullscreen; also console.info with byte size.
+  - Snapshot token renewed in the background every 3.5 min while a station's MJPEG view is up
+    (max age stays 4 min, JWT TTL 5 min), so a tap never waits on a token mint. Renewal only
+    replaces the snapshot-only token, never stationToken, so the live stream isn't restarted.
+    Costs one jwt_mint audit row per 3.5 min per open station session.
+`npm run check`: 13 errors (baseline), no new warnings. Vercel branch build used as the compile gate.
+Pushed to master at the user's explicit request.
