@@ -17119,3 +17119,10 @@ reference unit is never silently dropped. Known gaps (PRD-documented): tones use
 (226's long idle tail shifts its tone list); peak/min within ~0.9 dB of the prototype.
 vitest: 20/20 sonic tests. svelte-check (after svelte-kit sync): 14 errors = master baseline, 0 in
 touched files.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-8ul45dwor.vercel.app
+Source: branch feat/sonic-fingerprint-analysis @ commit c63499a7
+Retrieve this exact code: git checkout feat/sonic-fingerprint-analysis at commit c63499a7
+  (or: git log feat/sonic-fingerprint-analysis --oneline to find it if the branch has since moved on)
+What this deployment is for: VALIDATION-08 — server-side sonic analysis on /validation/sonic, the new
+/validation/sonic/compare and /validation/sonic/[sessionId] pages, reference set + advisory verdict.
