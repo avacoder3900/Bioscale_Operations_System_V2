@@ -1539,7 +1539,22 @@ export async function startRunTwoPhase(o: {
 		verb: sessionVerb(o.session),
 		onStep: o.onStep
 	});
-	if (r.ok && bridge && r.result?.job) void submitAutoResume(bridge, r.result.job);
+	if (r.ok && bridge && r.result?.job) {
+		// The server skipped the queue enqueue because the browser was going to
+		// hand auto_resume_run to /bridge. If that hand-off fails (the line
+		// dropped after run.create), queue it instead — otherwise the run sits at
+		// its initial pause. Duplicates are harmless (the daemon is idempotent).
+		void submitAutoResume(bridge, r.result.job).then((accepted) => {
+			if (!accepted) {
+				void o.post('autoResumeFallback', { runId }).then(
+					(res) => {
+						if (!res.ok) console.error('[startRunTwoPhase] auto-resume fallback failed — resume the run on the robot page:', res.error);
+					},
+					(e) => console.error('[startRunTwoPhase] auto-resume fallback failed — resume the run on the robot page:', e)
+				);
+			}
+		});
+	}
 	return r;
 }
 

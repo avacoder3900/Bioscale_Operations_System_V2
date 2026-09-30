@@ -93,7 +93,7 @@ except ImportError:
 
 # 1.1 = OT2-TAILNET-5 S5: the optional /bridge job server + the shared worker
 # queue. The long-poll, the handlers and every BIMS report are unchanged.
-VERSION = "ot2-bridge/1.1"
+VERSION = "ot2-bridge/1.2"
 
 # Waveshare GM-class trigger command (returns decoded payload over serial).
 # 0x7E 0x00 0x08 0x01 0x00 0x02 0x01 0xAB 0xCD
@@ -390,6 +390,16 @@ def restart_robot_server(reason: str = "", force: bool = False) -> bool:
     is hung. Cooldown-guarded so an auto-heal loop can't thrash; force=True (the
     manual UI button) bypasses the cooldown."""
     global _last_restart_at
+    # RUN-INTEGRITY GUARD (2026-09-30): restarting robot-server kills whatever
+    # protocol run it holds. The auto-heal path (force=False) restarts only when
+    # it can SEE the engine holds no live run — an unreadable /runs is not proof
+    # of a dead engine on a busy Pi 3, so it refuses then too. The manual button
+    # (force=True) is the recovery for a truly hung engine, so an unreadable
+    # /runs is allowed there, but a readable live run still refuses.
+    blocker = _live_run_blocking_restart(unreadable_blocks=not force)
+    if blocker:
+        log.warning("robot-server restart REFUSED (%s) — reason given: %s", blocker, reason)
+        return False
     if not force and (time.time() - _last_restart_at) < RESTART_COOLDOWN_S:
         log.warning("robot-server restart suppressed (cooldown %.0fs) — reason: %s",
                     RESTART_COOLDOWN_S - (time.time() - _last_restart_at), reason)
@@ -487,15 +497,21 @@ def _fetch_run(run_id: str, timeout: float = 6) -> Optional[dict]:
         return None
 
 
-def _current_protocol_run() -> Optional[dict]:
-    """Return {'id','status','pauseCommanded'} for the current protocol run."""
+_UNREADABLE = object()  # sentinel: GET /runs itself failed
+
+
+def _read_current_protocol_run():
+    """The current protocol run as {'id','status','pauseCommanded','createdAt'},
+    None when the engine holds no current run, or _UNREADABLE when /runs could
+    not be read (hung or overloaded server) — callers that protect a live run
+    must treat that as 'maybe running', never as 'nothing there'."""
     try:
         r = ot2_request("GET", "/runs", timeout=8)
         if r.status_code >= 400:
-            return None
+            return _UNREADABLE
         body = r.json() or {}
     except Exception:
-        return None
+        return _UNREADABLE
     href = ((body.get("links") or {}).get("current") or {}).get("href") or ""
     cur_id = href.rsplit("/", 1)[-1] if href else None
     if not cur_id:
@@ -503,8 +519,46 @@ def _current_protocol_run() -> Optional[dict]:
     for run in (body.get("data") or []):
         if run.get("id") == cur_id:
             return {"id": cur_id, "status": run.get("status"),
-                    "pauseCommanded": pause_was_commanded(run)}
-    return {"id": cur_id, "status": None, "pauseCommanded": False}
+                    "pauseCommanded": pause_was_commanded(run),
+                    "createdAt": run.get("createdAt")}
+    return {"id": cur_id, "status": None, "pauseCommanded": False, "createdAt": None}
+
+
+def _current_protocol_run() -> Optional[dict]:
+    """Return {'id','status','pauseCommanded'} for the current protocol run."""
+    run = _read_current_protocol_run()
+    return None if run is _UNREADABLE else run
+
+
+def _live_run_blocking_restart(unreadable_blocks: bool) -> Optional[str]:
+    """Why robot-server must NOT be restarted right now, or None if it may be.
+    Any non-terminal current run blocks — running, paused (operator OR protocol
+    pause, e.g. 'tiprack exhausted'), awaiting-recovery, blocked-by-open-door."""
+    run = _read_current_protocol_run()
+    if run is _UNREADABLE:
+        return "cannot read /runs to confirm no live run" if unreadable_blocks else None
+    if not run:
+        return None
+    status = (run.get("status") or "").lower()
+    if status in TERMINAL_RUN_STATES:
+        return None
+    return "protocol run {} is {}".format(run["id"], status or "in an unknown state")
+
+
+# An idle run (created, never played) younger than this may be a start that is
+# mid-flight in someone's browser (create -> play), so it is never auto-cleared.
+IDLE_RUN_CLEAR_AFTER_S = 600
+
+
+def _run_age_s(created_at: Optional[str]) -> Optional[float]:
+    if not created_at:
+        return None
+    try:
+        from datetime import datetime
+        t = datetime.fromisoformat(str(created_at).replace("Z", "+00:00"))
+        return time.time() - t.timestamp()
+    except Exception:
+        return None
 
 
 def clear_stale_protocol_run() -> Optional[dict]:
@@ -522,14 +576,23 @@ def clear_stale_protocol_run() -> Optional[dict]:
         raise RobotCommandError(
             "Robot has an ACTIVE protocol run (status={}) — refusing to "
             "auto-clear it. Stop that run before scanning.".format(status))
-    if status == "paused" and run.get("pauseCommanded"):
-        # A deliberately-paused fill is not a leftover. It looks identical to the
-        # start-of-run off-deck pause by status alone, which is how paused fills
-        # were getting silently stopped when someone started a deck scan.
+    # RUN-INTEGRITY (2026-09-30): only a run that is already on its way out
+    # (stop-requested) or an idle run nobody has played for IDLE_RUN_CLEAR_AFTER_S
+    # is a leftover. Every PAUSED run is protected — an operator pause, the
+    # start-of-run off-deck pause (auto-resume may simply not have fired yet),
+    # and the protocol's own mid-run protocol.pause() ("tiprack exhausted"),
+    # which carries no 'pause' action and used to look exactly like a stale run.
+    # Same for awaiting-recovery / blocked-by-open-door: a live run waiting on a human.
+    clearable = status == "stop-requested"
+    if status == "idle":
+        age = _run_age_s(run.get("createdAt"))
+        clearable = age is not None and age > IDLE_RUN_CLEAR_AFTER_S
+    if not clearable:
         raise RobotCommandError(
-            "Robot has a protocol run that was deliberately PAUSED — refusing to "
-            "auto-clear it. Resume it, or stop it explicitly, before scanning.")
-    # Stale: paused / idle / blocked-by-open-door / stop-requested / awaiting-recovery
+            "Robot has a protocol run that is {} (run {}) — refusing to auto-clear it. "
+            "Resume or finish it, or stop it explicitly, before this "
+            "operation.".format(status or "in an unknown state", run.get("id")))
+    # Stale: stop-requested, or idle and old
     run_id = run["id"]
     log.warning("clearing stale protocol run %s (status=%s) blocking maintenance op",
                 run_id, status)
@@ -1243,6 +1306,14 @@ def execute_restart_robot_server(command_id: str) -> None:
             "message": "Robot server is already starting up (boot takes ~2-3 min on this robot). "
                        "No restart issued — wait for it to finish instead of pressing restart again."}})
         return
+    blocker = _live_run_blocking_restart(unreadable_blocks=False)
+    if blocker:
+        log.info("restart_robot_server %s: refused — %s", command_id, blocker)
+        _post_result(command_id, {"ok": True, "status": 200, "body": {
+            "restarted": False, "liveRun": True,
+            "message": "Not restarted: {} — restarting would kill it. Stop the run "
+                       "first if it really is stuck.".format(blocker)}})
+        return
     log.info("restart_robot_server command %s: restarting on operator request", command_id)
     ok = restart_robot_server("manual restart via BIMS", force=True)
     if ok:
@@ -1255,16 +1326,17 @@ def execute_restart_robot_server(command_id: str) -> None:
 AUTO_RESUME_TIMEOUT_S = float(os.environ.get("AUTO_RESUME_TIMEOUT_S", "75"))
 
 
-def execute_auto_resume_run(command_id: str, payload: dict) -> None:
-    """Auto-resume the protocol's initial off-deck / 'confirm deck loaded' pause
-    so the operator can start the scan and walk away (they're routed to the
-    gallery, not the run page). Waits for the FIRST pause after play and resumes
-    it once with 'play' (the OT-2 has no 'resume' action). Leaves any later pause
-    or error-recovery state alone."""
-    run_id = (payload or {}).get("runId")
-    if not run_id:
-        _post_result(command_id, {"ok": False, "error": "auto_resume_run: no runId"})
-        return
+def _initial_pause_already_resumed(run_data: dict) -> bool:
+    """True once somebody has already cleared the start-of-run pause: the run's
+    action log holds more than the one 'play' that started it. Makes
+    auto_resume_run idempotent — a duplicate (tailnet submit + queue fallback,
+    or a retried start) must never resume a LATER, protocol-level pause such as
+    'tiprack exhausted', which also carries no 'pause' action."""
+    plays = [a for a in _run_actions(run_data) if (a.get("actionType") or "").lower() == "play"]
+    return len(plays) > 1
+
+
+def _auto_resume_watch(command_id: str, run_id: str) -> None:
     log.info("auto_resume_run %s: watching run %s for the initial pause", command_id, run_id)
     deadline = time.time() + AUTO_RESUME_TIMEOUT_S
     resumed = False
@@ -1274,6 +1346,11 @@ def execute_auto_resume_run(command_id: str, payload: dict) -> None:
         data = _fetch_run(run_id)
         if data is None:
             continue
+        if _initial_pause_already_resumed(data):
+            declined = True
+            log.info("auto_resume_run %s: run %s already past its initial pause — nothing to do",
+                     command_id, run_id)
+            break
         status = data.get("status")
         if status == "paused":
             # Only the engine's own start-of-run pause is ours to clear. If the
@@ -1299,6 +1376,40 @@ def execute_auto_resume_run(command_id: str, payload: dict) -> None:
         # 'running' / 'idle' / None -> keep waiting for the initial pause
     _post_result(command_id, {"ok": True, "status": 200,
                               "body": {"resumed": resumed, "declined": declined}})
+
+
+def execute_auto_resume_run(command_id: str, payload: dict) -> None:
+    """Auto-resume the protocol's initial off-deck / 'confirm deck loaded' pause
+    so the operator can start the scan and walk away (they're routed to the
+    gallery, not the run page). Waits for the FIRST pause after play and resumes
+    it once with 'play' (the OT-2 has no 'resume' action). Leaves any later pause
+    or error-recovery state alone.
+
+    The watch touches only the robot HTTP API (no scanner, no calibrator), so it
+    runs on its OWN thread: holding the single serial worker for up to
+    AUTO_RESUME_TIMEOUT_S used to make a queue-line Pause/Stop pressed in the
+    first ~75 s of a run wait behind it. A direct job's report routing is
+    thread-local, so the watcher re-binds it and the worker is told not to close
+    the job early (job.detached)."""
+    run_id = (payload or {}).get("runId")
+    if not run_id:
+        _post_result(command_id, {"ok": False, "error": "auto_resume_run: no runId"})
+        return
+    job = _direct_job_for(command_id)
+    if job is not None:
+        job.detached = True
+
+    def _watch():
+        _worker_ctx.direct_job = job
+        try:
+            _auto_resume_watch(command_id, run_id)
+        except Exception as e:
+            log.error("auto_resume_run %s: watcher raised: %s", command_id, e)
+            _post_result(command_id, {"ok": False, "error": str(e)})
+        finally:
+            _worker_ctx.direct_job = None
+
+    threading.Thread(target=_watch, name="auto-resume-" + str(run_id)[:8], daemon=True).start()
 
 
 # Tip calibration (NATIVE-CALIBRATION-SYSTEM PRD 4) -------------------------
@@ -1914,8 +2025,13 @@ def _report_direct_progress(job: DirectJob, payload: dict) -> Tuple[bool, bool]:
             except Exception:
                 rb = {}
             if r.status_code >= 400:
+                # Only an EXPLICIT cancel from BIMS stops the job (the jobs route
+                # answers 409 {cancelRequested:true} once the sweep run is
+                # terminal). A 401/404/5xx means BIMS_BASE_URL is the wrong
+                # deployment or down — the browser still drives and can cancel
+                # through /bridge/jobs/<id>/control, so keep scanning.
                 log.warning("job progress POST %s: %s", r.status_code, r.text[:200])
-                bims_pause, bims_cancel = bool(rb.get("pauseRequested")), bool(rb.get("cancelRequested", True))
+                bims_pause, bims_cancel = bool(rb.get("pauseRequested")), rb.get("cancelRequested") is True
             else:
                 bims_pause, bims_cancel = bool(rb.get("pauseRequested")), bool(rb.get("cancelRequested"))
         except Exception as e:
@@ -2493,8 +2609,9 @@ def run_work_item(item: dict, port: ScannerPort) -> None:
         except Exception as e:
             log.error("direct job %s (%s) raised: %s", job.id, job.kind, e)
             _post_result(job.id, {"ok": False, "error": str(e)})
-        if not job.is_terminal():
-            # Every handler posts a result; this is a belt-and-braces close so a
+        if not job.is_terminal() and not getattr(job, "detached", False):
+            # Every handler posts a result (a detached one — auto_resume_run's
+            # watcher thread — posts it later, from its own thread); this is a belt-and-braces close so a
             # browser polling /bridge/jobs/<id> never waits forever.
             job.record_result({"ok": False, "error": "handler returned without a result"})
     finally:

@@ -102,6 +102,7 @@ vi.mock('$lib/server/notifications', () => ({ notifyRunLifecycle: vi.fn(async ()
 vi.mock('$lib/manufacturing/reagent-run-estimate', () => ({ estimateReagentRunSeconds: () => ({ seconds: 600 }) }));
 
 import {
+	autoResumeFallback,
 	finishConfirm,
 	stopConfirm,
 	startConfirm,
@@ -368,5 +369,27 @@ describe('reconcileStartIntent (load)', () => {
 		expect(r).toEqual({ changed: true, banner: null });
 		expect(db.audits[0]).toMatchObject({ action: 'start_intent_cleared', tableName: 'wax_filling_runs' });
 		runVerbMock.fn = null;
+	});
+});
+
+// ── auto-resume fallback (run integrity) ────────────────────────────────────
+
+describe('autoResumeFallback', () => {
+	const RID = '1f0c6d2e-7a4b-4c1d-9e8f-0a1b2c3d4e5f';
+
+	it('queues auto_resume_run for the robot run BIMS has on file, and audits it', async () => {
+		db.wax.set('W9', { _id: 'W9', status: 'Running', opentronsRunId: RID, robot: { _id: 'rb' } });
+		const r = await autoResumeFallback('wax', 'W9', USER);
+		expect(r).toEqual({ success: true, queued: true });
+		const cmd = db.writes.find((w) => w.model === 'bridge' && w.op === 'create')!.args[0];
+		expect(cmd).toMatchObject({ robotId: 'rb', kind: 'auto_resume_run', payload: { runId: RID } });
+		expect(db.audits.at(-1)!.newData).toMatchObject({ autoResumeFallback: true, opentronsRunId: RID, queued: true });
+	});
+
+	it('refuses a run with no robot run on file (nothing to resume)', async () => {
+		db.wax.set('W8', { _id: 'W8', status: 'Loading', robot: { _id: 'rb' } });
+		const r: any = await autoResumeFallback('wax', 'W8', USER);
+		expect(r.fail.status).toBe(409);
+		expect(db.writes.some((w) => w.model === 'bridge')).toBe(false);
 	});
 });

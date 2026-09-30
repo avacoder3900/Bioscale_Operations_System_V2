@@ -398,6 +398,26 @@ describe('restartServerOverBridge', () => {
 		expect(calls).toEqual([{ url: '/api/opentrons-lab/robots/rb%201/restart-server', method: 'POST', body: { line: 'tailnet' } }]);
 	});
 
+	it('surfaces the daemon refusing a restart that would kill a live run', async () => {
+		vi.useFakeTimers();
+		try {
+			const { deps } = bims(() => json(200, { job: { jobId: 'job-rst001', kind: 'restart_robot_server', payload: {} } }));
+			const b = fakeBridge({
+				submit: vi.fn(async () => ({ ...accepted, position: 0 })),
+				getJob: vi.fn(async () => ({
+					status: 'completed',
+					result: { ok: true, body: { restarted: false, liveRun: true, message: 'Not restarted: protocol run r1 is paused' } }
+				})) as any
+			});
+			const p = restartServerOverBridge(b, 'rb', deps);
+			await vi.advanceTimersByTimeAsync(600);
+			const r = await p;
+			expect(r).toEqual({ ok: false, error: 'Not restarted: protocol run r1 is paused' });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it('a failed submit posts phase abandon', async () => {
 		const { calls, deps } = bims(() => json(200, { job: { jobId: 'job-rst001', kind: 'restart_robot_server', payload: {} } }));
 		const b = fakeBridge({ submit: vi.fn(async () => { throw new BridgeError('401', 'unauthorized', 401); }) });
@@ -408,18 +428,23 @@ describe('restartServerOverBridge', () => {
 });
 
 describe('submitAutoResume', () => {
-	it('submits a valid job once; a failure is logged, never thrown', async () => {
+	it('submits a valid job once; a failure is logged and reported false, never thrown', async () => {
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 		const b = fakeBridge({ submit: vi.fn(async () => { throw new BridgeError('down', 'network'); }) });
-		await expect(submitAutoResume(b, { jobId: 'job-auto01', kind: 'auto_resume_run', payload: { runId: 'r' } })).resolves.toBeUndefined();
+		await expect(submitAutoResume(b, { jobId: 'job-auto01', kind: 'auto_resume_run', payload: { runId: 'r' } })).resolves.toBe(false);
 		expect(b.submit).toHaveBeenCalledTimes(1);
 		expect(warn).toHaveBeenCalled();
 		warn.mockRestore();
 	});
 
+	it('reports true once the robot accepted it', async () => {
+		const b = fakeBridge({ submit: vi.fn(async () => accepted) });
+		await expect(submitAutoResume(b, { jobId: 'job-auto01', kind: 'auto_resume_run', payload: { runId: 'r' } })).resolves.toBe(true);
+	});
+
 	it('ignores anything that is not an auto_resume_run job', async () => {
 		const b = fakeBridge({ submit: vi.fn(async () => accepted) });
-		await submitAutoResume(b, { jobId: 'job-auto01', kind: 'sweep', payload: {} });
+		await expect(submitAutoResume(b, { jobId: 'job-auto01', kind: 'sweep', payload: {} })).resolves.toBe(false);
 		await submitAutoResume(b, undefined);
 		expect(b.submit).not.toHaveBeenCalled();
 	});

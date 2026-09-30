@@ -815,19 +815,7 @@ export async function startConfirm(
 			? { jobId: generateId(), kind: 'auto_resume_run' as const, payload: { runId: opentronsRunId } }
 			: null;
 	if (!autoResumeJob) {
-		try {
-			await Ot2BridgeCommand.create({
-				_id: generateId(),
-				robotId,
-				deviceId: bridgeDeviceIdForRobot((robot ?? run.robot ?? {}) as any),
-				kind: 'auto_resume_run',
-				payload: { runId: opentronsRunId },
-				ttlMs: 120_000,
-				requestedBy: user.username
-			});
-		} catch (e) {
-			console.warn(`[${kind === 'wax' ? 'startRun' : 'reagent startRun'}] could not enqueue auto_resume_run:`, e instanceof Error ? e.message : e);
-		}
+		await enqueueAutoResume(kind, robotId, (robot ?? run.robot ?? {}) as any, opentronsRunId, user);
 	}
 	const viaBridge = autoResumeJob ? { autoResumeJobId: autoResumeJob.jobId } : {};
 	const withJob = autoResumeJob ? { job: autoResumeJob } : {};
@@ -1097,6 +1085,55 @@ export function wantsFilledWells(kind: FillKind, run: any): boolean {
 }
 
 /** Already cancelled/aborted — a repeated tailnet confirm is a no-op (R2). */
+/**
+ * Queue-line auto_resume_run for a started fill. Safe to call more than once for
+ * the same robot run: the daemon (ot2-bridge 1.1+) declines once the start pause
+ * has been resumed, so it can never resume a later protocol pause.
+ */
+async function enqueueAutoResume(kind: FillKind, robotId: string, robot: any, opentronsRunId: string, user: User): Promise<boolean> {
+	try {
+		await Ot2BridgeCommand.create({
+			_id: generateId(),
+			robotId,
+			deviceId: bridgeDeviceIdForRobot(robot),
+			kind: 'auto_resume_run',
+			payload: { runId: opentronsRunId },
+			ttlMs: 120_000,
+			requestedBy: user.username
+		});
+		return true;
+	} catch (e) {
+		console.warn(`[${kind === 'wax' ? 'startRun' : 'reagent startRun'}] could not enqueue auto_resume_run:`, e instanceof Error ? e.message : e);
+		return false;
+	}
+}
+
+/**
+ * The browser could not hand a tailnet start's auto_resume_run to /bridge (the
+ * line dropped between run.create and the confirm, or the daemon refused).
+ * startConfirm skipped the queue enqueue for that start, so without this the
+ * run would sit at its initial off-deck pause. Only for a run that BIMS already
+ * recorded as started, and only for the robot run BIMS has on file.
+ */
+export async function autoResumeFallback(kind: FillKind, runId: string, user: User): Promise<ActionFail | { success: true; queued: boolean }> {
+	const run = (await model(kind).findById(runId).select('status opentronsRunId robot').lean()) as any;
+	if (!run) return actionFail(404, 'Run not found');
+	if (!run.opentronsRunId || !validRunId(run.opentronsRunId)) return actionFail(409, 'This run has no robot run on file yet.');
+	const robotId = String(run.robot?._id ?? '');
+	const robot = robotId ? await getRobot(robotId) : null;
+	const queued = await enqueueAutoResume(kind, robotId, (robot ?? run.robot ?? {}) as any, run.opentronsRunId, user);
+	await AuditLog.create({
+		_id: generateId(),
+		tableName: K[kind].table,
+		recordId: runId,
+		action: 'UPDATE',
+		changedBy: user.username,
+		changedAt: new Date(),
+		newData: { autoResumeFallback: true, opentronsRunId: run.opentronsRunId, queued, line: 'queue' }
+	});
+	return { success: true, queued };
+}
+
 export function alreadyStopped(kind: FillKind, run: any): boolean {
 	const s = String(run?.status ?? '');
 	return kind === 'wax' ? s === 'aborted' : s === 'Cancelled' || s === 'Aborted';
@@ -1483,6 +1520,15 @@ export function lifecycleActions(kind: FillKind) {
 			if (isActionFail(pre)) return failOut(pre);
 			if ('already' in pre) return { success: true, alreadyRecorded: true };
 			return finishConfirm(kind, pre.run, { finalStatus, tips }, user, validLine(form.get('line')));
+		},
+
+		autoResumeFallback: async (ev: Ev) => {
+			const { form, user } = await begin(ev);
+			const runId = str(form, 'runId');
+			if (!runId) return fail(400, { error: 'runId is required' });
+			const r = await autoResumeFallback(kind, runId, user);
+			if (isActionFail(r)) return failOut(r);
+			return r;
 		},
 
 		cancelConfirm: async (ev: Ev) => stopConfirmAction(kind, 'cancel', await begin(ev)),

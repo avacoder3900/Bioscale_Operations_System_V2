@@ -364,5 +364,145 @@ class SingleWorkerOrderingTests(ServerHarness):
         self.assertIsNone(bridge._direct_job_for("anything"))
 
 
+# ---- Run-integrity guards (2026-09-30) ---------------------------------------
+class FakeResp:
+    def __init__(self, status, body):
+        self.status_code = status
+        self._body = body
+        self.text = json.dumps(body)
+
+    def json(self):
+        return self._body
+
+
+def runs_listing(status, actions=None, created_at="2026-09-30T12:00:00Z"):
+    return FakeResp(200, {"links": {"current": {"href": "/runs/r1"}},
+                          "data": [{"id": "r1", "status": status, "actions": actions or [],
+                                    "createdAt": created_at}]})
+
+
+class RunIntegrityTests(unittest.TestCase):
+    def setUp(self):
+        self._orig = {k: getattr(bridge, k) for k in ("ot2_request", "time", "subprocess")}
+        self.calls = []
+        self.listing = runs_listing("paused")
+
+        def fake_ot2(method, path, body=None, timeout=None):
+            self.calls.append((method, path))
+            if method == "GET" and path == "/runs":
+                if isinstance(self.listing, Exception):
+                    raise self.listing
+                return self.listing
+            return FakeResp(200, {})
+        bridge.ot2_request = fake_ot2
+
+    def tearDown(self):
+        for k, v in self._orig.items():
+            setattr(bridge, k, v)
+
+    def mutations(self):
+        return [c for c in self.calls if c[0] != "GET"]
+
+    # clear_stale_protocol_run: every paused / waiting run is protected
+    def test_protocol_pause_is_not_cleared(self):
+        # 'tiprack exhausted' = protocol.pause(): paused, NO pause action.
+        self.listing = runs_listing("paused", [{"actionType": "play"}])
+        with self.assertRaises(bridge.RobotCommandError):
+            bridge.clear_stale_protocol_run()
+        self.assertEqual(self.mutations(), [])
+
+    def test_waiting_states_are_not_cleared(self):
+        for st in ("awaiting-recovery", "blocked-by-open-door", "running", "finishing"):
+            self.calls.clear()
+            self.listing = runs_listing(st)
+            with self.assertRaises(bridge.RobotCommandError, msg=st):
+                bridge.clear_stale_protocol_run()
+            self.assertEqual(self.mutations(), [], st)
+
+    def test_young_idle_run_is_not_cleared_old_one_is(self):
+        now_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        self.listing = runs_listing("idle", created_at=now_iso)
+        with self.assertRaises(bridge.RobotCommandError):
+            bridge.clear_stale_protocol_run()
+        self.assertEqual(self.mutations(), [])
+        self.listing = runs_listing("idle", created_at="2020-01-01T00:00:00Z")
+        bridge.clear_stale_protocol_run()
+        self.assertIn(("POST", "/runs/r1/actions"), self.mutations())
+
+    # restart guard
+    def test_auto_heal_restart_refuses_live_or_unreadable(self):
+        ran = []
+        bridge.subprocess = types.SimpleNamespace(run=lambda *a, **k: ran.append(a))
+        for listing in (runs_listing("paused"), runs_listing("running"), RuntimeError("hung")):
+            self.listing = listing
+            self.assertFalse(bridge.restart_robot_server("auto-heal test"))
+        self.assertEqual(ran, [])
+
+    def test_manual_restart_refuses_readable_live_run_allows_hung(self):
+        self.assertEqual(bridge._live_run_blocking_restart(unreadable_blocks=False), "protocol run r1 is paused")
+        self.listing = RuntimeError("hung")
+        self.assertIsNone(bridge._live_run_blocking_restart(unreadable_blocks=False))
+        self.assertIsNotNone(bridge._live_run_blocking_restart(unreadable_blocks=True))
+        self.listing = runs_listing("succeeded")
+        self.assertIsNone(bridge._live_run_blocking_restart(unreadable_blocks=True))
+
+    # auto_resume idempotency
+    def test_initial_pause_already_resumed(self):
+        self.assertFalse(bridge._initial_pause_already_resumed({"actions": [{"actionType": "play"}]}))
+        self.assertTrue(bridge._initial_pause_already_resumed(
+            {"actions": [{"actionType": "play"}, {"actionType": "play"}]}))
+
+    def test_auto_resume_does_not_touch_a_later_protocol_pause(self):
+        run = {"status": "paused", "actions": [{"actionType": "play"}, {"actionType": "play"}]}
+        orig_fetch, orig_post = bridge._fetch_run, bridge._post_result
+        posted = []
+        bridge._fetch_run = lambda rid, timeout=6: run
+        bridge._post_result = lambda cid, body: posted.append(body)
+        bridge.time = types.SimpleNamespace(time=time.time, sleep=lambda s: None)
+        try:
+            bridge._auto_resume_watch("c1", "r1")
+        finally:
+            bridge._fetch_run, bridge._post_result = orig_fetch, orig_post
+        self.assertEqual(self.mutations(), [])
+        self.assertEqual(posted[0]["body"], {"resumed": False, "declined": True})
+
+    def test_auto_resume_detaches_from_the_worker(self):
+        job = bridge.DirectJob("ar-job-0001", "auto_resume_run", {"runId": "r1"})
+        started = []
+        orig_thread = bridge.threading.Thread
+        bridge.threading.Thread = lambda target, name=None, daemon=None: types.SimpleNamespace(
+            start=lambda: started.append(name))
+        bridge._worker_ctx.direct_job = job
+        try:
+            bridge.execute_auto_resume_run("ar-job-0001", {"runId": "r1"})
+        finally:
+            bridge._worker_ctx.direct_job = None
+            bridge.threading.Thread = orig_thread
+        self.assertTrue(job.detached)
+        self.assertEqual(len(started), 1)
+        self.assertFalse(job.is_terminal())  # its watcher, not the worker, closes it
+
+
+class DirectProgressCancelTests(unittest.TestCase):
+    def setUp(self):
+        self._orig = (bridge.BIMS_BASE_URL, bridge.requests)
+        bridge.BIMS_BASE_URL = "https://bims.example"
+
+    def tearDown(self):
+        bridge.BIMS_BASE_URL, bridge.requests = self._orig
+
+    def report(self, status, body):
+        bridge.requests = types.SimpleNamespace(post=lambda *a, **k: FakeResp(status, body))
+        job = bridge.DirectJob("sw-job-0001", "sweep", {"sweepRunId": "s1"})
+        return bridge._report_direct_progress(job, {"sweepRunId": "s1", "slotsDone": 1})
+
+    def test_wrong_deployment_does_not_cancel(self):
+        for st in (401, 404, 500):
+            self.assertEqual(self.report(st, {"message": "Not Found"}), (False, False), st)
+
+    def test_explicit_cancel_still_cancels(self):
+        self.assertEqual(self.report(409, {"cancelRequested": True, "pauseRequested": False}), (False, True))
+
+
 if __name__ == "__main__":
     unittest.main()

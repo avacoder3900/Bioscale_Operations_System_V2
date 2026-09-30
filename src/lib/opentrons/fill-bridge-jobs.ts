@@ -463,6 +463,14 @@ export async function restartServerOverBridge(
 		if (!a.ok) throw new Error(await routeError(a, 'abandon failed'));
 	});
 	if (!sub.ok) return sub;
+	// The daemon REFUSES a restart while a protocol run is live (it would kill
+	// the run) or while the server is still booting, and answers within a second
+	// or two. Look for that answer briefly so the operator isn't told "back in
+	// ~90s" about a restart that never happened.
+	if (!sub.position) {
+		const refused = await restartRefusal(bridge, job.jobId);
+		if (refused) return { ok: false, error: refused };
+	}
 	return {
 		ok: true,
 		message:
@@ -470,6 +478,24 @@ export async function restartServerOverBridge(
 				? `Restart sent over Tailscale — queued behind ${sub.position} daemon job(s); the robot server will be back ~90s after it runs. Watch the health badge.`
 				: 'Restart sent over Tailscale — the robot server will be back in ~90s. Watch the health badge.'
 	};
+}
+
+/** The daemon's refusal message for a restart job, if it refused within ~4 s. */
+async function restartRefusal(bridge: BridgeClient, jobId: string): Promise<string | null> {
+	for (let i = 0; i < 8; i++) {
+		await new Promise((r) => setTimeout(r, 500));
+		let job;
+		try {
+			job = await bridge.getJob(jobId);
+		} catch {
+			return null; // can't tell — the success message's "watch the badge" still applies
+		}
+		if (job.status === 'queued' || job.status === 'running') continue;
+		const body = (job.result as any)?.body;
+		if (body && body.restarted === false) return String(body.message ?? 'The robot refused the restart.');
+		return null;
+	}
+	return null;
 }
 
 // ── auto-resume after a tailnet start ──────────────────────────────────────
@@ -480,14 +506,17 @@ export async function restartServerOverBridge(
  * failure is logged (the browser-side resume window in EmbeddedRunController
  * still covers an operator who stays on the page).
  */
-export function submitAutoResume(bridge: BridgeClient, rawJob: unknown): Promise<void> {
+export function submitAutoResume(bridge: BridgeClient, rawJob: unknown): Promise<boolean> {
 	const job = validJobDescriptor(rawJob, 'auto_resume_run');
-	if (!job) return Promise.resolve();
+	if (!job) return Promise.resolve(false);
 	return Promise.resolve()
 		.then(() => bridge.submit(job))
 		.then(
-			() => undefined,
-			(e) => console.warn('[fill-bridge-jobs] auto_resume_run was not accepted by the robot:', errText(e))
+			() => true,
+			(e) => {
+				console.warn('[fill-bridge-jobs] auto_resume_run was not accepted by the robot:', errText(e));
+				return false;
+			}
 		);
 }
 

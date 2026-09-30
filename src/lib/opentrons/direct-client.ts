@@ -137,6 +137,8 @@ export interface SessionOptions {
 }
 
 const API = (robotId: string) => `/api/opentrons-lab/robots/${encodeURIComponent(robotId)}`;
+/** How often a page that fell back to the queue re-tries the direct line on its own. */
+const RECOVER_EVERY_MS = 30_000;
 
 /** The maintenance routes a session can serve on the robot's line. */
 const MX_OPEN = /^\/api\/opentrons-lab\/robots\/([^/?#]+)\/maintenance$/;
@@ -378,6 +380,9 @@ export class RobotSession {
 			bridgeJobs: conn.bridgeJobs === true
 		});
 		if (typeof window !== 'undefined') window.addEventListener('pagehide', this.onPageHide);
+		// The refresh tick runs on a tailnet robot even when this page starts on
+		// the queue, so a blip at page load (or later) can heal itself (tryRecover).
+		this.startTimers();
 		const perm = await this.permissionQuery();
 		this.set({ browserPermission: perm });
 		if (perm === 'prompt') {
@@ -450,7 +455,10 @@ export class RobotSession {
 
 	/** Re-read /connection: busy flag, and the per-robot kill switch (mode → queue). */
 	private async refresh() {
-		if (this._state.transport !== 'direct') return;
+		if (this._state.transport !== 'direct') {
+			await this.tryRecover();
+			return;
+		}
 		try {
 			const res = await this.fetchImpl(`${API(this.robotId)}/connection`);
 			if (!res.ok) return;
@@ -463,6 +471,38 @@ export class RobotSession {
 			this.set({ busy: this.effectiveBusy(), hardened: conn.hardened === true, bridgeJobs: conn.bridgeJobs === true });
 		} catch {
 			/* a missed refresh changes nothing */
+		}
+	}
+
+	/**
+	 * Heal a fallback without a click. Operators leave a fill page open while they
+	 * do other work; one Wi-Fi blip used to pin the page to the queue until
+	 * somebody pressed retry. Every RECOVER_EVERY_MS, while nothing is busy:
+	 * re-read /connection (so the server-side kill switch still wins), then probe
+	 * the robot; a healthy probe puts the page back on the direct line.
+	 * Never while a permission prompt is pending or access was denied — that
+	 * needs the operator.
+	 */
+	private lastRecoverAt = 0;
+	private async tryRecover() {
+		const s = this._state;
+		if (!s.tailnetConfigured || !s.directUrl || s.needsPermission) return;
+		if (s.browserPermission === 'denied' || s.browserPermission === 'prompt') return;
+		if (this.effectiveBusy()) return;
+		if (Date.now() - this.lastRecoverAt < RECOVER_EVERY_MS) return;
+		this.lastRecoverAt = Date.now();
+		try {
+			const res = await this.fetchImpl(`${API(this.robotId)}/connection`);
+			if (!res.ok) return;
+			const conn = await res.json();
+			if (conn.transport !== 'tailnet' || !conn.directUrl) return;
+			await this.probeAndSet(conn.directUrl);
+			if (this._state.transport === 'direct') {
+				this.serverBusy = conn.busy ?? null;
+				this.set({ busy: this.effectiveBusy(), hardened: conn.hardened === true, bridgeJobs: conn.bridgeJobs === true });
+			}
+		} catch {
+			/* stay on the queue; try again next window */
 		}
 	}
 

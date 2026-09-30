@@ -142,6 +142,22 @@
 		return Date.now() - startedAt < AUTO_RESUME_WINDOW_MS;
 	}
 
+	/**
+	 * The robot's own action log decides whether this pause is the engine's
+	 * start-of-run one (same rule as the daemon's auto_resume_run): exactly one
+	 * 'play' so far (the start), and the latest control action is not a 'pause'.
+	 * A pause pressed in ANOTHER tab/PC, or a second pause after the start one was
+	 * already cleared (e.g. protocol "tiprack exhausted"), must never be undone —
+	 * `operatorPaused` only knows about this tab.
+	 */
+	function isInitialEnginePause(r: any): boolean {
+		const actions: any[] = Array.isArray(r?.actions) ? r.actions : [];
+		const kinds = actions.map((a) => String(a?.actionType ?? '').toLowerCase());
+		if (kinds.filter((k) => k === 'play').length > 1) return false;
+		const lastControl = [...kinds].reverse().find((k) => k === 'play' || k === 'pause' || k === 'stop');
+		return lastControl !== 'pause' && lastControl !== 'stop';
+	}
+
 	function schedulePoll() {
 		const every = conn?.transport === 'direct' ? Math.min(pollMs, DIRECT_POLL_MS) : pollMs;
 		if (!destroyed) pollHandle = setTimeout(poll, every);
@@ -188,7 +204,7 @@
 						// Off-deck labware makes the engine pause once at the very start;
 						// auto-resume only THAT pause. Never one the operator asked for,
 						// never one late in the run, never error-recovery.
-						if (!autoResumedInitial && !operatorPaused && withinAutoResumeWindow()) {
+						if (!autoResumedInitial && !operatorPaused && withinAutoResumeWindow() && isInitialEnginePause(run)) {
 							autoResumedInitial = true;
 							void handleAction('resume');
 						}
