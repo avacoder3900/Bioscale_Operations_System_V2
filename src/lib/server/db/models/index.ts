@@ -167,4 +167,7 @@ export { AskBimsTranscribeLog } from './ask-bims-transcribe-log.js';
 export { ProductionBucket } from './production-bucket.js';
 export { BucketCycle } from './bucket-cycle.js';
 export { BucketTransaction } from './bucket-transaction.js';
+// Operator badges + custody (BADGE-SYSTEM_PLAN.md Part 2)
+export { OperatorBadge } from './operator-badge.js';
+export { Custody } from './custody.js';
 export { ThermosealRoll } from './thermoseal-roll.js';

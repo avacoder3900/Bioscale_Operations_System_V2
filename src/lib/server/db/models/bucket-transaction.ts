@@ -31,6 +31,16 @@ const bucketTransactionSchema = new Schema({
 	relatedId: String, // LotRecord._id on consume; peer cycleId on merge; removal id on scrap
 	cartridgeIds: { type: [String], default: undefined }, // the cartridges this event touched (v2)
 	operator: { _id: String, username: String },
+	// Badge attribution (BADGE-SYSTEM_PLAN.md §15.3). `operator` is unchanged in
+	// meaning — the effective actor. `enteredBy` is the web session that submitted
+	// the request; on a badge-gated event (mint, create) they can differ.
+	// Rows written before 2026-09-30 have neither: read them as method 'login'.
+	enteredBy: { _id: String, username: String },
+	attribution: {
+		method: { type: String, enum: ['badge', 'login'] },
+		badgeId: String,   // OperatorBadge._id
+		custodyId: String  // Custody._id opened by this event (create only)
+	},
 	createdAt: { type: Date, default: Date.now }
 }, { timestamps: false });
 

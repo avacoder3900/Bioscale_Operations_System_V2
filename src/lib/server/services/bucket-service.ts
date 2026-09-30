@@ -38,9 +38,10 @@ import { connectDB } from '$lib/server/db/connection';
 import {
 	ProductionBucket, BucketCycle, BucketTransaction, AuditLog,
 	ReceivingLot, ManualCartridgeRemoval, CartridgeRecord,
-	InventoryTransaction, PartDefinition
+	InventoryTransaction, PartDefinition, Custody
 } from '$lib/server/db/models';
 import { generateId } from '$lib/server/db/utils';
+import { BadgeError, badgeMode, resolveBadge, badgeHolderCan, isBadgeCode } from './badge-service';
 import { recordTransaction, resolvePartId } from './inventory-transaction';
 import { splitMergedBarcodes, hardDeleteUnfinalizedCartridges } from './cartridge-hard-delete';
 import { generateBarcode } from './barcode-generator';
@@ -76,6 +77,13 @@ export { THERMOSEAL_PART };
 
 export type Operator = { _id: string; username: string };
 export type ResidualDisposition = 'merge' | 'scrap'; // 'defer' (quarantine) removed 2026-09-23
+
+/** How the operator on a ledger row was determined (BADGE-SYSTEM_PLAN.md §15.3). */
+export interface Attribution {
+	method: 'badge' | 'login';
+	badgeId?: string;
+	custodyId?: string;
+}
 
 export class BucketError extends Error {
 	status: number;
@@ -125,6 +133,10 @@ interface TxInput {
 	relatedId?: string | null;
 	cartridgeIds?: string[];
 	operator: Operator;
+	// Badge attribution (§15.3). Omitted on every non-gated step: the session is
+	// both `operator` and `enteredBy`, method 'login' — exactly the old rows.
+	enteredBy?: Operator;
+	attribution?: Attribution;
 }
 
 async function logTx(tx: TxInput): Promise<string> {
@@ -146,9 +158,61 @@ async function logTx(tx: TxInput): Promise<string> {
 		relatedId: tx.relatedId ?? undefined,
 		cartridgeIds: tx.cartridgeIds?.length ? tx.cartridgeIds : undefined,
 		operator: { _id: tx.operator._id, username: tx.operator.username },
+		enteredBy: tx.enteredBy
+			? { _id: tx.enteredBy._id, username: tx.enteredBy.username }
+			: { _id: tx.operator._id, username: tx.operator.username },
+		attribution: tx.attribution ?? { method: 'login' },
 		createdAt: new Date()
 	});
 	return id;
+}
+
+// ── badge gate (BADGE-SYSTEM_PLAN.md §16.2) ───────────────────────────────
+
+interface BadgeGate {
+	operator: Operator;      // the effective actor: badge holder, or the session when no badge
+	badgeId?: string;
+	attribution: Attribution;
+}
+
+/**
+ * The one place a badge scan is turned into an operator. Used by the two
+ * gated entry points only (createBucket, startCycle). With enforcement off, a
+ * badge that IS scanned is still honoured — better attribution for free — but
+ * an empty scan falls back to the session. With enforcement on, an empty scan
+ * is refused. The holder must be allowed to do the thing as well: a badge is
+ * attribution, never a substitute for permission.
+ */
+async function requireBadge(badge: string | null | undefined, session: Operator): Promise<BadgeGate> {
+	const code = (badge ?? '').trim();
+	const mode = await badgeMode();
+	if (!code) {
+		if (mode === 'off') return { operator: session, attribution: { method: 'login' } };
+		throw new BucketError('Scan your badge.', 400, 'BADGE_REQUIRED');
+	}
+	let holder;
+	try {
+		holder = await resolveBadge(code);
+	} catch (e) {
+		if (e instanceof BadgeError) throw new BucketError(e.message, e.status, e.code);
+		throw e;
+	}
+	if (!badgeHolderCan(holder, 'manufacturing:write')) {
+		throw new BucketError(`${holder.displayName}'s badge is not allowed to do this (manufacturing:write).`, 403, 'BADGE_FORBIDDEN');
+	}
+	return { operator: holder.user, badgeId: holder.badgeId, attribution: { method: 'badge', badgeId: holder.badgeId } };
+}
+
+/**
+ * Release the open custody on a pass. Called from EVERY path that closes a
+ * cycle (closeCycle, voidCycle) — that completeness is what keeps this from
+ * stranding the way capture_stations.currentOperator does (§13.0 / §16.3).
+ */
+async function releaseCustody(cycleId: string, reason: 'cycle_closed' | 'voided'): Promise<void> {
+	await Custody.updateOne(
+		{ resourceType: 'bucket_cycle', resourceId: cycleId, open: true },
+		{ $set: { open: false, releasedAt: new Date(), releaseReason: reason } }
+	);
 }
 
 async function audit(
@@ -400,9 +464,10 @@ export async function cartStatusLine(code: string): Promise<CartStatusLine> {
 }
 
 export interface ScanResolution {
-	kind: 'bucket' | 'search';
+	kind: 'bucket' | 'search' | 'badge';
 	bucket?: any;
 	cycle?: any | null;
+	badge?: { displayName: string | null; username: string | null; note: string | null };
 	matches?: { bucketId: string; barcode: string | null; state: string; cycle: any | null }[];
 }
 
@@ -414,6 +479,16 @@ export async function resolveScan(code: string): Promise<ScanResolution> {
 	await connectDB();
 	const raw = (code ?? '').trim();
 	if (!raw) return { kind: 'search', matches: [] };
+
+	// A badge scanned into the bucket box: say whose it is rather than "no match".
+	if (isBadgeCode(raw)) {
+		try {
+			const h = await resolveBadge(raw);
+			return { kind: 'badge', badge: { displayName: h.displayName, username: h.user.username, note: null } };
+		} catch (e) {
+			return { kind: 'badge', badge: { displayName: null, username: null, note: e instanceof BadgeError ? e.message : 'Unknown badge.' } };
+		}
+	}
 
 	const id = await resolveBucketId(raw);
 	if (id) {
@@ -439,6 +514,7 @@ export async function resolveScan(code: string): Promise<ScanResolution> {
 
 async function assertStickerFree(code: string, exceptBucketId?: string): Promise<void> {
 	if (/^BKT-\d+$/i.test(code)) throw new BucketError('That is an internal bucket id, not a sticker — scan the QR sticker.');
+	if (isBadgeCode(code)) throw new BucketError('That is a badge, not a bucket sticker — scan the QR sticker on the tub.', 400, 'BADGE');
 	const cart = await CartridgeRecord.findById(code).select('_id status').lean() as any;
 	if (cart) throw new BucketError(`${code} is already cartridge ${cart._id} (status ${cart.status ?? 'unknown'}) — use an unused sticker.`, 409);
 	const other = await ProductionBucket.findOne({ barcode: code, ...(exceptBucketId ? { _id: { $ne: exceptBucketId } } : {}) }).select('_id').lean() as any;
@@ -450,8 +526,11 @@ async function assertStickerFree(code: string, exceptBucketId?: string): Promise
  * The bucket gets a permanent internal BKT- id so a damaged sticker can be
  * replaced later without the tub becoming a new bucket.
  */
-export async function createBucket(input: { qr: string; user: Operator }): Promise<{ bucketId: string; barcode: string }> {
+export async function createBucket(input: { qr: string; badge?: string | null; user: Operator }): Promise<{ bucketId: string; barcode: string; operator: string; method: Attribution['method'] }> {
 	await connectDB();
+	// Badge first (§16.2): it is the first thing the operator scans, so it is the
+	// first thing that should be able to fail. `user` is the session = enteredBy.
+	const gate = await requireBadge(input.badge, input.user);
 	const code = (input.qr ?? '').trim();
 	if (!code) throw new BucketError('Scan the QR sticker for the new bucket.');
 	await assertStickerFree(code);
@@ -463,15 +542,15 @@ export async function createBucket(input: { qr: string; user: Operator }): Promi
 			state: 'available',
 			cycleCount: 0,
 			spotCheckPending: false,
-			createdBy: { _id: input.user._id, username: input.user.username }
+			createdBy: { _id: gate.operator._id, username: gate.operator.username }
 		});
 	} catch (e: any) {
 		if (e?.code === 11000) throw new BucketError(`${code} was just assigned to another bucket.`, 409);
 		throw e;
 	}
-	await logTx({ bucketId: id, type: 'mint', reason: `sticker ${code}`, relatedId: code, operator: input.user });
-	await audit('production_buckets', id, 'INSERT', input.user, { barcode: code, state: 'available' });
-	return { bucketId: id, barcode: code };
+	await logTx({ bucketId: id, type: 'mint', reason: `sticker ${code}`, relatedId: code, operator: gate.operator, enteredBy: input.user, attribution: gate.attribution });
+	await audit('production_buckets', id, 'INSERT', gate.operator, { barcode: code, state: 'available', badgeId: gate.badgeId ?? null, enteredBy: input.user.username });
+	return { bucketId: id, barcode: code, operator: gate.operator.username, method: gate.attribution.method };
 }
 
 /** Replace a damaged sticker. The BKT- id and all history stay put. */
@@ -513,6 +592,7 @@ async function closeCycle(cycle: any, status: 'consumed' | 'scrapped', user: Ope
 		fromStage: cycle.stage, toStage: cycle.stage, qtyBefore: 0, qtyAfter: 0,
 		reason: `cycle ${status}`, relatedId, operator: user
 	});
+	await releaseCustody(cycle._id, 'cycle_closed');
 	await audit('bucket_cycles', cycle._id, 'CLOSE', user, { status, closedAt: now });
 }
 
@@ -521,7 +601,8 @@ export interface StartCycleInput {
 	shellLotId: string;       // PT-CT-104 ReceivingLot.lotId
 	labelLotId: string;       // PT-CT-106 ReceivingLot.lotId
 	emptyConfirmed?: boolean; // required when the bucket has spotCheckPending
-	user: Operator;
+	badge?: string | null;    // scanned badge code (BADGE-SYSTEM_PLAN.md §16.2); required when badge mode is 'required'
+	user: Operator;           // the web session (= enteredBy)
 }
 
 /**
@@ -549,9 +630,15 @@ export async function startCycle(input: StartCycleInput): Promise<any> {
 	const label = await validateReceivingLot(input.labelLotId, LABEL_PART);
 	if (!label.ok) throw new BucketError(`Label lot: ${label.reason}`);
 
+	// Badge gate (§16.2): the holder becomes openedBy and the custody holder;
+	// input.user (the session) is recorded as enteredBy.
+	const gate = await requireBadge(input.badge, input.user);
+	const operator = { _id: gate.operator._id, username: gate.operator.username };
+
 	const now = new Date();
 	const cycleNumber = (bucket.cycleCount ?? 0) + 1;
 	const cycleId = generateId();
+	const custodyId = generateId();
 	try {
 		await BucketCycle.create({
 			_id: cycleId,
@@ -567,9 +654,10 @@ export async function startCycle(input: StartCycleInput): Promise<any> {
 			],
 			status: 'open',
 			...(bucket.spotCheckPending
-				? { emptyConfirmedBy: { _id: input.user._id, username: input.user.username }, emptyConfirmedAt: now }
+				? { emptyConfirmedBy: operator, emptyConfirmedAt: now }
 				: {}),
-			openedBy: { _id: input.user._id, username: input.user.username },
+			openedBy: operator,
+			custodyId,
 			openedAt: now,
 			stageEnteredAt: now
 		});
@@ -577,13 +665,30 @@ export async function startCycle(input: StartCycleInput): Promise<any> {
 		if (e?.code === 11000) throw new BucketError(`Bucket ${bucketId} already holds an open pass.`, 409);
 		throw e;
 	}
+	// Custody after the cycle exists (§15.2): the cycle id is fresh, so this
+	// cannot collide, and a failed cycle create leaves no orphan custody behind.
+	await Custody.create({
+		_id: custodyId,
+		resourceType: 'bucket_cycle',
+		resourceId: cycleId,
+		bucketId,
+		operator,
+		badgeId: gate.badgeId,
+		method: gate.attribution.method,
+		enteredBy: { _id: input.user._id, username: input.user.username },
+		claimedAt: now,
+		open: true
+	});
 
 	await ProductionBucket.updateOne(
 		{ _id: bucketId },
 		{ $set: { state: 'in_use', currentCycleId: cycleId, spotCheckPending: false }, $inc: { cycleCount: 1 } }
 	);
-	await logTx({ bucketId, cycleId, type: 'create', fromStage: null, toStage: 'barcoded', qtyBefore: 0, qtyAfter: 0, relatedId: shell.lot.lotId, operator: input.user });
-	await audit('bucket_cycles', cycleId, 'INSERT', input.user, { bucketId, cycleNumber, shellLot: shell.lot.lotId, labelLot: label.lot.lotId, emptyConfirmed: !!bucket.spotCheckPending });
+	await logTx({
+		bucketId, cycleId, type: 'create', fromStage: null, toStage: 'barcoded', qtyBefore: 0, qtyAfter: 0, relatedId: shell.lot.lotId,
+		operator, enteredBy: input.user, attribution: { ...gate.attribution, custodyId }
+	});
+	await audit('bucket_cycles', cycleId, 'INSERT', operator, { bucketId, cycleNumber, shellLot: shell.lot.lotId, labelLot: label.lot.lotId, emptyConfirmed: !!bucket.spotCheckPending, custodyId, badgeId: gate.badgeId ?? null, enteredBy: input.user.username });
 	return BucketCycle.findById(cycleId).lean();
 }
 
@@ -603,6 +708,8 @@ export async function scanCartIn(input: ScanCartInput): Promise<{ quantity: numb
 	const barcode = (input.barcode ?? '').trim();
 	if (!barcode) throw new BucketError('Scan the cartridge QR.');
 	if (/^BKT-\d+$/i.test(barcode)) throw new BucketError('That is a bucket id, not a cartridge sticker.');
+	// A badge must never be born as a cartridge (BADGE-SYSTEM_PLAN.md §16.2).
+	if (isBadgeCode(barcode)) throw new BucketError('That is a badge, not a cartridge sticker.', 400, 'BADGE');
 	await connectDB();
 
 	// PERF (2026-09-25): these three reads are independent — the pass, the
@@ -1216,6 +1323,7 @@ export async function auditScan(cycleId: string, barcode: string): Promise<Audit
 	const code = (barcode ?? '').trim();
 	const base = { barcode: code, status: null, stage: null, homeBucketId: null, homeCycleId: null, homeLabel: null };
 	if (!code) return { ...base, finding: 'unknown', note: 'Empty scan.' };
+	if (isBadgeCode(code)) return { ...base, finding: 'unknown', note: `${code} is a badge, not a cart.` };
 
 	const cycle = await BucketCycle.findById(cycleId).select('_id bucketId cycleNumber cartridgeIds').lean() as any;
 	if (!cycle) throw new BucketError('That pass no longer exists — reload the board.', 404);
@@ -1567,6 +1675,7 @@ export async function voidCycle(input: VoidCycleInput): Promise<VoidCycleResult>
 		{ $set: { status: 'voided', statusBeforeVoid: cycle.status, voidedAt: now, voidedBy: by, voidReason: reason, closedAt: cycle.closedAt ?? now, cartridgeIds: [], quantity: 0 } }
 	).lean();
 	if (!claimed) throw new BucketError(`${cycleLabel(cycle.bucketId, cycle.cycleNumber)} is already voided.`, 409);
+	await releaseCustody(cycle._id, 'voided');
 
 	const debits = await InventoryTransaction.find({ manufacturingRunId: cycle._id, transactionType: { $in: ['consumption', 'scrap'] } })
 		.select('transactionType partDefinitionId lotId quantity').lean() as any[];

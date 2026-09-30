@@ -16740,3 +16740,39 @@ What this deployment is for: build check of the failure-audit + direct-upload co
 Note: this checkout was on feat/badge-system (another session's checkout) when the two sonic
   commits were made; feat/bucket-system was fast-forwarded to 455cb2f0 and pushed. The docs
   commit that follows carries this log line only — same code as 455cb2f0.
+
+================================================================================
+2026-09-30 — feat/badge-system — Badge system v1 built: portal, print, custody, badge-gated mint + start-pass
+================================================================================
+Built BADGE-SYSTEM_PLAN.md Part 2 (sections 13-19) in the section 18.1 order; deviations are
+recorded in the new section 20. Nothing pushed.
+
+Models: operator-badge.ts (code BDG-XXXXXXXXXX, random, plaintext, unique; one ACTIVE badge per
+user via partial unique index; delete blocked), custody.ts (generic resourceType/resourceId,
+`open` flag drives the one-open-custody-per-resource partial unique index), bucket-transaction.ts
+(+enteredBy, +attribution{method,badgeId,custodyId}), bucket-cycle.ts (+custodyId),
+manufacturing-settings.ts (+badge{mode,changedAt,changedBy}, default 'required'), index.ts exports.
+
+Service: badge-service.ts — isBadgeCode/newBadgeCode, badgeMode/badgeSettings/setBadgeMode
+(audited, upsert), resolveBadge (unknown/revoked/inactive -> BadgeError), badgeHolderCan,
+issue/revoke/reissue/list/get/bumpPrintCount. bucket-service.ts — requireBadge() gate used by
+createBucket and startCycle only (holder must have manufacturing:write; session is enteredBy);
+startCycle opens a Custody row; releaseCustody() from closeCycle and voidCycle; scanCartIn,
+assertStickerFree and auditScan refuse a badge code so a badge can never become a cart or a
+sticker; resolveScan returns kind 'badge' naming the holder; logTx writes enteredBy + attribution
+on every row (non-gated rows = session, method 'login').
+
+Routes: /admin/badges (admin only via isAdmin(): Require-badge switch with reason + audit,
+issue form, active table with Print/Reissue/Revoke, revoked list), /admin/badges/[id]/print
+(CR80 card, bwip-js QR, print CSS, REVOKED band), Badges tab in admin/+layout. Mint page: badge
+field first, Enter jumps to the sticker field, badge persists across creates. Board start-pass
+form: badge field when mode is 'required', read-only "Badge required: off" note otherwise; board
+scan box explains a scanned badge.
+
+Docs: BUCKET-SYSTEM_PLAN.md section 6.1 / 9.4 notes + section 11 row; BADGE-SYSTEM_PLAN.md status
+line + section 20.
+
+svelte-check (portable node, direct): 14 errors before and after — all pre-existing
+(research-proxy.ts x2, r2.ts, AskBimsWidget.svelte, assembly/[sessionId] x8, magnetometer/[sessionId] x2); none in files this
+branch touches. The section 18.2 runtime checklist has NOT been run yet — needs a dev DB with an
+issued badge.

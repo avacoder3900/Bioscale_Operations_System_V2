@@ -264,8 +264,11 @@ in `reason` and the first roll id in `relatedId`.
 
 ### 6.1 Start a pass
 
-Rail → pick an Available bucket → choose the **shell lot (104)** and **label lot (106)** →
+Rail → pick an Available bucket → **scan your badge** (2026-09-30, when *Require badge* is on —
+see `BADGE-SYSTEM_PLAN.md` Part 2) → choose the **shell lot (104)** and **label lot (106)** →
 confirm empty if `spotCheckPending`. Opens at Barcoded with 0 members. Nothing is debited yet.
+The badge holder is `openedBy` and holds the pass's `Custody` row until it closes; the login
+session is `enteredBy` on the `create` ledger row. Later steps never ask for a badge.
 
 ### 6.2 Scan carts in (Barcoded only)
 
@@ -454,8 +457,11 @@ thermoseal cm, ledger rows, *Replace sticker* link, *Void this pass…* (admin).
 
 ### 9.4 `/manufacturing/cart-mfg/buckets/new` — mint one bucket from one QR
 
-Scan the sticker → `BKT-NNNNNN` minted with that `barcode`. `?bucket=BKT-…` presets *Replace
-sticker*. "← Return to previous page." The v1 `print-bucket-labels` page is deleted. This page
+Scan your badge (2026-09-30, when *Require badge* is on), then the sticker → `BKT-NNNNNN` minted
+with that `barcode`; `createdBy` and the `mint` row's `operator` are the badge holder, `enteredBy`
+the session. The badge field keeps its value across creates so one person can mint several tubs;
+a badge scanned into the sticker field, or into any cart field, is refused. `?bucket=BKT-…` presets
+*Replace sticker*. "← Return to previous page." The v1 `print-bucket-labels` page is deleted. This page
 (plus the board's *New bucket* header button) is the **only** way to mint a bucket or replace a
 sticker — the board's inline Mint card was removed on 2026-09-25, along with its `?/mint` and
 `?/relabel` actions.
@@ -569,6 +575,8 @@ per-scan lookup only needs `manufacturing:read`.
 | _(this change)_ | **Thermoseal: one part, rolls only, bucket phase only** (§3.4): `THERMOSEAL_PART` → PT-CT-101 (owned by `thermoseal-service`, re-exported by `bucket-service`); development pin removed (schema, service, board action, tile); yellow "not synced" card removed; `cut-thermoseal`, `wi-02`, `laser-cutting` no longer write inventory (PT-CT-101 / 111 / 112 / `ManufacturingMaterial`), laser-cutting inventory tile dropped; consumables overview stops deriving "individual backs"; `scripts/migrate-thermoseal-roll-only.ts` (`--plan` / `--apply`, not yet run) |
 | _(this change)_ | **Advance form: thermoseal preview + lot picker removed** (§3.4, §6.3) — the "N cm comes off the open roll" box and the "Lot the new roll comes from" select are gone from the Barcoded → Unpressed confirm; consumption is unchanged and runs in the background (FIFO lot); `?/advance` no longer reads `thermosealLotId`; board `thermosealCm()` helper dropped |
 | _(this change)_ | **"Backed" + Move to oven + In oven dropdown** (§2, §6.5, §9.1): stage relabelled everywhere (board, strip, dashboard, cartridge-admin, pipeline, dev dashboard, override); board grid `md:grid-cols-5` so Backed sits beside Pressed; `moveToOven` (service + `?/moveToOven`) closes the pass (`ovenReleasedAt/By`, `oven` change-log type, `MOVE_TO_OVEN` audit) and returns the tub to Available — no cart write, carts stay `backing` until wax filling; `returnCarts` leaves oven-released carts loose; the history page counts a released pass's carts as *went on*; `inOvenCarts()` feeds the **In oven** dropdown inside the Backed column. (An interim version the same day stamped carts `backing.movedToOvenAt` and had a longer stage name — reverted at the user's request.) |
+
+| _(feat/badge-system)_ | **Operator badges at mint + start-pass** (§6.1, §9.4; design and build layout in `BADGE-SYSTEM_PLAN.md` Part 2): `createBucket` / `startCycle` take a scanned `badge`; `requireBadge()` resolves it (or falls back to the session when the admin-only *Require badge* switch at `/admin/badges` is off) and refuses a holder without `manufacturing:write`; `startCycle` opens a `Custody` row (`custodyId` on the cycle) that `closeCycle` / `voidCycle` release; every ledger row now carries `enteredBy` + `attribution`; `scanCartIn`, `assertStickerFree`, `auditScan` refuse a badge code; `resolveScan` names the holder when a badge lands in the bucket box. New: `operator-badge.ts`, `custody.ts`, `badge-service.ts`, `/admin/badges` (portal + CR80 print). |
 
 `npm run check` after v2: **12 errors / 438 warnings** — the same 12 pre-existing (`r2.ts`,
 `AskBimsWidget.svelte`, 8× `assembly/[sessionId]`, 2× `validation/magnetometer/[sessionId]`

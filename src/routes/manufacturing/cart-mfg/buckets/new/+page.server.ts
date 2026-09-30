@@ -8,18 +8,24 @@ import { fail, redirect } from '@sveltejs/kit';
 import { connectDB, ProductionBucket } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
 import { BucketError, createBucket, replaceBucketSticker } from '$lib/server/services/bucket-service';
+import { badgeMode } from '$lib/server/services/badge-service';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals, url }) => {
 	if (!locals.user) redirect(302, '/login');
 	requirePermission(locals.user, 'manufacturing:read');
 	await connectDB();
-	const recent = await ProductionBucket.find({})
-		.select('_id barcode state cycleCount createdAt createdBy')
-		.sort({ createdAt: -1 })
-		.limit(25)
-		.lean() as any[];
+	const [recent, mode] = await Promise.all([
+		ProductionBucket.find({})
+			.select('_id barcode state cycleCount createdAt createdBy')
+			.sort({ createdAt: -1 })
+			.limit(25)
+			.lean() as Promise<any[]>,
+		// BADGE-SYSTEM_PLAN.md §17.3: decides whether the mint form asks for a badge.
+		badgeMode().catch(() => 'required' as const)
+	]);
 	return {
+		badgeMode: mode,
 		// Deep link from the board / history page: preselect this bucket for a sticker replacement.
 		presetBucket: url.searchParams.get('bucket')?.trim() || null,
 		recent: recent.map(b => ({
@@ -40,7 +46,11 @@ export const actions: Actions = {
 		await connectDB();
 		const d = await request.formData();
 		try {
-			const r = await createBucket({ qr: String(d.get('qr') ?? ''), user: { _id: locals.user._id, username: locals.user.username } });
+			const r = await createBucket({
+				qr: String(d.get('qr') ?? ''),
+				badge: String(d.get('badge') ?? ''),
+				user: { _id: locals.user._id, username: locals.user.username }
+			});
 			return { create: { success: true, ...r } };
 		} catch (e) {
 			if (e instanceof BucketError) return fail(e.status, { create: { error: e.message } });

@@ -25,7 +25,8 @@
 			} | null;
 			inOven: { count: number; ids: string[] };
 			canAdmin: boolean;
-			scan: { kind: 'bucket' | 'search'; bucket?: any; cycle?: any; matches?: { bucketId: string; barcode: string | null; state: string; cycle: any }[] } | null;
+			badgeMode: 'off' | 'required';
+			scan: { kind: 'bucket' | 'search' | 'badge'; bucket?: any; cycle?: any; badge?: { displayName: string | null; username: string | null; note: string | null }; matches?: { bucketId: string; barcode: string | null; state: string; cycle: any }[] } | null;
 			scanQuery: string;
 		};
 		form: {
@@ -817,7 +818,13 @@
 				{/if}
 				{#if data.scan}
 					<div class="mt-2 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] p-2 text-xs">
-						{#if data.scan.kind === 'bucket'}
+						{#if data.scan.kind === 'badge'}
+							{#if data.scan.badge?.displayName}
+								<p class="text-[var(--color-tron-text)]">That is <strong>{data.scan.badge.displayName}</strong>'s badge{data.scan.badge.username ? ` (${data.scan.badge.username})` : ''} — scan a bucket here. Badges go in the badge box when you mint or start a pass.</p>
+							{:else}
+								<p class="text-[var(--color-tron-yellow)]">{data.scan.badge?.note ?? 'Unknown badge.'}</p>
+							{/if}
+						{:else if data.scan.kind === 'bucket'}
 							<div class="flex items-center justify-between"><span class="font-mono text-[var(--color-tron-text)]">{data.scan.bucket._id}</span><span class="text-[10px] uppercase text-[var(--color-tron-text-secondary)]">{data.scan.bucket.state} · {data.scan.bucket.cycleCount} passes</span></div>
 							<a href="/manufacturing/cart-mfg/buckets/{data.scan.bucket._id}" class="mt-1 block text-[var(--color-tron-cyan)] hover:underline">Open history →</a>
 						{:else if (data.scan.matches ?? []).length === 0}
@@ -1158,6 +1165,14 @@
 							<input type="hidden" name="bucketId" value={b.bucketId} />
 							<input type="hidden" name="emptyConfirmed" value={b.spotCheckPending ? '1' : '0'} />
 							{#if b.spotCheckPending}<p class="text-[10px] text-[var(--color-tron-text-secondary)]">✓ Confirmed empty — recorded on this pass.</p>{/if}
+							{#if data.badgeMode === 'required'}
+								<label class="block">
+									<span class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Scan your badge</span>
+									<input type="text" name="badge" required autocomplete="off" placeholder="scan badge…" class="{inputCls} border-[var(--color-tron-cyan)]/60 ring-1 ring-[var(--color-tron-cyan)]/30 font-mono" />
+								</label>
+							{:else}
+								<p class="text-[10px] text-[var(--color-tron-text-secondary)]">Badge required: <strong>off</strong> — you will be recorded as the operator.</p>
+							{/if}
 							<p class="text-xs text-[var(--color-tron-text-secondary)]">Pick the lots this pass draws from, then scan shells in one at a time.</p>
 							<label class="block">
 								<span class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Shell lot (PT-CT-104)</span>
