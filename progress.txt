@@ -16885,3 +16885,12 @@ Retrieve this exact code: git checkout feat/badge-system at commit d7146e64
   (or: git log feat/badge-system --oneline to find it if the branch has since moved on)
 What this deployment is for: bucket nicknames — optional Nickname box on /buckets/new, add/rename on
 /buckets/[bucketId], nickname headlines on the board cards/panels, registry Nickname column + search.
+
+================================================================================
+2026-09-30 — feat/badge-system — Board: Badge-required link moved next to the Wax filling button
+================================================================================
+User: move the button next to the wax filling button. The admin-only "Badge required: on/off"
+link in the bucket board header now sits between "Cart state change" and "Wax filling →" instead
+of after "Master override". Markup only; gate and target unchanged. The nickname session's work
+(d7146e64) had been committed by then, so the tree was clean apart from this move.
+svelte-check: 14 errors, the pre-existing baseline.
