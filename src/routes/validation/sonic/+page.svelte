@@ -17,8 +17,24 @@
 	let hasFile = $state(false);
 	let uploading = $state(false);
 	let fileNonce = $state(0);
+	let clientError = $state<string | null>(null);
 
 	const mb = (n: number | null) => (n == null ? '—' : `${(n / 1048576).toFixed(1)} MB`);
+
+	// Vercel rejects request bodies over 4.5 MB before the form action runs, so
+	// the server's own size check never sees a big file. Gate it here instead.
+	const VERCEL_LIMIT_BYTES = 4.5 * 1024 * 1024;
+
+	function onFilePicked(e: Event) {
+		const f = (e.currentTarget as HTMLInputElement).files?.[0] ?? null;
+		if (f && f.size > VERCEL_LIMIT_BYTES) {
+			clientError = `Upload failed: ${f.name} is ${mb(f.size)}, over the 4.5 MB limit. Record a shorter clip or use a compressed format (m4a/mp3).`;
+			hasFile = false;
+			return;
+		}
+		clientError = null;
+		hasFile = f != null;
+	}
 	const when = (iso: string | null) => (iso ? new Date(iso).toLocaleString() : '—');
 </script>
 
@@ -33,8 +49,8 @@
 		</p>
 	</div>
 
-	{#if form?.error}
-		<div class="rounded-lg bg-[var(--color-tron-red)]/10 p-4 text-sm text-[var(--color-tron-red)]">{form.error}</div>
+	{#if clientError ?? form?.error}
+		<div class="rounded-lg bg-[var(--color-tron-red)]/10 p-4 text-sm text-[var(--color-tron-red)]">{clientError ?? form?.error}</div>
 	{/if}
 	{#if form?.uploaded}
 		<div class="rounded-lg bg-[var(--color-tron-green)]/10 p-4 text-sm text-[var(--color-tron-green)]">
@@ -48,8 +64,19 @@
 		enctype="multipart/form-data"
 		use:enhance={() => {
 			uploading = true;
+			clientError = null;
 			return async ({ result, update }) => {
 				try {
+					if (result.type === 'error') {
+						// Vercel's 413 comes back as plain text, so enhance can't parse it as an
+						// action result. Surface it here instead of dropping to the error page.
+						const status = (result as { status?: number }).status;
+						const msg = (result.error as { message?: string } | undefined)?.message;
+						clientError = status === 413 || /JSON|Unexpected token/i.test(msg ?? '')
+							? 'Upload failed: the file is over the 4.5 MB limit and was rejected before it reached the server.'
+							: `Upload failed${status ? ` (HTTP ${status})` : ''}${msg ? `: ${msg}` : ''}. The recording was not stored.`;
+						return;
+					}
 					await update({ reset: result.type === 'success' });
 					if (result.type === 'success') { hasFile = false; fileNonce += 1; }
 				} finally {
@@ -78,11 +105,11 @@
 					accept="audio/*,.wav,.m4a,.mp3,.aac,.ogg,.webm,.flac,.caf"
 					class="tron-input w-full"
 					style="min-height: 44px;"
-					onchange={(e) => (hasFile = ((e.currentTarget as HTMLInputElement).files?.length ?? 0) > 0)}
+					onchange={onFilePicked}
 					required
 				/>
 			{/key}
-			<p class="tron-text-muted mt-2 text-xs">Phone recording in any common format, up to 80 MB. Start recording before the scan and stop after the stage settles.</p>
+			<p class="tron-text-muted mt-2 text-xs">Phone recording in any common format, up to 4.5 MB. Start recording before the scan and stop after the stage settles.</p>
 			<label for="sonic-notes" class="tron-label mt-4">Notes (optional)</label>
 			<input id="sonic-notes" name="notes" type="text" class="tron-input w-full" style="min-height: 44px;" placeholder="Phone position, ambient noise, which dummy cartridge…" />
 		</div>

@@ -16638,3 +16638,57 @@ Still owed: the Vercel variables themselves. R2_ACCOUNT_ID is not the bare 32-he
 (recovered in code, warning logged once per cold start) and R2_ACCESS_KEY_ID is 24 chars (R2
 needs 32) — anything still on the S3 path (COC photos via src/lib/server/r2.ts, api/r2/files,
 receiving) is broken until someone with brevitest team access fixes both.
+
+================================================================================
+2026-09-30 — feat/bucket-system — AUDIT: why no sonic recording has ever been stored (no code change)
+================================================================================
+Requested audit + action plan; all attempted recordings were iPhone (Voice Memos). Findings:
+1. Storage was broken in the Vercel env twice over (see 09-25 entries): malformed R2_ACCOUNT_ID
+   (TLS alert 40) and a 24-char R2_ACCESS_KEY_ID (R2 400). Worker-first upload shipped to
+   production 09-25 (c6861be7) as a workaround; dashboard fix of both variables still owed.
+2. Vercel's 4.5 MB body cap sits under the page's old 80 MB promise. iPhone Voice Memos
+   "Compressed" ≈0.5 MB/min (a 5–7 min run ≈2.5–3.5 MB, fits); "Lossless" ≈3–6 MB/min (never
+   fits). Which quality the phone was on decides whether attempts even reached the function.
+3. No failure trace exists: AuditLog row is written only after storage succeeds, Vercel logs are
+   unreachable from here, and the page used to drop to the generic error page on transport errors.
+4. Still unverified: DB has 0 sonic sessions and 0 sonic audit rows as of today, though the audit
+   log shows other activity on 09-29 — the production Worker path has not been exercised since the
+   ship. Previews cannot test it (R2_WORKER_URL / R2_UPLOAD_SECRET are Production-scoped).
+Ruled out: schema (type/spuId are free Strings), permissions code, form wiring, hooks (the
+formData reader is scoped to /spu/receiving/new), CSRF.
+Plan (in order): (a) commit the uncommitted +page.svelte failure banner and retest on production
+with a Compressed voice memo <4.5 MB while logged in with spu:write; (b) fix R2_ACCOUNT_ID /
+R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY in the brevitest Vercel project and add the Worker vars to
+Preview scope; (c) write an AuditLog row on failed sonic attempts; (d) lift the 4.5 MB cap by
+letting the browser PUT straight to the Worker (already CORS-enabled) using a short-lived
+server-minted token instead of the static secret, then record the session after a HEAD check;
+(e) until (d), recorders use Compressed quality.
+
+================================================================================
+2026-09-30 — feat/badge-system — Badge system: audit + v1 build layout (no code change)
+================================================================================
+New branch feat/badge-system cut from feat/bucket-system (the bucket system exists only there;
+PR target will be feat/bucket-system, not master). Nothing coded. Two documents of work:
+
+1. System audit for where an ID scan-in could go — swept all 120 models, 156 AuditLog.create
+   sites, every scan input. Headline: custody already exists twice and disagrees with itself
+   (capture_stations.currentOperator = stored lock with no expiry; robot-arm-lock.ts = derived
+   holder whose header comment calls currentOperator "the cautionary tale in this codebase").
+   Free-text attribution found in inventory-transaction.performedBy, cleaning-record.performedBy,
+   reagent-inventory.inspectedBy, equipment-location placedBy, assembly-session capturedBy.
+   Worst attribution: opentrons-clone/operator-login is one shared env password with no user
+   identity. Full ranked list is BADGE-SYSTEM_PLAN.md section 13.
+
+2. v1 build layout for the scope the user set: Badge Portal under admin (isAdmin gate), manual
+   badge issue with name + QR, one active badge per user, printed CR80 cards; minting a bucket and
+   starting a pass require a badge scan, later steps do not. Decisions, data model (OperatorBadge,
+   Custody, additive BucketTransaction.enteredBy/attribution, BucketCycle.custodyId,
+   ManufacturingSettings.badge.mode default required), server logic incl. the guard that a badge
+   can never become a cartridge or sticker and the custody-release table covering every
+   cycle-close path, UI, file list, build order, verification checklist: BADGE-SYSTEM_PLAN.md
+   Part 2 (sections 13-19). Part 1 stage names corrected for the raw->barcoded rename.
+
+Files touched: BADGE-SYSTEM_PLAN.md (Part 2 appended), progress.txt.
+npm run check: not run — no source change; baseline remains 12 errors from master.
+Uncommitted src/routes/validation/sonic/+page.svelte in the tree belongs to another session;
+not staged, not touched.
