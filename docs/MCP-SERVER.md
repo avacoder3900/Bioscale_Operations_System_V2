@@ -109,6 +109,29 @@ This replicates the full `/api/agent/**` machine surface except: `ask`/`transcri
 routes serving the in-app widget, not machine agents) and the OT-2/scanner long-poll daemon queues
 (not request/response shaped; the robot bridge keeps using them directly).
 
+## Research analysis tools (v3.6.0)
+
+The brevitest-research-v2 app owns the analysis engine (declarative analysis profiles, stored
+per-well results on `cartridge_records.analysis`, and 4PL calibration curves per reagent lot).
+BIMS exposes it through this same connector by proxying an allowlisted subset of the research agent
+API: `/api/agent/research/<path>` → `${RESEARCH_API_URL}/api/agent/<path>` for `analysis/*` and
+`calibration/*` only (`src/lib/server/research-proxy.ts`, route `src/routes/api/agent/research/[...path]`).
+Set `RESEARCH_API_URL` (and optionally `RESEARCH_AGENT_API_KEY`; falls back to `AGENT_API_KEY`).
+
+Read-only: `research_analysis_catalog`, `research_analysis_list_profiles`, `research_analysis_get_profile`,
+`research_analysis_validate_profile`, `research_analysis_find_cartridges`, `research_analysis_preview` (dry run),
+`research_analysis_view`, `research_calibration_list_lots`, `research_calibration_list_curves`,
+`research_calibration_get_curve`.
+
+Mutating (`actor` required, machine_activity audit via `machineWrite`; the research app records
+`agent:<actor>` on the document): `research_analysis_save_profile` (draft), `research_analysis_activate_profile`,
+`research_analysis_archive_profile`, `research_analysis_run` (confirmed gate), `research_assay_attach_profile`,
+`research_calibration_fit` (draft), `research_calibration_activate_curve`, `research_calibration_quantify`
+(confirmed gate). None are human-only: they never touch manufacturing records, only research analysis state.
+
+Authoring doctrine is embedded in the tool descriptions: catalog → validate → find cartridges → preview →
+save draft → activate → attach to assay. See research-v2 `docs/prds/DOMAIN-30-ANALYSIS-V3.md`.
+
 ## Adding a tool
 
 Add a `server.registerTool(...)` block in `src/lib/server/mcp/bims-mcp.ts` that calls the relevant

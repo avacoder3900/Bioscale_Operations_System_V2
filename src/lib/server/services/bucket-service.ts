@@ -11,20 +11,27 @@
  *     into a bucket. That scan is the cartridge's birth: a CartridgeRecord is
  *     created at status 'barcoded'. A bucket pass is therefore a MEMBERSHIP LIST of
  *     cartridge ids, not a count.
- *   - Stages: barcoded → unpressed → pressed inside the bucket, then WI-01 draws
- *     cartridges out to 'backing', displayed as "In Oven". No oven equipment,
- *     no oven entry time, no cure-time gate anywhere.
+ *   - Stages: barcoded → unpressed → pressed → backing, all inside the bucket.
+ *     'backing' ("Backed") is a storage stage: the tub sits on the shelf until
+ *     the operator clicks "Move to oven" — that frees every cart from the bucket
+ *     and returns the tub to Available, nothing else. Carts keep status
+ *     'backing' until wax filling scans them in (pressed → backed → wax filled);
+ *     the board lists the freed ones under "In oven" inside the Backed column
+ *     (2026-09-25; the WI-01 "Cartridge Back" page and its LotRecord session
+ *     were removed). No oven equipment, no oven entry time, no cure-time gate
+ *     anywhere — oven tracking is disabled, not modelled, and may come back.
  *   - Advancing a bucket advances every member's status. Discards, residuals
- *     and WI-01 draws are all "scan the cart" — the system knows exactly
+ *     and wax-fill draws are all "scan the cart" — the system knows exactly
  *     which cartridges exist.
  *
  * Inventory (the scan-in is the truth):
  *   - scan a cart into a bucket  → −1 PT-CT-104 (shell) and −1 PT-CT-106 (label)
  *   - barcoded → unpressed            → thermoseal by LENGTH: members × 3.75 cm off the open
- *                                  roll; a roll pull (−1 PT-CT-112) only when one runs out
+ *                                  roll; a roll pull (−1 THERMOSEAL_PART roll) only when one
+ *                                  runs out — the ONLY place thermoseal inventory moves
  *   - discard / residual scrap   → scrap of what the cart physically is at that
  *                                  stage (shell + label; thermoseal length is not returned)
- *   - WI-01 draw                 → nothing; everything was debited upstream
+ *   - wax-fill draw (deck load)  → nothing; everything was debited upstream
  *   - un-scan a mis-scanned barcoded cart → the shell + label debits are retracted
  */
 import { connectDB } from '$lib/server/db/connection';
@@ -37,25 +44,35 @@ import { generateId } from '$lib/server/db/utils';
 import { recordTransaction, resolvePartId } from './inventory-transaction';
 import { splitMergedBarcodes, hardDeleteUnfinalizedCartridges } from './cartridge-hard-delete';
 import { generateBarcode } from './barcode-generator';
-import { consumeThermoseal, creditThermoseal, ThermosealError, type ConsumeResult } from './thermoseal-service';
+import { consumeThermoseal, creditThermoseal, ThermosealError, THERMOSEAL_PART, type ConsumeResult } from './thermoseal-service';
 
-export const BUCKET_STAGES = ['barcoded', 'unpressed', 'pressed'] as const;
+export const BUCKET_STAGES = ['barcoded', 'unpressed', 'pressed', 'backing'] as const;
 export type BucketStage = (typeof BUCKET_STAGES)[number];
 
 export const STAGE_LABELS: Record<BucketStage, string> = {
 	barcoded: 'Barcoded',
 	unpressed: 'Unpressed',
-	pressed: 'Pressed'
+	pressed: 'Pressed',
+	backing: 'Backed'
 };
 
-/** After the bucket: WI-01 draws cartridges into this CartridgeRecord status. */
-export const IN_OVEN_STATUS = 'backing';
-export const IN_OVEN_LABEL = 'In Oven';
+/**
+ * The last bucket stage. Cart status 'backing' is what wax filling's deck load
+ * accepts, so the bucket stage uses the same key and the cart mirrors it like
+ * every other stage. Every cart at 'backing' counts as Backed, in a bucket or
+ * not. "Move to oven" (moveToOven) is where carts leave the bucket system:
+ * the pass closes, the tub returns to Available, and the carts — untouched,
+ * still 'backing' — are "in oven" (inOvenCarts) until wax filling scans them.
+ */
+export const BACKED_STAGE: BucketStage = 'backing';
+export const BACKED_STATUS = 'backing';
+export const BACKED_LABEL = STAGE_LABELS.backing;
 
 export const BUCKET_PREFIX = 'BKT';
 export const SHELL_PART = 'PT-CT-104';
 export const LABEL_PART = 'PT-CT-106';
-export const THERMOSEAL_PART = 'PT-CT-112';
+// The thermoseal roll part is owned by thermoseal-service (one part, counted in rolls).
+export { THERMOSEAL_PART };
 
 export type Operator = { _id: string; username: string };
 export type ResidualDisposition = 'merge' | 'scrap'; // 'defer' (quarantine) removed 2026-09-23
@@ -97,7 +114,7 @@ function cleanCodes(codes: string[] | undefined | null): string[] {
 interface TxInput {
 	bucketId: string;
 	cycleId?: string | null;
-	type: 'mint' | 'relabel' | 'create' | 'scan_in' | 'unscan' | 'advance' | 'scrap' | 'consume'
+	type: 'mint' | 'relabel' | 'create' | 'scan_in' | 'unscan' | 'advance' | 'scrap' | 'consume' | 'oven'
 		| 'merge_in' | 'merge_out' | 'release' | 'quarantine' | 'retire' | 'void' | 'audit';
 	fromStage?: string | null;
 	toStage?: string | null;
@@ -358,18 +375,25 @@ export async function cartStatusLine(code: string): Promise<CartStatusLine> {
 
 	const status = String(cart.status ?? '');
 	const label = isBucketStage(status) ? STAGE_LABELS[status as BucketStage]
-		: status === IN_OVEN_STATUS ? IN_OVEN_LABEL
 		: status || 'unknown';
 
 	const parts: string[] = [`${cart._id} · ${label}`];
-	if (cart.bucket?.cycleId) {
+	// Where it belongs = the open pass whose member list names it (2026-09-25, for
+	// the leftover panel's search). Membership is the authority, not the cart's own
+	// `bucket.cycleId`, which an audit "take off pass" or a merge can leave stale.
+	const home = await BucketCycle.findOne({ status: 'open', cartridgeIds: cart._id }).select('bucketId cycleNumber stage').lean() as any;
+	if (home) {
+		parts.push(`belongs in bucket ${home.bucketId} #${home.cycleNumber} (${STAGE_LABELS[home.stage as BucketStage] ?? home.stage})`);
+	} else if (cart.bucket?.cycleId) {
 		const cycle = await BucketCycle.findById(cart.bucket.cycleId).select('bucketId cycleNumber stage status').lean() as any;
 		if (cycle) {
 			const where = `bucket ${cycle.bucketId} #${cycle.cycleNumber}`;
-			parts.push(cycle.status === 'open' ? `in ${where} (${STAGE_LABELS[cycle.stage as BucketStage] ?? cycle.stage})` : `last seen in ${where}, pass closed`);
+			parts.push(cycle.status === 'open' ? `on no open pass — last in ${where}, taken off` : `last seen in ${where}, pass closed`);
 		}
+	} else if (isBucketStage(status)) {
+		parts.push('on no open pass');
 	}
-	if (status === IN_OVEN_STATUS && cart.backing?.parentLotRecordId) parts.push(`WI-01 lot ${cart.backing.parentLotRecordId}`);
+	if (status === BACKED_STATUS && cart.backing?.parentLotRecordId) parts.push(`WI-01 lot ${cart.backing.parentLotRecordId} (legacy)`);
 	if (cart.statusUpdatedOn) parts.push(`since ${new Date(cart.statusUpdatedOn).toLocaleString()}`);
 
 	return { found: true, cartridgeId: cart._id, line: parts.join(' · ') };
@@ -761,7 +785,7 @@ export async function scrapCarts(input: ScrapInput): Promise<{ cycle: any; remov
 export interface AdvanceCycleInput {
 	cycleId: string;
 	user: Operator;
-	thermosealLotId?: string;   // PT-CT-112 lot to pull the NEXT roll from, if one is opened (optional; FIFO default)
+	thermosealLotId?: string;   // THERMOSEAL_PART lot to pull the NEXT roll from, if one is opened (optional; FIFO default)
 	discardedIds?: string[];    // carts binned at this step (scanned)
 	discardJournal?: string;    // required when discardedIds is non-empty
 }
@@ -772,7 +796,7 @@ export interface AdvanceCycleInput {
  * debit covers only carts that move), then every remaining member's status
  * follows the bucket. barcoded → unpressed takes members × 3.75 cm of thermoseal
  * off the open roll (thermoseal-service); the roll pull, if one happens, is
- * where PT-CT-112 inventory actually moves.
+ * where thermoseal inventory actually moves.
  */
 export async function advanceCycle(input: AdvanceCycleInput): Promise<{ cycle: any | null; discarded: number; closed: boolean; thermoseal: ConsumeResult | null }> {
 	await connectDB();
@@ -780,7 +804,7 @@ export async function advanceCycle(input: AdvanceCycleInput): Promise<{ cycle: a
 	if (!cycle || cycle.status !== 'open') throw new BucketError('Pass is not open.', 404);
 	const from = cycle.stage as BucketStage;
 	const to = nextStage(from);
-	if (!to) throw new BucketError(`${cycleLabel(cycle.bucketId, cycle.cycleNumber)} is already at Pressed — WI-01 draws it into the oven from here.`);
+	if (!to) throw new BucketError(`${cycleLabel(cycle.bucketId, cycle.cycleNumber)} is already ${STAGE_LABELS.backing} — wax filling draws its carts from here.`);
 	if ((cycle.cartridgeIds ?? []).length === 0) throw new BucketError('Scan at least one cart into the bucket before advancing it.');
 
 	const discardIds = cleanCodes(input.discardedIds);
@@ -822,9 +846,15 @@ export async function advanceCycle(input: AdvanceCycleInput): Promise<{ cycle: a
 		if (thermosealLot) push.sourceLots = { partNumber: THERMOSEAL_PART, lotId: thermosealLot, scannedAt: now };
 	}
 	await BucketCycle.updateOne({ _id: cycle._id }, { $set: set, ...(Object.keys(push).length ? { $push: push } : {}) });
+	// Pressed → Backed stamps the backing block the way WI-01 used to, minus the
+	// lot: downstream views (pipeline, dashboard, DHR) group backed carts by
+	// backing.bucketCycleId and show who backed them and when.
+	const backedStamp = to === BACKED_STAGE
+		? { 'backing.recordedAt': now, 'backing.operator': { _id: input.user._id, username: input.user.username }, 'backing.bucketCycleId': cycle._id, 'backing.bucketBarcode': cycle.bucketId }
+		: {};
 	await CartridgeRecord.updateMany(
 		{ _id: { $in: moving } },
-		{ $set: { status: to, statusUpdatedOn: now.toISOString(), priorStatus: from, ...(thermosealLot ? { 'backing.thermosealLot': thermosealLot } : {}) } }
+		{ $set: { status: to, statusUpdatedOn: now.toISOString(), priorStatus: from, ...(thermosealLot ? { 'backing.thermosealLot': thermosealLot } : {}), ...backedStamp } }
 	);
 	const tsNote = thermoseal
 		? `thermoseal ${thermoseal.cm} cm (${moving.length} × 3.75 cm) from roll${thermoseal.segments.length === 1 ? '' : 's'} ${thermoseal.segments.map(s => s.rollId.slice(0, 8)).join(', ')}${thermoseal.rollsOpened.length ? ` — ${thermoseal.rollsOpened.length} new roll${thermoseal.rollsOpened.length === 1 ? '' : 's'} pulled from inventory` : ''}`
@@ -836,23 +866,23 @@ export async function advanceCycle(input: AdvanceCycleInput): Promise<{ cycle: a
 
 export interface ConsumeInput {
 	cycleId: string;
-	barcodes: string[];   // cartridges WI-01 scanned into the oven
-	lotRecordId: string;
+	barcodes: string[];   // cartridges the wax-fill operator scanned onto the deck
+	waxRunId: string;     // WaxFillingRun._id (ledger relatedId)
 	user: Operator;
 }
 
 /**
- * WI-01 handoff: the scanned cartridges leave the bucket. The caller (WI-01)
- * sets their status to 'backing' and stamps the lot; this only maintains the
- * membership list and closes the pass when the last member leaves. Nothing is
- * debited — every part was consumed upstream.
+ * Wax-fill handoff: the scanned cartridges leave the bucket. The caller (wax
+ * filling's deck load) sets their status to 'wax_filling' and stamps the run;
+ * this only maintains the membership list and closes the pass when the last
+ * member leaves. Nothing is debited — every part was consumed upstream.
  */
 export async function consumeCarts(input: ConsumeInput): Promise<{ qtyBefore: number; qtyAfter: number; consumed: string[] }> {
 	await connectDB();
 	const cycle = await BucketCycle.findById(input.cycleId).lean() as any;
 	if (!cycle || cycle.status !== 'open') throw new BucketError('Pass is not open.', 404);
-	if (cycle.stage !== 'pressed') {
-		throw new BucketError(`${cycleLabel(cycle.bucketId, cycle.cycleNumber)} is at ${STAGE_LABELS[cycle.stage as BucketStage]} — only Pressed buckets go into the oven.`);
+	if (cycle.stage !== BACKED_STAGE) {
+		throw new BucketError(`${cycleLabel(cycle.bucketId, cycle.cycleNumber)} is at ${STAGE_LABELS[cycle.stage as BucketStage]} — only ${STAGE_LABELS.backing} buckets feed wax filling. Advance it on the board first.`);
 	}
 	const ids = cleanCodes(input.barcodes);
 	const members = new Set<string>(cycle.cartridgeIds ?? []);
@@ -865,12 +895,115 @@ export async function consumeCarts(input: ConsumeInput): Promise<{ qtyBefore: nu
 	await BucketCycle.updateOne({ _id: cycle._id }, { $pull: { cartridgeIds: { $in: ids } }, $set: { quantity: after } });
 	await logTx({
 		bucketId: cycle.bucketId, cycleId: cycle._id, type: 'consume',
-		fromStage: 'pressed', toStage: 'pressed', qtyBefore: before, qtyAfter: after,
-		relatedId: input.lotRecordId, cartridgeIds: ids, operator: input.user
+		fromStage: BACKED_STAGE, toStage: BACKED_STAGE, qtyBefore: before, qtyAfter: after,
+		relatedId: input.waxRunId, cartridgeIds: ids, operator: input.user
 	});
-	await audit('bucket_cycles', cycle._id, 'CONSUME', input.user, { consumed: ids.length, quantity: after, lotRecordId: input.lotRecordId }, { quantity: before });
-	if (after === 0) await closeCycle({ ...cycle, quantity: 0 }, 'consumed', input.user, input.lotRecordId);
+	await audit('bucket_cycles', cycle._id, 'CONSUME', input.user, { consumed: ids.length, quantity: after, waxRunId: input.waxRunId }, { quantity: before });
+	if (after === 0) await closeCycle({ ...cycle, quantity: 0 }, 'consumed', input.user, input.waxRunId);
 	return { qtyBefore: before, qtyAfter: after, consumed: ids };
+}
+
+export interface MoveToOvenInput { cycleId: string; user: Operator }
+
+/**
+ * "Move to oven" (user, 2026-09-25): all it does is free the carts from the
+ * bucket and return the bucket to Available. The pass closes; the carts are not
+ * written at all — they keep status 'backing' until wax filling scans them in.
+ * A later cancelled wax run does not put them back into the pass: returnCarts
+ * treats an oven-released pass as loose.
+ */
+export async function moveToOven(input: MoveToOvenInput): Promise<{ cycleId: string; bucketId: string; cycleNumber: number; released: string[] }> {
+	await connectDB();
+	const cycle = await BucketCycle.findById(input.cycleId).lean() as any;
+	if (!cycle || cycle.status !== 'open') throw new BucketError('Pass is not open.', 404);
+	if (cycle.stage !== BACKED_STAGE) {
+		throw new BucketError(`${cycleLabel(cycle.bucketId, cycle.cycleNumber)} is at ${STAGE_LABELS[cycle.stage as BucketStage]} — only a ${STAGE_LABELS.backing} bucket goes to the oven. Advance it first.`);
+	}
+	const ids: string[] = cycle.cartridgeIds ?? [];
+	const now = new Date();
+	const op = { _id: input.user._id, username: input.user.username };
+	await BucketCycle.updateOne({ _id: cycle._id }, { $set: { ovenReleasedAt: now, ovenReleasedBy: op } });
+	await logTx({
+		bucketId: cycle.bucketId, cycleId: cycle._id, type: 'oven',
+		fromStage: BACKED_STAGE, toStage: BACKED_STAGE, qtyBefore: ids.length, qtyAfter: 0,
+		reason: `moved to oven — ${ids.length} cart${ids.length === 1 ? '' : 's'} released from the bucket`, cartridgeIds: ids, operator: input.user
+	});
+	await audit('bucket_cycles', cycle._id, 'MOVE_TO_OVEN', input.user, { released: ids.length, ovenReleasedAt: now }, { quantity: cycle.quantity });
+	await closeCycle({ ...cycle, quantity: 0 }, 'consumed', input.user);
+	return { cycleId: cycle._id, bucketId: cycle.bucketId, cycleNumber: cycle.cycleNumber, released: ids };
+}
+
+/**
+ * "In oven": backed carts that are on no open pass — freed by Move to oven (or
+ * by a cancelled wax run, or drawn by the old WI-01 page). Shown as a short
+ * dropdown inside the board's Backed column, never as a card of its own (user,
+ * 2026-09-25). They stay here until wax filling scans them in.
+ */
+export async function inOvenCarts(limit = 200): Promise<{ count: number; ids: string[] }> {
+	await connectDB();
+	const open = await BucketCycle.find({ status: 'open', stage: BACKED_STAGE }).select('cartridgeIds').lean() as any[];
+	const inBucket = open.flatMap(c => (c.cartridgeIds ?? []) as string[]);
+	const q = { status: BACKED_STATUS, ...(inBucket.length ? { _id: { $nin: inBucket } } : {}) };
+	const [count, rows] = await Promise.all([
+		CartridgeRecord.countDocuments(q),
+		CartridgeRecord.find(q).select('_id').sort({ statusUpdatedOn: -1 }).limit(limit).lean() as any as Promise<{ _id: string }[]>
+	]);
+	return { count, ids: rows.map(r => r._id) };
+}
+
+export interface ReturnInput {
+	barcodes: string[];   // carts a cancelled/aborted wax run is handing back
+	waxRunId: string;
+	reason: string;
+	user: Operator;
+}
+
+/**
+ * Inverse of consumeCarts for a cancelled or aborted wax run: each cart goes
+ * back into the pass it was drawn from (its `bucket.cycleId`). If that pass
+ * has already closed and the tub has not started a new pass, the pass is
+ * reopened at Backed and the tub goes back to in_use; if the tub is busy with
+ * a newer pass the cart stays loose at 'backing' (still loadable) and is
+ * reported in `loose`. The caller sets the carts' status back to 'backing'.
+ */
+export async function returnCarts(input: ReturnInput): Promise<{ returned: string[]; loose: string[] }> {
+	await connectDB();
+	const ids = cleanCodes(input.barcodes);
+	if (ids.length === 0) return { returned: [], loose: [] };
+	const carts = await CartridgeRecord.find({ _id: { $in: ids } }).select('_id bucket.cycleId').lean() as any[];
+	const byCycle = new Map<string, string[]>();
+	const loose: string[] = [];
+	for (const c of carts) {
+		const cid = c.bucket?.cycleId;
+		if (!cid) { loose.push(c._id); continue; }
+		byCycle.set(cid, [...(byCycle.get(cid) ?? []), c._id]);
+	}
+	const returned: string[] = [];
+	for (const [cycleId, members] of byCycle) {
+		const cycle = await BucketCycle.findById(cycleId).lean() as any;
+		// An oven-released pass (moveToOven) is over: its carts are loose by design.
+		if (!cycle || cycle.status === 'voided' || cycle.stage !== BACKED_STAGE || cycle.ovenReleasedAt) { loose.push(...members); continue; }
+		if (cycle.status !== 'open') {
+			// Reopen only if the tub is free; a tub already on a newer pass cannot hold two.
+			const claimed = await ProductionBucket.findOneAndUpdate(
+				{ _id: cycle.bucketId, state: 'available' },
+				{ $set: { state: 'in_use', currentCycleId: cycle._id, spotCheckPending: false } }
+			).lean();
+			if (!claimed) { loose.push(...members); continue; }
+			await BucketCycle.updateOne({ _id: cycle._id }, { $set: { status: 'open', closedAt: null } });
+		}
+		const before: number = cycle.status === 'open' ? (cycle.quantity ?? 0) : 0;
+		const after = before + members.length;
+		await BucketCycle.updateOne({ _id: cycle._id }, { $addToSet: { cartridgeIds: { $each: members } }, $set: { quantity: after } });
+		await logTx({
+			bucketId: cycle.bucketId, cycleId: cycle._id, type: 'merge_in',
+			fromStage: BACKED_STAGE, toStage: BACKED_STAGE, qtyBefore: before, qtyAfter: after,
+			relatedId: input.waxRunId, reason: `returned by wax filling: ${input.reason}`, cartridgeIds: members, operator: input.user
+		});
+		await audit('bucket_cycles', cycle._id, 'RETURN', input.user, { returned: members.length, quantity: after, waxRunId: input.waxRunId, reopened: cycle.status !== 'open' }, { quantity: before, status: cycle.status }, input.reason);
+		returned.push(...members);
+	}
+	return { returned, loose };
 }
 
 // ── residual flow (§7, v2: scan the leftover carts) ───────────────────────
@@ -1459,7 +1592,7 @@ export async function voidCycle(input: VoidCycleInput): Promise<VoidCycleResult>
 	}
 
 	// Thermoseal was taken by length, not as a debit on this pass — credit the
-	// segments back to their rolls. The roll pull itself (−1 PT-CT-112) stays:
+	// segments back to their rolls. The roll pull itself (−1 roll) stays:
 	// that roll is physically open on the press.
 	const thermosealCreditedCm = cycle.thermoseal?.segments?.length
 		? await creditThermoseal({ segments: cycle.thermoseal.segments, user: input.user, reason: `VOID ${label}: ${reason}` })
@@ -1489,8 +1622,13 @@ export async function voidCycle(input: VoidCycleInput): Promise<VoidCycleResult>
 // ── read models ───────────────────────────────────────────────────────────
 
 export interface StageCounts {
+	/**
+	 * Per stage: open passes and their member carts. Backed is the exception —
+	 * its `cartridges` is EVERY cart at status 'backing', in a bucket or not
+	 * (user, 2026-09-25: one category, no separate "no bucket" count). Carts
+	 * freed by Move to oven are still 'backing' and still count here.
+	 */
 	stages: Record<BucketStage, { buckets: number; cartridges: number }>;
-	inOven: number;       // cartridges at 'backing' — the stage after the buckets
 	available: number;
 	inUse: number;
 	quarantined: number;
@@ -1499,19 +1637,20 @@ export interface StageCounts {
 
 export async function stageCounts(): Promise<StageCounts> {
 	await connectDB();
-	const [cycleAgg, bucketAgg, inOven] = await Promise.all([
+	const [cycleAgg, bucketAgg, backedTotal] = await Promise.all([
 		BucketCycle.aggregate([{ $match: { status: 'open' } }, { $group: { _id: '$stage', buckets: { $sum: 1 }, cartridges: { $sum: '$quantity' } } }]) as any as Promise<any[]>,
 		ProductionBucket.aggregate([{ $group: { _id: '$state', n: { $sum: 1 } } }]) as any as Promise<any[]>,
-		CartridgeRecord.countDocuments({ status: IN_OVEN_STATUS })
+		CartridgeRecord.countDocuments({ status: BACKED_STATUS })
 	]);
 	const stages = Object.fromEntries(BUCKET_STAGES.map(s => [s, { buckets: 0, cartridges: 0 }])) as StageCounts['stages'];
 	for (const row of cycleAgg) {
 		const stage: unknown = row._id;
 		if (isBucketStage(stage)) stages[stage] = { buckets: row.buckets ?? 0, cartridges: row.cartridges ?? 0 };
 	}
+	stages.backing.cartridges = backedTotal;
 	const byState = new Map(bucketAgg.map(r => [r._id, r.n ?? 0]));
 	return {
-		stages, inOven,
+		stages,
 		available: byState.get('available') ?? 0,
 		inUse: byState.get('in_use') ?? 0,
 		quarantined: byState.get('quarantined') ?? 0,
@@ -1742,9 +1881,9 @@ export async function overrideCartStage(input: OverrideInput): Promise<{ from: s
 
 // ── master override (whole bucket) ─────────────────────────────────────────
 
-export const FORCE_TARGETS = ['barcoded', 'unpressed', 'pressed', 'in_oven'] as const;
+export const FORCE_TARGETS = BUCKET_STAGES;
 export type ForceTarget = (typeof FORCE_TARGETS)[number];
-export const FORCE_TARGET_LABELS: Record<ForceTarget, string> = { barcoded: 'Barcoded', unpressed: 'Unpressed', pressed: 'Pressed', in_oven: IN_OVEN_LABEL };
+export const FORCE_TARGET_LABELS: Record<ForceTarget, string> = STAGE_LABELS;
 
 export interface ForceBucketInput {
 	bucket: string;        // QR sticker or BKT id, scanned
@@ -1762,11 +1901,10 @@ export interface ForceBucketResult {
  * MASTER OVERRIDE (/manufacturing/cart-mfg/buckets/override, admin only): scan
  * a bucket and put its open pass at ANY phase, bypassing the normal flow —
  * no thermoseal consumption, no "any carts discarded?", no forward-only order.
- * Every member cart's status follows the bucket. `in_oven` empties the pass
- * into 'backing' (In Oven) without a WI-01 session or LotRecord and closes it
- * like a consumed pass. Nothing is debited or credited; the ledger row, the
- * cart notes and the audit entry all say MASTER OVERRIDE so it can never be
- * mistaken for production flow.
+ * Every member cart's status follows the bucket; the pass stays open at the
+ * target (Backed included — wax filling draws from it like any other). Nothing
+ * is debited or credited; the ledger row, the cart notes and the audit entry
+ * all say MASTER OVERRIDE so it can never be mistaken for production flow.
  */
 export async function forceBucketPhase(input: ForceBucketInput): Promise<ForceBucketResult> {
 	await connectDB();
@@ -1787,37 +1925,18 @@ export async function forceBucketPhase(input: ForceBucketInput): Promise<ForceBu
 	const noteBody = `MASTER OVERRIDE ${label}: ${STAGE_LABELS[from]} → ${toLabel}: ${reason}`;
 	const cartNote = { _id: generateId(), body: noteBody, phase: 'bucket', author: by, createdAt: now };
 
-	if (input.target === 'in_oven') {
-		if (ids.length === 0) throw new BucketError(`${label} has no carts to put in the oven.`);
-		await CartridgeRecord.updateMany(
-			{ _id: { $in: ids } },
-			{
-				$set: {
-					status: IN_OVEN_STATUS, priorStatus: from, statusUpdatedOn: now.toISOString(),
-					'backing.recordedAt': now, 'backing.operator': by, 'backing.bucketCycleId': cycle._id, 'backing.bucketBarcode': id
-				},
-				$push: { notes: cartNote }
-			}
-		);
-		await logTx({
-			bucketId: id, cycleId: cycle._id, type: 'consume', fromStage: from, toStage: from,
-			qtyBefore: ids.length, qtyAfter: 0, reason: `MASTER OVERRIDE → ${toLabel} (no WI-01 session, no lot): ${reason}`,
-			cartridgeIds: ids, operator: input.user
-		});
-		await closeCycle({ ...cycle, quantity: 0 }, 'consumed', input.user);
-		await audit('bucket_cycles', cycle._id, 'FORCE_PHASE', input.user, { to: 'in_oven', members: ids.length }, { stage: from }, reason);
-		return { bucketId: id, cycleId: cycle._id, cycleNumber: cycle.cycleNumber, from, to: input.target, members: ids.length, closed: true };
-	}
-
 	const to = input.target as BucketStage;
 	if (to === from) throw new BucketError(`${label} is already at ${STAGE_LABELS[to]}.`);
 	const set: Record<string, unknown> = { stage: to, stageEnteredAt: now };
 	if (from === 'barcoded') set.openedQty = ids.length; // same rule as advanceCycle: fixed when leaving Barcoded
 	await BucketCycle.updateOne({ _id: cycle._id }, { $set: set });
 	if (ids.length) {
+		const backedStamp = to === BACKED_STAGE
+			? { 'backing.recordedAt': now, 'backing.operator': by, 'backing.bucketCycleId': cycle._id, 'backing.bucketBarcode': id }
+			: {};
 		await CartridgeRecord.updateMany(
 			{ _id: { $in: ids } },
-			{ $set: { status: to, priorStatus: from, statusUpdatedOn: now.toISOString() }, $push: { notes: cartNote } }
+			{ $set: { status: to, priorStatus: from, statusUpdatedOn: now.toISOString(), ...backedStamp }, $push: { notes: cartNote } }
 		);
 	}
 	await logTx({

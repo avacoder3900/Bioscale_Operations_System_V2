@@ -15806,6 +15806,432 @@ PR #54 remains open and mergeable/clean. The merge call is still refused by the 
 permission classifier ([Merge Without Review]) — it needs the user's click or an allow rule.
 
 ================================================================================
+2026-09-25 — feat/bucket-system — PR #54 conflict cleared (progress.txt append-vs-append)
+================================================================================
+User: GitHub reported merge conflicts on PR #54. master had moved two commits past the
+branch's last master merge (4bac0c08): 49d758f6 (countdown + progress bar on the running
+magnetometer sweep) and 8e3dd077 (its log entry). Those two commits touch exactly two files,
+and only progress.txt collided — both sides append at the same offset (after the base file's
+line 14220) with zero deletions on either side, master adding 65 lines and this branch 1519,
+so git could not choose an order. Nothing was actually in contention.
+Resolved in 6fef266e by keeping both, master's entry first (the convention 5a01239f set), plus
+the ==== separator line that was missing above the bucket block so both entries are well
+formed. Verified: no conflict markers left, both sides' content present, final length exactly
+base + master's 65 + the separator + the branch's 1519.
+src/routes/validation/magnetometer/run/+page.svelte merged clean — this branch never touches
+it.
+Check (svelte-check direct): 12 errors / 441 warnings — the documented baseline, none in any
+bucket file. `svelte-kit sync` and `vite build` still cannot run here (portable Node in Temp is
+the arm64 build, node_modules carries @rollup/rollup-win32-x64-msvc, so rollup will not load);
+svelte-check does not need rollup and this merge added no routes, so the generated types were
+already current.
+PR #54 head is now 6fef266e and GitHub reported mergeable again. Still open, still needing the
+user's Merge click — and still gated on the raw -> barcoded Atlas migration
+(scripts/migrate-bucket-raw-to-barcoded.ts --plan, then --apply), which has never been run.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-7ugq3eent-brevitest.vercel.app
+  (brevitest scope; cookie-session gated, 302 to /login)
+Source: branch feat/bucket-system @ commit 6fef266e
+Retrieve this exact code: git checkout feat/bucket-system at commit 6fef266e
+  (or: git log feat/bucket-system --oneline to find it if the branch has since moved on)
+What this deployment is for: the conflict-free PR #54 head — the bucket system plus master's
+  sweep countdown. Smoke: /login 200; buckets, buckets/new, wi-01 and validation/magnetometer/
+  run all 302 to /login as expected.
+Build status: success (GitHub deployment 6664045320, state success).
+================================================================================
+2026-09-25 — feat/bucket-system — Leftover panel: "Where does this cart belong?" search
+================================================================================
+User: "for the left over card, i want to have a simple search function to locate where the card
+belongs." The leftover (residual) panel asked Merge or Discard straight away, and the only way
+to learn where a stray cart came from was the Find-a-cart box at the bottom of the board, out
+of sight from the rail.
+Built: a small read-only search box at the top of the leftover panel, above the Merge / Discard
+choice. Scan (or type) one cart, press Enter or Find, and one line comes back:
+"<cart> · <stage> · belongs in bucket BKT-… #n (<stage>) · since <time>", or "on no open pass —
+last in bucket BKT-… #n, taken off" / "last seen in bucket …, pass closed" / "on no open pass".
+It reuses ?/cartLookup → cartStatusLine(); nothing is written and the cart is not added to the
+merge/discard scan list — it only tells the operator which choice fits. The input re-selects
+itself after each answer so a gun can scan the next cart straight away.
+cartStatusLine() itself now answers from open-pass membership first (BucketCycle.findOne
+{status:'open', cartridgeIds}) and only falls back to the cart's own bucket.cycleId for
+"last seen". Root cause for that change: an audit "Take off pass" or a merge_out leaves
+bucket.cycleId pointing at a pass the cart is no longer a member of, so the old line could
+name a bucket the cart does not belong to.
+Files: src/lib/server/services/bucket-service.ts (cartStatusLine), src/routes/manufacturing/
+cart-mfg/buckets/+page.svelte (lookupCart() shared helper, findWhere + whereFind/whereLine
+state, resetLists clears it, the box in the residual panel), BUCKET-SYSTEM_PLAN.md (§7, §9.1,
+changelog row).
+Staged for commit as only these hunks (blob written straight into the index from HEAD +
+this change): another session has ~17 files of uncommitted work in this checkout (backing
+stage, wi-01 route deletion, IN_OVEN→BACKED rename) that shares both of these files and is
+not part of this change. Commit + push are left to the user: no git identity is configured in
+this shell and the session was not allowed to pass one inline.
+Check (svelte-check direct; svelte-kit sync still cannot run — rollup arm64 native module
+missing): 14 errors / 431 warnings. 12 are the documented baseline; the other 2 are
+`wentOn` in buckets/[bucketId]/+page.svelte from the other session's uncommitted edits, not
+from this change. Both files touched here: 0 errors.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-q6w3ut7o1-brevitest.vercel.app
+  (brevitest scope; cookie-session gated, 302 to /login)
+Source: branch feat/bucket-system @ commit b741ba62
+Retrieve this exact code: git checkout feat/bucket-system at commit b741ba62
+  (or: git log feat/bucket-system --oneline to find it if the branch has since moved on)
+What this deployment is for: the leftover panel's "Where does this cart belong?" search —
+  open an Available bucket → Report leftover carts, scan a cart above Merge / Discard, and the
+  line should name the open pass it is a member of (membership-first cartStatusLine()).
+
+================================================================================
+2026-09-25 — feat/bucket-system — WI-01 page removed; buckets end at "Backed, awaiting oven"
+================================================================================
+User: after Pressed, carts should just sit in a "Backed, awaiting oven" category instead of
+going through the WI-01 "Cartridge Back" page (scan bucket → Start session → Start scanning →
+Take all → Finish session → Confirm batch → Done: seven clicks and a LotRecord per batch, all
+to land a cart at status 'backing'). Oven placement and time gating stay disabled — not
+modelled, may return later. On the floor: press → tub waits on the shelf → the wax-fill
+operator puts it in the oven and scans its carts onto the deck.
+
+Built (BUCKET-SYSTEM_PLAN.md §2, §5.2, §6.3, §6.4, §9, §10, §11, §12.4 — same commit):
+- Fourth bucket stage `backing` ("Backed, awaiting oven"): BUCKET_STAGES + STAGE_LABELS in
+  bucket-service.ts, BucketCycle.stage enum. The stage key IS the cart status wax filling
+  already accepts, so the mirror rule (cart status == bucket stage) holds and nothing
+  downstream (wax filling, pipeline, dashboard, cartridge-admin, ask-bims counts) had to learn
+  a new status. IN_OVEN_STATUS/IN_OVEN_LABEL → BACKED_STATUS/BACKED_LABEL/BACKED_STAGE.
+- advanceCycle: Pressed → Backed is a normal advance; it stamps backing.recordedAt/operator/
+  bucketCycleId/bucketBarcode on the members (what WI-01 wrote, minus the lot). At Backed the
+  card shows "Ready for the oven → wax filling" (link) instead of Advance.
+- consumeCarts now requires stage 'backing' and takes waxRunId (ledger relatedId). Its only
+  caller is wax filling's loadDeck: after the existing status validation it groups the scans
+  by open pass and draws them out BEFORE the wax_filling status write, so a bucket refusal
+  leaves the cart untouched. Loose backed carts (not in any open pass — the ~all existing
+  'backing' rows drawn by the old page, override results, returns to a busy tub) load with no
+  bucket write. Last member out → pass consumed, tub auto-released, as before.
+- New returnCarts (bucket-service) + revertToBacked (wax-filling server) for cancel/abort:
+  real carts go back to 'backing' AND back into their pass, reopening a consumed pass at
+  Backed when the tub is still available; if the tub started a newer pass the cart stays loose
+  (warned in the log). The old revert only recognised WI-01 carts (backing.parentLotRecordId)
+  and hard-deleted everything else as a test synthetic — a bucket-born cart would have been
+  DELETED on cancel. Fixed: synthetics are now flagged backing.synthetic at creation, and the
+  revert keeps any cart with a bucket.cycleId or a WI-01 lot.
+- StageCounts.inOven → looseBacked (backing carts minus those in open backed passes); board
+  and cartridge-admin show a "Backed, no bucket" tile only when > 0.
+- Master override: 'in_oven' target removed; Backed is an ordinary target and the pass stays
+  open there (it used to close the pass with no lot). FORCE_TARGETS = BUCKET_STAGES.
+- Wax-filling page: purple line above the deck grid lists the backed buckets (tub id + count)
+  and says "put the tub in the oven, then scan its carts onto the deck". Error text for an
+  unknown/wrong-status scan points at the bucket board instead of WI-01.
+- Pipeline `backing` view: backed bucket passes first (status "awaiting oven", links to the
+  bucket page), then loose carts grouped per legacy WI-01 batch, then legacy BackingLots.
+- Deleted src/routes/manufacturing/cart-mfg/wi-01/ (page + steps editor); Cartridge Back nav
+  entry and its Edit Steps subnav removed from cart-mfg/+layout.svelte; board's "WI-01 →"
+  button → "Wax filling →". Old LotRecords stay readable (lots page; bucket history under
+  "WI-01 batches (legacy)"). cart-mfg dashboard, cart-mfg-dev, cartridge-admin, [bucketId],
+  override, state-change wording updated ("In Oven" → "Backed, awaiting oven").
+- No data migration: existing 'backing' carts are simply loose; existing Pressed passes get
+  one more Advance before wax filling can draw from them.
+
+Files: src/lib/server/services/bucket-service.ts, src/lib/server/db/models/bucket-cycle.ts,
+src/routes/manufacturing/cart-mfg/{+layout.svelte,+page.svelte,buckets/+page.server.ts,
+buckets/+page.svelte,buckets/[bucketId]/+page.server.ts,buckets/[bucketId]/+page.svelte,
+buckets/override/+page.svelte,pipeline/+page.server.ts,pipeline/+page.svelte,
+state-change/+page.server.ts,state-change/+page.svelte,wax-filling/+page.server.ts,
+wax-filling/+page.svelte}, src/routes/manufacturing/cart-mfg-dev/+page.svelte,
+src/routes/cartridge-admin/+page.svelte, BUCKET-SYSTEM_PLAN.md; wi-01/ deleted.
+
+Check (svelte-check direct, portable arm64 Node): 12 errors / 431 warnings — the documented
+baseline, none in any file touched. `svelte-kit sync` still cannot run here (rollup native
+module), so the .svelte-kit/types proxies for the five edited server files were regenerated by
+hand with the same transform and the stale wi-01 proxies deleted; the two phantom errors that
+produced ([bucketId] page seeing the old `inOven` field) went away.
+
+Not exercised on a preview yet (see plan §12.4): Pressed → Backed advance, a deck load from a
+backed bucket closing the pass, and a cancel reopening it.
+
+Deployment: preview — FAILED (both Vercel projects) for commit 6f323765
+Source: branch feat/bucket-system @ commit 6f323765
+Retrieve this exact code: git checkout feat/bucket-system at commit 6f323765
+What this deployment is for: the Backed stage / WI-01 removal above.
+Build status: failure on the GitHub deployment record (6665661108) for both the brevitest and
+  the personal project, no log text reachable from here (Vercel logs need the dashboard or a
+  Vercel token; the harness refused the credential lookup). `vite build` was reproduced
+  locally for the first time on this machine (arm64 rollup/esbuild/lightningcss/oxide/sharp
+  binaries dropped into node_modules) and the client + server bundles build clean in 31 s —
+  the code compiles; only adapter-vercel's file trace failed locally, on C:\swapfile.sys,
+  which is a Windows artefact. Re-pushing with this log entry to see whether the failure
+  repeats.
+  → Cause found: the four wi-01/ deletions had been staged with `git rm` but were no longer in
+  the index when 6f323765 was committed (this checkout is shared with other sessions), so HEAD
+  still carried src/routes/manufacturing/cart-mfg/wi-01/, whose +page.server.ts imports
+  IN_OVEN_STATUS / IN_OVEN_LABEL from bucket-service — both renamed in that commit. Rollup
+  fails on a missing named export; the local build passed only because the working copy had
+  the files gone. Fixed by committing the deletions (next entry's commit).
+
+Deployment: preview — https://bioscale-operations-system-mongodb-aop3mpege-brevitest.vercel.app
+  (brevitest scope; cookie-session gated, 302 to /login)
+Source: branch feat/bucket-system @ commit de4ee2fa
+Retrieve this exact code: git checkout feat/bucket-system at commit de4ee2fa
+  (or: git log feat/bucket-system --oneline to find it if the branch has since moved on)
+What this deployment is for: the "Backed, awaiting oven" stage replacing the WI-01 page —
+  advance a Pressed bucket to Backed, then load a wax deck from it and confirm the pass closes;
+  cancel that run and confirm the pass reopens with the carts back in it.
+  Smoke: /login 200; buckets, wax-filling, pipeline?stage=backing 302 to /login as expected;
+  /manufacturing/cart-mfg/wi-01 also 302s (the route is gone — an unauthenticated request never
+  reaches the 404).
+Build status: success (GitHub deployment 6665949610, both projects).
+
+================================================================================
+2026-09-25 — feat/bucket-system — "Backed, no bucket" tile removed; one Backed category
+================================================================================
+User: move everything from "Backed, no bucket" into "Backed, awaiting oven" and remove the
+separate tile — redundant. Done: StageCounts.looseBacked is gone; stages.backing.cartridges
+is now the count of EVERY cart at status 'backing' (in a pass or not), buckets = open backed
+passes. Board strip back to five tiles; cartridge-admin strip's Backed tile shows the full
+count and filters the page to status backing; dashboard sub-label no longer says "+N loose";
+wax-filling hint reads "<N> carts in BKT-… (n), … — put the tub in the oven…"; pipeline
+backing view rows for carts outside a pass are labelled by their legacy WI-01 batch with
+status "awaiting oven" (no "loose"); cartStatusLine no longer appends "loose backed cart".
+Plan doc §2 note, §6.4, §9.1, §9.3, §11, §12.4 updated.
+Files: src/lib/server/services/bucket-service.ts, src/routes/manufacturing/cart-mfg/
+{+page.svelte,buckets/+page.svelte,pipeline/+page.server.ts,wax-filling/+page.svelte},
+src/routes/cartridge-admin/+page.svelte, BUCKET-SYSTEM_PLAN.md.
+Check (svelte-check direct): 17 errors — the 12 baseline plus 5 in thermoseal-service.ts and
+buckets/+page.server.ts (`rollsOnHandPinned` / `rollsOnHandOverride`) that belong to another
+session's uncommitted thermoseal work in this shared checkout; not staged here, not mine.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-gds0xhjy3-brevitest.vercel.app
+  (brevitest scope; cookie-session gated, 302 to /login)
+Source: branch feat/bucket-system @ commit 340096a6
+Retrieve this exact code: git checkout feat/bucket-system at commit 340096a6
+  (or: git log feat/bucket-system --oneline to find it if the branch has since moved on)
+What this deployment is for: one Backed category — the board and cartridge-admin strips show
+  "Backed, awaiting oven" counting every backed cart, no "Backed, no bucket" tile.
+  Smoke: /login 200; buckets and cartridge-admin 302 to /login as expected.
+Build status: success (GitHub deployment 6666159248).
+
+================================================================================
+2026-09-25 — feat/bucket-system — Thermoseal overhaul: one part, rolls only, bucket phase only
+================================================================================
+User: "completely overhaul the thermoseal inventory so that it ONLY counts at the bucket phase,
+and that it is only counted by the roll … we do not need to track the laser cut sheet at all,
+that inventory is now stale." Plan §3.4 rewritten; §8 / §9.1 / §11 / §12.2 / §12.3 / §12.4 updated.
+
+Before: three thermoseal parts moved inventory in three places. cut-thermoseal debited a
+PT-CT-101 roll per run and created PT-CT-111 cut sheets; laser-cutting consumed PT-CT-111 and
+created PT-CT-112 "laser cut sheets" as strips (×16 per sheet) plus a ReceivingLot mirror and a
+legacy ManufacturingMaterial counter; wi-02 wrote an orphan "strips" creation row; the bucket
+board pulled rolls against PT-CT-112 (the strip part, −228 today, and the part the live master
+WI-01 still debits per cart), hiding that behind a development pin that held "rolls on hand" at 1.
+
+After: THERMOSEAL_PART = PT-CT-101 (the roll SKU receiving books rolls into; "Thermoseal", 113
+"ea" today), owned by thermoseal-service and re-exported by bucket-service. The bucket board's
+roll pull (openRoll, −1 consumption, manufacturingRunId = roll id) is the only manufacturing step
+that moves it. cut-thermoseal, wi-02 and laser-cutting write no inventory at all (run/batch logs
+only; laser-cutting's inventory tile and ManufacturingMaterial produce block removed; the
+consumables overview no longer derives "individual backs" from a sheet count and its Cut/Laser/
+Backing rows are relabelled). The development pin (rollsOnHandPinned / rollsOnHandOverride) is
+gone from the settings schema, the service, the board action and the tile — setThermosealToggles
+$unsets it; the tile shows the live PT-CT-101 count and the yellow "not synced" card is gone
+(nothing on this branch reads PT-CT-112 any more). ThermosealStatus gained partNumber and lost
+rollsOnHandLive. Restock card / email / floor rule unchanged apart from the part.
+
+Data: scripts/migrate-thermoseal-roll-only.ts (--plan / --apply, NOT run — no MONGODB_URI in
+this checkout) renames PT-CT-101 → "Thermoseal Roll" (uom "roll"), sets PT-CT-111 / PT-CT-112
+isActive:false, relabels thermoseal_rolls to PT-CT-101, reports any open restock card for the old
+part id, writes one AuditLog summary row. It touches no count: PT-CT-101 needs a physical count
+in rolls after it runs.
+
+Files: src/lib/server/services/{thermoseal-service,bucket-service}.ts,
+src/lib/server/db/models/{manufacturing-settings,thermoseal-roll,bucket-cycle}.ts,
+src/lib/server/kanban/standing.ts, src/lib/server/ask-bims-tier1.ts,
+src/routes/manufacturing/cart-mfg/buckets/{+page.server.ts,+page.svelte},
+src/routes/manufacturing/cart-mfg/{cut-thermoseal,wi-02,laser-cutting}/+page.server.ts,
+src/routes/manufacturing/cart-mfg/laser-cutting/+page.svelte,
+src/routes/manufacturing/consumables/{+page.server.ts,+page.svelte},
+scripts/migrate-thermoseal-roll-only.ts (new), BUCKET-SYSTEM_PLAN.md.
+
+Check (svelte-kit sync + svelte-check direct, portable arm64 Node): 12 errors / 431 warnings —
+the documented baseline (r2.ts, AskBimsWidget, 8× assembly/[sessionId], 2× validation/
+magnetometer/[sessionId]); none in any file touched.
+
+================================================================================
+2026-09-25 — feat/bucket-system — dashboard: one Backed card
+================================================================================
+User: remove the redundant extra "Backed, awaiting oven" card. The cart-mfg dashboard showed
+the backed count three times — the top-row "Backed" shift stat, the Pipeline Flow strip's
+leading card (still labelled "In Oven"), and the Production Buckets strip's "Backed, awaiting
+oven" tile. Kept the Production Buckets tile (it is the stage's home, next to Pressed, and
+links to the board); removed the top-row stat (row is 5 tiles now) and the Pipeline Flow entry
+(the flow starts at Wax Fill). Plan §9.3 updated.
+Files: src/routes/manufacturing/cart-mfg/+page.svelte, BUCKET-SYSTEM_PLAN.md.
+Check (svelte-check direct): 12 errors / 431 warnings — baseline (the other session's five
+thermoseal errors from the previous entry are gone from the tree).
+
+Deployment: preview — https://bioscale-operations-system-mongodb-hraj2rm8v-brevitest.vercel.app
+  (brevitest scope; cookie-session gated, 302 to /login)
+Source: branch feat/bucket-system @ commit d74a85b2
+Retrieve this exact code: git checkout feat/bucket-system at commit d74a85b2
+  (or: git log feat/bucket-system --oneline to find it if the branch has since moved on)
+What this deployment is for: the cart-mfg dashboard with a single Backed card (Production
+  Buckets strip only). Smoke: /login 200; /manufacturing/cart-mfg 302 to /login as expected.
+Build status: success (GitHub deployment 6666318730, both projects).
+
+Deployment: preview — https://bioscale-operations-system-mongodb-14pteaoxz-brevitest.vercel.app
+  (brevitest scope; cookie-session gated, 302 to /login)
+Source: branch feat/bucket-system @ commit f50dc517
+Retrieve this exact code: git checkout feat/bucket-system at commit f50dc517
+  (or: git log feat/bucket-system --oneline to find it if the branch has since moved on)
+What this deployment is for: the thermoseal overhaul above — the board's Thermoseal tile now
+  reads the live PT-CT-101 roll count (no pin, no yellow card); an advance Barcoded → Unpressed
+  that pulls a roll must write −1 against PT-CT-101 (not PT-CT-112); cut-thermoseal, WI-02 and
+  laser-cutting record runs without moving any part. Run scripts/migrate-thermoseal-roll-only.ts
+  --plan / --apply against the DB before judging the tile's number, then record a physical count
+  of rolls on PT-CT-101.
+  Smoke: /login 200; /manufacturing/cart-mfg/buckets 302 https://bioscale-operations-system-mongodb-14pteaoxz-brevitest.vercel.app/login; /manufacturing/cart-mfg/laser-cutting 302 https://bioscale-operations-system-mongodb-14pteaoxz-brevitest.vercel.app/login.
+Build status: success (GitHub deployment 6666250259, both projects).
+
+Follow-up (same day): user — "we have exactly 1 roll on hand not 113". PT-CT-101's count is
+being set to 1 by physical count through the MCP (record_physical_count; needs the BIMS
+username to attribute it, asked). Plan §3.4 cutover text + §12.4 and the migration script's
+closing message updated to say so. With the 2-roll floor the board tile will read below floor
+until a delivery; notifications are off, so no restock card or email fires.
+
+================================================================================
+2026-09-25 — feat/bucket-system — advance form: thermoseal preview + lot picker removed
+================================================================================
+User: "when moving a bucket from barcoded to unpressed I want to remove the thermoseal check and
+text box. this can occur in the background but causes too much friction for the user." The
+Barcoded → Unpressed confirm on the bucket board showed a "Thermoseal: N cm (carts × 3.75 cm)
+comes off the open roll (X m left) / A new roll will be pulled" box and, whenever a roll pull
+was coming, a "Lot the new roll comes from" select. Both are gone: the form is now the same for
+every stage (discard scan list + journal + Confirm). Nothing changed in what happens on submit —
+advanceCycle still runs consumeThermoseal (§3.4) for members × 3.75 cm, pulls a roll FIFO from
+the oldest accepted PT-CT-101 lot when the open one runs out, and the post-move banner (cm
+taken, rolls pulled, floor alert) and the Thermoseal tile under Unpressed still report it.
+?/advance no longer reads thermosealLotId (advanceCycle keeps the optional parameter for other
+callers); the board's thermosealCm() helper was dropped. Plan §3.4 / §6.3 / changelog updated.
+Files: src/routes/manufacturing/cart-mfg/buckets/+page.svelte, .../buckets/+page.server.ts,
+BUCKET-SYSTEM_PLAN.md.
+Check (svelte-check direct): 12 errors / 431 warnings — baseline.
+  → Done: PT-CT-101 physical count recorded via MCP record_physical_count, 113 → 1 roll
+  (delta −112), actor/performedBy Samantha Wolf, 2026-09-25. The board tile now reads 1 roll,
+  below the 2-roll floor; notifications are off so nothing fires.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-45v83t241-brevitest.vercel.app
+  (brevitest scope; cookie-session gated, 302 to /login)
+Source: branch feat/bucket-system @ commit cb28e181
+Retrieve this exact code: git checkout feat/bucket-system at commit cb28e181
+  (or: git log feat/bucket-system --oneline to find it if the branch has since moved on)
+What this deployment is for: the bucket board's Barcoded → Unpressed confirm with no thermoseal
+  box and no lot select — just the discard scan list and Confirm. After a move, the banner above
+  the board should still report the cm taken / rolls pulled. Smoke: /login 200;
+  /manufacturing/cart-mfg/buckets 302 to /login as expected.
+Build status: success (GitHub deployment 6668992657).
+Note: the plan-doc edits for this change (§3.4, §6.3, changelog row) were swept into the
+  concurrent session's commit 69bc8d65 before cb28e181 was made; they are on origin either way.
+
+================================================================================
+2026-09-25 — feat/bucket-system — "Backed, Checked, and Waiting for Oven" + Move to oven
+================================================================================
+User: move the Backed card back next to Pressed; rename it "Backed, Checked, and Waiting for
+Oven"; a Move to oven button frees the carts from the bucket so they go on to the steps outside
+the bucket system, the bucket returns to Available, and the carts just keep the backed status —
+no extra status. Plan §2 / §6.5 (new) / §9.1 / §11 updated.
+
+Layout: the board grid was md:grid-cols-4 for five columns, so Backed wrapped under Available on
+tablet-and-up; it is md:grid-cols-5 now and Backed sits beside Pressed. STAGE_LABELS.backing is the
+new name, and the literal copies on the dashboard, cartridge-admin strip, pipeline, dev dashboard
+and override page follow it.
+
+Move to oven: bucket-service.moveToOven (board action ?/moveToOven, the Backed pass panel's
+primary button, replacing the "Ready for the oven → wax filling" link). Requires an open pass at
+'backing'; stamps every member backing.movedToOvenAt / movedToOvenBy (status stays 'backing');
+sets ovenReleasedAt / ovenReleasedBy on the pass; one 'oven' change-log row (new
+BucketTransaction type; board log reads "Moved to oven"); MOVE_TO_OVEN audit; closeCycle
+'consumed' → tub back to Available with the usual deferred spot-check. returnCarts treats an
+oven-released pass as loose, so a cancelled wax run never reopens it. stageCounts.backing (board
+strip, dashboard, cartridge-admin) now excludes carts with movedToOvenAt — they are no longer
+waiting for the oven; the bucket history page counts them as "went on". Wax filling is untouched:
+moved carts are loose backed carts and load exactly like the legacy WI-01 draws.
+
+Files: src/lib/server/services/bucket-service.ts, src/lib/server/db/models/{bucket-cycle,
+bucket-transaction,cartridge-record}.ts, src/routes/manufacturing/cart-mfg/buckets/{+page.server.ts,
++page.svelte,[bucketId]/+page.server.ts}, src/routes/manufacturing/cart-mfg/{+page.svelte,
+pipeline/+page.server.ts,wax-filling/+page.server.ts,wax-filling/+page.svelte},
+src/routes/manufacturing/cart-mfg-dev/+page.svelte, src/routes/cartridge-admin/+page.svelte,
+BUCKET-SYSTEM_PLAN.md.
+
+Check (svelte-kit sync + svelte-check direct): 12 errors / 431 warnings — the documented baseline,
+none in any file touched. No data migration: existing closed passes and loose backed carts are
+unaffected; only new Move to oven clicks write the stamps.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-bxqfenbpd-brevitest.vercel.app
+  (brevitest scope; cookie-session gated, 302 to /login)
+Source: branch feat/bucket-system @ commit d8928c7f
+Retrieve this exact code: git checkout feat/bucket-system at commit d8928c7f
+  (or: git log feat/bucket-system --oneline to find it if the branch has since moved on)
+What this deployment is for: the Backed column beside Pressed under its new name, and the
+  Move to oven button on a backed pass — click it and confirm the pass leaves the board, the
+  bucket shows in Available (with the "check" badge), the change log reads "Moved to oven",
+  the Backed tile no longer counts those carts, and wax filling still loads them by scan.
+  Smoke: /login 200; /manufacturing/cart-mfg/buckets 302 https://bioscale-operations-system-mongodb-bxqfenbpd-brevitest.vercel.app/login.
+Build status: success (GitHub deployment 6669296713, both projects).
+
+================================================================================
+2026-09-25 — feat/bucket-system — Simplified: "Backed", Move to oven frees carts + returns bucket, "In oven" dropdown
+================================================================================
+User: "this has become overcomplicated. Just name it backed and when it passes to the next phase
+all it should functionally do is move the bucket back to available, and free all of the carts
+from that location. have a short drop down list of 'in oven' but do not create a separate card
+for this. Carts will leave this status when they get scanned in for wax filling. functionally the
+cart statuses will all remain the same. pressed -> backed -> wax filled. Backed in the bucket
+system just refers to a storage system." Supersedes the previous entry (d8928c7f). Plan §2 /
+§6.5 / §11 rewritten to match.
+
+- Stage label is "Backed" everywhere (board, strip, dashboard, cartridge-admin, pipeline, dev
+  dashboard, override, wax-filling copy). Five-column board grid kept so Backed sits beside Pressed.
+- moveToOven now writes nothing on the carts: it stamps ovenReleasedAt/By on the pass, logs one
+  'oven' change-log row + MOVE_TO_OVEN audit, closes the pass 'consumed' and returns the bucket to
+  Available. The backing.movedToOvenAt/By cart fields from d8928c7f are removed from the schema
+  and the service (never written on a preview click before this commit, so no data to clean).
+- stageCounts.backing is back to every cart at 'backing' (one category); the history page marks
+  a released pass's carts as "went on" via the pass's ovenReleasedAt instead of a cart stamp.
+- New inOvenCarts() (bucket-service): backed carts on no open pass, count + up to 200 ids.
+  The board's Backed column ends with a dashed <details> "In oven · N carts" listing them —
+  a dropdown, not a card. Carts leave it when wax filling scans them in (status → wax_filling),
+  which is unchanged.
+
+Files: src/lib/server/services/bucket-service.ts, src/lib/server/db/models/{bucket-cycle,
+cartridge-record}.ts, src/routes/manufacturing/cart-mfg/buckets/{+page.server.ts,+page.svelte,
+[bucketId]/+page.server.ts}, src/routes/manufacturing/cart-mfg/{+page.svelte,pipeline/
++page.server.ts,wax-filling/+page.server.ts,wax-filling/+page.svelte},
+src/routes/manufacturing/cart-mfg-dev/+page.svelte, src/routes/cartridge-admin/+page.svelte,
+BUCKET-SYSTEM_PLAN.md.
+
+Check (svelte-kit sync + svelte-check direct): 12 errors / 431 warnings — the documented baseline,
+none in any file touched.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-8x4uz3jcx-brevitest.vercel.app
+  (brevitest scope; cookie-session gated, 302 to /login)
+Source: branch feat/bucket-system @ commit 1d3d1a3e
+Retrieve this exact code: git checkout feat/bucket-system at commit 1d3d1a3e
+  (or: git log feat/bucket-system --oneline to find it if the branch has since moved on)
+What this deployment is for: the simplified Backed stage — plain "Backed" beside Pressed, Move to
+  oven on a backed pass frees the carts and returns the bucket to Available (carts stay backed),
+  and the "In oven · N carts" dropdown at the bottom of the Backed column lists them until wax
+  filling scans them in. Supersedes the d8928c7f preview.
+  Smoke: /login 200; /manufacturing/cart-mfg/buckets 302 to /login.
+Build status: success (GitHub deployment 6669562389, both projects).
+
+Follow-up (same day): one-line helper under the Move to oven button (wording confirmed by the
+user): "Frees these carts from the bucket and returns it to Available. Carts stay backed until wax
+filling scans them in." Board svelte only; check unchanged (12 baseline errors).
+
+Deployment: preview — https://bioscale-operations-system-mongodb-rdpsoj69v-brevitest.vercel.app
+  (brevitest scope; cookie-session gated, 302 to /login)
+Source: branch feat/bucket-system @ commit 1590a96b
+Retrieve this exact code: git checkout feat/bucket-system at commit 1590a96b
+  (or: git log feat/bucket-system --oneline to find it if the branch has since moved on)
+What this deployment is for: the helper line under Move to oven. Smoke: /login 200; buckets 302.
+Build status: success (GitHub deployment 6670000921, both projects).
 2026-09-25 — master — BIMS refuses sweep peaks measured from a dead BLE link
 ================================================================================
 SPU 239 swept to SWPEND rows=7840 good=6615 and BIMS showed it as an ordinary
@@ -16027,3 +16453,428 @@ Retrieve this exact code: git checkout feat/ot2-tailnet-direct at commit 617e0d3
   (or: git log feat/ot2-tailnet-direct --oneline to find it if the branch has since moved on)
 What this deployment is for: OT2-TAILNET-5 rounds 1+2 (fill lifecycle, Opentrons UI, daemon jobs over
   the tailnet). Daemon-job paths inert until OT2_BRIDGE_TOKEN_SECRET is set and B14's daemon redeployed.
+================================================================================
+2026-09-25 — master — four units swept; the channel deficit is the JIG, not the SPUs
+================================================================================
+Swept 247 (session va9dLUSqBUvwpBlip4P3h) and 244 (session -i9MMeJJg_CH7qIJEBEH9),
+both good=7840, zero dropouts. With 226 and 255 that is four clean units.
+
+BEAD PULL |B x dB/dz|, mean over usable wells (edge peaks excluded):
+    unit     ch A     ch B     ch C    B vs A    C vs A
+    226       1864     1394     1424    -25.2%    -23.6%
+    244       1963     1666     1221    -15.2%    -37.8%
+    247       1957     1671     1076    -14.6%    -45.0%   (well 5 excluded)
+    255       2141     1998     1525     -6.7%    -28.8%
+    channel A spread ACROSS units: 14.8%
+
+Channel A is strongest and channel C weakest on ALL FOUR units, C down 24-45%,
+while channel A compared across units is tight at 14.8%. Magnet variation would
+put the weakest channel in a random position per unit; instead the ordering is
+identical every time and the same channel is stable unit to unit. The SAME JIG
+was used on all four, so this is predominantly the jig's own sensor geometry --
+channel C's sensor almost certainly sits at a different height relative to the
+magnet plane and therefore sees a flatter gradient.
+
+CORRECTION to the 2026-09-25 entry above: that entry framed the A-vs-C gap as
+evidence peak-only QC hides a quarter-scale spread in real bead force. With four
+units it is clear the within-unit channel gap is mostly FIXTURE, not SPU. Compare
+the same channel across units (meaningful); do not compare C against A within a
+unit and conclude a magnet is weak. Cheap test to settle it: re-sweep one SPU
+with a different jig, or rotate the jig 180 degrees. If the deficit follows the
+jig it is geometry; if it stays with the physical channel position, it is the
+magnet row.
+
+247 HAS A REAL POSITIONAL DEFECT, and it is not strength. Peak spacing runs
+8000 / 13400 / 8000 um -- well 3 and everything after it sit +5400um from an even
+cadence (226 is 8000 x4 exactly; 255 varies +/-200, one dy step; 244 is 8000 x4
+exactly). Well 3's peak field is healthy at 4373/4388/4260, in line with wells
+1/2/4, so the magnet is fine and the regular test fails it only because the test
+samples off-centre. Well 5 on 247 is unmeasurable: carried +5400 along, its peak
+lands past the 40000 sweep end and past the ~40800 real travel limit, so its
+1834 @ y=40000 is rising flank. The new gate handles that correctly -- coverage
+was complete, so peakAtWindowEdge fires but peakUnreliable does NOT, which is the
+intended distinction between "window missed the magnet" and "link died".
+
+STILL OPEN, and the firmware says so itself (brevitest-firmware.h:219): which
+stage geometry is correct is unresolved -- "the measured well_move[] puts the
+wells at 2825-18800 um, the nominal one at 4800-37000 um. A sweep this wide finds
+the peaks empirically and settles the question." Four units of empirical peaks
+now exist (226 5400-37400, 255 6000-38000, 244 5600-37600, 247 6200-35600+), all
+spanning the NOMINAL range. An earlier attempt here to explain 247's failing well
+3 via park positions did NOT reconcile: firmware parks compute to
+5650/13550/21200/29800/37600 (start 12800 + cumulative well_move
+{-7150,7900,7650,8600,7800}), yet the sweep reads only ~655 for sensor 3 at
+y=21200 while the regular test reported 3848. That mapping is wrong somewhere and
+needs a bench check, not more inference.
+
+Operational notes: the serial port renumbers constantly (COM7 -> COM8 -> COM20 ->
+COM8 -> COM12 -> COM11 across one session) -- let run-sweep.ps1 auto-detect it
+rather than passing a value read even a minute earlier. And judge mag-record
+freshness by the filename epoch, NOT by channel temperature: 244's record was 0.9
+min old while reading 21-26C simply because the unit was cold.
+
+No code changed in this entry.
+Final audit (script) + independent re-check (read-only, from the written UUID list):
+- 5000 UUIDs, 5000 unique; 0 on cartridge_records; 0 on optical_test_cartridges;
+  0 overlap with the 5,510 ids held by the 39 pre-existing barcode_sheet_batches (any status);
+  each of the 5000 in exactly one batch; 25 batches status=printed; 25 audit_log rows tagged
+  newData.bulkRun=zebra-bulk-2026-09-22 (one per batch, calibration JSON embedded).
+- PT-CT-106: 1691 → 6643. The 48-label gap vs +5000 is two concurrent WI-01 consumptions
+  (19:49:53Z −24, 20:24:43Z −24 — normal lab throughput), so the ledger reconciles exactly.
+- UUID list: %LOCALAPPDATA%\BIMS\zebra-runs\zebra-bulk-2026-09-22-1790106567226.txt
+- Batch ids: mfWgjjyeePGzeI7YOglZw uGvtgcK6RPDEZrAfbm5ij 3PCAV0JMlRKvRjGk-FvYD X8TaKdfIvQEUKxUmWtuov
+  WIazgaUNQ9EzsTL5HUh7g w88Q3K68LUj-Chr0pjOVN O1E3WWom0Ansm32_jlTVu _UkL6daDhvFDjrcLAvcKH
+  t0nzgmiHavBKDtHQjRwKh BA2N3_T4TZqEKi4veAWb1 daIkEAmS9U8kvDXdlQsHJ 0IQj4vlabEAGPqPtpW7_z
+  piWL6GT7JLIOwcLKG5FW6 Qy228vOOeTW2JGqQuryL4 NckdRD657qPzmFGsmEZen sFa-05OuZgAl3LKzqPw8L
+  Qd6qlJvZXU28PmuNehO_m Qc8R3w08joluxs3jUaOGO JCrb3LofEr7Z3Fnqw8sM7 wmryJHvPzD4Nz6MG0tBnD
+  mx6N5K7pLghgiiQ5cjKDG -L5PgM-EEe92MxMPQ5BN- u87ejvZryjl9kKm_A0_9r 43-0eIyNqvMGLcIuh0yXY
+  XqxcTQMP4TCWwhgY2vUCl
+Before the run: 40 unminted random test labels (the 20-label alignment job sent twice) + ~12 more
+from the layout dial-in — all to be destroyed, none in BIMS.
+No code changed in this entry. npm run check: n/a.
+
+================================================================================
+2026-09-24 — feat/research-analysis-mcp — research analysis + calibration MCP tools via proxy to brevitest-research-v2
+================================================================================
+Research-v2 DOMAIN-30 (analysis v3) exposes /api/agent/analysis/* and /api/agent/calibration/*.
+BIMS now proxies the allowlisted subset (analysis/, calibration/) at /api/agent/research/[...path]
+(src/lib/server/research-proxy.ts; RESEARCH_API_URL + optional RESEARCH_AGENT_API_KEY, falls back to
+AGENT_API_KEY) and registers 18 research_* MCP tools in bims-mcp.ts (server version 3.6.0): catalog,
+list/get/validate profiles, find cartridges, preview (dry run), view, save draft, activate, archive,
+run (confirmed gate), attach profile to assay, list lots, list/get curves, fit (draft), activate curve,
+quantify (confirmed gate). Writes go through machineWrite with actor. Docs: docs/MCP-SERVER.md.
+Tests: src/lib/server/research-proxy.test.ts (unit, 15 cases incl. dot-segment rejection);
+tests/contracts/12-research-analysis.test.ts (401 / 404 allowlist / 200-or-503 catalog).
+npm run test:unit: 174 pass. npm run check: 11 errors — unchanged from feat/spu-tweaks baseline.
+
+
+================================================================================
+2026-09-25 — master — DEPLOY: research analysis MCP tools (bims-operations 3.6.0)
+================================================================================
+Source: branch master @ commit faea623d (cherry-pick of feat/research-analysis-mcp 61560f31 onto master)
+Retrieve this exact code: git checkout master at commit faea623d
+Adds /api/agent/research/[...path] proxy + 18 research_* MCP tools. Requires RESEARCH_API_URL on Vercel
+(set 2026-09-25 by Alejandro). No manufacturing behaviour changed. Deployed via GitHub integration on push.
+
+================================================================================
+2026-09-25 — master — seven units swept: the mag test reads the flank, not the peak
+================================================================================
+Swept 218 (8loq-7xGVyX6ShKpPRFVb), 229 (pek3cX8mVZt0FcIHrmkPs) and 215
+(YPssyKzEPL2mVflJgEjRi), all good=7840. With 226, 244, 247 and 255 that is seven
+units, six of them clean and one (239) rejected by the new coverage gate.
+
+THE HEADLINE: NOT ONE OF THE SEVEN HAS A WEAK MAGNET. Every cell that failed or
+nearly failed the regular test is comfortably above the 3900 floor AT ITS ACTUAL
+PEAK. The test is sampling roughly a millimetre off the magnet centre and losing
+236-500 gauss to the flank:
+
+    unit  cell      true peak   test read   deficit   off-centre
+    218   w3 ch B        4080        3844     -236 G    ~903 um
+    229   w3 ch B        4233        3932     -301 G   ~1075 um
+    215   w2 ch A        4293        3912     -381 G   ~1148 um
+    215   w2 ch B        4372        3960     -412 G   ~1171 um
+    215   w2 ch C        4364        3864     -500 G   ~1320 um
+
+218 FAILED and 229 PASSED BY 32 GAUSS on essentially identical hardware. The
+threshold is currently sorting units by how a positioning error interacts with
+whichever channel happens to sit lowest, not by whether the magnet is adequate.
+
+WHY IT VARIES BY UNIT: the firmware parks at FIXED positions, but the magnet row
+does not sit in the same place on every unit. Well 1's peak across the seven:
+226 5400, 229 5600, 244 5600, 215 5800, 218 6000, 255 6000, 247 6200 -- an 800um
+spread. That spread, stacked on a systematic ~1mm park offset, decides how far
+down the flank each unit is read. Which cell then fails is near enough arbitrary.
+
+Two failure signatures were distinguished and neither is a bad magnet:
+  - 218 and 229: channel B runs ~5-6% below A and C across EVERY well; well 3 is
+    the weakest of the five, so it is the cell that crosses the line. Spacing on
+    both is a clean 8000um x4.
+  - 215: well 2 is low across ALL THREE channels in the regular test, which looked
+    like a genuinely weak magnet -- it is not. Its true peaks are 4293/4372/4364,
+    in line with wells 1/3/4/5 on the same unit. Predicted weak magnet; wrong.
+
+THE ONE REAL PHYSICAL DEFECT REMAINS 247: peak spacing 8000/13400/8000, well 3
+and everything after sitting +5400um from an even cadence, with a healthy peak
+field. That is a positioning fault, not a magnet to replace.
+
+HONEST LIMIT: the profile is symmetric about the peak, so the reported value
+crosses it on BOTH sides. The MAGNITUDE of the offset is solid; which side the
+test parks on is not determinable from the value alone. That needs the park
+geometry settled -- the same question the firmware already flags as open at
+brevitest-firmware.h:219 (measured well_move[] vs nominal). Seven units of
+empirical peaks now exist to settle it with.
+
+CORRECTION to the previous entry: it reported channel A bead pull as tight across
+units at 14.8%. Adding 218 takes that to 46.3% -- the claim does not survive.
+Peak FIELD is the tight quantity (ch A 5.7%, ch B 7.3%, ch C 4.3% across five
+units); the bead-pull spread is ~7x larger than the field spread it is derived
+from, which points at the gradient inference being sensitive to jig seating
+rather than at real magnet differences. Bead pull is NOT yet a trustworthy
+per-unit QC metric. The test that settles it: sweep one SPU twice, re-seating the
+jig between runs.
+
+No code changed in this entry.
+
+================================================================================
+2026-09-25 — feat/bucket-system — Ship: merge origin/master, then feat/bucket-system → master
+================================================================================
+User: "ship the build". PR #54 had already been merged into master (1dc287e7), so master carried
+the bucket system up to that point; the branch was 23 commits ahead (today's thermoseal overhaul,
+Backed / Move to oven / In oven, and the docs entries) and master 9 ahead (research-analysis MCP
+tools + proxy, magnetometer sweep docs, redeploy chores).
+
+Merge of origin/master into the branch (b4c13606): one conflict, progress.txt, resolved by keeping
+both sides in order (HEAD entries, then master's). Everything else auto-merged (docs/MCP-SERVER.md,
+bims-mcp.ts, research-proxy.ts + test, sweep page, contract test 12).
+
+Check on the merged tree: 14 errors / 431 warnings = the 12 documented baseline errors + 2 new ones
+in src/lib/server/research-proxy.ts (28:33, 34:32 — `process.env` typed against a `{ RESEARCH_API_URL?
+… }` shape). Both come in unchanged from master (the file is byte-identical to origin/master) and
+master has built and deployed with them, so they are master's baseline now, not a merge fault.
+None in any bucket / thermoseal file.
+
+Ship path (CLAUDE.md: never deploy from local): push the branch → confirm the brevitest preview
+builds → `git push origin feat/bucket-system:master` (fast-forward; master becomes b4c13606 + these
+docs commits) → Vercel's GitHub integration builds production from master. Migration scripts
+(migrate-bucket-raw-to-barcoded, migrate-thermoseal-roll-only) are still NOT run — no MONGODB_URI
+in this checkout; both are --plan / --apply and safe to run after the deploy.
+
+================================================================================
+2026-09-25 — feat/bucket-system — sonic upload: 4.5 MB note + visible failure message
+================================================================================
+Why the sonic fingerprint page "wasn't logging" uploads: Vercel rejects request bodies over
+4.5 MB (FUNCTION_PAYLOAD_TOO_LARGE) before the SvelteKit action ever runs, so the page's 80 MB
+promise and the action's 80 MB check were both unreachable for a real phone recording. The 413
+comes back as plain text, enhance can't deserialize it, and the result fell through as a generic
+error with nothing useful on screen. Production DB check (BIMS MCP saved queries): zero sonic
+validation_sessions and zero sonic_recording_upload audit rows — no upload has ever completed.
+
+src/routes/validation/sonic/+page.svelte only:
+- Helper note now says "up to 4.5 MB" (was 80 MB).
+- File picker rejects >4.5 MB client-side with a red "Upload failed: <name> is N MB, over the
+  4.5 MB limit…" message and keeps the submit button disabled.
+- enhance callback handles result.type === 'error': 413 (or the JSON-parse failure it produces)
+  → "Upload failed: the file is over the 4.5 MB limit and was rejected before it reached the
+  server."; any other error → "Upload failed (HTTP n): <msg>. The recording was not stored."
+  Shown in the same red banner as form.error instead of dropping to the error page.
+Server MAX_BYTES in +page.server.ts still reads 80 MB (unreachable; left as-is). Real fix for
+large recordings is a presigned PUT straight to R2 + a small record action (needs bucket CORS).
+svelte-check: 14 errors — the 12-error baseline plus 2 pre-existing in research-proxy.ts, none
+in the sonic page. Not committed.
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+  (deployment URL https://bioscale-operations-system-mongodb-ki9sipr5t-brevitest.vercel.app)
+Source: branch master (fast-forwarded from feat/bucket-system) @ commit c326f293
+Retrieve this exact code: git checkout master at commit c326f293
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: the shipped bucket-system build — WI-01 gone (route 302s to /login
+  before a 404 for an anonymous request), thermoseal as one roll part (PT-CT-101, 1 roll on hand),
+  Backed / Move to oven / In oven, plus master's research-analysis tools. Preview of the same commit
+  (brevitest 6670139519) built and smoked first; production is GitHub deployment 6670170690.
+  Smoke on the deployment URL: /login 200; /manufacturing/cart-mfg/buckets 302 to /login;
+  production alias /login 200.
+Build status: success (GitHub deployment 6670170690, Production – bioscale-operations-system-mongodb).
+Still to do by hand (need MONGODB_URI): scripts/migrate-bucket-raw-to-barcoded.ts --plan/--apply
+  and scripts/migrate-thermoseal-roll-only.ts --plan/--apply.
+
+================================================================================
+2026-09-25 — feat/bucket-system — R2 client: TLS alert 40 on sonic upload → readable error + path-style
+================================================================================
+User hit "Upload to storage failed: write EPROTO ... ssl3_read_bytes:ssl/tls alert handshake
+failure ... SSL alert number 40" on the sonic recording page. That is Cloudflare refusing the TLS
+handshake (alert 40 = handshake_failure) because the SNI hostname matched none of its certificates —
+nothing to do with credentials, permissions, or the file (those come back as HTTP 403/404).
+The AWS SDK client in src/lib/server/r2.ts uses virtual-hosted addressing, so the host it dials is
+<R2_BUCKET_NAME>.<R2_ACCOUNT_ID>.r2.cloudflarestorage.com. Confirmed with curl from this machine:
+  brevitest-cv.7bd6a45c….r2.cloudflarestorage.com → HTTP 400 (TLS fine)
+  brevitest-cv.not-an-account-id.r2.cloudflarestorage.com → TLS handshake failure
+  a.b.7bd6a45c….r2.cloudflarestorage.com (dotted bucket) → TLS handshake failure
+So the deployed env that produced the error has an R2_ACCOUNT_ID that is not the 32-hex account ID
+(pasted URL / bucket name / stray char / different value on preview vs production), or a bucket
+name with a dot. Cannot read the Vercel env from here (no CLI, no .vercel link) — needs a look in
+the Vercel dashboard for the environment the user was on.
+
+src/lib/server/r2.ts (the client shared by COC processing, receiving, api/r2/files, sonic):
+- R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME are trimmed.
+- R2_ACCOUNT_ID must match /^[0-9a-f]{32}$/ or getClient() throws
+  "R2_ACCOUNT_ID must be the 32-character hex Cloudflare account ID (got "…", N chars)" — so the
+  sonic page's red banner names the real cause instead of an EPROTO string.
+- forcePathStyle: true → requests go to <account>.r2.cloudflarestorage.com/<bucket>/<key>
+  (verified via an SDK finalizeRequest middleware), so the bucket name can never end up in the
+  TLS hostname. R2 supports path-style; presigned download URLs from getSignedDownloadUrl are
+  path-style too.
+svelte-check: 14 errors = the 12-error baseline + 2 pre-existing in research-proxy.ts; the
+r2.ts baseline error is in services/r2.ts (the raw-S3v4 client), untouched.
+Left alone: src/routes/validation/sonic/+page.svelte has another session's uncommitted edits.
+Deployment: preview — https://bioscale-operations-system-mongodb-5r6iyguvg-brevitest.vercel.app
+Source: branch feat/bucket-system @ commit 80b106d4
+Retrieve this exact code: git checkout feat/bucket-system at commit 80b106d4
+  (or: git log feat/bucket-system --oneline to find it if the branch has since moved on)
+What this deployment is for: R2 client fix — sonic upload should now show the real R2 env problem
+  (bad R2_ACCOUNT_ID) instead of "EPROTO … SSL alert number 40", and uploads go path-style.
+  GitHub deployment 6670220704. Smoke: /login 200; /validation/sonic 302 (auth redirect expected).
+  Still needed by hand: check R2_ACCOUNT_ID / R2_BUCKET_NAME in the Vercel env for the environment
+  the user was on — the code can only report a bad value, not correct it.
+Outcome: user confirmed on the preview — the banner now reads "R2_ACCOUNT_ID must be the
+  32-character hex Cloudflare account ID …", so the TLS alert 40 was a bad R2_ACCOUNT_ID in the
+  Vercel env, not code. Fix the variable in the Vercel dashboard for that environment and redeploy.
+
+================================================================================
+2026-09-25 — feat/bucket-system — R2: recover the account ID when R2_ACCOUNT_ID is malformed (no Vercel access)
+================================================================================
+Follow-up to the alert-40 entry above. The preview confirmed the deployed R2_ACCOUNT_ID is not the
+bare 32-hex account ID, and nobody with Vercel dashboard access is available to fix the variable.
+The user chose the code-side recovery ("option 2") over waiting.
+
+New src/lib/server/r2-account.ts — resolveR2AccountId(raw, publicUrl):
+  1. R2_ACCOUNT_ID is exactly 32 hex → use it (trimmed, lower-cased).
+  2. R2_ACCOUNT_ID contains a 32-hex run (pasted dashboard URL etc.) → extract it.
+  3. R2_PUBLIC_URL contains a 32-hex run that is not a `pub-<hash>.r2.dev` subdomain → use it
+     (pub- hashes are per-bucket, not the account, so they are refused).
+  4. Otherwise throw naming both values.
+  resolveR2AccountIdFromEnv(env) wraps it and console.warns once when a fallback was used, so
+  Vercel function logs show which source fed the endpoint. The account ID is public (it is in every
+  R2 URL), so this leaks nothing. Exercised against 6 inputs (exact, padded/upper, URL-embedded,
+  public-URL, pub-hash, empty) — all as intended.
+src/lib/server/r2.ts (AWS SDK client) and src/lib/server/services/r2.ts (raw S3v4 client) both
+  build their endpoint from the resolver now; the strict 32-hex throw from the previous entry is
+  replaced by the resolver's throw. services/r2.ts also trims its env values and no longer lists
+  R2_ACCOUNT_ID in its "credentials not configured" message (the resolver reports that case).
+svelte-check: 14 errors — same as the baseline (the services/r2.ts one is the pre-existing Buffer
+  → BodyInit fetch overload at line ~162, untouched).
+Dashboard fix still owed: whoever administers the brevitest Vercel team should set R2_ACCOUNT_ID to
+the bare 32-hex value so the warning stops firing.
+Deployment: preview — https://bioscale-operations-system-mongodb-hp2tyem6f-brevitest.vercel.app
+Source: branch feat/bucket-system @ commit ab2530e8
+Retrieve this exact code: git checkout feat/bucket-system at commit ab2530e8
+  (or: git log feat/bucket-system --oneline to find it if the branch has since moved on)
+What this deployment is for: sonic upload should now reach R2 despite the malformed R2_ACCOUNT_ID
+  (account ID recovered by r2-account.ts). GitHub deployment 6670725299.
+  Smoke: /login 200; /validation/sonic 302 (auth redirect expected). An actual upload needs a login,
+  so the user tests that; if it still fails, the banner names the values the resolver saw.
+
+================================================================================
+2026-09-25 — feat/bucket-system — sonic upload: go through the Cloudflare Worker, S3 creds are wrong too
+================================================================================
+With the account ID recovered (ab2530e8) the TLS handshake now succeeds and R2 itself answers —
+with HTTP 400 "Credential access key has length 24, should be 32". R2 access key IDs are 32 hex;
+the deployed R2_ACCESS_KEY_ID is something else (24 chars — likely a wrong paste). No code can
+recover a credential, but the S3 path is not the only way in: the CV capture flow stores photos
+in production through the Cloudflare Worker (R2_WORKER_URL + X-Upload-Secret; native R2 binding,
+no S3 credentials), and that works today.
+
+src/routes/validation/sonic/+page.server.ts:
+- storeRecording(): if R2_WORKER_URL is set, uploadViaWorker() first; on failure (or when the
+  Worker is not configured) fall back to the SDK uploadFile(). Both failures are joined in the
+  banner ("worker: …; S3: …") so the next diagnosis is one screenshot.
+- recordingUrl(): Worker /file/<key> URL when R2_WORKER_URL is set (same as CV photos),
+  otherwise the presigned S3 URL (which the bad access key would also break).
+- The 80 MB MAX_BYTES / 4.5 MB Vercel body cap situation is unchanged (see the 4.5 MB entry).
+Caveat: R2_WORKER_URL / R2_UPLOAD_SECRET are Production-scoped in Vercel (see the "VERCEL
+PREVIEW ENV" note above, ~line 2152), so a branch preview cannot exercise the Worker path — it
+falls back to S3 and shows the same access-key error. The real test is production (master).
+svelte-check: 14 errors — baseline. Left alone: +page.svelte (another session's uncommitted edits).
+Deployment: preview — https://bioscale-operations-system-mongodb-afy4ml066-brevitest.vercel.app
+Source: branch feat/bucket-system @ commit 5e09125d
+Retrieve this exact code: git checkout feat/bucket-system at commit 5e09125d
+  (or: git log feat/bucket-system --oneline to find it if the branch has since moved on)
+What this deployment is for: build check of the Worker-first sonic upload. GitHub deployment
+  6670864534. Smoke: /login 200; /validation/sonic 302. NOT a functional test — previews lack
+  R2_WORKER_URL, so an upload here still falls back to S3 and hits the access-key error.
+  Functional test requires production (master). Awaiting the user's go.
+
+================================================================================
+2026-09-25 — master — Ship: R2 account-ID recovery + Worker-first sonic upload to production
+================================================================================
+User chose to ship (option 1). origin/master fast-forwarded 9aa11bda → c6861be7 (no merge commit;
+the branch already contained master). Seven commits: 80b106d4 (R2 fail-fast + path-style),
+163735a8, 17f044d6 (logs), ab2530e8 (account-ID recovery), 6e9005fc (log), 5e09125d (sonic via
+Worker, S3 fallback), c6861be7 (log). Reason: the Worker variables are Production-scoped, so this
+is the only environment where the sonic upload can be exercised at all.
+Deployment: production — https://bioscale-operations-system-mongodb-rgqqid2ct-brevitest.vercel.app
+Source: branch master (= feat/bucket-system) @ commit c6861be7
+Retrieve this exact code: git checkout master at commit c6861be7
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: sonic recording upload should now store through the Cloudflare Worker
+  despite the wrong R2_ACCOUNT_ID / R2_ACCESS_KEY_ID in the Vercel env. GitHub deployment
+  6670920736 (Production – bioscale-operations-system-mongodb).
+  Smoke on the deployment URL: /login 200; /validation/sonic 302 → login; buckets 302 → login.
+  Functional test (an actual upload, needs a login) is the user's next step.
+Still owed: the Vercel variables themselves. R2_ACCOUNT_ID is not the bare 32-hex account ID
+(recovered in code, warning logged once per cold start) and R2_ACCESS_KEY_ID is 24 chars (R2
+needs 32) — anything still on the S3 path (COC photos via src/lib/server/r2.ts, api/r2/files,
+receiving) is broken until someone with brevitest team access fixes both.
+
+================================================================================
+2026-09-29 — feat/post-mortem-tablet-ui → master — Post-Mortem Inspect: tablet (touch) layout
+================================================================================
+Tablets are being introduced as single-purpose Post-Mortem Inspect stations (browser pointed at the
+URL, nothing else). Two tablet-only UI changes, gated on the CSS `pointer: coarse` media query (a
+touch-primary device) — NOT user-agent sniffing (iPad Safari reports as desktop Mac) and NOT a width
+breakpoint (would catch narrow laptop windows). Mouse-driven desktops/laptops render exactly as before.
+  - post-mortem-inspect/+page.svelte: Capture button spans the video-feed width (w-full) and is ~2x
+    as tall (py-3 → py-9, ~52px → ~100px); the action bar stacks (flex-col) so the "Scan a cartridge"
+    hint sits under the button.
+  - routes/+layout.svelte: top BIMS header hidden on touch devices, on post-mortem-inspect only.
+  - manufacturing/cart-mfg/+layout.svelte: cart-mfg icon sidebar hidden on touch devices, on
+    post-mortem-inspect only.
+Verified the five `[@media(pointer:coarse)]:*` utilities are emitted inside @media(pointer:coarse) in
+the compiled CSS. `npm run check`: 13 errors (baseline 14), none in touched files. `npm run build`:
+vite compile succeeds; the adapter-vercel packaging step OOMs on this Windows machine even with
+--max-old-space-size=8192 (environmental, unrelated to this change — Vercel builds on Linux).
+Pushed to master at the user's explicit request so production deploys for tablet testing.
+Deployment: production — https://bioscale-operations-system-mongodb-7lvbyhjik-brevitest.vercel.app
+Source: branch master (= feat/post-mortem-tablet-ui) @ commit 993354fe
+Retrieve this exact code: git checkout master at commit 993354fe
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: tablet (touch) layout for Post-Mortem Inspect — full-width, ~2x-tall
+  Capture button; BIMS header + cart-mfg sidebar hidden on touch devices. GitHub deployment
+  6745259760 (Production). Smoke: /login 200. On-tablet check is the user's next step.
+
+================================================================================
+2026-09-29 — feat/post-mortem-tablet-ui-2 — Post-Mortem Inspect: tablet layout, round 2
+================================================================================
+More touch-only (`pointer: coarse`) layout changes to post-mortem-inspect/+page.svelte, same gating
+as the round-1 entry above — mouse-driven desktops/laptops are unchanged:
+  - Camera (USB device) selector hidden.
+  - Locked cartridge ID shrunk from text-lg to text-xs, matching the "completed · scanned …" line.
+  - Header description paragraph ("Scan each cartridge that has been ran…") hidden.
+  - Deployment-status notice ("No model is deployed…" / "Inference active") moved below the Pi
+    station camera settings. Implemented as a {#snippet} rendered twice — once in the original spot
+    (hidden on touch) and once after StationCameraSettings (shown only on touch).
+Verified all touch utilities are emitted inside @media(pointer:coarse) and that the touch `:block`
+rule follows the base `.hidden` rule in the compiled CSS (so it wins on tablets). `npm run check`:
+13 errors (baseline 14), none in the touched file. Vite compile succeeds.
+Deployment: preview — https://bioscale-operations-system-mongodb-4nfu4y9jn.vercel.app
+Source: branch feat/post-mortem-tablet-ui-2 @ commit 4b4063a8
+Retrieve this exact code: git checkout feat/post-mortem-tablet-ui-2 at commit 4b4063a8
+  (or: git log feat/post-mortem-tablet-ui-2 --oneline to find it if the branch has since moved on)
+What this deployment is for: on-tablet check of the round-2 touch layout before it goes to master.
+  GitHub deployment 6745630040. Smoke: /login 302.
+Deployment: production — https://bioscale-operations-system-mongodb-qytoyvanc-brevitest.vercel.app
+Source: branch master (= feat/post-mortem-tablet-ui-2) @ commit 592b1ee7
+Retrieve this exact code: git checkout master at commit 592b1ee7
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: round-2 touch layout for Post-Mortem Inspect, shipped to production at
+  the user's request for on-tablet testing (the preview is behind Vercel SSO, which tablets can't pass).
+  GitHub deployment 6746198009 (Production). Smoke: /login 200.
+
+================================================================================
+2026-09-30 — feat/post-mortem-tablet-swap → master — Post-Mortem Inspect: tablet swap test
+================================================================================
+Touch-only (`pointer: coarse`) layout test for landscape tablets, requested by the user to see how it
+reads on-device: the Cartridge/Station context bar and the Capture action bar swap places. Touch order
+is now Capture → video → context bar. Implemented without duplicating markup (the context bar holds
+bound <select>s with ids and the <video> is bind:this): the three blocks are wrapped in a container
+that stays `space-y-4` on desktop (identical layout) and becomes `flex flex-col gap-4 space-y-0` on
+touch, with `order-1/2/3` on action bar / video / context bar. Verified in compiled CSS: order, flex
+and gap rules sit inside @media(pointer:coarse), and the touch `space-y-0` rule follows the base
+`space-y-4` rule (same :where specificity, so it wins on tablets). `npm run check`: 13 errors
+(baseline 14), none in the touched file. Vite compile succeeds.
+Pushed to master at the user's explicit request for on-tablet testing.
+Deployment: production — https://bioscale-operations-system-mongodb-k5sgndw7d-brevitest.vercel.app
+Source: branch master (= feat/post-mortem-tablet-swap) @ commit 2d6ba750
+Retrieve this exact code: git checkout master at commit 2d6ba750
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: on-tablet test of the Capture ↔ cartridge/station bar swap (touch only).
+  GitHub deployment 6762152984 (Production). Smoke: /login 200.

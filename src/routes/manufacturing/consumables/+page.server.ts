@@ -81,10 +81,9 @@ export const load: PageServerLoad = async ({ locals }) => {
 	// === Settings ===
 	const settingsDoc = await ManufacturingSettings.findById('default').lean();
 	const general = (settingsDoc as any)?.general ?? {};
-	const cartridgesPerSheet = general.cartridgesPerLaserCutSheet ?? 16;
-
-	const laserCutPart = partsList.find((p) => /laser.?cut|substrate|thermoseal.?sheet/i.test(p.name));
-	const individualBacks = (laserCutPart?.inventoryCount ?? 0) * cartridgesPerSheet;
+	// Thermoseal is one roll-counted part moved only by the bucket board's roll
+	// pull (2026-09-25); laser-cut sheet / "individual backs" inventory is stale
+	// and no longer derived. The roll count is in partsList like any other part.
 
 	// === Recent manual edits ===
 	const recentEdits = await AuditLog.find({ action: 'manual_inventory_edit' })
@@ -103,9 +102,9 @@ export const load: PageServerLoad = async ({ locals }) => {
 	// Pipeline stages
 	const stages = [
 		{
-			id: 'cut-thermoseal', name: 'Cut Thermoseal', href: '/manufacturing/cart-mfg/wi-02',
-			inputs: [{ name: 'Thermoseal Roll', icon: '🧻', count: null as number | null, unit: 'rolls (ROG)' }],
-			outputs: [{ name: 'Thermoseal Sheets', icon: '📄', count: null as number | null, unit: 'sheets' }],
+			id: 'cut-thermoseal', name: 'Cut Thermoseal (run log)', href: '/manufacturing/cart-mfg/wi-02',
+			inputs: [{ name: 'Thermoseal Roll', icon: '🧻', count: null as number | null, unit: 'rolls (not debited here)' }],
+			outputs: [{ name: 'Cut strips', icon: '📄', count: null as number | null, unit: 'not inventory' }],
 			activeRuns: 0, completedRuns: 0
 		},
 		{
@@ -115,15 +114,15 @@ export const load: PageServerLoad = async ({ locals }) => {
 			activeRuns: 0, completedRuns: 0
 		},
 		{
-			id: 'laser', name: 'Laser Cut', href: '/manufacturing/cart-mfg/laser-cutting',
-			inputs: [{ name: 'Thermoseal Sheets', icon: '📄', count: null as number | null, unit: 'sheets' }],
-			outputs: [{ name: 'Cartridge Backs', icon: '🔲', count: individualBacks > 0 ? individualBacks : null, unit: `backs (${cartridgesPerSheet}/sheet)` }],
+			id: 'laser', name: 'Laser Cut (run log)', href: '/manufacturing/cart-mfg/laser-cutting',
+			inputs: [{ name: 'Sheets', icon: '📄', count: null as number | null, unit: 'not inventory' }],
+			outputs: [{ name: 'Laser-cut sheets', icon: '🔲', count: null as number | null, unit: 'not inventory' }],
 			activeRuns: 0, completedRuns: 0
 		},
 		{
-			id: 'backing', name: 'Cartridge Back', href: '/manufacturing/cart-mfg/wi-01',
+			id: 'backing', name: 'Buckets (press + back)', href: '/manufacturing/cart-mfg/buckets',
 			inputs: [
-				{ name: 'Cartridge Back (laser cut)', icon: '🔲', count: individualBacks > 0 ? individualBacks : null, unit: 'backs' },
+				{ name: 'Thermoseal roll (at the press)', icon: '🧻', count: null as number | null, unit: 'rolls' },
 				{ name: 'Raw Cartridge', icon: '📦', count: null as number | null, unit: 'cartridges (ROG)' },
 				{ name: 'Barcode Label', icon: '🏷️', count: null as number | null, unit: 'labels' }
 			],
@@ -187,7 +186,6 @@ export const load: PageServerLoad = async ({ locals }) => {
 		stages,
 		parts: JSON.parse(JSON.stringify(partsList)),
 		recentEdits: JSON.parse(JSON.stringify(editsList)),
-		derived: { individualBacks, cartridgesPerSheet },
 		totals: { backed: backedCount, waxStored, reagentStored, sealed, voided, totalInSystem: backedCount }
 	};
 };

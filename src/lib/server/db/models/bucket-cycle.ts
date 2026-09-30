@@ -13,11 +13,13 @@ const operatorRef = { _id: String, username: String };
  * is serialized (CartridgeRecord created at status 'barcoded') the moment its QR
  * sticker is scanned into the bucket; `cartridgeIds` holds the members and
  * `quantity` is kept equal to its length for the board and counts. Advancing
- * the bucket advances every member's status. WI-01 draws members out to
- * 'backing' (In Oven); the pass closes when the last one leaves.
+ * the bucket advances every member's status. The last stage is 'backing'
+ * ("Backed"); "Move to oven" releases every member at once, or wax filling's deck load draws members out of it
+ * and the pass closes when the last one leaves (2026-09-25 — replaced the
+ * WI-01 page). Oven placement and cure time are not tracked.
  */
 const sourceLotSchema = new Schema({
-	partNumber: String,   // 'PT-CT-104' shell | 'PT-CT-106' label | 'PT-CT-112' thermoseal
+	partNumber: String,   // 'PT-CT-104' shell | 'PT-CT-106' label | THERMOSEAL_PART roll (PT-CT-101)
 	lotId: String,        // ReceivingLot.lotId (scanned barcode)
 	scannedAt: Date
 }, { _id: false });
@@ -77,7 +79,7 @@ const bucketCycleSchema = new Schema({
 	cycleNumber: { type: Number, required: true }, // → 'BKT-000123 #7'
 	stage: {
 		type: String,
-		enum: ['barcoded', 'raw', 'unpressed', 'pressed', 'qr_pending'], // 'raw' + qr_pending: pre-rename & v1 values, kept so old rows validate
+		enum: ['barcoded', 'raw', 'unpressed', 'pressed', 'backing', 'qr_pending'], // 'raw' + qr_pending: pre-rename & v1 values, kept so old rows validate
 		required: true
 	},
 	cartridgeIds: { type: [String], default: [] }, // members currently in the tub (v2)
@@ -100,6 +102,11 @@ const bucketCycleSchema = new Schema({
 		enum: ['open', 'consumed', 'scrapped', 'voided'],
 		default: 'open'
 	},
+	// "Move to oven" (2026-09-25): set when the backed pass's carts were released
+	// to the oven all at once (bucket-service.moveToOven). The pass then closes as
+	// 'consumed'; returnCarts never reopens an oven-released pass.
+	ovenReleasedAt: Date,
+	ovenReleasedBy: operatorRef,
 	voidedAt: Date,
 	voidedBy: operatorRef,
 	voidReason: String,

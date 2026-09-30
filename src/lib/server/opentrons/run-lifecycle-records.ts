@@ -71,6 +71,7 @@ import { isHardenedRobot } from '$lib/server/services/deck-calibration/rollout';
 import { recordTransaction, resolvePartId } from '$lib/server/services/inventory-transaction';
 import { protectLockedCarts } from '$lib/server/manufacturing/locked-cartridges';
 import { hardDeleteUnfinalizedCartridges } from '$lib/server/services/cartridge-hard-delete';
+import { returnCarts } from '$lib/server/services/bucket-service';
 import { notifyRunLifecycle } from '$lib/server/notifications';
 import { estimateReagentRunSeconds } from '$lib/manufacturing/reagent-run-estimate';
 
@@ -1102,6 +1103,54 @@ export function alreadyStopped(kind: FillKind, run: any): boolean {
 }
 
 /**
+ * Cancel/abort: carts scanned onto the deck never got wax-filled. Real carts
+ * (born in a production bucket, or drawn by the old WI-01 page) go back to
+ * 'backing' and — via bucket-service.returnCarts — back into the bucket pass
+ * they were drawn from, reopening it if the tub is free. Test-mode synthetics
+ * (flagged backing.synthetic, or with neither a bucket nor a WI-01 lot) are
+ * hard-deleted through the driver: Model.deleteMany is blocked by the sacred
+ * middleware and used to throw here AFTER the abort had already been recorded.
+ * (Ported from master's wax-filling page into the shared stop path.)
+ */
+async function revertToBacked(
+	scannedIds: string[],
+	runId: string,
+	reason: string,
+	user: { _id: string; username: string },
+	verb: 'cancelled' | 'aborted'
+): Promise<void> {
+	const real = await CartridgeRecord.find({
+		_id: { $in: scannedIds },
+		'waxFilling.runId': runId,
+		status: 'wax_filling',
+		'backing.synthetic': { $ne: true },
+		$or: [
+			{ 'bucket.cycleId': { $exists: true, $ne: null } },
+			{ 'backing.parentLotRecordId': { $exists: true, $ne: null } }
+		]
+	}).select('_id').lean() as any[];
+	const realIds = real.map((c: any) => String(c._id));
+	if (realIds.length > 0) {
+		await CartridgeRecord.updateMany(
+			{ _id: { $in: realIds } },
+			{ $set: { status: 'backing' }, $unset: { waxFilling: '' } }
+		);
+		try {
+			const r = await returnCarts({ barcodes: realIds, waxRunId: runId, reason, user: { _id: user._id, username: user.username } });
+			if (r.loose.length > 0) console.warn(`[wax ${verb}] ${r.loose.length} cart(s) returned loose at 'backing' (their bucket pass could not be reopened): ${r.loose.join(', ')}`);
+		} catch (e) {
+			// The carts are already back at 'backing' (loadable); a bucket bookkeeping
+			// failure must not undo the cancel.
+			console.error(`[wax ${verb}] returnCarts failed:`, e instanceof Error ? e.message : e);
+		}
+	}
+	await hardDeleteUnfinalizedCartridges(
+		{ _id: { $in: scannedIds }, 'waxFilling.runId': runId, status: 'wax_filling' },
+		{ reason: `Wax run ${verb} — synthetic (test-mode) cartridge removed`, user, oldData: { runId } }
+	);
+}
+
+/**
  * Cancel/Abort CONFIRM — today's cancelRun/abortRun body after the robot stop,
  * given {stopWarning, filledWells}. filledWells null = not read / read failed →
  * every scanned cart reverts (the old "smart abort check failed" path).
@@ -1145,30 +1194,11 @@ export async function stopConfirm(
 			}
 		}
 
-		// Cartridges scanned onto the deck never actually got wax-filled.
-		// WI-01-originated carts go back to 'backing' (the operator returns
-		// them to the oven; their original ovenEntryTime is preserved).
-		// Test-mode synthetics (no parentLotRecordId) are deleted.
+		// Cartridges scanned onto the deck never actually got wax-filled: they go
+		// back to 'backing' and back into their bucket pass (see revertToBacked).
 		if (scannedIds.length > 0) {
-			await CartridgeRecord.updateMany(
-				{
-					_id: { $in: scannedIds },
-					'waxFilling.runId': runId,
-					status: 'wax_filling',
-					'backing.parentLotRecordId': { $exists: true, $ne: null }
-				},
-				{ $set: { status: 'backing' }, $unset: { waxFilling: '' } }
-			);
-			// Test-mode synthetics (no parentLotRecordId) — hard-deleted through the
-			// driver: Model.deleteMany is blocked by the sacred middleware.
-			await hardDeleteUnfinalizedCartridges(
-				{ _id: { $in: scannedIds }, 'waxFilling.runId': runId, status: 'wax_filling' },
-				{
-					reason: action === 'cancel' ? 'Wax run cancelled — synthetic (test-mode) cartridge removed' : 'Wax run aborted — synthetic (test-mode) cartridge removed',
-					user: user as any,
-					oldData: { runId }
-				}
-			);
+			const verb = action === 'cancel' ? 'cancelled' : 'aborted';
+			await revertToBacked(scannedIds, runId, `run ${verb}: ${reason}`, user as any, verb);
 		}
 
 		await AuditLog.create({

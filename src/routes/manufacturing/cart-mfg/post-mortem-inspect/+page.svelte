@@ -701,7 +701,7 @@
 		<header class="flex items-center justify-between">
 			<div>
 				<h1 class="text-2xl font-bold text-[var(--color-tron-cyan)]">Post-Mortem Inspect</h1>
-				<p class="text-xs text-[var(--color-tron-text-secondary)]">
+				<p class="text-xs text-[var(--color-tron-text-secondary)] [@media(pointer:coarse)]:hidden">
 					Scan each cartridge that has been ran, press Space to photograph it, and the deployed model's PASS/FAIL verdict appears below. The photo is saved to the cartridge — its status stays <span class="font-mono">completed</span> (post-mortem photos don't change cartridge state).
 				</p>
 			</div>
@@ -710,7 +710,9 @@
 			</div>
 		</header>
 
-		<!-- Deployment status: yellow notice when nothing is deployed at post_mortem -->
+		<!-- Deployment status: yellow notice when nothing is deployed at post_mortem.
+		     Desktop shows it here; touch devices show it below the camera settings. -->
+		{#snippet deploymentStatus()}
 		{#if !data.modelDeployed}
 			<div class="rounded border border-[var(--color-tron-yellow,#facc15)] bg-[rgba(250,204,21,0.08)] p-3 text-sm text-[var(--color-tron-yellow,#facc15)]">
 				<span class="font-semibold">No model is deployed at the post_mortem phase — captures will save without inference.</span>
@@ -729,6 +731,8 @@
 				{/each}
 			</div>
 		{/if}
+		{/snippet}
+		<div class="[@media(pointer:coarse)]:hidden">{@render deploymentStatus()}</div>
 
 		<!-- Persistent reject banner: cartridge missing or wrong status -->
 		{#if rejectBanner}
@@ -755,13 +759,17 @@
 			</div>
 		{/if}
 
+		<!-- Context bar + video + action bar. On touch devices (tablets) this becomes
+		     a flex column and the context bar and action bar swap places via `order`
+		     (Capture on top, context bar under the video). Desktop keeps DOM order. -->
+		<div class="space-y-4 [@media(pointer:coarse)]:flex [@media(pointer:coarse)]:flex-col [@media(pointer:coarse)]:gap-4 [@media(pointer:coarse)]:space-y-0">
 		<!-- Context bar: sticky cartridge + station + camera -->
-		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-4">
+		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-4 [@media(pointer:coarse)]:order-3">
 			<div class="flex flex-wrap items-center gap-4">
 				<div class="min-w-[200px] flex-1">
 					<div class="text-xs uppercase text-[var(--color-tron-text-secondary)]">Cartridge</div>
 					{#if cartridgeId}
-						<div class="font-mono text-lg text-[var(--color-tron-green,#39ff14)]">🟢 {cartridgeId}</div>
+						<div class="font-mono text-lg text-[var(--color-tron-green,#39ff14)] [@media(pointer:coarse)]:text-xs">🟢 {cartridgeId}</div>
 						<div class="text-xs text-[var(--color-tron-text-secondary)]">
 							{cartridgeStatus ?? 'unknown'}{#if scannedAt} · scanned {new Date(scannedAt).toLocaleTimeString()}{/if}
 						</div>
@@ -795,7 +803,7 @@
 						{/each}
 					</select>
 				</div>
-				<div>
+				<div class="[@media(pointer:coarse)]:hidden">
 					<label for="cam-sel" class="block text-xs uppercase text-[var(--color-tron-text-secondary)]">Camera</label>
 					<select id="cam-sel" bind:value={selectedCameraId} onchange={() => startCamera()} class="tron-input" disabled={!!selectedStationId}>
 						{#each cameras as c (c.deviceId)}
@@ -807,7 +815,7 @@
 		</div>
 
 		<!-- Video pane -->
-		<div class="rounded-lg border border-[var(--color-tron-border)] bg-black p-2">
+		<div class="rounded-lg border border-[var(--color-tron-border)] bg-black p-2 [@media(pointer:coarse)]:order-2">
 			{#if cameraError}
 				<div class="flex aspect-video items-center justify-center text-[var(--color-tron-red,#ff3366)]">
 					{cameraError}
@@ -818,19 +826,21 @@
 			{/if}
 		</div>
 
-		<!-- Action bar -->
-		<div class="flex items-center justify-between gap-3">
+		<!-- Action bar. On touch devices (tablets) the button spans the video
+		     width at ~2x height so it's an easy thumb target. -->
+		<div class="flex items-center justify-between gap-3 [@media(pointer:coarse)]:order-1 [@media(pointer:coarse)]:flex-col [@media(pointer:coarse)]:items-stretch">
 			<button
 				type="button"
 				onclick={() => capturePhoto()}
 				disabled={submitting || !stream || !cartridgeId}
-				class="rounded bg-[var(--color-tron-cyan)] px-6 py-3 text-lg font-bold text-[var(--color-tron-bg-primary)] disabled:opacity-40"
+				class="rounded bg-[var(--color-tron-cyan)] px-6 py-3 text-lg font-bold text-[var(--color-tron-bg-primary)] disabled:opacity-40 [@media(pointer:coarse)]:w-full [@media(pointer:coarse)]:py-9"
 			>
 				{submitting ? 'Capturing…' : '📷 Capture (Space)'}
 			</button>
 			{#if !cartridgeId}
 				<div class="text-xs text-[var(--color-tron-text-secondary)]">Scan a cartridge to enable capture</div>
 			{/if}
+		</div>
 		</div>
 
 		<!-- Station camera tuning. Only for a Pi station: the camera is on the
@@ -844,6 +854,7 @@
 				onRefresh={requestCameraParams}
 			/>
 		{/if}
+		<div class="hidden [@media(pointer:coarse)]:block">{@render deploymentStatus()}</div>
 
 		<!-- Verdict banner — the headline result for the LATEST capture (advisory only) -->
 		{#if verdict.state !== 'idle'}

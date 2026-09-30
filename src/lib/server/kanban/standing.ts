@@ -185,9 +185,9 @@ async function spawnPartReorder(part: any): Promise<string> {
 }
 
 /**
- * Thermoseal restock (BUCKET-SYSTEM_PLAN v2 §3.4). PT-CT-112 is consumed by
- * length against an open roll; the inventory count moves only when a roll is
- * pulled. The floor is "always ≥ minRolls rolls on the shelf": when a pull
+ * Thermoseal restock (BUCKET-SYSTEM_PLAN v2 §3.4). Thermoseal is one
+ * roll-counted part (THERMOSEAL_PART) consumed by length against an open roll;
+ * the inventory count moves only when a roll is pulled. The floor is "always ≥ minRolls rolls on the shelf": when a pull
  * leaves fewer, one auto-committed restock card is spawned (idempotent on
  * sourceRef thermoseal-restock:<partId>) and the card body carries the lead
  * time warning. Returns the open card id (existing or new).

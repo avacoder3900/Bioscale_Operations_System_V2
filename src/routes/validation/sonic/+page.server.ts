@@ -2,7 +2,9 @@ import { fail } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
 import { connectDB, Spu, ValidationSession, User, AuditLog, generateId } from '$lib/server/db';
 import { uploadFile, getSignedDownloadUrl } from '$lib/server/r2';
+import { uploadViaWorker, getR2Url } from '$lib/server/services/r2';
 import { appendSpuJournal } from '$lib/server/spu-journal';
+import { env } from '$env/dynamic/private';
 import type { Actions, PageServerLoad } from './$types';
 
 /**
@@ -14,6 +16,39 @@ import type { Actions, PageServerLoad } from './$types';
  */
 const AUDIO_EXT = ['wav', 'm4a', 'mp3', 'aac', 'ogg', 'webm', 'flac', 'caf', 'mp4'];
 const MAX_BYTES = 80 * 1024 * 1024;
+
+/**
+ * Storage path. The CV capture flow already stores photos in production through the
+ * Cloudflare Worker (R2_WORKER_URL + X-Upload-Secret), whose native R2 binding needs no
+ * S3 credentials. The S3 credentials in the Vercel env are wrong (2026-09-25: R2 rejects
+ * the access key — "length 24, should be 32") and nobody can edit them right now, so the
+ * recording goes through the Worker first and falls back to the S3 client only when the
+ * Worker is not configured or refuses. Downloads follow the same rule: the Worker's
+ * /file/ URL when it exists, otherwise a presigned S3 URL.
+ */
+async function storeRecording(key: string, bytes: ArrayBuffer, contentType: string): Promise<{ key: string; size: number }> {
+	let workerError: string | null = null;
+	if (env.R2_WORKER_URL) {
+		try {
+			await uploadViaWorker(Buffer.from(bytes), key, contentType);
+			return { key, size: bytes.byteLength };
+		} catch (err) {
+			workerError = err instanceof Error ? err.message : String(err);
+			console.warn(`[sonic] worker upload failed, falling back to S3: ${workerError}`);
+		}
+	}
+	try {
+		return await uploadFile(key, bytes, contentType);
+	} catch (err) {
+		const s3Error = err instanceof Error ? err.message : String(err);
+		throw new Error(workerError ? `worker: ${workerError}; S3: ${s3Error}` : s3Error);
+	}
+}
+
+async function recordingUrl(key: string): Promise<string> {
+	if (env.R2_WORKER_URL) return getR2Url(key);
+	return getSignedDownloadUrl(key, 3600);
+}
 
 export const load: PageServerLoad = async ({ locals }) => {
 	requirePermission(locals.user, 'spu:read');
@@ -37,7 +72,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 			const r = (s.results ?? [])[0]?.rawData ?? {};
 			let url: string | null = null;
 			try {
-				url = r.r2Key ? await getSignedDownloadUrl(r.r2Key, 3600) : null;
+				url = r.r2Key ? await recordingUrl(r.r2Key) : null;
 			} catch {
 				url = null;
 			}
@@ -87,7 +122,7 @@ export const actions: Actions = {
 		const key = `sonic/${spu.udi}/${now.toISOString().replace(/[:.]/g, '-')}-${safe}`;
 		let stored: { key: string; size: number };
 		try {
-			stored = await uploadFile(key, await file.arrayBuffer(), file.type || 'application/octet-stream');
+			stored = await storeRecording(key, await file.arrayBuffer(), file.type || 'application/octet-stream');
 		} catch (err) {
 			return fail(500, { error: `Upload to storage failed: ${err instanceof Error ? err.message : String(err)}` });
 		}

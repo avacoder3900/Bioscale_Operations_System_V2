@@ -224,7 +224,7 @@ async function callAgentApi(
 export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 	// Version bump signals clients (claude.ai caches connector tool lists) that
 	// the toolset changed — bump on every tool add/remove/rename.
-	const server = new McpServer({ name: 'bims-operations', version: '3.5.1' });
+	const server = new McpServer({ name: 'bims-operations', version: '3.6.0' });
 
 	// ---------------------------------------------------------------- meta
 
@@ -1643,6 +1643,318 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 			inputSchema: z.object({ barcode: z.string().describe('The cartridge barcode.') })
 		},
 		async ({ barcode }) => callAgentApi(fetcher, `/api/agent/cartridge/${encodeURIComponent(barcode)}/photos`)
+	);
+
+	// ------------------------------------------- research analysis (proxied)
+	//
+	// brevitest-research-v2 owns the analysis engine: declarative analysis profiles
+	// (metrics/expressions/QC/views), stored per-well results on cartridge_records,
+	// and 4PL calibration curves per reagent lot. These tools proxy its
+	// /api/agent/analysis/* and /api/agent/calibration/* through
+	// /api/agent/research/* (allowlisted; RESEARCH_API_URL on BIMS).
+
+	const RESEARCH = '/api/agent/research';
+	const RESEARCH_AUTHORING_DOCTRINE =
+		'AUTHORING LOOP (follow exactly): 1) research_analysis_catalog once per session to learn bands, reducers, ' +
+		'window shapes, the expression grammar and two example profiles. 2) Draft the profile JSON with the ' +
+		'person; run research_analysis_validate_profile until it returns no issues. 3) research_analysis_find_cartridges ' +
+		'to pick 3-10 real run cartridges, then research_analysis_preview (dry run, nothing written) and show the table. ' +
+		'4) Only when the person is satisfied: research_analysis_save_profile (draft), research_analysis_activate_profile, ' +
+		'and research_assay_attach_profile so the device middleware runs it at upload time. Never activate or attach ' +
+		'without the person saying so. Profiles are versioned; active versions are immutable (save a new draft to change one).';
+
+	server.registerTool(
+		'research_analysis_catalog',
+		{ annotations: READ_ONLY,
+			description:
+				'Research app: everything needed to author an analysis profile — bands (f1..f8, clear, nir, temperature...), ' +
+				'reducers (sum, mean, median, sd, cv, min, max, first, last, count, slope), window shapes, the safe expression ' +
+				'grammar (arithmetic, comparisons, if/min/max/log..., cross-well `key@B`, `deviceFactor`), QC rule semantics, ' +
+				'quantify options, the legacy outputs[] compat projection (keep f3_raw and f7/f3 for device-calibration and ' +
+				'calibrated-analysis), view column sources, and two complete example profiles. Call this first. ' + RESEARCH_AUTHORING_DOCTRINE
+		},
+		async () => callAgentApi(fetcher, `${RESEARCH}/analysis/catalog`)
+	);
+
+	server.registerTool(
+		'research_analysis_list_profiles',
+		{ annotations: READ_ONLY,
+			description:
+				'Research app: list analysis profiles (v2 declarative and legacy v1 shown converted) with status, version, ' +
+				'metric/expression keys and view keys. Filter by status: active | draft | archived | v1.',
+			inputSchema: z.object({ status: z.enum(['active', 'draft', 'archived', 'v1']).optional() })
+		},
+		async ({ status }) => callAgentApi(fetcher, `${RESEARCH}/analysis/profiles`, { query: { status } })
+	);
+
+	server.registerTool(
+		'research_analysis_get_profile',
+		{ annotations: READ_ONLY,
+			description: 'Research app: one analysis profile in full v2 form (scanGroups, metrics, expressions, qc, quantify, compat, views) plus its version history.',
+			inputSchema: z.object({ profileId: z.string().describe('analysis_profiles _id') })
+		},
+		async ({ profileId }) => callAgentApi(fetcher, `${RESEARCH}/analysis/profiles/${encodeURIComponent(profileId)}`)
+	);
+
+	server.registerTool(
+		'research_analysis_validate_profile',
+		{ annotations: READ_ONLY,
+			description:
+				'Research app: validate a profile document WITHOUT saving. Returns { valid, issues[] } where each issue has a ' +
+				'JSON path (e.g. expressions[2].expr) and a message. Iterate until issues is empty before saving.',
+			inputSchema: z.object({ profile: z.record(z.string(), z.unknown()).describe('The profile JSON (schemaVersion 2 is implied).') })
+		},
+		async ({ profile }) => callAgentApi(fetcher, `${RESEARCH}/analysis/validate`, { method: 'POST', body: { profile } })
+	);
+
+	server.registerTool(
+		'research_analysis_find_cartridges',
+		{ annotations: READ_ONLY,
+			description:
+				'Research app: discover run cartridges (with raw optical data) to preview or run a profile on. Filter by ' +
+				'assayId (8-char A+hex), experiment name, or lotId. Rows carry barcode, experiment/arm, run time, the resolved ' +
+				'reagent lot (lotId + lotSource: manual | tubeRecords | fillRun | none), per-well sample labels and the stored ' +
+				'analysis stamp (profile, version, schemaVersion). Use the barcodes as cartridgeIds in preview/run.',
+			inputSchema: z.object({
+				assayId: z.string().optional(),
+				experiment: z.string().optional().describe('Exact experiment name as stored on the cartridge.'),
+				lotId: z.string().optional(),
+				limit: z.number().int().min(1).max(500).optional()
+			})
+		},
+		async (args) => callAgentApi(fetcher, `${RESEARCH}/analysis/cartridges`, { query: args })
+	);
+
+	server.registerTool(
+		'research_analysis_preview',
+		{ annotations: READ_ONLY,
+			description:
+				'Research app: DRY RUN a profile (saved profileId or an inline unsaved profile) on cartridges selected by ' +
+				'cartridgeIds, experimentId (+armIndex, -1 = all arms) or lotId. Nothing is written. Returns per-cartridge ' +
+				'wells (metrics, expressions, qc flags, quant) and, if the profile has views, the rendered table (json or tsv). ' +
+				'Show the person the table and the errors[] list. Default limit 25.',
+			inputSchema: z.object({
+				profileId: z.string().optional(),
+				profile: z.record(z.string(), z.unknown()).optional().describe('Inline profile JSON instead of profileId.'),
+				cartridgeIds: z.array(z.string()).optional(),
+				experimentId: z.string().optional(),
+				armIndex: z.number().int().optional(),
+				lotId: z.string().optional(),
+				viewKey: z.string().optional(),
+				limit: z.number().int().min(1).max(500).optional(),
+				format: z.enum(['json', 'tsv']).optional()
+			})
+		},
+		async (args) => callAgentApi(fetcher, `${RESEARCH}/analysis/preview`, { method: 'POST', body: args })
+	);
+
+	server.registerTool(
+		'research_analysis_view',
+		{ annotations: READ_ONLY,
+			description:
+				'Research app: render a profile VIEW over STORED results (no recompute) for cartridgeIds / experimentId ' +
+				'(+armIndex) / lotId. Views join samples, analyte, SPU factor, reagent lot, photo tags. Pass format tsv for a ' +
+				'paste-ready sheet, or hand the json rows to export_data_file. Optional inline `view` renders an ad-hoc column list.',
+			inputSchema: z.object({
+				cartridgeIds: z.array(z.string()).optional(),
+				experimentId: z.string().optional(),
+				armIndex: z.number().int().optional(),
+				lotId: z.string().optional(),
+				profileId: z.string().optional(),
+				viewKey: z.string().optional(),
+				view: z.record(z.string(), z.unknown()).optional(),
+				format: z.enum(['json', 'tsv']).optional()
+			})
+		},
+		async (args) => callAgentApi(fetcher, `${RESEARCH}/analysis/view`, { method: 'POST', body: args })
+	);
+
+	server.registerTool(
+		'research_analysis_save_profile',
+		{ annotations: WRITE_TOOL,
+			description:
+				'Research app: save a profile as a DRAFT. Without profileId a new draft is created; with profileId the ' +
+				'existing DRAFT is replaced (active/archived profiles are immutable — create a new draft instead). The server ' +
+				'validates and returns issues[] on failure. ' + RESEARCH_AUTHORING_DOCTRINE,
+			inputSchema: z.object({
+				actor: ACTOR_FIELD,
+				profileId: z.string().optional(),
+				profile: z.record(z.string(), z.unknown())
+			})
+		},
+		async (args) =>
+			machineWrite('research_analysis_save_profile', (args as any).actor, (actor) =>
+				callAgentApi(fetcher, args.profileId ? `${RESEARCH}/analysis/profiles/${encodeURIComponent(args.profileId)}` : `${RESEARCH}/analysis/profiles`, {
+					method: 'POST',
+					body: { profile: args.profile, actor }
+				})
+			)
+	);
+
+	server.registerTool(
+		'research_analysis_activate_profile',
+		{ annotations: WRITE_TOOL,
+			description:
+				'Research app: activate a draft profile (bumps the version and snapshots the previous body) or convert a ' +
+				'legacy v1 profile to v2 in place with identical outputs. Confirm with the person first: active profiles are ' +
+				'what the device middleware runs.',
+			inputSchema: z.object({ actor: ACTOR_FIELD, profileId: z.string(), notes: z.string().optional() })
+		},
+		async (args) =>
+			machineWrite('research_analysis_activate_profile', (args as any).actor, (actor) =>
+				callAgentApi(fetcher, `${RESEARCH}/analysis/profiles/${encodeURIComponent(args.profileId)}/activate`, { method: 'POST', body: { actor, notes: args.notes } })
+			)
+	);
+
+	server.registerTool(
+		'research_analysis_archive_profile',
+		{ annotations: WRITE_TOOL,
+			description: 'Research app: archive a profile. Refused while any assay still has it attached (detach first).',
+			inputSchema: z.object({ actor: ACTOR_FIELD, profileId: z.string() })
+		},
+		async (args) =>
+			machineWrite('research_analysis_archive_profile', (args as any).actor, (actor) =>
+				callAgentApi(fetcher, `${RESEARCH}/analysis/profiles/${encodeURIComponent(args.profileId)}/archive`, { method: 'POST', body: { actor } })
+			)
+	);
+
+	server.registerTool(
+		'research_analysis_run',
+		{ annotations: WRITE_TOOL,
+			description:
+				'Research app: compute and PERSIST cartridge.analysis for cartridgeIds / experimentId (+armIndex) / lotId. ' +
+				'Without profileId each cartridge uses the profile attached to its assay. Overwrites the previous stored result ' +
+				'(raw data is never touched). WORKFLOW: preview first; then state "Run <profile> on <N> cartridges (<scope>). ' +
+				'Confirm?"; call with confirmed: true only after the person confirms.',
+			inputSchema: z.object({
+				actor: ACTOR_FIELD,
+				confirmed: z.boolean().describe('Must be true, only after the person confirmed the scope.'),
+				profileId: z.string().optional(),
+				cartridgeIds: z.array(z.string()).optional(),
+				experimentId: z.string().optional(),
+				armIndex: z.number().int().optional(),
+				lotId: z.string().optional(),
+				assayId: z.string().optional()
+			})
+		},
+		async (args) =>
+			machineWrite('research_analysis_run', (args as any).actor, (actor) => {
+				if (args.confirmed !== true) return Promise.resolve(toolError('confirmed must be true — ask the person to confirm the run scope first.'));
+				const { confirmed, ...rest } = args;
+				void confirmed;
+				return callAgentApi(fetcher, `${RESEARCH}/analysis/run`, { method: 'POST', body: { ...rest, actor } });
+			})
+	);
+
+	server.registerTool(
+		'research_assay_attach_profile',
+		{ annotations: WRITE_TOOL,
+			description:
+				'Research app: attach an ACTIVE profile to an assay (8-char A+hex assayId) so the device middleware computes ' +
+				'it at upload time, or detach with profileId null. Every future run of that assay stores this profile; ' +
+				'confirm with the person and name the assay and profile version in the confirmation.',
+			inputSchema: z.object({ actor: ACTOR_FIELD, assayId: z.string(), profileId: z.string().nullable() })
+		},
+		async (args) =>
+			machineWrite('research_assay_attach_profile', (args as any).actor, (actor) =>
+				callAgentApi(fetcher, `${RESEARCH}/analysis/assay/${encodeURIComponent(args.assayId)}/attach`, { method: 'POST', body: { profileId: args.profileId, actor } })
+			)
+	);
+
+	server.registerTool(
+		'research_calibration_list_lots',
+		{ annotations: READ_ONLY,
+			description:
+				'Research app: reagent lots seen on run cartridges for an assay or experiment, with cartridge counts, ' +
+				'calibrator-well counts (sample role = calibrator with a known concentration) and the experiments involved. ' +
+				'A lot needs >= 4 calibrator concentrations before a 4PL curve can be fit. lotSource tells where the lot id ' +
+				'came from (tubeRecords = scanned at reagent fill in BIMS; fillRun = fill-run proxy; manual; none).',
+			inputSchema: z.object({ assayId: z.string().optional(), experimentId: z.string().optional() })
+		},
+		async (args) => callAgentApi(fetcher, `${RESEARCH}/calibration/lots`, { query: args })
+	);
+
+	server.registerTool(
+		'research_calibration_list_curves',
+		{ annotations: READ_ONLY,
+			description: 'Research app: list 4PL calibration curves (points omitted) filtered by lotId, assayId, analyteId, status (draft | active | superseded).',
+			inputSchema: z.object({ lotId: z.string().optional(), assayId: z.string().optional(), analyteId: z.string().optional(), status: z.enum(['draft', 'active', 'superseded']).optional() })
+		},
+		async (args) => callAgentApi(fetcher, `${RESEARCH}/calibration/curves`, { query: args })
+	);
+
+	server.registerTool(
+		'research_calibration_get_curve',
+		{ annotations: READ_ONLY,
+			description:
+				'Research app: one calibration curve in full — 4PL params (a, b, c=EC50, d), fit stats (r2, rmse, n, direction), ' +
+				'every calibrator point with back-calculated concentration and recovery %, and a sampled fitted line for charting. ' +
+				'PRESENTATION: show params, r2/rmse, then a table "Cartridge | Well | Sample | x | y | back-calc | recovery %" marking excluded points.',
+			inputSchema: z.object({ curveId: z.string() })
+		},
+		async ({ curveId }) => callAgentApi(fetcher, `${RESEARCH}/calibration/curves/${encodeURIComponent(curveId)}`)
+	);
+
+	server.registerTool(
+		'research_calibration_fit',
+		{ annotations: WRITE_TOOL,
+			description:
+				'Research app: fit a DRAFT 4PL curve for a reagent lot + assay from its calibrator wells (sample role ' +
+				'calibrator, known concentration). The readout defaults to the profile\'s quantify.readout. Nothing is ' +
+				'activated. WORKFLOW: research_calibration_list_lots to confirm >= 4 calibrator concentrations; fit; show ' +
+				'research_calibration_get_curve; if recovery looks bad, refit with `excluded` wells or weighting inverse_y2; ' +
+				'then ask before research_calibration_activate_curve.',
+			inputSchema: z.object({
+				actor: ACTOR_FIELD,
+				lotId: z.string(),
+				assayId: z.string(),
+				profileId: z.string().optional(),
+				readout: z.string().optional().describe('Metric or expression key used as y.'),
+				analyteId: z.string().optional(),
+				cartridgeIds: z.array(z.string()).optional().describe('Restrict to these calibrator cartridges.'),
+				excluded: z.array(z.object({ cartridgeId: z.string(), well: z.string() })).optional(),
+				weighting: z.enum(['none', 'inverse_y2']).optional(),
+				applyDeviceFactor: z.boolean().optional(),
+				notes: z.string().optional()
+			})
+		},
+		async (args) =>
+			machineWrite('research_calibration_fit', (args as any).actor, (actor) =>
+				callAgentApi(fetcher, `${RESEARCH}/calibration/fit`, { method: 'POST', body: { ...args, actor } })
+			)
+	);
+
+	server.registerTool(
+		'research_calibration_activate_curve',
+		{ annotations: WRITE_TOOL,
+			description:
+				'Research app: make a curve the ACTIVE curve for its lot/assay/analyte (previous active curve becomes ' +
+				'superseded). Unknown samples on that lot quantify against it from then on. Confirm with the person first.',
+			inputSchema: z.object({ actor: ACTOR_FIELD, curveId: z.string() })
+		},
+		async (args) =>
+			machineWrite('research_calibration_activate_curve', (args as any).actor, (actor) =>
+				callAgentApi(fetcher, `${RESEARCH}/calibration/curves/${encodeURIComponent(args.curveId)}/activate`, { method: 'POST', body: { actor } })
+			)
+	);
+
+	server.registerTool(
+		'research_calibration_quantify',
+		{ annotations: WRITE_TOOL,
+			description:
+				'Research app: re-run analysis WITH quantification for every cartridge on a lot so unknowns pick up the ' +
+				'active curve (persists cartridge.analysis; raw data untouched). Returns a count of quant statuses ' +
+				'(ok, below_range, above_range, no_curve, no_lot, no_readout). State the lot and cartridge count and ask ' +
+				'"Confirm?" before calling with confirmed: true.',
+			inputSchema: z.object({ actor: ACTOR_FIELD, confirmed: z.boolean(), lotId: z.string(), assayId: z.string(), profileId: z.string().optional() })
+		},
+		async (args) =>
+			machineWrite('research_calibration_quantify', (args as any).actor, (actor) => {
+				if (args.confirmed !== true) return Promise.resolve(toolError('confirmed must be true — ask the person to confirm first.'));
+				const { confirmed, ...rest } = args;
+				void confirmed;
+				return callAgentApi(fetcher, `${RESEARCH}/calibration/quantify`, { method: 'POST', body: { ...rest, actor } });
+			})
 	);
 
 	return server;

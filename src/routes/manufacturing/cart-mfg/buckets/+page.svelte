@@ -8,7 +8,7 @@
 	interface Props {
 		data: {
 			stages: { key: BucketStage; label: string }[];
-			inOvenLabel: string;
+			backedLabel: string;
 			focusStage: string | null;
 			board: { cycles: BoardCycle[]; available: BoardBucket[]; quarantined: BoardBucket[] };
 			counts: StageCounts;
@@ -16,29 +16,26 @@
 			changeLog: ChangeLogRow[];
 			registry: RegistryRow[];
 			thermoseal: {
-				config: { notificationsEnabled: boolean; rollsOnHandPinned: boolean; rollsOnHandOverride: number; cmPerCartridge: number; rollLengthCm: number; minRollsInInventory: number };
+				config: { notificationsEnabled: boolean; cmPerCartridge: number; rollLengthCm: number; minRollsInInventory: number };
+				partNumber: string;
 				roll: { id: string; lotId: string | null; lengthCm: number; consumedCm: number; remainingCm: number; remainingCartridges: number; openedAt: string | null; openedBy: string | null } | null;
-				rollsOnHand: number; rollsOnHandLive: number; minRolls: number; belowFloor: boolean;
+				rollsOnHand: number; minRolls: number; belowFloor: boolean;
 				nextLot: { lotId: string; remaining: number } | null;
 				openRestockTaskId: string | null; rollsExhausted: number;
 			} | null;
+			inOven: { count: number; ids: string[] };
 			canAdmin: boolean;
 			scan: { kind: 'bucket' | 'search'; bucket?: any; cycle?: any; matches?: { bucketId: string; barcode: string | null; state: string; cycle: any }[] } | null;
 			scanQuery: string;
 		};
 		form: {
 			start?: ActionResult; advance?: ActionResult; scrap?: ActionResult;
-			residual?: ActionResult; retire?: ActionResult; thermosealToggles?: ActionResult;
+			residual?: ActionResult; retire?: ActionResult; thermosealToggles?: ActionResult; moveToOven?: ActionResult;
 			auditScan?: ActionResult; audit?: ActionResult;
 		} | null;
 	}
 	let { data, form }: Props = $props();
 
-	// Thermoseal (BUCKET-SYSTEM_PLAN v2 §3.4): length a barcoded → unpressed move will take.
-	function thermosealCm(carts: number): number {
-		const per = data.thermoseal?.config.cmPerCartridge ?? 3.75;
-		return Math.round(carts * per * 100) / 100;
-	}
 	function fmtM(cm: number): string { return `${(cm / 100).toFixed(2)} m`; }
 	const advanceThermoseal = $derived.by(() => {
 		const a = form?.advance;
@@ -93,10 +90,9 @@
 	let cartFindBusy = $state(false);
 	let cartFindLine = $state('');
 	let cartFindOk = $state(true);
-	async function findCart() {
-		const code = cartFind.trim();
-		if (!code || cartFindBusy) return;
-		cartFindBusy = true;
+	// One read-only lookup, shared by the board box and the leftover panel's
+	// "where does it belong?" search: scan a cart, get one line back.
+	async function lookupCart(code: string): Promise<{ ok: boolean; line: string }> {
 		try {
 			const fd = new FormData();
 			fd.set('barcode', code);
@@ -104,15 +100,46 @@
 			const result = deserialize(await res.text());
 			if (result.type === 'success') {
 				const r = (result.data as any)?.cartLookup;
-				cartFindOk = !!r?.found;
-				cartFindLine = r?.line ?? 'No answer from the server.';
-			} else if (result.type === 'failure') { cartFindOk = false; cartFindLine = (result.data as any)?.cartLookup?.error ?? `Error ${result.status}`; }
-			else if (result.type === 'error') { cartFindOk = false; cartFindLine = result.error?.message ?? 'Lookup failed'; }
+				return { ok: !!r?.found, line: r?.line ?? 'No answer from the server.' };
+			}
+			if (result.type === 'failure') return { ok: false, line: (result.data as any)?.cartLookup?.error ?? `Error ${result.status}` };
+			if (result.type === 'error') return { ok: false, line: result.error?.message ?? 'Lookup failed' };
+			return { ok: false, line: 'Lookup failed' };
 		} catch (e) {
-			cartFindOk = false;
-			cartFindLine = e instanceof Error ? e.message : 'Lookup failed';
+			return { ok: false, line: e instanceof Error ? e.message : 'Lookup failed' };
+		}
+	}
+	async function findCart() {
+		const code = cartFind.trim();
+		if (!code || cartFindBusy) return;
+		cartFindBusy = true;
+		try {
+			const r = await lookupCart(code);
+			cartFindOk = r.ok;
+			cartFindLine = r.line;
 		} finally {
 			cartFindBusy = false;
+		}
+	}
+
+	// Leftover panel search (user, 2026-09-25): a cart found in an empty tub —
+	// where does it belong? Same lookup, its own box so it sits next to the
+	// Merge / Discard choice it informs. Read-only; adds nothing to the list.
+	let whereFind = $state('');
+	let whereBusy = $state(false);
+	let whereLine = $state('');
+	let whereOk = $state(true);
+	async function findWhere() {
+		const code = whereFind.trim();
+		if (!code || whereBusy) return;
+		whereBusy = true;
+		try {
+			const r = await lookupCart(code);
+			whereOk = r.ok;
+			whereLine = r.line;
+		} finally {
+			whereBusy = false;
+			setTimeout(() => (document.getElementById('whereFind') as HTMLInputElement | null)?.select(), 30);
 		}
 	}
 
@@ -157,7 +184,7 @@
 	// What the overlay adds to each stage's cartridge tile, so the count ticks up
 	// with the scans instead of waiting for the next refresh.
 	const stageCartDelta = $derived.by(() => {
-		const d: Record<string, number> = { barcoded: 0, unpressed: 0, pressed: 0 };
+		const d: Record<string, number> = { barcoded: 0, unpressed: 0, pressed: 0, backing: 0 };
 		for (const base of data.board.cycles) {
 			const live = boardCycles.find(c => c.cycleId === base.cycleId);
 			if (live && d[base.stage] !== undefined) d[base.stage] += live.quantity - base.quantity;
@@ -166,7 +193,7 @@
 	});
 
 	const cyclesByStage = $derived.by(() => {
-		const m: Record<BucketStage, BoardCycle[]> = { barcoded: [], unpressed: [], pressed: [] };
+		const m: Record<BucketStage, BoardCycle[]> = { barcoded: [], unpressed: [], pressed: [], backing: [] };
 		for (const c of boardCycles) m[c.stage]?.push(c);
 		return m;
 	});
@@ -277,7 +304,7 @@
 	function shortQr(barcode: string | null): string | null {
 		return barcode ? (barcode.length > 12 ? `${barcode.slice(0, 8)}…` : barcode) : null;
 	}
-	function resetLists() { discardList = []; scrapList = []; residualList = []; listInput = ''; residualDisposition = ''; residualDest = ''; cartScanError = ''; cartScanOk = ''; scanFailures = []; }
+	function resetLists() { discardList = []; scrapList = []; residualList = []; listInput = ''; residualDisposition = ''; residualDest = ''; cartScanError = ''; cartScanOk = ''; scanFailures = []; whereFind = ''; whereLine = ''; whereOk = true; }
 
 	function openCycle(c: BoardCycle) { panel = { kind: 'cycle', cycleId: c.cycleId, mode: 'view' }; resetLists(); if (c.stage === 'barcoded') focusCartScan(); }
 	function setMode(mode: CycleMode) {
@@ -322,12 +349,12 @@
 		scanInput = '';
 	}
 
-	function labelFor(stage: string): string { return data.stages.find(s => s.key === stage)?.label ?? (stage === 'backing' ? data.inOvenLabel : stage); }
+	function labelFor(stage: string): string { return data.stages.find(s => s.key === stage)?.label ?? stage; }
 	function nextKey(stage: BucketStage): BucketStage | null {
 		const i = data.stages.findIndex(s => s.key === stage);
 		return i >= 0 && i < data.stages.length - 1 ? data.stages[i + 1].key : null;
 	}
-	function nextLabel(stage: BucketStage): string { const k = nextKey(stage); return k ? labelFor(k) : data.inOvenLabel; }
+	function nextLabel(stage: BucketStage): string { const k = nextKey(stage); return k ? labelFor(k) : 'Wax filling'; }
 	function dwell(iso: string | null): string {
 		if (!iso) return '—';
 		const min = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 60000));
@@ -500,7 +527,8 @@
 			case 'scan_in': return { event: 'Cart scanned in', moved: 'at Barcoded', discarded: false };
 			case 'unscan': return { event: 'Mis-scan removed', moved: 'at Barcoded', discarded: false };
 			case 'advance': return { event: 'Moved', moved: `${from ?? '?'} → ${to ?? '?'}`, discarded: false };
-			case 'consume': return { event: `Drawn by WI-01 → ${data.inOvenLabel}`, moved: `${from ?? 'Pressed'} → ${data.inOvenLabel}`, discarded: false };
+			case 'consume': return { event: 'Drawn to wax filling', moved: `${from ?? data.backedLabel} → wax filling`, discarded: false };
+			case 'oven': return { event: 'Moved to oven', moved: `${from ?? data.backedLabel} → oven (carts released from the bucket)`, discarded: false };
 			case 'scrap': return { event: 'Discarded', moved: `at ${from ?? '?'}`, discarded: true };
 			case 'adjust': return { event: 'Count corrected', moved: `at ${from ?? '?'}`, discarded: false };
 			case 'merge_in': return { event: 'Residual received', moved: `at ${to ?? '?'}`, discarded: false };
@@ -543,7 +571,7 @@
 	const btnPrimary = 'w-full rounded-lg bg-[var(--color-tron-cyan)] py-2.5 text-sm font-bold text-[var(--color-tron-bg-primary)] hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-30';
 	const btnGhost = 'rounded border border-[var(--color-tron-border)] px-3 py-1.5 text-xs text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)] disabled:cursor-not-allowed disabled:opacity-40';
 	const btnDanger = 'w-full rounded-lg border border-red-500/50 bg-red-900/20 py-2.5 text-sm font-semibold text-red-300 hover:bg-red-900/30 disabled:opacity-30';
-	const stageTint: Record<string, string> = { available: 'border-[var(--color-tron-border)]', barcoded: 'border-gray-500/40', unpressed: 'border-blue-500/40', pressed: 'border-amber-500/40', in_oven: 'border-[var(--color-tron-purple)]/50' };
+	const stageTint: Record<string, string> = { available: 'border-[var(--color-tron-border)]', barcoded: 'border-gray-500/40', unpressed: 'border-blue-500/40', pressed: 'border-amber-500/40', backing: 'border-[var(--color-tron-purple)]/50' };
 </script>
 
 {#snippet scanList(target: 'discard' | 'scrap' | 'residual', list: string[], placeholder: string)}
@@ -568,13 +596,13 @@
 	<div class="flex flex-wrap items-end justify-between gap-3">
 		<div>
 			<h1 class="text-2xl font-semibold text-[var(--color-tron-text)]">Production Buckets</h1>
-			<p class="text-xs text-[var(--color-tron-text-secondary)]">Stick a QR on each shell and scan it into a bucket. Whole buckets move Barcoded → Unpressed → Pressed; WI-01 draws them into the oven.</p>
+			<p class="text-xs text-[var(--color-tron-text-secondary)]">Stick a QR on each shell and scan it into a bucket. Whole buckets move Barcoded → Unpressed → Pressed → {data.backedLabel}; <em>Move to oven</em> frees the carts from the bucket and returns it to Available. Carts stay backed until wax filling scans them in.</p>
 		</div>
 		<div class="flex gap-2">
 			<a href="/manufacturing/cart-mfg/buckets/new" class={btnGhost}>New bucket</a>
 			{#if data.canAdmin}<a href="/manufacturing/cart-mfg/buckets/override" class="rounded border border-red-500/40 px-3 py-1.5 text-xs text-red-300 hover:bg-red-900/20" title="Move a bucket to any phase, bypassing the flow (admin)">Master override</a>{/if}
 			<a href="/manufacturing/cart-mfg/state-change" class={btnGhost} title="Move individual carts to any status (bucket stages ask for a destination bucket)">Cart state change</a>
-			<a href="/manufacturing/cart-mfg/wi-01" class={btnGhost}>WI-01 →</a>
+			<a href="/manufacturing/cart-mfg/wax-filling" class={btnGhost}>Wax filling →</a>
 		</div>
 	</div>
 
@@ -594,11 +622,6 @@
 				<p class="text-[10px] text-[var(--color-tron-text-secondary)]">{data.counts.stages[s.key].buckets} bucket{data.counts.stages[s.key].buckets === 1 ? '' : 's'}</p>
 			</div>
 		{/each}
-		<a href="/cartridge-admin?stage=backing" class="rounded-lg border bg-[var(--color-tron-surface)] p-3 hover:border-[var(--color-tron-purple)] {stageTint.in_oven}" title="Cartridges drawn into the oven by WI-01">
-			<p class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">{data.inOvenLabel}</p>
-			<p class="mt-1 text-2xl font-bold text-[var(--color-tron-purple)]">{data.counts.inOven}</p>
-			<p class="text-[10px] text-[var(--color-tron-text-secondary)]">carts · via WI-01</p>
-		</a>
 	</div>
 
 	{#if advanceThermoseal}
@@ -612,8 +635,8 @@
 	{/if}
 
 	<div class="grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
-		<!-- Board -->
-		<div class="grid grid-cols-1 gap-3 md:grid-cols-4">
+		<!-- Board: five columns so Backed sits beside Pressed (user, 2026-09-25). -->
+		<div class="grid grid-cols-1 gap-3 md:grid-cols-5">
 			<div class="rounded-lg border bg-[var(--color-tron-bg-secondary)] p-2 {data.focusStage === 'available' ? 'ring-1 ring-[var(--color-tron-cyan)]' : 'border-[var(--color-tron-border)]'}">
 				<div class="flex items-center justify-between px-1 pb-2">
 					<span class="text-xs font-semibold uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Available</span>
@@ -701,19 +724,33 @@
 						{#if cyclesByStage[s.key].length === 0}
 							<p class="px-1 py-4 text-center text-[10px] text-[var(--color-tron-text-secondary)]">empty</p>
 						{/if}
+						{#if s.key === 'backing'}
+							<!-- "In oven": backed carts freed from their bucket (Move to oven), still 'backing'
+							     until wax filling scans them in. A dropdown here, not a card (user, 2026-09-25). -->
+							<details class="rounded border border-dashed border-[var(--color-tron-purple)]/40 px-2 py-1">
+								<summary class="cursor-pointer select-none text-[10px] uppercase tracking-wider text-[var(--color-tron-purple)] hover:text-[var(--color-tron-text)]">In oven · {data.inOven.count} cart{data.inOven.count === 1 ? '' : 's'}</summary>
+								{#if data.inOven.count === 0}
+									<p class="py-1 text-[10px] text-[var(--color-tron-text-secondary)]">none — carts land here when a Backed bucket is moved to the oven, and leave when wax filling scans them.</p>
+								{:else}
+									<ul class="mt-1 max-h-40 space-y-0.5 overflow-y-auto">
+										{#each data.inOven.ids as id (id)}
+											<li><a href="/cartridge-admin?search={encodeURIComponent(id)}" class="block truncate font-mono text-[10px] text-[var(--color-tron-text)] hover:text-[var(--color-tron-cyan)]" title={id}>{id}</a></li>
+										{/each}
+									</ul>
+									{#if data.inOven.count > data.inOven.ids.length}<p class="mt-1 text-[10px] text-[var(--color-tron-text-secondary)]">+{data.inOven.count - data.inOven.ids.length} more</p>{/if}
+								{/if}
+							</details>
+						{/if}
 					</div>
 
 					{#if s.key === 'unpressed' && data.thermoseal}
 						{@const ts = data.thermoseal}
 						{@const pct = ts.roll ? Math.max(0, Math.min(100, Math.round((ts.roll.remainingCm / ts.roll.lengthCm) * 100))) : 0}
 						<!-- Thermoseal lives under Unpressed because that is where it is consumed (v2 §3.4).
-						     Yellow card first: counts are NOT synced with production WI-01 (§12.4). -->
-						<div class="mt-3 rounded border border-[var(--color-tron-yellow)]/60 bg-[var(--color-tron-yellow)]/10 px-2 py-1.5 text-[10px] text-[var(--color-tron-yellow)]" role="note">
-							<strong>⚠ Thermoseal inventory is not synced between systems</strong> — the build live on <code>master</code> still withdraws one PT-CT-112 <em>unit</em> per cart out of this same database; this board counts rolls by length (3.75 cm per cart). Rolls on hand is pinned for development.
-						</div>
-						<div class="mt-2 rounded border {ts.belowFloor ? 'border-red-500/60' : 'border-[var(--color-tron-border)]'} bg-[var(--color-tron-surface)] p-2 text-[10px]">
+						     One part, counted in rolls; the roll pull here is the only thing that moves it. -->
+						<div class="mt-3 rounded border {ts.belowFloor ? 'border-red-500/60' : 'border-[var(--color-tron-border)]'} bg-[var(--color-tron-surface)] p-2 text-[10px]">
 							<div class="flex items-center justify-between">
-								<span class="font-semibold uppercase tracking-wider text-[var(--color-tron-cyan)]">Thermoseal PT-CT-112</span>
+								<span class="font-semibold uppercase tracking-wider text-[var(--color-tron-cyan)]">Thermoseal {ts.partNumber}</span>
 								{#if !ts.config.notificationsEnabled}<span class="rounded bg-[var(--color-tron-bg-tertiary)] px-1 py-0.5 text-[9px] text-[var(--color-tron-text-secondary)]" title="Restock notifications are off (development)">alerts off</span>{/if}
 							</div>
 							{#if ts.roll}
@@ -731,7 +768,7 @@
 								<div class="rounded border {ts.belowFloor ? 'border-red-500/60 bg-red-900/20' : 'border-[var(--color-tron-border)]'} px-2 py-1 text-center">
 									<p class="uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Rolls on hand</p>
 									<p class="text-lg font-bold leading-tight {ts.belowFloor ? 'text-red-300' : 'text-[var(--color-tron-text)]'}">{ts.rollsOnHand}</p>
-									<p class="text-[var(--color-tron-text-secondary)]">min {ts.minRolls}{#if ts.config.rollsOnHandPinned} · <span title="Development pin — live PT-CT-112 count is {ts.rollsOnHandLive}">pinned</span>{/if}</p>
+									<p class="text-[var(--color-tron-text-secondary)]">min {ts.minRolls} · live {ts.partNumber} count</p>
 								</div>
 								<div class="rounded border border-[var(--color-tron-border)] px-2 py-1 text-center">
 									<p class="uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Next roll from</p>
@@ -742,19 +779,13 @@
 							{#if ts.belowFloor}
 								<p class="mt-1 text-red-300">Below the {ts.minRolls}-roll floor — {#if !ts.config.notificationsEnabled}notifications off (development), nothing sent.{:else}{ts.openRestockTaskId ? 'restock card open on the' : 'a restock card goes to the'} <a href="/kanban" class="underline">kanban board</a> + email.{/if}</p>
 							{/if}
-							<!-- Development settings (admin): notifications toggle + rolls-on-hand pin -->
+							<!-- Development settings (admin): notifications toggle -->
 							<details class="mt-2">
 								<summary class="cursor-pointer text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]">Development settings</summary>
 								<form method="POST" action="?/thermosealToggles" use:enhance={enhanceBusy} class="mt-1.5 space-y-1.5">
 									<label class="flex items-center gap-1.5 {data.canAdmin ? '' : 'opacity-60'}">
 										<input type="checkbox" name="notificationsEnabled" value="1" checked={ts.config.notificationsEnabled} disabled={!data.canAdmin || busy} class="accent-[var(--color-tron-cyan)]" />
 										<span class="text-[var(--color-tron-text)]">Restock notifications</span>
-									</label>
-									<label class="flex items-center gap-1.5 {data.canAdmin ? '' : 'opacity-60'}">
-										<input type="checkbox" name="rollsOnHandPinned" value="1" checked={ts.config.rollsOnHandPinned} disabled={!data.canAdmin || busy} class="accent-[var(--color-tron-cyan)]" />
-										<span class="text-[var(--color-tron-text)]">Pin rolls at</span>
-										<input type="number" name="rollsOnHandOverride" min="0" step="1" value={ts.config.rollsOnHandOverride} disabled={!data.canAdmin || busy} class="w-14 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-1.5 py-0.5 text-[var(--color-tron-text)]" />
-										<span class="text-[var(--color-tron-text-secondary)]">live {ts.rollsOnHandLive}</span>
 									</label>
 									<p class="text-[var(--color-tron-text-secondary)]">{ts.config.cmPerCartridge} cm per cart · {fmtM(ts.config.rollLengthCm)} per roll</p>
 									{#if data.canAdmin}<button type="submit" disabled={busy} class={btnGhost}>{busy ? 'Saving…' : 'Apply'}</button>{:else}<span class="text-[var(--color-tron-text-secondary)]">manufacturing:admin to change</span>{/if}
@@ -804,7 +835,14 @@
 
 				{:else if panel.kind === 'cycle'}
 					{#if !panelCycle}
-						<p class="py-4 text-center text-xs text-[var(--color-tron-text-secondary)]">This pass is no longer on the board (drawn into the oven, emptied, or refreshing).</p>
+						{#if form?.moveToOven?.success}
+							{@const m = form.moveToOven as any}
+							<div class="rounded border border-[var(--color-tron-purple)]/60 bg-[var(--color-tron-purple)]/10 p-2 text-xs text-[var(--color-tron-text)]" role="status">
+								<strong class="text-[var(--color-tron-purple)]">Moved to oven.</strong> {m.released} cart{m.released === 1 ? '' : 's'} freed from {m.bucketId} #{m.cycleNumber}; the bucket is back in Available. They stay backed (see <em>In oven</em> under Backed) until <a href="/manufacturing/cart-mfg/wax-filling" class="underline">wax filling</a> scans them.
+							</div>
+						{:else}
+							<p class="py-4 text-center text-xs text-[var(--color-tron-text-secondary)]">This pass is no longer on the board (moved to the oven, drawn to wax filling, emptied, or refreshing).</p>
+						{/if}
 						<button type="button" class={btnGhost} onclick={() => { panel = { kind: 'none' }; }}>Close</button>
 					{:else}
 						{@const c = panelCycle}
@@ -882,7 +920,17 @@
 								{#if nxt}
 									<button type="button" class={btnPrimary} disabled={c.quantity === 0} onclick={() => setMode('advance')}>Advance → {nextLabel(c.stage)}</button>
 								{:else}
-									<a href="/manufacturing/cart-mfg/wi-01" class="block rounded-lg border border-[var(--color-tron-purple)]/60 bg-[var(--color-tron-purple)]/10 py-2.5 text-center text-sm font-semibold text-[var(--color-tron-purple)]">Ready for WI-01 → {data.inOvenLabel}</a>
+									<!-- Backed is the end of the bucket. Move to oven frees the carts from the bucket
+									     and returns it to Available — nothing else (user, 2026-09-25). -->
+									<form method="POST" action="?/moveToOven" use:enhance={enhanceBusy}>
+										<input type="hidden" name="cycleId" value={c.cycleId} />
+										<button type="submit" disabled={busy || c.quantity === 0}
+											class="w-full rounded-lg border border-[var(--color-tron-purple)]/60 bg-[var(--color-tron-purple)]/10 py-2.5 text-center text-sm font-semibold text-[var(--color-tron-purple)] hover:bg-[var(--color-tron-purple)]/20 disabled:opacity-50"
+											title="Free the carts from this bucket and return it to Available; the carts stay backed until wax filling scans them">{busy ? 'Moving…' : `Move to oven (${c.quantity} cart${c.quantity === 1 ? '' : 's'})`}</button>
+									</form>
+									<p class="text-[10px] text-[var(--color-tron-text-secondary)]">Frees these carts from the bucket and returns it to Available. Carts stay backed until wax filling scans them in.</p>
+									{#if form?.moveToOven?.error}<p class="text-xs text-[var(--color-tron-error)]">{form.moveToOven.error}</p>{/if}
+									<a href="/manufacturing/cart-mfg/wax-filling" class="block text-center text-[10px] text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)]">Wax filling →</a>
 								{/if}
 								<button type="button" class="{btnGhost} w-full" disabled={c.quantity === 0} onclick={() => setMode('scrap')}>Discard carts…</button>
 							</div>
@@ -905,25 +953,6 @@
 										<input type="text" name="discardJournal" required placeholder="e.g. cracked in press" class={inputCls} />
 									</label>
 									{#if discardList.length >= c.quantity}<p class="text-xs text-red-300">Discarding every cart closes this pass — nothing moves to {nextLabel(c.stage)}.</p>{/if}
-								{/if}
-								{#if nxt === 'unpressed'}
-									{@const movingCarts = Math.max(0, c.quantity - discardList.length)}
-									{@const needCm = thermosealCm(movingCarts)}
-									{@const leftCm = data.thermoseal?.roll?.remainingCm ?? 0}
-									<div class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] px-3 py-2 text-xs text-[var(--color-tron-text-secondary)]">
-										Thermoseal: <span class="font-mono text-[var(--color-tron-text)]">{needCm} cm</span> ({movingCarts} × {data.thermoseal?.config.cmPerCartridge ?? 3.75} cm) comes off the open roll
-										{#if data.thermoseal?.roll}({fmtM(leftCm)} left){/if}.
-										{#if !data.thermoseal?.roll || needCm > leftCm}<span class="text-[var(--color-tron-yellow)]">A new roll will be pulled from inventory.</span>{/if}
-									</div>
-									{#if !data.thermoseal?.roll || needCm > leftCm}
-										<label class="block">
-											<span class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Lot the new roll comes from (optional — oldest lot with stock if left blank)</span>
-											<select name="thermosealLotId" class={inputCls}>
-												<option value="">{data.thermoseal?.nextLot ? `Default: ${data.thermoseal.nextLot.lotId}` : '— No lot (part count only) —'}</option>
-												{#each data.lots['PT-CT-112'] ?? [] as l (l.lotId)}<option value={l.lotId}>{l.lotId} — {l.remaining} left</option>{/each}
-											</select>
-										</label>
-									{/if}
 								{/if}
 								{#if form?.advance?.error}<p class="text-xs text-[var(--color-tron-error)]">{form.advance.error}</p>{/if}
 								<button type="submit" disabled={busy} class={discardList.length >= c.quantity ? btnDanger : btnPrimary}>
@@ -1162,6 +1191,24 @@
 						<div class="font-mono text-lg text-[var(--color-tron-text)]">{shortQr(b.barcode) ?? b.bucketId}</div>
 						<div class="text-xs text-[var(--color-tron-text-secondary)]">leftover carts found in this bucket</div>
 					</div>
+
+					<!-- 0. Where does this cart belong? (user, 2026-09-25) Scan a leftover and
+					     get one line back: the open pass it is a member of, or that it is on
+					     none. Read-only — it does not add the cart to the list below. -->
+					<div class="mt-3 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-2">
+						<label for="whereFind" class="block text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Where does this cart belong?</label>
+						<div class="mt-1 flex gap-2">
+							<input id="whereFind" type="text" bind:value={whereFind} autocomplete="off" disabled={whereBusy}
+								placeholder="scan a cart to locate it…"
+								onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); findWhere(); } }} class={scanCls} />
+							<button type="button" onclick={findWhere} disabled={whereBusy || !whereFind.trim()}
+								class="shrink-0 rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 px-3 text-xs font-medium text-[var(--color-tron-cyan)] disabled:opacity-50">{whereBusy ? '…' : 'Find'}</button>
+						</div>
+						{#if whereLine}
+							<p class="mt-1 text-xs {whereOk ? 'text-[var(--color-tron-text)]' : 'text-[var(--color-tron-yellow)]'}">{whereLine}</p>
+						{/if}
+					</div>
+
 					<form method="POST" action="?/residual" use:enhance={enhanceBusy} class="mt-3 space-y-3">
 						<input type="hidden" name="bucketId" value={b.bucketId} />
 						<input type="hidden" name="barcodes" value={residualList.join(',')} />
@@ -1283,7 +1330,7 @@
 								</td>
 								<td class="whitespace-nowrap px-2 py-1 text-[var(--color-tron-text-secondary)]">{r.operator ?? '—'}</td>
 								<td class="px-2 py-1 text-[var(--color-tron-text-secondary)]" title={r.cartridgeIds.join(', ')}>
-									{#if r.type === 'consume' && r.relatedId}<a href="/manufacturing/cart-mfg/lots/{r.relatedId}" class="text-[var(--color-tron-cyan)] hover:underline">WI-01 batch</a>{#if r.reason} · {r.reason}{/if}
+									{#if r.type === 'consume' && r.relatedId}<span class="font-mono text-[10px]" title="Wax run / legacy WI-01 batch id">{r.relatedId.length > 14 ? r.relatedId.slice(0, 12) + '…' : r.relatedId}</span>{#if r.reason} · {r.reason}{/if}
 									{:else}{r.journal ?? r.reason ?? ''}{/if}
 									{#if r.cartridgeIds.length > 0 && r.cartridgeIds.length <= 3}<span class="ml-1 font-mono text-[10px]">{r.cartridgeIds.map(i => i.slice(0, 8)).join(', ')}</span>{:else if r.cartridgeIds.length > 3}<span class="ml-1 font-mono text-[10px]">{r.cartridgeIds.length} carts</span>{/if}
 								</td>

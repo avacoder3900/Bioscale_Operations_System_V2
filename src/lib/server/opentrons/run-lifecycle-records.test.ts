@@ -66,7 +66,9 @@ vi.mock('$lib/server/db', () => ({
 			db.writes.push({ model: 'cart', op: 'bulkWrite', args: [ops] });
 			return { modifiedCount: ops.length };
 		},
-		updateMany: async (...args: any[]) => db.writes.push({ model: 'cart', op: 'updateMany', args })
+		updateMany: async (...args: any[]) => db.writes.push({ model: 'cart', op: 'updateMany', args }),
+		// revertToBacked: every scanned cart is a real (bucket-born) cart here.
+		find: (q: any) => ({ select: () => ({ lean: async () => (q?._id?.$in ?? []).map((_id: string) => ({ _id })) }) })
 	},
 	Equipment: { findByIdAndUpdate: () => ({ catch: () => {} }) },
 	ManufacturingSettings: { findById: () => chain(() => null) },
@@ -95,6 +97,7 @@ vi.mock('$lib/server/services/deck-calibration/rollout', () => ({ isHardenedRobo
 vi.mock('$lib/server/services/inventory-transaction', () => ({ recordTransaction: vi.fn(async () => {}), resolvePartId: async () => 'part' }));
 vi.mock('$lib/server/manufacturing/locked-cartridges', () => ({ protectLockedCarts: async (ids: string[]) => ({ safeIds: ids }) }));
 vi.mock('$lib/server/services/cartridge-hard-delete', () => ({ hardDeleteUnfinalizedCartridges: vi.fn(async () => {}) }));
+vi.mock('$lib/server/services/bucket-service', () => ({ returnCarts: vi.fn(async () => ({ returned: [], loose: [] })) }));
 vi.mock('$lib/server/notifications', () => ({ notifyRunLifecycle: vi.fn(async () => {}) }));
 vi.mock('$lib/manufacturing/reagent-run-estimate', () => ({ estimateReagentRunSeconds: () => ({ seconds: 600 }) }));
 

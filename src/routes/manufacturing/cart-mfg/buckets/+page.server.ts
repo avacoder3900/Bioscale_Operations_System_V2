@@ -7,10 +7,10 @@ import { fail, redirect } from '@sveltejs/kit';
 import { connectDB, ReceivingLot, InventoryTransaction } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
 import {
-	BucketError, BUCKET_STAGES, STAGE_LABELS, IN_OVEN_LABEL, SHELL_PART, LABEL_PART, THERMOSEAL_PART,
+	BucketError, BUCKET_STAGES, STAGE_LABELS, BACKED_LABEL, SHELL_PART, LABEL_PART, THERMOSEAL_PART,
 	boardData, stageCounts, resolveScan, isBucketStage, changeLog, bucketRegistry,
 	startCycle, scanCartIn, unscanCart, advanceCycle, scrapCarts, reportResidual, retireBucket,
-	cartStatusLine, auditScan, auditCycle
+	cartStatusLine, auditScan, auditCycle, moveToOven, inOvenCarts
 } from '$lib/server/services/bucket-service';
 import { thermosealStatus, checkFloor, setThermosealToggles } from '$lib/server/services/thermoseal-service';
 import type { Actions, PageServerLoad } from './$types';
@@ -52,7 +52,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	const focusStage = url.searchParams.get('stage') ?? '';
 	const q = url.searchParams.get('q') ?? '';
 
-	const [board, counts, lots, scan, log, registry, thermoseal] = await Promise.all([
+	const [board, counts, lots, scan, log, registry, thermoseal, inOven] = await Promise.all([
 		boardData(),
 		stageCounts(),
 		availableLots([SHELL_PART, LABEL_PART, THERMOSEAL_PART]),
@@ -65,19 +65,22 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		// process (2026-09-25) so the board's background refresh during a scanning
 		// run does not re-run the rule between carts — it is a backstop, and a roll
 		// pull still runs it unthrottled.
-		checkFloor({ user: op(locals), throttleMs: 60_000 }).catch(() => null).then(() => thermosealStatus()).catch(() => null)
+		checkFloor({ user: op(locals), throttleMs: 60_000 }).catch(() => null).then(() => thermosealStatus()).catch(() => null),
+		// "In oven" dropdown inside the Backed column: backed carts on no open pass.
+		inOvenCarts().catch(() => ({ count: 0, ids: [] as string[] }))
 	]);
 
 	return {
 		stages: BUCKET_STAGES.map(s => ({ key: s, label: STAGE_LABELS[s] })),
-		inOvenLabel: IN_OVEN_LABEL,
-		focusStage: focusStage === 'available' || focusStage === 'in_oven' || isBucketStage(focusStage) ? focusStage : null,
+		backedLabel: BACKED_LABEL,
+		focusStage: focusStage === 'available' || isBucketStage(focusStage) ? focusStage : null,
 		board,
 		counts,
 		lots,
 		changeLog: log,
 		registry,
 		thermoseal,
+		inOven,
 		canAdmin: locals.user.roles.some(r => r.permissions.includes('manufacturing:admin') || r.permissions.includes('admin:full')),
 		scan: scan ? JSON.parse(JSON.stringify(scan)) : null,
 		scanQuery: q
@@ -199,6 +202,7 @@ export const actions: Actions = {
 	},
 
 	// Development toggle for the thermoseal restock notifications (kanban card + email) — admin.
+	// (The rolls-on-hand pin was removed 2026-09-25; the board follows the live roll count.)
 	thermosealToggles: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
 		requirePermission(locals.user, 'manufacturing:write');
@@ -207,14 +211,11 @@ export const actions: Actions = {
 		await connectDB();
 		const d = await request.formData();
 		return wrap('thermosealToggles', async () => {
-			const pinRaw = String(d.get('rollsOnHandOverride') ?? '').trim();
 			const cfg = await setThermosealToggles({
 				notificationsEnabled: d.get('notificationsEnabled') === '1',
-				rollsOnHandPinned: d.get('rollsOnHandPinned') === '1',
-				rollsOnHandOverride: pinRaw === '' ? undefined : Number(pinRaw),
 				user: op(locals)
 			});
-			return { thermosealToggles: { success: true, notificationsEnabled: cfg.notificationsEnabled, rollsOnHandPinned: cfg.rollsOnHandPinned, rollsOnHandOverride: cfg.rollsOnHandOverride } };
+			return { thermosealToggles: { success: true, notificationsEnabled: cfg.notificationsEnabled } };
 		})();
 	},
 
@@ -226,7 +227,6 @@ export const actions: Actions = {
 		return wrap('advance', async () => {
 			const r = await advanceCycle({
 				cycleId: String(d.get('cycleId') ?? ''),
-				thermosealLotId: (d.get('thermosealLotId') as string | null) ?? undefined,
 				discardedIds: codesFrom(d.get('discardedIds')),
 				discardJournal: (d.get('discardJournal') as string | null) ?? undefined,
 				user: op(locals)
@@ -238,6 +238,19 @@ export const actions: Actions = {
 					alert: r.thermoseal.alert?.below ? { rollsOnHand: r.thermoseal.alert.rollsOnHand, minRolls: r.thermoseal.alert.minRolls, kanbanCreated: r.thermoseal.alert.kanbanCreated, emailSent: r.thermoseal.alert.emailSent } : null
 				} : null
 			} };
+		})();
+	},
+
+	// "Move to oven": frees the carts from the bucket (they stay 'backing' until wax
+	// filling scans them in) and returns the bucket to Available. Nothing else.
+	moveToOven: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'manufacturing:write');
+		await connectDB();
+		const d = await request.formData();
+		return wrap('moveToOven', async () => {
+			const r = await moveToOven({ cycleId: String(d.get('cycleId') ?? ''), user: op(locals) });
+			return { moveToOven: { success: true, cycleId: r.cycleId, bucketId: r.bucketId, cycleNumber: r.cycleNumber, released: r.released.length } };
 		})();
 	},
 
