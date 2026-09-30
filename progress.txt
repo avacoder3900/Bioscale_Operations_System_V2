@@ -16692,3 +16692,38 @@ Files touched: BADGE-SYSTEM_PLAN.md (Part 2 appended), progress.txt.
 npm run check: not run — no source change; baseline remains 12 errors from master.
 Uncommitted src/routes/validation/sonic/+page.svelte in the tree belongs to another session;
 not staged, not touched.
+
+================================================================================
+2026-09-30 — feat/bucket-system — sonic upload: failed attempts audited, direct-to-Worker path behind a flag
+================================================================================
+Follow-through on today's audit entry. Committed 6d3146b7 first (the 4.5 MB note + failure banner
+that had sat uncommitted since the 25th). Then:
+
+src/routes/validation/sonic/+page.server.ts (rewrite, same behaviour on the existing path):
+- Every failed attempt writes AuditLog action 'sonic_recording_upload_failed' (stage: validate /
+  storage / record, reason, spu, file, size). Before this a failure left nothing in the DB, which
+  is why the audit had to guess.
+- Proxy path cap is now PROXY_MAX_BYTES = 4.5 MB (was 80 MB, unreachable behind Vercel's cap).
+- New actions `presign` and `record` for the direct path, gated by SONIC_DIRECT_UPLOAD=1 and
+  R2_WORKER_URL. presign validates and mints a token; record HEADs the object through the Worker,
+  checks the key prefix (sonic/<udi>/) and the size, then writes session + audit + journal via
+  the shared persistRecording(). rawData.via = 'proxy' | 'direct'.
+- load returns directUpload + maxBytes so the page knows which cap applies.
+src/lib/server/sonic-direct.ts (new): mintDirectUploadToken (HMAC-SHA256 over
+  key\nexpires\nmaxBytes with R2_UPLOAD_SECRET, 15 min TTL), headWorkerObject, directUploadEnabled.
+  Verified the Web Crypto digest equals node:crypto's for the same input.
+services/r2-upload-worker/src/index.ts: PUT /direct/:key (token check, constant-time compare,
+  expiry, Content-Length required and ≤ X-Upload-Max → 411/413), HEAD /file/:key (size via
+  Content-Length), CORS headers extended. Transpiles with esbuild; NOT deployed (needs wrangler
+  login). README documents the route and rollout.
+src/routes/validation/sonic/+page.svelte: when data.directUpload, the enhance submit is cancelled
+  and the page runs presign → XHR PUT with a progress % on the button → record → applyAction +
+  invalidateAll. Otherwise the proxied form is unchanged. Note shows the live cap and, on the
+  proxied path, the iPhone Voice Memos Compressed-vs-Lossless size hint.
+.env.example: SONIC_DIRECT_UPLOAD documented.
+svelte-check: 14 errors = baseline (12 + 2 pre-existing research-proxy.ts), none in these files.
+Rollout owed by a human: (1) cd services/r2-upload-worker && npx wrangler deploy; (2) set
+SONIC_DIRECT_UPLOAD=1 in the brevitest Vercel Production env; (3) fix R2_ACCOUNT_ID /
+R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY there too (still wrong since 09-25); (4) add the R2
+Worker vars to Preview scope so previews can test uploads. Until (1)+(2), production keeps the
+4.5 MB proxied path — now with a readable failure and an audit row on every miss.

@@ -4,6 +4,7 @@ import { connectDB, Spu, ValidationSession, User, AuditLog, generateId } from '$
 import { uploadFile, getSignedDownloadUrl } from '$lib/server/r2';
 import { uploadViaWorker, getR2Url } from '$lib/server/services/r2';
 import { appendSpuJournal } from '$lib/server/spu-journal';
+import { DIRECT_MAX_BYTES, directUploadEnabled, headWorkerObject, mintDirectUploadToken } from '$lib/server/sonic-direct';
 import { env } from '$env/dynamic/private';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -13,18 +14,47 @@ import type { Actions, PageServerLoad } from './$types';
  * motion-only assay; a person records the sound with a phone and drops the
  * file here against the unit. The recording is stored in R2 and the session
  * is the DHR record. Waveform analysis comes later, once we have recordings.
+ *
+ * Two ways in (2026-09-30):
+ *   upload          — the file rides the form POST through this function. Vercel
+ *                     drops function bodies over 4.5 MB before we run, so this
+ *                     path is capped at PROXY_MAX_BYTES.
+ *   presign+record  — when SONIC_DIRECT_UPLOAD=1 the browser PUTs the file
+ *                     straight to the R2 Worker with a token from `presign`, then
+ *                     `record` HEADs the object and writes the session. Up to
+ *                     DIRECT_MAX_BYTES. See $lib/server/sonic-direct.
+ * Every failed attempt gets an AuditLog row (sonic_recording_upload_failed) so
+ * the next "it didn't log" is answerable from the database.
  */
 const AUDIO_EXT = ['wav', 'm4a', 'mp3', 'aac', 'ogg', 'webm', 'flac', 'caf', 'mp4'];
-const MAX_BYTES = 80 * 1024 * 1024;
+/** Vercel's serverless request-body cap. Bigger bodies never reach this file. */
+const PROXY_MAX_BYTES = 4.5 * 1024 * 1024;
+
+type Who = { _id: string; username: string };
+
+function isAudio(fileName: string, mimeType: string): boolean {
+	const ext = (fileName.split('.').pop() ?? '').toLowerCase();
+	return AUDIO_EXT.includes(ext) || mimeType.startsWith('audio/');
+}
+
+function mbOf(n: number): string {
+	return (n / 1048576).toFixed(1);
+}
+
+function recordingKey(spuUdi: string, fileName: string, now: Date): string {
+	const safe = fileName.replace(/[^A-Za-z0-9._-]+/g, '_').slice(0, 80);
+	return `sonic/${spuUdi}/${now.toISOString().replace(/[:.]/g, '-')}-${safe}`;
+}
 
 /**
- * Storage path. The CV capture flow already stores photos in production through the
- * Cloudflare Worker (R2_WORKER_URL + X-Upload-Secret), whose native R2 binding needs no
- * S3 credentials. The S3 credentials in the Vercel env are wrong (2026-09-25: R2 rejects
- * the access key — "length 24, should be 32") and nobody can edit them right now, so the
- * recording goes through the Worker first and falls back to the S3 client only when the
- * Worker is not configured or refuses. Downloads follow the same rule: the Worker's
- * /file/ URL when it exists, otherwise a presigned S3 URL.
+ * Storage path for the proxied upload. The CV capture flow already stores photos in
+ * production through the Cloudflare Worker (R2_WORKER_URL + X-Upload-Secret), whose
+ * native R2 binding needs no S3 credentials. The S3 credentials in the Vercel env are
+ * wrong (2026-09-25: R2 rejects the access key — "length 24, should be 32") and nobody
+ * can edit them right now, so the recording goes through the Worker first and falls
+ * back to the S3 client only when the Worker is not configured or refuses. Downloads
+ * follow the same rule: the Worker's /file/ URL when it exists, otherwise a presigned
+ * S3 URL.
  */
 async function storeRecording(key: string, bytes: ArrayBuffer, contentType: string): Promise<{ key: string; size: number }> {
 	let workerError: string | null = null;
@@ -48,6 +78,77 @@ async function storeRecording(key: string, bytes: ArrayBuffer, contentType: stri
 async function recordingUrl(key: string): Promise<string> {
 	if (env.R2_WORKER_URL) return getR2Url(key);
 	return getSignedDownloadUrl(key, 3600);
+}
+
+/** A failed attempt is still evidence. Never throws — a logging failure must not mask the real one. */
+async function logFailedAttempt(who: Who, stage: string, reason: string, details: Record<string, unknown>): Promise<void> {
+	try {
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'validation_sessions',
+			recordId: null,
+			action: 'sonic_recording_upload_failed',
+			newData: { stage, reason, ...details },
+			reason,
+			changedBy: who.username,
+			changedAt: new Date()
+		});
+	} catch (err) {
+		console.warn(`[sonic] could not write failure audit row: ${err instanceof Error ? err.message : String(err)}`);
+	}
+}
+
+interface StoredRecording {
+	spuId: string;
+	spuUdi: string;
+	key: string;
+	fileName: string;
+	size: number;
+	mimeType: string;
+	notes: string;
+	via: 'proxy' | 'direct';
+}
+
+/** Session + audit + journal for a recording that is confirmed to be in storage. */
+async function persistRecording(r: StoredRecording, who: Who, now: Date) {
+	const sessionId = generateId();
+	await ValidationSession.create({
+		_id: sessionId,
+		type: 'sonic',
+		spuId: r.spuId,
+		spuUdi: r.spuUdi,
+		status: 'completed',
+		startedAt: now,
+		completedAt: now,
+		userId: who._id,
+		results: [
+			{
+				_id: generateId(),
+				testType: 'sonic',
+				rawData: { r2Key: r.key, fileName: r.fileName, size: r.size, mimeType: r.mimeType || null, notes: r.notes || null, via: r.via },
+				processedData: null,
+				passed: null,
+				notes: r.notes || undefined,
+				createdAt: now
+			}
+		]
+	});
+	await AuditLog.create({
+		_id: generateId(),
+		tableName: 'validation_sessions',
+		recordId: sessionId,
+		action: 'sonic_recording_upload',
+		newData: { spuId: r.spuId, spuUdi: r.spuUdi, r2Key: r.key, fileName: r.fileName, size: r.size, notes: r.notes || null, via: r.via },
+		changedBy: who.username,
+		changedAt: now
+	});
+	await appendSpuJournal(
+		r.spuId,
+		`Sonic fingerprint recorded — ${r.fileName} (${mbOf(r.size)} MB)${r.notes ? `\n${r.notes}` : ''}`,
+		who,
+		{ source: 'validation', refKind: 'validation_session', refId: sessionId, refLabel: 'Sonic fingerprint' }
+	);
+	return { uploaded: true as const, sessionId, spuUdi: r.spuUdi, fileName: r.fileName, size: r.size };
 }
 
 export const load: PageServerLoad = async ({ locals }) => {
@@ -91,26 +192,37 @@ export const load: PageServerLoad = async ({ locals }) => {
 		})
 	);
 
+	const directUpload = directUploadEnabled();
 	return {
 		spus: spus.map((s) => ({ id: s._id, udi: s.udi, status: s.status })),
-		recent
+		recent,
+		directUpload,
+		maxBytes: directUpload ? DIRECT_MAX_BYTES : PROXY_MAX_BYTES
 	};
 };
 
 export const actions: Actions = {
+	/** Proxied path: the file rides the multipart POST through this function (≤ 4.5 MB). */
 	upload: async ({ request, locals }) => {
 		requirePermission(locals.user, 'spu:write');
 		await connectDB();
+		const who: Who = { _id: locals.user!._id, username: locals.user!.username };
 
 		const form = await request.formData();
 		const spuId = form.get('spuId')?.toString() ?? '';
 		const notes = (form.get('notes')?.toString() ?? '').trim();
 		const file = form.get('file');
 		if (!spuId) return fail(400, { error: 'Pick the unit the recording is of' });
-		if (!(file instanceof File) || file.size === 0) return fail(400, { error: 'Choose the audio file' });
-		if (file.size > MAX_BYTES) return fail(400, { error: `That file is ${(file.size / 1048576).toFixed(0)} MB — keep recordings under ${MAX_BYTES / 1048576} MB` });
-		const ext = (file.name.split('.').pop() ?? '').toLowerCase();
-		if (!AUDIO_EXT.includes(ext) && !file.type.startsWith('audio/')) {
+		if (!(file instanceof File) || file.size === 0) {
+			await logFailedAttempt(who, 'validate', 'no file or zero bytes (iCloud-only file not downloaded?)', { spuId, fileName: file instanceof File ? file.name : null });
+			return fail(400, { error: 'Choose the audio file. If it lives in iCloud, open it in the Files app first so it downloads to the phone.' });
+		}
+		if (file.size > PROXY_MAX_BYTES) {
+			await logFailedAttempt(who, 'validate', 'over proxy size cap', { spuId, fileName: file.name, size: file.size, cap: PROXY_MAX_BYTES });
+			return fail(400, { error: `That file is ${mbOf(file.size)} MB — this path takes recordings under ${mbOf(PROXY_MAX_BYTES)} MB` });
+		}
+		if (!isAudio(file.name, file.type)) {
+			await logFailedAttempt(who, 'validate', 'not audio', { spuId, fileName: file.name, mimeType: file.type });
 			return fail(400, { error: `Not an audio file (.${AUDIO_EXT.join(', .')})` });
 		}
 
@@ -118,55 +230,101 @@ export const actions: Actions = {
 		if (!spu) return fail(404, { error: 'SPU not found' });
 
 		const now = new Date();
-		const safe = file.name.replace(/[^A-Za-z0-9._-]+/g, '_').slice(0, 80);
-		const key = `sonic/${spu.udi}/${now.toISOString().replace(/[:.]/g, '-')}-${safe}`;
+		const key = recordingKey(spu.udi, file.name, now);
 		let stored: { key: string; size: number };
 		try {
 			stored = await storeRecording(key, await file.arrayBuffer(), file.type || 'application/octet-stream');
 		} catch (err) {
-			return fail(500, { error: `Upload to storage failed: ${err instanceof Error ? err.message : String(err)}` });
+			const reason = err instanceof Error ? err.message : String(err);
+			await logFailedAttempt(who, 'storage', reason, { spuId, spuUdi: spu.udi, key, fileName: file.name, size: file.size, mimeType: file.type });
+			return fail(500, { error: `Upload to storage failed: ${reason}` });
 		}
 
-		const who = { _id: locals.user!._id, username: locals.user!.username };
-		const sessionId = generateId();
-		await ValidationSession.create({
-			_id: sessionId,
-			type: 'sonic',
-			spuId,
-			spuUdi: spu.udi,
-			status: 'completed',
-			startedAt: now,
-			completedAt: now,
-			userId: who._id,
-			results: [
-				{
-					_id: generateId(),
-					testType: 'sonic',
-					rawData: { r2Key: stored.key, fileName: file.name, size: stored.size, mimeType: file.type || null, notes: notes || null },
-					processedData: null,
-					passed: null,
-					notes: notes || undefined,
-					createdAt: now
-				}
-			]
-		});
-		await AuditLog.create({
-			_id: generateId(),
-			tableName: 'validation_sessions',
-			recordId: sessionId,
-			action: 'sonic_recording_upload',
-			newData: { spuId, spuUdi: spu.udi, r2Key: stored.key, fileName: file.name, size: stored.size, notes: notes || null },
-			changedBy: who.username,
-			changedAt: now
-		});
-		await appendSpuJournal(
-			spuId,
-			`Sonic fingerprint recorded — ${file.name} (${(stored.size / 1048576).toFixed(1)} MB)${notes ? `\n${notes}` : ''}`,
+		return persistRecording(
+			{ spuId, spuUdi: spu.udi, key: stored.key, fileName: file.name, size: stored.size, mimeType: file.type, notes, via: 'proxy' },
 			who,
-			{ source: 'validation', refKind: 'validation_session', refId: sessionId, refLabel: 'Sonic fingerprint' }
+			now
 		);
+	},
 
-		return { uploaded: true, sessionId, spuUdi: spu.udi, fileName: file.name, size: stored.size };
+	/** Direct path, step 1: validate and hand the browser a one-key, short-lived Worker token. */
+	presign: async ({ request, locals }) => {
+		requirePermission(locals.user, 'spu:write');
+		await connectDB();
+		const who: Who = { _id: locals.user!._id, username: locals.user!.username };
+		if (!directUploadEnabled()) return fail(400, { error: 'Direct upload is not enabled on this deployment' });
+
+		const form = await request.formData();
+		const spuId = form.get('spuId')?.toString() ?? '';
+		const fileName = (form.get('fileName')?.toString() ?? '').trim();
+		const size = Number(form.get('size')?.toString() ?? '');
+		const mimeType = form.get('mimeType')?.toString() ?? '';
+		if (!spuId) return fail(400, { error: 'Pick the unit the recording is of' });
+		if (!fileName || !Number.isFinite(size) || size <= 0) {
+			await logFailedAttempt(who, 'validate', 'no file or zero bytes (iCloud-only file not downloaded?)', { spuId, fileName, size, via: 'direct' });
+			return fail(400, { error: 'Choose the audio file. If it lives in iCloud, open it in the Files app first so it downloads to the phone.' });
+		}
+		if (size > DIRECT_MAX_BYTES) {
+			await logFailedAttempt(who, 'validate', 'over direct size cap', { spuId, fileName, size, cap: DIRECT_MAX_BYTES, via: 'direct' });
+			return fail(400, { error: `That file is ${mbOf(size)} MB — keep recordings under ${mbOf(DIRECT_MAX_BYTES)} MB` });
+		}
+		if (!isAudio(fileName, mimeType)) {
+			await logFailedAttempt(who, 'validate', 'not audio', { spuId, fileName, mimeType, via: 'direct' });
+			return fail(400, { error: `Not an audio file (.${AUDIO_EXT.join(', .')})` });
+		}
+		const spu = (await Spu.findById(spuId).select('udi').lean()) as any;
+		if (!spu) return fail(404, { error: 'SPU not found' });
+
+		const key = recordingKey(spu.udi, fileName, new Date());
+		const grant = await mintDirectUploadToken(key, DIRECT_MAX_BYTES);
+		return { presign: { ...grant, spuUdi: spu.udi as string } };
+	},
+
+	/** Direct path, step 2: the browser says the PUT succeeded; trust storage, not the browser. */
+	record: async ({ request, locals }) => {
+		requirePermission(locals.user, 'spu:write');
+		await connectDB();
+		const who: Who = { _id: locals.user!._id, username: locals.user!.username };
+		if (!directUploadEnabled()) return fail(400, { error: 'Direct upload is not enabled on this deployment' });
+
+		const form = await request.formData();
+		const spuId = form.get('spuId')?.toString() ?? '';
+		const key = form.get('key')?.toString() ?? '';
+		const fileName = (form.get('fileName')?.toString() ?? '').trim();
+		const size = Number(form.get('size')?.toString() ?? '');
+		const mimeType = form.get('mimeType')?.toString() ?? '';
+		const notes = (form.get('notes')?.toString() ?? '').trim();
+		if (!spuId || !key || !fileName) return fail(400, { error: 'Missing upload details' });
+
+		const spu = (await Spu.findById(spuId).select('udi').lean()) as any;
+		if (!spu) return fail(404, { error: 'SPU not found' });
+		if (!key.startsWith(`sonic/${spu.udi}/`)) {
+			await logFailedAttempt(who, 'record', 'key does not belong to this unit', { spuId, spuUdi: spu.udi, key, via: 'direct' });
+			return fail(400, { error: 'That upload does not belong to this unit' });
+		}
+
+		let head: { size: number; contentType: string } | null;
+		try {
+			head = await headWorkerObject(key);
+		} catch (err) {
+			const reason = err instanceof Error ? err.message : String(err);
+			await logFailedAttempt(who, 'record', `HEAD failed: ${reason}`, { spuId, spuUdi: spu.udi, key, fileName, size, via: 'direct' });
+			return fail(502, { error: `Could not confirm the file in storage: ${reason}` });
+		}
+		if (!head) {
+			await logFailedAttempt(who, 'record', 'object not found after PUT', { spuId, spuUdi: spu.udi, key, fileName, size, via: 'direct' });
+			return fail(400, { error: 'The file did not arrive in storage. Try the upload again.' });
+		}
+		if (Number.isFinite(size) && size > 0 && head.size !== size) {
+			await logFailedAttempt(who, 'record', 'size mismatch', { spuId, spuUdi: spu.udi, key, fileName, size, storedSize: head.size, via: 'direct' });
+			return fail(400, { error: `Storage has ${mbOf(head.size)} MB but the phone sent ${mbOf(size)} MB — the upload was cut short. Try again.` });
+		}
+
+		return persistRecording(
+			{ spuId, spuUdi: spu.udi, key, fileName, size: head.size, mimeType: mimeType || head.contentType, notes, via: 'direct' },
+			who,
+			new Date()
+		);
 	}
 };
 
