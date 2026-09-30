@@ -1,7 +1,8 @@
 /**
  * Badge Portal (BADGE-SYSTEM_PLAN.md §17.1 / §17.5) — admin only.
  * Issue, revoke, reissue printed QR badges, and flip the "Require badge"
- * switch that gates bucket mint / start-pass. Every action re-checks
+ * switch that gates the bucket board's scan-in, discards and move to oven
+ * (user, 2026-09-30; it gated mint / start-pass before). Every action re-checks
  * isAdmin() itself; the layout tab is only a convenience.
  */
 import { error, fail, redirect } from '@sveltejs/kit';

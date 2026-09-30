@@ -13,6 +13,10 @@ const operatorRef = { _id: String, username: String };
  * bucket-service.releaseCustody() from closeCycle() and voidCycle(). The
  * `open` flag exists for the partial unique index: at most ONE open custody
  * per resource, as a duplicate-key error rather than an app-level check.
+ *
+ * A bucket pass's row is claimed at the FIRST scan-in by the badge holder who
+ * counts the bucket up (bucket-service.claimCustody, 2026-09-30) — no longer at
+ * start-pass, which asks for no badge any more.
  */
 const custodySchema = new Schema({
 	_id: { type: String, default: () => generateId() },

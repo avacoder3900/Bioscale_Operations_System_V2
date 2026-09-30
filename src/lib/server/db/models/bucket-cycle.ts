@@ -117,8 +117,8 @@ const bucketCycleSchema = new Schema({
 	residualFound: { type: [residualFoundSchema], default: [] },
 	discrepancies: { type: [discrepancySchema], default: [] },
 	audits: { type: [auditRunSchema], default: [] },
-	openedBy: operatorRef,   // the badge holder when a badge was scanned (BADGE-SYSTEM_PLAN.md §15.4); else the session
-	custodyId: String,       // Custody._id opened at start; released by closeCycle / voidCycle
+	openedBy: operatorRef,   // the session that started the pass (was the badge holder until 2026-09-30, when the gate moved to scan-in)
+	custodyId: String,       // Custody._id claimed by the badge holder at the FIRST scan-in (bucket-service.claimCustody); released by closeCycle / voidCycle
 	openedAt: Date,
 	stageEnteredAt: Date, // set on create and on every advance — dwell time without replaying the ledger
 	closedAt: Date

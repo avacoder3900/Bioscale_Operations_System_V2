@@ -17133,3 +17133,48 @@ Retrieve this exact code: git checkout feat/bucket-nav-perf at commit 6c0a8bc1
 What this deployment is for: the bucket board ↔ history page navigation-lag fixes (root layout no
 longer re-runs per navigation, thermoseal branch ~3 reads in series, history payload trimmed,
 sidebar hover preload). Open the board, then a bucket, then back — compare against PR #70's preview.
+
+================================================================================
+2026-09-30 — feat/badge-gated-steps — Badge gate moved to scan-in, discards and move to oven
+================================================================================
+User: "I want the badge requirement for the bucket system to be when counting up a bucket, when
+discarding carts, and when passing carts to oven." Branch cut from feat/bucket-nav-perf (c6df9ac6).
+Read "counting up a bucket" as scanning carts into a Barcoded pass (the count climbs one per scan) —
+not the Audit panel. Read "to be when …" as the full list: the badge no longer gates mint or
+start-pass, which feat/badge-system had added earlier today.
+
+WHAT CHANGED
+- bucket-service.ts: requireBadge() now reads the mode and resolves the badge in one Promise.all
+  (it sits on the scan-in hot path); new loginGate() (session as actor) and claimCustody() (Custody
+  row opened by the badge holder at the FIRST scan-in of a pass — insert, then a conditional
+  `custodyId: null` update so a concurrent first scan cannot overwrite the winner's id).
+  Gated: scanCartIn (gate runs inside the existing guard Promise.all — no extra round trip in
+  series; holder = scannedInBy, operator on both debits + scan_in row; returns `operator`),
+  scrapCarts (→ scrapCartsAs(input, gate) so advanceCycle resolves the badge once for discards +
+  move), advanceCycle (badge required only when discardedIds non-empty; a badge scanned anyway is
+  honoured on the advance row), auditCycle (when a stray is discarded or a missing member written
+  off), reportResidual (Discard only), moveToOven (holder = ovenReleasedBy; returns `operator`).
+  Un-gated: createBucket and startCycle lose `badge`; startCycle no longer creates Custody or sets
+  custodyId; openedBy = session. Every gated row: operator = holder, enteredBy = session,
+  attribution { method, badgeId, custodyId? }; audit rows carry badgeId + enteredBy.
+- buckets/+page.server.ts: badge read from the form on scanIn / advance / scrap / moveToOven /
+  audit / residual; dropped from start; scanIn + moveToOven return `operator`.
+- buckets/+page.svelte: one shared `badge` state + `badgeField(show, next?)` snippet (visible +
+  required when `show` and mode is 'required'; otherwise a hidden input so a badge scanned anyway
+  rides along). Rendered on the Barcoded panel (above the cart box, with "Carts are being recorded
+  to <user>" + Change badge after the first scan), advance (discards only), scrap, audit
+  (discards / write-offs only), residual (Discard only), Move to oven. A BDG- code scanned into
+  the cart box or any list box is routed to the badge (takeBadge); cart scans with no badge on are
+  held client-side ("Scan your badge first"); every ?/scanIn POST carries the badge; a BADGE_*
+  refusal (not the plain BADGE "that is a badge, not a cart") clears it and refocuses the box.
+  Start form's badge block removed; header link title + scan-box message reworded.
+- buckets/new/+page.server.ts + .svelte: badge field, badgeMode and `method` removed; mint is
+  "scan the sticker" again.
+- admin/badges/+page.svelte + .server.ts: portal copy says where the badge is now asked for.
+- models: bucket-cycle.ts / custody.ts comments (custody claimed at first scan-in).
+- BUCKET-SYSTEM_PLAN.md: header; new §6.6 (where the badge is asked for, one-badge-for-the-rail,
+  hot path, custody); §6.1, §6.2, §6.3, §6.5, §7, §9.1, §9.4, §9.8; §11 row.
+- BADGE-SYSTEM_PLAN.md NOT edited (its "mint + start-pass" scope line is now stale — §6.6 of the
+  bucket plan is the current statement). Also not built: a dev DB with an issued badge to click
+  through the three gates.
+svelte-check: COMPLETED 3419 FILES 14 ERRORS — the pre-existing baseline, none in touched files.

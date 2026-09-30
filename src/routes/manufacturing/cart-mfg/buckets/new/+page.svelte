@@ -2,10 +2,9 @@
 	import { enhance } from '$app/forms';
 	import { goto } from '$app/navigation';
 
-	type Result = { success?: boolean; error?: string; code?: string | null; bucketId?: string; barcode?: string; nickname?: string | null; previous?: string | null; operator?: string; method?: 'badge' | 'login' };
+	type Result = { success?: boolean; error?: string; code?: string | null; bucketId?: string; barcode?: string; nickname?: string | null; previous?: string | null; operator?: string };
 	interface Props {
 		data: {
-			badgeMode: 'off' | 'required';
 			presetBucket: string | null;
 			recent: { bucketId: string; barcode: string | null; nickname: string | null; state: string; cycleCount: number; createdAt: string | null; createdBy: string | null }[];
 		};
@@ -14,7 +13,6 @@
 	let { data, form }: Props = $props();
 
 	let qr = $state('');
-	let badge = $state('');
 	let replaceBucket = $state('');
 	let replaceQr = $state('');
 	// Third block: scan a bucket, name it.
@@ -22,8 +20,6 @@
 	let nickname = $state('');
 	let busy = $state(false);
 	let presetApplied = $state(false);
-
-	const badgeRequired = $derived(data.badgeMode === 'required');
 
 	$effect(() => {
 		if (!presetApplied && data.presetBucket) {
@@ -33,18 +29,13 @@
 	});
 
 	function focusQr() { setTimeout(() => document.getElementById('qr')?.focus(), 60); }
-	function focusBadge() { setTimeout(() => document.getElementById('badge')?.focus(), 60); }
-	// A gun sends Enter after the code: badge → sticker → submit, no clicking.
-	function badgeKeydown(e: KeyboardEvent) {
-		if (e.key === 'Enter') { e.preventDefault(); focusQr(); }
-	}
-	// After a create: the sticker clears (each tub gets its own), the badge stays
-	// (one person mints several tubs in a row) — unless the badge was the problem.
-	function afterCreate(result: { type: string; data?: any }) {
+	// After a create the sticker clears (each tub gets its own) and the box is
+	// ready for the next scan. No badge here (user, 2026-09-30): minting is not a
+	// gated step — the badge is asked for on the board at scan-in, discards and
+	// move to oven.
+	function afterCreate() {
 		qr = '';
-		const code = result.type === 'failure' ? result.data?.create?.code : null;
-		if (code && String(code).startsWith('BADGE')) { badge = ''; focusBadge(); }
-		else focusQr();
+		focusQr();
 	}
 	// A gun sends Enter after the bucket's QR: jump to the name field instead of submitting.
 	function nickBucketKeydown(e: KeyboardEvent) {
@@ -72,30 +63,22 @@
 		<form
 			method="POST"
 			action="?/create"
-			use:enhance={() => { busy = true; return async ({ update, result }) => { await update({ reset: false }); busy = false; afterCreate(result); }; }}
+			use:enhance={() => { busy = true; return async ({ update }) => { await update({ reset: false }); busy = false; afterCreate(); }; }}
 			class="rounded-lg border border-[var(--color-tron-cyan)]/40 bg-[var(--color-tron-surface)] p-4 space-y-3"
 		>
 			<p class="text-sm font-medium text-[var(--color-tron-text)]">Create a bucket</p>
-			{#if badgeRequired}
-				<label class="block">
-					<span class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">1 · Scan your badge</span>
-					<input id="badge" type="text" name="badge" bind:value={badge} onkeydown={badgeKeydown} autocomplete="off" placeholder="scan badge…" class="{inputCls} {badge.trim() ? '' : 'border-[var(--color-tron-cyan)]/60 ring-1 ring-[var(--color-tron-cyan)]/30'}" />
-				</label>
-			{:else}
-				<p class="text-[10px] text-[var(--color-tron-text-secondary)]">Badge required: <strong>off</strong> — you will be recorded as the operator.</p>
-			{/if}
 			<label class="block">
-				<span class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">{badgeRequired ? '2 · ' : ''}Scan the tub's QR sticker</span>
-				<input id="qr" type="text" name="qr" bind:value={qr} autocomplete="off" placeholder="scan…" class="{inputCls} {!badgeRequired || badge.trim() ? 'border-[var(--color-tron-cyan)]/60 ring-1 ring-[var(--color-tron-cyan)]/30' : ''}" />
+				<span class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Scan the tub's QR sticker</span>
+				<input id="qr" type="text" name="qr" bind:value={qr} autocomplete="off" placeholder="scan…" class="{inputCls} border-[var(--color-tron-cyan)]/60 ring-1 ring-[var(--color-tron-cyan)]/30" />
 			</label>
 			{#if form?.create?.error}<p class="text-xs text-[var(--color-tron-error)]">{form.create.error}</p>{/if}
 			{#if form?.create?.success}
 				<p class="rounded border border-green-500/40 bg-green-900/15 p-2 text-xs text-green-300">
 					Bucket created — sticker <span class="font-mono">{form.create.barcode}</span>
-					<span class="text-[var(--color-tron-text-secondary)]">(internal id {form.create.bucketId})</span>{#if form.create.operator}, minted by <strong>{form.create.operator}</strong>{form.create.method === 'badge' ? ' (badge)' : ''}{/if}. It's on the board under <strong>Available</strong>.
+					<span class="text-[var(--color-tron-text-secondary)]">(internal id {form.create.bucketId})</span>{#if form.create.operator}, minted by <strong>{form.create.operator}</strong>{/if}. It's on the board under <strong>Available</strong>.
 				</p>
 			{/if}
-			<button type="submit" disabled={busy || !qr.trim() || (badgeRequired && !badge.trim())} class="w-full rounded-lg bg-[var(--color-tron-cyan)] py-2.5 text-sm font-bold text-[var(--color-tron-bg-primary)] hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-30">
+			<button type="submit" disabled={busy || !qr.trim()} class="w-full rounded-lg bg-[var(--color-tron-cyan)] py-2.5 text-sm font-bold text-[var(--color-tron-bg-primary)] hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-30">
 				{busy ? 'Creating…' : 'Create bucket'}
 			</button>
 		</form>

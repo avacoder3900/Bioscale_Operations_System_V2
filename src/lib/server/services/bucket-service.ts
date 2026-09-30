@@ -135,6 +135,8 @@ interface TxInput {
 	operator: Operator;
 	// Badge attribution (§15.3). Omitted on every non-gated step: the session is
 	// both `operator` and `enteredBy`, method 'login' — exactly the old rows.
+	// The gated steps (scan-in, discard, move to oven — user, 2026-09-30) pass the
+	// badge holder as `operator`, the session as `enteredBy`, and the gate's attribution.
 	enteredBy?: Operator;
 	attribution?: Attribution;
 }
@@ -175,32 +177,78 @@ interface BadgeGate {
 	attribution: Attribution;
 }
 
+/** The session as the actor, no badge involved — what every non-gated step records. */
+function loginGate(session: Operator): BadgeGate {
+	return { operator: session, attribution: { method: 'login' } };
+}
+
 /**
- * The one place a badge scan is turned into an operator. Used by the two
- * gated entry points only (createBucket, startCycle). With enforcement off, a
- * badge that IS scanned is still honoured — better attribution for free — but
- * an empty scan falls back to the session. With enforcement on, an empty scan
- * is refused. The holder must be allowed to do the thing as well: a badge is
- * attribution, never a substitute for permission.
+ * The one place a badge scan is turned into an operator. The gated steps
+ * (user, 2026-09-30) are the ones where carts are handled: counting a bucket
+ * up (scanCartIn), discarding carts (scrapCarts, and the audit / leftover
+ * discards), and passing carts to the oven (moveToOven). Minting a bucket and
+ * starting a pass no longer ask. With enforcement off, a badge that IS scanned
+ * is still honoured — better attribution for free — but an empty scan falls
+ * back to the session. With enforcement on, an empty scan is refused. The
+ * holder must be allowed to do the thing as well: a badge is attribution,
+ * never a substitute for permission.
+ *
+ * Sits on the scan-in hot path (§6.2.1): the mode read and the badge lookup
+ * run together, so the gate costs one round trip in series, not two.
  */
 async function requireBadge(badge: string | null | undefined, session: Operator): Promise<BadgeGate> {
 	const code = (badge ?? '').trim();
-	const mode = await badgeMode();
-	if (!code) {
-		if (mode === 'off') return { operator: session, attribution: { method: 'login' } };
+	const [mode, resolved] = await Promise.all([
+		badgeMode(),
+		code ? resolveBadge(code).then(holder => ({ holder }), (e: unknown) => ({ e })) : Promise.resolve(null)
+	]);
+	if (!resolved) {
+		if (mode === 'off') return loginGate(session);
 		throw new BucketError('Scan your badge.', 400, 'BADGE_REQUIRED');
 	}
-	let holder;
-	try {
-		holder = await resolveBadge(code);
-	} catch (e) {
+	if ('e' in resolved) {
+		const e = resolved.e;
 		if (e instanceof BadgeError) throw new BucketError(e.message, e.status, e.code);
 		throw e;
 	}
+	const holder = resolved.holder;
 	if (!badgeHolderCan(holder, 'manufacturing:write')) {
 		throw new BucketError(`${holder.displayName}'s badge is not allowed to do this (manufacturing:write).`, 403, 'BADGE_FORBIDDEN');
 	}
 	return { operator: holder.user, badgeId: holder.badgeId, attribution: { method: 'badge', badgeId: holder.badgeId } };
+}
+
+/**
+ * Custody of a pass (§15.2) is claimed by whoever counts the bucket up — the
+ * badge holder at the FIRST scan-in — and stays with them until the pass
+ * closes. Later scans by another badge are attributed on their own rows but do
+ * not take the pass over (no takeover in v1, §14 #10). Returns the custody id,
+ * or null when a concurrent scan won the claim (its id is then already on the
+ * pass; nothing to repair).
+ */
+async function claimCustody(cycle: { _id: string; bucketId: string; custodyId?: string | null }, gate: BadgeGate, session: Operator): Promise<string | null> {
+	if (cycle.custodyId) return cycle.custodyId;
+	const custodyId = generateId();
+	try {
+		await Custody.create({
+			_id: custodyId,
+			resourceType: 'bucket_cycle',
+			resourceId: cycle._id,
+			bucketId: cycle.bucketId,
+			operator: { _id: gate.operator._id, username: gate.operator.username },
+			badgeId: gate.badgeId,
+			method: gate.attribution.method,
+			enteredBy: { _id: session._id, username: session.username },
+			claimedAt: new Date(),
+			open: true
+		});
+	} catch (e: any) {
+		if (e?.code === 11000) return null; // another terminal's first scan claimed it a moment ago
+		throw e;
+	}
+	// Only the row that won the insert may write its id onto the pass.
+	await BucketCycle.updateOne({ _id: cycle._id, custodyId: null }, { $set: { custodyId } });
+	return custodyId;
 }
 
 /**
@@ -588,11 +636,11 @@ export async function setBucketNickname(input: { bucketId: string; nickname: unk
  * replaced later without the tub becoming a new bucket. An optional nickname
  * can be typed alongside the scan (2026-09-30); it is never required.
  */
-export async function createBucket(input: { qr: string; badge?: string | null; nickname?: string | null; user: Operator }): Promise<{ bucketId: string; barcode: string; nickname: string | null; operator: string; method: Attribution['method'] }> {
+export async function createBucket(input: { qr: string; nickname?: string | null; user: Operator }): Promise<{ bucketId: string; barcode: string; nickname: string | null; operator: string }> {
 	await connectDB();
-	// Badge first (§16.2): it is the first thing the operator scans, so it is the
-	// first thing that should be able to fail. `user` is the session = enteredBy.
-	const gate = await requireBadge(input.badge, input.user);
+	// No badge here (user, 2026-09-30): minting is not one of the gated steps.
+	// The session is the operator, as on every non-gated step.
+	const gate = loginGate(input.user);
 	const code = (input.qr ?? '').trim();
 	if (!code) throw new BucketError('Scan the QR sticker for the new bucket.');
 	await assertStickerFree(code);
@@ -614,8 +662,8 @@ export async function createBucket(input: { qr: string; badge?: string | null; n
 		throw e;
 	}
 	await logTx({ bucketId: id, type: 'mint', reason: nickname ? `sticker ${code} · nickname ${nickname}` : `sticker ${code}`, relatedId: code, operator: gate.operator, enteredBy: input.user, attribution: gate.attribution });
-	await audit('production_buckets', id, 'INSERT', gate.operator, { barcode: code, nickname, state: 'available', badgeId: gate.badgeId ?? null, enteredBy: input.user.username });
-	return { bucketId: id, barcode: code, nickname, operator: gate.operator.username, method: gate.attribution.method };
+	await audit('production_buckets', id, 'INSERT', gate.operator, { barcode: code, nickname, state: 'available', enteredBy: input.user.username });
+	return { bucketId: id, barcode: code, nickname, operator: gate.operator.username };
 }
 
 /** Replace a damaged sticker. The BKT- id and all history stay put. */
@@ -666,14 +714,15 @@ export interface StartCycleInput {
 	shellLotId: string;       // PT-CT-104 ReceivingLot.lotId
 	labelLotId: string;       // PT-CT-106 ReceivingLot.lotId
 	emptyConfirmed?: boolean; // required when the bucket has spotCheckPending
-	badge?: string | null;    // scanned badge code (BADGE-SYSTEM_PLAN.md §16.2); required when badge mode is 'required'
-	user: Operator;           // the web session (= enteredBy)
+	user: Operator;           // the web session — openedBy and enteredBy
 }
 
 /**
  * Open a pass at Barcoded with zero members. Shells are then scanned in one at a
  * time (scanCartIn). The shell and label lots are fixed here so every scan
- * debits against the same lots.
+ * debits against the same lots. No badge is asked for (user, 2026-09-30):
+ * custody of the pass is claimed by the badge holder at the first scan-in
+ * (claimCustody), not by whoever picked the lots.
  */
 export async function startCycle(input: StartCycleInput): Promise<any> {
 	await connectDB();
@@ -695,15 +744,11 @@ export async function startCycle(input: StartCycleInput): Promise<any> {
 	const label = await validateReceivingLot(input.labelLotId, LABEL_PART);
 	if (!label.ok) throw new BucketError(`Label lot: ${label.reason}`);
 
-	// Badge gate (§16.2): the holder becomes openedBy and the custody holder;
-	// input.user (the session) is recorded as enteredBy.
-	const gate = await requireBadge(input.badge, input.user);
-	const operator = { _id: gate.operator._id, username: gate.operator.username };
+	const operator = { _id: input.user._id, username: input.user.username };
 
 	const now = new Date();
 	const cycleNumber = (bucket.cycleCount ?? 0) + 1;
 	const cycleId = generateId();
-	const custodyId = generateId();
 	try {
 		await BucketCycle.create({
 			_id: cycleId,
@@ -722,7 +767,6 @@ export async function startCycle(input: StartCycleInput): Promise<any> {
 				? { emptyConfirmedBy: operator, emptyConfirmedAt: now }
 				: {}),
 			openedBy: operator,
-			custodyId,
 			openedAt: now,
 			stageEnteredAt: now
 		});
@@ -730,20 +774,6 @@ export async function startCycle(input: StartCycleInput): Promise<any> {
 		if (e?.code === 11000) throw new BucketError(`Bucket ${bucketId} already holds an open pass.`, 409);
 		throw e;
 	}
-	// Custody after the cycle exists (§15.2): the cycle id is fresh, so this
-	// cannot collide, and a failed cycle create leaves no orphan custody behind.
-	await Custody.create({
-		_id: custodyId,
-		resourceType: 'bucket_cycle',
-		resourceId: cycleId,
-		bucketId,
-		operator,
-		badgeId: gate.badgeId,
-		method: gate.attribution.method,
-		enteredBy: { _id: input.user._id, username: input.user.username },
-		claimedAt: now,
-		open: true
-	});
 
 	await ProductionBucket.updateOne(
 		{ _id: bucketId },
@@ -751,40 +781,45 @@ export async function startCycle(input: StartCycleInput): Promise<any> {
 	);
 	await logTx({
 		bucketId, cycleId, type: 'create', fromStage: null, toStage: 'barcoded', qtyBefore: 0, qtyAfter: 0, relatedId: shell.lot.lotId,
-		operator, enteredBy: input.user, attribution: { ...gate.attribution, custodyId }
+		operator
 	});
-	await audit('bucket_cycles', cycleId, 'INSERT', operator, { bucketId, cycleNumber, shellLot: shell.lot.lotId, labelLot: label.lot.lotId, emptyConfirmed: !!bucket.spotCheckPending, custodyId, badgeId: gate.badgeId ?? null, enteredBy: input.user.username });
+	await audit('bucket_cycles', cycleId, 'INSERT', operator, { bucketId, cycleNumber, shellLot: shell.lot.lotId, labelLot: label.lot.lotId, emptyConfirmed: !!bucket.spotCheckPending });
 	return BucketCycle.findById(cycleId).lean();
 }
 
 export interface ScanCartInput {
 	cycleId: string;
 	barcode: string;
-	user: Operator;
+	badge?: string | null;   // scanned badge code; required when badge mode is 'required' (scan-in only — unscan ignores it)
+	user: Operator;          // the web session (= enteredBy)
 }
 
 /**
  * The cartridge's birth. Only while the pass is at Barcoded. Refuses a code that
  * is already a cartridge or a bucket's sticker. Debits one shell + one label
- * against the pass's lots.
+ * against the pass's lots. Badge-gated (user, 2026-09-30): "counting up a
+ * bucket" is done by the badge holder — they are `scannedInBy`, the operator on
+ * the debits and the ledger row, and (at the first scan) the pass's custodian.
  */
-export async function scanCartIn(input: ScanCartInput): Promise<{ quantity: number; barcode: string }> {
+export async function scanCartIn(input: ScanCartInput): Promise<{ quantity: number; barcode: string; operator: string }> {
 	assertNotMergedBarcode(input.barcode ?? '');
 	const barcode = (input.barcode ?? '').trim();
 	if (!barcode) throw new BucketError('Scan the cartridge QR.');
 	if (/^BKT-\d+$/i.test(barcode)) throw new BucketError('That is a bucket id, not a cartridge sticker.');
 	// A badge must never be born as a cartridge (BADGE-SYSTEM_PLAN.md §16.2).
-	if (isBadgeCode(barcode)) throw new BucketError('That is a badge, not a cartridge sticker.', 400, 'BADGE');
+	if (isBadgeCode(barcode)) throw new BucketError('That is a badge, not a cartridge sticker — it goes in the badge box.', 400, 'BADGE');
 	await connectDB();
 
-	// PERF (2026-09-25): these three reads are independent — the pass, the
-	// bucket-label collision guard (§10) and "is this sticker already a cart".
-	// Awaiting them in series was most of the scan's latency; the operator is
-	// scanning shells at a rapid pace, so the guards go together.
-	const [cycle, bucketLabelId, existing] = await Promise.all([
+	// PERF (2026-09-25): these reads are independent — the pass, the
+	// bucket-label collision guard (§10), "is this sticker already a cart", and
+	// (2026-09-30) the badge gate. Awaiting them in series was most of the
+	// scan's latency; the operator is scanning shells at a rapid pace, so the
+	// guards go together and the badge adds no round trip in series.
+	const [cycle, bucketLabelId, existing, gate] = await Promise.all([
 		BucketCycle.findById(input.cycleId).lean() as Promise<any>,
 		resolveBucketId(barcode),
-		CartridgeRecord.findById(barcode).select('_id status bucket').lean() as Promise<any>
+		CartridgeRecord.findById(barcode).select('_id status bucket').lean() as Promise<any>,
+		requireBadge(input.badge, input.user)
 	]);
 
 	if (!cycle || cycle.status !== 'open') throw new BucketError('Pass is not open.', 404);
@@ -796,9 +831,12 @@ export async function scanCartIn(input: ScanCartInput): Promise<{ quantity: numb
 	}
 
 	const now = new Date();
-	const op = { _id: input.user._id, username: input.user.username };
+	const op = { _id: gate.operator._id, username: gate.operator.username };
 	const shellLot = lotFor(cycle.sourceLots, SHELL_PART);
 	const labelLot = lotFor(cycle.sourceLots, LABEL_PART);
+	// First scan of the pass claims custody for the badge holder (one extra write,
+	// once per pass); every later scan sees custodyId on the pass and skips this.
+	const custodyId = cycle.custodyId ?? await claimCustody(cycle, gate, input.user);
 	try {
 		await CartridgeRecord.create({
 			_id: barcode,
@@ -828,14 +866,14 @@ export async function scanCartIn(input: ScanCartInput): Promise<{ quantity: numb
 	// still matters, since nothing may be debited for a cart that was not born.
 	await Promise.all([
 		BucketCycle.updateOne({ _id: cycle._id }, { $addToSet: { cartridgeIds: barcode }, $inc: { quantity: 1 } }),
-		debit(SHELL_PART, shellLot, 1, cycle._id, input.user, `Scan-in ${barcode} into ${label}: 1x ${SHELL_PART} shell from lot ${shellLot ?? '(none)'}`),
-		debit(LABEL_PART, labelLot, 1, cycle._id, input.user, `Scan-in ${barcode} into ${label}: 1x ${LABEL_PART} label from lot ${labelLot ?? '(none)'}`),
-		logTx({ bucketId: cycle.bucketId, cycleId: cycle._id, type: 'scan_in', fromStage: 'barcoded', toStage: 'barcoded', qtyBefore: before, qtyAfter: before + 1, cartridgeIds: [barcode], operator: input.user }),
-		audit('cartridge_records', barcode, 'INSERT', input.user, { status: 'barcoded', bucketId: cycle.bucketId, cycleId: cycle._id })
+		debit(SHELL_PART, shellLot, 1, cycle._id, gate.operator, `Scan-in ${barcode} into ${label}: 1x ${SHELL_PART} shell from lot ${shellLot ?? '(none)'}`),
+		debit(LABEL_PART, labelLot, 1, cycle._id, gate.operator, `Scan-in ${barcode} into ${label}: 1x ${LABEL_PART} label from lot ${labelLot ?? '(none)'}`),
+		logTx({ bucketId: cycle.bucketId, cycleId: cycle._id, type: 'scan_in', fromStage: 'barcoded', toStage: 'barcoded', qtyBefore: before, qtyAfter: before + 1, cartridgeIds: [barcode], operator: gate.operator, enteredBy: input.user, attribution: { ...gate.attribution, ...(custodyId ? { custodyId } : {}) } }),
+		audit('cartridge_records', barcode, 'INSERT', gate.operator, { status: 'barcoded', bucketId: cycle.bucketId, cycleId: cycle._id, badgeId: gate.badgeId ?? null, enteredBy: input.user.username })
 	]);
 	// No re-read of the pass: the caller only needs the new count, and the board
 	// tracks its own membership between refreshes (§9.1).
-	return { quantity: before + 1, barcode };
+	return { quantity: before + 1, barcode, operator: gate.operator.username };
 }
 
 /**
@@ -888,7 +926,8 @@ export interface ScrapInput {
 	cycleId: string;
 	barcodes: string[];      // the discarded cartridges, scanned
 	journal: string;
-	user: Operator;
+	badge?: string | null;   // scanned badge code; required when badge mode is 'required'
+	user: Operator;          // the web session (= enteredBy)
 	relatedId?: string;      // LotRecord._id when scrapped during WI-01
 	skipInventory?: boolean; // WI-01 confirm withdraws its own scrap
 }
@@ -898,10 +937,16 @@ export interface ScrapInput {
  * 'scrapped', leaves the membership list, is written to ManualCartridgeRemoval
  * (so it shows in Recent Checkouts), and — unless the caller withdraws
  * inventory itself — what the cart physically was at that stage is scrapped
- * from stock.
+ * from stock. Badge-gated (user, 2026-09-30): the badge holder is the operator
+ * on the removal, the scrap debits and the ledger row.
  */
 export async function scrapCarts(input: ScrapInput): Promise<{ cycle: any; removalId: string; scrapped: string[] }> {
 	await connectDB();
+	return scrapCartsAs(input, await requireBadge(input.badge, input.user));
+}
+
+/** scrapCarts with the gate already resolved — advanceCycle scans the badge once for discards + move. */
+async function scrapCartsAs(input: ScrapInput, gate: BadgeGate): Promise<{ cycle: any; removalId: string; scrapped: string[] }> {
 	const cycle = await BucketCycle.findById(input.cycleId).lean() as any;
 	if (!cycle || cycle.status !== 'open') throw new BucketError('Pass is not open.', 404);
 	const ids = cleanCodes(input.barcodes);
@@ -913,7 +958,8 @@ export async function scrapCarts(input: ScrapInput): Promise<{ cycle: any; remov
 	if (!journal) throw new BucketError('A journal entry describing why these were discarded is required.');
 
 	const now = new Date();
-	const op = { _id: input.user._id, username: input.user.username };
+	const op = { _id: gate.operator._id, username: gate.operator.username };
+	const attribution: Attribution = { ...gate.attribution, ...(cycle.custodyId ? { custodyId: cycle.custodyId } : {}) };
 	const stage = cycle.stage as BucketStage;
 	await CartridgeRecord.updateMany(
 		{ _id: { $in: ids } },
@@ -937,7 +983,7 @@ export async function scrapCarts(input: ScrapInput): Promise<{ cycle: any; remov
 	if (!input.skipInventory) {
 		const label = cycleLabel(cycle.bucketId, cycle.cycleNumber);
 		for (const pn of partsAtStage(stage)) {
-			await debitScrap(pn, lotFor(cycle.sourceLots, pn), ids.length, cycle._id, input.user, journal, `Bucket ${label}: ${ids.length}x ${pn} discarded at ${STAGE_LABELS[stage]} — ${journal}`);
+			await debitScrap(pn, lotFor(cycle.sourceLots, pn), ids.length, cycle._id, gate.operator, journal, `Bucket ${label}: ${ids.length}x ${pn} discarded at ${STAGE_LABELS[stage]} — ${journal}`);
 		}
 	}
 
@@ -947,16 +993,18 @@ export async function scrapCarts(input: ScrapInput): Promise<{ cycle: any; remov
 	await logTx({
 		bucketId: cycle.bucketId, cycleId: cycle._id, type: 'scrap',
 		fromStage: stage, toStage: stage, qtyBefore: before, qtyAfter: after,
-		reason: journal, journal, relatedId: input.relatedId ?? removalId, cartridgeIds: ids, operator: input.user
+		reason: journal, journal, relatedId: input.relatedId ?? removalId, cartridgeIds: ids,
+		operator: gate.operator, enteredBy: input.user, attribution
 	});
-	await audit('bucket_cycles', cycle._id, 'SCRAP', input.user, { scrapped: ids, quantity: after, removalId }, { quantity: before }, journal);
-	if (after === 0) await closeCycle({ ...cycle, quantity: 0 }, 'scrapped', input.user, removalId);
+	await audit('bucket_cycles', cycle._id, 'SCRAP', gate.operator, { scrapped: ids, quantity: after, removalId, badgeId: gate.badgeId ?? null, enteredBy: input.user.username }, { quantity: before }, journal);
+	if (after === 0) await closeCycle({ ...cycle, quantity: 0 }, 'scrapped', gate.operator, removalId);
 	return { cycle: await BucketCycle.findById(cycle._id).lean(), removalId, scrapped: ids };
 }
 
 export interface AdvanceCycleInput {
 	cycleId: string;
-	user: Operator;
+	user: Operator;             // the web session (= enteredBy)
+	badge?: string | null;      // scanned badge code; required when carts are discarded and badge mode is 'required'
 	thermosealLotId?: string;   // THERMOSEAL_PART lot to pull the NEXT roll from, if one is opened (optional; FIFO default)
 	discardedIds?: string[];    // carts binned at this step (scanned)
 	discardJournal?: string;    // required when discardedIds is non-empty
@@ -969,6 +1017,11 @@ export interface AdvanceCycleInput {
  * follows the bucket. barcoded → unpressed takes members × 3.75 cm of thermoseal
  * off the open roll (thermoseal-service); the roll pull, if one happens, is
  * where thermoseal inventory actually moves.
+ *
+ * Badge (user, 2026-09-30): required only when carts are discarded at this
+ * step — the move alone is not gated. A badge scanned for the discards is
+ * honoured for the move too (one operator, one row set); with no discards and
+ * no scan, the session is the operator as before.
  */
 export async function advanceCycle(input: AdvanceCycleInput): Promise<{ cycle: any | null; discarded: number; closed: boolean; thermoseal: ConsumeResult | null }> {
 	await connectDB();
@@ -986,6 +1039,12 @@ export async function advanceCycle(input: AdvanceCycleInput): Promise<{ cycle: a
 	const notMembers = discardIds.filter(id => !members.has(id));
 	if (notMembers.length) throw new BucketError(`Not in this bucket: ${notMembers.join(', ')}`);
 
+	const gate = discardIds.length > 0 || (input.badge ?? '').trim()
+		? await requireBadge(input.badge, input.user)
+		: loginGate(input.user);
+	const operator = gate.operator;
+	const attribution: Attribution = { ...gate.attribution, ...(cycle.custodyId ? { custodyId: cycle.custodyId } : {}) };
+
 	let thermosealLot: string | undefined;
 	if (to === 'unpressed' && (input.thermosealLotId ?? '').trim()) {
 		const check = await validateReceivingLot(input.thermosealLotId ?? '', THERMOSEAL_PART);
@@ -994,7 +1053,7 @@ export async function advanceCycle(input: AdvanceCycleInput): Promise<{ cycle: a
 	}
 
 	if (discardIds.length > 0) {
-		await scrapCarts({ cycleId: cycle._id, barcodes: discardIds, journal: `Discarded at ${STAGE_LABELS[from]} → ${STAGE_LABELS[to]}: ${journal}`, user: input.user });
+		await scrapCartsAs({ cycleId: cycle._id, barcodes: discardIds, journal: `Discarded at ${STAGE_LABELS[from]} → ${STAGE_LABELS[to]}: ${journal}`, user: input.user }, gate);
 		if (discardIds.length === members.size) {
 			return { cycle: await BucketCycle.findById(cycle._id).lean(), discarded: discardIds.length, closed: true, thermoseal: null };
 		}
@@ -1009,7 +1068,7 @@ export async function advanceCycle(input: AdvanceCycleInput): Promise<{ cycle: a
 	let thermoseal: ConsumeResult | null = null;
 	if (to === 'unpressed') {
 		try {
-			thermoseal = await consumeThermoseal({ cartridges: moving.length, user: input.user, cycleId: cycle._id, lotId: thermosealLot });
+			thermoseal = await consumeThermoseal({ cartridges: moving.length, user: operator, cycleId: cycle._id, lotId: thermosealLot });
 		} catch (e) {
 			if (e instanceof ThermosealError) throw new BucketError(`Thermoseal: ${e.message}`, e.status);
 			throw e;
@@ -1022,7 +1081,7 @@ export async function advanceCycle(input: AdvanceCycleInput): Promise<{ cycle: a
 	// lot: downstream views (pipeline, dashboard, DHR) group backed carts by
 	// backing.bucketCycleId and show who backed them and when.
 	const backedStamp = to === BACKED_STAGE
-		? { 'backing.recordedAt': now, 'backing.operator': { _id: input.user._id, username: input.user.username }, 'backing.bucketCycleId': cycle._id, 'backing.bucketBarcode': cycle.bucketId }
+		? { 'backing.recordedAt': now, 'backing.operator': { _id: operator._id, username: operator.username }, 'backing.bucketCycleId': cycle._id, 'backing.bucketBarcode': cycle.bucketId }
 		: {};
 	await CartridgeRecord.updateMany(
 		{ _id: { $in: moving } },
@@ -1031,8 +1090,8 @@ export async function advanceCycle(input: AdvanceCycleInput): Promise<{ cycle: a
 	const tsNote = thermoseal
 		? `thermoseal ${thermoseal.cm} cm (${moving.length} × 3.75 cm) from roll${thermoseal.segments.length === 1 ? '' : 's'} ${thermoseal.segments.map(s => s.rollId.slice(0, 8)).join(', ')}${thermoseal.rollsOpened.length ? ` — ${thermoseal.rollsOpened.length} new roll${thermoseal.rollsOpened.length === 1 ? '' : 's'} pulled from inventory` : ''}`
 		: undefined;
-	await logTx({ bucketId: cycle.bucketId, cycleId: cycle._id, type: 'advance', fromStage: from, toStage: to, qtyBefore: moving.length, qtyAfter: moving.length, relatedId: thermoseal?.segments[0]?.rollId ?? thermosealLot, reason: tsNote, cartridgeIds: moving, operator: input.user });
-	await audit('bucket_cycles', cycle._id, 'ADVANCE', input.user, { from, to, members: moving.length, thermosealLot, thermoseal: thermoseal ? { cm: thermoseal.cm, segments: thermoseal.segments, rollsOpened: thermoseal.rollsOpened } : undefined });
+	await logTx({ bucketId: cycle.bucketId, cycleId: cycle._id, type: 'advance', fromStage: from, toStage: to, qtyBefore: moving.length, qtyAfter: moving.length, relatedId: thermoseal?.segments[0]?.rollId ?? thermosealLot, reason: tsNote, cartridgeIds: moving, operator, enteredBy: input.user, attribution });
+	await audit('bucket_cycles', cycle._id, 'ADVANCE', operator, { from, to, members: moving.length, thermosealLot, thermoseal: thermoseal ? { cm: thermoseal.cm, segments: thermoseal.segments, rollsOpened: thermoseal.rollsOpened } : undefined, badgeId: gate.badgeId ?? null, enteredBy: input.user.username });
 	return { cycle: await BucketCycle.findById(cycle._id).lean(), discarded: discardIds.length, closed: false, thermoseal };
 }
 
@@ -1075,34 +1134,43 @@ export async function consumeCarts(input: ConsumeInput): Promise<{ qtyBefore: nu
 	return { qtyBefore: before, qtyAfter: after, consumed: ids };
 }
 
-export interface MoveToOvenInput { cycleId: string; user: Operator }
+export interface MoveToOvenInput {
+	cycleId: string;
+	badge?: string | null;   // scanned badge code; required when badge mode is 'required'
+	user: Operator;          // the web session (= enteredBy)
+}
 
 /**
  * "Move to oven" (user, 2026-09-25): all it does is free the carts from the
  * bucket and return the bucket to Available. The pass closes; the carts are not
  * written at all — they keep status 'backing' until wax filling scans them in.
  * A later cancelled wax run does not put them back into the pass: returnCarts
- * treats an oven-released pass as loose.
+ * treats an oven-released pass as loose. Badge-gated (user, 2026-09-30): the
+ * badge holder is `ovenReleasedBy` and the operator on the ledger row.
  */
-export async function moveToOven(input: MoveToOvenInput): Promise<{ cycleId: string; bucketId: string; cycleNumber: number; released: string[] }> {
+export async function moveToOven(input: MoveToOvenInput): Promise<{ cycleId: string; bucketId: string; cycleNumber: number; released: string[]; operator: string }> {
 	await connectDB();
-	const cycle = await BucketCycle.findById(input.cycleId).lean() as any;
+	const [cycle, gate] = await Promise.all([
+		BucketCycle.findById(input.cycleId).lean() as Promise<any>,
+		requireBadge(input.badge, input.user)
+	]);
 	if (!cycle || cycle.status !== 'open') throw new BucketError('Pass is not open.', 404);
 	if (cycle.stage !== BACKED_STAGE) {
 		throw new BucketError(`${cycleLabel(cycle.bucketId, cycle.cycleNumber)} is at ${STAGE_LABELS[cycle.stage as BucketStage]} — only a ${STAGE_LABELS.backing} bucket goes to the oven. Advance it first.`);
 	}
 	const ids: string[] = cycle.cartridgeIds ?? [];
 	const now = new Date();
-	const op = { _id: input.user._id, username: input.user.username };
+	const op = { _id: gate.operator._id, username: gate.operator.username };
 	await BucketCycle.updateOne({ _id: cycle._id }, { $set: { ovenReleasedAt: now, ovenReleasedBy: op } });
 	await logTx({
 		bucketId: cycle.bucketId, cycleId: cycle._id, type: 'oven',
 		fromStage: BACKED_STAGE, toStage: BACKED_STAGE, qtyBefore: ids.length, qtyAfter: 0,
-		reason: `moved to oven — ${ids.length} cart${ids.length === 1 ? '' : 's'} released from the bucket`, cartridgeIds: ids, operator: input.user
+		reason: `moved to oven — ${ids.length} cart${ids.length === 1 ? '' : 's'} released from the bucket`, cartridgeIds: ids,
+		operator: gate.operator, enteredBy: input.user, attribution: { ...gate.attribution, ...(cycle.custodyId ? { custodyId: cycle.custodyId } : {}) }
 	});
-	await audit('bucket_cycles', cycle._id, 'MOVE_TO_OVEN', input.user, { released: ids.length, ovenReleasedAt: now }, { quantity: cycle.quantity });
-	await closeCycle({ ...cycle, quantity: 0 }, 'consumed', input.user);
-	return { cycleId: cycle._id, bucketId: cycle.bucketId, cycleNumber: cycle.cycleNumber, released: ids };
+	await audit('bucket_cycles', cycle._id, 'MOVE_TO_OVEN', gate.operator, { released: ids.length, ovenReleasedAt: now, badgeId: gate.badgeId ?? null, enteredBy: input.user.username }, { quantity: cycle.quantity });
+	await closeCycle({ ...cycle, quantity: 0 }, 'consumed', gate.operator);
+	return { cycleId: cycle._id, bucketId: cycle.bucketId, cycleNumber: cycle.cycleNumber, released: ids, operator: gate.operator.username };
 }
 
 /**
@@ -1187,7 +1255,8 @@ export interface ResidualInput {
 	destinationBucketId?: string; // merge (legacy: one destination for every cart)
 	moves?: { barcode: string; destinationBucketId: string }[]; // merge: per-cart destination (v2 leftover flow)
 	journal?: string;             // required for scrap
-	user: Operator;
+	badge?: string | null;        // scanned badge code; required for scrap when badge mode is 'required' (discarding carts is gated)
+	user: Operator;               // the web session (= enteredBy)
 }
 
 export interface ResidualLookup {
@@ -1248,7 +1317,12 @@ export async function reportResidual(input: ResidualInput): Promise<{ bucket: an
 
 	const prevCycle = await BucketCycle.findOne({ bucketId }).sort({ cycleNumber: -1 }).lean() as any;
 	const now = new Date();
-	const by = { _id: input.user._id, username: input.user.username };
+	// Discarding carts is badge-gated (user, 2026-09-30); a merge is not, but a
+	// badge scanned for one is honoured all the same.
+	const gate = input.disposition === 'scrap' || (input.badge ?? '').trim()
+		? await requireBadge(input.badge, input.user)
+		: loginGate(input.user);
+	const by = { _id: gate.operator._id, username: gate.operator.username };
 	const journal = (input.journal ?? '').trim();
 	const qty = ids.length;
 	const found: Record<string, unknown> = { qty, cartridgeIds: ids, disposition: input.disposition, at: now, by };
@@ -1340,10 +1414,10 @@ export async function reportResidual(input: ResidualInput): Promise<{ bucket: an
 		for (const c of carts) byStage.set(c.status as BucketStage, (byStage.get(c.status as BucketStage) ?? 0) + 1);
 		for (const [stage, n] of byStage) {
 			for (const pn of partsAtStage(stage)) {
-				await debitScrap(pn, lotFor(prevCycle?.sourceLots, pn), n, prevCycle?._id ?? null, input.user, `residual: ${journal}`, `Bucket ${bucketId} residual: ${n}x ${pn} at ${STAGE_LABELS[stage]} scrapped — ${journal}`);
+				await debitScrap(pn, lotFor(prevCycle?.sourceLots, pn), n, prevCycle?._id ?? null, by, `residual: ${journal}`, `Bucket ${bucketId} residual: ${n}x ${pn} at ${STAGE_LABELS[stage]} scrapped — ${journal}`);
 			}
 		}
-		await logTx({ bucketId, cycleId: prevCycle?._id ?? null, type: 'scrap', qtyBefore: qty, qtyAfter: 0, reason: journal, journal, relatedId: removalId, cartridgeIds: ids, operator: input.user });
+		await logTx({ bucketId, cycleId: prevCycle?._id ?? null, type: 'scrap', qtyBefore: qty, qtyAfter: 0, reason: journal, journal, relatedId: removalId, cartridgeIds: ids, operator: by, enteredBy: input.user, attribution: gate.attribution });
 		found.removalId = removalId;
 		relatedId = removalId;
 	} else if ((input.disposition as string) === 'defer') {
@@ -1363,9 +1437,9 @@ export async function reportResidual(input: ResidualInput): Promise<{ bucket: an
 			{ _id: prevCycle._id },
 			{ $set: { closedWithResidual: true }, $push: { residualFound: found, discrepancies: { type: 'shortfall', qty, relatedId, at: now, note: `${qty} cart(s) found in tub after close — ${input.disposition}` } } }
 		);
-		await audit('bucket_cycles', prevCycle._id, 'RESIDUAL', input.user, found);
+		await audit('bucket_cycles', prevCycle._id, 'RESIDUAL', by, found);
 	}
-	await audit('production_buckets', bucketId, 'RESIDUAL', input.user, { cartridgeIds: ids, disposition: input.disposition, relatedId });
+	await audit('production_buckets', bucketId, 'RESIDUAL', by, { cartridgeIds: ids, disposition: input.disposition, relatedId, badgeId: gate.badgeId ?? null, enteredBy: input.user.username });
 	return { bucket: await ProductionBucket.findById(bucketId).lean(), prevCycle: prevCycle ? await BucketCycle.findById(prevCycle._id).lean() : null };
 }
 
@@ -1429,7 +1503,8 @@ export interface AuditCycleInput {
 	// or take them off the pass without scrapping (they are somewhere else).
 	missingActions?: { barcode: string; action: 'discard' | 'release' }[];
 	journal?: string;                                             // required when anything is removed
-	user: Operator;
+	badge?: string | null;                                        // scanned badge code; required when carts are discarded or written off and badge mode is 'required'
+	user: Operator;                                               // the web session (= enteredBy)
 }
 
 export interface AuditCycleResult {
@@ -1478,6 +1553,13 @@ export async function auditCycle(input: AuditCycleInput): Promise<AuditCycleResu
 	if ((discards.length || missingDiscards.length || missingReleases.length) && !journal) {
 		throw new BucketError('A journal entry describing why carts were discarded or taken off the pass is required.');
 	}
+	// Discarding carts (a stray discarded, a missing member written off) is
+	// badge-gated (user, 2026-09-30); moves and take-offs are not, but a badge
+	// scanned for an audit is honoured on all of its rows.
+	const gate = discards.length || missingDiscards.length || (input.badge ?? '').trim()
+		? await requireBadge(input.badge, input.user)
+		: loginGate(input.user);
+	const attribution: Attribution = { ...gate.attribution, ...(cycle.custodyId ? { custodyId: cycle.custodyId } : {}) };
 
 	// Validate every foreign cart before writing anything.
 	const carts = foreign.length
@@ -1522,7 +1604,7 @@ export async function auditCycle(input: AuditCycleInput): Promise<AuditCycleResu
 	}
 
 	const now = new Date();
-	const by = { _id: input.user._id, username: input.user.username };
+	const by = { _id: gate.operator._id, username: gate.operator.username };
 	const auditNote = `audit of ${cycleLabel(cycle.bucketId, cycle.cycleNumber)}`;
 	const moved: AuditCycleResult['moved'] = [];
 
@@ -1587,7 +1669,7 @@ export async function auditCycle(input: AuditCycleInput): Promise<AuditCycleResu
 			if (!home) continue;
 			const before = home.quantity ?? (home.cartridgeIds ?? []).length;
 			await BucketCycle.updateOne({ _id: home._id }, { $pull: { cartridgeIds: id }, $set: { quantity: Math.max(0, before - 1) } });
-			await logTx({ bucketId: home.bucketId, cycleId: home._id, type: 'scrap', fromStage: home.stage, toStage: home.stage, qtyBefore: before, qtyAfter: Math.max(0, before - 1), reason: `${id} found in ${cycle.bucketId} during an audit and discarded: ${journal}`, journal, relatedId: removalId, cartridgeIds: [id], operator: input.user });
+			await logTx({ bucketId: home.bucketId, cycleId: home._id, type: 'scrap', fromStage: home.stage, toStage: home.stage, qtyBefore: before, qtyAfter: Math.max(0, before - 1), reason: `${id} found in ${cycle.bucketId} during an audit and discarded: ${journal}`, journal, relatedId: removalId, cartridgeIds: [id], operator: by, enteredBy: input.user, attribution: gate.attribution });
 			home.quantity = Math.max(0, before - 1);
 		}
 		await CartridgeRecord.updateMany(
@@ -1602,7 +1684,7 @@ export async function auditCycle(input: AuditCycleInput): Promise<AuditCycleResu
 		}
 		for (const [stage, n] of byStage) {
 			for (const pn of partsAtStage(stage)) {
-				await debitScrap(pn, lotFor(cycle.sourceLots, pn), n, cycle._id, input.user, `audit discard: ${journal}`, `Audit of ${cycle.bucketId}: ${n}x ${pn} at ${STAGE_LABELS[stage]} scrapped — ${journal}`);
+				await debitScrap(pn, lotFor(cycle.sourceLots, pn), n, cycle._id, by, `audit discard: ${journal}`, `Audit of ${cycle.bucketId}: ${n}x ${pn} at ${STAGE_LABELS[stage]} scrapped — ${journal}`);
 			}
 		}
 	}
@@ -1629,9 +1711,9 @@ export async function auditCycle(input: AuditCycleInput): Promise<AuditCycleResu
 				cartridgeCount: missingDiscards.length, reason: `audit: not in the tub — ${journal}`, journal, operator: by, removedAt: now
 			});
 			for (const pn of partsAtStage(stage)) {
-				await debitScrap(pn, lotFor(cycle.sourceLots, pn), missingDiscards.length, cycle._id, input.user, `audit write-off: ${journal}`, `Audit of ${cycle.bucketId}: ${missingDiscards.length}x ${pn} at ${STAGE_LABELS[stage]} written off (not in the tub) — ${journal}`);
+				await debitScrap(pn, lotFor(cycle.sourceLots, pn), missingDiscards.length, cycle._id, by, `audit write-off: ${journal}`, `Audit of ${cycle.bucketId}: ${missingDiscards.length}x ${pn} at ${STAGE_LABELS[stage]} written off (not in the tub) — ${journal}`);
 			}
-			await logTx({ bucketId: cycle.bucketId, cycleId: cycle._id, type: 'scrap', fromStage: cycle.stage, toStage: cycle.stage, qtyBefore: before, qtyAfter: Math.max(0, before - missingDiscards.length), reason: `audit: ${missingDiscards.length} member(s) not in the tub, written off: ${journal}`, journal, cartridgeIds: missingDiscards, operator: input.user });
+			await logTx({ bucketId: cycle.bucketId, cycleId: cycle._id, type: 'scrap', fromStage: cycle.stage, toStage: cycle.stage, qtyBefore: before, qtyAfter: Math.max(0, before - missingDiscards.length), reason: `audit: ${missingDiscards.length} member(s) not in the tub, written off: ${journal}`, journal, cartridgeIds: missingDiscards, operator: by, enteredBy: input.user, attribution });
 		}
 		if (missingReleases.length) {
 			await CartridgeRecord.updateMany(
@@ -1678,9 +1760,9 @@ export async function auditCycle(input: AuditCycleInput): Promise<AuditCycleResu
 		journal: journal || undefined,
 		relatedId: removalId,
 		cartridgeIds: scanned,
-		operator: input.user
+		operator: by, enteredBy: input.user, attribution
 	});
-	await audit('bucket_cycles', cycle._id, 'AUDIT', input.user, record);
+	await audit('bucket_cycles', cycle._id, 'AUDIT', by, { ...record, badgeId: gate.badgeId ?? null, enteredBy: input.user.username });
 
 	return {
 		cycleId: cycle._id, bucketId: cycle.bucketId, cycleNumber: cycle.cycleNumber,

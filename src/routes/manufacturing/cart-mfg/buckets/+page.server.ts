@@ -64,9 +64,9 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		thermosealBranch,
 		// "In oven" dropdown inside the Backed column: backed carts on no open pass.
 		inOvenCarts().catch(() => ({ count: 0, ids: [] as string[] })),
-		// Badge enforcement (BADGE-SYSTEM_PLAN.md §17.4): decides whether the
-		// start-pass form asks for a badge. Flipped only from /admin/badges; the
-		// board links there for admins (canBadgeAdmin).
+		// Badge enforcement: decides whether the board asks for a badge at the
+		// gated steps — scan-in, discards, move to oven (user, 2026-09-30).
+		// Flipped only from /admin/badges; the board links there for admins.
 		badgeMode().catch(() => 'required' as const)
 	]);
 
@@ -145,6 +145,7 @@ export const actions: Actions = {
 				moves,
 				missingActions,
 				journal: String(d.get('journal') ?? ''),
+				badge: String(d.get('badge') ?? ''),
 				user: op(locals)
 			});
 			return { audit: { success: true, result: r } };
@@ -175,7 +176,6 @@ export const actions: Actions = {
 				shellLotId: String(d.get('shellLotId') ?? ''),
 				labelLotId: String(d.get('labelLotId') ?? ''),
 				emptyConfirmed: d.get('emptyConfirmed') === '1',
-				badge: String(d.get('badge') ?? ''),
 				user: op(locals)
 			});
 			return { start: { success: true, cycleId: cycle._id, bucketId: cycle.bucketId, cycleNumber: cycle.cycleNumber } };
@@ -183,15 +183,16 @@ export const actions: Actions = {
 	},
 
 	// Called via fetch from the Barcoded panel's scan box (one cart per call) so the
-	// rail can keep scanning without a full form round-trip.
+	// rail can keep scanning without a full form round-trip. The badge scanned into
+	// the panel's badge box rides along on every call (gated step, 2026-09-30).
 	scanIn: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
 		requirePermission(locals.user, 'manufacturing:write');
 		await connectDB();
 		const d = await request.formData();
 		return wrap('scanIn', async () => {
-			const r = await scanCartIn({ cycleId: String(d.get('cycleId') ?? ''), barcode: String(d.get('barcode') ?? ''), user: op(locals) });
-			return { scanIn: { success: true, barcode: r.barcode, quantity: r.quantity } };
+			const r = await scanCartIn({ cycleId: String(d.get('cycleId') ?? ''), barcode: String(d.get('barcode') ?? ''), badge: String(d.get('badge') ?? ''), user: op(locals) });
+			return { scanIn: { success: true, barcode: r.barcode, quantity: r.quantity, operator: r.operator } };
 		})();
 	},
 
@@ -234,6 +235,7 @@ export const actions: Actions = {
 				cycleId: String(d.get('cycleId') ?? ''),
 				discardedIds: codesFrom(d.get('discardedIds')),
 				discardJournal: (d.get('discardJournal') as string | null) ?? undefined,
+				badge: String(d.get('badge') ?? ''),
 				user: op(locals)
 			});
 			return { advance: {
@@ -248,14 +250,15 @@ export const actions: Actions = {
 
 	// "Move to oven": frees the carts from the bucket (they stay 'backing' until wax
 	// filling scans them in) and returns the bucket to Available. Nothing else.
+	// Badge-gated (2026-09-30).
 	moveToOven: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
 		requirePermission(locals.user, 'manufacturing:write');
 		await connectDB();
 		const d = await request.formData();
 		return wrap('moveToOven', async () => {
-			const r = await moveToOven({ cycleId: String(d.get('cycleId') ?? ''), user: op(locals) });
-			return { moveToOven: { success: true, cycleId: r.cycleId, bucketId: r.bucketId, cycleNumber: r.cycleNumber, released: r.released.length } };
+			const r = await moveToOven({ cycleId: String(d.get('cycleId') ?? ''), badge: String(d.get('badge') ?? ''), user: op(locals) });
+			return { moveToOven: { success: true, cycleId: r.cycleId, bucketId: r.bucketId, cycleNumber: r.cycleNumber, released: r.released.length, operator: r.operator } };
 		})();
 	},
 
@@ -269,6 +272,7 @@ export const actions: Actions = {
 				cycleId: String(d.get('cycleId') ?? ''),
 				barcodes: codesFrom(d.get('barcodes')),
 				journal: String(d.get('journal') ?? ''),
+				badge: String(d.get('badge') ?? ''),
 				user: op(locals)
 			});
 			return { scrap: { success: true, cycleId: r.cycle?._id ?? null, quantity: r.cycle?.quantity ?? 0, status: r.cycle?.status ?? null, scrapped: r.scrapped.length } };
@@ -297,6 +301,7 @@ export const actions: Actions = {
 				destinationBucketId: (d.get('destinationBucketId') as string | null) ?? undefined,
 				moves,
 				journal: (d.get('journal') as string | null) ?? undefined,
+				badge: String(d.get('badge') ?? ''),
 				user: op(locals)
 			});
 			return { residual: { success: true, bucketId: r.bucket?._id ?? null, state: r.bucket?.state ?? null, disposition } };
