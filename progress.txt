@@ -17094,3 +17094,12 @@ testing. A touch-only "⛶ Fullscreen" button in the page header enters it:
 Scanner handling is unchanged (wedge input + Pi scanner via WS still lock cartridges while in fullscreen).
 `npm run check`: 13 errors (baseline), no new warnings. Vercel branch build used as the compile gate.
 Pushed to master at the user's explicit request.
+Deployment: preview — https://bioscale-operations-system-mongodb-kxq1lt5lj-brevitest.vercel.app
+Source: branch feat/post-mortem-tablet-fullscreen @ commit e48b2d39
+What this deployment is for: compile gate before fast-forwarding master (GitHub deployment 6769691890).
+Deployment: production — https://bioscale-operations-system-mongodb-iwifl3s5n-brevitest.vercel.app
+Source: branch master (= feat/post-mortem-tablet-fullscreen) @ commit e48b2d39
+Retrieve this exact code: git checkout master at commit e48b2d39
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: on-tablet test of the Post-Mortem fullscreen mode (feed + Capture only).
+  GitHub deployment 6769733121 (Production). Smoke: /login 200.
