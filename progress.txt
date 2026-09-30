@@ -17125,3 +17125,11 @@ Not changed on purpose: changeLog / boardData / inOvenCarts (each 2 reads in ser
 shorter than the thermoseal branch so not on the critical path); no materialised lot counter
 (the ledger aggregate is index-only and a counter would have to be kept by every writer).
 svelte-check: COMPLETED 3419 FILES 14 ERRORS — the pre-existing baseline, none in touched files.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-4kwd6krp7-brevitest.vercel.app
+Source: branch feat/bucket-nav-perf @ commit 6c0a8bc1
+Retrieve this exact code: git checkout feat/bucket-nav-perf at commit 6c0a8bc1
+  (or: git log feat/bucket-nav-perf --oneline to find it if the branch has since moved on)
+What this deployment is for: the bucket board ↔ history page navigation-lag fixes (root layout no
+longer re-runs per navigation, thermoseal branch ~3 reads in series, history payload trimmed,
+sidebar hover preload). Open the board, then a bucket, then back — compare against PR #70's preview.
