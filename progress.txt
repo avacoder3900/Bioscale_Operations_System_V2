@@ -16820,3 +16820,10 @@ FINAL BUILD" in the action comment, the markup comment, the page's form type, a 
 UI, BADGE-SYSTEM_PLAN.md section 17.5 / section 20 item 9, and BUCKET-SYSTEM_PLAN.md section 12.5.
 The portal switch at /admin/badges is the permanent one.
 svelte-check: 14 errors before and after, all pre-existing; none in these files.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-2gtmctrma-brevitest.vercel.app
+Source: branch feat/badge-system @ commit 939984f7
+Retrieve this exact code: git checkout feat/badge-system at commit 939984f7
+  (or: git log feat/badge-system --oneline to find it if the branch has since moved on)
+What this deployment is for: the DEV-ONLY Require-badge checkbox on the bucket board's Development
+settings card (admin only), alongside the portal switch, batch print, and badge-gated mint/start.
