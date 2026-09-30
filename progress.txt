@@ -16827,3 +16827,21 @@ Retrieve this exact code: git checkout feat/badge-system at commit 939984f7
   (or: git log feat/badge-system --oneline to find it if the branch has since moved on)
 What this deployment is for: the DEV-ONLY Require-badge checkbox on the bucket board's Development
 settings card (admin only), alongside the portal switch, batch print, and badge-gated mint/start.
+
+================================================================================
+2026-09-30 — feat/badge-system — Board toggle removed; admin-only link to the portal switch instead
+================================================================================
+User: the admin toggle stays as it is (in /admin/badges, no dev note); the bucket page gets a link
+to it, visible only to admins. Reverted 939984f7's board copy of the switch (?/badgeMode action,
+the form under the thermoseal toggle, the badge settings in the load, the DEV-ONLY notes in both
+plan docs). Added instead: the board header shows "Badge required: on/off" as a link to
+/admin/badges, and the start-pass form's "off" note gets a "Change" link — both gated by
+canBadgeAdmin = isAdmin() (the portal's own gate: admin:full or admin:users), so the link never
+leads to a 403. BADGE-SYSTEM_PLAN.md section 17.5 / section 20 item 9 and BUCKET-SYSTEM_PLAN.md
+section 12.5 updated.
+Shared-worktree note: another session is mid-build on a bucket "nickname" feature in this checkout
+(production-bucket.ts, bucket-transaction.ts, bucket-service.ts, buckets/[bucketId]/*, new/*, and
+nameOf()/containsLabel() hunks in buckets/+page.svelte). Only this change's hunks were staged (git
+apply --cached from a filtered patch); the nickname work is untouched and uncommitted here.
+svelte-check on the combined tree: 32 errors = the 14 baseline + 18 from the unfinished nickname
+work (nameOf, nickname/canEdit/nicknameMax props); none from the badge-link change.

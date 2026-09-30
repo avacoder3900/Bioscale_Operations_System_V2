@@ -26,14 +26,13 @@
 			inOven: { count: number; ids: string[] };
 			canAdmin: boolean;
 			badgeMode: 'off' | 'required';
-			badge: { mode: 'off' | 'required'; changedAt: string | null; changedBy: string | null };
+			canBadgeAdmin: boolean;
 			scan: { kind: 'bucket' | 'search' | 'badge'; bucket?: any; cycle?: any; badge?: { displayName: string | null; username: string | null; note: string | null }; matches?: { bucketId: string; barcode: string | null; state: string; cycle: any }[] } | null;
 			scanQuery: string;
 		};
 		form: {
 			start?: ActionResult; advance?: ActionResult; scrap?: ActionResult;
 			residual?: ActionResult; retire?: ActionResult; thermosealToggles?: ActionResult; moveToOven?: ActionResult;
-			badgeMode?: ActionResult; // DEV ONLY — remove with the board toggle before final build
 			auditScan?: ActionResult; audit?: ActionResult;
 		} | null;
 	}
@@ -612,6 +611,9 @@
 	<!-- Stage strip -->
 	<div class="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
 		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3">
+			<!-- Badge Portal link (BADGE-SYSTEM_PLAN.md §17.5): the Require-badge switch lives
+			     there; this only shows to someone the portal will let in. -->
+			{#if data.canBadgeAdmin}<a href="/admin/badges" class="rounded border px-3 py-1.5 text-xs {data.badgeMode === 'required' ? 'border-[var(--color-tron-cyan)]/40 text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10' : 'border-[var(--color-tron-yellow)]/40 text-[var(--color-tron-yellow)] hover:bg-[var(--color-tron-yellow)]/10'}" title="Open the Badge Portal to change whether mint and start-pass require a badge (admin)">Badge required: {data.badgeMode === 'required' ? 'on' : 'off'}</a>{/if}
 			<p class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Available</p>
 			<p class="mt-1 text-2xl font-bold text-[var(--color-tron-text)]">{data.counts.available}</p>
 			<p class="text-[10px] text-[var(--color-tron-text-secondary)]">empty buckets</p>
@@ -794,21 +796,6 @@
 									{#if data.canAdmin}<button type="submit" disabled={busy} class={btnGhost}>{busy ? 'Saving…' : 'Apply'}</button>{:else}<span class="text-[var(--color-tron-text-secondary)]">manufacturing:admin to change</span>{/if}
 									{#if form?.thermosealToggles?.error}<span class="text-[var(--color-tron-error)]">{form.thermosealToggles.error}</span>{/if}
 									{#if form?.thermosealToggles?.success}<span class="text-[var(--color-tron-cyan)]">Saved.</span>{/if}
-								</form>
-								<!-- DEV ONLY — REMOVE BEFORE FINAL BUILD. Require-badge switch, duplicated from
-								     /admin/badges so the badge rollout can be flipped from the floor while it is
-								     being tested (BADGE-SYSTEM_PLAN.md §17.5 / §20). Admin only, same gate as the
-								     thermoseal toggle above; the write is the same audited setBadgeMode(). -->
-								<form method="POST" action="?/badgeMode" use:enhance={enhanceBusy} class="mt-2 space-y-1.5 border-t border-dashed border-[var(--color-tron-yellow)]/40 pt-2">
-									<p class="text-[var(--color-tron-yellow)]">DEV · remove before final build — the real switch is in <a href="/admin/badges" class="underline">Badge Portal</a>.</p>
-									<label class="flex items-center gap-1.5 {data.canAdmin ? '' : 'opacity-60'}">
-										<input type="checkbox" name="required" value="1" checked={data.badge.mode === 'required'} disabled={!data.canAdmin || busy} class="accent-[var(--color-tron-cyan)]" />
-										<span class="text-[var(--color-tron-text)]">Require badge at mint + start-pass</span>
-									</label>
-									{#if data.badge.changedAt}<p class="text-[var(--color-tron-text-secondary)]">Last changed {new Date(data.badge.changedAt).toLocaleString()}{data.badge.changedBy ? ` by ${data.badge.changedBy}` : ''}</p>{/if}
-									{#if data.canAdmin}<button type="submit" disabled={busy} class={btnGhost}>{busy ? 'Saving…' : 'Apply'}</button>{:else}<span class="text-[var(--color-tron-text-secondary)]">manufacturing:admin to change</span>{/if}
-									{#if form?.badgeMode?.error}<span class="text-[var(--color-tron-error)]">{form.badgeMode.error}</span>{/if}
-									{#if form?.badgeMode?.success}<span class="text-[var(--color-tron-cyan)]">Saved.</span>{/if}
 								</form>
 							</details>
 						</div>
@@ -1188,7 +1175,7 @@
 									<input type="text" name="badge" required autocomplete="off" placeholder="scan badge…" class="{inputCls} border-[var(--color-tron-cyan)]/60 ring-1 ring-[var(--color-tron-cyan)]/30 font-mono" />
 								</label>
 							{:else}
-								<p class="text-[10px] text-[var(--color-tron-text-secondary)]">Badge required: <strong>off</strong> — you will be recorded as the operator.</p>
+								<p class="text-[10px] text-[var(--color-tron-text-secondary)]">Badge required: <strong>off</strong> — you will be recorded as the operator.{#if data.canBadgeAdmin} <a href="/admin/badges" class="underline">Change</a>{/if}</p>
 							{/if}
 							<p class="text-xs text-[var(--color-tron-text-secondary)]">Pick the lots this pass draws from, then scan shells in one at a time.</p>
 							<label class="block">

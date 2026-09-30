@@ -552,13 +552,10 @@ Require badge at mint and start-pass     [ ON ]     changed 2026-09-30 by alejan
 The previous draft of this section put the switch on the board's development-settings card;
 moved here so the gate is one `isAdmin()` check in one route rather than two.
 
-**DEV ONLY (2026-09-30, user request) — a second copy of the switch sits on the bucket board.s
-*Development settings* card** (beside the thermoseal toggle, `?/badgeMode`), so the rollout can be
-flipped from the floor while it is being tested. Same gate as that card (`manufacturing:admin` or
-`admin:full`), same audited `setBadgeMode()` write (reason `board development settings`). It is
-marked `DEV ONLY — REMOVE BEFORE FINAL BUILD` in the action, the markup and the page type, and is
-listed in `BUCKET-SYSTEM_PLAN.md` §12.5. **Remove it (action + form + `badge` in the load) before
-the final build; the portal switch stays.**
+**Board link (2026-09-30):** the bucket board header shows *Badge required: on / off* as a link
+to `/admin/badges`, and the start-pass form.s "off" note gets a *Change* link — both only when
+`canBadgeAdmin` (`isAdmin()`, the portal.s own gate), so the link never leads to a 403. The board
+itself has no switch; a short-lived dev-only copy was added and removed the same day.
 
 ---
 
@@ -648,8 +645,9 @@ Built on `feat/badge-system` in the §18.1 order. Deviations, all small:
    `eclevel` option is not in the package's `RenderOptions` typing.
  8. **Batch print added after the first push** (§17.2): `getBadges(ids)` keeps selection order and
    drops unknown ids; `bumpPrintCount` takes one id or a list (`updateMany`).
- 9. **DEV-ONLY board copy of the Require-badge switch** (§17.5) — `?/badgeMode` on the bucket board.
-   Remove before final build.
+ 9. **Board links to the portal switch** (§17.5) — `canBadgeAdmin` in the board load, header link
+   and start-form *Change* link. (A dev-only copy of the switch on the board existed for one commit,
+   `939984f7`, and was removed at the user.s request.)
 
 `npm run check`: 14 errors before, 14 after — all pre-existing (`research-proxy.ts` ×2,
 `r2.ts`, `AskBimsWidget.svelte`, `assembly/[sessionId]` ×8, `validation/magnetometer/[sessionId]` ×2 —
