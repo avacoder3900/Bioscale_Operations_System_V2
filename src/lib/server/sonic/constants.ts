@@ -47,5 +47,6 @@ export const MIN_SPUS_FOR_ENVELOPE = 3; // compare page: SPU + at least 2 others
 export const FREQ_MATCH_PCT = 5;
 export const EXTREME_PROM_HZ = 25; // label a valley only if the stretch's range is at least this
 export const EXTREME_MIN_S = 1.5;
+export const MAX_EXTREME_LABELS = 16; // per SPU, so the graph stays readable
 export const TONE_FLAG_DB = 10;
 export const TICK_S = 10;

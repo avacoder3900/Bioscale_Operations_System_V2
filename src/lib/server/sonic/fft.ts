@@ -121,6 +121,8 @@ export function windowPower(w: Float64Array): number {
 export function welch(x: ArrayLike<number>, fs: number, nperseg: number): { df: number; psd: Float64Array } {
 	let n = 1;
 	while (n * 2 <= Math.min(nperseg, x.length)) n *= 2; // power of two ≤ requested
+	// n = 1 gives a zero Hann window → 0/0 PSD (and a fractional-length accumulator).
+	if (n < 2) throw new Error(`welch needs at least 2 samples (got ${x.length})`);
 	const win = hann(n);
 	const wp = windowPower(win);
 	const acc = new Float64Array(n / 2 + 1);

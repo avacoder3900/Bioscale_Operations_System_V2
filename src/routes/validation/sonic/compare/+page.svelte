@@ -9,9 +9,19 @@
 	const bandCenters = THIRD_OCT.slice(0, -1).map((lo, i) => Math.sqrt(lo * THIRD_OCT[i + 1]));
 
 	// ── picker ────────────────────────────────────────────────────────────
-	let picked = $state<Record<string, boolean>>(Object.fromEntries(data.ids.map((id: string) => [id, true])));
-	let sectionsText = $state(data.sections ?? '');
-	let against = $state(data.againstRefs);
+	// The picker mirrors the URL. Seed it for SSR, then re-seed whenever the load data changes:
+	// back/forward navigation reuses this component, so a mount-only seed goes stale.
+	const urlPicked = (): Record<string, boolean> => Object.fromEntries(data.ids.map((id: string) => [id, true]));
+	const urlSections = (): string => data.sections ?? '';
+	const urlAgainst = (): boolean => data.againstRefs;
+	let picked = $state<Record<string, boolean>>(urlPicked());
+	let sectionsText = $state(urlSections());
+	let against = $state(urlAgainst());
+	$effect.pre(() => {
+		picked = urlPicked();
+		sectionsText = urlSections();
+		against = urlAgainst();
+	});
 	let pickerAssay = $state('ALL');
 	const pickedIds = $derived(Object.keys(picked).filter((k) => picked[k]));
 	const pickerRows = $derived(data.available.filter((a: { assay: string | null }) => pickerAssay === 'ALL' || (a.assay ?? 'UNKNOWN') === pickerAssay));
@@ -105,25 +115,36 @@
 		return worst >= data.passPct ? 'rgba(74,222,128,0.25)' : worst >= 75 ? 'rgba(250,204,21,0.3)' : 'rgba(248,113,113,0.35)';
 	}
 
+	/** RFC 4180 cell: quote anything with a comma, quote or newline (labels and file names can). */
+	const csv = (v: string | number) => {
+		const s = String(v);
+		return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+	};
+
 	function downloadCsv() {
 		if (!R) return;
 		const lines: string[] = [];
-		lines.push(['SPU', 'file', ...R.sections.flatMap((s: { name: string; a: number; b: number }) => [`${s.name} ${s.a}-${s.b}s loudness %`, `${s.name} tone %`, `${s.name} result`])].join(','));
+		// Score columns follow R.envelopes — the scores are indexed by envelope, not by section.
+		lines.push(['SPU', 'file', ...R.envelopes.flatMap((s: { name: string; a: number; b: number }) => [`${s.name} ${s.a}-${s.b}s loudness %`, `${s.name} tone %`, `${s.name} result`])].map(csv).join(','));
 		R.items.forEach((it: { label: string; fileName: string | null }, i: number) => {
 			const cells = R.scores[i].flatMap((s: { loudIn: number; specIn: number; pass: boolean } | null) => (s ? [s.loudIn, s.specIn, s.pass ? 'PASS' : 'CHECK'] : ['', '', 'n/a']));
-			lines.push([it.label, `"${it.fileName ?? ''}"`, ...cells].join(','));
+			lines.push([it.label, it.fileName ?? '', ...cells].map(csv).join(','));
 		});
 		lines.push('');
-		lines.push(['phase', 'start_s', 'end_s', ...R.items.flatMap((it: { label: string }) => [`${it.label} avg dBFS`, `${it.label} Hz`])].join(','));
+		lines.push(['phase', 'start_s', 'end_s', ...R.items.flatMap((it: { label: string }) => [`${it.label} avg dBFS`, `${it.label} Hz`])].map(csv).join(','));
 		R.phases.forEach(([a, b]: [number, number], p: number) => {
-			lines.push([`P${p + 1}`, a, b, ...R.pstats.flatMap((row: { avgDb: number | null; hz: number | null }[]) => [row[p].avgDb ?? '', row[p].hz ?? ''])].join(','));
+			lines.push([`P${p + 1}`, a ?? '', b ?? '', ...R.pstats.flatMap((row: { avgDb: number | null; hz: number | null }[]) => [row[p]?.avgDb ?? '', row[p]?.hz ?? ''])].map(csv).join(','));
 		});
 		const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
 		const a = document.createElement('a');
-		a.href = URL.createObjectURL(blob);
+		const href = URL.createObjectURL(blob);
+		a.href = href;
 		a.download = `sonic-compare-${new Date().toISOString().slice(0, 10)}.csv`;
+		document.body.appendChild(a);
 		a.click();
-		URL.revokeObjectURL(a.href);
+		a.remove();
+		// Revoking synchronously can cancel the download in Firefox/Safari.
+		setTimeout(() => URL.revokeObjectURL(href), 1000);
 	}
 
 	const fmt = (v: number | null | undefined, d = 1) => (v == null ? '—' : v.toFixed(d));
@@ -138,14 +159,14 @@
 				SPU is judged against the others' average shape ± {data.envelopeK}σ — or against the reference set of its assay.
 			</p>
 		</div>
-		<a href="/validation/sonic" class="text-sm text-[var(--color-tron-cyan)] hover:underline">← Recordings</a>
+		<a href="/validation/sonic" class="inline-flex items-center text-sm text-[var(--color-tron-cyan)] hover:underline" style="min-height: 44px;">← Recordings</a>
 	</div>
 
 	<!-- picker -->
 	<div class="tron-card space-y-3 p-4">
 		<div class="flex flex-wrap items-center gap-3">
 			<h2 class="tron-heading text-sm font-semibold uppercase tracking-wide">Recordings to compare ({pickedIds.length})</h2>
-			<select bind:value={pickerAssay} class="tron-select text-sm" style="min-height: 36px;">
+			<select bind:value={pickerAssay} aria-label="Filter recordings by assay" class="tron-select text-sm" style="min-height: 44px;">
 				<option value="ALL">All assays</option>
 				<option value="SONIC">SONIC</option>
 				<option value="BCODE">BCODE</option>
@@ -155,7 +176,7 @@
 		</div>
 		<div class="grid max-h-56 grid-cols-1 gap-1 overflow-y-auto text-sm md:grid-cols-2 lg:grid-cols-3">
 			{#each pickerRows as a (a.id)}
-				<label class="flex items-center gap-2 rounded px-2 py-1 hover:bg-[var(--color-tron-bg-tertiary)]">
+				<label class="flex items-center gap-2 rounded px-2 py-1 hover:bg-[var(--color-tron-bg-tertiary)]" style="min-height: 44px;">
 					<input type="checkbox" bind:checked={picked[a.id]} class="h-4 w-4" />
 					<span class="font-mono font-bold">{a.spuUdi}</span>
 					{#if a.reference}<span class="text-[var(--color-tron-orange)]" title="reference">★</span>{/if}
@@ -168,13 +189,13 @@
 		<div class="flex flex-wrap items-end gap-3">
 			<label class="text-sm">
 				<span class="tron-label">Sections (seconds; blank = automatic)</span>
-				<input bind:value={sectionsText} class="tron-input w-72" style="min-height: 40px;" placeholder="e.g. 40-57, 110-130" />
+				<input bind:value={sectionsText} onkeydown={(e) => { if (e.key === 'Enter' && pickedIds.length >= (against ? 1 : 2)) run(); }} class="tron-input w-72" style="min-height: 44px;" placeholder="e.g. 40-57, 110-130" />
 			</label>
-			<label class="flex items-center gap-2 text-sm" style="min-height: 40px;">
+			<label class="flex items-center gap-2 text-sm" style="min-height: 44px;">
 				<input type="checkbox" bind:checked={against} class="h-4 w-4" />
 				Judge against the reference set (★) of their assay
 			</label>
-			<button type="button" onclick={run} disabled={pickedIds.length < (against ? 1 : 2)} class="rounded bg-[var(--color-tron-cyan)] px-4 py-2 text-sm font-semibold text-[var(--color-tron-bg-primary)] disabled:opacity-40" style="min-height: 40px;">
+			<button type="button" onclick={run} disabled={pickedIds.length < (against ? 1 : 2)} class="rounded bg-[var(--color-tron-cyan)] px-4 py-2 text-sm font-semibold text-[var(--color-tron-bg-primary)] disabled:opacity-40" style="min-height: 44px;">
 				Compare
 			</button>
 		</div>
@@ -199,7 +220,7 @@
 			</div>
 			<p class="tron-text-muted mt-2 text-xs">
 				Compared window {R.window[0]}–{R.window[1]} s (time of {R.items[0].label}). Differences are against <b>{R.against}</b>.
-				<button type="button" onclick={downloadCsv} class="ml-3 text-[var(--color-tron-cyan)] hover:underline">Download CSV</button>
+				<button type="button" onclick={downloadCsv} class="ml-3 text-[var(--color-tron-cyan)] hover:underline" style="min-height: 44px;">Download CSV</button>
 			</p>
 		</div>
 
@@ -216,7 +237,8 @@
 						<thead>
 							<tr>
 								<th class="px-2 py-1 text-left">SPU</th>
-								{#each R.sections as s (s.name)}<th class="px-2 py-1">{s.name}<br /><span class="tron-text-muted font-normal">{s.a.toFixed(0)}–{s.b.toFixed(0)}s</span></th>{/each}
+								<!-- scores[i][k] line up with envelopes[k] (a section with no bins is skipped there), not with sections[k] -->
+								{#each R.envelopes as s (s.name)}<th class="px-2 py-1">{s.name}<br /><span class="tron-text-muted font-normal">{s.a.toFixed(0)}–{s.b.toFixed(0)}s</span></th>{/each}
 								<th class="px-2 py-1">passed</th>
 							</tr>
 						</thead>
@@ -260,12 +282,12 @@
 							tickS={e.b - e.a > 15 ? data.tickS : 2}
 							height={260}
 							yLabel="dB"
-							band={{ mu: e.loudMu as number[], sd: e.loudSd as number[], k: data.envelopeK }}
+							band={{ mu: e.loudMu, sd: e.loudSd, k: data.envelopeK }}
 							series={R.items.map((it: { label: string }, i: number) => ({
 								label: it.label,
 								color: color(i),
 								values: e.loud[i],
-								width: R.scores[i][k] && R.scores[i][k].loudIn < data.passPct ? 3 : 1.2
+								width: (R.scores[i]?.[k]?.loudIn ?? 100) < data.passPct ? 3 : 1.2
 							}))}
 							legend={k === 0}
 						/>
@@ -282,12 +304,12 @@
 							xDomain={[bandCenters[0], bandCenters[bandCenters.length - 1]]}
 							height={260}
 							yLabel="relative dB"
-							band={{ mu: e.specMu as number[], sd: e.specSd as number[], k: data.envelopeK }}
+							band={{ mu: e.specMu, sd: e.specSd, k: data.envelopeK }}
 							series={R.items.map((it: { label: string }, i: number) => ({
 								label: it.label,
 								color: color(i),
 								values: e.spec[i],
-								width: R.scores[i][k] && R.scores[i][k].specIn < data.passPct ? 3 : 1.2
+								width: (R.scores[i]?.[k]?.specIn ?? 100) < data.passPct ? 3 : 1.2
 							}))}
 							legend={k === 0}
 						/>
@@ -325,7 +347,7 @@
 								<thead>
 									<tr>
 										<th class="px-2 py-1 text-left">SPU</th>
-										{#each R.phases as [a, b], p (p)}<th class="px-2 py-1">P{p + 1}<br /><span class="tron-text-muted font-normal">{a.toFixed(0)}–{b.toFixed(0)}s</span></th>{/each}
+										{#each R.phases as [a, b], p (p)}<th class="px-2 py-1">P{p + 1}<br /><span class="tron-text-muted font-normal">{fmt(a, 0)}–{fmt(b, 0)}s</span></th>{/each}
 									</tr>
 								</thead>
 								<tbody>

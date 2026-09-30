@@ -6,7 +6,7 @@ import { uploadViaWorker, getR2Url } from '$lib/server/services/r2';
 import { appendSpuJournal } from '$lib/server/spu-journal';
 import { DIRECT_MAX_BYTES, directUploadEnabled, headWorkerObject, mintDirectUploadToken } from '$lib/server/sonic-direct';
 import {
-	ASSAY_LABELS, SONIC_ASSAYS, analyzeSession, scoreSession, setAssay, setReference, type SonicAssay
+	ASSAY_LABELS, SONIC_ASSAYS, analyzeSession, referenceFilter, scoreSession, setAssay, setReference, type SonicAssay
 } from '$lib/server/sonic/analyze';
 import { MIN_REFERENCES } from '$lib/server/sonic/constants';
 import { env } from '$env/dynamic/private';
@@ -49,6 +49,12 @@ function isAudio(fileName: string, mimeType: string): boolean {
 function assayOf(v: FormDataEntryValue | null): SonicAssay {
 	const s = (v?.toString() ?? '').trim().toUpperCase();
 	return (SONIC_ASSAYS as readonly string[]).includes(s) ? (s as SonicAssay) : 'SONIC';
+}
+
+/** Strict parse for setAssay: an unknown value must not silently become SONIC. */
+function strictAssayOf(v: FormDataEntryValue | null): SonicAssay | null {
+	const s = (v?.toString() ?? '').trim().toUpperCase();
+	return (SONIC_ASSAYS as readonly string[]).includes(s) ? (s as SonicAssay) : null;
 }
 
 function whoOf(locals: App.Locals): Who {
@@ -224,14 +230,16 @@ export const load: PageServerLoad = async ({ locals }) => {
 		})
 	);
 
-	// Reference-set size per assay, for the "n/3 references" hints.
+	// Reference-set size per assay, for the "n/3 references" hints. Counted the way the
+	// verdict counts them (loadFingerprints): a reference whose re-analysis failed has no
+	// fingerprint and does not score, so it must not count here either.
 	const refCounts: Record<string, number> = {};
 	await Promise.all(
 		SONIC_ASSAYS.map(async (k) => {
 			refCounts[k] = await ValidationSession.countDocuments({
 				type: 'sonic',
-				'results.0.rawData.assay': k,
-				'results.0.processedData.reference.on': true
+				'results.0.processedData.fingerprint': { $ne: null },
+				...referenceFilter(k)
 			});
 		})
 	);
@@ -380,14 +388,27 @@ export const actions: Actions = {
 		await connectDB();
 		const sessionId = (await request.formData()).get('sessionId')?.toString() ?? '';
 		if (!sessionId) return fail(400, { error: 'Missing recording' });
+		const who = whoOf(locals);
 		try {
-			const who = whoOf(locals);
 			const r = await analyzeSession(sessionId, who);
 			if (!r.ok) return fail(422, { error: `Could not analyze: ${r.error}`, analyzedId: sessionId });
-			const v = await scoreSession(sessionId, who);
-			return { analyzed: true, analyzedId: sessionId, verdictStatus: v.status, referenceCount: v.referenceCount };
 		} catch (err) {
 			return fail(500, { error: err instanceof Error ? err.message : String(err), analyzedId: sessionId });
+		}
+		// The fingerprint is stored and audited at this point; a scoring failure must not
+		// report the analysis itself as failed.
+		try {
+			const v = await scoreSession(sessionId, who);
+			return { analyzed: true, analyzedId: sessionId, verdictStatus: v.status as string, referenceCount: v.referenceCount };
+		} catch (err) {
+			console.warn(`[sonic] auto-score of ${sessionId} failed: ${err instanceof Error ? err.message : String(err)}`);
+			return {
+				analyzed: true,
+				analyzedId: sessionId,
+				verdictStatus: 'error' as string,
+				referenceCount: 0,
+				scoreError: err instanceof Error ? err.message : String(err)
+			};
 		}
 	},
 
@@ -397,7 +418,12 @@ export const actions: Actions = {
 		await connectDB();
 		const sessionId = (await request.formData()).get('sessionId')?.toString() ?? '';
 		if (!sessionId) return fail(400, { error: 'Missing recording' });
-		const v = await scoreSession(sessionId, whoOf(locals));
+		let v: Awaited<ReturnType<typeof scoreSession>>;
+		try {
+			v = await scoreSession(sessionId, whoOf(locals));
+		} catch (err) {
+			return fail(422, { error: err instanceof Error ? err.message : String(err) });
+		}
 		if (v.status === 'insufficient') {
 			return fail(400, { error: `Need at least ${MIN_REFERENCES} reference recordings of this assay (have ${v.referenceCount}).` });
 		}
@@ -427,8 +453,10 @@ export const actions: Actions = {
 		const form = await request.formData();
 		const sessionId = form.get('sessionId')?.toString() ?? '';
 		if (!sessionId) return fail(400, { error: 'Missing recording' });
+		const assay = strictAssayOf(form.get('assay'));
+		if (!assay) return fail(400, { error: `Assay must be one of ${SONIC_ASSAYS.join(', ')}` });
 		try {
-			await setAssay(sessionId, assayOf(form.get('assay')), whoOf(locals));
+			await setAssay(sessionId, assay, whoOf(locals));
 			return { assaySet: true };
 		} catch (err) {
 			return fail(400, { error: err instanceof Error ? err.message : String(err) });

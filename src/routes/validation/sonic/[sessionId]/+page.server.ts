@@ -77,7 +77,11 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 			storedVerdict: p.verdict ? JSON.parse(JSON.stringify(p.verdict)) : null
 		},
 		charts,
-		live: fp ? await liveVerdict(s._id) : null,
+		live: fp ? await liveVerdict(s._id).catch((err) => {
+			// The live score is a convenience; a compare failure must not take the page down.
+			console.warn(`[sonic] live verdict for ${s._id} failed: ${err instanceof Error ? err.message : String(err)}`);
+			return null;
+		}) : null,
 		tickS: TICK_S,
 		minReferences: MIN_REFERENCES,
 		passPct: PASS_INSIDE_PCT

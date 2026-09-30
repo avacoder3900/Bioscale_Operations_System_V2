@@ -169,6 +169,10 @@ function binSeries(x: Float32Array) {
 }
 
 export function fingerprint(x: Float32Array): Fingerprint {
+	// Shorter than one full Welch/spectrogram segment: the PSD would use a
+	// different bin width (psdHzStep) than every other fingerprint and no
+	// spectrogram frame would exist. decode.ts already rejects < 1 s.
+	if (x.length < Math.max(WELCH_NPERSEG, SPEC_NPERSEG)) throw new Error('recording is too short to analyze');
 	const env = envelopeDb(x);
 	const { df, psd } = welch(x, SR, WELCH_NPERSEG);
 	let sumK = 0;
@@ -219,9 +223,11 @@ export function fingerprint(x: Float32Array): Fingerprint {
 			rmsDb: r1(db(ss / x.length)),
 			peakDbfs: r1(20 * Math.log10(Math.max(peak, 1e-12))),
 			noiseFloorDb: r1(noiseFloor),
-			centroidHz: Math.round(sumFK / sumK),
+			// All-zero (silent) input has no spectrum above MIN_FREQ: 0/0 and x/0 here
+			// would store NaN / Infinity, which is not JSON-safe. Report 0 instead.
+			centroidHz: sumK > 0 ? Math.round(sumFK / sumK) : 0,
 			rolloffHz: Math.round((kStart + Math.max(rollIdx, 0)) * df),
-			flatness: Math.round((Math.exp(logSum / nK) / (sumK / nK)) * 1000) / 1000,
+			flatness: sumK > 0 ? Math.round((Math.exp(logSum / nK) / (sumK / nK)) * 1000) / 1000 : 0,
 			bandLevels: bandSums(psd, df, BANDS5.map(([lo, hi]) => [lo, hi] as const)).map(r1),
 			tones
 		},

@@ -20,13 +20,17 @@
 	async function act(name: string, fields: Record<string, string>, ok: string) {
 		working = true;
 		err = null;
+		msg = null;
 		try {
 			const fd = new FormData();
 			for (const [k, v] of Object.entries(fields)) fd.set(k, v);
 			const res = await fetch(`/validation/sonic?/${name}`, { method: 'POST', body: fd, headers: { 'x-sveltekit-action': 'true' } });
 			const r = deserialize(await res.text());
 			if (r.type === 'success') msg = ok;
-			else err = (r.type === 'failure' ? (r.data as { error?: string })?.error : null) ?? `${name} failed`;
+			else if (r.type === 'failure') err = (r.data as { error?: string } | undefined)?.error ?? `${name} failed`;
+			else err = `${name} failed${res.status ? ` (HTTP ${res.status})` : ''}`;
+		} catch (e) {
+			err = `${name} failed: ${e instanceof Error ? e.message : String(e)}`;
 		} finally {
 			working = false;
 			await invalidateAll();
@@ -39,15 +43,20 @@
 	);
 
 	// Heatmap: 1/3-octave bands over time (spectrogram-lite).
+	// Empty bands, or no finite level at all (silent file), draw nothing rather than NaN rects.
 	const heat = $derived.by(() => {
-		if (!C) return null;
-		const all = C.bands.flat();
-		const hi = Math.max(...all);
-		const lo = hi - 50;
-		return { lo, hi, cols: C.bands.length, rows: C.bands[0]?.length ?? 0 };
+		if (!C || !C.bands.length || !C.bands[0]?.length) return null;
+		let hi = -Infinity;
+		for (const col of C.bands) for (const v of col) if (Number.isFinite(v) && v > hi) hi = v;
+		if (!Number.isFinite(hi)) return null;
+		return { lo: hi - 50, hi, cols: C.bands.length, rows: C.bands[0].length };
 	});
+	/** Time labels every 30 s under the heatmap (none when the duration is unknown / zero). */
+	const heatTimes = $derived(C && C.durationS > 0 ? Array.from({ length: Math.floor(C.durationS / 30) + 1 }, (_, i) => i * 30) : []);
+	/** Spectrum x-range: 50 Hz to the last plotted point (the chart falls back to the data if empty). */
+	const psdDomain = $derived<[number, number] | undefined>(C && C.psdX.length > 1 ? [50, C.psdX[C.psdX.length - 1]] : undefined);
 	function heatColor(v: number, lo: number, hi: number) {
-		const x = Math.min(Math.max((v - lo) / (hi - lo), 0), 1);
+		const x = Number.isFinite(v) ? Math.min(Math.max((v - lo) / (hi - lo), 0), 1) : 0;
 		// dark → magenta → orange → yellow
 		const r = Math.round(255 * Math.min(1, x * 1.6));
 		const g = Math.round(255 * Math.max(0, x - 0.45) * 1.8);
@@ -70,8 +79,8 @@
 			</p>
 		</div>
 		<div class="flex flex-wrap gap-3 text-sm">
-			<a href="/validation/sonic" class="text-[var(--color-tron-cyan)] hover:underline">← Recordings</a>
-			<a href={`/validation/sonic/compare?ids=${S.id}&against=reference`} class="text-[var(--color-tron-cyan)] hover:underline">Compare with references →</a>
+			<a href="/validation/sonic" class="inline-flex items-center text-[var(--color-tron-cyan)] hover:underline" style="min-height: 44px;">← Recordings</a>
+			{#if C}<a href={`/validation/sonic/compare?ids=${S.id}&against=reference`} class="inline-flex items-center text-[var(--color-tron-cyan)] hover:underline" style="min-height: 44px;">Compare with references →</a>{/if}
 		</div>
 	</div>
 
@@ -93,12 +102,12 @@
 			<span class="tron-text-muted">Not analyzed yet.</span>
 		{/if}
 		<span class="ml-auto flex flex-wrap gap-2">
-			<button type="button" disabled={working} onclick={() => act('analyze', { sessionId: S.id }, 'Re-analyzed.')} class="rounded border border-[var(--color-tron-cyan)] px-3 py-2 text-[var(--color-tron-cyan)] disabled:opacity-40" style="min-height: 40px;">Re-analyze</button>
+			<button type="button" disabled={working} onclick={() => act('analyze', { sessionId: S.id }, 'Re-analyzed.')} class="rounded border border-[var(--color-tron-cyan)] px-3 py-2 text-[var(--color-tron-cyan)] disabled:opacity-40" style="min-height: 44px;">Re-analyze</button>
 			{#if C}
-				<button type="button" disabled={working || !S.assay} onclick={() => act('setReference', { sessionId: S.id, on: S.reference ? '0' : '1' }, S.reference ? 'No longer a reference.' : 'Now a reference.')} class="rounded border border-[var(--color-tron-orange)] px-3 py-2 text-[var(--color-tron-orange)] disabled:opacity-40" style="min-height: 40px;">
+				<button type="button" disabled={working || !S.assay} aria-pressed={S.reference} onclick={() => act('setReference', { sessionId: S.id, on: S.reference ? '0' : '1' }, S.reference ? 'No longer a reference.' : 'Now a reference.')} class="rounded border border-[var(--color-tron-orange)] px-3 py-2 text-[var(--color-tron-orange)] disabled:opacity-40" style="min-height: 44px;">
 					{S.reference ? '★ Remove from references' : '☆ Use as reference'}
 				</button>
-				<button type="button" disabled={working || data.live?.status !== 'scored'} onclick={() => act('score', { sessionId: S.id }, 'Verdict stored and journaled.')} class="rounded bg-[var(--color-tron-cyan)] px-3 py-2 font-semibold text-[var(--color-tron-bg-primary)] disabled:opacity-40" style="min-height: 40px;">Store verdict</button>
+				<button type="button" disabled={working || data.live?.status !== 'scored'} onclick={() => act('score', { sessionId: S.id }, 'Verdict stored and journaled.')} class="rounded bg-[var(--color-tron-cyan)] px-3 py-2 font-semibold text-[var(--color-tron-bg-primary)] disabled:opacity-40" style="min-height: 44px;">Store verdict</button>
 			{/if}
 		</span>
 	</div>
@@ -160,10 +169,10 @@
 								<rect x={60 + (b / heat.cols) * 1130} y={10 + (1 - (q + 1) / heat.rows) * 260} width={1130 / heat.cols + 0.6} height={260 / heat.rows + 0.6} fill={heatColor(v, heat.lo, heat.hi)} />
 							{/each}
 						{/each}
-						{#each [0, 4, 8, 12, 16, 20] as q (q)}
+						{#each [0, 4, 8, 12, 16, 20].filter((q) => q < heat.rows) as q (q)}
 							<text x="54" y={10 + (1 - (q + 0.5) / heat.rows) * 260} text-anchor="end" dominant-baseline="middle" font-size="11" fill="var(--color-tron-text-secondary)">{bandLabel(q)}</text>
 						{/each}
-						{#each Array.from({ length: Math.floor(C.durationS / 30) + 1 }, (_, i) => i * 30) as tt (tt)}
+						{#each heatTimes as tt (tt)}
 							<text x={60 + (tt / C.durationS) * 1130} y="290" text-anchor="middle" font-size="11" fill="var(--color-tron-text-secondary)">{tt}s</text>
 						{/each}
 					</svg>
@@ -172,7 +181,7 @@
 		{/if}
 		<div class="tron-card space-y-3 p-4">
 			<h2 class="tron-heading text-lg font-semibold">Average spectrum</h2>
-			<SonicChart x={C.psdX} xLog xDomain={[50, C.psdX[C.psdX.length - 1]]} height={320} yLabel="dB/Hz" xLabel="frequency (Hz)" markers={toneMarkers} series={[{ label: S.spuUdi, color: 'var(--color-tron-cyan)', values: C.psdY, width: 1.2 }]} legend={false} />
+			<SonicChart x={C.psdX} xLog xDomain={psdDomain} height={320} yLabel="dB/Hz" xLabel="frequency (Hz)" markers={toneMarkers} series={[{ label: S.spuUdi, color: 'var(--color-tron-cyan)', values: C.psdY, width: 1.2 }]} legend={false} />
 		</div>
 		<details class="tron-card p-4 text-sm">
 			<summary class="cursor-pointer font-semibold">Events ({C.events.length})</summary>

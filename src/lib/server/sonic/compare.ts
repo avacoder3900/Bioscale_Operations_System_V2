@@ -8,7 +8,7 @@
 import {
 	FRAME_S, BIN_S, MAX_ALIGN_S, ACTIVE_RISE_DB, EVENT_GAP_S, PHASE_MIN_S, SECTION_GAP_MIN_S, LEVEL_SMOOTH_S,
 	ENVELOPE_K, SIGMA_FLOOR_DB, SPEC_SIGMA_FLOOR_DB, PASS_INSIDE_PCT, MIN_REFERENCES, MIN_SPUS_FOR_ENVELOPE,
-	FREQ_MATCH_PCT, EXTREME_PROM_HZ, EXTREME_MIN_S, MIN_FREQ, TONE_FLAG_DB
+	FREQ_MATCH_PCT, EXTREME_PROM_HZ, EXTREME_MIN_S, MAX_EXTREME_LABELS, MIN_FREQ, TONE_FLAG_DB
 } from './constants';
 import type { Fingerprint } from './features';
 import { db, findPeaks, mean, median, movingAverageSame, percentile, std1 } from './stats';
@@ -121,7 +121,10 @@ export function alignOffset(refEnv: ArrayLike<number>, env: ArrayLike<number>): 
 	return bestLag === 0 ? 0 : -bestLag * FRAME_S; // never -0 (shows as "-0.00 s")
 }
 
-/** Sample a stored per-bin series at file time u (linear for levels, nearest for Hz). */
+/** Power-domain linear mix of two dB levels (overlap-weighted mean power, like re-binning the spectrogram). */
+const pmix = (a: number, b: number, f: number) => (f <= 0 ? a : f >= 1 ? b : db((1 - f) * 10 ** (a / 10) + f * 10 ** (b / 10)));
+
+/** Sample a stored per-bin series at file time u (power-linear for levels/bands, nearest for Hz). */
 function sampler(fp: Fingerprint) {
 	const nb = fp.levelDb.length;
 	const pos = (u: number) => Math.min(Math.max(u / fp.binS - 0.5, 0), nb - 1);
@@ -130,14 +133,14 @@ function sampler(fp: Fingerprint) {
 			const j = pos(u);
 			const lo = Math.floor(j);
 			const hi = Math.min(lo + 1, nb - 1);
-			return fp.levelDb[lo] + (fp.levelDb[hi] - fp.levelDb[lo]) * (j - lo);
+			return pmix(fp.levelDb[lo], fp.levelDb[hi], j - lo);
 		},
 		bands(u: number) {
 			const j = pos(u);
 			const lo = Math.floor(j);
 			const hi = Math.min(lo + 1, nb - 1);
 			const f = j - lo;
-			return fp.bands[lo].map((v, k) => v + (fp.bands[hi][k] - v) * f);
+			return fp.bands[lo].map((v, k) => pmix(v, fp.bands[hi][k], f));
 		},
 		dom(u: number) {
 			const v = fp.domHz[Math.round(pos(u))];
@@ -276,6 +279,14 @@ export function compareFingerprints(items: CompareItem[], opts: CompareOptions =
 			if (v > peakDb) { peakDb = v; peakT = tc; }
 			if (v < minDb) { minDb = v; minT = tc; }
 		});
+		// Window narrower than one stored bin (very short recording): fall back to
+		// the resampled grid so peak/min stay finite (±Infinity is not JSON-safe).
+		if (peakDb === -Infinity) {
+			lvl[i].forEach((v, k) => {
+				if (v > peakDb) { peakDb = v; peakT = t[k]; }
+				if (v < minDb) { minDb = v; minT = t[k]; }
+			});
+		}
 		return {
 			dHz: dHz.map(nn),
 			dLvl,
@@ -338,7 +349,15 @@ export function compareFingerprints(items: CompareItem[], opts: CompareOptions =
 			}
 			k = e;
 		}
-		return out.sort((x, y) => x[0] - y[0]);
+		out.sort((x, y) => x[0] - y[0] || x[1] - y[1]);
+		if (out.length <= MAX_EXTREME_LABELS) return out;
+		// Busy trace: keep the ones farthest from the typical Hz (prototype freq_extremes()).
+		const med = median(dom[i]);
+		return out
+			.slice()
+			.sort((x, y) => Math.abs(y[1] - med) - Math.abs(x[1] - med))
+			.slice(0, MAX_EXTREME_LABELS)
+			.sort((x, y) => x[0] - y[0] || x[1] - y[1]);
 	});
 
 	// 7. Sections + section shapes + leave-one-out scoring.

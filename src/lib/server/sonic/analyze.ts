@@ -31,17 +31,42 @@ export interface Who {
 	username: string;
 }
 
-/** Recordings go through the Worker first (the S3 keys in Vercel are known-bad), S3 as fallback. */
+/**
+ * The download must finish well inside the action's maxDuration (60 s) so a hung
+ * Worker still ends in a stored analysis.error instead of a killed function and a
+ * recording that reads "pending" forever.
+ */
+const DOWNLOAD_TIMEOUT_MS = 25_000;
+
+function withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const timeout = new Promise<never>((_, reject) => {
+		timer = setTimeout(() => reject(new Error(`${what} timed out after ${Math.round(ms / 1000)} s`)), ms);
+	});
+	return Promise.race([p, timeout]).finally(() => clearTimeout(timer));
+}
+
+/**
+ * Server-side reads go through the Worker (the S3 keys in Vercel are known-bad, and
+ * falling back to them only replaced the Worker's real error with a credentials one).
+ * The S3 client is used only where no Worker is configured (local dev).
+ */
 async function fetchRecording(key: string): Promise<Uint8Array> {
+	let bytes: Uint8Array;
 	if (env.R2_WORKER_URL) {
-		try {
-			return new Uint8Array(await downloadViaWorker(key));
-		} catch (err) {
-			console.warn(`[sonic] worker download failed, trying S3: ${err instanceof Error ? err.message : String(err)}`);
-		}
+		bytes = new Uint8Array(await withTimeout(downloadViaWorker(key), DOWNLOAD_TIMEOUT_MS, 'recording download'));
+	} else {
+		bytes = await withTimeout(
+			(async () => {
+				const { body } = await downloadFile(key);
+				return new Uint8Array(await new Response(body).arrayBuffer());
+			})(),
+			DOWNLOAD_TIMEOUT_MS,
+			'recording download'
+		);
 	}
-	const { body } = await downloadFile(key);
-	return new Uint8Array(await new Response(body).arrayBuffer());
+	if (!bytes.byteLength) throw new Error('the stored recording is empty (0 bytes)');
+	return bytes;
 }
 
 /** Playable URL: the Worker's /file/ route when configured, else a presigned S3 URL. */
@@ -71,12 +96,22 @@ async function audit(action: string, sessionId: string, who: Who, newData: Recor
 	});
 }
 
-/** Replace results.0.processedData wholesale (it may still be null, so sub-path $set can't be used). */
-async function writeProcessed(sessionId: string, resultId: string, processed: Record<string, unknown>, extra: Record<string, unknown> = {}) {
+/**
+ * Set keys inside results.<resultId>.processedData without rewriting the rest of it,
+ * so an analyze that takes a few seconds cannot wipe a reference mark or verdict written
+ * meanwhile (a whole-object $set built from a stale read did exactly that). processedData
+ * starts as null from the upload and Mongo cannot $set a sub-path under null, so it is
+ * first turned into {} — only while it is still null/missing.
+ */
+async function writeProcessed(sessionId: string, resultId: string, patch: Record<string, unknown>, extra: Record<string, unknown> = {}) {
 	await ValidationSession.updateOne(
-		{ _id: sessionId, 'results._id': resultId },
-		{ $set: { 'results.$.processedData': processed, ...extra } }
+		{ _id: sessionId, results: { $elemMatch: { _id: resultId, processedData: null } } },
+		{ $set: { 'results.$.processedData': {} } }
 	);
+	const set: Record<string, unknown> = { ...extra };
+	for (const [k, v] of Object.entries(patch)) set[`results.$.processedData.${k}`] = v;
+	const r = await ValidationSession.updateOne({ _id: sessionId, 'results._id': resultId }, { $set: set });
+	if (r.matchedCount === 0) throw new Error('Sonic recording not found');
 }
 
 export async function analyzeSession(sessionId: string, who: Who) {
@@ -86,7 +121,6 @@ export async function analyzeSession(sessionId: string, who: Who) {
 	const raw = result?.rawData ?? {};
 	if (!raw.r2Key) throw new Error('This session has no stored recording');
 
-	const base = pd(s);
 	const started = Date.now();
 	let analysis: Record<string, unknown>;
 	let fp: Fingerprint | null = null;
@@ -113,8 +147,17 @@ export async function analyzeSession(sessionId: string, who: Who) {
 			error: err instanceof NotAnalyzableError ? err.message : `analysis failed: ${err instanceof Error ? err.message : String(err)}`
 		};
 	}
-	await writeProcessed(sessionId, result._id, { ...base, analysis, fingerprint: fp });
+	// A failed RE-analysis (Worker hiccup, timeout) must not wipe a good fingerprint —
+	// that would silently drop a reference unit from its reference set. Keep the last
+	// good analysis and record the failed attempt beside it instead.
+	const hadFingerprint = !!pd(s).fingerprint;
+	if (!fp && hadFingerprint) {
+		await writeProcessed(sessionId, result._id, { lastFailure: { at: analysis.analyzedAt, by: who.username, error: analysis.error } });
+	} else {
+		await writeProcessed(sessionId, result._id, { analysis, fingerprint: fp, lastFailure: null });
+	}
 	await audit('sonic_analysis', sessionId, who, {
+		keptPreviousFingerprint: !fp && hadFingerprint,
 		spuUdi: s.spuUdi,
 		r2Key: raw.r2Key,
 		version: ANALYSIS_VERSION,
@@ -176,7 +219,7 @@ export interface LiveVerdict {
 /** Score one recording against today's reference set (no writes). */
 export async function liveVerdict(sessionId: string): Promise<LiveVerdict> {
 	const s = (await ValidationSession.findById(sessionId).lean()) as any;
-	const res = s?.results?.[0];
+	const res = s?.type === 'sonic' ? s.results?.[0] : undefined;
 	const fp = res?.processedData?.fingerprint as Fingerprint | undefined;
 	if (!fp) return { status: 'not-analyzed', referenceCount: 0 };
 	const assay = res.rawData?.assay;
@@ -186,7 +229,9 @@ export async function liveVerdict(sessionId: string): Promise<LiveVerdict> {
 	const items = [...refs.map((r) => ({ id: r.id, label: r.spuUdi, fp: r.fp })), { id: sessionId, label: s.spuUdi, fp }];
 	const c = compareFingerprints(items, { referenceIds: refs.map((r) => r.id) });
 	const mine = c.scores[items.length - 1];
-	const perSection = c.sections.map((sec, k) => ({
+	// scores[i][k] lines up with envelopes[k], not sections[k]: compareFingerprints skips
+	// a section with no bins on the shared grid without pushing a score for it.
+	const perSection = c.envelopes.map((sec, k) => ({
 		name: sec.name,
 		a: Math.round(sec.a * 10) / 10,
 		b: Math.round(sec.b * 10) / 10,
@@ -208,7 +253,10 @@ export async function liveVerdict(sessionId: string): Promise<LiveVerdict> {
 export async function scoreSession(sessionId: string, who: Who) {
 	const v = await liveVerdict(sessionId);
 	if (v.status !== 'scored') return v;
+	// 0/0 would store passed:true with nothing checked.
+	if (!v.total) throw new Error('No sections to score — this recording shares no running stretch with the reference set');
 	const s = (await ValidationSession.findById(sessionId).lean()) as any;
+	if (!s?.results?.[0]) throw new Error('Sonic recording not found');
 	const res = s.results[0];
 	const assay = res.rawData?.assay;
 	const allPass = v.passed === v.total;
@@ -225,7 +273,7 @@ export async function scoreSession(sessionId: string, who: Who) {
 		perSection: v.perSection,
 		advisory: true
 	};
-	await writeProcessed(sessionId, res._id, { ...pd(s), verdict }, {
+	await writeProcessed(sessionId, res._id, { verdict }, {
 		'results.$.passed': allPass,
 		overallPassed: allPass,
 		failureReasons,
@@ -258,11 +306,14 @@ export async function setReference(sessionId: string, on: boolean, who: Who) {
 	const s = (await ValidationSession.findById(sessionId).lean()) as any;
 	if (!s || s.type !== 'sonic') throw new Error('Sonic recording not found');
 	const res = s.results?.[0];
-	if (on && !res?.processedData?.fingerprint) throw new Error('Analyze the recording before using it as a reference');
-	if (on && !res?.rawData?.assay) throw new Error('Set the assay before using it as a reference');
+	if (!res?._id) throw new Error('This session has no recording result');
+	if (on && !res.processedData?.fingerprint) throw new Error('Analyze the recording before using it as a reference');
+	if (on && !res.rawData?.assay) throw new Error('Set the assay before using it as a reference');
 	const before = pd(s).reference ?? null;
+	// Already in that state: keep who/when actually set it, and no duplicate audit row.
+	if (!!before?.on === on) return;
 	const reference = { on, by: who.username, at: new Date() };
-	await writeProcessed(sessionId, res._id, { ...pd(s), reference });
+	await writeProcessed(sessionId, res._id, { reference });
 	await audit(on ? 'sonic_reference_set' : 'sonic_reference_cleared', sessionId, who, { spuUdi: s.spuUdi, assay: res.rawData?.assay ?? null }, before);
 }
 
@@ -270,11 +321,14 @@ export async function setAssay(sessionId: string, assay: SonicAssay, who: Who) {
 	const s = (await ValidationSession.findById(sessionId).lean()) as any;
 	if (!s || s.type !== 'sonic') throw new Error('Sonic recording not found');
 	const res = s.results?.[0];
-	const before = res?.rawData?.assay ?? null;
+	if (!res?._id) throw new Error('This session has no recording result');
+	const before = res.rawData?.assay ?? null;
 	if (before === assay) return;
 	const update: Record<string, unknown> = { 'results.$.rawData.assay': assay };
+	// A reference only counts for its own assay — changing the assay drops the reference mark,
+	// in the same update so it is never a reference under the wrong assay. processedData is an
+	// object whenever reference.on is set, so the sub-path $set is safe.
+	if (pd(s).reference?.on) update['results.$.processedData.reference'] = { on: false, by: who.username, at: new Date() };
 	await ValidationSession.updateOne({ _id: sessionId, 'results._id': res._id }, { $set: update });
-	// A reference only counts for its own assay — changing the assay drops the reference mark.
-	if (pd(s).reference?.on) await writeProcessed(sessionId, res._id, { ...pd(s), reference: { on: false, by: who.username, at: new Date() } });
 	await audit('sonic_assay_set', sessionId, who, { spuUdi: s.spuUdi, assay }, { assay: before });
 }

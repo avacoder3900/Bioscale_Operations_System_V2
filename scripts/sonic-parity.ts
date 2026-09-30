@@ -10,7 +10,7 @@ import { readFileSync } from 'node:fs';
 import { basename } from 'node:path';
 import { decodeRecording } from '../src/lib/server/sonic/decode';
 import { fingerprint } from '../src/lib/server/sonic/features';
-import { compareFingerprints } from '../src/lib/server/sonic/compare';
+import { compareFingerprints, type CompareItem } from '../src/lib/server/sonic/compare';
 
 const args = process.argv.slice(2);
 const si = args.indexOf('--sections');
@@ -22,7 +22,7 @@ function label(file: string): string {
 	return m ? `SPU ${m[1]}` : stem;
 }
 
-const items = [];
+const items: CompareItem[] = [];
 for (const file of args) {
 	const t0 = Date.now();
 	const { samples, decoder, sourceRate } = await decodeRecording(new Uint8Array(readFileSync(file)), file);
@@ -49,9 +49,12 @@ c.sim.forEach((s, i) => {
 	);
 });
 console.log('\nsections: ' + c.sections.map((s) => `${s.name}=${s.a.toFixed(0)}-${s.b.toFixed(0)}`).join(' '));
+// spu_audio.py on the same 7 recordings, automatic sections (PRD §5); ±1 per SPU is the AC.
+const PROTO: Record<string, number> = { 'SPU 237': 10, 'SPU 245': 9, 'SPU 250': 9, 'SPU 226': 7, 'SPU 229': 6, 'SPU 217': 5, 'SPU 248': 2 };
 c.scores.forEach((row, i) => {
 	const marks = row.map((s) => (s == null ? '  -' : s.pass ? '  ✓' : '  x')).join('');
 	const passed = row.filter((s) => s?.pass).length;
-	console.log(`${items[i].label.padEnd(9)}${marks}   ${passed}/${row.length}`);
+	const proto = !sections && PROTO[items[i].label] != null ? `   (prototype ${PROTO[items[i].label]}/11)` : '';
+	console.log(`${items[i].label.padEnd(9)}${marks}   ${passed}/${row.length}${proto}`);
 });
 console.log('\ntones above the others: ' + c.tones.map((t, i) => `${items[i].label}: ${t.map((x) => `${x[0]}Hz+${x[1]}`).join(' ') || '—'}`).join(' | '));

@@ -71,12 +71,25 @@
 		return fallback;
 	}
 
-	/** POST one named form action from JS and read its ActionResult. */
+	/**
+	 * POST one named form action from JS and read its ActionResult. Never throws: a network
+	 * failure or a non-JSON body (e.g. Vercel's plain-text timeout page) becomes an error result.
+	 */
 	async function callAction(name: string, fields: Record<string, string>): Promise<ActionResult> {
 		const fd = new FormData();
 		for (const [k, v] of Object.entries(fields)) fd.set(k, v);
-		const res = await fetch(`?/${name}`, { method: 'POST', body: fd, headers: { 'x-sveltekit-action': 'true' } });
-		return deserialize(await res.text());
+		let res: Response;
+		try {
+			res = await fetch(`?/${name}`, { method: 'POST', body: fd, headers: { 'x-sveltekit-action': 'true' } });
+		} catch (err) {
+			return { type: 'error', error: { message: err instanceof Error ? err.message : String(err) } };
+		}
+		const text = await res.text();
+		try {
+			return deserialize(text);
+		} catch {
+			return { type: 'error', status: res.status, error: { message: text.slice(0, 200) || res.statusText } };
+		}
 	}
 
 	/** Decode + fingerprint on the server, then (if the reference set allows) score. */
@@ -85,13 +98,18 @@
 		try {
 			const r = await callAction('analyze', { sessionId: id });
 			if (r.type === 'success') {
-				const d = r.data as { verdictStatus?: string; referenceCount?: number };
+				const d = (r.data ?? {}) as { verdictStatus?: string; referenceCount?: number; scoreError?: string };
 				notice =
 					d.verdictStatus === 'scored'
 						? `${udi}: analyzed and scored against the reference set.`
 						: d.verdictStatus === 'insufficient'
 							? `${udi}: analyzed. No verdict yet — this assay has ${d.referenceCount ?? 0} of ${data.minReferences} reference recordings needed.`
-							: `${udi}: analyzed.`;
+							: d.verdictStatus === 'no-assay'
+								? `${udi}: analyzed. Set its assay to get a verdict.`
+								: d.verdictStatus === 'error'
+									? `${udi}: analyzed, but scoring against the references failed${d.scoreError ? `: ${d.scoreError}` : ''}.`
+									: `${udi}: analyzed.`;
+				clientError = null;
 			} else {
 				clientError = describeFailure(r, `Analysis of ${udi} failed`);
 			}
@@ -106,13 +124,21 @@
 		for (const r of pending) await analyze(r.id, r.spuUdi);
 	}
 
-	async function simpleAction(name: string, fields: Record<string, string>, ok: string) {
+	async function simpleAction(name: string, fields: Record<string, string>, ok: string): Promise<boolean> {
 		const r = await callAction(name, fields);
-		if (r.type === 'success') {
+		const success = r.type === 'success';
+		if (success) {
 			notice = ok;
 			clientError = null;
 		} else clientError = describeFailure(r, `${name} failed`);
 		await invalidateAll();
+		return success;
+	}
+
+	/** The row's assay select is one-way bound: put it back if the change did not stick. */
+	async function changeAssay(r: Recording, el: HTMLSelectElement) {
+		const ok = await simpleAction('setAssay', { sessionId: r.id, assay: el.value }, `${r.spuUdi}: assay set.`);
+		if (!ok) el.value = r.assay ?? '';
 	}
 
 	function compareSelected() {
@@ -212,7 +238,7 @@
 	{#if notice}
 		<div class="rounded-lg bg-[var(--color-tron-cyan)]/10 p-3 text-sm text-[var(--color-tron-cyan)]">{notice}</div>
 	{/if}
-	{#each Object.values(busy) as msg (msg)}
+	{#each Object.entries(busy) as [id, msg] (id)}
 		<div class="rounded-lg bg-[var(--color-tron-orange)]/10 p-3 text-sm text-[var(--color-tron-orange)]">{msg} (decoding and fingerprinting on the server — a few seconds)</div>
 	{/each}
 
@@ -258,7 +284,7 @@
 		<div class="grid gap-4 md:grid-cols-2">
 			<div class="tron-card p-6">
 				<h2 class="tron-heading mb-4 text-lg font-semibold">Unit</h2>
-				<select name="spuId" bind:value={selectedSpuId} class="tron-select w-full" style="min-height: 44px;" required>
+				<select name="spuId" bind:value={selectedSpuId} aria-label="Unit the recording is of" class="tron-select w-full" style="min-height: 44px;" required>
 					<option value="" disabled>Choose the unit the recording is of…</option>
 					{#each data.spus as s (s.id)}
 						<option value={s.id}>{s.udi} — {s.status}</option>
@@ -267,7 +293,7 @@
 			</div>
 			<div class="tron-card p-6">
 				<h2 class="tron-heading mb-4 text-lg font-semibold">Assay that was running</h2>
-				<select name="assay" bind:value={assay} class="tron-select w-full" style="min-height: 44px;">
+				<select name="assay" bind:value={assay} aria-label="Assay that was running" class="tron-select w-full" style="min-height: 44px;">
 					{#each data.assays as a (a.key)}
 						<option value={a.key}>{a.label} — {data.refCounts[a.key] ?? 0} reference{(data.refCounts[a.key] ?? 0) === 1 ? '' : 's'}</option>
 					{/each}
@@ -283,6 +309,7 @@
 					type="file"
 					name="file"
 					accept="audio/*,.wav,.m4a,.mp3,.aac,.ogg,.webm,.flac,.caf"
+					aria-label="Recording file"
 					class="tron-input w-full"
 					style="min-height: 44px;"
 					onchange={onFilePicked}
@@ -315,18 +342,18 @@
 	<div class="tron-card p-4">
 		<div class="mb-3 flex flex-wrap items-center gap-3">
 			<h2 class="tron-heading text-sm font-semibold uppercase tracking-wide">Recordings ({shown.length})</h2>
-			<select bind:value={assayFilter} class="tron-select text-sm" style="min-height: 36px;">
+			<select bind:value={assayFilter} aria-label="Filter recordings by assay" class="tron-select text-sm" style="min-height: 44px;">
 				<option value="ALL">All assays</option>
 				{#each data.assays as a (a.key)}<option value={a.key}>{a.key}</option>{/each}
 				<option value="UNKNOWN">Assay not set</option>
 			</select>
 			<div class="ml-auto flex flex-wrap gap-2">
 				{#if pending.length}
-					<button type="button" onclick={analyzeAllPending} class="rounded border border-[var(--color-tron-orange)] px-3 py-2 text-sm text-[var(--color-tron-orange)] hover:bg-[var(--color-tron-orange)]/10" style="min-height: 36px;">
+					<button type="button" onclick={analyzeAllPending} disabled={Object.keys(busy).length > 0} class="rounded border border-[var(--color-tron-orange)] px-3 py-2 text-sm text-[var(--color-tron-orange)] hover:bg-[var(--color-tron-orange)]/10 disabled:opacity-40" style="min-height: 44px;">
 						Analyze all pending ({pending.length})
 					</button>
 				{/if}
-				<button type="button" onclick={compareSelected} disabled={selectedIds.length < 2} class="rounded bg-[var(--color-tron-cyan)] px-3 py-2 text-sm font-semibold text-[var(--color-tron-bg-primary)] disabled:opacity-40" style="min-height: 36px;">
+				<button type="button" onclick={compareSelected} disabled={selectedIds.length < 2} class="rounded bg-[var(--color-tron-cyan)] px-3 py-2 text-sm font-semibold text-[var(--color-tron-bg-primary)] disabled:opacity-40" style="min-height: 44px;">
 					Compare selected ({selectedIds.length})
 				</button>
 			</div>
@@ -341,20 +368,30 @@
 			<div class="space-y-3">
 				{#each shown as r (r.id)}
 					<div class="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-[var(--color-tron-border)]/50 pb-3 text-sm">
-						<input type="checkbox" bind:checked={selected[r.id]} disabled={r.analysis.state !== 'done'} title={r.analysis.state === 'done' ? 'Select to compare' : 'Analyze first'} class="h-5 w-5" />
+						<label class="inline-flex items-center justify-center" style="min-height: 44px; min-width: 44px;">
+							<input type="checkbox" bind:checked={selected[r.id]} disabled={r.analysis.state !== 'done'} title={r.analysis.state === 'done' ? 'Select to compare' : 'Analyze first'} aria-label={`Select ${r.spuUdi ?? 'recording'} to compare`} class="h-5 w-5" />
+						</label>
 						<button
 							type="button"
 							title={r.reference ? 'Reference — click to remove' : 'Use as reference (known-good unit)'}
-							class="text-lg {r.reference ? 'text-[var(--color-tron-orange)]' : 'text-[var(--color-tron-text-secondary)]'}"
+							aria-label={r.reference ? `Remove ${r.spuUdi ?? 'recording'} from references` : `Use ${r.spuUdi ?? 'recording'} as a reference`}
+							aria-pressed={r.reference}
+							style="min-height: 44px; min-width: 44px;"
+							class="text-lg disabled:opacity-40 {r.reference ? 'text-[var(--color-tron-orange)]' : 'text-[var(--color-tron-text-secondary)]'}"
 							disabled={r.analysis.state !== 'done' || !r.assay}
 							onclick={() => simpleAction('setReference', { sessionId: r.id, on: r.reference ? '0' : '1' }, r.reference ? `${r.spuUdi} is no longer a reference.` : `${r.spuUdi} is now a ${r.assay} reference.`)}
 						>{r.reference ? '★' : '☆'}</button>
-						<a href={r.spuId ? `/spu/${r.spuId}` : '#'} class="font-mono font-bold text-[var(--color-tron-cyan)] hover:underline">{r.spuUdi ?? '—'}</a>
+						{#if r.spuId}
+							<a href={`/spu/${r.spuId}`} class="inline-flex items-center font-mono font-bold text-[var(--color-tron-cyan)] hover:underline" style="min-height: 44px;">{r.spuUdi ?? '—'}</a>
+						{:else}
+							<span class="font-mono font-bold">{r.spuUdi ?? '—'}</span>
+						{/if}
 						<select
 							class="tron-select text-xs"
-							style="min-height: 32px;"
+							style="min-height: 44px;"
+							aria-label={`Assay of ${r.spuUdi ?? 'recording'}`}
 							value={r.assay ?? ''}
-							onchange={(e) => simpleAction('setAssay', { sessionId: r.id, assay: (e.currentTarget as HTMLSelectElement).value }, `${r.spuUdi}: assay set.`)}
+							onchange={(e) => changeAssay(r, e.currentTarget as HTMLSelectElement)}
 						>
 							{#if !r.assay}<option value="" disabled>assay?</option>{/if}
 							{#each data.assays as a (a.key)}<option value={a.key}>{a.key}</option>{/each}
@@ -379,14 +416,14 @@
 						{#if r.url}
 							<audio controls preload="none" src={r.url} class="h-8"></audio>
 						{/if}
-						<span class="ml-auto flex gap-3 text-xs">
+						<span class="ml-auto flex items-center gap-3 text-xs">
 							{#if r.analysis.state === 'done'}
-								<a href="/validation/sonic/{r.id}" class="text-[var(--color-tron-cyan)] hover:underline">Details</a>
+								<a href="/validation/sonic/{r.id}" class="inline-flex items-center text-[var(--color-tron-cyan)] hover:underline" style="min-height: 44px;">Details</a>
 							{/if}
-							<button type="button" class="text-[var(--color-tron-cyan)] hover:underline disabled:opacity-40" disabled={!!busy[r.id]} onclick={() => analyze(r.id, r.spuUdi)}>
+							<button type="button" class="text-[var(--color-tron-cyan)] hover:underline disabled:opacity-40" style="min-height: 44px;" disabled={!!busy[r.id]} onclick={() => analyze(r.id, r.spuUdi)}>
 								{r.analysis.state === 'pending' ? 'Analyze' : 'Re-analyze'}
 							</button>
-							{#if r.url}<a href={r.url} class="text-[var(--color-tron-cyan)] hover:underline" download>Download</a>{/if}
+							{#if r.url}<a href={r.url} class="inline-flex items-center text-[var(--color-tron-cyan)] hover:underline" style="min-height: 44px;" download>Download</a>{/if}
 						</span>
 					</div>
 				{/each}

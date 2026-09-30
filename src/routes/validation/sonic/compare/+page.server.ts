@@ -14,6 +14,9 @@ import type { PageServerLoad } from './$types';
  *   &sections=110-130,40-57 custom sections (default: automatic P#/B#)
  *   &against=reference      judge each against the reference set of their assay
  */
+/** Each fingerprint is ~150 KB and the compare is O(n²) in places; keep a request bounded. */
+const MAX_COMPARE = 30;
+
 const r1 = (v: number | null) => (v == null || !Number.isFinite(v) ? null : Math.round(v * 10) / 10);
 
 export const load: PageServerLoad = async ({ locals, url }) => {
@@ -39,6 +42,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	const againstRefs = url.searchParams.get('against') === 'reference';
 	const base = { available, ids, sections, againstRefs, tickS: TICK_S, envelopeK: ENVELOPE_K, passPct: PASS_INSIDE_PCT, minReferences: MIN_REFERENCES };
 	if (ids.length < (againstRefs ? 1 : 2)) return { ...base, result: null, error: null };
+	if (ids.length > MAX_COMPARE) return { ...base, result: null, error: `Compare at most ${MAX_COMPARE} recordings at a time (${ids.length} selected).` };
 
 	const chosen = await loadFingerprints({ _id: { $in: ids } });
 	const byId = new Map(chosen.map((c) => [c.id, c]));
