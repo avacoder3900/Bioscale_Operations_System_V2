@@ -16735,3 +16735,28 @@ Retrieve this exact code: git checkout master at commit 1bfef4a4
   (or: git log master --oneline to find it if the branch has since moved on)
 What this deployment is for: on-tablet test of the vertical 📷 Capture bar left of the video and the
   hidden Ask BIMS widget (touch only). GitHub deployment 6762758302 (Production). Smoke: /login 200.
+
+================================================================================
+2026-09-30 — feat/post-mortem-mjpeg-snapshot → master — Post-Mortem Inspect: MJPEG view + clean stills
+================================================================================
+Ported /capture's fast station pathway to post-mortem-inspect/+page.svelte (desktop + tablet — a
+quality change, not layout). Previously this page streamed WebRTC/VP8 (aiortc, blocky on motion) and
+took photos by drawing that decoded VP8 frame to a canvas, so compression artifacts were baked in.
+  - Live view: <img src="https://<station>/preview.mjpg?token=…&fps=15&q=80"> (per-frame JPEG).
+  - Photos: fetch https://<station>/snapshot.jpg?q=92 — a camera frame that never touched the
+    video encoder.
+  - Fallback to the old WebRTC feed (the priority for older agents, e.g. station 2 on the June
+    `bims-capture-agent` branch, which 404s both endpoints): MJPEG <img> onerror OR no painted frame
+    within 8 s (watchdog on naturalWidth) → mjpegError → WebRTC offer. Snapshot failure → same
+    fallback, then waits up to 10 s for the WebRTC stream and takes that press's photo from it.
+  - Single-encoder rule kept (dual VP8+JPEG browned out station 3's PSU): the 'hello' handler only
+    negotiates WebRTC once MJPEG has failed.
+  - Snapshot auth: station JWTs expire in 5 min and the agent's 401 has no CORS header (browser
+    reports a network error, not a status), so a separate snapshot token is re-minted after 4 min
+    and once more on any failure. Kept apart from stationToken so re-minting doesn't restart the
+    MJPEG stream. (/capture has no refresh — its snapshots after 5 min on one connection will fail;
+    not changed here.)
+  - `stream` made $state so the Capture button enables when a fallback WebRTC stream lands.
+`npm run check`: 13 errors (baseline 14), none in the touched file; warnings 431 → 430.
+Local vite build skipped (slow on this machine); Vercel's branch build used as the compile gate
+before fast-forwarding master. Pushed to master at the user's explicit request.
