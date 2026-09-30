@@ -17031,3 +17031,20 @@ Retrieve this exact code: git checkout master at commit b2b650c6
 What this deployment is for: on-station test of the MJPEG view + /snapshot.jpg stills on Post-Mortem
   Inspect (station 3 = new path; station 2 = WebRTC fallback until its agent is updated).
   GitHub deployment 6763725750 (Production). Smoke: /login 200.
+
+================================================================================
+2026-09-30 — feat/badge-system — Final build: origin/master merged in; PR #69 opened into master
+================================================================================
+User: merge all changes to master. Per the shipping rule (PR to master, the user merges), this
+session did the final-build prep and stopped at the PR:
+- PR #54 (feat/bucket-system -> master) had already merged on 2026-09-25, so master contains the
+  bucket system; feat/badge-system was 15 commits ahead / 11 behind.
+- Merged origin/master into feat/badge-system (0b16a321). Only progress.txt conflicted (both
+  sides append); resolved as the union. svelte-check on the merged tree: 14 errors, the baseline.
+- Opened PR #69 feat/badge-system -> master:
+  https://github.com/avacoder3900/Bioscale_Operations_System_V2/pull/69
+  Scope: badge system (models, service, portal, batch print, badge-gated mint/start-pass, custody,
+  board link) + the bucket nickname feature (d7146e64). Rollout note in the PR: badge.mode defaults
+  to required, so issue badges or switch it off in /admin/badges before the floor mints or starts
+  a pass on production.
+Not done: the PR merge itself (user), and the BADGE-SYSTEM_PLAN.md section 18.2 runtime checklist.
