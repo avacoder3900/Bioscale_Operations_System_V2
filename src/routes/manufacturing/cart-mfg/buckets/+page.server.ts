@@ -13,7 +13,7 @@ import {
 	cartStatusLine, auditScan, auditCycle, moveToOven, inOvenCarts
 } from '$lib/server/services/bucket-service';
 import { thermosealStatus, checkFloor, setThermosealToggles } from '$lib/server/services/thermoseal-service';
-import { badgeMode } from '$lib/server/services/badge-service';
+import { badgeSettings, setBadgeMode } from '$lib/server/services/badge-service';
 import type { Actions, PageServerLoad } from './$types';
 
 export const config = { maxDuration: 60 };
@@ -70,12 +70,14 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		// "In oven" dropdown inside the Backed column: backed carts on no open pass.
 		inOvenCarts().catch(() => ({ count: 0, ids: [] as string[] })),
 		// Badge enforcement (BADGE-SYSTEM_PLAN.md §17.4): decides whether the
-		// start-pass form asks for a badge. Flipped only from /admin/badges.
-		badgeMode().catch(() => 'required' as const)
+		// start-pass form asks for a badge. Flipped from /admin/badges — and,
+		// DEV ONLY, from this board's Development settings card (see ?/badgeMode).
+		badgeSettings().catch(() => ({ mode: 'required' as const, changedAt: null, changedBy: null }))
 	]);
 
 	return {
-		badgeMode: badge,
+		badgeMode: badge.mode,
+		badge,
 		stages: BUCKET_STAGES.map(s => ({ key: s, label: STAGE_LABELS[s] })),
 		backedLabel: BACKED_LABEL,
 		focusStage: focusStage === 'available' || isBucketStage(focusStage) ? focusStage : null,
@@ -222,6 +224,28 @@ export const actions: Actions = {
 				user: op(locals)
 			});
 			return { thermosealToggles: { success: true, notificationsEnabled: cfg.notificationsEnabled } };
+		})();
+	},
+
+	// DEV ONLY — REMOVE BEFORE FINAL BUILD (BADGE-SYSTEM_PLAN.md §17.5 / §20).
+	// The Require-badge switch's real home is /admin/badges; this copy sits on the
+	// board's Development settings card so the badge rollout can be flipped from
+	// the floor while it is being tested. Same gate as the thermoseal toggle
+	// (manufacturing:admin or admin:full), same audited write as the portal.
+	badgeMode: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'manufacturing:write');
+		const isAdmin = locals.user.roles.some(r => r.permissions.includes('manufacturing:admin') || r.permissions.includes('admin:full'));
+		if (!isAdmin) return fail(403, { badgeMode: { error: 'Changing the badge requirement requires manufacturing:admin' } });
+		await connectDB();
+		const d = await request.formData();
+		return wrap('badgeMode', async () => {
+			const settings = await setBadgeMode({
+				mode: d.get('required') === '1' ? 'required' : 'off',
+				reason: 'board development settings',
+				user: op(locals)
+			});
+			return { badgeMode: { success: true, mode: settings.mode } };
 		})();
 	},
 

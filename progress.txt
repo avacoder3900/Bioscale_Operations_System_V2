@@ -16805,3 +16805,18 @@ Retrieve this exact code: git checkout feat/badge-system at commit 38347977
   (or: git log feat/badge-system --oneline to find it if the branch has since moved on)
 What this deployment is for: batch print — build a list on /admin/badges (dropdown / name search /
 add all) and print every card on one sheet at /admin/badges/print?ids=…
+
+================================================================================
+2026-09-30 — feat/badge-system — DEV ONLY: Require-badge toggle copied onto the bucket board (admin only)
+================================================================================
+User asked for the Require-badge switch on the bucket page too, admin only, with a dev note to
+remove it in the final build. Added a checkbox + Apply under the board's existing "Development
+settings" card (next to the thermoseal notifications toggle): ?/badgeMode action in
+buckets/+page.server.ts, gated exactly like thermosealToggles (manufacturing:admin or admin:full;
+non-admins see it disabled with "manufacturing:admin to change"), writing through the same audited
+setBadgeMode() (reason "board development settings"). The load now returns the full badge settings
+(mode, changedAt, changedBy) so the card shows who last flipped it. Marked "DEV ONLY — REMOVE BEFORE
+FINAL BUILD" in the action comment, the markup comment, the page's form type, a yellow line in the
+UI, BADGE-SYSTEM_PLAN.md section 17.5 / section 20 item 9, and BUCKET-SYSTEM_PLAN.md section 12.5.
+The portal switch at /admin/badges is the permanent one.
+svelte-check: 14 errors before and after, all pre-existing; none in these files.

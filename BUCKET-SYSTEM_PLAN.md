@@ -672,6 +672,11 @@ the floor creates a real card and sends real mail on the next board load.
 
 ### 12.5 Deferred / noted
 
+- **DEV ONLY — remove before final build (2026-09-30):** the *Require badge* checkbox on the board's
+  *Development settings* card (`?/badgeMode` in `buckets/+page.server.ts`, the form under the thermoseal
+  toggle, and `badge` in the load). It duplicates the switch at `/admin/badges` so the badge rollout can be
+  flipped from the floor during testing. The portal switch is the permanent one. See `BADGE-SYSTEM_PLAN.md` §17.5.
+
 - Thermoseal settings UI; per-roll history page; "retire roll" action.
 - WI-01 reminder when Pressed buckets exist but none is selected.
 - Wording sweep "tub" → "bucket" outside the Available card.

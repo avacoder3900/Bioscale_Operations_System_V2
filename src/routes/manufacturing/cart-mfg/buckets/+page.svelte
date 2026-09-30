@@ -26,12 +26,14 @@
 			inOven: { count: number; ids: string[] };
 			canAdmin: boolean;
 			badgeMode: 'off' | 'required';
+			badge: { mode: 'off' | 'required'; changedAt: string | null; changedBy: string | null };
 			scan: { kind: 'bucket' | 'search' | 'badge'; bucket?: any; cycle?: any; badge?: { displayName: string | null; username: string | null; note: string | null }; matches?: { bucketId: string; barcode: string | null; state: string; cycle: any }[] } | null;
 			scanQuery: string;
 		};
 		form: {
 			start?: ActionResult; advance?: ActionResult; scrap?: ActionResult;
 			residual?: ActionResult; retire?: ActionResult; thermosealToggles?: ActionResult; moveToOven?: ActionResult;
+			badgeMode?: ActionResult; // DEV ONLY — remove with the board toggle before final build
 			auditScan?: ActionResult; audit?: ActionResult;
 		} | null;
 	}
@@ -792,6 +794,21 @@
 									{#if data.canAdmin}<button type="submit" disabled={busy} class={btnGhost}>{busy ? 'Saving…' : 'Apply'}</button>{:else}<span class="text-[var(--color-tron-text-secondary)]">manufacturing:admin to change</span>{/if}
 									{#if form?.thermosealToggles?.error}<span class="text-[var(--color-tron-error)]">{form.thermosealToggles.error}</span>{/if}
 									{#if form?.thermosealToggles?.success}<span class="text-[var(--color-tron-cyan)]">Saved.</span>{/if}
+								</form>
+								<!-- DEV ONLY — REMOVE BEFORE FINAL BUILD. Require-badge switch, duplicated from
+								     /admin/badges so the badge rollout can be flipped from the floor while it is
+								     being tested (BADGE-SYSTEM_PLAN.md §17.5 / §20). Admin only, same gate as the
+								     thermoseal toggle above; the write is the same audited setBadgeMode(). -->
+								<form method="POST" action="?/badgeMode" use:enhance={enhanceBusy} class="mt-2 space-y-1.5 border-t border-dashed border-[var(--color-tron-yellow)]/40 pt-2">
+									<p class="text-[var(--color-tron-yellow)]">DEV · remove before final build — the real switch is in <a href="/admin/badges" class="underline">Badge Portal</a>.</p>
+									<label class="flex items-center gap-1.5 {data.canAdmin ? '' : 'opacity-60'}">
+										<input type="checkbox" name="required" value="1" checked={data.badge.mode === 'required'} disabled={!data.canAdmin || busy} class="accent-[var(--color-tron-cyan)]" />
+										<span class="text-[var(--color-tron-text)]">Require badge at mint + start-pass</span>
+									</label>
+									{#if data.badge.changedAt}<p class="text-[var(--color-tron-text-secondary)]">Last changed {new Date(data.badge.changedAt).toLocaleString()}{data.badge.changedBy ? ` by ${data.badge.changedBy}` : ''}</p>{/if}
+									{#if data.canAdmin}<button type="submit" disabled={busy} class={btnGhost}>{busy ? 'Saving…' : 'Apply'}</button>{:else}<span class="text-[var(--color-tron-text-secondary)]">manufacturing:admin to change</span>{/if}
+									{#if form?.badgeMode?.error}<span class="text-[var(--color-tron-error)]">{form.badgeMode.error}</span>{/if}
+									{#if form?.badgeMode?.success}<span class="text-[var(--color-tron-cyan)]">Saved.</span>{/if}
 								</form>
 							</details>
 						</div>
