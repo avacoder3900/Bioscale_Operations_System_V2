@@ -17,7 +17,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	await connectDB();
 	const [recent, mode] = await Promise.all([
 		ProductionBucket.find({})
-			.select('_id barcode state cycleCount createdAt createdBy')
+			.select('_id barcode nickname state cycleCount createdAt createdBy')
 			.sort({ createdAt: -1 })
 			.limit(25)
 			.lean() as Promise<any[]>,
@@ -31,6 +31,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		recent: recent.map(b => ({
 			bucketId: b._id,
 			barcode: b.barcode ?? null,
+			nickname: b.nickname ?? null,
 			state: b.state,
 			cycleCount: b.cycleCount ?? 0,
 			createdAt: b.createdAt ? new Date(b.createdAt).toISOString() : null,
@@ -49,6 +50,7 @@ export const actions: Actions = {
 			const r = await createBucket({
 				qr: String(d.get('qr') ?? ''),
 				badge: String(d.get('badge') ?? ''),
+				nickname: String(d.get('nickname') ?? ''), // optional (2026-09-30)
 				user: { _id: locals.user._id, username: locals.user.username }
 			});
 			return { create: { success: true, ...r } };

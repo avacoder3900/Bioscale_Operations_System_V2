@@ -122,7 +122,7 @@ function cleanCodes(codes: string[] | undefined | null): string[] {
 interface TxInput {
 	bucketId: string;
 	cycleId?: string | null;
-	type: 'mint' | 'relabel' | 'create' | 'scan_in' | 'unscan' | 'advance' | 'scrap' | 'consume' | 'oven'
+	type: 'mint' | 'relabel' | 'nickname' | 'create' | 'scan_in' | 'unscan' | 'advance' | 'scrap' | 'consume' | 'oven'
 		| 'merge_in' | 'merge_out' | 'release' | 'quarantine' | 'retire' | 'void' | 'audit';
 	fromStage?: string | null;
 	toStage?: string | null;
@@ -468,7 +468,7 @@ export interface ScanResolution {
 	bucket?: any;
 	cycle?: any | null;
 	badge?: { displayName: string | null; username: string | null; note: string | null };
-	matches?: { bucketId: string; barcode: string | null; state: string; cycle: any | null }[];
+	matches?: { bucketId: string; barcode: string | null; nickname: string | null; state: string; cycle: any | null }[];
 }
 
 /**
@@ -498,7 +498,9 @@ export async function resolveScan(code: string): Promise<ScanResolution> {
 	}
 
 	const rx = { $regex: escapeRegExp(raw), $options: 'i' };
-	const found = await ProductionBucket.find({ $or: [{ _id: rx }, { barcode: rx }] })
+	// Nickname is searchable (typed "blue" finds "Big Blue") but never an exact
+	// resolve — a scan gun only ever produces ids and stickers.
+	const found = await ProductionBucket.find({ $or: [{ _id: rx }, { barcode: rx }, { nickname: rx }] })
 		.sort({ _id: 1 }).limit(10).lean() as any[];
 	const openCycles = found.length
 		? await BucketCycle.find({ bucketId: { $in: found.map(b => b._id) }, status: 'open' }).lean() as any[]
@@ -506,7 +508,7 @@ export async function resolveScan(code: string): Promise<ScanResolution> {
 	const cycleByBucket = new Map(openCycles.map(c => [c.bucketId, c]));
 	return {
 		kind: 'search',
-		matches: found.map(b => ({ bucketId: b._id, barcode: b.barcode ?? null, state: b.state, cycle: cycleByBucket.get(b._id) ?? null }))
+		matches: found.map(b => ({ bucketId: b._id, barcode: b.barcode ?? null, nickname: b.nickname ?? null, state: b.state, cycle: cycleByBucket.get(b._id) ?? null }))
 	};
 }
 
@@ -521,12 +523,64 @@ async function assertStickerFree(code: string, exceptBucketId?: string): Promise
 	if (other) throw new BucketError(`${code} is already the sticker on bucket ${other._id}.`, 409);
 }
 
+// ── nickname (2026-09-30) ─────────────────────────────────────────────────
+// A human name for the tub, shown in place of the sticker on the board. It is
+// display only: nothing resolves a scan by nickname, so a typo can never send
+// carts into the wrong bucket. Blank clears it.
+
+export const NICKNAME_MAX = 30;
+
+/** Trim + collapse whitespace; '' → null; refuses anything that looks like a code. */
+function normalizeNickname(raw: unknown): string | null {
+	const s = String(raw ?? '').replace(/\s+/g, ' ').trim();
+	if (!s) return null;
+	if (s.length > NICKNAME_MAX) throw new BucketError(`Nickname is too long (max ${NICKNAME_MAX} characters).`);
+	if (/^BKT-\d+$/i.test(s)) throw new BucketError('A nickname cannot look like a bucket id.');
+	if (isBadgeCode(s)) throw new BucketError('A nickname cannot look like a badge code.');
+	return s;
+}
+
+/** One live name → one bucket (case-insensitive). Retired tubs release their name. */
+async function assertNicknameFree(nickname: string, exceptBucketId?: string): Promise<void> {
+	const other = await ProductionBucket.findOne({
+		nickname: { $regex: `^${escapeRegExp(nickname)}$`, $options: 'i' },
+		state: { $ne: 'retired' },
+		...(exceptBucketId ? { _id: { $ne: exceptBucketId } } : {})
+	}).select('_id').lean() as any;
+	if (other) throw new BucketError(`"${nickname}" is already the nickname of bucket ${other._id}.`, 409);
+}
+
+/**
+ * Set, change or clear a bucket's nickname. Any manufacturing:write user; the
+ * bucket may be in use (the name is not part of the pass). Refused on a retired
+ * bucket — its label is dead and its name should be free for the next tub.
+ */
+export async function setBucketNickname(input: { bucketId: string; nickname: unknown; user: Operator }): Promise<{ bucketId: string; nickname: string | null; previous: string | null }> {
+	await connectDB();
+	const bucketId = await resolveBucketId(input.bucketId);
+	if (!bucketId) throw new BucketError(`"${(input.bucketId ?? '').trim()}" is not a known bucket.`, 404);
+	const bucket = await ProductionBucket.findById(bucketId).select('nickname state').lean() as any;
+	if (bucket.state === 'retired') throw new BucketError(`Bucket ${bucketId} is retired.`);
+	const next = normalizeNickname(input.nickname);
+	const previous: string | null = bucket.nickname ?? null;
+	if (next === previous) return { bucketId, nickname: next, previous };
+	if (next) await assertNicknameFree(next, bucketId);
+	await ProductionBucket.updateOne({ _id: bucketId }, next ? { $set: { nickname: next } } : { $unset: { nickname: 1 } });
+	const reason = next
+		? (previous ? `nickname changed: ${previous} → ${next}` : `nickname set: ${next}`)
+		: `nickname cleared: ${previous}`;
+	await logTx({ bucketId, type: 'nickname', reason, operator: input.user });
+	await audit('production_buckets', bucketId, 'NICKNAME', input.user, { nickname: next }, { nickname: previous });
+	return { bucketId, nickname: next, previous };
+}
+
 /**
  * New bucket = one QR sticker scanned (v2: one at a time, nothing else asked).
  * The bucket gets a permanent internal BKT- id so a damaged sticker can be
- * replaced later without the tub becoming a new bucket.
+ * replaced later without the tub becoming a new bucket. An optional nickname
+ * can be typed alongside the scan (2026-09-30); it is never required.
  */
-export async function createBucket(input: { qr: string; badge?: string | null; user: Operator }): Promise<{ bucketId: string; barcode: string; operator: string; method: Attribution['method'] }> {
+export async function createBucket(input: { qr: string; badge?: string | null; nickname?: string | null; user: Operator }): Promise<{ bucketId: string; barcode: string; nickname: string | null; operator: string; method: Attribution['method'] }> {
 	await connectDB();
 	// Badge first (§16.2): it is the first thing the operator scans, so it is the
 	// first thing that should be able to fail. `user` is the session = enteredBy.
@@ -534,11 +588,14 @@ export async function createBucket(input: { qr: string; badge?: string | null; u
 	const code = (input.qr ?? '').trim();
 	if (!code) throw new BucketError('Scan the QR sticker for the new bucket.');
 	await assertStickerFree(code);
+	const nickname = normalizeNickname(input.nickname);
+	if (nickname) await assertNicknameFree(nickname);
 	const id = await generateBarcode(BUCKET_PREFIX, 'bucket');
 	try {
 		await ProductionBucket.create({
 			_id: id,
 			barcode: code,
+			...(nickname ? { nickname } : {}),
 			state: 'available',
 			cycleCount: 0,
 			spotCheckPending: false,
@@ -548,9 +605,9 @@ export async function createBucket(input: { qr: string; badge?: string | null; u
 		if (e?.code === 11000) throw new BucketError(`${code} was just assigned to another bucket.`, 409);
 		throw e;
 	}
-	await logTx({ bucketId: id, type: 'mint', reason: `sticker ${code}`, relatedId: code, operator: gate.operator, enteredBy: input.user, attribution: gate.attribution });
-	await audit('production_buckets', id, 'INSERT', gate.operator, { barcode: code, state: 'available', badgeId: gate.badgeId ?? null, enteredBy: input.user.username });
-	return { bucketId: id, barcode: code, operator: gate.operator.username, method: gate.attribution.method };
+	await logTx({ bucketId: id, type: 'mint', reason: nickname ? `sticker ${code} · nickname ${nickname}` : `sticker ${code}`, relatedId: code, operator: gate.operator, enteredBy: input.user, attribution: gate.attribution });
+	await audit('production_buckets', id, 'INSERT', gate.operator, { barcode: code, nickname, state: 'available', badgeId: gate.badgeId ?? null, enteredBy: input.user.username });
+	return { bucketId: id, barcode: code, nickname, operator: gate.operator.username, method: gate.attribution.method };
 }
 
 /** Replace a damaged sticker. The BKT- id and all history stay put. */
@@ -1771,6 +1828,7 @@ export interface BoardCycle {
 	cycleId: string;
 	bucketId: string;
 	barcode: string | null;
+	nickname: string | null;
 	cycleNumber: number;
 	stage: BucketStage;
 	quantity: number;
@@ -1785,6 +1843,7 @@ export interface BoardCycle {
 export interface BoardBucket {
 	bucketId: string;
 	barcode: string | null;
+	nickname: string | null;
 	state: string;
 	cycleCount: number;
 	spotCheckPending: boolean;
@@ -1797,9 +1856,10 @@ export async function boardData(): Promise<{ cycles: BoardCycle[]; available: Bo
 	const [cycles, buckets, inUse] = await Promise.all([
 		BucketCycle.find({ status: 'open' }).sort({ stageEnteredAt: 1 }).lean() as any as Promise<any[]>,
 		ProductionBucket.find({ state: { $in: ['available', 'quarantined'] } }).sort({ _id: 1 }).lean() as any as Promise<any[]>,
-		ProductionBucket.find({ state: 'in_use' }).select('_id barcode').lean() as any as Promise<any[]>
+		ProductionBucket.find({ state: 'in_use' }).select('_id barcode nickname').lean() as any as Promise<any[]>
 	]);
 	const barcodeByBucket = new Map<string, string | null>(inUse.map(b => [b._id, b.barcode ?? null]));
+	const nicknameByBucket = new Map<string, string | null>(inUse.map(b => [b._id, b.nickname ?? null]));
 	const lastStageByBucket = new Map<string, BucketStage>();
 	if (buckets.length) {
 		const last = await BucketCycle.aggregate([
@@ -1810,12 +1870,12 @@ export async function boardData(): Promise<{ cycles: BoardCycle[]; available: Bo
 		for (const row of last) if (isBucketStage(row.stage)) lastStageByBucket.set(row._id, row.stage);
 	}
 	const toBucket = (b: any): BoardBucket => ({
-		bucketId: b._id, barcode: b.barcode ?? null, state: b.state, cycleCount: b.cycleCount ?? 0,
+		bucketId: b._id, barcode: b.barcode ?? null, nickname: b.nickname ?? null, state: b.state, cycleCount: b.cycleCount ?? 0,
 		spotCheckPending: !!b.spotCheckPending, residualNote: b.residualNote ?? null, lastStage: lastStageByBucket.get(b._id) ?? null
 	});
 	return {
 		cycles: cycles.filter(c => isBucketStage(c.stage)).map(c => ({
-			cycleId: c._id, bucketId: c.bucketId, barcode: barcodeByBucket.get(c.bucketId) ?? null, cycleNumber: c.cycleNumber,
+			cycleId: c._id, bucketId: c.bucketId, barcode: barcodeByBucket.get(c.bucketId) ?? null, nickname: nicknameByBucket.get(c.bucketId) ?? null, cycleNumber: c.cycleNumber,
 			stage: c.stage, quantity: c.quantity ?? 0, openedQty: c.openedQty ?? 0,
 			cartridgeIds: c.cartridgeIds ?? [],
 			stageEnteredAt: c.stageEnteredAt ? new Date(c.stageEnteredAt).toISOString() : null,
@@ -1853,7 +1913,7 @@ export async function changeLog(limit = 150): Promise<ChangeLogRow[]> {
 }
 
 export interface RegistryRow {
-	bucketId: string; barcode: string | null; state: string; cycleCount: number;
+	bucketId: string; barcode: string | null; nickname: string | null; state: string; cycleCount: number;
 	spotCheckPending: boolean; residualNote: string | null; retiredAt: string | null; retiredReason: string | null;
 	createdAt: string | null; createdBy: string | null;
 	current: { cycleNumber: number; stage: BucketStage; quantity: number } | null;
@@ -1880,7 +1940,7 @@ export async function bucketRegistry(): Promise<RegistryRow[]> {
 	return buckets.map(b => {
 		const c = cycleByBucket.get(b._id);
 		return {
-			bucketId: b._id, barcode: b.barcode ?? null, state: b.state ?? 'available', cycleCount: b.cycleCount ?? 0,
+			bucketId: b._id, barcode: b.barcode ?? null, nickname: b.nickname ?? null, state: b.state ?? 'available', cycleCount: b.cycleCount ?? 0,
 			spotCheckPending: !!b.spotCheckPending, residualNote: b.residualNote ?? null,
 			retiredAt: iso(b.retiredAt), retiredReason: b.retiredReason ?? null, createdAt: iso(b.createdAt), createdBy: b.createdBy?.username ?? null,
 			current: c && isBucketStage(c.stage) ? { cycleNumber: c.cycleNumber, stage: c.stage, quantity: c.quantity ?? 0 } : null,

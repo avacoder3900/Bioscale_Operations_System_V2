@@ -16852,3 +16852,29 @@ Retrieve this exact code: git checkout feat/badge-system at commit 0b7eb161
   (or: git log feat/badge-system --oneline to find it if the branch has since moved on)
 What this deployment is for: board toggle gone; admin-only "Badge required: on/off" link on the
 bucket board (and "Change" in the start-pass form) to the portal switch at /admin/badges.
+
+================================================================================
+2026-09-30 — feat/badge-system — Bucket nicknames (optional human name per tub)
+================================================================================
+User asked for the option to give buckets nicknames. Added ProductionBucket.nickname (optional,
+max 30 chars, whitespace-collapsed; refused if it looks like a BKT id or a badge code; unique
+case-insensitive among non-retired buckets so a retired tub's name can be reused). It is display
+only: resolveBucketId is unchanged, so a scan never resolves by nickname and a typo cannot route
+carts into the wrong bucket; the board's scan box and resolveScan list nickname hits as search
+results instead.
+
+Where it shows / is set:
+- bucket-service.ts: setBucketNickname() (any manufacturing:write user, any state but retired,
+  blank clears; writes a new `nickname` ledger row + NICKNAME audit); createBucket() takes an
+  optional nickname (mint row reason notes it); BoardCycle / BoardBucket / RegistryRow / scan
+  matches carry nickname; NICKNAME_MAX exported.
+- buckets/[bucketId]: header shows the nickname as the title with the BKT id beside it; "add
+  nickname" / "rename" opens an inline form (?/nickname). canEdit + nicknameMax in the load.
+- buckets/new: optional Nickname box under the sticker (clears after each create; Enter on the
+  sticker still submits); recent-buckets table gains a Nickname column.
+- buckets board: nameOf() = nickname ?? short sticker ?? id for every card/panel headline (id stays
+  underneath); registry gets a Nickname column + filter; local scan-box search matches nickname.
+- models: production-bucket.ts field; bucket-transaction.ts enum gains 'nickname'.
+- BUCKET-SYSTEM_PLAN.md: §4.1 (field + rules), §4.3 (type), §9.2, §9.4, §11 row, header date.
+svelte-check: 14 errors before and after — all pre-existing (r2.ts, research-proxy.ts,
+AskBimsWidget, 8× assembly/[sessionId], 2× validation/magnetometer/[sessionId]); none in these files.

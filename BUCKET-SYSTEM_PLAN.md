@@ -1,6 +1,6 @@
 # Bucket System — Production Buckets, v2 (as built)
 
-**Started:** 2026-09-21 · **Last updated:** 2026-09-25 (thermoseal: one roll part; fourth bucket stage **Backed** with **Move to oven** releasing the carts)
+**Started:** 2026-09-21 · **Last updated:** 2026-09-30 (bucket **nicknames**, §4.1; before that 2026-09-25: thermoseal one roll part; fourth bucket stage **Backed** with **Move to oven**)
 **Branch:** `feat/bucket-system` — **PR #54 open into `master`**
 (https://github.com/avacoder3900/Bioscale_Operations_System_V2/pull/54). `origin/master` has
 been merged into this branch twice (last `33a937a4`); it sits on current production code.
@@ -212,9 +212,18 @@ From the rail on any Available bucket.
 
 ### 4.1 `ProductionBucket` → `production_buckets`
 
-`_id` BKT-NNNNNN · `barcode` (QR, unique sparse) · `state` available | in_use | quarantined |
-retired · `currentCycleId` · `cycleCount` · `spotCheckPending` · `residualNote` ·
-`retiredAt/Reason` · `createdBy` · `homeLocation` (LEGACY, unused in v2).
+`_id` BKT-NNNNNN · `barcode` (QR, unique sparse) · **`nickname`** (optional, ≤30 chars, 2026-09-30) ·
+`state` available | in_use | quarantined | retired · `currentCycleId` · `cycleCount` ·
+`spotCheckPending` · `residualNote` · `retiredAt/Reason` · `createdBy` · `homeLocation` (LEGACY,
+unused in v2).
+
+**Nickname (2026-09-30).** A human name for the tub ("Big Blue"), shown in place of the sticker on
+board cards, panels and the registry, with the BKT id always underneath. Display only: nothing
+resolves a *scan* by nickname (`resolveBucketId` is unchanged), so a typo can never send carts into
+the wrong bucket; the board's scan box and `resolveScan` list it as a *search* hit. Unique
+(case-insensitive) among non-retired buckets — a retired tub releases its name. Set optionally at
+mint (§9.4) or any time from the history page (§9.2) by any `manufacturing:write` user, in any state
+but retired; blank clears it. Every set/change/clear is a `nickname` ledger row + `NICKNAME` audit.
 
 ### 4.2 `BucketCycle` → `bucket_cycles`
 
@@ -231,8 +240,8 @@ destinationBucketId, destinationCycleId}] }]`** (§9.8) · `stageEnteredAt` ·
 
 ### 4.3 `BucketTransaction` → `bucket_transactions` (immutable)
 
-Types: `mint, relabel, create, scan_in, unscan, advance, adjust, scrap, consume, merge_in,
-merge_out, release, quarantine, retire, void, audit`. Carries `cartridgeIds` for the rows that touch
+Types: `mint, relabel, nickname, create, scan_in, unscan, advance, adjust, scrap, consume, merge_in,
+merge_out, release, quarantine, retire, void, audit, oven`. Carries `cartridgeIds` for the rows that touch
 carts. The `advance` row into Unpressed stores the thermoseal note (cm, roll ids, rolls pulled)
 in `reason` and the first roll id in `relatedId`.
 
@@ -439,7 +448,9 @@ as *Where does this cart belong?* (§7, 2026-09-25).
 ### 9.2 `/manufacturing/cart-mfg/buckets/[bucketId]`
 
 Passes with per-pass cartridges (in bucket / → on to wax filling / scrapped), source lots,
-thermoseal cm, ledger rows, *Replace sticker* link, *Void this pass…* (admin).
+thermoseal cm, ledger rows, *Replace sticker* link, *Void this pass…* (admin), and the
+*add nickname* / *rename* control in the header (§4.1; `?/nickname`, `manufacturing:write`,
+hidden on a retired bucket). With a nickname the header reads *Big Blue* with the BKT id beside it.
 
 ### 9.3 Summary views (read-only, deep-link to the board)
 
@@ -460,7 +471,9 @@ thermoseal cm, ledger rows, *Replace sticker* link, *Void this pass…* (admin).
 Scan your badge (2026-09-30, when *Require badge* is on), then the sticker → `BKT-NNNNNN` minted
 with that `barcode`; `createdBy` and the `mint` row's `operator` are the badge holder, `enteredBy`
 the session. The badge field keeps its value across creates so one person can mint several tubs;
-a badge scanned into the sticker field, or into any cart field, is refused. `?bucket=BKT-…` presets
+a badge scanned into the sticker field, or into any cart field, is refused. An optional **Nickname**
+box sits under the sticker (2026-09-30, §4.1): type it before scanning if you want one — the gun's
+Enter on the sticker still submits — and it clears after each create. `?bucket=BKT-…` presets
 *Replace sticker*. "← Return to previous page." The v1 `print-bucket-labels` page is deleted. This page
 (plus the board's *New bucket* header button) is the **only** way to mint a bucket or replace a
 sticker — the board's inline Mint card was removed on 2026-09-25, along with its `?/mint` and
@@ -577,6 +590,7 @@ per-scan lookup only needs `manufacturing:read`.
 | _(this change)_ | **"Backed" + Move to oven + In oven dropdown** (§2, §6.5, §9.1): stage relabelled everywhere (board, strip, dashboard, cartridge-admin, pipeline, dev dashboard, override); board grid `md:grid-cols-5` so Backed sits beside Pressed; `moveToOven` (service + `?/moveToOven`) closes the pass (`ovenReleasedAt/By`, `oven` change-log type, `MOVE_TO_OVEN` audit) and returns the tub to Available — no cart write, carts stay `backing` until wax filling; `returnCarts` leaves oven-released carts loose; the history page counts a released pass's carts as *went on*; `inOvenCarts()` feeds the **In oven** dropdown inside the Backed column. (An interim version the same day stamped carts `backing.movedToOvenAt` and had a longer stage name — reverted at the user's request.) |
 
 | _(feat/badge-system)_ | **Operator badges at mint + start-pass** (§6.1, §9.4; design and build layout in `BADGE-SYSTEM_PLAN.md` Part 2): `createBucket` / `startCycle` take a scanned `badge`; `requireBadge()` resolves it (or falls back to the session when the admin-only *Require badge* switch at `/admin/badges` is off) and refuses a holder without `manufacturing:write`; `startCycle` opens a `Custody` row (`custodyId` on the cycle) that `closeCycle` / `voidCycle` release; every ledger row now carries `enteredBy` + `attribution`; `scanCartIn`, `assertStickerFree`, `auditScan` refuse a badge code; `resolveScan` names the holder when a badge lands in the bucket box. New: `operator-badge.ts`, `custody.ts`, `badge-service.ts`, `/admin/badges` (portal + CR80 print). |
+| _(feat/badge-system)_ | **Bucket nicknames** (§4.1, §9.2, §9.4): `ProductionBucket.nickname` (optional, ≤30, unique among non-retired, case-insensitive); `setBucketNickname()` + `?/nickname` on the history page (any `manufacturing:write` user, blank clears, refused on retired); optional Nickname box on `/buckets/new` (`createBucket` takes `nickname`); board cards/panels headline the nickname over the sticker via `nameOf()`, registry gains a Nickname column, board scan box + `resolveScan` search by it (never an exact resolve — `resolveBucketId` unchanged); new `nickname` ledger type + `NICKNAME` audit. |
 
 `npm run check` after v2: **12 errors / 438 warnings** — the same 12 pre-existing (`r2.ts`,
 `AskBimsWidget.svelte`, 8× `assembly/[sessionId]`, 2× `validation/magnetometer/[sessionId]`

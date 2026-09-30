@@ -6,12 +6,15 @@
  */
 import { error, fail, redirect } from '@sveltejs/kit';
 import { connectDB, CartridgeRecord, LotRecord } from '$lib/server/db';
-import { requirePermission } from '$lib/server/permissions';
-import { bucketHistory, voidCycle, retireBucket, BucketError, STAGE_LABELS } from '$lib/server/services/bucket-service';
+import { requirePermission, hasPermission } from '$lib/server/permissions';
+import { bucketHistory, voidCycle, retireBucket, setBucketNickname, BucketError, STAGE_LABELS, NICKNAME_MAX } from '$lib/server/services/bucket-service';
 import type { Actions, PageServerLoad } from './$types';
 
 function isBucketAdmin(user: App.Locals['user']): boolean {
 	return !!user?.roles.some(r => r.permissions.includes('manufacturing:admin') || r.permissions.includes('admin:full'));
+}
+function canWrite(user: App.Locals['user']): boolean {
+	return hasPermission(user, 'manufacturing:write') || isBucketAdmin(user);
 }
 
 export const load: PageServerLoad = async ({ locals, params }) => {
@@ -75,9 +78,12 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 
 	return {
 		canVoid: isBucketAdmin(locals.user),
+		canEdit: canWrite(locals.user),
+		nicknameMax: NICKNAME_MAX,
 		bucket: {
 			bucketId: h.bucket._id,
 			barcode: h.bucket.barcode ?? null,
+			nickname: h.bucket.nickname ?? null,
 			state: h.bucket.state,
 			cycleCount: h.bucket.cycleCount ?? 0,
 			homeLocation: h.bucket.homeLocation ?? null,
@@ -130,6 +136,27 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 };
 
 export const actions: Actions = {
+	/** Set, change or clear the nickname (2026-09-30). Any manufacturing:write user; blank clears. */
+	nickname: async ({ request, locals, params }) => {
+		if (!locals.user) redirect(302, '/login');
+		if (!canWrite(locals.user)) {
+			return fail(403, { nickname: { error: 'Naming a bucket requires manufacturing:write' } });
+		}
+		await connectDB();
+		const d = await request.formData();
+		try {
+			const r = await setBucketNickname({
+				bucketId: params.bucketId,
+				nickname: d.get('nickname'),
+				user: { _id: locals.user._id, username: locals.user.username }
+			});
+			return { nickname: { success: true, ...r } };
+		} catch (e) {
+			if (e instanceof BucketError) return fail(e.status, { nickname: { error: e.message } });
+			throw e;
+		}
+	},
+
 	/**
 	 * Void a pass that never really happened (test data / wrong lot) and return
 	 * what it took from inventory. Admin only — it moves real inventory numbers.

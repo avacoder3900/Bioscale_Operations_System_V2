@@ -27,7 +27,7 @@
 			canAdmin: boolean;
 			badgeMode: 'off' | 'required';
 			canBadgeAdmin: boolean;
-			scan: { kind: 'bucket' | 'search' | 'badge'; bucket?: any; cycle?: any; badge?: { displayName: string | null; username: string | null; note: string | null }; matches?: { bucketId: string; barcode: string | null; state: string; cycle: any }[] } | null;
+			scan: { kind: 'bucket' | 'search' | 'badge'; bucket?: any; cycle?: any; badge?: { displayName: string | null; username: string | null; note: string | null }; matches?: { bucketId: string; barcode: string | null; nickname: string | null; state: string; cycle: any }[] } | null;
 			scanQuery: string;
 		};
 		form: {
@@ -77,9 +77,9 @@
 	function stageLabel(stage: string | null | undefined): string { return stage ? (data.stages.find(s => s.key === stage)?.label ?? stage) : '—'; }
 	// Destinations for a stage: open passes at that stage first, then empty buckets (this one first — the carts are already in it).
 	function residualOptions(stage: string, self: string): { bucketId: string; label: string; newPass: boolean }[] {
-		const open = boardCycles.filter(c => c.stage === stage).map(c => ({ bucketId: c.bucketId, label: `${shortQr(c.barcode) ?? c.bucketId} · ${c.bucketId} #${c.cycleNumber} · ${c.quantity} cart${c.quantity === 1 ? '' : 's'} at ${stageLabel(stage)}`, newPass: false }));
+		const open = boardCycles.filter(c => c.stage === stage).map(c => ({ bucketId: c.bucketId, label: `${nameOf(c)} · ${c.bucketId} #${c.cycleNumber} · ${c.quantity} cart${c.quantity === 1 ? '' : 's'} at ${stageLabel(stage)}`, newPass: false }));
 		const empties = [...data.board.available].sort((a, b) => (a.bucketId === self ? -1 : b.bucketId === self ? 1 : 0))
-			.map(b => ({ bucketId: b.bucketId, label: `${shortQr(b.barcode) ?? b.bucketId} · ${b.bucketId} — empty, start a new pass at ${stageLabel(stage)}${b.bucketId === self ? ' (this bucket)' : ''}`, newPass: true }));
+			.map(b => ({ bucketId: b.bucketId, label: `${nameOf(b)} · ${b.bucketId} — empty, start a new pass at ${stageLabel(stage)}${b.bucketId === self ? ' (this bucket)' : ''}`, newPass: true }));
 		return [...open, ...empties];
 	}
 	function residualDestFor(stage: string, self: string): string {
@@ -306,6 +306,11 @@
 	function shortQr(barcode: string | null): string | null {
 		return barcode ? (barcode.length > 12 ? `${barcode.slice(0, 8)}…` : barcode) : null;
 	}
+	// Headline for a bucket card / panel: nickname if it has one (2026-09-30),
+	// else the sticker, else the internal id. The id is always shown underneath.
+	function nameOf(b: { nickname: string | null; barcode: string | null; bucketId: string }): string {
+		return b.nickname ?? shortQr(b.barcode) ?? b.bucketId;
+	}
 	function resetLists() { discardList = []; scrapList = []; residualList = []; listInput = ''; residualDisposition = ''; residualDest = ''; cartScanError = ''; cartScanOk = ''; scanFailures = []; whereFind = ''; whereLine = ''; whereOk = true; }
 
 	function openCycle(c: BoardCycle) { panel = { kind: 'cycle', cycleId: c.cycleId, mode: 'view' }; resetLists(); if (c.stage === 'barcoded') focusCartScan(); }
@@ -323,8 +328,11 @@
 	function matchesLabel(bucketId: string, barcode: string | null, code: string): boolean {
 		return bucketId === code.toUpperCase() || (barcode != null && barcode.toLowerCase() === code.toLowerCase());
 	}
-	function containsLabel(bucketId: string, barcode: string | null, code: string): boolean {
-		return bucketId.includes(code.toUpperCase()) || (barcode != null && barcode.toLowerCase().includes(code.toLowerCase()));
+	// Nickname is searchable here (typed "blue" lists "Big Blue") but never an
+	// exact match — only an id or sticker opens a panel straight from the box.
+	function containsLabel(bucketId: string, barcode: string | null, code: string, nickname: string | null = null): boolean {
+		return bucketId.includes(code.toUpperCase()) || (barcode != null && barcode.toLowerCase().includes(code.toLowerCase()))
+			|| (nickname != null && nickname.toLowerCase().includes(code.toLowerCase()));
 	}
 	function resolveLocal(code: string): boolean {
 		const raw = code.trim();
@@ -334,8 +342,8 @@
 		const bucket = allIdleBuckets.find(b => matchesLabel(b.bucketId, b.barcode, raw));
 		if (bucket) { openBucket(bucket); shortList = []; return true; }
 		const hits = [
-			...boardCycles.filter(c => containsLabel(c.bucketId, c.barcode, raw)).map(c => ({ bucketId: c.bucketId, state: 'in_use', hint: `${labelFor(c.stage)} · ${c.quantity}` })),
-			...allIdleBuckets.filter(b => containsLabel(b.bucketId, b.barcode, raw)).map(b => ({ bucketId: b.bucketId, state: b.state, hint: b.state === 'quarantined' ? (b.residualNote ?? 'quarantined') : `available · ${b.cycleCount} passes` }))
+			...boardCycles.filter(c => containsLabel(c.bucketId, c.barcode, raw, c.nickname)).map(c => ({ bucketId: c.bucketId, state: 'in_use', hint: `${c.nickname ? `${c.nickname} · ` : ''}${labelFor(c.stage)} · ${c.quantity}` })),
+			...allIdleBuckets.filter(b => containsLabel(b.bucketId, b.barcode, raw, b.nickname)).map(b => ({ bucketId: b.bucketId, state: b.state, hint: `${b.nickname ? `${b.nickname} · ` : ''}${b.state === 'quarantined' ? (b.residualNote ?? 'quarantined') : `available · ${b.cycleCount} passes`}` }))
 		].slice(0, 8);
 		shortList = hits;
 		return hits.length > 0;
@@ -558,7 +566,7 @@
 	});
 	const filteredRegistry = $derived.by(() => {
 		const q = regFilter.trim().toLowerCase();
-		return data.registry.filter(r => (regState === 'all' || r.state === regState) && (!q || r.bucketId.toLowerCase().includes(q) || (r.barcode ?? '').toLowerCase().includes(q)));
+		return data.registry.filter(r => (regState === 'all' || r.state === regState) && (!q || r.bucketId.toLowerCase().includes(q) || (r.barcode ?? '').toLowerCase().includes(q) || (r.nickname ?? '').toLowerCase().includes(q)));
 	});
 	const regStateLabel: Record<string, string> = { available: 'Available', in_use: 'In use', quarantined: 'Quarantined', retired: 'Retired' };
 	const regStateTint: Record<string, string> = {
@@ -654,7 +662,7 @@
 						<div class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] hover:border-[var(--color-tron-cyan)]/60 {(panel.kind === 'start' || panel.kind === 'retire') && panel.bucketId === b.bucketId ? 'ring-1 ring-[var(--color-tron-cyan)]' : ''}">
 							<button type="button" onclick={() => openBucket(b)} class="w-full p-2 text-left">
 								<div class="flex items-center justify-between">
-									<span class="font-mono text-sm text-[var(--color-tron-text)]">{shortQr(b.barcode) ?? b.bucketId}</span>
+									<span class="font-mono text-sm text-[var(--color-tron-text)]">{nameOf(b)}</span>
 									{#if b.spotCheckPending}<span class="rounded bg-[var(--color-tron-yellow)]/20 px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-[var(--color-tron-yellow)]" title="Confirm empty at next start">check</span>{/if}
 								</div>
 								<div class="mt-1 text-[10px] text-[var(--color-tron-text-secondary)]">{b.bucketId} · {b.cycleCount} pass{b.cycleCount === 1 ? '' : 'es'}</div>
@@ -671,7 +679,7 @@
 						<button type="button" onclick={() => openBucket(b)}
 							class="w-full rounded border border-[var(--color-tron-yellow)]/50 bg-[var(--color-tron-yellow)]/5 p-2 text-left hover:border-[var(--color-tron-yellow)] {panel.kind === 'residual' && panel.bucketId === b.bucketId ? 'ring-1 ring-[var(--color-tron-yellow)]' : ''}">
 							<div class="flex items-center justify-between">
-								<span class="font-mono text-sm text-[var(--color-tron-text)]">{shortQr(b.barcode) ?? b.bucketId}</span>
+								<span class="font-mono text-sm text-[var(--color-tron-text)]">{nameOf(b)}</span>
 								<span class="rounded bg-[var(--color-tron-yellow)]/20 px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-[var(--color-tron-yellow)]">quarantined</span>
 							</div>
 							<div class="mt-1 truncate text-[10px] text-[var(--color-tron-text-secondary)]" title={b.residualNote ?? ''}>{b.residualNote ?? 'residual pending'}</div>
@@ -696,7 +704,7 @@
 							<div class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] hover:border-[var(--color-tron-cyan)]/60 {panel.kind === 'cycle' && panel.cycleId === c.cycleId ? 'ring-1 ring-[var(--color-tron-cyan)]' : ''}">
 								<button type="button" onclick={() => openCycle(c)} class="w-full p-2 text-left">
 									<div class="flex items-baseline justify-between">
-										<span class="font-mono text-sm text-[var(--color-tron-text)]">{shortQr(c.barcode) ?? c.bucketId}</span>
+										<span class="font-mono text-sm text-[var(--color-tron-text)]">{nameOf(c)}</span>
 										<span class="text-lg font-bold text-[var(--color-tron-cyan)]">{c.quantity}</span>
 									</div>
 									<div class="mt-1 flex items-center justify-between text-[10px] text-[var(--color-tron-text-secondary)]">
@@ -829,12 +837,12 @@
 								<p class="text-[var(--color-tron-yellow)]">{data.scan.badge?.note ?? 'Unknown badge.'}</p>
 							{/if}
 						{:else if data.scan.kind === 'bucket'}
-							<div class="flex items-center justify-between"><span class="font-mono text-[var(--color-tron-text)]">{data.scan.bucket._id}</span><span class="text-[10px] uppercase text-[var(--color-tron-text-secondary)]">{data.scan.bucket.state} · {data.scan.bucket.cycleCount} passes</span></div>
+							<div class="flex items-center justify-between"><span class="font-mono text-[var(--color-tron-text)]">{#if data.scan.bucket.nickname}<span class="font-sans">{data.scan.bucket.nickname}</span> · {/if}{data.scan.bucket._id}</span><span class="text-[10px] uppercase text-[var(--color-tron-text-secondary)]">{data.scan.bucket.state} · {data.scan.bucket.cycleCount} passes</span></div>
 							<a href="/manufacturing/cart-mfg/buckets/{data.scan.bucket._id}" class="mt-1 block text-[var(--color-tron-cyan)] hover:underline">Open history →</a>
 						{:else if (data.scan.matches ?? []).length === 0}
 							<p class="text-[var(--color-tron-text-secondary)]">No bucket matches “{data.scanQuery}”.</p>
 						{:else}
-							<ul class="space-y-1">{#each data.scan.matches ?? [] as m (m.bucketId)}<li class="flex items-center justify-between"><a href="/manufacturing/cart-mfg/buckets/{m.bucketId}" class="font-mono text-[var(--color-tron-cyan)] hover:underline">{m.bucketId}</a><span class="text-[10px] text-[var(--color-tron-text-secondary)]">{m.cycle ? `${labelFor(m.cycle.stage)} · ${m.cycle.quantity}` : m.state}</span></li>{/each}</ul>
+							<ul class="space-y-1">{#each data.scan.matches ?? [] as m (m.bucketId)}<li class="flex items-center justify-between"><a href="/manufacturing/cart-mfg/buckets/{m.bucketId}" class="font-mono text-[var(--color-tron-cyan)] hover:underline">{m.bucketId}{#if m.nickname} <span class="font-sans text-[var(--color-tron-text)]">· {m.nickname}</span>{/if}</a><span class="text-[10px] text-[var(--color-tron-text-secondary)]">{m.cycle ? `${labelFor(m.cycle.stage)} · ${m.cycle.quantity}` : m.state}</span></li>{/each}</ul>
 						{/if}
 					</div>
 				{/if}
@@ -860,7 +868,7 @@
 						{@const nxt = nextKey(c.stage)}
 						<div class="flex items-start justify-between">
 							<div>
-								<div class="font-mono text-lg text-[var(--color-tron-text)]">{shortQr(c.barcode) ?? c.bucketId}</div>
+								<div class="font-mono text-lg text-[var(--color-tron-text)]">{nameOf(c)}</div>
 								<div class="text-xs text-[var(--color-tron-text-secondary)]">{c.bucketId} #{c.cycleNumber} · {labelFor(c.stage)} · opened {c.openedAt ? new Date(c.openedAt).toLocaleString() : '—'}{c.openedBy ? ` · ${c.openedBy}` : ''}</div>
 							</div>
 							<a href="/manufacturing/cart-mfg/buckets/{c.bucketId}" class="text-[10px] text-[var(--color-tron-cyan)] hover:underline">history</a>
@@ -1147,7 +1155,7 @@
 					{@const b = panelBucket}
 					<div class="flex items-start justify-between">
 						<div>
-							<div class="font-mono text-lg text-[var(--color-tron-text)]">{shortQr(b.barcode) ?? b.bucketId}</div>
+							<div class="font-mono text-lg text-[var(--color-tron-text)]">{nameOf(b)}</div>
 							<div class="text-xs text-[var(--color-tron-text-secondary)]">{b.bucketId} · available · {b.cycleCount} pass{b.cycleCount === 1 ? '' : 'es'}</div>
 						</div>
 						<div class="flex gap-2">
@@ -1207,7 +1215,7 @@
 					{@const opts = last ? residualOptions(last, b.bucketId) : []}
 					{@const dest = last ? residualDestFor(last, b.bucketId) : ''}
 					<div>
-						<div class="font-mono text-lg text-[var(--color-tron-text)]">{shortQr(b.barcode) ?? b.bucketId}</div>
+						<div class="font-mono text-lg text-[var(--color-tron-text)]">{nameOf(b)}</div>
 						<div class="text-xs text-[var(--color-tron-text-secondary)]">leftover carts found in this bucket</div>
 					</div>
 
@@ -1293,7 +1301,7 @@
 					{@const b = panelBucket}
 					<form method="POST" action="?/retire" use:enhance={enhanceBusy} class="space-y-3">
 						<input type="hidden" name="bucketId" value={b.bucketId} />
-						<p class="font-mono text-lg text-[var(--color-tron-text)]">{shortQr(b.barcode) ?? b.bucketId}</p>
+						<p class="font-mono text-lg text-[var(--color-tron-text)]">{nameOf(b)}</p>
 						<p class="text-xs text-[var(--color-tron-text-secondary)]">Retiring is permanent; the bucket's history stays.</p>
 						<label class="block"><span class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Reason (required)</span><input type="text" name="reason" required class={inputCls} /></label>
 						{#if form?.retire?.error}<p class="text-xs text-[var(--color-tron-error)]">{form.retire.error}</p>{/if}
@@ -1379,11 +1387,12 @@
 				<p class="py-4 text-center text-xs text-[var(--color-tron-text-secondary)]">{data.registry.length === 0 ? 'No buckets yet.' : 'No buckets match.'}</p>
 			{:else}
 				<div class="overflow-x-auto"><table class="w-full text-xs">
-					<thead><tr class="border-b border-[var(--color-tron-border)] text-left text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]"><th class="px-2 py-1">Sticker</th><th class="px-2 py-1">Id</th><th class="px-2 py-1">Status</th><th class="px-2 py-1">Right now</th><th class="px-2 py-1 text-right">Passes</th><th class="px-2 py-1">Last activity</th><th class="px-2 py-1">Created</th></tr></thead>
+					<thead><tr class="border-b border-[var(--color-tron-border)] text-left text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]"><th class="px-2 py-1">Sticker</th><th class="px-2 py-1">Nickname</th><th class="px-2 py-1">Id</th><th class="px-2 py-1">Status</th><th class="px-2 py-1">Right now</th><th class="px-2 py-1 text-right">Passes</th><th class="px-2 py-1">Last activity</th><th class="px-2 py-1">Created</th></tr></thead>
 					<tbody>
 						{#each filteredRegistry as r (r.bucketId)}
 							<tr class="border-b border-[var(--color-tron-border)]/40 {r.state === 'retired' ? 'opacity-70' : ''}">
 								<td class="whitespace-nowrap px-2 py-1 font-mono text-[var(--color-tron-text)]" title={r.barcode ?? ''}>{shortQr(r.barcode) ?? '—'}</td>
+								<td class="whitespace-nowrap px-2 py-1 text-[var(--color-tron-text)]">{r.nickname ?? '—'}</td>
 								<td class="whitespace-nowrap px-2 py-1 font-mono"><a href="/manufacturing/cart-mfg/buckets/{r.bucketId}" class="text-[var(--color-tron-cyan)] hover:underline">{r.bucketId}</a></td>
 								<td class="whitespace-nowrap px-2 py-1"><span class="rounded border px-1.5 py-0.5 text-[10px] uppercase tracking-wider {regStateTint[r.state] ?? ''}">{regStateLabel[r.state] ?? r.state}</span></td>
 								<td class="px-2 py-1 text-[var(--color-tron-text-secondary)]">

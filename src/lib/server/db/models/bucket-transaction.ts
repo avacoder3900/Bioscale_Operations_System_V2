@@ -17,7 +17,8 @@ const bucketTransactionSchema = new Schema({
 		enum: [
 			'mint', 'relabel', 'create', 'scan_in', 'unscan', 'advance', 'adjust', 'scrap', 'consume',
 			'merge_in', 'merge_out', 'release', 'quarantine', 'retire', 'void', 'audit',
-			'oven' // moveToOven: the backed pass's carts released to the oven, all at once (2026-09-25)
+			'oven', // moveToOven: the backed pass's carts released to the oven, all at once (2026-09-25)
+			'nickname' // setBucketNickname: nickname set, changed or cleared (2026-09-30)
 		],
 		required: true
 	},
