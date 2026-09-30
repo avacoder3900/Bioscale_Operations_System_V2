@@ -472,8 +472,8 @@ Scan your badge (2026-09-30, when *Require badge* is on), then the sticker → `
 with that `barcode`; `createdBy` and the `mint` row's `operator` are the badge holder, `enteredBy`
 the session. The badge field keeps its value across creates so one person can mint several tubs;
 a badge scanned into the sticker field, or into any cart field, is refused. Nicknames are **not**
-taken here (user, 2026-09-30): the page.s third block, **Nickname a bucket** (`?/nickname`, §4.1),
-is scan the sticker → type the name → *Set nickname*; an empty name is *Clear nickname*. The gun.s
+taken here (user, 2026-09-30): the page's third block, **Nickname a bucket** (`?/nickname`, §4.1),
+is scan the sticker → type the name → *Set nickname*; an empty name is *Clear nickname*. The gun's
 Enter on the sticker jumps to the name field. `?bucket=BKT-…` presets
 *Replace sticker*. "← Return to previous page." The v1 `print-bucket-labels` page is deleted. This page
 (plus the board's *New bucket* header button) is the **only** way to mint a bucket or replace a
