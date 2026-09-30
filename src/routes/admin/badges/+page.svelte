@@ -28,6 +28,34 @@
 	const required = $derived(data.settings.mode === 'required');
 	const active = $derived(data.badges.filter(b => b.status === 'active'));
 	const revoked = $derived(data.badges.filter(b => b.status === 'revoked'));
+
+	// Batch print (§17.2): build a list from the dropdown or by searching names,
+	// then print every card on one sheet at /admin/badges/print?ids=…
+	let batch = $state<string[]>([]);
+	let batchQuery = $state('');
+	let batchPick = $state('');
+	const batchBadges = $derived(batch.map(id => active.find(b => b.badgeId === id)).filter((b): b is Badge => !!b));
+	const batchCandidates = $derived(active.filter(b => !batch.includes(b.badgeId)));
+	const batchMatches = $derived.by(() => {
+		const q = batchQuery.trim().toLowerCase();
+		if (!q) return [];
+		return batchCandidates
+			.filter(b => b.displayName.toLowerCase().includes(q) || (b.username ?? '').toLowerCase().includes(q) || b.code.toLowerCase().includes(q))
+			.slice(0, 8);
+	});
+	const batchHref = $derived(`/admin/badges/print?ids=${batch.join(',')}`);
+
+	function addToBatch(id: string) {
+		if (id && !batch.includes(id)) batch = [...batch, id];
+		batchQuery = '';
+		batchPick = '';
+	}
+	function removeFromBatch(id: string) { batch = batch.filter(x => x !== id); }
+	function addAllActive() { batch = [...batch, ...batchCandidates.map(b => b.badgeId)]; }
+	// Enter on the search box adds the top match, so a list can be built without the mouse.
+	function batchSearchKeydown(e: KeyboardEvent) {
+		if (e.key === 'Enter' && batchMatches.length > 0) { e.preventDefault(); addToBatch(batchMatches[0].badgeId); }
+	}
 	// The row just issued / reissued, so the admin can go straight to Print.
 	const justIssued = $derived(form?.issue?.badge ?? form?.reissue?.badge ?? null);
 
@@ -116,6 +144,64 @@
 			</p>
 		{/if}
 	</form>
+
+	<!-- Batch print -->
+	<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4">
+		<div class="flex flex-wrap items-center justify-between gap-2">
+			<div>
+				<p class="text-sm font-medium text-[var(--color-tron-text)]">Batch print</p>
+				<p class="text-[11px] text-[var(--color-tron-text-secondary)]">Pick badges from the list or search a name; every card in the list prints on one sheet, eight per page.</p>
+			</div>
+			<div class="flex items-center gap-2">
+				<button type="button" class={btnGhost} disabled={batchCandidates.length === 0} onclick={addAllActive}>Add all active ({batchCandidates.length})</button>
+				<button type="button" class={btnGhost} disabled={batch.length === 0} onclick={() => { batch = []; }}>Clear</button>
+				{#if batch.length > 0}
+					<a href={batchHref} class="rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/20 px-4 py-1.5 text-xs font-medium text-[var(--color-tron-cyan)]">Print {batch.length} badge{batch.length === 1 ? '' : 's'} →</a>
+				{:else}
+					<span class="rounded border border-[var(--color-tron-border)] px-4 py-1.5 text-xs text-[var(--color-tron-text-secondary)] opacity-50">Print 0 badges</span>
+				{/if}
+			</div>
+		</div>
+
+		<div class="mt-3 grid gap-3 md:grid-cols-2">
+			<label class="block">
+				<span class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Add from list</span>
+				<select bind:value={batchPick} onchange={() => addToBatch(batchPick)} class={inputCls}>
+					<option value="">{batchCandidates.length ? '— Select a badge —' : 'Nothing left to add'}</option>
+					{#each batchCandidates as b (b.badgeId)}<option value={b.badgeId}>{b.displayName}{b.username ? ` — ${b.username}` : ''}</option>{/each}
+				</select>
+			</label>
+			<label class="relative block">
+				<span class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Search a name</span>
+				<input type="text" bind:value={batchQuery} onkeydown={batchSearchKeydown} autocomplete="off" placeholder="type a name, user, or code…" class={inputCls} />
+				{#if batchMatches.length > 0}
+					<ul class="absolute z-10 mt-1 w-full overflow-hidden rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] shadow-lg">
+						{#each batchMatches as b (b.badgeId)}
+							<li>
+								<button type="button" class="flex w-full items-center justify-between px-3 py-2 text-left text-sm text-[var(--color-tron-text)] hover:bg-[var(--color-tron-cyan)]/10" onclick={() => addToBatch(b.badgeId)}>
+									<span>{b.displayName}{b.username ? ` — ${b.username}` : ''}</span>
+									<span class="font-mono text-[10px] text-[var(--color-tron-text-secondary)]">{b.code}</span>
+								</button>
+							</li>
+						{/each}
+					</ul>
+				{:else if batchQuery.trim()}
+					<p class="mt-1 text-[11px] text-[var(--color-tron-text-secondary)]">No active badge matches “{batchQuery.trim()}”.</p>
+				{/if}
+			</label>
+		</div>
+
+		{#if batchBadges.length > 0}
+			<ul class="mt-3 flex flex-wrap gap-2">
+				{#each batchBadges as b (b.badgeId)}
+					<li class="flex items-center gap-2 rounded-full border border-[var(--color-tron-cyan)]/40 bg-[var(--color-tron-cyan)]/10 py-1 pl-3 pr-1 text-xs text-[var(--color-tron-text)]">
+						<span>{b.displayName}</span>
+						<button type="button" class="rounded-full px-1.5 text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-error)]" title="Remove from list" onclick={() => removeFromBatch(b.badgeId)}>×</button>
+					</li>
+				{/each}
+			</ul>
+		{/if}
+	</div>
 
 	<!-- Active badges -->
 	<div class="overflow-x-auto rounded border border-[var(--color-tron-border)]">

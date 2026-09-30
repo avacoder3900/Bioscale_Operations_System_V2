@@ -1,3 +1,5 @@
+| `src/routes/admin/badges/print/+page.server.ts`, `+page.svelte` | **new** — batch print sheet (`?ids=`) |
+| `src/lib/components/admin/BadgeCard.svelte` | **new** — the CR80 card, shared by both print pages |
 # Badge System — Operator Identity for the Bucket System (design discussion)
 
 **Status:** Part 1 = design discussion (2026-09-23). Part 2 = v1 build layout (2026-09-30), **built the same day on `feat/badge-system`** — see §20 for what changed between layout and code.
@@ -504,6 +506,13 @@ QR (`bwip-js/browser`, `qrcode`, code as the payload) centred, code in small mon
 "BIMS" wordmark. `window.print()` button; the load bumps `printCount`. Revoked badges render with
 a red REVOKED band so a stale print cannot be confused for a live one.
 
+**Batch print** (added the same day): a *Batch print* panel on the portal builds a list from a
+dropdown of active badges, a name/user/code search (Enter adds the top match), or *Add all
+active*; *Print N badges* opens `/admin/badges/print?ids=a,b,c` — a cut sheet of CR80 cards, two
+across and four down per Letter/A4 page (`break-inside: avoid`). The card itself is one shared
+component, `src/lib/components/admin/BadgeCard.svelte`, used by both print pages. Opening the
+sheet bumps `printCount` once for each active badge on it; revoked ones still print with the band.
+
 ### 17.3 `/manufacturing/cart-mfg/buckets/new` — mint
 
 Two scan fields, in scan order: **1. Scan your badge**, then focus jumps to **2. Scan the tub's
@@ -629,6 +638,8 @@ Built on `feat/badge-system` in the §18.1 order. Deviations, all small:
    load (active badges only).
 7. **Print page uses `bwip-js/browser` `qrcode` at scale 8 with default error correction** — the
    `eclevel` option is not in the package's `RenderOptions` typing.
+ 8. **Batch print added after the first push** (§17.2): `getBadges(ids)` keeps selection order and
+   drops unknown ids; `bumpPrintCount` takes one id or a list (`updateMany`).
 
 `npm run check`: 14 errors before, 14 after — all pre-existing (`research-proxy.ts` ×2,
 `r2.ts`, `AskBimsWidget.svelte`, `assembly/[sessionId]` ×8, `validation/magnetometer/[sessionId]` ×2 —

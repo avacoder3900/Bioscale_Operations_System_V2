@@ -16784,3 +16784,17 @@ Retrieve this exact code: git checkout feat/badge-system at commit 3f35d12c
 What this deployment is for: first live test of the badge system — /admin/badges portal (issue,
 print, Require-badge switch) and the badge-gated mint (/manufacturing/cart-mfg/buckets/new) and
 start-pass on the bucket board. Section 18.2 checklist in BADGE-SYSTEM_PLAN.md runs against this.
+
+================================================================================
+2026-09-30 — feat/badge-system — Badge Portal: batch print (dropdown / name search list -> one cut sheet)
+================================================================================
+User asked for a way to select badges from a dropdown or search names into a list and print them
+all at once. Added a Batch print panel to /admin/badges: dropdown of active badges, a search box
+(name / user / code, Enter adds the top match), Add all active, Clear, chips for the list, and a
+"Print N badges" link to the new /admin/badges/print?ids=a,b,c sheet — CR80 cards two across, four
+down per Letter/A4 page with break-inside: avoid. The card moved into a shared component
+src/lib/components/admin/BadgeCard.svelte used by both the single and batch print pages.
+badge-service: getBadges(ids) (selection order kept, unknown ids dropped) and bumpPrintCount now
+takes one id or a list (updateMany; the sheet bumps each active badge once). Admin gate is the same
+isAdmin() as the rest of the portal. BADGE-SYSTEM_PLAN.md sections 17.2 / 18 / 20 updated.
+svelte-check: 14 errors before and after, all pre-existing; none in these files.

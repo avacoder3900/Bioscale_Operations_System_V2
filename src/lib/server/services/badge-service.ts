@@ -279,7 +279,18 @@ export async function getBadge(badgeId: string): Promise<BadgeRow | null> {
 	return doc ? toRow(doc) : null;
 }
 
-export async function bumpPrintCount(badgeId: string): Promise<void> {
+/** Batch print: the selected badges in the order they were selected; unknown ids are dropped. */
+export async function getBadges(badgeIds: string[]): Promise<BadgeRow[]> {
 	await connectDB();
-	await OperatorBadge.updateOne({ _id: badgeId }, { $inc: { printCount: 1 } });
+	if (badgeIds.length === 0) return [];
+	const docs = await OperatorBadge.find({ _id: { $in: badgeIds } }).lean() as any[];
+	const byId = new Map(docs.map(d => [d._id, toRow(d)]));
+	return badgeIds.map(id => byId.get(id)).filter((b): b is BadgeRow => !!b);
+}
+
+export async function bumpPrintCount(badgeId: string | string[]): Promise<void> {
+	const ids = Array.isArray(badgeId) ? badgeId : [badgeId];
+	if (ids.length === 0) return;
+	await connectDB();
+	await OperatorBadge.updateMany({ _id: { $in: ids } }, { $inc: { printCount: 1 } });
 }
