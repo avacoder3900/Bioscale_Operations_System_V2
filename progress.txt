@@ -16776,3 +16776,11 @@ svelte-check (portable node, direct): 14 errors before and after — all pre-exi
 (research-proxy.ts x2, r2.ts, AskBimsWidget.svelte, assembly/[sessionId] x8, magnetometer/[sessionId] x2); none in files this
 branch touches. The section 18.2 runtime checklist has NOT been run yet — needs a dev DB with an
 issued badge.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-f6h728rfv-brevitest.vercel.app
+Source: branch feat/badge-system @ commit 3f35d12c
+Retrieve this exact code: git checkout feat/badge-system at commit 3f35d12c
+  (or: git log feat/badge-system --oneline to find it if the branch has since moved on)
+What this deployment is for: first live test of the badge system — /admin/badges portal (issue,
+print, Require-badge switch) and the badge-gated mint (/manufacturing/cart-mfg/buckets/new) and
+start-pass on the bucket board. Section 18.2 checklist in BADGE-SYSTEM_PLAN.md runs against this.
