@@ -16845,3 +16845,10 @@ nameOf()/containsLabel() hunks in buckets/+page.svelte). Only this change's hunk
 apply --cached from a filtered patch); the nickname work is untouched and uncommitted here.
 svelte-check on the combined tree: 32 errors = the 14 baseline + 18 from the unfinished nickname
 work (nameOf, nickname/canEdit/nicknameMax props); none from the badge-link change.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-d4avxtw4m-brevitest.vercel.app
+Source: branch feat/badge-system @ commit 0b7eb161
+Retrieve this exact code: git checkout feat/badge-system at commit 0b7eb161
+  (or: git log feat/badge-system --oneline to find it if the branch has since moved on)
+What this deployment is for: board toggle gone; admin-only "Badge required: on/off" link on the
+bucket board (and "Change" in the start-pass form) to the portal switch at /admin/badges.
