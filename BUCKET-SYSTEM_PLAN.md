@@ -1,6 +1,6 @@
 # Bucket System — Production Buckets, v2 (as built)
 
-**Started:** 2026-09-21 · **Last updated:** 2026-09-30 (bucket **nicknames**, §4.1; before that 2026-09-25: thermoseal one roll part; fourth bucket stage **Backed** with **Move to oven**)
+**Started:** 2026-09-21 · **Last updated:** 2026-09-30 (page-to-page **navigation lag** fixes, §9.1/§9.2/§11; earlier that day bucket **nicknames**, §4.1; before that 2026-09-25: thermoseal one roll part; fourth bucket stage **Backed** with **Move to oven**)
 **Branch:** `feat/bucket-system` — **PR #54 open into `master`**
 (https://github.com/avacoder3900/Bioscale_Operations_System_V2/pull/54). `origin/master` has
 been merged into this branch twice (last `33a937a4`); it sits on current production code.
@@ -445,12 +445,29 @@ seen, the legacy WI-01 lot when it has one, and when the status last changed). R
 rather than reported missing (user, 2026-09-23). The same lookup sits inside the leftover panel
 as *Where does this cart belong?* (§7, 2026-09-25).
 
+**Load cost (2026-09-30, navigation-lag pass).** The board load fans out nine branches; the
+longest used to be the thermoseal one (floor rule → status, ~8 reads in series). It is now ~3:
+`thermosealConfig()` + `thermosealPart()` are read once and handed to both `checkFloor()` and
+`thermosealStatus(pre)`, and the tile's *next roll lot* comes from the same per-lot-remaining
+rows the start-pass pickers use (`lot-remaining.ts`, one ledger pass instead of two). Two
+app-wide costs paid on *every* page change were also removed: the root layout no longer re-runs
+its load on each client-side navigation (it read `url.pathname`, which SvelteKit tracks — now
+`untrack`ed), and its Box/Particle status reads are cached per process for a minute. The
+cart-mfg sidebar preloads a page's data on hover (`data-sveltekit-preload-data="hover"`; the
+app default is `tap`). Not verified: that the Atlas cluster sits in the same region as the
+Vercel functions (`pdx1`) — a cross-region cluster would multiply every remaining round trip.
+
 ### 9.2 `/manufacturing/cart-mfg/buckets/[bucketId]`
 
 Passes with per-pass cartridges (in bucket / → on to wax filling / scrapped), source lots,
 thermoseal cm, ledger rows, *Replace sticker* link, *Void this pass…* (admin), and the
 *add nickname* / *rename* control in the header (§4.1; `?/nickname`, `manufacturing:write`,
 hidden on a retired bucket). With a nickname the header reads *Big Blue* with the BKT id beside it.
+Payload trimmed 2026-09-30: `bucketHistory()` resolves and loads the tub in one read and leaves
+each pass's `cartridgeIds` array in the database (the page lists the carts *born* in a pass via
+`CartridgeRecord`, never the member list), and the per-pass cart aggregate slices to the 12 ids
+the page shows before leaving the server. A well-used tub no longer gets slower to open with
+every pass it has run.
 
 ### 9.3 Summary views (read-only, deep-link to the board)
 
@@ -551,6 +568,8 @@ per-scan lookup only needs `manufacturing:read`.
 | `src/lib/server/db/models/production-bucket.ts`, `bucket-cycle.ts`, `bucket-transaction.ts`, **`thermoseal-roll.ts`** | models |
 | `src/lib/server/services/bucket-service.ts` | all bucket logic (create, sticker, start, scanIn/unscan, scrap, advance, consume, **returnCarts**, residual, retire, void, counts, board, logs) |
 | **`src/lib/server/services/thermoseal-service.ts`** | config, roll open/consume/credit, floor rule, board status |
+| **`src/lib/server/services/lot-remaining.ts`** | the one per-lot "remaining by ledger" math (`lotRemaining`, `fifoLot`, `lotsWithStock`) — board lot pickers + thermoseal next-roll lot (2026-09-30) |
+| `src/routes/+layout.server.ts` | **not a bucket file** — its load used to re-run on every client-side navigation; `untrack`ed + Box/Particle status cached 60 s (2026-09-30). Every page in the app rides on it. |
 | `src/lib/server/kanban/standing.ts` → `ensureThermosealRestockCard` | restock card via the supply autopilot |
 | `src/lib/server/notifications.ts` → `notifyThermosealLow` | Resend email to the low-inventory list |
 | `src/routes/manufacturing/cart-mfg/buckets/…` | board, history, `new/` |
@@ -594,6 +613,8 @@ per-scan lookup only needs `manufacturing:read`.
 | _(feat/badge-system)_ | **Bucket nicknames** (§4.1, §9.2, §9.4): `ProductionBucket.nickname` (optional, ≤30, unique among non-retired, case-insensitive); `setBucketNickname()` + `?/nickname` on the history page (any `manufacturing:write` user, blank clears, refused on retired); optional Nickname box on `/buckets/new` (`createBucket` takes `nickname`); board cards/panels headline the nickname over the sticker via `nameOf()`, registry gains a Nickname column, board scan box + `resolveScan` search by it (never an exact resolve — `resolveBucketId` unchanged); new `nickname` ledger type + `NICKNAME` audit. |
 
 | _(feat/bucket-nickname-block)_ | **Nickname moved out of the mint form** (§9.4): the mint block is back to badge + sticker; a third block *Nickname a bucket* on `/buckets/new` (scan sticker → name → `?/nickname` → `setBucketNickname`) sits beside *Create* and *Replace sticker*. Clearing = empty name. History-page rename unchanged. |
+
+| _(feat/bucket-nav-perf)_ | **Navigation lag between bucket pages** (§9.1, §9.2): root `+layout.server.ts` no longer re-runs on every client-side navigation (`untrack(() => url.pathname)`) and caches the Box/Particle status reads for 60 s per process; new `lot-remaining.ts` (`lotRemaining` / `fifoLot` / `lotsWithStock`) is the one per-lot ledger math — the board's `availableLots` and thermoseal's `defaultThermosealLot` both use it; `thermosealStatus(pre?)` takes a preloaded config / part / next lot and runs its reads in parallel, `checkFloor` takes `part`, `thermosealPart()` exported; board thermoseal branch ~8 → ~3 round trips in series; `bucketHistory` resolves + loads the tub in one read (`findBucketByCode`, shared with `resolveBucketId`) and drops `cartridgeIds` from the cycles it returns; history-page cart aggregate `$slice`s to 12 ids in the database; cart-mfg sidebar `data-sveltekit-preload-data="hover"`. No schema or data change. |
 
 `npm run check` after v2: **12 errors / 438 warnings** — the same 12 pre-existing (`r2.ts`,
 `AskBimsWidget.svelte`, 8× `assembly/[sessionId]`, 2× `validation/magnetometer/[sessionId]`

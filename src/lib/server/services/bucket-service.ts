@@ -354,17 +354,25 @@ export async function getOpenCycle(bucketId: string): Promise<any | null> {
  * and in both cases, since scanners disagree about hex case. Null = not a bucket.
  */
 export async function resolveBucketId(code: string): Promise<string | null> {
+	const hit = await findBucketByCode(code, '_id');
+	return hit ? hit._id : null;
+}
+
+/**
+ * The bucket behind any scanned code, with the fields in `select` (all when
+ * omitted). ONE query, not two (perf, 2026-09-25): this sits on every scan-in
+ * and every audit scan, so the id probe and the sticker probe go together.
+ * Both fields are indexed, so this is an index OR, and the two can never
+ * collide — a sticker matching /^BKT-\d+$/ is refused by assertStickerFree.
+ */
+async function findBucketByCode(code: string, select?: string): Promise<any | null> {
 	await connectDB();
 	const raw = (code ?? '').trim();
 	if (!raw) return null;
-	// ONE query, not two (perf, 2026-09-25): this sits on every scan-in and every
-	// audit scan, so the id probe and the sticker probe go together. Both fields
-	// are indexed, so this is an index OR, and the two can never collide — a
-	// sticker matching /^BKT-\d+$/ is refused by assertStickerFree.
-	const hit = await ProductionBucket.findOne({
+	const q = ProductionBucket.findOne({
 		$or: [{ _id: raw.toUpperCase() }, { barcode: { $in: [raw, raw.toLowerCase(), raw.toUpperCase()] } }]
-	}).select('_id').lean() as any;
-	return hit ? hit._id : null;
+	});
+	return (select ? q.select(select) : q).lean() as any;
 }
 
 /**
@@ -1952,11 +1960,16 @@ export async function bucketRegistry(): Promise<RegistryRow[]> {
 /** Full history for one tub: every cycle it has held, plus the ledger. */
 export async function bucketHistory(bucketId: string): Promise<{ bucket: any; cycles: any[]; transactions: any[]; removals: any[] } | null> {
 	await connectDB();
-	const id = await resolveBucketId(bucketId);
-	if (!id) return null;
-	const bucket = await ProductionBucket.findById(id).lean() as any;
+	// Resolve and load the tub in one read (was resolve → findById, two in series).
+	const bucket = await findBucketByCode(bucketId);
+	if (!bucket) return null;
+	const id: string = bucket._id;
 	const [cycles, transactions, removals] = await Promise.all([
-		BucketCycle.find({ bucketId: id }).sort({ cycleNumber: -1 }).lean(),
+		// The history page never shows a pass's member list — it links the carts
+		// *born* in the pass via CartridgeRecord instead — so the cartridgeIds
+		// arrays (one id per cart, every pass the tub ever ran) stay in the
+		// database (perf, 2026-09-30). Callers that need membership use getOpenCycle.
+		BucketCycle.find({ bucketId: id }).select('-cartridgeIds').sort({ cycleNumber: -1 }).lean(),
 		BucketTransaction.find({ bucketId: id }).sort({ createdAt: -1 }).limit(500).lean(),
 		ManualCartridgeRemoval.find({ bucketId: id }).sort({ removedAt: -1 }).lean()
 	]);

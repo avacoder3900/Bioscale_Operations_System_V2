@@ -17077,3 +17077,51 @@ Retrieve this exact code: git checkout feat/bucket-nickname-block at commit 1fb8
   (or: git log feat/bucket-nickname-block --oneline to find it if the branch has since moved on)
 What this deployment is for: PR #70 — the "Nickname a bucket" third block on /buckets/new; mint
 form back to badge + sticker.
+
+================================================================================
+2026-09-30 — feat/bucket-nav-perf — Bucket pages: lag moving between board and history fixed
+================================================================================
+User: "a lot of lag in the bucket system moving back and forth between pages, why is that" → then
+"implement those fixes". Branch cut from feat/bucket-nickname-block (b2dce0cf, PR #70 head) so the
+board/service edits sit on the nickname code they touch.
+
+WHY IT LAGGED (read off the code — no local .env, nothing timed against Atlas)
+- Every client-side navigation re-ran the ROOT layout load: it read `url.pathname`, which SvelteKit
+  tracks, so each page change paid two sequential Integration.findOne (Box + Particle dots) before
+  the page's own load could start — on top of the hook's session lookups.
+- The board load's longest branch was thermoseal: checkFloor (config → part) then thermosealStatus
+  (config → roll/part/defaultLot(2 in series)/exhausted → open kanban card) ≈ 8 reads in series.
+  defaultThermosealLot re-did the per-lot ledger math the board's availableLots had already done
+  in a parallel branch (both sum every consumption/scrap row on the shell/label/thermoseal lots).
+- The history page did resolveBucketId → findById (two reads), then loaded every pass the tub ever
+  ran WITH its full cartridgeIds array (never displayed — the page links carts born in the pass
+  via CartridgeRecord), and the cart aggregate $pushed every id of every pass before slicing to 12
+  in Node. Grows per pass.
+- Link preload is app-wide "tap" (app.html, frozen), which does nothing for a mouse.
+- Unverified: whether the Atlas cluster is in the same region as the Vercel functions (pdx1).
+
+WHAT CHANGED
+- src/routes/+layout.server.ts: `untrack(() => url.pathname)` for the public-path check (login /
+  logout redirects still invalidateAll, so user changes still land); Box/Particle reads in one
+  Promise.all, cached per process for 60 s (failures not cached, fall back to "disconnected").
+- NEW src/lib/server/services/lot-remaining.ts: lotRemaining(partNumbers) — one ReceivingLot read
+  + one ledger aggregate — plus fifoLot (oldest lot with stock) and lotsWithStock (per part,
+  largest remaining first). Same math as before, one implementation.
+- thermoseal-service.ts: defaultThermosealLot = fifoLot(lotRemaining([PT-CT-101])); thermosealPart
+  exported; checkFloor takes `part`; thermosealStatus(pre?: {cfg, part, nextLot}) runs roll /
+  next lot / exhausted count / open restock card in ONE Promise.all (KanbanTask lookup no longer
+  waits behind the others). Unused InventoryTransaction import dropped.
+- buckets/+page.server.ts: availableLots removed; lotRemaining once, shared by the pickers
+  (lotsWithStock) and the thermoseal branch, which now reads config + part once and hands them to
+  checkFloor and thermosealStatus — ~3 reads in series instead of ~8.
+- bucket-service.ts: findBucketByCode(code, select?) is the one id/sticker $or query;
+  resolveBucketId uses it (unchanged behaviour); bucketHistory loads the tub with it (one read
+  instead of two) and selects `-cartridgeIds` on the cycles.
+- buckets/[bucketId]/+page.server.ts: aggregate gets a `$project` with `$slice` to 12 ids;
+  `cartridgeIds` dropped from the returned cycles (the page never read it).
+- cart-mfg/+layout.svelte: sidebar <nav data-sveltekit-preload-data="hover">.
+- BUCKET-SYSTEM_PLAN.md: header, §9.1 load-cost note, §9.2 payload note, §10, §11 row.
+Not changed on purpose: changeLog / boardData / inOvenCarts (each 2 reads in series, but all
+shorter than the thermoseal branch so not on the critical path); no materialised lot counter
+(the ledger aggregate is index-only and a counter would have to be kept by every writer).
+svelte-check: COMPLETED 3419 FILES 14 ERRORS — the pre-existing baseline, none in touched files.

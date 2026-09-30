@@ -73,7 +73,10 @@
 <div class="flex">
 	<!-- Sidebar: icons only, expand on hover -->
 	<aside class="mfg-sidebar sticky top-14 h-[calc(100vh-3.5rem)] shrink-0 overflow-hidden border-r border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] {hideSidebarOnTouch ? '[@media(pointer:coarse)]:hidden' : ''}">
-		<nav class="flex flex-col gap-0.5 px-0.5 pt-2">
+		<!-- preload on hover: the page's server load starts while the pointer is still
+		     on the link, so the click lands on data already in flight (app-wide default
+		     is "tap", which only helps touch devices). -->
+		<nav class="flex flex-col gap-0.5 px-0.5 pt-2" data-sveltekit-preload-data="hover">
 			{#each navItems as item}
 				{@const active = isActive(item.href, $page.url.pathname, item.exact)}
 				<a
