@@ -17122,3 +17122,12 @@ desktop and regular tablet layouts are untouched):
     so it doesn't sit on the right bar.
 `npm run check`: 13 errors (baseline), no new warnings. Vercel branch build used as the compile gate.
 Pushed to master at the user's explicit request.
+Deployment: preview — https://bioscale-operations-system-mongodb-o18pfm400-brevitest.vercel.app
+Source: branch feat/post-mortem-fullscreen-bars @ commit 5cf92d30
+What this deployment is for: compile gate before fast-forwarding master (GitHub deployment 6769964104).
+Deployment: production — https://bioscale-operations-system-mongodb-8ellsnuv7-brevitest.vercel.app
+Source: branch master (= feat/post-mortem-fullscreen-bars) @ commit 5cf92d30
+Retrieve this exact code: git checkout master at commit 5cf92d30
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: on-tablet test of the two Capture bars, top-aligned feed and cartridge
+  strip in fullscreen. GitHub deployment 6769996539 (Production). Smoke: /login 200.
