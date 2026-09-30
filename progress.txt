@@ -16957,3 +16957,15 @@ Source: branch feat/ot2-tailnet-direct @ commit 6002a7024
 Retrieve this exact code: git checkout feat/ot2-tailnet-direct at commit 6002a7024
 What this deployment is for: run-integrity fixes on the tailnet line.
 Deployment: robot — B14 / ot2-b14.tailf65a70.ts.net, ot2-bridge 1.2 (scripts/ot2-bridge.py @ 6002a7024).
+
+================================================================================
+2026-09-30 — feat/ot2-tailnet-direct — B14 daemon reports now go to this branch's preview
+================================================================================
+B14 /data/ot2-bridge/.env BIMS_BASE_URL: old feat-de-52595e preview (no /api/agent/ot2/jobs routes) →
+https://bioscale-operations-system-mongodb-git-feat-ot-2ae11c-brevitest.vercel.app (branch alias, stable
+across pushes). Robot idle; backup .env.bak-20260930 (600); ot2-bridge restarted on 1.2, no warnings.
+Verified: scanner_events hb:ot2-b14-bridge refreshed 9 s after restart with version ot2-bridge/1.2, so the
+preview accepts B14's agent key. Tailnet sweep progress/results will now land in BIMS.
+NOTE: B14's queue line now serves this preview — prod BIMS still sees B14 heartbeats (shared Mongo) but
+anything prod enqueues for B14 is polled by this daemon from the preview's routes; revert before merging.
+Rollback: cp .env.bak-20260930 .env && systemctl restart ot2-bridge.
