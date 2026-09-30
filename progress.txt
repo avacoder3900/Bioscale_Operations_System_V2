@@ -16894,3 +16894,10 @@ link in the bucket board header now sits between "Cart state change" and "Wax fi
 of after "Master override". Markup only; gate and target unchanged. The nickname session's work
 (d7146e64) had been committed by then, so the tree was clean apart from this move.
 svelte-check: 14 errors, the pre-existing baseline.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-9natk0yq7-brevitest.vercel.app
+Source: branch feat/badge-system @ commit 55809e9e
+Retrieve this exact code: git checkout feat/badge-system at commit 55809e9e
+  (or: git log feat/badge-system --oneline to find it if the branch has since moved on)
+What this deployment is for: the admin-only "Badge required" link sits beside "Wax filling →" in
+the bucket board header.
