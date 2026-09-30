@@ -17178,3 +17178,10 @@ WHAT CHANGED
   bucket plan is the current statement). Also not built: a dev DB with an issued badge to click
   through the three gates.
 svelte-check: COMPLETED 3419 FILES 14 ERRORS — the pre-existing baseline, none in touched files.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-qs4uqd44x-brevitest.vercel.app
+Source: branch feat/badge-gated-steps @ commit aa8206aa
+Retrieve this exact code: git checkout feat/badge-gated-steps at commit aa8206aa
+  (or: git log feat/badge-gated-steps --oneline to find it if the branch has since moved on)
+What this deployment is for: PR #71 — badge asked for at scan-in, discards and Move to oven; not at
+mint or start-pass. Needs an issued badge (Badge Portal) to click through the three gates.
