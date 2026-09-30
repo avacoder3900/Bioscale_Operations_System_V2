@@ -16706,3 +16706,9 @@ and gap rules sit inside @media(pointer:coarse), and the touch `space-y-0` rule 
 `space-y-4` rule (same :where specificity, so it wins on tablets). `npm run check`: 13 errors
 (baseline 14), none in the touched file. Vite compile succeeds.
 Pushed to master at the user's explicit request for on-tablet testing.
+Deployment: production — https://bioscale-operations-system-mongodb-k5sgndw7d-brevitest.vercel.app
+Source: branch master (= feat/post-mortem-tablet-swap) @ commit 2d6ba750
+Retrieve this exact code: git checkout master at commit 2d6ba750
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: on-tablet test of the Capture ↔ cartridge/station bar swap (touch only).
+  GitHub deployment 6762152984 (Production). Smoke: /login 200.
