@@ -17103,3 +17103,22 @@ Retrieve this exact code: git checkout master at commit e48b2d39
   (or: git log master --oneline to find it if the branch has since moved on)
 What this deployment is for: on-tablet test of the Post-Mortem fullscreen mode (feed + Capture only).
   GitHub deployment 6769733121 (Production). Smoke: /login 200.
+
+================================================================================
+2026-09-30 — feat/post-mortem-fullscreen-bars → master — Post-Mortem fullscreen: two bars + cartridge strip
+================================================================================
+Follow-up to the fullscreen mode (post-mortem-inspect/+page.svelte, fullscreen layout only; the
+desktop and regular tablet layouts are untouched):
+  - Grid is now `grid-cols-[6.25vw_minmax(0,1fr)_6.25vw] grid-rows-[minmax(0,1fr)_auto]`: a 📷
+    Capture bar down each edge (row-span-2; the right one is a second button with the same
+    onclick/disabled/pulse as the left), feed in the middle.
+  - Feed pinned to the top of the screen (`items-start` + `object-top` on the MJPEG <img> and the
+    WebRTC <video>) instead of vertically centred.
+  - Compact one-line cartridge strip under the feed with the same content as the context bar's
+    Cartridge block: "⚠ Scan to start · Accepts: completed · linked" before a scan, "🟢 <id> ·
+    <status> · scanned <time> [Release]" after. The reject reason (wrong status / not found) is shown
+    there too, since the normal red reject banner sits behind the fullscreen layout.
+  - The fallback ✕ exit (only when browser fullscreen is refused) moved to the top-left of the feed
+    so it doesn't sit on the right bar.
+`npm run check`: 13 errors (baseline), no new warnings. Vercel branch build used as the compile gate.
+Pushed to master at the user's explicit request.
