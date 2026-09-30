@@ -2,21 +2,26 @@
 	import { enhance } from '$app/forms';
 	import { goto } from '$app/navigation';
 
-	type Result = { success?: boolean; error?: string; bucketId?: string; barcode?: string; previous?: string | null };
+	type Result = { success?: boolean; error?: string; code?: string | null; bucketId?: string; barcode?: string; nickname?: string | null; previous?: string | null; operator?: string; method?: 'badge' | 'login' };
 	interface Props {
 		data: {
+			badgeMode: 'off' | 'required';
 			presetBucket: string | null;
-			recent: { bucketId: string; barcode: string | null; state: string; cycleCount: number; createdAt: string | null; createdBy: string | null }[];
+			recent: { bucketId: string; barcode: string | null; nickname: string | null; state: string; cycleCount: number; createdAt: string | null; createdBy: string | null }[];
 		};
 		form: { create?: Result; replace?: Result } | null;
 	}
 	let { data, form }: Props = $props();
 
 	let qr = $state('');
+	let badge = $state('');
+	let nickname = $state(''); // optional; clears after each create like the sticker does
 	let replaceBucket = $state('');
 	let replaceQr = $state('');
 	let busy = $state(false);
 	let presetApplied = $state(false);
+
+	const badgeRequired = $derived(data.badgeMode === 'required');
 
 	$effect(() => {
 		if (!presetApplied && data.presetBucket) {
@@ -26,6 +31,20 @@
 	});
 
 	function focusQr() { setTimeout(() => document.getElementById('qr')?.focus(), 60); }
+	function focusBadge() { setTimeout(() => document.getElementById('badge')?.focus(), 60); }
+	// A gun sends Enter after the code: badge → sticker → submit, no clicking.
+	function badgeKeydown(e: KeyboardEvent) {
+		if (e.key === 'Enter') { e.preventDefault(); focusQr(); }
+	}
+	// After a create: the sticker clears (each tub gets its own), the badge stays
+	// (one person mints several tubs in a row) — unless the badge was the problem.
+	function afterCreate(result: { type: string; data?: any }) {
+		qr = '';
+		if (result.type === 'success') nickname = '';
+		const code = result.type === 'failure' ? result.data?.create?.code : null;
+		if (code && String(code).startsWith('BADGE')) { badge = ''; focusBadge(); }
+		else focusQr();
+	}
 	function goBack() {
 		if (typeof history !== 'undefined' && history.length > 1) history.back();
 		else goto('/manufacturing/cart-mfg/buckets');
@@ -48,22 +67,37 @@
 		<form
 			method="POST"
 			action="?/create"
-			use:enhance={() => { busy = true; return async ({ update }) => { await update({ reset: false }); busy = false; qr = ''; focusQr(); }; }}
+			use:enhance={() => { busy = true; return async ({ update, result }) => { await update({ reset: false }); busy = false; afterCreate(result); }; }}
 			class="rounded-lg border border-[var(--color-tron-cyan)]/40 bg-[var(--color-tron-surface)] p-4 space-y-3"
 		>
 			<p class="text-sm font-medium text-[var(--color-tron-text)]">Create a bucket</p>
+			{#if badgeRequired}
+				<label class="block">
+					<span class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">1 · Scan your badge</span>
+					<input id="badge" type="text" name="badge" bind:value={badge} onkeydown={badgeKeydown} autocomplete="off" placeholder="scan badge…" class="{inputCls} {badge.trim() ? '' : 'border-[var(--color-tron-cyan)]/60 ring-1 ring-[var(--color-tron-cyan)]/30'}" />
+				</label>
+			{:else}
+				<p class="text-[10px] text-[var(--color-tron-text-secondary)]">Badge required: <strong>off</strong> — you will be recorded as the operator.</p>
+			{/if}
 			<label class="block">
-				<span class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Scan the tub's QR sticker</span>
-				<input id="qr" type="text" name="qr" bind:value={qr} autocomplete="off" placeholder="scan…" class="{inputCls} border-[var(--color-tron-cyan)]/60 ring-1 ring-[var(--color-tron-cyan)]/30" />
+				<span class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">{badgeRequired ? '2 · ' : ''}Scan the tub's QR sticker</span>
+				<input id="qr" type="text" name="qr" bind:value={qr} autocomplete="off" placeholder="scan…" class="{inputCls} {!badgeRequired || badge.trim() ? 'border-[var(--color-tron-cyan)]/60 ring-1 ring-[var(--color-tron-cyan)]/30' : ''}" />
+			</label>
+			<!-- Optional nickname (2026-09-30). Sits after the sticker so the gun's Enter on
+			     the QR still submits; type it first if you want one. Editable later on the
+			     bucket's history page. -->
+			<label class="block">
+				<span class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Nickname <span class="normal-case tracking-normal">(optional — e.g. “Big Blue”)</span></span>
+				<input type="text" name="nickname" bind:value={nickname} maxlength="30" autocomplete="off" placeholder="a name for the floor…" class="{inputCls} font-sans" />
 			</label>
 			{#if form?.create?.error}<p class="text-xs text-[var(--color-tron-error)]">{form.create.error}</p>{/if}
 			{#if form?.create?.success}
 				<p class="rounded border border-green-500/40 bg-green-900/15 p-2 text-xs text-green-300">
-					Bucket created — sticker <span class="font-mono">{form.create.barcode}</span>
-					<span class="text-[var(--color-tron-text-secondary)]">(internal id {form.create.bucketId})</span>. It's on the board under <strong>Available</strong>.
+					Bucket created — {#if form.create.nickname}<strong>{form.create.nickname}</strong>, {/if}sticker <span class="font-mono">{form.create.barcode}</span>
+					<span class="text-[var(--color-tron-text-secondary)]">(internal id {form.create.bucketId})</span>{#if form.create.operator}, minted by <strong>{form.create.operator}</strong>{form.create.method === 'badge' ? ' (badge)' : ''}{/if}. It's on the board under <strong>Available</strong>.
 				</p>
 			{/if}
-			<button type="submit" disabled={busy || !qr.trim()} class="w-full rounded-lg bg-[var(--color-tron-cyan)] py-2.5 text-sm font-bold text-[var(--color-tron-bg-primary)] hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-30">
+			<button type="submit" disabled={busy || !qr.trim() || (badgeRequired && !badge.trim())} class="w-full rounded-lg bg-[var(--color-tron-cyan)] py-2.5 text-sm font-bold text-[var(--color-tron-bg-primary)] hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-30">
 				{busy ? 'Creating…' : 'Create bucket'}
 			</button>
 		</form>
@@ -103,13 +137,14 @@
 			<table class="mt-3 w-full text-xs">
 				<thead>
 					<tr class="border-b border-[var(--color-tron-border)] text-left text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">
-						<th class="px-2 py-1">Sticker</th><th class="px-2 py-1">Internal id</th><th class="px-2 py-1">State</th><th class="px-2 py-1">Passes</th><th class="px-2 py-1">Created</th>
+						<th class="px-2 py-1">Sticker</th><th class="px-2 py-1">Nickname</th><th class="px-2 py-1">Internal id</th><th class="px-2 py-1">State</th><th class="px-2 py-1">Passes</th><th class="px-2 py-1">Created</th>
 					</tr>
 				</thead>
 				<tbody>
 					{#each data.recent as b (b.bucketId)}
 						<tr class="border-b border-[var(--color-tron-border)]/40">
 							<td class="px-2 py-1 font-mono text-[var(--color-tron-text)]">{b.barcode ?? '—'}</td>
+							<td class="px-2 py-1 text-[var(--color-tron-text)]">{b.nickname ?? '—'}</td>
 							<td class="px-2 py-1 font-mono"><a href="/manufacturing/cart-mfg/buckets/{b.bucketId}" class="text-[var(--color-tron-cyan)] hover:underline">{b.bucketId}</a></td>
 							<td class="px-2 py-1 text-[var(--color-tron-text)]">{b.state}</td>
 							<td class="px-2 py-1 text-[var(--color-tron-text)]">{b.cycleCount}</td>

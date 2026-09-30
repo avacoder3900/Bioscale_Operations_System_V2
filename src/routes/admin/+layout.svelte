@@ -4,7 +4,7 @@
 
 	interface Props {
 		children: Snippet;
-		data: { canManageUsers: boolean; canManageRoles: boolean; canManageAdmin: boolean };
+		data: { canManageUsers: boolean; canManageRoles: boolean; canManageAdmin: boolean; canManageBadges: boolean };
 	}
 
 	let { children, data }: Props = $props();
@@ -14,6 +14,9 @@
 		if (data.canManageUsers) {
 			items.push({ href: '/admin/users', label: 'Users' });
 			items.push({ href: '/admin/invites', label: 'Invites' });
+		}
+		if (data.canManageBadges) {
+			items.push({ href: '/admin/badges', label: 'Badges' });
 		}
 		if (data.canManageRoles) {
 			items.push({ href: '/admin/roles', label: 'Roles' });

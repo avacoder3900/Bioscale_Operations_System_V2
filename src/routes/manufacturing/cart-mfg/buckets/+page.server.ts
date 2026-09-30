@@ -5,7 +5,7 @@
  */
 import { fail, redirect } from '@sveltejs/kit';
 import { connectDB, ReceivingLot, InventoryTransaction } from '$lib/server/db';
-import { requirePermission } from '$lib/server/permissions';
+import { requirePermission, isAdmin } from '$lib/server/permissions';
 import {
 	BucketError, BUCKET_STAGES, STAGE_LABELS, BACKED_LABEL, SHELL_PART, LABEL_PART, THERMOSEAL_PART,
 	boardData, stageCounts, resolveScan, isBucketStage, changeLog, bucketRegistry,
@@ -13,6 +13,7 @@ import {
 	cartStatusLine, auditScan, auditCycle, moveToOven, inOvenCarts
 } from '$lib/server/services/bucket-service';
 import { thermosealStatus, checkFloor, setThermosealToggles } from '$lib/server/services/thermoseal-service';
+import { badgeMode } from '$lib/server/services/badge-service';
 import type { Actions, PageServerLoad } from './$types';
 
 export const config = { maxDuration: 60 };
@@ -52,7 +53,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	const focusStage = url.searchParams.get('stage') ?? '';
 	const q = url.searchParams.get('q') ?? '';
 
-	const [board, counts, lots, scan, log, registry, thermoseal, inOven] = await Promise.all([
+	const [board, counts, lots, scan, log, registry, thermoseal, inOven, badge] = await Promise.all([
 		boardData(),
 		stageCounts(),
 		availableLots([SHELL_PART, LABEL_PART, THERMOSEAL_PART]),
@@ -67,10 +68,18 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		// pull still runs it unthrottled.
 		checkFloor({ user: op(locals), throttleMs: 60_000 }).catch(() => null).then(() => thermosealStatus()).catch(() => null),
 		// "In oven" dropdown inside the Backed column: backed carts on no open pass.
-		inOvenCarts().catch(() => ({ count: 0, ids: [] as string[] }))
+		inOvenCarts().catch(() => ({ count: 0, ids: [] as string[] })),
+		// Badge enforcement (BADGE-SYSTEM_PLAN.md §17.4): decides whether the
+		// start-pass form asks for a badge. Flipped only from /admin/badges; the
+		// board links there for admins (canBadgeAdmin).
+		badgeMode().catch(() => 'required' as const)
 	]);
 
 	return {
+		badgeMode: badge,
+		// The Badge Portal's own gate (admin:full or admin:users), so the link only
+		// shows to someone the portal will actually let in.
+		canBadgeAdmin: isAdmin(locals.user),
 		stages: BUCKET_STAGES.map(s => ({ key: s, label: STAGE_LABELS[s] })),
 		backedLabel: BACKED_LABEL,
 		focusStage: focusStage === 'available' || isBucketStage(focusStage) ? focusStage : null,
@@ -171,6 +180,7 @@ export const actions: Actions = {
 				shellLotId: String(d.get('shellLotId') ?? ''),
 				labelLotId: String(d.get('labelLotId') ?? ''),
 				emptyConfirmed: d.get('emptyConfirmed') === '1',
+				badge: String(d.get('badge') ?? ''),
 				user: op(locals)
 			});
 			return { start: { success: true, cycleId: cycle._id, bucketId: cycle.bucketId, cycleNumber: cycle.cycleNumber } };

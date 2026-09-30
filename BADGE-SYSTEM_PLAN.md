@@ -1,6 +1,6 @@
 # Badge System — Operator Identity for the Bucket System (design discussion)
 
-**Status:** design only. Nothing built, no schema written, no decision locked.
+**Status:** Part 1 = design discussion (2026-09-23). Part 2 = v1 build layout (2026-09-30), **built the same day on `feat/badge-system`** — see §20 for what changed between layout and code.
 **Date:** 2026-09-23
 **Sibling doc:** `BUCKET-SYSTEM_PLAN.md` (lives on `feat/bucket-system`). This file is deliberately
 separate — the badge/custody primitive is not bucket-specific, and the bucket system is only its
@@ -153,7 +153,7 @@ means:
 | Reading | Taps per pass |
 |---|---|
 | Badge per **transaction** | `create` + 50x `scan_in` + 2 advances = **53** — untenable |
-| Badge per **stage transition** | create, raw to unpressed, unpressed to pressed, WI-01 draw = **4** |
+| Badge per **stage transition** | create, Barcoded to Unpressed, Unpressed to Pressed, Pressed to Backed = **4** |
 | Model 2 | **1** guaranteed, rest optional |
 
 So the real delta is **4 taps vs 1**, spread across hours of work. The friction argument for
@@ -267,3 +267,391 @@ floor rather than by prediction.
   `resourceType` / `resourceId` shape in §4.2 is there so this is possible later, not so it
   happens now.
 - Anything involving a second-person witness beyond reserving the `witness` field.
+
+---
+---
+
+# Part 2 — v1 build layout (2026-09-30)
+
+**Branch:** `feat/badge-system`, cut from `feat/bucket-system` (the bucket system exists only
+there). PR target is `feat/bucket-system`, not master.
+**Status:** layout agreed in conversation, nothing coded yet.
+**Scope, in the user's words:** bucket system is the testing ground, extend to other applications
+later. Badge Portal under user manager, admin only, generates badges (name + QR). Each user can
+be assigned a badge. Creation is manual. Badges are printed and carried in badge holders.
+**Minting a bucket and starting a pass require a badge scan. Subsequent steps do not.**
+
+Part 1 stays as the design record. Where Part 2 narrows or overrides it, Part 2 wins for v1.
+Stage names in Part 1 predate the `raw` to `barcoded` rename; the stages are now
+Barcoded, Unpressed, Pressed, Backed.
+
+---
+
+## 13. System audit — where badges could go (2026-09-30)
+
+Swept all 120 models, 156 `AuditLog.create` sites, every scan surface. Ranked by value per effort.
+
+### 13.0 Custody already exists here, twice, and disagrees with itself
+
+| Where | What | Why it matters |
+|---|---|---|
+| `capture-station.ts` `currentOperator` + `api/cv/stations/[id]/lock` | **stored** lock with claim/release endpoints | already ~80% of the `Custody` record in §4.2 |
+| `robot-arm-lock.ts` | **derived** holder — no lock field, release = the run's terminal event | its header names `capture_stations.currentOperator` as *"the cautionary tale in this codebase: it has no expiry and has to be cleared out of Mongo by hand"* |
+
+Two incompatible custody designs shipped; one is documented as a mistake. §4.2 would be the third.
+v1 builds `Custody` with an explicit release on every cycle-close path (§16.3) so it cannot strand
+the way `currentOperator` does. Folding the other two into it is deferred (§19).
+
+### 13.1 Attribution is free text today (a string anyone can type)
+
+`inventory-transaction.performedBy`, `cleaning-record.performedBy` (free text on purpose — cleaners
+are not BIMS users, so a badge is the *only* fix), `reagent-inventory.inspectedBy`,
+`equipment-location.currentPlacements.placedBy`, `assembly-session.fieldRecords.capturedBy`.
+
+### 13.2 Worst attribution in the system
+
+`opentrons-clone/operator-login`: one shared env password (`OT_OPERATOR_PASSWORD`), an 8-hour
+cookie, **no user identity at all**. Clearest badge win after buckets.
+
+### 13.3 Long-running work where one name covers hours
+
+`assembly-session`, `opentrons-run-record`, `wax-filling-run`, `reagent-batch-record`,
+`lot-record`, `validation-run`, `protocol-execution`, `service-record`, `spu.assembly`. All are
+future `Custody` consumers via `resourceType` / `resourceId`.
+
+### 13.4 Near-free because the plumbing exists
+
+- 21 scan inputs already live; a keyboard-wedge badge needs no new client surface at any of them.
+- Barcode printing already built: `GeneratedBarcode` counter, `bwip-js` in the browser at
+  `/manufacturing/print-barcodes`. A printed QR badge is one new prefix.
+- `AuditLog` is immutable, has `sessionId` / `ipAddress` / `userAgent`, and is written at 156
+  sites — one `attribution` block there instruments every mutation in the app. Deferred (§19).
+- `workstationId` already exists on `spu.assembly` and `assembly-session` — precedent for `stationId`.
+
+### 13.5 Signature points — badge is the ID half, never the signature
+
+`assembly/complete`, `documents/[id]/approve`, `documents/[id]/train`, `spu/[spuId]`. Note
+`assembly/complete` writes `dataHash: ''` — a separate Part 11 gap, not this project.
+
+### 13.6 Skip
+
+Kanban assignment, CV projects/labels, Opentrons protocol authoring — desk work, no traceability gain.
+
+---
+
+## 14. v1 decisions (made here — say if you disagree)
+
+| # | Decision | Why |
+|---|---|---|
+| 1 | **Badge code is random and stored in plaintext**, not hashed (revises §9) | The portal must reprint a badge at any time. A hash only defends against a DB dump, which already exposes everything else; the real defence is that the code is unguessable. Switching to hash-only later is contained to `resolveBadge()` + "reissue instead of reprint". |
+| 2 | Code format `BDG-` + 10 chars from `ABCDEFGHJKLMNPQRSTUVWXYZ23456789` (no 0/O/1/I) | Prefix lets every scan box recognise a badge by regex; alphabet survives keyboard-wedge guns and human reading. |
+| 3 | **One active badge per user** — partial unique index | "Each user can be assigned a badge." Reissue revokes the old one first. |
+| 4 | Portal gate is `isAdmin()` (`admin:full` or `admin:users`) — no new permission string | That is already the repo's definition of admin; avoids touching the PERM-02 registry. |
+| 5 | Badge holder must also hold `manufacturing:write`; the web session still passes `requirePermission` as today | Custody is attribution, never a substitute for permission (§9). Both people in the shared-terminal case must be allowed. |
+| 6 | Session user is always recorded as `enteredBy`; `operator` = badge holder on badge-gated events, = session user everywhere else | Nothing downstream that reads `operator` changes meaning; `enteredBy` is the new fact. |
+| 7 | **Subsequent steps do not inherit the badge holder as `operator`** | Attributing Jane's scan-ins to Bob because Bob started the pass is exactly the "bad data that looks good" failure in §6. They link to the pass's custody by id instead. |
+| 8 | Enforcement is a settings switch `ManufacturingSettings.badge.mode` = `off` or `required`, **default `required`**. The switch is a toggle in the Badge Portal, **admin only** (§17.5) | User asked for required, with an admin-only way to turn it off; flippable without a deploy. |
+| 9 | Mint writes attribution only; **start-pass also opens a `Custody` row**, released when the pass closes | Mint is instantaneous. A pass is the unit of work and is what "extend to other applications" will copy. |
+| 10 | No TTL, no takeover, no board "Held by" in v1 | Not needed for "scan at mint + start". Fields are reserved so they are additive later. |
+
+---
+
+## 15. Data model (v1)
+
+### 15.1 `OperatorBadge` — new, collection `operator_badges`
+
+```
+_id           nanoid
+code          'BDG-XXXXXXXXXX'   unique index — the value in the QR
+userId        User._id
+username      snapshot
+displayName   the name printed on the badge (default: first + last, editable at issue)
+status        'active' | 'revoked'
+issuedAt / issuedBy { _id, username }
+revokedAt / revokedBy { _id, username } / revokeReason
+lastUsedAt    bumped by resolveBadge()
+printCount    bumped by the print page
+```
+Indexes: `{ code: 1 }` unique · `{ userId: 1 }` unique, partial `status: 'active'` · `{ status: 1, issuedAt: -1 }`.
+Revoke, never delete — block deletes the way `user.ts` does.
+
+### 15.2 `Custody` — new, collection `custody`
+
+```
+_id            nanoid
+resourceType   'bucket_cycle'          (generic on purpose — §4.2)
+resourceId     BucketCycle._id
+bucketId       denormalised for the board
+operator       { _id, username }       badge holder
+badgeId        OperatorBadge._id
+method         'badge'                  (enum reserved: 'login' | 'override')
+enteredBy      { _id, username }       web session that submitted the scan
+claimedAt
+releasedAt     null while open
+releaseReason  'cycle_closed' | 'voided' (enum reserved: 'scan_out' | 'takeover' | 'expired')
+```
+Index: `{ resourceType: 1, resourceId: 1 }` unique, partial `releasedAt: null` — same trick as
+one-open-cycle-per-bucket. `{ bucketId: 1, claimedAt: -1 }` for history.
+
+### 15.3 `BucketTransaction` — two additive fields
+
+```
+enteredBy    { _id, username }                          // always the session
+attribution  { method: 'badge' | 'login', badgeId, custodyId }
+```
+`operator` unchanged. Rows written before this change have neither field; readers treat missing
+`attribution` as `{ method: 'login' }`, which is what they were.
+
+### 15.4 `BucketCycle` — one additive field
+
+`custodyId` — the `Custody` row opened at start. `openedBy` becomes the badge holder (it was the
+session user); the session user is on the custody row as `enteredBy`, not duplicated here.
+
+### 15.5 `ManufacturingSettings.badge`
+
+```
+badge: {
+  mode:      { type: String, enum: ['off', 'required'], default: 'required' },
+  changedAt: Date,                        // last flip (§17.5)
+  changedBy: { _id: String, username: String }
+}
+```
+Lives beside `thermoseal`. `requireBadgeFor` from §4.4 is **not** a setting in v1 — the gated set
+is hard-coded to `mint` + `create` in `bucket-service.ts` until a second consumer needs the list.
+
+---
+
+## 16. Server logic
+
+### 16.1 `src/lib/server/services/badge-service.ts` — new
+
+```
+isBadgeCode(code)                       /^BDG-[A-Z0-9]{10}$/i
+resolveBadge(code) -> BadgeHolder       { badgeId, user: { _id, username }, displayName }
+                                        throws BadgeError: unknown code / revoked / user inactive
+                                        bumps lastUsedAt (fire-and-forget)
+issueBadge({ userId, displayName, issuedBy })
+                                        refuses if the user already has an active badge (11000 -> BadgeError 409)
+revokeBadge({ badgeId, reason, by })
+reissueBadge({ badgeId, by })           revoke + issue, one call, one audit row
+listBadges()                            for the portal table
+badgeMode()                             reads ManufacturingSettings.badge.mode, default 'required'
+```
+`BadgeError` mirrors `BucketError` (message, status, code) so the bucket page's `wrap()` needs no
+change beyond catching both.
+
+### 16.2 `bucket-service.ts` — gated entry points
+
+```
+createBucket({ qr, badge, user })   // badge: scanned code; user: session (= enteredBy)
+startCycle({ ..., badge, user })
+```
+Both do, in order: `requireBadge(badge, user)` — a private helper that
+
+1. reads `badgeMode()`; if `off`, returns `{ operator: user, attribution: { method: 'login' } }`;
+2. else refuses an empty scan (`Scan your badge.`, 400, `BADGE_REQUIRED`);
+3. `resolveBadge()`; loads the holder's roles; refuses unless `hasPermission(holder, 'manufacturing:write')`;
+4. returns `{ operator: holder, badgeId, attribution: { method: 'badge', badgeId } }`.
+
+`createBucket` writes `createdBy` = operator, `logTx` with `operator` + `enteredBy` + `attribution`.
+`startCycle` additionally creates the `Custody` row (before `BucketCycle.create`, inside the same
+try so an 11000 on either unwinds cleanly), sets `openedBy` = operator and `custodyId`.
+
+**Guards — a badge must never become a cartridge or a sticker.** `scanCartIn`, `assertStickerFree`
+and `auditScan` reject `isBadgeCode()` with *"That is a badge, not a cart."* `resolveScan()` gains
+`kind: 'badge'` so the board's main scan box answers *"That is Jane's badge — scan a bucket."*
+
+### 16.3 Custody release — every close path, no exceptions
+
+| Path | `releaseReason` |
+|---|---|
+| `closeCycle()` (consumed / scrapped — reached from scrap-to-zero, consumeCarts, moveToOven, overrideCartStage) | `cycle_closed` |
+| `voidCycle()` | `voided` |
+
+One private `releaseCustody(cycleId, reason)` called from both. `forceBucketPhase` (Master
+Override) goes through `closeCycle` when it closes, so it is covered. This table is the difference
+between `Custody` and the stranded `currentOperator` in §13.0 — keep it complete.
+
+### 16.4 Every non-gated step
+
+`scanCartIn`, `unscanCart`, `advanceCycle`, `scrapCarts`, `consumeCarts`, `moveToOven`,
+`returnCarts`, residual, audit, retire, void: **unchanged behaviour**. `logTx` gains
+`enteredBy = operator = session user` and `attribution: { method: 'login', custodyId }` where the
+cycle has one. That is the whole change to them.
+
+---
+
+## 17. UI
+
+### 17.1 Badge Portal — `/admin/badges` (admin only)
+
+- Tab **Badges** in `admin/+layout.svelte`, shown when `canManageBadges` (`isAdmin()`), placed
+  after **Users**. `admin/+layout.server.ts` adds the flag and lets it satisfy the layout's
+  "at least one" redirect check.
+- `load`: `isAdmin()` check, 403 otherwise; returns badges (joined display) and the users without
+  an active badge for the picker.
+- **Issue badge** form: user select · display name (prefilled first + last) · Issue. On success
+  the new row is highlighted and the *Print* link is offered immediately.
+- Table: name · user · code (mono) · status · issued · last used · actions **Print** / **Revoke**
+  (reason required) / **Reissue**.
+- Actions: `issue`, `revoke`, `reissue`, `setBadgeMode` (§17.5). Each writes `AuditLog` (`tableName: 'operator_badges'`; `setBadgeMode` writes `manufacturing_settings`).
+- **Require badge** switch at the top of the page, admin only — §17.5.
+
+### 17.2 Print — `/admin/badges/[badgeId]/print`
+
+Standalone page, print stylesheet, one CR80 card (85.6 x 54 mm) per badge: display name large,
+QR (`bwip-js/browser`, `qrcode`, code as the payload) centred, code in small mono under it,
+"BIMS" wordmark. `window.print()` button; the load bumps `printCount`. Revoked badges render with
+a red REVOKED band so a stale print cannot be confused for a live one.
+
+**Batch print** (added the same day): a *Batch print* panel on the portal builds a list from a
+dropdown of active badges, a name/user/code search (Enter adds the top match), or *Add all
+active*; *Print N badges* opens `/admin/badges/print?ids=a,b,c` — a cut sheet of CR80 cards, two
+across and four down per Letter/A4 page (`break-inside: avoid`). The card itself is one shared
+component, `src/lib/components/admin/BadgeCard.svelte`, used by both print pages. Opening the
+sheet bumps `printCount` once for each active badge on it; revoked ones still print with the band.
+
+### 17.3 `/manufacturing/cart-mfg/buckets/new` — mint
+
+Two scan fields, in scan order: **1. Scan your badge**, then focus jumps to **2. Scan the tub's
+QR sticker**, then submit. Enhance keeps the badge value after success so one operator can mint
+several tubs in a row (the sticker field clears, the badge does not). Error strings come straight
+from `BadgeError` / `BucketError`. Success line: *"Bucket created — sticker X, minted by Jane."*
+
+### 17.4 Board start-pass form (`?/start`)
+
+One new input at the top of the existing form: **Scan your badge** (`name="badge"`, required
+when `data.badgeMode === 'required'`). Lots unchanged. The pass card afterwards shows the opener
+as it does now (`openedBy`), which is now the badge holder.
+
+### 17.5 "Require badge" toggle — Badge Portal, admin only
+
+One switch, one place. It lives at the top of `/admin/badges`, above the issue form:
+
+```
+Require badge at mint and start-pass     [ ON ]     changed 2026-09-30 by alejandro
+```
+
+- **Gate:** the `setBadgeMode` action checks `isAdmin(locals.user)` and returns 403 otherwise —
+  the same gate as the rest of the portal, so a non-admin can neither see the page nor POST to it.
+  The switch is not rendered anywhere a non-admin can reach.
+- **Write:** `ManufacturingSettings.updateOne({ _id: 'default' }, { $set: { 'badge.mode': m,
+  'badge.changedAt': now, 'badge.changedBy': { _id, username } } })`. `badge.changedAt` /
+  `badge.changedBy` are two extra fields in §15.5 so the portal can show who last flipped it.
+- **Audit:** every flip writes `AuditLog` (`tableName: 'manufacturing_settings'`,
+  `action: 'BADGE_MODE'`, `oldData: { mode }`, `newData: { mode }`, `reason` optional text field on
+  the switch). Turning enforcement *off* is the flip that matters for traceability, so it is never
+  silent.
+- **Effect is immediate:** `badgeMode()` reads the setting per request (no cache), so the next
+  mint or start-pass honours the new value with no deploy and no restart.
+- **Board:** `/manufacturing/cart-mfg/buckets` shows a one-line read-only note in the mint / start
+  area — *Badge required: on* / *off* — so operators know why the field is or is not there. The
+  board does **not** get a switch; the thermoseal *Development settings* card is unrelated and
+  stays as it is.
+
+The previous draft of this section put the switch on the board's development-settings card;
+moved here so the gate is one `isAdmin()` check in one route rather than two.
+
+**Board link (2026-09-30):** the bucket board header shows *Badge required: on / off* as a link
+to `/admin/badges`, and the start-pass form.s "off" note gets a *Change* link — both only when
+`canBadgeAdmin` (`isAdmin()`, the portal.s own gate), so the link never leads to a 403. The board
+itself has no switch; a short-lived dev-only copy was added and removed the same day.
+
+---
+
+## 18. Files
+
+| File | Change |
+|---|---|
+| `src/lib/server/db/models/operator-badge.ts` | **new** |
+| `src/lib/server/db/models/custody.ts` | **new** |
+| `src/lib/server/db/models/index.ts` | export both |
+| `src/lib/server/db/models/bucket-transaction.ts` | + `enteredBy`, `attribution` |
+| `src/lib/server/db/models/bucket-cycle.ts` | + `custodyId` |
+| `src/lib/server/db/models/manufacturing-settings.ts` | + `badge.mode` |
+| `src/lib/server/services/badge-service.ts` | **new** — §16.1 |
+| `src/lib/server/services/bucket-service.ts` | `requireBadge`, `releaseCustody`, gated `createBucket` / `startCycle`, badge guards, `resolveScan` badge kind, `logTx` attribution |
+| `src/routes/admin/+layout.server.ts`, `+layout.svelte` | Badges tab |
+| `src/routes/admin/badges/+page.server.ts`, `+page.svelte` | **new** — portal + **Require badge** toggle (`setBadgeMode`, `isAdmin` gate) |
+| `src/routes/admin/badges/[badgeId]/print/+page.server.ts`, `+page.svelte` | **new** — print |
+| `src/routes/admin/badges/print/+page.server.ts`, `+page.svelte` | **new** — batch print sheet (`?ids=`) |
+| `src/lib/components/admin/BadgeCard.svelte` | **new** — the CR80 card, shared by both print pages |
+| `src/routes/manufacturing/cart-mfg/buckets/new/+page.server.ts`, `+page.svelte` | badge field |
+| `src/routes/manufacturing/cart-mfg/buckets/+page.server.ts`, `+page.svelte` | badge on `?/start`, `badgeMode` in load, read-only "Badge required" note on the board |
+| `BUCKET-SYSTEM_PLAN.md` | one build-history row + §6.1 / §9.4 notes, same commit as the bucket-side code |
+
+Not touched: `src/lib/stores/`, `src/lib/utils/`, `app.html`, `app.css`, `static/`, `hooks.server.ts`, `permissions*.ts`.
+
+### 18.1 Build order (each step leaves `npm run check` at the 12-error baseline)
+
+1. Models + index exports + `badge-service.ts`. No behaviour change.
+2. Badge Portal + print page + admin tab. Badges can be issued and printed; nothing consumes them yet.
+3. `bucket-service.ts`: `requireBadge`, custody, guards, attribution — with `badge.mode` read but the
+   two UI forms not yet sending a badge, so run this step with mode `off` in the dev DB.
+4. `buckets/new` + board `?/start` forms; flip mode to `required`.
+5. `BUCKET-SYSTEM_PLAN.md` row; `progress.txt` entry; push; PR to `feat/bucket-system`.
+
+### 18.2 Verification checklist
+
+- Issue a badge for a user with `manufacturing:write`, print it, scan it into the mint page: bucket
+  created, `BucketTransaction.mint` has `operator` = holder, `enteredBy` = session, `attribution.method = 'badge'`.
+- Start a pass with the badge: `Custody` row open, `BucketCycle.custodyId` set, `openedBy` = holder.
+- Scan the badge into the cart scan-in box: refused, no `CartridgeRecord` created.
+- Scan the badge as a sticker at mint: refused.
+- Revoke the badge: mint and start refuse with the revoke message; the print page shows REVOKED.
+- A badge whose user lacks `manufacturing:write`: refused even though the session is allowed.
+- Close the pass by every path in §16.3: `Custody.releasedAt` set, `releaseReason` correct. **Void too.**
+- Toggle **Require badge** off in the portal as an admin: both forms accept an empty badge; rows carry `method: 'login'`; the board note reads *Badge required: off*. A non-admin session POSTing `?/setBadgeMode` gets 403.
+- A second active badge for the same user: 409 from the portal.
+
+---
+
+## 19. Deferred from v1 (ordered by the audit in §13)
+
+1. Fold `capture_stations.currentOperator` and `robot-arm-lock` into `Custody` (§13.0).
+2. `AuditLog.attribution` — one change, every mutation (§13.4).
+3. Opentrons operator login to badge (§13.2).
+4. Free-text `performedBy` fields to badge (§13.1), cleaning records first.
+5. Optional scan-in at later stages, custody TTL, takeover, board "Held by" (Part 1 §8).
+6. `requireBadgeFor` as a settings list once a second consumer exists (§4.4).
+7. Badge + PIN as the two Part 11 components at the four signature routes (§13.5).
+
+---
+
+## 20. Build notes — where the code differs from the layout (2026-09-30)
+
+Built on `feat/badge-system` in the §18.1 order. Deviations, all small:
+
+1. **`Custody.open` boolean instead of a `releasedAt: null` partial index** (§15.2). A boolean
+   equality is the unambiguous partial-filter shape; `releasedAt` is still written on release.
+   `releaseCustody()` matches on `open: true` and sets `open: false`.
+2. **Custody is created after the cycle, not before** (§16.2). The cycle id is fresh, so the
+   custody row cannot collide, and a failed cycle create leaves no orphan custody. Simpler than
+   unwinding.
+3. **Non-gated ledger rows do not carry `custodyId`** (§16.4). Looking it up would add a read to
+   the scan-in hot path (§6.2.1 of the bucket plan) for a value that is already on
+   `BucketCycle.custodyId`. They carry `enteredBy = operator = session` and `{ method: 'login' }`.
+4. **A badge scanned while enforcement is off is still honoured.** `requireBadge()` only falls back
+   to the session when the scan is *empty*; a present badge is resolved and attributed. Better
+   data for free during rollout, no behaviour change for anyone who does not scan.
+5. **Badge errors surface as `BucketError`** so the two route files' existing `wrap()` /
+   `try` blocks need no change. Codes: `BADGE_REQUIRED`, `BADGE_INVALID`, `BADGE_UNKNOWN`,
+   `BADGE_REVOKED`, `BADGE_INACTIVE`, `BADGE_FORBIDDEN`, `BADGE` (a badge scanned as a sticker
+   or cart). The mint page clears the badge field on any `BADGE*` failure and the sticker field
+   otherwise.
+6. **`resolveBadge()` bumps `lastUsedAt` fire-and-forget**; the print page bumps `printCount` on
+   load (active badges only).
+7. **Print page uses `bwip-js/browser` `qrcode` at scale 8 with default error correction** — the
+   `eclevel` option is not in the package's `RenderOptions` typing.
+ 8. **Batch print added after the first push** (§17.2): `getBadges(ids)` keeps selection order and
+   drops unknown ids; `bumpPrintCount` takes one id or a list (`updateMany`).
+ 9. **Board links to the portal switch** (§17.5) — `canBadgeAdmin` in the board load, header link
+   and start-form *Change* link. (A dev-only copy of the switch on the board existed for one commit,
+   `939984f7`, and was removed at the user.s request.)
+
+`npm run check`: 14 errors before, 14 after — all pre-existing (`research-proxy.ts` ×2,
+`r2.ts`, `AskBimsWidget.svelte`, `assembly/[sessionId]` ×8, `validation/magnetometer/[sessionId]` ×2 —
+the two `research-proxy.ts` errors are new on master since the bucket plan recorded 12). None in any file this branch touches.
+
+**Not yet done from §18.1:** step 5 push / PR, and the §18.2 checklist has not been run against a
+live database — a dev DB with at least one issued badge is needed for that.

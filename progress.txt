@@ -16640,6 +16640,267 @@ needs 32) — anything still on the S3 path (COC photos via src/lib/server/r2.ts
 receiving) is broken until someone with brevitest team access fixes both.
 
 ================================================================================
+2026-09-30 — feat/bucket-system — AUDIT: why no sonic recording has ever been stored (no code change)
+================================================================================
+Requested audit + action plan; all attempted recordings were iPhone (Voice Memos). Findings:
+1. Storage was broken in the Vercel env twice over (see 09-25 entries): malformed R2_ACCOUNT_ID
+   (TLS alert 40) and a 24-char R2_ACCESS_KEY_ID (R2 400). Worker-first upload shipped to
+   production 09-25 (c6861be7) as a workaround; dashboard fix of both variables still owed.
+2. Vercel's 4.5 MB body cap sits under the page's old 80 MB promise. iPhone Voice Memos
+   "Compressed" ≈0.5 MB/min (a 5–7 min run ≈2.5–3.5 MB, fits); "Lossless" ≈3–6 MB/min (never
+   fits). Which quality the phone was on decides whether attempts even reached the function.
+3. No failure trace exists: AuditLog row is written only after storage succeeds, Vercel logs are
+   unreachable from here, and the page used to drop to the generic error page on transport errors.
+4. Still unverified: DB has 0 sonic sessions and 0 sonic audit rows as of today, though the audit
+   log shows other activity on 09-29 — the production Worker path has not been exercised since the
+   ship. Previews cannot test it (R2_WORKER_URL / R2_UPLOAD_SECRET are Production-scoped).
+Ruled out: schema (type/spuId are free Strings), permissions code, form wiring, hooks (the
+formData reader is scoped to /spu/receiving/new), CSRF.
+Plan (in order): (a) commit the uncommitted +page.svelte failure banner and retest on production
+with a Compressed voice memo <4.5 MB while logged in with spu:write; (b) fix R2_ACCOUNT_ID /
+R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY in the brevitest Vercel project and add the Worker vars to
+Preview scope; (c) write an AuditLog row on failed sonic attempts; (d) lift the 4.5 MB cap by
+letting the browser PUT straight to the Worker (already CORS-enabled) using a short-lived
+server-minted token instead of the static secret, then record the session after a HEAD check;
+(e) until (d), recorders use Compressed quality.
+
+================================================================================
+2026-09-30 — feat/badge-system — Badge system: audit + v1 build layout (no code change)
+================================================================================
+New branch feat/badge-system cut from feat/bucket-system (the bucket system exists only there;
+PR target will be feat/bucket-system, not master). Nothing coded. Two documents of work:
+
+1. System audit for where an ID scan-in could go — swept all 120 models, 156 AuditLog.create
+   sites, every scan input. Headline: custody already exists twice and disagrees with itself
+   (capture_stations.currentOperator = stored lock with no expiry; robot-arm-lock.ts = derived
+   holder whose header comment calls currentOperator "the cautionary tale in this codebase").
+   Free-text attribution found in inventory-transaction.performedBy, cleaning-record.performedBy,
+   reagent-inventory.inspectedBy, equipment-location placedBy, assembly-session capturedBy.
+   Worst attribution: opentrons-clone/operator-login is one shared env password with no user
+   identity. Full ranked list is BADGE-SYSTEM_PLAN.md section 13.
+
+2. v1 build layout for the scope the user set: Badge Portal under admin (isAdmin gate), manual
+   badge issue with name + QR, one active badge per user, printed CR80 cards; minting a bucket and
+   starting a pass require a badge scan, later steps do not. Decisions, data model (OperatorBadge,
+   Custody, additive BucketTransaction.enteredBy/attribution, BucketCycle.custodyId,
+   ManufacturingSettings.badge.mode default required), server logic incl. the guard that a badge
+   can never become a cartridge or sticker and the custody-release table covering every
+   cycle-close path, UI, file list, build order, verification checklist: BADGE-SYSTEM_PLAN.md
+   Part 2 (sections 13-19). Part 1 stage names corrected for the raw->barcoded rename.
+
+Files touched: BADGE-SYSTEM_PLAN.md (Part 2 appended), progress.txt.
+npm run check: not run — no source change; baseline remains 12 errors from master.
+Uncommitted src/routes/validation/sonic/+page.svelte in the tree belongs to another session;
+not staged, not touched.
+
+================================================================================
+2026-09-30 — feat/bucket-system — sonic upload: failed attempts audited, direct-to-Worker path behind a flag
+================================================================================
+Follow-through on today's audit entry. Committed 6d3146b7 first (the 4.5 MB note + failure banner
+that had sat uncommitted since the 25th). Then:
+
+src/routes/validation/sonic/+page.server.ts (rewrite, same behaviour on the existing path):
+- Every failed attempt writes AuditLog action 'sonic_recording_upload_failed' (stage: validate /
+  storage / record, reason, spu, file, size). Before this a failure left nothing in the DB, which
+  is why the audit had to guess.
+- Proxy path cap is now PROXY_MAX_BYTES = 4.5 MB (was 80 MB, unreachable behind Vercel's cap).
+- New actions `presign` and `record` for the direct path, gated by SONIC_DIRECT_UPLOAD=1 and
+  R2_WORKER_URL. presign validates and mints a token; record HEADs the object through the Worker,
+  checks the key prefix (sonic/<udi>/) and the size, then writes session + audit + journal via
+  the shared persistRecording(). rawData.via = 'proxy' | 'direct'.
+- load returns directUpload + maxBytes so the page knows which cap applies.
+src/lib/server/sonic-direct.ts (new): mintDirectUploadToken (HMAC-SHA256 over
+  key\nexpires\nmaxBytes with R2_UPLOAD_SECRET, 15 min TTL), headWorkerObject, directUploadEnabled.
+  Verified the Web Crypto digest equals node:crypto's for the same input.
+services/r2-upload-worker/src/index.ts: PUT /direct/:key (token check, constant-time compare,
+  expiry, Content-Length required and ≤ X-Upload-Max → 411/413), HEAD /file/:key (size via
+  Content-Length), CORS headers extended. Transpiles with esbuild; NOT deployed (needs wrangler
+  login). README documents the route and rollout.
+src/routes/validation/sonic/+page.svelte: when data.directUpload, the enhance submit is cancelled
+  and the page runs presign → XHR PUT with a progress % on the button → record → applyAction +
+  invalidateAll. Otherwise the proxied form is unchanged. Note shows the live cap and, on the
+  proxied path, the iPhone Voice Memos Compressed-vs-Lossless size hint.
+.env.example: SONIC_DIRECT_UPLOAD documented.
+svelte-check: 14 errors = baseline (12 + 2 pre-existing research-proxy.ts), none in these files.
+Rollout owed by a human: (1) cd services/r2-upload-worker && npx wrangler deploy; (2) set
+SONIC_DIRECT_UPLOAD=1 in the brevitest Vercel Production env; (3) fix R2_ACCOUNT_ID /
+R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY there too (still wrong since 09-25); (4) add the R2
+Worker vars to Preview scope so previews can test uploads. Until (1)+(2), production keeps the
+4.5 MB proxied path — now with a readable failure and an audit row on every miss.
+Deployment: preview — pending at push time; brevitest inspector
+  https://vercel.com/brevitest/bioscale-operations-system-mongodb/AWvJAuks9VbrKxfMFV92YPcgPDu3
+  (resolve the open URL via the GitHub deployments API for the sha, take the -brevitest one)
+Source: branch feat/bucket-system @ commit 455cb2f0
+Retrieve this exact code: git checkout feat/bucket-system at commit 455cb2f0
+  (or: git log feat/bucket-system --oneline to find it if the branch has since moved on)
+What this deployment is for: build check of the failure-audit + direct-upload code. NOT a
+  functional test of either path — previews lack R2_WORKER_URL (Production-scoped), so a proxied
+  upload there falls back to S3 and shows the bad-access-key error, and the direct path stays off
+  until the Worker is redeployed and SONIC_DIRECT_UPLOAD=1 is set. Functional test = production.
+Note: this checkout was on feat/badge-system (another session's checkout) when the two sonic
+  commits were made; feat/bucket-system was fast-forwarded to 455cb2f0 and pushed. The docs
+  commit that follows carries this log line only — same code as 455cb2f0.
+
+================================================================================
+2026-09-30 — feat/badge-system — Badge system v1 built: portal, print, custody, badge-gated mint + start-pass
+================================================================================
+Built BADGE-SYSTEM_PLAN.md Part 2 (sections 13-19) in the section 18.1 order; deviations are
+recorded in the new section 20. Nothing pushed.
+
+Models: operator-badge.ts (code BDG-XXXXXXXXXX, random, plaintext, unique; one ACTIVE badge per
+user via partial unique index; delete blocked), custody.ts (generic resourceType/resourceId,
+`open` flag drives the one-open-custody-per-resource partial unique index), bucket-transaction.ts
+(+enteredBy, +attribution{method,badgeId,custodyId}), bucket-cycle.ts (+custodyId),
+manufacturing-settings.ts (+badge{mode,changedAt,changedBy}, default 'required'), index.ts exports.
+
+Service: badge-service.ts — isBadgeCode/newBadgeCode, badgeMode/badgeSettings/setBadgeMode
+(audited, upsert), resolveBadge (unknown/revoked/inactive -> BadgeError), badgeHolderCan,
+issue/revoke/reissue/list/get/bumpPrintCount. bucket-service.ts — requireBadge() gate used by
+createBucket and startCycle only (holder must have manufacturing:write; session is enteredBy);
+startCycle opens a Custody row; releaseCustody() from closeCycle and voidCycle; scanCartIn,
+assertStickerFree and auditScan refuse a badge code so a badge can never become a cart or a
+sticker; resolveScan returns kind 'badge' naming the holder; logTx writes enteredBy + attribution
+on every row (non-gated rows = session, method 'login').
+
+Routes: /admin/badges (admin only via isAdmin(): Require-badge switch with reason + audit,
+issue form, active table with Print/Reissue/Revoke, revoked list), /admin/badges/[id]/print
+(CR80 card, bwip-js QR, print CSS, REVOKED band), Badges tab in admin/+layout. Mint page: badge
+field first, Enter jumps to the sticker field, badge persists across creates. Board start-pass
+form: badge field when mode is 'required', read-only "Badge required: off" note otherwise; board
+scan box explains a scanned badge.
+
+Docs: BUCKET-SYSTEM_PLAN.md section 6.1 / 9.4 notes + section 11 row; BADGE-SYSTEM_PLAN.md status
+line + section 20.
+
+svelte-check (portable node, direct): 14 errors before and after — all pre-existing
+(research-proxy.ts x2, r2.ts, AskBimsWidget.svelte, assembly/[sessionId] x8, magnetometer/[sessionId] x2); none in files this
+branch touches. The section 18.2 runtime checklist has NOT been run yet — needs a dev DB with an
+issued badge.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-f6h728rfv-brevitest.vercel.app
+Source: branch feat/badge-system @ commit 3f35d12c
+Retrieve this exact code: git checkout feat/badge-system at commit 3f35d12c
+  (or: git log feat/badge-system --oneline to find it if the branch has since moved on)
+What this deployment is for: first live test of the badge system — /admin/badges portal (issue,
+print, Require-badge switch) and the badge-gated mint (/manufacturing/cart-mfg/buckets/new) and
+start-pass on the bucket board. Section 18.2 checklist in BADGE-SYSTEM_PLAN.md runs against this.
+
+================================================================================
+2026-09-30 — feat/badge-system — Badge Portal: batch print (dropdown / name search list -> one cut sheet)
+================================================================================
+User asked for a way to select badges from a dropdown or search names into a list and print them
+all at once. Added a Batch print panel to /admin/badges: dropdown of active badges, a search box
+(name / user / code, Enter adds the top match), Add all active, Clear, chips for the list, and a
+"Print N badges" link to the new /admin/badges/print?ids=a,b,c sheet — CR80 cards two across, four
+down per Letter/A4 page with break-inside: avoid. The card moved into a shared component
+src/lib/components/admin/BadgeCard.svelte used by both the single and batch print pages.
+badge-service: getBadges(ids) (selection order kept, unknown ids dropped) and bumpPrintCount now
+takes one id or a list (updateMany; the sheet bumps each active badge once). Admin gate is the same
+isAdmin() as the rest of the portal. BADGE-SYSTEM_PLAN.md sections 17.2 / 18 / 20 updated.
+svelte-check: 14 errors before and after, all pre-existing; none in these files.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-fwo6hu6tt-brevitest.vercel.app
+Source: branch feat/badge-system @ commit 38347977
+Retrieve this exact code: git checkout feat/badge-system at commit 38347977
+  (or: git log feat/badge-system --oneline to find it if the branch has since moved on)
+What this deployment is for: batch print — build a list on /admin/badges (dropdown / name search /
+add all) and print every card on one sheet at /admin/badges/print?ids=…
+
+================================================================================
+2026-09-30 — feat/badge-system — DEV ONLY: Require-badge toggle copied onto the bucket board (admin only)
+================================================================================
+User asked for the Require-badge switch on the bucket page too, admin only, with a dev note to
+remove it in the final build. Added a checkbox + Apply under the board's existing "Development
+settings" card (next to the thermoseal notifications toggle): ?/badgeMode action in
+buckets/+page.server.ts, gated exactly like thermosealToggles (manufacturing:admin or admin:full;
+non-admins see it disabled with "manufacturing:admin to change"), writing through the same audited
+setBadgeMode() (reason "board development settings"). The load now returns the full badge settings
+(mode, changedAt, changedBy) so the card shows who last flipped it. Marked "DEV ONLY — REMOVE BEFORE
+FINAL BUILD" in the action comment, the markup comment, the page's form type, a yellow line in the
+UI, BADGE-SYSTEM_PLAN.md section 17.5 / section 20 item 9, and BUCKET-SYSTEM_PLAN.md section 12.5.
+The portal switch at /admin/badges is the permanent one.
+svelte-check: 14 errors before and after, all pre-existing; none in these files.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-2gtmctrma-brevitest.vercel.app
+Source: branch feat/badge-system @ commit 939984f7
+Retrieve this exact code: git checkout feat/badge-system at commit 939984f7
+  (or: git log feat/badge-system --oneline to find it if the branch has since moved on)
+What this deployment is for: the DEV-ONLY Require-badge checkbox on the bucket board's Development
+settings card (admin only), alongside the portal switch, batch print, and badge-gated mint/start.
+
+================================================================================
+2026-09-30 — feat/badge-system — Board toggle removed; admin-only link to the portal switch instead
+================================================================================
+User: the admin toggle stays as it is (in /admin/badges, no dev note); the bucket page gets a link
+to it, visible only to admins. Reverted 939984f7's board copy of the switch (?/badgeMode action,
+the form under the thermoseal toggle, the badge settings in the load, the DEV-ONLY notes in both
+plan docs). Added instead: the board header shows "Badge required: on/off" as a link to
+/admin/badges, and the start-pass form's "off" note gets a "Change" link — both gated by
+canBadgeAdmin = isAdmin() (the portal's own gate: admin:full or admin:users), so the link never
+leads to a 403. BADGE-SYSTEM_PLAN.md section 17.5 / section 20 item 9 and BUCKET-SYSTEM_PLAN.md
+section 12.5 updated.
+Shared-worktree note: another session is mid-build on a bucket "nickname" feature in this checkout
+(production-bucket.ts, bucket-transaction.ts, bucket-service.ts, buckets/[bucketId]/*, new/*, and
+nameOf()/containsLabel() hunks in buckets/+page.svelte). Only this change's hunks were staged (git
+apply --cached from a filtered patch); the nickname work is untouched and uncommitted here.
+svelte-check on the combined tree: 32 errors = the 14 baseline + 18 from the unfinished nickname
+work (nameOf, nickname/canEdit/nicknameMax props); none from the badge-link change.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-d4avxtw4m-brevitest.vercel.app
+Source: branch feat/badge-system @ commit 0b7eb161
+Retrieve this exact code: git checkout feat/badge-system at commit 0b7eb161
+  (or: git log feat/badge-system --oneline to find it if the branch has since moved on)
+What this deployment is for: board toggle gone; admin-only "Badge required: on/off" link on the
+bucket board (and "Change" in the start-pass form) to the portal switch at /admin/badges.
+
+================================================================================
+2026-09-30 — feat/badge-system — Bucket nicknames (optional human name per tub)
+================================================================================
+User asked for the option to give buckets nicknames. Added ProductionBucket.nickname (optional,
+max 30 chars, whitespace-collapsed; refused if it looks like a BKT id or a badge code; unique
+case-insensitive among non-retired buckets so a retired tub's name can be reused). It is display
+only: resolveBucketId is unchanged, so a scan never resolves by nickname and a typo cannot route
+carts into the wrong bucket; the board's scan box and resolveScan list nickname hits as search
+results instead.
+
+Where it shows / is set:
+- bucket-service.ts: setBucketNickname() (any manufacturing:write user, any state but retired,
+  blank clears; writes a new `nickname` ledger row + NICKNAME audit); createBucket() takes an
+  optional nickname (mint row reason notes it); BoardCycle / BoardBucket / RegistryRow / scan
+  matches carry nickname; NICKNAME_MAX exported.
+- buckets/[bucketId]: header shows the nickname as the title with the BKT id beside it; "add
+  nickname" / "rename" opens an inline form (?/nickname). canEdit + nicknameMax in the load.
+- buckets/new: optional Nickname box under the sticker (clears after each create; Enter on the
+  sticker still submits); recent-buckets table gains a Nickname column.
+- buckets board: nameOf() = nickname ?? short sticker ?? id for every card/panel headline (id stays
+  underneath); registry gets a Nickname column + filter; local scan-box search matches nickname.
+- models: production-bucket.ts field; bucket-transaction.ts enum gains 'nickname'.
+- BUCKET-SYSTEM_PLAN.md: §4.1 (field + rules), §4.3 (type), §9.2, §9.4, §11 row, header date.
+svelte-check: 14 errors before and after — all pre-existing (r2.ts, research-proxy.ts,
+AskBimsWidget, 8× assembly/[sessionId], 2× validation/magnetometer/[sessionId]); none in these files.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-9bxtxuv6a-brevitest.vercel.app
+Source: branch feat/badge-system @ commit d7146e64
+Retrieve this exact code: git checkout feat/badge-system at commit d7146e64
+  (or: git log feat/badge-system --oneline to find it if the branch has since moved on)
+What this deployment is for: bucket nicknames — optional Nickname box on /buckets/new, add/rename on
+/buckets/[bucketId], nickname headlines on the board cards/panels, registry Nickname column + search.
+
+================================================================================
+2026-09-30 — feat/badge-system — Board: Badge-required link moved next to the Wax filling button
+================================================================================
+User: move the button next to the wax filling button. The admin-only "Badge required: on/off"
+link in the bucket board header now sits between "Cart state change" and "Wax filling →" instead
+of after "Master override". Markup only; gate and target unchanged. The nickname session's work
+(d7146e64) had been committed by then, so the tree was clean apart from this move.
+svelte-check: 14 errors, the pre-existing baseline.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-9natk0yq7-brevitest.vercel.app
+Source: branch feat/badge-system @ commit 55809e9e
+Retrieve this exact code: git checkout feat/badge-system at commit 55809e9e
+  (or: git log feat/badge-system --oneline to find it if the branch has since moved on)
+What this deployment is for: the admin-only "Badge required" link sits beside "Wax filling →" in
+the bucket board header.
 2026-09-29 — feat/post-mortem-tablet-ui → master — Post-Mortem Inspect: tablet (touch) layout
 ================================================================================
 Tablets are being introduced as single-purpose Post-Mortem Inspect stations (browser pointed at the
@@ -16770,3 +17031,27 @@ Retrieve this exact code: git checkout master at commit b2b650c6
 What this deployment is for: on-station test of the MJPEG view + /snapshot.jpg stills on Post-Mortem
   Inspect (station 3 = new path; station 2 = WebRTC fallback until its agent is updated).
   GitHub deployment 6763725750 (Production). Smoke: /login 200.
+
+================================================================================
+2026-09-30 — feat/badge-system — Final build: origin/master merged in; PR #69 opened into master
+================================================================================
+User: merge all changes to master. Per the shipping rule (PR to master, the user merges), this
+session did the final-build prep and stopped at the PR:
+- PR #54 (feat/bucket-system -> master) had already merged on 2026-09-25, so master contains the
+  bucket system; feat/badge-system was 15 commits ahead / 11 behind.
+- Merged origin/master into feat/badge-system (0b16a321). Only progress.txt conflicted (both
+  sides append); resolved as the union. svelte-check on the merged tree: 14 errors, the baseline.
+- Opened PR #69 feat/badge-system -> master:
+  https://github.com/avacoder3900/Bioscale_Operations_System_V2/pull/69
+  Scope: badge system (models, service, portal, batch print, badge-gated mint/start-pass, custody,
+  board link) + the bucket nickname feature (d7146e64). Rollout note in the PR: badge.mode defaults
+  to required, so issue badges or switch it off in /admin/badges before the floor mints or starts
+  a pass on production.
+Not done: the PR merge itself (user), and the BADGE-SYSTEM_PLAN.md section 18.2 runtime checklist.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-2nbri5daj-brevitest.vercel.app
+Source: branch feat/badge-system @ commit 0b16a321
+Retrieve this exact code: git checkout feat/badge-system at commit 0b16a321
+  (or: git log feat/badge-system --oneline to find it if the branch has since moved on)
+What this deployment is for: the final-build merge of origin/master into feat/badge-system — the
+exact tree PR #69 proposes for master (badge system + bucket nicknames + master's Post-Mortem work).

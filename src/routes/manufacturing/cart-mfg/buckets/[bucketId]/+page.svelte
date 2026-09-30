@@ -14,7 +14,8 @@
 		thermosealCreditedCm?: number;
 	};
 	type RetireResult = { success?: boolean; error?: string };
-	interface Props { data: PageData; form: { voidPass?: VoidResult; retire?: RetireResult } | null }
+	type NicknameResult = { success?: boolean; error?: string; nickname?: string | null; previous?: string | null };
+	interface Props { data: PageData; form: { voidPass?: VoidResult; retire?: RetireResult; nickname?: NicknameResult } | null }
 	let { data, form }: Props = $props();
 	let open = $state<Record<string, boolean>>({});
 	let voidingId = $state<string | null>(null);
@@ -23,6 +24,12 @@
 	let retireOpen = $state(false);
 	let retireBusy = $state(false);
 	const canRetire = $derived(data.canVoid && data.bucket.state !== 'retired' && data.bucket.state !== 'in_use');
+	// Nickname — any writer, any state but retired; blank clears (2026-09-30).
+	let nickOpen = $state(false);
+	let nickBusy = $state(false);
+	let nickDraft = $state('');
+	const canName = $derived(data.canEdit && data.bucket.state !== 'retired');
+	function openNick() { nickDraft = data.bucket.nickname ?? ''; nickOpen = true; setTimeout(() => document.getElementById('nickname')?.focus(), 30); }
 
 	function fmt(iso: string | null): string {
 		if (!iso) return '—';
@@ -39,7 +46,7 @@
 		create: 'text-green-300', advance: 'text-[var(--color-tron-cyan)]', consume: 'text-[var(--color-tron-cyan)]',
 		scrap: 'text-red-300', adjust: 'text-[var(--color-tron-yellow)]', merge_in: 'text-green-300', merge_out: 'text-[var(--color-tron-yellow)]',
 		release: 'text-[var(--color-tron-text-secondary)]', quarantine: 'text-[var(--color-tron-yellow)]', mint: 'text-[var(--color-tron-text-secondary)]', retire: 'text-red-300',
-		void: 'text-[var(--color-tron-yellow)]', relabel: 'text-[var(--color-tron-text-secondary)]'
+		void: 'text-[var(--color-tron-yellow)]', relabel: 'text-[var(--color-tron-text-secondary)]', nickname: 'text-[var(--color-tron-text-secondary)]'
 	};
 </script>
 
@@ -47,16 +54,40 @@
 	<nav class="text-xs text-[var(--color-tron-text-secondary)]">
 		<a href="/manufacturing/cart-mfg/buckets" class="hover:text-[var(--color-tron-cyan)]">Buckets</a>
 		<span class="mx-1">/</span>
-		<span class="font-mono text-[var(--color-tron-text)]">{data.bucket.bucketId}</span>
+		<span class="font-mono text-[var(--color-tron-text)]">{data.bucket.bucketId}</span>{#if data.bucket.nickname} <span class="text-[var(--color-tron-text-secondary)]">· {data.bucket.nickname}</span>{/if}
 	</nav>
 
 	<div class="flex flex-wrap items-start justify-between gap-3 rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4">
 		<div>
-			<div class="flex items-center gap-3">
-				<h1 class="font-mono text-3xl font-bold text-[var(--color-tron-cyan)]">{data.bucket.bucketId}</h1>
+			<div class="flex flex-wrap items-center gap-3">
+				{#if data.bucket.nickname}
+					<h1 class="text-3xl font-bold text-[var(--color-tron-cyan)]">{data.bucket.nickname}</h1>
+					<span class="font-mono text-lg text-[var(--color-tron-text-secondary)]">{data.bucket.bucketId}</span>
+				{:else}
+					<h1 class="font-mono text-3xl font-bold text-[var(--color-tron-cyan)]">{data.bucket.bucketId}</h1>
+				{/if}
 				<span class="rounded border px-2 py-0.5 text-[10px] uppercase tracking-wider {stateTint[data.bucket.state] ?? ''}">{data.bucket.state}</span>
 				{#if data.bucket.spotCheckPending}<span class="rounded border border-[var(--color-tron-yellow)]/40 bg-[var(--color-tron-yellow)]/10 px-2 py-0.5 text-[10px] uppercase tracking-wider text-[var(--color-tron-yellow)]">empty check pending</span>{/if}
+				{#if canName && !nickOpen}
+					<button type="button" onclick={openNick} class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)]">{data.bucket.nickname ? 'rename' : 'add nickname'}</button>
+				{/if}
 			</div>
+			{#if nickOpen && canName}
+				<form method="POST" action="?/nickname" use:enhance={() => { nickBusy = true; return async ({ update, result }) => { await update({ reset: false }); nickBusy = false; if (result.type === 'success') nickOpen = false; }; }}
+					class="mt-2 flex flex-wrap items-center gap-2">
+					<input id="nickname" type="text" name="nickname" bind:value={nickDraft} maxlength={data.nicknameMax} autocomplete="off" placeholder="e.g. Big Blue"
+						class="w-56 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-3 py-1.5 text-sm text-[var(--color-tron-text)] focus:border-[var(--color-tron-cyan)] focus:outline-none" />
+					<button type="submit" disabled={nickBusy} class="rounded bg-[var(--color-tron-cyan)] px-3 py-1.5 text-xs font-bold text-[var(--color-tron-bg-primary)] disabled:opacity-50">{nickBusy ? 'Saving…' : 'Save'}</button>
+					{#if data.bucket.nickname}
+						<button type="button" disabled={nickBusy} onclick={() => { nickDraft = ''; }} class="rounded border border-[var(--color-tron-border)] px-3 py-1.5 text-xs text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]" title="Clear the box, then Save to remove the nickname">Clear</button>
+					{/if}
+					<button type="button" onclick={() => (nickOpen = false)} class="text-xs text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]">Cancel</button>
+					<span class="text-[10px] text-[var(--color-tron-text-secondary)]">A name for the floor — the sticker and id still identify the tub. Blank removes it.</span>
+					{#if form?.nickname?.error}<p class="w-full text-xs text-[var(--color-tron-error)]">{form.nickname.error}</p>{/if}
+				</form>
+			{:else if form?.nickname?.success}
+				<p class="mt-1 text-xs text-green-300">{form.nickname.nickname ? `Nickname saved: ${form.nickname.nickname}` : 'Nickname removed'}{form.nickname.previous && form.nickname.nickname ? ` (was ${form.nickname.previous})` : ''}.</p>
+			{/if}
 			<p class="mt-1 text-xs text-[var(--color-tron-text-secondary)]">
 				{data.bucket.cycleCount} pass{data.bucket.cycleCount === 1 ? '' : 'es'}
 				{#if data.bucket.homeLocation} · home {data.bucket.homeLocation}{/if}
