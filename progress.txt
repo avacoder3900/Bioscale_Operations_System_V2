@@ -17077,3 +17077,20 @@ Retrieve this exact code: git checkout feat/bucket-nickname-block at commit 1fb8
   (or: git log feat/bucket-nickname-block --oneline to find it if the branch has since moved on)
 What this deployment is for: PR #70 — the "Nickname a bucket" third block on /buckets/new; mint
 form back to badge + sticker.
+
+================================================================================
+2026-09-30 — feat/post-mortem-tablet-fullscreen → master — Post-Mortem Inspect: tablet fullscreen mode
+================================================================================
+Third layout for Post-Mortem Inspect (desktop → tablet/touch → fullscreen), requested after tablet
+testing. A touch-only "⛶ Fullscreen" button in the page header enters it:
+  - The context/video/action wrapper becomes `fixed inset-0 z-[60]` black grid
+    `grid-cols-[6.25vw_1fr] grid-rows-[minmax(0,1fr)]`: the vertical 📷 Capture bar | the live feed
+    (MJPEG <img> or WebRTC <video>, `h-full w-full object-contain`). Cartridge/station bar hidden.
+    Existing elements are restyled, not duplicated (the <video> is bind:this with a live srcObject).
+  - Also calls document.documentElement.requestFullscreen({navigationUI:'hide'}) to drop Android's
+    address/status bars. A `fullscreenchange` to non-fullscreen (back gesture) leaves the layout. If
+    the browser refuses (e.g. iPad Safari), the layout still fills the viewport and a small ✕ exit
+    appears (only in that case). Body scroll is locked while active; fullscreen is exited on destroy.
+Scanner handling is unchanged (wedge input + Pi scanner via WS still lock cartridges while in fullscreen).
+`npm run check`: 13 errors (baseline), no new warnings. Vercel branch build used as the compile gate.
+Pushed to master at the user's explicit request.

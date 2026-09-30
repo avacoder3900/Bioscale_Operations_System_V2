@@ -236,6 +236,48 @@
 		return retryToken ? attempt(retryToken) : null;
 	}
 
+	// ── Tablet fullscreen mode ──────────────────────────────────────────────
+	// A third layout (desktop → tablet → fullscreen): only the live feed and the
+	// Capture button, filling the screen. Entered from a touch-only button. We
+	// also ask the browser for real fullscreen (hides Android's address/status
+	// bars); leaving it with the back gesture drops the mode via
+	// fullscreenchange. If the browser refuses (e.g. iPad Safari), the layout
+	// still fills the viewport and a small exit control is shown instead.
+	let fullscreen = $state(false);
+	let nativeFullscreen = $state(false);
+
+	async function enterFullscreen() {
+		fullscreen = true;
+		try {
+			await document.documentElement.requestFullscreen?.({ navigationUI: 'hide' });
+			nativeFullscreen = !!document.fullscreenElement;
+		} catch {
+			nativeFullscreen = false;
+		}
+	}
+
+	function exitFullscreen() {
+		fullscreen = false;
+		if (document.fullscreenElement) document.exitFullscreen?.().catch(() => null);
+		nativeFullscreen = false;
+	}
+
+	function onFullscreenChange() {
+		if (!document.fullscreenElement && nativeFullscreen) {
+			// Back gesture / system exit — leave the layout too.
+			nativeFullscreen = false;
+			fullscreen = false;
+		}
+	}
+
+	// No page scroll (or rubber-banding) behind the fullscreen layout.
+	$effect(() => {
+		if (!fullscreen) return;
+		const prev = document.body.style.overflow;
+		document.body.style.overflow = 'hidden';
+		return () => { document.body.style.overflow = prev; };
+	});
+
 	// ── Transient status banner ─────────────────────────────────────────────
 	let banner = $state<{ kind: 'ok' | 'err' | 'info'; text: string } | null>(null);
 	let bannerTimer: ReturnType<typeof setTimeout> | null = null;
@@ -841,6 +883,7 @@
 		refocusInterval = setInterval(refocusScanner, 500);
 		if (typeof window !== 'undefined') {
 			window.addEventListener('beforeunload', onBeforeUnload);
+			document.addEventListener('fullscreenchange', onFullscreenChange);
 		}
 	});
 
@@ -848,6 +891,8 @@
 		// Svelte 5 invokes onDestroy during SSR teardown — guard window access.
 		if (typeof window !== 'undefined') {
 			window.removeEventListener('beforeunload', onBeforeUnload);
+			document.removeEventListener('fullscreenchange', onFullscreenChange);
+			if (document.fullscreenElement) document.exitFullscreen?.().catch(() => null);
 		}
 		teardownStation();
 		stopCamera();
@@ -874,8 +919,18 @@
 					Scan each cartridge that has been ran, press Space to photograph it, and the deployed model's PASS/FAIL verdict appears below. The photo is saved to the cartridge — its status stays <span class="font-mono">completed</span> (post-mortem photos don't change cartridge state).
 				</p>
 			</div>
-			<div class="text-xs text-[var(--color-tron-text-secondary)]">
-				Operator: <span class="text-[var(--color-tron-cyan)]">{data.user.username}</span>
+			<div class="flex items-center gap-3">
+				<div class="text-xs text-[var(--color-tron-text-secondary)]">
+					Operator: <span class="text-[var(--color-tron-cyan)]">{data.user.username}</span>
+				</div>
+				<!-- Tablet-only: enter the feed + Capture fullscreen layout. -->
+				<button
+					type="button"
+					onclick={enterFullscreen}
+					class="hidden rounded border border-[var(--color-tron-cyan)] px-3 py-2 text-sm font-semibold text-[var(--color-tron-cyan)] [@media(pointer:coarse)]:inline-flex"
+				>
+					⛶ Fullscreen
+				</button>
 			</div>
 		</header>
 
@@ -931,9 +986,13 @@
 		<!-- Context bar + video + action bar. On touch devices (tablets) this becomes
 		     a grid: a narrow vertical Capture bar (1/16 of the screen width) left of
 		     the video, with the context bar spanning below. Desktop keeps DOM order. -->
-		<div class="space-y-4 [@media(pointer:coarse)]:grid [@media(pointer:coarse)]:grid-cols-[6.25vw_1fr] [@media(pointer:coarse)]:gap-4 [@media(pointer:coarse)]:space-y-0">
+		<!-- Fullscreen mode swaps this wrapper for a black, viewport-filling grid:
+		     Capture bar | feed, one full-height row; the context bar is hidden. -->
+		<div class={fullscreen
+			? 'fixed inset-0 z-[60] grid grid-cols-[6.25vw_1fr] grid-rows-[minmax(0,1fr)] gap-2 bg-black p-2'
+			: 'space-y-4 [@media(pointer:coarse)]:grid [@media(pointer:coarse)]:grid-cols-[6.25vw_1fr] [@media(pointer:coarse)]:gap-4 [@media(pointer:coarse)]:space-y-0'}>
 		<!-- Context bar: sticky cartridge + station + camera -->
-		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-4 [@media(pointer:coarse)]:col-span-2 [@media(pointer:coarse)]:row-start-2">
+		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-4 [@media(pointer:coarse)]:col-span-2 [@media(pointer:coarse)]:row-start-2 {fullscreen ? 'hidden' : ''}">
 			<div class="flex flex-wrap items-center gap-4">
 				<div class="min-w-[200px] flex-1">
 					<div class="text-xs uppercase text-[var(--color-tron-text-secondary)]">Cartridge</div>
@@ -984,7 +1043,9 @@
 		</div>
 
 		<!-- Video pane -->
-		<div class="rounded-lg border border-[var(--color-tron-border)] bg-black p-2 [@media(pointer:coarse)]:col-start-2 [@media(pointer:coarse)]:row-start-1">
+		<div class={fullscreen
+			? 'col-start-2 row-start-1 flex min-h-0 items-center justify-center bg-black'
+			: 'rounded-lg border border-[var(--color-tron-border)] bg-black p-2 [@media(pointer:coarse)]:col-start-2 [@media(pointer:coarse)]:row-start-1'}>
 			{#if cameraError}
 				<div class="flex aspect-video items-center justify-center text-[var(--color-tron-red,#ff3366)]">
 					{cameraError}
@@ -997,20 +1058,20 @@
 						bind:this={mjpegImgEl}
 						src={mjpegUrl}
 						alt="Live station preview"
-						class="aspect-video w-full rounded object-contain"
+						class={fullscreen ? 'h-full w-full object-contain' : 'aspect-video w-full rounded object-contain'}
 						onload={clearMjpegWatchdog}
 						onerror={() => fallBackToWebRtc('preview stream error')}
 					/>
 				{/if}
 				<!-- svelte-ignore a11y_media_has_caption -->
-				<video bind:this={videoEl} class="aspect-video w-full rounded {mjpegShowing ? 'hidden' : ''}" playsinline autoplay muted></video>
+				<video bind:this={videoEl} class="{fullscreen ? 'h-full w-full object-contain' : 'aspect-video w-full rounded'} {mjpegShowing ? 'hidden' : ''}" playsinline autoplay muted></video>
 			{/if}
 		</div>
 
 		<!-- Action bar. On touch devices (tablets) the button is a full-height
 		     vertical bar left of the video showing only the camera emoji (no
 		     keyboard, so no "(Space)"), and the scan hint is hidden. -->
-		<div class="flex items-center justify-between gap-3 [@media(pointer:coarse)]:col-start-1 [@media(pointer:coarse)]:row-start-1 [@media(pointer:coarse)]:items-stretch">
+		<div class="flex items-center justify-between gap-3 [@media(pointer:coarse)]:col-start-1 [@media(pointer:coarse)]:row-start-1 [@media(pointer:coarse)]:items-stretch {fullscreen ? 'col-start-1 row-start-1 items-stretch' : ''}">
 			<button
 				type="button"
 				onclick={() => capturePhoto()}
@@ -1025,6 +1086,17 @@
 				<div class="text-xs text-[var(--color-tron-text-secondary)] [@media(pointer:coarse)]:hidden">Scan a cartridge to enable capture</div>
 			{/if}
 		</div>
+		{#if fullscreen && !nativeFullscreen}
+			<!-- Only when the browser refused real fullscreen (no back-gesture exit). -->
+			<button
+				type="button"
+				onclick={exitFullscreen}
+				aria-label="Exit fullscreen"
+				class="absolute right-3 top-3 rounded-full bg-black/60 px-3 py-1 text-sm text-white"
+			>
+				✕
+			</button>
+		{/if}
 		</div>
 
 		<!-- Station camera tuning. Only for a Pi station: the camera is on the
