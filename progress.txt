@@ -16727,3 +16727,16 @@ SONIC_DIRECT_UPLOAD=1 in the brevitest Vercel Production env; (3) fix R2_ACCOUNT
 R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY there too (still wrong since 09-25); (4) add the R2
 Worker vars to Preview scope so previews can test uploads. Until (1)+(2), production keeps the
 4.5 MB proxied path — now with a readable failure and an audit row on every miss.
+Deployment: preview — pending at push time; brevitest inspector
+  https://vercel.com/brevitest/bioscale-operations-system-mongodb/AWvJAuks9VbrKxfMFV92YPcgPDu3
+  (resolve the open URL via the GitHub deployments API for the sha, take the -brevitest one)
+Source: branch feat/bucket-system @ commit 455cb2f0
+Retrieve this exact code: git checkout feat/bucket-system at commit 455cb2f0
+  (or: git log feat/bucket-system --oneline to find it if the branch has since moved on)
+What this deployment is for: build check of the failure-audit + direct-upload code. NOT a
+  functional test of either path — previews lack R2_WORKER_URL (Production-scoped), so a proxied
+  upload there falls back to S3 and shows the bad-access-key error, and the direct path stays off
+  until the Worker is redeployed and SONIC_DIRECT_UPLOAD=1 is set. Functional test = production.
+Note: this checkout was on feat/badge-system (another session's checkout) when the two sonic
+  commits were made; feat/bucket-system was fast-forwarded to 455cb2f0 and pushed. The docs
+  commit that follows carries this log line only — same code as 455cb2f0.
