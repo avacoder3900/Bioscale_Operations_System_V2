@@ -16897,3 +16897,30 @@ Source: branch feat/ot2-tailnet-direct @ commit 359b83b82
 Retrieve this exact code: git checkout feat/ot2-tailnet-direct at commit 359b83b82
   (or: git log feat/ot2-tailnet-direct --oneline to find it if the branch has since moved on)
 What this deployment is for: TAILNET-4/5 rebased onto current master (bucket system) before hardware testing.
+
+================================================================================
+2026-09-30 — feat/ot2-tailnet-direct — OT2-TAILNET-5 S5 on B14: /bridge job server live over the tailnet
+================================================================================
+- OT2_BRIDGE_TOKEN_SECRET generated (openssl rand -base64 48; Windows openssl appended a \r, stripped —
+  64 chars) into ~/.bims/ot2-bridge-secret (600, outside the repo) and added to Vercel **Preview only**
+  (Sensitive). Production untouched. OT2_TAILNET_ROBOT_IDS already Preview-only. B14's OpentronsRobot
+  (8LufEAi5sYJ5JRk_fTfT7) already had connection.mode tailnet + directUrl https://ot2-b14.tailf65a70.ts.net.
+- B14 daemon 1.0 → 1.1: pushed via ssh cat to ot2-bridge.py.new, py_compile on the robot, then swapped in;
+  1.0 kept as /data/ot2-bridge/ot2-bridge.py.v1.0.bak. md5 matches the repo (a579ac00…).
+- scripts/ot2-tailnet-provision.sh b14 (robot idle, no current run): BRIDGE_TOKEN_SECRET + BRIDGE_ROBOT_ID
+  into .env, tailscale serve / → :31950 and /bridge → 127.0.0.1:31960, ot2-bridge restarted.
+- Verified: /bridge/health no token 401, malformed token 401, minted token 200 {version ot2-bridge/1.1,
+  jobServer:true, serialOpen:true, /dev/scanner}; ot2-bridge active; queue long-poll still running.
+- B07/R04 untouched (still 1.0, no /bridge).
+- Still open: B14's BIMS_BASE_URL points at an old feature preview (…git-feat-de-52…), not this branch —
+  sweep progress/heartbeat reports go there. No browser test of the tailnet line yet. Reboot test (S3) not run.
+Rollback on B14: cp ot2-bridge.py.v1.0.bak ot2-bridge.py; drop BRIDGE_TOKEN_SECRET from .env;
+  tailscale serve --https=443 --set-path=/bridge off; systemctl restart ot2-bridge.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-git-feat-ot-2ae11c-brevitest.vercel.app
+  (this build: https://bioscale-operations-system-mongodb-3cbydfrsi-brevitest.vercel.app)
+Source: branch feat/ot2-tailnet-direct @ commit 0b4f92587
+Retrieve this exact code: git checkout feat/ot2-tailnet-direct at commit 0b4f92587
+  (or: git log feat/ot2-tailnet-direct --oneline to find it if the branch has since moved on)
+What this deployment is for: first preview with OT2_BRIDGE_TOKEN_SECRET — B14 tailnet-line test.
+Deployment: robot — B14 / muddy-water / ot2-b14.tailf65a70.ts.net, ot2-bridge 1.1 + /bridge serve path.
