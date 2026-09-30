@@ -16878,3 +16878,22 @@ Retrieve this exact code: git checkout master at commit 2d6ba750
   (or: git log master --oneline to find it if the branch has since moved on)
 What this deployment is for: on-tablet test of the Capture ↔ cartridge/station bar swap (touch only).
   GitHub deployment 6762152984 (Production). Smoke: /login 200.
+
+================================================================================
+2026-09-30 — feat/ot2-tailnet-direct — merged origin/master (47 commits) into the tailnet branch
+================================================================================
+Two conflicts. wax-filling +page.server.ts: the branch had moved cancel/abort into the shared
+stop path (run-lifecycle-records.stopConfirm), while master's bucket system rewrote that same body
+to return carts to their bucket pass (revertToBacked -> bucket-service.returnCarts; test-mode carts
+flagged backing.synthetic). Ported revertToBacked into run-lifecycle-records so the queue line and
+the tailnet line both return carts to their bucket. Test mock gained CartridgeRecord.find + a
+returnCarts stub. progress.txt: kept both sides.
+test:unit 504/504 (30 files). npm run check 106 errors — new baseline from master (bims-mcp.ts 81,
+roadmap/assembly svelte, research-proxy); every file with an error is byte-identical to origin/master.
+No robot touched.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-ig7r56yly.vercel.app
+Source: branch feat/ot2-tailnet-direct @ commit 359b83b82
+Retrieve this exact code: git checkout feat/ot2-tailnet-direct at commit 359b83b82
+  (or: git log feat/ot2-tailnet-direct --oneline to find it if the branch has since moved on)
+What this deployment is for: TAILNET-4/5 rebased onto current master (bucket system) before hardware testing.
