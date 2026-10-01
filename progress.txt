@@ -17222,3 +17222,12 @@ From the timing readout (photo 0.17 s · network 0.70 s · server 0.94 s = db 0.
     round trip for post-mortem (no stationId) and two for /capture.
 `npm run check`: 13 errors (baseline), warnings unchanged. Vercel branch build used as the compile
 gate. Pushed to master at the user's explicit request.
+Deployment: preview — https://bioscale-operations-system-mongodb-ao5zaxo3v-brevitest.vercel.app
+Source: branch feat/capture-background-upload @ commit 6b62993a
+What this deployment is for: compile gate before fast-forwarding master (GitHub deployment 6787922065).
+Deployment: production — https://bioscale-operations-system-mongodb-27snsnjhl-brevitest.vercel.app
+Source: branch master (= feat/capture-background-upload) @ commit 6b62993a
+Retrieve this exact code: git checkout master at commit 6b62993a
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: fullscreen background upload + paired capture DB writes.
+  GitHub deployment 6787965848 (Production). Smoke: /login 200.
