@@ -17257,3 +17257,12 @@ selecting CV Station 1 kicks alejandro off, who drops to Local).
     as bumped instead of re-claiming.
 `npm run check`: 13 errors (baseline), warnings unchanged. No contract tests cover the lock. Vercel
 branch build used as the compile gate. Pushed to master at the user's explicit request.
+Deployment: preview — https://bioscale-operations-system-mongodb-3n48nvag6-brevitest.vercel.app
+Source: branch feat/station-newest-wins @ commit f02b16ef
+What this deployment is for: compile gate before fast-forwarding master (GitHub deployment 6790156708).
+Deployment: production — https://bioscale-operations-system-mongodb-p9su44vjk-brevitest.vercel.app
+Source: branch master (= feat/station-newest-wins) @ commit f02b16ef
+Retrieve this exact code: git checkout master at commit f02b16ef
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: CV station locks — newest request wins; displaced sessions drop to Local.
+  GitHub deployment 6790199799 (Production). Smoke: /login 200.
