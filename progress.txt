@@ -17231,3 +17231,29 @@ Retrieve this exact code: git checkout master at commit 6b62993a
   (or: git log master --oneline to find it if the branch has since moved on)
 What this deployment is for: fullscreen background upload + paired capture DB writes.
   GitHub deployment 6787965848 (Production). Smoke: /login 200.
+
+================================================================================
+2026-10-01 — feat/station-newest-wins → master — CV stations: newest request wins
+================================================================================
+User request: selecting a CV station should always work and bump whoever had it (e.g. Giovanni
+selecting CV Station 1 kicks alejandro off, who drops to Local).
+  - api/cv/stations/[id]/lock/+server.ts: POST never refuses — a different user or the same user on
+    another device is displaced (audited 'lock-takeover', oldData = displaced holder) and the
+    response carries tookOverFrom { username, since }. New read-only GET → { mine, holder } (mine =
+    same user and same ?device=, or a legacy lock without deviceId). DELETE unchanged: only the
+    holder (or ?force=true) releases, so a displaced tab closing can't free its successor's lock.
+    The ?takeover / 409-sameUser flow from the previous change is gone.
+  - src/lib/station-device.ts: checkStationLock() (one GET) and watchStationLock() — polls GET every
+    10 s while a tab holds a station and calls onLost once when it no longer does. Read-only by
+    design: the earlier Post-Mortem watch re-POSTed, which under newest-wins would let a bumped tab
+    grab the station back.
+  - All five station pages (/capture, post-mortem, reagent-inspect, wax-inspect, wax-reject):
+    claim → "Took over <station> from <user>" notice when someone was displaced; start the watch;
+    on loss → teardown (lockedStationId cleared first so no release is attempted), switch to Local,
+    "<station> was taken over by <user> — switched to Local." (post-mortem also leaves fullscreen).
+    Station dropdowns no longer disable in-use stations (label still says "in use by …"). The old
+    409 "already in use" branches are removed.
+  - /capture auto-reconnect checks GET first and, if the station was taken over meanwhile, treats it
+    as bumped instead of re-claiming.
+`npm run check`: 13 errors (baseline), warnings unchanged. No contract tests cover the lock. Vercel
+branch build used as the compile gate. Pushed to master at the user's explicit request.

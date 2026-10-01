@@ -1,21 +1,23 @@
 /**
- * POST   /api/cv/stations/[id]/lock — claim the operator lock for this station.
- * DELETE /api/cv/stations/[id]/lock — release the operator lock.
+ * GET    /api/cv/stations/[id]/lock — who holds this station, and is it me?
+ * POST   /api/cv/stations/[id]/lock — claim the station (newest request wins).
+ * DELETE /api/cv/stations/[id]/lock — release the station.
  *
- * Multi-tenant rule (PRD §6.3): one operator per station at a time. One
- * operator may hold sessions on multiple stations simultaneously, so the
- * same-user re-claim is a no-op success. Second-operator claim returns
- * 409 with the current holder identified so the /capture page can show
- * "in use by {username} since {since}".
+ * Callers pass ?device=<per-tab id> (src/lib/station-device.ts).
  *
- * One DEVICE per station: callers pass ?device=<per-tab id>. Two tablets
- * signed in as the same user each opened their own MJPEG stream, doubling the
- * Pi's encode load (it then dropped scanner keystrokes). So the same user on a
- * different device also gets a 409 (sameUser: true) unless it passes
- * ?takeover=1, which moves the lock to the new device. The old device notices
- * on its next lock refresh. Callers without ?device= (pages not yet updated)
- * keep the old per-user behaviour. DELETE with a device that no longer holds
- * the lock is a no-op, so a closing tab can't release its successor's lock.
+ * NEWEST REQUEST WINS: a claim always succeeds. If another user — or the same
+ * user on another device — held the station, the lock moves to the caller
+ * (audited as 'lock-takeover') and the response names who was displaced
+ * (tookOverFrom). The displaced tab finds out through GET, which every station
+ * page polls (watchStationLock): GET is read-only, so a displaced tab never
+ * grabs the station back. Keeping one viewer per station matters because each
+ * viewer gets its own MJPEG stream — two viewers doubled the Pi's encode load
+ * and it dropped scanner keystrokes. One operator may still hold several
+ * stations at once.
+ *
+ * DELETE only releases when the caller still holds the lock, so a displaced
+ * tab closing can't release its successor's lock. ?force=true (station admin /
+ * /capture "reset") clears it regardless and is audited.
  */
 import { json, error } from '@sveltejs/kit';
 import { connectDB } from '$lib/server/db/connection.js';
@@ -30,6 +32,27 @@ function deviceParam(url: URL): string | undefined {
 	return raw ? raw.slice(0, 64) : undefined;
 }
 
+// The caller holds the lock if it's the same user on the same device. A lock
+// without a deviceId (claimed by an older page) counts as the user's.
+function heldByCaller(holder: any, userId: string, deviceId: string | undefined): boolean {
+	if (!holder?._id || holder._id !== userId) return false;
+	return !holder.deviceId || !deviceId || holder.deviceId === deviceId;
+}
+
+export const GET: RequestHandler = async ({ params, locals, url }) => {
+	if (!locals.user) throw error(401, 'Unauthorized');
+	await connectDB();
+
+	const station = await CaptureStation.findById(params.id).select('currentOperator').lean() as any;
+	if (!station) return json({ error: 'Station not found' }, { status: 404 });
+
+	const holder = station.currentOperator;
+	return json({
+		mine: heldByCaller(holder, locals.user._id, deviceParam(url)),
+		holder: holder?._id ? { username: holder.username ?? null, since: holder.since ?? null } : null
+	});
+};
+
 export const POST: RequestHandler = async ({ params, locals, url }) => {
 	if (!locals.user) throw error(401, 'Unauthorized');
 	await connectDB();
@@ -40,32 +63,13 @@ export const POST: RequestHandler = async ({ params, locals, url }) => {
 	const holder = station.currentOperator;
 	const userId = locals.user._id;
 	const deviceId = deviceParam(url);
-	const takeover = url.searchParams.get('takeover') === '1';
 
-	if (holder?._id && holder._id !== userId) {
-		const body: LockStationResponse = {
-			ok: false,
-			heldBy: { username: holder.username, since: holder.since }
-		};
-		return json(body, { status: 409 });
-	}
+	// Newest request wins: anyone else holding it is displaced.
+	const refresh = heldByCaller(holder, userId, deviceId);
+	const displaced = holder?._id && !refresh ? holder : null;
 
-	// Same user, different device (both known) → busy unless taking over.
-	const otherDevice =
-		holder?._id === userId && !!holder.deviceId && !!deviceId && holder.deviceId !== deviceId;
-	if (otherDevice && !takeover) {
-		const body: LockStationResponse = {
-			ok: false,
-			heldBy: { username: `${holder.username} (another device)`, since: holder.since },
-			sameUser: true
-		};
-		return json(body, { status: 409 });
-	}
-
-	// Free, same device, or takeover — claim / refresh. Reuse `since` only when
-	// the same device is refreshing; a claim or takeover stamps a new one.
-	const sameHolder = holder?._id === userId && !otherDevice;
-	const since = sameHolder && holder.since ? holder.since : new Date();
+	// Reuse `since` only when the same holder is refreshing.
+	const since = refresh && holder.since ? holder.since : new Date();
 	await CaptureStation.updateOne(
 		{ _id: params.id },
 		{
@@ -80,23 +84,25 @@ export const POST: RequestHandler = async ({ params, locals, url }) => {
 		}
 	);
 
-	// Audit claims and takeovers only — same-device refreshes would flood the log.
-	if (!sameHolder) {
+	// Audit claims and takeovers only — refreshes would flood the log.
+	if (!refresh) {
 		await AuditLog.create({
 			_id: generateId(),
 			tableName: 'capture_stations',
 			recordId: params.id,
 			action: 'UPDATE',
-			oldData: otherDevice ? { currentOperator: holder } : undefined,
+			oldData: displaced ? { currentOperator: displaced } : undefined,
 			newData: { currentOperator: { _id: userId, username: locals.user.username, since, deviceId } },
 			changedFields: ['currentOperator'],
 			changedAt: new Date(),
 			changedBy: locals.user.username,
-			reason: otherDevice ? 'lock-takeover' : 'lock-claim'
+			reason: displaced ? 'lock-takeover' : 'lock-claim'
 		});
 	}
 
-	const body: LockStationResponse = { ok: true };
+	const body: LockStationResponse = displaced
+		? { ok: true, tookOverFrom: { username: displaced.username, since: displaced.since } }
+		: { ok: true };
 	return json(body);
 };
 

@@ -14,7 +14,7 @@
 	 * automatic fallback to the WebRTC feed on agents that lack them.
 	 */
 	import { onMount, onDestroy } from 'svelte';
-	import { stationLockUrl } from '$lib/station-device';
+	import { stationLockUrl, watchStationLock } from '$lib/station-device';
 	import PhotoAnnotatorModal from '$lib/components/PhotoAnnotatorModal.svelte';
 	import StationCameraSettings from '$lib/components/capture/StationCameraSettings.svelte';
 
@@ -540,39 +540,32 @@
 		}
 	}
 
-	// Lock watch: re-claim (refresh) the lock every minute. A 409 means another
-	// device took this station over — stop streaming so the Pi serves only one
-	// viewer, and tell the operator.
-	let lockWatchInterval: ReturnType<typeof setInterval> | null = null;
-	const LOCK_WATCH_MS = 60_000;
+	// Newest request wins (see /api/cv/stations/[id]/lock): watch whether this
+	// tab still holds the station. When another user or device takes it over
+	// (or it's force-released), drop to the local camera and say who took it.
+	let stopStationWatch: (() => void) | null = null;
 
-	function stopLockWatch() {
-		if (lockWatchInterval) { clearInterval(lockWatchInterval); lockWatchInterval = null; }
+	function startStationWatch(stationId: string, stationName: string) {
+		stopStationWatch?.();
+		stopStationWatch = watchStationLock(stationId, (holder) => {
+			if (selectedStationId !== stationId) return;
+			bumpedFromStation(stationName, holder?.username ?? null);
+		});
 	}
 
-	function startLockWatch(stationId: string, stationName: string) {
-		stopLockWatch();
-		lockWatchInterval = setInterval(async () => {
-			if (lockedStationId !== stationId) return;
-			let res: Response;
-			try {
-				res = await fetch(stationLockUrl(stationId), { method: 'POST' });
-			} catch {
-				return; // network blip — try again next minute
-			}
-			if (res.status !== 409 || lockedStationId !== stationId) return;
-			lockedStationId = null; // it's no longer ours to release
-			teardownStation();
-			selectedStationId = null;
-			if (fullscreen) exitFullscreen();
-			flashBanner('err', `${stationName} was opened on another device, so it was disconnected here.`, 15000);
-			await startCamera();
-		}, LOCK_WATCH_MS);
+	function bumpedFromStation(stationName: string, byUsername: string | null) {
+		lockedStationId = null; // no longer ours to release
+		selectedStationId = null;
+		teardownStation();
+		if (fullscreen) exitFullscreen();
+		flashBanner('err', `${stationName} was taken over by ${byUsername ?? 'another session'} — switched to Local.`, 15000);
+		void startCamera();
 	}
 
 	function teardownStation() {
 		if (heartbeatInterval) { clearInterval(heartbeatInterval); heartbeatInterval = null; }
-		stopLockWatch();
+		stopStationWatch?.();
+		stopStationWatch = null;
 		clearMjpegWatchdog();
 		// Nulling these unmounts the MJPEG <img>, which closes its stream.
 		stationToken = null;
@@ -604,30 +597,16 @@
 			return;
 		}
 
-		// One operator AND one device per station. 409 means another user holds
-		// it, or (sameUser) this account on another device — which this device
-		// may take over; the other one disconnects at its next lock check.
+		// Newest request wins: claiming always succeeds and bumps whoever had it.
 		try {
-			let lockRes = await fetch(stationLockUrl(stationId), { method: 'POST' });
-			if (lockRes.status === 409) {
-				const body = await lockRes.json().catch(() => ({}));
-				const heldBy = body?.heldBy;
-				const since = heldBy?.since ? new Date(heldBy.since).toLocaleString() : 'earlier';
-				const takeOver =
-					body?.sameUser === true &&
-					confirm(`${station.name} is open on another device (since ${since}). Use it on this device instead? The other device will be disconnected.`);
-				if (takeOver) {
-					lockRes = await fetch(stationLockUrl(stationId, { takeover: '1' }), { method: 'POST' });
-				} else {
-					flashBanner('err', `Station already in use by ${heldBy?.username ?? 'another operator'} since ${since}. Pick another station.`);
-					selectedStationId = null;
-					await startCamera();
-					return;
-				}
-			}
+			const lockRes = await fetch(stationLockUrl(stationId), { method: 'POST' });
 			if (!lockRes.ok) throw new Error(`HTTP ${lockRes.status}`);
 			lockedStationId = stationId;
-			startLockWatch(stationId, station.name);
+			const lockBody = await lockRes.json().catch(() => ({}));
+			if (lockBody?.tookOverFrom?.username) {
+				flashBanner('info', `Took over ${station.name} from ${lockBody.tookOverFrom.username}.`, 5000);
+			}
+			startStationWatch(stationId, station.name);
 		} catch (e) {
 			flashBanner('err', `Failed to claim station lock: ${e instanceof Error ? e.message : e}`);
 			selectedStationId = null;
@@ -1273,7 +1252,7 @@
 							{@const badge = s.status === 'online' ? '🟢' : s.status === 'degraded' ? '🟡' : '🔴'}
 							{@const heldByOther = s.currentOperator && s.currentOperator._id && s.currentOperator._id !== data.user._id}
 							{@const offline = s.status !== 'online' && s.status !== 'degraded'}
-							{@const disabled = offline || heldByOther}
+							{@const disabled = offline}
 							<option value={s._id} {disabled}>
 								{badge}
 								{s.name}
