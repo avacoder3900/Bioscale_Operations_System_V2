@@ -17160,3 +17160,33 @@ Retrieve this exact code: git checkout master at commit 1a171874
   (or: git log master --oneline to find it if the branch has since moved on)
 What this deployment is for: capture timing readout + background snapshot-token renewal on
   Post-Mortem Inspect. GitHub deployment 6771317681 (Production). Smoke: /login 200.
+
+================================================================================
+2026-10-01 — feat/capture-speed-thumbs-device-lock → master — Faster capture, thumbnails, one device per station
+================================================================================
+Quick capture-lag wins + the fix for the dropped-scanner-keystroke issue (two tablets on one station
+doubled the Pi's per-viewer MJPEG encode load; throttled=0x0, temp normal, so not heat/power).
+  - api/cv/capture/+server.ts: barcode detection, embedding, the original upload and a new
+    thumbnail run concurrently (Promise.all) instead of in sequence. Same records and audit logs;
+    upload failure still fails the capture (500), embed/thumbnail stay best-effort. Each step is
+    still timed individually; `timingsMs.parallel` = wall time of the block. Response adds
+    `thumbnailUrl`.
+  - Thumbnails: 160 px JPEG (q70) via sharp, uploaded next to the original
+    (captures/<imageId>_<cartImageNo>-thumb.jpg) and stored in the existing CvImage.thumbnailPath
+    (the DHR pages already read it; image DELETE already removes it). r2.ts generateThumbnail is a
+    pass-through stub, so it isn't used. Highlight save now $unsets thumbnailPath so lists fall back
+    to the boxed full image instead of a stale thumbnail.
+  - post-mortem-inspect: table uses thumbUrl (falls back to full image for older captures),
+    decoding="async"; tap still opens the full photo in the existing highlight viewer. The table is
+    not rendered at all in fullscreen.
+  - One device per station: CaptureStation.currentOperator gains deviceId (per-browser-tab id from
+    new src/lib/station-device.ts, sessionStorage-backed). Lock POST/DELETE take ?device=; the same
+    user on a different device gets 409 { sameUser: true } unless ?takeover=1 (audited as
+    'lock-takeover'). DELETE from a device that no longer holds the lock is a no-op, so a closing
+    tab can't release its successor's lock. Callers without ?device= keep the old per-user
+    behaviour. All five station pages (/capture, post-mortem, reagent-inspect, wax-inspect,
+    wax-reject) now pass ?device= on claim/release/unload (force-release untouched).
+    Post-mortem additionally offers takeover via confirm() and re-claims the lock every 60 s; a 409
+    there means it was taken over → it tears down the stream, leaves fullscreen and says so.
+`npm run check`: 13 errors (baseline), warnings unchanged (430). Vercel branch build used as the
+compile gate. Pushed to master at the user's request ("let's get that change in").

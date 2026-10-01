@@ -49,7 +49,20 @@ import { detectBarcodePresence, BARCODE_VIEW, NO_BARCODE_VIEW } from '$lib/serve
 import { embedImage, EMBEDDING_VERSION } from '$lib/server/services/cv-classifier';
 import { hasPermission } from '$lib/server/permissions';
 import { runPhaseInference } from '$lib/server/cv/run-inference';
+import sharp from 'sharp';
 import type { RequestHandler } from './$types';
+
+// Photo-list preview: 160 px wide covers a 48 px thumbnail at 3x pixel density.
+// (r2.ts's generateThumbnail is a pass-through stub, so it isn't used here.)
+const THUMB_WIDTH = 160;
+
+function makeCaptureThumbnail(buffer: Buffer): Promise<Buffer> {
+	return sharp(buffer)
+		.rotate()
+		.resize({ width: THUMB_WIDTH, withoutEnlargement: true })
+		.jpeg({ quality: 70 })
+		.toBuffer();
+}
 
 function pad(n: number): string {
 	return String(n).padStart(3, '0');
@@ -159,47 +172,72 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		const buffer = Buffer.from(await file.arrayBuffer());
 		lap('parse');
 
-		// Resolve the camera view (CV-PIPELINE-V2 top/bottom split). The manual
-		// toggle always wins; when it's unset, auto-classify from barcode presence
-		// (the cartridge barcode shows only in top photos). Detection never blocks
-		// or fails a capture — a null result leaves the view untagged.
-		let effectiveView: 'top' | 'bottom' | undefined = view;
-		let viewSource: 'manual' | 'barcode-auto' | undefined = view ? 'manual' : undefined;
-		if (!view) {
-			const hasBarcode = await detectBarcodePresence(buffer);
-			if (hasBarcode !== null) {
-				effectiveView = hasBarcode ? BARCODE_VIEW : NO_BARCODE_VIEW;
-				viewSource = 'barcode-auto';
-			}
-		}
-		lap('barcode');
-
-		// Pre-warm the training-embedding cache while the pixels are already in
-		// memory (~150ms) — so training never has to re-fetch this photo from R2
-		// and embed it in-request (cold-cache embedding is what 504'd training).
-		// Best-effort: an embed failure never blocks a capture.
-		let embedding: number[] | undefined;
-		try {
-			embedding = await embedImage(buffer);
-		} catch (e) {
-			console.error('[capture] embed cache-warm failed:', e instanceof Error ? e.message : e);
-		}
-		lap('embed');
-
 		const imageId = generateId();
 		const filenameFromClient = file.name || `${cartridgeImageNumber}.jpg`;
 		const key = buildCvNamedKey('captures', imageId, `${cartridgeImageNumber}-${filenameFromClient}`);
+		const thumbKey = buildCvNamedKey('captures', imageId, `${cartridgeImageNumber}-thumb.jpg`);
 		const contentType = file.type || 'image/jpeg';
 
-		await uploadViaWorker(buffer, key, contentType);
+		// The four pixel-level steps don't depend on each other, so they run
+		// concurrently — the wait is the slowest one instead of the sum. Each is
+		// still timed on its own; `parallel` is the wall time of the block.
+		//   - barcode: resolve the camera view (CV-PIPELINE-V2 top/bottom split).
+		//     The manual toggle always wins; when unset, auto-classify from barcode
+		//     presence (the cartridge barcode shows only in top photos). Never
+		//     throws — a null result leaves the view untagged.
+		//   - embed: pre-warm the training-embedding cache while the pixels are in
+		//     memory (cold-cache embedding is what 504'd training). Best-effort.
+		//   - storage: the original upload. A failure here fails the capture, as
+		//     before (rejects Promise.all → caught below → 500).
+		//   - thumb: small preview for photo lists. Best-effort — lists fall back
+		//     to the full image when thumbnailPath is unset.
+		const timed = async <T>(step: string, p: Promise<T>): Promise<T> => {
+			const start = performance.now();
+			try {
+				return await p;
+			} finally {
+				timingsMs[step] = Math.round(performance.now() - start);
+			}
+		};
+		const parallelStart = performance.now();
+		const [hasBarcode, embedding, , thumbnailPath] = await Promise.all([
+			timed('barcode', view ? Promise.resolve(null) : detectBarcodePresence(buffer)),
+			timed(
+				'embed',
+				embedImage(buffer).catch((e): undefined => {
+					console.error('[capture] embed cache-warm failed:', e instanceof Error ? e.message : e);
+					return undefined;
+				})
+			),
+			timed('storage', uploadViaWorker(buffer, key, contentType)),
+			timed(
+				'thumb',
+				makeCaptureThumbnail(buffer)
+					.then((thumb) => uploadViaWorker(thumb, thumbKey, 'image/jpeg'))
+					.then((): string => thumbKey)
+					.catch((e): undefined => {
+						console.error('[capture] thumbnail failed:', e instanceof Error ? e.message : e);
+						return undefined;
+					})
+			)
+		]);
+		timingsMs.parallel = Math.round(performance.now() - parallelStart);
+		tLap = performance.now();
+
+		let effectiveView: 'top' | 'bottom' | undefined = view;
+		let viewSource: 'manual' | 'barcode-auto' | undefined = view ? 'manual' : undefined;
+		if (!view && hasBarcode !== null) {
+			effectiveView = hasBarcode ? BARCODE_VIEW : NO_BARCODE_VIEW;
+			viewSource = 'barcode-auto';
+		}
 		const publicUrl = getR2Url(key);
-		lap('storage');
 
 		const capturedAt = new Date();
 		await CvImage.create({
 			_id: imageId,
 			filename: filenameFromClient,
 			filePath: key,
+			...(thumbnailPath ? { thumbnailPath } : {}),
 			fileSizeBytes: buffer.length,
 			cameraIndex: cameraIndexRaw ? Number.parseInt(cameraIndexRaw, 10) : undefined,
 			capturedAt,
@@ -314,6 +352,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			cartridgeRecordId: cartridgeId,
 			phase,
 			imageUrl: publicUrl,
+			thumbnailUrl: thumbnailPath ? getR2Url(thumbnailPath) : null,
 			filePath: key,
 			view: effectiveView ?? null,
 			viewSource: viewSource ?? null,

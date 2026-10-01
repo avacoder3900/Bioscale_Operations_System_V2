@@ -12,6 +12,7 @@
 	 * Capture/station plumbing mirrors /wax-inspect (the proven implementation).
 	 */
 	import { onMount, onDestroy } from 'svelte';
+	import { stationLockUrl } from '$lib/station-device';
 	import PhotoAnnotatorModal from '$lib/components/PhotoAnnotatorModal.svelte';
 
 	let { data } = $props();
@@ -325,7 +326,7 @@
 		if (lockedStationId) {
 			const releaseId = lockedStationId;
 			lockedStationId = null;
-			fetch(`/api/cv/stations/${encodeURIComponent(releaseId)}/lock`, { method: 'DELETE' })
+			fetch(stationLockUrl(releaseId), { method: 'DELETE' })
 				.catch(() => null);
 		}
 	}
@@ -340,7 +341,7 @@
 
 		// Hard one-operator-per-station lock. 409 means another user holds it.
 		try {
-			const lockRes = await fetch(`/api/cv/stations/${encodeURIComponent(stationId)}/lock`, { method: 'POST' });
+			const lockRes = await fetch(stationLockUrl(stationId), { method: 'POST' });
 			if (lockRes.status === 409) {
 				const body = await lockRes.json().catch(() => ({}));
 				const heldBy = body?.heldBy;
@@ -653,7 +654,7 @@
 	function onBeforeUnload() {
 		if (lockedStationId) {
 			// keepalive lets the DELETE finish after the page unloads.
-			fetch(`/api/cv/stations/${encodeURIComponent(lockedStationId)}/lock`, {
+			fetch(stationLockUrl(lockedStationId), {
 				method: 'DELETE',
 				keepalive: true
 			}).catch(() => null);

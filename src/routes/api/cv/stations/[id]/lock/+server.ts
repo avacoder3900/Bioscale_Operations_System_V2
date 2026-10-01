@@ -7,6 +7,15 @@
  * same-user re-claim is a no-op success. Second-operator claim returns
  * 409 with the current holder identified so the /capture page can show
  * "in use by {username} since {since}".
+ *
+ * One DEVICE per station: callers pass ?device=<per-tab id>. Two tablets
+ * signed in as the same user each opened their own MJPEG stream, doubling the
+ * Pi's encode load (it then dropped scanner keystrokes). So the same user on a
+ * different device also gets a 409 (sameUser: true) unless it passes
+ * ?takeover=1, which moves the lock to the new device. The old device notices
+ * on its next lock refresh. Callers without ?device= (pages not yet updated)
+ * keep the old per-user behaviour. DELETE with a device that no longer holds
+ * the lock is a no-op, so a closing tab can't release its successor's lock.
  */
 import { json, error } from '@sveltejs/kit';
 import { connectDB } from '$lib/server/db/connection.js';
@@ -16,7 +25,12 @@ import { generateId } from '$lib/server/db/utils.js';
 import type { RequestHandler } from './$types';
 import type { LockStationResponse } from '$lib/types/capture-station';
 
-export const POST: RequestHandler = async ({ params, locals }) => {
+function deviceParam(url: URL): string | undefined {
+	const raw = url.searchParams.get('device')?.trim();
+	return raw ? raw.slice(0, 64) : undefined;
+}
+
+export const POST: RequestHandler = async ({ params, locals, url }) => {
 	if (!locals.user) throw error(401, 'Unauthorized');
 	await connectDB();
 
@@ -25,6 +39,8 @@ export const POST: RequestHandler = async ({ params, locals }) => {
 
 	const holder = station.currentOperator;
 	const userId = locals.user._id;
+	const deviceId = deviceParam(url);
+	const takeover = url.searchParams.get('takeover') === '1';
 
 	if (holder?._id && holder._id !== userId) {
 		const body: LockStationResponse = {
@@ -34,9 +50,22 @@ export const POST: RequestHandler = async ({ params, locals }) => {
 		return json(body, { status: 409 });
 	}
 
-	// Free or same user — refresh / claim. Reuse `since` if the same operator
-	// is already holding the lock; otherwise stamp a new one.
-	const since = holder?._id === userId && holder.since ? holder.since : new Date();
+	// Same user, different device (both known) → busy unless taking over.
+	const otherDevice =
+		holder?._id === userId && !!holder.deviceId && !!deviceId && holder.deviceId !== deviceId;
+	if (otherDevice && !takeover) {
+		const body: LockStationResponse = {
+			ok: false,
+			heldBy: { username: `${holder.username} (another device)`, since: holder.since },
+			sameUser: true
+		};
+		return json(body, { status: 409 });
+	}
+
+	// Free, same device, or takeover — claim / refresh. Reuse `since` only when
+	// the same device is refreshing; a claim or takeover stamps a new one.
+	const sameHolder = holder?._id === userId && !otherDevice;
+	const since = sameHolder && holder.since ? holder.since : new Date();
 	await CaptureStation.updateOne(
 		{ _id: params.id },
 		{
@@ -44,24 +73,26 @@ export const POST: RequestHandler = async ({ params, locals }) => {
 				currentOperator: {
 					_id: userId,
 					username: locals.user.username,
-					since
+					since,
+					...(deviceId ? { deviceId } : {})
 				}
 			}
 		}
 	);
 
-	// Audit only the initial claim — same-user refreshes would flood the log.
-	if (holder?._id !== userId) {
+	// Audit claims and takeovers only — same-device refreshes would flood the log.
+	if (!sameHolder) {
 		await AuditLog.create({
 			_id: generateId(),
 			tableName: 'capture_stations',
 			recordId: params.id,
 			action: 'UPDATE',
-			newData: { currentOperator: { _id: userId, username: locals.user.username, since } },
+			oldData: otherDevice ? { currentOperator: holder } : undefined,
+			newData: { currentOperator: { _id: userId, username: locals.user.username, since, deviceId } },
 			changedFields: ['currentOperator'],
 			changedAt: new Date(),
 			changedBy: locals.user.username,
-			reason: 'lock-claim'
+			reason: otherDevice ? 'lock-takeover' : 'lock-claim'
 		});
 	}
 
@@ -92,6 +123,13 @@ export const DELETE: RequestHandler = async ({ params, locals, url }) => {
 
 	if (holder._id !== locals.user._id && !isForce) {
 		return json({ error: 'Only the current holder can release this lock' }, { status: 403 });
+	}
+
+	// A device that was taken over must not release its successor's lock
+	// (e.g. the old tablet's beforeunload firing after a takeover).
+	const deviceId = deviceParam(url);
+	if (!isForce && holder.deviceId && deviceId && holder.deviceId !== deviceId) {
+		return json({ ok: true, released: false } satisfies LockStationResponse);
 	}
 
 	await CaptureStation.updateOne(

@@ -82,7 +82,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 	);
 	const images = imageIds.length > 0
 		? await CvImage.find({ _id: { $in: imageIds } })
-			.select('_id imageUrl filePath capturedBy')
+			.select('_id imageUrl filePath thumbnailPath capturedBy')
 			.lean() as any[]
 		: [];
 	const imageById = new Map<string, any>(images.map((img: any) => [img._id, img]));
@@ -94,6 +94,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 			imageId: i.imageId ?? null,
 			cartridgeRecordId: i.cartridgeRecordId ?? null,
 			imageUrl: img?.imageUrl ?? (img?.filePath ? getR2Url(img.filePath) : null),
+			// Small preview for the table; older captures have none → full image.
+			thumbUrl: img?.thumbnailPath ? getR2Url(img.thumbnailPath) : null,
 			result: i.result ?? null,
 			confidenceScore: typeof i.confidenceScore === 'number' ? i.confidenceScore : null,
 			modelVersion: i.modelVersion ?? null,

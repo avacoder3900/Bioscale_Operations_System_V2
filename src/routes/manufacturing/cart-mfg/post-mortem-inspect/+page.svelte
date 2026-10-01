@@ -14,6 +14,7 @@
 	 * automatic fallback to the WebRTC feed on agents that lack them.
 	 */
 	import { onMount, onDestroy } from 'svelte';
+	import { stationLockUrl } from '$lib/station-device';
 	import PhotoAnnotatorModal from '$lib/components/PhotoAnnotatorModal.svelte';
 	import StationCameraSettings from '$lib/components/capture/StationCameraSettings.svelte';
 
@@ -26,7 +27,8 @@
 	// A highlight was burned into the stored photo — repoint the feed row and the
 	// open modal at the new (boxed) image.
 	function applyHighlightSaved(id: string, url: string) {
-		feed = feed.map((r) => (r.imageId === id ? { ...r, imageUrl: url } : r));
+		// The old thumbnail shows the un-highlighted photo — fall back to the full one.
+		feed = feed.map((r) => (r.imageId === id ? { ...r, imageUrl: url, thumbUrl: null } : r));
 		annotateUrl = url;
 	}
 
@@ -334,6 +336,7 @@
 		imageId: string | null;
 		cartridgeRecordId: string | null;
 		imageUrl: string | null;
+		thumbUrl: string | null;           // small preview; null → use imageUrl
 		result: 'pass' | 'fail' | null;
 		confidenceScore: number | null;
 		modelVersion: string | null;
@@ -348,6 +351,7 @@
 			imageId: r.imageId ?? null,
 			cartridgeRecordId: r.cartridgeRecordId ?? null,
 			imageUrl: r.imageUrl ?? null,
+			thumbUrl: r.thumbUrl ?? null,
 			result: r.result ?? null,
 			confidenceScore: r.confidenceScore ?? null,
 			modelVersion: r.modelVersion ?? null,
@@ -536,8 +540,39 @@
 		}
 	}
 
+	// Lock watch: re-claim (refresh) the lock every minute. A 409 means another
+	// device took this station over — stop streaming so the Pi serves only one
+	// viewer, and tell the operator.
+	let lockWatchInterval: ReturnType<typeof setInterval> | null = null;
+	const LOCK_WATCH_MS = 60_000;
+
+	function stopLockWatch() {
+		if (lockWatchInterval) { clearInterval(lockWatchInterval); lockWatchInterval = null; }
+	}
+
+	function startLockWatch(stationId: string, stationName: string) {
+		stopLockWatch();
+		lockWatchInterval = setInterval(async () => {
+			if (lockedStationId !== stationId) return;
+			let res: Response;
+			try {
+				res = await fetch(stationLockUrl(stationId), { method: 'POST' });
+			} catch {
+				return; // network blip — try again next minute
+			}
+			if (res.status !== 409 || lockedStationId !== stationId) return;
+			lockedStationId = null; // it's no longer ours to release
+			teardownStation();
+			selectedStationId = null;
+			if (fullscreen) exitFullscreen();
+			flashBanner('err', `${stationName} was opened on another device, so it was disconnected here.`, 15000);
+			await startCamera();
+		}, LOCK_WATCH_MS);
+	}
+
 	function teardownStation() {
 		if (heartbeatInterval) { clearInterval(heartbeatInterval); heartbeatInterval = null; }
+		stopLockWatch();
 		clearMjpegWatchdog();
 		// Nulling these unmounts the MJPEG <img>, which closes its stream.
 		stationToken = null;
@@ -556,7 +591,7 @@
 		if (lockedStationId) {
 			const releaseId = lockedStationId;
 			lockedStationId = null;
-			fetch(`/api/cv/stations/${encodeURIComponent(releaseId)}/lock`, { method: 'DELETE' })
+			fetch(stationLockUrl(releaseId), { method: 'DELETE' })
 				.catch(() => null);
 		}
 	}
@@ -569,20 +604,30 @@
 			return;
 		}
 
-		// Hard one-operator-per-station lock. 409 means another user holds it.
+		// One operator AND one device per station. 409 means another user holds
+		// it, or (sameUser) this account on another device — which this device
+		// may take over; the other one disconnects at its next lock check.
 		try {
-			const lockRes = await fetch(`/api/cv/stations/${encodeURIComponent(stationId)}/lock`, { method: 'POST' });
+			let lockRes = await fetch(stationLockUrl(stationId), { method: 'POST' });
 			if (lockRes.status === 409) {
 				const body = await lockRes.json().catch(() => ({}));
 				const heldBy = body?.heldBy;
 				const since = heldBy?.since ? new Date(heldBy.since).toLocaleString() : 'earlier';
-				flashBanner('err', `Station already in use by ${heldBy?.username ?? 'another operator'} since ${since}. Pick another station.`);
-				selectedStationId = null;
-				await startCamera();
-				return;
+				const takeOver =
+					body?.sameUser === true &&
+					confirm(`${station.name} is open on another device (since ${since}). Use it on this device instead? The other device will be disconnected.`);
+				if (takeOver) {
+					lockRes = await fetch(stationLockUrl(stationId, { takeover: '1' }), { method: 'POST' });
+				} else {
+					flashBanner('err', `Station already in use by ${heldBy?.username ?? 'another operator'} since ${since}. Pick another station.`);
+					selectedStationId = null;
+					await startCamera();
+					return;
+				}
 			}
 			if (!lockRes.ok) throw new Error(`HTTP ${lockRes.status}`);
 			lockedStationId = stationId;
+			startLockWatch(stationId, station.name);
 		} catch (e) {
 			flashBanner('err', `Failed to claim station lock: ${e instanceof Error ? e.message : e}`);
 			selectedStationId = null;
@@ -851,6 +896,7 @@
 				imageId: result.imageId,
 				cartridgeRecordId: result.cartridgeRecordId,
 				imageUrl: result.imageUrl ?? null,
+				thumbUrl: result.thumbnailUrl ?? null,
 				result: null,
 				confidenceScore: null,
 				modelVersion: null,
@@ -954,7 +1000,7 @@
 	function onBeforeUnload() {
 		if (lockedStationId) {
 			// keepalive lets the DELETE finish after the page unloads.
-			fetch(`/api/cv/stations/${encodeURIComponent(lockedStationId)}/lock`, {
+			fetch(stationLockUrl(lockedStationId), {
 				method: 'DELETE',
 				keepalive: true
 			}).catch(() => null);
@@ -1311,7 +1357,10 @@
 			tabindex="-1"
 		/>
 
-		<!-- Session feed: server-loaded 50 recent post_mortem inspections + live prepends -->
+		<!-- Session feed: server-loaded 50 recent post_mortem inspections + live prepends.
+		     Not rendered in fullscreen (it's behind the fullscreen layout), so a
+		     tablet doesn't load or decode photos it never shows. -->
+		{#if !fullscreen}
 		<div>
 			<h3 class="mb-2 text-sm font-semibold uppercase text-[var(--color-tron-text-secondary)]">Recent post_mortem inspections</h3>
 			{#if feed.length === 0}
@@ -1343,7 +1392,7 @@
 												title="Open photo to highlight"
 												class="block rounded ring-offset-1 ring-offset-[var(--color-tron-bg-primary)] transition-shadow hover:ring-2 hover:ring-[var(--color-tron-yellow,#facc15)]"
 											>
-												<img src={row.imageUrl} alt={row.cartridgeRecordId ?? 'capture'} class="h-12 w-12 cursor-pointer rounded object-cover" loading="lazy" />
+												<img src={row.thumbUrl ?? row.imageUrl} alt={row.cartridgeRecordId ?? 'capture'} class="h-12 w-12 cursor-pointer rounded object-cover" loading="lazy" decoding="async" />
 											</button>
 										{:else}
 											<div class="flex h-12 w-12 items-center justify-center rounded bg-[var(--color-tron-bg-tertiary)] text-[10px] text-[var(--color-tron-text-secondary)]">—</div>
@@ -1381,5 +1430,6 @@
 				</div>
 			{/if}
 		</div>
+		{/if}
 	</div>
 </div>

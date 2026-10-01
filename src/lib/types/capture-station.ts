@@ -105,5 +105,6 @@ export interface HeartbeatRequest {
 }
 
 export type LockStationResponse =
-	| { ok: true }
-	| { ok: false; heldBy: { username: string; since: string | Date } };
+	| { ok: true; released?: boolean }
+	// sameUser: held by this same account on another device (takeover allowed).
+	| { ok: false; heldBy: { username: string; since: string | Date }; sameUser?: boolean };
