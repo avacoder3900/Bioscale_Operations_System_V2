@@ -17126,3 +17126,8 @@ Retrieve this exact code: git checkout feat/sonic-fingerprint-analysis at commit
   (or: git log feat/sonic-fingerprint-analysis --oneline to find it if the branch has since moved on)
 What this deployment is for: VALIDATION-08 — server-side sonic analysis on /validation/sonic, the new
 /validation/sonic/compare and /validation/sonic/[sessionId] pages, reference set + advisory verdict.
+
+2026-10-01 follow-up (feat/sonic-fingerprint-analysis): palette.ts widened from 10 to 20 colours —
+a 12-SPU comparison (5 new units 210/212/222/236/251 added in the prototype) reused the 1st/2nd
+unit's colour for the 11th/12th. Also replaced the grey 9th colour (too close to the ±2σ band grey,
+flagged in the review pass) with lime. No logic change; svelte-check unaffected (data-only file).
