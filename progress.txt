@@ -17190,3 +17190,12 @@ doubled the Pi's per-viewer MJPEG encode load; throttled=0x0, temp normal, so no
     there means it was taken over → it tears down the stream, leaves fullscreen and says so.
 `npm run check`: 13 errors (baseline), warnings unchanged (430). Vercel branch build used as the
 compile gate. Pushed to master at the user's request ("let's get that change in").
+Deployment: preview — https://bioscale-operations-system-mongodb-pexvr4gxf-brevitest.vercel.app
+Source: branch feat/capture-speed-thumbs-device-lock @ commit 146ec57e
+What this deployment is for: compile gate before fast-forwarding master (GitHub deployment 6787200725).
+Deployment: production — https://bioscale-operations-system-mongodb-qgjbzi7zf-brevitest.vercel.app
+Source: branch master (= feat/capture-speed-thumbs-device-lock) @ commit 146ec57e
+Retrieve this exact code: git checkout master at commit 146ec57e
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: parallel capture processing, thumbnails, one device per station.
+  GitHub deployment 6787242743 (Production). Smoke: /login 200.
