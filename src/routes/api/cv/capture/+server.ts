@@ -143,23 +143,24 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		// Station sanity check (CV-PIPELINE-V2 Stage 1): a capture posted from a
 		// station assigned to a different phase is almost always "wrong station
 		// selected in the dropdown". Warn in the success response — never block.
+		// The station lookup and the cartridge $inc are independent, so they run
+		// together (one database round trip instead of two).
 		let warning: string | undefined;
-		if (stationId) {
-			const station = await CaptureStation.findById(stationId)
-				.select('name assignedPhase')
-				.lean() as any;
-			if (station?.assignedPhase && station.assignedPhase !== phase) {
-				warning = `station ${station.name} is assigned to ${station.assignedPhase} but this capture was tagged ${phase}`;
-			}
+		const [station, updated] = await Promise.all([
+			stationId
+				? (CaptureStation.findById(stationId).select('name assignedPhase').lean() as Promise<any>)
+				: Promise.resolve(null),
+			// Atomic $inc serves double duty: validates cartridge exists AND mints a
+			// race-free sequence number. null updated = cartridge doesn't exist.
+			CartridgeRecord.findOneAndUpdate(
+				{ _id: cartridgeId },
+				{ $inc: { photoSequence: 1 } },
+				{ new: true, projection: { photoSequence: 1, status: 1 } }
+			).lean() as Promise<any>
+		]);
+		if (station?.assignedPhase && station.assignedPhase !== phase) {
+			warning = `station ${station.name} is assigned to ${station.assignedPhase} but this capture was tagged ${phase}`;
 		}
-
-		// Atomic $inc serves double duty: validates cartridge exists AND mints a
-		// race-free sequence number. null updated = cartridge doesn't exist.
-		const updated = await CartridgeRecord.findOneAndUpdate(
-			{ _id: cartridgeId },
-			{ $inc: { photoSequence: 1 } },
-			{ new: true, projection: { photoSequence: 1, status: 1 } }
-		).lean() as any;
 
 		if (!updated) {
 			return json({ error: `Cartridge ${cartridgeId} not found in BIMS` }, { status: 400 });
@@ -233,7 +234,20 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		const publicUrl = getR2Url(key);
 
 		const capturedAt = new Date();
-		await CvImage.create({
+
+		// The CvImage insert and the cartridge's photos[] append are independent,
+		// so they run together (one round trip instead of two). photos[] must
+		// never point at an image that wasn't saved: if the insert fails, the
+		// appended entry is pulled again and the capture fails as before.
+		// A batch of legacy cartridges have a malformed (non-array) `photos`
+		// field, so a plain $push throws "must be an array but is of type …".
+		// Use a pipeline update to coerce photos to [] when it isn't an array,
+		// then append — atomic, self-healing, and a no-op shape change for the
+		// well-formed majority. $literal keeps the entry stored verbatim (so a
+		// '$' or '.' in any value isn't parsed as an aggregation expression).
+		const photoEntry = { imageId, phase, capturedAt, r2Key: key, r2Url: publicUrl, cartridgeImageNumber };
+		const [imageWrite, photosWrite] = await Promise.allSettled([
+			CvImage.create({
 			_id: imageId,
 			filename: filenameFromClient,
 			filePath: key,
@@ -262,7 +276,35 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 				}
 				: {}),
 			...(forensic ? { metadata: { forensic } } : {})
-		});
+			}),
+			CartridgeRecord.updateOne(
+				{ _id: cartridgeId },
+				[
+					{
+						$set: {
+							photos: {
+								$concatArrays: [
+									{ $cond: [{ $isArray: '$photos' }, '$photos', []] },
+									{ $literal: [photoEntry] }
+								]
+							}
+						}
+					}
+				],
+				// Mongoose 9 requires opting in to array (aggregation-pipeline) updates.
+				{ updatePipeline: true }
+			)
+		]);
+		if (imageWrite.status === 'rejected') {
+			if (photosWrite.status === 'fulfilled') {
+				await CartridgeRecord.updateOne(
+					{ _id: cartridgeId },
+					{ $pull: { photos: { imageId } } }
+				).catch((e) => console.error('[capture] photos[] rollback failed:', e));
+			}
+			throw imageWrite.reason;
+		}
+		if (photosWrite.status === 'rejected') throw photosWrite.reason;
 
 		// Capture-time verdict is a QC decision — audit it like the other
 		// cartridge-status writes below.
@@ -277,31 +319,6 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 				changedBy: locals.user.username
 			});
 		}
-
-		// A batch of legacy cartridges have a malformed (non-array) `photos`
-		// field, so a plain $push throws "must be an array but is of type …".
-		// Use a pipeline update to coerce photos to [] when it isn't an array,
-		// then append — atomic, self-healing, and a no-op shape change for the
-		// well-formed majority. $literal keeps the entry stored verbatim (so a
-		// '$' or '.' in any value isn't parsed as an aggregation expression).
-		const photoEntry = { imageId, phase, capturedAt, r2Key: key, r2Url: publicUrl, cartridgeImageNumber };
-		await CartridgeRecord.updateOne(
-			{ _id: cartridgeId },
-			[
-				{
-					$set: {
-						photos: {
-							$concatArrays: [
-								{ $cond: [{ $isArray: '$photos' }, '$photos', []] },
-								{ $literal: [photoEntry] }
-							]
-						}
-					}
-				}
-			],
-			// Mongoose 9 requires opting in to array (aggregation-pipeline) updates.
-			{ updatePipeline: true }
-		);
 
 		// WAX-SIMPLIFY-2: photographing a wax-stage cart no longer changes its status
 		// (the old wax_stored → wax_qc auto-advance is gone). Wax rejects are an

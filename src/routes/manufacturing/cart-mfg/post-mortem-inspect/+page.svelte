@@ -813,6 +813,181 @@
 	});
 
 	// ── Capture → poll → (advisory) verdict ─────────────────────────────────
+	// Two modes:
+	//   - Desktop / regular tablet layout (unchanged): the button stays locked
+	//     until the server has saved the photo.
+	//   - Fullscreen (tablets): the button unlocks as soon as the photo is in
+	//     hand (and at least CAPTURE_COOLDOWN_MS after the tap, so a double tap
+	//     can't take two photos); the upload runs in a background queue — one at
+	//     a time, in order, each tied to the cartridge locked when it was taken.
+	//     No automatic retries: a lost response could otherwise re-save a photo
+	//     the server already has, so a failed upload waits for the operator's
+	//     Retry (or Discard).
+	const CAPTURE_COOLDOWN_MS = 1000;
+
+	type Shot = { blob: Blob; photoMs: number; source: CaptureTiming['source'] };
+	type PendingUpload = {
+		id: number;
+		shot: Shot;
+		cartridgeId: string;
+		tStart: number;
+		status: 'queued' | 'uploading' | 'failed';
+		error?: string;
+	};
+	let uploads = $state<PendingUpload[]>([]);
+	let uploadSeq = 0;
+	let uploadWorkerRunning = false;
+	const uploadsActive = $derived(uploads.filter((u) => u.status !== 'failed').length);
+	const uploadsFailed = $derived(uploads.filter((u) => u.status === 'failed').length);
+
+	// Short-lived fullscreen notices (the normal banners sit behind fullscreen).
+	let savedFlash = $state(false);
+	let savedFlashTimer: ReturnType<typeof setTimeout> | null = null;
+	let captureNotice = $state<string | null>(null);
+	let captureNoticeTimer: ReturnType<typeof setTimeout> | null = null;
+
+	function flashSaved() {
+		savedFlash = true;
+		if (savedFlashTimer) clearTimeout(savedFlashTimer);
+		savedFlashTimer = setTimeout(() => { savedFlash = false; }, 1500);
+	}
+
+	function showCaptureNotice(text: string) {
+		captureNotice = text;
+		if (captureNoticeTimer) clearTimeout(captureNoticeTimer);
+		captureNoticeTimer = setTimeout(() => { captureNotice = null; }, 5000);
+	}
+
+	// Get the photo: the station's clean /snapshot.jpg while the MJPEG view is
+	// up, otherwise (or if that fails → WebRTC fallback) a frame of the video feed.
+	async function acquirePhoto(tStart: number): Promise<Shot> {
+		let blob: Blob | null = null;
+		let source: CaptureTiming['source'] = 'feed';
+
+		if (mjpegShowing && selectedStationId) {
+			blob = await fetchStationSnapshot(selectedStationId);
+			if (blob) source = 'station';
+			if (!blob) {
+				// Snapshot didn't work on this station — switch to the classic
+				// feed and take this same photo from it once it's up.
+				fallBackToWebRtc('snapshot unavailable');
+				if (!(await waitForStream(WEBRTC_FALLBACK_WAIT_MS))) {
+					throw new Error('Station photo failed and the standard video feed did not start — try again');
+				}
+			}
+		}
+
+		if (!blob) {
+			if (!videoEl || !stream) throw new Error('Camera not running');
+			const canvas = document.createElement('canvas');
+			canvas.width = videoEl.videoWidth;
+			canvas.height = videoEl.videoHeight;
+			const ctx = canvas.getContext('2d');
+			if (!ctx) throw new Error('canvas 2d context unavailable');
+			ctx.drawImage(videoEl, 0, 0, canvas.width, canvas.height);
+
+			blob = await new Promise<Blob>((resolve, reject) => {
+				canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('toBlob failed'))), 'image/jpeg', 0.92);
+			});
+		}
+
+		return { blob, photoMs: performance.now() - tStart, source };
+	}
+
+	// POST one photo to /api/cv/capture and record it (timing readout, session
+	// feed row, advisory verdict). Throws on any failure.
+	async function uploadCapture(shot: Shot, forCartridge: string, tStart: number, seq: number) {
+		const form = new FormData();
+		form.append('file', shot.blob, 'capture.jpg');
+		form.append('cartridgeId', forCartridge);
+		form.append('phase', PHASE);
+
+		const tUpload = performance.now();
+		const res = await fetch('/api/cv/capture', { method: 'POST', body: form });
+		if (!res.ok) {
+			const body = await res.json().catch(() => ({}));
+			throw new Error(body.error || `HTTP ${res.status}`);
+		}
+		const result = await res.json();
+		const tDone = performance.now();
+
+		const serverSteps: Record<string, number> | null =
+			result.timingsMs && typeof result.timingsMs === 'object' ? result.timingsMs : null;
+		lastTiming = {
+			source: shot.source,
+			photoMs: shot.photoMs,
+			roundTripMs: tDone - tUpload,
+			serverMs: typeof serverSteps?.total === 'number' ? serverSteps.total : null,
+			steps: serverSteps,
+			totalMs: tDone - tStart
+		};
+		console.info('[post-mortem-inspect] capture timing:', timingLong, { ...lastTiming, bytes: shot.blob.size });
+
+		// Prepend live row to the session feed; the poll patches it in place.
+		const row: FeedRow = {
+			key: result.imageId,
+			imageId: result.imageId,
+			cartridgeRecordId: result.cartridgeRecordId,
+			imageUrl: result.imageUrl ?? null,
+			thumbUrl: result.thumbnailUrl ?? null,
+			result: null,
+			confidenceScore: null,
+			modelVersion: null,
+			status: data.modelDeployed ? 'pending' : 'none',
+			isShadow: false,
+			triggeredAt: Date.now(),
+			operator: data.user.username,
+		};
+		feed = [row, ...feed];
+
+		if (data.modelDeployed) {
+			verdict = { state: 'polling' };
+			pollInference(result.imageId, seq).catch(() => null);
+		} else {
+			verdict = { state: 'no_model' };
+		}
+		// No-state-change: the cartridge stays `completed` after the photo.
+		return result;
+	}
+
+	// Background queue worker (fullscreen mode). One upload at a time, oldest
+	// first; a failure parks that photo as 'failed' and moves on.
+	async function runUploadQueue() {
+		if (uploadWorkerRunning) return;
+		uploadWorkerRunning = true;
+		try {
+			for (;;) {
+				const next = uploads.find((u) => u.status === 'queued');
+				if (!next) break;
+				next.status = 'uploading';
+				try {
+					await uploadCapture(next.shot, next.cartridgeId, next.tStart, ++pollSeq);
+					uploads = uploads.filter((u) => u.id !== next.id);
+					flashSaved();
+				} catch (e) {
+					next.status = 'failed';
+					next.error = e instanceof Error ? e.message : 'Upload failed';
+				}
+			}
+		} finally {
+			uploadWorkerRunning = false;
+		}
+	}
+
+	function retryFailedUploads() {
+		for (const u of uploads) if (u.status === 'failed') { u.status = 'queued'; u.error = undefined; }
+		void runUploadQueue();
+		scanInputEl?.focus();
+	}
+
+	function discardFailedUploads() {
+		const n = uploadsFailed;
+		if (n === 0) return;
+		if (!confirm(`Discard ${n} unsaved photo${n === 1 ? '' : 's'}? ${n === 1 ? 'It' : 'They'} will not be saved to the cartridge.`)) return;
+		uploads = uploads.filter((u) => u.status !== 'failed');
+		scanInputEl?.focus();
+	}
+
 	async function capturePhoto() {
 		if (submitting) return;
 		if (!cartridgeId) {
@@ -827,97 +1002,30 @@
 		}
 
 		submitting = true;
+		const background = fullscreen;
+		const forCartridge = cartridgeId;
 		const mySeq = ++pollSeq;
-		verdict = { state: 'capturing' };
-		shadowNote = null;
 		const tStart = performance.now();
-		let photoSource: CaptureTiming['source'] = 'feed';
+		if (!background) {
+			verdict = { state: 'capturing' };
+			shadowNote = null;
+		}
 		try {
-			let blob: Blob | null = null;
-
-			if (mjpegShowing && selectedStationId) {
-				blob = await fetchStationSnapshot(selectedStationId);
-				if (blob) photoSource = 'station';
-				if (!blob) {
-					// Snapshot didn't work on this station — switch to the classic
-					// feed and take this same photo from it once it's up.
-					fallBackToWebRtc('snapshot unavailable');
-					if (!(await waitForStream(WEBRTC_FALLBACK_WAIT_MS))) {
-						throw new Error('Station photo failed and the standard video feed did not start — try again');
-					}
-				}
-			}
-
-			if (!blob) {
-				if (!videoEl || !stream) throw new Error('Camera not running');
-				const canvas = document.createElement('canvas');
-				canvas.width = videoEl.videoWidth;
-				canvas.height = videoEl.videoHeight;
-				const ctx = canvas.getContext('2d');
-				if (!ctx) throw new Error('canvas 2d context unavailable');
-				ctx.drawImage(videoEl, 0, 0, canvas.width, canvas.height);
-
-				blob = await new Promise<Blob>((resolve, reject) => {
-					canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('toBlob failed'))), 'image/jpeg', 0.92);
-				});
-			}
-
-			const photoMs = performance.now() - tStart;
-
-			const form = new FormData();
-			form.append('file', blob, 'capture.jpg');
-			form.append('cartridgeId', cartridgeId);
-			form.append('phase', PHASE);
-
-			const tUpload = performance.now();
-			const res = await fetch('/api/cv/capture', { method: 'POST', body: form });
-			if (!res.ok) {
-				const body = await res.json().catch(() => ({}));
-				throw new Error(body.error || `HTTP ${res.status}`);
-			}
-			const result = await res.json();
-			const tDone = performance.now();
-
-			const serverSteps: Record<string, number> | null =
-				result.timingsMs && typeof result.timingsMs === 'object' ? result.timingsMs : null;
-			lastTiming = {
-				source: photoSource,
-				photoMs,
-				roundTripMs: tDone - tUpload,
-				serverMs: typeof serverSteps?.total === 'number' ? serverSteps.total : null,
-				steps: serverSteps,
-				totalMs: tDone - tStart
-			};
-			console.info('[post-mortem-inspect] capture timing:', timingLong, { ...lastTiming, bytes: blob.size });
-
-			// Prepend live row to the session feed; the poll patches it in place.
-			const row: FeedRow = {
-				key: result.imageId,
-				imageId: result.imageId,
-				cartridgeRecordId: result.cartridgeRecordId,
-				imageUrl: result.imageUrl ?? null,
-				thumbUrl: result.thumbnailUrl ?? null,
-				result: null,
-				confidenceScore: null,
-				modelVersion: null,
-				status: data.modelDeployed ? 'pending' : 'none',
-				isShadow: false,
-				triggeredAt: Date.now(),
-				operator: data.user.username,
-			};
-			feed = [row, ...feed];
-
-			if (data.modelDeployed) {
-				verdict = { state: 'polling' };
-				pollInference(result.imageId, mySeq).catch(() => null);
+			const shot = await acquirePhoto(tStart);
+			if (background) {
+				uploads.push({ id: ++uploadSeq, shot, cartridgeId: forCartridge, tStart, status: 'queued' });
+				void runUploadQueue();
+				const wait = CAPTURE_COOLDOWN_MS - (performance.now() - tStart);
+				if (wait > 0) await new Promise((r) => setTimeout(r, wait));
 			} else {
-				verdict = { state: 'no_model' };
+				const result = await uploadCapture(shot, forCartridge, tStart, mySeq);
+				flashBanner('ok', `Captured ${result.cartridgeImageNumber}`, 1800);
 			}
-			// No-state-change: the cartridge stays `completed` after the photo.
-			flashBanner('ok', `Captured ${result.cartridgeImageNumber}`, 1800);
 		} catch (e) {
-			if (pollSeq === mySeq) verdict = { state: 'error', message: e instanceof Error ? e.message : 'Capture failed' };
-			flashBanner('err', e instanceof Error ? e.message : 'Capture failed');
+			const message = e instanceof Error ? e.message : 'Capture failed';
+			if (!background && pollSeq === mySeq) verdict = { state: 'error', message };
+			flashBanner('err', message);
+			if (background) showCaptureNotice(message);
 		} finally {
 			submitting = false;
 			// Refocus the scanner input so the next scan still wedges correctly.
@@ -997,7 +1105,15 @@
 		capturePhoto();
 	}
 
-	function onBeforeUnload() {
+	function onBeforeUnload(e: BeforeUnloadEvent) {
+		// Photos still waiting to upload (fullscreen background queue) would be
+		// lost — ask the browser to confirm, and keep the station lock in case
+		// the operator stays on the page.
+		if (uploads.length > 0) {
+			e.preventDefault();
+			e.returnValue = '';
+			return;
+		}
 		if (lockedStationId) {
 			// keepalive lets the DELETE finish after the page unloads.
 			fetch(stationLockUrl(lockedStationId), {
@@ -1030,6 +1146,8 @@
 		teardownStation();
 		stopCamera();
 		if (bannerTimer) clearTimeout(bannerTimer);
+		if (savedFlashTimer) clearTimeout(savedFlashTimer);
+		if (captureNoticeTimer) clearTimeout(captureNoticeTimer);
 		if (refocusInterval) clearInterval(refocusInterval);
 	});
 </script>
@@ -1268,6 +1386,24 @@
 			>
 				✕
 			</button>
+		{/if}
+		{#if fullscreen && (uploadsActive > 0 || uploadsFailed > 0 || savedFlash || captureNotice)}
+			<!-- Background-upload status (fullscreen): top-centre of the feed. -->
+			<div class="absolute left-1/2 top-3 flex -translate-x-1/2 items-center gap-2 rounded bg-black/70 px-3 py-1 text-xs text-white">
+				{#if uploadsFailed > 0}
+					<span class="text-[var(--color-tron-red,#ff3366)]">⚠ {uploadsFailed} photo{uploadsFailed === 1 ? '' : 's'} not saved</span>
+					<button type="button" onclick={retryFailedUploads} class="rounded border border-white/40 px-2 py-0.5">Retry</button>
+					<button type="button" onclick={discardFailedUploads} class="rounded border border-white/40 px-2 py-0.5">Discard</button>
+				{/if}
+				{#if uploadsActive > 0}
+					<span class="animate-pulse text-[var(--color-tron-cyan)]">⬆ Saving{uploadsActive > 1 ? ` ${uploadsActive}` : ''}…</span>
+				{:else if savedFlash && uploadsFailed === 0}
+					<span class="text-[var(--color-tron-green,#39ff14)]">✓ Saved</span>
+				{/if}
+				{#if captureNotice}
+					<span class="text-[var(--color-tron-red,#ff3366)]">✕ {captureNotice}</span>
+				{/if}
+			</div>
 		{/if}
 		{#if fullscreen && lastTiming}
 			<!-- Capture timing (diagnostics): top-right corner of the feed. -->

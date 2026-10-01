@@ -17199,3 +17199,26 @@ Retrieve this exact code: git checkout master at commit 146ec57e
   (or: git log master --oneline to find it if the branch has since moved on)
 What this deployment is for: parallel capture processing, thumbnails, one device per station.
   GitHub deployment 6787242743 (Production). Smoke: /login 200.
+
+================================================================================
+2026-10-01 — feat/capture-background-upload → master — Background upload (fullscreen) + paired DB writes
+================================================================================
+From the timing readout (photo 0.17 s · network 0.70 s · server 0.94 s = db 0.35 + parallel 0.59 →
+1.81 s with the Capture button locked the whole time):
+  - post-mortem-inspect/+page.svelte, FULLSCREEN ONLY (desktop + regular tablet layout unchanged):
+    the button unlocks once the photo is in hand (min 1 s after the tap, so a double tap can't
+    take two photos); the upload goes to a background queue — one at a time, oldest first, each
+    carrying the cartridgeId locked when it was taken. No automatic retries (a lost response could
+    re-save a photo the server already has): a failure parks the photo as "not saved" with
+    Retry / Discard (Discard confirms). Status pill top-centre of the feed: "⬆ Saving…", "✓ Saved",
+    failures, and photo-acquire errors (the normal banners sit behind fullscreen). beforeunload
+    warns while anything is queued/uploading/failed and then skips the lock release. Capture logic
+    split into acquirePhoto() / uploadCapture() / runUploadQueue(); the synchronous path calls the
+    same two functions, so its behaviour is unchanged.
+  - api/cv/capture/+server.ts: station lookup + cartridge photoSequence $inc run together; the
+    CvImage insert + cartridge photos[] append run together (allSettled — if the insert fails the
+    appended entry is $pull-ed again and the capture fails as before, so photos[] never points at an
+    unsaved image). Capture-time verdict audit stays sequential after the image exists. Saves one
+    round trip for post-mortem (no stationId) and two for /capture.
+`npm run check`: 13 errors (baseline), warnings unchanged. Vercel branch build used as the compile
+gate. Pushed to master at the user's explicit request.
