@@ -16969,3 +16969,33 @@ preview accepts B14's agent key. Tailnet sweep progress/results will now land in
 NOTE: B14's queue line now serves this preview — prod BIMS still sees B14 heartbeats (shared Mongo) but
 anything prod enqueues for B14 is polled by this daemon from the preview's routes; revert before merging.
 Rollback: cp .env.bak-20260930 .env && systemctl restart ot2-bridge.
+
+================================================================================
+2026-10-02 — feat/ot2-tailnet-direct — B14 live over Tailscale from the lab Mac; setup-stage connection pill
+================================================================================
+Lab Mac rejoined the tailnet as imac-1 (old `imac` node stale, offline 86 d — delete in admin console).
+Live-monitored B14 (robot API journal, daemon, run state, Mongo change streams). Findings:
+- Earlier tests today ran from PRODUCTION BIMS (no `line` on audit rows, 0 ot2_direct_calls) → all queue.
+  Once on the branch preview: reagent run jr1ZzWWJ… (robot run 78793f94) — status reads 65–100 ms direct,
+  resume 270 ms / pause 164 ms / stop 280 ms as [DIRECT] run.action, finish record + cancel both
+  line:'tailnet', 0 queue commands for them. Deck scan via /bridge: token issued (audited), POST
+  /bridge/jobs 202 in 80 ms, scanned DECK-003, result + confirm audit rows line:'tailnet'.
+- Daemon 1.2 auto_resume_run resumed the initial pause once (actions play,play), queue line.
+- Wax on B14 fails by design: FailedToLoadPipetteError — protocol line 374 loads p20_single_gen2 on
+  the right mount, B14 has p1000_single_v2.2. Reagent (p300 left) runs fine on B14.
+- A queue-line wax start that had to re-upload the protocol overran the 60 s action (known gap); a
+  duplicate start attempt was absorbed (its POST /runs expired in the queue; one robot run created).
+- Two pages (prod + preview) recorded the same finish → close prod while testing on the preview.
+- B14 Wi-Fi: 2.4 GHz ch 6, -49 dBm but 6.5 Mbit/s rx, 3389 retries — repeated direct→DERP relay flips and
+  robot→BIMS read timeouts. Recommend Ethernet for all robots.
+- Stop mid-move left smoothie "Alarm lock" (normal after a hard stop) — home before next run.
+- SLIP: a latency probe POSTed 2 ScannerEvent rows (eventType error, deviceId ot2-b14-bridge-probe,
+  source latency-probe) into prod Mongo; not cleaned up yet (awaiting user OK).
+Change (commit 958f84e3f): TransportPill at the top of the wax + reagent pages on every stage (setup,
+loading, deck scan) so the operator sees/fixes the line BEFORE Start; stale "never flips back" comment fixed.
+npm run check 106 = baseline.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-git-feat-ot-2ae11c-brevitest.vercel.app
+Source: branch feat/ot2-tailnet-direct @ commit 958f84e3f
+Retrieve this exact code: git checkout feat/ot2-tailnet-direct at commit 958f84e3f
+What this deployment is for: connection pill visible during run setup on the fill pages.
