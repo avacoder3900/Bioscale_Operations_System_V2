@@ -1,4 +1,7 @@
 <script lang="ts">
+	import { openRobotSession } from '$lib/opentrons/direct-client';
+	import { uploadBundle, sessionVerb, isStepError } from '$lib/opentrons/ot2-protocol';
+
 	let { data } = $props();
 
 	let sortBy = $state<'alpha' | 'recent'>('recent');
@@ -40,6 +43,23 @@
 		importError = '';
 
 		try {
+			// OT2-TAILNET-5 S4: on the tailnet line this browser uploads straight to
+			// the robot (BIMS bundles the labware first, then records the result).
+			const session = await openRobotSession(selectedRobotId);
+			const direct = session.state.transport === 'direct';
+			if (direct) {
+				try {
+					await importOverSession(session, importFile);
+				} finally {
+					session.close();
+				}
+				showImportModal = false;
+				importFile = null;
+				window.location.reload();
+				return;
+			}
+			session.close();
+
 			const formData = new FormData();
 			formData.append('protocolFile', importFile);
 
@@ -62,6 +82,24 @@
 		} finally {
 			importing = false;
 		}
+	}
+
+	/** prepare (BIMS bundles the labware) → run.uploadProtocol (robot) → confirm (BIMS records). */
+	async function importOverSession(session: Awaited<ReturnType<typeof openRobotSession>>, file: File) {
+		const api = `/api/opentrons-lab/robots/${selectedRobotId}/protocols`;
+		const bytes = new Uint8Array(await file.arrayBuffer());
+		let bin = '';
+		for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+		const post = async (body: Record<string, unknown>) => {
+			const res = await fetch(api, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+			const json = await res.json().catch(() => ({}));
+			if (!res.ok) throw new Error(json.message || json.error || `HTTP ${res.status}`);
+			return json;
+		};
+		const { bundle } = await post({ phase: 'prepare', fileName: file.name, fileB64: btoa(bin) });
+		const uploaded = await uploadBundle(sessionVerb(session), bundle);
+		if (isStepError(uploaded)) throw new Error(uploaded.error);
+		await post({ phase: 'confirm', fileName: file.name, uploaded });
 	}
 </script>
 

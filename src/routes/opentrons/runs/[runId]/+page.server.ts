@@ -3,6 +3,26 @@ import { connectDB, OpentronsRobot } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
 import type { PageServerLoad } from './$types';
 
+/** Shown when the robot doesn't answer (same stub as before). */
+function stubRun(runId: string) {
+	return {
+		id: runId,
+		status: 'unknown',
+		current: false,
+		protocolId: null,
+		createdAt: null,
+		startedAt: null,
+		completedAt: null,
+		errors: [],
+		pipettes: [],
+		labware: [],
+		modules: [],
+		liquids: [],
+		runTimeParameters: [],
+		actions: []
+	} as any;
+}
+
 export const load: PageServerLoad = async ({ params, url, locals }) => {
 	if (!locals.user) redirect(302, '/login');
 	requirePermission(locals.user, 'manufacturing:read');
@@ -13,43 +33,11 @@ export const load: PageServerLoad = async ({ params, url, locals }) => {
 	const robot = await OpentronsRobot.findById(robotId).lean() as any;
 	if (!robot) error(404, 'Robot not found');
 
-	let run: any = null;
-	try {
-		const resp = await fetch(
-			`http://${robot.ip}:${robot.port ?? 31950}/runs/${params.runId}`,
-			{ signal: AbortSignal.timeout(5000) }
-		);
-		if (resp.ok) {
-			const data = await resp.json();
-			run = data.data ?? data;
-		}
-	} catch { /* robot offline */ }
-
-	if (!run) {
-		// Return a stub if robot is offline
-		run = {
-			id: params.runId,
-			status: 'unknown',
-			current: false,
-			protocolId: null,
-			createdAt: null,
-			startedAt: null,
-			completedAt: null,
-			errors: [],
-			pipettes: [],
-			labware: [],
-			modules: [],
-			liquids: [],
-			runTimeParameters: [],
-			actions: []
-		};
-	}
-
 	return {
 		robotId,
 		robotName: robot.name ?? '',
-		run
+		// OT2-TAILNET-5 S7: the run itself is read in the browser (+page.ts).
+		run: stubRun(params.runId)
 	};
 };
 
-export const config = { maxDuration: 60 };

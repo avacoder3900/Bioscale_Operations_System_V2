@@ -2,7 +2,9 @@
  * Task-5 end-to-end verification against a real OT-2.
  *
  * This exercises the same code paths our /opentrons-clone routes use:
- *   - src/lib/server/opentrons/client.ts (typed openapi-fetch client)
+ *   - src/lib/server/opentrons/client.ts (typed openapi-fetch client — since
+ *     OT2-TAILNET-5 a thin LAN wrapper over src/lib/opentrons/robot-client.ts,
+ *     the same client the browser runs over the robot session)
  *   - the raw fetch() patterns used for multipart upload + action POSTs
  *
  * It skips the SvelteKit wrapper (auth + robot-IP lookup) because those
