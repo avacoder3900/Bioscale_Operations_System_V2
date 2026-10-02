@@ -17429,3 +17429,10 @@ scan from a cached one, so the rule lives where the badge is cached)
   fresh badge scan. `untrack` imported from svelte.
 - BUCKET-SYSTEM_PLAN.md: header; §6.6 "One badge for the rail" → "One badge per bucket"; §11 row.
 svelte-check (worktree): COMPLETED 3420 FILES 14 ERRORS — baseline, none in touched files.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-e7bvp711t-brevitest.vercel.app
+Source: branch feat/badge-every-phase @ commit c69d26f6
+Retrieve this exact code: git checkout feat/badge-every-phase at commit c69d26f6
+  (or: git log feat/badge-every-phase --oneline to find it if the branch has since moved on)
+What this deployment is for: PR #73 head — badge at every advance + one badge per bucket (opening
+  another bucket or starting a pass clears it). Smoke: /login 200.
