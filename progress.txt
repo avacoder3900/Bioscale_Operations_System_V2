@@ -17352,3 +17352,12 @@ WHAT CHANGED
 - BUCKET-SYSTEM_PLAN.md: header, §9.6 "No bucket" paragraph, changelog row.
 svelte-check (worktree, after svelte-kit sync): 14 errors — the pre-existing baseline, none
 in touched files. Not clicked through on a preview yet.
+Shipped: commit a0c7635d pushed; PR #76 into feat/drop-pressed-stage (stacked on #75; GitHub retargets
+  to master when #75 merges) — https://github.com/avacoder3900/Bioscale_Operations_System_V2/pull/76
+
+Deployment: preview — https://bioscale-operations-system-mongodb-9tf1yqkpd-brevitest.vercel.app
+Source: branch feat/state-change-direct-backed @ commit a0c7635d
+Retrieve this exact code: git checkout feat/state-change-direct-backed at commit a0c7635d
+  (or: git log feat/state-change-direct-backed --oneline to find it if the branch has since moved on)
+What this deployment is for: PR #76 — State Change "No bucket" setting: move carts straight to Backed
+  with no destination bucket (loose at backing, as Move to oven leaves them). Smoke: /login 200.
