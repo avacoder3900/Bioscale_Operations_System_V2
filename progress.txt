@@ -17474,3 +17474,10 @@ Checks: svelte-kit sync + svelte-check → 14 errors (baseline, none in touched 
 a11y_img_redundant_alt warnings from the picker were fixed (alt no longer says "photo"). vite build
 transformed cleanly. Not run against a live DB yet — needs an issued badge to click through
 Issue-with-photo → Print, Photo… → Replace / Remove, and Reissue carrying the photo.
+Deployment: preview — https://bioscale-operations-system-mongodb-1jqvrdknu-brevitest.vercel.app
+Source: branch feat/badge-photos @ commit 2443a48f
+Retrieve this exact code: git checkout feat/badge-photos at commit 2443a48f
+  (or: git log feat/badge-photos --oneline to find it if the branch has since moved on)
+What this deployment is for: PR #72 — photos on badges. Issue a badge with a photo, Photo… → Replace /
+  Remove on a row, Reissue (photo should follow), then Print / batch print to see the portrait on the
+  card. GitHub deployment 6810533752. Smoke: /login 200.
