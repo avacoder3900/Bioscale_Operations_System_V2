@@ -17983,3 +17983,19 @@ Source: branch master @ commit f1b07295
 Retrieve this exact code: git checkout master at commit f1b07295
   (or: git log master --oneline to find it if the branch has since moved on)
 What this deployment is for: production release of PR #78 (Find a cart nickname + colour-coded status markers).
+
+================================================================================
+2026-10-02 — master — Tailscale is the DEFAULT line for B14 in production
+================================================================================
+- Vercel Production env: OT2_BRIDGE_TOKEN_SECRET (same value as Preview, file ~/.bims/ot2-bridge-secret,
+  Sensitive) and OT2_TAILNET_ROBOT_IDS=b14 added. B07/R04 deliberately NOT listed yet (still queue).
+- B14 /data/ot2-bridge/.env BIMS_BASE_URL → https://bioscale-operations-system-mongodb.vercel.app (was the
+  branch preview); backup .env.bak-20261002-preview; ot2-bridge 1.2 restarted while idle; heartbeat
+  hb:ot2-b14-bridge refreshed 10 s later with version ot2-bridge/1.2.
+- Empty rebuild commit 90561e841 was DEDUPED by Vercel (identical tree, no deployment) — this entry is
+  the tree change that forces the production build.
+Effect: on the normal BIMS address, B14's fill pages / run control / sweeps / deck scan / tip cal go
+browser → B14 over Tailscale from any tailnet computer (pill "direct" during setup); queue stays the
+automatic fallback for non-tailnet devices and dropouts.
+Rollback: remove both OT2_* vars from Vercel Production and push a tree-changing commit to master; on
+B14 cp .env.bak-20261002-preview is NOT needed for rollback (prod reports are correct either way).
