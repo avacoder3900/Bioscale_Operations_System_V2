@@ -2,7 +2,7 @@
 	import { deserialize, enhance } from '$app/forms';
 	import { goto, invalidateAll } from '$app/navigation';
 	import { page } from '$app/stores';
-	import type { BoardBucket, BoardCycle, BucketStage, ChangeLogRow, RegistryRow, StageCounts } from '$lib/server/services/bucket-service';
+	import type { BoardBucket, BoardCycle, BucketStage, CartStatusLine, ChangeLogRow, RegistryRow, StageCounts } from '$lib/server/services/bucket-service';
 
 	type ActionResult = { success?: boolean; error?: string; code?: string | null; [k: string]: unknown };
 	interface Props {
@@ -107,14 +107,21 @@
 		return residualDest && opts.some(o => o.bucketId === residualDest) ? residualDest : (opts[0]?.bucketId ?? '');
 	}
 
-	// Cart QR search under the board: read-only, one line back (?/cartLookup).
+	// Cart QR search under the board: read-only, one answer back (?/cartLookup).
+	// Since 2026-10-02 the answer is structured (cart status, the bucket it is in
+	// with its nickname + state) and rendered as colour-coded pills, the way the
+	// bucket search list and the bucket log mark status; `line` is the plain-text
+	// fallback for "not found" and errors.
+	type CartHit = CartStatusLine & { found: true; cartridgeId: string };
+	type CartLookup = { ok: boolean; line: string; hit: CartHit | null };
 	let cartFind = $state('');
 	let cartFindBusy = $state(false);
 	let cartFindLine = $state('');
 	let cartFindOk = $state(true);
+	let cartFindHit = $state<CartHit | null>(null);
 	// One read-only lookup, shared by the board box and the leftover panel's
-	// "where does it belong?" search: scan a cart, get one line back.
-	async function lookupCart(code: string): Promise<{ ok: boolean; line: string }> {
+	// "where does it belong?" search.
+	async function lookupCart(code: string): Promise<CartLookup> {
 		try {
 			const fd = new FormData();
 			fd.set('barcode', code);
@@ -122,13 +129,14 @@
 			const result = deserialize(await res.text());
 			if (result.type === 'success') {
 				const r = (result.data as any)?.cartLookup;
-				return { ok: !!r?.found, line: r?.line ?? 'No answer from the server.' };
+				const ok = !!r?.found;
+				return { ok, line: r?.line ?? 'No answer from the server.', hit: ok && r?.cartridgeId ? (r as CartHit) : null };
 			}
-			if (result.type === 'failure') return { ok: false, line: (result.data as any)?.cartLookup?.error ?? `Error ${result.status}` };
-			if (result.type === 'error') return { ok: false, line: result.error?.message ?? 'Lookup failed' };
-			return { ok: false, line: 'Lookup failed' };
+			if (result.type === 'failure') return { ok: false, line: (result.data as any)?.cartLookup?.error ?? `Error ${result.status}`, hit: null };
+			if (result.type === 'error') return { ok: false, line: result.error?.message ?? 'Lookup failed', hit: null };
+			return { ok: false, line: 'Lookup failed', hit: null };
 		} catch (e) {
-			return { ok: false, line: e instanceof Error ? e.message : 'Lookup failed' };
+			return { ok: false, line: e instanceof Error ? e.message : 'Lookup failed', hit: null };
 		}
 	}
 	async function findCart() {
@@ -139,10 +147,29 @@
 			const r = await lookupCart(code);
 			cartFindOk = r.ok;
 			cartFindLine = r.line;
+			cartFindHit = r.hit;
 		} finally {
 			cartFindBusy = false;
 		}
 	}
+	// Pill colours for a cart's own status: the bucket stages follow the column
+	// tints (grey / blue / purple); anything downstream of the bucket (wax filled,
+	// assembled, …) is neutral. Mirrors regStateTint for buckets.
+	const cartStatusTint: Record<string, string> = {
+		barcoded: 'text-gray-300 border-gray-500/40 bg-gray-700/20',
+		unpressed: 'text-blue-300 border-blue-500/40 bg-blue-900/20',
+		pressed: 'text-blue-300 border-blue-500/40 bg-blue-900/20',
+		backing: 'text-[var(--color-tron-purple)] border-[var(--color-tron-purple)]/40 bg-[var(--color-tron-purple)]/10'
+	};
+	const cartStatusTintDefault = 'text-[var(--color-tron-text)] border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)]';
+	// The "where" pill: green when the cart is a member of an open pass, yellow
+	// when it has fallen off one, grey when its last pass is closed.
+	const relationTint: Record<string, string> = {
+		member: 'text-green-300 border-green-500/40 bg-green-900/20',
+		taken_off: 'text-[var(--color-tron-yellow)] border-[var(--color-tron-yellow)]/40 bg-[var(--color-tron-yellow)]/10',
+		closed: 'text-[var(--color-tron-text-secondary)] border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)]'
+	};
+	const relationLabel: Record<string, string> = { member: 'Belongs in', taken_off: 'Taken off', closed: 'Last seen in' };
 
 	// Leftover panel search (user, 2026-09-25): a cart found in an empty tub —
 	// where does it belong? Same lookup, its own box so it sits next to the
@@ -151,6 +178,7 @@
 	let whereBusy = $state(false);
 	let whereLine = $state('');
 	let whereOk = $state(true);
+	let whereHit = $state<CartHit | null>(null);
 	async function findWhere() {
 		const code = whereFind.trim();
 		if (!code || whereBusy) return;
@@ -159,6 +187,7 @@
 			const r = await lookupCart(code);
 			whereOk = r.ok;
 			whereLine = r.line;
+			whereHit = r.hit;
 		} finally {
 			whereBusy = false;
 			setTimeout(() => (document.getElementById('whereFind') as HTMLInputElement | null)?.select(), 30);
@@ -342,7 +371,7 @@
 	function nameOf(b: { nickname: string | null; barcode: string | null; bucketId: string }): string {
 		return b.nickname ?? shortQr(b.barcode) ?? b.bucketId;
 	}
-	function resetLists() { discardList = []; scrapList = []; residualList = []; listInput = ''; residualDisposition = ''; residualDest = ''; cartScanError = ''; cartScanOk = ''; scanFailures = []; whereFind = ''; whereLine = ''; whereOk = true; }
+	function resetLists() { discardList = []; scrapList = []; residualList = []; listInput = ''; residualDisposition = ''; residualDest = ''; cartScanError = ''; cartScanOk = ''; scanFailures = []; whereFind = ''; whereLine = ''; whereOk = true; whereHit = null; }
 
 	function openCycle(c: BoardCycle) { panel = { kind: 'cycle', cycleId: c.cycleId, mode: 'view' }; resetLists(); if (c.stage === 'barcoded') focusScanEntry(); }
 	function setMode(mode: CycleMode) {
@@ -657,6 +686,30 @@
 	{:else}
 		<input type="hidden" name="badge" value={badge} />
 	{/if}
+{/snippet}
+
+{#snippet cartHitView(h: CartHit)}
+	<!-- One found cart (Find a cart box + leftover "where does it belong?"):
+	     cart id · status pill · where it is, headlined by the bucket's nickname
+	     (the way board cards are), with the bucket's state pill from the bucket
+	     log. Read-only — the bucket link is the only thing to click. -->
+	<div class="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+		<span class="font-mono text-[var(--color-tron-text)]">{h.cartridgeId}</span>
+		<span class="rounded border px-1.5 py-0.5 text-[10px] uppercase tracking-wider {cartStatusTint[h.status ?? ''] ?? cartStatusTintDefault}">{h.statusLabel ?? h.status ?? '—'}</span>
+		{#if h.home}
+			<span class="rounded border px-1.5 py-0.5 text-[10px] uppercase tracking-wider {relationTint[h.home.relation]}">{relationLabel[h.home.relation]}</span>
+			<a href="/manufacturing/cart-mfg/buckets/{h.home.bucketId}" class="text-[var(--color-tron-cyan)] hover:underline" title={h.home.barcode ?? h.home.bucketId}>
+				{#if h.home.nickname}<span class="font-medium">{h.home.nickname}</span> <span class="font-mono text-[var(--color-tron-text-secondary)]">{h.home.bucketId}</span>{:else}<span class="font-mono">{h.home.bucketId}</span>{/if}
+				<span class="font-mono text-[var(--color-tron-text-secondary)]">#{h.home.cycleNumber}</span>
+			</a>
+			<span class="text-[var(--color-tron-text-secondary)]">at {stageLabel(h.home.stage)}</span>
+			{#if h.home.bucketState}<span class="rounded border px-1.5 py-0.5 text-[10px] uppercase tracking-wider {regStateTint[h.home.bucketState] ?? ''}">bucket {regStateLabel[h.home.bucketState] ?? h.home.bucketState}</span>{/if}
+		{:else if h.status && cartStatusTint[h.status]}
+			<span class="rounded border px-1.5 py-0.5 text-[10px] uppercase tracking-wider {relationTint.taken_off}">On no open pass</span>
+		{/if}
+		{#if h.legacyLotId}<span class="text-[var(--color-tron-text-secondary)]">WI-01 lot <span class="font-mono">{h.legacyLotId}</span> (legacy)</span>{/if}
+		{#if h.since}<span class="font-mono text-[10px] text-[var(--color-tron-text-secondary)]">since {fmtAt(h.since)}</span>{/if}
+	</div>
 {/snippet}
 
 {#snippet scanList(target: 'discard' | 'scrap' | 'residual', list: string[], placeholder: string)}
@@ -1322,7 +1375,9 @@
 							<button type="button" onclick={findWhere} disabled={whereBusy || !whereFind.trim()}
 								class="shrink-0 rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 px-3 text-xs font-medium text-[var(--color-tron-cyan)] disabled:opacity-50">{whereBusy ? '…' : 'Find'}</button>
 						</div>
-						{#if whereLine}
+						{#if whereHit}
+							<div class="mt-1">{@render cartHitView(whereHit)}</div>
+						{:else if whereLine}
 							<p class="mt-1 text-xs {whereOk ? 'text-[var(--color-tron-text)]' : 'text-[var(--color-tron-yellow)]'}">{whereLine}</p>
 						{/if}
 					</div>
@@ -1417,7 +1472,9 @@
 				class="min-h-[44px] w-full max-w-sm rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-3 py-2 font-mono text-sm text-[var(--color-tron-text)] placeholder:font-sans placeholder:text-[var(--color-tron-text-secondary)]/50 focus:border-[var(--color-tron-cyan)] focus:outline-none" />
 			<button type="button" onclick={findCart} disabled={cartFindBusy || !cartFind.trim()}
 				class="min-h-[44px] rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 px-4 text-sm font-medium text-[var(--color-tron-cyan)] disabled:opacity-50">{cartFindBusy ? 'Looking…' : 'Find'}</button>
-			{#if cartFindLine}
+			{#if cartFindHit}
+				{@render cartHitView(cartFindHit)}
+			{:else if cartFindLine}
 				<p class="text-xs {cartFindOk ? 'text-[var(--color-tron-text)]' : 'text-[var(--color-tron-yellow)]'}">{cartFindLine}</p>
 			{/if}
 		</div>

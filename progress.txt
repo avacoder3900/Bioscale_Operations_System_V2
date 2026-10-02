@@ -17532,3 +17532,30 @@ none in any file this branch touches.
 Shipped: commit 59af4e86 pushed; PR #75 into master
 (https://github.com/avacoder3900/Bioscale_Operations_System_V2/pull/75). Preview deployment: Vercel GitHub
 integration builds it from the push — log the URL here when it appears.
+
+================================================================================
+2026-10-02 — feat/find-cart-bucket-pills — Buckets: Find a cart shows the bucket nickname + colour-coded pills
+================================================================================
+Branched from feat/drop-pressed-stage @ b3f74612 (stacked: it needs that branch's isBucketStatus /
+stageLabel helpers; PR #75 should land first). User: the "Find a cart" results should return the
+bucket's nickname when the cart belongs to a bucket, and show colour-coded status markers like the
+other search functions (the bucket scan-box search list and the bucket log pills).
+  - bucket-service.ts: CartStatusLine gains status / statusLabel, home { bucketId, nickname,
+    barcode, bucketState, cycleNumber, stage, relation: member | taken_off | closed }, legacyLotId,
+    since (ISO). `line` is unchanged in shape and now names the bucket as "Nickname (BKT-…)" when
+    it has one. One extra ProductionBucket read (nickname barcode state) per found cart.
+  - buckets/+page.server.ts ?/cartLookup: returns the whole CartStatusLine ({ success, ...r })
+    instead of { found, line }.
+  - buckets/+page.svelte: lookupCart() returns { ok, line, hit }; cartFindHit / whereHit state;
+    new cartHitView snippet — cart id (mono) · status pill (cartStatusTint: grey Barcoded, blue
+    Unpressed + legacy Pressed, purple Backed, neutral otherwise) · relation pill (green "Belongs
+    in", yellow "Taken off", grey "Last seen in", yellow "On no open pass") · bucket link headlined
+    by nickname with id + #pass in mono, sticker in the title · "at <stage>" · the bucket's own
+    state pill reusing regStateTint / regStateLabel ("bucket In use" etc.) · legacy WI-01 lot ·
+    "since <fmtAt>". Used by both the Find a cart box and the leftover panel's "Where does this cart
+    belong?" (shared lookup, so both got it). Not-found and error cases still show the plain
+    yellow `line`. resetLists() clears whereHit too.
+  - BUCKET-SYSTEM_PLAN.md §9.1 (new paragraph) + build-history row.
+npm run check (svelte-kit sync + svelte-check): 14 errors — the pre-existing baseline (r2.ts,
+2× research-proxy.ts, AskBimsWidget, 8× assembly/[sessionId], 2× validation/magnetometer/[sessionId]);
+none in any file this branch touches.

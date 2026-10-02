@@ -508,7 +508,27 @@ export async function findBucketLabels(codes: string[]): Promise<Map<string, str
 export interface CartStatusLine {
 	found: boolean;
 	cartridgeId: string | null;
+	/** The whole answer as plain text — what the box showed before 2026-10-02. */
 	line: string;
+	// Structured fields (user, 2026-10-02) so the board can show colour-coded
+	// status pills and the bucket's nickname instead of one grey line.
+	/** The cart's own status key (`CartridgeRecord.status`); null when not found. */
+	status: string | null;
+	statusLabel: string | null;
+	/** The bucket the cart belongs in / was last in, and how we know. */
+	home: {
+		bucketId: string;
+		nickname: string | null;
+		barcode: string | null;
+		/** `ProductionBucket.state` right now — drives the bucket pill colour. */
+		bucketState: string | null;
+		cycleNumber: number;
+		stage: string;
+		/** member = named on an open pass · taken_off = that pass is open but it is not a member · closed = the last pass it was on is closed */
+		relation: 'member' | 'taken_off' | 'closed';
+	} | null;
+	legacyLotId: string | null;
+	since: string | null;
 }
 
 /**
@@ -519,39 +539,51 @@ export interface CartStatusLine {
 export async function cartStatusLine(code: string): Promise<CartStatusLine> {
 	await connectDB();
 	const raw = (code ?? '').trim();
-	if (!raw) return { found: false, cartridgeId: null, line: 'Scan a cart QR.' };
+	const none = { cartridgeId: null, status: null, statusLabel: null, home: null, legacyLotId: null, since: null };
+	if (!raw) return { found: false, ...none, line: 'Scan a cart QR.' };
 
 	const cart = await CartridgeRecord.findById(raw)
 		.select('_id status statusUpdatedOn bucket backing').lean() as any;
 	if (!cart) {
 		const bucketId = await resolveBucketId(raw);
-		if (bucketId) return { found: false, cartridgeId: null, line: `${raw} is bucket ${bucketId}, not a cart — use the bucket scan box above.` };
-		return { found: false, cartridgeId: null, line: `No cart with code ${raw}. A cart exists once it is scanned into a bucket at Barcoded.` };
+		if (bucketId) return { found: false, ...none, line: `${raw} is bucket ${bucketId}, not a cart — use the bucket scan box above.` };
+		return { found: false, ...none, line: `No cart with code ${raw}. A cart exists once it is scanned into a bucket at Barcoded.` };
 	}
 
 	const status = String(cart.status ?? '');
 	const label = stageLabel(status);
 
 	const parts: string[] = [`${cart._id} · ${label}`];
+	let home: CartStatusLine['home'] = null;
 	// Where it belongs = the open pass whose member list names it (2026-09-25, for
 	// the leftover panel's search). Membership is the authority, not the cart's own
 	// `bucket.cycleId`, which an audit "take off pass" or a merge can leave stale.
-	const home = await BucketCycle.findOne({ status: 'open', cartridgeIds: cart._id }).select('bucketId cycleNumber stage').lean() as any;
-	if (home) {
-		parts.push(`belongs in bucket ${home.bucketId} #${home.cycleNumber} (${stageLabel(home.stage)})`);
+	const member = await BucketCycle.findOne({ status: 'open', cartridgeIds: cart._id }).select('bucketId cycleNumber stage').lean() as any;
+	if (member) {
+		home = { bucketId: member.bucketId, nickname: null, barcode: null, bucketState: null, cycleNumber: member.cycleNumber, stage: member.stage, relation: 'member' };
 	} else if (cart.bucket?.cycleId) {
 		const cycle = await BucketCycle.findById(cart.bucket.cycleId).select('bucketId cycleNumber stage status').lean() as any;
-		if (cycle) {
-			const where = `bucket ${cycle.bucketId} #${cycle.cycleNumber}`;
-			parts.push(cycle.status === 'open' ? `on no open pass — last in ${where}, taken off` : `last seen in ${where}, pass closed`);
-		}
+		if (cycle) home = { bucketId: cycle.bucketId, nickname: null, barcode: null, bucketState: null, cycleNumber: cycle.cycleNumber, stage: cycle.stage, relation: cycle.status === 'open' ? 'taken_off' : 'closed' };
+	}
+	if (home) {
+		// The tub's nickname + current state ride along (user, 2026-10-02): the floor
+		// knows buckets by name, and the state pill says whether it is still in use.
+		const tub = await ProductionBucket.findById(home.bucketId).select('nickname barcode state').lean() as any;
+		if (tub) { home.nickname = tub.nickname ?? null; home.barcode = tub.barcode ?? null; home.bucketState = tub.state ?? null; }
+		const name = home.nickname ? `${home.nickname} (${home.bucketId})` : home.bucketId;
+		const where = `bucket ${name} #${home.cycleNumber}`;
+		if (home.relation === 'member') parts.push(`belongs in ${where} (${stageLabel(home.stage)})`);
+		else if (home.relation === 'taken_off') parts.push(`on no open pass — last in ${where}, taken off`);
+		else parts.push(`last seen in ${where}, pass closed`);
 	} else if (isBucketStatus(status)) {
 		parts.push('on no open pass');
 	}
-	if (status === BACKED_STATUS && cart.backing?.parentLotRecordId) parts.push(`WI-01 lot ${cart.backing.parentLotRecordId} (legacy)`);
-	if (cart.statusUpdatedOn) parts.push(`since ${new Date(cart.statusUpdatedOn).toLocaleString()}`);
+	const legacyLotId = status === BACKED_STATUS && cart.backing?.parentLotRecordId ? String(cart.backing.parentLotRecordId) : null;
+	if (legacyLotId) parts.push(`WI-01 lot ${legacyLotId} (legacy)`);
+	const since = cart.statusUpdatedOn ? new Date(cart.statusUpdatedOn).toISOString() : null;
+	if (since) parts.push(`since ${new Date(since).toLocaleString()}`);
 
-	return { found: true, cartridgeId: cart._id, line: parts.join(' · ') };
+	return { found: true, cartridgeId: cart._id, line: parts.join(' · '), status, statusLabel: label, home, legacyLotId, since };
 }
 
 export interface ScanResolution {

@@ -522,12 +522,27 @@ mis-scan, advance with discards (+ badge, every advance since 2026-10-02), scrap
 Discard), move to oven (+ badge), retire — see §6.6) → expandable **change log** (lot, move,
 who, discards, thermoseal note) → **bucket log** (every bucket incl. retired). `?stage=` focuses
 a column; `?q=` resolves a scan (bucket QR, BKT id, or cartridge id → its bucket).
-Below the board + rail: **Find a cart** — scan a cart QR, get one line back (cart id · status
-label · the open pass it **belongs in** by membership, or "on no open pass" + where it was last
-seen, the legacy WI-01 lot when it has one, and when the status last changed). Read-only,
-`?/cartLookup` → `cartStatusLine()`; a bucket sticker scanned there is named as a bucket
-rather than reported missing (user, 2026-09-23). The same lookup sits inside the leftover panel
-as *Where does this cart belong?* (§7, 2026-09-25).
+Below the board + rail: **Find a cart** — scan a cart QR, get back cart id · status · the open
+pass it **belongs in** by membership, or "on no open pass" + where it was last seen, the legacy
+WI-01 lot when it has one, and when the status last changed. Read-only, `?/cartLookup` →
+`cartStatusLine()`; a bucket sticker scanned there is named as a bucket rather than reported
+missing (user, 2026-09-23). The same lookup sits inside the leftover panel as *Where does this
+cart belong?* (§7, 2026-09-25).
+
+Since 2026-10-02 (user: "results should return the bucket's nickname … and colour-coded status
+markers like the other search functions") the answer is **structured** rather than one grey
+line: `CartStatusLine` carries `status` / `statusLabel`, `home` (`bucketId`, `nickname`,
+`barcode`, `bucketState`, `cycleNumber`, `stage`, `relation` = `member | taken_off | closed`),
+`legacyLotId` and `since`; `line` remains the plain-text fallback for not-found and errors. The
+`?/cartLookup` action returns the whole object. The board renders a found cart with the
+`cartHitView` snippet (shared by both boxes): cart id · a **status pill** tinted like the stage
+columns (`cartStatusTint`: grey Barcoded, blue Unpressed / legacy Pressed, purple Backed;
+neutral for anything downstream) · a **relation pill** (green *Belongs in*, yellow *Taken off*,
+grey *Last seen in*; yellow *On no open pass* when a bucket-stage cart has no home) · the bucket
+link headlined by its **nickname** with the id and `#pass` in mono (sticker in the tooltip) ·
+"at <stage>" · the bucket's own **state pill** from the bucket log's `regStateTint` ("bucket
+In use" / "bucket Available" …) · legacy lot · "since". One extra `ProductionBucket` read per
+found cart (nickname, barcode, state).
 
 **Load cost (2026-09-30, navigation-lag pass).** The board load fans out nine branches; the
 longest used to be the thermoseal one (floor rule → status, ~8 reads in series). It is now ~3:
@@ -709,6 +724,7 @@ per-scan lookup only needs `manufacturing:read`.
 | _(fix/bucket-scan-count)_ | **Scan-in count lag** (§6.2.1): the card count and stage tile now tick on Enter — new `scanPending` overlay joins `scanAdded` / `scanRemoved` in `overlay()`; queued on Enter, moved to `scanAdded` on confirm, dropped on failure (`settlePending`). Queued-check before membership-check in `enqueueCartScan`. Client only; no server, schema or data change. |
 | _(feat/badge-every-phase)_ | **Badge at every phase** (§6.3, §6.6, §9.1; user 2026-10-02: "require a scan in at every phase", read as the badge plan's Model 1): `advanceCycle` now calls `requireBadge()` unconditionally — every advance (Barcoded → Unpressed, Unpressed → Pressed, Pressed → Backed) is badge-gated, not only one with discards; with *Require badge* off and no scan it still falls back to the session. Board: the advance form always renders the badge box (`badgeField(true)`) and `setMode('advance')` focuses it when no badge is on; header-link title and the "that is a badge" message name the advance. Badge Portal copy (`/admin/badges`) says "every phase". No schema, server-action or data change — `?/advance` already carried `badge`. |
 | _(feat/drop-pressed-stage)_ | **Pressed stage removed** (§2, §5.2, §6.3, §7, §9.1, §9.3, §9.5, §9.6, §12.3): `BUCKET_STAGES` is now `barcoded | unpressed | backing`, so Unpressed advances straight to Backed (same `backing.*` stamp; thermoseal still consumed at Barcoded → Unpressed). The key stays in both model enums as `LEGACY_PRESSED_STAGE`; new `isBucketStatus()` / `boardStage()` / `stageLabel()` and a legacy branch in `nextStage()` keep any pass or cart still at `pressed` visible (Unpressed column + count), advanceable (→ Backed, no thermoseal) and accepted by residual / audit / void / state-change — no data migration. Board `md:grid-cols-4`, dashboard + cartridge-admin strips lose the Pressed tile, pipeline loses `bucket_pressed`, override + state-change no longer offer the target. `npm run check`: 14 errors, the pre-existing baseline. |
+| _(feat/find-cart-bucket-pills)_ | **Find a cart: bucket nickname + colour-coded pills** (§9.1, §7; user 2026-10-02): `cartStatusLine()` returns structured fields (`status`, `statusLabel`, `home` with `nickname` / `barcode` / `bucketState` / `relation`, `legacyLotId`, `since`) beside the unchanged `line`, reading the home bucket's `ProductionBucket` row for nickname + state; `?/cartLookup` returns the whole object. Board: new `cartHitView` snippet renders cart id · stage-tinted status pill · relation pill (Belongs in / Taken off / Last seen in / On no open pass) · bucket link headlined by nickname · "at <stage>" · bucket-state pill (`regStateTint`) · legacy lot · since; used by the *Find a cart* box and the leftover panel's *Where does this cart belong?*. Plain `line` still shown for not-found / errors. No schema or data change. |
 
 `npm run check` after v2: **12 errors / 438 warnings** — the same 12 pre-existing (`r2.ts`,
 `AskBimsWidget.svelte`, 8× `assembly/[sessionId]`, 2× `validation/magnetometer/[sessionId]`
