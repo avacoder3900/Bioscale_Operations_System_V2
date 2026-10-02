@@ -1,9 +1,17 @@
 <script lang="ts">
-	import { enhance } from '$app/forms';
+	import { cloneForm, guardWrite, type CloneFormResult } from '../../../clone-form';
+	import { cloneLine } from '../../../clone-session';
+	import { protocolActions, downloadFile } from '../../../clone-api';
 	import { onMount } from 'svelte';
 	import { page } from '$app/stores';
 
-	let { data, form } = $props();
+	let { data } = $props();
+
+	// OT2-TAILNET-5 S10b: actions run in the browser over the robot session.
+	let form = $state<CloneFormResult>(null);
+	const line = $derived(cloneLine(data.robot._id));
+	const actions = $derived(guardWrite(data.canWrite, protocolActions(line, data.protocolId)));
+	const onResult = (r: CloneFormResult) => (form = r);
 
 	type LpcOffset = {
 		definitionUri: string;
@@ -63,9 +71,15 @@
 	const labwareFiles = data.protocol?.files?.filter((f: any) => f.role === 'labware') ?? [];
 	const a = data.latestAnalysis;
 
-	const analysisDocUrl = data.analyses.length
-		? `/api/opentrons-clone/robots/${data.robot._id}/protocols/${data.protocolId}/analysis/${data.analyses[data.analyses.length - 1].id}/document`
+	const analysisId: string | null = data.analyses.length ? data.analyses[data.analyses.length - 1].id : null;
+	const analysisDocUrl = analysisId
+		? `/protocols/${encodeURIComponent(data.protocolId)}/analyses/${encodeURIComponent(analysisId)}/asDocument`
 		: null;
+	async function downloadAnalysis() {
+		if (!analysisDocUrl) return;
+		const err = await downloadFile(line, analysisDocUrl, `analysis-${analysisId}.json`, 'application/json');
+		if (err) form = { error: `Analysis download failed — ${err}` };
+	}
 
 	type RtpParam = {
 		variableName: string;
@@ -310,9 +324,8 @@
 
 				{#if analysisDocUrl}
 					<a
-						href={analysisDocUrl}
-						target="_blank"
-						rel="noopener"
+						href={`#analysis-${analysisId}`}
+						onclick={(e) => { e.preventDefault(); void downloadAnalysis(); }}
 						class="text-xs text-blue-600 hover:underline inline-block mt-2"
 					>
 						Download full analysis document (JSON) →
@@ -374,7 +387,7 @@
 			</div>
 		{/if}
 
-		<form method="POST" action="?/createRun" use:enhance>
+		<form method="POST" action="?/createRun" use:cloneForm={{ actions, onResult }}>
 			<input type="hidden" name="rtpValues" value={rtpValuesJson} />
 			<input type="hidden" name="rtpFiles" value={rtpFilesJson} />
 			<input type="hidden" name="offsets" value={offsetsJson} />
@@ -590,7 +603,7 @@
 
 	<section class="bg-white border rounded-lg p-4">
 		<h3 class="font-semibold mb-2 text-red-700">Danger zone</h3>
-		<form method="POST" action="?/delete" use:enhance>
+		<form method="POST" action="?/delete" use:cloneForm={{ actions, onResult }}>
 			<button
 				type="submit"
 				onclick={(e) => {

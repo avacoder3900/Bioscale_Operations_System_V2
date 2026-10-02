@@ -8,6 +8,20 @@ const opentronsRobotSchema = new Schema({
 	// OT2-BRIDGE-1: deviceId the on-robot bridge daemon polls with
 	// (ot2-<slot>-bridge). Falls back to derivation from name when unset.
 	bridgeDeviceId: String,
+	// OT2-TAILNET-4: which line BIMS uses to reach this robot. Unset / 'queue' =
+	// the Ot2BridgeCommand queue (today's behaviour). 'tailnet' = the operator's
+	// browser calls directUrl over Tailscale — only when this deployment also lists
+	// the robot in OT2_TAILNET_ROBOT_IDS (src/lib/server/opentrons/connection.ts).
+	connection: {
+		type: new Schema({
+			mode: { type: String, enum: ['queue', 'tailnet'], default: 'queue' },
+			directUrl: String,        // https://ot2-<slot>.tailf65a70.ts.net
+			tailnetHostname: String,  // ot2-<slot>
+			updatedAt: Date,
+			updatedBy: String
+		}, { _id: false }),
+		default: undefined
+	},
 	// Deck Calibration Studio tip cursor per profile: { wax|reagent: { index, at, lastWell } }.
 	// Advanced on every Studio pick-up so a session never aims at a spent rack position.
 	studioTip: Schema.Types.Mixed,

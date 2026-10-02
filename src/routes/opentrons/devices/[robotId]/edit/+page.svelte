@@ -83,6 +83,49 @@
 			</div>
 		</fieldset>
 
+		<!-- Connection (OT2-TAILNET-4) -->
+		<fieldset class="space-y-4 rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-5">
+			<legend class="px-2 text-lg font-medium text-[var(--color-tron-cyan)]">Connection</legend>
+
+			<p class="text-sm text-[var(--color-tron-text-secondary)]">
+				How BIMS reaches this robot. <strong>Queue</strong> sends commands through the Vercel queue (the robot's bridge picks them up).
+				<strong>Tailnet</strong> lets a browser on Tailscale talk to the robot directly — faster pause/resume/jog. Tailnet only takes effect
+				when this deployment also allows the robot (<code>OT2_TAILNET_ROBOT_IDS</code>); everything else stays on the queue.
+			</p>
+
+			<div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+				<div>
+					<label for="connectionMode" class="mb-1 block text-sm font-medium text-[var(--color-tron-text-secondary)]">Mode</label>
+					<select id="connectionMode" name="connectionMode"
+						class="w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-3 py-2 text-[var(--color-tron-text)] focus:border-[var(--color-tron-cyan)] focus:outline-none">
+						<option value="queue" selected={r.connectionMode !== 'tailnet'}>Queue (default)</option>
+						<option value="tailnet" selected={r.connectionMode === 'tailnet'}>Tailnet (direct)</option>
+					</select>
+				</div>
+
+				<div>
+					<label for="tailnetHostname" class="mb-1 block text-sm font-medium text-[var(--color-tron-text-secondary)]">Tailnet Hostname</label>
+					<input id="tailnetHostname" name="tailnetHostname" type="text" value={r.tailnetHostname} placeholder="e.g. ot2-b14"
+						class="w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-3 py-2 text-[var(--color-tron-text)] focus:border-[var(--color-tron-cyan)] focus:outline-none" />
+				</div>
+
+				<div class="sm:col-span-2">
+					<label for="directUrl" class="mb-1 block text-sm font-medium text-[var(--color-tron-text-secondary)]">Direct URL</label>
+					<input id="directUrl" name="directUrl" type="text" value={r.directUrl} placeholder="https://ot2-b14.tailf65a70.ts.net"
+						class="w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-3 py-2 font-mono text-sm text-[var(--color-tron-text)] focus:border-[var(--color-tron-cyan)] focus:outline-none" />
+				</div>
+			</div>
+
+			<div class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-3 py-2 text-xs text-[var(--color-tron-text-secondary)]">
+				<div>Effective now: <span class={data.connection.effective.transport === 'tailnet' ? 'text-green-400' : 'text-[var(--color-tron-text)]'}>{data.connection.effective.reason}</span></div>
+				<div>This deployment allows tailnet for this robot: {data.connection.allowedHere ? 'yes' : 'no'}</div>
+				{#if r.connectionUpdatedBy}
+					<div>Last changed by {r.connectionUpdatedBy}{r.connectionUpdatedAt ? ` on ${new Date(r.connectionUpdatedAt).toLocaleString()}` : ''}</div>
+				{/if}
+				<div class="mt-1"><a href="/opentrons/connectivity" class="text-[var(--color-tron-cyan)] hover:underline">Fleet connectivity →</a></div>
+			</div>
+		</fieldset>
+
 		<!-- Pipette Configuration -->
 		<fieldset class="space-y-4 rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-5">
 			<legend class="px-2 text-lg font-medium text-[var(--color-tron-cyan)]">Pipette Configuration</legend>

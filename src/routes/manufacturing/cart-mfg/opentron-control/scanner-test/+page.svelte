@@ -3,6 +3,8 @@
 	import { invalidateAll, goto } from '$app/navigation';
 	import { page } from '$app/stores';
 	import { enhance } from '$app/forms';
+	import { openRobotSession, type RobotSession } from '$lib/opentrons/direct-client';
+	import { testScanOverBridge } from '$lib/opentrons/studio-bridge-jobs';
 
 	let { data, form } = $props();
 
@@ -82,9 +84,48 @@
 		}
 	}
 
+	// OT2-TAILNET-5 S6: when this scanner belongs to an OT-2 (server-mapped from
+	// the deviceId), open that robot's session. If it hands out a /bridge client
+	// (tailnet line + daemon jobs allowed here), Trigger Scan runs on the daemon's
+	// /bridge/scan from this browser; otherwise the queue trigger below, as before.
+	let robotSession: RobotSession | null = null;
+	let scanViaTailnet = $state(false);
+	$effect(() => {
+		const id = data.scannerRobot?.robotId;
+		if (!id) return;
+		let s: RobotSession | null = null;
+		let gone = false;
+		void openRobotSession(id).then((opened) => {
+			if (gone) return opened.close();
+			s = opened;
+			robotSession = opened;
+			opened.subscribe(() => (scanViaTailnet = opened.bridge() !== null));
+		});
+		return () => {
+			gone = true;
+			if (s && robotSession === s) robotSession = null;
+			scanViaTailnet = false;
+			s?.close();
+		};
+	});
+
 	async function fireTrigger() {
 		triggerError = null;
 		triggering = true;
+		const bridge = robotSession?.bridge() ?? null;
+		if (bridge && data.scannerRobot) {
+			try {
+				const out = await testScanOverBridge(bridge, { deviceId, robotId: data.scannerRobot.robotId, source: 'test' });
+				if (out.error) triggerError = `Scanner: ${out.error}`;
+				// The daemon posted the ScannerEvent itself — pull it into the stream.
+				void poll();
+			} catch (err) {
+				triggerError = err instanceof Error ? err.message : String(err);
+			} finally {
+				triggering = false;
+			}
+			return;
+		}
 		try {
 			const res = await fetch('/api/scanner/trigger', {
 				method: 'POST',
@@ -267,8 +308,13 @@
 				<p class="mt-2 text-xs text-red-400">{triggerError}</p>
 			{/if}
 			<p class="mt-3 text-[11px]" style="color: var(--color-tron-text-secondary)">
-				Enqueues a trigger for <span class="font-mono">{deviceId}</span>. The bridge
-				daemon picks it up on its next poll (~500ms) and fires the scanner.
+				{#if scanViaTailnet}
+					Fires <span class="font-mono">{deviceId}</span> directly on {data.scannerRobot?.name}'s bridge
+					daemon over Tailscale; the scan lands in the event stream below.
+				{:else}
+					Enqueues a trigger for <span class="font-mono">{deviceId}</span>. The bridge
+					daemon picks it up on its next poll (~500ms) and fires the scanner.
+				{/if}
 			</p>
 		</div>
 

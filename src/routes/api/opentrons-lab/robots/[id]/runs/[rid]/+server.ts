@@ -7,7 +7,8 @@
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { requirePermission } from '$lib/server/permissions';
-import { getRobot, robotGet, robotPatch } from '$lib/server/opentrons/proxy';
+import { getRobot, robotPatch } from '$lib/server/opentrons/proxy';
+import { verbResponse } from '$lib/server/opentrons/transport';
 
 // Status read + stop both route through the bridge (up to ~30s); exceed Vercel's default.
 export const config = { maxDuration: 45 };
@@ -19,13 +20,8 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 	const robot = await getRobot(params.id);
 	if (!robot) error(404, 'Robot not found');
 
-	try {
-		const res = await robotGet(robot, `/runs/${params.rid}`);
-		const data = await res.json();
-		return json(data);
-	} catch (e) {
-		error(502, `Failed to reach robot: ${e instanceof Error ? e.message : 'unknown'}`);
-	}
+	// Shared with the browser's tailnet line: $lib/opentrons/ot2-protocol 'run.get'.
+	return verbResponse(robot, 'run.get', { rid: params.rid });
 };
 
 export const PATCH: RequestHandler = async ({ params, locals, request }) => {

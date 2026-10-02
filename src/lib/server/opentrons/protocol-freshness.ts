@@ -8,14 +8,20 @@
  * was loaded before a Sync and posted the older protocol id, or (c) a deploy
  * script repointed the robot without updating the stored .py library.
  *
- * ensureFreshRunProtocol() closes all three holes at the moment that matters —
- * run start. It resolves the robot's CURRENT protocol entry server-side,
- * fetches that upload's own analysis from the robot, and diffs every
- * BIMS-managed labware definition it resolved (well x/y/z) against live Mongo.
- * On any mismatch (or if the bundle can't be verified) it re-uploads the stored
- * protocol .py with the live defs, repoints the robot's entry, VERIFIES the new
- * bundle, and returns the fresh id. It never lets a run start on geometry it
- * could not prove current.
+ * The gate closes all three holes at the moment that matters — run start. It
+ * resolves the robot's CURRENT protocol entry server-side, fetches that upload's
+ * own analysis from the robot, and diffs every BIMS-managed labware definition
+ * it resolved (well x/y/z) against live Mongo. On any mismatch (or if the bundle
+ * can't be verified) it re-uploads the stored protocol .py with the live defs,
+ * repoints the robot's entry, VERIFIES the new bundle, and returns the fresh id.
+ * It never lets a run start on geometry it could not prove current.
+ *
+ * OT2-TAILNET-5 split: the ROBOT half (the analyses diff, the upload) is the
+ * shared 'run.ensureFresh' / 'run.uploadProtocol' verbs in
+ * $lib/opentrons/ot2-protocol, run over either line. What is left here is the
+ * BIMS half: the expected wells, the current entry, the stored .py, and the
+ * records written when a re-sync happens. startRunSequence (ot2-protocol) puts
+ * them in order; ensureFreshRunProtocol below is the same gate in one call.
  */
 import {
 	connectDB,
@@ -25,9 +31,9 @@ import {
 	AuditLog,
 	generateId
 } from '$lib/server/db';
-import { robotGet, robotUploadProtocol } from './proxy';
-
-const TOL = 1e-6;
+import { runVerb, type ExpectedWells, type UploadedProtocolResult, type ProcessType, type Line } from '$lib/opentrons/ot2-protocol';
+import { assembleProtocolUpload, uploadAssembledProtocol } from './proxy';
+import { serverTransport } from './transport';
 
 export type FreshProtocol = {
 	opentronsProtocolId: string;
@@ -37,108 +43,45 @@ export type FreshProtocol = {
 	detail: string;
 };
 
-type MongoDefs = Map<string, any>;
-
 /**
- * Compare the labware definitions a protocol upload actually resolved (from its
- * on-robot analysis) against the live Mongo definitions. Only BIMS-managed
- * loadNames are compared — labware bundled from other sources isn't calibration.
- * Throws when the analysis can't be fetched (caller treats that as stale).
+ * loadName → wellName → {x,y,z} from Mongo definitions — exactly the fields the
+ * diff compares. Later definitions with the same loadName win, as the old Map did.
  */
-async function bundledDefsMatchMongo(
-	robot: any,
-	protocolId: string,
-	mongoDefs: MongoDefs,
-	waitForCompletedMs = 0
-): Promise<{ ok: boolean; detail: string }> {
-	const deadline = Date.now() + waitForCompletedMs;
-	let analysisId: string | null = null;
-	for (;;) {
-		const listRes = await robotGet(robot, `/protocols/${protocolId}/analyses`);
-		if (!listRes.ok) throw new Error(`robot returned ${listRes.status} listing analyses`);
-		const list = ((await listRes.json()) as any)?.data ?? [];
-		const completed = list.filter((a: any) => a.status === 'completed');
-		if (completed.length) {
-			analysisId = completed[completed.length - 1].id;
-			break;
+export function expectedWellsFromDefs(defs: Array<{ loadName?: string; definition?: any }>): ExpectedWells {
+	const out: ExpectedWells = {};
+	for (const d of defs) {
+		if (!d?.loadName) continue;
+		const wells = d.definition?.wells ?? {};
+		const slim: ExpectedWells[string] = {};
+		for (const [wn, w] of Object.entries(wells as Record<string, any>)) {
+			slim[wn] = { x: w?.x, y: w?.y, z: w?.z };
 		}
-		if (list.some((a: any) => a.status === 'failed')) throw new Error('protocol analysis failed');
-		if (Date.now() >= deadline) throw new Error('no completed analysis for protocol');
-		await new Promise((r) => setTimeout(r, 3000));
+		out[d.loadName] = slim;
 	}
-	const detRes = await robotGet(robot, `/protocols/${protocolId}/analyses/${analysisId}`);
-	if (!detRes.ok) throw new Error(`robot returned ${detRes.status} fetching analysis`);
-	const det = ((await detRes.json()) as any)?.data;
-	if ((det?.errors ?? []).length) throw new Error('protocol analysis completed with errors');
-
-	let checked = 0;
-	for (const c of det?.commands ?? []) {
-		if (c.commandType !== 'loadLabware') continue;
-		const def = c.result?.definition;
-		const loadName = def?.parameters?.loadName;
-		if (!loadName || !mongoDefs.has(loadName)) continue;
-		const want = mongoDefs.get(loadName)?.wells ?? {};
-		const got = def.wells ?? {};
-		for (const wn of Object.keys(want)) {
-			const w = want[wn];
-			const g = got[wn];
-			if (!g) return { ok: false, detail: `${loadName} ${wn} missing from bundled def` };
-			if (
-				Math.abs((g.x ?? 0) - (w.x ?? 0)) > TOL ||
-				Math.abs((g.y ?? 0) - (w.y ?? 0)) > TOL ||
-				Math.abs((g.z ?? 0) - (w.z ?? 0)) > TOL
-			) {
-				return {
-					ok: false,
-					detail: `${loadName} ${wn} bundled (${g.x},${g.y},${g.z}) != current (${w.x},${w.y},${w.z})`
-				};
-			}
-		}
-		checked++;
-	}
-	if (!checked) return { ok: false, detail: 'analysis resolved no BIMS-managed labware' };
-	return { ok: true, detail: `${checked} BIMS labware defs verified current` };
+	return out;
 }
 
-export async function ensureFreshRunProtocol(
-	robot: any,
-	robotId: string,
-	processType: 'wax-filling' | 'reagent-filling',
-	username: string
-): Promise<FreshProtocol> {
+/** Live Mongo geometry for every BIMS-managed labware definition. */
+export async function loadExpectedWells(): Promise<ExpectedWells> {
 	await connectDB();
+	const defs = (await LabwareDefinition.find().select('loadName definition').lean()) as any[];
+	return expectedWellsFromDefs(defs);
+}
 
+/** The robot's current (newest) protocol entry for a process, or null. */
+export async function currentProtocolEntry(robotId: string, processType: ProcessType): Promise<any | null> {
+	await connectDB();
 	const robotDoc = (await OpentronsRobot.findById(robotId).lean()) as any;
 	const entries = ((robotDoc?.protocols ?? []) as any[])
 		.filter((p) => p.protocolType === processType && p.opentronsProtocolId)
 		.sort((a, b) => new Date(a.createdAt ?? 0).getTime() - new Date(b.createdAt ?? 0).getTime());
-	const current = entries[entries.length - 1] ?? null;
+	return entries[entries.length - 1] ?? null;
+}
 
-	const defs = (await LabwareDefinition.find().select('loadName definition').lean()) as any[];
-	const mongoDefs: MongoDefs = new Map(defs.map((d) => [d.loadName, d.definition]));
-
-	let staleDetail = 'no protocol entry on robot';
-	if (current) {
-		try {
-			const res = await bundledDefsMatchMongo(robot, current.opentronsProtocolId, mongoDefs);
-			if (res.ok) {
-				return {
-					opentronsProtocolId: current.opentronsProtocolId,
-					parametersSchema: current.parametersSchema ?? null,
-					refreshed: false,
-					detail: res.detail
-				};
-			}
-			staleDetail = res.detail;
-		} catch (e) {
-			staleDetail = `could not verify bundle: ${e instanceof Error ? e.message : e}`;
-		}
-	}
-
-	// Stale / unverifiable → re-upload the stored .py with the LIVE defs.
-	const proto = (await OpentronProtocol.findOne({ processType, isActive: true })
-		.sort({ createdAt: -1 })
-		.lean()) as any;
+/** The stored .py to re-sync with; throws the operator-facing message when none. */
+export async function storedRunProtocol(processType: ProcessType, staleDetail: string): Promise<{ fileName: string; fileContent: string }> {
+	await connectDB();
+	const proto = (await OpentronProtocol.findOne({ processType, isActive: true }).sort({ createdAt: -1 }).lean()) as any;
 	if (!proto?.fileContent) {
 		throw new Error(
 			`Deck calibration is newer than the robot's ${processType} upload (${staleDetail}), ` +
@@ -146,9 +89,24 @@ export async function ensureFreshRunProtocol(
 				`Sync from the Deck Calibration page, then start the run again.`
 		);
 	}
-	const fileName = proto.fileName ?? `${processType}.py`;
-	const uploaded = await robotUploadProtocol(robot, fileName, new TextEncoder().encode(proto.fileContent));
+	return { fileName: proto.fileName ?? `${processType}.py`, fileContent: proto.fileContent };
+}
 
+/** The upload bundle for a re-sync (server half of 'run.uploadProtocol'). */
+export async function resyncBundle(robot: any, processType: ProcessType, staleDetail: string) {
+	const { fileName, fileContent } = await storedRunProtocol(processType, staleDetail);
+	return assembleProtocolUpload(robot, fileName, fileContent);
+}
+
+/** Repoint the robot's entry for this process to a fresh upload. */
+export async function recordResyncUpload(
+	robotId: string,
+	processType: ProcessType,
+	fileName: string,
+	uploaded: UploadedProtocolResult,
+	username: string
+): Promise<void> {
+	await connectDB();
 	await OpentronsRobot.updateOne({ _id: robotId }, { $pull: { protocols: { protocolType: processType } } });
 	await OpentronsRobot.updateOne(
 		{ _id: robotId },
@@ -170,28 +128,80 @@ export async function ensureFreshRunProtocol(
 			}
 		}
 	);
+}
 
-	// Hard gate: prove the FRESH upload carries the live calibration before the
-	// caller is allowed to start a run on it.
-	const verify = await bundledDefsMatchMongo(robot, uploaded.opentronsProtocolId, mongoDefs, 120_000);
-	if (!verify.ok) {
-		throw new Error(`re-synced ${processType} protocol still doesn't match live calibration: ${verify.detail}`);
-	}
-
+/** The AuditLog row for a verified run-start re-sync. */
+export async function auditResync(
+	robotId: string,
+	processType: ProcessType,
+	from: string | null,
+	to: string,
+	reason: string,
+	username: string,
+	line: Line
+): Promise<void> {
+	await connectDB();
 	await AuditLog.create({
 		_id: generateId(),
 		tableName: 'opentrons_robots',
 		recordId: robotId,
 		action: 'run_start_auto_resync',
-		newData: {
-			processType,
-			from: current?.opentronsProtocolId ?? null,
-			to: uploaded.opentronsProtocolId,
-			reason: staleDetail
-		},
+		newData: { processType, from, to, reason, line },
 		changedAt: new Date(),
 		changedBy: username
 	});
+}
+
+/**
+ * The whole gate in one server call, over the server line (queue on Vercel).
+ * Same order and messages as before the split; the fill pages now run the same
+ * steps through startRunSequence.
+ */
+export async function ensureFreshRunProtocol(
+	robot: any,
+	robotId: string,
+	processType: ProcessType,
+	username: string
+): Promise<FreshProtocol> {
+	await connectDB();
+	const t = serverTransport(robot);
+	const current = await currentProtocolEntry(robotId, processType);
+	const expectedWells = await loadExpectedWells();
+
+	let staleDetail = 'no protocol entry on robot';
+	if (current) {
+		const r = await runVerb(t, 'run.ensureFresh', { protocolId: current.opentronsProtocolId, expectedWells });
+		const b = r.body as any;
+		if (r.status === 200 && b?.ok) {
+			return {
+				opentronsProtocolId: current.opentronsProtocolId,
+				parametersSchema: current.parametersSchema ?? null,
+				refreshed: false,
+				detail: b.detail
+			};
+		}
+		staleDetail = r.status === 200 ? b?.detail : `could not verify bundle: ${b?.message}`;
+	}
+
+	// Stale / unverifiable → re-upload the stored .py with the LIVE defs.
+	const bundle = await resyncBundle(robot, processType, staleDetail);
+	const uploaded = await uploadAssembledProtocol(robot, bundle);
+	await recordResyncUpload(robotId, processType, bundle.fileName, uploaded, username);
+
+	// Hard gate: prove the FRESH upload carries the live calibration before the
+	// caller is allowed to start a run on it.
+	const v = await runVerb(t, 'run.ensureFresh', {
+		protocolId: uploaded.opentronsProtocolId,
+		expectedWells,
+		waitForCompletedMs: 120_000
+	});
+	if (v.status !== 200) throw new Error((v.body as any)?.message ?? 'verify failed');
+	const verify = v.body as { ok: boolean; detail: string };
+	if (!verify.ok) {
+		throw new Error(`re-synced ${processType} protocol still doesn't match live calibration: ${verify.detail}`);
+	}
+
+	await auditResync(robotId, processType, current?.opentronsProtocolId ?? null, uploaded.opentronsProtocolId, staleDetail, username, 'queue');
 
 	return {
 		opentronsProtocolId: uploaded.opentronsProtocolId,

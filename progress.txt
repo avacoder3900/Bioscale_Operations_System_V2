@@ -16288,6 +16288,172 @@ Retrieve this exact code: git checkout master at commit 9c2d8b30
 What this deployment is for: sweep coverage refusal + reachable sweep/compare pages
 
 ================================================================================
+2026-09-25 — feat/ot2-tailnet-direct — OT2-TAILNET-4: BIMS talks to OT-2s over Tailscale (B14 pilot), one protocol / two transports
+================================================================================
+B14 is on the tailnet (ot2-b14, https://ot2-b14.tailf65a70.ts.net — see OT2-TAILNET-3 §13 for the
+hands-on log: SSH key via /server/ssh_keys (RSA only), tailscale 1.102.4 userspace mode under
+/data/tailscale, systemd unit scripts/ot2-tailscale.service, serve :443 -> :31950, CORS echoes any
+origin). This branch makes BIMS use it without mixing lines and without touching B07/R04.
+
+Design (docs/prds/OT2-TAILNET-4-DIRECT-TRANSPORT.md):
+- ONE implementation of each interactive verb: src/lib/opentrons/ot2-protocol.ts (isomorphic)
+  holds run.get / run.action (resume->play, 4xx->409 conflict) and the maintenance motion verbs
+  (sendMaintenanceCommand incl. the failed-201 check, leftZ->z, drop-tip no-tip rule, the routes'
+  validation messages). MOVED from the route handlers + maintenance.ts, not copied. The BIMS
+  routes now run it over serverTransport (proxy.ts -> queue on Vercel); the browser runs the same
+  function over fetch(directUrl). Same status + JSON either way.
+- TWO keys before any robot goes direct: OpentronsRobot.connection.mode='tailnet' + valid
+  directUrl (per robot, set on /opentrons/devices/[id]/edit, AuditLog 'connection_update') AND
+  env OT2_TAILNET_ROBOT_IDS lists it (per deployment; same matching as DECK_HARDENING_ROBOT_IDS —
+  rollout.ts now exports robotMatchesTokens/parseRobotTokens for both). Unset = all queue.
+  Previews share prod Mongo, so the env key is what makes Preview the test environment.
+- Browser session (src/lib/opentrons/direct-client.ts): decides the line ONCE per page
+  (/connection + a 1.5 s /health probe from THIS computer); a direct no-answer falls back to the
+  queue for the rest of the page, visibly, retrying that call via BIMS — except a relative jog,
+  which is never retried (could double-move). Robot 4xx/5xx is an answer, not a failover. Re-reads
+  /connection every 5 s: busy flag (claimed sweep/deck_scan/calibrate_tip -> motion via queue)
+  and the per-robot kill switch.
+- Trace: new ot2_direct_calls collection (Ot2DirectCall, 3-day TTL like Ot2BridgeCommand),
+  batch-posted by the browser to POST /api/opentrons-lab/robots/[id]/direct-calls.
+- UI: TransportPill (direct / busy / queue + retry) in EmbeddedRunController (wax + reagent fill)
+  and the deck-calibration studio + scanner-positions teach page; new /opentrons/connectivity
+  fleet page (line in use + why, live probe from this browser, bridge heartbeat, direct calls 24h);
+  Connection section on the robot edit page; Connectivity item in the OT-2 sidebar.
+- Stays on the queue by design: anything writing BIMS records (start/cancel/finish run, maint
+  open/close, load-labware, pick-up-tip, force-reset, protocol upload) and all daemon jobs.
+  RAW direct-IP paths (opentrons-clone etc.) untouched — out of scope.
+
+Files: new src/lib/opentrons/{ot2-protocol,direct-client}.ts (+tests),
+src/lib/server/opentrons/{transport,connection}.ts (+test), models/ot2-direct-call.ts,
+api/opentrons-lab/robots/[id]/{connection,direct-calls}, routes/opentrons/connectivity,
+components/opentrons/TransportPill.svelte. Modified: opentrons-robot model (+connection),
+models/index, maintenance.ts (motion delegates), rollout.ts (shared token matcher), the 8 run/
+maintenance-motion routes (now thin), edit page, EmbeddedRunController, deck-calibration +
+scanner-positions pages, opentrons +layout.svelte.
+
+Tests: npm run test:unit 211/211 (46 new: protocol parity vs old route behaviour, the two-key
+gate incl. "B07/R04 can never resolve tailnet", session failover/sticky/jog-no-retry/busy/
+queue-never-leaves-origin). Also ran runVerb against the REAL B14 over the tailnet (read-only:
+/health, GET /runs 564 ms, run.get of a missing run -> robot's 404 body passed through as 200,
+same as the route).
+npm run check: 87 errors — identical to this worktree's pre-change baseline (the 75+ extra vs the
+logged 12 are "Cannot find module" from a junctioned node_modules that predates master's new deps
+— @modelcontextprotocol/server, zod, xyflow — none in touched files). 441 warnings, unchanged.
+
+NOT DONE / needs the user: Vercel Preview env OT2_TAILNET_ROBOT_IDS=b14 (Production stays unset);
+set B14's Connection on the edit page; hardware test on a real run; tailnet ACL (TAILNET-3 S4) —
+until then any tailnet device can reach B14's unauthenticated API.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-puiscpnib.vercel.app
+Source: branch feat/ot2-tailnet-direct @ commit 34c6c58d7
+Retrieve this exact code: git checkout feat/ot2-tailnet-direct at commit 34c6c58d7
+  (or: git log feat/ot2-tailnet-direct --oneline to find it if the branch has since moved on)
+What this deployment is for: OT2-TAILNET-4 B14 pilot — inert until Vercel Preview env
+  OT2_TAILNET_ROBOT_IDS=b14 is set (+ redeploy) and B14's Connection is set to Tailnet on the edit
+  page. Smoke: /opentrons/connectivity + the new API routes answer 302 unauthenticated (no 500s).
+
+2026-09-25 (later) — feat/ot2-tailnet-direct — fix: Chrome Local Network Access held every direct call
+First real test on the preview: /opentrons/connectivity showed B14 "Allowed here: yes" but the
+browser probe timed out, while curl from the same PC got /health in 0.47 s. Root cause (verified in
+Chrome 153 on alejandros-pc): Chrome's Local Network Access gate — a public origin (*.vercel.app)
+reaching a private address (Tailscale 100.x) needs a one-time per-origin permission; while it is
+'prompt' Chrome HOLDS the request (a non-gesture fetch shows no prompt), which is indistinguishable
+from an unreachable robot. Fix: the session now queries the permission first — 'prompt' → stay on
+queue WITHOUT probing and offer an "allow direct" button (the click's probe waits up to 60 s for the
+operator's Allow); 'denied' → queue with the site-settings instructions. Connectivity page gets an
+"Allow direct link" banner. Permission is per origin: production's address is stable, but every
+preview URL is a new origin (use the branch alias URL for repeat testing).
+test:unit 213/213 (+2); npm run check 87 errors = baseline.
+
+================================================================================
+2026-09-25 — feat/ot2-tailnet-direct — OT2-TAILNET-4 option 1: maintenance open/close, load-labware, pick-up-tip over the tailnet
+================================================================================
+Preview test by the user worked (B14 direct; jog 270 ms avg / position 74 ms avg over 67 calls, 0
+failures). Remaining studio calls that still went through the queue are now on the robot's line too.
+
+Pattern: each verb = ROBOT half (in $lib/opentrons/ot2-protocol, run over either line) + BIMS half
+(always server). Moved into ot2-protocol from maintenance.ts: SlotOccupiedError, clearStaleProtocolRun
+(never stops an ACTIVE run), open/closeMaintenanceRun, discoverPipette, loadPipetteInRun,
+registerLabwareDefinition, loadLabwareInRun (hardened rule now an explicit flag the server decides),
+pickUpTip; new verbs mx.open / mx.close / mx.loadLabware / mx.pickUpTip. Ot2Transport gained delete.
+BIMS half: new src/lib/server/opentrons/maintenance-records.ts — resolveLabwareForRobot (definition +
+blob identity, as the routes did) and applyMaintenanceRecord (AuditLog maintenance_run_open/close with
+line:'queue'|'tailnet'; studio tip-cursor advance → nextTipWell). The four routes are now thin
+(verbResponse writes the record inline). The browser gets the same halves via two new endpoints:
+GET /api/opentrons-lab/labware/resolve and POST /api/opentrons-lab/robots/[id]/direct-record.
+/connection now also returns `hardened` (DECK_HARDENING_ROBOT_IDS) so both lines apply the same rule.
+Session: resolves the definition before, posts the record after; a record failure never turns a
+robot success into an error (recordError field). pick-up-tip joins jog as never-auto-retried on
+failover. All maintenance verbs defer to the queue while a sweep/deck-scan/tip-cal runs. Studio page
+pick-up-tip now via the session; the page-UNLOAD close stays a same-origin keepalive to BIMS (the one
+request that reliably survives the page closing).
+test:unit 227/227 (+14); npm run check 87 = baseline. Read-only hardware: shared discoverPipette vs
+B14 over the tailnet → p300_single_gen2/left in 556 ms (B14 had a maintenance run left open).
+
+================================================================================
+2026-09-25/26 — feat/ot2-tailnet-direct — OT2-TAILNET-5 round 1 (workflow): fill lifecycle, Opentrons UI, daemon /bridge
+================================================================================
+Built via workflow ot2-tailnet-everything (run wf_9dda6c50-350; 1 planner + 3 executors on disjoint
+file contracts; ~659k output tokens). PRD docs/prds/OT2-TAILNET-5-EVERYTHING-OVER-TAILNET.md.
+Unit 1 fill lifecycle (S1-S4 + S8 run-record half): new shared verbs run.list/create/stop/commands/
+ensureFresh/uploadProtocol + mx.command and the tip-tracker / filled-well parsers in ot2-protocol.ts;
+multipart via FormData (serverTransport routes it to proxy's upload path, so the queue still uses the
+upload_protocol bridge kind); queue route POST /api/opentrons-lab/robots/[id]/verb (allowlisted);
+run-lifecycle-records.ts holds the BIMS halves split from the wax/reagent page servers (idempotent
+confirms, line stamped in AuditLog); startIntent subdoc on WaxFillingRun/ReagentBatchRecord + load
+reconcile + 'start interrupted' banner; prepare/confirm actions and page wiring; deck-cal Sync,
+robots/[id]/protocols POST and protocols/deploy on the same shape; robots/[id]/protocols GET via robotGet.
+Unit 2 Opentrons UI (S7, S8 poller half, S10a-d): isomorphic robot-client.ts (openapi-fetch, injected
+fetch), RobotSession.robotFetch, generic /relay queue route, every /opentrons-clone page + the legacy
+/opentrons device/run/protocol pages load in the browser via the session; /api/opentrons-clone/**
+removed; health-poller + health-stream SSE retired; signed expiring operator cookie (a hand-set 'ok'
+no longer passes).
+Unit 3 daemon (S5, S6 server halves, S9): ot2-bridge.py /bridge ThreadingHTTPServer on 127.0.0.1:31960
+with HMAC token + CORS allowlist + ONE WorkQueue shared with the long-poll; bridge-token lib + route;
+browser bridge-client.ts; jobs sweep-progress endpoints; provision script scripts/ot2-tailnet-provision.sh
+(serve --set-path=/bridge, secret via stdin); scripts accept tailnet ROBOT_HOST (ot2-robot-host.cjs);
+connectivity page Daemon column.
+Integration: main loop fixed 5 type errors (env typing into operatorCookieSecret, 2 test call sites).
+test:unit 386/386 (24 files); python -m unittest test_ot2_bridge_server 19 OK; npm run check 87 =
+baseline, 0 in feature files.
+NOT verified on hardware (no robot calls, no redeploy): all robot ACs. Known gaps for round 2: pages do
+not yet submit sweeps/deck-scan/calibrate-tip/tip-swap/auto-resume/restart to /bridge; relay lacks PUT;
+LPC still uses robot-client maintenanceCommand instead of session mx.command.
+Needs the user: OT2_BRIDGE_TOKEN_SECRET (Preview env + B14 via provision script); B14 daemon redeploy.
+
+================================================================================
+2026-09-26 — feat/ot2-tailnet-direct — OT2-TAILNET-5 round 2 (workflow): every daemon job on the tailnet line
+================================================================================
+Workflow ot2-tailnet-everything-r2 (run wf_3d323c13-e5c; 1 planner + 3 executors). First attempt died
+mid-edit on a pxpipe proxy outage (502 upstream unreachable) — resumed the same run with the plan
+cached; executors reviewed and finished the partial edits.
+U1 session/bridge/relay/LPC: RobotSession.bridge() — ONE BridgeClient per session, non-null only when
+the line is direct AND /connection says bridgeJobs (bridgeJobGate: tailnet robot + allowed here +
+OT2_BRIDGE_TOKEN_SECRET); one token across kinds; job starts logged as 'bridge:<kind>' in
+ot2_direct_calls, never retried or re-routed to the queue; gantry jobs set session busy. proxy.ts
+robotPut + relay PUT (clone clientData / system time over the queue). LPC uses session.call
+('mx.command') so its fallback is POST /verb. OpentronProtocol.deployments[].line. Queue progress
+route golden-tested against the shared sweepProgressUpdate.
+U2 fill pages: sweeps + deck scan (both DeckLoadingGrids, wax orchestration), tip swap, auto_resume
+after a tailnet start confirm, robot-server restart — on the tailnet line: server prepare (BIMS rows
+first) -> bridge submit -> live /bridge/jobs progress -> server record; queue line unchanged.
+New src/lib/opentrons/fill-bridge-jobs.ts.
+U3 studio + scanner tools: calibrate-tip and test-scans (scanner-positions teach, opentron-control
+scanner-test) over /bridge; new src/lib/opentrons/studio-bridge-jobs.ts; connectivity 'jobs:' line.
+test:unit 486/486 (29 files); daemon python 19 OK; npm run check 87 = baseline.
+NOT verified on hardware: needs OT2_BRIDGE_TOKEN_SECRET (Preview env + B14 via
+scripts/ot2-tailnet-provision.sh) and the B14 daemon redeploy — both awaiting the user.
+Known leftovers: no unit tests for the tailnet abandon branches in sweep/[id], restart-server and
+the tip-swap prepares; deck-calibration doesn't abort pollJob on unmount (matches queue behaviour);
+run-lifecycle.pollRunStatus is now dead code.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-kt456enng-brevitest.vercel.app
+Source: branch feat/ot2-tailnet-direct @ commit 617e0d3a1
+Retrieve this exact code: git checkout feat/ot2-tailnet-direct at commit 617e0d3a1
+  (or: git log feat/ot2-tailnet-direct --oneline to find it if the branch has since moved on)
+What this deployment is for: OT2-TAILNET-5 rounds 1+2 (fill lifecycle, Opentrons UI, daemon jobs over
+  the tailnet). Daemon-job paths inert until OT2_BRIDGE_TOKEN_SECRET is set and B14's daemon redeployed.
+================================================================================
 2026-09-25 — master — four units swept; the channel deficit is the JIG, not the SPUs
 ================================================================================
 Swept 247 (session va9dLUSqBUvwpBlip4P3h) and 244 (session -i9MMeJJg_CH7qIJEBEH9),
@@ -16975,6 +17141,127 @@ What this deployment is for: on-tablet test of the Capture ↔ cartridge/station
   GitHub deployment 6762152984 (Production). Smoke: /login 200.
 
 ================================================================================
+2026-09-30 — feat/ot2-tailnet-direct — merged origin/master (47 commits) into the tailnet branch
+================================================================================
+Two conflicts. wax-filling +page.server.ts: the branch had moved cancel/abort into the shared
+stop path (run-lifecycle-records.stopConfirm), while master's bucket system rewrote that same body
+to return carts to their bucket pass (revertToBacked -> bucket-service.returnCarts; test-mode carts
+flagged backing.synthetic). Ported revertToBacked into run-lifecycle-records so the queue line and
+the tailnet line both return carts to their bucket. Test mock gained CartridgeRecord.find + a
+returnCarts stub. progress.txt: kept both sides.
+test:unit 504/504 (30 files). npm run check 106 errors — new baseline from master (bims-mcp.ts 81,
+roadmap/assembly svelte, research-proxy); every file with an error is byte-identical to origin/master.
+No robot touched.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-ig7r56yly.vercel.app
+Source: branch feat/ot2-tailnet-direct @ commit 359b83b82
+Retrieve this exact code: git checkout feat/ot2-tailnet-direct at commit 359b83b82
+  (or: git log feat/ot2-tailnet-direct --oneline to find it if the branch has since moved on)
+What this deployment is for: TAILNET-4/5 rebased onto current master (bucket system) before hardware testing.
+
+================================================================================
+2026-09-30 — feat/ot2-tailnet-direct — OT2-TAILNET-5 S5 on B14: /bridge job server live over the tailnet
+================================================================================
+- OT2_BRIDGE_TOKEN_SECRET generated (openssl rand -base64 48; Windows openssl appended a \r, stripped —
+  64 chars) into ~/.bims/ot2-bridge-secret (600, outside the repo) and added to Vercel **Preview only**
+  (Sensitive). Production untouched. OT2_TAILNET_ROBOT_IDS already Preview-only. B14's OpentronsRobot
+  (8LufEAi5sYJ5JRk_fTfT7) already had connection.mode tailnet + directUrl https://ot2-b14.tailf65a70.ts.net.
+- B14 daemon 1.0 → 1.1: pushed via ssh cat to ot2-bridge.py.new, py_compile on the robot, then swapped in;
+  1.0 kept as /data/ot2-bridge/ot2-bridge.py.v1.0.bak. md5 matches the repo (a579ac00…).
+- scripts/ot2-tailnet-provision.sh b14 (robot idle, no current run): BRIDGE_TOKEN_SECRET + BRIDGE_ROBOT_ID
+  into .env, tailscale serve / → :31950 and /bridge → 127.0.0.1:31960, ot2-bridge restarted.
+- Verified: /bridge/health no token 401, malformed token 401, minted token 200 {version ot2-bridge/1.1,
+  jobServer:true, serialOpen:true, /dev/scanner}; ot2-bridge active; queue long-poll still running.
+- B07/R04 untouched (still 1.0, no /bridge).
+- Still open: B14's BIMS_BASE_URL points at an old feature preview (…git-feat-de-52…), not this branch —
+  sweep progress/heartbeat reports go there. No browser test of the tailnet line yet. Reboot test (S3) not run.
+Rollback on B14: cp ot2-bridge.py.v1.0.bak ot2-bridge.py; drop BRIDGE_TOKEN_SECRET from .env;
+  tailscale serve --https=443 --set-path=/bridge off; systemctl restart ot2-bridge.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-git-feat-ot-2ae11c-brevitest.vercel.app
+  (this build: https://bioscale-operations-system-mongodb-3cbydfrsi-brevitest.vercel.app)
+Source: branch feat/ot2-tailnet-direct @ commit 0b4f92587
+Retrieve this exact code: git checkout feat/ot2-tailnet-direct at commit 0b4f92587
+  (or: git log feat/ot2-tailnet-direct --oneline to find it if the branch has since moved on)
+What this deployment is for: first preview with OT2_BRIDGE_TOKEN_SECRET — B14 tailnet-line test.
+Deployment: robot — B14 / muddy-water / ot2-b14.tailf65a70.ts.net, ot2-bridge 1.1 + /bridge serve path.
+
+================================================================================
+2026-09-30 — feat/ot2-tailnet-direct — run-integrity pass (daemon 1.2 on B14) after a tailnet line audit
+================================================================================
+Audit (3 read-only passes over the branch): fill-page start/pause/resume/finish/cancel, protocol import,
+deck-cal Sync, LPC/maintenance, device live reads, opentrons-clone, tip-cal, deck scan, test scan all go
+direct over Tailscale with queue fallback. Queue-only still: legacy /opentrons runs/new + run-detail
+controls, device identify/home/lights, protocol delete, force-reset, per-slot ScannerTrigger rescans,
+page-load reconciles (server-initiated). Live CORS preflight from the branch preview origin passes on the
+robot API (/runs, /protocols) and /bridge/jobs.
+Run-integrity fixes (user priority: no stalls, no resets from connection errors), commit 6002a7024:
+- DAEMON clear_stale_protocol_run used to STOP any paused run the operator didn't pause — incl. the
+  protocol's own protocol.pause() ("tiprack exhausted") and the start-of-run pause — whenever a
+  scan/sweep/calibration opened a maintenance run. Now only stop-requested or idle>10min runs are cleared.
+- DAEMON robot-server restart: auto-heal refuses unless /runs is readable and holds no live run; the
+  manual button refuses a readable live run. auto_resume_run idempotent (declines after >1 'play') and on
+  its own thread (no longer blocks the serial worker 75 s). /bridge sweep progress cancels only on an
+  explicit cancelRequested:true — 404 from a deployment without the jobs routes used to kill every sweep.
+- BIMS: ?/autoResumeFallback when the /bridge auto-resume hand-off fails; browser auto-resume checks the
+  robot action log; RobotSession self-heals a fallback every 30 s (re-reads /connection first);
+  restart over Tailscale reports the daemon's refusal.
+Tests: daemon 29 OK (+10), test:unit 508/508, npm run check 106 = baseline.
+B14: ot2-bridge 1.2 deployed (robot idle; 1.1 kept as ot2-bridge.py.v1.1.bak, 1.0 as .v1.0.bak), md5
+0e380b34…, /bridge/health 200 with token (jobServer, serialOpen, engineOk), 401 without.
+Still open: B14 BIMS_BASE_URL → old feature preview (no jobs routes: sweep won't record in BIMS);
+queue-line stale-bundle start can exceed the 60 s action; /bridge jobs are in daemon memory only;
+/bridge busy state not shared across browsers; legacy /opentrons pages still queue-only.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-git-feat-ot-2ae11c-brevitest.vercel.app
+Source: branch feat/ot2-tailnet-direct @ commit 6002a7024
+Retrieve this exact code: git checkout feat/ot2-tailnet-direct at commit 6002a7024
+What this deployment is for: run-integrity fixes on the tailnet line.
+Deployment: robot — B14 / ot2-b14.tailf65a70.ts.net, ot2-bridge 1.2 (scripts/ot2-bridge.py @ 6002a7024).
+
+================================================================================
+2026-09-30 — feat/ot2-tailnet-direct — B14 daemon reports now go to this branch's preview
+================================================================================
+B14 /data/ot2-bridge/.env BIMS_BASE_URL: old feat-de-52595e preview (no /api/agent/ot2/jobs routes) →
+https://bioscale-operations-system-mongodb-git-feat-ot-2ae11c-brevitest.vercel.app (branch alias, stable
+across pushes). Robot idle; backup .env.bak-20260930 (600); ot2-bridge restarted on 1.2, no warnings.
+Verified: scanner_events hb:ot2-b14-bridge refreshed 9 s after restart with version ot2-bridge/1.2, so the
+preview accepts B14's agent key. Tailnet sweep progress/results will now land in BIMS.
+NOTE: B14's queue line now serves this preview — prod BIMS still sees B14 heartbeats (shared Mongo) but
+anything prod enqueues for B14 is polled by this daemon from the preview's routes; revert before merging.
+Rollback: cp .env.bak-20260930 .env && systemctl restart ot2-bridge.
+
+================================================================================
+2026-10-02 — feat/ot2-tailnet-direct — B14 live over Tailscale from the lab Mac; setup-stage connection pill
+================================================================================
+Lab Mac rejoined the tailnet as imac-1 (old `imac` node stale, offline 86 d — delete in admin console).
+Live-monitored B14 (robot API journal, daemon, run state, Mongo change streams). Findings:
+- Earlier tests today ran from PRODUCTION BIMS (no `line` on audit rows, 0 ot2_direct_calls) → all queue.
+  Once on the branch preview: reagent run jr1ZzWWJ… (robot run 78793f94) — status reads 65–100 ms direct,
+  resume 270 ms / pause 164 ms / stop 280 ms as [DIRECT] run.action, finish record + cancel both
+  line:'tailnet', 0 queue commands for them. Deck scan via /bridge: token issued (audited), POST
+  /bridge/jobs 202 in 80 ms, scanned DECK-003, result + confirm audit rows line:'tailnet'.
+- Daemon 1.2 auto_resume_run resumed the initial pause once (actions play,play), queue line.
+- Wax on B14 fails by design: FailedToLoadPipetteError — protocol line 374 loads p20_single_gen2 on
+  the right mount, B14 has p1000_single_v2.2. Reagent (p300 left) runs fine on B14.
+- A queue-line wax start that had to re-upload the protocol overran the 60 s action (known gap); a
+  duplicate start attempt was absorbed (its POST /runs expired in the queue; one robot run created).
+- Two pages (prod + preview) recorded the same finish → close prod while testing on the preview.
+- B14 Wi-Fi: 2.4 GHz ch 6, -49 dBm but 6.5 Mbit/s rx, 3389 retries — repeated direct→DERP relay flips and
+  robot→BIMS read timeouts. Recommend Ethernet for all robots.
+- Stop mid-move left smoothie "Alarm lock" (normal after a hard stop) — home before next run.
+- SLIP: a latency probe POSTed 2 ScannerEvent rows (eventType error, deviceId ot2-b14-bridge-probe,
+  source latency-probe) into prod Mongo; not cleaned up yet (awaiting user OK).
+Change (commit 958f84e3f): TransportPill at the top of the wax + reagent pages on every stage (setup,
+loading, deck scan) so the operator sees/fixes the line BEFORE Start; stale "never flips back" comment fixed.
+npm run check 106 = baseline.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-git-feat-ot-2ae11c-brevitest.vercel.app
+Source: branch feat/ot2-tailnet-direct @ commit 958f84e3f
+Retrieve this exact code: git checkout feat/ot2-tailnet-direct at commit 958f84e3f
+What this deployment is for: connection pill visible during run setup on the fill pages.
+
+================================================================================
 2026-09-30 — feat/post-mortem-tablet-hide-askbims → master — Post-Mortem Inspect: vertical Capture bar
 ================================================================================
 More touch-only (`pointer: coarse`) changes for the landscape tablets; mouse-driven desktops unchanged.
@@ -17605,6 +17892,28 @@ Connector 3.7.0: research_reagent_lot_list/get/create, research_inventory_origin
 research_curve_set_list, research_fill_lot_set_reagent_lot; research_fill_lot_assign_curve_set HUMAN-ONLY.
 Proxy allowlist: + reagent-lots, reagent-inventory/originate. test:unit 198 pass; vite build clean
 (adapter-vercel file trace fails locally on C:swapfile.sys — Windows only). Deployed via GitHub push.
+
+================================================================================
+2026-10-02 — master — PR #77 merged: OT-2 over Tailscale (TAILNET-4/5) + run-integrity fixes, LIVE in production
+================================================================================
+feat/ot2-tailnet-direct merged to master (merge commit 404db137c, PR #77, branch head 080e0f97c). Before the merge
+origin/master (71 commits) was merged into the branch: wax/reagent page-server conflicts resolved by porting
+master's State Change no-bucket carts (backing.manualBackedAt) into run-lifecycle-records.revertToBacked
+and the 3.7.0 reagent lot stamp (reagentFilling.reagentLotId/Number) into finalizeReagentRun.
+test:unit 515/515, daemon 29 OK, npm run check 115 = master's own baseline (no new errors).
+Production check: POST /api/agent/ot2/jobs/<id>/progress → 401 (was 404 this morning) — the new code is
+serving. All 3 robots idle at merge time.
+INERT IN PRODUCTION until enabled: Production env has neither OT2_TAILNET_ROBOT_IDS nor
+OT2_BRIDGE_TOKEN_SECRET (both Preview-only), so every robot stays on the queue line in prod.
+Robot state: B14 daemon 1.2, reports to the branch preview (repoint to prod next); B07/R04 daemon 1.0
+(queue-compatible) — onboard per docs/OT2-TAILNET-ADD-ROBOT-RUNBOOK.md.
+
+Deployment: production — https://bioscale-operations-system-mongodb-oo7y0nghk-brevitest.vercel.app
+  (served at https://bioscale-operations-system-mongodb.vercel.app)
+Source: branch master @ commit 404db137c
+Retrieve this exact code: git checkout master at commit 404db137c
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: OT-2 tailnet transport + /bridge jobs + run-integrity fixes (inert until enabled).
 2026-10-02 — feat/find-cart-bucket-pills — Buckets: Find a cart shows the bucket nickname + colour-coded pills
 ================================================================================
 Branched from feat/drop-pressed-stage @ b3f74612 (stacked: it needs that branch's isBucketStatus /
