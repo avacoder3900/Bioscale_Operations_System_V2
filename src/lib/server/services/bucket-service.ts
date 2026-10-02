@@ -11,11 +11,15 @@
  *     into a bucket. That scan is the cartridge's birth: a CartridgeRecord is
  *     created at status 'barcoded'. A bucket pass is therefore a MEMBERSHIP LIST of
  *     cartridge ids, not a count.
- *   - Stages: barcoded → unpressed → pressed → backing, all inside the bucket.
+ *   - Stages: barcoded → unpressed → backing, all inside the bucket. (A fourth
+ *     stage 'pressed' sat between Unpressed and Backed until 2026-10-02; the user
+ *     judged it redundant — pressing and backing happen in one go — so Unpressed
+ *     now advances straight to Backed. The key stays in the model enums for
+ *     historical rows; see LEGACY_PRESSED_STAGE.)
  *     'backing' ("Backed") is a storage stage: the tub sits on the shelf until
  *     the operator clicks "Move to oven" — that frees every cart from the bucket
  *     and returns the tub to Available, nothing else. Carts keep status
- *     'backing' until wax filling scans them in (pressed → backed → wax filled);
+ *     'backing' until wax filling scans them in (unpressed → backed → wax filled);
  *     the board lists the freed ones under "In oven" inside the Backed column
  *     (2026-09-25; the WI-01 "Cartridge Back" page and its LotRecord session
  *     were removed). No oven equipment, no oven entry time, no cure-time gate
@@ -47,15 +51,25 @@ import { splitMergedBarcodes, hardDeleteUnfinalizedCartridges } from './cartridg
 import { generateBarcode } from './barcode-generator';
 import { consumeThermoseal, creditThermoseal, ThermosealError, THERMOSEAL_PART, type ConsumeResult } from './thermoseal-service';
 
-export const BUCKET_STAGES = ['barcoded', 'unpressed', 'pressed', 'backing'] as const;
+export const BUCKET_STAGES = ['barcoded', 'unpressed', 'backing'] as const;
 export type BucketStage = (typeof BUCKET_STAGES)[number];
 
 export const STAGE_LABELS: Record<BucketStage, string> = {
 	barcoded: 'Barcoded',
 	unpressed: 'Unpressed',
-	pressed: 'Pressed',
 	backing: 'Backed'
 };
+
+/**
+ * 'pressed' was the stage between Unpressed and Backed until 2026-10-02 (user:
+ * redundant). It is no longer a board stage, but an open pass or a cart can still
+ * sit at it, so: it still counts as "inside the bucket system" (isBucketStatus),
+ * it is shown in the Unpressed column (boardStage) and it advances to Backed
+ * (nextStage) — no thermoseal is consumed on that move, the roll was debited when
+ * the pass entered Unpressed. Nothing writes 'pressed' any more.
+ */
+export const LEGACY_PRESSED_STAGE = 'pressed';
+export type BucketStatus = BucketStage | typeof LEGACY_PRESSED_STAGE;
 
 /**
  * The last bucket stage. Cart status 'backing' is what wax filling's deck load
@@ -100,7 +114,27 @@ export function isBucketStage(s: unknown): s is BucketStage {
 	return typeof s === 'string' && (BUCKET_STAGES as readonly string[]).includes(s);
 }
 
-export function nextStage(stage: BucketStage): BucketStage | null {
+/** True for every status a cart or pass can have while still inside the bucket system, legacy 'pressed' included. */
+export function isBucketStatus(s: unknown): s is BucketStatus {
+	return isBucketStage(s) || s === LEGACY_PRESSED_STAGE;
+}
+
+/** The board column a stored stage belongs to (legacy 'pressed' → Unpressed); null when it is not a bucket status. */
+export function boardStage(s: unknown): BucketStage | null {
+	if (isBucketStage(s)) return s;
+	if (s === LEGACY_PRESSED_STAGE) return 'unpressed';
+	return null;
+}
+
+/** Display label for a stored stage, legacy 'pressed' included. */
+export function stageLabel(s: unknown): string {
+	if (isBucketStage(s)) return STAGE_LABELS[s];
+	if (s === LEGACY_PRESSED_STAGE) return 'Pressed (legacy)';
+	return typeof s === 'string' && s ? s : 'unknown';
+}
+
+export function nextStage(stage: BucketStatus): BucketStage | null {
+	if (stage === LEGACY_PRESSED_STAGE) return BACKED_STAGE;
 	const i = BUCKET_STAGES.indexOf(stage);
 	return i >= 0 && i < BUCKET_STAGES.length - 1 ? BUCKET_STAGES[i + 1] : null;
 }
@@ -494,8 +528,7 @@ export async function cartStatusLine(code: string): Promise<CartStatusLine> {
 	}
 
 	const status = String(cart.status ?? '');
-	const label = isBucketStage(status) ? STAGE_LABELS[status as BucketStage]
-		: status || 'unknown';
+	const label = stageLabel(status);
 
 	const parts: string[] = [`${cart._id} · ${label}`];
 	// Where it belongs = the open pass whose member list names it (2026-09-25, for
@@ -503,14 +536,14 @@ export async function cartStatusLine(code: string): Promise<CartStatusLine> {
 	// `bucket.cycleId`, which an audit "take off pass" or a merge can leave stale.
 	const home = await BucketCycle.findOne({ status: 'open', cartridgeIds: cart._id }).select('bucketId cycleNumber stage').lean() as any;
 	if (home) {
-		parts.push(`belongs in bucket ${home.bucketId} #${home.cycleNumber} (${STAGE_LABELS[home.stage as BucketStage] ?? home.stage})`);
+		parts.push(`belongs in bucket ${home.bucketId} #${home.cycleNumber} (${stageLabel(home.stage)})`);
 	} else if (cart.bucket?.cycleId) {
 		const cycle = await BucketCycle.findById(cart.bucket.cycleId).select('bucketId cycleNumber stage status').lean() as any;
 		if (cycle) {
 			const where = `bucket ${cycle.bucketId} #${cycle.cycleNumber}`;
 			parts.push(cycle.status === 'open' ? `on no open pass — last in ${where}, taken off` : `last seen in ${where}, pass closed`);
 		}
-	} else if (isBucketStage(status)) {
+	} else if (isBucketStatus(status)) {
 		parts.push('on no open pass');
 	}
 	if (status === BACKED_STATUS && cart.backing?.parentLotRecordId) parts.push(`WI-01 lot ${cart.backing.parentLotRecordId} (legacy)`);
@@ -1027,7 +1060,7 @@ export async function advanceCycle(input: AdvanceCycleInput): Promise<{ cycle: a
 	await connectDB();
 	const cycle = await BucketCycle.findById(input.cycleId).lean() as any;
 	if (!cycle || cycle.status !== 'open') throw new BucketError('Pass is not open.', 404);
-	const from = cycle.stage as BucketStage;
+	const from = cycle.stage as BucketStatus;
 	const to = nextStage(from);
 	if (!to) throw new BucketError(`${cycleLabel(cycle.bucketId, cycle.cycleNumber)} is already ${STAGE_LABELS.backing} — wax filling draws its carts from here.`);
 	if ((cycle.cartridgeIds ?? []).length === 0) throw new BucketError('Scan at least one cart into the bucket before advancing it.');
@@ -1053,7 +1086,7 @@ export async function advanceCycle(input: AdvanceCycleInput): Promise<{ cycle: a
 	}
 
 	if (discardIds.length > 0) {
-		await scrapCartsAs({ cycleId: cycle._id, barcodes: discardIds, journal: `Discarded at ${STAGE_LABELS[from]} → ${STAGE_LABELS[to]}: ${journal}`, user: input.user }, gate);
+		await scrapCartsAs({ cycleId: cycle._id, barcodes: discardIds, journal: `Discarded at ${stageLabel(from)} → ${STAGE_LABELS[to]}: ${journal}`, user: input.user }, gate);
 		if (discardIds.length === members.size) {
 			return { cycle: await BucketCycle.findById(cycle._id).lean(), discarded: discardIds.length, closed: true, thermoseal: null };
 		}
@@ -1077,7 +1110,7 @@ export async function advanceCycle(input: AdvanceCycleInput): Promise<{ cycle: a
 		if (thermosealLot) push.sourceLots = { partNumber: THERMOSEAL_PART, lotId: thermosealLot, scannedAt: now };
 	}
 	await BucketCycle.updateOne({ _id: cycle._id }, { $set: set, ...(Object.keys(push).length ? { $push: push } : {}) });
-	// Pressed → Backed stamps the backing block the way WI-01 used to, minus the
+	// Unpressed → Backed stamps the backing block the way WI-01 used to, minus the
 	// lot: downstream views (pipeline, dashboard, DHR) group backed carts by
 	// backing.bucketCycleId and show who backed them and when.
 	const backedStamp = to === BACKED_STAGE
@@ -1280,7 +1313,7 @@ export async function lookupResidualCart(barcode: string): Promise<ResidualLooku
 	if (await resolveBucketId(code)) return { barcode: code, status: null, stage: null, ok: false, reason: 'That is a bucket label, not a cart.' };
 	const cart = await CartridgeRecord.findById(code).select('_id status').lean() as any;
 	if (!cart) return { barcode: code, status: null, stage: null, ok: false, reason: 'Not a known cartridge — leftovers must have been scanned into a bucket before.' };
-	if (!isBucketStage(cart.status)) return { barcode: code, status: cart.status ?? null, stage: null, ok: false, reason: `Already past the buckets (${cart.status}).` };
+	if (!isBucketStatus(cart.status)) return { barcode: code, status: cart.status ?? null, stage: null, ok: false, reason: `Already past the buckets (${cart.status}).` };
 	const member = await BucketCycle.findOne({ status: 'open', cartridgeIds: code }).select('bucketId cycleNumber').lean() as any;
 	if (member) return { barcode: code, status: cart.status, stage: cart.status, ok: false, reason: `Still a member of ${cycleLabel(member.bucketId, member.cycleNumber)} — discard or un-scan it there.` };
 	return { barcode: code, status: cart.status, stage: cart.status, ok: true };
@@ -1288,7 +1321,7 @@ export async function lookupResidualCart(barcode: string): Promise<ResidualLooku
 
 /**
  * Leftovers found in a tub. Each scanned code must be a known cartridge that
- * is still pre-oven (barcoded / unpressed / pressed) and not a member of any open
+ * is still pre-oven (barcoded / unpressed, or legacy pressed) and not a member of any open
  * pass — i.e. it got left behind. Merge moves them into another open bucket
  * (they take that bucket's stage); scrap discards them; defer quarantines the
  * tub with the list in the note. Everything is validated before any write.
@@ -1307,7 +1340,7 @@ export async function reportResidual(input: ResidualInput): Promise<{ bucket: an
 	const byId = new Map(carts.map(c => [c._id, c]));
 	const unknown = ids.filter(id => !byId.has(id));
 	if (unknown.length) throw new BucketError(`Not known cartridges: ${unknown.join(', ')} — leftovers must have been scanned into a bucket before.`);
-	const tooFar = carts.filter(c => !isBucketStage(c.status));
+	const tooFar = carts.filter(c => !isBucketStatus(c.status));
 	if (tooFar.length) throw new BucketError(`Already past the buckets: ${tooFar.map(c => `${c._id} (${c.status})`).join(', ')}`);
 	const stillMembers = await BucketCycle.find({ status: 'open', cartridgeIds: { $in: ids } }).select('bucketId cycleNumber cartridgeIds').lean() as any[];
 	if (stillMembers.length) {
@@ -1475,21 +1508,21 @@ export async function auditScan(cycleId: string, barcode: string): Promise<Audit
 
 	const status = String(cart.status ?? '');
 	if ((cycle.cartridgeIds ?? []).includes(code)) {
-		return { ...base, status, stage: isBucketStage(status) ? status as BucketStage : null, finding: 'member', note: `${code} belongs here.` };
+		return { ...base, status, stage: boardStage(status), finding: 'member', note: `${code} belongs here.` };
 	}
 
 	const home = await BucketCycle.findOne({ status: 'open', cartridgeIds: code }).select('_id bucketId cycleNumber stage').lean() as any;
 	const homeLabel = home ? cycleLabel(home.bucketId, home.cycleNumber) : null;
 	const homeBits = { homeBucketId: home?.bucketId ?? null, homeCycleId: home?._id ?? null, homeLabel };
 
-	if (!isBucketStage(status)) {
+	if (!isBucketStatus(status)) {
 		return { ...base, ...homeBits, status, finding: 'ineligible',
 			note: `${code} is ${status || 'unknown'} — past the buckets. Take it out of the tub; the board will not move it.` };
 	}
 	return {
-		barcode: code, finding: 'foreign', status, stage: status as BucketStage, ...homeBits,
+		barcode: code, finding: 'foreign', status, stage: boardStage(status) as BucketStage, ...homeBits,
 		note: home
-			? `${code} is a member of ${homeLabel} (${STAGE_LABELS[home.stage as BucketStage]}) — wrong tub.`
+			? `${code} is a member of ${homeLabel} (${stageLabel(home.stage)}) — wrong tub.`
 			: `${code} is ${STAGE_LABELS[status as BucketStage]} and is on no open pass.`
 	};
 }
@@ -1568,7 +1601,7 @@ export async function auditCycle(input: AuditCycleInput): Promise<AuditCycleResu
 	const byId = new Map<string, any>(carts.map(c => [c._id, c]));
 	const unknown = foreign.filter(id => !byId.has(id));
 	if (unknown.length) throw new BucketError(`Not known cartridges: ${unknown.join(', ')}`);
-	const tooFar = carts.filter(c => !isBucketStage(c.status));
+	const tooFar = carts.filter(c => !isBucketStatus(c.status));
 	if (tooFar.length) throw new BucketError(`Past the buckets, so the board will not move them: ${tooFar.map(c => `${c._id} (${c.status})`).join(', ')} — take them out of the tub.`);
 
 	// Where each foreign cart is a member today (so it can be pulled out of that pass).
@@ -1810,7 +1843,7 @@ export async function voidCycle(input: VoidCycleInput): Promise<VoidCycleResult>
 	if (cycle.status === 'voided') throw new BucketError(`${cycleLabel(cycle.bucketId, cycle.cycleNumber)} is already voided.`, 409);
 
 	const born = await CartridgeRecord.find({ 'bucket.cycleId': cycle._id }).select('_id status').lean() as any[];
-	const wentOn = born.filter(c => !isBucketStage(c.status) && c.status !== 'scrapped' && c.status !== 'voided');
+	const wentOn = born.filter(c => !isBucketStatus(c.status) && c.status !== 'scrapped' && c.status !== 'voided');
 	if (wentOn.length > 0) {
 		throw new BucketError(`${wentOn.length} cartridge${wentOn.length === 1 ? '' : 's'} from ${cycleLabel(cycle.bucketId, cycle.cycleNumber)} went on past the buckets (e.g. ${wentOn[0]._id} is ${wentOn[0].status}) — that material was really used, so this pass cannot be voided.`, 409, 'SERIALIZED');
 	}
@@ -1900,8 +1933,8 @@ export async function stageCounts(): Promise<StageCounts> {
 	]);
 	const stages = Object.fromEntries(BUCKET_STAGES.map(s => [s, { buckets: 0, cartridges: 0 }])) as StageCounts['stages'];
 	for (const row of cycleAgg) {
-		const stage: unknown = row._id;
-		if (isBucketStage(stage)) stages[stage] = { buckets: row.buckets ?? 0, cartridges: row.cartridges ?? 0 };
+		const stage = boardStage(row._id); // legacy 'pressed' passes count under Unpressed
+		if (stage) stages[stage] = { buckets: stages[stage].buckets + (row.buckets ?? 0), cartridges: stages[stage].cartridges + (row.cartridges ?? 0) };
 	}
 	stages.backing.cartridges = backedTotal;
 	const byState = new Map(bucketAgg.map(r => [r._id, r.n ?? 0]));
@@ -1957,16 +1990,17 @@ export async function boardData(): Promise<{ cycles: BoardCycle[]; available: Bo
 			{ $sort: { cycleNumber: -1 } },
 			{ $group: { _id: '$bucketId', stage: { $first: '$stage' } } }
 		]) as any[];
-		for (const row of last) if (isBucketStage(row.stage)) lastStageByBucket.set(row._id, row.stage);
+		for (const row of last) { const s = boardStage(row.stage); if (s) lastStageByBucket.set(row._id, s); }
 	}
 	const toBucket = (b: any): BoardBucket => ({
 		bucketId: b._id, barcode: b.barcode ?? null, nickname: b.nickname ?? null, state: b.state, cycleCount: b.cycleCount ?? 0,
 		spotCheckPending: !!b.spotCheckPending, residualNote: b.residualNote ?? null, lastStage: lastStageByBucket.get(b._id) ?? null
 	});
 	return {
-		cycles: cycles.filter(c => isBucketStage(c.stage)).map(c => ({
+		// A legacy 'pressed' pass is listed under Unpressed (boardStage); its Advance goes to Backed.
+		cycles: cycles.filter(c => isBucketStatus(c.stage)).map(c => ({
 			cycleId: c._id, bucketId: c.bucketId, barcode: barcodeByBucket.get(c.bucketId) ?? null, nickname: nicknameByBucket.get(c.bucketId) ?? null, cycleNumber: c.cycleNumber,
-			stage: c.stage, quantity: c.quantity ?? 0, openedQty: c.openedQty ?? 0,
+			stage: boardStage(c.stage) as BucketStage, quantity: c.quantity ?? 0, openedQty: c.openedQty ?? 0,
 			cartridgeIds: c.cartridgeIds ?? [],
 			stageEnteredAt: c.stageEnteredAt ? new Date(c.stageEnteredAt).toISOString() : null,
 			openedAt: c.openedAt ? new Date(c.openedAt).toISOString() : null,
@@ -2033,7 +2067,7 @@ export async function bucketRegistry(): Promise<RegistryRow[]> {
 			bucketId: b._id, barcode: b.barcode ?? null, nickname: b.nickname ?? null, state: b.state ?? 'available', cycleCount: b.cycleCount ?? 0,
 			spotCheckPending: !!b.spotCheckPending, residualNote: b.residualNote ?? null,
 			retiredAt: iso(b.retiredAt), retiredReason: b.retiredReason ?? null, createdAt: iso(b.createdAt), createdBy: b.createdBy?.username ?? null,
-			current: c && isBucketStage(c.stage) ? { cycleNumber: c.cycleNumber, stage: c.stage, quantity: c.quantity ?? 0 } : null,
+			current: c && boardStage(c.stage) ? { cycleNumber: c.cycleNumber, stage: boardStage(c.stage) as BucketStage, quantity: c.quantity ?? 0 } : null,
 			lastActivityAt: iso(lastByBucket.get(b._id))
 		};
 	});
@@ -2101,7 +2135,7 @@ export async function overrideCartStage(input: OverrideInput): Promise<{ from: s
 		if (!destId) throw new BucketError(`"${destRaw}" is not a known bucket.`, 404);
 		dest = await getOpenCycle(destId);
 		if (!dest) throw new BucketError(`Bucket ${destId} has no open pass.`);
-		if (dest.stage !== target) throw new BucketError(`${cycleLabel(destId, dest.cycleNumber)} is at ${STAGE_LABELS[dest.stage as BucketStage]}, not ${STAGE_LABELS[target]}.`);
+		if (boardStage(dest.stage) !== target) throw new BucketError(`${cycleLabel(destId, dest.cycleNumber)} is at ${stageLabel(dest.stage)}, not ${STAGE_LABELS[target]}.`);
 		if (current && current._id === dest._id && from === target) {
 			return { from, to: target, fromCycle: current._id, toCycle: dest._id };
 		}

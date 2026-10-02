@@ -1,6 +1,6 @@
 # Bucket System — Production Buckets, v2 (as built)
 
-**Started:** 2026-09-21 · **Last updated:** 2026-09-30 (**badge gate moved** to scan-in / discards / move to oven, §6.6; earlier that day page-to-page **navigation lag** fixes, §9.1/§9.2/§11, and bucket **nicknames**, §4.1; before that 2026-09-25: thermoseal one roll part; fourth bucket stage **Backed** with **Move to oven**)
+**Started:** 2026-09-21 · **Last updated:** 2026-10-02 (**Pressed stage removed** — Unpressed advances straight to Backed, §2; before that 2026-09-30: **badge gate moved** to scan-in / discards / move to oven, §6.6; earlier that day page-to-page **navigation lag** fixes, §9.1/§9.2/§11, and bucket **nicknames**, §4.1; before that 2026-09-25: thermoseal one roll part; fourth bucket stage **Backed** with **Move to oven**)
 **Branch:** `feat/bucket-system` — **PR #54 open into `master`**
 (https://github.com/avacoder3900/Bioscale_Operations_System_V2/pull/54). `origin/master` has
 been merged into this branch twice (last `33a937a4`); it sits on current production code.
@@ -8,8 +8,8 @@ been merged into this branch twice (last `33a937a4`); it sits on current product
 stale; `main` is older still.
 **Status:** Built and type-checked; deployed to Vercel preview via the GitHub integration only.
 Reviewed by the user on previews; never exercised in production; no automated tests. See §12.
-**Scope:** QR-labelled production buckets that carry cartridges through four stages —
-**Barcoded → Unpressed → Pressed → Backed** (status `backing`) — after which the
+**Scope:** QR-labelled production buckets that carry cartridges through three stages —
+**Barcoded → Unpressed → Backed** (status `backing`) — after which the
 wax-fill operator puts the tub in the oven and scans its carts onto a deck; that deck load draws
 them out of the bucket. A cartridge is *born* when its QR sticker is scanned into a bucket. The
 system also owns **thermoseal roll tracking** (§3.4) and removed oven/cure-time tracking
@@ -53,11 +53,22 @@ written by the bucket system.
 |---|---|---|
 | `barcoded` | Barcoded | Shells with QR stickers on, scanned into the bucket one at a time |
 | `unpressed` | Unpressed | Bucket staged for the press. **Thermoseal is consumed here** (§3.4) |
-| `pressed` | Pressed | Off the press |
+| ~~`pressed`~~ | Pressed | **Removed 2026-10-02** (user: an added layer of redundancy — pressing and backing happen in one go). No longer a board stage; see the callout below for rows still at it |
 | `backing` | Backed | A storage stage: the tub sits on the shelf. **End of the bucket:** *Move to oven* frees the carts and returns the tub (§6.5) — or wax filling's deck load draws carts straight out (§6.4). The stage key is the cart status wax filling already accepts |
 
 Each cartridge's `status` mirrors its bucket's stage while it is a member, so
-`/cartridge-admin?stage=barcoded|unpressed|pressed|backing` filters real records.
+`/cartridge-admin?stage=barcoded|unpressed|backing` filters real records (`pressed` still filters historical rows).
+
+> **Pressed stage removed 2026-10-02.** Unpressed now advances straight to Backed. `BUCKET_STAGES`
+> is `barcoded | unpressed | backing`; the key `pressed` stays in the `BucketCycle.stage` and
+> `CartridgeRecord.status` enums so historical rows validate (`LEGACY_PRESSED_STAGE`). Anything
+> still sitting at it is handled without a data migration: `isBucketStatus()` counts a legacy
+> pressed cart/pass as inside the bucket system (residual, audit, void, state-change all accept it);
+> `boardStage()` lists a legacy pressed pass in the **Unpressed** column and folds it into the
+> Unpressed strip count; `nextStage('pressed')` is Backed, so its Advance button moves it on with
+> the normal `backing.*` stamp and **no thermoseal** (that was taken when it entered Unpressed);
+> `stageLabel()` shows it as "Pressed (legacy)" in cart lookups. Nothing writes `pressed` any more:
+> the override page and the state-change page no longer offer it as a target.
 
 > **Backed stage added 2026-09-25.** Before this, Pressed was the end of the bucket and a
 > separate WI-01 page (scan bucket → session → scan/take-all → confirm) moved carts to `backing`
@@ -81,7 +92,7 @@ Each cartridge's `status` mirrors its bucket's stage while it is a member, so
 
 ### 2.1 Pressing — no SOP exists
 
-`unpressed` / `pressed` are still the working names; there is no pressing SOP in the repo. The
+`unpressed` is still the working name (`pressed` was dropped 2026-10-02); there is no pressing SOP in the repo. The
 "which press" prompt was removed on 2026-09-22.
 
 ## 3. Locked decisions
@@ -109,7 +120,7 @@ Yellow note on the board: **"Inventory is not Debited Until Carts are Scanned in
   debits are retracted (negative rows of the same type, §8).
 - A discarded cart (at advance, via *Scrap*, or as a residual) writes a `scrap` transaction for
   its shell and label. **Thermoseal length is not returned** — it is consumed material.
-- Pressed → Backed and the wax-fill draw debit nothing.
+- Unpressed → Backed and the wax-fill draw debit nothing.
 
 ### 3.4 Thermoseal — ONE part, counted ONLY in rolls, moved ONLY at the bucket phase (2026-09-25)
 
@@ -265,7 +276,8 @@ in `reason` and the first roll id in `relatedId`.
 
 ### 5.2 Pass
 
-`open@barcoded —advance→ open@unpressed —advance→ open@pressed —advance→ open@backing —wax filling loads the last member→ consumed`;
+`open@barcoded —advance→ open@unpressed —advance→ open@backing —wax filling loads the last member→ consumed`
+(a pre-2026-10-02 pass still at `open@pressed` advances to `open@backing` the same way);
 `consumed@backing —wax run cancelled/aborted, tub still free→ open@backing` (`returnCarts`, §6.4);
 `open —all members discarded→ scrapped`; `open|consumed|scrapped —void (admin)→ voided`.
 
@@ -329,7 +341,7 @@ the discard list is non-empty; the move alone is not gated, but a badge scanned 
 on the `advance` row too) → discards scrapped first → all remaining members'
 `status` follows the bucket. **Barcoded → Unpressed** additionally runs `consumeThermoseal` (§3.4)
 silently — nothing about thermoseal appears on the form itself — and shows the result banner
-(cm taken, rolls pulled, floor alert) after the move. **Pressed → Backed** stamps
+(cm taken, rolls pulled, floor alert) after the move. **Unpressed → Backed** stamps
 `backing.recordedAt/operator/bucketCycleId/bucketBarcode` on every member (what WI-01 used to
 write, minus the lot) so the pipeline, dashboard and DHR can group backed carts by pass.
 **Backed** is the end of the bucket: the card shows *Ready for the oven → wax filling* instead
@@ -382,7 +394,7 @@ holder is `ovenReleasedBy` and the operator on the `oven` row. It does two thing
 not a status: `inOvenCarts()` = carts at `backing` on no open pass (freed by Move to oven, returned by a
 cancelled run, or drawn by the old WI-01 page), count + up to 200 ids. The Backed stage count stays
 *every cart at `backing`* (§2, one category). The board's five columns are one row wide from `md` up,
-so Backed sits beside Pressed.
+so Backed sat beside Pressed (four columns since the Pressed column was removed 2026-10-02, §9.1).
 
 ### 6.6 Where the badge is asked for (2026-09-30)
 
@@ -463,7 +475,7 @@ longer calls it — validation happens on submit.
 | Un-scan (Barcoded) | +1 (negative `consumption`) | +1 | — |
 | Barcoded → Unpressed | — | — | **members × 3.75 cm off the open roll**; −1 roll `consumption` only when a roll is pulled (`manufacturingRunId = roll id`) |
 | Discard / scrap / residual scrap | −1 `scrap` | −1 `scrap` | — (length not returned) |
-| Pressed → Backed · wax-fill draw | — | — | — |
+| Unpressed → Backed · wax-fill draw | — | — | — |
 | Void pass | net consumption + scrap returned per lot | same | cm credited to roll(s); pulled rolls stay pulled |
 
 All bucket debits carry `manufacturingRunId = cycleId` except roll pulls. Per-lot "N left" =
@@ -473,9 +485,10 @@ lot quantity − Σ consumption/scrap rows for that lot.
 
 ### 9.1 `/manufacturing/cart-mfg/buckets` — board, rail, thermoseal, logs
 
-Stage strip (Available · Barcoded · Unpressed · Pressed · **Backed** — the Backed
+Stage strip (Available · Barcoded · Unpressed · **Backed** — the Backed
 tile counts every cart at `backing`, its bucket sub-count the open backed passes) →
-5-column board (Available / Barcoded / Unpressed / Pressed / Backed).
+4-column board (Available / Barcoded / Unpressed / Backed; the Pressed column was removed
+2026-10-02 — a legacy pressed pass shows under Unpressed and its Advance goes to Backed, §2).
 Under **Available**: empty buckets only — minting lives on `/buckets/new` (§9.4), reached from
 the header *New bucket* button; there is no inline mint card on the board. Every pass card
 carries **Audit** (§9.8) under its cart list.
@@ -520,7 +533,7 @@ every pass it has run.
 
 ### 9.3 Summary views (read-only, deep-link to the board)
 
-- `/cartridge-admin` strip: Barcoded · Unpressed · Pressed (link to the board) · **Backed** (was "Backed, awaiting
+- `/cartridge-admin` strip: Barcoded · Unpressed (link to the board) · **Backed** (was "Backed, awaiting
   oven** (every cart at `backing`; filters the page to `backing`). The
   *Available* tile was removed 2026-09-23 (user: report only the production stages); the
   board's own strip (§9.1) still counts Available buckets.
@@ -528,7 +541,7 @@ every pass it has run.
   is the dashboard's only Backed card: the top-row *Backed* stat and the Pipeline Flow strip's
   leading *In Oven* card were removed 2026-09-25 (user: redundant) — Pipeline Flow now starts
   at Wax Fill.
-- `/manufacturing/cart-mfg/pipeline?stage=bucket_barcoded|bucket_unpressed|bucket_pressed|backing`.
+- `/manufacturing/cart-mfg/pipeline?stage=bucket_barcoded|bucket_unpressed|backing` (`bucket_pressed` removed 2026-10-02).
   The `backing` view lists backed bucket passes first, then carts outside a pass grouped per
   legacy WI-01 batch (same status, "awaiting oven"), then legacy `BackingLot` aggregates.
 
@@ -547,7 +560,7 @@ sticker — the board's inline Mint card was removed on 2026-09-25, along with i
 
 ### 9.5 `/manufacturing/cart-mfg/buckets/override` — Master Override (admin)
 
-Scan a bucket, pick **Barcoded / Unpressed / Pressed / Backed**, give a reason →
+Scan a bucket, pick **Barcoded / Unpressed / Backed**, give a reason →
 `forceBucketPhase()` puts its open pass there, **bypassing the flow**: no thermoseal
 consumption, no discard prompt, no forward-only order (backwards is allowed). The pass stays
 open at the target (Backed included — it gets the same `backing.*` stamp as a normal advance and
@@ -558,7 +571,7 @@ open passes with a *use* shortcut. Linked from the board header (red button) and
 ### 9.6 `/manufacturing/cart-mfg/state-change` — per-cart manual override (bucket-aware)
 
 The pre-existing bulk State Change page now routes bucket stages through
-`overrideCartStage()`: a target of Barcoded / Unpressed / Pressed / Backed requires a **destination bucket**
+`overrideCartStage()`: a target of Barcoded / Unpressed / Backed requires a **destination bucket**
 (only open passes at that stage are offered) and the cart joins that pass (`merge_in`), leaving
 its old one (`merge_out`; an emptied pass closes like a consumed one); any other target removes
 a bucket member from its pass. No inventory moves. Unknown barcodes are refused for bucket stages.
@@ -671,6 +684,8 @@ per-scan lookup only needs `manufacturing:read`.
 
 | _(feat/badge-gated-steps)_ | **Badge gate moved to the cart-handling steps** (§6.6; §6.1, §6.2, §6.3, §6.5, §7, §9.1, §9.4, §9.8): `requireBadge()` now runs in `scanCartIn` (inside the guard `Promise.all`; mode read + badge lookup in parallel), `scrapCarts` (so advance discards, *Discard carts…*), `auditCycle` (when a stray is discarded or a missing member written off), `reportResidual` (Discard only) and `moveToOven`; removed from `createBucket` and `startCycle`. New `claimCustody()`: the `Custody` row is opened by the badge holder at the first scan-in of a pass (`BucketCycle.custodyId` set then), no longer at start-pass. Gated rows carry `operator` = holder, `enteredBy` = session, `attribution` (+ `custodyId`). Board: one shared `badge` state + `badgeField` snippet on the Barcoded panel, advance (discards only), scrap, audit (discards/write-offs only), residual (Discard only) and Move to oven; a `BDG-` code scanned into any cart box is routed to the badge; `?/scanIn` returns `operator`; start form and `/buckets/new` lose their badge fields. Badge Portal copy updated. No schema change. |
 
+| _(feat/drop-pressed-stage)_ | **Pressed stage removed** (§2, §5.2, §6.3, §7, §9.1, §9.3, §9.5, §9.6, §12.3): `BUCKET_STAGES` is now `barcoded | unpressed | backing`, so Unpressed advances straight to Backed (same `backing.*` stamp; thermoseal still consumed at Barcoded → Unpressed). The key stays in both model enums as `LEGACY_PRESSED_STAGE`; new `isBucketStatus()` / `boardStage()` / `stageLabel()` and a legacy branch in `nextStage()` keep any pass or cart still at `pressed` visible (Unpressed column + count), advanceable (→ Backed, no thermoseal) and accepted by residual / audit / void / state-change — no data migration. Board `md:grid-cols-4`, dashboard + cartridge-admin strips lose the Pressed tile, pipeline loses `bucket_pressed`, override + state-change no longer offer the target. `npm run check`: 14 errors, the pre-existing baseline. |
+
 `npm run check` after v2: **12 errors / 438 warnings** — the same 12 pre-existing (`r2.ts`,
 `AskBimsWidget.svelte`, 8× `assembly/[sessionId]`, 2× `validation/magnetometer/[sessionId]`
 from master). None in any file this branch touches.
@@ -706,7 +721,7 @@ the floor creates a real card and sends real mail on the next board load.
 
 ### 12.3 Decisions still needed from the floor
 
-1. Stage vocabulary (`unpressed` / `pressed`) — labels free, keys are a migration.
+1. Stage vocabulary (`unpressed`) — label free, key is a migration. (`pressed` resolved 2026-10-02: removed.)
 2. Bucket sizing — unconstrained by design.
 3. Cutover — go-forward only: new shells enter buckets; material already on the floor drains
    through the legacy paths.
@@ -718,7 +733,7 @@ the floor creates a real card and sends real mail on the next board load.
 ### 12.4 Known risks
 
 - **Backed stage is untested end to end** (2026-09-25). Not yet exercised on a preview: advance
-  Pressed → Backed; load a deck from a backed bucket and confirm the pass closes and the tub
+  Unpressed → Backed; load a deck from a backed bucket and confirm the pass closes and the tub
   returns to Available; cancel that run and confirm the pass reopens at Backed with the carts
   back in it. `revertToBacked` swallows a `returnCarts` failure (logs it) so a cancel can never
   be blocked by bucket bookkeeping — check the server log if a cancelled run's carts are back at
@@ -767,6 +782,5 @@ the floor creates a real card and sends real mail on the next board load.
 
 
 - Thermoseal settings UI; per-roll history page; "retire roll" action.
-- WI-01 reminder when Pressed buckets exist but none is selected.
 - Wording sweep "tub" → "bucket" outside the Available card.
 - Repo is public (`"private": false`).

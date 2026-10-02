@@ -205,7 +205,7 @@
 	// What the overlay adds to each stage's cartridge tile, so the count ticks up
 	// with the scans instead of waiting for the next refresh.
 	const stageCartDelta = $derived.by(() => {
-		const d: Record<string, number> = { barcoded: 0, unpressed: 0, pressed: 0, backing: 0 };
+		const d: Record<string, number> = { barcoded: 0, unpressed: 0, backing: 0 };
 		for (const base of data.board.cycles) {
 			const live = boardCycles.find(c => c.cycleId === base.cycleId);
 			if (live && d[base.stage] !== undefined) d[base.stage] += live.quantity - base.quantity;
@@ -214,7 +214,7 @@
 	});
 
 	const cyclesByStage = $derived.by(() => {
-		const m: Record<BucketStage, BoardCycle[]> = { barcoded: [], unpressed: [], pressed: [], backing: [] };
+		const m: Record<BucketStage, BoardCycle[]> = { barcoded: [], unpressed: [], backing: [] };
 		for (const c of boardCycles) m[c.stage]?.push(c);
 		return m;
 	});
@@ -618,7 +618,7 @@
 	const btnPrimary = 'w-full rounded-lg bg-[var(--color-tron-cyan)] py-2.5 text-sm font-bold text-[var(--color-tron-bg-primary)] hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-30';
 	const btnGhost = 'rounded border border-[var(--color-tron-border)] px-3 py-1.5 text-xs text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)] disabled:cursor-not-allowed disabled:opacity-40';
 	const btnDanger = 'w-full rounded-lg border border-red-500/50 bg-red-900/20 py-2.5 text-sm font-semibold text-red-300 hover:bg-red-900/30 disabled:opacity-30';
-	const stageTint: Record<string, string> = { available: 'border-[var(--color-tron-border)]', barcoded: 'border-gray-500/40', unpressed: 'border-blue-500/40', pressed: 'border-amber-500/40', backing: 'border-[var(--color-tron-purple)]/50' };
+	const stageTint: Record<string, string> = { available: 'border-[var(--color-tron-border)]', barcoded: 'border-gray-500/40', unpressed: 'border-blue-500/40', backing: 'border-[var(--color-tron-purple)]/50' };
 </script>
 
 {#snippet badgeField(show: boolean, next?: () => void)}
@@ -660,7 +660,7 @@
 	<div class="flex flex-wrap items-end justify-between gap-3">
 		<div>
 			<h1 class="text-2xl font-semibold text-[var(--color-tron-text)]">Production Buckets</h1>
-			<p class="text-xs text-[var(--color-tron-text-secondary)]">Stick a QR on each shell and scan it into a bucket. Whole buckets move Barcoded → Unpressed → Pressed → {data.backedLabel}; <em>Move to oven</em> frees the carts from the bucket and returns it to Available. Carts stay backed until wax filling scans them in.</p>
+			<p class="text-xs text-[var(--color-tron-text-secondary)]">Stick a QR on each shell and scan it into a bucket. Whole buckets move Barcoded → Unpressed → {data.backedLabel}; <em>Move to oven</em> frees the carts from the bucket and returns it to Available. Carts stay backed until wax filling scans them in.</p>
 		</div>
 		<div class="flex gap-2">
 			<a href="/manufacturing/cart-mfg/buckets/new" class={btnGhost}>New bucket</a>
@@ -702,8 +702,8 @@
 	{/if}
 
 	<div class="grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
-		<!-- Board: five columns so Backed sits beside Pressed (user, 2026-09-25). -->
-		<div class="grid grid-cols-1 gap-3 md:grid-cols-5">
+		<!-- Board: four columns — Available + the three stages. (Pressed column dropped 2026-10-02, user: redundant.) -->
+		<div class="grid grid-cols-1 gap-3 md:grid-cols-4">
 			<div class="rounded-lg border bg-[var(--color-tron-bg-secondary)] p-2 {data.focusStage === 'available' ? 'ring-1 ring-[var(--color-tron-cyan)]' : 'border-[var(--color-tron-border)]'}">
 				<div class="flex items-center justify-between px-1 pb-2">
 					<span class="text-xs font-semibold uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Available</span>
