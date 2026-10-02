@@ -17237,6 +17237,141 @@ Retrieve this exact code: git checkout master at commit 5cf92d30
   (or: git log master --oneline to find it if the branch has since moved on)
 What this deployment is for: on-tablet test of the two Capture bars, top-aligned feed and cartridge
   strip in fullscreen. GitHub deployment 6769996539 (Production). Smoke: /login 200.
+
+================================================================================
+2026-09-30 — feat/capture-timing-token-renewal → master — Capture timing readout + background token renewal
+================================================================================
+Diagnostics for the tablet capture-lag report (Tailscale already confirmed direct: Pi→lab-tab-1
+`tailscale ping` = via 172.16.202.244, 7 ms). No change to what a capture does or how many photos
+one tap makes.
+  - api/cv/capture/+server.ts: per-step lap timers, returned additively as `timingsMs`
+    { connect, parse, db, barcode, embed, storage, total } in the existing 201 response. Nothing
+    else in the handler changed; other capture pages ignore the new field.
+  - post-mortem-inspect/+page.svelte: each capture records photo time (station /snapshot.jpg or
+    video-feed frame), round trip to /api/cv/capture, and server time → "network" = round trip −
+    server. Shown as "Last capture: …" under the capture area (desktop + tablet) and as a compact
+    tag top-right of the feed in fullscreen; also console.info with byte size.
+  - Snapshot token renewed in the background every 3.5 min while a station's MJPEG view is up
+    (max age stays 4 min, JWT TTL 5 min), so a tap never waits on a token mint. Renewal only
+    replaces the snapshot-only token, never stationToken, so the live stream isn't restarted.
+    Costs one jwt_mint audit row per 3.5 min per open station session.
+`npm run check`: 13 errors (baseline), no new warnings. Vercel branch build used as the compile gate.
+Pushed to master at the user's explicit request.
+Deployment: preview — https://bioscale-operations-system-mongodb-l6jcdv6vj.vercel.app
+Source: branch feat/capture-timing-token-renewal @ commit 1a171874
+What this deployment is for: compile gate before fast-forwarding master (GitHub deployment 6771291595).
+Deployment: production — https://bioscale-operations-system-mongodb-gnc9w1dqz-brevitest.vercel.app
+Source: branch master (= feat/capture-timing-token-renewal) @ commit 1a171874
+Retrieve this exact code: git checkout master at commit 1a171874
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: capture timing readout + background snapshot-token renewal on
+  Post-Mortem Inspect. GitHub deployment 6771317681 (Production). Smoke: /login 200.
+
+================================================================================
+2026-10-01 — feat/capture-speed-thumbs-device-lock → master — Faster capture, thumbnails, one device per station
+================================================================================
+Quick capture-lag wins + the fix for the dropped-scanner-keystroke issue (two tablets on one station
+doubled the Pi's per-viewer MJPEG encode load; throttled=0x0, temp normal, so not heat/power).
+  - api/cv/capture/+server.ts: barcode detection, embedding, the original upload and a new
+    thumbnail run concurrently (Promise.all) instead of in sequence. Same records and audit logs;
+    upload failure still fails the capture (500), embed/thumbnail stay best-effort. Each step is
+    still timed individually; `timingsMs.parallel` = wall time of the block. Response adds
+    `thumbnailUrl`.
+  - Thumbnails: 160 px JPEG (q70) via sharp, uploaded next to the original
+    (captures/<imageId>_<cartImageNo>-thumb.jpg) and stored in the existing CvImage.thumbnailPath
+    (the DHR pages already read it; image DELETE already removes it). r2.ts generateThumbnail is a
+    pass-through stub, so it isn't used. Highlight save now $unsets thumbnailPath so lists fall back
+    to the boxed full image instead of a stale thumbnail.
+  - post-mortem-inspect: table uses thumbUrl (falls back to full image for older captures),
+    decoding="async"; tap still opens the full photo in the existing highlight viewer. The table is
+    not rendered at all in fullscreen.
+  - One device per station: CaptureStation.currentOperator gains deviceId (per-browser-tab id from
+    new src/lib/station-device.ts, sessionStorage-backed). Lock POST/DELETE take ?device=; the same
+    user on a different device gets 409 { sameUser: true } unless ?takeover=1 (audited as
+    'lock-takeover'). DELETE from a device that no longer holds the lock is a no-op, so a closing
+    tab can't release its successor's lock. Callers without ?device= keep the old per-user
+    behaviour. All five station pages (/capture, post-mortem, reagent-inspect, wax-inspect,
+    wax-reject) now pass ?device= on claim/release/unload (force-release untouched).
+    Post-mortem additionally offers takeover via confirm() and re-claims the lock every 60 s; a 409
+    there means it was taken over → it tears down the stream, leaves fullscreen and says so.
+`npm run check`: 13 errors (baseline), warnings unchanged (430). Vercel branch build used as the
+compile gate. Pushed to master at the user's request ("let's get that change in").
+Deployment: preview — https://bioscale-operations-system-mongodb-pexvr4gxf-brevitest.vercel.app
+Source: branch feat/capture-speed-thumbs-device-lock @ commit 146ec57e
+What this deployment is for: compile gate before fast-forwarding master (GitHub deployment 6787200725).
+Deployment: production — https://bioscale-operations-system-mongodb-qgjbzi7zf-brevitest.vercel.app
+Source: branch master (= feat/capture-speed-thumbs-device-lock) @ commit 146ec57e
+Retrieve this exact code: git checkout master at commit 146ec57e
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: parallel capture processing, thumbnails, one device per station.
+  GitHub deployment 6787242743 (Production). Smoke: /login 200.
+
+================================================================================
+2026-10-01 — feat/capture-background-upload → master — Background upload (fullscreen) + paired DB writes
+================================================================================
+From the timing readout (photo 0.17 s · network 0.70 s · server 0.94 s = db 0.35 + parallel 0.59 →
+1.81 s with the Capture button locked the whole time):
+  - post-mortem-inspect/+page.svelte, FULLSCREEN ONLY (desktop + regular tablet layout unchanged):
+    the button unlocks once the photo is in hand (min 1 s after the tap, so a double tap can't
+    take two photos); the upload goes to a background queue — one at a time, oldest first, each
+    carrying the cartridgeId locked when it was taken. No automatic retries (a lost response could
+    re-save a photo the server already has): a failure parks the photo as "not saved" with
+    Retry / Discard (Discard confirms). Status pill top-centre of the feed: "⬆ Saving…", "✓ Saved",
+    failures, and photo-acquire errors (the normal banners sit behind fullscreen). beforeunload
+    warns while anything is queued/uploading/failed and then skips the lock release. Capture logic
+    split into acquirePhoto() / uploadCapture() / runUploadQueue(); the synchronous path calls the
+    same two functions, so its behaviour is unchanged.
+  - api/cv/capture/+server.ts: station lookup + cartridge photoSequence $inc run together; the
+    CvImage insert + cartridge photos[] append run together (allSettled — if the insert fails the
+    appended entry is $pull-ed again and the capture fails as before, so photos[] never points at an
+    unsaved image). Capture-time verdict audit stays sequential after the image exists. Saves one
+    round trip for post-mortem (no stationId) and two for /capture.
+`npm run check`: 13 errors (baseline), warnings unchanged. Vercel branch build used as the compile
+gate. Pushed to master at the user's explicit request.
+Deployment: preview — https://bioscale-operations-system-mongodb-ao5zaxo3v-brevitest.vercel.app
+Source: branch feat/capture-background-upload @ commit 6b62993a
+What this deployment is for: compile gate before fast-forwarding master (GitHub deployment 6787922065).
+Deployment: production — https://bioscale-operations-system-mongodb-27snsnjhl-brevitest.vercel.app
+Source: branch master (= feat/capture-background-upload) @ commit 6b62993a
+Retrieve this exact code: git checkout master at commit 6b62993a
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: fullscreen background upload + paired capture DB writes.
+  GitHub deployment 6787965848 (Production). Smoke: /login 200.
+
+================================================================================
+2026-10-01 — feat/station-newest-wins → master — CV stations: newest request wins
+================================================================================
+User request: selecting a CV station should always work and bump whoever had it (e.g. Giovanni
+selecting CV Station 1 kicks alejandro off, who drops to Local).
+  - api/cv/stations/[id]/lock/+server.ts: POST never refuses — a different user or the same user on
+    another device is displaced (audited 'lock-takeover', oldData = displaced holder) and the
+    response carries tookOverFrom { username, since }. New read-only GET → { mine, holder } (mine =
+    same user and same ?device=, or a legacy lock without deviceId). DELETE unchanged: only the
+    holder (or ?force=true) releases, so a displaced tab closing can't free its successor's lock.
+    The ?takeover / 409-sameUser flow from the previous change is gone.
+  - src/lib/station-device.ts: checkStationLock() (one GET) and watchStationLock() — polls GET every
+    10 s while a tab holds a station and calls onLost once when it no longer does. Read-only by
+    design: the earlier Post-Mortem watch re-POSTed, which under newest-wins would let a bumped tab
+    grab the station back.
+  - All five station pages (/capture, post-mortem, reagent-inspect, wax-inspect, wax-reject):
+    claim → "Took over <station> from <user>" notice when someone was displaced; start the watch;
+    on loss → teardown (lockedStationId cleared first so no release is attempted), switch to Local,
+    "<station> was taken over by <user> — switched to Local." (post-mortem also leaves fullscreen).
+    Station dropdowns no longer disable in-use stations (label still says "in use by …"). The old
+    409 "already in use" branches are removed.
+  - /capture auto-reconnect checks GET first and, if the station was taken over meanwhile, treats it
+    as bumped instead of re-claiming.
+`npm run check`: 13 errors (baseline), warnings unchanged. No contract tests cover the lock. Vercel
+branch build used as the compile gate. Pushed to master at the user's explicit request.
+Deployment: preview — https://bioscale-operations-system-mongodb-3n48nvag6-brevitest.vercel.app
+Source: branch feat/station-newest-wins @ commit f02b16ef
+What this deployment is for: compile gate before fast-forwarding master (GitHub deployment 6790156708).
+Deployment: production — https://bioscale-operations-system-mongodb-p9su44vjk-brevitest.vercel.app
+Source: branch master (= feat/station-newest-wins) @ commit f02b16ef
+Retrieve this exact code: git checkout master at commit f02b16ef
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: CV station locks — newest request wins; displaced sessions drop to Local.
+  GitHub deployment 6790199799 (Production). Smoke: /login 200.
 ================================================================================
 2026-10-02 — feat/badge-every-phase — Badge required at every phase (every advance is now gated)
 ================================================================================

@@ -7,7 +7,9 @@ const operatorRefSchema = new Schema(
 );
 
 const currentOperatorSchema = new Schema(
-	{ _id: String, username: String, since: Date },
+	// deviceId: per-browser-tab id of the holder, so one station runs one
+	// viewer at a time even when two tablets share a user account.
+	{ _id: String, username: String, since: Date, deviceId: String },
 	{ _id: false }
 );
 

@@ -12,6 +12,7 @@
 	 * Capture/station plumbing mirrors /wax-inspect (the proven implementation).
 	 */
 	import { onMount, onDestroy } from 'svelte';
+	import { stationLockUrl, watchStationLock } from '$lib/station-device';
 	import PhotoAnnotatorModal from '$lib/components/PhotoAnnotatorModal.svelte';
 
 	let { data } = $props();
@@ -313,7 +314,30 @@
 		}
 	}
 
+	// Newest request wins (see /api/cv/stations/[id]/lock): watch whether this
+	// tab still holds the station. When another user or device takes it over
+	// (or it's force-released), drop to the local camera and say who took it.
+	let stopStationWatch: (() => void) | null = null;
+
+	function startStationWatch(stationId: string, stationName: string) {
+		stopStationWatch?.();
+		stopStationWatch = watchStationLock(stationId, (holder) => {
+			if (selectedStationId !== stationId) return;
+			bumpedFromStation(stationName, holder?.username ?? null);
+		});
+	}
+
+	function bumpedFromStation(stationName: string, byUsername: string | null) {
+		lockedStationId = null; // no longer ours to release
+		selectedStationId = null;
+		teardownStation();
+		flashBanner('err', `${stationName} was taken over by ${byUsername ?? 'another session'} — switched to Local.`, 15000);
+		void startCamera();
+	}
+
 	function teardownStation() {
+		stopStationWatch?.();
+		stopStationWatch = null;
 		if (heartbeatInterval) { clearInterval(heartbeatInterval); heartbeatInterval = null; }
 		if (pc) { try { pc.close(); } catch { /* */ } pc = null; }
 		if (ws) { try { ws.close(); } catch { /* */ } ws = null; }
@@ -325,7 +349,7 @@
 		if (lockedStationId) {
 			const releaseId = lockedStationId;
 			lockedStationId = null;
-			fetch(`/api/cv/stations/${encodeURIComponent(releaseId)}/lock`, { method: 'DELETE' })
+			fetch(stationLockUrl(releaseId), { method: 'DELETE' })
 				.catch(() => null);
 		}
 	}
@@ -338,20 +362,16 @@
 			return;
 		}
 
-		// Hard one-operator-per-station lock. 409 means another user holds it.
+		// Newest request wins: claiming always succeeds and bumps whoever had it.
 		try {
-			const lockRes = await fetch(`/api/cv/stations/${encodeURIComponent(stationId)}/lock`, { method: 'POST' });
-			if (lockRes.status === 409) {
-				const body = await lockRes.json().catch(() => ({}));
-				const heldBy = body?.heldBy;
-				const since = heldBy?.since ? new Date(heldBy.since).toLocaleString() : 'earlier';
-				flashBanner('err', `Station already in use by ${heldBy?.username ?? 'another operator'} since ${since}. Pick another station.`);
-				selectedStationId = null;
-				await startCamera();
-				return;
-			}
+			const lockRes = await fetch(stationLockUrl(stationId), { method: 'POST' });
 			if (!lockRes.ok) throw new Error(`HTTP ${lockRes.status}`);
 			lockedStationId = stationId;
+			const lockBody = await lockRes.json().catch(() => ({}));
+			if (lockBody?.tookOverFrom?.username) {
+				flashBanner('info', `Took over ${station.name} from ${lockBody.tookOverFrom.username}.`, 5000);
+			}
+			startStationWatch(stationId, station.name);
 		} catch (e) {
 			flashBanner('err', `Failed to claim station lock: ${e instanceof Error ? e.message : e}`);
 			selectedStationId = null;
@@ -653,7 +673,7 @@
 	function onBeforeUnload() {
 		if (lockedStationId) {
 			// keepalive lets the DELETE finish after the page unloads.
-			fetch(`/api/cv/stations/${encodeURIComponent(lockedStationId)}/lock`, {
+			fetch(stationLockUrl(lockedStationId), {
 				method: 'DELETE',
 				keepalive: true
 			}).catch(() => null);
@@ -789,7 +809,7 @@
 							{@const badge = s.status === 'online' ? '🟢' : s.status === 'degraded' ? '🟡' : '🔴'}
 							{@const heldByOther = s.currentOperator && s.currentOperator._id && s.currentOperator._id !== data.user._id}
 							{@const offline = s.status !== 'online' && s.status !== 'degraded'}
-							{@const disabled = offline || heldByOther}
+							{@const disabled = offline}
 							<option value={s._id} {disabled}>
 								{badge}
 								{s.name}
