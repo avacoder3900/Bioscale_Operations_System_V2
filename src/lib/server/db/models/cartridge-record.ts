@@ -73,6 +73,9 @@ const cartridgeRecordSchema = new Schema({
 		// assay data (bug)".
 		isResearch: Boolean,
 		deckPosition: Number,
+		// DOMAIN-32: research reagent lot (reagent_set_lots._id / lotNumber) this cartridge was filled with
+		reagentLotId: String,
+		reagentLotNumber: String,
 		tubeRecords: [{ _id: false, wellPosition: Number, reagentName: String, sourceLotId: String, transferTubeId: String }],
 		operator: operatorRef, fillDate: Date, expirationDate: Date, recordedAt: Date
 	},
