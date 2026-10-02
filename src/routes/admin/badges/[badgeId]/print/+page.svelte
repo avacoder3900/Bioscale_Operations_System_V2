@@ -2,7 +2,7 @@
 	import BadgeCard from '$lib/components/admin/BadgeCard.svelte';
 
 	interface Props {
-		data: { badge: { badgeId: string; code: string; displayName: string; username: string | null; status: 'active' | 'revoked'; issuedAt: string | null } };
+		data: { badge: { badgeId: string; code: string; displayName: string; username: string | null; status: 'active' | 'revoked'; issuedAt: string | null; photoUrl: string | null } };
 	}
 	let { data }: Props = $props();
 </script>
@@ -22,7 +22,7 @@
 	</div>
 
 	<div class="print-area">
-		<BadgeCard code={data.badge.code} displayName={data.badge.displayName} username={data.badge.username} status={data.badge.status} />
+		<BadgeCard code={data.badge.code} displayName={data.badge.displayName} username={data.badge.username} status={data.badge.status} photoUrl={data.badge.photoUrl} />
 	</div>
 </div>
 
