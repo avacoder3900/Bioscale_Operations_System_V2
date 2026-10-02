@@ -1941,7 +1941,7 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 		'research_calibration_activate_curve',
 		{ annotations: WRITE_TOOL,
 			description:
-				'HUMAN-ONLY. Approving a calibration curve as a reagent lot's active curve is a decision a person makes on the ' +
+				'HUMAN-ONLY. Approving a calibration curve as a reagent lot\'s active curve is a decision a person makes on the ' +
 				'research app Curves page (review calibrator wells, recovery, the previous curve overlay, then Approve with a ' +
 				'note). This tool always refuses; use it only to explain where the person approves. You may draft fits with ' +
 				'research_calibration_fit and read everything with research_calibration_list_runs / get_curve.',
