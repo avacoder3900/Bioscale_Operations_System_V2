@@ -17592,3 +17592,16 @@ Retrieve this exact code: git checkout feat/state-change-direct-backed at commit
   (or: git log feat/state-change-direct-backed --oneline to find it if the branch has since moved on)
 What this deployment is for: PR #76 head after merging master — the build the user merges into
   master. Smoke: /login 200.
+
+================================================================================
+2026-10-02 — master — DEPLOY: required reagent-lot picker on fill screen + connector lot tools (bims-operations 3.7.0)
+================================================================================
+Source: branch master @ commit 41f7b7d1 (feat/reagent-lot-picker)
+Retrieve this exact code: git checkout master at commit 41f7b7d1
+Fill screen Reagent Preparation = dropdown of active research reagent lots (reagent_set_lots, read-only
+ReagentSetLot model); the free-text "test lot" scan is removed and recordReagentPrep fails 400 without an
+active lot. ReagentBatchRecord + cartridge reagentFilling carry reagentLotId / reagentLotNumber.
+Connector 3.7.0: research_reagent_lot_list/get/create, research_inventory_originate, research_fill_lot_list,
+research_curve_set_list, research_fill_lot_set_reagent_lot; research_fill_lot_assign_curve_set HUMAN-ONLY.
+Proxy allowlist: + reagent-lots, reagent-inventory/originate. test:unit 198 pass; vite build clean
+(adapter-vercel file trace fails locally on C:swapfile.sys — Windows only). Deployed via GitHub push.
