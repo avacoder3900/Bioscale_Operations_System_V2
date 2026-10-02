@@ -220,8 +220,10 @@ function loginGate(session: Operator): BadgeGate {
  * The one place a badge scan is turned into an operator. The gated steps
  * (user, 2026-09-30) are the ones where carts are handled: counting a bucket
  * up (scanCartIn), discarding carts (scrapCarts, and the audit / leftover
- * discards), and passing carts to the oven (moveToOven). Minting a bucket and
- * starting a pass no longer ask. With enforcement off, a badge that IS scanned
+ * discards), and passing carts to the oven (moveToOven) — plus, since
+ * 2026-10-02 (user: "require a scan in at every phase"), EVERY advance
+ * (advanceCycle), so each phase a bucket enters is badge-signed. Minting a
+ * bucket and starting a pass do not ask. With enforcement off, a badge that IS scanned
  * is still honoured — better attribution for free — but an empty scan falls
  * back to the session. With enforcement on, an empty scan is refused. The
  * holder must be allowed to do the thing as well: a badge is attribution,
@@ -1037,7 +1039,7 @@ async function scrapCartsAs(input: ScrapInput, gate: BadgeGate): Promise<{ cycle
 export interface AdvanceCycleInput {
 	cycleId: string;
 	user: Operator;             // the web session (= enteredBy)
-	badge?: string | null;      // scanned badge code; required when carts are discarded and badge mode is 'required'
+	badge?: string | null;      // scanned badge code; required at EVERY advance when badge mode is 'required' (2026-10-02; was discards-only)
 	thermosealLotId?: string;   // THERMOSEAL_PART lot to pull the NEXT roll from, if one is opened (optional; FIFO default)
 	discardedIds?: string[];    // carts binned at this step (scanned)
 	discardJournal?: string;    // required when discardedIds is non-empty
@@ -1051,10 +1053,13 @@ export interface AdvanceCycleInput {
  * off the open roll (thermoseal-service); the roll pull, if one happens, is
  * where thermoseal inventory actually moves.
  *
- * Badge (user, 2026-09-30): required only when carts are discarded at this
- * step — the move alone is not gated. A badge scanned for the discards is
- * honoured for the move too (one operator, one row set); with no discards and
- * no scan, the session is the operator as before.
+ * Badge (user, 2026-10-02: "require a scan in at every phase"): every advance
+ * is badge-gated — Barcoded → Unpressed, Unpressed → Pressed, Pressed → Backed —
+ * so each phase a bucket enters is signed by the badge holder. The badge
+ * resolved once here is the operator on the discards (scrapCartsAs) and on the
+ * `advance` row alike (one operator, one row set). From 2026-09-30 until this
+ * change the move alone was not gated and only the discards asked for a badge.
+ * With enforcement off, requireBadge falls back to the session as before.
  */
 export async function advanceCycle(input: AdvanceCycleInput): Promise<{ cycle: any | null; discarded: number; closed: boolean; thermoseal: ConsumeResult | null }> {
 	await connectDB();
@@ -1072,9 +1077,9 @@ export async function advanceCycle(input: AdvanceCycleInput): Promise<{ cycle: a
 	const notMembers = discardIds.filter(id => !members.has(id));
 	if (notMembers.length) throw new BucketError(`Not in this bucket: ${notMembers.join(', ')}`);
 
-	const gate = discardIds.length > 0 || (input.badge ?? '').trim()
-		? await requireBadge(input.badge, input.user)
-		: loginGate(input.user);
+	// Every advance asks for the badge (2026-10-02). With enforcement off and no
+	// scan this resolves to the session, exactly as the old discards-only gate did.
+	const gate = await requireBadge(input.badge, input.user);
 	const operator = gate.operator;
 	const attribution: Attribution = { ...gate.attribution, ...(cycle.custodyId ? { custodyId: cycle.custodyId } : {}) };
 
