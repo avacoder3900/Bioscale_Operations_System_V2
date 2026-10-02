@@ -23,7 +23,18 @@ const operatorBadgeSchema = new Schema({
 	revokedBy: operatorRef,
 	revokeReason: String,
 	lastUsedAt: Date,                              // bumped by resolveBadge()
-	printCount: { type: Number, default: 0 }       // bumped by the print page
+	printCount: { type: Number, default: 0 },      // bumped by the print page
+	// Optional portrait printed on the card (§17.6). `data` is the image as
+	// base64 (JPEG/PNG/WebP, ≤ 400 KB decoded) and is select:false so listing
+	// badges never drags every photo along; getBadgePhoto() selects it explicitly.
+	// Absent entirely when the badge has no photo (clearBadgePhoto() $unsets it).
+	photo: {
+		data: { type: String, select: false },
+		contentType: String,
+		size: Number,                              // decoded bytes
+		updatedAt: Date,
+		updatedBy: operatorRef
+	}
 }, { timestamps: true });
 
 operatorBadgeSchema.index({ code: 1 }, { unique: true });

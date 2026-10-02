@@ -3,13 +3,15 @@
  * Issue, revoke, reissue printed QR badges, and flip the "Require badge"
  * switch that gates the bucket board's scan-in, discards and move to oven
  * (user, 2026-09-30; it gated mint / start-pass before). Every action re-checks
- * isAdmin() itself; the layout tab is only a convenience.
+ * isAdmin() itself; the layout tab is only a convenience. Photos (§17.6):
+ * optional at issue, and added / replaced / removed per badge from the table.
  */
 import { error, fail, redirect } from '@sveltejs/kit';
 import { connectDB, User } from '$lib/server/db';
 import { isAdmin } from '$lib/server/permissions';
 import {
-	BadgeError, badgeSettings, setBadgeMode, issueBadge, revokeBadge, reissueBadge, listBadges
+	BadgeError, badgeSettings, setBadgeMode, issueBadge, revokeBadge, reissueBadge, listBadges,
+	setBadgePhoto, clearBadgePhoto
 } from '$lib/server/services/badge-service';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -53,6 +55,13 @@ function wrap(key: string, fn: () => Promise<Record<string, unknown>>) {
 	};
 }
 
+/** The picker's resized portrait, or nothing. A missing or empty file means "no photo", not an error. */
+async function photoBytes(d: FormData): Promise<Uint8Array | undefined> {
+	const f = d.get('photo');
+	if (!(f instanceof File) || f.size === 0) return undefined;
+	return new Uint8Array(await f.arrayBuffer());
+}
+
 export const actions: Actions = {
 	issue: async ({ request, locals }) => {
 		const by = requireAdmin(locals);
@@ -62,6 +71,7 @@ export const actions: Actions = {
 			const badge = await issueBadge({
 				userId: String(d.get('userId') ?? ''),
 				displayName: String(d.get('displayName') ?? ''),
+				photo: await photoBytes(d),
 				issuedBy: by
 			});
 			return { issue: { success: true, badge } };
@@ -85,6 +95,30 @@ export const actions: Actions = {
 		return wrap('reissue', async () => {
 			const r = await reissueBadge({ badgeId: String(d.get('badgeId') ?? ''), by });
 			return { reissue: { success: true, badge: r.issued, revoked: r.revoked } };
+		})();
+	},
+
+	// Photo on an existing badge (§17.6): add or replace…
+	setPhoto: async ({ request, locals }) => {
+		const by = requireAdmin(locals);
+		await connectDB();
+		const d = await request.formData();
+		return wrap('photo', async () => {
+			const bytes = await photoBytes(d);
+			if (!bytes) throw new BadgeError('Choose a photo first.');
+			const badge = await setBadgePhoto({ badgeId: String(d.get('badgeId') ?? ''), bytes, by });
+			return { photo: { success: true, badge } };
+		})();
+	},
+
+	// …or remove.
+	clearPhoto: async ({ request, locals }) => {
+		const by = requireAdmin(locals);
+		await connectDB();
+		const d = await request.formData();
+		return wrap('photo', async () => {
+			const badge = await clearBadgePhoto({ badgeId: String(d.get('badgeId') ?? ''), by });
+			return { photo: { success: true, badge } };
 		})();
 	},
 

@@ -1,11 +1,13 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
+	import type { SubmitFunction } from '@sveltejs/kit';
+	import BadgePhotoInput from '$lib/components/admin/BadgePhotoInput.svelte';
 
 	type Badge = {
 		badgeId: string; code: string; userId: string; username: string | null; displayName: string;
 		status: 'active' | 'revoked'; issuedAt: string | null; issuedBy: string | null;
 		revokedAt: string | null; revokedBy: string | null; revokeReason: string | null;
-		lastUsedAt: string | null; printCount: number;
+		lastUsedAt: string | null; printCount: number; photoUrl: string | null;
 	};
 	type Result = { success?: boolean; error?: string; code?: string | null; badge?: Badge; settings?: { mode: 'off' | 'required'; changedAt: string | null; changedBy: string | null } };
 	interface Props {
@@ -14,7 +16,7 @@
 			settings: { mode: 'off' | 'required'; changedAt: string | null; changedBy: string | null };
 			candidates: { id: string; username: string; defaultName: string }[];
 		};
-		form: { issue?: Result; revoke?: Result; reissue?: Result; setBadgeMode?: Result } | null;
+		form: { issue?: Result; revoke?: Result; reissue?: Result; setBadgeMode?: Result; photo?: Result } | null;
 	}
 	let { data, form }: Props = $props();
 
@@ -24,6 +26,11 @@
 	let revoking = $state<string | null>(null);
 	let revokeReason = $state('');
 	let modeReason = $state('');
+	// Photos (§17.6): the resized portrait for the issue form, and the row whose
+	// Photo… panel is open plus its pending portrait.
+	let issuePhoto = $state<Blob | null>(null);
+	let photoFor = $state<string | null>(null);
+	let rowPhoto = $state<Blob | null>(null);
 
 	const required = $derived(data.settings.mode === 'required');
 	const active = $derived(data.badges.filter(b => b.status === 'active'));
@@ -74,6 +81,34 @@
 		};
 	};
 
+	// The picker leaves the raw file in the form as `photo`; swap in the resized blob
+	// (or drop the field) before it goes to the server.
+	function attachPhoto(formData: FormData, b: Blob | null) {
+		formData.delete('photo');
+		if (b) formData.set('photo', b, 'photo.jpg');
+	}
+	const enhancePhoto: SubmitFunction = ({ formData }) => {
+		attachPhoto(formData, rowPhoto);
+		busy = true;
+		return async ({ update }) => {
+			await update({ reset: false });
+			busy = false;
+			photoFor = null;
+			rowPhoto = null;
+		};
+	};
+	const enhanceIssue: SubmitFunction = ({ formData }) => {
+		attachPhoto(formData, issuePhoto);
+		busy = true;
+		return async ({ update }) => {
+			await update({ reset: false });
+			busy = false;
+			userId = '';
+			displayName = '';
+			issuePhoto = null;
+		};
+	};
+
 	const inputCls = 'mt-1 w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-3 py-2 text-sm text-[var(--color-tron-text)] focus:border-[var(--color-tron-cyan)] focus:outline-none';
 	const btnGhost = 'rounded border border-[var(--color-tron-border)] px-3 py-1.5 text-xs text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-cyan)]/60 disabled:opacity-40';
 </script>
@@ -114,7 +149,7 @@
 	</form>
 
 	<!-- Issue -->
-	<form method="POST" action="?/issue" use:enhance={() => { busy = true; return async ({ update }) => { await update({ reset: false }); busy = false; userId = ''; displayName = ''; }; }}
+	<form method="POST" action="?/issue" enctype="multipart/form-data" use:enhance={enhanceIssue}
 		class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4">
 		<p class="text-sm font-medium text-[var(--color-tron-text)]">Issue a badge</p>
 		<p class="text-[11px] text-[var(--color-tron-text-secondary)]">One active badge per person. The name below is what gets printed.</p>
@@ -133,6 +168,10 @@
 			<button type="submit" disabled={busy || !userId} class="min-h-[38px] rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/20 px-4 py-2 text-sm font-medium text-[var(--color-tron-cyan)] disabled:opacity-40">
 				{busy ? 'Issuing…' : 'Issue badge'}
 			</button>
+		</div>
+		<div class="mt-3 md:max-w-md">
+			<span class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Photo (optional)</span>
+			<div class="mt-1"><BadgePhotoInput bind:blob={issuePhoto} disabled={busy} id="issue-photo" /></div>
 		</div>
 		{#if form?.issue?.error}<p class="mt-2 text-xs text-[var(--color-tron-error)]">{form.issue.error}</p>{/if}
 		{#if form?.reissue?.error}<p class="mt-2 text-xs text-[var(--color-tron-error)]">{form.reissue.error}</p>{/if}
@@ -208,15 +247,22 @@
 		<table class="w-full text-sm">
 			<thead>
 				<tr class="border-b border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] text-left text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">
-					<th class="px-3 py-2">Name</th><th class="px-3 py-2">User</th><th class="px-3 py-2">Code</th><th class="px-3 py-2">Issued</th><th class="px-3 py-2">Last used</th><th class="px-3 py-2">Prints</th><th class="px-3 py-2 text-right">Actions</th>
+					<th class="px-3 py-2">Photo</th><th class="px-3 py-2">Name</th><th class="px-3 py-2">User</th><th class="px-3 py-2">Code</th><th class="px-3 py-2">Issued</th><th class="px-3 py-2">Last used</th><th class="px-3 py-2">Prints</th><th class="px-3 py-2 text-right">Actions</th>
 				</tr>
 			</thead>
 			<tbody>
 				{#if active.length === 0}
-					<tr><td colspan="7" class="px-3 py-4 text-center text-xs text-[var(--color-tron-text-secondary)]">No active badges yet.</td></tr>
+					<tr><td colspan="8" class="px-3 py-4 text-center text-xs text-[var(--color-tron-text-secondary)]">No active badges yet.</td></tr>
 				{/if}
 				{#each active as b (b.badgeId)}
 					<tr class="border-b border-[var(--color-tron-border)]/40 {justIssued?.badgeId === b.badgeId ? 'bg-green-900/10' : ''}">
+						<td class="px-3 py-2">
+							{#if b.photoUrl}
+								<img src={b.photoUrl} alt="" class="h-10 w-8 rounded border border-[var(--color-tron-border)] object-cover" />
+							{:else}
+								<div class="flex h-10 w-8 items-center justify-center rounded border border-dashed border-[var(--color-tron-border)] text-[10px] text-[var(--color-tron-text-secondary)]" title="No photo">—</div>
+							{/if}
+						</td>
 						<td class="px-3 py-2 font-medium text-[var(--color-tron-text)]">{b.displayName}</td>
 						<td class="px-3 py-2 text-[var(--color-tron-text-secondary)]">{b.username ?? b.userId}</td>
 						<td class="px-3 py-2 font-mono text-[var(--color-tron-text)]">{b.code}</td>
@@ -230,6 +276,7 @@
 									<input type="hidden" name="badgeId" value={b.badgeId} />
 									<button type="submit" disabled={busy} class={btnGhost} title="Revoke this code and print a new one for the same person">Reissue</button>
 								</form>
+								<button type="button" class={btnGhost} onclick={() => { photoFor = photoFor === b.badgeId ? null : b.badgeId; rowPhoto = null; }} title={b.photoUrl ? 'Replace or remove the photo' : 'Add a photo to this badge'}>Photo…</button>
 								<button type="button" class="{btnGhost} text-red-300" onclick={() => { revoking = revoking === b.badgeId ? null : b.badgeId; revokeReason = ''; }}>Revoke…</button>
 							</div>
 							{#if revoking === b.badgeId}
@@ -238,6 +285,22 @@
 									<input type="text" name="reason" bind:value={revokeReason} placeholder="why?" required autocomplete="off" class="w-48 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-2 py-1 text-xs text-[var(--color-tron-text)]" />
 									<button type="submit" disabled={busy || !revokeReason.trim()} class="rounded border border-red-500/50 px-3 py-1 text-xs text-red-300 hover:bg-red-900/20 disabled:opacity-40">Confirm revoke</button>
 								</form>
+							{/if}
+							{#if photoFor === b.badgeId}
+								<div class="mt-2 flex flex-wrap items-end justify-end gap-2">
+									<form method="POST" action="?/setPhoto" enctype="multipart/form-data" use:enhance={enhancePhoto} class="flex min-w-[18rem] items-center gap-2">
+										<input type="hidden" name="badgeId" value={b.badgeId} />
+										<div class="flex-1"><BadgePhotoInput bind:blob={rowPhoto} currentUrl={b.photoUrl} disabled={busy} id="photo-{b.badgeId}" /></div>
+										<button type="submit" disabled={busy || !rowPhoto} class="rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/20 px-3 py-1 text-xs font-medium text-[var(--color-tron-cyan)] disabled:opacity-40">{b.photoUrl ? 'Replace' : 'Save photo'}</button>
+									</form>
+									{#if b.photoUrl}
+										<form method="POST" action="?/clearPhoto" use:enhance={enhancePhoto}>
+											<input type="hidden" name="badgeId" value={b.badgeId} />
+											<button type="submit" disabled={busy} class="rounded border border-red-500/50 px-3 py-1 text-xs text-red-300 hover:bg-red-900/20 disabled:opacity-40">Remove photo</button>
+										</form>
+									{/if}
+								</div>
+								{#if form?.photo?.error}<p class="mt-1 text-right text-xs text-[var(--color-tron-error)]">{form.photo.error}</p>{/if}
 							{/if}
 						</td>
 					</tr>

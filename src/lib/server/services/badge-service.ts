@@ -48,6 +48,8 @@ export interface BadgeRow {
 	revokeReason: string | null;
 	lastUsedAt: string | null;
 	printCount: number;
+	/** Admin-only image URL (GET /admin/badges/[id]/photo?v=…), null when the badge has no photo (§17.6). */
+	photoUrl: string | null;
 }
 
 // ── code format ───────────────────────────────────────────────────────────
@@ -179,7 +181,9 @@ function toRow(b: any): BadgeRow {
 		revokedBy: b.revokedBy?.username ?? null,
 		revokeReason: b.revokeReason ?? null,
 		lastUsedAt: iso(b.lastUsedAt),
-		printCount: b.printCount ?? 0
+		printCount: b.printCount ?? 0,
+		// `v` is the upload time, so a replaced photo gets a new URL and the old one can be cached forever.
+		photoUrl: b.photo?.updatedAt ? `/admin/badges/${b._id}/photo?v=${new Date(b.photo.updatedAt).getTime()}` : null
 	};
 }
 
@@ -197,7 +201,7 @@ async function badgeAudit(action: string, badgeId: string, by: Operator, newData
 	});
 }
 
-export async function issueBadge(input: { userId: string; displayName?: string; issuedBy: Operator }): Promise<BadgeRow> {
+export async function issueBadge(input: { userId: string; displayName?: string; photo?: Uint8Array; issuedBy: Operator }): Promise<BadgeRow> {
 	await connectDB();
 	const user = await User.findById(input.userId).select('_id username firstName lastName isActive').lean() as any;
 	if (!user) throw new BadgeError('User not found.', 404);
@@ -212,6 +216,7 @@ export async function issueBadge(input: { userId: string; displayName?: string; 
 
 	const now = new Date();
 	const by = { _id: input.issuedBy._id, username: input.issuedBy.username };
+	const photo = input.photo ? validatePhoto(input.photo) : null;
 	// A code collision is a 1-in-32^10 event; retry a couple of times rather than fail.
 	for (let attempt = 0; attempt < 3; attempt++) {
 		const code = newBadgeCode();
@@ -219,7 +224,8 @@ export async function issueBadge(input: { userId: string; displayName?: string; 
 		try {
 			await OperatorBadge.create({
 				_id: id, code, userId: user._id, username: user.username, displayName,
-				status: 'active', issuedAt: now, issuedBy: by, printCount: 0
+				status: 'active', issuedAt: now, issuedBy: by, printCount: 0,
+				...(photo ? { photo: { ...photo, updatedAt: now, updatedBy: by } } : {})
 			});
 		} catch (e: any) {
 			if (e?.code === 11000) {
@@ -230,7 +236,7 @@ export async function issueBadge(input: { userId: string; displayName?: string; 
 			}
 			throw e;
 		}
-		await badgeAudit('ISSUE', id, by, { code, userId: user._id, displayName });
+		await badgeAudit('ISSUE', id, by, { code, userId: user._id, displayName, photo: !!photo });
 		const doc = await OperatorBadge.findById(id).lean();
 		return toRow(doc);
 	}
@@ -258,13 +264,98 @@ export async function revokeBadge(input: { badgeId: string; reason: string; by: 
 /** Lost or damaged card: revoke the old code and print a new one for the same person. */
 export async function reissueBadge(input: { badgeId: string; by: Operator }): Promise<{ revoked: BadgeRow; issued: BadgeRow }> {
 	await connectDB();
-	const old = await OperatorBadge.findById(input.badgeId).lean() as any;
+	// +photo.data: the portrait follows the person onto the new card.
+	const old = await OperatorBadge.findById(input.badgeId).select('+photo.data').lean() as any;
 	if (!old) throw new BadgeError('Badge not found.', 404);
 	if (old.status !== 'active') throw new BadgeError(`${old.code} is already revoked — issue a new badge from the form instead.`, 409);
 	const revoked = await revokeBadge({ badgeId: old._id, reason: 'reissued', by: input.by });
-	const issued = await issueBadge({ userId: old.userId, displayName: old.displayName, issuedBy: input.by });
+	const issued = await issueBadge({
+		userId: old.userId, displayName: old.displayName, issuedBy: input.by,
+		photo: old.photo?.data ? Buffer.from(old.photo.data, 'base64') : undefined
+	});
 	await badgeAudit('REISSUE', issued.badgeId, input.by, { code: issued.code }, { badgeId: old._id, code: old.code });
 	return { revoked, issued };
+}
+
+// ── photo (§17.6) ─────────────────────────────────────────────────────────
+
+/**
+ * Decoded bytes. The portal's picker crops to 4:5 and shrinks to 480×600 JPEG
+ * in the browser (~50 KB) before upload; this is the ceiling for anything that
+ * bypasses it (JS off, a hand-built request).
+ */
+export const BADGE_PHOTO_MAX_BYTES = 400 * 1024;
+
+export interface BadgePhoto {
+	bytes: Buffer;
+	contentType: string;
+	updatedAt: Date | null;
+}
+
+function ascii(bytes: Uint8Array, start: number, end: number): string {
+	let out = '';
+	for (let i = start; i < end && i < bytes.length; i++) out += String.fromCharCode(bytes[i]);
+	return out;
+}
+
+/** Sniff the container from the bytes; the client's declared type is not trusted. */
+export function sniffImageType(bytes: Uint8Array): 'image/jpeg' | 'image/png' | 'image/webp' | null {
+	if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return 'image/jpeg';
+	if (bytes.length >= 8 && bytes[0] === 0x89 && ascii(bytes, 1, 4) === 'PNG') return 'image/png';
+	if (bytes.length >= 12 && ascii(bytes, 0, 4) === 'RIFF' && ascii(bytes, 8, 12) === 'WEBP') return 'image/webp';
+	return null;
+}
+
+function validatePhoto(bytes: Uint8Array): { data: string; contentType: string; size: number } {
+	if (bytes.length === 0) throw new BadgeError('The photo is empty.');
+	if (bytes.length > BADGE_PHOTO_MAX_BYTES) {
+		throw new BadgeError(`Photo is ${Math.round(bytes.length / 1024)} KB — the limit is ${BADGE_PHOTO_MAX_BYTES / 1024} KB. Pick it in the Badge Portal, which shrinks it automatically.`, 413, 'PHOTO_TOO_LARGE');
+	}
+	const contentType = sniffImageType(bytes);
+	if (!contentType) throw new BadgeError('Photo must be a JPEG, PNG or WebP image.', 415, 'PHOTO_TYPE');
+	return { data: Buffer.from(bytes).toString('base64'), contentType, size: bytes.length };
+}
+
+/** Add or replace the portrait on an active badge. The bytes never reach the audit log — only type and size. */
+export async function setBadgePhoto(input: { badgeId: string; bytes: Uint8Array; by: Operator }): Promise<BadgeRow> {
+	await connectDB();
+	const badge = await OperatorBadge.findById(input.badgeId).select('_id status photo.contentType photo.size').lean() as any;
+	if (!badge) throw new BadgeError('Badge not found.', 404);
+	if (badge.status !== 'active') throw new BadgeError('This badge is revoked — issue a new one and add the photo there.', 409);
+	const photo = validatePhoto(input.bytes);
+	const now = new Date();
+	const by = { _id: input.by._id, username: input.by.username };
+	await OperatorBadge.updateOne({ _id: badge._id }, { $set: { photo: { ...photo, updatedAt: now, updatedBy: by } } });
+	await badgeAudit(
+		'PHOTO_SET', badge._id, by,
+		{ contentType: photo.contentType, size: photo.size },
+		badge.photo?.size ? { contentType: badge.photo.contentType, size: badge.photo.size } : undefined
+	);
+	return toRow(await OperatorBadge.findById(badge._id).lean());
+}
+
+/** Remove the portrait. Allowed on revoked badges too — the card is history, the face need not be. */
+export async function clearBadgePhoto(input: { badgeId: string; by: Operator }): Promise<BadgeRow> {
+	await connectDB();
+	const badge = await OperatorBadge.findById(input.badgeId).select('_id photo.contentType photo.size').lean() as any;
+	if (!badge) throw new BadgeError('Badge not found.', 404);
+	if (!badge.photo?.size) throw new BadgeError('This badge has no photo.', 409);
+	const by = { _id: input.by._id, username: input.by.username };
+	await OperatorBadge.updateOne({ _id: badge._id }, { $unset: { photo: 1 } });
+	await badgeAudit('PHOTO_CLEAR', badge._id, by, undefined, { contentType: badge.photo.contentType, size: badge.photo.size });
+	return toRow(await OperatorBadge.findById(badge._id).lean());
+}
+
+/** The stored bytes for GET /admin/badges/[id]/photo. The only reader of `photo.data`. */
+export async function getBadgePhoto(badgeId: string): Promise<BadgePhoto | null> {
+	await connectDB();
+	const badge = await OperatorBadge.findById(badgeId).select('+photo.data').lean() as any;
+	if (!badge?.photo?.data) return null;
+	return {
+		bytes: Buffer.from(badge.photo.data, 'base64'),
+		contentType: badge.photo.contentType || 'image/jpeg',
+		updatedAt: badge.photo.updatedAt ? new Date(badge.photo.updatedAt) : null
+	};
 }
 
 export async function listBadges(): Promise<BadgeRow[]> {

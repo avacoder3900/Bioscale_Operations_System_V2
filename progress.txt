@@ -17440,3 +17440,37 @@ WHAT CHANGED (client only)
   low-inventory settings, fire-and-forget the low-inventory warn) NOT done — client fix only.
 svelte-check (worktree, after svelte-kit sync): COMPLETED 3420 FILES 14 ERRORS — the pre-existing
 baseline, none in touched files. Not clicked through on a preview yet.
+================================================================================
+2026-10-02 — feat/badge-photos — Badge Portal: photos on badges (portrait on the printed card)
+================================================================================
+Branched from feat/badge-gated-steps @ 56b624d9 (which already carries origin/master). Adds an
+optional portrait to an operator badge — BADGE-SYSTEM_PLAN.md §17.6, model line in §15.1, rows in
+§18, build note #10 in §20.
+  - Model (operator-badge.ts): `photo { data (base64, select:false), contentType, size, updatedAt,
+    updatedBy }`. Stored on the badge document, not R2: ~50 KB each, a few dozen badges, the print
+    page needs it inline, and the portal must not depend on R2 creds / the Worker TLS path. The
+    `select: false` on `photo.data` keeps listBadges() and every other read light.
+  - badge-service.ts: `setBadgePhoto` (active only), `clearBadgePhoto` ($unset, any status),
+    `getBadgePhoto` (the one `+photo.data` reader), `issueBadge({ photo })`; `reissueBadge` reads
+    the old card's bytes and passes them on so a lost card reprints with the same face. Bytes are
+    magic-sniffed (JPEG/PNG/WebP; client type ignored) and capped at 400 KB decoded
+    (`BADGE_PHOTO_MAX_BYTES`). Audit: `PHOTO_SET` / `PHOTO_CLEAR` with type+size only; `ISSUE`
+    newData gains `photo: boolean`. `BadgeRow.photoUrl` = `/admin/badges/<id>/photo?v=<updatedAt ms>`.
+  - New GET /admin/badges/[badgeId]/photo (+server.ts): admin only, `Cache-Control: private,
+    max-age=31536000, immutable` — the `?v=` makes a replaced photo a new URL.
+  - New BadgePhotoInput.svelte: `<input type=file accept=image/*>` → createImageBitmap (EXIF
+    orientation honoured, <img> fallback) → centre crop to 4:5 → 480×600 canvas → JPEG q0.85 blob,
+    with a 48×60 preview (dimmed current photo until a new one is picked). Bindable `blob`; the
+    owning form's enhance() deletes the raw `photo` field and sets the blob in its place, so the
+    server sees ~50 KB. Parent resets by setting blob = null.
+  - /admin/badges: Photo column (thumbnail or dashed placeholder) on the active table (colspan 7→8);
+    per-row **Photo…** opens an inline panel with the picker + Save photo/Replace and Remove photo;
+    the Issue form has an optional Photo field (enctype multipart). New actions `setPhoto`,
+    `clearPhoto` (wrap key `photo`); `issue` reads the file via `photoBytes()`. SubmitFunction-typed
+    `enhanceIssue` / `enhancePhoto` replace the inline issue enhance.
+  - BadgeCard.svelte: `photoUrl` prop; `.media` flex row with the 24×30 mm portrait left of the
+    30 mm QR. No photo → identical to before. Both print pages pass `photoUrl` through.
+Checks: svelte-kit sync + svelte-check → 14 errors (baseline, none in touched files); the two new
+a11y_img_redundant_alt warnings from the picker were fixed (alt no longer says "photo"). vite build
+transformed cleanly. Not run against a live DB yet — needs an issued badge to click through
+Issue-with-photo → Print, Photo… → Replace / Remove, and Reissue carrying the photo.

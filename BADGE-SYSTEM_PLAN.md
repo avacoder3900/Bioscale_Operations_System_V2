@@ -371,6 +371,7 @@ issuedAt / issuedBy { _id, username }
 revokedAt / revokedBy { _id, username } / revokeReason
 lastUsedAt    bumped by resolveBadge()
 printCount    bumped by the print page
+photo         { data (base64, select:false), contentType, size, updatedAt, updatedBy } — optional portrait, §17.6 (2026-10-02)
 ```
 Indexes: `{ code: 1 }` unique · `{ userId: 1 }` unique, partial `status: 'active'` · `{ status: 1, issuedAt: -1 }`.
 Revoke, never delete — block deletes the way `user.ts` does.
@@ -559,6 +560,35 @@ itself has no switch; a short-lived dev-only copy was added and removed the same
 
 ---
 
+### 17.6 Photos on badges (added 2026-10-02)
+
+The card can carry a portrait so the person at the scan box can be matched to the badge by eye.
+Storage is on the badge document itself, not R2: a badge portrait is ~50 KB, there are a few dozen
+of them, the print page needs it inline, and the portal must not depend on R2 credentials or the
+Worker's TLS situation. `photo.data` is base64 with `select: false`, so `listBadges()` and every other
+read stay light; only `getBadgePhoto()` selects it.
+
+- **Picker** — `src/lib/components/admin/BadgePhotoInput.svelte`. Centre-crops to 4:5 and shrinks to
+  480 × 600 JPEG (q 0.85) in the browser via `createImageBitmap` (EXIF orientation honoured) and a
+  canvas, so a phone photo arrives as ~50 KB. The form's `enhance()` swaps the resized blob in as
+  `photo`; with JS off the raw file goes up and the server's limit applies.
+- **Server** — `badge-service.ts`: `setBadgePhoto` (active badges only), `clearBadgePhoto` (any
+  status), `getBadgePhoto`, and `issueBadge({ photo })`. Bytes are sniffed (JPEG / PNG / WebP magic,
+  the client's type is ignored) and capped at `BADGE_PHOTO_MAX_BYTES` = 400 KB decoded. Audit rows
+  `PHOTO_SET` / `PHOTO_CLEAR` carry type and size, never the bytes; `ISSUE` gains `photo: boolean`.
+- **Reissue carries the photo forward** — `reissueBadge` reads `+photo.data` from the old card and
+  passes it to `issueBadge`, so a lost card is reprinted with the same face.
+- **Serving** — `GET /admin/badges/[badgeId]/photo`, admin only. `BadgeRow.photoUrl` is that path with
+  `?v=<updatedAt ms>`, so a replaced photo is a new URL and the response is cached for a year.
+- **Portal** — a *Photo* column (thumbnail or dashed placeholder) and a **Photo…** action per active
+  row that opens the picker with **Save photo** / **Replace** and **Remove photo**; the issue form has an
+  optional *Photo* field. Actions `setPhoto`, `clearPhoto`; errors land in `form.photo`.
+- **Card** — `BadgeCard` takes `photoUrl`; the portrait (24 × 30 mm) sits left of the 30 mm QR in one
+  row. A card without a photo renders exactly as before. Both print pages pass it through.
+
+Out of scope here: showing the portrait at the scan box when a badge is resolved (a natural follow-up
+once a kiosk view exists), and any photo on `User`.
+
 ## 18. Files
 
 | File | Change |
@@ -575,7 +605,9 @@ itself has no switch; a short-lived dev-only copy was added and removed the same
 | `src/routes/admin/badges/+page.server.ts`, `+page.svelte` | **new** — portal + **Require badge** toggle (`setBadgeMode`, `isAdmin` gate) |
 | `src/routes/admin/badges/[badgeId]/print/+page.server.ts`, `+page.svelte` | **new** — print |
 | `src/routes/admin/badges/print/+page.server.ts`, `+page.svelte` | **new** — batch print sheet (`?ids=`) |
-| `src/lib/components/admin/BadgeCard.svelte` | **new** — the CR80 card, shared by both print pages |
+| `src/lib/components/admin/BadgeCard.svelte` | **new** — the CR80 card, shared by both print pages; `photoUrl` prop (§17.6) |
+| `src/lib/components/admin/BadgePhotoInput.svelte` | **new** (2026-10-02) — browser-side crop / shrink picker, §17.6 |
+| `src/routes/admin/badges/[badgeId]/photo/+server.ts` | **new** (2026-10-02) — admin-only portrait bytes, §17.6 |
 | `src/routes/manufacturing/cart-mfg/buckets/new/+page.server.ts`, `+page.svelte` | badge field |
 | `src/routes/manufacturing/cart-mfg/buckets/+page.server.ts`, `+page.svelte` | badge on `?/start`, `badgeMode` in load, read-only "Badge required" note on the board |
 | `BUCKET-SYSTEM_PLAN.md` | one build-history row + §6.1 / §9.4 notes, same commit as the bucket-side code |
@@ -648,6 +680,9 @@ Built on `feat/badge-system` in the §18.1 order. Deviations, all small:
  9. **Board links to the portal switch** (§17.5) — `canBadgeAdmin` in the board load, header link
    and start-form *Change* link. (A dev-only copy of the switch on the board existed for one commit,
    `939984f7`, and was removed at the user.s request.)
+10. **Photos (2026-10-02, `feat/badge-photos`)** — §17.6. Stored on the badge document (base64,
+   `select: false`) rather than R2; see the section for why. Picker crops client-side so the 400 KB
+   server cap is only a backstop. `npm run check` stayed at the 14-error baseline.
 
 `npm run check`: 14 errors before, 14 after — all pre-existing (`research-proxy.ts` ×2,
 `r2.ts`, `AskBimsWidget.svelte`, `assembly/[sessionId]` ×8, `validation/magnetometer/[sessionId]` ×2 —
