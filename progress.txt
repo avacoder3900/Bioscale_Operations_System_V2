@@ -17559,3 +17559,11 @@ other search functions (the bucket scan-box search list and the bucket log pills
 npm run check (svelte-kit sync + svelte-check): 14 errors — the pre-existing baseline (r2.ts,
 2× research-proxy.ts, AskBimsWidget, 8× assembly/[sessionId], 2× validation/magnetometer/[sessionId]);
 none in any file this branch touches.
+Shipped: commit 2ad5bd2f pushed (branch only — no PR yet; it stacks on feat/drop-pressed-stage / PR #75).
+
+Deployment: preview — https://bioscale-operations-system-mongodb-emhbswf8l-brevitest.vercel.app
+Source: branch feat/find-cart-bucket-pills @ commit 2ad5bd2f
+Retrieve this exact code: git checkout feat/find-cart-bucket-pills at commit 2ad5bd2f
+  (or: git log feat/find-cart-bucket-pills --oneline to find it if the branch has since moved on)
+What this deployment is for: Find a cart / Where does this cart belong? results with the bucket
+  nickname and colour-coded status, relation and bucket-state pills (on top of the Pressed-stage removal).
