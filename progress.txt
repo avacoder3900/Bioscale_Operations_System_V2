@@ -17498,3 +17498,37 @@ Retrieve this exact code: git checkout master at commit fba63a8e
 research_calibration_activate_curve added to HUMAN_ONLY_ACTIONS (approval happens on the research app
 Curves page with a note); new read tool research_calibration_list_runs; fit tool describes the fit policy.
 npm run test:unit 191 pass; check: 0 errors in changed files (master baseline otherwise). Deployed via GitHub push.
+
+================================================================================
+2026-10-02 — feat/drop-pressed-stage — Buckets: Pressed stage removed (Unpressed → Backed)
+================================================================================
+Branched from feat/badge-photos @ 251d8dd4. User: the "Pressed" column in the bucket system is an
+added layer of redundancy — pressing and backing happen in one go — so Unpressed now advances
+directly to Backed. BUCKET-SYSTEM_PLAN.md §2 (new callout), §5.2, §6.3, §7, §9.1, §9.3, §9.5,
+§9.6, §12.3 and a changelog row carry the as-built detail.
+  - bucket-service.ts: BUCKET_STAGES = barcoded | unpressed | backing; STAGE_LABELS loses Pressed.
+    The key is kept as LEGACY_PRESSED_STAGE (and in the BucketCycle.stage / CartridgeRecord.status
+    enums) so historical rows validate. New helpers: isBucketStatus() (bucket stage OR legacy
+    pressed — used wherever a cart's status is tested for "still inside the buckets": residual
+    scan/merge, audit scan, void's went-on check, cart lookup, state-change), boardStage() (legacy
+    pressed → 'unpressed' for the board column, stage counts, last-stage-by-bucket, registry
+    current stage, state-change destination match) and stageLabel() ("Pressed (legacy)").
+    nextStage('pressed') → 'backing', so a pass still at Pressed advances to Backed with the normal
+    backing.* stamp and no thermoseal (taken at Barcoded → Unpressed). stageCounts folds legacy
+    pressed rows into Unpressed instead of dropping them. No data migration needed; nothing writes
+    'pressed' any more (FORCE_TARGETS and the state-change bucket-stage list derive from
+    BUCKET_STAGES).
+  - Board (buckets/+page.svelte): md:grid-cols-4; stage records/tints lose pressed; help copy.
+  - cart-mfg/+page.svelte and cartridge-admin/+page.svelte: Pressed tile removed from the bucket
+    strips; STATUS_ORDER / STATUS_NEXT_LABEL updated (legacy pressed → "Backed").
+  - pipeline/+page.server.ts: STAGE_KEYS loses bucket_pressed; Unpressed description says to
+    advance to Backed once pressed and backed.
+  - override/+page.svelte tint map, state-change server/page copy, model + LifecycleStage comments.
+  - Not touched: buckets/[bucketId]/+page.server.ts went-on list and cartridge-admin STAGES filter
+    keep 'pressed' on purpose (historical rows).
+npm run check (svelte-kit sync + svelte-check): 14 errors — the pre-existing baseline (r2.ts,
+2× research-proxy.ts, AskBimsWidget, 8× assembly/[sessionId], 2× validation/magnetometer/[sessionId]);
+none in any file this branch touches.
+Shipped: commit 59af4e86 pushed; PR #75 into master
+(https://github.com/avacoder3900/Bioscale_Operations_System_V2/pull/75). Preview deployment: Vercel GitHub
+integration builds it from the push — log the URL here when it appears.

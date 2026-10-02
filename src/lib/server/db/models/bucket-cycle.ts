@@ -79,7 +79,7 @@ const bucketCycleSchema = new Schema({
 	cycleNumber: { type: Number, required: true }, // → 'BKT-000123 #7'
 	stage: {
 		type: String,
-		enum: ['barcoded', 'raw', 'unpressed', 'pressed', 'backing', 'qr_pending'], // 'raw' + qr_pending: pre-rename & v1 values, kept so old rows validate
+		enum: ['barcoded', 'raw', 'unpressed', 'pressed', 'backing', 'qr_pending'], // 'raw' + qr_pending: pre-rename & v1 values; 'pressed': stage dropped 2026-10-02 — all kept so old rows validate
 		required: true
 	},
 	cartridgeIds: { type: [String], default: [] }, // members currently in the tub (v2)

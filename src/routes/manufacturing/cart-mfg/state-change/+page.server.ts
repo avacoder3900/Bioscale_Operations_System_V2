@@ -14,7 +14,7 @@
  *    barcodes" opts in to originating them directly at the target status.
  *  - Every changed cartridge gets `priorStatus`, a phase-scoped note, and an
  *    AuditLog row.
- *  - Bucket stages (barcoded / unpressed / pressed / backing) are bucket MEMBERSHIP, not just a
+ *  - Bucket stages (barcoded / unpressed / backing) are bucket MEMBERSHIP, not just a
  *    status: moving a cart into one needs a destination bucket whose open pass
  *    is at that stage, and moving a cart out of one removes it from its pass.
  *    Both go through bucket-service.overrideCartStage so the board stays honest.
@@ -24,7 +24,7 @@
 import { fail, redirect } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
 import { connectDB, CartridgeRecord, AuditLog, generateId } from '$lib/server/db';
-import { resolveBucketId, overrideCartStage, boardData, isBucketStage, BucketError, BUCKET_STAGES, STAGE_LABELS } from '$lib/server/services/bucket-service';
+import { resolveBucketId, overrideCartStage, boardData, isBucketStage, isBucketStatus, BucketError, BUCKET_STAGES, STAGE_LABELS } from '$lib/server/services/bucket-service';
 import type { PageServerLoad, Actions } from './$types';
 
 /** The status enum, read straight off the schema — single source of truth. */
@@ -103,7 +103,7 @@ export const actions: Actions = {
 
 			// Bucket-aware path: into a bucket stage, or out of one (the cart is a
 			// member of an open pass). Membership + status move together.
-			if (cart && (isBucketStage(target) || isBucketStage(cart.status))) {
+			if (cart && (isBucketStage(target) || isBucketStatus(cart.status))) { // legacy 'pressed' members leave their pass too
 				try {
 					const r = await overrideCartStage({ barcode, target, destinationBucketId: destinationBucketId || undefined, reason, user: op });
 					if (r.from === r.to && r.fromCycle === r.toCycle) unchanged.push({ barcode, reason: `already ${target}${r.toCycle ? ' in that bucket' : ''}` });
