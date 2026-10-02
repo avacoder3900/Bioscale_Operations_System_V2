@@ -17489,3 +17489,12 @@ Retrieve this exact code: git checkout master at commit 294bd679
 What this deployment is for: photos on badges live in production — Badge Portal Photo column / Photo…
   panel / issue-with-photo, portrait on printed cards. GitHub deployment 6811307817 (Production).
   Smoke: /login 200. PR #72 closed in favour of the cherry-pick.
+
+================================================================================
+2026-10-02 — master — DEPLOY: research curve activation human-only + list_runs (bims-operations 3.6.1)
+================================================================================
+Source: branch master @ commit fba63a8e (feat/research-calibration-human-only)
+Retrieve this exact code: git checkout master at commit fba63a8e
+research_calibration_activate_curve added to HUMAN_ONLY_ACTIONS (approval happens on the research app
+Curves page with a note); new read tool research_calibration_list_runs; fit tool describes the fit policy.
+npm run test:unit 191 pass; check: 0 errors in changed files (master baseline otherwise). Deployed via GitHub push.
