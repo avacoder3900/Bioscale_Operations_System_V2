@@ -79,7 +79,7 @@ const bucketCycleSchema = new Schema({
 	cycleNumber: { type: Number, required: true }, // → 'BKT-000123 #7'
 	stage: {
 		type: String,
-		enum: ['barcoded', 'raw', 'unpressed', 'pressed', 'backing', 'qr_pending'], // 'raw' + qr_pending: pre-rename & v1 values, kept so old rows validate
+		enum: ['barcoded', 'raw', 'unpressed', 'pressed', 'backing', 'qr_pending'], // 'raw' + qr_pending: pre-rename & v1 values; 'pressed': stage dropped 2026-10-02 — all kept so old rows validate
 		required: true
 	},
 	cartridgeIds: { type: [String], default: [] }, // members currently in the tub (v2)
@@ -117,7 +117,8 @@ const bucketCycleSchema = new Schema({
 	residualFound: { type: [residualFoundSchema], default: [] },
 	discrepancies: { type: [discrepancySchema], default: [] },
 	audits: { type: [auditRunSchema], default: [] },
-	openedBy: operatorRef,
+	openedBy: operatorRef,   // the session that started the pass (was the badge holder until 2026-09-30, when the gate moved to scan-in)
+	custodyId: String,       // Custody._id claimed by the badge holder at the FIRST scan-in (bucket-service.claimCustody); released by closeCycle / voidCycle
 	openedAt: Date,
 	stageEnteredAt: Date, // set on create and on every advance — dwell time without replaying the ledger
 	closedAt: Date

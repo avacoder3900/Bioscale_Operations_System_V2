@@ -7,15 +7,17 @@
 import { fail, redirect } from '@sveltejs/kit';
 import { connectDB, ProductionBucket } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
-import { BucketError, createBucket, replaceBucketSticker } from '$lib/server/services/bucket-service';
+import { BucketError, createBucket, replaceBucketSticker, setBucketNickname } from '$lib/server/services/bucket-service';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals, url }) => {
 	if (!locals.user) redirect(302, '/login');
 	requirePermission(locals.user, 'manufacturing:read');
 	await connectDB();
+	// No badge on this page (user, 2026-09-30): minting is not a gated step; the
+	// badge is asked for at scan-in, discards and move to oven on the board.
 	const recent = await ProductionBucket.find({})
-		.select('_id barcode state cycleCount createdAt createdBy')
+		.select('_id barcode nickname state cycleCount createdAt createdBy')
 		.sort({ createdAt: -1 })
 		.limit(25)
 		.lean() as any[];
@@ -25,6 +27,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		recent: recent.map(b => ({
 			bucketId: b._id,
 			barcode: b.barcode ?? null,
+			nickname: b.nickname ?? null,
 			state: b.state,
 			cycleCount: b.cycleCount ?? 0,
 			createdAt: b.createdAt ? new Date(b.createdAt).toISOString() : null,
@@ -40,10 +43,34 @@ export const actions: Actions = {
 		await connectDB();
 		const d = await request.formData();
 		try {
-			const r = await createBucket({ qr: String(d.get('qr') ?? ''), user: { _id: locals.user._id, username: locals.user.username } });
+			// Nickname is no longer taken here (user, 2026-09-30) — it has its own
+			// block below (?/nickname) so the mint stays "scan the sticker, nothing else".
+			const r = await createBucket({
+				qr: String(d.get('qr') ?? ''),
+				user: { _id: locals.user._id, username: locals.user.username }
+			});
 			return { create: { success: true, ...r } };
 		} catch (e) {
-			if (e instanceof BucketError) return fail(e.status, { create: { error: e.message } });
+			if (e instanceof BucketError) return fail(e.status, { create: { error: e.message, code: e.code ?? null } });
+			throw e;
+		}
+	},
+
+	// Third block: scan a bucket's QR, give it a nickname (or clear it with an empty name).
+	nickname: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'manufacturing:write');
+		await connectDB();
+		const d = await request.formData();
+		try {
+			const r = await setBucketNickname({
+				bucketId: String(d.get('bucketId') ?? ''),
+				nickname: String(d.get('nickname') ?? ''),
+				user: { _id: locals.user._id, username: locals.user.username }
+			});
+			return { nickname: { success: true, ...r } };
+		} catch (e) {
+			if (e instanceof BucketError) return fail(e.status, { nickname: { error: e.message } });
 			throw e;
 		}
 	},

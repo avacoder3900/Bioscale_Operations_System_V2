@@ -21,7 +21,7 @@ const cartridgeRecordSchema = new Schema({
 	// Production bucket the cartridge was scanned into at birth (BUCKET-SYSTEM_PLAN
 	// v2, 2026-09-23): a cartridge is serialized the moment its QR sticker is
 	// scanned into a bucket at status 'barcoded', then travels barcoded → unpressed →
-	// pressed inside that bucket until WI-01 draws it out to 'backing' (In Oven).
+	// backing inside that bucket ('pressed' sat in between until 2026-10-02).
 	bucket: {
 		bucketId: String,            // ProductionBucket._id ('BKT-000123') — the tub, reusable
 		cycleId: String,             // BucketCycle._id — the pass; the real link (bucket ids repeat)
@@ -38,6 +38,7 @@ const cartridgeRecordSchema = new Schema({
 		barcodeLabelLot: String,     // PT-CT-106 input material lot
 		bucketCycleId: String,       // BucketCycle._id the cartridge was drawn from at WI-01
 		bucketBarcode: String,       // denormalized ProductionBucket._id for search; NOT unique across passes
+		manualBackedAt: Date,        // State Change moved it straight to Backed with no bucket (BUCKET-SYSTEM_PLAN §9.6); wax filling's cancel path reads it as "real cart"
 		// LEGACY (backing-oven tracking removed 2026-09-23, BUCKET-SYSTEM_PLAN v2):
 		// no longer written; kept so historical records still validate.
 		ovenEntryTime: Date,
@@ -72,6 +73,9 @@ const cartridgeRecordSchema = new Schema({
 		// assay data (bug)".
 		isResearch: Boolean,
 		deckPosition: Number,
+		// DOMAIN-32: research reagent lot (reagent_set_lots._id / lotNumber) this cartridge was filled with
+		reagentLotId: String,
+		reagentLotNumber: String,
 		tubeRecords: [{ _id: false, wellPosition: Number, reagentName: String, sourceLotId: String, transferTubeId: String }],
 		operator: operatorRef, fillDate: Date, expirationDate: Date, recordedAt: Date
 	},
@@ -183,8 +187,8 @@ const cartridgeRecordSchema = new Schema({
 			// in the enum so historical rows still validate; `wax_stored` is migrated away.
 			// Pre-backing bucket stages (BUCKET-SYSTEM_PLAN v2): a cartridge is born at
 			// 'barcoded' when its QR sticker is scanned into a production bucket and moves
-			// with the bucket. 'backing' is displayed as "In Oven" — WI-01 draws
-			// cartridges out of a pressed bucket into it.
+			// with the bucket to 'backing' ("Backed"). 'pressed' was the stage between
+			// Unpressed and Backed until 2026-10-02 — kept so historical rows validate.
 			'barcoded', 'unpressed', 'pressed',
 			'raw', // pre-rename value (BUCKET-SYSTEM_PLAN), kept so historical rows still validate
 			'backing', 'wax_filling', 'wax_filled', 'wax_qc', 'wax_ready', 'wax_rejected', 'reagent_filling', 'reagent_filled',

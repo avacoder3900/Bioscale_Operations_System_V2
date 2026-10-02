@@ -109,7 +109,13 @@ This replicates the full `/api/agent/**` machine surface except: `ask`/`transcri
 routes serving the in-app widget, not machine agents) and the OT-2/scanner long-poll daemon queues
 (not request/response shaped; the robot bridge keeps using them directly).
 
-## Research analysis tools (v3.6.0)
+## Research analysis tools (v3.7.0)
+
+v3.7.0 adds DOMAIN-32 reagent-lot tools: `research_reagent_lot_list` / `_get` / `_create` (W),
+`research_inventory_originate` (W), `research_fill_lot_list`, `research_curve_set_list`,
+`research_fill_lot_set_reagent_lot` (W), and the human-only `research_fill_lot_assign_curve_set`.
+The fill screen now requires picking a research reagent lot (reagent_set_lots, read-only in BIMS)
+and stamps `reagentLotId` / `reagentLotNumber` on the run and on each cartridge's `reagentFilling`.
 
 The brevitest-research-v2 app owns the analysis engine (declarative analysis profiles, stored
 per-well results on `cartridge_records.analysis`, and 4PL calibration curves per reagent lot).
@@ -127,7 +133,9 @@ Mutating (`actor` required, machine_activity audit via `machineWrite`; the resea
 `agent:<actor>` on the document): `research_analysis_save_profile` (draft), `research_analysis_activate_profile`,
 `research_analysis_archive_profile`, `research_analysis_run` (confirmed gate), `research_assay_attach_profile`,
 `research_calibration_fit` (draft), `research_calibration_activate_curve`, `research_calibration_quantify`
-(confirmed gate). None are human-only: they never touch manufacturing records, only research analysis state.
+(confirmed gate). `research_calibration_activate_curve` is **human-only** (3.6.1): approving a lot's calibration
+curve happens on the research Curves page with a note; the tool refuses and says so. `research_calibration_list_runs`
+(3.6.1) shows the calibrator wells a fit would use. Everything else never touches manufacturing records.
 
 Authoring doctrine is embedded in the tool descriptions: catalog → validate → find cartridges → preview →
 save draft → activate → attach to assay. See research-v2 `docs/prds/DOMAIN-30-ANALYSIS-V3.md`.

@@ -45,6 +45,9 @@ const reagentBatchRecordSchema = new Schema({
 		wellPosition: Number, reagentName: String, sourceLotId: String,
 		transferTubeId: String, preparedAt: Date
 	}],
+	// DOMAIN-32: the research-app reagent lot (reagent_set_lots) picked at fill time. Required.
+	reagentLotId: String,
+	reagentLotNumber: String,
 
 	setupTimestamp: Date, runStartTime: Date, runEndTime: Date,
 	// Set when the OT-2 finishes (completeRunFilling). Once present, the run

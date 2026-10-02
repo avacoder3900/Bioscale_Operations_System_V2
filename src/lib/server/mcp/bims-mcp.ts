@@ -224,7 +224,7 @@ async function callAgentApi(
 export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 	// Version bump signals clients (claude.ai caches connector tool lists) that
 	// the toolset changed — bump on every tool add/remove/rename.
-	const server = new McpServer({ name: 'bims-operations', version: '3.6.0' });
+	const server = new McpServer({ name: 'bims-operations', version: '3.7.0' });
 
 	// ---------------------------------------------------------------- meta
 
@@ -1875,6 +1875,19 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 	);
 
 	server.registerTool(
+		'research_calibration_list_runs',
+		{ annotations: READ_ONLY,
+			description:
+				'Research app: every calibrator well on a reagent lot for an assay, with the readout recomputed under the ' +
+				'assay profile, nominal concentration, QC pass/flags, SPU and factor, and whether the fit policy would include ' +
+				'it (and why not). Also returns the policy, the distinct levels, and meetsMinLevels. Call before ' +
+				'research_calibration_fit and present the table so the person sees exactly what a fit would use.',
+			inputSchema: z.object({ lotId: z.string(), assayId: z.string(), profileId: z.string().optional(), readout: z.string().optional() })
+		},
+		async (args) => callAgentApi(fetcher, `${RESEARCH}/calibration/runs`, { query: args })
+	);
+
+	server.registerTool(
 		'research_calibration_list_curves',
 		{ annotations: READ_ONLY,
 			description: 'Research app: list 4PL calibration curves (points omitted) filtered by lotId, assayId, analyteId, status (draft | active | superseded).',
@@ -1928,8 +1941,10 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 		'research_calibration_activate_curve',
 		{ annotations: WRITE_TOOL,
 			description:
-				'Research app: make a curve the ACTIVE curve for its lot/assay/analyte (previous active curve becomes ' +
-				'superseded). Unknown samples on that lot quantify against it from then on. Confirm with the person first.',
+				'HUMAN-ONLY. Approving a calibration curve as a reagent lot\'s active curve is a decision a person makes on the ' +
+				'research app Curves page (review calibrator wells, recovery, the previous curve overlay, then Approve with a ' +
+				'note). This tool always refuses; use it only to explain where the person approves. You may draft fits with ' +
+				'research_calibration_fit and read everything with research_calibration_list_runs / get_curve.',
 			inputSchema: z.object({ actor: ACTOR_FIELD, curveId: z.string() })
 		},
 		async (args) =>
@@ -1955,6 +1970,130 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 				void confirmed;
 				return callAgentApi(fetcher, `${RESEARCH}/calibration/quantify`, { method: 'POST', body: { ...rest, actor } });
 			})
+	);
+
+	// --------------------------------- research reagent lots / fill lots / curve sets (proxied, DOMAIN-32)
+	//
+	// Vocabulary: a REAGENT LOT is the set of inventory barcodes (qd630, qd480, beads required;
+	// buffer, wash, elution optional) filled into cartridges — created in the research app and
+	// picked on the BIMS fill screen. A FILL LOT is one fill run. A CURVE SET is one fill lot's
+	// calibration curves at different time points (days since fill). Quantification uses the
+	// fill lot's own curve set, or one a PERSON assigned (same reagent lot, or equal
+	// compatibility key = same qd630 + qd480 + beads barcodes).
+
+	server.registerTool(
+		'research_reagent_lot_list',
+		{ annotations: READ_ONLY,
+			description:
+				'Research app: list reagent lots (RL-YYYYMMDD-NNN) with their components (role → inventory barcode, ' +
+				'catalog name, manufacturer lot), compatibility key and status. Filter by assayId and status (active | retired).',
+			inputSchema: z.object({ assayId: z.string().optional(), status: z.enum(['active', 'retired']).optional() })
+		},
+		async (args) => callAgentApi(fetcher, `${RESEARCH}/reagent-lots`, { query: args })
+	);
+
+	server.registerTool(
+		'research_reagent_lot_get',
+		{ annotations: READ_ONLY,
+			description: 'Research app: one reagent lot with its inventory items resolved (concentration, expiry, status).',
+			inputSchema: z.object({ reagentLotId: z.string() })
+		},
+		async ({ reagentLotId }) => callAgentApi(fetcher, `${RESEARCH}/reagent-lots/${encodeURIComponent(reagentLotId)}`)
+	);
+
+	server.registerTool(
+		'research_reagent_lot_create',
+		{ annotations: WRITE_TOOL,
+			description:
+				'Research app: create a reagent lot from inventory barcodes. Roles qd630, qd480 and beads are REQUIRED; ' +
+				'buffer, wash and elution are optional. Each component is either an existing inventory barcode ' +
+				'({ role, inventoryId }) or a new inventory item originated from a catalog entry on the spot ' +
+				'({ role, originate: { catalogId, manufacturerLotId?, concentration? } }) — use research_inventory_originate ' +
+				'semantics; the research app generates the barcode. WORKFLOW: list the catalog/inventory first ' +
+				'(research reagent-catalog tools), show the person the six roles with what you will use, get a yes, then call. ' +
+				'The lot number is generated; it is stored and picked from a dropdown at fill time, never printed.',
+			inputSchema: z.object({
+				actor: ACTOR_FIELD,
+				assayId: z.string().describe('8-char A+hex assay id'),
+				name: z.string().optional(),
+				notes: z.string().optional(),
+				components: z.array(z.object({
+					role: z.enum(['qd630', 'qd480', 'beads', 'buffer', 'wash', 'elution']),
+					inventoryId: z.string().optional().describe('Existing reagent_inventory barcode'),
+					originate: z.object({ catalogId: z.string(), manufacturerLotId: z.string().optional(), concentration: z.number().optional(), concentrationUnit: z.string().optional(), barcode: z.string().optional() }).optional()
+				})).min(3)
+			})
+		},
+		async (args) =>
+			machineWrite('research_reagent_lot_create', (args as any).actor, (actor) =>
+				callAgentApi(fetcher, `${RESEARCH}/reagent-lots`, { method: 'POST', body: { ...args, actor } })
+			)
+	);
+
+	server.registerTool(
+		'research_inventory_originate',
+		{ annotations: WRITE_TOOL,
+			description:
+				'Research app: create a reagent inventory item straight from a catalog entry (no protocol execution). ' +
+				'Returns the new barcode. Use when a stock bottle exists physically but was never entered.',
+			inputSchema: z.object({ actor: ACTOR_FIELD, catalogId: z.string(), manufacturerLotId: z.string().optional(), concentration: z.number().optional(), concentrationUnit: z.string().optional(), barcode: z.string().optional(), notes: z.string().optional() })
+		},
+		async (args) =>
+			machineWrite('research_inventory_originate', (args as any).actor, (actor) =>
+				callAgentApi(fetcher, `${RESEARCH}/reagent-inventory/originate`, { method: 'POST', body: { ...args, actor } })
+			)
+	);
+
+	server.registerTool(
+		'research_fill_lot_list',
+		{ annotations: READ_ONLY,
+			description:
+				'Research app: fill lots (fill runs) for an assay with fill date, reagent lot, cartridges, standard wells and ' +
+				'levels, the curve set in use (own or assigned, with source) and its active curve + time point (days since ' +
+				'fill), borrow candidates with compatibility verdicts and reasons, and staleness/profile-drift flags. ' +
+				'PRESENTATION: one row per fill lot: "<fill id> · filled <date> · reagent lot <RL-…> · <n> carts · curve: <v@day> (<source>)".',
+			inputSchema: z.object({ assayId: z.string() })
+		},
+		async ({ assayId }) => callAgentApi(fetcher, `${RESEARCH}/calibration/fill-lots`, { query: { assayId } })
+	);
+
+	server.registerTool(
+		'research_curve_set_list',
+		{ annotations: READ_ONLY,
+			description: 'Research app: curve sets (one per fill lot + analyte) with their curves ordered by time point. Filter by assayId or fillLotId.',
+			inputSchema: z.object({ assayId: z.string().optional(), fillLotId: z.string().optional() })
+		},
+		async (args) => callAgentApi(fetcher, `${RESEARCH}/calibration/curve-sets`, { query: args })
+	);
+
+	server.registerTool(
+		'research_fill_lot_set_reagent_lot',
+		{ annotations: WRITE_TOOL,
+			description:
+				'Research app: set the reagent lot on a fill lot BY HAND. Only for fills made before the BIMS picker existed ' +
+				'(new fills get it at fill time). Refused once the fill lot has a curve set. Confirm the fill id and lot ' +
+				'number with the person first.',
+			inputSchema: z.object({ actor: ACTOR_FIELD, fillLotId: z.string(), reagentLotId: z.string() })
+		},
+		async (args) =>
+			machineWrite('research_fill_lot_set_reagent_lot', (args as any).actor, (actor) =>
+				callAgentApi(fetcher, `${RESEARCH}/calibration/fill-lots/${encodeURIComponent(args.fillLotId)}/reagent-lot`, { method: 'POST', body: { reagentLotId: args.reagentLotId, actor } })
+			)
+	);
+
+	server.registerTool(
+		'research_fill_lot_assign_curve_set',
+		{ annotations: WRITE_TOOL,
+			description:
+				'HUMAN-ONLY. Deciding that a fill lot quantifies against ANOTHER fill lot\'s curve set (same reagent lot, or ' +
+				'equal qd630/qd480/beads) is a person\'s decision made on the research Curves page with a note. This tool ' +
+				'always refuses; use research_fill_lot_list to show the candidates and their compatibility verdicts.',
+			inputSchema: z.object({ actor: ACTOR_FIELD, fillLotId: z.string(), curveSetId: z.string(), note: z.string() })
+		},
+		async (args) =>
+			machineWrite('research_fill_lot_assign_curve_set', (args as any).actor, (actor) =>
+				callAgentApi(fetcher, `${RESEARCH}/calibration/fill-lots/${encodeURIComponent(args.fillLotId)}/assign-curve-set`, { method: 'POST', body: { curveSetId: args.curveSetId, note: args.note, actor } })
+			)
 	);
 
 	return server;

@@ -6,6 +6,7 @@ import {
 	OpentronsRobot, Ot2BridgeCommand
 } from '$lib/server/db';
 import { recordTransaction, resolvePartId } from '$lib/server/services/inventory-transaction';
+import { ReagentSetLot } from '$lib/server/db';
 import { findBucketLabels } from '$lib/server/services/bucket-service';
 import { checkRobotConflict, checkDeckConflict, checkTrayConflict } from '$lib/server/manufacturing/resource-locks';
 import { WAX_PAGE_OWNED } from '$lib/server/manufacturing/run-statuses';
@@ -294,6 +295,8 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 			.limit(200)
 			.lean()
 			.catch(() => []);
+		// DOMAIN-32: research reagent lots (reagent_set_lots) the operator must pick from at fill time.
+		const researchReagentLots = await ReagentSetLot.find({ status: 'active' }).select('_id lotNumber name assayId components createdAt').sort({ createdAt: -1 }).lean();
 		const activeReagentLots: Record<string, any[]> = {};
 		for (const l of finalizedLots as any[]) {
 			const slug = l.templateSlug ?? 'unknown';
@@ -360,6 +363,8 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 			reagentBatchBarcode: (activeRun?.tubeRecords ?? [])[0]?.sourceLotId ?? null,
 			fridges,
 			activeReagentLots,
+			researchReagentLots: JSON.parse(JSON.stringify(researchReagentLots)),
+			reagentLotNumber: (activeRun as any)?.reagentLotNumber ?? null,
 			// --- OT-2 Start Run panel inputs (same shape as wax-filling) ---
 			robotProtocols,
 			opentronsRobotId: robotId,
@@ -487,6 +492,10 @@ export const actions: Actions = {
 		const data = await request.formData();
 		const runId = data.get('runId') as string;
 		const tubesRaw = data.get('tubes') as string;
+		const reagentLotId = ((data.get('reagentLotId') as string | null) ?? '').trim();
+		if (!reagentLotId) return fail(400, { error: 'A reagent lot is required to fill. Create one in the research app (Reagent Lots) and pick it.' });
+		const reagentLot = await ReagentSetLot.findById(reagentLotId).lean() as any;
+		if (!reagentLot || reagentLot.status !== 'active') return fail(400, { error: 'Reagent lot not found or retired' });
 
 		let tubes: { reagentName: string; wellPosition: number; volume: number; lotId?: string; transferTubeId?: string }[] = [];
 		if (tubesRaw) {
@@ -502,7 +511,7 @@ export const actions: Actions = {
 		}));
 
 		await ReagentBatchRecord.findByIdAndUpdate(runId, {
-			$set: { tubeRecords, status: 'Loading' }
+			$set: { tubeRecords, status: 'Loading', reagentLotId, reagentLotNumber: reagentLot.lotNumber }
 		});
 
 		return { success: true };

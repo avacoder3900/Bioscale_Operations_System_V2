@@ -8,6 +8,7 @@ export { CartridgeGroup } from './cartridge-group.js';
 export { ReagentBatchRecord } from './reagent-batch-record.js';
 export { ReagentProtocolTemplate } from './reagent-protocol-template.js';
 export { ReagentLot } from './reagent-lot.js';
+export { ReagentSetLot } from './reagent-set-lot.js';
 
 // Tier 2: Operational — Receiving & Inspection
 export { ReceivingLot } from './receiving-lot.js';
@@ -168,4 +169,7 @@ export { AskBimsTranscribeLog } from './ask-bims-transcribe-log.js';
 export { ProductionBucket } from './production-bucket.js';
 export { BucketCycle } from './bucket-cycle.js';
 export { BucketTransaction } from './bucket-transaction.js';
+// Operator badges + custody (BADGE-SYSTEM_PLAN.md Part 2)
+export { OperatorBadge } from './operator-badge.js';
+export { Custody } from './custody.js';
 export { ThermosealRoll } from './thermoseal-roll.js';

@@ -16,6 +16,11 @@ const productionBucketSchema = new Schema({
 	// Identity stays on _id so a scuffed sticker is replaced, not the bucket.
 	// Every scan path resolves a code by _id first, then by this field.
 	barcode: { type: String },
+	// Optional human name for the tub ("Big Blue", "Bench 2"). Display only —
+	// never an identity: scans still resolve by _id / barcode. Unique among
+	// non-retired buckets (service-enforced, case-insensitive), so a retired
+	// tub's name can be reused. Added 2026-09-30.
+	nickname: { type: String },
 	state: {
 		type: String,
 		enum: ['available', 'in_use', 'quarantined', 'retired'],
