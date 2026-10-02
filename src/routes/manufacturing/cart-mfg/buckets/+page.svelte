@@ -70,10 +70,11 @@
 	let residualDisposition = $state<'merge' | 'scrap' | ''>('');
 
 	// ── operator badge (user, 2026-09-30) ────────────────────────────────────
-	// One badge for the whole rail. It is asked for at the three gated steps —
-	// scanning carts into a bucket, discarding carts (advance discards, Discard
-	// carts…, audit discards / write-offs, leftover discards) and Move to oven —
-	// and nowhere else. Scanned once into any badge box (or into a cart box: a
+	// One badge for the whole rail. It is asked for at the gated steps —
+	// scanning carts into a bucket, EVERY advance (2026-10-02: "require a scan
+	// in at every phase"), discarding carts (advance discards, Discard carts…,
+	// audit discards / write-offs, leftover discards) and Move to oven — and
+	// nowhere else. Scanned once into any badge box (or into a cart box: a
 	// BDG- code is routed here), it rides on every scan-in POST and on each gated
 	// form until the server rejects it or the operator changes it.
 	const BADGE_RE = /^BDG-[A-Z0-9]{10}$/i;
@@ -336,6 +337,9 @@
 	function setMode(mode: CycleMode) {
 		if (panel.kind === 'cycle') panel = { kind: 'cycle', cycleId: panel.cycleId, mode };
 		resetLists();
+		// Every advance is badge-gated (2026-10-02): land the gun on the badge box
+		// when no badge is on yet, so the first scan is the badge, not a cart.
+		if (mode === 'advance' && badgeRequired && !badge.trim()) focusBadge();
 	}
 	function openResidual(bucketId: string) { resetLists(); panel = { kind: 'residual', bucketId }; }
 	function openBucket(b: BoardBucket) {
@@ -668,7 +672,7 @@
 			<a href="/manufacturing/cart-mfg/state-change" class={btnGhost} title="Move individual carts to any status (bucket stages ask for a destination bucket)">Cart state change</a>
 			<!-- Badge Portal link (BADGE-SYSTEM_PLAN.md §17.5): the Require-badge switch lives
 			     there; this only shows to someone the portal will let in. -->
-			{#if data.canBadgeAdmin}<a href="/admin/badges" class="rounded border px-3 py-1.5 text-xs {data.badgeMode === 'required' ? 'border-[var(--color-tron-cyan)]/40 text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10' : 'border-[var(--color-tron-yellow)]/40 text-[var(--color-tron-yellow)] hover:bg-[var(--color-tron-yellow)]/10'}" title="Open the Badge Portal to change whether scan-in, discards and move to oven require a badge (admin)">Badge required: {data.badgeMode === 'required' ? 'on' : 'off'}</a>{/if}
+			{#if data.canBadgeAdmin}<a href="/admin/badges" class="rounded border px-3 py-1.5 text-xs {data.badgeMode === 'required' ? 'border-[var(--color-tron-cyan)]/40 text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10' : 'border-[var(--color-tron-yellow)]/40 text-[var(--color-tron-yellow)] hover:bg-[var(--color-tron-yellow)]/10'}" title="Open the Badge Portal to change whether scan-in, every advance, discards and move to oven require a badge (admin)">Badge required: {data.badgeMode === 'required' ? 'on' : 'off'}</a>{/if}
 			<a href="/manufacturing/cart-mfg/wax-filling" class={btnGhost}>Wax filling →</a>
 		</div>
 	</div>
@@ -886,7 +890,7 @@
 					<div class="mt-2 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] p-2 text-xs">
 						{#if data.scan.kind === 'badge'}
 							{#if data.scan.badge?.displayName}
-								<p class="text-[var(--color-tron-text)]">That is <strong>{data.scan.badge.displayName}</strong>'s badge{data.scan.badge.username ? ` (${data.scan.badge.username})` : ''} — scan a bucket here. Badges go in the badge box when you scan carts into a bucket, discard carts, or move a bucket to the oven.</p>
+								<p class="text-[var(--color-tron-text)]">That is <strong>{data.scan.badge.displayName}</strong>'s badge{data.scan.badge.username ? ` (${data.scan.badge.username})` : ''} — scan a bucket here. Badges go in the badge box when you scan carts into a bucket, advance it a phase, discard carts, or move it to the oven.</p>
 							{:else}
 								<p class="text-[var(--color-tron-yellow)]">{data.scan.badge?.note ?? 'Unknown badge.'}</p>
 							{/if}
@@ -1039,8 +1043,10 @@
 									</label>
 									{#if discardList.length >= c.quantity}<p class="text-xs text-red-300">Discarding every cart closes this pass — nothing moves to {nextLabel(c.stage)}.</p>{/if}
 								{/if}
-								<!-- Gated step (2026-09-30): the badge is needed only when carts are discarded here. -->
-								{@render badgeField(discardList.length > 0)}
+								<!-- Gated step (2026-10-02, "require a scan in at every phase"): every advance
+								     needs a badge, discards or not. Before this it was asked only when the
+								     discard list was non-empty. -->
+								{@render badgeField(true)}
 								{#if form?.advance?.error}<p class="text-xs text-[var(--color-tron-error)]">{form.advance.error}</p>{/if}
 								<button type="submit" disabled={busy} class={discardList.length >= c.quantity ? btnDanger : btnPrimary}>
 									{busy ? 'Saving…' : discardList.length >= c.quantity ? `Discard all ${c.quantity} & close pass` : discardList.length > 0 ? `Discard ${discardList.length} & move ${c.quantity - discardList.length} → ${nextLabel(c.stage)}` : `Confirm → ${nextLabel(c.stage)}`}

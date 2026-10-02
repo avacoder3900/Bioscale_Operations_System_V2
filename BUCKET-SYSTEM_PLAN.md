@@ -1,6 +1,6 @@
 # Bucket System — Production Buckets, v2 (as built)
 
-**Started:** 2026-09-21 · **Last updated:** 2026-09-30 (**badge gate moved** to scan-in / discards / move to oven, §6.6; earlier that day page-to-page **navigation lag** fixes, §9.1/§9.2/§11, and bucket **nicknames**, §4.1; before that 2026-09-25: thermoseal one roll part; fourth bucket stage **Backed** with **Move to oven**)
+**Started:** 2026-09-21 · **Last updated:** 2026-10-02 (**badge at every phase** — every advance is now gated too, §6.3/§6.6; 2026-09-30: **badge gate moved** to scan-in / discards / move to oven, §6.6; earlier that day page-to-page **navigation lag** fixes, §9.1/§9.2/§11, and bucket **nicknames**, §4.1; before that 2026-09-25: thermoseal one roll part; fourth bucket stage **Backed** with **Move to oven**)
 **Branch:** `feat/bucket-system` — **PR #54 open into `master`**
 (https://github.com/avacoder3900/Bioscale_Operations_System_V2/pull/54). `origin/master` has
 been merged into this branch twice (last `33a937a4`); it sits on current production code.
@@ -324,9 +324,10 @@ touching it:
 
 ### 6.3 Advance (with discard)
 
-"Any carts discarded?" scan list + journal → **badge** (§6.6 — the badge box appears only when
-the discard list is non-empty; the move alone is not gated, but a badge scanned anyway is honoured
-on the `advance` row too) → discards scrapped first → all remaining members'
+"Any carts discarded?" scan list + journal → **badge** (§6.6 — **required at every advance since
+2026-10-02**, discards or not; one scan signs the discards and the `advance` row alike. From
+2026-09-30 to 2026-10-02 the box appeared only when the discard list was non-empty and the move
+alone was not gated) → discards scrapped first → all remaining members'
 `status` follows the bucket. **Barcoded → Unpressed** additionally runs `consumeThermoseal` (§3.4)
 silently — nothing about thermoseal appears on the form itself — and shows the result banner
 (cm taken, rolls pulled, floor alert) after the move. **Pressed → Backed** stamps
@@ -384,22 +385,35 @@ cancelled run, or drawn by the old WI-01 page), count + up to 200 ids. The Backe
 *every cart at `backing`* (§2, one category). The board's five columns are one row wide from `md` up,
 so Backed sits beside Pressed.
 
-### 6.6 Where the badge is asked for (2026-09-30)
+### 6.6 Where the badge is asked for (2026-09-30; every phase since 2026-10-02)
 
-**User:** "I want the badge requirement for the bucket system to be when counting up a bucket,
+**User (2026-10-02):** "I want to adjust the bucket system to require a scan in at every phase."
+Read as the badge plan's *Model 1* — "scan in at each stage and advancement"
+(`BADGE-SYSTEM_PLAN.md` §1) — not as re-scanning every cart at every stage: the badge is now
+asked for at **every phase a bucket enters**, which adds the three advances to the three steps
+below. Barcoded is entered by scanning carts in (already gated); Unpressed, Pressed and Backed
+are entered by an advance (**now gated, discards or not**); the oven by *Move to oven* (already
+gated). Start-pass stays ungated — no carts are handled there and the user had the badge taken
+off it on 2026-09-30; the Barcoded phase gets its badge at the first cart scan. Taps per pass
+under *Require badge* on: one at scan-in, one per advance, one at Move to oven — the "4 taps"
+reading of the badge plan's §5, plus the oven step.
+
+**User (2026-09-30):** "I want the badge requirement for the bucket system to be when counting up a bucket,
 when discarding carts, and when passing carts to oven." Before this (same day, `feat/badge-system`)
 the badge gated **mint** and **start-pass** and nothing after; that is reversed. The operator
 badge (`BADGE-SYSTEM_PLAN.md` for the badge itself, the portal and the *Require badge* switch)
-is now asked for at exactly three kinds of step — the ones where carts are handled:
+is asked for at these steps — the ones where carts are handled, and (2026-10-02) every advance:
 
 | Step | Where on the board | What the holder becomes |
 |---|---|---|
 | **Counting a bucket up** = scanning carts in (§6.2) | badge box above the cart box on a Barcoded pass; the badge rides on every `?/scanIn` | `scannedInBy`, operator on the shell + label debits and the `scan_in` row; **custodian of the pass** at the first scan (`claimCustody`) |
-| **Discarding carts** — at an advance (§6.3), *Discard carts…* (`?/scrap`), an audit's *Discard* / *Write off* (§9.8), a leftover *Discard* (§7) | badge box beside the journal, shown only when something is actually being discarded | operator on the `ManualCartridgeRemoval`, the scrap debits and the `scrap` row |
+| **Advancing a phase** (§6.3) — Barcoded → Unpressed, Unpressed → Pressed, Pressed → Backed (**2026-10-02**) | badge box on the advance form, always shown; the gun lands on it when no badge is on yet | operator on the `advance` row (and on that step's discards, if any); `backing.operator` on every member at Pressed → Backed |
+| **Discarding carts** — at an advance (§6.3), *Discard carts…* (`?/scrap`), an audit's *Discard* / *Write off* (§9.8), a leftover *Discard* (§7) | badge box beside the journal, shown only when something is actually being discarded (on the advance form it is always shown) | operator on the `ManualCartridgeRemoval`, the scrap debits and the `scrap` row |
 | **Passing carts to the oven** (§6.5) | badge box above *Move to oven* | `ovenReleasedBy`, operator on the `oven` row |
 
 Everything else — mint, start-pass, un-scan, audit moves and take-offs, leftover merge, wax
-filling's draw, return, retire, void, nickname, override — is **not** gated: the session is the
+filling's draw, return, retire, void, nickname, override (the Master Override bypasses the flow
+and is admin-only, §9.5) — is **not** gated: the session is the
 operator, as before. On every gated row `operator` = badge holder, `enteredBy` = session,
 `attribution` = `{ method: 'badge', badgeId, custodyId? }`. With *Require badge* **off** the
 boxes are hidden, but a badge scanned into a cart box is still routed and honoured.
@@ -483,7 +497,7 @@ Under **Unpressed**: the compact **Thermoseal tile** (§3.4; live PT-CT-101 roll
 toggle inside "Development settings"; the "not synced" card and the rolls-on-hand pin are gone). Header
 buttons: *New bucket*, *Master override* (admin, §9.5), *Badge required: on/off* (admin, links to the
 portal switch), *Wax filling →*. Rail (start, **badge box** + scan-in box with
-mis-scan, advance with discards (+ badge), scrap by scan (+ badge), residual by scan (+ badge on
+mis-scan, advance with discards (+ badge, every advance since 2026-10-02), scrap by scan (+ badge), residual by scan (+ badge on
 Discard), move to oven (+ badge), retire — see §6.6) → expandable **change log** (lot, move,
 who, discards, thermoseal note) → **bucket log** (every bucket incl. retired). `?stage=` focuses
 a column; `?q=` resolves a scan (bucket QR, BKT id, or cartridge id → its bucket).
@@ -670,6 +684,8 @@ per-scan lookup only needs `manufacturing:read`.
 | `6c0a8bc1` (feat/bucket-nav-perf) | **Navigation lag between bucket pages** (§9.1, §9.2): root `+layout.server.ts` no longer re-runs on every client-side navigation (`untrack(() => url.pathname)`) and caches the Box/Particle status reads for 60 s per process; new `lot-remaining.ts` (`lotRemaining` / `fifoLot` / `lotsWithStock`) is the one per-lot ledger math — the board's `availableLots` and thermoseal's `defaultThermosealLot` both use it; `thermosealStatus(pre?)` takes a preloaded config / part / next lot and runs its reads in parallel, `checkFloor` takes `part`, `thermosealPart()` exported; board thermoseal branch ~8 → ~3 round trips in series; `bucketHistory` resolves + loads the tub in one read (`findBucketByCode`, shared with `resolveBucketId`) and drops `cartridgeIds` from the cycles it returns; history-page cart aggregate `$slice`s to 12 ids in the database; cart-mfg sidebar `data-sveltekit-preload-data="hover"`. No schema or data change. |
 
 | _(feat/badge-gated-steps)_ | **Badge gate moved to the cart-handling steps** (§6.6; §6.1, §6.2, §6.3, §6.5, §7, §9.1, §9.4, §9.8): `requireBadge()` now runs in `scanCartIn` (inside the guard `Promise.all`; mode read + badge lookup in parallel), `scrapCarts` (so advance discards, *Discard carts…*), `auditCycle` (when a stray is discarded or a missing member written off), `reportResidual` (Discard only) and `moveToOven`; removed from `createBucket` and `startCycle`. New `claimCustody()`: the `Custody` row is opened by the badge holder at the first scan-in of a pass (`BucketCycle.custodyId` set then), no longer at start-pass. Gated rows carry `operator` = holder, `enteredBy` = session, `attribution` (+ `custodyId`). Board: one shared `badge` state + `badgeField` snippet on the Barcoded panel, advance (discards only), scrap, audit (discards/write-offs only), residual (Discard only) and Move to oven; a `BDG-` code scanned into any cart box is routed to the badge; `?/scanIn` returns `operator`; start form and `/buckets/new` lose their badge fields. Badge Portal copy updated. No schema change. |
+
+| _(feat/badge-every-phase)_ | **Badge at every phase** (§6.3, §6.6, §9.1; user 2026-10-02: "require a scan in at every phase", read as the badge plan's Model 1): `advanceCycle` now calls `requireBadge()` unconditionally — every advance (Barcoded → Unpressed, Unpressed → Pressed, Pressed → Backed) is badge-gated, not only one with discards; with *Require badge* off and no scan it still falls back to the session. Board: the advance form always renders the badge box (`badgeField(true)`) and `setMode('advance')` focuses it when no badge is on; header-link title and the "that is a badge" message name the advance. Badge Portal copy (`/admin/badges`) says "every phase". No schema, server-action or data change — `?/advance` already carried `badge`. |
 
 `npm run check` after v2: **12 errors / 438 warnings** — the same 12 pre-existing (`r2.ts`,
 `AskBimsWidget.svelte`, 8× `assembly/[sessionId]`, 2× `validation/magnetometer/[sessionId]`

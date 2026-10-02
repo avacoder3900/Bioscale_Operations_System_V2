@@ -81,7 +81,7 @@
 <div class="space-y-5">
 	<div>
 		<h3 class="text-base font-semibold text-[var(--color-tron-text)]">Badge Portal</h3>
-		<p class="text-xs text-[var(--color-tron-text-secondary)]">Printed QR badges that identify who is at the scan box. The bucket board asks for one when carts are scanned into a bucket, when carts are discarded, and when a bucket is moved to the oven; minting a bucket and starting a pass do not.</p>
+		<p class="text-xs text-[var(--color-tron-text-secondary)]">Printed QR badges that identify who is at the scan box. The bucket board asks for one at every phase: when carts are scanned into a bucket, each time a bucket is advanced, when carts are discarded, and when a bucket is moved to the oven; minting a bucket and starting a pass do not.</p>
 	</div>
 
 	<!-- Require badge switch (§17.5) — admin only; the whole page is admin only. -->
@@ -91,11 +91,11 @@
 		<div class="flex flex-wrap items-center justify-between gap-3">
 			<div>
 				<p class="text-sm font-semibold text-[var(--color-tron-text)]">
-					Require badge at scan-in, discards and move to oven:
+					Require badge at every phase (scan-in, each advance, discards, move to oven):
 					<span class={required ? 'text-[var(--color-tron-cyan)]' : 'text-[var(--color-tron-yellow)]'}>{required ? 'ON' : 'OFF'}</span>
 				</p>
 				<p class="text-[11px] text-[var(--color-tron-text-secondary)]">
-					{#if required}Operators must scan a badge to scan carts into a bucket, discard carts, or move a bucket to the oven. Turning this off makes the login session the operator, as before.
+					{#if required}Operators must scan a badge to scan carts into a bucket, advance it a phase, discard carts, or move it to the oven. Turning this off makes the login session the operator, as before.
 					{:else}Badge scans are optional; the login session is recorded as the operator. Turn this on to require a badge again.{/if}
 					{#if data.settings.changedAt}<span class="ml-1">Last changed {fmt(data.settings.changedAt)}{data.settings.changedBy ? ` by ${data.settings.changedBy}` : ''}.</span>{/if}
 				</p>
