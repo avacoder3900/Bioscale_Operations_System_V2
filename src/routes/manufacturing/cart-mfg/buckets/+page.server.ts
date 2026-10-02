@@ -161,7 +161,9 @@ export const actions: Actions = {
 		const d = await request.formData();
 		return wrap('cartLookup', async () => {
 			const r = await cartStatusLine(String(d.get('barcode') ?? ''));
-			return { cartLookup: { success: true, found: r.found, line: r.line } };
+			// Whole result goes back: the box renders the structured fields as
+			// colour-coded pills + the bucket nickname; `line` stays as the fallback.
+			return { cartLookup: { success: true, ...r } };
 		})();
 	},
 
