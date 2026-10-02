@@ -1,6 +1,6 @@
 # Bucket System — Production Buckets, v2 (as built)
 
-**Started:** 2026-09-21 · **Last updated:** 2026-09-30 (bucket **nicknames**, §4.1; before that 2026-09-25: thermoseal one roll part; fourth bucket stage **Backed** with **Move to oven**)
+**Started:** 2026-09-21 · **Last updated:** 2026-10-02 (**badge at every phase** — every advance is now gated too, §6.3/§6.6; 2026-09-30: **badge gate moved** to scan-in / discards / move to oven, §6.6; earlier that day page-to-page **navigation lag** fixes, §9.1/§9.2/§11, and bucket **nicknames**, §4.1; before that 2026-09-25: thermoseal one roll part; fourth bucket stage **Backed** with **Move to oven**)
 **Branch:** `feat/bucket-system` — **PR #54 open into `master`**
 (https://github.com/avacoder3900/Bioscale_Operations_System_V2/pull/54). `origin/master` has
 been merged into this branch twice (last `33a937a4`); it sits on current production code.
@@ -273,18 +273,24 @@ in `reason` and the first roll id in `relatedId`.
 
 ### 6.1 Start a pass
 
-Rail → pick an Available bucket → **scan your badge** (2026-09-30, when *Require badge* is on —
-see `BADGE-SYSTEM_PLAN.md` Part 2) → choose the **shell lot (104)** and **label lot (106)** →
+Rail → pick an Available bucket → choose the **shell lot (104)** and **label lot (106)** →
 confirm empty if `spotCheckPending`. Opens at Barcoded with 0 members. Nothing is debited yet.
-The badge holder is `openedBy` and holds the pass's `Custody` row until it closes; the login
-session is `enteredBy` on the `create` ledger row. Later steps never ask for a badge.
+**No badge is asked for here** (user, 2026-09-30 — see §6.6; for one day starting a pass took a
+badge and opened the `Custody` row). `openedBy` is the login session; the pass's `Custody` row is
+claimed by whoever scans the first cart in.
 
 ### 6.2 Scan carts in (Barcoded only)
 
-Scan a QR sticker → `scanCartIn`: the sticker must not be a bucket label (collision guard), a
-merged double-read, or an existing cartridge; a `CartridgeRecord` is created at `barcoded` with
-`bucket.*`; 1 × shell + 1 × label debited. A mis-scan button un-scans (record deleted, debits
-retracted) — see §6.2.1 for why that delete needs the driver-level path.
+**Badge-gated (§6.6).** Scan your badge into the panel's badge box (or straight into the cart
+box — a `BDG-` code is routed to the badge box), then the carts. The badge is sent with every
+scan-in POST; the badge holder is `scannedInBy`, the operator on the two debits and the
+`scan_in` ledger row (`enteredBy` = session, `attribution.method = 'badge'`), and — at the
+**first** scan of the pass — the pass's `Custody` holder (`claimCustody`, `custodyId` on the
+pass). Scan a QR sticker → `scanCartIn`: the sticker must not be a bucket label (collision
+guard), a merged double-read, a badge, or an existing cartridge; a `CartridgeRecord` is created
+at `barcoded` with `bucket.*`; 1 × shell + 1 × label debited. A mis-scan button un-scans (record
+deleted, debits retracted; **not** gated) — see §6.2.1 for why that delete needs the
+driver-level path.
 
 #### 6.2.1 Scanning pace — the hot path (2026-09-25)
 
@@ -318,7 +324,10 @@ touching it:
 
 ### 6.3 Advance (with discard)
 
-"Any carts discarded?" scan list + journal → discards scrapped first → all remaining members'
+"Any carts discarded?" scan list + journal → **badge** (§6.6 — **required at every advance since
+2026-10-02**, discards or not; one scan signs the discards and the `advance` row alike. From
+2026-09-30 to 2026-10-02 the box appeared only when the discard list was non-empty and the move
+alone was not gated) → discards scrapped first → all remaining members'
 `status` follows the bucket. **Barcoded → Unpressed** additionally runs `consumeThermoseal` (§3.4)
 silently — nothing about thermoseal appears on the form itself — and shows the result banner
 (cm taken, rolls pulled, floor alert) after the move. **Pressed → Backed** stamps
@@ -360,7 +369,8 @@ they get scanned in for wax filling. Functionally the cart statuses will all rem
 pressed → backed → wax filled. Backed in the bucket system just refers to a storage system."
 
 On a **Backed** pass card the panel's primary button is **Move to oven (N carts)** → `?/moveToOven` →
-`bucket-service.moveToOven`. It does two things and nothing else:
+`bucket-service.moveToOven`. **Badge-gated (§6.6):** the badge box sits above the button; the
+holder is `ovenReleasedBy` and the operator on the `oven` row. It does two things and nothing else:
 
 1. the pass closes (`consumed`, `ovenReleasedAt` / `ovenReleasedBy` on the pass, one `oven` change-log
    row with the cart ids, a `MOVE_TO_OVEN` audit row) and the tub returns to **Available** (with the
@@ -374,6 +384,56 @@ not a status: `inOvenCarts()` = carts at `backing` on no open pass (freed by Mov
 cancelled run, or drawn by the old WI-01 page), count + up to 200 ids. The Backed stage count stays
 *every cart at `backing`* (§2, one category). The board's five columns are one row wide from `md` up,
 so Backed sits beside Pressed.
+
+### 6.6 Where the badge is asked for (2026-09-30; every phase since 2026-10-02)
+
+**User (2026-10-02):** "I want to adjust the bucket system to require a scan in at every phase."
+Read as the badge plan's *Model 1* — "scan in at each stage and advancement"
+(`BADGE-SYSTEM_PLAN.md` §1) — not as re-scanning every cart at every stage: the badge is now
+asked for at **every phase a bucket enters**, which adds the three advances to the three steps
+below. Barcoded is entered by scanning carts in (already gated); Unpressed, Pressed and Backed
+are entered by an advance (**now gated, discards or not**); the oven by *Move to oven* (already
+gated). Start-pass stays ungated — no carts are handled there and the user had the badge taken
+off it on 2026-09-30; the Barcoded phase gets its badge at the first cart scan. Taps per pass
+under *Require badge* on: one at scan-in, one per advance, one at Move to oven — the "4 taps"
+reading of the badge plan's §5, plus the oven step.
+
+**User (2026-09-30):** "I want the badge requirement for the bucket system to be when counting up a bucket,
+when discarding carts, and when passing carts to oven." Before this (same day, `feat/badge-system`)
+the badge gated **mint** and **start-pass** and nothing after; that is reversed. The operator
+badge (`BADGE-SYSTEM_PLAN.md` for the badge itself, the portal and the *Require badge* switch)
+is asked for at these steps — the ones where carts are handled, and (2026-10-02) every advance:
+
+| Step | Where on the board | What the holder becomes |
+|---|---|---|
+| **Counting a bucket up** = scanning carts in (§6.2) | badge box above the cart box on a Barcoded pass; the badge rides on every `?/scanIn` | `scannedInBy`, operator on the shell + label debits and the `scan_in` row; **custodian of the pass** at the first scan (`claimCustody`) |
+| **Advancing a phase** (§6.3) — Barcoded → Unpressed, Unpressed → Pressed, Pressed → Backed (**2026-10-02**) | badge box on the advance form, always shown; the gun lands on it when no badge is on yet | operator on the `advance` row (and on that step's discards, if any); `backing.operator` on every member at Pressed → Backed |
+| **Discarding carts** — at an advance (§6.3), *Discard carts…* (`?/scrap`), an audit's *Discard* / *Write off* (§9.8), a leftover *Discard* (§7) | badge box beside the journal, shown only when something is actually being discarded (on the advance form it is always shown) | operator on the `ManualCartridgeRemoval`, the scrap debits and the `scrap` row |
+| **Passing carts to the oven** (§6.5) | badge box above *Move to oven* | `ovenReleasedBy`, operator on the `oven` row |
+
+Everything else — mint, start-pass, un-scan, audit moves and take-offs, leftover merge, wax
+filling's draw, return, retire, void, nickname, override (the Master Override bypasses the flow
+and is admin-only, §9.5) — is **not** gated: the session is the
+operator, as before. On every gated row `operator` = badge holder, `enteredBy` = session,
+`attribution` = `{ method: 'badge', badgeId, custodyId? }`. With *Require badge* **off** the
+boxes are hidden, but a badge scanned into a cart box is still routed and honoured.
+
+**One badge for the rail.** The board keeps one `badge` value: scanned once (into any badge box,
+or into any cart box — `BDG-…` is recognised client-side and never queued as a cart), it fills
+every gated form's badge field until the operator presses *Change badge* or the server refuses it
+(`BADGE_*` codes clear it and refocus the box). The Barcoded panel says who the carts are being
+recorded to after the first scan lands. Cart scans made before a badge is on are held with *Scan
+your badge first* rather than sent.
+
+**Hot path (§6.2.1).** `requireBadge()` reads the mode and resolves the badge in one `Promise.all`,
+and on scan-in that whole gate runs inside the existing guard group — the badge adds no round trip
+in series. The custody claim is one extra write on the first scan of a pass only.
+
+**Custody.** `Custody` rows are still released by every close path (§16.3 of the badge plan);
+they are just opened later — by the first scan-in, by the badge holder who counts the bucket up
+— instead of at start-pass by whoever picked the lots. A pass that never gets a cart never gets
+a custody row. A later scan by a different badge is attributed on its own rows but does not
+take the pass over (no takeover in v1).
 
 ## 7. Residual flow
 
@@ -392,8 +452,9 @@ on an Available bucket, the panel asks **Merge or Discard** first:
   carts are scanned (they are tracked by id, so the records must be named) and merged. The
   server validates every cart on submit (known, still at that stage, not in an open pass).
   Ledger: `create` (new pass) or `merge_in`, plus one `merge_out` on the reported bucket.
-- **Discard** — **bulk QR scan** of every cart being discarded + journal (required); shell +
-  label scrapped from inventory (§8).
+- **Discard** — **bulk QR scan** of every cart being discarded + journal (required) + **badge**
+  (§6.6; the box appears only for Discard, never for Merge); shell + label scrapped from
+  inventory (§8).
 
 **Where does this cart belong? (user, 2026-09-25).** Above the Merge / Discard choice the panel
 carries a small search box: scan (or type) one leftover cart and get one line back — the open
@@ -434,8 +495,10 @@ the header *New bucket* button; there is no inline mint card on the board. Every
 carries **Audit** (§9.8) under its cart list.
 Under **Unpressed**: the compact **Thermoseal tile** (§3.4; live PT-CT-101 roll count, notifications
 toggle inside "Development settings"; the "not synced" card and the rolls-on-hand pin are gone). Header
-buttons: *New bucket*, *Master override* (admin, §9.5), *Wax filling →*. Rail (start, scan-in box with
-mis-scan, advance with discards, scrap by scan, residual by scan, retire) → expandable **change log** (lot, move,
+buttons: *New bucket*, *Master override* (admin, §9.5), *Badge required: on/off* (admin, links to the
+portal switch), *Wax filling →*. Rail (start, **badge box** + scan-in box with
+mis-scan, advance with discards (+ badge, every advance since 2026-10-02), scrap by scan (+ badge), residual by scan (+ badge on
+Discard), move to oven (+ badge), retire — see §6.6) → expandable **change log** (lot, move,
 who, discards, thermoseal note) → **bucket log** (every bucket incl. retired). `?stage=` focuses
 a column; `?q=` resolves a scan (bucket QR, BKT id, or cartridge id → its bucket).
 Below the board + rail: **Find a cart** — scan a cart QR, get one line back (cart id · status
@@ -445,12 +508,29 @@ seen, the legacy WI-01 lot when it has one, and when the status last changed). R
 rather than reported missing (user, 2026-09-23). The same lookup sits inside the leftover panel
 as *Where does this cart belong?* (§7, 2026-09-25).
 
+**Load cost (2026-09-30, navigation-lag pass).** The board load fans out nine branches; the
+longest used to be the thermoseal one (floor rule → status, ~8 reads in series). It is now ~3:
+`thermosealConfig()` + `thermosealPart()` are read once and handed to both `checkFloor()` and
+`thermosealStatus(pre)`, and the tile's *next roll lot* comes from the same per-lot-remaining
+rows the start-pass pickers use (`lot-remaining.ts`, one ledger pass instead of two). Two
+app-wide costs paid on *every* page change were also removed: the root layout no longer re-runs
+its load on each client-side navigation (it read `url.pathname`, which SvelteKit tracks — now
+`untrack`ed), and its Box/Particle status reads are cached per process for a minute. The
+cart-mfg sidebar preloads a page's data on hover (`data-sveltekit-preload-data="hover"`; the
+app default is `tap`). Not verified: that the Atlas cluster sits in the same region as the
+Vercel functions (`pdx1`) — a cross-region cluster would multiply every remaining round trip.
+
 ### 9.2 `/manufacturing/cart-mfg/buckets/[bucketId]`
 
 Passes with per-pass cartridges (in bucket / → on to wax filling / scrapped), source lots,
 thermoseal cm, ledger rows, *Replace sticker* link, *Void this pass…* (admin), and the
 *add nickname* / *rename* control in the header (§4.1; `?/nickname`, `manufacturing:write`,
 hidden on a retired bucket). With a nickname the header reads *Big Blue* with the BKT id beside it.
+Payload trimmed 2026-09-30: `bucketHistory()` resolves and loads the tub in one read and leaves
+each pass's `cartridgeIds` array in the database (the page lists the carts *born* in a pass via
+`CartridgeRecord`, never the member list), and the per-pass cart aggregate slices to the 12 ids
+the page shows before leaving the server. A well-used tub no longer gets slower to open with
+every pass it has run.
 
 ### 9.3 Summary views (read-only, deep-link to the board)
 
@@ -468,10 +548,9 @@ hidden on a retired bucket). With a nickname the header reads *Big Blue* with th
 
 ### 9.4 `/manufacturing/cart-mfg/buckets/new` — mint one bucket from one QR
 
-Scan your badge (2026-09-30, when *Require badge* is on), then the sticker → `BKT-NNNNNN` minted
-with that `barcode`; `createdBy` and the `mint` row's `operator` are the badge holder, `enteredBy`
-the session. The badge field keeps its value across creates so one person can mint several tubs;
-a badge scanned into the sticker field, or into any cart field, is refused. Nicknames are **not**
+Scan the sticker → `BKT-NNNNNN` minted with that `barcode`; `createdBy` and the `mint` row's
+`operator` are the login session. **No badge** (user, 2026-09-30, §6.6 — for one day the page had
+a badge field first); a badge scanned into the sticker field is still refused. Nicknames are **not**
 taken here (user, 2026-09-30): the page's third block, **Nickname a bucket** (`?/nickname`, §4.1),
 is scan the sticker → type the name → *Set nickname*; an empty name is *Clear nickname*. The gun's
 Enter on the sticker jumps to the name field. `?bucket=BKT-…` presets
@@ -534,6 +613,11 @@ row each, and every one gets a choice (user, 2026-09-23) — *Keep* (default), *
 | **Write off** | gone for good: off the pass, status `scrapped`, a `ManualCartridgeRemoval`, shell + label scrapped from inventory at the pass's stage (`scrap` ledger row) |
 | **Take off pass** | it is somewhere else: off the pass, still a live cart, so the leftover flow or another bucket's audit can re-home it (`unscan` ledger row) |
 
+An audit that **discards** a stray or **writes off** a missing member is discarding carts, so it
+asks for the **badge** (§6.6) — the box appears beside the journal as soon as one of those is
+chosen; moves and *Take off pass* alone do not ask. The holder is the operator on every row the
+audit writes.
+
 Anything removed needs the journal, and the panel says what the count will drop to. A
 `shortfall` discrepancy is still pushed onto the cycle, naming how many were kept, written off
 and taken off. Nothing is removed unless the operator picks it — an audit never silently
@@ -551,6 +635,8 @@ per-scan lookup only needs `manufacturing:read`.
 | `src/lib/server/db/models/production-bucket.ts`, `bucket-cycle.ts`, `bucket-transaction.ts`, **`thermoseal-roll.ts`** | models |
 | `src/lib/server/services/bucket-service.ts` | all bucket logic (create, sticker, start, scanIn/unscan, scrap, advance, consume, **returnCarts**, residual, retire, void, counts, board, logs) |
 | **`src/lib/server/services/thermoseal-service.ts`** | config, roll open/consume/credit, floor rule, board status |
+| **`src/lib/server/services/lot-remaining.ts`** | the one per-lot "remaining by ledger" math (`lotRemaining`, `fifoLot`, `lotsWithStock`) — board lot pickers + thermoseal next-roll lot (2026-09-30) |
+| `src/routes/+layout.server.ts` | **not a bucket file** — its load used to re-run on every client-side navigation; `untrack`ed + Box/Particle status cached 60 s (2026-09-30). Every page in the app rides on it. |
 | `src/lib/server/kanban/standing.ts` → `ensureThermosealRestockCard` | restock card via the supply autopilot |
 | `src/lib/server/notifications.ts` → `notifyThermosealLow` | Resend email to the low-inventory list |
 | `src/routes/manufacturing/cart-mfg/buckets/…` | board, history, `new/` |
@@ -594,6 +680,12 @@ per-scan lookup only needs `manufacturing:read`.
 | _(feat/badge-system)_ | **Bucket nicknames** (§4.1, §9.2, §9.4): `ProductionBucket.nickname` (optional, ≤30, unique among non-retired, case-insensitive); `setBucketNickname()` + `?/nickname` on the history page (any `manufacturing:write` user, blank clears, refused on retired); optional Nickname box on `/buckets/new` (`createBucket` takes `nickname`); board cards/panels headline the nickname over the sticker via `nameOf()`, registry gains a Nickname column, board scan box + `resolveScan` search by it (never an exact resolve — `resolveBucketId` unchanged); new `nickname` ledger type + `NICKNAME` audit. |
 
 | _(feat/bucket-nickname-block)_ | **Nickname moved out of the mint form** (§9.4): the mint block is back to badge + sticker; a third block *Nickname a bucket* on `/buckets/new` (scan sticker → name → `?/nickname` → `setBucketNickname`) sits beside *Create* and *Replace sticker*. Clearing = empty name. History-page rename unchanged. |
+
+| `6c0a8bc1` (feat/bucket-nav-perf) | **Navigation lag between bucket pages** (§9.1, §9.2): root `+layout.server.ts` no longer re-runs on every client-side navigation (`untrack(() => url.pathname)`) and caches the Box/Particle status reads for 60 s per process; new `lot-remaining.ts` (`lotRemaining` / `fifoLot` / `lotsWithStock`) is the one per-lot ledger math — the board's `availableLots` and thermoseal's `defaultThermosealLot` both use it; `thermosealStatus(pre?)` takes a preloaded config / part / next lot and runs its reads in parallel, `checkFloor` takes `part`, `thermosealPart()` exported; board thermoseal branch ~8 → ~3 round trips in series; `bucketHistory` resolves + loads the tub in one read (`findBucketByCode`, shared with `resolveBucketId`) and drops `cartridgeIds` from the cycles it returns; history-page cart aggregate `$slice`s to 12 ids in the database; cart-mfg sidebar `data-sveltekit-preload-data="hover"`. No schema or data change. |
+
+| _(feat/badge-gated-steps)_ | **Badge gate moved to the cart-handling steps** (§6.6; §6.1, §6.2, §6.3, §6.5, §7, §9.1, §9.4, §9.8): `requireBadge()` now runs in `scanCartIn` (inside the guard `Promise.all`; mode read + badge lookup in parallel), `scrapCarts` (so advance discards, *Discard carts…*), `auditCycle` (when a stray is discarded or a missing member written off), `reportResidual` (Discard only) and `moveToOven`; removed from `createBucket` and `startCycle`. New `claimCustody()`: the `Custody` row is opened by the badge holder at the first scan-in of a pass (`BucketCycle.custodyId` set then), no longer at start-pass. Gated rows carry `operator` = holder, `enteredBy` = session, `attribution` (+ `custodyId`). Board: one shared `badge` state + `badgeField` snippet on the Barcoded panel, advance (discards only), scrap, audit (discards/write-offs only), residual (Discard only) and Move to oven; a `BDG-` code scanned into any cart box is routed to the badge; `?/scanIn` returns `operator`; start form and `/buckets/new` lose their badge fields. Badge Portal copy updated. No schema change. |
+
+| _(feat/badge-every-phase)_ | **Badge at every phase** (§6.3, §6.6, §9.1; user 2026-10-02: "require a scan in at every phase", read as the badge plan's Model 1): `advanceCycle` now calls `requireBadge()` unconditionally — every advance (Barcoded → Unpressed, Unpressed → Pressed, Pressed → Backed) is badge-gated, not only one with discards; with *Require badge* off and no scan it still falls back to the session. Board: the advance form always renders the badge box (`badgeField(true)`) and `setMode('advance')` focuses it when no badge is on; header-link title and the "that is a badge" message name the advance. Badge Portal copy (`/admin/badges`) says "every phase". No schema, server-action or data change — `?/advance` already carried `badge`. |
 
 `npm run check` after v2: **12 errors / 438 warnings** — the same 12 pre-existing (`r2.ts`,
 `AskBimsWidget.svelte`, 8× `assembly/[sessionId]`, 2× `validation/magnetometer/[sessionId]`

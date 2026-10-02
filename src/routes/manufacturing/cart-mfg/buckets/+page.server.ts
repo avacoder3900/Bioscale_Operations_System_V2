@@ -4,7 +4,7 @@
  * enforces permissions and maps BucketError → fail().
  */
 import { fail, redirect } from '@sveltejs/kit';
-import { connectDB, ReceivingLot, InventoryTransaction } from '$lib/server/db';
+import { connectDB } from '$lib/server/db';
 import { requirePermission, isAdmin } from '$lib/server/permissions';
 import {
 	BucketError, BUCKET_STAGES, STAGE_LABELS, BACKED_LABEL, SHELL_PART, LABEL_PART, THERMOSEAL_PART,
@@ -12,7 +12,8 @@ import {
 	startCycle, scanCartIn, unscanCart, advanceCycle, scrapCarts, reportResidual, retireBucket,
 	cartStatusLine, auditScan, auditCycle, moveToOven, inOvenCarts
 } from '$lib/server/services/bucket-service';
-import { thermosealStatus, checkFloor, setThermosealToggles } from '$lib/server/services/thermoseal-service';
+import { thermosealStatus, thermosealConfig, thermosealPart, checkFloor, setThermosealToggles } from '$lib/server/services/thermoseal-service';
+import { lotRemaining, lotsWithStock, fifoLot } from '$lib/server/services/lot-remaining';
 import { badgeMode } from '$lib/server/services/badge-service';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -23,27 +24,7 @@ function op(locals: App.Locals): Op {
 	return { _id: locals.user!._id, username: locals.user!.username };
 }
 
-/** Same per-lot remaining math WI-01 used: lot quantity minus consumption+scrap rows. */
-async function availableLots(partNumbers: string[]) {
-	const lots = await ReceivingLot.find({
-		'part.partNumber': { $in: partNumbers },
-		status: { $nin: ['rejected', 'returned'] }
-	}).select('lotId part.partNumber quantity').lean() as any[];
-	const agg = await InventoryTransaction.aggregate([
-		{ $match: { lotId: { $in: lots.map(l => l.lotId) }, transactionType: { $in: ['consumption', 'scrap'] } } },
-		{ $group: { _id: '$lotId', total: { $sum: '$quantity' } } }
-	]);
-	const consumed = new Map((agg as any[]).map(r => [r._id, Math.abs(r.total ?? 0)]));
-	const out: Record<string, { lotId: string; remaining: number }[]> = Object.fromEntries(partNumbers.map(p => [p, []]));
-	for (const l of lots) {
-		const pn = l.part?.partNumber;
-		if (!out[pn]) continue;
-		const remaining = Math.max(0, Number(l.quantity ?? 0) - (consumed.get(l.lotId) ?? 0));
-		if (remaining > 0) out[pn].push({ lotId: l.lotId, remaining });
-	}
-	for (const pn of partNumbers) out[pn].sort((a, b) => b.remaining - a.remaining);
-	return out;
-}
+const LOT_PARTS = [SHELL_PART, LABEL_PART, THERMOSEAL_PART];
 
 export const load: PageServerLoad = async ({ locals, url }) => {
 	if (!locals.user) redirect(302, '/login');
@@ -53,25 +34,39 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	const focusStage = url.searchParams.get('stage') ?? '';
 	const q = url.searchParams.get('q') ?? '';
 
-	const [board, counts, lots, scan, log, registry, thermoseal, inOven, badge] = await Promise.all([
+	// Per-lot remaining for the start-pass pickers AND the thermoseal tile's
+	// next-roll lot — one ledger pass, shared (perf, 2026-09-30; it was computed
+	// twice per board load, and the second copy sat in series behind the floor rule).
+	const lotRows = lotRemaining(LOT_PARTS);
+
+	// Thermoseal branch. Floor rule runs here too, not only on a roll pull: a
+	// shelf that is already below the minimum (receiving, physical count) gets
+	// its one restock card + email the next time anyone opens the board.
+	// Idempotent. Throttled per process (2026-09-25) so the board's background
+	// refresh during a scanning run does not re-run the rule between carts — it
+	// is a backstop, and a roll pull still runs it unthrottled.
+	// The config + roll part are read once and handed to both the rule and the
+	// status, so this whole branch is ~3 round trips instead of ~8 in series —
+	// it was the longest path in the board load.
+	const thermosealBranch = (async () => {
+		const [cfg, part, rows] = await Promise.all([thermosealConfig(), thermosealPart(), lotRows]);
+		await checkFloor({ user: op(locals), cfg, part, throttleMs: 60_000 }).catch(() => null);
+		return thermosealStatus({ cfg, part, nextLot: fifoLot(rows, THERMOSEAL_PART) });
+	})().catch(() => null);
+
+	const [board, counts, lotRowsResolved, scan, log, registry, thermoseal, inOven, badge] = await Promise.all([
 		boardData(),
 		stageCounts(),
-		availableLots([SHELL_PART, LABEL_PART, THERMOSEAL_PART]),
+		lotRows,
 		q ? resolveScan(q) : Promise.resolve(null),
 		changeLog(150),
 		bucketRegistry(),
-		// Floor rule runs here too, not only on a roll pull: a shelf that is already
-		// below the minimum (receiving, physical count) gets its one restock card +
-		// email the next time anyone opens the board. Idempotent. Throttled per
-		// process (2026-09-25) so the board's background refresh during a scanning
-		// run does not re-run the rule between carts — it is a backstop, and a roll
-		// pull still runs it unthrottled.
-		checkFloor({ user: op(locals), throttleMs: 60_000 }).catch(() => null).then(() => thermosealStatus()).catch(() => null),
+		thermosealBranch,
 		// "In oven" dropdown inside the Backed column: backed carts on no open pass.
 		inOvenCarts().catch(() => ({ count: 0, ids: [] as string[] })),
-		// Badge enforcement (BADGE-SYSTEM_PLAN.md §17.4): decides whether the
-		// start-pass form asks for a badge. Flipped only from /admin/badges; the
-		// board links there for admins (canBadgeAdmin).
+		// Badge enforcement: decides whether the board asks for a badge at the
+		// gated steps — scan-in, discards, move to oven (user, 2026-09-30).
+		// Flipped only from /admin/badges; the board links there for admins.
 		badgeMode().catch(() => 'required' as const)
 	]);
 
@@ -85,7 +80,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		focusStage: focusStage === 'available' || isBucketStage(focusStage) ? focusStage : null,
 		board,
 		counts,
-		lots,
+		lots: lotsWithStock(lotRowsResolved, LOT_PARTS),
 		changeLog: log,
 		registry,
 		thermoseal,
@@ -150,6 +145,7 @@ export const actions: Actions = {
 				moves,
 				missingActions,
 				journal: String(d.get('journal') ?? ''),
+				badge: String(d.get('badge') ?? ''),
 				user: op(locals)
 			});
 			return { audit: { success: true, result: r } };
@@ -180,7 +176,6 @@ export const actions: Actions = {
 				shellLotId: String(d.get('shellLotId') ?? ''),
 				labelLotId: String(d.get('labelLotId') ?? ''),
 				emptyConfirmed: d.get('emptyConfirmed') === '1',
-				badge: String(d.get('badge') ?? ''),
 				user: op(locals)
 			});
 			return { start: { success: true, cycleId: cycle._id, bucketId: cycle.bucketId, cycleNumber: cycle.cycleNumber } };
@@ -188,15 +183,16 @@ export const actions: Actions = {
 	},
 
 	// Called via fetch from the Barcoded panel's scan box (one cart per call) so the
-	// rail can keep scanning without a full form round-trip.
+	// rail can keep scanning without a full form round-trip. The badge scanned into
+	// the panel's badge box rides along on every call (gated step, 2026-09-30).
 	scanIn: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
 		requirePermission(locals.user, 'manufacturing:write');
 		await connectDB();
 		const d = await request.formData();
 		return wrap('scanIn', async () => {
-			const r = await scanCartIn({ cycleId: String(d.get('cycleId') ?? ''), barcode: String(d.get('barcode') ?? ''), user: op(locals) });
-			return { scanIn: { success: true, barcode: r.barcode, quantity: r.quantity } };
+			const r = await scanCartIn({ cycleId: String(d.get('cycleId') ?? ''), barcode: String(d.get('barcode') ?? ''), badge: String(d.get('badge') ?? ''), user: op(locals) });
+			return { scanIn: { success: true, barcode: r.barcode, quantity: r.quantity, operator: r.operator } };
 		})();
 	},
 
@@ -239,6 +235,7 @@ export const actions: Actions = {
 				cycleId: String(d.get('cycleId') ?? ''),
 				discardedIds: codesFrom(d.get('discardedIds')),
 				discardJournal: (d.get('discardJournal') as string | null) ?? undefined,
+				badge: String(d.get('badge') ?? ''),
 				user: op(locals)
 			});
 			return { advance: {
@@ -253,14 +250,15 @@ export const actions: Actions = {
 
 	// "Move to oven": frees the carts from the bucket (they stay 'backing' until wax
 	// filling scans them in) and returns the bucket to Available. Nothing else.
+	// Badge-gated (2026-09-30).
 	moveToOven: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
 		requirePermission(locals.user, 'manufacturing:write');
 		await connectDB();
 		const d = await request.formData();
 		return wrap('moveToOven', async () => {
-			const r = await moveToOven({ cycleId: String(d.get('cycleId') ?? ''), user: op(locals) });
-			return { moveToOven: { success: true, cycleId: r.cycleId, bucketId: r.bucketId, cycleNumber: r.cycleNumber, released: r.released.length } };
+			const r = await moveToOven({ cycleId: String(d.get('cycleId') ?? ''), badge: String(d.get('badge') ?? ''), user: op(locals) });
+			return { moveToOven: { success: true, cycleId: r.cycleId, bucketId: r.bucketId, cycleNumber: r.cycleNumber, released: r.released.length, operator: r.operator } };
 		})();
 	},
 
@@ -274,6 +272,7 @@ export const actions: Actions = {
 				cycleId: String(d.get('cycleId') ?? ''),
 				barcodes: codesFrom(d.get('barcodes')),
 				journal: String(d.get('journal') ?? ''),
+				badge: String(d.get('badge') ?? ''),
 				user: op(locals)
 			});
 			return { scrap: { success: true, cycleId: r.cycle?._id ?? null, quantity: r.cycle?.quantity ?? 0, status: r.cycle?.status ?? null, scrapped: r.scrapped.length } };
@@ -302,6 +301,7 @@ export const actions: Actions = {
 				destinationBucketId: (d.get('destinationBucketId') as string | null) ?? undefined,
 				moves,
 				journal: (d.get('journal') as string | null) ?? undefined,
+				badge: String(d.get('badge') ?? ''),
 				user: op(locals)
 			});
 			return { residual: { success: true, bucketId: r.bucket?._id ?? null, state: r.bucket?.state ?? null, disposition } };

@@ -17079,6 +17079,112 @@ What this deployment is for: PR #70 — the "Nickname a bucket" third block on /
 form back to badge + sticker.
 
 ================================================================================
+2026-09-30 — feat/bucket-nav-perf — Bucket pages: lag moving between board and history fixed
+================================================================================
+User: "a lot of lag in the bucket system moving back and forth between pages, why is that" → then
+"implement those fixes". Branch cut from feat/bucket-nickname-block (b2dce0cf, PR #70 head) so the
+board/service edits sit on the nickname code they touch.
+
+WHY IT LAGGED (read off the code — no local .env, nothing timed against Atlas)
+- Every client-side navigation re-ran the ROOT layout load: it read `url.pathname`, which SvelteKit
+  tracks, so each page change paid two sequential Integration.findOne (Box + Particle dots) before
+  the page's own load could start — on top of the hook's session lookups.
+- The board load's longest branch was thermoseal: checkFloor (config → part) then thermosealStatus
+  (config → roll/part/defaultLot(2 in series)/exhausted → open kanban card) ≈ 8 reads in series.
+  defaultThermosealLot re-did the per-lot ledger math the board's availableLots had already done
+  in a parallel branch (both sum every consumption/scrap row on the shell/label/thermoseal lots).
+- The history page did resolveBucketId → findById (two reads), then loaded every pass the tub ever
+  ran WITH its full cartridgeIds array (never displayed — the page links carts born in the pass
+  via CartridgeRecord), and the cart aggregate $pushed every id of every pass before slicing to 12
+  in Node. Grows per pass.
+- Link preload is app-wide "tap" (app.html, frozen), which does nothing for a mouse.
+- Unverified: whether the Atlas cluster is in the same region as the Vercel functions (pdx1).
+
+WHAT CHANGED
+- src/routes/+layout.server.ts: `untrack(() => url.pathname)` for the public-path check (login /
+  logout redirects still invalidateAll, so user changes still land); Box/Particle reads in one
+  Promise.all, cached per process for 60 s (failures not cached, fall back to "disconnected").
+- NEW src/lib/server/services/lot-remaining.ts: lotRemaining(partNumbers) — one ReceivingLot read
+  + one ledger aggregate — plus fifoLot (oldest lot with stock) and lotsWithStock (per part,
+  largest remaining first). Same math as before, one implementation.
+- thermoseal-service.ts: defaultThermosealLot = fifoLot(lotRemaining([PT-CT-101])); thermosealPart
+  exported; checkFloor takes `part`; thermosealStatus(pre?: {cfg, part, nextLot}) runs roll /
+  next lot / exhausted count / open restock card in ONE Promise.all (KanbanTask lookup no longer
+  waits behind the others). Unused InventoryTransaction import dropped.
+- buckets/+page.server.ts: availableLots removed; lotRemaining once, shared by the pickers
+  (lotsWithStock) and the thermoseal branch, which now reads config + part once and hands them to
+  checkFloor and thermosealStatus — ~3 reads in series instead of ~8.
+- bucket-service.ts: findBucketByCode(code, select?) is the one id/sticker $or query;
+  resolveBucketId uses it (unchanged behaviour); bucketHistory loads the tub with it (one read
+  instead of two) and selects `-cartridgeIds` on the cycles.
+- buckets/[bucketId]/+page.server.ts: aggregate gets a `$project` with `$slice` to 12 ids;
+  `cartridgeIds` dropped from the returned cycles (the page never read it).
+- cart-mfg/+layout.svelte: sidebar <nav data-sveltekit-preload-data="hover">.
+- BUCKET-SYSTEM_PLAN.md: header, §9.1 load-cost note, §9.2 payload note, §10, §11 row.
+Not changed on purpose: changeLog / boardData / inOvenCarts (each 2 reads in series, but all
+shorter than the thermoseal branch so not on the critical path); no materialised lot counter
+(the ledger aggregate is index-only and a counter would have to be kept by every writer).
+svelte-check: COMPLETED 3419 FILES 14 ERRORS — the pre-existing baseline, none in touched files.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-4kwd6krp7-brevitest.vercel.app
+Source: branch feat/bucket-nav-perf @ commit 6c0a8bc1
+Retrieve this exact code: git checkout feat/bucket-nav-perf at commit 6c0a8bc1
+  (or: git log feat/bucket-nav-perf --oneline to find it if the branch has since moved on)
+What this deployment is for: the bucket board ↔ history page navigation-lag fixes (root layout no
+longer re-runs per navigation, thermoseal branch ~3 reads in series, history payload trimmed,
+sidebar hover preload). Open the board, then a bucket, then back — compare against PR #70's preview.
+
+================================================================================
+2026-09-30 — feat/badge-gated-steps — Badge gate moved to scan-in, discards and move to oven
+================================================================================
+User: "I want the badge requirement for the bucket system to be when counting up a bucket, when
+discarding carts, and when passing carts to oven." Branch cut from feat/bucket-nav-perf (c6df9ac6).
+Read "counting up a bucket" as scanning carts into a Barcoded pass (the count climbs one per scan) —
+not the Audit panel. Read "to be when …" as the full list: the badge no longer gates mint or
+start-pass, which feat/badge-system had added earlier today.
+
+WHAT CHANGED
+- bucket-service.ts: requireBadge() now reads the mode and resolves the badge in one Promise.all
+  (it sits on the scan-in hot path); new loginGate() (session as actor) and claimCustody() (Custody
+  row opened by the badge holder at the FIRST scan-in of a pass — insert, then a conditional
+  `custodyId: null` update so a concurrent first scan cannot overwrite the winner's id).
+  Gated: scanCartIn (gate runs inside the existing guard Promise.all — no extra round trip in
+  series; holder = scannedInBy, operator on both debits + scan_in row; returns `operator`),
+  scrapCarts (→ scrapCartsAs(input, gate) so advanceCycle resolves the badge once for discards +
+  move), advanceCycle (badge required only when discardedIds non-empty; a badge scanned anyway is
+  honoured on the advance row), auditCycle (when a stray is discarded or a missing member written
+  off), reportResidual (Discard only), moveToOven (holder = ovenReleasedBy; returns `operator`).
+  Un-gated: createBucket and startCycle lose `badge`; startCycle no longer creates Custody or sets
+  custodyId; openedBy = session. Every gated row: operator = holder, enteredBy = session,
+  attribution { method, badgeId, custodyId? }; audit rows carry badgeId + enteredBy.
+- buckets/+page.server.ts: badge read from the form on scanIn / advance / scrap / moveToOven /
+  audit / residual; dropped from start; scanIn + moveToOven return `operator`.
+- buckets/+page.svelte: one shared `badge` state + `badgeField(show, next?)` snippet (visible +
+  required when `show` and mode is 'required'; otherwise a hidden input so a badge scanned anyway
+  rides along). Rendered on the Barcoded panel (above the cart box, with "Carts are being recorded
+  to <user>" + Change badge after the first scan), advance (discards only), scrap, audit
+  (discards / write-offs only), residual (Discard only), Move to oven. A BDG- code scanned into
+  the cart box or any list box is routed to the badge (takeBadge); cart scans with no badge on are
+  held client-side ("Scan your badge first"); every ?/scanIn POST carries the badge; a BADGE_*
+  refusal (not the plain BADGE "that is a badge, not a cart") clears it and refocuses the box.
+  Start form's badge block removed; header link title + scan-box message reworded.
+- buckets/new/+page.server.ts + .svelte: badge field, badgeMode and `method` removed; mint is
+  "scan the sticker" again.
+- admin/badges/+page.svelte + .server.ts: portal copy says where the badge is now asked for.
+- models: bucket-cycle.ts / custody.ts comments (custody claimed at first scan-in).
+- BUCKET-SYSTEM_PLAN.md: header; new §6.6 (where the badge is asked for, one-badge-for-the-rail,
+  hot path, custody); §6.1, §6.2, §6.3, §6.5, §7, §9.1, §9.4, §9.8; §11 row.
+- BADGE-SYSTEM_PLAN.md NOT edited (its "mint + start-pass" scope line is now stale — §6.6 of the
+  bucket plan is the current statement). Also not built: a dev DB with an issued badge to click
+  through the three gates.
+svelte-check: COMPLETED 3419 FILES 14 ERRORS — the pre-existing baseline, none in touched files.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-qs4uqd44x-brevitest.vercel.app
+Source: branch feat/badge-gated-steps @ commit aa8206aa
+Retrieve this exact code: git checkout feat/badge-gated-steps at commit aa8206aa
+  (or: git log feat/badge-gated-steps --oneline to find it if the branch has since moved on)
+What this deployment is for: PR #71 — badge asked for at scan-in, discards and Move to oven; not at
+mint or start-pass. Needs an issued badge (Badge Portal) to click through the three gates.
 2026-09-30 — feat/post-mortem-tablet-fullscreen → master — Post-Mortem Inspect: tablet fullscreen mode
 ================================================================================
 Third layout for Post-Mortem Inspect (desktop → tablet/touch → fullscreen), requested after tablet
@@ -17266,3 +17372,40 @@ Retrieve this exact code: git checkout master at commit f02b16ef
   (or: git log master --oneline to find it if the branch has since moved on)
 What this deployment is for: CV station locks — newest request wins; displaced sessions drop to Local.
   GitHub deployment 6790199799 (Production). Smoke: /login 200.
+================================================================================
+2026-10-02 — feat/badge-every-phase — Badge required at every phase (every advance is now gated)
+================================================================================
+User: "I want to adjust the bucket system to require a scan in at every phase." Read as the badge
+plan's Model 1 — "scan in at each stage and advancement" (BADGE-SYSTEM_PLAN.md §1, the user's own
+wording from 2026-09-23) — i.e. a BADGE scan at every phase transition, not re-scanning every cart
+at every stage. Before this the advance asked for a badge only when carts were discarded
+(feat/badge-gated-steps, 2026-09-30). Branch cut from feat/badge-gated-steps HEAD (56b624d9) in a
+git worktree (../Bioscale_V2-wt-badge-every-phase, node_modules junctioned) because the shared
+checkout held another session's uncommitted badge-photo edits on feat/badge-photos.
+
+WHAT CHANGED
+- bucket-service.ts: advanceCycle calls requireBadge() unconditionally — Barcoded → Unpressed,
+  Unpressed → Pressed and Pressed → Backed all need a badge when Require badge is on; with it off
+  and no scan it falls back to the session exactly as before. The one badge signs the discards
+  (scrapCartsAs) and the advance row. requireBadge / AdvanceCycleInput docblocks updated.
+  Phase coverage is now: Barcoded = scan-in (gated 09-30), Unpressed / Pressed / Backed = advance
+  (gated now), oven = Move to oven (gated 09-30). Start-pass stays ungated (user removed it 09-30;
+  no carts are handled there).
+- buckets/+page.svelte: advance form renders badgeField(true) always; setMode('advance') focuses
+  the badge box when none is on so the gun's first read is the badge; header-link title and the
+  "that is a badge" message name the advance; badge-state comment updated.
+- admin/badges/+page.svelte: portal copy says "every phase (scan-in, each advance, discards, move
+  to oven)". +page.server.ts header comment NOT touched (the badge-photos session is editing it).
+- BUCKET-SYSTEM_PLAN.md: header; §6.3; §6.6 (new 2026-10-02 paragraph + "Advancing a phase" table
+  row); §9.1 rail; §11 row. BADGE-SYSTEM_PLAN.md not edited (as on 09-30).
+- No schema, server-action or data change: ?/advance already carried `badge`.
+svelte-check (worktree, after svelte-kit sync): COMPLETED 3419 FILES 14 ERRORS — the pre-existing
+baseline, none in touched files. Not clicked through on a preview yet.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-6f87n5pqh-brevitest.vercel.app
+Source: branch feat/badge-every-phase @ commit 9ee18715
+Retrieve this exact code: git checkout feat/badge-every-phase at commit 9ee18715
+  (or: git log feat/badge-every-phase --oneline to find it if the branch has since moved on)
+What this deployment is for: PR #73 — badge required at every advance (plus scan-in and Move to oven
+  as before). Branch merged with origin/master first (progress.txt conflict resolved, both sides kept);
+  svelte-check after the merge: 14 errors = baseline. Smoke: /login 200.
