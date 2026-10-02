@@ -17999,3 +17999,20 @@ browser → B14 over Tailscale from any tailnet computer (pill "direct" during s
 automatic fallback for non-tailnet devices and dropouts.
 Rollback: remove both OT2_* vars from Vercel Production and push a tree-changing commit to master; on
 B14 cp .env.bak-20261002-preview is NOT needed for rollback (prod reports are correct either way).
+
+================================================================================
+2026-10-02 — master — B07 + R04 onboarded: Tailscale is the default line for ALL THREE OT-2s in production
+================================================================================
+Same steps as B14 (docs/OT2-TAILNET-ADD-ROBOT-RUNBOOK.md), robot idle each time:
+- R04 (172.16.202.124, BIMS CCyX8FjTRGvYOd9vISGvi) and B07 (172.16.202.123, BIMS 2vIu0fzsbqzkZ7_Zjj3h2):
+  ot2-bridge 1.0 → 1.2 (md5 0e380b34…, = master scripts/ot2-bridge.py; 1.0 kept as ot2-bridge.py.v1.0.bak),
+  BIMS_BASE_URL already prod, scripts/ot2-tailnet-provision.sh <slot> --robot-id … all ✓ (secret, serve
+  /bridge → :31960, restart). Verified: /bridge/health 401 no token, 200 with token (1.2, jobServer,
+  serialOpen, engineOk); heartbeats hb:ot2-r04-bridge / hb:ot2-b07-bridge on 1.2 within 3–4 s.
+  B07 was mid maintenance session (queue) until 20:32:05 — onboarded after it closed and went quiet.
+- BIMS records: connection {mode:'tailnet', directUrl https://ot2-<slot>.tailf65a70.ts.net,
+  tailnetHostname ot2-<slot>} set for B07 + R04 with the edit page's AuditLog shape (connection_update,
+  changedBy alejandro) — applied by script (same fields as the edit form) at the user's instruction.
+- Vercel Production OT2_TAILNET_ROBOT_IDS: b14 → b14,b07,r04. This entry forces the production build.
+Pipettes: B07/R04 right = p20 (wax OK), B14 right = p1000 (reagent only).
+Rollback per robot: BIMS edit page Mode → Queue (and/or drop it from OT2_TAILNET_ROBOT_IDS + rebuild).
