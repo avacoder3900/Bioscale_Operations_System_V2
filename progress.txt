@@ -17892,3 +17892,25 @@ Connector 3.7.0: research_reagent_lot_list/get/create, research_inventory_origin
 research_curve_set_list, research_fill_lot_set_reagent_lot; research_fill_lot_assign_curve_set HUMAN-ONLY.
 Proxy allowlist: + reagent-lots, reagent-inventory/originate. test:unit 198 pass; vite build clean
 (adapter-vercel file trace fails locally on C:swapfile.sys — Windows only). Deployed via GitHub push.
+
+================================================================================
+2026-10-02 — master — PR #77 merged: OT-2 over Tailscale (TAILNET-4/5) + run-integrity fixes, LIVE in production
+================================================================================
+feat/ot2-tailnet-direct merged to master (merge commit 404db137c, PR #77, branch head 080e0f97c). Before the merge
+origin/master (71 commits) was merged into the branch: wax/reagent page-server conflicts resolved by porting
+master's State Change no-bucket carts (backing.manualBackedAt) into run-lifecycle-records.revertToBacked
+and the 3.7.0 reagent lot stamp (reagentFilling.reagentLotId/Number) into finalizeReagentRun.
+test:unit 515/515, daemon 29 OK, npm run check 115 = master's own baseline (no new errors).
+Production check: POST /api/agent/ot2/jobs/<id>/progress → 401 (was 404 this morning) — the new code is
+serving. All 3 robots idle at merge time.
+INERT IN PRODUCTION until enabled: Production env has neither OT2_TAILNET_ROBOT_IDS nor
+OT2_BRIDGE_TOKEN_SECRET (both Preview-only), so every robot stays on the queue line in prod.
+Robot state: B14 daemon 1.2, reports to the branch preview (repoint to prod next); B07/R04 daemon 1.0
+(queue-compatible) — onboard per docs/OT2-TAILNET-ADD-ROBOT-RUNBOOK.md.
+
+Deployment: production — https://bioscale-operations-system-mongodb-oo7y0nghk-brevitest.vercel.app
+  (served at https://bioscale-operations-system-mongodb.vercel.app)
+Source: branch master @ commit 404db137c
+Retrieve this exact code: git checkout master at commit 404db137c
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: OT-2 tailnet transport + /bridge jobs + run-integrity fixes (inert until enabled).
