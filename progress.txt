@@ -17409,3 +17409,34 @@ Retrieve this exact code: git checkout feat/badge-every-phase at commit 9ee18715
 What this deployment is for: PR #73 — badge required at every advance (plus scan-in and Move to oven
   as before). Branch merged with origin/master first (progress.txt conflict resolved, both sides kept);
   svelte-check after the merge: 14 errors = baseline. Smoke: /login 200.
+
+================================================================================
+2026-10-02 — fix/bucket-scan-count — Cart scan-in count lag on the bucket board
+================================================================================
+The user reported that the count lags behind the gun when scanning carts into a bucket. Branch
+cut from origin/master (95b9710d) in a git worktree (../Bioscale_V2-wt-scan-count, node_modules
+junctioned) because the shared checkout held another session's uncommitted CV-station edits on
+feat/badge-photos.
+
+ROOT CAUSE
+The 2026-09-25 rewrite made the scan box never drop a keystroke (Enter → queue → one worker posts
+one cart at a time), but the card count and the stage tile came from the scanAdded overlay, which
+is only written when the server CONFIRMS a scan. Each confirm is a full Vercel round trip with
+~8 database hops in series (session + user in hooks, badge mode + badge + holder, pass/cart/bucket
+guards, cart insert, then two debits each doing a part $inc + low-inventory settings read +
+transaction insert, plus the log rows) — roughly half a second to a second per cart. At a cart a
+second the queue grows and the count trails the gun by the queue length.
+
+WHAT CHANGED (client only)
+- buckets/+page.svelte: new scanPending overlay (cycleId → codes queued but unconfirmed) joins
+  scanAdded / scanRemoved in overlay(), so boardCycles, the panel card count, the stage tile delta
+  and the audit's missing-members list all count a queued cart immediately. enqueueCartScan adds
+  the code to scanPending when it queues it; pumpCartScans calls settlePending() after each POST
+  (success: it is in scanAdded by then; failure: it leaves the count and sits in "did not take").
+  The "already queued" check now runs before the "already in this bucket" check, because a pending
+  id is a member through the overlay.
+- BUCKET-SYSTEM_PLAN.md: header; §6.2.1 new rule; §11 row.
+- No server, schema or data change. Step 2 (faster drain: 2–3 concurrent POSTs, cache badge mode +
+  low-inventory settings, fire-and-forget the low-inventory warn) NOT done — client fix only.
+svelte-check (worktree, after svelte-kit sync): COMPLETED 3420 FILES 14 ERRORS — the pre-existing
+baseline, none in touched files. Not clicked through on a preview yet.
