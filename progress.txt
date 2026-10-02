@@ -17440,3 +17440,10 @@ WHAT CHANGED (client only)
   low-inventory settings, fire-and-forget the low-inventory warn) NOT done — client fix only.
 svelte-check (worktree, after svelte-kit sync): COMPLETED 3420 FILES 14 ERRORS — the pre-existing
 baseline, none in touched files. Not clicked through on a preview yet.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-8mcuf6igz-brevitest.vercel.app
+Source: branch fix/bucket-scan-count @ commit 9226811c
+Retrieve this exact code: git checkout fix/bucket-scan-count at commit 9226811c
+  (or: git log fix/bucket-scan-count --oneline to find it if the branch has since moved on)
+What this deployment is for: PR #74 — cart scan-in count ticks on Enter instead of on the server's
+  confirm (scanPending overlay on the bucket board). Smoke: /login 200.
