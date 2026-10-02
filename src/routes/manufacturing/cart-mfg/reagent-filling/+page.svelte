@@ -14,6 +14,7 @@
 	import EmbeddedRunController from '$lib/components/manufacturing/EmbeddedRunController.svelte';
 	import { deserialize } from '$app/forms';
 	import { RobotSession, type RobotSessionState } from '$lib/opentrons/direct-client';
+	import TransportPill from '$lib/components/opentrons/TransportPill.svelte';
 	import {
 		startRunTwoPhase,
 		finishRunTwoPhase,
@@ -679,6 +680,14 @@
 </script>
 
 <div class="space-y-4">
+	{#if lifecycleRobotId}
+		<!-- Which line this page reaches the robot on, visible BEFORE Start: the
+		     session opens on page load, so Start/Finish/Cancel use whatever this shows. -->
+		<div class="flex items-center justify-end gap-2 text-xs text-[var(--color-tron-text-secondary)]">
+			<span>Robot connection</span>
+			<TransportPill state={lifecycleConn} onRetry={() => void lifecycleSession?.retryDirect()} />
+		</div>
+	{/if}
 	{#if previewParam}
 		<!-- Preview mode stage picker -->
 		<div class="rounded-lg border border-[var(--color-tron-orange)]/50 bg-[var(--color-tron-orange)]/10 p-3">

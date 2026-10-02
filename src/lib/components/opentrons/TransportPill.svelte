@@ -4,7 +4,7 @@
     busy    amber  — direct, but a daemon job (sweep / deck scan / tip cal) holds
                      the gantry, so motion is going through the queue
     queue   grey   — the Vercel queue (today's path); tooltip says why
-  After a fallback, offers "retry direct" (the session never flips back by itself).
+  After a fallback, offers "retry direct" (the session also re-tries on its own every 30 s).
   The tooltip also lists the verbs this page ran "via Tailscale" / "via BIMS queue".
   When Chrome's Local Network Access permission is still unanswered for this BIMS
   address, offers "allow direct" — the click is what lets Chrome show its prompt.
