@@ -506,10 +506,11 @@ async function stopRobotRun(run: any): Promise<string | null> {
 
 /**
  * Cancel/abort: carts scanned onto the deck never got wax-filled. Real carts
- * (born in a production bucket, or drawn by the old WI-01 page) go back to
- * 'backing' and — via bucket-service.returnCarts — back into the bucket pass
- * they were drawn from, reopening it if the tub is free. Test-mode synthetics
- * (flagged backing.synthetic, or with neither a bucket nor a WI-01 lot) are
+ * (born in a production bucket, drawn by the old WI-01 page, or moved straight
+ * to Backed by State Change's no-bucket setting — backing.manualBackedAt) go back
+ * to 'backing' and — via bucket-service.returnCarts — back into the bucket pass
+ * they were drawn from, reopening it if the tub is free (loose if there is none).
+ * Test-mode synthetics (flagged backing.synthetic, or with none of those marks) are
  * hard-deleted through the driver: Model.deleteMany is blocked by the sacred
  * middleware and used to throw here AFTER the abort had already been recorded.
  */
@@ -527,7 +528,8 @@ async function revertToBacked(
 		'backing.synthetic': { $ne: true },
 		$or: [
 			{ 'bucket.cycleId': { $exists: true, $ne: null } },
-			{ 'backing.parentLotRecordId': { $exists: true, $ne: null } }
+			{ 'backing.parentLotRecordId': { $exists: true, $ne: null } },
+			{ 'backing.manualBackedAt': { $exists: true, $ne: null } } // State Change → Backed, no bucket (§9.6)
 		]
 	}).select('_id').lean() as any[];
 	const realIds = real.map((c: any) => String(c._id));

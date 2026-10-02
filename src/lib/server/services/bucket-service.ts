@@ -2103,6 +2103,7 @@ export interface OverrideInput {
 	barcode: string;
 	target: string;               // any CartridgeRecord status; bucket stages need destinationBucketId
 	destinationBucketId?: string; // bucket (QR or BKT id) whose open pass is at `target`
+	noBucket?: boolean;           // target Backed only: straight to 'backing' on no pass — no destination needed (§9.6)
 	reason?: string;
 	user: Operator;
 }
@@ -2112,7 +2113,14 @@ export interface OverrideInput {
  * any status while keeping bucket membership honest.
  *   - target is a bucket stage → the cart joins the destination bucket's open
  *     pass (which must already be at that stage), leaving its old pass if any;
- *   - target is anything else → the cart leaves its pass (if it was in one).
+ *   - target is anything else → the cart leaves its pass (if it was in one);
+ *   - target is Backed with `noBucket` → the cart leaves its pass (if any) and
+ *     sits loose at 'backing' — the same place Move to oven leaves carts:
+ *     counted as Backed, listed under the board's "In oven" dropdown, loadable
+ *     by wax filling. It gets the backing.recordedAt / operator stamp plus
+ *     backing.manualBackedAt, which wax filling's cancel path reads as proof of
+ *     a real cart (otherwise a never-bucketed cart would be hard-deleted as a
+ *     test-mode synthetic).
  * A pass emptied this way closes like a consumed one (tub back to Available,
  * empty-check armed). No inventory moves — an override is bookkeeping, not
  * production. Unknown barcodes are refused for bucket stages: scanning a cart
@@ -2128,12 +2136,17 @@ export async function overrideCartStage(input: OverrideInput): Promise<{ from: s
 	const now = new Date();
 	const by = { _id: input.user._id, username: input.user.username };
 	const why = (input.reason ?? '').trim();
-	const note = `Manual override: ${from} → ${target}${why ? `: ${why}` : ''}`;
+	// Straight to Backed on no pass (State Change's "No bucket" setting, §9.6).
+	const direct = target === BACKED_STAGE && input.noBucket === true;
+	const note = `Manual override: ${from} → ${target}${direct ? ' (no bucket)' : ''}${why ? `: ${why}` : ''}`;
 
 	const current = await BucketCycle.findOne({ status: 'open', cartridgeIds: barcode }).lean() as any;
 
 	let dest: any = null;
-	if (isBucketStage(target)) {
+	if (direct) {
+		// Already loose at Backed: nothing to do.
+		if (from === target && !current) return { from, to: target, fromCycle: null, toCycle: null };
+	} else if (isBucketStage(target)) {
 		const destRaw = (input.destinationBucketId ?? '').trim();
 		if (!destRaw) throw new BucketError(`Moving to ${STAGE_LABELS[target]} needs a destination bucket whose open pass is at ${STAGE_LABELS[target]}.`);
 		const destId = await resolveBucketId(destRaw);
@@ -2153,7 +2166,7 @@ export async function overrideCartStage(input: OverrideInput): Promise<{ from: s
 		await BucketCycle.updateOne({ _id: current._id }, { $pull: { cartridgeIds: barcode }, $set: { quantity: after } });
 		await logTx({
 			bucketId: current.bucketId, cycleId: current._id, type: 'merge_out', fromStage: current.stage, toStage: dest ? dest.stage : current.stage,
-			qtyBefore: before, qtyAfter: after, reason: dest ? `override → ${cycleLabel(dest.bucketId, dest.cycleNumber)}${why ? `: ${why}` : ''}` : `override → ${target}${why ? `: ${why}` : ''}`,
+			qtyBefore: before, qtyAfter: after, reason: dest ? `override → ${cycleLabel(dest.bucketId, dest.cycleNumber)}${why ? `: ${why}` : ''}` : `override → ${target}${direct ? ' (no bucket)' : ''}${why ? `: ${why}` : ''}`,
 			relatedId: dest?._id, cartridgeIds: [barcode], operator: input.user
 		});
 		if (after === 0) await closeCycle({ ...current, quantity: 0 }, 'consumed', input.user, dest?._id);
@@ -2174,11 +2187,18 @@ export async function overrideCartStage(input: OverrideInput): Promise<{ from: s
 		set['backing.bucketCycleId'] = dest._id;
 		set['backing.bucketBarcode'] = dest.bucketId;
 	}
+	if (direct) {
+		// Same stamp Unpressed → Backed writes, minus the pass ids (there is none);
+		// manualBackedAt is what revertToBacked (wax filling) keys on.
+		set['backing.recordedAt'] = now;
+		set['backing.operator'] = by;
+		set['backing.manualBackedAt'] = now;
+	}
 	await CartridgeRecord.updateOne(
 		{ _id: barcode },
 		{ $set: set, $push: { notes: { _id: generateId(), body: note, phase: 'bucket', author: by, createdAt: now } } }
 	);
-	await audit('cartridge_records', barcode, 'OVERRIDE', input.user, { status: target, cycleId: dest?._id ?? null }, { status: from, cycleId: current?._id ?? null }, why || undefined);
+	await audit('cartridge_records', barcode, 'OVERRIDE', input.user, { status: target, cycleId: dest?._id ?? null, ...(direct ? { noBucket: true } : {}) }, { status: from, cycleId: current?._id ?? null }, why || undefined);
 	return { from, to: target, fromCycle: current?._id ?? null, toCycle: dest?._id ?? null };
 }
 

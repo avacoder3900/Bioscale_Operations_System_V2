@@ -17532,3 +17532,63 @@ none in any file this branch touches.
 Shipped: commit 59af4e86 pushed; PR #75 into master
 (https://github.com/avacoder3900/Bioscale_Operations_System_V2/pull/75). Preview deployment: Vercel GitHub
 integration builds it from the push — log the URL here when it appears.
+
+================================================================================
+2026-10-02 — feat/state-change-direct-backed — State Change: straight to Backed with no bucket
+================================================================================
+User: "create a cart state change setting to move a cart directly to backed without the need of a
+bucket." Until now a Backed target on /manufacturing/cart-mfg/state-change required a destination
+bucket whose open pass is at Backed (BUCKET-SYSTEM_PLAN §9.6) — the cart had to join a pass. The
+target state without a pass already exists in the system: Move to oven leaves carts loose at status
+'backing' (counted as Backed, listed in the board's In oven dropdown, loadable by wax filling), so
+this adds a way to put a cart there directly. Branch cut from feat/drop-pressed-stage @ 3672986b
+(PR #75, not merged yet — this relies on its stage helpers) in a git worktree
+(../Bioscale_V2-wt-direct-backed, node_modules junctioned) because the shared checkout was mid-merge
+with another session's conflicts; the merge commit that session made (d4c56d9c) has conflict markers
+committed in BUCKET-SYSTEM_PLAN.md and progress.txt, so this branch deliberately starts from the
+commit before it.
+
+WHAT CHANGED
+- state-change/+page.svelte: a "No bucket" checkbox appears only when the target is Backed
+  (data.backedStage). Ticked, the destination picker is replaced by a one-line note and the form
+  posts noBucket=on without a destinationBucketId; the client-side guard says "pick the destination
+  bucket or tick No bucket". Barcoded / Unpressed targets look and behave exactly as before.
+- state-change/+page.server.ts: reads noBucket (only honoured when target === BACKED_STAGE), drops
+  the "pick a destination" 400 in that case, passes noBucket to overrideCartStage; "already backing
+  (no bucket)" in the skipped list. Header comment documents the setting.
+- bucket-service.ts overrideCartStage: OverrideInput.noBucket. direct = target Backed + noBucket:
+  no destination lookup; if the cart is already loose at backing it is a no-op; otherwise it leaves
+  its open pass (merge_out row says "override → backing (no bucket)", emptied pass closes), and the
+  cart write adds backing.recordedAt / backing.operator (same stamp as the Unpressed → Backed
+  advance, minus the pass ids) plus backing.manualBackedAt. Note "Manual override: X → backing (no
+  bucket)", OVERRIDE audit row carries noBucket: true. bucket / backing.bucketCycleId are left as they
+  were, like every other path that takes a cart out of a pass.
+- cartridge-record.ts: backing.manualBackedAt: Date declared (strict mode would otherwise drop it).
+- wax-filling/+page.server.ts revertToBacked: the "real cart" $or gains backing.manualBackedAt.
+  Root cause of needing it: cancel/abort hard-deletes any deck cart with neither bucket.cycleId nor
+  a WI-01 lot as a test-mode synthetic — a cart that had never been in a bucket and was backed via
+  this setting would have been deleted on a cancelled wax run. It is now returned loose at backing.
+- BUCKET-SYSTEM_PLAN.md: header, §9.6 "No bucket" paragraph, changelog row.
+svelte-check (worktree, after svelte-kit sync): 14 errors — the pre-existing baseline, none
+in touched files. Not clicked through on a preview yet.
+Shipped: commit a0c7635d pushed; PR #76 into feat/drop-pressed-stage (stacked on #75; GitHub retargets
+  to master when #75 merges) — https://github.com/avacoder3900/Bioscale_Operations_System_V2/pull/76
+
+Deployment: preview — https://bioscale-operations-system-mongodb-9tf1yqkpd-brevitest.vercel.app
+Source: branch feat/state-change-direct-backed @ commit a0c7635d
+Retrieve this exact code: git checkout feat/state-change-direct-backed at commit a0c7635d
+  (or: git log feat/state-change-direct-backed --oneline to find it if the branch has since moved on)
+What this deployment is for: PR #76 — State Change "No bucket" setting: move carts straight to Backed
+  with no destination bucket (loose at backing, as Move to oven leaves them). Smoke: /login 200.
+
+Merge for master (user: "merge to master"): #75 had landed on master (c6950328) and the other
+session had resolved the committed markers on feat/drop-pressed-stage, so PR #76 was retargeted to
+master and origin/master merged in (ca9843fa; one conflict, the plan-doc header line — both notes
+kept). svelte-check after the merge: 14 errors = baseline.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-pmk5kyunr-brevitest.vercel.app
+Source: branch feat/state-change-direct-backed @ commit ca9843fa
+Retrieve this exact code: git checkout feat/state-change-direct-backed at commit ca9843fa
+  (or: git log feat/state-change-direct-backed --oneline to find it if the branch has since moved on)
+What this deployment is for: PR #76 head after merging master — the build the user merges into
+  master. Smoke: /login 200.
