@@ -1,6 +1,6 @@
 # Bucket System — Production Buckets, v2 (as built)
 
-**Started:** 2026-09-21 · **Last updated:** 2026-10-02 (**Pressed stage removed** — Unpressed advances straight to Backed, §2; before that 2026-09-30: **badge gate moved** to scan-in / discards / move to oven, §6.6; earlier that day page-to-page **navigation lag** fixes, §9.1/§9.2/§11, and bucket **nicknames**, §4.1; before that 2026-09-25: thermoseal one roll part; fourth bucket stage **Backed** with **Move to oven**)
+**Started:** 2026-09-21 · **Last updated:** 2026-10-02 (**State Change: straight to Backed, no bucket**, §9.6; **Pressed stage removed** — Unpressed advances straight to Backed, §2; before that 2026-09-30: **badge gate moved** to scan-in / discards / move to oven, §6.6; earlier that day page-to-page **navigation lag** fixes, §9.1/§9.2/§11, and bucket **nicknames**, §4.1; before that 2026-09-25: thermoseal one roll part; fourth bucket stage **Backed** with **Move to oven**)
 **Branch:** `feat/bucket-system` — **PR #54 open into `master`**
 (https://github.com/avacoder3900/Bioscale_Operations_System_V2/pull/54). `origin/master` has
 been merged into this branch twice (last `33a937a4`); it sits on current production code.
@@ -576,6 +576,22 @@ The pre-existing bulk State Change page now routes bucket stages through
 its old one (`merge_out`; an emptied pass closes like a consumed one); any other target removes
 a bucket member from its pass. No inventory moves. Unknown barcodes are refused for bucket stages.
 
+**No bucket (2026-10-02).** User: "create a cart state change setting to move a cart directly to
+backed without the need of a bucket." When the target is **Backed** the page shows a *No bucket*
+checkbox; ticked, the destination picker goes away and `overrideCartStage({ noBucket: true })` moves
+each cart straight to status `backing` on no pass. That is a state that already exists — it is
+where *Move to oven* leaves carts (§6.5): counted in the Backed tile, listed in the board's *In oven*
+dropdown, loadable by wax filling. The cart leaves its open pass if it is in one (`merge_out`, and an
+emptied pass closes as usual), gets the same `backing.recordedAt` / `backing.operator` stamp the
+Unpressed → Backed advance writes (minus the pass ids), plus `backing.manualBackedAt` (new model
+field), a *Manual override: … → backing (no bucket)* note and an `OVERRIDE` audit row with
+`noBucket: true`. The marker matters: wax filling's cancel/abort (`revertToBacked`) treats a cart
+with neither `bucket.cycleId` nor a WI-01 lot as a test-mode synthetic and hard-deletes it, so a
+never-bucketed cart backed this way would have vanished on a cancelled run — `manualBackedAt` is now
+a third proof of a real cart there, and such a cart is returned loose at `backing` instead. Only the
+Backed target offers the setting (Barcoded and Unpressed still need a destination pass); unknown
+barcodes are still refused; nothing is debited.
+
 ### 9.7 Bucket page — retire
 
 *Retire bucket…* on `/buckets/[bucketId]` (admin, reason required, hidden while in use).
@@ -685,6 +701,7 @@ per-scan lookup only needs `manufacturing:read`.
 | _(feat/badge-gated-steps)_ | **Badge gate moved to the cart-handling steps** (§6.6; §6.1, §6.2, §6.3, §6.5, §7, §9.1, §9.4, §9.8): `requireBadge()` now runs in `scanCartIn` (inside the guard `Promise.all`; mode read + badge lookup in parallel), `scrapCarts` (so advance discards, *Discard carts…*), `auditCycle` (when a stray is discarded or a missing member written off), `reportResidual` (Discard only) and `moveToOven`; removed from `createBucket` and `startCycle`. New `claimCustody()`: the `Custody` row is opened by the badge holder at the first scan-in of a pass (`BucketCycle.custodyId` set then), no longer at start-pass. Gated rows carry `operator` = holder, `enteredBy` = session, `attribution` (+ `custodyId`). Board: one shared `badge` state + `badgeField` snippet on the Barcoded panel, advance (discards only), scrap, audit (discards/write-offs only), residual (Discard only) and Move to oven; a `BDG-` code scanned into any cart box is routed to the badge; `?/scanIn` returns `operator`; start form and `/buckets/new` lose their badge fields. Badge Portal copy updated. No schema change. |
 
 | _(feat/drop-pressed-stage)_ | **Pressed stage removed** (§2, §5.2, §6.3, §7, §9.1, §9.3, §9.5, §9.6, §12.3): `BUCKET_STAGES` is now `barcoded | unpressed | backing`, so Unpressed advances straight to Backed (same `backing.*` stamp; thermoseal still consumed at Barcoded → Unpressed). The key stays in both model enums as `LEGACY_PRESSED_STAGE`; new `isBucketStatus()` / `boardStage()` / `stageLabel()` and a legacy branch in `nextStage()` keep any pass or cart still at `pressed` visible (Unpressed column + count), advanceable (→ Backed, no thermoseal) and accepted by residual / audit / void / state-change — no data migration. Board `md:grid-cols-4`, dashboard + cartridge-admin strips lose the Pressed tile, pipeline loses `bucket_pressed`, override + state-change no longer offer the target. `npm run check`: 14 errors, the pre-existing baseline. |
+| _(feat/state-change-direct-backed)_ | **State Change: straight to Backed with no bucket** (§9.6): a *No bucket* checkbox on `/manufacturing/cart-mfg/state-change`, shown only when the target is Backed, sends `noBucket` to `overrideCartStage()`, which moves the cart to status `backing` on no pass — it leaves its open pass if any (`merge_out`; an emptied pass closes), gets the `backing.recordedAt` / `operator` stamp and the new `backing.manualBackedAt` (model), a `(no bucket)` note and an `OVERRIDE` audit row. Loose backed carts are the state Move to oven already produces (Backed tile, In oven dropdown, loadable by wax filling). Wax filling's `revertToBacked` accepts `backing.manualBackedAt` as proof of a real cart, so a never-bucketed cart is returned loose on cancel/abort instead of hard-deleted as a synthetic. Barcoded / Unpressed targets unchanged; unknown barcodes still refused. `npm run check`: 14 errors, the pre-existing baseline. |
 
 `npm run check` after v2: **12 errors / 438 warnings** — the same 12 pre-existing (`r2.ts`,
 `AskBimsWidget.svelte`, 8× `assembly/[sessionId]`, 2× `validation/magnetometer/[sessionId]`
