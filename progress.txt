@@ -17959,3 +17959,11 @@ Retrieve this exact code: git checkout feat/find-cart-bucket-pills at commit 07f
   (or: git log feat/find-cart-bucket-pills --oneline to find it if the branch has since moved on)
 What this deployment is for: the merge-ready build of the Find a cart nickname + pills change (master merged in);
   smoke: /login 200, /manufacturing/cart-mfg/buckets → 302 /login.
+
+Second master merge @ 65de69ff (PR #77 tailnet work landed meanwhile; progress.txt append-only conflict, both kept).
+svelte-check: 14 errors, baseline.
+Deployment: preview — https://bioscale-operations-system-mongodb-4airoj7e9-brevitest.vercel.app
+Source: branch feat/find-cart-bucket-pills @ commit 65de69ff
+Retrieve this exact code: git checkout feat/find-cart-bucket-pills at commit 65de69ff
+  (or: git log feat/find-cart-bucket-pills --oneline to find it if the branch has since moved on)
+What this deployment is for: final pre-merge build of PR #78 (master @ 42166337 merged in); smoke: /login 200, buckets → 302 /login.
