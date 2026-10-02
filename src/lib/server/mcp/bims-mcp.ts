@@ -224,7 +224,7 @@ async function callAgentApi(
 export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 	// Version bump signals clients (claude.ai caches connector tool lists) that
 	// the toolset changed — bump on every tool add/remove/rename.
-	const server = new McpServer({ name: 'bims-operations', version: '3.6.0' });
+	const server = new McpServer({ name: 'bims-operations', version: '3.6.1' });
 
 	// ---------------------------------------------------------------- meta
 
@@ -1875,6 +1875,19 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 	);
 
 	server.registerTool(
+		'research_calibration_list_runs',
+		{ annotations: READ_ONLY,
+			description:
+				'Research app: every calibrator well on a reagent lot for an assay, with the readout recomputed under the ' +
+				'assay profile, nominal concentration, QC pass/flags, SPU and factor, and whether the fit policy would include ' +
+				'it (and why not). Also returns the policy, the distinct levels, and meetsMinLevels. Call before ' +
+				'research_calibration_fit and present the table so the person sees exactly what a fit would use.',
+			inputSchema: z.object({ lotId: z.string(), assayId: z.string(), profileId: z.string().optional(), readout: z.string().optional() })
+		},
+		async (args) => callAgentApi(fetcher, `${RESEARCH}/calibration/runs`, { query: args })
+	);
+
+	server.registerTool(
 		'research_calibration_list_curves',
 		{ annotations: READ_ONLY,
 			description: 'Research app: list 4PL calibration curves (points omitted) filtered by lotId, assayId, analyteId, status (draft | active | superseded).',
@@ -1928,8 +1941,10 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 		'research_calibration_activate_curve',
 		{ annotations: WRITE_TOOL,
 			description:
-				'Research app: make a curve the ACTIVE curve for its lot/assay/analyte (previous active curve becomes ' +
-				'superseded). Unknown samples on that lot quantify against it from then on. Confirm with the person first.',
+				'HUMAN-ONLY. Approving a calibration curve as a reagent lot's active curve is a decision a person makes on the ' +
+				'research app Curves page (review calibrator wells, recovery, the previous curve overlay, then Approve with a ' +
+				'note). This tool always refuses; use it only to explain where the person approves. You may draft fits with ' +
+				'research_calibration_fit and read everything with research_calibration_list_runs / get_curve.',
 			inputSchema: z.object({ actor: ACTOR_FIELD, curveId: z.string() })
 		},
 		async (args) =>

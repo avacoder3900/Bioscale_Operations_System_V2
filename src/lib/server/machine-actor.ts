@@ -125,6 +125,10 @@ function escapeRegex(s: string): string {
  * Key = stable id used by callers; value = where a human does it instead.
  */
 export const HUMAN_ONLY_ACTIONS: Record<string, { what: string; where: string }> = {
+	research_calibration_activate_curve: {
+		what: "Approving a 4PL calibration curve as a reagent lot's active curve (research app)",
+		where: 'Research app → Curves → pick the lot and draft, review points and recovery, Approve with a note'
+	},
 	kanban_replenish: {
 		what: 'Committing work (Tier 1 → Board)',
 		where: 'Kanban → Tier 1, select the items and use the commit bar'
