@@ -17239,8 +17239,6 @@ What this deployment is for: on-tablet test of the two Capture bars, top-aligned
   strip in fullscreen. GitHub deployment 6769996539 (Production). Smoke: /login 200.
 
 ================================================================================
-<<<<<<< HEAD
-=======
 2026-09-30 — feat/capture-timing-token-renewal → master — Capture timing readout + background token renewal
 ================================================================================
 Diagnostics for the tablet capture-lag report (Tailscale already confirmed direct: Pi→lab-tab-1
@@ -17443,7 +17441,6 @@ WHAT CHANGED (client only)
 svelte-check (worktree, after svelte-kit sync): COMPLETED 3420 FILES 14 ERRORS — the pre-existing
 baseline, none in touched files. Not clicked through on a preview yet.
 ================================================================================
->>>>>>> origin/master
 2026-10-02 — feat/badge-photos — Badge Portal: photos on badges (portrait on the printed card)
 ================================================================================
 Branched from feat/badge-gated-steps @ 56b624d9 (which already carries origin/master). Adds an
@@ -17484,7 +17481,23 @@ Retrieve this exact code: git checkout feat/badge-photos at commit 2443a48f
 What this deployment is for: PR #72 — photos on badges. Issue a badge with a photo, Photo… → Replace /
   Remove on a row, Reissue (photo should follow), then Print / batch print to see the portrait on the
   card. GitHub deployment 6810533752. Smoke: /login 200.
-<<<<<<< HEAD
+Deployment: production — https://bioscale-operations-system-mongodb-hd75yhwhd-brevitest.vercel.app
+Source: branch master @ commit 294bd679 (photos cherry-picked from feat/badge-photos 2443a48f / 251d8dd4 as fc2a7125 / 294bd679,
+  on top of PR #74; PR #71's badge-gate commits were deliberately left out — user chose "photos only")
+Retrieve this exact code: git checkout master at commit 294bd679
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: photos on badges live in production — Badge Portal Photo column / Photo…
+  panel / issue-with-photo, portrait on printed cards. GitHub deployment 6811307817 (Production).
+  Smoke: /login 200. PR #72 closed in favour of the cherry-pick.
+
+================================================================================
+2026-10-02 — master — DEPLOY: research curve activation human-only + list_runs (bims-operations 3.6.1)
+================================================================================
+Source: branch master @ commit fba63a8e (feat/research-calibration-human-only)
+Retrieve this exact code: git checkout master at commit fba63a8e
+research_calibration_activate_curve added to HUMAN_ONLY_ACTIONS (approval happens on the research app
+Curves page with a note); new read tool research_calibration_list_runs; fit tool describes the fit policy.
+npm run test:unit 191 pass; check: 0 errors in changed files (master baseline otherwise). Deployed via GitHub push.
 
 ================================================================================
 2026-10-02 — feat/drop-pressed-stage — Buckets: Pressed stage removed (Unpressed → Backed)
@@ -17519,22 +17532,3 @@ none in any file this branch touches.
 Shipped: commit 59af4e86 pushed; PR #75 into master
 (https://github.com/avacoder3900/Bioscale_Operations_System_V2/pull/75). Preview deployment: Vercel GitHub
 integration builds it from the push — log the URL here when it appears.
-=======
-Deployment: production — https://bioscale-operations-system-mongodb-hd75yhwhd-brevitest.vercel.app
-Source: branch master @ commit 294bd679 (photos cherry-picked from feat/badge-photos 2443a48f / 251d8dd4 as fc2a7125 / 294bd679,
-  on top of PR #74; PR #71's badge-gate commits were deliberately left out — user chose "photos only")
-Retrieve this exact code: git checkout master at commit 294bd679
-  (or: git log master --oneline to find it if the branch has since moved on)
-What this deployment is for: photos on badges live in production — Badge Portal Photo column / Photo…
-  panel / issue-with-photo, portrait on printed cards. GitHub deployment 6811307817 (Production).
-  Smoke: /login 200. PR #72 closed in favour of the cherry-pick.
-
-================================================================================
-2026-10-02 — master — DEPLOY: research curve activation human-only + list_runs (bims-operations 3.6.1)
-================================================================================
-Source: branch master @ commit fba63a8e (feat/research-calibration-human-only)
-Retrieve this exact code: git checkout master at commit fba63a8e
-research_calibration_activate_curve added to HUMAN_ONLY_ACTIONS (approval happens on the research app
-Curves page with a note); new read tool research_calibration_list_runs; fit tool describes the fit policy.
-npm run test:unit 191 pass; check: 0 errors in changed files (master baseline otherwise). Deployed via GitHub push.
->>>>>>> origin/master

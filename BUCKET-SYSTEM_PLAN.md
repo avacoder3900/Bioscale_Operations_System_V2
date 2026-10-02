@@ -1,10 +1,6 @@
 # Bucket System — Production Buckets, v2 (as built)
 
-<<<<<<< HEAD
-**Started:** 2026-09-21 · **Last updated:** 2026-10-02 (**Pressed stage removed** — Unpressed advances straight to Backed, §2; before that 2026-09-30: **badge gate moved** to scan-in / discards / move to oven, §6.6; earlier that day page-to-page **navigation lag** fixes, §9.1/§9.2/§11, and bucket **nicknames**, §4.1; before that 2026-09-25: thermoseal one roll part; fourth bucket stage **Backed** with **Move to oven**)
-=======
-**Started:** 2026-09-21 · **Last updated:** 2026-10-02 (**scan-in count lag** — the count moves on Enter, not on the server's confirm, §6.2.1; **badge at every phase** — every advance is now gated too, §6.3/§6.6; 2026-09-30: **badge gate moved** to scan-in / discards / move to oven, §6.6; earlier that day page-to-page **navigation lag** fixes, §9.1/§9.2/§11, and bucket **nicknames**, §4.1; before that 2026-09-25: thermoseal one roll part; fourth bucket stage **Backed** with **Move to oven**)
->>>>>>> origin/master
+**Started:** 2026-09-21 · **Last updated:** 2026-10-02 (**Pressed stage removed** — Unpressed advances straight to Backed, §2; **scan-in count lag** — the count moves on Enter, not on the server's confirm, §6.2.1; **badge at every phase** — every advance is now gated too, §6.3/§6.6; 2026-09-30: **badge gate moved** to scan-in / discards / move to oven, §6.6; earlier that day page-to-page **navigation lag** fixes, §9.1/§9.2/§11, and bucket **nicknames**, §4.1; before that 2026-09-25: thermoseal one roll part; fourth bucket stage **Backed** with **Move to oven**)
 **Branch:** `feat/bucket-system` — **PR #54 open into `master`**
 (https://github.com/avacoder3900/Bioscale_Operations_System_V2/pull/54). `origin/master` has
 been merged into this branch twice (last `33a937a4`); it sits on current production code.
@@ -415,7 +411,7 @@ so Backed sat beside Pressed (four columns since the Pressed column was removed 
 Read as the badge plan's *Model 1* — "scan in at each stage and advancement"
 (`BADGE-SYSTEM_PLAN.md` §1) — not as re-scanning every cart at every stage: the badge is now
 asked for at **every phase a bucket enters**, which adds the three advances to the three steps
-below. Barcoded is entered by scanning carts in (already gated); Unpressed, Pressed and Backed
+below. Barcoded is entered by scanning carts in (already gated); Unpressed and Backed
 are entered by an advance (**now gated, discards or not**); the oven by *Move to oven* (already
 gated). Start-pass stays ungated — no carts are handled there and the user had the badge taken
 off it on 2026-09-30; the Barcoded phase gets its badge at the first cart scan. Taps per pass
@@ -431,7 +427,7 @@ is asked for at these steps — the ones where carts are handled, and (2026-10-0
 | Step | Where on the board | What the holder becomes |
 |---|---|---|
 | **Counting a bucket up** = scanning carts in (§6.2) | badge box above the cart box on a Barcoded pass; the badge rides on every `?/scanIn` | `scannedInBy`, operator on the shell + label debits and the `scan_in` row; **custodian of the pass** at the first scan (`claimCustody`) |
-| **Advancing a phase** (§6.3) — Barcoded → Unpressed, Unpressed → Pressed, Pressed → Backed (**2026-10-02**) | badge box on the advance form, always shown; the gun lands on it when no badge is on yet | operator on the `advance` row (and on that step's discards, if any); `backing.operator` on every member at Pressed → Backed |
+| **Advancing a phase** (§6.3) — Barcoded → Unpressed, Unpressed → Backed (**2026-10-02**) | badge box on the advance form, always shown; the gun lands on it when no badge is on yet | operator on the `advance` row (and on that step's discards, if any); `backing.operator` on every member at Pressed → Backed |
 | **Discarding carts** — at an advance (§6.3), *Discard carts…* (`?/scrap`), an audit's *Discard* / *Write off* (§9.8), a leftover *Discard* (§7) | badge box beside the journal, shown only when something is actually being discarded (on the advance form it is always shown) | operator on the `ManualCartridgeRemoval`, the scrap debits and the `scrap` row |
 | **Passing carts to the oven** (§6.5) | badge box above *Move to oven* | `ovenReleasedBy`, operator on the `oven` row |
 
@@ -710,12 +706,9 @@ per-scan lookup only needs `manufacturing:read`.
 
 | _(feat/badge-gated-steps)_ | **Badge gate moved to the cart-handling steps** (§6.6; §6.1, §6.2, §6.3, §6.5, §7, §9.1, §9.4, §9.8): `requireBadge()` now runs in `scanCartIn` (inside the guard `Promise.all`; mode read + badge lookup in parallel), `scrapCarts` (so advance discards, *Discard carts…*), `auditCycle` (when a stray is discarded or a missing member written off), `reportResidual` (Discard only) and `moveToOven`; removed from `createBucket` and `startCycle`. New `claimCustody()`: the `Custody` row is opened by the badge holder at the first scan-in of a pass (`BucketCycle.custodyId` set then), no longer at start-pass. Gated rows carry `operator` = holder, `enteredBy` = session, `attribution` (+ `custodyId`). Board: one shared `badge` state + `badgeField` snippet on the Barcoded panel, advance (discards only), scrap, audit (discards/write-offs only), residual (Discard only) and Move to oven; a `BDG-` code scanned into any cart box is routed to the badge; `?/scanIn` returns `operator`; start form and `/buckets/new` lose their badge fields. Badge Portal copy updated. No schema change. |
 
-<<<<<<< HEAD
-| _(feat/drop-pressed-stage)_ | **Pressed stage removed** (§2, §5.2, §6.3, §7, §9.1, §9.3, §9.5, §9.6, §12.3): `BUCKET_STAGES` is now `barcoded | unpressed | backing`, so Unpressed advances straight to Backed (same `backing.*` stamp; thermoseal still consumed at Barcoded → Unpressed). The key stays in both model enums as `LEGACY_PRESSED_STAGE`; new `isBucketStatus()` / `boardStage()` / `stageLabel()` and a legacy branch in `nextStage()` keep any pass or cart still at `pressed` visible (Unpressed column + count), advanceable (→ Backed, no thermoseal) and accepted by residual / audit / void / state-change — no data migration. Board `md:grid-cols-4`, dashboard + cartridge-admin strips lose the Pressed tile, pipeline loses `bucket_pressed`, override + state-change no longer offer the target. `npm run check`: 14 errors, the pre-existing baseline. |
-=======
 | _(fix/bucket-scan-count)_ | **Scan-in count lag** (§6.2.1): the card count and stage tile now tick on Enter — new `scanPending` overlay joins `scanAdded` / `scanRemoved` in `overlay()`; queued on Enter, moved to `scanAdded` on confirm, dropped on failure (`settlePending`). Queued-check before membership-check in `enqueueCartScan`. Client only; no server, schema or data change. |
 | _(feat/badge-every-phase)_ | **Badge at every phase** (§6.3, §6.6, §9.1; user 2026-10-02: "require a scan in at every phase", read as the badge plan's Model 1): `advanceCycle` now calls `requireBadge()` unconditionally — every advance (Barcoded → Unpressed, Unpressed → Pressed, Pressed → Backed) is badge-gated, not only one with discards; with *Require badge* off and no scan it still falls back to the session. Board: the advance form always renders the badge box (`badgeField(true)`) and `setMode('advance')` focuses it when no badge is on; header-link title and the "that is a badge" message name the advance. Badge Portal copy (`/admin/badges`) says "every phase". No schema, server-action or data change — `?/advance` already carried `badge`. |
->>>>>>> origin/master
+| _(feat/drop-pressed-stage)_ | **Pressed stage removed** (§2, §5.2, §6.3, §7, §9.1, §9.3, §9.5, §9.6, §12.3): `BUCKET_STAGES` is now `barcoded | unpressed | backing`, so Unpressed advances straight to Backed (same `backing.*` stamp; thermoseal still consumed at Barcoded → Unpressed). The key stays in both model enums as `LEGACY_PRESSED_STAGE`; new `isBucketStatus()` / `boardStage()` / `stageLabel()` and a legacy branch in `nextStage()` keep any pass or cart still at `pressed` visible (Unpressed column + count), advanceable (→ Backed, no thermoseal) and accepted by residual / audit / void / state-change — no data migration. Board `md:grid-cols-4`, dashboard + cartridge-admin strips lose the Pressed tile, pipeline loses `bucket_pressed`, override + state-change no longer offer the target. `npm run check`: 14 errors, the pre-existing baseline. |
 
 `npm run check` after v2: **12 errors / 438 warnings** — the same 12 pre-existing (`r2.ts`,
 `AskBimsWidget.svelte`, 8× `assembly/[sessionId]`, 2× `validation/magnetometer/[sessionId]`
