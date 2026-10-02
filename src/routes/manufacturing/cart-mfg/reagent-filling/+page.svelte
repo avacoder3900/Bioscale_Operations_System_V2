@@ -737,13 +737,14 @@
 		     there are no more buttons after barcode scanning. -->
 		<ReagentPreparation
 			reagentDefinitions={data.reagentDefinitions as any}
-			onComplete={async (tubes) => {
+			reagentLots={(data.researchReagentLots ?? []) as any}
+			onComplete={async (tubes, reagentLotId) => {
 				reagentBatchBarcodeLocal = tubes[0]?.sourceLotId ?? '';
 				reagentBatchConfirmedLocal = true;
 				// Persist the batch (writes to the run record — no cartridge dependency).
 				// Do NOT start the run yet: the deck hasn't been scanned. The deck-scan
 				// step auto-starts once cartridges are on.
-				await submitForm('recordReagentPrep', { tubes: JSON.stringify(tubes) });
+				await submitForm('recordReagentPrep', { tubes: JSON.stringify(tubes), reagentLotId });
 			}}
 			onSaveNote={handleSaveBatchNote}
 			readonly={isViewingPast}

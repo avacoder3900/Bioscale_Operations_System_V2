@@ -20,11 +20,16 @@
  *    Both go through bucket-service.overrideCartStage so the board stays honest.
  *    No inventory moves either way. Unknown barcodes cannot be created at a
  *    bucket stage — scanning into a bucket on the board is what debits parts.
+ *  - "No bucket" (shown only when the target is Backed) moves the carts straight
+ *    to status 'backing' on no pass — where Move to oven leaves carts: counted as
+ *    Backed, listed in the board's "In oven" dropdown, loadable by wax filling.
+ *    They leave their current pass if they are in one. Unknown barcodes are still
+ *    refused.
  */
 import { fail, redirect } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
 import { connectDB, CartridgeRecord, AuditLog, generateId } from '$lib/server/db';
-import { resolveBucketId, overrideCartStage, boardData, isBucketStage, isBucketStatus, BucketError, BUCKET_STAGES, STAGE_LABELS } from '$lib/server/services/bucket-service';
+import { resolveBucketId, overrideCartStage, boardData, isBucketStage, isBucketStatus, BucketError, BUCKET_STAGES, BACKED_STAGE, STAGE_LABELS } from '$lib/server/services/bucket-service';
 import type { PageServerLoad, Actions } from './$types';
 
 /** The status enum, read straight off the schema — single source of truth. */
@@ -54,6 +59,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 		total,
 		counts,
 		bucketStages: [...BUCKET_STAGES] as string[],
+		backedStage: BACKED_STAGE as string, // the one bucket stage that allows "No bucket"
 		stageLabels: STAGE_LABELS as Record<string, string>,
 		// Open passes, for the destination picker when the target is a bucket stage.
 		openPasses: board.cycles.map((c: any) => ({
@@ -75,11 +81,13 @@ export const actions: Actions = {
 		const clearReagentFill = data.get('clearReagentFill') === 'on';
 		const reason = ((data.get('reason') as string) ?? '').trim();
 		const destinationBucketId = ((data.get('destinationBucketId') as string) ?? '').trim();
+		// Straight to Backed on no pass — only meaningful for the Backed target.
+		const noBucket = data.get('noBucket') === 'on' && target === BACKED_STAGE;
 
 		if (!statusList().includes(target)) {
 			return fail(400, { error: `Pick a target status (got "${target || 'none'}")` });
 		}
-		if (isBucketStage(target) && !destinationBucketId) {
+		if (isBucketStage(target) && !destinationBucketId && !noBucket) {
 			return fail(400, { error: `${STAGE_LABELS[target]} is a bucket stage — pick the destination bucket (its open pass must be at ${STAGE_LABELS[target]}).` });
 		}
 
@@ -105,8 +113,8 @@ export const actions: Actions = {
 			// member of an open pass). Membership + status move together.
 			if (cart && (isBucketStage(target) || isBucketStatus(cart.status))) { // legacy 'pressed' members leave their pass too
 				try {
-					const r = await overrideCartStage({ barcode, target, destinationBucketId: destinationBucketId || undefined, reason, user: op });
-					if (r.from === r.to && r.fromCycle === r.toCycle) unchanged.push({ barcode, reason: `already ${target}${r.toCycle ? ' in that bucket' : ''}` });
+					const r = await overrideCartStage({ barcode, target, destinationBucketId: noBucket ? undefined : destinationBucketId || undefined, noBucket, reason, user: op });
+					if (r.from === r.to && r.fromCycle === r.toCycle) unchanged.push({ barcode, reason: `already ${target}${r.toCycle ? ' in that bucket' : noBucket ? ' (no bucket)' : ''}` });
 					else changed.push({ barcode, from: r.from });
 				} catch (e) {
 					rejected.push({ barcode, reason: e instanceof BucketError ? e.message : 'override failed' });

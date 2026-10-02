@@ -12,7 +12,11 @@ describe('researchPathAllowed', () => {
 		'analysis/profiles/abc123/activate',
 		'analysis/assay/A67AC662/attach',
 		'calibration/lots',
-		'calibration/curves/xyz-1/activate'
+		'calibration/curves/xyz-1/activate',
+		'reagent-lots',
+		'reagent-lots/abc/retire',
+		'reagent-inventory/originate',
+		'calibration/fill-lots/run1/assign-curve-set'
 	])('allows %s', (p) => expect(researchPathAllowed(p)).toBe(true));
 
 	it.each([
@@ -21,6 +25,9 @@ describe('researchPathAllowed', () => {
 		'analysis/',
 		'protocols',
 		'reagent-catalog/create',
+		'reagent-inventory/create',
+		'reagent-lotsx',
+		'reagent-inventory/originate-all',
 		'analysis/../users',
 		'analysis//profiles',
 		'analysis/profiles?x=1',

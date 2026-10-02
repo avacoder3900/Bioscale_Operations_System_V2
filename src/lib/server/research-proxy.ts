@@ -12,16 +12,19 @@ import { env } from '$env/dynamic/private';
  *   RESEARCH_API_URL         e.g. https://research.brevitest.com (no trailing slash)
  *   RESEARCH_AGENT_API_KEY   optional; falls back to AGENT_API_KEY (the apps share it today)
  */
-export const RESEARCH_ALLOWED_PREFIXES = ['analysis/', 'calibration/'] as const;
+export const RESEARCH_ALLOWED_PREFIXES = ['analysis/', 'calibration/', 'reagent-lots', 'reagent-inventory/originate'] as const;
 
 const SAFE_SEGMENT = /^[A-Za-z0-9_.-]+$/;
 
-/** Only analysis/* and calibration/* paths made of plain segments are forwarded. */
+/** Only allowlisted paths made of plain segments are forwarded. A prefix ending in '/' matches any
+ * sub-path; a bare prefix (e.g. 'reagent-lots') matches exactly or as a path root. */
 export function researchPathAllowed(path: string): boolean {
 	if (typeof path !== 'string' || path.length === 0 || path.length > 200) return false;
-	if (!RESEARCH_ALLOWED_PREFIXES.some((p) => path.startsWith(p))) return false;
+	const allowed = RESEARCH_ALLOWED_PREFIXES.some((p) =>
+		p.endsWith('/') ? path.startsWith(p) : path === p || path.startsWith(`${p}/`)
+	);
+	if (!allowed) return false;
 	const segments = path.split('/');
-	if (segments.length < 2) return false;
 	return segments.every((s) => s.length > 0 && s !== '.' && s !== '..' && SAFE_SEGMENT.test(s));
 }
 

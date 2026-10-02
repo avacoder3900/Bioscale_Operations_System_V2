@@ -109,7 +109,13 @@ This replicates the full `/api/agent/**` machine surface except: `ask`/`transcri
 routes serving the in-app widget, not machine agents) and the OT-2/scanner long-poll daemon queues
 (not request/response shaped; the robot bridge keeps using them directly).
 
-## Research analysis tools (v3.6.1)
+## Research analysis tools (v3.7.0)
+
+v3.7.0 adds DOMAIN-32 reagent-lot tools: `research_reagent_lot_list` / `_get` / `_create` (W),
+`research_inventory_originate` (W), `research_fill_lot_list`, `research_curve_set_list`,
+`research_fill_lot_set_reagent_lot` (W), and the human-only `research_fill_lot_assign_curve_set`.
+The fill screen now requires picking a research reagent lot (reagent_set_lots, read-only in BIMS)
+and stamps `reagentLotId` / `reagentLotNumber` on the run and on each cartridge's `reagentFilling`.
 
 The brevitest-research-v2 app owns the analysis engine (declarative analysis profiles, stored
 per-well results on `cartridge_records.analysis`, and 4PL calibration curves per reagent lot).

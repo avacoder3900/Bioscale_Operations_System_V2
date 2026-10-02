@@ -38,6 +38,7 @@ const cartridgeRecordSchema = new Schema({
 		barcodeLabelLot: String,     // PT-CT-106 input material lot
 		bucketCycleId: String,       // BucketCycle._id the cartridge was drawn from at WI-01
 		bucketBarcode: String,       // denormalized ProductionBucket._id for search; NOT unique across passes
+		manualBackedAt: Date,        // State Change moved it straight to Backed with no bucket (BUCKET-SYSTEM_PLAN §9.6); wax filling's cancel path reads it as "real cart"
 		// LEGACY (backing-oven tracking removed 2026-09-23, BUCKET-SYSTEM_PLAN v2):
 		// no longer written; kept so historical records still validate.
 		ovenEntryTime: Date,
@@ -72,6 +73,9 @@ const cartridgeRecordSchema = new Schema({
 		// assay data (bug)".
 		isResearch: Boolean,
 		deckPosition: Number,
+		// DOMAIN-32: research reagent lot (reagent_set_lots._id / lotNumber) this cartridge was filled with
+		reagentLotId: String,
+		reagentLotNumber: String,
 		tubeRecords: [{ _id: false, wellPosition: Number, reagentName: String, sourceLotId: String, transferTubeId: String }],
 		operator: operatorRef, fillDate: Date, expirationDate: Date, recordedAt: Date
 	},

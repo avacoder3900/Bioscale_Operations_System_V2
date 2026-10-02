@@ -1,6 +1,6 @@
 # Bucket System — Production Buckets, v2 (as built)
 
-**Started:** 2026-09-21 · **Last updated:** 2026-10-02 (**Pressed stage removed** — Unpressed advances straight to Backed, §2; **scan-in count lag** — the count moves on Enter, not on the server's confirm, §6.2.1; **badge at every phase** — every advance is now gated too, §6.3/§6.6; 2026-09-30: **badge gate moved** to scan-in / discards / move to oven, §6.6; earlier that day page-to-page **navigation lag** fixes, §9.1/§9.2/§11, and bucket **nicknames**, §4.1; before that 2026-09-25: thermoseal one roll part; fourth bucket stage **Backed** with **Move to oven**)
+**Started:** 2026-09-21 · **Last updated:** 2026-10-02 (**State Change: straight to Backed, no bucket**, §9.6; **Pressed stage removed** — Unpressed advances straight to Backed, §2; **scan-in count lag** — the count moves on Enter, not on the server's confirm, §6.2.1; **badge at every phase** — every advance is now gated too, §6.3/§6.6; 2026-09-30: **badge gate moved** to scan-in / discards / move to oven, §6.6; earlier that day page-to-page **navigation lag** fixes, §9.1/§9.2/§11, and bucket **nicknames**, §4.1; before that 2026-09-25: thermoseal one roll part; fourth bucket stage **Backed** with **Move to oven**)
 **Branch:** `feat/bucket-system` — **PR #54 open into `master`**
 (https://github.com/avacoder3900/Bioscale_Operations_System_V2/pull/54). `origin/master` has
 been merged into this branch twice (last `33a937a4`); it sits on current production code.
@@ -613,6 +613,22 @@ The pre-existing bulk State Change page now routes bucket stages through
 its old one (`merge_out`; an emptied pass closes like a consumed one); any other target removes
 a bucket member from its pass. No inventory moves. Unknown barcodes are refused for bucket stages.
 
+**No bucket (2026-10-02).** User: "create a cart state change setting to move a cart directly to
+backed without the need of a bucket." When the target is **Backed** the page shows a *No bucket*
+checkbox; ticked, the destination picker goes away and `overrideCartStage({ noBucket: true })` moves
+each cart straight to status `backing` on no pass. That is a state that already exists — it is
+where *Move to oven* leaves carts (§6.5): counted in the Backed tile, listed in the board's *In oven*
+dropdown, loadable by wax filling. The cart leaves its open pass if it is in one (`merge_out`, and an
+emptied pass closes as usual), gets the same `backing.recordedAt` / `backing.operator` stamp the
+Unpressed → Backed advance writes (minus the pass ids), plus `backing.manualBackedAt` (new model
+field), a *Manual override: … → backing (no bucket)* note and an `OVERRIDE` audit row with
+`noBucket: true`. The marker matters: wax filling's cancel/abort (`revertToBacked`) treats a cart
+with neither `bucket.cycleId` nor a WI-01 lot as a test-mode synthetic and hard-deletes it, so a
+never-bucketed cart backed this way would have vanished on a cancelled run — `manualBackedAt` is now
+a third proof of a real cart there, and such a cart is returned loose at `backing` instead. Only the
+Backed target offers the setting (Barcoded and Unpressed still need a destination pass); unknown
+barcodes are still refused; nothing is debited.
+
 ### 9.7 Bucket page — retire
 
 *Retire bucket…* on `/buckets/[bucketId]` (admin, reason required, hidden while in use).
@@ -724,6 +740,7 @@ per-scan lookup only needs `manufacturing:read`.
 | _(fix/bucket-scan-count)_ | **Scan-in count lag** (§6.2.1): the card count and stage tile now tick on Enter — new `scanPending` overlay joins `scanAdded` / `scanRemoved` in `overlay()`; queued on Enter, moved to `scanAdded` on confirm, dropped on failure (`settlePending`). Queued-check before membership-check in `enqueueCartScan`. Client only; no server, schema or data change. |
 | _(feat/badge-every-phase)_ | **Badge at every phase** (§6.3, §6.6, §9.1; user 2026-10-02: "require a scan in at every phase", read as the badge plan's Model 1): `advanceCycle` now calls `requireBadge()` unconditionally — every advance (Barcoded → Unpressed, Unpressed → Pressed, Pressed → Backed) is badge-gated, not only one with discards; with *Require badge* off and no scan it still falls back to the session. Board: the advance form always renders the badge box (`badgeField(true)`) and `setMode('advance')` focuses it when no badge is on; header-link title and the "that is a badge" message name the advance. Badge Portal copy (`/admin/badges`) says "every phase". No schema, server-action or data change — `?/advance` already carried `badge`. |
 | _(feat/drop-pressed-stage)_ | **Pressed stage removed** (§2, §5.2, §6.3, §7, §9.1, §9.3, §9.5, §9.6, §12.3): `BUCKET_STAGES` is now `barcoded | unpressed | backing`, so Unpressed advances straight to Backed (same `backing.*` stamp; thermoseal still consumed at Barcoded → Unpressed). The key stays in both model enums as `LEGACY_PRESSED_STAGE`; new `isBucketStatus()` / `boardStage()` / `stageLabel()` and a legacy branch in `nextStage()` keep any pass or cart still at `pressed` visible (Unpressed column + count), advanceable (→ Backed, no thermoseal) and accepted by residual / audit / void / state-change — no data migration. Board `md:grid-cols-4`, dashboard + cartridge-admin strips lose the Pressed tile, pipeline loses `bucket_pressed`, override + state-change no longer offer the target. `npm run check`: 14 errors, the pre-existing baseline. |
+| _(feat/state-change-direct-backed)_ | **State Change: straight to Backed with no bucket** (§9.6): a *No bucket* checkbox on `/manufacturing/cart-mfg/state-change`, shown only when the target is Backed, sends `noBucket` to `overrideCartStage()`, which moves the cart to status `backing` on no pass — it leaves its open pass if any (`merge_out`; an emptied pass closes), gets the `backing.recordedAt` / `operator` stamp and the new `backing.manualBackedAt` (model), a `(no bucket)` note and an `OVERRIDE` audit row. Loose backed carts are the state Move to oven already produces (Backed tile, In oven dropdown, loadable by wax filling). Wax filling's `revertToBacked` accepts `backing.manualBackedAt` as proof of a real cart, so a never-bucketed cart is returned loose on cancel/abort instead of hard-deleted as a synthetic. Barcoded / Unpressed targets unchanged; unknown barcodes still refused. `npm run check`: 14 errors, the pre-existing baseline. |
 | _(feat/find-cart-bucket-pills)_ | **Find a cart: bucket nickname + colour-coded pills** (§9.1, §7; user 2026-10-02): `cartStatusLine()` returns structured fields (`status`, `statusLabel`, `home` with `nickname` / `barcode` / `bucketState` / `relation`, `legacyLotId`, `since`) beside the unchanged `line`, reading the home bucket's `ProductionBucket` row for nickname + state; `?/cartLookup` returns the whole object. Board: new `cartHitView` snippet renders cart id · stage-tinted status pill · relation pill (Belongs in / Taken off / Last seen in / On no open pass) · bucket link headlined by nickname · "at <stage>" · bucket-state pill (`regStateTint`) · legacy lot · since; used by the *Find a cart* box and the leftover panel's *Where does this cart belong?*. Plain `line` still shown for not-found / errors. No schema or data change. |
 
 `npm run check` after v2: **12 errors / 438 warnings** — the same 12 pre-existing (`r2.ts`,
