@@ -17409,3 +17409,23 @@ Retrieve this exact code: git checkout feat/badge-every-phase at commit 9ee18715
 What this deployment is for: PR #73 — badge required at every advance (plus scan-in and Move to oven
   as before). Branch merged with origin/master first (progress.txt conflict resolved, both sides kept);
   svelte-check after the merge: 14 errors = baseline. Smoke: /login 200.
+================================================================================
+2026-10-02 — feat/badge-every-phase — One badge per bucket: no carry-over to the next bucket
+================================================================================
+User: "Require badge scan in each time a new bucket is filled, do not carry over badge info from a
+previous scan in or advance." Until now the board kept ONE badge for the whole rail (2026-09-30):
+scanned once, it filled every gated form on every bucket until Change badge or a server refusal.
+
+WHAT CHANGED (board only — buckets/+page.svelte; no server change, the server cannot tell a fresh
+scan from a cached one, so the rule lives where the badge is cached)
+- `badgeFor` records the rail's target (pass id, or bucket id for start / residual / retire) at
+  the moment the badge is scanned (takeBadge, and Enter in the badge box).
+- `panelKey` ($derived) is that target for the current panel; an $effect calls retargetBadge()
+  whenever it changes: a badge scanned for a different target is dropped (badge, scanOperator,
+  badgeFor cleared). openCycle and the start-pass success handler call retargetBadge()
+  synchronously too, so focusScanEntry() lands the gun on the badge box, not the cart box.
+- Net behaviour: scan-in, advances, discards and Move to oven on ONE bucket still share the badge;
+  opening another pass or bucket, closing the panel, or starting a pass (new target) requires a
+  fresh badge scan. `untrack` imported from svelte.
+- BUCKET-SYSTEM_PLAN.md: header; §6.6 "One badge for the rail" → "One badge per bucket"; §11 row.
+svelte-check (worktree): COMPLETED 3420 FILES 14 ERRORS — baseline, none in touched files.

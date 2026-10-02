@@ -1,6 +1,6 @@
 # Bucket System — Production Buckets, v2 (as built)
 
-**Started:** 2026-09-21 · **Last updated:** 2026-10-02 (**badge at every phase** — every advance is now gated too, §6.3/§6.6; 2026-09-30: **badge gate moved** to scan-in / discards / move to oven, §6.6; earlier that day page-to-page **navigation lag** fixes, §9.1/§9.2/§11, and bucket **nicknames**, §4.1; before that 2026-09-25: thermoseal one roll part; fourth bucket stage **Backed** with **Move to oven**)
+**Started:** 2026-09-21 · **Last updated:** 2026-10-02 (**badge at every phase** — every advance is now gated too, and the badge is **per bucket**, never carried to another bucket, §6.3/§6.6; 2026-09-30: **badge gate moved** to scan-in / discards / move to oven, §6.6; earlier that day page-to-page **navigation lag** fixes, §9.1/§9.2/§11, and bucket **nicknames**, §4.1; before that 2026-09-25: thermoseal one roll part; fourth bucket stage **Backed** with **Move to oven**)
 **Branch:** `feat/bucket-system` — **PR #54 open into `master`**
 (https://github.com/avacoder3900/Bioscale_Operations_System_V2/pull/54). `origin/master` has
 been merged into this branch twice (last `33a937a4`); it sits on current production code.
@@ -418,12 +418,20 @@ operator, as before. On every gated row `operator` = badge holder, `enteredBy` =
 `attribution` = `{ method: 'badge', badgeId, custodyId? }`. With *Require badge* **off** the
 boxes are hidden, but a badge scanned into a cart box is still routed and honoured.
 
-**One badge for the rail.** The board keeps one `badge` value: scanned once (into any badge box,
-or into any cart box — `BDG-…` is recognised client-side and never queued as a cart), it fills
-every gated form's badge field until the operator presses *Change badge* or the server refuses it
-(`BADGE_*` codes clear it and refocus the box). The Barcoded panel says who the carts are being
-recorded to after the first scan lands. Cart scans made before a badge is on are held with *Scan
-your badge first* rather than sent.
+**One badge per bucket (2026-10-02).** User: "Require badge scan in each time a new bucket is
+filled, do not carry over badge info from a previous scan in or advance." The board keeps one
+`badge` value, but it belongs to the bucket it was scanned on: `badgeFor` records the rail's
+target (pass id or bucket id) at the moment the badge is scanned, and an effect clears the badge
+whenever the rail is pointed somewhere else — opening another pass or bucket, closing the panel,
+or a pass just started on the same bucket (start-pass → its new Barcoded pass is a new target).
+Within one bucket the badge still fills every gated form — scan-in, each advance, discards, Move
+to oven — until the operator presses *Change badge* or the server refuses it (`BADGE_*` codes
+clear it and refocus the box). Scanned into any badge box, or into any cart box (`BDG-…` is
+recognised client-side and never queued as a cart). The Barcoded panel says who the carts are
+being recorded to after the first scan lands. Cart scans made before a badge is on are held with
+*Scan your badge first* rather than sent. This is client-side scoping: the server cannot tell a
+fresh scan from a cached one, so the rule lives where the badge is cached. (From 2026-09-30 to
+2026-10-02 one badge carried across the whole rail.)
 
 **Hot path (§6.2.1).** `requireBadge()` reads the mode and resolves the badge in one `Promise.all`,
 and on scan-in that whole gate runs inside the existing guard group — the badge adds no round trip
@@ -686,6 +694,7 @@ per-scan lookup only needs `manufacturing:read`.
 | _(feat/badge-gated-steps)_ | **Badge gate moved to the cart-handling steps** (§6.6; §6.1, §6.2, §6.3, §6.5, §7, §9.1, §9.4, §9.8): `requireBadge()` now runs in `scanCartIn` (inside the guard `Promise.all`; mode read + badge lookup in parallel), `scrapCarts` (so advance discards, *Discard carts…*), `auditCycle` (when a stray is discarded or a missing member written off), `reportResidual` (Discard only) and `moveToOven`; removed from `createBucket` and `startCycle`. New `claimCustody()`: the `Custody` row is opened by the badge holder at the first scan-in of a pass (`BucketCycle.custodyId` set then), no longer at start-pass. Gated rows carry `operator` = holder, `enteredBy` = session, `attribution` (+ `custodyId`). Board: one shared `badge` state + `badgeField` snippet on the Barcoded panel, advance (discards only), scrap, audit (discards/write-offs only), residual (Discard only) and Move to oven; a `BDG-` code scanned into any cart box is routed to the badge; `?/scanIn` returns `operator`; start form and `/buckets/new` lose their badge fields. Badge Portal copy updated. No schema change. |
 
 | _(feat/badge-every-phase)_ | **Badge at every phase** (§6.3, §6.6, §9.1; user 2026-10-02: "require a scan in at every phase", read as the badge plan's Model 1): `advanceCycle` now calls `requireBadge()` unconditionally — every advance (Barcoded → Unpressed, Unpressed → Pressed, Pressed → Backed) is badge-gated, not only one with discards; with *Require badge* off and no scan it still falls back to the session. Board: the advance form always renders the badge box (`badgeField(true)`) and `setMode('advance')` focuses it when no badge is on; header-link title and the "that is a badge" message name the advance. Badge Portal copy (`/admin/badges`) says "every phase". No schema, server-action or data change — `?/advance` already carried `badge`. |
+| _(feat/badge-every-phase)_ | **One badge per bucket** (§6.6; user 2026-10-02: "require badge scan in each time a new bucket is filled, do not carry over badge info from a previous scan in or advance"): board-only — `badgeFor` + `panelKey` + an effect that clears `badge` / `scanOperator` when the rail is pointed at a different pass or bucket (or closed, or a pass is started); `takeBadge` and the badge box's Enter stamp `badgeFor`. Within a bucket the badge still carries across scan-in, advances, discards and Move to oven. No server change. |
 
 `npm run check` after v2: **12 errors / 438 warnings** — the same 12 pre-existing (`r2.ts`,
 `AskBimsWidget.svelte`, 8× `assembly/[sessionId]`, 2× `validation/magnetometer/[sessionId]`
