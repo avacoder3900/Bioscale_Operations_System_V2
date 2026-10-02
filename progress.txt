@@ -17401,3 +17401,11 @@ WHAT CHANGED
 - No schema, server-action or data change: ?/advance already carried `badge`.
 svelte-check (worktree, after svelte-kit sync): COMPLETED 3419 FILES 14 ERRORS — the pre-existing
 baseline, none in touched files. Not clicked through on a preview yet.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-6f87n5pqh-brevitest.vercel.app
+Source: branch feat/badge-every-phase @ commit 9ee18715
+Retrieve this exact code: git checkout feat/badge-every-phase at commit 9ee18715
+  (or: git log feat/badge-every-phase --oneline to find it if the branch has since moved on)
+What this deployment is for: PR #73 — badge required at every advance (plus scan-in and Move to oven
+  as before). Branch merged with origin/master first (progress.txt conflict resolved, both sides kept);
+  svelte-check after the merge: 14 errors = baseline. Smoke: /login 200.
