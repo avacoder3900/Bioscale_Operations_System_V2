@@ -17580,3 +17580,15 @@ Retrieve this exact code: git checkout feat/state-change-direct-backed at commit
   (or: git log feat/state-change-direct-backed --oneline to find it if the branch has since moved on)
 What this deployment is for: PR #76 — State Change "No bucket" setting: move carts straight to Backed
   with no destination bucket (loose at backing, as Move to oven leaves them). Smoke: /login 200.
+
+Merge for master (user: "merge to master"): #75 had landed on master (c6950328) and the other
+session had resolved the committed markers on feat/drop-pressed-stage, so PR #76 was retargeted to
+master and origin/master merged in (ca9843fa; one conflict, the plan-doc header line — both notes
+kept). svelte-check after the merge: 14 errors = baseline.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-pmk5kyunr-brevitest.vercel.app
+Source: branch feat/state-change-direct-backed @ commit ca9843fa
+Retrieve this exact code: git checkout feat/state-change-direct-backed at commit ca9843fa
+  (or: git log feat/state-change-direct-backed --oneline to find it if the branch has since moved on)
+What this deployment is for: PR #76 head after merging master — the build the user merges into
+  master. Smoke: /login 200.
