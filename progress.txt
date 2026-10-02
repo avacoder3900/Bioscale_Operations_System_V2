@@ -17310,3 +17310,6 @@ directly to Backed. BUCKET-SYSTEM_PLAN.md §2 (new callout), §5.2, §6.3, §7, 
 npm run check (svelte-kit sync + svelte-check): 14 errors — the pre-existing baseline (r2.ts,
 2× research-proxy.ts, AskBimsWidget, 8× assembly/[sessionId], 2× validation/magnetometer/[sessionId]);
 none in any file this branch touches.
+Shipped: commit 59af4e86 pushed; PR #75 into master
+(https://github.com/avacoder3900/Bioscale_Operations_System_V2/pull/75). Preview deployment: Vercel GitHub
+integration builds it from the push — log the URL here when it appears.
