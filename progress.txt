@@ -17481,3 +17481,11 @@ Retrieve this exact code: git checkout feat/badge-photos at commit 2443a48f
 What this deployment is for: PR #72 — photos on badges. Issue a badge with a photo, Photo… → Replace /
   Remove on a row, Reissue (photo should follow), then Print / batch print to see the portrait on the
   card. GitHub deployment 6810533752. Smoke: /login 200.
+Deployment: production — https://bioscale-operations-system-mongodb-hd75yhwhd-brevitest.vercel.app
+Source: branch master @ commit 294bd679 (photos cherry-picked from feat/badge-photos 2443a48f / 251d8dd4 as fc2a7125 / 294bd679,
+  on top of PR #74; PR #71's badge-gate commits were deliberately left out — user chose "photos only")
+Retrieve this exact code: git checkout master at commit 294bd679
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: photos on badges live in production — Badge Portal Photo column / Photo…
+  panel / issue-with-photo, portrait on printed cards. GitHub deployment 6811307817 (Production).
+  Smoke: /login 200. PR #72 closed in favour of the cherry-pick.
