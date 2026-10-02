@@ -17638,3 +17638,15 @@ Retrieve this exact code: git checkout feat/find-cart-bucket-pills at commit 2ad
   (or: git log feat/find-cart-bucket-pills --oneline to find it if the branch has since moved on)
 What this deployment is for: Find a cart / Where does this cart belong? results with the bucket
   nickname and colour-coded status, relation and bucket-state pills (on top of the Pressed-stage removal).
+
+Merged origin/master (a125c9e4, 3.7.0 reagent-lot picker + state-change-direct-backed) into the branch @ 07f26e49;
+doc conflicts in BUCKET-SYSTEM_PLAN.md / progress.txt were append-only, both sides kept. svelte-check after the
+merge: 14 errors, the pre-existing baseline. PR #78 into master
+(https://github.com/avacoder3900/Bioscale_Operations_System_V2/pull/78).
+
+Deployment: preview — https://bioscale-operations-system-mongodb-3z64fbsrd-brevitest.vercel.app
+Source: branch feat/find-cart-bucket-pills @ commit 07f26e49
+Retrieve this exact code: git checkout feat/find-cart-bucket-pills at commit 07f26e49
+  (or: git log feat/find-cart-bucket-pills --oneline to find it if the branch has since moved on)
+What this deployment is for: the merge-ready build of the Find a cart nickname + pills change (master merged in);
+  smoke: /login 200, /manufacturing/cart-mfg/buckets → 302 /login.
