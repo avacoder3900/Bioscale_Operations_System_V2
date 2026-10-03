@@ -1669,7 +1669,7 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 			description:
 				'Research app: everything needed to author an analysis profile — bands (f1..f8, clear, nir, temperature...), ' +
 				'reducers (sum, mean, median, sd, cv, min, max, first, last, count, slope), window shapes, the safe expression ' +
-				'grammar (arithmetic, comparisons, if/min/max/log..., cross-well `key@B`, `deviceFactor`), QC rule semantics, ' +
+				'grammar (arithmetic, comparisons, if/min/max/log..., cross-well `key@B`), QC rule semantics, ' +
 				'quantify options, the legacy outputs[] compat projection (keep f3_raw and f7/f3 for device-calibration and ' +
 				'calibrated-analysis), view column sources, and two complete example profiles. Call this first. ' + RESEARCH_AUTHORING_DOCTRINE
 		},
@@ -1927,7 +1927,6 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 				cartridgeIds: z.array(z.string()).optional().describe('Restrict to these calibrator cartridges.'),
 				excluded: z.array(z.object({ cartridgeId: z.string(), well: z.string() })).optional(),
 				weighting: z.enum(['none', 'inverse_y2']).optional(),
-				applyDeviceFactor: z.boolean().optional(),
 				notes: z.string().optional()
 			})
 		},

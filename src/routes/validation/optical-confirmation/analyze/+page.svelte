@@ -3,7 +3,6 @@
 	import { page } from '$app/state';
 	import GroupPill from '$lib/components/validation/optical/GroupPill.svelte';
 	import OutlierMark from '$lib/components/validation/optical/OutlierMark.svelte';
-	import CalibrationPill from '$lib/components/validation/optical/CalibrationPill.svelte';
 	import MethodLegend from '$lib/components/validation/optical/MethodLegend.svelte';
 	import GroupStripPlot from '$lib/components/validation/optical/GroupStripPlot.svelte';
 	import { toCsv, downloadCsv, todayStamp } from '$lib/components/validation/optical/csv';
@@ -80,8 +79,6 @@
 		spuUdi: string | null;
 		spuId: string | null;
 		deviceName: string | null;
-		calibration: 'calibrated' | 'uncalibrated' | 'unknown';
-		calibrationReason: string;
 	}
 
 	interface Props {
@@ -212,7 +209,7 @@
 	function exportDataset() {
 		if (!cmp) return;
 		const header = [
-			'group_name', 'group_id', 'barcode', 'spu_udi', 'spu_calibration_status', 'well',
+			'group_name', 'group_id', 'barcode', 'spu_udi', 'well',
 			'f7_f3_ratio', 'robust_z', 'is_outlier', 'group_median', 'group_mad_scaled',
 			'group_scale_estimator', 'group_robust_cv_pct', 'expected_low', 'expected_high',
 			'cartridge_ratio_cv_pct', 'cross_well_cv_pct', 'threshold_k', 'window_k', 'exported_at'
@@ -227,7 +224,6 @@
 					rows.push([
 						g.groupName, g.groupId, r.id,
 						spu(r.id)?.spuUdi ?? r.spuUdi ?? '',
-						spu(r.id)?.calibration ?? 'unknown',
 						c,
 						r.ratioByChannel[c], r.robustZByChannel[c],
 						r.outlierChannels.includes(c) ? 'yes' : 'no',
@@ -316,8 +312,7 @@
 			class="rounded-lg border border-[var(--color-tron-cyan)]/40 bg-[var(--color-tron-cyan)]/5 p-3 text-sm text-[var(--color-tron-text-secondary)]"
 		>
 			Every number on this page is <span class="tron-text-primary font-semibold">raw F7/F3</span>
-			(F7 630 nm signal ÷ F3 480 nm reference). No calibration factor is applied anywhere; per-SPU
-			calibration status is shown for context only.
+			(F7 630 nm signal ÷ F3 480 nm reference). No calibration factor is applied anywhere.
 		</div>
 
 		{#each cmp!.notes as note}
@@ -507,7 +502,6 @@
 							<th class="py-2 pr-4 font-medium">Group</th>
 							<th class="py-2 pr-4 font-medium">Barcode</th>
 							<th class="py-2 pr-4 font-medium">SPU</th>
-							<th class="py-2 pr-4 font-medium">Calib</th>
 							<th class="py-2 pr-4 font-medium">A</th>
 							<th class="py-2 pr-4 font-medium">B</th>
 							<th class="py-2 pr-4 font-medium">C</th>
@@ -539,13 +533,6 @@
 											</span>
 										{:else}
 											—
-										{/if}
-									</td>
-									<td class="py-2 pr-4 font-sans">
-										{#if sc}
-											<CalibrationPill status={sc.calibration} reason={sc.calibrationReason} />
-										{:else}
-											<span class="text-[var(--color-tron-text-secondary)]">—</span>
 										{/if}
 									</td>
 									{#each CHANNELS as c}
