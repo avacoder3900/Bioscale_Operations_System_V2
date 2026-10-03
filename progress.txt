@@ -18016,3 +18016,15 @@ Same steps as B14 (docs/OT2-TAILNET-ADD-ROBOT-RUNBOOK.md), robot idle each time:
 - Vercel Production OT2_TAILNET_ROBOT_IDS: b14 → b14,b07,r04. This entry forces the production build.
 Pipettes: B07/R04 right = p20 (wax OK), B14 right = p1000 (reagent only).
 Rollback per robot: BIMS edit page Mode → Queue (and/or drop it from OT2_TAILNET_ROBOT_IDS + rebuild).
+
+================================================================================
+2026-10-02 — master — DEPLOY: fill screen picks a FILL LOT, inline new fill lot, connector 3.8.0
+================================================================================
+Source: branch master @ commit 48794fe7 (feat/fill-lot-picker)
+Retrieve this exact code: git checkout master at commit 48794fe7
+Alejandro: a fill lot is one reagent lot across any number of robot runs. ReagentPreparation now lists open
+research fill_lots (FillLot model, strict:false), preselects the last-used one, and can open a new one
+(createFillLot action: reagent lot + name → FL-YYYYMMDD-NNN). recordReagentPrep requires an open fill lot and
+stamps fillLotId/fillLotNumber + reagentLotId/reagentLotNumber on the run; finalize stamps every cartridge and
+$addToSet runIds on the fill lot. Connector 3.8.0: research_fill_lot_create, research_fill_lot_assign_runs.
+test:unit 515 pass; check 13 errors = baseline, none in changed files. Deployed via GitHub push.
