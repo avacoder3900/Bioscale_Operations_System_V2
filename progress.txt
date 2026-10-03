@@ -18028,3 +18028,13 @@ research fill_lots (FillLot model, strict:false), preselects the last-used one, 
 stamps fillLotId/fillLotNumber + reagentLotId/reagentLotNumber on the run; finalize stamps every cartridge and
 $addToSet runIds on the fill lot. Connector 3.8.0: research_fill_lot_create, research_fill_lot_assign_runs.
 test:unit 515 pass; check 13 errors = baseline, none in changed files. Deployed via GitHub push.
+
+================================================================================
+2026-10-03 — master — DEPLOY: device-factor (opticalCalibration) experiment stripped
+================================================================================
+Source: branch master @ commit 865b9b42 (chore/strip-device-factor)
+Retrieve this exact code: git checkout master at commit 865b9b42
+Alejandro: the per-SPU optical factor calibration was a failed experiment. spus.opticalCalibration removed
+from 17 SPUs by the research app (backup in research scripts/); BIMS optical-confirmation analyze page drops
+the Calib column / CalibrationPill / calibration status; MCP fit tool drops applyDeviceFactor.
+test:unit 515 pass; check 13 errors = baseline. Deployed via GitHub push.
