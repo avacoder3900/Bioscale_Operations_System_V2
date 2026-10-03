@@ -73,7 +73,9 @@ const cartridgeRecordSchema = new Schema({
 		// assay data (bug)".
 		isResearch: Boolean,
 		deckPosition: Number,
-		// DOMAIN-32: research reagent lot (reagent_set_lots._id / lotNumber) this cartridge was filled with
+		// DOMAIN-32: research fill lot (fill_lots) and reagent lot (reagent_set_lots) this cartridge was filled with
+		fillLotId: String,
+		fillLotNumber: String,
 		reagentLotId: String,
 		reagentLotNumber: String,
 		tubeRecords: [{ _id: false, wellPosition: Number, reagentName: String, sourceLotId: String, transferTubeId: String }],

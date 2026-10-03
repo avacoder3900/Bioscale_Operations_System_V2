@@ -109,7 +109,13 @@ This replicates the full `/api/agent/**` machine surface except: `ask`/`transcri
 routes serving the in-app widget, not machine agents) and the OT-2/scanner long-poll daemon queues
 (not request/response shaped; the robot bridge keeps using them directly).
 
-## Research analysis tools (v3.7.0)
+## Research analysis tools (v3.8.0)
+
+v3.8.0 — fill lots are explicit: `research_fill_lot_create` (W) opens one on a reagent lot;
+`research_fill_lot_assign_runs` (W) moves legacy robot runs into one. The BIMS fill screen now picks a
+FILL LOT (defaulting to the one used last, with an inline "new fill lot" that picks the reagent lot) and
+stamps `fillLotId`/`fillLotNumber` + `reagentLotId`/`reagentLotNumber` on the run and on every cartridge;
+finalize appends the run id to `fill_lots.runIds`.
 
 v3.7.0 adds DOMAIN-32 reagent-lot tools: `research_reagent_lot_list` / `_get` / `_create` (W),
 `research_inventory_originate` (W), `research_fill_lot_list`, `research_curve_set_list`,

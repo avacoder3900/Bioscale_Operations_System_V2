@@ -6,7 +6,8 @@ import {
 	OpentronsRobot, Ot2BridgeCommand
 } from '$lib/server/db';
 import { recordTransaction, resolvePartId } from '$lib/server/services/inventory-transaction';
-import { ReagentSetLot } from '$lib/server/db';
+import { ReagentSetLot, FillLot, fillLotNumber } from '$lib/server/db';
+
 import { findBucketLabels } from '$lib/server/services/bucket-service';
 import { checkRobotConflict, checkDeckConflict, checkTrayConflict } from '$lib/server/manufacturing/resource-locks';
 import { WAX_PAGE_OWNED } from '$lib/server/manufacturing/run-statuses';
@@ -295,8 +296,12 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 			.limit(200)
 			.lean()
 			.catch(() => []);
-		// DOMAIN-32: research reagent lots (reagent_set_lots) the operator must pick from at fill time.
+		// DOMAIN-32: research reagent lots (reagent_set_lots) — needed to open a new fill lot.
 		const researchReagentLots = await ReagentSetLot.find({ status: 'active' }).select('_id lotNumber name assayId components createdAt').sort({ createdAt: -1 }).lean();
+		// Open fill lots (fill_lots): the operator picks one per run; runs default to the one used last.
+		const openFillLots = await FillLot.find({ status: 'open', fillLotNumber: { $nin: [null, ''] } }).select('_id fillLotNumber name reagentLotId reagentLotNumber runIds fillDate updatedAt').sort({ updatedAt: -1 }).lean();
+		const lastWithFillLot = await ReagentBatchRecord.findOne({ fillLotId: { $nin: [null, ''] } }).select('fillLotId').sort({ createdAt: -1 }).lean() as any;
+		const defaultFillLotId = (activeRun as any)?.fillLotId ?? lastWithFillLot?.fillLotId ?? (openFillLots[0] as any)?._id ?? '';
 		const activeReagentLots: Record<string, any[]> = {};
 		for (const l of finalizedLots as any[]) {
 			const slug = l.templateSlug ?? 'unknown';
@@ -364,6 +369,9 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 			fridges,
 			activeReagentLots,
 			researchReagentLots: JSON.parse(JSON.stringify(researchReagentLots)),
+			openFillLots: JSON.parse(JSON.stringify(openFillLots)),
+			defaultFillLotId: String(defaultFillLotId ?? ''),
+			fillLotNumber: (activeRun as any)?.fillLotNumber ?? null,
 			reagentLotNumber: (activeRun as any)?.reagentLotNumber ?? null,
 			// --- OT-2 Start Run panel inputs (same shape as wax-filling) ---
 			robotProtocols,
@@ -492,10 +500,12 @@ export const actions: Actions = {
 		const data = await request.formData();
 		const runId = data.get('runId') as string;
 		const tubesRaw = data.get('tubes') as string;
-		const reagentLotId = ((data.get('reagentLotId') as string | null) ?? '').trim();
-		if (!reagentLotId) return fail(400, { error: 'A reagent lot is required to fill. Create one in the research app (Reagent Lots) and pick it.' });
-		const reagentLot = await ReagentSetLot.findById(reagentLotId).lean() as any;
-		if (!reagentLot || reagentLot.status !== 'active') return fail(400, { error: 'Reagent lot not found or retired' });
+		const fillLotId = ((data.get('fillLotId') as string | null) ?? '').trim();
+		if (!fillLotId) return fail(400, { error: 'A fill lot is required to fill. Open one (pick its reagent lot) and select it.' });
+		const fillLot = await FillLot.findById(fillLotId).lean() as any;
+		if (!fillLot || !fillLot.fillLotNumber || fillLot.status !== 'open') return fail(400, { error: 'Fill lot not found or closed' });
+		const reagentLot = fillLot.reagentLotId ? await ReagentSetLot.findById(fillLot.reagentLotId).lean() as any : null;
+		if (!reagentLot || reagentLot.status !== 'active') return fail(400, { error: 'The fill lot\'s reagent lot is missing or retired' });
 
 		let tubes: { reagentName: string; wellPosition: number; volume: number; lotId?: string; transferTubeId?: string }[] = [];
 		if (tubesRaw) {
@@ -511,10 +521,42 @@ export const actions: Actions = {
 		}));
 
 		await ReagentBatchRecord.findByIdAndUpdate(runId, {
-			$set: { tubeRecords, status: 'Loading', reagentLotId, reagentLotNumber: reagentLot.lotNumber }
+			$set: { tubeRecords, status: 'Loading', fillLotId, fillLotNumber: fillLot.fillLotNumber, reagentLotId: String(reagentLot._id), reagentLotNumber: reagentLot.lotNumber }
 		});
 
 		return { success: true };
+	},
+
+	/** DOMAIN-32: open a fill lot from the fill screen — a reagent lot plus a name (FL-YYYYMMDD-NNN). */
+	createFillLot: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		await connectDB();
+		const data = await request.formData();
+		const reagentLotId = ((data.get('reagentLotId') as string | null) ?? '').trim();
+		const name = ((data.get('name') as string | null) ?? '').trim().slice(0, 200);
+		if (!reagentLotId) return fail(400, { error: 'Pick a reagent lot' });
+		const reagentLot = await ReagentSetLot.findById(reagentLotId).lean() as any;
+		if (!reagentLot || reagentLot.status !== 'active') return fail(400, { error: 'Reagent lot not found or retired' });
+		const now = new Date();
+		const prefix = fillLotNumber(now, 0).slice(0, -3);
+		const todays = await FillLot.countDocuments({ fillLotNumber: { $regex: `^${prefix}` } });
+		const doc = {
+			_id: generateId(),
+			fillLotNumber: fillLotNumber(now, todays + 1),
+			name,
+			status: 'open',
+			assayId: reagentLot.assayId ?? '',
+			assayName: '',
+			fillDate: now.toISOString(),
+			runIds: [],
+			reagentLotId: String(reagentLot._id),
+			reagentLotNumber: reagentLot.lotNumber,
+			reagentLotSource: 'bims',
+			curveSetId: '', curveSetSource: '', assignedBy: '', assignedAt: '', assignmentNote: '', notes: '',
+			createdBy: locals.user.username ?? String(locals.user._id)
+		};
+		await FillLot.create(doc);
+		return { success: true, fillLot: JSON.parse(JSON.stringify(doc)) };
 	},
 
 	/**

@@ -959,13 +959,24 @@
 		<ReagentPreparation
 			reagentDefinitions={data.reagentDefinitions as any}
 			reagentLots={(data.researchReagentLots ?? []) as any}
-			onComplete={async (tubes, reagentLotId) => {
+			fillLots={(data.openFillLots ?? []) as any}
+			defaultFillLotId={data.defaultFillLotId ?? ''}
+			onCreateFillLot={async (reagentLotId, name) => {
+				const fd = new FormData();
+				fd.set('reagentLotId', reagentLotId);
+				fd.set('name', name);
+				const res = await fetch('?/createFillLot', { method: 'POST', body: fd });
+				const result = deserialize(await res.text());
+				if (result.type === 'success') return { ok: true, fillLot: (result.data as any)?.fillLot };
+				return { ok: false, error: result.type === 'failure' ? ((result.data as any)?.error ?? 'Failed') : 'Failed' };
+			}}
+			onComplete={async (tubes, fillLotId) => {
 				reagentBatchBarcodeLocal = tubes[0]?.sourceLotId ?? '';
 				reagentBatchConfirmedLocal = true;
 				// Persist the batch (writes to the run record — no cartridge dependency).
 				// Do NOT start the run yet: the deck hasn't been scanned. The deck-scan
 				// step auto-starts once cartridges are on.
-				await submitForm('recordReagentPrep', { tubes: JSON.stringify(tubes), reagentLotId });
+				await submitForm('recordReagentPrep', { tubes: JSON.stringify(tubes), fillLotId });
 			}}
 			onSaveNote={handleSaveBatchNote}
 			readonly={isViewingPast}

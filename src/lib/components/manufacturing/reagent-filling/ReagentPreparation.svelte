@@ -22,16 +22,31 @@
 		components?: { role: string; catalogName?: string; manufacturerLotId?: string }[];
 	}
 
+	/** A research-app fill lot (fill_lots): one reagent lot, however many robot runs. */
+	interface FillLotOption {
+		_id: string;
+		fillLotNumber: string;
+		name?: string;
+		reagentLotId: string;
+		reagentLotNumber: string;
+		runIds?: string[];
+		fillDate?: string;
+	}
+
 	interface Props {
 		reagentDefinitions: ReagentDef[];
 		reagentLots: ReagentLotOption[];
-		onComplete: (tubes: TubeRecord[], reagentLotId: string) => void;
+		fillLots: FillLotOption[];
+		/** The fill lot used by the most recent run (today's default). */
+		defaultFillLotId?: string;
+		onComplete: (tubes: TubeRecord[], fillLotId: string) => void;
+		onCreateFillLot?: (reagentLotId: string, name: string) => Promise<{ ok: boolean; error?: string; fillLot?: FillLotOption }>;
 		onSaveNote?: (noteBody: string) => Promise<{ ok: boolean; error?: string; cartridgeCount?: number }>;
 		readonly?: boolean;
 		cartridgeCount?: number;
 	}
 
-	let { reagentDefinitions, reagentLots, onComplete, onSaveNote, readonly: isReadonly = false, cartridgeCount = 0 }: Props = $props();
+	let { reagentDefinitions, reagentLots, fillLots, defaultFillLotId = '', onComplete, onCreateFillLot, onSaveNote, readonly: isReadonly = false, cartridgeCount = 0 }: Props = $props();
 
 	// Operator-entered batch note — saved against every cartridge currently
 	// loaded on the run via the recordBatchNote action.
@@ -60,13 +75,21 @@
 		}
 	}
 
-	let selectedLotId = $state('');
+	let lots = $state<FillLotOption[]>(fillLots);
+	let selectedFillLotId = $state(defaultFillLotId && fillLots.some((f) => f._id === defaultFillLotId) ? defaultFillLotId : (fillLots[0]?._id ?? ''));
 	let submitting = $state(false);
+	let showNew = $state(false);
+	let newReagentLotId = $state('');
+	let newName = $state('');
+	let creating = $state(false);
+	let createError = $state('');
 
 	const activeWells = $derived(
 		reagentDefinitions.filter((d) => d.isActive).sort((a, b) => a.wellPosition - b.wellPosition)
 	);
-	const selectedLot = $derived(reagentLots.find((l) => l._id === selectedLotId) ?? null);
+	const selectedFill = $derived(lots.find((f) => f._id === selectedFillLotId) ?? null);
+	const selectedLot = $derived(selectedFill ? (reagentLots.find((l) => l._id === selectedFill.reagentLotId) ?? null) : null);
+	const isDefault = $derived(!!selectedFill && selectedFill._id === defaultFillLotId);
 	const critical = (lot: ReagentLotOption, role: string) => lot.components?.find((c) => c.role === role);
 	const describe = (lot: ReagentLotOption) =>
 		['qd630', 'qd480', 'beads']
@@ -76,22 +99,44 @@
 	// Every well of this fill carries the reagent lot number; the transfer tube id is
 	// derived so downstream views keep a per-well record.
 	const tubes = $derived<TubeRecord[]>(
-		selectedLot
-			? activeWells.map((w, i) => ({ wellPosition: w.wellPosition, reagentName: w.reagentName, sourceLotId: selectedLot.lotNumber, transferTubeId: `${selectedLot.lotNumber}-T${i + 1}` }))
+		selectedFill
+			? activeWells.map((w, i) => ({ wellPosition: w.wellPosition, reagentName: w.reagentName, sourceLotId: selectedFill.reagentLotNumber, transferTubeId: `${selectedFill.reagentLotNumber}-T${i + 1}` }))
 			: []
 	);
 
+	async function createFillLot() {
+		if (!onCreateFillLot || !newReagentLotId || creating) return;
+		creating = true;
+		createError = '';
+		try {
+			const r = await onCreateFillLot(newReagentLotId, newName.trim());
+			if (!r.ok || !r.fillLot) {
+				createError = r.error ?? 'Could not open the fill lot';
+				return;
+			}
+			lots = [r.fillLot, ...lots];
+			selectedFillLotId = r.fillLot._id;
+			showNew = false;
+			newName = '';
+			newReagentLotId = '';
+		} catch (e) {
+			createError = e instanceof Error ? e.message : 'Could not open the fill lot';
+		} finally {
+			creating = false;
+		}
+	}
+
 	function handleSubmit() {
-		if (submitting || !selectedLot) return;
+		if (submitting || !selectedFill) return;
 		submitting = true;
-		onComplete(tubes, selectedLot._id);
+		onComplete(tubes, selectedFill._id);
 	}
 </script>
 
 <div class="space-y-5">
-	<h2 class="text-lg font-semibold text-[var(--color-tron-text)]">Reagent Lot</h2>
+	<h2 class="text-lg font-semibold text-[var(--color-tron-text)]">Fill Lot</h2>
 	<p class="text-sm text-[var(--color-tron-text-secondary)]">
-		Every fill records the reagent lot (the set of 630 QD, 480 QD, beads and buffers) it was filled with. Pick the lot the chemist prepared; lots are created in the research app under Reagent Lots.
+		A fill lot is one reagent lot (630 QD, 480 QD, beads and buffers) filled across as many robot runs as you like. Runs default to the fill lot used last; open a new one when the reagents change.
 	</p>
 
 	{#if isReadonly}
@@ -99,29 +144,54 @@
 	{/if}
 
 	<div class="space-y-3">
-		<label for="reagent-lot-pick" class="text-xs font-medium text-[var(--color-tron-cyan)]">Reagent lot (required)</label>
+		<div class="flex items-center justify-between">
+			<label for="fill-lot-pick" class="text-xs font-medium text-[var(--color-tron-cyan)]">Fill lot (required)</label>
+			{#if onCreateFillLot && !isReadonly}
+				<button type="button" onclick={() => (showNew = !showNew)} class="text-xs text-[var(--color-tron-cyan)] underline">{showNew ? 'cancel' : '+ new fill lot'}</button>
+			{/if}
+		</div>
 		<select
-			id="reagent-lot-pick"
-			bind:value={selectedLotId}
+			id="fill-lot-pick"
+			bind:value={selectedFillLotId}
 			disabled={isReadonly || submitting}
 			class="min-h-[44px] w-full rounded border border-[var(--color-tron-cyan)]/30 bg-[var(--color-tron-bg)] px-3 py-2 text-sm text-[var(--color-tron-text)] focus:border-[var(--color-tron-cyan)] focus:outline-none disabled:opacity-50"
 		>
-			<option value="">Select a reagent lot…</option>
-			{#each reagentLots as lot (lot._id)}
-				<option value={lot._id}>{lot.lotNumber}{lot.name ? ` · ${lot.name}` : ''}{lot.assayId ? ` · ${lot.assayId}` : ''}</option>
+			<option value="">Select a fill lot…</option>
+			{#each lots as f (f._id)}
+				<option value={f._id}>{f.fillLotNumber}{f.name ? ` · ${f.name}` : ''} · reagent lot {f.reagentLotNumber}{f._id === defaultFillLotId ? ' · (last used)' : ''}</option>
 			{/each}
 		</select>
-		{#if reagentLots.length === 0}
-			<p class="text-xs text-red-400">No active reagent lots exist. Create one in the research app (Reagent Lots) before filling.</p>
+		{#if lots.length === 0 && !showNew}
+			<p class="text-xs text-red-400">No open fill lots. Open one here (pick the reagent lot) or in the research app under Curves.</p>
+		{/if}
+
+		{#if showNew}
+			<div class="space-y-2 rounded border border-[var(--color-tron-cyan)]/30 bg-[var(--color-tron-surface)] p-3">
+				<label for="new-fill-reagent-lot" class="text-xs font-medium text-[var(--color-tron-text-secondary)]">Reagent lot for the new fill lot</label>
+				<select id="new-fill-reagent-lot" bind:value={newReagentLotId} disabled={creating} class="min-h-[40px] w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-3 py-2 text-sm text-[var(--color-tron-text)]">
+					<option value="">Select a reagent lot…</option>
+					{#each reagentLots as lot (lot._id)}
+						<option value={lot._id}>{lot.lotNumber}{lot.name ? ` · ${lot.name}` : ''}</option>
+					{/each}
+				</select>
+				{#if reagentLots.length === 0}
+					<p class="text-xs text-red-400">No active reagent lots exist. Create one in the research app (Reagent Lots) first.</p>
+				{/if}
+				<input type="text" bind:value={newName} disabled={creating} placeholder="name (optional), e.g. Sept 21 algo fill" class="min-h-[40px] w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-3 py-2 text-sm text-[var(--color-tron-text)]" />
+				{#if createError}<p class="text-xs text-red-400">{createError}</p>{/if}
+				<button type="button" onclick={createFillLot} disabled={creating || !newReagentLotId} class="min-h-[40px] rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/20 px-4 text-sm font-semibold text-[var(--color-tron-cyan)] disabled:opacity-40">
+					{creating ? 'Opening…' : 'Open fill lot'}
+				</button>
+			</div>
 		{/if}
 	</div>
 
-	{#if selectedLot}
+	{#if selectedFill}
 		<div class="space-y-4">
 			<div class="rounded-lg border border-[var(--color-tron-cyan)]/30 bg-[var(--color-tron-cyan)]/10 p-4">
-				<p class="text-xs text-[var(--color-tron-text-secondary)]">Reagent lot</p>
-				<p class="font-mono text-lg font-bold text-[var(--color-tron-cyan)]">{selectedLot.lotNumber}</p>
-				<p class="text-xs text-[var(--color-tron-text-secondary)]">{describe(selectedLot)}</p>
+				<p class="text-xs text-[var(--color-tron-text-secondary)]">Fill lot{isDefault ? ' · same as the last run' : ''}</p>
+				<p class="font-mono text-lg font-bold text-[var(--color-tron-cyan)]">{selectedFill.fillLotNumber}{selectedFill.name ? ` · ${selectedFill.name}` : ''}</p>
+				<p class="text-xs text-[var(--color-tron-text-secondary)]">reagent lot <span class="font-mono">{selectedFill.reagentLotNumber}</span>{selectedLot ? ` · ${describe(selectedLot)}` : ''}{selectedFill.runIds?.length ? ` · ${selectedFill.runIds.length} run${selectedFill.runIds.length === 1 ? '' : 's'} so far` : ''}</p>
 			</div>
 
 			<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4">
@@ -189,7 +259,7 @@
 			{#if submitting}
 				Confirming...
 			{:else}
-				Confirm Reagent Lot {selectedLot.lotNumber} ({tubes.length} tubes)
+				Fill on {selectedFill.fillLotNumber} ({tubes.length} tubes)
 			{/if}
 		</button>
 	{/if}

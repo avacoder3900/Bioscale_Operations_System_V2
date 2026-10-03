@@ -224,7 +224,7 @@ async function callAgentApi(
 export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 	// Version bump signals clients (claude.ai caches connector tool lists) that
 	// the toolset changed — bump on every tool add/remove/rename.
-	const server = new McpServer({ name: 'bims-operations', version: '3.7.0' });
+	const server = new McpServer({ name: 'bims-operations', version: '3.8.0' });
 
 	// ---------------------------------------------------------------- meta
 
@@ -2048,13 +2048,44 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 		'research_fill_lot_list',
 		{ annotations: READ_ONLY,
 			description:
-				'Research app: fill lots (fill runs) for an assay with fill date, reagent lot, cartridges, standard wells and ' +
+				'Research app: fill lots for an assay (a fill lot = one reagent lot across any number of robot runs; rows with ' +
+				'legacyRun=true are single robot runs never moved into a lot) with fill date, reagent lot, runs, cartridges, standard wells and ' +
 				'levels, the curve set in use (own or assigned, with source) and its active curve + time point (days since ' +
 				'fill), borrow candidates with compatibility verdicts and reasons, and staleness/profile-drift flags. ' +
 				'PRESENTATION: one row per fill lot: "<fill id> · filled <date> · reagent lot <RL-…> · <n> carts · curve: <v@day> (<source>)".',
 			inputSchema: z.object({ assayId: z.string() })
 		},
 		async ({ assayId }) => callAgentApi(fetcher, `${RESEARCH}/calibration/fill-lots`, { query: { assayId } })
+	);
+
+	server.registerTool(
+		'research_fill_lot_create',
+		{ annotations: WRITE_TOOL,
+			description:
+				'Research app: OPEN a fill lot — one reagent lot plus a name (FL-YYYYMMDD-NNN). A fill lot is NOT one robot run: ' +
+				'the BIMS fill screen offers open fill lots, defaults to the one used last, and stamps the pick on every cartridge ' +
+				'of every run until the operator picks another. Open a new one when the reagent prep changes. Confirm reagent lot and name with the person first.',
+			inputSchema: z.object({ actor: ACTOR_FIELD, reagentLotId: z.string(), name: z.string().optional(), assayId: z.string().optional(), notes: z.string().optional() })
+		},
+		async (args) =>
+			machineWrite('research_fill_lot_create', (args as any).actor, (actor) =>
+				callAgentApi(fetcher, `${RESEARCH}/calibration/fill-lots`, { method: 'POST', body: { ...args, actor } })
+			)
+	);
+
+	server.registerTool(
+		'research_fill_lot_assign_runs',
+		{ annotations: WRITE_TOOL,
+			description:
+				'Research app: move robot runs (reagent_batch_records ids) into a fill lot — for runs filled before fill lots existed ' +
+				'("unassigned run" rows in research_fill_lot_list, whose id IS the run id). Stamps the fill lot and its reagent lot on ' +
+				'every cartridge of those runs. Refused when a run\'s current lot already has a curve set. Confirm with the person first.',
+			inputSchema: z.object({ actor: ACTOR_FIELD, fillLotId: z.string(), runIds: z.array(z.string()).min(1) })
+		},
+		async (args) =>
+			machineWrite('research_fill_lot_assign_runs', (args as any).actor, (actor) =>
+				callAgentApi(fetcher, `${RESEARCH}/calibration/fill-lots/${encodeURIComponent(args.fillLotId)}/assign-runs`, { method: 'POST', body: { runIds: args.runIds, actor } })
+			)
 	);
 
 	server.registerTool(

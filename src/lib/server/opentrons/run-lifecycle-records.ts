@@ -27,7 +27,7 @@ import {
 	generateId,
 	WaxFillingRun,
 	ReagentBatchRecord,
-	CartridgeRecord,
+	CartridgeRecord, FillLot,
 	Equipment,
 	ManufacturingSettings,
 	Ot2BridgeCommand,
@@ -289,6 +289,8 @@ export async function finalizeReagentRun(runId: string, user: User, trigger: str
 				'reagentFilling.isResearch': isResearch,
 				'reagentFilling.deckPosition': cf.deckPosition,
 				'reagentFilling.tubeRecords': run.tubeRecords,
+				'reagentFilling.fillLotId': run.fillLotId ?? '',
+				'reagentFilling.fillLotNumber': run.fillLotNumber ?? '',
 				'reagentFilling.reagentLotId': run.reagentLotId ?? '',
 				'reagentFilling.reagentLotNumber': run.reagentLotNumber ?? '',
 				'reagentFilling.operator': run.operator,
@@ -322,6 +324,8 @@ export async function finalizeReagentRun(runId: string, user: User, trigger: str
 			];
 		});
 		await CartridgeRecord.bulkWrite(bulkOps);
+		// DOMAIN-32: the fill lot remembers its runs (the research app lists lots by them)
+		if (run.fillLotId) await FillLot.updateOne({ _id: run.fillLotId }, { $addToSet: { runIds: String(run._id) } }).catch(() => undefined);
 
 		// Consume 2ml tubes (PT-CT-107) — FLAT 4 TUBES PER RUN regardless of
 		// cartridge count (1–24). Research runs consume the same 4 tubes.

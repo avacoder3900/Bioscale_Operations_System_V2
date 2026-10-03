@@ -45,7 +45,9 @@ const reagentBatchRecordSchema = new Schema({
 		wellPosition: Number, reagentName: String, sourceLotId: String,
 		transferTubeId: String, preparedAt: Date
 	}],
-	// DOMAIN-32: the research-app reagent lot (reagent_set_lots) picked at fill time. Required.
+	// DOMAIN-32: the research-app FILL LOT (fill_lots) picked at fill time — it carries the reagent lot. Required.
+	fillLotId: String,
+	fillLotNumber: String,
 	reagentLotId: String,
 	reagentLotNumber: String,
 
