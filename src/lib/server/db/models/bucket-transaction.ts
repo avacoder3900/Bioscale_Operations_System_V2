@@ -18,7 +18,8 @@ const bucketTransactionSchema = new Schema({
 			'mint', 'relabel', 'create', 'scan_in', 'unscan', 'advance', 'adjust', 'scrap', 'consume',
 			'merge_in', 'merge_out', 'release', 'quarantine', 'retire', 'void', 'audit',
 			'oven', // moveToOven: the backed pass's carts released to the oven, all at once (2026-09-25)
-			'nickname' // setBucketNickname: nickname set, changed or cleared (2026-09-30)
+			'nickname', // setBucketNickname: nickname set, changed or cleared (2026-09-30)
+			'pull' // pullIntoProcess: an Unpressed pass pulled into "in process" — the custody handoff (2026-10-05)
 		],
 		required: true
 	},

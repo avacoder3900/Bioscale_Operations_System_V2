@@ -10,7 +10,7 @@ import {
 	BucketError, BUCKET_STAGES, STAGE_LABELS, BACKED_LABEL, SHELL_PART, LABEL_PART, THERMOSEAL_PART,
 	boardData, stageCounts, resolveScan, isBucketStage, changeLog, bucketRegistry,
 	startCycle, scanCartIn, unscanCart, advanceCycle, scrapCarts, reportResidual, retireBucket,
-	cartStatusLine, auditScan, auditCycle, moveToOven, inOvenCarts
+	cartStatusLine, auditScan, auditCycle, moveToOven, inOvenCarts, pullIntoProcess
 } from '$lib/server/services/bucket-service';
 import { thermosealStatus, thermosealConfig, thermosealPart, checkFloor, setThermosealToggles } from '$lib/server/services/thermoseal-service';
 import { lotRemaining, lotsWithStock, fifoLot } from '$lib/server/services/lot-remaining';
@@ -264,6 +264,19 @@ export const actions: Actions = {
 					alert: r.thermoseal.alert?.below ? { rollsOnHand: r.thermoseal.alert.rollsOnHand, minRolls: r.thermoseal.alert.minRolls, kanbanCreated: r.thermoseal.alert.kanbanCreated, emailSent: r.thermoseal.alert.emailSent } : null
 				} : null
 			} };
+		})();
+	},
+
+	// Pull a waiting Unpressed bucket into "in process" (2026-10-05): the badge
+	// handoff. Carts are untouched; the puller takes custody of the pass.
+	pull: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'manufacturing:write');
+		await connectDB();
+		const d = await request.formData();
+		return wrap('pull', async () => {
+			const r = await pullIntoProcess({ cycleId: String(d.get('cycleId') ?? ''), badge: String(d.get('badge') ?? ''), user: op(locals) });
+			return { pull: { success: true, cycleId: r.cycleId, bucketId: r.bucketId, cycleNumber: r.cycleNumber, operator: r.operator } };
 		})();
 	},
 

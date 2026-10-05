@@ -18471,3 +18471,29 @@ Retrieve this exact code: git checkout master at commit 6e34488c
   (or: git log master --oneline to find it if the branch has since moved on)
 What this deployment is for: recording navigation (Previous/Next, picker, Next to trim) on /validation/sonic/[id].
   GitHub deployment 6866851567 (Production). Smoke: /login 200; recording page 302 (auth redirect expected).
+
+================================================================================
+2026-10-05 — feat/bucket-board-lanes — bucket board: waiting / in-process lanes, pull = badge handoff, rail moved to a top strip
+================================================================================
+Jacob: the board made it unclear what was happening to a bucket at any moment. Lanes are now
+Available → Barcoded → Unpressed (waiting) → Unpressed — in process → Backed (narrow column).
+- No new stage or cart status: the two Unpressed lanes are one stage. BucketCycle gains
+  inProcessAt / inProcessBy (src/lib/server/db/models/bucket-cycle.ts); BucketTransaction gains
+  ledger type 'pull'.
+- bucket-service.ts: new pullIntoProcess() — badge-gated; sets inProcessAt/By, releases the open
+  Custody as 'takeover' and opens one for the puller, logs a 'pull' row + audit. advanceCycle
+  refuses Unpressed → Backed on a pass that has not been pulled (code NOT_PULLED) and clears the
+  in-process fields on every stage change (so does the master override). BoardCycle carries
+  inProcessAt / inProcessBy.
+- buckets/+page.server.ts: new ?/pull action.
+- buckets/+page.svelte: counter tiles above the board removed; the right-hand rail (scan box +
+  bucket panel) is now a horizontal strip in their place and the lanes take the full width; the
+  pass panel is two columns (identity | working area); a waiting Unpressed bucket shows a "Pull
+  into in process" badge form instead of Advance; Advance is relabelled "Done → <next>"; the board
+  drops the held badge after every advance so each lane change takes a fresh badge scan; change
+  log shows "Pulled into process". Thermoseal tile sits under the in-process lane.
+- BUCKET-SYSTEM_PLAN.md §2 callout.
+Effect on live data at deploy: every pass already at Unpressed shows in the waiting lane and must be
+pulled (badge) before it can be marked Done → Backed.
+`npm run check`: 16 errors / 434 warnings — identical to untouched master (checked both), none in
+the changed files. Not exercised in a browser from here.

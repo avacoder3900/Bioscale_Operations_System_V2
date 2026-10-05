@@ -158,7 +158,7 @@ interface TxInput {
 	bucketId: string;
 	cycleId?: string | null;
 	type: 'mint' | 'relabel' | 'nickname' | 'create' | 'scan_in' | 'unscan' | 'advance' | 'scrap' | 'consume' | 'oven'
-		| 'merge_in' | 'merge_out' | 'release' | 'quarantine' | 'retire' | 'void' | 'audit';
+		| 'merge_in' | 'merge_out' | 'release' | 'quarantine' | 'retire' | 'void' | 'audit' | 'pull';
 	fromStage?: string | null;
 	toStage?: string | null;
 	qtyBefore?: number;
@@ -1136,6 +1136,11 @@ export async function advanceCycle(input: AdvanceCycleInput): Promise<{ cycle: a
 	const to = nextStage(from);
 	if (!to) throw new BucketError(`${cycleLabel(cycle.bucketId, cycle.cycleNumber)} is already ${STAGE_LABELS.backing} — wax filling draws its carts from here.`);
 	if ((cycle.cartridgeIds ?? []).length === 0) throw new BucketError('Scan at least one cart into the bucket before advancing it.');
+	// Unpressed is two lanes (2026-10-05): a waiting pass must be pulled into
+	// "in process" (pullIntoProcess — the badge handoff) before it can be finished.
+	if (from === 'unpressed' && !cycle.inProcessAt) {
+		throw new BucketError(`${cycleLabel(cycle.bucketId, cycle.cycleNumber)} is waiting in ${STAGE_LABELS.unpressed} — pull it into in process first.`, 409, 'NOT_PULLED');
+	}
 
 	const discardIds = cleanCodes(input.discardedIds);
 	const journal = (input.discardJournal ?? '').trim();
@@ -1181,7 +1186,8 @@ export async function advanceCycle(input: AdvanceCycleInput): Promise<{ cycle: a
 		set.thermoseal = { cm: thermoseal.cm, cartridges: moving.length, segments: thermoseal.segments, consumedAt: now };
 		if (thermosealLot) push.sourceLots = { partNumber: THERMOSEAL_PART, lotId: thermosealLot, scannedAt: now };
 	}
-	await BucketCycle.updateOne({ _id: cycle._id }, { $set: set, ...(Object.keys(push).length ? { $push: push } : {}) });
+	// A stage change always lands the pass in the new stage's waiting lane.
+	await BucketCycle.updateOne({ _id: cycle._id }, { $set: set, $unset: { inProcessAt: '', inProcessBy: '' }, ...(Object.keys(push).length ? { $push: push } : {}) });
 	// Unpressed → Backed stamps the backing block the way WI-01 used to, minus the
 	// lot: downstream views (pipeline, dashboard, DHR) group backed carts by
 	// backing.bucketCycleId and show who backed them and when.
@@ -1241,6 +1247,66 @@ export async function consumeCarts(input: ConsumeInput): Promise<{ qtyBefore: nu
 	await audit('bucket_cycles', cycle._id, 'CONSUME', input.user, { consumed: ids.length, quantity: after, waxRunId: input.waxRunId }, { quantity: before });
 	if (after === 0) await closeCycle({ ...cycle, quantity: 0 }, 'consumed', input.user, input.waxRunId);
 	return { qtyBefore: before, qtyAfter: after, consumed: ids };
+}
+
+export interface PullInput {
+	cycleId: string;
+	badge?: string | null;   // scanned badge code; required when badge mode is 'required'
+	user: Operator;          // the web session (= enteredBy)
+}
+
+/**
+ * Pull a waiting Unpressed pass into "Unpressed — in process" (user, 2026-10-05:
+ * "that is where the attribution will occur and the badge handoff will occur").
+ * Nothing about the carts changes — they stay 'unpressed'. What changes is who
+ * holds the bucket: the badge holder becomes `inProcessBy`, the open custody
+ * (claimed by whoever counted the bucket up at Barcoded) is released as a
+ * 'takeover', and a new custody row is opened for the puller. Only a pulled
+ * pass can be advanced to Backed (advanceCycle).
+ */
+export async function pullIntoProcess(input: PullInput): Promise<{ cycleId: string; bucketId: string; cycleNumber: number; operator: string }> {
+	await connectDB();
+	const [cycle, gate] = await Promise.all([
+		BucketCycle.findById(input.cycleId).lean() as Promise<any>,
+		requireBadge(input.badge, input.user)
+	]);
+	if (!cycle || cycle.status !== 'open') throw new BucketError('Pass is not open.', 404);
+	const label = cycleLabel(cycle.bucketId, cycle.cycleNumber);
+	// A legacy 'pressed' pass sits in the Unpressed column (boardStage), so it pulls the same way.
+	const pullable = ['unpressed', LEGACY_PRESSED_STAGE];
+	if (!pullable.includes(cycle.stage)) throw new BucketError(`${label} is at ${stageLabel(cycle.stage)} — only a bucket waiting in ${STAGE_LABELS.unpressed} can be pulled into in process.`);
+	if (cycle.inProcessAt) throw new BucketError(`${label} is already in process${cycle.inProcessBy?.username ? ` (${cycle.inProcessBy.username})` : ''}.`, 409);
+
+	const now = new Date();
+	const op = { _id: gate.operator._id, username: gate.operator.username };
+	// The filter is the claim: two terminals pulling the same bucket → one wins.
+	const won = await BucketCycle.updateOne(
+		{ _id: cycle._id, status: 'open', stage: { $in: pullable }, inProcessAt: { $exists: false } },
+		{ $set: { inProcessAt: now, inProcessBy: op } }
+	);
+	if (!won.modifiedCount) throw new BucketError(`${label} was just pulled by someone else.`, 409);
+
+	// Custody handoff: close the previous holder's stint, open the puller's.
+	await Custody.updateOne(
+		{ resourceType: 'bucket_cycle', resourceId: cycle._id, open: true },
+		{ $set: { open: false, releasedAt: now, releaseReason: 'takeover' } }
+	);
+	const custodyId = generateId();
+	await Custody.create({
+		_id: custodyId, resourceType: 'bucket_cycle', resourceId: cycle._id, bucketId: cycle.bucketId,
+		operator: op, badgeId: gate.badgeId, method: gate.attribution.method,
+		enteredBy: { _id: input.user._id, username: input.user.username }, claimedAt: now, open: true
+	});
+	await BucketCycle.updateOne({ _id: cycle._id }, { $set: { custodyId } });
+
+	const members: string[] = cycle.cartridgeIds ?? [];
+	await logTx({
+		bucketId: cycle.bucketId, cycleId: cycle._id, type: 'pull', fromStage: 'unpressed', toStage: 'unpressed',
+		qtyBefore: members.length, qtyAfter: members.length, reason: 'pulled into in process', relatedId: cycle.custodyId ?? undefined,
+		cartridgeIds: members, operator: gate.operator, enteredBy: input.user, attribution: { ...gate.attribution, custodyId }
+	});
+	await audit('bucket_cycles', cycle._id, 'PULL', gate.operator, { inProcessAt: now, inProcessBy: op.username, custodyId, badgeId: gate.badgeId ?? null, enteredBy: input.user.username }, { custodyId: cycle.custodyId ?? null });
+	return { cycleId: cycle._id, bucketId: cycle.bucketId, cycleNumber: cycle.cycleNumber, operator: op.username };
 }
 
 export interface MoveToOvenInput {
@@ -2053,6 +2119,9 @@ export interface BoardCycle {
 	openedAt: string | null;
 	openedBy: string | null;
 	sourceLots: { partNumber: string; lotId: string }[];
+	/** Unpressed only: set once the pass has been pulled into "in process" (null = waiting). */
+	inProcessAt: string | null;
+	inProcessBy: string | null;
 }
 
 export interface BoardBucket {
@@ -2097,7 +2166,9 @@ export async function boardData(): Promise<{ cycles: BoardCycle[]; available: Bo
 			stageEnteredAt: c.stageEnteredAt ? new Date(c.stageEnteredAt).toISOString() : null,
 			openedAt: c.openedAt ? new Date(c.openedAt).toISOString() : null,
 			openedBy: c.openedBy?.username ?? null,
-			sourceLots: (c.sourceLots ?? []).map((l: any) => ({ partNumber: l.partNumber, lotId: l.lotId }))
+			sourceLots: (c.sourceLots ?? []).map((l: any) => ({ partNumber: l.partNumber, lotId: l.lotId })),
+			inProcessAt: c.inProcessAt ? new Date(c.inProcessAt).toISOString() : null,
+			inProcessBy: c.inProcessBy?.username ?? null
 		})),
 		available: buckets.filter(b => b.state === 'available').map(toBucket),
 		quarantined: buckets.filter(b => b.state === 'quarantined').map(toBucket)
@@ -2349,7 +2420,7 @@ export async function forceBucketPhase(input: ForceBucketInput): Promise<ForceBu
 
 	const set: Record<string, unknown> = { stage: to, stageEnteredAt: now };
 	if (from === 'barcoded') set.openedQty = ids.length; // same rule as advanceCycle: fixed when leaving Barcoded
-	await BucketCycle.updateOne({ _id: cycle._id }, { $set: set });
+	await BucketCycle.updateOne({ _id: cycle._id }, { $set: set, $unset: { inProcessAt: '', inProcessBy: '' } });
 	if (ids.length) {
 		const backedStamp = to === BACKED_STAGE
 			? { 'backing.recordedAt': now, 'backing.operator': by, 'backing.bucketCycleId': cycle._id, 'backing.bucketBarcode': id }

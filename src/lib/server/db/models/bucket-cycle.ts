@@ -120,6 +120,13 @@ const bucketCycleSchema = new Schema({
 	openedBy: operatorRef,   // the session that started the pass (was the badge holder until 2026-09-30, when the gate moved to scan-in)
 	custodyId: String,       // Custody._id claimed by the badge holder at the FIRST scan-in (bucket-service.claimCustody); released by closeCycle / voidCycle
 	openedAt: Date,
+	// Unpressed has two board lanes (user, 2026-10-05): a pass lands in "Unpressed"
+	// (waiting) when barcoding is marked done, and moves to "Unpressed — in process"
+	// when an operator PULLS it with their badge (bucket-service.pullIntoProcess).
+	// That pull is the custody handoff. Set only while stage is 'unpressed'; every
+	// stage change clears it. The cart status stays 'unpressed' in both lanes.
+	inProcessAt: Date,
+	inProcessBy: operatorRef,
 	stageEnteredAt: Date, // set on create and on every advance — dwell time without replaying the ledger
 	closedAt: Date
 }, { timestamps: true });
