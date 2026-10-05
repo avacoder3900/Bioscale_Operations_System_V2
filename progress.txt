@@ -18449,3 +18449,16 @@ What this deployment is for: SONIC workflow steps 1–6 (MongoDB copy, trim & ve
   anomalies + listener) + Alejandro's VALIDATION-08 analysis, compare report and batch upload.
   GitHub deployment 6866433641 (Production). Smoke: /login 200; /validation/sonic 302, /audio 302 (auth redirects expected).
   Master moved twice during the push (PR #82 + its progress log); both merged in, push refused → retried, no force.
+
+================================================================================
+2026-10-05 — feat/sonic-recording-nav → master — Move between recordings from a recording's page
+================================================================================
+User: when trimming/analyzing one recording, switch quickly to others and work through the ones still
+to trim. src/lib/components/validation/sonic/RecordingNav.svelte at the top of /validation/sonic/[id]:
+Previous/Next (list order, newest first), picker of every SONIC recording with status (… analyze /
+⚠ trim / ✓ + anomaly count / ✗ unusable), 'Only ones to trim' filter, 'Next to trim → (N left)' (wraps).
+[sessionId]/+page.server.ts: light projection of the same list (no fingerprints). The page reuses the
+component across recordings, so SonicReview is {#key}ed by recording and messages clear on switch.
+Read-only check on prod data: 11 SONIC recordings — 3 verified (210/212/217), 8 to trim (222–251).
+npm run check: 13 errors / 434 warnings (baseline), none in sonic files. Tested on the local dev server
+by the user; pushed to master at the user's request.
