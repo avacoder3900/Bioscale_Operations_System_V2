@@ -26,6 +26,41 @@
 	const pickedIds = $derived(Object.keys(picked).filter((k) => picked[k]));
 	const pickerRows = $derived(data.available.filter((a: { assay: string | null }) => pickerAssay === 'ALL' || (a.assay ?? 'UNKNOWN') === pickerAssay));
 
+	/** One row per SPU: its recordings newest first (data.available is already newest first). */
+	const spuGroups = $derived.by(() => {
+		const m = new Map<string, { udi: string; short: string; recs: typeof pickerRows }>();
+		for (const a of pickerRows) {
+			const g = m.get(a.spuUdi) ?? { udi: a.spuUdi, short: a.short, recs: [] };
+			g.recs.push(a);
+			m.set(a.spuUdi, g);
+		}
+		return [...m.values()].sort((a, b) => a.short.localeCompare(b.short, undefined, { numeric: true }));
+	});
+	const spuPicked = (g: { recs: { id: string }[] }) => g.recs.some((r) => picked[r.id]);
+	/** Ticking an SPU picks its latest recording; unticking drops every recording of it. */
+	function toggleSpu(g: { recs: { id: string }[] }) {
+		const next = { ...picked };
+		if (spuPicked(g)) for (const r of g.recs) delete next[r.id];
+		else next[g.recs[0].id] = true;
+		picked = next;
+	}
+	function pickAllSpus() {
+		const next = { ...picked };
+		for (const g of spuGroups) if (!spuPicked(g)) next[g.recs[0].id] = true;
+		picked = next;
+	}
+
+	let copied = $state(false);
+	async function copyLink() {
+		try {
+			await navigator.clipboard.writeText(location.href);
+			copied = true;
+			setTimeout(() => (copied = false), 1500);
+		} catch {
+			/* clipboard blocked — the address bar has the same link */
+		}
+	}
+
 	function run() {
 		const q = new URLSearchParams();
 		q.set('ids', pickedIds.join(','));
@@ -42,14 +77,114 @@
 	const phaseSections = $derived(R ? R.phases.map(([a, b]: [number, number], p: number) => ({ name: `P${p + 1}`, a, b })) : []);
 	const hasScores = $derived(R ? R.scores.some((row: unknown[]) => row.some((s) => s)) : false);
 
+	// ── show / hide + hover focus (charts only; nothing is recomputed) ───
+	let hidden = $state<Record<string, boolean>>({});
+	let focusId = $state<string | null>(null);
+	const shown = (i: number) => !!R && !hidden[R.items[i].id];
+	const focusLabel = $derived(R && focusId ? (R.items.find((it: { id: string }) => it.id === focusId)?.label ?? null) : null);
+	const setAll = (on: boolean) => {
+		hidden = on ? {} : Object.fromEntries((R?.items ?? []).map((it: { id: string }) => [it.id, true]));
+	};
+	const passCount = (i: number) => (R ? R.scores[i].filter((s: { pass: boolean } | null) => s?.pass).length : 0);
+	const scoredCount = (i: number) => (R ? R.scores[i].filter((s: unknown) => s).length : 0);
+	/** Scorecard rows: most sections passed first, like the report. */
+	const scoreOrder = $derived(R ? R.items.map((_: unknown, i: number) => i).sort((a: number, b: number) => passCount(b) - passCount(a)) : []);
+
+	// ── key findings, generated from the comparison ──────────────────────
+	type Finding = { kind: 'fail' | 'warn' | 'ok'; title: string; text: string };
+	const findings = $derived.by((): Finding[] => {
+		if (!R) return [];
+		const out: Finding[] = [];
+		const idx: number[] = vsIdx;
+		const label = (i: number) => R.items[i].label as string;
+		if (hasScores) {
+			const scored = idx.filter((i) => scoredCount(i) > 0);
+			const worst = [...scored].sort((a, b) => passCount(a) / scoredCount(a) - passCount(b) / scoredCount(b))[0];
+			if (worst != null && passCount(worst) < scoredCount(worst)) {
+				const tone = R.tones[worst]?.[0] as [number, number] | undefined;
+				const shape = R.sim[worst]?.avgShape as number | null;
+				const bits = [
+					shape != null ? `sound shape differs by ${shape.toFixed(1)} dB on average` : null,
+					tone ? `strongest extra tone ${tone[0].toLocaleString()} Hz (+${tone[1]} dB over the others)` : null
+				].filter(Boolean);
+				out.push({
+					kind: 'fail',
+					title: `${label(worst)} — ${passCount(worst)} of ${scoredCount(worst)} sections`,
+					text: `Clearest outlier in this set${bits.length ? `: ${bits.join('; ')}` : ''}.`
+				});
+			}
+			const clean = scored.filter((i) => passCount(i) === scoredCount(i));
+			if (clean.length) {
+				out.push({
+					kind: 'ok',
+					title: `${clean.map(label).join(', ')} — all sections`,
+					text: `${clean.length === 1 ? 'Sits' : 'These sit'} inside the ${R.scoredAgainst === 'references' ? 'reference' : 'group'} band in every section judged.`
+				});
+			}
+		}
+		// Motor pitch: lowest / highest, and families (sorted typical Hz, split on a > 10 % jump).
+		const hz = idx
+			.map((i) => ({ i, hz: R.sim[i]?.medianHz as number | null }))
+			.filter((r): r is { i: number; hz: number } => r.hz != null)
+			.sort((a, b) => a.hz - b.hz);
+		if (hz.length >= 2) {
+			const fam: { i: number; hz: number }[][] = [[hz[0]]];
+			for (let k = 1; k < hz.length; k++) {
+				if (hz[k].hz / hz[k - 1].hz > 1.1) fam.push([]);
+				fam[fam.length - 1].push(hz[k]);
+			}
+			const lo = hz[0];
+			const hi = hz[hz.length - 1];
+			out.push({
+				kind: 'warn',
+				title: `Pitch ${lo.hz}–${hi.hz} Hz`,
+				text: `Lowest motor pitch ${label(lo.i)} (~${lo.hz} Hz), highest ${label(hi.i)} (~${hi.hz} Hz).`
+			});
+			if (fam.length > 1 && fam.length < hz.length) {
+				const rng = (f: { hz: number }[]) => (f[0].hz === f[f.length - 1].hz ? `~${f[0].hz} Hz` : `~${f[0].hz}–${f[f.length - 1].hz} Hz`);
+				out.push({
+					kind: 'warn',
+					title: `${fam.length} pitch families`,
+					text: `${fam.map((f) => `${rng(f)} (${f.map((r) => label(r.i).replace(/^SPU /, '')).join(', ')})`).join(' · ')}. Worth checking against build records.`
+				});
+			}
+		}
+		return out;
+	});
+
+	// ── summary sort ─────────────────────────────────────────────────────
+	type SortKey = 'label' | 'medianHz' | 'avgAbsPct' | 'matchPct' | 'avgAbsLvl' | 'avgShape' | 'peakDb' | 'minDb';
+	let sortKey = $state<SortKey>('avgShape');
+	let sortDir = $state<1 | -1>(-1);
+	function sortBy(k: SortKey) {
+		sortDir = k === sortKey ? (-sortDir as 1 | -1) : -1;
+		sortKey = k;
+	}
+	const summaryOrder = $derived.by(() => {
+		if (!R) return [] as number[];
+		const val = (i: number): number | string | null => (sortKey === 'label' ? R.items[i].label : R.sim[i][sortKey]);
+		return R.items
+			.map((_: unknown, i: number) => i)
+			.sort((a: number, b: number) => {
+				const va = val(a);
+				const vb = val(b);
+				if (va == null) return 1;
+				if (vb == null) return -1;
+				return (va > vb ? 1 : va < vb ? -1 : 0) * sortDir;
+			});
+	});
+
+	let gridTab = $state<'hz' | 'db' | 'pattern'>('hz');
+	const GRID_TABS: [typeof gridTab, string][] = [['hz', 'Typical frequency (Hz)'], ['db', 'Average loudness (dBFS)'], ['pattern', 'Loudness pattern']];
+
 	/** Per phase: the SPU with the highest (▲) and lowest (▼) value of `key`. */
 	function phaseMarkers(key: 'hz' | 'avgDb', fmt: (v: number) => string): ChartMarker[] {
 		if (!R) return [];
 		const out: ChartMarker[] = [];
 		R.phases.forEach(([a, b]: [number, number], p: number) => {
 			const vals = R.pstats.map((row: { hz: number | null; avgDb: number | null }[]) => row[p][key]);
-			const idx = vals.map((v: number | null, i: number) => [v, i] as const).filter(([v]: readonly [number | null, number]) => v != null) as [number, number][];
-			if (!idx.length) return;
+			const idx = vals.map((v: number | null, i: number) => [v, i] as const).filter(([v, i]: readonly [number | null, number]) => v != null && shown(i)) as [number, number][];
+			if (idx.length < 2) return;
 			const hi = idx.reduce((m, x) => (x[0] > m[0] ? x : m));
 			const lo = idx.reduce((m, x) => (x[0] < m[0] ? x : m));
 			const mid = (a + b) / 2;
@@ -60,24 +195,24 @@
 	}
 
 	const freqSeries = $derived<ChartSeries[]>(
-		R ? R.items.map((it: { label: string }, i: number) => ({ label: it.label, color: color(i), values: R.series[i].domHz, width: 2 })) : []
+		R ? R.items.flatMap((it: { label: string }, i: number) => (shown(i) ? [{ label: it.label, color: color(i), values: R.series[i].domHz, width: 2 }] : [])) : []
 	);
 	const freqMarkers = $derived<ChartMarker[]>(
 		!R
 			? []
 			: n <= 2
 				? R.extremes.flatMap((row: [number, number, string][], i: number) =>
-						row.map(([x, v, kind]) => ({ x, v, side: (kind === 'peak' ? 1 : -1) as 1 | -1, color: color(i), text: `${v} Hz` }))
+						(shown(i) ? row : []).map(([x, v, kind]) => ({ x, v, side: (kind === 'peak' ? 1 : -1) as 1 | -1, color: color(i), text: `${v} Hz` }))
 					)
 				: phaseMarkers('hz', (v) => `${Math.round(v)} Hz`)
 	);
 	const loudSeries = $derived<ChartSeries[]>(
-		R ? R.items.map((it: { label: string }, i: number) => ({ label: it.label, color: color(i), values: R.series[i].levelSmooth, width: 1.8 })) : []
+		R ? R.items.flatMap((it: { label: string }, i: number) => (shown(i) ? [{ label: it.label, color: color(i), values: R.series[i].levelSmooth, width: 1.8 }] : [])) : []
 	);
 	const loudMarkers = $derived<ChartMarker[]>(phaseMarkers('avgDb', (v) => `${v.toFixed(1)} dB`));
 
 	const diff = (key: 'dHz' | 'dLvl' | 'shapeDb'): ChartSeries[] =>
-		R ? vsIdx.map((i: number) => ({ label: R.items[i].label, color: color(i), values: R.sim[i][key], width: 1.4 })) : [];
+		R ? vsIdx.filter((i: number) => shown(i)).map((i: number) => ({ label: R.items[i].label, color: color(i), values: R.sim[i][key], width: 1.4 })) : [];
 
 	// Phase grids: value + difference from the group median (or from the first SPU when there are two).
 	function grid(key: 'hz' | 'avgDb', pattern = false) {
@@ -150,6 +285,12 @@
 	const fmt = (v: number | null | undefined, d = 1) => (v == null ? '—' : v.toFixed(d));
 </script>
 
+{#snippet th(k: SortKey, name: string, cls = 'px-2')}
+	<th class="{cls} cursor-pointer select-none hover:text-[var(--color-tron-text-primary)]" onclick={() => sortBy(k)} aria-sort={sortKey === k ? (sortDir > 0 ? 'ascending' : 'descending') : 'none'}>
+		{name}{sortKey === k ? (sortDir > 0 ? ' ▲' : ' ▼') : ''}
+	</th>
+{/snippet}
+
 <div class="space-y-6">
 	<div class="flex flex-wrap items-start justify-between gap-3">
 		<div>
@@ -174,7 +315,33 @@
 				<option value="UNKNOWN">Assay not set</option>
 			</select>
 		</div>
-		<div class="grid max-h-56 grid-cols-1 gap-1 overflow-y-auto text-sm md:grid-cols-2 lg:grid-cols-3">
+		<div class="flex flex-wrap gap-2">
+			{#each spuGroups as g (g.udi)}
+				<button
+					type="button"
+					onclick={() => toggleSpu(g)}
+					aria-pressed={spuPicked(g)}
+					title={`${g.udi} — ${g.recs.length} recording${g.recs.length === 1 ? '' : 's'}; picks the latest`}
+					class="rounded-full border px-3 font-mono text-sm {spuPicked(g)
+						? 'border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/15 text-[var(--color-tron-cyan)]'
+						: 'border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)]'}"
+					style="min-height: 40px;"
+				>
+					{g.short}{#if g.recs.some((r: { reference: boolean }) => r.reference)}<span class="ml-1 text-[var(--color-tron-orange)]">★</span>{/if}
+				</button>
+			{:else}
+				<p class="tron-text-muted text-sm">No analyzed recordings yet — upload on the Recordings page; they are analyzed automatically.</p>
+			{/each}
+		</div>
+		{#if spuGroups.length}
+			<div class="flex flex-wrap gap-2 text-sm">
+				<button type="button" onclick={pickAllSpus} class="rounded border border-[var(--color-tron-border)] px-3" style="min-height: 40px;">All SPUs</button>
+				<button type="button" onclick={() => (picked = {})} class="rounded border border-[var(--color-tron-border)] px-3" style="min-height: 40px;">Clear</button>
+			</div>
+		{/if}
+		<details class="text-sm">
+			<summary class="tron-text-muted cursor-pointer" style="min-height: 32px;">Pick individual recordings (e.g. two runs of the same SPU)</summary>
+		<div class="mt-2 grid max-h-56 grid-cols-1 gap-1 overflow-y-auto text-sm md:grid-cols-2 lg:grid-cols-3">
 			{#each pickerRows as a (a.id)}
 				<label class="flex items-center gap-2 rounded px-2 py-1 hover:bg-[var(--color-tron-bg-tertiary)]" style="min-height: 44px;">
 					<input type="checkbox" bind:checked={picked[a.id]} class="h-4 w-4" />
@@ -186,6 +353,7 @@
 				<p class="tron-text-muted">No analyzed recordings yet.</p>
 			{/each}
 		</div>
+		</details>
 		<div class="flex flex-wrap items-end gap-3">
 			<label class="text-sm">
 				<span class="tron-label">Sections (seconds; blank = automatic)</span>
@@ -196,7 +364,7 @@
 				Judge against the reference set (★) of their assay
 			</label>
 			<button type="button" onclick={run} disabled={pickedIds.length < (against ? 1 : 2)} class="rounded bg-[var(--color-tron-cyan)] px-4 py-2 text-sm font-semibold text-[var(--color-tron-bg-primary)] disabled:opacity-40" style="min-height: 44px;">
-				Compare
+				Generate comparison ({pickedIds.length})
 			</button>
 		</div>
 	</div>
@@ -206,22 +374,54 @@
 	{/if}
 
 	{#if R}
-		<!-- who's in it -->
-		<div class="tron-card p-4 text-sm">
-			<div class="flex flex-wrap gap-x-6 gap-y-2">
-				{#each R.items as it, i (it.id)}
-					<span class="inline-flex items-center gap-2">
-						<span class="inline-block h-3 w-3 rounded-full" style="background: {color(i)}"></span>
-						<a href={`/validation/sonic/${it.id}`} class="font-mono font-bold hover:underline" style="color: {color(i)}">{it.label}</a>
-						{#if it.isReference}<span class="text-[var(--color-tron-orange)]" title="reference">★</span>{/if}
-						<span class="tron-text-muted text-xs">{it.assay ?? '?'} · offset {it.offset >= 0 ? '+' : ''}{it.offset.toFixed(2)} s</span>
-					</span>
+		<!-- key findings -->
+		{#if findings.length}
+			<div class="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4" aria-label="Key findings">
+				{#each findings as f (f.title)}
+					<div
+						class="tron-card space-y-1 border-l-4 p-3"
+						style="border-left-color: {f.kind === 'fail' ? 'rgb(248,113,113)' : f.kind === 'warn' ? 'rgb(250,204,21)' : 'rgb(74,222,128)'}"
+					>
+						<div class="tron-text-primary text-base font-semibold">{f.title}</div>
+						<div class="tron-text-muted text-sm">{f.text}</div>
+					</div>
 				{/each}
 			</div>
-			<p class="tron-text-muted mt-2 text-xs">
-				Compared window {R.window[0]}–{R.window[1]} s (time of {R.items[0].label}). Differences are against <b>{R.against}</b>.
-				<button type="button" onclick={downloadCsv} class="ml-3 text-[var(--color-tron-cyan)] hover:underline" style="min-height: 44px;">Download CSV</button>
+		{/if}
+
+		<!-- units: show / hide + hover to highlight -->
+		<div class="tron-card space-y-2 p-4 text-sm">
+			<div class="flex flex-wrap gap-2">
+				{#each R.items as it, i (it.id)}
+					<button
+						type="button"
+						aria-pressed={!hidden[it.id]}
+						onclick={() => (hidden = { ...hidden, [it.id]: !hidden[it.id] })}
+						onpointerenter={() => (focusId = it.id)}
+						onpointerleave={() => (focusId = null)}
+						onfocus={() => (focusId = it.id)}
+						onblur={() => (focusId = null)}
+						title={`${it.assay ?? '?'} · offset ${it.offset >= 0 ? '+' : ''}${it.offset.toFixed(2)} s${it.fileName ? ` · ${it.fileName}` : ''}`}
+						class="inline-flex items-center gap-2 rounded-full border border-[var(--color-tron-border)] px-3 font-mono"
+						style="min-height: 40px; opacity: {hidden[it.id] ? 0.38 : 1}"
+					>
+						<span class="inline-block h-3 w-3 rounded-full" style="background: {color(i)}"></span>{it.label}{#if it.isReference}<span class="text-[var(--color-tron-orange)]">★</span>{/if}
+					</button>
+				{/each}
+			</div>
+			<div class="flex flex-wrap items-center gap-3">
+				<button type="button" onclick={() => setAll(true)} class="rounded border border-[var(--color-tron-border)] px-3" style="min-height: 40px;">Show all</button>
+				<button type="button" onclick={() => setAll(false)} class="rounded border border-[var(--color-tron-border)] px-3" style="min-height: 40px;">Hide all</button>
+				<span class="tron-text-muted text-xs">Click a unit to show or hide it on the charts; hover to highlight it.</span>
+			</div>
+			<p class="tron-text-muted text-xs">
+				Compared window {R.window[0]}–{R.window[1]} s (time of {R.items[0].label}). Differences are against <b>{R.against}</b>. Recordings:
+				{#each R.items as it, i (it.id)}<a href={`/validation/sonic/${it.id}`} class="mr-2 hover:underline" style="color: {color(i)}">{it.label}</a>{/each}
 			</p>
+			<div class="flex flex-wrap gap-4">
+				<button type="button" onclick={downloadCsv} class="text-[var(--color-tron-cyan)] hover:underline" style="min-height: 40px;">Download CSV</button>
+				<button type="button" onclick={copyLink} class="text-[var(--color-tron-cyan)] hover:underline" style="min-height: 40px;">{copied ? 'Link copied' : 'Copy link to this comparison'}</button>
+			</div>
 		</div>
 
 		<!-- 1. section scorecard -->
@@ -243,8 +443,9 @@
 							</tr>
 						</thead>
 						<tbody>
-							{#each R.items as it, i (it.id)}
-								<tr class="border-t border-[var(--color-tron-border)]/40">
+							{#each scoreOrder as i (R.items[i].id)}
+								{@const it = R.items[i]}
+								<tr class="border-t border-[var(--color-tron-border)]/40" style={focusId && focusId !== it.id ? 'opacity: 0.5' : ''}>
 									<td class="px-2 py-1 text-left font-mono font-bold" style="color: {color(i)}">{it.label}{it.isReference ? ' ★' : ''}</td>
 									{#each R.scores[i] as s, k (k)}
 										<td class="px-1 py-1" style="background: {scoreBg(s)}">
@@ -283,12 +484,12 @@
 							height={260}
 							yLabel="dB"
 							band={{ mu: e.loudMu, sd: e.loudSd, k: data.envelopeK }}
-							series={R.items.map((it: { label: string }, i: number) => ({
-								label: it.label,
-								color: color(i),
-								values: e.loud[i],
-								width: (R.scores[i]?.[k]?.loudIn ?? 100) < data.passPct ? 3 : 1.2
-							}))}
+							focus={focusLabel}
+							series={R.items.flatMap((it: { label: string }, i: number) =>
+								shown(i)
+									? [{ label: it.label, color: color(i), values: e.loud[i], width: (R.scores[i]?.[k]?.loudIn ?? 100) < data.passPct ? 3 : 1.2 }]
+									: []
+							)}
 							legend={k === 0}
 						/>
 					{/each}
@@ -305,12 +506,12 @@
 							height={260}
 							yLabel="relative dB"
 							band={{ mu: e.specMu, sd: e.specSd, k: data.envelopeK }}
-							series={R.items.map((it: { label: string }, i: number) => ({
-								label: it.label,
-								color: color(i),
-								values: e.spec[i],
-								width: (R.scores[i]?.[k]?.specIn ?? 100) < data.passPct ? 3 : 1.2
-							}))}
+							focus={focusLabel}
+							series={R.items.flatMap((it: { label: string }, i: number) =>
+								shown(i)
+									? [{ label: it.label, color: color(i), values: e.spec[i], width: (R.scores[i]?.[k]?.specIn ?? 100) < data.passPct ? 3 : 1.2 }]
+									: []
+							)}
 							legend={k === 0}
 						/>
 					{/each}
@@ -325,21 +526,33 @@
 				Strongest tone between 100 and 2000 Hz (motor pitch), shown only while each SPU is running.
 				{n <= 2 ? '▲ peak / ▼ valley of every running stretch.' : 'Per phase: ▲ highest SPU, ▼ lowest SPU.'} Grey = running; {data.tickS} s grid.
 			</p>
-			<SonicChart x={R.t} xDomain={R.window} tickS={data.tickS} height={440} yLabel="Hz" xLabel={`time (s), aligned to ${R.items[0].label}`} series={freqSeries} markers={freqMarkers} shade={R.shade} sections={phaseSections} />
+			<SonicChart x={R.t} xDomain={R.window} tickS={data.tickS} height={440} yLabel="Hz" xLabel={`time (s), aligned to ${R.items[0].label}`} series={freqSeries} markers={freqMarkers} shade={R.shade} sections={phaseSections} focus={focusLabel} tooltip fmt={(v) => `${Math.round(v)} Hz`} />
 		</div>
 
 		<!-- 4. loudness over time -->
 		<div class="tron-card space-y-3 p-4">
 			<h2 class="tron-heading text-lg font-semibold">Loudness over time</h2>
 			<p class="tron-text-muted text-xs">2 s average. Per phase: ▲ loudest SPU, ▼ quietest SPU (phase-average level). Absolute level also depends on how close the phone was.</p>
-			<SonicChart x={R.t} xDomain={R.window} tickS={data.tickS} height={440} yLabel="dBFS" xLabel={`time (s), aligned to ${R.items[0].label}`} series={loudSeries} markers={loudMarkers} shade={R.shade} sections={phaseSections} />
+			<SonicChart x={R.t} xDomain={R.window} tickS={data.tickS} height={440} yLabel="dBFS" xLabel={`time (s), aligned to ${R.items[0].label}`} series={loudSeries} markers={loudMarkers} shade={R.shade} sections={phaseSections} focus={focusLabel} tooltip fmt={(v) => `${v.toFixed(1)} dB`} />
 		</div>
 
 		<!-- 5. per-phase grids -->
 		{#if R.phases.length}
 			<div class="tron-card space-y-4 p-4">
 				<h2 class="tron-heading text-lg font-semibold">Per phase</h2>
-				{#each [{ title: 'Typical frequency (Hz)', g: hzGrid, unit: 'Hz', dp: 0 }, { title: 'Average loudness (dBFS)', g: dbGrid, unit: 'dB', dp: 1 }, { title: "Loudness pattern — each SPU's constant offset (phone distance) removed; 0 = same rise/fall as the group", g: patGrid, unit: 'dB', dp: 1, pattern: true }] as G (G.title)}
+				<p class="tron-text-muted text-xs">Colour shows how far each SPU is from {R.mode === 'reference' ? R.items[0].label : 'the group median'} in that phase: red above, blue below.</p>
+				<div class="flex flex-wrap gap-2 text-sm" role="group" aria-label="Measure">
+					{#each GRID_TABS as [k, name] (k)}
+						<button
+							type="button"
+							aria-pressed={gridTab === k}
+							onclick={() => (gridTab = k)}
+							class="rounded border px-3 {gridTab === k ? 'border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)] text-[var(--color-tron-bg-primary)]' : 'border-[var(--color-tron-border)]'}"
+							style="min-height: 40px;">{name}</button
+						>
+					{/each}
+				</div>
+				{#each [{ k: 'hz', title: 'Typical frequency (Hz)', g: hzGrid, unit: 'Hz', dp: 0, pattern: false }, { k: 'db', title: 'Average loudness (dBFS)', g: dbGrid, unit: 'dB', dp: 1, pattern: false }, { k: 'pattern', title: "Loudness pattern — each SPU's constant offset (phone distance) removed; 0 = same rise/fall as the group", g: patGrid, unit: 'dB', dp: 1, pattern: true }].filter((G) => G.k === gridTab) as G (G.title)}
 					<div>
 						<div class="tron-text-primary mb-1 text-sm font-semibold">{G.title}</div>
 						<div class="overflow-x-auto">
@@ -373,18 +586,19 @@
 		<!-- 6. similarity table -->
 		<div class="tron-card space-y-3 p-4">
 			<h2 class="tron-heading text-lg font-semibold">Similarity summary</h2>
-			<p class="tron-text-muted text-xs">Averages count only the time both are clearly running. Peak / min are the loudest and quietest half-seconds of the test.</p>
+			<p class="tron-text-muted text-xs">Averages count only the time both are clearly running. Peak / min are the loudest and quietest half-seconds of the test. Click a column to sort.</p>
 			<div class="overflow-x-auto">
 				<table class="w-full text-right text-xs">
 					<thead>
 						<tr class="text-[var(--color-tron-text-secondary)]">
-							<th class="px-2 py-1 text-left">SPU</th><th class="px-2">typical Hz</th><th class="px-2">avg |Δ freq| Hz</th><th class="px-2">avg |Δ freq| %</th>
-							<th class="px-2">freq within ±5 %</th><th class="px-2">avg |Δ loudness| dB</th><th class="px-2">avg shape diff dB</th>
-							<th class="px-2">peak dBFS @ s</th><th class="px-2">min dBFS @ s</th><th class="px-2">tones above the others</th>
+							{@render th('label', 'SPU', 'px-2 py-1 text-left')}{@render th('medianHz', 'typical Hz')}<th class="px-2">avg |Δ freq| Hz</th>{@render th('avgAbsPct', 'avg |Δ freq| %')}
+							{@render th('matchPct', 'freq within ±5 %')}{@render th('avgAbsLvl', 'avg |Δ loudness| dB')}{@render th('avgShape', 'avg shape diff dB')}
+							{@render th('peakDb', 'peak dBFS @ s')}{@render th('minDb', 'min dBFS @ s')}<th class="px-2">tones above the others</th>
 						</tr>
 					</thead>
 					<tbody>
-						{#each R.items as it, i (it.id)}
+						{#each summaryOrder as i (R.items[i].id)}
+							{@const it = R.items[i]}
 							{@const s = R.sim[i]}
 							{@const isRef = !vsIdx.includes(i)}
 							<tr class="border-t border-[var(--color-tron-border)]/40">
@@ -408,9 +622,9 @@
 		<!-- 7. differences over time -->
 		<div class="tron-card space-y-3 p-4">
 			<h2 class="tron-heading text-lg font-semibold">Differences over time (vs {R.against})</h2>
-			<SonicChart title="Frequency difference (Hz)" x={R.t} xDomain={R.window} tickS={data.tickS} height={260} yLabel="Δ Hz" series={diff('dHz')} shade={R.shade} />
-			<SonicChart title="Loudness difference (dB)" x={R.t} xDomain={R.window} tickS={data.tickS} height={260} yLabel="Δ dB" series={diff('dLvl')} shade={R.shade} />
-			<SonicChart title="Sound-shape difference (dB, 0 = identical tone colour)" x={R.t} xDomain={R.window} tickS={data.tickS} height={260} yLabel="dB" series={diff('shapeDb')} shade={R.shade} />
+			<SonicChart title="Frequency difference (Hz)" x={R.t} xDomain={R.window} tickS={data.tickS} height={260} yLabel="Δ Hz" series={diff('dHz')} shade={R.shade} focus={focusLabel} tooltip fmt={(v) => `${v > 0 ? '+' : ''}${Math.round(v)} Hz`} />
+			<SonicChart title="Loudness difference (dB)" x={R.t} xDomain={R.window} tickS={data.tickS} height={260} yLabel="Δ dB" series={diff('dLvl')} shade={R.shade} focus={focusLabel} tooltip fmt={(v) => `${v > 0 ? '+' : ''}${v.toFixed(1)} dB`} />
+			<SonicChart title="Sound-shape difference (dB, 0 = identical tone colour)" x={R.t} xDomain={R.window} tickS={data.tickS} height={260} yLabel="dB" series={diff('shapeDb')} shade={R.shade} focus={focusLabel} tooltip fmt={(v) => `${v.toFixed(1)} dB`} />
 		</div>
 	{/if}
 </div>

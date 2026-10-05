@@ -38,6 +38,12 @@
 		/** mean ± k·σ; null entries (non-finite values from the server) leave a gap. */
 		band?: { mu: (number | null)[]; sd: (number | null)[]; k: number } | null;
 		legend?: boolean;
+		/** Label of the series to highlight; the others are dimmed and it is drawn on top. */
+		focus?: string | null;
+		/** Hover crosshair + a tooltip listing every series' value at that x. */
+		tooltip?: boolean;
+		/** Value format for the tooltip. */
+		fmt?: (v: number) => string;
 	}
 
 	let {
@@ -54,8 +60,56 @@
 		shade = [],
 		sections = [],
 		band = null,
-		legend = true
+		legend = true,
+		focus = null,
+		tooltip = false,
+		fmt = (v: number) => String(Math.round(v * 10) / 10)
 	}: Props = $props();
+
+	/** Focused series last so it is drawn over the others. */
+	const drawOrder = $derived(
+		focus && series.some((s) => s.label === focus) ? [...series.filter((s) => s.label !== focus), ...series.filter((s) => s.label === focus)] : series
+	);
+
+	// ── hover ────────────────────────────────────────────────────────────
+	let svgEl = $state<SVGSVGElement | null>(null);
+	let hoverI = $state<number | null>(null);
+	let tipPos = $state({ left: 0, top: 0 });
+
+	function onMove(ev: PointerEvent) {
+		if (!svgEl || !x.length) return;
+		const r = svgEl.getBoundingClientRect();
+		const px = ((ev.clientX - r.left) / r.width) * W;
+		if (px < pad.left || px > W - pad.right) {
+			hoverI = null;
+			return;
+		}
+		// Nearest x by screen distance (x is monotonic on every sonic chart; a linear scan is fine at ~500 points).
+		let best = -1;
+		let bestD = Infinity;
+		x.forEach((xi, i) => {
+			if (!okX(xi)) return;
+			const d = Math.abs(geo.sx(xi) - px);
+			if (d < bestD) {
+				bestD = d;
+				best = i;
+			}
+		});
+		hoverI = best >= 0 ? best : null;
+		const host = svgEl.parentElement!.getBoundingClientRect();
+		let left = ev.clientX - host.left + 14;
+		if (left + 200 > host.width) left = ev.clientX - host.left - 214;
+		tipPos = { left: Math.max(0, left), top: Math.max(0, ev.clientY - host.top - 20) };
+	}
+
+	const tipRows = $derived(
+		hoverI == null
+			? []
+			: series
+					.map((s) => ({ label: s.label, color: s.color, v: s.values[hoverI!] }))
+					.filter((r): r is { label: string; color: string; v: number } => fin(r.v))
+					.sort((a, b) => b.v - a.v)
+	);
 
 	const W = 1200;
 	const pad = { top: 28, right: 20, bottom: 42, left: 62 };
@@ -228,8 +282,12 @@
 
 <div class="w-full">
 	{#if title}<div class="tron-text-primary mb-1 text-sm font-semibold">{title}</div>{/if}
-	<div class="w-full overflow-x-auto">
-		<svg viewBox="0 0 {W} {geo.H}" class="w-full rounded bg-[var(--color-tron-bg-tertiary)]" style="min-width: 640px" preserveAspectRatio="xMidYMid meet" role="img" aria-label={ariaLabel}>
+	<div class="relative w-full overflow-x-auto">
+		<svg
+			bind:this={svgEl}
+			onpointermove={tooltip ? onMove : undefined}
+			onpointerleave={tooltip ? () => (hoverI = null) : undefined}
+			viewBox="0 0 {W} {geo.H}" class="w-full rounded bg-[var(--color-tron-bg-tertiary)]" style="min-width: 640px" preserveAspectRatio="xMidYMid meet" role="img" aria-label={ariaLabel}>
 			<title>{ariaLabel}</title>
 			<!-- running stretches -->
 			{#each shadeRects as r, i (i)}
@@ -266,9 +324,20 @@
 				<path d={path(band.mu)} fill="none" stroke="var(--color-tron-text-primary)" stroke-width="1.5" stroke-dasharray="6,4" />
 			{/if}
 			<!-- series -->
-			{#each series as s, i (i)}
-				<path d={path(s.values)} fill="none" stroke={s.color} stroke-width={s.width ?? 1.8} stroke-dasharray={s.dashed ? '6,4' : undefined} stroke-linejoin="round" />
+			{#each drawOrder as s, i (i)}
+				<path
+					d={path(s.values)}
+					fill="none"
+					stroke={s.color}
+					stroke-width={focus === s.label ? (s.width ?? 1.8) + 1.6 : (s.width ?? 1.8)}
+					opacity={focus && focus !== s.label ? 0.15 : 1}
+					stroke-dasharray={s.dashed ? '6,4' : undefined}
+					stroke-linejoin="round"
+				/>
 			{/each}
+			{#if hoverI != null && okX(x[hoverI])}
+				<line x1={geo.sx(x[hoverI])} x2={geo.sx(x[hoverI])} y1={pad.top} y2={pad.top + geo.innerH} stroke="var(--color-tron-text-primary)" stroke-dasharray="2,3" opacity="0.6" />
+			{/if}
 			<!-- markers + labels -->
 			{#each placed as m, i (i)}
 				{#if m.level > 0 || Math.abs(m.cx - m.px) > 1}
@@ -281,6 +350,21 @@
 				{/each}
 			{/each}
 		</svg>
+		{#if tooltip && hoverI != null}
+			<div
+				class="pointer-events-none absolute z-10 min-w-[170px] rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-3 py-2 font-mono text-xs shadow-lg"
+				style="left: {tipPos.left}px; top: {tipPos.top}px"
+			>
+				<div class="tron-text-muted mb-1">{xLog ? `${Math.round(x[hoverI])} Hz` : `${x[hoverI].toFixed(1)} s`}</div>
+				{#each tipRows as r (r.label)}
+					<div class="flex justify-between gap-3" style={focus && focus !== r.label ? 'opacity: 0.45' : ''}>
+						<span><span class="mr-1.5 inline-block h-2 w-2 rounded-full" style="background: {r.color}"></span>{r.label}</span><span>{fmt(r.v)}</span>
+					</div>
+				{:else}
+					<div class="tron-text-muted">nothing running</div>
+				{/each}
+			</div>
+		{/if}
 	</div>
 	{#if legend && series.length}
 		<div class="mt-2 flex flex-wrap justify-center gap-x-5 gap-y-1 text-xs">

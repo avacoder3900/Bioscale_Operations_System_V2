@@ -18206,6 +18206,8 @@ Retrieve this exact code: git checkout master at commit cfbdd3f1
   (or: git log master --oneline to find it if the branch has since moved on)
 What this deployment is for: sonic recordings under 4.5 MB upload through BIMS (proxied action).
   GitHub deployment 6863843473 (Production). Smoke: /validation/sonic 302 (auth redirect expected).
+
+================================================================================
 2026-09-30 — feat/sonic-fingerprint-analysis — VALIDATION-08: sonic fingerprint analysis on /validation/sonic
 ================================================================================
 The Sonic page stored recordings but analyzed nothing (processedData null, "waveform analysis comes
@@ -18288,3 +18290,33 @@ trim/clip defaults 1 s with typed values; test on the local dev server, no deplo
     vs real DB/R2 in a scratch GridFS bucket (deleted). Thresholds are first guesses — calibrate with references.
 npm run check: 13 errors / 434 warnings = master baseline, none in sonic files.
 Not deployed (user: test on local dev server first).
+2026-10-05 — feat/sonic-fingerprint-analysis — Sonic compare = the "SPU Sonic Fingerprints" report; batch upload
+================================================================================
+User: wants a page like the SPU Sonic Fingerprints artifact (all units' sonic data compared with
+each other), built by selecting several SPUs and generating the graphs from them. Chose "in BIMS".
+- Merged origin/master (91 commits; conflict with cfbdd3f1 "upload files under 4.5 MB through BIMS"
+  resolved by keeping both: assays/refCounts/minReferences AND proxyMaxBytes; progress.txt rebuilt
+  from master's copy + this branch's entries).
+- compare/+page.svelte: SPU chip picker (latest recording per SPU, All SPUs / Clear, individual
+  recordings under a <details>), "Generate comparison"; key-findings cards derived from the result
+  (worst outlier w/ shape diff + strongest extra tone, all-pass units, pitch range, pitch families =
+  sorted typical Hz split on a >10 % jump); show/hide + hover-highlight unit chips driving every
+  chart (per-phase ▲/▼ only over shown units); scorecard sorted by sections passed; per-phase tabs;
+  sortable summary; copy-link. compare/+page.server.ts: labels "SPU 210" (UDI numeric suffix).
+- SonicChart.svelte: optional focus (others dimmed to 0.15, focused drawn on top, thicker) and
+  tooltip (crosshair + every series' value at the nearest x, sorted).
+- +page.svelte (Recordings): "Several recordings at once" — multi-file input, unit read from the
+  file name (unambiguous UDI-suffix match, editable select), stores + analyzes each in turn via the
+  existing ?/upload and ?/analyze actions, then "Compare these N →". Files over the proxy cap are
+  skipped with a message (the direct/Worker path is still broken in prod per cfbdd3f1).
+- Prod DB (read-only probe): 1 sonic session (SPU 210, today, not analyzed), 0 fingerprints — the
+  report needs the 20 prototype recordings uploaded. No R2 creds locally, so no script backfill;
+  spu226 (4.9 MB) and SPU229 wav (21 MB) re-encoded to AAC mono (3.6 / 2.8 MB) for upload.
+svelte-check: 14 errors = baseline, none in sonic files; vitest sonic 20/20.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-6jndwhj1u-brevitest.vercel.app
+Source: branch feat/sonic-fingerprint-analysis @ commit 679a6ce2
+Retrieve this exact code: git checkout feat/sonic-fingerprint-analysis at commit 679a6ce2
+  (or: git log feat/sonic-fingerprint-analysis --oneline to find it if the branch has since moved on)
+What this deployment is for: artifact-style sonic compare report (pick SPUs → generate) + batch
+upload with the unit read from each file name.

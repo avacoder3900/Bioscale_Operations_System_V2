@@ -146,6 +146,95 @@
 		goto(`/validation/sonic/compare?ids=${selectedIds.join(',')}`);
 	}
 
+	// ── batch: several recordings at once, the unit read from each file name ──
+	type BatchRow = {
+		key: number;
+		file: File;
+		spuId: string;
+		state: 'ready' | 'skip' | 'uploading' | 'analyzing' | 'done' | 'error';
+		msg: string;
+		sessionId?: string;
+	};
+	let batch = $state<BatchRow[]>([]);
+	let batchRunning = $state(false);
+	let batchNonce = $state(0);
+	const batchDone = $derived(batch.filter((r) => r.state === 'done' && r.sessionId));
+	const batchReady = $derived(batch.filter((r) => r.state === 'ready' && r.spuId));
+
+	/**
+	 * "210.m4a", "spu226 audio.m4a", "SPU229_bcode.wav" → the SPU whose UDI ends in that
+	 * number. Only an unambiguous match is filled in; otherwise the row asks for the unit.
+	 */
+	function spuFromName(name: string): string {
+		const m = /(\d{3,4})/.exec(name);
+		if (!m) return '';
+		const n = Number(m[1]);
+		const hits = data.spus.filter((s) => {
+			const t = /-0*(\d+)$/.exec(s.udi);
+			return t != null && Number(t[1]) === n;
+		});
+		return hits.length === 1 ? hits[0].id : '';
+	}
+
+	function onBatchPicked(e: Event) {
+		const files = [...((e.currentTarget as HTMLInputElement).files ?? [])];
+		// Same margin as the single form: the other fields ride the 4.5 MB body too.
+		const cap = data.proxyMaxBytes - 64 * 1024;
+		batch = files.map((file, key) => {
+			const spuId = spuFromName(file.name);
+			if (file.size > cap)
+				return { key, file, spuId, state: 'skip', msg: `${mb(file.size)} — over the ${mb(cap)} batch limit; use the single upload below` };
+			return { key, file, spuId, state: 'ready', msg: spuId ? '' : 'pick the unit' };
+		});
+	}
+
+	function setRow(key: number, patch: Partial<BatchRow>) {
+		batch = batch.map((r) => (r.key === key ? { ...r, ...patch } : r));
+	}
+
+	/** Store then analyze each file in turn, through the same actions as the single upload. */
+	async function runBatch() {
+		batchRunning = true;
+		clientError = null;
+		try {
+			for (const row of batchReady) {
+				setRow(row.key, { state: 'uploading', msg: 'uploading…' });
+				const fd = new FormData();
+				fd.set('spuId', row.spuId);
+				fd.set('assay', 'SONIC'); // this page is the SONIC test only
+				fd.set('notes', '');
+				fd.set('file', row.file);
+				let up: ActionResult;
+				try {
+					const res = await fetch('?/upload', { method: 'POST', body: fd, headers: { 'x-sveltekit-action': 'true' } });
+					const text = await res.text();
+					try {
+						up = deserialize(text);
+					} catch {
+						up = { type: 'error', status: res.status, error: { message: text.slice(0, 200) || res.statusText } };
+					}
+				} catch (err) {
+					up = { type: 'error', error: { message: err instanceof Error ? err.message : String(err) } };
+				}
+				const sessionId = up.type === 'success' ? (up.data as { sessionId?: string } | undefined)?.sessionId : undefined;
+				if (!sessionId) {
+					setRow(row.key, { state: 'error', msg: describeFailure(up, 'upload failed') });
+					continue;
+				}
+				setRow(row.key, { state: 'analyzing', msg: 'analyzing…', sessionId });
+				const an = await callAction('analyze', { sessionId });
+				setRow(row.key, an.type === 'success' ? { state: 'done', msg: 'stored and analyzed' } : { state: 'error', msg: describeFailure(an, 'stored, but analysis failed') });
+			}
+		} finally {
+			batchRunning = false;
+			await invalidateAll();
+		}
+	}
+
+	function compareBatch() {
+		goto(`/validation/sonic/compare?ids=${batchDone.map((r) => r.sessionId).join(',')}`);
+	}
+
 	/** PUT the file to the Worker with upload progress (fetch has none). */
 	function putWithProgress(url: string, file: File, h: { token: string; expires: number; maxBytes: number }): Promise<void> {
 		return new Promise((resolve, reject) => {
@@ -248,6 +337,95 @@
 	{#each Object.entries(busy) as [id, msg] (id)}
 		<div class="rounded-lg bg-[var(--color-tron-orange)]/10 p-3 text-sm text-[var(--color-tron-orange)]">{msg} (decoding and fingerprinting on the server — a few seconds)</div>
 	{/each}
+
+	<!-- several recordings at once -->
+	<div class="tron-card space-y-3 p-6">
+		<div>
+			<h2 class="tron-heading text-lg font-semibold">Several recordings at once</h2>
+			<p class="tron-text-muted mt-1 text-xs">
+				Pick any number of files. The unit is read from each file name (210.m4a, spu226 audio.m4a, SPU229_bcode.wav) — check it, then
+				everything is stored, analyzed and ready to compare.
+			</p>
+		</div>
+		<div class="flex flex-wrap items-center gap-3">
+			{#key batchNonce}
+				<input
+					type="file"
+					multiple
+					accept="audio/*,.wav,.m4a,.mp3,.aac,.ogg,.webm,.flac,.caf"
+					aria-label="Recording files"
+					class="tron-input flex-1"
+					style="min-height: 44px;"
+					onchange={onBatchPicked}
+					disabled={batchRunning}
+				/>
+			{/key}
+			<span class="rounded bg-[var(--color-tron-cyan)]/10 px-2 py-1 text-xs text-[var(--color-tron-cyan)]">SONIC</span>
+		</div>
+		{#if batch.length}
+			<div class="overflow-x-auto">
+				<table class="w-full text-sm">
+					<thead>
+						<tr class="text-left text-xs text-[var(--color-tron-text-secondary)]">
+							<th class="px-2 py-1">File</th><th class="px-2 py-1">Unit</th><th class="px-2 py-1">Size</th><th class="px-2 py-1">Status</th>
+						</tr>
+					</thead>
+					<tbody>
+						{#each batch as r (r.key)}
+							<tr class="border-t border-[var(--color-tron-border)]/40">
+								<td class="px-2 py-1 font-mono">{r.file.name}</td>
+								<td class="px-2 py-1">
+									<select
+										value={r.spuId}
+										onchange={(e) => {
+											const v = (e.currentTarget as HTMLSelectElement).value;
+											setRow(r.key, { spuId: v, msg: r.state === 'ready' ? '' : r.msg });
+										}}
+										disabled={batchRunning || r.state !== 'ready'}
+										aria-label={`Unit for ${r.file.name}`}
+										class="tron-select text-sm"
+										style="min-height: 40px;"
+									>
+										<option value="">Choose…</option>
+										{#each data.spus as s (s.id)}<option value={s.id}>{s.udi}</option>{/each}
+									</select>
+								</td>
+								<td class="px-2 py-1">{mb(r.file.size)}</td>
+								<td
+									class="px-2 py-1 text-xs {r.state === 'done'
+										? 'text-[var(--color-tron-green)]'
+										: r.state === 'error' || r.state === 'skip'
+											? 'text-[var(--color-tron-red)]'
+											: r.state === 'ready'
+												? 'tron-text-muted'
+												: 'text-[var(--color-tron-orange)]'}">{r.msg || (r.state === 'ready' ? 'ready' : r.state)}</td
+								>
+							</tr>
+						{/each}
+					</tbody>
+				</table>
+			</div>
+			<div class="flex flex-wrap gap-3">
+				<button
+					type="button"
+					onclick={runBatch}
+					disabled={batchRunning || !batchReady.length}
+					class="rounded-lg bg-[var(--color-tron-orange)] px-5 py-2 font-semibold text-[var(--color-tron-bg-primary)] disabled:opacity-50"
+					style="min-height: 44px;"
+				>
+					{batchRunning ? 'Working…' : `Store and analyze ${batchReady.length}`}
+				</button>
+				{#if batchDone.length >= 2 && !batchRunning}
+					<button type="button" onclick={compareBatch} class="rounded-lg bg-[var(--color-tron-cyan)] px-5 py-2 font-semibold text-[var(--color-tron-bg-primary)]" style="min-height: 44px;">
+						Compare these {batchDone.length} →
+					</button>
+				{/if}
+				{#if !batchRunning}
+					<button type="button" onclick={() => { batch = []; batchNonce += 1; }} class="rounded border border-[var(--color-tron-border)] px-4 text-sm" style="min-height: 44px;">Clear</button>
+				{/if}
+			</div>
+		{/if}
+	</div>
 
 	<form
 		method="POST"
