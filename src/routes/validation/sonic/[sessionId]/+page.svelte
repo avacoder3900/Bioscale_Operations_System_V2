@@ -2,10 +2,12 @@
 	import { deserialize } from '$app/forms';
 	import { invalidateAll } from '$app/navigation';
 	import SonicChart, { type ChartMarker } from '$lib/components/validation/sonic/SonicChart.svelte';
+	import SonicReview from '$lib/components/validation/sonic/SonicReview.svelte';
 
 	let { data } = $props();
 	const S = $derived(data.session);
 	const C = $derived(data.charts);
+	const R = $derived(data.review);
 	let msg = $state<string | null>(null);
 	let err = $state<string | null>(null);
 	let working = $state(false);
@@ -87,8 +89,48 @@
 	{#if err}<div class="rounded-lg bg-[var(--color-tron-red)]/10 p-3 text-sm text-[var(--color-tron-red)]">{err}</div>{/if}
 	{#if msg}<div class="rounded-lg bg-[var(--color-tron-cyan)]/10 p-3 text-sm text-[var(--color-tron-cyan)]">{msg}</div>{/if}
 
+	<!-- SONIC workflow: step 5 (trim & verify) and step 6 (step-mapped anomalies) -->
+	<div class="tron-card space-y-3 p-4">
+		<div class="flex flex-wrap items-center gap-3">
+			<h2 class="tron-heading text-lg font-semibold">Review</h2>
+			{#if R.mongoCopy}<span class="rounded bg-[var(--color-tron-green)]/15 px-2 py-0.5 text-xs text-[var(--color-tron-green)]" title={`SHA-256 ${R.mongoCopy.sha256}`}>R2 ✓ · MongoDB ✓</span>{:else}<span class="rounded bg-[var(--color-tron-orange)]/15 px-2 py-0.5 text-xs text-[var(--color-tron-orange)]">MongoDB copy missing</span>{/if}
+			{#if R.windowSummary}
+				<span class="text-xs">
+					Analyzed {R.windowSummary.at ? new Date(R.windowSummary.at).toLocaleString() : ''} by {R.windowSummary.by ?? '—'} ·
+					step fit <b class={R.windowSummary.alignment.quality === 'good' ? 'text-[var(--color-tron-green)]' : 'text-[var(--color-tron-orange)]'}>{R.windowSummary.alignment.quality}</b> (r = {R.windowSummary.alignment.corr}) ·
+					<b>{R.windowSummary.summary.total}</b> anomal{R.windowSummary.summary.total === 1 ? 'y' : 'ies'}
+					({R.windowSummary.summary.bySeverity.high} high, {R.windowSummary.summary.bySeverity.medium} medium, {R.windowSummary.summary.bySeverity.low} low) ·
+					{R.windowSummary.referenceCount} reference{R.windowSummary.referenceCount === 1 ? '' : 's'}
+				</span>
+				<button type="button" disabled={working} onclick={() => act('runWindow', { sessionId: S.id }, 'Window re-analyzed.')} class="ml-auto rounded border border-[var(--color-tron-cyan)] px-3 py-2 text-sm text-[var(--color-tron-cyan)] disabled:opacity-40" style="min-height: 44px;">Re-run analysis</button>
+			{/if}
+		</div>
+		{#if R.windowSummary?.alignment.quality === 'low'}
+			<p class="text-xs text-[var(--color-tron-orange)]">The 48-step plan did not fit this recording well — check that the window covers the whole run (start before the first move, end after the last).</p>
+		{/if}
+		{#if R.durationS > 0}
+			<SonicReview
+				durationS={R.durationS}
+				envDb={R.envDb}
+				frameS={R.frameS}
+				audioSrc={R.audioSrc}
+				spectroUrl={R.spectroUrl}
+				review={R.review}
+				suggested={R.suggested}
+				planTotalS={R.planTotalS}
+				planSteps={R.planSteps}
+				mappedSteps={R.mappedSteps}
+				anomalies={R.anomalies}
+				{working}
+				onVerify={(a, b) => act('verify', { sessionId: S.id, startS: String(a), endS: String(b) }, 'Window verified and analyzed.')}
+				onUnusable={(why) => act('markUnusable', { sessionId: S.id, reason: why }, 'Marked unusable — re-record this unit.')}
+			/>
+		{:else}
+			<p class="tron-text-muted text-sm">Analyze the recording first (Re-analyze above) — trimming needs its waveform.</p>
+		{/if}
+	</div>
+
 	<div class="tron-card flex flex-wrap items-center gap-4 p-4 text-sm">
-		{#if S.url}<audio controls preload="none" src={S.url} class="h-9"></audio>{/if}
 		{#if C}
 			<span>duration <b>{fmt(C.durationS)} s</b></span>
 			<span>RMS <b>{fmt(C.summary.rmsDb)} dBFS</b></span>

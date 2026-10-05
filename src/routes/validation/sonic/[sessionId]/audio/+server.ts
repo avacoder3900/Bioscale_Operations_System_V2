@@ -68,10 +68,10 @@ export const GET: RequestHandler = async ({ params, locals, request, url }) => {
 		if (!(start <= end) || start >= total) {
 			return new Response(null, { status: 416, headers: { ...baseHeaders, 'Content-Range': `bytes */${total}` } });
 		}
-		return new Response(bytes.slice(start, end + 1), {
+		return new Response(new Uint8Array(bytes.subarray(start, end + 1)), {
 			status: 206,
 			headers: { ...baseHeaders, 'Content-Range': `bytes ${start}-${end}/${total}`, 'Content-Length': String(end - start + 1) }
 		});
 	}
-	return new Response(bytes, { status: 200, headers: { ...baseHeaders, 'Content-Length': String(total) } });
+	return new Response(new Uint8Array(bytes), { status: 200, headers: { ...baseHeaders, 'Content-Length': String(total) } });
 };

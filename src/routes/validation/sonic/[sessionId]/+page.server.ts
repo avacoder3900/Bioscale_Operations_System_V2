@@ -5,9 +5,15 @@ import { liveVerdict, recordingUrl } from '$lib/server/sonic/analyze';
 import { ACTIVE_RISE_DB, FRAME_S, TICK_S, MIN_REFERENCES, PASS_INSIDE_PCT } from '$lib/server/sonic/constants';
 import { percentile } from '$lib/server/sonic/stats';
 import type { Fingerprint } from '$lib/server/sonic/features';
+import { sonicTimeline } from '$lib/server/sonic/review';
+import { suggestWindow } from '$lib/server/sonic/window';
 import type { PageServerLoad } from './$types';
 
-/** One sonic recording: its fingerprint charts and its advisory verdict (VALIDATION-08 §8.2). */
+/**
+ * One sonic recording: trim & verify the test window, the step-mapped anomaly
+ * review (SONIC workflow steps 5–6), and the fingerprint charts + advisory
+ * verdict (VALIDATION-08 §8.2).
+ */
 export const load: PageServerLoad = async ({ locals, params }) => {
 	requirePermission(locals.user, 'spu:read');
 	await connectDB();
@@ -60,7 +66,58 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 		};
 	}
 
+	// SONIC plan (48 steps) and the review state.
+	let plan: { totalS: number; steps: { index: number; label: string; kind: string; t0: number; t1: number }[]; firstMoveS: number } | null = null;
+	try {
+		const tl = await sonicTimeline();
+		plan = {
+			totalS: tl.totalS,
+			firstMoveS: tl.steps.find((x) => x.kind !== 'start' && x.moving)?.t0 ?? 0,
+			steps: tl.steps.map((x) => ({ index: x.index, label: x.label, kind: x.kind, t0: x.t0, t1: x.t1 }))
+		};
+	} catch (err) {
+		console.warn(`[sonic] SONIC timeline unavailable: ${err instanceof Error ? err.message : String(err)}`);
+	}
+	const durationS = fp?.durationS ?? p.analysis?.durationS ?? 0;
+	const suggested = fp && plan ? suggestWindow(fp.events, durationS, plan.totalS, plan.firstMoveS, 1, 1) : { startS: 0, endS: durationS };
+	const rv = raw.review ?? null;
+	const wa = p.windowAnalysis ?? null;
+	const reviewData = {
+		durationS,
+		envDb: fp?.envDb ?? [],
+		frameS: FRAME_S,
+		audioSrc: `/validation/sonic/${s._id}/audio`,
+		spectroUrl: p.spectrogram?.fileId ? `/validation/sonic/${s._id}/spectrogram.png?v=${p.spectrogram.fileId}` : null,
+		review: rv
+			? {
+					status: rv.status as 'verified' | 'unusable',
+					startS: rv.startS ?? undefined,
+					endS: rv.endS ?? undefined,
+					reason: rv.reason ?? undefined,
+					by: rv.by ?? undefined,
+					at: rv.at ? new Date(rv.at).toISOString() : undefined
+				}
+			: null,
+		suggested,
+		planTotalS: plan?.totalS ?? 0,
+		planSteps: plan?.steps ?? [],
+		mappedSteps: wa?.steps ?? null,
+		anomalies: wa?.anomalies ?? [],
+		windowSummary: wa
+			? {
+					at: wa.at ? new Date(wa.at).toISOString() : null,
+					by: wa.by ?? null,
+					alignment: { offsetS: wa.alignment?.offsetS, scale: wa.alignment?.scale, corr: wa.alignment?.corr, quality: wa.alignment?.quality },
+					summary: wa.summary,
+					referenceCount: wa.referenceSessionIds?.length ?? 0,
+					window: wa.window
+				}
+			: null,
+		mongoCopy: raw.mongoCopy ? { sha256: raw.mongoCopy.sha256 as string, size: raw.mongoCopy.size as number } : null
+	};
+
 	return {
+		review: JSON.parse(JSON.stringify(reviewData)),
 		session: {
 			id: s._id as string,
 			spuId: (s.spuId ?? null) as string | null,

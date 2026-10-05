@@ -9,6 +9,9 @@
 		mimeType: string | null; notes: string | null; recordedBy: string | null; at: string | null; url: string | null;
 		assay: string | null; analysis: Analysis; reference: boolean;
 		verdict: { passed: number; total: number; at: string | null } | null;
+		mongoCopy: { ok: true } | { ok: false; error: string } | null;
+		review: { status: 'verified' | 'unusable'; reason: string | null } | null;
+		anomalies: { total: number; high: number; medium: number } | null;
 	}
 	interface Props {
 		data: {
@@ -23,12 +26,11 @@
 			refCounts: Record<string, number>;
 			minReferences: number;
 		};
-		form: { error?: string; uploaded?: boolean; sessionId?: string; spuUdi?: string; fileName?: string; size?: number } | null;
+		form: { error?: string; uploaded?: boolean; sessionId?: string; spuUdi?: string; fileName?: string; size?: number; mongoCopied?: boolean; mongoCopyError?: string | null } | null;
 	}
 	let { data, form }: Props = $props();
 
 	let selectedSpuId = $state('');
-	let assay = $state('SONIC');
 	let hasFile = $state(false);
 	let uploading = $state(false);
 	let progress = $state<number | null>(null);
@@ -38,12 +40,14 @@
 	/** Sessions being analyzed right now (server decode + fingerprint). */
 	let busy = $state<Record<string, string>>({});
 	let selected = $state<Record<string, boolean>>({});
-	let assayFilter = $state('ALL');
+
 
 	const mb = (n: number | null) => (n == null ? '—' : `${(n / 1048576).toFixed(1)} MB`);
 	const when = (iso: string | null) => (iso ? new Date(iso).toLocaleString() : '—');
 	const limitLabel = $derived(data.directUpload ? '80 MB' : '4.5 MB');
-	const shown = $derived(data.recent.filter((r) => assayFilter === 'ALL' || (r.assay ?? 'UNKNOWN') === assayFilter));
+	const shown = $derived(data.recent);
+	const selectedUdi = $derived(data.spus.find((s) => s.id === selectedSpuId)?.udi ?? null);
+	const missingCopies = $derived(data.recent.filter((r) => !r.mongoCopy?.ok).length);
 	const selectedIds = $derived(Object.keys(selected).filter((k) => selected[k]));
 	const pending = $derived(data.recent.filter((r) => r.analysis.state === 'pending'));
 
@@ -137,12 +141,6 @@
 		return success;
 	}
 
-	/** The row's assay select is one-way bound: put it back if the change did not stick. */
-	async function changeAssay(r: Recording, el: HTMLSelectElement) {
-		const ok = await simpleAction('setAssay', { sessionId: r.id, assay: el.value }, `${r.spuUdi}: assay set.`);
-		if (!ok) el.value = r.assay ?? '';
-	}
-
 	function compareSelected() {
 		if (selectedIds.length < 2) return;
 		goto(`/validation/sonic/compare?ids=${selectedIds.join(',')}`);
@@ -218,10 +216,11 @@
 		<div>
 			<h1 class="tron-heading text-2xl font-bold">Sonic Fingerprint</h1>
 			<p class="tron-text-muted mt-1 max-w-3xl text-sm">
-				Scan the SONIC- barcode on a unit (firmware v96) — it runs the motion-only assay, about five
-				minutes of the cortisol moves with no heat and no reads. Record the sound with a phone and drop
-				the file here against the unit. The recording is analyzed on the server and compared with the
-				reference units of the same assay, section by section (advisory — it does not gate release).
+				The SONIC test only: scan the SONIC- barcode on a unit (firmware v96) — it runs the 48-step,
+				motion-only assay A78C7989 (modelled at 5:00; real units finish in about 3½ minutes). Record it
+				with a phone, upload it here, then open the recording to trim and verify the test window. The
+				verified window is mapped to the 48 steps and checked for anomalies (advisory — it does not gate
+				release). Every recording is kept in R2 and copied to MongoDB.
 			</p>
 		</div>
 		<a href="/validation/sonic/compare" class="rounded border border-[var(--color-tron-cyan)] px-4 py-2 text-sm text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10" style="min-height: 44px; display: inline-flex; align-items: center;">
@@ -234,8 +233,14 @@
 	{/if}
 	{#if form?.uploaded && !clientError}
 		<div class="rounded-lg bg-[var(--color-tron-green)]/10 p-4 text-sm text-[var(--color-tron-green)]">
-			Stored {form.fileName} ({mb(form.size ?? null)}) against {form.spuUdi}. It's in the unit's journal.
+			Stored {form.fileName} ({mb(form.size ?? null)}) against {form.spuUdi}. It's in the unit's journal{form.mongoCopied === false ? '' : ', and copied to MongoDB'}.
+			{#if form.sessionId}<a href="/validation/sonic/{form.sessionId}" class="ml-2 underline">Trim &amp; verify it →</a>{/if}
 		</div>
+		{#if form.mongoCopied === false}
+			<div class="rounded-lg bg-[var(--color-tron-orange)]/10 p-3 text-sm text-[var(--color-tron-orange)]">
+				The MongoDB copy failed ({form.mongoCopyError ?? 'unknown error'}). The recording is safe in R2 — use "Retry copy" on it below.
+			</div>
+		{/if}
 	{/if}
 	{#if notice}
 		<div class="rounded-lg bg-[var(--color-tron-cyan)]/10 p-3 text-sm text-[var(--color-tron-cyan)]">{notice}</div>
@@ -300,13 +305,14 @@
 				</select>
 			</div>
 			<div class="tron-card p-6">
-				<h2 class="tron-heading mb-4 text-lg font-semibold">Assay that was running</h2>
-				<select name="assay" bind:value={assay} aria-label="Assay that was running" class="tron-select w-full" style="min-height: 44px;">
-					{#each data.assays as a (a.key)}
-						<option value={a.key}>{a.label} — {data.refCounts[a.key] ?? 0} reference{(data.refCounts[a.key] ?? 0) === 1 ? '' : 's'}</option>
-					{/each}
-				</select>
-				<p class="tron-text-muted mt-2 text-xs">Recordings are only ever compared with references of the same assay.</p>
+				<h2 class="tron-heading mb-3 text-lg font-semibold">Before you record</h2>
+				<input type="hidden" name="assay" value="SONIC" />
+				<ol class="list-decimal space-y-1 pl-5 text-sm">
+					<li>Same phone and app every time; Voice Memos at <b>Compressed</b> quality, noise reduction off.</li>
+					<li>Phone on the marked spot, a quiet room, nobody talking near the unit.</li>
+					<li><b>Start recording before</b> scanning the SONIC- barcode.</li>
+					<li>Hands off during the run; stop recording after the stage has settled.</li>
+				</ol>
 			</div>
 		</div>
 
@@ -330,9 +336,12 @@
 				{#if !data.directUpload}On iPhone, Voice Memos at Compressed quality is about 0.5 MB per minute; Lossless is roughly ten times that and will not fit.{/if}
 			</p>
 			<label for="sonic-notes" class="tron-label mt-4">Notes (optional)</label>
-			<input id="sonic-notes" name="notes" type="text" class="tron-input w-full" style="min-height: 44px;" placeholder="Phone model and position, ambient noise, which dummy cartridge…" />
+			<input id="sonic-notes" name="notes" type="text" class="tron-input w-full" style="min-height: 44px;" placeholder="Anything unusual you heard (e.g. squeal around 2:30), phone and position, ambient noise…" />
 		</div>
 
+		{#if selectedUdi}
+			<p class="text-center text-sm">Uploading for <b class="font-mono text-[var(--color-tron-cyan)]">{selectedUdi}</b> — check this is the unit you recorded.</p>
+		{/if}
 		<button
 			type="submit"
 			disabled={!selectedSpuId || !hasFile || uploading}
@@ -350,12 +359,12 @@
 	<div class="tron-card p-4">
 		<div class="mb-3 flex flex-wrap items-center gap-3">
 			<h2 class="tron-heading text-sm font-semibold uppercase tracking-wide">Recordings ({shown.length})</h2>
-			<select bind:value={assayFilter} aria-label="Filter recordings by assay" class="tron-select text-sm" style="min-height: 44px;">
-				<option value="ALL">All assays</option>
-				{#each data.assays as a (a.key)}<option value={a.key}>{a.key}</option>{/each}
-				<option value="UNKNOWN">Assay not set</option>
-			</select>
 			<div class="ml-auto flex flex-wrap gap-2">
+				{#if missingCopies}
+					<button type="button" onclick={() => simpleAction('archiveMissing', {}, 'Copied the missing recordings to MongoDB.')} class="rounded border border-[var(--color-tron-orange)] px-3 py-2 text-sm text-[var(--color-tron-orange)] hover:bg-[var(--color-tron-orange)]/10" style="min-height: 44px;">
+						Copy missing to MongoDB ({missingCopies})
+					</button>
+				{/if}
 				{#if pending.length}
 					<button type="button" onclick={analyzeAllPending} disabled={Object.keys(busy).length > 0} class="rounded border border-[var(--color-tron-orange)] px-3 py-2 text-sm text-[var(--color-tron-orange)] hover:bg-[var(--color-tron-orange)]/10 disabled:opacity-40" style="min-height: 44px;">
 						Analyze all pending ({pending.length})
@@ -367,8 +376,8 @@
 			</div>
 		</div>
 		<p class="tron-text-muted mb-3 text-xs">
-			★ = reference (a known-good unit). Each assay needs {data.minReferences}+ references before new recordings get a verdict.
-			Verdicts are advisory and don't affect release.
+			★ = reference (a known-good unit; only verified recordings can be references). {data.minReferences}+ references are needed
+			before recordings get a verdict and a reference comparison. Everything here is advisory and doesn't affect release.
 		</p>
 		{#if shown.length === 0}
 			<p class="text-sm text-[var(--color-tron-text-secondary)]">None yet.</p>
@@ -381,12 +390,12 @@
 						</label>
 						<button
 							type="button"
-							title={r.reference ? 'Reference — click to remove' : 'Use as reference (known-good unit)'}
+							title={r.reference ? 'Reference — click to remove' : r.review?.status === 'verified' ? 'Use as reference (known-good unit)' : 'Trim and verify the recording first'}
 							aria-label={r.reference ? `Remove ${r.spuUdi ?? 'recording'} from references` : `Use ${r.spuUdi ?? 'recording'} as a reference`}
 							aria-pressed={r.reference}
 							style="min-height: 44px; min-width: 44px;"
 							class="text-lg disabled:opacity-40 {r.reference ? 'text-[var(--color-tron-orange)]' : 'text-[var(--color-tron-text-secondary)]'}"
-							disabled={r.analysis.state !== 'done' || !r.assay}
+							disabled={r.analysis.state !== 'done' || !r.assay || r.review?.status !== 'verified'}
 							onclick={() => simpleAction('setReference', { sessionId: r.id, on: r.reference ? '0' : '1' }, r.reference ? `${r.spuUdi} is no longer a reference.` : `${r.spuUdi} is now a ${r.assay} reference.`)}
 						>{r.reference ? '★' : '☆'}</button>
 						{#if r.spuId}
@@ -394,16 +403,11 @@
 						{:else}
 							<span class="font-mono font-bold">{r.spuUdi ?? '—'}</span>
 						{/if}
-						<select
-							class="tron-select text-xs"
-							style="min-height: 44px;"
-							aria-label={`Assay of ${r.spuUdi ?? 'recording'}`}
-							value={r.assay ?? ''}
-							onchange={(e) => changeAssay(r, e.currentTarget as HTMLSelectElement)}
-						>
-							{#if !r.assay}<option value="" disabled>assay?</option>{/if}
-							{#each data.assays as a (a.key)}<option value={a.key}>{a.key}</option>{/each}
-						</select>
+						{#if r.assay}
+							<span class="rounded bg-[var(--color-tron-cyan)]/10 px-2 py-0.5 text-xs text-[var(--color-tron-cyan)]">{r.assay}</span>
+						{:else}
+							<button type="button" class="rounded border border-[var(--color-tron-cyan)] px-2 py-1 text-xs text-[var(--color-tron-cyan)]" style="min-height: 44px;" onclick={() => simpleAction('setAssay', { sessionId: r.id, assay: 'SONIC' }, `${r.spuUdi}: set as a SONIC recording.`)}>Set as SONIC</button>
+						{/if}
 						{#if busy[r.id]}
 							<span class="rounded bg-[var(--color-tron-orange)]/15 px-2 py-0.5 text-xs text-[var(--color-tron-orange)]">analyzing…</span>
 						{:else if r.analysis.state === 'done'}
@@ -418,6 +422,24 @@
 								{r.verdict.passed === r.verdict.total ? 'PASS' : 'CHECK'} {r.verdict.passed}/{r.verdict.total}
 							</span>
 						{/if}
+						{#if r.mongoCopy?.ok}
+							<span class="rounded bg-[var(--color-tron-green)]/15 px-2 py-0.5 text-xs text-[var(--color-tron-green)]" title="Kept in R2 and copied to MongoDB">R2 ✓ · MongoDB ✓</span>
+						{:else}
+							<span class="rounded bg-[var(--color-tron-orange)]/15 px-2 py-0.5 text-xs text-[var(--color-tron-orange)]" title={r.mongoCopy && !r.mongoCopy.ok ? r.mongoCopy.error : 'Not copied yet'}>MongoDB copy missing</span>
+							<button type="button" class="text-xs text-[var(--color-tron-orange)] underline" style="min-height: 44px;" onclick={() => simpleAction('archive', { sessionId: r.id }, `${r.spuUdi}: copied to MongoDB.`)}>Retry copy</button>
+						{/if}
+						{#if r.review?.status === 'verified'}
+							<span class="rounded bg-[var(--color-tron-green)]/15 px-2 py-0.5 text-xs text-[var(--color-tron-green)]">✓ verified</span>
+						{:else if r.review?.status === 'unusable'}
+							<span class="rounded bg-[var(--color-tron-red)]/15 px-2 py-0.5 text-xs text-[var(--color-tron-red)]" title={r.review.reason ?? ''}>unusable — re-record</span>
+						{:else if r.analysis.state === 'done'}
+							<span class="rounded bg-[var(--color-tron-orange)]/15 px-2 py-0.5 text-xs text-[var(--color-tron-orange)]">needs trim &amp; verify</span>
+						{/if}
+						{#if r.anomalies}
+							<span class="rounded px-2 py-0.5 text-xs font-semibold {r.anomalies.total === 0 ? 'bg-[var(--color-tron-green)]/15 text-[var(--color-tron-green)]' : r.anomalies.high ? 'bg-[var(--color-tron-red)]/15 text-[var(--color-tron-red)]' : 'bg-[var(--color-tron-orange)]/15 text-[var(--color-tron-orange)]'}">
+								{r.anomalies.total === 0 ? 'no anomalies' : `${r.anomalies.total} anomal${r.anomalies.total === 1 ? 'y' : 'ies'}${r.anomalies.high ? ` (${r.anomalies.high} high)` : ''}`}
+							</span>
+						{/if}
 						<span class="tron-text-primary">{r.fileName ?? '—'}</span>
 						<span class="tron-text-muted text-xs">{mb(r.size)} · {when(r.at)} · {r.recordedBy ?? '—'}</span>
 						{#if r.notes}<span class="tron-text-muted text-xs">{r.notes}</span>{/if}
@@ -426,7 +448,7 @@
 						{/if}
 						<span class="ml-auto flex items-center gap-3 text-xs">
 							{#if r.analysis.state === 'done'}
-								<a href="/validation/sonic/{r.id}" class="inline-flex items-center text-[var(--color-tron-cyan)] hover:underline" style="min-height: 44px;">Details</a>
+								<a href="/validation/sonic/{r.id}" class="inline-flex items-center font-semibold text-[var(--color-tron-cyan)] hover:underline" style="min-height: 44px;">{r.review ? 'Review' : 'Trim & verify'}</a>
 							{/if}
 							<button type="button" class="text-[var(--color-tron-cyan)] hover:underline disabled:opacity-40" style="min-height: 44px;" disabled={!!busy[r.id]} onclick={() => analyze(r.id, r.spuUdi)}>
 								{r.analysis.state === 'pending' ? 'Analyze' : 'Re-analyze'}

@@ -10,6 +10,7 @@ import {
 } from '$lib/server/sonic/analyze';
 import { MIN_REFERENCES } from '$lib/server/sonic/constants';
 import { ensureMongoCopy } from '$lib/server/sonic/archive';
+import { markUnusable, runWindowAnalysis, verifyWindow } from '$lib/server/sonic/review';
 import { env } from '$env/dynamic/private';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -187,8 +188,10 @@ export const load: PageServerLoad = async ({ locals }) => {
 		.lean()) as any[];
 
 	// The fingerprint (~100–250 KB each) stays in the database; the list only needs its status.
-	const sessions = (await ValidationSession.find({ type: 'sonic' })
-		.select('-results.processedData.fingerprint')
+	// This page is the SONIC test only (2026-10-05): SONIC recordings, plus older
+	// ones whose assay was never set (they can be set to SONIC from the list).
+	const sessions = (await ValidationSession.find({ type: 'sonic', 'results.0.rawData.assay': { $in: ['SONIC', null] } })
+		.select('-results.processedData.fingerprint -results.processedData.windowAnalysis.steps -results.processedData.windowAnalysis.alignment.warp')
 		.sort({ createdAt: -1 })
 		.limit(100)
 		.lean()) as any[];
@@ -225,8 +228,17 @@ export const load: PageServerLoad = async ({ locals }) => {
 						? { state: 'error' as const, error: String(a.error) }
 						: { state: 'done' as const, durationS: (a.durationS ?? null) as number | null }
 					: { state: 'pending' as const },
-				reference: !!p?.reference?.on,
-				verdict: v ? { passed: v.passedSections as number, total: v.totalSections as number, at: v.at ? new Date(v.at).toISOString() : null } : null
+			reference: !!p?.reference?.on,
+				verdict: v ? { passed: v.passedSections as number, total: v.totalSections as number, at: v.at ? new Date(v.at).toISOString() : null } : null,
+				mongoCopy: r.mongoCopy ? { ok: true as const } : r.mongoCopyError ? { ok: false as const, error: String(r.mongoCopyError.error ?? 'failed') } : null,
+				review: r.review ? { status: r.review.status as 'verified' | 'unusable', reason: (r.review.reason ?? null) as string | null } : null,
+				anomalies: p?.windowAnalysis?.summary
+					? {
+							total: p.windowAnalysis.summary.total as number,
+							high: (p.windowAnalysis.summary.bySeverity?.high ?? 0) as number,
+							medium: (p.windowAnalysis.summary.bySeverity?.medium ?? 0) as number
+						}
+					: null
 			};
 		})
 	);
@@ -301,7 +313,7 @@ export const actions: Actions = {
 		}
 
 		const saved = await persistRecording(
-			{ spuId, spuUdi: spu.udi, key: stored.key, fileName: file.name, size: stored.size, mimeType: file.type, notes, via: 'proxy', assay: assayOf(form.get('assay')) },
+			{ spuId, spuUdi: spu.udi, key: stored.key, fileName: file.name, size: stored.size, mimeType: file.type, notes, via: 'proxy', assay: 'SONIC' },
 			who,
 			now
 		);
@@ -385,7 +397,7 @@ export const actions: Actions = {
 		}
 
 		const saved = await persistRecording(
-			{ spuId, spuUdi: spu.udi, key, fileName, size: head.size, mimeType: mimeType || head.contentType, notes, via: 'direct', assay: assayOf(form.get('assay')) },
+			{ spuId, spuUdi: spu.udi, key, fileName, size: head.size, mimeType: mimeType || head.contentType, notes, via: 'direct', assay: 'SONIC' },
 			who,
 			new Date()
 		);
@@ -459,6 +471,53 @@ export const actions: Actions = {
 		}
 	},
 
+	/** Step 5: save the operator's trimmed window, then run the step-6 analysis on it. */
+	verify: async ({ request, locals }) => {
+		requirePermission(locals.user, 'spu:write');
+		await connectDB();
+		const form = await request.formData();
+		const sessionId = form.get('sessionId')?.toString() ?? '';
+		const startS = Number(form.get('startS')?.toString() ?? '');
+		const endS = Number(form.get('endS')?.toString() ?? '');
+		if (!sessionId) return fail(400, { error: 'Missing recording' });
+		try {
+			const wa = await verifyWindow(sessionId, startS, endS, whoOf(locals));
+			return { verified: true, anomalies: wa.summary.total };
+		} catch (err) {
+			return fail(400, { error: err instanceof Error ? err.message : String(err) });
+		}
+	},
+
+	/** Step 5 alternative: the recording can't be used — re-record. */
+	markUnusable: async ({ request, locals }) => {
+		requirePermission(locals.user, 'spu:write');
+		await connectDB();
+		const form = await request.formData();
+		const sessionId = form.get('sessionId')?.toString() ?? '';
+		const reason = form.get('reason')?.toString() ?? '';
+		if (!sessionId) return fail(400, { error: 'Missing recording' });
+		try {
+			await markUnusable(sessionId, reason, whoOf(locals));
+			return { unusable: true };
+		} catch (err) {
+			return fail(400, { error: err instanceof Error ? err.message : String(err) });
+		}
+	},
+
+	/** Step 6 again on the stored window (e.g. after more references were added). */
+	runWindow: async ({ request, locals }) => {
+		requirePermission(locals.user, 'spu:write');
+		await connectDB();
+		const sessionId = (await request.formData()).get('sessionId')?.toString() ?? '';
+		if (!sessionId) return fail(400, { error: 'Missing recording' });
+		try {
+			const wa = await runWindowAnalysis(sessionId, whoOf(locals));
+			return { reanalyzedWindow: true, anomalies: wa.summary.total };
+		} catch (err) {
+			return fail(400, { error: err instanceof Error ? err.message : String(err) });
+		}
+	},
+
 	/** Make (or retry) the MongoDB copy of one recording. */
 	archive: async ({ request, locals }) => {
 		requirePermission(locals.user, 'spu:write');
@@ -497,7 +556,7 @@ export const actions: Actions = {
 		const sessionId = form.get('sessionId')?.toString() ?? '';
 		if (!sessionId) return fail(400, { error: 'Missing recording' });
 		const assay = strictAssayOf(form.get('assay'));
-		if (!assay) return fail(400, { error: `Assay must be one of ${SONIC_ASSAYS.join(', ')}` });
+		if (assay !== 'SONIC') return fail(400, { error: 'This page is for the SONIC test only' });
 		try {
 			await setAssay(sessionId, assay, whoOf(locals));
 			return { assaySet: true };
