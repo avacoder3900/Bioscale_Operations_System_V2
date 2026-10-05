@@ -22,7 +22,7 @@ import type { Spectrogram } from './spectrogram';
 import { SPECTRO_EDGES } from './spectrogram';
 import { expectedLoudness, type Timeline } from './timeline';
 
-export const WINDOW_VERSION = 1;
+export const WINDOW_VERSION = 2; // 2 = steps placed from landmarks (estimated or adjusted)
 
 // Alignment (dynamic time warping)
 const ALIGN_CELL_S = 0.25; // plan and recording are compared in 0.25 s cells
@@ -53,7 +53,7 @@ const SMOOTH_FRAMES = 3; // 150 ms power average before comparing
 const BOUNDARY_GUARD_S = 0.35; // clicks/tones this close to a motion start/stop are the motion itself
 
 export interface Alignment {
-	method: 'dtw';
+	method: 'dtw' | 'landmarks';
 	gridS: number;
 	/** Recording time (s) of plan time k·gridS, k = 0..; monotonic. */
 	warp: number[];
@@ -89,6 +89,18 @@ export interface Anomaly {
 	z: number;
 	severity: Severity;
 	note: string;
+	/** Set when a person ignored it (this recording) or an ignore rule matches it. */
+	ignored?: AnomalyIgnore | null;
+}
+
+export interface AnomalyIgnore {
+	source: 'manual' | 'rule';
+	/** The manual entry's id, or the rule's id. */
+	id: string;
+	name: string | null;
+	reason: string;
+	by: string | null;
+	at: string | null;
 }
 
 export interface WindowAnalysis {
@@ -98,7 +110,8 @@ export interface WindowAnalysis {
 	steps: { index: number; kind: string; label: string; t0: number; t1: number }[];
 	anomalies: Anomaly[];
 	summary: {
-		total: number;
+		total: number; // anomalies still in play (not ignored)
+		ignored?: number;
 		bySeverity: Record<Severity, number>;
 		byKind: Record<AnomalyKind, number>;
 		stepsWithAnomalies: number[];
@@ -109,13 +122,13 @@ export interface WindowAnalysis {
 
 // ---------------------------------------------------------------- helpers
 
-function frameAt(s: Spectrogram, t: number): number {
+export function frameAt(s: Spectrogram, t: number): number {
 	return Math.round((t - s.t0) / s.frameS);
 }
 function timeOf(s: Spectrogram, f: number): number {
 	return s.t0 + f * s.frameS;
 }
-function levelDb(s: Spectrogram, f: number): number {
+export function levelDb(s: Spectrogram, f: number): number {
 	let p = 0;
 	for (let b = 0; b < s.bands; b++) p += 10 ** (s.db[f * s.bands + b] / 10);
 	return 10 * Math.log10(p + 1e-20);
@@ -129,7 +142,7 @@ function median(a: number[]): number {
 function mad(a: number[], m: number): number {
 	return median(a.map((v) => Math.abs(v - m)));
 }
-function pearson(a: number[], b: number[]): number {
+export function pearson(a: number[], b: number[]): number {
 	const n = a.length;
 	if (n < 3) return 0;
 	let ma = 0;
@@ -305,6 +318,33 @@ export function alignTimeline(s: Spectrogram, tl: Timeline, startS: number, endS
 	};
 }
 
+/**
+ * Fit quality of an alignment: correlation between the plan's expected loudness
+ * and the recording's loudness (scaled 0..1 inside the window) along it.
+ */
+export function fitCorrelation(s: Spectrogram, tl: Timeline, al: Alignment, startS: number, endS: number): number {
+	const cell = ALIGN_CELL_S;
+	const lev: number[] = [];
+	for (let t = startS; t < endS; t += cell) {
+		const f = frameAt(s, t);
+		if (f >= 0 && f < s.frames) lev.push(levelDb(s, f));
+	}
+	const sorted = [...lev].sort((x, y) => x - y);
+	const lo = sorted[Math.floor(sorted.length * 0.1)] ?? 0;
+	const hi = sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.95))] ?? 1;
+	const exp: number[] = [];
+	const got: number[] = [];
+	for (let n = 0; n < tl.totalS; n += cell) {
+		const t = mapPlanTime(al, n);
+		if (t < startS || t >= endS) continue;
+		const f = frameAt(s, t);
+		if (f < 0 || f >= s.frames) continue;
+		exp.push(expectedLoudness(tl, n));
+		got.push(hi > lo ? Math.min(1, Math.max(0, (levelDb(s, f) - lo) / (hi - lo))) : 0);
+	}
+	return Math.round(pearson(exp, got) * 100) / 100;
+}
+
 // ---------------------------------------------------------------- anomaly detection
 
 interface Cell {
@@ -379,6 +419,11 @@ function repetitionAnomalies(s: Spectrogram, tl: Timeline, al: Alignment) {
 	const out: Omit<Anomaly, 'id' | 'step' | 'stepLabel'>[] = [];
 	for (const st of tl.steps) {
 		if (st.parts.length < MIN_PARTS) continue;
+		// Oscillation slices only. A REPEAT's 300 µm moves are mostly inaudible (SPU 237,
+		// step 7: 2 of 12 made a detectable sound), so its repetitions can't be timed from
+		// the recording and "this repetition vs its siblings" compares a faint click with
+		// silence. Repeat steps are left to the click/tone and reference checks.
+		if (st.kind === 'repeat') continue;
 		const partFrames = st.parts.map((p) => [frameAt(s, mapPlanTime(al, p.t0)), frameAt(s, mapPlanTime(al, p.t1))] as const);
 		const K = Math.min(...partFrames.map(([a, z]) => z - a));
 		if (!(K >= 2)) continue;
@@ -524,8 +569,15 @@ function referenceAnomalies(s: Spectrogram, tl: Timeline, al: Alignment, refs: R
 }
 
 /** Run alignment + every check on the verified window and build the report. */
-export function analyzeWindow(s: Spectrogram, tl: Timeline, startS: number, endS: number, refs: ReferenceTrack[] = []): WindowAnalysis {
-	const al = alignTimeline(s, tl, startS, endS);
+export function analyzeWindow(
+	s: Spectrogram,
+	tl: Timeline,
+	startS: number,
+	endS: number,
+	refs: ReferenceTrack[] = [],
+	alignment?: Alignment
+): WindowAnalysis {
+	const al = alignment ?? alignTimeline(s, tl, startS, endS);
 	const steps = tl.steps.map((st) => ({
 		index: st.index,
 		kind: st.kind,
@@ -567,26 +619,33 @@ export function analyzeWindow(s: Spectrogram, tl: Timeline, startS: number, endS
 			const st = steps.find((x) => a.t >= x.t0 && a.t < x.t1) ?? null;
 			return { ...a, id: `A${i + 1}`, step: st?.index ?? null, stepLabel: st?.label ?? null };
 		});
-	const bySeverity: Record<Severity, number> = { low: 0, medium: 0, high: 0 };
-	const byKind: Record<AnomalyKind, number> = { repetition: 0, click: 0, tone: 0, reference: 0 };
-	for (const a of anomalies) {
-		bySeverity[a.severity]++;
-		byKind[a.kind]++;
-	}
 	return {
 		version: WINDOW_VERSION,
 		window: { startS: r2(startS), endS: r2(endS) },
 		alignment: al,
 		steps,
 		anomalies,
-		summary: {
-			total: anomalies.length,
-			bySeverity,
-			byKind,
-			stepsWithAnomalies: [...new Set(anomalies.map((a) => a.step).filter((x): x is number => x != null))].sort((a, b) => a - b),
-			referenceCount: refs.length,
-			truncated
-		}
+		summary: summarizeAnomalies(anomalies, refs.length, truncated)
+	};
+}
+
+/** Counts over the anomalies still in play — ignored ones are only counted as `ignored`. */
+export function summarizeAnomalies(anomalies: Anomaly[], referenceCount: number, truncated: boolean): WindowAnalysis['summary'] {
+	const bySeverity: Record<Severity, number> = { low: 0, medium: 0, high: 0 };
+	const byKind: Record<AnomalyKind, number> = { repetition: 0, click: 0, tone: 0, reference: 0 };
+	const active = anomalies.filter((a) => !a.ignored);
+	for (const a of active) {
+		bySeverity[a.severity]++;
+		byKind[a.kind]++;
+	}
+	return {
+		total: active.length,
+		ignored: anomalies.length - active.length,
+		bySeverity,
+		byKind,
+		stepsWithAnomalies: [...new Set(active.map((a) => a.step).filter((x): x is number => x != null))].sort((a, b) => a - b),
+		referenceCount,
+		truncated
 	};
 }
 

@@ -17,7 +17,10 @@ import { analyzeSession, SPECTRO_BUCKET, setReference, writeProcessed, type Who 
 import { readGridFile } from './archive';
 import { decodeSpectrogram, type Spectrogram } from './spectrogram';
 import { buildTimeline, SONIC_ASSAY_ID, type Timeline } from './timeline';
-import { analyzeWindow, type Alignment, type ReferenceTrack, type WindowAnalysis } from './window';
+import { analyzeWindow, summarizeAnomalies, type Alignment, type ReferenceTrack, type WindowAnalysis } from './window';
+import { applyIgnores, loadIgnoreRules } from './ignore';
+import { estimateLandmarks, expectedDurations, measuredDurations, mergeLandmarks, placeFromLandmarks, placementAlignment } from './landmarks';
+import type { Landmark } from '$lib/sonic-placement';
 
 /** Shortest window that can hold a meaningful part of the 5-min run. */
 export const MIN_WINDOW_S = 30;
@@ -140,8 +143,16 @@ async function referenceTracks(excludeId: string): Promise<ReferenceTrack[]> {
 	return out;
 }
 
-/** Step 6: alignment to the 48 steps, anomaly checks and the report, on the verified window. */
-export async function runWindowAnalysis(sessionId: string, who: Who): Promise<WindowAnalysis & { at: Date; by: string; referenceSessionIds: string[] }> {
+/**
+ * Step 6 on the verified window:
+ *   1. landmarks — the analysis' estimates (sequence-matched to the loud stretches,
+ *      using the measured timeline from the other verified recordings), with any
+ *      placement a person has saved taking precedence;
+ *   2. every step placed from the landmarks (measured durations between them);
+ *   3. the anomaly checks and the report, on that placement.
+ * `journal: false` skips the unit-journal line (bulk re-analysis).
+ */
+export async function runWindowAnalysis(sessionId: string, who: Who, opts: { journal?: boolean } = {}) {
 	let { s, res } = await loadSonic(sessionId);
 	const review = res.rawData?.review;
 	if (review?.status !== 'verified') throw new Error('Trim and verify the recording first');
@@ -154,29 +165,95 @@ export async function runWindowAnalysis(sessionId: string, who: Who): Promise<Wi
 	const spec = await loadSpectrogram(res.processedData);
 	if (!spec) throw new Error('The recording has no spectrogram — re-analyze it');
 	const tl = await sonicTimeline();
+	const durationS: number = res.processedData?.analysis?.durationS ?? spec.t0 + spec.frames * spec.frameS;
+
+	const measured = await measuredDurations(tl, sessionId);
+	const durations = expectedDurations(tl, measured?.durations ?? null);
+	const { landmarks: estimates, segments } = estimateLandmarks(spec, tl, review.startS, review.endS, measured?.durations ?? null);
+	const saved: Landmark[] | null = res.rawData?.stepPlacement?.landmarks ?? null;
+	const landmarks = mergeLandmarks(estimates, saved);
+	const placed = placeFromLandmarks(tl, landmarks, durations, durationS);
+	const alignment = placementAlignment(spec, tl, placed, review.startS, review.endS);
+
 	const refs = await referenceTracks(sessionId);
-	const wa = analyzeWindow(spec, tl, review.startS, review.endS, refs);
-	const stored = { ...wa, at: new Date(), by: who.username, referenceSessionIds: refs.map((r) => r.id) };
+	const wa = analyzeWindow(spec, tl, review.startS, review.endS, refs, alignment);
+	// Anomalies a person ignored (this recording, or by a rule) stay ignored after re-analysis.
+	wa.anomalies = applyIgnores(wa.anomalies, res.rawData?.anomalyIgnores ?? [], await loadIgnoreRules());
+	wa.summary = summarizeAnomalies(wa.anomalies, wa.summary.referenceCount, wa.summary.truncated);
+	const stored = {
+		...wa,
+		steps: placed,
+		landmarks: { estimates, used: landmarks, segments },
+		durations: durations.map((d) => Math.round(d * 100) / 100),
+		measured: measured ? { from: measured.from, confirmedOnly: measured.confirmedOnly } : null,
+		placement: res.rawData?.stepPlacement?.confirmed
+			? { confirmed: true, by: res.rawData.stepPlacement.by ?? null, at: res.rawData.stepPlacement.at ?? null }
+			: { confirmed: false },
+		at: new Date(),
+		by: who.username,
+		referenceSessionIds: refs.map((r) => r.id)
+	};
 	await writeProcessed(sessionId, res._id, { windowAnalysis: stored });
 	await audit('sonic_window_analysis', sessionId, who, {
 		spuUdi: s.spuUdi,
 		window: wa.window,
-		alignment: wa.alignment,
+		alignment: { method: alignment.method, corr: alignment.corr, quality: alignment.quality },
+		landmarksFound: estimates.filter((l) => l.found).length,
+		landmarksAdjusted: landmarks.filter((l) => l.source === 'user').length,
+		measuredFrom: measured?.from ?? 0,
 		anomalies: wa.summary.total,
 		bySeverity: wa.summary.bySeverity,
 		references: refs.length
 	});
-	if (s.spuId) {
+	if (s.spuId && opts.journal !== false) {
 		const { total, bySeverity, stepsWithAnomalies } = wa.summary;
 		const line = total
 			? `Sonic analysis (advisory): ${total} anomal${total === 1 ? 'y' : 'ies'} — ${bySeverity.high} high, ${bySeverity.medium} medium, ${bySeverity.low} low — in step${stepsWithAnomalies.length === 1 ? '' : 's'} ${stepsWithAnomalies.join(', ')}.`
 			: 'Sonic analysis (advisory): no anomalies found in the verified window.';
+		const ignoredNote = wa.summary.ignored ? ` ${wa.summary.ignored} more ignored as known harmless.` : '';
 		await appendSpuJournal(
 			s.spuId,
-			`${line} Window ${wa.window.startS}–${wa.window.endS} s, fit ${wa.alignment.quality} (r = ${wa.alignment.corr}), ${refs.length} reference${refs.length === 1 ? '' : 's'}.`,
+			`${line}${ignoredNote} Window ${wa.window.startS}–${wa.window.endS} s; steps placed from ${landmarks.length} landmarks (${stored.placement.confirmed ? 'confirmed' : 'estimated'}), fit r = ${alignment.corr}; ${refs.length} reference${refs.length === 1 ? '' : 's'}.`,
 			who,
 			{ source: 'validation', refKind: 'validation_session', refId: sessionId, refLabel: 'Sonic analysis' }
 		);
 	}
 	return stored;
+}
+
+/**
+ * A person's step placement: the landmark times they reviewed (adjusted or kept),
+ * saved as confirmed, then the window re-analyzed with it. Earlier placements are
+ * kept in history; confirmed placements feed the measured timeline.
+ */
+export async function saveStepPlacement(sessionId: string, landmarks: Landmark[], who: Who) {
+	const { s, res } = await loadSonic(sessionId);
+	if (res.rawData?.review?.status !== 'verified') throw new Error('Trim and verify the recording first');
+	const tl = await sonicTimeline();
+	const valid = new Set(tl.steps.filter((x) => x.landmark).map((x) => x.index));
+	const clean = landmarks
+		.filter((l) => valid.has(Number(l.step)) && Number.isFinite(+l.t0) && Number.isFinite(+l.t1) && +l.t1 > +l.t0)
+		.map((l) => ({ step: Number(l.step), t0: Math.round(+l.t0 * 100) / 100, t1: Math.round(+l.t1 * 100) / 100, source: 'user' as const }))
+		.sort((a, b) => a.step - b.step);
+	if (!clean.length) throw new Error('No landmark times to save');
+	for (let k = 1; k < clean.length; k++) {
+		if (clean[k].t0 < clean[k - 1].t1 - 0.05) throw new Error(`Step ${clean[k].step} starts before step ${clean[k - 1].step} ends — keep the landmarks in order`);
+	}
+	const before = res.rawData?.stepPlacement ?? null;
+	const history = before ? [...(Array.isArray(before.history) ? before.history : []), { landmarks: before.landmarks, by: before.by, at: before.at }] : [];
+	const placement = { landmarks: clean, confirmed: true, by: who.username, at: new Date(), history };
+	await ValidationSession.updateOne({ _id: sessionId, 'results._id': res._id }, { $set: { 'results.$.rawData.stepPlacement': placement } });
+	await audit('sonic_step_placement_saved', sessionId, who, { spuUdi: s.spuUdi, landmarks: clean.length }, before ? { landmarks: before.landmarks?.length ?? 0, by: before.by } : null);
+	return runWindowAnalysis(sessionId, who);
+}
+
+/** Drop the saved placement: back to the analysis' estimates. */
+export async function resetStepPlacement(sessionId: string, who: Who) {
+	const { s, res } = await loadSonic(sessionId);
+	const before = res.rawData?.stepPlacement ?? null;
+	if (before) {
+		await ValidationSession.updateOne({ _id: sessionId, 'results._id': res._id }, { $unset: { 'results.$.rawData.stepPlacement': '' } });
+		await audit('sonic_step_placement_reset', sessionId, who, { spuUdi: s.spuUdi }, { landmarks: before.landmarks, by: before.by, at: before.at });
+	}
+	return runWindowAnalysis(sessionId, who);
 }

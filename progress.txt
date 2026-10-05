@@ -18532,3 +18532,43 @@ shows under "Backed — in process" (same meaning: pulled to be pressed). Barcod
 before they can be marked Done.
 `npm run check`: 16 errors / 434 warnings — same as master, none in the changed files. Not viewed in
 a browser from here.
+
+================================================================================
+2026-10-05 — feat/sonic-step-landmarks — SONIC step timing from landmarks, same-moment listening on other SPUs, ignoring anomalies
+================================================================================
+Built on feat/sonic-step-landmarks, tested by the user on the local dev server, pushed to master.
+1. Step timing from landmarks (src/lib/sonic-placement.ts, sonic/landmarks.ts + test, timeline.ts,
+   review.ts, window.ts v2): the loud steps (oscillations, moves >= 1000 um; 16 in SONIC) are
+   estimated from the sound by sequence-matching them to the loud stretches, with step durations
+   measured from the other verified recordings; the steps between are placed by those durations;
+   steps past the end of a cut-short recording are flagged, not squeezed. "Adjust step timing" on the
+   recording page shows the estimates as boxes to drag/type; Save & confirm stores
+   rawData.stepPlacement and re-analyzes (audited: sonic_step_placement_saved / _reset).
+   "Re-run analysis on all verified" on the list page migrates older recordings.
+2. Same moment on other SPUs (SonicCompare.svelte, [sessionId]/+page.server.ts `compare`): the picked
+   moment becomes "step N, X % through", mapped onto each other verified SONIC recording via its own
+   placed steps; pick recordings, nudge/type each clip's start, play one or all in turn.
+3. Ignoring anomalies (sonic/ignore.ts + test, models/sonic-ignore-rule.ts -> sonic_ignore_rules,
+   actions ignoreAnomaly / restoreAnomaly / addIgnoreRule / removeIgnoreRule): a reason is required;
+   "just this one" (rawData.anomalyIgnores, matched by time+frequency so it survives re-analysis) or
+   a rule for every SONIC recording (kind / step range / frequency range; presets for the
+   end-of-test beep and compression artifacts). Ignored anomalies stay listed (greyed) but leave the
+   counts; the list shows "clean · N ignored" for recordings whose remaining anomalies are all
+   ignored. Every change audited; rules are never deleted (removedAt).
+Known issue (paused at the user's request): the repetition check slides each oscillation slice
+up to +/-0.3 s onto its siblings, and on a steady oscillation that slide can move an odd sound out
+of the compared window. The half-done fix was backed out; the unit test for it is it.skip with a
+note (workflow.test.ts). Sonic unit tests: 35 passed, 1 skipped.
+`npm run check`: 13 errors / 434 warnings — same as before, none in the changed files.
+
+================================================================================
+2026-10-05 — feat/sonic-step-landmarks — kanban: Reopen a task marked Done by mistake
+================================================================================
+A task set to Done could not be moved back from the UI (the task page had no back button for Done;
+the board has no drag-and-drop), though the transition service allowed it.
+- kanban/task/[taskId]/+page.svelte: "Reopen" button on Done tasks -> ?/move to In Progress (wip),
+  reason "Reopened — not done"; goes through transitionTask, so it is a recorded transition
+  (transitions + activityLog) and the WIP limit still applies (its error shows on the page).
+- server/kanban/transition.ts: leaving Done clears completedDate, so a reopened task drops out of
+  the cycle-time / throughput metrics (flow-metrics.ts reads completedDate) until it is done again.
+`npm run check`: 13 errors / 434 warnings — unchanged, none in the changed files.

@@ -138,6 +138,16 @@
 				{working}
 				onVerify={(a, b) => act('verify', { sessionId: S.id, startS: String(a), endS: String(b) }, 'Window verified and analyzed.')}
 				onUnusable={(why) => act('markUnusable', { sessionId: S.id, reason: why }, 'Marked unusable — re-record this unit.')}
+				placement={R.placement}
+				onSavePlacement={(lms) => act('saveSteps', { sessionId: S.id, landmarks: JSON.stringify(lms) }, 'Step timing saved and confirmed; anomalies re-analyzed.')}
+				onResetPlacement={() => act('resetSteps', { sessionId: S.id }, 'Back to the estimated step timing; anomalies re-analyzed.')}
+				compare={data.compare}
+				udi={S.spuUdi}
+				ignoreRules={data.ignoreRules}
+				onIgnore={(id, reason) => act('ignoreAnomaly', { sessionId: S.id, anomalyId: id, reason }, 'Anomaly ignored; counts updated.')}
+				onRestore={(id) => act('restoreAnomaly', { sessionId: S.id, ignoreId: id }, 'Anomaly restored.')}
+				onAddRule={(r) => act('addIgnoreRule', { name: r.name, reason: r.reason, kind: r.kind ?? '', stepFrom: r.stepFrom == null ? '' : String(r.stepFrom), stepTo: r.stepTo == null ? '' : String(r.stepTo), fMinHz: r.fMinHz == null ? '' : String(r.fMinHz), fMaxHz: r.fMaxHz == null ? '' : String(r.fMaxHz) }, `Rule "${r.name}" created and applied to every SONIC recording.`)}
+				onRemoveRule={(id) => act('removeIgnoreRule', { ruleId: id }, 'Rule removed; its anomalies are back on every recording.')}
 			/>
 			{/key}
 		{:else}

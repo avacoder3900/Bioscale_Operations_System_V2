@@ -10,7 +10,8 @@ import {
 } from '$lib/server/sonic/analyze';
 import { MIN_REFERENCES } from '$lib/server/sonic/constants';
 import { ensureMongoCopy } from '$lib/server/sonic/archive';
-import { markUnusable, runWindowAnalysis, verifyWindow } from '$lib/server/sonic/review';
+import { markUnusable, resetStepPlacement, runWindowAnalysis, saveStepPlacement, verifyWindow } from '$lib/server/sonic/review';
+import { addIgnoreRule, ignoreAnomaly, removeIgnoreRule, restoreAnomaly } from '$lib/server/sonic/ignore';
 import { env } from '$env/dynamic/private';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -235,6 +236,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 				anomalies: p?.windowAnalysis?.summary
 					? {
 							total: p.windowAnalysis.summary.total as number,
+							ignored: (p.windowAnalysis.summary.ignored ?? 0) as number,
 							high: (p.windowAnalysis.summary.bySeverity?.high ?? 0) as number,
 							medium: (p.windowAnalysis.summary.bySeverity?.medium ?? 0) as number
 						}
@@ -508,11 +510,112 @@ export const actions: Actions = {
 	runWindow: async ({ request, locals }) => {
 		requirePermission(locals.user, 'spu:write');
 		await connectDB();
+		const form = await request.formData();
+		const sessionId = form.get('sessionId')?.toString() ?? '';
+		if (!sessionId) return fail(400, { error: 'Missing recording' });
+		try {
+			// quiet=1: bulk re-analysis — no unit-journal line.
+			const wa = await runWindowAnalysis(sessionId, whoOf(locals), { journal: form.get('quiet')?.toString() !== '1' });
+			return { reanalyzedWindow: true, anomalies: wa.summary.total };
+		} catch (err) {
+			return fail(400, { error: err instanceof Error ? err.message : String(err) });
+		}
+	},
+
+	/** Step placement reviewed by a person: save the landmark times (confirmed) and re-analyze. */
+	saveSteps: async ({ request, locals }) => {
+		requirePermission(locals.user, 'spu:write');
+		await connectDB();
+		const form = await request.formData();
+		const sessionId = form.get('sessionId')?.toString() ?? '';
+		if (!sessionId) return fail(400, { error: 'Missing recording' });
+		let landmarks: any[];
+		try {
+			landmarks = JSON.parse(form.get('landmarks')?.toString() ?? '[]');
+			if (!Array.isArray(landmarks)) throw new Error('not a list');
+		} catch {
+			return fail(400, { error: 'Landmark times were not readable' });
+		}
+		try {
+			const wa = await saveStepPlacement(sessionId, landmarks, whoOf(locals));
+			return { stepsSaved: true, anomalies: wa.summary.total };
+		} catch (err) {
+			return fail(400, { error: err instanceof Error ? err.message : String(err) });
+		}
+	},
+
+	/** Back to the analysis' estimated step placement. */
+	resetSteps: async ({ request, locals }) => {
+		requirePermission(locals.user, 'spu:write');
+		await connectDB();
 		const sessionId = (await request.formData()).get('sessionId')?.toString() ?? '';
 		if (!sessionId) return fail(400, { error: 'Missing recording' });
 		try {
-			const wa = await runWindowAnalysis(sessionId, whoOf(locals));
-			return { reanalyzedWindow: true, anomalies: wa.summary.total };
+			const wa = await resetStepPlacement(sessionId, whoOf(locals));
+			return { stepsReset: true, anomalies: wa.summary.total };
+		} catch (err) {
+			return fail(400, { error: err instanceof Error ? err.message : String(err) });
+		}
+	},
+
+	/** Ignore one anomaly on one recording (a reason is required); it stays listed but leaves the counts. */
+	ignoreAnomaly: async ({ request, locals }) => {
+		requirePermission(locals.user, 'spu:write');
+		await connectDB();
+		const form = await request.formData();
+		const sessionId = form.get('sessionId')?.toString() ?? '';
+		const anomalyId = form.get('anomalyId')?.toString() ?? '';
+		if (!sessionId || !anomalyId) return fail(400, { error: 'Missing recording or anomaly' });
+		try {
+			const summary = await ignoreAnomaly(sessionId, anomalyId, form.get('reason')?.toString() ?? '', whoOf(locals));
+			return { ignored: true, anomalies: summary?.total ?? null };
+		} catch (err) {
+			return fail(400, { error: err instanceof Error ? err.message : String(err) });
+		}
+	},
+
+	/** Undo a person's ignore on one recording. */
+	restoreAnomaly: async ({ request, locals }) => {
+		requirePermission(locals.user, 'spu:write');
+		await connectDB();
+		const form = await request.formData();
+		const sessionId = form.get('sessionId')?.toString() ?? '';
+		const ignoreId = form.get('ignoreId')?.toString() ?? '';
+		if (!sessionId || !ignoreId) return fail(400, { error: 'Missing recording or entry' });
+		try {
+			const summary = await restoreAnomaly(sessionId, ignoreId, whoOf(locals));
+			return { restored: true, anomalies: summary?.total ?? null };
+		} catch (err) {
+			return fail(400, { error: err instanceof Error ? err.message : String(err) });
+		}
+	},
+
+	/** A rule that ignores anomalies like this on every SONIC recording (name + reason required). */
+	addIgnoreRule: async ({ request, locals }) => {
+		requirePermission(locals.user, 'spu:write');
+		await connectDB();
+		const form = await request.formData();
+		const g = (k: string) => form.get(k)?.toString() ?? '';
+		const n = (k: string) => (g(k).trim() === '' ? null : Number(g(k)));
+		try {
+			const r = await addIgnoreRule(
+				{ name: g('name'), reason: g('reason'), kind: g('kind') || null, stepFrom: n('stepFrom'), stepTo: n('stepTo'), fMinHz: n('fMinHz'), fMaxHz: n('fMaxHz') },
+				whoOf(locals)
+			);
+			return { ruleAdded: r.id, recordings: r.recordings };
+		} catch (err) {
+			return fail(400, { error: err instanceof Error ? err.message : String(err) });
+		}
+	},
+
+	removeIgnoreRule: async ({ request, locals }) => {
+		requirePermission(locals.user, 'spu:write');
+		await connectDB();
+		const ruleId = (await request.formData()).get('ruleId')?.toString() ?? '';
+		if (!ruleId) return fail(400, { error: 'Missing rule' });
+		try {
+			const r = await removeIgnoreRule(ruleId, whoOf(locals));
+			return { ruleRemoved: true, recordings: r.recordings };
 		} catch (err) {
 			return fail(400, { error: err instanceof Error ? err.message : String(err) });
 		}

@@ -12,6 +12,8 @@
  *   - REPEAT blocks → one part per repetition (e.g. 12 × "move 300 µm + wait");
  *   - SINUSOIDAL OSCILLATE → one part per cycle.
  */
+import { isLandmarkStep, type PlanStep } from '$lib/sonic-placement';
+
 export const SONIC_ASSAY_ID = 'A78C7989';
 /** Shortest oscillation slice compared against its siblings. */
 export const OSC_SLICE_MIN_S = 1;
@@ -35,6 +37,10 @@ export interface TimelineStep {
 	loudness: number;
 	/** REPEAT only: one repetition's inner sequence, in nominal seconds, with each part's expected loudness. */
 	pattern?: { d: number; loudness: number }[];
+	/** Loud enough to locate in a recording (oscillation ≥ 1 s, move ≥ 1 mm) — see $lib/sonic-placement. */
+	landmark: boolean;
+	/** Short name for the review page, e.g. "Osc W1", "Move −2000 µm". */
+	short: string;
 }
 
 export interface Timeline {
@@ -116,6 +122,27 @@ function loudnessOf(b: Block): number {
 	}
 }
 
+function shortOf(b: Block): string {
+	const p = b.params ?? {};
+	const well = typeof p.comment === 'string' ? /\bw(\d)\b/i.exec(p.comment)?.[1] : undefined;
+	switch (kindOf(b.command)) {
+		case 'oscillate':
+			return `Osc${well ? ` W${well}` : ''}`;
+		case 'move':
+			return `Move ${(+p.microns || 0) > 0 ? '+' : '−'}${Math.abs(+p.microns || 0)} µm`;
+		case 'delay':
+			return `Wait ${((+p.delay_ms || 0) / 1000).toFixed(1)} s`;
+		case 'repeat':
+			return `Repeat ${b.count}×`;
+		case 'start':
+			return 'Start';
+		case 'finish':
+			return 'Finish';
+		default:
+			return b.command;
+	}
+}
+
 function labelOf(b: Block): string {
 	const p = b.params ?? {};
 	const comment = typeof p.comment === 'string' && p.comment.trim() ? ` — ${p.comment.trim()}` : '';
@@ -158,7 +185,8 @@ export function buildTimeline(code: Block[], assayId = SONIC_ASSAY_ID): Timeline
 			for (let k = 0; k < n; k++) parts.push({ t0: t0 + k * each, t1: t0 + (k + 1) * each });
 		}
 		const pattern = kind === 'repeat' ? (b.code ?? []).map((x) => ({ d: blockMs(x) / 1000, loudness: loudnessOf(x) })) : undefined;
-		return { index: i + 1, kind, label: labelOf(b), t0, t1, parts, moving: kind !== 'delay', loudness: loudnessOf(b), ...(pattern ? { pattern } : {}) };
+		const landmark = isLandmarkStep(kind, dur, kind === 'move' ? +(b.params?.microns ?? 0) : null);
+		return { index: i + 1, kind, label: labelOf(b), short: shortOf(b), t0, t1, parts, moving: kind !== 'delay', loudness: loudnessOf(b), landmark, ...(pattern ? { pattern } : {}) };
 	});
 	return { assayId, totalS: t, steps };
 }
@@ -189,4 +217,34 @@ export function stepAt(tl: Timeline, recordingS: number, offsetS: number, scale:
 	const n = (recordingS - offsetS) / scale;
 	if (n < 0 || n > tl.totalS) return null;
 	return tl.steps.find((s) => n >= s.t0 && n < s.t1) ?? tl.steps[tl.steps.length - 1] ?? null;
+}
+
+/** The plan in the shape the step-placement code (shared with the page) uses. */
+export function planSteps(tl: Timeline): PlanStep[] {
+	return tl.steps.map((s) => ({ index: s.index, kind: s.kind, label: s.label, t0: s.t0, t1: s.t1, landmark: s.landmark, short: s.short }));
+}
+
+/**
+ * The same plan with real (measured) step durations: each step keeps its order,
+ * kind and loudness; its repetitions/slices and inner move/wait pattern scale with it.
+ */
+export function withDurations(tl: Timeline, durations: (number | null)[] | null): Timeline {
+	if (!durations) return tl;
+	let t = 0;
+	const steps = tl.steps.map((s, i) => {
+		const nominal = s.t1 - s.t0;
+		const d = durations[i];
+		const real = d != null && Number.isFinite(d) && d > 0 ? d : nominal;
+		const k = nominal > 0 ? real / nominal : 1;
+		const t0 = t;
+		t += real;
+		return {
+			...s,
+			t0,
+			t1: t,
+			parts: s.parts.map((p) => ({ t0: t0 + (p.t0 - s.t0) * k, t1: t0 + (p.t1 - s.t0) * k })),
+			...(s.pattern ? { pattern: s.pattern.map((seg) => ({ ...seg, d: seg.d * k })) } : {})
+		};
+	});
+	return { ...tl, totalS: t, steps };
 }

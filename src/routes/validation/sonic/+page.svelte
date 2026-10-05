@@ -11,7 +11,7 @@
 		verdict: { passed: number; total: number; at: string | null } | null;
 		mongoCopy: { ok: true } | { ok: false; error: string } | null;
 		review: { status: 'verified' | 'unusable'; reason: string | null } | null;
-		anomalies: { total: number; high: number; medium: number } | null;
+		anomalies: { total: number; ignored: number; high: number; medium: number } | null;
 	}
 	interface Props {
 		data: {
@@ -122,6 +122,34 @@
 		} finally {
 			const { [id]: _, ...rest } = busy;
 			busy = rest;
+			await invalidateAll();
+		}
+	}
+
+	/**
+	 * Re-run the step-6 analysis on every verified recording, twice: the first pass
+	 * (quiet — no journal lines) gives every recording a landmark placement, from which
+	 * the measured step timeline is built; the second uses it and journals once per unit.
+	 */
+	let rerunning = $state<string | null>(null);
+	async function rerunAllVerified() {
+		const ids = data.recent.filter((r) => r.review?.status === 'verified');
+		if (!ids.length) return;
+		clientError = null;
+		try {
+			for (const pass of [1, 2]) {
+				for (let i = 0; i < ids.length; i++) {
+					rerunning = `Pass ${pass} of 2 — ${ids[i].spuUdi ?? ''} (${i + 1}/${ids.length})`;
+					const r = await callAction('runWindow', { sessionId: ids[i].id, quiet: pass === 1 ? '1' : '0' });
+					if (r.type !== 'success') {
+						clientError = describeFailure(r, `Re-analysis of ${ids[i].spuUdi} failed`);
+						return;
+					}
+				}
+			}
+			notice = `Re-analyzed ${ids.length} verified recordings with the new step placement.`;
+		} finally {
+			rerunning = null;
 			await invalidateAll();
 		}
 	}
@@ -538,6 +566,11 @@
 		<div class="mb-3 flex flex-wrap items-center gap-3">
 			<h2 class="tron-heading text-sm font-semibold uppercase tracking-wide">Recordings ({shown.length})</h2>
 			<div class="ml-auto flex flex-wrap gap-2">
+				{#if data.recent.some((r) => r.review?.status === 'verified')}
+					<button type="button" onclick={rerunAllVerified} disabled={!!rerunning} class="rounded border border-[var(--color-tron-cyan)] px-3 py-2 text-sm text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40" style="min-height: 44px;">
+						{rerunning ?? 'Re-run analysis on all verified'}
+					</button>
+				{/if}
 				{#if missingCopies}
 					<button type="button" onclick={() => simpleAction('archiveMissing', {}, 'Copied the missing recordings to MongoDB.')} class="rounded border border-[var(--color-tron-orange)] px-3 py-2 text-sm text-[var(--color-tron-orange)] hover:bg-[var(--color-tron-orange)]/10" style="min-height: 44px;">
 						Copy missing to MongoDB ({missingCopies})
@@ -615,7 +648,7 @@
 						{/if}
 						{#if r.anomalies}
 							<span class="rounded px-2 py-0.5 text-xs font-semibold {r.anomalies.total === 0 ? 'bg-[var(--color-tron-green)]/15 text-[var(--color-tron-green)]' : r.anomalies.high ? 'bg-[var(--color-tron-red)]/15 text-[var(--color-tron-red)]' : 'bg-[var(--color-tron-orange)]/15 text-[var(--color-tron-orange)]'}">
-								{r.anomalies.total === 0 ? 'no anomalies' : `${r.anomalies.total} anomal${r.anomalies.total === 1 ? 'y' : 'ies'}${r.anomalies.high ? ` (${r.anomalies.high} high)` : ''}`}
+								{r.anomalies.total === 0 ? (r.anomalies.ignored ? 'clean' : 'no anomalies') : `${r.anomalies.total} anomal${r.anomalies.total === 1 ? 'y' : 'ies'}${r.anomalies.high ? ` (${r.anomalies.high} high)` : ''}`}{r.anomalies.ignored ? ` · ${r.anomalies.ignored} ignored` : ''}
 							</span>
 						{/if}
 						<span class="tron-text-primary">{r.fileName ?? '—'}</span>

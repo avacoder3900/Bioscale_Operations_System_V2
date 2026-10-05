@@ -6,7 +6,11 @@ import { ACTIVE_RISE_DB, FRAME_S, TICK_S, MIN_REFERENCES, PASS_INSIDE_PCT } from
 import { percentile } from '$lib/server/sonic/stats';
 import type { Fingerprint } from '$lib/server/sonic/features';
 import { sonicTimeline } from '$lib/server/sonic/review';
+import { planSteps as toPlanSteps } from '$lib/server/sonic/timeline';
+import { expectedDurations } from '$lib/server/sonic/landmarks';
+import type { PlanStep } from '$lib/sonic-placement';
 import { suggestWindow } from '$lib/server/sonic/window';
+import { loadIgnoreRules } from '$lib/server/sonic/ignore';
 import type { PageServerLoad } from './$types';
 
 /**
@@ -67,13 +71,14 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 	}
 
 	// SONIC plan (48 steps) and the review state.
-	let plan: { totalS: number; steps: { index: number; label: string; kind: string; t0: number; t1: number }[]; firstMoveS: number } | null = null;
+	let plan: { totalS: number; steps: PlanStep[]; firstMoveS: number; expected: number[] } | null = null;
 	try {
 		const tl = await sonicTimeline();
 		plan = {
 			totalS: tl.totalS,
 			firstMoveS: tl.steps.find((x) => x.kind !== 'start' && x.moving)?.t0 ?? 0,
-			steps: tl.steps.map((x) => ({ index: x.index, label: x.label, kind: x.kind, t0: x.t0, t1: x.t1 }))
+			steps: toPlanSteps(tl),
+			expected: expectedDurations(tl, null)
 		};
 	} catch (err) {
 		console.warn(`[sonic] SONIC timeline unavailable: ${err instanceof Error ? err.message : String(err)}`);
@@ -102,6 +107,20 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 		planTotalS: plan?.totalS ?? 0,
 		planSteps: plan?.steps ?? [],
 		mappedSteps: wa?.steps ?? null,
+		// Step placement (landmarks): the analysis' estimates, the times in use (estimates
+		// + a saved, confirmed placement), loud stretches found, and real step durations.
+		placement: wa?.landmarks
+			? {
+					estimates: wa.landmarks.estimates ?? [],
+					used: wa.landmarks.used ?? [],
+					segments: wa.landmarks.segments ?? [],
+					durations: wa.durations ?? plan?.expected ?? [],
+					confirmed: !!raw.stepPlacement?.confirmed,
+					by: raw.stepPlacement?.by ?? null,
+					at: raw.stepPlacement?.at ? new Date(raw.stepPlacement.at).toISOString() : null,
+					measuredFrom: wa.measured?.from ?? 0
+				}
+			: null,
 		anomalies: wa?.anomalies ?? [],
 		windowSummary: wa
 			? {
@@ -138,8 +157,38 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 		};
 	});
 
+	// Other verified SONIC recordings, for "listen to the same moment on other SPUs":
+	// only their placed step times (to map a moment across) and verified window.
+	const cmpRows = (await ValidationSession.find({
+		_id: { $ne: s._id },
+		type: 'sonic',
+		'results.0.rawData.assay': { $in: ['SONIC', null] },
+		'results.0.rawData.review.status': 'verified',
+		'results.0.processedData.windowAnalysis.steps.0': { $exists: true }
+	})
+		.select('spuUdi createdAt results.rawData.review.startS results.rawData.review.endS results.rawData.stepPlacement.confirmed results.processedData.reference.on results.processedData.windowAnalysis.steps')
+		.sort({ createdAt: -1 })
+		.limit(100)
+		.lean()) as any[];
+	const compare = cmpRows.map((r) => {
+		const rr = r.results?.[0] ?? {};
+		return {
+			id: r._id as string,
+			udi: (r.spuUdi ?? '?') as string,
+			at: r.createdAt ? new Date(r.createdAt).toISOString() : null,
+			audioSrc: `/validation/sonic/${r._id}/audio`,
+			reference: !!rr.processedData?.reference?.on,
+			confirmed: !!rr.rawData?.stepPlacement?.confirmed,
+			startS: (rr.rawData?.review?.startS ?? null) as number | null,
+			endS: (rr.rawData?.review?.endS ?? null) as number | null,
+			steps: ((rr.processedData?.windowAnalysis?.steps ?? []) as any[]).map((x) => ({ index: x.index as number, t0: x.t0 as number, t1: x.t1 as number }))
+		};
+	});
+
 	return {
 		nav: JSON.parse(JSON.stringify(nav)),
+		compare: JSON.parse(JSON.stringify(compare)),
+		ignoreRules: await loadIgnoreRules(),
 		review: JSON.parse(JSON.stringify(reviewData)),
 		session: {
 			id: s._id as string,
