@@ -18462,3 +18462,12 @@ component across recordings, so SonicReview is {#key}ed by recording and message
 Read-only check on prod data: 11 SONIC recordings — 3 verified (210/212/217), 8 to trim (222–251).
 npm run check: 13 errors / 434 warnings (baseline), none in sonic files. Tested on the local dev server
 by the user; pushed to master at the user's request.
+Deployment: preview — https://bioscale-operations-system-mongodb-8da2sr054-brevitest.vercel.app
+Source: branch feat/sonic-recording-nav @ commit 6e34488c
+What this deployment is for: compile gate before master (GitHub deployment 6866819171).
+Deployment: production — https://bioscale-operations-system-mongodb-3v7yog16g-brevitest.vercel.app
+Source: branch master (= feat/sonic-recording-nav) @ commit 6e34488c
+Retrieve this exact code: git checkout master at commit 6e34488c
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: recording navigation (Previous/Next, picker, Next to trim) on /validation/sonic/[id].
+  GitHub deployment 6866851567 (Production). Smoke: /login 200; recording page 302 (auth redirect expected).
