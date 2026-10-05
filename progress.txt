@@ -18438,3 +18438,14 @@ User approved after local testing: push to master, 'be wary of recent changes'. 
   - New package deps: @audio/decode-aac (GPL-2.0, server-only — accepted: BIMS is internal), @audio/decode-wav.
 Production behaviour: /validation/sonic is SONIC-only; uploads are copied to MongoDB (GridFS
 sonic_recordings) automatically; recordings must be trimmed & verified before analysis/reference use.
+Deployment: preview — https://bioscale-operations-system-mongodb-knep2bahn-brevitest.vercel.app
+Source: branch feat/sonic-analysis-workflow @ commit df9ec01e (before the PR #82 merges; same sonic code)
+What this deployment is for: compile gate for the SONIC workflow (GitHub deployment 6866325767).
+Deployment: production — https://bioscale-operations-system-mongodb-g39i15zyz-brevitest.vercel.app
+Source: branch master (= feat/sonic-analysis-workflow) @ commit 0851ba5e
+Retrieve this exact code: git checkout master at commit 0851ba5e
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: SONIC workflow steps 1–6 (MongoDB copy, trim & verify, 48-step mapping,
+  anomalies + listener) + Alejandro's VALIDATION-08 analysis, compare report and batch upload.
+  GitHub deployment 6866433641 (Production). Smoke: /login 200; /validation/sonic 302, /audio 302 (auth redirects expected).
+  Master moved twice during the push (PR #82 + its progress log); both merged in, push refused → retried, no force.
