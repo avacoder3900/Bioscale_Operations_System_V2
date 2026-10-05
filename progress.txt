@@ -18228,3 +18228,10 @@ wording there), historical changelog rows.
 Verification: svelte-kit sync + svelte-check 14 errors / 434 warnings — the same pre-existing set
 (r2.ts, 2× research-proxy.ts, AskBimsWidget, 8× assembly/[sessionId], 2× magnetometer/[sessionId]),
 none in touched files. Not yet looked at in a signed-in browser session.
+Deployment: preview — https://bioscale-operations-system-mongodb-62o5t0z62-brevitest.vercel.app
+Source: branch feat/rename-available-to-empty @ commit f59795e6
+Retrieve this exact code: git checkout feat/rename-available-to-empty at commit f59795e6
+  (or: git log feat/rename-available-to-empty --oneline to find it if the branch has since moved on)
+What this deployment is for: the "Empty buckets" relabel on the bucket board, bucket log and
+  cart-mfg dashboard tile (GitHub deployment 6866136338). Smoke: /login 200, buckets → 302
+  (auth redirect expected). Labels not yet viewed in a signed-in session.
