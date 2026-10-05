@@ -1,6 +1,6 @@
 # Bucket System — Production Buckets, v2 (as built)
 
-**Started:** 2026-09-21 · **Last updated:** 2026-10-05 (**badge on the rest of the bucket actions** — mint, start pass, un-scan, sticker replace, retire, void, Master Override and State Change's bucket moves, §6.6; 2026-10-02: **State Change: straight to Backed, no bucket**, §9.6; **Pressed stage removed** — Unpressed advances straight to Backed, §2; **scan-in count lag** — the count moves on Enter, not on the server's confirm, §6.2.1; **badge at every phase** — every advance is now gated too, §6.3/§6.6; 2026-09-30: **badge gate moved** to scan-in / discards / move to oven, §6.6; earlier that day page-to-page **navigation lag** fixes, §9.1/§9.2/§11, and bucket **nicknames**, §4.1; before that 2026-09-25: thermoseal one roll part; fourth bucket stage **Backed** with **Move to oven**)
+**Started:** 2026-09-21 · **Last updated:** 2026-10-05 (**In oven: Copy all ids**, §6.5; **badge on the rest of the bucket actions** — mint, start pass, un-scan, sticker replace, retire, void, Master Override and State Change's bucket moves, §6.6; 2026-10-02: **State Change: straight to Backed, no bucket**, §9.6; **Pressed stage removed** — Unpressed advances straight to Backed, §2; **scan-in count lag** — the count moves on Enter, not on the server's confirm, §6.2.1; **badge at every phase** — every advance is now gated too, §6.3/§6.6; 2026-09-30: **badge gate moved** to scan-in / discards / move to oven, §6.6; earlier that day page-to-page **navigation lag** fixes, §9.1/§9.2/§11, and bucket **nicknames**, §4.1; before that 2026-09-25: thermoseal one roll part; fourth bucket stage **Backed** with **Move to oven**)
 **Branch:** `feat/bucket-system` — **PR #54 open into `master`**
 (https://github.com/avacoder3900/Bioscale_Operations_System_V2/pull/54). `origin/master` has
 been merged into this branch twice (last `33a937a4`); it sits on current production code.
@@ -402,7 +402,10 @@ holder is `ovenReleasedBy` and the operator on the `oven` row. It does two thing
 
 **In oven** is a short `<details>` dropdown at the bottom of the board's Backed column, not a card and
 not a status: `inOvenCarts()` = carts at `backing` on no open pass (freed by Move to oven, returned by a
-cancelled run, or drawn by the old WI-01 page), count + up to 200 ids. The Backed stage count stays
+cancelled run, or drawn by the old WI-01 page), count + up to 200 ids. A **Copy all N ids** button
+in the dropdown (user, 2026-10-05; `?/inOvenList`, read-only, `manufacturing:read`) fetches the whole
+list — not just the 200 shown — and puts it on the clipboard and in a box, one id per line, the shape
+State Change's cart box takes. The Backed stage count stays
 *every cart at `backing`* (§2, one category). The board's five columns are one row wide from `md` up,
 so Backed sat beside Pressed (four columns since the Pressed column was removed 2026-10-02, §9.1).
 
@@ -753,6 +756,7 @@ per-scan lookup only needs `manufacturing:read`.
 |---|---|
 | `23b1d6b9` … `b7e2c262` | v1 (2026-09-21/22): count-based buckets, labels, board, residual, WI-01 handoff, dashboard/pipeline views, change + bucket logs |
 | `f0e9176a` | Merge of `origin/master` (564 commits); collision guard extended; `findBucketLabels()` |
+| _(feat/in-oven-copy-ids)_ | **In oven: Copy all ids** (§6.5; user 2026-10-05, "give me every cart qr code in the backed category minus any that are currently sitting in buckets"): `?/inOvenList` on the board returns every `inOvenCarts()` id (ceiling 10 000); a *Copy all N ids* button in the In oven dropdown copies them one per line and shows them in a read-only box. Read-only, no data change. Context: the Backed tile reads high because carts are still listed in oven that are not physically there; PR #80 (count in-bucket carts only) was closed unmerged at the user's request — the count rule stays buckets + oven — and a bulk "oven is empty" reset was not built. |
 | `ce75e928` _(feat/badge-all-bucket-actions)_ | **Badge on the rest of the bucket actions** (§6.6; user 2026-10-05, after the badge-scan audit): `requireBadge()` gains a level (`'write'` / `'admin'`) and now gates `createBucket`, `replaceBucketSticker`, `startCycle`, `unscanCart`, `overrideCartStage` (write) and `retireBucket`, `voidCycle`, `forceBucketPhase` (admin badge). New `badgeGate()` export so State Change resolves the badge once per batch. Badge boxes on `/buckets/new` (create + replace), the board's start and retire forms, `/buckets/[bucketId]` (void + retire), `/buckets/override` and State Change, via the new `BadgeScanField.svelte`; `?/unscan` carries the rail's badge. `consumeCarts` / `returnCarts` deliberately left on the session (wax filling's deck load and abort path). Reverses the 2026-09-30 removal of the badge from mint and start-pass. No schema or data change. |
 | `47a2a63d` | `voidCycle()` + *Void this pass…* |
 | `fe947207` | No debit on bucket entry; discards remove carts from inventory; yellow note |
