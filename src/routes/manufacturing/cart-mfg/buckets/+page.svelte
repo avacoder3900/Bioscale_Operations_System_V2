@@ -104,6 +104,13 @@
 		const key = panelKey;
 		untrack(() => retargetBadge(key));
 	});
+	// The bucket detail sits UNDER the board (user, 2026-10-05), so opening a bucket
+	// scrolls it into view. Keyed on what the panel points at, not on its mode, so
+	// moving between view / advance / audit inside one bucket does not jump the page.
+	$effect(() => {
+		const key = panelKey;
+		if (key) untrack(() => { setTimeout(() => document.getElementById('bucketPanel')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 60); });
+	});
 	function takeBadge(code: string): boolean {
 		if (!BADGE_RE.test(code)) return false;
 		badgeFor = panelKey; badge = code; scanOperator = '';
@@ -839,9 +846,9 @@
 		</div>
 	{/if}
 
-	<!-- Controls strip (user, 2026-10-05): what used to be the right-hand rail, laid
-	     across the top where the counter tiles were, so the lanes get the full width. -->
-	<section class="grid items-start gap-3 lg:grid-cols-[minmax(0,320px)_minmax(0,1fr)]">
+	<!-- Scan box above the board; the bucket detail opens UNDER the board (user,
+	     2026-10-05 — it was a strip above it, and before that a right-hand rail). -->
+	<section class="lg:max-w-md">
 			<div class="rounded-lg border border-[var(--color-tron-cyan)]/40 bg-[var(--color-tron-surface)] p-3">
 				<label for="bucketScan" class="block text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Scan a bucket's sticker</label>
 				<input id="bucketScan" type="text" bind:value={scanInput} autocomplete="off" placeholder="scan bucket QR…"
@@ -876,11 +883,130 @@
 				{/if}
 			</div>
 
-			<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3 {panel.kind === 'cycle' ? '' : 'lg:max-w-2xl'}">
-				{#if panel.kind === 'none'}
-					<p class="py-6 text-center text-xs text-[var(--color-tron-text-secondary)]">Scan a bucket or pick a card.</p>
+	</section>
 
-				{:else if panel.kind === 'cycle'}
+		<!-- Board: Available + five lanes — Barcoded, Unpressed — in process, Unpressed, Backed — in process, Backed (user, 2026-10-05). -->
+		<div class="grid grid-cols-1 gap-3 md:grid-cols-3 xl:grid-cols-6">
+			<div class="rounded-lg border bg-[var(--color-tron-bg-secondary)] p-2 {data.focusStage === 'available' ? 'ring-1 ring-[var(--color-tron-cyan)]' : 'border-[var(--color-tron-border)]'}">
+				<div class="flex items-center justify-between px-1 pb-2">
+					<span class="text-xs font-semibold uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Available</span>
+					<span class="text-xs text-[var(--color-tron-text-secondary)]">{data.board.available.length}</span>
+				</div>
+				<div class="space-y-2">
+					{#each data.board.available as b (b.bucketId)}
+						<!-- Card = open-the-start-panel button + (admin) Retire control. Two buttons
+						     side by side rather than nested, so the retire click never starts a pass. -->
+						<div class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] hover:border-[var(--color-tron-cyan)]/60 {(panel.kind === 'start' || panel.kind === 'retire') && panel.bucketId === b.bucketId ? 'ring-1 ring-[var(--color-tron-cyan)]' : ''}">
+							<button type="button" onclick={() => openBucket(b)} class="w-full p-2 text-left">
+								<div class="flex items-center justify-between">
+									<span class="font-mono text-sm text-[var(--color-tron-text)]">{nameOf(b)}</span>
+									{#if b.spotCheckPending}<span class="rounded bg-[var(--color-tron-yellow)]/20 px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-[var(--color-tron-yellow)]" title="Confirm empty at next start">check</span>{/if}
+								</div>
+								<div class="mt-1 text-[10px] text-[var(--color-tron-text-secondary)]">{b.bucketId} · {b.cycleCount} pass{b.cycleCount === 1 ? '' : 'es'}</div>
+							</button>
+							{#if data.canAdmin}
+								<div class="flex justify-end border-t border-[var(--color-tron-border)]/40 px-2 py-1">
+									<button type="button" onclick={() => { panel = { kind: 'retire', bucketId: b.bucketId }; resetLists(); }}
+										class="text-[10px] uppercase tracking-wider text-red-300/80 hover:text-red-300" title="Retire this bucket (kill the label) — reason required">Retire</button>
+								</div>
+							{/if}
+						</div>
+					{/each}
+					{#each data.board.quarantined as b (b.bucketId)}
+						<button type="button" onclick={() => openBucket(b)}
+							class="w-full rounded border border-[var(--color-tron-yellow)]/50 bg-[var(--color-tron-yellow)]/5 p-2 text-left hover:border-[var(--color-tron-yellow)] {panel.kind === 'residual' && panel.bucketId === b.bucketId ? 'ring-1 ring-[var(--color-tron-yellow)]' : ''}">
+							<div class="flex items-center justify-between">
+								<span class="font-mono text-sm text-[var(--color-tron-text)]">{nameOf(b)}</span>
+								<span class="rounded bg-[var(--color-tron-yellow)]/20 px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-[var(--color-tron-yellow)]">quarantined</span>
+							</div>
+							<div class="mt-1 truncate text-[10px] text-[var(--color-tron-text-secondary)]" title={b.residualNote ?? ''}>{b.residualNote ?? 'residual pending'}</div>
+						</button>
+					{/each}
+					{#if data.board.available.length === 0 && data.board.quarantined.length === 0}
+						<p class="px-1 py-4 text-center text-[10px] text-[var(--color-tron-text-secondary)]">No empty buckets.</p>
+					{/if}
+				</div>
+			</div>
+
+			{#each lanes as s (s.key)}
+				<div class="rounded-lg border bg-[var(--color-tron-bg-secondary)] p-2 {data.focusStage === s.key ? 'ring-1 ring-[var(--color-tron-cyan)]' : ''} {stageTint[s.tint]}">
+					<div class="flex items-center justify-between px-1 pb-2">
+						<span class="text-xs font-semibold uppercase tracking-wider text-[var(--color-tron-text-secondary)]">{s.label}{#if s.hint} <span class="font-normal normal-case tracking-normal opacity-70">· {s.hint}</span>{/if}</span>
+						<span class="text-xs text-[var(--color-tron-text-secondary)]">{s.cycles.length}</span>
+					</div>
+					<div class="space-y-2">
+						{#each s.cycles as c (c.cycleId)}
+							<!-- Card = open-the-panel button + an expandable list of the carts inside
+							     (a sibling <details>, not nested in the button). -->
+							<div class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] hover:border-[var(--color-tron-cyan)]/60 {panel.kind === 'cycle' && panel.cycleId === c.cycleId ? 'ring-1 ring-[var(--color-tron-cyan)]' : ''}">
+								<button type="button" onclick={() => openCycle(c)} class="w-full p-2 text-left">
+									<div class="flex items-baseline justify-between">
+										<span class="font-mono text-sm text-[var(--color-tron-text)]">{nameOf(c)}</span>
+										<span class="text-lg font-bold text-[var(--color-tron-cyan)]">{c.quantity}</span>
+									</div>
+									<div class="mt-1 flex items-center justify-between text-[10px] text-[var(--color-tron-text-secondary)]">
+										<span>{c.bucketId} #{c.cycleNumber} · {dwell(c.inProcessAt ?? c.stageEnteredAt)}{#if c.inProcessBy} · {c.inProcessBy}{/if}</span>
+										{#if c.stage !== 'barcoded' && c.quantity !== c.openedQty}<span title="left Barcoded with {c.openedQty}">−{c.openedQty - c.quantity}</span>{/if}
+									</div>
+								</button>
+								<details class="border-t border-[var(--color-tron-border)]/40 px-2 py-1">
+									<summary class="cursor-pointer select-none text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]">{c.cartridgeIds.length} cart{c.cartridgeIds.length === 1 ? '' : 's'} inside</summary>
+									{#if c.cartridgeIds.length === 0}
+										<p class="py-1 text-[10px] text-[var(--color-tron-text-secondary)]">none scanned in yet</p>
+									{:else}
+										<ul class="mt-1 max-h-40 space-y-0.5 overflow-y-auto">
+											{#each c.cartridgeIds as id, i (id)}
+												<li class="flex items-center justify-between gap-2 text-[10px]">
+													<span class="text-[var(--color-tron-text-secondary)]">{i + 1}.</span>
+													<a href="/cartridge-admin?search={encodeURIComponent(id)}" class="min-w-0 flex-1 truncate font-mono text-[var(--color-tron-text)] hover:text-[var(--color-tron-cyan)]" title={id}>{id}</a>
+												</li>
+											{/each}
+										</ul>
+									{/if}
+								</details>
+								<div class="flex justify-end border-t border-[var(--color-tron-border)]/40 px-2 py-1">
+									<button type="button" onclick={() => openAudit(c)}
+										class="text-[10px] uppercase tracking-wider text-[var(--color-tron-cyan)]/80 hover:text-[var(--color-tron-cyan)]"
+										title="Scan every cart in this bucket; anything that does not belong is moved or discarded">Audit</button>
+								</div>
+							</div>
+						{/each}
+						{#if s.cycles.length === 0}
+							<p class="px-1 py-4 text-center text-[10px] text-[var(--color-tron-text-secondary)]">empty</p>
+						{/if}
+						{#if s.key === 'backing'}
+							<!-- "In oven": backed carts freed from their bucket (Move to oven), still 'backing'
+							     until wax filling scans them in. A dropdown here, not a card (user, 2026-09-25). -->
+							<details class="rounded border border-dashed border-[var(--color-tron-purple)]/40 px-2 py-1">
+								<summary class="cursor-pointer select-none text-[10px] uppercase tracking-wider text-[var(--color-tron-purple)] hover:text-[var(--color-tron-text)]">In oven · {data.inOven.count} cart{data.inOven.count === 1 ? '' : 's'}</summary>
+								{#if data.inOven.count === 0}
+									<p class="py-1 text-[10px] text-[var(--color-tron-text-secondary)]">none — carts land here when a Backed bucket is moved to the oven, and leave when wax filling scans them.</p>
+								{:else}
+									<ul class="mt-1 max-h-40 space-y-0.5 overflow-y-auto">
+										{#each data.inOven.ids as id (id)}
+											<li><a href="/cartridge-admin?search={encodeURIComponent(id)}" class="block truncate font-mono text-[10px] text-[var(--color-tron-text)] hover:text-[var(--color-tron-cyan)]" title={id}>{id}</a></li>
+										{/each}
+									</ul>
+									{#if data.inOven.count > data.inOven.ids.length}<p class="mt-1 text-[10px] text-[var(--color-tron-text-secondary)]">+{data.inOven.count - data.inOven.ids.length} more</p>{/if}
+									<!-- Every id, not just the first 200 shown above — one per line. -->
+									<button type="button" onclick={copyAllInOven} disabled={ovenIdsBusy}
+										class="mt-1 text-[10px] uppercase tracking-wider text-[var(--color-tron-cyan)]/80 hover:text-[var(--color-tron-cyan)] disabled:opacity-50">{ovenIdsBusy ? 'Loading…' : `Copy all ${data.inOven.count} ids`}</button>
+									{#if ovenIdsMsg}<p class="mt-1 text-[10px] text-[var(--color-tron-text-secondary)]">{ovenIdsMsg}</p>{/if}
+									{#if ovenIdsText}
+										<textarea readonly rows="6" value={ovenIdsText} onfocus={(e) => (e.currentTarget as HTMLTextAreaElement).select()}
+											class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-2 py-1 font-mono text-[10px] text-[var(--color-tron-text)]"></textarea>
+									{/if}
+								{/if}
+							</details>
+						{/if}
+					</div>
+				</div>
+			{/each}
+		</div>
+
+	{#if panel.kind !== 'none'}
+			<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3 {panel.kind === 'cycle' ? '' : 'lg:max-w-2xl'}" id="bucketPanel" style="scroll-margin: 1rem">
+				{#if panel.kind === 'cycle'}
 					{#if !panelCycle}
 						{#if form?.moveToOven?.success}
 							{@const m = form.moveToOven as any}
@@ -1383,126 +1509,7 @@
 					</form>
 				{/if}
 			</div>
-	</section>
-
-		<!-- Board: Available + five lanes — Barcoded, Unpressed — in process, Unpressed, Backed — in process, Backed (user, 2026-10-05). -->
-		<div class="grid grid-cols-1 gap-3 md:grid-cols-3 xl:grid-cols-6">
-			<div class="rounded-lg border bg-[var(--color-tron-bg-secondary)] p-2 {data.focusStage === 'available' ? 'ring-1 ring-[var(--color-tron-cyan)]' : 'border-[var(--color-tron-border)]'}">
-				<div class="flex items-center justify-between px-1 pb-2">
-					<span class="text-xs font-semibold uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Available</span>
-					<span class="text-xs text-[var(--color-tron-text-secondary)]">{data.board.available.length}</span>
-				</div>
-				<div class="space-y-2">
-					{#each data.board.available as b (b.bucketId)}
-						<!-- Card = open-the-start-panel button + (admin) Retire control. Two buttons
-						     side by side rather than nested, so the retire click never starts a pass. -->
-						<div class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] hover:border-[var(--color-tron-cyan)]/60 {(panel.kind === 'start' || panel.kind === 'retire') && panel.bucketId === b.bucketId ? 'ring-1 ring-[var(--color-tron-cyan)]' : ''}">
-							<button type="button" onclick={() => openBucket(b)} class="w-full p-2 text-left">
-								<div class="flex items-center justify-between">
-									<span class="font-mono text-sm text-[var(--color-tron-text)]">{nameOf(b)}</span>
-									{#if b.spotCheckPending}<span class="rounded bg-[var(--color-tron-yellow)]/20 px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-[var(--color-tron-yellow)]" title="Confirm empty at next start">check</span>{/if}
-								</div>
-								<div class="mt-1 text-[10px] text-[var(--color-tron-text-secondary)]">{b.bucketId} · {b.cycleCount} pass{b.cycleCount === 1 ? '' : 'es'}</div>
-							</button>
-							{#if data.canAdmin}
-								<div class="flex justify-end border-t border-[var(--color-tron-border)]/40 px-2 py-1">
-									<button type="button" onclick={() => { panel = { kind: 'retire', bucketId: b.bucketId }; resetLists(); }}
-										class="text-[10px] uppercase tracking-wider text-red-300/80 hover:text-red-300" title="Retire this bucket (kill the label) — reason required">Retire</button>
-								</div>
-							{/if}
-						</div>
-					{/each}
-					{#each data.board.quarantined as b (b.bucketId)}
-						<button type="button" onclick={() => openBucket(b)}
-							class="w-full rounded border border-[var(--color-tron-yellow)]/50 bg-[var(--color-tron-yellow)]/5 p-2 text-left hover:border-[var(--color-tron-yellow)] {panel.kind === 'residual' && panel.bucketId === b.bucketId ? 'ring-1 ring-[var(--color-tron-yellow)]' : ''}">
-							<div class="flex items-center justify-between">
-								<span class="font-mono text-sm text-[var(--color-tron-text)]">{nameOf(b)}</span>
-								<span class="rounded bg-[var(--color-tron-yellow)]/20 px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-[var(--color-tron-yellow)]">quarantined</span>
-							</div>
-							<div class="mt-1 truncate text-[10px] text-[var(--color-tron-text-secondary)]" title={b.residualNote ?? ''}>{b.residualNote ?? 'residual pending'}</div>
-						</button>
-					{/each}
-					{#if data.board.available.length === 0 && data.board.quarantined.length === 0}
-						<p class="px-1 py-4 text-center text-[10px] text-[var(--color-tron-text-secondary)]">No empty buckets.</p>
-					{/if}
-				</div>
-			</div>
-
-			{#each lanes as s (s.key)}
-				<div class="rounded-lg border bg-[var(--color-tron-bg-secondary)] p-2 {data.focusStage === s.key ? 'ring-1 ring-[var(--color-tron-cyan)]' : ''} {stageTint[s.tint]}">
-					<div class="flex items-center justify-between px-1 pb-2">
-						<span class="text-xs font-semibold uppercase tracking-wider text-[var(--color-tron-text-secondary)]">{s.label}{#if s.hint} <span class="font-normal normal-case tracking-normal opacity-70">· {s.hint}</span>{/if}</span>
-						<span class="text-xs text-[var(--color-tron-text-secondary)]">{s.cycles.length}</span>
-					</div>
-					<div class="space-y-2">
-						{#each s.cycles as c (c.cycleId)}
-							<!-- Card = open-the-panel button + an expandable list of the carts inside
-							     (a sibling <details>, not nested in the button). -->
-							<div class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] hover:border-[var(--color-tron-cyan)]/60 {panel.kind === 'cycle' && panel.cycleId === c.cycleId ? 'ring-1 ring-[var(--color-tron-cyan)]' : ''}">
-								<button type="button" onclick={() => openCycle(c)} class="w-full p-2 text-left">
-									<div class="flex items-baseline justify-between">
-										<span class="font-mono text-sm text-[var(--color-tron-text)]">{nameOf(c)}</span>
-										<span class="text-lg font-bold text-[var(--color-tron-cyan)]">{c.quantity}</span>
-									</div>
-									<div class="mt-1 flex items-center justify-between text-[10px] text-[var(--color-tron-text-secondary)]">
-										<span>{c.bucketId} #{c.cycleNumber} · {dwell(c.inProcessAt ?? c.stageEnteredAt)}{#if c.inProcessBy} · {c.inProcessBy}{/if}</span>
-										{#if c.stage !== 'barcoded' && c.quantity !== c.openedQty}<span title="left Barcoded with {c.openedQty}">−{c.openedQty - c.quantity}</span>{/if}
-									</div>
-								</button>
-								<details class="border-t border-[var(--color-tron-border)]/40 px-2 py-1">
-									<summary class="cursor-pointer select-none text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]">{c.cartridgeIds.length} cart{c.cartridgeIds.length === 1 ? '' : 's'} inside</summary>
-									{#if c.cartridgeIds.length === 0}
-										<p class="py-1 text-[10px] text-[var(--color-tron-text-secondary)]">none scanned in yet</p>
-									{:else}
-										<ul class="mt-1 max-h-40 space-y-0.5 overflow-y-auto">
-											{#each c.cartridgeIds as id, i (id)}
-												<li class="flex items-center justify-between gap-2 text-[10px]">
-													<span class="text-[var(--color-tron-text-secondary)]">{i + 1}.</span>
-													<a href="/cartridge-admin?search={encodeURIComponent(id)}" class="min-w-0 flex-1 truncate font-mono text-[var(--color-tron-text)] hover:text-[var(--color-tron-cyan)]" title={id}>{id}</a>
-												</li>
-											{/each}
-										</ul>
-									{/if}
-								</details>
-								<div class="flex justify-end border-t border-[var(--color-tron-border)]/40 px-2 py-1">
-									<button type="button" onclick={() => openAudit(c)}
-										class="text-[10px] uppercase tracking-wider text-[var(--color-tron-cyan)]/80 hover:text-[var(--color-tron-cyan)]"
-										title="Scan every cart in this bucket; anything that does not belong is moved or discarded">Audit</button>
-								</div>
-							</div>
-						{/each}
-						{#if s.cycles.length === 0}
-							<p class="px-1 py-4 text-center text-[10px] text-[var(--color-tron-text-secondary)]">empty</p>
-						{/if}
-						{#if s.key === 'backing'}
-							<!-- "In oven": backed carts freed from their bucket (Move to oven), still 'backing'
-							     until wax filling scans them in. A dropdown here, not a card (user, 2026-09-25). -->
-							<details class="rounded border border-dashed border-[var(--color-tron-purple)]/40 px-2 py-1">
-								<summary class="cursor-pointer select-none text-[10px] uppercase tracking-wider text-[var(--color-tron-purple)] hover:text-[var(--color-tron-text)]">In oven · {data.inOven.count} cart{data.inOven.count === 1 ? '' : 's'}</summary>
-								{#if data.inOven.count === 0}
-									<p class="py-1 text-[10px] text-[var(--color-tron-text-secondary)]">none — carts land here when a Backed bucket is moved to the oven, and leave when wax filling scans them.</p>
-								{:else}
-									<ul class="mt-1 max-h-40 space-y-0.5 overflow-y-auto">
-										{#each data.inOven.ids as id (id)}
-											<li><a href="/cartridge-admin?search={encodeURIComponent(id)}" class="block truncate font-mono text-[10px] text-[var(--color-tron-text)] hover:text-[var(--color-tron-cyan)]" title={id}>{id}</a></li>
-										{/each}
-									</ul>
-									{#if data.inOven.count > data.inOven.ids.length}<p class="mt-1 text-[10px] text-[var(--color-tron-text-secondary)]">+{data.inOven.count - data.inOven.ids.length} more</p>{/if}
-									<!-- Every id, not just the first 200 shown above — one per line. -->
-									<button type="button" onclick={copyAllInOven} disabled={ovenIdsBusy}
-										class="mt-1 text-[10px] uppercase tracking-wider text-[var(--color-tron-cyan)]/80 hover:text-[var(--color-tron-cyan)] disabled:opacity-50">{ovenIdsBusy ? 'Loading…' : `Copy all ${data.inOven.count} ids`}</button>
-									{#if ovenIdsMsg}<p class="mt-1 text-[10px] text-[var(--color-tron-text-secondary)]">{ovenIdsMsg}</p>{/if}
-									{#if ovenIdsText}
-										<textarea readonly rows="6" value={ovenIdsText} onfocus={(e) => (e.currentTarget as HTMLTextAreaElement).select()}
-											class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-2 py-1 font-mono text-[10px] text-[var(--color-tron-text)]"></textarea>
-									{/if}
-								{/if}
-							</details>
-						{/if}
-					</div>
-				</div>
-			{/each}
-		</div>
+	{/if}
 
 	{#if data.thermoseal}
 		{@const ts = data.thermoseal}
