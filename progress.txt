@@ -13099,3 +13099,323 @@ Final audit (script) + independent re-check (read-only, from the written UUID li
 Before the run: 40 unminted random test labels (the 20-label alignment job sent twice) + ~12 more
 from the layout dial-in — all to be destroyed, none in BIMS.
 No code changed in this entry. npm run check: n/a.
+
+================================================================================
+2026-09-22 — feat/spu-tweaks — cortisol curve experiment analysis: zero-well correction, per-device/per-channel 4PL (read-only)
+================================================================================
+No code changes. Lot A67AC662-42032565330 ("Algorithm adjustment time point 1"): 6 devices x 7
+concentrations (500/300/200/100/20/10/0 from quantityA/B/C), wells A/B at concentration, C at
+zero on every cartridge. Published a private artifact ("Per-Device Cortisol Curves", 2 revisions):
+fleet 4PL, per-device 4PL panels, per-channel 4PL panels with throughput relation.
+Findings:
+- In-cartridge zero well does not correct A/B: zero deviation predicts A/B deviation at r=0.11;
+  every correction family (divide, subtract, F3-background) picks strength ~0 under leave-one-
+  cartridge-out. Well-to-well (A vs B, same cartridge) noise dominates (~24% SD at 300-500).
+- Zero well DOES catch fluidics failures: 0243 (missed by 237/357) flagged by C raw < 7.
+- Per-device 4PL scatter: 0239 4.3% < 0247 5.1% < 0244 8.9% < 0226 16.6% < 0202 30% vs fleet
+  20.2%. 0239 is biased/compressed, not noisy.
+- Per-channel: throughput (sum F7 at zero, 42-read sum) vs 4PL IC50 Spearman 0.87, top -0.73,
+  slope 0.68 (p~0.02); held-out IC50 error 34% -> 27% when indexed on throughput. Parameters are
+  soft (LOO IC50 +/-18%) — needs time point 2 to confirm persistence.
+- Firmware check (brevitest-firmware.cpp/.h): lasers are digitalWrite on/off; LASER_*_POWER /
+  PWM constants and Laser.power are unused, so no per-channel laser power control exists today.
+  AS7341 gain/astep/atime come from BCODE and apply to all three channels. Throughput spread
+  (25k-117k) is downstream of the laser (monitor photodiode 750-830 everywhere) and the F3
+  background does not track throughput -> level-vs-proportion hypotheses are confounded.
+Proposed next: run the same 7-point curve on 0239 one AS7341 gain step lower to separate the
+two; add curve time point 2 to the artifact; optionally fix parse-thermo.ts per-sensor averaging.
+Scratch scripts (session scratchpad): curve.cjs, zeroalgo.cjs, chanfit.cjs, build8.cjs.
+`npm run check`: not run (no code touched).
+
+================================================================================
+2026-09-23 — feat/spu-tweaks — SPU QC re-analysis: F7 throughput vs 4PL parameters is a bead-amount effect (read-only)
+================================================================================
+No code changes. Fresh read-only pull of everything Jacob listed (scratchpad JSON): exp 357
+(82 zero carts, 27 devices), exp 358 (42 curve carts, 6 devices), the 9_10 / 9_18 degradation /
+two 9_18 variance / 9_21_26 degradation optical groups (249 carts), 56 optical_blank_runs, 39 laser
++ 34 dark bench reads, 273 mag + 44 thermo sessions, SPU journals + service_records. Service
+timeline matters for "recency bias": stage boards replaced on 0203/0210/0253 (9/18) and 0249 (9/21),
+debris cleared on 0218 ch C (9/18), 0230 stage changed (9/18) — all after the 9_18 optical sets and
+before 9_21 optical / 357 / 358.
+Findings on the 358 throughput-vs-4PL question (artifact K8HQvsa8ckGkZbSVrTF8xM reproduced: IC50
+Spearman 0.87, top -0.73, slope 0.68; holds dropping any single channel, 0.83-0.90):
+- The relation is in the MIDDLE of the curve, not the top: ratio at 100 ng vs channel mean SF3 over
+  its 7 carts = Spearman 0.96 (y100/y0 0.87, r200 0.70); top only -0.49 model-free; bottom/500 ng ~0.
+  Subtracting the empty-well baseline (0.8x or full) does not remove it -> F3 additive background is
+  NOT the mechanism.
+- "Throughput" (SF7 or SF3 at zero) is a stable channel property of the assay cartridge: 357 vs 358
+  Spearman 0.91-0.93 (n=15-16, consecutive days). It is NOT seen by the optical QC tools: vs 9_21
+  optical cart F7 0.27, laser-into-sensor F7 0.28, blank cart F7 0.54 (all read the same 19-25 mm
+  stage window, so position is not the reason).
+- Decomposition with the assay's own empty-well baseline read (same window, before beads arrive):
+  baseline (optics only) tracks the loaded read at 0.76 but explains little of the curve shape
+  (vs IC50 0.39, r100 0.32); loaded/baseline (= bead amount in the read well) predicts IC50 0.81,
+  r100 0.90, r200 0.83; previous-day 357 loaded F3 predicts 358 IC50 0.85 and r100 0.93 (n=10).
+  log IC50 vs log SF3 slope 0.81 (IC50 ~ proportional to bead/antibody amount = ligand-depletion
+  behaviour); top falls with bead amount (-0.82), bottom does not move.
+- Bead amount by channel letter (357, loaded/baseline F3): A 10.3, B 8.0, C 7.9 with a flat optical
+  baseline (852/907/775) -> a lane gradient in bead delivery, not optics. Variance split of log SF3:
+  device 0.27, channel-within-device 0.31, cart 0.19. Magnet Z per channel does not predict it
+  (|rho| <= 0.25, n=63); thermo n too small / no relation.
+- Not confirmed on the stability lot (100 ng: per-day Spearman 0.15/0.58/0.65, n=9 each; pooled 0.11,
+  confounded by day drift and device rework between days). Paired A-vs-B within one cart shows no
+  well-level effect (7/15) - low power, channel-level differences are ~30% vs cart noise ~11-20%.
+Scratch scripts (session scratchpad, not in repo): dump.cjs, inventory.cjs, curve.cjs,
+throughput.cjs, beads.cjs, baseline.cjs. Also read Acuity GEN2 Main/Stage Board R5 .brd (Eagle
+9.7 XML): one IS32LT3143 drives all three SLD3232VF lasers from a single ISET (R8), monitor
+photodiodes PHOTO_A/B/C; stage board powers the three AS7341 VDDs from PCA9536 GPIO pins on a
+shared I2C bus.
+`npm run check`: not run (no code touched).
+
+================================================================================
+2026-09-24 — feat/spu-tweaks — 100 ng replication on 10 devices: magnet correlation does not hold, bead index holds weakly (read-only)
+================================================================================
+No code changes. New lot A67AC662-42092981418, arm "Running 100ng/mL on 10 devices": 30 carts, 10 devices
+(0229 0247 0215 0221 0246 0211 0239 0226 0244 0218 — the four from 358 plus the six picked yesterday to
+cross magnet strength against bead index), triplicate, all three channels at 100 ng.
+- Magnet Z (latest passing session, none re-run) vs ratio@100 across 30 channels: Spearman -0.20 (p 0.48);
+  device level -0.03. The -0.95 seen on the eight 358 channels was a four-device coincidence (those eight
+  still give -0.81 today, the six new devices give +0.14). 0229 (strongest field) reads high, as the
+  bead-index story predicted, not low as the magnet story predicted.
+- Bead index vs ratio@100: this-run loaded/baseline F3 Spearman 0.52 (p 0.002), 357 index 0.47 (p 0.009),
+  n=30. Real but modest; the 0.96 on 358 was small-n inflation. Within the six new devices alone only 0.22.
+- Bead index is stable across lots: this-run vs 357 loaded/baseline 0.89, SF3 0.93 (n=30). 0218 A dropped
+  12.0 -> 6.7 (its channel C had debris cleared 9/18; A also moved).
+- Channel spread in triplicate is much smaller than the single-cart 358 data suggested: 30 channel means
+  4.17-6.09, SD 0.42 (8% CV) vs within-channel cart SD median ~0.3 (6%); 10 device means 4.48-5.49.
+  Cart-to-cart F3 vs ratio inside a channel: slope 0.02 (no relation, as before).
+Scratch: exp359.cjs, exp359.json (session scratchpad). Artifact 8SsoFMNF3BJyx9Rkq88dzN not yet updated
+with this run. `npm run check`: not run.
+
+================================================================================
+2026-09-24 — feat/spu-tweaks — ratio-correction ledger; stability lot excluded (different QDs) (read-only)
+================================================================================
+No code changes. Two artifacts: "Bead Amount Sets the Curve" (8SsoFMNF3BJyx9Rkq88dzN, v7) and a new
+"Ratio Correction Ledger" (JrB3Ag7MGttX6KnzCmNSdq) listing every F7/F3 correction tried, train on 358+357,
+test on 359. Jacob: the cortisol stability lot A67AC662-41434773772 uses DIFFERENT quantum dots and must
+not be pooled with 357/358/359 — removed from both pages and from the harness (memory note added).
+Findings: the 358 sheet correction (X=F3 %dev, Y=F7 %dev from the level mean, slope 0.773) reproduces
+exactly but its Y is 75-90% the ratio error itself at 100-300 ng (needs the true level). Inside a channel a
+cart's F3 deviation predicts its ratio deviation at r -0.13 (359) / -0.04 (357) -> any F3-bias per-cart
+correction is capped under 1% CV. 16 bias x family combinations + concentration-dependent strengths: 359
+CV 10.4% uncorrected, every deployable variant 10.0-11.7% with strengths ~0; anything that lowers train
+CV below 17% raises 359. F3 follows F7 at slope 0.9 within a channel (not 0.77). 359 @100: total CV 10.4%,
+between-channel 7.6%, within-channel 5.5%. Scratch: bias.cjs, bias2.cjs, build-ledger.cjs.
+`npm run check`: not run.
+
+================================================================================
+2026-09-24 — feat/research-analysis-mcp — research analysis + calibration MCP tools via proxy to brevitest-research-v2
+================================================================================
+Research-v2 DOMAIN-30 (analysis v3) exposes /api/agent/analysis/* and /api/agent/calibration/*.
+BIMS now proxies the allowlisted subset (analysis/, calibration/) at /api/agent/research/[...path]
+(src/lib/server/research-proxy.ts; RESEARCH_API_URL + optional RESEARCH_AGENT_API_KEY, falls back to
+AGENT_API_KEY) and registers 18 research_* MCP tools in bims-mcp.ts (server version 3.6.0): catalog,
+list/get/validate profiles, find cartridges, preview (dry run), view, save draft, activate, archive,
+run (confirmed gate), attach profile to assay, list lots, list/get curves, fit (draft), activate curve,
+quantify (confirmed gate). Writes go through machineWrite with actor. Docs: docs/MCP-SERVER.md.
+Tests: src/lib/server/research-proxy.test.ts (unit, 15 cases incl. dot-segment rejection);
+tests/contracts/12-research-analysis.test.ts (401 / 404 allowlist / 200-or-503 catalog).
+npm run test:unit: 174 pass. npm run check: 11 errors — unchanged from feat/spu-tweaks baseline.
+
+
+================================================================================
+2026-09-25 — feat/research-analysis-mcp — SONIC-0000002..0000011 validation-tool labels printed (ZT230, USB)
+================================================================================
+Jacob asked for a batch of unique SONIC- barcodes. Read the runbook (docs/ZEBRA-ZT230-BARCODE-PRINTING.md),
+the v96 handoff (brevitest-device Docs/V96_BLANK_SONIC_LASER_HANDOFF.md: 13-char SONIC-NNNNNNN, prefix
+classified by firmware, 7 digits free text, nothing minted/recorded in BIMS) and the 2026-09-17 entry
+(SONIC-0000001 layout). Browser Print 1.3.2 saw 52j150301773 (usb) at once.
+- Scratch script (not in repo): %LOCALAPPDATA%\Temp\claude\...\scratchpad\zebra-sonic.mts — rebuilds
+  the 09-17 SONIC layout on top of computeGeometry()/ZT230_2X_075_DEFAULTS with the 09-22 roll offsets
+  (^LS16 / ^LT-14): title ^A0 16 @ y10, QR ^BQN,2,4 ECC Q @ column origin y28 (84 dots), code ^A0 13
+  @ y134; --from/--count/--align/--feed/--dry.
+- Printed: 1 alignment row (x-16 y-14, for a roll check) + SONIC-0000002 … SONIC-0000011 (5 rows,
+  10 labels) + feed 2. First /write returned 500 "Error writing to port, connection closed" with the
+  printer idle/ready per ~HS; identical resend → 200, ~HS buffer 000 afterwards (job printed).
+- Numbering so far: SONIC-0000001 (09-17), 0000002–0000011 (today). Next run starts at 0000012.
+  These are validation-tool labels — not cartridge barcodes, no PT-CT-106 / BarcodeSheetBatch entry.
+npm run check: not run (no source changes).
+
+================================================================================
+2026-09-25 — feat/spu-tweaks — magnet sweeps vs bead delivery: field GRADIENT predicts bead index; optical 9_21 CV page (read-only)
+================================================================================
+No code changes. Two new private artifacts:
+- "Optical Scan Repeatability 9/21" (5aoWDDqXncFiCBqp87sBxF): 9_21_26 degradation group, 84 channels x 3
+  reinsertions x 10 scans. Reinsertion CV 1.5% median, within-run 1.7%, drift +5.3% (F3 fades faster),
+  channel-within-device 4.6%, device 3.7%, fleet 5.2% (ratio 10.46-13.46). Optical ratio vs assay bead
+  index: Spearman 0.10 (n=78) — the optics' fixed offsets are not the assay's offsets.
+- "Magnet Sweeps vs Bead Delivery" (magnet-sweeps-vs-bead-delivery.html): validation_sessions type
+  'mag_sweep' (spu-mag-sweep/v1, 1-40 mm x 0.2 mm x 8 reps, 5 well sensors x 3 lanes), 8 devices (7 of
+  the 10 in exp 359 + 0255). Sweep peak Bz vs original magnetometer Z: 120 well-lanes, Spearman 0.79,
+  peak sits 1-4% above the fixed-position read. Repeat sweeps: peak Bz 0.3%, gradient 1.5%.
+  KEY: the sweep's field gradient (magResults.wells[w][ch].gradBzdz, derived from the Bx slope along
+  travel; forceIndex = Bz x gradient) ranks with the 357 bead index at Spearman 0.84 (n=21 lanes,
+  p<0.0001), 359 loaded/baseline F3 0.81, 359 ratio@100 0.55 raw / 0.28 adjusted; peak Bz (what the
+  original test measures) -0.34. Within-device lane order by gradient = order by bead index on 4/7
+  devices fully, top lane 6/7. Device-level (7): 0.64-0.75. 0247's magnet pitch is wrong (peaks at 6.2,
+  14.2, 27.6, 35.6, >40 mm vs 8.0 mm pitch everywhere else) and it is the lowest-delivery device.
+  Not yet swept: 0221, 0246, 0211. Scratch: sweep.cjs, sweep2.cjs, build-sweep.cjs, opt921.cjs.
+`npm run check`: not run.
+
+================================================================================
+2026-10-05 — feat/spu-tweaks — read-only audit of in-process cartridges (bucket → wax → reagent)
+================================================================================
+New script scripts/diag-inprocess-cart-audit.ts (read-only, re-runnable, `--json <path>` for full
+detail). Cross-checks every in-process cart's status against the thing that should own it at that
+stage (open bucket pass, wax run, reagent run) and against the cart's own phase sub-documents.
+Run against production (db bioscale) 2026-10-05 16:53 UTC. No data written, no app code changed.
+Result: the bucket system is clean (4 open passes, 117 member carts, all 10 bucket checks 0;
+67 carts at backing, all loose/"in oven"). Everything flagged is older, downstream of backing:
+- wax_filling 47: 12 on wax run vbriez9HZz3OyIL-7l_rW still "Running" since 2026-10-02; 35 stuck
+  on aborted runs (21 on 9cqBVy6Ewy3RxjN6Hnr4l, 7 on FKSHbUqyQbeTVKtHQrV_Z), 34 untouched 60+ days.
+- wax_filled 1172 + wax_ready 330: 1259 have no fridge recorded, 501 have no wax run (393 of those
+  are usedForTestFill), 63 sit on aborted runs. wax_ready untouched since 2026-08-20.
+- 34 in-process carts (29 reagent_filled, 3 wax_filled, 2 wax_ready) are flagged used:true.
+- 22 wax_filled carts carry a reagent fill record (20 usedForTestFill).
+- 16 reagent_qc + 3 sealed with no reagent run, untouched since June; 3 carts at status
+  "(created)" (not in the enum); 2 wax_ready carts with voidedAt set; reagent run
+  tS9uwBIao91l30uhqQdqG at Loading with 0 carts since 2026-10-02.
+Nothing fixed yet — dispositions are Jacob's call (which carts physically exist).
+`npm run check`: not run (script only, not part of the app build).
+
+================================================================================
+2026-10-05 — feat/spu-tweaks — wax stage reconciled to the physical count (887 carts scrapped, production data)
+================================================================================
+Jacob supplied the physical count of every cart at wax filled (601 lines, 599 unique ids; 7591c913…
+and 684dbc45… were each listed twice) and asked for every wax_filled / wax_ready cart NOT on it to be
+scrapped. New script scripts/scrap-wax-not-on-list.ts (dry-run default, --apply, --hold-wax-run).
+Dry run: all 599 listed ids exist and all are at wax_filled; 903 wax-stage carts were not on the list.
+Applied 2026-10-05 17:04 UTC against production (db bioscale):
+- 887 carts → scrapped (557 from wax_filled, 330 from wax_ready). Each: status 'scrapped', priorStatus =
+  old status, statusUpdatedOn, voidedAt, voidReason "Not found in the 2026-10-05 physical count of
+  wax-filled cartridges", a note, and one audit_log row (action 'wax_physical_count_scrap',
+  changedBy 'migration:wax-physical-count-2026-10-05', oldData.status). Undo = restore priorStatus
+  for the carts carrying that audit action.
+- HELD, not scrapped: 16 wax_filled carts from wax run AHpsqZ_OUx51aWtKsRFtN (Robot 3 B07,
+  2026-10-02 16:17 UTC, completed, 24 carts, only 8 on the list). Every other run since 09-21 is
+  missing 0-3 carts; 16 from the last deck of the day looks like an uncounted tray. Awaiting Jacob.
+- After: wax_filled 615 (599 counted + 16 held), wax_ready 0, scrapped 1050.
+Not changed: 243 of the scrapped carts still carry a wax fridge location (33 were already checked
+out), so /cartridge-dashboard fridge tiles will list them as scrapped occupants until checked out.
+Also found (not fixed): the home page (/) "Manufacturing Pipeline" Backing bar reads the dead
+BackingLot collection (2 'ready' lots = 34) instead of cart status 'backing' (67 carts);
+/cartridge-dashboard counts carts but still adds the legacy lots on top.
+`npm run check`: not run (scripts only, no app code changed).
+
+================================================================================
+2026-10-05 — feat/spu-tweaks — wax count reconciliation, second pass: 16 held carts scrapped; 12 OVER-SCRAPPED, restore pending
+================================================================================
+Jacob confirmed the 16 held carts (wax run AHpsqZ_OUx51aWtKsRFtN, deck positions 1-8 and 17-24)
+should be scrapped. Second --apply at 2026-10-05 17:11 UTC scrapped 28, not 16: the 16, plus 12
+carts of wax run vbriez9HZz3OyIL-7l_rW (Robot 2 R04) that the operator had completed and stored in
+fridge IZDUEeCGZg-2iHhF6UkzR at 17:07 UTC — after the count was taken, so they were at wax_filled
+and not on the list. MISTAKE: the script trusted the list for every wax_filled cart regardless of
+when it got there. Those 12 are real, freshly stored carts and are currently status 'scrapped'.
+- Fix to the tool: scrap-wax-not-on-list.ts now refuses --apply without --as-of <count time> and
+  never scraps a cart whose record changed after it.
+- Restore prepared, NOT yet applied (the session's permission layer blocked the write):
+    npx tsx scripts/restore-wax-count-scrap.ts --wax-run vbriez9HZz3OyIL-7l_rW --apply
+  Dry run finds exactly those 12. Sets status back to wax_filled, clears voidedAt/voidReason, adds a
+  note and an audit_log row (action 'wax_physical_count_scrap_reverted').
+- State now: wax_filled 599 (exactly the counted list), wax_ready 0, scrapped 1078 (incl. the 12).
+  After the restore: wax_filled 611.
+Dashboard fix for the Backing bar is on branch fix/pipeline-backing-count (commit 6b0358f3, pushed;
+worktree ..\Bioscale_Operations_System_V2-pipeline-fix) — see that branch's progress.txt entry.
+`npm run check`: not run here (scripts only).
+
+================================================================================
+2026-10-05 — feat/spu-tweaks — shell (PT-CT-104) lots reset for the new shipment (production data)
+================================================================================
+Jacob: all old shell stock is depleted, a new shipment arrived — clear the old lots out of the
+bucket board's picker and open a new lot at 5000. New script scripts/reset-shell-lots.ts (dry-run
+default, --apply, --qty). Applied 2026-10-05 17:35 UTC against production (db bioscale):
+- The two PT-CT-104 lots that still showed stock were CLOSED OUT, not deleted (carts, bucket passes
+  and the ledger reference them): received quantity corrected down to what the ledger shows used, so
+  remaining = 0 and lot-remaining.ts drops them from the picker.
+    PLACEHOLDER-CT-104-20260422   500 → 499   (1 was left)
+    LOT-20260924-N847            1000 → 453   (547 were left; its 1000 was a placeholder count)
+  The other two lots (6271346a…, 9b968611…) were already at/below zero and untouched.
+- PT-CT-104 part count: adjustment row +207 (-207 → 0), then receipt +5000 → 5000.
+- New lot LOT-20261005-YEG5: 5000 shells, status accepted, pathway coc, operator
+  "claude (req: alejandrov)", no receiving inspection recorded. It is the only shell lot in the picker.
+- audit_log rows for both lot updates and the insert; every row/note tagged shell-lot-reset-2026-10-05.
+Not changed: the three open passes (BKT-000011 #2, BKT-000012 #2, BKT-000009 #2) were started on
+LOT-20260924-N847 and keep debiting it on scan-in (scan-in has no stock check, so nothing blocks);
+it will run negative and stay out of the picker. Label lots (PT-CT-106) untouched.
+Still pending from earlier today: restore of the 12 over-scrapped carts (wax run vbriez9HZz3OyIL-7l_rW)
+— not yet run; and fix/pipeline-backing-count (6b0358f3) is pushed but not merged to master.
+`npm run check`: not run here (scripts only).
+
+================================================================================
+2026-10-05 — feat/spu-tweaks — status: dashboard fix + shell-lot-only pass start are pushed, NOT deployed
+================================================================================
+Branch feat/bucket-shell-lot-only @ 7b4b42f6 (worktree ..\Bioscale_Operations_System_V2-pipeline-fix)
+is a fast-forward of master dd9fe4b6 and carries both changes: the Manufacturing Pipeline widget fix
+(6b0358f3) and the start-pass form without the label-lot picker (048b3324). The session's permission
+layer blocked the push to master (production deploy), and gh is not installed, so no PR was opened.
+Production still shows the old widget ("Backing 34") and the old start form until Jacob merges or
+pushes it. `npm run check` on that branch: 14 errors / 434 warnings, none in changed files.
+
+Deployment: production — URL NOT RETRIEVED (no Vercel CLI / gh on this machine; see the Vercel
+  dashboard Deployments tab for commit 7b4b42f6)
+Source: branch master (= feat/bucket-shell-lot-only, fast-forward) @ commit 7b4b42f6
+Retrieve this exact code: git checkout master at commit 7b4b42f6
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: Manufacturing Pipeline widget counts carts by status (Backed bar fixed,
+  bucket stages + in-flight fills shown) and the bucket start-pass form asks for the shell lot only.
+Pushed 2026-10-05 at Jacob's instruction ("push to master"); build result not verified from here.
+
+================================================================================
+2026-10-05 — feat/spu-tweaks — 35 carts stranded at wax_filling scrapped (production data)
+================================================================================
+Jacob: only the carts on the robots right now (2 decks, 48) are really at wax filling; anything else
+at that status should be scrapped. New script scripts/scrap-stuck-wax-filling.ts (dry-run default,
+--apply): keeps every wax_filling cart that is on a non-terminal wax run, scraps the rest.
+Applied 2026-10-05 18:01 UTC against production (db bioscale):
+- KEPT 48: runs Jlfgmi3-fwtTMkAUuAFIj (Robot 2 R04) and gIsqPVTGgixMGldAvGLwK (Robot 3 B07), both
+  Running, 24 carts each.
+- SCRAPPED 35, all on aborted runs: 21 on 9cqBVy6Ewy3RxjN6Hnr4l (08-05), 7 on FKSHbUqyQbeTVKtHQrV_Z
+  (06-04), and one each on seven other runs (06-04 … 10-02). status 'scrapped', priorStatus
+  'wax_filling', voidedAt/voidReason, a note, and one audit_log row per cart (action
+  'wax_filling_stuck_scrap', changedBy 'migration:wax-filling-stuck-2026-10-05').
+- wax_filling now 48.
+`npm run check`: not run (script only).
+
+================================================================================
+2026-10-05 — feat/spu-tweaks — 11 carts created straight at Backed (production data)
+================================================================================
+Jacob supplied 11 cart ids that were physically on the line before the cleanup but had no record,
+and asked for them to be created and moved straight to Backed. New script
+scripts/create-backed-carts.ts (dry-run default, --apply, --ids <file>). Dry run: none of the 11
+had a cartridge record, none is a bucket sticker or optical-test cart, and all 11 are on file as
+printed labels (barcode_sheet_batches). Applied 2026-10-05 18:05 UTC (db bioscale):
+- 11 cartridge_records inserted at status 'backing', no bucket, with the same stamp State Change's
+  "No bucket → Backed" writes (backing.recordedAt / operator / manualBackedAt), a note, and an
+  audit_log INSERT row each (changedBy "claude (req: alejandrov)").
+- No inventory moved and shell/label lots left null: the shells came out of the old stock written
+  off in the shell-lot reset; the 11 labels were never debited (PT-CT-106 count is 11 high).
+ids: 4edef24f… aada07b6… e3e1c256… b2af8ef6… b95da206… a85f18c6… c2e3fd0b… bc2f8e9b… 890557a5…
+     53569fef… b5b80776…
+`npm run check`: not run (script only).
+
+================================================================================
+2026-10-05 — feat/spu-tweaks — status: bucket board lanes pushed to a branch (preview), not on master
+================================================================================
+Earlier today: 5 ids Jacob asked to scrap needed nothing (4 already scrapped by the wax count pass,
+a098b59a-0d8c-4074-a50e-fd62de3c96ad has no record). The label-lot picker he still saw was a stale
+tab — verified the deployed production bundle (0851ba5e build) has no "QR label lot".
+New work: branch feat/bucket-board-lanes @ 237698ed (worktree ..\Bioscale_Operations_System_V2-pipeline-fix),
+based on master 2b3baef3: Unpressed split into waiting / in-process lanes with a badge-gated pull
+(custody handoff), counter tiles removed, rail moved to a top strip, Backed column narrowed. Full
+write-up is in that branch's progress.txt entry. Pushed for a Vercel preview only; production
+unchanged until it is merged/pushed to master. `npm run check` there: 16 errors / 434 warnings,
+identical to untouched master.
+
+Deployment: production — URL NOT RETRIEVED (no Vercel CLI / gh on this machine; see the Vercel
+  dashboard Deployments tab for commit 237698ed)
+Source: branch master (= feat/bucket-board-lanes, fast-forward) @ commit 237698ed
+Retrieve this exact code: git checkout master at commit 237698ed
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: bucket board lanes — Unpressed waiting / in-process with a badge pull,
+  counter tiles removed, rail moved to a top strip, narrow Backed column.
+Pushed 2026-10-05 at Jacob's instruction ("go and push it all").
