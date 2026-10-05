@@ -18258,3 +18258,33 @@ What this deployment is for: VALIDATION-08 — server-side sonic analysis on /va
 a 12-SPU comparison (5 new units 210/212/222/236/251 added in the prototype) reused the 1st/2nd
 unit's colour for the 11th/12th. Also replaced the grey 9th colour (too close to the ±2σ band grey,
 flagged in the review pass) with lime. No logic change; svelte-check unaffected (data-only file).
+
+================================================================================
+2026-10-05 — feat/sonic-analysis-workflow — SONIC workflow steps 1–6 (local dev only, not deployed)
+================================================================================
+User's SONIC workflow: 1–2 record (checklist), 3 upload, 4 MongoDB copy, 5 trim & verify (or unusable),
+6 analysis mapped to the 48 assay steps + anomalies + report. Built on Alejandro's VALIDATION-08 branch
+(origin/feat/sonic-fingerprint-analysis merged in; conflicts with master's small-file upload fix kept both).
+Decisions (user): GPL-2.0 decoder OK (internal tool); page is SONIC (A78C7989) only; production data OK;
+trim/clip defaults 1 s with typed values; test on the local dev server, no deploy.
+  - Step 4: src/lib/server/sonic/archive.ts — GridFS bucket sonic_recordings + SHA-256 on rawData.mongoCopy;
+    upload/record actions copy automatically (never fail the upload; mongoCopyError + Retry); archive /
+    archiveMissing actions; /validation/sonic/[id]/audio serves the copy with HTTP Range (R2 fallback).
+  - Steps 1–3: SONIC-only list (assay forced SONIC; untagged older recordings → 'Set as SONIC'), recording
+    checklist, unit confirmation, notes prompt; chips for MongoDB copy / review / anomalies.
+  - Step 5: review.ts verifyWindow / markUnusable (rawData.review with history; audit; unusable journaled,
+    drops reference); SonicReview.svelte — waveform + spectrogram timeline, zoom, cursor, draggable/typed
+    handles, play start/end/window; references now require a verified window; unusable excluded everywhere.
+  - Step 6: timeline.ts (48 steps, 299.7 s modelled, repeat/oscillation parts, expected loudness);
+    spectrogram.ts (50 ms x 64 log bands 50 Hz-16 kHz, 1 byte/value in GridFS sonic_spectrograms, PNG);
+    window.ts — DTW alignment (FINDING on SPU 210: the real run is ~209 s, ~72 % of the model; moves/repeats
+    run fast, oscillations ~20 % slow, so a single offset+speed fit failed, r=0), repetition check (parts
+    slid ±0.3 s onto siblings, edge frames skipped, ≥5σ/10 dB, ≥150 ms x 2 bands), clicks/tones vs ±1 s
+    (motion on/off ±0.35 s ignored), reference check (≥3 verified refs, own-median-normalized); quieter-
+    than-expected only counts when broadband; result in processedData.windowAnalysis + journal line.
+    Anomaly listener: table + markers, Pre/Post (1 s default, typed), Play clip.
+  - Tests: 9 new unit tests (29 sonic total pass); read-only dry run (scripts/sonic-dryrun.ts) on SPU 210:
+    decode 1 s, spectrogram 1 s, window analysis ~3 s, fit r=0.90, 18-21 anomalies (6 high); integration check
+    vs real DB/R2 in a scratch GridFS bucket (deleted). Thresholds are first guesses — calibrate with references.
+npm run check: 13 errors / 434 warnings = master baseline, none in sonic files.
+Not deployed (user: test on local dev server first).
