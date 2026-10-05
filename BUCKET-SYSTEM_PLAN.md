@@ -59,6 +59,20 @@ written by the bucket system.
 Each cartridge's `status` mirrors its bucket's stage while it is a member, so
 `/cartridge-admin?stage=barcoded|unpressed|backing` filters real records (`pressed` still filters historical rows).
 
+> **Unpressed is two board lanes since 2026-10-05 (user: "it's kind of confusing what's happening
+> to a bucket at any given moment").** The board reads Available → Barcoded → **Unpressed**
+> (waiting) → **Unpressed — in process** → Backed (a narrow column; it is storage). Marking a
+> Barcoded bucket *Done* is the old Barcoded → Unpressed advance (thermoseal still taken there) and
+> lands it in the waiting lane. An operator then **pulls** it into in process with their badge
+> (`bucket-service.pullIntoProcess`, action `?/pull`, ledger type `pull`): that is the attribution
+> point and the custody handoff — the open `Custody` row is released as `takeover` and a new one is
+> opened for the puller; `BucketCycle.inProcessAt` / `inProcessBy` are set. Only a pulled pass can
+> be marked *Done* → Backed (`advanceCycle` refuses a waiting one, code `NOT_PULLED`). **No new
+> stage and no new cart status:** both lanes are stage/status `unpressed`; every stage change
+> clears the in-process fields. The board drops the held badge after every advance, so each lane
+> change takes a fresh badge scan. Same day: the counter tiles above the board were removed and the
+> right-hand rail (scan box + bucket panel) became a horizontal strip in their place.
+
 > **Pressed stage removed 2026-10-02.** Unpressed now advances straight to Backed. `BUCKET_STAGES`
 > is `barcoded | unpressed | backing`; the key `pressed` stays in the `BucketCycle.stage` and
 > `CartridgeRecord.status` enums so historical rows validate (`LEGACY_PRESSED_STAGE`). Anything
