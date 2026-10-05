@@ -105,7 +105,7 @@
 			{#if form?.create?.success}
 				<p class="rounded border border-green-500/40 bg-green-900/15 p-2 text-xs text-green-300">
 					Bucket created — sticker <span class="font-mono">{form.create.barcode}</span>
-					<span class="text-[var(--color-tron-text-secondary)]">(internal id {form.create.bucketId})</span>{#if form.create.operator}, minted by <strong>{form.create.operator}</strong>{/if}. It's on the board under <strong>Available</strong>.
+					<span class="text-[var(--color-tron-text-secondary)]">(internal id {form.create.bucketId})</span>{#if form.create.operator}, minted by <strong>{form.create.operator}</strong>{/if}. It's on the board under <strong>Empty buckets</strong>.
 				</p>
 			{/if}
 			<button type="submit" disabled={busy || !qr.trim() || (badgeRequired && !badge.trim())} class="w-full rounded-lg bg-[var(--color-tron-cyan)] py-2.5 text-sm font-bold text-[var(--color-tron-bg-primary)] hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-30">

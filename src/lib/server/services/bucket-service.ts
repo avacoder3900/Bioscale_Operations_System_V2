@@ -18,7 +18,7 @@
  *     historical rows; see LEGACY_PRESSED_STAGE.)
  *     'backing' ("Backed") is a storage stage: the tub sits on the shelf until
  *     the operator clicks "Move to oven" — that frees every cart from the bucket
- *     and returns the tub to Available, nothing else. Carts keep status
+ *     and returns the tub to Empty buckets, nothing else. Carts keep status
  *     'backing' until wax filling scans them in (unpressed → backed → wax filled);
  *     the board lists the freed ones under "In oven" inside the Backed column
  *     (2026-09-25; the WI-01 "Cartridge Back" page and its LotRecord session
@@ -76,7 +76,7 @@ export type BucketStatus = BucketStage | typeof LEGACY_PRESSED_STAGE;
  * accepts, so the bucket stage uses the same key and the cart mirrors it like
  * every other stage. Every cart at 'backing' counts as Backed, in a bucket or
  * not. "Move to oven" (moveToOven) is where carts leave the bucket system:
- * the pass closes, the tub returns to Available, and the carts — untouched,
+ * the pass closes, the tub returns to Empty buckets, and the carts — untouched,
  * still 'backing' — are "in oven" (inOvenCarts) until wax filling scans them.
  */
 export const BACKED_STAGE: BucketStage = 'backing';
@@ -1247,7 +1247,7 @@ export interface MoveToOvenInput {
 
 /**
  * "Move to oven" (user, 2026-09-25): all it does is free the carts from the
- * bucket and return the bucket to Available. The pass closes; the carts are not
+ * bucket and return the bucket to Empty buckets. The pass closes; the carts are not
  * written at all — they keep status 'backing' until wax filling scans them in.
  * A later cancelled wax run does not put them back into the pass: returnCarts
  * treats an oven-released pass as loose. Badge-gated (user, 2026-09-30): the
@@ -2206,7 +2206,7 @@ export interface OverrideInput {
  *     backing.manualBackedAt, which wax filling's cancel path reads as proof of
  *     a real cart (otherwise a never-bucketed cart would be hard-deleted as a
  *     test-mode synthetic).
- * A pass emptied this way closes like a consumed one (tub back to Available,
+ * A pass emptied this way closes like a consumed one (tub back to Empty buckets,
  * empty-check armed). No inventory moves — an override is bookkeeping, not
  * production. Unknown barcodes are refused for bucket stages: scanning a cart
  * into a bucket on the board is what debits its shell + label.

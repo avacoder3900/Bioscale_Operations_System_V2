@@ -83,7 +83,7 @@
 				{:else}
 					<h1 class="font-mono text-3xl font-bold text-[var(--color-tron-cyan)]">{data.bucket.bucketId}</h1>
 				{/if}
-				<span class="rounded border px-2 py-0.5 text-[10px] uppercase tracking-wider {stateTint[data.bucket.state] ?? ''}">{data.bucket.state}</span>
+				<span class="rounded border px-2 py-0.5 text-[10px] uppercase tracking-wider {stateTint[data.bucket.state] ?? ''}">{data.bucket.state === 'available' ? 'empty' : data.bucket.state}</span>
 				{#if data.bucket.spotCheckPending}<span class="rounded border border-[var(--color-tron-yellow)]/40 bg-[var(--color-tron-yellow)]/10 px-2 py-0.5 text-[10px] uppercase tracking-wider text-[var(--color-tron-yellow)]">empty check pending</span>{/if}
 				{#if canName && !nickOpen}
 					<button type="button" onclick={openNick} class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)]">{data.bucket.nickname ? 'rename' : 'add nickname'}</button>

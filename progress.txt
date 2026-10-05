@@ -18206,3 +18206,25 @@ Retrieve this exact code: git checkout master at commit cfbdd3f1
   (or: git log master --oneline to find it if the branch has since moved on)
 What this deployment is for: sonic recordings under 4.5 MB upload through BIMS (proxied action).
   GitHub deployment 6863843473 (Production). Smoke: /validation/sonic 302 (auth redirect expected).
+
+================================================================================
+2026-10-05 — feat/rename-available-to-empty — Bucket system: "Available" relabelled "Empty buckets"
+================================================================================
+User: "Rename Available to Empty buckets in the bucket system". Display-only relabel — the stored
+ProductionBucket.state stays 'available' (no migration), as do the ?stage=available deep link,
+counts.available and board.available, so nothing that reads the state changes behaviour.
+- buckets/+page.svelte: board column header and strip tile read "Empty buckets" (strip sub-line
+  "empty buckets" → "ready to start" so the tile does not say it twice); regStateLabel
+  available → "Empty" (bucket log pills + filter, Find-a-cart "bucket Empty" pill); the two
+  scan-lookup lines now go through regStateLabel instead of printing the raw state; rail hint and
+  start-panel line "· empty ·"; change-log "→ empty"; Move to oven copy "returns it to Empty buckets".
+- cart-mfg/+page.svelte: Production Buckets tile "Empty buckets" / "ready to start".
+- buckets/[bucketId]/+page.svelte: state chip shows "empty" for available.
+- buckets/new + buckets/override: "on the board under Empty buckets" / "back under Empty buckets".
+- bucket-service.ts, buckets/+page.server.ts: comments only.
+- BUCKET-SYSTEM_PLAN.md: header, §3.5, §3.7, §4, §6.1, §6.5, §9.1, §9.3, §12 + changelog row.
+Not changed: /cartridge-admin (has no Available tile), ask-bims / MCP text (no bucket "Available"
+wording there), historical changelog rows.
+Verification: svelte-kit sync + svelte-check 14 errors / 434 warnings — the same pre-existing set
+(r2.ts, 2× research-proxy.ts, AskBimsWidget, 8× assembly/[sessionId], 2× magnetometer/[sessionId]),
+none in touched files. Not yet looked at in a signed-in browser session.

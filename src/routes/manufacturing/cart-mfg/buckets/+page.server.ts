@@ -269,7 +269,7 @@ export const actions: Actions = {
 	},
 
 	// "Move to oven": frees the carts from the bucket (they stay 'backing' until wax
-	// filling scans them in) and returns the bucket to Available. Nothing else.
+	// filling scans them in) and returns the bucket to Empty buckets. Nothing else.
 	// Badge-gated (2026-09-30).
 	moveToOven: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');

@@ -89,7 +89,7 @@
 		{@const m = form.move}
 		<div class="rounded-lg border border-green-500/40 bg-green-900/15 p-3 text-sm text-green-300">
 			<strong>{m.bucketId} #{m.cycleNumber}</strong> moved {m.fromLabel} → <strong>{m.toLabel}</strong> with {m.members} cart{m.members === 1 ? '' : 's'}.
-			{#if m.closed}The pass is closed and the bucket is back under Available (empty-check armed).{/if}
+			{#if m.closed}The pass is closed and the bucket is back under Empty buckets (empty-check armed).{/if}
 			<a href="/manufacturing/cart-mfg/buckets/{encodeURIComponent(m.bucketId ?? '')}" class="ml-1 underline">History</a>
 		</div>
 	{/if}

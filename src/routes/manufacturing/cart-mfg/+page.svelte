@@ -262,7 +262,7 @@
 	{#if data.bucketCounts}
 		{@const bc = data.bucketCounts}
 		{@const bucketStages = [
-			{ key: 'available', label: 'Available', count: bc.available, sub: 'empty buckets', color: 'text-[var(--color-tron-text)]' },
+			{ key: 'available', label: 'Empty buckets', count: bc.available, sub: 'ready to start', color: 'text-[var(--color-tron-text)]' },
 			{ key: 'barcoded', label: 'Barcoded', count: bc.stages.barcoded.cartridges, sub: `${bc.stages.barcoded.buckets} bucket${bc.stages.barcoded.buckets === 1 ? '' : 's'}`, color: 'text-[var(--color-tron-cyan)]' },
 			{ key: 'unpressed', label: 'Unpressed', count: bc.stages.unpressed.cartridges, sub: `${bc.stages.unpressed.buckets} bucket${bc.stages.unpressed.buckets === 1 ? '' : 's'}`, color: 'text-[var(--color-tron-cyan)]' },
 			{ key: 'backing', label: 'Backed', count: bc.stages.backing.cartridges, sub: `${bc.stages.backing.buckets} bucket${bc.stages.backing.buckets === 1 ? '' : 's'}`, color: 'text-[var(--color-tron-purple)]' }

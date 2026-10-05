@@ -1,6 +1,6 @@
 # Bucket System — Production Buckets, v2 (as built)
 
-**Started:** 2026-09-21 · **Last updated:** 2026-10-05 (**In oven: Copy all ids**, §6.5; **badge on the rest of the bucket actions** — mint, start pass, un-scan, sticker replace, retire, void, Master Override and State Change's bucket moves, §6.6; 2026-10-02: **State Change: straight to Backed, no bucket**, §9.6; **Pressed stage removed** — Unpressed advances straight to Backed, §2; **scan-in count lag** — the count moves on Enter, not on the server's confirm, §6.2.1; **badge at every phase** — every advance is now gated too, §6.3/§6.6; 2026-09-30: **badge gate moved** to scan-in / discards / move to oven, §6.6; earlier that day page-to-page **navigation lag** fixes, §9.1/§9.2/§11, and bucket **nicknames**, §4.1; before that 2026-09-25: thermoseal one roll part; fourth bucket stage **Backed** with **Move to oven**)
+**Started:** 2026-09-21 · **Last updated:** 2026-10-05 (**"Available" relabelled "Empty buckets"** — display only, the stored state is still `available`, §9.1; **In oven: Copy all ids**, §6.5; **badge on the rest of the bucket actions** — mint, start pass, un-scan, sticker replace, retire, void, Master Override and State Change's bucket moves, §6.6; 2026-10-02: **State Change: straight to Backed, no bucket**, §9.6; **Pressed stage removed** — Unpressed advances straight to Backed, §2; **scan-in count lag** — the count moves on Enter, not on the server's confirm, §6.2.1; **badge at every phase** — every advance is now gated too, §6.3/§6.6; 2026-09-30: **badge gate moved** to scan-in / discards / move to oven, §6.6; earlier that day page-to-page **navigation lag** fixes, §9.1/§9.2/§11, and bucket **nicknames**, §4.1; before that 2026-09-25: thermoseal one roll part; fourth bucket stage **Backed** with **Move to oven**)
 **Branch:** `feat/bucket-system` — **PR #54 open into `master`**
 (https://github.com/avacoder3900/Bioscale_Operations_System_V2/pull/54). `origin/master` has
 been merged into this branch twice (last `33a937a4`); it sits on current production code.
@@ -191,7 +191,7 @@ here and nothing on this branch reads it, so the drift is invisible to the board
 
 ### 3.5 Auto-release with deferred spot-check
 
-When wax filling draws the last member, the pass closes and the bucket returns to *Available* with
+When wax filling draws the last member, the pass closes and the bucket returns to *Empty buckets* with
 `spotCheckPending`; the next *Start* asks "Is the tub empty?".
 
 ### 3.6 Residual disposition — free text, no approval
@@ -204,7 +204,7 @@ stay for legacy rows, and any bucket still marked quarantined resolves through m
 
 ### 3.7 Residual reporting is available anytime
 
-From the rail on any Available bucket.
+From the rail on any empty bucket.
 
 ### 3.8 Oven tracking and time gating removed app-wide (2026-09-23)
 
@@ -224,7 +224,8 @@ From the rail on any Available bucket.
 ### 4.1 `ProductionBucket` → `production_buckets`
 
 `_id` BKT-NNNNNN · `barcode` (QR, unique sparse) · **`nickname`** (optional, ≤30 chars, 2026-09-30) ·
-`state` available | in_use | quarantined | retired · `currentCycleId` · `cycleCount` ·
+`state` available | in_use | quarantined | retired (`available` is shown as **Empty** / the
+**Empty buckets** column since 2026-10-05 — label only, the stored value is unchanged) · `currentCycleId` · `cycleCount` ·
 `spotCheckPending` · `residualNote` · `retiredAt/Reason` · `createdBy` · `homeLocation` (LEGACY,
 unused in v2).
 
@@ -285,7 +286,7 @@ in `reason` and the first roll id in `relatedId`.
 
 ### 6.1 Start a pass
 
-Rail → pick an Available bucket → choose the **shell lot (104)** and **label lot (106)** →
+Rail → pick an empty bucket → choose the **shell lot (104)** and **label lot (106)** →
 confirm empty if `spotCheckPending`. Opens at Barcoded with 0 members. Nothing is debited yet.
 **Badge-gated again since 2026-10-05** (§6.6; it was ungated from 2026-09-30 to then): the badge
 box is the first field of the start form, and the badge holder is `openedBy`, `emptyConfirmedBy`
@@ -394,7 +395,7 @@ On a **Backed** pass card the panel's primary button is **Move to oven (N carts)
 holder is `ovenReleasedBy` and the operator on the `oven` row. It does two things and nothing else:
 
 1. the pass closes (`consumed`, `ovenReleasedAt` / `ovenReleasedBy` on the pass, one `oven` change-log
-   row with the cart ids, a `MOVE_TO_OVEN` audit row) and the tub returns to **Available** (with the
+   row with the cart ids, a `MOVE_TO_OVEN` audit row) and the tub returns to **Empty buckets** (with the
    usual deferred spot-check, §3.5);
 2. the carts are freed from the bucket — **no cart is written**. They keep status `backing` until wax
    filling scans them in (§6.4); a cancelled wax run leaves them loose rather than reopening the pass
@@ -495,7 +496,7 @@ real records whose status says which stage they were at — so merge/scrap act o
 `residualFound` block on the previous pass records the ids and disposition.
 
 **Leftover flow as built (2026-09-23, simplified the same day).** From *Report leftover carts*
-on an Available bucket, the panel asks **Merge or Discard** first:
+on an empty bucket, the panel asks **Merge or Discard** first:
 
 - **Merge** — shows the **last stage this bucket's carts were in** (its previous pass's stage)
   and one *Merge into* picker suggested from the board: an **open pass at that stage** first;
@@ -540,11 +541,12 @@ lot quantity − Σ consumption/scrap rows for that lot.
 
 ### 9.1 `/manufacturing/cart-mfg/buckets` — board, rail, thermoseal, logs
 
-Stage strip (Available · Barcoded · Unpressed · **Backed** — the Backed
+Stage strip (Empty buckets · Barcoded · Unpressed · **Backed** — the Backed
 tile counts every cart at `backing`, its bucket sub-count the open backed passes) →
-4-column board (Available / Barcoded / Unpressed / Backed; the Pressed column was removed
+4-column board (Empty buckets / Barcoded / Unpressed / Backed; the Pressed column was removed
 2026-10-02 — a legacy pressed pass shows under Unpressed and its Advance goes to Backed, §2).
-Under **Available**: empty buckets only — minting lives on `/buckets/new` (§9.4), reached from
+Under **Empty buckets** (labelled "Available" until 2026-10-05; the state key, the
+`?stage=available` deep link and `counts.available` keep the old name): empty buckets only — minting lives on `/buckets/new` (§9.4), reached from
 the header *New bucket* button; there is no inline mint card on the board. Every pass card
 carries **Audit** (§9.8) under its cart list.
 Under **Unpressed**: the compact **Thermoseal tile** (§3.4; live PT-CT-101 roll count, notifications
@@ -574,7 +576,7 @@ neutral for anything downstream) · a **relation pill** (green *Belongs in*, yel
 grey *Last seen in*; yellow *On no open pass* when a bucket-stage cart has no home) · the bucket
 link headlined by its **nickname** with the id and `#pass` in mono (sticker in the tooltip) ·
 "at <stage>" · the bucket's own **state pill** from the bucket log's `regStateTint` ("bucket
-In use" / "bucket Available" …) · legacy lot · "since". One extra `ProductionBucket` read per
+In use" / "bucket Empty" …) · legacy lot · "since". One extra `ProductionBucket` read per
 found cart (nickname, barcode, state).
 
 **Load cost (2026-09-30, navigation-lag pass).** The board load fans out nine branches; the
@@ -606,7 +608,7 @@ every pass it has run.
 - `/cartridge-admin` strip: Barcoded · Unpressed (link to the board) · **Backed** (was "Backed, awaiting
   oven** (every cart at `backing`; filters the page to `backing`). The
   *Available* tile was removed 2026-09-23 (user: report only the production stages); the
-  board's own strip (§9.1) still counts Available buckets.
+  board's own strip (§9.1) still counts empty buckets.
 - `/manufacturing/cart-mfg` **Production Buckets** card beneath the robot grid, same tiles. This
   is the dashboard's only Backed card: the top-row *Backed* stat and the Pipeline Flow strip's
   leading *In Oven* card were removed 2026-09-25 (user: redundant) — Pipeline Flow now starts
@@ -796,6 +798,7 @@ per-scan lookup only needs `manufacturing:read`.
 | _(feat/drop-pressed-stage)_ | **Pressed stage removed** (§2, §5.2, §6.3, §7, §9.1, §9.3, §9.5, §9.6, §12.3): `BUCKET_STAGES` is now `barcoded | unpressed | backing`, so Unpressed advances straight to Backed (same `backing.*` stamp; thermoseal still consumed at Barcoded → Unpressed). The key stays in both model enums as `LEGACY_PRESSED_STAGE`; new `isBucketStatus()` / `boardStage()` / `stageLabel()` and a legacy branch in `nextStage()` keep any pass or cart still at `pressed` visible (Unpressed column + count), advanceable (→ Backed, no thermoseal) and accepted by residual / audit / void / state-change — no data migration. Board `md:grid-cols-4`, dashboard + cartridge-admin strips lose the Pressed tile, pipeline loses `bucket_pressed`, override + state-change no longer offer the target. `npm run check`: 14 errors, the pre-existing baseline. |
 | _(feat/state-change-direct-backed)_ | **State Change: straight to Backed with no bucket** (§9.6): a *No bucket* checkbox on `/manufacturing/cart-mfg/state-change`, shown only when the target is Backed, sends `noBucket` to `overrideCartStage()`, which moves the cart to status `backing` on no pass — it leaves its open pass if any (`merge_out`; an emptied pass closes), gets the `backing.recordedAt` / `operator` stamp and the new `backing.manualBackedAt` (model), a `(no bucket)` note and an `OVERRIDE` audit row. Loose backed carts are the state Move to oven already produces (Backed tile, In oven dropdown, loadable by wax filling). Wax filling's `revertToBacked` accepts `backing.manualBackedAt` as proof of a real cart, so a never-bucketed cart is returned loose on cancel/abort instead of hard-deleted as a synthetic. Barcoded / Unpressed targets unchanged; unknown barcodes still refused. `npm run check`: 14 errors, the pre-existing baseline. |
 | _(feat/find-cart-bucket-pills)_ | **Find a cart: bucket nickname + colour-coded pills** (§9.1, §7; user 2026-10-02): `cartStatusLine()` returns structured fields (`status`, `statusLabel`, `home` with `nickname` / `barcode` / `bucketState` / `relation`, `legacyLotId`, `since`) beside the unchanged `line`, reading the home bucket's `ProductionBucket` row for nickname + state; `?/cartLookup` returns the whole object. Board: new `cartHitView` snippet renders cart id · stage-tinted status pill · relation pill (Belongs in / Taken off / Last seen in / On no open pass) · bucket link headlined by nickname · "at <stage>" · bucket-state pill (`regStateTint`) · legacy lot · since; used by the *Find a cart* box and the leftover panel's *Where does this cart belong?*. Plain `line` still shown for not-found / errors. No schema or data change. |
+| _(feat/rename-available-to-empty)_ | **"Available" → "Empty buckets"** (§9.1, §5.1; user 2026-10-05): display-only relabel. Board column + strip tile and the `/manufacturing/cart-mfg` Production Buckets tile read **Empty buckets** (sub-line "ready to start"); the bucket log / Find-a-cart state pill, the scan-lookup lines and the bucket detail chip read **Empty**; the rail hint, change-log "→ empty" and the Move to oven / mint / override copy follow. `ProductionBucket.state` stays `available` (no migration), as do `?stage=available`, `counts.available` and `board.available`. |
 
 `npm run check` after v2: **12 errors / 438 warnings** — the same 12 pre-existing (`r2.ts`,
 `AskBimsWidget.svelte`, 8× `assembly/[sessionId]`, 2× `validation/magnetometer/[sessionId]`
@@ -846,7 +849,7 @@ the floor creates a real card and sends real mail on the next board load.
 
 - **Backed stage is untested end to end** (2026-09-25). Not yet exercised on a preview: advance
   Unpressed → Backed; load a deck from a backed bucket and confirm the pass closes and the tub
-  returns to Available; cancel that run and confirm the pass reopens at Backed with the carts
+  returns to Empty buckets; cancel that run and confirm the pass reopens at Backed with the carts
   back in it. `revertToBacked` swallows a `returnCarts` failure (logs it) so a cancel can never
   be blocked by bucket bookkeeping — check the server log if a cancelled run's carts are back at
   `backing` but not back in their bucket.

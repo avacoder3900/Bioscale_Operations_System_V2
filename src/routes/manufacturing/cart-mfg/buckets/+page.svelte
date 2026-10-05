@@ -407,7 +407,7 @@
 		if (bucket) { openBucket(bucket); shortList = []; return true; }
 		const hits = [
 			...boardCycles.filter(c => containsLabel(c.bucketId, c.barcode, raw, c.nickname)).map(c => ({ bucketId: c.bucketId, state: 'in_use', hint: `${c.nickname ? `${c.nickname} · ` : ''}${labelFor(c.stage)} · ${c.quantity}` })),
-			...allIdleBuckets.filter(b => containsLabel(b.bucketId, b.barcode, raw, b.nickname)).map(b => ({ bucketId: b.bucketId, state: b.state, hint: `${b.nickname ? `${b.nickname} · ` : ''}${b.state === 'quarantined' ? (b.residualNote ?? 'quarantined') : `available · ${b.cycleCount} passes`}` }))
+			...allIdleBuckets.filter(b => containsLabel(b.bucketId, b.barcode, raw, b.nickname)).map(b => ({ bucketId: b.bucketId, state: b.state, hint: `${b.nickname ? `${b.nickname} · ` : ''}${b.state === 'quarantined' ? (b.residualNote ?? 'quarantined') : `empty · ${b.cycleCount} passes`}` }))
 		].slice(0, 8);
 		shortList = hits;
 		return hits.length > 0;
@@ -671,7 +671,7 @@
 			case 'adjust': return { event: 'Count corrected', moved: `at ${from ?? '?'}`, discarded: false };
 			case 'merge_in': return { event: 'Residual received', moved: `at ${to ?? '?'}`, discarded: false };
 			case 'merge_out': return { event: 'Residual merged out', moved: `to another bucket`, discarded: false };
-			case 'release': return { event: 'Emptied', moved: `${from ?? '?'} → available`, discarded: false };
+			case 'release': return { event: 'Emptied', moved: `${from ?? '?'} → empty`, discarded: false };
 			case 'quarantine': return { event: 'Quarantined', moved: 'residual deferred', discarded: false };
 			case 'retire': return { event: 'Retired', moved: 'label killed', discarded: false };
 			case 'void': return { event: 'Pass voided', moved: 'inventory returned', discarded: false };
@@ -696,7 +696,7 @@
 		const q = regFilter.trim().toLowerCase();
 		return data.registry.filter(r => (regState === 'all' || r.state === regState) && (!q || r.bucketId.toLowerCase().includes(q) || (r.barcode ?? '').toLowerCase().includes(q) || (r.nickname ?? '').toLowerCase().includes(q)));
 	});
-	const regStateLabel: Record<string, string> = { available: 'Available', in_use: 'In use', quarantined: 'Quarantined', retired: 'Retired' };
+	const regStateLabel: Record<string, string> = { available: 'Empty', in_use: 'In use', quarantined: 'Quarantined', retired: 'Retired' };
 	const regStateTint: Record<string, string> = {
 		available: 'text-green-300 border-green-500/40 bg-green-900/20',
 		in_use: 'text-[var(--color-tron-cyan)] border-[var(--color-tron-cyan)]/40 bg-[var(--color-tron-cyan)]/10',
@@ -775,7 +775,7 @@
 	<div class="flex flex-wrap items-end justify-between gap-3">
 		<div>
 			<h1 class="text-2xl font-semibold text-[var(--color-tron-text)]">Production Buckets</h1>
-			<p class="text-xs text-[var(--color-tron-text-secondary)]">Stick a QR on each shell and scan it into a bucket. Whole buckets move Barcoded → Unpressed → {data.backedLabel}; <em>Move to oven</em> frees the carts from the bucket and returns it to Available. Carts stay backed until wax filling scans them in.</p>
+			<p class="text-xs text-[var(--color-tron-text-secondary)]">Stick a QR on each shell and scan it into a bucket. Whole buckets move Barcoded → Unpressed → {data.backedLabel}; <em>Move to oven</em> frees the carts from the bucket and returns it to Empty buckets. Carts stay backed until wax filling scans them in.</p>
 		</div>
 		<div class="flex gap-2">
 			<a href="/manufacturing/cart-mfg/buckets/new" class={btnGhost}>New bucket</a>
@@ -791,9 +791,9 @@
 	<!-- Stage strip -->
 	<div class="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
 		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3">
-			<p class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Available</p>
+			<p class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Empty buckets</p>
 			<p class="mt-1 text-2xl font-bold text-[var(--color-tron-text)]">{data.counts.available}</p>
-			<p class="text-[10px] text-[var(--color-tron-text-secondary)]">empty buckets</p>
+			<p class="text-[10px] text-[var(--color-tron-text-secondary)]">ready to start</p>
 		</div>
 		{#each data.stages as s (s.key)}
 			<div class="rounded-lg border bg-[var(--color-tron-surface)] p-3 {stageTint[s.key]}">
@@ -817,11 +817,11 @@
 	{/if}
 
 	<div class="grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
-		<!-- Board: four columns — Available + the three stages. (Pressed column dropped 2026-10-02, user: redundant.) -->
+		<!-- Board: four columns — Empty buckets + the three stages. (Pressed column dropped 2026-10-02, user: redundant.) -->
 		<div class="grid grid-cols-1 gap-3 md:grid-cols-4">
 			<div class="rounded-lg border bg-[var(--color-tron-bg-secondary)] p-2 {data.focusStage === 'available' ? 'ring-1 ring-[var(--color-tron-cyan)]' : 'border-[var(--color-tron-border)]'}">
 				<div class="flex items-center justify-between px-1 pb-2">
-					<span class="text-xs font-semibold uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Available</span>
+					<span class="text-xs font-semibold uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Empty buckets</span>
 					<span class="text-xs text-[var(--color-tron-text-secondary)]">{data.board.available.length}</span>
 				</div>
 				<div class="space-y-2">
@@ -1014,12 +1014,12 @@
 								<p class="text-[var(--color-tron-yellow)]">{data.scan.badge?.note ?? 'Unknown badge.'}</p>
 							{/if}
 						{:else if data.scan.kind === 'bucket'}
-							<div class="flex items-center justify-between"><span class="font-mono text-[var(--color-tron-text)]">{#if data.scan.bucket.nickname}<span class="font-sans">{data.scan.bucket.nickname}</span> · {/if}{data.scan.bucket._id}</span><span class="text-[10px] uppercase text-[var(--color-tron-text-secondary)]">{data.scan.bucket.state} · {data.scan.bucket.cycleCount} passes</span></div>
+							<div class="flex items-center justify-between"><span class="font-mono text-[var(--color-tron-text)]">{#if data.scan.bucket.nickname}<span class="font-sans">{data.scan.bucket.nickname}</span> · {/if}{data.scan.bucket._id}</span><span class="text-[10px] uppercase text-[var(--color-tron-text-secondary)]">{regStateLabel[data.scan.bucket.state] ?? data.scan.bucket.state} · {data.scan.bucket.cycleCount} passes</span></div>
 							<a href="/manufacturing/cart-mfg/buckets/{data.scan.bucket._id}" class="mt-1 block text-[var(--color-tron-cyan)] hover:underline">Open history →</a>
 						{:else if (data.scan.matches ?? []).length === 0}
 							<p class="text-[var(--color-tron-text-secondary)]">No bucket matches “{data.scanQuery}”.</p>
 						{:else}
-							<ul class="space-y-1">{#each data.scan.matches ?? [] as m (m.bucketId)}<li class="flex items-center justify-between"><a href="/manufacturing/cart-mfg/buckets/{m.bucketId}" class="font-mono text-[var(--color-tron-cyan)] hover:underline">{m.bucketId}{#if m.nickname} <span class="font-sans text-[var(--color-tron-text)]">· {m.nickname}</span>{/if}</a><span class="text-[10px] text-[var(--color-tron-text-secondary)]">{m.cycle ? `${labelFor(m.cycle.stage)} · ${m.cycle.quantity}` : m.state}</span></li>{/each}</ul>
+							<ul class="space-y-1">{#each data.scan.matches ?? [] as m (m.bucketId)}<li class="flex items-center justify-between"><a href="/manufacturing/cart-mfg/buckets/{m.bucketId}" class="font-mono text-[var(--color-tron-cyan)] hover:underline">{m.bucketId}{#if m.nickname} <span class="font-sans text-[var(--color-tron-text)]">· {m.nickname}</span>{/if}</a><span class="text-[10px] text-[var(--color-tron-text-secondary)]">{m.cycle ? `${labelFor(m.cycle.stage)} · ${m.cycle.quantity}` : (regStateLabel[m.state] ?? m.state)}</span></li>{/each}</ul>
 						{/if}
 					</div>
 				{/if}
@@ -1034,7 +1034,7 @@
 						{#if form?.moveToOven?.success}
 							{@const m = form.moveToOven as any}
 							<div class="rounded border border-[var(--color-tron-purple)]/60 bg-[var(--color-tron-purple)]/10 p-2 text-xs text-[var(--color-tron-text)]" role="status">
-								<strong class="text-[var(--color-tron-purple)]">Moved to oven.</strong> {m.released} cart{m.released === 1 ? '' : 's'} freed from {m.bucketId} #{m.cycleNumber}{#if m.operator} by <strong>{m.operator}</strong>{/if}; the bucket is back in Available. They stay backed (see <em>In oven</em> under Backed) until <a href="/manufacturing/cart-mfg/wax-filling" class="underline">wax filling</a> scans them.
+								<strong class="text-[var(--color-tron-purple)]">Moved to oven.</strong> {m.released} cart{m.released === 1 ? '' : 's'} freed from {m.bucketId} #{m.cycleNumber}{#if m.operator} by <strong>{m.operator}</strong>{/if}; the bucket is back in Empty buckets. They stay backed (see <em>In oven</em> under Backed) until <a href="/manufacturing/cart-mfg/wax-filling" class="underline">wax filling</a> scans them.
 							</div>
 						{:else}
 							<p class="py-4 text-center text-xs text-[var(--color-tron-text-secondary)]">This pass is no longer on the board (moved to the oven, drawn to wax filling, emptied, or refreshing).</p>
@@ -1127,16 +1127,16 @@
 									<button type="button" class={btnPrimary} disabled={c.quantity === 0} onclick={() => setMode('advance')}>Advance → {nextLabel(c.stage)}</button>
 								{:else}
 									<!-- Backed is the end of the bucket. Move to oven frees the carts from the bucket
-									     and returns it to Available — nothing else (user, 2026-09-25). -->
+									     and returns it to Empty buckets — nothing else (user, 2026-09-25). -->
 									<form method="POST" action="?/moveToOven" use:enhance={enhanceBusy} class="space-y-2">
 										<input type="hidden" name="cycleId" value={c.cycleId} />
 										<!-- Gated step (2026-09-30): passing carts to the oven needs a badge. -->
 										{@render badgeField(true)}
 										<button type="submit" disabled={busy || c.quantity === 0}
 											class="w-full rounded-lg border border-[var(--color-tron-purple)]/60 bg-[var(--color-tron-purple)]/10 py-2.5 text-center text-sm font-semibold text-[var(--color-tron-purple)] hover:bg-[var(--color-tron-purple)]/20 disabled:opacity-50"
-											title="Free the carts from this bucket and return it to Available; the carts stay backed until wax filling scans them">{busy ? 'Moving…' : `Move to oven (${c.quantity} cart${c.quantity === 1 ? '' : 's'})`}</button>
+											title="Free the carts from this bucket and return it to Empty buckets; the carts stay backed until wax filling scans them">{busy ? 'Moving…' : `Move to oven (${c.quantity} cart${c.quantity === 1 ? '' : 's'})`}</button>
 									</form>
-									<p class="text-[10px] text-[var(--color-tron-text-secondary)]">Frees these carts from the bucket and returns it to Available. Carts stay backed until wax filling scans them in.</p>
+									<p class="text-[10px] text-[var(--color-tron-text-secondary)]">Frees these carts from the bucket and returns it to Empty buckets. Carts stay backed until wax filling scans them in.</p>
 									{#if form?.moveToOven?.error}<p class="text-xs text-[var(--color-tron-error)]">{form.moveToOven.error}</p>{/if}
 									<a href="/manufacturing/cart-mfg/wax-filling" class="block text-center text-[10px] text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)]">Wax filling →</a>
 								{/if}
@@ -1355,7 +1355,7 @@
 					<div class="flex items-start justify-between">
 						<div>
 							<div class="font-mono text-lg text-[var(--color-tron-text)]">{nameOf(b)}</div>
-							<div class="text-xs text-[var(--color-tron-text-secondary)]">{b.bucketId} · available · {b.cycleCount} pass{b.cycleCount === 1 ? '' : 'es'}</div>
+							<div class="text-xs text-[var(--color-tron-text-secondary)]">{b.bucketId} · empty · {b.cycleCount} pass{b.cycleCount === 1 ? '' : 'es'}</div>
 						</div>
 						<div class="flex gap-2">
 							<a href="/manufacturing/cart-mfg/buckets/{b.bucketId}" class="text-[10px] text-[var(--color-tron-cyan)] hover:underline">history</a>
