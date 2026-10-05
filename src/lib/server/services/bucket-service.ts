@@ -74,8 +74,9 @@ export type BucketStatus = BucketStage | typeof LEGACY_PRESSED_STAGE;
 /**
  * The last bucket stage. Cart status 'backing' is what wax filling's deck load
  * accepts, so the bucket stage uses the same key and the cart mirrors it like
- * every other stage. Every cart at 'backing' counts as Backed, in a bucket or
- * not. "Move to oven" (moveToOven) is where carts leave the bucket system:
+ * every other stage. The Backed COUNT is the carts in open Backed passes only
+ * (stageCounts; user, 2026-10-05) — a cart at 'backing' on no pass is "in oven",
+ * not in that number. "Move to oven" (moveToOven) is where carts leave the bucket system:
  * the pass closes, the tub returns to Available, and the carts — untouched,
  * still 'backing' — are "in oven" (inOvenCarts) until wax filling scans them.
  */
@@ -2000,10 +2001,12 @@ export async function voidCycle(input: VoidCycleInput): Promise<VoidCycleResult>
 
 export interface StageCounts {
 	/**
-	 * Per stage: open passes and their member carts. Backed is the exception —
-	 * its `cartridges` is EVERY cart at status 'backing', in a bucket or not
-	 * (user, 2026-09-25: one category, no separate "no bucket" count). Carts
-	 * freed by Move to oven are still 'backing' and still count here.
+	 * Per stage: open passes and their member carts — Backed included (user,
+	 * 2026-10-05: "total number of backed carts … just what's in buckets").
+	 * Carts freed by Move to oven are still status 'backing' but are on no pass,
+	 * so they are NOT in this number; the board lists them under "In oven"
+	 * (inOvenCarts). From 2026-09-25 until then Backed counted every cart at
+	 * status 'backing', in a bucket or not.
 	 */
 	stages: Record<BucketStage, { buckets: number; cartridges: number }>;
 	available: number;
@@ -2014,17 +2017,15 @@ export interface StageCounts {
 
 export async function stageCounts(): Promise<StageCounts> {
 	await connectDB();
-	const [cycleAgg, bucketAgg, backedTotal] = await Promise.all([
+	const [cycleAgg, bucketAgg] = await Promise.all([
 		BucketCycle.aggregate([{ $match: { status: 'open' } }, { $group: { _id: '$stage', buckets: { $sum: 1 }, cartridges: { $sum: '$quantity' } } }]) as any as Promise<any[]>,
-		ProductionBucket.aggregate([{ $group: { _id: '$state', n: { $sum: 1 } } }]) as any as Promise<any[]>,
-		CartridgeRecord.countDocuments({ status: BACKED_STATUS })
+		ProductionBucket.aggregate([{ $group: { _id: '$state', n: { $sum: 1 } } }]) as any as Promise<any[]>
 	]);
 	const stages = Object.fromEntries(BUCKET_STAGES.map(s => [s, { buckets: 0, cartridges: 0 }])) as StageCounts['stages'];
 	for (const row of cycleAgg) {
 		const stage = boardStage(row._id); // legacy 'pressed' passes count under Unpressed
 		if (stage) stages[stage] = { buckets: stages[stage].buckets + (row.buckets ?? 0), cartridges: stages[stage].cartridges + (row.cartridges ?? 0) };
 	}
-	stages.backing.cartridges = backedTotal;
 	const byState = new Map(bucketAgg.map(r => [r._id, r.n ?? 0]));
 	return {
 		stages,
@@ -2201,8 +2202,8 @@ export interface OverrideInput {
  *   - target is anything else → the cart leaves its pass (if it was in one);
  *   - target is Backed with `noBucket` → the cart leaves its pass (if any) and
  *     sits loose at 'backing' — the same place Move to oven leaves carts:
- *     counted as Backed, listed under the board's "In oven" dropdown, loadable
- *     by wax filling. It gets the backing.recordedAt / operator stamp plus
+ *     listed under the board's "In oven" dropdown (not in the Backed count, which
+ *     is in-bucket carts only since 2026-10-05), loadable by wax filling. It gets the backing.recordedAt / operator stamp plus
  *     backing.manualBackedAt, which wax filling's cancel path reads as proof of
  *     a real cart (otherwise a never-bucketed cart would be hard-deleted as a
  *     test-mode synthetic).

@@ -125,7 +125,8 @@
 	<PartsNav />
 
 	<!-- Production-bucket funnel (BUCKET-SYSTEM_PLAN v2 §9.3): Barcoded → Unpressed → Backed.
-	     Tiles deep-link into the board; Backed counts every cart at status backing and filters this page. -->
+	     Tiles deep-link into the board; Backed counts the carts in open Backed buckets only (2026-10-05) and
+	     filters this page to status backing — that list also holds the loose "in oven" carts, so it can be longer. -->
 	{#if data.bucketCounts}
 		{@const bc = data.bucketCounts}
 		{@const strip = [

@@ -1,6 +1,6 @@
 # Bucket System — Production Buckets, v2 (as built)
 
-**Started:** 2026-09-21 · **Last updated:** 2026-10-05 (**badge on the rest of the bucket actions** — mint, start pass, un-scan, sticker replace, retire, void, Master Override and State Change's bucket moves, §6.6; 2026-10-02: **State Change: straight to Backed, no bucket**, §9.6; **Pressed stage removed** — Unpressed advances straight to Backed, §2; **scan-in count lag** — the count moves on Enter, not on the server's confirm, §6.2.1; **badge at every phase** — every advance is now gated too, §6.3/§6.6; 2026-09-30: **badge gate moved** to scan-in / discards / move to oven, §6.6; earlier that day page-to-page **navigation lag** fixes, §9.1/§9.2/§11, and bucket **nicknames**, §4.1; before that 2026-09-25: thermoseal one roll part; fourth bucket stage **Backed** with **Move to oven**)
+**Started:** 2026-09-21 · **Last updated:** 2026-10-05 (**Backed count = carts in buckets only**, §2; **badge on the rest of the bucket actions** — mint, start pass, un-scan, sticker replace, retire, void, Master Override and State Change's bucket moves, §6.6; 2026-10-02: **State Change: straight to Backed, no bucket**, §9.6; **Pressed stage removed** — Unpressed advances straight to Backed, §2; **scan-in count lag** — the count moves on Enter, not on the server's confirm, §6.2.1; **badge at every phase** — every advance is now gated too, §6.3/§6.6; 2026-09-30: **badge gate moved** to scan-in / discards / move to oven, §6.6; earlier that day page-to-page **navigation lag** fixes, §9.1/§9.2/§11, and bucket **nicknames**, §4.1; before that 2026-09-25: thermoseal one roll part; fourth bucket stage **Backed** with **Move to oven**)
 **Branch:** `feat/bucket-system` — **PR #54 open into `master`**
 (https://github.com/avacoder3900/Bioscale_Operations_System_V2/pull/54). `origin/master` has
 been merged into this branch twice (last `33a937a4`); it sits on current production code.
@@ -76,13 +76,17 @@ Each cartridge's `status` mirrors its bucket's stage while it is a member, so
 > redundant and too many clicks: after pressing, carts just sit in a "backed" holding phase until
 > the wax-fill operator places them in the oven and loads the deck. **Oven placement and time
 > gating are disabled, not modelled** — nothing records which oven or when; it may return later.
-> **One category (user, 2026-09-25):** every cart at `backing` is *Backed*,
-> whether or not it is still a member of an open pass. Carts drawn by the old WI-01 page before
-> the change, or handed back by a cancelled wax run to a tub that had moved on, are not in a
-> pass; they are counted in the Backed tile all the same (`StageCounts.stages.backing.cartridges`
-> is the count of every cart at status `backing`, not of pass members) and wax filling accepts
-> them. There is no separate "no bucket" tile or count — a first version had one and it was
-> removed as redundant.
+> **The Backed count is carts in buckets only (user, 2026-10-05):** "our total number of backed
+> carts is currently 34 (just what's in buckets), change number to match this."
+> `StageCounts.stages.backing.cartridges` is now the member count of the open Backed passes, like
+> every other stage. Carts at status `backing` on no pass — freed by *Move to oven*, drawn by the
+> old WI-01 page, handed back by a cancelled wax run to a tub that had moved on, or sent straight
+> to Backed by State Change — are **not** in that number. They keep status `backing`, are listed
+> under the board's *In oven* dropdown with their own count, and wax filling still accepts them.
+> This reverses the 2026-09-25 "one category" rule, under which the tile counted every cart at
+> `backing`, in a pass or not. Not changed: wax filling's "carts available to load", the
+> consumables page's *Backed Cartridges* and the pipeline page's rows still count the loose carts,
+> because those pages are about what can be loaded, not what is in a tub.
 
 > **Renamed 2026-09-25: `raw` → `barcoded`.** The first stage is named for what has happened to
 > the shell (a QR/barcode label is on it), not for the material it was cut from. The old value
@@ -370,7 +374,7 @@ the last member is loaded. Ledger row: `consume` with `relatedId` = the wax run 
 **Cancel / abort** (`revertToBacked` in the wax-filling server): real carts go back to
 `backing` and `returnCarts` puts them back into their pass — reopening a consumed pass at Backed
 if the tub is still `available`; if the tub already started a newer pass the cart stays at
-`backing` outside a pass (logged, still counted as Backed, still loadable). Test-mode synthetics (`backing.synthetic: true`, or neither a bucket
+`backing` outside a pass (logged, listed under *In oven*, still loadable; not in the Backed count since 2026-10-05, §2). Test-mode synthetics (`backing.synthetic: true`, or neither a bucket
 nor a WI-01 lot) are hard-deleted as before.
 
 **Removed:** `src/routes/manufacturing/cart-mfg/wi-01/` (page + steps editor), the *Cartridge
@@ -402,8 +406,9 @@ holder is `ovenReleasedBy` and the operator on the `oven` row. It does two thing
 
 **In oven** is a short `<details>` dropdown at the bottom of the board's Backed column, not a card and
 not a status: `inOvenCarts()` = carts at `backing` on no open pass (freed by Move to oven, returned by a
-cancelled run, or drawn by the old WI-01 page), count + up to 200 ids. The Backed stage count stays
-*every cart at `backing`* (§2, one category). The board's five columns are one row wide from `md` up,
+cancelled run, or drawn by the old WI-01 page), count + up to 200 ids. Since 2026-10-05 the Backed stage count is
+the carts in open Backed passes only, so these carts are **not** in it (§2; before that it was
+*every cart at `backing`*). The board's five columns are one row wide from `md` up,
 so Backed sat beside Pressed (four columns since the Pressed column was removed 2026-10-02, §9.1).
 
 ### 6.6 Where the badge is asked for (2026-09-30; every phase since 2026-10-02; every operator action since 2026-10-05)
@@ -538,7 +543,7 @@ lot quantity − Σ consumption/scrap rows for that lot.
 ### 9.1 `/manufacturing/cart-mfg/buckets` — board, rail, thermoseal, logs
 
 Stage strip (Available · Barcoded · Unpressed · **Backed** — the Backed
-tile counts every cart at `backing`, its bucket sub-count the open backed passes) →
+tile counts the carts in open Backed passes only since 2026-10-05, §2; its bucket sub-count is those passes) →
 4-column board (Available / Barcoded / Unpressed / Backed; the Pressed column was removed
 2026-10-02 — a legacy pressed pass shows under Unpressed and its Advance goes to Backed, §2).
 Under **Available**: empty buckets only — minting lives on `/buckets/new` (§9.4), reached from
@@ -601,7 +606,8 @@ every pass it has run.
 ### 9.3 Summary views (read-only, deep-link to the board)
 
 - `/cartridge-admin` strip: Barcoded · Unpressed (link to the board) · **Backed** (was "Backed, awaiting
-  oven** (every cart at `backing`; filters the page to `backing`). The
+  oven** (carts in open Backed buckets only since 2026-10-05, §2; the tile still filters the page to
+  status `backing`, a list that also holds the loose "in oven" carts). The
   *Available* tile was removed 2026-09-23 (user: report only the production stages); the
   board's own strip (§9.1) still counts Available buckets.
 - `/manufacturing/cart-mfg` **Production Buckets** card beneath the robot grid, same tiles. This
@@ -753,6 +759,7 @@ per-scan lookup only needs `manufacturing:read`.
 |---|---|
 | `23b1d6b9` … `b7e2c262` | v1 (2026-09-21/22): count-based buckets, labels, board, residual, WI-01 handoff, dashboard/pipeline views, change + bucket logs |
 | `f0e9176a` | Merge of `origin/master` (564 commits); collision guard extended; `findBucketLabels()` |
+| _(fix/backed-count-in-buckets)_ | **Backed count = carts in buckets only** (§2; user 2026-10-05): `stageCounts()` no longer overrides the Backed stage with a count of every cart at status `backing` — it is the member count of the open Backed passes, like the other stages. Changes the board's Backed tile, the cart-mfg strip and the `/cartridge-admin` tile. Loose `backing` carts stay listed under *In oven*. Reverses the 2026-09-25 "one category" rule. No data change. |
 | `ce75e928` _(feat/badge-all-bucket-actions)_ | **Badge on the rest of the bucket actions** (§6.6; user 2026-10-05, after the badge-scan audit): `requireBadge()` gains a level (`'write'` / `'admin'`) and now gates `createBucket`, `replaceBucketSticker`, `startCycle`, `unscanCart`, `overrideCartStage` (write) and `retireBucket`, `voidCycle`, `forceBucketPhase` (admin badge). New `badgeGate()` export so State Change resolves the badge once per batch. Badge boxes on `/buckets/new` (create + replace), the board's start and retire forms, `/buckets/[bucketId]` (void + retire), `/buckets/override` and State Change, via the new `BadgeScanField.svelte`; `?/unscan` carries the rail's badge. `consumeCarts` / `returnCarts` deliberately left on the session (wax filling's deck load and abort path). Reverses the 2026-09-30 removal of the badge from mint and start-pass. No schema or data change. |
 | `47a2a63d` | `voidCycle()` + *Void this pass…* |
 | `fe947207` | No debit on bucket entry; discards remove carts from inventory; yellow note |

@@ -153,7 +153,7 @@
 				<input type="checkbox" bind:checked={noBucket} class="mt-0.5" />
 				<span>
 					<span class="font-semibold" style="color: var(--color-tron-text)">No bucket</span> — move straight to {data.stageLabels[target] ?? target}.
-					The carts sit loose at <span class="font-mono">backing</span>, where <em>Move to oven</em> leaves them: counted as Backed, listed under the board's <em>In oven</em> dropdown, loadable by wax filling.
+					The carts sit loose at <span class="font-mono">backing</span>, where <em>Move to oven</em> leaves them: listed under the board's <em>In oven</em> dropdown (not in the Backed count, which is carts in buckets only), loadable by wax filling.
 				</span>
 			</label>
 		{/if}

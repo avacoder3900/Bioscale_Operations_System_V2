@@ -18119,3 +18119,31 @@ Source: branch master @ commit e6368c05
 Retrieve this exact code: git checkout master at commit e6368c05
   (or: git log master --oneline to find it if the branch has since moved on)
 What this deployment is for: production release of PR #79 (badge scan on the remaining bucket actions).
+
+================================================================================
+2026-10-05 — fix/backed-count-in-buckets — Backed count = carts in buckets only
+================================================================================
+User: "our total number of backed carts is currently 34 (just whats in buckets) change number to match
+this". Asked which way to make it match; the user chose "count only carts in buckets" (a display change,
+no cartridge records touched) over removing the loose carts from status backing.
+Root cause of the mismatch: stageCounts() overrode the Backed stage with countDocuments({ status:
+'backing' }) — every cart at backing, including the loose ones freed by Move to oven (the 2026-09-25 "one
+category" rule) — so the tile read higher than what is physically in the tubs.
+What changed:
+  - bucket-service.ts stageCounts(): the override is gone; Backed is the member count of the open Backed
+    passes, the same as Barcoded and Unpressed. One fewer query per board load. Comments on BACKED_STAGE,
+    StageCounts and overrideCartStage updated.
+  - This one function feeds the board's Backed tile, the cart-mfg page's bucket strip and the
+    /cartridge-admin Backed tile — all three now show in-bucket carts only.
+  - state-change/+page.svelte: the "No bucket" help text no longer says those carts are counted as Backed.
+  - cartridge-admin/+page.svelte: comment only.
+  - BUCKET-SYSTEM_PLAN.md: §2 note rewritten (reverses "one category"), §6.4, §6.5, §9.1, §9.3, header,
+    build-history row.
+Not changed on purpose: the board's "In oven" dropdown (still lists and counts the loose carts), wax
+filling's "carts available to load", the consumables page's Backed Cartridges and the pipeline page — those
+still include loose carts at status backing.
+I could not read the database from this machine (no .env, no saved query for cartridge_records), so I have
+NOT confirmed that the open Backed buckets add up to 34 — the tile will show whatever the open Backed
+passes hold.
+Verification: svelte-kit sync + svelte-check 14 errors, the same pre-existing set, none in touched files;
+test:unit 515 pass.
