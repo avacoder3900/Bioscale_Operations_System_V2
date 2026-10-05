@@ -18089,3 +18089,33 @@ Retrieve this exact code: git checkout feat/badge-all-bucket-actions at commit c
 What this deployment is for: badge scan on mint, sticker replace, start pass, un-scan, retire, void,
   Master Override and State Change bucket moves; smoke: /login 200, buckets, buckets/new,
   buckets/override and state-change → 302 /login. Badge flows themselves still untested on it.
+
+Docs commit af3a421f (this log entry) built a second preview of the same code:
+Deployment: preview — https://bioscale-operations-system-mongodb-3syqnkole-brevitest.vercel.app
+Source: branch feat/badge-all-bucket-actions @ commit af3a421f
+Retrieve this exact code: git checkout feat/badge-all-bucket-actions at commit af3a421f
+  (or: git log feat/badge-all-bucket-actions --oneline to find it if the branch has since moved on)
+What this deployment is for: the pre-merge build of PR #79 (master had not moved, so no merge-in was
+  needed); smoke: /login 200, buckets → 302 /login.
+
+================================================================================
+2026-10-05 — master — PR #79 merged: badge scan on the remaining bucket actions, LIVE in production
+================================================================================
+User: "push to main" (= master). PR #79
+(https://github.com/avacoder3900/Bioscale_Operations_System_V2/pull/79) opened from
+feat/badge-all-bucket-actions @ af3a421f. The first merge call was blocked by the Claude Code auto-mode
+check; the user then said "allow you to merge" and it was merged via the GitHub API (merge commit
+e6368c05). Production built from that commit by the Vercel GitHub integration; smoke: /login 200,
+buckets, buckets/new, buckets/override and state-change → 302 /login.
+What shipped: badge gate on mint, sticker replace, start pass, un-scan and State Change bucket moves
+(manufacturing:write badge) and on retire, void and Master Override (bucket-admin badge); consumeCarts /
+returnCarts left on the session. No schema or data change. See the entry above for the file list.
+In effect now, while Require badge is ON: minting a bucket and starting a pass refuse without a badge;
+retire / void / Master Override refuse until a bucket admin holds an active badge (/admin/badges).
+Still NOT exercised with a real badge on any environment.
+
+Deployment: production — https://bioscale-operations-system-mongodb-c7u0fy0b0-brevitest.vercel.app
+Source: branch master @ commit e6368c05
+Retrieve this exact code: git checkout master at commit e6368c05
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: production release of PR #79 (badge scan on the remaining bucket actions).
