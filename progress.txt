@@ -18206,3 +18206,24 @@ Retrieve this exact code: git checkout master at commit cfbdd3f1
   (or: git log master --oneline to find it if the branch has since moved on)
 What this deployment is for: sonic recordings under 4.5 MB upload through BIMS (proxied action).
   GitHub deployment 6863843473 (Production). Smoke: /validation/sonic 302 (auth redirect expected).
+
+================================================================================
+2026-10-05 — fix/pipeline-backing-count — Manufacturing Pipeline widget counts carts, not dead BackingLots
+================================================================================
+Jacob saw "Backing 34" on the home page while 67 carts were at status backing. Root cause: the home
+page (/) set the Backing bar from BackingLot.cartridgeCount (in_oven + ready) and ignored cart status
+entirely — two leftover 'ready' lots total 34, so the number never moved. /cartridge-dashboard counted
+carts but still added the legacy lots on top. Nothing has written BackingLot since WAX-FLOW-2, and the
+bucket system (BUCKET-SYSTEM_PLAN §2) made 'backing' a per-cartridge status.
+- New src/lib/server/cartridge-pipeline.ts: PIPELINE_PHASES + buildPipeline(), used by BOTH pages so
+  they cannot drift again. Every bar is a CartridgeRecord status count (checked-out carts still
+  excluded, as before); the BackingLot term is gone from the widget.
+- The widget now also shows the bucket stages and the in-flight fills it used to hide: Barcoded,
+  Unpressed, Backed (label for 'backing', matching the bucket board), Wax Filling, Reagent Filling.
+- src/routes/+page.server.ts, src/routes/cartridge-dashboard/+page.server.ts: use buildPipeline; home
+  page no longer imports BackingLot. The dashboard's per-oven occupancy query is unchanged.
+- src/routes/+page.svelte, src/routes/cartridge-dashboard/+page.svelte: bar colours for the new phases
+  (the dashboard map was also missing wax_ready / wax_rejected / reagent_qc / reagent_ready /
+  reagent_rejected, which rendered grey).
+`npm run check`: 14 errors / 434 warnings, none in the changed files (pre-existing: r2.ts,
+research-proxy.ts, AskBimsWidget, assembly/[sessionId], magnetometer/[sessionId]).
