@@ -50,6 +50,7 @@ import { recordTransaction, resolvePartId } from './inventory-transaction';
 import { splitMergedBarcodes, hardDeleteUnfinalizedCartridges } from './cartridge-hard-delete';
 import { generateBarcode } from './barcode-generator';
 import { consumeThermoseal, creditThermoseal, ThermosealError, THERMOSEAL_PART, type ConsumeResult } from './thermoseal-service';
+import { lotRemaining, fifoLot } from './lot-remaining';
 
 export const BUCKET_STAGES = ['barcoded', 'unpressed', 'backing'] as const;
 export type BucketStage = (typeof BUCKET_STAGES)[number];
@@ -804,7 +805,6 @@ async function closeCycle(cycle: any, status: 'consumed' | 'scrapped', user: Ope
 export interface StartCycleInput {
 	bucketId: string;
 	shellLotId: string;       // PT-CT-104 ReceivingLot.lotId
-	labelLotId: string;       // PT-CT-106 ReceivingLot.lotId
 	emptyConfirmed?: boolean; // required when the bucket has spotCheckPending
 	badge?: string | null;    // scanned badge code; required when badge mode is 'required'
 	user: Operator;           // the web session (= enteredBy)
@@ -813,7 +813,12 @@ export interface StartCycleInput {
 /**
  * Open a pass at Barcoded with zero members. Shells are then scanned in one at a
  * time (scanCartIn). The shell and label lots are fixed here so every scan
- * debits against the same lots. Badge-gated again since 2026-10-05 (ungated
+ * debits against the same lots. Only the shell lot is the operator's choice
+ * (user, 2026-10-05: "all I care about at the barcoding stage is selecting the
+ * shell lot"); the label lot is taken automatically — the oldest PT-CT-106 lot
+ * with stock (FIFO) — so labels are still debited and traceable. With no label
+ * lot in stock the pass opens with none and the label debit carries no lot.
+ * Badge-gated again since 2026-10-05 (ungated
  * 2026-09-30 → 2026-10-05): the badge holder is `openedBy`, the one who
  * confirmed the tub empty, and the operator on the `create` row. Custody is
  * unchanged — still claimed by the badge holder at the first scan-in
@@ -836,8 +841,7 @@ export async function startCycle(input: StartCycleInput): Promise<any> {
 
 	const shell = await validateReceivingLot(input.shellLotId, SHELL_PART);
 	if (!shell.ok) throw new BucketError(`Shell lot: ${shell.reason}`);
-	const label = await validateReceivingLot(input.labelLotId, LABEL_PART);
-	if (!label.ok) throw new BucketError(`Label lot: ${label.reason}`);
+	const labelLotId = fifoLot(await lotRemaining([LABEL_PART]), LABEL_PART)?.lotId ?? null;
 
 	const gate = await requireBadge(input.badge, input.user);
 	const operator = { _id: gate.operator._id, username: gate.operator.username };
@@ -856,7 +860,7 @@ export async function startCycle(input: StartCycleInput): Promise<any> {
 			openedQty: 0,
 			sourceLots: [
 				{ partNumber: SHELL_PART, lotId: shell.lot.lotId, scannedAt: now },
-				{ partNumber: LABEL_PART, lotId: label.lot.lotId, scannedAt: now }
+				...(labelLotId ? [{ partNumber: LABEL_PART, lotId: labelLotId, scannedAt: now }] : [])
 			],
 			status: 'open',
 			...(bucket.spotCheckPending
@@ -879,7 +883,7 @@ export async function startCycle(input: StartCycleInput): Promise<any> {
 		bucketId, cycleId, type: 'create', fromStage: null, toStage: 'barcoded', qtyBefore: 0, qtyAfter: 0, relatedId: shell.lot.lotId,
 		operator, enteredBy: input.user, attribution: gate.attribution
 	});
-	await audit('bucket_cycles', cycleId, 'INSERT', operator, { bucketId, cycleNumber, shellLot: shell.lot.lotId, labelLot: label.lot.lotId, emptyConfirmed: !!bucket.spotCheckPending, badgeId: gate.badgeId ?? null, enteredBy: input.user.username });
+	await audit('bucket_cycles', cycleId, 'INSERT', operator, { bucketId, cycleNumber, shellLot: shell.lot.lotId, labelLot: labelLotId, emptyConfirmed: !!bucket.spotCheckPending, badgeId: gate.badgeId ?? null, enteredBy: input.user.username });
 	return BucketCycle.findById(cycleId).lean();
 }
 

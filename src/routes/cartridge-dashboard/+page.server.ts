@@ -2,6 +2,7 @@ import { redirect } from '@sveltejs/kit';
 import { connectDB, CartridgeRecord, Equipment, BackingLot, WaxFillingRun, ReagentBatchRecord } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
 import { getCheckedOutCartridgeIds } from '$lib/server/checkout-utils';
+import { buildPipeline } from '$lib/server/cartridge-pipeline';
 import { WAX_STAGE_STATUSES } from '$lib/shared/cartridge-wax-status';
 import type { PageServerLoad } from './$types';
 
@@ -149,15 +150,6 @@ export const load: PageServerLoad = async ({ locals }) => {
 		if (f.name) { fridgeMap.set(f.name, label); fridgeIdMap.set(f.name, String(f._id)); }
 	}
 
-	// Phase pipeline order for display. 'backing' is a real CartridgeRecord
-	// status again (WAX-FLOW-2, per-cartridge oven scans) so it's already in
-	// phaseCounts — add the legacy BackingLot.cartridgeCount sum on top until
-	// those buckets drain.
-	const phaseOrder = ['backing', 'wax_filled', 'wax_qc', 'wax_ready', 'wax_rejected', 'reagent_filled', 'inspected', 'sealed', 'reagent_qc', 'reagent_ready', 'reagent_rejected', 'cured', 'stored', 'released', 'shipped'];
-	const phaseMap = new Map((phaseCounts as any[]).map((p: any) => [p._id, p.count]));
-	const legacyBackingCount = (legacyOvenOccupancyAgg as any[]).reduce((s, o: any) => s + (o.count ?? 0), 0);
-	phaseMap.set('backing', (phaseMap.get('backing') ?? 0) + legacyBackingCount);
-
 	const qcMap = (arr: any[]) => {
 		const m: Record<string, number> = {};
 		for (const item of arr) m[item._id] = item.count;
@@ -239,11 +231,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 	return {
 		// Manufacturing pipeline
-		pipeline: phaseOrder.map(phase => ({
-			phase,
-			count: phaseMap.get(phase) ?? 0,
-			label: phase.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
-		})),
+		pipeline: buildPipeline(phaseCounts as any[]),
 		totalMfg,
 		totalVoided,
 		weeklyProduction,

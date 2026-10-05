@@ -1376,7 +1376,7 @@
 							<input type="hidden" name="bucketId" value={b.bucketId} />
 							<input type="hidden" name="emptyConfirmed" value={b.spotCheckPending ? '1' : '0'} />
 							{#if b.spotCheckPending}<p class="text-[10px] text-[var(--color-tron-text-secondary)]">✓ Confirmed empty — recorded on this pass.</p>{/if}
-							<p class="text-xs text-[var(--color-tron-text-secondary)]">{#if badgeRequired}Scan your badge, pick{:else}Pick{/if} the lots this pass draws from, then scan the shells in one at a time.</p>
+							<p class="text-xs text-[var(--color-tron-text-secondary)]">{#if badgeRequired}Scan your badge, pick{:else}Pick{/if} the shell lot this pass draws from, then scan the shells in one at a time.</p>
 							<!-- Gated step again (2026-10-05; it was ungated from 2026-09-30): starting a
 							     pass needs a badge. The same badge then carries on to the cart scans. -->
 							{@render badgeField(true)}
@@ -1385,13 +1385,6 @@
 								<select name="shellLotId" required class={inputCls}>
 									<option value="">{(data.lots['PT-CT-104'] ?? []).length ? '— Select lot —' : 'No shell lots available'}</option>
 									{#each data.lots['PT-CT-104'] ?? [] as l (l.lotId)}<option value={l.lotId}>{l.lotId} — {l.remaining} left</option>{/each}
-								</select>
-							</label>
-							<label class="block">
-								<span class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">QR label lot (PT-CT-106)</span>
-								<select name="labelLotId" required class={inputCls}>
-									<option value="">{(data.lots['PT-CT-106'] ?? []).length ? '— Select lot —' : 'No label lots available'}</option>
-									{#each data.lots['PT-CT-106'] ?? [] as l (l.lotId)}<option value={l.lotId}>{l.lotId} — {l.remaining} left</option>{/each}
 								</select>
 							</label>
 							{#if form?.start?.error}<p class="text-xs text-[var(--color-tron-error)]">{form.start.error}</p>{/if}

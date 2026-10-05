@@ -18320,3 +18320,42 @@ Retrieve this exact code: git checkout feat/sonic-fingerprint-analysis at commit
   (or: git log feat/sonic-fingerprint-analysis --oneline to find it if the branch has since moved on)
 What this deployment is for: artifact-style sonic compare report (pick SPUs → generate) + batch
 upload with the unit read from each file name.
+
+2026-10-05 — fix/pipeline-backing-count — Manufacturing Pipeline widget counts carts, not dead BackingLots
+================================================================================
+Jacob saw "Backing 34" on the home page while 67 carts were at status backing. Root cause: the home
+page (/) set the Backing bar from BackingLot.cartridgeCount (in_oven + ready) and ignored cart status
+entirely — two leftover 'ready' lots total 34, so the number never moved. /cartridge-dashboard counted
+carts but still added the legacy lots on top. Nothing has written BackingLot since WAX-FLOW-2, and the
+bucket system (BUCKET-SYSTEM_PLAN §2) made 'backing' a per-cartridge status.
+- New src/lib/server/cartridge-pipeline.ts: PIPELINE_PHASES + buildPipeline(), used by BOTH pages so
+  they cannot drift again. Every bar is a CartridgeRecord status count (checked-out carts still
+  excluded, as before); the BackingLot term is gone from the widget.
+- The widget now also shows the bucket stages and the in-flight fills it used to hide: Barcoded,
+  Unpressed, Backed (label for 'backing', matching the bucket board), Wax Filling, Reagent Filling.
+- src/routes/+page.server.ts, src/routes/cartridge-dashboard/+page.server.ts: use buildPipeline; home
+  page no longer imports BackingLot. The dashboard's per-oven occupancy query is unchanged.
+- src/routes/+page.svelte, src/routes/cartridge-dashboard/+page.svelte: bar colours for the new phases
+  (the dashboard map was also missing wax_ready / wax_rejected / reagent_qc / reagent_ready /
+  reagent_rejected, which rendered grey).
+`npm run check`: 14 errors / 434 warnings, none in the changed files (pre-existing: r2.ts,
+research-proxy.ts, AskBimsWidget, assembly/[sessionId], magnetometer/[sessionId]).
+
+================================================================================
+2026-10-05 — feat/bucket-shell-lot-only — start a pass with the shell lot only; label lot taken FIFO
+================================================================================
+Jacob: "all I care about at the barcoding stage is selecting the shell lot." The start-pass form on
+the bucket board no longer shows the QR label lot (PT-CT-106) dropdown.
+- src/lib/server/services/bucket-service.ts: StartCycleInput drops labelLotId; startCycle takes the
+  oldest PT-CT-106 lot with stock (lot-remaining.fifoLot) and fixes it on the pass's sourceLots, so
+  scanCartIn still debits one label per cart against a lot and still stamps
+  backing.barcodeLabelLot. No label lot in stock → the pass opens with only the shell lot and the
+  label debit carries no lot (scanCartIn / unscan / scrap already handle an absent lot).
+- src/routes/manufacturing/cart-mfg/buckets/+page.server.ts: start action no longer reads labelLotId.
+- src/routes/manufacturing/cart-mfg/buckets/+page.svelte: label select removed; helper text updated.
+- BUCKET-SYSTEM_PLAN.md §3.3 / §6.1 updated.
+Note: FIFO means new passes draw labels from ZEBRA-20260818-PTCT106 (821 left) before
+ZEBRA-20260922-PTCT106; passes already open keep the lot they were started with.
+This branch also carries fix/pipeline-backing-count (6b0358f3, merged in) so both ship together.
+`npm run check`: 14 errors / 434 warnings, none in the changed files (same pre-existing set).
+Not exercised in a browser before shipping.
