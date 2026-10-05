@@ -5,6 +5,10 @@ import { uploadFile, getSignedDownloadUrl } from '$lib/server/r2';
 import { uploadViaWorker, getR2Url } from '$lib/server/services/r2';
 import { appendSpuJournal } from '$lib/server/spu-journal';
 import { DIRECT_MAX_BYTES, directUploadEnabled, headWorkerObject, mintDirectUploadToken } from '$lib/server/sonic-direct';
+import {
+	ASSAY_LABELS, SONIC_ASSAYS, analyzeSession, referenceFilter, scoreSession, setAssay, setReference, type SonicAssay
+} from '$lib/server/sonic/analyze';
+import { MIN_REFERENCES } from '$lib/server/sonic/constants';
 import { env } from '$env/dynamic/private';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -25,6 +29,11 @@ import type { Actions, PageServerLoad } from './$types';
  *                     DIRECT_MAX_BYTES. See $lib/server/sonic-direct.
  * Every failed attempt gets an AuditLog row (sonic_recording_upload_failed) so
  * the next "it didn't log" is answerable from the database.
+ *
+ * Analysis (VALIDATION-08, $lib/server/sonic): after a recording is stored the
+ * page calls `analyze`, which decodes it on the server and stores a fingerprint
+ * on the session; `setReference` / `setAssay` / `score` manage the hand-picked
+ * reference set and the advisory verdict. Compare lives at ./compare.
  */
 const AUDIO_EXT = ['wav', 'm4a', 'mp3', 'aac', 'ogg', 'webm', 'flac', 'caf', 'mp4'];
 /** Vercel's serverless request-body cap. Bigger bodies never reach this file. */
@@ -35,6 +44,21 @@ type Who = { _id: string; username: string };
 function isAudio(fileName: string, mimeType: string): boolean {
 	const ext = (fileName.split('.').pop() ?? '').toLowerCase();
 	return AUDIO_EXT.includes(ext) || mimeType.startsWith('audio/');
+}
+
+function assayOf(v: FormDataEntryValue | null): SonicAssay {
+	const s = (v?.toString() ?? '').trim().toUpperCase();
+	return (SONIC_ASSAYS as readonly string[]).includes(s) ? (s as SonicAssay) : 'SONIC';
+}
+
+/** Strict parse for setAssay: an unknown value must not silently become SONIC. */
+function strictAssayOf(v: FormDataEntryValue | null): SonicAssay | null {
+	const s = (v?.toString() ?? '').trim().toUpperCase();
+	return (SONIC_ASSAYS as readonly string[]).includes(s) ? (s as SonicAssay) : null;
+}
+
+function whoOf(locals: App.Locals): Who {
+	return { _id: locals.user!._id, username: locals.user!.username };
 }
 
 function mbOf(n: number): string {
@@ -107,6 +131,7 @@ interface StoredRecording {
 	mimeType: string;
 	notes: string;
 	via: 'proxy' | 'direct';
+	assay: SonicAssay;
 }
 
 /** Session + audit + journal for a recording that is confirmed to be in storage. */
@@ -125,7 +150,7 @@ async function persistRecording(r: StoredRecording, who: Who, now: Date) {
 			{
 				_id: generateId(),
 				testType: 'sonic',
-				rawData: { r2Key: r.key, fileName: r.fileName, size: r.size, mimeType: r.mimeType || null, notes: r.notes || null, via: r.via },
+				rawData: { r2Key: r.key, fileName: r.fileName, size: r.size, mimeType: r.mimeType || null, notes: r.notes || null, via: r.via, assay: r.assay },
 				processedData: null,
 				passed: null,
 				notes: r.notes || undefined,
@@ -138,7 +163,7 @@ async function persistRecording(r: StoredRecording, who: Who, now: Date) {
 		tableName: 'validation_sessions',
 		recordId: sessionId,
 		action: 'sonic_recording_upload',
-		newData: { spuId: r.spuId, spuUdi: r.spuUdi, r2Key: r.key, fileName: r.fileName, size: r.size, notes: r.notes || null, via: r.via },
+		newData: { spuId: r.spuId, spuUdi: r.spuUdi, r2Key: r.key, fileName: r.fileName, size: r.size, notes: r.notes || null, via: r.via, assay: r.assay },
 		changedBy: who.username,
 		changedAt: now
 	});
@@ -160,9 +185,11 @@ export const load: PageServerLoad = async ({ locals }) => {
 		.sort({ udi: 1 })
 		.lean()) as any[];
 
+	// The fingerprint (~100–250 KB each) stays in the database; the list only needs its status.
 	const sessions = (await ValidationSession.find({ type: 'sonic' })
+		.select('-results.processedData.fingerprint')
 		.sort({ createdAt: -1 })
-		.limit(40)
+		.limit(100)
 		.lean()) as any[];
 	const userIds = [...new Set(sessions.map((s) => s.userId).filter(Boolean))];
 	const users = userIds.length ? ((await User.find({ _id: { $in: userIds } }, { username: 1 }).lean()) as any[]) : [];
@@ -171,6 +198,9 @@ export const load: PageServerLoad = async ({ locals }) => {
 	const recent = await Promise.all(
 		sessions.map(async (s) => {
 			const r = (s.results ?? [])[0]?.rawData ?? {};
+			const p = (s.results ?? [])[0]?.processedData ?? {};
+			const a = p?.analysis ?? null;
+			const v = p?.verdict ?? null;
 			let url: string | null = null;
 			try {
 				url = r.r2Key ? await recordingUrl(r.r2Key) : null;
@@ -187,8 +217,30 @@ export const load: PageServerLoad = async ({ locals }) => {
 				notes: (r.notes ?? null) as string | null,
 				recordedBy: nameOf.get(s.userId) ?? null,
 				at: s.createdAt ? new Date(s.createdAt).toISOString() : null,
-				url
+				url,
+				assay: (r.assay ?? null) as string | null,
+				analysis: a
+					? a.error
+						? { state: 'error' as const, error: String(a.error) }
+						: { state: 'done' as const, durationS: (a.durationS ?? null) as number | null }
+					: { state: 'pending' as const },
+				reference: !!p?.reference?.on,
+				verdict: v ? { passed: v.passedSections as number, total: v.totalSections as number, at: v.at ? new Date(v.at).toISOString() : null } : null
 			};
+		})
+	);
+
+	// Reference-set size per assay, for the "n/3 references" hints. Counted the way the
+	// verdict counts them (loadFingerprints): a reference whose re-analysis failed has no
+	// fingerprint and does not score, so it must not count here either.
+	const refCounts: Record<string, number> = {};
+	await Promise.all(
+		SONIC_ASSAYS.map(async (k) => {
+			refCounts[k] = await ValidationSession.countDocuments({
+				type: 'sonic',
+				'results.0.processedData.fingerprint': { $ne: null },
+				...referenceFilter(k)
+			});
 		})
 	);
 
@@ -200,7 +252,10 @@ export const load: PageServerLoad = async ({ locals }) => {
 		maxBytes: directUpload ? DIRECT_MAX_BYTES : PROXY_MAX_BYTES,
 		// Files up to this size always take the proxied path, even with direct
 		// upload on — it only needs the Worker's long-standing /upload route.
-		proxyMaxBytes: PROXY_MAX_BYTES
+		proxyMaxBytes: PROXY_MAX_BYTES,
+		assays: SONIC_ASSAYS.map((k) => ({ key: k, label: ASSAY_LABELS[k] })),
+		refCounts,
+		minReferences: MIN_REFERENCES
 	};
 };
 
@@ -244,7 +299,7 @@ export const actions: Actions = {
 		}
 
 		return persistRecording(
-			{ spuId, spuUdi: spu.udi, key: stored.key, fileName: file.name, size: stored.size, mimeType: file.type, notes, via: 'proxy' },
+			{ spuId, spuUdi: spu.udi, key: stored.key, fileName: file.name, size: stored.size, mimeType: file.type, notes, via: 'proxy', assay: assayOf(form.get('assay')) },
 			who,
 			now
 		);
@@ -324,10 +379,91 @@ export const actions: Actions = {
 		}
 
 		return persistRecording(
-			{ spuId, spuUdi: spu.udi, key, fileName, size: head.size, mimeType: mimeType || head.contentType, notes, via: 'direct' },
+			{ spuId, spuUdi: spu.udi, key, fileName, size: head.size, mimeType: mimeType || head.contentType, notes, via: 'direct', assay: assayOf(form.get('assay')) },
 			who,
 			new Date()
 		);
+	},
+
+	/** VALIDATION-08: decode the stored recording on the server and store its fingerprint; then score if possible. */
+	analyze: async ({ request, locals }) => {
+		requirePermission(locals.user, 'spu:write');
+		await connectDB();
+		const sessionId = (await request.formData()).get('sessionId')?.toString() ?? '';
+		if (!sessionId) return fail(400, { error: 'Missing recording' });
+		const who = whoOf(locals);
+		try {
+			const r = await analyzeSession(sessionId, who);
+			if (!r.ok) return fail(422, { error: `Could not analyze: ${r.error}`, analyzedId: sessionId });
+		} catch (err) {
+			return fail(500, { error: err instanceof Error ? err.message : String(err), analyzedId: sessionId });
+		}
+		// The fingerprint is stored and audited at this point; a scoring failure must not
+		// report the analysis itself as failed.
+		try {
+			const v = await scoreSession(sessionId, who);
+			return { analyzed: true, analyzedId: sessionId, verdictStatus: v.status as string, referenceCount: v.referenceCount };
+		} catch (err) {
+			console.warn(`[sonic] auto-score of ${sessionId} failed: ${err instanceof Error ? err.message : String(err)}`);
+			return {
+				analyzed: true,
+				analyzedId: sessionId,
+				verdictStatus: 'error' as string,
+				referenceCount: 0,
+				scoreError: err instanceof Error ? err.message : String(err)
+			};
+		}
+	},
+
+	/** Re-score against today's reference set (stores a new advisory verdict + journal line). */
+	score: async ({ request, locals }) => {
+		requirePermission(locals.user, 'spu:write');
+		await connectDB();
+		const sessionId = (await request.formData()).get('sessionId')?.toString() ?? '';
+		if (!sessionId) return fail(400, { error: 'Missing recording' });
+		let v: Awaited<ReturnType<typeof scoreSession>>;
+		try {
+			v = await scoreSession(sessionId, whoOf(locals));
+		} catch (err) {
+			return fail(422, { error: err instanceof Error ? err.message : String(err) });
+		}
+		if (v.status === 'insufficient') {
+			return fail(400, { error: `Need at least ${MIN_REFERENCES} reference recordings of this assay (have ${v.referenceCount}).` });
+		}
+		if (v.status === 'no-assay') return fail(400, { error: 'Set the assay of this recording first.' });
+		if (v.status === 'not-analyzed') return fail(400, { error: 'Analyze the recording first.' });
+		return { scored: true, passed: v.passed, total: v.total };
+	},
+
+	setReference: async ({ request, locals }) => {
+		requirePermission(locals.user, 'spu:write');
+		await connectDB();
+		const form = await request.formData();
+		const sessionId = form.get('sessionId')?.toString() ?? '';
+		const on = form.get('on')?.toString() === '1';
+		if (!sessionId) return fail(400, { error: 'Missing recording' });
+		try {
+			await setReference(sessionId, on, whoOf(locals));
+			return { referenceSet: on };
+		} catch (err) {
+			return fail(400, { error: err instanceof Error ? err.message : String(err) });
+		}
+	},
+
+	setAssay: async ({ request, locals }) => {
+		requirePermission(locals.user, 'spu:write');
+		await connectDB();
+		const form = await request.formData();
+		const sessionId = form.get('sessionId')?.toString() ?? '';
+		if (!sessionId) return fail(400, { error: 'Missing recording' });
+		const assay = strictAssayOf(form.get('assay'));
+		if (!assay) return fail(400, { error: `Assay must be one of ${SONIC_ASSAYS.join(', ')}` });
+		try {
+			await setAssay(sessionId, assay, whoOf(locals));
+			return { assaySet: true };
+		} catch (err) {
+			return fail(400, { error: err instanceof Error ? err.message : String(err) });
+		}
 	}
 };
 

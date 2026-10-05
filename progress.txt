@@ -18206,3 +18206,55 @@ Retrieve this exact code: git checkout master at commit cfbdd3f1
   (or: git log master --oneline to find it if the branch has since moved on)
 What this deployment is for: sonic recordings under 4.5 MB upload through BIMS (proxied action).
   GitHub deployment 6863843473 (Production). Smoke: /validation/sonic 302 (auth redirect expected).
+2026-09-30 — feat/sonic-fingerprint-analysis — VALIDATION-08: sonic fingerprint analysis on /validation/sonic
+================================================================================
+The Sonic page stored recordings but analyzed nothing (processedData null, "waveform analysis comes
+later"). A standalone Python prototype (C:\Users\aleja\spu-audio\spu_audio.py) was built and tuned on
+7 real recordings (SPU 217/226/229/237/245/248/250) earlier today; this branch ports that function
+into BIMS. PRD: docs/prds/VALIDATION-08-sonic-fingerprint-analysis.md (decisions: advisory verdict
+only — sonic stays graded:false, release gate untouched; hand-picked reference set per assay).
+- src/lib/server/sonic/: pure-TS engine (radix-2 FFT, scipy-compatible welch/Tukey spectrogram/medfilt/
+  find_peaks, fingerprint = 50 ms envelope + 0.5 s bins of level / dominant Hz / 1/3-octave bands +
+  Welch PSD + events, ~100 KB per 4-min run; compare = envelope x-corr alignment, P#/B# sections,
+  leave-one-out mean ± 2σ scoring with σ floors, similarity, peaks/valleys, tones). Decode is server-
+  side WASM (@audio/decode-aac FAAD2, @audio/decode-wav) — no ffmpeg binary to bundle on Vercel; the
+  585 s spu226 m4a decodes in ~1 s locally, RMS matches the Python/ffmpeg value exactly.
+- analyze.ts: download via the R2 Worker (S3 keys in Vercel are known-bad), store fingerprint in
+  results[0].processedData, reference marks, advisory verdict (results.$.passed, overallPassed,
+  failureReasons, criteriaUsed) + SPU journal line; never writes Spu.validation.*. AuditLog rows:
+  sonic_analysis / sonic_reference_set|_cleared / sonic_assay_set / sonic_verdict.
+- /validation/sonic: assay picker on upload (stored in rawData.assay), auto-analyze after upload,
+  list chips (analyzed / verdict / ★ reference), compare selection. New /validation/sonic/compare
+  (scorecard, envelope small-multiples, dominant Hz + loudness over time on one graph each with
+  labelled peaks/valleys on a 10 s grid, per-phase grids, similarity table, CSV) and
+  /validation/sonic/[sessionId] (single-recording charts + live verdict vs references).
+- Parity (scripts/sonic-parity.ts vs the prototype on the 7 recordings): alignment offsets identical
+  (226 +16.95 s etc.), same 11 automatic sections, peak/min within ~0.6 dB, scorecard equal for 229/250
+  and within 1-2 borderline between-phase cells for the others. 13 vitest unit tests pass.
+- Upload paths (proxy ≤4.5 MB + SONIC_DIRECT_UPLOAD Worker path, landed on master this morning) kept.
+Review pass (workflow wf_05c3a5cd-73a, 4 agents: 1 planner + 3 executors on disjoint files engine /
+server / UI). Fixed: bins resampled in dB instead of power when an offset isn't a 0.5 s multiple (skewed
+scores; with power mixing the scorecard matches the prototype exactly for 6/7 SPUs, 217 at 4 vs 5);
+lost-update race in writeProcessed (whole-object $set from a stale read -> per-key sub-path $set);
+Worker failure silently falling back to the known-bad S3 keys + no download timeout; liveVerdict and
+scorecard/CSV columns keyed by sections instead of envelopes (misalign when a section has no bins);
+vacuous 0/0 verdict stored as PASS; 44.1 kHz resampler ~5 s/min (polyphase table, ~12x faster);
+NaN from uneven stereo channels / silent input; chart edge cases (null band values, label collisions,
+tick loops, empty heatmap); callAction crashing on a Vercel 504/413 text body; 44 px touch targets.
+Main loop added: a failed RE-analysis keeps the last good fingerprint (lastFailure recorded) so a
+reference unit is never silently dropped. Known gaps (PRD-documented): tones use the whole-file PSD
+(226's long idle tail shifts its tone list); peak/min within ~0.9 dB of the prototype.
+vitest: 20/20 sonic tests. svelte-check (after svelte-kit sync): 14 errors = master baseline, 0 in
+touched files.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-8ul45dwor.vercel.app
+Source: branch feat/sonic-fingerprint-analysis @ commit c63499a7
+Retrieve this exact code: git checkout feat/sonic-fingerprint-analysis at commit c63499a7
+  (or: git log feat/sonic-fingerprint-analysis --oneline to find it if the branch has since moved on)
+What this deployment is for: VALIDATION-08 — server-side sonic analysis on /validation/sonic, the new
+/validation/sonic/compare and /validation/sonic/[sessionId] pages, reference set + advisory verdict.
+
+2026-10-01 follow-up (feat/sonic-fingerprint-analysis): palette.ts widened from 10 to 20 colours —
+a 12-SPU comparison (5 new units 210/212/222/236/251 added in the prototype) reused the 1st/2nd
+unit's colour for the 11th/12th. Also replaced the grey 9th colour (too close to the ±2σ band grey,
+flagged in the review pass) with lime. No logic change; svelte-check unaffected (data-only file).
