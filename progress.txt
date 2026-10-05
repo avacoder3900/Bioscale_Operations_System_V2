@@ -18321,6 +18321,53 @@ Retrieve this exact code: git checkout feat/sonic-fingerprint-analysis at commit
 What this deployment is for: artifact-style sonic compare report (pick SPUs → generate) + batch
 upload with the unit read from each file name.
 
+2026-10-05 — feat/badge-per-pass — one badge per pass on the bucket board
+================================================================================
+User: "Do not save badge info in the scan in window between scans. Each pass should require a fresh
+scan, and not hold onto stale badge info."
+Cause: the board held ONE badge value for the whole rail (since 2026-09-30) — scanned once, it rode on
+every gated form for every bucket until someone pressed Change badge, so the next operator's pass was
+recorded to the previous operator's badge.
+What changed (buckets/+page.svelte only):
+  - badgeFor (what the rail was pointed at when the badge was scanned) + panelKey (pass id, or bucket id
+    on the start / leftover / retire forms, or null). retargetBadge() clears badge + scanOperator when
+    the two differ; it runs from an $effect on panelKey (backstop for every `panel = …`) and
+    synchronously in openCycle so the focus lands on the badge box.
+  - takeBadge() and the badge box's Enter handler stamp badgeFor.
+  - Start pass: the badge that started the pass is re-keyed to the new pass id, so that pass's cart
+    scans do not ask again. Every other move to a different pass / bucket / closed panel drops it.
+  - Within one pass nothing changes: one badge covers scan-in, un-scan, advance, discard, Move to oven.
+  - BUCKET-SYSTEM_PLAN.md §6.6 ("One badge per pass"), header, build-history row.
+No server change: the server already required a badge on every gated call; this is only about what the
+page keeps. Same idea as the unmerged feat/badge-every-phase @ c69d26f6 (2026-10-02), rebuilt on current
+master because start-pass is badge-gated now. Not changed: /buckets/new still keeps the badge between
+consecutive mints.
+Verification: svelte-kit sync + svelte-check 14 errors, the same pre-existing set, none in the bucket
+pages; test:unit 515 pass. NOT clicked through in a browser — the drop-on-switch behaviour is untested
+in a signed-in session.
+Shipped: commit 46fe24a8 pushed; PR #82 into master
+(https://github.com/avacoder3900/Bioscale_Operations_System_V2/pull/82) — open, not merged.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-kxhq88c5k-brevitest.vercel.app
+Source: branch feat/badge-per-pass @ commit 46fe24a8
+Retrieve this exact code: git checkout feat/badge-per-pass at commit 46fe24a8
+  (or: git log feat/badge-per-pass --oneline to find it if the branch has since moved on)
+What this deployment is for: one badge per pass on the bucket board; smoke: /login 200,
+  buckets → 302 /login. Built before the master merge below.
+
+Merged origin/master (7b4b42f6: pipeline backing count fix + shell-lot-only pass start) into the branch;
+only progress.txt conflicted (append-only, both sides kept). svelte-check after the merge: 14 errors,
+the pre-existing set, none in the bucket pages; test:unit 515 pass.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-r8y8bap6m-brevitest.vercel.app
+Source: branch feat/badge-per-pass @ commit c2c3a410
+Retrieve this exact code: git checkout feat/badge-per-pass at commit c2c3a410
+  (or: git log feat/badge-per-pass --oneline to find it if the branch has since moved on)
+What this deployment is for: the merge-ready build of PR #82 (master @ 7b4b42f6 merged in); smoke:
+  /login 200, buckets → 302 /login. PR #82 mergeable (clean). Badge drop-on-switch still not clicked
+  through signed-in.
+
+================================================================================
 2026-10-05 — fix/pipeline-backing-count — Manufacturing Pipeline widget counts carts, not dead BackingLots
 ================================================================================
 Jacob saw "Backing 34" on the home page while 67 carts were at status backing. Root cause: the home
