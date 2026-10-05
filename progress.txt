@@ -18359,3 +18359,18 @@ ZEBRA-20260922-PTCT106; passes already open keep the lot they were started with.
 This branch also carries fix/pipeline-backing-count (6b0358f3, merged in) so both ship together.
 `npm run check`: 14 errors / 434 warnings, none in the changed files (same pre-existing set).
 Not exercised in a browser before shipping.
+
+================================================================================
+2026-10-05 — feat/sonic-analysis-workflow → master — Ship SONIC workflow steps 1–6 + VALIDATION-08
+================================================================================
+User approved after local testing: push to master, 'be wary of recent changes'. Before shipping:
+  - origin/feat/sonic-fingerprint-analysis had moved (679a6ce2 compare report + batch upload, 2357aeff)
+    since it was merged here — merged again so Alejandro's newest work is not lost or left to conflict.
+    Conflicts: data fields (kept both), progress.txt (kept both). His batch upload used the removed assay
+    picker → now fixed to SONIC like the rest of the page.
+  - origin/master had 4 new commits (buckets/dashboard, nothing sonic-related) → merged; progress.txt only.
+  - Full checks on the merged tree: npm run check 13 errors / 434 warnings (= master baseline); full unit
+    suite 544/544 (32 files), sonic 29/29. Vercel branch build used as the compile gate.
+  - New package deps: @audio/decode-aac (GPL-2.0, server-only — accepted: BIMS is internal), @audio/decode-wav.
+Production behaviour: /validation/sonic is SONIC-only; uploads are copied to MongoDB (GridFS
+sonic_recordings) automatically; recordings must be trimmed & verified before analysis/reference use.
