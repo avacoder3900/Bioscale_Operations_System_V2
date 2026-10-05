@@ -9,6 +9,7 @@ import {
 	ASSAY_LABELS, SONIC_ASSAYS, analyzeSession, referenceFilter, scoreSession, setAssay, setReference, type SonicAssay
 } from '$lib/server/sonic/analyze';
 import { MIN_REFERENCES } from '$lib/server/sonic/constants';
+import { ensureMongoCopy } from '$lib/server/sonic/archive';
 import { env } from '$env/dynamic/private';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -290,19 +291,24 @@ export const actions: Actions = {
 		const now = new Date();
 		const key = recordingKey(spu.udi, file.name, now);
 		let stored: { key: string; size: number };
+		const bytes = new Uint8Array(await file.arrayBuffer());
 		try {
-			stored = await storeRecording(key, await file.arrayBuffer(), file.type || 'application/octet-stream');
+			stored = await storeRecording(key, bytes.buffer as ArrayBuffer, file.type || 'application/octet-stream');
 		} catch (err) {
 			const reason = err instanceof Error ? err.message : String(err);
 			await logFailedAttempt(who, 'storage', reason, { spuId, spuUdi: spu.udi, key, fileName: file.name, size: file.size, mimeType: file.type });
 			return fail(500, { error: `Upload to storage failed: ${reason}` });
 		}
 
-		return persistRecording(
+		const saved = await persistRecording(
 			{ spuId, spuUdi: spu.udi, key: stored.key, fileName: file.name, size: stored.size, mimeType: file.type, notes, via: 'proxy', assay: assayOf(form.get('assay')) },
 			who,
 			now
 		);
+		// Second copy in MongoDB (GridFS). Never fails the upload: R2 already has it,
+		// and a failed copy is recorded on the session with a Retry button.
+		const copy = await ensureMongoCopy(saved.sessionId, who, bytes);
+		return { ...saved, mongoCopied: copy.ok, mongoCopyError: copy.ok ? null : copy.error };
 	},
 
 	/** Direct path, step 1: validate and hand the browser a one-key, short-lived Worker token. */
@@ -378,11 +384,14 @@ export const actions: Actions = {
 			return fail(400, { error: `Storage has ${mbOf(head.size)} MB but the phone sent ${mbOf(size)} MB — the upload was cut short. Try again.` });
 		}
 
-		return persistRecording(
+		const saved = await persistRecording(
 			{ spuId, spuUdi: spu.udi, key, fileName, size: head.size, mimeType: mimeType || head.contentType, notes, via: 'direct', assay: assayOf(form.get('assay')) },
 			who,
 			new Date()
 		);
+		// The bytes went browser → R2 directly, so the MongoDB copy reads them back from R2.
+		const copy = await ensureMongoCopy(saved.sessionId, who);
+		return { ...saved, mongoCopied: copy.ok, mongoCopyError: copy.ok ? null : copy.error };
 	},
 
 	/** VALIDATION-08: decode the stored recording on the server and store its fingerprint; then score if possible. */
@@ -448,6 +457,37 @@ export const actions: Actions = {
 		} catch (err) {
 			return fail(400, { error: err instanceof Error ? err.message : String(err) });
 		}
+	},
+
+	/** Make (or retry) the MongoDB copy of one recording. */
+	archive: async ({ request, locals }) => {
+		requirePermission(locals.user, 'spu:write');
+		await connectDB();
+		const sessionId = (await request.formData()).get('sessionId')?.toString() ?? '';
+		if (!sessionId) return fail(400, { error: 'Missing recording' });
+		const r = await ensureMongoCopy(sessionId, whoOf(locals));
+		if (!r.ok) return fail(502, { error: `MongoDB copy failed: ${r.error}` });
+		return { archived: true, created: r.created };
+	},
+
+	/** Backfill: copy every sonic recording that has no MongoDB copy yet. */
+	archiveMissing: async ({ locals }) => {
+		requirePermission(locals.user, 'spu:write');
+		await connectDB();
+		const who = whoOf(locals);
+		const missing = (await ValidationSession.find({ type: 'sonic', 'results.0.rawData.r2Key': { $exists: true }, 'results.0.rawData.mongoCopy': { $exists: false } })
+			.select('_id')
+			.limit(50)
+			.lean()) as any[];
+		let copied = 0;
+		const failed: string[] = [];
+		for (const m of missing) {
+			const r = await ensureMongoCopy(m._id, who);
+			if (r.ok) copied++;
+			else failed.push(`${m._id}: ${r.error}`);
+		}
+		if (failed.length) return fail(502, { error: `Copied ${copied}; ${failed.length} failed — ${failed.slice(0, 3).join('; ')}` });
+		return { archivedMissing: copied };
 	},
 
 	setAssay: async ({ request, locals }) => {

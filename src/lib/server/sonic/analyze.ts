@@ -8,8 +8,10 @@
  */
 import { env } from '$env/dynamic/private';
 import { ValidationSession, AuditLog, generateId } from '$lib/server/db';
-import { downloadFile, getSignedDownloadUrl } from '$lib/server/r2';
-import { downloadViaWorker, getR2Url } from '$lib/server/services/r2';
+import { getSignedDownloadUrl } from '$lib/server/r2';
+import { getR2Url } from '$lib/server/services/r2';
+import { fetchRecording } from './fetch';
+export { fetchRecording };
 import { appendSpuJournal } from '$lib/server/spu-journal';
 import {
 	ANALYSIS_VERSION, ENVELOPE_K, SIGMA_FLOOR_DB, SPEC_SIGMA_FLOOR_DB, PASS_INSIDE_PCT, MIN_REFERENCES
@@ -17,6 +19,11 @@ import {
 import { decodeRecording, NotAnalyzableError } from './decode';
 import { fingerprint, type Fingerprint } from './features';
 import { compareFingerprints } from './compare';
+import { putGridFile, readGridFile, RECORDING_BUCKET } from './archive';
+import { computeSpectrogram, encodeSpectrogram, SPECTRO_VERSION } from './spectrogram';
+
+/** GridFS bucket for the fine spectrograms (derived data — recomputable from the recording). */
+export const SPECTRO_BUCKET = 'sonic_spectrograms';
 
 export const SONIC_ASSAYS = ['SONIC', 'BCODE', 'OTHER'] as const;
 export type SonicAssay = (typeof SONIC_ASSAYS)[number];
@@ -29,44 +36,6 @@ export const ASSAY_LABELS: Record<SonicAssay, string> = {
 export interface Who {
 	_id: string;
 	username: string;
-}
-
-/**
- * The download must finish well inside the action's maxDuration (60 s) so a hung
- * Worker still ends in a stored analysis.error instead of a killed function and a
- * recording that reads "pending" forever.
- */
-const DOWNLOAD_TIMEOUT_MS = 25_000;
-
-function withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
-	let timer: ReturnType<typeof setTimeout> | undefined;
-	const timeout = new Promise<never>((_, reject) => {
-		timer = setTimeout(() => reject(new Error(`${what} timed out after ${Math.round(ms / 1000)} s`)), ms);
-	});
-	return Promise.race([p, timeout]).finally(() => clearTimeout(timer));
-}
-
-/**
- * Server-side reads go through the Worker (the S3 keys in Vercel are known-bad, and
- * falling back to them only replaced the Worker's real error with a credentials one).
- * The S3 client is used only where no Worker is configured (local dev).
- */
-async function fetchRecording(key: string): Promise<Uint8Array> {
-	let bytes: Uint8Array;
-	if (env.R2_WORKER_URL) {
-		bytes = new Uint8Array(await withTimeout(downloadViaWorker(key), DOWNLOAD_TIMEOUT_MS, 'recording download'));
-	} else {
-		bytes = await withTimeout(
-			(async () => {
-				const { body } = await downloadFile(key);
-				return new Uint8Array(await new Response(body).arrayBuffer());
-			})(),
-			DOWNLOAD_TIMEOUT_MS,
-			'recording download'
-		);
-	}
-	if (!bytes.byteLength) throw new Error('the stored recording is empty (0 bytes)');
-	return bytes;
 }
 
 /** Playable URL: the Worker's /file/ route when configured, else a presigned S3 URL. */
@@ -103,7 +72,7 @@ async function audit(action: string, sessionId: string, who: Who, newData: Recor
  * starts as null from the upload and Mongo cannot $set a sub-path under null, so it is
  * first turned into {} — only while it is still null/missing.
  */
-async function writeProcessed(sessionId: string, resultId: string, patch: Record<string, unknown>, extra: Record<string, unknown> = {}) {
+export async function writeProcessed(sessionId: string, resultId: string, patch: Record<string, unknown>, extra: Record<string, unknown> = {}) {
 	await ValidationSession.updateOne(
 		{ _id: sessionId, results: { $elemMatch: { _id: resultId, processedData: null } } },
 		{ $set: { 'results.$.processedData': {} } }
@@ -124,10 +93,23 @@ export async function analyzeSession(sessionId: string, who: Who) {
 	const started = Date.now();
 	let analysis: Record<string, unknown>;
 	let fp: Fingerprint | null = null;
+	let spectro: Record<string, unknown> | null = null;
 	try {
-		const bytes = await fetchRecording(raw.r2Key);
+		// Prefer the MongoDB copy (no Worker round trip); the R2 original otherwise.
+		const bytes = raw.mongoCopy?.fileId
+			? await readGridFile(RECORDING_BUCKET, raw.mongoCopy.fileId).catch(() => fetchRecording(raw.r2Key))
+			: await fetchRecording(raw.r2Key);
 		const dec = await decodeRecording(bytes, raw.fileName ?? '');
 		fp = fingerprint(dec.samples);
+		// Fine spectrogram (50 ms × 64 bands) for the SONIC window analysis, in GridFS.
+		const sp = computeSpectrogram(dec.samples);
+		const fileId = await putGridFile(SPECTRO_BUCKET, `${sessionId}.spectro`, encodeSpectrogram(sp), {
+			sessionId,
+			version: SPECTRO_VERSION,
+			frames: sp.frames,
+			bands: sp.bands
+		});
+		spectro = { fileId, version: SPECTRO_VERSION, frames: sp.frames, bands: sp.bands, frameS: sp.frameS, t0: sp.t0 };
 		analysis = {
 			version: ANALYSIS_VERSION,
 			analyzedAt: new Date(),
@@ -154,7 +136,7 @@ export async function analyzeSession(sessionId: string, who: Who) {
 	if (!fp && hadFingerprint) {
 		await writeProcessed(sessionId, result._id, { lastFailure: { at: analysis.analyzedAt, by: who.username, error: analysis.error } });
 	} else {
-		await writeProcessed(sessionId, result._id, { analysis, fingerprint: fp, lastFailure: null });
+		await writeProcessed(sessionId, result._id, { analysis, fingerprint: fp, spectrogram: spectro, lastFailure: null });
 	}
 	await audit('sonic_analysis', sessionId, who, {
 		keptPreviousFingerprint: !fp && hadFingerprint,
@@ -182,7 +164,13 @@ export interface LoadedFingerprint {
 
 /** Sessions with a fingerprint, as compare items. */
 export async function loadFingerprints(filter: Record<string, unknown>): Promise<LoadedFingerprint[]> {
-	const rows = (await ValidationSession.find({ type: 'sonic', 'results.0.processedData.fingerprint': { $ne: null }, ...filter })
+	// A recording marked unusable (SONIC workflow step 5) never takes part in a comparison.
+	const rows = (await ValidationSession.find({
+		type: 'sonic',
+		'results.0.processedData.fingerprint': { $ne: null },
+		'results.0.rawData.review.status': { $ne: 'unusable' },
+		...filter
+	})
 		.select('spuId spuUdi createdAt results')
 		.sort({ createdAt: 1 })
 		.lean()) as any[];
@@ -309,6 +297,10 @@ export async function setReference(sessionId: string, on: boolean, who: Who) {
 	if (!res?._id) throw new Error('This session has no recording result');
 	if (on && !res.processedData?.fingerprint) throw new Error('Analyze the recording before using it as a reference');
 	if (on && !res.rawData?.assay) throw new Error('Set the assay before using it as a reference');
+	// A reference has to be a recording someone has trimmed and verified (its window
+	// is what the step-by-step comparison lines up), and never an unusable one.
+	if (on && res.rawData?.review?.status === 'unusable') throw new Error('This recording is marked unusable');
+	if (on && res.rawData?.review?.status !== 'verified') throw new Error('Trim and verify the recording before using it as a reference');
 	const before = pd(s).reference ?? null;
 	// Already in that state: keep who/when actually set it, and no duplicate audit row.
 	if (!!before?.on === on) return;
