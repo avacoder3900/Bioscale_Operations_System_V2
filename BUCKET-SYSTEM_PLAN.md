@@ -115,7 +115,8 @@ draw part of a backed bucket (partial consumption) and the remainder stays Backe
 Yellow note on the board: **"Inventory is not Debited Until Carts are Scanned in."**
 
 - Scanning a cart into a Barcoded bucket debits **1 × PT-CT-104 (shell) + 1 × PT-CT-106 (label)**
-  from the lots chosen when the pass was started, and creates the `CartridgeRecord`.
+  from the lots fixed when the pass was started (the shell lot the operator picked; the label lot
+  the system took FIFO — §6.1), and creates the `CartridgeRecord`.
 - A mis-scan can be **un-scanned** while the pass is still Barcoded: the record is deleted and both
   debits are retracted (negative rows of the same type, §8).
 - A discarded cart (at advance, via *Scrap*, or as a residual) writes a `scrap` transaction for
@@ -285,8 +286,13 @@ in `reason` and the first roll id in `relatedId`.
 
 ### 6.1 Start a pass
 
-Rail → pick an Available bucket → choose the **shell lot (104)** and **label lot (106)** →
+Rail → pick an Available bucket → choose the **shell lot (104)** →
 confirm empty if `spotCheckPending`. Opens at Barcoded with 0 members. Nothing is debited yet.
+**The label lot (106) is no longer picked (2026-10-05, user: "all I care about at the barcoding
+stage is selecting the shell lot").** `startCycle` takes the oldest PT-CT-106 lot with stock (FIFO,
+`lot-remaining.fifoLot`) and fixes it on the pass, so labels are still debited per scan and
+`backing.barcodeLabelLot` is still stamped. With no label lot in stock the pass opens without one
+and the label debit carries no lot.
 **Badge-gated again since 2026-10-05** (§6.6; it was ungated from 2026-09-30 to then): the badge
 box is the first field of the start form, and the badge holder is `openedBy`, `emptyConfirmedBy`
 and the operator on the `create` row. The pass's `Custody` row is still claimed by whoever scans
