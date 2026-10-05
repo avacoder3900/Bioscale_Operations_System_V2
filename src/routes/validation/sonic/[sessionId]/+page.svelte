@@ -3,6 +3,7 @@
 	import { invalidateAll } from '$app/navigation';
 	import SonicChart, { type ChartMarker } from '$lib/components/validation/sonic/SonicChart.svelte';
 	import SonicReview from '$lib/components/validation/sonic/SonicReview.svelte';
+	import RecordingNav from '$lib/components/validation/sonic/RecordingNav.svelte';
 
 	let { data } = $props();
 	const S = $derived(data.session);
@@ -11,6 +12,16 @@
 	let msg = $state<string | null>(null);
 	let err = $state<string | null>(null);
 	let working = $state(false);
+
+	// Moving to another recording reuses this page: clear the last one's messages.
+	let shownId = '';
+	$effect(() => {
+		if (S.id !== shownId) {
+			shownId = S.id;
+			msg = null;
+			err = null;
+		}
+	});
 
 	const THIRD_OCT = Array.from({ length: 22 }, (_, k) => 100 * 2 ** (k / 3));
 	const bandLabel = (q: number) => {
@@ -69,6 +80,8 @@
 </script>
 
 <div class="space-y-6">
+	<RecordingNav items={data.nav} currentId={S.id} />
+
 	<div class="flex flex-wrap items-start justify-between gap-3">
 		<div>
 			<h1 class="tron-heading text-2xl font-bold">
@@ -109,6 +122,7 @@
 			<p class="text-xs text-[var(--color-tron-orange)]">The 48-step plan did not fit this recording well — check that the window covers the whole run (start before the first move, end after the last).</p>
 		{/if}
 		{#if R.durationS > 0}
+			{#key S.id}
 			<SonicReview
 				durationS={R.durationS}
 				envDb={R.envDb}
@@ -125,6 +139,7 @@
 				onVerify={(a, b) => act('verify', { sessionId: S.id, startS: String(a), endS: String(b) }, 'Window verified and analyzed.')}
 				onUnusable={(why) => act('markUnusable', { sessionId: S.id, reason: why }, 'Marked unusable — re-record this unit.')}
 			/>
+			{/key}
 		{:else}
 			<p class="tron-text-muted text-sm">Analyze the recording first (Re-analyze above) — trimming needs its waveform.</p>
 		{/if}

@@ -116,7 +116,30 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 		mongoCopy: raw.mongoCopy ? { sha256: raw.mongoCopy.sha256 as string, size: raw.mongoCopy.size as number } : null
 	};
 
+	// Navigation between recordings (same list and order as /validation/sonic): a
+	// light projection — no fingerprints or analysis bodies.
+	const navRows = (await ValidationSession.find({ type: 'sonic', 'results.0.rawData.assay': { $in: ['SONIC', null] } })
+		.select('spuUdi createdAt results.rawData.fileName results.rawData.review.status results.processedData.analysis.durationS results.processedData.analysis.error results.processedData.windowAnalysis.summary.total')
+		.sort({ createdAt: -1 })
+		.limit(300)
+		.lean()) as any[];
+	const nav = navRows.map((r) => {
+		const rr = r.results?.[0] ?? {};
+		const reviewStatus = rr.rawData?.review?.status as 'verified' | 'unusable' | undefined;
+		const analyzed = rr.processedData?.analysis?.durationS != null && !rr.processedData?.analysis?.error;
+		const status: 'verified' | 'unusable' | 'needs-trim' | 'needs-analysis' = reviewStatus ?? (analyzed ? 'needs-trim' : 'needs-analysis');
+		return {
+			id: r._id as string,
+			udi: (r.spuUdi ?? '?') as string,
+			at: r.createdAt ? new Date(r.createdAt).toISOString() : null,
+			fileName: (rr.rawData?.fileName ?? null) as string | null,
+			status,
+			anomalies: (rr.processedData?.windowAnalysis?.summary?.total ?? null) as number | null
+		};
+	});
+
 	return {
+		nav: JSON.parse(JSON.stringify(nav)),
 		review: JSON.parse(JSON.stringify(reviewData)),
 		session: {
 			id: s._id as string,
