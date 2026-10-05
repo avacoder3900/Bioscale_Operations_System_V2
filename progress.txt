@@ -18197,3 +18197,12 @@ compare + detail pages) also edits these two files — expect a merge conflict i
 and the load() return when that branch lands.
 `npm run check`: 13 errors / 434 warnings — identical with and without this change. Vercel branch
 build used as the compile gate. Pushed to master at the user's request ("I just want this done quickly").
+Deployment: preview — https://bioscale-operations-system-mongodb-gs3d8eowp-brevitest.vercel.app
+Source: branch fix/sonic-small-files-via-bims @ commit 4b764499 (pre-rebase; same code as cfbdd3f1)
+What this deployment is for: compile gate before master (GitHub deployment 6863769111).
+Deployment: production — https://bioscale-operations-system-mongodb-awio86h4a-brevitest.vercel.app
+Source: branch master (= fix/sonic-small-files-via-bims, rebased) @ commit cfbdd3f1
+Retrieve this exact code: git checkout master at commit cfbdd3f1
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: sonic recordings under 4.5 MB upload through BIMS (proxied action).
+  GitHub deployment 6863843473 (Production). Smoke: /validation/sonic 302 (auth redirect expected).
