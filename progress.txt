@@ -18080,4 +18080,12 @@ Verification: svelte-kit sync + svelte-check 14 errors, all in files this branch
 the last master entries record 13 — not re-measured on a clean master from this worktree. test:unit 515
 pass. vite build: client + server built; only the known adapter-vercel EBUSY swapfile trace failure.
 NOT exercised against a live database — no badge was scanned through any of these forms.
-No deployment yet (branch not pushed).
+Shipped: commit ce75e928 pushed (branch only — no PR yet).
+
+Deployment: preview — https://bioscale-operations-system-mongodb-di49buwhc-brevitest.vercel.app
+Source: branch feat/badge-all-bucket-actions @ commit ce75e928
+Retrieve this exact code: git checkout feat/badge-all-bucket-actions at commit ce75e928
+  (or: git log feat/badge-all-bucket-actions --oneline to find it if the branch has since moved on)
+What this deployment is for: badge scan on mint, sticker replace, start pass, un-scan, retire, void,
+  Master Override and State Change bucket moves; smoke: /login 200, buckets, buckets/new,
+  buckets/override and state-change → 302 /login. Badge flows themselves still untested on it.
