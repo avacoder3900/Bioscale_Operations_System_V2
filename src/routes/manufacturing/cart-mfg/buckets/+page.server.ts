@@ -65,7 +65,8 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		// "In oven" dropdown inside the Backed column: backed carts on no open pass.
 		inOvenCarts().catch(() => ({ count: 0, ids: [] as string[] })),
 		// Badge enforcement: decides whether the board asks for a badge at the
-		// gated steps — scan-in, discards, move to oven (user, 2026-09-30).
+		// gated steps — start pass, scan-in / un-scan, every advance, discards,
+		// move to oven, retire (2026-09-30; start, un-scan and retire 2026-10-05).
 		// Flipped only from /admin/badges; the board links there for admins.
 		badgeMode().catch(() => 'required' as const)
 	]);
@@ -178,6 +179,7 @@ export const actions: Actions = {
 				shellLotId: String(d.get('shellLotId') ?? ''),
 				labelLotId: String(d.get('labelLotId') ?? ''),
 				emptyConfirmed: d.get('emptyConfirmed') === '1',
+				badge: String(d.get('badge') ?? ''),
 				user: op(locals)
 			});
 			return { start: { success: true, cycleId: cycle._id, bucketId: cycle.bucketId, cycleNumber: cycle.cycleNumber } };
@@ -186,7 +188,8 @@ export const actions: Actions = {
 
 	// Called via fetch from the Barcoded panel's scan box (one cart per call) so the
 	// rail can keep scanning without a full form round-trip. The badge scanned into
-	// the panel's badge box rides along on every call (gated step, 2026-09-30).
+	// the panel's badge box rides along on every call (gated step, 2026-09-30) —
+	// and on ?/unscan below (2026-10-05).
 	scanIn: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
 		requirePermission(locals.user, 'manufacturing:write');
@@ -204,7 +207,7 @@ export const actions: Actions = {
 		await connectDB();
 		const d = await request.formData();
 		return wrap('unscan', async () => {
-			const r = await unscanCart({ cycleId: String(d.get('cycleId') ?? ''), barcode: String(d.get('barcode') ?? ''), user: op(locals) });
+			const r = await unscanCart({ cycleId: String(d.get('cycleId') ?? ''), barcode: String(d.get('barcode') ?? ''), badge: String(d.get('badge') ?? ''), user: op(locals) });
 			return { unscan: { success: true, barcode: r.barcode, quantity: r.quantity } };
 		})();
 	},
@@ -318,7 +321,7 @@ export const actions: Actions = {
 		await connectDB();
 		const d = await request.formData();
 		return wrap('retire', async () => {
-			await retireBucket(String(d.get('bucketId') ?? ''), String(d.get('reason') ?? ''), op(locals));
+			await retireBucket(String(d.get('bucketId') ?? ''), String(d.get('reason') ?? ''), op(locals), String(d.get('badge') ?? ''));
 			return { retire: { success: true } };
 		})();
 	}

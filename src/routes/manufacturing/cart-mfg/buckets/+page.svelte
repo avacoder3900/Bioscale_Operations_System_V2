@@ -71,10 +71,11 @@
 
 	// ── operator badge (user, 2026-09-30) ────────────────────────────────────
 	// One badge for the whole rail. It is asked for at the gated steps —
-	// scanning carts into a bucket, EVERY advance (2026-10-02: "require a scan
+	// starting a pass (2026-10-05), scanning carts into a bucket and taking a
+	// mis-scan back out (2026-10-05), EVERY advance (2026-10-02: "require a scan
 	// in at every phase"), discarding carts (advance discards, Discard carts…,
-	// audit discards / write-offs, leftover discards) and Move to oven — and
-	// nowhere else. Scanned once into any badge box (or into a cart box: a
+	// audit discards / write-offs, leftover discards), Move to oven and retiring
+	// a bucket (2026-10-05, admin badge). Scanned once into any badge box (or into a cart box: a
 	// BDG- code is routed here), it rides on every scan-in POST and on each gated
 	// form until the server rejects it or the operator changes it.
 	const BADGE_RE = /^BDG-[A-Z0-9]{10}$/i;
@@ -560,10 +561,13 @@
 		if (panel.kind !== 'cycle') return;
 		const cycleId = panel.cycleId;
 		cartScanError = ''; cartScanOk = '';
+		// Gated step (2026-10-05): taking a cart back out needs the badge too.
+		if (badgeRequired && !badge) { cartScanError = 'Scan your badge first, then remove the cart.'; focusBadge(); return; }
 		try {
 			const fd = new FormData();
 			fd.set('cycleId', cycleId);
 			fd.set('barcode', code);
+			fd.set('badge', badge);
 			const res = await fetch('?/unscan', { method: 'POST', body: fd, headers: { 'x-sveltekit-action': 'true' } });
 			const result = deserialize(await res.text());
 			if (result.type === 'success') {
@@ -571,7 +575,11 @@
 				scanAdded = { ...scanAdded, [cycleId]: (scanAdded[cycleId] ?? []).filter(c => c !== code) };
 				cartScanOk = `${code} removed`;
 				scheduleBoardRefresh();
-			} else if (result.type === 'failure') cartScanError = (result.data as any)?.unscan?.error ?? `Error ${result.status}`;
+			} else if (result.type === 'failure') {
+				cartScanError = (result.data as any)?.unscan?.error ?? `Error ${result.status}`;
+				const errCode = (result.data as any)?.unscan?.code;
+				if (typeof errCode === 'string' && errCode.startsWith('BADGE') && errCode !== 'BADGE') { badge = ''; scanOperator = ''; focusBadge(); }
+			}
 			// The mis-scan button used to have no branch here at all, so the 500 the
 			// sacred delete hook threw showed the operator nothing (fixed 2026-09-25
 			// along with the hook itself).
@@ -592,7 +600,7 @@
 		if (form.start?.success && typeof form.start.cycleId === 'string') { panel = { kind: 'cycle', cycleId: form.start.cycleId, mode: 'view' }; resetLists(); focusScanEntry(); }
 		if (form.residual?.success || form.retire?.success) { panel = { kind: 'none' }; resetLists(); }
 		// A gated form refused the badge: clear it so the next badge scan replaces it.
-		for (const r of [form.advance, form.scrap, form.moveToOven, form.audit, form.residual]) {
+		for (const r of [form.start, form.advance, form.scrap, form.moveToOven, form.audit, form.residual, form.retire]) {
 			if (r && typeof r.code === 'string' && r.code.startsWith('BADGE') && r.code !== 'BADGE') { badge = ''; scanOperator = ''; focusBadge(); }
 		}
 	});
@@ -1327,9 +1335,10 @@
 							<input type="hidden" name="bucketId" value={b.bucketId} />
 							<input type="hidden" name="emptyConfirmed" value={b.spotCheckPending ? '1' : '0'} />
 							{#if b.spotCheckPending}<p class="text-[10px] text-[var(--color-tron-text-secondary)]">✓ Confirmed empty — recorded on this pass.</p>{/if}
-							<!-- No badge here (user, 2026-09-30): starting a pass is not a gated step —
-							     the badge is asked for when the carts are scanned in. -->
-							<p class="text-xs text-[var(--color-tron-text-secondary)]">Pick the lots this pass draws from, then scan {#if badgeRequired}your badge and {/if}the shells in one at a time.</p>
+							<p class="text-xs text-[var(--color-tron-text-secondary)]">{#if badgeRequired}Scan your badge, pick{:else}Pick{/if} the lots this pass draws from, then scan the shells in one at a time.</p>
+							<!-- Gated step again (2026-10-05; it was ungated from 2026-09-30): starting a
+							     pass needs a badge. The same badge then carries on to the cart scans. -->
+							{@render badgeField(true)}
 							<label class="block">
 								<span class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Shell lot (PT-CT-104)</span>
 								<select name="shellLotId" required class={inputCls}>
@@ -1452,6 +1461,8 @@
 						<p class="font-mono text-lg text-[var(--color-tron-text)]">{nameOf(b)}</p>
 						<p class="text-xs text-[var(--color-tron-text-secondary)]">Retiring is permanent; the bucket's history stays.</p>
 						<label class="block"><span class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Reason (required)</span><input type="text" name="reason" required class={inputCls} /></label>
+						<!-- Gated step (2026-10-05): retiring needs a badge whose holder is a bucket admin. -->
+						{@render badgeField(true)}
 						{#if form?.retire?.error}<p class="text-xs text-[var(--color-tron-error)]">{form.retire.error}</p>{/if}
 						<button type="submit" disabled={busy} class={btnDanger}>Retire bucket</button>
 						<button type="button" class={btnGhost} onclick={() => { panel = { kind: 'start', bucketId: b.bucketId, step: 'form' }; }}>Cancel</button>

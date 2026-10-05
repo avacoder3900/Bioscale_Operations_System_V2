@@ -1,13 +1,16 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
 	import { onMount } from 'svelte';
+	import type { ActionResult } from '@sveltejs/kit';
+	import BadgeScanField from '$lib/components/manufacturing/BadgeScanField.svelte';
 
 	type MoveResult = {
-		success?: boolean; error?: string;
+		success?: boolean; error?: string; code?: string | null;
 		bucketId?: string; cycleNumber?: number; fromLabel?: string; toLabel?: string; members?: number; closed?: boolean;
 	};
 	interface Props {
 		data: {
+			badgeMode: 'off' | 'required';
 			canOverride: boolean;
 			presetBucket: string | null;
 			targets: { key: string; label: string }[];
@@ -32,7 +35,27 @@
 		if (!q) return null;
 		return data.openPasses.find(p => p.bucketId.toLowerCase() === q || (p.barcode ?? '').toLowerCase() === q) ?? null;
 	});
-	const ready = $derived(!!bucket.trim() && !!target && !!reason.trim() && data.canOverride);
+	// Badge-gated (2026-10-05): the holder must be a bucket admin too. Every move
+	// is signed on its own — the badge is cleared once a move goes through.
+	const BADGE_RE = /^BDG-[A-Z0-9]{10}$/i;
+	let badge = $state('');
+	const badgeRequired = $derived(data.badgeMode === 'required');
+	function focusBadge() { setTimeout(() => document.getElementById('badgeOverride')?.focus(), 60); }
+	/** The gun types into whatever box is focused: a badge scanned into the bucket box is taken as the badge. */
+	function bucketKeydown(e: KeyboardEvent) {
+		if (e.key !== 'Enter' || !BADGE_RE.test(bucket.trim())) return;
+		e.preventDefault();
+		badge = bucket.trim();
+		bucket = '';
+	}
+	function afterMove(result: ActionResult) {
+		const code = result.type === 'failure' ? (result.data as any)?.move?.code : null;
+		// Only the badge was wrong: keep the bucket and the reason, rescan the badge.
+		if (typeof code === 'string' && code.startsWith('BADGE')) { badge = ''; focusBadge(); return; }
+		if (result.type === 'success') badge = '';
+		bucket = ''; reason = ''; bucketEl?.focus();
+	}
+	const ready = $derived(!!bucket.trim() && !!target && !!reason.trim() && data.canOverride && (!badgeRequired || !!badge.trim()));
 
 	const inputCls = 'mt-1 w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-3 py-2 text-sm text-[var(--color-tron-text)] focus:border-[var(--color-tron-cyan)] focus:outline-none';
 	const tint: Record<string, string> = {
@@ -74,12 +97,12 @@
 	<form
 		method="POST"
 		action="?/move"
-		use:enhance={() => { busy = true; return async ({ update }) => { await update({ reset: false }); busy = false; bucket = ''; reason = ''; bucketEl?.focus(); }; }}
+		use:enhance={() => { busy = true; return async ({ update, result }) => { await update({ reset: false }); busy = false; afterMove(result); }; }}
 		class="space-y-4 rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4"
 	>
 		<label class="block">
 			<span class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Bucket — scan its sticker (or type its BKT id)</span>
-			<input type="text" name="bucket" bind:value={bucket} bind:this={bucketEl} autocomplete="off" placeholder="scan bucket…" class={inputCls} />
+			<input type="text" name="bucket" bind:value={bucket} bind:this={bucketEl} onkeydown={bucketKeydown} autocomplete="off" placeholder="scan bucket…" class={inputCls} />
 			{#if bucket.trim()}
 				{#if match}
 					<p class="mt-1 text-xs text-[var(--color-tron-text-secondary)]">
@@ -108,6 +131,8 @@
 			<span class="text-[10px] uppercase tracking-wider text-red-300">Reason (required)</span>
 			<input type="text" name="reason" bind:value={reason} required placeholder="e.g. press skipped for rework batch; bucket was mis-advanced" class={inputCls} />
 		</label>
+
+		<BadgeScanField bind:value={badge} show={badgeRequired} id="badgeOverride" label="Scan your badge — admin badge required" class={inputCls} />
 
 		{#if form?.move?.error}<p class="text-xs text-[var(--color-tron-error)]">{form.move.error}</p>{/if}
 		<div class="flex flex-wrap items-center gap-2">

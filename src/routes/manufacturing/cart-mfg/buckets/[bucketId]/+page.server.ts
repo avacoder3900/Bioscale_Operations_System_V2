@@ -8,6 +8,7 @@ import { error, fail, redirect } from '@sveltejs/kit';
 import { connectDB, CartridgeRecord, LotRecord } from '$lib/server/db';
 import { requirePermission, hasPermission } from '$lib/server/permissions';
 import { bucketHistory, voidCycle, retireBucket, setBucketNickname, BucketError, STAGE_LABELS, NICKNAME_MAX } from '$lib/server/services/bucket-service';
+import { badgeMode } from '$lib/server/services/badge-service';
 import type { Actions, PageServerLoad } from './$types';
 
 function isBucketAdmin(user: App.Locals['user']): boolean {
@@ -26,7 +27,9 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 	if (!h) throw error(404, `Bucket ${params.bucketId} not found`);
 
 	const cycleIds = h.cycles.map((c: any) => c._id);
-	const [cartAgg, lots] = await Promise.all([
+	const [badge, cartAgg, lots] = await Promise.all([
+		// Void and Retire are badge-gated (2026-10-05) — the forms ask when this is 'required'.
+		badgeMode().catch(() => 'required' as const),
 		cycleIds.length
 			? CartridgeRecord.aggregate([
 				{ $match: { $or: [{ 'bucket.cycleId': { $in: cycleIds } }, { 'backing.bucketCycleId': { $in: cycleIds } }] } },
@@ -80,6 +83,7 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 	});
 
 	return {
+		badgeMode: badge,
 		canVoid: isBucketAdmin(locals.user),
 		canEdit: canWrite(locals.user),
 		nicknameMax: NICKNAME_MAX,
@@ -175,11 +179,12 @@ export const actions: Actions = {
 			const r = await voidCycle({
 				cycleId,
 				reason: String(d.get('reason') ?? ''),
+				badge: String(d.get('badge') ?? ''),
 				user: { _id: locals.user._id, username: locals.user.username }
 			});
 			return { voidPass: { success: true, ...r } };
 		} catch (e) {
-			if (e instanceof BucketError) return fail(e.status, { voidPass: { error: e.message, cycleId } });
+			if (e instanceof BucketError) return fail(e.status, { voidPass: { error: e.message, code: e.code ?? null, cycleId } });
 			throw e;
 		}
 	},
@@ -193,10 +198,10 @@ export const actions: Actions = {
 		await connectDB();
 		const d = await request.formData();
 		try {
-			await retireBucket(params.bucketId, String(d.get('reason') ?? ''), { _id: locals.user._id, username: locals.user.username });
+			await retireBucket(params.bucketId, String(d.get('reason') ?? ''), { _id: locals.user._id, username: locals.user.username }, String(d.get('badge') ?? ''));
 			return { retire: { success: true } };
 		} catch (e) {
-			if (e instanceof BucketError) return fail(e.status, { retire: { error: e.message } });
+			if (e instanceof BucketError) return fail(e.status, { retire: { error: e.message, code: e.code ?? null } });
 			throw e;
 		}
 	}

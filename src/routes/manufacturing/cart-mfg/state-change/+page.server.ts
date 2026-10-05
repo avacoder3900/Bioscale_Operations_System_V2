@@ -25,11 +25,17 @@
  *    Backed, listed in the board's "In oven" dropdown, loadable by wax filling.
  *    They leave their current pass if they are in one. Unknown barcodes are still
  *    refused.
+ *  - Badge (2026-10-05): a cart entering or leaving a bucket pass is a
+ *    badge-gated bucket step, like the board's. The badge is resolved once per
+ *    batch and only if a cart actually takes the bucket path; plain status
+ *    changes on carts outside the buckets stay on the session. A BDG- code
+ *    scanned into the cart box is taken as the badge, never as a cartridge.
  */
 import { fail, redirect } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
 import { connectDB, CartridgeRecord, AuditLog, generateId } from '$lib/server/db';
-import { resolveBucketId, overrideCartStage, boardData, isBucketStage, isBucketStatus, BucketError, BUCKET_STAGES, BACKED_STAGE, STAGE_LABELS } from '$lib/server/services/bucket-service';
+import { resolveBucketId, overrideCartStage, badgeGate, boardData, isBucketStage, isBucketStatus, BucketError, BUCKET_STAGES, BACKED_STAGE, STAGE_LABELS, type BadgeGate } from '$lib/server/services/bucket-service';
+import { badgeMode, isBadgeCode } from '$lib/server/services/badge-service';
 import type { PageServerLoad, Actions } from './$types';
 
 /** The status enum, read straight off the schema — single source of truth. */
@@ -43,10 +49,11 @@ export const load: PageServerLoad = async ({ locals }) => {
 	requirePermission(locals.user, 'manufacturing:read');
 	await connectDB();
 
-	const [total, byStatus, board] = await Promise.all([
+	const [total, byStatus, board, badge] = await Promise.all([
 		CartridgeRecord.estimatedDocumentCount(),
 		CartridgeRecord.aggregate([{ $group: { _id: '$status', n: { $sum: 1 } } }]),
-		boardData().catch(() => ({ cycles: [] as any[] }))
+		boardData().catch(() => ({ cycles: [] as any[] })),
+		badgeMode().catch(() => 'required' as const)
 	]);
 
 	const counts: Record<string, number> = {};
@@ -55,6 +62,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 	}
 
 	return {
+		badgeMode: badge,
 		statuses: statusList(),
 		total,
 		counts,
@@ -92,12 +100,30 @@ export const actions: Actions = {
 		}
 
 		// Split on any whitespace/newlines (scanner sends barcode + Enter), trim, dedup.
-		const barcodes = Array.from(
+		const scannedCodes = Array.from(
 			new Set(raw.split(/\s+/).map((s) => s.trim()).filter(Boolean))
 		);
+		// A badge scanned into the cart box is the badge, never a cartridge — with
+		// "Create unknown barcodes" ticked it would otherwise be originated as one.
+		const barcodes = scannedCodes.filter((c) => !isBadgeCode(c));
+		const badge = ((data.get('badge') as string) ?? '').trim() || scannedCodes.find((c) => isBadgeCode(c)) || '';
 		if (barcodes.length === 0) return fail(400, { error: 'Scan at least one cartridge barcode' });
 
 		const op = { _id: locals.user._id, username: locals.user.username };
+		// Bucket moves are badge-gated (2026-10-05). One lookup for the whole batch,
+		// made only when a cart actually enters or leaves a bucket pass.
+		let gate: Promise<BadgeGate> | null = null;
+		const bucketGate = () => (gate ??= badgeGate(badge, op));
+		if (isBucketStage(target)) {
+			// Every cart in this batch takes the bucket path: refuse once, up front,
+			// instead of rejecting each cart with the same badge message.
+			try {
+				await bucketGate();
+			} catch (e) {
+				if (e instanceof BucketError) return fail(e.status, { error: e.message, code: e.code ?? null });
+				throw e;
+			}
+		}
 		const now = new Date();
 		const changed: { barcode: string; from: string }[] = [];
 		const unchanged: { barcode: string; reason: string }[] = [];
@@ -113,7 +139,7 @@ export const actions: Actions = {
 			// member of an open pass). Membership + status move together.
 			if (cart && (isBucketStage(target) || isBucketStatus(cart.status))) { // legacy 'pressed' members leave their pass too
 				try {
-					const r = await overrideCartStage({ barcode, target, destinationBucketId: noBucket ? undefined : destinationBucketId || undefined, noBucket, reason, user: op });
+					const r = await overrideCartStage({ barcode, target, destinationBucketId: noBucket ? undefined : destinationBucketId || undefined, noBucket, reason, gate: await bucketGate(), user: op });
 					if (r.from === r.to && r.fromCycle === r.toCycle) unchanged.push({ barcode, reason: `already ${target}${r.toCycle ? ' in that bucket' : noBucket ? ' (no bucket)' : ''}` });
 					else changed.push({ barcode, from: r.from });
 				} catch (e) {
