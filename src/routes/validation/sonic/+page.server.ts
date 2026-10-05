@@ -197,7 +197,10 @@ export const load: PageServerLoad = async ({ locals }) => {
 		spus: spus.map((s) => ({ id: s._id, udi: s.udi, status: s.status })),
 		recent,
 		directUpload,
-		maxBytes: directUpload ? DIRECT_MAX_BYTES : PROXY_MAX_BYTES
+		maxBytes: directUpload ? DIRECT_MAX_BYTES : PROXY_MAX_BYTES,
+		// Files up to this size always take the proxied path, even with direct
+		// upload on — it only needs the Worker's long-standing /upload route.
+		proxyMaxBytes: PROXY_MAX_BYTES
 	};
 };
 

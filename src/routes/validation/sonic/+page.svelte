@@ -13,6 +13,8 @@
 			/** True when the browser sends the file straight to the R2 Worker (no 4.5 MB cap). */
 			directUpload: boolean;
 			maxBytes: number;
+			/** Files up to this size go through the form action even when directUpload is on. */
+			proxyMaxBytes: number;
 		};
 		form: { error?: string; uploaded?: boolean; spuUdi?: string; fileName?: string; size?: number } | null;
 	}
@@ -149,7 +151,13 @@
 		action="?/upload"
 		enctype="multipart/form-data"
 		use:enhance={({ cancel, formData }) => {
-			if (data.directUpload) {
+			// Only files too big for this POST (Vercel's 4.5 MB body cap, less a margin
+			// for the other form fields) go straight to the Worker. Smaller ones ride
+			// the proxied form action, which works even while the deployed Worker
+			// lacks the /direct route (2026-10-05: it does — every direct upload failed).
+			const picked = formData.get('file');
+			const fitsProxy = picked instanceof File && picked.size <= data.proxyMaxBytes - 64 * 1024;
+			if (data.directUpload && !fitsProxy) {
 				// The file must not ride this POST (4.5 MB cap) — send it to the Worker instead.
 				cancel();
 				void directUpload(formData);

@@ -18174,3 +18174,26 @@ Source: branch master @ commit 2ea8649f
 Retrieve this exact code: git checkout master at commit 2ea8649f
   (or: git log master --oneline to find it if the branch has since moved on)
 What this deployment is for: production release of PR #81 (Copy all ids in the board's In oven dropdown).
+
+================================================================================
+2026-10-05 — fix/sonic-small-files-via-bims → master — Sonic uploads: small files go through BIMS
+================================================================================
+Report: sonic m4a uploads (~2 MB) don't work. Production DB: 0 sonic validation_sessions and 0
+sonic_recording_upload_failed audit rows — the failure happens before any server-side check.
+Root cause: the deployed R2 Worker (brevitest-r2-upload.alejandrov.workers.dev) predates the
+/direct/ route — an unauthenticated PUT /direct/... returns the generic 401 instead of the new
+400 "X-Upload-Token ... required", and its CORS allow-headers are only Content-Type, X-Upload-Secret
+(no X-Upload-Token/-Expires/-Max). With SONIC_DIRECT_UPLOAD=1 in Vercel every file, however small,
+took the direct path: presign OK → browser PUT blocked by CORS ("network error while sending the
+file to storage") → record never called, so nothing was logged.
+Fix (no Vercel or Worker change needed): validation/sonic/+page.svelte routes a file through the
+proxied `upload` action whenever it fits Vercel's 4.5 MB body cap (load now returns proxyMaxBytes;
+64 KB margin for the other form fields); only bigger files use the direct path. The proxied path
+stores via the Worker's long-standing PUT /upload (17 CV captures stored through it in the last 3
+days). Once the Worker is redeployed (`npx wrangler deploy` in services/r2-upload-worker, Alejandro's
+Cloudflare account), files up to 80 MB work too with no further change.
+Note: Alejandro's unmerged origin/feat/sonic-fingerprint-analysis (VALIDATION-08 analysis engine,
+compare + detail pages) also edits these two files — expect a merge conflict in the enhance callback
+and the load() return when that branch lands.
+`npm run check`: 13 errors / 434 warnings — identical with and without this change. Vercel branch
+build used as the compile gate. Pushed to master at the user's request ("I just want this done quickly").
