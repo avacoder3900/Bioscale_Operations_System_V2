@@ -18368,6 +18368,23 @@ What this deployment is for: the merge-ready build of PR #82 (master @ 7b4b42f6 
   through signed-in.
 
 ================================================================================
+2026-10-05 — master — PR #82 merged: one badge per pass on the bucket board, LIVE in production
+================================================================================
+User: "merge". PR #82 (https://github.com/avacoder3900/Bioscale_Operations_System_V2/pull/82) merged
+from feat/badge-per-pass @ cdfc23e9 via the GitHub API (merge commit 7630cbf2). Production built from
+that commit by the Vercel GitHub integration; smoke: /login 200, buckets → 302 /login.
+What shipped: the board keys the scanned badge to the pass (or bucket) the rail is pointed at and drops
+it when the rail moves to another pass / bucket or the panel closes; the badge that started a pass
+carries into that pass's cart scans. Board page only — no server, schema or data change.
+Still NOT clicked through in a signed-in session.
+
+Deployment: production — https://bioscale-operations-system-mongodb-kh1qr1d94-brevitest.vercel.app
+Source: branch master @ commit 7630cbf2
+Retrieve this exact code: git checkout master at commit 7630cbf2
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: production release of PR #82 (one badge per pass on the bucket board).
+
+================================================================================
 2026-10-05 — fix/pipeline-backing-count — Manufacturing Pipeline widget counts carts, not dead BackingLots
 ================================================================================
 Jacob saw "Backing 34" on the home page while 67 carts were at status backing. Root cause: the home
