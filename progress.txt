@@ -18227,3 +18227,22 @@ bucket system (BUCKET-SYSTEM_PLAN §2) made 'backing' a per-cartridge status.
   reagent_rejected, which rendered grey).
 `npm run check`: 14 errors / 434 warnings, none in the changed files (pre-existing: r2.ts,
 research-proxy.ts, AskBimsWidget, assembly/[sessionId], magnetometer/[sessionId]).
+
+================================================================================
+2026-10-05 — feat/bucket-shell-lot-only — start a pass with the shell lot only; label lot taken FIFO
+================================================================================
+Jacob: "all I care about at the barcoding stage is selecting the shell lot." The start-pass form on
+the bucket board no longer shows the QR label lot (PT-CT-106) dropdown.
+- src/lib/server/services/bucket-service.ts: StartCycleInput drops labelLotId; startCycle takes the
+  oldest PT-CT-106 lot with stock (lot-remaining.fifoLot) and fixes it on the pass's sourceLots, so
+  scanCartIn still debits one label per cart against a lot and still stamps
+  backing.barcodeLabelLot. No label lot in stock → the pass opens with only the shell lot and the
+  label debit carries no lot (scanCartIn / unscan / scrap already handle an absent lot).
+- src/routes/manufacturing/cart-mfg/buckets/+page.server.ts: start action no longer reads labelLotId.
+- src/routes/manufacturing/cart-mfg/buckets/+page.svelte: label select removed; helper text updated.
+- BUCKET-SYSTEM_PLAN.md §3.3 / §6.1 updated.
+Note: FIFO means new passes draw labels from ZEBRA-20260818-PTCT106 (821 left) before
+ZEBRA-20260922-PTCT106; passes already open keep the lot they were started with.
+This branch also carries fix/pipeline-backing-count (6b0358f3, merged in) so both ship together.
+`npm run check`: 14 errors / 434 warnings, none in the changed files (same pre-existing set).
+Not exercised in a browser before shipping.
