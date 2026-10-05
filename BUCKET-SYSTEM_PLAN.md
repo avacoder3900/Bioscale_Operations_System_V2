@@ -1,6 +1,6 @@
 # Bucket System — Production Buckets, v2 (as built)
 
-**Started:** 2026-09-21 · **Last updated:** 2026-10-05 (**In oven: Copy all ids**, §6.5; **badge on the rest of the bucket actions** — mint, start pass, un-scan, sticker replace, retire, void, Master Override and State Change's bucket moves, §6.6; 2026-10-02: **State Change: straight to Backed, no bucket**, §9.6; **Pressed stage removed** — Unpressed advances straight to Backed, §2; **scan-in count lag** — the count moves on Enter, not on the server's confirm, §6.2.1; **badge at every phase** — every advance is now gated too, §6.3/§6.6; 2026-09-30: **badge gate moved** to scan-in / discards / move to oven, §6.6; earlier that day page-to-page **navigation lag** fixes, §9.1/§9.2/§11, and bucket **nicknames**, §4.1; before that 2026-09-25: thermoseal one roll part; fourth bucket stage **Backed** with **Move to oven**)
+**Started:** 2026-09-21 · **Last updated:** 2026-10-05 (**one badge per pass** — the board drops the badge when the rail moves to another pass, §6.6; **In oven: Copy all ids**, §6.5; **badge on the rest of the bucket actions** — mint, start pass, un-scan, sticker replace, retire, void, Master Override and State Change's bucket moves, §6.6; 2026-10-02: **State Change: straight to Backed, no bucket**, §9.6; **Pressed stage removed** — Unpressed advances straight to Backed, §2; **scan-in count lag** — the count moves on Enter, not on the server's confirm, §6.2.1; **badge at every phase** — every advance is now gated too, §6.3/§6.6; 2026-09-30: **badge gate moved** to scan-in / discards / move to oven, §6.6; earlier that day page-to-page **navigation lag** fixes, §9.1/§9.2/§11, and bucket **nicknames**, §4.1; before that 2026-09-25: thermoseal one roll part; fourth bucket stage **Backed** with **Move to oven**)
 **Branch:** `feat/bucket-system` — **PR #54 open into `master`**
 (https://github.com/avacoder3900/Bioscale_Operations_System_V2/pull/54). `origin/master` has
 been merged into this branch twice (last `33a937a4`); it sits on current production code.
@@ -477,9 +477,22 @@ top of this section.) On every gated row `operator` = badge holder, `enteredBy` 
 `attribution` = `{ method: 'badge', badgeId, custodyId? }`. With *Require badge* **off** the
 boxes are hidden, but a badge scanned into a cart box is still routed and honoured.
 
-**One badge for the rail.** The board keeps one `badge` value: scanned once (into any badge box,
-or into any cart box — `BDG-…` is recognised client-side and never queued as a cart), it fills
-every gated form's badge field until the operator presses *Change badge* or the server refuses it
+**One badge per pass (user, 2026-10-05):** "Do not save badge info in the scan in window between
+scans. Each pass should require a fresh scan, and not hold onto stale badge info." The board
+remembers what the rail was pointed at when the badge was scanned (`badgeFor` — a pass id, or a
+bucket id on the start / leftover / retire forms) and **drops the badge the moment the rail points
+at anything else**: another pass, another bucket, or nothing (panel closed). Reopening the same pass
+later asks again. Within one pass the badge still covers every cart scan, un-scan, advance, discard
+and *Move to oven*, so scanning 100 carts is still one badge scan. The one hand-over: the badge
+that started a pass is re-keyed to that pass, so its cart scans do not ask a second time. A page
+reload also clears it (the value only ever lived in the page). From 2026-09-30 until this change
+there was **one badge for the whole rail** — scanned once, it filled every gated form on every
+bucket until someone pressed *Change badge*. (The same change was built on 2026-10-02 as
+`feat/badge-every-phase` @ `c69d26f6` and never merged; this replaces it.)
+
+The `badge` value itself: scanned into any badge box,
+or into any cart box — `BDG-…` is recognised client-side and never queued as a cart — it fills
+that pass's gated forms until the operator presses *Change badge* or the server refuses it
 (`BADGE_*` codes clear it and refocus the box). The Barcoded panel says who the carts are being
 recorded to after the first scan lands. Cart scans made before a badge is on are held with *Scan
 your badge first* rather than sent.
@@ -762,6 +775,7 @@ per-scan lookup only needs `manufacturing:read`.
 |---|---|
 | `23b1d6b9` … `b7e2c262` | v1 (2026-09-21/22): count-based buckets, labels, board, residual, WI-01 handoff, dashboard/pipeline views, change + bucket logs |
 | `f0e9176a` | Merge of `origin/master` (564 commits); collision guard extended; `findBucketLabels()` |
+| _(feat/badge-per-pass)_ | **One badge per pass** (§6.6; user 2026-10-05): the board keys the scanned badge to what the rail is pointed at (`badgeFor` / `panelKey`) and clears it when that changes — another pass, another bucket, or the panel closed — so no badge is left sitting in the scan-in window for the next pass. The badge that started a pass carries into that pass's cart scans. Board page only; no server, schema or data change. Supersedes the unmerged `feat/badge-every-phase` @ `c69d26f6`. |
 | `0ef9d195` _(feat/in-oven-copy-ids)_ | **In oven: Copy all ids** (§6.5; user 2026-10-05, "give me every cart qr code in the backed category minus any that are currently sitting in buckets"): `?/inOvenList` on the board returns every `inOvenCarts()` id (ceiling 10 000); a *Copy all N ids* button in the In oven dropdown copies them one per line and shows them in a read-only box. Read-only, no data change. Context: the Backed tile reads high because carts are still listed in oven that are not physically there; PR #80 (count in-bucket carts only) was closed unmerged at the user's request — the count rule stays buckets + oven — and a bulk "oven is empty" reset was not built. |
 | `ce75e928` _(feat/badge-all-bucket-actions)_ | **Badge on the rest of the bucket actions** (§6.6; user 2026-10-05, after the badge-scan audit): `requireBadge()` gains a level (`'write'` / `'admin'`) and now gates `createBucket`, `replaceBucketSticker`, `startCycle`, `unscanCart`, `overrideCartStage` (write) and `retireBucket`, `voidCycle`, `forceBucketPhase` (admin badge). New `badgeGate()` export so State Change resolves the badge once per batch. Badge boxes on `/buckets/new` (create + replace), the board's start and retire forms, `/buckets/[bucketId]` (void + retire), `/buckets/override` and State Change, via the new `BadgeScanField.svelte`; `?/unscan` carries the rail's badge. `consumeCarts` / `returnCarts` deliberately left on the session (wax filling's deck load and abort path). Reverses the 2026-09-30 removal of the badge from mint and start-pass. No schema or data change. |
 | `47a2a63d` | `voidCycle()` + *Void this pass…* |

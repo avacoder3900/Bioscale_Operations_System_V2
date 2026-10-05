@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { untrack } from 'svelte';
 	import { deserialize, enhance } from '$app/forms';
 	import { goto, invalidateAll } from '$app/navigation';
 	import { page } from '$app/stores';
@@ -70,21 +71,41 @@
 	let residualDisposition = $state<'merge' | 'scrap' | ''>('');
 
 	// ── operator badge (user, 2026-09-30) ────────────────────────────────────
-	// One badge for the whole rail. It is asked for at the gated steps —
+	// One badge PER PASS. It is asked for at the gated steps —
 	// starting a pass (2026-10-05), scanning carts into a bucket and taking a
 	// mis-scan back out (2026-10-05), EVERY advance (2026-10-02: "require a scan
 	// in at every phase"), discarding carts (advance discards, Discard carts…,
 	// audit discards / write-offs, leftover discards), Move to oven and retiring
 	// a bucket (2026-10-05, admin badge). Scanned once into any badge box (or into a cart box: a
 	// BDG- code is routed here), it rides on every scan-in POST and on each gated
-	// form until the server rejects it or the operator changes it.
+	// form FOR THAT PASS until the server rejects it or the operator changes it.
+	// Pointing the rail at another pass or bucket, or closing the panel, drops it,
+	// so every pass takes a fresh badge scan and the scan-in window never holds a
+	// badge left over from an earlier one (user, 2026-10-05: "Do not save badge
+	// info in the scan in window between scans. Each pass should require a fresh
+	// scan"). The one hand-over: the badge that started a pass stays on for that
+	// same pass's cart scans. Until this change one badge carried across the rail.
 	const BADGE_RE = /^BDG-[A-Z0-9]{10}$/i;
 	let badge = $state('');
 	let scanOperator = $state('');   // who the last scan-in was recorded to (from the server)
+	let badgeFor = $state<string | null>(null); // what the rail was pointed at when the badge was scanned
 	const badgeRequired = $derived(data.badgeMode === 'required');
+	// What the rail is pointed at: a pass id, a bucket id (start / leftover / retire), or nothing.
+	const panelKey = $derived(panel.kind === 'cycle' ? panel.cycleId : panel.kind === 'none' ? null : panel.bucketId);
+	/** Drop the badge if it was scanned for something other than `key`. */
+	function retargetBadge(key: string | null) {
+		if (badge && key !== badgeFor) { badge = ''; scanOperator = ''; badgeFor = null; }
+	}
+	// Backstop for every `panel = …` on the board. openCycle also calls it
+	// synchronously, so the focus decision that follows sees the cleared badge
+	// (effects run after).
+	$effect(() => {
+		const key = panelKey;
+		untrack(() => retargetBadge(key));
+	});
 	function takeBadge(code: string): boolean {
 		if (!BADGE_RE.test(code)) return false;
-		badge = code; scanOperator = '';
+		badgeFor = panelKey; badge = code; scanOperator = '';
 		return true;
 	}
 	function clearBadge() { badge = ''; scanOperator = ''; focusBadge(); }
@@ -374,7 +395,7 @@
 	}
 	function resetLists() { discardList = []; scrapList = []; residualList = []; listInput = ''; residualDisposition = ''; residualDest = ''; cartScanError = ''; cartScanOk = ''; scanFailures = []; whereFind = ''; whereLine = ''; whereOk = true; whereHit = null; }
 
-	function openCycle(c: BoardCycle) { panel = { kind: 'cycle', cycleId: c.cycleId, mode: 'view' }; resetLists(); if (c.stage === 'barcoded') focusScanEntry(); }
+	function openCycle(c: BoardCycle) { panel = { kind: 'cycle', cycleId: c.cycleId, mode: 'view' }; resetLists(); retargetBadge(c.cycleId); if (c.stage === 'barcoded') focusScanEntry(); }
 	function setMode(mode: CycleMode) {
 		if (panel.kind === 'cycle') panel = { kind: 'cycle', cycleId: panel.cycleId, mode };
 		resetLists();
@@ -597,7 +618,12 @@
 		handledForm = form;
 		if (form.advance?.success || form.scrap?.success) { if (panel.kind === 'cycle') setMode('view'); }
 		if (form.audit?.success) { resetAudit(); if (panel.kind === 'cycle') setMode('view'); }
-		if (form.start?.success && typeof form.start.cycleId === 'string') { panel = { kind: 'cycle', cycleId: form.start.cycleId, mode: 'view' }; resetLists(); focusScanEntry(); }
+		if (form.start?.success && typeof form.start.cycleId === 'string') {
+			// The badge that started this pass is this pass's badge: re-key it to the
+			// new pass so the cart scans that follow do not ask for it a second time.
+			if (badge) badgeFor = form.start.cycleId;
+			panel = { kind: 'cycle', cycleId: form.start.cycleId, mode: 'view' }; resetLists(); focusScanEntry();
+		}
 		if (form.residual?.success || form.retire?.success) { panel = { kind: 'none' }; resetLists(); }
 		// A gated form refused the badge: clear it so the next badge scan replaces it.
 		for (const r of [form.start, form.advance, form.scrap, form.moveToOven, form.audit, form.residual, form.retire]) {
@@ -721,7 +747,7 @@
 		<label class="block">
 			<span class="text-[10px] uppercase tracking-wider {badge.trim() ? 'text-[var(--color-tron-text-secondary)]' : 'text-[var(--color-tron-cyan)]'}">Scan your badge{#if badge.trim()} <span class="normal-case tracking-normal text-green-300">· on</span>{/if}</span>
 			<input id="badgeScan" type="text" name="badge" bind:value={badge} required autocomplete="off" placeholder="scan badge…"
-				onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); badge = badge.trim(); scanOperator = ''; next?.(); } }}
+				onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); badge = badge.trim(); badgeFor = panelKey; scanOperator = ''; next?.(); } }}
 				class="{inputCls} font-mono {badge.trim() ? '' : 'border-[var(--color-tron-cyan)]/60 ring-1 ring-[var(--color-tron-cyan)]/30'}" />
 		</label>
 	{:else}
