@@ -18246,6 +18246,14 @@ Merged origin/master (7b4b42f6: pipeline backing count fix + shell-lot-only pass
 only progress.txt conflicted (append-only, both sides kept). svelte-check after the merge: 14 errors,
 the pre-existing set, none in the bucket pages; test:unit 515 pass.
 
+Deployment: preview — https://bioscale-operations-system-mongodb-r8y8bap6m-brevitest.vercel.app
+Source: branch feat/badge-per-pass @ commit c2c3a410
+Retrieve this exact code: git checkout feat/badge-per-pass at commit c2c3a410
+  (or: git log feat/badge-per-pass --oneline to find it if the branch has since moved on)
+What this deployment is for: the merge-ready build of PR #82 (master @ 7b4b42f6 merged in); smoke:
+  /login 200, buckets → 302 /login. PR #82 mergeable (clean). Badge drop-on-switch still not clicked
+  through signed-in.
+
 ================================================================================
 2026-10-05 — fix/pipeline-backing-count — Manufacturing Pipeline widget counts carts, not dead BackingLots
 ================================================================================
