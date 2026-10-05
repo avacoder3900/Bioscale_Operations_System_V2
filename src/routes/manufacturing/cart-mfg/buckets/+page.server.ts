@@ -25,6 +25,8 @@ function op(locals: App.Locals): Op {
 }
 
 const LOT_PARTS = [SHELL_PART, LABEL_PART, THERMOSEAL_PART];
+// Ceiling for ?/inOvenList: far above any real oven load, low enough to stay a small response.
+const IN_OVEN_LIST_MAX = 10000;
 
 export const load: PageServerLoad = async ({ locals, url }) => {
 	if (!locals.user) redirect(302, '/login');
@@ -165,6 +167,19 @@ export const actions: Actions = {
 			// Whole result goes back: the box renders the structured fields as
 			// colour-coded pills + the bucket nickname; `line` stays as the fallback.
 			return { cartLookup: { success: true, ...r } };
+		})();
+	},
+
+	// Every "In oven" cart id — backed carts on no open pass — for the dropdown's
+	// Copy all button (user, 2026-10-05). Read-only. The board load itself only
+	// carries the first 200 ids; this fetches the whole list on demand.
+	inOvenList: async ({ locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'manufacturing:read');
+		await connectDB();
+		return wrap('inOvenList', async () => {
+			const r = await inOvenCarts(IN_OVEN_LIST_MAX);
+			return { inOvenList: { success: true, count: r.count, ids: r.ids } };
 		})();
 	},
 

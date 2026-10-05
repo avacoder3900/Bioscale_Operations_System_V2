@@ -18119,3 +18119,31 @@ Source: branch master @ commit e6368c05
 Retrieve this exact code: git checkout master at commit e6368c05
   (or: git log master --oneline to find it if the branch has since moved on)
 What this deployment is for: production release of PR #79 (badge scan on the remaining bucket actions).
+
+================================================================================
+2026-10-05 — feat/in-oven-copy-ids — Backed count reads high; In oven "Copy all ids"
+================================================================================
+User: the total backed count should be 34 (what is in the buckets). Sequence, for the record:
+  1. First reading — "count only carts in buckets": built on fix/backed-count-in-buckets (5a92b430,
+     stageCounts() without the status-backing override), PR #80, preview
+     https://bioscale-operations-system-mongodb-8lcmf3f03-brevitest.vercel.app. NOT what the user wanted:
+     "no, remove that merge … make the total backed count only the carts that are in buckets, but always
+     include the carts that are in the oven. There are currently no carts in the oven, so the count is
+     inaccurate." PR #80 CLOSED UNMERGED; master's count rule is unchanged (buckets + oven). The branch
+     and its two commits are still on origin, unused.
+  2. Real cause: stale data — carts at status backing on no open pass (the In oven list) that are not
+     physically in the oven. A bulk admin "oven is empty" reset (void them all) was proposed and the user
+     approved it in chat, but the Claude Code permission check refused the code edit twice; it was NOT
+     built and no data was touched.
+  3. User then asked for every backed cart QR that is not in a bucket. This machine has no database
+     access (no .env; no saved query for cartridge_records), so the list could not be pulled directly.
+What was built (read-only):
+  - buckets/+page.server.ts: ?/inOvenList (manufacturing:read) returns every inOvenCarts() id, ceiling
+    10 000 — the board load itself still carries only the first 200.
+  - buckets/+page.svelte: "Copy all N ids" button inside the In oven dropdown; copies one id per line to
+    the clipboard and shows them in a read-only box (falls back to the box if the clipboard is blocked).
+  - BUCKET-SYSTEM_PLAN.md §6.5, header, build-history row.
+Intended use: paste the list into State Change to move the stale carts out of status backing (the
+existing, badge-gated, per-batch path). The target status is the user's call (voided was proposed).
+Verification: svelte-kit sync + svelte-check 14 errors, the same pre-existing set, none in touched
+files; test:unit 515 pass.

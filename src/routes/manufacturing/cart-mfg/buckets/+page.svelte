@@ -610,6 +610,39 @@
 		return async ({ update }: { update: (o?: { reset?: boolean }) => Promise<void> }) => { await update({ reset: false }); busy = false; };
 	};
 
+	// ── "In oven" — copy every id (user, 2026-10-05) ─────────────────────────
+	// The dropdown shows the first 200 ids as links; this fetches the whole list
+	// and puts it, one id per line, on the clipboard and in a box (the same shape
+	// State Change's cart box takes). Read-only.
+	let ovenIdsText = $state('');
+	let ovenIdsMsg = $state('');
+	let ovenIdsBusy = $state(false);
+	async function copyAllInOven() {
+		ovenIdsBusy = true; ovenIdsMsg = '';
+		try {
+			const res = await fetch('?/inOvenList', { method: 'POST', body: new FormData(), headers: { 'x-sveltekit-action': 'true' } });
+			const result = deserialize(await res.text());
+			if (result.type !== 'success') {
+				ovenIdsMsg = result.type === 'failure' ? ((result.data as any)?.inOvenList?.error ?? `Error ${result.status}`) : 'Could not load the list.';
+				return;
+			}
+			const r = (result.data as any)?.inOvenList as { count: number; ids: string[] };
+			ovenIdsText = r.ids.join('\n');
+			const short = r.count > r.ids.length ? ` (first ${r.ids.length} of ${r.count})` : '';
+			try {
+				await navigator.clipboard.writeText(ovenIdsText);
+				ovenIdsMsg = `${r.ids.length} id${r.ids.length === 1 ? '' : 's'} copied${short}.`;
+			} catch {
+				// Clipboard blocked (permissions, older browser): the box below still has them.
+				ovenIdsMsg = `${r.ids.length} id${r.ids.length === 1 ? '' : 's'} listed below${short} — select and copy.`;
+			}
+		} catch (e) {
+			ovenIdsMsg = e instanceof Error ? e.message : 'Could not load the list.';
+		} finally {
+			ovenIdsBusy = false;
+		}
+	}
+
 	// ── change log ──────────────────────────────────────────────────────────
 	let logFilter = $state('');
 	const filteredLog = $derived.by(() => {
@@ -887,6 +920,14 @@
 										{/each}
 									</ul>
 									{#if data.inOven.count > data.inOven.ids.length}<p class="mt-1 text-[10px] text-[var(--color-tron-text-secondary)]">+{data.inOven.count - data.inOven.ids.length} more</p>{/if}
+									<!-- Every id, not just the first 200 shown above — one per line. -->
+									<button type="button" onclick={copyAllInOven} disabled={ovenIdsBusy}
+										class="mt-1 text-[10px] uppercase tracking-wider text-[var(--color-tron-cyan)]/80 hover:text-[var(--color-tron-cyan)] disabled:opacity-50">{ovenIdsBusy ? 'Loading…' : `Copy all ${data.inOven.count} ids`}</button>
+									{#if ovenIdsMsg}<p class="mt-1 text-[10px] text-[var(--color-tron-text-secondary)]">{ovenIdsMsg}</p>{/if}
+									{#if ovenIdsText}
+										<textarea readonly rows="6" value={ovenIdsText} onfocus={(e) => (e.currentTarget as HTMLTextAreaElement).select()}
+											class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-2 py-1 font-mono text-[10px] text-[var(--color-tron-text)]"></textarea>
+									{/if}
 								{/if}
 							</details>
 						{/if}
