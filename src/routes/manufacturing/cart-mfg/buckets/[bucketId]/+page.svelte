@@ -1,5 +1,7 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
+	import type { ActionResult } from '@sveltejs/kit';
+	import BadgeScanField from '$lib/components/manufacturing/BadgeScanField.svelte';
 	import type { PageData } from './$types';
 
 	// The action returns either a success or a fail() shape; SvelteKit infers a
@@ -7,13 +9,14 @@
 	type VoidResult = {
 		success?: boolean;
 		error?: string;
+		code?: string | null;
 		cycleId?: string;
 		cycleNumber?: number;
 		restored?: { partNumber: string | null; lotId: string | null; quantity: number }[];
 		removalsMarked?: number;
 		thermosealCreditedCm?: number;
 	};
-	type RetireResult = { success?: boolean; error?: string };
+	type RetireResult = { success?: boolean; error?: string; code?: string | null };
 	type NicknameResult = { success?: boolean; error?: string; nickname?: string | null; previous?: string | null };
 	interface Props { data: PageData; form: { voidPass?: VoidResult; retire?: RetireResult; nickname?: NicknameResult } | null }
 	let { data, form }: Props = $props();
@@ -23,6 +26,20 @@
 	// Retire (kill the label) — admin, empty bucket only; reason required.
 	let retireOpen = $state(false);
 	let retireBusy = $state(false);
+	// Void and Retire are badge-gated (2026-10-05): the holder must be a bucket
+	// admin too. One badge value for the page; it is cleared once an action goes
+	// through, or when the server refuses it. A failed action keeps its form open
+	// (it used to close, which hid the retire form's own error line).
+	let badge = $state('');
+	const badgeRequired = $derived(data.badgeMode === 'required');
+	const badgeInputCls = 'mt-1 w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-3 py-1.5 text-xs text-[var(--color-tron-text)] focus:border-[var(--color-tron-cyan)] focus:outline-none';
+	/** Clears the badge when it is spent or refused; returns true when the action succeeded. */
+	function settleBadge(result: ActionResult, key: 'voidPass' | 'retire', boxId: string): boolean {
+		if (result.type === 'success') { badge = ''; return true; }
+		const code = result.type === 'failure' ? (result.data as any)?.[key]?.code : null;
+		if (typeof code === 'string' && code.startsWith('BADGE')) { badge = ''; setTimeout(() => document.getElementById(boxId)?.focus(), 60); }
+		return false;
+	}
 	const canRetire = $derived(data.canVoid && data.bucket.state !== 'retired' && data.bucket.state !== 'in_use');
 	// Nickname — any writer, any state but retired; blank clears (2026-09-30).
 	let nickOpen = $state(false);
@@ -116,7 +133,7 @@
 			<strong>{data.bucket.bucketId} retired.</strong> Its label is dead; the history below is kept. It no longer appears on the board except in the bucket log.
 		</div>
 	{:else if retireOpen && canRetire}
-		<form method="POST" action="?/retire" use:enhance={() => { retireBusy = true; return async ({ update }) => { await update({ reset: false }); retireBusy = false; retireOpen = false; }; }}
+		<form method="POST" action="?/retire" use:enhance={() => { retireBusy = true; return async ({ update, result }) => { await update({ reset: false }); retireBusy = false; if (settleBadge(result, 'retire', 'badgeRetire')) retireOpen = false; }; }}
 			class="rounded-lg border border-red-500/40 bg-red-900/10 p-4 space-y-3">
 			<p class="text-sm font-medium text-red-300">Retire {data.bucket.bucketId}?</p>
 			<p class="text-xs text-[var(--color-tron-text-secondary)]">The bucket leaves service and its sticker stops resolving. Nothing is deleted — every pass, ledger row and cartridge link stays. This cannot be undone from the UI.</p>
@@ -124,6 +141,7 @@
 				<span class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Reason (required)</span>
 				<input type="text" name="reason" required placeholder="e.g. cracked tub" class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-3 py-2 text-sm text-[var(--color-tron-text)]" />
 			</label>
+			<BadgeScanField bind:value={badge} show={badgeRequired} id="badgeRetire" label="Scan your badge — admin badge required" class={badgeInputCls} />
 			{#if form?.retire?.error}<p class="text-xs text-[var(--color-tron-error)]">{form.retire.error}</p>{/if}
 			<div class="flex gap-2">
 				<button type="submit" disabled={retireBusy} class="rounded bg-red-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-red-500 disabled:opacity-50">{retireBusy ? 'Retiring…' : 'Retire bucket'}</button>
@@ -177,7 +195,7 @@
 									     Refused server-side if cartridges were serialized from it. -->
 									{#if voidingId === c.cycleId}
 										<form method="POST" action="?/voidPass"
-											use:enhance={() => { voidBusy = true; return async ({ update }) => { await update({ reset: false }); voidBusy = false; voidingId = null; }; }}
+											use:enhance={() => { voidBusy = true; return async ({ update, result }) => { await update({ reset: false }); voidBusy = false; if (settleBadge(result, 'voidPass', 'badgeVoid')) voidingId = null; }; }}
 											class="rounded border border-[var(--color-tron-yellow)]/40 bg-[var(--color-tron-yellow)]/5 p-3 space-y-2">
 											<input type="hidden" name="cycleId" value={c.cycleId} />
 											<p class="text-[var(--color-tron-text)]">
@@ -187,6 +205,7 @@
 											</p>
 											<input type="text" name="reason" required placeholder="Why? e.g. test data from preview review"
 												class="w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-3 py-1.5 text-xs text-[var(--color-tron-text)] focus:border-[var(--color-tron-cyan)] focus:outline-none" />
+											<BadgeScanField bind:value={badge} show={badgeRequired} id="badgeVoid" label="Scan your badge — admin badge required" class={badgeInputCls} />
 											<div class="flex gap-2">
 												<button type="submit" disabled={voidBusy} class="rounded border border-[var(--color-tron-yellow)]/60 bg-[var(--color-tron-yellow)]/15 px-3 py-1.5 font-semibold text-[var(--color-tron-yellow)] disabled:opacity-40">{voidBusy ? 'Voiding…' : 'Void pass & return inventory'}</button>
 												<button type="button" onclick={() => (voidingId = null)} class="rounded border border-[var(--color-tron-border)] px-3 py-1.5 text-[var(--color-tron-text-secondary)]">Cancel</button>

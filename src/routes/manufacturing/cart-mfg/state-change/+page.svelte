@@ -10,6 +10,7 @@
 	import { onMount } from 'svelte';
 	import { deserialize } from '$app/forms';
 	import { invalidateAll } from '$app/navigation';
+	import BadgeScanField from '$lib/components/manufacturing/BadgeScanField.svelte';
 
 	let { data } = $props();
 
@@ -36,8 +37,16 @@
 	} | null>(null);
 	let errMsg = $state<string | null>(null);
 
-	// Distinct, trimmed barcodes currently in the box (live count).
-	const scanned = $derived(Array.from(new Set(text.split(/\s+/).map((s) => s.trim()).filter(Boolean))));
+	// Badge (2026-10-05): a cart entering or leaving a bucket pass is a badge-gated
+	// bucket step. Scanned into its own box, or into the cart box — a BDG- code
+	// there is the badge, not a cart (the server routes it the same way).
+	const BADGE_RE = /^BDG-[A-Z0-9]{10}$/i;
+	let badge = $state('');
+	const badgeRequired = $derived(data.badgeMode === 'required');
+
+	// Distinct, trimmed codes currently in the box; the cart count leaves a badge out.
+	const codesInBox = $derived(Array.from(new Set(text.split(/\s+/).map((s) => s.trim()).filter(Boolean))));
+	const scanned = $derived(codesInBox.filter((c) => !BADGE_RE.test(c)));
 
 	onMount(() => boxEl?.focus());
 
@@ -45,11 +54,16 @@
 		if (!target) { errMsg = 'Pick a target status'; return; }
 		if (needsBucket && !destinationBucketId) { errMsg = `${data.stageLabels[target] ?? target} is a bucket stage — pick the destination bucket${isBackedTarget ? ' or tick "No bucket"' : ''}`; return; }
 		if (scanned.length === 0) { errMsg = 'Scan at least one barcode'; return; }
+		// A badge scanned into the cart box moves to the badge box, so it stays on for the next batch.
+		const badgeInBox = codesInBox.find((c) => BADGE_RE.test(c));
+		if (badgeInBox && !badge.trim()) badge = badgeInBox;
+		if (badgeRequired && isBucketTarget && !badge.trim()) { errMsg = 'Scan your badge — moving carts into a bucket stage needs one.'; document.getElementById('badgeStateChange')?.focus(); return; }
 		errMsg = null;
 		busy = true;
 		try {
 			const fd = new FormData();
-			fd.set('barcodes', text);
+			fd.set('barcodes', scanned.join('\n'));
+			fd.set('badge', badge.trim());
 			fd.set('targetStatus', target);
 			if (createUnknown) fd.set('createUnknown', 'on');
 			if (needsBucket && destinationBucketId) fd.set('destinationBucketId', destinationBucketId);
@@ -62,7 +76,13 @@
 				headers: { 'x-sveltekit-action': 'true' }
 			});
 			const r = deserialize(await res.text());
-			if (r.type === 'failure') { errMsg = (r.data as any)?.error ?? 'Failed'; return; }
+			if (r.type === 'failure') {
+				errMsg = (r.data as any)?.error ?? 'Failed';
+				// A refused badge (unknown, revoked, not allowed) is cleared so the next scan replaces it.
+				const code = (r.data as any)?.code;
+				if (typeof code === 'string' && code.startsWith('BADGE')) badge = '';
+				return;
+			}
 			if (r.type === 'error') { errMsg = r.error?.message ?? 'Failed'; return; }
 			const d = (r as any).data ?? {};
 			result = {
@@ -187,6 +207,18 @@
 			<span>Clear reagent fill (the old Quick Rgt Test behaviour — pair with <span class="font-mono">wax_ready</span>)</span>
 		</label>
 	</div>
+
+	<!-- Badge-gated bucket step (2026-10-05): asked for whenever enforcement is on,
+	     required only for carts that enter or leave a bucket pass. -->
+	<BadgeScanField
+		bind:value={badge}
+		show={badgeRequired}
+		required={false}
+		id="badgeStateChange"
+		label="Scan your badge — needed when a cart enters or leaves a bucket"
+		class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-black/40 px-3 py-2 text-sm text-[var(--color-tron-text)]"
+		onscanned={() => boxEl?.focus()}
+	/>
 
 	<label class="block">
 		<span class="text-xs font-medium uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">

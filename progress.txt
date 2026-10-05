@@ -18038,3 +18038,46 @@ Alejandro: the per-SPU optical factor calibration was a failed experiment. spus.
 from 17 SPUs by the research app (backup in research scripts/); BIMS optical-confirmation analyze page drops
 the Calib column / CalibrationPill / calibration status; MCP fit tool drops applyDeviceFactor.
 test:unit 515 pass; check 13 errors = baseline. Deployed via GitHub push.
+
+================================================================================
+2026-10-05 — feat/badge-all-bucket-actions — badge scan on the remaining bucket actions (audit items 8, 9, 10)
+================================================================================
+User asked for an audit of where else the badge scan could be used (26 candidates, given in chat), then
+"implement 8 and 9, 10": the Master Override, void / retire / sticker replace, and mint / start pass /
+un-scan. Branch cut from origin/master @ 265b903e in its own worktree (../Bioscale_V2-wt-badge-all-actions).
+NOTE: this reverses the 2026-09-30 decision that took the badge off mint and start-pass.
+What changed:
+  - bucket-service.ts: requireBadge() takes a level ('write' = manufacturing:write, 'admin' =
+    manufacturing:admin / admin:full on the badge HOLDER, the same test the routes apply to the session).
+    Now gated — write: createBucket, replaceBucketSticker, startCycle, unscanCart, overrideCartStage;
+    admin: retireBucket (4th arg `badge`), voidCycle, forceBucketPhase. On each, operator = badge holder,
+    enteredBy = session, attribution = { method: 'badge', badgeId, custodyId? }, and the audit rows carry
+    badgeId + enteredBy. The holder is also openedBy / emptyConfirmedBy (start), createdBy (mint), voidedBy
+    (void) and the cart-note author / backing.operator on the overrides. Custody is unchanged (still claimed
+    at the first scan-in). New export badgeGate() + BadgeGate type so State Change resolves the badge once
+    per batch instead of once per cart. With Require badge OFF every one of these falls back to the session
+    exactly as before.
+  - NOT gated, deliberately: consumeCarts / returnCarts. They run inside wax filling's hands-off deck load
+    and its cancel / abort path (which swallows bucket errors so the abort completes) — a refused badge
+    there would stall the fill line or leave carts loose. Gating them is a wax-filling change.
+  - New src/lib/components/manufacturing/BadgeScanField.svelte (badge box for forms outside the board).
+  - buckets/new: badge box on Create and Replace (one shared value, kept after a success, cleared when
+    refused); a BDG- code scanned into a sticker box is moved to the badge box; load returns badgeMode.
+  - buckets (board): badge box on the start form and the rail's retire form; ?/unscan carries the rail's
+    badge (held with "Scan your badge first" when none is on); start / retire refusals clear the badge.
+  - buckets/[bucketId]: badge box (admin badge) on the void and retire forms; a failed void / retire now
+    keeps its form open (the retire form used to close and hide its own error).
+  - buckets/override: badge box (admin badge); cleared after each move that goes through.
+  - state-change: badge box; the gate is resolved lazily, only when a cart enters or leaves a bucket pass;
+    a bucket-stage target with no badge is refused up front. A BDG- code in the cart box is taken as the
+    badge and never as a cartridge (with "Create unknown barcodes" it used to be originated as one).
+  - BUCKET-SYSTEM_PLAN.md: header, §6.1, §6.6 (new table + the not-gated rationale), §9.4, §9.5, §9.6,
+    §9.7, §12.2, build-history row.
+Operational note: Require badge defaults to ON, so after this ships void / retire / Master Override need
+an ADMIN who holds an active badge — issue one in /admin/badges first, or those three are blocked.
+Verification: svelte-kit sync + svelte-check 14 errors, all in files this branch does not touch (r2.ts,
+2x research-proxy.ts, AskBimsWidget, 8x assembly/[sessionId], 2x validation/magnetometer/[sessionId]);
+the last master entries record 13 — not re-measured on a clean master from this worktree. test:unit 515
+pass. vite build: client + server built; only the known adapter-vercel EBUSY swapfile trace failure.
+NOT exercised against a live database — no badge was scanned through any of these forms.
+No deployment yet (branch not pushed).

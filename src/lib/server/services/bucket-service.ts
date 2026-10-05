@@ -169,8 +169,8 @@ interface TxInput {
 	operator: Operator;
 	// Badge attribution (§15.3). Omitted on every non-gated step: the session is
 	// both `operator` and `enteredBy`, method 'login' — exactly the old rows.
-	// The gated steps (scan-in, discard, move to oven — user, 2026-09-30) pass the
-	// badge holder as `operator`, the session as `enteredBy`, and the gate's attribution.
+	// The gated steps (see requireBadge for the list) pass the badge holder as
+	// `operator`, the session as `enteredBy`, and the gate's attribution.
 	enteredBy?: Operator;
 	attribution?: Attribution;
 }
@@ -205,11 +205,14 @@ async function logTx(tx: TxInput): Promise<string> {
 
 // ── badge gate (BADGE-SYSTEM_PLAN.md §16.2) ───────────────────────────────
 
-interface BadgeGate {
+export interface BadgeGate {
 	operator: Operator;      // the effective actor: badge holder, or the session when no badge
 	badgeId?: string;
 	attribution: Attribution;
 }
+
+/** What the badge holder must be allowed to do: 'write' = manufacturing:write, 'admin' = manufacturing:admin / admin:full. */
+type BadgeLevel = 'write' | 'admin';
 
 /** The session as the actor, no badge involved — what every non-gated step records. */
 function loginGate(session: Operator): BadgeGate {
@@ -222,8 +225,14 @@ function loginGate(session: Operator): BadgeGate {
  * up (scanCartIn), discarding carts (scrapCarts, and the audit / leftover
  * discards), and passing carts to the oven (moveToOven) — plus, since
  * 2026-10-02 (user: "require a scan in at every phase"), EVERY advance
- * (advanceCycle), so each phase a bucket enters is badge-signed. Minting a
- * bucket and starting a pass do not ask. With enforcement off, a badge that IS scanned
+ * (advanceCycle), so each phase a bucket enters is badge-signed. Since
+ * 2026-10-05 (user, after the system audit) the rest of the operator-driven
+ * steps ask too: minting a bucket and starting a pass (ungated since
+ * 2026-09-30), un-scanning a mis-scan, replacing a sticker, a State Change
+ * override of a bucket cart, and — at 'admin' level — retiring a bucket,
+ * voiding a pass and the Master Override. Only consumeCarts / returnCarts do
+ * not: they run inside wax filling's deck load and its cancel / abort path,
+ * not at a bucket scan box. With enforcement off, a badge that IS scanned
  * is still honoured — better attribution for free — but an empty scan falls
  * back to the session. With enforcement on, an empty scan is refused. The
  * holder must be allowed to do the thing as well: a badge is attribution,
@@ -232,7 +241,7 @@ function loginGate(session: Operator): BadgeGate {
  * Sits on the scan-in hot path (§6.2.1): the mode read and the badge lookup
  * run together, so the gate costs one round trip in series, not two.
  */
-async function requireBadge(badge: string | null | undefined, session: Operator): Promise<BadgeGate> {
+async function requireBadge(badge: string | null | undefined, session: Operator, level: BadgeLevel = 'write'): Promise<BadgeGate> {
 	const code = (badge ?? '').trim();
 	const [mode, resolved] = await Promise.all([
 		badgeMode(),
@@ -248,10 +257,25 @@ async function requireBadge(badge: string | null | undefined, session: Operator)
 		throw e;
 	}
 	const holder = resolved.holder;
-	if (!badgeHolderCan(holder, 'manufacturing:write')) {
-		throw new BucketError(`${holder.displayName}'s badge is not allowed to do this (manufacturing:write).`, 403, 'BADGE_FORBIDDEN');
+	// Same test the routes apply to the session: the admin-only steps (void, retire,
+	// master override) need manufacturing:admin or admin:full on the badge holder too.
+	const allowed = level === 'admin'
+		? holder.roles.some(r => r.permissions.includes('manufacturing:admin') || r.permissions.includes('admin:full'))
+		: badgeHolderCan(holder, 'manufacturing:write');
+	if (!allowed) {
+		throw new BucketError(`${holder.displayName}'s badge is not allowed to do this (manufacturing:${level}).`, 403, 'BADGE_FORBIDDEN');
 	}
 	return { operator: holder.user, badgeId: holder.badgeId, attribution: { method: 'badge', badgeId: holder.badgeId } };
+}
+
+/**
+ * The gate for a caller that makes several service calls on one scan — State
+ * Change resolves the badge once and hands the result to every
+ * overrideCartStage in the batch, instead of one badge lookup per cart.
+ */
+export async function badgeGate(badge: string | null | undefined, session: Operator): Promise<BadgeGate> {
+	await connectDB();
+	return requireBadge(badge, session);
 }
 
 /**
@@ -702,14 +726,14 @@ export async function setBucketNickname(input: { bucketId: string; nickname: unk
  * The bucket gets a permanent internal BKT- id so a damaged sticker can be
  * replaced later without the tub becoming a new bucket. An optional nickname
  * can be typed alongside the scan (2026-09-30); it is never required.
+ * Badge-gated again since 2026-10-05 (it was for one day on 2026-09-30): the
+ * badge holder is `createdBy` and the operator on the `mint` row.
  */
-export async function createBucket(input: { qr: string; nickname?: string | null; user: Operator }): Promise<{ bucketId: string; barcode: string; nickname: string | null; operator: string }> {
+export async function createBucket(input: { qr: string; nickname?: string | null; badge?: string | null; user: Operator }): Promise<{ bucketId: string; barcode: string; nickname: string | null; operator: string }> {
 	await connectDB();
-	// No badge here (user, 2026-09-30): minting is not one of the gated steps.
-	// The session is the operator, as on every non-gated step.
-	const gate = loginGate(input.user);
 	const code = (input.qr ?? '').trim();
 	if (!code) throw new BucketError('Scan the QR sticker for the new bucket.');
+	const gate = await requireBadge(input.badge, input.user);
 	await assertStickerFree(code);
 	const nickname = normalizeNickname(input.nickname);
 	if (nickname) await assertNicknameFree(nickname);
@@ -729,12 +753,12 @@ export async function createBucket(input: { qr: string; nickname?: string | null
 		throw e;
 	}
 	await logTx({ bucketId: id, type: 'mint', reason: nickname ? `sticker ${code} · nickname ${nickname}` : `sticker ${code}`, relatedId: code, operator: gate.operator, enteredBy: input.user, attribution: gate.attribution });
-	await audit('production_buckets', id, 'INSERT', gate.operator, { barcode: code, nickname, state: 'available', enteredBy: input.user.username });
+	await audit('production_buckets', id, 'INSERT', gate.operator, { barcode: code, nickname, state: 'available', badgeId: gate.badgeId ?? null, enteredBy: input.user.username });
 	return { bucketId: id, barcode: code, nickname, operator: gate.operator.username };
 }
 
-/** Replace a damaged sticker. The BKT- id and all history stay put. */
-export async function replaceBucketSticker(input: { bucketId: string; qr: string; user: Operator }): Promise<{ bucketId: string; barcode: string; previous: string | null }> {
+/** Replace a damaged sticker. The BKT- id and all history stay put. Badge-gated (2026-10-05). */
+export async function replaceBucketSticker(input: { bucketId: string; qr: string; badge?: string | null; user: Operator }): Promise<{ bucketId: string; barcode: string; previous: string | null; operator: string }> {
 	await connectDB();
 	const bucketId = await resolveBucketId(input.bucketId);
 	if (!bucketId) throw new BucketError(`"${(input.bucketId ?? '').trim()}" is not a known bucket.`, 404);
@@ -743,6 +767,7 @@ export async function replaceBucketSticker(input: { bucketId: string; qr: string
 	const code = (input.qr ?? '').trim();
 	if (!code) throw new BucketError('Scan the new QR sticker.');
 	if (bucket.barcode === code) throw new BucketError(`${code} is already on ${bucketId}.`);
+	const gate = await requireBadge(input.badge, input.user);
 	await assertStickerFree(code, bucketId);
 	const previous: string | null = bucket.barcode ?? null;
 	try {
@@ -751,9 +776,9 @@ export async function replaceBucketSticker(input: { bucketId: string; qr: string
 		if (e?.code === 11000) throw new BucketError(`${code} was just assigned to another bucket.`, 409);
 		throw e;
 	}
-	await logTx({ bucketId, type: 'relabel', reason: previous ? `sticker replaced: ${previous} → ${code}` : `sticker assigned: ${code}`, relatedId: code, operator: input.user });
-	await audit('production_buckets', bucketId, 'RELABEL', input.user, { barcode: code }, { barcode: previous });
-	return { bucketId, barcode: code, previous };
+	await logTx({ bucketId, type: 'relabel', reason: previous ? `sticker replaced: ${previous} → ${code}` : `sticker assigned: ${code}`, relatedId: code, operator: gate.operator, enteredBy: input.user, attribution: gate.attribution });
+	await audit('production_buckets', bucketId, 'RELABEL', gate.operator, { barcode: code, badgeId: gate.badgeId ?? null, enteredBy: input.user.username }, { barcode: previous });
+	return { bucketId, barcode: code, previous, operator: gate.operator.username };
 }
 
 // ── cycle lifecycle ───────────────────────────────────────────────────────
@@ -781,15 +806,18 @@ export interface StartCycleInput {
 	shellLotId: string;       // PT-CT-104 ReceivingLot.lotId
 	labelLotId: string;       // PT-CT-106 ReceivingLot.lotId
 	emptyConfirmed?: boolean; // required when the bucket has spotCheckPending
-	user: Operator;           // the web session — openedBy and enteredBy
+	badge?: string | null;    // scanned badge code; required when badge mode is 'required'
+	user: Operator;           // the web session (= enteredBy)
 }
 
 /**
  * Open a pass at Barcoded with zero members. Shells are then scanned in one at a
  * time (scanCartIn). The shell and label lots are fixed here so every scan
- * debits against the same lots. No badge is asked for (user, 2026-09-30):
- * custody of the pass is claimed by the badge holder at the first scan-in
- * (claimCustody), not by whoever picked the lots.
+ * debits against the same lots. Badge-gated again since 2026-10-05 (ungated
+ * 2026-09-30 → 2026-10-05): the badge holder is `openedBy`, the one who
+ * confirmed the tub empty, and the operator on the `create` row. Custody is
+ * unchanged — still claimed by the badge holder at the first scan-in
+ * (claimCustody), the one who counts the bucket up, not by whoever picked the lots.
  */
 export async function startCycle(input: StartCycleInput): Promise<any> {
 	await connectDB();
@@ -811,7 +839,8 @@ export async function startCycle(input: StartCycleInput): Promise<any> {
 	const label = await validateReceivingLot(input.labelLotId, LABEL_PART);
 	if (!label.ok) throw new BucketError(`Label lot: ${label.reason}`);
 
-	const operator = { _id: input.user._id, username: input.user.username };
+	const gate = await requireBadge(input.badge, input.user);
+	const operator = { _id: gate.operator._id, username: gate.operator.username };
 
 	const now = new Date();
 	const cycleNumber = (bucket.cycleCount ?? 0) + 1;
@@ -848,16 +877,16 @@ export async function startCycle(input: StartCycleInput): Promise<any> {
 	);
 	await logTx({
 		bucketId, cycleId, type: 'create', fromStage: null, toStage: 'barcoded', qtyBefore: 0, qtyAfter: 0, relatedId: shell.lot.lotId,
-		operator
+		operator, enteredBy: input.user, attribution: gate.attribution
 	});
-	await audit('bucket_cycles', cycleId, 'INSERT', operator, { bucketId, cycleNumber, shellLot: shell.lot.lotId, labelLot: label.lot.lotId, emptyConfirmed: !!bucket.spotCheckPending });
+	await audit('bucket_cycles', cycleId, 'INSERT', operator, { bucketId, cycleNumber, shellLot: shell.lot.lotId, labelLot: label.lot.lotId, emptyConfirmed: !!bucket.spotCheckPending, badgeId: gate.badgeId ?? null, enteredBy: input.user.username });
 	return BucketCycle.findById(cycleId).lean();
 }
 
 export interface ScanCartInput {
 	cycleId: string;
 	barcode: string;
-	badge?: string | null;   // scanned badge code; required when badge mode is 'required' (scan-in only — unscan ignores it)
+	badge?: string | null;   // scanned badge code; required when badge mode is 'required' (scan-in, and un-scan since 2026-10-05)
 	user: Operator;          // the web session (= enteredBy)
 }
 
@@ -946,14 +975,16 @@ export async function scanCartIn(input: ScanCartInput): Promise<{ quantity: numb
 /**
  * Undo a mis-scan while the pass is still at Barcoded: the cartridge record is
  * deleted (it was born seconds ago and has no history) and the shell + label
- * debits are retracted.
+ * debits are retracted. Badge-gated (2026-10-05): the badge holder is the
+ * operator on the delete's audit row, the two retractions and the ledger row.
  */
 export async function unscanCart(input: ScanCartInput): Promise<{ quantity: number; barcode: string }> {
 	const barcode = (input.barcode ?? '').trim();
 	await connectDB();
-	const [cycle, cart] = await Promise.all([
+	const [cycle, cart, gate] = await Promise.all([
 		BucketCycle.findById(input.cycleId).lean() as Promise<any>,
-		CartridgeRecord.findById(barcode).select('status bucket').lean() as Promise<any>
+		CartridgeRecord.findById(barcode).select('status bucket').lean() as Promise<any>,
+		requireBadge(input.badge, input.user)
 	]);
 	if (!cycle || cycle.status !== 'open') throw new BucketError('Pass is not open.', 404);
 	if (cycle.stage !== 'barcoded') throw new BucketError('Carts can only be un-scanned while the bucket is at Barcoded — after that, use Discard.');
@@ -972,8 +1003,8 @@ export async function unscanCart(input: ScanCartInput): Promise<{ quantity: numb
 		{
 			statuses: ['barcoded'],
 			reason: 'Operator removed mis-scanned cartridge while bucket at Barcoded',
-			user: input.user,
-			oldData: { cycleId: cycle._id, bucketId: cycle.bucketId }
+			user: gate.operator,
+			oldData: { cycleId: cycle._id, bucketId: cycle.bucketId, badgeId: gate.badgeId ?? null, enteredBy: input.user.username }
 		}
 	);
 	if (removed.length === 0) throw new BucketError(`${barcode} could not be removed — reload the board and try again.`, 409);
@@ -982,9 +1013,9 @@ export async function unscanCart(input: ScanCartInput): Promise<{ quantity: numb
 	const [shellPartId, labelPartId] = await Promise.all([resolvePartId(SHELL_PART), resolvePartId(LABEL_PART)]);
 	await Promise.all([
 		BucketCycle.updateOne({ _id: cycle._id }, { $pull: { cartridgeIds: barcode }, $inc: { quantity: -1 } }),
-		retract('consumption', shellPartId, lotFor(cycle.sourceLots, SHELL_PART) ?? null, 1, cycle._id, input.user, `Un-scan ${barcode} from ${label}: 1x ${SHELL_PART} returned`),
-		retract('consumption', labelPartId, lotFor(cycle.sourceLots, LABEL_PART) ?? null, 1, cycle._id, input.user, `Un-scan ${barcode} from ${label}: 1x ${LABEL_PART} returned`),
-		logTx({ bucketId: cycle.bucketId, cycleId: cycle._id, type: 'unscan', fromStage: 'barcoded', toStage: 'barcoded', qtyBefore: before, qtyAfter: Math.max(0, before - 1), cartridgeIds: [barcode], reason: 'mis-scan removed', operator: input.user })
+		retract('consumption', shellPartId, lotFor(cycle.sourceLots, SHELL_PART) ?? null, 1, cycle._id, gate.operator, `Un-scan ${barcode} from ${label}: 1x ${SHELL_PART} returned`),
+		retract('consumption', labelPartId, lotFor(cycle.sourceLots, LABEL_PART) ?? null, 1, cycle._id, gate.operator, `Un-scan ${barcode} from ${label}: 1x ${LABEL_PART} returned`),
+		logTx({ bucketId: cycle.bucketId, cycleId: cycle._id, type: 'unscan', fromStage: 'barcoded', toStage: 'barcoded', qtyBefore: before, qtyAfter: Math.max(0, before - 1), cartridgeIds: [barcode], reason: 'mis-scan removed', operator: gate.operator, enteredBy: input.user, attribution: { ...gate.attribution, ...(cycle.custodyId ? { custodyId: cycle.custodyId } : {}) } })
 	]);
 	return { quantity: Math.max(0, before - 1), barcode };
 }
@@ -1177,6 +1208,10 @@ export interface ConsumeInput {
  * filling's deck load) sets their status to 'wax_filling' and stamps the run;
  * this only maintains the membership list and closes the pass when the last
  * member leaves. Nothing is debited — every part was consumed upstream.
+ * Deliberately NOT badge-gated (2026-10-05): this runs inside wax filling's
+ * hands-off deck load (robot sweep → loadDeck → start), which has no badge
+ * box, and its inverse returnCarts runs inside the cancel / abort path, where a
+ * refusal is swallowed and would leave the carts loose. Both stay on the session.
  */
 export async function consumeCarts(input: ConsumeInput): Promise<{ qtyBefore: number; qtyAfter: number; consumed: string[] }> {
 	await connectDB();
@@ -1841,7 +1876,12 @@ export async function auditCycle(input: AuditCycleInput): Promise<AuditCycleResu
 	};
 }
 
-export async function retireBucket(bucketId: string, reason: string, user: Operator): Promise<void> {
+/**
+ * Retire a bucket (kill the label). Admin only. Badge-gated (2026-10-05) at
+ * 'admin' level: the badge holder must be a bucket admin too, and is the
+ * operator on the `retire` row; `user` is the web session (= enteredBy).
+ */
+export async function retireBucket(bucketId: string, reason: string, user: Operator, badge?: string | null): Promise<void> {
 	await connectDB();
 	const id = await resolveBucketId(bucketId);
 	if (!id) throw new BucketError(`"${(bucketId ?? '').trim()}" is not a known bucket.`, 404);
@@ -1850,14 +1890,20 @@ export async function retireBucket(bucketId: string, reason: string, user: Opera
 	if (bucket.state === 'retired') throw new BucketError('Already retired.');
 	const why = (reason ?? '').trim();
 	if (!why) throw new BucketError('A reason is required to retire a bucket.');
+	const gate = await requireBadge(badge, user, 'admin');
 	await ProductionBucket.updateOne({ _id: id }, { $set: { state: 'retired', retiredAt: new Date(), retiredReason: why } });
-	await logTx({ bucketId: id, type: 'retire', reason: why, operator: user });
-	await audit('production_buckets', id, 'RETIRE', user, { state: 'retired' }, { state: bucket.state }, why);
+	await logTx({ bucketId: id, type: 'retire', reason: why, operator: gate.operator, enteredBy: user, attribution: gate.attribution });
+	await audit('production_buckets', id, 'RETIRE', gate.operator, { state: 'retired', badgeId: gate.badgeId ?? null, enteredBy: user.username }, { state: bucket.state }, why);
 }
 
 // ── void a pass (§12.2) ───────────────────────────────────────────────────
 
-export interface VoidCycleInput { cycleId: string; reason: string; user: Operator }
+export interface VoidCycleInput {
+	cycleId: string;
+	reason: string;
+	badge?: string | null;   // scanned badge code; required when badge mode is 'required' — the holder must be a bucket admin
+	user: Operator;          // the web session (= enteredBy)
+}
 export interface VoidCycleResult {
 	cycleId: string; bucketId: string; cycleNumber: number;
 	restored: { partNumber: string | null; lotId: string | null; quantity: number }[];
@@ -1869,7 +1915,9 @@ export interface VoidCycleResult {
  * Void a pass that never really happened — test data, or a pass opened
  * against the wrong lot — and give back exactly what it took from inventory.
  * Refused if any of its cartridges went on into the oven (they were really
- * used). Its cartridges become 'voided'; nothing is deleted.
+ * used). Its cartridges become 'voided'; nothing is deleted. Badge-gated
+ * (2026-10-05) at 'admin' level: the badge holder is `voidedBy` and the
+ * operator on the retractions, the thermoseal credit and the `void` row.
  */
 export async function voidCycle(input: VoidCycleInput): Promise<VoidCycleResult> {
 	await connectDB();
@@ -1885,8 +1933,11 @@ export async function voidCycle(input: VoidCycleInput): Promise<VoidCycleResult>
 		throw new BucketError(`${wentOn.length} cartridge${wentOn.length === 1 ? '' : 's'} from ${cycleLabel(cycle.bucketId, cycle.cycleNumber)} went on past the buckets (e.g. ${wentOn[0]._id} is ${wentOn[0].status}) — that material was really used, so this pass cannot be voided.`, 409, 'SERIALIZED');
 	}
 
+	// After the refusals above, before the first write: a pass that cannot be
+	// voided says so without asking for a badge first.
+	const gate = await requireBadge(input.badge, input.user, 'admin');
 	const now = new Date();
-	const by = { _id: input.user._id, username: input.user.username };
+	const by = { _id: gate.operator._id, username: gate.operator.username };
 	const claimed = await BucketCycle.findOneAndUpdate(
 		{ _id: cycle._id, status: { $ne: 'voided' } },
 		{ $set: { status: 'voided', statusBeforeVoid: cycle.status, voidedAt: now, voidedBy: by, voidReason: reason, closedAt: cycle.closedAt ?? now, cartridgeIds: [], quantity: 0 } }
@@ -1913,7 +1964,7 @@ export async function voidCycle(input: VoidCycleInput): Promise<VoidCycleResult>
 			const part = await PartDefinition.findById(g.partDefinitionId).select('partNumber').lean() as any;
 			partNumber = part?.partNumber ?? null;
 		}
-		await retract(g.type, g.partDefinitionId, g.lotId, g.net, cycle._id, input.user, `VOID ${label}: returned ${g.net}x ${partNumber ?? 'part'}${g.lotId ? ` to lot ${g.lotId}` : ''}${g.type === 'scrap' ? ' (discard reversed)' : ''} — ${reason}`);
+		await retract(g.type, g.partDefinitionId, g.lotId, g.net, cycle._id, gate.operator, `VOID ${label}: returned ${g.net}x ${partNumber ?? 'part'}${g.lotId ? ` to lot ${g.lotId}` : ''}${g.type === 'scrap' ? ' (discard reversed)' : ''} — ${reason}`);
 		restored.push({ partNumber, lotId: g.lotId, quantity: g.net });
 	}
 
@@ -1921,7 +1972,7 @@ export async function voidCycle(input: VoidCycleInput): Promise<VoidCycleResult>
 	// segments back to their rolls. The roll pull itself (−1 roll) stays:
 	// that roll is physically open on the press.
 	const thermosealCreditedCm = cycle.thermoseal?.segments?.length
-		? await creditThermoseal({ segments: cycle.thermoseal.segments, user: input.user, reason: `VOID ${label}: ${reason}` })
+		? await creditThermoseal({ segments: cycle.thermoseal.segments, user: gate.operator, reason: `VOID ${label}: ${reason}` })
 		: 0;
 
 	const voidable = born.map(c => c._id);
@@ -1939,9 +1990,9 @@ export async function voidCycle(input: VoidCycleInput): Promise<VoidCycleResult>
 	await logTx({
 		bucketId: cycle.bucketId, cycleId: cycle._id, type: 'void', fromStage: cycle.stage, toStage: cycle.stage, qtyBefore: cycle.quantity ?? 0, qtyAfter: 0,
 		reason: `${reason} — returned ${restored.map(r => `${r.quantity}x ${r.partNumber ?? 'part'}`).join(', ') || 'nothing (no debits found)'}${thermosealCreditedCm > 0 ? `; ${thermosealCreditedCm} cm thermoseal credited back to its roll` : ''}; ${voidable.length} cartridge(s) voided`,
-		cartridgeIds: voidable, operator: input.user
+		cartridgeIds: voidable, operator: gate.operator, enteredBy: input.user, attribution: { ...gate.attribution, ...(cycle.custodyId ? { custodyId: cycle.custodyId } : {}) }
 	});
-	await audit('bucket_cycles', cycle._id, 'VOID', input.user, { status: 'voided', restored, cartridgesVoided: voidable.length, removalsMarked: marked.modifiedCount ?? 0 }, { status: cycle.status, quantity: cycle.quantity }, reason);
+	await audit('bucket_cycles', cycle._id, 'VOID', gate.operator, { status: 'voided', restored, cartridgesVoided: voidable.length, removalsMarked: marked.modifiedCount ?? 0, badgeId: gate.badgeId ?? null, enteredBy: input.user.username }, { status: cycle.status, quantity: cycle.quantity }, reason);
 	return { cycleId: cycle._id, bucketId: cycle.bucketId, cycleNumber: cycle.cycleNumber, restored, thermosealCreditedCm, cartridgesVoided: voidable.length, removalsMarked: marked.modifiedCount ?? 0 };
 }
 
@@ -2137,7 +2188,9 @@ export interface OverrideInput {
 	destinationBucketId?: string; // bucket (QR or BKT id) whose open pass is at `target`
 	noBucket?: boolean;           // target Backed only: straight to 'backing' on no pass — no destination needed (§9.6)
 	reason?: string;
-	user: Operator;
+	badge?: string | null;        // scanned badge code; required when badge mode is 'required'
+	gate?: BadgeGate;             // the same badge already resolved by the caller (badgeGate) — State Change does it once per batch
+	user: Operator;               // the web session (= enteredBy)
 }
 
 /**
@@ -2157,6 +2210,8 @@ export interface OverrideInput {
  * empty-check armed). No inventory moves — an override is bookkeeping, not
  * production. Unknown barcodes are refused for bucket stages: scanning a cart
  * into a bucket on the board is what debits its shell + label.
+ * Badge-gated (2026-10-05): the badge holder is the note author, the operator
+ * on the merge rows and — on a no-bucket move to Backed — `backing.operator`.
  */
 export async function overrideCartStage(input: OverrideInput): Promise<{ from: string; to: string; fromCycle: string | null; toCycle: string | null }> {
 	await connectDB();
@@ -2164,9 +2219,10 @@ export async function overrideCartStage(input: OverrideInput): Promise<{ from: s
 	const target = (input.target ?? '').trim();
 	const cart = await CartridgeRecord.findById(barcode).select('_id status bucket').lean() as any;
 	if (!cart) throw new BucketError(`${barcode} is not a known cartridge${isBucketStage(target) ? ' — scan it into a bucket on the board instead' : ''}.`, 404);
+	const gate = input.gate ?? await requireBadge(input.badge, input.user);
 	const from: string = cart.status ?? 'none';
 	const now = new Date();
-	const by = { _id: input.user._id, username: input.user.username };
+	const by = { _id: gate.operator._id, username: gate.operator.username };
 	const why = (input.reason ?? '').trim();
 	// Straight to Backed on no pass (State Change's "No bucket" setting, §9.6).
 	const direct = target === BACKED_STAGE && input.noBucket === true;
@@ -2199,9 +2255,9 @@ export async function overrideCartStage(input: OverrideInput): Promise<{ from: s
 		await logTx({
 			bucketId: current.bucketId, cycleId: current._id, type: 'merge_out', fromStage: current.stage, toStage: dest ? dest.stage : current.stage,
 			qtyBefore: before, qtyAfter: after, reason: dest ? `override → ${cycleLabel(dest.bucketId, dest.cycleNumber)}${why ? `: ${why}` : ''}` : `override → ${target}${direct ? ' (no bucket)' : ''}${why ? `: ${why}` : ''}`,
-			relatedId: dest?._id, cartridgeIds: [barcode], operator: input.user
+			relatedId: dest?._id, cartridgeIds: [barcode], operator: gate.operator, enteredBy: input.user, attribution: gate.attribution
 		});
-		if (after === 0) await closeCycle({ ...current, quantity: 0 }, 'consumed', input.user, dest?._id);
+		if (after === 0) await closeCycle({ ...current, quantity: 0 }, 'consumed', gate.operator, dest?._id);
 	}
 
 	const set: Record<string, unknown> = { status: target, priorStatus: from, statusUpdatedOn: now.toISOString() };
@@ -2212,7 +2268,7 @@ export async function overrideCartStage(input: OverrideInput): Promise<{ from: s
 			await logTx({
 				bucketId: dest.bucketId, cycleId: dest._id, type: 'merge_in', fromStage: dest.stage, toStage: dest.stage,
 				qtyBefore: before, qtyAfter: before + 1, reason: `override from ${current ? cycleLabel(current.bucketId, current.cycleNumber) : from}${why ? `: ${why}` : ''}`,
-				relatedId: current?._id, cartridgeIds: [barcode], operator: input.user
+				relatedId: current?._id, cartridgeIds: [barcode], operator: gate.operator, enteredBy: input.user, attribution: gate.attribution
 			});
 		}
 		set.bucket = { bucketId: dest.bucketId, cycleId: dest._id, scannedInAt: cart.bucket?.scannedInAt ?? now, scannedInBy: cart.bucket?.scannedInBy ?? by };
@@ -2230,7 +2286,7 @@ export async function overrideCartStage(input: OverrideInput): Promise<{ from: s
 		{ _id: barcode },
 		{ $set: set, $push: { notes: { _id: generateId(), body: note, phase: 'bucket', author: by, createdAt: now } } }
 	);
-	await audit('cartridge_records', barcode, 'OVERRIDE', input.user, { status: target, cycleId: dest?._id ?? null, ...(direct ? { noBucket: true } : {}) }, { status: from, cycleId: current?._id ?? null }, why || undefined);
+	await audit('cartridge_records', barcode, 'OVERRIDE', gate.operator, { status: target, cycleId: dest?._id ?? null, ...(direct ? { noBucket: true } : {}), badgeId: gate.badgeId ?? null, enteredBy: input.user.username }, { status: from, cycleId: current?._id ?? null }, why || undefined);
 	return { from, to: target, fromCycle: current?._id ?? null, toCycle: dest?._id ?? null };
 }
 
@@ -2244,7 +2300,8 @@ export interface ForceBucketInput {
 	bucket: string;        // QR sticker or BKT id, scanned
 	target: ForceTarget;
 	reason: string;        // required
-	user: Operator;
+	badge?: string | null; // scanned badge code; required when badge mode is 'required' — the holder must be a bucket admin
+	user: Operator;        // the web session (= enteredBy)
 }
 
 export interface ForceBucketResult {
@@ -2260,6 +2317,8 @@ export interface ForceBucketResult {
  * target (Backed included — wax filling draws from it like any other). Nothing
  * is debited or credited; the ledger row, the cart notes and the audit entry
  * all say MASTER OVERRIDE so it can never be mistaken for production flow.
+ * Badge-gated (2026-10-05) at 'admin' level: the badge holder is the note
+ * author, `backing.operator` on a move to Backed, and the operator on the row.
  */
 export async function forceBucketPhase(input: ForceBucketInput): Promise<ForceBucketResult> {
 	await connectDB();
@@ -2273,15 +2332,17 @@ export async function forceBucketPhase(input: ForceBucketInput): Promise<ForceBu
 
 	const from = cycle.stage as BucketStage;
 	const ids: string[] = cycle.cartridgeIds ?? [];
-	const now = new Date();
-	const by = { _id: input.user._id, username: input.user.username };
 	const label = cycleLabel(id, cycle.cycleNumber);
+	const to = input.target as BucketStage;
+	if (to === from) throw new BucketError(`${label} is already at ${STAGE_LABELS[to]}.`);
+
+	const gate = await requireBadge(input.badge, input.user, 'admin');
+	const now = new Date();
+	const by = { _id: gate.operator._id, username: gate.operator.username };
 	const toLabel = FORCE_TARGET_LABELS[input.target];
 	const noteBody = `MASTER OVERRIDE ${label}: ${STAGE_LABELS[from]} → ${toLabel}: ${reason}`;
 	const cartNote = { _id: generateId(), body: noteBody, phase: 'bucket', author: by, createdAt: now };
 
-	const to = input.target as BucketStage;
-	if (to === from) throw new BucketError(`${label} is already at ${STAGE_LABELS[to]}.`);
 	const set: Record<string, unknown> = { stage: to, stageEnteredAt: now };
 	if (from === 'barcoded') set.openedQty = ids.length; // same rule as advanceCycle: fixed when leaving Barcoded
 	await BucketCycle.updateOne({ _id: cycle._id }, { $set: set });
@@ -2297,8 +2358,8 @@ export async function forceBucketPhase(input: ForceBucketInput): Promise<ForceBu
 	await logTx({
 		bucketId: id, cycleId: cycle._id, type: 'advance', fromStage: from, toStage: to,
 		qtyBefore: ids.length, qtyAfter: ids.length, reason: `MASTER OVERRIDE (no thermoseal, no discards): ${reason}`,
-		cartridgeIds: ids, operator: input.user
+		cartridgeIds: ids, operator: gate.operator, enteredBy: input.user, attribution: { ...gate.attribution, ...(cycle.custodyId ? { custodyId: cycle.custodyId } : {}) }
 	});
-	await audit('bucket_cycles', cycle._id, 'FORCE_PHASE', input.user, { stage: to, members: ids.length }, { stage: from }, reason);
+	await audit('bucket_cycles', cycle._id, 'FORCE_PHASE', gate.operator, { stage: to, members: ids.length, badgeId: gate.badgeId ?? null, enteredBy: input.user.username }, { stage: from }, reason);
 	return { bucketId: id, cycleId: cycle._id, cycleNumber: cycle.cycleNumber, from, to: input.target, members: ids.length, closed: false };
 }
