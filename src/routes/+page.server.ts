@@ -4,9 +4,10 @@ import { requirePermission } from '$lib/server/permissions';
 import {
 	connectDB, Spu, Batch, BomItem, ProductionRun, Customer, User, AuditLog, generateId,
 	CartridgeRecord, Equipment, EquipmentLocation,
-	OpentronsRobot, WaxFillingRun, ReagentBatchRecord, AssayDefinition, PartDefinition, BackingLot
+	OpentronsRobot, WaxFillingRun, ReagentBatchRecord, AssayDefinition, PartDefinition
 } from '$lib/server/db';
 import { getCheckedOutCartridgeIds } from '$lib/server/checkout-utils';
+import { buildPipeline } from '$lib/server/cartridge-pipeline';
 import { isSpuStatus, isLegalTransition } from '$lib/server/spu-status';
 import { syncServiceFlag } from '$lib/server/service-flag';
 import { WAX_FILLING_ACTIVE } from '$lib/server/manufacturing/run-statuses';
@@ -206,15 +207,6 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 				// Map from barcode/name key → actual _id for detail links
 				const fridgeIdMap = new Map((fridges as any[]).map((f: any) => [f.barcode ?? f.name ?? String(f._id), String(f._id)]));
 
-				const phaseOrder = ['backing', 'wax_filled', 'wax_qc', 'wax_ready', 'wax_rejected', 'reagent_filled', 'inspected', 'sealed', 'reagent_qc', 'reagent_ready', 'reagent_rejected', 'cured', 'stored', 'released', 'shipped'];
-				const phaseMap = new Map((phaseCounts as any[]).map((p: any) => [p._id, p.count]));
-				// 'backing' isn't a CartridgeRecord status anymore — aggregate BackingLot.
-				const backingAgg = await BackingLot.aggregate([
-					{ $match: { status: { $in: ['in_oven', 'ready'] } } },
-					{ $group: { _id: null, total: { $sum: '$cartridgeCount' } } }
-				]).catch(() => []);
-				phaseMap.set('backing', (backingAgg[0] as any)?.total ?? 0);
-
 				const qcMap = (arr: any[]) => {
 					const m: Record<string, number> = {};
 					for (const item of arr) m[item._id] = item.count;
@@ -298,11 +290,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 				const crtCostTotal = (cartridgeBomItems as any[]).reduce((s: number, b: any) => s + (Number(b.unitCost) || 0), 0);
 
 				return {
-					pipeline: phaseOrder.map(phase => ({
-						phase,
-						count: phaseMap.get(phase) ?? 0,
-						label: phase.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
-					})),
+					pipeline: buildPipeline(phaseCounts as any[]),
 					totalMfg,
 					totalVoided,
 					weeklyProduction,

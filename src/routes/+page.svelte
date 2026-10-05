@@ -10,9 +10,10 @@
 
 	// Phase colors for manufacturing pipeline
 	const phaseColors: Record<string, string> = {
-		backing: '#6366f1', wax_filled: '#8b5cf6', wax_stored: '#7c3aed', wax_qc: '#a78bfa',
+		barcoded: '#64748b', unpressed: '#3b82f6',
+		backing: '#6366f1', wax_filling: '#c084fc', wax_filled: '#8b5cf6', wax_stored: '#7c3aed', wax_qc: '#a78bfa',
 		wax_ready: '#16a34a', wax_rejected: '#dc2626',
-		reagent_filled: '#06b6d4', inspected: '#22d3ee', sealed: '#14b8a6',
+		reagent_filling: '#67e8f9', reagent_filled: '#06b6d4', inspected: '#22d3ee', sealed: '#14b8a6',
 		reagent_qc: '#f59e0b', reagent_ready: '#16a34a', reagent_rejected: '#dc2626',
 		cured: '#10b981',
 		stored: '#059669', released: '#34d399', shipped: '#4ade80', assay_loaded: '#f59e0b',

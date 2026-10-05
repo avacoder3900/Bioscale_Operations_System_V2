@@ -192,7 +192,6 @@ export const actions: Actions = {
 			const cycle = await startCycle({
 				bucketId: String(d.get('bucketId') ?? ''),
 				shellLotId: String(d.get('shellLotId') ?? ''),
-				labelLotId: String(d.get('labelLotId') ?? ''),
 				emptyConfirmed: d.get('emptyConfirmed') === '1',
 				badge: String(d.get('badge') ?? ''),
 				user: op(locals)
