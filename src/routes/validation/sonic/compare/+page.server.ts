@@ -17,6 +17,12 @@ import type { PageServerLoad } from './$types';
 /** Each fingerprint is ~150 KB and the compare is O(n²) in places; keep a request bounded. */
 const MAX_COMPARE = 30;
 
+/** "BT-M01-0000-0210" → "SPU 210" (the number people call the unit by); anything else unchanged. */
+const spuShort = (udi: string) => {
+	const m = /-0*(\d+)$/.exec(udi);
+	return m ? `SPU ${m[1]}` : udi;
+};
+
 const r1 = (v: number | null) => (v == null || !Number.isFinite(v) ? null : Math.round(v * 10) / 10);
 
 export const load: PageServerLoad = async ({ locals, url }) => {
@@ -31,6 +37,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		.lean()) as any[]).map((s) => ({
 		id: s._id as string,
 		spuUdi: (s.spuUdi ?? '?') as string,
+		short: spuShort((s.spuUdi ?? '?') as string),
 		assay: (s.results?.[0]?.rawData?.assay ?? null) as string | null,
 		fileName: (s.results?.[0]?.rawData?.fileName ?? null) as string | null,
 		reference: !!s.results?.[0]?.processedData?.reference?.on,
@@ -66,7 +73,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	rows.forEach((r) => labelCount.set(r.spuUdi, (labelCount.get(r.spuUdi) ?? 0) + 1));
 	const items = rows.map((r) => ({
 		id: r.id,
-		label: (labelCount.get(r.spuUdi) ?? 0) > 1 && r.at ? `${r.spuUdi} (${r.at.slice(5, 16).replace('T', ' ')})` : r.spuUdi,
+		label: (labelCount.get(r.spuUdi) ?? 0) > 1 && r.at ? `${spuShort(r.spuUdi)} (${r.at.slice(5, 16).replace('T', ' ')})` : spuShort(r.spuUdi),
 		fp: r.fp
 	}));
 
