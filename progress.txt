@@ -18147,3 +18147,12 @@ Intended use: paste the list into State Change to move the stale carts out of st
 existing, badge-gated, per-batch path). The target status is the user's call (voided was proposed).
 Verification: svelte-kit sync + svelte-check 14 errors, the same pre-existing set, none in touched
 files; test:unit 515 pass.
+Shipped: commit 0ef9d195 pushed; PR #81 into master
+(https://github.com/avacoder3900/Bioscale_Operations_System_V2/pull/81). User: "push this".
+
+Deployment: preview — https://bioscale-operations-system-mongodb-roimjtez6-brevitest.vercel.app
+Source: branch feat/in-oven-copy-ids @ commit 0ef9d195
+Retrieve this exact code: git checkout feat/in-oven-copy-ids at commit 0ef9d195
+  (or: git log feat/in-oven-copy-ids --oneline to find it if the branch has since moved on)
+What this deployment is for: the In oven dropdown's Copy all ids button; smoke: /login 200,
+  buckets → 302 /login. The button itself not clicked in a signed-in session.
