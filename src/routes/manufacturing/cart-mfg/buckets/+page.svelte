@@ -1481,62 +1481,67 @@
 							</details>
 						{/if}
 					</div>
-
-					{#if s.key === 'unpressed_wip' && data.thermoseal}
-						{@const ts = data.thermoseal}
-						{@const pct = ts.roll ? Math.max(0, Math.min(100, Math.round((ts.roll.remainingCm / ts.roll.lengthCm) * 100))) : 0}
-						<!-- Thermoseal lives under Unpressed because that is where it is consumed (v2 §3.4).
-						     One part, counted in rolls; the roll pull here is the only thing that moves it. -->
-						<div class="mt-3 rounded border {ts.belowFloor ? 'border-red-500/60' : 'border-[var(--color-tron-border)]'} bg-[var(--color-tron-surface)] p-2 text-[10px]">
-							<div class="flex items-center justify-between">
-								<span class="font-semibold uppercase tracking-wider text-[var(--color-tron-cyan)]">Thermoseal {ts.partNumber}</span>
-								{#if !ts.config.notificationsEnabled}<span class="rounded bg-[var(--color-tron-bg-tertiary)] px-1 py-0.5 text-[9px] text-[var(--color-tron-text-secondary)]" title="Restock notifications are off (development)">alerts off</span>{/if}
-							</div>
-							{#if ts.roll}
-								<div class="mt-1 flex items-baseline justify-between">
-									<span class="text-[var(--color-tron-text-secondary)]">Open roll <span class="font-mono">{ts.roll.id.slice(0, 8)}</span></span>
-									<span class="font-mono text-[var(--color-tron-text)]">{fmtM(ts.roll.remainingCm)} · ≈{ts.roll.remainingCartridges} carts</span>
-								</div>
-								<div class="mt-1 h-1.5 w-full overflow-hidden rounded bg-[var(--color-tron-bg-tertiary)]">
-									<div class="h-full {pct <= 10 ? 'bg-red-400' : pct <= 25 ? 'bg-[var(--color-tron-yellow)]' : 'bg-[var(--color-tron-cyan)]'}" style="width: {pct}%"></div>
-								</div>
-							{:else}
-								<p class="mt-1 text-[var(--color-tron-text-secondary)]">No roll open — the first move to Unpressed pulls one{#if ts.nextLot} (lot {ts.nextLot.lotId}){/if}.</p>
-							{/if}
-							<div class="mt-2 grid grid-cols-2 gap-1">
-								<div class="rounded border {ts.belowFloor ? 'border-red-500/60 bg-red-900/20' : 'border-[var(--color-tron-border)]'} px-2 py-1 text-center">
-									<p class="uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Rolls on hand</p>
-									<p class="text-lg font-bold leading-tight {ts.belowFloor ? 'text-red-300' : 'text-[var(--color-tron-text)]'}">{ts.rollsOnHand}</p>
-									<p class="text-[var(--color-tron-text-secondary)]">min {ts.minRolls} · live {ts.partNumber} count</p>
-								</div>
-								<div class="rounded border border-[var(--color-tron-border)] px-2 py-1 text-center">
-									<p class="uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Next roll from</p>
-									<p class="truncate font-mono text-[var(--color-tron-text)]" title={ts.nextLot?.lotId ?? ''}>{ts.nextLot?.lotId ?? '—'}</p>
-									<p class="text-[var(--color-tron-text-secondary)]">{ts.nextLot ? `${ts.nextLot.remaining} left in lot` : 'no lot with stock'}</p>
-								</div>
-							</div>
-							{#if ts.belowFloor}
-								<p class="mt-1 text-red-300">Below the {ts.minRolls}-roll floor — {#if !ts.config.notificationsEnabled}notifications off (development), nothing sent.{:else}{ts.openRestockTaskId ? 'restock card open on the' : 'a restock card goes to the'} <a href="/kanban" class="underline">kanban board</a> + email.{/if}</p>
-							{/if}
-							<!-- Development settings (admin): notifications toggle -->
-							<details class="mt-2">
-								<summary class="cursor-pointer text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]">Development settings</summary>
-								<form method="POST" action="?/thermosealToggles" use:enhance={enhanceBusy} class="mt-1.5 space-y-1.5">
-									<label class="flex items-center gap-1.5 {data.canAdmin ? '' : 'opacity-60'}">
-										<input type="checkbox" name="notificationsEnabled" value="1" checked={ts.config.notificationsEnabled} disabled={!data.canAdmin || busy} class="accent-[var(--color-tron-cyan)]" />
-										<span class="text-[var(--color-tron-text)]">Restock notifications</span>
-									</label>
-									<p class="text-[var(--color-tron-text-secondary)]">{ts.config.cmPerCartridge} cm per cart · {fmtM(ts.config.rollLengthCm)} per roll</p>
-									{#if data.canAdmin}<button type="submit" disabled={busy} class={btnGhost}>{busy ? 'Saving…' : 'Apply'}</button>{:else}<span class="text-[var(--color-tron-text-secondary)]">manufacturing:admin to change</span>{/if}
-									{#if form?.thermosealToggles?.error}<span class="text-[var(--color-tron-error)]">{form.thermosealToggles.error}</span>{/if}
-									{#if form?.thermosealToggles?.success}<span class="text-[var(--color-tron-cyan)]">Saved.</span>{/if}
-								</form>
-							</details>
-						</div>
-					{/if}
 				</div>
 			{/each}
 		</div>
+
+	{#if data.thermoseal}
+		{@const ts = data.thermoseal}
+		{@const pct = ts.roll ? Math.max(0, Math.min(100, Math.round((ts.roll.remainingCm / ts.roll.lengthCm) * 100))) : 0}
+		<!-- Thermoseal (v2 §3.4): one part, counted in rolls; the roll pull is the only thing
+		     that moves it. A horizontal strip below the board since 2026-10-05 (user) — it
+		     was a tile inside the Unpressed column, where it stretched the lane. -->
+		<div class="rounded-lg border {ts.belowFloor ? 'border-red-500/60' : 'border-[var(--color-tron-border)]'} bg-[var(--color-tron-surface)] p-3 text-[10px]">
+			<div class="flex flex-wrap items-stretch gap-3">
+				<div class="min-w-[220px] flex-1">
+					<div class="flex items-center justify-between">
+						<span class="font-semibold uppercase tracking-wider text-[var(--color-tron-cyan)]">Thermoseal {ts.partNumber}</span>
+						{#if !ts.config.notificationsEnabled}<span class="rounded bg-[var(--color-tron-bg-tertiary)] px-1 py-0.5 text-[9px] text-[var(--color-tron-text-secondary)]" title="Restock notifications are off (development)">alerts off</span>{/if}
+					</div>
+					{#if ts.roll}
+						<div class="mt-1 flex items-baseline justify-between">
+							<span class="text-[var(--color-tron-text-secondary)]">Open roll <span class="font-mono">{ts.roll.id.slice(0, 8)}</span></span>
+							<span class="font-mono text-[var(--color-tron-text)]">{fmtM(ts.roll.remainingCm)} · ≈{ts.roll.remainingCartridges} carts</span>
+						</div>
+						<div class="mt-1 h-1.5 w-full overflow-hidden rounded bg-[var(--color-tron-bg-tertiary)]">
+							<div class="h-full {pct <= 10 ? 'bg-red-400' : pct <= 25 ? 'bg-[var(--color-tron-yellow)]' : 'bg-[var(--color-tron-cyan)]'}" style="width: {pct}%"></div>
+						</div>
+					{:else}
+						<p class="mt-1 text-[var(--color-tron-text-secondary)]">No roll open — the first move to Unpressed pulls one{#if ts.nextLot} (lot {ts.nextLot.lotId}){/if}.</p>
+					{/if}
+				</div>
+				<div class="w-40 rounded border {ts.belowFloor ? 'border-red-500/60 bg-red-900/20' : 'border-[var(--color-tron-border)]'} px-2 py-1 text-center">
+					<p class="uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Rolls on hand</p>
+					<p class="text-lg font-bold leading-tight {ts.belowFloor ? 'text-red-300' : 'text-[var(--color-tron-text)]'}">{ts.rollsOnHand}</p>
+					<p class="text-[var(--color-tron-text-secondary)]">min {ts.minRolls} · live {ts.partNumber} count</p>
+				</div>
+				<div class="w-56 rounded border border-[var(--color-tron-border)] px-2 py-1 text-center">
+					<p class="uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Next roll from</p>
+					<p class="truncate font-mono text-[var(--color-tron-text)]" title={ts.nextLot?.lotId ?? ''}>{ts.nextLot?.lotId ?? '—'}</p>
+					<p class="text-[var(--color-tron-text-secondary)]">{ts.nextLot ? `${ts.nextLot.remaining} left in lot` : 'no lot with stock'}</p>
+				</div>
+				<div class="min-w-[220px] flex-1">
+					{#if ts.belowFloor}
+						<p class="text-red-300">Below the {ts.minRolls}-roll floor — {#if !ts.config.notificationsEnabled}notifications off (development), nothing sent.{:else}{ts.openRestockTaskId ? 'restock card open on the' : 'a restock card goes to the'} <a href="/kanban" class="underline">kanban board</a> + email.{/if}</p>
+					{/if}
+					<!-- Development settings (admin): notifications toggle -->
+					<details class="mt-1">
+						<summary class="cursor-pointer text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]">Development settings</summary>
+						<form method="POST" action="?/thermosealToggles" use:enhance={enhanceBusy} class="mt-1.5 space-y-1.5">
+							<label class="flex items-center gap-1.5 {data.canAdmin ? '' : 'opacity-60'}">
+								<input type="checkbox" name="notificationsEnabled" value="1" checked={ts.config.notificationsEnabled} disabled={!data.canAdmin || busy} class="accent-[var(--color-tron-cyan)]" />
+								<span class="text-[var(--color-tron-text)]">Restock notifications</span>
+							</label>
+							<p class="text-[var(--color-tron-text-secondary)]">{ts.config.cmPerCartridge} cm per cart · {fmtM(ts.config.rollLengthCm)} per roll</p>
+							{#if data.canAdmin}<button type="submit" disabled={busy} class={btnGhost}>{busy ? 'Saving…' : 'Apply'}</button>{:else}<span class="text-[var(--color-tron-text-secondary)]">manufacturing:admin to change</span>{/if}
+							{#if form?.thermosealToggles?.error}<span class="text-[var(--color-tron-error)]">{form.thermosealToggles.error}</span>{/if}
+							{#if form?.thermosealToggles?.success}<span class="text-[var(--color-tron-cyan)]">Saved.</span>{/if}
+						</form>
+					</details>
+				</div>
+			</div>
+		</div>
+	{/if}
 
 	<!-- Cart QR search (user, 2026-09-23): scan a cart, get one line telling you
 	     where it is. Read-only — it moves nothing and opens no panel. -->
