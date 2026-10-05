@@ -924,6 +924,7 @@ export async function scanCartIn(input: ScanCartInput): Promise<{ quantity: numb
 
 	if (!cycle || cycle.status !== 'open') throw new BucketError('Pass is not open.', 404);
 	if (cycle.stage !== 'barcoded') throw new BucketError(`${cycleLabel(cycle.bucketId, cycle.cycleNumber)} is at ${STAGE_LABELS[cycle.stage as BucketStage]} — carts can only be scanned in while a bucket is at Barcoded.`);
+	if (cycle.inProcessAt) throw new BucketError(`${cycleLabel(cycle.bucketId, cycle.cycleNumber)} has been pulled into in process — carts can no longer be scanned into it.`, 409);
 	if (bucketLabelId) throw new BucketError(`${barcode} is the QR sticker on production bucket ${bucketLabelId}, not a cartridge.`, 409, 'BUCKET_LABEL');
 	if (existing) {
 		const where = existing.bucket?.bucketId ? ` (in bucket ${existing.bucket.bucketId})` : '';
@@ -1136,10 +1137,10 @@ export async function advanceCycle(input: AdvanceCycleInput): Promise<{ cycle: a
 	const to = nextStage(from);
 	if (!to) throw new BucketError(`${cycleLabel(cycle.bucketId, cycle.cycleNumber)} is already ${STAGE_LABELS.backing} — wax filling draws its carts from here.`);
 	if ((cycle.cartridgeIds ?? []).length === 0) throw new BucketError('Scan at least one cart into the bucket before advancing it.');
-	// Unpressed is two lanes (2026-10-05): a waiting pass must be pulled into
-	// "in process" (pullIntoProcess — the badge handoff) before it can be finished.
-	if (from === 'unpressed' && !cycle.inProcessAt) {
-		throw new BucketError(`${cycleLabel(cycle.bucketId, cycle.cycleNumber)} is waiting in ${STAGE_LABELS.unpressed} — pull it into in process first.`, 409, 'NOT_PULLED');
+	// Lanes (2026-10-05): Done only exists in an in-process lane. A pass is pulled
+	// (pullIntoProcess — the badge handoff) before it can be finished, at both stages.
+	if ((from === 'barcoded' || from === 'unpressed') && !cycle.inProcessAt) {
+		throw new BucketError(`${cycleLabel(cycle.bucketId, cycle.cycleNumber)} has not been pulled into in process yet — pull it with a badge before marking it done.`, 409, 'NOT_PULLED');
 	}
 
 	const discardIds = cleanCodes(input.discardedIds);
@@ -1256,13 +1257,14 @@ export interface PullInput {
 }
 
 /**
- * Pull a waiting Unpressed pass into "Unpressed — in process" (user, 2026-10-05:
- * "that is where the attribution will occur and the badge handoff will occur").
- * Nothing about the carts changes — they stay 'unpressed'. What changes is who
- * holds the bucket: the badge holder becomes `inProcessBy`, the open custody
- * (claimed by whoever counted the bucket up at Barcoded) is released as a
- * 'takeover', and a new custody row is opened for the puller. Only a pulled
- * pass can be advanced to Backed (advanceCycle).
+ * Pull a pass into "in process" (user, 2026-10-05: "that is where the attribution
+ * will occur and the badge handoff will occur"). A Barcoded pass is pulled into
+ * "Unpressed — in process" (scan-in closes), an Unpressed pass into "Backed — in
+ * process". Nothing about the carts changes — their status follows the stage, and
+ * the stage only moves on Done (advanceCycle, which refuses an un-pulled pass).
+ * What changes is who holds the bucket: the badge holder becomes `inProcessBy`,
+ * the open custody is released as a 'takeover', and a new custody row is opened
+ * for the puller.
  */
 export async function pullIntoProcess(input: PullInput): Promise<{ cycleId: string; bucketId: string; cycleNumber: number; operator: string }> {
 	await connectDB();
@@ -1272,10 +1274,13 @@ export async function pullIntoProcess(input: PullInput): Promise<{ cycleId: stri
 	]);
 	if (!cycle || cycle.status !== 'open') throw new BucketError('Pass is not open.', 404);
 	const label = cycleLabel(cycle.bucketId, cycle.cycleNumber);
-	// A legacy 'pressed' pass sits in the Unpressed column (boardStage), so it pulls the same way.
-	const pullable = ['unpressed', LEGACY_PRESSED_STAGE];
-	if (!pullable.includes(cycle.stage)) throw new BucketError(`${label} is at ${stageLabel(cycle.stage)} — only a bucket waiting in ${STAGE_LABELS.unpressed} can be pulled into in process.`);
+	// Barcoded pulls toward Unpressed, Unpressed toward Backed. A legacy 'pressed' pass sits in the Unpressed column (boardStage), so it pulls the same way.
+	const pullable = ['barcoded', 'unpressed', LEGACY_PRESSED_STAGE];
+	if (!pullable.includes(cycle.stage)) throw new BucketError(`${label} is at ${stageLabel(cycle.stage)} — there is nothing to pull it into.`);
 	if (cycle.inProcessAt) throw new BucketError(`${label} is already in process${cycle.inProcessBy?.username ? ` (${cycle.inProcessBy.username})` : ''}.`, 409);
+	if ((cycle.cartridgeIds ?? []).length === 0) throw new BucketError('Scan at least one cart into the bucket before pulling it.');
+	const toward = nextStage(cycle.stage as BucketStatus);
+	const towardLabel = toward ? STAGE_LABELS[toward] : STAGE_LABELS.backing;
 
 	const now = new Date();
 	const op = { _id: gate.operator._id, username: gate.operator.username };
@@ -1301,8 +1306,8 @@ export async function pullIntoProcess(input: PullInput): Promise<{ cycleId: stri
 
 	const members: string[] = cycle.cartridgeIds ?? [];
 	await logTx({
-		bucketId: cycle.bucketId, cycleId: cycle._id, type: 'pull', fromStage: 'unpressed', toStage: 'unpressed',
-		qtyBefore: members.length, qtyAfter: members.length, reason: 'pulled into in process', relatedId: cycle.custodyId ?? undefined,
+		bucketId: cycle.bucketId, cycleId: cycle._id, type: 'pull', fromStage: cycle.stage, toStage: cycle.stage,
+		qtyBefore: members.length, qtyAfter: members.length, reason: `pulled into ${towardLabel} — in process`, relatedId: cycle.custodyId ?? undefined,
 		cartridgeIds: members, operator: gate.operator, enteredBy: input.user, attribution: { ...gate.attribution, custodyId }
 	});
 	await audit('bucket_cycles', cycle._id, 'PULL', gate.operator, { inProcessAt: now, inProcessBy: op.username, custodyId, badgeId: gate.badgeId ?? null, enteredBy: input.user.username }, { custodyId: cycle.custodyId ?? null });

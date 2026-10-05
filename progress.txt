@@ -18508,3 +18508,27 @@ the board — open roll + bar | rolls on hand | next roll from | floor warning +
 settings. Same content, same ?/thermosealToggles form; nothing server-side changed.
 `npm run check`: 16 errors / 434 warnings — same as master, none in the changed file. Not viewed
 in a browser from here.
+
+================================================================================
+2026-10-05 — feat/bucket-six-lanes — bucket board: six lanes, a pull into each in-process lane
+================================================================================
+Jacob corrected the lane order: Available → Barcoded → Unpressed in process → Unpressed → Backed in
+process → Backed (the earlier version had one in-process lane, after Unpressed).
+Model: an in-process lane is a pass that has been PULLED (badge) to be worked toward the next stage,
+reusing BucketCycle.inProcessAt / inProcessBy — stage barcoded + pulled = "Unpressed — in process",
+stage unpressed + pulled = "Backed — in process". Done is the existing stage advance and only exists
+in those two lanes. No new stage, no new cart status.
+- bucket-service.ts: pullIntoProcess accepts a Barcoded pass (needs ≥1 cart) as well as Unpressed;
+  advanceCycle refuses an un-pulled pass at both stages (NOT_PULLED); scanCartIn refuses a pulled
+  pass (scan-in closes at the pull); the 'pull' ledger row carries the real stage.
+- buckets/+page.svelte: five lanes + Available in a 6-column grid (3 columns on medium screens);
+  the pass panel shows the scan-in box only while a Barcoded bucket is un-pulled, a "Pull into
+  <next> — in process" form in both waiting lanes, and "Done → <next>" in both in-process lanes;
+  the pull form has its own badge box so the handoff is always a fresh scan, and that badge then
+  rides on the Done; change log wording.
+- bucket-cycle.ts comment; BUCKET-SYSTEM_PLAN.md §2 callout rewritten with a lane table.
+Effect on live data at deploy: an Unpressed pass that was pulled under the previous version now
+shows under "Backed — in process" (same meaning: pulled to be pressed). Barcoded passes need a pull
+before they can be marked Done.
+`npm run check`: 16 errors / 434 warnings — same as master, none in the changed files. Not viewed in
+a browser from here.

@@ -87,6 +87,7 @@
 	// same pass's cart scans. Until this change one badge carried across the rail.
 	const BADGE_RE = /^BDG-[A-Z0-9]{10}$/i;
 	let badge = $state('');
+	let pullBadge = $state(''); // the badge scanned INTO the pull form — always a fresh scan (the handoff)
 	let scanOperator = $state('');   // who the last scan-in was recorded to (from the server)
 	let badgeFor = $state<string | null>(null); // what the rail was pointed at when the badge was scanned
 	const badgeRequired = $derived(data.badgeMode === 'required');
@@ -270,16 +271,19 @@
 		for (const c of boardCycles) m[c.stage]?.push(c);
 		return m;
 	});
-	// Board lanes (user, 2026-10-05): Barcoded → Unpressed (waiting) → Unpressed — in
-	// process → Backed. The two Unpressed lanes are ONE stage: a pass waits until an
-	// operator pulls it with their badge (?/pull — the custody handoff), and only a
-	// pulled pass can be marked done. Backed is a narrow column: it is storage.
-	type Lane = { key: string; stage: BucketStage; label: string; hint: string; cycles: BoardCycle[] };
+	// Board lanes (user, 2026-10-05, second pass): Barcoded → Unpressed — in process →
+	// Unpressed → Backed — in process → Backed. An "in process" lane is not a stage: it
+	// is a pass that an operator has PULLED with their badge (?/pull — the custody
+	// handoff) to work it toward the next stage. So a pulled Barcoded pass shows under
+	// "Unpressed — in process" and a pulled Unpressed pass under "Backed — in process";
+	// Done (the stage advance) only exists in those two lanes.
+	type Lane = { key: string; tint: string; label: string; hint: string; cycles: BoardCycle[] };
 	const lanes = $derived.by((): Lane[] => [
-		{ key: 'barcoded', stage: 'barcoded', label: labelFor('barcoded'), hint: 'scanning carts in', cycles: cyclesByStage.barcoded },
-		{ key: 'unpressed', stage: 'unpressed', label: labelFor('unpressed'), hint: 'waiting to be pulled', cycles: cyclesByStage.unpressed.filter(c => !c.inProcessAt) },
-		{ key: 'unpressed_wip', stage: 'unpressed', label: `${labelFor('unpressed')} — in process`, hint: 'badge on, being pressed', cycles: cyclesByStage.unpressed.filter(c => !!c.inProcessAt) },
-		{ key: 'backing', stage: 'backing', label: labelFor('backing'), hint: '', cycles: cyclesByStage.backing }
+		{ key: 'barcoded', tint: 'barcoded', label: labelFor('barcoded'), hint: 'scanning carts in', cycles: cyclesByStage.barcoded.filter(c => !c.inProcessAt) },
+		{ key: 'unpressed_wip', tint: 'unpressed', label: `${labelFor('unpressed')} — in process`, hint: 'pulled, badge on', cycles: cyclesByStage.barcoded.filter(c => !!c.inProcessAt) },
+		{ key: 'unpressed', tint: 'unpressed', label: labelFor('unpressed'), hint: 'waiting to be pulled', cycles: cyclesByStage.unpressed.filter(c => !c.inProcessAt) },
+		{ key: 'backing_wip', tint: 'backing', label: `${labelFor('backing')} — in process`, hint: 'pulled, badge on', cycles: cyclesByStage.unpressed.filter(c => !!c.inProcessAt) },
+		{ key: 'backing', tint: 'backing', label: labelFor('backing'), hint: '', cycles: cyclesByStage.backing }
 	]);
 	const allIdleBuckets = $derived([...data.board.available, ...data.board.quarantined]);
 
@@ -393,9 +397,9 @@
 	function nameOf(b: { nickname: string | null; barcode: string | null; bucketId: string }): string {
 		return b.nickname ?? shortQr(b.barcode) ?? b.bucketId;
 	}
-	function resetLists() { discardList = []; scrapList = []; residualList = []; listInput = ''; residualDisposition = ''; residualDest = ''; cartScanError = ''; cartScanOk = ''; scanFailures = []; whereFind = ''; whereLine = ''; whereOk = true; whereHit = null; }
+	function resetLists() { discardList = []; scrapList = []; residualList = []; listInput = ''; residualDisposition = ''; residualDest = ''; cartScanError = ''; cartScanOk = ''; scanFailures = []; whereFind = ''; whereLine = ''; whereOk = true; whereHit = null; pullBadge = ''; }
 
-	function openCycle(c: BoardCycle) { panel = { kind: 'cycle', cycleId: c.cycleId, mode: 'view' }; resetLists(); retargetBadge(c.cycleId); if (c.stage === 'barcoded') focusScanEntry(); }
+	function openCycle(c: BoardCycle) { panel = { kind: 'cycle', cycleId: c.cycleId, mode: 'view' }; resetLists(); retargetBadge(c.cycleId); if (c.stage === 'barcoded' && !c.inProcessAt) focusScanEntry(); }
 	function setMode(mode: CycleMode) {
 		if (panel.kind === 'cycle') panel = { kind: 'cycle', cycleId: panel.cycleId, mode };
 		resetLists();
@@ -620,7 +624,13 @@
 		// Every lane change is a handoff: the next step takes a fresh badge scan, so the
 		// badge that marked a bucket done never rides into the pull that follows.
 		if (form.advance?.success) { badge = ''; scanOperator = ''; badgeFor = null; }
-		if (form.pull?.success && panel.kind === 'cycle') setMode('view');
+		// The puller's badge becomes the pass's badge, so the Done that follows rides on it.
+		if (form.pull?.success) {
+			const scanned = pullBadge.trim();
+			if (panel.kind === 'cycle') { setMode('view'); if (scanned) { badge = scanned; badgeFor = panel.cycleId; scanOperator = ''; } }
+			pullBadge = '';
+		}
+		if (typeof form.pull?.code === 'string' && form.pull.code.startsWith('BADGE')) pullBadge = '';
 		if (form.audit?.success) { resetAudit(); if (panel.kind === 'cycle') setMode('view'); }
 		if (form.start?.success && typeof form.start.cycleId === 'string') {
 			// The badge that started this pass is this pass's badge: re-key it to the
@@ -697,7 +707,7 @@
 			case 'advance': return { event: 'Moved', moved: `${from ?? '?'} → ${to ?? '?'}`, discarded: false };
 			case 'consume': return { event: 'Drawn to wax filling', moved: `${from ?? data.backedLabel} → wax filling`, discarded: false };
 			case 'oven': return { event: 'Moved to oven', moved: `${from ?? data.backedLabel} → oven (carts released from the bucket)`, discarded: false };
-			case 'pull': return { event: 'Pulled into process', moved: `${from ?? 'Unpressed'} → in process (badge handoff)`, discarded: false };
+			case 'pull': return { event: 'Pulled into process', moved: `${from ?? '?'} → ${r.fromStage === 'barcoded' ? labelFor('unpressed') : data.backedLabel} in process (badge handoff)`, discarded: false };
 			case 'scrap': return { event: 'Discarded', moved: `at ${from ?? '?'}`, discarded: true };
 			case 'adjust': return { event: 'Count corrected', moved: `at ${from ?? '?'}`, discarded: false };
 			case 'merge_in': return { event: 'Residual received', moved: `at ${to ?? '?'}`, discarded: false };
@@ -806,7 +816,7 @@
 	<div class="flex flex-wrap items-end justify-between gap-3">
 		<div>
 			<h1 class="text-2xl font-semibold text-[var(--color-tron-text)]">Production Buckets</h1>
-			<p class="text-xs text-[var(--color-tron-text-secondary)]">Stick a QR on each shell and scan it into a bucket. Mark a Barcoded bucket <em>Done</em> and it waits in Unpressed; an operator <em>pulls</em> it into in process with their badge, then marks it Done → {data.backedLabel}. <em>Move to oven</em> frees the carts and returns the bucket to Available.</p>
+			<p class="text-xs text-[var(--color-tron-text-secondary)]">Stick a QR on each shell and scan it into a bucket. A bucket is <em>pulled</em> into an in-process lane with a badge — that is the handoff — and marked <em>Done</em> when the work is finished: Barcoded → Unpressed in process → Unpressed → {data.backedLabel} in process → {data.backedLabel}. <em>Move to oven</em> frees the carts and returns the bucket to Available.</p>
 		</div>
 		<div class="flex gap-2">
 			<a href="/manufacturing/cart-mfg/buckets/new" class={btnGhost}>New bucket</a>
@@ -902,13 +912,13 @@
 							{#each c.sourceLots as l (l.partNumber + l.lotId)}<span class="mr-2">{l.partNumber === 'PT-CT-104' ? 'shell' : l.partNumber === 'PT-CT-106' ? 'label' : 'thermoseal'} <span class="font-mono text-[var(--color-tron-text)]">{l.lotId}</span></span>{/each}
 						</div>
 
-						{#if c.stage === 'unpressed'}
-							<p class="mt-2 text-[10px] {c.inProcessAt ? 'text-green-300' : 'text-[var(--color-tron-yellow)]'}">{c.inProcessAt ? `In process${c.inProcessBy ? ` · ${c.inProcessBy}` : ''} · pulled ${dwell(c.inProcessAt)} ago` : 'Waiting — not pulled into in process yet'}</p>
+						{#if c.stage !== 'backing'}
+							<p class="mt-2 text-[10px] {c.inProcessAt ? 'text-green-300' : 'text-[var(--color-tron-yellow)]'}">{c.inProcessAt ? `${nextLabel(c.stage)} — in process${c.inProcessBy ? ` · ${c.inProcessBy}` : ''} · pulled ${dwell(c.inProcessAt)} ago` : c.stage === 'barcoded' ? 'Scanning carts in — pull the bucket when it is full' : 'Waiting to be pulled'}</p>
 						{/if}
 						</div>
 						<div>
 						{#if panel.mode === 'view'}
-							{#if c.stage === 'barcoded'}
+							{#if c.stage === 'barcoded' && !c.inProcessAt}
 								<!-- Barcoded = filling. Scan shells in; each scan is a cartridge's birth.
 								     Gated step (2026-09-30): badge first, then carts — the badge rides on
 								     every scan-in POST, and a badge scanned into the cart box is routed up. -->
@@ -971,16 +981,25 @@
 								</div>
 							{/if}
 							<div class="mt-3 space-y-2">
-								{#if c.stage === 'unpressed' && !c.inProcessAt}
+								{#if (c.stage === 'barcoded' || c.stage === 'unpressed') && !c.inProcessAt}
 									<!-- Waiting lane: nothing can be done to the bucket until someone takes it.
 									     The pull is the badge handoff (2026-10-05) — it is recorded to this badge
 									     from here until the bucket is marked done. -->
 									<form method="POST" action="?/pull" use:enhance={enhanceBusy} class="space-y-2">
 										<input type="hidden" name="cycleId" value={c.cycleId} />
-										<p class="text-xs text-[var(--color-tron-text-secondary)]">This bucket is waiting. {#if badgeRequired}Scan your badge to take it{:else}Take it{/if} into <strong class="text-[var(--color-tron-text)]">in process</strong> — it is recorded to you from here.</p>
-										{@render badgeField(true)}
+										<p class="text-xs text-[var(--color-tron-text-secondary)]">{#if c.stage === 'barcoded'}When the bucket is full, pull{:else}Pull{/if} it into <strong class="text-[var(--color-tron-text)]">{nextLabel(c.stage)} — in process</strong>. {#if badgeRequired}The badge scanned here takes the bucket: it is recorded to that person until it is marked done.{/if}</p>
+										{#if badgeRequired}
+											<label class="block">
+												<span class="text-[10px] uppercase tracking-wider text-[var(--color-tron-cyan)]">Scan your badge to take this bucket</span>
+												<input type="text" name="badge" bind:value={pullBadge} required autocomplete="off" placeholder="scan badge…"
+													onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); pullBadge = pullBadge.trim(); } }}
+													class="{inputCls} font-mono border-[var(--color-tron-cyan)]/60 ring-1 ring-[var(--color-tron-cyan)]/30" />
+											</label>
+										{:else}
+											<input type="hidden" name="badge" value="" />
+										{/if}
 										{#if form?.pull?.error}<p class="text-xs text-[var(--color-tron-error)]">{form.pull.error}</p>{/if}
-										<button type="submit" disabled={busy} class={btnPrimary}>{busy ? 'Pulling…' : 'Pull into in process'}</button>
+										<button type="submit" disabled={busy || c.quantity === 0} class={btnPrimary}>{busy ? 'Pulling…' : `Pull into ${nextLabel(c.stage)} — in process`}</button>
 									</form>
 								{:else if nxt}
 									<button type="button" class={btnPrimary} disabled={c.quantity === 0} onclick={() => setMode('advance')}>Done → {nextLabel(c.stage)}</button>
@@ -1366,8 +1385,8 @@
 			</div>
 	</section>
 
-		<!-- Board: Available + four lanes — Barcoded, Unpressed (waiting), Unpressed — in process, and a narrow Backed (user, 2026-10-05). -->
-		<div class="grid grid-cols-1 gap-3 md:grid-cols-[repeat(4,minmax(0,1fr))_minmax(0,0.7fr)]">
+		<!-- Board: Available + five lanes — Barcoded, Unpressed — in process, Unpressed, Backed — in process, Backed (user, 2026-10-05). -->
+		<div class="grid grid-cols-1 gap-3 md:grid-cols-3 xl:grid-cols-6">
 			<div class="rounded-lg border bg-[var(--color-tron-bg-secondary)] p-2 {data.focusStage === 'available' ? 'ring-1 ring-[var(--color-tron-cyan)]' : 'border-[var(--color-tron-border)]'}">
 				<div class="flex items-center justify-between px-1 pb-2">
 					<span class="text-xs font-semibold uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Available</span>
@@ -1410,7 +1429,7 @@
 			</div>
 
 			{#each lanes as s (s.key)}
-				<div class="rounded-lg border bg-[var(--color-tron-bg-secondary)] p-2 {data.focusStage === s.stage ? 'ring-1 ring-[var(--color-tron-cyan)]' : ''} {stageTint[s.stage]}">
+				<div class="rounded-lg border bg-[var(--color-tron-bg-secondary)] p-2 {data.focusStage === s.key ? 'ring-1 ring-[var(--color-tron-cyan)]' : ''} {stageTint[s.tint]}">
 					<div class="flex items-center justify-between px-1 pb-2">
 						<span class="text-xs font-semibold uppercase tracking-wider text-[var(--color-tron-text-secondary)]">{s.label}{#if s.hint} <span class="font-normal normal-case tracking-normal opacity-70">· {s.hint}</span>{/if}</span>
 						<span class="text-xs text-[var(--color-tron-text-secondary)]">{s.cycles.length}</span>
