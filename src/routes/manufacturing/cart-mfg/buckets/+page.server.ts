@@ -10,7 +10,8 @@ import {
 	BucketError, BUCKET_STAGES, STAGE_LABELS, BACKED_LABEL, SHELL_PART, LABEL_PART, THERMOSEAL_PART,
 	boardData, stageCounts, resolveScan, isBucketStage, changeLog, bucketRegistry,
 	startCycle, scanCartIn, unscanCart, advanceCycle, scrapCarts, reportResidual, retireBucket,
-	cartStatusLine, auditScan, auditCycle, moveToOven, inOvenCarts, pullIntoProcess
+	cartStatusLine, auditScan, auditCycle, moveToOven, inOvenCarts, pullIntoProcess,
+	finishBarcoding, reopenBarcoding, AWAITING_THERMOSEAL_LABEL
 } from '$lib/server/services/bucket-service';
 import { thermosealStatus, thermosealConfig, thermosealPart, checkFloor, setThermosealToggles } from '$lib/server/services/thermoseal-service';
 import { lotRemaining, lotsWithStock, fifoLot } from '$lib/server/services/lot-remaining';
@@ -80,6 +81,8 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		canBadgeAdmin: isAdmin(locals.user),
 		stages: BUCKET_STAGES.map(s => ({ key: s, label: STAGE_LABELS[s] })),
 		backedLabel: BACKED_LABEL,
+		// The lane a Barcoded bucket waits in after Finished, until it is pulled.
+		awaitingThermosealLabel: AWAITING_THERMOSEAL_LABEL,
 		focusStage: focusStage === 'available' || isBucketStage(focusStage) ? focusStage : null,
 		board,
 		counts,
@@ -277,6 +280,31 @@ export const actions: Actions = {
 		return wrap('pull', async () => {
 			const r = await pullIntoProcess({ cycleId: String(d.get('cycleId') ?? ''), badge: String(d.get('badge') ?? ''), user: op(locals) });
 			return { pull: { success: true, cycleId: r.cycleId, bucketId: r.bucketId, cycleNumber: r.cycleNumber, operator: r.operator } };
+		})();
+	},
+
+	// "Finished" on a Barcoded bucket (2026-10-05): scan-in closes and the bucket
+	// waits in "Awaiting thermoseal processing" until it is pulled. Carts untouched.
+	finishBarcoding: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'manufacturing:write');
+		await connectDB();
+		const d = await request.formData();
+		return wrap('finishBarcoding', async () => {
+			const r = await finishBarcoding({ cycleId: String(d.get('cycleId') ?? ''), badge: String(d.get('badge') ?? ''), user: op(locals) });
+			return { finishBarcoding: { success: true, cycleId: r.cycleId, bucketId: r.bucketId, cycleNumber: r.cycleNumber, quantity: r.quantity, operator: r.operator } };
+		})();
+	},
+
+	// That Finished taken back, while the bucket has not been pulled: it takes scans again.
+	reopenBarcoding: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'manufacturing:write');
+		await connectDB();
+		const d = await request.formData();
+		return wrap('reopenBarcoding', async () => {
+			const r = await reopenBarcoding({ cycleId: String(d.get('cycleId') ?? ''), badge: String(d.get('badge') ?? ''), user: op(locals) });
+			return { reopenBarcoding: { success: true, cycleId: r.cycleId, bucketId: r.bucketId, cycleNumber: r.cycleNumber, operator: r.operator } };
 		})();
 	},
 
