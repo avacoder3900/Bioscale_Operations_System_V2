@@ -7,7 +7,7 @@ export type LifecycleStage =
 	// 'barcoded' when scanned into a bucket and moves with it until WI-01 → 'backing'.
 	| 'barcoded'
 	| 'unpressed'
-	| 'pressed'
+	| 'pressed' // retired bucket stage (2026-10-02) — historical rows only
 	| 'backing'
 	| 'wax_filling'
 	| 'wax_filled'

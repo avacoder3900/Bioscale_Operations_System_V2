@@ -1,7 +1,7 @@
 <script lang="ts">
 	import BadgeCard from '$lib/components/admin/BadgeCard.svelte';
 
-	type Badge = { badgeId: string; code: string; displayName: string; username: string | null; status: 'active' | 'revoked' };
+	type Badge = { badgeId: string; code: string; displayName: string; username: string | null; status: 'active' | 'revoked'; photoUrl: string | null };
 	interface Props { data: { badges: Badge[]; missing: number } }
 	let { data }: Props = $props();
 
@@ -28,7 +28,7 @@
 
 	<div class="print-area sheet">
 		{#each data.badges as b (b.badgeId)}
-			<BadgeCard code={b.code} displayName={b.displayName} username={b.username} status={b.status} />
+			<BadgeCard code={b.code} displayName={b.displayName} username={b.username} status={b.status} photoUrl={b.photoUrl} />
 		{/each}
 	</div>
 </div>

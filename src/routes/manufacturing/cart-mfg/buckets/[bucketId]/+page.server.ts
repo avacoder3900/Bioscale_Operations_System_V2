@@ -8,6 +8,7 @@ import { error, fail, redirect } from '@sveltejs/kit';
 import { connectDB, CartridgeRecord, LotRecord } from '$lib/server/db';
 import { requirePermission, hasPermission } from '$lib/server/permissions';
 import { bucketHistory, voidCycle, retireBucket, setBucketNickname, BucketError, STAGE_LABELS, NICKNAME_MAX } from '$lib/server/services/bucket-service';
+import { badgeMode } from '$lib/server/services/badge-service';
 import type { Actions, PageServerLoad } from './$types';
 
 function isBucketAdmin(user: App.Locals['user']): boolean {
@@ -26,21 +27,26 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 	if (!h) throw error(404, `Bucket ${params.bucketId} not found`);
 
 	const cycleIds = h.cycles.map((c: any) => c._id);
-	const [cartAgg, lots] = await Promise.all([
+	const [badge, cartAgg, lots] = await Promise.all([
+		// Void and Retire are badge-gated (2026-10-05) — the forms ask when this is 'required'.
+		badgeMode().catch(() => 'required' as const),
 		cycleIds.length
 			? CartridgeRecord.aggregate([
 				{ $match: { $or: [{ 'bucket.cycleId': { $in: cycleIds } }, { 'backing.bucketCycleId': { $in: cycleIds } }] } },
 				// wentOn = carts that left the bucket for wax filling (or further). 'backing' is
 				// still a bucket stage, so a backed cart in the tub does not count — unless the
 				// pass was released by Move to oven (ovenReleasedAt), handled below.
-				{ $group: { _id: { $ifNull: ['$bucket.cycleId', '$backing.bucketCycleId'] }, count: { $sum: 1 }, ids: { $push: '$_id' }, wentOn: { $sum: { $cond: [{ $in: ['$status', ['barcoded', 'raw', 'unpressed', 'pressed', 'backing', 'scrapped', 'voided']] }, 0, 1] } } } }
+				{ $group: { _id: { $ifNull: ['$bucket.cycleId', '$backing.bucketCycleId'] }, count: { $sum: 1 }, ids: { $push: '$_id' }, wentOn: { $sum: { $cond: [{ $in: ['$status', ['barcoded', 'raw', 'unpressed', 'pressed', 'backing', 'scrapped', 'voided']] }, 0, 1] } } } },
+				// The page shows at most 12 ids per pass (+N more link) — trim in the
+				// database rather than shipping every id of every pass (perf, 2026-09-30).
+				{ $project: { count: 1, wentOn: 1, ids: { $slice: ['$ids', 12] } } }
 			]) as any as Promise<any[]>
 			: Promise.resolve([]),
 		cycleIds.length
 			? LotRecord.find({ bucketCycleId: { $in: cycleIds } }).select('_id bucketCycleId outputLotNumber status quantityProduced').lean() as any as Promise<any[]>
 			: Promise.resolve([])
 	]);
-	const cartsByCycle = new Map(cartAgg.map(r => [r._id, { count: r.count, wentOn: r.wentOn ?? 0, ids: (r.ids as string[]).slice(0, 12) }]));
+	const cartsByCycle = new Map(cartAgg.map(r => [r._id, { count: r.count, wentOn: r.wentOn ?? 0, ids: (r.ids as string[]) ?? [] }]));
 	const lotsByCycle = new Map<string, any[]>();
 	for (const l of lots) {
 		const arr = lotsByCycle.get(l.bucketCycleId) ?? [];
@@ -77,6 +83,7 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 	});
 
 	return {
+		badgeMode: badge,
 		canVoid: isBucketAdmin(locals.user),
 		canEdit: canWrite(locals.user),
 		nicknameMax: NICKNAME_MAX,
@@ -99,7 +106,6 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 			cycleNumber: c.cycleNumber,
 			stage: c.stage,
 			stageLabel: STAGE_LABELS[c.stage as keyof typeof STAGE_LABELS] ?? (c.stage === 'qr_pending' ? 'QR Scan-In Pending (v1)' : c.stage),
-			cartridgeIds: (c.cartridgeIds ?? []) as string[],
 			status: c.status,
 			quantity: c.quantity,
 			openedQty: c.openedQty,
@@ -173,11 +179,12 @@ export const actions: Actions = {
 			const r = await voidCycle({
 				cycleId,
 				reason: String(d.get('reason') ?? ''),
+				badge: String(d.get('badge') ?? ''),
 				user: { _id: locals.user._id, username: locals.user.username }
 			});
 			return { voidPass: { success: true, ...r } };
 		} catch (e) {
-			if (e instanceof BucketError) return fail(e.status, { voidPass: { error: e.message, cycleId } });
+			if (e instanceof BucketError) return fail(e.status, { voidPass: { error: e.message, code: e.code ?? null, cycleId } });
 			throw e;
 		}
 	},
@@ -191,10 +198,10 @@ export const actions: Actions = {
 		await connectDB();
 		const d = await request.formData();
 		try {
-			await retireBucket(params.bucketId, String(d.get('reason') ?? ''), { _id: locals.user._id, username: locals.user.username });
+			await retireBucket(params.bucketId, String(d.get('reason') ?? ''), { _id: locals.user._id, username: locals.user.username }, String(d.get('badge') ?? ''));
 			return { retire: { success: true } };
 		} catch (e) {
-			if (e instanceof BucketError) return fail(e.status, { retire: { error: e.message } });
+			if (e instanceof BucketError) return fail(e.status, { retire: { error: e.message, code: e.code ?? null } });
 			throw e;
 		}
 	}

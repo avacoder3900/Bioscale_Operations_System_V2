@@ -252,7 +252,10 @@ export const load: PageServerLoad = async ({ locals }) => {
 		maxBytes: directUpload ? DIRECT_MAX_BYTES : PROXY_MAX_BYTES,
 		assays: SONIC_ASSAYS.map((k) => ({ key: k, label: ASSAY_LABELS[k] })),
 		refCounts,
-		minReferences: MIN_REFERENCES
+		minReferences: MIN_REFERENCES,
+		// Files up to this size always take the proxied path, even with direct
+		// upload on — it only needs the Worker's long-standing /upload route.
+		proxyMaxBytes: PROXY_MAX_BYTES
 	};
 };
 

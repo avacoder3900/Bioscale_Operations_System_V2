@@ -5,6 +5,10 @@
 	 * (maintenance run, mirrors scanner-position teaching) + apply-offset-to-group.
 	 */
 	import { onDestroy } from 'svelte';
+	import { RobotSession, type RobotSessionState } from '$lib/opentrons/direct-client';
+	import { uploadBundle, sessionVerb, isStepError, type ProtocolUploadBundle } from '$lib/opentrons/ot2-protocol';
+	import { calibrateTipOverBridge } from '$lib/opentrons/studio-bridge-jobs';
+	import TransportPill from '$lib/components/opentrons/TransportPill.svelte';
 	import { goto, invalidateAll } from '$app/navigation';
 	import { deserialize } from '$app/forms';
 	import { page } from '$app/stores';
@@ -474,8 +478,37 @@
 	async function syncToRobot() {
 		if (!selectedRobotId) { errMsg = 'Pick a robot'; return; }
 		if (!confirm(`Re-upload the ${syncWhich} protocol(s) to ${robot?.name} with the corrected deck?`)) return;
-		const r = await postAction('sync', { robotId: selectedRobotId, which: syncWhich });
+		const r = robotSession?.state.transport === 'direct' ? await syncOverSession(robotSession) : await postAction('sync', { robotId: selectedRobotId, which: syncWhich });
 		if (r) msg = (r.results ?? []).map((x: any) => `${x.processType}: ${x.ok ? '✓' : '✗'} ${x.detail}`).join(' · ');
+	}
+
+	/**
+	 * OT2-TAILNET-5 S4: Sync on the tailnet line. BIMS prepares the bundles
+	 * (?/syncPrepare, DB only), this browser uploads each straight to the robot
+	 * (the shared 'run.uploadProtocol' verb, long analysis wait included), and BIMS
+	 * records them (?/syncConfirm). Same records + AuditLog as ?/sync.
+	 */
+	async function syncOverSession(s: RobotSession) {
+		const prep = await postAction('syncPrepare', { robotId: selectedRobotId, which: syncWhich });
+		if (!prep) return null;
+		busy = true;
+		msg = 'Uploading to the robot over Tailscale…';
+		const uploads: Record<string, unknown>[] = [];
+		try {
+			for (const u of (prep.uploads ?? []) as { processType: string; fileName: string; bundle: ProtocolUploadBundle }[]) {
+				const up = await uploadBundle(sessionVerb(s), u.bundle).catch((e) => ({ error: e instanceof Error ? e.message : 'Upload failed' }));
+				uploads.push(isStepError(up) ? { processType: u.processType, fileName: u.fileName, error: up.error } : { processType: u.processType, fileName: u.fileName, uploaded: up });
+			}
+		} finally {
+			busy = false;
+		}
+		return postAction('syncConfirm', {
+			robotId: selectedRobotId,
+			which: syncWhich,
+			results: JSON.stringify(prep.results ?? []),
+			publishedVersions: JSON.stringify(prep.publishedVersions ?? []),
+			uploads: JSON.stringify(uploads)
+		});
 	}
 
 	// ── Maintenance-run jog (mirror scanner-position teaching) ───────────────────
@@ -519,8 +552,25 @@
 	// pre-edit deck, so "Move to hole" would use stale coords until the deck is reloaded.
 	let deckDirty = $state(false);
 
+	// OT2-TAILNET-4: one robot session per selected robot. Jog / move / position /
+	// home / drop-tip go on its line (direct over Tailscale when available); every
+	// other call is a plain BIMS fetch. Re-created when the robot changes.
+	let robotSession: RobotSession | null = null;
+	let robotConn = $state<RobotSessionState | null>(null);
+	$effect(() => {
+		const id = selectedRobotId;
+		if (!id) return;
+		const s = new RobotSession(id);
+		robotSession = s;
+		s.subscribe((st) => (robotConn = st));
+		void s.open();
+		return () => s.close();
+	});
+	const robotFetch = (path: string, init: RequestInit) =>
+		robotSession ? robotSession.fetchRoute(path, init) : fetch(path, init);
+
 	async function api(path: string, init?: RequestInit): Promise<any> {
-		const res = await fetch(path, { ...init, credentials: 'same-origin', headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) } });
+		const res = await robotFetch(path, { ...init, credentials: 'same-origin', headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) } });
 		const text = await res.text();
 		let body: any = null;
 		try { body = text ? JSON.parse(text) : null; } catch { body = text; }
@@ -1030,7 +1080,17 @@
 			// applyCalibratorOverride lays it over the stored fixture axis by axis, so the
 			// probe happens at the live field values without writing a thing to Mongo.
 			// Its z is the PROBE Z -- the touch-off depth -- never the approach height.
-			const res = await api('/api/scanner/calibrate-tip', { method: 'POST', body: JSON.stringify({ robotId: selectedRobotId, deckLoadName: kind === 'deck' ? data.selected : null, mount: desiredMount, tipProfile, tipWell, runId, pipetteId, calibrator: { x: calX, y: calY, z: probeZNow } }) });
+			const calRequest = { robotId: selectedRobotId, deckLoadName: kind === 'deck' ? data.selected : null, mount: desiredMount, tipProfile, tipWell, runId, pipetteId, calibrator: { x: calX, y: calY, z: probeZNow } };
+			// OT2-TAILNET-5 S6: on the tailnet line (the session hands out a /bridge
+			// client) the probe runs as a daemon job from this browser — BIMS prepares
+			// and records it, progress comes live from the robot. null = the queue
+			// line, exactly as before.
+			const bridge = robotSession?.bridge() ?? null;
+			const res = bridge
+				? await calibrateTipOverBridge(bridge, calRequest, {
+						onProgress: (t) => (msg = `Calibrating tip on the fixture via Tailscale… ${t}`)
+					})
+				: await api('/api/scanner/calibrate-tip', { method: 'POST', body: JSON.stringify(calRequest) });
 			if (res?.adjust && typeof res.adjust.x === 'number') {
 				tipAdjust = { x: res.adjust.x, y: res.adjust.y };
 				// The probe moved the gantry and changed the applied adjust → any prior
@@ -1038,7 +1098,7 @@
 				nominal = null; refWell = null;
 				await refreshPosition();
 				msg = `Tip calibrated: adjust x=${tipAdjust.x} y=${tipAdjust.y}. Tip kept on; applied to every move-to while tuning. Move to a hole to set a fresh nominal.`;
-			} else { errMsg = 'Calibration returned no adjust'; }
+			} else { errMsg = (bridge && typeof res?.error === 'string' && res.error) || 'Calibration returned no adjust'; }
 		} catch (e) { errMsg = e instanceof Error ? e.message : String(e); } finally { busy = false; calibrating = false; }
 	}
 
@@ -1072,7 +1132,7 @@
 
 	/** Drop the modelled tip into the trash. Resolves false when the engine modelled none. */
 	async function doDropTip(): Promise<boolean> {
-		const res = await fetch(`/api/opentrons-lab/robots/${selectedRobotId}/maintenance/${runId}/drop-tip`, {
+		const res = await robotFetch(`/api/opentrons-lab/robots/${selectedRobotId}/maintenance/${runId}/drop-tip`, {
 			method: 'POST',
 			credentials: 'same-origin',
 			headers: { 'Content-Type': 'application/json' },
@@ -1084,7 +1144,7 @@
 	}
 
 	async function doPickUp(allowRecover: boolean) {
-		const res = await fetch(
+		const res = await robotFetch(
 			`/api/opentrons-lab/robots/${selectedRobotId}/maintenance/${runId}/pick-up-tip`,
 			{
 				method: 'POST',
@@ -1280,6 +1340,8 @@
 	onDestroy(() => {
 		if (runId) {
 			try {
+				// Page unload: a same-origin keepalive request to BIMS is what reliably
+				// survives the page closing, so this one close stays on the queue line.
 				fetch(`/api/opentrons-lab/robots/${selectedRobotId}/maintenance/${runId}`, { method: 'DELETE', credentials: 'same-origin', keepalive: true });
 			} catch { /* best-effort */ }
 		}
@@ -1330,6 +1392,7 @@
 			<select bind:value={selectedRobotId} class="mt-1 block rounded border border-[var(--color-tron-border)] bg-black/30 px-2 py-1.5 text-xs" style="color: var(--color-tron-text)">
 				{#each robots as r (r._id)}<option value={r._id}>{r.name}{r.isActive ? '' : ' (inactive)'}</option>{/each}
 			</select>
+			<span class="mt-1 block"><TransportPill state={robotConn} onRetry={() => void robotSession?.retryDirect()} /></span>
 		</label>
 		<!-- Mount lives here (2026-08-28), not in the JOG panel: it decides which
 		     PIPETTE the maintenance run loads, so it is a before-you-open-the-run

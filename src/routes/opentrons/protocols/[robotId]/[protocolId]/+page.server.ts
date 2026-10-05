@@ -14,45 +14,17 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 		(p: any) => p._id === params.protocolId || p.opentronsProtocolId === params.protocolId
 	);
 
-	let robotOffline = true;
-	let protocol: any = null;
-	let analysis: any = null;
-
+	// OT2-TAILNET-5 S7: the robot's protocol + analysis are read in the browser
+	// (+page.ts) over the robot session. This load returns Mongo data only.
 	const otProtocolId = dbRecord?.opentronsProtocolId ?? params.protocolId;
-
-	try {
-		const resp = await fetch(
-			`http://${robot.ip}:${robot.port ?? 31950}/protocols/${otProtocolId}`,
-			{ signal: AbortSignal.timeout(3000) }
-		);
-		if (resp.ok) {
-			robotOffline = false;
-			const data = await resp.json();
-			protocol = data.data ?? data;
-
-			// Try to get analysis
-			const analyses = protocol.analysisSummaries ?? [];
-			if (analyses.length > 0) {
-				const latestId = analyses[analyses.length - 1].id;
-				try {
-					const aResp = await fetch(
-						`http://${robot.ip}:${robot.port ?? 31950}/protocols/${otProtocolId}/analyses/${latestId}`,
-						{ signal: AbortSignal.timeout(3000) }
-					);
-					if (aResp.ok) {
-						analysis = (await aResp.json()).data ?? await aResp.json();
-					}
-				} catch { /* ignore */ }
-			}
-		}
-	} catch { /* robot offline */ }
 
 	return {
 		robotId: params.robotId,
 		protocolId: params.protocolId,
 		robotName: robot.name ?? '',
-		robotOffline,
-		protocol,
+		otProtocolId: String(otProtocolId),
+		robotOffline: true,
+		protocol: null as any,
 		dbRecord: dbRecord ? {
 			protocolName: dbRecord.protocolName ?? null,
 			protocolType: dbRecord.protocolType ?? null,
@@ -62,7 +34,7 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 			pipettesRequired: dbRecord.pipettesRequired ?? null,
 			updatedAt: dbRecord.updatedAt ? new Date(dbRecord.updatedAt).toISOString() : new Date().toISOString()
 		} : null,
-		analysis: analysis as {
+		analysis: null as {
 			id: string;
 			status: string;
 			parameters?: Array<{
@@ -87,4 +59,3 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 	};
 };
 
-export const config = { maxDuration: 60 };

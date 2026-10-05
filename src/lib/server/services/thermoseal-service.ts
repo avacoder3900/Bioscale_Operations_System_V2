@@ -27,9 +27,10 @@
  */
 import {
 	connectDB, generateId, ManufacturingSettings, PartDefinition, ReceivingLot, ThermosealRoll,
-	InventoryTransaction, AuditLog, KanbanTask
+	AuditLog, KanbanTask
 } from '$lib/server/db';
 import { recordTransaction, resolvePartId } from './inventory-transaction';
+import { lotRemaining, fifoLot } from './lot-remaining';
 import { notifyThermosealLow } from '$lib/server/notifications';
 import { ensureThermosealRestockCard } from '$lib/server/kanban/standing';
 
@@ -130,23 +131,12 @@ export async function activeRoll(): Promise<any | null> {
  * the ledger (lot quantity − Σ consumption/scrap rows on that lot).
  */
 export async function defaultThermosealLot(): Promise<{ lotId: string; remaining: number } | null> {
-	await connectDB();
-	const lots = await ReceivingLot.find({ 'part.partNumber': THERMOSEAL_PART, status: { $nin: ['rejected', 'returned'] } })
-		.select('lotId quantity createdAt').sort({ createdAt: 1 }).lean() as any[];
-	if (lots.length === 0) return null;
-	const used = await InventoryTransaction.aggregate([
-		{ $match: { lotId: { $in: lots.map(l => l.lotId) }, transactionType: { $in: ['consumption', 'scrap'] } } },
-		{ $group: { _id: '$lotId', qty: { $sum: '$quantity' } } }
-	]) as any[];
-	const usedBy = new Map<string, number>(used.map(u => [String(u._id), Math.abs(Number(u.qty ?? 0))]));
-	for (const l of lots) {
-		const remaining = Number(l.quantity ?? 0) - (usedBy.get(l.lotId) ?? 0);
-		if (remaining > 0) return { lotId: l.lotId, remaining };
-	}
-	return null;
+	// Same ledger math as the board's lot pickers, one implementation (lot-remaining.ts).
+	return fifoLot(await lotRemaining([THERMOSEAL_PART]), THERMOSEAL_PART);
 }
 
-async function thermosealPart(): Promise<any | null> {
+/** The roll part's definition (live inventoryCount = rolls on the shelf). Exported so the board can load it once. */
+export async function thermosealPart(): Promise<any | null> {
 	return PartDefinition.findOne({ partNumber: THERMOSEAL_PART })
 		.select('_id partNumber name inventoryCount minimumOrderQty leadTimeDays supplier').lean();
 }
@@ -318,12 +308,14 @@ export async function checkFloor(input: {
 	 * A roll pull omits it — that check must always run.
 	 */
 	throttleMs?: number;
+	/** Already-loaded roll part (thermosealPart()), so a caller that also needs it does not read it twice. */
+	part?: any | null;
 }): Promise<FloorCheck | null> {
 	if (input.throttleMs && Date.now() - lastFloorCheckAt < input.throttleMs) return null;
 	lastFloorCheckAt = Date.now();
 	await connectDB();
 	const cfg = input.cfg ?? await thermosealConfig();
-	const part = await thermosealPart();
+	const part = input.part !== undefined ? input.part : await thermosealPart();
 	if (!part) return null;
 	const rollsOnHand = rollsOnHandFor(part);
 	const below = rollsOnHand < cfg.minRollsInInventory;
@@ -377,18 +369,32 @@ export interface ThermosealStatus {
 	rollsExhausted: number;
 }
 
-export async function thermosealStatus(): Promise<ThermosealStatus> {
+/**
+ * `pre`: pieces the caller has already loaded (the bucket board reads the
+ * config + part once and shares them with checkFloor, and derives the FIFO lot
+ * from the same lot-remaining rows its pickers use). With everything supplied
+ * this is ONE round trip (roll, exhausted count, open restock card in
+ * parallel); it used to be five in series (perf, 2026-09-30).
+ */
+export async function thermosealStatus(pre?: {
+	cfg?: ThermosealConfig;
+	part?: any | null;
+	nextLot?: { lotId: string; remaining: number } | null;
+}): Promise<ThermosealStatus> {
 	await connectDB();
-	const cfg = await thermosealConfig();
-	const [roll, part, nextLot, exhausted] = await Promise.all([
-		activeRoll(), thermosealPart(), defaultThermosealLot(),
-		ThermosealRoll.countDocuments({ status: 'exhausted' })
+	const [cfg, part] = await Promise.all([
+		pre?.cfg ?? thermosealConfig(),
+		pre?.part !== undefined ? pre.part : thermosealPart()
 	]);
-	let openRestockTaskId: string | null = null;
-	if (part) {
-		const open = await KanbanTask.findOne({ sourceRef: `thermoseal-restock:${part._id}`, status: { $ne: 'done' }, archived: false }).select('_id').lean() as any;
-		openRestockTaskId = open?._id ?? null;
-	}
+	const [roll, nextLot, exhausted, open] = await Promise.all([
+		activeRoll(),
+		pre?.nextLot !== undefined ? pre.nextLot : defaultThermosealLot(),
+		ThermosealRoll.countDocuments({ status: 'exhausted' }),
+		part
+			? KanbanTask.findOne({ sourceRef: `thermoseal-restock:${part._id}`, status: { $ne: 'done' }, archived: false }).select('_id').lean() as any
+			: Promise.resolve(null)
+	]);
+	const openRestockTaskId: string | null = open?._id ?? null;
 	const rollsOnHand = rollsOnHandFor(part);
 	const remainingCm = roll ? round2(roll.lengthCm - roll.consumedCm) : 0;
 	return {

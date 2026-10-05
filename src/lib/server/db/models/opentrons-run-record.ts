@@ -80,8 +80,14 @@ const opentronsRunRecordSchema = new Schema({
 opentronsRunRecordSchema.index({ manufacturingRunId: 1 });
 opentronsRunRecordSchema.index({ robotId: 1, status: 1 });
 opentronsRunRecordSchema.index({ opentronsRunId: 1 }, { unique: true, sparse: true });
-// The health-poller singleton filters by status alone every 15s — without a
-// status-prefix index that was a permanent COLLSCAN (Atlas alert, 2026-07-31).
+// Status-prefix index. It was added for the in-memory health poller, which
+// filtered by status alone every 15 s (a permanent COLLSCAN without it — Atlas
+// alert, 2026-07-31). That poller was retired in OT2-TAILNET-5 (S8) and nothing
+// calls run-lifecycle.ts pollRunStatus any more: status now moves only in the
+// run-lifecycle confirms (run-lifecycle-records.ts setRunRecordStatus) and in
+// sendRunAction (run-lifecycle.ts, POST run-records/[recordId]/actions), and it
+// is read by GET /api/opentrons-lab/run-records?status=… — which this index
+// still serves.
 opentronsRunRecordSchema.index({ status: 1 });
 
 export const OpentronsRunRecord = mongoose.models.OpentronsRunRecord

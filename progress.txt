@@ -16288,6 +16288,172 @@ Retrieve this exact code: git checkout master at commit 9c2d8b30
 What this deployment is for: sweep coverage refusal + reachable sweep/compare pages
 
 ================================================================================
+2026-09-25 — feat/ot2-tailnet-direct — OT2-TAILNET-4: BIMS talks to OT-2s over Tailscale (B14 pilot), one protocol / two transports
+================================================================================
+B14 is on the tailnet (ot2-b14, https://ot2-b14.tailf65a70.ts.net — see OT2-TAILNET-3 §13 for the
+hands-on log: SSH key via /server/ssh_keys (RSA only), tailscale 1.102.4 userspace mode under
+/data/tailscale, systemd unit scripts/ot2-tailscale.service, serve :443 -> :31950, CORS echoes any
+origin). This branch makes BIMS use it without mixing lines and without touching B07/R04.
+
+Design (docs/prds/OT2-TAILNET-4-DIRECT-TRANSPORT.md):
+- ONE implementation of each interactive verb: src/lib/opentrons/ot2-protocol.ts (isomorphic)
+  holds run.get / run.action (resume->play, 4xx->409 conflict) and the maintenance motion verbs
+  (sendMaintenanceCommand incl. the failed-201 check, leftZ->z, drop-tip no-tip rule, the routes'
+  validation messages). MOVED from the route handlers + maintenance.ts, not copied. The BIMS
+  routes now run it over serverTransport (proxy.ts -> queue on Vercel); the browser runs the same
+  function over fetch(directUrl). Same status + JSON either way.
+- TWO keys before any robot goes direct: OpentronsRobot.connection.mode='tailnet' + valid
+  directUrl (per robot, set on /opentrons/devices/[id]/edit, AuditLog 'connection_update') AND
+  env OT2_TAILNET_ROBOT_IDS lists it (per deployment; same matching as DECK_HARDENING_ROBOT_IDS —
+  rollout.ts now exports robotMatchesTokens/parseRobotTokens for both). Unset = all queue.
+  Previews share prod Mongo, so the env key is what makes Preview the test environment.
+- Browser session (src/lib/opentrons/direct-client.ts): decides the line ONCE per page
+  (/connection + a 1.5 s /health probe from THIS computer); a direct no-answer falls back to the
+  queue for the rest of the page, visibly, retrying that call via BIMS — except a relative jog,
+  which is never retried (could double-move). Robot 4xx/5xx is an answer, not a failover. Re-reads
+  /connection every 5 s: busy flag (claimed sweep/deck_scan/calibrate_tip -> motion via queue)
+  and the per-robot kill switch.
+- Trace: new ot2_direct_calls collection (Ot2DirectCall, 3-day TTL like Ot2BridgeCommand),
+  batch-posted by the browser to POST /api/opentrons-lab/robots/[id]/direct-calls.
+- UI: TransportPill (direct / busy / queue + retry) in EmbeddedRunController (wax + reagent fill)
+  and the deck-calibration studio + scanner-positions teach page; new /opentrons/connectivity
+  fleet page (line in use + why, live probe from this browser, bridge heartbeat, direct calls 24h);
+  Connection section on the robot edit page; Connectivity item in the OT-2 sidebar.
+- Stays on the queue by design: anything writing BIMS records (start/cancel/finish run, maint
+  open/close, load-labware, pick-up-tip, force-reset, protocol upload) and all daemon jobs.
+  RAW direct-IP paths (opentrons-clone etc.) untouched — out of scope.
+
+Files: new src/lib/opentrons/{ot2-protocol,direct-client}.ts (+tests),
+src/lib/server/opentrons/{transport,connection}.ts (+test), models/ot2-direct-call.ts,
+api/opentrons-lab/robots/[id]/{connection,direct-calls}, routes/opentrons/connectivity,
+components/opentrons/TransportPill.svelte. Modified: opentrons-robot model (+connection),
+models/index, maintenance.ts (motion delegates), rollout.ts (shared token matcher), the 8 run/
+maintenance-motion routes (now thin), edit page, EmbeddedRunController, deck-calibration +
+scanner-positions pages, opentrons +layout.svelte.
+
+Tests: npm run test:unit 211/211 (46 new: protocol parity vs old route behaviour, the two-key
+gate incl. "B07/R04 can never resolve tailnet", session failover/sticky/jog-no-retry/busy/
+queue-never-leaves-origin). Also ran runVerb against the REAL B14 over the tailnet (read-only:
+/health, GET /runs 564 ms, run.get of a missing run -> robot's 404 body passed through as 200,
+same as the route).
+npm run check: 87 errors — identical to this worktree's pre-change baseline (the 75+ extra vs the
+logged 12 are "Cannot find module" from a junctioned node_modules that predates master's new deps
+— @modelcontextprotocol/server, zod, xyflow — none in touched files). 441 warnings, unchanged.
+
+NOT DONE / needs the user: Vercel Preview env OT2_TAILNET_ROBOT_IDS=b14 (Production stays unset);
+set B14's Connection on the edit page; hardware test on a real run; tailnet ACL (TAILNET-3 S4) —
+until then any tailnet device can reach B14's unauthenticated API.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-puiscpnib.vercel.app
+Source: branch feat/ot2-tailnet-direct @ commit 34c6c58d7
+Retrieve this exact code: git checkout feat/ot2-tailnet-direct at commit 34c6c58d7
+  (or: git log feat/ot2-tailnet-direct --oneline to find it if the branch has since moved on)
+What this deployment is for: OT2-TAILNET-4 B14 pilot — inert until Vercel Preview env
+  OT2_TAILNET_ROBOT_IDS=b14 is set (+ redeploy) and B14's Connection is set to Tailnet on the edit
+  page. Smoke: /opentrons/connectivity + the new API routes answer 302 unauthenticated (no 500s).
+
+2026-09-25 (later) — feat/ot2-tailnet-direct — fix: Chrome Local Network Access held every direct call
+First real test on the preview: /opentrons/connectivity showed B14 "Allowed here: yes" but the
+browser probe timed out, while curl from the same PC got /health in 0.47 s. Root cause (verified in
+Chrome 153 on alejandros-pc): Chrome's Local Network Access gate — a public origin (*.vercel.app)
+reaching a private address (Tailscale 100.x) needs a one-time per-origin permission; while it is
+'prompt' Chrome HOLDS the request (a non-gesture fetch shows no prompt), which is indistinguishable
+from an unreachable robot. Fix: the session now queries the permission first — 'prompt' → stay on
+queue WITHOUT probing and offer an "allow direct" button (the click's probe waits up to 60 s for the
+operator's Allow); 'denied' → queue with the site-settings instructions. Connectivity page gets an
+"Allow direct link" banner. Permission is per origin: production's address is stable, but every
+preview URL is a new origin (use the branch alias URL for repeat testing).
+test:unit 213/213 (+2); npm run check 87 errors = baseline.
+
+================================================================================
+2026-09-25 — feat/ot2-tailnet-direct — OT2-TAILNET-4 option 1: maintenance open/close, load-labware, pick-up-tip over the tailnet
+================================================================================
+Preview test by the user worked (B14 direct; jog 270 ms avg / position 74 ms avg over 67 calls, 0
+failures). Remaining studio calls that still went through the queue are now on the robot's line too.
+
+Pattern: each verb = ROBOT half (in $lib/opentrons/ot2-protocol, run over either line) + BIMS half
+(always server). Moved into ot2-protocol from maintenance.ts: SlotOccupiedError, clearStaleProtocolRun
+(never stops an ACTIVE run), open/closeMaintenanceRun, discoverPipette, loadPipetteInRun,
+registerLabwareDefinition, loadLabwareInRun (hardened rule now an explicit flag the server decides),
+pickUpTip; new verbs mx.open / mx.close / mx.loadLabware / mx.pickUpTip. Ot2Transport gained delete.
+BIMS half: new src/lib/server/opentrons/maintenance-records.ts — resolveLabwareForRobot (definition +
+blob identity, as the routes did) and applyMaintenanceRecord (AuditLog maintenance_run_open/close with
+line:'queue'|'tailnet'; studio tip-cursor advance → nextTipWell). The four routes are now thin
+(verbResponse writes the record inline). The browser gets the same halves via two new endpoints:
+GET /api/opentrons-lab/labware/resolve and POST /api/opentrons-lab/robots/[id]/direct-record.
+/connection now also returns `hardened` (DECK_HARDENING_ROBOT_IDS) so both lines apply the same rule.
+Session: resolves the definition before, posts the record after; a record failure never turns a
+robot success into an error (recordError field). pick-up-tip joins jog as never-auto-retried on
+failover. All maintenance verbs defer to the queue while a sweep/deck-scan/tip-cal runs. Studio page
+pick-up-tip now via the session; the page-UNLOAD close stays a same-origin keepalive to BIMS (the one
+request that reliably survives the page closing).
+test:unit 227/227 (+14); npm run check 87 = baseline. Read-only hardware: shared discoverPipette vs
+B14 over the tailnet → p300_single_gen2/left in 556 ms (B14 had a maintenance run left open).
+
+================================================================================
+2026-09-25/26 — feat/ot2-tailnet-direct — OT2-TAILNET-5 round 1 (workflow): fill lifecycle, Opentrons UI, daemon /bridge
+================================================================================
+Built via workflow ot2-tailnet-everything (run wf_9dda6c50-350; 1 planner + 3 executors on disjoint
+file contracts; ~659k output tokens). PRD docs/prds/OT2-TAILNET-5-EVERYTHING-OVER-TAILNET.md.
+Unit 1 fill lifecycle (S1-S4 + S8 run-record half): new shared verbs run.list/create/stop/commands/
+ensureFresh/uploadProtocol + mx.command and the tip-tracker / filled-well parsers in ot2-protocol.ts;
+multipart via FormData (serverTransport routes it to proxy's upload path, so the queue still uses the
+upload_protocol bridge kind); queue route POST /api/opentrons-lab/robots/[id]/verb (allowlisted);
+run-lifecycle-records.ts holds the BIMS halves split from the wax/reagent page servers (idempotent
+confirms, line stamped in AuditLog); startIntent subdoc on WaxFillingRun/ReagentBatchRecord + load
+reconcile + 'start interrupted' banner; prepare/confirm actions and page wiring; deck-cal Sync,
+robots/[id]/protocols POST and protocols/deploy on the same shape; robots/[id]/protocols GET via robotGet.
+Unit 2 Opentrons UI (S7, S8 poller half, S10a-d): isomorphic robot-client.ts (openapi-fetch, injected
+fetch), RobotSession.robotFetch, generic /relay queue route, every /opentrons-clone page + the legacy
+/opentrons device/run/protocol pages load in the browser via the session; /api/opentrons-clone/**
+removed; health-poller + health-stream SSE retired; signed expiring operator cookie (a hand-set 'ok'
+no longer passes).
+Unit 3 daemon (S5, S6 server halves, S9): ot2-bridge.py /bridge ThreadingHTTPServer on 127.0.0.1:31960
+with HMAC token + CORS allowlist + ONE WorkQueue shared with the long-poll; bridge-token lib + route;
+browser bridge-client.ts; jobs sweep-progress endpoints; provision script scripts/ot2-tailnet-provision.sh
+(serve --set-path=/bridge, secret via stdin); scripts accept tailnet ROBOT_HOST (ot2-robot-host.cjs);
+connectivity page Daemon column.
+Integration: main loop fixed 5 type errors (env typing into operatorCookieSecret, 2 test call sites).
+test:unit 386/386 (24 files); python -m unittest test_ot2_bridge_server 19 OK; npm run check 87 =
+baseline, 0 in feature files.
+NOT verified on hardware (no robot calls, no redeploy): all robot ACs. Known gaps for round 2: pages do
+not yet submit sweeps/deck-scan/calibrate-tip/tip-swap/auto-resume/restart to /bridge; relay lacks PUT;
+LPC still uses robot-client maintenanceCommand instead of session mx.command.
+Needs the user: OT2_BRIDGE_TOKEN_SECRET (Preview env + B14 via provision script); B14 daemon redeploy.
+
+================================================================================
+2026-09-26 — feat/ot2-tailnet-direct — OT2-TAILNET-5 round 2 (workflow): every daemon job on the tailnet line
+================================================================================
+Workflow ot2-tailnet-everything-r2 (run wf_3d323c13-e5c; 1 planner + 3 executors). First attempt died
+mid-edit on a pxpipe proxy outage (502 upstream unreachable) — resumed the same run with the plan
+cached; executors reviewed and finished the partial edits.
+U1 session/bridge/relay/LPC: RobotSession.bridge() — ONE BridgeClient per session, non-null only when
+the line is direct AND /connection says bridgeJobs (bridgeJobGate: tailnet robot + allowed here +
+OT2_BRIDGE_TOKEN_SECRET); one token across kinds; job starts logged as 'bridge:<kind>' in
+ot2_direct_calls, never retried or re-routed to the queue; gantry jobs set session busy. proxy.ts
+robotPut + relay PUT (clone clientData / system time over the queue). LPC uses session.call
+('mx.command') so its fallback is POST /verb. OpentronProtocol.deployments[].line. Queue progress
+route golden-tested against the shared sweepProgressUpdate.
+U2 fill pages: sweeps + deck scan (both DeckLoadingGrids, wax orchestration), tip swap, auto_resume
+after a tailnet start confirm, robot-server restart — on the tailnet line: server prepare (BIMS rows
+first) -> bridge submit -> live /bridge/jobs progress -> server record; queue line unchanged.
+New src/lib/opentrons/fill-bridge-jobs.ts.
+U3 studio + scanner tools: calibrate-tip and test-scans (scanner-positions teach, opentron-control
+scanner-test) over /bridge; new src/lib/opentrons/studio-bridge-jobs.ts; connectivity 'jobs:' line.
+test:unit 486/486 (29 files); daemon python 19 OK; npm run check 87 = baseline.
+NOT verified on hardware: needs OT2_BRIDGE_TOKEN_SECRET (Preview env + B14 via
+scripts/ot2-tailnet-provision.sh) and the B14 daemon redeploy — both awaiting the user.
+Known leftovers: no unit tests for the tailnet abandon branches in sweep/[id], restart-server and
+the tip-swap prepares; deck-calibration doesn't abort pollJob on unmount (matches queue behaviour);
+run-lifecycle.pollRunStatus is now dead code.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-kt456enng-brevitest.vercel.app
+Source: branch feat/ot2-tailnet-direct @ commit 617e0d3a1
+Retrieve this exact code: git checkout feat/ot2-tailnet-direct at commit 617e0d3a1
+  (or: git log feat/ot2-tailnet-direct --oneline to find it if the branch has since moved on)
+What this deployment is for: OT2-TAILNET-5 rounds 1+2 (fill lifecycle, Opentrons UI, daemon jobs over
+  the tailnet). Daemon-job paths inert until OT2_BRIDGE_TOKEN_SECRET is set and B14's daemon redeployed.
+================================================================================
 2026-09-25 — master — four units swept; the channel deficit is the JIG, not the SPUs
 ================================================================================
 Swept 247 (session va9dLUSqBUvwpBlip4P3h) and 244 (session -i9MMeJJg_CH7qIJEBEH9),
@@ -16975,6 +17141,127 @@ What this deployment is for: on-tablet test of the Capture ↔ cartridge/station
   GitHub deployment 6762152984 (Production). Smoke: /login 200.
 
 ================================================================================
+2026-09-30 — feat/ot2-tailnet-direct — merged origin/master (47 commits) into the tailnet branch
+================================================================================
+Two conflicts. wax-filling +page.server.ts: the branch had moved cancel/abort into the shared
+stop path (run-lifecycle-records.stopConfirm), while master's bucket system rewrote that same body
+to return carts to their bucket pass (revertToBacked -> bucket-service.returnCarts; test-mode carts
+flagged backing.synthetic). Ported revertToBacked into run-lifecycle-records so the queue line and
+the tailnet line both return carts to their bucket. Test mock gained CartridgeRecord.find + a
+returnCarts stub. progress.txt: kept both sides.
+test:unit 504/504 (30 files). npm run check 106 errors — new baseline from master (bims-mcp.ts 81,
+roadmap/assembly svelte, research-proxy); every file with an error is byte-identical to origin/master.
+No robot touched.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-ig7r56yly.vercel.app
+Source: branch feat/ot2-tailnet-direct @ commit 359b83b82
+Retrieve this exact code: git checkout feat/ot2-tailnet-direct at commit 359b83b82
+  (or: git log feat/ot2-tailnet-direct --oneline to find it if the branch has since moved on)
+What this deployment is for: TAILNET-4/5 rebased onto current master (bucket system) before hardware testing.
+
+================================================================================
+2026-09-30 — feat/ot2-tailnet-direct — OT2-TAILNET-5 S5 on B14: /bridge job server live over the tailnet
+================================================================================
+- OT2_BRIDGE_TOKEN_SECRET generated (openssl rand -base64 48; Windows openssl appended a \r, stripped —
+  64 chars) into ~/.bims/ot2-bridge-secret (600, outside the repo) and added to Vercel **Preview only**
+  (Sensitive). Production untouched. OT2_TAILNET_ROBOT_IDS already Preview-only. B14's OpentronsRobot
+  (8LufEAi5sYJ5JRk_fTfT7) already had connection.mode tailnet + directUrl https://ot2-b14.tailf65a70.ts.net.
+- B14 daemon 1.0 → 1.1: pushed via ssh cat to ot2-bridge.py.new, py_compile on the robot, then swapped in;
+  1.0 kept as /data/ot2-bridge/ot2-bridge.py.v1.0.bak. md5 matches the repo (a579ac00…).
+- scripts/ot2-tailnet-provision.sh b14 (robot idle, no current run): BRIDGE_TOKEN_SECRET + BRIDGE_ROBOT_ID
+  into .env, tailscale serve / → :31950 and /bridge → 127.0.0.1:31960, ot2-bridge restarted.
+- Verified: /bridge/health no token 401, malformed token 401, minted token 200 {version ot2-bridge/1.1,
+  jobServer:true, serialOpen:true, /dev/scanner}; ot2-bridge active; queue long-poll still running.
+- B07/R04 untouched (still 1.0, no /bridge).
+- Still open: B14's BIMS_BASE_URL points at an old feature preview (…git-feat-de-52…), not this branch —
+  sweep progress/heartbeat reports go there. No browser test of the tailnet line yet. Reboot test (S3) not run.
+Rollback on B14: cp ot2-bridge.py.v1.0.bak ot2-bridge.py; drop BRIDGE_TOKEN_SECRET from .env;
+  tailscale serve --https=443 --set-path=/bridge off; systemctl restart ot2-bridge.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-git-feat-ot-2ae11c-brevitest.vercel.app
+  (this build: https://bioscale-operations-system-mongodb-3cbydfrsi-brevitest.vercel.app)
+Source: branch feat/ot2-tailnet-direct @ commit 0b4f92587
+Retrieve this exact code: git checkout feat/ot2-tailnet-direct at commit 0b4f92587
+  (or: git log feat/ot2-tailnet-direct --oneline to find it if the branch has since moved on)
+What this deployment is for: first preview with OT2_BRIDGE_TOKEN_SECRET — B14 tailnet-line test.
+Deployment: robot — B14 / muddy-water / ot2-b14.tailf65a70.ts.net, ot2-bridge 1.1 + /bridge serve path.
+
+================================================================================
+2026-09-30 — feat/ot2-tailnet-direct — run-integrity pass (daemon 1.2 on B14) after a tailnet line audit
+================================================================================
+Audit (3 read-only passes over the branch): fill-page start/pause/resume/finish/cancel, protocol import,
+deck-cal Sync, LPC/maintenance, device live reads, opentrons-clone, tip-cal, deck scan, test scan all go
+direct over Tailscale with queue fallback. Queue-only still: legacy /opentrons runs/new + run-detail
+controls, device identify/home/lights, protocol delete, force-reset, per-slot ScannerTrigger rescans,
+page-load reconciles (server-initiated). Live CORS preflight from the branch preview origin passes on the
+robot API (/runs, /protocols) and /bridge/jobs.
+Run-integrity fixes (user priority: no stalls, no resets from connection errors), commit 6002a7024:
+- DAEMON clear_stale_protocol_run used to STOP any paused run the operator didn't pause — incl. the
+  protocol's own protocol.pause() ("tiprack exhausted") and the start-of-run pause — whenever a
+  scan/sweep/calibration opened a maintenance run. Now only stop-requested or idle>10min runs are cleared.
+- DAEMON robot-server restart: auto-heal refuses unless /runs is readable and holds no live run; the
+  manual button refuses a readable live run. auto_resume_run idempotent (declines after >1 'play') and on
+  its own thread (no longer blocks the serial worker 75 s). /bridge sweep progress cancels only on an
+  explicit cancelRequested:true — 404 from a deployment without the jobs routes used to kill every sweep.
+- BIMS: ?/autoResumeFallback when the /bridge auto-resume hand-off fails; browser auto-resume checks the
+  robot action log; RobotSession self-heals a fallback every 30 s (re-reads /connection first);
+  restart over Tailscale reports the daemon's refusal.
+Tests: daemon 29 OK (+10), test:unit 508/508, npm run check 106 = baseline.
+B14: ot2-bridge 1.2 deployed (robot idle; 1.1 kept as ot2-bridge.py.v1.1.bak, 1.0 as .v1.0.bak), md5
+0e380b34…, /bridge/health 200 with token (jobServer, serialOpen, engineOk), 401 without.
+Still open: B14 BIMS_BASE_URL → old feature preview (no jobs routes: sweep won't record in BIMS);
+queue-line stale-bundle start can exceed the 60 s action; /bridge jobs are in daemon memory only;
+/bridge busy state not shared across browsers; legacy /opentrons pages still queue-only.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-git-feat-ot-2ae11c-brevitest.vercel.app
+Source: branch feat/ot2-tailnet-direct @ commit 6002a7024
+Retrieve this exact code: git checkout feat/ot2-tailnet-direct at commit 6002a7024
+What this deployment is for: run-integrity fixes on the tailnet line.
+Deployment: robot — B14 / ot2-b14.tailf65a70.ts.net, ot2-bridge 1.2 (scripts/ot2-bridge.py @ 6002a7024).
+
+================================================================================
+2026-09-30 — feat/ot2-tailnet-direct — B14 daemon reports now go to this branch's preview
+================================================================================
+B14 /data/ot2-bridge/.env BIMS_BASE_URL: old feat-de-52595e preview (no /api/agent/ot2/jobs routes) →
+https://bioscale-operations-system-mongodb-git-feat-ot-2ae11c-brevitest.vercel.app (branch alias, stable
+across pushes). Robot idle; backup .env.bak-20260930 (600); ot2-bridge restarted on 1.2, no warnings.
+Verified: scanner_events hb:ot2-b14-bridge refreshed 9 s after restart with version ot2-bridge/1.2, so the
+preview accepts B14's agent key. Tailnet sweep progress/results will now land in BIMS.
+NOTE: B14's queue line now serves this preview — prod BIMS still sees B14 heartbeats (shared Mongo) but
+anything prod enqueues for B14 is polled by this daemon from the preview's routes; revert before merging.
+Rollback: cp .env.bak-20260930 .env && systemctl restart ot2-bridge.
+
+================================================================================
+2026-10-02 — feat/ot2-tailnet-direct — B14 live over Tailscale from the lab Mac; setup-stage connection pill
+================================================================================
+Lab Mac rejoined the tailnet as imac-1 (old `imac` node stale, offline 86 d — delete in admin console).
+Live-monitored B14 (robot API journal, daemon, run state, Mongo change streams). Findings:
+- Earlier tests today ran from PRODUCTION BIMS (no `line` on audit rows, 0 ot2_direct_calls) → all queue.
+  Once on the branch preview: reagent run jr1ZzWWJ… (robot run 78793f94) — status reads 65–100 ms direct,
+  resume 270 ms / pause 164 ms / stop 280 ms as [DIRECT] run.action, finish record + cancel both
+  line:'tailnet', 0 queue commands for them. Deck scan via /bridge: token issued (audited), POST
+  /bridge/jobs 202 in 80 ms, scanned DECK-003, result + confirm audit rows line:'tailnet'.
+- Daemon 1.2 auto_resume_run resumed the initial pause once (actions play,play), queue line.
+- Wax on B14 fails by design: FailedToLoadPipetteError — protocol line 374 loads p20_single_gen2 on
+  the right mount, B14 has p1000_single_v2.2. Reagent (p300 left) runs fine on B14.
+- A queue-line wax start that had to re-upload the protocol overran the 60 s action (known gap); a
+  duplicate start attempt was absorbed (its POST /runs expired in the queue; one robot run created).
+- Two pages (prod + preview) recorded the same finish → close prod while testing on the preview.
+- B14 Wi-Fi: 2.4 GHz ch 6, -49 dBm but 6.5 Mbit/s rx, 3389 retries — repeated direct→DERP relay flips and
+  robot→BIMS read timeouts. Recommend Ethernet for all robots.
+- Stop mid-move left smoothie "Alarm lock" (normal after a hard stop) — home before next run.
+- SLIP: a latency probe POSTed 2 ScannerEvent rows (eventType error, deviceId ot2-b14-bridge-probe,
+  source latency-probe) into prod Mongo; not cleaned up yet (awaiting user OK).
+Change (commit 958f84e3f): TransportPill at the top of the wax + reagent pages on every stage (setup,
+loading, deck scan) so the operator sees/fixes the line BEFORE Start; stale "never flips back" comment fixed.
+npm run check 106 = baseline.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-git-feat-ot-2ae11c-brevitest.vercel.app
+Source: branch feat/ot2-tailnet-direct @ commit 958f84e3f
+Retrieve this exact code: git checkout feat/ot2-tailnet-direct at commit 958f84e3f
+What this deployment is for: connection pill visible during run setup on the fill pages.
+
+================================================================================
 2026-09-30 — feat/post-mortem-tablet-hide-askbims → master — Post-Mortem Inspect: vertical Capture bar
 ================================================================================
 More touch-only (`pointer: coarse`) changes for the landscape tablets; mouse-driven desktops unchanged.
@@ -17077,6 +17364,848 @@ Retrieve this exact code: git checkout feat/bucket-nickname-block at commit 1fb8
   (or: git log feat/bucket-nickname-block --oneline to find it if the branch has since moved on)
 What this deployment is for: PR #70 — the "Nickname a bucket" third block on /buckets/new; mint
 form back to badge + sticker.
+
+================================================================================
+2026-09-30 — feat/bucket-nav-perf — Bucket pages: lag moving between board and history fixed
+================================================================================
+User: "a lot of lag in the bucket system moving back and forth between pages, why is that" → then
+"implement those fixes". Branch cut from feat/bucket-nickname-block (b2dce0cf, PR #70 head) so the
+board/service edits sit on the nickname code they touch.
+
+WHY IT LAGGED (read off the code — no local .env, nothing timed against Atlas)
+- Every client-side navigation re-ran the ROOT layout load: it read `url.pathname`, which SvelteKit
+  tracks, so each page change paid two sequential Integration.findOne (Box + Particle dots) before
+  the page's own load could start — on top of the hook's session lookups.
+- The board load's longest branch was thermoseal: checkFloor (config → part) then thermosealStatus
+  (config → roll/part/defaultLot(2 in series)/exhausted → open kanban card) ≈ 8 reads in series.
+  defaultThermosealLot re-did the per-lot ledger math the board's availableLots had already done
+  in a parallel branch (both sum every consumption/scrap row on the shell/label/thermoseal lots).
+- The history page did resolveBucketId → findById (two reads), then loaded every pass the tub ever
+  ran WITH its full cartridgeIds array (never displayed — the page links carts born in the pass
+  via CartridgeRecord), and the cart aggregate $pushed every id of every pass before slicing to 12
+  in Node. Grows per pass.
+- Link preload is app-wide "tap" (app.html, frozen), which does nothing for a mouse.
+- Unverified: whether the Atlas cluster is in the same region as the Vercel functions (pdx1).
+
+WHAT CHANGED
+- src/routes/+layout.server.ts: `untrack(() => url.pathname)` for the public-path check (login /
+  logout redirects still invalidateAll, so user changes still land); Box/Particle reads in one
+  Promise.all, cached per process for 60 s (failures not cached, fall back to "disconnected").
+- NEW src/lib/server/services/lot-remaining.ts: lotRemaining(partNumbers) — one ReceivingLot read
+  + one ledger aggregate — plus fifoLot (oldest lot with stock) and lotsWithStock (per part,
+  largest remaining first). Same math as before, one implementation.
+- thermoseal-service.ts: defaultThermosealLot = fifoLot(lotRemaining([PT-CT-101])); thermosealPart
+  exported; checkFloor takes `part`; thermosealStatus(pre?: {cfg, part, nextLot}) runs roll /
+  next lot / exhausted count / open restock card in ONE Promise.all (KanbanTask lookup no longer
+  waits behind the others). Unused InventoryTransaction import dropped.
+- buckets/+page.server.ts: availableLots removed; lotRemaining once, shared by the pickers
+  (lotsWithStock) and the thermoseal branch, which now reads config + part once and hands them to
+  checkFloor and thermosealStatus — ~3 reads in series instead of ~8.
+- bucket-service.ts: findBucketByCode(code, select?) is the one id/sticker $or query;
+  resolveBucketId uses it (unchanged behaviour); bucketHistory loads the tub with it (one read
+  instead of two) and selects `-cartridgeIds` on the cycles.
+- buckets/[bucketId]/+page.server.ts: aggregate gets a `$project` with `$slice` to 12 ids;
+  `cartridgeIds` dropped from the returned cycles (the page never read it).
+- cart-mfg/+layout.svelte: sidebar <nav data-sveltekit-preload-data="hover">.
+- BUCKET-SYSTEM_PLAN.md: header, §9.1 load-cost note, §9.2 payload note, §10, §11 row.
+Not changed on purpose: changeLog / boardData / inOvenCarts (each 2 reads in series, but all
+shorter than the thermoseal branch so not on the critical path); no materialised lot counter
+(the ledger aggregate is index-only and a counter would have to be kept by every writer).
+svelte-check: COMPLETED 3419 FILES 14 ERRORS — the pre-existing baseline, none in touched files.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-4kwd6krp7-brevitest.vercel.app
+Source: branch feat/bucket-nav-perf @ commit 6c0a8bc1
+Retrieve this exact code: git checkout feat/bucket-nav-perf at commit 6c0a8bc1
+  (or: git log feat/bucket-nav-perf --oneline to find it if the branch has since moved on)
+What this deployment is for: the bucket board ↔ history page navigation-lag fixes (root layout no
+longer re-runs per navigation, thermoseal branch ~3 reads in series, history payload trimmed,
+sidebar hover preload). Open the board, then a bucket, then back — compare against PR #70's preview.
+
+================================================================================
+2026-09-30 — feat/badge-gated-steps — Badge gate moved to scan-in, discards and move to oven
+================================================================================
+User: "I want the badge requirement for the bucket system to be when counting up a bucket, when
+discarding carts, and when passing carts to oven." Branch cut from feat/bucket-nav-perf (c6df9ac6).
+Read "counting up a bucket" as scanning carts into a Barcoded pass (the count climbs one per scan) —
+not the Audit panel. Read "to be when …" as the full list: the badge no longer gates mint or
+start-pass, which feat/badge-system had added earlier today.
+
+WHAT CHANGED
+- bucket-service.ts: requireBadge() now reads the mode and resolves the badge in one Promise.all
+  (it sits on the scan-in hot path); new loginGate() (session as actor) and claimCustody() (Custody
+  row opened by the badge holder at the FIRST scan-in of a pass — insert, then a conditional
+  `custodyId: null` update so a concurrent first scan cannot overwrite the winner's id).
+  Gated: scanCartIn (gate runs inside the existing guard Promise.all — no extra round trip in
+  series; holder = scannedInBy, operator on both debits + scan_in row; returns `operator`),
+  scrapCarts (→ scrapCartsAs(input, gate) so advanceCycle resolves the badge once for discards +
+  move), advanceCycle (badge required only when discardedIds non-empty; a badge scanned anyway is
+  honoured on the advance row), auditCycle (when a stray is discarded or a missing member written
+  off), reportResidual (Discard only), moveToOven (holder = ovenReleasedBy; returns `operator`).
+  Un-gated: createBucket and startCycle lose `badge`; startCycle no longer creates Custody or sets
+  custodyId; openedBy = session. Every gated row: operator = holder, enteredBy = session,
+  attribution { method, badgeId, custodyId? }; audit rows carry badgeId + enteredBy.
+- buckets/+page.server.ts: badge read from the form on scanIn / advance / scrap / moveToOven /
+  audit / residual; dropped from start; scanIn + moveToOven return `operator`.
+- buckets/+page.svelte: one shared `badge` state + `badgeField(show, next?)` snippet (visible +
+  required when `show` and mode is 'required'; otherwise a hidden input so a badge scanned anyway
+  rides along). Rendered on the Barcoded panel (above the cart box, with "Carts are being recorded
+  to <user>" + Change badge after the first scan), advance (discards only), scrap, audit
+  (discards / write-offs only), residual (Discard only), Move to oven. A BDG- code scanned into
+  the cart box or any list box is routed to the badge (takeBadge); cart scans with no badge on are
+  held client-side ("Scan your badge first"); every ?/scanIn POST carries the badge; a BADGE_*
+  refusal (not the plain BADGE "that is a badge, not a cart") clears it and refocuses the box.
+  Start form's badge block removed; header link title + scan-box message reworded.
+- buckets/new/+page.server.ts + .svelte: badge field, badgeMode and `method` removed; mint is
+  "scan the sticker" again.
+- admin/badges/+page.svelte + .server.ts: portal copy says where the badge is now asked for.
+- models: bucket-cycle.ts / custody.ts comments (custody claimed at first scan-in).
+- BUCKET-SYSTEM_PLAN.md: header; new §6.6 (where the badge is asked for, one-badge-for-the-rail,
+  hot path, custody); §6.1, §6.2, §6.3, §6.5, §7, §9.1, §9.4, §9.8; §11 row.
+- BADGE-SYSTEM_PLAN.md NOT edited (its "mint + start-pass" scope line is now stale — §6.6 of the
+  bucket plan is the current statement). Also not built: a dev DB with an issued badge to click
+  through the three gates.
+svelte-check: COMPLETED 3419 FILES 14 ERRORS — the pre-existing baseline, none in touched files.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-qs4uqd44x-brevitest.vercel.app
+Source: branch feat/badge-gated-steps @ commit aa8206aa
+Retrieve this exact code: git checkout feat/badge-gated-steps at commit aa8206aa
+  (or: git log feat/badge-gated-steps --oneline to find it if the branch has since moved on)
+What this deployment is for: PR #71 — badge asked for at scan-in, discards and Move to oven; not at
+mint or start-pass. Needs an issued badge (Badge Portal) to click through the three gates.
+2026-09-30 — feat/post-mortem-tablet-fullscreen → master — Post-Mortem Inspect: tablet fullscreen mode
+================================================================================
+Third layout for Post-Mortem Inspect (desktop → tablet/touch → fullscreen), requested after tablet
+testing. A touch-only "⛶ Fullscreen" button in the page header enters it:
+  - The context/video/action wrapper becomes `fixed inset-0 z-[60]` black grid
+    `grid-cols-[6.25vw_1fr] grid-rows-[minmax(0,1fr)]`: the vertical 📷 Capture bar | the live feed
+    (MJPEG <img> or WebRTC <video>, `h-full w-full object-contain`). Cartridge/station bar hidden.
+    Existing elements are restyled, not duplicated (the <video> is bind:this with a live srcObject).
+  - Also calls document.documentElement.requestFullscreen({navigationUI:'hide'}) to drop Android's
+    address/status bars. A `fullscreenchange` to non-fullscreen (back gesture) leaves the layout. If
+    the browser refuses (e.g. iPad Safari), the layout still fills the viewport and a small ✕ exit
+    appears (only in that case). Body scroll is locked while active; fullscreen is exited on destroy.
+Scanner handling is unchanged (wedge input + Pi scanner via WS still lock cartridges while in fullscreen).
+`npm run check`: 13 errors (baseline), no new warnings. Vercel branch build used as the compile gate.
+Pushed to master at the user's explicit request.
+Deployment: preview — https://bioscale-operations-system-mongodb-kxq1lt5lj-brevitest.vercel.app
+Source: branch feat/post-mortem-tablet-fullscreen @ commit e48b2d39
+What this deployment is for: compile gate before fast-forwarding master (GitHub deployment 6769691890).
+Deployment: production — https://bioscale-operations-system-mongodb-iwifl3s5n-brevitest.vercel.app
+Source: branch master (= feat/post-mortem-tablet-fullscreen) @ commit e48b2d39
+Retrieve this exact code: git checkout master at commit e48b2d39
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: on-tablet test of the Post-Mortem fullscreen mode (feed + Capture only).
+  GitHub deployment 6769733121 (Production). Smoke: /login 200.
+
+================================================================================
+2026-09-30 — feat/post-mortem-fullscreen-bars → master — Post-Mortem fullscreen: two bars + cartridge strip
+================================================================================
+Follow-up to the fullscreen mode (post-mortem-inspect/+page.svelte, fullscreen layout only; the
+desktop and regular tablet layouts are untouched):
+  - Grid is now `grid-cols-[6.25vw_minmax(0,1fr)_6.25vw] grid-rows-[minmax(0,1fr)_auto]`: a 📷
+    Capture bar down each edge (row-span-2; the right one is a second button with the same
+    onclick/disabled/pulse as the left), feed in the middle.
+  - Feed pinned to the top of the screen (`items-start` + `object-top` on the MJPEG <img> and the
+    WebRTC <video>) instead of vertically centred.
+  - Compact one-line cartridge strip under the feed with the same content as the context bar's
+    Cartridge block: "⚠ Scan to start · Accepts: completed · linked" before a scan, "🟢 <id> ·
+    <status> · scanned <time> [Release]" after. The reject reason (wrong status / not found) is shown
+    there too, since the normal red reject banner sits behind the fullscreen layout.
+  - The fallback ✕ exit (only when browser fullscreen is refused) moved to the top-left of the feed
+    so it doesn't sit on the right bar.
+`npm run check`: 13 errors (baseline), no new warnings. Vercel branch build used as the compile gate.
+Pushed to master at the user's explicit request.
+Deployment: preview — https://bioscale-operations-system-mongodb-o18pfm400-brevitest.vercel.app
+Source: branch feat/post-mortem-fullscreen-bars @ commit 5cf92d30
+What this deployment is for: compile gate before fast-forwarding master (GitHub deployment 6769964104).
+Deployment: production — https://bioscale-operations-system-mongodb-8ellsnuv7-brevitest.vercel.app
+Source: branch master (= feat/post-mortem-fullscreen-bars) @ commit 5cf92d30
+Retrieve this exact code: git checkout master at commit 5cf92d30
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: on-tablet test of the two Capture bars, top-aligned feed and cartridge
+  strip in fullscreen. GitHub deployment 6769996539 (Production). Smoke: /login 200.
+
+================================================================================
+2026-09-30 — feat/capture-timing-token-renewal → master — Capture timing readout + background token renewal
+================================================================================
+Diagnostics for the tablet capture-lag report (Tailscale already confirmed direct: Pi→lab-tab-1
+`tailscale ping` = via 172.16.202.244, 7 ms). No change to what a capture does or how many photos
+one tap makes.
+  - api/cv/capture/+server.ts: per-step lap timers, returned additively as `timingsMs`
+    { connect, parse, db, barcode, embed, storage, total } in the existing 201 response. Nothing
+    else in the handler changed; other capture pages ignore the new field.
+  - post-mortem-inspect/+page.svelte: each capture records photo time (station /snapshot.jpg or
+    video-feed frame), round trip to /api/cv/capture, and server time → "network" = round trip −
+    server. Shown as "Last capture: …" under the capture area (desktop + tablet) and as a compact
+    tag top-right of the feed in fullscreen; also console.info with byte size.
+  - Snapshot token renewed in the background every 3.5 min while a station's MJPEG view is up
+    (max age stays 4 min, JWT TTL 5 min), so a tap never waits on a token mint. Renewal only
+    replaces the snapshot-only token, never stationToken, so the live stream isn't restarted.
+    Costs one jwt_mint audit row per 3.5 min per open station session.
+`npm run check`: 13 errors (baseline), no new warnings. Vercel branch build used as the compile gate.
+Pushed to master at the user's explicit request.
+Deployment: preview — https://bioscale-operations-system-mongodb-l6jcdv6vj.vercel.app
+Source: branch feat/capture-timing-token-renewal @ commit 1a171874
+What this deployment is for: compile gate before fast-forwarding master (GitHub deployment 6771291595).
+Deployment: production — https://bioscale-operations-system-mongodb-gnc9w1dqz-brevitest.vercel.app
+Source: branch master (= feat/capture-timing-token-renewal) @ commit 1a171874
+Retrieve this exact code: git checkout master at commit 1a171874
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: capture timing readout + background snapshot-token renewal on
+  Post-Mortem Inspect. GitHub deployment 6771317681 (Production). Smoke: /login 200.
+
+================================================================================
+2026-10-01 — feat/capture-speed-thumbs-device-lock → master — Faster capture, thumbnails, one device per station
+================================================================================
+Quick capture-lag wins + the fix for the dropped-scanner-keystroke issue (two tablets on one station
+doubled the Pi's per-viewer MJPEG encode load; throttled=0x0, temp normal, so not heat/power).
+  - api/cv/capture/+server.ts: barcode detection, embedding, the original upload and a new
+    thumbnail run concurrently (Promise.all) instead of in sequence. Same records and audit logs;
+    upload failure still fails the capture (500), embed/thumbnail stay best-effort. Each step is
+    still timed individually; `timingsMs.parallel` = wall time of the block. Response adds
+    `thumbnailUrl`.
+  - Thumbnails: 160 px JPEG (q70) via sharp, uploaded next to the original
+    (captures/<imageId>_<cartImageNo>-thumb.jpg) and stored in the existing CvImage.thumbnailPath
+    (the DHR pages already read it; image DELETE already removes it). r2.ts generateThumbnail is a
+    pass-through stub, so it isn't used. Highlight save now $unsets thumbnailPath so lists fall back
+    to the boxed full image instead of a stale thumbnail.
+  - post-mortem-inspect: table uses thumbUrl (falls back to full image for older captures),
+    decoding="async"; tap still opens the full photo in the existing highlight viewer. The table is
+    not rendered at all in fullscreen.
+  - One device per station: CaptureStation.currentOperator gains deviceId (per-browser-tab id from
+    new src/lib/station-device.ts, sessionStorage-backed). Lock POST/DELETE take ?device=; the same
+    user on a different device gets 409 { sameUser: true } unless ?takeover=1 (audited as
+    'lock-takeover'). DELETE from a device that no longer holds the lock is a no-op, so a closing
+    tab can't release its successor's lock. Callers without ?device= keep the old per-user
+    behaviour. All five station pages (/capture, post-mortem, reagent-inspect, wax-inspect,
+    wax-reject) now pass ?device= on claim/release/unload (force-release untouched).
+    Post-mortem additionally offers takeover via confirm() and re-claims the lock every 60 s; a 409
+    there means it was taken over → it tears down the stream, leaves fullscreen and says so.
+`npm run check`: 13 errors (baseline), warnings unchanged (430). Vercel branch build used as the
+compile gate. Pushed to master at the user's request ("let's get that change in").
+Deployment: preview — https://bioscale-operations-system-mongodb-pexvr4gxf-brevitest.vercel.app
+Source: branch feat/capture-speed-thumbs-device-lock @ commit 146ec57e
+What this deployment is for: compile gate before fast-forwarding master (GitHub deployment 6787200725).
+Deployment: production — https://bioscale-operations-system-mongodb-qgjbzi7zf-brevitest.vercel.app
+Source: branch master (= feat/capture-speed-thumbs-device-lock) @ commit 146ec57e
+Retrieve this exact code: git checkout master at commit 146ec57e
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: parallel capture processing, thumbnails, one device per station.
+  GitHub deployment 6787242743 (Production). Smoke: /login 200.
+
+================================================================================
+2026-10-01 — feat/capture-background-upload → master — Background upload (fullscreen) + paired DB writes
+================================================================================
+From the timing readout (photo 0.17 s · network 0.70 s · server 0.94 s = db 0.35 + parallel 0.59 →
+1.81 s with the Capture button locked the whole time):
+  - post-mortem-inspect/+page.svelte, FULLSCREEN ONLY (desktop + regular tablet layout unchanged):
+    the button unlocks once the photo is in hand (min 1 s after the tap, so a double tap can't
+    take two photos); the upload goes to a background queue — one at a time, oldest first, each
+    carrying the cartridgeId locked when it was taken. No automatic retries (a lost response could
+    re-save a photo the server already has): a failure parks the photo as "not saved" with
+    Retry / Discard (Discard confirms). Status pill top-centre of the feed: "⬆ Saving…", "✓ Saved",
+    failures, and photo-acquire errors (the normal banners sit behind fullscreen). beforeunload
+    warns while anything is queued/uploading/failed and then skips the lock release. Capture logic
+    split into acquirePhoto() / uploadCapture() / runUploadQueue(); the synchronous path calls the
+    same two functions, so its behaviour is unchanged.
+  - api/cv/capture/+server.ts: station lookup + cartridge photoSequence $inc run together; the
+    CvImage insert + cartridge photos[] append run together (allSettled — if the insert fails the
+    appended entry is $pull-ed again and the capture fails as before, so photos[] never points at an
+    unsaved image). Capture-time verdict audit stays sequential after the image exists. Saves one
+    round trip for post-mortem (no stationId) and two for /capture.
+`npm run check`: 13 errors (baseline), warnings unchanged. Vercel branch build used as the compile
+gate. Pushed to master at the user's explicit request.
+Deployment: preview — https://bioscale-operations-system-mongodb-ao5zaxo3v-brevitest.vercel.app
+Source: branch feat/capture-background-upload @ commit 6b62993a
+What this deployment is for: compile gate before fast-forwarding master (GitHub deployment 6787922065).
+Deployment: production — https://bioscale-operations-system-mongodb-27snsnjhl-brevitest.vercel.app
+Source: branch master (= feat/capture-background-upload) @ commit 6b62993a
+Retrieve this exact code: git checkout master at commit 6b62993a
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: fullscreen background upload + paired capture DB writes.
+  GitHub deployment 6787965848 (Production). Smoke: /login 200.
+
+================================================================================
+2026-10-01 — feat/station-newest-wins → master — CV stations: newest request wins
+================================================================================
+User request: selecting a CV station should always work and bump whoever had it (e.g. Giovanni
+selecting CV Station 1 kicks alejandro off, who drops to Local).
+  - api/cv/stations/[id]/lock/+server.ts: POST never refuses — a different user or the same user on
+    another device is displaced (audited 'lock-takeover', oldData = displaced holder) and the
+    response carries tookOverFrom { username, since }. New read-only GET → { mine, holder } (mine =
+    same user and same ?device=, or a legacy lock without deviceId). DELETE unchanged: only the
+    holder (or ?force=true) releases, so a displaced tab closing can't free its successor's lock.
+    The ?takeover / 409-sameUser flow from the previous change is gone.
+  - src/lib/station-device.ts: checkStationLock() (one GET) and watchStationLock() — polls GET every
+    10 s while a tab holds a station and calls onLost once when it no longer does. Read-only by
+    design: the earlier Post-Mortem watch re-POSTed, which under newest-wins would let a bumped tab
+    grab the station back.
+  - All five station pages (/capture, post-mortem, reagent-inspect, wax-inspect, wax-reject):
+    claim → "Took over <station> from <user>" notice when someone was displaced; start the watch;
+    on loss → teardown (lockedStationId cleared first so no release is attempted), switch to Local,
+    "<station> was taken over by <user> — switched to Local." (post-mortem also leaves fullscreen).
+    Station dropdowns no longer disable in-use stations (label still says "in use by …"). The old
+    409 "already in use" branches are removed.
+  - /capture auto-reconnect checks GET first and, if the station was taken over meanwhile, treats it
+    as bumped instead of re-claiming.
+`npm run check`: 13 errors (baseline), warnings unchanged. No contract tests cover the lock. Vercel
+branch build used as the compile gate. Pushed to master at the user's explicit request.
+Deployment: preview — https://bioscale-operations-system-mongodb-3n48nvag6-brevitest.vercel.app
+Source: branch feat/station-newest-wins @ commit f02b16ef
+What this deployment is for: compile gate before fast-forwarding master (GitHub deployment 6790156708).
+Deployment: production — https://bioscale-operations-system-mongodb-p9su44vjk-brevitest.vercel.app
+Source: branch master (= feat/station-newest-wins) @ commit f02b16ef
+Retrieve this exact code: git checkout master at commit f02b16ef
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: CV station locks — newest request wins; displaced sessions drop to Local.
+  GitHub deployment 6790199799 (Production). Smoke: /login 200.
+================================================================================
+2026-10-02 — feat/badge-every-phase — Badge required at every phase (every advance is now gated)
+================================================================================
+User: "I want to adjust the bucket system to require a scan in at every phase." Read as the badge
+plan's Model 1 — "scan in at each stage and advancement" (BADGE-SYSTEM_PLAN.md §1, the user's own
+wording from 2026-09-23) — i.e. a BADGE scan at every phase transition, not re-scanning every cart
+at every stage. Before this the advance asked for a badge only when carts were discarded
+(feat/badge-gated-steps, 2026-09-30). Branch cut from feat/badge-gated-steps HEAD (56b624d9) in a
+git worktree (../Bioscale_V2-wt-badge-every-phase, node_modules junctioned) because the shared
+checkout held another session's uncommitted badge-photo edits on feat/badge-photos.
+
+WHAT CHANGED
+- bucket-service.ts: advanceCycle calls requireBadge() unconditionally — Barcoded → Unpressed,
+  Unpressed → Pressed and Pressed → Backed all need a badge when Require badge is on; with it off
+  and no scan it falls back to the session exactly as before. The one badge signs the discards
+  (scrapCartsAs) and the advance row. requireBadge / AdvanceCycleInput docblocks updated.
+  Phase coverage is now: Barcoded = scan-in (gated 09-30), Unpressed / Pressed / Backed = advance
+  (gated now), oven = Move to oven (gated 09-30). Start-pass stays ungated (user removed it 09-30;
+  no carts are handled there).
+- buckets/+page.svelte: advance form renders badgeField(true) always; setMode('advance') focuses
+  the badge box when none is on so the gun's first read is the badge; header-link title and the
+  "that is a badge" message name the advance; badge-state comment updated.
+- admin/badges/+page.svelte: portal copy says "every phase (scan-in, each advance, discards, move
+  to oven)". +page.server.ts header comment NOT touched (the badge-photos session is editing it).
+- BUCKET-SYSTEM_PLAN.md: header; §6.3; §6.6 (new 2026-10-02 paragraph + "Advancing a phase" table
+  row); §9.1 rail; §11 row. BADGE-SYSTEM_PLAN.md not edited (as on 09-30).
+- No schema, server-action or data change: ?/advance already carried `badge`.
+svelte-check (worktree, after svelte-kit sync): COMPLETED 3419 FILES 14 ERRORS — the pre-existing
+baseline, none in touched files. Not clicked through on a preview yet.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-6f87n5pqh-brevitest.vercel.app
+Source: branch feat/badge-every-phase @ commit 9ee18715
+Retrieve this exact code: git checkout feat/badge-every-phase at commit 9ee18715
+  (or: git log feat/badge-every-phase --oneline to find it if the branch has since moved on)
+What this deployment is for: PR #73 — badge required at every advance (plus scan-in and Move to oven
+  as before). Branch merged with origin/master first (progress.txt conflict resolved, both sides kept);
+  svelte-check after the merge: 14 errors = baseline. Smoke: /login 200.
+
+================================================================================
+2026-10-02 — fix/bucket-scan-count — Cart scan-in count lag on the bucket board
+================================================================================
+The user reported that the count lags behind the gun when scanning carts into a bucket. Branch
+cut from origin/master (95b9710d) in a git worktree (../Bioscale_V2-wt-scan-count, node_modules
+junctioned) because the shared checkout held another session's uncommitted CV-station edits on
+feat/badge-photos.
+
+ROOT CAUSE
+The 2026-09-25 rewrite made the scan box never drop a keystroke (Enter → queue → one worker posts
+one cart at a time), but the card count and the stage tile came from the scanAdded overlay, which
+is only written when the server CONFIRMS a scan. Each confirm is a full Vercel round trip with
+~8 database hops in series (session + user in hooks, badge mode + badge + holder, pass/cart/bucket
+guards, cart insert, then two debits each doing a part $inc + low-inventory settings read +
+transaction insert, plus the log rows) — roughly half a second to a second per cart. At a cart a
+second the queue grows and the count trails the gun by the queue length.
+
+WHAT CHANGED (client only)
+- buckets/+page.svelte: new scanPending overlay (cycleId → codes queued but unconfirmed) joins
+  scanAdded / scanRemoved in overlay(), so boardCycles, the panel card count, the stage tile delta
+  and the audit's missing-members list all count a queued cart immediately. enqueueCartScan adds
+  the code to scanPending when it queues it; pumpCartScans calls settlePending() after each POST
+  (success: it is in scanAdded by then; failure: it leaves the count and sits in "did not take").
+  The "already queued" check now runs before the "already in this bucket" check, because a pending
+  id is a member through the overlay.
+- BUCKET-SYSTEM_PLAN.md: header; §6.2.1 new rule; §11 row.
+- No server, schema or data change. Step 2 (faster drain: 2–3 concurrent POSTs, cache badge mode +
+  low-inventory settings, fire-and-forget the low-inventory warn) NOT done — client fix only.
+svelte-check (worktree, after svelte-kit sync): COMPLETED 3420 FILES 14 ERRORS — the pre-existing
+baseline, none in touched files. Not clicked through on a preview yet.
+================================================================================
+2026-10-02 — feat/badge-photos — Badge Portal: photos on badges (portrait on the printed card)
+================================================================================
+Branched from feat/badge-gated-steps @ 56b624d9 (which already carries origin/master). Adds an
+optional portrait to an operator badge — BADGE-SYSTEM_PLAN.md §17.6, model line in §15.1, rows in
+§18, build note #10 in §20.
+  - Model (operator-badge.ts): `photo { data (base64, select:false), contentType, size, updatedAt,
+    updatedBy }`. Stored on the badge document, not R2: ~50 KB each, a few dozen badges, the print
+    page needs it inline, and the portal must not depend on R2 creds / the Worker TLS path. The
+    `select: false` on `photo.data` keeps listBadges() and every other read light.
+  - badge-service.ts: `setBadgePhoto` (active only), `clearBadgePhoto` ($unset, any status),
+    `getBadgePhoto` (the one `+photo.data` reader), `issueBadge({ photo })`; `reissueBadge` reads
+    the old card's bytes and passes them on so a lost card reprints with the same face. Bytes are
+    magic-sniffed (JPEG/PNG/WebP; client type ignored) and capped at 400 KB decoded
+    (`BADGE_PHOTO_MAX_BYTES`). Audit: `PHOTO_SET` / `PHOTO_CLEAR` with type+size only; `ISSUE`
+    newData gains `photo: boolean`. `BadgeRow.photoUrl` = `/admin/badges/<id>/photo?v=<updatedAt ms>`.
+  - New GET /admin/badges/[badgeId]/photo (+server.ts): admin only, `Cache-Control: private,
+    max-age=31536000, immutable` — the `?v=` makes a replaced photo a new URL.
+  - New BadgePhotoInput.svelte: `<input type=file accept=image/*>` → createImageBitmap (EXIF
+    orientation honoured, <img> fallback) → centre crop to 4:5 → 480×600 canvas → JPEG q0.85 blob,
+    with a 48×60 preview (dimmed current photo until a new one is picked). Bindable `blob`; the
+    owning form's enhance() deletes the raw `photo` field and sets the blob in its place, so the
+    server sees ~50 KB. Parent resets by setting blob = null.
+  - /admin/badges: Photo column (thumbnail or dashed placeholder) on the active table (colspan 7→8);
+    per-row **Photo…** opens an inline panel with the picker + Save photo/Replace and Remove photo;
+    the Issue form has an optional Photo field (enctype multipart). New actions `setPhoto`,
+    `clearPhoto` (wrap key `photo`); `issue` reads the file via `photoBytes()`. SubmitFunction-typed
+    `enhanceIssue` / `enhancePhoto` replace the inline issue enhance.
+  - BadgeCard.svelte: `photoUrl` prop; `.media` flex row with the 24×30 mm portrait left of the
+    30 mm QR. No photo → identical to before. Both print pages pass `photoUrl` through.
+Checks: svelte-kit sync + svelte-check → 14 errors (baseline, none in touched files); the two new
+a11y_img_redundant_alt warnings from the picker were fixed (alt no longer says "photo"). vite build
+transformed cleanly. Not run against a live DB yet — needs an issued badge to click through
+Issue-with-photo → Print, Photo… → Replace / Remove, and Reissue carrying the photo.
+Deployment: preview — https://bioscale-operations-system-mongodb-1jqvrdknu-brevitest.vercel.app
+Source: branch feat/badge-photos @ commit 2443a48f
+Retrieve this exact code: git checkout feat/badge-photos at commit 2443a48f
+  (or: git log feat/badge-photos --oneline to find it if the branch has since moved on)
+What this deployment is for: PR #72 — photos on badges. Issue a badge with a photo, Photo… → Replace /
+  Remove on a row, Reissue (photo should follow), then Print / batch print to see the portrait on the
+  card. GitHub deployment 6810533752. Smoke: /login 200.
+Deployment: production — https://bioscale-operations-system-mongodb-hd75yhwhd-brevitest.vercel.app
+Source: branch master @ commit 294bd679 (photos cherry-picked from feat/badge-photos 2443a48f / 251d8dd4 as fc2a7125 / 294bd679,
+  on top of PR #74; PR #71's badge-gate commits were deliberately left out — user chose "photos only")
+Retrieve this exact code: git checkout master at commit 294bd679
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: photos on badges live in production — Badge Portal Photo column / Photo…
+  panel / issue-with-photo, portrait on printed cards. GitHub deployment 6811307817 (Production).
+  Smoke: /login 200. PR #72 closed in favour of the cherry-pick.
+
+================================================================================
+2026-10-02 — master — DEPLOY: research curve activation human-only + list_runs (bims-operations 3.6.1)
+================================================================================
+Source: branch master @ commit fba63a8e (feat/research-calibration-human-only)
+Retrieve this exact code: git checkout master at commit fba63a8e
+research_calibration_activate_curve added to HUMAN_ONLY_ACTIONS (approval happens on the research app
+Curves page with a note); new read tool research_calibration_list_runs; fit tool describes the fit policy.
+npm run test:unit 191 pass; check: 0 errors in changed files (master baseline otherwise). Deployed via GitHub push.
+
+================================================================================
+2026-10-02 — feat/drop-pressed-stage — Buckets: Pressed stage removed (Unpressed → Backed)
+================================================================================
+Branched from feat/badge-photos @ 251d8dd4. User: the "Pressed" column in the bucket system is an
+added layer of redundancy — pressing and backing happen in one go — so Unpressed now advances
+directly to Backed. BUCKET-SYSTEM_PLAN.md §2 (new callout), §5.2, §6.3, §7, §9.1, §9.3, §9.5,
+§9.6, §12.3 and a changelog row carry the as-built detail.
+  - bucket-service.ts: BUCKET_STAGES = barcoded | unpressed | backing; STAGE_LABELS loses Pressed.
+    The key is kept as LEGACY_PRESSED_STAGE (and in the BucketCycle.stage / CartridgeRecord.status
+    enums) so historical rows validate. New helpers: isBucketStatus() (bucket stage OR legacy
+    pressed — used wherever a cart's status is tested for "still inside the buckets": residual
+    scan/merge, audit scan, void's went-on check, cart lookup, state-change), boardStage() (legacy
+    pressed → 'unpressed' for the board column, stage counts, last-stage-by-bucket, registry
+    current stage, state-change destination match) and stageLabel() ("Pressed (legacy)").
+    nextStage('pressed') → 'backing', so a pass still at Pressed advances to Backed with the normal
+    backing.* stamp and no thermoseal (taken at Barcoded → Unpressed). stageCounts folds legacy
+    pressed rows into Unpressed instead of dropping them. No data migration needed; nothing writes
+    'pressed' any more (FORCE_TARGETS and the state-change bucket-stage list derive from
+    BUCKET_STAGES).
+  - Board (buckets/+page.svelte): md:grid-cols-4; stage records/tints lose pressed; help copy.
+  - cart-mfg/+page.svelte and cartridge-admin/+page.svelte: Pressed tile removed from the bucket
+    strips; STATUS_ORDER / STATUS_NEXT_LABEL updated (legacy pressed → "Backed").
+  - pipeline/+page.server.ts: STAGE_KEYS loses bucket_pressed; Unpressed description says to
+    advance to Backed once pressed and backed.
+  - override/+page.svelte tint map, state-change server/page copy, model + LifecycleStage comments.
+  - Not touched: buckets/[bucketId]/+page.server.ts went-on list and cartridge-admin STAGES filter
+    keep 'pressed' on purpose (historical rows).
+npm run check (svelte-kit sync + svelte-check): 14 errors — the pre-existing baseline (r2.ts,
+2× research-proxy.ts, AskBimsWidget, 8× assembly/[sessionId], 2× validation/magnetometer/[sessionId]);
+none in any file this branch touches.
+Shipped: commit 59af4e86 pushed; PR #75 into master
+(https://github.com/avacoder3900/Bioscale_Operations_System_V2/pull/75). Preview deployment: Vercel GitHub
+integration builds it from the push — log the URL here when it appears.
+
+================================================================================
+2026-10-02 — feat/state-change-direct-backed — State Change: straight to Backed with no bucket
+================================================================================
+User: "create a cart state change setting to move a cart directly to backed without the need of a
+bucket." Until now a Backed target on /manufacturing/cart-mfg/state-change required a destination
+bucket whose open pass is at Backed (BUCKET-SYSTEM_PLAN §9.6) — the cart had to join a pass. The
+target state without a pass already exists in the system: Move to oven leaves carts loose at status
+'backing' (counted as Backed, listed in the board's In oven dropdown, loadable by wax filling), so
+this adds a way to put a cart there directly. Branch cut from feat/drop-pressed-stage @ 3672986b
+(PR #75, not merged yet — this relies on its stage helpers) in a git worktree
+(../Bioscale_V2-wt-direct-backed, node_modules junctioned) because the shared checkout was mid-merge
+with another session's conflicts; the merge commit that session made (d4c56d9c) has conflict markers
+committed in BUCKET-SYSTEM_PLAN.md and progress.txt, so this branch deliberately starts from the
+commit before it.
+
+WHAT CHANGED
+- state-change/+page.svelte: a "No bucket" checkbox appears only when the target is Backed
+  (data.backedStage). Ticked, the destination picker is replaced by a one-line note and the form
+  posts noBucket=on without a destinationBucketId; the client-side guard says "pick the destination
+  bucket or tick No bucket". Barcoded / Unpressed targets look and behave exactly as before.
+- state-change/+page.server.ts: reads noBucket (only honoured when target === BACKED_STAGE), drops
+  the "pick a destination" 400 in that case, passes noBucket to overrideCartStage; "already backing
+  (no bucket)" in the skipped list. Header comment documents the setting.
+- bucket-service.ts overrideCartStage: OverrideInput.noBucket. direct = target Backed + noBucket:
+  no destination lookup; if the cart is already loose at backing it is a no-op; otherwise it leaves
+  its open pass (merge_out row says "override → backing (no bucket)", emptied pass closes), and the
+  cart write adds backing.recordedAt / backing.operator (same stamp as the Unpressed → Backed
+  advance, minus the pass ids) plus backing.manualBackedAt. Note "Manual override: X → backing (no
+  bucket)", OVERRIDE audit row carries noBucket: true. bucket / backing.bucketCycleId are left as they
+  were, like every other path that takes a cart out of a pass.
+- cartridge-record.ts: backing.manualBackedAt: Date declared (strict mode would otherwise drop it).
+- wax-filling/+page.server.ts revertToBacked: the "real cart" $or gains backing.manualBackedAt.
+  Root cause of needing it: cancel/abort hard-deletes any deck cart with neither bucket.cycleId nor
+  a WI-01 lot as a test-mode synthetic — a cart that had never been in a bucket and was backed via
+  this setting would have been deleted on a cancelled wax run. It is now returned loose at backing.
+- BUCKET-SYSTEM_PLAN.md: header, §9.6 "No bucket" paragraph, changelog row.
+svelte-check (worktree, after svelte-kit sync): 14 errors — the pre-existing baseline, none
+in touched files. Not clicked through on a preview yet.
+Shipped: commit a0c7635d pushed; PR #76 into feat/drop-pressed-stage (stacked on #75; GitHub retargets
+  to master when #75 merges) — https://github.com/avacoder3900/Bioscale_Operations_System_V2/pull/76
+
+Deployment: preview — https://bioscale-operations-system-mongodb-9tf1yqkpd-brevitest.vercel.app
+Source: branch feat/state-change-direct-backed @ commit a0c7635d
+Retrieve this exact code: git checkout feat/state-change-direct-backed at commit a0c7635d
+  (or: git log feat/state-change-direct-backed --oneline to find it if the branch has since moved on)
+What this deployment is for: PR #76 — State Change "No bucket" setting: move carts straight to Backed
+  with no destination bucket (loose at backing, as Move to oven leaves them). Smoke: /login 200.
+
+Merge for master (user: "merge to master"): #75 had landed on master (c6950328) and the other
+session had resolved the committed markers on feat/drop-pressed-stage, so PR #76 was retargeted to
+master and origin/master merged in (ca9843fa; one conflict, the plan-doc header line — both notes
+kept). svelte-check after the merge: 14 errors = baseline.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-pmk5kyunr-brevitest.vercel.app
+Source: branch feat/state-change-direct-backed @ commit ca9843fa
+Retrieve this exact code: git checkout feat/state-change-direct-backed at commit ca9843fa
+  (or: git log feat/state-change-direct-backed --oneline to find it if the branch has since moved on)
+What this deployment is for: PR #76 head after merging master — the build the user merges into
+  master. Smoke: /login 200.
+
+================================================================================
+2026-10-02 — master — DEPLOY: required reagent-lot picker on fill screen + connector lot tools (bims-operations 3.7.0)
+================================================================================
+Source: branch master @ commit 41f7b7d1 (feat/reagent-lot-picker)
+Retrieve this exact code: git checkout master at commit 41f7b7d1
+Fill screen Reagent Preparation = dropdown of active research reagent lots (reagent_set_lots, read-only
+ReagentSetLot model); the free-text "test lot" scan is removed and recordReagentPrep fails 400 without an
+active lot. ReagentBatchRecord + cartridge reagentFilling carry reagentLotId / reagentLotNumber.
+Connector 3.7.0: research_reagent_lot_list/get/create, research_inventory_originate, research_fill_lot_list,
+research_curve_set_list, research_fill_lot_set_reagent_lot; research_fill_lot_assign_curve_set HUMAN-ONLY.
+Proxy allowlist: + reagent-lots, reagent-inventory/originate. test:unit 198 pass; vite build clean
+(adapter-vercel file trace fails locally on C:swapfile.sys — Windows only). Deployed via GitHub push.
+
+================================================================================
+2026-10-02 — master — PR #77 merged: OT-2 over Tailscale (TAILNET-4/5) + run-integrity fixes, LIVE in production
+================================================================================
+feat/ot2-tailnet-direct merged to master (merge commit 404db137c, PR #77, branch head 080e0f97c). Before the merge
+origin/master (71 commits) was merged into the branch: wax/reagent page-server conflicts resolved by porting
+master's State Change no-bucket carts (backing.manualBackedAt) into run-lifecycle-records.revertToBacked
+and the 3.7.0 reagent lot stamp (reagentFilling.reagentLotId/Number) into finalizeReagentRun.
+test:unit 515/515, daemon 29 OK, npm run check 115 = master's own baseline (no new errors).
+Production check: POST /api/agent/ot2/jobs/<id>/progress → 401 (was 404 this morning) — the new code is
+serving. All 3 robots idle at merge time.
+INERT IN PRODUCTION until enabled: Production env has neither OT2_TAILNET_ROBOT_IDS nor
+OT2_BRIDGE_TOKEN_SECRET (both Preview-only), so every robot stays on the queue line in prod.
+Robot state: B14 daemon 1.2, reports to the branch preview (repoint to prod next); B07/R04 daemon 1.0
+(queue-compatible) — onboard per docs/OT2-TAILNET-ADD-ROBOT-RUNBOOK.md.
+
+Deployment: production — https://bioscale-operations-system-mongodb-oo7y0nghk-brevitest.vercel.app
+  (served at https://bioscale-operations-system-mongodb.vercel.app)
+Source: branch master @ commit 404db137c
+Retrieve this exact code: git checkout master at commit 404db137c
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: OT-2 tailnet transport + /bridge jobs + run-integrity fixes (inert until enabled).
+2026-10-02 — feat/find-cart-bucket-pills — Buckets: Find a cart shows the bucket nickname + colour-coded pills
+================================================================================
+Branched from feat/drop-pressed-stage @ b3f74612 (stacked: it needs that branch's isBucketStatus /
+stageLabel helpers; PR #75 should land first). User: the "Find a cart" results should return the
+bucket's nickname when the cart belongs to a bucket, and show colour-coded status markers like the
+other search functions (the bucket scan-box search list and the bucket log pills).
+  - bucket-service.ts: CartStatusLine gains status / statusLabel, home { bucketId, nickname,
+    barcode, bucketState, cycleNumber, stage, relation: member | taken_off | closed }, legacyLotId,
+    since (ISO). `line` is unchanged in shape and now names the bucket as "Nickname (BKT-…)" when
+    it has one. One extra ProductionBucket read (nickname barcode state) per found cart.
+  - buckets/+page.server.ts ?/cartLookup: returns the whole CartStatusLine ({ success, ...r })
+    instead of { found, line }.
+  - buckets/+page.svelte: lookupCart() returns { ok, line, hit }; cartFindHit / whereHit state;
+    new cartHitView snippet — cart id (mono) · status pill (cartStatusTint: grey Barcoded, blue
+    Unpressed + legacy Pressed, purple Backed, neutral otherwise) · relation pill (green "Belongs
+    in", yellow "Taken off", grey "Last seen in", yellow "On no open pass") · bucket link headlined
+    by nickname with id + #pass in mono, sticker in the title · "at <stage>" · the bucket's own
+    state pill reusing regStateTint / regStateLabel ("bucket In use" etc.) · legacy WI-01 lot ·
+    "since <fmtAt>". Used by both the Find a cart box and the leftover panel's "Where does this cart
+    belong?" (shared lookup, so both got it). Not-found and error cases still show the plain
+    yellow `line`. resetLists() clears whereHit too.
+  - BUCKET-SYSTEM_PLAN.md §9.1 (new paragraph) + build-history row.
+npm run check (svelte-kit sync + svelte-check): 14 errors — the pre-existing baseline (r2.ts,
+2× research-proxy.ts, AskBimsWidget, 8× assembly/[sessionId], 2× validation/magnetometer/[sessionId]);
+none in any file this branch touches.
+Shipped: commit 2ad5bd2f pushed (branch only — no PR yet; it stacks on feat/drop-pressed-stage / PR #75).
+
+Deployment: preview — https://bioscale-operations-system-mongodb-emhbswf8l-brevitest.vercel.app
+Source: branch feat/find-cart-bucket-pills @ commit 2ad5bd2f
+Retrieve this exact code: git checkout feat/find-cart-bucket-pills at commit 2ad5bd2f
+  (or: git log feat/find-cart-bucket-pills --oneline to find it if the branch has since moved on)
+What this deployment is for: Find a cart / Where does this cart belong? results with the bucket
+  nickname and colour-coded status, relation and bucket-state pills (on top of the Pressed-stage removal).
+
+Merged origin/master (a125c9e4, 3.7.0 reagent-lot picker + state-change-direct-backed) into the branch @ 07f26e49;
+doc conflicts in BUCKET-SYSTEM_PLAN.md / progress.txt were append-only, both sides kept. svelte-check after the
+merge: 14 errors, the pre-existing baseline. PR #78 into master
+(https://github.com/avacoder3900/Bioscale_Operations_System_V2/pull/78).
+
+Deployment: preview — https://bioscale-operations-system-mongodb-3z64fbsrd-brevitest.vercel.app
+Source: branch feat/find-cart-bucket-pills @ commit 07f26e49
+Retrieve this exact code: git checkout feat/find-cart-bucket-pills at commit 07f26e49
+  (or: git log feat/find-cart-bucket-pills --oneline to find it if the branch has since moved on)
+What this deployment is for: the merge-ready build of the Find a cart nickname + pills change (master merged in);
+  smoke: /login 200, /manufacturing/cart-mfg/buckets → 302 /login.
+
+Second master merge @ 65de69ff (PR #77 tailnet work landed meanwhile; progress.txt append-only conflict, both kept).
+svelte-check: 14 errors, baseline.
+Deployment: preview — https://bioscale-operations-system-mongodb-4airoj7e9-brevitest.vercel.app
+Source: branch feat/find-cart-bucket-pills @ commit 65de69ff
+Retrieve this exact code: git checkout feat/find-cart-bucket-pills at commit 65de69ff
+  (or: git log feat/find-cart-bucket-pills --oneline to find it if the branch has since moved on)
+What this deployment is for: final pre-merge build of PR #78 (master @ 42166337 merged in); smoke: /login 200, buckets → 302 /login.
+
+================================================================================
+2026-10-02 — master — PR #78 merged: Find a cart shows the bucket nickname + colour-coded pills, LIVE in production
+================================================================================
+Merged feat/find-cart-bucket-pills @ 82e82b1a via the GitHub API (merge commit f1b07295). Production built from
+that commit by the Vercel GitHub integration; smoke: /login 200, /manufacturing/cart-mfg/buckets → 302 /login.
+What shipped: cartStatusLine() structured result (status, home bucket with nickname / barcode / state / relation,
+legacy lot, since); ?/cartLookup returns it whole; board cartHitView snippet renders stage-tinted status pill,
+Belongs in / Taken off / Last seen in pill, nickname-headlined bucket link and the bucket-state pill in both the
+Find a cart box and the leftover panel's Where does this cart belong?. No schema or data change.
+
+Deployment: production — https://bioscale-operations-system-mongodb-3a2wblsof-brevitest.vercel.app
+Source: branch master @ commit f1b07295
+Retrieve this exact code: git checkout master at commit f1b07295
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: production release of PR #78 (Find a cart nickname + colour-coded status markers).
+
+================================================================================
+2026-10-02 — master — Tailscale is the DEFAULT line for B14 in production
+================================================================================
+- Vercel Production env: OT2_BRIDGE_TOKEN_SECRET (same value as Preview, file ~/.bims/ot2-bridge-secret,
+  Sensitive) and OT2_TAILNET_ROBOT_IDS=b14 added. B07/R04 deliberately NOT listed yet (still queue).
+- B14 /data/ot2-bridge/.env BIMS_BASE_URL → https://bioscale-operations-system-mongodb.vercel.app (was the
+  branch preview); backup .env.bak-20261002-preview; ot2-bridge 1.2 restarted while idle; heartbeat
+  hb:ot2-b14-bridge refreshed 10 s later with version ot2-bridge/1.2.
+- Empty rebuild commit 90561e841 was DEDUPED by Vercel (identical tree, no deployment) — this entry is
+  the tree change that forces the production build.
+Effect: on the normal BIMS address, B14's fill pages / run control / sweeps / deck scan / tip cal go
+browser → B14 over Tailscale from any tailnet computer (pill "direct" during setup); queue stays the
+automatic fallback for non-tailnet devices and dropouts.
+Rollback: remove both OT2_* vars from Vercel Production and push a tree-changing commit to master; on
+B14 cp .env.bak-20261002-preview is NOT needed for rollback (prod reports are correct either way).
+
+================================================================================
+2026-10-02 — master — B07 + R04 onboarded: Tailscale is the default line for ALL THREE OT-2s in production
+================================================================================
+Same steps as B14 (docs/OT2-TAILNET-ADD-ROBOT-RUNBOOK.md), robot idle each time:
+- R04 (172.16.202.124, BIMS CCyX8FjTRGvYOd9vISGvi) and B07 (172.16.202.123, BIMS 2vIu0fzsbqzkZ7_Zjj3h2):
+  ot2-bridge 1.0 → 1.2 (md5 0e380b34…, = master scripts/ot2-bridge.py; 1.0 kept as ot2-bridge.py.v1.0.bak),
+  BIMS_BASE_URL already prod, scripts/ot2-tailnet-provision.sh <slot> --robot-id … all ✓ (secret, serve
+  /bridge → :31960, restart). Verified: /bridge/health 401 no token, 200 with token (1.2, jobServer,
+  serialOpen, engineOk); heartbeats hb:ot2-r04-bridge / hb:ot2-b07-bridge on 1.2 within 3–4 s.
+  B07 was mid maintenance session (queue) until 20:32:05 — onboarded after it closed and went quiet.
+- BIMS records: connection {mode:'tailnet', directUrl https://ot2-<slot>.tailf65a70.ts.net,
+  tailnetHostname ot2-<slot>} set for B07 + R04 with the edit page's AuditLog shape (connection_update,
+  changedBy alejandro) — applied by script (same fields as the edit form) at the user's instruction.
+- Vercel Production OT2_TAILNET_ROBOT_IDS: b14 → b14,b07,r04. This entry forces the production build.
+Pipettes: B07/R04 right = p20 (wax OK), B14 right = p1000 (reagent only).
+Rollback per robot: BIMS edit page Mode → Queue (and/or drop it from OT2_TAILNET_ROBOT_IDS + rebuild).
+
+================================================================================
+2026-10-02 — master — DEPLOY: fill screen picks a FILL LOT, inline new fill lot, connector 3.8.0
+================================================================================
+Source: branch master @ commit 48794fe7 (feat/fill-lot-picker)
+Retrieve this exact code: git checkout master at commit 48794fe7
+Alejandro: a fill lot is one reagent lot across any number of robot runs. ReagentPreparation now lists open
+research fill_lots (FillLot model, strict:false), preselects the last-used one, and can open a new one
+(createFillLot action: reagent lot + name → FL-YYYYMMDD-NNN). recordReagentPrep requires an open fill lot and
+stamps fillLotId/fillLotNumber + reagentLotId/reagentLotNumber on the run; finalize stamps every cartridge and
+$addToSet runIds on the fill lot. Connector 3.8.0: research_fill_lot_create, research_fill_lot_assign_runs.
+test:unit 515 pass; check 13 errors = baseline, none in changed files. Deployed via GitHub push.
+
+================================================================================
+2026-10-03 — master — DEPLOY: device-factor (opticalCalibration) experiment stripped
+================================================================================
+Source: branch master @ commit 865b9b42 (chore/strip-device-factor)
+Retrieve this exact code: git checkout master at commit 865b9b42
+Alejandro: the per-SPU optical factor calibration was a failed experiment. spus.opticalCalibration removed
+from 17 SPUs by the research app (backup in research scripts/); BIMS optical-confirmation analyze page drops
+the Calib column / CalibrationPill / calibration status; MCP fit tool drops applyDeviceFactor.
+test:unit 515 pass; check 13 errors = baseline. Deployed via GitHub push.
+
+================================================================================
+2026-10-05 — feat/badge-all-bucket-actions — badge scan on the remaining bucket actions (audit items 8, 9, 10)
+================================================================================
+User asked for an audit of where else the badge scan could be used (26 candidates, given in chat), then
+"implement 8 and 9, 10": the Master Override, void / retire / sticker replace, and mint / start pass /
+un-scan. Branch cut from origin/master @ 265b903e in its own worktree (../Bioscale_V2-wt-badge-all-actions).
+NOTE: this reverses the 2026-09-30 decision that took the badge off mint and start-pass.
+What changed:
+  - bucket-service.ts: requireBadge() takes a level ('write' = manufacturing:write, 'admin' =
+    manufacturing:admin / admin:full on the badge HOLDER, the same test the routes apply to the session).
+    Now gated — write: createBucket, replaceBucketSticker, startCycle, unscanCart, overrideCartStage;
+    admin: retireBucket (4th arg `badge`), voidCycle, forceBucketPhase. On each, operator = badge holder,
+    enteredBy = session, attribution = { method: 'badge', badgeId, custodyId? }, and the audit rows carry
+    badgeId + enteredBy. The holder is also openedBy / emptyConfirmedBy (start), createdBy (mint), voidedBy
+    (void) and the cart-note author / backing.operator on the overrides. Custody is unchanged (still claimed
+    at the first scan-in). New export badgeGate() + BadgeGate type so State Change resolves the badge once
+    per batch instead of once per cart. With Require badge OFF every one of these falls back to the session
+    exactly as before.
+  - NOT gated, deliberately: consumeCarts / returnCarts. They run inside wax filling's hands-off deck load
+    and its cancel / abort path (which swallows bucket errors so the abort completes) — a refused badge
+    there would stall the fill line or leave carts loose. Gating them is a wax-filling change.
+  - New src/lib/components/manufacturing/BadgeScanField.svelte (badge box for forms outside the board).
+  - buckets/new: badge box on Create and Replace (one shared value, kept after a success, cleared when
+    refused); a BDG- code scanned into a sticker box is moved to the badge box; load returns badgeMode.
+  - buckets (board): badge box on the start form and the rail's retire form; ?/unscan carries the rail's
+    badge (held with "Scan your badge first" when none is on); start / retire refusals clear the badge.
+  - buckets/[bucketId]: badge box (admin badge) on the void and retire forms; a failed void / retire now
+    keeps its form open (the retire form used to close and hide its own error).
+  - buckets/override: badge box (admin badge); cleared after each move that goes through.
+  - state-change: badge box; the gate is resolved lazily, only when a cart enters or leaves a bucket pass;
+    a bucket-stage target with no badge is refused up front. A BDG- code in the cart box is taken as the
+    badge and never as a cartridge (with "Create unknown barcodes" it used to be originated as one).
+  - BUCKET-SYSTEM_PLAN.md: header, §6.1, §6.6 (new table + the not-gated rationale), §9.4, §9.5, §9.6,
+    §9.7, §12.2, build-history row.
+Operational note: Require badge defaults to ON, so after this ships void / retire / Master Override need
+an ADMIN who holds an active badge — issue one in /admin/badges first, or those three are blocked.
+Verification: svelte-kit sync + svelte-check 14 errors, all in files this branch does not touch (r2.ts,
+2x research-proxy.ts, AskBimsWidget, 8x assembly/[sessionId], 2x validation/magnetometer/[sessionId]);
+the last master entries record 13 — not re-measured on a clean master from this worktree. test:unit 515
+pass. vite build: client + server built; only the known adapter-vercel EBUSY swapfile trace failure.
+NOT exercised against a live database — no badge was scanned through any of these forms.
+Shipped: commit ce75e928 pushed (branch only — no PR yet).
+
+Deployment: preview — https://bioscale-operations-system-mongodb-di49buwhc-brevitest.vercel.app
+Source: branch feat/badge-all-bucket-actions @ commit ce75e928
+Retrieve this exact code: git checkout feat/badge-all-bucket-actions at commit ce75e928
+  (or: git log feat/badge-all-bucket-actions --oneline to find it if the branch has since moved on)
+What this deployment is for: badge scan on mint, sticker replace, start pass, un-scan, retire, void,
+  Master Override and State Change bucket moves; smoke: /login 200, buckets, buckets/new,
+  buckets/override and state-change → 302 /login. Badge flows themselves still untested on it.
+
+Docs commit af3a421f (this log entry) built a second preview of the same code:
+Deployment: preview — https://bioscale-operations-system-mongodb-3syqnkole-brevitest.vercel.app
+Source: branch feat/badge-all-bucket-actions @ commit af3a421f
+Retrieve this exact code: git checkout feat/badge-all-bucket-actions at commit af3a421f
+  (or: git log feat/badge-all-bucket-actions --oneline to find it if the branch has since moved on)
+What this deployment is for: the pre-merge build of PR #79 (master had not moved, so no merge-in was
+  needed); smoke: /login 200, buckets → 302 /login.
+
+================================================================================
+2026-10-05 — master — PR #79 merged: badge scan on the remaining bucket actions, LIVE in production
+================================================================================
+User: "push to main" (= master). PR #79
+(https://github.com/avacoder3900/Bioscale_Operations_System_V2/pull/79) opened from
+feat/badge-all-bucket-actions @ af3a421f. The first merge call was blocked by the Claude Code auto-mode
+check; the user then said "allow you to merge" and it was merged via the GitHub API (merge commit
+e6368c05). Production built from that commit by the Vercel GitHub integration; smoke: /login 200,
+buckets, buckets/new, buckets/override and state-change → 302 /login.
+What shipped: badge gate on mint, sticker replace, start pass, un-scan and State Change bucket moves
+(manufacturing:write badge) and on retire, void and Master Override (bucket-admin badge); consumeCarts /
+returnCarts left on the session. No schema or data change. See the entry above for the file list.
+In effect now, while Require badge is ON: minting a bucket and starting a pass refuse without a badge;
+retire / void / Master Override refuse until a bucket admin holds an active badge (/admin/badges).
+Still NOT exercised with a real badge on any environment.
+
+Deployment: production — https://bioscale-operations-system-mongodb-c7u0fy0b0-brevitest.vercel.app
+Source: branch master @ commit e6368c05
+Retrieve this exact code: git checkout master at commit e6368c05
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: production release of PR #79 (badge scan on the remaining bucket actions).
+
+================================================================================
+2026-10-05 — feat/in-oven-copy-ids — Backed count reads high; In oven "Copy all ids"
+================================================================================
+User: the total backed count should be 34 (what is in the buckets). Sequence, for the record:
+  1. First reading — "count only carts in buckets": built on fix/backed-count-in-buckets (5a92b430,
+     stageCounts() without the status-backing override), PR #80, preview
+     https://bioscale-operations-system-mongodb-8lcmf3f03-brevitest.vercel.app. NOT what the user wanted:
+     "no, remove that merge … make the total backed count only the carts that are in buckets, but always
+     include the carts that are in the oven. There are currently no carts in the oven, so the count is
+     inaccurate." PR #80 CLOSED UNMERGED; master's count rule is unchanged (buckets + oven). The branch
+     and its two commits are still on origin, unused.
+  2. Real cause: stale data — carts at status backing on no open pass (the In oven list) that are not
+     physically in the oven. A bulk admin "oven is empty" reset (void them all) was proposed and the user
+     approved it in chat, but the Claude Code permission check refused the code edit twice; it was NOT
+     built and no data was touched.
+  3. User then asked for every backed cart QR that is not in a bucket. This machine has no database
+     access (no .env; no saved query for cartridge_records), so the list could not be pulled directly.
+What was built (read-only):
+  - buckets/+page.server.ts: ?/inOvenList (manufacturing:read) returns every inOvenCarts() id, ceiling
+    10 000 — the board load itself still carries only the first 200.
+  - buckets/+page.svelte: "Copy all N ids" button inside the In oven dropdown; copies one id per line to
+    the clipboard and shows them in a read-only box (falls back to the box if the clipboard is blocked).
+  - BUCKET-SYSTEM_PLAN.md §6.5, header, build-history row.
+Intended use: paste the list into State Change to move the stale carts out of status backing (the
+existing, badge-gated, per-batch path). The target status is the user's call (voided was proposed).
+Verification: svelte-kit sync + svelte-check 14 errors, the same pre-existing set, none in touched
+files; test:unit 515 pass.
+Shipped: commit 0ef9d195 pushed; PR #81 into master
+(https://github.com/avacoder3900/Bioscale_Operations_System_V2/pull/81). User: "push this".
+
+Deployment: preview — https://bioscale-operations-system-mongodb-roimjtez6-brevitest.vercel.app
+Source: branch feat/in-oven-copy-ids @ commit 0ef9d195
+Retrieve this exact code: git checkout feat/in-oven-copy-ids at commit 0ef9d195
+  (or: git log feat/in-oven-copy-ids --oneline to find it if the branch has since moved on)
+What this deployment is for: the In oven dropdown's Copy all ids button; smoke: /login 200,
+  buckets → 302 /login. The button itself not clicked in a signed-in session.
+
+================================================================================
+2026-10-05 — master — PR #81 merged: In oven "Copy all ids", LIVE in production
+================================================================================
+PR #81 was merged on GitHub by Samantha Wolf at 10:57 CDT (merge commit 2ea8649f, from 0ef9d195) —
+not by this session. Production built from that commit by the Vercel GitHub integration; smoke:
+/login 200, buckets → 302 /login.
+First report from the floor: "im not seeing the copy button". Not a build problem — master @ 2ea8649f
+has it. The button is drawn only inside the In oven dropdown (collapsed by default) and only when the
+In oven count is above 0. If the dropdown reads "In oven · 0 carts", there are no loose backing carts,
+and the high Backed count is then coming from the open Backed buckets' own membership, not the oven.
+Open question with the user.
+
+Deployment: production — https://bioscale-operations-system-mongodb-kpouu85ac-brevitest.vercel.app
+Source: branch master @ commit 2ea8649f
+Retrieve this exact code: git checkout master at commit 2ea8649f
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: production release of PR #81 (Copy all ids in the board's In oven dropdown).
+
+================================================================================
+2026-10-05 — fix/sonic-small-files-via-bims → master — Sonic uploads: small files go through BIMS
+================================================================================
+Report: sonic m4a uploads (~2 MB) don't work. Production DB: 0 sonic validation_sessions and 0
+sonic_recording_upload_failed audit rows — the failure happens before any server-side check.
+Root cause: the deployed R2 Worker (brevitest-r2-upload.alejandrov.workers.dev) predates the
+/direct/ route — an unauthenticated PUT /direct/... returns the generic 401 instead of the new
+400 "X-Upload-Token ... required", and its CORS allow-headers are only Content-Type, X-Upload-Secret
+(no X-Upload-Token/-Expires/-Max). With SONIC_DIRECT_UPLOAD=1 in Vercel every file, however small,
+took the direct path: presign OK → browser PUT blocked by CORS ("network error while sending the
+file to storage") → record never called, so nothing was logged.
+Fix (no Vercel or Worker change needed): validation/sonic/+page.svelte routes a file through the
+proxied `upload` action whenever it fits Vercel's 4.5 MB body cap (load now returns proxyMaxBytes;
+64 KB margin for the other form fields); only bigger files use the direct path. The proxied path
+stores via the Worker's long-standing PUT /upload (17 CV captures stored through it in the last 3
+days). Once the Worker is redeployed (`npx wrangler deploy` in services/r2-upload-worker, Alejandro's
+Cloudflare account), files up to 80 MB work too with no further change.
+Note: Alejandro's unmerged origin/feat/sonic-fingerprint-analysis (VALIDATION-08 analysis engine,
+compare + detail pages) also edits these two files — expect a merge conflict in the enhance callback
+and the load() return when that branch lands.
+`npm run check`: 13 errors / 434 warnings — identical with and without this change. Vercel branch
+build used as the compile gate. Pushed to master at the user's request ("I just want this done quickly").
+Deployment: preview — https://bioscale-operations-system-mongodb-gs3d8eowp-brevitest.vercel.app
+Source: branch fix/sonic-small-files-via-bims @ commit 4b764499 (pre-rebase; same code as cfbdd3f1)
+What this deployment is for: compile gate before master (GitHub deployment 6863769111).
+Deployment: production — https://bioscale-operations-system-mongodb-awio86h4a-brevitest.vercel.app
+Source: branch master (= fix/sonic-small-files-via-bims, rebased) @ commit cfbdd3f1
+Retrieve this exact code: git checkout master at commit cfbdd3f1
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: sonic recordings under 4.5 MB upload through BIMS (proxied action).
+  GitHub deployment 6863843473 (Production). Smoke: /validation/sonic 302 (auth redirect expected).
 
 ================================================================================
 2026-09-30 — feat/sonic-fingerprint-analysis — VALIDATION-08: sonic fingerprint analysis on /validation/sonic

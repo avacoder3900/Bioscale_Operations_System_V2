@@ -143,7 +143,7 @@ Research-only collections (shared Mongo with brevitest-research-v2 — readable 
   reagent_inventory 🟢 — physical reagent items. _id is UUID barcode. catalogId→reagent_catalog, variantKey, status: active/depleted/expired/discarded. preparedFromExecutionId→protocol_executions (recursion anchor for trace_reagent_chain), inspections[]
   protocol_definitions 🟢 — versioned recipes. status: draft/active/archived. parameters[].{key,cellRef,isInput}, materials[].catalogId→reagent_catalog, steps[].reagents[].{materialKey,amountFormula}, cellMap(Mixed Excel formula graph — ⚠ EMPTY on live protocols pending re-extraction), versionHistory[].previousDefinition snapshot
   protocol_executions 🟢 — lab notebook records. definitionId→protocol_definitions, variantKey, status: in_progress/completed/aborted. parameterValues, materialsUsed[].inventoryId→reagent_inventory, stepRecords[], outputs[].{barcode,volume,createdAt} multi-aliquot, experimentId→experiments. Legacy outputInventoryId/outputBarcode/outputVolume mirror outputs[0]
-  spus 🟡 — sacred SPU device. shared with BIMS (listed above under Device & Firmware). Research-side schema declares strict:false + opticalCalibration{channels:{A,B,C}.{rawF3,factor}}; rest is dynamic
+  spus 🟡 — sacred SPU device. shared with BIMS (listed above under Device & Firmware). Research-side schema declares strict:false only (the 2026 opticalCalibration device-factor experiment was abandoned and stripped 2026-10-03); rest is dynamic
 
 § 3. CARTRIDGE LIFECYCLE (the golden thread)
 

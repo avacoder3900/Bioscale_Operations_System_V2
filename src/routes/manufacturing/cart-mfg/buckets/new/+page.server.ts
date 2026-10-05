@@ -15,17 +15,18 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	if (!locals.user) redirect(302, '/login');
 	requirePermission(locals.user, 'manufacturing:read');
 	await connectDB();
-	const [recent, mode] = await Promise.all([
+	// Minting and replacing a sticker are badge-gated again (2026-10-05; the page
+	// had no badge from 2026-09-30). Naming a bucket still is not.
+	const [recent, badge] = await Promise.all([
 		ProductionBucket.find({})
 			.select('_id barcode nickname state cycleCount createdAt createdBy')
 			.sort({ createdAt: -1 })
 			.limit(25)
-			.lean() as Promise<any[]>,
-		// BADGE-SYSTEM_PLAN.md §17.3: decides whether the mint form asks for a badge.
+			.lean() as any as Promise<any[]>,
 		badgeMode().catch(() => 'required' as const)
 	]);
 	return {
-		badgeMode: mode,
+		badgeMode: badge,
 		// Deep link from the board / history page: preselect this bucket for a sticker replacement.
 		presetBucket: url.searchParams.get('bucket')?.trim() || null,
 		recent: recent.map(b => ({
@@ -89,11 +90,12 @@ export const actions: Actions = {
 			const r = await replaceBucketSticker({
 				bucketId: String(d.get('bucketId') ?? ''),
 				qr: String(d.get('qr') ?? ''),
+				badge: String(d.get('badge') ?? ''),
 				user: { _id: locals.user._id, username: locals.user.username }
 			});
 			return { replace: { success: true, ...r } };
 		} catch (e) {
-			if (e instanceof BucketError) return fail(e.status, { replace: { error: e.message } });
+			if (e instanceof BucketError) return fail(e.status, { replace: { error: e.message, code: e.code ?? null } });
 			throw e;
 		}
 	}

@@ -25,14 +25,14 @@ export const config = { maxDuration: 60 };
 
 // The bucket_* stages are the production-bucket funnel (BUCKET-SYSTEM_PLAN v2 §9):
 // cartridges are born at Barcoded when scanned into a bucket and move with it
-// through Pressed to 'backing' ("Backed"), where the tub waits for
+// through Unpressed to 'backing' ("Backed"), where the tub waits for
 // the wax-fill operator. The 'backing' view lists those buckets plus any loose
 // backed carts (legacy WI-01 draws) and legacy BackingLot aggregates.
-const STAGE_KEYS = ['bucket_barcoded', 'bucket_unpressed', 'bucket_pressed', 'backing', 'wax_fill', 'cooling', 'reagent', 'seal', 'store'] as const;
+const STAGE_KEYS = ['bucket_barcoded', 'bucket_unpressed', 'backing', 'wax_fill', 'cooling', 'reagent', 'seal', 'store'] as const;
 type StageKey = (typeof STAGE_KEYS)[number];
 
 const BUCKET_STAGE_FOR_KEY: Partial<Record<StageKey, BucketStage>> = {
-	bucket_barcoded: 'barcoded', bucket_unpressed: 'unpressed', bucket_pressed: 'pressed'
+	bucket_barcoded: 'barcoded', bucket_unpressed: 'unpressed'
 };
 
 export interface PipelineRow {
@@ -74,12 +74,7 @@ const STAGE_META: Record<StageKey, StageMeta> = {
 	},
 	bucket_unpressed: {
 		key: 'bucket_unpressed', label: 'Unpressed', color: 'tron-blue',
-		description: 'Buckets staged for the press (thermoseal consumed at this step).',
-		headers: bucketHeaders
-	},
-	bucket_pressed: {
-		key: 'bucket_pressed', label: 'Pressed', color: 'tron-yellow',
-		description: 'Buckets off the press. Advance to "Backed" on the bucket board.',
+		description: 'Buckets staged for the press (thermoseal consumed at this step). Advance to "Backed" on the bucket board once pressed and backed.',
 		headers: bucketHeaders
 	},
 	backing: {

@@ -1,6 +1,8 @@
 <script lang="ts">
 	// One CR80 badge card (85.6 × 54 mm), printed 1:1 — BADGE-SYSTEM_PLAN.md §17.2.
-	// Shared by the single-badge print page and the batch print sheet.
+	// Shared by the single-badge print page and the batch print sheet. With a
+	// photo (§17.6) the portrait sits left of the QR; without one the card is
+	// exactly what it was before.
 	import { onMount } from 'svelte';
 	import bwipjs from 'bwip-js/browser';
 
@@ -9,8 +11,9 @@
 		displayName: string;
 		username?: string | null;
 		status: 'active' | 'revoked';
+		photoUrl?: string | null;
 	}
-	let { code, displayName, username = null, status }: Props = $props();
+	let { code, displayName, username = null, status, photoUrl = null }: Props = $props();
 
 	let canvas: HTMLCanvasElement | undefined = $state();
 	let qrError = $state('');
@@ -30,8 +33,11 @@
 <div class="badge-card">
 	{#if status === 'revoked'}<div class="revoked">REVOKED</div>{/if}
 	<div class="name">{displayName}</div>
-	<div class="qr">
-		{#if qrError}<div class="qr-error">QR failed: {qrError}</div>{:else}<canvas bind:this={canvas}></canvas>{/if}
+	<div class="media">
+		{#if photoUrl}<img class="photo" src={photoUrl} alt="" />{/if}
+		<div class="qr">
+			{#if qrError}<div class="qr-error">QR failed: {qrError}</div>{:else}<canvas bind:this={canvas}></canvas>{/if}
+		</div>
 	</div>
 	<div class="code">{code}</div>
 	<div class="brand">BIMS{username ? ` · ${username}` : ''}</div>
@@ -59,6 +65,9 @@
 		page-break-inside: avoid;
 	}
 	.name { font-size: 5.2mm; font-weight: 700; line-height: 1.1; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+	.media { display: flex; align-items: center; justify-content: center; gap: 4mm; min-height: 0; }
+	/* 4:5 portrait, the same height as the QR so the two read as one row. */
+	.photo { width: 24mm; height: 30mm; object-fit: cover; border-radius: 1.5mm; border: 0.2mm solid #bbb; background: #eee; }
 	.qr { display: flex; align-items: center; justify-content: center; min-height: 0; }
 	.qr canvas { height: 30mm; width: 30mm; image-rendering: pixelated; }
 	.qr-error { font-size: 2.5mm; color: #b00; }

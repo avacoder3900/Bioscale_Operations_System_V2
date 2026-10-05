@@ -1,7 +1,7 @@
 /**
  * Sync each OT-2's on-robot protocol library into its OpentronsRobot.protocols[]
  * doc in Mongo. That embedded array is what the wax-filling / reagent-filling
- * Start Run panels read (src/routes/manufacturing/cart-mfg/*/+page.server.ts) —
+ * Start Run panels read (src/routes/manufacturing/cart-mfg/{wax,reagent}-filling/+page.server.ts) —
  * uploading a protocol to a robot does NOT populate it on its own, which is why a
  * freshly-uploaded wax protocol never appears on the Wax page.
  *
@@ -20,6 +20,12 @@
  *   npx tsx scripts/sync-robot-protocols.ts                                  # dry run (no writes)
  *   SYNC_APPLY=1 npx tsx scripts/sync-robot-protocols.ts                     # write to Mongo
  *   SYNC_ROBOT=OT2CEP20210817R04.local npx tsx scripts/sync-robot-protocols.ts   # one robot
+ *
+ * Over the tailnet (OT2-TAILNET-5 S9), from any tailnet machine — no lab LAN:
+ *   ROBOT_HOST=https://ot2-b14.tailf65a70.ts.net npx tsx scripts/sync-robot-protocols.ts
+ * ROBOT_HOST syncs ONE robot: the record whose connection.directUrl (or ip) is
+ * that host, dialled at ROBOT_HOST (https, no port). If it matches no record,
+ * add SYNC_ROBOT=<the record's ip> to say which. Unset = unchanged.
  */
 
 import * as dotenv from 'dotenv';
@@ -27,13 +33,16 @@ import mongoose from 'mongoose';
 import { fileURLToPath } from 'url';
 import path from 'path';
 import { randomUUID } from 'node:crypto';
+import robotHost from './ot2-robot-host.cjs';
+
+const { robotUrl, robotHostFromEnv, matchesRobotRecord } = robotHost;
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.resolve(__dirname, '..', '.env') });
 
 const APPLY = process.env.SYNC_APPLY === '1';
 const ONLY_HOST = process.env.SYNC_ROBOT?.trim() || null;
-const PORT = 31950;
+const ROBOT_HOST = robotHostFromEnv();
 const OT_HEADERS = { 'opentrons-version': '*' };
 
 function deriveProtocolType(filename: string): 'wax-filling' | 'reagent-filling' | 'other' {
@@ -51,7 +60,7 @@ function mainFileName(p: any): string {
 }
 
 async function robotGet(host: string, pathName: string): Promise<any> {
-	const res = await fetch(`http://${host}:${PORT}${pathName}`, {
+	const res = await fetch(robotUrl(host, pathName), {
 		headers: OT_HEADERS,
 		signal: AbortSignal.timeout(20_000)
 	});
@@ -102,14 +111,23 @@ async function main() {
 
 	let robots = await coll.find({ isActive: { $ne: false } }).toArray();
 	if (ONLY_HOST) robots = robots.filter((r) => r.ip === ONLY_HOST);
+	else if (ROBOT_HOST) robots = robots.filter((r) => matchesRobotRecord(ROBOT_HOST, r as any));
+	if (ROBOT_HOST && robots.length > 1) {
+		throw new Error(`ROBOT_HOST=${ROBOT_HOST} matches ${robots.length} robot records — add SYNC_ROBOT=<ip> to pick one`);
+	}
 	if (robots.length === 0) {
-		console.log('No matching robots in Mongo.');
+		console.log(
+			ROBOT_HOST
+				? `No robot record has connection.directUrl/ip = ${ROBOT_HOST}. Add SYNC_ROBOT=<the record's ip> to pick one.`
+				: 'No matching robots in Mongo.'
+		);
 		await mongoose.disconnect();
 		return;
 	}
 
 	for (const robot of robots) {
-		const host = robot.ip;
+		// ROBOT_HOST (the tailnet origin) replaces the LAN ip as the dial address.
+		const host = ROBOT_HOST ?? robot.ip;
 		console.log(`\n→ ${robot.name}  (${host})`);
 		console.log('─'.repeat(78));
 

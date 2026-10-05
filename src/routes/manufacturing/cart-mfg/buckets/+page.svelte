@@ -2,7 +2,7 @@
 	import { deserialize, enhance } from '$app/forms';
 	import { goto, invalidateAll } from '$app/navigation';
 	import { page } from '$app/stores';
-	import type { BoardBucket, BoardCycle, BucketStage, ChangeLogRow, RegistryRow, StageCounts } from '$lib/server/services/bucket-service';
+	import type { BoardBucket, BoardCycle, BucketStage, CartStatusLine, ChangeLogRow, RegistryRow, StageCounts } from '$lib/server/services/bucket-service';
 
 	type ActionResult = { success?: boolean; error?: string; code?: string | null; [k: string]: unknown };
 	interface Props {
@@ -69,6 +69,27 @@
 	let listInput = $state('');
 	let residualDisposition = $state<'merge' | 'scrap' | ''>('');
 
+	// ── operator badge (user, 2026-09-30) ────────────────────────────────────
+	// One badge for the whole rail. It is asked for at the gated steps —
+	// starting a pass (2026-10-05), scanning carts into a bucket and taking a
+	// mis-scan back out (2026-10-05), EVERY advance (2026-10-02: "require a scan
+	// in at every phase"), discarding carts (advance discards, Discard carts…,
+	// audit discards / write-offs, leftover discards), Move to oven and retiring
+	// a bucket (2026-10-05, admin badge). Scanned once into any badge box (or into a cart box: a
+	// BDG- code is routed here), it rides on every scan-in POST and on each gated
+	// form until the server rejects it or the operator changes it.
+	const BADGE_RE = /^BDG-[A-Z0-9]{10}$/i;
+	let badge = $state('');
+	let scanOperator = $state('');   // who the last scan-in was recorded to (from the server)
+	const badgeRequired = $derived(data.badgeMode === 'required');
+	function takeBadge(code: string): boolean {
+		if (!BADGE_RE.test(code)) return false;
+		badge = code; scanOperator = '';
+		return true;
+	}
+	function clearBadge() { badge = ''; scanOperator = ''; focusBadge(); }
+	function focusBadge() { setTimeout(() => document.getElementById('badgeScan')?.focus(), 60); }
+
 	// Leftover flow (v2 §7, simplified 2026-09-23): Merge or Discard. Merge goes to a
 	// bucket at the stage the carts were last in (this bucket's previous pass);
 	// Discard is a bulk QR scan + journal. Carts are tracked by id, so both need
@@ -87,14 +108,21 @@
 		return residualDest && opts.some(o => o.bucketId === residualDest) ? residualDest : (opts[0]?.bucketId ?? '');
 	}
 
-	// Cart QR search under the board: read-only, one line back (?/cartLookup).
+	// Cart QR search under the board: read-only, one answer back (?/cartLookup).
+	// Since 2026-10-02 the answer is structured (cart status, the bucket it is in
+	// with its nickname + state) and rendered as colour-coded pills, the way the
+	// bucket search list and the bucket log mark status; `line` is the plain-text
+	// fallback for "not found" and errors.
+	type CartHit = CartStatusLine & { found: true; cartridgeId: string };
+	type CartLookup = { ok: boolean; line: string; hit: CartHit | null };
 	let cartFind = $state('');
 	let cartFindBusy = $state(false);
 	let cartFindLine = $state('');
 	let cartFindOk = $state(true);
+	let cartFindHit = $state<CartHit | null>(null);
 	// One read-only lookup, shared by the board box and the leftover panel's
-	// "where does it belong?" search: scan a cart, get one line back.
-	async function lookupCart(code: string): Promise<{ ok: boolean; line: string }> {
+	// "where does it belong?" search.
+	async function lookupCart(code: string): Promise<CartLookup> {
 		try {
 			const fd = new FormData();
 			fd.set('barcode', code);
@@ -102,13 +130,14 @@
 			const result = deserialize(await res.text());
 			if (result.type === 'success') {
 				const r = (result.data as any)?.cartLookup;
-				return { ok: !!r?.found, line: r?.line ?? 'No answer from the server.' };
+				const ok = !!r?.found;
+				return { ok, line: r?.line ?? 'No answer from the server.', hit: ok && r?.cartridgeId ? (r as CartHit) : null };
 			}
-			if (result.type === 'failure') return { ok: false, line: (result.data as any)?.cartLookup?.error ?? `Error ${result.status}` };
-			if (result.type === 'error') return { ok: false, line: result.error?.message ?? 'Lookup failed' };
-			return { ok: false, line: 'Lookup failed' };
+			if (result.type === 'failure') return { ok: false, line: (result.data as any)?.cartLookup?.error ?? `Error ${result.status}`, hit: null };
+			if (result.type === 'error') return { ok: false, line: result.error?.message ?? 'Lookup failed', hit: null };
+			return { ok: false, line: 'Lookup failed', hit: null };
 		} catch (e) {
-			return { ok: false, line: e instanceof Error ? e.message : 'Lookup failed' };
+			return { ok: false, line: e instanceof Error ? e.message : 'Lookup failed', hit: null };
 		}
 	}
 	async function findCart() {
@@ -119,10 +148,29 @@
 			const r = await lookupCart(code);
 			cartFindOk = r.ok;
 			cartFindLine = r.line;
+			cartFindHit = r.hit;
 		} finally {
 			cartFindBusy = false;
 		}
 	}
+	// Pill colours for a cart's own status: the bucket stages follow the column
+	// tints (grey / blue / purple); anything downstream of the bucket (wax filled,
+	// assembled, …) is neutral. Mirrors regStateTint for buckets.
+	const cartStatusTint: Record<string, string> = {
+		barcoded: 'text-gray-300 border-gray-500/40 bg-gray-700/20',
+		unpressed: 'text-blue-300 border-blue-500/40 bg-blue-900/20',
+		pressed: 'text-blue-300 border-blue-500/40 bg-blue-900/20',
+		backing: 'text-[var(--color-tron-purple)] border-[var(--color-tron-purple)]/40 bg-[var(--color-tron-purple)]/10'
+	};
+	const cartStatusTintDefault = 'text-[var(--color-tron-text)] border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)]';
+	// The "where" pill: green when the cart is a member of an open pass, yellow
+	// when it has fallen off one, grey when its last pass is closed.
+	const relationTint: Record<string, string> = {
+		member: 'text-green-300 border-green-500/40 bg-green-900/20',
+		taken_off: 'text-[var(--color-tron-yellow)] border-[var(--color-tron-yellow)]/40 bg-[var(--color-tron-yellow)]/10',
+		closed: 'text-[var(--color-tron-text-secondary)] border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)]'
+	};
+	const relationLabel: Record<string, string> = { member: 'Belongs in', taken_off: 'Taken off', closed: 'Last seen in' };
 
 	// Leftover panel search (user, 2026-09-25): a cart found in an empty tub —
 	// where does it belong? Same lookup, its own box so it sits next to the
@@ -131,6 +179,7 @@
 	let whereBusy = $state(false);
 	let whereLine = $state('');
 	let whereOk = $state(true);
+	let whereHit = $state<CartHit | null>(null);
 	async function findWhere() {
 		const code = whereFind.trim();
 		if (!code || whereBusy) return;
@@ -139,6 +188,7 @@
 			const r = await lookupCart(code);
 			whereOk = r.ok;
 			whereLine = r.line;
+			whereHit = r.hit;
 		} finally {
 			whereBusy = false;
 			setTimeout(() => (document.getElementById('whereFind') as HTMLInputElement | null)?.select(), 30);
@@ -169,16 +219,27 @@
 	// duplicate, so this never needs clearing and can never disagree with `data`.
 	let scanAdded = $state<Record<string, string[]>>({});
 	let scanRemoved = $state<Record<string, string[]>>({});
+	// Queued but not yet confirmed (2026-10-02). The count used to move only when
+	// the server confirmed a scan, and scans confirm one at a time — each confirm
+	// is a full round trip — so with the gun at a cart a second the card and the
+	// stage tile trailed the gun by the length of the queue. A pending id counts
+	// exactly like an added one; on confirm it moves to scanAdded, on failure it is
+	// dropped, so the count visibly steps back and the code is in "did not take".
+	let scanPending = $state<Record<string, string[]>>({});
 
 	function overlay(c: BoardCycle): BoardCycle {
 		const added = scanAdded[c.cycleId];
+		const pending = scanPending[c.cycleId];
 		const removed = scanRemoved[c.cycleId];
-		if (!added?.length && !removed?.length) return c;
+		if (!added?.length && !pending?.length && !removed?.length) return c;
 		const gone = new Set(removed ?? []);
 		const ids = c.cartridgeIds.filter(id => !gone.has(id));
 		const seen = new Set(ids);
-		for (const id of added ?? []) if (!seen.has(id) && !gone.has(id)) { ids.push(id); seen.add(id); }
+		for (const id of [...(added ?? []), ...(pending ?? [])]) if (!seen.has(id) && !gone.has(id)) { ids.push(id); seen.add(id); }
 		return { ...c, cartridgeIds: ids, quantity: ids.length };
+	}
+	function settlePending(cycleId: string, code: string) {
+		scanPending = { ...scanPending, [cycleId]: (scanPending[cycleId] ?? []).filter(c => c !== code) };
 	}
 	// Every read of an open pass goes through here, so the card, the rail and the
 	// audit's "missing members" list all see the same membership.
@@ -186,7 +247,7 @@
 	// What the overlay adds to each stage's cartridge tile, so the count ticks up
 	// with the scans instead of waiting for the next refresh.
 	const stageCartDelta = $derived.by(() => {
-		const d: Record<string, number> = { barcoded: 0, unpressed: 0, pressed: 0, backing: 0 };
+		const d: Record<string, number> = { barcoded: 0, unpressed: 0, backing: 0 };
 		for (const base of data.board.cycles) {
 			const live = boardCycles.find(c => c.cycleId === base.cycleId);
 			if (live && d[base.stage] !== undefined) d[base.stage] += live.quantity - base.quantity;
@@ -195,7 +256,7 @@
 	});
 
 	const cyclesByStage = $derived.by(() => {
-		const m: Record<BucketStage, BoardCycle[]> = { barcoded: [], unpressed: [], pressed: [], backing: [] };
+		const m: Record<BucketStage, BoardCycle[]> = { barcoded: [], unpressed: [], backing: [] };
 		for (const c of boardCycles) m[c.stage]?.push(c);
 		return m;
 	});
@@ -311,12 +372,15 @@
 	function nameOf(b: { nickname: string | null; barcode: string | null; bucketId: string }): string {
 		return b.nickname ?? shortQr(b.barcode) ?? b.bucketId;
 	}
-	function resetLists() { discardList = []; scrapList = []; residualList = []; listInput = ''; residualDisposition = ''; residualDest = ''; cartScanError = ''; cartScanOk = ''; scanFailures = []; whereFind = ''; whereLine = ''; whereOk = true; }
+	function resetLists() { discardList = []; scrapList = []; residualList = []; listInput = ''; residualDisposition = ''; residualDest = ''; cartScanError = ''; cartScanOk = ''; scanFailures = []; whereFind = ''; whereLine = ''; whereOk = true; whereHit = null; }
 
-	function openCycle(c: BoardCycle) { panel = { kind: 'cycle', cycleId: c.cycleId, mode: 'view' }; resetLists(); if (c.stage === 'barcoded') focusCartScan(); }
+	function openCycle(c: BoardCycle) { panel = { kind: 'cycle', cycleId: c.cycleId, mode: 'view' }; resetLists(); if (c.stage === 'barcoded') focusScanEntry(); }
 	function setMode(mode: CycleMode) {
 		if (panel.kind === 'cycle') panel = { kind: 'cycle', cycleId: panel.cycleId, mode };
 		resetLists();
+		// Every advance is badge-gated (2026-10-02): land the gun on the badge box
+		// when no badge is on yet, so the first scan is the badge, not a cart.
+		if (mode === 'advance' && badgeRequired && !badge.trim()) focusBadge();
 	}
 	function openResidual(bucketId: string) { resetLists(); panel = { kind: 'residual', bucketId }; }
 	function openBucket(b: BoardBucket) {
@@ -379,6 +443,7 @@
 		const code = listInput.trim();
 		listInput = '';
 		if (!code) return;
+		if (takeBadge(code)) return; // a badge scanned into a cart list goes to the badge box
 		if (target === 'discard') { if (!discardList.includes(code)) discardList = [...discardList, code]; }
 		else if (target === 'scrap') { if (!scrapList.includes(code)) scrapList = [...scrapList, code]; }
 		else { if (!residualList.includes(code)) residualList = [...residualList, code]; }
@@ -390,6 +455,8 @@
 	}
 
 	function focusCartScan() { setTimeout(() => document.getElementById('cartScan')?.focus(), 60); }
+	/** Where the gun should land on a Barcoded pass: the badge box until a badge is on, then the cart box. */
+	function focusScanEntry() { if (badgeRequired && !badge) focusBadge(); else focusCartScan(); }
 
 	// A fast gun can glue two 36-character labels into one read. WI-01 learned
 	// this the hard way (87 merged codes became cartridge records before the
@@ -425,10 +492,18 @@
 		if (codes.length > 1) cartScanOk = `${codes.length} labels read as one — scanning them separately.`;
 		const members = new Set(panelCycle?.cartridgeIds ?? []);
 		for (const code of codes) {
-			if (members.has(code)) { cartScanError = `${code} is already in this bucket.`; continue; }
+			// The badge is usually the first thing scanned, and the gun types into
+			// whatever box is focused — so a badge in the cart box is taken as the badge.
+			if (takeBadge(code)) { cartScanError = ''; cartScanOk = 'Badge scanned — now scan the carts.'; focusCartScan(); continue; }
+			if (badgeRequired && !badge) { cartScanError = 'Scan your badge first, then the carts.'; focusBadge(); continue; }
+			// Queued first: a pending id is already a member through the overlay, so
+			// the membership check alone would call a double read "already in".
 			if (scanQueue.some(q => q.code === code)) { cartScanError = `${code} is already queued.`; continue; }
+			if (members.has(code)) { cartScanError = `${code} is already in this bucket.`; continue; }
 			cartScanError = '';
 			scanQueue = [...scanQueue, { code, cycleId }];
+			// Counted now, not when the server answers — the gun does not wait.
+			scanPending = { ...scanPending, [cycleId]: [...(scanPending[cycleId] ?? []), code] };
 		}
 		void pumpCartScans();
 	}
@@ -444,12 +519,15 @@
 					const fd = new FormData();
 					fd.set('cycleId', cycleId);
 					fd.set('barcode', code);
+					fd.set('badge', badge);   // the gated step: every scan-in carries the badge
 					const res = await fetch('?/scanIn', { method: 'POST', body: fd, headers: { 'x-sveltekit-action': 'true' } });
 					const result = deserialize(await res.text());
 					if (result.type === 'success') {
 						scanAdded = { ...scanAdded, [cycleId]: [...(scanAdded[cycleId] ?? []), code] };
 						scanRemoved = { ...scanRemoved, [cycleId]: (scanRemoved[cycleId] ?? []).filter(c => c !== code) };
 						cartScanOk = `${code} scanned in`;
+						const who = (result.data as any)?.scanIn?.operator;
+						if (typeof who === 'string') scanOperator = who;
 					} else {
 						const msg = result.type === 'failure'
 							? ((result.data as any)?.scanIn?.error ?? `Error ${result.status}`)
@@ -459,12 +537,18 @@
 						// stack up under the box until they are dismissed.
 						scanFailures = [...scanFailures, { code, error: msg }];
 						cartScanError = msg;
+						// A refused badge (unknown, revoked, not allowed) is cleared so the
+						// next scan into the badge box replaces it rather than appending.
+						const errCode = result.type === 'failure' ? (result.data as any)?.scanIn?.code : null;
+						if (typeof errCode === 'string' && errCode.startsWith('BADGE') && errCode !== 'BADGE') { badge = ''; scanOperator = ''; focusBadge(); }
 					}
 				} catch (e) {
 					const msg = e instanceof Error ? e.message : 'Scan failed';
 					scanFailures = [...scanFailures, { code, error: msg }];
 					cartScanError = msg;
 				}
+				// Confirmed ids are in scanAdded by now; failed ones leave the count.
+				settlePending(cycleId, code);
 				scanQueue = scanQueue.slice(1); // codes appended while that POST ran are kept
 			}
 		} finally {
@@ -477,10 +561,13 @@
 		if (panel.kind !== 'cycle') return;
 		const cycleId = panel.cycleId;
 		cartScanError = ''; cartScanOk = '';
+		// Gated step (2026-10-05): taking a cart back out needs the badge too.
+		if (badgeRequired && !badge) { cartScanError = 'Scan your badge first, then remove the cart.'; focusBadge(); return; }
 		try {
 			const fd = new FormData();
 			fd.set('cycleId', cycleId);
 			fd.set('barcode', code);
+			fd.set('badge', badge);
 			const res = await fetch('?/unscan', { method: 'POST', body: fd, headers: { 'x-sveltekit-action': 'true' } });
 			const result = deserialize(await res.text());
 			if (result.type === 'success') {
@@ -488,7 +575,11 @@
 				scanAdded = { ...scanAdded, [cycleId]: (scanAdded[cycleId] ?? []).filter(c => c !== code) };
 				cartScanOk = `${code} removed`;
 				scheduleBoardRefresh();
-			} else if (result.type === 'failure') cartScanError = (result.data as any)?.unscan?.error ?? `Error ${result.status}`;
+			} else if (result.type === 'failure') {
+				cartScanError = (result.data as any)?.unscan?.error ?? `Error ${result.status}`;
+				const errCode = (result.data as any)?.unscan?.code;
+				if (typeof errCode === 'string' && errCode.startsWith('BADGE') && errCode !== 'BADGE') { badge = ''; scanOperator = ''; focusBadge(); }
+			}
 			// The mis-scan button used to have no branch here at all, so the 500 the
 			// sacred delete hook threw showed the operator nothing (fixed 2026-09-25
 			// along with the hook itself).
@@ -506,14 +597,51 @@
 		handledForm = form;
 		if (form.advance?.success || form.scrap?.success) { if (panel.kind === 'cycle') setMode('view'); }
 		if (form.audit?.success) { resetAudit(); if (panel.kind === 'cycle') setMode('view'); }
-		if (form.start?.success && typeof form.start.cycleId === 'string') { panel = { kind: 'cycle', cycleId: form.start.cycleId, mode: 'view' }; resetLists(); focusCartScan(); }
+		if (form.start?.success && typeof form.start.cycleId === 'string') { panel = { kind: 'cycle', cycleId: form.start.cycleId, mode: 'view' }; resetLists(); focusScanEntry(); }
 		if (form.residual?.success || form.retire?.success) { panel = { kind: 'none' }; resetLists(); }
+		// A gated form refused the badge: clear it so the next badge scan replaces it.
+		for (const r of [form.start, form.advance, form.scrap, form.moveToOven, form.audit, form.residual, form.retire]) {
+			if (r && typeof r.code === 'string' && r.code.startsWith('BADGE') && r.code !== 'BADGE') { badge = ''; scanOperator = ''; focusBadge(); }
+		}
 	});
 
 	const enhanceBusy = () => {
 		busy = true;
 		return async ({ update }: { update: (o?: { reset?: boolean }) => Promise<void> }) => { await update({ reset: false }); busy = false; };
 	};
+
+	// ── "In oven" — copy every id (user, 2026-10-05) ─────────────────────────
+	// The dropdown shows the first 200 ids as links; this fetches the whole list
+	// and puts it, one id per line, on the clipboard and in a box (the same shape
+	// State Change's cart box takes). Read-only.
+	let ovenIdsText = $state('');
+	let ovenIdsMsg = $state('');
+	let ovenIdsBusy = $state(false);
+	async function copyAllInOven() {
+		ovenIdsBusy = true; ovenIdsMsg = '';
+		try {
+			const res = await fetch('?/inOvenList', { method: 'POST', body: new FormData(), headers: { 'x-sveltekit-action': 'true' } });
+			const result = deserialize(await res.text());
+			if (result.type !== 'success') {
+				ovenIdsMsg = result.type === 'failure' ? ((result.data as any)?.inOvenList?.error ?? `Error ${result.status}`) : 'Could not load the list.';
+				return;
+			}
+			const r = (result.data as any)?.inOvenList as { count: number; ids: string[] };
+			ovenIdsText = r.ids.join('\n');
+			const short = r.count > r.ids.length ? ` (first ${r.ids.length} of ${r.count})` : '';
+			try {
+				await navigator.clipboard.writeText(ovenIdsText);
+				ovenIdsMsg = `${r.ids.length} id${r.ids.length === 1 ? '' : 's'} copied${short}.`;
+			} catch {
+				// Clipboard blocked (permissions, older browser): the box below still has them.
+				ovenIdsMsg = `${r.ids.length} id${r.ids.length === 1 ? '' : 's'} listed below${short} — select and copy.`;
+			}
+		} catch (e) {
+			ovenIdsMsg = e instanceof Error ? e.message : 'Could not load the list.';
+		} finally {
+			ovenIdsBusy = false;
+		}
+	}
 
 	// ── change log ──────────────────────────────────────────────────────────
 	let logFilter = $state('');
@@ -581,8 +709,49 @@
 	const btnPrimary = 'w-full rounded-lg bg-[var(--color-tron-cyan)] py-2.5 text-sm font-bold text-[var(--color-tron-bg-primary)] hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-30';
 	const btnGhost = 'rounded border border-[var(--color-tron-border)] px-3 py-1.5 text-xs text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)] disabled:cursor-not-allowed disabled:opacity-40';
 	const btnDanger = 'w-full rounded-lg border border-red-500/50 bg-red-900/20 py-2.5 text-sm font-semibold text-red-300 hover:bg-red-900/30 disabled:opacity-30';
-	const stageTint: Record<string, string> = { available: 'border-[var(--color-tron-border)]', barcoded: 'border-gray-500/40', unpressed: 'border-blue-500/40', pressed: 'border-amber-500/40', backing: 'border-[var(--color-tron-purple)]/50' };
+	const stageTint: Record<string, string> = { available: 'border-[var(--color-tron-border)]', barcoded: 'border-gray-500/40', unpressed: 'border-blue-500/40', backing: 'border-[var(--color-tron-purple)]/50' };
 </script>
+
+{#snippet badgeField(show: boolean, next?: () => void)}
+	<!-- The badge box for a gated step. `show` = this submission needs a badge
+	     (e.g. an advance only when carts are discarded). When it is not needed, or
+	     enforcement is off, the badge already scanned still rides along hidden so a
+	     scan made anyway is honoured. Enter never submits — the gun sends one. -->
+	{#if show && badgeRequired}
+		<label class="block">
+			<span class="text-[10px] uppercase tracking-wider {badge.trim() ? 'text-[var(--color-tron-text-secondary)]' : 'text-[var(--color-tron-cyan)]'}">Scan your badge{#if badge.trim()} <span class="normal-case tracking-normal text-green-300">· on</span>{/if}</span>
+			<input id="badgeScan" type="text" name="badge" bind:value={badge} required autocomplete="off" placeholder="scan badge…"
+				onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); badge = badge.trim(); scanOperator = ''; next?.(); } }}
+				class="{inputCls} font-mono {badge.trim() ? '' : 'border-[var(--color-tron-cyan)]/60 ring-1 ring-[var(--color-tron-cyan)]/30'}" />
+		</label>
+	{:else}
+		<input type="hidden" name="badge" value={badge} />
+	{/if}
+{/snippet}
+
+{#snippet cartHitView(h: CartHit)}
+	<!-- One found cart (Find a cart box + leftover "where does it belong?"):
+	     cart id · status pill · where it is, headlined by the bucket's nickname
+	     (the way board cards are), with the bucket's state pill from the bucket
+	     log. Read-only — the bucket link is the only thing to click. -->
+	<div class="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+		<span class="font-mono text-[var(--color-tron-text)]">{h.cartridgeId}</span>
+		<span class="rounded border px-1.5 py-0.5 text-[10px] uppercase tracking-wider {cartStatusTint[h.status ?? ''] ?? cartStatusTintDefault}">{h.statusLabel ?? h.status ?? '—'}</span>
+		{#if h.home}
+			<span class="rounded border px-1.5 py-0.5 text-[10px] uppercase tracking-wider {relationTint[h.home.relation]}">{relationLabel[h.home.relation]}</span>
+			<a href="/manufacturing/cart-mfg/buckets/{h.home.bucketId}" class="text-[var(--color-tron-cyan)] hover:underline" title={h.home.barcode ?? h.home.bucketId}>
+				{#if h.home.nickname}<span class="font-medium">{h.home.nickname}</span> <span class="font-mono text-[var(--color-tron-text-secondary)]">{h.home.bucketId}</span>{:else}<span class="font-mono">{h.home.bucketId}</span>{/if}
+				<span class="font-mono text-[var(--color-tron-text-secondary)]">#{h.home.cycleNumber}</span>
+			</a>
+			<span class="text-[var(--color-tron-text-secondary)]">at {stageLabel(h.home.stage)}</span>
+			{#if h.home.bucketState}<span class="rounded border px-1.5 py-0.5 text-[10px] uppercase tracking-wider {regStateTint[h.home.bucketState] ?? ''}">bucket {regStateLabel[h.home.bucketState] ?? h.home.bucketState}</span>{/if}
+		{:else if h.status && cartStatusTint[h.status]}
+			<span class="rounded border px-1.5 py-0.5 text-[10px] uppercase tracking-wider {relationTint.taken_off}">On no open pass</span>
+		{/if}
+		{#if h.legacyLotId}<span class="text-[var(--color-tron-text-secondary)]">WI-01 lot <span class="font-mono">{h.legacyLotId}</span> (legacy)</span>{/if}
+		{#if h.since}<span class="font-mono text-[10px] text-[var(--color-tron-text-secondary)]">since {fmtAt(h.since)}</span>{/if}
+	</div>
+{/snippet}
 
 {#snippet scanList(target: 'discard' | 'scrap' | 'residual', list: string[], placeholder: string)}
 	<div>
@@ -606,7 +775,7 @@
 	<div class="flex flex-wrap items-end justify-between gap-3">
 		<div>
 			<h1 class="text-2xl font-semibold text-[var(--color-tron-text)]">Production Buckets</h1>
-			<p class="text-xs text-[var(--color-tron-text-secondary)]">Stick a QR on each shell and scan it into a bucket. Whole buckets move Barcoded → Unpressed → Pressed → {data.backedLabel}; <em>Move to oven</em> frees the carts from the bucket and returns it to Available. Carts stay backed until wax filling scans them in.</p>
+			<p class="text-xs text-[var(--color-tron-text-secondary)]">Stick a QR on each shell and scan it into a bucket. Whole buckets move Barcoded → Unpressed → {data.backedLabel}; <em>Move to oven</em> frees the carts from the bucket and returns it to Available. Carts stay backed until wax filling scans them in.</p>
 		</div>
 		<div class="flex gap-2">
 			<a href="/manufacturing/cart-mfg/buckets/new" class={btnGhost}>New bucket</a>
@@ -614,7 +783,7 @@
 			<a href="/manufacturing/cart-mfg/state-change" class={btnGhost} title="Move individual carts to any status (bucket stages ask for a destination bucket)">Cart state change</a>
 			<!-- Badge Portal link (BADGE-SYSTEM_PLAN.md §17.5): the Require-badge switch lives
 			     there; this only shows to someone the portal will let in. -->
-			{#if data.canBadgeAdmin}<a href="/admin/badges" class="rounded border px-3 py-1.5 text-xs {data.badgeMode === 'required' ? 'border-[var(--color-tron-cyan)]/40 text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10' : 'border-[var(--color-tron-yellow)]/40 text-[var(--color-tron-yellow)] hover:bg-[var(--color-tron-yellow)]/10'}" title="Open the Badge Portal to change whether mint and start-pass require a badge (admin)">Badge required: {data.badgeMode === 'required' ? 'on' : 'off'}</a>{/if}
+			{#if data.canBadgeAdmin}<a href="/admin/badges" class="rounded border px-3 py-1.5 text-xs {data.badgeMode === 'required' ? 'border-[var(--color-tron-cyan)]/40 text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10' : 'border-[var(--color-tron-yellow)]/40 text-[var(--color-tron-yellow)] hover:bg-[var(--color-tron-yellow)]/10'}" title="Open the Badge Portal to change whether scan-in, every advance, discards and move to oven require a badge (admin)">Badge required: {data.badgeMode === 'required' ? 'on' : 'off'}</a>{/if}
 			<a href="/manufacturing/cart-mfg/wax-filling" class={btnGhost}>Wax filling →</a>
 		</div>
 	</div>
@@ -648,8 +817,8 @@
 	{/if}
 
 	<div class="grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
-		<!-- Board: five columns so Backed sits beside Pressed (user, 2026-09-25). -->
-		<div class="grid grid-cols-1 gap-3 md:grid-cols-5">
+		<!-- Board: four columns — Available + the three stages. (Pressed column dropped 2026-10-02, user: redundant.) -->
+		<div class="grid grid-cols-1 gap-3 md:grid-cols-4">
 			<div class="rounded-lg border bg-[var(--color-tron-bg-secondary)] p-2 {data.focusStage === 'available' ? 'ring-1 ring-[var(--color-tron-cyan)]' : 'border-[var(--color-tron-border)]'}">
 				<div class="flex items-center justify-between px-1 pb-2">
 					<span class="text-xs font-semibold uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Available</span>
@@ -751,6 +920,14 @@
 										{/each}
 									</ul>
 									{#if data.inOven.count > data.inOven.ids.length}<p class="mt-1 text-[10px] text-[var(--color-tron-text-secondary)]">+{data.inOven.count - data.inOven.ids.length} more</p>{/if}
+									<!-- Every id, not just the first 200 shown above — one per line. -->
+									<button type="button" onclick={copyAllInOven} disabled={ovenIdsBusy}
+										class="mt-1 text-[10px] uppercase tracking-wider text-[var(--color-tron-cyan)]/80 hover:text-[var(--color-tron-cyan)] disabled:opacity-50">{ovenIdsBusy ? 'Loading…' : `Copy all ${data.inOven.count} ids`}</button>
+									{#if ovenIdsMsg}<p class="mt-1 text-[10px] text-[var(--color-tron-text-secondary)]">{ovenIdsMsg}</p>{/if}
+									{#if ovenIdsText}
+										<textarea readonly rows="6" value={ovenIdsText} onfocus={(e) => (e.currentTarget as HTMLTextAreaElement).select()}
+											class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-2 py-1 font-mono text-[10px] text-[var(--color-tron-text)]"></textarea>
+									{/if}
 								{/if}
 							</details>
 						{/if}
@@ -832,7 +1009,7 @@
 					<div class="mt-2 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] p-2 text-xs">
 						{#if data.scan.kind === 'badge'}
 							{#if data.scan.badge?.displayName}
-								<p class="text-[var(--color-tron-text)]">That is <strong>{data.scan.badge.displayName}</strong>'s badge{data.scan.badge.username ? ` (${data.scan.badge.username})` : ''} — scan a bucket here. Badges go in the badge box when you mint or start a pass.</p>
+								<p class="text-[var(--color-tron-text)]">That is <strong>{data.scan.badge.displayName}</strong>'s badge{data.scan.badge.username ? ` (${data.scan.badge.username})` : ''} — scan a bucket here. Badges go in the badge box when you scan carts into a bucket, advance it a phase, discard carts, or move it to the oven.</p>
 							{:else}
 								<p class="text-[var(--color-tron-yellow)]">{data.scan.badge?.note ?? 'Unknown badge.'}</p>
 							{/if}
@@ -857,7 +1034,7 @@
 						{#if form?.moveToOven?.success}
 							{@const m = form.moveToOven as any}
 							<div class="rounded border border-[var(--color-tron-purple)]/60 bg-[var(--color-tron-purple)]/10 p-2 text-xs text-[var(--color-tron-text)]" role="status">
-								<strong class="text-[var(--color-tron-purple)]">Moved to oven.</strong> {m.released} cart{m.released === 1 ? '' : 's'} freed from {m.bucketId} #{m.cycleNumber}; the bucket is back in Available. They stay backed (see <em>In oven</em> under Backed) until <a href="/manufacturing/cart-mfg/wax-filling" class="underline">wax filling</a> scans them.
+								<strong class="text-[var(--color-tron-purple)]">Moved to oven.</strong> {m.released} cart{m.released === 1 ? '' : 's'} freed from {m.bucketId} #{m.cycleNumber}{#if m.operator} by <strong>{m.operator}</strong>{/if}; the bucket is back in Available. They stay backed (see <em>In oven</em> under Backed) until <a href="/manufacturing/cart-mfg/wax-filling" class="underline">wax filling</a> scans them.
 							</div>
 						{:else}
 							<p class="py-4 text-center text-xs text-[var(--color-tron-text-secondary)]">This pass is no longer on the board (moved to the oven, drawn to wax filling, emptied, or refreshing).</p>
@@ -884,7 +1061,17 @@
 
 						{#if panel.mode === 'view'}
 							{#if c.stage === 'barcoded'}
-								<!-- Barcoded = filling. Scan shells in; each scan is a cartridge's birth. -->
+								<!-- Barcoded = filling. Scan shells in; each scan is a cartridge's birth.
+								     Gated step (2026-09-30): badge first, then carts — the badge rides on
+								     every scan-in POST, and a badge scanned into the cart box is routed up. -->
+								<div class="mt-3 space-y-2">
+									{@render badgeField(true, focusCartScan)}
+									{#if scanOperator}
+										<p class="text-[10px] text-[var(--color-tron-text-secondary)]">Carts are being recorded to <strong class="text-[var(--color-tron-text)]">{scanOperator}</strong>. <button type="button" onclick={clearBadge} class="underline hover:text-[var(--color-tron-text)]">Change badge</button></p>
+									{:else if badgeRequired && !badge.trim()}
+										<p class="text-[10px] text-[var(--color-tron-yellow)]">Scan your badge first — cart scans are held until it is on.</p>
+									{/if}
+								</div>
 								<div class="mt-3">
 									<label for="cartScan" class="text-[10px] uppercase tracking-wider text-[var(--color-tron-cyan)]">Scan carts into this bucket</label>
 									<!-- Never disabled: a disabled input loses focus, and the gun keeps
@@ -941,8 +1128,10 @@
 								{:else}
 									<!-- Backed is the end of the bucket. Move to oven frees the carts from the bucket
 									     and returns it to Available — nothing else (user, 2026-09-25). -->
-									<form method="POST" action="?/moveToOven" use:enhance={enhanceBusy}>
+									<form method="POST" action="?/moveToOven" use:enhance={enhanceBusy} class="space-y-2">
 										<input type="hidden" name="cycleId" value={c.cycleId} />
+										<!-- Gated step (2026-09-30): passing carts to the oven needs a badge. -->
+										{@render badgeField(true)}
 										<button type="submit" disabled={busy || c.quantity === 0}
 											class="w-full rounded-lg border border-[var(--color-tron-purple)]/60 bg-[var(--color-tron-purple)]/10 py-2.5 text-center text-sm font-semibold text-[var(--color-tron-purple)] hover:bg-[var(--color-tron-purple)]/20 disabled:opacity-50"
 											title="Free the carts from this bucket and return it to Available; the carts stay backed until wax filling scans them">{busy ? 'Moving…' : `Move to oven (${c.quantity} cart${c.quantity === 1 ? '' : 's'})`}</button>
@@ -973,6 +1162,10 @@
 									</label>
 									{#if discardList.length >= c.quantity}<p class="text-xs text-red-300">Discarding every cart closes this pass — nothing moves to {nextLabel(c.stage)}.</p>{/if}
 								{/if}
+								<!-- Gated step (2026-10-02, "require a scan in at every phase"): every advance
+								     needs a badge, discards or not. Before this it was asked only when the
+								     discard list was non-empty. -->
+								{@render badgeField(true)}
 								{#if form?.advance?.error}<p class="text-xs text-[var(--color-tron-error)]">{form.advance.error}</p>{/if}
 								<button type="submit" disabled={busy} class={discardList.length >= c.quantity ? btnDanger : btnPrimary}>
 									{busy ? 'Saving…' : discardList.length >= c.quantity ? `Discard all ${c.quantity} & close pass` : discardList.length > 0 ? `Discard ${discardList.length} & move ${c.quantity - discardList.length} → ${nextLabel(c.stage)}` : `Confirm → ${nextLabel(c.stage)}`}
@@ -992,6 +1185,8 @@
 									<span class="text-[10px] uppercase tracking-wider text-red-300">Journal — why (required)</span>
 									<textarea name="journal" rows="3" required placeholder="What happened to them?" class={inputCls}></textarea>
 								</label>
+								<!-- Gated step (2026-09-30): discarding carts needs a badge. -->
+								{@render badgeField(true)}
 								{#if form?.scrap?.error}<p class="text-xs text-[var(--color-tron-error)]">{form.scrap.error}</p>{/if}
 								<button type="submit" disabled={busy || scrapList.length === 0} class={btnDanger}>{busy ? 'Saving…' : `Discard ${scrapList.length} & journal`}</button>
 								<button type="button" class={btnGhost} onclick={() => setMode('view')}>Cancel</button>
@@ -1132,6 +1327,10 @@
 										<textarea name="journal" rows="2" required placeholder="What happened to them?" class={inputCls}></textarea>
 									</label>
 								{/if}
+								<!-- Gated step (2026-09-30): an audit that discards a stray or writes a
+								     missing member off is discarding carts, so it needs a badge; moves and
+								     take-offs do not. -->
+								{@render badgeField(auditDiscards.length > 0 || auditMissingActions.some(m => m.action === 'discard'))}
 								{#if auditIneligible.length > 0}
 									<p class="text-xs text-red-300">Remove the scans the board cannot handle before submitting.</p>
 								{/if}
@@ -1177,15 +1376,10 @@
 							<input type="hidden" name="bucketId" value={b.bucketId} />
 							<input type="hidden" name="emptyConfirmed" value={b.spotCheckPending ? '1' : '0'} />
 							{#if b.spotCheckPending}<p class="text-[10px] text-[var(--color-tron-text-secondary)]">✓ Confirmed empty — recorded on this pass.</p>{/if}
-							{#if data.badgeMode === 'required'}
-								<label class="block">
-									<span class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Scan your badge</span>
-									<input type="text" name="badge" required autocomplete="off" placeholder="scan badge…" class="{inputCls} border-[var(--color-tron-cyan)]/60 ring-1 ring-[var(--color-tron-cyan)]/30 font-mono" />
-								</label>
-							{:else}
-								<p class="text-[10px] text-[var(--color-tron-text-secondary)]">Badge required: <strong>off</strong> — you will be recorded as the operator.{#if data.canBadgeAdmin} <a href="/admin/badges" class="underline">Change</a>{/if}</p>
-							{/if}
-							<p class="text-xs text-[var(--color-tron-text-secondary)]">Pick the lots this pass draws from, then scan shells in one at a time.</p>
+							<p class="text-xs text-[var(--color-tron-text-secondary)]">{#if badgeRequired}Scan your badge, pick{:else}Pick{/if} the lots this pass draws from, then scan the shells in one at a time.</p>
+							<!-- Gated step again (2026-10-05; it was ungated from 2026-09-30): starting a
+							     pass needs a badge. The same badge then carries on to the cart scans. -->
+							{@render badgeField(true)}
 							<label class="block">
 								<span class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Shell lot (PT-CT-104)</span>
 								<select name="shellLotId" required class={inputCls}>
@@ -1231,7 +1425,9 @@
 							<button type="button" onclick={findWhere} disabled={whereBusy || !whereFind.trim()}
 								class="shrink-0 rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 px-3 text-xs font-medium text-[var(--color-tron-cyan)] disabled:opacity-50">{whereBusy ? '…' : 'Find'}</button>
 						</div>
-						{#if whereLine}
+						{#if whereHit}
+							<div class="mt-1">{@render cartHitView(whereHit)}</div>
+						{:else if whereLine}
 							<p class="mt-1 text-xs {whereOk ? 'text-[var(--color-tron-text)]' : 'text-[var(--color-tron-yellow)]'}">{whereLine}</p>
 						{/if}
 					</div>
@@ -1287,6 +1483,8 @@
 								<textarea name="journal" rows="2" required class={inputCls}></textarea>
 							</label>
 						{/if}
+						<!-- Gated step (2026-09-30): discarding leftovers needs a badge; merging does not. -->
+						{@render badgeField(residualDisposition === 'scrap')}
 
 						{#if form?.residual?.error}<p class="text-xs text-[var(--color-tron-error)]">{form.residual.error}</p>{/if}
 						{#if residualDisposition}
@@ -1304,6 +1502,8 @@
 						<p class="font-mono text-lg text-[var(--color-tron-text)]">{nameOf(b)}</p>
 						<p class="text-xs text-[var(--color-tron-text-secondary)]">Retiring is permanent; the bucket's history stays.</p>
 						<label class="block"><span class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Reason (required)</span><input type="text" name="reason" required class={inputCls} /></label>
+						<!-- Gated step (2026-10-05): retiring needs a badge whose holder is a bucket admin. -->
+						{@render badgeField(true)}
 						{#if form?.retire?.error}<p class="text-xs text-[var(--color-tron-error)]">{form.retire.error}</p>{/if}
 						<button type="submit" disabled={busy} class={btnDanger}>Retire bucket</button>
 						<button type="button" class={btnGhost} onclick={() => { panel = { kind: 'start', bucketId: b.bucketId, step: 'form' }; }}>Cancel</button>
@@ -1324,7 +1524,9 @@
 				class="min-h-[44px] w-full max-w-sm rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-3 py-2 font-mono text-sm text-[var(--color-tron-text)] placeholder:font-sans placeholder:text-[var(--color-tron-text-secondary)]/50 focus:border-[var(--color-tron-cyan)] focus:outline-none" />
 			<button type="button" onclick={findCart} disabled={cartFindBusy || !cartFind.trim()}
 				class="min-h-[44px] rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 px-4 text-sm font-medium text-[var(--color-tron-cyan)] disabled:opacity-50">{cartFindBusy ? 'Looking…' : 'Find'}</button>
-			{#if cartFindLine}
+			{#if cartFindHit}
+				{@render cartHitView(cartFindHit)}
+			{:else if cartFindLine}
 				<p class="text-xs {cartFindOk ? 'text-[var(--color-tron-text)]' : 'text-[var(--color-tron-yellow)]'}">{cartFindLine}</p>
 			{/if}
 		</div>

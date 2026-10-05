@@ -8,6 +8,8 @@ export { CartridgeGroup } from './cartridge-group.js';
 export { ReagentBatchRecord } from './reagent-batch-record.js';
 export { ReagentProtocolTemplate } from './reagent-protocol-template.js';
 export { ReagentLot } from './reagent-lot.js';
+export { ReagentSetLot } from './reagent-set-lot.js';
+export { FillLot, fillLotNumber } from './fill-lot.js';
 
 // Tier 2: Operational — Receiving & Inspection
 export { ReceivingLot } from './receiving-lot.js';
@@ -61,6 +63,7 @@ export { OpentronsRobot } from './opentrons-robot.js';
 export { OpentronsScannerPositionSet } from './opentrons-scanner-position-set.js';
 export { OpentronsScannerSweepRun } from './opentrons-scanner-sweep-run.js';
 export { Ot2BridgeCommand } from './ot2-bridge-command.js';
+export { Ot2DirectCall } from './ot2-direct-call.js';
 export { OpentronProtocol } from './opentrons-protocol.js';
 export { OpentronsRunRecord } from './opentrons-run-record.js';
 export { Consumable } from './consumable.js';

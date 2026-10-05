@@ -124,14 +124,13 @@
 <div class="space-y-4">
 	<PartsNav />
 
-	<!-- Production-bucket funnel (BUCKET-SYSTEM_PLAN v2 §9.3): Barcoded → Unpressed → Pressed → Backed.
+	<!-- Production-bucket funnel (BUCKET-SYSTEM_PLAN v2 §9.3): Barcoded → Unpressed → Backed.
 	     Tiles deep-link into the board; Backed counts every cart at status backing and filters this page. -->
 	{#if data.bucketCounts}
 		{@const bc = data.bucketCounts}
 		{@const strip = [
 			{ key: 'barcoded', label: 'Barcoded', value: bc.stages.barcoded.cartridges, sub: `${bc.stages.barcoded.buckets} bkt`, cls: 'text-[var(--color-tron-cyan)]' },
 			{ key: 'unpressed', label: 'Unpressed', value: bc.stages.unpressed.cartridges, sub: `${bc.stages.unpressed.buckets} bkt`, cls: 'text-[var(--color-tron-cyan)]' },
-			{ key: 'pressed', label: 'Pressed', value: bc.stages.pressed.cartridges, sub: `${bc.stages.pressed.buckets} bkt`, cls: 'text-[var(--color-tron-cyan)]' },
 			{ key: 'backing', label: 'Backed', value: bc.stages.backing.cartridges, sub: `${bc.stages.backing.buckets} bkt`, cls: 'text-[var(--color-tron-purple)]' }
 		]}
 		<div class="flex flex-wrap items-stretch gap-2">

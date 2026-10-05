@@ -10,6 +10,7 @@ import { requirePermission } from '$lib/server/permissions';
 import {
 	BucketError, boardData, forceBucketPhase, FORCE_TARGETS, FORCE_TARGET_LABELS, STAGE_LABELS, type ForceTarget
 } from '$lib/server/services/bucket-service';
+import { badgeMode } from '$lib/server/services/badge-service';
 import type { Actions, PageServerLoad } from './$types';
 
 function isBucketAdmin(user: App.Locals['user']): boolean {
@@ -20,8 +21,13 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	if (!locals.user) redirect(302, '/login');
 	requirePermission(locals.user, 'manufacturing:read');
 	await connectDB();
-	const board = await boardData().catch(() => ({ cycles: [] as any[] }));
+	const [board, badge] = await Promise.all([
+		boardData().catch(() => ({ cycles: [] as any[] })),
+		// Badge-gated (2026-10-05): the move asks for a badge whose holder is a bucket admin too.
+		badgeMode().catch(() => 'required' as const)
+	]);
 	return {
+		badgeMode: badge,
 		canOverride: isBucketAdmin(locals.user),
 		presetBucket: url.searchParams.get('bucket')?.trim() || null,
 		targets: FORCE_TARGETS.map(t => ({ key: t, label: FORCE_TARGET_LABELS[t] })),
@@ -44,11 +50,12 @@ export const actions: Actions = {
 				bucket: String(d.get('bucket') ?? ''),
 				target: String(d.get('target') ?? '') as ForceTarget,
 				reason: String(d.get('reason') ?? ''),
+				badge: String(d.get('badge') ?? ''),
 				user: { _id: locals.user._id, username: locals.user.username }
 			});
 			return { move: { success: true, ...r, fromLabel: STAGE_LABELS[r.from], toLabel: FORCE_TARGET_LABELS[r.to] } };
 		} catch (e) {
-			if (e instanceof BucketError) return fail(e.status, { move: { error: e.message } });
+			if (e instanceof BucketError) return fail(e.status, { move: { error: e.message, code: e.code ?? null } });
 			throw e;
 		}
 	}

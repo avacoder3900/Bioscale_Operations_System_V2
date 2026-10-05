@@ -3,10 +3,52 @@ import { hasPermission } from '$lib/server/permissions';
 import { connectDB, Integration } from '$lib/server/db';
 import type { LayoutServerLoad } from './$types';
 
-export const load: LayoutServerLoad = async ({ locals, url }) => {
-	// Public routes that don't require authentication
-	const publicPaths = ['/login', '/logout', '/invite', '/api'];
-	if (publicPaths.some(p => url.pathname === p || url.pathname.startsWith(p + '/'))) {
+// Public routes that don't require authentication
+const PUBLIC_PATHS = ['/login', '/logout', '/invite', '/api'];
+
+type IntegrationStatus = { isBoxConnected: boolean; particleStatus: 'connected' | 'stale' | 'disconnected' };
+
+// The header's Box / Particle dots. Two reads that were re-run on every page
+// change, in series, for a status that changes a few times a day — cached per
+// process for a minute (perf, 2026-09-30). Failures fall back to "not
+// connected", exactly as before, and are not cached.
+const INTEGRATION_TTL_MS = 60_000;
+let integrationCache: { at: number; value: IntegrationStatus } | null = null;
+
+async function integrationStatus(): Promise<IntegrationStatus> {
+	if (integrationCache && Date.now() - integrationCache.at < INTEGRATION_TTL_MS) return integrationCache.value;
+	const value: IntegrationStatus = { isBoxConnected: false, particleStatus: 'disconnected' };
+	let ok = true;
+	try {
+		const [boxInteg, particleInteg] = await Promise.all([
+			Integration.findOne({ type: 'box' }).select('accessToken').lean(),
+			Integration.findOne({ type: 'particle' }).select('isActive syncIntervalMinutes lastSyncAt').lean()
+		]);
+		value.isBoxConnected = Boolean(boxInteg?.accessToken);
+		if (particleInteg?.isActive) {
+			const staleThreshold = ((particleInteg.syncIntervalMinutes as number) ?? 30) * 2 * 60 * 1000;
+			if (particleInteg.lastSyncAt && Date.now() - new Date(particleInteg.lastSyncAt).getTime() < staleThreshold) {
+				value.particleStatus = 'connected';
+			} else {
+				value.particleStatus = 'stale';
+			}
+		}
+	} catch {
+		ok = false; // non-critical
+	}
+	if (ok) integrationCache = { at: Date.now(), value };
+	return value;
+}
+
+export const load: LayoutServerLoad = async ({ locals, url, untrack }) => {
+	// `untrack`: reading url.pathname here used to make SvelteKit re-run this
+	// load on EVERY client-side navigation (it tracks url accesses), so each
+	// page change paid the session lookups AND these queries again before the
+	// page's own load could start. The public-path check only matters on a hard
+	// load / invalidateAll — a client-side hop into a protected page already has
+	// the user, and a login/logout redirect invalidates everything (perf, 2026-09-30).
+	const pathname = untrack(() => url.pathname);
+	if (PUBLIC_PATHS.some(p => pathname === p || pathname.startsWith(p + '/'))) {
 		return {};
 	}
 
@@ -15,27 +57,7 @@ export const load: LayoutServerLoad = async ({ locals, url }) => {
 	}
 
 	await connectDB();
-
-	// Check Box.com connection status
-	let isBoxConnected = false;
-	try {
-		const boxInteg = await Integration.findOne({ type: 'box' }).lean();
-		isBoxConnected = Boolean(boxInteg?.accessToken);
-	} catch { /* non-critical */ }
-
-	// Check Particle connection status
-	let particleStatus: 'connected' | 'stale' | 'disconnected' = 'disconnected';
-	try {
-		const particleInteg = await Integration.findOne({ type: 'particle' }).lean();
-		if (particleInteg?.isActive) {
-			const staleThreshold = ((particleInteg.syncIntervalMinutes as number) ?? 30) * 2 * 60 * 1000;
-			if (particleInteg.lastSyncAt && Date.now() - new Date(particleInteg.lastSyncAt).getTime() < staleThreshold) {
-				particleStatus = 'connected';
-			} else {
-				particleStatus = 'stale';
-			}
-		}
-	} catch { /* non-critical */ }
+	const { isBoxConnected, particleStatus } = await integrationStatus();
 
 	const user = locals.user;
 	const canAccessDocuments = hasPermission(user, 'document:read');

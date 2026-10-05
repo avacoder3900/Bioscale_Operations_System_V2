@@ -49,7 +49,20 @@ import { detectBarcodePresence, BARCODE_VIEW, NO_BARCODE_VIEW } from '$lib/serve
 import { embedImage, EMBEDDING_VERSION } from '$lib/server/services/cv-classifier';
 import { hasPermission } from '$lib/server/permissions';
 import { runPhaseInference } from '$lib/server/cv/run-inference';
+import sharp from 'sharp';
 import type { RequestHandler } from './$types';
+
+// Photo-list preview: 160 px wide covers a 48 px thumbnail at 3x pixel density.
+// (r2.ts's generateThumbnail is a pass-through stub, so it isn't used here.)
+const THUMB_WIDTH = 160;
+
+function makeCaptureThumbnail(buffer: Buffer): Promise<Buffer> {
+	return sharp(buffer)
+		.rotate()
+		.resize({ width: THUMB_WIDTH, withoutEnlargement: true })
+		.jpeg({ quality: 70 })
+		.toBuffer();
+}
 
 function pad(n: number): string {
 	return String(n).padStart(3, '0');
@@ -62,10 +75,23 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		throw error(403, 'Forbidden');
 	}
 
+	// Per-step timings, returned as `timingsMs` so capture pages can show where
+	// a slow capture spends its time. Measurement only — no behaviour change.
+	const t0 = performance.now();
+	let tLap = t0;
+	const timingsMs: Record<string, number> = {};
+	const lap = (step: string) => {
+		const now = performance.now();
+		timingsMs[step] = (timingsMs[step] ?? 0) + Math.round(now - tLap);
+		tLap = now;
+	};
+
 	await connectDB();
+	lap('connect');
 
 	try {
 		const formData = await request.formData();
+		lap('parse');
 		const file = formData.get('file') as File | null;
 		const cartridgeId = formData.get('cartridgeId')?.toString().trim();
 		const phase = formData.get('phase')?.toString().trim();
@@ -117,23 +143,24 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		// Station sanity check (CV-PIPELINE-V2 Stage 1): a capture posted from a
 		// station assigned to a different phase is almost always "wrong station
 		// selected in the dropdown". Warn in the success response — never block.
+		// The station lookup and the cartridge $inc are independent, so they run
+		// together (one database round trip instead of two).
 		let warning: string | undefined;
-		if (stationId) {
-			const station = await CaptureStation.findById(stationId)
-				.select('name assignedPhase')
-				.lean() as any;
-			if (station?.assignedPhase && station.assignedPhase !== phase) {
-				warning = `station ${station.name} is assigned to ${station.assignedPhase} but this capture was tagged ${phase}`;
-			}
+		const [station, updated] = await Promise.all([
+			stationId
+				? (CaptureStation.findById(stationId).select('name assignedPhase').lean() as Promise<any>)
+				: Promise.resolve(null),
+			// Atomic $inc serves double duty: validates cartridge exists AND mints a
+			// race-free sequence number. null updated = cartridge doesn't exist.
+			CartridgeRecord.findOneAndUpdate(
+				{ _id: cartridgeId },
+				{ $inc: { photoSequence: 1 } },
+				{ new: true, projection: { photoSequence: 1, status: 1 } }
+			).lean() as Promise<any>
+		]);
+		if (station?.assignedPhase && station.assignedPhase !== phase) {
+			warning = `station ${station.name} is assigned to ${station.assignedPhase} but this capture was tagged ${phase}`;
 		}
-
-		// Atomic $inc serves double duty: validates cartridge exists AND mints a
-		// race-free sequence number. null updated = cartridge doesn't exist.
-		const updated = await CartridgeRecord.findOneAndUpdate(
-			{ _id: cartridgeId },
-			{ $inc: { photoSequence: 1 } },
-			{ new: true, projection: { photoSequence: 1, status: 1 } }
-		).lean() as any;
 
 		if (!updated) {
 			return json({ error: `Cartridge ${cartridgeId} not found in BIMS` }, { status: 400 });
@@ -141,47 +168,90 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 
 		const seq = updated.photoSequence;
 		const cartridgeImageNumber = `${cartridgeId}_${pad(seq)}`;
+		lap('db');
 
 		const buffer = Buffer.from(await file.arrayBuffer());
-
-		// Resolve the camera view (CV-PIPELINE-V2 top/bottom split). The manual
-		// toggle always wins; when it's unset, auto-classify from barcode presence
-		// (the cartridge barcode shows only in top photos). Detection never blocks
-		// or fails a capture — a null result leaves the view untagged.
-		let effectiveView: 'top' | 'bottom' | undefined = view;
-		let viewSource: 'manual' | 'barcode-auto' | undefined = view ? 'manual' : undefined;
-		if (!view) {
-			const hasBarcode = await detectBarcodePresence(buffer);
-			if (hasBarcode !== null) {
-				effectiveView = hasBarcode ? BARCODE_VIEW : NO_BARCODE_VIEW;
-				viewSource = 'barcode-auto';
-			}
-		}
-
-		// Pre-warm the training-embedding cache while the pixels are already in
-		// memory (~150ms) — so training never has to re-fetch this photo from R2
-		// and embed it in-request (cold-cache embedding is what 504'd training).
-		// Best-effort: an embed failure never blocks a capture.
-		let embedding: number[] | undefined;
-		try {
-			embedding = await embedImage(buffer);
-		} catch (e) {
-			console.error('[capture] embed cache-warm failed:', e instanceof Error ? e.message : e);
-		}
+		lap('parse');
 
 		const imageId = generateId();
 		const filenameFromClient = file.name || `${cartridgeImageNumber}.jpg`;
 		const key = buildCvNamedKey('captures', imageId, `${cartridgeImageNumber}-${filenameFromClient}`);
+		const thumbKey = buildCvNamedKey('captures', imageId, `${cartridgeImageNumber}-thumb.jpg`);
 		const contentType = file.type || 'image/jpeg';
 
-		await uploadViaWorker(buffer, key, contentType);
+		// The four pixel-level steps don't depend on each other, so they run
+		// concurrently — the wait is the slowest one instead of the sum. Each is
+		// still timed on its own; `parallel` is the wall time of the block.
+		//   - barcode: resolve the camera view (CV-PIPELINE-V2 top/bottom split).
+		//     The manual toggle always wins; when unset, auto-classify from barcode
+		//     presence (the cartridge barcode shows only in top photos). Never
+		//     throws — a null result leaves the view untagged.
+		//   - embed: pre-warm the training-embedding cache while the pixels are in
+		//     memory (cold-cache embedding is what 504'd training). Best-effort.
+		//   - storage: the original upload. A failure here fails the capture, as
+		//     before (rejects Promise.all → caught below → 500).
+		//   - thumb: small preview for photo lists. Best-effort — lists fall back
+		//     to the full image when thumbnailPath is unset.
+		const timed = async <T>(step: string, p: Promise<T>): Promise<T> => {
+			const start = performance.now();
+			try {
+				return await p;
+			} finally {
+				timingsMs[step] = Math.round(performance.now() - start);
+			}
+		};
+		const parallelStart = performance.now();
+		const [hasBarcode, embedding, , thumbnailPath] = await Promise.all([
+			timed('barcode', view ? Promise.resolve(null) : detectBarcodePresence(buffer)),
+			timed(
+				'embed',
+				embedImage(buffer).catch((e): undefined => {
+					console.error('[capture] embed cache-warm failed:', e instanceof Error ? e.message : e);
+					return undefined;
+				})
+			),
+			timed('storage', uploadViaWorker(buffer, key, contentType)),
+			timed(
+				'thumb',
+				makeCaptureThumbnail(buffer)
+					.then((thumb) => uploadViaWorker(thumb, thumbKey, 'image/jpeg'))
+					.then((): string => thumbKey)
+					.catch((e): undefined => {
+						console.error('[capture] thumbnail failed:', e instanceof Error ? e.message : e);
+						return undefined;
+					})
+			)
+		]);
+		timingsMs.parallel = Math.round(performance.now() - parallelStart);
+		tLap = performance.now();
+
+		let effectiveView: 'top' | 'bottom' | undefined = view;
+		let viewSource: 'manual' | 'barcode-auto' | undefined = view ? 'manual' : undefined;
+		if (!view && hasBarcode !== null) {
+			effectiveView = hasBarcode ? BARCODE_VIEW : NO_BARCODE_VIEW;
+			viewSource = 'barcode-auto';
+		}
 		const publicUrl = getR2Url(key);
 
 		const capturedAt = new Date();
-		await CvImage.create({
+
+		// The CvImage insert and the cartridge's photos[] append are independent,
+		// so they run together (one round trip instead of two). photos[] must
+		// never point at an image that wasn't saved: if the insert fails, the
+		// appended entry is pulled again and the capture fails as before.
+		// A batch of legacy cartridges have a malformed (non-array) `photos`
+		// field, so a plain $push throws "must be an array but is of type …".
+		// Use a pipeline update to coerce photos to [] when it isn't an array,
+		// then append — atomic, self-healing, and a no-op shape change for the
+		// well-formed majority. $literal keeps the entry stored verbatim (so a
+		// '$' or '.' in any value isn't parsed as an aggregation expression).
+		const photoEntry = { imageId, phase, capturedAt, r2Key: key, r2Url: publicUrl, cartridgeImageNumber };
+		const [imageWrite, photosWrite] = await Promise.allSettled([
+			CvImage.create({
 			_id: imageId,
 			filename: filenameFromClient,
 			filePath: key,
+			...(thumbnailPath ? { thumbnailPath } : {}),
 			fileSizeBytes: buffer.length,
 			cameraIndex: cameraIndexRaw ? Number.parseInt(cameraIndexRaw, 10) : undefined,
 			capturedAt,
@@ -206,7 +276,35 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 				}
 				: {}),
 			...(forensic ? { metadata: { forensic } } : {})
-		});
+			}),
+			CartridgeRecord.updateOne(
+				{ _id: cartridgeId },
+				[
+					{
+						$set: {
+							photos: {
+								$concatArrays: [
+									{ $cond: [{ $isArray: '$photos' }, '$photos', []] },
+									{ $literal: [photoEntry] }
+								]
+							}
+						}
+					}
+				],
+				// Mongoose 9 requires opting in to array (aggregation-pipeline) updates.
+				{ updatePipeline: true }
+			)
+		]);
+		if (imageWrite.status === 'rejected') {
+			if (photosWrite.status === 'fulfilled') {
+				await CartridgeRecord.updateOne(
+					{ _id: cartridgeId },
+					{ $pull: { photos: { imageId } } }
+				).catch((e) => console.error('[capture] photos[] rollback failed:', e));
+			}
+			throw imageWrite.reason;
+		}
+		if (photosWrite.status === 'rejected') throw photosWrite.reason;
 
 		// Capture-time verdict is a QC decision — audit it like the other
 		// cartridge-status writes below.
@@ -221,31 +319,6 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 				changedBy: locals.user.username
 			});
 		}
-
-		// A batch of legacy cartridges have a malformed (non-array) `photos`
-		// field, so a plain $push throws "must be an array but is of type …".
-		// Use a pipeline update to coerce photos to [] when it isn't an array,
-		// then append — atomic, self-healing, and a no-op shape change for the
-		// well-formed majority. $literal keeps the entry stored verbatim (so a
-		// '$' or '.' in any value isn't parsed as an aggregation expression).
-		const photoEntry = { imageId, phase, capturedAt, r2Key: key, r2Url: publicUrl, cartridgeImageNumber };
-		await CartridgeRecord.updateOne(
-			{ _id: cartridgeId },
-			[
-				{
-					$set: {
-						photos: {
-							$concatArrays: [
-								{ $cond: [{ $isArray: '$photos' }, '$photos', []] },
-								{ $literal: [photoEntry] }
-							]
-						}
-					}
-				}
-			],
-			// Mongoose 9 requires opting in to array (aggregation-pipeline) updates.
-			{ updatePipeline: true }
-		);
 
 		// WAX-SIMPLIFY-2: photographing a wax-stage cart no longer changes its status
 		// (the old wax_stored → wax_qc auto-advance is gone). Wax rejects are an
@@ -275,6 +348,9 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			});
 		}
 
+		lap('db');
+		timingsMs.total = Math.round(performance.now() - t0);
+
 		// Fire-and-forget: any project deploying at this phase runs inference.
 		// Errors are swallowed inside runPhaseInference — capture response always
 		// succeeds regardless of inference state.
@@ -293,9 +369,11 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			cartridgeRecordId: cartridgeId,
 			phase,
 			imageUrl: publicUrl,
+			thumbnailUrl: thumbnailPath ? getR2Url(thumbnailPath) : null,
 			filePath: key,
 			view: effectiveView ?? null,
 			viewSource: viewSource ?? null,
+			timingsMs,
 			...(warning ? { warning } : {})
 		}, { status: 201 });
 	} catch (e: any) {
