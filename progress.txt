@@ -18147,3 +18147,12 @@ NOT confirmed that the open Backed buckets add up to 34 — the tile will show w
 passes hold.
 Verification: svelte-kit sync + svelte-check 14 errors, the same pre-existing set, none in touched files;
 test:unit 515 pass.
+Shipped: commit 5a92b430 pushed; PR #80 into master
+(https://github.com/avacoder3900/Bioscale_Operations_System_V2/pull/80) — open, not merged.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-8lcmf3f03-brevitest.vercel.app
+Source: branch fix/backed-count-in-buckets @ commit 5a92b430
+Retrieve this exact code: git checkout fix/backed-count-in-buckets at commit 5a92b430
+  (or: git log fix/backed-count-in-buckets --oneline to find it if the branch has since moved on)
+What this deployment is for: the Backed tile counting only carts in open Backed buckets; smoke:
+  /login 200, buckets and cartridge-admin → 302 /login. The tile's value not yet read signed-in.
