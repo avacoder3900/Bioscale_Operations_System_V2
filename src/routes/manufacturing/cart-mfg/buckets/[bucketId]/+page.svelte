@@ -61,6 +61,7 @@
 	};
 	const txTint: Record<string, string> = {
 		create: 'text-green-300', advance: 'text-[var(--color-tron-cyan)]', consume: 'text-[var(--color-tron-cyan)]',
+		pull: 'text-green-300', finish: 'text-[var(--color-tron-yellow)]', reopen: 'text-[var(--color-tron-text-secondary)]',
 		scrap: 'text-red-300', adjust: 'text-[var(--color-tron-yellow)]', merge_in: 'text-green-300', merge_out: 'text-[var(--color-tron-yellow)]',
 		release: 'text-[var(--color-tron-text-secondary)]', quarantine: 'text-[var(--color-tron-yellow)]', mint: 'text-[var(--color-tron-text-secondary)]', retire: 'text-red-300',
 		void: 'text-[var(--color-tron-yellow)]', relabel: 'text-[var(--color-tron-text-secondary)]', nickname: 'text-[var(--color-tron-text-secondary)]'

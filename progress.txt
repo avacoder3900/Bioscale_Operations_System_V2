@@ -18532,3 +18532,40 @@ shows under "Backed — in process" (same meaning: pulled to be pressed). Barcod
 before they can be marked Done.
 `npm run check`: 16 errors / 434 warnings — same as master, none in the changed files. Not viewed in
 a browser from here.
+
+================================================================================
+2026-10-05 — feat/bucket-finished-handoff — bucket board: Finished on Barcoded + skinny waiting lanes
+================================================================================
+Alejandro: a "Finished" button on the barcoding phase that moves the bucket to a skinnier "awaiting
+thermoseal processing" section, from which someone selects it to move it into "In process"; a
+Finished button there too, moving it to "waiting to be pressed", with the same pick-up-and-scan-in
+to get it "in progress". Purpose: tell finished buckets from in-process ones.
+Built on feat/bucket-six-lanes (b7f4f9f3, above), which already had the second half — Done in
+"Unpressed — in process" lands the bucket in Unpressed, where it waits for the badge pull into
+"Backed — in process". What was missing is a waiting lane between scanning and the first pull.
+Lanes now: Available → Barcoded → Awaiting thermoseal processing (skinny) → Unpressed — in process →
+Unpressed (skinny, "waiting to be pressed") → Backed — in process → Backed.
+- src/lib/server/db/models/bucket-cycle.ts: finishedAt / finishedBy (Barcoded only, cleared on a
+  stage change). bucket-transaction.ts: ledger types 'finish', 'reopen'.
+- src/lib/server/services/bucket-service.ts: finishBarcoding() and reopenBarcoding() (badge-gated;
+  no cart, inventory or custody write); scanCartIn refuses a finished pass (FINISHED);
+  pullIntoProcess refuses a Barcoded pass that is not finished (NOT_FINISHED) and its claim filter
+  re-checks it; advanceCycle / forceBucketPhase clear the fields; BoardCycle carries them.
+- src/routes/manufacturing/cart-mfg/buckets/+page.server.ts: ?/finishBarcoding, ?/reopenBarcoding;
+  load returns awaitingThermosealLabel.
+- src/routes/manufacturing/cart-mfg/buckets/+page.svelte: new skinny lane; Unpressed lane skinny;
+  compact cards in both (Audit + cart list moved into the panel for those buckets); the scanning
+  panel shows "Finished → Awaiting thermoseal processing" instead of the pull form; the waiting
+  bucket's panel has the pull form plus "Not finished? Reopen for scanning"; "Done → …" reads
+  "Finished → …"; after Finished the rail lets go of the bucket and the badge; change log rows;
+  grid is 7 columns from xl, 4 across on medium.
+- src/routes/manufacturing/cart-mfg/buckets/[bucketId]/+page.svelte: tints for pull / finish / reopen.
+- BUCKET-SYSTEM_PLAN.md: §2 callout (lane table), §4.2, §4.3, §11, §12.4.
+Two earlier builds of this request were dropped unshipped as master moved under them (4f1e8bab,
+then b7f4f9f3 — the board was reworked twice by another session while this was in progress); this
+is the third, cut to what the six-lane board still lacked.
+Effect on live data at deploy: a Barcoded bucket that has not been pulled must be marked Finished
+before it can be pulled. Buckets already pulled are unaffected.
+`npm run check`: 16 errors / 434 warnings — same as master (r2.ts, 2× sonic/decode.ts, 2×
+research-proxy.ts, AskBimsWidget, 8× assembly/[sessionId], 2× magnetometer/[sessionId]), none in
+the changed files. Not exercised in a browser — no flow was clicked through.

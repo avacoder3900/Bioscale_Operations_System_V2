@@ -128,6 +128,13 @@ const bucketCycleSchema = new Schema({
 	// clears it. Cart statuses are untouched — they follow the stage only.
 	inProcessAt: Date,
 	inProcessBy: operatorRef,
+	// "Finished" at Barcoded (user, 2026-10-05): set when the operator scanning carts in
+	// marks the bucket finished (bucket-service.finishBarcoding). Scan-in closes and the
+	// pass moves to the "Awaiting thermoseal processing" lane — stage barcoded +
+	// finishedAt, not yet pulled — which is the only place a Barcoded pass can be pulled
+	// from. Cleared if the bucket is reopened for scanning, and on every stage change.
+	finishedAt: Date,
+	finishedBy: operatorRef,
 	stageEnteredAt: Date, // set on create and on every advance — dwell time without replaying the ledger
 	closedAt: Date
 }, { timestamps: true });

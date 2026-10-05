@@ -10,6 +10,7 @@
 		data: {
 			stages: { key: BucketStage; label: string }[];
 			backedLabel: string;
+			awaitingThermosealLabel: string;
 			focusStage: string | null;
 			board: { cycles: BoardCycle[]; available: BoardBucket[]; quarantined: BoardBucket[] };
 			counts: StageCounts;
@@ -35,6 +36,7 @@
 			start?: ActionResult; advance?: ActionResult; scrap?: ActionResult;
 			residual?: ActionResult; retire?: ActionResult; thermosealToggles?: ActionResult; moveToOven?: ActionResult;
 			auditScan?: ActionResult; audit?: ActionResult; pull?: ActionResult;
+			finishBarcoding?: ActionResult; reopenBarcoding?: ActionResult;
 		} | null;
 	}
 	let { data, form }: Props = $props();
@@ -277,11 +279,24 @@
 	// handoff) to work it toward the next stage. So a pulled Barcoded pass shows under
 	// "Unpressed — in process" and a pulled Unpressed pass under "Backed — in process";
 	// Done (the stage advance) only exists in those two lanes.
-	type Lane = { key: string; tint: string; label: string; hint: string; cycles: BoardCycle[] };
+	//
+	// Finished + the two skinny waiting lanes (user, 2026-10-05, third pass: "differentiate
+	// finished buckets from in process buckets"): a Barcoded bucket is marked Finished
+	// (?/finishBarcoding — scan-in closes) and waits in "Awaiting thermoseal processing"
+	// until it is pulled; a bucket marked Finished in "Unpressed — in process" waits in
+	// Unpressed — waiting to be pressed — until it is pulled again. Those two waiting
+	// lanes are skinny and hold compact cards, so what is waiting reads apart from what
+	// someone is working on.
+	type Lane = { key: string; tint: string; label: string; hint: string; skinny?: boolean; cycles: BoardCycle[] };
+	/** Finished at its last station and not picked up yet — the passes in the two skinny lanes. */
+	function isWaitingPass(c: BoardCycle): boolean {
+		return !c.inProcessAt && (c.stage === 'unpressed' || (c.stage === 'barcoded' && !!c.finishedAt));
+	}
 	const lanes = $derived.by((): Lane[] => [
-		{ key: 'barcoded', tint: 'barcoded', label: labelFor('barcoded'), hint: 'scanning carts in', cycles: cyclesByStage.barcoded.filter(c => !c.inProcessAt) },
+		{ key: 'barcoded', tint: 'barcoded', label: labelFor('barcoded'), hint: 'scanning carts in', cycles: cyclesByStage.barcoded.filter(c => !c.inProcessAt && !c.finishedAt) },
+		{ key: 'thermoseal_wait', tint: 'barcoded', label: data.awaitingThermosealLabel, hint: 'finished, waiting to be pulled', skinny: true, cycles: cyclesByStage.barcoded.filter(c => !c.inProcessAt && !!c.finishedAt) },
 		{ key: 'unpressed_wip', tint: 'unpressed', label: `${labelFor('unpressed')} — in process`, hint: 'pulled, badge on', cycles: cyclesByStage.barcoded.filter(c => !!c.inProcessAt) },
-		{ key: 'unpressed', tint: 'unpressed', label: labelFor('unpressed'), hint: 'waiting to be pulled', cycles: cyclesByStage.unpressed.filter(c => !c.inProcessAt) },
+		{ key: 'unpressed', tint: 'unpressed', label: labelFor('unpressed'), hint: 'waiting to be pressed', skinny: true, cycles: cyclesByStage.unpressed.filter(c => !c.inProcessAt) },
 		{ key: 'backing_wip', tint: 'backing', label: `${labelFor('backing')} — in process`, hint: 'pulled, badge on', cycles: cyclesByStage.unpressed.filter(c => !!c.inProcessAt) },
 		{ key: 'backing', tint: 'backing', label: labelFor('backing'), hint: '', cycles: cyclesByStage.backing }
 	]);
@@ -399,7 +414,7 @@
 	}
 	function resetLists() { discardList = []; scrapList = []; residualList = []; listInput = ''; residualDisposition = ''; residualDest = ''; cartScanError = ''; cartScanOk = ''; scanFailures = []; whereFind = ''; whereLine = ''; whereOk = true; whereHit = null; pullBadge = ''; }
 
-	function openCycle(c: BoardCycle) { panel = { kind: 'cycle', cycleId: c.cycleId, mode: 'view' }; resetLists(); retargetBadge(c.cycleId); if (c.stage === 'barcoded' && !c.inProcessAt) focusScanEntry(); }
+	function openCycle(c: BoardCycle) { panel = { kind: 'cycle', cycleId: c.cycleId, mode: 'view' }; resetLists(); retargetBadge(c.cycleId); if (c.stage === 'barcoded' && !c.inProcessAt && !c.finishedAt) focusScanEntry(); }
 	function setMode(mode: CycleMode) {
 		if (panel.kind === 'cycle') panel = { kind: 'cycle', cycleId: panel.cycleId, mode };
 		resetLists();
@@ -631,6 +646,11 @@
 			pullBadge = '';
 		}
 		if (typeof form.pull?.code === 'string' && form.pull.code.startsWith('BADGE')) pullBadge = '';
+		// Finished at Barcoded is a lane change too: the operator is done with the bucket,
+		// so the rail lets go of it and of the badge — the pull belongs to whoever takes it.
+		if (form.finishBarcoding?.success) { badge = ''; scanOperator = ''; badgeFor = null; panel = { kind: 'none' }; resetLists(); }
+		// Reopened for scanning: back to the scan-in view, the badge that reopened it stays on.
+		if (form.reopenBarcoding?.success && panel.kind === 'cycle') { setMode('view'); focusScanEntry(); }
 		if (form.audit?.success) { resetAudit(); if (panel.kind === 'cycle') setMode('view'); }
 		if (form.start?.success && typeof form.start.cycleId === 'string') {
 			// The badge that started this pass is this pass's badge: re-key it to the
@@ -640,7 +660,7 @@
 		}
 		if (form.residual?.success || form.retire?.success) { panel = { kind: 'none' }; resetLists(); }
 		// A gated form refused the badge: clear it so the next badge scan replaces it.
-		for (const r of [form.start, form.advance, form.pull, form.scrap, form.moveToOven, form.audit, form.residual, form.retire]) {
+		for (const r of [form.start, form.advance, form.pull, form.finishBarcoding, form.reopenBarcoding, form.scrap, form.moveToOven, form.audit, form.residual, form.retire]) {
 			if (r && typeof r.code === 'string' && r.code.startsWith('BADGE') && r.code !== 'BADGE') { badge = ''; scanOperator = ''; focusBadge(); }
 		}
 	});
@@ -708,6 +728,8 @@
 			case 'consume': return { event: 'Drawn to wax filling', moved: `${from ?? data.backedLabel} → wax filling`, discarded: false };
 			case 'oven': return { event: 'Moved to oven', moved: `${from ?? data.backedLabel} → oven (carts released from the bucket)`, discarded: false };
 			case 'pull': return { event: 'Pulled into process', moved: `${from ?? '?'} → ${r.fromStage === 'barcoded' ? labelFor('unpressed') : data.backedLabel} in process (badge handoff)`, discarded: false };
+			case 'finish': return { event: 'Finished', moved: `${from ?? 'Barcoded'} → ${data.awaitingThermosealLabel}`, discarded: false };
+			case 'reopen': return { event: 'Reopened', moved: `${data.awaitingThermosealLabel} → ${from ?? 'Barcoded'} (scanning again)`, discarded: false };
 			case 'scrap': return { event: 'Discarded', moved: `at ${from ?? '?'}`, discarded: true };
 			case 'adjust': return { event: 'Count corrected', moved: `at ${from ?? '?'}`, discarded: false };
 			case 'merge_in': return { event: 'Residual received', moved: `at ${to ?? '?'}`, discarded: false };
@@ -816,7 +838,7 @@
 	<div class="flex flex-wrap items-end justify-between gap-3">
 		<div>
 			<h1 class="text-2xl font-semibold text-[var(--color-tron-text)]">Production Buckets</h1>
-			<p class="text-xs text-[var(--color-tron-text-secondary)]">Stick a QR on each shell and scan it into a bucket. A bucket is <em>pulled</em> into an in-process lane with a badge — that is the handoff — and marked <em>Done</em> when the work is finished: Barcoded → Unpressed in process → Unpressed → {data.backedLabel} in process → {data.backedLabel}. <em>Move to oven</em> frees the carts and returns the bucket to Available.</p>
+			<p class="text-xs text-[var(--color-tron-text-secondary)]">Stick a QR on each shell and scan it into a bucket. A bucket is marked <em>Finished</em> when its work is done and then waits in a skinny lane until someone <em>pulls</em> it into the next in-process lane with a badge — that is the handoff: Barcoded → {data.awaitingThermosealLabel} → Unpressed in process → Unpressed → {data.backedLabel} in process → {data.backedLabel}. <em>Move to oven</em> frees the carts and returns the bucket to Available.</p>
 		</div>
 		<div class="flex gap-2">
 			<a href="/manufacturing/cart-mfg/buckets/new" class={btnGhost}>New bucket</a>
@@ -878,6 +900,12 @@
 
 			<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3 {panel.kind === 'cycle' ? '' : 'lg:max-w-2xl'}">
 				{#if panel.kind === 'none'}
+					{#if form?.finishBarcoding?.success}
+						{@const f = form.finishBarcoding as any}
+						<div class="rounded border border-green-500/40 bg-green-900/20 p-2 text-xs text-[var(--color-tron-text)]" role="status">
+							<strong class="text-green-300">Finished.</strong> {f.bucketId} #{f.cycleNumber} — {f.quantity} cart{f.quantity === 1 ? '' : 's'}{#if f.operator}, marked by <strong>{f.operator}</strong>{/if} — is now in <strong>{data.awaitingThermosealLabel}</strong>. Whoever takes it scans its sticker here and pulls it with their badge.
+						</div>
+					{/if}
 					<p class="py-6 text-center text-xs text-[var(--color-tron-text-secondary)]">Scan a bucket or pick a card.</p>
 
 				{:else if panel.kind === 'cycle'}
@@ -913,13 +941,13 @@
 						</div>
 
 						{#if c.stage !== 'backing'}
-							<p class="mt-2 text-[10px] {c.inProcessAt ? 'text-green-300' : 'text-[var(--color-tron-yellow)]'}">{c.inProcessAt ? `${nextLabel(c.stage)} — in process${c.inProcessBy ? ` · ${c.inProcessBy}` : ''} · pulled ${dwell(c.inProcessAt)} ago` : c.stage === 'barcoded' ? 'Scanning carts in — pull the bucket when it is full' : 'Waiting to be pulled'}</p>
+							<p class="mt-2 text-[10px] {c.inProcessAt ? 'text-green-300' : 'text-[var(--color-tron-yellow)]'}">{c.inProcessAt ? `${nextLabel(c.stage)} — in process${c.inProcessBy ? ` · ${c.inProcessBy}` : ''} · pulled ${dwell(c.inProcessAt)} ago` : c.stage === 'barcoded' ? (c.finishedAt ? `${data.awaitingThermosealLabel} · finished ${dwell(c.finishedAt)} ago${c.finishedBy ? ` by ${c.finishedBy}` : ''} — waiting to be pulled` : 'Scanning carts in — mark the bucket Finished when it is full') : 'Waiting to be pressed — pull it to start'}</p>
 						{/if}
 						</div>
 						<div>
 						{#if panel.mode === 'view'}
-							{#if c.stage === 'barcoded' && !c.inProcessAt}
-								<!-- Barcoded = filling. Scan shells in; each scan is a cartridge's birth.
+							{#if c.stage === 'barcoded' && !c.inProcessAt && !c.finishedAt}
+								<!-- Barcoded = filling, until it is marked Finished. Scan shells in; each scan is a cartridge's birth.
 								     Gated step (2026-09-30): badge first, then carts — the badge rides on
 								     every scan-in POST, and a badge scanned into the cart box is routed up. -->
 								<div class="mt-3 space-y-2">
@@ -981,13 +1009,26 @@
 								</div>
 							{/if}
 							<div class="mt-3 space-y-2">
-								{#if (c.stage === 'barcoded' || c.stage === 'unpressed') && !c.inProcessAt}
+								{#if c.stage === 'barcoded' && !c.inProcessAt && !c.finishedAt}
+									<!-- Still being barcoded: the operator scanning carts in marks the bucket
+									     Finished (2026-10-05). Scan-in closes and the bucket moves to the
+									     skinny "Awaiting thermoseal processing" lane, where it is pulled from.
+									     One click — it rides on the badge the carts are being scanned under,
+									     and it can be taken back (Reopen) until someone pulls the bucket. -->
+									<form method="POST" action="?/finishBarcoding" use:enhance={enhanceBusy} class="space-y-2">
+										<input type="hidden" name="cycleId" value={c.cycleId} />
+										{@render badgeField(false)}
+										{#if form?.finishBarcoding?.error}<p class="text-xs text-[var(--color-tron-error)]">{form.finishBarcoding.error}</p>{/if}
+										<button type="submit" disabled={busy || c.quantity === 0 || scanQueue.length > 0} class={btnPrimary}>{busy ? 'Saving…' : `Finished → ${data.awaitingThermosealLabel}`}</button>
+										{#if scanQueue.length > 0}<p class="text-[10px] text-[var(--color-tron-text-secondary)]">Waiting for {scanQueue.length} queued scan{scanQueue.length === 1 ? '' : 's'} to record…</p>{/if}
+									</form>
+								{:else if (c.stage === 'barcoded' || c.stage === 'unpressed') && !c.inProcessAt}
 									<!-- Waiting lane: nothing can be done to the bucket until someone takes it.
 									     The pull is the badge handoff (2026-10-05) — it is recorded to this badge
 									     from here until the bucket is marked done. -->
 									<form method="POST" action="?/pull" use:enhance={enhanceBusy} class="space-y-2">
 										<input type="hidden" name="cycleId" value={c.cycleId} />
-										<p class="text-xs text-[var(--color-tron-text-secondary)]">{#if c.stage === 'barcoded'}When the bucket is full, pull{:else}Pull{/if} it into <strong class="text-[var(--color-tron-text)]">{nextLabel(c.stage)} — in process</strong>. {#if badgeRequired}The badge scanned here takes the bucket: it is recorded to that person until it is marked done.{/if}</p>
+										<p class="text-xs text-[var(--color-tron-text-secondary)]">{#if c.stage === 'barcoded'}Barcoding is finished — pull{:else}Pull{/if} it into <strong class="text-[var(--color-tron-text)]">{nextLabel(c.stage)} — in process</strong>. {#if badgeRequired}The badge scanned here takes the bucket: it is recorded to that person until it is marked done.{/if}</p>
 										{#if badgeRequired}
 											<label class="block">
 												<span class="text-[10px] uppercase tracking-wider text-[var(--color-tron-cyan)]">Scan your badge to take this bucket</span>
@@ -1002,7 +1043,10 @@
 										<button type="submit" disabled={busy || c.quantity === 0} class={btnPrimary}>{busy ? 'Pulling…' : `Pull into ${nextLabel(c.stage)} — in process`}</button>
 									</form>
 								{:else if nxt}
-									<button type="button" class={btnPrimary} disabled={c.quantity === 0} onclick={() => setMode('advance')}>Done → {nextLabel(c.stage)}</button>
+									<!-- In process: Finished (was "Done") is the stage advance. From "Unpressed — in
+									     process" it lands in Unpressed, waiting to be pressed; from "Backed — in
+									     process" in Backed. -->
+									<button type="button" class={btnPrimary} disabled={c.quantity === 0} onclick={() => setMode('advance')}>Finished → {nextLabel(c.stage)}</button>
 								{:else}
 									<!-- Backed is the end of the bucket. Move to oven frees the carts from the bucket
 									     and returns it to Available — nothing else (user, 2026-09-25). -->
@@ -1019,6 +1063,32 @@
 									<a href="/manufacturing/cart-mfg/wax-filling" class="block text-center text-[10px] text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)]">Wax filling →</a>
 								{/if}
 								<button type="button" class="{btnGhost} w-full" disabled={c.quantity === 0} onclick={() => setMode('scrap')}>Discard carts…</button>
+								{#if c.stage === 'barcoded' && !c.inProcessAt && c.finishedAt}
+									<!-- Finished too early: take it back while nobody has pulled the bucket.
+									     It returns to the Barcoded lane and takes scans again. Its own badge
+									     box — the pull form's badge is the puller's, not this. -->
+									<details class="rounded border border-[var(--color-tron-border)]/60 px-2 py-1">
+										<summary class="cursor-pointer select-none text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]">Not finished? Reopen for scanning</summary>
+										<form method="POST" action="?/reopenBarcoding" use:enhance={enhanceBusy} class="mt-2 space-y-2">
+											<input type="hidden" name="cycleId" value={c.cycleId} />
+											{@render badgeField(true)}
+											{#if form?.reopenBarcoding?.error}<p class="text-xs text-[var(--color-tron-error)]">{form.reopenBarcoding.error}</p>{/if}
+											<button type="submit" disabled={busy} class="{btnGhost} w-full">{busy ? 'Saving…' : `Reopen — back to ${labelFor('barcoded')}`}</button>
+										</form>
+									</details>
+								{/if}
+								{#if isWaitingPass(c)}
+									<!-- The compact card in a skinny waiting lane has no cart list or Audit link of its own. -->
+									<button type="button" class="{btnGhost} w-full" onclick={() => openAudit(c)} title="Scan every cart in this bucket; anything that does not belong is moved or discarded">Audit…</button>
+									<details class="rounded border border-[var(--color-tron-border)]/60 px-2 py-1">
+										<summary class="cursor-pointer select-none text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]">{c.cartridgeIds.length} cart{c.cartridgeIds.length === 1 ? '' : 's'} inside</summary>
+										<ul class="mt-1 max-h-40 space-y-0.5 overflow-y-auto">
+											{#each c.cartridgeIds as id (id)}
+												<li><a href="/cartridge-admin?search={encodeURIComponent(id)}" class="block truncate font-mono text-[10px] text-[var(--color-tron-text)] hover:text-[var(--color-tron-cyan)]" title={id}>{id}</a></li>
+											{/each}
+										</ul>
+									</details>
+								{/if}
 							</div>
 
 						{:else if panel.mode === 'advance'}
@@ -1385,8 +1455,11 @@
 			</div>
 	</section>
 
-		<!-- Board: Available + five lanes — Barcoded, Unpressed — in process, Unpressed, Backed — in process, Backed (user, 2026-10-05). -->
-		<div class="grid grid-cols-1 gap-3 md:grid-cols-3 xl:grid-cols-6">
+		<!-- Board: Available + six lanes — Barcoded, Awaiting thermoseal processing, Unpressed — in
+		     process, Unpressed, Backed — in process, Backed (user, 2026-10-05). The two waiting
+		     lanes (Awaiting thermoseal processing, Unpressed) are the skinny ones: 0.6 of a
+		     working lane. One row from `xl` up; four across, wrapping, on a medium screen. -->
+		<div class="grid grid-cols-1 gap-3 md:grid-cols-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,0.6fr)_minmax(0,1fr)_minmax(0,0.6fr)_minmax(0,1fr)_minmax(0,1fr)]">
 			<div class="rounded-lg border bg-[var(--color-tron-bg-secondary)] p-2 {data.focusStage === 'available' ? 'ring-1 ring-[var(--color-tron-cyan)]' : 'border-[var(--color-tron-border)]'}">
 				<div class="flex items-center justify-between px-1 pb-2">
 					<span class="text-xs font-semibold uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Available</span>
@@ -1429,13 +1502,27 @@
 			</div>
 
 			{#each lanes as s (s.key)}
-				<div class="rounded-lg border bg-[var(--color-tron-bg-secondary)] p-2 {data.focusStage === s.key ? 'ring-1 ring-[var(--color-tron-cyan)]' : ''} {stageTint[s.tint]}">
-					<div class="flex items-center justify-between px-1 pb-2">
-						<span class="text-xs font-semibold uppercase tracking-wider text-[var(--color-tron-text-secondary)]">{s.label}{#if s.hint} <span class="font-normal normal-case tracking-normal opacity-70">· {s.hint}</span>{/if}</span>
+				<div class="rounded-lg border bg-[var(--color-tron-bg-secondary)] {s.skinny ? 'border-dashed p-1.5' : 'p-2'} {data.focusStage === s.key ? 'ring-1 ring-[var(--color-tron-cyan)]' : ''} {stageTint[s.tint]}">
+					<div class="flex items-start justify-between gap-1 px-1 pb-2">
+						<span class="font-semibold uppercase tracking-wider {s.skinny ? 'text-[10px] leading-tight text-[var(--color-tron-yellow)]' : 'text-xs text-[var(--color-tron-text-secondary)]'}">{s.label}{#if s.hint} <span class="font-normal normal-case tracking-normal opacity-70 {s.skinny ? 'block' : ''}">{s.skinny ? '' : '· '}{s.hint}</span>{/if}</span>
 						<span class="text-xs text-[var(--color-tron-text-secondary)]">{s.cycles.length}</span>
 					</div>
 					<div class="space-y-2">
 						{#each s.cycles as c (c.cycleId)}
+							{#if s.skinny}
+								<!-- Skinny waiting lane: a compact card — finished, waiting to be pulled,
+								     with how long it has waited. Clicking it (or scanning the bucket's
+								     sticker) opens the pull form; the cart list and Audit are in the panel. -->
+								<button type="button" onclick={() => openCycle(c)} title="{c.bucketId} #{c.cycleNumber} — finished, waiting to be pulled"
+									class="w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-1.5 text-left hover:border-[var(--color-tron-cyan)]/60 {panel.kind === 'cycle' && panel.cycleId === c.cycleId ? 'ring-1 ring-[var(--color-tron-cyan)]' : ''}">
+									<div class="truncate font-mono text-xs text-[var(--color-tron-text)]">{nameOf(c)}</div>
+									<div class="flex items-baseline justify-between gap-1">
+										<span class="text-base font-bold text-[var(--color-tron-cyan)]">{c.quantity}</span>
+										<span class="text-[10px] text-[var(--color-tron-yellow)]" title="waiting">{dwell(c.finishedAt ?? c.stageEnteredAt)}</span>
+									</div>
+									<div class="truncate text-[9px] text-[var(--color-tron-text-secondary)]">{c.bucketId} #{c.cycleNumber}</div>
+								</button>
+							{:else}
 							<!-- Card = open-the-panel button + an expandable list of the carts inside
 							     (a sibling <details>, not nested in the button). -->
 							<div class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] hover:border-[var(--color-tron-cyan)]/60 {panel.kind === 'cycle' && panel.cycleId === c.cycleId ? 'ring-1 ring-[var(--color-tron-cyan)]' : ''}">
@@ -1470,9 +1557,10 @@
 										title="Scan every cart in this bucket; anything that does not belong is moved or discarded">Audit</button>
 								</div>
 							</div>
+							{/if}
 						{/each}
 						{#if s.cycles.length === 0}
-							<p class="px-1 py-4 text-center text-[10px] text-[var(--color-tron-text-secondary)]">empty</p>
+							<p class="px-1 py-4 text-center text-[10px] text-[var(--color-tron-text-secondary)]">{s.skinny ? 'none waiting' : 'empty'}</p>
 						{/if}
 						{#if s.key === 'backing'}
 							<!-- "In oven": backed carts freed from their bucket (Move to oven), still 'backing'

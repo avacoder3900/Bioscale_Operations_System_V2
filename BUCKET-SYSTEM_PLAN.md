@@ -1,6 +1,6 @@
 # Bucket System — Production Buckets, v2 (as built)
 
-**Started:** 2026-09-21 · **Last updated:** 2026-10-05 (**one badge per pass** — the board drops the badge when the rail moves to another pass, §6.6; **In oven: Copy all ids**, §6.5; **badge on the rest of the bucket actions** — mint, start pass, un-scan, sticker replace, retire, void, Master Override and State Change's bucket moves, §6.6; 2026-10-02: **State Change: straight to Backed, no bucket**, §9.6; **Pressed stage removed** — Unpressed advances straight to Backed, §2; **scan-in count lag** — the count moves on Enter, not on the server's confirm, §6.2.1; **badge at every phase** — every advance is now gated too, §6.3/§6.6; 2026-09-30: **badge gate moved** to scan-in / discards / move to oven, §6.6; earlier that day page-to-page **navigation lag** fixes, §9.1/§9.2/§11, and bucket **nicknames**, §4.1; before that 2026-09-25: thermoseal one roll part; fourth bucket stage **Backed** with **Move to oven**)
+**Started:** 2026-09-21 · **Last updated:** 2026-10-05 (**Finished button on Barcoded + skinny waiting lanes** — *Awaiting thermoseal processing* and Unpressed, §2 callout; **one badge per pass** — the board drops the badge when the rail moves to another pass, §6.6; **In oven: Copy all ids**, §6.5; **badge on the rest of the bucket actions** — mint, start pass, un-scan, sticker replace, retire, void, Master Override and State Change's bucket moves, §6.6; 2026-10-02: **State Change: straight to Backed, no bucket**, §9.6; **Pressed stage removed** — Unpressed advances straight to Backed, §2; **scan-in count lag** — the count moves on Enter, not on the server's confirm, §6.2.1; **badge at every phase** — every advance is now gated too, §6.3/§6.6; 2026-09-30: **badge gate moved** to scan-in / discards / move to oven, §6.6; earlier that day page-to-page **navigation lag** fixes, §9.1/§9.2/§11, and bucket **nicknames**, §4.1; before that 2026-09-25: thermoseal one roll part; fourth bucket stage **Backed** with **Move to oven**)
 **Branch:** `feat/bucket-system` — **PR #54 open into `master`**
 (https://github.com/avacoder3900/Bioscale_Operations_System_V2/pull/54). `origin/master` has
 been merged into this branch twice (last `33a937a4`); it sits on current production code.
@@ -84,6 +84,46 @@ Each cartridge's `status` mirrors its bucket's stage while it is a member, so
 > after every advance. Same day: the counter tiles above the board were removed, the right-hand rail
 > (scan box + bucket panel) became a horizontal strip in their place, and the thermoseal tile moved
 > to a strip below the board.
+
+> **Finished + the skinny waiting lanes (2026-10-05, third change that day).** User: "I want to add
+> a 'finished' button to the barcoding phase. This will move the bucket to a skinnier 'awaiting
+> thermoseal processing' section. From this section, users can select a bucket to move it into 'In
+> process'. This is to differentiate finished buckets from in process buckets. I want a 'finished'
+> button to also be added to this, which will move buckets to an inbetween phase before pressed
+> 'waiting to be pressed' with the same system of needing someone to pickup the bucket and scan it
+> into 'in progress'." Read against the lanes above, the second half already existed (the *Done*
+> in "Unpressed — in process" lands the bucket in Unpressed, where it waits for the pull into
+> "Backed — in process"); what was missing was a waiting lane **between scanning and the first
+> pull**. The board now reads:
+>
+> | Lane | Stored as | Gets there by |
+> |---|---|---|
+> | Barcoded | stage `barcoded` | Start pass; carts are scanned in here |
+> | **Awaiting thermoseal processing** *(skinny)* | stage `barcoded` + `finishedAt` | **Finished** on the Barcoded bucket (`finishBarcoding`, `?/finishBarcoding`, badge). Scan-in closes |
+> | Unpressed — in process | stage `barcoded` + `inProcessAt` | **Pull** (badge) — only out of the lane above |
+> | Unpressed *(skinny — "waiting to be pressed")* | stage `unpressed` | **Finished** (was *Done*) = the Barcoded → Unpressed advance, thermoseal taken |
+> | Backed — in process | stage `unpressed` + `inProcessAt` | **Pull** (badge) |
+> | Backed | stage `backing` | **Finished** (was *Done*) = the Unpressed → Backed advance; then *Move to oven* |
+>
+> - **Finished at Barcoded** is one click under the badge the carts are being scanned with (the
+>   badge box above the cart box). It sets `BucketCycle.finishedAt` / `finishedBy`, writes a `finish`
+>   ledger row and a `FINISH` audit row, and nothing else — stage, carts, inventory and custody are
+>   untouched. `scanCartIn` refuses a finished pass (code `FINISHED`). The rail then lets go of the
+>   bucket and of the badge and shows a green confirmation.
+> - **A Barcoded bucket is pulled only out of *Awaiting thermoseal processing*:**
+>   `pullIntoProcess` refuses one that is not finished (code `NOT_FINISHED`), and the scanning
+>   panel offers *Finished*, no longer a pull form.
+> - **Reopen** — *Not finished? Reopen for scanning* in the waiting bucket's panel
+>   (`reopenBarcoding`, `?/reopenBarcoding`, badge, `reopen` ledger row): clears `finishedAt` while
+>   the bucket has not been pulled, so it goes back to Barcoded and takes scans again.
+> - `finishedAt` / `finishedBy` are cleared with the in-process fields on every stage change
+>   (`advanceCycle`, `forceBucketPhase`).
+> - The two waiting lanes are **skinny** (0.6 of a working lane, dashed border, yellow heading) and
+>   hold **compact cards** — name, cart count, how long the bucket has waited; their cart list and
+>   *Audit…* moved into the panel. The board is seven columns from `xl` up (four across, wrapping,
+>   on a medium screen).
+> - **Live data at deploy:** a Barcoded bucket that has not been pulled can no longer be pulled
+>   directly — it is marked Finished first. Buckets already pulled are unaffected.
 
 > **Pressed stage removed 2026-10-02.** Unpressed now advances straight to Backed. `BUCKET_STAGES`
 > is `barcoded | unpressed | backing`; the key `pressed` stays in the `BucketCycle.stage` and
@@ -273,13 +313,17 @@ open | consumed | scrapped | voided (+ `voidedAt/By/Reason`, `statusBeforeVoid`)
 `residualFound { cartridgeIds, disposition, … }` · `discrepancies[]` ·
 **`audits[{ at, by, scanned[], present[], missing[], foreign[{barcode, action, fromCycleId,
 destinationBucketId, destinationCycleId}] }]`** (§9.8) · `stageEnteredAt` ·
+`inProcessAt` / `inProcessBy` (pulled into an in-process lane) · `finishedAt` / `finishedBy`
+(Barcoded only: marked Finished, awaiting thermoseal processing — both pairs §2, cleared on
+every stage change) ·
 `openedBy/At`, `closedAt`. Partial unique index `{bucketId}` where `status: 'open'`; index
 `{cartridgeIds: 1}`.
 
 ### 4.3 `BucketTransaction` → `bucket_transactions` (immutable)
 
 Types: `mint, relabel, nickname, create, scan_in, unscan, advance, adjust, scrap, consume, merge_in,
-merge_out, release, quarantine, retire, void, audit, oven`. Carries `cartridgeIds` for the rows that touch
+merge_out, release, quarantine, retire, void, audit, oven, pull, finish, reopen` (`pull` = pulled
+into an in-process lane; `finish` / `reopen` = Finished at Barcoded and that taken back — §2). Carries `cartridgeIds` for the rows that touch
 carts. The `advance` row into Unpressed stores the thermoseal note (cm, roll ids, rolls pulled)
 in `reason` and the first roll id in `relatedId`.
 
@@ -801,6 +845,7 @@ per-scan lookup only needs `manufacturing:read`.
 |---|---|
 | `23b1d6b9` … `b7e2c262` | v1 (2026-09-21/22): count-based buckets, labels, board, residual, WI-01 handoff, dashboard/pipeline views, change + bucket logs |
 | `f0e9176a` | Merge of `origin/master` (564 commits); collision guard extended; `findBucketLabels()` |
+| _(feat/bucket-finished-handoff)_ | **Finished on Barcoded + skinny waiting lanes** (§2 callout, §4.2, §4.3; user 2026-10-05: "differentiate finished buckets from in process buckets"), on top of the six lanes of `b7f4f9f3`. `BucketCycle.finishedAt` / `finishedBy`; ledger types `finish`, `reopen`; `bucket-service.finishBarcoding()` and `reopenBarcoding()` (badge-gated), `AWAITING_THERMOSEAL_LABEL`; `scanCartIn` refuses a finished pass, `pullIntoProcess` refuses a Barcoded pass that is not finished (and its claim re-checks it), `advanceCycle` / `forceBucketPhase` clear the fields on a stage change; `BoardCycle.finishedAt` / `finishedBy`. Board: `?/finishBarcoding`, `?/reopenBarcoding`; new skinny lane *Awaiting thermoseal processing* between Barcoded and "Unpressed — in process"; the Unpressed lane is skinny too ("waiting to be pressed"); compact cards in both, with Audit and the cart list in the panel; the scanning panel offers *Finished* instead of a pull; *Done* is relabelled *Finished*; seven-column grid from `xl`. No new stage or cart status, no inventory or custody change, no migration. |
 | _(feat/badge-per-pass)_ | **One badge per pass** (§6.6; user 2026-10-05): the board keys the scanned badge to what the rail is pointed at (`badgeFor` / `panelKey`) and clears it when that changes — another pass, another bucket, or the panel closed — so no badge is left sitting in the scan-in window for the next pass. The badge that started a pass carries into that pass's cart scans. Board page only; no server, schema or data change. Supersedes the unmerged `feat/badge-every-phase` @ `c69d26f6`. |
 | `0ef9d195` _(feat/in-oven-copy-ids)_ | **In oven: Copy all ids** (§6.5; user 2026-10-05, "give me every cart qr code in the backed category minus any that are currently sitting in buckets"): `?/inOvenList` on the board returns every `inOvenCarts()` id (ceiling 10 000); a *Copy all N ids* button in the In oven dropdown copies them one per line and shows them in a read-only box. Read-only, no data change. Context: the Backed tile reads high because carts are still listed in oven that are not physically there; PR #80 (count in-bucket carts only) was closed unmerged at the user's request — the count rule stays buckets + oven — and a bulk "oven is empty" reset was not built. |
 | `ce75e928` _(feat/badge-all-bucket-actions)_ | **Badge on the rest of the bucket actions** (§6.6; user 2026-10-05, after the badge-scan audit): `requireBadge()` gains a level (`'write'` / `'admin'`) and now gates `createBucket`, `replaceBucketSticker`, `startCycle`, `unscanCart`, `overrideCartStage` (write) and `retireBucket`, `voidCycle`, `forceBucketPhase` (admin badge). New `badgeGate()` export so State Change resolves the badge once per batch. Badge boxes on `/buckets/new` (create + replace), the board's start and retire forms, `/buckets/[bucketId]` (void + retire), `/buckets/override` and State Change, via the new `BadgeScanField.svelte`; `?/unscan` carries the rail's badge. `consumeCarts` / `returnCarts` deliberately left on the session (wax filling's deck load and abort path). Reverses the 2026-09-30 removal of the badge from mint and start-pass. No schema or data change. |
@@ -889,6 +934,13 @@ the floor creates a real card and sends real mail on the next board load.
    PT-CT-101 part so the restock card and email carry a real lead time.
 
 ### 12.4 Known risks
+
+- **Finished / Awaiting thermoseal processing is untested end to end** (2026-10-05, §2) —
+  type-checked only, never clicked through. Worth walking once on a preview: scan carts in →
+  *Finished* (the card moves to the skinny lane, the scan box is gone, a scan of a new cart into
+  it is refused) → *Reopen* (back in Barcoded, takes scans) → *Finished* → pull with a badge →
+  *Finished* → the skinny Unpressed lane → pull → *Finished* → Backed. Also look at the board at
+  the floor's screen width: seven columns in one row from 1280 px up, four across below that.
 
 - **Backed stage is untested end to end** (2026-09-25). Not yet exercised on a preview: advance
   Unpressed → Backed; load a deck from a backed bucket and confirm the pass closes and the tub

@@ -158,7 +158,7 @@ interface TxInput {
 	bucketId: string;
 	cycleId?: string | null;
 	type: 'mint' | 'relabel' | 'nickname' | 'create' | 'scan_in' | 'unscan' | 'advance' | 'scrap' | 'consume' | 'oven'
-		| 'merge_in' | 'merge_out' | 'release' | 'quarantine' | 'retire' | 'void' | 'audit' | 'pull';
+		| 'merge_in' | 'merge_out' | 'release' | 'quarantine' | 'retire' | 'void' | 'audit' | 'pull' | 'finish' | 'reopen';
 	fromStage?: string | null;
 	toStage?: string | null;
 	qtyBefore?: number;
@@ -925,6 +925,8 @@ export async function scanCartIn(input: ScanCartInput): Promise<{ quantity: numb
 	if (!cycle || cycle.status !== 'open') throw new BucketError('Pass is not open.', 404);
 	if (cycle.stage !== 'barcoded') throw new BucketError(`${cycleLabel(cycle.bucketId, cycle.cycleNumber)} is at ${STAGE_LABELS[cycle.stage as BucketStage]} — carts can only be scanned in while a bucket is at Barcoded.`);
 	if (cycle.inProcessAt) throw new BucketError(`${cycleLabel(cycle.bucketId, cycle.cycleNumber)} has been pulled into in process — carts can no longer be scanned into it.`, 409);
+	// Marked Finished (2026-10-05): the count is settled and the bucket is waiting to be picked up.
+	if (cycle.finishedAt) throw new BucketError(`${cycleLabel(cycle.bucketId, cycle.cycleNumber)} was marked Finished and is ${AWAITING_THERMOSEAL_LABEL.toLowerCase()} — reopen it on the board to scan more carts in.`, 409, 'FINISHED');
 	if (bucketLabelId) throw new BucketError(`${barcode} is the QR sticker on production bucket ${bucketLabelId}, not a cartridge.`, 409, 'BUCKET_LABEL');
 	if (existing) {
 		const where = existing.bucket?.bucketId ? ` (in bucket ${existing.bucket.bucketId})` : '';
@@ -1188,7 +1190,7 @@ export async function advanceCycle(input: AdvanceCycleInput): Promise<{ cycle: a
 		if (thermosealLot) push.sourceLots = { partNumber: THERMOSEAL_PART, lotId: thermosealLot, scannedAt: now };
 	}
 	// A stage change always lands the pass in the new stage's waiting lane.
-	await BucketCycle.updateOne({ _id: cycle._id }, { $set: set, $unset: { inProcessAt: '', inProcessBy: '' }, ...(Object.keys(push).length ? { $push: push } : {}) });
+	await BucketCycle.updateOne({ _id: cycle._id }, { $set: set, $unset: { inProcessAt: '', inProcessBy: '', finishedAt: '', finishedBy: '' }, ...(Object.keys(push).length ? { $push: push } : {}) });
 	// Unpressed → Backed stamps the backing block the way WI-01 used to, minus the
 	// lot: downstream views (pipeline, dashboard, DHR) group backed carts by
 	// backing.bucketCycleId and show who backed them and when.
@@ -1256,6 +1258,80 @@ export interface PullInput {
 	user: Operator;          // the web session (= enteredBy)
 }
 
+/** The lane a Barcoded pass waits in between Finished and its pull (stage barcoded + finishedAt, not pulled). */
+export const AWAITING_THERMOSEAL_LABEL = 'Awaiting thermoseal processing';
+
+/**
+ * "Finished" at Barcoded (user, 2026-10-05: "differentiate finished buckets from
+ * in process buckets"). The operator scanning carts in marks the bucket finished:
+ * scan-in closes and the pass moves out of the Barcoded lane into "Awaiting
+ * thermoseal processing", where it waits to be pulled (pullIntoProcess — which
+ * now takes a Barcoded pass only from there). Nothing else changes: the stage is
+ * still barcoded, no cart is written, nothing is debited, custody stays with
+ * whoever counted the bucket up until the pull takes it over. Badge-gated; the
+ * holder is `finishedBy` and the operator on the `finish` row.
+ */
+export async function finishBarcoding(input: PullInput): Promise<{ cycleId: string; bucketId: string; cycleNumber: number; quantity: number; operator: string }> {
+	await connectDB();
+	const [cycle, gate] = await Promise.all([
+		BucketCycle.findById(input.cycleId).lean() as Promise<any>,
+		requireBadge(input.badge, input.user)
+	]);
+	if (!cycle || cycle.status !== 'open') throw new BucketError('Pass is not open.', 404);
+	const label = cycleLabel(cycle.bucketId, cycle.cycleNumber);
+	if (cycle.stage !== 'barcoded') throw new BucketError(`${label} is at ${stageLabel(cycle.stage)} — Finished here is for a bucket that is still being barcoded.`);
+	if (cycle.inProcessAt) throw new BucketError(`${label} has already been pulled into in process.`, 409);
+	if (cycle.finishedAt) throw new BucketError(`${label} is already marked Finished${cycle.finishedBy?.username ? ` (${cycle.finishedBy.username})` : ''}.`, 409);
+	const members: string[] = cycle.cartridgeIds ?? [];
+	if (members.length === 0) throw new BucketError('Scan at least one cart into the bucket before marking it finished.');
+
+	const now = new Date();
+	const op = { _id: gate.operator._id, username: gate.operator.username };
+	const won = await BucketCycle.updateOne(
+		{ _id: cycle._id, status: 'open', stage: 'barcoded', inProcessAt: { $exists: false }, finishedAt: { $exists: false } },
+		{ $set: { finishedAt: now, finishedBy: op } }
+	);
+	if (!won.modifiedCount) throw new BucketError(`${label} was just changed by someone else — reload the board.`, 409);
+	await logTx({
+		bucketId: cycle.bucketId, cycleId: cycle._id, type: 'finish', fromStage: 'barcoded', toStage: 'barcoded',
+		qtyBefore: members.length, qtyAfter: members.length, reason: `barcoding finished — ${AWAITING_THERMOSEAL_LABEL.toLowerCase()}`,
+		operator: gate.operator, enteredBy: input.user, attribution: { ...gate.attribution, ...(cycle.custodyId ? { custodyId: cycle.custodyId } : {}) }
+	});
+	await audit('bucket_cycles', cycle._id, 'FINISH', gate.operator, { finishedAt: now, finishedBy: op.username, members: members.length, badgeId: gate.badgeId ?? null, enteredBy: input.user.username });
+	return { cycleId: cycle._id, bucketId: cycle.bucketId, cycleNumber: cycle.cycleNumber, quantity: members.length, operator: op.username };
+}
+
+/**
+ * Take that Finished back while the bucket is still waiting (not pulled): it
+ * returns to the Barcoded lane and takes scans again. For a bucket marked
+ * finished too early. Badge-gated; a `reopen` row.
+ */
+export async function reopenBarcoding(input: PullInput): Promise<{ cycleId: string; bucketId: string; cycleNumber: number; operator: string }> {
+	await connectDB();
+	const [cycle, gate] = await Promise.all([
+		BucketCycle.findById(input.cycleId).lean() as Promise<any>,
+		requireBadge(input.badge, input.user)
+	]);
+	if (!cycle || cycle.status !== 'open') throw new BucketError('Pass is not open.', 404);
+	const label = cycleLabel(cycle.bucketId, cycle.cycleNumber);
+	if (cycle.stage !== 'barcoded' || !cycle.finishedAt) throw new BucketError(`${label} is not waiting in ${AWAITING_THERMOSEAL_LABEL} — there is nothing to reopen.`);
+	if (cycle.inProcessAt) throw new BucketError(`${label} has already been pulled into in process${cycle.inProcessBy?.username ? ` (${cycle.inProcessBy.username})` : ''} — it can no longer be reopened for scanning.`, 409);
+
+	const won = await BucketCycle.updateOne(
+		{ _id: cycle._id, status: 'open', stage: 'barcoded', inProcessAt: { $exists: false }, finishedAt: { $exists: true } },
+		{ $unset: { finishedAt: '', finishedBy: '' } }
+	);
+	if (!won.modifiedCount) throw new BucketError(`${label} was just changed by someone else — reload the board.`, 409);
+	const count: number = cycle.quantity ?? 0;
+	await logTx({
+		bucketId: cycle.bucketId, cycleId: cycle._id, type: 'reopen', fromStage: 'barcoded', toStage: 'barcoded',
+		qtyBefore: count, qtyAfter: count, reason: 'finished taken back — reopened for scanning',
+		operator: gate.operator, enteredBy: input.user, attribution: { ...gate.attribution, ...(cycle.custodyId ? { custodyId: cycle.custodyId } : {}) }
+	});
+	await audit('bucket_cycles', cycle._id, 'REOPEN', gate.operator, { finishedAt: null, badgeId: gate.badgeId ?? null, enteredBy: input.user.username }, { finishedAt: cycle.finishedAt, finishedBy: cycle.finishedBy?.username ?? null });
+	return { cycleId: cycle._id, bucketId: cycle.bucketId, cycleNumber: cycle.cycleNumber, operator: gate.operator.username };
+}
+
 /**
  * Pull a pass into "in process" (user, 2026-10-05: "that is where the attribution
  * will occur and the badge handoff will occur"). A Barcoded pass is pulled into
@@ -1279,6 +1355,11 @@ export async function pullIntoProcess(input: PullInput): Promise<{ cycleId: stri
 	if (!pullable.includes(cycle.stage)) throw new BucketError(`${label} is at ${stageLabel(cycle.stage)} — there is nothing to pull it into.`);
 	if (cycle.inProcessAt) throw new BucketError(`${label} is already in process${cycle.inProcessBy?.username ? ` (${cycle.inProcessBy.username})` : ''}.`, 409);
 	if ((cycle.cartridgeIds ?? []).length === 0) throw new BucketError('Scan at least one cart into the bucket before pulling it.');
+	// A Barcoded bucket is picked up out of "Awaiting thermoseal processing", not out of
+	// the scanning lane: whoever is scanning it in marks it Finished first (finishBarcoding).
+	if (cycle.stage === 'barcoded' && !cycle.finishedAt) {
+		throw new BucketError(`${label} is still being barcoded — it has to be marked Finished before it can be pulled into in process.`, 409, 'NOT_FINISHED');
+	}
 	const toward = nextStage(cycle.stage as BucketStatus);
 	const towardLabel = toward ? STAGE_LABELS[toward] : STAGE_LABELS.backing;
 
@@ -1286,7 +1367,8 @@ export async function pullIntoProcess(input: PullInput): Promise<{ cycleId: stri
 	const op = { _id: gate.operator._id, username: gate.operator.username };
 	// The filter is the claim: two terminals pulling the same bucket → one wins.
 	const won = await BucketCycle.updateOne(
-		{ _id: cycle._id, status: 'open', stage: { $in: pullable }, inProcessAt: { $exists: false } },
+		// (For a Barcoded pass the claim also re-checks Finished, so a pull cannot race a reopen.)
+		{ _id: cycle._id, status: 'open', stage: { $in: pullable }, inProcessAt: { $exists: false }, ...(cycle.stage === 'barcoded' ? { finishedAt: { $exists: true } } : {}) },
 		{ $set: { inProcessAt: now, inProcessBy: op } }
 	);
 	if (!won.modifiedCount) throw new BucketError(`${label} was just pulled by someone else.`, 409);
@@ -2127,6 +2209,9 @@ export interface BoardCycle {
 	/** Unpressed only: set once the pass has been pulled into "in process" (null = waiting). */
 	inProcessAt: string | null;
 	inProcessBy: string | null;
+	/** Barcoded only: set once barcoding was marked Finished — the pass is awaiting thermoseal processing until it is pulled. */
+	finishedAt: string | null;
+	finishedBy: string | null;
 }
 
 export interface BoardBucket {
@@ -2173,7 +2258,9 @@ export async function boardData(): Promise<{ cycles: BoardCycle[]; available: Bo
 			openedBy: c.openedBy?.username ?? null,
 			sourceLots: (c.sourceLots ?? []).map((l: any) => ({ partNumber: l.partNumber, lotId: l.lotId })),
 			inProcessAt: c.inProcessAt ? new Date(c.inProcessAt).toISOString() : null,
-			inProcessBy: c.inProcessBy?.username ?? null
+			inProcessBy: c.inProcessBy?.username ?? null,
+			finishedAt: c.finishedAt ? new Date(c.finishedAt).toISOString() : null,
+			finishedBy: c.finishedBy?.username ?? null
 		})),
 		available: buckets.filter(b => b.state === 'available').map(toBucket),
 		quarantined: buckets.filter(b => b.state === 'quarantined').map(toBucket)
@@ -2425,7 +2512,7 @@ export async function forceBucketPhase(input: ForceBucketInput): Promise<ForceBu
 
 	const set: Record<string, unknown> = { stage: to, stageEnteredAt: now };
 	if (from === 'barcoded') set.openedQty = ids.length; // same rule as advanceCycle: fixed when leaving Barcoded
-	await BucketCycle.updateOne({ _id: cycle._id }, { $set: set, $unset: { inProcessAt: '', inProcessBy: '' } });
+	await BucketCycle.updateOne({ _id: cycle._id }, { $set: set, $unset: { inProcessAt: '', inProcessBy: '', finishedAt: '', finishedBy: '' } });
 	if (ids.length) {
 		const backedStamp = to === BACKED_STAGE
 			? { 'backing.recordedAt': now, 'backing.operator': by, 'backing.bucketCycleId': cycle._id, 'backing.bucketBarcode': id }
