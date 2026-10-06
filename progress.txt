@@ -18635,3 +18635,7 @@ to tell whether the misses cluster on a position (deck geometry) or scatter (tip
   runs in the window so the rate is honest.
 Smoke-tested the schema against Atlas on a throwaway run (push / enum reject / pull / delete).
 `npm run check`: 16 errors / 434 warnings — identical to origin/master, none in the changed files.
+Deployment: production — Vercel GitHub integration build of master
+Source: branch master @ commit c588bdf1 (merge of feat/reagent-well-tracker @ 176a48d0)
+Retrieve this exact code: git checkout master at commit c588bdf1
+What this deployment is for: reagent-filling run page gets the per-well mistake tracker; new Well Issues tab.
