@@ -18731,3 +18731,152 @@ Source: branch master @ commit ad3602207 (PR #85, merge of feat/validation-autog
 Retrieve this exact code: git checkout master at commit ad3602207
   (or: git log master --oneline to find it if the branch has since moved on)
 What this deployment is for: validation workflow — auto-graded bench + blank, optical confirmation banked (release = mag + thermo), sonic Fleet check / Detailed compare.
+
+================================================================================
+2026-10-06 — feat/device-assembly-wi — Manufacturing → Device Assembly Work Instruction (docx import, sub-assemblies, revision tracker, per-step inventory pulls)
+================================================================================
+New tab under Manufacturing: /manufacturing/device-assembly ("Device Assembly WI" in the sidebar).
+Imports the SPU assembly Word document (WIMF With Sections.docx) and turns it into a
+structured, editable work instruction with an automatic revision tracker and per-step
+material deduction from inventory.
+
+Parser (src/lib/server/services/device-assembly-wi-parser.ts): mammoth → HTML, then a
+tolerant block/table walker. Front matter (PURPOSE/SCOPE/RESPONSIBILITIES/DEFINITIONS/
+REFERENCES) is kept; everything after PROCEDURE is split into sections: "Cleaning and
+Setup:" → section 0 (Setup), "Subassembly #N: title" → Sub-Assembly N. Always pads to five
+sub-assemblies so empty ones exist to move steps into. Each Step/Instructions/Photo row
+becomes a step: images from either cell, materials pulled out of the italic bullets
+("Heater Block (PT-SPU-013) x1") and typed as part / tool (TOOL-SPU-xxx) / mfg aid / supply,
+quantity+unit parsed ("x350mm", "x2 Drops"; trailing words like "need new pt number" become
+notes, not units). "Note:"-only rows become section notes rather than steps. ESD flag and
+"Enter X Serial Number in DHR" fields are detected per step. Explicit step numbers are honoured
+when present, otherwise steps are numbered sequentially per section. Result on the real file:
+Setup 4 steps, Sub-Assembly 1 45 steps, 92 images, 0 parser warnings.
+
+Models (src/lib/server/db/models/): device-assembly-wi.ts (one doc, sections[] → steps[] →
+images[]/materials[], revisions[] append-only, optimisticConcurrency), device-assembly-
+material-pull.ts (immutable per-step pull ledger), work-instruction-image.ts (binary fallback
+store served by /api/device-assembly/images/[id] — used when R2 is not configured, e.g. the
+import script; routes try R2 worker → R2 S3 → Mongo so a picture is never lost).
+
+Revision tracker: every mutation goes through mutateDeviceAssemblyWI() which bumps
+currentVersion and appends {version/label "vN", changeType, summary, location
+(section/step), before, after, changedBy {_id, username}, changedAt} in the same save, plus
+an AuditLog row. Page header shows "Rev vN · last changed by X on <time>"; recent revisions
+listed on the page; /manufacturing/device-assembly/revisions has the full filterable
+history (before/after JSON) and the material-pull ledger.
+
+Editing (manufacturing:write, "Edit mode"): rename sub-assembly, edit step (title, rich-text
+instructions via contenteditable, ESD flag, DHR fields), add/delete/move step between
+sub-assemblies (steps renumber), add/remove/reorder/caption images (multi-file upload),
+add/edit/remove materials (document syntax "Name (PT-SPU-000) x1" or form fields; part numbers
+auto-link to PartDefinition, catalog datalist), re-link parts after catalog changes. Steps are
+addressable as "step N in Sub-Assembly M" (anchor #step-M-N, ?section=M).
+
+Inventory pulls: "Pull from inventory" on any step with part materials → tick parts, units
+built multiplier, optional SPU serial + notes → pullMaterialsForStep() validates every row
+first (linked to catalog, qty > 0; a bad row aborts the whole pull) then calls the shared
+recordTransaction({transactionType:'consumption'}) per part (decrements
+PartDefinition.inventoryCount, triggers low-stock + kanban replenishment as elsewhere) and
+writes a DeviceAssemblyMaterialPull row + AuditLog. Live on-hand counts shown next to each
+material; per-step pull history on the page.
+
+Import: scripts/import-device-assembly-wi.ts <file.docx> [username] (Mongo image store), or
+the Upload .docx form on the page (re-import replaces sections and records a new version).
+Ran the import on "WIMF With Sections.docx" as alejandro → WIMF-SPU-01 v1. Part numbers in
+the doc that are not in the catalog (flagged on the page, pulls blocked until linked):
+PT-CT-001, PT-SPU-035, PT-SPU-053, SBA-SPU-001, SBA-SPU-002 (catalog has SBA-SPU-003 Main
+Board / SBA-SPU-004 Stage Board — the doc's numbering is stale).
+
+Verified via dev server with a real session: page/revisions/image endpoint render (200),
+rename → v2 with correct who/when/summary, empty pull / unlinked-material pull / no-op edit
+all rejected with no inventory_transactions written. Smoke-test revision was reset so the
+live history starts at v1. npm run check: 10 errors (unchanged from baseline), +1 warning
+(intentional initial-value read of `data` for the default tab).
+
+Files: src/lib/server/db/models/{device-assembly-wi,device-assembly-material-pull,
+work-instruction-image}.ts, models/index.ts, src/lib/server/services/device-assembly-wi
+{,-parser,-images,-pulls}.ts, src/routes/manufacturing/device-assembly/{+page.server.ts,
++page.svelte,revisions/+page.server.ts,revisions/+page.svelte},
+src/routes/api/device-assembly/images/[id]/+server.ts, src/routes/+layout.svelte (nav),
+scripts/import-device-assembly-wi.ts.
+
+================================================================================
+2026-10-06 — feat/device-assembly-wi — MCP connector suite for the Device Assembly WI (20 device_wi_* tools)
+================================================================================
+Full edit + inventory surface for Manufacturing → Device Assembly WI through Claude chat, so any
+change anyone wants to make can be done conversationally. bims-operations MCP server bumped
+3.5.1 → 3.6.0 (claude.ai caches the tool list on version).
+
+Agent API (src/routes/api/agent/device-assembly/**, requireAgentApiKey): GET / (overview: version,
+who/when, sections → step list, parts not in catalog, last 5 revisions), GET /step
+(?section&step | ?stepId | ?section | ?q= search), POST /mutate {op, actor, …} (rename_section,
+set_section_notes, update_step [replace/append/html], add_step, delete_step [confirmed],
+move_step, add_image [imageUrl or base64], remove_image, set_image_caption, reorder_image,
+add_material [document syntax or fields], update_material [incl. part-number re-link],
+remove_material, relink_parts, import [docx URL, confirmed]), POST /pull (preview unless
+confirmed:true; optional items subset/overrides, unitsBuilt multiplier, deviceSerial; blocked
+parts reported), GET /revisions (filters user/section/step/since, detail=1 for before/after),
+GET /pulls (ledger with filters).
+
+Reference resolution lives in src/lib/server/services/device-assembly-wi-agent.ts: section =
+number | "sub-assembly 2" | "SA2" | "setup" | title fragment; step = number | stepId | title
+phrase; material = part number | materialId | name fragment; image = position | imageId | url.
+Ambiguity and misses return actionable 404s listing the valid options. Actor is resolved via
+machine-actor.resolveActor (must be an active BIMS user) and every mutation goes through the same
+revision-tracked service functions the UI uses, so revisions show the human's username.
+
+MCP tools (src/lib/server/mcp/bims-mcp.ts): device_wi_overview, device_wi_get_step,
+device_wi_revisions, device_wi_pull_history (read); device_wi_rename_section,
+device_wi_set_section_notes, device_wi_update_step, device_wi_add_step, device_wi_delete_step,
+device_wi_move_step, device_wi_add_image, device_wi_remove_image, device_wi_set_image_caption,
+device_wi_reorder_image, device_wi_add_material, device_wi_update_material,
+device_wi_remove_material, device_wi_relink_parts, device_wi_pull_materials (preview → user
+confirms numbered list → confirmed:true), device_wi_import. Write tools go through machineWrite
+(actor required, machine activity logged); delete/remove/import carry destructiveHint.
+
+Verified on the dev server with AGENT_API_KEY set: overview/step/search/revisions/pulls reads,
+mutate without actor → attribution refusal, rename → v2, caption → v3, delete without confirmed
+→ refused, pull preview (PT-SPU-041 ×2 units: 47→43) and blocked preview for the unlinked
+Stage Board; MCP initialize (3.6.0), tools/list shows all 20 device_wi_* tools, tools/call for
+overview/get_step/revisions, unknown actor → isError. Test revisions reset to v1 afterwards.
+docs/MCP-SERVER.md updated. npm run check: 10 errors (baseline), warnings unchanged.
+
+================================================================================
+2026-10-06 — feat/device-assembly-wi — moved the WI tab from Manufacturing to SPU as "SPU Assembly WI"
+================================================================================
+Per Alejandro: the work-instruction tab now sits in the SPU sidebar group (after SPU Assembly)
+labelled "SPU Assembly WI", at /spu/assembly-wi (+ /spu/assembly-wi/revisions). The route
+directory moved from src/routes/manufacturing/device-assembly → src/routes/spu/assembly-wi;
+the old paths 301-redirect (query string preserved) so bookmarks and the MCP pageUrl keep
+working. Page/revisions permissions switched from manufacturing:read/write to spu:read/write to
+match the rest of the SPU section. All user-facing text, MCP tool descriptions, the agent
+overview pageUrl, docs/MCP-SERVER.md and the import script now say "SPU Assembly Work
+Instruction" / "SPU → SPU Assembly WI"; the stored document title in Mongo was updated to match.
+Internal identifiers are unchanged on purpose (DeviceAssemblyWI model, device_wi_* MCP tool
+names, /api/agent/device-assembly/**, /api/device-assembly/images/** — image URLs are persisted
+in the document). Verified on the dev server: new page + revisions render (200), old paths 301 →
+new. npm run check: 10 errors (baseline).
+
+================================================================================
+2026-10-06 — feat/device-assembly-wi — merged origin/master into the branch; PR #86 ready to merge
+================================================================================
+Local master had been 374 commits behind GitHub when the branch was cut, so PR #86 showed as
+not mergeable. Merged origin/master into feat/device-assembly-wi (1ce643aa). Conflicts:
+src/lib/server/mcp/bims-mcp.ts (master's research-analysis tools kept + the 20 device_wi_*
+tools; MCP server version 3.8.0 → 3.9.0 so connectors refresh), docs/MCP-SERVER.md (own
+"SPU Assembly Work Instruction tools (v3.9.0)" section), progress.txt (both logs). Lockfile
+taken from master. The branch also carries 5f2fb7a3 (camera_capture.py / NO_POST_PROCESSING
+refactor + lockfile), committed by VS Code "Publish Branch" from pending working-tree edits —
+not part of the WI work. Verified on the merged tree: npm install, npm run check (13 errors,
+all pre-existing in master: r2.ts, research-proxy.ts, AskBimsWidget, assembly/[sessionId],
+validation/magnetometer — none in today's files), npm run build ✔. PR #86 now mergeable_state
+"clean". Merge into master (production) left for a human per review policy.
+
+Deployment: preview — <fill from Vercel dashboard: Deployments → branch feat/device-assembly-wi>
+Source: branch feat/device-assembly-wi @ commit 1ce643aa
+Retrieve this exact code: git checkout feat/device-assembly-wi at commit 1ce643aa
+  (or: git log feat/device-assembly-wi --oneline to find it if the branch has since moved on)
+What this deployment is for: SPU → SPU Assembly WI tab (docx import, sub-assemblies, revision
+  tracker, inventory pulls) + device_wi_* MCP tools (bims-operations 3.9.0) for review before
+  merging PR #86 to production.
