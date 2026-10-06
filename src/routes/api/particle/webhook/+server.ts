@@ -14,6 +14,7 @@ import { connectDB, DeviceEvent, ParticleDevice, Spu, OpticalBlankRun, generateI
 import { requireAgentApiKey } from '$lib/server/api-auth';
 import { syncServiceFlag } from '$lib/server/service-flag';
 import { parseTestPayload } from '$lib/server/test-payload';
+import { handleSweepChunk, isSweepChunkEvent } from '$lib/server/validation/mag-sweep-ingest';
 import type { RequestHandler } from './$types';
 
 export const POST: RequestHandler = async ({ request }) => {
@@ -33,6 +34,17 @@ export const POST: RequestHandler = async ({ request }) => {
 
 	if (!deviceId) {
 		return json({ error: 'Missing coreid (device ID)' }, { status: 400 });
+	}
+
+	// Magnetometer sweep chunks take their own path and return early. A sweep is
+	// far too large for one publish, so firmware v98 ships it as ~109 chunk events
+	// that must be buffered and reassembled before anything can be stored — that
+	// does not fit the one-event-one-DeviceEvent shape the rest of this handler
+	// has. The logic lives in $lib/server/validation/mag-sweep-ingest so this
+	// route stays small and mergeable.
+	if (isSweepChunkEvent(eventName)) {
+		const at = publishedAt ? new Date(publishedAt) : new Date();
+		return await handleSweepChunk(deviceId, eventData, at);
 	}
 
 	// Map Particle event names to our event types

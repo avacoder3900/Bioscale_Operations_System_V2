@@ -1,6 +1,4 @@
 <script lang="ts">
-	import { generateTestBarcode } from '$lib/utils/test-barcode';
-
 	interface ReagentDef {
 		wellPosition: number;
 		reagentName: string;
@@ -9,19 +7,46 @@
 
 	interface TubeRecord {
 		wellPosition: number;
+		reagentName: string;
 		sourceLotId: string;
 		transferTubeId: string;
 	}
 
+	/** A research-app reagent lot (reagent_set_lots): the bundle of inventory barcodes being filled. */
+	interface ReagentLotOption {
+		_id: string;
+		lotNumber: string;
+		name?: string;
+		assayId?: string;
+		createdAt?: string;
+		components?: { role: string; catalogName?: string; manufacturerLotId?: string }[];
+	}
+
+	/** A research-app fill lot (fill_lots): one reagent lot, however many robot runs. */
+	interface FillLotOption {
+		_id: string;
+		fillLotNumber: string;
+		name?: string;
+		reagentLotId: string;
+		reagentLotNumber: string;
+		runIds?: string[];
+		fillDate?: string;
+	}
+
 	interface Props {
 		reagentDefinitions: ReagentDef[];
-		onComplete: (tubes: TubeRecord[]) => void;
+		reagentLots: ReagentLotOption[];
+		fillLots: FillLotOption[];
+		/** The fill lot used by the most recent run (today's default). */
+		defaultFillLotId?: string;
+		onComplete: (tubes: TubeRecord[], fillLotId: string) => void;
+		onCreateFillLot?: (reagentLotId: string, name: string) => Promise<{ ok: boolean; error?: string; fillLot?: FillLotOption }>;
 		onSaveNote?: (noteBody: string) => Promise<{ ok: boolean; error?: string; cartridgeCount?: number }>;
 		readonly?: boolean;
 		cartridgeCount?: number;
 	}
 
-	let { reagentDefinitions, onComplete, onSaveNote, readonly: isReadonly = false, cartridgeCount = 0 }: Props = $props();
+	let { reagentDefinitions, reagentLots, fillLots, defaultFillLotId = '', onComplete, onCreateFillLot, onSaveNote, readonly: isReadonly = false, cartridgeCount = 0 }: Props = $props();
 
 	// Operator-entered batch note — saved against every cartridge currently
 	// loaded on the run via the recordBatchNote action.
@@ -50,182 +75,144 @@
 		}
 	}
 
-	let batchBarcode = $state('');
-	let scanInput = $state('');
-	let scanInputEl: HTMLInputElement | undefined = $state();
-	let scanError = $state('');
+	let lots = $state<FillLotOption[]>(fillLots);
+	let selectedFillLotId = $state(defaultFillLotId && fillLots.some((f) => f._id === defaultFillLotId) ? defaultFillLotId : (fillLots[0]?._id ?? ''));
 	let submitting = $state(false);
-	type BatchData = { lotId: string; cartridgeCount?: number; tubes: { wellPosition: number; reagentName: string; tubeId: string }[] };
-	let batchData = $state<BatchData | null>(null);
-	let fetchingBatch = $state(false);
+	let showNew = $state(false);
+	let newReagentLotId = $state('');
+	let newName = $state('');
+	let creating = $state(false);
+	let createError = $state('');
 
 	const activeWells = $derived(
 		reagentDefinitions.filter((d) => d.isActive).sort((a, b) => a.wellPosition - b.wellPosition)
 	);
+	const selectedFill = $derived(lots.find((f) => f._id === selectedFillLotId) ?? null);
+	const selectedLot = $derived(selectedFill ? (reagentLots.find((l) => l._id === selectedFill.reagentLotId) ?? null) : null);
+	const isDefault = $derived(!!selectedFill && selectedFill._id === defaultFillLotId);
+	const critical = (lot: ReagentLotOption, role: string) => lot.components?.find((c) => c.role === role);
+	const describe = (lot: ReagentLotOption) =>
+		['qd630', 'qd480', 'beads']
+			.map((r) => { const c = critical(lot, r); return c ? `${r}: ${c.catalogName ?? '?'}${c.manufacturerLotId ? ` (${c.manufacturerLotId})` : ''}` : `${r}: –`; })
+			.join(' · ');
 
-	function playBeep(success: boolean) {
+	// Every well of this fill carries the reagent lot number; the transfer tube id is
+	// derived so downstream views keep a per-well record.
+	const tubes = $derived<TubeRecord[]>(
+		selectedFill
+			? activeWells.map((w, i) => ({ wellPosition: w.wellPosition, reagentName: w.reagentName, sourceLotId: selectedFill.reagentLotNumber, transferTubeId: `${selectedFill.reagentLotNumber}-T${i + 1}` }))
+			: []
+	);
+
+	async function createFillLot() {
+		if (!onCreateFillLot || !newReagentLotId || creating) return;
+		creating = true;
+		createError = '';
 		try {
-			const ctx = new AudioContext();
-			const osc = ctx.createOscillator();
-			const gain = ctx.createGain();
-			osc.connect(gain);
-			gain.connect(ctx.destination);
-			osc.frequency.value = success ? 880 : 220;
-			osc.type = 'sine';
-			gain.gain.value = 0.3;
-			osc.start();
-			osc.stop(ctx.currentTime + 0.15);
-		} catch { /* audio not available */ }
-	}
-
-	async function handleBatchScan() {
-		const value = scanInput.trim();
-		if (!value) return;
-
-		scanError = '';
-		fetchingBatch = true;
-		batchBarcode = value;
-		scanInput = '';
-
-		try {
-			const res = await fetch(`/api/manufacturing/reagent-batch/${encodeURIComponent(value)}`);
-			if (!res.ok) {
-				if (res.status === 404) {
-					// API not yet built — use stub data based on active wells
-					batchData = {
-						lotId: value,
-						cartridgeCount: cartridgeCount || undefined,
-						tubes: activeWells.map((w, i) => ({
-							wellPosition: w.wellPosition,
-							reagentName: w.reagentName,
-							tubeId: `${value}-T${i + 1}`
-						}))
-					};
-					playBeep(true);
-				} else {
-					throw new Error(`Server error: ${res.status}`);
-				}
-			} else {
-				const json = await res.json();
-				batchData = json;
-				playBeep(true);
+			const r = await onCreateFillLot(newReagentLotId, newName.trim());
+			if (!r.ok || !r.fillLot) {
+				createError = r.error ?? 'Could not open the fill lot';
+				return;
 			}
+			lots = [r.fillLot, ...lots];
+			selectedFillLotId = r.fillLot._id;
+			showNew = false;
+			newName = '';
+			newReagentLotId = '';
 		} catch (e) {
-			scanError = e instanceof Error ? e.message : 'Failed to fetch batch data';
-			batchBarcode = '';
-			batchData = null;
-			playBeep(false);
+			createError = e instanceof Error ? e.message : 'Could not open the fill lot';
 		} finally {
-			fetchingBatch = false;
+			creating = false;
 		}
 	}
 
-	function resetScan() {
-		batchBarcode = '';
-		batchData = null;
-		scanError = '';
-		scanInput = '';
-		setTimeout(() => scanInputEl?.focus(), 50);
-	}
-
 	function handleSubmit() {
-		if (submitting || !batchData) return;
+		if (submitting || !selectedFill) return;
 		submitting = true;
-
-		const result: TubeRecord[] = batchData.tubes.map((t) => ({
-			wellPosition: t.wellPosition,
-			sourceLotId: batchData!.lotId,
-			transferTubeId: t.tubeId
-		}));
-
-		onComplete(result);
+		onComplete(tubes, selectedFill._id);
 	}
 </script>
 
 <div class="space-y-5">
-	<h2 class="text-lg font-semibold text-[var(--color-tron-text)]">Reagent Batch Scan</h2>
+	<h2 class="text-lg font-semibold text-[var(--color-tron-text)]">Fill Lot</h2>
 	<p class="text-sm text-[var(--color-tron-text-secondary)]">
-		Scan a single reagent batch barcode to auto-populate all tube information.
+		A fill lot is one reagent lot (630 QD, 480 QD, beads and buffers) filled across as many robot runs as you like. Runs default to the fill lot used last; open a new one when the reagents change.
 	</p>
 
 	{#if isReadonly}
 		<p class="rounded border border-[var(--color-tron-yellow)]/30 bg-[var(--color-tron-yellow)]/5 px-3 py-2 text-xs text-[var(--color-tron-yellow)]">Read-only — viewing past stage</p>
 	{/if}
 
-	{#if !batchData}
-		<!-- Scan input -->
-		<div class="space-y-3">
-			<p class="text-xs font-medium text-[var(--color-tron-cyan)]">
-				Scan reagent batch barcode
-			</p>
-			<div class="flex gap-2">
-				<input
-					bind:this={scanInputEl}
-					bind:value={scanInput}
-					onkeydown={(e) => { if (e.key === 'Enter') handleBatchScan(); }}
-					placeholder="Reagent batch barcode..."
-					disabled={fetchingBatch}
-					class="min-h-[44px] flex-1 rounded border border-[var(--color-tron-cyan)]/30 bg-[var(--color-tron-bg)] px-3 py-2 text-sm text-[var(--color-tron-text)] focus:border-[var(--color-tron-cyan)] focus:outline-none disabled:opacity-50"
-				/>
-				<button type="button" onclick={() => { scanInput = generateTestBarcode('RBATCH'); handleBatchScan(); }}
-					class="min-h-[44px] rounded border border-[var(--color-tron-border)] px-3 py-2 text-xs text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-orange)] hover:text-[var(--color-tron-orange)]"
-				>
-					Test
-				</button>
-			</div>
-			{#if fetchingBatch}
-				<p class="text-xs text-[var(--color-tron-cyan)] animate-pulse">Looking up batch...</p>
-			{/if}
-			{#if scanError}
-				<p class="text-xs text-red-400">{scanError}</p>
+	<div class="space-y-3">
+		<div class="flex items-center justify-between">
+			<label for="fill-lot-pick" class="text-xs font-medium text-[var(--color-tron-cyan)]">Fill lot (required)</label>
+			{#if onCreateFillLot && !isReadonly}
+				<button type="button" onclick={() => (showNew = !showNew)} class="text-xs text-[var(--color-tron-cyan)] underline">{showNew ? 'cancel' : '+ new fill lot'}</button>
 			{/if}
 		</div>
-	{:else}
-		<!-- Batch data display -->
-		<div class="space-y-4">
-			<div class="flex items-center justify-between rounded-lg border border-[var(--color-tron-cyan)]/30 bg-[var(--color-tron-cyan)]/10 p-4">
-				<div>
-					<p class="text-xs text-[var(--color-tron-text-secondary)]">Reagent Batch</p>
-					<p class="font-mono text-lg font-bold text-[var(--color-tron-cyan)]">{batchBarcode}</p>
-					<p class="text-xs text-[var(--color-tron-text-secondary)]">Lot: {batchData.lotId}</p>
-				</div>
-				<button
-					type="button"
-					onclick={resetScan}
-					class="rounded border border-[var(--color-tron-border)] px-3 py-1.5 text-xs text-[var(--color-tron-text-secondary)] hover:border-red-500/50 hover:text-red-400"
-				>
-					Re-scan
+		<select
+			id="fill-lot-pick"
+			bind:value={selectedFillLotId}
+			disabled={isReadonly || submitting}
+			class="min-h-[44px] w-full rounded border border-[var(--color-tron-cyan)]/30 bg-[var(--color-tron-bg)] px-3 py-2 text-sm text-[var(--color-tron-text)] focus:border-[var(--color-tron-cyan)] focus:outline-none disabled:opacity-50"
+		>
+			<option value="">Select a fill lot…</option>
+			{#each lots as f (f._id)}
+				<option value={f._id}>{f.fillLotNumber}{f.name ? ` · ${f.name}` : ''} · reagent lot {f.reagentLotNumber}{f._id === defaultFillLotId ? ' · (last used)' : ''}</option>
+			{/each}
+		</select>
+		{#if lots.length === 0 && !showNew}
+			<p class="text-xs text-red-400">No open fill lots. Open one here (pick the reagent lot) or in the research app under Curves.</p>
+		{/if}
+
+		{#if showNew}
+			<div class="space-y-2 rounded border border-[var(--color-tron-cyan)]/30 bg-[var(--color-tron-surface)] p-3">
+				<label for="new-fill-reagent-lot" class="text-xs font-medium text-[var(--color-tron-text-secondary)]">Reagent lot for the new fill lot</label>
+				<select id="new-fill-reagent-lot" bind:value={newReagentLotId} disabled={creating} class="min-h-[40px] w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-3 py-2 text-sm text-[var(--color-tron-text)]">
+					<option value="">Select a reagent lot…</option>
+					{#each reagentLots as lot (lot._id)}
+						<option value={lot._id}>{lot.lotNumber}{lot.name ? ` · ${lot.name}` : ''}</option>
+					{/each}
+				</select>
+				{#if reagentLots.length === 0}
+					<p class="text-xs text-red-400">No active reagent lots exist. Create one in the research app (Reagent Lots) first.</p>
+				{/if}
+				<input type="text" bind:value={newName} disabled={creating} placeholder="name (optional), e.g. Sept 21 algo fill" class="min-h-[40px] w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-3 py-2 text-sm text-[var(--color-tron-text)]" />
+				{#if createError}<p class="text-xs text-red-400">{createError}</p>{/if}
+				<button type="button" onclick={createFillLot} disabled={creating || !newReagentLotId} class="min-h-[40px] rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/20 px-4 text-sm font-semibold text-[var(--color-tron-cyan)] disabled:opacity-40">
+					{creating ? 'Opening…' : 'Open fill lot'}
 				</button>
 			</div>
+		{/if}
+	</div>
 
-			<!-- 6-tube location diagram -->
+	{#if selectedFill}
+		<div class="space-y-4">
+			<div class="rounded-lg border border-[var(--color-tron-cyan)]/30 bg-[var(--color-tron-cyan)]/10 p-4">
+				<p class="text-xs text-[var(--color-tron-text-secondary)]">Fill lot{isDefault ? ' · same as the last run' : ''}</p>
+				<p class="font-mono text-lg font-bold text-[var(--color-tron-cyan)]">{selectedFill.fillLotNumber}{selectedFill.name ? ` · ${selectedFill.name}` : ''}</p>
+				<p class="text-xs text-[var(--color-tron-text-secondary)]">reagent lot <span class="font-mono">{selectedFill.reagentLotNumber}</span>{selectedLot ? ` · ${describe(selectedLot)}` : ''}{selectedFill.runIds?.length ? ` · ${selectedFill.runIds.length} run${selectedFill.runIds.length === 1 ? '' : 's'} so far` : ''}</p>
+			</div>
+
 			<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4">
-				<p class="mb-3 text-xs font-medium text-[var(--color-tron-text-secondary)]">
-					Tube Locations ({batchData.tubes.length} tubes)
-				</p>
+				<p class="mb-3 text-xs font-medium text-[var(--color-tron-text-secondary)]">Tube Locations ({tubes.length} tubes)</p>
 				<div class="grid grid-cols-3 gap-3">
-					{#each batchData.tubes as tube (tube.wellPosition)}
+					{#each tubes as tube (tube.wellPosition)}
 						<div class="rounded border border-green-500/30 bg-green-900/10 p-3 text-center">
 							<div class="text-xs text-[var(--color-tron-text-secondary)]">Well {tube.wellPosition}</div>
 							<div class="mt-1 text-sm font-semibold text-[var(--color-tron-text)]">{tube.reagentName}</div>
-							<div class="mt-1 font-mono text-xs text-green-300">{tube.tubeId}</div>
+							<div class="mt-1 font-mono text-xs text-green-300">{tube.transferTubeId}</div>
 						</div>
 					{/each}
 				</div>
 			</div>
 
-			<!-- Batch note — applied to every cartridge in the run. Re-saving
-				 overwrites the prior reagent_prep note (action is idempotent). -->
 			{#if onSaveNote && !isReadonly}
 				<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4">
 					<div class="mb-2 flex items-center justify-between">
-						<label for="batch-note" class="text-xs font-medium text-[var(--color-tron-text-secondary)]">
-							Batch Note (optional)
-						</label>
+						<label for="batch-note" class="text-xs font-medium text-[var(--color-tron-text-secondary)]">Batch Note (optional)</label>
 						{#if cartridgeCount > 0}
-							<span class="text-[10px] text-[var(--color-tron-text-secondary)]/70">
-								Applies to {cartridgeCount} cartridge{cartridgeCount === 1 ? '' : 's'}
-							</span>
+							<span class="text-[10px] text-[var(--color-tron-text-secondary)]/70">Applies to {cartridgeCount} cartridge{cartridgeCount === 1 ? '' : 's'}</span>
 						{/if}
 					</div>
 					<textarea
@@ -243,9 +230,7 @@
 							{:else if noteSaving}
 								<span class="text-[var(--color-tron-cyan)] animate-pulse">Saving...</span>
 							{:else if noteSavedAt}
-								<span class="text-green-400">
-									Saved to {noteSavedCount} cartridge{noteSavedCount === 1 ? '' : 's'} at {noteSavedAt.toLocaleTimeString()}
-								</span>
+								<span class="text-green-400">Saved to {noteSavedCount} cartridge{noteSavedCount === 1 ? '' : 's'} at {noteSavedAt.toLocaleTimeString()}</span>
 							{:else}
 								<span class="text-[var(--color-tron-text-secondary)]/60">Save anytime — re-saving overwrites the previous note.</span>
 							{/if}
@@ -263,7 +248,6 @@
 			{/if}
 		</div>
 
-		<!-- Confirm button -->
 		<button
 			type="button"
 			disabled={submitting || isReadonly}
@@ -275,7 +259,7 @@
 			{#if submitting}
 				Confirming...
 			{:else}
-				Confirm Reagent Batch ({batchData.tubes.length} tubes)
+				Fill on {selectedFill.fillLotNumber} ({tubes.length} tubes)
 			{/if}
 		</button>
 	{/if}

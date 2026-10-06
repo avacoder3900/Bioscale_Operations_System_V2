@@ -122,11 +122,11 @@
 		return phase === 0 ? 'New device' : `Post-service #${phase}`;
 	}
 
-	// The three modalities that make up SPU validation. `validation.lux` also
-	// exists in the schema but is never run, so it is deliberately excluded.
+	// The modalities that gate release (VALIDATION_INSTRUMENTS). Optical
+	// confirmation (`spectrophotometer`) was banked 2026-10-06; `validation.lux`
+	// exists in the schema but is never run. Both are deliberately excluded.
 	const VALIDATION_TESTS = [
 		{ key: 'magnetometer', name: 'Magnetometer', icon: '🧲' },
-		{ key: 'spectrophotometer', name: 'Spectrophotometer', icon: '🔬' },
 		{ key: 'thermocouple', name: 'Thermocouple', icon: '🌡️' }
 	] as const;
 
@@ -216,6 +216,32 @@
 				? 'failed'
 				: 'pending'
 	);
+
+	// Server-computed: which of the six offered validation tests have a run newer
+	// than the servicing reset. Not the same list as VALIDATION_TESTS above —
+	// that one is the three modalities that carry a pass/fail verdict.
+	const validationSince = $derived(
+		data.validationSince ?? { tests: [], ran: 0, passed: 0, total: 5, resetAt: null }
+	);
+
+	// Red / amber / green per test. Colour is never the only carrier — each dot
+	// keeps its name beside it and states its meaning in the tooltip and to
+	// screen readers, so this still reads correctly colour-blind.
+	const DOT = {
+		needed: { color: 'var(--color-tron-red)', label: 'needs test' },
+		ran: { color: 'var(--color-tron-yellow)', label: 'ran, not passed' },
+		passed: { color: 'var(--color-tron-green)', label: 'passed' }
+	} as const;
+	function dot(state: string) {
+		return DOT[state as keyof typeof DOT] ?? DOT.needed;
+	}
+	function dotTitle(t: { key: string; name: string; state: string; graded: boolean; autoVerdict?: string | null; lastRunAt: string | null }) {
+		const when = t.lastRunAt ? `last run ${formatDate(t.lastRunAt)}` : 'no run on record';
+		const auto = t.key === 'bench' || t.key === 'blank';
+		const how = t.graded || auto ? '' : ' (capture only — records no pass/fail)';
+		const reasons = auto && t.state === 'ran' ? (data.autoChecks as any)?.[t.key]?.reasons ?? [] : [];
+		return `${t.name}: ${dot(t.state).label}${how} — ${when}${reasons.length ? '\n' + reasons.join('\n') : ''}`;
+	}
 
 	// Only transitions legal from the current status (SPU-INV-07), server-computed.
 
@@ -320,7 +346,7 @@
 					? 'background: var(--color-tron-cyan); color: var(--color-tron-bg);'
 					: 'color: var(--color-tron-text-secondary);'}
 			>
-				{tab.label}{#if tab.k === 'validation'} ({validationPassedCount}/3){/if}
+				{tab.label}{#if tab.k === 'validation'} ({validationPassedCount}/{VALIDATION_TESTS.length}){/if}
 			</button>
 		{/each}
 		<a
@@ -461,19 +487,50 @@
 					<span class="flex items-center gap-2 text-xs">
 						<span
 							class="rounded-full px-2 py-0.5 font-bold"
-							style="color: {validationPassedCount >= 3 ? 'var(--color-tron-green)' : 'var(--color-tron-red)'}; background: rgba(128,128,128,0.12);"
-						>{validationPassedCount}/3</span>
+							style="color: {validationPassedCount >= VALIDATION_TESTS.length ? 'var(--color-tron-green)' : 'var(--color-tron-red)'}; background: rgba(128,128,128,0.12);"
+						>{validationPassedCount}/{VALIDATION_TESTS.length}</span>
 						<span
 							class="rounded-full px-2 py-0.5 font-bold"
 							style="color: {validationOverall === 'passed' ? 'var(--color-tron-green)' : validationOverall === 'failed' ? 'var(--color-tron-red)' : 'var(--color-tron-orange)'}; background: rgba(128,128,128,0.12);"
 						>{validationOverall.toUpperCase()}</span>
+						<span
+							class="rounded-full px-2 py-0.5 font-bold"
+							title="Validation tests green since this unit was last sent to servicing"
+							style="color: {validationSince.passed >= validationSince.total ? 'var(--color-tron-green)' : validationSince.passed > 0 ? 'var(--color-tron-orange)' : 'var(--color-tron-red)'}; background: rgba(128,128,128,0.12);"
+						>{validationSince.passed}/{validationSince.total}</span>
 						<a href="/validation" class="hover:underline" style="color: var(--color-tron-cyan);">Hub &rarr;</a>
 					</span>
+				</div>
+
+				<!-- Status of each of the six tests since the servicing button was
+				     pressed: red needs running, amber ran without passing, green is
+				     good. Blank/sonic/bench record no verdict, so for them the capture
+				     itself is the green state — they can never sit amber. -->
+				<div class="mb-4 rounded-lg border p-3" style="border-color: var(--color-tron-border); background: var(--color-tron-bg-secondary);">
+					<div class="tron-text-muted mb-2 text-xs">
+						{#if validationSince.resetAt}
+							Since servicing started {formatDate(validationSince.resetAt)}
+						{:else}
+							Never serviced — every test ever run on this unit counts
+						{/if}
+					</div>
+					<div class="flex flex-wrap gap-x-4 gap-y-2">
+						{#each validationSince.tests as t (t.key)}
+							<span class="flex items-center gap-1.5 text-xs" title={dotTitle(t)}>
+								<span
+									class="inline-block h-2.5 w-2.5 shrink-0 rounded-full"
+									style="background: {dot(t.state).color}; box-shadow: 0 0 6px {dot(t.state).color};"
+								></span>
+								<span class="sr-only">{dot(t.state).label}:</span>
+								<span style="color: {t.state === 'needed' ? 'var(--color-tron-text-secondary)' : 'var(--color-tron-text)'};">{t.name}</span>
+							</span>
+						{/each}
+					</div>
 				</div>
 				<!-- One column per modality, read left to right: Magnetometer,
 				     Spectrophotometer, Thermocouple. Each stacks its own reading so the
 				     measurement is the thing your eye lands on. -->
-				<div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
+				<div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
 					{#each validationRows as row (row.key)}
 						<div
 							class="flex min-h-[190px] flex-col items-center justify-between rounded-lg border p-5 text-center"
@@ -878,9 +935,9 @@
 					Validation
 					<span
 						class="ml-2 rounded-full px-2 py-0.5 text-xs font-bold align-middle"
-						style="color: {validationPassedCount >= 3 ? 'var(--color-tron-green)' : 'var(--color-tron-red)'}; background: rgba(128,128,128,0.12);"
+						style="color: {validationPassedCount >= VALIDATION_TESTS.length ? 'var(--color-tron-green)' : 'var(--color-tron-red)'}; background: rgba(128,128,128,0.12);"
 					>
-						{validationPassedCount}/3
+						{validationPassedCount}/{VALIDATION_TESTS.length}
 					</span>
 					<span
 						class="ml-1 rounded-full px-2 py-0.5 text-xs font-bold align-middle"
@@ -893,11 +950,12 @@
 					<a href="/validation" class="hover:underline" style="color: var(--color-tron-cyan);">Validation Hub ↗</a>
 					<a href="/validation/magnetometer" class="tron-text-muted hover:text-[var(--color-tron-cyan)] hover:underline">Run mag</a>
 					<a href="/validation/thermocouple" class="tron-text-muted hover:text-[var(--color-tron-cyan)] hover:underline">Run thermo</a>
-					<a href="/validation/optical-confirmation" class="tron-text-muted hover:text-[var(--color-tron-cyan)] hover:underline">Run optics</a>
+					<a href="/validation/bench" class="tron-text-muted hover:text-[var(--color-tron-cyan)] hover:underline">Run bench</a>
+					<a href="/validation/blank" class="tron-text-muted hover:text-[var(--color-tron-cyan)] hover:underline">Blank runs</a>
 				</span>
 			</div>
 
-			<div class="grid grid-cols-1 gap-3 md:grid-cols-3">
+			<div class="grid grid-cols-1 gap-3 md:grid-cols-2">
 				{#each validationRows as test (test.key)}
 					{@const result = test.result}
 					<div class="rounded-lg border p-3" style="border-color: {result?.status === 'passed' || result?.status === 'overridden' ? 'var(--color-tron-green)' : result?.status === 'failed' ? 'var(--color-tron-red)' : 'var(--color-tron-border)'}; background: {result?.status === 'passed' || result?.status === 'overridden' ? 'rgba(0,255,100,0.05)' : result?.status === 'failed' ? 'rgba(255,0,0,0.05)' : 'var(--color-tron-bg-secondary)'};">
@@ -1096,7 +1154,7 @@
 				<div class="flex justify-between gap-3"><dt class="tron-text-muted">Device State</dt><dd class="tron-text-primary text-right">{data.spu.deviceState || '—'}</dd></div>
 				<div class="flex justify-between gap-3"><dt class="tron-text-muted">QC Status</dt><dd class="tron-text-primary text-right">{data.spu.qcStatus}</dd></div>
 				<div class="flex justify-between gap-3"><dt class="tron-text-muted">Assembly Status</dt><dd class="tron-text-primary text-right">{data.spu.assemblyStatus}</dd></div>
-				<div class="flex justify-between gap-3"><dt class="tron-text-muted">Validation</dt><dd class="tron-text-primary text-right">{validationPassedCount}/3 ({validationOverall})</dd></div>
+				<div class="flex justify-between gap-3"><dt class="tron-text-muted">Validation</dt><dd class="tron-text-primary text-right">{validationPassedCount}/{VALIDATION_TESTS.length} ({validationOverall})</dd></div>
 				{#each validationRows as row (row.key)}
 					<div class="flex justify-between gap-3">
 						<dt class="tron-text-muted">{row.icon} {row.name}</dt>
@@ -1492,7 +1550,7 @@
 							<textarea id="svc-fix" name="fix" rows="3" class="tron-input w-full" placeholder="Describe the repair / change made..." required disabled={submittingService}></textarea>
 						</div>
 						<p class="text-xs" style="color: var(--color-tron-orange);">
-							On return, the unit goes to <strong>validating</strong> and the validation counter resets to 0/3. Prior validation records are kept and tagged with their service cycle.
+							On return, the unit goes to <strong>validating</strong> and the validation counter resets to 0. Prior validation records are kept and tagged with their service cycle.
 						</p>
 						{#if form?.error}
 							<div class="rounded border border-[var(--color-tron-red)] bg-[rgba(255,51,102,0.1)] p-3"><p class="text-sm text-[var(--color-tron-red)]">{form.error}</p></div>

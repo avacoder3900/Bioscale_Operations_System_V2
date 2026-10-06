@@ -1,5 +1,7 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
+	import { stationLockUrl, watchStationLock, checkStationLock } from '$lib/station-device';
+	import StationCameraSettings from '$lib/components/capture/StationCameraSettings.svelte';
 	import { invalidateAll } from '$app/navigation';
 	import jsQR from 'jsqr';
 
@@ -492,7 +494,30 @@
 		}
 	}
 
+	// Newest request wins (see /api/cv/stations/[id]/lock): watch whether this
+	// tab still holds the station. When another user or device takes it over
+	// (or it's force-released), drop to the local camera and say who took it.
+	let stopStationWatch: (() => void) | null = null;
+
+	function startStationWatch(stationId: string, stationName: string) {
+		stopStationWatch?.();
+		stopStationWatch = watchStationLock(stationId, (holder) => {
+			if (selectedStationId !== stationId) return;
+			bumpedFromStation(stationName, holder?.username ?? null);
+		});
+	}
+
+	function bumpedFromStation(stationName: string, byUsername: string | null) {
+		lockedStationId = null; // no longer ours to release
+		selectedStationId = null;
+		teardownStation();
+		flashBanner('err', `${stationName} was taken over by ${byUsername ?? 'another session'} — switched to Local.`, 15000);
+		void startCamera();
+	}
+
 	function teardownStation() {
+		stopStationWatch?.();
+		stopStationWatch = null;
 		if (heartbeatInterval) { clearInterval(heartbeatInterval); heartbeatInterval = null; }
 		if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
 		reconnectDelayMs = 2000;
@@ -520,7 +545,7 @@
 		if (lockedStationId) {
 			const releaseId = lockedStationId;
 			lockedStationId = null;
-			fetch(`/api/cv/stations/${encodeURIComponent(releaseId)}/lock`, { method: 'DELETE' })
+			fetch(stationLockUrl(releaseId), { method: 'DELETE' })
 				.catch(() => null);
 		}
 	}
@@ -564,20 +589,26 @@
 			if (ws) { try { ws.close(); } catch { /* */ } ws = null; }
 		}
 
-		// Hard one-operator-per-station lock. 409 means another user holds it.
-		try {
-			const lockRes = await fetch(`/api/cv/stations/${encodeURIComponent(stationId)}/lock`, { method: 'POST' });
-			if (lockRes.status === 409) {
-				const body = await lockRes.json().catch(() => ({}));
-				const heldBy = body?.heldBy;
-				const since = heldBy?.since ? new Date(heldBy.since).toLocaleString() : 'earlier';
-				flashBanner('err', `Station already in use by ${heldBy?.username ?? 'another operator'} since ${since}. Pick another station.`);
-				selectedStationId = null;
-				await startCamera();
+		// Reconnect after a blip: re-claim only if the station is still ours. If
+		// someone took it over meanwhile, don't grab it back (newest wins).
+		if (isReconnect) {
+			const state = await checkStationLock(stationId);
+			if (state && !state.mine) {
+				bumpedFromStation(station.name, state.holder?.username ?? null);
 				return;
 			}
+		}
+
+		// Newest request wins: claiming always succeeds and bumps whoever had it.
+		try {
+			const lockRes = await fetch(stationLockUrl(stationId), { method: 'POST' });
 			if (!lockRes.ok) throw new Error(`HTTP ${lockRes.status}`);
 			lockedStationId = stationId;
+			const lockBody = await lockRes.json().catch(() => ({}));
+			if (lockBody?.tookOverFrom?.username) {
+				flashBanner('info', `Took over ${station.name} from ${lockBody.tookOverFrom.username}.`, 5000);
+			}
+			startStationWatch(stationId, station.name);
 		} catch (e) {
 			if (isReconnect) { scheduleReconnect(stationId); return; }
 			flashBanner('err', `Failed to claim station lock: ${e instanceof Error ? e.message : e}`);
@@ -1156,7 +1187,7 @@
 	function onBeforeUnload() {
 		if (lockedStationId) {
 			// keepalive lets the DELETE finish after the page unloads.
-			fetch(`/api/cv/stations/${encodeURIComponent(lockedStationId)}/lock`, {
+			fetch(stationLockUrl(lockedStationId), {
 				method: 'DELETE',
 				keepalive: true
 			}).catch(() => null);
@@ -1348,7 +1379,7 @@
 							{@const badge = s.status === 'online' ? '🟢' : s.status === 'degraded' ? '🟡' : '🔴'}
 							{@const heldByOther = s.currentOperator && s.currentOperator._id && s.currentOperator._id !== data.user._id}
 							{@const offline = s.status !== 'online' && s.status !== 'degraded'}
-							{@const disabled = offline || heldByOther}
+							{@const disabled = offline}
 							<option value={s._id} disabled={disabled}>
 								{badge}
 								{s.name}
@@ -1429,66 +1460,17 @@
 			{/if}
 		</div>
 
-		<!-- Remote camera tuning (Pi station only). Collapsible to keep the
-		     main capture flow uncluttered; expand when an operator needs to
-		     dial in exposure / focus / white balance for the room. -->
-		{#if selectedStationId && cameraParamsKnown.length > 0}
-			<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)]">
-				<button
-					type="button"
-					onclick={() => (cameraParamsExpanded = !cameraParamsExpanded)}
-					class="flex w-full items-center justify-between rounded-t-lg px-4 py-2 text-left text-sm font-medium text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-bg-tertiary)]"
-				>
-					<span>🎛 Camera settings (Pi station)</span>
-					<svg
-						class="h-4 w-4 transition-transform {cameraParamsExpanded ? 'rotate-180' : ''}"
-						fill="none"
-						viewBox="0 0 24 24"
-						stroke="currentColor"
-					>
-						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
-					</svg>
-				</button>
-				{#if cameraParamsExpanded}
-					<div class="grid gap-3 border-t border-[var(--color-tron-border)] p-4 sm:grid-cols-2">
-						{#each cameraParamsKnown as prop (prop)}
-							{@const cfg = CAMERA_PARAM_LABELS[prop]}
-							{@const r = cameraParamRanges[prop]}
-							{@const lo = r?.min ?? cfg?.min ?? 0}
-							{@const hi = r?.max ?? cfg?.max ?? 255}
-							{@const step = r?.step ?? cfg?.step ?? 1}
-							{@const label = cfg?.label ?? prop}
-							<div>
-								<div class="flex items-baseline justify-between gap-2">
-									<label for={`cp-${prop}`} class="text-xs text-[var(--color-tron-text-secondary)]">
-										{label}
-									</label>
-									<span class="font-mono text-xs text-[var(--color-tron-cyan)]">
-										{cameraParams[prop] ?? '?'}
-									</span>
-								</div>
-								<input
-									id={`cp-${prop}`}
-									type="range"
-									min={lo}
-									max={hi}
-									{step}
-									value={cameraParams[prop] ?? lo}
-									oninput={(e) => setCameraParam(prop, Number((e.currentTarget as HTMLInputElement).value))}
-									class="w-full"
-								/>
-								<!-- Real editable bounds so the operator can see what's adjustable.
-								     "camera" = true V4L2 range, "default" = advisory fallback. -->
-								<div class="flex justify-between text-[10px] text-[var(--color-tron-text-secondary)]">
-									<span class="font-mono">{lo}</span>
-									<span>{r ? (r.source === 'v4l2' ? 'camera range' : 'default range') : 'default range'}</span>
-									<span class="font-mono">{hi}</span>
-								</div>
-							</div>
-						{/each}
-					</div>
-				{/if}
-			</div>
+		<!-- Remote camera tuning (Pi station only). Shared with post-mortem-inspect
+		     so the measured ranges live in one place: the earlier 0..255 guesses
+		     let sliders travel well past where the camera stopped responding. -->
+		{#if selectedStationId}
+			<StationCameraSettings
+				params={cameraParams}
+				ranges={cameraParamRanges}
+				known={cameraParamsKnown}
+				onSet={setCameraParam}
+				onRefresh={() => { try { ws?.send(JSON.stringify({ cmd: "get_camera_params" })); } catch { /* dead socket already flagged */ } }}
+			/>
 		{/if}
 
 		<!-- Microscope sequence (station mode + 'sequence' capability only). A timed

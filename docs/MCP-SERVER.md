@@ -109,7 +109,46 @@ This replicates the full `/api/agent/**` machine surface except: `ask`/`transcri
 routes serving the in-app widget, not machine agents) and the OT-2/scanner long-poll daemon queues
 (not request/response shaped; the robot bridge keeps using them directly).
 
-**SPU Assembly Work Instruction (2026-10-06, v3.6.0)** — full edit + inventory surface for
+## Research analysis tools (v3.8.0)
+
+v3.8.0 — fill lots are explicit: `research_fill_lot_create` (W) opens one on a reagent lot;
+`research_fill_lot_assign_runs` (W) moves legacy robot runs into one. The BIMS fill screen now picks a
+FILL LOT (defaulting to the one used last, with an inline "new fill lot" that picks the reagent lot) and
+stamps `fillLotId`/`fillLotNumber` + `reagentLotId`/`reagentLotNumber` on the run and on every cartridge;
+finalize appends the run id to `fill_lots.runIds`.
+
+v3.7.0 adds DOMAIN-32 reagent-lot tools: `research_reagent_lot_list` / `_get` / `_create` (W),
+`research_inventory_originate` (W), `research_fill_lot_list`, `research_curve_set_list`,
+`research_fill_lot_set_reagent_lot` (W), and the human-only `research_fill_lot_assign_curve_set`.
+The fill screen now requires picking a research reagent lot (reagent_set_lots, read-only in BIMS)
+and stamps `reagentLotId` / `reagentLotNumber` on the run and on each cartridge's `reagentFilling`.
+
+The brevitest-research-v2 app owns the analysis engine (declarative analysis profiles, stored
+per-well results on `cartridge_records.analysis`, and 4PL calibration curves per reagent lot).
+BIMS exposes it through this same connector by proxying an allowlisted subset of the research agent
+API: `/api/agent/research/<path>` → `${RESEARCH_API_URL}/api/agent/<path>` for `analysis/*` and
+`calibration/*` only (`src/lib/server/research-proxy.ts`, route `src/routes/api/agent/research/[...path]`).
+Set `RESEARCH_API_URL` (and optionally `RESEARCH_AGENT_API_KEY`; falls back to `AGENT_API_KEY`).
+
+Read-only: `research_analysis_catalog`, `research_analysis_list_profiles`, `research_analysis_get_profile`,
+`research_analysis_validate_profile`, `research_analysis_find_cartridges`, `research_analysis_preview` (dry run),
+`research_analysis_view`, `research_calibration_list_lots`, `research_calibration_list_curves`,
+`research_calibration_get_curve`.
+
+Mutating (`actor` required, machine_activity audit via `machineWrite`; the research app records
+`agent:<actor>` on the document): `research_analysis_save_profile` (draft), `research_analysis_activate_profile`,
+`research_analysis_archive_profile`, `research_analysis_run` (confirmed gate), `research_assay_attach_profile`,
+`research_calibration_fit` (draft), `research_calibration_activate_curve`, `research_calibration_quantify`
+(confirmed gate). `research_calibration_activate_curve` is **human-only** (3.6.1): approving a lot's calibration
+curve happens on the research Curves page with a note; the tool refuses and says so. `research_calibration_list_runs`
+(3.6.1) shows the calibrator wells a fit would use. Everything else never touches manufacturing records.
+
+Authoring doctrine is embedded in the tool descriptions: catalog → validate → find cartridges → preview →
+save draft → activate → attach to assay. See research-v2 `docs/prds/DOMAIN-30-ANALYSIS-V3.md`.
+
+## SPU Assembly Work Instruction tools (v3.9.0)
+
+full edit + inventory surface for
 SPU → SPU Assembly WI so changes can be made from Claude chat. Steps are addressed as
 humans say them (`section` = "sub-assembly 2" / "setup", `step` = "2" / stepId / title phrase).
 Read: `device_wi_overview`, `device_wi_get_step` (one step, a section, or `q=` search),

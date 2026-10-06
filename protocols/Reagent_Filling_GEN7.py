@@ -211,6 +211,23 @@ def add_parameters(parameters: protocol_api.Parameters):
         description="Tip-calibration probe Z (p300 200uL reagent tip).",
         default=40.8, minimum=0.0, maximum=200.0, unit="mm")
 
+    # Which tube rack holds the four reagents in slot 10 (2026-09-21). 'standard'
+    # is the 24-tube rack this protocol has always used (tubes D3-D6) and is
+    # byte-for-byte the old behaviour. 'incubator' loads the wax dry-bath block
+    # instead (same 2ml tubes, rim ~26mm higher, block 108mm tall) with the
+    # reagents in B1-B4 — a per-run choice, so the SHARED rack definitions are
+    # never edited to fake one robot's setup and the other robots are untouched.
+    parameters.add_str(
+        variable_name="tube_rack",
+        display_name="Reagent tube rack",
+        description="Slot-10 rack: standard 24-tube (D3-D6) or wax incubator block (B1-B4, heater OFF).",
+        choices=[
+            {"display_name": "Standard 24-tube rack (D3-D6)", "value": "standard"},
+            {"display_name": "Wax incubator block (B1-B4)", "value": "incubator"},
+        ],
+        default="standard",
+    )
+
 def run(protocol: protocol_api.ProtocolContext):
     # =====================================================================
     # AUTO-DETECT ROBOT & APPLY PER-ROBOT OFFSETS
@@ -263,7 +280,13 @@ def run(protocol: protocol_api.ProtocolContext):
                          f'x={robot_offsets["x"]}, y={robot_offsets["y"]}, z={robot_offsets["z"]}mm')
 
     offset = { 'x': 0, 'y': 0 }
-    tuberack = protocol.load_labware('custom_2ml_24_tube_rack', 10)
+    # Reagent tube rack per the run-time choice (see add_parameters). Both load
+    # names are literal so the BIMS bundler ships both definitions.
+    use_incubator_rack = (str(getattr(protocol.params, 'tube_rack', 'standard')) == 'incubator')
+    if use_incubator_rack:
+        tuberack = protocol.load_labware('cosmas_and_damian_drybath_tuberack', 10)
+    else:
+        tuberack = protocol.load_labware('custom_2ml_24_tube_rack', 10)
     tiprack = protocol.load_labware('cosmas_and_damian_biotix_96_200ul_tiprack', 11)
     pipette = protocol.load_instrument('p300_single_gen2', mount='left', tip_racks=[tiprack])
 
@@ -556,6 +579,41 @@ def run(protocol: protocol_api.ProtocolContext):
         protocol.comment(f'Loaded carriage for particle ID: {particle_id}')
         protocol.comment(f'Applied robot offsets: x={robot_offsets["x"]}, y={robot_offsets["y"]}, z={robot_offsets["z"]}')
 
+        # ── Mid-run tip swap request (2026-09-18, ported from the wax protocol) ──
+        # BIMS ("Tip problem?" card on the reagent run page) asks the on-robot bridge
+        # daemon to write this file. dispense_reagent checks it before EVERY
+        # aspiration batch — the one moment the tip is empty (it was blown out into
+        # the source tube after the previous batch). When present the run swaps the
+        # tip (robot from the rack, or the operator by hand), re-probes it on the
+        # calibrator, then carries on with the very batch it was about to aspirate.
+        # Nothing skipped, nothing double-filled.
+        _TIP_SWAP_REQ = '/data/ot2-bridge/tip-swap-request.json'
+
+        def take_tip_swap_request():
+            """Return the requested mode ('rack' | 'hand') and consume the file, else None."""
+            if protocol.is_simulating():
+                return None
+            try:
+                import os as _os, json as _json
+                if not _os.path.exists(_TIP_SWAP_REQ):
+                    return None
+                mode = 'rack'
+                try:
+                    with open(_TIP_SWAP_REQ, 'r') as _f:
+                        mode = str((_json.load(_f) or {}).get('mode') or 'rack')
+                except Exception:
+                    pass
+                try:
+                    _os.remove(_TIP_SWAP_REQ)
+                except Exception:
+                    pass
+                return 'hand' if mode == 'hand' else 'rack'
+            except Exception:
+                return None
+
+        # A stale request left over from an earlier run must not fire now.
+        take_tip_swap_request()
+
         # Calibration check wells - 9 positions across the deck
         calibration_check_wells = ['W3', 'L5', 'B7', 'B15', 'L13', 'W11', 'W19', 'L21', 'B23']
         
@@ -597,7 +655,10 @@ def run(protocol: protocol_api.ProtocolContext):
             
             return True
 
-        def pick_up_and_calibrate_tip():
+        def pick_up_and_calibrate_tip(pick_up=True):
+            """pick_up=False: a tip was put on BY HAND while the API already models a
+            tip (has_tip stays True so the tip length is honoured) — skip drop/pick-up
+            and just probe. Used by the mid-run tip swap."""
             nonlocal _tip_index
             # PRD 6: calibrator point + probe Z are RTPs (defaults = previously
             # hardcoded values; z_cal for the 200uL VWR tip). Move points track
@@ -606,27 +667,28 @@ def run(protocol: protocol_api.ProtocolContext):
             cal_x = protocol.params.cal_x
             cal_y = protocol.params.cal_y
             z_cal = protocol.params.z_cal
-            
-            if (pipette.has_tip):
+
+            if pick_up and pipette.has_tip:
                 pipette.drop_tip()
 
             # Check if rack is exhausted before picking up
-            if not protocol.is_simulating() and _tip_index >= len(_all_tips):
+            if pick_up and not protocol.is_simulating() and _tip_index >= len(_all_tips):
                 protocol.pause('TIP TRACKER: tiprack exhausted — refill rack, enable "Tiprack Refilled" on next run, then click Resume to continue with current run from A1')
                 _tip_index = 0
                 pipette.starting_tip = _all_tips[0]
                 save_tip_state(0)
 
-            pipette.pick_up_tip()
+            if pick_up:
+                pipette.pick_up_tip()
 
-            # Persist immediately after pickup so an aborted run still advances the counter
-            if not protocol.is_simulating():
-                _tip_index += 1
-                save_tip_state(_tip_index)
-                if _tip_index < len(_all_tips):
-                    protocol.comment(f'TIP TRACKER: consumed tip {_all_tips[_tip_index - 1].well_name} — next tip will be {_all_tips[_tip_index].well_name} (index {_tip_index})')
-                else:
-                    protocol.comment(f'TIP TRACKER: consumed tip {_all_tips[_tip_index - 1].well_name} — rack now empty')
+                # Persist immediately after pickup so an aborted run still advances the counter
+                if not protocol.is_simulating():
+                    _tip_index += 1
+                    save_tip_state(_tip_index)
+                    if _tip_index < len(_all_tips):
+                        protocol.comment(f'TIP TRACKER: consumed tip {_all_tips[_tip_index - 1].well_name} — next tip will be {_all_tips[_tip_index].well_name} (index {_tip_index})')
+                    else:
+                        protocol.comment(f'TIP TRACKER: consumed tip {_all_tips[_tip_index - 1].well_name} — rack now empty')
 
             # Per-tip bend calibration is OPT-IN (use_tip_calibration). When disabled,
             # skip the physical X/Y limit-switch probe entirely and dispense at the
@@ -825,6 +887,19 @@ def run(protocol: protocol_api.ProtocolContext):
         # The liquid sits on top of this. Measured/calibrated value.
         tube_bottom_height = 48.20
 
+        # Incubator block: the constants above are the STANDARD rack's. The dry-bath
+        # tubes sit ~26mm higher, so take rim and bottom from the loaded labware
+        # (same convention the wax protocol uses). Commanded depths are relative
+        # to .top(), so rim/bottom only have to be consistent with each other —
+        # which the definition guarantees. The standard path is left untouched.
+        if use_incubator_rack:
+            _first_tube = tuberack['B1']
+            tube_rim_height = _first_tube.top().point.z
+            tube_bottom_height = _first_tube.bottom().point.z
+            protocol.comment(f'Reagent tube rack: WAX INCUBATOR BLOCK (B1-B4) — rim z={tube_rim_height:.2f}, bottom z={tube_bottom_height:.2f} from the loaded labware. Heater must be OFF.')
+        else:
+            protocol.comment('Reagent tube rack: standard 24-tube rack (D3-D6).')
+
         # ----- Tip Safety Limits -----
         # min_tip_clearance: mm above tube bottom the tip is allowed to go
         # This prevents the tip from crashing into the bottom of the tube
@@ -923,6 +998,25 @@ def run(protocol: protocol_api.ProtocolContext):
             return liquid_surface_z
 
 
+        def do_tip_swap(mode, at_well):
+            """Operator-requested mid-run tip swap (see take_tip_swap_request). Called
+            at an aspiration-batch boundary, so the tip is empty (blown out into the
+            source after the previous batch). 'rack' = robot drops the tip and takes
+            the next tracked one; 'hand' = operator pulls the old tip off and pushes a
+            new one on while the API keeps modelling a tip (so the tip length stays
+            right) — then re-probe either way and return the new adjust."""
+            protocol.comment(f'TIP SWAP requested from BIMS ({mode}) — will continue at well {at_well}.')
+            if mode == 'hand':
+                _cx, _cy, _cz = protocol.params.cal_x, protocol.params.cal_y, protocol.params.z_cal
+                pipette.move_to(types.Location(types.Point(x=_cx, y=_cy, z=_cz + 60), carriage), force_direct=True, speed=20)
+                protocol.pause(
+                    f'TIP SWAP (by hand): the pipette is raised over the calibrator. Pull the old tip '
+                    f'off and push a NEW tip firmly on, then click Resume — it will calibrate the new '
+                    f'tip and continue at well {at_well}. Cancel/Stop to end the run.'
+                )
+                return pick_up_and_calibrate_tip(pick_up=False)
+            return pick_up_and_calibrate_tip()
+
         def dispense_reagent(sources, wells, well_volume, source_volume, adjust, cartridges_per_deck):
             """
             Aspirates reagent from source tubes and dispenses into cartridge wells.
@@ -959,10 +1053,21 @@ def run(protocol: protocol_api.ProtocolContext):
                 jump_frequency = 3    # every 3rd well, do an extra high move
                 jump_height = 60      # mm above well for the jump move
 
-                for run in range(runs):
-                    # ----- Determine which wells this run fills -----
-                    start_well = run * wells_per_run
-                    wells_this_run = destination_wells[start_well:start_well + wells_per_run]
+                # Cursor-driven, not `for run in range(runs)`: a mid-trip tip swap
+                # re-does the interrupted well and the rest of that trip, so the
+                # trip boundaries are no longer a fixed multiple of wells_per_run.
+                well_index = 0
+                run = 0
+                while well_index < len(destination_wells):
+                    # Operator asked for a tip swap between trips -> do it now, before
+                    # aspirating (the tip is empty here). The new tip's probe adjust
+                    # replaces the old one for every dispense from here on.
+                    _swap = take_tip_swap_request()
+                    if _swap:
+                        adjust = do_tip_swap(_swap, destination_wells[well_index].well_name)
+
+                    # ----- Determine which wells this trip fills -----
+                    wells_this_run = destination_wells[well_index:well_index + wells_per_run]
 
                     # ----- Calculate total aspiration volume for this run -----
                     # = (number of wells × volume per well) + disposal + remainder
@@ -970,8 +1075,10 @@ def run(protocol: protocol_api.ProtocolContext):
 
                     # ----- Safety checks -----
                     if aspirate_volume <= 0:
-                        protocol.comment('WARNING: Invalid aspirate volume, skipping this run')
-                        continue
+                        # `break`, not `continue`: the cursor has not advanced, so
+                        # continuing here would spin forever.
+                        protocol.comment('WARNING: Invalid aspirate volume, abandoning this source')
+                        break
                     if aspirate_volume > pipette_tip_capacity:
                         protocol.comment(f'WARNING: aspirate volume {aspirate_volume:.1f}uL exceeds tip capacity {pipette_tip_capacity}uL')
 
@@ -1034,7 +1141,16 @@ def run(protocol: protocol_api.ProtocolContext):
                     well_z_depth = -3.0        # mm below well top to dispense at
                     well_prejump_height = 5    # mm above well top for pre-jump move
 
-                    for well in wells_this_run:
+                    swap_at = None
+                    for idx, well in enumerate(wells_this_run):
+                        # Operator asked for a tip swap MID-TRIP: stop BEFORE this well.
+                        # The wells already done in this trip count; this one and the
+                        # rest of the trip are re-done with the new tip. (A bent tip
+                        # mid-trip was landing every remaining well off the hole.)
+                        _swap = take_tip_swap_request()
+                        if _swap:
+                            swap_at = (idx, _swap)
+                            break
                         # Every jump_frequency wells, do an extra high move to clear obstacles
                         if jump_count % jump_frequency == 0:
                             pipette.move_to(well.top(jump_height).move(types.Point(adjust['x'], adjust['y'], 0.0)))
@@ -1045,14 +1161,28 @@ def run(protocol: protocol_api.ProtocolContext):
                         jump_count += 1
                         dispensed_volume += well_volume
 
-                    # Blow out remaining liquid back into source tube
+                    # Blow out remaining liquid back into source tube. After a mid-trip
+                    # swap request this is what gives the un-dispensed reagent back.
                     pipette.blow_out(location=source_well.bottom(2.4))
 
                     # Update remaining source volume (only subtract what was actually dispensed)
                     source_volume -= dispensed_volume
 
-                    # Extra blow out between runs
-                    if run < runs - 1 or runs == 1:
+                    if swap_at is not None:
+                        # Tip is empty (blown out above). Swap + re-probe, then loop:
+                        # the next trip re-aspirates and starts at the interrupted well.
+                        _idx, _mode = swap_at
+                        well_index += _idx
+                        protocol.comment(f'TIP SWAP mid-trip: {_idx} well(s) of this trip kept, re-aspirating from {destination_wells[well_index].well_name}.')
+                        adjust = do_tip_swap(_mode, destination_wells[well_index].well_name)
+                        continue
+
+                    well_index += len(wells_this_run)
+                    run += 1
+
+                    # Extra blow out between trips (not after the final one). Expressed
+                    # against the cursor so a tip swap can't skew it.
+                    if well_index < len(destination_wells) or runs == 1:
                         pipette.blow_out(location=source_well.bottom(2.4))
 
                 pipette.drop_tip()
@@ -1171,24 +1301,18 @@ def run(protocol: protocol_api.ProtocolContext):
         #specify from 1 - 20 how many cartidges are to be filled
         cartridges_per_deck = protocol.params.cartridges
 
-        # Gen6: 4 reagent types - well_2 (beads)=D3, well_3 (wash)=D4, well_4 (wash)=D5, well_5 (elution)=D6
+        # Gen6: 4 reagent types - well_2 (beads), well_3 (tracer), well_4 (wash), well_5 (elution).
+        # Standard rack: D3-D6. Incubator block: B1-B4 (middle row; A3 is the wax tube's usual spot).
+        _tubes = ['B1', 'B2', 'B3', 'B4'] if use_incubator_rack else ['D3', 'D4', 'D5', 'D6']
         tube_locations = {
-            'well_2a': 'D3',
-            'well_2b': 'D3',
-            'well_2c': 'D3',
-            'well_3a': 'D4',
-            'well_3b': 'D4',
-            'well_3c': 'D4',
-            'well_4a': 'D5',
-            'well_4b': 'D5',
-            'well_4c': 'D5',
-            'well_5a': 'D6',
-            'well_5b': 'D6',
-            'well_5c': 'D6',
-            'well_2': 'D3',
-            'well_3': 'D4',
-            'well_4': 'D5',
-            'well_5': 'D6',
+            'well_2a': _tubes[0], 'well_2b': _tubes[0], 'well_2c': _tubes[0],
+            'well_3a': _tubes[1], 'well_3b': _tubes[1], 'well_3c': _tubes[1],
+            'well_4a': _tubes[2], 'well_4b': _tubes[2], 'well_4c': _tubes[2],
+            'well_5a': _tubes[3], 'well_5b': _tubes[3], 'well_5c': _tubes[3],
+            'well_2': _tubes[0],
+            'well_3': _tubes[1],
+            'well_4': _tubes[2],
+            'well_5': _tubes[3],
         }
 
         well_volumes = {

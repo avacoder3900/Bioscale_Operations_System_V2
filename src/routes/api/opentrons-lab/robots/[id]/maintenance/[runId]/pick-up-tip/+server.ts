@@ -5,16 +5,20 @@
  * Body: { pipetteId, tiprackLoadName, slot?, tipWell? }
  * Returns: { tiprackLabwareId }
  */
-import { json, error } from '@sveltejs/kit';
+import { error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { requirePermission } from '$lib/server/permissions';
 import { getRobot } from '$lib/server/opentrons/proxy';
-import { connectDB, LabwareDefinition } from '$lib/server/db';
-import { resolveLabwareDefinition } from '$lib/server/services/deck-calibration/resolve';
-import { registerLabwareDefinition, loadLabwareInRun, pickUpTip, SlotOccupiedError } from '$lib/server/opentrons/maintenance';
+import { verbResponse } from '$lib/server/opentrons/transport';
+import { resolveLabwareForRobot } from '$lib/server/opentrons/maintenance-records';
+import { isHardenedRobot } from '$lib/server/services/deck-calibration/rollout';
 
 export const config = { maxDuration: 60 };
 
+// BIMS half before: resolve the tiprack; after: advance the Studio tip cursor
+// (nextTipWell). Robot half ('mx.pickUpTip': register, idempotent load, pick up,
+// TIP_ALREADY_ATTACHED / SLOT_OCCUPIED 409s) is in $lib/opentrons/ot2-protocol —
+// all shared with the tailnet line.
 export const POST: RequestHandler = async ({ params, locals, request }) => {
 	if (!locals.user) error(401, 'Not authenticated');
 	requirePermission(locals.user, 'manufacturing:write');
@@ -25,45 +29,28 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 	const body = await request.json().catch(() => ({}) as any);
 	const pipetteId = body?.pipetteId;
 	const tiprackLoadName = body?.tiprackLoadName;
-	const slot = String(body?.slot ?? '11');
-	const tipWell = body?.tipWell ?? 'A1';
 	if (!pipetteId || typeof pipetteId !== 'string') error(400, 'pipetteId required');
 	if (!tiprackLoadName || typeof tiprackLoadName !== 'string') error(400, 'tiprackLoadName required');
 
-	await connectDB();
-	let def: any;
+	let resolved;
 	try {
-		({ doc: def } = await resolveLabwareDefinition(tiprackLoadName, { strict: true }));
+		resolved = await resolveLabwareForRobot(tiprackLoadName);
 	} catch (e) {
 		throw error(404, e instanceof Error ? e.message : `Tiprack "${tiprackLoadName}" not found`);
 	}
-	// Identity from the registered blob, not the columns (see load-labware).
-	const namespace = def.definition?.namespace ?? def.namespace;
-	const version = Number(def.definition?.version ?? def.version ?? 1);
 
-	try {
-		await registerLabwareDefinition(robot, params.runId, def.definition);
-		// loadLabwareInRun is idempotent (reuses the slot if already loaded), so a
-		// reused maintenance run no longer throws LocationIsOccupiedError here.
-		const tiprackLabwareId = await loadLabwareInRun(robot, params.runId, { namespace, loadName: tiprackLoadName, version, slot });
-		try {
-			await pickUpTip(robot, params.runId, pipetteId, tiprackLabwareId, tipWell);
-		} catch (tipErr) {
-			// In a reused run the pipette may already hold a tip — that's the desired
-			// end state, so treat "tip already attached" as success instead of erroring.
-			const msg = tipErr instanceof Error ? tipErr.message : String(tipErr);
-			if (!/tip.*(attach|present|already)|already.*tip|should not have a tip/i.test(msg)) throw tipErr;
-		}
-		return json({ tiprackLabwareId });
-	} catch (e) {
-		// A different rack occupies slot 11 (e.g. the reagent rack from an earlier
-		// calibration step in this same run). The slot can't be freed in place, so
-		// tell the client to reopen the run and retry — 409 + a stable code lets it
-		// auto-recover instead of showing the raw LocationIsOccupiedError.
-		if (e instanceof SlotOccupiedError) {
-			return json({ code: e.code, message: e.message }, { status: 409 });
-		}
-		console.error('[API] pick-up-tip error:', e instanceof Error ? e.message : e);
-		error(502, e instanceof Error ? e.message : 'Failed to pick up tip');
-	}
+	return verbResponse(
+		robot,
+		'mx.pickUpTip',
+		{
+			runId: params.runId,
+			pipetteId,
+			tiprackLoadName,
+			slot: String(body?.slot ?? '11'),
+			tipWell: body?.tipWell ?? 'A1',
+			...resolved,
+			hardened: isHardenedRobot(robot)
+		},
+		locals.user
+	);
 };

@@ -35,6 +35,24 @@ const manufacturingSettingsSchema = new Schema({
 		cartridgesPerLaserCutSheet: Number, sheetsPerLaserBatch: Number,
 		defaultLaserTools: String, defaultCuttingProgramLink: String
 	},
+	// Thermoseal roll tracking (BUCKET-SYSTEM_PLAN v2 §3.4). Defaults live in
+	// thermoseal-service.ts; these override when set.
+	thermoseal: {
+		notificationsEnabled: Boolean, // development toggle: kanban restock card + email only when true (default off)
+		// (rollsOnHandPinned / rollsOnHandOverride — the development pin — were removed
+		// 2026-09-25: the board follows the live roll count on THERMOSEAL_PART.)
+		cmPerCartridge: Number,      // default 3.75 cm (averaged for excess)
+		rollLengthCm: Number,        // default 6500 cm (65 m per roll)
+		minRollsInInventory: Number  // default 2 — restock alert when on-hand drops below
+	},
+	// Operator badges (BADGE-SYSTEM_PLAN.md §15.5 / §17.5). 'required' = a badge
+	// scan is needed to mint a bucket or start a pass; 'off' = the login session
+	// is the operator, as before. Flipped only from /admin/badges (admin), audited.
+	badge: {
+		mode: { type: String, enum: ['off', 'required'], default: 'required' },
+		changedAt: Date,
+		changedBy: { _id: String, username: String }
+	},
 	rejectionReasonCodes: [{ _id: false, code: String, label: String, processType: String, sortOrder: Number }],
 	temperatureAlerts: {
 		emailRecipients: [String]

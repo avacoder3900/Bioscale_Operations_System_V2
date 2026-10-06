@@ -143,6 +143,36 @@ export async function calibrationRtpValues(
 			const wanted = Number(fix.maxTipAdjust);
 			out['max_tip_adjust'] = Number.isFinite(ceiling) ? Math.min(wanted, ceiling) : wanted;
 		}
+
+		// Per-robot wax-tube aspiration floor (2026-09-17). The wax .py clamps the
+		// aspirating tip to `tube bottom + min_tip_clearance` and models the liquid
+		// from a hardcoded 50uL dead volume, so every run ends on that floor. How far
+		// above the physical tube bottom the floor really is depends on how accurate
+		// the robot's Z frame is — and that differs per robot:
+		//
+		//   • B07: taught deck-004 Z equals the deck file's design height, i.e. the
+		//     model is physically accurate, so the protocol's 1.5mm default really is
+		//     1.5mm above a conical 2ml tube's apex. The p20 tip wall wedges in the
+		//     cone, bends, and the last 4-5 cartridges of carrier 3 fill badly.
+		//   • R04: taught deck-001 Z sits ~4-5mm BELOW its design height (the model
+		//     thinks the tip is lower than it is), so at the untaught wax tube the
+		//     same 1.5mm floor is physically ~6mm — and raising it would lift the tip
+		//     out of the wax at the end of a run.
+		//
+		// So this is a fixture (robot + deck) value, not a fleet default. Absent =>
+		// nothing injected and the .py default (1.5) stands. Wax only: the reagent
+		// protocol declares the same RTP for a different tube rack and has been fine.
+		if (processType === 'wax-filling' && declared.has('min_tip_clearance') && fix.minTipClearanceWaxMm != null) {
+			const spec = (paramSchema ?? []).find((p) => p.variableName === 'min_tip_clearance');
+			const wanted = Number(fix.minTipClearanceWaxMm);
+			const lo = Number(spec?.min), hi = Number(spec?.max);
+			if (Number.isFinite(wanted) && wanted > 0) {
+				let v = wanted;
+				if (Number.isFinite(hi)) v = Math.min(v, hi);
+				if (Number.isFinite(lo)) v = Math.max(v, lo);
+				out['min_tip_clearance'] = v;
+			}
+		}
 	}
 	return out;
 }

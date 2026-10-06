@@ -18,6 +18,7 @@
 				spuUdi: string | null;
 				spuId: string | null;
 				username: string | null;
+				// Field magnitude sqrt(x²+y²+z²) in gauss, not Z alone.
 				gaussMin: number | null;
 				gaussMax: number | null;
 			}>;
@@ -58,8 +59,8 @@
 		return new Date(dateStr).toLocaleString();
 	}
 
-	function formatGauss(z: number | null): string {
-		return z === null ? '—' : String(z);
+	function formatGauss(g: number | null): string {
+		return g === null || Number.isNaN(g) ? '—' : g.toFixed(1);
 	}
 
 	function getResultBadge(passed: boolean | null, status: string) {
@@ -76,12 +77,12 @@
 	}
 
 	function exportToCsv() {
-		const headers = ['UDI', 'User', 'Gauss Min', 'Gauss Max', 'Result', 'Date'];
+		const headers = ['UDI', 'User', 'Field Min (G)', 'Field Max (G)', 'Result', 'Date'];
 		const rows = sessions.map((s) => [
 			s.spuUdi ?? '',
 			s.username ?? '',
-			s.gaussMin ?? '',
-			s.gaussMax ?? '',
+			s.gaussMin === null ? '' : s.gaussMin.toFixed(1),
+			s.gaussMax === null ? '' : s.gaussMax.toFixed(1),
 			s.passed === true ? 'Passed' : s.passed === false ? 'Failed' : 'Pending',
 			s.testRanAt ? formatDateTime(s.testRanAt) : ''
 		]);
@@ -113,6 +114,8 @@
 
 		<div class="flex items-center gap-3">
 		<a href="/validation/magnetometer/run" class="tron-btn-primary">Run a test</a>
+		<a href="/validation/magnetometer/sweep" class="tron-btn-secondary">Stage sweeps</a>
+		<a href="/validation/magnetometer/compare" class="tron-btn-secondary">Compare SPUs</a>
 		<button onclick={exportToCsv} class="tron-btn-secondary flex items-center gap-2">
 			<svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
 				<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
@@ -160,8 +163,8 @@
 								</span>
 							</th>
 						<th class="tron-text-muted px-4 py-3 text-left text-xs font-medium uppercase">User</th>
-						<th class="tron-text-muted px-4 py-3 text-left text-xs font-medium uppercase">Gauss Min</th>
-						<th class="tron-text-muted px-4 py-3 text-left text-xs font-medium uppercase">Gauss Max</th>
+						<th class="tron-text-muted px-4 py-3 text-left text-xs font-medium uppercase">Field Min (G)</th>
+						<th class="tron-text-muted px-4 py-3 text-left text-xs font-medium uppercase">Field Max (G)</th>
 						<th class="tron-text-muted px-4 py-3 text-left text-xs font-medium uppercase">Result</th>
 						<th class="tron-text-muted px-4 py-3 text-left text-xs font-medium uppercase">Test Results</th>
 										</tr>

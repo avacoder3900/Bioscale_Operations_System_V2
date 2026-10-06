@@ -20,7 +20,9 @@ export const GET: RequestHandler = async ({ locals }) => {
 			devices[d.id] = {
 				online: !!d.online,
 				lastHeard: d.last_heard ?? null,
-				firmwareVersion: d.firmware_version ?? null,
+				// firmware_version is number for product devices, string elsewhere; this
+				// surface is typed string, so normalise rather than widen it too.
+				firmwareVersion: d.firmware_version != null ? String(d.firmware_version) : null,
 				systemVersion: d.system_firmware_version ?? null
 			};
 		}

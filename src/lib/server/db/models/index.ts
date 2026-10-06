@@ -8,6 +8,8 @@ export { CartridgeGroup } from './cartridge-group.js';
 export { ReagentBatchRecord } from './reagent-batch-record.js';
 export { ReagentProtocolTemplate } from './reagent-protocol-template.js';
 export { ReagentLot } from './reagent-lot.js';
+export { ReagentSetLot } from './reagent-set-lot.js';
+export { FillLot, fillLotNumber } from './fill-lot.js';
 
 // Tier 2: Operational — Receiving & Inspection
 export { ReceivingLot } from './receiving-lot.js';
@@ -46,7 +48,9 @@ export { Batch } from './batch.js';
 export { ProductionRun } from './production-run.js';
 export { GeneratedBarcode } from './generated-barcode.js';
 export { ValidationSession } from './validation-session.js';
-export { ValidationRun, VALIDATION_RUN_STEPS, STEP_LABELS } from './validation-run.js';
+export { SonicIgnoreRule } from './sonic-ignore-rule.js';
+export { ValidationRun, VALIDATION_RUN_STEPS, DEFAULT_RUN_STEPS, STEP_LABELS } from './validation-run.js';
+export { SweepUpload } from './sweep-upload.js';
 export { WaxFillingRun } from './wax-filling-run.js';
 export { WaxBatch } from './wax-batch.js';
 export { ProcessConfiguration } from './process-configuration.js';
@@ -63,6 +67,7 @@ export { OpentronsRobot } from './opentrons-robot.js';
 export { OpentronsScannerPositionSet } from './opentrons-scanner-position-set.js';
 export { OpentronsScannerSweepRun } from './opentrons-scanner-sweep-run.js';
 export { Ot2BridgeCommand } from './ot2-bridge-command.js';
+export { Ot2DirectCall } from './ot2-direct-call.js';
 export { OpentronProtocol } from './opentrons-protocol.js';
 export { OpentronsRunRecord } from './opentrons-run-record.js';
 export { Consumable } from './consumable.js';
@@ -164,3 +169,12 @@ export { AskBimsFeedback } from './ask-bims-feedback.js';
 
 // Ask BIMS — voice transcription cost telemetry (Phase M.1, 2026-05-13)
 export { AskBimsTranscribeLog } from './ask-bims-transcribe-log.js';
+
+// Production buckets — pre-serialization WIP tracking (BUCKET-SYSTEM_PLAN.md)
+export { ProductionBucket } from './production-bucket.js';
+export { BucketCycle } from './bucket-cycle.js';
+export { BucketTransaction } from './bucket-transaction.js';
+// Operator badges + custody (BADGE-SYSTEM_PLAN.md Part 2)
+export { OperatorBadge } from './operator-badge.js';
+export { Custody } from './custody.js';
+export { ThermosealRoll } from './thermoseal-roll.js';

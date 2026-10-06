@@ -59,6 +59,12 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		'waxQc.recordedAt': now
 	};
 	if (verdict === 'rejected' && reason) set['waxQc.rejectionReason'] = reason;
+	// Photo-less bench rejects are allowed (camera untrained, 2026-10-06) but
+	// must say why, and are flagged so the CV training set can skip them.
+	if (verdict === 'rejected' && !imageId && !reason) {
+		return json({ error: 'A reject without a photo needs a reason.' }, { status: 400 });
+	}
+	set['waxQc.method'] = imageId ? 'photo' : 'visual';
 	const res = await CartridgeRecord.updateOne({ _id: cartridgeId, status: from }, { $set: set });
 	if (res.matchedCount === 0) {
 		return json({ error: `Cartridge ${cartridgeId} changed status mid-request — rescan it.` }, { status: 409 });
@@ -69,7 +75,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		tableName: 'cartridge_records',
 		recordId: cartridgeId,
 		action: 'wax_inspection_verdict',
-		newData: { status: newStatus, from, verdict, source, reason: reason || undefined, imageId },
+		newData: { status: newStatus, from, verdict, source, reason: reason || undefined, imageId, method: imageId ? 'photo' : 'visual' },
 		changedAt: now,
 		changedBy: locals.user.username
 	});

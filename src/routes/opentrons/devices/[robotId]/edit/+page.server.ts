@@ -1,6 +1,7 @@
 import { error, fail, redirect } from '@sveltejs/kit';
-import { connectDB, OpentronsRobot } from '$lib/server/db';
+import { connectDB, OpentronsRobot, AuditLog, generateId } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
+import { isValidDirectUrl, resolveRobotConnection, tailnetAllowedHere } from '$lib/server/opentrons/connection';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ params, locals }) => {
@@ -30,7 +31,17 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 			labwareCalibrationDate: robot.labwareCalibrationDate ?? '',
 			pipetteCalibrationDate: robot.pipetteCalibrationDate ?? '',
 			deckCalibrationDate: robot.deckCalibrationDate ?? '',
-			notes: robot.notes ?? ''
+			notes: robot.notes ?? '',
+			// OT2-TAILNET-4
+			connectionMode: robot.connection?.mode ?? 'queue',
+			directUrl: robot.connection?.directUrl ?? '',
+			tailnetHostname: robot.connection?.tailnetHostname ?? '',
+			connectionUpdatedAt: robot.connection?.updatedAt ?? null,
+			connectionUpdatedBy: robot.connection?.updatedBy ?? ''
+		},
+		connection: {
+			allowedHere: tailnetAllowedHere(robot),
+			effective: resolveRobotConnection(robot)
 		}
 	};
 };
@@ -70,10 +81,47 @@ export const actions: Actions = {
 			notes: form.get('notes')?.toString().trim() || ''
 		};
 
-		const robot = await OpentronsRobot.findById(params.robotId);
+		// OT2-TAILNET-4: which line BIMS uses to reach this robot.
+		const connectionMode = form.get('connectionMode')?.toString() === 'tailnet' ? 'tailnet' : 'queue';
+		const directUrl = (form.get('directUrl')?.toString().trim() || '').replace(/\/+$/, '');
+		const tailnetHostname = form.get('tailnetHostname')?.toString().trim() || '';
+		if (directUrl && !isValidDirectUrl(directUrl)) {
+			return fail(400, { error: 'Direct URL must look like https://ot2-<slot>.tailf65a70.ts.net (https, no port or path)' });
+		}
+		if (connectionMode === 'tailnet' && !directUrl) {
+			return fail(400, { error: 'Tailnet mode needs a Direct URL' });
+		}
+
+		const robot = (await OpentronsRobot.findById(params.robotId).lean()) as any;
 		if (!robot) return fail(404, { error: 'Robot not found' });
 
+		const before = {
+			mode: robot.connection?.mode ?? 'queue',
+			directUrl: robot.connection?.directUrl ?? '',
+			tailnetHostname: robot.connection?.tailnetHostname ?? ''
+		};
+		const after = { mode: connectionMode, directUrl, tailnetHostname };
+		const connectionChanged =
+			before.mode !== after.mode || before.directUrl !== after.directUrl || before.tailnetHostname !== after.tailnetHostname;
+		if (connectionChanged) {
+			update.connection = { ...after, updatedAt: new Date(), updatedBy: locals.user.username };
+		}
+
 		await OpentronsRobot.updateOne({ _id: params.robotId }, { $set: update });
+
+		if (connectionChanged) {
+			await AuditLog.create({
+				_id: generateId(),
+				tableName: 'opentrons_robots',
+				recordId: params.robotId,
+				action: 'connection_update',
+				oldData: before,
+				newData: after,
+				changedFields: Object.keys(after).filter((k) => (before as any)[k] !== (after as any)[k]),
+				changedAt: new Date(),
+				changedBy: locals.user.username
+			});
+		}
 
 		redirect(303, `/opentrons/devices/${params.robotId}`);
 	}

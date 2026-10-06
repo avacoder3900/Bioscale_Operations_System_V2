@@ -1,5 +1,6 @@
 import { requirePermission } from '$lib/server/permissions';
 import { connectDB, CartridgeRecord, AssayDefinition, User, WaxFillingRun, ReagentBatchRecord, CvImage, ManufacturingSettings, Experiment } from '$lib/server/db';
+import { stageCounts } from '$lib/server/services/bucket-service';
 import type { PageServerLoad } from './$types';
 
 function escapeRegExp(str: string): string {
@@ -239,7 +240,13 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		}
 	}
 
+	// Pre-barcode funnel for the stage strip above the table (BUCKET-SYSTEM_PLAN
+	// §9.3). Read-only glance; a bucket-collection hiccup must never take the
+	// cartridge table down with it.
+	const bucketCounts = await stageCounts().catch(() => null);
+
 	return {
+		bucketCounts,
 		filters: { search, sortBy, sortDir, assayTypeId, lifecycleStage, operatorId, runId, arm, experiment, tag, failureCode, notesSearch },
 		armOptions,
 		experimentOptions,

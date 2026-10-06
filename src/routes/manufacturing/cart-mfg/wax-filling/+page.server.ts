@@ -1,24 +1,35 @@
 import { redirect, fail } from '@sveltejs/kit';
-import { isCureComplete } from '$lib/server/manufacturing/cure-time';
+
 import mongoose from 'mongoose';
 import {
 	connectDB, WaxFillingRun, CartridgeRecord, Consumable, ManufacturingSettings, generateId,
 	Equipment, EquipmentLocation, AuditLog, BackingLot, WaxBatch, ReceivingLot,
-	OpentronsRobot, ManualCartridgeRemoval, Ot2BridgeCommand
+	OpentronsRobot, ManualCartridgeRemoval, Ot2BridgeCommand, TipCalibratorFixture
 } from '$lib/server/db';
 import { recordTransaction, resolvePartId } from '$lib/server/services/inventory-transaction';
+import { findBucketLabels, consumeCarts, BucketError, BACKED_STAGE, BACKED_LABEL } from '$lib/server/services/bucket-service';
+import { BucketCycle } from '$lib/server/db';
 import { resolveFridgeId, resolveCoolingTrayId, resolveDeckId } from '$lib/server/services/equipment-resolve';
 import { isAdmin } from '$lib/server/permissions';
 import { User } from '$lib/server/db';
 import { notifyLowWaxBatch, notifyRunLifecycle, shouldWarnLowWax } from '$lib/server/notifications';
 import { checkRobotConflict, checkDeckConflict, checkTrayConflict } from '$lib/server/manufacturing/resource-locks';
 import { protectLockedCarts, LOCKED_STATUSES } from '$lib/server/manufacturing/locked-cartridges';
-import { getRobot, robotGet, robotPost, bridgeDeviceIdForRobot } from '$lib/server/opentrons/proxy';
-import { calibrationRtpValues } from '$lib/server/opentrons/calibration-rtps';
-import { ensureFreshRunProtocol } from '$lib/server/opentrons/protocol-freshness';
-import { resolveDeckBinding, DeckBindingError } from '$lib/server/services/deck-calibration/run-guard';
-import { isHardenedRobot } from '$lib/server/services/deck-calibration/rollout';
-import { OpentronsRunRecord } from '$lib/server/db';
+import { getRobot, robotGet, bridgeDeviceIdForRobot } from '$lib/server/opentrons/proxy';
+import { bridgeJobGate } from '$lib/server/opentrons/bridge-token';
+import { requirePermission } from '$lib/server/permissions';
+// OT2-TAILNET-5 §7.1: the run lifecycle's BIMS halves (moved out of this file,
+// unchanged) + the prepare/confirm actions the tailnet line calls.
+import {
+	advanceCartsToWaxFilled,
+	startRunQueue,
+	recordRunFinishedQueue,
+	stopRunQueue,
+	reconcileStartIntent,
+	setRunRecordStatus,
+	lifecycleActions,
+	isActionFail
+} from '$lib/server/opentrons/run-lifecycle-records';
 import bcrypt from 'bcryptjs';
 import type { PageServerLoad, Actions } from './$types';
 
@@ -95,7 +106,8 @@ function emptyState(robotId: string, loadError: string | null = null) {
 			runStartTime: null, runEndTime: null,
 			deckId: null, waxSourceLot: null, coolingTrayId: null, plannedCartridgeCount: null,
 			opentronsRunId: null as string | null,
-			protocolParameters: null as Record<string, unknown> | null
+			protocolParameters: null as Record<string, unknown> | null,
+			startInterrupted: null as string | null
 		},
 		settings: {
 			runDurationMin: 45, removeDeckWarningMin: 5, coolingWarningMin: 7,
@@ -109,6 +121,8 @@ function emptyState(robotId: string, loadError: string | null = null) {
 		backedOvens: [] as { ovenId: string; ovenName: string; total: number; ready: number }[],
 		backedReadyCount: 0,
 		backedTotalCount: 0,
+		backedBuckets: [] as { bucketId: string; cycleNumber: number; count: number; backedAt: string | null }[],
+		backedLabel: BACKED_LABEL,
 		waxLots: [] as { barcode: string; label: string; remainingVolumeUl: number; source: string }[],
 		rejectionCodes: [] as any[],
 		fridges: [] as { id: string; displayName: string; barcode: string }[],
@@ -124,12 +138,17 @@ function emptyState(robotId: string, loadError: string | null = null) {
 			nextTipIndex: number | null;
 			hostname: string | null;
 			capturedAt: string | null;
-		}
+		},
+		// Per-robot wax-tube aspiration floor (fixture.minTipClearanceWaxMm), for DISPLAY
+		// on the parameters form. The value that runs is injected server-side at
+		// startRun by calibrationRtpValues regardless of what the form shows.
+		waxFloorMm: null as number | null
 	};
 }
 
 export const load: PageServerLoad = async ({ locals, url, parent }) => {
 	if (!locals.user) redirect(302, '/login');
+	requirePermission(locals.user, 'waxFilling:read');
 
 	// Get robotId from URL param or first robot from layout — do this BEFORE connectDB
 	// so we have a safe fallback even if DB is unavailable
@@ -194,6 +213,15 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 			}));
 
 		let run = activeWaxRun as any;
+		// Two-phase start (OT2-TAILNET-5): a start whose page died between "robot
+		// started" and "confirm" left startIntent set. Find the robot's run and
+		// confirm it, or clear the intent once nothing can still be in flight.
+		let startInterrupted: string | null = null;
+		if (run?.startIntent?.token) {
+			const rec = await reconcileStartIntent('wax', run, { _id: locals.user!._id, username: locals.user!.username });
+			startInterrupted = rec.banner;
+			if (rec.changed) run = (await WaxFillingRun.findById(run._id).lean()) as any;
+		}
 		// SELF-HEAL (2026-08-28): if the robot finished cleanly while nobody had
 		// the page open, advance + complete on the next visit — the carts must
 		// not depend on a browser tab having been alive at the moment the run
@@ -211,6 +239,7 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 							await WaxFillingRun.findByIdAndUpdate(run._id, {
 								$set: { status: 'completed', opentronsRunFinalStatus: 'succeeded', robotReleasedAt: new Date(), runEndTime: new Date() }
 							});
+							await setRunRecordStatus(String(run._id), run.opentronsRunId, 'succeeded');
 							run = null; // page renders idle — run is done
 						}
 					}
@@ -253,9 +282,11 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 				opentronsRunFinalStatus: run.opentronsRunFinalStatus ?? null,
 				// Mirror the parameter set the operator chose for this run so the
 				// page can show "what we asked the robot to do" after the fact.
-				protocolParameters: run.protocolParameters ?? null
+				protocolParameters: run.protocolParameters ?? null,
+				// "start interrupted — check robot" (a start intent older than 10 min).
+				startInterrupted
 			}
-			: { hasActiveRun: false, runId: null, stage: null, runStartTime: null, runEndTime: null, deckRemovedTime: null, deckId: null, waxSourceLot: null, coolingTrayId: null, plannedCartridgeCount: null, coolingConfirmedAt: null, existingWaxRunNote: '', opentronsRunId: null, opentronsRunFinalStatus: null, protocolParameters: null };
+			: { hasActiveRun: false, runId: null, stage: null, runStartTime: null, runEndTime: null, deckRemovedTime: null, deckId: null, waxSourceLot: null, coolingTrayId: null, plannedCartridgeCount: null, coolingConfirmedAt: null, existingWaxRunNote: '', opentronsRunId: null, opentronsRunFinalStatus: null, protocolParameters: null, startInterrupted: null };
 
 		// Robot's uploaded protocols, projected to what the Start Run panel
 		// needs (id, name, type, parameter schema). Empty list if the robot
@@ -273,6 +304,22 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 
 		// Last known tip state for this robot — derived from the most recent
 		// completed wax run. null on first-ever use; protocol falls back to A1.
+		// Wax-tube aspiration floor to SHOW on the form (2026-09-24). The parameters
+		// step runs before the deck is scanned, so prefer the fixture of the run's
+		// deck when known, else any fixture on this robot that carries a floor.
+		// Display only: startRun re-resolves by deck and injects the real value.
+		let waxFloorMm: number | null = null;
+		try {
+			let fx: any = null;
+			if (run?.deckId) {
+				const deckEq = await Equipment.findById(run.deckId).select('deckLoadName').lean() as any;
+				if (deckEq?.deckLoadName) fx = await TipCalibratorFixture.findOne({ deckLoadName: deckEq.deckLoadName }).select('minTipClearanceWaxMm').lean();
+			}
+			if (!fx) fx = await TipCalibratorFixture.findOne({ robotId: String(robotId), minTipClearanceWaxMm: { $ne: null } }).select('minTipClearanceWaxMm').lean();
+			const v = Number((fx as any)?.minTipClearanceWaxMm);
+			if (Number.isFinite(v) && v > 0) waxFloorMm = v;
+		} catch { /* display only */ }
+
 		const lastTipState = (lastTipRun as any)?.pipetteTipState?.after
 			? {
 				nextTipIndex: (lastTipRun as any).pipetteTipState.after.nextTipIndex ?? null,
@@ -314,33 +361,23 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 			}))
 		];
 
-		// Backed cartridges in ovens (per-cartridge, WAX-FLOW-2 — replaces the
-		// retired BackingLot aggregate). Grouped by oven for the deck-load hint.
-		const minOvenTimeMin = wax.minOvenTimeMin ?? 60;
-		const now = Date.now();
-		const backedCartsRaw = await CartridgeRecord.find(
-			{ status: 'backing' },
-			{ _id: 1, 'backing.ovenEntryTime': 1, 'backing.ovenLocationId': 1, 'backing.ovenLocationName': 1 }
-		).lean().catch(() => []);
-
-		const ovenGroupMap = new Map<string, { ovenId: string; ovenName: string; total: number; ready: number }>();
-		let backedReadyCount = 0;
-		for (const c of backedCartsRaw as any[]) {
-			const entry = c.backing?.ovenEntryTime ? new Date(c.backing.ovenEntryTime).getTime() : 0;
-			const isReady = isCureComplete(c.backing?.ovenEntryTime, minOvenTimeMin, now);
-			if (isReady) backedReadyCount++;
-			const key = c.backing?.ovenLocationId ?? 'unknown';
-			const g = ovenGroupMap.get(key) ?? {
-				ovenId: key,
-				ovenName: c.backing?.ovenLocationName ?? 'Unknown oven',
-				total: 0,
-				ready: 0
-			};
-			g.total++;
-			if (isReady) g.ready++;
-			ovenGroupMap.set(key, g);
-		}
-		const backedOvens = [...ovenGroupMap.values()].sort((a, b) => a.ovenName.localeCompare(b.ovenName));
+		// Backed cartridges (status 'backing'). Backing-oven tracking and the
+		// cure-time gate were removed app-wide (2026-09-23, BUCKET-SYSTEM_PLAN v2):
+		// no oven grouping, no readiness — every backed cartridge is loadable.
+		// Backed carts sit in their production bucket ("Backed, Checked, and Waiting
+		// for Oven") until the board's "Move to oven" releases them (they stay at
+		// 'backing', loose) or loadDeck draws them out. `backedBuckets` lists the
+		// tubs still holding carts so the operator knows which to fetch.
+		const [backedTotalCount, backedCycles] = await Promise.all([
+			CartridgeRecord.countDocuments({ status: 'backing' }).catch(() => 0),
+			BucketCycle.find({ status: 'open', stage: BACKED_STAGE }).select('bucketId cycleNumber quantity stageEnteredAt').sort({ stageEnteredAt: 1 }).lean().catch(() => [] as any[])
+		]);
+		const backedReadyCount = backedTotalCount;
+		const backedOvens: { ovenId: string; ovenName: string; total: number; ready: number }[] = [];
+		const backedBuckets = (backedCycles as any[]).map((c: any) => ({
+			bucketId: String(c.bucketId), cycleNumber: Number(c.cycleNumber ?? 0), count: Number(c.quantity ?? 0),
+			backedAt: c.stageEnteredAt ? new Date(c.stageEnteredAt).toISOString() : null
+		}));
 
 		// Wax lot dropdown (WAX-FLOW-3): in-house WaxBatches + purchased
 		// PT-CT-114 receiving lots with remaining volume. Few of these ever
@@ -403,11 +440,12 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 			tubeData,
 			backedOvens,
 			backedReadyCount,
-			backedTotalCount: (backedCartsRaw as any[]).length,
+			backedTotalCount,
+			backedBuckets,
+			backedLabel: BACKED_LABEL,
 			waxLots: JSON.parse(JSON.stringify(waxLots)),
 			rejectionCodes,
 			fridges,
-			minOvenTimeMin,
 			// --- OT-2 Start Run panel inputs ---
 			// The robot's uploaded protocols (with parameter schemas) for the
 			// picker. Empty if the robot hasn't been hydrated.
@@ -417,7 +455,8 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 			opentronsRobotId: robotId,
 			// Last completed run's post-run tip-tracker snapshot (if any),
 			// to seed the "next tip / tips remaining" readout on the panel.
-			lastTipState
+			lastTipState,
+			waxFloorMm
 		};
 	} catch (err) {
 		console.error('[WAX-FILLING PAGE] Load error:', err instanceof Error ? err.message : err);
@@ -450,164 +489,9 @@ async function resolveWaxRunId(data: FormData): Promise<string | null> {
 	return run ? String(run._id) : null;
 }
 
-/**
- * Best-effort stop of the OT-2 run backing a wax run, BEFORE we mark the run
- * aborted in BIMS. Without this, abort/cancel only updated the database — the
- * UI exited but the physical robot kept executing the protocol, leaving an
- * un-stoppable "running" run on the device.
- *
- * Resilient by design: a run that never reached the robot, an already-terminal
- * run (404/409/"not found"), or an unreachable robot must NOT block the
- * operator's abort. Returns a human warning string when the stop couldn't be
- * confirmed (so the UI can tell the operator to check the device), else null.
- *
- * `run` must have been selected with `opentronsRunId` and `robot`.
- */
-async function stopRobotRun(run: any): Promise<string | null> {
-	const opentronsRunId: string | undefined = run?.opentronsRunId;
-	const robotId: string | undefined = run?.robot?._id;
-	if (!opentronsRunId || !robotId) return null; // never started on a robot
-
-	try {
-		const robot = await getRobot(robotId);
-		if (!robot) return `Robot ${robotId} is offline — confirm the run is stopped on the device.`;
-		const res = await robotPost(robot, `/runs/${opentronsRunId}/actions`, {
-			data: { actionType: 'stop' }
-		});
-		if (res.ok) return null;
-		const body = await res.json().catch(() => ({}));
-		const detail = (body as any)?.errors?.[0]?.detail ?? `robot returned ${res.status}`;
-		// Already finished/cleared → nothing to stop, treat as success.
-		if (res.status === 404 || res.status === 409 || /not found|not allowed|terminal/i.test(String(detail))) {
-			return null;
-		}
-		return `Couldn't stop the run on the robot (${detail}) — confirm on the device.`;
-	} catch (e) {
-		return `Couldn't reach the robot to stop the run (${e instanceof Error ? e.message : 'unknown'}) — confirm on the device.`;
-	}
-}
-
-
-/**
- * Flip a run's carts wax_filling → wax_filled with the full waxFilling phase
- * stamp + PT-CT-105 consumption. Shared by: auto-advance on a clean run
- * completion, the smart abort (advance only the carts the robot actually
- * finished), and the legacy storeDeckAndComplete action.
- * Returns { advanced, skipped } — skipped = locked carts or carts whose status
- * was no longer wax_filling.
- */
-async function advanceCartsToWaxFilled(
-	run: any,
-	cartIds: string[],
-	user: { _id: string; username: string },
-	via: string
-): Promise<{ advanced: number; skipped: number }> {
-	if (!cartIds?.length) return { advanced: 0, skipped: 0 };
-	const now = new Date();
-	const { safeIds } = await protectLockedCarts(cartIds, via, String(run._id), user);
-	let advanced = 0;
-	if (safeIds.length > 0) {
-		const bulkOps = safeIds.map((cid: string) => ({
-			updateOne: {
-				filter: { _id: cid, status: 'wax_filling' },
-				update: {
-					$set: {
-						'waxFilling.runId': run._id,
-						'waxFilling.robotId': run.robot?._id,
-						'waxFilling.robotName': run.robot?.name,
-						'waxFilling.deckId': run.deckId,
-						'waxFilling.waxTubeId': run.waxTubeId,
-						'waxFilling.waxSourceLot': run.waxSourceLot,
-						'waxFilling.operator': run.operator,
-						'waxFilling.runStartTime': run.runStartTime,
-						'waxFilling.runEndTime': now,
-						'waxFilling.recordedAt': now,
-						status: 'wax_filled'
-					}
-				}
-			}
-		}));
-		const res = await CartridgeRecord.bulkWrite(bulkOps);
-		advanced = res.modifiedCount ?? 0;
-		try {
-			const waxPartId = await resolvePartId('PT-CT-105');
-			for (const cid of safeIds) {
-				await recordTransaction({
-					transactionType: 'consumption',
-					partDefinitionId: waxPartId ?? undefined,
-					cartridgeRecordId: cid,
-					lotId: run.waxSourceLot ?? undefined,
-					quantity: 1,
-					manufacturingStep: 'wax_filling',
-					manufacturingRunId: String(run._id),
-					operatorId: run.operator?._id,
-					operatorUsername: run.operator?.username,
-					notes: `Wax-filled cartridge (${via}) in run ${run._id}`
-				});
-			}
-		} catch (e) {
-			console.error(`[${via}] consumption recordTransaction failed:`, e instanceof Error ? e.message : e);
-		}
-	}
-	const skipped = cartIds.length - advanced;
-	try {
-		await AuditLog.create({
-			_id: generateId(),
-			tableName: 'cartridge_records',
-			recordId: String(run._id),
-			action: 'UPDATE',
-			changedBy: user.username,
-			changedAt: now,
-			newData: { via, cartridgeStatus: 'wax_filled', advanced, skipped, cartIds }
-		});
-	} catch { /* non-fatal */ }
-	return { advanced, skipped };
-}
-
-/**
- * Which of the run's carts did the robot actually FINISH filling? Parsed from
- * the run's own command log ("Dispensed …uL into well X2" comments). A cart
- * counts as filled only when every well its row-pattern selection expects got a
- * dispense — partially-filled carts are NOT counted (they go back to backing on
- * an abort; scrap-or-keep is the operator's call at QC).
- * cartridgeIds[i] is deck position i+1 (the scan stores slot order).
- */
-async function cartsFilledPerRobotLog(robot: any, opentronsRunId: string, run: any): Promise<Set<number>> {
-	const filled = new Set<number>();
-	const wellsPerCart = new Map<number, Set<string>>();
-	let cursor = 0;
-	for (let page = 0; page < 5; page++) {
-		const res = await robotGet(robot, `/runs/${opentronsRunId}/commands?cursor=${cursor}&pageLength=999`);
-		if (!res.ok) break;
-		const body = await res.json();
-		const cmds = (body.data ?? []) as Array<{ commandType: string; params?: { message?: string } }>;
-		for (const c of cmds) {
-			if (c.commandType !== 'comment') continue;
-			const m = c.params?.message?.match(/Dispensed [\d.]+uL into well ([A-X])(\d+)/);
-			if (!m) continue;
-			const row = m[1];
-			const col = parseInt(m[2], 10);
-			// carrier from column (wax = even cols 2-24), cart row-band from letter.
-			const carrier = Math.floor((col - 1) / 8); // 0,1,2
-			const band = Math.floor('XWVUTSRQPONMLKJIHGFEDCBA'.indexOf(row) / 3); // 0..7 (X,W,V=0 … C,B,A=7)
-			const cart = carrier * 8 + band + 1; // 1..24
-			if (!wellsPerCart.has(cart)) wellsPerCart.set(cart, new Set());
-			wellsPerCart.get(cart)!.add(row + col);
-		}
-		const total = body?.meta?.totalLength ?? 0;
-		cursor += cmds.length;
-		if (cursor >= total || cmds.length === 0) break;
-	}
-	// Expected wells per cart: 4 wax columns × the active row patterns (default 3).
-	const pp = run.protocolParameters ?? {};
-	const patterns = ['row_pattern_0', 'row_pattern_1', 'row_pattern_2']
-		.filter((k) => pp[k] !== false).length || 3;
-	const expected = 4 * patterns;
-	for (const [cart, wells] of wellsPerCart) {
-		if (wells.size >= expected) filled.add(cart);
-	}
-	return filled;
-}
+// stopRobotRun, advanceCartsToWaxFilled and cartsFilledPerRobotLog moved to
+// $lib/server/opentrons/run-lifecycle-records (the stop + well parse are the
+// shared 'run.stop' / 'run.commands' verbs and parseFilledWells).
 
 export const actions: Actions = {
 	/** Create a new wax filling run — starts directly in Loading (the setup
@@ -810,46 +694,43 @@ export const actions: Actions = {
 		const run = await WaxFillingRun.findById(runId).lean() as any;
 		if (!run) return fail(404, { error: 'Run not found' });
 
-		// WAX-FLOW-2: cartridges were already originated at WI-01 backing
-		// (status 'backing', full lineage + oven entry time on the record).
-		// loadDeck validates each scan against those records and gates on the
-		// per-cartridge minimum oven time.
+		// Cartridges arrive here at status 'backing' ("Backed"),
+		// still sitting in their production bucket. loadDeck validates each scan
+		// against those records and then draws the members out of their bucket
+		// pass (consumeCarts) — the deck load IS the handoff since 2026-09-25.
+		// Backing-oven tracking and the cure-time gate were removed app-wide
+		// (2026-09-23) — nothing here reads oven entry time any more.
 		if (cartridgeIds.length > 0) {
 			const now = new Date();
-			const settingsDocLd = await ManufacturingSettings.findById('default')
-				.select('waxFilling.minOvenTimeMin').lean() as any;
-			const minOvenTimeMin: number = settingsDocLd?.waxFilling?.minOvenTimeMin ?? 60;
 
 			const existingCarts = await CartridgeRecord.find(
 				{ _id: { $in: cartridgeIds } },
-				{ _id: 1, status: 1, 'backing.ovenEntryTime': 1, 'waxFilling.runId': 1 }
+				{ _id: 1, status: 1, 'waxFilling.runId': 1 }
 			).lean() as any[];
 			const cartById = new Map(existingCarts.map((c: any) => [String(c._id), c]));
 
 			const missing: string[] = [];
 			const wrongStatus: { id: string; status: string }[] = [];
-			const underTime: { id: string; remainingMin: number }[] = [];
 			for (const cid of cartridgeIds) {
 				const c = cartById.get(cid);
 				if (!c) { missing.push(cid); continue; }
 				// Idempotent retry: already stamped onto this run by a prior submit
 				if (c.status === 'wax_filling' && c.waxFilling?.runId === runId) continue;
 				if (c.status !== 'backing') { wrongStatus.push({ id: cid, status: c.status ?? '(none)' }); continue; }
-				// CURE-TIME GATE SUSPENDED 2026-08-28 (operator decision). Nothing
-				// blocks on oven time any more; the shortfall is still MEASURED so it
-				// lands in the audit trail and so reinstating the gate is a one-line
-				// change (turn the `underTime` list back into a fail()).
-				const entry = c.backing?.ovenEntryTime ? new Date(c.backing.ovenEntryTime).getTime() : 0;
-				const elapsedMin = entry ? (now.getTime() - entry) / 60000 : 0;
-				if (!entry || elapsedMin < minOvenTimeMin) {
-					underTime.push({ id: cid, remainingMin: Math.ceil(Math.max(0, minOvenTimeMin - elapsedMin)) });
-				}
 			}
 
 			// Test mode: synthesize backed carts for unknown barcodes so the
 			// flow can be exercised end-to-end without WI-01. Synthetic carts
 			// have no backing.parentLotRecordId — cancel/abort deletes them.
 			if (missing.length > 0 && testMode) {
+				// Never synthesize a cartridge from a production bucket's label —
+				// a tub wearing a UUID QR sticker scans exactly like a cartridge
+				// (BUCKET-SYSTEM_PLAN §9.4).
+				const bucketLabels = await findBucketLabels(missing);
+				if (bucketLabels.size > 0) {
+					const details = [...bucketLabels].map(([code, b]) => `${code} is the label on bucket ${b}`).join('; ');
+					return fail(400, { error: `Not cartridges — ${details}. Remove them from the deck scan.` });
+				}
 				await CartridgeRecord.bulkWrite(missing.map((cid) => ({
 					updateOne: {
 						filter: { _id: cid },
@@ -857,9 +738,9 @@ export const actions: Actions = {
 							$setOnInsert: {
 								_id: cid,
 								status: 'backing',
-								'backing.ovenEntryTime': new Date(now.getTime() - minOvenTimeMin * 60000),
 								'backing.operator': { _id: locals.user!._id, username: locals.user!.username },
-								'backing.recordedAt': now
+								'backing.recordedAt': now,
+								'backing.synthetic': true // test-mode only; cancel/abort hard-deletes these
 							}
 						},
 						upsert: true
@@ -879,34 +760,29 @@ export const actions: Actions = {
 			}
 
 			if (missing.length > 0) {
-				return fail(400, { error: `Cartridge(s) not found in backing: ${missing.join(', ')}. Scan them into the oven at Cartridge Back (WI-01) first.` });
+				return fail(400, { error: `Cartridge(s) not found: ${missing.join(', ')}. A cart exists once it is scanned into a production bucket; advance its bucket to "${BACKED_LABEL}" on the bucket board first.` });
 			}
 			if (wrongStatus.length > 0) {
-				return fail(400, { error: `Cartridge(s) not available for wax filling: ${wrongStatus.map((w) => `${w.id} (${w.status})`).join(', ')}.` });
+				return fail(400, { error: `Cartridge(s) not available for wax filling: ${wrongStatus.map((w) => `${w.id} (${w.status})`).join(', ')}. Only carts in a "${BACKED_LABEL}" bucket (status backing) can be loaded.` });
 			}
-			// Oven cure time is NO LONGER ENFORCED (2026-08-28, operator: "completely
-			// abolish the heating/oven timing requirement for wax carts — we might
-			// reinstate it later"). Previously this refused the deck load and offered
-			// an admin override; carts backed minutes earlier could not be filled.
-			// The shortfall is still recorded on the run and in the audit log, so the
-			// data to reinstate the gate (and to see how often it would have fired)
-			// keeps accruing. To bring it back: return fail() here again — the client
-			// already handles `requiresOverride` and the admin re-auth modal is intact.
-			if (underTime.length > 0) {
-				const worst = Math.max(...underTime.map((u) => u.remainingMin));
-				console.log(`[loadDeck] cure-time gate suspended — proceeding with ${underTime.length} cartridge(s) under ${minOvenTimeMin} min (worst ${worst} min short)`);
+
+			// Draw the members out of their backed bucket pass. Carts that are not in
+			// any open pass (legacy WI-01 draws, overrides, returns to a busy tub) are
+			// loose and load without a bucket write. Done BEFORE the status write so a
+			// bucket refusal leaves the cart untouched; if the status write fails after
+			// this, the cart is merely loose at 'backing' and still loadable.
+			const memberCycles = await BucketCycle.find({ status: 'open', cartridgeIds: { $in: cartridgeIds } })
+				.select('_id bucketId cycleNumber stage cartridgeIds').lean() as any[];
+			const scanSet = new Set(cartridgeIds);
+			for (const cyc of memberCycles) {
+				const members = (cyc.cartridgeIds as string[]).filter((id) => scanSet.has(id));
+				if (members.length === 0) continue;
 				try {
-					await AuditLog.create({
-						_id: generateId(),
-						tableName: 'cartridge_records',
-						recordId: runId,
-						action: 'UPDATE',
-						changedBy: locals.user.username,
-						changedAt: now,
-						reason: `Cure-time gate suspended — ${underTime.length} cartridge(s) loaded under the ${minOvenTimeMin} min oven time (worst ${worst} min short)`,
-						newData: { cureGateSuspended: true, minOvenTimeMin, cartridges: underTime }
-					});
-				} catch { /* never block the load on the note */ }
+					await consumeCarts({ cycleId: String(cyc._id), barcodes: members, waxRunId: runId, user: { _id: locals.user._id, username: locals.user.username } });
+				} catch (e) {
+					if (e instanceof BucketError) return fail(e.status, { error: `Bucket ${cyc.bucketId} #${cyc.cycleNumber}: ${e.message}` });
+					throw e;
+				}
 			}
 
 			const ops = cartridgeIds.map((cid: string, idx: number) => ({
@@ -915,8 +791,6 @@ export const actions: Actions = {
 					update: {
 						$set: {
 							status: 'wax_filling',
-							// Cartridge is leaving the backing oven onto the deck
-							'backing.ovenExitTime': now,
 							'waxFilling.runId': runId,
 							'waxFilling.deckId': deckId ?? null,
 							'waxFilling.robotId': run.robot?._id ?? null,
@@ -981,272 +855,19 @@ export const actions: Actions = {
 	 * Status transitions setup→Running atomically with the OT-2 work — if
 	 * the robot rejects the run, the wax run stays in its prior stage.
 	 */
+	/**
+	 * Start the run — the queue line's single action. Same guards, freshness gate
+	 * (auto-resync when stale), create, play and records as before, now composed
+	 * from the shared prepare → robot half (runVerb over the server transport) →
+	 * confirm. The tailnet line runs the same steps via ?/startPrepare … ?/startConfirm.
+	 */
 	startRun: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
 		await connectDB();
-
 		const data = await request.formData();
-		const runId = data.get('runId') as string;
-		const opentronsProtocolId = data.get('opentronsProtocolId')?.toString();
-		if (!runId) return fail(400, { error: 'runId is required' });
-		if (!opentronsProtocolId) return fail(400, { error: 'opentronsProtocolId is required (pick a protocol)' });
-
-		const run = await WaxFillingRun.findById(runId).lean() as any;
-		if (!run) return fail(404, { error: 'Wax filling run not found' });
-		const robotId = run.robot?._id;
-		if (!robotId) return fail(400, { error: 'Wax run has no robot assigned' });
-
-		// UNTRACKED-FILL GUARD (2026-08-28). Runs were starting with no scanned
-		// deck and no cartridgeIds — the robot filled real carts that no record
-		// ever pointed at, so nothing could mark them wax_filled. A run may only
-		// start without them as an EXPLICIT test fill (calibration/tuning).
-		const testFill = data.get('testFillNoCartridges')?.toString() === 'true';
-		if (!testFill && (!run.deckId || !(run.cartridgeIds?.length))) {
-			return fail(400, {
-				error:
-					'This run has no scanned deck/cartridges — starting now would fill carts no record points at ' +
-					'(they could never be marked wax filled). Scan the deck + cartridges first, or tick ' +
-					'"Test fill — no cartridges tracked" if this is a calibration run.'
-			});
-		}
-		if (testFill && !(run.cartridgeIds?.length)) {
-			try {
-				await AuditLog.create({
-					_id: generateId(), tableName: 'wax_filling_runs', recordId: runId, action: 'UPDATE',
-					changedBy: locals.user?.username, changedAt: new Date(),
-					newData: { testFillNoCartridges: true, note: 'explicit untracked test fill' }
-				});
-			} catch { /* non-fatal */ }
-		}
-
-		const robot = await getRobot(robotId);
-		if (!robot) return fail(404, { error: `Robot ${robotId} not found / not active` });
-
-		// Deck identity guard. BIMS knows which deck the operator selected; the
-		// robot picks its cartridge-deck definition independently, from a Particle
-		// id it reads over serial. Prove the selected deck is actually bound to a
-		// real definition before moving a pipette — an unbound or dangling deck is
-		// how a calibrated deck ends up filling at someone else's coordinates.
-		let deckBinding;
-		try {
-			deckBinding = await resolveDeckBinding(run?.deckId ?? null, {
-				enforce: isHardenedRobot(robot)
-			});
-		} catch (e) {
-			if (e instanceof DeckBindingError) return fail(400, { error: e.message });
-			throw e;
-		}
-		if (deckBinding.warning) console.warn('[wax-filling startRun] ' + deckBinding.warning);
-
-
-		// Freshness gate: resolve the robot's CURRENT wax protocol server-side and
-		// prove its bundled deck calibration matches live Mongo; auto-resync if
-		// not. The posted opentronsProtocolId is intentionally NOT trusted — a page
-		// loaded before a Sync would post the older upload, which still exists on
-		// the robot and would silently run stale geometry.
-		let protocol: { opentronsProtocolId: string; parametersSchema: any[] | null };
-		try {
-			protocol = await ensureFreshRunProtocol(robot, String(robotId), 'wax-filling', locals.user.username);
-		} catch (e) {
-			return fail(502, {
-				error: `Deck-calibration freshness check failed: ${e instanceof Error ? e.message : 'unknown'}`
-			});
-		}
-		const runProtocolId = protocol.opentronsProtocolId;
-
-		const paramSchema = (protocol.parametersSchema ?? []) as Array<{
-			variableName: string;
-			type?: 'int' | 'float' | 'bool' | 'str';
-			default?: unknown;
-		}>;
-
-		const runTimeParameterValues: Record<string, number | string | boolean> = {};
-		const protocolParameters: Record<string, number | string | boolean> = {};
-		for (const def of paramSchema) {
-			const raw = data.get(`param_${def.variableName}`);
-			if (raw === null) {
-				// Operator didn't override; use protocol default.
-				if (def.default !== undefined && def.default !== null) {
-					runTimeParameterValues[def.variableName] = def.default as any;
-					protocolParameters[def.variableName] = def.default as any;
-				}
-				continue;
-			}
-			let value: number | string | boolean;
-			const s = raw.toString();
-			if (def.type === 'bool') value = s === 'true' || s === 'on';
-			else if (def.type === 'int') value = parseInt(s, 10);
-			else if (def.type === 'float') value = parseFloat(s);
-			else value = s;
-			runTimeParameterValues[def.variableName] = value;
-			protocolParameters[def.variableName] = value;
-		}
-
-		// Partial-deck runs (2026-08-18). The protocol's `cartridges` is the END
-		// cartridge (it slices the first N cartridges of the destination list) and
-		// `resume_cartridge` is the START. In BIMS `cartridges` is locked to the
-		// number of cartridges the operator SCANNED into the run, so for a run that
-		// starts partway (e.g. positions 16..24 = 9 scanned) the natural meaning is
-		// "this many cartridges FROM the start". Translate count -> end here so the
-		// operator never has to do that arithmetic (and can't get an empty run).
-		const declared = new Set(paramSchema.map((d) => d.variableName));
-		const startCart = Number(runTimeParameterValues['resume_cartridge'] ?? 1);
-		if (declared.has('resume_cartridge') && startCart > 1) {
-			const count = Number(runTimeParameterValues['cartridges'] ?? 24);
-			const endCart = Math.min(24, startCart + count - 1);
-			runTimeParameterValues['cartridges'] = endCart;
-			protocolParameters['cartridges'] = endCart;
-			protocolParameters['cartridgesScanned'] = count;
-			console.log(`[wax startRun] partial deck: start cartridge ${startCart}, ${count} scanned -> end cartridge ${endCart}`);
-		}
-
-		// PRD 6: inject the BIMS-native calibration params (global offset +
-		// calibrator point) for robots that have a captured offset. No-op for the
-		// pre-cutover protocol (none of these RTPs declared) — see calibration-rtps.
-		// Deck-keyed calibrator (2026-08-28): the fixture is bolted to the carriage,
-		// so the run gets the point taught for the deck that is physically mounted —
-		// deckBinding.particleDeviceId is the same id the .py reads at run start.
-		const calRtps = await calibrationRtpValues(String(robotId), 'wax-filling', paramSchema as any, {
-			deckKey: deckBinding.particleDeviceId,
-			deckLoadName: deckBinding.deckLoadName
-		});
-		Object.assign(runTimeParameterValues, calRtps);
-		Object.assign(protocolParameters, calRtps);
-
-		// Create the OT-2 run.
-		let opentronsRunId: string;
-		try {
-			const createRes = await robotPost(robot, '/runs', {
-				data: {
-					protocolId: runProtocolId,
-					...(Object.keys(runTimeParameterValues).length ? { runTimeParameterValues } : {})
-				}
-			});
-			if (!createRes.ok) {
-				const body = await createRes.json().catch(() => ({}));
-				const detail = (body as any).errors?.[0]?.detail ?? `Robot returned ${createRes.status}`;
-				return fail(502, { error: `Couldn't create run on robot: ${detail}` });
-			}
-			const createBody = await createRes.json();
-			opentronsRunId = createBody?.data?.id;
-			if (!opentronsRunId) {
-				return fail(502, { error: 'Robot returned no run id' });
-			}
-
-		// Geometry provenance. Record exactly which deck definition, at which
-		// version and content hash, this run was started against — the definition
-		// is edited in place, so these coordinates stop existing the moment anyone
-		// jogs the deck again.
-		try {
-			await OpentronsRunRecord.create({
-				_id: generateId(),
-				manufacturingRunId: String(runId),
-				manufacturingRunType: 'wax-filling',
-				robotId: String(robotId),
-				robotName: robot.name ?? null,
-				opentronsRunId,
-				opentronsProtocolId: runProtocolId,
-				runtimeParameters: runTimeParameterValues,
-				deckGeometry: deckBinding,
-				status: 'created',
-				robotCreatedAt: new Date(),
-				startedBy: locals.user.username
-			});
-		} catch (e) {
-			// Provenance must never block a fill that the robot already accepted.
-			console.error('[wax-filling startRun] could not write run record:', e instanceof Error ? e.message : e);
-		}
-		} catch (err) {
-			return fail(502, {
-				error: `Couldn't reach robot: ${err instanceof Error ? err.message : 'unknown'}`
-			});
-		}
-
-		// Start execution.
-		try {
-			const playRes = await robotPost(robot, `/runs/${opentronsRunId}/actions`, {
-				data: { actionType: 'play' }
-			});
-			if (!playRes.ok) {
-				const body = await playRes.json().catch(() => ({}));
-				const detail = (body as any).errors?.[0]?.detail ?? `Robot returned ${playRes.status}`;
-				return fail(502, {
-					error: `Created run ${opentronsRunId} but couldn't start it: ${detail}. Operator can play it from the device page.`
-				});
-			}
-		} catch (err) {
-			return fail(502, {
-				error: `Created run ${opentronsRunId} but couldn't start it: ${err instanceof Error ? err.message : 'unknown'}`
-			});
-		}
-
-		// Auto-resume the protocol's initial off-deck "confirm deck loaded" pause
-		// on the robot. The operator is routed to the gallery and won't be on the
-		// run page to click Resume, so the daemon watches the run and resumes the
-		// first pause once. Fire-and-forget.
-		try {
-			await Ot2BridgeCommand.create({
-				_id: generateId(),
-				robotId: String(robotId),
-				deviceId: bridgeDeviceIdForRobot(robot as any),
-				kind: 'auto_resume_run',
-				payload: { runId: opentronsRunId },
-				ttlMs: 120_000,
-				requestedBy: locals.user.username
-			});
-		} catch (e) {
-			console.warn('[startRun] could not enqueue auto_resume_run:', e instanceof Error ? e.message : e);
-		}
-
-		// Carry the previous run's tip state forward as this run's "before"
-		// snapshot. If the operator checked tiprack_refilled, the protocol
-		// will reset to index 0 — record that intent so post-run consumed
-		// math is sane (we treat refilled-mid-flight separately).
-		const prevTipRun = await WaxFillingRun.findOne({
-			'robot._id': robotId,
-			'pipetteTipState.after.nextTipIndex': { $exists: true },
-			_id: { $ne: runId }
-		}).sort({ runEndTime: -1 }).select('pipetteTipState').lean() as any;
-
-		const refilled = protocolParameters.tiprack_refilled === true;
-		const beforeSnap = refilled
-			? { nextTipIndex: 0, hostname: prevTipRun?.pipetteTipState?.after?.hostname ?? null, capturedAt: new Date() }
-			: prevTipRun?.pipetteTipState?.after
-				? {
-					nextTipIndex: prevTipRun.pipetteTipState.after.nextTipIndex ?? 0,
-					hostname: prevTipRun.pipetteTipState.after.hostname ?? null,
-					capturedAt: new Date()
-				}
-				: { nextTipIndex: 0, hostname: null, capturedAt: new Date() };
-
-		const now = new Date();
-		await WaxFillingRun.findByIdAndUpdate(runId, {
-			$set: {
-				status: 'Running',
-				runStartTime: now,
-				opentronsRunId,
-				protocolParameters,
-				'pipetteTipState.before': beforeSnap,
-				'pipetteTipState.rackRefilledDuringRun': refilled
-			}
-		});
-
-		await AuditLog.create({
-			_id: generateId(),
-			tableName: 'wax_filling_runs',
-			recordId: runId,
-			action: 'UPDATE',
-			changedBy: locals.user?.username,
-			changedAt: now,
-			newData: {
-				status: 'Running',
-				opentronsRunId,
-				protocolParameters,
-				pipetteTipBefore: beforeSnap.nextTipIndex
-			}
-		});
-
-		return { success: true, opentronsRunId };
+		const r = await startRunQueue('wax', data, { _id: locals.user._id, username: locals.user.username });
+		if (isActionFail(r)) return fail(r.fail.status, { error: r.fail.error });
+		return r;
 	},
 
 	/**
@@ -1266,107 +887,10 @@ export const actions: Actions = {
 		const data = await request.formData();
 		const runId = data.get('runId') as string;
 		const finalStatus = (data.get('finalStatus')?.toString() ?? '').toLowerCase();
-		if (!runId) return fail(400, { error: 'runId is required' });
-
-		const run = await WaxFillingRun.findById(runId).lean() as any;
-		if (!run) return fail(404, { error: 'Wax filling run not found' });
-		if (!run.opentronsRunId) return fail(400, { error: 'This wax run has no OT-2 run linked' });
-		if (run.pipetteTipState?.after?.nextTipIndex != null) {
-			// Idempotent: already recorded. Return success without re-fetching.
-			return { success: true, alreadyRecorded: true };
-		}
-
-		const robot = await getRobot(run.robot?._id);
-		if (!robot) return fail(404, { error: 'Robot no longer reachable' });
-
-		// Pull commands. The OT-2 paginates — request a large pageLength to
-		// get everything in one round-trip for a typical wax run (well under
-		// 10k commands).
-		let nextTipIndex: number | null = null;
-		let hostname: string | null = null;
-		let pickUpTipCount = 0;
-		try {
-			const cmdRes = await robotGet(
-				robot,
-				`/runs/${run.opentronsRunId}/commands?cursor=0&pageLength=10000`
-			);
-			if (cmdRes.ok) {
-				const cmdBody = await cmdRes.json();
-				const commands = (cmdBody.data ?? []) as Array<{
-					commandType: string;
-					params?: { message?: string };
-				}>;
-				for (const cmd of commands) {
-					if (cmd.commandType === 'pickUpTip') pickUpTipCount += 1;
-					if (cmd.commandType === 'comment' && cmd.params?.message) {
-						// "TIP TRACKER: consumed tip A37 — next tip will be A38 (index 24)"
-						// "TIP TRACKER: starting from tip A37 (index 24)"
-						const m = cmd.params.message.match(/TIP TRACKER:[\s\S]*?\(index (\d+)\)/);
-						if (m) nextTipIndex = parseInt(m[1], 10);
-					}
-				}
-			}
-		} catch (err) {
-			console.error('[WAX-FILLING] recordRunFinished: command fetch failed:', err);
-			// Fall through — still stamp partial state.
-		}
-
-		const now = new Date();
-		const before = run.pipetteTipState?.before?.nextTipIndex ?? 0;
-		const refilledMidRun = !!run.pipetteTipState?.rackRefilledDuringRun;
-		// If the rack was refilled mid-run, consumed = (96 - before) + (final index).
-		// Otherwise just the delta.
-		const finalIndex = nextTipIndex ?? before + pickUpTipCount;
-		const consumed = refilledMidRun
-			? Math.max(0, 96 - before) + finalIndex
-			: Math.max(0, finalIndex - before);
-
-		await WaxFillingRun.findByIdAndUpdate(runId, {
-			$set: {
-				// Persist the terminal .py status on the run so the Running stage can
-				// reveal the deck-removal + Run-again controls after it finishes (reload-safe).
-				opentronsRunFinalStatus: finalStatus || 'unknown',
-				'pipetteTipState.after': {
-					nextTipIndex: finalIndex,
-					hostname: hostname ?? run.pipetteTipState?.before?.hostname ?? null,
-					capturedAt: now
-				},
-				'pipetteTipState.consumed': consumed
-			}
-		});
-
-		await AuditLog.create({
-			_id: generateId(),
-			tableName: 'wax_filling_runs',
-			recordId: runId,
-			action: 'UPDATE',
-			changedBy: locals.user?.username,
-			changedAt: now,
-			newData: {
-				opentronsRunFinalStatus: finalStatus || 'unknown',
-				pipetteTipAfter: finalIndex,
-				pipetteTipConsumed: consumed
-			}
-		});
-
-		// AUTO-ADVANCE (2026-08-28): a run that completes with no cancellation IS
-		// the statement that every cart on it got wax. No deck-removed / fridge
-		// ceremony — flip the whole run to wax_filled and complete it right here.
-		// Stopped/failed runs are left for cancel/abort (smart abort advances only
-		// the carts the robot log proves were finished).
-		let advanced = 0;
-		if (finalStatus === 'succeeded') {
-			const user = { _id: locals.user!._id, username: locals.user!.username };
-			const r = await advanceCartsToWaxFilled(run, run.cartridgeIds ?? [], user, 'run-complete auto-advance');
-			advanced = r.advanced;
-			await WaxFillingRun.findByIdAndUpdate(runId, {
-				$set: { status: 'completed', robotReleasedAt: now, runEndTime: now }
-			});
-		}
-
-		return { success: true, consumed, nextTipIndex: finalIndex, advanced, autoCompleted: finalStatus === 'succeeded' };
+		const r = await recordRunFinishedQueue('wax', runId, finalStatus, { _id: locals.user._id, username: locals.user.username });
+		if (isActionFail(r)) return fail(r.fail.status, { error: r.fail.error });
+		return r;
 	},
-
 
 	/**
 	 * Confirm deck removed + store in one commit (WAX-SIMPLIFY-1: deck-removed →
@@ -1485,8 +1009,6 @@ export const actions: Actions = {
 		return { success: true };
 	},
 
-
-
 	/** Reset run back to Loading stage (deck loading) — clears deckId and cartridges so operator can re-scan */
 	resetToLoading: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
@@ -1585,82 +1107,11 @@ export const actions: Actions = {
 		const data = await request.formData();
 		const runId = data.get('runId') as string;
 		const reason = (data.get('reason') as string) || 'Cancelled by operator';
-		const now = new Date();
-
-		// Once the OT-2 has finished (robotReleasedAt set), the run is committed
-		// and can no longer be cancelled. Individual cartridges can still be
-		// rejected at QC; whole-run abort is no longer the right tool.
-		const existing = await WaxFillingRun.findById(runId).select('robotReleasedAt').lean() as any;
-		if (existing?.robotReleasedAt) {
-			return fail(400, { error: 'Cannot cancel: the OT-2 has already completed this run. Reject individual cartridges at QC instead.' });
-		}
-
-		const runBeforeCancel = await WaxFillingRun.findById(runId).select('cartridgeIds opentronsRunId robot deckId waxTubeId waxSourceLot operator runStartTime protocolParameters').lean() as any;
-		const cancelScannedIds: string[] = (runBeforeCancel?.cartridgeIds ?? []) as string[];
-
-		// Actually halt the OT-2 first — otherwise the robot keeps running.
-		const cancelRobotWarning = await stopRobotRun(runBeforeCancel);
-
-		await WaxFillingRun.findByIdAndUpdate(runId, {
-			$set: { status: 'aborted', abortReason: reason, runEndTime: now }
-		});
-
-		// SMART ABORT (2026-08-28): the robot's own log proves which carts it
-		// finished before the stop — mark THOSE wax_filled instead of reverting
-		// real fills to backing. Only fully-filled carts count.
-		if (cancelScannedIds.length > 0 && runBeforeCancel?.opentronsRunId) {
-			try {
-				const cRobot = await getRobot(runBeforeCancel.robot?._id);
-				if (cRobot) {
-					const filled = await cartsFilledPerRobotLog(cRobot, runBeforeCancel.opentronsRunId, runBeforeCancel);
-					const filledIds = [...filled].map((n) => cancelScannedIds[n - 1]).filter(Boolean);
-					if (filledIds.length > 0) {
-						const r = await advanceCartsToWaxFilled(runBeforeCancel, filledIds, { _id: locals.user!._id, username: locals.user!.username }, 'smart-abort (cancel)');
-						console.log(`[cancelRun] smart abort: ${r.advanced} filled cart(s) marked wax_filled before revert`);
-					}
-				}
-			} catch (e) {
-				console.error('[cancelRun] smart abort check failed (reverting all):', e instanceof Error ? e.message : e);
-			}
-		}
-
-		// Cartridges scanned onto the deck never actually got wax-filled.
-		// WI-01-originated carts go back to 'backing' (the operator returns
-		// them to the oven; their original ovenEntryTime is preserved).
-		// Test-mode synthetics (no parentLotRecordId) are deleted.
-		if (cancelScannedIds.length > 0) {
-			await CartridgeRecord.updateMany(
-				{
-					_id: { $in: cancelScannedIds },
-					'waxFilling.runId': runId,
-					status: 'wax_filling',
-					'backing.parentLotRecordId': { $exists: true, $ne: null }
-				},
-				{ $set: { status: 'backing' }, $unset: { waxFilling: '', 'backing.ovenExitTime': '' } }
-			);
-			await CartridgeRecord.deleteMany({
-				_id: { $in: cancelScannedIds },
-				'waxFilling.runId': runId,
-				status: 'wax_filling'
-			});
-		}
-
-		await AuditLog.create({
-			_id: generateId(),
-			tableName: 'wax_filling_runs',
-			recordId: runId,
-			action: 'UPDATE',
-			changedBy: locals.user?.username,
-			changedAt: now,
-			newData: { status: 'aborted', abortReason: reason, revertedToBacking: cancelScannedIds.length }
-		});
-
-		await notifyRunLifecycle({
-			runId, runType: 'wax_filling', status: 'cancelled',
-			operator: locals.user?.username, reason
-		});
-
-		return { success: true, warning: cancelRobotWarning ?? undefined };
+		// Halts the OT-2 first ('run.stop'), reads which carts it finished (smart
+		// abort), then records — see stopConfirm in run-lifecycle-records.
+		const r = await stopRunQueue('wax', 'cancel', runId, { reason }, { _id: locals.user._id, username: locals.user.username });
+		if (isActionFail(r)) return fail(r.fail.status, { error: r.fail.error });
+		return r;
 	},
 
 	abortRun: async ({ request, locals }) => {
@@ -1670,82 +1121,14 @@ export const actions: Actions = {
 		const data = await request.formData();
 		const runId = data.get('runId') as string;
 		const reason = (data.get('reason') as string) || 'Aborted';
-		const now = new Date();
-
-		// Once the OT-2 has finished (robotReleasedAt set), abort is no longer
-		// available — same rule as cancelRun. Per-cartridge rejection at QC
-		// is the post-run path.
-		const existing = await WaxFillingRun.findById(runId).select('robotReleasedAt').lean() as any;
-		if (existing?.robotReleasedAt) {
-			return fail(400, { error: 'Cannot abort: the OT-2 has already completed this run. Reject individual cartridges at QC instead.' });
-		}
-
-		const runBeforeAbort = await WaxFillingRun.findById(runId).select('cartridgeIds opentronsRunId robot deckId waxTubeId waxSourceLot operator runStartTime protocolParameters').lean() as any;
-		const abortScannedIds: string[] = (runBeforeAbort?.cartridgeIds ?? []) as string[];
-
-		// Actually halt the OT-2 first — otherwise the robot keeps running.
-		const abortRobotWarning = await stopRobotRun(runBeforeAbort);
-
-		await WaxFillingRun.findByIdAndUpdate(runId, {
-			$set: { status: 'aborted', abortReason: reason, runEndTime: now }
-		});
-
-		// SMART ABORT — see cancelRun: robot-proven filled carts advance instead
-		// of reverting to backing.
-		if (abortScannedIds.length > 0 && runBeforeAbort?.opentronsRunId) {
-			try {
-				const aRobot = await getRobot(runBeforeAbort.robot?._id);
-				if (aRobot) {
-					const filled = await cartsFilledPerRobotLog(aRobot, runBeforeAbort.opentronsRunId, runBeforeAbort);
-					const filledIds = [...filled].map((n) => abortScannedIds[n - 1]).filter(Boolean);
-					if (filledIds.length > 0) {
-						const r = await advanceCartsToWaxFilled(runBeforeAbort, filledIds, { _id: locals.user!._id, username: locals.user!.username }, 'smart-abort');
-						console.log(`[abortRun] smart abort: ${r.advanced} filled cart(s) marked wax_filled before revert`);
-					}
-				}
-			} catch (e) {
-				console.error('[abortRun] smart abort check failed (reverting all):', e instanceof Error ? e.message : e);
-			}
-		}
-
-		// Same revert semantics as cancelRun — see comment there.
-		if (abortScannedIds.length > 0) {
-			await CartridgeRecord.updateMany(
-				{
-					_id: { $in: abortScannedIds },
-					'waxFilling.runId': runId,
-					status: 'wax_filling',
-					'backing.parentLotRecordId': { $exists: true, $ne: null }
-				},
-				{ $set: { status: 'backing' }, $unset: { waxFilling: '', 'backing.ovenExitTime': '' } }
-			);
-			await CartridgeRecord.deleteMany({
-				_id: { $in: abortScannedIds },
-				'waxFilling.runId': runId,
-				status: 'wax_filling'
-			});
-		}
-
-		await AuditLog.create({
-			_id: generateId(),
-			tableName: 'wax_filling_runs',
-			recordId: runId,
-			action: 'UPDATE',
-			changedBy: locals.user?.username,
-			changedAt: now,
-			newData: { status: 'aborted', abortReason: reason, revertedToBacking: abortScannedIds.length }
-		});
-
-		await notifyRunLifecycle({
-			runId, runType: 'wax_filling', status: 'aborted',
-			operator: locals.user?.username, reason
-		});
-
-		return { success: true, warning: abortRobotWarning ?? undefined };
+		const r = await stopRunQueue('wax', 'abort', runId, { reason }, { _id: locals.user._id, username: locals.user.username });
+		if (isActionFail(r)) return fail(r.fail.status, { error: r.fail.error });
+		return r;
 	},
 
-
-
+	// OT2-TAILNET-5 two-phase lifecycle (tailnet line): startPrepare, startBundle,
+	// startRecordResync, startConfirm, finishConfirm, cancelConfirm, abortConfirm.
+	...lifecycleActions('wax'),
 
 	/**
 	 * Save an operator-entered note against the wax run. Append-only metadata —
@@ -1775,6 +1158,56 @@ export const actions: Actions = {
 		const robotId = run.robot?._id;
 		const robot = robotId ? await OpentronsRobot.findById(robotId).lean() as any : null;
 		if (!robot) return fail(400, { error: 'Run has no OT-2 robot' });
+		if (data.get('line')?.toString() === 'tailnet') {
+			// OT2-TAILNET-5 S6: the tailnet prepare. Same guards and the same
+			// AuditLog row (stamped line + bridgeJobId), but NO Ot2BridgeCommand —
+			// the browser submits the returned job to the robot daemon's /bridge.
+			// {phase:'abandon'} records that the browser's submit failed.
+			requirePermission(locals.user, 'manufacturing:write');
+			const now = new Date();
+			if (data.get('phase')?.toString() === 'abandon') {
+				const bridgeJobId = data.get('bridgeJobId')?.toString() ?? '';
+				if (!/^[A-Za-z0-9_-]{6,64}$/.test(bridgeJobId)) return fail(400, { error: 'bridgeJobId is required' });
+				await AuditLog.create({
+					_id: generateId(),
+					tableName: 'wax_filling_runs',
+					recordId: runId,
+					action: 'wax_tip_swap_submit_failed',
+					changedBy: locals.user.username,
+					changedAt: now,
+					newData: {
+						opentronsRunId: run.opentronsRunId ?? null,
+						robotId: String(robotId),
+						line: 'tailnet',
+						bridgeJobId,
+						error: (data.get('error')?.toString() ?? '').slice(0, 500) || 'bridge submit failed'
+					}
+				});
+				return { success: true, abandoned: true };
+			}
+			const gate = bridgeJobGate(robot);
+			if (!gate.ok) return fail(409, { error: gate.reason });
+			const bridgeJobId = generateId();
+			await AuditLog.create({
+				_id: generateId(),
+				tableName: 'wax_filling_runs',
+				recordId: runId,
+				action: cancel ? 'wax_tip_swap_cancel' : 'wax_tip_swap_request',
+				changedBy: locals.user.username,
+				changedAt: now,
+				newData: { mode, cancel, opentronsRunId: run.opentronsRunId ?? null, robotId: String(robotId), line: 'tailnet', bridgeJobId }
+			});
+			return {
+				success: true,
+				tipSwap: cancel ? 'cancelled' : mode,
+				line: 'tailnet',
+				job: {
+					jobId: bridgeJobId,
+					kind: 'tip_swap_request',
+					payload: { mode, cancel, runId: run.opentronsRunId ?? null, requestedBy: locals.user.username }
+				}
+			};
+		}
 		try {
 			await Ot2BridgeCommand.create({
 				_id: generateId(),
@@ -1788,15 +1221,17 @@ export const actions: Actions = {
 		} catch (e) {
 			return fail(502, { error: `Could not reach the robot bridge: ${e instanceof Error ? e.message : 'unknown'}` });
 		}
+		// AuditLog's schema is tableName/recordId/changedBy/changedAt/newData — the
+		// previous shape (resourceType/username/details) was silently dropped by
+		// Mongoose, leaving rows with only an action and a time (found 2026-09-17).
 		await AuditLog.create({
 			_id: generateId(),
+			tableName: 'wax_filling_runs',
+			recordId: runId,
 			action: cancel ? 'wax_tip_swap_cancel' : 'wax_tip_swap_request',
-			resourceType: 'wax_filling_run',
-			resourceId: runId,
-			userId: locals.user._id,
-			username: locals.user.username,
-			timestamp: new Date(),
-			details: { mode, opentronsRunId: run.opentronsRunId ?? null }
+			changedBy: locals.user.username,
+			changedAt: new Date(),
+			newData: { mode, cancel, opentronsRunId: run.opentronsRunId ?? null, robotId: String(robotId) }
 		});
 		return { success: true, tipSwap: cancel ? 'cancelled' : mode };
 	},

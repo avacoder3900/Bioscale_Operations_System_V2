@@ -15,7 +15,6 @@
 				finishTime: string | null;
 				cycleTime: number | null;
 				createdAt: string;
-				oven: string | null;
 				inputLots: { materialName: string; barcode: string }[];
 			} | null;
 			cartridges: {
@@ -23,7 +22,7 @@
 				status: string;
 				scannedAt: string | null;
 				scannedBy: string;
-				oven: string;
+				bucket: string;
 			}[];
 			batchNotes: {
 				id: string;
@@ -95,9 +94,9 @@
 			</div>
 		</div>
 
-		{#if data.lot.inputLots.length > 0 || data.lot.oven}
+		{#if data.lot.inputLots.length > 0}
 			<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-4">
-				<h2 class="text-sm font-medium text-[var(--color-tron-text)]">Materials &amp; oven</h2>
+				<h2 class="text-sm font-medium text-[var(--color-tron-text)]">Materials</h2>
 				<div class="mt-3 grid gap-2 text-sm sm:grid-cols-2">
 					{#each data.lot.inputLots as m (m.materialName)}
 						<div class="flex justify-between rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-3 py-2">
@@ -105,12 +104,6 @@
 							<span class="font-mono text-[var(--color-tron-text)]">{m.barcode}</span>
 						</div>
 					{/each}
-					{#if data.lot.oven}
-						<div class="flex justify-between rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-3 py-2">
-							<span class="text-[var(--color-tron-text-secondary)]">Oven</span>
-							<span class="font-mono text-[var(--color-tron-text)]">{data.lot.oven}</span>
-						</div>
-					{/if}
 				</div>
 			</div>
 		{/if}
@@ -125,7 +118,7 @@
 								<th class="px-3 py-2">Cartridge</th>
 								<th class="px-3 py-2">Scanned</th>
 								<th class="px-3 py-2">By</th>
-								<th class="px-3 py-2">Oven</th>
+								<th class="px-3 py-2">From bucket</th>
 								<th class="px-3 py-2">Status</th>
 							</tr>
 						</thead>
@@ -135,7 +128,7 @@
 									<td class="px-3 py-2 font-mono text-xs text-[var(--color-tron-text)]">{c.barcode}</td>
 									<td class="px-3 py-2 text-[var(--color-tron-text-secondary)]">{c.scannedAt ? new Date(c.scannedAt).toLocaleString() : '—'}</td>
 									<td class="px-3 py-2 text-[var(--color-tron-text)]">{c.scannedBy}</td>
-									<td class="px-3 py-2 text-[var(--color-tron-text-secondary)]">{c.oven}</td>
+									<td class="px-3 py-2 text-[var(--color-tron-text-secondary)]">{c.bucket}</td>
 									<td class="px-3 py-2 text-[var(--color-tron-text)]">{c.status}</td>
 								</tr>
 							{/each}

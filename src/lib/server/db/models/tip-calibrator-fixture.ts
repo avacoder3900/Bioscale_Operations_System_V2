@@ -82,6 +82,16 @@ const tipCalibratorFixtureSchema = new Schema({
 	 * be tight enough for B07 and loose enough for R04 at the same time.
 	 */
 	maxTipAdjust: { type: Number, default: null },
+	/**
+	 * Wax-tube aspiration floor for this robot+deck, in mm above the tube's
+	 * defined bottom (the wax .py's `min_tip_clearance`). Optional — absent
+	 * means the protocol's own default (1.5) stands. Per robot because it is
+	 * only as true as the robot's Z frame: B07's frame is accurate and 1.5mm is
+	 * inside the conical tube's apex (tip bends on the last carts); R04's taught
+	 * frame sits ~4-5mm below design so the same 1.5mm is physically ~6mm there.
+	 * Wax only — the reagent protocol's floor is left alone.
+	 */
+	minTipClearanceWaxMm: { type: Number, default: null },
 	capturedBy: { type: operatorRef },
 	capturedAt: { type: Date, default: Date.now },
 	// Newest-first list of the points this one replaced. Capped at 10 on write.

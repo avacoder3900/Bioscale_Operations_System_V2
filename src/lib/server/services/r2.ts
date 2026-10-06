@@ -6,18 +6,20 @@
  */
 import { createHmac, createHash } from 'node:crypto';
 import { env } from '$env/dynamic/private';
+import { resolveR2AccountIdFromEnv } from '../r2-account';
 
 function getConfig() {
-	const accountId = env.R2_ACCOUNT_ID;
-	const accessKeyId = env.R2_ACCESS_KEY_ID;
-	const secretAccessKey = env.R2_SECRET_ACCESS_KEY;
-	const bucket = env.R2_BUCKET_NAME || 'brevitest-cv';
-	const publicUrl = env.R2_PUBLIC_URL || `https://${bucket}.r2.dev`;
-	const endpoint = `${accountId}.r2.cloudflarestorage.com`;
+	const accessKeyId = (env.R2_ACCESS_KEY_ID ?? '').trim();
+	const secretAccessKey = (env.R2_SECRET_ACCESS_KEY ?? '').trim();
+	const bucket = (env.R2_BUCKET_NAME ?? '').trim() || 'brevitest-cv';
+	const publicUrl = (env.R2_PUBLIC_URL ?? '').trim() || `https://${bucket}.r2.dev`;
 
-	if (!accountId || !accessKeyId || !secretAccessKey) {
-		throw new Error('R2 credentials not configured (R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY)');
+	if (!accessKeyId || !secretAccessKey) {
+		throw new Error('R2 credentials not configured (R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY)');
 	}
+	// Salvages a malformed R2_ACCOUNT_ID (or falls back to R2_PUBLIC_URL) — see r2-account.ts.
+	const accountId = resolveR2AccountIdFromEnv(env);
+	const endpoint = `${accountId}.r2.cloudflarestorage.com`;
 
 	return { accountId, accessKeyId, secretAccessKey, bucket, publicUrl, endpoint };
 }

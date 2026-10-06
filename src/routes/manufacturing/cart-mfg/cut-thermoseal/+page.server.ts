@@ -1,7 +1,16 @@
+/**
+ * Cut Thermoseal — run log only (2026-09-25).
+ *
+ * Thermoseal inventory is one roll-counted part (THERMOSEAL_PART, PT-CT-101)
+ * that moves ONLY when the bucket board pulls a roll at the press
+ * (thermoseal-service.openRoll). This page no longer consumes rolls or creates
+ * cut sheets (PT-CT-111) — that sheet inventory is stale and retired. Runs are
+ * still recorded for the record; the roll tile is the live roll count, read-only.
+ */
 import { redirect, fail } from '@sveltejs/kit';
 import { connectDB, AuditLog, PartDefinition, generateId } from '$lib/server/db';
 import { byId, asId } from '$lib/server/db/native-helpers';
-import { recordTransaction, resolvePartId } from '$lib/server/services/inventory-transaction';
+import { THERMOSEAL_PART } from '$lib/server/services/thermoseal-service';
 import type { PageServerLoad, Actions } from './$types';
 import mongoose from 'mongoose';
 
@@ -15,7 +24,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 	const [runs, thermosealPart, settingsDoc] = await Promise.all([
 		getCollection().find({}).sort({ createdAt: -1 }).limit(50).toArray(),
-		PartDefinition.findOne({ partNumber: 'PT-CT-101' }).lean(),
+		PartDefinition.findOne({ partNumber: THERMOSEAL_PART }).lean(),
 		mongoose.connection.db!.collection('manufacturing_settings').findOne(byId('default'))
 	]);
 
@@ -76,43 +85,9 @@ export const actions: Actions = {
 			updatedAt: now
 		});
 
-		// Consume 1 roll per cutting run (PT-CT-101) + produce the accepted
-		// strips (PT-CT-112). Previously the creation side was missing, so
-		// PT-CT-112.inventoryCount stayed at 0 no matter how many runs were
-		// recorded — WI-01's "Thermoseal Laser Cut Sheets" tile read 0.
-		const thermosealPartId = await resolvePartId('PT-CT-101');
-		if (thermosealPartId) {
-			await recordTransaction({
-				transactionType: 'consumption',
-				partDefinitionId: thermosealPartId,
-				quantity: 1,
-				manufacturingStep: 'cut_thermoseal',
-				manufacturingRunId: runId,
-				operatorId: locals.user._id,
-				operatorUsername: locals.user.username,
-				lotId: lotBarcode,
-				notes: `Cut thermoseal [${lotBarcode}]: 1 roll consumed → ${acceptedCount} strips accepted of ${expectedSheets} expected`
-			});
-		}
-
-		// Roll → sheets. Output of this step is PT-CT-111 (Thermoseal Cut
-		// Sheet), which then goes into the laser-cutting step to become
-		// PT-CT-112 (Thermoseal Laser Cut Sheet). Earlier versions of this
-		// fix incorrectly wrote PT-CT-112 here — corrected per the BOM
-		// (PT-CT-111 → PT-CT-112).
-		const cutSheetPartId = await resolvePartId('PT-CT-111');
-		if (cutSheetPartId && acceptedCount > 0) {
-			await recordTransaction({
-				transactionType: 'creation',
-				partDefinitionId: cutSheetPartId,
-				quantity: acceptedCount,
-				manufacturingStep: 'cut_thermoseal',
-				manufacturingRunId: runId,
-				operatorId: locals.user._id,
-				operatorUsername: locals.user.username,
-				notes: `Cut thermoseal [${lotBarcode}]: produced ${acceptedCount} cut sheets (${expectedSheets - acceptedCount} rejected of ${expectedSheets} expected)`
-			});
-		}
+		// No inventory movement here (2026-09-25): thermoseal is counted in rolls
+		// and only the bucket board's roll pull moves it. The cut-sheet part
+		// (PT-CT-111) is retired — this is a run record, nothing more.
 
 		await AuditLog.create({
 			_id: generateId(),

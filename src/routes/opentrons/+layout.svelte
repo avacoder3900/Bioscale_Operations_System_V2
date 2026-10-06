@@ -11,7 +11,8 @@
 	const navItems = [
 		{ href: '/opentrons', label: 'Protocols', exact: false, matchPrefix: '/opentrons/protocols' },
 		{ href: '/opentrons/devices', label: 'Devices', exact: false },
-		{ href: '/opentrons/labware', label: 'Labware', exact: false }
+		{ href: '/opentrons/labware', label: 'Labware', exact: false },
+		{ href: '/opentrons/connectivity', label: 'Connectivity', exact: false }
 	];
 
 	function isActive(item: (typeof navItems)[0], currentPath: string): boolean {

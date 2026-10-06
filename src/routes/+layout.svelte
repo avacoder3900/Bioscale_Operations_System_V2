@@ -27,6 +27,13 @@
 	let loggingOut = $state(false);
 	let menuOpen = $state(false);
 
+	// Tablets at Post-Mortem Inspect are single-purpose stations — drop the BIMS
+	// header and the Ask BIMS widget on touch devices there. Mouse-driven
+	// desktops keep both.
+	const hideChromeOnTouch = $derived(
+		$page.url.pathname.startsWith('/manufacturing/cart-mfg/post-mortem-inspect')
+	);
+
 	// Navigation timeout — if client-side routing is stuck for >10s, force a full page load
 	$effect(() => {
 		const nav = $navigating;
@@ -227,7 +234,7 @@
 <GridBackground>
 	<div class="min-h-screen">
 		<!-- Header — hidden on /cv routes (CV has its own layout header) -->
-		<header class="border-b border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)]" class:hidden={$page.url.pathname.startsWith('/cv')}>
+		<header class="border-b border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] {hideChromeOnTouch ? '[@media(pointer:coarse)]:hidden' : ''}" class:hidden={$page.url.pathname.startsWith('/cv')}>
 			<div class="mx-auto px-4 sm:px-6 lg:px-8">
 				<div class="flex h-14 items-center justify-between">
 					<a href="/" class="flex shrink-0 items-center gap-2">
@@ -421,4 +428,6 @@
 	</div>
 </GridBackground>
 
-<AskBimsWidget />
+<div class={hideChromeOnTouch ? '[@media(pointer:coarse)]:hidden' : ''}>
+	<AskBimsWidget />
+</div>

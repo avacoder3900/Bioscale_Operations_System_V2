@@ -12,6 +12,20 @@
 	import RunExecution from '$lib/components/manufacturing/reagent-filling/RunExecution.svelte';
 	import ProtocolStartPanel from '$lib/components/manufacturing/ProtocolStartPanel.svelte';
 	import EmbeddedRunController from '$lib/components/manufacturing/EmbeddedRunController.svelte';
+	import ReagentWellTracker from '$lib/components/manufacturing/reagent-filling/ReagentWellTracker.svelte';
+	import type { ReagentWellIssueRow } from '$lib/manufacturing/reagent-well-issues';
+	import { deserialize } from '$app/forms';
+	import { RobotSession, type RobotSessionState } from '$lib/opentrons/direct-client';
+	import TransportPill from '$lib/components/opentrons/TransportPill.svelte';
+	import {
+		startRunTwoPhase,
+		finishRunTwoPhase,
+		stopRunTwoPhase,
+		type ActionPoster,
+		type StartStepId,
+		type StartStepStatus
+	} from '$lib/opentrons/ot2-protocol';
+	import { tipSwapOverBridge } from '$lib/opentrons/fill-bridge-jobs';
 	// REAGENT-TOPSEAL-IMPLICIT: there is no post-OT-2 queue. Run completion ends
 	// the run; top sealing is implicit; the next touch is the Reagent Inspect photo.
 
@@ -135,6 +149,86 @@
 	let robotStatus = $state<string | null>(null);
 
 	/**
+	 * Well tracker (2026-10-06): per-well fill mistakes the operator logs while
+	 * watching the run. Server-owned (data.wellIssues); the tracker's action
+	 * results replace the local copy so a tap shows instantly without a reload.
+	 */
+	let wellIssuesLocal = $state<ReagentWellIssueRow[] | null>(null);
+	const wellIssues = $derived(wellIssuesLocal ?? data.wellIssues ?? []);
+	$effect(() => {
+		// A reload (or a different run) resets the optimistic copy to server truth.
+		data.wellIssues;
+		data.activeRunId;
+		wellIssuesLocal = null;
+	});
+	const loadedPositions = $derived(
+		(data.cartridges ?? []).map((c: any) => Number(c.deckPosition)).filter((n: number) => n >= 1 && n <= 24)
+	);
+	const cartridgeByPosition = $derived.by(() => {
+		const m: Record<number, string> = {};
+		for (const c of data.cartridges ?? []) if (c.deckPosition != null) m[Number(c.deckPosition)] = String(c.cartridgeId ?? c.id ?? '');
+		return m;
+	});
+	const reagentNamesByWell = $derived.by(() => {
+		const m: Record<number, string> = {};
+		for (const r of data.reagentDefinitions ?? []) if (r.wellPosition != null && r.reagentName) m[Number(r.wellPosition)] = r.reagentName;
+		return m;
+	});
+	// Wells the protocol was asked to fill (well_2..well_5 RTPs); default all four.
+	const activeWells = $derived.by(() => {
+		const p = data.runState.protocolParameters as Record<string, unknown> | null;
+		if (!p) return [2, 3, 4, 5];
+		const on = [2, 3, 4, 5].filter((w) => p[`well_${w}`] !== false);
+		return on.length ? on : [2, 3, 4, 5];
+	});
+
+	/**
+	 * Mid-run tip swap (2026-09-18, mirrors wax-filling). Sends a request to the
+	 * on-robot bridge; the running reagent protocol picks it up before its next
+	 * aspiration batch, swaps the tip (from the rack, or by hand), re-probes it and
+	 * continues with that batch.
+	 */
+	let tipSwapStatus = $state<'' | 'sending' | 'rack' | 'hand' | 'cancelled' | 'error'>('');
+	async function requestTipSwap(mode: 'rack' | 'hand' | 'cancel') {
+		if (!data.activeRunId) return;
+		tipSwapStatus = 'sending';
+		// Tailnet line (OT2-TAILNET-5 S6): the same ?/requestTipSwap audit, then
+		// the job goes to the robot daemon's /bridge — no queue row.
+		const bridge = lifecycleSession?.bridge() ?? null;
+		if (bridge) {
+			const r = await tipSwapOverBridge(bridge, postLifecycleAction, {
+				runId: data.activeRunId,
+				mode: mode === 'cancel' ? 'rack' : mode,
+				cancel: mode === 'cancel' ? 'true' : 'false'
+			});
+			if (r.ok) {
+				tipSwapStatus = mode === 'cancel' ? 'cancelled' : mode;
+			} else {
+				console.error('[reagent] tip swap request failed', r.error);
+				tipSwapStatus = 'error';
+			}
+			return;
+		}
+		try {
+			const fd = new FormData();
+			fd.set('runId', data.activeRunId);
+			fd.set('mode', mode === 'cancel' ? 'rack' : mode);
+			fd.set('cancel', mode === 'cancel' ? 'true' : 'false');
+			const res = await fetch('?/requestTipSwap', {
+				method: 'POST',
+				body: fd,
+				headers: { 'x-sveltekit-action': 'true' }
+			});
+			const json = await res.json();
+			if (!res.ok || json?.type === 'failure') throw new Error(json?.data?.error ?? `HTTP ${res.status}`);
+			tipSwapStatus = mode === 'cancel' ? 'cancelled' : mode;
+		} catch (e) {
+			console.error('[reagent] tip swap request failed', e);
+			tipSwapStatus = 'error';
+		}
+	}
+
+	/**
 	 * Run-time parameters BIMS pre-selects for a reagent run, overriding the .py's
 	 * own defaults. These seed the form; the operator can still change any of them.
 	 *
@@ -210,6 +304,23 @@
 		capturedParamsFd.set('param_cartridges', String(data.cartridges.length));
 		submitting = true;
 		pendingStage = 'Running';
+		if (lifecycleDirect) {
+			try {
+				const err = await startRunDirect(capturedParamsFd);
+				if (err) {
+					errorMsg = `Auto-start failed: ${err}`;
+					pendingStage = null;
+				}
+				await invalidateAll();
+				if (data.runState.hasActiveRun && data.runState.stage !== 'Loading') pendingStage = null;
+			} catch (e) {
+				errorMsg = e instanceof Error ? e.message : 'Run start failed';
+				pendingStage = null;
+			} finally {
+				submitting = false;
+			}
+			return;
+		}
 		try {
 			const res = await fetch('?/startRun', {
 				method: 'POST',
@@ -459,9 +570,160 @@
 		}
 	}
 
+	// ── OT2-TAILNET-5 §7.1: this page's robot line for the run lifecycle ──────
+	// One RobotSession per page (shared with the embedded run controller). When
+	// it is on the direct line, Start / Finish / Cancel / Abort run as server
+	// prepare → the robot half over Tailscale → server confirm (the shared drivers
+	// in $lib/opentrons/ot2-protocol). Otherwise the page calls the same single
+	// ?/startRun, ?/recordRunFinished, ?/cancelRun, ?/abortRun actions as before.
+	const lifecycleRobotId = $derived(previewParam ? '' : (data.opentronsRobotId ?? ''));
+	let lifecycleSession = $state.raw<RobotSession | null>(null);
+	let lifecycleConn = $state<RobotSessionState | null>(null);
+	$effect(() => {
+		const id = lifecycleRobotId;
+		if (!id) return;
+		const s = new RobotSession(id);
+		lifecycleSession = s;
+		const off = s.subscribe((st) => (lifecycleConn = st));
+		void s.open();
+		return () => {
+			off();
+			s.close();
+			if (lifecycleSession === s) lifecycleSession = null;
+		};
+	});
+	const lifecycleDirect = $derived(lifecycleConn?.transport === 'direct');
+
+	/** A page form action as the drivers call it (fields in, data or error out). */
+	const postLifecycleAction: ActionPoster = async (action, fields) => {
+		const fd = new FormData();
+		for (const [k, v] of Object.entries(fields)) fd.set(k, v);
+		try {
+			const res = await fetch(`?/${action}`, {
+				method: 'POST',
+				body: fd,
+				headers: { 'x-sveltekit-action': 'true' },
+				signal: AbortSignal.timeout(30_000)
+			});
+			const result = deserialize(await res.text());
+			if (result.type === 'success') return { ok: true, data: result.data ?? {} };
+			if (result.type === 'failure') return { ok: false, status: result.status, error: String((result.data as any)?.error ?? `Action failed (HTTP ${res.status})`) };
+			if (result.type === 'error') return { ok: false, status: result.status ?? 500, error: result.error?.message ?? 'Action failed' };
+			return { ok: false, status: res.status, error: `Action failed (HTTP ${res.status})` };
+		} catch (e) {
+			return { ok: false, status: 0, error: e instanceof Error ? e.message : 'Request failed' };
+		}
+	};
+
+	/** The start checklist (PRD §8): each step says which line it ran on. */
+	type StartUiStep = { id: 'checking' | 'uploading' | 'creating' | 'running'; label: string; status: 'pending' | 'active' | 'done' | 'failed' | 'skipped'; detail: string; line: string };
+	let startSteps = $state<StartUiStep[]>([]);
+	const lineLabel = () => (lifecycleSession?.state.transport === 'direct' ? 'via Tailscale' : 'via BIMS queue');
+	function onStartStep(step: StartStepId, status: StartStepStatus, detail?: string) {
+		// 'verifying' (the post-upload freshness proof) is part of the upload step.
+		const id = step === 'verifying' ? 'uploading' : step;
+		if (step === 'verifying' && status === 'skipped') return;
+		startSteps = startSteps.map((s) =>
+			s.id === id
+				? { ...s, status, detail: detail ?? (step === 'verifying' && status === 'active' ? 'verifying the fresh upload…' : s.detail), line: lineLabel() }
+				: s
+		);
+	}
+
+	/** Start over the direct line. Resolves null on success, else the error to show. */
+	async function startRunDirect(fd: FormData): Promise<string | null> {
+		const session = lifecycleSession;
+		if (!session) return 'Robot session is not open';
+		startSteps = [
+			{ id: 'checking', label: 'Checking protocol', status: 'pending', detail: '', line: '' },
+			{ id: 'uploading', label: 'Uploading protocol (only if needed)', status: 'pending', detail: '', line: '' },
+			{ id: 'creating', label: 'Creating run', status: 'pending', detail: '', line: '' },
+			{ id: 'running', label: 'Running', status: 'pending', detail: '', line: '' }
+		];
+		const r = await startRunTwoPhase({ form: fd, post: postLifecycleAction, session, onStep: onStartStep, bridge: session.bridge() });
+		if (r.ok) {
+			startSteps = [];
+			return null;
+		}
+		return r.error;
+	}
+
+	/** Finish / cancel / abort over the direct line; same UI contract as submitForm. */
+	async function lifecycleDirectAction(
+		fn: () => Promise<{ ok: true; data: any } | { ok: false; error: string; status: number }>,
+		refresh: boolean
+	) {
+		if (submitting) return;
+		submitting = true;
+		errorMsg = '';
+		try {
+			const r = await fn();
+			if (!r.ok) showError(r.error);
+			// (a stop `warning` is not surfaced — same as the queue line's submit)
+			// Finish skips the refresh, exactly like submitForm('recordRunFinished').
+			if (refresh && r.ok) {
+				await invalidateAll();
+				pendingStage = null;
+			}
+		} finally {
+			submitting = false;
+		}
+	}
+
+	function recordRunFinishedViaLine(status: string) {
+		const rid = data.runState.opentronsRunId;
+		const session = lifecycleSession;
+		if (lifecycleDirect && session && rid && data.activeRunId) {
+			const runId = data.activeRunId;
+			return lifecycleDirectAction(() => finishRunTwoPhase({ runId, rid, finalStatus: status, post: postLifecycleAction, session }), false);
+		}
+		return submitForm('recordRunFinished', { runId: data.activeRunId ?? '', finalStatus: status });
+	}
+
+	function stopRunViaLine(action: 'cancel' | 'abort', fields: Record<string, string>) {
+		const rid = data.runState.opentronsRunId ?? null;
+		const session = lifecycleSession;
+		if (lifecycleDirect && session && rid && data.activeRunId && !previewParam) {
+			const runId = data.activeRunId;
+			return lifecycleDirectAction(
+				() => stopRunTwoPhase({ action, runId, rid, readFilledWells: false, fields: { ...fields, robotId: data.robotId }, post: postLifecycleAction, session }),
+				true
+			);
+		}
+		return submitForm(action === 'cancel' ? 'cancelRun' : 'abortRun', fields);
+	}
+
+	/** The ready-to-run panel's Start, on the direct line only (queue = its native form POST). */
+	async function startFromPanelDirect(fd: FormData) {
+		if (submitting || !data.activeRunId) return;
+		fd.set('runId', data.activeRunId);
+		submitting = true;
+		errorMsg = '';
+		pendingStage = 'Running';
+		try {
+			const err = await startRunDirect(fd);
+			if (err) {
+				showError(err);
+				pendingStage = null;
+			}
+			await invalidateAll();
+			if (data.runState.hasActiveRun && data.runState.stage !== 'Loading') pendingStage = null;
+		} finally {
+			submitting = false;
+		}
+	}
+
 </script>
 
 <div class="space-y-4">
+	{#if lifecycleRobotId}
+		<!-- Which line this page reaches the robot on, visible BEFORE Start: the
+		     session opens on page load, so Start/Finish/Cancel use whatever this shows. -->
+		<div class="flex items-center justify-end gap-2 text-xs text-[var(--color-tron-text-secondary)]">
+			<span>Robot connection</span>
+			<TransportPill state={lifecycleConn} onRetry={() => void lifecycleSession?.retryDirect()} />
+		</div>
+	{/if}
 	{#if previewParam}
 		<!-- Preview mode stage picker -->
 		<div class="rounded-lg border border-[var(--color-tron-orange)]/50 bg-[var(--color-tron-orange)]/10 p-3">
@@ -493,6 +755,30 @@
 				<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
 			</svg>
 			Processing...
+		</div>
+	{/if}
+
+	{#if data.runState.startInterrupted}
+		<div class="rounded border border-amber-500/40 bg-amber-900/20 px-4 py-3 text-sm text-amber-200">
+			{data.runState.startInterrupted}
+		</div>
+	{/if}
+
+	{#if startSteps.length > 0}
+		<div class="space-y-2 rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4">
+			{#each startSteps as step (step.id)}
+				<div class="flex items-start gap-3">
+					<span class="mt-0.5 w-4 shrink-0 text-center text-sm font-bold {step.status === 'done' ? 'text-green-400' : step.status === 'failed' ? 'text-red-400' : step.status === 'active' ? 'text-[var(--color-tron-cyan)]' : 'text-[var(--color-tron-text-secondary)]'}">
+						{step.status === 'done' ? '✓' : step.status === 'failed' ? '✗' : step.status === 'active' ? '…' : step.status === 'skipped' ? '–' : '·'}
+					</span>
+					<div class="min-w-0 flex-1 text-sm">
+						<span class={step.status === 'failed' ? 'text-red-300' : 'text-[var(--color-tron-text)]'}>{step.label}</span>
+						{#if step.status === 'skipped'}<span class="text-xs text-[var(--color-tron-text-secondary)]"> — not needed</span>{/if}
+						{#if step.line}<span class="text-xs text-[var(--color-tron-text-secondary)]"> · {step.line}</span>{/if}
+						{#if step.detail}<p class="text-xs {step.status === 'failed' ? 'text-red-400/80' : 'text-[var(--color-tron-text-secondary)]'}">{step.detail}</p>{/if}
+					</div>
+				</div>
+			{/each}
 		</div>
 	{/if}
 
@@ -708,13 +994,25 @@
 		     there are no more buttons after barcode scanning. -->
 		<ReagentPreparation
 			reagentDefinitions={data.reagentDefinitions as any}
-			onComplete={async (tubes) => {
+			reagentLots={(data.researchReagentLots ?? []) as any}
+			fillLots={(data.openFillLots ?? []) as any}
+			defaultFillLotId={data.defaultFillLotId ?? ''}
+			onCreateFillLot={async (reagentLotId, name) => {
+				const fd = new FormData();
+				fd.set('reagentLotId', reagentLotId);
+				fd.set('name', name);
+				const res = await fetch('?/createFillLot', { method: 'POST', body: fd });
+				const result = deserialize(await res.text());
+				if (result.type === 'success') return { ok: true, fillLot: (result.data as any)?.fillLot };
+				return { ok: false, error: result.type === 'failure' ? ((result.data as any)?.error ?? 'Failed') : 'Failed' };
+			}}
+			onComplete={async (tubes, fillLotId) => {
 				reagentBatchBarcodeLocal = tubes[0]?.sourceLotId ?? '';
 				reagentBatchConfirmedLocal = true;
 				// Persist the batch (writes to the run record — no cartridge dependency).
 				// Do NOT start the run yet: the deck hasn't been scanned. The deck-scan
 				// step auto-starts once cartridges are on.
-				await submitForm('recordReagentPrep', { tubes: JSON.stringify(tubes) });
+				await submitForm('recordReagentPrep', { tubes: JSON.stringify(tubes), fillLotId });
 			}}
 			onSaveNote={handleSaveBatchNote}
 			readonly={isViewingPast}
@@ -738,6 +1036,7 @@
 			focusPaused={showCancelModal}
 			robotId={data.robotId}
 			runId={data.activeRunId ?? null}
+			session={lifecycleSession}
 		/>
 
 	{:else if displayStage === 'Loading' && data.cartridges.length > 0 && reagentBatchConfirmed}
@@ -767,6 +1066,7 @@
 						runId: data.activeRunId ?? '',
 						reagentBatchBarcode: reagentBatchBarcode ?? ''
 					}}
+					onSubmitIntercept={lifecycleDirect ? startFromPanelDirect : undefined}
 				/>
 			{/if}
 		</div>
@@ -777,18 +1077,74 @@
 				robotId={data.opentronsRobotId}
 				robotName={data.runState.assayTypeName ?? 'Reagent Run'}
 				opentronsRunId={data.runState.opentronsRunId}
+				session={lifecycleSession}
 				onStatusChange={(status) => { robotStatus = status; }}
 				onComplete={(status) => {
 					// The .py landed terminal — reveal the run-complete controls.
 					// recordRunFinished auto-finalizes a succeeded run server-side
 					// (carts stamped, robot freed); the panel below is confirmation.
 					runFinishedLocal = true;
-					submitForm('recordRunFinished', {
-						runId: data.activeRunId ?? '',
-						finalStatus: status
-					});
+					recordRunFinishedViaLine(status);
 				}}
 			/>
+			{#if !runFinished}
+				<div class="mt-3 rounded-lg border border-amber-500/40 bg-amber-900/10 p-4">
+					<div class="flex flex-wrap items-center justify-between gap-3">
+						<div>
+							<h3 class="text-sm font-semibold text-amber-200">Tip problem? Swap the tip without losing your place</h3>
+							<p class="mt-1 text-xs text-amber-200/80">
+								The robot stops before its next well, blows what is left in the tip back into the reagent tube, swaps the tip,
+								re-calibrates it, then re-aspirates and continues at the exact well it stopped at. Works while running or paused.
+							</p>
+						</div>
+						<div class="flex flex-wrap gap-2">
+							<button type="button"
+								class="rounded-md border border-amber-400/60 bg-amber-500/20 px-3 py-1.5 text-sm font-medium text-amber-100 hover:bg-amber-500/30 disabled:opacity-50"
+								disabled={tipSwapStatus === 'sending'}
+								onclick={() => requestTipSwap('rack')}>
+								Swap tip — robot picks a new one
+							</button>
+							<button type="button"
+								class="rounded-md border border-amber-400/60 bg-amber-500/20 px-3 py-1.5 text-sm font-medium text-amber-100 hover:bg-amber-500/30 disabled:opacity-50"
+								disabled={tipSwapStatus === 'sending'}
+								onclick={() => requestTipSwap('hand')}>
+								Swap tip — I'll put one on by hand
+							</button>
+							{#if tipSwapStatus === 'rack' || tipSwapStatus === 'hand'}
+								<button type="button"
+									class="rounded-md border border-[var(--color-tron-border)] px-3 py-1.5 text-sm text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]"
+									onclick={() => requestTipSwap('cancel')}>
+									Cancel request
+								</button>
+							{/if}
+						</div>
+					</div>
+					{#if tipSwapStatus === 'sending'}
+						<p class="mt-2 text-xs text-amber-200/80">Sending to the robot…</p>
+					{:else if tipSwapStatus === 'rack'}
+						<p class="mt-2 text-xs text-emerald-300">Requested. The robot will stop before its next aspiration, drop the tip, pick a fresh one from the rack, calibrate it and continue. If the run is paused, press Resume.</p>
+					{:else if tipSwapStatus === 'hand'}
+						<p class="mt-2 text-xs text-emerald-300">Requested. The robot will stop before its next aspiration, raise the pipette over the calibrator and pause — pull the old tip off, push a new one on, then press Resume. It calibrates the new tip and continues. If the run is paused now, press Resume first so it can reach that point.</p>
+					{:else if tipSwapStatus === 'cancelled'}
+						<p class="mt-2 text-xs text-[var(--color-tron-text-secondary)]">Request cancelled (only if the robot hadn't acted on it yet).</p>
+					{:else if tipSwapStatus === 'error'}
+						<p class="mt-2 text-xs text-red-300">Could not send the request to the robot bridge — try again, or Pause and swap the tip when the run reaches its next tip change.</p>
+					{/if}
+				</div>
+			{/if}
+		{/if}
+		{#if !isViewingPast && !previewParam && data.activeRunId}
+			<div class="mt-3">
+				<ReagentWellTracker
+					runId={data.activeRunId}
+					issues={wellIssues}
+					{loadedPositions}
+					{cartridgeByPosition}
+					reagentNames={reagentNamesByWell}
+					{activeWells}
+					onChange={(rows) => { wellIssuesLocal = rows; }}
+				/>
+			</div>
 		{/if}
 		{#if data.runState.runEndTime || previewParam}
 			<RunExecution
@@ -806,7 +1162,7 @@
 				paused={robotStatus === 'paused'}
 				autoCompleteOnExpiry={!data.runState.opentronsRunId}
 				onTimerComplete={() => { runFinishedLocal = true; }}
-				onAbort={(reason, photoUrl) => submitForm('abortRun', { reason, photoUrl: photoUrl ?? '' })}
+				onAbort={(reason, photoUrl) => stopRunViaLine('abort', { reason, photoUrl: photoUrl ?? '' })}
 				readonly={isViewingPast}
 			/>
 		{:else}
@@ -884,7 +1240,7 @@
 					</button>
 					<button
 						type="button"
-						onclick={() => { showCancelModal = false; submitForm('cancelRun', { reason: cancelReason.trim() }); cancelReason = ''; }}
+						onclick={() => { showCancelModal = false; stopRunViaLine('cancel', { reason: cancelReason.trim() }); cancelReason = ''; }}
 						disabled={!cancelReason.trim() || submitting}
 						class="rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-red-700 disabled:opacity-50"
 					>

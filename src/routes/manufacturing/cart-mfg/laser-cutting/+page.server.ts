@@ -1,11 +1,16 @@
+/**
+ * Laser cutting — batch log only (2026-09-25).
+ *
+ * Laser-cut sheet inventory is stale and no longer tracked: thermoseal is one
+ * roll-counted part (THERMOSEAL_PART, PT-CT-101) that moves ONLY when the
+ * bucket board pulls a roll at the press. This page records batches for the
+ * record and moves no inventory — not PT-CT-111, not PT-CT-112, not the legacy
+ * ManufacturingMaterial "laser cut substrates" counter.
+ */
 import { redirect, fail } from '@sveltejs/kit';
-import {
-	connectDB, LaserCutBatch, ManufacturingSettings, ManufacturingMaterial,
-	ManufacturingMaterialTransaction, AuditLog, PartDefinition, ReceivingLot, generateId
-} from '$lib/server/db';
+import { connectDB, LaserCutBatch, ManufacturingSettings, AuditLog, generateId } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
 import { nanoid } from 'nanoid';
-import { recordTransaction, resolvePartId } from '$lib/server/services/inventory-transaction';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
@@ -13,18 +18,12 @@ export const load: PageServerLoad = async ({ locals }) => {
 	requirePermission(locals.user, 'manufacturing:read');
 	await connectDB();
 
-	const [batches, settingsDoc, materials] = await Promise.all([
+	const [batches, settingsDoc] = await Promise.all([
 		LaserCutBatch.find().sort({ createdAt: -1 }).limit(50).lean(),
-		ManufacturingSettings.findById('default').lean(),
-		ManufacturingMaterial.find().lean()
+		ManufacturingSettings.findById('default').lean()
 	]);
 
 	const general = (settingsDoc as any)?.general ?? {};
-
-	// FIX-01: Find the laser-cut output material (cut substrates) by name convention
-	const outputMaterial = (materials as any[]).find((m: any) =>
-		m.name && /laser.?cut|cut.?sub|substrate/i.test(m.name)
-	) ?? null;
 
 	// Stats rollup
 	const totalBatches = batches.length;
@@ -53,19 +52,12 @@ export const load: PageServerLoad = async ({ locals }) => {
 		defaults: {
 			defaultLaserTools: general.defaultLaserTools ?? null,
 			defaultCuttingProgramLink: general.defaultCuttingProgramLink ?? null
-		},
-		inventory: {
-			laserCutSheets: {
-				name: outputMaterial?.name ?? 'Laser Cut Substrates',
-				quantity: outputMaterial?.currentQuantity ?? 0,
-				unit: outputMaterial?.unit ?? 'sheets'
-			}
 		}
 	};
 };
 
 export const actions: Actions = {
-	/** Record a completed laser-cut batch and update inventory */
+	/** Record a completed laser-cut batch (no inventory movement — see header) */
 	recordBatch: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
 		requirePermission(locals.user, 'manufacturing:write');
@@ -106,112 +98,9 @@ export const actions: Actions = {
 			operator: { _id: locals.user._id, username: locals.user.username }
 		});
 
-		// FIX-01: Update inventory for output substrates produced
-		if (outputSheetCount > 0) {
-			const outputMaterial = await ManufacturingMaterial.findOne({
-				name: { $regex: /laser.?cut|cut.?sub|substrate/i }
-			}).lean() as any;
-
-			if (outputMaterial) {
-				const quantityBefore = outputMaterial.currentQuantity ?? 0;
-				const quantityAfter = quantityBefore + outputSheetCount;
-				const now = new Date();
-
-				await ManufacturingMaterialTransaction.create({
-					_id: generateId(),
-					materialId: outputMaterial._id,
-					transactionType: 'produce',
-					quantityChanged: outputSheetCount,
-					quantityBefore,
-					quantityAfter,
-					operatorId: locals.user._id,
-					notes: `Laser cut batch produced ${outputSheetCount} sheets (${failureCount} failures from ${inputSheetCount} input)`,
-					createdAt: now
-				});
-
-				const txEntry = {
-					transactionType: 'produce',
-					quantityChanged: outputSheetCount,
-					quantityBefore,
-					quantityAfter,
-					operatorId: locals.user._id,
-					notes: `Laser cut batch: ${outputSheetCount} output`,
-					createdAt: now
-				};
-
-				await ManufacturingMaterial.findByIdAndUpdate(outputMaterial._id, {
-					$set: { currentQuantity: quantityAfter, updatedAt: now },
-					$push: { recentTransactions: { $each: [txEntry], $slice: -100 } }
-				});
-			}
-		}
-
-		// Part-level inventory transactions — wire both legs to PartDefinition
-		// so WI-01 and the Parts page see the same number.
-		//
-		//   PT-CT-111 Thermoseal Cut Sheet      — consumed by inputSheetCount
-		//   PT-CT-112 Thermoseal Laser Cut Sht  — created by outputSheetCount × cartridgesPerLaserCutSheet (counted in strips)
-		//
-		// Previously this block just called recordTransaction with no
-		// partDefinitionId, which wrote an orphan transaction row and did not
-		// move any part's inventoryCount. The ManufacturingMaterial branch
-		// above (outputMaterial) is legacy/unused — kept for now in case it's
-		// referenced elsewhere, but PT-CT-112 is the source of truth.
-		const stripsPerSheet: number = general.cartridgesPerLaserCutSheet ?? 16;
-		const inputPartId = await resolvePartId('PT-CT-111');
-		const outputPartId = await resolvePartId('PT-CT-112');
-
-		if (inputPartId && inputSheetCount > 0) {
-			await recordTransaction({
-				transactionType: 'consumption',
-				partDefinitionId: inputPartId,
-				quantity: inputSheetCount,
-				manufacturingStep: 'laser_cut',
-				manufacturingRunId: outputLotId,
-				operatorId: locals.user._id,
-				operatorUsername: locals.user.username,
-				lotId: inputLotId || undefined,
-				notes: `Laser cut batch ${outputLotId}: consumed ${inputSheetCount} cut sheets`
-			});
-		}
-
-		if (outputPartId && outputSheetCount > 0) {
-			const stripsProduced = outputSheetCount * stripsPerSheet;
-			await recordTransaction({
-				transactionType: 'creation',
-				partDefinitionId: outputPartId,
-				quantity: stripsProduced,
-				manufacturingStep: 'laser_cut',
-				manufacturingRunId: outputLotId,
-				operatorId: locals.user._id,
-				operatorUsername: locals.user.username,
-				lotId: outputLotId,
-				notes: `Laser cut batch ${outputLotId}: produced ${outputSheetCount} sheets × ${stripsPerSheet} strips/sheet = ${stripsProduced} strips (${failureCount} sheet failures from ${inputSheetCount} input)`
-			});
-
-			// Mirror the produced batch as a ReceivingLot so it appears on the
-			// PT-CT-112 part page's Receiving Lots tab alongside ROG-accessioned lots.
-			// Internal production passes inspection by definition (operator already
-			// reported failureCount above), so we mark it accepted with a CoC pathway.
-			const outputPart = await PartDefinition.findById(outputPartId)
-				.select('partNumber name').lean() as any;
-			await ReceivingLot.create({
-				_id: generateId(),
-				lotId: outputLotId,
-				lotNumber: outputLotId,
-				part: {
-					_id: outputPartId,
-					partNumber: outputPart?.partNumber ?? 'PT-CT-112',
-					name: outputPart?.name ?? 'Thermoseal Laser Cut sheet'
-				},
-				quantity: stripsProduced,
-				operator: { _id: locals.user._id, username: locals.user.username },
-				inspectionPathway: 'coc',
-				cocMeetsStandards: true,
-				status: 'accepted',
-				notes: `Internal production from laser cut batch: ${outputSheetCount} sheets × ${stripsPerSheet} strips/sheet = ${stripsProduced} strips (${failureCount} sheet failures from ${inputSheetCount} input)`
-			});
-		}
+		// No inventory movement (2026-09-25). Laser-cut sheets are not tracked
+		// inventory any more; thermoseal is one roll-counted part moved only by the
+		// bucket board's roll pull. The LaserCutBatch above is the record.
 
 		// Audit log for batch record creation
 		const batchRecord = await LaserCutBatch.findOne({ operatorId: locals.user._id, outputLotId }).lean() as any;

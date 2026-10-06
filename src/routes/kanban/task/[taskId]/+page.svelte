@@ -214,6 +214,15 @@
 						<TaskStatusBadge status={data.task.status} />
 					</div>
 					<div class="flex items-center gap-2">
+						{#if data.task.status === 'done'}
+							<!-- Reopen: a task marked Done by mistake goes back to In Progress (recorded as a normal transition). -->
+							<form method="POST" action="?/move" use:enhance>
+								<input type="hidden" name="taskId" value={data.task.id} />
+								<input type="hidden" name="newStatus" value="wip" />
+								<input type="hidden" name="reason" value="Reopened — not done" />
+								<TronButton type="submit">↺ Reopen</TronButton>
+							</form>
+						{/if}
 						{#if flow.prev}
 							<form method="POST" action="?/move" use:enhance>
 								<input type="hidden" name="taskId" value={data.task.id} />

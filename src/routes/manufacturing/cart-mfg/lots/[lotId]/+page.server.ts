@@ -12,21 +12,21 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 	if (!lot) throw error(404, 'Lot not found');
 
 	// Cartridges individuated into this backing lot (WAX-FLOW-2): each carries its
-	// own scan time + scanner, grouped by backing.parentLotRecordId.
+	// own scan time + scanner, grouped by backing.parentLotRecordId. Oven tracking
+	// was removed 2026-09-23; the source production bucket is shown instead.
 	const carts = await CartridgeRecord.find({ 'backing.parentLotRecordId': params.lotId })
-		.select('_id status backing.ovenEntryTime backing.operator backing.ovenLocationName')
+		.select('_id status backing.recordedAt backing.operator backing.bucketBarcode')
 		.lean() as any[];
 	const cartridges = carts
 		.map((c: any) => ({
 			barcode: String(c._id),
 			status: c.status ?? '',
-			scannedAt: c.backing?.ovenEntryTime ? new Date(c.backing.ovenEntryTime).toISOString() : null,
+			scannedAt: c.backing?.recordedAt ? new Date(c.backing.recordedAt).toISOString() : null,
 			scannedBy: c.backing?.operator?.username ?? 'unknown',
-			oven: c.backing?.ovenLocationName ?? ''
+			bucket: c.backing?.bucketBarcode ?? ''
 		}))
 		.sort((a, b) => (a.scannedAt ?? '').localeCompare(b.scannedAt ?? ''));
 
-	const ovenName = lot.ovenPlacement?.ovenBarcode ?? carts[0]?.backing?.ovenLocationName ?? null;
 
 	return {
 		lot: {
@@ -41,7 +41,6 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 			finishTime: lot.finishTime ? new Date(lot.finishTime).toISOString() : null,
 			cycleTime: lot.cycleTime ?? null,
 			createdAt: lot.createdAt ? new Date(lot.createdAt).toISOString() : '',
-			oven: ovenName,
 			inputLots: (lot.inputLots ?? []).map((il: any) => ({
 				materialName: il.materialName ?? '',
 				barcode: il.barcode ?? ''

@@ -13,6 +13,48 @@ import { analyzeCartridge } from '$lib/server/optical-analysis';
 import { OPTICAL_CARTRIDGE_FILTER } from '$lib/server/optical-constants';
 import type { RequestHandler } from './$types';
 
+// ------------------------------------------------------------ field magnitude
+// |B| = sqrt(X^2 + Y^2 + Z^2) per channel, in gauss — the same unit the stored
+// X/Y/Z already carry, so no conversion is applied. Ingest persists chX_mag per
+// well plus a session-level fieldSummary; the derive-on-read fallback keeps
+// sessions recorded before that from reading back magnitude-less. Never NaN.
+const FIELD_UNIT = 'gauss';
+
+function magAxis(well: any, key: string): number | null {
+	const v = well?.[key];
+	return typeof v === 'number' && Number.isFinite(v) ? v : null;
+}
+
+/** Stored magnitude when present, else derived from stored X/Y/Z, else null. */
+function channelMag(well: any, ch: 'A' | 'B' | 'C'): number | null {
+	const stored = magAxis(well, `ch${ch}_mag`);
+	if (stored !== null) return stored;
+	const x = magAxis(well, `ch${ch}_X`);
+	const y = magAxis(well, `ch${ch}_Y`);
+	const z = magAxis(well, `ch${ch}_Z`);
+	if (x === null || y === null || z === null) return null;
+	const m = Math.sqrt(x * x + y * y + z * z);
+	return Number.isFinite(m) ? m : null;
+}
+
+function fieldSummaryFor(wells: unknown) {
+	const list = Array.isArray(wells) ? wells : [];
+	const mags: number[] = [];
+	for (const well of list) {
+		for (const ch of ['A', 'B', 'C'] as const) {
+			const m = channelMag(well, ch);
+			if (m !== null) mags.push(m);
+		}
+	}
+	return {
+		unit: FIELD_UNIT,
+		wellCount: list.length,
+		minMag: mags.length ? Math.min(...mags) : null,
+		maxMag: mags.length ? Math.max(...mags) : null,
+		meanMag: mags.length ? mags.reduce((a, b) => a + b, 0) / mags.length : null
+	};
+}
+
 /**
  * Cross-domain test-result resolver for agents — ANY outcome, not just failures.
  *
@@ -119,15 +161,16 @@ export const GET: RequestHandler = async ({ request, url }) => {
 		}
 		const docs = await ValidationSession.find(filter)
 			.select(
-				'type spuId spuUdi barcode particleDeviceId status startedAt completedAt testRanAt overallPassed failureReasons override createdAt magResults criteriaUsed results.testType results.passed results.notes'
+				'type spuId spuUdi barcode particleDeviceId status startedAt completedAt testRanAt overallPassed failureReasons override createdAt magResults fieldSummary criteriaUsed results.testType results.passed results.notes'
 			)
 			.sort({ createdAt: -1 })
 			.limit(limit)
 			.lean();
 		sessions = (docs as any[]).map((d) => {
-			// Per-well Z table exactly as the BIMS magnetometer page renders it:
-			// Well | Ch A (Z) | Ch B (Z) | Ch C (Z), each cell checked against the
-			// session's Z-range criteria.
+			// Per-well table exactly as the BIMS magnetometer page renders it:
+			// Well | Ch A (X, Y, Z, |B|) | Ch B (...) | Ch C (...). Pass/fail is still
+			// judged on Z alone, against the session's Z-range criteria. |B| is the
+			// stored field magnitude in gauss, derived on read for older sessions.
 			const criteria =
 				d.criteriaUsed && typeof d.criteriaUsed === 'object' ? d.criteriaUsed : null;
 			const inRange = (z: unknown): boolean | null =>
@@ -139,14 +182,25 @@ export const GET: RequestHandler = async ({ request, url }) => {
 			const wells = Array.isArray(d.magResults)
 				? d.magResults.map((w: any) => ({
 						well: w.well,
+						chA_X: magAxis(w, 'chA_X'),
+						chA_Y: magAxis(w, 'chA_Y'),
 						chA_Z: w.chA_Z ?? null,
+						chA_mag: channelMag(w, 'A'),
 						chA_pass: inRange(w.chA_Z),
+						chB_X: magAxis(w, 'chB_X'),
+						chB_Y: magAxis(w, 'chB_Y'),
 						chB_Z: w.chB_Z ?? null,
+						chB_mag: channelMag(w, 'B'),
 						chB_pass: inRange(w.chB_Z),
+						chC_X: magAxis(w, 'chC_X'),
+						chC_Y: magAxis(w, 'chC_Y'),
 						chC_Z: w.chC_Z ?? null,
+						chC_mag: channelMag(w, 'C'),
 						chC_pass: inRange(w.chC_Z)
 					}))
 				: [];
+			const fieldSummary =
+				d.fieldSummary ?? (Array.isArray(d.magResults) ? fieldSummaryFor(d.magResults) : null);
 			return {
 				source: 'validation_sessions',
 				modality: normalizeModality(d.type),
@@ -160,6 +214,7 @@ export const GET: RequestHandler = async ({ request, url }) => {
 				testRanAt: d.testRanAt ?? null,
 				recordedAt: d.createdAt ?? d.startedAt ?? null,
 				criteria,
+				fieldSummary,
 				wells,
 				subResults: (d.results ?? []).map((r: any) => ({
 					testType: r.testType,
@@ -325,8 +380,10 @@ export const GET: RequestHandler = async ({ request, url }) => {
 				'ran them via device.name (= the SPU UDI). ' +
 				'PRESENTATION: render magnetometer results exactly as the BIMS page does — for each session a line ' +
 				'"Criteria: Z range <criteria.minZ> - <criteria.maxZ>" then a table with columns ' +
-				'"Well | Ch A (Z) | Ch B (Z) | Ch C (Z)" built from wells[], marking each Z with a check (pass) or ' +
-				'cross (fail) from the chX_pass flags. Never show raw axis data (T/X/Y columns) unless the user ' +
+				'"Well | Ch A (X, Y, Z, |B|) | Ch B (...) | Ch C (...)" built from wells[], marking each Z with a ' +
+				'check (pass) or cross (fail) from the chX_pass flags — pass/fail is judged on Z alone. chX_mag is ' +
+				'the field magnitude |B| = sqrt(X^2 + Y^2 + Z^2); every value is in gauss, and fieldSummary carries ' +
+				'min/max/mean |B| across the session. Never show the raw T (temperature) column unless the user ' +
 				'explicitly asks for raw device output.'
 		}
 	});

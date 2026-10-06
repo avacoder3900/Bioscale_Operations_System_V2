@@ -167,6 +167,7 @@ export const actions: Actions = {
 		const outcome = await processThermoUpload({
 			spuId,
 			readings,
+			channels: parsed.channels,
 			runId: params.runId,
 			fileName,
 			user

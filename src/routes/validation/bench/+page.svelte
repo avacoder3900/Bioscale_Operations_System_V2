@@ -1,17 +1,26 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
+	import { invalidateAll } from '$app/navigation';
 
 	type BenchType = 'laser' | 'dark' | 'laser_scan';
 	interface Chan { c: 'A' | 'B' | 'C'; pd?: number; pd0?: number; f?: number[]; pts?: number[][] }
 	interface Result { seq?: number; kind?: string; pos?: number; gain?: number; astep?: number; atime?: number; ms?: number; temp?: number; start?: number; end?: number; step?: number; ch?: Chan[]; error?: string }
+	type Verdict = 'pass' | 'fail' | 'incomplete';
+	interface Check { verdict: Verdict; reasons: string[] }
 	interface Props {
 		data: {
 			bench: { posUm: number; gain: number; astep: number; atime: number; positionLimitUm: number; maxScanPoints: number };
-			spus: Array<{ id: string; udi: string; status: string }>;
-			history: Array<{ id: string; type: BenchType; spuId: string | null; spuUdi: string | null; by: string | null; at: string | null; result: Result | null }>;
+			criteria: { laserPdMin: number; darkPdMax: number };
+			spus: Array<{ id: string; udi: string; status: string; deviceId: string | null }>;
+			units: Array<{ id: string; udi: string; check: Check & { at: string | null } }>;
+			history: Array<{ id: string; type: BenchType; spuId: string | null; spuUdi: string | null; by: string | null; at: string | null; result: Result | null; check: Check | null }>;
+			batches: Batch[];
 		};
-		form: { error?: string; ran?: boolean; type?: BenchType; spuUdi?: string; result?: Result } | null;
+		form: { error?: string; ran?: boolean; type?: BenchType; spuUdi?: string; result?: Result; check?: Check | null } | null;
 	}
+	type RowState = 'queued' | 'running' | 'done' | 'failed' | 'skipped';
+	interface BatchRow { id?: string; spuId: string | null; spuUdi: string | null; ok: boolean; error: string | null; at: string | null; result: Result | null; check?: Check | null }
+	interface Batch { id: string; type: BenchType; by: string | null; startedAt: string | null; finishedAt: string | null; rows: BatchRow[] }
 	let { data, form }: Props = $props();
 
 	const BANDS = ['F1 405–425', 'F2 435–455', 'F3 470–490', 'F4 505–525', 'F5 545–565', 'F6 580–600', 'F7 620–640', 'F8 670–690', 'Clear', 'NIR'];
@@ -19,6 +28,13 @@
 	const CH_COLOR: Record<string, string> = { A: 'var(--color-tron-cyan)', B: 'var(--color-tron-orange)', C: 'var(--color-tron-purple)' };
 
 	const fw = $derived(data.bench);
+	// Auto-check (validation-autograde.ts): PASS / FAIL / INCOMPLETE badges.
+	const VERDICT_STYLE: Record<Verdict, string> = {
+		pass: 'color: var(--color-tron-green); background: rgba(0,255,100,0.12);',
+		fail: 'color: var(--color-tron-red); background: rgba(255,0,0,0.12);',
+		incomplete: 'color: var(--color-tron-orange); background: rgba(255,160,0,0.12);'
+	};
+	const failingUnits = $derived(data.units.filter((u) => u.check.verdict !== 'pass').length);
 	let spuId = $state('');
 	let type = $state<BenchType>('laser');
 	// Scan defaults: the last 4.4 mm up to the firmware's ceiling, 12 points.
@@ -50,6 +66,144 @@
 			lines: r.ch.map((c) => ({ c: c.c, d: (c.pts ?? []).map((p, i) => `${i ? 'L' : 'M'}${X(p[0]).toFixed(1)},${Y(p[1]).toFixed(1)}`).join(' '), dots: (c.pts ?? []).map((p) => ({ cx: X(p[0]), cy: Y(p[1]), pos: p[0], pd: p[1], clear: p[2] })), peak: (c.pts ?? []).reduce((b, p) => (p[1] > (b?.[1] ?? -1) ? p : b), null as number[] | null) }))
 		};
 	}
+
+	// ── Fleet run: the same read on every unit, one request per unit ──────────
+	// A read blocks up to ~36 s server-side, so the page fans out (CONCURRENCY at
+	// a time) instead of one long request. Each session is tagged with batchId.
+	const CONCURRENCY = 4;
+	let fleetConfirm = $state(false);
+	let fleetRunning = $state(false);
+	let fleetStop = $state(false);
+	let skipOffline = $state(true);
+	let fleetId = $state<string | null>(null);
+	let fleetType = $state<BenchType>('laser');
+	let fleetNote = $state<string | null>(null);
+	let fleet = $state<Array<{ spuId: string; udi: string; state: RowState; error: string | null; result: Result | null }>>([]);
+	const fleetCounts = $derived({
+		done: fleet.filter((r) => r.state === 'done').length,
+		failed: fleet.filter((r) => r.state === 'failed').length,
+		skipped: fleet.filter((r) => r.state === 'skipped').length,
+		pending: fleet.filter((r) => r.state === 'queued' || r.state === 'running').length
+	});
+
+	function newBatchId() {
+		const d = new Date();
+		const p = (n: number) => String(n).padStart(2, '0');
+		const rnd = Math.random().toString(36).slice(2, 6).toUpperCase();
+		return `BENCH-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}-${rnd}`;
+	}
+
+	async function runFleet() {
+		fleetConfirm = false;
+		fleetRunning = true;
+		fleetStop = false;
+		fleetNote = null;
+		fleetType = type;
+		const batchId = newBatchId();
+		fleetId = batchId;
+		fleet = data.spus.map((s) => ({ spuId: s.id, udi: s.udi, state: 'queued' as RowState, error: null, result: null }));
+
+		// One Particle call for the whole fleet's connectivity. If it fails, try every unit.
+		let online: Record<string, boolean> | null = null;
+		if (skipOffline) {
+			try {
+				const res = await fetch('/api/particle/status');
+				if (!res.ok) throw new Error();
+				const body = await res.json();
+				online = Object.fromEntries(Object.entries(body.devices ?? {}).map(([id, d]) => [id, !!(d as { online?: boolean }).online]));
+			} catch {
+				fleetNote = 'Could not read fleet connectivity — trying every unit.';
+			}
+		}
+
+		const params = { batchId, type: fleetType, start, end, stepUm };
+		let next = 0;
+		const worker = async () => {
+			while (!fleetStop) {
+				const i = next++;
+				if (i >= fleet.length) return;
+				const row = fleet[i];
+				const unit = data.spus.find((s) => s.id === row.spuId);
+				const offline = online !== null && !(unit?.deviceId && online[unit.deviceId]);
+				row.state = 'running';
+				try {
+					const res = await fetch('/api/validation/bench/run', {
+						method: 'POST',
+						headers: { 'content-type': 'application/json' },
+						body: JSON.stringify({ ...params, spuId: row.spuId, ...(offline ? { skipReason: 'Particle reports the device offline' } : {}) })
+					});
+					const body = await res.json().catch(() => ({ ok: false, error: `HTTP ${res.status}` }));
+					if (body.ok) {
+						row.state = 'done';
+						row.result = body.result ?? null;
+					} else {
+						row.state = body.skipped ? 'skipped' : 'failed';
+						row.error = body.error ?? `HTTP ${res.status}`;
+					}
+				} catch (err) {
+					row.state = 'failed';
+					row.error = err instanceof Error ? err.message : String(err);
+				}
+			}
+		};
+		await Promise.all(Array.from({ length: Math.min(CONCURRENCY, fleet.length) }, worker));
+		for (const r of fleet) {
+			if (r.state === 'queued') {
+				r.state = 'skipped';
+				r.error = 'Stopped before it ran';
+			}
+		}
+		fleetRunning = false;
+		await invalidateAll();
+	}
+
+	// Long-format CSV: one row per unit × channel (× scan point for scans).
+	function batchCsv(b: { id: string; type: BenchType; rows: BatchRow[] }) {
+		const head = ['batch', 'unit', 'status', 'error', 'read', 'at', 'seq', 'pos_um', 'gain', 'astep', 'atime', 'temp_c', 'channel', 'pd', 'pd_dark', 'f1', 'f2', 'f3', 'f4', 'f5', 'f6', 'f7', 'f8', 'clear', 'nir', 'scan_pos_um', 'scan_pd', 'scan_clear'];
+		const esc = (v: unknown) => {
+			const t = v === null || v === undefined ? '' : String(v);
+			return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t;
+		};
+		const lines = [head.join(',')];
+		for (const row of b.rows) {
+			const r = row.result;
+			const base = [b.id, row.spuUdi, row.ok ? 'ok' : 'failed', row.error, b.type, row.at, r?.seq, r?.pos, r?.gain, r?.astep, r?.atime, r?.temp != null ? (r.temp / 10).toFixed(1) : ''];
+			if (!row.ok || !r?.ch?.length) {
+				lines.push([...base, ...Array(head.length - base.length).fill('')].map(esc).join(','));
+				continue;
+			}
+			for (const c of r.ch) {
+				const chCols = [c.c, c.pd, c.pd0, ...Array.from({ length: 10 }, (_, k) => c.f?.[k])];
+				if (r.kind === 'scan' && c.pts?.length) {
+					for (const pt of c.pts) lines.push([...base, ...chCols, pt[0], pt[1], pt[2]].map(esc).join(','));
+				} else lines.push([...base, ...chCols, '', '', ''].map(esc).join(','));
+			}
+		}
+		return lines.join('\n');
+	}
+	function downloadCsv(b: { id: string; type: BenchType; rows: BatchRow[] }) {
+		const url = URL.createObjectURL(new Blob([batchCsv(b)], { type: 'text/csv' }));
+		const a = document.createElement('a');
+		a.href = url;
+		a.download = `${b.id}.csv`;
+		a.click();
+		URL.revokeObjectURL(url);
+	}
+	const liveAsBatch = $derived(
+		fleetId
+			? { id: fleetId, type: fleetType, rows: fleet.map((r): BatchRow => ({ spuId: r.spuId, spuUdi: r.udi, ok: r.state === 'done', error: r.error, at: null, result: r.result })) }
+			: null
+	);
+	let openBatch = $state<string | null>(null);
+	const pdList = (r: Result | null) => (r?.kind === 'scan' ? 'scan' : (r?.ch ?? []).map((c) => c.pd ?? '—').join(' / ') || '—');
+	const f7List = (r: Result | null) => (r?.kind === 'scan' ? '—' : (r?.ch ?? []).map((c) => c.f?.[6] ?? '—').join(' / ') || '—');
+	const STATE_CLASS: Record<RowState, string> = {
+		queued: 'tron-text-muted',
+		running: 'text-[var(--color-tron-cyan)]',
+		done: 'text-emerald-400',
+		failed: 'text-[var(--color-tron-red)]',
+		skipped: 'text-amber-400'
+	};
 </script>
 
 <div class="space-y-6">
@@ -127,10 +281,82 @@
 		</button>
 	</form>
 
+	<div class="tron-card space-y-3 p-6">
+		<div class="flex flex-wrap items-center justify-between gap-3">
+			<div>
+				<h2 class="tron-heading text-sm font-semibold uppercase tracking-wide">Run on all units</h2>
+				<p class="tron-text-muted mt-1 text-xs">
+					Runs the read selected above ({TYPE_LABEL[type]}) on every unit with a linked device ({data.spus.length}),
+					{CONCURRENCY} at a time, and saves the whole run as a fleet batch you can download as CSV. Keep this
+					tab open until it finishes.
+				</p>
+			</div>
+			<div class="flex flex-wrap items-center gap-3">
+				<label class="tron-text-muted flex items-center gap-2 text-xs">
+					<input type="checkbox" bind:checked={skipOffline} disabled={fleetRunning} /> Skip units Particle reports offline
+				</label>
+				{#if fleetRunning}
+					<button type="button" onclick={() => (fleetStop = true)} disabled={fleetStop} class="rounded-lg border border-[var(--color-tron-red)] px-4 py-2 text-sm font-semibold text-[var(--color-tron-red)] disabled:opacity-50" style="min-height: 44px">
+						{fleetStop ? 'Stopping after current reads…' : 'Stop'}
+					</button>
+				{:else if fleetConfirm}
+					<span class="text-sm">{TYPE_LABEL[type]} on {data.spus.length} units?</span>
+					<button type="button" onclick={runFleet} class="rounded-lg bg-[var(--color-tron-orange)] px-4 py-2 text-sm font-semibold text-[var(--color-tron-bg-primary)]" style="min-height: 44px">Start</button>
+					<button type="button" onclick={() => (fleetConfirm = false)} class="tron-text-muted rounded-lg border border-[var(--color-tron-border)] px-4 py-2 text-sm" style="min-height: 44px">Cancel</button>
+				{:else}
+					<button type="button" onclick={() => (fleetConfirm = true)} disabled={running || scanBad || data.spus.length === 0} class="rounded-lg bg-[var(--color-tron-orange)] px-4 py-2 text-sm font-semibold text-[var(--color-tron-bg-primary)] hover:bg-[var(--color-tron-orange)]/90 disabled:cursor-not-allowed disabled:opacity-50" style="min-height: 44px">
+						Run on all units ({data.spus.length})
+					</button>
+				{/if}
+			</div>
+		</div>
+
+		{#if fleet.length}
+			<div class="flex flex-wrap items-center justify-between gap-2 text-xs">
+				<span class="font-mono">
+					{fleetId} · {TYPE_LABEL[fleetType]} ·
+					<span class="text-emerald-400">{fleetCounts.done} ok</span> ·
+					<span class="text-[var(--color-tron-red)]">{fleetCounts.failed} failed</span> ·
+					<span class="text-amber-400">{fleetCounts.skipped} skipped</span>
+					{#if fleetCounts.pending}· {fleetCounts.pending} to go{/if}
+				</span>
+				{#if !fleetRunning && liveAsBatch}
+					{@const b = liveAsBatch}
+					<button type="button" onclick={() => downloadCsv(b)} class="text-[var(--color-tron-cyan)] hover:underline">Download CSV</button>
+				{/if}
+			</div>
+			{#if fleetNote}<p class="text-xs text-amber-400">{fleetNote}</p>{/if}
+			<div class="max-h-96 overflow-auto">
+				<table class="w-full text-xs">
+					<thead class="text-[10px] uppercase text-[var(--color-tron-text-secondary)]">
+						<tr class="border-b border-[var(--color-tron-border)]"><th class="py-1 pr-4 text-left font-medium">Unit</th><th class="py-1 pr-4 text-left font-medium">Status</th><th class="py-1 pr-4 text-left font-medium">PD A / B / C</th><th class="py-1 pr-4 text-left font-medium">F7 A / B / C</th><th class="py-1 text-left font-medium">Detail</th></tr>
+					</thead>
+					<tbody class="font-mono tron-text-primary">
+						{#each fleet as r (r.spuId)}
+							<tr class="border-b border-[var(--color-tron-border)]/50">
+								<td class="py-1 pr-4">{r.udi}</td>
+								<td class="py-1 pr-4 font-sans {STATE_CLASS[r.state]}">{r.state === 'running' ? 'running…' : r.state}</td>
+								<td class="py-1 pr-4">{r.result ? pdList(r.result) : '—'}</td>
+								<td class="py-1 pr-4">{r.result ? f7List(r.result) : '—'}</td>
+								<td class="py-1 font-sans tron-text-muted">{r.error ?? ''}</td>
+							</tr>
+						{/each}
+					</tbody>
+				</table>
+			</div>
+		{/if}
+	</div>
+
 	{#if form?.ran && form.result}
 		{@const r = form.result}
 		<div class="tron-card p-4">
-			<h2 class="tron-heading mb-2 text-sm font-semibold uppercase tracking-wide">{TYPE_LABEL[form.type ?? 'laser']} — {form.spuUdi}</h2>
+			<h2 class="tron-heading mb-2 text-sm font-semibold uppercase tracking-wide">
+				{TYPE_LABEL[form.type ?? 'laser']} — {form.spuUdi}
+				{#if form.check}<span class="ml-2 rounded-full px-2 py-0.5 text-xs font-bold uppercase" style={VERDICT_STYLE[form.check.verdict]}>{form.check.verdict}</span>{/if}
+			</h2>
+			{#if form.check?.reasons.length}
+				<ul class="mb-2 list-disc pl-5 text-xs text-[var(--color-tron-red)]">{#each form.check.reasons as why (why)}<li>{why}</li>{/each}</ul>
+			{/if}
 			<p class="tron-text-muted mb-3 text-xs">seq {r.seq} · {r.kind} · {r.kind === 'scan' ? `${r.start}–${r.end} µm step ${r.step}` : `${r.pos} µm`} · gain {r.gain} · astep {r.astep} · atime {r.atime}{r.temp != null ? ` · ${(r.temp / 10).toFixed(1)} °C` : ''}</p>
 			{#if r.kind === 'scan'}
 				{@const ch = scanChart(r)}
@@ -170,6 +396,84 @@
 		</div>
 	{/if}
 
+	{#if data.batches.length}
+		<div class="tron-card p-4">
+			<h2 class="tron-heading mb-3 text-sm font-semibold uppercase tracking-wide">Fleet runs ({data.batches.length})</h2>
+			<div class="space-y-2">
+				{#each data.batches as b (b.id)}
+					{@const ok = b.rows.filter((r) => r.ok).length}
+					<div class="rounded border border-[var(--color-tron-border)]">
+						<div class="flex flex-wrap items-center justify-between gap-2 px-3 py-2 text-xs">
+							<button type="button" class="flex flex-wrap items-center gap-3 text-left" onclick={() => (openBatch = openBatch === b.id ? null : b.id)}>
+								<span class="font-mono text-[var(--color-tron-cyan)]">{openBatch === b.id ? '▾' : '▸'} {b.id}</span>
+								<span>{TYPE_LABEL[b.type]}</span>
+								<span class="tron-text-muted">{when(b.startedAt)}</span>
+								<span><span class="text-emerald-400">{ok} ok</span> / {b.rows.length} units</span>
+								<span class="tron-text-muted">{b.by ?? ''}</span>
+							</button>
+							<button type="button" onclick={() => downloadCsv(b)} class="text-[var(--color-tron-cyan)] hover:underline">Download CSV</button>
+						</div>
+						{#if openBatch === b.id}
+							<div class="overflow-x-auto border-t border-[var(--color-tron-border)] px-3 py-2">
+								<table class="w-full text-xs">
+									<thead class="text-[10px] uppercase text-[var(--color-tron-text-secondary)]">
+										<tr><th class="py-1 pr-4 text-left font-medium">Unit</th><th class="py-1 pr-4 text-left font-medium">Status</th><th class="py-1 pr-4 text-left font-medium">PD A / B / C</th><th class="py-1 pr-4 text-left font-medium">F7 A / B / C</th><th class="py-1 text-left font-medium">Detail</th></tr>
+									</thead>
+									<tbody class="font-mono tron-text-primary">
+										{#each b.rows as r (r.id)}
+											<tr class="border-t border-[var(--color-tron-border)]/50">
+												<td class="py-1 pr-4"><a href={r.spuId ? `/spu/${r.spuId}` : '#'} class="text-[var(--color-tron-cyan)] hover:underline">{r.spuUdi ?? '—'}</a></td>
+												<td class="py-1 pr-4 font-sans {r.ok ? 'text-emerald-400' : 'text-[var(--color-tron-red)]'}">
+													{#if r.ok && r.check}<span class="rounded-full px-1.5 text-[10px] font-bold uppercase" style={VERDICT_STYLE[r.check.verdict]} title={r.check.reasons.join('\n')}>{r.check.verdict}</span>{:else}{r.ok ? 'ok' : 'failed'}{/if}
+												</td>
+												<td class="py-1 pr-4">{pdList(r.result)}</td>
+												<td class="py-1 pr-4">{f7List(r.result)}</td>
+												<td class="py-1 font-sans tron-text-muted">{r.error ?? ''}</td>
+											</tr>
+										{/each}
+									</tbody>
+								</table>
+							</div>
+						{/if}
+					</div>
+				{/each}
+			</div>
+		</div>
+	{/if}
+
+	<div class="tron-card p-4">
+		<h2 class="tron-heading mb-1 text-sm font-semibold uppercase tracking-wide">
+			Unit check ({data.units.length}) ·
+			<span class={failingUnits ? 'text-[var(--color-tron-red)]' : 'text-[var(--color-tron-green)]'}>{failingUnits} not passing</span>
+		</h2>
+		<p class="tron-text-muted mb-3 text-xs">
+			A unit passes when its latest laser read has photodiode ≥ {data.criteria.laserPdMin} and signal in all
+			ten bands on every channel, AND its latest dark read has photodiode ≤ {data.criteria.darkPdMax}
+			(lasers off, no light leak). Run both reads on every unit. Fleet-run attempts that could not reach a unit are ignored.
+		</p>
+		{#if data.units.length === 0}
+			<p class="text-sm text-[var(--color-tron-text-secondary)]">No unit has a laser or dark read yet.</p>
+		{:else}
+			<div class="overflow-x-auto">
+				<table class="w-full text-xs">
+					<thead class="text-[10px] uppercase text-[var(--color-tron-text-secondary)]">
+						<tr class="border-b border-[var(--color-tron-border)]"><th class="py-1 pr-4 text-left font-medium">Unit</th><th class="py-1 pr-4 text-left font-medium">Check</th><th class="py-1 pr-4 text-left font-medium">Why</th><th class="py-1 text-left font-medium">Latest read</th></tr>
+					</thead>
+					<tbody>
+						{#each data.units as u (u.id)}
+							<tr class="border-b border-[var(--color-tron-border)]/50">
+								<td class="py-1 pr-4 font-mono"><a href="/spu/{u.id}" class="text-[var(--color-tron-cyan)] hover:underline">{u.udi}</a></td>
+								<td class="py-1 pr-4"><span class="rounded-full px-2 py-0.5 font-bold uppercase" style={VERDICT_STYLE[u.check.verdict]}>{u.check.verdict}</span></td>
+								<td class="py-1 pr-4 {u.check.verdict === 'fail' ? 'text-[var(--color-tron-red)]' : 'tron-text-muted'}">{u.check.reasons.join('; ') || '—'}</td>
+								<td class="py-1 tron-text-muted">{when(u.check.at)}</td>
+							</tr>
+						{/each}
+					</tbody>
+				</table>
+			</div>
+		{/if}
+	</div>
+
 	<div class="tron-card p-4">
 		<div class="mb-3 flex flex-wrap items-center justify-between gap-2">
 			<h2 class="tron-heading text-sm font-semibold uppercase tracking-wide">History ({shown.length})</h2>
@@ -184,7 +488,7 @@
 			<div class="overflow-x-auto">
 				<table class="w-full text-xs">
 					<thead class="text-[10px] uppercase text-[var(--color-tron-text-secondary)]">
-						<tr class="border-b border-[var(--color-tron-border)]"><th class="py-1 pr-4 text-left font-medium">When</th><th class="py-1 pr-4 text-left font-medium">Unit</th><th class="py-1 pr-4 text-left font-medium">Read</th><th class="py-1 pr-4 text-left font-medium">Position</th><th class="py-1 pr-4 text-left font-medium">Gain</th><th class="py-1 pr-4 text-left font-medium">PD A / B / C</th><th class="py-1 pr-4 text-left font-medium">F7 A / B / C</th><th class="py-1 text-left font-medium">By</th></tr>
+						<tr class="border-b border-[var(--color-tron-border)]"><th class="py-1 pr-4 text-left font-medium">When</th><th class="py-1 pr-4 text-left font-medium">Unit</th><th class="py-1 pr-4 text-left font-medium">Read</th><th class="py-1 pr-4 text-left font-medium">Check</th><th class="py-1 pr-4 text-left font-medium">Position</th><th class="py-1 pr-4 text-left font-medium">Gain</th><th class="py-1 pr-4 text-left font-medium">PD A / B / C</th><th class="py-1 pr-4 text-left font-medium">F7 A / B / C</th><th class="py-1 text-left font-medium">By</th></tr>
 					</thead>
 					<tbody class="font-mono tron-text-primary">
 						{#each shown as h (h.id)}
@@ -193,6 +497,7 @@
 								<td class="py-1 pr-4">{when(h.at)}</td>
 								<td class="py-1 pr-4"><a href={h.spuId ? `/spu/${h.spuId}` : '#'} class="text-[var(--color-tron-cyan)] hover:underline">{h.spuUdi ?? '—'}</a></td>
 								<td class="py-1 pr-4 font-sans">{TYPE_LABEL[h.type]}</td>
+								<td class="py-1 pr-4 font-sans">{#if h.check}<span class="rounded-full px-1.5 text-[10px] font-bold uppercase" style={VERDICT_STYLE[h.check.verdict]} title={h.check.reasons.join('\n')}>{h.check.verdict}</span>{:else}<span class="tron-text-muted">—</span>{/if}</td>
 								<td class="py-1 pr-4">{r?.kind === 'scan' ? `${r.start}–${r.end}` : (r?.pos ?? '—')}</td>
 								<td class="py-1 pr-4">{r?.gain ?? '—'}</td>
 								<td class="py-1 pr-4">{r?.kind === 'scan' ? '—' : (r?.ch ?? []).map((c) => c.pd ?? '—').join(' / ')}</td>

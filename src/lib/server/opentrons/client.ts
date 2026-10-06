@@ -1,19 +1,19 @@
 /**
- * Stateless typed client for the Opentrons OT-2 HTTP API.
+ * Server-side wrapper over the isomorphic robot client ($lib/opentrons/robot-client).
  *
- * Wraps openapi-fetch with a factory that injects:
- *   - per-robot base URL
- *   - the required `opentrons-version` header
- *   - a short request timeout
- *
- * Every call is a live pass-through to the robot. No DB, no caching.
+ * Binds a client to a robot's LAN address with plain fetch — for scripts run
+ * from a lab machine (scripts/verify-opentrons-clone.ts) and any leftover
+ * server use. Pages do NOT use this: they call the robot from the browser over
+ * the robot session (OT2-TAILNET-5 §7.8), because Vercel can't reach the LAN.
  */
+import {
+	createRobotClient as createIsomorphicClient,
+	unwrap,
+	type OpentronsClient
+} from '../../opentrons/robot-client';
 
-import createClient, { type Middleware } from 'openapi-fetch';
-import type { paths } from './openapi-types';
-
-export type OpentronsClient = ReturnType<typeof createClient<paths>>;
-export type { paths } from './openapi-types';
+export type { OpentronsClient, paths } from '../../opentrons/robot-client';
+export { unwrap };
 
 export interface RobotEndpoint {
 	ip: string;
@@ -22,8 +22,6 @@ export interface RobotEndpoint {
 
 const DEFAULT_PORT = 31950;
 const DEFAULT_TIMEOUT_MS = 10_000;
-const OPENTRONS_VERSION_HEADER = 'opentrons-version';
-const OPENTRONS_VERSION_VALUE = '*';
 
 export function robotBaseUrl(robot: RobotEndpoint): string {
 	const port = robot.port ?? DEFAULT_PORT;
@@ -31,47 +29,13 @@ export function robotBaseUrl(robot: RobotEndpoint): string {
 }
 
 /**
- * Create a typed client bound to a specific robot.
- * Each call forwards to the robot with a timeout; callers may override via init.signal.
+ * Create a typed client bound to a specific robot. Each call forwards to the
+ * robot with a timeout and `opentrons-version: *`, exactly as before the move.
  */
-export function createRobotClient(
-	robot: RobotEndpoint,
-	options: { timeoutMs?: number } = {}
-): OpentronsClient {
-	const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-
-	const timeoutMiddleware: Middleware = {
-		async onRequest({ request }) {
-			if (request.signal) return request;
-			const signal = AbortSignal.timeout(timeoutMs);
-			return new Request(request, { signal });
-		},
-	};
-
-	const headerMiddleware: Middleware = {
-		async onRequest({ request }) {
-			if (!request.headers.has(OPENTRONS_VERSION_HEADER)) {
-				request.headers.set(OPENTRONS_VERSION_HEADER, OPENTRONS_VERSION_VALUE);
-			}
-			return request;
-		},
-	};
-
-	const client = createClient<paths>({ baseUrl: robotBaseUrl(robot) });
-	client.use(headerMiddleware, timeoutMiddleware);
-	return client;
-}
-
-/**
- * Unwrap an openapi-fetch result, throwing on error.
- * Keep the signature loose — openapi-fetch's response shape carries rich generics
- * that aren't worth threading through every caller.
- */
-export function unwrap<T>(res: { data?: T; error?: unknown; response: Response }): T {
-	if (res.error !== undefined) {
-		throw new Error(
-			`Opentrons API error: ${res.response.status} ${res.response.statusText} — ${JSON.stringify(res.error)}`
-		);
-	}
-	return res.data as T;
+export function createRobotClient(robot: RobotEndpoint, options: { timeoutMs?: number } = {}): OpentronsClient {
+	return createIsomorphicClient({
+		baseUrl: robotBaseUrl(robot),
+		timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+		versionHeader: '*'
+	});
 }

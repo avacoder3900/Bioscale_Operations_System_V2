@@ -1,5 +1,5 @@
 import { redirect } from '@sveltejs/kit';
-import { isCureComplete, cureRemainingMin } from '$lib/server/manufacturing/cure-time';
+
 import {
 	connectDB, WaxFillingRun, ReagentBatchRecord, CartridgeRecord,
 	BackingLot, LaserCutBatch, Consumable, LotRecord, ManufacturingSettings,
@@ -51,7 +51,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 				'Completed', 'Aborted', 'Cancelled'] }
 		}).lean(),
 		BackingLot.find({ status: { $in: ['in_oven', 'ready', 'created'] } })
-			.sort({ ovenEntryTime: -1 }).lean(),
+			.sort({ createdAt: -1 }).lean(),
 		Promise.resolve(null),
 		CartridgeRecord.aggregate([
 			{ $group: { _id: '$status', count: { $sum: 1 } } }
@@ -66,7 +66,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 	]);
 
 	const settings = settingsDoc as any ?? {};
-	const minOvenTimeMin: number = settings?.waxFilling?.minOvenTimeMin ?? 60;
+
 	const cartridgesPerSheet: number = settings?.general?.cartridgesPerLaserCutSheet ?? 16;
 	const waxStorageMaxAgeDays: number = settings?.general?.waxStorageMaxAgeDays ?? 7;
 	const robotStallWarningMin: number = settings?.general?.robotStallWarningMin ?? 90;
@@ -170,21 +170,16 @@ export const load: PageServerLoad = async ({ locals }) => {
 		).sort({ 'waxStorage.timestamp': 1 }).lean()
 	]);
 
-	// --- Backing lots with oven status ---
-	const enrichedBackingLots = (backingLots as any[]).map((bl: any) => {
-		const entryMs = bl.ovenEntryTime ? new Date(bl.ovenEntryTime).getTime() : 0;
-		const elapsedMin = entryMs ? (now - entryMs) / 60000 : 0;
-		return {
-			lotId: String(bl._id),
-			cartridgeCount: bl.cartridgeCount ?? 0,
-			status: bl.status ?? 'in_oven',
-			ovenLocationName: bl.ovenLocationName ?? null,
-			elapsedMin: Math.floor(elapsedMin),
-			remainingMin: cureRemainingMin(bl.ovenEntryTime, minOvenTimeMin),
-			isReady: isCureComplete(bl.ovenEntryTime, minOvenTimeMin),
-			operatorUsername: bl.operator?.username ?? null
-		};
-	});
+	// --- Legacy backing lots (display-only until drained). Backing-oven
+	// tracking and the cure-time gate were removed app-wide (2026-09-23), so
+	// every backed cartridge counts as ready.
+	const enrichedBackingLots = (backingLots as any[]).map((bl: any) => ({
+		lotId: String(bl._id),
+		cartridgeCount: bl.cartridgeCount ?? 0,
+		status: bl.status ?? 'in_oven',
+		isReady: true,
+		operatorUsername: bl.operator?.username ?? null
+	}));
 
 	// --- Robot status computation ---
 	// Page-owned stages = operator still working the run on the filling page
@@ -371,11 +366,9 @@ export const load: PageServerLoad = async ({ locals }) => {
 				recentBatchAt: recentLaserBatch ? new Date((recentLaserBatch as any).createdAt).toISOString() : null
 			},
 			backing: {
-				inProgressLots: enrichedBackingLots.filter(bl => !bl.isReady),
-				readyLots: enrichedBackingLots.filter(bl => bl.isReady),
-				totalReadyCartridges: enrichedBackingLots
-					.filter(bl => bl.isReady)
-					.reduce((s, bl) => s + bl.cartridgeCount, 0),
+				inProgressLots: [] as typeof enrichedBackingLots,
+				readyLots: enrichedBackingLots,
+				totalReadyCartridges: phaseMap.get('backing') ?? 0,
 				backedTotal: phaseMap.get('backing') ?? 0
 			},
 			waxFilling: {
@@ -428,7 +421,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 			topRejections: allRejectReasons
 		},
 		alerts,
-		minOvenTimeMin,
+
 		refreshIntervalSec
 	}));
 };
