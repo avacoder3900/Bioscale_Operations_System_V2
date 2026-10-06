@@ -2,7 +2,7 @@ import { uploadToR2, uploadViaWorker } from './r2';
 import { storeImageInMongo } from './device-assembly-wi';
 import type { StoreImageFn } from './device-assembly-wi-parser';
 
-// R2-first image store for the Device Assembly WI (routes only — pulls in $env).
+// R2-first image store for the SPU Assembly WI (routes only — pulls in $env).
 // Order: Cloudflare Worker → direct S3v4 → Mongo (WorkInstructionImage).
 // Something is always stored, so a picture never silently disappears.
 

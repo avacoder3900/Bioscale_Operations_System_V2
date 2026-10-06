@@ -1669,7 +1669,7 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 		'device_wi_overview',
 		{ annotations: READ_ONLY,
 			description:
-				'The Device Assembly Work Instruction (Manufacturing → Device Assembly WI): current revision (vN, who/when), ' +
+				'The SPU Assembly Work Instruction (SPU → SPU Assembly WI): current revision (vN, who/when), ' +
 				'every section (Setup + Sub-Assembly 1…5) with its step list (number, title, ESD flag, image and material counts, ' +
 				'stepId), part numbers not yet linked to the catalog, and the last 5 revisions. Call this first to find the ' +
 				'step a user is talking about ("step 2 in sub-assembly 2"), then device_wi_get_step for the full text/photos/materials.'
@@ -1975,7 +1975,7 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 				'Replace the whole work instruction by re-parsing a .docx at a URL (every section/step/material/photo is rebuilt; ' +
 				'manual edits since the last import are lost, though the revision history keeps the record). Only when the user ' +
 				'explicitly asks to re-import; confirm first. For a file on their computer, point them to the Upload .docx button on ' +
-				'the Device Assembly WI page instead.',
+				'the SPU Assembly WI page instead.',
 			inputSchema: z.object({ actor: ACTOR_FIELD, confirmed: z.boolean(), fileUrl: z.string().describe('http(s) URL of the .docx'), fileName: z.string().optional() })
 		},
 		async (args) => wiMutate('import', args)

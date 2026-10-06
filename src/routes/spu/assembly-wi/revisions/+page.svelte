@@ -46,7 +46,7 @@
 <div class="space-y-6">
 	<div class="flex flex-wrap items-end justify-between gap-3">
 		<div>
-			<a href="/manufacturing/device-assembly" class="text-xs text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)]">← Device Assembly WI</a>
+			<a href="/spu/assembly-wi" class="text-xs text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)]">← SPU Assembly WI</a>
 			<h1 class="text-2xl font-bold text-[var(--color-tron-cyan)]">Revision History</h1>
 			{#if data.wi}
 				<p class="mt-1 text-sm text-[var(--color-tron-text-secondary)]">

@@ -10,7 +10,7 @@ export const GET: RequestHandler = async ({ request, url }) => {
 	requireAgentApiKey(request);
 	await connectDB();
 	const wi = await getDeviceAssemblyWI();
-	if (!wi) return json({ success: true, data: [], message: 'No Device Assembly Work Instruction has been imported yet.' });
+	if (!wi) return json({ success: true, data: [], message: 'No SPU Assembly Work Instruction has been imported yet.' });
 	let rows = await getRecentPulls(wi._id, 500);
 	const section = url.searchParams.get('section');
 	const step = url.searchParams.get('step');

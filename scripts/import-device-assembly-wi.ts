@@ -1,11 +1,11 @@
 /**
- * Import (or re-import) the Device Assembly Work Instruction from a .docx.
+ * Import (or re-import) the SPU Assembly Work Instruction from a .docx.
  *
  *   npx tsx scripts/import-device-assembly-wi.ts "/path/to/WIMF With Sections.docx" [username]
  *
  * Images are stored in Mongo (work_instruction_images) because this script
  * runs outside SvelteKit and cannot reach the R2 worker config. The web UI
- * upload (Manufacturing → Device Assembly WI → Upload .docx) uses R2 first.
+ * upload (SPU → SPU Assembly WI → Upload .docx) uses R2 first.
  */
 import 'dotenv/config';
 import fs from 'node:fs';

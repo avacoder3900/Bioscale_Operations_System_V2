@@ -9,7 +9,7 @@ export class RefError extends Error {}
 
 export async function requireWI(): Promise<any> {
 	const wi = await getDeviceAssemblyWI();
-	if (!wi) throw new RefError('No Device Assembly Work Instruction has been imported yet. Upload the .docx in BIMS (Manufacturing → Device Assembly WI) or use device_wi_import.');
+	if (!wi) throw new RefError('No SPU Assembly Work Instruction has been imported yet. Upload the .docx in BIMS (SPU → SPU Assembly WI) or use device_wi_import.');
 	return wi;
 }
 
@@ -152,7 +152,7 @@ export function overview(wi: any, stock: Record<string, any>) {
 		lastChangedBy: wi.lastChangedBy?.username ?? null,
 		lastChangedAt: wi.lastChangedAt,
 		sourceFile: wi.sourceFile?.originalFileName ?? null,
-		pageUrl: '/manufacturing/device-assembly',
+		pageUrl: '/spu/assembly-wi',
 		sections: wi.sections.map((s: any) => ({
 			sectionNumber: s.number,
 			label: sectionLabel(s),

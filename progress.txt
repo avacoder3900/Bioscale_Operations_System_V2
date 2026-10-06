@@ -13113,3 +13113,19 @@ mutate without actor → attribution refusal, rename → v2, caption → v3, del
 Stage Board; MCP initialize (3.6.0), tools/list shows all 20 device_wi_* tools, tools/call for
 overview/get_step/revisions, unknown actor → isError. Test revisions reset to v1 afterwards.
 docs/MCP-SERVER.md updated. npm run check: 10 errors (baseline), warnings unchanged.
+
+================================================================================
+2026-10-06 — feat/device-assembly-wi — moved the WI tab from Manufacturing to SPU as "SPU Assembly WI"
+================================================================================
+Per Alejandro: the work-instruction tab now sits in the SPU sidebar group (after SPU Assembly)
+labelled "SPU Assembly WI", at /spu/assembly-wi (+ /spu/assembly-wi/revisions). The route
+directory moved from src/routes/manufacturing/device-assembly → src/routes/spu/assembly-wi;
+the old paths 301-redirect (query string preserved) so bookmarks and the MCP pageUrl keep
+working. Page/revisions permissions switched from manufacturing:read/write to spu:read/write to
+match the rest of the SPU section. All user-facing text, MCP tool descriptions, the agent
+overview pageUrl, docs/MCP-SERVER.md and the import script now say "SPU Assembly Work
+Instruction" / "SPU → SPU Assembly WI"; the stored document title in Mongo was updated to match.
+Internal identifiers are unchanged on purpose (DeviceAssemblyWI model, device_wi_* MCP tool
+names, /api/agent/device-assembly/**, /api/device-assembly/images/** — image URLs are persisted
+in the document). Verified on the dev server: new page + revisions render (200), old paths 301 →
+new. npm run check: 10 errors (baseline).

@@ -3,7 +3,7 @@ import { connectDB } from '$lib/server/db/connection';
 import { WorkInstructionImage } from '$lib/server/db/models';
 import type { RequestHandler } from './$types';
 
-// Serves Device Assembly WI images that were stored in Mongo (the fallback
+// Serves SPU Assembly WI images that were stored in Mongo (the fallback
 // when R2 is not configured). Requires a logged-in session.
 export const GET: RequestHandler = async ({ params, locals, setHeaders }) => {
 	if (!locals.user) throw error(401, 'Unauthorized');

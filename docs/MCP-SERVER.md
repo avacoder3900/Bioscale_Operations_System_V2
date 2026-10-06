@@ -109,8 +109,8 @@ This replicates the full `/api/agent/**` machine surface except: `ask`/`transcri
 routes serving the in-app widget, not machine agents) and the OT-2/scanner long-poll daemon queues
 (not request/response shaped; the robot bridge keeps using them directly).
 
-**Device Assembly Work Instruction (2026-10-06, v3.6.0)** — full edit + inventory surface for
-Manufacturing → Device Assembly WI so changes can be made from Claude chat. Steps are addressed as
+**SPU Assembly Work Instruction (2026-10-06, v3.6.0)** — full edit + inventory surface for
+SPU → SPU Assembly WI so changes can be made from Claude chat. Steps are addressed as
 humans say them (`section` = "sub-assembly 2" / "setup", `step` = "2" / stepId / title phrase).
 Read: `device_wi_overview`, `device_wi_get_step` (one step, a section, or `q=` search),
 `device_wi_revisions` (vN / who / when / where / what, optional before-after), `device_wi_pull_history`.

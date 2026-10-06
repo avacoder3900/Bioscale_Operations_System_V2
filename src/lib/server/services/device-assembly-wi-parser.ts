@@ -566,7 +566,7 @@ export function buildFromHtml(rawHtml: string, warnings: string[]): Omit<ParsedD
 	if (!totalSteps) warnings.push('No steps were extracted from the document');
 
 	return {
-		title: 'Device Assembly Work Instruction',
+		title: 'SPU Assembly Work Instruction',
 		assemblyNumber,
 		frontMatter,
 		sections
@@ -584,7 +584,7 @@ export async function parseDeviceAssemblyWI(
 	const isDocx =
 		file.mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
 		lowerName.endsWith('.docx');
-	if (!isDocx) throw new Error('Only .docx files are supported for the Device Assembly Work Instruction');
+	if (!isDocx) throw new Error('Only .docx files are supported for the SPU Assembly Work Instruction');
 
 	let imgIndex = 0;
 	const storeFailures: string[] = [];

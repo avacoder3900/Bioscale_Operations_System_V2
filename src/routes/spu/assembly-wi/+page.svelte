@@ -85,13 +85,13 @@
 	}
 </script>
 
-<svelte:head><title>Device Assembly Work Instruction · BIMS</title></svelte:head>
+<svelte:head><title>SPU Assembly Work Instruction · BIMS</title></svelte:head>
 
 <div class="space-y-6">
 	<!-- ═══ Header ═══ -->
 	<div class="flex flex-wrap items-start justify-between gap-4">
 		<div>
-			<h1 class="text-2xl font-bold text-[var(--color-tron-cyan)]">Device Assembly Work Instruction</h1>
+			<h1 class="text-2xl font-bold text-[var(--color-tron-cyan)]">SPU Assembly Work Instruction</h1>
 			{#if data.wi}
 				<p class="mt-1 text-sm text-[var(--color-tron-text-secondary)]">
 					{data.wi.documentNumber}{#if data.wi.assemblyNumber} · {data.wi.assemblyNumber}{/if}
@@ -101,7 +101,7 @@
 				<p class="mt-1 text-xs text-[var(--color-tron-text-secondary)]">
 					<span class="rounded border border-[var(--color-tron-cyan)]/40 bg-[var(--color-tron-cyan)]/10 px-2 py-0.5 font-mono font-semibold text-[var(--color-tron-cyan)]">Rev v{data.wi.currentVersion}</span>
 					last changed by <span class="text-[var(--color-tron-text)]">{data.wi.lastChangedBy?.username ?? '—'}</span> on {fmt(data.wi.lastChangedAt)}
-					· <a href="/manufacturing/device-assembly/revisions" class="underline hover:text-[var(--color-tron-cyan)]">full revision history</a>
+					· <a href="/spu/assembly-wi/revisions" class="underline hover:text-[var(--color-tron-cyan)]">full revision history</a>
 				</p>
 			{:else}
 				<p class="mt-1 text-sm text-[var(--color-tron-text-secondary)]">No work instruction imported yet. Upload the .docx to get started.</p>
@@ -549,7 +549,7 @@
 		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4">
 			<div class="flex items-center justify-between">
 				<h2 class="text-sm font-semibold text-[var(--color-tron-text)]">Recent revisions</h2>
-				<a href="/manufacturing/device-assembly/revisions" class="text-xs text-[var(--color-tron-cyan)] hover:underline">All {data.wi.revisions.length} revisions &amp; material pulls →</a>
+				<a href="/spu/assembly-wi/revisions" class="text-xs text-[var(--color-tron-cyan)] hover:underline">All {data.wi.revisions.length} revisions &amp; material pulls →</a>
 			</div>
 			<ul class="mt-2 divide-y divide-[var(--color-tron-border)] text-xs">
 				{#each data.recentRevisions as r (r._id)}

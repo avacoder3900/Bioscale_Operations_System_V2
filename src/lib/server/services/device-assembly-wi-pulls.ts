@@ -3,7 +3,7 @@ import { generateId } from '$lib/server/db/utils.js';
 import { recordTransaction } from './inventory-transaction';
 import { DEVICE_WI_DOCUMENT_NUMBER, findSection, findStep, sectionLabel, type Actor } from './device-assembly-wi';
 
-// Material consumption for a Device Assembly WI step.
+// Material consumption for a SPU Assembly WI step.
 //
 // Each selected material becomes one InventoryTransaction (consumption) via
 // the shared recordTransaction() helper — which is what decrements
@@ -29,7 +29,7 @@ export async function pullMaterialsForStep(
 	actor: Actor
 ): Promise<{ results: PullResult[]; stepNumber: number; sectionTitle: string }> {
 	const wi: any = await DeviceAssemblyWI.findOne({ documentNumber: DEVICE_WI_DOCUMENT_NUMBER }).lean();
-	if (!wi) throw new Error('No Device Assembly Work Instruction has been imported yet');
+	if (!wi) throw new Error('No SPU Assembly Work Instruction has been imported yet');
 	const section = findSection(wi, input.sectionNumber);
 	if (!section) throw new Error(`Section ${input.sectionNumber} not found`);
 	const step = findStep(section, { stepId: input.stepId });
@@ -60,7 +60,7 @@ export async function pullMaterialsForStep(
 	const results: PullResult[] = [];
 
 	for (const p of planned) {
-		const noteParts = [`Device Assembly WI ${wi.documentNumber} ${`v${wi.currentVersion}`} — ${where}: ${p.material.name}`];
+		const noteParts = [`SPU Assembly WI ${wi.documentNumber} ${`v${wi.currentVersion}`} — ${where}: ${p.material.name}`];
 		if (serial) noteParts.push(`SPU ${serial}`);
 		if (input.notes?.trim()) noteParts.push(input.notes.trim());
 		const txId = await recordTransaction({

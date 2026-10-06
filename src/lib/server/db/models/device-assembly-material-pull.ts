@@ -3,7 +3,7 @@ import { generateId } from '../utils.js';
 import { applyImmutableMiddleware } from '../middleware/immutable.js';
 
 // Append-only record of material pulled from inventory for a specific
-// Device Assembly WI step. The stock movement itself is an
+// SPU Assembly WI step. The stock movement itself is an
 // InventoryTransaction (consumption) — this row ties that transaction back
 // to the WI section/step/material so the page can show per-step history.
 

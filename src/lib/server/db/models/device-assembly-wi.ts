@@ -1,7 +1,7 @@
 import mongoose, { Schema } from 'mongoose';
 import { generateId } from '../utils.js';
 
-// Device Assembly Work Instruction (Manufacturing → Device Assembly WI).
+// SPU Assembly Work Instruction (SPU → SPU Assembly WI).
 //
 // One document per work instruction. The procedure is split into `sections`:
 // number 0 is the "Cleaning & Setup" prerequisite block, numbers 1..N are the
@@ -90,7 +90,7 @@ const revisionSchema = new Schema({
 const deviceAssemblyWISchema = new Schema({
 	_id: { type: String, default: () => generateId() },
 	documentNumber: { type: String, default: 'WIMF-SPU-01' },
-	title: { type: String, default: 'Device Assembly Work Instruction' },
+	title: { type: String, default: 'SPU Assembly Work Instruction' },
 	assemblyNumber: { type: String, default: '' },      // AS-SPU-001
 	status: { type: String, enum: ['draft', 'active', 'retired'], default: 'active' },
 	currentVersion: { type: Number, default: 0 },

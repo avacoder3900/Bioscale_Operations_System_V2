@@ -10,7 +10,7 @@ import {
 	type ParsedMaterial
 } from './device-assembly-wi-parser';
 
-// Core service for the Device Assembly Work Instruction.
+// Core service for the SPU Assembly Work Instruction.
 //
 // Deliberately imports only models + the parser (no R2, no $env) so the same
 // code runs from a tsx script (scripts/import-device-assembly-wi.ts) and from
@@ -262,7 +262,7 @@ export async function mutateDeviceAssemblyWI(
 	mutate: (doc: any) => RevisionInput | Promise<RevisionInput>
 ): Promise<{ version: number; label: string; summary: string }> {
 	const doc = await DeviceAssemblyWI.findOne({ documentNumber: DEVICE_WI_DOCUMENT_NUMBER });
-	if (!doc) throw new Error('No Device Assembly Work Instruction has been imported yet');
+	if (!doc) throw new Error('No SPU Assembly Work Instruction has been imported yet');
 	const rev = await mutate(doc);
 	const nextVersion = (doc.currentVersion ?? 0) + 1;
 	const now = new Date();
