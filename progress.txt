@@ -18660,3 +18660,7 @@ a missing feature.
 - cart-mfg dashboard: pipeline.waxFilling.waxRejected; the "Wax-Filled" tile sub-line now reads
   "usable · N rejected" (its count was already wax_filled + wax_ready, excluding rejects).
 `npm run check`: 16 errors / 434 warnings — same as master, none in the changed files.
+Deployment: production — Vercel GitHub integration build of master
+Source: branch master @ commit d3c83e12 (merge of feat/wax-reject-visual-only)
+Retrieve this exact code: git checkout master at commit d3c83e12
+What this deployment is for: Wax Reject usable without a camera (reason-gated visual rejects); dashboard shows rejected count.
