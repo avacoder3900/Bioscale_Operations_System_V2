@@ -12,6 +12,8 @@
 	import RunExecution from '$lib/components/manufacturing/reagent-filling/RunExecution.svelte';
 	import ProtocolStartPanel from '$lib/components/manufacturing/ProtocolStartPanel.svelte';
 	import EmbeddedRunController from '$lib/components/manufacturing/EmbeddedRunController.svelte';
+	import ReagentWellTracker from '$lib/components/manufacturing/reagent-filling/ReagentWellTracker.svelte';
+	import type { ReagentWellIssueRow } from '$lib/manufacturing/reagent-well-issues';
 	import { deserialize } from '$app/forms';
 	import { RobotSession, type RobotSessionState } from '$lib/opentrons/direct-client';
 	import TransportPill from '$lib/components/opentrons/TransportPill.svelte';
@@ -145,6 +147,40 @@
 	// The robot's own status, reported by EmbeddedRunController. Used to hold the
 	// run clock while the robot is paused — paused time isn't fill time.
 	let robotStatus = $state<string | null>(null);
+
+	/**
+	 * Well tracker (2026-10-06): per-well fill mistakes the operator logs while
+	 * watching the run. Server-owned (data.wellIssues); the tracker's action
+	 * results replace the local copy so a tap shows instantly without a reload.
+	 */
+	let wellIssuesLocal = $state<ReagentWellIssueRow[] | null>(null);
+	const wellIssues = $derived(wellIssuesLocal ?? data.wellIssues ?? []);
+	$effect(() => {
+		// A reload (or a different run) resets the optimistic copy to server truth.
+		data.wellIssues;
+		data.activeRunId;
+		wellIssuesLocal = null;
+	});
+	const loadedPositions = $derived(
+		(data.cartridges ?? []).map((c: any) => Number(c.deckPosition)).filter((n: number) => n >= 1 && n <= 24)
+	);
+	const cartridgeByPosition = $derived.by(() => {
+		const m: Record<number, string> = {};
+		for (const c of data.cartridges ?? []) if (c.deckPosition != null) m[Number(c.deckPosition)] = String(c.cartridgeId ?? c.id ?? '');
+		return m;
+	});
+	const reagentNamesByWell = $derived.by(() => {
+		const m: Record<number, string> = {};
+		for (const r of data.reagentDefinitions ?? []) if (r.wellPosition != null && r.reagentName) m[Number(r.wellPosition)] = r.reagentName;
+		return m;
+	});
+	// Wells the protocol was asked to fill (well_2..well_5 RTPs); default all four.
+	const activeWells = $derived.by(() => {
+		const p = data.runState.protocolParameters as Record<string, unknown> | null;
+		if (!p) return [2, 3, 4, 5];
+		const on = [2, 3, 4, 5].filter((w) => p[`well_${w}`] !== false);
+		return on.length ? on : [2, 3, 4, 5];
+	});
 
 	/**
 	 * Mid-run tip swap (2026-09-18, mirrors wax-filling). Sends a request to the
@@ -1096,6 +1132,19 @@
 					{/if}
 				</div>
 			{/if}
+		{/if}
+		{#if !isViewingPast && !previewParam && data.activeRunId}
+			<div class="mt-3">
+				<ReagentWellTracker
+					runId={data.activeRunId}
+					issues={wellIssues}
+					{loadedPositions}
+					{cartridgeByPosition}
+					reagentNames={reagentNamesByWell}
+					{activeWells}
+					onChange={(rows) => { wellIssuesLocal = rows; }}
+				/>
+			</div>
 		{/if}
 		{#if data.runState.runEndTime || previewParam}
 			<RunExecution

@@ -18607,3 +18607,31 @@ Source: branch feat/optical-bench-run-all @ commit ee5968b2c
 Retrieve this exact code: git checkout feat/optical-bench-run-all at commit ee5968b2c
   (or: git log feat/optical-bench-run-all --oneline to find it if the branch has since moved on)
 What this deployment is for: try "Run on all units" on /validation/bench before merging.
+2026-10-06 — feat/reagent-well-tracker — reagent fills: per-well mistake tracker on the run page + history heatmap
+================================================================================
+Alejandro: "everything looks good during calibration, however whenever we do the actual fills
+sometimes there are still mistakes here and there" — wanted a way to log them per well, in real
+time, on each reagent run. Until now the only place was a free-text run note, so there was no way
+to tell whether the misses cluster on a position (deck geometry) or scatter (tip).
+- models/reagent-batch-record.ts: `wellIssues[]` ({_id, deckPosition 1-24, cartridgeId, well 2-5,
+  reagentName, issue enum REAGENT_WELL_ISSUES (no_fill/partial_fill/overfill/missed_hole/splash/
+  bubble/bent_tip/other), note, loggedBy, loggedAt}). Well numbering = the .py's well_2..well_5.
+- models/cartridge-record.ts: `reagentFilling.wellIssues[]`; run-lifecycle-records.ts
+  finalizeReagentRun copies each cart's entries into its own stamp (clean carts get []).
+- lib/manufacturing/reagent-well-issues.ts: client-safe vocabulary + labels, the 4 wells, the
+  8x3 snake deck layout (same as DeckLoadingGrid).
+- reagent-filling/+page.server.ts: load returns `wellIssues`; actions `logWellIssue` /
+  `removeWellIssue` (validate position/well/issue, refuse once the run is finalized/terminal, audit
+  rows reagent_well_issue_logged / _removed, return the fresh list).
+- components/reagent-filling/ReagentWellTracker.svelte: the deck drawn as 24 tiles x 4 well
+  buttons; tap a well -> pick what you saw (+ optional note) -> saved immediately; red cells,
+  running log with ✕ remove. Uses $app/forms deserialize on the fetch'd action result.
+- reagent-filling/+page.svelte: tracker mounted on the Running stage (under the tip-swap card),
+  live until Done; loaded positions / cartridge ids / reagent names / active wells derived from
+  the run data. Optimistic local copy reset by reload.
+- NEW reagent-filling/well-issues/ page (+ "Well Issues" tab in the reagent layout): heatmap per
+  robot+deck over N days (24 positions x 4 wells, carrier totals, by-well totals, by-type counts,
+  % of wells), plus expandable per-run lists. Only runs with issues are listed; header shows all
+  runs in the window so the rate is honest.
+Smoke-tested the schema against Atlas on a throwaway run (push / enum reject / pull / delete).
+`npm run check`: 16 errors / 434 warnings — identical to origin/master, none in the changed files.
