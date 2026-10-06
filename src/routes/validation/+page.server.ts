@@ -5,14 +5,17 @@ import { cycleSummary, inCurrentCycle } from '$lib/server/spu-validation-cycle';
 import { isLegalTransition } from '$lib/server/spu-status';
 import { syncServiceFlag } from '$lib/server/service-flag';
 import { appendSpuJournal } from '$lib/server/spu-journal';
-import { syncOpticsValidation } from '$lib/server/services/optics-validation-sync';
+import { loadAutoVerdicts } from '$lib/server/validation-autograde-load';
 import type { Actions, PageServerLoad } from './$types';
 
 /**
  * SPU Validation hub (SPU-INV-11): the unified fleet view. Each instrument
  * keeps its own execution page — this page answers "where does the fleet
- * stand" with real measurements: gauss at every point (mag), per-channel
- * ratio averages (optics), mode temperature (thermo).
+ * stand" with real measurements: gauss at every point (mag), mode
+ * temperature (thermo), and the auto-graded bench + blank checks.
+ *
+ * Optical confirmation was banked 2026-10-06 (see VALIDATION_INSTRUMENTS):
+ * no column, no sync button, and it no longer counts toward release.
  */
 export const load: PageServerLoad = async ({ locals }) => {
 	requirePermission(locals.user, 'spu:read');
@@ -33,6 +36,10 @@ export const load: PageServerLoad = async ({ locals }) => {
 	]);
 
 	const magBySpu = new Map<string, any>(latestMagSessions.map((m: any) => [m._id, m]));
+	const autoChecks = await loadAutoVerdicts((spus as any[]).map((s) => ({ _id: String(s._id), udi: s.udi ?? null })));
+	/** A verdict only counts if its run is in the unit's current cycle. */
+	const inCycle = (c: { verdict: string; reasons: string[]; at: string | null } | null, resetAt: unknown) =>
+		c && inCurrentCycle(c.at, resetAt as Date | null) ? { verdict: c.verdict, reasons: c.reasons, at: c.at } : null;
 
 	// The mag wells grid: [{well, A, B, C}] of Z (gauss) values.
 	function magWells(raw: any): { well: number; A: number | null; B: number | null; C: number | null }[] | null {
@@ -65,14 +72,14 @@ export const load: PageServerLoad = async ({ locals }) => {
 		const wells = magRollupWells ?? magWells(magSession?.magResults);
 		const magStatus = cycle.statuses.magnetometer;
 
-		const opt = current(v.spectrophotometer) ? (v.spectrophotometer ?? {}) : {};
-		const ratios = opt.results?.ratioByChannel ?? null;
-
 		const th = current(v.thermocouple) ? (v.thermocouple ?? {}) : {};
 		const thermoMode =
 			th.results?.stats?.mode ?? th.results?.mode ?? th.results?.overallStats?.mode ?? null;
 
 		const overall = cycle.overall;
+		const auto = autoChecks.get(String(s._id));
+		const bench = inCycle(auto?.bench ?? null, s.validationResetAt);
+		const blank = inCycle(auto?.blank ?? null, s.validationResetAt);
 
 		// Most recent test of ANY modality — drives the default sort.
 		const times = [
@@ -80,7 +87,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 			v.magnetometer?.testRanAt,
 			magSession?.at,
 			th.completedAt,
-			opt.completedAt
+			auto?.bench?.at,
+			auto?.blank?.at
 		]
 			.filter(Boolean)
 			.map((t: any) => new Date(t).getTime());
@@ -103,15 +111,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 				failureReasons: v.magnetometer?.failureReasons ?? [],
 				fromSession: !magRollupWells && !!magSession
 			},
-			optics: {
-				status: cycle.statuses.spectrophotometer,
-				ratios: ratios
-					? { A: ratios.A ?? null, B: ratios.B ?? null, C: ratios.C ?? null }
-					: null,
-				// Optical runs are cartridge_records and the record _id IS the scanned
-				// barcode, so this is what /validation/optical-confirmation/[id] wants.
-				cartridgeBarcode: opt.results?.cartridgeBarcode ?? null
-			},
+			bench,
+			blank,
 			thermo: {
 				status: cycle.statuses.thermocouple,
 				mode: thermoMode,
@@ -128,37 +129,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 export const actions: Actions = {
 	/**
-	 * Manual optics → SPU write-back. Deliberately not on a timer (2026-09-15):
-	 * the pass/fail rule for an optical scan is still being defined, so a human
-	 * decides when the latest runs get judged onto the units.
-	 */
-	syncOptics: async ({ locals }) => {
-		requirePermission(locals.user, 'spu:write');
-		await connectDB();
-		const r = await syncOpticsValidation();
-		await AuditLog.create({
-			_id: generateId(),
-			tableName: 'spus',
-			recordId: 'fleet',
-			action: 'UPDATE',
-			newData: { opticsSync: { updated: r.updated, unchanged: r.unchanged.length, noReadings: r.skippedNoReadings.length } },
-			reason: 'Manual optics → SPU sync from the validation hub',
-			changedBy: locals.user!.username ?? locals.user!._id,
-			changedAt: new Date()
-		});
-		return {
-			opticsSynced: true,
-			updated: r.updated.length,
-			unchanged: r.unchanged.length,
-			noReadings: r.skippedNoReadings.length,
-			passed: r.updated.filter((u) => u.status === 'passed').length,
-			failed: r.updated.filter((u) => u.status === 'failed').length
-		};
-	},
-
-	/**
-	 * Release a unit from the hub. Passing all three validations in the current
-	 * cycle is what qualifies a validating unit; pressing Release is the manual
+	 * Release a unit from the hub. Passing every graded validation (mag +
+	 * thermo) in the current cycle is what qualifies a validating unit; pressing Release is the manual
 	 * act that moves it (SPU-INV-07 doctrine).
 	 */
 	release: async ({ request, locals }) => {
@@ -182,13 +154,13 @@ export const actions: Actions = {
 		const cycle = cycleSummary(spu);
 		if (cycle.overall !== 'passed') {
 			return fail(400, {
-				error: `${spu.udi} has ${cycle.passed}/${cycle.total} validations passed this cycle — all three must pass before release`
+				error: `${spu.udi} has ${cycle.passed}/${cycle.total} validations passed this cycle — all must pass before release`
 			});
 		}
 
 		const who = { _id: locals.user!._id, username: locals.user!.username };
 		const now = new Date();
-		const reason = 'Released from the validation hub — 3/3 validations passed this cycle';
+		const reason = `Released from the validation hub — ${cycle.passed}/${cycle.total} validations passed this cycle`;
 		await Spu.updateOne(
 			{ _id: spuId, status: from },
 			{
@@ -211,7 +183,7 @@ export const actions: Actions = {
 		});
 		await appendSpuJournal(
 			spuId,
-			'Released — magnetometer, thermocouple and optics all passed this validation cycle.',
+			'Released — magnetometer and thermocouple both passed this validation cycle.',
 			who,
 			{ source: 'release' }
 		);

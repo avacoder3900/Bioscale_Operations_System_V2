@@ -340,9 +340,14 @@
 				release). Every recording is kept in R2 and copied to MongoDB.
 			</p>
 		</div>
-		<a href="/validation/sonic/compare" class="rounded border border-[var(--color-tron-cyan)] px-4 py-2 text-sm text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10" style="min-height: 44px; display: inline-flex; align-items: center;">
-			Compare recordings →
-		</a>
+		<div class="flex flex-wrap gap-2">
+			<a href="/validation/sonic/fleet" class="rounded bg-[var(--color-tron-cyan)] px-4 py-2 text-sm font-semibold text-[var(--color-tron-bg-primary)]" style="min-height: 44px; display: inline-flex; align-items: center;">
+				Fleet comparison →
+			</a>
+			<a href="/validation/sonic/compare" class="rounded border border-[var(--color-tron-cyan)] px-4 py-2 text-sm text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10" style="min-height: 44px; display: inline-flex; align-items: center;">
+				Compare recordings →
+			</a>
+		</div>
 	</div>
 
 	{#if clientError ?? form?.error}

@@ -1,7 +1,7 @@
 /**
  * Validation cycles (2026-09-10, per Jacob).
  *
- * A unit's three validations — magnetometer, thermocouple, optics — only count
+ * A unit's graded validations — magnetometer and thermocouple — only count
  * for the CURRENT cycle. Entering servicing starts a new cycle: the counter
  * drops to 0/3, the rollups on the unit record are cleared, and every
  * instrument has to pass again before the unit can be released.
@@ -13,8 +13,17 @@
  * into a native $set when they must bypass Mongoose).
  */
 import { Spu } from '$lib/server/db';
+import type { AutoVerdict } from './validation-autograde';
 
-export const VALIDATION_INSTRUMENTS = ['magnetometer', 'thermocouple', 'spectrophotometer'] as const;
+/**
+ * What gates release. Optical confirmation (`spectrophotometer`) was dropped
+ * on 2026-10-06 (per Alejandro): it is an assay, not a device check, and is
+ * banked until it is relevant again. Its rollup field stays on the Spu and the
+ * optical-confirmation pages still exist — they are just not linked from the
+ * validation section and no longer count toward release. To bring it back,
+ * add 'spectrophotometer' here and its row back to VALIDATION_TESTS.
+ */
+export const VALIDATION_INSTRUMENTS = ['magnetometer', 'thermocouple'] as const;
 export type ValidationInstrument = (typeof VALIDATION_INSTRUMENTS)[number];
 export type CycleStatus = 'pending' | 'passed' | 'failed' | 'overridden';
 
@@ -59,8 +68,7 @@ export function cycleSummary(spu: {
 	const resetAt = spu.validationResetAt ?? null;
 	const statuses = {
 		magnetometer: cycleStatus(v.magnetometer, resetAt),
-		thermocouple: cycleStatus(v.thermocouple, resetAt),
-		spectrophotometer: cycleStatus(v.spectrophotometer, resetAt)
+		thermocouple: cycleStatus(v.thermocouple, resetAt)
 	};
 	const all = Object.values(statuses);
 	const passed = all.filter(isPassed).length;
@@ -73,40 +81,41 @@ export function cycleSummary(spu: {
 }
 
 /**
- * The six tests the SPU Validation section offers, and where each one's
+ * The tests the SPU Validation section offers, and where each one's
  * evidence actually lives (2026-09-17, per Alejandro).
  *
- * Only the first three carry a pass/fail rollup on the unit. Blank cartridge,
- * sonic fingerprint and optical bench are capture-only — their writers store
- * `passed: null` — so there is no verdict to count for them. This list
- * therefore answers "did a run happen since the unit was sent to servicing",
- * NOT "did it pass". cycleSummary() above is the pass/fail view and is
- * deliberately left alone: it is what gates release.
+ * Only mag and thermo carry a pass/fail rollup on the unit. Blank cartridge,
+ * sonic fingerprint and optical bench store no verdict (`passed: null`); bench
+ * and blank are graded on read instead. This list answers "did a run happen
+ * since the unit was sent to servicing, and did it look right" — NOT release.
+ * cycleSummary() above is the release view.
  *
  * NOTE: spu/[spuId]/+page.svelte has its own local const of the same name
- * holding only the THREE pass/fail modalities it renders columns for. They are
- * different lists on purpose (6 offered vs 3 with a verdict) — don't import
- * this one over that one without reading both.
+ * holding only the pass/fail modalities it renders columns for. They are
+ * different lists on purpose — don't import this one over that one without
+ * reading both.
  *
  * `sessionTypes` are the validation_sessions `type` strings each test writes.
  * Magnetometer has two because early sessions used 'magnetometer' before the
  * writers settled on 'mag'.
  */
 /**
- * `graded` marks the three instruments that actually record a verdict. Sonic,
- * Blank Cartridge and Optical Bench write `passed: null` (optical_blank_runs has
- * no pass field at all), so there is nothing to fail them on: for those,
- * capturing the evidence IS the finished state. Confirmed with Alejandro
- * 2026-09-10 — capture-only tests go green on run rather than sitting amber
- * forever and making 6/6 unreachable.
+ * `graded` marks the instruments that record a verdict in a rollup on the unit
+ * (mag, thermo). `auto` marks the two "does everything work" tests whose
+ * verdict is derived on read from the run data (validation-autograde.ts):
+ * Optical Bench and Blank Cartridge. Sonic is still capture-only — its run IS
+ * the finished state (confirmed with Alejandro 2026-09-10).
+ *
+ * Listed in WORKFLOW ORDER (2026-10-06): cheapest, broadest checks first, so a
+ * bad unit is weeded out before the slower fixture tests. Optical
+ * confirmation is banked — see VALIDATION_INSTRUMENTS.
  */
 export const VALIDATION_TESTS = [
-	{ key: 'magnetometer', name: 'Magnetometer', source: 'session', graded: true, sessionTypes: ['mag', 'magnetometer'] },
-	{ key: 'thermocouple', name: 'Thermocouple', source: 'session', graded: true, sessionTypes: ['thermo'] },
-	{ key: 'spectrophotometer', name: 'Optical Confirmation', source: 'rollup', graded: true, sessionTypes: [] },
-	{ key: 'blank', name: 'Blank Cartridge', source: 'blankRun', graded: false, sessionTypes: [] },
-	{ key: 'sonic', name: 'Sonic Fingerprint', source: 'session', graded: false, sessionTypes: ['sonic'] },
-	{ key: 'bench', name: 'Optical Bench', source: 'session', graded: false, sessionTypes: ['laser', 'dark', 'laser_scan'] }
+	{ key: 'bench', name: 'Optical Bench', source: 'session', graded: false, auto: true, sessionTypes: ['laser', 'dark', 'laser_scan'] },
+	{ key: 'sonic', name: 'Sonic Fingerprint', source: 'session', graded: false, auto: false, sessionTypes: ['sonic'] },
+	{ key: 'blank', name: 'Blank Cartridge', source: 'blankRun', graded: false, auto: true, sessionTypes: [] },
+	{ key: 'magnetometer', name: 'Magnetometer', source: 'session', graded: true, auto: false, sessionTypes: ['mag', 'magnetometer'] },
+	{ key: 'thermocouple', name: 'Thermocouple', source: 'session', graded: true, auto: false, sessionTypes: ['thermo'] }
 ] as const;
 
 export type ValidationTestKey = (typeof VALIDATION_TESTS)[number]['key'];
@@ -114,10 +123,9 @@ export type ValidationTestKey = (typeof VALIDATION_TESTS)[number]['key'];
 /**
  * What one dot shows:
  *   needed — no run since servicing (red)
- *   ran    — graded test ran but is not passing this cycle (amber)
- *   passed — graded test passed this cycle, or a capture-only test has its
- *            evidence (green)
- * `ran` is unreachable for capture-only tests by design — see VALIDATION_TESTS.
+ *   ran    — graded/auto test ran but is not passing this cycle (amber)
+ *   passed — graded/auto test passed this cycle, or the capture-only test
+ *            (sonic) has its evidence (green)
  */
 export type TestRunState = 'needed' | 'ran' | 'passed';
 
@@ -132,13 +140,15 @@ export interface TestRunSince {
 	graded: boolean;
 	/** This cycle's rollup verdict; null for ungraded tests. */
 	status: CycleStatus | null;
+	/** Auto-graded tests: the latest run's verdict (null when not supplied / never run). */
+	autoVerdict: AutoVerdict | null;
 	state: TestRunState;
 }
 
 export interface RunsSinceServicing {
 	tests: TestRunSince[];
 	ran: number;
-	/** Tests whose dot is green — what the x/6 badge counts. */
+	/** Tests whose dot is green — what the x/N badge counts. */
 	passed: number;
 	total: number;
 	/** The servicing-button moment everything is compared against. */
@@ -160,7 +170,7 @@ function newest(...candidates: (Date | string | null | undefined)[]): string | n
 }
 
 /**
- * Which of the six tests have a run newer than `validationResetAt`.
+ * Which of the tests have a run newer than `validationResetAt`.
  *
  * Pure — the caller supplies the evidence it already loaded. A unit that has
  * never been serviced has no reset, so every test it has ever run counts;
@@ -176,6 +186,11 @@ export function runsSinceServicing(input: {
 	sessions?: { type?: string | null; startedAt?: Date | string | null; createdAt?: Date | string | null }[] | null;
 	/** Newest optical_blank_runs.receivedAt for this unit. */
 	blankRunAt?: Date | string | null;
+	/**
+	 * Verdicts of the latest bench / blank runs (validation-autograde-load.ts).
+	 * When omitted, an auto test that ran reads green as before.
+	 */
+	autoVerdicts?: Partial<Record<'bench' | 'blank', AutoVerdict | null>> | null;
 }): RunsSinceServicing {
 	const resetAt = toIso(input.validationResetAt);
 	const sessions = input.sessions ?? [];
@@ -198,8 +213,6 @@ export function runsSinceServicing(input: {
 			// the newer of the two stops the dots and that counter disagreeing
 			// when one surface lags (optics needs a sync, mag/thermo do not).
 			lastRunAt = t.graded ? newest(fromSessions, rollup?.completedAt ?? null) : fromSessions;
-		} else if (t.source === 'rollup') {
-			lastRunAt = toIso(rollup?.completedAt ?? null);
 		} else {
 			lastRunAt = toIso(input.blankRunAt ?? null);
 		}
@@ -211,13 +224,16 @@ export function runsSinceServicing(input: {
 		// cycleStatus() already discounts a verdict earned before this cycle, so a
 		// stale 'passed' from before the servicing click cannot hold a dot green.
 		const status = t.graded ? cycleStatus(rollup, resetAt) : null;
+		const autoVerdict = t.auto ? (input.autoVerdicts?.[t.key as 'bench' | 'blank'] ?? null) : null;
 		const state: TestRunState = !ranSinceServicing
 			? 'needed'
-			: !t.graded || isPassed(status)
-				? 'passed'
-				: 'ran';
+			: t.graded
+				? isPassed(status) ? 'passed' : 'ran'
+				: autoVerdict && autoVerdict !== 'pass'
+					? 'ran'
+					: 'passed';
 
-		return { key: t.key, name: t.name, lastRunAt, ranSinceServicing, graded: t.graded, status, state };
+		return { key: t.key, name: t.name, lastRunAt, ranSinceServicing, graded: t.graded, status, autoVerdict, state };
 	});
 
 	return {

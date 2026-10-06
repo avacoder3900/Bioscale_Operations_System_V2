@@ -41,6 +41,13 @@ export const ValidationRun = mongoose.models.ValidationRun || mongoose.model('Va
 export const VALIDATION_RUN_STEPS = ['magnetometer', 'thermocouple', 'optical_confirmation'] as const;
 export type ValidationRunStep = (typeof VALIDATION_RUN_STEPS)[number];
 
+/**
+ * Steps a NEW run starts with. Optical confirmation was banked 2026-10-06
+ * (see VALIDATION_INSTRUMENTS); runs created before then keep it in their
+ * stored `steps`, so VALIDATION_RUN_STEPS still lists it for rendering them.
+ */
+export const DEFAULT_RUN_STEPS: readonly ValidationRunStep[] = ['magnetometer', 'thermocouple'];
+
 export const STEP_LABELS: Record<ValidationRunStep, string> = {
 	magnetometer: 'Magnetometer',
 	thermocouple: 'Thermocouple',

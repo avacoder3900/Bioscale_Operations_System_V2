@@ -4,13 +4,17 @@
 	type BenchType = 'laser' | 'dark' | 'laser_scan';
 	interface Chan { c: 'A' | 'B' | 'C'; pd?: number; pd0?: number; f?: number[]; pts?: number[][] }
 	interface Result { seq?: number; kind?: string; pos?: number; gain?: number; astep?: number; atime?: number; ms?: number; temp?: number; start?: number; end?: number; step?: number; ch?: Chan[]; error?: string }
+	type Verdict = 'pass' | 'fail' | 'incomplete';
+	interface Check { verdict: Verdict; reasons: string[] }
 	interface Props {
 		data: {
 			bench: { posUm: number; gain: number; astep: number; atime: number; positionLimitUm: number; maxScanPoints: number };
+			criteria: { laserPdMin: number; darkPdMax: number };
 			spus: Array<{ id: string; udi: string; status: string }>;
-			history: Array<{ id: string; type: BenchType; spuId: string | null; spuUdi: string | null; by: string | null; at: string | null; result: Result | null }>;
+			units: Array<{ id: string; udi: string; check: Check & { at: string | null } }>;
+			history: Array<{ id: string; type: BenchType; spuId: string | null; spuUdi: string | null; by: string | null; at: string | null; result: Result | null; check: Check | null }>;
 		};
-		form: { error?: string; ran?: boolean; type?: BenchType; spuUdi?: string; result?: Result } | null;
+		form: { error?: string; ran?: boolean; type?: BenchType; spuUdi?: string; result?: Result; check?: Check | null } | null;
 	}
 	let { data, form }: Props = $props();
 
@@ -19,6 +23,12 @@
 	const CH_COLOR: Record<string, string> = { A: 'var(--color-tron-cyan)', B: 'var(--color-tron-orange)', C: 'var(--color-tron-purple)' };
 
 	const fw = $derived(data.bench);
+	const VERDICT_STYLE: Record<Verdict, string> = {
+		pass: 'color: var(--color-tron-green); background: rgba(0,255,100,0.12);',
+		fail: 'color: var(--color-tron-red); background: rgba(255,0,0,0.12);',
+		incomplete: 'color: var(--color-tron-orange); background: rgba(255,160,0,0.12);'
+	};
+	const failingUnits = $derived(data.units.filter((u) => u.check.verdict !== 'pass').length);
 	let spuId = $state('');
 	let type = $state<BenchType>('laser');
 	// Scan defaults: the last 4.4 mm up to the firmware's ceiling, 12 points.
@@ -130,7 +140,13 @@
 	{#if form?.ran && form.result}
 		{@const r = form.result}
 		<div class="tron-card p-4">
-			<h2 class="tron-heading mb-2 text-sm font-semibold uppercase tracking-wide">{TYPE_LABEL[form.type ?? 'laser']} — {form.spuUdi}</h2>
+			<h2 class="tron-heading mb-2 text-sm font-semibold uppercase tracking-wide">
+				{TYPE_LABEL[form.type ?? 'laser']} — {form.spuUdi}
+				{#if form.check}<span class="ml-2 rounded-full px-2 py-0.5 text-xs font-bold uppercase normal-case" style={VERDICT_STYLE[form.check.verdict]}>{form.check.verdict}</span>{/if}
+			</h2>
+			{#if form.check?.reasons.length}
+				<ul class="mb-2 list-disc pl-5 text-xs text-[var(--color-tron-red)]">{#each form.check.reasons as why}<li>{why}</li>{/each}</ul>
+			{/if}
 			<p class="tron-text-muted mb-3 text-xs">seq {r.seq} · {r.kind} · {r.kind === 'scan' ? `${r.start}–${r.end} µm step ${r.step}` : `${r.pos} µm`} · gain {r.gain} · astep {r.astep} · atime {r.atime}{r.temp != null ? ` · ${(r.temp / 10).toFixed(1)} °C` : ''}</p>
 			{#if r.kind === 'scan'}
 				{@const ch = scanChart(r)}
@@ -171,6 +187,39 @@
 	{/if}
 
 	<div class="tron-card p-4">
+		<h2 class="tron-heading mb-1 text-sm font-semibold uppercase tracking-wide">
+			Unit check ({data.units.length}) ·
+			<span class={failingUnits ? 'text-[var(--color-tron-red)]' : 'text-[var(--color-tron-green)]'}>{failingUnits} not passing</span>
+		</h2>
+		<p class="tron-text-muted mb-3 text-xs">
+			A unit passes when its latest laser read has photodiode ≥ {data.criteria.laserPdMin} and signal in all
+			ten bands on every channel, AND its latest dark read has photodiode ≤ {data.criteria.darkPdMax}
+			(lasers off, no light leak). Run both reads on every unit.
+		</p>
+		{#if data.units.length === 0}
+			<p class="text-sm text-[var(--color-tron-text-secondary)]">No unit has a laser or dark read yet.</p>
+		{:else}
+			<div class="overflow-x-auto">
+				<table class="w-full text-xs">
+					<thead class="text-[10px] uppercase text-[var(--color-tron-text-secondary)]">
+						<tr class="border-b border-[var(--color-tron-border)]"><th class="py-1 pr-4 text-left font-medium">Unit</th><th class="py-1 pr-4 text-left font-medium">Check</th><th class="py-1 pr-4 text-left font-medium">Why</th><th class="py-1 text-left font-medium">Latest read</th></tr>
+					</thead>
+					<tbody>
+						{#each data.units as u (u.id)}
+							<tr class="border-b border-[var(--color-tron-border)]/50">
+								<td class="py-1 pr-4 font-mono"><a href="/spu/{u.id}" class="text-[var(--color-tron-cyan)] hover:underline">{u.udi}</a></td>
+								<td class="py-1 pr-4"><span class="rounded-full px-2 py-0.5 font-bold uppercase" style={VERDICT_STYLE[u.check.verdict]}>{u.check.verdict}</span></td>
+								<td class="py-1 pr-4 {u.check.verdict === 'fail' ? 'text-[var(--color-tron-red)]' : 'tron-text-muted'}">{u.check.reasons.join('; ') || '—'}</td>
+								<td class="py-1 tron-text-muted">{when(u.check.at)}</td>
+							</tr>
+						{/each}
+					</tbody>
+				</table>
+			</div>
+		{/if}
+	</div>
+
+	<div class="tron-card p-4">
 		<div class="mb-3 flex flex-wrap items-center justify-between gap-2">
 			<h2 class="tron-heading text-sm font-semibold uppercase tracking-wide">History ({shown.length})</h2>
 			<select bind:value={filterUdi} class="tron-select" style="min-height: 36px;">
@@ -184,7 +233,7 @@
 			<div class="overflow-x-auto">
 				<table class="w-full text-xs">
 					<thead class="text-[10px] uppercase text-[var(--color-tron-text-secondary)]">
-						<tr class="border-b border-[var(--color-tron-border)]"><th class="py-1 pr-4 text-left font-medium">When</th><th class="py-1 pr-4 text-left font-medium">Unit</th><th class="py-1 pr-4 text-left font-medium">Read</th><th class="py-1 pr-4 text-left font-medium">Position</th><th class="py-1 pr-4 text-left font-medium">Gain</th><th class="py-1 pr-4 text-left font-medium">PD A / B / C</th><th class="py-1 pr-4 text-left font-medium">F7 A / B / C</th><th class="py-1 text-left font-medium">By</th></tr>
+						<tr class="border-b border-[var(--color-tron-border)]"><th class="py-1 pr-4 text-left font-medium">When</th><th class="py-1 pr-4 text-left font-medium">Unit</th><th class="py-1 pr-4 text-left font-medium">Read</th><th class="py-1 pr-4 text-left font-medium">Check</th><th class="py-1 pr-4 text-left font-medium">Position</th><th class="py-1 pr-4 text-left font-medium">Gain</th><th class="py-1 pr-4 text-left font-medium">PD A / B / C</th><th class="py-1 pr-4 text-left font-medium">F7 A / B / C</th><th class="py-1 text-left font-medium">By</th></tr>
 					</thead>
 					<tbody class="font-mono tron-text-primary">
 						{#each shown as h (h.id)}
@@ -193,6 +242,7 @@
 								<td class="py-1 pr-4">{when(h.at)}</td>
 								<td class="py-1 pr-4"><a href={h.spuId ? `/spu/${h.spuId}` : '#'} class="text-[var(--color-tron-cyan)] hover:underline">{h.spuUdi ?? '—'}</a></td>
 								<td class="py-1 pr-4 font-sans">{TYPE_LABEL[h.type]}</td>
+								<td class="py-1 pr-4 font-sans">{#if h.check}<span class="rounded-full px-1.5 text-[10px] font-bold uppercase" style={VERDICT_STYLE[h.check.verdict]} title={h.check.reasons.join('\n')}>{h.check.verdict}</span>{:else}<span class="tron-text-muted">—</span>{/if}</td>
 								<td class="py-1 pr-4">{r?.kind === 'scan' ? `${r.start}–${r.end}` : (r?.pos ?? '—')}</td>
 								<td class="py-1 pr-4">{r?.gain ?? '—'}</td>
 								<td class="py-1 pr-4">{r?.kind === 'scan' ? '—' : (r?.ch ?? []).map((c) => c.pd ?? '—').join(' / ')}</td>

@@ -30,7 +30,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	await connectDB();
 
 	// Picker: every analyzed recording, without fingerprints.
-	const available = ((await ValidationSession.find({ type: 'sonic', 'results.0.processedData.fingerprint': { $ne: null } })
+	const available = ((await ValidationSession.find({ type: 'sonic', 'results.0.processedData.fingerprint': { $type: 'object' } })
 		.select('spuUdi createdAt results.rawData.assay results.rawData.fileName results.processedData.reference')
 		.sort({ createdAt: -1 })
 		.limit(300)

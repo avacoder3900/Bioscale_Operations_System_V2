@@ -18572,3 +18572,37 @@ the board has no drag-and-drop), though the transition service allowed it.
 - server/kanban/transition.ts: leaving Done clears completedDate, so a reopened task drops out of
   the cycle-time / throughput metrics (flow-metrics.ts reads completedDate) until it is done again.
 `npm run check`: 13 errors / 434 warnings — unchanged, none in the changed files.
+
+================================================================================
+2026-10-06 — feat/validation-autograde — validation workflow: bench + blank auto-graded, optics banked, sonic fleet compare
+================================================================================
+The validation section is reorganised as a workflow, easiest/broadest check first:
+1 Optical Bench -> 2 Sonic -> 3 Blank Cartridge -> 4 Magnetometer -> 5 Thermocouple.
+- Auto-grading (server/validation-autograde.ts + -load.ts + test). Bench and Blank used to be
+  capture-only (green on any run). Now: Blank FAILS on < 126 readings, a channel missing positions,
+  mean laser_output < 500 on a channel (laser never came on) or an empty band; a unit's verdict is
+  its latest run. Bench passes when the latest laser read has photodiode >= 500 + signal in all 10
+  bands per channel AND the latest dark read has photodiode <= 50; one of the two missing =
+  INCOMPLETE. Thresholds from prod 2026-10-06: blank laser_output 733-830, bench laser pd 740-836,
+  dark pd 0. Dry run on prod: blank 31 pass / 1 fail (0256, latest run empty); bench 30 pass /
+  2 incomplete (0246, 0253: no dark read). Verdicts show on /validation (new Bench + Blank columns),
+  /validation/bench (Unit check table, Check column, verdict on a fresh read), /validation/blank
+  (Check column, laser-output column, Failing-only filter) and the SPU dots (amber + reasons on hover).
+- Optical confirmation banked (per Alejandro): removed from the validation nav, hub launchers and
+  matrix, the Sync optics button/action, the SPU page columns and new validation runs
+  (DEFAULT_RUN_STEPS = mag + thermo). VALIDATION_INSTRUMENTS is now [magnetometer, thermocouple], so
+  RELEASE needs mag + thermo only. Pages, data and the spectrophotometer rollup are untouched;
+  re-adding is one line in spu-validation-cycle.ts. Blank moved to /validation/blank (308 redirect
+  from /validation/optical-confirmation/blank).
+- Sonic fleet comparison (/validation/sonic/fleet, server/sonic/fleet.ts): pick devices (latest
+  analyzed recording per SPU), metric (Loudness; Dominant frequency — FLEET_METRICS is the extension
+  point), interval (default 10 s), K (default 1 sigma) and fit threshold (default 75%). Each interval
+  gets fleet mean + sample sigma; each unit is scored inside/outside per interval. Chart with the
+  band, worst-first verdict table, per-interval grid. Linked from /validation/sonic.
+- FIX: the "has a fingerprint" filter `'results.0.processedData.fingerprint': {$ne: null}` matched
+  0 of 11 analyzed recordings in prod (results is an array, so Mongo also reads `0` as a field name
+  on each element -> null -> $ne fails). Replaced with {$type: 'object'} in loadFingerprints, the
+  compare picker, the sonic page reference counts and the new fleet page. Dry run: 11 units compare.
+Unit tests: validation-autograde.test.ts 10/10. `npm run check`: 119 errors / 434 warnings with
+node_modules borrowed from the older main checkout (missing @xyflow/svelte, @modelcontextprotocol/
+server, @audio/decode-*, zod...) — none in the changed files; Vercel build is the real gate.

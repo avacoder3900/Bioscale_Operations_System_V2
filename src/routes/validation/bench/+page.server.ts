@@ -3,6 +3,8 @@ import { requirePermission } from '$lib/server/permissions';
 import { connectDB, Spu, ValidationSession, User, AuditLog, generateId } from '$lib/server/db';
 import { callFunction, getVariable } from '$lib/server/particle';
 import { appendSpuJournal } from '$lib/server/spu-journal';
+import { BENCH_CRITERIA, gradeBenchRead } from '$lib/server/validation-autograde';
+import { loadAutoVerdicts } from '$lib/server/validation-autograde-load';
 import type { Actions, PageServerLoad } from './$types';
 
 /**
@@ -28,7 +30,11 @@ import type { Actions, PageServerLoad } from './$types';
  * Gain 8, astep 999, atime 49 are the bench settings Jacob wants; the firmware's
  * own defaults are gain 1 / 999 / 49, so BIMS always sends the full explicit
  * argument string (the firmware's CSV parser stops at an empty field, so a
- * position can't be omitted while passing gain). The scan keeps its start /
+ * position can't be omitted while passing gain).
+ *
+ * Auto-check (2026-10-06): every laser / dark read is graded on read by
+ * gradeBenchRead(); a unit passes the bench when its latest laser read AND its
+ * latest dark read both pass (validation-autograde.ts). The scan keeps its start /
  * end / step inputs — those are the one thing the operator actually varies.
  */
 /** Mirrors OPTICAL_BENCH_LASER_POSITION / OPTICAL_BENCH_POSITION_LIMIT in brevitest-firmware.h. */
@@ -69,10 +75,18 @@ export const load: PageServerLoad = async ({ locals }) => {
 	const userIds = [...new Set(sessions.map((s) => s.userId).filter(Boolean))];
 	const users = userIds.length ? ((await User.find({ _id: { $in: userIds } }, { username: 1 }).lean()) as any[]) : [];
 	const nameOf = new Map(users.map((u) => [u._id, u.username]));
+	const verdicts = await loadAutoVerdicts(spus.map((s) => ({ _id: String(s._id), udi: s.udi ?? null })));
 
 	return {
 		bench: { ...BENCH, positionLimitUm: FIRMWARE_POSITION_LIMIT_UM, maxScanPoints: FIRMWARE_MAX_SCAN_POINTS },
+		criteria: BENCH_CRITERIA,
 		spus: spus.map((s) => ({ id: s._id, udi: s.udi, status: s.status })),
+		// Units with at least one laser/dark read, worst first.
+		units: spus
+			.map((s) => ({ id: s._id as string, udi: s.udi as string, check: verdicts.get(String(s._id))?.bench ?? null }))
+			.filter((u) => u.check)
+			.map((u) => ({ ...u, check: { verdict: u.check!.verdict, reasons: u.check!.reasons, at: u.check!.at } }))
+			.sort((a, b) => (a.check.verdict === b.check.verdict ? a.udi.localeCompare(b.udi) : a.check.verdict === 'fail' ? -1 : b.check.verdict === 'fail' ? 1 : a.check.verdict === 'incomplete' ? -1 : 1)),
 		history: sessions.map((s) => ({
 			id: s._id as string,
 			type: s.type as BenchType,
@@ -80,7 +94,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 			spuUdi: (s.spuUdi ?? null) as string | null,
 			by: nameOf.get(s.userId) ?? null,
 			at: s.createdAt ? new Date(s.createdAt).toISOString() : null,
-			result: s.rawData ?? null
+			result: s.rawData ?? null,
+			check: gradeBenchRead(s.type, s.rawData)
 		}))
 	};
 };
@@ -191,7 +206,7 @@ export const actions: Actions = {
 					(Array.isArray(result.ch) ? ` — pd A/B/C ${result.ch.map((c: any) => c.pd ?? '—').join('/')}` : '');
 		await appendSpuJournal(spuId, `Optical bench: ${summary}`, who, { source: 'validation', refKind: 'validation_session', refId: sessionId, refLabel: 'Optical bench' });
 
-		return { ran: true, type, sessionId, spuUdi: spu.udi, result };
+		return { ran: true, type, sessionId, spuUdi: spu.udi, result, check: gradeBenchRead(type, result) };
 	}
 };
 
