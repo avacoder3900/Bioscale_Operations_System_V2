@@ -13072,3 +13072,44 @@ work-instruction-image}.ts, models/index.ts, src/lib/server/services/device-asse
 +page.svelte,revisions/+page.server.ts,revisions/+page.svelte},
 src/routes/api/device-assembly/images/[id]/+server.ts, src/routes/+layout.svelte (nav),
 scripts/import-device-assembly-wi.ts.
+
+================================================================================
+2026-10-06 — feat/device-assembly-wi — MCP connector suite for the Device Assembly WI (20 device_wi_* tools)
+================================================================================
+Full edit + inventory surface for Manufacturing → Device Assembly WI through Claude chat, so any
+change anyone wants to make can be done conversationally. bims-operations MCP server bumped
+3.5.1 → 3.6.0 (claude.ai caches the tool list on version).
+
+Agent API (src/routes/api/agent/device-assembly/**, requireAgentApiKey): GET / (overview: version,
+who/when, sections → step list, parts not in catalog, last 5 revisions), GET /step
+(?section&step | ?stepId | ?section | ?q= search), POST /mutate {op, actor, …} (rename_section,
+set_section_notes, update_step [replace/append/html], add_step, delete_step [confirmed],
+move_step, add_image [imageUrl or base64], remove_image, set_image_caption, reorder_image,
+add_material [document syntax or fields], update_material [incl. part-number re-link],
+remove_material, relink_parts, import [docx URL, confirmed]), POST /pull (preview unless
+confirmed:true; optional items subset/overrides, unitsBuilt multiplier, deviceSerial; blocked
+parts reported), GET /revisions (filters user/section/step/since, detail=1 for before/after),
+GET /pulls (ledger with filters).
+
+Reference resolution lives in src/lib/server/services/device-assembly-wi-agent.ts: section =
+number | "sub-assembly 2" | "SA2" | "setup" | title fragment; step = number | stepId | title
+phrase; material = part number | materialId | name fragment; image = position | imageId | url.
+Ambiguity and misses return actionable 404s listing the valid options. Actor is resolved via
+machine-actor.resolveActor (must be an active BIMS user) and every mutation goes through the same
+revision-tracked service functions the UI uses, so revisions show the human's username.
+
+MCP tools (src/lib/server/mcp/bims-mcp.ts): device_wi_overview, device_wi_get_step,
+device_wi_revisions, device_wi_pull_history (read); device_wi_rename_section,
+device_wi_set_section_notes, device_wi_update_step, device_wi_add_step, device_wi_delete_step,
+device_wi_move_step, device_wi_add_image, device_wi_remove_image, device_wi_set_image_caption,
+device_wi_reorder_image, device_wi_add_material, device_wi_update_material,
+device_wi_remove_material, device_wi_relink_parts, device_wi_pull_materials (preview → user
+confirms numbered list → confirmed:true), device_wi_import. Write tools go through machineWrite
+(actor required, machine activity logged); delete/remove/import carry destructiveHint.
+
+Verified on the dev server with AGENT_API_KEY set: overview/step/search/revisions/pulls reads,
+mutate without actor → attribution refusal, rename → v2, caption → v3, delete without confirmed
+→ refused, pull preview (PT-SPU-041 ×2 units: 47→43) and blocked preview for the unlinked
+Stage Board; MCP initialize (3.6.0), tools/list shows all 20 device_wi_* tools, tools/call for
+overview/get_step/revisions, unknown actor → isError. Test revisions reset to v1 afterwards.
+docs/MCP-SERVER.md updated. npm run check: 10 errors (baseline), warnings unchanged.

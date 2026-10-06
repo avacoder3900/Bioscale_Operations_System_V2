@@ -109,6 +109,22 @@ This replicates the full `/api/agent/**` machine surface except: `ask`/`transcri
 routes serving the in-app widget, not machine agents) and the OT-2/scanner long-poll daemon queues
 (not request/response shaped; the robot bridge keeps using them directly).
 
+**Device Assembly Work Instruction (2026-10-06, v3.6.0)** — full edit + inventory surface for
+Manufacturing → Device Assembly WI so changes can be made from Claude chat. Steps are addressed as
+humans say them (`section` = "sub-assembly 2" / "setup", `step` = "2" / stepId / title phrase).
+Read: `device_wi_overview`, `device_wi_get_step` (one step, a section, or `q=` search),
+`device_wi_revisions` (vN / who / when / where / what, optional before-after), `device_wi_pull_history`.
+Write (each call = one new revision, attributed to `actor`): `device_wi_rename_section`,
+`device_wi_set_section_notes`, `device_wi_update_step` (replace / append instructions, title, ESD,
+DHR fields), `device_wi_add_step`, `device_wi_delete_step` (confirmed), `device_wi_move_step`
+(between sub-assemblies — how the imported list gets divided), `device_wi_add_image` (url or base64),
+`device_wi_remove_image`, `device_wi_set_image_caption`, `device_wi_reorder_image`,
+`device_wi_add_material` (document syntax "Name (PT-SPU-000) x1"), `device_wi_update_material`
+(incl. fixing part numbers), `device_wi_remove_material`, `device_wi_relink_parts`,
+`device_wi_pull_materials` (preview → confirm → deduct via the shared inventory consumption path),
+`device_wi_import` (re-parse a .docx URL, confirmed). Backed by `/api/agent/device-assembly/**`
+(`GET /`, `GET /step`, `POST /mutate {op}`, `POST /pull`, `GET /revisions`, `GET /pulls`).
+
 ## Adding a tool
 
 Add a `server.registerTool(...)` block in `src/lib/server/mcp/bims-mcp.ts` that calls the relevant

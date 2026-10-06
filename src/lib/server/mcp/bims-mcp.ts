@@ -224,7 +224,7 @@ async function callAgentApi(
 export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 	// Version bump signals clients (claude.ai caches connector tool lists) that
 	// the toolset changed — bump on every tool add/remove/rename.
-	const server = new McpServer({ name: 'bims-operations', version: '3.5.1' });
+	const server = new McpServer({ name: 'bims-operations', version: '3.6.0' });
 
 	// ---------------------------------------------------------------- meta
 
@@ -1643,6 +1643,342 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 			inputSchema: z.object({ barcode: z.string().describe('The cartridge barcode.') })
 		},
 		async ({ barcode }) => callAgentApi(fetcher, `/api/agent/cartridge/${encodeURIComponent(barcode)}/photos`)
+	);
+
+	// ------------------------------------------ device assembly work instruction
+
+	const WI_SECTION_FIELD = z
+		.string()
+		.describe('Which section: a sub-assembly number ("2", "sub-assembly 2", "SA2"), "setup" for the Cleaning & Setup block, or a unique word from the section title ("bottom").');
+	const WI_STEP_FIELD = z
+		.string()
+		.describe('Which step inside that section: the step number ("2", "step 2"), the stepId from device_wi_overview, or a unique phrase from the step title.');
+	const WI_MATERIAL_FIELD = z
+		.string()
+		.describe('Which material on the step: part number (PT-SPU-013), materialId, or a unique part of the name ("heater block").');
+	const WI_IMAGE_FIELD = z
+		.string()
+		.describe('Which image on the step: its position (1 = first photo as shown on the page), its imageId, or its url.');
+
+	const wiMutate = (op: string, args: any) =>
+		machineWrite(`device_wi_${op}`, args.actor, (actor) =>
+			callAgentApi(fetcher, '/api/agent/device-assembly/mutate', { method: 'POST', body: { ...args, op, actor } })
+		);
+
+	server.registerTool(
+		'device_wi_overview',
+		{ annotations: READ_ONLY,
+			description:
+				'The Device Assembly Work Instruction (Manufacturing → Device Assembly WI): current revision (vN, who/when), ' +
+				'every section (Setup + Sub-Assembly 1…5) with its step list (number, title, ESD flag, image and material counts, ' +
+				'stepId), part numbers not yet linked to the catalog, and the last 5 revisions. Call this first to find the ' +
+				'step a user is talking about ("step 2 in sub-assembly 2"), then device_wi_get_step for the full text/photos/materials.'
+		},
+		async () => callAgentApi(fetcher, '/api/agent/device-assembly')
+	);
+
+	server.registerTool(
+		'device_wi_get_step',
+		{ annotations: READ_ONLY,
+			description:
+				'Full detail of one step (instructions text + HTML, photos with positions/urls/captions, materials with per-device ' +
+				'quantity and live on-hand stock), or every step of a section when step is omitted, or a text search across all ' +
+				'steps with q. Use before editing so you can quote the current wording back to the user.',
+			inputSchema: z.object({
+				section: WI_SECTION_FIELD.optional(),
+				step: WI_STEP_FIELD.optional(),
+				q: z.string().optional().describe('Search titles, instructions and material names across all sections (e.g. "heater block").')
+			})
+		},
+		async (args) => callAgentApi(fetcher, '/api/agent/device-assembly/step', { query: args })
+	);
+
+	server.registerTool(
+		'device_wi_revisions',
+		{ annotations: READ_ONLY,
+			description:
+				'Revision history of the work instruction: one row per change with version label (vN), who, when, change type, ' +
+				'where (section/step) and summary; detail=true adds before/after snapshots. Filter by user, section, step or since-date. ' +
+				'Use to answer "what changed", "who edited step 5", "what version are we on".',
+			inputSchema: z.object({
+				limit: z.number().int().min(1).max(500).optional(),
+				user: z.string().optional().describe('Only changes by this BIMS username.'),
+				section: z.string().optional(),
+				step: z.string().optional().describe('Step number within the section.'),
+				since: z.string().optional().describe('ISO date — only changes on/after this.'),
+				detail: z.boolean().optional().describe('Include before/after snapshots (verbose).')
+			})
+		},
+		async ({ detail, ...rest }) => callAgentApi(fetcher, '/api/agent/device-assembly/revisions', { query: { ...rest, detail: detail ? 1 : undefined } })
+	);
+
+	server.registerTool(
+		'device_wi_pull_history',
+		{ annotations: READ_ONLY,
+			description:
+				'Ledger of materials pulled from inventory through the work instruction: when, who, section/step, part, quantity, ' +
+				'stock before → after, SPU serial. Filter by section, step, part, user or serial.',
+			inputSchema: z.object({
+				section: z.string().optional(),
+				step: z.string().optional(),
+				part: z.string().optional().describe('Part number or name fragment.'),
+				user: z.string().optional(),
+				serial: z.string().optional().describe('SPU serial fragment.'),
+				limit: z.number().int().min(1).max(500).optional()
+			})
+		},
+		async (args) => callAgentApi(fetcher, '/api/agent/device-assembly/pulls', { query: args })
+	);
+
+	server.registerTool(
+		'device_wi_rename_section',
+		{ annotations: WRITE_TOOL,
+			description: 'Rename a sub-assembly (e.g. give "Sub-Assembly 2" the title "Enclosure & Electronics"). Creates a new revision.',
+			inputSchema: z.object({ actor: ACTOR_FIELD, section: WI_SECTION_FIELD, title: z.string().describe('New title.') })
+		},
+		async (args) => wiMutate('rename_section', args)
+	);
+
+	server.registerTool(
+		'device_wi_set_section_notes',
+		{ annotations: WRITE_TOOL,
+			description: 'Replace the section-level notes shown above a section\'s steps (e.g. "For all steps, visually verify form and fit…"). Plain text; blank lines = paragraphs. Creates a new revision.',
+			inputSchema: z.object({ actor: ACTOR_FIELD, section: WI_SECTION_FIELD, notes: z.string() })
+		},
+		async (args) => wiMutate('set_section_notes', args)
+	);
+
+	server.registerTool(
+		'device_wi_update_step',
+		{ annotations: WRITE_TOOL,
+			description:
+				'Edit one step\'s title, instructions, ESD flag or DHR serial-number fields. Pass `instructions` (plain text: blank ' +
+				'lines = paragraphs, "- " lines = bullets) to REPLACE the wording, or `appendInstructions` to add text after the ' +
+				'existing wording, or `instructionsHtml` for exact HTML. Only the fields you pass change. Read the step first ' +
+				'(device_wi_get_step) and confirm the new wording with the user. Every save is a new revision recorded with the actor.',
+			inputSchema: z.object({
+				actor: ACTOR_FIELD,
+				section: WI_SECTION_FIELD,
+				step: WI_STEP_FIELD,
+				title: z.string().optional(),
+				instructions: z.string().optional().describe('Replacement instructions, plain text.'),
+				appendInstructions: z.string().optional().describe('Text to add at the end of the current instructions.'),
+				instructionsHtml: z.string().optional().describe('Exact replacement HTML (p/ul/ol/strong/em only).'),
+				requiresEsd: z.boolean().optional(),
+				dhrFields: z.array(z.string()).optional().describe('Serial numbers the operator must record in the DHR at this step, e.g. ["Stepper Motor"].')
+			})
+		},
+		async (args) => wiMutate('update_step', args)
+	);
+
+	server.registerTool(
+		'device_wi_add_step',
+		{ annotations: WRITE_TOOL,
+			description:
+				'Insert a new step into a section — at the end, or right after a given step (afterStep). Following steps renumber. ' +
+				'Add materials/photos afterwards with device_wi_add_material / device_wi_add_image. Creates a new revision.',
+			inputSchema: z.object({
+				actor: ACTOR_FIELD,
+				section: WI_SECTION_FIELD,
+				title: z.string().describe('Short step title (first sentence of the instruction works well).'),
+				instructions: z.string().optional().describe('Plain text; blank lines = paragraphs, "- " lines = bullets.'),
+				afterStep: z.string().optional().describe('Insert after this step number (omit = end of section).'),
+				requiresEsd: z.boolean().optional()
+			})
+		},
+		async (args) => wiMutate('add_step', args)
+	);
+
+	server.registerTool(
+		'device_wi_delete_step',
+		{ annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
+			description:
+				'Delete a step (its text, photos and materials). Following steps renumber. Quote the step title back and get an ' +
+				'explicit yes before calling with confirmed: true. Recorded as a revision with a full snapshot of the removed step.',
+			inputSchema: z.object({ actor: ACTOR_FIELD, section: WI_SECTION_FIELD, step: WI_STEP_FIELD, confirmed: z.boolean().describe('Must be true, only after the user confirmed the deletion.') })
+		},
+		async (args) => wiMutate('delete_step', args)
+	);
+
+	server.registerTool(
+		'device_wi_move_step',
+		{ annotations: WRITE_TOOL,
+			description:
+				'Move a step to another sub-assembly and/or position ("move step 30 of sub-assembly 1 to sub-assembly 2", ' +
+				'"make step 7 the 3rd step"). Both sections renumber. This is how the long imported list gets divided into ' +
+				'Sub-Assemblies 2–5. Creates a new revision.',
+			inputSchema: z.object({
+				actor: ACTOR_FIELD,
+				section: WI_SECTION_FIELD,
+				step: WI_STEP_FIELD,
+				toSection: WI_SECTION_FIELD.optional().describe('Destination section (omit = same section).'),
+				toPosition: z.number().int().min(1).optional().describe('New step number in the destination (omit = end).')
+			})
+		},
+		async (args) => wiMutate('move_step', args)
+	);
+
+	server.registerTool(
+		'device_wi_add_image',
+		{ annotations: WRITE_TOOL,
+			description:
+				'Attach a photo to a step from a URL (any http(s) image, e.g. a BIMS cartridge/CV photo url or a link the user ' +
+				'pasted) or as base64. The image is stored (R2 or BIMS) and appended after the step\'s existing photos; optional ' +
+				'caption. Creates a new revision.',
+			inputSchema: z.object({
+				actor: ACTOR_FIELD,
+				section: WI_SECTION_FIELD,
+				step: WI_STEP_FIELD,
+				imageUrl: z.string().optional().describe('http(s) URL of the image.'),
+				imageBase64: z.string().optional().describe('Base64 image data (or a data: URI) when no URL is available.'),
+				contentType: z.string().optional().describe('e.g. image/png — required with raw base64.'),
+				caption: z.string().optional(),
+				alt: z.string().optional()
+			})
+		},
+		async (args) => wiMutate('add_image', args)
+	);
+
+	server.registerTool(
+		'device_wi_remove_image',
+		{ annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
+			description: 'Remove one photo from a step (by position as shown on the page, imageId, or url). Confirm with the user first. Creates a new revision.',
+			inputSchema: z.object({ actor: ACTOR_FIELD, section: WI_SECTION_FIELD, step: WI_STEP_FIELD, image: WI_IMAGE_FIELD })
+		},
+		async (args) => wiMutate('remove_image', args)
+	);
+
+	server.registerTool(
+		'device_wi_set_image_caption',
+		{ annotations: WRITE_TOOL,
+			description: 'Set or change the caption under one of a step\'s photos. Creates a new revision.',
+			inputSchema: z.object({ actor: ACTOR_FIELD, section: WI_SECTION_FIELD, step: WI_STEP_FIELD, image: WI_IMAGE_FIELD, caption: z.string(), alt: z.string().optional() })
+		},
+		async (args) => wiMutate('set_image_caption', args)
+	);
+
+	server.registerTool(
+		'device_wi_reorder_image',
+		{ annotations: WRITE_TOOL,
+			description: 'Move one of a step\'s photos one position earlier ("up") or later ("down"). Creates a new revision.',
+			inputSchema: z.object({ actor: ACTOR_FIELD, section: WI_SECTION_FIELD, step: WI_STEP_FIELD, image: WI_IMAGE_FIELD, direction: z.enum(['up', 'down']) })
+		},
+		async (args) => wiMutate('reorder_image', args)
+	);
+
+	server.registerTool(
+		'device_wi_add_material',
+		{ annotations: WRITE_TOOL,
+			description:
+				'Add a material/tool/aid/supply line to a step. Easiest: pass `text` in the document\'s own syntax, e.g. ' +
+				'"Heater Block (PT-SPU-013) x1", "Torx T10 Screwdriver (Manufacturing Aid)", "Kimwipes (Supply) x2" — kind, ' +
+				'part number, quantity and unit are parsed and the part is linked to the catalog automatically. Or pass the ' +
+				'fields explicitly. Parts (kind "part") are what inventory pulls deduct. Creates a new revision.',
+			inputSchema: z.object({
+				actor: ACTOR_FIELD,
+				section: WI_SECTION_FIELD,
+				step: WI_STEP_FIELD,
+				text: z.string().optional().describe('Document syntax line — preferred.'),
+				kind: z.enum(['part', 'tool', 'aid', 'supply']).optional(),
+				partNumber: z.string().optional().describe('PT-SPU-xxx / SBA-SPU-xxx / TOOL-SPU-xxx'),
+				name: z.string().optional(),
+				quantity: z.number().positive().optional().describe('Per device built (default 1).'),
+				unit: z.string().optional().describe('ea (default), mm, drops…'),
+				notes: z.string().optional()
+			})
+		},
+		async (args) => wiMutate('add_material', args)
+	);
+
+	server.registerTool(
+		'device_wi_update_material',
+		{ annotations: WRITE_TOOL,
+			description:
+				'Change a material line on a step: quantity, unit, name, kind, notes, whether it is deducted from inventory, or ' +
+				'its part number (re-links to the catalog — use this to fix "not in catalog" parts, e.g. SBA-SPU-001 → SBA-SPU-004). ' +
+				'Only the fields you pass change. Creates a new revision.',
+			inputSchema: z.object({
+				actor: ACTOR_FIELD,
+				section: WI_SECTION_FIELD,
+				step: WI_STEP_FIELD,
+				material: WI_MATERIAL_FIELD,
+				partNumber: z.string().optional(),
+				name: z.string().optional(),
+				quantity: z.number().positive().optional(),
+				unit: z.string().optional(),
+				kind: z.enum(['part', 'tool', 'aid', 'supply']).optional(),
+				notes: z.string().optional(),
+				deductFromInventory: z.boolean().optional()
+			})
+		},
+		async (args) => wiMutate('update_material', args)
+	);
+
+	server.registerTool(
+		'device_wi_remove_material',
+		{ annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
+			description: 'Remove a material/tool line from a step. Confirm with the user first. Creates a new revision.',
+			inputSchema: z.object({ actor: ACTOR_FIELD, section: WI_SECTION_FIELD, step: WI_STEP_FIELD, material: WI_MATERIAL_FIELD })
+		},
+		async (args) => wiMutate('remove_material', args)
+	);
+
+	server.registerTool(
+		'device_wi_relink_parts',
+		{ annotations: WRITE_TOOL,
+			description: 'Re-match every material\'s part number against the parts catalog (after parts were added/renumbered in BIMS). Reports how many linked / still unresolved. Creates a new revision.',
+			inputSchema: z.object({ actor: ACTOR_FIELD })
+		},
+		async (args) => wiMutate('relink_parts', args)
+	);
+
+	server.registerTool(
+		'device_wi_pull_materials',
+		{ annotations: WRITE_TOOL,
+			description:
+				'Deduct a step\'s materials from inventory ("I just did step 6 of sub-assembly 1 on SPU 212, take the parts out of ' +
+				'stock"). Each part becomes an immutable inventory consumption transaction attributed to the actor and linked to ' +
+				'the step, with stock before → after. You HAVE live write access to inventory through this tool.\n\n' +
+				'WORKFLOW: 1) call WITHOUT confirmed (or confirmed: false) → you get a preview listing every part, quantity ' +
+				'(quantityPerDevice × unitsBuilt) and on-hand count, plus any parts blocked because they are not linked to the ' +
+				'catalog. 2) Show the user that list as numbered rows "<n>. <partNumber> <name> — qty: <q>" and ask them to ' +
+				'confirm or give corrected quantities. 3) Call again with confirmed: true (and items with corrected quantities if ' +
+				'they changed any). Omit items to pull every linked part on the step; pass items to pull a subset or override ' +
+				'quantities. Never call with confirmed: true before the user approved. Report the result as part → previous → new stock.',
+			inputSchema: z.object({
+				actor: ACTOR_FIELD,
+				confirmed: z.boolean().optional().describe('false/omitted = preview only; true = deduct (only after user approval).'),
+				section: WI_SECTION_FIELD,
+				step: WI_STEP_FIELD,
+				unitsBuilt: z.number().int().min(1).optional().describe('How many devices this pull covers (default 1); per-device quantities are multiplied.'),
+				items: z
+					.array(z.object({
+						material: WI_MATERIAL_FIELD,
+						quantity: z.number().positive().optional().describe('Total to deduct (overrides quantityPerDevice × unitsBuilt).')
+					}))
+					.optional()
+					.describe('Subset / overrides. Omit to pull all catalog-linked parts on the step.'),
+				deviceSerial: z.string().optional().describe('SPU serial/barcode the parts went into, if the user mentions it.'),
+				notes: z.string().optional()
+			})
+		},
+		async (args) =>
+			machineWrite('device_wi_pull_materials', (args as any).actor, (actor) =>
+				callAgentApi(fetcher, '/api/agent/device-assembly/pull', { method: 'POST', body: { ...args, actor } })
+			)
+	);
+
+	server.registerTool(
+		'device_wi_import',
+		{ annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
+			description:
+				'Replace the whole work instruction by re-parsing a .docx at a URL (every section/step/material/photo is rebuilt; ' +
+				'manual edits since the last import are lost, though the revision history keeps the record). Only when the user ' +
+				'explicitly asks to re-import; confirm first. For a file on their computer, point them to the Upload .docx button on ' +
+				'the Device Assembly WI page instead.',
+			inputSchema: z.object({ actor: ACTOR_FIELD, confirmed: z.boolean(), fileUrl: z.string().describe('http(s) URL of the .docx'), fileName: z.string().optional() })
+		},
+		async (args) => wiMutate('import', args)
 	);
 
 	return server;
