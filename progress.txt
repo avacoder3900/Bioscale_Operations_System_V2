@@ -13003,3 +13003,72 @@ in both touched files.
 
 Manual verification only — tests/contracts/ has no optical coverage (closest is
 10-cartridges.test.ts). Worth a contract test for the append / skip / move-out paths.
+
+================================================================================
+2026-10-06 — feat/device-assembly-wi — Manufacturing → Device Assembly Work Instruction (docx import, sub-assemblies, revision tracker, per-step inventory pulls)
+================================================================================
+New tab under Manufacturing: /manufacturing/device-assembly ("Device Assembly WI" in the sidebar).
+Imports the SPU assembly Word document (WIMF With Sections.docx) and turns it into a
+structured, editable work instruction with an automatic revision tracker and per-step
+material deduction from inventory.
+
+Parser (src/lib/server/services/device-assembly-wi-parser.ts): mammoth → HTML, then a
+tolerant block/table walker. Front matter (PURPOSE/SCOPE/RESPONSIBILITIES/DEFINITIONS/
+REFERENCES) is kept; everything after PROCEDURE is split into sections: "Cleaning and
+Setup:" → section 0 (Setup), "Subassembly #N: title" → Sub-Assembly N. Always pads to five
+sub-assemblies so empty ones exist to move steps into. Each Step/Instructions/Photo row
+becomes a step: images from either cell, materials pulled out of the italic bullets
+("Heater Block (PT-SPU-013) x1") and typed as part / tool (TOOL-SPU-xxx) / mfg aid / supply,
+quantity+unit parsed ("x350mm", "x2 Drops"; trailing words like "need new pt number" become
+notes, not units). "Note:"-only rows become section notes rather than steps. ESD flag and
+"Enter X Serial Number in DHR" fields are detected per step. Explicit step numbers are honoured
+when present, otherwise steps are numbered sequentially per section. Result on the real file:
+Setup 4 steps, Sub-Assembly 1 45 steps, 92 images, 0 parser warnings.
+
+Models (src/lib/server/db/models/): device-assembly-wi.ts (one doc, sections[] → steps[] →
+images[]/materials[], revisions[] append-only, optimisticConcurrency), device-assembly-
+material-pull.ts (immutable per-step pull ledger), work-instruction-image.ts (binary fallback
+store served by /api/device-assembly/images/[id] — used when R2 is not configured, e.g. the
+import script; routes try R2 worker → R2 S3 → Mongo so a picture is never lost).
+
+Revision tracker: every mutation goes through mutateDeviceAssemblyWI() which bumps
+currentVersion and appends {version/label "vN", changeType, summary, location
+(section/step), before, after, changedBy {_id, username}, changedAt} in the same save, plus
+an AuditLog row. Page header shows "Rev vN · last changed by X on <time>"; recent revisions
+listed on the page; /manufacturing/device-assembly/revisions has the full filterable
+history (before/after JSON) and the material-pull ledger.
+
+Editing (manufacturing:write, "Edit mode"): rename sub-assembly, edit step (title, rich-text
+instructions via contenteditable, ESD flag, DHR fields), add/delete/move step between
+sub-assemblies (steps renumber), add/remove/reorder/caption images (multi-file upload),
+add/edit/remove materials (document syntax "Name (PT-SPU-000) x1" or form fields; part numbers
+auto-link to PartDefinition, catalog datalist), re-link parts after catalog changes. Steps are
+addressable as "step N in Sub-Assembly M" (anchor #step-M-N, ?section=M).
+
+Inventory pulls: "Pull from inventory" on any step with part materials → tick parts, units
+built multiplier, optional SPU serial + notes → pullMaterialsForStep() validates every row
+first (linked to catalog, qty > 0; a bad row aborts the whole pull) then calls the shared
+recordTransaction({transactionType:'consumption'}) per part (decrements
+PartDefinition.inventoryCount, triggers low-stock + kanban replenishment as elsewhere) and
+writes a DeviceAssemblyMaterialPull row + AuditLog. Live on-hand counts shown next to each
+material; per-step pull history on the page.
+
+Import: scripts/import-device-assembly-wi.ts <file.docx> [username] (Mongo image store), or
+the Upload .docx form on the page (re-import replaces sections and records a new version).
+Ran the import on "WIMF With Sections.docx" as alejandro → WIMF-SPU-01 v1. Part numbers in
+the doc that are not in the catalog (flagged on the page, pulls blocked until linked):
+PT-CT-001, PT-SPU-035, PT-SPU-053, SBA-SPU-001, SBA-SPU-002 (catalog has SBA-SPU-003 Main
+Board / SBA-SPU-004 Stage Board — the doc's numbering is stale).
+
+Verified via dev server with a real session: page/revisions/image endpoint render (200),
+rename → v2 with correct who/when/summary, empty pull / unlinked-material pull / no-op edit
+all rejected with no inventory_transactions written. Smoke-test revision was reset so the
+live history starts at v1. npm run check: 10 errors (unchanged from baseline), +1 warning
+(intentional initial-value read of `data` for the default tab).
+
+Files: src/lib/server/db/models/{device-assembly-wi,device-assembly-material-pull,
+work-instruction-image}.ts, models/index.ts, src/lib/server/services/device-assembly-wi
+{,-parser,-images,-pulls}.ts, src/routes/manufacturing/device-assembly/{+page.server.ts,
++page.svelte,revisions/+page.server.ts,revisions/+page.svelte},
+src/routes/api/device-assembly/images/[id]/+server.ts, src/routes/+layout.svelte (nav),
+scripts/import-device-assembly-wi.ts.
