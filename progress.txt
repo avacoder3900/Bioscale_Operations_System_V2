@@ -18572,3 +18572,38 @@ the board has no drag-and-drop), though the transition service allowed it.
 - server/kanban/transition.ts: leaving Done clears completedDate, so a reopened task drops out of
   the cycle-time / throughput metrics (flow-metrics.ts reads completedDate) until it is done again.
 `npm run check`: 13 errors / 434 warnings — unchanged, none in the changed files.
+
+================================================================================
+2026-10-06 — feat/optical-bench-run-all — Optical bench: "Run on all units" fleet run + batch CSV
+================================================================================
+Added a fleet run to /validation/bench: one button runs the selected bench read
+(laser / dark / scan, same fixed settings) on every non-retired SPU with a linked
+Particle device and gathers the results into one batch.
+
+Why it fans out client-side: a single bench read blocks up to ~36 s (trigger +
+poll optical_bench) against the 60 s function limit, so the server can't loop the
+fleet in one request. The page runs 4 units at a time, one POST per unit to the
+new /api/validation/bench/run, each tagged with a batchId (BENCH-YYYYMMDD-HHMM-XXXX).
+
+- src/lib/server/optical-bench.ts (new): the read logic moved out of the bench
+  page action verbatim (fixed settings, firmware v96 contract, trigger/poll/store).
+  With a batchId, failed attempts (offline/busy/cartridge inserted/timeout/no v96)
+  are stored as status 'failed' validation sessions so a batch lists every unit.
+  Successes carry rawData.batchId; journal line notes the fleet run.
+- src/routes/api/validation/bench/run/+server.ts (new): spu:write; per-unit run;
+  skipReason records a pre-known offline unit without a 15 s Particle timeout.
+- bench/+page.server.ts: Go action now calls the shared helper (unchanged
+  behaviour); load adds the last 8 fleet batches; history hides failed sessions.
+- bench/+page.svelte: "Run on all units (N)" card with inline confirm, skip-offline
+  toggle (one /api/particle/status call), Stop, live per-unit table (PD + F7 A/B/C);
+  "Fleet runs" section with expandable batches and a long-format CSV download
+  (unit × channel, × scan point for scans, all ten bands + PD/PD dark).
+
+svelte-check: 0 errors in touched files. Worktree total 119 — 92 in
+lib/server/mcp/bims-mcp.ts and the rest in untouched files (worktree uses a
+junctioned node_modules); not introduced here. Not yet exercised against live units.
+Deployment: preview — https://bioscale-operations-system-mongodb-d38xqh8us-brevitest.vercel.app
+Source: branch feat/optical-bench-run-all @ commit ee5968b2c
+Retrieve this exact code: git checkout feat/optical-bench-run-all at commit ee5968b2c
+  (or: git log feat/optical-bench-run-all --oneline to find it if the branch has since moved on)
+What this deployment is for: try "Run on all units" on /validation/bench before merging.
