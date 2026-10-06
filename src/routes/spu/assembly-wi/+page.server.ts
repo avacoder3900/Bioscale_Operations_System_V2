@@ -20,6 +20,11 @@ import {
 	updateMaterial,
 	removeMaterial,
 	relinkAllParts,
+	addSection,
+	deleteSection,
+	moveSection,
+	updateFrontMatter,
+	updateMetadata,
 	type Actor
 } from '$lib/server/services/device-assembly-wi';
 import { makeDeviceWiImageStore } from '$lib/server/services/device-assembly-wi-images';
@@ -290,6 +295,57 @@ export const actions: Actions = {
 		const materialId = str(form.get('materialId'));
 		if (sectionNumber == null || !stepId || !materialId) return fail(400, { error: 'Material reference missing' });
 		return run(() => removeMaterial(actor(locals), sectionNumber, stepId, materialId), (r) => `${r.summary} — now ${r.label}`);
+	},
+
+	addSection: async ({ request, locals }) => {
+		requirePermission(locals.user, 'spu:write');
+		await connectDB();
+		const form = await request.formData();
+		return run(() => addSection(actor(locals), { title: str(form.get('title')), position: num(form.get('position')) }), (r) => `${r.summary} — now ${r.label}`);
+	},
+
+	deleteSection: async ({ request, locals }) => {
+		requirePermission(locals.user, 'spu:write');
+		await connectDB();
+		const form = await request.formData();
+		const sectionNumber = num(form.get('sectionNumber'));
+		if (sectionNumber == null) return fail(400, { error: 'Section is required' });
+		return run(() => deleteSection(actor(locals), sectionNumber, { moveStepsTo: num(form.get('moveStepsTo')) }), (r) => `${r.summary} — now ${r.label}`);
+	},
+
+	moveSection: async ({ request, locals }) => {
+		requirePermission(locals.user, 'spu:write');
+		await connectDB();
+		const form = await request.formData();
+		const sectionNumber = num(form.get('sectionNumber'));
+		const toPosition = num(form.get('toPosition'));
+		if (sectionNumber == null || toPosition == null) return fail(400, { error: 'Section and position are required' });
+		return run(() => moveSection(actor(locals), sectionNumber, toPosition), (r) => `${r.summary} — now ${r.label}`);
+	},
+
+	updateFrontMatter: async ({ request, locals }) => {
+		requirePermission(locals.user, 'spu:write');
+		await connectDB();
+		const form = await request.formData();
+		const lines = (v: FormDataEntryValue | null) => str(v).split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
+		return run(
+			() => updateFrontMatter(actor(locals), {
+				purposeHtml: str(form.get('purposeHtml')),
+				scopeHtml: str(form.get('scopeHtml')),
+				responsibilitiesHtml: str(form.get('responsibilitiesHtml')),
+				generalNotesHtml: str(form.get('generalNotesHtml')),
+				definitions: lines(form.get('definitions')),
+				references: lines(form.get('references'))
+			}),
+			(r) => `${r.summary} — now ${r.label}`
+		);
+	},
+
+	updateMetadata: async ({ request, locals }) => {
+		requirePermission(locals.user, 'spu:write');
+		await connectDB();
+		const form = await request.formData();
+		return run(() => updateMetadata(actor(locals), { title: str(form.get('title')), assemblyNumber: str(form.get('assemblyNumber')) }), (r) => `${r.summary} — now ${r.label}`);
 	},
 
 	relinkParts: async ({ locals }) => {

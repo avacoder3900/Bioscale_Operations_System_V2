@@ -18897,3 +18897,39 @@ Retrieve this exact code: git checkout master at commit 45cab695
   (or: git log master --oneline to find it if the branch has since moved on)
 What this deployment is for: SPU Assembly Work Instruction feature + MCP connector tools live
   for operators; connector clients re-fetch the tool list on the 3.9.0 version bump.
+
+================================================================================
+2026-10-06 — feat/wi-sections-via-chat — SPU Assembly WI: sections, front matter and metadata editable from chat (MCP 3.10.0)
+================================================================================
+Gap reported by Alejandro: asking Claude chat to "add Sub-Assembly 6, 7, 8" failed because no
+tool could create a section (the tab count was fixed by the import). The WI is now fully
+maintainable without re-uploading the .docx.
+
+Service (device-assembly-wi.ts): addSection (append or at a position; later sub-assemblies
+renumber, default "Sub-Assembly N" titles follow the new numbers; can recreate Setup),
+deleteSection (refused while it has steps unless moveStepsTo is given — steps are appended
+there; last sub-assembly cannot be deleted), moveSection (reorder; Setup always first),
+updateFrontMatter (purpose/scope/responsibilities/general notes html + definitions/references
+lists), updateMetadata (title, assembly number, status). New revision changeTypes:
+section_add, section_delete, section_move, front_matter_edit (model enum + revisions page).
+
+Agent API /api/agent/device-assembly/mutate ops: add_section, delete_section (confirmed +
+moveStepsTo), move_section, update_front_matter (plain text → html), update_metadata. Overview
+now returns frontMatter as text so chat can read before editing.
+
+MCP (bims-operations 3.9.0 → 3.10.0): device_wi_add_section, device_wi_delete_section,
+device_wi_move_section, device_wi_update_front_matter, device_wi_update_metadata (25 device_wi_*
+tools total). Overview description tells the model sections are not fixed at five.
+
+UI (/spu/assembly-wi edit mode): "+ Add sub-assembly" next to the tabs (title + optional
+position), per-section ◀ ▶ reorder and "Delete section" (with move-steps-to picker when not
+empty), "edit front matter" (rich-text purpose/scope/responsibilities/notes + definitions/
+references lists), "edit title / assembly number" under the heading.
+
+Verified on the dev server through the agent API as alejandro: add ×3 → v2–v4 (kept: the live
+WI now has Sub-Assembly 6, 7, 8), temp section add → move to 6 (others renumbered, default
+titles refreshed) → delete without confirmed refused → delete of SA1 without moveStepsTo
+refused → delete confirmed (renumbered back), front-matter edit, no-op metadata refused, moving
+Setup refused; MCP tools/list shows 25 device_wi_* tools. Test-only revisions (v5–v8) reset so
+the live history reads v1 import, v2–v4 sub-assembly adds. npm run check: 13 errors (master
+baseline, none in these files).

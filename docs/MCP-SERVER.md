@@ -146,14 +146,18 @@ curve happens on the research Curves page with a note; the tool refuses and says
 Authoring doctrine is embedded in the tool descriptions: catalog → validate → find cartridges → preview →
 save draft → activate → attach to assay. See research-v2 `docs/prds/DOMAIN-30-ANALYSIS-V3.md`.
 
-## SPU Assembly Work Instruction tools (v3.9.0)
+## SPU Assembly Work Instruction tools (v3.10.0)
 
 full edit + inventory surface for
 SPU → SPU Assembly WI so changes can be made from Claude chat. Steps are addressed as
 humans say them (`section` = "sub-assembly 2" / "setup", `step` = "2" / stepId / title phrase).
 Read: `device_wi_overview`, `device_wi_get_step` (one step, a section, or `q=` search),
 `device_wi_revisions` (vN / who / when / where / what, optional before-after), `device_wi_pull_history`.
-Write (each call = one new revision, attributed to `actor`): `device_wi_rename_section`,
+Write (each call = one new revision, attributed to `actor`): `device_wi_add_section` /
+`device_wi_delete_section` / `device_wi_move_section` (sub-assembly tabs are not fixed at five —
+create, remove, reorder them from chat; later ones renumber), `device_wi_update_front_matter`
+(purpose/scope/responsibilities/definitions/references/notes), `device_wi_update_metadata` (title,
+assembly number, status), `device_wi_rename_section`,
 `device_wi_set_section_notes`, `device_wi_update_step` (replace / append instructions, title, ESD,
 DHR fields), `device_wi_add_step`, `device_wi_delete_step` (confirmed), `device_wi_move_step`
 (between sub-assemblies — how the imported list gets divided), `device_wi_add_image` (url or base64),
