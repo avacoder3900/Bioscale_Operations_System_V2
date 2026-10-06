@@ -18602,3 +18602,8 @@ new /api/validation/bench/run, each tagged with a batchId (BENCH-YYYYMMDD-HHMM-X
 svelte-check: 0 errors in touched files. Worktree total 119 — 92 in
 lib/server/mcp/bims-mcp.ts and the rest in untouched files (worktree uses a
 junctioned node_modules); not introduced here. Not yet exercised against live units.
+Deployment: preview — https://bioscale-operations-system-mongodb-d38xqh8us-brevitest.vercel.app
+Source: branch feat/optical-bench-run-all @ commit ee5968b2c
+Retrieve this exact code: git checkout feat/optical-bench-run-all at commit ee5968b2c
+  (or: git log feat/optical-bench-run-all --oneline to find it if the branch has since moved on)
+What this deployment is for: try "Run on all units" on /validation/bench before merging.
