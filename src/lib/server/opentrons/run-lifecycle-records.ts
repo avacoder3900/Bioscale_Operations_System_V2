@@ -280,9 +280,21 @@ export async function finalizeReagentRun(runId: string, user: User, trigger: str
 	// reagentFilling.isResearch === true as "assay intentionally blank".
 	if (run?.cartridgesFilled?.length) {
 		const isResearch = run.isResearch === true;
+		// Operator-logged fill mistakes (run-page well tracker), by deck position,
+		// so each cart carries its own. Carts with a clean fill get an empty list.
+		const issuesByPos = new Map<number, any[]>();
+		for (const w of (run.wellIssues ?? []) as any[]) {
+			const pos = Number(w.deckPosition);
+			if (!issuesByPos.has(pos)) issuesByPos.set(pos, []);
+			issuesByPos.get(pos)!.push({
+				well: w.well, reagentName: w.reagentName ?? null, issue: w.issue,
+				note: w.note ?? null, loggedBy: w.loggedBy ?? null, loggedAt: w.loggedAt ?? null
+			});
+		}
 		const bulkOps = run.cartridgesFilled.flatMap((cf: any) => {
 			const stamp = {
 				'reagentFilling.runId': run._id,
+				'reagentFilling.wellIssues': issuesByPos.get(Number(cf.deckPosition)) ?? [],
 				'reagentFilling.robotId': run.robot?._id,
 				'reagentFilling.robotName': run.robot?.name,
 				'reagentFilling.assayType': isResearch ? null : run.assayType,

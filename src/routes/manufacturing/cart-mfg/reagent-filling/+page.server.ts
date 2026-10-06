@@ -27,6 +27,11 @@ import {
 	isActionFail
 } from '$lib/server/opentrons/run-lifecycle-records';
 import { isReagentEligible } from '$lib/shared/cartridge-wax-status';
+import {
+	REAGENT_WELL_ISSUE_CODES,
+	REAGENT_WELLS,
+	type ReagentWellIssueRow
+} from '$lib/manufacturing/reagent-well-issues';
 import type { PageServerLoad, Actions } from './$types';
 
 // Extend Vercel serverless timeout to 60s
@@ -83,8 +88,24 @@ function emptyReagentState(robotId: string, loadError?: string) {
 			nextTipIndex: number | null;
 			hostname: string | null;
 			capturedAt: string | null;
-		}
+		},
+		wellIssues: [] as ReagentWellIssueRow[]
 	};
+}
+
+/** Run-page tracker rows, plain and ISO-dated (SvelteKit-serializable). */
+function serializeWellIssues(raw: any[] | undefined | null): ReagentWellIssueRow[] {
+	return (raw ?? []).map((w: any) => ({
+		id: String(w._id),
+		deckPosition: Number(w.deckPosition),
+		cartridgeId: w.cartridgeId ?? null,
+		well: Number(w.well),
+		reagentName: w.reagentName ?? null,
+		issue: String(w.issue ?? 'other'),
+		note: w.note ?? null,
+		loggedBy: w.loggedBy?.username ?? null,
+		loggedAt: w.loggedAt ? new Date(w.loggedAt).toISOString() : null
+	}));
 }
 
 export const load: PageServerLoad = async ({ locals, url, parent }) => {
@@ -274,6 +295,9 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 			storageLocation: cf.storageLocation ?? null
 		}));
 
+		// Operator-logged per-well fill mistakes (run-page tracker).
+		const wellIssues = serializeWellIssues(activeRun?.wellIssues);
+
 		// Tube records (reagent prep)
 		const tubes = (activeRun?.tubeRecords ?? []).map((t: any) => ({
 			id: t._id ? String(t._id) : generateId(),
@@ -376,7 +400,8 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 			// --- OT-2 Start Run panel inputs (same shape as wax-filling) ---
 			robotProtocols,
 			opentronsRobotId: robotId,
-			lastTipState
+			lastTipState,
+			wellIssues
 		};
 	} catch (err) {
 		console.error('[REAGENT-FILLING PAGE] Load error:', err instanceof Error ? err.message : err);
@@ -923,6 +948,94 @@ export const actions: Actions = {
 	 * operator to push one on), re-probes it on the calibrator, and continues
 	 * with the batch it was about to aspirate. Works running or paused.
 	 */
+	/**
+	 * Well tracker (2026-10-06): log one fill mistake the operator just saw, at
+	 * a deck position + reagent well. Written straight onto the run so it is
+	 * there on reload and for every browser watching the run; copied to the
+	 * cartridge at completion (finalizeReagentRun). Allowed while the run is
+	 * page-owned (Running, and Loading for a mistake noticed pre-start), not
+	 * after Done — post-completion observations belong on Reagent Inspect.
+	 */
+	logWellIssue: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'manufacturing:write');
+		await connectDB();
+		const data = await request.formData();
+		const runId = data.get('runId')?.toString();
+		const deckPosition = Math.floor(Number(data.get('deckPosition')));
+		const well = Math.floor(Number(data.get('well')));
+		const issue = data.get('issue')?.toString() ?? '';
+		const note = (data.get('note')?.toString() ?? '').trim().slice(0, 500);
+		if (!runId) return fail(400, { error: 'Missing runId' });
+		if (!(deckPosition >= 1 && deckPosition <= 24)) return fail(400, { error: 'Deck position must be 1–24' });
+		if (!REAGENT_WELLS.some((w) => w.well === well)) return fail(400, { error: 'Well must be 2, 3, 4 or 5' });
+		if (!REAGENT_WELL_ISSUE_CODES.includes(issue)) return fail(400, { error: `Unknown issue "${issue}"` });
+
+		const run = await ReagentBatchRecord.findById(runId)
+			.select('status finalizedAt cartridgesFilled tubeRecords assayType').lean() as any;
+		if (!run) return fail(404, { error: 'Run not found' });
+		if (run.finalizedAt || TERMINAL.has(String(run.status))) {
+			return fail(400, { error: 'Run is finished — log post-run observations on Reagent Inspect.' });
+		}
+		const cart = (run.cartridgesFilled ?? []).find((c: any) => Number(c.deckPosition) === deckPosition);
+		const tube = (run.tubeRecords ?? []).find((t: any) => Number(t.wellPosition) === well);
+		const reagentName = tube?.reagentName ?? REAGENT_WELLS.find((w) => w.well === well)?.defaultName ?? null;
+
+		const entry = {
+			_id: generateId(),
+			deckPosition,
+			cartridgeId: cart?.cartridgeId ?? null,
+			well,
+			reagentName,
+			issue,
+			note: note || undefined,
+			loggedBy: { _id: locals.user._id, username: locals.user.username },
+			loggedAt: new Date()
+		};
+		await ReagentBatchRecord.findByIdAndUpdate(runId, { $push: { wellIssues: entry } });
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'reagent_batch_records',
+			recordId: runId,
+			action: 'reagent_well_issue_logged',
+			changedBy: locals.user.username,
+			changedAt: entry.loggedAt,
+			newData: { issueId: entry._id, deckPosition, well, issue, note: note || null, cartridgeId: entry.cartridgeId }
+		});
+		const fresh = await ReagentBatchRecord.findById(runId).select('wellIssues').lean() as any;
+		return { success: true, wellIssues: serializeWellIssues(fresh?.wellIssues) };
+	},
+
+	/** Well tracker: remove a mis-tapped entry (audited, keeps the old row). */
+	removeWellIssue: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'manufacturing:write');
+		await connectDB();
+		const data = await request.formData();
+		const runId = data.get('runId')?.toString();
+		const issueId = data.get('issueId')?.toString();
+		if (!runId || !issueId) return fail(400, { error: 'Missing runId or issueId' });
+		const run = await ReagentBatchRecord.findById(runId).select('status finalizedAt wellIssues').lean() as any;
+		if (!run) return fail(404, { error: 'Run not found' });
+		if (run.finalizedAt || TERMINAL.has(String(run.status))) {
+			return fail(400, { error: 'Run is finished — its well log is locked.' });
+		}
+		const old = (run.wellIssues ?? []).find((w: any) => String(w._id) === issueId);
+		if (!old) return fail(404, { error: 'Entry not found (already removed?)' });
+		await ReagentBatchRecord.findByIdAndUpdate(runId, { $pull: { wellIssues: { _id: issueId } } });
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'reagent_batch_records',
+			recordId: runId,
+			action: 'reagent_well_issue_removed',
+			changedBy: locals.user.username,
+			changedAt: new Date(),
+			oldData: JSON.parse(JSON.stringify(old))
+		});
+		const fresh = await ReagentBatchRecord.findById(runId).select('wellIssues').lean() as any;
+		return { success: true, wellIssues: serializeWellIssues(fresh?.wellIssues) };
+	},
+
 	requestTipSwap: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
 		await connectDB();

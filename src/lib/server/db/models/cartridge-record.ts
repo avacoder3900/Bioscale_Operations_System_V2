@@ -79,6 +79,9 @@ const cartridgeRecordSchema = new Schema({
 		reagentLotId: String,
 		reagentLotNumber: String,
 		tubeRecords: [{ _id: false, wellPosition: Number, reagentName: String, sourceLotId: String, transferTubeId: String }],
+		// Operator-logged fill mistakes for THIS cartridge, copied from the run's
+		// wellIssues at completion so the cart carries its own fill history.
+		wellIssues: [{ _id: false, well: Number, reagentName: String, issue: String, note: String, loggedBy: operatorRef, loggedAt: Date }],
 		operator: operatorRef, fillDate: Date, expirationDate: Date, recordedAt: Date
 	},
 	reagentInspection: {

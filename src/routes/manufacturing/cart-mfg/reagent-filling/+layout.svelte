@@ -217,6 +217,12 @@
 				Cooling Queue
 			</a>
 			<a
+				href={resolve('/manufacturing/cart-mfg/reagent-filling/well-issues')}
+				class={navLinkClass(`${BASE}/well-issues`)}
+			>
+				Well Issues
+			</a>
+			<a
 				href={resolve('/manufacturing/cart-mfg/reagent-filling/settings')}
 				class={navLinkClass(`${BASE}/settings`)}
 			>
