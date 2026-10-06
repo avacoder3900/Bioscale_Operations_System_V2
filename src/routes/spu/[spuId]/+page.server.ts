@@ -11,6 +11,7 @@ import { isLegalTransition, LEGAL_TRANSITIONS, normalizeSpuStatus } from '$lib/s
 import { syncServiceFlag } from '$lib/server/service-flag';
 import { appendSpuJournal } from '$lib/server/spu-journal';
 import { beginValidationCycle, validationCycleResetFields, runsSinceServicing } from '$lib/server/spu-validation-cycle';
+import { loadAutoVerdicts } from '$lib/server/validation-autograde-load';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals, params }) => {
@@ -65,11 +66,14 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 	// to servicing. Capture-only tests (blank/sonic/bench) have no verdict, so
 	// this counts runs, not passes — the pass/fail rollup is separate and still
 	// what gates release.
+	// Bench + blank are auto-graded from their latest runs (validation-autograde.ts).
+	const autoChecks = (await loadAutoVerdicts([{ _id: params.spuId, udi: s.udi ?? null }])).get(params.spuId) ?? { blank: null, bench: null };
 	const validationSince = runsSinceServicing({
 		validation: s.validation ?? null,
 		validationResetAt: s.validationResetAt ?? null,
 		sessions: validationSessions as any[],
-		blankRunAt: latestBlankRun?.receivedAt ?? latestBlankRun?.publishedAt ?? null
+		blankRunAt: latestBlankRun?.receivedAt ?? latestBlankRun?.publishedAt ?? null,
+		autoVerdicts: { blank: autoChecks.blank?.verdict ?? null, bench: autoChecks.bench?.verdict ?? null }
 	});
 
 	// Locations already in use across the fleet, offered as suggestions when
@@ -112,6 +116,10 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 	return {
 		knownLocations,
 		validationSince,
+		autoChecks: {
+			blank: autoChecks.blank ? { verdict: autoChecks.blank.verdict, reasons: autoChecks.blank.reasons } : null,
+			bench: autoChecks.bench ? { verdict: autoChecks.bench.verdict, reasons: autoChecks.bench.reasons } : null
+		},
 		spu: {
 			id: s._id,
 			udi: s.udi,

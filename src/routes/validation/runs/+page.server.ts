@@ -2,7 +2,7 @@ import { fail, redirect } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
 import {
 	connectDB, Spu, ValidationRun, GeneratedBarcode, AuditLog, generateId,
-	VALIDATION_RUN_STEPS
+	DEFAULT_RUN_STEPS
 } from '$lib/server/db';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -156,14 +156,14 @@ export const actions: Actions = {
 			type: 'validation_run'
 		});
 
-		const emptySteps = Object.fromEntries(VALIDATION_RUN_STEPS.map(k => [k, { status: 'not_started' }]));
+		const emptySteps = Object.fromEntries(DEFAULT_RUN_STEPS.map(k => [k, { status: 'not_started' }]));
 		const runId = generateId();
 		await ValidationRun.create({
 			_id: runId,
 			runNumber,
 			name,
 			status: 'in_progress',
-			steps: [...VALIDATION_RUN_STEPS],
+			steps: [...DEFAULT_RUN_STEPS],
 			spus: spus.map(s => {
 				// Carry prior device-record results (spu.validation.*, as shown on
 				// the SPU's DHR) into the run so an already-passed mag/thermo test

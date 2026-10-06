@@ -2,6 +2,7 @@
 	import { goto } from '$app/navigation';
 	import SonicChart, { type ChartMarker, type ChartSeries } from '$lib/components/validation/sonic/SonicChart.svelte';
 	import { sonicColor } from '$lib/components/validation/sonic/palette';
+	import SonicFleet from '$lib/components/validation/sonic/SonicFleet.svelte';
 
 	let { data } = $props();
 
@@ -14,14 +15,28 @@
 	const urlPicked = (): Record<string, boolean> => Object.fromEntries(data.ids.map((id: string) => [id, true]));
 	const urlSections = (): string => data.sections ?? '';
 	const urlAgainst = (): boolean => data.againstRefs;
+	const urlFleet = () => ({ ...data.fleetOpts });
 	let picked = $state<Record<string, boolean>>(urlPicked());
 	let sectionsText = $state(urlSections());
 	let against = $state(urlAgainst());
+	// Two views of the same picked recordings (2026-10-06): Fleet check (quick
+	// triage, fits / outside per unit) and Detailed compare (sections, tone colour).
+	const urlView = (): 'fleet' | 'detail' => data.view;
+	let view = $state<'fleet' | 'detail'>(urlView());
+	let fleetOpts = $state(urlFleet());
 	$effect.pre(() => {
 		picked = urlPicked();
 		sectionsText = urlSections();
 		against = urlAgainst();
+		view = urlView();
+		fleetOpts = urlFleet();
 	});
+	const minPicked = $derived(view === 'fleet' ? 3 : against ? 1 : 2);
+	function setView(v: 'fleet' | 'detail') {
+		view = v;
+		// Same recordings, other view — re-run straight away when there are enough.
+		if (pickedIds.length >= (v === 'fleet' ? 3 : against ? 1 : 2)) run();
+	}
 	let pickerAssay = $state('ALL');
 	const pickedIds = $derived(Object.keys(picked).filter((k) => picked[k]));
 	const pickerRows = $derived(data.available.filter((a: { assay: string | null }) => pickerAssay === 'ALL' || (a.assay ?? 'UNKNOWN') === pickerAssay));
@@ -63,9 +78,18 @@
 
 	function run() {
 		const q = new URLSearchParams();
+		q.set('view', view);
 		q.set('ids', pickedIds.join(','));
-		if (sectionsText.trim()) q.set('sections', sectionsText.trim());
-		if (against) q.set('against', 'reference');
+		if (view === 'fleet') {
+			q.set('metric', fleetOpts.metric);
+			q.set('interval', String(fleetOpts.intervalS));
+			q.set('k', String(fleetOpts.k));
+			q.set('min', String(fleetOpts.minInsidePct));
+			q.set('shape', fleetOpts.shapeOnly ? '1' : '0');
+		} else {
+			if (sectionsText.trim()) q.set('sections', sectionsText.trim());
+			if (against) q.set('against', 'reference');
+		}
 		goto(`/validation/sonic/compare?${q.toString()}`);
 	}
 
@@ -295,9 +319,26 @@
 	<div class="flex flex-wrap items-start justify-between gap-3">
 		<div>
 			<h1 class="tron-heading text-2xl font-bold">Sonic Compare</h1>
-			<p class="tron-text-muted mt-1 max-w-3xl text-sm">
-				Recordings are lined up in time, cut into sections (P = operating phase, B = the stretch between phases, or your own), and each
-				SPU is judged against the others' average shape ± {data.envelopeK}σ — or against the reference set of its assay.
+			<div class="mt-2 inline-flex rounded-lg border border-[var(--color-tron-border)] p-1" role="group" aria-label="Comparison view">
+				{#each [['fleet', 'Fleet check'], ['detail', 'Detailed compare']] as [v, name] (v)}
+					<button
+						type="button"
+						aria-pressed={view === v}
+						onclick={() => setView(v as 'fleet' | 'detail')}
+						class="rounded-md px-4 text-sm font-semibold {view === v ? 'bg-[var(--color-tron-cyan)] text-[var(--color-tron-bg-primary)]' : 'tron-text-muted hover:text-[var(--color-tron-cyan)]'}"
+						style="min-height: 40px;"
+					>{name}</button>
+				{/each}
+			</div>
+			<p class="tron-text-muted mt-2 max-w-3xl text-sm">
+				{#if view === 'fleet'}
+					<strong>Which units are odd?</strong> The run is cut into fixed intervals; in each one the fleet's mean and standard
+					deviation make a band, and each unit fits or falls outside it. Quick triage — then switch to Detailed compare to see what differs.
+				{:else}
+					<strong>How and where is it different?</strong> Recordings are lined up in time, cut into sections (P = operating phase,
+					B = the stretch between phases, or your own), and each SPU is judged on loudness shape and tone colour against the
+					others' average ± {data.envelopeK}σ — or against the reference set of its assay.
+				{/if}
 			</p>
 		</div>
 		<a href="/validation/sonic" class="inline-flex items-center text-sm text-[var(--color-tron-cyan)] hover:underline" style="min-height: 44px;">← Recordings</a>
@@ -355,16 +396,43 @@
 		</div>
 		</details>
 		<div class="flex flex-wrap items-end gap-3">
+			{#if view === 'fleet'}
+			<label class="text-sm">
+				<span class="tron-label">Compare</span>
+				<select bind:value={fleetOpts.metric} class="tron-select" style="min-height: 44px;">
+					{#each data.metrics as m (m.key)}<option value={m.key}>{m.label} ({m.unit})</option>{/each}
+				</select>
+			</label>
+			<label class="text-sm">
+				<span class="tron-label">Interval (s)</span>
+				<input type="number" min="1" max="120" step="1" bind:value={fleetOpts.intervalS} class="tron-input w-24" style="min-height: 44px;" />
+			</label>
+			<label class="text-sm">
+				<span class="tron-label">Band (K·σ)</span>
+				<input type="number" min="0.5" max="4" step="0.5" bind:value={fleetOpts.k} class="tron-input w-24" style="min-height: 44px;" />
+			</label>
+			<label class="text-sm">
+				<span class="tron-label">Fits if ≥ % inside</span>
+				<input type="number" min="0" max="100" step="5" bind:value={fleetOpts.minInsidePct} class="tron-input w-24" style="min-height: 44px;" />
+			</label>
+			{#if fleetOpts.metric === 'loudness'}
+				<label class="flex items-center gap-2 text-sm" style="min-height: 44px;" title="Removes each recording's overall level, so a phone held closer or farther does not count">
+					<input type="checkbox" bind:checked={fleetOpts.shapeOnly} class="h-4 w-4" />
+					Shape only (ignore overall loudness)
+				</label>
+			{/if}
+			{:else}
 			<label class="text-sm">
 				<span class="tron-label">Sections (seconds; blank = automatic)</span>
-				<input bind:value={sectionsText} onkeydown={(e) => { if (e.key === 'Enter' && pickedIds.length >= (against ? 1 : 2)) run(); }} class="tron-input w-72" style="min-height: 44px;" placeholder="e.g. 40-57, 110-130" />
+				<input bind:value={sectionsText} onkeydown={(e) => { if (e.key === 'Enter' && pickedIds.length >= minPicked) run(); }} class="tron-input w-72" style="min-height: 44px;" placeholder="e.g. 40-57, 110-130" />
 			</label>
 			<label class="flex items-center gap-2 text-sm" style="min-height: 44px;">
 				<input type="checkbox" bind:checked={against} class="h-4 w-4" />
 				Judge against the reference set (★) of their assay
 			</label>
-			<button type="button" onclick={run} disabled={pickedIds.length < (against ? 1 : 2)} class="rounded bg-[var(--color-tron-cyan)] px-4 py-2 text-sm font-semibold text-[var(--color-tron-bg-primary)] disabled:opacity-40" style="min-height: 44px;">
-				Generate comparison ({pickedIds.length})
+			{/if}
+			<button type="button" onclick={run} disabled={pickedIds.length < minPicked} class="rounded bg-[var(--color-tron-cyan)] px-4 py-2 text-sm font-semibold text-[var(--color-tron-bg-primary)] disabled:opacity-40" style="min-height: 44px;">
+				{view === 'fleet' ? 'Run fleet check' : 'Generate comparison'} ({pickedIds.length})
 			</button>
 		</div>
 	</div>
@@ -373,7 +441,11 @@
 		<div class="rounded-lg bg-[var(--color-tron-orange)]/10 p-3 text-sm text-[var(--color-tron-orange)]">{data.error}</div>
 	{/if}
 
-	{#if R}
+	{#if R && data.view === 'fleet' && data.fleet}
+		<SonicFleet fleet={data.fleet} items={R.items} t={R.t} window={R.window} tickS={data.tickS} />
+	{/if}
+
+	{#if R && data.view === 'detail'}
 		<!-- key findings -->
 		{#if findings.length}
 			<div class="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4" aria-label="Key findings">

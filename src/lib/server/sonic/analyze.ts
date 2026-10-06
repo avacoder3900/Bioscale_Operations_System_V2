@@ -165,9 +165,12 @@ export interface LoadedFingerprint {
 /** Sessions with a fingerprint, as compare items. */
 export async function loadFingerprints(filter: Record<string, unknown>): Promise<LoadedFingerprint[]> {
 	// A recording marked unusable (SONIC workflow step 5) never takes part in a comparison.
+	// `$type: 'object'`, NOT `$ne: null`: `results` is an array, so Mongo also reads the
+	// `0` as a field name on each element — that reading is null, and `$ne` fails the
+	// whole document. `$ne: null` matched 0 of 11 analyzed recordings (2026-10-06).
 	const rows = (await ValidationSession.find({
 		type: 'sonic',
-		'results.0.processedData.fingerprint': { $ne: null },
+		'results.0.processedData.fingerprint': { $type: 'object' },
 		'results.0.rawData.review.status': { $ne: 'unusable' },
 		...filter
 	})

@@ -5,9 +5,10 @@ import {
 	runsSinceServicing,
 	VALIDATION_TESTS
 } from '$lib/server/spu-validation-cycle';
+import { loadAutoVerdicts } from '$lib/server/validation-autograde-load';
 import type { PageServerLoad } from './$types';
 
-/** Every session type any of the six tests is evidenced by. */
+/** Every session type any of the validation tests is evidenced by. */
 const SESSION_TYPES = [...new Set(VALIDATION_TESTS.flatMap((t) => [...t.sessionTypes]))];
 
 const newerOf = (a: Date | null, b: Date | null) =>
@@ -64,6 +65,9 @@ export const load: PageServerLoad = async ({ locals }) => {
 		sessionsBySpu.set(id, list);
 	}
 
+	// Bench + blank verdicts from each unit's latest runs (two aggregations, not per card).
+	const autoChecks = await loadAutoVerdicts((spus as any[]).map((s) => ({ _id: String(s._id), udi: s.udi ?? null })));
+
 	const blankById = new Map<string, Date>();
 	const blankByUdi = new Map<string, Date>();
 	for (const r of ((blankAgg as any[])[0]?.byId ?? []) as any[]) if (r._id) blankById.set(String(r._id), r.lastAt);
@@ -85,7 +89,11 @@ export const load: PageServerLoad = async ({ locals }) => {
 					newerOf(
 						blankById.get(String(s._id)) ?? null,
 						s.udi ? (blankByUdi.get(s.udi) ?? null) : null
-					) ?? null
+					) ?? null,
+				autoVerdicts: {
+					blank: autoChecks.get(String(s._id))?.blank?.verdict ?? null,
+					bench: autoChecks.get(String(s._id))?.bench?.verdict ?? null
+				}
 			});
 
 			return {

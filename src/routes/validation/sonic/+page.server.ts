@@ -253,7 +253,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 		SONIC_ASSAYS.map(async (k) => {
 			refCounts[k] = await ValidationSession.countDocuments({
 				type: 'sonic',
-				'results.0.processedData.fingerprint': { $ne: null },
+				'results.0.processedData.fingerprint': { $type: 'object' },
 				...referenceFilter(k)
 			});
 		})

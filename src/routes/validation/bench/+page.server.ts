@@ -10,10 +10,16 @@ import {
 	runBenchRead,
 	type BenchType
 } from '$lib/server/optical-bench';
+import { BENCH_CRITERIA, gradeBenchRead } from '$lib/server/validation-autograde';
+import { loadAutoVerdicts } from '$lib/server/validation-autograde-load';
 import type { Actions, PageServerLoad } from './$types';
 
 // Read logic, fixed settings and the firmware contract live in
 // $lib/server/optical-bench.ts (shared with the fleet-run endpoint).
+//
+// Auto-check (2026-10-06): every laser / dark read is graded on read by
+// gradeBenchRead(); a unit passes the bench when its latest laser read AND its
+// latest dark read both pass (validation-autograde.ts).
 
 const BATCHES_SHOWN = 8;
 
@@ -54,6 +60,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 	const userIds = [...new Set([...sessions, ...batchSessions].map((s) => s.userId).filter(Boolean))];
 	const users = userIds.length ? ((await User.find({ _id: { $in: userIds } }, { username: 1 }).lean()) as any[]) : [];
 	const nameOf = new Map(users.map((u) => [u._id, u.username]));
+	const verdicts = await loadAutoVerdicts(spus.map((s) => ({ _id: String(s._id), udi: s.udi ?? null })));
 
 	const batches = batchIds.map((id) => {
 		const rows = batchSessions.filter((s) => s.rawData?.batchId === id);
@@ -71,14 +78,22 @@ export const load: PageServerLoad = async ({ locals }) => {
 				ok: s.status !== 'failed',
 				error: (s.rawData?.error ?? null) as string | null,
 				at: s.createdAt ? new Date(s.createdAt).toISOString() : null,
-				result: s.status !== 'failed' ? (s.rawData ?? null) : null
+				result: s.status !== 'failed' ? (s.rawData ?? null) : null,
+				check: s.status !== 'failed' ? gradeBenchRead(s.type, s.rawData) : null
 			}))
 		};
 	});
 
 	return {
 		bench: { ...BENCH, positionLimitUm: FIRMWARE_POSITION_LIMIT_UM, maxScanPoints: FIRMWARE_MAX_SCAN_POINTS },
+		criteria: BENCH_CRITERIA,
 		spus: spus.map((s) => ({ id: s._id, udi: s.udi, status: s.status, deviceId: s.particleLink?.particleDeviceId ?? null })),
+		// Units with at least one laser/dark read, worst first.
+		units: spus
+			.map((s) => ({ id: s._id as string, udi: s.udi as string, check: verdicts.get(String(s._id))?.bench ?? null }))
+			.filter((u) => u.check)
+			.map((u) => ({ ...u, check: { verdict: u.check!.verdict, reasons: u.check!.reasons, at: u.check!.at } }))
+			.sort((a, b) => (a.check.verdict === b.check.verdict ? a.udi.localeCompare(b.udi) : a.check.verdict === 'fail' ? -1 : b.check.verdict === 'fail' ? 1 : a.check.verdict === 'incomplete' ? -1 : 1)),
 		history: sessions.map((s) => ({
 			id: s._id as string,
 			type: s.type as BenchType,
@@ -86,7 +101,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 			spuUdi: (s.spuUdi ?? null) as string | null,
 			by: nameOf.get(s.userId) ?? null,
 			at: s.createdAt ? new Date(s.createdAt).toISOString() : null,
-			result: s.rawData ?? null
+			result: s.rawData ?? null,
+			check: gradeBenchRead(s.type, s.rawData)
 		})),
 		batches: JSON.parse(JSON.stringify(batches))
 	};
@@ -113,7 +129,7 @@ export const actions: Actions = {
 			{ _id: locals.user!._id, username: locals.user!.username }
 		);
 		if (!out.ok) return fail(out.status, { error: out.error });
-		return { ran: true, type: out.type, sessionId: out.sessionId, spuUdi: out.spuUdi, result: out.result };
+		return { ran: true, type: out.type, sessionId: out.sessionId, spuUdi: out.spuUdi, result: out.result, check: gradeBenchRead(out.type, out.result) };
 	}
 };
 

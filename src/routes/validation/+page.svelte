@@ -13,20 +13,9 @@
 			releasing = null;
 		};
 	}
-	let syncing = $state(false);
-	function syncHandler() {
-		syncing = true;
-		return async ({ update }: { update: () => Promise<void> }) => {
-			try {
-				await update();
-			} finally {
-				syncing = false;
-			}
-		};
-	}
 	function releaseBlockedReason(r: { status: string; passedCount: number; total: number }): string {
 		if (r.status !== 'validating') return `Only a validating unit can be released (this one is ${r.status})`;
-		return `${r.passedCount}/${r.total} validations passed this cycle — all three must pass first`;
+		return `${r.passedCount}/${r.total} validations passed this cycle — magnetometer and thermocouple must both pass first`;
 	}
 
 	let expanded = $state<string | null>(null);
@@ -100,21 +89,26 @@
 		return 'neutral';
 	}
 
-	// Validation = how many of the three instruments have passed in the CURRENT
-	// cycle, rendered exactly like the inventory's pill. The cycle resets to
-	// 0/3 when a unit enters servicing (spu-validation-cycle.ts).
+	// Validation = how many of the graded instruments (mag + thermo) have passed
+	// in the CURRENT cycle, rendered exactly like the inventory's pill. The cycle
+	// resets to 0 when a unit enters servicing (spu-validation-cycle.ts).
 
-	function fmtRatio(r: number | null): string {
-		return r == null ? '—' : r.toFixed(2);
+	/** Bench / blank auto-check cell: PASS / FAIL / INCOMPLETE, reasons on hover. */
+	function autoVariant(v: string | undefined): 'success' | 'error' | 'warning' | 'neutral' {
+		if (v === 'pass') return 'success';
+		if (v === 'fail') return 'error';
+		if (v === 'incomplete') return 'warning';
+		return 'neutral';
 	}
 
+	// The validation workflow, in order (2026-10-06): cheapest, broadest checks
+	// first so a bad unit is weeded out before the slower fixture tests.
 	const LAUNCHERS = [
-		{ href: '/validation/magnetometer', label: 'Magnetometer', desc: 'Read gauss values from a device' },
-		{ href: '/validation/thermocouple', label: 'Thermocouple', desc: 'Upload a temperature dataset + verdict' },
-		{ href: '/validation/optical-confirmation', label: 'Optical Confirmation', desc: 'Assign + analyze optics cartridges' },
-		{ href: '/validation/optical-confirmation/blank', label: 'Blank Cartridge', desc: 'One blank cart on every unit — instrument noise' },
-		{ href: '/validation/sonic', label: 'Sonic Fingerprint', desc: 'Upload a phone recording of the motion assay' },
-		{ href: '/validation/bench', label: 'Optical Bench', desc: 'Laser-into-sensor and dark reads, no cartridge' }
+		{ href: '/validation/bench', label: 'Optical Bench', desc: 'Empty slot, one click. Fails on a dead/weak laser, a dead sensor band, or light in the dark read.' },
+		{ href: '/validation/sonic', label: 'Sonic Fingerprint', desc: 'Phone recording of the motion assay. Fleet check: loudness against the fleet.' },
+		{ href: '/validation/blank', label: 'Blank Cartridge', desc: 'One reusable blank cart. Fails on a short run, a missing channel, or a laser that never came on.' },
+		{ href: '/validation/magnetometer', label: 'Magnetometer', desc: 'Fixture cartridge. Z (gauss) per well against the criteria range.' },
+		{ href: '/validation/thermocouple', label: 'Thermocouple', desc: 'Instrumented cartridge + logger. Upload the dataset for a verdict.' }
 	];
 </script>
 
@@ -127,45 +121,40 @@
 				picture lives.
 			</p>
 		</div>
-		<!-- Optics is judged onto units only when a human says so — no timer. -->
-		<form method="POST" action="?/syncOptics" use:enhance={syncHandler}>
-			<span title="Write each unit's latest in-cycle optical run onto its validation record (pass/fail + ratios). Runs only when you press it.">
-				<TronButton type="submit" variant="ghost" disabled={syncing}>
-					{syncing ? 'Syncing optics…' : 'Sync optics to units'}
-				</TronButton>
-			</span>
-		</form>
 	</div>
 
-	<!-- Launchers -->
-	<div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-		{#each LAUNCHERS as l (l.href)}
-			<a href={l.href} class="block">
-				<TronCard interactive>
-					<div class="font-medium text-[var(--color-tron-cyan)]">{l.label} →</div>
-					<div class="tron-text-muted mt-1 text-xs">{l.desc}</div>
-				</TronCard>
-			</a>
-		{/each}
+	<!-- Launchers, in workflow order. A unit that fails a step is fixed and
+	     re-run at that step (back to step 1 if it was opened up). -->
+	<div>
+		<div class="tron-text-muted mb-2 text-xs uppercase">Validation workflow — easiest first</div>
+		<div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+			{#each LAUNCHERS as l, i (l.href)}
+				<a href={l.href} class="block">
+					<TronCard interactive>
+						<div class="font-medium text-[var(--color-tron-cyan)]">
+							<span class="tron-text-muted mr-1 font-mono text-xs">{i + 1}</span>{l.label} →
+						</div>
+						<div class="tron-text-muted mt-1 text-xs">{l.desc}</div>
+					</TronCard>
+				</a>
+			{/each}
+		</div>
 	</div>
 
 	<!-- Fleet matrix -->
 	<TronCard>
 		<h3 class="tron-text-primary mb-3 text-lg font-medium">Fleet Matrix</h3>
 		<p class="tron-text-muted mb-4 text-xs">
-			Magnetometer shows the Z (gauss) range — expand a row for every point. Optics shows the
-			average F7/F3 ratio per channel. Thermocouple shows the mode of the temperature plot.
-			Only the current validation cycle counts — it resets to 0/3 when a unit enters servicing.
-			Most recently tested first. Retired units are hidden.
+			Bench and Blank are checked automatically from the latest run — hover a FAIL for the
+			reason. Magnetometer shows the Z (gauss) range — expand a row for every point.
+			Thermocouple shows the mode of the temperature plot. Release needs magnetometer and
+			thermocouple passed. Only the current validation cycle counts — it resets when a unit
+			enters servicing. Most recently tested first. Retired units are hidden.
 		</p>
 		{#if form?.error}
 			<p class="mb-3 text-sm text-[var(--color-tron-red)]">{form.error}</p>
 		{:else if form?.released}
 			<p class="mb-3 text-sm text-[var(--color-tron-cyan)]">{form.udi} released.</p>
-		{:else if form?.opticsSynced}
-			<p class="mb-3 text-sm text-[var(--color-tron-cyan)]">
-				Optics synced: {form.updated} unit{form.updated === 1 ? '' : 's'} updated ({form.passed} passed, {form.failed} failed), {form.unchanged} unchanged, {form.noReadings} with no run this cycle.
-			</p>
 		{/if}
 		<input
 			type="text"
@@ -195,8 +184,9 @@
 						</th>
 						<th class="py-2 pr-4 text-xs uppercase text-[var(--color-tron-text-secondary)]">Validation</th>
 						<th class="py-2 pr-4 text-xs uppercase text-[var(--color-tron-text-secondary)]">Lifecycle</th>
+						<th class="py-2 pr-4 text-xs uppercase text-[var(--color-tron-text-secondary)]">Bench</th>
+						<th class="py-2 pr-4 text-xs uppercase text-[var(--color-tron-text-secondary)]">Blank</th>
 						<th class="py-2 pr-4 text-xs uppercase text-[var(--color-tron-text-secondary)]">Magnetometer (gauss)</th>
-						<th class="py-2 pr-4 text-xs uppercase text-[var(--color-tron-text-secondary)]">Optics ratio A / B / C</th>
 						<th class="py-2 pr-4 text-xs uppercase text-[var(--color-tron-text-secondary)]">Thermo mode</th>
 						<th
 							class="py-0 pr-4"
@@ -234,6 +224,20 @@
 							<td class="py-2.5 pr-4">
 								<TronBadge variant="neutral">{r.status}</TronBadge>
 							</td>
+							{#each [r.bench, r.blank] as c, ci (ci)}
+								<td class="py-2.5 pr-4 whitespace-nowrap">
+									{#if c}
+										<span title={c.reasons.length ? c.reasons.join('\n') : 'All channels read'}>
+											<TronBadge variant={autoVariant(c.verdict)}>{c.verdict}</TronBadge>
+										</span>
+										{#if c.reasons.length}
+											<div class="mt-0.5 max-w-[14rem] truncate text-[10px] text-[var(--color-tron-red)]" title={c.reasons.join('\n')}>{c.reasons[0]}</div>
+										{/if}
+									{:else}
+										<span class="tron-text-muted text-xs">not run</span>
+									{/if}
+								</td>
+							{/each}
 							<td class="py-2.5 pr-4 whitespace-nowrap">
 								<TronBadge variant={badgeVariant(r.mag.status)}>{r.mag.status}</TronBadge>
 								{#if r.mag.zRange}
@@ -250,23 +254,6 @@
 									{/if}
 								{:else}
 									<span class="tron-text-muted ml-2 text-xs">no readings</span>
-								{/if}
-							</td>
-							<td class="py-2.5 pr-4 font-mono text-xs whitespace-nowrap">
-								{#if r.optics.ratios}
-									<TronBadge variant={badgeVariant(r.optics.status)}>{r.optics.status}</TronBadge>
-									{#if r.optics.cartridgeBarcode}
-									<a
-										href="/validation/optical-confirmation/{r.optics.cartridgeBarcode}"
-										class="ml-2 text-[var(--color-tron-cyan)] hover:underline"
-										title="Open this cartridge's optical test results"
-									>{fmtRatio(r.optics.ratios.A)} / {fmtRatio(r.optics.ratios.B)} / {fmtRatio(r.optics.ratios.C)}</a>
-								{:else}
-									<span class="ml-2">{fmtRatio(r.optics.ratios.A)} / {fmtRatio(r.optics.ratios.B)} / {fmtRatio(r.optics.ratios.C)}</span>
-								{/if}
-								{:else}
-									<TronBadge variant={badgeVariant(r.optics.status)}>{r.optics.status}</TronBadge>
-									<span class="tron-text-muted ml-2">—</span>
 								{/if}
 							</td>
 							<td class="py-2.5 font-mono whitespace-nowrap">
@@ -306,7 +293,7 @@
 						</tr>
 						{#if expanded === r.id && r.mag.wells}
 							<tr class="border-b border-[var(--color-tron-border)]">
-								<td colspan="8" class="bg-[var(--color-tron-bg-secondary)]/40 px-4 py-3">
+								<td colspan="9" class="bg-[var(--color-tron-bg-secondary)]/40 px-4 py-3">
 									<span class="tron-text-muted mb-2 block text-xs uppercase">Gauss (Z) at all points — {r.udi}</span>
 									<table class="text-xs">
 										<thead>
@@ -335,7 +322,7 @@
 							</tr>
 						{/if}
 					{:else}
-						<tr><td colspan="8" class="tron-text-muted py-8 text-center">No units{search.trim() ? ` match “${search}”` : ''}.</td></tr>
+						<tr><td colspan="9" class="tron-text-muted py-8 text-center">No units{search.trim() ? ` match “${search}”` : ''}.</td></tr>
 					{/each}
 				</tbody>
 			</table>

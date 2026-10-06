@@ -324,7 +324,7 @@
 								<td class="py-2.5 pr-4">{s.batchNumber ?? '—'}</td>
 								<td class="py-2.5 pr-4">{s.owner ?? '—'}</td>
 								<td class="py-2.5 pr-4">
-									<!-- Six dots = the six validation tests, in the same order and with
+									<!-- One dot per validation test (workflow order), with
 									     the same colours as the unit page, so a card and the unit it
 									     links to can never tell different stories. Retired units are
 									     dimmed: their counts are history, not work outstanding. -->
