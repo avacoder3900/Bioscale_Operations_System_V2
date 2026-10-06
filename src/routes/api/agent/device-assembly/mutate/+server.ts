@@ -6,6 +6,7 @@ import {
 	renameSection, updateSectionNotes, updateStep, addStep, deleteStep, moveStep,
 	addStepImages, removeStepImage, updateStepImage, moveStepImage,
 	addMaterial, addMaterialFromText, updateMaterial, removeMaterial, relinkAllParts,
+	addSection, deleteSection, moveSection, updateFrontMatter, updateMetadata,
 	importDeviceAssemblyWI, getDeviceAssemblyWI, sectionLabel
 } from '$lib/server/services/device-assembly-wi';
 import { makeDeviceWiImageStore } from '$lib/server/services/device-assembly-wi-images';
@@ -16,7 +17,9 @@ import type { RequestHandler } from './$types';
  * POST /api/agent/device-assembly/mutate — every revision-tracked change to the WI.
  * Body: { op, actor, ...params }. Every op bumps the version and records who/when/what.
  *
- * ops: rename_section, set_section_notes, update_step, add_step, delete_step, move_step,
+ * ops: add_section, delete_section, move_section, rename_section, set_section_notes,
+ *      update_front_matter, update_metadata,
+ *      update_step, add_step, delete_step, move_step,
  *      add_image, remove_image, set_image_caption, reorder_image,
  *      add_material, update_material, remove_material, relink_parts, import
  */
@@ -56,6 +59,39 @@ export const POST: RequestHandler = async ({ request, fetch }) => {
 
 		if (op === 'relink_parts') {
 			return json({ success: true, data: await relinkAllParts(actor) });
+		}
+		if (op === 'add_section') {
+			const r = await addSection(actor, { title: text(body.title), position: num(body.position), type: body.type === 'setup' ? 'setup' : 'subassembly', notesHtml: body.notes ? toHtml(text(body.notes)) : '' });
+			return json({ success: true, data: r }, { status: 201 });
+		}
+		if (op === 'delete_section') {
+			const s = resolveSection(wi, body.section);
+			if (body.confirmed !== true) throw error(400, `confirmed must be true — ask the user to confirm deleting ${sectionLabel(s)} "${s.title}" (${s.steps.length} step(s))`);
+			const moveTo = body.moveStepsTo != null && body.moveStepsTo !== '' ? resolveSection(wi, body.moveStepsTo).number : null;
+			return json({ success: true, data: await deleteSection(actor, s.number, { moveStepsTo: moveTo }) });
+		}
+		if (op === 'move_section') {
+			const s = resolveSection(wi, body.section);
+			const to = num(body.toPosition);
+			if (to == null) throw error(400, 'toPosition (new sub-assembly number) is required');
+			return json({ success: true, data: await moveSection(actor, s.number, to) });
+		}
+		if (op === 'update_front_matter') {
+			const patch: any = {};
+			for (const k of ['purpose', 'scope', 'responsibilities', 'generalNotes'] as const) {
+				if (body[`${k}Html`] != null) patch[`${k}Html`] = String(body[`${k}Html`]);
+				else if (body[k] != null) patch[`${k}Html`] = toHtml(text(body[k]));
+			}
+			if (Array.isArray(body.definitions)) patch.definitions = body.definitions.map(String);
+			if (Array.isArray(body.references)) patch.references = body.references.map(String);
+			return json({ success: true, data: await updateFrontMatter(actor, patch) });
+		}
+		if (op === 'update_metadata') {
+			const patch: any = {};
+			if (body.title != null) patch.title = text(body.title);
+			if (body.assemblyNumber != null) patch.assemblyNumber = text(body.assemblyNumber);
+			if (body.status != null) { if (!['draft', 'active', 'retired'].includes(body.status)) throw error(400, 'status must be draft | active | retired'); patch.status = body.status; }
+			return json({ success: true, data: await updateMetadata(actor, patch) });
 		}
 		if (op === 'rename_section') {
 			const s = resolveSection(wi, body.section);

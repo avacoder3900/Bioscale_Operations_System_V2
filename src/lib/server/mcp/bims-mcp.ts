@@ -224,7 +224,7 @@ async function callAgentApi(
 export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 	// Version bump signals clients (claude.ai caches connector tool lists) that
 	// the toolset changed — bump on every tool add/remove/rename.
-	const server = new McpServer({ name: 'bims-operations', version: '3.9.0' });
+	const server = new McpServer({ name: 'bims-operations', version: '3.10.0' });
 
 	// ---------------------------------------------------------------- meta
 
@@ -2150,8 +2150,9 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 		'device_wi_overview',
 		{ annotations: READ_ONLY,
 			description:
-				'The SPU Assembly Work Instruction (SPU → SPU Assembly WI): current revision (vN, who/when), ' +
-				'every section (Setup + Sub-Assembly 1…5) with its step list (number, title, ESD flag, image and material counts, ' +
+				'The SPU Assembly Work Instruction (SPU → SPU Assembly WI): current revision (vN, who/when), front matter ' +
+				'(purpose/scope/responsibilities/definitions/references), every section (Setup + Sub-Assembly 1…N — add more with ' +
+				'device_wi_add_section) with its step list (number, title, ESD flag, image and material counts, ' +
 				'stepId), part numbers not yet linked to the catalog, and the last 5 revisions. Call this first to find the ' +
 				'step a user is talking about ("step 2 in sub-assembly 2"), then device_wi_get_step for the full text/photos/materials.'
 		},
@@ -2209,6 +2210,79 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 			})
 		},
 		async (args) => callAgentApi(fetcher, '/api/agent/device-assembly/pulls', { query: args })
+	);
+
+	server.registerTool(
+		'device_wi_add_section',
+		{ annotations: WRITE_TOOL,
+			description:
+				'Create a new sub-assembly tab ("add Sub-Assembly 6", "add a section called Enclosure after sub-assembly 2"). ' +
+				'Appends at the end unless position is given; later sub-assemblies renumber (default "Sub-Assembly N" titles follow). ' +
+				'Then fill it with device_wi_add_step / device_wi_move_step. Creates a new revision.',
+			inputSchema: z.object({
+				actor: ACTOR_FIELD,
+				title: z.string().optional().describe('Title shown on the tab (default "Sub-Assembly N").'),
+				position: z.number().int().min(1).optional().describe('Sub-assembly number the new section should take (omit = after the last one).'),
+				type: z.enum(['subassembly', 'setup']).optional().describe('"setup" recreates the Setup block if it was deleted; default subassembly.'),
+				notes: z.string().optional().describe('Section-level notes shown above its steps (plain text).')
+			})
+		},
+		async (args) => wiMutate('add_section', args)
+	);
+
+	server.registerTool(
+		'device_wi_delete_section',
+		{ annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
+			description:
+				'Remove a sub-assembly (or the Setup block). If it still has steps, pass moveStepsTo = the section that should ' +
+				'receive them (they are appended there), otherwise the call is refused. Later sub-assemblies renumber. Quote the ' +
+				'section title and step count back and get an explicit yes before calling with confirmed: true. Creates a new revision.',
+			inputSchema: z.object({
+				actor: ACTOR_FIELD,
+				section: WI_SECTION_FIELD,
+				moveStepsTo: WI_SECTION_FIELD.optional().describe('Where its steps go (required when the section is not empty).'),
+				confirmed: z.boolean().describe('Must be true, only after the user confirmed the deletion.')
+			})
+		},
+		async (args) => wiMutate('delete_section', args)
+	);
+
+	server.registerTool(
+		'device_wi_move_section',
+		{ annotations: WRITE_TOOL,
+			description: 'Reorder sub-assemblies: give a section a new number ("make Enclosure sub-assembly 2"). The others shift and renumber; Setup always stays first. Creates a new revision.',
+			inputSchema: z.object({ actor: ACTOR_FIELD, section: WI_SECTION_FIELD, toPosition: z.number().int().min(1).describe('New sub-assembly number.') })
+		},
+		async (args) => wiMutate('move_section', args)
+	);
+
+	server.registerTool(
+		'device_wi_update_front_matter',
+		{ annotations: WRITE_TOOL,
+			description:
+				'Edit the document front matter shown above the steps: purpose, scope, responsibilities, general notes (plain text; ' +
+				'blank lines = paragraphs, "- " = bullets), and the definitions / references lists (full replacement arrays). ' +
+				'Only the fields you pass change. Read current values from device_wi_overview.frontMatter first. Creates a new revision.',
+			inputSchema: z.object({
+				actor: ACTOR_FIELD,
+				purpose: z.string().optional(),
+				scope: z.string().optional(),
+				responsibilities: z.string().optional(),
+				generalNotes: z.string().optional(),
+				definitions: z.array(z.string()).optional().describe('e.g. ["ESD – Electro Static Discharge", …] — replaces the whole list.'),
+				references: z.array(z.string()).optional().describe('e.g. ["SOP-10 Non-Conforming Materials", …] — replaces the whole list.')
+			})
+		},
+		async (args) => wiMutate('update_front_matter', args)
+	);
+
+	server.registerTool(
+		'device_wi_update_metadata',
+		{ annotations: WRITE_TOOL,
+			description: 'Edit the document title, assembly number (e.g. AS-SPU-001) or status (draft | active | retired). Creates a new revision.',
+			inputSchema: z.object({ actor: ACTOR_FIELD, title: z.string().optional(), assemblyNumber: z.string().optional(), status: z.enum(['draft', 'active', 'retired']).optional() })
+		},
+		async (args) => wiMutate('update_metadata', args)
 	);
 
 	server.registerTool(

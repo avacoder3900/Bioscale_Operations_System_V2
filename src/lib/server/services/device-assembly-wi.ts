@@ -25,7 +25,7 @@ export type RevisionInput = {
 	changeType:
 		| 'import' | 'section_rename' | 'step_add' | 'step_edit' | 'step_delete' | 'step_move'
 		| 'image_add' | 'image_remove' | 'image_edit' | 'material_add' | 'material_edit' | 'material_remove'
-		| 'metadata_edit';
+		| 'metadata_edit' | 'section_add' | 'section_delete' | 'section_move' | 'front_matter_edit';
 	summary: string;
 	location?: { sectionNumber?: number | null; sectionTitle?: string | null; stepNumber?: number | null; stepId?: string | null };
 	before?: unknown;
@@ -567,5 +567,144 @@ export function relinkAllParts(actor: Actor) {
 	return mutateDeviceAssemblyWI(actor, async (doc) => {
 		const { resolved, unresolved } = await resolvePartLinks(doc.sections);
 		return { changeType: 'metadata_edit', summary: `Re-linked materials to the parts catalog (${resolved} linked, ${unresolved.length} unresolved)`, after: { resolved, unresolved } };
+	});
+}
+
+// ───────────────────────────── sections / front matter / metadata ─────────────────────────────
+
+/** Setup stays number 0; sub-assemblies are renumbered 1..N in array order. */
+export function renumberSections(doc: any) {
+	const setup = doc.sections.filter((s: any) => s.type === 'setup');
+	const subs = doc.sections.filter((s: any) => s.type !== 'setup');
+	setup.forEach((s: any) => { s.number = 0; });
+	subs.forEach((s: any, i: number) => { s.number = i + 1; });
+	doc.sections = [...setup, ...subs];
+}
+
+/** Rewrite default "Sub-Assembly N" titles after renumbering so labels and numbers stay in step. */
+function refreshDefaultTitles(doc: any, before: Map<string, number>) {
+	for (const s of doc.sections) {
+		const prev = before.get(s._id);
+		if (prev != null && prev !== s.number && s.type !== 'setup' && s.title === `Sub-Assembly ${prev}`) s.title = `Sub-Assembly ${s.number}`;
+	}
+}
+
+export function addSection(actor: Actor, input: { title?: string; position?: number | null; type?: 'setup' | 'subassembly'; notesHtml?: string }) {
+	return mutateDeviceAssemblyWI(actor, (doc) => {
+		const type = input.type ?? 'subassembly';
+		if (type === 'setup') {
+			if (doc.sections.some((s: any) => s.type === 'setup')) throw new Error('A Setup section already exists');
+			const section = { _id: generateId(), type: 'setup', number: 0, title: input.title?.trim() || 'Cleaning and Setup', notesHtml: sanitizeHtml(input.notesHtml ?? ''), materialsHtml: '', steps: [] };
+			doc.sections.unshift(section);
+			renumberSections(doc);
+			return { changeType: 'section_add', summary: `Added Setup section "${section.title}"`, location: where(section), before: null, after: { title: section.title, number: 0 } };
+		}
+		const subs = doc.sections.filter((s: any) => s.type !== 'setup');
+		let idx = subs.length; // 0-based position among sub-assemblies
+		if (input.position != null && Number.isFinite(input.position)) idx = Math.max(0, Math.min(subs.length, Math.floor(input.position) - 1));
+		const before = new Map<string, number>(doc.sections.map((s: any) => [s._id, s.number]));
+		const section = { _id: generateId(), type: 'subassembly', number: idx + 1, title: input.title?.trim() || `Sub-Assembly ${idx + 1}`, notesHtml: sanitizeHtml(input.notesHtml ?? ''), materialsHtml: '', steps: [] };
+		// insert among sub-assemblies, keep setup first
+		const setup = doc.sections.filter((s: any) => s.type === 'setup');
+		subs.splice(idx, 0, section);
+		doc.sections = [...setup, ...subs];
+		renumberSections(doc);
+		refreshDefaultTitles(doc, before);
+		const shifted = subs.length - 1 - idx;
+		return {
+			changeType: 'section_add',
+			summary: `Added ${sectionLabel(section)} "${section.title}"${shifted ? ` (${shifted} later sub-assembl${shifted === 1 ? 'y' : 'ies'} renumbered)` : ''}`,
+			location: where(section),
+			before: null,
+			after: { number: section.number, title: section.title }
+		};
+	});
+}
+
+export function deleteSection(actor: Actor, sectionNumber: number, opts: { moveStepsTo?: number | null } = {}) {
+	return mutateDeviceAssemblyWI(actor, (doc) => {
+		const section = requireSection(doc, sectionNumber);
+		const label = sectionLabel(section);
+		const snapshot = JSON.parse(JSON.stringify(section));
+		let movedTo: any = null;
+		if (section.steps.length) {
+			if (opts.moveStepsTo == null) throw new Error(`${label} still has ${section.steps.length} step(s). Move them first, or pass moveStepsTo = the section that should receive them.`);
+			movedTo = requireSection(doc, opts.moveStepsTo);
+			if (movedTo._id === section._id) throw new Error('moveStepsTo must be a different section');
+			movedTo.steps.push(...section.steps);
+			renumber(movedTo);
+		}
+		const subsLeft = doc.sections.filter((s: any) => s.type !== 'setup' && s._id !== section._id).length;
+		if (section.type !== 'setup' && subsLeft === 0) throw new Error('Cannot delete the last sub-assembly');
+		const before = new Map<string, number>(doc.sections.map((s: any) => [s._id, s.number]));
+		doc.sections = doc.sections.filter((s: any) => s._id !== section._id);
+		renumberSections(doc);
+		refreshDefaultTitles(doc, before);
+		return {
+			changeType: 'section_delete',
+			summary: `Deleted ${label} "${snapshot.title}"${movedTo ? ` (its ${snapshot.steps.length} step(s) moved to ${sectionLabel(movedTo)})` : ''}; later sub-assemblies renumbered`,
+			location: { sectionNumber: snapshot.number, sectionTitle: snapshot.title, stepNumber: null, stepId: null },
+			before: { number: snapshot.number, title: snapshot.title, steps: snapshot.steps.map((st: any) => ({ stepId: st._id, stepNumber: st.stepNumber, title: st.title })) },
+			after: movedTo ? { stepsMovedTo: movedTo.number } : null
+		};
+	});
+}
+
+export function moveSection(actor: Actor, sectionNumber: number, toPosition: number) {
+	return mutateDeviceAssemblyWI(actor, (doc) => {
+		const section = requireSection(doc, sectionNumber);
+		if (section.type === 'setup') throw new Error('The Setup section always stays first');
+		const subs = doc.sections.filter((s: any) => s.type !== 'setup');
+		const from = subs.findIndex((s: any) => s._id === section._id);
+		const to = Math.max(0, Math.min(subs.length - 1, Math.floor(toPosition) - 1));
+		if (from === to) throw new Error(`${sectionLabel(section)} is already at position ${to + 1}`);
+		const before = new Map<string, number>(doc.sections.map((s: any) => [s._id, s.number]));
+		subs.splice(from, 1);
+		subs.splice(to, 0, section);
+		doc.sections = [...doc.sections.filter((s: any) => s.type === 'setup'), ...subs];
+		renumberSections(doc);
+		refreshDefaultTitles(doc, before);
+		return { changeType: 'section_move', summary: `Moved "${section.title}" from Sub-Assembly ${from + 1} to Sub-Assembly ${to + 1} (others renumbered)`, location: where(section), before: { number: from + 1 }, after: { number: to + 1 } };
+	});
+}
+
+export type FrontMatterPatch = {
+	purposeHtml?: string; scopeHtml?: string; responsibilitiesHtml?: string; generalNotesHtml?: string;
+	definitions?: string[]; references?: string[];
+};
+
+export function updateFrontMatter(actor: Actor, patch: FrontMatterPatch) {
+	return mutateDeviceAssemblyWI(actor, (doc) => {
+		const fm = doc.frontMatter;
+		const before: Record<string, unknown> = {};
+		const after: Record<string, unknown> = {};
+		const changed: string[] = [];
+		for (const k of ['purposeHtml', 'scopeHtml', 'responsibilitiesHtml', 'generalNotesHtml'] as const) {
+			if (patch[k] == null) continue;
+			const html = sanitizeHtml(patch[k]!);
+			if (html === (fm[k] ?? '')) continue;
+			before[k] = fm[k]; fm[k] = html; after[k] = html; changed.push(k.replace('Html', ''));
+		}
+		for (const k of ['definitions', 'references'] as const) {
+			if (!patch[k]) continue;
+			const next = patch[k]!.map((x) => String(x).trim()).filter(Boolean);
+			if (JSON.stringify(next) === JSON.stringify(fm[k] ?? [])) continue;
+			before[k] = fm[k]; fm[k] = next; after[k] = next; changed.push(k);
+		}
+		if (!changed.length) throw new Error('No changes to save');
+		return { changeType: 'front_matter_edit', summary: `Edited front matter (${changed.join(', ')})`, before, after };
+	});
+}
+
+export function updateMetadata(actor: Actor, patch: { title?: string; assemblyNumber?: string; status?: 'draft' | 'active' | 'retired' }) {
+	return mutateDeviceAssemblyWI(actor, (doc) => {
+		const before: Record<string, unknown> = {};
+		const after: Record<string, unknown> = {};
+		const changed: string[] = [];
+		if (patch.title != null && patch.title.trim() && patch.title.trim() !== doc.title) { before.title = doc.title; doc.title = patch.title.trim(); after.title = doc.title; changed.push('title'); }
+		if (patch.assemblyNumber != null && patch.assemblyNumber.trim() !== (doc.assemblyNumber ?? '')) { before.assemblyNumber = doc.assemblyNumber; doc.assemblyNumber = patch.assemblyNumber.trim(); after.assemblyNumber = doc.assemblyNumber; changed.push('assembly number'); }
+		if (patch.status && patch.status !== doc.status) { before.status = doc.status; doc.status = patch.status; after.status = patch.status; changed.push('status'); }
+		if (!changed.length) throw new Error('No changes to save');
+		return { changeType: 'metadata_edit', summary: `Edited document ${changed.join(', ')}`, before, after };
 	});
 }

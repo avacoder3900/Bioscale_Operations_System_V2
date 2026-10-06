@@ -153,6 +153,14 @@ export function overview(wi: any, stock: Record<string, any>) {
 		lastChangedAt: wi.lastChangedAt,
 		sourceFile: wi.sourceFile?.originalFileName ?? null,
 		pageUrl: '/spu/assembly-wi',
+		frontMatter: {
+			purpose: htmlToText(wi.frontMatter?.purposeHtml),
+			scope: htmlToText(wi.frontMatter?.scopeHtml),
+			responsibilities: htmlToText(wi.frontMatter?.responsibilitiesHtml),
+			definitions: wi.frontMatter?.definitions ?? [],
+			references: wi.frontMatter?.references ?? [],
+			generalNotes: htmlToText(wi.frontMatter?.generalNotesHtml)
+		},
 		sections: wi.sections.map((s: any) => ({
 			sectionNumber: s.number,
 			label: sectionLabel(s),
@@ -164,6 +172,10 @@ export function overview(wi: any, stock: Record<string, any>) {
 		partsNotInCatalog: [...unresolved],
 		recentRevisions: [...wi.revisions].sort((a: any, b: any) => b.version - a.version).slice(0, 5).map(revisionView)
 	};
+}
+
+function htmlToText(html: string | null | undefined): string {
+	return (html ?? '').replace(/<\/(p|li|tr|h\d)>/gi, '\n').replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/[ \t]+/g, ' ').replace(/\s*\n\s*/g, '\n').trim();
 }
 
 export function revisionView(r: any) {

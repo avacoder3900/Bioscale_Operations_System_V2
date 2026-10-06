@@ -33,6 +33,21 @@
 	let draftEsd = $state(false);
 	let draftDhr = $state('');
 	let addStepHtml = $state('');
+	let showAddSection = $state(false);
+	let showDeleteSection = $state(false);
+	let editFrontMatter = $state(false);
+	let editMeta = $state(false);
+	let fmPurpose = $state('');
+	let fmScope = $state('');
+	let fmResp = $state('');
+	let fmNotes = $state('');
+	function startFrontMatterEdit() {
+		fmPurpose = data.wi?.frontMatter.purposeHtml ?? '';
+		fmScope = data.wi?.frontMatter.scopeHtml ?? '';
+		fmResp = data.wi?.frontMatter.responsibilitiesHtml ?? '';
+		fmNotes = data.wi?.frontMatter.generalNotesHtml ?? '';
+		editFrontMatter = true;
+	}
 
 	const section = $derived(data.wi?.sections.find((s: any) => s.number === activeSection) ?? null);
 	const totalSteps = $derived(data.wi ? data.wi.sections.reduce((n: number, s: any) => n + s.steps.length, 0) : 0);
@@ -91,7 +106,19 @@
 	<!-- ═══ Header ═══ -->
 	<div class="flex flex-wrap items-start justify-between gap-4">
 		<div>
-			<h1 class="text-2xl font-bold text-[var(--color-tron-cyan)]">SPU Assembly Work Instruction</h1>
+			<h1 class="text-2xl font-bold text-[var(--color-tron-cyan)]">{data.wi?.title || 'SPU Assembly Work Instruction'}</h1>
+			{#if data.wi && editMode}
+				{#if !editMeta}
+					<button class="text-[11px] text-amber-300 hover:underline" onclick={() => (editMeta = true)}>edit title / assembly number</button>
+				{:else}
+					<form method="POST" action="?/updateMetadata" use:enhance={afterSubmit(() => (editMeta = false))} class="mt-1 flex flex-wrap items-center gap-2 text-xs">
+						<input name="title" value={data.wi.title} class="w-72 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-2 py-1 text-[var(--color-tron-text)]" />
+						<input name="assemblyNumber" value={data.wi.assemblyNumber ?? ''} placeholder="AS-SPU-001" class="w-32 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-2 py-1 font-mono text-[var(--color-tron-text)]" />
+						<button class="rounded bg-amber-500 px-2 py-1 font-semibold text-black">Save</button>
+						<button type="button" class="text-[var(--color-tron-text-secondary)]" onclick={() => (editMeta = false)}>cancel</button>
+					</form>
+				{/if}
+			{/if}
 			{#if data.wi}
 				<p class="mt-1 text-sm text-[var(--color-tron-text-secondary)]">
 					{data.wi.documentNumber}{#if data.wi.assemblyNumber} · {data.wi.assemblyNumber}{/if}
@@ -157,8 +184,26 @@
 				<span>Purpose, scope, responsibilities &amp; references</span>
 				<span class="text-xs text-[var(--color-tron-text-secondary)]">{showFrontMatter ? 'hide' : 'show'}</span>
 			</button>
-			{#if showFrontMatter}
+			{#if showFrontMatter && editMode && editFrontMatter}
+				<form method="POST" action="?/updateFrontMatter" use:enhance={afterSubmit(() => (editFrontMatter = false))} class="grid gap-3 border-t border-amber-500/30 bg-amber-900/5 px-4 py-3 text-xs md:grid-cols-2">
+					<input type="hidden" name="purposeHtml" value={fmPurpose} />
+					<input type="hidden" name="scopeHtml" value={fmScope} />
+					<input type="hidden" name="responsibilitiesHtml" value={fmResp} />
+					<input type="hidden" name="generalNotesHtml" value={fmNotes} />
+					<div>Purpose<div contenteditable="true" bind:innerHTML={fmPurpose} class="wi-prose mt-1 min-h-[4rem] rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-3 py-2 text-sm text-[var(--color-tron-text)]"></div></div>
+					<div>Scope<div contenteditable="true" bind:innerHTML={fmScope} class="wi-prose mt-1 min-h-[4rem] rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-3 py-2 text-sm text-[var(--color-tron-text)]"></div></div>
+					<div>Responsibilities<div contenteditable="true" bind:innerHTML={fmResp} class="wi-prose mt-1 min-h-[4rem] rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-3 py-2 text-sm text-[var(--color-tron-text)]"></div></div>
+					<div>General notes<div contenteditable="true" bind:innerHTML={fmNotes} class="wi-prose mt-1 min-h-[4rem] rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-3 py-2 text-sm text-[var(--color-tron-text)]"></div></div>
+					<label>Definitions (one per line)<textarea name="definitions" rows="4" class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-2 py-1 text-sm text-[var(--color-tron-text)]">{data.wi.frontMatter.definitions.join('\n')}</textarea></label>
+					<label>References (one per line)<textarea name="references" rows="4" class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-2 py-1 text-sm text-[var(--color-tron-text)]">{data.wi.frontMatter.references.join('\n')}</textarea></label>
+					<div class="flex gap-2 md:col-span-2">
+						<button class="rounded bg-amber-500 px-3 py-1 font-semibold text-black">Save front matter (creates v{data.wi.currentVersion + 1})</button>
+						<button type="button" class="rounded border border-[var(--color-tron-border)] px-3 py-1 text-[var(--color-tron-text-secondary)]" onclick={() => (editFrontMatter = false)}>Cancel</button>
+					</div>
+				</form>
+			{:else if showFrontMatter}
 				<div class="wi-prose grid gap-4 border-t border-[var(--color-tron-border)] px-4 py-3 text-sm md:grid-cols-2">
+					{#if editMode}<div class="md:col-span-2"><button class="text-[11px] text-amber-300 hover:underline" onclick={startFrontMatterEdit}>edit front matter</button></div>{/if}
 					<div><h3>Purpose</h3>{@html data.wi.frontMatter.purposeHtml || '<p>—</p>'}</div>
 					<div><h3>Scope</h3>{@html data.wi.frontMatter.scopeHtml || '<p>—</p>'}</div>
 					<div><h3>Responsibilities</h3>{@html data.wi.frontMatter.responsibilitiesHtml || '<p>—</p>'}</div>
@@ -187,7 +232,7 @@
 		</div>
 
 		<!-- ═══ Section tabs ═══ -->
-		<div class="flex flex-wrap gap-2 border-b border-[var(--color-tron-border)] pb-2">
+		<div class="flex flex-wrap items-center gap-2 border-b border-[var(--color-tron-border)] pb-2">
 			{#each data.wi.sections as s (s._id)}
 				<button
 					class="rounded-t px-3 py-2 text-sm transition {activeSection === s.number ? 'bg-[var(--color-tron-cyan)]/15 font-semibold text-[var(--color-tron-cyan)] border-b-2 border-[var(--color-tron-cyan)]' : 'text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]'}"
@@ -197,6 +242,18 @@
 					<span class="ml-1 rounded-full bg-[var(--color-tron-surface)] px-1.5 text-[10px] text-[var(--color-tron-text-secondary)]">{s.steps.length}</span>
 				</button>
 			{/each}
+			{#if editMode}
+				{#if !showAddSection}
+					<button class="rounded border border-dashed border-[var(--color-tron-cyan)]/50 px-3 py-1.5 text-xs text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10" onclick={() => (showAddSection = true)}>+ Add sub-assembly</button>
+				{:else}
+					<form method="POST" action="?/addSection" use:enhance={afterSubmit(() => (showAddSection = false))} class="flex items-center gap-1 text-xs">
+						<input name="title" placeholder="Title (optional)" class="w-44 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-2 py-1 text-[var(--color-tron-text)]" />
+						<input name="position" type="number" min="1" placeholder="as #" title="Sub-assembly number (blank = last)" class="w-16 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-2 py-1 text-[var(--color-tron-text)]" />
+						<button class="rounded border border-[var(--color-tron-cyan)]/50 px-2 py-1 text-[var(--color-tron-cyan)]">Add</button>
+						<button type="button" class="text-[var(--color-tron-text-secondary)]" onclick={() => (showAddSection = false)}>cancel</button>
+					</form>
+				{/if}
+			{/if}
 		</div>
 
 		{#if section}
@@ -208,11 +265,38 @@
 						<h2 class="text-lg font-semibold text-[var(--color-tron-text)]">{section.title}</h2>
 					</div>
 					{#if editMode}
-						<form method="POST" action="?/renameSection" use:enhance={afterSubmit()} class="flex items-center gap-2">
-							<input type="hidden" name="sectionNumber" value={section.number} />
-							<input name="title" value={section.title} class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-2 py-1 text-sm text-[var(--color-tron-text)]" />
-							<button class="rounded border border-[var(--color-tron-cyan)]/50 px-2 py-1 text-xs text-[var(--color-tron-cyan)]">Rename</button>
-						</form>
+						<div class="flex flex-wrap items-center gap-2">
+							<form method="POST" action="?/renameSection" use:enhance={afterSubmit()} class="flex items-center gap-2">
+								<input type="hidden" name="sectionNumber" value={section.number} />
+								<input name="title" value={section.title} class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-2 py-1 text-sm text-[var(--color-tron-text)]" />
+								<button class="rounded border border-[var(--color-tron-cyan)]/50 px-2 py-1 text-xs text-[var(--color-tron-cyan)]">Rename</button>
+							</form>
+							{#if section.type !== 'setup'}
+								<form method="POST" action="?/moveSection" use:enhance={afterSubmit(() => (activeSection = Math.max(1, section.number - 1)))} class="inline">
+									<input type="hidden" name="sectionNumber" value={section.number} /><input type="hidden" name="toPosition" value={section.number - 1} />
+									<button class="rounded border border-[var(--color-tron-border)] px-2 py-1 text-xs text-[var(--color-tron-text-secondary)] disabled:opacity-30" disabled={section.number <= 1} title="move earlier">◀</button>
+								</form>
+								<form method="POST" action="?/moveSection" use:enhance={afterSubmit(() => (activeSection = section.number + 1))} class="inline">
+									<input type="hidden" name="sectionNumber" value={section.number} /><input type="hidden" name="toPosition" value={section.number + 1} />
+									<button class="rounded border border-[var(--color-tron-border)] px-2 py-1 text-xs text-[var(--color-tron-text-secondary)] disabled:opacity-30" disabled={section.number >= data.wi.sections.filter((x: any) => x.type !== 'setup').length} title="move later">▶</button>
+								</form>
+							{/if}
+							{#if !showDeleteSection}
+								<button class="rounded border border-red-500/40 px-2 py-1 text-xs text-red-300 hover:bg-red-900/20" onclick={() => (showDeleteSection = true)}>Delete section</button>
+							{:else}
+								<form method="POST" action="?/deleteSection" use:enhance={afterSubmit(() => { showDeleteSection = false; activeSection = 0; })} class="flex items-center gap-1 rounded border border-red-500/40 bg-red-900/10 px-2 py-1 text-xs" onsubmit={(e) => { if (!confirm(`Delete ${sectionLabel(section)} "${section.title}"?`)) e.preventDefault(); }}>
+									<input type="hidden" name="sectionNumber" value={section.number} />
+									{#if section.steps.length}
+										<span class="text-red-200">move its {section.steps.length} steps to</span>
+										<select name="moveStepsTo" required class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-1 py-0.5 text-[var(--color-tron-text)]">
+											{#each data.wi.sections.filter((x: any) => x._id !== section._id) as t}<option value={t.number}>{sectionLabel(t)} — {t.title}</option>{/each}
+										</select>
+									{/if}
+									<button class="rounded bg-red-500 px-2 py-0.5 font-semibold text-black">Delete</button>
+									<button type="button" class="text-[var(--color-tron-text-secondary)]" onclick={() => (showDeleteSection = false)}>cancel</button>
+								</form>
+							{/if}
+						</div>
 					{/if}
 				</div>
 				{#if section.notesHtml}

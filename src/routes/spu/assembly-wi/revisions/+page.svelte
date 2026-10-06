@@ -39,6 +39,10 @@
 		material_remove: 'text-red-300 border-red-500/40',
 		material_edit: 'text-amber-300 border-amber-500/40',
 		section_rename: 'text-amber-300 border-amber-500/40',
+		section_add: 'text-green-300 border-green-500/40',
+		section_delete: 'text-red-300 border-red-500/40',
+		section_move: 'text-purple-300 border-purple-500/40',
+		front_matter_edit: 'text-amber-300 border-amber-500/40',
 		metadata_edit: 'text-[var(--color-tron-text-secondary)] border-[var(--color-tron-border)]'
 	};
 </script>

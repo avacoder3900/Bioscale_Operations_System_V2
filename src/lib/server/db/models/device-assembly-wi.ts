@@ -67,7 +67,7 @@ const revisionSchema = new Schema({
 		enum: [
 			'import', 'section_rename', 'step_add', 'step_edit', 'step_delete', 'step_move',
 			'image_add', 'image_remove', 'image_edit', 'material_add', 'material_edit', 'material_remove',
-			'metadata_edit'
+			'metadata_edit', 'section_add', 'section_delete', 'section_move', 'front_matter_edit'
 		],
 		required: true
 	},
