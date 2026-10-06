@@ -55,7 +55,11 @@ const cartridgeRecordSchema = new Schema({
 	},
 	waxQc: {
 		status: { type: String, enum: ['Accepted', 'Rejected', 'Pending'] },
-		rejectionReason: String, source: String, operator: operatorRef, timestamp: Date, recordedAt: Date
+		rejectionReason: String, source: String, operator: operatorRef, timestamp: Date, recordedAt: Date,
+		// 'photo' when a capture image backs the verdict, 'visual' for a bench
+		// eyeball reject with no picture (Wax Reject, 2026-10-06). Lets the
+		// training set exclude photo-less rejects without guessing from imageId.
+		method: { type: String, enum: ['photo', 'visual'] }
 	},
 	waxStorage: {
 		locationId: String,           // Equipment._id of the fridge (authoritative join key - S1a)

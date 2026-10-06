@@ -18639,3 +18639,24 @@ Deployment: production — Vercel GitHub integration build of master
 Source: branch master @ commit c588bdf1 (merge of feat/reagent-well-tracker @ 176a48d0)
 Retrieve this exact code: git checkout master at commit c588bdf1
 What this deployment is for: reagent-filling run page gets the per-well mistake tracker; new Well Issues tab.
+
+================================================================================
+2026-10-06 — feat/wax-reject-visual-only — Wax Reject: photo optional, reason required (visual bench rejects)
+================================================================================
+Alejandro asked for "a temporary option to scrap carts post wax fill based on visual inspection"
+so the usable wax count is honest. The Wax Reject page already did exactly that (scan → photo →
+Reject → wax_rejected, reagent scan refuses wax_rejected) but the MANDATORY photo meant it was
+never used: 767 wax_filled / 0 wax_rejected ever as of today — the line bypassed the camera (no
+time to train it) and failed carts stayed in the usable count. Root cause = the photo gate, not
+a missing feature.
+- wax-reject/+page.svelte: Reject is gated on a REASON (chip or note) instead of a photo; Space
+  still photographs when a camera/station is connected and the image attaches as before; copy,
+  banners, button titles and the Enter handler updated; reason chips widened (no wax, wrong hole,
+  damaged). Header comment records the 2026-10-06 decision + the 767/0 finding.
+- api/cv/wax-verdict/+server.ts: rejects with neither imageId nor reason → 400; stamps
+  waxQc.method 'photo' | 'visual' (also in the audit row) so the CV training set can skip
+  photo-less rejects.
+- models/cartridge-record.ts: waxQc.method enum.
+- cart-mfg dashboard: pipeline.waxFilling.waxRejected; the "Wax-Filled" tile sub-line now reads
+  "usable · N rejected" (its count was already wax_filled + wax_ready, excluding rejects).
+`npm run check`: 16 errors / 434 warnings — same as master, none in the changed files.
