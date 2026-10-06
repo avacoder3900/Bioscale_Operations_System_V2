@@ -3,6 +3,24 @@ import { generateId } from '../utils.js';
 import { applySacredMiddleware } from '../middleware/sacred.js';
 
 const operatorRef = { _id: String, username: String };
+
+/**
+ * What an operator can tag a reagent well with during a run. Kept short and
+ * physical — these are the things you can SEE from beside the robot. Shared
+ * with the run-page tracker (labels live in $lib/manufacturing/reagent-well-issues).
+ */
+export const REAGENT_WELL_ISSUES = [
+	'no_fill',       // well stayed empty
+	'partial_fill',  // visibly short volume
+	'overfill',      // volume over the rim / pooled
+	'missed_hole',   // dispensed on the rim / next to the hole
+	'splash',        // droplets on the cartridge surface or wall
+	'bubble',        // air bubble in the well
+	'bent_tip',      // tip bent going in (fill suspect)
+	'other'
+] as const;
+export type ReagentWellIssue = (typeof REAGENT_WELL_ISSUES)[number];
+
 const correctionSchema = new Schema({
 	_id: { type: String, default: () => generateId() },
 	fieldPath: String, previousValue: Schema.Types.Mixed, correctedValue: Schema.Types.Mixed,
@@ -119,6 +137,26 @@ const reagentBatchRecordSchema = new Schema({
 		phase: String,
 		author: operatorRef,
 		createdAt: Date
+	}],
+
+	// Per-well fill mistakes spotted by the operator while watching the run
+	// (2026-10-06). Calibration looks perfect in the Studio and the run still
+	// misses "here and there" — this is the log of exactly which deck position
+	// and which reagent well went wrong, so the misses can be charted by
+	// position across runs instead of remembered. Append-only; an entry can be
+	// removed by the operator who is watching (mis-tap), which is audited.
+	// `well` is the cartridge reagent well (2 beads, 3 tracer, 4 wash, 5
+	// elution) — the same numbering the protocol's well_2..well_5 RTPs use.
+	wellIssues: [{
+		_id: { type: String, default: () => generateId() },
+		deckPosition: Number,
+		cartridgeId: String,
+		well: Number,
+		reagentName: String,
+		issue: { type: String, enum: REAGENT_WELL_ISSUES },
+		note: String,
+		loggedBy: operatorRef,
+		loggedAt: Date
 	}],
 
 	finalizedAt: Date, voidedAt: Date, voidReason: String,

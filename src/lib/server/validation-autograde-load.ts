@@ -32,7 +32,8 @@ export async function loadAutoVerdicts(spus: { _id: string; udi?: string | null 
 			}
 		]),
 		ValidationSession.aggregate([
-			{ $match: { type: { $in: ['laser', 'dark'] }, spuId: { $in: ids } } },
+			// status 'failed' = a fleet run that could not reach the unit: no reading, nothing to grade.
+			{ $match: { type: { $in: ['laser', 'dark'] }, spuId: { $in: ids }, status: { $ne: 'failed' } } },
 			{ $sort: { startedAt: -1, createdAt: -1 } },
 			{
 				$group: {

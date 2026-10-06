@@ -5,9 +5,17 @@
 	 * Bucket of visually-rejected wax_filled carts → scan one (sticky context),
 	 * press Space to photograph it (Pi WebRTC station or USB camera; POST
 	 * /api/cv/capture at phase 'wax_filled' with verdict:'rejected' so the image
-	 * is pre-labelled fail for training), optionally pick a reason, then Reject
-	 * (Enter) → POST /api/cv/wax-verdict → wax_rejected. Photo is mandatory —
-	 * that's the point. Passing inspection is implicit; no button for it.
+	 * is pre-labelled fail for training), pick a reason, then Reject
+	 * (Enter) → POST /api/cv/wax-verdict → wax_rejected.
+	 *
+	 * VISUAL-ONLY REJECTS (2026-10-06, temporary): the photo is OPTIONAL and the
+	 * reason is REQUIRED. The line never got time to train the camera, so the
+	 * bench has been doing a real visual inspection and the mandatory photo meant
+	 * no reject was ever recorded (767 wax_filled, 0 wax_rejected on 10-06) —
+	 * failed carts sat in the usable count and could be scanned into a reagent
+	 * run. A reject with no photo is stamped waxQc.source 'human' with no
+	 * imageId; when a camera IS connected the photo still attaches as before.
+	 * Passing inspection is implicit; no button for it.
 	 * Capture/station plumbing is copied from /wax-inspect (the proven implementation).
 	 */
 	import { onMount, onDestroy } from 'svelte';
@@ -25,13 +33,13 @@
 
 	const PHASE = 'wax_filled';
 	const ALLOWED_STATUSES: string[] = data.allowedStatuses ?? ['wax_filled', 'wax_ready'];
-	const REASON_CHIPS = ['underfill', 'overfill', 'bubble', 'smear', 'other'] as const;
+	const REASON_CHIPS = ['underfill', 'overfill', 'no wax', 'bubble', 'smear', 'wrong hole', 'damaged', 'other'] as const;
 
 	// ── Sticky cartridge context ────────────────────────────────────────────
 	let cartridgeId = $state<string | null>(null);
 	let cartridgeStatus = $state<string | null>(null);
 	let scannedAt = $state<number | null>(null);
-	// Photo taken for THIS scan — reject is disabled until it exists.
+	// Photo taken for THIS scan — optional (see header); attached when present.
 	let capturedImageId = $state<string | null>(null);
 	let capturedImageUrl = $state<string | null>(null);
 	let capturedNumber = $state<string | null>(null);
@@ -109,6 +117,8 @@
 		const parts = [reasonChip, reasonText.trim()].filter(Boolean);
 		return parts.join(': ');
 	}
+	// A reject needs a reason now that the photo is optional — a chip or a note.
+	const hasReason = $derived(!!reasonChip || reasonText.trim().length > 0);
 
 	// ── Scan handling ───────────────────────────────────────────────────────
 	async function handleScan(rawCode: string) {
@@ -140,7 +150,7 @@
 			cartridgeId = info.cartridgeRecordId;
 			cartridgeStatus = status;
 			scannedAt = Date.now();
-			flashBanner('ok', `Locked on ${cartridgeId} (${status}) — press Space to photograph`);
+			flashBanner('ok', `Locked on ${cartridgeId} (${status}) — pick a reason, then Reject (Enter). Space to photograph if a camera is on.`);
 		} catch (e) {
 			flashBanner('err', e instanceof Error ? e.message : 'Lookup failed');
 		} finally {
@@ -456,10 +466,10 @@
 		}
 	}
 
-	// ── Reject: wax_filled | wax_ready → wax_rejected (photo mandatory) ─────
+	// ── Reject: wax_filled | wax_ready → wax_rejected (reason required, photo optional) ─
 	async function submitReject() {
 		if (rejecting || !cartridgeId) return;
-		if (!capturedImageId) { flashBanner('err', 'Snap a photo first — every reject needs its picture'); return; }
+		if (!hasReason) { flashBanner('err', 'Pick a reason (or type a note) — a visual reject needs to say what was wrong'); return; }
 		rejecting = true;
 		const id = cartridgeId;
 		const reason = composedReason();
@@ -500,7 +510,7 @@
 		}
 	}
 
-	// ── Keyboard: Space = capture, Enter = reject (when a photo exists) ──────
+	// ── Keyboard: Space = capture, Enter = reject (when a reason is picked) ──
 	function onGlobalKeydown(e: KeyboardEvent) {
 		const target = e.target as HTMLElement;
 		const inControl = target !== scanInputEl &&
@@ -512,7 +522,7 @@
 			return;
 		}
 		if (e.key === 'Enter' && target !== scanInputEl && !inControl) {
-			if (cartridgeId && capturedImageId) {
+			if (cartridgeId && hasReason) {
 				e.preventDefault();
 				submitReject();
 			}
@@ -559,8 +569,9 @@
 			<div>
 				<h1 class="text-2xl font-bold text-[var(--color-tron-red,#ff3366)]">Wax Reject</h1>
 				<p class="text-xs text-[var(--color-tron-text-secondary)]">
-					Visually rejected wax-filled carts come here from the reject bucket. Scan → Space to photograph → Reject (Enter).
-					Not being rejected means accepted — there is nothing to do for good carts.
+					Carts that failed your visual check after wax fill come here. Scan → pick a reason → Reject (Enter).
+					A photo (Space) is optional while the camera is untrained. Rejected carts leave the usable wax count and
+					can't be scanned into a reagent run. Not being rejected means accepted — nothing to do for good carts.
 				</p>
 			</div>
 			<div class="flex gap-4 text-xs text-[var(--color-tron-text-secondary)]">
@@ -660,7 +671,7 @@
 					<img src={capturedImageUrl} alt={cartridgeId ?? 'capture'} class="aspect-video w-full rounded object-cover" />
 				{:else}
 					<div class="flex aspect-video items-center justify-center rounded border border-dashed border-[var(--color-tron-border)] text-xs text-[var(--color-tron-text-secondary)]">
-						{cartridgeId ? 'Press Space to photograph' : 'Scan first'}
+						{cartridgeId ? (stream ? 'Space to photograph (optional)' : 'No camera — reject without a photo') : 'Scan first'}
 					</div>
 				{/if}
 			</div>
@@ -668,7 +679,7 @@
 
 		<!-- Reason (optional) -->
 		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-3">
-			<div class="mb-2 text-xs uppercase text-[var(--color-tron-text-secondary)]">Reason <span class="normal-case opacity-70">(optional)</span></div>
+			<div class="mb-2 text-xs uppercase text-[var(--color-tron-text-secondary)]">Reason <span class="normal-case opacity-70">(required — what did you see?)</span></div>
 			<div class="flex flex-wrap items-center gap-2">
 				{#each REASON_CHIPS as chip (chip)}
 					<button
@@ -705,14 +716,16 @@
 			<button
 				type="button"
 				onclick={() => submitReject()}
-				disabled={rejecting || !cartridgeId || !capturedImageId}
-				title={!capturedImageId ? 'Snap a photo first' : 'Mark wax_rejected'}
+				disabled={rejecting || !cartridgeId || !hasReason}
+				title={!hasReason ? 'Pick a reason first' : 'Mark wax_rejected'}
 				class="rounded bg-red-600 px-6 py-3 text-lg font-bold text-white transition-colors hover:bg-red-500 disabled:opacity-40"
 			>
 				{rejecting ? 'Rejecting…' : '✗ Reject (Enter)'}
 			</button>
-			{#if cartridgeId && !capturedImageId}
-				<div class="text-xs text-[var(--color-tron-yellow,#facc15)]">Snap a photo first — every reject needs its picture.</div>
+			{#if cartridgeId && !hasReason}
+				<div class="text-xs text-[var(--color-tron-yellow,#facc15)]">Pick a reason chip (or type a note), then Reject.</div>
+			{:else if cartridgeId && !capturedImageId}
+				<div class="text-xs text-[var(--color-tron-text-secondary)]">Rejecting without a photo (visual inspection).</div>
 			{:else if !cartridgeId}
 				<div class="text-xs text-[var(--color-tron-text-secondary)]">Scan a cartridge from the reject bucket to begin</div>
 			{/if}

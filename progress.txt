@@ -18574,6 +18574,96 @@ the board has no drag-and-drop), though the transition service allowed it.
 `npm run check`: 13 errors / 434 warnings — unchanged, none in the changed files.
 
 ================================================================================
+2026-10-06 — feat/optical-bench-run-all — Optical bench: "Run on all units" fleet run + batch CSV
+================================================================================
+Added a fleet run to /validation/bench: one button runs the selected bench read
+(laser / dark / scan, same fixed settings) on every non-retired SPU with a linked
+Particle device and gathers the results into one batch.
+
+Why it fans out client-side: a single bench read blocks up to ~36 s (trigger +
+poll optical_bench) against the 60 s function limit, so the server can't loop the
+fleet in one request. The page runs 4 units at a time, one POST per unit to the
+new /api/validation/bench/run, each tagged with a batchId (BENCH-YYYYMMDD-HHMM-XXXX).
+
+- src/lib/server/optical-bench.ts (new): the read logic moved out of the bench
+  page action verbatim (fixed settings, firmware v96 contract, trigger/poll/store).
+  With a batchId, failed attempts (offline/busy/cartridge inserted/timeout/no v96)
+  are stored as status 'failed' validation sessions so a batch lists every unit.
+  Successes carry rawData.batchId; journal line notes the fleet run.
+- src/routes/api/validation/bench/run/+server.ts (new): spu:write; per-unit run;
+  skipReason records a pre-known offline unit without a 15 s Particle timeout.
+- bench/+page.server.ts: Go action now calls the shared helper (unchanged
+  behaviour); load adds the last 8 fleet batches; history hides failed sessions.
+- bench/+page.svelte: "Run on all units (N)" card with inline confirm, skip-offline
+  toggle (one /api/particle/status call), Stop, live per-unit table (PD + F7 A/B/C);
+  "Fleet runs" section with expandable batches and a long-format CSV download
+  (unit × channel, × scan point for scans, all ten bands + PD/PD dark).
+
+svelte-check: 0 errors in touched files. Worktree total 119 — 92 in
+lib/server/mcp/bims-mcp.ts and the rest in untouched files (worktree uses a
+junctioned node_modules); not introduced here. Not yet exercised against live units.
+Deployment: preview — https://bioscale-operations-system-mongodb-d38xqh8us-brevitest.vercel.app
+Source: branch feat/optical-bench-run-all @ commit ee5968b2c
+Retrieve this exact code: git checkout feat/optical-bench-run-all at commit ee5968b2c
+  (or: git log feat/optical-bench-run-all --oneline to find it if the branch has since moved on)
+What this deployment is for: try "Run on all units" on /validation/bench before merging.
+2026-10-06 — feat/reagent-well-tracker — reagent fills: per-well mistake tracker on the run page + history heatmap
+================================================================================
+Alejandro: "everything looks good during calibration, however whenever we do the actual fills
+sometimes there are still mistakes here and there" — wanted a way to log them per well, in real
+time, on each reagent run. Until now the only place was a free-text run note, so there was no way
+to tell whether the misses cluster on a position (deck geometry) or scatter (tip).
+- models/reagent-batch-record.ts: `wellIssues[]` ({_id, deckPosition 1-24, cartridgeId, well 2-5,
+  reagentName, issue enum REAGENT_WELL_ISSUES (no_fill/partial_fill/overfill/missed_hole/splash/
+  bubble/bent_tip/other), note, loggedBy, loggedAt}). Well numbering = the .py's well_2..well_5.
+- models/cartridge-record.ts: `reagentFilling.wellIssues[]`; run-lifecycle-records.ts
+  finalizeReagentRun copies each cart's entries into its own stamp (clean carts get []).
+- lib/manufacturing/reagent-well-issues.ts: client-safe vocabulary + labels, the 4 wells, the
+  8x3 snake deck layout (same as DeckLoadingGrid).
+- reagent-filling/+page.server.ts: load returns `wellIssues`; actions `logWellIssue` /
+  `removeWellIssue` (validate position/well/issue, refuse once the run is finalized/terminal, audit
+  rows reagent_well_issue_logged / _removed, return the fresh list).
+- components/reagent-filling/ReagentWellTracker.svelte: the deck drawn as 24 tiles x 4 well
+  buttons; tap a well -> pick what you saw (+ optional note) -> saved immediately; red cells,
+  running log with ✕ remove. Uses $app/forms deserialize on the fetch'd action result.
+- reagent-filling/+page.svelte: tracker mounted on the Running stage (under the tip-swap card),
+  live until Done; loaded positions / cartridge ids / reagent names / active wells derived from
+  the run data. Optimistic local copy reset by reload.
+- NEW reagent-filling/well-issues/ page (+ "Well Issues" tab in the reagent layout): heatmap per
+  robot+deck over N days (24 positions x 4 wells, carrier totals, by-well totals, by-type counts,
+  % of wells), plus expandable per-run lists. Only runs with issues are listed; header shows all
+  runs in the window so the rate is honest.
+Smoke-tested the schema against Atlas on a throwaway run (push / enum reject / pull / delete).
+`npm run check`: 16 errors / 434 warnings — identical to origin/master, none in the changed files.
+Deployment: production — Vercel GitHub integration build of master
+Source: branch master @ commit c588bdf1 (merge of feat/reagent-well-tracker @ 176a48d0)
+Retrieve this exact code: git checkout master at commit c588bdf1
+What this deployment is for: reagent-filling run page gets the per-well mistake tracker; new Well Issues tab.
+
+================================================================================
+2026-10-06 — feat/wax-reject-visual-only — Wax Reject: photo optional, reason required (visual bench rejects)
+================================================================================
+Alejandro asked for "a temporary option to scrap carts post wax fill based on visual inspection"
+so the usable wax count is honest. The Wax Reject page already did exactly that (scan → photo →
+Reject → wax_rejected, reagent scan refuses wax_rejected) but the MANDATORY photo meant it was
+never used: 767 wax_filled / 0 wax_rejected ever as of today — the line bypassed the camera (no
+time to train it) and failed carts stayed in the usable count. Root cause = the photo gate, not
+a missing feature.
+- wax-reject/+page.svelte: Reject is gated on a REASON (chip or note) instead of a photo; Space
+  still photographs when a camera/station is connected and the image attaches as before; copy,
+  banners, button titles and the Enter handler updated; reason chips widened (no wax, wrong hole,
+  damaged). Header comment records the 2026-10-06 decision + the 767/0 finding.
+- api/cv/wax-verdict/+server.ts: rejects with neither imageId nor reason → 400; stamps
+  waxQc.method 'photo' | 'visual' (also in the audit row) so the CV training set can skip
+  photo-less rejects.
+- models/cartridge-record.ts: waxQc.method enum.
+- cart-mfg dashboard: pipeline.waxFilling.waxRejected; the "Wax-Filled" tile sub-line now reads
+  "usable · N rejected" (its count was already wax_filled + wax_ready, excluding rejects).
+`npm run check`: 16 errors / 434 warnings — same as master, none in the changed files.
+Deployment: production — Vercel GitHub integration build of master
+Source: branch master @ commit d3c83e12 (merge of feat/wax-reject-visual-only)
+Retrieve this exact code: git checkout master at commit d3c83e12
+What this deployment is for: Wax Reject usable without a camera (reason-gated visual rejects); dashboard shows rejected count.
 2026-10-06 — feat/validation-autograde — validation workflow: bench + blank auto-graded, optics banked, sonic fleet compare
 ================================================================================
 The validation section is reorganised as a workflow, easiest/broadest check first:

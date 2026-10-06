@@ -277,7 +277,9 @@ export const load: PageServerLoad = async ({ locals }) => {
 				inProgress: phaseMap.get('wax_filling') ?? 0,
 				waxFilled: phaseMap.get('wax_filled') ?? 0,
 				// Wax-stage carts eligible for reagent filling (WAX-SIMPLIFY-3)
-				waxStage: WAX_STAGE_STATUSES.reduce((s, st) => s + (phaseMap.get(st) ?? 0), 0)
+				waxStage: WAX_STAGE_STATUSES.reduce((s, st) => s + (phaseMap.get(st) ?? 0), 0),
+				// Visually rejected at the bench (Wax Reject) — out of the usable count.
+				waxRejected: phaseMap.get('wax_rejected') ?? 0
 			},
 			reagentFilling: {
 				inProgress: phaseMap.get('reagent_filling') ?? 0,
