@@ -59,7 +59,7 @@
 	// strip further down, so repeating it here was a third copy of the same count.
 	const pipelineStages = $derived([
 		{ label: 'Wax Fill', count: data.pipeline.waxFilling.inProgress, sub: 'filling', color: 'text-[var(--color-tron-yellow)]' },
-		{ label: 'Wax-Filled', count: data.pipeline.waxFilling.waxStage, sub: 'ready for reagent', color: 'text-[var(--color-tron-blue)]' },
+		{ label: 'Wax-Filled', count: data.pipeline.waxFilling.waxStage, sub: `usable · ${data.pipeline.waxFilling.waxRejected ?? 0} rejected`, color: 'text-[var(--color-tron-blue)]' },
 		{ label: 'Reagent', count: data.pipeline.reagentFilling.inProgress + data.pipeline.reagentFilling.reagentFilled, sub: `${data.pipeline.reagentFilling.inProgress} filling`, color: 'text-[var(--color-tron-orange)]' },
 		{ label: 'Seal', count: data.pipeline.reagentFilling.sealed, sub: 'sealed', color: 'text-[var(--color-tron-cyan)]' },
 		{ label: 'Store', count: data.pipeline.storage.stored, sub: `${data.pipeline.storage.voided} voided`, color: 'text-[var(--color-tron-green)]' }
