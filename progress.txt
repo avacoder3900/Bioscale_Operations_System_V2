@@ -18631,3 +18631,7 @@ page is back to one "Compare recordings" button.
 Unit tests 11/11. `npm run check` (after svelte-kit sync): 119 errors / 434 warnings, same as the
 previous commit; none in the changed files (remaining errors = packages missing from the borrowed
 node_modules + pre-existing).
+Deployment: preview — https://bioscale-operations-system-mongodb-1eirlk0xs-brevitest.vercel.app
+Source: branch feat/validation-autograde @ commit 3d78f2287
+Retrieve this exact code: git checkout feat/validation-autograde at commit 3d78f2287
+What this deployment is for: review the merged sonic compare page (Fleet check / Detailed compare buttons).
