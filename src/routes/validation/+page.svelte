@@ -105,7 +105,7 @@
 	// first so a bad unit is weeded out before the slower fixture tests.
 	const LAUNCHERS = [
 		{ href: '/validation/bench', label: 'Optical Bench', desc: 'Empty slot, one click. Fails on a dead/weak laser, a dead sensor band, or light in the dark read.' },
-		{ href: '/validation/sonic', label: 'Sonic Fingerprint', desc: 'Phone recording of the motion assay. Compare loudness against the fleet.' },
+		{ href: '/validation/sonic', label: 'Sonic Fingerprint', desc: 'Phone recording of the motion assay. Fleet check: loudness against the fleet.' },
 		{ href: '/validation/blank', label: 'Blank Cartridge', desc: 'One reusable blank cart. Fails on a short run, a missing channel, or a laser that never came on.' },
 		{ href: '/validation/magnetometer', label: 'Magnetometer', desc: 'Fixture cartridge. Z (gauss) per well against the criteria range.' },
 		{ href: '/validation/thermocouple', label: 'Thermocouple', desc: 'Instrumented cartridge + logger. Upload the dataset for a verdict.' }

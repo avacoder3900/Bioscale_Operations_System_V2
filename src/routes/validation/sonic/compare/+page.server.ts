@@ -2,17 +2,24 @@ import { requirePermission } from '$lib/server/permissions';
 import { connectDB, ValidationSession } from '$lib/server/db';
 import { loadFingerprints, referenceFilter } from '$lib/server/sonic/analyze';
 import { compareFingerprints } from '$lib/server/sonic/compare';
+import { FLEET_METRICS, fleetView, isFleetMetric, type FleetMetricKey } from '$lib/server/sonic/fleet';
 import { ENVELOPE_K, PASS_INSIDE_PCT, MIN_REFERENCES, TICK_S } from '$lib/server/sonic/constants';
 import type { PageServerLoad } from './$types';
 
 /**
  * Sonic compare (VALIDATION-08 §8.3): line up any analyzed recordings and show
- * how they differ over time, section by section. Everything is computed from
- * stored fingerprints — no audio is touched here.
+ * how they differ over time. Everything is computed from stored fingerprints —
+ * no audio is touched here. One page, two views (2026-10-06):
+ *
+ *   view=fleet   Fleet check — fixed intervals, fleet mean ± K·σ per interval,
+ *                fits / outside per unit (sonic/fleet.ts). Needs 3+ recordings.
+ *   view=detail  Detailed compare — sections, loudness shape + tone colour
+ *                scorecard, frequency/loudness charts (sonic/compare.ts).
  *
  *   ?ids=a,b,c              recordings to compare (2+)
- *   &sections=110-130,40-57 custom sections (default: automatic P#/B#)
- *   &against=reference      judge each against the reference set of their assay
+ *   &sections=110-130,40-57 custom sections (default: automatic P#/B#)   [detail]
+ *   &against=reference      judge each against the reference set           [detail]
+ *   &metric=loudness&interval=10&k=1&min=75&shape=1                        [fleet]
  */
 /** Each fingerprint is ~150 KB and the compare is O(n²) in places; keep a request bounded. */
 const MAX_COMPARE = 30;
@@ -24,6 +31,10 @@ const spuShort = (udi: string) => {
 };
 
 const r1 = (v: number | null) => (v == null || !Number.isFinite(v) ? null : Math.round(v * 10) / 10);
+const clampNum = (raw: string | null, d: number, lo: number, hi: number) => {
+	const v = Number(raw);
+	return raw != null && raw !== '' && Number.isFinite(v) ? Math.min(Math.max(v, lo), hi) : d;
+};
 
 export const load: PageServerLoad = async ({ locals, url }) => {
 	requirePermission(locals.user, 'spu:read');
@@ -45,11 +56,27 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	}));
 
 	const ids = [...new Set((url.searchParams.get('ids') ?? '').split(',').map((s) => s.trim()).filter(Boolean))];
-	const sections = url.searchParams.get('sections')?.trim() || null;
-	const againstRefs = url.searchParams.get('against') === 'reference';
-	const base = { available, ids, sections, againstRefs, tickS: TICK_S, envelopeK: ENVELOPE_K, passPct: PASS_INSIDE_PCT, minReferences: MIN_REFERENCES };
-	if (ids.length < (againstRefs ? 1 : 2)) return { ...base, result: null, error: null };
-	if (ids.length > MAX_COMPARE) return { ...base, result: null, error: `Compare at most ${MAX_COMPARE} recordings at a time (${ids.length} selected).` };
+	const view: 'fleet' | 'detail' = url.searchParams.get('view') === 'fleet' ? 'fleet' : 'detail';
+	const sections = view === 'detail' ? url.searchParams.get('sections')?.trim() || null : null;
+	const againstRefs = view === 'detail' && url.searchParams.get('against') === 'reference';
+	const metricRaw = url.searchParams.get('metric') ?? 'loudness';
+	const fleetOpts = {
+		metric: (isFleetMetric(metricRaw) ? metricRaw : 'loudness') as FleetMetricKey,
+		intervalS: clampNum(url.searchParams.get('interval'), 10, 1, 120),
+		k: clampNum(url.searchParams.get('k'), 1, 0.5, 4),
+		minInsidePct: clampNum(url.searchParams.get('min'), 75, 0, 100),
+		shapeOnly: url.searchParams.get('shape') !== '0'
+	};
+	const base = {
+		available, ids, view, sections, againstRefs, fleetOpts,
+		metrics: Object.entries(FLEET_METRICS).map(([key, m]) => ({ key, label: m.label, unit: m.unit })),
+		tickS: TICK_S, envelopeK: ENVELOPE_K, passPct: PASS_INSIDE_PCT, minReferences: MIN_REFERENCES
+	};
+	const minPicked = view === 'fleet' ? 3 : againstRefs ? 1 : 2;
+	if (ids.length < minPicked) {
+		return { ...base, result: null, fleet: null, error: view === 'fleet' && ids.length ? 'Fleet check needs at least 3 recordings — a standard deviation needs a fleet.' : null };
+	}
+	if (ids.length > MAX_COMPARE) return { ...base, result: null, fleet: null, error: `Compare at most ${MAX_COMPARE} recordings at a time (${ids.length} selected).` };
 
 	const chosen = await loadFingerprints({ _id: { $in: ids } });
 	const byId = new Map(chosen.map((c) => [c.id, c]));
@@ -60,14 +87,14 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	if (againstRefs) {
 		const assays = [...new Set(rows.map((r) => r.assay))];
 		if (assays.length !== 1 || !assays[0]) {
-			return { ...base, result: null, error: 'To judge against the reference set, pick recordings of one assay (set the assay on each first).' };
+			return { ...base, result: null, fleet: null, error: 'To judge against the reference set, pick recordings of one assay (set the assay on each first).' };
 		}
 		const refs = await loadFingerprints(referenceFilter(assays[0]));
 		referenceIds = refs.map((r) => r.id);
 		// References go first (the first recording is the timing reference), then the rest.
 		rows = [...refs, ...rows.filter((r) => !referenceIds!.includes(r.id))];
 	}
-	if (rows.length < 2) return { ...base, result: null, error: 'Need at least two analyzed recordings.' };
+	if (rows.length < 2) return { ...base, result: null, fleet: null, error: 'Need at least two analyzed recordings.' };
 
 	const labelCount = new Map<string, number>();
 	rows.forEach((r) => labelCount.set(r.spuUdi, (labelCount.get(r.spuUdi) ?? 0) + 1));
@@ -81,7 +108,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	try {
 		c = compareFingerprints(items, { sections, referenceIds });
 	} catch (err) {
-		return { ...base, result: null, error: err instanceof Error ? err.message : String(err) };
+		return { ...base, result: null, fleet: null, error: err instanceof Error ? err.message : String(err) };
 	}
 
 	// Running stretches of the reference/group, for grey shading.
@@ -94,8 +121,11 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		else shade.push([a, c.t[k] + 0.25]);
 	});
 
+	const fleet = view === 'fleet' && rows.length >= 3 ? fleetView(c, fleetOpts) : null;
+
 	return {
 		...base,
+		fleet,
 		error: missing.length ? `${missing.length} selected recording(s) are not analyzed yet and were left out.` : null,
 		result: {
 			mode: c.mode,

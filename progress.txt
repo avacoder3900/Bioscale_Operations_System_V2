@@ -18611,3 +18611,23 @@ Source: branch feat/validation-autograde @ commit 895fc04f3
 Retrieve this exact code: git checkout feat/validation-autograde at commit 895fc04f3
   (or: git log feat/validation-autograde --oneline to find it if the branch has since moved on)
 What this deployment is for: review the validation workflow — bench/blank auto-checks, optics removed, /validation/sonic/fleet.
+
+================================================================================
+2026-10-06 — feat/validation-autograde — sonic: Fleet check + Detailed compare merged on one page
+================================================================================
+Per Alejandro, the two sonic comparison pages are now one: /validation/sonic/compare with two
+buttons, "Fleet check" (view=fleet) and "Detailed compare" (view=detail, the default so existing
+?ids= links behave as before). One shared picker; each view shows its own options (fleet: metric,
+interval, K, fit %, shape-only; detail: sections, judge against references). Switching view re-runs
+on the same recordings. /validation/sonic/fleet now 308-redirects to compare?view=fleet; the Sonic
+page is back to one "Compare recordings" button.
+- sonic/fleet.ts: fleetView() builds the fleet result from the same compareFingerprints() run.
+  New "Shape only" option (default ON, loudness only): each recording's own average level is
+  removed first, so phone distance does not count. On prod (19 units, 10 s, 1 sigma, 75%): absolute
+  flagged 251, 250, 247, 239, 215, 212, 211; shape-only flags 250, 248, 247, 239, 218, 215, 212, 229
+  (now catches 248, the 5.7-11 kHz hiss unit, and 218/229 that the section scorecard also flags).
+- components/validation/sonic/SonicFleet.svelte: the fleet results (worst-first table with
+  "furthest out" times in the unit's own recording + Listen link, chart with band, interval grid).
+Unit tests 11/11. `npm run check` (after svelte-kit sync): 119 errors / 434 warnings, same as the
+previous commit; none in the changed files (remaining errors = packages missing from the borrowed
+node_modules + pre-existing).

@@ -103,3 +103,53 @@ export function fleetSpread(
 	});
 	return { k, intervalS, minInsidePct, intervals, units };
 }
+
+const r1 = (v: number | null) => (v == null || !Number.isFinite(v) ? null : Math.round(v * 10) / 10);
+
+export interface FleetOptions {
+	metric: FleetMetricKey;
+	intervalS: number;
+	k: number;
+	minInsidePct: number;
+	/**
+	 * Loudness only: remove each recording's own average level first, so only the
+	 * shape over time is compared. A phone held closer or farther shifts the whole
+	 * curve; without this, that alone can push a good unit outside the band.
+	 */
+	shapeOnly: boolean;
+}
+
+/** The Fleet check view of a comparison, rounded and ready to serialize. */
+export function fleetView(cmp: CompareResult, opts: FleetOptions) {
+	const m: FleetMetric = FLEET_METRICS[opts.metric];
+	let series = cmp.series.map((s) => Array.from(m.pick(s), (v) => (v == null || !Number.isFinite(v) ? null : v)));
+	const shapeOnly = opts.shapeOnly && opts.metric === 'loudness';
+	if (shapeOnly) {
+		const means = series.map((s) => mean(s.filter((v): v is number => v != null)));
+		const grand = mean(means.filter((v) => Number.isFinite(v)));
+		series = series.map((s, i) => s.map((v) => (v == null ? null : v - means[i] + grand)));
+	}
+	const spread = fleetSpread(cmp.t, series, { intervalS: opts.intervalS, k: opts.k, minInsidePct: opts.minInsidePct, unit: m.unit });
+	const at = (tk: number) => spread.intervals.find((iv) => tk >= iv.a && tk < iv.b);
+	return {
+		metric: { key: opts.metric, label: m.label, unit: m.unit },
+		shapeOnly,
+		intervalS: opts.intervalS,
+		k: opts.k,
+		minInsidePct: opts.minInsidePct,
+		series: series.map((s) => s.map(r1)),
+		units: spread.units.map((u) => ({ ...u, insidePct: u.insidePct == null ? null : Math.round(u.insidePct) })),
+		band: { mu: cmp.t.map((tk) => r1(at(tk)?.mean ?? null)), sd: cmp.t.map((tk) => r1(at(tk)?.sd ?? null)), k: opts.k },
+		intervals: spread.intervals.map((iv) => ({
+			a: r1(iv.a)!,
+			b: r1(iv.b)!,
+			mean: r1(iv.mean),
+			sd: r1(iv.sd),
+			values: iv.values.map(r1),
+			inside: iv.inside,
+			z: iv.z.map(r1)
+		}))
+	};
+}
+
+export type FleetView = ReturnType<typeof fleetView>;

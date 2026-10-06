@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { gradeBenchRead, gradeBenchUnit, gradeBlankRun } from './validation-autograde';
-import { fleetSpread } from './sonic/fleet';
+import { fleetSpread, fleetView } from './sonic/fleet';
+import type { CompareResult } from './sonic/compare';
 
 /** A full blank run: 42 positions × 3 channels, lasers on (shape of optical_blank_runs.readings). */
 function blankRun(over: (r: Record<string, unknown>) => Record<string, unknown> = (r) => r) {
@@ -93,5 +94,16 @@ describe('fleetSpread', () => {
 		const s = fleetSpread(t, [flat(60), t.map(() => null)], { intervalS: 5, k: 1, minInsidePct: 75 });
 		expect(s.intervals[0].mean).toBeNull();
 		expect(s.units[1]).toMatchObject({ scored: 0, fits: null });
+	});
+});
+
+describe('fleetView shape only', () => {
+	it('a unit recorded 8 dB louder with the same shape fits once the level is removed', () => {
+		const t = Array.from({ length: 40 }, (_, i) => 0.25 + i * 0.5);
+		const curve = (lift: number) => t.map((tk) => 60 + lift + (tk > 10 ? 6 : 0));
+		const cmp = { t, series: [0, 0.3, -0.3, 8].map((d) => ({ levelSmooth: curve(d), domHz: t.map(() => null), level: [], active: [] })) } as unknown as CompareResult;
+		const opts = { metric: 'loudness' as const, intervalS: 5, k: 1, minInsidePct: 75 };
+		expect(fleetView(cmp, { ...opts, shapeOnly: false }).units[3].fits).toBe(false);
+		expect(fleetView(cmp, { ...opts, shapeOnly: true }).units[3].fits).toBe(true);
 	});
 });
