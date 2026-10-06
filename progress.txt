@@ -18606,3 +18606,8 @@ The validation section is reorganised as a workflow, easiest/broadest check firs
 Unit tests: validation-autograde.test.ts 10/10. `npm run check`: 119 errors / 434 warnings with
 node_modules borrowed from the older main checkout (missing @xyflow/svelte, @modelcontextprotocol/
 server, @audio/decode-*, zod...) — none in the changed files; Vercel build is the real gate.
+Deployment: preview — https://bioscale-operations-system-mongodb-aad7rc2a7-brevitest.vercel.app
+Source: branch feat/validation-autograde @ commit 895fc04f3
+Retrieve this exact code: git checkout feat/validation-autograde at commit 895fc04f3
+  (or: git log feat/validation-autograde --oneline to find it if the branch has since moved on)
+What this deployment is for: review the validation workflow — bench/blank auto-checks, optics removed, /validation/sonic/fleet.
