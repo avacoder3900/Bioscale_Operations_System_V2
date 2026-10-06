@@ -18857,3 +18857,26 @@ Internal identifiers are unchanged on purpose (DeviceAssemblyWI model, device_wi
 names, /api/agent/device-assembly/**, /api/device-assembly/images/** — image URLs are persisted
 in the document). Verified on the dev server: new page + revisions render (200), old paths 301 →
 new. npm run check: 10 errors (baseline).
+
+================================================================================
+2026-10-06 — feat/device-assembly-wi — merged origin/master into the branch; PR #86 ready to merge
+================================================================================
+Local master had been 374 commits behind GitHub when the branch was cut, so PR #86 showed as
+not mergeable. Merged origin/master into feat/device-assembly-wi (1ce643aa). Conflicts:
+src/lib/server/mcp/bims-mcp.ts (master's research-analysis tools kept + the 20 device_wi_*
+tools; MCP server version 3.8.0 → 3.9.0 so connectors refresh), docs/MCP-SERVER.md (own
+"SPU Assembly Work Instruction tools (v3.9.0)" section), progress.txt (both logs). Lockfile
+taken from master. The branch also carries 5f2fb7a3 (camera_capture.py / NO_POST_PROCESSING
+refactor + lockfile), committed by VS Code "Publish Branch" from pending working-tree edits —
+not part of the WI work. Verified on the merged tree: npm install, npm run check (13 errors,
+all pre-existing in master: r2.ts, research-proxy.ts, AskBimsWidget, assembly/[sessionId],
+validation/magnetometer — none in today's files), npm run build ✔. PR #86 now mergeable_state
+"clean". Merge into master (production) left for a human per review policy.
+
+Deployment: preview — <fill from Vercel dashboard: Deployments → branch feat/device-assembly-wi>
+Source: branch feat/device-assembly-wi @ commit 1ce643aa
+Retrieve this exact code: git checkout feat/device-assembly-wi at commit 1ce643aa
+  (or: git log feat/device-assembly-wi --oneline to find it if the branch has since moved on)
+What this deployment is for: SPU → SPU Assembly WI tab (docx import, sub-assemblies, revision
+  tracker, inventory pulls) + device_wi_* MCP tools (bims-operations 3.9.0) for review before
+  merging PR #86 to production.
