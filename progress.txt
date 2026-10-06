@@ -18880,3 +18880,20 @@ Retrieve this exact code: git checkout feat/device-assembly-wi at commit 1ce643a
 What this deployment is for: SPU → SPU Assembly WI tab (docx import, sub-assemblies, revision
   tracker, inventory pulls) + device_wi_* MCP tools (bims-operations 3.9.0) for review before
   merging PR #86 to production.
+
+================================================================================
+2026-10-06 — master — production deployment: PR #86 (SPU Assembly WI + device_wi_* MCP suite)
+================================================================================
+PR #86 (feat/device-assembly-wi → master) merged by avacoder3900 at 2026-10-06 21:21 UTC.
+Ships: SPU → SPU Assembly WI tab (/spu/assembly-wi: docx import, Setup + Sub-Assembly 1–5,
+auto revision tracker, per-step inventory pulls, revisions page), /api/agent/device-assembly/**
+agent endpoints, bims-operations MCP server 3.9.0 with the 20 device_wi_* tools, 301 redirects
+from /manufacturing/device-assembly, plus 5f2fb7a3 (camera_capture.py line-ending/refactor
+commit that VS Code included when publishing the branch).
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit 45cab695
+Retrieve this exact code: git checkout master at commit 45cab695
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: SPU Assembly Work Instruction feature + MCP connector tools live
+  for operators; connector clients re-fetch the tool list on the 3.9.0 version bump.
