@@ -18725,3 +18725,9 @@ Deployment: preview — https://bioscale-operations-system-mongodb-1eirlk0xs-bre
 Source: branch feat/validation-autograde @ commit 3d78f2287
 Retrieve this exact code: git checkout feat/validation-autograde at commit 3d78f2287
 What this deployment is for: review the merged sonic compare page (Fleet check / Detailed compare buttons).
+
+Deployment: production — https://bioscale-operations-system-mongodb-lq438ewcf-brevitest.vercel.app
+Source: branch master @ commit ad3602207 (PR #85, merge of feat/validation-autograde)
+Retrieve this exact code: git checkout master at commit ad3602207
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: validation workflow — auto-graded bench + blank, optical confirmation banked (release = mag + thermo), sonic Fleet check / Detailed compare.
