@@ -19023,3 +19023,48 @@ Smoke (unauthenticated curl; 302 → /login means the route exists and is gated)
   /manufacturing/cart-mfg/opentron-control -> 302 https://bioscale-operations-system-mongodb-6o2trrhxg-brevitest.vercel.app/login
   /manufacturing/cart-mfg/opentron-control/wax/abc -> 302 https://bioscale-operations-system-mongodb-6o2trrhxg-brevitest.vercel.app/login
 
+
+================================================================================
+2026-10-07 — feat/robot-overhaul — Round 2: every robot's wizard open at once, side by side
+================================================================================
+Operator feedback on round 1: structure good, but they want to RUN all three
+robots side by side — the wax or reagent card opening under the robot board,
+all three at once, no new tabs, no waiting for a page to load.
+
+### What changed
+- /manufacturing/cart-mfg/robots now renders every OPEN wizard below the board
+  in a 1/2/3-column grid (xl:grid-cols-N), one panel per robot. A robot with a
+  run in progress is always open on that process; "Start →" on the board opens
+  an idle robot's wax or reagent wizard (URL state ?open=<id>:wax,<id>:reagent,
+  $lib/manufacturing/robot-panels.ts) and "Close" hides it again. "Open ↓" on
+  a running robot scrolls to its panel (#panel-<id>). The board outlines every
+  open card. The single-robot pages are gone.
+- The two wizards are components now: wax-filling/+page.svelte →
+  $lib/components/manufacturing/wax-filling/WaxWizard.svelte and
+  reagent-filling/+page.svelte → …/reagent-filling/ReagentWizard.svelte (git
+  mv, content unchanged except: `data` typed from the loader; every relative
+  '?/<action>' fetch / formAction now goes through `act(name)` =
+  /manufacturing/cart-mfg/<process>-filling?/<name>&robot=<id>, because the
+  wizard no longer lives on its own route; the two "go to the other process"
+  links point at /robots?open=…). ReagentWellTracker takes an `actionUrl`
+  prop for the same reason. SvelteKit picks the action from whichever query
+  param starts with '/', so the extra &robot= is fine.
+- The two page loads moved verbatim into $lib/server/manufacturing/
+  wax-wizard.ts (loadWaxWizard(locals, robotId, robotName)) and
+  reagent-wizard.ts (loadReagentWizard(locals, robotId)); the route files keep
+  ONLY their actions plus a load that 302s /wax-filling?robot=X to
+  /robots?open=X:wax (same for reagent), so the cart-mfg dashboard's per-robot
+  links keep working. The empty-state fallbacks gained the fields the full
+  return has (SvelteKit's PageData used to paper over that; a plain union
+  does not). Dead ACTIVE_STAGES constant dropped.
+- robots/+page.server.ts loads the open panels in parallel (one loadX per
+  panel) after the layout's board; panels the user may not read are skipped.
+
+### Check
+svelte-kit sync + svelte-check: 14 errors, all pre-existing (the sonic
+decode.ts pair cleared once @audio/decode-* were present locally). vite build:
+client + server bundles build; adapter-vercel file trace OOMs on this Windows
+worktree as before. Not exercised against live robots here — needs the
+preview smoke: open all three, Start on an idle robot, Close, a running
+robot's Open ↓, and an action from a panel (tip swap / cancel) to confirm the
+explicit action URLs round-trip.

@@ -1,3 +1,9 @@
+<!--
+  Wax filling wizard (ROBOT-OVERHAUL round 2, 2026-10-07). This WAS
+  wax-filling/+page.svelte; it is a component now so the Robots page can show
+  one per robot, side by side. `data` is loadWaxWizard()'s result; every
+  action still posts to the wax-filling route (see `act`).
+-->
 <script lang="ts">
 	import { enhance, deserialize } from '$app/forms';
 	import { goto, invalidateAll } from '$app/navigation';
@@ -112,6 +118,11 @@
 
 	let { data }: Props = $props();
 
+	// ROBOT-OVERHAUL round 2: this wizard renders on /robots (every robot side by
+	// side), so its actions post to their own route explicitly instead of '?/x'.
+	const ROUTE = '/manufacturing/cart-mfg/wax-filling';
+	const act = (name: string) => `${ROUTE}?/${name}&robot=${encodeURIComponent(data.robotId)}`;
+
 	let submitting = $state(false);
 	let submittingTooLong = $state(false);
 
@@ -150,7 +161,7 @@
 			fd.set('runId', data.runState.runId);
 			fd.set('mode', mode === 'cancel' ? 'rack' : mode);
 			fd.set('cancel', mode === 'cancel' ? 'true' : 'false');
-			const res = await fetch('?/requestTipSwap', {
+			const res = await fetch(act('requestTipSwap'), {
 				method: 'POST',
 				body: fd,
 				headers: { 'x-sveltekit-action': 'true' },
@@ -494,7 +505,7 @@
 				formData.set('runId', runId);
 				const controller = new AbortController();
 				const timeout = setTimeout(() => controller.abort(), 45000);
-				const res = await fetch('?/startRun', {
+				const res = await fetch(act('startRun'), {
 					method: 'POST',
 					body: formData,
 					headers: { 'x-sveltekit-action': 'true' },
@@ -617,7 +628,7 @@
 			for (const [k, v] of Object.entries(formData)) {
 				fd.set(k, v);
 			}
-			const res = await fetch(`?/${action}`, {
+			const res = await fetch(act(action), {
 				method: 'POST',
 				body: fd,
 				headers: { 'x-sveltekit-action': 'true' },
@@ -799,7 +810,7 @@
 			return;
 		}
 		try {
-			const res = await fetch('?/startRun', {
+			const res = await fetch(act('startRun'), {
 				method: 'POST',
 				body: capturedParamsFd,
 				headers: { 'x-sveltekit-action': 'true' }
@@ -997,7 +1008,7 @@
 		const fd = new FormData();
 		for (const [k, v] of Object.entries(fields)) fd.set(k, v);
 		try {
-			const res = await fetch(`?/${action}`, {
+			const res = await fetch(act(action), {
 				method: 'POST',
 				body: fd,
 				headers: { 'x-sveltekit-action': 'true' },
@@ -1243,7 +1254,7 @@
 					Complete or cancel the reagent run before starting wax filling.
 				</p>
 				<!-- eslint-disable svelte/no-navigation-without-resolve -->
-				<a href="/manufacturing/cart-mfg/reagent-filling?robot={data.robotId}" class="mt-3 inline-block rounded border border-amber-500/50 px-4 py-2 text-sm text-amber-300 hover:bg-amber-900/30">
+				<a href="/manufacturing/cart-mfg/robots?open={data.robotId}:reagent" class="mt-3 inline-block rounded border border-amber-500/50 px-4 py-2 text-sm text-amber-300 hover:bg-amber-900/30">
 					Go to Reagent Filling
 				</a>
 				<!-- eslint-enable svelte/no-navigation-without-resolve -->
@@ -1288,7 +1299,7 @@
 						Run {data.runState.runId}
 					</span>
 					<div class="flex items-center gap-3">
-					<a href="/manufacturing/cart-mfg/reagent-filling?robot={data.robotId}" class="rounded border border-[var(--color-tron-cyan)]/40 bg-[var(--color-tron-cyan)]/10 px-2 py-0.5 text-xs font-medium text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/20">Move to Reagent Run →</a>
+					<a href="/manufacturing/cart-mfg/robots?open={data.robotId}:reagent" class="rounded border border-[var(--color-tron-cyan)]/40 bg-[var(--color-tron-cyan)]/10 px-2 py-0.5 text-xs font-medium text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/20">Move to Reagent Run →</a>
 					<span class="text-xs text-[var(--color-tron-text-secondary)]">
 						Stage {currentBubbleIndex + 1} of {TIMELINE.length}
 					</span>
@@ -1482,7 +1493,7 @@
 						contextReadonly={['cartridges']}
 						lastTipState={data.lastTipState}
 						submitting={submitting}
-						formAction="?/startRun"
+						formAction={act('startRun')}
 						extraHidden={{ runId: data.runState.runId ?? '', ...(testFillNoCarts ? { testFillNoCartridges: 'true' } : {}) }}
 						autoStart={autoStartPending}
 						onAutoStarted={() => (autoStartPending = false)}
@@ -1524,7 +1535,7 @@
 						contextReadonly={['cartridges']}
 						lastTipState={data.lastTipState}
 						submitting={submitting}
-						formAction="?/startRun"
+						formAction={act('startRun')}
 						extraHidden={{ runId: data.runState.runId ?? '', ...(testFillNoCarts ? { testFillNoCartridges: 'true' } : {}) }}
 						submitLabel="Save & continue to barcode scan →"
 						onSubmitIntercept={handleParamsConfirmed}
@@ -1598,7 +1609,7 @@
 						contextReadonly={['cartridges']}
 						lastTipState={data.lastTipState}
 						submitting={submitting || orchestrating}
-						formAction="?/startRun"
+						formAction={act('startRun')}
 						extraHidden={{ runId: data.runState.runId ?? '', ...(testFillNoCarts ? { testFillNoCartridges: 'true' } : {}) }}
 						onSubmitIntercept={handleScanAndStart}
 					/>

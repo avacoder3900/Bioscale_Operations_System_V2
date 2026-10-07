@@ -15,7 +15,7 @@ import { WAX_PAGE_OWNED, REAGENT_PAGE_OWNED } from './run-statuses';
 
 export type { RobotHealth } from '$lib/server/opentrons/health';
 
-export type BoardProcess = 'wax' | 'reagent';
+export type { BoardProcess } from '$lib/manufacturing/robot-panels';
 
 /** The run a process currently has on a robot (page-owned stages only). */
 export interface BoardRun {

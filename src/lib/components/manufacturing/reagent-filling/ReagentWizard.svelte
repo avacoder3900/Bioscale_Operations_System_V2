@@ -1,3 +1,9 @@
+<!--
+  Reagent filling wizard (ROBOT-OVERHAUL round 2, 2026-10-07). This WAS
+  reagent-filling/+page.svelte; it is a component now so the Robots page can
+  show one per robot, side by side. `data` is loadReagentWizard()'s result;
+  every action still posts to the reagent-filling route (see `act`).
+-->
 <script lang="ts">
 	import { page } from '$app/stores';
 	import { invalidateAll } from '$app/navigation';
@@ -26,10 +32,16 @@
 		type StartStepStatus
 	} from '$lib/opentrons/ot2-protocol';
 	import { tipSwapOverBridge } from '$lib/opentrons/fill-bridge-jobs';
+	import type { ReagentWizardData } from '$lib/server/manufacturing/reagent-wizard';
 	// REAGENT-TOPSEAL-IMPLICIT: there is no post-OT-2 queue. Run completion ends
 	// the run; top sealing is implicit; the next touch is the Reagent Inspect photo.
 
-	let { data } = $props();
+	let { data }: { data: ReagentWizardData } = $props();
+
+	// ROBOT-OVERHAUL round 2: this wizard renders on /robots (every robot side by
+	// side), so its actions post to their own route explicitly instead of '?/x'.
+	const ROUTE = '/manufacturing/cart-mfg/reagent-filling';
+	const act = (name: string) => `${ROUTE}?/${name}&robot=${encodeURIComponent(data.robotId)}`;
 
 	let selectedAssayTypeId = $state('');
 	let isResearchRun = $state(false);
@@ -214,7 +226,7 @@
 			fd.set('runId', data.activeRunId);
 			fd.set('mode', mode === 'cancel' ? 'rack' : mode);
 			fd.set('cancel', mode === 'cancel' ? 'true' : 'false');
-			const res = await fetch('?/requestTipSwap', {
+			const res = await fetch(act('requestTipSwap'), {
 				method: 'POST',
 				body: fd,
 				headers: { 'x-sveltekit-action': 'true' }
@@ -283,7 +295,7 @@
 		const body = new FormData();
 		body.set('runId', data.activeRunId);
 		body.set('plannedCartridgeCount', String(n));
-		fetch('?/savePlannedCount', {
+		fetch(act('savePlannedCount'), {
 			method: 'POST',
 			body,
 			headers: { 'x-sveltekit-action': 'true' }
@@ -322,7 +334,7 @@
 			return;
 		}
 		try {
-			const res = await fetch('?/startRun', {
+			const res = await fetch(act('startRun'), {
 				method: 'POST',
 				body: capturedParamsFd,
 				headers: { 'x-sveltekit-action': 'true' }
@@ -362,7 +374,7 @@
 			const formData = new FormData();
 			formData.set('runId', data.activeRunId ?? '');
 			formData.set('noteBody', noteBody);
-			const res = await fetch('?/recordBatchNote', {
+			const res = await fetch(act('recordBatchNote'), {
 				method: 'POST',
 				body: formData,
 				headers: { 'x-sveltekit-action': 'true' }
@@ -481,7 +493,7 @@
 			for (const [key, value] of Object.entries(extraData)) {
 				formData.set(key, value);
 			}
-			const res = await fetch(`?/${action}`, {
+			const res = await fetch(act(action), {
 				method: 'POST',
 				body: formData,
 				headers: { 'x-sveltekit-action': 'true' },
@@ -599,7 +611,7 @@
 		const fd = new FormData();
 		for (const [k, v] of Object.entries(fields)) fd.set(k, v);
 		try {
-			const res = await fetch(`?/${action}`, {
+			const res = await fetch(act(action), {
 				method: 'POST',
 				body: fd,
 				headers: { 'x-sveltekit-action': 'true' },
@@ -810,7 +822,7 @@
 				This robot is currently running wax filling{data.robotBlocked.runId ? ` (${data.robotBlocked.runId})` : ''}.
 				Complete or cancel the wax run before starting reagent filling.
 			</p>
-			<a href="/manufacturing/cart-mfg/wax-filling?robot={data.robotId}" class="mt-3 inline-block rounded border border-amber-500/50 px-4 py-2 text-sm text-amber-300 hover:bg-amber-900/30">
+			<a href="/manufacturing/cart-mfg/robots?open={data.robotId}:wax" class="mt-3 inline-block rounded border border-amber-500/50 px-4 py-2 text-sm text-amber-300 hover:bg-amber-900/30">
 				Go to Wax Filling
 			</a>
 		</div>
@@ -981,7 +993,7 @@
 				contextValues={REAGENT_PARAM_DEFAULTS}
 				lastTipState={data.lastTipState}
 				submitting={submitting}
-				formAction="?/startRun"
+				formAction={act('startRun')}
 				extraHidden={{ runId: data.activeRunId ?? '' }}
 				submitLabel="Save & continue to reagent batch →"
 				onSubmitIntercept={handleParamsConfirmed}
@@ -1001,7 +1013,7 @@
 				const fd = new FormData();
 				fd.set('reagentLotId', reagentLotId);
 				fd.set('name', name);
-				const res = await fetch('?/createFillLot', { method: 'POST', body: fd });
+				const res = await fetch(act('createFillLot'), { method: 'POST', body: fd });
 				const result = deserialize(await res.text());
 				if (result.type === 'success') return { ok: true, fillLot: (result.data as any)?.fillLot };
 				return { ok: false, error: result.type === 'failure' ? ((result.data as any)?.error ?? 'Failed') : 'Failed' };
@@ -1061,7 +1073,7 @@
 					contextReadonly={['cartridges']}
 					lastTipState={data.lastTipState}
 					submitting={submitting}
-					formAction="?/startRun"
+					formAction={act('startRun')}
 					extraHidden={{
 						runId: data.activeRunId ?? '',
 						reagentBatchBarcode: reagentBatchBarcode ?? ''
@@ -1136,6 +1148,7 @@
 		{#if !isViewingPast && !previewParam && data.activeRunId}
 			<div class="mt-3">
 				<ReagentWellTracker
+					actionUrl={act}
 					runId={data.activeRunId}
 					issues={wellIssues}
 					{loadedPositions}

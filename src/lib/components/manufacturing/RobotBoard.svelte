@@ -3,9 +3,13 @@
   with BOTH processes per robot. Each card shows the bridge health, the wax
   run and the reagent run the robot has (or Idle), and the two controls that
   used to sit in the wax-filling and reagent-filling layouts — restart the
-  robot server, force the robot back to idle. "Open" continues the run in
-  progress; "Start" opens the wizard on an idle robot. The card whose wizard is
-  open below is outlined, so switching robots is one click, same page.
+  robot server, force the robot back to idle.
+
+  Round 2: the wizards open BELOW this board on the same page, as many at once
+  as the operator wants. A robot with a run in progress is always open on that
+  process ("Open" just scrolls to it); "Start →" opens an idle robot's wizard
+  (?open=<id>:wax|reagent, see $lib/manufacturing/robot-panels) and "Close"
+  hides it again. A robot busy with the other process shows a dash.
 
   Health is polled every 10 s from /api/opentrons-lab/robots/health; run stages
   refresh whenever a wizard action invalidates the page data.
@@ -13,27 +17,25 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { invalidateAll } from '$app/navigation';
+	import { page } from '$app/stores';
 	import { resolve } from '$app/paths';
 	import { openRobotSession } from '$lib/opentrons/direct-client';
 	import { restartServerOverBridge } from '$lib/opentrons/fill-bridge-jobs';
-	import type { BoardProcess, BoardRun, RobotBoardRow, RobotHealth } from '$lib/server/manufacturing/robot-board';
+	import { parseOpenPanels, panelsHref, panelAnchor, type BoardProcess } from '$lib/manufacturing/robot-panels';
+	import type { BoardRun, RobotBoardRow, RobotHealth } from '$lib/server/manufacturing/robot-board';
 
 	interface Props {
 		rows: RobotBoardRow[];
-		/** The robot whose wizard is open below the board ('' = none). */
-		selectedRobotId?: string;
-		/** Which wizard is open below the board (null = the landing page). */
-		selectedProcess?: BoardProcess | null;
+		/** Which wizard is open per robot, from the Robots page load. */
+		openPanels?: Record<string, BoardProcess>;
 	}
 
-	let { rows, selectedRobotId = '', selectedProcess = null }: Props = $props();
+	let { rows, openPanels = {} }: Props = $props();
 
-	const WAX = '/manufacturing/cart-mfg/wax-filling';
-	const REAGENT = '/manufacturing/cart-mfg/reagent-filling';
-	const processHref = (process: BoardProcess, robotId: string) =>
-		resolve(process === 'wax' ? WAX : REAGENT) + '?robot=' + encodeURIComponent(robotId);
 	const processLabel = (p: BoardProcess) => (p === 'wax' ? 'Wax' : 'Reagent');
 	const otherProcess = (p: BoardProcess): BoardProcess => (p === 'wax' ? 'reagent' : 'wax');
+	// The operator-chosen panels in the URL (robots with runs are open regardless).
+	const openMap = $derived(parseOpenPanels($page.url.searchParams.get('open')));
 
 	// --- Robot health (ready / busy / hung / offline) --------------------------
 	// Polled from a lightweight endpoint so the dots stay fresh WITHOUT a full
@@ -191,7 +193,7 @@
 		<div>
 			<h1 class="text-xl font-semibold text-[var(--color-tron-text)]">Robots</h1>
 			<p class="mt-0.5 text-xs text-[var(--color-tron-text-secondary)]">
-				Every OT-2, wax and reagent, on one page. Pick a robot and a process below.
+				Every OT-2, wax and reagent, on one page. Open wizards render below, side by side.
 			</p>
 		</div>
 		<nav class="flex flex-wrap items-center gap-1 text-xs" aria-label="Robot tools">
@@ -211,10 +213,10 @@
 		<div class="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
 			{#each rows as row (row.robotId)}
 				{@const h = healthFor(row)}
-				{@const isSelected = row.robotId === selectedRobotId}
+				{@const isOpen = row.robotId in openPanels}
 				{@const isHung = h?.status === 'hung'}
 				<section
-					class="flex flex-col gap-2.5 rounded-lg border bg-[var(--color-tron-surface)] p-3 transition-colors {isSelected
+					class="flex flex-col gap-2.5 rounded-lg border bg-[var(--color-tron-surface)] p-3 transition-colors {isOpen
 						? 'border-[var(--color-tron-cyan)] shadow-[0_0_12px_rgba(0,255,255,0.12)]'
 						: isHung
 							? 'border-red-500/50'
@@ -273,7 +275,7 @@
 </div>
 
 {#snippet processRow(row: RobotBoardRow, process: BoardProcess, run: BoardRun | null, other: BoardRun | null)}
-	{@const isOpen = row.robotId === selectedRobotId && selectedProcess === process}
+	{@const isOpen = openPanels[row.robotId] === process}
 	{@const blocked = !run && !!other}
 	<div
 		class="flex items-center gap-2 rounded border px-2.5 py-2 {isOpen
@@ -291,17 +293,32 @@
 		</span>
 		{#if blocked}
 			<span class="shrink-0 text-[11px] text-[var(--color-tron-text-secondary)]" title="This robot is on a {otherProcess(process)} run">—</span>
-		{:else}
+		{:else if run}
+			<!-- A run in progress is always open below; this just scrolls to it. -->
 			<a
-				href={processHref(process, row.robotId)}
+				href={panelAnchor(row.robotId)}
 				class="shrink-0 rounded px-2.5 py-1 text-[11px] font-medium transition-colors {isOpen
 					? 'bg-[var(--color-tron-cyan)] text-black'
-					: run
-						? 'border border-amber-500/50 bg-amber-900/20 text-amber-300 hover:bg-amber-900/30'
-						: 'border border-[var(--color-tron-cyan)]/40 bg-[var(--color-tron-cyan)]/10 text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/20'}"
-				aria-current={isOpen ? 'page' : undefined}
+					: 'border border-amber-500/50 bg-amber-900/20 text-amber-300 hover:bg-amber-900/30'}"
 			>
-				{isOpen ? 'Open' : run ? 'Open →' : 'Start →'}
+				Open ↓
+			</a>
+		{:else if isOpen}
+			<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- URL built from the current page -->
+			<a
+				href={panelsHref(openMap, row.robotId, null)}
+				class="shrink-0 rounded border border-[var(--color-tron-cyan)]/60 bg-[var(--color-tron-cyan)]/10 px-2.5 py-1 text-[11px] font-medium text-[var(--color-tron-cyan)] transition-colors hover:bg-[var(--color-tron-cyan)]/20"
+				title="Hide this wizard (no run has started)"
+			>
+				Close
+			</a>
+		{:else}
+			<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- URL built from the current page -->
+			<a
+				href={panelsHref(openMap, row.robotId, process)}
+				class="shrink-0 rounded border border-[var(--color-tron-cyan)]/40 bg-[var(--color-tron-cyan)]/10 px-2.5 py-1 text-[11px] font-medium text-[var(--color-tron-cyan)] transition-colors hover:bg-[var(--color-tron-cyan)]/20"
+			>
+				Start →
 			</a>
 		{/if}
 	</div>
