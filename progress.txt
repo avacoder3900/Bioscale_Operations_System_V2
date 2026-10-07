@@ -19083,3 +19083,27 @@ Smoke (unauthenticated curl; 302 → /login means the route exists and is gated)
   /manufacturing/cart-mfg/reagent-filling?robot=y -> 302 https://bioscale-operations-system-mongodb-7ja5xjdey-brevitest.vercel.app/login
   /manufacturing/cart-mfg/robots/history -> 302 https://bioscale-operations-system-mongodb-7ja5xjdey-brevitest.vercel.app/login
 
+
+================================================================================
+2026-10-07 — feat/robot-overhaul — Round 3: all three panels always open, Wax | Reagent toggle per robot
+================================================================================
+Operator feedback on round 2: open all three cards automatically, and let me
+choose wax or reagent per robot.
+
+- /robots now renders a panel for EVERY active robot, always (no Start/Close).
+  A robot with a run in progress shows that process, toggle locked; an idle
+  robot shows the operator's choice (?open=<id>:wax|reagent, same URL state as
+  before), else the process it ran LAST (new RobotBoardRow.lastProcess from a
+  $sort/$group over WaxFillingRun + ReagentBatchRecord createdAt), else wax.
+- Panel header: robot name + a Wax | Reagent segmented toggle (links that
+  rewrite ?open=; disabled with a "run in progress" title when locked).
+- Board rows: "Open ↓" on the process a panel shows (scrolls), "Switch →" on
+  the other process of an idle robot, "—" when busy with the other process.
+  The card outline for "selected" is gone — every card is open now.
+- A reader of only one process (waxFilling:read xor reagentFilling:read)
+  still gets each idle robot's panel on the process they may see.
+
+Check: svelte-check 14 errors (all pre-existing); vite build client + server
+bundles build (adapter trace OOMs locally as before). Needs the preview smoke
+with a login: three panels up, toggle an idle robot, a locked toggle on a
+running one, and one action from a panel.

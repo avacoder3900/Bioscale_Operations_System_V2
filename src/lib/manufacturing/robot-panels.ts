@@ -4,8 +4,8 @@
  *
  * Which wizards are open on /manufacturing/cart-mfg/robots is URL state:
  *   ?open=<robotId>:wax,<robotId>:reagent
- * A robot with a run in progress is ALWAYS open on that process (the operator
- * must see it); the param only adds idle robots the operator chose to start.
+ * Every robot has a panel. A robot with a run in progress is locked to that
+ * process; the param records which process the operator chose for an idle one.
  */
 export type BoardProcess = 'wax' | 'reagent';
 

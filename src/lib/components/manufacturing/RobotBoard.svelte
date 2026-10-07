@@ -5,11 +5,12 @@
   used to sit in the wax-filling and reagent-filling layouts — restart the
   robot server, force the robot back to idle.
 
-  Round 2: the wizards open BELOW this board on the same page, as many at once
-  as the operator wants. A robot with a run in progress is always open on that
-  process ("Open" just scrolls to it); "Start →" opens an idle robot's wizard
-  (?open=<id>:wax|reagent, see $lib/manufacturing/robot-panels) and "Close"
-  hides it again. A robot busy with the other process shows a dash.
+  Round 3: every robot's wizard is open BELOW this board, always. A robot with
+  a run in progress shows that process; an idle robot shows whichever the
+  operator chose (?open=<id>:wax|reagent, see $lib/manufacturing/robot-panels),
+  else what it ran last. Per process row: "Open ↓" scrolls to the panel when
+  that process is the one shown, "Switch →" flips an idle robot's panel to the
+  other process, and a dash means the robot is busy with the other process.
 
   Health is polled every 10 s from /api/opentrons-lab/robots/health; run stages
   refresh whenever a wizard action invalidates the page data.
@@ -26,7 +27,7 @@
 
 	interface Props {
 		rows: RobotBoardRow[];
-		/** Which wizard is open per robot, from the Robots page load. */
+		/** Which wizard each robot's panel shows, from the Robots page load. */
 		openPanels?: Record<string, BoardProcess>;
 	}
 
@@ -34,7 +35,7 @@
 
 	const processLabel = (p: BoardProcess) => (p === 'wax' ? 'Wax' : 'Reagent');
 	const otherProcess = (p: BoardProcess): BoardProcess => (p === 'wax' ? 'reagent' : 'wax');
-	// The operator-chosen panels in the URL (robots with runs are open regardless).
+	// The operator's per-robot choices in the URL (robots with runs are locked regardless).
 	const openMap = $derived(parseOpenPanels($page.url.searchParams.get('open')));
 
 	// --- Robot health (ready / busy / hung / offline) --------------------------
@@ -193,7 +194,7 @@
 		<div>
 			<h1 class="text-xl font-semibold text-[var(--color-tron-text)]">Robots</h1>
 			<p class="mt-0.5 text-xs text-[var(--color-tron-text-secondary)]">
-				Every OT-2, wax and reagent, on one page. Open wizards render below, side by side.
+				Every OT-2, wax and reagent, on one page. Each robot's wizard is below; pick wax or reagent per robot.
 			</p>
 		</div>
 		<nav class="flex flex-wrap items-center gap-1 text-xs" aria-label="Robot tools">
@@ -213,14 +214,11 @@
 		<div class="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
 			{#each rows as row (row.robotId)}
 				{@const h = healthFor(row)}
-				{@const isOpen = row.robotId in openPanels}
 				{@const isHung = h?.status === 'hung'}
 				<section
-					class="flex flex-col gap-2.5 rounded-lg border bg-[var(--color-tron-surface)] p-3 transition-colors {isOpen
-						? 'border-[var(--color-tron-cyan)] shadow-[0_0_12px_rgba(0,255,255,0.12)]'
-						: isHung
-							? 'border-red-500/50'
-							: 'border-[var(--color-tron-border)]'}"
+					class="flex flex-col gap-2.5 rounded-lg border bg-[var(--color-tron-surface)] p-3 transition-colors {isHung
+						? 'border-red-500/50'
+						: 'border-[var(--color-tron-border)]'}"
 					aria-label={row.name}
 				>
 					<!-- Header: health dot, name, side, controls -->
@@ -275,10 +273,10 @@
 </div>
 
 {#snippet processRow(row: RobotBoardRow, process: BoardProcess, run: BoardRun | null, other: BoardRun | null)}
-	{@const isOpen = openPanels[row.robotId] === process}
+	{@const shown = openPanels[row.robotId] === process}
 	{@const blocked = !run && !!other}
 	<div
-		class="flex items-center gap-2 rounded border px-2.5 py-2 {isOpen
+		class="flex items-center gap-2 rounded border px-2.5 py-2 {shown
 			? 'border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/10'
 			: 'border-[var(--color-tron-border)]/60 bg-[var(--color-tron-bg)]/40'}"
 	>
@@ -293,32 +291,22 @@
 		</span>
 		{#if blocked}
 			<span class="shrink-0 text-[11px] text-[var(--color-tron-text-secondary)]" title="This robot is on a {otherProcess(process)} run">—</span>
-		{:else if run}
-			<!-- A run in progress is always open below; this just scrolls to it. -->
+		{:else if shown}
+			<!-- This process is the one in the robot's panel below; scroll to it. -->
 			<a
 				href={panelAnchor(row.robotId)}
-				class="shrink-0 rounded px-2.5 py-1 text-[11px] font-medium transition-colors {isOpen
-					? 'bg-[var(--color-tron-cyan)] text-black'
-					: 'border border-amber-500/50 bg-amber-900/20 text-amber-300 hover:bg-amber-900/30'}"
+				class="shrink-0 rounded bg-[var(--color-tron-cyan)] px-2.5 py-1 text-[11px] font-medium text-black transition-opacity hover:opacity-90"
 			>
 				Open ↓
-			</a>
-		{:else if isOpen}
-			<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- URL built from the current page -->
-			<a
-				href={panelsHref(openMap, row.robotId, null)}
-				class="shrink-0 rounded border border-[var(--color-tron-cyan)]/60 bg-[var(--color-tron-cyan)]/10 px-2.5 py-1 text-[11px] font-medium text-[var(--color-tron-cyan)] transition-colors hover:bg-[var(--color-tron-cyan)]/20"
-				title="Hide this wizard (no run has started)"
-			>
-				Close
 			</a>
 		{:else}
 			<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- URL built from the current page -->
 			<a
 				href={panelsHref(openMap, row.robotId, process)}
 				class="shrink-0 rounded border border-[var(--color-tron-cyan)]/40 bg-[var(--color-tron-cyan)]/10 px-2.5 py-1 text-[11px] font-medium text-[var(--color-tron-cyan)] transition-colors hover:bg-[var(--color-tron-cyan)]/20"
+				title="Show the {processLabel(process).toLowerCase()} wizard in this robot's panel"
 			>
-				Start →
+				Switch →
 			</a>
 		{/if}
 	</div>

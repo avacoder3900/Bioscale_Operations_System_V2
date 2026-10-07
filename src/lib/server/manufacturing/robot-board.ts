@@ -1,8 +1,9 @@
 /**
  * Robot board — the ONE server read behind the Robots page group
  * (/manufacturing/cart-mfg/robots plus the wax-filling and reagent-filling
- * wizards under it). One row per active OT-2: its bridge health and the run,
- * if any, that EACH process (wax, reagent) currently has on it.
+ * wizards under it). One row per active OT-2: its bridge health, the run,
+ * if any, that EACH process (wax, reagent) currently has on it, and which
+ * process it ran last (the wizard an idle robot's panel opens on).
  *
  * ROBOT-OVERHAUL (2026-10-07): replaces the three near-identical loads that
  * lived in wax-filling/+layout.server.ts, reagent-filling/+layout.server.ts and
@@ -11,10 +12,10 @@
  */
 import { Equipment, WaxFillingRun, ReagentBatchRecord } from '$lib/server/db';
 import { getRobotsHealth, type RobotHealth } from '$lib/server/opentrons/health';
+import type { BoardProcess } from '$lib/manufacturing/robot-panels';
 import { WAX_PAGE_OWNED, REAGENT_PAGE_OWNED } from './run-statuses';
 
 export type { RobotHealth } from '$lib/server/opentrons/health';
-
 export type { BoardProcess } from '$lib/manufacturing/robot-panels';
 
 /** The run a process currently has on a robot (page-owned stages only). */
@@ -36,6 +37,8 @@ export interface RobotBoardRow {
 	health: RobotHealth | null;
 	wax: BoardRun | null;
 	reagent: BoardRun | null;
+	/** The process this robot ran most recently (null = never ran). */
+	lastProcess: BoardProcess | null;
 }
 
 export interface RobotBoard {
@@ -46,8 +49,21 @@ export interface RobotBoard {
 
 const iso = (d: unknown): string | null => (d ? new Date(d as string | number | Date).toISOString() : null);
 
+/** robotId → createdAt (ms) of that robot's newest run in a collection. */
+async function newestRunByRobot(model: typeof WaxFillingRun | typeof ReagentBatchRecord): Promise<Map<string, number>> {
+	const rows = (await model
+		.aggregate([{ $sort: { createdAt: -1 } }, { $group: { _id: '$robot._id', at: { $first: '$createdAt' } } }])
+		.catch(() => [])) as { _id: unknown; at: unknown }[];
+	const m = new Map<string, number>();
+	for (const r of rows) {
+		const t = r.at ? new Date(r.at as string).getTime() : NaN;
+		if (r._id && Number.isFinite(t)) m.set(String(r._id), t);
+	}
+	return m;
+}
+
 export async function loadRobotBoard(): Promise<RobotBoard> {
-	const [robots, waxRuns, reagentRuns] = await Promise.all([
+	const [robots, waxRuns, reagentRuns, lastWaxAt, lastReagentAt] = await Promise.all([
 		Equipment.find({ equipmentType: 'robot', isActive: true }, { _id: 1, name: 1, robotSide: 1 })
 			.sort({ name: 1 })
 			.lean(),
@@ -62,7 +78,9 @@ export async function loadRobotBoard(): Promise<RobotBoard> {
 			{ 'robot._id': 1, status: 1, runStartTime: 1, cartridgeCount: 1, 'assayType.name': 1 }
 		)
 			.lean()
-			.catch(() => [] as any[])
+			.catch(() => [] as any[]),
+		newestRunByRobot(WaxFillingRun),
+		newestRunByRobot(ReagentBatchRecord)
 	]);
 
 	// Bridge-heartbeat health (ready / busy / hung / offline) per robot — the
@@ -75,6 +93,8 @@ export async function loadRobotBoard(): Promise<RobotBoard> {
 		const robotId = String(r._id);
 		const w = (waxRuns as any[]).find((x) => String(x.robot?._id) === robotId);
 		const g = (reagentRuns as any[]).find((x) => String(x.robot?._id) === robotId);
+		const wAt = lastWaxAt.get(robotId) ?? 0;
+		const gAt = lastReagentAt.get(robotId) ?? 0;
 		return {
 			robotId,
 			name: r.name ?? '',
@@ -99,7 +119,8 @@ export async function loadRobotBoard(): Promise<RobotBoard> {
 						deckId: null,
 						assayTypeName: g.assayType?.name ?? null
 					}
-				: null
+				: null,
+			lastProcess: wAt === 0 && gAt === 0 ? null : wAt >= gAt ? 'wax' : 'reagent'
 		};
 	});
 
