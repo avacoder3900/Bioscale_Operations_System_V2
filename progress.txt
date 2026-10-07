@@ -19107,3 +19107,16 @@ Check: svelte-check 14 errors (all pre-existing); vite build client + server
 bundles build (adapter trace OOMs locally as before). Needs the preview smoke
 with a login: three panels up, toggle an idle robot, a locked toggle on a
 running one, and one action from a panel.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-opqqqvppe-brevitest.vercel.app
+Source: branch feat/robot-overhaul @ commit f110e39e
+Retrieve this exact code: git checkout feat/robot-overhaul at commit f110e39e
+  (or: git log feat/robot-overhaul --oneline to find it if the branch has since moved on)
+What this deployment is for: round 3 — all three robot panels always open with a per-robot
+  Wax | Reagent toggle; needs a logged-in operator smoke.
+Smoke (unauthenticated curl; 302 → /login means the route exists and is gated):
+  /login -> 200 
+  /manufacturing/cart-mfg/robots -> 302 https://bioscale-operations-system-mongodb-opqqqvppe-brevitest.vercel.app/login
+  /manufacturing/cart-mfg/robots?open=x:reagent -> 302 https://bioscale-operations-system-mongodb-opqqqvppe-brevitest.vercel.app/login
+  /manufacturing/cart-mfg/wax-filling?robot=x -> 302 https://bioscale-operations-system-mongodb-opqqqvppe-brevitest.vercel.app/login
+
