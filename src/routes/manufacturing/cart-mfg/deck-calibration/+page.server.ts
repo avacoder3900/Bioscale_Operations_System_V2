@@ -526,8 +526,10 @@ async function rederiveCalibratorFromHole(
 	}
 
 	const now = new Date();
+	// The exact row that was read — rows are per deck now, so { robotId } could
+	// match another deck's calibrator on the same robot.
 	await TipCalibratorFixture.updateOne(
-		{ robotId },
+		{ _id: fixture._id },
 		{
 			$set: {
 				'position.x': next.x,
@@ -1095,7 +1097,9 @@ export const actions: Actions = {
 		if (!nominal) return fail(400, { error: `No nominal x/y/z for ${wellName} — reselect the hole` });
 		if (!taught) return fail(400, { error: 'No live position captured — jog to the hole, then capture' });
 
-		const prev = (await TipCalibratorFixture.findOne({ robotId }).lean()) as any;
+		// DECK-KEYED like saveCalibrator: the anchor belongs to the mounted deck's row.
+		const selector = (await calibratorSelectorForDeck(deckLoadName))!;
+		const prev = (await TipCalibratorFixture.findOne(selector).lean()) as any;
 		const sameWell =
 			prev?.referenceHole?.wellName === wellName &&
 			prev?.referenceHole?.deckLoadName === deckLoadName;
@@ -1105,7 +1109,7 @@ export const actions: Actions = {
 		const capturedBy = { _id: locals.user._id, username: locals.user.username };
 		const now = new Date();
 		await TipCalibratorFixture.updateOne(
-			{ robotId },
+			selector,
 			{
 				$set: {
 					referenceHole: { deckLoadName, wellName, nominal, taught, offset, capturedBy, capturedAt: now }
@@ -1117,7 +1121,9 @@ export const actions: Actions = {
 					_id: generateId(),
 					position: { x: CAL_DEFAULTS.x, y: CAL_DEFAULTS.y, z: CAL_DEFAULTS.z },
 					zCalWax: CAL_DEFAULTS.zCalWax,
-					zCalReagent: CAL_DEFAULTS.zCalReagent
+					zCalReagent: CAL_DEFAULTS.zCalReagent,
+					deckLoadName,
+					robotId
 				}
 			},
 			{ upsert: true }
@@ -1135,7 +1141,7 @@ export const actions: Actions = {
 
 		// Re-teaching the same hole is exactly the reseat case, so move the
 		// calibrator with it. A fresh hole has no offset yet and simply reports that.
-		const after = (await TipCalibratorFixture.findOne({ robotId }).lean()) as any;
+		const after = (await TipCalibratorFixture.findOne(selector).lean()) as any;
 		const rederive = await rederiveCalibratorFromHole(robotId, after, taught, locals.user, false);
 
 		return {
@@ -1156,10 +1162,13 @@ export const actions: Actions = {
 		const data = await request.formData();
 		const robotId = (data.get('robotId') as string)?.trim();
 		if (!robotId) return fail(400, { error: 'Pick a robot' });
+		const deckLoadName = (data.get('deckLoadName') as string)?.trim() || null;
+		const selector = await calibratorSelectorForDeck(deckLoadName);
+		if (!selector) return fail(400, { error: 'Pick the deck whose calibrator to re-derive' });
 
-		const fixture = (await TipCalibratorFixture.findOne({ robotId }).lean()) as any;
+		const fixture = (await TipCalibratorFixture.findOne(selector).lean()) as any;
 		if (!fixture?.referenceHole?.taught) {
-			return fail(400, { error: 'This robot has no taught reference hole to re-derive from' });
+			return fail(400, { error: 'This deck has no taught reference hole to re-derive from' });
 		}
 		const rederive = await rederiveCalibratorFromHole(
 			robotId,

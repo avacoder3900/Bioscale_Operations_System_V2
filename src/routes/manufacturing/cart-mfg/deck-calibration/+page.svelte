@@ -1491,7 +1491,7 @@
 
 	async function confirmHoleRederive() {
 		if (!selectedRobotId) return;
-		const r = await postAction('rederiveFromHole', { robotId: selectedRobotId });
+		const r = await postAction('rederiveFromHole', { robotId: selectedRobotId, deckLoadName: data.selected ?? '' });
 		if (r) { pendingHoleRederive = null; msg = r.rederive?.message ?? 'Calibrator re-derived from the reference hole.'; }
 	}
 
