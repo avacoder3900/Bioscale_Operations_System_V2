@@ -25,7 +25,8 @@ export const BRIDGE_JOB_KINDS = [
 	'calibrate_tip',
 	'tip_swap_request',
 	'restart_robot_server',
-	'auto_resume_run'
+	'auto_resume_run',
+	'calibrator_watch'
 ] as const;
 export type BridgeJobKind = (typeof BRIDGE_JOB_KINDS)[number];
 
@@ -51,6 +52,8 @@ export interface BridgeJob {
 		slotsDone: number;
 		currentSlotIndex: number | null;
 		scans: Array<Record<string, unknown>>;
+		/** calibrator_watch only: one entry per limit-switch trip. */
+		trips?: Array<Record<string, unknown>>;
 		slotErrors: Array<Record<string, unknown>>;
 		log: Array<{ ts: number; level: string; message: string }>;
 		final: { status: string; abortReason?: string } | null;

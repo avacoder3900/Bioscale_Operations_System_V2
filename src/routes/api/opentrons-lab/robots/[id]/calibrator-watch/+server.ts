@@ -63,6 +63,29 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 
 	await connectDB();
 
+	// TAILNET LINE: the browser submits the watch straight to the robot's /bridge
+	// job server over Tailscale and polls the trips from there. BIMS only resolves
+	// the inputs and audits the start — no Ot2BridgeCommand row, nothing on the
+	// queue. The daemon itself supersedes a running watch (one serial port).
+	if (body?.line === 'tailnet') {
+		const jobId = generateId();
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'ot2_bridge_jobs',
+			recordId: jobId,
+			action: 'calibrator_watch_start',
+			newData: { robotId: String(robot._id), runId, pipetteId, durationMs, line: 'tailnet' },
+			changedAt: new Date(),
+			changedBy: user.username
+		});
+		return json({
+			ok: true,
+			job: { jobId, kind: 'calibrator_watch', payload: { runId, pipetteId, durationMs } },
+			durationMs,
+			expiresAt: new Date(Date.now() + durationMs).toISOString()
+		});
+	}
+
 	// One watch at a time per robot: two daemons contending for the calibrator's
 	// serial port would each see half the trips, and neither would be wrong in a
 	// way anyone could spot. Retire the old one rather than refusing, so a

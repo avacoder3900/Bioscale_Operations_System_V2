@@ -7,7 +7,8 @@
 	import { onDestroy } from 'svelte';
 	import { RobotSession, type RobotSessionState } from '$lib/opentrons/direct-client';
 	import { uploadBundle, sessionVerb, isStepError, type ProtocolUploadBundle } from '$lib/opentrons/ot2-protocol';
-	import { calibrateTipOverBridge } from '$lib/opentrons/studio-bridge-jobs';
+	import { calibrateTipOverBridge, startCalibratorWatchOverBridge } from '$lib/opentrons/studio-bridge-jobs';
+	import type { BridgeClient } from '$lib/opentrons/bridge-client';
 	import TransportPill from '$lib/components/opentrons/TransportPill.svelte';
 	import { goto, invalidateAll } from '$app/navigation';
 	import { deserialize } from '$app/forms';
@@ -1622,6 +1623,9 @@
 	// fixture; this LOCATES the fixture.
 
 	let watchCommandId = $state<string | null>(null);
+	// Tailnet line: the watch is a /bridge job on the robot and its trips are read
+	// straight from it over Tailscale. null = the BIMS queue line (watchCommandId).
+	let watchBridge: BridgeClient | null = null;
 	let watchArmed = $state(false);
 	let watchQueued = $state(false);
 	let watchEvents = $state<any[]>([]);
@@ -1667,6 +1671,21 @@
 
 	async function pollWatch() {
 		if (!watchCommandId || !selectedRobotId) return;
+		if (watchBridge) {
+			try {
+				const job = await watchBridge.getJob(watchCommandId);
+				watchEvents = (job.progress?.trips ?? []) as any[];
+				watchArmed = job.status === 'running';
+				watchQueued = job.status === 'queued';
+				if (!watchArmed && !watchQueued) {
+					stopPolling();
+					if (job.status === 'failed' && job.error) errMsg = `Watch ended: ${job.error}`;
+				}
+			} catch (e) {
+				console.warn('[calibrator-watch] tailnet poll failed', e);
+			}
+			return;
+		}
 		try {
 			const res = await api(`/api/opentrons-lab/robots/${selectedRobotId}/calibrator-watch/${watchCommandId}`);
 			watchEvents = res?.events ?? [];
@@ -1696,16 +1715,25 @@
 		clearMsg();
 		busy = true;
 		try {
-			const res = await api(`/api/opentrons-lab/robots/${selectedRobotId}/calibrator-watch`, {
-				method: 'POST',
-				body: JSON.stringify({ runId, pipetteId })
-			});
-			watchCommandId = res?.commandId ?? null;
+			// Same line choice as Calibrate tip: Tailscale when the session has a
+			// /bridge client, else the BIMS queue exactly as before.
+			const bridge = robotSession?.bridge() ?? null;
+			if (bridge) {
+				watchCommandId = await startCalibratorWatchOverBridge(bridge, selectedRobotId, { runId, pipetteId });
+				watchBridge = bridge;
+			} else {
+				const res = await api(`/api/opentrons-lab/robots/${selectedRobotId}/calibrator-watch`, {
+					method: 'POST',
+					body: JSON.stringify({ runId, pipetteId })
+				});
+				watchCommandId = res?.commandId ?? null;
+				watchBridge = null;
+			}
 			watchEvents = [];
 			watchQueued = true;
 			if (watchTimer) clearInterval(watchTimer);
 			watchTimer = setInterval(pollWatch, 1000);
-			msg = 'Watch requested. Once it arms, jog the tip onto the calibrator — every switch trip is recorded.';
+			msg = `Watch requested${watchBridge ? ' via Tailscale' : ''}. Once it arms, jog the tip onto the calibrator — every switch trip is recorded.`;
 		} catch (e) {
 			errMsg = e instanceof Error ? e.message : String(e);
 		} finally {
@@ -1717,7 +1745,8 @@
 		if (!watchCommandId || !selectedRobotId) { stopPolling(); return; }
 		busy = true;
 		try {
-			await api(`/api/opentrons-lab/robots/${selectedRobotId}/calibrator-watch/${watchCommandId}`, { method: 'DELETE' });
+			if (watchBridge) await watchBridge.control(watchCommandId, 'cancel');
+			else await api(`/api/opentrons-lab/robots/${selectedRobotId}/calibrator-watch/${watchCommandId}`, { method: 'DELETE' });
 			await pollWatch(); // one last read so no trip is lost from the display
 			msg = `Watch stopped — ${watchEvents.length} trip${watchEvents.length === 1 ? '' : 's'} recorded.`;
 		} catch (e) {
@@ -1743,9 +1772,14 @@
 	async function saveCalibratorFromTrips() {
 		if (!selectedRobotId) { errMsg = 'Pick a robot'; return; }
 		if (!watchEvents.length) { errMsg = 'No switch trips recorded to save'; return; }
+		if (kind !== 'deck' || !data.selected) {
+			errMsg = 'Pick the deck this calibrator belongs to (Labware → Deck) before saving.';
+			return;
+		}
 		if (checkedZ(calZ, 'Approach Z') === null) return;
 		const fields: Record<string, string> = {
 			robotId: selectedRobotId,
+			deckLoadName: String(data.selected),
 			x: String(calX), y: String(calY), z: String(calZ),
 			source: 'sensor',
 			switchEvents: JSON.stringify(watchEvents)
@@ -1773,7 +1807,10 @@
 		// a page nobody is looking at — it holds the fixture against the next
 		// operation, and its trips would be recorded with no one to read them.
 		if (watchTimer) clearInterval(watchTimer);
-		if (watchCommandId && selectedRobotId) {
+		if (watchCommandId && watchBridge) {
+			// Best-effort; the daemon's own deadline releases the port if this is lost.
+			void watchBridge.control(watchCommandId, 'cancel').catch(() => {});
+		} else if (watchCommandId && selectedRobotId) {
 			try {
 				fetch(`/api/opentrons-lab/robots/${selectedRobotId}/calibrator-watch/${watchCommandId}`, { method: 'DELETE', credentials: 'same-origin', keepalive: true });
 			} catch { /* best-effort */ }

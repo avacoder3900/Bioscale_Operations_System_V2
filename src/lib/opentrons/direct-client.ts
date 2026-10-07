@@ -187,6 +187,7 @@ const NO_RETRY_WHAT: Record<string, string> = {
 	'bridge:tip_swap_request': 'tip swap request',
 	'bridge:restart_robot_server': 'robot-server restart',
 	'bridge:auto_resume_run': 'auto-resume request',
+	'bridge:calibrator_watch': 'calibrator watch start',
 	'bridge:scan': 'test scan',
 	'bridge:control': 'job pause / resume / cancel'
 };

@@ -1684,6 +1684,15 @@ def _post_switch_event(command_id: str, payload: dict) -> bool:
     mid-jog on. But a WATCH_FATAL_HTTP status is not a blip — that route will
     never answer — so it stops immediately.
     """
+    # Tailnet line: the trip goes into the /bridge job record the browser polls
+    # over Tailscale — no BIMS round-trip, no command row to post it to. Stop =
+    # the browser's /control cancel.
+    job = _direct_job_for(command_id)
+    if job is not None:
+        if not payload.get("heartbeat"):
+            job.record_progress({"trip": payload, "log": [{
+                "message": "{} switch tripped".format(str(payload.get("axis", "?")).upper())}]})
+        return bool(job.cancel_requested)
     url = "{}/api/agent/ot2/commands/{}/switch-event".format(BIMS_BASE_URL, command_id)
     try:
         r = requests.post(url, headers=_bims_headers(), data=json.dumps(payload), timeout=10)
@@ -1740,12 +1749,18 @@ def execute_calibrator_watch(command_id: str, payload: dict) -> None:
                                            "(the watch attaches to the studio's run)"})
         return
 
+    # On the tailnet line the worker must not close the job when this returns —
+    # the watch thread posts the result itself (same as auto_resume_run).
+    job = _direct_job_for(command_id)
+    if job is not None:
+        job.detached = True
+
     with _watch_lock:
         _stop_active_watch("superseded by {}".format(command_id))
         ev = threading.Event()
         t = threading.Thread(
             target=_calibrator_watch_worker,
-            args=(command_id, payload, run_id, pipette_id, ev),
+            args=(command_id, payload, run_id, pipette_id, ev, job),
             name="calwatch", daemon=True)
         globals()["_watch_stop"] = ev
         globals()["_watch_thread"] = t
@@ -1755,8 +1770,19 @@ def execute_calibrator_watch(command_id: str, payload: dict) -> None:
 
 
 def _calibrator_watch_worker(command_id: str, payload: dict, run_id: str,
-                             pipette_id: str, cancel: "threading.Event") -> None:
-    """The listening loop. Runs off the command loop; posts its own result."""
+                             pipette_id: str, cancel: "threading.Event",
+                             job: Optional["DirectJob"] = None) -> None:
+    """The listening loop. Runs off the command loop; posts its own result.
+    A /bridge job's report routing is thread-local, so it is re-bound here."""
+    _worker_ctx.direct_job = job
+    try:
+        _calibrator_watch_loop(command_id, payload, run_id, pipette_id, cancel)
+    finally:
+        _worker_ctx.direct_job = None
+
+
+def _calibrator_watch_loop(command_id: str, payload: dict, run_id: str,
+                           pipette_id: str, cancel: "threading.Event") -> None:
     try:
         duration_s = min(float((payload or {}).get("durationMs") or 600000) / 1000.0,
                          WATCH_MAX_DURATION_S)
@@ -1898,8 +1924,13 @@ def _calibrator_watch_worker(command_id: str, payload: dict, run_id: str,
     # ok:true even when the operator stopped it early — a watch that listened and
     # was told to stand down did its job. Only a fixture we could never open, or a
     # missing run, is a failure; both return above.
+    # Tailnet line: the trips never went to BIMS one by one, so the result (which
+    # BIMS records in the bridge-job AuditLog) carries them as the record.
+    direct = _direct_job_for(command_id)
+    events = list(direct.progress.get("trips", [])) if direct is not None else None
     _post_result(command_id, {"ok": True, "status": 200, "body": {
         "trips": trips,
+        **({"events": events} if events is not None else {}),
         "stopReason": stop_reason,
         "bend": bend,
         "attached": True,
@@ -2173,7 +2204,7 @@ def execute_command(cmd: dict, port: ScannerPort) -> None:
 #   bridge-token.test.ts).
 
 DIRECT_JOB_KINDS = ("sweep", "deck_scan", "calibrate_tip", "tip_swap_request",
-                    "restart_robot_server", "auto_resume_run")
+                    "restart_robot_server", "auto_resume_run", "calibrator_watch")
 # 'scan' is the /bridge/scan test-scan; it is a token kind, not a queued job.
 TOKEN_KINDS = DIRECT_JOB_KINDS + ("scan",)
 TOKEN_AUDIENCE = "ot2-bridge"
@@ -2242,6 +2273,8 @@ class DirectJob:
                 p["scans"].append(payload["scan"])
             if isinstance(payload.get("slotError"), dict):
                 p["slotErrors"].append(payload["slotError"])
+            if isinstance(payload.get("trip"), dict):
+                p.setdefault("trips", []).append(payload["trip"])
             for entry in (payload.get("log") or [])[:20]:
                 if isinstance(entry, dict):
                     p["log"].append({"ts": time.time(), "level": entry.get("level", "info"),
@@ -2527,7 +2560,7 @@ class JobServerContext:
                 job.record_result({"ok": True, "status": 200,
                                    "body": {"status": "cancelled", "cancelledBeforeStart": True}})
                 threading.Thread(target=self._finish_removed, args=(job,), daemon=True).start()
-            elif job.status == "running" and job.kind != "sweep":
+            elif job.status == "running" and job.kind not in ("sweep", "calibrator_watch"):
                 job.cancel_requested = False
                 return 409, {"error": "a running {} cannot be interrupted".format(job.kind)}
             return 200, job.snapshot(self.position(job))

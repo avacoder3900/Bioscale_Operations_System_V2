@@ -305,3 +305,36 @@ export async function testScanOverBridge(
 		event
 	};
 }
+
+/**
+ * Start a live calibrator limit-switch watch on the TAILNET line.
+ *
+ * BIMS prepares (validates the attached run, audits the start), then the job
+ * goes straight to the robot's /bridge server. Unlike calibrate_tip there is no
+ * record half: the page polls the trips with `bridge.getJob(jobId)` — they are
+ * `progress.trips` — stops it with `bridge.control(jobId, 'cancel')`, and saves
+ * the calibrator from them itself. Returns the jobId to poll.
+ */
+export async function startCalibratorWatchOverBridge(
+	bridge: BridgeClient,
+	robotId: string,
+	request: { runId: string; pipetteId: string; durationMs?: number },
+	opts: { bimsFetch?: BimsFetch } = {}
+): Promise<string> {
+	const bimsFetch = opts.bimsFetch ?? defaultBimsFetch;
+	let prepared: any;
+	try {
+		prepared = await postBims(bimsFetch, `/api/opentrons-lab/robots/${encodeURIComponent(robotId)}/calibrator-watch`, {
+			...request,
+			line: 'tailnet'
+		});
+	} catch (e) {
+		throw new StudioJobError(`The calibrator watch was not started: ${errText(e)}`, 'prepare');
+	}
+	const job = prepared?.job as BridgeJobDescriptor | undefined;
+	if (!job || job.kind !== 'calibrator_watch' || typeof job.jobId !== 'string' || !job.jobId) {
+		throw new StudioJobError('The calibrator watch was not started: BIMS returned no calibrator_watch job', 'prepare');
+	}
+	await submitOnce(bridge, job, 'calibrator watch');
+	return job.jobId;
+}

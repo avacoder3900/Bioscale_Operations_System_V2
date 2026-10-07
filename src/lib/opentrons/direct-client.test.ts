@@ -644,7 +644,7 @@ describe('RobotSession.bridge()', () => {
 		await b.testScan({ source: 'test' });
 		expect(tokenUrls).toHaveLength(1);
 		const kinds = decodeURIComponent(tokenUrls[0].split('kinds=')[1]).split(',');
-		expect(kinds).toEqual(['sweep', 'deck_scan', 'calibrate_tip', 'tip_swap_request', 'restart_robot_server', 'auto_resume_run', 'scan']);
+		expect(kinds).toEqual(['sweep', 'deck_scan', 'calibrate_tip', 'tip_swap_request', 'restart_robot_server', 'auto_resume_run', 'calibrator_watch', 'scan']);
 		expect(daemonCalls.every((c) => new Headers(c.init?.headers).get('authorization') === 'Bearer tok1')).toBe(true);
 		expect(JSON.parse(String(daemonCalls[1].init?.body))).toEqual({ kind: 'deck_scan', payload: {}, jobId: 'j2' });
 	});

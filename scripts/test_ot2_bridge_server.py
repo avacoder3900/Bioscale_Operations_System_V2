@@ -483,6 +483,56 @@ class RunIntegrityTests(unittest.TestCase):
         self.assertFalse(job.is_terminal())  # its watcher, not the worker, closes it
 
 
+class CalibratorWatchTailnetTests(unittest.TestCase):
+    """calibrator_watch as a /bridge job: trips stay on the robot, cancel works."""
+
+    def setUp(self):
+        self._orig = (bridge.BIMS_BASE_URL, bridge.requests)
+        bridge.BIMS_BASE_URL = "https://bims.example"
+        self.posts = []
+        bridge.requests = types.SimpleNamespace(
+            post=lambda *a, **k: self.posts.append(a) or FakeResp(200, {}))
+
+    def tearDown(self):
+        bridge.BIMS_BASE_URL, bridge.requests = self._orig
+        bridge._worker_ctx.direct_job = None
+
+    def test_is_a_direct_job_kind(self):
+        self.assertIn("calibrator_watch", bridge.DIRECT_JOB_KINDS)
+
+    def test_trip_is_recorded_on_the_job_not_posted_to_bims(self):
+        job = bridge.DirectJob("cw-job-0001", "calibrator_watch", {})
+        bridge._worker_ctx.direct_job = job
+        stop = bridge._post_switch_event("cw-job-0001", {"axis": "x", "position": {"x": 1, "y": 2, "z": 3}})
+        self.assertFalse(stop)
+        self.assertEqual(job.snapshot()["progress"]["trips"][0]["axis"], "x")
+        self.assertEqual(self.posts, [])
+
+    def test_heartbeat_is_not_a_trip_and_cancel_stops_it(self):
+        job = bridge.DirectJob("cw-job-0002", "calibrator_watch", {})
+        bridge._worker_ctx.direct_job = job
+        self.assertFalse(bridge._post_switch_event("cw-job-0002", {"heartbeat": True}))
+        job.cancel_requested = True
+        self.assertTrue(bridge._post_switch_event("cw-job-0002", {"heartbeat": True}))
+        self.assertNotIn("trips", job.snapshot()["progress"])
+        self.assertEqual(self.posts, [])
+
+    def test_detaches_from_the_worker(self):
+        job = bridge.DirectJob("cw-job-0003", "calibrator_watch", {"runId": "r1", "pipetteId": "p1"})
+        started = []
+        orig_thread = bridge.threading.Thread
+        bridge.threading.Thread = lambda target, args=(), name=None, daemon=None: types.SimpleNamespace(
+            start=lambda: started.append(name), is_alive=lambda: False)
+        bridge._worker_ctx.direct_job = job
+        try:
+            bridge.execute_calibrator_watch("cw-job-0003", {"runId": "r1", "pipetteId": "p1"})
+        finally:
+            bridge.threading.Thread = orig_thread
+            bridge._watch_thread, bridge._watch_stop = None, None
+        self.assertTrue(job.detached)
+        self.assertEqual(started, ["calwatch"])
+        self.assertFalse(job.is_terminal())
+
 class DirectProgressCancelTests(unittest.TestCase):
     def setUp(self):
         self._orig = (bridge.BIMS_BASE_URL, bridge.requests)
