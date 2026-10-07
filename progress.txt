@@ -19068,3 +19068,18 @@ worktree as before. Not exercised against live robots here — needs the
 preview smoke: open all three, Start on an idle robot, Close, a running
 robot's Open ↓, and an action from a panel (tip swap / cancel) to confirm the
 explicit action URLs round-trip.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-7ja5xjdey-brevitest.vercel.app
+Source: branch feat/robot-overhaul @ commit 51d28d3b
+Retrieve this exact code: git checkout feat/robot-overhaul at commit 51d28d3b
+  (or: git log feat/robot-overhaul --oneline to find it if the branch has since moved on)
+What this deployment is for: round 2 — all three robots' wizards open side by side on /robots;
+  the wizard-as-component refactor (explicit action URLs) needs a logged-in operator smoke.
+Smoke (unauthenticated curl; 302 → /login means the route exists and is gated):
+  /login -> 200 
+  /manufacturing/cart-mfg/robots -> 302 https://bioscale-operations-system-mongodb-7ja5xjdey-brevitest.vercel.app/login
+  /manufacturing/cart-mfg/robots?open=x:wax,y:reagent -> 302 https://bioscale-operations-system-mongodb-7ja5xjdey-brevitest.vercel.app/login
+  /manufacturing/cart-mfg/wax-filling?robot=x -> 302 https://bioscale-operations-system-mongodb-7ja5xjdey-brevitest.vercel.app/login
+  /manufacturing/cart-mfg/reagent-filling?robot=y -> 302 https://bioscale-operations-system-mongodb-7ja5xjdey-brevitest.vercel.app/login
+  /manufacturing/cart-mfg/robots/history -> 302 https://bioscale-operations-system-mongodb-7ja5xjdey-brevitest.vercel.app/login
+
