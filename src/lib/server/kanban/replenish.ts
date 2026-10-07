@@ -33,7 +33,10 @@ export async function requireReplenisher(username: string | undefined | null): P
 		throw new ReplenishError('ACTOR_INVALID', 'Replenishment requires a named human actor (username). Only a human commits work.');
 	}
 	await connectDB();
-	const user: any = await User.findOne({ username: username.trim().toLowerCase() })
+	// Usernames are stored as typed ("Giovanni Victorio"), so match the whole name
+	// ignoring case — lowercasing it first never found a username with capitals.
+	const name = username.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+	const user: any = await User.findOne({ username: new RegExp(`^${name}$`, 'i') })
 		.select('username isActive roles')
 		.lean();
 	if (!user || user.isActive === false) {

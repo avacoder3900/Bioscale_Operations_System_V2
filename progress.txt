@@ -18933,3 +18933,13 @@ refused → delete confirmed (renumbered back), front-matter edit, no-op metadat
 Setup refused; MCP tools/list shows 25 device_wi_* tools. Test-only revisions (v5–v8) reset so
 the live history reads v1 import, v2–v4 sub-assembly adds. npm run check: 13 errors (master
 baseline, none in these files).
+
+================================================================================
+2026-10-07 — master — kanban: committing a task failed for usernames with capitals
+================================================================================
+"Actor 'Giovanni Victorio' is not an active BIMS user" when adding a task straight to the board.
+Root cause: requireReplenisher (server/kanban/replenish.ts) looked the actor up by
+username.toLowerCase(), but usernames are stored as typed and login matches them exactly, so any
+username with capitals was never found (admin or not). Now a whole-name, case-insensitive match
+(same as machine-actor.ts). Affects every commit path: capture-to-board, replenish, the
+ready-scope checks. `npm run check`: 13 errors / 435 warnings — same as master, none in the file.
