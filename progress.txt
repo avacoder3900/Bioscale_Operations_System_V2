@@ -19005,3 +19005,21 @@ warnings in moved files; none in the new ones.
 Not exercised against a live robot or DB in this session — needs a preview
 deploy smoke: /robots, Start on an idle robot, Open on a running one, Restart
 and Reset, and the two settings pages.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-6o2trrhxg-brevitest.vercel.app
+Source: branch feat/robot-overhaul @ commit 367a4739
+Retrieve this exact code: git checkout feat/robot-overhaul at commit 367a4739
+  (or: git log feat/robot-overhaul --oneline to find it if the branch has since moved on)
+What this deployment is for: the unified Robots page (board + both wizards), the /robots
+  redirects, and the removal of the dead opentron-control routes — operator smoke on live robots.
+Smoke (unauthenticated curl; 302 → /login means the route exists and is gated):
+  /login -> 200 
+  /manufacturing/cart-mfg/robots -> 302 https://bioscale-operations-system-mongodb-6o2trrhxg-brevitest.vercel.app/login
+  /manufacturing/cart-mfg/wax-filling?robot=x -> 302 https://bioscale-operations-system-mongodb-6o2trrhxg-brevitest.vercel.app/login
+  /manufacturing/cart-mfg/reagent-filling -> 302 https://bioscale-operations-system-mongodb-6o2trrhxg-brevitest.vercel.app/login
+  /manufacturing/cart-mfg/robots/history -> 302 https://bioscale-operations-system-mongodb-6o2trrhxg-brevitest.vercel.app/login
+  /manufacturing/cart-mfg/opentrons -> 302 https://bioscale-operations-system-mongodb-6o2trrhxg-brevitest.vercel.app/login
+  /manufacturing/cart-mfg/opentrons/history -> 302 https://bioscale-operations-system-mongodb-6o2trrhxg-brevitest.vercel.app/login
+  /manufacturing/cart-mfg/opentron-control -> 302 https://bioscale-operations-system-mongodb-6o2trrhxg-brevitest.vercel.app/login
+  /manufacturing/cart-mfg/opentron-control/wax/abc -> 302 https://bioscale-operations-system-mongodb-6o2trrhxg-brevitest.vercel.app/login
+
