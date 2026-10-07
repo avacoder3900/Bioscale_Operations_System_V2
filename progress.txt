@@ -18943,3 +18943,56 @@ username.toLowerCase(), but usernames are stored as typed and login matches them
 username with capitals was never found (admin or not). Now a whole-name, case-insensitive match
 (same as machine-actor.ts). Affects every commit path: capture-to-board, replenish, the
 ready-scope checks. `npm run check`: 13 errors / 435 warnings — same as master, none in the file.
+
+================================================================================
+2026-10-07 — feat/deck-calibrator-teach-restore — restore the calibrator teach UI (four-corner frame, reference hole, live switch watch) on master, over Tailscale
+================================================================================
+The calibrator-teaching tools built 2026-08-21 on feat/deck-frame-calibrator-watch were deployed
+to a preview and to B14's bridge back then but never merged, so master's Deck Calibration Studio
+had lost them. New branch off origin/master; the five code commits cherry-picked with -x
+(0aa2551ca four-corner deck frame + live calibrator switch watch, c567115ae watch off the command
+loop, 25d8f2709 anchor the calibrator to a taught deck hole, d306e7ce4 safe arc from MEASURED deck
+height, 09d09965c arc the calibrate-tip probe path). The August docs/progress commits were left out.
+
+Conflicts: master re-keyed TipCalibratorFixture per DECK on 2026-08-28 (the fixture rides on the
+carriage) and deleted saveRobotOffset/robotOffsets. The restored frame + reference-hole code still
+looked calibrators up by { robotId }, which on today's master matches whichever deck's row comes
+first — the robot-arm-deck vs reagent-deck clobber that re-key fixed. cf59dc5a4 routes all of it
+through calibratorSelectorForDeck() (the saveCalibrator selector); the hole re-derive writes back to
+the row it read by _id; a calibrator only links to a frame taught for the same deck. saveRobotOffset
+stays deleted. safeArcZ was added to master's shared calibratePayload so the tailnet probe gets it too.
+
+03648eaba puts the switch watch on Tailscale. It had only ever run on the queue line (daemon
+long-polls BIMS, POSTs every trip back over the internet). Now, like calibrate_tip, when the
+studio's RobotSession has a /bridge client: BIMS prepares + audits (line:'tailnet', no
+Ot2BridgeCommand), the browser submits the calibrator_watch job to the robot, polls
+progress.trips over the tailnet and stops it with /control cancel (allowed for a running watch —
+it commands no motion). The daemon detaches the job like auto_resume_run and returns the trips in
+its result so the bridge-job AuditLog keeps the record. Queue line unchanged as the fallback. Not
+a BRIDGE_BUSY_KIND — it must not block the jogging it watches. Save-from-trips now sends the deck.
+
+Files: scripts/ot2-bridge.py, scripts/test_ot2_bridge_server.py, src/lib/shared/deck-frame(.test).ts,
+src/lib/server/db/models/{deck-frame,index,ot2-bridge-command,tip-calibrator-fixture}.ts,
+src/lib/opentrons/{bridge-client,direct-client(.test),studio-bridge-jobs}.ts,
+src/routes/api/opentrons-lab/robots/[id]/calibrator-watch/**, src/routes/api/agent/ot2/commands/[id]/switch-event,
+src/routes/api/scanner/calibrate-tip/+server.ts, src/routes/manufacturing/cart-mfg/deck-calibration/*.
+
+Tests: vitest src/lib/opentrons + deck-frame 241/241; daemon test_ot2_bridge_server.py 33/33 (4 new
+calibrator_watch tailnet tests). svelte-check (node_modules junctioned into the worktree): 143
+errors / 435 warnings, ZERO in touched files — 143 does not match the 13 recorded above, likely the
+junctioned environment; not baselined against master in the same setup.
+
+Context from the session: a B14 calibrate_tip on robotarm_cartridge_deck_001 (left p300, saved point
+294.88, 79.24, z 23.85) failed with X and Y both travelling 5 mm without tripping — the tip was not
+on the fixture at that point; the operator stopped the run. No adjust was applied. A p300 tip (H1)
+may still be on the left pipette.
+
+NOT DONE: the bridge daemon from this branch is not yet on B14 (remote write was permission-blocked
+from the session). B14 runs master's ot2-bridge.py (md5 0e380b34…, = origin/master) — the tailnet
+watch needs this branch's file deployed + `systemctl restart ot2-bridge`.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-i7xydlvwc-brevitest.vercel.app
+Source: branch feat/deck-calibrator-teach-restore @ commit 03648eaba
+Retrieve this exact code: git checkout feat/deck-calibrator-teach-restore at commit 03648eaba
+  (or: git log feat/deck-calibrator-teach-restore --oneline to find it if the branch has since moved on)
+What this deployment is for: re-teach the B14 tip calibrator (switch watch / reference hole / deck frame) over Tailscale
