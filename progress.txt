@@ -18996,3 +18996,12 @@ Source: branch feat/deck-calibrator-teach-restore @ commit 03648eaba
 Retrieve this exact code: git checkout feat/deck-calibrator-teach-restore at commit 03648eaba
   (or: git log feat/deck-calibrator-teach-restore --oneline to find it if the branch has since moved on)
 What this deployment is for: re-teach the B14 tip calibrator (switch watch / reference hole / deck frame) over Tailscale
+
+2026-10-07 (follow-up) — B14 bridge deployed. The first tailnet watch attempt was refused by B14
+("kind must be one of sweep, deck_scan, …") because the robot still ran master's daemon. Deployed
+this branch's scripts/ot2-bridge.py (from 03648eaba, md5 4e0df625…) to /data/ot2-bridge on ot2-b14,
+backup at /data/ot2-bridge/ot2-bridge.py.bak-20261007-master (= origin/master, md5 0e380b34…);
+parsed on-robot, restarted, active, /bridge job server listening. Known gap until merge: the daemon
+posts job results to PRODUCTION BIMS, whose BRIDGE_JOB_KINDS lacks calibrator_watch, so a tailnet
+watch's end-of-watch result is rejected there (400, logged on the robot) and its bridge-job AuditLog
+row is not written. The trips still reach the page and are saved with the calibrator.
