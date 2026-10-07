@@ -18943,3 +18943,65 @@ username.toLowerCase(), but usernames are stored as typed and login matches them
 username with capitals was never found (admin or not). Now a whole-name, case-insensitive match
 (same as machine-actor.ts). Affects every commit path: capture-to-board, replenish, the
 ready-scope checks. `npm run check`: 13 errors / 435 warnings — same as master, none in the file.
+
+================================================================================
+2026-10-07 — feat/robot-overhaul — Robots: one page for all three OT-2s, wax AND reagent
+================================================================================
+Branch cut from origin/master (b302574e) in a worktree. Goal from the operator:
+control all three robots from one page without hopping between the Wax Filling
+and Reagent Filling sections, see both processes for every robot at once, and
+drop what nobody used any more.
+
+### What the page is now
+/manufacturing/cart-mfg/robots is the one entry (sidebar "Robots"; the "Wax
+Filling", "Reagent Filling" and old "Robots" entries are gone — one entry, lit
+on either wizard route). A RobotBoard sits at the top: one card per active OT-2
+with the bridge health dot/label (ready/busy/hung/offline, polled every 10 s),
+a WAX row and a REAGENT row (stage badge or Idle; carts · elapsed · assay/deck;
+"Open →" when that process has a run, "Start →" when idle, "—" when the robot
+is busy with the other process), plus Restart server and Reset-to-idle per
+robot (the two controls that used to live in the two layouts; Reset was reagent
+only before). Clicking a row opens that wizard BELOW the board on the same
+page (/wax-filling?robot=… or /reagent-filling?robot=… — URLs unchanged, so
+every existing link, redirect and bookmark still lands). The card whose wizard
+is open is outlined. Tool links (Run history, Well issues, Cooling queue, Wax
+params, Reagent params) sit in the board header; those pages render under the
+breadcrumb without the board.
+
+### Structure
+- New route group src/routes/manufacturing/cart-mfg/(robots)/ with ONE
+  +layout.server.ts (loadRobotBoard) + +layout.svelte (board + breadcrumb +
+  "pick a robot" hint when a wizard URL has no ?robot=). wax-filling/ and
+  reagent-filling/ moved into the group with git mv (same URLs); their two
+  near-identical +layout.* pairs (robot tabs, select-a-robot cards, health
+  poll, restart, force-reset — ~680 lines) deleted.
+- New $lib/server/manufacturing/robot-board.ts: the single server read
+  (robots, page-owned wax + reagent run per robot via run-statuses.ts sets,
+  getRobotsHealth). New $lib/components/manufacturing/RobotBoard.svelte.
+- opentrons/history → (robots)/robots/history (URL /robots/history).
+  opentrons/[...path] is a 308 to /robots/<same>; opentron-control hub now
+  308s to /robots. cartridge-dashboard's history link repointed.
+
+### Vestigial, removed
+- opentron-control/wax/[runId] (993+300 lines): the post-OT-2 QC/Storage
+  flow. Wax runs have completed straight from the wizard
+  (storeDeckAndComplete → 'completed') since WAX-FLOW; nothing linked here
+  and its load 400s unless a run sits in QC/Storage, which no code writes.
+- opentron-control/settings: read-only mirror of the two settings pages,
+  unlinked.
+- lib/server/manufacturing/robot-cards.ts: the wax layout loaded its waxQueue
+  on every page view and no template rendered it.
+- lib/server/services/{wax,reagent}-filling/robots.ts: layout-only types.
+- old opentrons/+page.* "Robots" card page (its content is the board).
+Kept on purpose: opentron-control/scanner-test + sweeps (daemon tools, have
+unit tests), reagent cooling-queue and well-issues (linked from the board).
+
+### Check
+svelte-kit sync + svelte-check: 16 errors, all pre-existing on origin/master
+(the known 14 + 2 in sonic/decode.ts), none in touched files. vite build:
+client + server bundles build; the adapter-vercel file trace then runs out of
+heap on this Windows worktree (local artefact, as before). Only pre-existing
+warnings in moved files; none in the new ones.
+Not exercised against a live robot or DB in this session — needs a preview
+deploy smoke: /robots, Start on an idle robot, Open on a running one, Restart
+and Reset, and the two settings pages.
