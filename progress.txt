@@ -19037,3 +19037,24 @@ without confirmed then applied, update_metadata documentNumber, revert refused w
 confirmed then restored to v4 (sections and document number back), MCP tools/list = 30
 device_wi_* tools. Test revisions/snapshots reset so the live history still ends at v4.
 npm run check: 13 errors (master baseline, none in these files).
+
+================================================================================
+2026-10-08 — master — production deployment: PR #89 (SPU Assembly WI full chat control, MCP 3.11.0)
+================================================================================
+PR #89 (feat/wi-full-chat-control → master) merged by pdaga-sudo at 2026-10-08 18:26 UTC.
+Confirmed live via the claude.ai BIMS connector: device_wi_overview returns the document with
+tabLabel/customTabLabel per section (new in this release).
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit b95fc76a
+Retrieve this exact code: git checkout master at commit b95fc76a
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: every change on the SPU Assembly WI page from chat — tab labels,
+  bulk step moves/deletes, copy step, document number, and revert to any snapshotted version
+  (30 device_wi_* tools). Also fixes the "No SPU Assembly WI" symptom: the WI is now looked up
+  as the single document instead of by document number (the number became editable).
+
+Note: during pre-merge testing the live document was advanced to v12 with test edits (SA2 tab
+"Electronics"/title "Boards & cables", SA1 steps 40–45 moved to SA2, document number
+WIMF-SPU-01-TEST). Snapshot v7 exists; the intended fix is device_wi_revert 7 from chat, which
+records the restore as v13 with full history retained.
