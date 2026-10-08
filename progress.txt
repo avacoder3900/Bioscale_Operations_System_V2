@@ -19005,3 +19005,7 @@ reagent never did, and nothing downstream had needed it until now.
   onto carts.
 No data migration: older records keep 0 and are read through the fallback; new loads are right.
 `npm run check`: error list identical to master (16; one flaky unrelated run showed 18).
+Deployment: production — Vercel GitHub integration build of master
+Source: branch master @ commit e1b09dff (merge of fix/reagent-well-tracker-positions)
+Retrieve this exact code: git checkout master at commit e1b09dff
+What this deployment is for: reagent well tracker tiles enabled (real deck positions on reagent carts).
