@@ -19221,3 +19221,14 @@ info in the panel, not a new page.
 
 Check: svelte-check 14 errors (all pre-existing), no warnings in the touched
 files; vite build client + server bundles build.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-66ql71g1y-brevitest.vercel.app
+Source: branch feat/robot-overhaul @ commit ed998b42
+Retrieve this exact code: git checkout feat/robot-overhaul at commit ed998b42
+  (or: git log feat/robot-overhaul --oneline to find it if the branch has since moved on)
+What this deployment is for: round 5 — the heatmap as an inline card on each robot panel.
+Smoke (unauthenticated curl; 302 → /login or 401 means the route exists and is gated):
+  /manufacturing/cart-mfg/robots -> 302 https://bioscale-operations-system-mongodb-66ql71g1y-brevitest.vercel.app/login
+  /api/manufacturing/reagent-well-issues?robot=x -> 401 
+  /manufacturing/cart-mfg/reagent-filling/well-issues -> 302 https://bioscale-operations-system-mongodb-66ql71g1y-brevitest.vercel.app/login
+
