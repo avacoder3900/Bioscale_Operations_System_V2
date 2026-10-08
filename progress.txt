@@ -19299,3 +19299,11 @@ place (derived values, no behaviour change).
 
 Check: svelte-check 14 errors (all pre-existing), no warnings in the file;
 vite build client + server bundles build.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-pis28gtzc-brevitest.vercel.app
+Source: branch feat/robot-overhaul @ commit 8f6a2bca
+Retrieve this exact code: git checkout feat/robot-overhaul at commit 8f6a2bca
+  (or: git log feat/robot-overhaul --oneline to find it if the branch has since moved on)
+What this deployment is for: round 7 — the trimmed run controller card (line · status · Play/Pause/Stop).
+Smoke (unauthenticated curl; 302 → /login means the route exists and is gated):
+  /manufacturing/cart-mfg/robots -> 302 https://bioscale-operations-system-mongodb-pis28gtzc-brevitest.vercel.app/login
