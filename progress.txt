@@ -19120,3 +19120,22 @@ Smoke (unauthenticated curl; 302 → /login means the route exists and is gated)
   /manufacturing/cart-mfg/robots?open=x:reagent -> 302 https://bioscale-operations-system-mongodb-opqqqvppe-brevitest.vercel.app/login
   /manufacturing/cart-mfg/wax-filling?robot=x -> 302 https://bioscale-operations-system-mongodb-opqqqvppe-brevitest.vercel.app/login
 
+
+================================================================================
+2026-10-08 — feat/robot-overhaul — Round 4: board is status-only; heatmap icon on each panel
+================================================================================
+Operator feedback on round 3: the Wax/Reagent buttons on the top robot cards
+are redundant now that each panel has the toggle — remove them (keep the
+panel toggle), and put the well-issue heatmap as a small icon in the corner
+of the card.
+
+- RobotBoard: the per-process "Open ↓" / "Switch →" / "—" buttons are gone.
+  The rows show stage + detail only; the row whose process the panel shows is
+  marked "open", a robot busy with the other process still says so. Dropped
+  the now-unused $page / robot-panels href imports.
+- Robots page panel header: a 3×3 heatmap icon (left of the Wax | Reagent
+  toggle) links to /reagent-filling/well-issues?robot=<id> — that robot's
+  reagent fill-mistake heatmap (the per-well tracker's history).
+
+Check: svelte-check 14 errors (all pre-existing), no new warnings in the two
+files; vite build client + server bundles build.

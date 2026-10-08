@@ -5,12 +5,10 @@
   used to sit in the wax-filling and reagent-filling layouts — restart the
   robot server, force the robot back to idle.
 
-  Round 3: every robot's wizard is open BELOW this board, always. A robot with
-  a run in progress shows that process; an idle robot shows whichever the
-  operator chose (?open=<id>:wax|reagent, see $lib/manufacturing/robot-panels),
-  else what it ran last. Per process row: "Open ↓" scrolls to the panel when
-  that process is the one shown, "Switch →" flips an idle robot's panel to the
-  other process, and a dash means the robot is busy with the other process.
+  Round 3/4: every robot's wizard is open BELOW this board, always, and the
+  Wax | Reagent choice lives on the panel itself — so this board is status
+  only. The row whose process the panel shows is marked "open"; a robot busy
+  with the other process says so.
 
   Health is polled every 10 s from /api/opentrons-lab/robots/health; run stages
   refresh whenever a wizard action invalidates the page data.
@@ -18,11 +16,10 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { invalidateAll } from '$app/navigation';
-	import { page } from '$app/stores';
 	import { resolve } from '$app/paths';
 	import { openRobotSession } from '$lib/opentrons/direct-client';
 	import { restartServerOverBridge } from '$lib/opentrons/fill-bridge-jobs';
-	import { parseOpenPanels, panelsHref, panelAnchor, type BoardProcess } from '$lib/manufacturing/robot-panels';
+	import type { BoardProcess } from '$lib/manufacturing/robot-panels';
 	import type { BoardRun, RobotBoardRow, RobotHealth } from '$lib/server/manufacturing/robot-board';
 
 	interface Props {
@@ -35,8 +32,6 @@
 
 	const processLabel = (p: BoardProcess) => (p === 'wax' ? 'Wax' : 'Reagent');
 	const otherProcess = (p: BoardProcess): BoardProcess => (p === 'wax' ? 'reagent' : 'wax');
-	// The operator's per-robot choices in the URL (robots with runs are locked regardless).
-	const openMap = $derived(parseOpenPanels($page.url.searchParams.get('open')));
 
 	// --- Robot health (ready / busy / hung / offline) --------------------------
 	// Polled from a lightweight endpoint so the dots stay fresh WITHOUT a full
@@ -289,25 +284,8 @@
 				busy with {otherProcess(process)} filling
 			{/if}
 		</span>
-		{#if blocked}
-			<span class="shrink-0 text-[11px] text-[var(--color-tron-text-secondary)]" title="This robot is on a {otherProcess(process)} run">—</span>
-		{:else if shown}
-			<!-- This process is the one in the robot's panel below; scroll to it. -->
-			<a
-				href={panelAnchor(row.robotId)}
-				class="shrink-0 rounded bg-[var(--color-tron-cyan)] px-2.5 py-1 text-[11px] font-medium text-black transition-opacity hover:opacity-90"
-			>
-				Open ↓
-			</a>
-		{:else}
-			<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- URL built from the current page -->
-			<a
-				href={panelsHref(openMap, row.robotId, process)}
-				class="shrink-0 rounded border border-[var(--color-tron-cyan)]/40 bg-[var(--color-tron-cyan)]/10 px-2.5 py-1 text-[11px] font-medium text-[var(--color-tron-cyan)] transition-colors hover:bg-[var(--color-tron-cyan)]/20"
-				title="Show the {processLabel(process).toLowerCase()} wizard in this robot's panel"
-			>
-				Switch →
-			</a>
+		{#if shown}
+			<span class="shrink-0 text-[10px] uppercase tracking-wider text-[var(--color-tron-cyan)]" title="This is the wizard in {row.name}'s panel below">open</span>
 		{/if}
 	</div>
 {/snippet}

@@ -7,6 +7,7 @@
 -->
 <script lang="ts">
 	import { page } from '$app/stores';
+	import { resolve } from '$app/paths';
 	import WaxWizard from '$lib/components/manufacturing/wax-filling/WaxWizard.svelte';
 	import ReagentWizard from '$lib/components/manufacturing/reagent-filling/ReagentWizard.svelte';
 	import { parseOpenPanels, panelsHref, type BoardProcess } from '$lib/manufacturing/robot-panels';
@@ -32,6 +33,26 @@
 			>
 				<header class="mb-3 flex items-center justify-between gap-2 border-b border-[var(--color-tron-border)] pb-2">
 					<h2 class="truncate text-sm font-semibold text-[var(--color-tron-text)]">{panel.robotName}</h2>
+					<div class="flex shrink-0 items-center gap-1.5">
+					<!-- This robot's reagent fill-mistake heatmap (the per-well tracker's history). -->
+					<a
+						href="{resolve('/manufacturing/cart-mfg/reagent-filling/well-issues')}?robot={encodeURIComponent(panel.robotId)}"
+						class="flex h-6 w-6 items-center justify-center rounded border border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)] transition-colors hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]"
+						title="{panel.robotName}: reagent fill mistakes by position (heatmap)"
+						aria-label="{panel.robotName} well-issue heatmap"
+					>
+						<svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+							<rect x="3" y="3" width="5" height="5" rx="1" opacity="0.35" />
+							<rect x="9.5" y="3" width="5" height="5" rx="1" opacity="0.7" />
+							<rect x="16" y="3" width="5" height="5" rx="1" />
+							<rect x="3" y="9.5" width="5" height="5" rx="1" opacity="0.7" />
+							<rect x="9.5" y="9.5" width="5" height="5" rx="1" />
+							<rect x="16" y="9.5" width="5" height="5" rx="1" opacity="0.35" />
+							<rect x="3" y="16" width="5" height="5" rx="1" />
+							<rect x="9.5" y="16" width="5" height="5" rx="1" opacity="0.35" />
+							<rect x="16" y="16" width="5" height="5" rx="1" opacity="0.7" />
+						</svg>
+					</a>
 					<!-- Wax | Reagent: which wizard this robot's panel shows. Locked to the
 					     running process while a run is in progress. -->
 					<div
@@ -56,6 +77,7 @@
 								</a>
 							{/if}
 						{/each}
+					</div>
 					</div>
 				</header>
 				{#if panel.process === 'wax'}
