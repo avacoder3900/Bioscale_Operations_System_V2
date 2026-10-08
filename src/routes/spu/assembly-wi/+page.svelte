@@ -237,8 +237,13 @@
 				<button
 					class="rounded-t px-3 py-2 text-sm transition {activeSection === s.number ? 'bg-[var(--color-tron-cyan)]/15 font-semibold text-[var(--color-tron-cyan)] border-b-2 border-[var(--color-tron-cyan)]' : 'text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]'}"
 					onclick={() => { activeSection = s.number; editingStep = null; }}
+					title="{sectionLabel(s)} — {s.title}"
 				>
-					{sectionLabel(s)}
+					{#if s.type === 'setup'}
+						{s.title || 'Setup'}
+					{:else}
+						<span class="mr-1 font-mono text-[10px] opacity-70">{s.number}</span>{s.title || sectionLabel(s)}
+					{/if}
 					<span class="ml-1 rounded-full bg-[var(--color-tron-surface)] px-1.5 text-[10px] text-[var(--color-tron-text-secondary)]">{s.steps.length}</span>
 				</button>
 			{/each}

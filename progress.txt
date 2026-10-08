@@ -18943,3 +18943,28 @@ username.toLowerCase(), but usernames are stored as typed and login matches them
 username with capitals was never found (admin or not). Now a whole-name, case-insensitive match
 (same as machine-actor.ts). Affects every commit path: capture-to-board, replenish, the
 ready-scope checks. `npm run check`: 13 errors / 435 warnings — same as master, none in the file.
+
+================================================================================
+2026-10-06 — master — production deployment: PR #87 (sections / front matter / metadata from chat, MCP 3.10.0)
+================================================================================
+PR #87 (feat/wi-sections-via-chat → master) merged by pdaga-sudo at 2026-10-06 22:03 UTC.
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit 0fa96b38
+Retrieve this exact code: git checkout master at commit 0fa96b38
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: SPU Assembly WI sub-assemblies can be added / deleted / reordered,
+  and front matter + metadata edited, from Claude chat (device_wi_add_section etc.) and from
+  the page's edit mode.
+
+================================================================================
+2026-10-08 — feat/wi-tab-titles — SPU Assembly WI tabs show the section title
+================================================================================
+Reported via chat: device_wi_rename_section changed a section's title but the tab still read
+"Sub-Assembly 1" because tabs rendered only the positional label; the title appeared in the
+section header below. Tabs now show "<n> <title>" for sub-assemblies (title defaults to
+"Sub-Assembly N") and the Setup title for the setup block, with the positional label in the
+tooltip. device_wi_rename_section's description states that it sets the tab/header title and
+that the number only changes via device_wi_move_section; the agent overview adds tabLabel per
+section. Files: src/routes/spu/assembly-wi/+page.svelte, src/lib/server/mcp/bims-mcp.ts,
+src/lib/server/services/device-assembly-wi-agent.ts.
