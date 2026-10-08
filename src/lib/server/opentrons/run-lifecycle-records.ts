@@ -54,7 +54,7 @@ import {
 	type Line,
 	type StepError
 } from '$lib/opentrons/ot2-protocol';
-import { getRobot, bridgeDeviceIdForRobot } from './proxy';
+import { getRobot, bridgeDeviceIdForRobot, withRequester } from './proxy';
 import { serverTransport } from './transport';
 import { bridgeJobGate } from './bridge-token';
 import { calibrationRtpValues } from './calibration-rtps';
@@ -113,6 +113,13 @@ export const START_INTENT_BANNER_MS = 10 * 60_000;
 export const START_INTENT_CLEAR_MS = 8 * 60_000;
 /** A create whose answer was lost is ruled out once the robot lists no such run this long after. */
 export const START_INTENT_UNCERTAIN_CLEAR_MS = 15_000;
+/**
+ * A prepare younger than this with no run id yet is a start still between its
+ * prepare and its create. A second prepare used to overwrite it silently: both
+ * sequences then POSTed /runs, the robot raised RunConflictError, and one run
+ * was orphaned (2026-10-07, R04, twice). Now the second start is refused.
+ */
+export const START_INTENT_IN_FLIGHT_MS = 3 * 60_000;
 export const START_INTERRUPTED_BANNER = 'start interrupted — check robot';
 
 // ── validation of browser-reported robot observations ──────────────────────
@@ -611,6 +618,16 @@ export async function startPrepare(
 			409,
 			"A previous start lost the robot's answer while creating the run — reload the page so BIMS can check the robot before starting again."
 		);
+	}
+	if (prior?.token) {
+		const ageMs = Date.now() - new Date(prior.requestedAt ?? 0).getTime();
+		if (ageMs >= 0 && ageMs < START_INTENT_IN_FLIGHT_MS) {
+			const who = prior.requestedBy?.username ? ` by ${prior.requestedBy.username}` : '';
+			return actionFail(
+				409,
+				`A start is already in progress on this run (requested ${Math.round(ageMs / 1000)} s ago${who}) — wait for it to finish, or reload the page if it never does.`
+			);
+		}
 	}
 	const processType = K[kind].processType;
 	const current = await currentProtocolEntry(ctx.robotId, processType);
@@ -1352,7 +1369,7 @@ export async function reconcileStartIntent(kind: FillKind, run: any, user: User)
 		const createArgs = intent.createArgs as { protocolId?: string } | undefined;
 		const robot = await getRobot(run.robot?._id);
 		if (!robot) return { changed: false, banner: banner() };
-		const list = await runVerb(serverTransport(robot), 'run.list', {});
+		const list = await withRequester(`${user.username} (reconcile)`, () => runVerb(serverTransport(robot), 'run.list', {}));
 		if (list.status !== 200) return { changed: false, banner: banner() };
 		const body = list.body as { runs: Array<{ id: string; status: string | null; protocolId: string | null; createdAt: string | null }>; current: any };
 		const requestedAt = new Date(intent.requestedAt ?? 0).getTime();

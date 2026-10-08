@@ -19,6 +19,7 @@ vi.mock('./proxy', () => {
 	};
 	return {
 		getRobot: async (id: string) => (id === 'b14' ? { _id: 'b14', name: 'OT-2 B14', ip: '10.0.0.5' } : null),
+		withRequester: (_u: unknown, fn: () => Promise<unknown>) => fn(),
 		robotGet: rec('robotGet'),
 		robotPost: rec('robotPost'),
 		robotPatch: rec('robotPatch'),

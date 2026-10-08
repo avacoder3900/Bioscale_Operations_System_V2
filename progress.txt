@@ -18664,3 +18664,67 @@ Deployment: production — Vercel GitHub integration build of master
 Source: branch master @ commit d3c83e12 (merge of feat/wax-reject-visual-only)
 Retrieve this exact code: git checkout master at commit d3c83e12
 What this deployment is for: Wax Reject usable without a camera (reason-gated visual rejects); dashboard shows rejected count.
+
+================================================================================
+2026-10-07 — master — AUDIT: OT-2 connection ecosystem in the Tailscale era (no code change)
+================================================================================
+Read-only audit of every BIMS <-> OT-2 line five days after Tailscale became the default for all three
+robots: the five TAILNET PRDs vs. what shipped, direct-client / ot2-protocol / run-lifecycle-records /
+proxy / relay / health, the daemon (ot2-bridge.py 1.2), the scanner integrations, Mongo traffic for the
+last 36 h, curl timings over the tailnet from imac-1, and SSH to all three robots over the LAN.
+Written up in docs/OT2-TAILNET-CONNECTION-AUDIT-2026-10-07.md (findings, measurements, a ranked fix list).
+Headlines:
+- Transport is fine: robot API over Tailscale = 70 ms with a kept-alive HTTP/2 connection (LAN 60-70 ms);
+  only the first TLS handshake costs 350 ms on the Pi. Large reads (360 KB) identical LAN vs tailnet.
+- ALL THREE robots are on WiFi (eth0 down on B07/R04/B14, -48..-50 dBm). run.get spikes to 12-13 s and
+  the daemon's reports to Vercel time out 3-19 times/day per robot. Ethernet is the #1 fix.
+- Today's R04 "hang" reconstructed (UTC): run.create takes 15-30 s on a Pi 3 (10 of 19 in 14 d > 25 s)
+  against a 30 s browser timeout; the start sequence ran TWICE (no `submitting` guard in
+  startRunWithCapturedParams on either fill page; startPrepare overwrites an unconfirmed intent that has
+  no run id yet) -> two concurrent POST /runs -> RunConflict 500 -> "Failed to fetch" -> sticky queue
+  fallback; recovery then blocked ~30 min (= BRIDGE_BUSY_MAX_AGE_MS) by a stale bridge-job busy entry;
+  operator force-reset x2, restart robot-server x2, power-cycled R04 at 16:36:36Z.
+- A browser tab open since 10-04 21:11Z has been polling a wax run that FINISHED 10-05 through the queue
+  (~10k ot2_bridge_commands in 36 h, 6,093 handled by R04's daemon today), interleaved with real work on
+  the daemon's single worker. EmbeddedRunController polls forever after terminal; queue commands carry no
+  requestedBy, so the machine cannot be identified from Mongo.
+- SSH to a robot over its tailnet IP hangs: Tailscale SSH (RunSSH: true) intercepts port 22 and fails on
+  busybox ("getent not found"). Use the LAN IP or `tailscale set --ssh=false`.
+- Stale shapes: 30 s bridge-sized timeouts everywhere, three auto-resume implementations, trigger_loop
+  polling Vercel 2x/s per robot for a feature /bridge/scan replaced, /connection re-read every 5 s per page,
+  page-load reconciles still via the queue, health pill Mongo-only, lab-Mac scanner-bridge docs.
+- From first principles: the run supervisor belongs in the daemon (durable, on the robot, now reachable
+  over the tailnet), with the browser as a viewer; TAILNET-5 did this for sweeps/deck-scan but not for the
+  run lifecycle, which is where today's failures live. Not required to fix today's problems: an 8-step
+  incremental list is in the doc (Ethernet; create timeout 90 s + adopt the robot's run; double-start
+  guard; busy never blocks recovery; stop polling after terminal + stamp requestedBy; per-line timeouts;
+  daemon read-only lane + retire trigger_loop; Tailscale SSH off).
+No npm run check (no source change). Nothing changed on robots or in Mongo.
+
+================================================================================
+2026-10-07 — feat/ot2-run-integrity-2 — OT2-TAILNET-6: run-integrity fixes from the connection audit (S1–S5)
+================================================================================
+Branch off master (71897356). PRD: docs/prds/OT2-TAILNET-6-RUN-INTEGRITY-2.md; evidence in
+docs/OT2-TAILNET-CONNECTION-AUDIT-2026-10-07.md. No robot or Mongo change. Not committed/pushed yet.
+- S1 ot2-protocol.ts: CREATE_RUN_TIMEOUT_MS = 90 s on POST /runs (Pi 3 needs 15–30 s; the 30 s default cut
+  real creates off). A thrown POST answers 502 {noAnswer:true}. startRunSequence: on a lost answer, NEW
+  findCreatedRun() polls run.list for up to 60 s and adopts the CURRENT run only if idle + our protocol +
+  runTimeParameters match (rtpMatches); otherwise the start stays `uncertain` for the load reconcile as before.
+  StartRunSteps.adopt = test seams (waitMs/sleep).
+- S2 double-start: `if (submitting) return` at the top of startRunWithCapturedParams on wax + reagent pages;
+  run-lifecycle-records.startPrepare refuses (409, names the requester) a prior intent younger than
+  START_INTENT_IN_FLIGHT_MS (3 min) that has no run id and is not uncertain — it used to overwrite it.
+- S3 direct-client.ts: tryRecover no longer blocked by `busy` (busy gates motion only; a stale bridge-job busy
+  pinned today's R04 run to the queue for 30 min). New lineReallyDown(): before a fallback, probe /health;
+  robot answers → retry-safe verb repeated once directly, NO_RETRY verb / raw mutation → 502 {noAnswer:true},
+  line kept; only a failed probe falls back (a CORS-less robot 500 used to look like a dead tunnel).
+- S4 EmbeddedRunController: stops polling 3 ticks after a terminal status (a tab polled a finished run
+  through the queue ~10k times in 36 h).
+- S5 requestedBy on queue commands: proxy.withRequester() (AsyncLocalStorage) read by bridgeFetch/bridgeUpload;
+  set in transport.verbResponse, relay.handleRelay, runs/[rid] GET + actions POST (now pass locals.user), and
+  the load reconcile ("<user> (reconcile)").
+Tests: direct-client (+3), ot2-protocol.run (+4 incl. adoption/no-adoption matrix), relay/RLR/other proxy
+mocks gain withRequester. npm run test:unit 557 pass / 1 fail = sonic.test.ts (missing @audio/decode-wav in
+this environment, unrelated). npm run check 16 errors = master baseline, none in touched files.
+Next (S6, separate): per-line poll/action timeouts in the controller; connectivity page shows per-robot queue
+load + requesters; daemon read-only lane + trigger_loop retirement; Ethernet on R04/B14 (hardware).

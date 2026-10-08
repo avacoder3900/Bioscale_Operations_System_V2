@@ -21,7 +21,7 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 	if (!robot) error(404, 'Robot not found');
 
 	// Shared with the browser's tailnet line: $lib/opentrons/ot2-protocol 'run.get'.
-	return verbResponse(robot, 'run.get', { rid: params.rid });
+	return verbResponse(robot, 'run.get', { rid: params.rid }, locals.user);
 };
 
 export const PATCH: RequestHandler = async ({ params, locals, request }) => {

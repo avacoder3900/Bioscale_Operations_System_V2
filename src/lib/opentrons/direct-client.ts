@@ -488,7 +488,11 @@ export class RobotSession {
 		const s = this._state;
 		if (!s.tailnetConfigured || !s.directUrl || s.needsPermission) return;
 		if (s.browserPermission === 'denied' || s.browserPermission === 'prompt') return;
-		if (this.effectiveBusy()) return;
+		// `busy` gates MOTION verbs (they defer to the queue while a daemon job
+		// holds the gantry); it never gates which line the page is on. It used to
+		// block this probe too, and a gantry job this tab never saw finish kept a
+		// fallen-back fill page on the queue for BRIDGE_BUSY_MAX_AGE_MS (30 min) —
+		// the 2026-10-07 R04 run polled through Vercel for exactly that long.
 		if (Date.now() - this.lastRecoverAt < RECOVER_EVERY_MS) return;
 		this.lastRecoverAt = Date.now();
 		try {
@@ -508,6 +512,39 @@ export class RobotSession {
 
 	private fallBack(reason: string) {
 		this.set({ transport: 'queue', fellBack: true, reason: `queue (fell back) — ${reason}` });
+	}
+
+	/**
+	 * A thrown fetch is not always a dead line. A robot 500 with no CORS header
+	 * (FastAPI's unhandled-exception path, e.g. RunConflictError on a second
+	 * POST /runs) and a per-request timeout both surface as "Failed to fetch" /
+	 * "signal timed out" while the robot is perfectly reachable. Falling back on
+	 * those moved whole runs onto the queue (2026-10-07, R04). So before giving
+	 * the line up, ask the robot: an answered /health (any status) = line up.
+	 */
+	private async lineReallyDown(): Promise<boolean> {
+		const directUrl = this._state.directUrl;
+		if (!directUrl) return true;
+		try {
+			await this.fetchImpl(`${directUrl}/health`, {
+				headers: { 'opentrons-version': '3' },
+				signal: AbortSignal.timeout(this.opts.probeTimeoutMs)
+			});
+			return false;
+		} catch {
+			return true;
+		}
+	}
+
+	/** The 502 a NO_RETRY verb answers when the robot is up but gave no answer. */
+	private noAnswerResult(verb: string, firstError: string) {
+		return {
+			status: 502,
+			body: {
+				message: `The robot is reachable but did not deliver an answer to ${noRetryLabel(verb)} (${firstError}). It may have happened on the robot — check before repeating it.`,
+				noAnswer: true
+			}
+		};
 	}
 
 	/**
@@ -647,11 +684,24 @@ export class RobotSession {
 			delete: (path, o) => track('DELETE', () => base.delete(path, o), path)()
 		};
 
-		const r = await runVerb(tracked, verb, args);
+		let r = await runVerb(tracked, verb, args);
 
 		if (signal?.aborted) {
 			// Keep the caller's error semantics (e.g. EmbeddedRunController's TimeoutError).
 			throw signal.reason ?? new DOMException('The operation was aborted.', 'AbortError');
+		}
+		if (lineError && !(await this.lineReallyDown())) {
+			// The robot answers: the request failed, the line did not. Repeat a
+			// retry-safe verb once right here; a NO_RETRY verb answers 502 with
+			// `noAnswer` so the caller (startRunSequence) can look for what landed.
+			const firstError = lineError;
+			if (!NO_RETRY_VERBS.has(verb)) {
+				lineError = null;
+				r = await runVerb(tracked, verb, args);
+				if (signal?.aborted) throw signal.reason ?? new DOMException('The operation was aborted.', 'AbortError');
+			}
+			if (lineError) return { line: 'direct', result: this.noAnswerResult(verb, firstError) };
+			return { line: 'direct', result: r };
 		}
 		if (lineError) {
 			this.fallBack(`direct link failed: ${lineError}`);
@@ -723,7 +773,25 @@ export class RobotSession {
 				this.record({ verb, method, path, status: 0, ok: false, latencyMs: Date.now() - t0, error: msg, at });
 				// The caller's own timeout/abort is not a line failure — surface it as-is.
 				if (caller?.aborted) throw caller.reason ?? e;
-				this.fallBack(`direct link failed: ${msg}`);
+				let lineDown = await this.lineReallyDown();
+				if (!lineDown) {
+					// Robot reachable: the request failed, not the line. Stay direct —
+					// a mutation answers 502 (it may have happened); a read is retried once.
+					if (mutating) {
+						const r = this.noAnswerResult(verb, msg);
+						return jsonResponse(r.status, r.body);
+					}
+					try {
+						const again = await this.fetchImpl(`${s.directUrl}${path}`, { ...rest, method, headers, signal: AbortSignal.timeout(timeoutMs ?? RAW_DEFAULT_TIMEOUT_MS) });
+						this.record({ verb, method, path, status: again.status, ok: again.ok, latencyMs: Date.now() - t0, at });
+						return again;
+					} catch (e2) {
+						const msg2 = e2 instanceof Error ? e2.message : String(e2);
+						this.record({ verb, method, path, status: 0, ok: false, latencyMs: Date.now() - t0, error: msg2, at });
+						lineDown = true;
+					}
+				}
+				if (lineDown) this.fallBack(`direct link failed: ${msg}`);
 				if (mutating) {
 					this.noteLine(verb, 'queue');
 					return jsonResponse(502, { message: noRetryMessage(verb) });

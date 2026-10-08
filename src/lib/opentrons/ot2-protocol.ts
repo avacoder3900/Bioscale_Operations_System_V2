@@ -854,18 +854,31 @@ async function runList(t: Ot2Transport): Promise<VerbResult> {
 	}
 }
 
+/**
+ * POST /runs on an OT-2 (Pi 3) loads the protocol analysis and every labware
+ * definition it bundles before answering: measured 15–30 s per create across
+ * the fleet (2026-10-07 audit), with half of all creates within 5 s of the old
+ * 30 s default. The transport's default abort therefore cut off creates that
+ * the robot went on to finish, leaving an unconfirmed run behind.
+ */
+export const CREATE_RUN_TIMEOUT_MS = 90_000;
+
 /** POST /runs — was the fill pages' startRun "Create the OT-2 run" block. */
 async function runCreate(t: Ot2Transport, protocolId: unknown, rtp: unknown): Promise<VerbResult> {
 	if (!protocolId || typeof protocolId !== 'string') return fail(400, 'protocolId required');
 	if (rtp != null && (typeof rtp !== 'object' || Array.isArray(rtp))) return fail(400, 'runTimeParameterValues must be an object');
 	const runTimeParameterValues = (rtp ?? {}) as Record<string, unknown>;
 	try {
-		const createRes = await t.post('/runs', {
-			data: {
-				protocolId,
-				...(Object.keys(runTimeParameterValues).length ? { runTimeParameterValues } : {})
-			}
-		});
+		const createRes = await t.post(
+			'/runs',
+			{
+				data: {
+					protocolId,
+					...(Object.keys(runTimeParameterValues).length ? { runTimeParameterValues } : {})
+				}
+			},
+			{ timeoutMs: CREATE_RUN_TIMEOUT_MS }
+		);
 		if (!createRes.ok) {
 			const body = await createRes.json().catch(() => ({}));
 			const detail = (body as any).errors?.[0]?.detail ?? `Robot returned ${createRes.status}`;
@@ -876,7 +889,64 @@ async function runCreate(t: Ot2Transport, protocolId: unknown, rtp: unknown): Pr
 		if (!opentronsRunId) return fail(502, 'Robot returned no run id');
 		return ok({ opentronsRunId });
 	} catch (err) {
-		return fail(502, `Couldn't reach robot: ${err instanceof Error ? err.message : 'unknown'}`);
+		// `noAnswer`: the POST may have landed even though nothing came back
+		// (timeout, dropped connection). startRunSequence then looks for the run
+		// the robot created instead of declaring the start failed.
+		return { status: 502, body: { message: `Couldn't reach robot: ${err instanceof Error ? err.message : 'unknown'}`, noAnswer: true } };
+	}
+}
+
+// ── adopting a run whose create answer was lost ─────────────────────────────
+
+/** How long to wait for a run the robot may still be creating after a lost answer. */
+export const ADOPT_RUN_WAIT_MS = 60_000;
+const ADOPT_RUN_POLL_MS = 3_000;
+const defaultSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+/**
+ * Do the robot's run-time parameters match what we asked for? The robot lists
+ * every parameter with its resolved value; a run with different values is a
+ * different (older, stale) run and must not be adopted. No list at all (older
+ * API) → nothing to check against → accept.
+ */
+export function rtpMatches(robotParams: unknown, requested: Record<string, unknown>): boolean {
+	if (!Array.isArray(robotParams)) return true;
+	const byName = new Map<string, unknown>();
+	for (const p of robotParams as any[]) if (p && typeof p.variableName === 'string') byName.set(p.variableName, p.value);
+	for (const [k, v] of Object.entries(requested)) {
+		if (!byName.has(k)) return false;
+		if (String(byName.get(k)) !== String(v)) return false;
+	}
+	return true;
+}
+
+/**
+ * After a lost create answer: the run the robot made for us, if any. The robot
+ * keeps processing a POST /runs after the client gives up, so this polls the
+ * run list for up to `waitMs`. It adopts only the CURRENT run when it is idle
+ * (created, not played), on our protocol, with our parameters — anything else
+ * is someone else's run or a stale one, and the start stays "uncertain" for
+ * the page-load reconcile exactly as before.
+ */
+export async function findCreatedRun(
+	verb: SequenceVerb,
+	protocolId: string,
+	rtp: Record<string, unknown>,
+	o: { waitMs?: number; sleep?: (ms: number) => Promise<void> } = {}
+): Promise<{ opentronsRunId: string } | null> {
+	const sleep = o.sleep ?? defaultSleep;
+	const deadline = Date.now() + (o.waitMs ?? ADOPT_RUN_WAIT_MS);
+	for (;;) {
+		const list = await verb('run.list', {});
+		const cur = (list.body as any)?.current;
+		if (list.status === 200 && cur?.id && cur.protocolId === protocolId && String(cur.status ?? '').toLowerCase() === 'idle') {
+			const got = await verb('run.get', { rid: String(cur.id) });
+			const params = (got.body as any)?.data?.runTimeParameters;
+			if (got.status === 200 && rtpMatches(params, rtp)) return { opentronsRunId: String(cur.id) };
+			return null; // an idle run on our protocol with other values: not ours
+		}
+		if (Date.now() >= deadline) return null;
+		await sleep(ADOPT_RUN_POLL_MS);
 	}
 }
 
@@ -1283,6 +1353,8 @@ export interface StartRunSteps {
 	confirm(token: string, obs: StartConfirmObs): Promise<Record<string, unknown> | StepError>;
 	verb: SequenceVerb;
 	onStep?(step: StartStepId, status: StartStepStatus, detail?: string): void;
+	/** Test seams for the lost-create adoption wait (findCreatedRun). */
+	adopt?: { waitMs?: number; sleep?: (ms: number) => Promise<void> };
 }
 
 export type SequenceResult =
@@ -1360,13 +1432,25 @@ export async function startRunSequence(s: StartRunSteps): Promise<SequenceResult
 	// 3. Create the OT-2 run.
 	step('creating', 'active');
 	const c = await s.verb('run.create', { protocolId, runTimeParameterValues: rtp ?? {} });
-	const opentronsRunId = (c.body as any)?.opentronsRunId as string | undefined;
+	let opentronsRunId = (c.body as any)?.opentronsRunId as string | undefined;
 	if (c.status !== 200 || !opentronsRunId) {
 		const message = bodyMsg(c, "Couldn't create run on robot");
-		step('creating', 'failed', message);
-		// The answer was lost but the POST may have landed: keep the start intent
-		// so the page's reconcile finds (or rules out) the robot run.
-		return failStart({ phase: 'failed', stage: 'create', message, uncertain: c.lineLost === true });
+		const answerLost = c.lineLost === true || (c.body as any)?.noAnswer === true;
+		if (answerLost && typeof protocolId === 'string') {
+			// The POST may have landed (the robot keeps working after the client
+			// gives up). Look for the run it made for us before calling this failed —
+			// a second create would collide with it (RunConflictError) or double it.
+			step('creating', 'active', 'answer lost — checking the robot for the run it created…');
+			const found = await findCreatedRun(s.verb, protocolId, rtp ?? {}, s.adopt).catch(() => null);
+			if (found) opentronsRunId = found.opentronsRunId;
+		}
+		if (!opentronsRunId) {
+			step('creating', 'failed', message);
+			// The answer was lost but the POST may have landed: keep the start intent
+			// so the page's reconcile finds (or rules out) the robot run.
+			return failStart({ phase: 'failed', stage: 'create', message, uncertain: answerLost });
+		}
+		step('creating', 'active', `adopted run ${opentronsRunId} the robot created after the answer was lost`);
 	}
 	const created = await s.confirm(token, { phase: 'created', opentronsRunId, protocolId: protocolId as string });
 	if (isStepError(created)) {

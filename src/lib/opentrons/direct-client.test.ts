@@ -73,16 +73,63 @@ describe('queue sessions (B07 / R04 today)', () => {
 
 describe('direct sessions', () => {
 	async function directSession(robotHandler: Handler, busy: unknown = null) {
+		let opened = false;
 		const ff = fakeFetch((url, init) => {
 			if (url.endsWith('/connection')) return connTailnet(busy);
-			if (url === `${DIRECT}/health`) return res(200, { name: 'B14' });
+			// The open() probe. Afterwards /health is the robot handler's: a line
+			// failure is only one where the robot does not answer /health either.
+			if (!opened && url === `${DIRECT}/health`) return res(200, { name: 'B14' });
 			if (url.startsWith('/api/')) return res(200, { via: 'queue', url });
 			return robotHandler(url, init);
 		});
 		const s = new RobotSession('b14', { ...opts, fetchImpl: ff.f });
 		await s.open();
+		opened = true;
 		return { s, urls: ff.urls };
 	}
+
+	it('a thrown fetch while the robot still answers /health is NOT a line failure: retried once directly, stays direct', async () => {
+		let throws = 1;
+		const { s, urls } = await directSession((url) => {
+			if (url === `${DIRECT}/health`) return res(200, {});
+			if (throws-- > 0) throw new TypeError('Failed to fetch');
+			return res(200, { data: { status: 'running' } });
+		});
+		const r = await s.call('run.get', { rid: 'r1' });
+		expect(r.status).toBe(200);
+		expect(s.state.transport).toBe('direct');
+		expect(s.state.fellBack).toBe(false);
+		expect(urls.filter((u) => u === `${DIRECT}/runs/r1`)).toHaveLength(2);
+		expect(urls.some((u) => u.startsWith('/api/') && u.endsWith('/runs/r1'))).toBe(false);
+	});
+
+	it('a NO_RETRY verb (run.create) with no answer while /health answers → 502 noAnswer, not repeated, stays direct', async () => {
+		const { s, urls } = await directSession((url) => {
+			if (url === `${DIRECT}/health`) return res(200, {});
+			throw new TypeError('signal timed out');
+		});
+		const r = await s.call('run.create', { protocolId: 'p1', runTimeParameterValues: {} });
+		expect(r.status).toBe(502);
+		expect(await r.json()).toMatchObject({ noAnswer: true });
+		expect(urls.filter((u) => u === `${DIRECT}/runs`)).toHaveLength(1);
+		expect(s.state.transport).toBe('direct');
+		expect(s.state.fellBack).toBe(false);
+	});
+
+	it('recovery after a fallback is not blocked by a busy daemon job', async () => {
+		let robotUp = false;
+		const { s } = await directSession((url) => {
+			if (robotUp) return res(200, {});
+			throw new TypeError('Failed to fetch');
+		}, { kind: 'sweep', since: 'now' });
+		await s.call('run.get', { rid: 'r1' });
+		expect(s.state.transport).toBe('queue');
+		expect(s.state.busy).toMatchObject({ kind: 'sweep' });
+		robotUp = true;
+		(s as any).lastRecoverAt = 0;
+		await (s as any).tryRecover();
+		expect(s.state.transport).toBe('direct');
+	});
 
 	it('calls the robot directly and returns the route-shaped body', async () => {
 		const { s, urls } = await directSession(() => res(201, {}));
@@ -266,15 +313,17 @@ describe('fetchRoute (pages that already call BIMS routes)', () => {
 	});
 
 	it('a tip pick-up that lost its answer is not retried', async () => {
+		let opened = false;
 		const ff = fakeFetch((url) => {
 			if (url.endsWith('/connection')) return connTailnet();
-			if (url === `${DIRECT}/health`) return res(200, {});
+			if (!opened && url === `${DIRECT}/health`) return res(200, {}); // the open() probe; the line then dies
 			if (url.startsWith('/api/opentrons-lab/labware/resolve?')) return res(200, { definition: {}, labwareNamespace: 'o', labwareVersion: 1 });
 			if (url.startsWith('/api/')) return res(200, { via: 'queue' });
 			throw new TypeError('Failed to fetch');
 		});
 		const s = new RobotSession('b14', { ...opts, fetchImpl: ff.f });
 		await s.open();
+		opened = true;
 		const r = await s.fetchRoute('/api/opentrons-lab/robots/b14/maintenance/m1/pick-up-tip', {
 			method: 'POST',
 			body: JSON.stringify({ pipetteId: 'p', tiprackLoadName: 'r' })

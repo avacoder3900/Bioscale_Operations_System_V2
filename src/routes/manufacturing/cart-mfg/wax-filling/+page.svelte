@@ -776,6 +776,10 @@
 
 	// Start the run with the params captured before scanning. Hands-off path.
 	async function startRunWithCapturedParams() {
+		// Re-entry guard: the deck grid's onComplete can fire again while a start
+		// is in flight (a repeated last scan, a remount after invalidateAll). Two
+		// starts = two POST /runs = RunConflictError + an orphaned run on the robot.
+		if (submitting) return;
 		if (!capturedParamsFd || !data.runState.runId) return;
 		capturedParamsFd.set('runId', data.runState.runId);
 		submitting = true;

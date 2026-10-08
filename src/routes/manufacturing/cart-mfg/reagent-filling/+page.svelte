@@ -297,6 +297,10 @@
 	}
 
 	async function startRunWithCapturedParams() {
+		// Re-entry guard: the deck grid's onComplete can fire again while a start
+		// is in flight (a repeated last scan, a remount after invalidateAll). Two
+		// starts = two POST /runs = RunConflictError + an orphaned run on the robot.
+		if (submitting) return;
 		if (!capturedParamsFd || !data.activeRunId) return;
 		capturedParamsFd.set('runId', data.activeRunId);
 		capturedParamsFd.set('reagentBatchBarcode', reagentBatchBarcode ?? '');

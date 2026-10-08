@@ -23,5 +23,5 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 	if (!robot) error(404, 'Robot not found');
 
 	const { action } = await request.json().catch(() => ({}) as any);
-	return verbResponse(robot, 'run.action', { rid: params.rid, action });
+	return verbResponse(robot, 'run.action', { rid: params.rid, action }, locals.user);
 };
