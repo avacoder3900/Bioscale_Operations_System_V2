@@ -18728,3 +18728,11 @@ mocks gain withRequester. npm run test:unit 557 pass / 1 fail = sonic.test.ts (m
 this environment, unrelated). npm run check 16 errors = master baseline, none in touched files.
 Next (S6, separate): per-line poll/action timeouts in the controller; connectivity page shows per-robot queue
 load + requesters; daemon read-only lane + trigger_loop retirement; Ethernet on R04/B14 (hardware).
+
+Committed af886a5f and pushed (branch new on origin) — the Vercel GitHub integration builds the preview.
+Deployment: preview — <take the URL from the Vercel dashboard, Deployments tab, branch feat/ot2-run-integrity-2>
+Source: branch feat/ot2-run-integrity-2 @ commit af886a5f
+Retrieve this exact code: git checkout feat/ot2-run-integrity-2 at commit af886a5f
+  (or: git log feat/ot2-run-integrity-2 --oneline to find it if the branch has since moved on)
+What this deployment is for: OT2-TAILNET-6 S1–S5 (90 s create + adopt, double-start guard, probe-before-
+  fallback + recovery under busy, stop polling after terminal, requestedBy on queue rows) — hardware test on R04.
