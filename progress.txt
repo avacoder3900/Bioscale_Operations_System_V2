@@ -19150,3 +19150,41 @@ Smoke (unauthenticated curl; 302 → /login means the route exists and is gated)
   /manufacturing/cart-mfg/robots -> 302 https://bioscale-operations-system-mongodb-b51ewgqws-brevitest.vercel.app/login
   /manufacturing/cart-mfg/reagent-filling/well-issues?robot=x -> 302 https://bioscale-operations-system-mongodb-b51ewgqws-brevitest.vercel.app/login
 
+
+================================================================================
+2026-10-08 — feat/robot-overhaul — OT-2 simulator: test the Robots page with no robot moving
+================================================================================
+Operator asked for a way to test the new system without activating any robot,
+removable before the final ship. Built as scripts/ot2-sim/ — nothing in src/
+changed; the rig talks to BIMS exactly like a real OT-2 + bridge daemon.
+
+- scripts/ot2-sim/fake-ot2.ts: in-memory OT-2 HTTP API for the surface the
+  wizards use (health, runs create/play/pause/stop/delete/commands, protocols
+  + analyses, maintenance runs, lights/identify/home). A played run reveals
+  its planned commands over --run-seconds and lands `succeeded`, emitting the
+  exact "Dispensed …uL into well X2" and "TIP TRACKER … (index N)" comments
+  the finish parsers read (waxWellsForCart is the inverse of
+  cartsFilledFromWells). Analyses echo live Mongo labware defs (or a
+  re-upload's bundled defs) so the run-start freshness gate passes.
+- scripts/ot2-sim/daemon.ts: impersonates N robots — serves the fake API on
+  127.0.0.1:3195N (direct line, local dev) AND long-polls
+  /api/agent/ot2/poll as ot2-s0N-bridge (queue line, Vercel previews),
+  executing http / upload_protocol / sweep (hands out seeded SIM-W/SIM-R
+  barcodes by which process owns the robot, with progress + pause/cancel) /
+  deck_scan (SIM-DECK-001) / tip_swap_request / restart_robot_server /
+  auto_resume_run / calibrate_tip, and posts heartbeats every 10 s.
+  `--selftest` drives the fake robot with no BIMS/Mongo (passes).
+- scripts/ot2-sim/seed.ts: upserts 3 sim robots (Equipment + opentrons_robots
+  same _id, "SIM Robot S0N" so the slot code yields the device id, wax +
+  reagent protocol entries with RTP schemas, queue mode), a default scanner
+  position set with a deck-barcode position, SIM Deck 001, a 200 mL wax lot,
+  a reagent set lot + open fill lot FL-SIM-001, stored .py placeholders only
+  when the line has none active, and 72 backing + 72 wax_filled sim carts.
+  --reset-carts between cycles; --teardown deletes every sim document.
+- scripts/ot2-sim/README.md: how to run it against a preview or local dev,
+  what is not simulated, and the removal steps.
+
+Check: `tsc --strict` on the three scripts clean; selftest passes; the
+scripts are outside the app tsconfig so svelte-check is unchanged (14).
+NOT yet run against a database or deployment from this session — the seed
+writes visible "SIM Robot" cards into whichever DB MONGODB_URI points at.
