@@ -1673,18 +1673,16 @@
 
 	/**
 	 * Calculate the start position from the latest X + Y trips, stop the watch, and
-	 * send the gantry there (safe arc, approach Z) so the operator can see it.
+	 * send the gantry there AT THE PROBE Z — exactly where the probe itself starts
+	 * (execute_calibrate_tip moves to (calX, calY, z_cal) before probing). The move
+	 * arcs over the deck (safeArcZ) and descends vertically onto the start.
 	 */
 	async function moveToTripStart() {
 		if (!tipProfile) { errMsg = 'Pick the pipette first (p20 · wax or p300 · reagent)'; return; }
 		if (!tripStart) { errMsg = 'Need one X trip and one Y trip with positions first'; return; }
 		if (!runId || !pipetteId) { errMsg = 'Open a maintenance run first'; return; }
-		const approachZNow = checkedZ(calZ, 'Approach Z');
-		if (approachZNow === null) return;
-		if (approachZNow < probeZ) {
-			errMsg = `Approach Z (${approachZNow}) is below the ${pipetteLabel} probe Z (${probeZ}) — it would park inside the fixture. Raise it in Fixture point first.`;
-			return;
-		}
+		const startZ = checkedZ(probeZ, `${pipetteLabel} probe Z`);
+		if (startZ === null) return;
 		const start = { x: tripStart.x, y: tripStart.y, profile: tipProfile };
 		// Stop listening first: the move must not be recorded as touches.
 		if (watchArmed || watchQueued) await stopWatch();
@@ -1692,10 +1690,10 @@
 		calY = start.y;
 		clearMsg(); busy = true;
 		try {
-			await doGoToCalibrator(approachZNow);
+			await doGoToCalibrator(startZ);
 			computedStart = start;
 			msg =
-				`Gantry at the calculated ${pipetteLabel} start (${start.x}, ${start.y}) at approach Z ${approachZNow}. ` +
+				`Gantry at the calculated ${pipetteLabel} start (${start.x}, ${start.y}) at probe Z ${startZ}. ` +
 				`Each switch should close ${START_MARGIN_MM} mm into its probe. Save start position to keep it.`;
 		} catch (e) {
 			errMsg = e instanceof Error ? e.message : String(e);
@@ -1717,9 +1715,12 @@
 			errMsg = 'Pick the deck this calibrator belongs to (Labware → Deck) before saving.';
 			return;
 		}
-		if (checkedZ(calZ, 'Approach Z') === null) return;
 		const z = checkedZ(probeZ, 'Probe Z');
 		if (z === null) return;
+		// The approach (park) height must never sit below the probe height: "Go to
+		// calibrator" parks there, and below the probe Z is inside the fixture.
+		if (!(calZ >= z)) calZ = z;
+		if (checkedZ(calZ, 'Approach Z') === null) return;
 		const r = await postAction('saveCalibrator', {
 			robotId: selectedRobotId,
 			deckLoadName: String(data.selected),
@@ -2277,7 +2278,7 @@
 								{/each}
 							</div>
 							<div class="mt-1 grid grid-cols-2 gap-1">
-								<button type="button" onclick={moveToTripStart} disabled={busy || !runId} class="rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 px-2 py-1.5 text-[10px] font-semibold text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/20 disabled:opacity-40" title="Stops the watch, then moves the gantry (safe arc, approach Z) to the calculated start">Calculate start → move gantry</button>
+								<button type="button" onclick={moveToTripStart} disabled={busy || !runId} class="rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 px-2 py-1.5 text-[10px] font-semibold text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/20 disabled:opacity-40" title="Stops the watch, then moves the gantry (arcing over the deck) to the calculated start at the probe Z">Calculate start → move gantry</button>
 								<button type="button" onclick={saveStartPosition} disabled={busy || !selectedRobotId || !computedStart} class="rounded border border-green-500/40 bg-green-900/15 px-2 py-1.5 text-[10px] font-semibold text-green-300 hover:bg-green-900/25 disabled:opacity-40" title="Save the calculated start and this pipette's probe Z, keeping the trip log on the record">Save start position</button>
 							</div>
 							{#if computedStart}
