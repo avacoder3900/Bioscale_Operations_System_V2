@@ -18958,17 +18958,57 @@ What this deployment is for: SPU Assembly WI sub-assemblies can be added / delet
   the page's edit mode.
 
 ================================================================================
-2026-10-08 — feat/wi-tab-titles — SPU Assembly WI: tabs stay "Sub-Assembly N"; title is the editable heading
+2026-10-08 — feat/wi-tab-titles — SPU Assembly WI tabs show the section title
 ================================================================================
 Reported via chat: device_wi_rename_section changed a section's title but the tab still read
-"Sub-Assembly 1", so the model told the user it could not set the tab name. Decision from
-Alejandro: that is the intended design — tabs are always the positional "Sub-Assembly N" /
-"Setup", and the title (the heading shown under the tabs) is what chat renames. A first cut
-that put titles on the tabs was reverted on this branch. Kept: a tooltip on each tab showing
-"Sub-Assembly N — <title>", and device_wi_rename_section's description now states explicitly
-that tabs always read "Sub-Assembly N" and that the tool sets the separate title, so the model
-stops reporting a missing capability. Files: src/routes/spu/assembly-wi/+page.svelte,
-src/lib/server/mcp/bims-mcp.ts.
+"Sub-Assembly 1" because tabs rendered only the positional label; the title appeared in the
+section header below. Tabs now show "<n> <title>" for sub-assemblies (title defaults to
+"Sub-Assembly N") and the Setup title for the setup block, with the positional label in the
+tooltip. device_wi_rename_section's description states that it sets the tab/header title and
+that the number only changes via device_wi_move_section; the agent overview adds tabLabel per
+section. Files: src/routes/spu/assembly-wi/+page.svelte, src/lib/server/mcp/bims-mcp.ts,
+src/lib/server/services/device-assembly-wi-agent.ts.
+
+================================================================================
+2026-10-08 — fix/reagent-well-tracker-positions — reagent well tracker: wells could not be tapped (every cart at deck position 0)
+================================================================================
+Report: "for the well tracker for reagent runs i can't really click on the wells". The tracker disables a
+tile unless its position is in loadedPositions, and loadedPositions keeps only 1–24. Mongo showed EVERY
+cartridge on every recent reagent run stored with deckPosition 0 (18/18 on the run in progress, same on all
+of 10-07's runs): the reagent DeckLoadingGrid's CartridgeScan carried only cartridgeId, denseScans() dropped
+the slot index, and loadDeck's `cs.deckPosition ?? cs.position ?? 0` always fell to 0. The tracker (10-06)
+was built against a position the record never had. Same zero broke logWellIssue's cart lookup (issues would
+have saved with cartridgeId null) and the completion copy onto each cart.
+Fix (3 files):
+- reagent DeckLoadingGrid.svelte: CartridgeScan gains deckPosition; denseScans() sends SCAN_ORDER[slot].
+- reagent +page.server.ts: loadDeck stores the sent position, else index+1 (scans are dense in deck order;
+  never 0); page serialisation and the logWellIssue lookup fall back to index+1 for runs loaded with 0s
+  (incl. the run in progress), so the tracker works without reloading the deck.
+- run-lifecycle-records.ts finalizeReagentRun: same index fallback when copying issues onto carts.
+Historic cartridgesFilled rows keep their stored 0 (display derives the position); no data migration.
+Tests: run-lifecycle-records 21/21. npm run check 16 errors = baseline. Not committed yet.
+
+================================================================================
+2026-10-08 — fix/reagent-well-tracker-positions — well tracker: every tile was disabled (reagent carts stored at deck position 0)
+================================================================================
+Alejandro: "i see the tracker but i can't click on anything". Root cause: the reagent deck scan
+never sent a slot number — DeckLoadingGrid.denseScans() emitted {cartridgeId} only and loadDeck
+stored `deckPosition: cs.deckPosition ?? cs.position ?? 0`, so EVERY reagent cart ever loaded sits
+at position 0 (the tracker keys on 1-24 and so saw an empty deck). The wax grid sends positions;
+reagent never did, and nothing downstream had needed it until now.
+- DeckLoadingGrid.svelte: denseScans() now sends deckPosition = SCAN_ORDER[slotIndex].
+- reagent-filling/+page.server.ts: loadDeck stores the sent position, never 0 (index+1 fallback
+  for a payload without one); load serializes position with the same index fallback for runs
+  loaded before this fix (scans are dense in deck order, so index = position); logWellIssue
+  resolves the cartridgeId by position, falling back to index for those older runs.
+- run-lifecycle-records.ts: finalizeReagentRun uses the same fallback when copying wellIssues
+  onto carts.
+No data migration: older records keep 0 and are read through the fallback; new loads are right.
+`npm run check`: error list identical to master (16; one flaky unrelated run showed 18).
+Deployment: production — Vercel GitHub integration build of master
+Source: branch master @ commit e1b09dff (merge of fix/reagent-well-tracker-positions)
+Retrieve this exact code: git checkout master at commit e1b09dff
+What this deployment is for: reagent well tracker tiles enabled (real deck positions on reagent carts).
 
 ================================================================================
 2026-10-08 — feat/wi-full-chat-control — SPU Assembly WI: everything on the page editable from chat (MCP 3.11.0, 30 device_wi_* tools)

@@ -284,10 +284,13 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 			: { hasActiveRun: false, stage: null, assayTypeName: null, assayTypeId: null, isResearch: false, cartridgeCount: 0, runStartTime: null, runEndTime: null, opentronsRunId: null, opentronsRunFinalStatus: null, protocolParameters: null, startInterrupted: null };
 
 		// Serialize cartridges
-		const cartridges = (activeRun?.cartridgesFilled ?? []).map((cf: any) => ({
+		// deckPosition: runs loaded before 2026-10-08 stored 0 for every cart (the
+		// grid never sent a position); scans are dense in deck order, so the index
+		// is the position for those. New loads carry the real position.
+		const cartridges = (activeRun?.cartridgesFilled ?? []).map((cf: any, i: number) => ({
 			id: cf.cartridgeId ?? '',
 			cartridgeId: cf.cartridgeId ?? '',
-			deckPosition: cf.deckPosition ?? null,
+			deckPosition: Number(cf.deckPosition) >= 1 ? Number(cf.deckPosition) : i + 1,
 			inspectionStatus: cf.inspectionStatus ?? 'Pending',
 			inspectionReason: cf.inspectionReason ?? null,
 			inspectedBy: cf.inspectedBy?.username ?? null,
@@ -729,9 +732,11 @@ export const actions: Actions = {
 			}
 		}
 
-		const cartridgesFilled = cartridgeScans.map((cs: any) => ({
+		// The grid sends deckPosition (SCAN_ORDER[slot]); a payload without it is
+		// dense in deck order, so the index is the position. Never store 0.
+		const cartridgesFilled = cartridgeScans.map((cs: any, i: number) => ({
 			cartridgeId: cs.cartridgeId ?? cs.id ?? '',
-			deckPosition: cs.deckPosition ?? cs.position ?? 0,
+			deckPosition: Number(cs.deckPosition ?? cs.position) >= 1 ? Number(cs.deckPosition ?? cs.position) : i + 1,
 			inspectionStatus: 'Pending'
 		}));
 
@@ -977,7 +982,9 @@ export const actions: Actions = {
 		if (run.finalizedAt || TERMINAL.has(String(run.status))) {
 			return fail(400, { error: 'Run is finished — log post-run observations on Reagent Inspect.' });
 		}
-		const cart = (run.cartridgesFilled ?? []).find((c: any) => Number(c.deckPosition) === deckPosition);
+		const carts = (run.cartridgesFilled ?? []) as any[];
+		// Position match first; index fallback for runs loaded with position 0 (pre 2026-10-08).
+		const cart = carts.find((c: any) => Number(c.deckPosition) === deckPosition) ?? (carts.every((c) => !(Number(c.deckPosition) >= 1)) ? carts[deckPosition - 1] : undefined);
 		const tube = (run.tubeRecords ?? []).find((t: any) => Number(t.wellPosition) === well);
 		const reagentName = tube?.reagentName ?? REAGENT_WELLS.find((w) => w.well === well)?.defaultName ?? null;
 
