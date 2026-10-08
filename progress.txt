@@ -19197,3 +19197,27 @@ What this deployment is for: same app as 639bf49d plus scripts/ot2-sim — the p
   the simulator daemon at (BIMS_BASE_URL) for the no-robot test of the Robots page.
 Smoke (unauthenticated curl; 302 → /login means the route exists and is gated):
   /manufacturing/cart-mfg/robots -> 302 https://bioscale-operations-system-mongodb-mn244wa8b-brevitest.vercel.app/login
+
+================================================================================
+2026-10-08 — feat/robot-overhaul — Round 5: heatmap opens as a card inside the robot panel
+================================================================================
+Operator feedback: the heatmap button should open a card above the filling
+info in the panel, not a new page.
+
+- The well-issues roll-up moved verbatim from reagent-filling/well-issues/
+  +page.server.ts into $lib/server/manufacturing/reagent-well-heatmap.ts
+  (loadWellIssueHeatmap); the page load calls it, and a new JSON endpoint
+  GET /api/manufacturing/reagent-well-issues?robot=<id>&days=30
+  (manufacturing:read) serves the same shape.
+- The heatmap markup (per robot/deck grid, carrier + per-well totals, legend,
+  runs with issues) is now $lib/components/manufacturing/reagent-filling/
+  ReagentWellHeatmap.svelte, used by the well-issues page (unchanged look)
+  and by the Robots page.
+- Robots page: the heatmap icon is a toggle. Open → a card above the wizard
+  ("Reagent fill mistakes · last 30 days — N of M runs had an issue") that
+  fetches that robot's data on first open (per-robot state, cached while the
+  page lives), with Refresh, Full page (the filtered well-issues page) and
+  Close. Compact layout inside the panel column.
+
+Check: svelte-check 14 errors (all pre-existing), no warnings in the touched
+files; vite build client + server bundles build.
