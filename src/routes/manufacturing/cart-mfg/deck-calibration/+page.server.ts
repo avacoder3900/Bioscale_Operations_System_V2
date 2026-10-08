@@ -23,8 +23,18 @@ import {
 	TipCalibratorFixture,
 	AuditLog,
 	generateId,
-	Equipment
+	Equipment,
+	ReagentBatchRecord
 } from '$lib/server/db';
+import { labwareWellsFor } from '$lib/manufacturing/reagent-well-issues';
+
+/** One run-page well-tracker entry, resolved onto this deck's labware wells. */
+type StudioIssueMark = {
+	runId: string; runAt: string | null;
+	deckPosition: number; well: number; reagentName: string | null;
+	issue: string; note: string | null; loggedBy: string | null; loggedAt: string | null;
+	labwareWells: string[];
+};
 import {
 	applyDeckEditBatch,
 	applyDeckEditsPerWell,
@@ -250,6 +260,52 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 				.lean()) as any)
 		: null;
 
+	// Fill-mistake marks from the reagent run-page well tracker (2026-10-08), for
+	// THIS deck, keyed by robot: the operator opens the Studio to fix the deck a
+	// run just misbehaved on, so the tracker entries are drawn on the holes they
+	// were logged against (deckPosition+well → the cartridge's three labware
+	// wells, see labwareWellsFor) and listed per cartridge position. Last 60 days
+	// — long enough to see a repeat, short enough that a fixed deck goes quiet.
+	const wellIssueMarks: Record<string, StudioIssueMark[]> = {};
+	if (kind === 'deck' && selected) {
+		try {
+			const deckEq = (await Equipment.find({ deckLoadName: selected }).select('_id').lean()) as any[];
+			const deckIds = deckEq.map((d) => String(d._id));
+			if (deckIds.length) {
+				const since = new Date(Date.now() - 60 * 86_400_000);
+				const runs = (await ReagentBatchRecord.find({
+					deckId: { $in: deckIds },
+					createdAt: { $gte: since },
+					'wellIssues.0': { $exists: true }
+				})
+					.select('_id robot runStartTime createdAt wellIssues')
+					.sort({ createdAt: -1 })
+					.lean()) as any[];
+				for (const r of runs) {
+					const rid = String(r.robot?._id ?? '');
+					if (!rid) continue;
+					const list = (wellIssueMarks[rid] ??= []);
+					for (const w of (r.wellIssues ?? []) as any[]) {
+						list.push({
+							runId: String(r._id),
+							runAt: (r.runStartTime ?? r.createdAt) ? new Date(r.runStartTime ?? r.createdAt).toISOString() : null,
+							deckPosition: Number(w.deckPosition),
+							well: Number(w.well),
+							reagentName: w.reagentName ?? null,
+							issue: String(w.issue ?? 'other'),
+							note: w.note ?? null,
+							loggedBy: w.loggedBy?.username ?? null,
+							loggedAt: w.loggedAt ? new Date(w.loggedAt).toISOString() : null,
+							labwareWells: labwareWellsFor(Number(w.deckPosition), Number(w.well))
+						});
+					}
+				}
+			}
+		} catch (e) {
+			console.error('[deck-calibration] well-issue marks failed:', e instanceof Error ? e.message : e);
+		}
+	}
+
 	// Where the next fresh tip is on each robot's rack, per tip type — so a Studio
 	// pick-up aims at a position that still has a tip in it (see tip-cursor.ts).
 	const nextTipWells: Record<string, Record<'wax' | 'reagent', { well: string; source: string }>> = {};
@@ -275,7 +331,8 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		dimensions,
 		editedWells,
 		history: JSON.parse(JSON.stringify(history)),
-		calibrators: JSON.parse(JSON.stringify(calibrators))
+		calibrators: JSON.parse(JSON.stringify(calibrators)),
+		wellIssueMarks
 	};
 };
 
