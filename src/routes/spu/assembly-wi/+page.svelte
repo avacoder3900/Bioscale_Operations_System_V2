@@ -56,6 +56,11 @@
 	function sectionLabel(s: any) {
 		return s.type === 'setup' ? 'Setup' : `Sub-Assembly ${s.number}`;
 	}
+	function tabLabel(s: any) {
+		return (s.tabLabel ?? '').trim() || sectionLabel(s);
+	}
+	let editSectionMaterials = $state(false);
+	let draftSectionMaterials = $state('');
 	function fmt(d: string | null | undefined) {
 		return d ? new Date(d).toLocaleString() : '—';
 	}
@@ -109,10 +114,11 @@
 			<h1 class="text-2xl font-bold text-[var(--color-tron-cyan)]">{data.wi?.title || 'SPU Assembly Work Instruction'}</h1>
 			{#if data.wi && editMode}
 				{#if !editMeta}
-					<button class="text-[11px] text-amber-300 hover:underline" onclick={() => (editMeta = true)}>edit title / assembly number</button>
+					<button class="text-[11px] text-amber-300 hover:underline" onclick={() => (editMeta = true)}>edit title / document number / assembly number</button>
 				{:else}
 					<form method="POST" action="?/updateMetadata" use:enhance={afterSubmit(() => (editMeta = false))} class="mt-1 flex flex-wrap items-center gap-2 text-xs">
 						<input name="title" value={data.wi.title} class="w-72 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-2 py-1 text-[var(--color-tron-text)]" />
+						<input name="documentNumber" value={data.wi.documentNumber} placeholder="WIMF-SPU-01" class="w-32 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-2 py-1 font-mono text-[var(--color-tron-text)]" />
 						<input name="assemblyNumber" value={data.wi.assemblyNumber ?? ''} placeholder="AS-SPU-001" class="w-32 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-2 py-1 font-mono text-[var(--color-tron-text)]" />
 						<button class="rounded bg-amber-500 px-2 py-1 font-semibold text-black">Save</button>
 						<button type="button" class="text-[var(--color-tron-text-secondary)]" onclick={() => (editMeta = false)}>cancel</button>
@@ -239,7 +245,7 @@
 					onclick={() => { activeSection = s.number; editingStep = null; }}
 					title="{sectionLabel(s)} — {s.title}"
 				>
-					{sectionLabel(s)}
+					{tabLabel(s)}
 					<span class="ml-1 rounded-full bg-[var(--color-tron-surface)] px-1.5 text-[10px] text-[var(--color-tron-text-secondary)]">{s.steps.length}</span>
 				</button>
 			{/each}
@@ -267,10 +273,15 @@
 					</div>
 					{#if editMode}
 						<div class="flex flex-wrap items-center gap-2">
-							<form method="POST" action="?/renameSection" use:enhance={afterSubmit()} class="flex items-center gap-2">
+							<form method="POST" action="?/updateSection" use:enhance={afterSubmit()} class="flex flex-wrap items-center gap-2">
 								<input type="hidden" name="sectionNumber" value={section.number} />
-								<input name="title" value={section.title} class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-2 py-1 text-sm text-[var(--color-tron-text)]" />
-								<button class="rounded border border-[var(--color-tron-cyan)]/50 px-2 py-1 text-xs text-[var(--color-tron-cyan)]">Rename</button>
+								<label class="text-[10px] text-[var(--color-tron-text-secondary)]">Tab
+									<input name="tabLabel" value={section.tabLabel ?? ''} placeholder={sectionLabel(section)} class="ml-1 w-32 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-2 py-1 text-sm text-[var(--color-tron-text)]" />
+								</label>
+								<label class="text-[10px] text-[var(--color-tron-text-secondary)]">Title
+									<input name="title" value={section.title} class="ml-1 w-64 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-2 py-1 text-sm text-[var(--color-tron-text)]" />
+								</label>
+								<button class="rounded border border-[var(--color-tron-cyan)]/50 px-2 py-1 text-xs text-[var(--color-tron-cyan)]">Save</button>
 							</form>
 							{#if section.type !== 'setup'}
 								<form method="POST" action="?/moveSection" use:enhance={afterSubmit(() => (activeSection = Math.max(1, section.number - 1)))} class="inline">
@@ -303,10 +314,21 @@
 				{#if section.notesHtml}
 					<div class="wi-prose mt-2 rounded border border-amber-500/20 bg-amber-900/10 px-3 py-2 text-sm text-amber-100/90">{@html section.notesHtml}</div>
 				{/if}
-				{#if section.materialsHtml}
-					<details class="mt-2 text-sm">
-						<summary class="cursor-pointer text-xs text-[var(--color-tron-text-secondary)]">Section materials table</summary>
-						<div class="wi-prose mt-2">{@html section.materialsHtml}</div>
+				{#if editMode && editSectionMaterials}
+					<form method="POST" action="?/updateSection" use:enhance={afterSubmit(() => (editSectionMaterials = false))} class="mt-2 text-xs">
+						<input type="hidden" name="sectionNumber" value={section.number} />
+						<input type="hidden" name="materialsHtml" value={draftSectionMaterials} />
+						<div class="text-[var(--color-tron-text-secondary)]">Section materials table</div>
+						<div contenteditable="true" bind:innerHTML={draftSectionMaterials} class="wi-prose mt-1 min-h-[4rem] rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-3 py-2 text-sm text-[var(--color-tron-text)]"></div>
+						<div class="mt-1 flex gap-2">
+							<button class="rounded bg-amber-500 px-2 py-1 font-semibold text-black">Save</button>
+							<button type="button" class="text-[var(--color-tron-text-secondary)]" onclick={() => (editSectionMaterials = false)}>cancel</button>
+						</div>
+					</form>
+				{:else if section.materialsHtml || editMode}
+					<details class="mt-2 text-sm" open={Boolean(section.materialsHtml)}>
+						<summary class="cursor-pointer text-xs text-[var(--color-tron-text-secondary)]">Section materials table{#if editMode} <button class="ml-2 text-amber-300 hover:underline" onclick={(e) => { e.preventDefault(); draftSectionMaterials = section.materialsHtml ?? ''; editSectionMaterials = true; }}>edit</button>{/if}</summary>
+						{#if section.materialsHtml}<div class="wi-prose mt-2">{@html section.materialsHtml}</div>{/if}
 					</details>
 				{/if}
 				{#if !section.steps.length}

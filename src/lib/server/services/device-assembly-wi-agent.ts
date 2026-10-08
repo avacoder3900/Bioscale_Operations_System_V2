@@ -1,5 +1,5 @@
 import { PartDefinition } from '$lib/server/db/models/index.js';
-import { getDeviceAssemblyWI, sectionLabel } from './device-assembly-wi';
+import { getDeviceAssemblyWI, sectionLabel, tabLabel } from './device-assembly-wi';
 
 // Reference resolution + compact serialisation shared by the /api/agent/device-assembly/**
 // endpoints (which back the MCP tools). Humans talk about "step 2 in sub-assembly 2";
@@ -164,8 +164,12 @@ export function overview(wi: any, stock: Record<string, any>) {
 		sections: wi.sections.map((s: any) => ({
 			sectionNumber: s.number,
 			label: sectionLabel(s),
+			tabLabel: tabLabel(s),
+			customTabLabel: s.tabLabel || null,
 			type: s.type,
 			title: s.title,
+			notes: htmlToText(s.notesHtml) || undefined,
+			materialsTable: htmlToText(s.materialsHtml) || undefined,
 			stepCount: s.steps.length,
 			steps: s.steps.map((st: any) => stepView(s, st, stock))
 		})),

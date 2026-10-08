@@ -1,7 +1,7 @@
 import { DeviceAssemblyWI, DeviceAssemblyMaterialPull, InventoryTransaction, PartDefinition, AuditLog } from '$lib/server/db/models/index.js';
 import { generateId } from '$lib/server/db/utils.js';
 import { recordTransaction } from './inventory-transaction';
-import { DEVICE_WI_DOCUMENT_NUMBER, findSection, findStep, sectionLabel, type Actor } from './device-assembly-wi';
+import { findSection, findStep, sectionLabel, type Actor } from './device-assembly-wi';
 
 // Material consumption for a SPU Assembly WI step.
 //
@@ -28,7 +28,7 @@ export async function pullMaterialsForStep(
 	input: { sectionNumber: number; stepId: string; items: PullItem[]; unitsBuilt?: number; deviceSerial?: string | null; notes?: string | null },
 	actor: Actor
 ): Promise<{ results: PullResult[]; stepNumber: number; sectionTitle: string }> {
-	const wi: any = await DeviceAssemblyWI.findOne({ documentNumber: DEVICE_WI_DOCUMENT_NUMBER }).lean();
+	const wi: any = await DeviceAssemblyWI.findOne({}).sort({ createdAt: 1 }).lean();
 	if (!wi) throw new Error('No SPU Assembly Work Instruction has been imported yet');
 	const section = findSection(wi, input.sectionNumber);
 	if (!section) throw new Error(`Section ${input.sectionNumber} not found`);

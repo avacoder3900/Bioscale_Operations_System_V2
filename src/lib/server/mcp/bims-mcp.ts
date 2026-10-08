@@ -224,7 +224,7 @@ async function callAgentApi(
 export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 	// Version bump signals clients (claude.ai caches connector tool lists) that
 	// the toolset changed — bump on every tool add/remove/rename.
-	const server = new McpServer({ name: 'bims-operations', version: '3.10.0' });
+	const server = new McpServer({ name: 'bims-operations', version: '3.11.0' });
 
 	// ---------------------------------------------------------------- meta
 
@@ -2152,7 +2152,7 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 			description:
 				'The SPU Assembly Work Instruction (SPU → SPU Assembly WI): current revision (vN, who/when), front matter ' +
 				'(purpose/scope/responsibilities/definitions/references), every section (Setup + Sub-Assembly 1…N — add more with ' +
-				'device_wi_add_section) with its step list (number, title, ESD flag, image and material counts, ' +
+				'device_wi_add_section; tabLabel = text on its tab, title = heading, both editable) with its step list (number, title, ESD flag, image and material counts, ' +
 				'stepId), part numbers not yet linked to the catalog, and the last 5 revisions. Call this first to find the ' +
 				'step a user is talking about ("step 2 in sub-assembly 2"), then device_wi_get_step for the full text/photos/materials.'
 		},
@@ -2279,10 +2279,99 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 	server.registerTool(
 		'device_wi_update_metadata',
 		{ annotations: WRITE_TOOL,
-			description: 'Edit the document title, assembly number (e.g. AS-SPU-001) or status (draft | active | retired). Creates a new revision.',
-			inputSchema: z.object({ actor: ACTOR_FIELD, title: z.string().optional(), assemblyNumber: z.string().optional(), status: z.enum(['draft', 'active', 'retired']).optional() })
+			description: 'Edit the document title, document number (WIMF-SPU-01), assembly number (AS-SPU-001) or status (draft | active | retired). Creates a new revision.',
+			inputSchema: z.object({ actor: ACTOR_FIELD, title: z.string().optional(), documentNumber: z.string().optional().describe('e.g. WIMF-SPU-01'), assemblyNumber: z.string().optional(), status: z.enum(['draft', 'active', 'retired']).optional() })
 		},
 		async (args) => wiMutate('update_metadata', args)
+	);
+
+	server.registerTool(
+		'device_wi_update_section',
+		{ annotations: WRITE_TOOL,
+			description:
+				'Edit a section\'s tab text, title, notes or materials table in one call. tabLabel is the text on the tab itself ' +
+				'(default "Sub-Assembly N" / "Setup"; pass "" to go back to the default), title is the heading under the tabs, ' +
+				'notes is the callout above the steps, materials is the section-level materials table (setup block). Only the ' +
+				'fields you pass change. Creates a new revision.',
+			inputSchema: z.object({
+				actor: ACTOR_FIELD,
+				section: WI_SECTION_FIELD,
+				tabLabel: z.string().optional().describe('Text shown on the tab. "" resets to "Sub-Assembly N".'),
+				title: z.string().optional().describe('Heading shown under the tabs.'),
+				notes: z.string().optional().describe('Plain text; blank lines = paragraphs, "- " = bullets.'),
+				materials: z.string().optional().describe('Plain text for the section materials table (one item per line).')
+			})
+		},
+		async (args) => wiMutate('update_section', args)
+	);
+
+	server.registerTool(
+		'device_wi_move_steps',
+		{ annotations: WRITE_TOOL,
+			description:
+				'Move SEVERAL steps at once to another sub-assembly, keeping their order ("move steps 20 to 30 of sub-assembly 1 ' +
+				'into sub-assembly 2", "put steps 3, 7 and 9 at the start of sub-assembly 3"). Give a from/to range or a list of ' +
+				'step numbers. Both sections renumber. This is the fast way to divide the long imported list. Creates one revision.',
+			inputSchema: z.object({
+				actor: ACTOR_FIELD,
+				section: WI_SECTION_FIELD.describe('Section the steps are in now.'),
+				from: z.number().int().min(1).optional().describe('First step number of a range.'),
+				to: z.number().int().min(1).optional().describe('Last step number of a range.'),
+				steps: z.array(z.number().int().min(1)).optional().describe('Explicit step numbers instead of a range.'),
+				toSection: WI_SECTION_FIELD.describe('Destination section.'),
+				toPosition: z.number().int().min(1).optional().describe('Step number the first moved step should take in the destination (omit = end).')
+			})
+		},
+		async (args) => wiMutate('move_steps', args)
+	);
+
+	server.registerTool(
+		'device_wi_delete_steps',
+		{ annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
+			description: 'Delete several steps at once (range or list) from a section; the rest renumber. List them to the user and get an explicit yes before calling with confirmed: true. Snapshots of the removed steps go into the revision. Creates one revision.',
+			inputSchema: z.object({
+				actor: ACTOR_FIELD,
+				section: WI_SECTION_FIELD,
+				from: z.number().int().min(1).optional(),
+				to: z.number().int().min(1).optional(),
+				steps: z.array(z.number().int().min(1)).optional(),
+				confirmed: z.boolean().describe('Must be true, only after the user confirmed.')
+			})
+		},
+		async (args) => wiMutate('delete_steps', args)
+	);
+
+	server.registerTool(
+		'device_wi_copy_step',
+		{ annotations: WRITE_TOOL,
+			description: 'Duplicate a step (text, photos, materials) into a section — the same or another one — at the end or at a position. Useful for repeated operations across sub-assemblies. Creates a new revision.',
+			inputSchema: z.object({
+				actor: ACTOR_FIELD,
+				section: WI_SECTION_FIELD,
+				step: WI_STEP_FIELD,
+				toSection: WI_SECTION_FIELD.optional().describe('Destination (omit = same section).'),
+				toPosition: z.number().int().min(1).optional().describe('Step number the copy should take (omit = end).')
+			})
+		},
+		async (args) => wiMutate('copy_step', args)
+	);
+
+	server.registerTool(
+		'device_wi_revert',
+		{ annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
+			description:
+				'Undo: restore the whole document content (all sections, steps, photos, materials, front matter, title) to an ' +
+				'earlier version ("undo the last change" = current version − 1; "go back to v7"). Recorded as a NEW revision, so ' +
+				'nothing is lost and it can itself be undone. device_wi_revisions lists restorableVersions. Explain what will change ' +
+				'(use the revision summaries between the two versions) and get a yes before calling with confirmed: true.',
+			inputSchema: z.object({
+				actor: ACTOR_FIELD,
+				version: z.number().int().min(1).describe('Version number to restore (e.g. 7 for v7).'),
+				reason: z.string().optional().describe('Why — goes into the revision summary.'),
+				confirmed: z.boolean().describe('Must be true, only after the user confirmed.')
+			})
+		},
+		async (args) => wiMutate('revert', args)
 	);
 
 	server.registerTool(
