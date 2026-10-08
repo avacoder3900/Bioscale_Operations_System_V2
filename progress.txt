@@ -19058,3 +19058,23 @@ Note: during pre-merge testing the live document was advanced to v12 with test e
 "Electronics"/title "Boards & cables", SA1 steps 40–45 moved to SA2, document number
 WIMF-SPU-01-TEST). Snapshot v7 exists; the intended fix is device_wi_revert 7 from chat, which
 records the restore as v13 with full history retained.
+
+================================================================================
+2026-10-08 — feat/studio-well-issue-marks — Deck Calibration Studio shows the reagent well-tracker notes for the selected deck + robot
+================================================================================
+Alejandro: "incorporate the well tracker notes into the deck calibration page according to the
+selected deck and robot so when i go to fix the calibrations i can see the notes".
+- lib/manufacturing/reagent-well-issues.ts: labwareWellsFor(deckPosition, well) → the cartridge's
+  three labware wells (and the inverse deckPositionOfWell). Geometry from the reagent .py
+  (reagent cols: well5→1, well4→3, well3→5, well2→7, +8/carrier; carriers 1/3 run X→A, carrier 2
+  A→X, which equals the scan-slot order — checked against all three robots' scanner position
+  sets and the deck-004 def). Round-trips for all 96 cells.
+- deck-calibration/+page.server.ts: for kind=deck, resolves Equipment.deckLoadName → deckIds,
+  pulls reagent runs on those decks with wellIssues (60 days), returns `wellIssueMarks` keyed by
+  robotId with each entry resolved to labware wells.
+- deck-calibration/+page.svelte: marks for the SELECTED robot only; red ring around each hit hole
+  (thicker when hit more than once), hover title lists "FILL ISSUES: Missed the hole×2 …", and a
+  "Fill issues on this deck" table under the deck (cartridge #, carrier, well+reagent, the 3 hole
+  names, what was seen, notes, last logged/by) with a "Select holes" button (shift = add) that
+  loads those holes into the selection for jog/apply. Empty state explains where entries come from.
+`npm run check`: 16 errors / 435 warnings — same as master, none in the changed files.

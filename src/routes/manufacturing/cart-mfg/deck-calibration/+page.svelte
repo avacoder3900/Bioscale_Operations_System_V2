@@ -35,6 +35,44 @@
 	});
 	const robot = $derived(robots.find((r) => r._id === selectedRobotId) ?? null);
 
+	// ── Fill-mistake marks from the reagent run-page well tracker (2026-10-08) ──
+	// Entries logged on runs that used THIS deck on the SELECTED robot (60 days),
+	// resolved to labware wells server-side. Drawn as red rings on the holes and
+	// listed per cartridge position below the deck, so the operator fixing the
+	// deck sees what the line actually saw go wrong at each hole.
+	type IssueMark = { runId: string; runAt: string | null; deckPosition: number; well: number; reagentName: string | null; issue: string; note: string | null; loggedBy: string | null; loggedAt: string | null; labwareWells: string[] };
+	const issueMarks = $derived(((data.wellIssueMarks ?? {}) as Record<string, IssueMark[]>)[selectedRobotId] ?? []);
+	const issueByWell = $derived.by(() => {
+		const m = new Map<string, IssueMark[]>();
+		for (const mk of issueMarks) for (const n of mk.labwareWells) { if (!m.has(n)) m.set(n, []); m.get(n)!.push(mk); }
+		return m;
+	});
+	// Grouped per cartridge position + well for the panel, most-hit first.
+	const issueGroups = $derived.by(() => {
+		const g = new Map<string, { deckPosition: number; well: number; reagentName: string | null; labwareWells: string[]; marks: IssueMark[] }>();
+		for (const mk of issueMarks) {
+			const k = `${mk.deckPosition}:${mk.well}`;
+			if (!g.has(k)) g.set(k, { deckPosition: mk.deckPosition, well: mk.well, reagentName: mk.reagentName, labwareWells: mk.labwareWells, marks: [] });
+			g.get(k)!.marks.push(mk);
+		}
+		return [...g.values()].sort((a, b) => b.marks.length - a.marks.length || a.deckPosition - b.deckPosition || a.well - b.well);
+	});
+	function issueLabelOf(code: string): string {
+		return ({ no_fill: 'No fill', partial_fill: 'Partial fill', overfill: 'Overfill', missed_hole: 'Missed the hole', splash: 'Splash', bubble: 'Bubble', bent_tip: 'Bent tip', other: 'Other' } as Record<string, string>)[code] ?? code;
+	}
+	function issueTitle(name: string): string {
+		const list = issueByWell.get(name);
+		if (!list?.length) return '';
+		const counts = new Map<string, number>();
+		for (const mk of list) counts.set(mk.issue, (counts.get(mk.issue) ?? 0) + 1);
+		return ` · FILL ISSUES: ${[...counts].map(([k, n]) => `${issueLabelOf(k)}×${n}`).join(', ')}`;
+	}
+	/** Put a group's three holes into the selection so they can be jogged/applied together. */
+	function selectIssueWells(names: string[], additive = false) {
+		const present = names.filter((n) => wellByName.has(n) && isActiveRole(n));
+		selection = additive ? new Set([...selection, ...present]) : new Set(present);
+	}
+
 	function pickDeck(loadName: string) {
 		const u = new URL($page.url);
 		u.searchParams.set('deck', loadName);
@@ -1514,7 +1552,14 @@
 								onpointerdown={(e) => { e.stopPropagation(); }}
 								onclick={(e) => { e.stopPropagation(); toggleWell(w.name, e.shiftKey || e.ctrlKey || e.metaKey); }}
 								role="button" tabindex="-1"
-							><title>{w.name} ({role}) — x {w.x.toFixed(2)} y {w.y.toFixed(2)} z {w.z.toFixed(2)}</title></circle>
+							><title>{w.name} ({role}) — x {w.x.toFixed(2)} y {w.y.toFixed(2)} z {w.z.toFixed(2)}{issueTitle(w.name)}</title></circle>
+						{/each}
+						<!-- Fill-mistake rings (reagent run-page well tracker), drawn over the dots. -->
+						{#each wells as w (`issue-${w.name}`)}
+							{@const n = issueByWell.get(w.name)?.length ?? 0}
+							{#if n > 0}
+								<circle cx={w.x} cy={cy(w.y)} r={wellR + 0.9} fill="none" stroke={n > 1 ? '#ef4444' : '#f87171'} stroke-width={n > 1 ? 0.6 : 0.4} style="pointer-events:none;" />
+							{/if}
 						{/each}
 						{#if boxRect}
 							<rect x={boxRect.x} y={boxRect.y} width={boxRect.w} height={boxRect.h} fill="rgba(0,255,255,0.12)" stroke="var(--color-tron-cyan)" stroke-width="0.4" />
@@ -1872,6 +1917,47 @@
 		</button>
 	</section>
 	</div>
+
+	<!-- Fill issues logged on this deck + robot (reagent run-page well tracker) -->
+	{#if kind === 'deck' && data.selected}
+		<section class="rounded-lg border {issueMarks.length ? 'border-red-500/40' : 'border-[var(--color-tron-border)]'} bg-[var(--color-tron-surface)] p-3">
+			<div class="mb-2 flex flex-wrap items-baseline justify-between gap-2">
+				<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">
+					Fill issues on this deck <span class="normal-case font-normal">— {robot?.name ?? 'robot'} · {data.selected} · last 60 days</span>
+				</h2>
+				{#if issueMarks.length}
+					<span class="text-[11px] text-red-300">{issueMarks.length} logged on {issueGroups.length} hole group{issueGroups.length === 1 ? '' : 's'} · red rings on the deck above</span>
+				{/if}
+			</div>
+			{#if !issueMarks.length}
+				<p class="text-[11px]" style="color: var(--color-tron-text-secondary)">Nothing logged for this deck on {robot?.name ?? 'this robot'}. Operators tag mistakes on the reagent run page's well tracker; they show up here against the holes they hit.</p>
+			{:else}
+				<div class="overflow-x-auto">
+					<table class="w-full text-left text-[11px]">
+						<thead style="color: var(--color-tron-text-secondary)"><tr><th class="px-2 py-1">Cartridge</th><th class="px-2 py-1">Well</th><th class="px-2 py-1">Holes</th><th class="px-2 py-1">What was seen</th><th class="px-2 py-1">Notes</th><th class="px-2 py-1">Last</th><th class="px-2 py-1"></th></tr></thead>
+						<tbody style="color: var(--color-tron-text)">
+							{#each issueGroups as g (`${g.deckPosition}:${g.well}`)}
+								{@const counts = [...g.marks.reduce((m, mk) => m.set(mk.issue, (m.get(mk.issue) ?? 0) + 1), new Map<string, number>())]}
+								{@const notes = g.marks.filter((mk) => mk.note).map((mk) => mk.note)}
+								{@const last = g.marks.map((mk) => mk.loggedAt ?? '').sort().at(-1) || null}
+								<tr class="border-t border-[var(--color-tron-border)] align-top">
+									<td class="px-2 py-1 font-semibold">#{g.deckPosition} <span class="font-normal" style="color: var(--color-tron-text-secondary)">(carrier {Math.floor((g.deckPosition - 1) / 8) + 1})</span></td>
+									<td class="px-2 py-1">well {g.well}{g.reagentName ? ` · ${g.reagentName}` : ''}</td>
+									<td class="px-2 py-1 font-mono">{g.labwareWells.join(' ')}</td>
+									<td class="px-2 py-1 text-red-200">{counts.map(([k, n]) => `${issueLabelOf(k)}${n > 1 ? ` ×${n}` : ''}`).join(', ')}</td>
+									<td class="px-2 py-1" style="color: var(--color-tron-text-secondary)">{notes.length ? notes.join(' · ') : '—'}</td>
+									<td class="px-2 py-1" style="color: var(--color-tron-text-secondary)">{last ? new Date(last).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : ''}{g.marks[0]?.loggedBy ? ` · ${g.marks[0].loggedBy}` : ''}</td>
+									<td class="px-2 py-1 whitespace-nowrap">
+										<button type="button" onclick={(e) => selectIssueWells(g.labwareWells, e.shiftKey)} class="rounded border border-[var(--color-tron-border)] px-2 py-0.5 hover:border-[var(--color-tron-cyan)]" style="color: var(--color-tron-text)" title="Select these three holes (shift = add to the selection)">Select holes</button>
+									</td>
+								</tr>
+							{/each}
+						</tbody>
+					</table>
+				</div>
+			{/if}
+		</section>
+	{/if}
 
 	<!-- History -->
 	{#if data.history?.length}
