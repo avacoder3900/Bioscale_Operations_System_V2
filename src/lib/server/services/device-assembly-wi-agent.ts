@@ -166,7 +166,6 @@ export function overview(wi: any, stock: Record<string, any>) {
 			label: sectionLabel(s),
 			type: s.type,
 			title: s.title,
-			tabLabel: s.type === 'setup' ? s.title || 'Setup' : `${s.number} · ${s.title || sectionLabel(s)}`,
 			stepCount: s.steps.length,
 			steps: s.steps.map((st: any) => stepView(s, st, stock))
 		})),

@@ -239,11 +239,7 @@
 					onclick={() => { activeSection = s.number; editingStep = null; }}
 					title="{sectionLabel(s)} — {s.title}"
 				>
-					{#if s.type === 'setup'}
-						{s.title || 'Setup'}
-					{:else}
-						<span class="mr-1 font-mono text-[10px] opacity-70">{s.number}</span>{s.title || sectionLabel(s)}
-					{/if}
+					{sectionLabel(s)}
 					<span class="ml-1 rounded-full bg-[var(--color-tron-surface)] px-1.5 text-[10px] text-[var(--color-tron-text-secondary)]">{s.steps.length}</span>
 				</button>
 			{/each}

@@ -18958,13 +18958,14 @@ What this deployment is for: SPU Assembly WI sub-assemblies can be added / delet
   the page's edit mode.
 
 ================================================================================
-2026-10-08 — feat/wi-tab-titles — SPU Assembly WI tabs show the section title
+2026-10-08 — feat/wi-tab-titles — SPU Assembly WI: tabs stay "Sub-Assembly N"; title is the editable heading
 ================================================================================
 Reported via chat: device_wi_rename_section changed a section's title but the tab still read
-"Sub-Assembly 1" because tabs rendered only the positional label; the title appeared in the
-section header below. Tabs now show "<n> <title>" for sub-assemblies (title defaults to
-"Sub-Assembly N") and the Setup title for the setup block, with the positional label in the
-tooltip. device_wi_rename_section's description states that it sets the tab/header title and
-that the number only changes via device_wi_move_section; the agent overview adds tabLabel per
-section. Files: src/routes/spu/assembly-wi/+page.svelte, src/lib/server/mcp/bims-mcp.ts,
-src/lib/server/services/device-assembly-wi-agent.ts.
+"Sub-Assembly 1", so the model told the user it could not set the tab name. Decision from
+Alejandro: that is the intended design — tabs are always the positional "Sub-Assembly N" /
+"Setup", and the title (the heading shown under the tabs) is what chat renames. A first cut
+that put titles on the tabs was reverted on this branch. Kept: a tooltip on each tab showing
+"Sub-Assembly N — <title>", and device_wi_rename_section's description now states explicitly
+that tabs always read "Sub-Assembly N" and that the tool sets the separate title, so the model
+stops reporting a missing capability. Files: src/routes/spu/assembly-wi/+page.svelte,
+src/lib/server/mcp/bims-mcp.ts.
