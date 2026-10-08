@@ -19283,3 +19283,19 @@ Smoke (unauthenticated curl; 302 → /login means the route exists and is gated)
   /manufacturing/cart-mfg/reagent-filling?robot=x -> 302 https://bioscale-operations-system-mongodb-1w27clmkp-brevitest.vercel.app/login
   /manufacturing/cart-mfg/wax-filling -> 302 https://bioscale-operations-system-mongodb-1w27clmkp-brevitest.vercel.app/login
 
+
+================================================================================
+2026-10-08 — feat/robot-overhaul — Round 7: run controller card trimmed to line · status · Play/Pause/Stop
+================================================================================
+Operator: on the "Running on Reagent Run" card keep only queue, running,
+pause, play, stop. EmbeddedRunController (shared by both wizards and wax
+RunExecution) now renders the TransportPill (queue / direct), the status
+badge and the three controls. Removed: the "Running on <name>" heading text
+(kept as the card's title tooltip), the pause-requested note, the OT-2 run
+id + elapsed tiles, the "Last action" line and the "Run finished… advancing"
+note. Kept: the error line and the "Why it failed" list — they only appear
+when something went wrong. Script state behind the removed tiles is left in
+place (derived values, no behaviour change).
+
+Check: svelte-check 14 errors (all pre-existing), no warnings in the file;
+vite build client + server bundles build.
