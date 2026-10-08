@@ -19270,3 +19270,16 @@ Check: svelte-check 14 errors (all pre-existing), no warnings in touched
 files (431 total, down 2); vite build client + server bundles build. Needs
 the logged-in smoke: Start wax from /robots → setup page → start run → auto
 return to /robots → run panel (timer on top, dropdowns) → finish → idle.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-1w27clmkp-brevitest.vercel.app
+Source: branch feat/robot-overhaul @ commit beb2021a
+Retrieve this exact code: git checkout feat/robot-overhaul at commit beb2021a
+  (or: git log feat/robot-overhaul --oneline to find it if the branch has since moved on)
+What this deployment is for: round 6 — setup pages restored, Robots page shows live runs only,
+  run view with timer first and tip-swap / well-tracker dropdowns.
+Smoke (unauthenticated curl; 302 → /login means the route exists and is gated):
+  /manufacturing/cart-mfg/robots -> 302 https://bioscale-operations-system-mongodb-1w27clmkp-brevitest.vercel.app/login
+  /manufacturing/cart-mfg/wax-filling?robot=x -> 302 https://bioscale-operations-system-mongodb-1w27clmkp-brevitest.vercel.app/login
+  /manufacturing/cart-mfg/reagent-filling?robot=x -> 302 https://bioscale-operations-system-mongodb-1w27clmkp-brevitest.vercel.app/login
+  /manufacturing/cart-mfg/wax-filling -> 302 https://bioscale-operations-system-mongodb-1w27clmkp-brevitest.vercel.app/login
+
