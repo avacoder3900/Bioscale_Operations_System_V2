@@ -19232,3 +19232,41 @@ Smoke (unauthenticated curl; 302 → /login or 401 means the route exists and is
   /api/manufacturing/reagent-well-issues?robot=x -> 401 
   /manufacturing/cart-mfg/reagent-filling/well-issues -> 302 https://bioscale-operations-system-mongodb-66ql71g1y-brevitest.vercel.app/login
 
+
+================================================================================
+2026-10-08 — feat/robot-overhaul — Round 6: setup pages back; Robots page is the live command view
+================================================================================
+Operator direction: keep the wax and reagent SETUP flows on their own pages,
+land on the Robots page once the robot is running, return there after a run
+concludes, and reach the setup pages from Start wax / Start reagent buttons.
+Plus three run-view changes: strip the stage-timeline module at the top (and
+its Cancel run / Preview / Reset to deck loading buttons), move the run timer
+to the top, and turn the well tracker and tip-problem cards into dropdowns.
+
+- Wizards gained `mode`: 'setup' (the wax-filling / reagent-filling page:
+  prep → scan → params → Start) or 'run' (a Robots-page panel: Running stage
+  only). In setup mode an $effect sends the operator to /robots the moment
+  the run is Running. The stage-timeline header block (Run id · Stage x of y
+  · Preview · Cancel Run · bubbles · arrows · past/future-stage banners) is
+  gone from both, as are the "Preview All Stages" links and the Cancel Run,
+  Reset to Deck Loading and Skip Stage modals (their only triggers lived in
+  that header; the server actions remain).
+- Running block reordered: RunExecution (timer / finish card) first, then
+  EmbeddedRunController, then "Tip problem? …" as a <details> dropdown;
+  reagent also wraps ReagentWellTracker in a <details> ("Well tracker — log
+  a fill mistake as you see it") before the finish controls.
+- /wax-filling?robot=X and /reagent-filling?robot=X are real pages again:
+  thin +page.svelte wrappers (robot name, "← All robots") over the wizards in
+  setup mode; their loads call loadWaxWizard / loadReagentWizard (no robot →
+  /robots). The (robots) layout treats them like tool pages (no board).
+- /robots: one panel per robot — running (wax Running/Awaiting Removal,
+  reagent Running) → the wizard in run mode; a run in Setup/Loading →
+  "Continue … setup →" to its page; idle → "Start wax →" / "Start reagent →"
+  (permission-aware). Finishing a run drops the panel to idle in place. The
+  heatmap card stays. ?open= panel state removed (robot-panels.ts trimmed to
+  the type + paths); the board marks a live row "live".
+
+Check: svelte-check 14 errors (all pre-existing), no warnings in touched
+files (431 total, down 2); vite build client + server bundles build. Needs
+the logged-in smoke: Start wax from /robots → setup page → start run → auto
+return to /robots → run panel (timer on top, dropdowns) → finish → idle.

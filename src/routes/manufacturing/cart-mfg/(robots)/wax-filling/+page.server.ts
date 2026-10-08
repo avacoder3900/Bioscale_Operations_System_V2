@@ -18,7 +18,7 @@ import { protectLockedCarts, LOCKED_STATUSES } from '$lib/server/manufacturing/l
 import { getRobot, robotGet, bridgeDeviceIdForRobot } from '$lib/server/opentrons/proxy';
 import { bridgeJobGate } from '$lib/server/opentrons/bridge-token';
 import { requirePermission } from '$lib/server/permissions';
-import { WAX_TUBE_PART_NUMBER } from '$lib/server/manufacturing/wax-wizard';
+import { WAX_TUBE_PART_NUMBER, loadWaxWizard } from '$lib/server/manufacturing/wax-wizard';
 // OT2-TAILNET-5 §7.1: the run lifecycle's BIMS halves (moved out of this file,
 // unchanged) + the prepare/confirm actions the tailnet line calls.
 import {
@@ -67,15 +67,20 @@ async function verifyAdminOverride(username: string, password: string): Promise<
 export const config = { maxDuration: 60 };
 
 /**
- * ROBOT-OVERHAUL round 2: the single-robot wax page is gone — every wizard
- * renders on the Robots page, side by side (loadWaxWizard in
- * $lib/server/manufacturing/wax-wizard.ts is this route's old load). The
- * actions below stay here; WaxWizard.svelte posts to them as
- * /manufacturing/cart-mfg/wax-filling?/<action>&robot=<id>.
+ * The wax SETUP page (ROBOT-OVERHAUL round 6, 2026-10-08): prep → deck scan →
+ * parameters → Start for ONE robot (?robot=<id>, from the Robots page's "Start
+ * wax" button). Once the robot is running, WaxWizard hands the operator over to
+ * /manufacturing/cart-mfg/robots, where every running robot is watched side by
+ * side; the actions below stay here (WaxWizard posts to them explicitly).
  */
-export const load: PageServerLoad = async ({ url }) => {
+export const load: PageServerLoad = async ({ locals, url, parent }) => {
+	if (!locals.user) redirect(302, '/login');
+	requirePermission(locals.user, 'waxFilling:read');
 	const robot = url.searchParams.get('robot');
-	redirect(302, `/manufacturing/cart-mfg/robots${robot ? `?open=${encodeURIComponent(robot)}:wax` : ''}`);
+	if (!robot) redirect(302, '/manufacturing/cart-mfg/robots');
+	const { robots } = await parent();
+	const name = robots.find((r) => r.robotId === robot)?.name ?? 'Wax Filling';
+	return loadWaxWizard(locals, robot, name);
 };
 
 /**

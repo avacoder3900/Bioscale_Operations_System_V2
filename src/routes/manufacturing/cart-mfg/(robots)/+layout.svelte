@@ -21,26 +21,34 @@
 	let { children, data }: Props = $props();
 
 	const path = $derived($page.url.pathname);
-	// Tool pages stand on their own — no board above them.
-	const isTool = $derived(/\/(settings|history|cooling-queue|well-issues)(\/|$)/.test(path));
+	// Tool pages AND the two setup pages stand on their own — no board above
+	// them (round 6: setup is its own page again; the board lives on /robots).
+	const isSetup = $derived(/\/(wax-filling|reagent-filling)$/.test(path));
+	const isTool = $derived(isSetup || /\/(settings|history|cooling-queue|well-issues)(\/|$)/.test(path));
 	const crumb = $derived(
 		!isTool
 			? ''
-			: path.endsWith('/history')
-				? 'Run history'
-				: path.endsWith('/cooling-queue')
-					? 'Cooling queue'
-					: path.endsWith('/well-issues')
-						? 'Well issues'
-						: path.includes('/wax-filling/')
-							? 'Wax settings'
-							: 'Reagent settings'
+			: isSetup
+				? path.endsWith('/wax-filling')
+					? 'Wax filling setup'
+					: 'Reagent filling setup'
+				: path.endsWith('/history')
+					? 'Run history'
+					: path.endsWith('/cooling-queue')
+						? 'Cooling queue'
+						: path.endsWith('/well-issues')
+							? 'Well issues'
+							: path.includes('/wax-filling/')
+								? 'Wax settings'
+								: 'Reagent settings'
 	);
-	// Which wizard is open per robot (from the Robots page's own load) — the
-	// board uses it to show Open / Close instead of Start.
+	// Which robots have a LIVE run panel on the Robots page (from its load) —
+	// the board marks that process row "live".
 	const openPanels = $derived.by(() => {
 		const out: Record<string, BoardProcess> = {};
-		for (const p of ($page.data.panels ?? []) as { robotId: string; process: BoardProcess }[]) out[p.robotId] = p.process;
+		for (const p of ($page.data.panels ?? []) as { robotId: string; process: BoardProcess | null; live?: boolean }[]) {
+			if (p.live && p.process) out[p.robotId] = p.process;
+		}
 		return out;
 	});
 </script>

@@ -5,10 +5,9 @@
   used to sit in the wax-filling and reagent-filling layouts — restart the
   robot server, force the robot back to idle.
 
-  Round 3/4: every robot's wizard is open BELOW this board, always, and the
-  Wax | Reagent choice lives on the panel itself — so this board is status
-  only. The row whose process the panel shows is marked "open"; a robot busy
-  with the other process says so.
+  Round 6: this board is status only. Below it, each robot's panel shows its
+  LIVE run (marked "live" on that process row here); setup happens on the
+  wax-filling / reagent-filling pages via the panel's Start buttons.
 
   Health is polled every 10 s from /api/opentrons-lab/robots/health; run stages
   refresh whenever a wizard action invalidates the page data.
@@ -24,7 +23,7 @@
 
 	interface Props {
 		rows: RobotBoardRow[];
-		/** Which wizard each robot's panel shows, from the Robots page load. */
+		/** Robots with a live run panel on the Robots page, by process. */
 		openPanels?: Record<string, BoardProcess>;
 	}
 
@@ -285,7 +284,7 @@
 			{/if}
 		</span>
 		{#if shown}
-			<span class="shrink-0 text-[10px] uppercase tracking-wider text-[var(--color-tron-cyan)]" title="This is the wizard in {row.name}'s panel below">open</span>
+			<span class="shrink-0 text-[10px] uppercase tracking-wider text-[var(--color-tron-cyan)]" title="{row.name}'s live run is in its panel below">live</span>
 		{/if}
 	</div>
 {/snippet}

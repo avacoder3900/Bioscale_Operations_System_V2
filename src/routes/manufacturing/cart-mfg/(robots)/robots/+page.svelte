@@ -1,30 +1,33 @@
 <!--
-  /manufacturing/cart-mfg/robots — the Robots page (ROBOT-OVERHAUL round 3).
-  The board (every OT-2, wax + reagent, health, restart/reset) is rendered by
-  the (robots) layout above; this page renders EVERY robot's wizard below it,
-  side by side, one panel per robot, always open. Each panel's header has a
-  Wax | Reagent toggle; it is locked while that robot has a run in progress.
+  /manufacturing/cart-mfg/robots — the Robots page, the live command view
+  (ROBOT-OVERHAUL round 6, 2026-10-08). The board (every OT-2, health,
+  restart/reset) is rendered by the (robots) layout above; below it, one panel
+  per robot, side by side:
+    running    → that robot's wizard in run mode (timer first, robot controller,
+                 tip-swap and well-tracker dropdowns, finish controls)
+    setting up → "continue setup" on the wax-filling / reagent-filling page
+    idle       → Start wax / Start reagent, which go to those setup pages
+  Each panel header also has the heatmap toggle (card above the wizard).
 -->
 <script lang="ts">
-	import { page } from '$app/stores';
 	import { resolve } from '$app/paths';
 	import WaxWizard from '$lib/components/manufacturing/wax-filling/WaxWizard.svelte';
 	import ReagentWizard from '$lib/components/manufacturing/reagent-filling/ReagentWizard.svelte';
 	import ReagentWellHeatmap from '$lib/components/manufacturing/reagent-filling/ReagentWellHeatmap.svelte';
-	import { parseOpenPanels, panelsHref, type BoardProcess } from '$lib/manufacturing/robot-panels';
+	import { SETUP_PATH, type BoardProcess } from '$lib/manufacturing/robot-panels';
 	import type { WellIssueHeatmap } from '$lib/server/manufacturing/reagent-well-heatmap';
 
 	let { data } = $props();
 
-	const openMap = $derived(parseOpenPanels($page.url.searchParams.get('open')));
 	const count = $derived(data.panels.length);
 	const gridClass = $derived(count >= 3 ? 'xl:grid-cols-3' : count === 2 ? 'xl:grid-cols-2' : '');
-	const PROCESSES: BoardProcess[] = ['wax', 'reagent'];
 	const label = (p: BoardProcess) => (p === 'wax' ? 'Wax' : 'Reagent');
+	// Plain paths (resolve() wants a literal route); SETUP_PATH holds both.
+	const setupHref = (p: BoardProcess, robotId: string) => `${SETUP_PATH[p]}?robot=${encodeURIComponent(robotId)}`;
 
-	// ── inline heatmap card (2026-10-08): the icon opens this robot's reagent
-	//    fill-mistake heatmap ABOVE the wizard, fetched on first open, instead of
-	//    leaving the page. Per robot: closed | loading | loaded | error.
+	// ── inline heatmap card: the icon opens this robot's reagent fill-mistake
+	//    heatmap ABOVE the wizard, fetched on first open. Per robot: closed |
+	//    loading | loaded | error.
 	const HEATMAP_DAYS = 30;
 	type HeatmapState = { open: boolean; loading: boolean; error: string; data: WellIssueHeatmap | null };
 	let heatmaps = $state<Record<string, HeatmapState>>({});
@@ -52,6 +55,11 @@
 			heatmaps = { ...heatmaps, [robotId]: { ...heatmapOf(robotId), loading: false, error: e instanceof Error ? e.message : 'Could not load the heatmap' } };
 		}
 	}
+
+	const startBtn =
+		'flex min-h-[44px] flex-1 items-center justify-center rounded-lg border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 px-4 py-2 text-sm font-semibold text-[var(--color-tron-cyan)] transition-colors hover:bg-[var(--color-tron-cyan)]/20';
+	const toolBtn =
+		'rounded border border-[var(--color-tron-border)] px-2 py-0.5 text-[var(--color-tron-text-secondary)] transition-colors hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]';
 </script>
 
 {#if count === 0}
@@ -62,18 +70,26 @@
 			{@const hm = heatmapOf(panel.robotId)}
 			<section
 				id="panel-{panel.robotId}"
-				class="min-w-0 scroll-mt-20 rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)]/40 p-3"
-				aria-label="{panel.robotName} {panel.process} filling"
+				class="min-w-0 scroll-mt-20 rounded-lg border bg-[var(--color-tron-surface)]/40 p-3 {panel.live ? 'border-[var(--color-tron-cyan)]/50' : 'border-[var(--color-tron-border)]'}"
+				aria-label="{panel.robotName}{panel.process ? ` ${panel.process} filling` : ''}"
 			>
 				<header class="mb-3 flex items-center justify-between gap-2 border-b border-[var(--color-tron-border)] pb-2">
-					<h2 class="truncate text-sm font-semibold text-[var(--color-tron-text)]">{panel.robotName}</h2>
-					<div class="flex shrink-0 items-center gap-1.5">
+					<h2 class="truncate text-sm font-semibold text-[var(--color-tron-text)]">
+						{panel.robotName}
+						{#if panel.process}
+							<span class="font-normal text-[var(--color-tron-text-secondary)]">
+								— {label(panel.process)} filling{panel.kind === 'setup' ? ` · ${panel.stage ?? 'setup'}` : ''}
+							</span>
+						{:else}
+							<span class="font-normal text-[var(--color-tron-text-secondary)]">— idle</span>
+						{/if}
+					</h2>
 					<!-- This robot's reagent fill-mistake heatmap (the per-well tracker's
 					     history) — opens as a card above the wizard, not a new page. -->
 					<button
 						type="button"
 						onclick={() => toggleHeatmap(panel.robotId)}
-						class="flex h-6 w-6 items-center justify-center rounded border transition-colors {hm.open
+						class="flex h-6 w-6 shrink-0 items-center justify-center rounded border transition-colors {hm.open
 							? 'border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/15 text-[var(--color-tron-cyan)]'
 							: 'border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]'}"
 						title="{panel.robotName}: reagent fill mistakes by position (heatmap), last {HEATMAP_DAYS} days"
@@ -92,33 +108,8 @@
 							<rect x="16" y="16" width="5" height="5" rx="1" opacity="0.7" />
 						</svg>
 					</button>
-					<!-- Wax | Reagent: which wizard this robot's panel shows. Locked to the
-					     running process while a run is in progress. -->
-					<div
-						class="flex shrink-0 overflow-hidden rounded border border-[var(--color-tron-border)] text-[11px] font-medium"
-						role="group"
-						aria-label="Process for {panel.robotName}"
-						title={panel.forced ? `${label(panel.process)} run in progress — finish or cancel it to switch` : 'Choose which fill to run on this robot'}
-					>
-						{#each PROCESSES as p (p)}
-							{@const current = panel.process === p}
-							{#if current}
-								<span class="bg-[var(--color-tron-cyan)] px-2.5 py-1 text-black" aria-current="true">{label(p)}</span>
-							{:else if panel.forced}
-								<span class="cursor-not-allowed px-2.5 py-1 text-[var(--color-tron-text-secondary)] opacity-50">{label(p)}</span>
-							{:else}
-								<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- URL built from the current page -->
-								<a
-									href={panelsHref(openMap, panel.robotId, p, false)}
-									class="px-2.5 py-1 text-[var(--color-tron-text-secondary)] transition-colors hover:bg-[var(--color-tron-cyan)]/15 hover:text-[var(--color-tron-cyan)]"
-								>
-									{label(p)}
-								</a>
-							{/if}
-						{/each}
-					</div>
-					</div>
 				</header>
+
 				{#if hm.open}
 					<div class="mb-3 rounded-lg border border-[var(--color-tron-cyan)]/40 bg-[var(--color-tron-bg)]/40 p-3">
 						<div class="mb-2 flex items-center justify-between gap-2">
@@ -131,15 +122,13 @@
 								{/if}
 							</h3>
 							<div class="flex shrink-0 items-center gap-1 text-[11px]">
-								<button type="button" onclick={() => loadHeatmap(panel.robotId)} disabled={hm.loading} class="rounded border border-[var(--color-tron-border)] px-2 py-0.5 text-[var(--color-tron-text-secondary)] transition-colors hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)] disabled:opacity-50">
+								<button type="button" onclick={() => loadHeatmap(panel.robotId)} disabled={hm.loading} class="{toolBtn} disabled:opacity-50">
 									{hm.loading ? 'Loading…' : 'Refresh'}
 								</button>
-								<a href="{resolve('/manufacturing/cart-mfg/reagent-filling/well-issues')}?robot={encodeURIComponent(panel.robotId)}" class="rounded border border-[var(--color-tron-border)] px-2 py-0.5 text-[var(--color-tron-text-secondary)] transition-colors hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]" title="All robots, other windows">
+								<a href="{resolve('/manufacturing/cart-mfg/reagent-filling/well-issues')}?robot={encodeURIComponent(panel.robotId)}" class={toolBtn} title="All robots, other windows">
 									Full page
 								</a>
-								<button type="button" onclick={() => toggleHeatmap(panel.robotId)} class="rounded border border-[var(--color-tron-border)] px-2 py-0.5 text-[var(--color-tron-text-secondary)] transition-colors hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]" aria-label="Close heatmap">
-									Close
-								</button>
+								<button type="button" onclick={() => toggleHeatmap(panel.robotId)} class={toolBtn} aria-label="Close heatmap">Close</button>
 							</div>
 						</div>
 						{#if hm.error}
@@ -151,10 +140,31 @@
 						{/if}
 					</div>
 				{/if}
-				{#if panel.process === 'wax'}
-					<WaxWizard data={panel.data} />
+
+				{#if panel.kind === 'wax'}
+					<WaxWizard data={panel.data} mode="run" />
+				{:else if panel.kind === 'reagent'}
+					<ReagentWizard data={panel.data} mode="run" />
+				{:else if panel.kind === 'setup'}
+					<div class="rounded-lg border border-amber-500/40 bg-amber-900/10 p-4 text-center">
+						<p class="text-sm font-semibold text-amber-200">{label(panel.process)} setup in progress{panel.stage ? ` — ${panel.stage}` : ''}</p>
+						<p class="mt-1 text-xs text-amber-200/80">The run has not started on the robot yet. Finish the setup on its page; this panel goes live once the robot is running.</p>
+						<a href={setupHref(panel.process, panel.robotId)} class="mt-3 inline-flex min-h-[40px] items-center rounded-lg border border-amber-400/60 bg-amber-500/20 px-4 py-2 text-sm font-medium text-amber-100 transition-colors hover:bg-amber-500/30">
+							Continue {label(panel.process).toLowerCase()} setup →
+						</a>
+					</div>
 				{:else}
-					<ReagentWizard data={panel.data} />
+					<div class="space-y-2">
+						<p class="text-xs text-[var(--color-tron-text-secondary)]">Robot idle. Start a fill — setup happens on its own page; the live run comes back here.</p>
+						<div class="flex gap-2">
+							{#if data.may.wax}
+								<a href={setupHref('wax', panel.robotId)} class={startBtn}>Start wax →</a>
+							{/if}
+							{#if data.may.reagent}
+								<a href={setupHref('reagent', panel.robotId)} class={startBtn}>Start reagent →</a>
+							{/if}
+						</div>
+					</div>
 				{/if}
 			</section>
 		{/each}

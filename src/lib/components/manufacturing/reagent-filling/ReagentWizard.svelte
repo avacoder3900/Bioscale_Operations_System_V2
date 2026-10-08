@@ -6,7 +6,7 @@
 -->
 <script lang="ts">
 	import { page } from '$app/stores';
-	import { invalidateAll } from '$app/navigation';
+	import { goto, invalidateAll } from '$app/navigation';
 	import SetupConfirmation from '$lib/components/manufacturing/reagent-filling/SetupConfirmation.svelte';
 	import ReagentPreparation from '$lib/components/manufacturing/reagent-filling/ReagentPreparation.svelte';
 	import ReagentBatchScan from '$lib/components/manufacturing/reagent-filling/ReagentBatchScan.svelte';
@@ -36,7 +36,8 @@
 	// REAGENT-TOPSEAL-IMPLICIT: there is no post-OT-2 queue. Run completion ends
 	// the run; top sealing is implicit; the next touch is the Reagent Inspect photo.
 
-	let { data }: { data: ReagentWizardData } = $props();
+	/** setup = the reagent-filling page (assay → prep → scan → start; hands over to /robots once running); run = a Robots-page panel (Running stage only). */
+	let { data, mode = 'setup' }: { data: ReagentWizardData; mode?: 'setup' | 'run' } = $props();
 
 	// ROBOT-OVERHAUL round 2: this wizard renders on /robots (every robot side by
 	// side), so its actions post to their own route explicitly instead of '?/x'.
@@ -441,6 +442,12 @@
 	const displayStage = $derived(previewParam ? previewStage : viewStage);
 	const isPreviewOrPast = $derived(previewParam || isViewingPast);
 
+	// The setup page hands over to the Robots page once the robot is running
+	// (2026-10-08): every running robot is watched there, side by side.
+	$effect(() => {
+		if (mode === 'setup' && !previewParam && stage === 'Running') void goto('/manufacturing/cart-mfg/robots');
+	});
+
 	// Timeline bubbles (4): the Loading stage is split into "Barcode Scanning"
 	// (deck + cartridge scan, cartridges===0) and "Reagent Prep" (cartridges>0).
 	// Inspection moved off this page — the run ends at Run (then implicit top
@@ -822,7 +829,7 @@
 				This robot is currently running wax filling{data.robotBlocked.runId ? ` (${data.robotBlocked.runId})` : ''}.
 				Complete or cancel the wax run before starting reagent filling.
 			</p>
-			<a href="/manufacturing/cart-mfg/robots?open={data.robotId}:wax" class="mt-3 inline-block rounded border border-amber-500/50 px-4 py-2 text-sm text-amber-300 hover:bg-amber-900/30">
+			<a href="/manufacturing/cart-mfg/robots" class="mt-3 inline-block rounded border border-amber-500/50 px-4 py-2 text-sm text-amber-300 hover:bg-amber-900/30">
 				Go to Wax Filling
 			</a>
 		</div>
@@ -833,11 +840,6 @@
 			<p class="text-sm text-[var(--color-tron-text-secondary)]">
 				Select an assay type and confirm setup to begin.
 			</p>
-			<div class="flex items-center gap-2">
-				<a href="?preview" class="rounded border border-[var(--color-tron-orange)]/50 px-3 py-1.5 text-xs text-[var(--color-tron-orange)] hover:bg-[var(--color-tron-orange)]/10">
-					Preview All Stages
-				</a>
-			</div>
 			<SetupConfirmation
 				assayTypes={data.assayTypes}
 				reagentNames={data.reagentDefinitions as any}
@@ -855,112 +857,14 @@
 			/>
 		</div>
 
-	{:else if !previewParam}
-		<!-- Stage progress indicator with navigation arrows -->
-		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4">
-			<div class="mb-2 flex items-center justify-between">
-				<span class="text-xs font-medium text-[var(--color-tron-text-secondary)]">
-					Run {data.activeRunId}
-				</span>
-				<div class="flex items-center gap-3">
-					<span class="text-xs text-[var(--color-tron-text-secondary)]">
-						Stage {currentBubbleIndex + 1} of {TIMELINE.length}
-					</span>
-					<a href="?preview" class="rounded border border-[var(--color-tron-orange)]/40 px-2 py-0.5 text-xs text-[var(--color-tron-orange)] hover:bg-[var(--color-tron-orange)]/10">
-						Preview
-					</a>
-					{#if stage === 'Loading' || stage === 'Running'}
-						<button
-							type="button"
-							onclick={() => { showResetModal = true; }}
-							class="rounded border border-amber-500/40 px-2 py-0.5 text-xs text-amber-400 transition-colors hover:border-amber-500 hover:bg-amber-900/20 hover:text-amber-300"
-						>
-							Reset to Deck Loading
-						</button>
-					{/if}
-					<button
-						type="button"
-						onclick={() => { showCancelModal = true; }}
-						class="rounded border border-red-500/40 px-2 py-0.5 text-xs text-red-400 transition-colors hover:border-red-500 hover:bg-red-900/20 hover:text-red-300"
-					>
-						Cancel Run
-					</button>
-				</div>
-			</div>
-			<div class="flex items-center gap-1">
-				{#each TIMELINE as label, i (label)}
-					{@const isCurrent = i === currentBubbleIndex}
-					{@const isPast = i < currentBubbleIndex}
-					<div class="flex flex-1 flex-col items-center gap-1">
-						<div
-							class="flex h-8 w-8 items-center justify-center rounded-full text-xs font-bold transition-colors {isCurrent
-								? 'bg-[var(--color-tron-cyan)] text-white'
-								: isPast
-									? 'bg-green-600 text-white'
-									: 'bg-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)]'}"
-						>
-							{isPast ? '\u2713' : i + 1}
-						</div>
-						<span
-							class="text-center text-[10px] font-medium {isCurrent
-								? 'text-[var(--color-tron-cyan)]'
-								: isPast
-									? 'text-green-400'
-									: 'text-[var(--color-tron-text-secondary)]'}"
-						>
-							{label}
-						</span>
-					</div>
-					{#if i < TIMELINE.length - 1}
-						<div
-							class="mt-[-16px] h-0.5 flex-1 {isPast
-								? 'bg-green-600'
-								: 'bg-[var(--color-tron-border)]'}"
-						></div>
-					{/if}
-				{/each}
-			</div>
-		</div>
-
-		{#if isViewingPast}
-			<button
-				type="button"
-				onclick={() => { viewStageIndex = currentStageIndex; }}
-				class="flex w-full items-center justify-center gap-2 rounded-lg border border-[var(--color-tron-yellow)]/50 bg-[var(--color-tron-yellow)]/10 px-4 py-2 text-sm font-medium text-[var(--color-tron-yellow)] transition-colors hover:bg-[var(--color-tron-yellow)]/20"
-			>
-				<svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-					<path stroke-linecap="round" stroke-linejoin="round" d="M13 9l3 3m0 0l-3 3m3-3H8m13 0a9 9 0 11-18 0 9 9 0 0118 0z" />
-				</svg>
-				Viewing past stage (read-only) — Click to return to current stage
-			</button>
-		{:else if isViewingFuture}
-			<div class="flex w-full items-center justify-between gap-2 rounded-lg border border-amber-500/50 bg-amber-900/20 px-4 py-2">
-				<span class="text-sm font-medium text-amber-300">
-					Viewing future stage
-				</span>
-				<div class="flex items-center gap-2">
-					<button
-						type="button"
-						onclick={() => { viewStageIndex = currentStageIndex; }}
-						class="min-h-[36px] rounded border border-[var(--color-tron-border)] px-3 py-1.5 text-xs text-[var(--color-tron-text-secondary)] transition-colors hover:bg-[var(--color-tron-border)]/30"
-					>
-						Return
-					</button>
-					<button
-						type="button"
-						onclick={() => { skipTargetIndex = viewStageIndex; showSkipModal = true; }}
-						disabled={submitting}
-						class="min-h-[36px] rounded border border-amber-500/50 bg-amber-900/30 px-3 py-1.5 text-xs font-medium text-amber-300 transition-colors hover:bg-amber-900/40 disabled:opacity-50"
-					>
-						Skip to {stageLabel(STAGES[viewStageIndex])}
-					</button>
-				</div>
-			</div>
-		{/if}
+		<!-- The stage timeline header (Cancel Run / Preview / Reset to Deck Loading) was removed
+		     2026-10-08: setup is linear on this page and the live run is watched on the Robots page. -->
 	{/if}
 
 	<!-- Stage content: works for both normal mode and preview mode -->
-	{#if displayStage === 'Setup'}
+	{#if mode === 'run' && displayStage !== 'Running'}
+		<!-- A Robots-page panel shows only the Running stage; setup lives on the reagent-filling page. -->
+	{:else if displayStage === 'Setup'}
 		<SetupConfirmation
 			assayTypes={data.assayTypes}
 			reagentNames={data.reagentDefinitions as any}
@@ -1084,6 +988,35 @@
 		</div>
 
 	{:else if displayStage === 'Running'}
+		<!-- Run timer first (2026-10-08), then the robot controller + tip dropdown, the well-tracker dropdown, the finish controls. -->
+		{#if data.runState.runEndTime || previewParam}
+			<RunExecution
+				assayTypeName={previewParam
+					? 'Preview Assay'
+					: (data.runState.isResearch
+						? 'Research Run'
+						: (data.runState.assayTypeName ?? 'Unknown'))}
+				cartridgeCount={previewParam ? 8 : (data.runState.cartridgeCount ?? 0)}
+				runStartTime={new Date(data.runState.runStartTime ?? Date.now())}
+				runEndTime={new Date(data.runState.runEndTime ?? (Date.now() + 600000))}
+				protocolParameters={data.runState.protocolParameters}
+				robotFinished={runFinished}
+				finalStatus={data.runState.opentronsRunFinalStatus}
+				paused={robotStatus === 'paused'}
+				autoCompleteOnExpiry={!data.runState.opentronsRunId}
+				onTimerComplete={() => { runFinishedLocal = true; }}
+				onAbort={(reason, photoUrl) => stopRunViaLine('abort', { reason, photoUrl: photoUrl ?? '' })}
+				readonly={isViewingPast}
+			/>
+		{:else}
+			<!-- Run has been started but the server hasn't written runEndTime yet.
+			     Show a brief "starting" state instead of a misleading flat-10-min
+			     fallback estimate (see lib/manufacturing/reagent-run-estimate.ts). -->
+			<div class="flex flex-col items-center gap-2 rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-6 text-center">
+				<h2 class="text-lg font-semibold text-[var(--color-tron-text)]">Starting run…</h2>
+				<p class="text-sm text-[var(--color-tron-text-secondary)]">Creating the protocol run on the robot — the countdown will appear once it begins.</p>
+			</div>
+		{/if}
 		{#if !isViewingPast && data.runState.opentronsRunId && data.opentronsRobotId}
 			<EmbeddedRunController
 				robotId={data.opentronsRobotId}
@@ -1100,10 +1033,11 @@
 				}}
 			/>
 			{#if !runFinished}
-				<div class="mt-3 rounded-lg border border-amber-500/40 bg-amber-900/10 p-4">
+				<details class="mt-3 rounded-lg border border-amber-500/40 bg-amber-900/10">
+					<summary class="cursor-pointer px-4 py-2 text-sm font-semibold text-amber-200">Tip problem? Swap the tip without losing your place</summary>
+					<div class="px-4 pb-4">
 					<div class="flex flex-wrap items-center justify-between gap-3">
 						<div>
-							<h3 class="text-sm font-semibold text-amber-200">Tip problem? Swap the tip without losing your place</h3>
 							<p class="mt-1 text-xs text-amber-200/80">
 								The robot stops before its next well, blows what is left in the tip back into the reagent tube, swaps the tip,
 								re-calibrates it, then re-aspirates and continues at the exact well it stopped at. Works while running or paused.
@@ -1142,11 +1076,14 @@
 					{:else if tipSwapStatus === 'error'}
 						<p class="mt-2 text-xs text-red-300">Could not send the request to the robot bridge — try again, or Pause and swap the tip when the run reaches its next tip change.</p>
 					{/if}
-				</div>
+					</div>
+				</details>
 			{/if}
 		{/if}
 		{#if !isViewingPast && !previewParam && data.activeRunId}
-			<div class="mt-3">
+			<details class="mt-3 rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)]">
+				<summary class="cursor-pointer px-4 py-2 text-sm font-semibold text-[var(--color-tron-text)]">Well tracker — log a fill mistake as you see it</summary>
+				<div class="px-3 pb-3">
 				<ReagentWellTracker
 					actionUrl={act}
 					runId={data.activeRunId}
@@ -1157,35 +1094,8 @@
 					{activeWells}
 					onChange={(rows) => { wellIssuesLocal = rows; }}
 				/>
-			</div>
-		{/if}
-		{#if data.runState.runEndTime || previewParam}
-			<RunExecution
-				assayTypeName={previewParam
-					? 'Preview Assay'
-					: (data.runState.isResearch
-						? 'Research Run'
-						: (data.runState.assayTypeName ?? 'Unknown'))}
-				cartridgeCount={previewParam ? 8 : (data.runState.cartridgeCount ?? 0)}
-				runStartTime={new Date(data.runState.runStartTime ?? Date.now())}
-				runEndTime={new Date(data.runState.runEndTime ?? (Date.now() + 600000))}
-				protocolParameters={data.runState.protocolParameters}
-				robotFinished={runFinished}
-				finalStatus={data.runState.opentronsRunFinalStatus}
-				paused={robotStatus === 'paused'}
-				autoCompleteOnExpiry={!data.runState.opentronsRunId}
-				onTimerComplete={() => { runFinishedLocal = true; }}
-				onAbort={(reason, photoUrl) => stopRunViaLine('abort', { reason, photoUrl: photoUrl ?? '' })}
-				readonly={isViewingPast}
-			/>
-		{:else}
-			<!-- Run has been started but the server hasn't written runEndTime yet.
-			     Show a brief "starting" state instead of a misleading flat-10-min
-			     fallback estimate (see lib/manufacturing/reagent-run-estimate.ts). -->
-			<div class="flex flex-col items-center gap-2 rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-6 text-center">
-				<h2 class="text-lg font-semibold text-[var(--color-tron-text)]">Starting run…</h2>
-				<p class="text-sm text-[var(--color-tron-text-secondary)]">Creating the protocol run on the robot — the countdown will appear once it begins.</p>
-			</div>
+				</div>
+			</details>
 		{/if}
 
 		<!-- Run-complete controls: appear only once the .py finishes. A succeeded
@@ -1224,77 +1134,6 @@
 				</button>
 			</div>
 		{/if}
-	{/if}
-
-	<!-- Cancel Run Modal -->
-	{#if showCancelModal}
-		<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-			<div class="mx-4 w-full max-w-md rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-6 shadow-xl">
-				<h3 class="text-lg font-semibold text-[var(--color-tron-text)]">Cancel Run</h3>
-				<p class="mt-2 text-sm text-[var(--color-tron-text-secondary)]">
-					Are you sure you want to cancel run {data.activeRunId}? This action cannot be undone.
-				</p>
-				<label class="mt-4 block">
-					<span class="text-sm font-medium text-[var(--color-tron-text-secondary)]">Reason</span>
-					<textarea
-						bind:value={cancelReason}
-						rows="3"
-						class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-3 py-2 text-sm text-[var(--color-tron-text)] placeholder-[var(--color-tron-text-secondary)] focus:border-[var(--color-tron-cyan)] focus:outline-none"
-						placeholder="Enter reason for cancellation..."
-					></textarea>
-				</label>
-				<div class="mt-4 flex justify-end gap-3">
-					<button
-						type="button"
-						onclick={() => { showCancelModal = false; cancelReason = ''; }}
-						class="rounded-lg border border-[var(--color-tron-border)] px-4 py-2 text-sm text-[var(--color-tron-text-secondary)] transition-colors hover:bg-[var(--color-tron-border)]/30"
-					>
-						Go Back
-					</button>
-					<button
-						type="button"
-						onclick={() => { showCancelModal = false; stopRunViaLine('cancel', { reason: cancelReason.trim() }); cancelReason = ''; }}
-						disabled={!cancelReason.trim() || submitting}
-						class="rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-red-700 disabled:opacity-50"
-					>
-						{submitting ? 'Cancelling...' : 'Confirm Cancel'}
-					</button>
-				</div>
-			</div>
-		</div>
-	{/if}
-
-	<!-- Reset to Deck Loading Modal -->
-	{#if showResetModal}
-		<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-			<div class="mx-4 w-full max-w-md rounded-lg border border-amber-500/30 bg-[var(--color-tron-surface)] p-6 shadow-xl">
-				<h3 class="text-lg font-semibold text-amber-300">Reset to Deck Loading</h3>
-				<p class="mt-2 text-sm text-[var(--color-tron-text-secondary)]">
-					This will delete all cartridge records and seal batches for this run, release the deck,
-					and return to the deck loading step. Reagent tube entries will be preserved.
-				</p>
-				<p class="mt-2 text-sm font-medium text-amber-300/80">
-					This cannot be undone. Are you sure?
-				</p>
-				<div class="mt-4 flex justify-end gap-3">
-					<button
-						type="button"
-						onclick={() => { showResetModal = false; }}
-						class="rounded-lg border border-[var(--color-tron-border)] px-4 py-2 text-sm text-[var(--color-tron-text-secondary)] transition-colors hover:bg-[var(--color-tron-border)]/30"
-					>
-						Go Back
-					</button>
-					<button
-						type="button"
-						onclick={() => { showResetModal = false; submitForm('resetToLoading'); }}
-						disabled={submitting}
-						class="rounded-lg bg-amber-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-amber-700 disabled:opacity-50"
-					>
-						{submitting ? 'Resetting...' : 'Confirm Reset'}
-					</button>
-				</div>
-			</div>
-		</div>
 	{/if}
 
 	<!-- Admin Override Modal -->
@@ -1364,44 +1203,4 @@
 		</div>
 	{/if}
 
-	<!-- Skip Stage Confirmation Modal -->
-	{#if showSkipModal && skipTargetIndex >= 0}
-		<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-			<div class="mx-4 w-full max-w-md rounded-lg border border-amber-500/30 bg-[var(--color-tron-surface)] p-6 shadow-xl">
-				<h3 class="text-lg font-semibold text-amber-300">Skip to {stageLabel(STAGES[skipTargetIndex])}</h3>
-				<p class="mt-2 text-sm text-[var(--color-tron-text-secondary)]">
-					This will advance the run directly from
-					<span class="font-medium text-[var(--color-tron-cyan)]">{stageLabel(STAGES[currentStageIndex])}</span>
-					to
-					<span class="font-medium text-amber-300">{stageLabel(STAGES[skipTargetIndex])}</span>,
-					skipping intermediate steps.
-				</p>
-				<p class="mt-2 text-sm font-medium text-amber-300/80">
-					This action is logged and may affect data integrity. Continue?
-				</p>
-				<div class="mt-4 flex justify-end gap-3">
-					<button
-						type="button"
-						onclick={() => { showSkipModal = false; skipTargetIndex = -1; }}
-						class="rounded-lg border border-[var(--color-tron-border)] px-4 py-2 text-sm text-[var(--color-tron-text-secondary)] transition-colors hover:bg-[var(--color-tron-border)]/30"
-					>
-						Go Back
-					</button>
-					<button
-						type="button"
-						disabled={submitting}
-						onclick={() => {
-							showSkipModal = false;
-							const target = STAGES[skipTargetIndex];
-							skipTargetIndex = -1;
-							submitForm('forceAdvanceStage', { targetStage: target });
-						}}
-						class="rounded-lg bg-amber-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-amber-700 disabled:opacity-50"
-					>
-						{submitting ? 'Advancing...' : 'Confirm Skip'}
-					</button>
-				</div>
-			</div>
-		</div>
-	{/if}
 </div>

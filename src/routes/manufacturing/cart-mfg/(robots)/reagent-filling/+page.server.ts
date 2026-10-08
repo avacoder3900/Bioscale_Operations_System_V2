@@ -14,7 +14,7 @@ import { WAX_PAGE_OWNED } from '$lib/server/manufacturing/run-statuses';
 import { getRobot, robotGet, bridgeDeviceIdForRobot } from '$lib/server/opentrons/proxy';
 import { bridgeJobGate } from '$lib/server/opentrons/bridge-token';
 import { requirePermission } from '$lib/server/permissions';
-import { serializeWellIssues } from '$lib/server/manufacturing/reagent-wizard';
+import { serializeWellIssues, loadReagentWizard } from '$lib/server/manufacturing/reagent-wizard';
 // OT2-TAILNET-5 §7.1: the run lifecycle's BIMS halves (moved out of this file,
 // unchanged) + the prepare/confirm actions the tailnet line calls.
 import {
@@ -41,15 +41,18 @@ export const config = { maxDuration: 60 };
 const TERMINAL = new Set(['completed', 'aborted', 'voided', 'cancelled', 'Completed', 'Aborted', 'Cancelled']);
 
 /**
- * ROBOT-OVERHAUL round 2: the single-robot reagent page is gone — every wizard
- * renders on the Robots page, side by side (loadReagentWizard in
- * $lib/server/manufacturing/reagent-wizard.ts is this route's old load). The
- * actions below stay here; ReagentWizard.svelte posts to them as
- * /manufacturing/cart-mfg/reagent-filling?/<action>&robot=<id>.
+ * The reagent SETUP page (ROBOT-OVERHAUL round 6, 2026-10-08): assay → fill lot
+ * → deck scan → parameters → Start for ONE robot (?robot=<id>, from the Robots
+ * page's "Start reagent" button). Once the robot is running, ReagentWizard hands
+ * the operator over to /manufacturing/cart-mfg/robots; the actions below stay
+ * here (ReagentWizard posts to them explicitly).
  */
-export const load: PageServerLoad = async ({ url }) => {
+export const load: PageServerLoad = async ({ locals, url }) => {
+	if (!locals.user) redirect(302, '/login');
+	requirePermission(locals.user, 'reagentFilling:read');
 	const robot = url.searchParams.get('robot');
-	redirect(302, `/manufacturing/cart-mfg/robots${robot ? `?open=${encodeURIComponent(robot)}:reagent` : ''}`);
+	if (!robot) redirect(302, '/manufacturing/cart-mfg/robots');
+	return loadReagentWizard(locals, robot);
 };
 
 // stopRobotRun, PRE_REAGENT_STATUSES and finalizeReagentRun moved to
