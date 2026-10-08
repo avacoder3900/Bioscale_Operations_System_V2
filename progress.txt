@@ -19139,3 +19139,14 @@ of the card.
 
 Check: svelte-check 14 errors (all pre-existing), no new warnings in the two
 files; vite build client + server bundles build.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-b51ewgqws-brevitest.vercel.app
+Source: branch feat/robot-overhaul @ commit 639bf49d
+Retrieve this exact code: git checkout feat/robot-overhaul at commit 639bf49d
+  (or: git log feat/robot-overhaul --oneline to find it if the branch has since moved on)
+What this deployment is for: round 4 — status-only board cards, heatmap icon per panel.
+Smoke (unauthenticated curl; 302 → /login means the route exists and is gated):
+  /login -> 200 
+  /manufacturing/cart-mfg/robots -> 302 https://bioscale-operations-system-mongodb-b51ewgqws-brevitest.vercel.app/login
+  /manufacturing/cart-mfg/reagent-filling/well-issues?robot=x -> 302 https://bioscale-operations-system-mongodb-b51ewgqws-brevitest.vercel.app/login
+
