@@ -19,7 +19,7 @@ export function resolveSection(wi: any, ref: string | number | null | undefined)
 	const sections: any[] = wi.sections;
 	if (typeof ref === 'number') {
 		const hit = sections.find((s) => s.number === ref);
-		if (!hit) throw new RefError(`No section number ${ref}. Available: ${sections.map((s) => `${s.number} = ${sectionLabel(s)} (${s.title})`).join('; ')}`);
+		if (!hit) throw new RefError(`No section number ${ref}. Available: ${sections.map((s) => `${s.number} = ${tabLabel(s)} (${s.title})`).join('; ')}`);
 		return hit;
 	}
 	const text = String(ref).trim().toLowerCase();
@@ -33,10 +33,13 @@ export function resolveSection(wi: any, ref: string | number | null | undefined)
 		const hit = sections.find((s) => s.number === n);
 		if (hit) return hit;
 	}
-	const byTitle = sections.filter((s) => (s.title ?? '').toLowerCase().includes(text));
+	// Exact custom tab label first ("Electronics"), then title / tab-label substring.
+	const byTab = sections.filter((s) => (s.tabLabel ?? '').trim().toLowerCase() === text);
+	if (byTab.length === 1) return byTab[0];
+	const byTitle = sections.filter((s) => (s.title ?? '').toLowerCase().includes(text) || (s.tabLabel ?? '').toLowerCase().includes(text));
 	if (byTitle.length === 1) return byTitle[0];
-	if (byTitle.length > 1) throw new RefError(`"${ref}" matches several sections: ${byTitle.map((s) => `${sectionLabel(s)} (${s.title})`).join('; ')}`);
-	throw new RefError(`Section "${ref}" not found. Available: ${sections.map((s) => `${s.number} = ${sectionLabel(s)} (${s.title})`).join('; ')}`);
+	if (byTitle.length > 1) throw new RefError(`"${ref}" matches several sections: ${byTitle.map((s) => `${tabLabel(s)} (${s.title})`).join('; ')}`);
+	throw new RefError(`Section "${ref}" not found. Available: ${sections.map((s) => `${s.number} = ${tabLabel(s)} (${s.title})`).join('; ')}`);
 }
 
 /** Step by id, or by number within a section, or by title/text match within a section. */
