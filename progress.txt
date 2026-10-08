@@ -19009,3 +19009,31 @@ Deployment: production — Vercel GitHub integration build of master
 Source: branch master @ commit e1b09dff (merge of fix/reagent-well-tracker-positions)
 Retrieve this exact code: git checkout master at commit e1b09dff
 What this deployment is for: reagent well tracker tiles enabled (real deck positions on reagent carts).
+
+================================================================================
+2026-10-08 — feat/wi-full-chat-control — SPU Assembly WI: everything on the page editable from chat (MCP 3.11.0, 30 device_wi_* tools)
+================================================================================
+Goal from Alejandro: any change to the SPU Assembly WI page — tabs, sections, steps, text,
+photos, materials, document fields, and undo — must be doable from Claude chat without a code
+change. Added on top of the section tools:
+
+- Tab text is now its own field (section.tabLabel). Tabs still default to "Sub-Assembly N" /
+  "Setup"; device_wi_update_section (tabLabel / title / notes / materials table) or the page's
+  edit form sets or resets it. Title stays the separate heading.
+- Bulk step ops: device_wi_move_steps (range or list → another section, order kept, one
+  revision), device_wi_delete_steps (confirmed), device_wi_copy_step (duplicate with new ids).
+- Document number is editable (device_wi_update_metadata documentNumber); the WI is now looked
+  up as the single document rather than by number.
+- Undo: every mutation writes a full-content snapshot per version to
+  device_assembly_wi_snapshots (new model); device_wi_revert <version> (confirmed) restores
+  sections/front matter/title/numbers as a NEW revision (changeType 'revert'), and the
+  revisions page has "Restore vN" buttons for spu:write users. revisions endpoint returns
+  restorableVersions.
+- Agent overview exposes tabLabel, notes and materials text per section.
+
+Verified on the dev server as alejandro: update_section (tab "Electronics", title), move_steps
+40–45 of SA1 → SA2 (SA1 45→39, SA2 0→6), copy_step into SA3 at position 1, delete_steps refused
+without confirmed then applied, update_metadata documentNumber, revert refused without
+confirmed then restored to v4 (sections and document number back), MCP tools/list = 30
+device_wi_* tools. Test revisions/snapshots reset so the live history still ends at v4.
+npm run check: 13 errors (master baseline, none in these files).

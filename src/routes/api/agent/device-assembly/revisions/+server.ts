@@ -1,7 +1,7 @@
 import { json } from '@sveltejs/kit';
 import { connectDB } from '$lib/server/db';
 import { requireAgentApiKey } from '$lib/server/api-auth';
-import { getDeviceAssemblyWI } from '$lib/server/services/device-assembly-wi';
+import { getDeviceAssemblyWI, listSnapshots } from '$lib/server/services/device-assembly-wi';
 import { revisionView } from '$lib/server/services/device-assembly-wi-agent';
 import type { RequestHandler } from './$types';
 
@@ -23,5 +23,6 @@ export const GET: RequestHandler = async ({ request, url }) => {
 	if (step) rows = rows.filter((r: any) => String(r.location?.stepNumber) === step);
 	if (since) { const t = new Date(since).getTime(); if (Number.isFinite(t)) rows = rows.filter((r: any) => new Date(r.changedAt).getTime() >= t); }
 	const data = rows.slice(0, limit).map(revisionView).map((r) => (detail ? r : { ...r, before: undefined, after: undefined }));
-	return json({ success: true, data: { currentVersion: wi.currentVersion, total: wi.revisions.length, revisions: data } });
+	const restorable = (await listSnapshots(wi._id)).map((s) => s.label);
+	return json({ success: true, data: { currentVersion: wi.currentVersion, total: wi.revisions.length, restorableVersions: restorable, revisions: data } });
 };

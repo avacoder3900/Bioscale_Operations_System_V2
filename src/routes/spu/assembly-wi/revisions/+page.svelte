@@ -1,5 +1,6 @@
 <script lang="ts">
-	let { data } = $props();
+	import { enhance } from '$app/forms';
+	let { data, form } = $props();
 
 	let filter = $state('');
 	let tab = $state<'revisions' | 'pulls'>('revisions');
@@ -43,7 +44,8 @@
 		section_delete: 'text-red-300 border-red-500/40',
 		section_move: 'text-purple-300 border-purple-500/40',
 		front_matter_edit: 'text-amber-300 border-amber-500/40',
-		metadata_edit: 'text-[var(--color-tron-text-secondary)] border-[var(--color-tron-border)]'
+		metadata_edit: 'text-[var(--color-tron-text-secondary)] border-[var(--color-tron-border)]',
+		revert: 'text-[var(--color-tron-cyan)] border-[var(--color-tron-cyan)]/40'
 	};
 </script>
 
@@ -65,6 +67,9 @@
 		</div>
 	</div>
 
+	{#if form?.error}<div class="rounded border border-red-500/30 bg-red-900/20 px-4 py-3 text-sm text-red-300">{form.error}</div>{/if}
+	{#if form?.success}<div class="rounded border border-green-500/30 bg-green-900/20 px-4 py-3 text-sm text-green-300">{form.message}</div>{/if}
+
 	{#if !data.wi}
 		<div class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-6 text-sm text-[var(--color-tron-text-secondary)]">No work instruction has been imported yet.</div>
 	{:else if tab === 'revisions'}
@@ -79,6 +84,7 @@
 						<th class="px-3 py-2">Type</th>
 						<th class="px-3 py-2">Where</th>
 						<th class="px-3 py-2">Change</th>
+						{#if data.canEdit}<th class="px-3 py-2"></th>{/if}
 					</tr>
 				</thead>
 				<tbody>
@@ -105,6 +111,18 @@
 									</details>
 								{/if}
 							</td>
+							{#if data.canEdit}
+								<td class="px-3 py-2 whitespace-nowrap">
+									{#if r.version !== data.wi.currentVersion && data.restorable.includes(r.version)}
+										<form method="POST" action="?/revert" use:enhance onsubmit={(e) => { if (!confirm(`Restore the whole document to ${r.label}? This is recorded as a new revision.`)) e.preventDefault(); }}>
+											<input type="hidden" name="version" value={r.version} />
+											<button class="rounded border border-[var(--color-tron-cyan)]/50 px-2 py-0.5 text-[11px] text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10">Restore {r.label}</button>
+										</form>
+									{:else if r.version === data.wi.currentVersion}
+										<span class="text-[11px] text-[var(--color-tron-text-secondary)]">current</span>
+									{/if}
+								</td>
+							{/if}
 						</tr>
 					{/each}
 				</tbody>
