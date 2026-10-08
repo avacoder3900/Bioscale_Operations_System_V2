@@ -19078,3 +19078,7 @@ selected deck and robot so when i go to fix the calibrations i can see the notes
   names, what was seen, notes, last logged/by) with a "Select holes" button (shift = add) that
   loads those holes into the selection for jog/apply. Empty state explains where entries come from.
 `npm run check`: 16 errors / 435 warnings — same as master, none in the changed files.
+Deployment: production — Vercel GitHub integration build of master
+Source: branch master @ commit 65cbe174 (merge of feat/studio-well-issue-marks)
+Retrieve this exact code: git checkout master at commit 65cbe174
+What this deployment is for: Studio shows reagent well-tracker issues (red rings + table) for the selected deck/robot.
