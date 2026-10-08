@@ -19005,3 +19005,40 @@ parsed on-robot, restarted, active, /bridge job server listening. Known gap unti
 posts job results to PRODUCTION BIMS, whose BRIDGE_JOB_KINDS lacks calibrator_watch, so a tailnet
 watch's end-of-watch result is rejected there (400, logged on the robot) and its bridge-job AuditLog
 row is not written. The trips still reach the page and are saved with the calibrator.
+
+================================================================================
+2026-10-08 — feat/deck-calibrator-teach-restore — probe start calculated from the sensor watch; four-corner frame removed
+================================================================================
+Operator asked for: the watch to calculate the calibration START position, a Save Z height button
+for the tip height, per-pipette (p20/p300) selection, the gantry to move to the calculated start
+automatically, and the four-corner feature removed.
+
+Root cause found on the way: the restored watch's "Use as calibrator" copied the switch-TRIP
+positions into the calibrator point. The point is the reference the daemon's probe offsets from
+(X probe from calX+xDx, calY+xDy — reagent −1.4/−7.0, wax −0.6/−6.5; Y probe from calX+8.829,
+calY−7.5; each creeps ≤5 mm), so a trip-point save starts the X probe 1.4 mm past its switch and the
+Y probe 7.5 mm past its, into the fixture.
+
+New: src/lib/shared/tip-calibrator-probe.ts (+test) mirrors CAL_PROBE_RECIPES / CAL_PROBE_Y_DX/DY
+from scripts/ot2-bridge.py — change both together — and inverts them so each touched switch closes
+START_MARGIN_MM = 2.5 mm into its probe (middle of the 5 mm window). Warns when a touch is >2 mm off
+the line its probe runs along, or the two touches differ >1 mm in height. Page watch panel:
+"Calculate start → move gantry" (stops the watch, moves via the existing move-to with safe arc at
+approach Z, refuses if approach Z < probe Z), "Save start position" (saves only the calculated point
++ the pipette's probe Z, source 'sensor', trip log, refuses if the fields were edited or the pipette
+changed), "Save Z height" (live tip Z → zCalWax/zCalReagent; requires a tip on; keeps the saved x/y).
+
+Removed: four-corner deck frame — page UI/script, saveDeckFrame + rederiveCalibrator actions,
+rederiveCalibratorForFrame, DeckFrame model + export, TipCalibratorFixture.frameRelative,
+$lib/shared/deck-frame(.test).ts. Reference-hole anchor kept (vec3 + MAX_SILENT_REDERIVE_MM moved
+local to +page.server.ts).
+
+Tests: vitest tip-calibrator-probe + src/lib/opentrons 222/222. svelte-check (junctioned
+node_modules): 143 errors / 435 warnings, unchanged from this branch's earlier runs, zero in touched
+files. Not yet run against B14. Bridge daemon unchanged by this commit (B14 already has 03648eaba's).
+
+Deployment: preview — https://bioscale-operations-system-mongodb-ku4r3kzaj-brevitest.vercel.app
+Source: branch feat/deck-calibrator-teach-restore @ commit 2a8fa5f29
+Retrieve this exact code: git checkout feat/deck-calibrator-teach-restore at commit 2a8fa5f29
+  (or: git log feat/deck-calibrator-teach-restore --oneline to find it if the branch has since moved on)
+What this deployment is for: teach the B14 calibrator start from the sensor watch over Tailscale
