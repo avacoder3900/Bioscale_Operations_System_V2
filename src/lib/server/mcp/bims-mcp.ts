@@ -2288,7 +2288,8 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 	server.registerTool(
 		'device_wi_rename_section',
 		{ annotations: WRITE_TOOL,
-			description: 'Rename a sub-assembly (e.g. give "Sub-Assembly 2" the title "Enclosure & Electronics"). Creates a new revision.',
+			description: 'Rename a section: sets the title shown on its tab and header (e.g. make Sub-Assembly 2 read "Enclosure & Electronics"). ' +
+				'The number ("Sub-Assembly 2") is positional and only changes via device_wi_move_section. Creates a new revision.',
 			inputSchema: z.object({ actor: ACTOR_FIELD, section: WI_SECTION_FIELD, title: z.string().describe('New title.') })
 		},
 		async (args) => wiMutate('rename_section', args)
