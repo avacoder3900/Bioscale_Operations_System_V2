@@ -106,43 +106,12 @@ const tipCalibratorFixtureSchema = new Schema({
 	 */
 	minTipClearanceWaxMm: { type: Number, default: null },
 	/**
-	 * Where this calibrator sits as a FRACTION of the robot's taught deck frame
-	 * (see deck-frame.ts): u across the deck, v front-to-back, 0..1 inside it.
-	 *
-	 * `position` above stays the absolute source of truth that the production
-	 * fill path reads — resolveCalibratorPoint() does not look at this field, so
-	 * a robot with no frame behaves exactly as before. This is the input to the
-	 * RE-DERIVE: when the corners are re-taught after a deck is reseated, the new
-	 * absolute position is fromFrameRelative(newFrame, this), which is what makes
-	 * a reseat a four-corner jog instead of a re-probe.
-	 *
-	 * Null until the calibrator is saved against a frame. `frameId` records which
-	 * frame the fraction was measured in, so a re-derive can tell a stale pairing
-	 * from a current one.
-	 */
-	frameRelative: {
-		type: new Schema(
-			{
-				u: { type: Number, required: true },
-				v: { type: Number, required: true },
-				frameId: { type: String, default: null },
-				derivedAt: { type: Date, default: Date.now }
-			},
-			{ _id: false }
-		),
-		default: null
-	},
-	/**
 	 * THE calibrator's anchor: one taught deck hole, and the calibrator's offset
 	 * from it.
 	 *
-	 * This replaces frameRelative as what the calibrator hangs off, because a
-	 * hole is a far better reference than the deck's plate corners: a hole has a
-	 * NOMINAL position in the deck's own labware definition, so "the calibrator
-	 * is 3.97 mm left and 99.65 mm back of hole H12" is a statement about the
-	 * geometry the robot actually fills. A plate corner has no nominal at all —
-	 * the four-corner frame could only ever describe where the plate sat, never
-	 * relate it to the wells.
+	 * A hole is the reference because it has a NOMINAL position in the deck's own
+	 * labware definition, so "the calibrator is 3.97 mm left and 99.65 mm back of
+	 * hole H12" is a statement about the geometry the robot actually fills.
 	 *
 	 * It also costs the operator one jog instead of four, and re-teaching is one
 	 * jog too: move to the same hole after a deck is reseated, capture it, and

@@ -13,21 +13,7 @@
 	import { goto, invalidateAll } from '$app/navigation';
 	import { deserialize } from '$app/forms';
 	import { page } from '$app/stores';
-	// The SAME geometry the saveDeckFrame action runs. Imported rather than
-	// re-implemented so the width/rotation/fit the operator sees while capturing
-	// corners is exactly what the server will compute when they save — a second
-	// copy here would drift, and the drift would only show as a deck taught
-	// slightly wrong.
-	import {
-		CORNER_LABELS,
-		CORNER_NAMES,
-		deriveFrame,
-		toFrameRelative,
-		validateCorners,
-		type Corner,
-		type CornerLabel,
-		type DeckFrameDerived
-	} from '$lib/shared/deck-frame';
+	import { startFromTrips, START_MARGIN_MM } from '$lib/shared/tip-calibrator-probe';
 
 	let { data } = $props();
 
@@ -1496,122 +1482,6 @@
 		if (r) { pendingHoleRederive = null; msg = r.rederive?.message ?? 'Calibrator re-derived from the reference hole.'; }
 	}
 
-	// ══ Deck frame: four jogged corners say where the deck physically IS ══════
-	//
-	// Jog the tip to each physical corner of the deck plate and capture it. Those
-	// four points give the deck's origin, size and rotation — which is what lets
-	// the calibrator be stored as a FRACTION of the deck instead of a bare
-	// absolute point that silently goes stale the moment the deck is reseated.
-	//
-	// The fit runs client-side from $lib/shared/deck-frame, the same module the
-	// save action uses, so what is previewed here is what gets stored.
-
-	type Vec = { x: number; y: number; z: number };
-	let frameCorners = $state<Record<CornerLabel, Vec | null>>({
-		FL: null,
-		FR: null,
-		BR: null,
-		BL: null
-	});
-	/** The re-derive the server declined to apply silently, awaiting a human. */
-	let pendingRederive = $state<{ deltaMm: number; from: any; to: any; message: string } | null>(null);
-
-	const savedFrame = $derived(
-		((data.deckFrames ?? []) as any[]).find((f) => f.robotId === selectedRobotId) ?? null
-	);
-	const frameLimits = $derived(
-		(data.frameLimits ?? { maxResidualMm: 1, maxSilentRederiveMm: 10 }) as {
-			maxResidualMm: number;
-			maxSilentRederiveMm: number;
-		}
-	);
-
-	const capturedCorners = $derived(
-		CORNER_LABELS.filter((l) => frameCorners[l] !== null).map(
-			(l) => ({ label: l, ...(frameCorners[l] as Vec) }) as Corner
-		)
-	);
-	/** Why the current four corners are not yet a usable frame (null once they are). */
-	const frameProblem = $derived(
-		capturedCorners.length < 4 ? null : validateCorners(capturedCorners)
-	);
-	/** Live preview of the frame these corners describe. Null until all four are in. */
-	const draftFrame = $derived.by((): DeckFrameDerived | null => {
-		if (capturedCorners.length < 4 || frameProblem) return null;
-		try {
-			return deriveFrame(capturedCorners);
-		} catch {
-			return null;
-		}
-	});
-	const draftFits = $derived(!!draftFrame && draftFrame.residualMm <= frameLimits.maxResidualMm);
-
-	/** Where the current calibrator XY sits inside the previewed frame. */
-	const calInDraftFrame = $derived(
-		draftFrame ? toFrameRelative(draftFrame, { x: calX, y: calY }) : null
-	);
-
-	function captureCorner(label: CornerLabel) {
-		if (liveX === null || liveY === null || liveZ === null) {
-			errMsg = 'No live position — open a run and jog to the corner first';
-			return;
-		}
-		frameCorners[label] = { x: +liveX.toFixed(3), y: +liveY.toFixed(3), z: +liveZ.toFixed(3) };
-		msg = `Captured ${CORNER_NAMES[label]} corner at (${frameCorners[label]!.x}, ${frameCorners[label]!.y}, ${frameCorners[label]!.z}).`;
-	}
-
-	function clearCorner(label: CornerLabel) {
-		frameCorners[label] = null;
-	}
-
-	/** Pull the robot's saved corners back into the draft, to re-teach just one. */
-	function loadSavedCorners() {
-		if (!savedFrame) { errMsg = 'This robot has no saved deck frame yet'; return; }
-		const next: Record<CornerLabel, Vec | null> = { FL: null, FR: null, BR: null, BL: null };
-		for (const c of savedFrame.corners ?? []) {
-			if (CORNER_LABELS.includes(c.label)) next[c.label as CornerLabel] = { x: c.x, y: c.y, z: c.z };
-		}
-		frameCorners = next;
-		msg = 'Loaded the saved corners — re-capture any that moved, then Save.';
-	}
-
-	async function saveDeckFrame() {
-		if (!selectedRobotId) { errMsg = 'Pick a robot'; return; }
-		if (capturedCorners.length < 4) { errMsg = 'Capture all four deck corners first'; return; }
-		if (frameProblem) { errMsg = frameProblem; return; }
-
-		const fields: Record<string, string> = { robotId: selectedRobotId, deckLoadName: data.selected ?? '' };
-		for (const c of capturedCorners) {
-			fields[`corner_${c.label}_x`] = String(c.x);
-			fields[`corner_${c.label}_y`] = String(c.y);
-			fields[`corner_${c.label}_z`] = String(c.z);
-		}
-		pendingRederive = null;
-		const r = await postAction('saveDeckFrame', fields);
-		if (!r) return;
-
-		const rd = r.rederive ?? null;
-		// 'needs-confirm' is the one outcome that leaves work on the table: the
-		// frame saved but the calibrator deliberately did not move. Surface it as a
-		// prompt rather than a status line, or it reads as "done" when it is not.
-		if (rd?.reason === 'needs-confirm') {
-			pendingRederive = { deltaMm: rd.deltaMm, from: rd.from, to: rd.to, message: rd.message };
-			msg = '';
-			errMsg = '';
-		} else {
-			msg = rd?.message ?? 'Deck frame saved.';
-		}
-	}
-
-	async function confirmRederive() {
-		if (!selectedRobotId) return;
-		const r = await postAction('rederiveCalibrator', { robotId: selectedRobotId });
-		if (r) {
-			pendingRederive = null;
-			msg = r.rederive?.message ?? 'Calibrator re-derived onto the new deck frame.';
-		}
-	}
-
 	// ══ Live limit-switch watch ═══════════════════════════════════════════════
 	//
 	// Arms the calibrator's limit switches and records each trip — which switch,
@@ -1646,28 +1516,39 @@
 	 */
 	const armedAxis = $derived(watchEvents.length % 2 === 0 ? 'X' : 'Y');
 
+	/** The latest trip of one axis that carries a full position. One switch measures one axis. */
+	function latestTrip(axis: 'x' | 'y') {
+		return [...watchEvents]
+			.reverse()
+			.find((e) => e?.axis === axis && e?.position && ['x', 'y', 'z'].every((k) => Number.isFinite(Number(e.position[k]))));
+	}
+
 	/**
-	 * The calibrator point the trips imply: x from the most recent x-axis trip,
-	 * y from the most recent y-axis trip.
-	 *
-	 * Per-axis and most-recent-wins because that is how the fixture actually
-	 * reads — each switch measures ONE axis, and the operator will usually touch
-	 * off a few times before they are happy. Requires one of each: a point built
-	 * from two x-trips would be half-guessed, and guessing is what put the
-	 * pipette into the fixture in the first place.
+	 * The calibrator START position the latest X + Y trips imply for the selected
+	 * pipette — the point the probe offsets from, so that each switch closes
+	 * START_MARGIN_MM into its creep. NOT the trip point itself: saving that would
+	 * start the probes past their switches (see tip-calibrator-probe.ts).
 	 */
-	const tripPoint = $derived.by(() => {
-		const latest = (axis: string) =>
-			[...watchEvents].reverse().find((e) => e?.axis === axis && e?.position);
-		const ex = latest('x');
-		const ey = latest('y');
+	const tripStart = $derived.by(() => {
+		if (!tipProfile) return null;
+		const ex = latestTrip('x');
+		const ey = latestTrip('y');
 		if (!ex || !ey) return null;
-		const x = Number(ex.position.x);
-		const y = Number(ey.position.y);
-		const zs = [Number(ex.position.z), Number(ey.position.z)].filter(Number.isFinite);
-		if (!Number.isFinite(x) || !Number.isFinite(y) || !zs.length) return null;
-		return { x: +x.toFixed(3), y: +y.toFixed(3), z: +(zs.reduce((s, v) => s + v, 0) / zs.length).toFixed(3) };
+		const v = (p: any) => ({ x: Number(p.x), y: Number(p.y), z: Number(p.z) });
+		return startFromTrips(tipProfile, v(ex.position), v(ey.position));
 	});
+
+	/**
+	 * The start the gantry was last sent to from the trips. "Save start position"
+	 * only saves this, so what gets stored is exactly what the operator saw the
+	 * gantry go to — never a stale or hand-edited field.
+	 */
+	let computedStart = $state<{ x: number; y: number; profile: 'wax' | 'reagent' } | null>(null);
+
+	const pipetteLabel = $derived(tipProfile === 'wax' ? 'p20' : tipProfile === 'reagent' ? 'p300' : null);
+	const savedProbeZ = $derived(
+		probeZKey && typeof (currentCalibrator as any)?.[probeZKey] === 'number' ? (currentCalibrator as any)[probeZKey] : null
+	);
 
 	async function pollWatch() {
 		if (!watchCommandId || !selectedRobotId) return;
@@ -1730,6 +1611,7 @@
 				watchBridge = null;
 			}
 			watchEvents = [];
+			computedStart = null;
 			watchQueued = true;
 			if (watchTimer) clearInterval(watchTimer);
 			watchTimer = setInterval(pollWatch, 1000);
@@ -1757,44 +1639,100 @@
 		}
 	}
 
-	/** Load the trip-derived point into the calibrator fields (does NOT save). */
-	function useTripsAsCalibrator() {
-		if (!tripPoint) { errMsg = 'Need at least one X trip and one Y trip before a point can be derived'; return; }
-		calX = tripPoint.x;
-		calY = tripPoint.y;
-		// z is NOT taken from the trip: the trips happen at probe depth, and calZ is
-		// the APPROACH height the free-jog move-to commands. Copying a touch-off
-		// depth into it is precisely the crash case the two-field split prevents.
-		msg = `Calibrator X/Y set from the switch trips (${calX}, ${calY}). Approach Z left at ${calZ} — check it, then Save.`;
+	/**
+	 * Save the TIP's current height as the probe Z for the selected pipette — the
+	 * depth the limit-switch probe runs at. Jog the tip down to where it touches
+	 * the switches, then press this. Height only: the saved start x/y and approach
+	 * Z are kept, so this can be pressed before or after the start is saved.
+	 */
+	async function saveZHeight() {
+		if (!selectedRobotId) { errMsg = 'Pick a robot'; return; }
+		if (!tipProfile || !probeZKey) { errMsg = 'Pick the pipette first (p20 · wax or p300 · reagent) — each has its own probe Z'; return; }
+		if (kind !== 'deck' || !data.selected) { errMsg = 'Pick the deck this calibrator belongs to (Labware → Deck) first.'; return; }
+		if (!hasTip) { errMsg = 'Put a tip on first (Pick up tip) — the probe Z is the height of the TIP; without one it reads ~49 mm off.'; return; }
+		await refreshPosition();
+		if (liveZ === null) { errMsg = 'Could not read the live position'; return; }
+		const z = checkedZ(+liveZ.toFixed(3), 'Probe Z');
+		if (z === null) return;
+		setProbeZ(z);
+		const pos = (currentCalibrator as any)?.position;
+		if (!pos || (currentCalibrator as any)?.inheritedFromGlobal) {
+			msg = `Probe Z for the ${pipetteLabel} set to ${z}. This deck has no saved start position yet — it will be saved with it.`;
+			return;
+		}
+		const r = await postAction('saveCalibrator', {
+			robotId: selectedRobotId,
+			deckLoadName: String(data.selected),
+			x: String(pos.x), y: String(pos.y), z: String(pos.z),
+			source: 'manual',
+			note: `probe Z set from the live tip height (${pipetteLabel})`,
+			[probeZKey]: String(z)
+		});
+		if (r) msg = `Saved probe Z ${z} for the ${pipetteLabel} on ${data.selected}.`;
 	}
 
-	/** Save the calibrator from the trips, tagged 'sensor' and carrying the log. */
-	async function saveCalibratorFromTrips() {
+	/**
+	 * Calculate the start position from the latest X + Y trips, stop the watch, and
+	 * send the gantry there (safe arc, approach Z) so the operator can see it.
+	 */
+	async function moveToTripStart() {
+		if (!tipProfile) { errMsg = 'Pick the pipette first (p20 · wax or p300 · reagent)'; return; }
+		if (!tripStart) { errMsg = 'Need one X trip and one Y trip with positions first'; return; }
+		if (!runId || !pipetteId) { errMsg = 'Open a maintenance run first'; return; }
+		const approachZNow = checkedZ(calZ, 'Approach Z');
+		if (approachZNow === null) return;
+		if (approachZNow < probeZ) {
+			errMsg = `Approach Z (${approachZNow}) is below the ${pipetteLabel} probe Z (${probeZ}) — it would park inside the fixture. Raise it in Fixture point first.`;
+			return;
+		}
+		const start = { x: tripStart.x, y: tripStart.y, profile: tipProfile };
+		// Stop listening first: the move must not be recorded as touches.
+		if (watchArmed || watchQueued) await stopWatch();
+		calX = start.x;
+		calY = start.y;
+		clearMsg(); busy = true;
+		try {
+			await doGoToCalibrator(approachZNow);
+			computedStart = start;
+			msg =
+				`Gantry at the calculated ${pipetteLabel} start (${start.x}, ${start.y}) at approach Z ${approachZNow}. ` +
+				`Each switch should close ${START_MARGIN_MM} mm into its probe. Save start position to keep it.`;
+		} catch (e) {
+			errMsg = e instanceof Error ? e.message : String(e);
+		} finally {
+			busy = false;
+		}
+	}
+
+	/** Save the calculated start (and the pipette's probe Z), tagged 'sensor' with the trip log. */
+	async function saveStartPosition() {
 		if (!selectedRobotId) { errMsg = 'Pick a robot'; return; }
-		if (!watchEvents.length) { errMsg = 'No switch trips recorded to save'; return; }
+		if (!computedStart || !probeZKey) { errMsg = 'Calculate the start from the switch trips first'; return; }
+		if (computedStart.profile !== tipProfile) { errMsg = 'The pipette changed since the start was calculated — calculate it again.'; return; }
+		if (calX !== computedStart.x || calY !== computedStart.y) {
+			errMsg = 'The X/Y fields were edited after the start was calculated — calculate it again (or use Fixture point → Save for a typed point).';
+			return;
+		}
 		if (kind !== 'deck' || !data.selected) {
 			errMsg = 'Pick the deck this calibrator belongs to (Labware → Deck) before saving.';
 			return;
 		}
 		if (checkedZ(calZ, 'Approach Z') === null) return;
-		const fields: Record<string, string> = {
+		const z = checkedZ(probeZ, 'Probe Z');
+		if (z === null) return;
+		const r = await postAction('saveCalibrator', {
 			robotId: selectedRobotId,
 			deckLoadName: String(data.selected),
 			x: String(calX), y: String(calY), z: String(calZ),
 			source: 'sensor',
-			switchEvents: JSON.stringify(watchEvents)
-		};
-		if (probeZKey) {
-			const z = checkedZ(probeZ, 'Probe Z');
-			if (z === null) return;
-			fields[probeZKey] = String(z);
-		}
-		const r = await postAction('saveCalibrator', fields);
+			note: `start calculated from switch trips (${pipetteLabel}, ${START_MARGIN_MM} mm margin)`,
+			switchEvents: JSON.stringify(watchEvents),
+			[probeZKey]: String(z)
+		});
 		if (r) {
 			msg =
-				`Saved calibrator for ${robot?.name} from ${watchEvents.length} switch trip` +
-				`${watchEvents.length === 1 ? '' : 's'}: (${calX}, ${calY}, ${calZ}).` +
-				(savedFrame ? ' Linked to this robot’s deck frame.' : ' No deck frame taught yet — teach the four corners to link it.');
+				`Saved the ${pipetteLabel} start for ${data.selected}: (${calX}, ${calY}), approach Z ${calZ}, probe Z ${z}. ` +
+				`Run Calibrate tip a few times to confirm the adjust repeats.`;
 		}
 	}
 
@@ -2258,86 +2196,6 @@
 					</details>
 				</div>
 
-				<!-- Deck frame: four jogged corners say where the deck physically is -->
-				<div class="mt-3 rounded border border-[var(--color-tron-border)] bg-black/20 p-2">
-					<div class="mb-1 flex items-center justify-between">
-						<div class="text-[11px] font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Deck frame — four corners</div>
-						{#if savedFrame}
-							<button type="button" onclick={loadSavedCorners} class="rounded border border-[var(--color-tron-border)] px-2 py-0.5 text-[10px] hover:border-[var(--color-tron-cyan)]" style="color: var(--color-tron-text)" title="Load this robot's saved corners so you can re-capture just the ones that moved">Load saved</button>
-						{/if}
-					</div>
-					<p class="mb-2 text-[10px]" style="color: var(--color-tron-text-secondary)">
-						Jog the tip to each physical corner of the deck plate and capture it. The four points give the deck's <strong>area, position and rotation</strong> — and let the tip calibrator be stored as a fraction of the deck, so re-teaching these corners after a reseat moves it automatically instead of needing a re-probe.
-					</p>
-
-					<div class="space-y-1">
-						{#each CORNER_LABELS as label (label)}
-							{@const c = frameCorners[label]}
-							<div class="flex items-center gap-1.5 text-[11px]">
-								<span class="w-7 shrink-0 font-mono font-bold" style="color: var(--color-tron-cyan)">{label}</span>
-								<span class="w-20 shrink-0 opacity-70" style="color: var(--color-tron-text-secondary)">{CORNER_NAMES[label]}</span>
-								<span class="min-w-0 flex-1 truncate font-mono" style="color: var(--color-tron-text)">
-									{#if c}{c.x}, {c.y}, {c.z}{:else}<span class="opacity-40">not captured</span>{/if}
-								</span>
-								<button type="button" onclick={() => captureCorner(label)} disabled={busy || liveX === null} class="shrink-0 rounded border border-[var(--color-tron-cyan)]/40 px-2 py-0.5 text-[10px] text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40" title="Capture the live jogged position as this corner">Capture</button>
-								{#if c}
-									<button type="button" onclick={() => clearCorner(label)} class="shrink-0 rounded border border-[var(--color-tron-border)] px-1.5 py-0.5 text-[10px] opacity-60 hover:border-red-500/50 hover:text-red-300" style="color: var(--color-tron-text-secondary)" title="Clear this corner">✕</button>
-								{/if}
-							</div>
-						{/each}
-					</div>
-
-					{#if frameProblem}
-						<p class="mt-2 rounded border border-red-500/40 bg-red-900/15 p-1.5 text-[10px] text-red-200">{frameProblem}</p>
-					{:else if draftFrame}
-						<div class="mt-2 rounded border border-[var(--color-tron-border)] bg-black/30 p-1.5 text-[10px] font-mono" style="color: var(--color-tron-text-secondary)">
-							<div><span class="opacity-60">area</span> {draftFrame.width.toFixed(2)} × {draftFrame.height.toFixed(2)} mm</div>
-							<div><span class="opacity-60">origin</span> {draftFrame.origin.x.toFixed(2)}, {draftFrame.origin.y.toFixed(2)}</div>
-							<div><span class="opacity-60">rotation</span> {draftFrame.rotationDeg.toFixed(3)}° · <span class="opacity-60">square by</span> {draftFrame.squarenessDeg.toFixed(3)}°</div>
-							<div class={draftFits ? '' : 'text-red-300'}>
-								<span class="opacity-60">fit</span> {draftFrame.residualMm.toFixed(3)} mm
-								{#if !draftFits}<strong> — over the {frameLimits.maxResidualMm} mm limit (≈{(draftFrame.residualMm * 4).toFixed(1)} mm at one corner)</strong>{/if}
-							</div>
-							{#if calInDraftFrame}
-								<div class="mt-1 border-t border-[var(--color-tron-border)] pt-1">
-									<span class="opacity-60">calibrator sits at</span> u {calInDraftFrame.u.toFixed(4)} · v {calInDraftFrame.v.toFixed(4)}
-								</div>
-							{/if}
-						</div>
-					{:else}
-						<p class="mt-2 text-[10px]" style="color: var(--color-tron-text-secondary)">{capturedCorners.length} of 4 corners captured.</p>
-					{/if}
-
-					<button type="button" onclick={saveDeckFrame} disabled={busy || !selectedRobotId || !draftFits} class="mt-2 w-full rounded border border-green-500/40 bg-green-900/15 px-2 py-1.5 text-[11px] font-semibold text-green-300 hover:bg-green-900/25 disabled:opacity-40">
-						Save deck frame → {robot?.name ?? 'robot'}
-					</button>
-
-					{#if pendingRederive}
-						<div class="mt-2 rounded border border-amber-500/50 bg-amber-900/20 p-2 text-[10px] text-amber-100">
-							<p class="font-bold">Calibrator NOT moved — confirm first</p>
-							<p class="mt-1">{pendingRederive.message}</p>
-							<p class="mt-1 font-mono">
-								{pendingRederive.from?.x?.toFixed?.(3)}, {pendingRederive.from?.y?.toFixed?.(3)}
-								→ {pendingRederive.to?.x?.toFixed?.(3)}, {pendingRederive.to?.y?.toFixed?.(3)}
-							</p>
-							<div class="mt-2 grid grid-cols-2 gap-1">
-								<button type="button" onclick={confirmRederive} disabled={busy} class="rounded border border-amber-400/60 bg-amber-900/30 px-2 py-1 font-bold text-amber-100 disabled:opacity-40">Move it {pendingRederive.deltaMm.toFixed(2)} mm</button>
-								<button type="button" onclick={() => (pendingRederive = null)} class="rounded border border-[var(--color-tron-border)] px-2 py-1" style="color: var(--color-tron-text-secondary)">Leave it</button>
-							</div>
-						</div>
-					{/if}
-
-					{#if savedFrame}
-						<p class="mt-1.5 text-[10px]" style="color: var(--color-tron-text-secondary)">
-							Saved: {savedFrame.derived.width.toFixed(1)} × {savedFrame.derived.height.toFixed(1)} mm at {savedFrame.derived.rotationDeg.toFixed(2)}°
-							{#if savedFrame.capturedBy}· {savedFrame.capturedBy}{/if}
-							{#if savedFrame.capturedAt}· {new Date(savedFrame.capturedAt).toLocaleString()}{/if}
-						</p>
-					{:else}
-						<p class="mt-1.5 text-[10px]" style="color: var(--color-tron-text-secondary)">No deck frame taught for this robot yet.</p>
-					{/if}
-				</div>
-
 				<!-- Live limit-switch watch: locate the fixture by hand-jogging onto it -->
 				<div class="mt-3 rounded border border-[var(--color-tron-border)] bg-black/20 p-2">
 					<div class="mb-1 flex items-center justify-between">
@@ -2349,7 +2207,7 @@
 						{/if}
 					</div>
 					<p class="mb-2 text-[10px]" style="color: var(--color-tron-text-secondary)">
-						Arms the calibrator's limit switches and records <strong>every trip</strong> — which switch, when, and where the tip was — while <strong>you</strong> jog onto the fixture. This commands no motion of its own. (The <em>Calibrate tip</em> button above is the opposite: it drives the creep probe to measure a tip against a fixture whose location is already known.)
+						<strong>1.</strong> Pick the pipette (p20 or p300) in the Tip panel and put a tip on. <strong>2.</strong> Start watch and jog the tip onto the <strong>X</strong> switch, then the <strong>Y</strong> switch — each touch is recorded with where the tip was. <strong>3.</strong> At touch height, <strong>Save Z height</strong>. <strong>4.</strong> <strong>Calculate start → move gantry</strong> works out where the probe must start and sends the gantry there. <strong>5.</strong> <strong>Save start position</strong>, then confirm with <em>Calibrate tip</em>.
 					</p>
 					<p class="mb-2 text-[10px]" style="color: var(--color-tron-text-secondary)">
 						<strong>One switch is live at a time</strong>, starting with <strong>X</strong> — the one a normal approach reaches first — and handing off to the other after each trip. Touch the switch the badge names; the other one is deaf until its turn.
@@ -2362,6 +2220,19 @@
 					{#if !runId}
 						<p class="mt-1 text-[10px] text-amber-300/80">Open a maintenance run first — the watch attaches to it.</p>
 					{/if}
+
+					<!-- Probe Z: the TIP height the limit-switch probe runs at, per pipette -->
+					<div class="mt-2 rounded border border-[var(--color-tron-border)] bg-black/30 p-1.5 text-[10px]" style="color: var(--color-tron-text-secondary)">
+						<div class="flex items-center justify-between gap-2">
+							<span>
+								<span class="opacity-60">Probe Z{pipetteLabel ? ` (${pipetteLabel})` : ''}:</span>
+								<span class="font-mono" style="color: var(--color-tron-text)"> saved {savedProbeZ ?? '—'}</span>
+								<span class="opacity-60"> · tip now</span>
+								<span class="font-mono" style="color: var(--color-tron-text)"> {liveZ !== null ? liveZ.toFixed(2) : '—'}</span>
+							</span>
+						</div>
+						<button type="button" onclick={saveZHeight} disabled={busy || !runId || !tipProfile} class="mt-1 w-full rounded border border-green-500/40 bg-green-900/15 px-2 py-1.5 text-[10px] font-semibold text-green-300 hover:bg-green-900/25 disabled:opacity-40" title="Jog the tip down to where it touches the switches, then save that height as this pipette's probe Z">Save Z height (tip's current height)</button>
+					</div>
 
 					{#if watchEvents.length}
 						<div class="mt-2 max-h-40 overflow-y-auto rounded border border-[var(--color-tron-border)] bg-black/30">
@@ -2389,17 +2260,31 @@
 							</table>
 						</div>
 
-						{#if tripPoint}
+						{#if !tipProfile}
+							<p class="mt-2 text-[10px] text-amber-300/80">Pick the pipette (p20 · wax or p300 · reagent) in the Tip panel — the start position depends on it.</p>
+						{:else if tripStart}
 							<div class="mt-2 rounded border border-[var(--color-tron-cyan)]/30 bg-black/30 p-1.5 text-[10px]" style="color: var(--color-tron-text-secondary)">
-								<span class="opacity-60">from the latest X + Y trips:</span>
-								<span class="font-mono" style="color: var(--color-tron-text)"> {tripPoint.x}, {tripPoint.y}</span>
+								<div>
+									<span class="opacity-60">{pipetteLabel} start position:</span>
+									<span class="font-mono font-bold" style="color: var(--color-tron-text)"> {tripStart.x}, {tripStart.y}</span>
+								</div>
+								<div class="mt-0.5 font-mono opacity-80">
+									X probe from {tripStart.xProbeStart.x}, {tripStart.xProbeStart.y} · Y probe from {tripStart.yProbeStart.x}, {tripStart.yProbeStart.y}
+								</div>
+								<div class="mt-0.5 opacity-80">Each switch closes {START_MARGIN_MM} mm into its probe. Switches touched at z {tripStart.tripZ}.</div>
+								{#each tripStart.warnings as w (w)}
+									<p class="mt-1 text-amber-300">⚠ {w}</p>
+								{/each}
 							</div>
 							<div class="mt-1 grid grid-cols-2 gap-1">
-								<button type="button" onclick={useTripsAsCalibrator} disabled={busy} class="rounded border border-[var(--color-tron-border)] px-2 py-1.5 text-[10px] hover:border-[var(--color-tron-cyan)] disabled:opacity-40" style="color: var(--color-tron-text)" title="Load the trip-derived X/Y into the calibrator fields above (does not save)">Use as calibrator ↥</button>
-								<button type="button" onclick={saveCalibratorFromTrips} disabled={busy || !selectedRobotId} class="rounded border border-green-500/40 bg-green-900/15 px-2 py-1.5 text-[10px] font-semibold text-green-300 hover:bg-green-900/25 disabled:opacity-40" title="Save the calibrator fields, tagged as sensor-taught, keeping this trip log on the record">Save with trip log</button>
+								<button type="button" onclick={moveToTripStart} disabled={busy || !runId} class="rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 px-2 py-1.5 text-[10px] font-semibold text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/20 disabled:opacity-40" title="Stops the watch, then moves the gantry (safe arc, approach Z) to the calculated start">Calculate start → move gantry</button>
+								<button type="button" onclick={saveStartPosition} disabled={busy || !selectedRobotId || !computedStart} class="rounded border border-green-500/40 bg-green-900/15 px-2 py-1.5 text-[10px] font-semibold text-green-300 hover:bg-green-900/25 disabled:opacity-40" title="Save the calculated start and this pipette's probe Z, keeping the trip log on the record">Save start position</button>
 							</div>
+							{#if computedStart}
+								<p class="mt-1 text-[10px] text-green-300/80">Gantry sent to {computedStart.x}, {computedStart.y} — check it, then Save.</p>
+							{/if}
 						{:else}
-							<p class="mt-1 text-[10px] text-amber-300/80">Need at least one X trip and one Y trip to derive a point.</p>
+							<p class="mt-1 text-[10px] text-amber-300/80">Need at least one X trip and one Y trip to calculate the start.</p>
 						{/if}
 					{:else if watchArmed}
 						<p class="mt-2 text-[10px]" style="color: var(--color-tron-text-secondary)">Listening on the <strong>{armedAxis}</strong> switch — no trips yet. Jog the tip onto it.</p>
