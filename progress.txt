@@ -19042,3 +19042,20 @@ Source: branch feat/deck-calibrator-teach-restore @ commit 2a8fa5f29
 Retrieve this exact code: git checkout feat/deck-calibrator-teach-restore at commit 2a8fa5f29
   (or: git log feat/deck-calibrator-teach-restore --oneline to find it if the branch has since moved on)
 What this deployment is for: teach the B14 calibrator start from the sensor watch over Tailscale
+
+2026-10-08 (follow-up) — "Calculate start → move gantry" did nothing on B14. Bridge log: the watch
+worked (4 trips; X at x≈284.9 y≈71.7, Y at x≈295.9 y≈67.7, all z 26.23), then no move command ever
+reached the robot. Read-only DB probe: Save Z height had saved zCalReagent 26.23 on
+robotarm_cartridge_deck_001 while position.z (approach) stayed 23.85, so the page's own "approach Z
+below probe Z" guard refused the move. Wrong rule: the calibration starts AT the probe Z
+(execute_calibrate_tip moves to (calX, calY, z_cal) before probing). 20d7a6ba4 moves to the start at
+the probe Z (safe arc), and Save start position lifts approach Z to the probe Z when it is lower.
+Also explains the 2026-10-07 failed probe: the old point (294.88, 79.24) started the X probe at
+x 293.48, ~8.6 mm from where the X switch closes — beyond the 5 mm creep. svelte-check unchanged
+(143, none in touched files).
+
+Deployment: preview — https://bioscale-operations-system-mongodb-32ckku5xr-brevitest.vercel.app
+Source: branch feat/deck-calibrator-teach-restore @ commit 20d7a6ba4
+Retrieve this exact code: git checkout feat/deck-calibrator-teach-restore at commit 20d7a6ba4
+  (or: git log feat/deck-calibrator-teach-restore --oneline to find it if the branch has since moved on)
+What this deployment is for: calculate-start moves to the probe-Z start on B14
