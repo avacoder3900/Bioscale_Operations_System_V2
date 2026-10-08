@@ -19188,3 +19188,12 @@ Check: `tsc --strict` on the three scripts clean; selftest passes; the
 scripts are outside the app tsconfig so svelte-check is unchanged (14).
 NOT yet run against a database or deployment from this session — the seed
 writes visible "SIM Robot" cards into whichever DB MONGODB_URI points at.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-mn244wa8b-brevitest.vercel.app
+Source: branch feat/robot-overhaul @ commit 922e02a8
+Retrieve this exact code: git checkout feat/robot-overhaul at commit 922e02a8
+  (or: git log feat/robot-overhaul --oneline to find it if the branch has since moved on)
+What this deployment is for: same app as 639bf49d plus scripts/ot2-sim — the preview URL to point
+  the simulator daemon at (BIMS_BASE_URL) for the no-robot test of the Robots page.
+Smoke (unauthenticated curl; 302 → /login means the route exists and is gated):
+  /manufacturing/cart-mfg/robots -> 302 https://bioscale-operations-system-mongodb-mn244wa8b-brevitest.vercel.app/login
