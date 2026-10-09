@@ -19099,3 +19099,7 @@ resolved stamp and drop off the open list.
   collapsed "N resolved entries" list with when/who/note and a Reopen button per group.
 - reagent-filling/well-issues page: "✓ resolved — note" badge per entry.
 Smoke-tested the arrayFilters set/unset on a throwaway run. `npm run check`: 16/435 — same as master.
+Deployment: production — Vercel GitHub integration build of master
+Source: branch master @ commit 03ec8bea (merge of feat/studio-resolve-well-issues)
+Retrieve this exact code: git checkout master at commit 03ec8bea
+What this deployment is for: Studio can resolve/reopen reagent well-tracker issues; open list = blank slate after fixes.
