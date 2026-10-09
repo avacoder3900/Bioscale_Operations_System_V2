@@ -176,6 +176,9 @@
 									<span class="text-red-200">{issueLabel(i.issue)}</span>
 									{#if i.note}<span class="text-[var(--color-tron-text-secondary)]"> — {i.note}</span>{/if}
 									<span class="ml-1 text-[10px] text-[var(--color-tron-text-secondary)]">{fmt(i.loggedAt)}{i.loggedBy ? ` · ${i.loggedBy}` : ''}</span>
+									{#if i.resolvedAt}
+										<span class="ml-2 rounded border border-emerald-500/40 bg-emerald-900/20 px-1.5 py-0.5 text-[10px] text-emerald-300" title={`Resolved in the Deck Calibration Studio ${fmt(i.resolvedAt)}${i.resolvedBy ? ` by ${i.resolvedBy}` : ''}${i.resolvedNote ? ` — ${i.resolvedNote}` : ''}`}>✓ resolved{i.resolvedNote ? ` — ${i.resolvedNote}` : ''}</span>
+									{/if}
 								</li>
 							{/each}
 						</ul>

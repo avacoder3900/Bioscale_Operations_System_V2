@@ -40,23 +40,45 @@
 	// resolved to labware wells server-side. Drawn as red rings on the holes and
 	// listed per cartridge position below the deck, so the operator fixing the
 	// deck sees what the line actually saw go wrong at each hole.
-	type IssueMark = { runId: string; runAt: string | null; deckPosition: number; well: number; reagentName: string | null; issue: string; note: string | null; loggedBy: string | null; loggedAt: string | null; labwareWells: string[] };
-	const issueMarks = $derived(((data.wellIssueMarks ?? {}) as Record<string, IssueMark[]>)[selectedRobotId] ?? []);
+	type IssueMark = { runId: string; issueId: string; runAt: string | null; deckPosition: number; well: number; reagentName: string | null; issue: string; note: string | null; loggedBy: string | null; loggedAt: string | null; labwareWells: string[]; resolvedAt: string | null; resolvedBy: string | null; resolvedNote: string | null };
+	const allIssueMarks = $derived(((data.wellIssueMarks ?? {}) as Record<string, IssueMark[]>)[selectedRobotId] ?? []);
+	// OPEN entries drive the rings and the main table; resolved ones (addressed in
+	// the deck already — "Resolved" here) sit in a collapsed list so the next run's
+	// notes start from a blank slate without losing the history.
+	const issueMarks = $derived(allIssueMarks.filter((mk) => !mk.resolvedAt));
+	const resolvedMarks = $derived(allIssueMarks.filter((mk) => !!mk.resolvedAt));
 	const issueByWell = $derived.by(() => {
 		const m = new Map<string, IssueMark[]>();
 		for (const mk of issueMarks) for (const n of mk.labwareWells) { if (!m.has(n)) m.set(n, []); m.get(n)!.push(mk); }
 		return m;
 	});
-	// Grouped per cartridge position + well for the panel, most-hit first.
-	const issueGroups = $derived.by(() => {
-		const g = new Map<string, { deckPosition: number; well: number; reagentName: string | null; labwareWells: string[]; marks: IssueMark[] }>();
-		for (const mk of issueMarks) {
+	type IssueGroup = { deckPosition: number; well: number; reagentName: string | null; labwareWells: string[]; marks: IssueMark[] };
+	function groupMarks(list: IssueMark[]): IssueGroup[] {
+		const g = new Map<string, IssueGroup>();
+		for (const mk of list) {
 			const k = `${mk.deckPosition}:${mk.well}`;
 			if (!g.has(k)) g.set(k, { deckPosition: mk.deckPosition, well: mk.well, reagentName: mk.reagentName, labwareWells: mk.labwareWells, marks: [] });
 			g.get(k)!.marks.push(mk);
 		}
 		return [...g.values()].sort((a, b) => b.marks.length - a.marks.length || a.deckPosition - b.deckPosition || a.well - b.well);
-	});
+	}
+	// Grouped per cartridge position + well for the panel, most-hit first.
+	const issueGroups = $derived(groupMarks(issueMarks));
+	const resolvedGroups = $derived(groupMarks(resolvedMarks));
+	let resolveNote = $state('');
+	let showResolved = $state(false);
+	/** Resolve (or reopen) a set of tracker entries for this deck + robot. */
+	async function resolveIssues(marks: IssueMark[], reopen = false) {
+		if (!marks.length || !selectedRobotId) return;
+		const r = await postAction('resolveWellIssues', {
+			deckLoadName: data.selected ?? '',
+			robotId: selectedRobotId,
+			entries: JSON.stringify(marks.map((mk) => ({ runId: mk.runId, issueId: mk.issueId }))),
+			note: reopen ? '' : resolveNote,
+			reopen: reopen ? 'true' : 'false'
+		});
+		if (r) { msg = reopen ? `Reopened ${r.touched ?? marks.length} entr${(r.touched ?? marks.length) === 1 ? 'y' : 'ies'}` : `Resolved ${r.touched ?? marks.length} entr${(r.touched ?? marks.length) === 1 ? 'y' : 'ies'} — they stay in the history below`; if (!reopen) resolveNote = ''; }
+	}
 	function issueLabelOf(code: string): string {
 		return ({ no_fill: 'No fill', partial_fill: 'Partial fill', overfill: 'Overfill', missed_hole: 'Missed the hole', splash: 'Splash', bubble: 'Bubble', bent_tip: 'Bent tip', other: 'Other' } as Record<string, string>)[code] ?? code;
 	}
@@ -1926,11 +1948,15 @@
 					Fill issues on this deck <span class="normal-case font-normal">— {robot?.name ?? 'robot'} · {data.selected} · last 60 days</span>
 				</h2>
 				{#if issueMarks.length}
-					<span class="text-[11px] text-red-300">{issueMarks.length} logged on {issueGroups.length} hole group{issueGroups.length === 1 ? '' : 's'} · red rings on the deck above</span>
+					<div class="flex flex-wrap items-center gap-2">
+						<span class="text-[11px] text-red-300">{issueMarks.length} open on {issueGroups.length} hole group{issueGroups.length === 1 ? '' : 's'} · red rings on the deck above</span>
+						<input type="text" bind:value={resolveNote} placeholder="what you changed (optional)" maxlength="300" class="rounded border border-[var(--color-tron-border)] bg-black/30 px-2 py-1 text-[11px]" style="color: var(--color-tron-text)" />
+						<button type="button" onclick={() => resolveIssues(issueMarks)} disabled={busy} class="rounded border border-emerald-500/50 bg-emerald-900/20 px-2 py-1 text-[11px] font-bold text-emerald-300 hover:bg-emerald-900/30 disabled:opacity-40" title="Mark every open entry on this deck + robot as addressed. They move to the resolved list; the next run starts from a blank slate.">✓ Resolve all open</button>
+					</div>
 				{/if}
 			</div>
 			{#if !issueMarks.length}
-				<p class="text-[11px]" style="color: var(--color-tron-text-secondary)">Nothing logged for this deck on {robot?.name ?? 'this robot'}. Operators tag mistakes on the reagent run page's well tracker; they show up here against the holes they hit.</p>
+				<p class="text-[11px]" style="color: var(--color-tron-text-secondary)">No open issues for this deck on {robot?.name ?? 'this robot'}{resolvedMarks.length ? ` — ${resolvedMarks.length} resolved (below)` : ''}. Operators tag mistakes on the reagent run page's well tracker; they show up here against the holes they hit until you resolve them.</p>
 			{:else}
 				<div class="overflow-x-auto">
 					<table class="w-full text-left text-[11px]">
@@ -1949,11 +1975,40 @@
 									<td class="px-2 py-1" style="color: var(--color-tron-text-secondary)">{last ? new Date(last).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : ''}{g.marks[0]?.loggedBy ? ` · ${g.marks[0].loggedBy}` : ''}</td>
 									<td class="px-2 py-1 whitespace-nowrap">
 										<button type="button" onclick={(e) => selectIssueWells(g.labwareWells, e.shiftKey)} class="rounded border border-[var(--color-tron-border)] px-2 py-0.5 hover:border-[var(--color-tron-cyan)]" style="color: var(--color-tron-text)" title="Select these three holes (shift = add to the selection)">Select holes</button>
+										<button type="button" onclick={() => resolveIssues(g.marks)} disabled={busy} class="ml-1 rounded border border-emerald-500/50 bg-emerald-900/20 px-2 py-0.5 text-emerald-300 hover:bg-emerald-900/30 disabled:opacity-40" title="Addressed in the deck — move this hole group's entries to the resolved list">✓ Resolved</button>
 									</td>
 								</tr>
 							{/each}
 						</tbody>
 					</table>
+				</div>
+			{/if}
+			{#if resolvedMarks.length}
+				<div class="mt-2 border-t border-[var(--color-tron-border)] pt-2">
+					<button type="button" onclick={() => (showResolved = !showResolved)} class="text-[11px] underline-offset-2 hover:underline" style="color: var(--color-tron-text-secondary)">
+						{showResolved ? '▾' : '▸'} {resolvedMarks.length} resolved entr{resolvedMarks.length === 1 ? 'y' : 'ies'} on {resolvedGroups.length} hole group{resolvedGroups.length === 1 ? '' : 's'} (already addressed — kept for history)
+					</button>
+					{#if showResolved}
+						<div class="mt-1 overflow-x-auto">
+							<table class="w-full text-left text-[11px] opacity-80">
+								<thead style="color: var(--color-tron-text-secondary)"><tr><th class="px-2 py-1">Cartridge</th><th class="px-2 py-1">Well</th><th class="px-2 py-1">Holes</th><th class="px-2 py-1">What was seen</th><th class="px-2 py-1">Resolved</th><th class="px-2 py-1"></th></tr></thead>
+								<tbody style="color: var(--color-tron-text)">
+									{#each resolvedGroups as g (`r:${g.deckPosition}:${g.well}`)}
+										{@const counts = [...g.marks.reduce((m, mk) => m.set(mk.issue, (m.get(mk.issue) ?? 0) + 1), new Map<string, number>())]}
+										{@const lastRes = [...g.marks].sort((a, b) => (b.resolvedAt ?? '').localeCompare(a.resolvedAt ?? ''))[0]}
+										<tr class="border-t border-[var(--color-tron-border)] align-top">
+											<td class="px-2 py-1 font-semibold">#{g.deckPosition}</td>
+											<td class="px-2 py-1">well {g.well}{g.reagentName ? ` · ${g.reagentName}` : ''}</td>
+											<td class="px-2 py-1 font-mono">{g.labwareWells.join(' ')}</td>
+											<td class="px-2 py-1">{counts.map(([k, n]) => `${issueLabelOf(k)}${n > 1 ? ` ×${n}` : ''}`).join(', ')}</td>
+											<td class="px-2 py-1" style="color: var(--color-tron-text-secondary)">{lastRes?.resolvedAt ? new Date(lastRes.resolvedAt).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : ''}{lastRes?.resolvedBy ? ` · ${lastRes.resolvedBy}` : ''}{lastRes?.resolvedNote ? ` — ${lastRes.resolvedNote}` : ''}</td>
+											<td class="px-2 py-1 whitespace-nowrap"><button type="button" onclick={() => resolveIssues(g.marks, true)} disabled={busy} class="rounded border border-[var(--color-tron-border)] px-2 py-0.5 hover:border-amber-400" style="color: var(--color-tron-text)" title="Put this hole group back on the open list">Reopen</button></td>
+										</tr>
+									{/each}
+								</tbody>
+							</table>
+						</div>
+					{/if}
 				</div>
 			{/if}
 		</section>

@@ -30,7 +30,8 @@ import { labwareWellsFor } from '$lib/manufacturing/reagent-well-issues';
 
 /** One run-page well-tracker entry, resolved onto this deck's labware wells. */
 type StudioIssueMark = {
-	runId: string; runAt: string | null;
+	runId: string; issueId: string; runAt: string | null;
+	resolvedAt: string | null; resolvedBy: string | null; resolvedNote: string | null;
 	deckPosition: number; well: number; reagentName: string | null;
 	issue: string; note: string | null; loggedBy: string | null; loggedAt: string | null;
 	labwareWells: string[];
@@ -288,6 +289,10 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 					for (const w of (r.wellIssues ?? []) as any[]) {
 						list.push({
 							runId: String(r._id),
+							issueId: String(w._id),
+							resolvedAt: w.resolvedAt ? new Date(w.resolvedAt).toISOString() : null,
+							resolvedBy: w.resolvedBy?.username ?? null,
+							resolvedNote: w.resolvedNote ?? null,
 							runAt: (r.runStartTime ?? r.createdAt) ? new Date(r.runStartTime ?? r.createdAt).toISOString() : null,
 							deckPosition: Number(w.deckPosition),
 							well: Number(w.well),
@@ -337,6 +342,56 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 };
 
 export const actions: Actions = {
+	/**
+	 * Mark run-page well-tracker entries as addressed in the deck (2026-10-09).
+	 * `entries` is JSON [{runId, issueId}] — the Studio sends one hole group or
+	 * every open entry for the selected deck+robot. Stamps resolvedAt/By/Note on
+	 * each entry (kept, never deleted) so the open list goes blank for the next
+	 * run while the history stays. `reopen=true` clears the stamp (mis-click).
+	 */
+	resolveWellIssues: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'manufacturing:write');
+		const data = await request.formData();
+		const deckLoadName = (data.get('deckLoadName') as string)?.trim() || '';
+		const robotId = (data.get('robotId') as string)?.trim() || '';
+		const reopen = data.get('reopen')?.toString() === 'true';
+		const note = (data.get('note')?.toString() ?? '').trim().slice(0, 300);
+		let entries: { runId: string; issueId: string }[] = [];
+		try { entries = JSON.parse((data.get('entries') as string) || '[]'); } catch { /* fallthrough */ }
+		entries = entries.filter((e) => e && typeof e.runId === 'string' && typeof e.issueId === 'string');
+		if (!entries.length) return fail(400, { error: 'Nothing to resolve' });
+		await connectDB();
+		const now = new Date();
+		const byRun = new Map<string, string[]>();
+		for (const e of entries) (byRun.get(e.runId) ?? byRun.set(e.runId, []).get(e.runId)!).push(e.issueId);
+		let touched = 0;
+		for (const [runId, ids] of byRun) {
+			const res = await ReagentBatchRecord.updateOne(
+				{ _id: runId },
+				reopen
+					? { $unset: { 'wellIssues.$[w].resolvedAt': '', 'wellIssues.$[w].resolvedBy': '', 'wellIssues.$[w].resolvedNote': '' } }
+					: { $set: {
+						'wellIssues.$[w].resolvedAt': now,
+						'wellIssues.$[w].resolvedBy': { _id: locals.user._id, username: locals.user.username },
+						...(note ? { 'wellIssues.$[w].resolvedNote': note } : {})
+					} },
+				{ arrayFilters: [{ 'w._id': { $in: ids } }] }
+			);
+			touched += res.modifiedCount ?? 0;
+			await AuditLog.create({
+				_id: generateId(),
+				tableName: 'reagent_batch_records',
+				recordId: runId,
+				action: reopen ? 'reagent_well_issues_reopened' : 'reagent_well_issues_resolved',
+				newData: { issueIds: ids, deckLoadName, robotId, note: note || null },
+				changedAt: now,
+				changedBy: locals.user.username
+			});
+		}
+		return { success: true, action: 'resolveWellIssues', touched, reopen };
+	},
+
 	/** Apply one delta to a group of wells (the core group-calibration write). */
 	applyBatch: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
