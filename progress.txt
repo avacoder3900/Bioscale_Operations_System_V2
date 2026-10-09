@@ -19082,3 +19082,20 @@ Deployment: production — Vercel GitHub integration build of master
 Source: branch master @ commit 65cbe174 (merge of feat/studio-well-issue-marks)
 Retrieve this exact code: git checkout master at commit 65cbe174
 What this deployment is for: Studio shows reagent well-tracker issues (red rings + table) for the selected deck/robot.
+
+================================================================================
+2026-10-09 — feat/studio-resolve-well-issues — Studio: resolve / reopen well-tracker issues so the next run starts clean
+================================================================================
+Alejandro: "give me an option to resolve fill issues in the deck calibration so the next fill
+starts at a blank slate ... i don't want to get confused on what problems have already been
+addressed and what haven't". Entries are never deleted (they are the cart's DHR) — they get a
+resolved stamp and drop off the open list.
+- models/reagent-batch-record.ts: wellIssues[].resolvedAt / resolvedBy / resolvedNote.
+- deck-calibration/+page.server.ts: marks carry issueId + resolved fields; new action
+  resolveWellIssues (entries JSON [{runId, issueId}], optional note, reopen=true to undo) using
+  arrayFilters updates per run + an audit row per run (reagent_well_issues_resolved / _reopened).
+- deck-calibration/+page.svelte: rings + main table show OPEN entries only; "✓ Resolved" per hole
+  group and "✓ Resolve all open" (with an optional "what you changed" note) in the panel header;
+  collapsed "N resolved entries" list with when/who/note and a Reopen button per group.
+- reagent-filling/well-issues page: "✓ resolved — note" badge per entry.
+Smoke-tested the arrayFilters set/unset on a throwaway run. `npm run check`: 16/435 — same as master.

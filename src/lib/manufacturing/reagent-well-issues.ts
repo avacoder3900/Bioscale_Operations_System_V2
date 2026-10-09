@@ -60,6 +60,9 @@ export interface ReagentWellIssueRow {
 	note: string | null;
 	loggedBy: string | null;
 	loggedAt: string | null;
+	resolvedAt?: string | null;
+	resolvedBy?: string | null;
+	resolvedNote?: string | null;
 }
 
 /**
