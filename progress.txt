@@ -13419,3 +13419,80 @@ Retrieve this exact code: git checkout master at commit 237698ed
 What this deployment is for: bucket board lanes — Unpressed waiting / in-process with a badge pull,
   counter tiles removed, rail moved to a top strip, narrow Backed column.
 Pushed 2026-10-05 at Jacob's instruction ("go and push it all").
+
+================================================================================
+2026-10-05 — feat/spu-tweaks — thermoseal strip shipped to master (e97efbc4)
+================================================================================
+Bucket board: the thermoseal tile moved out of the lane column into a horizontal strip below the
+board (branch feat/thermoseal-strip, one file: buckets/+page.svelte; write-up in that branch's
+progress.txt entry, now on master).
+Deployment: production — URL NOT RETRIEVED (no Vercel CLI / gh here; Vercel dashboard, commit e97efbc4)
+Source: branch master (= feat/thermoseal-strip, fast-forward) @ commit e97efbc4
+Retrieve this exact code: git checkout master at commit e97efbc4
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: thermoseal window as a horizontal strip below the bucket board.
+Pushed 2026-10-05 at Jacob's instruction ("push it").
+Also: production build of 237698ed (board lanes) was confirmed live at 19:00 UTC by reading the
+deployed bundle on the git-master alias.
+
+================================================================================
+2026-10-05 — feat/spu-tweaks — six-lane bucket board shipped to master (b7f4f9f3)
+================================================================================
+Jacob corrected the lanes to Available → Barcoded → Unpressed in process → Unpressed → Backed in
+process → Backed and asked for it to be written and pushed. Branch feat/bucket-six-lanes (write-up in
+its progress.txt entry, now on master). Thermoseal strip (e97efbc4) was confirmed live at 19:16 UTC.
+Deployment: production — URL NOT RETRIEVED (no Vercel CLI / gh here; Vercel dashboard, commit b7f4f9f3)
+Source: branch master (= feat/bucket-six-lanes, fast-forward) @ commit b7f4f9f3
+Retrieve this exact code: git checkout master at commit b7f4f9f3
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: six-lane bucket board with a badge pull into each in-process lane.
+
+================================================================================
+2026-10-09 — feat/spu-tweaks — "Bucket 4" (BKT-000010) resolved after an experiment (production data)
+================================================================================
+Jacob: Bucket 4 had experimental work done on its contents; the 49 ids he listed are now Backed,
+anything else that was in the bucket is scrap, new QR codes on the list go straight to Backed, and
+the bucket is freed. Bucket 4 = BKT-000010 (nickname), open pass i19axmYI0bIFh5nVZYLWA #2 at
+unpressed (pulled by jacob 10-05), 53 members. New one-off script scripts/resolve-bucket4-pass.ts
+(dry-run default, --apply, --list). Applied 2026-10-09 21:08 UTC (db bioscale):
+- 47 listed members unpressed → backing, loose (Backed stamp: backing.recordedAt/operator/
+  bucketCycleId/bucketBarcode/manualBackedAt), note + audit row each.
+- 2 listed ids with no record (printed labels, never scanned in) created at backing with the pass's
+  lots (shell LOT-20261005-YEG5, label ZEBRA-20260922-PTCT106) and the scan-in debits they never
+  got: consumption rows −2 PT-CT-104 / −2 PT-CT-106 against those lots.
+- 3 members not on the list, status unpressed → scrapped (25fa372c…, 2b6d954a…, 2b642dbf…). No
+  inventory scrap rows written (shells were already debited at scan-in).
+- 3 members not on the list at status 'linked' (0cb60283…, 8899e41b…, 26325995…) were NOT scrapped
+  — they are already past the bucket system (assigned to a device test); taken off the pass only,
+  'adjust' ledger row. Jacob to decide.
+- Pass: stage → backing, ovenReleasedAt/By, status consumed, closed, members cleared, in-process
+  fields cleared; ledger rows scan_in(2) / scrap / adjust / advance / oven / release; custody row
+  released (cycle_closed); BKT-000010 → available with spotCheckPending. backing now 59.
+`npm run check`: not run (script only).
+
+================================================================================
+2026-10-11 — feat/spu-tweaks — Fall 2026 Roadmap v5: board-wide re-plan filed to BIMS (no app code)
+================================================================================
+Strategic re-plan session with Jacob (kanban via the BIMS MCP, actor jacob). Inputs: full board
+snapshot (226 items), Jacob's spoken state-of-the-company + phone notes, git history of BIMS /
+brevitest-research-v2 / brevitest-device / bioscale-app / brevitest-model since Aug 25, the
+Verification-and-Validation repo (campaign V2, handoff Rev D), BIMS progress log Sept 22 - Oct 5,
+experiments 357/358/359/361/363. Output doc: docs/roadmap/2026-10-11-fall-replan-v5.md, filed
+verbatim as PlanningDocument 8OD5lQx3AEmZeQDa1omxe (supersedes Fall 2026 Roadmap v4).
+Board changes:
+- 4 new milestones: TASK-184 welded acrylic cartridge proven (Nov 13 provisional), TASK-185
+  sample-collection kit v1 (Nov 6), TASK-186 A4M demo configuration frozen (Nov 20), TASK-187 V&V
+  campaign V2 master curve locked (Dec 4 provisional). Re-dated TASK-089 recipe lock -> Nov 14,
+  TASK-127 robot arm -> Oct 31, TASK-111 -> Nov 6 + retitled "20 trusted SPUs through the new
+  screen pipeline". A4M (TASK-090) is no longer gated by the CLSI studies or the gold-standard
+  study; it is gated by TASK-186 (decision D-1 in the plan, reversible).
+- 54 captures TASK-188..TASK-241 with sourceRef plan:8OD5lQx3AEmZeQDa1omxe (cartridge pivot,
+  SCREEN pipeline, stage-check ingest, quick sweep, thermal std, chemistry/IC50/200-cart
+  experiment, stability v2, V&V V2 studies + pre-work, kit/packaging, OT-2 ethernet, HR/ops in
+  BIMS, fleet-health page). Dependency chain wired to the milestones.
+- 26 dead links removed (declined/deleted/done blockers that made every chain infeasible),
+  8 merges (178->015, 019->179, 020->172, 095->159, 029->170, 091->064, 119->145, 043->189),
+  10 declines (shipped: 120, 126, 137, 033, 037, optical test; superseded/answered: 016, 057,
+  084, 085), 2 iceboxed (magnetometer board redesign, ERP research), ~30 context appends,
+  Tier-1 re-ranked with the critical items on top. Nothing committed to ready (human-only).
+`npm run check`: not run (docs + progress only; no app code touched).
