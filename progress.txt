@@ -19132,3 +19132,7 @@ Daemon: R04 + B07 updated + restarted (md5 2dd6dd53…, backups ot2-bridge.py.ba
 B14 daemon pending (also: B14 daemon cannot resolve DNS since its 20:19 UTC restart — bridge
 commands via Mongo don't reach it; wrote today's hand-swap request file over SSH instead).
 `npm run check`: 16 errors / 435 warnings — same as master.
+Deployment: production — Vercel GitHub integration build of master
+Source: branch master @ commit 42b1aae2 (merge of feat/reagent-bump-recovery)
+Retrieve this exact code: git checkout master at commit 42b1aae2
+What this deployment is for: "Bumped the robot" button on the reagent run page (pause + bump request); protocol/daemon already on B07+R04, B14 pending.
