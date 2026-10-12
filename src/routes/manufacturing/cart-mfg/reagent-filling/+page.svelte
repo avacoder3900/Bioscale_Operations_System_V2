@@ -188,8 +188,9 @@
 	 * aspiration batch, swaps the tip (from the rack, or by hand), re-probes it and
 	 * continues with that batch.
 	 */
-	let tipSwapStatus = $state<'' | 'sending' | 'rack' | 'hand' | 'cancelled' | 'error'>('');
-	async function requestTipSwap(mode: 'rack' | 'hand' | 'cancel') {
+	let tipSwapStatus = $state<'' | 'sending' | 'rack' | 'hand' | 'bump' | 'cancelled' | 'error'>('');
+	let tipSwapWarning = $state<string | null>(null);
+	async function requestTipSwap(mode: 'rack' | 'hand' | 'bump' | 'cancel') {
 		if (!data.activeRunId) return;
 		tipSwapStatus = 'sending';
 		// Tailnet line (OT2-TAILNET-5 S6): the same ?/requestTipSwap audit, then
@@ -222,6 +223,13 @@
 			const json = await res.json();
 			if (!res.ok || json?.type === 'failure') throw new Error(json?.data?.error ?? `HTTP ${res.status}`);
 			tipSwapStatus = mode === 'cancel' ? 'cancelled' : mode;
+			// Action data is devalue-encoded; the pauseWarning string (if any) is the
+			// only field we need back, so pull it out by name.
+			try {
+				const arr = JSON.parse(json?.data ?? '[]');
+				const pw = arr[0]?.pauseWarning;
+				tipSwapWarning = typeof pw === 'number' && typeof arr[pw] === 'string' ? arr[pw] : null;
+			} catch { tipSwapWarning = null; }
 		} catch (e) {
 			console.error('[reagent] tip swap request failed', e);
 			tipSwapStatus = 'error';
@@ -1110,7 +1118,14 @@
 								onclick={() => requestTipSwap('hand')}>
 								Swap tip — I'll put one on by hand
 							</button>
-							{#if tipSwapStatus === 'rack' || tipSwapStatus === 'hand'}
+							<button type="button"
+								class="rounded-md border border-red-400/60 bg-red-500/15 px-3 py-1.5 text-sm font-medium text-red-100 hover:bg-red-500/25 disabled:opacity-50"
+								disabled={tipSwapStatus === 'sending'}
+								title="Pauses the robot now. On Resume it homes the gantry, re-calibrates the tip it already has, and continues at the well it was about to fill."
+								onclick={() => requestTipSwap('bump')}>
+								Bumped the robot — pause, home, re-calibrate, continue
+							</button>
+							{#if tipSwapStatus === 'rack' || tipSwapStatus === 'hand' || tipSwapStatus === 'bump'}
 								<button type="button"
 									class="rounded-md border border-[var(--color-tron-border)] px-3 py-1.5 text-sm text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]"
 									onclick={() => requestTipSwap('cancel')}>
@@ -1125,6 +1140,9 @@
 						<p class="mt-2 text-xs text-emerald-300">Requested. The robot will stop before its next aspiration, drop the tip, pick a fresh one from the rack, calibrate it and continue. If the run is paused, press Resume.</p>
 					{:else if tipSwapStatus === 'hand'}
 						<p class="mt-2 text-xs text-emerald-300">Requested. The robot will stop before its next aspiration, raise the pipette over the calibrator and pause — pull the old tip off, push a new one on, then press Resume. It calibrates the new tip and continues. If the run is paused now, press Resume first so it can reach that point.</p>
+					{:else if tipSwapStatus === 'bump'}
+						<p class="mt-2 text-xs text-emerald-300">Paused and request sent. When you're ready, press <strong>Resume</strong>: the robot empties the tip back into the tube, <strong>homes</strong>, re-calibrates the tip it already has on the calibrator, re-aspirates and continues at the exact well it stopped at. Nothing is skipped or double-filled.</p>
+						{#if tipSwapWarning}<p class="mt-1 text-xs text-amber-300">{tipSwapWarning}</p>{/if}
 					{:else if tipSwapStatus === 'cancelled'}
 						<p class="mt-2 text-xs text-[var(--color-tron-text-secondary)]">Request cancelled (only if the robot hadn't acted on it yet).</p>
 					{:else if tipSwapStatus === 'error'}
