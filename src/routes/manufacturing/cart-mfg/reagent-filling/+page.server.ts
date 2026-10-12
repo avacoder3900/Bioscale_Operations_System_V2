@@ -11,7 +11,7 @@ import { ReagentSetLot, FillLot, fillLotNumber } from '$lib/server/db';
 import { findBucketLabels } from '$lib/server/services/bucket-service';
 import { checkRobotConflict, checkDeckConflict, checkTrayConflict } from '$lib/server/manufacturing/resource-locks';
 import { WAX_PAGE_OWNED } from '$lib/server/manufacturing/run-statuses';
-import { getRobot, robotGet, bridgeDeviceIdForRobot } from '$lib/server/opentrons/proxy';
+import { getRobot, robotGet, robotPost, bridgeDeviceIdForRobot } from '$lib/server/opentrons/proxy';
 import { bridgeJobGate } from '$lib/server/opentrons/bridge-token';
 import { requirePermission } from '$lib/server/permissions';
 // OT2-TAILNET-5 §7.1: the run lifecycle's BIMS halves (moved out of this file,
@@ -1048,7 +1048,12 @@ export const actions: Actions = {
 		await connectDB();
 		const data = await request.formData();
 		const runId = data.get('runId')?.toString();
-		const mode = data.get('mode')?.toString() === 'hand' ? 'hand' : 'rack';
+		const modeRaw = data.get('mode')?.toString() ?? 'rack';
+		// 'bump' (2026-10-12): operator knocked the robot. Same request channel as a
+		// tip swap; the protocol homes first, re-probes the SAME tip and continues at
+		// the well it was about to fill. We also pause the robot run right now so
+		// the gantry stops where it is until the operator presses Resume.
+		const mode: 'rack' | 'hand' | 'bump' = modeRaw === 'hand' ? 'hand' : modeRaw === 'bump' ? 'bump' : 'rack';
 		const cancel = data.get('cancel')?.toString() === 'true';
 		if (!runId) return fail(400, { error: 'Missing runId' });
 		const run = await ReagentBatchRecord.findById(runId).lean() as any;
@@ -1056,6 +1061,20 @@ export const actions: Actions = {
 		const robotId = run.robot?._id;
 		const robot = robotId ? await OpentronsRobot.findById(robotId).lean() as any : null;
 		if (!robot) return fail(400, { error: 'Run has no OT-2 robot' });
+		let pauseWarning: string | null = null;
+		if (mode === 'bump' && !cancel && run.opentronsRunId) {
+			try {
+				const pr = await robotPost(robot, `/runs/${run.opentronsRunId}/actions`, { data: { actionType: 'pause' } }, { timeoutMs: 8000 });
+				if (!pr.ok) {
+					const b = await pr.json().catch(() => ({}));
+					const detail = String((b as any)?.errors?.[0]?.detail ?? pr.status);
+					// Already paused / not running is fine — the request still lands.
+					if (!/already|not running|paused/i.test(detail)) pauseWarning = `Could not pause the robot (${detail}) — press Pause yourself.`;
+				}
+			} catch (e) {
+				pauseWarning = `Could not reach the robot to pause it (${e instanceof Error ? e.message : 'unknown'}) — press Pause yourself.`;
+			}
+		}
 		if (data.get('line')?.toString() === 'tailnet') {
 			// OT2-TAILNET-5 S6: the tailnet prepare. Same guards and the same
 			// AuditLog row (stamped line + bridgeJobId), but NO Ot2BridgeCommand —
@@ -1128,7 +1147,7 @@ export const actions: Actions = {
 			changedAt: new Date(),
 			newData: { mode, cancel, opentronsRunId: run.opentronsRunId ?? null, robotId: String(robotId) }
 		});
-		return { success: true, tipSwap: cancel ? 'cancelled' : mode };
+		return { success: true, tipSwap: cancel ? 'cancelled' : mode, pauseWarning };
 	},
 
 	forceAdvanceStage: async ({ request, locals }) => {

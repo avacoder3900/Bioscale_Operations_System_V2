@@ -1790,7 +1790,9 @@ def execute_tip_swap_request(command_id: str, payload: dict) -> None:
                 pass
             _post_result(command_id, {"ok": True, "status": 200, "body": {"cancelled": True}})
             return
-        mode = "hand" if str(payload.get("mode") or "rack") == "hand" else "rack"
+        # 'bump' (2026-10-12): home + re-probe the same tip after the robot was knocked.
+        _m = str(payload.get("mode") or "rack")
+        mode = _m if _m in ("hand", "bump") else "rack"
         os.makedirs(os.path.dirname(TIP_SWAP_REQUEST_PATH), exist_ok=True)
         tmp = TIP_SWAP_REQUEST_PATH + ".tmp"
         with open(tmp, "w") as f:

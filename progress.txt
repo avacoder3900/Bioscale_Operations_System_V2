@@ -19103,3 +19103,32 @@ Deployment: production — Vercel GitHub integration build of master
 Source: branch master @ commit 03ec8bea (merge of feat/studio-resolve-well-issues)
 Retrieve this exact code: git checkout master at commit 03ec8bea
 What this deployment is for: Studio can resolve/reopen reagent well-tracker issues; open list = blank slate after fixes.
+
+================================================================================
+2026-10-12 — feat/reagent-bump-recovery — "Bumped the robot" recovery for reagent fills (pause → home → re-probe same tip → continue)
+================================================================================
+Alejandro hit his head on B14 mid reagent run and asked for a one-button version of what we did
+by hand: stop, home, keep the tip, recalibrate it, continue where it left off.
+Why not the legacy /robot/home: the OT-2 blocks hardware moves while a protocol run is paused
+(ExecutionManager PAUSED) — the request hangs and fires at the next Resume, racing the protocol
+(worst case one dispense into the trash). A protocol-level home is the right tool.
+- protocols/Reagent_Filling_GEN7.py: tip-swap request mode 'bump'. take_tip_swap_request accepts
+  it; the dispense loop (per-well check) HOMES BEFORE returning to the source tube for the blow-out
+  (a lost-step frame could hit the rack rim), then do_tip_swap('bump') = protocol.home() + probe
+  the tip already on (pick_up=False) → re-aspirate → continue at the interrupted well. Same path
+  at a trip boundary. Nothing skipped or double-filled.
+- scripts/ot2-bridge.py: execute_tip_swap_request passes 'bump' through (was normalised to rack).
+- reagent-filling/+page.server.ts requestTipSwap: mode 'bump' also POSTs a pause action to the
+  robot run first (robotPost; tolerant of already-paused), returns pauseWarning if it couldn't.
+- reagent-filling/+page.svelte: red "Bumped the robot — pause, home, re-calibrate, continue" button
+  in the Tip-problem card + status text; pauseWarning surfaced.
+- NEW scripts/deploy-reagent-protocol.cjs: generalised deploy (all robots via LAN/Tailscale robot
+  HTTP API, Mongo labware bundle, analysis + RTP gate, repoint; skips robots with live runs;
+  ALLOW_LOADING=1; STORE=1 makes the .py the stored active OpentronProtocol).
+Deployed: stored active protocol op-1d10067f2f2b2efc (previous op-015681796c96e631 deactivated);
+B07 → 62e9954d, R04 → 9790cac8 (R04 was at Loading, no robot run yet). B14 SKIPPED (mid-run) —
+re-run `DEPLOY_APPLY=1 ROBOTS=b14 node scripts/deploy-reagent-protocol.cjs` after its run.
+Daemon: R04 + B07 updated + restarted (md5 2dd6dd53…, backups ot2-bridge.py.bak-20261012);
+B14 daemon pending (also: B14 daemon cannot resolve DNS since its 20:19 UTC restart — bridge
+commands via Mongo don't reach it; wrote today's hand-swap request file over SSH instead).
+`npm run check`: 16 errors / 435 warnings — same as master.
