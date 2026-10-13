@@ -1,6 +1,12 @@
+<!--
+  Reagent fill-mistake heatmap (2026-10-06; a component since 2026-10-08).
+  One section per robot + deck: the 24-position × 4-well grid coloured by how
+  often each well was logged on the run-page tracker, carrier and per-well
+  totals, the issue legend, and the runs that had issues. Rendered by the
+  well-issues page (all robots, with filters) and inline on a Robots-page
+  panel (one robot).
+-->
 <script lang="ts">
-	import { page } from '$app/stores';
-	import { goto } from '$app/navigation';
 	import {
 		REAGENT_DECK_ROWS,
 		REAGENT_WELLS,
@@ -8,15 +14,16 @@
 		issueLabel,
 		issueShort
 	} from '$lib/manufacturing/reagent-well-issues';
+	import type { HeatCell, HeatmapGroup, HeatmapRun } from '$lib/server/manufacturing/reagent-well-heatmap';
 
-	let { data } = $props();
-
-	function setParam(k: string, v: string) {
-		const url = new URL($page.url);
-		if (v) url.searchParams.set(k, v); else url.searchParams.delete(k);
-		// eslint-disable-next-line svelte/no-navigation-without-resolve -- URL built from current page
-		goto(url.pathname + url.search, { invalidateAll: true });
+	interface Props {
+		groups: HeatmapGroup[];
+		runs: HeatmapRun[];
+		/** Tighter paddings for the inline card on a robot panel. */
+		compact?: boolean;
 	}
+
+	let { groups, runs, compact = false }: Props = $props();
 
 	const fmt = (iso: string | null) =>
 		iso ? new Date(iso).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
@@ -30,7 +37,7 @@
 		return 'border-red-300 bg-red-500/70 text-white';
 	}
 
-	function cellTitle(cell: { count: number; byIssue: Record<string, number> } | undefined, pos: number, well: number) {
+	function cellTitle(cell: HeatCell | undefined, pos: number, well: number) {
 		if (!cell) return `#${pos} · well ${well} — clean`;
 		const parts = Object.entries(cell.byIssue).map(([k, n]) => `${issueLabel(k)} ×${n}`);
 		return `#${pos} · well ${well} — ${cell.count}: ${parts.join(', ')}`;
@@ -38,51 +45,32 @@
 
 	// Per-position totals (all four wells) and per-carrier totals, to spot
 	// "carrier 3 again" at a glance.
-	function positionTotal(g: (typeof data.groups)[number], pos: number) {
+	function positionTotal(g: HeatmapGroup, pos: number) {
 		return REAGENT_WELLS.reduce((s, w) => s + (g.cells[`${pos}:${w.well}`]?.count ?? 0), 0);
 	}
-	function carrierTotal(g: (typeof data.groups)[number], carrier: 0 | 1 | 2) {
+	function carrierTotal(g: HeatmapGroup, carrier: 0 | 1 | 2) {
 		return REAGENT_DECK_ROWS.reduce((s, row) => s + positionTotal(g, row[carrier]), 0);
 	}
-	function wellTotal(g: (typeof data.groups)[number], well: number) {
+	function wellTotal(g: HeatmapGroup, well: number) {
 		let s = 0;
 		for (let p = 1; p <= 24; p++) s += g.cells[`${p}:${well}`]?.count ?? 0;
 		return s;
 	}
-	function maxCell(g: (typeof data.groups)[number]) {
+	function maxCell(g: HeatmapGroup) {
 		return Math.max(1, ...Object.values(g.cells).map((c) => c.count));
 	}
+
+	const pad = $derived(compact ? 'p-3' : 'p-4');
 </script>
 
 <div class="space-y-4">
-	<div class="flex flex-wrap items-end justify-between gap-3">
-		<div>
-			<h2 class="text-lg font-semibold text-[var(--color-tron-text)]">Reagent fill mistakes by position</h2>
-			<p class="text-xs text-[var(--color-tron-text-secondary)]">
-				Everything logged on the run-page well tracker, last {data.days} days — {data.runs.length} of {data.totalRuns} runs had at least one issue.
-				A hot spot that repeats on one position or one carrier is deck geometry; scattered single cells are the tip.
-			</p>
-		</div>
-		<div class="flex items-center gap-2 text-xs">
-			<label class="text-[var(--color-tron-text-secondary)]" for="wi-robot">Robot</label>
-			<select id="wi-robot" class="tron-input !w-auto !py-1" value={data.robotFilter} onchange={(e) => setParam('robot', (e.currentTarget as HTMLSelectElement).value)}>
-				<option value="">All</option>
-				{#each data.robots as r (r.id)}<option value={r.id}>{r.name}</option>{/each}
-			</select>
-			<label class="text-[var(--color-tron-text-secondary)]" for="wi-days">Window</label>
-			<select id="wi-days" class="tron-input !w-auto !py-1" value={String(data.days)} onchange={(e) => setParam('days', (e.currentTarget as HTMLSelectElement).value)}>
-				{#each [7, 14, 30, 60, 90, 180] as d (d)}<option value={String(d)}>{d} days</option>{/each}
-			</select>
-		</div>
-	</div>
-
-	{#if data.groups.length === 0}
-		<p class="rounded border border-[var(--color-tron-border)] p-4 text-sm text-[var(--color-tron-text-secondary)]">No reagent runs in this window.</p>
+	{#if groups.length === 0}
+		<p class="rounded border border-[var(--color-tron-border)] {pad} text-sm text-[var(--color-tron-text-secondary)]">No reagent runs in this window.</p>
 	{/if}
 
-	{#each data.groups as g (g.robotId + g.deckId)}
+	{#each groups as g (g.robotId + g.deckId)}
 		{@const max = maxCell(g)}
-		<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4">
+		<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] {pad}">
 			<div class="mb-3 flex flex-wrap items-baseline justify-between gap-2">
 				<h3 class="text-sm font-semibold text-[var(--color-tron-text)]">
 					{g.robotName} <span class="text-[var(--color-tron-text-secondary)]">· {g.deckId}</span>
@@ -102,7 +90,7 @@
 			{#if g.issues === 0}
 				<p class="text-xs text-emerald-300">Clean — nothing logged for this robot/deck in the window.</p>
 			{:else}
-				<div class="grid gap-4 lg:grid-cols-[auto_1fr]">
+				<div class="grid gap-4 {compact ? '' : 'lg:grid-cols-[auto_1fr]'}">
 					<div class="overflow-x-auto">
 						<div class="mb-1 grid grid-cols-3 gap-2 text-center text-[10px] uppercase tracking-wide text-[var(--color-tron-text-secondary)]">
 							<span>Carrier 1 · {carrierTotal(g, 0)}</span><span>Carrier 2 · {carrierTotal(g, 1)}</span><span>Carrier 3 · {carrierTotal(g, 2)}</span>
@@ -156,11 +144,11 @@
 		</section>
 	{/each}
 
-	{#if data.runs.length}
-		<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4">
+	{#if runs.length}
+		<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] {pad}">
 			<h3 class="mb-2 text-sm font-semibold text-[var(--color-tron-text)]">Runs with logged issues</h3>
 			<div class="space-y-2">
-				{#each data.runs as r (r.id)}
+				{#each runs as r (r.id)}
 					<details class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)]/40">
 						<summary class="cursor-pointer px-3 py-2 text-xs">
 							<span class="font-semibold text-[var(--color-tron-text)]">{fmt(r.startedAt)}</span>

@@ -30,6 +30,8 @@
 		activeWells?: number[];
 		readonly?: boolean;
 		onChange?: (issues: ReagentWellIssueRow[]) => void;
+		/** Builds a form-action URL; defaults to this page's own ?/<name>. */
+		actionUrl?: (name: string) => string;
 	}
 
 	let {
@@ -40,7 +42,8 @@
 		reagentNames = {},
 		activeWells = [2, 3, 4, 5],
 		readonly = false,
-		onChange
+		onChange,
+		actionUrl = (n: string) => `?/${n}`
 	}: Props = $props();
 
 	let selected = $state<{ position: number; well: number } | null>(null);
@@ -87,7 +90,7 @@
 			const fd = new FormData();
 			fd.set('runId', runId);
 			for (const [k, v] of Object.entries(fields)) fd.set(k, v);
-			const res = await fetch(`?/${action}`, {
+			const res = await fetch(actionUrl(action), {
 				method: 'POST',
 				body: fd,
 				headers: { 'x-sveltekit-action': 'true' }

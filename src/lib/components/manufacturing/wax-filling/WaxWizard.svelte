@@ -1,3 +1,9 @@
+<!--
+  Wax filling wizard (ROBOT-OVERHAUL round 2, 2026-10-07). This WAS
+  wax-filling/+page.svelte; it is a component now so the Robots page can show
+  one per robot, side by side. `data` is loadWaxWizard()'s result; every
+  action still posts to the wax-filling route (see `act`).
+-->
 <script lang="ts">
 	import { enhance, deserialize } from '$app/forms';
 	import { goto, invalidateAll } from '$app/navigation';
@@ -27,6 +33,8 @@
 	import type { RejectionReasonCode } from '$lib/server/db/schema';
 
 	interface Props {
+		/** setup = the wax-filling page (prep → scan → start; hands over to /robots once running); run = a Robots-page panel (Running stage only). */
+		mode?: 'setup' | 'run';
 		data: {
 			robotId: string;
 			robotName: string;
@@ -110,7 +118,12 @@
 		};
 	}
 
-	let { data }: Props = $props();
+	let { data, mode = 'setup' }: Props = $props();
+
+	// ROBOT-OVERHAUL round 2: this wizard renders on /robots (every robot side by
+	// side), so its actions post to their own route explicitly instead of '?/x'.
+	const ROUTE = '/manufacturing/cart-mfg/wax-filling';
+	const act = (name: string) => `${ROUTE}?/${name}&robot=${encodeURIComponent(data.robotId)}`;
 
 	let submitting = $state(false);
 	let submittingTooLong = $state(false);
@@ -150,7 +163,7 @@
 			fd.set('runId', data.runState.runId);
 			fd.set('mode', mode === 'cancel' ? 'rack' : mode);
 			fd.set('cancel', mode === 'cancel' ? 'true' : 'false');
-			const res = await fetch('?/requestTipSwap', {
+			const res = await fetch(act('requestTipSwap'), {
 				method: 'POST',
 				body: fd,
 				headers: { 'x-sveltekit-action': 'true' },
@@ -494,7 +507,7 @@
 				formData.set('runId', runId);
 				const controller = new AbortController();
 				const timeout = setTimeout(() => controller.abort(), 45000);
-				const res = await fetch('?/startRun', {
+				const res = await fetch(act('startRun'), {
 					method: 'POST',
 					body: formData,
 					headers: { 'x-sveltekit-action': 'true' },
@@ -617,7 +630,7 @@
 			for (const [k, v] of Object.entries(formData)) {
 				fd.set(k, v);
 			}
-			const res = await fetch(`?/${action}`, {
+			const res = await fetch(act(action), {
 				method: 'POST',
 				body: fd,
 				headers: { 'x-sveltekit-action': 'true' },
@@ -799,7 +812,7 @@
 			return;
 		}
 		try {
-			const res = await fetch('?/startRun', {
+			const res = await fetch(act('startRun'), {
 				method: 'POST',
 				body: capturedParamsFd,
 				headers: { 'x-sveltekit-action': 'true' }
@@ -968,6 +981,12 @@
 	let runFinishedLocal = $state(false);
 	const runFinished = $derived(runFinishedLocal || !!data.runState.opentronsRunFinalStatus);
 
+	// The setup page hands over to the Robots page once the robot is running
+	// (2026-10-08): every running robot is watched there, side by side.
+	$effect(() => {
+		if (mode === 'setup' && !previewParam && effectiveStage === 'Running') void goto('/manufacturing/cart-mfg/robots');
+	});
+
 	// ── OT2-TAILNET-5 §7.1: this page's robot line for the run lifecycle ──────
 	// One RobotSession per page (shared with the embedded run controller). When
 	// it is on the direct line, Start / Finish / Cancel / Abort run as server
@@ -997,7 +1016,7 @@
 		const fd = new FormData();
 		for (const [k, v] of Object.entries(fields)) fd.set(k, v);
 		try {
-			const res = await fetch(`?/${action}`, {
+			const res = await fetch(act(action), {
 				method: 'POST',
 				body: fd,
 				headers: { 'x-sveltekit-action': 'true' },
@@ -1243,7 +1262,7 @@
 					Complete or cancel the reagent run before starting wax filling.
 				</p>
 				<!-- eslint-disable svelte/no-navigation-without-resolve -->
-				<a href="/manufacturing/cart-mfg/reagent-filling?robot={data.robotId}" class="mt-3 inline-block rounded border border-amber-500/50 px-4 py-2 text-sm text-amber-300 hover:bg-amber-900/30">
+				<a href="/manufacturing/cart-mfg/robots" class="mt-3 inline-block rounded border border-amber-500/50 px-4 py-2 text-sm text-amber-300 hover:bg-amber-900/30">
 					Go to Reagent Filling
 				</a>
 				<!-- eslint-enable svelte/no-navigation-without-resolve -->
@@ -1272,108 +1291,12 @@
 				/>
 			</div>
 
-			<div class="text-center">
-				<a href="?preview" class="rounded border border-[var(--color-tron-orange)]/50 px-4 py-2 text-sm text-[var(--color-tron-orange)] hover:bg-[var(--color-tron-orange)]/10">
-					Preview All Stages
-				</a>
-			</div>
 		</div>
 	{:else if !previewParam}
 		<!-- Active run: show stage wizard -->
 		<div class="space-y-6">
-			<!-- Stage progress indicator with navigation arrows -->
-			<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4">
-				<div class="mb-2 flex items-center justify-between">
-					<span class="text-xs font-medium text-[var(--color-tron-text-secondary)]">
-						Run {data.runState.runId}
-					</span>
-					<div class="flex items-center gap-3">
-					<a href="/manufacturing/cart-mfg/reagent-filling?robot={data.robotId}" class="rounded border border-[var(--color-tron-cyan)]/40 bg-[var(--color-tron-cyan)]/10 px-2 py-0.5 text-xs font-medium text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/20">Move to Reagent Run →</a>
-					<span class="text-xs text-[var(--color-tron-text-secondary)]">
-						Stage {currentBubbleIndex + 1} of {TIMELINE.length}
-					</span>
-					<a href="?preview" class="rounded border border-[var(--color-tron-orange)]/40 px-2 py-0.5 text-xs text-[var(--color-tron-orange)] hover:bg-[var(--color-tron-orange)]/10">Preview</a>
-					<button
-						type="button"
-						onclick={() => { showCancelModal = true; }}
-						class="rounded border border-red-500/40 px-2 py-0.5 text-xs text-red-400 transition-colors hover:border-red-500 hover:bg-red-900/20 hover:text-red-300"
-					>
-						Cancel Run
-					</button>
-				</div>
-				</div>
-				<div class="flex items-center gap-1">
-					<!-- Left arrow -->
-					<button
-						type="button"
-						disabled={viewStageIndex <= 0}
-						onclick={() => { viewStageIndex = Math.max(0, viewStageIndex - 1); }}
-						class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)] transition-colors hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)] disabled:opacity-30 disabled:hover:border-[var(--color-tron-border)] disabled:hover:text-[var(--color-tron-text-secondary)]"
-					>
-						<svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-							<path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7" />
-						</svg>
-					</button>
-
-					{#each TIMELINE as label, i (label)}
-						{@const isCurrent = i === currentBubbleIndex}
-						{@const isPast = i < currentBubbleIndex}
-						<div class="flex flex-1 flex-col items-center gap-1">
-							<div
-								class="flex h-8 w-8 items-center justify-center rounded-full text-xs font-bold transition-colors {isCurrent
-									? 'bg-[var(--color-tron-cyan)] text-white'
-									: isPast
-										? 'bg-green-600 text-white'
-										: 'bg-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)]'}"
-							>
-								{isPast ? '\u2713' : i + 1}
-							</div>
-							<span
-								class="text-center text-[10px] font-medium {isCurrent
-									? 'text-[var(--color-tron-cyan)]'
-									: isPast
-										? 'text-green-400'
-										: 'text-[var(--color-tron-text-secondary)]'}"
-							>
-								{label}
-							</span>
-						</div>
-						{#if i < TIMELINE.length - 1}
-							<div
-								class="mt-[-16px] h-0.5 flex-1 {isPast
-									? 'bg-green-600'
-									: 'bg-[var(--color-tron-border)]'}"
-							></div>
-						{/if}
-					{/each}
-
-					<!-- Right arrow -->
-					<button
-						type="button"
-						disabled={viewStageIndex >= currentStageIndex}
-						onclick={() => { viewStageIndex = Math.min(currentStageIndex, viewStageIndex + 1); }}
-						class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)] transition-colors hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)] disabled:opacity-30 disabled:hover:border-[var(--color-tron-border)] disabled:hover:text-[var(--color-tron-text-secondary)]"
-					>
-						<svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-							<path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
-						</svg>
-					</button>
-				</div>
-			</div>
-
-			<!-- Back to Current Stage banner -->
-			{#if isViewingPast}
-				<button
-					type="button"
-					onclick={() => { viewStageIndex = currentStageIndex; }}
-					class="flex w-full items-center justify-center gap-2 rounded-lg border border-[var(--color-tron-yellow)]/50 bg-[var(--color-tron-yellow)]/10 px-4 py-2 text-sm font-medium text-[var(--color-tron-yellow)] transition-colors hover:bg-[var(--color-tron-yellow)]/20"
-				>
-					<svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-						<path stroke-linecap="round" stroke-linejoin="round" d="M13 9l3 3m0 0l-3 3m3-3H8m13 0a9 9 0 11-18 0 9 9 0 0118 0z" />
-					</svg>
-					Viewing past stage (read-only) — Click to return to current stage
-				</button>
-			{/if}
+			<!-- The stage timeline header (with Cancel Run / Preview) was removed 2026-10-08:
+			     setup is linear on this page and the live run is watched on the Robots page. -->
 
 			<!-- Incubator Tube Info (visible during Loading through QC) -->
 			{#if data.tubeData && data.runState.stage && ['Loading', 'Running', 'Awaiting Removal', 'Cooling', 'QC', 'Storage'].includes(data.runState.stage)}
@@ -1423,7 +1346,7 @@
 	{/if}
 
 	<!-- Stage content: always rendered (not destroyed during submission) -->
-	{#if displayStage}
+	{#if displayStage && (mode === 'setup' || displayStage === 'Running')}
 	<div class="relative">
 		{#if submitting && !previewParam}
 			<div class="absolute inset-0 z-10 flex items-center justify-center rounded-lg bg-black/30">
@@ -1482,7 +1405,7 @@
 						contextReadonly={['cartridges']}
 						lastTipState={data.lastTipState}
 						submitting={submitting}
-						formAction="?/startRun"
+						formAction={act('startRun')}
 						extraHidden={{ runId: data.runState.runId ?? '', ...(testFillNoCarts ? { testFillNoCartridges: 'true' } : {}) }}
 						autoStart={autoStartPending}
 						onAutoStarted={() => (autoStartPending = false)}
@@ -1524,7 +1447,7 @@
 						contextReadonly={['cartridges']}
 						lastTipState={data.lastTipState}
 						submitting={submitting}
-						formAction="?/startRun"
+						formAction={act('startRun')}
 						extraHidden={{ runId: data.runState.runId ?? '', ...(testFillNoCarts ? { testFillNoCartridges: 'true' } : {}) }}
 						submitLabel="Save & continue to barcode scan →"
 						onSubmitIntercept={handleParamsConfirmed}
@@ -1598,7 +1521,7 @@
 						contextReadonly={['cartridges']}
 						lastTipState={data.lastTipState}
 						submitting={submitting || orchestrating}
-						formAction="?/startRun"
+						formAction={act('startRun')}
 						extraHidden={{ runId: data.runState.runId ?? '', ...(testFillNoCarts ? { testFillNoCartridges: 'true' } : {}) }}
 						onSubmitIntercept={handleScanAndStart}
 					/>
@@ -1647,6 +1570,16 @@
 				/>
 			{/if}
 		{:else if displayStage === 'Running'}
+			<!-- Run timer / finish card first (2026-10-08), then the robot controller, then the tip dropdown. -->
+			<RunExecution
+				runId={previewParam ? 'WXR-PREVIEW' : (data.runState.runId ?? '')}
+				serverRunStartTime={previewParam ? new Date() : (data.runState.runStartTime ? new Date(data.runState.runStartTime) : null)}
+				runFinished={previewParam ? true : runFinished}
+				fridges={data.fridges}
+				onDeckRemoved={handleDeckRemoved}
+				onAborted={handleAborted}
+				readonly={isPreviewOrPast}
+			/>
 			{#if !isPreviewOrPast && data.runState.opentronsRunId && data.opentronsRobotId}
 				<EmbeddedRunController
 					robotId={data.opentronsRobotId}
@@ -1663,10 +1596,11 @@
 					}}
 				/>
 				{#if !runFinishedLocal}
-					<div class="mt-3 rounded-lg border border-amber-500/40 bg-amber-900/10 p-4">
+					<details class="mt-3 rounded-lg border border-amber-500/40 bg-amber-900/10">
+						<summary class="cursor-pointer px-4 py-2 text-sm font-semibold text-amber-200">Tip problem? Swap the tip without losing your place</summary>
+						<div class="px-4 pb-4">
 						<div class="flex flex-wrap items-center justify-between gap-3">
 							<div>
-								<h3 class="text-sm font-semibold text-amber-200">Tip problem? Swap the tip without losing your place</h3>
 								<p class="mt-1 text-xs text-amber-200/80">
 									The robot finishes nothing further with the current tip: it empties it back into the wax tube, swaps the tip,
 									re-calibrates it, then re-aspirates and continues at the exact well it stopped at. Works while running or paused.
@@ -1705,58 +1639,12 @@
 						{:else if tipSwapStatus === 'error'}
 							<p class="mt-2 text-xs text-red-300">Could not send the request to the robot bridge — try again, or Pause and swap the tip when the run reaches its next tip change.</p>
 						{/if}
-					</div>
+						</div>
+					</details>
 				{/if}
 			{/if}
-			<RunExecution
-				runId={previewParam ? 'WXR-PREVIEW' : (data.runState.runId ?? '')}
-				serverRunStartTime={previewParam ? new Date() : (data.runState.runStartTime ? new Date(data.runState.runStartTime) : null)}
-				runFinished={previewParam ? true : runFinished}
-				fridges={data.fridges}
-				onDeckRemoved={handleDeckRemoved}
-				onAborted={handleAborted}
-				readonly={isPreviewOrPast}
-			/>
 		{/if}
 	</div>
-	{/if}
-
-	<!-- Cancel Run Modal -->
-	{#if showCancelModal}
-		<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-			<div class="mx-4 w-full max-w-md rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-6 shadow-xl">
-				<h3 class="text-lg font-semibold text-[var(--color-tron-text)]">Cancel Run</h3>
-				<p class="mt-2 text-sm text-[var(--color-tron-text-secondary)]">
-					Are you sure you want to cancel run {data.runState.runId}? This action cannot be undone.
-				</p>
-				<label class="mt-4 block">
-					<span class="text-sm font-medium text-[var(--color-tron-text-secondary)]">Reason</span>
-					<textarea
-						bind:value={cancelReason}
-						rows="3"
-						class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-3 py-2 text-sm text-[var(--color-tron-text)] placeholder-[var(--color-tron-text-secondary)] focus:border-[var(--color-tron-cyan)] focus:outline-none"
-						placeholder="Enter reason for cancellation..."
-					></textarea>
-				</label>
-				<div class="mt-4 flex justify-end gap-3">
-					<button
-						type="button"
-						onclick={() => { showCancelModal = false; cancelReason = ''; }}
-						class="rounded-lg border border-[var(--color-tron-border)] px-4 py-2 text-sm text-[var(--color-tron-text-secondary)] transition-colors hover:bg-[var(--color-tron-border)]/30"
-					>
-						Go Back
-					</button>
-					<button
-						type="button"
-						onclick={handleCancelRun}
-						disabled={!cancelReason.trim() || submitting}
-						class="rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-red-700 disabled:opacity-50"
-					>
-						{submitting ? 'Cancelling...' : 'Confirm Cancel'}
-					</button>
-				</div>
-			</div>
-		</div>
 	{/if}
 
 	<!-- Admin Override Modal -->

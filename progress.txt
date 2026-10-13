@@ -18945,6 +18945,368 @@ username with capitals was never found (admin or not). Now a whole-name, case-in
 ready-scope checks. `npm run check`: 13 errors / 435 warnings — same as master, none in the file.
 
 ================================================================================
+2026-10-07 — feat/robot-overhaul — Robots: one page for all three OT-2s, wax AND reagent
+================================================================================
+Branch cut from origin/master (b302574e) in a worktree. Goal from the operator:
+control all three robots from one page without hopping between the Wax Filling
+and Reagent Filling sections, see both processes for every robot at once, and
+drop what nobody used any more.
+
+### What the page is now
+/manufacturing/cart-mfg/robots is the one entry (sidebar "Robots"; the "Wax
+Filling", "Reagent Filling" and old "Robots" entries are gone — one entry, lit
+on either wizard route). A RobotBoard sits at the top: one card per active OT-2
+with the bridge health dot/label (ready/busy/hung/offline, polled every 10 s),
+a WAX row and a REAGENT row (stage badge or Idle; carts · elapsed · assay/deck;
+"Open →" when that process has a run, "Start →" when idle, "—" when the robot
+is busy with the other process), plus Restart server and Reset-to-idle per
+robot (the two controls that used to live in the two layouts; Reset was reagent
+only before). Clicking a row opens that wizard BELOW the board on the same
+page (/wax-filling?robot=… or /reagent-filling?robot=… — URLs unchanged, so
+every existing link, redirect and bookmark still lands). The card whose wizard
+is open is outlined. Tool links (Run history, Well issues, Cooling queue, Wax
+params, Reagent params) sit in the board header; those pages render under the
+breadcrumb without the board.
+
+### Structure
+- New route group src/routes/manufacturing/cart-mfg/(robots)/ with ONE
+  +layout.server.ts (loadRobotBoard) + +layout.svelte (board + breadcrumb +
+  "pick a robot" hint when a wizard URL has no ?robot=). wax-filling/ and
+  reagent-filling/ moved into the group with git mv (same URLs); their two
+  near-identical +layout.* pairs (robot tabs, select-a-robot cards, health
+  poll, restart, force-reset — ~680 lines) deleted.
+- New $lib/server/manufacturing/robot-board.ts: the single server read
+  (robots, page-owned wax + reagent run per robot via run-statuses.ts sets,
+  getRobotsHealth). New $lib/components/manufacturing/RobotBoard.svelte.
+- opentrons/history → (robots)/robots/history (URL /robots/history).
+  opentrons/[...path] is a 308 to /robots/<same>; opentron-control hub now
+  308s to /robots. cartridge-dashboard's history link repointed.
+
+### Vestigial, removed
+- opentron-control/wax/[runId] (993+300 lines): the post-OT-2 QC/Storage
+  flow. Wax runs have completed straight from the wizard
+  (storeDeckAndComplete → 'completed') since WAX-FLOW; nothing linked here
+  and its load 400s unless a run sits in QC/Storage, which no code writes.
+- opentron-control/settings: read-only mirror of the two settings pages,
+  unlinked.
+- lib/server/manufacturing/robot-cards.ts: the wax layout loaded its waxQueue
+  on every page view and no template rendered it.
+- lib/server/services/{wax,reagent}-filling/robots.ts: layout-only types.
+- old opentrons/+page.* "Robots" card page (its content is the board).
+Kept on purpose: opentron-control/scanner-test + sweeps (daemon tools, have
+unit tests), reagent cooling-queue and well-issues (linked from the board).
+
+### Check
+svelte-kit sync + svelte-check: 16 errors, all pre-existing on origin/master
+(the known 14 + 2 in sonic/decode.ts), none in touched files. vite build:
+client + server bundles build; the adapter-vercel file trace then runs out of
+heap on this Windows worktree (local artefact, as before). Only pre-existing
+warnings in moved files; none in the new ones.
+Not exercised against a live robot or DB in this session — needs a preview
+deploy smoke: /robots, Start on an idle robot, Open on a running one, Restart
+and Reset, and the two settings pages.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-6o2trrhxg-brevitest.vercel.app
+Source: branch feat/robot-overhaul @ commit 367a4739
+Retrieve this exact code: git checkout feat/robot-overhaul at commit 367a4739
+  (or: git log feat/robot-overhaul --oneline to find it if the branch has since moved on)
+What this deployment is for: the unified Robots page (board + both wizards), the /robots
+  redirects, and the removal of the dead opentron-control routes — operator smoke on live robots.
+Smoke (unauthenticated curl; 302 → /login means the route exists and is gated):
+  /login -> 200 
+  /manufacturing/cart-mfg/robots -> 302 https://bioscale-operations-system-mongodb-6o2trrhxg-brevitest.vercel.app/login
+  /manufacturing/cart-mfg/wax-filling?robot=x -> 302 https://bioscale-operations-system-mongodb-6o2trrhxg-brevitest.vercel.app/login
+  /manufacturing/cart-mfg/reagent-filling -> 302 https://bioscale-operations-system-mongodb-6o2trrhxg-brevitest.vercel.app/login
+  /manufacturing/cart-mfg/robots/history -> 302 https://bioscale-operations-system-mongodb-6o2trrhxg-brevitest.vercel.app/login
+  /manufacturing/cart-mfg/opentrons -> 302 https://bioscale-operations-system-mongodb-6o2trrhxg-brevitest.vercel.app/login
+  /manufacturing/cart-mfg/opentrons/history -> 302 https://bioscale-operations-system-mongodb-6o2trrhxg-brevitest.vercel.app/login
+  /manufacturing/cart-mfg/opentron-control -> 302 https://bioscale-operations-system-mongodb-6o2trrhxg-brevitest.vercel.app/login
+  /manufacturing/cart-mfg/opentron-control/wax/abc -> 302 https://bioscale-operations-system-mongodb-6o2trrhxg-brevitest.vercel.app/login
+
+
+================================================================================
+2026-10-07 — feat/robot-overhaul — Round 2: every robot's wizard open at once, side by side
+================================================================================
+Operator feedback on round 1: structure good, but they want to RUN all three
+robots side by side — the wax or reagent card opening under the robot board,
+all three at once, no new tabs, no waiting for a page to load.
+
+### What changed
+- /manufacturing/cart-mfg/robots now renders every OPEN wizard below the board
+  in a 1/2/3-column grid (xl:grid-cols-N), one panel per robot. A robot with a
+  run in progress is always open on that process; "Start →" on the board opens
+  an idle robot's wax or reagent wizard (URL state ?open=<id>:wax,<id>:reagent,
+  $lib/manufacturing/robot-panels.ts) and "Close" hides it again. "Open ↓" on
+  a running robot scrolls to its panel (#panel-<id>). The board outlines every
+  open card. The single-robot pages are gone.
+- The two wizards are components now: wax-filling/+page.svelte →
+  $lib/components/manufacturing/wax-filling/WaxWizard.svelte and
+  reagent-filling/+page.svelte → …/reagent-filling/ReagentWizard.svelte (git
+  mv, content unchanged except: `data` typed from the loader; every relative
+  '?/<action>' fetch / formAction now goes through `act(name)` =
+  /manufacturing/cart-mfg/<process>-filling?/<name>&robot=<id>, because the
+  wizard no longer lives on its own route; the two "go to the other process"
+  links point at /robots?open=…). ReagentWellTracker takes an `actionUrl`
+  prop for the same reason. SvelteKit picks the action from whichever query
+  param starts with '/', so the extra &robot= is fine.
+- The two page loads moved verbatim into $lib/server/manufacturing/
+  wax-wizard.ts (loadWaxWizard(locals, robotId, robotName)) and
+  reagent-wizard.ts (loadReagentWizard(locals, robotId)); the route files keep
+  ONLY their actions plus a load that 302s /wax-filling?robot=X to
+  /robots?open=X:wax (same for reagent), so the cart-mfg dashboard's per-robot
+  links keep working. The empty-state fallbacks gained the fields the full
+  return has (SvelteKit's PageData used to paper over that; a plain union
+  does not). Dead ACTIVE_STAGES constant dropped.
+- robots/+page.server.ts loads the open panels in parallel (one loadX per
+  panel) after the layout's board; panels the user may not read are skipped.
+
+### Check
+svelte-kit sync + svelte-check: 14 errors, all pre-existing (the sonic
+decode.ts pair cleared once @audio/decode-* were present locally). vite build:
+client + server bundles build; adapter-vercel file trace OOMs on this Windows
+worktree as before. Not exercised against live robots here — needs the
+preview smoke: open all three, Start on an idle robot, Close, a running
+robot's Open ↓, and an action from a panel (tip swap / cancel) to confirm the
+explicit action URLs round-trip.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-7ja5xjdey-brevitest.vercel.app
+Source: branch feat/robot-overhaul @ commit 51d28d3b
+Retrieve this exact code: git checkout feat/robot-overhaul at commit 51d28d3b
+  (or: git log feat/robot-overhaul --oneline to find it if the branch has since moved on)
+What this deployment is for: round 2 — all three robots' wizards open side by side on /robots;
+  the wizard-as-component refactor (explicit action URLs) needs a logged-in operator smoke.
+Smoke (unauthenticated curl; 302 → /login means the route exists and is gated):
+  /login -> 200 
+  /manufacturing/cart-mfg/robots -> 302 https://bioscale-operations-system-mongodb-7ja5xjdey-brevitest.vercel.app/login
+  /manufacturing/cart-mfg/robots?open=x:wax,y:reagent -> 302 https://bioscale-operations-system-mongodb-7ja5xjdey-brevitest.vercel.app/login
+  /manufacturing/cart-mfg/wax-filling?robot=x -> 302 https://bioscale-operations-system-mongodb-7ja5xjdey-brevitest.vercel.app/login
+  /manufacturing/cart-mfg/reagent-filling?robot=y -> 302 https://bioscale-operations-system-mongodb-7ja5xjdey-brevitest.vercel.app/login
+  /manufacturing/cart-mfg/robots/history -> 302 https://bioscale-operations-system-mongodb-7ja5xjdey-brevitest.vercel.app/login
+
+
+================================================================================
+2026-10-07 — feat/robot-overhaul — Round 3: all three panels always open, Wax | Reagent toggle per robot
+================================================================================
+Operator feedback on round 2: open all three cards automatically, and let me
+choose wax or reagent per robot.
+
+- /robots now renders a panel for EVERY active robot, always (no Start/Close).
+  A robot with a run in progress shows that process, toggle locked; an idle
+  robot shows the operator's choice (?open=<id>:wax|reagent, same URL state as
+  before), else the process it ran LAST (new RobotBoardRow.lastProcess from a
+  $sort/$group over WaxFillingRun + ReagentBatchRecord createdAt), else wax.
+- Panel header: robot name + a Wax | Reagent segmented toggle (links that
+  rewrite ?open=; disabled with a "run in progress" title when locked).
+- Board rows: "Open ↓" on the process a panel shows (scrolls), "Switch →" on
+  the other process of an idle robot, "—" when busy with the other process.
+  The card outline for "selected" is gone — every card is open now.
+- A reader of only one process (waxFilling:read xor reagentFilling:read)
+  still gets each idle robot's panel on the process they may see.
+
+Check: svelte-check 14 errors (all pre-existing); vite build client + server
+bundles build (adapter trace OOMs locally as before). Needs the preview smoke
+with a login: three panels up, toggle an idle robot, a locked toggle on a
+running one, and one action from a panel.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-opqqqvppe-brevitest.vercel.app
+Source: branch feat/robot-overhaul @ commit f110e39e
+Retrieve this exact code: git checkout feat/robot-overhaul at commit f110e39e
+  (or: git log feat/robot-overhaul --oneline to find it if the branch has since moved on)
+What this deployment is for: round 3 — all three robot panels always open with a per-robot
+  Wax | Reagent toggle; needs a logged-in operator smoke.
+Smoke (unauthenticated curl; 302 → /login means the route exists and is gated):
+  /login -> 200 
+  /manufacturing/cart-mfg/robots -> 302 https://bioscale-operations-system-mongodb-opqqqvppe-brevitest.vercel.app/login
+  /manufacturing/cart-mfg/robots?open=x:reagent -> 302 https://bioscale-operations-system-mongodb-opqqqvppe-brevitest.vercel.app/login
+  /manufacturing/cart-mfg/wax-filling?robot=x -> 302 https://bioscale-operations-system-mongodb-opqqqvppe-brevitest.vercel.app/login
+
+
+================================================================================
+2026-10-08 — feat/robot-overhaul — Round 4: board is status-only; heatmap icon on each panel
+================================================================================
+Operator feedback on round 3: the Wax/Reagent buttons on the top robot cards
+are redundant now that each panel has the toggle — remove them (keep the
+panel toggle), and put the well-issue heatmap as a small icon in the corner
+of the card.
+
+- RobotBoard: the per-process "Open ↓" / "Switch →" / "—" buttons are gone.
+  The rows show stage + detail only; the row whose process the panel shows is
+  marked "open", a robot busy with the other process still says so. Dropped
+  the now-unused $page / robot-panels href imports.
+- Robots page panel header: a 3×3 heatmap icon (left of the Wax | Reagent
+  toggle) links to /reagent-filling/well-issues?robot=<id> — that robot's
+  reagent fill-mistake heatmap (the per-well tracker's history).
+
+Check: svelte-check 14 errors (all pre-existing), no new warnings in the two
+files; vite build client + server bundles build.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-b51ewgqws-brevitest.vercel.app
+Source: branch feat/robot-overhaul @ commit 639bf49d
+Retrieve this exact code: git checkout feat/robot-overhaul at commit 639bf49d
+  (or: git log feat/robot-overhaul --oneline to find it if the branch has since moved on)
+What this deployment is for: round 4 — status-only board cards, heatmap icon per panel.
+Smoke (unauthenticated curl; 302 → /login means the route exists and is gated):
+  /login -> 200 
+  /manufacturing/cart-mfg/robots -> 302 https://bioscale-operations-system-mongodb-b51ewgqws-brevitest.vercel.app/login
+  /manufacturing/cart-mfg/reagent-filling/well-issues?robot=x -> 302 https://bioscale-operations-system-mongodb-b51ewgqws-brevitest.vercel.app/login
+
+
+================================================================================
+2026-10-08 — feat/robot-overhaul — OT-2 simulator: test the Robots page with no robot moving
+================================================================================
+Operator asked for a way to test the new system without activating any robot,
+removable before the final ship. Built as scripts/ot2-sim/ — nothing in src/
+changed; the rig talks to BIMS exactly like a real OT-2 + bridge daemon.
+
+- scripts/ot2-sim/fake-ot2.ts: in-memory OT-2 HTTP API for the surface the
+  wizards use (health, runs create/play/pause/stop/delete/commands, protocols
+  + analyses, maintenance runs, lights/identify/home). A played run reveals
+  its planned commands over --run-seconds and lands `succeeded`, emitting the
+  exact "Dispensed …uL into well X2" and "TIP TRACKER … (index N)" comments
+  the finish parsers read (waxWellsForCart is the inverse of
+  cartsFilledFromWells). Analyses echo live Mongo labware defs (or a
+  re-upload's bundled defs) so the run-start freshness gate passes.
+- scripts/ot2-sim/daemon.ts: impersonates N robots — serves the fake API on
+  127.0.0.1:3195N (direct line, local dev) AND long-polls
+  /api/agent/ot2/poll as ot2-s0N-bridge (queue line, Vercel previews),
+  executing http / upload_protocol / sweep (hands out seeded SIM-W/SIM-R
+  barcodes by which process owns the robot, with progress + pause/cancel) /
+  deck_scan (SIM-DECK-001) / tip_swap_request / restart_robot_server /
+  auto_resume_run / calibrate_tip, and posts heartbeats every 10 s.
+  `--selftest` drives the fake robot with no BIMS/Mongo (passes).
+- scripts/ot2-sim/seed.ts: upserts 3 sim robots (Equipment + opentrons_robots
+  same _id, "SIM Robot S0N" so the slot code yields the device id, wax +
+  reagent protocol entries with RTP schemas, queue mode), a default scanner
+  position set with a deck-barcode position, SIM Deck 001, a 200 mL wax lot,
+  a reagent set lot + open fill lot FL-SIM-001, stored .py placeholders only
+  when the line has none active, and 72 backing + 72 wax_filled sim carts.
+  --reset-carts between cycles; --teardown deletes every sim document.
+- scripts/ot2-sim/README.md: how to run it against a preview or local dev,
+  what is not simulated, and the removal steps.
+
+Check: `tsc --strict` on the three scripts clean; selftest passes; the
+scripts are outside the app tsconfig so svelte-check is unchanged (14).
+NOT yet run against a database or deployment from this session — the seed
+writes visible "SIM Robot" cards into whichever DB MONGODB_URI points at.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-mn244wa8b-brevitest.vercel.app
+Source: branch feat/robot-overhaul @ commit 922e02a8
+Retrieve this exact code: git checkout feat/robot-overhaul at commit 922e02a8
+  (or: git log feat/robot-overhaul --oneline to find it if the branch has since moved on)
+What this deployment is for: same app as 639bf49d plus scripts/ot2-sim — the preview URL to point
+  the simulator daemon at (BIMS_BASE_URL) for the no-robot test of the Robots page.
+Smoke (unauthenticated curl; 302 → /login means the route exists and is gated):
+  /manufacturing/cart-mfg/robots -> 302 https://bioscale-operations-system-mongodb-mn244wa8b-brevitest.vercel.app/login
+
+================================================================================
+2026-10-08 — feat/robot-overhaul — Round 5: heatmap opens as a card inside the robot panel
+================================================================================
+Operator feedback: the heatmap button should open a card above the filling
+info in the panel, not a new page.
+
+- The well-issues roll-up moved verbatim from reagent-filling/well-issues/
+  +page.server.ts into $lib/server/manufacturing/reagent-well-heatmap.ts
+  (loadWellIssueHeatmap); the page load calls it, and a new JSON endpoint
+  GET /api/manufacturing/reagent-well-issues?robot=<id>&days=30
+  (manufacturing:read) serves the same shape.
+- The heatmap markup (per robot/deck grid, carrier + per-well totals, legend,
+  runs with issues) is now $lib/components/manufacturing/reagent-filling/
+  ReagentWellHeatmap.svelte, used by the well-issues page (unchanged look)
+  and by the Robots page.
+- Robots page: the heatmap icon is a toggle. Open → a card above the wizard
+  ("Reagent fill mistakes · last 30 days — N of M runs had an issue") that
+  fetches that robot's data on first open (per-robot state, cached while the
+  page lives), with Refresh, Full page (the filtered well-issues page) and
+  Close. Compact layout inside the panel column.
+
+Check: svelte-check 14 errors (all pre-existing), no warnings in the touched
+files; vite build client + server bundles build.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-66ql71g1y-brevitest.vercel.app
+Source: branch feat/robot-overhaul @ commit ed998b42
+Retrieve this exact code: git checkout feat/robot-overhaul at commit ed998b42
+  (or: git log feat/robot-overhaul --oneline to find it if the branch has since moved on)
+What this deployment is for: round 5 — the heatmap as an inline card on each robot panel.
+Smoke (unauthenticated curl; 302 → /login or 401 means the route exists and is gated):
+  /manufacturing/cart-mfg/robots -> 302 https://bioscale-operations-system-mongodb-66ql71g1y-brevitest.vercel.app/login
+  /api/manufacturing/reagent-well-issues?robot=x -> 401 
+  /manufacturing/cart-mfg/reagent-filling/well-issues -> 302 https://bioscale-operations-system-mongodb-66ql71g1y-brevitest.vercel.app/login
+
+
+================================================================================
+2026-10-08 — feat/robot-overhaul — Round 6: setup pages back; Robots page is the live command view
+================================================================================
+Operator direction: keep the wax and reagent SETUP flows on their own pages,
+land on the Robots page once the robot is running, return there after a run
+concludes, and reach the setup pages from Start wax / Start reagent buttons.
+Plus three run-view changes: strip the stage-timeline module at the top (and
+its Cancel run / Preview / Reset to deck loading buttons), move the run timer
+to the top, and turn the well tracker and tip-problem cards into dropdowns.
+
+- Wizards gained `mode`: 'setup' (the wax-filling / reagent-filling page:
+  prep → scan → params → Start) or 'run' (a Robots-page panel: Running stage
+  only). In setup mode an $effect sends the operator to /robots the moment
+  the run is Running. The stage-timeline header block (Run id · Stage x of y
+  · Preview · Cancel Run · bubbles · arrows · past/future-stage banners) is
+  gone from both, as are the "Preview All Stages" links and the Cancel Run,
+  Reset to Deck Loading and Skip Stage modals (their only triggers lived in
+  that header; the server actions remain).
+- Running block reordered: RunExecution (timer / finish card) first, then
+  EmbeddedRunController, then "Tip problem? …" as a <details> dropdown;
+  reagent also wraps ReagentWellTracker in a <details> ("Well tracker — log
+  a fill mistake as you see it") before the finish controls.
+- /wax-filling?robot=X and /reagent-filling?robot=X are real pages again:
+  thin +page.svelte wrappers (robot name, "← All robots") over the wizards in
+  setup mode; their loads call loadWaxWizard / loadReagentWizard (no robot →
+  /robots). The (robots) layout treats them like tool pages (no board).
+- /robots: one panel per robot — running (wax Running/Awaiting Removal,
+  reagent Running) → the wizard in run mode; a run in Setup/Loading →
+  "Continue … setup →" to its page; idle → "Start wax →" / "Start reagent →"
+  (permission-aware). Finishing a run drops the panel to idle in place. The
+  heatmap card stays. ?open= panel state removed (robot-panels.ts trimmed to
+  the type + paths); the board marks a live row "live".
+
+Check: svelte-check 14 errors (all pre-existing), no warnings in touched
+files (431 total, down 2); vite build client + server bundles build. Needs
+the logged-in smoke: Start wax from /robots → setup page → start run → auto
+return to /robots → run panel (timer on top, dropdowns) → finish → idle.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-1w27clmkp-brevitest.vercel.app
+Source: branch feat/robot-overhaul @ commit beb2021a
+Retrieve this exact code: git checkout feat/robot-overhaul at commit beb2021a
+  (or: git log feat/robot-overhaul --oneline to find it if the branch has since moved on)
+What this deployment is for: round 6 — setup pages restored, Robots page shows live runs only,
+  run view with timer first and tip-swap / well-tracker dropdowns.
+Smoke (unauthenticated curl; 302 → /login means the route exists and is gated):
+  /manufacturing/cart-mfg/robots -> 302 https://bioscale-operations-system-mongodb-1w27clmkp-brevitest.vercel.app/login
+  /manufacturing/cart-mfg/wax-filling?robot=x -> 302 https://bioscale-operations-system-mongodb-1w27clmkp-brevitest.vercel.app/login
+  /manufacturing/cart-mfg/reagent-filling?robot=x -> 302 https://bioscale-operations-system-mongodb-1w27clmkp-brevitest.vercel.app/login
+  /manufacturing/cart-mfg/wax-filling -> 302 https://bioscale-operations-system-mongodb-1w27clmkp-brevitest.vercel.app/login
+
+
+================================================================================
+2026-10-08 — feat/robot-overhaul — Round 7: run controller card trimmed to line · status · Play/Pause/Stop
+================================================================================
+Operator: on the "Running on Reagent Run" card keep only queue, running,
+pause, play, stop. EmbeddedRunController (shared by both wizards and wax
+RunExecution) now renders the TransportPill (queue / direct), the status
+badge and the three controls. Removed: the "Running on <name>" heading text
+(kept as the card's title tooltip), the pause-requested note, the OT-2 run
+id + elapsed tiles, the "Last action" line and the "Run finished… advancing"
+note. Kept: the error line and the "Why it failed" list — they only appear
+when something went wrong. Script state behind the removed tiles is left in
+place (derived values, no behaviour change).
+
+Check: svelte-check 14 errors (all pre-existing), no warnings in the file;
+vite build client + server bundles build.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-pis28gtzc-brevitest.vercel.app
+Source: branch feat/robot-overhaul @ commit 8f6a2bca
+Retrieve this exact code: git checkout feat/robot-overhaul at commit 8f6a2bca
+  (or: git log feat/robot-overhaul --oneline to find it if the branch has since moved on)
+What this deployment is for: round 7 — the trimmed run controller card (line · status · Play/Pause/Stop).
+Smoke (unauthenticated curl; 302 → /login means the route exists and is gated):
+  /manufacturing/cart-mfg/robots -> 302 https://bioscale-operations-system-mongodb-pis28gtzc-brevitest.vercel.app/login
 2026-10-06 — master — production deployment: PR #87 (sections / front matter / metadata from chat, MCP 3.10.0)
 ================================================================================
 PR #87 (feat/wi-sections-via-chat → master) merged by pdaga-sudo at 2026-10-06 22:03 UTC.
@@ -19136,3 +19498,39 @@ Deployment: production — Vercel GitHub integration build of master
 Source: branch master @ commit 42b1aae2 (merge of feat/reagent-bump-recovery)
 Retrieve this exact code: git checkout master at commit 42b1aae2
 What this deployment is for: "Bumped the robot" button on the reagent run page (pause + bump request); protocol/daemon already on B07+R04, B14 pending.
+
+================================================================================
+2026-10-13 — feat/robot-overhaul — Final build: origin/master merged in; simulator removed
+================================================================================
+Operator asked to push to main. origin/master (20 commits: reagent bump
+recovery, Studio well-issue marks/resolve, real deck positions for the well
+tracker, SPU WI chat control) merged into the branch. Git carried master's
+reagent-page edits across the page→component rename into ReagentWizard
+(bump-recovery button lands inside the tip-problem dropdown) and its
+well-issues edits into the heatmap lib/component. Hand-resolved: progress.txt
+(both logs) and the reagent route (thin setup load kept; master's
+deckPosition fallback ported into reagent-wizard.ts); HeatmapRunIssue gained
+resolvedAt/resolvedBy/resolvedNote.
+
+scripts/ot2-sim/ removed as agreed ("can be removed before final ship").
+Retrieve it with: git checkout 922e02a8 -- scripts/ot2-sim. If sim fixtures
+were seeded into the database, run that seed.ts --teardown before/after the
+ship — the sim robots would otherwise show on the production Robots page.
+
+Check: svelte-check 14 errors (all pre-existing on master); vite build on the
+merged tree — see below.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-nji6shgaw-brevitest.vercel.app
+Source: branch feat/robot-overhaul @ commit 7801d596
+Retrieve this exact code: git checkout feat/robot-overhaul at commit 7801d596
+  (or: git log feat/robot-overhaul --oneline to find it if the branch has since moved on)
+What this deployment is for: the final build (master merged in, simulator removed) — PR #90.
+Smoke (unauthenticated curl; 302 → /login or 401 means the route exists and is gated):
+  /login -> 200 
+  /manufacturing/cart-mfg/robots -> 302 https://bioscale-operations-system-mongodb-nji6shgaw-brevitest.vercel.app/login
+  /manufacturing/cart-mfg/wax-filling?robot=x -> 302 https://bioscale-operations-system-mongodb-nji6shgaw-brevitest.vercel.app/login
+  /manufacturing/cart-mfg/reagent-filling?robot=x -> 302 https://bioscale-operations-system-mongodb-nji6shgaw-brevitest.vercel.app/login
+  /manufacturing/cart-mfg/robots/history -> 302 https://bioscale-operations-system-mongodb-nji6shgaw-brevitest.vercel.app/login
+  /api/manufacturing/reagent-well-issues?robot=x -> 401 
+  /manufacturing/cart-mfg/opentrons -> 302 https://bioscale-operations-system-mongodb-nji6shgaw-brevitest.vercel.app/login
+

@@ -403,11 +403,11 @@
 </script>
 
 <div class="space-y-4 rounded-xl border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-5">
-	<div class="flex items-baseline justify-between">
-		<h3 class="flex items-baseline gap-2 text-lg font-semibold text-[var(--color-tron-text)]">
-			Running on {robotName}
-			<TransportPill state={conn} onRetry={() => void session?.retryDirect()} />
-		</h3>
+	<!-- Trimmed 2026-10-08 (operator): just the line (queue / direct), the robot's
+	     status and the Play / Pause / Stop controls. Run id, elapsed and last
+	     action are gone (the timer card above carries the time); failures still show. -->
+	<div class="flex items-center justify-between gap-2" title="Running on {robotName}">
+		<TransportPill state={conn} onRetry={() => void session?.retryDirect()} />
 		<span
 			class="rounded-full border px-3 py-1 text-xs font-medium uppercase tracking-wider {statusColor(
 				displayStatus
@@ -417,44 +417,9 @@
 		</span>
 	</div>
 
-	{#if pausePending && !isTerminal && runStatus !== 'paused'}
-		<div class="rounded border border-yellow-500/40 bg-yellow-900/10 p-2 text-xs text-yellow-300">
-			Pause requested — the robot finishes the step it is already on before it stops,
-			so this can take a few seconds on a fill.
-		</div>
-	{/if}
-
 	{#if visibleError}
 		<div class="rounded border border-red-500/40 bg-red-900/10 p-2 text-xs text-red-300">
 			{visibleError}
-		</div>
-	{/if}
-
-	<div class="grid grid-cols-2 gap-3 text-xs">
-		<div class="rounded border border-[var(--color-tron-border)] bg-black/30 p-2">
-			<div class="uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">
-				OT-2 run id
-			</div>
-			<div class="mt-1 font-mono break-all" style="color: var(--color-tron-text)">
-				{opentronsRunId}
-			</div>
-		</div>
-		<div class="rounded border border-[var(--color-tron-border)] bg-black/30 p-2">
-			<div class="uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">
-				Elapsed
-			</div>
-			<div class="mt-1 font-mono" style="color: var(--color-tron-text)">
-				{elapsed ?? '—'}
-			</div>
-		</div>
-	</div>
-
-	{#if currentCommand}
-		<div class="rounded border border-[var(--color-tron-border)] bg-black/20 p-2 text-xs">
-			<span class="uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">
-				Last action:
-			</span>
-			<span class="ml-2 font-mono" style="color: var(--color-tron-text)">{currentCommand}</span>
 		</div>
 	{/if}
 
@@ -488,10 +453,6 @@
 	</div>
 
 	{#if TERMINAL.has(runStatus)}
-		<div class="rounded border border-[var(--color-tron-border)] bg-black/30 p-2 text-xs" style="color: var(--color-tron-text-secondary)">
-			Run finished with status <span class="font-mono" style="color: var(--color-tron-cyan)">{runStatus}</span>.
-			Advancing the flow…
-		</div>
 		{#if runStatus === 'failed' && run?.errors?.length}
 			<div class="mt-2 rounded border border-red-500/40 bg-red-900/15 p-2 text-xs text-red-300">
 				<p class="font-semibold">Why it failed</p>

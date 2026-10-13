@@ -1,24 +1,72 @@
-import { redirect } from '@sveltejs/kit';
-import { connectDB, ReagentBatchRecord, OpentronsRobot } from '$lib/server/db';
-import type { PageServerLoad } from './$types';
-
-export const config = { maxDuration: 60 };
-
 /**
- * Reagent well-issue history (2026-10-06). Every mistake logged on the run-page
- * well tracker, rolled up by robot + deck into a 24-position × 4-well heatmap,
- * plus the per-run list. The point: calibration looks right in the Studio and
- * the fills still miss "here and there" — if the misses pile up on one position
- * or one carrier, that is a deck/geometry problem; if they are random, it is the
- * tip. Only runs that have at least one issue are listed; the run count in the
- * header is ALL runs in the window so the rate is honest.
+ * Reagent well-issue history, rolled up for the heatmap (2026-10-06; lifted
+ * out of reagent-filling/well-issues/+page.server.ts on 2026-10-08 so the
+ * Robots page can show the same card inline per robot).
+ *
+ * Every mistake logged on the run-page well tracker, grouped by robot + deck
+ * into a 24-position × 4-well heatmap, plus the per-run list. The point:
+ * calibration looks right in the Studio and the fills still miss "here and
+ * there" — if the misses pile up on one position or one carrier, that is a
+ * deck/geometry problem; if they are random, it is the tip. Only runs that
+ * have at least one issue are listed; `totalRuns` is ALL runs in the window so
+ * the rate is honest.
  */
-export const load: PageServerLoad = async ({ locals, url }) => {
-	if (!locals.user) redirect(302, '/login');
-	await connectDB();
+import { connectDB, ReagentBatchRecord, OpentronsRobot } from '$lib/server/db';
 
-	const days = Math.min(365, Math.max(1, Number(url.searchParams.get('days') ?? 30) || 30));
-	const robotFilter = url.searchParams.get('robot') ?? '';
+export type HeatCell = { count: number; byIssue: Record<string, number> };
+
+export interface HeatmapGroup {
+	robotId: string;
+	robotName: string;
+	deckId: string;
+	runs: number;
+	runsWithIssues: number;
+	cartsFilled: number;
+	issues: number;
+	/** "pos:well" → cell */
+	cells: Record<string, HeatCell>;
+	byIssue: Record<string, number>;
+}
+
+export interface HeatmapRunIssue {
+	deckPosition: number;
+	well: number;
+	reagentName: string | null;
+	issue: string;
+	note: string | null;
+	loggedBy: string | null;
+	loggedAt: string | null;
+	/** Stamped from the Deck Calibration Studio once the deck was corrected (master, 2026-10-09). */
+	resolvedAt: string | null;
+	resolvedBy: string | null;
+	resolvedNote: string | null;
+}
+
+export interface HeatmapRun {
+	id: string;
+	robotName: string;
+	deckId: string;
+	status: string | null;
+	startedAt: string | null;
+	assay: string | null;
+	operator: string | null;
+	cartridgeCount: number;
+	issues: HeatmapRunIssue[];
+}
+
+export interface WellIssueHeatmap {
+	days: number;
+	robotFilter: string;
+	robots: { id: string; name: string }[];
+	groups: HeatmapGroup[];
+	runs: HeatmapRun[];
+	totalRuns: number;
+}
+
+export async function loadWellIssueHeatmap(opts: { days?: number | null; robotId?: string | null }): Promise<WellIssueHeatmap> {
+	await connectDB();
+	const days = Math.min(365, Math.max(1, Number(opts.days ?? 30) || 30));
+	const robotFilter = (opts.robotId ?? '').trim();
 	const since = new Date(Date.now() - days * 86_400_000);
 
 	const robots = (await OpentronsRobot.find({}).select('_id name').lean()) as any[];
@@ -31,15 +79,8 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		.sort({ createdAt: -1 })
 		.lean()) as any[];
 
-	type Cell = { count: number; byIssue: Record<string, number> };
-	const groups = new Map<string, {
-		robotId: string; robotName: string; deckId: string;
-		runs: number; runsWithIssues: number; cartsFilled: number; issues: number;
-		cells: Record<string, Cell>; // "pos:well"
-		byIssue: Record<string, number>;
-	}>();
-
-	const runRows: any[] = [];
+	const groups = new Map<string, HeatmapGroup>();
+	const runRows: HeatmapRun[] = [];
 	for (const r of runs) {
 		const rid = String(r.robot?._id ?? '');
 		const rname = r.robot?.name && robotName.get(rid) ? robotName.get(rid)! : (robotName.get(rid) ?? r.robot?.name ?? rid);
@@ -96,4 +137,4 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		runs: runRows,
 		totalRuns: runs.length
 	};
-};
+}
