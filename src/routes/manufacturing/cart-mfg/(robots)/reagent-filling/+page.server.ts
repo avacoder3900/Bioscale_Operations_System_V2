@@ -6,7 +6,7 @@ import {
 	OpentronsRobot, Ot2BridgeCommand
 } from '$lib/server/db';
 import { recordTransaction, resolvePartId } from '$lib/server/services/inventory-transaction';
-import { ReagentSetLot, FillLot, fillLotNumber } from '$lib/server/db';
+import { ReagentSetLot, FillLot, fillLotNumber, NON_CALIBRATED_REAGENT_LOT, NON_CALIBRATED_LOT_LABEL } from '$lib/server/db';
 
 import { findBucketLabels } from '$lib/server/services/bucket-service';
 import { checkRobotConflict, checkDeckConflict, checkTrayConflict } from '$lib/server/manufacturing/resource-locks';
@@ -174,8 +174,11 @@ export const actions: Actions = {
 		if (!fillLotId) return fail(400, { error: 'A fill lot is required to fill. Open one (pick its reagent lot) and select it.' });
 		const fillLot = await FillLot.findById(fillLotId).lean() as any;
 		if (!fillLot || !fillLot.fillLotNumber || fillLot.status !== 'open') return fail(400, { error: 'Fill lot not found or closed' });
+		// A non-calibrated fill lot has no reagent lot on purpose (fills before the lot exists). Any other
+		// fill lot must point at an active research reagent lot.
+		const nonCalibrated = !fillLot.reagentLotId && fillLot.reagentLotSource === 'non-calibrated';
 		const reagentLot = fillLot.reagentLotId ? await ReagentSetLot.findById(fillLot.reagentLotId).lean() as any : null;
-		if (!reagentLot || reagentLot.status !== 'active') return fail(400, { error: 'The fill lot\'s reagent lot is missing or retired' });
+		if (!nonCalibrated && (!reagentLot || reagentLot.status !== 'active')) return fail(400, { error: 'The fill lot\'s reagent lot is missing or retired' });
 
 		let tubes: { reagentName: string; wellPosition: number; volume: number; lotId?: string; transferTubeId?: string }[] = [];
 		if (tubesRaw) {
@@ -191,22 +194,31 @@ export const actions: Actions = {
 		}));
 
 		await ReagentBatchRecord.findByIdAndUpdate(runId, {
-			$set: { tubeRecords, status: 'Loading', fillLotId, fillLotNumber: fillLot.fillLotNumber, reagentLotId: String(reagentLot._id), reagentLotNumber: reagentLot.lotNumber }
+			$set: {
+				tubeRecords, status: 'Loading', fillLotId, fillLotNumber: fillLot.fillLotNumber,
+				reagentLotId: reagentLot ? String(reagentLot._id) : '',
+				reagentLotNumber: reagentLot ? reagentLot.lotNumber : NON_CALIBRATED_LOT_LABEL
+			}
 		});
 
 		return { success: true };
 	},
 
-	/** DOMAIN-32: open a fill lot from the fill screen — a reagent lot plus a name (FL-YYYYMMDD-NNN). */
+	/**
+	 * DOMAIN-32: open a fill lot from the fill screen — a reagent lot plus a name (FL-YYYYMMDD-NNN).
+	 * reagentLotId 'non-calibrated' opens one with NO reagent lot ("non-calibrated reagent lot
+	 * chemicals"): the normal case for fills done before a calibrated reagent lot exists.
+	 */
 	createFillLot: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
 		await connectDB();
 		const data = await request.formData();
 		const reagentLotId = ((data.get('reagentLotId') as string | null) ?? '').trim();
 		const name = ((data.get('name') as string | null) ?? '').trim().slice(0, 200);
-		if (!reagentLotId) return fail(400, { error: 'Pick a reagent lot' });
-		const reagentLot = await ReagentSetLot.findById(reagentLotId).lean() as any;
-		if (!reagentLot || reagentLot.status !== 'active') return fail(400, { error: 'Reagent lot not found or retired' });
+		if (!reagentLotId) return fail(400, { error: 'Pick a reagent lot, or "Non-calibrated reagent lot chemicals"' });
+		const nonCalibrated = reagentLotId === NON_CALIBRATED_REAGENT_LOT;
+		const reagentLot = nonCalibrated ? null : await ReagentSetLot.findById(reagentLotId).lean() as any;
+		if (!nonCalibrated && (!reagentLot || reagentLot.status !== 'active')) return fail(400, { error: 'Reagent lot not found or retired' });
 		const now = new Date();
 		const prefix = fillLotNumber(now, 0).slice(0, -3);
 		const todays = await FillLot.countDocuments({ fillLotNumber: { $regex: `^${prefix}` } });
@@ -215,13 +227,13 @@ export const actions: Actions = {
 			fillLotNumber: fillLotNumber(now, todays + 1),
 			name,
 			status: 'open',
-			assayId: reagentLot.assayId ?? '',
+			assayId: reagentLot?.assayId ?? '',
 			assayName: '',
 			fillDate: now.toISOString(),
 			runIds: [],
-			reagentLotId: String(reagentLot._id),
-			reagentLotNumber: reagentLot.lotNumber,
-			reagentLotSource: 'bims',
+			reagentLotId: reagentLot ? String(reagentLot._id) : '',
+			reagentLotNumber: reagentLot ? reagentLot.lotNumber : '',
+			reagentLotSource: reagentLot ? 'bims' : 'non-calibrated',
 			curveSetId: '', curveSetSource: '', assignedBy: '', assignedAt: '', assignmentNote: '', notes: '',
 			createdBy: locals.user.username ?? String(locals.user._id)
 		};

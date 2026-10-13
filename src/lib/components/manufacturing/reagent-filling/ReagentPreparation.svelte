@@ -22,16 +22,26 @@
 		components?: { role: string; catalogName?: string; manufacturerLotId?: string }[];
 	}
 
-	/** A research-app fill lot (fill_lots): one reagent lot, however many robot runs. */
+	/**
+	 * A research-app fill lot (fill_lots): one reagent lot, however many robot runs — or, when
+	 * reagentLotSource is 'non-calibrated', no reagent lot at all (fills done before the lot exists).
+	 */
 	interface FillLotOption {
 		_id: string;
 		fillLotNumber: string;
 		name?: string;
 		reagentLotId: string;
 		reagentLotNumber: string;
+		reagentLotSource?: string;
 		runIds?: string[];
 		fillDate?: string;
 	}
+
+	/** Sent as the reagent lot id to open a fill lot with no reagent lot. */
+	const NON_CALIBRATED = 'non-calibrated';
+	const NON_CALIBRATED_LABEL = 'Non-calibrated reagent lot chemicals';
+	const isNonCalibrated = (f: FillLotOption | null) => !!f && !f.reagentLotId && f.reagentLotSource === NON_CALIBRATED;
+	const reagentLabel = (f: FillLotOption) => (isNonCalibrated(f) ? 'non-calibrated reagents' : `reagent lot ${f.reagentLotNumber}`);
 
 	interface Props {
 		reagentDefinitions: ReagentDef[];
@@ -96,11 +106,14 @@
 			.map((r) => { const c = critical(lot, r); return c ? `${r}: ${c.catalogName ?? '?'}${c.manufacturerLotId ? ` (${c.manufacturerLotId})` : ''}` : `${r}: –`; })
 			.join(' · ');
 
-	// Every well of this fill carries the reagent lot number; the transfer tube id is
-	// derived so downstream views keep a per-well record.
+	// Every well of this fill carries the reagent lot number ('non-calibrated' when the fill lot has
+	// none); the transfer tube id is derived so downstream views keep a per-well record.
 	const tubes = $derived<TubeRecord[]>(
 		selectedFill
-			? activeWells.map((w, i) => ({ wellPosition: w.wellPosition, reagentName: w.reagentName, sourceLotId: selectedFill.reagentLotNumber, transferTubeId: `${selectedFill.reagentLotNumber}-T${i + 1}` }))
+			? activeWells.map((w, i) => {
+					const lotTag = selectedFill.reagentLotNumber || NON_CALIBRATED;
+					return { wellPosition: w.wellPosition, reagentName: w.reagentName, sourceLotId: lotTag, transferTubeId: `${lotTag}-T${i + 1}` };
+				})
 			: []
 	);
 
@@ -136,7 +149,7 @@
 <div class="space-y-5">
 	<h2 class="text-lg font-semibold text-[var(--color-tron-text)]">Fill Lot</h2>
 	<p class="text-sm text-[var(--color-tron-text-secondary)]">
-		A fill lot is one reagent lot (630 QD, 480 QD, beads and buffers) filled across as many robot runs as you like. Runs default to the fill lot used last; open a new one when the reagents change.
+		A fill lot is one reagent lot (630 QD, 480 QD, beads and buffers) filled across as many robot runs as you like. Runs default to the fill lot used last; open a new one when the reagents change. Filling before a calibrated reagent lot exists? Open a fill lot on "{NON_CALIBRATED_LABEL}" — the reagent lot can be set on it later in the research app.
 	</p>
 
 	{#if isReadonly}
@@ -158,11 +171,11 @@
 		>
 			<option value="">Select a fill lot…</option>
 			{#each lots as f (f._id)}
-				<option value={f._id}>{f.fillLotNumber}{f.name ? ` · ${f.name}` : ''} · reagent lot {f.reagentLotNumber}{f._id === defaultFillLotId ? ' · (last used)' : ''}</option>
+				<option value={f._id}>{f.fillLotNumber}{f.name ? ` · ${f.name}` : ''} · {reagentLabel(f)}{f._id === defaultFillLotId ? ' · (last used)' : ''}</option>
 			{/each}
 		</select>
 		{#if lots.length === 0 && !showNew}
-			<p class="text-xs text-red-400">No open fill lots. Open one here (pick the reagent lot) or in the research app under Curves.</p>
+			<p class="text-xs text-red-400">No open fill lots. Open one here (pick the reagent lot, or "{NON_CALIBRATED_LABEL}") or in the research app under Curves.</p>
 		{/if}
 
 		{#if showNew}
@@ -170,12 +183,15 @@
 				<label for="new-fill-reagent-lot" class="text-xs font-medium text-[var(--color-tron-text-secondary)]">Reagent lot for the new fill lot</label>
 				<select id="new-fill-reagent-lot" bind:value={newReagentLotId} disabled={creating} class="min-h-[40px] w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-3 py-2 text-sm text-[var(--color-tron-text)]">
 					<option value="">Select a reagent lot…</option>
+					<option value={NON_CALIBRATED}>{NON_CALIBRATED_LABEL} (no reagent lot yet)</option>
 					{#each reagentLots as lot (lot._id)}
 						<option value={lot._id}>{lot.lotNumber}{lot.name ? ` · ${lot.name}` : ''}</option>
 					{/each}
 				</select>
-				{#if reagentLots.length === 0}
-					<p class="text-xs text-red-400">No active reagent lots exist. Create one in the research app (Reagent Lots) first.</p>
+				{#if newReagentLotId === NON_CALIBRATED}
+					<p class="text-xs text-[var(--color-tron-yellow)]">No reagent lot: for fills done before a calibrated lot exists (conjugation / chemistry calibration runs). Cartridges are stamped "non-calibrated"; the reagent lot can be set on this fill lot later in the research app (Curves), which restamps them.</p>
+				{:else if reagentLots.length === 0}
+					<p class="text-xs text-red-400">No active reagent lots exist. Pick "{NON_CALIBRATED_LABEL}", or create one in the research app (Reagent Lots) first.</p>
 				{/if}
 				<input type="text" bind:value={newName} disabled={creating} placeholder="name (optional), e.g. Sept 21 algo fill" class="min-h-[40px] w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-3 py-2 text-sm text-[var(--color-tron-text)]" />
 				{#if createError}<p class="text-xs text-red-400">{createError}</p>{/if}
@@ -191,7 +207,11 @@
 			<div class="rounded-lg border border-[var(--color-tron-cyan)]/30 bg-[var(--color-tron-cyan)]/10 p-4">
 				<p class="text-xs text-[var(--color-tron-text-secondary)]">Fill lot{isDefault ? ' · same as the last run' : ''}</p>
 				<p class="font-mono text-lg font-bold text-[var(--color-tron-cyan)]">{selectedFill.fillLotNumber}{selectedFill.name ? ` · ${selectedFill.name}` : ''}</p>
-				<p class="text-xs text-[var(--color-tron-text-secondary)]">reagent lot <span class="font-mono">{selectedFill.reagentLotNumber}</span>{selectedLot ? ` · ${describe(selectedLot)}` : ''}{selectedFill.runIds?.length ? ` · ${selectedFill.runIds.length} run${selectedFill.runIds.length === 1 ? '' : 's'} so far` : ''}</p>
+				{#if isNonCalibrated(selectedFill)}
+					<p class="text-xs text-[var(--color-tron-yellow)]">non-calibrated reagents — no reagent lot yet{selectedFill.runIds?.length ? ` · ${selectedFill.runIds.length} run${selectedFill.runIds.length === 1 ? '' : 's'} so far` : ''}</p>
+				{:else}
+					<p class="text-xs text-[var(--color-tron-text-secondary)]">reagent lot <span class="font-mono">{selectedFill.reagentLotNumber}</span>{selectedLot ? ` · ${describe(selectedLot)}` : ''}{selectedFill.runIds?.length ? ` · ${selectedFill.runIds.length} run${selectedFill.runIds.length === 1 ? '' : 's'} so far` : ''}</p>
+				{/if}
 			</div>
 
 			<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4">
