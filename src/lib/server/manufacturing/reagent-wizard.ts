@@ -7,7 +7,7 @@
 import { redirect } from '@sveltejs/kit';
 import {
 	connectDB, ReagentBatchRecord, AssayDefinition, ManufacturingSettings, WaxFillingRun,
-	Equipment, EquipmentLocation, generateId, ReagentLot, OpentronsRobot, ReagentSetLot, FillLot
+	Equipment, EquipmentLocation, ReagentLot, OpentronsRobot, ReagentSetLot, FillLot
 } from '$lib/server/db';
 import { WAX_PAGE_OWNED } from './run-statuses';
 import { getRobot, robotGet } from '$lib/server/opentrons/proxy';
@@ -57,7 +57,6 @@ function emptyReagentState(robotId: string, loadError?: string) {
 		reagentDefinitions: [] as { id: string; reagentName: string; wellPosition: number | null; volumeMicroliters: number | null; isActive: boolean }[],
 		cartridges: [] as any[],
 		rejectionCodes: [] as any[],
-		tubes: [] as { id: string; reagentName: string; volume: number }[],
 		reagentPrepDone: false,
 		reagentBatchBarcode: null as string | null,
 		fridges: [] as { id: string; displayName: string; barcode: string }[],
@@ -275,13 +274,6 @@ export async function loadReagentWizard(locals: App.Locals, robotId: string) {
 		// Operator-logged per-well fill mistakes (run-page tracker).
 		const wellIssues = serializeWellIssues(activeRun?.wellIssues);
 
-		// Tube records (reagent prep)
-		const tubes = (activeRun?.tubeRecords ?? []).map((t: any) => ({
-			id: t._id ? String(t._id) : generateId(),
-			reagentName: t.reagentName ?? '',
-			volume: t.volumeMicroliters ?? 0
-		}));
-
 		// Finalized ReagentLots eligible to feed cartridge fills, grouped by
 		// protocol slug. UI dropdown wire-up is pending (see TODO below) —
 		// the data is here so the picker can land without a second backend pass.
@@ -362,11 +354,11 @@ export async function loadReagentWizard(locals: App.Locals, robotId: string) {
 			reagentDefinitions,
 			cartridges,
 			rejectionCodes,
-			tubes,
-			// Reagent-batch prep state, server-derived so it survives a reload (the
-			// batch is now selected BEFORE the deck scan, which reloads the page).
-			reagentPrepDone: (activeRun?.tubeRecords ?? []).length > 0,
-			reagentBatchBarcode: (activeRun?.tubeRecords ?? [])[0]?.sourceLotId ?? null,
+			// Fill-lot step state, server-derived so it survives a reload (the fill lot is
+			// picked BEFORE the deck scan, which reloads the page). reagentBatchBarcode is
+			// the reagent lot number ('non-calibrated' when the fill lot has none).
+			reagentPrepDone: !!(activeRun as any)?.fillLotId,
+			reagentBatchBarcode: ((activeRun as any)?.reagentLotNumber as string | undefined) || null,
 			fridges,
 			activeReagentLots,
 			researchReagentLots: JSON.parse(JSON.stringify(researchReagentLots)),

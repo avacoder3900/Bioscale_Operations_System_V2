@@ -278,8 +278,17 @@ export async function finalizeReagentRun(runId: string, user: User, trigger: str
 	// Write reagentFilling phase to cartridges (WRITE-ONCE). Research runs
 	// leave assayType null on each cartridge — downstream UIs must treat
 	// reagentFilling.isResearch === true as "assay intentionally blank".
+	//
+	// The assay chosen at fill IS the cartridge's assay (2026-10-13): a production run also
+	// writes the top-level assayId/assayName — the fields the research app and the device
+	// Lambda read. Research linking keeps it (an arm with no assay inherits it) or overrides
+	// it (an arm with an assay); unlinking falls back to it. Written only on cartridges still
+	// in a pre-fill status — one already linked into an experiment keeps the arm's assay.
 	if (run?.cartridgesFilled?.length) {
 		const isResearch = run.isResearch === true;
+		const fillAssay = !isResearch && run.assayType?._id
+			? { assayId: String(run.assayType._id), assayName: String(run.assayType.name ?? '') }
+			: null;
 		// Operator-logged fill mistakes (run-page well tracker), by deck position,
 		// so each cart carries its own. Carts with a clean fill get an empty list.
 		const issuesByPos = new Map<number, any[]>();
@@ -302,7 +311,6 @@ export async function finalizeReagentRun(runId: string, user: User, trigger: str
 				'reagentFilling.assayType': isResearch ? null : run.assayType,
 				'reagentFilling.isResearch': isResearch,
 				'reagentFilling.deckPosition': cf.deckPosition,
-				'reagentFilling.tubeRecords': run.tubeRecords,
 				'reagentFilling.fillLotId': run.fillLotId ?? '',
 				'reagentFilling.fillLotNumber': run.fillLotNumber ?? '',
 				'reagentFilling.reagentLotId': run.reagentLotId ?? '',
@@ -319,7 +327,7 @@ export async function finalizeReagentRun(runId: string, user: User, trigger: str
 							'reagentFilling.recordedAt': { $exists: false },
 							status: { $in: PRE_REAGENT_STATUSES }
 						},
-						update: { $set: { ...stamp, status: 'reagent_filled' } }
+						update: { $set: { ...stamp, ...(fillAssay ?? {}), status: 'reagent_filled' } }
 					}
 				},
 				// Cart already moved past the fill (e.g. linked into a research
@@ -338,8 +346,17 @@ export async function finalizeReagentRun(runId: string, user: User, trigger: str
 			];
 		});
 		await CartridgeRecord.bulkWrite(bulkOps);
-		// DOMAIN-32: the fill lot remembers its runs (the research app lists lots by them)
-		if (run.fillLotId) await FillLot.updateOne({ _id: run.fillLotId }, { $addToSet: { runIds: String(run._id) } }).catch(() => undefined);
+		// DOMAIN-32: the fill lot remembers its runs (the research app lists lots by them). A fill
+		// lot opened without an assay (non-calibrated, no reagent lot) takes the run's.
+		if (run.fillLotId) {
+			await FillLot.updateOne({ _id: run.fillLotId }, { $addToSet: { runIds: String(run._id) } }).catch(() => undefined);
+			if (fillAssay) {
+				await FillLot.updateOne(
+					{ _id: run.fillLotId, $or: [{ assayId: '' }, { assayId: null }, { assayId: { $exists: false } }] },
+					{ $set: fillAssay }
+				).catch(() => undefined);
+			}
+		}
 
 		// Consume 2ml tubes (PT-CT-107) — FLAT 4 TUBES PER RUN regardless of
 		// cartridge count (1–24). Research runs consume the same 4 tubes.

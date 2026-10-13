@@ -58,6 +58,8 @@ const reagentBatchRecordSchema = new Schema({
 	operator: operatorRef,
 	deckId: String,
 
+	// Historical only (retired 2026-10-13): runs no longer write per-well tube records; the fill
+	// lot / reagent lot on the run carry the reagent lineage. Kept so old runs still read.
 	tubeRecords: [{
 		_id: false,
 		wellPosition: Number, reagentName: String, sourceLotId: String,
