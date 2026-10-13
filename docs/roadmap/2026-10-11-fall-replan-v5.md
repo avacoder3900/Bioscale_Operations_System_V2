@@ -197,3 +197,59 @@ Jacob's four-experiment program (phone) sits *before* Javier's ten CLSI studies 
 - TASK-015 diluent tube + TASK-157 SOP + TASK-014 kit v1 → 🎯 TASK-185 → TASK-009 internal round 1, TASK-011 external round 1
 - TASK-063 app pass 1 + 🎯 TASK-184/089 outcome + fleet firmware + TASK-013 → 🎯 TASK-186 → TASK-067 photos, TASK-068 IFU/video v2, TASK-064 app pass 2 → 🎯 TASK-090
 - chute → long-cycle proof → calibration → synchronized protocol → 🎯 TASK-127
+
+---
+
+## Addendum, Oct 12 2026 — Jacob's reactions and John's commercial draft
+
+Filed after the workshop page was reviewed. Board is live; these are the deltas since v5 was filed on Oct 11. All new tasks carry `sourceRef plan:8OD5lQx3AEmZeQDa1omxe`.
+
+### Jacob's additions (TASK-242 to TASK-250)
+
+| Task | What | Where it hangs |
+|---|---|---|
+| TASK-242 | Spike (3 d): does slowing the oscillation stroke stop the stage missing steps? | Device pipeline, next to the v101 stage check |
+| TASK-243 | Firmware: count total stage travel including oscillation strokes (odometer), into BIMS | Device pipeline |
+| TASK-244 | Finish the assay export + analysis system: redeploy Lambda, quantify block on 6.1 profile, well A ~2, fill-lot picker, one clean end-to-end pass | Chemistry; blocks TASK-215 |
+| TASK-216 | Stability experiment #2 retitled and START NOW: 6.1 W3 pre-scan tracks tracer brightness directly; recipe-lock gate removed | Chemistry |
+| TASK-245 | Test reagent filling + sample loading on 3D-printed new-geometry cartridges before the mold lands (geometry + process fit only) | Cartridge pivot; blocks TASK-184 |
+| TASK-246 | Second MongoDB Atlas cluster for client/field tests with parallel-pathing logic (one codebase, two data paths) | Software; blocks TASK-011 |
+| TASK-247 | Production management of the assay system: plan, lot genealogy, release gate, shelf-life status, kit record, traceability (project; first slice at processing) | Software / production |
+| TASK-248 | Cold-chain shipping test to Riley with dye-filled thermal-seal carts, data logger, round trip | Cartridge pivot; blocks TASK-192 and TASK-185 |
+| TASK-249 | Conveyor belt at the output of the robot-arm wax line | Filling line |
+| TASK-250 | Buy a bigger SPU box (chore) | Packaging; blocks TASK-011 |
+
+### John's draft one-pager (photo, "Draft – For Discussion Purposes Only")
+
+Oct Internal Testing → gate "validation against gold standard to confirm accuracy" → Nov External Testing → gate "solve stability issue to enable 3 day shipping" → Dec Beta Testing → initial investor meetings.
+
+Line items already on the board: app MVP (TASK-063), draft instructions (TASK-065), demo video (TASK-066), finalize instructions (TASK-068), rough/refined packaging (TASK-014, TASK-234), FedEx cool box (TASK-248), UPS alternative (TASK-233), cartridges per kit (TASK-013), external recruiting (TASK-010), external round 1 (TASK-011), update app (TASK-064).
+
+New from John's draft (TASK-251 to TASK-258):
+
+| Task | What |
+|---|---|
+| TASK-251 | Internal remote-tester round: 20 carts each to RT and JMO in CA, rough packaging, FedEx cool box, app MVP, draft IFU. Blocked by TASK-248 and TASK-065; blocks TASK-011 |
+| TASK-252 | Initial use cases v1 |
+| TASK-253 | Produce 6 external-testing kits: 1 kit + 1 SPU each for 3 local + 1 CA testers, 2 spare. Blocked by TASK-185; blocks TASK-011 |
+| TASK-254 | Update the website for external and beta testing |
+| TASK-255 | December beta plan: local B2B pilots, continued local B2C, web-based B2C. Blocked by TASK-011 |
+| TASK-256 | B2B local strategy + B2B kit definition |
+| TASK-257 | COGS analysis: cartridge, kit, SPU at current and 10k volumes |
+| TASK-258 | Initial investor meetings after A4M: deck with dated gates and the honest risk statement. Blocked by TASK-090 |
+
+Context appended to TASK-013, TASK-233, TASK-010, TASK-248, TASK-054 with John's specifics.
+
+### Where John's gates and the board's gates differ
+
+- **Gold standard before external testing (John, end Oct)** vs TASK-054 due Dec 4 and off the A4M gate under D-1. This is decision **D-7** (by Oct 18): if John's gate stands, TASK-054 moves to early November on the thermal-seal cart, the mass-spec lab (TASK-052/053) is booked now, and it blocks TASK-011.
+- **Stability for 3-day shipping before beta (John, end Nov)**: already covered two ways, a cold-chain recipe that holds 3 days (TASK-248 → TASK-192) or the welded cart (TASK-184).
+- Board gates John's sheet does not show: trusted devices (TASK-111, Nov 6), recipe lock (TASK-089, Nov 14), demo freeze (TASK-186, Nov 20). The 6 external kits and the A4M kit are the same frozen configuration.
+
+### Step-back point 13
+
+John's plan and the board are one plan with the gates in different places. His are market-facing, the board's are physical. On one timeline the only real conflict is the gold-standard study's date (D-7).
+
+### Counts after the addendum
+
+71 new tasks since Oct 11 (TASK-188 to TASK-258), 7 open decisions (D-1 to D-7). The 17 tasks added Oct 12 are linked but unsized; the roadmap capacity clamp does not reflect them until they are processed.

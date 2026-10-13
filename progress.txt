@@ -13496,3 +13496,29 @@ Board changes:
   084, 085), 2 iceboxed (magnetometer board redesign, ERP research), ~30 context appends,
   Tier-1 re-ranked with the critical items on top. Nothing committed to ready (human-only).
 `npm run check`: not run (docs + progress only; no app code touched).
+
+================================================================================
+2026-10-12 — feat/spu-tweaks — Roadmap v5 addendum: Jacob's Oct 12 reactions + John's commercial draft folded into the board (no app code)
+================================================================================
+Workshop follow-ups on the Fall 2026 Roadmap v5 (BIMS plan 8OD5lQx3AEmZeQDa1omxe). Board
+changes were made live through the BIMS MCP as actor jacob; this entry records them.
+
+Captured TASK-242..TASK-250 from Jacob: slow-oscillation spike (242), stage-travel odometer
+firmware (243), finish assay export + analysis system (244, blocks the 200-cart experiment),
+3D-printed cartridge fill/sample-load test before the mold (245, blocks TASK-184), second
+Atlas cluster for client tests with parallel-pathing logic (246, blocks external round 1),
+production management of the assay system (247, project; first slice at processing),
+cold-chain shipping test to Riley with dye carts (248, blocks TASK-192 + kit v1), conveyor
+belt at the wax-line output (249), bigger SPU box chore (250). TASK-216 stability #2 retitled
+to use the 6.1 W3 pre-scan for tracer brightness, recipe-lock gate removed, START NOW.
+
+Ingested John's draft one-pager (Oct internal → Nov external → Dec beta → investor meetings).
+Line items already on the board mapped; seven missing ones captured as TASK-251..TASK-258
+(remote-tester round RT + JMO/CA, use cases v1, 6 external kits, website, Dec beta plan, B2B
+strategy + kits, COGS, investor meetings). Context appended to TASK-013/233/010/248/054.
+New decision D-7: John's "gold standard before external testing" gate vs TASK-054 at Dec 4
+under D-1.
+
+Files: docs/roadmap/2026-10-11-fall-replan-v5.md (addendum section), progress.txt.
+Workshop page republished (Version 7): Two tracks section, D-7 card, Commercial track
+program, step-back point 13. No app code touched; npm run check not run.
