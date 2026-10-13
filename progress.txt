@@ -19534,3 +19534,15 @@ Smoke (unauthenticated curl; 302 → /login or 401 means the route exists and is
   /api/manufacturing/reagent-well-issues?robot=x -> 401 
   /manufacturing/cart-mfg/opentrons -> 302 https://bioscale-operations-system-mongodb-nji6shgaw-brevitest.vercel.app/login
 
+
+================================================================================
+2026-10-13 — feat/robot-overhaul — Cancel Run back on the wax setup page
+================================================================================
+Operator asked where Cancel Run went on the wax setup page: it left with the
+stage-timeline module in round 6. Restored in WaxWizard for setup mode only
+(active run, not yet Running): a "Run <id> · Cancel Run" row above the stage
+content plus the original reason dialog → the existing ?/cancelRun action via
+stopRunViaLine. Not shown on the Robots page (Stop / Reset live there).
+Reagent setup page unchanged (ask if it should mirror this).
+
+Check: svelte-check 14 errors (all pre-existing), no warnings in the file.

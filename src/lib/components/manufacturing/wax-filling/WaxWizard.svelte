@@ -1297,6 +1297,21 @@
 		<div class="space-y-6">
 			<!-- The stage timeline header (with Cancel Run / Preview) was removed 2026-10-08:
 			     setup is linear on this page and the live run is watched on the Robots page. -->
+			<!-- Cancel run (restored 2026-10-13, setup page only): abandon a run during
+			     setup, with a reason. The Robots page has Stop / Reset instead. -->
+			{#if mode === 'setup' && !previewParam && effectiveHasActiveRun && effectiveStage !== 'Running'}
+				<div class="flex items-center justify-between gap-3">
+					<span class="text-xs text-[var(--color-tron-text-secondary)]">Run {data.runState.runId}</span>
+					<button
+						type="button"
+						onclick={() => { showCancelModal = true; }}
+						disabled={submitting}
+						class="rounded border border-red-500/40 px-3 py-1 text-xs text-red-400 transition-colors hover:border-red-500 hover:bg-red-900/20 hover:text-red-300 disabled:opacity-50"
+					>
+						Cancel Run
+					</button>
+				</div>
+			{/if}
 
 			<!-- Incubator Tube Info (visible during Loading through QC) -->
 			{#if data.tubeData && data.runState.stage && ['Loading', 'Running', 'Awaiting Removal', 'Cooling', 'QC', 'Storage'].includes(data.runState.stage)}
@@ -1645,6 +1660,44 @@
 			{/if}
 		{/if}
 	</div>
+	{/if}
+
+	<!-- Cancel Run Modal (restored 2026-10-13 for the setup page) -->
+	{#if showCancelModal}
+		<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+			<div class="mx-4 w-full max-w-md rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-6 shadow-xl">
+				<h3 class="text-lg font-semibold text-[var(--color-tron-text)]">Cancel Run</h3>
+				<p class="mt-2 text-sm text-[var(--color-tron-text-secondary)]">
+					Are you sure you want to cancel run {data.runState.runId}? This action cannot be undone.
+				</p>
+				<label class="mt-4 block">
+					<span class="text-sm font-medium text-[var(--color-tron-text-secondary)]">Reason</span>
+					<textarea
+						bind:value={cancelReason}
+						rows="3"
+						class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-3 py-2 text-sm text-[var(--color-tron-text)] placeholder-[var(--color-tron-text-secondary)] focus:border-[var(--color-tron-cyan)] focus:outline-none"
+						placeholder="Enter reason for cancellation..."
+					></textarea>
+				</label>
+				<div class="mt-4 flex justify-end gap-3">
+					<button
+						type="button"
+						onclick={() => { showCancelModal = false; cancelReason = ''; }}
+						class="rounded-lg border border-[var(--color-tron-border)] px-4 py-2 text-sm text-[var(--color-tron-text-secondary)] transition-colors hover:bg-[var(--color-tron-border)]/30"
+					>
+						Go Back
+					</button>
+					<button
+						type="button"
+						onclick={handleCancelRun}
+						disabled={!cancelReason.trim() || submitting}
+						class="rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-red-700 disabled:opacity-50"
+					>
+						{submitting ? 'Cancelling...' : 'Confirm Cancel'}
+					</button>
+				</div>
+			</div>
+		</div>
 	{/if}
 
 	<!-- Admin Override Modal -->
