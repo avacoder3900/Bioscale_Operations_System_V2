@@ -19587,3 +19587,15 @@ Worktree note: this branch lives in ..\Bioscale_Operations_System_V2-jq-reagent-
 master 788dad7c); its node_modules were from May and produced 159 phantom check errors until `npm install`.
 npm run check: 13 errors = master baseline, none in the changed files. npm run test:unit: 541 pass, 1 fail =
 sonic "leave-one-out" 5 s timeout (pure-math test, unrelated; the machine was running svelte-check at the time).
+
+================================================================================
+2026-10-13 — master — DEPLOY: "Non-calibrated reagent lot chemicals" fill lots (connector 3.12.0)
+================================================================================
+Deployment: production — bioscale-operations-system-mongodb.vercel.app (Vercel GitHub integration; per-deployment
+  URL + dpl id in the Vercel dashboard, brevitest team scope)
+Source: branch master @ commit 2a9cd39d (merge of feat/non-calibrated-fill 0ddf3a9e)
+Retrieve this exact code: git checkout master at commit 2a9cd39d
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: the fill screen can open a fill lot on "Non-calibrated reagent lot chemicals" (no
+  reagent lot) so development fills before a calibrated reagent lot exists are no longer blocked; MCP
+  research_fill_lot_create takes nonCalibrated: true. Research app main 6b71081 deployed first (same feature).
