@@ -109,7 +109,14 @@ This replicates the full `/api/agent/**` machine surface except: `ask`/`transcri
 routes serving the in-app widget, not machine agents) and the OT-2/scanner long-poll daemon queues
 (not request/response shaped; the robot bridge keeps using them directly).
 
-## Research analysis tools (v3.8.0)
+## Research analysis tools (v3.12.0)
+
+v3.12.0 — non-calibrated fill lots: `research_fill_lot_create` takes `nonCalibrated: true` instead of a
+`reagentLotId` to open a fill lot with NO reagent lot ("non-calibrated reagent lot chemicals"). Most fills
+happen before a calibrated reagent lot exists (a lot takes several conjugations and chemistry calibrations
+first), so the BIMS fill screen offers the same choice in its "new fill lot" picker. Runs and cartridges on
+such a lot are stamped `reagentLotNumber: 'non-calibrated'` with an empty `reagentLotId`;
+`research_fill_lot_set_reagent_lot` (or the Curves page) sets the reagent lot later and restamps them.
 
 v3.8.0 — fill lots are explicit: `research_fill_lot_create` (W) opens one on a reagent lot;
 `research_fill_lot_assign_runs` (W) moves legacy robot runs into one. The BIMS fill screen now picks a

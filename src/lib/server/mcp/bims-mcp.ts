@@ -224,7 +224,7 @@ async function callAgentApi(
 export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 	// Version bump signals clients (claude.ai caches connector tool lists) that
 	// the toolset changed — bump on every tool add/remove/rename.
-	const server = new McpServer({ name: 'bims-operations', version: '3.11.0' });
+	const server = new McpServer({ name: 'bims-operations', version: '3.12.0' });
 
 	// ---------------------------------------------------------------- meta
 
@@ -2063,8 +2063,12 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 			description:
 				'Research app: OPEN a fill lot — one reagent lot plus a name (FL-YYYYMMDD-NNN). A fill lot is NOT one robot run: ' +
 				'the BIMS fill screen offers open fill lots, defaults to the one used last, and stamps the pick on every cartridge ' +
-				'of every run until the operator picks another. Open a new one when the reagent prep changes. Confirm reagent lot and name with the person first.',
-			inputSchema: z.object({ actor: ACTOR_FIELD, reagentLotId: z.string(), name: z.string().optional(), assayId: z.string().optional(), notes: z.string().optional() })
+				'of every run until the operator picks another. Open a new one when the reagent prep changes. ' +
+				'nonCalibrated: true (no reagentLotId) opens a fill lot with NO reagent lot — "non-calibrated reagent lot chemicals", ' +
+				'the normal case for fills done before a calibrated reagent lot exists; the reagent lot can be set on it later with ' +
+				'research_fill_lot_set_reagent_lot. Confirm reagent lot (or non-calibrated) and name with the person first.',
+			inputSchema: z.object({ actor: ACTOR_FIELD, reagentLotId: z.string().optional(), nonCalibrated: z.boolean().optional(), name: z.string().optional(), assayId: z.string().optional(), notes: z.string().optional() })
+				.refine((a) => !!a.reagentLotId || a.nonCalibrated === true, { message: 'reagentLotId or nonCalibrated: true is required' })
 		},
 		async (args) =>
 			machineWrite('research_fill_lot_create', (args as any).actor, (actor) =>

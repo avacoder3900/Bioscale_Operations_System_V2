@@ -300,7 +300,7 @@ export async function loadReagentWizard(locals: App.Locals, robotId: string) {
 		// DOMAIN-32: research reagent lots (reagent_set_lots) — needed to open a new fill lot.
 		const researchReagentLots = await ReagentSetLot.find({ status: 'active' }).select('_id lotNumber name assayId components createdAt').sort({ createdAt: -1 }).lean();
 		// Open fill lots (fill_lots): the operator picks one per run; runs default to the one used last.
-		const openFillLots = await FillLot.find({ status: 'open', fillLotNumber: { $nin: [null, ''] } }).select('_id fillLotNumber name reagentLotId reagentLotNumber runIds fillDate updatedAt').sort({ updatedAt: -1 }).lean();
+		const openFillLots = await FillLot.find({ status: 'open', fillLotNumber: { $nin: [null, ''] } }).select('_id fillLotNumber name reagentLotId reagentLotNumber reagentLotSource runIds fillDate updatedAt').sort({ updatedAt: -1 }).lean();
 		const lastWithFillLot = await ReagentBatchRecord.findOne({ fillLotId: { $nin: [null, ''] } }).select('fillLotId').sort({ createdAt: -1 }).lean() as any;
 		const defaultFillLotId = (activeRun as any)?.fillLotId ?? lastWithFillLot?.fillLotId ?? (openFillLots[0] as any)?._id ?? '';
 		const activeReagentLots: Record<string, any[]> = {};

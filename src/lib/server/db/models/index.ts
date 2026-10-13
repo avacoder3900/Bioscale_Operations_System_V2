@@ -9,7 +9,7 @@ export { ReagentBatchRecord } from './reagent-batch-record.js';
 export { ReagentProtocolTemplate } from './reagent-protocol-template.js';
 export { ReagentLot } from './reagent-lot.js';
 export { ReagentSetLot } from './reagent-set-lot.js';
-export { FillLot, fillLotNumber } from './fill-lot.js';
+export { FillLot, fillLotNumber, NON_CALIBRATED_REAGENT_LOT, NON_CALIBRATED_LOT_LABEL } from './fill-lot.js';
 
 // Tier 2: Operational — Receiving & Inspection
 export { ReceivingLot } from './receiving-lot.js';

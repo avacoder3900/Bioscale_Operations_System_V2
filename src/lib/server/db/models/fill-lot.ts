@@ -5,7 +5,16 @@ import mongoose, { Schema } from 'mongoose';
  * lot (FL-YYYYMMDD-NNN); the fill screen offers the open ones, defaults to the one used last,
  * and stamps the pick on the run and on every cartridge it fills. BIMS creates lots here only
  * through the fill screen's "new fill lot" action and appends run ids on finalize.
+ *
+ * A fill lot may have NO reagent lot (reagentLotSource 'non-calibrated'): most fills happen before a
+ * calibrated reagent lot exists — a lot takes several conjugations and chemistry calibrations first.
+ * The research app's Curves page can set the reagent lot on it later, which restamps its cartridges.
  */
+
+/** The value the fill screen / connector send in place of a reagent lot id to open a non-calibrated fill lot. */
+export const NON_CALIBRATED_REAGENT_LOT = 'non-calibrated';
+/** What gets stamped as reagentLotNumber on runs and cartridges filled on a non-calibrated fill lot. */
+export const NON_CALIBRATED_LOT_LABEL = 'non-calibrated';
 const FillLotSchema = new Schema(
 	{
 		_id: { type: String },
