@@ -19638,3 +19638,15 @@ reagent-filling/+page.server.ts, src/lib/server/manufacturing/reagent-wizard.ts,
 manufacturing/reagent-filling/{ReagentWizard,ReagentPreparation,SetupConfirmation}.svelte (ReagentBatchScan
 deleted), src/lib/server/db/models/{cartridge-record,reagent-batch-record}.ts.
 npm run check: 13 errors = master baseline, none in changed files.
+
+================================================================================
+2026-10-13 — master — DEPLOY: fill-time assay is the assay; tube step retired
+================================================================================
+Deployment: production — bioscale-operations-system-mongodb.vercel.app (Vercel GitHub integration; per-deployment
+  URL + dpl id in the Vercel dashboard, brevitest team scope)
+Source: branch master @ commit c295ba92 (merge of feat/fill-assay-is-the-assay 5e586599)
+Retrieve this exact code: git checkout master at commit c295ba92
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: finalizeReagentRun stamps top-level assayId/assayName on production-filled
+  cartridges (the fields the device + research app read); the reagent-prep tube step is gone (selectFillLot
+  records the fill lot only). Research app main e0bdc81 (linking inherits/overrides/falls back) deployed first.
