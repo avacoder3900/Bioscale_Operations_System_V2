@@ -9,11 +9,6 @@
 	import { goto, invalidateAll } from '$app/navigation';
 	import SetupConfirmation from '$lib/components/manufacturing/reagent-filling/SetupConfirmation.svelte';
 	import ReagentPreparation from '$lib/components/manufacturing/reagent-filling/ReagentPreparation.svelte';
-	import ReagentBatchScan from '$lib/components/manufacturing/reagent-filling/ReagentBatchScan.svelte';
-	// ⚠️ MERGE NOTE: Jacob's branch builds the full Reagent Batch system (models, API routes, schema).
-	// The ReagentBatchScan component and reagentBatchBarcode param passed to startRun are stubs.
-	// When merging Jacob's branch, wire ReagentBatchScan to his API and update startRun to use his batch linkage.
-	// DO NOT overwrite Jacob's reagent batch models or routes — this page is the UI consumer only.
 	import DeckLoadingGrid from '$lib/components/manufacturing/reagent-filling/DeckLoadingGrid.svelte';
 	import RunExecution from '$lib/components/manufacturing/reagent-filling/RunExecution.svelte';
 	import ProtocolStartPanel from '$lib/components/manufacturing/ProtocolStartPanel.svelte';
@@ -83,16 +78,17 @@
 	const ACTION_NEXT_STAGE: Record<string, string> = {
 		createRun: 'Loading',
 		confirmSetup: 'Loading',
-		recordReagentPrep: 'Loading',
+		selectFillLot: 'Loading',
 		loadDeck: 'Loading',
 		startRun: 'Running',
 	};
 	let pendingStage = $state<string | null>(null);
 
-	// Reagent batch scan state. The batch is now selected BEFORE the deck scan, and
-	// the deck scan reloads the page — so derive "confirmed" from the server (the
-	// run's persisted tubeRecords) with a client override for the optimistic moment
-	// right after scanning the batch but before the reload lands.
+	// Fill-lot step state. The fill lot is picked BEFORE the deck scan, and the deck
+	// scan reloads the page — so derive "confirmed" from the server (the run's
+	// persisted fillLotId) with a client override for the optimistic moment right
+	// after picking the lot but before the reload lands. reagentBatchBarcode = the
+	// reagent lot number ('non-calibrated' when the fill lot has none).
 	let reagentBatchConfirmedLocal = $state(false);
 	let reagentBatchBarcodeLocal = $state<string | null>(null);
 	const reagentBatchConfirmed = $derived(reagentBatchConfirmedLocal || (data.reagentPrepDone ?? false));
@@ -850,8 +846,7 @@
 			</p>
 			<SetupConfirmation
 				assayTypes={data.assayTypes}
-				reagentNames={data.reagentDefinitions as any}
-				{selectedAssayTypeId}
+					{selectedAssayTypeId}
 				onSelectAssayType={(id) => { selectedAssayTypeId = id; }}
 				isResearch={isResearchRun}
 				onSetResearch={(v) => {
@@ -875,7 +870,6 @@
 	{:else if displayStage === 'Setup'}
 		<SetupConfirmation
 			assayTypes={data.assayTypes}
-			reagentNames={data.reagentDefinitions as any}
 			selectedAssayTypeId={previewParam ? 'preview' : (data.runState.assayTypeName ?? 'selected')}
 			onSelectAssayType={previewParam ? () => {} : (id) => { selectedAssayTypeId = id; }}
 			isResearch={previewParam ? false : (data.runState.isResearch || isResearchRun)}
@@ -917,7 +911,6 @@
 		     Records the batch now; the run auto-starts once the deck is scanned, so
 		     there are no more buttons after barcode scanning. -->
 		<ReagentPreparation
-			reagentDefinitions={data.reagentDefinitions as any}
 			reagentLots={(data.researchReagentLots ?? []) as any}
 			fillLots={(data.openFillLots ?? []) as any}
 			defaultFillLotId={data.defaultFillLotId ?? ''}
@@ -930,13 +923,13 @@
 				if (result.type === 'success') return { ok: true, fillLot: (result.data as any)?.fillLot };
 				return { ok: false, error: result.type === 'failure' ? ((result.data as any)?.error ?? 'Failed') : 'Failed' };
 			}}
-			onComplete={async (tubes, fillLotId) => {
-				reagentBatchBarcodeLocal = tubes[0]?.sourceLotId ?? '';
+			onComplete={async (fillLotId, reagentLotLabel) => {
+				reagentBatchBarcodeLocal = reagentLotLabel;
 				reagentBatchConfirmedLocal = true;
-				// Persist the batch (writes to the run record — no cartridge dependency).
+				// Persist the fill lot (writes to the run record — no cartridge dependency).
 				// Do NOT start the run yet: the deck hasn't been scanned. The deck-scan
 				// step auto-starts once cartridges are on.
-				await submitForm('recordReagentPrep', { tubes: JSON.stringify(tubes), fillLotId });
+				await submitForm('selectFillLot', { fillLotId });
 			}}
 			onSaveNote={handleSaveBatchNote}
 			readonly={isViewingPast}
@@ -972,8 +965,8 @@
 						<path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
 					</svg>
 					<div>
-						<p class="font-semibold text-green-400">Deck Loaded &amp; Reagent Batch Verified</p>
-						<p class="text-sm text-green-300/70">{data.cartridges.length} cartridges ready · Batch {reagentBatchBarcode}</p>
+						<p class="font-semibold text-green-400">Deck Loaded &amp; Fill Lot Set</p>
+						<p class="text-sm text-green-300/70">{data.cartridges.length} cartridges ready · fill lot {data.fillLotNumber ?? '—'} · reagents {reagentBatchBarcode ?? '—'}</p>
 					</div>
 				</div>
 			</div>

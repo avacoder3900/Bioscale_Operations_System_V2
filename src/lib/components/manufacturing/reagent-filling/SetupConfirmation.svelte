@@ -9,7 +9,6 @@
 
 	interface Props {
 		assayTypes: AssayType[];
-		reagentNames?: { wellPosition: number; reagentName: string }[];
 		selectedAssayTypeId: string;
 		onSelectAssayType: (id: string) => void;
 		isResearch?: boolean;
@@ -20,7 +19,6 @@
 
 	let {
 		assayTypes,
-		reagentNames = [],
 		selectedAssayTypeId,
 		onSelectAssayType,
 		isResearch = false,
@@ -29,14 +27,8 @@
 		readonly: isReadonly = false
 	}: Props = $props();
 
-	// Use reagents from the selected assay type if reagentNames is empty.
-	// Research mode has no assay, so no reagents to show.
-	const activeReagents = $derived(() => {
-		if (isResearch) return [];
-		if (reagentNames.length > 0) return reagentNames;
-		const selected = assayTypes.find((a) => a.id === selectedAssayTypeId);
-		return selected?.reagents ?? [];
-	});
+	// The per-well reagent list that used to render here (and the tube records it fed) was
+	// retired 2026-10-13 — vestigial. The assay chosen here IS the cartridge's assay.
 
 	// Assay-required gate is lifted when Research is selected. The old "setup
 	// conditions" checklist + confirm checkbox were removed (informational noise).
@@ -46,7 +38,7 @@
 <div class="space-y-5">
 	<h2 class="text-lg font-semibold text-[var(--color-tron-text)]">Setup Confirmation</h2>
 	<p class="text-sm text-[var(--color-tron-text-secondary)]">
-		Select run type and verify setup conditions before proceeding.
+		Pick the run type and the assay. The assay chosen here becomes the cartridge's assay — the research app keeps it when the cartridge is linked to an arm with no assay, and can override it from the arm.
 	</p>
 
 	<!-- Run type: Production (assay required) vs Research (no assay) -->
@@ -76,7 +68,7 @@
 		</div>
 		{#if isResearch}
 			<p class="text-xs text-[var(--color-tron-orange)]/90">
-				Research run — no assay will be assigned. Cartridges will flow through the line with assay fields left blank.
+				Research run — no assay yet. Cartridges flow through the line with the assay blank and take the arm's assay when linked in the research app.
 			</p>
 		{/if}
 	</div>
@@ -98,24 +90,6 @@
 			{/each}
 		</select>
 	</div>
-
-	{#if !isResearch && selectedAssayTypeId && activeReagents().length > 0}
-		<div
-			class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3"
-		>
-			<p class="mb-2 text-xs font-medium text-[var(--color-tron-text-secondary)]">
-				Reagent wells for this assay:
-			</p>
-			<div class="grid grid-cols-3 gap-2">
-				{#each activeReagents() as rn (rn.wellPosition)}
-					<div class="text-xs text-[var(--color-tron-text)]">
-						<span class="text-[var(--color-tron-cyan)]">Well {rn.wellPosition}:</span>
-						{rn.reagentName}
-					</div>
-				{/each}
-			</div>
-		</div>
-	{/if}
 
 	<button
 		type="button"

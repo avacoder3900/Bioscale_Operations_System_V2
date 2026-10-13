@@ -82,6 +82,7 @@ const cartridgeRecordSchema = new Schema({
 		fillLotNumber: String,
 		reagentLotId: String,
 		reagentLotNumber: String,
+		// Historical only (retired 2026-10-13) — fills since then stamp no tube records; see fillLotId/reagentLotId.
 		tubeRecords: [{ _id: false, wellPosition: Number, reagentName: String, sourceLotId: String, transferTubeId: String }],
 		// Operator-logged fill mistakes for THIS cartridge, copied from the run's
 		// wellIssues at completion so the cart carries its own fill history.

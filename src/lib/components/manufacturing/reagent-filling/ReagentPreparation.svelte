@@ -1,16 +1,7 @@
 <script lang="ts">
-	interface ReagentDef {
-		wellPosition: number;
-		reagentName: string;
-		isActive: boolean;
-	}
-
-	interface TubeRecord {
-		wellPosition: number;
-		reagentName: string;
-		sourceLotId: string;
-		transferTubeId: string;
-	}
+	// Fill-lot picker. The per-well "tube records" this step used to produce were retired
+	// 2026-10-13 (vestigial): the fill lot — and through it the reagent lot — is the reagent
+	// lineage, and the assay chosen at setup is the cartridge's assay.
 
 	/** A research-app reagent lot (reagent_set_lots): the bundle of inventory barcodes being filled. */
 	interface ReagentLotOption {
@@ -44,19 +35,19 @@
 	const reagentLabel = (f: FillLotOption) => (isNonCalibrated(f) ? 'non-calibrated reagents' : `reagent lot ${f.reagentLotNumber}`);
 
 	interface Props {
-		reagentDefinitions: ReagentDef[];
 		reagentLots: ReagentLotOption[];
 		fillLots: FillLotOption[];
 		/** The fill lot used by the most recent run (today's default). */
 		defaultFillLotId?: string;
-		onComplete: (tubes: TubeRecord[], fillLotId: string) => void;
+		/** reagentLotLabel = the reagent lot number, or 'non-calibrated' when the fill lot has none. */
+		onComplete: (fillLotId: string, reagentLotLabel: string) => void;
 		onCreateFillLot?: (reagentLotId: string, name: string) => Promise<{ ok: boolean; error?: string; fillLot?: FillLotOption }>;
 		onSaveNote?: (noteBody: string) => Promise<{ ok: boolean; error?: string; cartridgeCount?: number }>;
 		readonly?: boolean;
 		cartridgeCount?: number;
 	}
 
-	let { reagentDefinitions, reagentLots, fillLots, defaultFillLotId = '', onComplete, onCreateFillLot, onSaveNote, readonly: isReadonly = false, cartridgeCount = 0 }: Props = $props();
+	let { reagentLots, fillLots, defaultFillLotId = '', onComplete, onCreateFillLot, onSaveNote, readonly: isReadonly = false, cartridgeCount = 0 }: Props = $props();
 
 	// Operator-entered batch note — saved against every cartridge currently
 	// loaded on the run via the recordBatchNote action.
@@ -94,9 +85,6 @@
 	let creating = $state(false);
 	let createError = $state('');
 
-	const activeWells = $derived(
-		reagentDefinitions.filter((d) => d.isActive).sort((a, b) => a.wellPosition - b.wellPosition)
-	);
 	const selectedFill = $derived(lots.find((f) => f._id === selectedFillLotId) ?? null);
 	const selectedLot = $derived(selectedFill ? (reagentLots.find((l) => l._id === selectedFill.reagentLotId) ?? null) : null);
 	const isDefault = $derived(!!selectedFill && selectedFill._id === defaultFillLotId);
@@ -105,17 +93,6 @@
 		['qd630', 'qd480', 'beads']
 			.map((r) => { const c = critical(lot, r); return c ? `${r}: ${c.catalogName ?? '?'}${c.manufacturerLotId ? ` (${c.manufacturerLotId})` : ''}` : `${r}: –`; })
 			.join(' · ');
-
-	// Every well of this fill carries the reagent lot number ('non-calibrated' when the fill lot has
-	// none); the transfer tube id is derived so downstream views keep a per-well record.
-	const tubes = $derived<TubeRecord[]>(
-		selectedFill
-			? activeWells.map((w, i) => {
-					const lotTag = selectedFill.reagentLotNumber || NON_CALIBRATED;
-					return { wellPosition: w.wellPosition, reagentName: w.reagentName, sourceLotId: lotTag, transferTubeId: `${lotTag}-T${i + 1}` };
-				})
-			: []
-	);
 
 	async function createFillLot() {
 		if (!onCreateFillLot || !newReagentLotId || creating) return;
@@ -142,7 +119,7 @@
 	function handleSubmit() {
 		if (submitting || !selectedFill) return;
 		submitting = true;
-		onComplete(tubes, selectedFill._id);
+		onComplete(selectedFill._id, selectedFill.reagentLotNumber || NON_CALIBRATED);
 	}
 </script>
 
@@ -214,19 +191,6 @@
 				{/if}
 			</div>
 
-			<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4">
-				<p class="mb-3 text-xs font-medium text-[var(--color-tron-text-secondary)]">Tube Locations ({tubes.length} tubes)</p>
-				<div class="grid grid-cols-3 gap-3">
-					{#each tubes as tube (tube.wellPosition)}
-						<div class="rounded border border-green-500/30 bg-green-900/10 p-3 text-center">
-							<div class="text-xs text-[var(--color-tron-text-secondary)]">Well {tube.wellPosition}</div>
-							<div class="mt-1 text-sm font-semibold text-[var(--color-tron-text)]">{tube.reagentName}</div>
-							<div class="mt-1 font-mono text-xs text-green-300">{tube.transferTubeId}</div>
-						</div>
-					{/each}
-				</div>
-			</div>
-
 			{#if onSaveNote && !isReadonly}
 				<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4">
 					<div class="mb-2 flex items-center justify-between">
@@ -279,7 +243,7 @@
 			{#if submitting}
 				Confirming...
 			{:else}
-				Fill on {selectedFill.fillLotNumber} ({tubes.length} tubes)
+				Fill on {selectedFill.fillLotNumber}
 			{/if}
 		</button>
 	{/if}

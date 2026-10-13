@@ -94,7 +94,6 @@ export const actions: Actions = {
 			isResearch,
 			operator: { _id: locals.user!._id, username: locals.user!.username },
 			status: 'Loading',
-			tubeRecords: [],
 			cartridgesFilled: [],
 			setupTimestamp: new Date()
 		});
@@ -140,7 +139,6 @@ export const actions: Actions = {
 		return { success: true };
 	},
 
-	/** Record reagent preparation (tubes) */
 	/**
 	 * Persist the operator's planned cartridge count the moment the params step is
 	 * confirmed (BEFORE any scan). The auto barcode sweep previously relied on the
@@ -163,13 +161,16 @@ export const actions: Actions = {
 		return { success: true, plannedCartridgeCount: n };
 	},
 
-	recordReagentPrep: async ({ request, locals }) => {
+	/**
+	 * Record the fill lot for this run (replaces the old "reagent preparation" tube step, retired
+	 * 2026-10-13 — per-well tube records were vestigial; the fill lot carries the reagent lineage).
+	 */
+	selectFillLot: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
 		await connectDB();
 
 		const data = await request.formData();
 		const runId = data.get('runId') as string;
-		const tubesRaw = data.get('tubes') as string;
 		const fillLotId = ((data.get('fillLotId') as string | null) ?? '').trim();
 		if (!fillLotId) return fail(400, { error: 'A fill lot is required to fill. Open one (pick its reagent lot) and select it.' });
 		const fillLot = await FillLot.findById(fillLotId).lean() as any;
@@ -180,22 +181,9 @@ export const actions: Actions = {
 		const reagentLot = fillLot.reagentLotId ? await ReagentSetLot.findById(fillLot.reagentLotId).lean() as any : null;
 		if (!nonCalibrated && (!reagentLot || reagentLot.status !== 'active')) return fail(400, { error: 'The fill lot\'s reagent lot is missing or retired' });
 
-		let tubes: { reagentName: string; wellPosition: number; volume: number; lotId?: string; transferTubeId?: string }[] = [];
-		if (tubesRaw) {
-			try { tubes = JSON.parse(tubesRaw); } catch { /* ignore */ }
-		}
-
-		const tubeRecords = tubes.map((t: any) => ({
-			wellPosition: t.wellPosition ?? 0,
-			reagentName: t.reagentName ?? '',
-			sourceLotId: t.lotId ?? t.sourceLotId ?? undefined,
-			transferTubeId: t.transferTubeId ?? undefined,
-			preparedAt: new Date()
-		}));
-
 		await ReagentBatchRecord.findByIdAndUpdate(runId, {
 			$set: {
-				tubeRecords, status: 'Loading', fillLotId, fillLotNumber: fillLot.fillLotNumber,
+				status: 'Loading', fillLotId, fillLotNumber: fillLot.fillLotNumber,
 				reagentLotId: reagentLot ? String(reagentLot._id) : '',
 				reagentLotNumber: reagentLot ? reagentLot.lotNumber : NON_CALIBRATED_LOT_LABEL
 			}
@@ -631,7 +619,7 @@ export const actions: Actions = {
 		if (!REAGENT_WELL_ISSUE_CODES.includes(issue)) return fail(400, { error: `Unknown issue "${issue}"` });
 
 		const run = await ReagentBatchRecord.findById(runId)
-			.select('status finalizedAt cartridgesFilled tubeRecords assayType').lean() as any;
+			.select('status finalizedAt cartridgesFilled assayType').lean() as any;
 		if (!run) return fail(404, { error: 'Run not found' });
 		if (run.finalizedAt || TERMINAL.has(String(run.status))) {
 			return fail(400, { error: 'Run is finished — log post-run observations on Reagent Inspect.' });
@@ -639,8 +627,7 @@ export const actions: Actions = {
 		const carts = (run.cartridgesFilled ?? []) as any[];
 		// Position match first; index fallback for runs loaded with position 0 (pre 2026-10-08).
 		const cart = carts.find((c: any) => Number(c.deckPosition) === deckPosition) ?? (carts.every((c) => !(Number(c.deckPosition) >= 1)) ? carts[deckPosition - 1] : undefined);
-		const tube = (run.tubeRecords ?? []).find((t: any) => Number(t.wellPosition) === well);
-		const reagentName = tube?.reagentName ?? REAGENT_WELLS.find((w) => w.well === well)?.defaultName ?? null;
+		const reagentName = REAGENT_WELLS.find((w) => w.well === well)?.defaultName ?? null;
 
 		const entry = {
 			_id: generateId(),
