@@ -19498,3 +19498,24 @@ Deployment: production — Vercel GitHub integration build of master
 Source: branch master @ commit 42b1aae2 (merge of feat/reagent-bump-recovery)
 Retrieve this exact code: git checkout master at commit 42b1aae2
 What this deployment is for: "Bumped the robot" button on the reagent run page (pause + bump request); protocol/daemon already on B07+R04, B14 pending.
+
+================================================================================
+2026-10-13 — feat/robot-overhaul — Final build: origin/master merged in; simulator removed
+================================================================================
+Operator asked to push to main. origin/master (20 commits: reagent bump
+recovery, Studio well-issue marks/resolve, real deck positions for the well
+tracker, SPU WI chat control) merged into the branch. Git carried master's
+reagent-page edits across the page→component rename into ReagentWizard
+(bump-recovery button lands inside the tip-problem dropdown) and its
+well-issues edits into the heatmap lib/component. Hand-resolved: progress.txt
+(both logs) and the reagent route (thin setup load kept; master's
+deckPosition fallback ported into reagent-wizard.ts); HeatmapRunIssue gained
+resolvedAt/resolvedBy/resolvedNote.
+
+scripts/ot2-sim/ removed as agreed ("can be removed before final ship").
+Retrieve it with: git checkout 922e02a8 -- scripts/ot2-sim. If sim fixtures
+were seeded into the database, run that seed.ts --teardown before/after the
+ship — the sim robots would otherwise show on the production Robots page.
+
+Check: svelte-check 14 errors (all pre-existing on master); vite build on the
+merged tree — see below.
