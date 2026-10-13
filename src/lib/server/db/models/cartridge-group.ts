@@ -32,8 +32,36 @@ const cartridgeGroupSchema = new Schema(
 
 		purpose: {
 			type: String,
-			enum: ['assign_batch', 'optical_analysis'],
+			enum: ['assign_batch', 'optical_analysis', 'assay_run'],
 			default: 'optical_analysis'
+		},
+
+		// ---- purpose 'assay_run' (2026-10-13, screen pipeline §3.3) ----
+		// The assay-run validation test is a GROUP test: several cartridges run
+		// together on one device, linked here, evaluated as a group. The group,
+		// not a single run, writes spu.validation.assay_run. Member records are
+		// still cartridge_records (sacred, never written here); `cartridgeIds`
+		// holds their _ids (= scanned barcodes).
+		spuId: String,
+		spuUdi: String,
+		/** The unit's validationResetAt when the group was created — ties it to a cycle. */
+		cycleResetAt: Date,
+		assayId: String,
+		lot: String,
+		intendedConcentration: Number,
+		intendedConcentrationUnit: String,
+		/** Latest derive-on-read evaluation, persisted so the hub does not re-pull every record. */
+		evaluation: Schema.Types.Mixed,
+		evaluatedAt: Date,
+		override: {
+			type: {
+				by: { _id: String, username: String },
+				at: Date,
+				reason: String,
+				status: String
+			},
+			default: null,
+			_id: false
 		},
 
 		/** cartridge_records._id — which, for optical cartridges, IS the scanned barcode. */
@@ -52,6 +80,7 @@ const cartridgeGroupSchema = new Schema(
 cartridgeGroupSchema.index({ purpose: 1, name: 1 });
 cartridgeGroupSchema.index({ cartridgeIds: 1 });
 cartridgeGroupSchema.index({ archivedAt: 1 });
+cartridgeGroupSchema.index({ purpose: 1, spuId: 1, createdAt: -1 });
 
 export const CartridgeGroup =
 	mongoose.models.CartridgeGroup ||

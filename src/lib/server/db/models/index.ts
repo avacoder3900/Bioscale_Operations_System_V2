@@ -43,7 +43,7 @@ export { Batch } from './batch.js';
 export { ProductionRun } from './production-run.js';
 export { GeneratedBarcode } from './generated-barcode.js';
 export { ValidationSession } from './validation-session.js';
-export { ValidationRun, VALIDATION_RUN_STEPS, STEP_LABELS } from './validation-run.js';
+export { ValidationRun, VALIDATION_RUN_STEPS, STEP_LABELS, ALL_STEP_LABELS } from './validation-run.js';
 export { WaxFillingRun } from './wax-filling-run.js';
 export { WaxBatch } from './wax-batch.js';
 export { ProcessConfiguration } from './process-configuration.js';
@@ -82,6 +82,8 @@ export { ServiceTicket } from './service-ticket.js';
 export { ServiceRecord, SERVICE_TYPES, SERVICE_PRIORITIES, FINDING_OUTCOMES } from './service-record.js';
 export { ServiceGroup } from './service-group.js';
 export { OpticalBlankRun } from './optical-blank-run.js';
+export { DeviceChunk, DeviceChunkJob, DEVICE_CHUNK_KINDS } from './device-chunk.js';
+export type { DeviceChunkKind } from './device-chunk.js';
 
 // Research-v2 collections — shared Mongo Atlas, BIMS reads only via Ask BIMS tools.
 export { Experiment } from './experiment.js';

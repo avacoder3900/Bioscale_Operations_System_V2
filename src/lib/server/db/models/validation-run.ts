@@ -4,7 +4,7 @@ import { generateId } from '../utils.js';
 const operatorRef = { _id: String, username: String };
 
 // One SPU's membership in a run. Step state is keyed by step name
-// ('magnetometer' | 'thermocouple' | 'optical_confirmation') and kept as Mixed
+// ('screen' | 'magnetometer' | 'thermocouple' | 'assay_run'; legacy runs: 'optical_confirmation') and kept as Mixed
 // because cells carry step-specific payloads (thermo stats + evaluation,
 // session links, manual-record notes). Cell shape:
 // { status: 'not_started'|'in_progress'|'uploaded'|'passed'|'failed'|'skipped',
@@ -38,11 +38,22 @@ validationRunSchema.index({ 'spus.spuId': 1 });
 
 export const ValidationRun = mongoose.models.ValidationRun || mongoose.model('ValidationRun', validationRunSchema, 'validation_runs');
 
-export const VALIDATION_RUN_STEPS = ['magnetometer', 'thermocouple', 'optical_confirmation'] as const;
+// 2026-10-13 (screen pipeline): optical_confirmation is no longer a validation
+// step — no optical measure predicts the assay — and the real assay run takes
+// its place; the one-button SCREEN opens the sequence. Runs created before this
+// keep their stored `steps` array and still render (LEGACY_STEP_LABELS below).
+export const VALIDATION_RUN_STEPS = ['screen', 'magnetometer', 'thermocouple', 'assay_run'] as const;
 export type ValidationRunStep = (typeof VALIDATION_RUN_STEPS)[number];
 
 export const STEP_LABELS: Record<ValidationRunStep, string> = {
+	screen: 'Screen',
 	magnetometer: 'Magnetometer',
 	thermocouple: 'Thermocouple',
+	assay_run: 'Assay Run'
+};
+
+/** Labels for every step key that has ever been stored on a run, old and new. */
+export const ALL_STEP_LABELS: Record<string, string> = {
+	...STEP_LABELS,
 	optical_confirmation: 'Optical Confirmation'
 };

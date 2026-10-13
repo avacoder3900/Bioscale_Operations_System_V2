@@ -74,6 +74,20 @@ const spuSchema = new Schema({
 			sessionId: String, completedAt: Date, rawData: Schema.Types.Mixed,
 			results: Schema.Types.Mixed, failureReasons: [String], criteriaUsed: Schema.Types.Mixed
 		},
+		// 2026-10-13 screen pipeline: the one-button SCREEN (self-test suite +
+		// laser blast + the real assay motion x3) and the assay-run GROUP test
+		// replace spectrophotometer as the gate. spectrophotometer stays
+		// readable for history; nothing writes it any more (optics sync retired).
+		screen: {
+			status: { type: String, enum: ['pending', 'passed', 'failed'], default: 'pending' },
+			sessionId: String, completedAt: Date, testRanAt: Date, rawData: Schema.Types.Mixed,
+			results: Schema.Types.Mixed, failureReasons: [String], criteriaUsed: Schema.Types.Mixed
+		},
+		assay_run: {
+			status: { type: String, enum: ['pending', 'passed', 'failed', 'overridden'], default: 'pending' },
+			groupId: String, completedAt: Date, rawData: Schema.Types.Mixed,
+			results: Schema.Types.Mixed, failureReasons: [String], criteriaUsed: Schema.Types.Mixed
+		},
 		spectrophotometer: {
 			status: { type: String, enum: ['pending', 'passed', 'failed'], default: 'pending' },
 			sessionId: String, completedAt: Date, rawData: Schema.Types.Mixed,
