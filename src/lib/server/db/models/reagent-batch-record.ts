@@ -65,11 +65,14 @@ const reagentBatchRecordSchema = new Schema({
 		wellPosition: Number, reagentName: String, sourceLotId: String,
 		transferTubeId: String, preparedAt: Date
 	}],
-	// DOMAIN-32: the research-app FILL LOT (fill_lots) picked at fill time — it carries the reagent lot. Required.
+	// DOMAIN-32: the research-app FILL LOT (fill_lots) picked at fill time — it carries the reagent lot.
+	// OPTIONAL (2026-10-13): the default is no fill lot; the operator opts in when the run belongs to a
+	// curve set. fillLotSelectedAt records that the step was decided, lot or none.
 	fillLotId: String,
 	fillLotNumber: String,
 	reagentLotId: String,
 	reagentLotNumber: String,
+	fillLotSelectedAt: Date,
 
 	setupTimestamp: Date, runStartTime: Date, runEndTime: Date,
 	// Set when the OT-2 finishes (completeRunFilling). Once present, the run

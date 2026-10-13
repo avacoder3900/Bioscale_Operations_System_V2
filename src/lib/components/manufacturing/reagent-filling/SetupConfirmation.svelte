@@ -38,7 +38,7 @@
 <div class="space-y-5">
 	<h2 class="text-lg font-semibold text-[var(--color-tron-text)]">Setup Confirmation</h2>
 	<p class="text-sm text-[var(--color-tron-text-secondary)]">
-		Pick the run type and the assay. The assay chosen here becomes the cartridge's assay — the research app keeps it when the cartridge is linked to an arm with no assay, and can override it from the arm.
+		Runs default to Research: no assay. Opt in to Production to assign one — that assay becomes the cartridge's assay; the research app keeps it when the cartridge is linked to an arm with no assay, and can override it from the arm.
 	</p>
 
 	<!-- Run type: Production (assay required) vs Research (no assay) -->
@@ -53,7 +53,7 @@
 					? 'border-[var(--color-tron-cyan)]/60 bg-[var(--color-tron-cyan)]/15 text-[var(--color-tron-cyan)]'
 					: 'border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-cyan)]/30'}"
 			>
-				Production (Assay)
+				Production — assign assay
 			</button>
 			<button
 				type="button"
@@ -63,7 +63,7 @@
 					? 'border-[var(--color-tron-orange)]/60 bg-[var(--color-tron-orange)]/15 text-[var(--color-tron-orange)]'
 					: 'border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-orange)]/30'}"
 			>
-				Research
+				Research — no assay (default)
 			</button>
 		</div>
 		{#if isResearch}

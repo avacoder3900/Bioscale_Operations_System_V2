@@ -19638,3 +19638,18 @@ reagent-filling/+page.server.ts, src/lib/server/manufacturing/reagent-wizard.ts,
 manufacturing/reagent-filling/{ReagentWizard,ReagentPreparation,SetupConfirmation}.svelte (ReagentBatchScan
 deleted), src/lib/server/db/models/{cartridge-record,reagent-batch-record}.ts.
 npm run check: 13 errors = master baseline, none in changed files.
+
+================================================================================
+2026-10-13 — feat/fill-assay-is-the-assay — fill defaults are opt-in: Research (no assay) and no fill lot
+================================================================================
+Jacob: "make sure that the default at filling is no assay and no fill lot, we have to opt in to that at filling."
+ReagentWizard: isResearchRun defaults to true (Setup buttons now read "Research — no assay (default)" /
+"Production — assign assay"). ReagentPreparation: the select starts on "No fill lot (default)" (the last-used
+lot is only flagged in the list, never preselected); a "None" card explains the run is filled without a fill
+lot / reagent lot; the submit reads "Fill with no fill lot" or "Fill on FL-…". selectFillLot accepts an empty
+fillLotId (clears fillLotId/fillLotNumber/reagentLotId/reagentLotNumber) and stamps fillLotSelectedAt on the
+run either way; the loader derives reagentPrepDone from fillLotSelectedAt || fillLotId (runs opened before
+the marker). ReagentBatchRecord gains fillLotSelectedAt (fill lot comment: optional). Research-side curves
+simply cannot resolve a cartridge with no fill lot — expected; opt in when the run belongs to a curve set.
+Files: ReagentWizard/ReagentPreparation/SetupConfirmation.svelte, (robots)/reagent-filling/+page.server.ts,
+reagent-wizard.ts, models/reagent-batch-record.ts. npm run check: 13 errors = master baseline.

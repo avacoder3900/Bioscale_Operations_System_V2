@@ -77,7 +77,9 @@
 	}
 
 	let lots = $state<FillLotOption[]>(fillLots);
-	let selectedFillLotId = $state(defaultFillLotId && fillLots.some((f) => f._id === defaultFillLotId) ? defaultFillLotId : (fillLots[0]?._id ?? ''));
+	// Default is NO fill lot (Jacob 2026-10-13): tying a run to a fill lot is opt-in. The last-used
+	// lot is only flagged in the list, never preselected.
+	let selectedFillLotId = $state('');
 	let submitting = $state(false);
 	let showNew = $state(false);
 	let newReagentLotId = $state('');
@@ -117,16 +119,16 @@
 	}
 
 	function handleSubmit() {
-		if (submitting || !selectedFill) return;
+		if (submitting) return;
 		submitting = true;
-		onComplete(selectedFill._id, selectedFill.reagentLotNumber || NON_CALIBRATED);
+		onComplete(selectedFill?._id ?? '', selectedFill ? selectedFill.reagentLotNumber || NON_CALIBRATED : '');
 	}
 </script>
 
 <div class="space-y-5">
 	<h2 class="text-lg font-semibold text-[var(--color-tron-text)]">Fill Lot</h2>
 	<p class="text-sm text-[var(--color-tron-text-secondary)]">
-		A fill lot is one reagent lot (630 QD, 480 QD, beads and buffers) filled across as many robot runs as you like. Runs default to the fill lot used last; open a new one when the reagents change. Filling before a calibrated reagent lot exists? Open a fill lot on "{NON_CALIBRATED_LABEL}" — the reagent lot can be set on it later in the research app.
+		Optional. By default a run is tied to no fill lot. Opt in when this fill belongs to a curve set: a fill lot is one reagent lot (630 QD, 480 QD, beads and buffers) filled across as many robot runs as you like. Filling before a calibrated reagent lot exists? Open a fill lot on "{NON_CALIBRATED_LABEL}" — the reagent lot can be set on it later in the research app.
 	</p>
 
 	{#if isReadonly}
@@ -135,7 +137,7 @@
 
 	<div class="space-y-3">
 		<div class="flex items-center justify-between">
-			<label for="fill-lot-pick" class="text-xs font-medium text-[var(--color-tron-cyan)]">Fill lot (required)</label>
+			<label for="fill-lot-pick" class="text-xs font-medium text-[var(--color-tron-cyan)]">Fill lot (optional — opt in)</label>
 			{#if onCreateFillLot && !isReadonly}
 				<button type="button" onclick={() => (showNew = !showNew)} class="text-xs text-[var(--color-tron-cyan)] underline">{showNew ? 'cancel' : '+ new fill lot'}</button>
 			{/if}
@@ -146,13 +148,13 @@
 			disabled={isReadonly || submitting}
 			class="min-h-[44px] w-full rounded border border-[var(--color-tron-cyan)]/30 bg-[var(--color-tron-bg)] px-3 py-2 text-sm text-[var(--color-tron-text)] focus:border-[var(--color-tron-cyan)] focus:outline-none disabled:opacity-50"
 		>
-			<option value="">Select a fill lot…</option>
+			<option value="">No fill lot (default)</option>
 			{#each lots as f (f._id)}
 				<option value={f._id}>{f.fillLotNumber}{f.name ? ` · ${f.name}` : ''} · {reagentLabel(f)}{f._id === defaultFillLotId ? ' · (last used)' : ''}</option>
 			{/each}
 		</select>
 		{#if lots.length === 0 && !showNew}
-			<p class="text-xs text-red-400">No open fill lots. Open one here (pick the reagent lot, or "{NON_CALIBRATED_LABEL}") or in the research app under Curves.</p>
+			<p class="text-xs text-[var(--color-tron-text-secondary)]">No open fill lots. If this run needs one, open it here (pick the reagent lot, or "{NON_CALIBRATED_LABEL}") or in the research app under Curves.</p>
 		{/if}
 
 		{#if showNew}
@@ -179,8 +181,8 @@
 		{/if}
 	</div>
 
-	{#if selectedFill}
-		<div class="space-y-4">
+	<div class="space-y-4">
+		{#if selectedFill}
 			<div class="rounded-lg border border-[var(--color-tron-cyan)]/30 bg-[var(--color-tron-cyan)]/10 p-4">
 				<p class="text-xs text-[var(--color-tron-text-secondary)]">Fill lot{isDefault ? ' · same as the last run' : ''}</p>
 				<p class="font-mono text-lg font-bold text-[var(--color-tron-cyan)]">{selectedFill.fillLotNumber}{selectedFill.name ? ` · ${selectedFill.name}` : ''}</p>
@@ -190,6 +192,13 @@
 					<p class="text-xs text-[var(--color-tron-text-secondary)]">reagent lot <span class="font-mono">{selectedFill.reagentLotNumber}</span>{selectedLot ? ` · ${describe(selectedLot)}` : ''}{selectedFill.runIds?.length ? ` · ${selectedFill.runIds.length} run${selectedFill.runIds.length === 1 ? '' : 's'} so far` : ''}</p>
 				{/if}
 			</div>
+		{:else}
+			<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4">
+				<p class="text-xs text-[var(--color-tron-text-secondary)]">Fill lot</p>
+				<p class="text-lg font-bold text-[var(--color-tron-text)]">None</p>
+				<p class="text-xs text-[var(--color-tron-text-secondary)]">Cartridges are filled without a fill lot or reagent lot. Pick one above only if this run belongs to a curve set.</p>
+			</div>
+		{/if}
 
 			{#if onSaveNote && !isReadonly}
 				<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4">
@@ -242,9 +251,10 @@
 		>
 			{#if submitting}
 				Confirming...
-			{:else}
+			{:else if selectedFill}
 				Fill on {selectedFill.fillLotNumber}
+			{:else}
+				Fill with no fill lot
 			{/if}
 		</button>
-	{/if}
 </div>

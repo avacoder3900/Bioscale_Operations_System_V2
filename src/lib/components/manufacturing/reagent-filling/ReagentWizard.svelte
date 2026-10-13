@@ -40,7 +40,8 @@
 	const act = (name: string) => `${ROUTE}?/${name}&robot=${encodeURIComponent(data.robotId)}`;
 
 	let selectedAssayTypeId = $state('');
-	let isResearchRun = $state(false);
+	// Default run type is Research = no assay (Jacob 2026-10-13): assigning an assay at fill is opt-in.
+	let isResearchRun = $state(true);
 	let errorMsg = $state('');
 	let submitting = $state(false);
 	let showCancelModal = $state(false);
@@ -924,9 +925,10 @@
 				return { ok: false, error: result.type === 'failure' ? ((result.data as any)?.error ?? 'Failed') : 'Failed' };
 			}}
 			onComplete={async (fillLotId, reagentLotLabel) => {
-				reagentBatchBarcodeLocal = reagentLotLabel;
+				reagentBatchBarcodeLocal = reagentLotLabel || null;
 				reagentBatchConfirmedLocal = true;
-				// Persist the fill lot (writes to the run record — no cartridge dependency).
+				// Persist the fill-lot decision — a lot, or none (the default; opt-in). Writes to the
+				// run record only, no cartridge dependency.
 				// Do NOT start the run yet: the deck hasn't been scanned. The deck-scan
 				// step auto-starts once cartridges are on.
 				await submitForm('selectFillLot', { fillLotId });
@@ -966,7 +968,7 @@
 					</svg>
 					<div>
 						<p class="font-semibold text-green-400">Deck Loaded &amp; Fill Lot Set</p>
-						<p class="text-sm text-green-300/70">{data.cartridges.length} cartridges ready · fill lot {data.fillLotNumber ?? '—'} · reagents {reagentBatchBarcode ?? '—'}</p>
+						<p class="text-sm text-green-300/70">{data.cartridges.length} cartridges ready · fill lot {data.fillLotNumber || 'none'} · reagents {reagentBatchBarcode ?? '—'}</p>
 					</div>
 				</div>
 			</div>
