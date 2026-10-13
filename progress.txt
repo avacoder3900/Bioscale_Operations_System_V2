@@ -19534,3 +19534,29 @@ Smoke (unauthenticated curl; 302 → /login or 401 means the route exists and is
   /api/manufacturing/reagent-well-issues?robot=x -> 401 
   /manufacturing/cart-mfg/opentrons -> 302 https://bioscale-operations-system-mongodb-nji6shgaw-brevitest.vercel.app/login
 
+
+================================================================================
+2026-10-13 — master — PR #90 merged: Robots page overhaul (wax + reagent), LIVE in production
+================================================================================
+feat/robot-overhaul merged to master by the GitHub API on the operator's explicit
+"push to main you have my permission" (merge commit 9e9920e9). Branch head at
+merge: 34726f59 (code 1c39203e + its deploy log).
+
+Deployment: production — https://bioscale-operations-system-mongodb-isajgf1v1-brevitest.vercel.app
+Source: branch master @ commit 9e9920e9 (merge of feat/robot-overhaul, PR #90)
+Retrieve this exact code: git checkout 9e9920e9
+What this deployment is for: the Robots page overhaul — one command page for all
+  three OT-2s (board + live run panels), setup on the wax-filling / reagent-filling
+  pages, wizards as components, trimmed run controller, inline heatmap, dead
+  opentron-control routes removed. The no-robot simulator was removed before ship
+  (retrieve: git checkout 922e02a8 -- scripts/ot2-sim; run its seed.ts --teardown
+  if sim fixtures were ever seeded).
+Smoke (unauthenticated curl; 302 → /login means the route exists and is gated):
+  /login -> 200 
+  /manufacturing/cart-mfg/robots -> 302 https://bioscale-operations-system-mongodb-isajgf1v1-brevitest.vercel.app/login
+  /manufacturing/cart-mfg/wax-filling?robot=x -> 302 https://bioscale-operations-system-mongodb-isajgf1v1-brevitest.vercel.app/login
+  /manufacturing/cart-mfg/opentrons -> 302 https://bioscale-operations-system-mongodb-isajgf1v1-brevitest.vercel.app/login
+
+Known follow-ups (not in this ship): Cancel Run on the reagent setup page (wax has
+it back); page-load robot round trips (self-heal + start-intent reconcile over the
+30 s bridge queue on every Robots-page load/invalidation) behind the reported lag.
