@@ -1,7 +1,7 @@
 import { fail } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
-import { connectDB, Spu, ValidationSession, AuditLog, generateId } from '$lib/server/db';
-import { cycleSummary, inCurrentCycle } from '$lib/server/spu-validation-cycle';
+import { connectDB, Spu, ValidationSession, CartridgeGroup, AuditLog, generateId } from '$lib/server/db';
+import { cycleSummary, inCurrentCycle, VALIDATION_INSTRUMENTS } from '$lib/server/spu-validation-cycle';
 import { isLegalTransition } from '$lib/server/spu-status';
 import { syncServiceFlag } from '$lib/server/service-flag';
 import { appendSpuJournal } from '$lib/server/spu-journal';
@@ -9,16 +9,21 @@ import { syncOpticsValidation } from '$lib/server/services/optics-validation-syn
 import type { Actions, PageServerLoad } from './$types';
 
 /**
- * SPU Validation hub (SPU-INV-11): the unified fleet view. Each instrument
- * keeps its own execution page — this page answers "where does the fleet
- * stand" with real measurements: gauss at every point (mag), per-channel
- * ratio averages (optics), mode temperature (thermo).
+ * SPU Validation hub (SPU-INV-11; instruments re-cut 2026-10-13): the unified
+ * fleet view. Each instrument keeps its own execution page — this page answers
+ * "where does the fleet stand" with real measurements per unit:
+ *   Screen        pass / fail / warn counts of the latest screen (firmware v102)
+ *   Magnetometer  gauss at every point (fixed-position read) + min sweep gradient
+ *   Thermocouple  mode temperature of the heat-cart hold
+ *   Assay run     latest group's bead index per lane and CV
+ * Optics (spectrophotometer) is no longer a gate; its legacy rollup is shown
+ * only as a note on units that still carry one.
  */
 export const load: PageServerLoad = async ({ locals }) => {
 	requirePermission(locals.user, 'spu:read');
 	await connectDB();
 
-	const [spus, latestMagSessions] = await Promise.all([
+	const [spus, latestMagSessions, latestSweeps, latestScreens, latestGroups] = await Promise.all([
 		Spu.find({ status: { $ne: 'retired' } })
 			.select('udi status validation validationResetAt')
 			.sort({ udi: 1 })
@@ -29,10 +34,28 @@ export const load: PageServerLoad = async ({ locals }) => {
 			{ $match: { type: { $in: ['mag', 'magnetometer'] } } },
 			{ $sort: { startedAt: -1 } },
 			{ $group: { _id: '$spuId', magResults: { $first: '$magResults' }, overallPassed: { $first: '$overallPassed' }, at: { $first: '$startedAt' } } }
+		]),
+		ValidationSession.aggregate([
+			{ $match: { type: 'mag_sweep' } },
+			{ $sort: { startedAt: -1 } },
+			{ $group: { _id: '$spuId', minGradient: { $first: '$magResults.minGradient' }, at: { $first: '$startedAt' }, sessionId: { $first: '$_id' } } }
+		]),
+		ValidationSession.aggregate([
+			{ $match: { type: 'screen' } },
+			{ $sort: { startedAt: -1 } },
+			{ $group: { _id: '$spuId', sessionId: { $first: '$_id' }, status: { $first: '$status' }, overallPassed: { $first: '$overallPassed' }, at: { $first: '$startedAt' }, summary: { $first: '$rawData.summary' } } }
+		]),
+		CartridgeGroup.aggregate([
+			{ $match: { purpose: 'assay_run', archivedAt: null } },
+			{ $sort: { createdAt: -1 } },
+			{ $group: { _id: '$spuId', groupId: { $first: '$_id' }, name: { $first: '$name' }, evaluation: { $first: '$evaluation' }, at: { $first: '$evaluatedAt' } } }
 		])
 	]);
 
 	const magBySpu = new Map<string, any>(latestMagSessions.map((m: any) => [m._id, m]));
+	const sweepBySpu = new Map<string, any>(latestSweeps.map((m: any) => [m._id, m]));
+	const screenBySpu = new Map<string, any>(latestScreens.map((m: any) => [m._id, m]));
+	const groupBySpu = new Map<string, any>(latestGroups.map((m: any) => [m._id, m]));
 
 	// The mag wells grid: [{well, A, B, C}] of Z (gauss) values.
 	function magWells(raw: any): { well: number; A: number | null; B: number | null; C: number | null }[] | null {
@@ -63,24 +86,36 @@ export const load: PageServerLoad = async ({ locals }) => {
 		const rawMagSession = magBySpu.get(s._id);
 		const magSession = rawMagSession && inCurrentCycle(rawMagSession.at, s.validationResetAt) ? rawMagSession : null;
 		const wells = magRollupWells ?? magWells(magSession?.magResults);
-		const magStatus = cycle.statuses.magnetometer;
+		const sweep = sweepBySpu.get(s._id);
+		const sweepCurrent = sweep && inCurrentCycle(sweep.at, s.validationResetAt) ? sweep : null;
 
-		const opt = current(v.spectrophotometer) ? (v.spectrophotometer ?? {}) : {};
-		const ratios = opt.results?.ratioByChannel ?? null;
+		const sc = current(v.screen) ? (v.screen ?? {}) : {};
+		const screenSession = screenBySpu.get(s._id);
+		const screenLive = screenSession && inCurrentCycle(screenSession.at, s.validationResetAt) ? screenSession : null;
 
 		const th = current(v.thermocouple) ? (v.thermocouple ?? {}) : {};
 		const thermoMode =
 			th.results?.stats?.mode ?? th.results?.mode ?? th.results?.overallStats?.mode ?? null;
 
+		const ar = current(v.assay_run) ? (v.assay_run ?? {}) : {};
+		const group = groupBySpu.get(s._id);
+		const groupLive = group && inCurrentCycle(group.at, s.validationResetAt) ? group : null;
+		const arResults = ar.results ?? groupLive?.evaluation ?? null;
+
+		const opt = v.spectrophotometer ?? {};
 		const overall = cycle.overall;
 
 		// Most recent test of ANY modality — drives the default sort.
 		const times = [
+			sc.completedAt,
+			screenLive?.at,
 			v.magnetometer?.completedAt,
 			v.magnetometer?.testRanAt,
 			magSession?.at,
+			sweepCurrent?.at,
 			th.completedAt,
-			opt.completedAt
+			ar.completedAt,
+			groupLive?.at
 		]
 			.filter(Boolean)
 			.map((t: any) => new Date(t).getTime());
@@ -96,26 +131,45 @@ export const load: PageServerLoad = async ({ locals }) => {
 			// Passing validation qualifies validating → released; release itself
 			// is the manual act (the button in the last column).
 			canRelease: (s.status ?? 'draft') === 'validating' && overall === 'passed',
+			screen: {
+				status: cycle.statuses.screen,
+				counts: sc.results?.counts ?? null,
+				sessionId: sc.sessionId ?? screenLive?.sessionId ?? null,
+				running: !!screenLive && screenLive.status === 'running',
+				fw: sc.rawData?.fw ?? null,
+				failureReasons: sc.failureReasons ?? []
+			},
 			mag: {
-				status: magStatus,
+				status: cycle.statuses.magnetometer,
 				wells,
 				zRange: zRange(wells),
 				failureReasons: v.magnetometer?.failureReasons ?? [],
-				fromSession: !magRollupWells && !!magSession
-			},
-			optics: {
-				status: cycle.statuses.spectrophotometer,
-				ratios: ratios
-					? { A: ratios.A ?? null, B: ratios.B ?? null, C: ratios.C ?? null }
-					: null,
-				// Optical runs are cartridge_records and the record _id IS the scanned
-				// barcode, so this is what /validation/optical-confirmation/[id] wants.
-				cartridgeBarcode: opt.results?.cartridgeBarcode ?? null
+				fromSession: !magRollupWells && !!magSession,
+				minGradient: sweepCurrent?.minGradient ?? null,
+				sweepSessionId: sweepCurrent?.sessionId ?? null
 			},
 			thermo: {
 				status: cycle.statuses.thermocouple,
 				mode: thermoMode,
 				sessionId: th.sessionId ?? null
+			},
+			assayRun: {
+				status: cycle.statuses.assay_run,
+				groupId: ar.groupId ?? groupLive?.groupId ?? null,
+				groupName: groupLive?.name ?? ar.rawData?.groupName ?? null,
+				beadIndex: arResults
+					? { A: arResults.lanes?.A?.beadIndexMean ?? null, B: arResults.lanes?.B?.beadIndexMean ?? null, C: arResults.lanes?.C?.beadIndexMean ?? null }
+					: null,
+				beadIndexCv: arResults?.beadIndexCv ?? null,
+				nValid: arResults?.nValid ?? null,
+				n: arResults?.n ?? null,
+				stageMaxErr: arResults?.stage?.maxAbsErrorUm ?? null,
+				failureReasons: ar.failureReasons ?? []
+			},
+			legacyOptics: {
+				status: cycle.legacy.spectrophotometer,
+				ratios: opt.results?.ratioByChannel ?? null,
+				cartridgeBarcode: opt.results?.cartridgeBarcode ?? null
 			}
 		};
 	});
@@ -123,14 +177,15 @@ export const load: PageServerLoad = async ({ locals }) => {
 	// Most recently tested first; never-tested units sink to the bottom.
 	rows.sort((a, b) => (b.lastTestAt?.getTime() ?? 0) - (a.lastTestAt?.getTime() ?? 0));
 
-	return { rows: JSON.parse(JSON.stringify(rows)) };
+	return { rows: JSON.parse(JSON.stringify(rows)), instruments: [...VALIDATION_INSTRUMENTS] };
 };
 
 export const actions: Actions = {
 	/**
-	 * Manual optics → SPU write-back. Deliberately not on a timer (2026-09-15):
-	 * the pass/fail rule for an optical scan is still being defined, so a human
-	 * decides when the latest runs get judged onto the units.
+	 * Legacy optics → SPU write-back. Retired from the gate on 2026-10-13 (the
+	 * assay run replaced optical confirmation); kept callable for the R&D pages
+	 * and for history. Writes only the legacy `validation.spectrophotometer`
+	 * slot, which no longer counts toward release.
 	 */
 	syncOptics: async ({ locals }) => {
 		requirePermission(locals.user, 'spu:write');
@@ -142,7 +197,7 @@ export const actions: Actions = {
 			recordId: 'fleet',
 			action: 'UPDATE',
 			newData: { opticsSync: { updated: r.updated, unchanged: r.unchanged.length, noReadings: r.skippedNoReadings.length } },
-			reason: 'Manual optics → SPU sync from the validation hub',
+			reason: 'Manual (legacy) optics → SPU sync from the validation hub',
 			changedBy: locals.user!.username ?? locals.user!._id,
 			changedAt: new Date()
 		});
@@ -157,7 +212,7 @@ export const actions: Actions = {
 	},
 
 	/**
-	 * Release a unit from the hub. Passing all three validations in the current
+	 * Release a unit from the hub. Passing every instrument in the current
 	 * cycle is what qualifies a validating unit; pressing Release is the manual
 	 * act that moves it (SPU-INV-07 doctrine).
 	 */
@@ -182,13 +237,13 @@ export const actions: Actions = {
 		const cycle = cycleSummary(spu);
 		if (cycle.overall !== 'passed') {
 			return fail(400, {
-				error: `${spu.udi} has ${cycle.passed}/${cycle.total} validations passed this cycle — all three must pass before release`
+				error: `${spu.udi} has ${cycle.passed}/${cycle.total} validations passed this cycle — all ${cycle.total} must pass before release`
 			});
 		}
 
 		const who = { _id: locals.user!._id, username: locals.user!.username };
 		const now = new Date();
-		const reason = 'Released from the validation hub — 3/3 validations passed this cycle';
+		const reason = `Released from the validation hub — ${cycle.total}/${cycle.total} validations passed this cycle`;
 		await Spu.updateOne(
 			{ _id: spuId, status: from },
 			{
@@ -211,7 +266,7 @@ export const actions: Actions = {
 		});
 		await appendSpuJournal(
 			spuId,
-			'Released — magnetometer, thermocouple and optics all passed this validation cycle.',
+			'Released — screen, magnetometer, thermocouple and assay run all passed this validation cycle.',
 			who,
 			{ source: 'release' }
 		);

@@ -51,7 +51,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 	await connectDB();
 
 	const spus = await Spu.find(ROSTER_QUERY)
-		.select('udi barcode status batch.batchNumber createdAt validation.status validation.magnetometer.status validation.thermocouple.status')
+		.select('udi barcode status batch.batchNumber createdAt validation.status validation.screen.status validation.magnetometer.status validation.thermocouple.status validation.assay_run.status')
 		.sort({ udi: 1 })
 		.lean() as any[];
 
@@ -169,7 +169,7 @@ export const actions: Actions = {
 				// the SPU's DHR) into the run so an already-passed mag/thermo test
 				// is visible from the start. Re-running a step is still allowed.
 				const steps: Record<string, unknown> = structuredClone(emptySteps);
-				for (const key of ['magnetometer', 'thermocouple'] as const) {
+				for (const key of ['screen', 'magnetometer', 'thermocouple', 'assay_run'] as const) {
 					const v = s.validation?.[key];
 					if (v?.status && v.status !== 'pending') {
 						steps[key] = {

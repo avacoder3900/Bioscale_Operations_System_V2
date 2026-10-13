@@ -26,7 +26,7 @@
 	}
 	function releaseBlockedReason(r: { status: string; passedCount: number; total: number }): string {
 		if (r.status !== 'validating') return `Only a validating unit can be released (this one is ${r.status})`;
-		return `${r.passedCount}/${r.total} validations passed this cycle — all three must pass first`;
+		return `${r.passedCount}/${r.total} validations passed this cycle — all ${r.total} must pass first`;
 	}
 
 	let expanded = $state<string | null>(null);
@@ -107,14 +107,21 @@
 	function fmtRatio(r: number | null): string {
 		return r == null ? '—' : r.toFixed(2);
 	}
+	function fmtBi(r: number | null): string {
+		return r == null ? '—' : r.toFixed(2);
+	}
 
+	// The four gates, then the tools that feed them (2026-10-13 pipeline:
+	// SCREEN → mag / thermo / sonic as separate tools → assay-run group).
 	const LAUNCHERS = [
-		{ href: '/validation/magnetometer', label: 'Magnetometer', desc: 'Read gauss values from a device' },
-		{ href: '/validation/thermocouple', label: 'Thermocouple', desc: 'Upload a temperature dataset + verdict' },
-		{ href: '/validation/optical-confirmation', label: 'Optical Confirmation', desc: 'Assign + analyze optics cartridges' },
-		{ href: '/validation/optical-confirmation/blank', label: 'Blank Cartridge', desc: 'One blank cart on every unit — instrument noise' },
+		{ href: '/validation/screen', label: 'Screen', desc: 'One button: self-test suite, laser blast, assay motion ×3' },
+		{ href: '/validation/magnetometer', label: 'Magnetometer', desc: 'Gauss at every well; peaks sweep gradient' },
+		{ href: '/validation/thermocouple', label: 'Thermocouple', desc: 'Heat-cart hold read by the thermocouple tool' },
+		{ href: '/validation/assay-run', label: 'Assay Run', desc: 'A group of real cartridges on the unit — bead index, CV, stage check' },
 		{ href: '/validation/sonic', label: 'Sonic Fingerprint', desc: 'Upload a phone recording of the motion assay' },
-		{ href: '/validation/bench', label: 'Optical Bench', desc: 'Laser-into-sensor and dark reads, no cartridge' }
+		{ href: '/validation/bench', label: 'Optical Bench (R&D)', desc: 'Laser-into-sensor and dark reads, no cartridge' },
+		{ href: '/validation/optical-confirmation', label: 'Optical Confirmation (R&D)', desc: 'No longer a gate — optics R&D only' },
+		{ href: '/validation/optical-confirmation/blank', label: 'Blank Cartridge (R&D)', desc: 'Instrument noise with the chemistry held constant' }
 	];
 </script>
 
@@ -127,12 +134,12 @@
 				picture lives.
 			</p>
 		</div>
-		<!-- Optics is judged onto units only when a human says so — no timer. -->
+		<!-- Legacy: optics is no longer a gate (2026-10-13). The sync stays callable for history. -->
 		<form method="POST" action="?/syncOptics" use:enhance={syncHandler}>
-			<span title="Write each unit's latest in-cycle optical run onto its validation record (pass/fail + ratios). Runs only when you press it.">
-				<TronButton type="submit" variant="ghost" disabled={syncing}>
-					{syncing ? 'Syncing optics…' : 'Sync optics to units'}
-				</TronButton>
+			<span title="LEGACY — writes each unit's latest optical run onto the retired validation.spectrophotometer slot. Does not count toward release.">
+				<button type="submit" class="tron-text-muted text-xs hover:underline" disabled={syncing}>
+					{syncing ? 'Syncing optics…' : 'legacy: sync optics'}
+				</button>
 			</span>
 		</form>
 	</div>
@@ -153,10 +160,11 @@
 	<TronCard>
 		<h3 class="tron-text-primary mb-3 text-lg font-medium">Fleet Matrix</h3>
 		<p class="tron-text-muted mb-4 text-xs">
-			Magnetometer shows the Z (gauss) range — expand a row for every point. Optics shows the
-			average F7/F3 ratio per channel. Thermocouple shows the mode of the temperature plot.
-			Only the current validation cycle counts — it resets to 0/3 when a unit enters servicing.
-			Most recently tested first. Retired units are hidden.
+			Screen shows the latest screen's pass / fail / warn counts. Magnetometer shows the Z (gauss)
+			range — expand a row for every point — and the minimum sweep gradient when a sweep exists.
+			Thermocouple shows the mode of the temperature plot. Assay run shows the latest group's bead
+			index per lane and its CV. Only the current validation cycle counts — it resets to 0/4 when a
+			unit enters servicing. Most recently tested first. Retired units are hidden.
 		</p>
 		{#if form?.error}
 			<p class="mb-3 text-sm text-[var(--color-tron-red)]">{form.error}</p>
@@ -195,9 +203,10 @@
 						</th>
 						<th class="py-2 pr-4 text-xs uppercase text-[var(--color-tron-text-secondary)]">Validation</th>
 						<th class="py-2 pr-4 text-xs uppercase text-[var(--color-tron-text-secondary)]">Lifecycle</th>
+						<th class="py-2 pr-4 text-xs uppercase text-[var(--color-tron-text-secondary)]">Screen</th>
 						<th class="py-2 pr-4 text-xs uppercase text-[var(--color-tron-text-secondary)]">Magnetometer (gauss)</th>
-						<th class="py-2 pr-4 text-xs uppercase text-[var(--color-tron-text-secondary)]">Optics ratio A / B / C</th>
 						<th class="py-2 pr-4 text-xs uppercase text-[var(--color-tron-text-secondary)]">Thermo mode</th>
+						<th class="py-2 pr-4 text-xs uppercase text-[var(--color-tron-text-secondary)]">Assay run — bead index A / B / C</th>
 						<th
 							class="py-0 pr-4"
 							aria-sort={sortKey === 'lastTest' ? (sortDir === 'asc' ? 'ascending' : 'descending') : undefined}
@@ -234,6 +243,16 @@
 							<td class="py-2.5 pr-4">
 								<TronBadge variant="neutral">{r.status}</TronBadge>
 							</td>
+							<td class="py-2.5 pr-4 font-mono text-xs whitespace-nowrap">
+								<TronBadge variant={badgeVariant(r.screen.status)}>{r.screen.running ? 'running' : r.screen.status}</TronBadge>
+								{#if r.screen.counts}
+									<a href="/validation/screen/{r.screen.sessionId}" class="ml-2 text-[var(--color-tron-cyan)] hover:underline" title="Open the latest screen">{r.screen.counts.pass}P / <span class={r.screen.counts.fail ? 'text-[var(--color-tron-red)]' : ''}>{r.screen.counts.fail}F</span> / {r.screen.counts.warn}W</a>
+								{:else if r.screen.sessionId}
+									<a href="/validation/screen/{r.screen.sessionId}" class="ml-2 text-[var(--color-tron-cyan)] hover:underline">open</a>
+								{:else}
+									<span class="tron-text-muted ml-2">—</span>
+								{/if}
+							</td>
 							<td class="py-2.5 pr-4 whitespace-nowrap">
 								<TronBadge variant={badgeVariant(r.mag.status)}>{r.mag.status}</TronBadge>
 								{#if r.mag.zRange}
@@ -251,22 +270,8 @@
 								{:else}
 									<span class="tron-text-muted ml-2 text-xs">no readings</span>
 								{/if}
-							</td>
-							<td class="py-2.5 pr-4 font-mono text-xs whitespace-nowrap">
-								{#if r.optics.ratios}
-									<TronBadge variant={badgeVariant(r.optics.status)}>{r.optics.status}</TronBadge>
-									{#if r.optics.cartridgeBarcode}
-									<a
-										href="/validation/optical-confirmation/{r.optics.cartridgeBarcode}"
-										class="ml-2 text-[var(--color-tron-cyan)] hover:underline"
-										title="Open this cartridge's optical test results"
-									>{fmtRatio(r.optics.ratios.A)} / {fmtRatio(r.optics.ratios.B)} / {fmtRatio(r.optics.ratios.C)}</a>
-								{:else}
-									<span class="ml-2">{fmtRatio(r.optics.ratios.A)} / {fmtRatio(r.optics.ratios.B)} / {fmtRatio(r.optics.ratios.C)}</span>
-								{/if}
-								{:else}
-									<TronBadge variant={badgeVariant(r.optics.status)}>{r.optics.status}</TronBadge>
-									<span class="tron-text-muted ml-2">—</span>
+								{#if r.mag.minGradient}
+									<a href="/validation/magnetometer/{r.mag.sweepSessionId}" class="ml-2 font-mono text-[10px] text-[var(--color-tron-cyan)] hover:underline" title="Minimum sweep gradient (dBz/dz) across wells and lanes — the bead-delivery proxy">∇ {r.mag.minGradient.value} @ {r.mag.minGradient.well}{r.mag.minGradient.channel}</a>
 								{/if}
 							</td>
 							<td class="py-2.5 font-mono whitespace-nowrap">
@@ -283,6 +288,17 @@
 								{/if}
 								{:else}
 									<TronBadge variant={badgeVariant(r.thermo.status)}>{r.thermo.status}</TronBadge>
+									<span class="tron-text-muted ml-2">—</span>
+								{/if}
+							</td>
+							<td class="py-2.5 pr-4 font-mono text-xs whitespace-nowrap">
+								<TronBadge variant={badgeVariant(r.assayRun.status)}>{r.assayRun.status}</TronBadge>
+								{#if r.assayRun.beadIndex}
+									<a href="/validation/assay-run/{r.assayRun.groupId}" class="ml-2 text-[var(--color-tron-cyan)] hover:underline" title="{r.assayRun.groupName ?? 'group'} — {r.assayRun.nValid}/{r.assayRun.n} valid{r.assayRun.stageMaxErr != null ? `, stage max |err| ${r.assayRun.stageMaxErr} µm` : ''}">{fmtBi(r.assayRun.beadIndex.A)} / {fmtBi(r.assayRun.beadIndex.B)} / {fmtBi(r.assayRun.beadIndex.C)}</a>
+									{#if r.assayRun.beadIndexCv != null}<span class="tron-text-muted ml-1">CV {r.assayRun.beadIndexCv.toFixed(1)}%</span>{/if}
+								{:else if r.assayRun.groupId}
+									<a href="/validation/assay-run/{r.assayRun.groupId}" class="ml-2 text-[var(--color-tron-cyan)] hover:underline">{r.assayRun.groupName ?? 'group'}</a>
+								{:else}
 									<span class="tron-text-muted ml-2">—</span>
 								{/if}
 							</td>
@@ -306,7 +322,7 @@
 						</tr>
 						{#if expanded === r.id && r.mag.wells}
 							<tr class="border-b border-[var(--color-tron-border)]">
-								<td colspan="8" class="bg-[var(--color-tron-bg-secondary)]/40 px-4 py-3">
+								<td colspan="9" class="bg-[var(--color-tron-bg-secondary)]/40 px-4 py-3">
 									<span class="tron-text-muted mb-2 block text-xs uppercase">Gauss (Z) at all points — {r.udi}</span>
 									<table class="text-xs">
 										<thead>
@@ -331,11 +347,20 @@
 									{#if r.mag.failureReasons.length}
 										<p class="mt-2 text-xs text-[var(--color-tron-red,#ef4444)]">{r.mag.failureReasons.join('; ')}</p>
 									{/if}
+									{#if r.screen.failureReasons.length}
+										<p class="mt-2 text-xs text-[var(--color-tron-red,#ef4444)]">Screen: {r.screen.failureReasons.join('; ')}</p>
+									{/if}
+									{#if r.assayRun.failureReasons.length}
+										<p class="mt-2 text-xs text-[var(--color-tron-red,#ef4444)]">Assay run: {r.assayRun.failureReasons.join('; ')}</p>
+									{/if}
+									{#if r.legacyOptics.ratios}
+										<p class="tron-text-muted mt-2 text-xs">Legacy optics (no longer a gate): F7/F3 {fmtRatio(r.legacyOptics.ratios.A)} / {fmtRatio(r.legacyOptics.ratios.B)} / {fmtRatio(r.legacyOptics.ratios.C)} — {r.legacyOptics.status}</p>
+									{/if}
 								</td>
 							</tr>
 						{/if}
 					{:else}
-						<tr><td colspan="8" class="tron-text-muted py-8 text-center">No units{search.trim() ? ` match “${search}”` : ''}.</td></tr>
+						<tr><td colspan="9" class="tron-text-muted py-8 text-center">No units{search.trim() ? ` match “${search}”` : ''}.</td></tr>
 					{/each}
 				</tbody>
 			</table>
