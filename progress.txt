@@ -19599,3 +19599,6 @@ Retrieve this exact code: git checkout master at commit 2a9cd39d
 What this deployment is for: the fill screen can open a fill lot on "Non-calibrated reagent lot chemicals" (no
   reagent lot) so development fills before a calibrated reagent lot exists are no longer blocked; MCP
   research_fill_lot_create takes nonCalibrated: true. Research app main 6b71081 deployed first (same feature).
+Re-trigger (2026-10-13, later the same day): Jacob asked for the deployment to be re-pushed once the Vercel
+  GitHub integration was working again. master was already in sync with origin, so this progress-log commit
+  is the re-trigger: production rebuilds from master @ this commit (code identical to 2a9cd39d).
