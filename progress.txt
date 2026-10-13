@@ -19546,3 +19546,13 @@ stopRunViaLine. Not shown on the Robots page (Stop / Reset live there).
 Reagent setup page unchanged (ask if it should mirror this).
 
 Check: svelte-check 14 errors (all pre-existing), no warnings in the file.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-anjhmze3s-brevitest.vercel.app
+Source: branch feat/robot-overhaul @ commit 1c39203e
+Retrieve this exact code: git checkout feat/robot-overhaul at commit 1c39203e
+  (or: git log feat/robot-overhaul --oneline to find it if the branch has since moved on)
+What this deployment is for: Cancel Run restored on the wax setup page (PR #90 head).
+Smoke (unauthenticated curl; 302 → /login means the route exists and is gated):
+  /manufacturing/cart-mfg/robots -> 302 https://bioscale-operations-system-mongodb-anjhmze3s-brevitest.vercel.app/login
+  /manufacturing/cart-mfg/wax-filling?robot=x -> 302 https://bioscale-operations-system-mongodb-anjhmze3s-brevitest.vercel.app/login
+
