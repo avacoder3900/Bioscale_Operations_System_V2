@@ -13522,3 +13522,68 @@ under D-1.
 Files: docs/roadmap/2026-10-11-fall-replan-v5.md (addendum section), progress.txt.
 Workshop page republished (Version 7): Two tracks section, D-7 card, Commercial track
 program, step-back point 13. No app code touched; npm run check not run.
+
+================================================================================
+2026-10-13 — feat/screen-pipeline — SCREEN pipeline: webhooks (screen/ping/screen_record/mag_sweep_chunk/sweep_progress), validation cycle re-cut to screen+mag+thermo+assay_run, /validation/screen, /validation/assay-run group test, stage-tail parsing
+================================================================================
+Branch feat/screen-pipeline off feat/spu-tweaks. BIMS half of the device screening pipeline
+(brevitest-device Docs/DEVICE_SCREEN_PIPELINE_PLAN.md; firmware v102 built in parallel). No deploy.
+
+Webhook (src/routes/api/particle/webhook/+server.ts):
+- bioscale/screen: level/part events + lvl-9 summary -> ONE validation_sessions doc type 'screen'
+  per (device, run), idempotent on (run, lvl, part), re-evaluated on every event against the
+  Integration doc screen_criteria (src/lib/server/screen/contract.ts, ingest.ts, summarize.ts);
+  the summary writes spu.validation.screen, audit + journal, autoEnterValidating('screen').
+  Criteria resolve by exact id (homerep2), bare id (homerep) or run suffix (run_err); an "abort"
+  row / "aborted" summary field fails the screen.
+- bioscale/ping: replies 200 {ok,nonce,at}, stores nothing (device times the hook-response).
+- bioscale/screen_record + bioscale/mag_sweep_chunk: chunk store (new models DeviceChunk /
+  DeviceChunkJob, src/lib/server/chunks.ts) keyed (device, kind, id, seq), upsert, assemble when
+  every seq 0..total-1 is present; BINARY publishes decoded from the data: URL. screen_record id =
+  run*10+runIndex, base64 lines -> parseTestRecordBuffer -> attached to the screen session as
+  rawData.records[runIndex] (readings + stageCheck + per-channel background means).
+  mag_sweep_chunk -> src/lib/server/sweep/parse.ts (SWPBEGIN/M/SWPEND, scale, seg/pitch for the
+  v102 peaks-only sweep; absent wells = not sampled) + analyze.ts (peak, baseline, FWHM, Bx slope
+  over |y-peak| <= 1500 um -> gradBzdz = -2*slope, forceIndex = peakBz*grad; edge rule 1500 um;
+  reasons[] incl. "no peak in window"). Verified against the 32 stored serial-captured sessions:
+  gradBzdz / forceIndex / peakBz reproduce to 0.00000 relative (90 cells). Creates a 'mag_sweep'
+  session shaped like the stored ones; writes validation.magnetometer only when mag_criteria has
+  minGradient/minForceIndex.
+- bioscale/sweep_progress -> DeviceChunkJob.progress. blank-test now stores stageCheck.
+- test-payload.ts: parseStageTail() v1 (11588, 16 B) and v2 (fw 102: +travel_um, home_ms,
+  hit_ms[4] -> 11628 B); TestPayload.stageCheck. cartridge_records already carry
+  rawData.stageCheck on 330 records (the Lambda patch IS deployed, contrary to the plan's note).
+
+Validation cycle (src/lib/server/spu-validation-cycle.ts): VALIDATION_INSTRUMENTS =
+screen, magnetometer, thermocouple, assay_run; spectrophotometer is legacy (cycleSummary().legacy,
+cleared on reset, never counted). spu.ts: validation.screen + validation.assay_run. validation-run.ts
+steps = the four; ALL_STEP_LABELS keeps optical_confirmation for old runs. Integration enum +
+criteria/updatedBy fields. CartridgeGroup purpose 'assay_run' + spuId/udi/cycleResetAt/lot/
+intendedConcentration/evaluation/override. optics-validation-sync retired from the gate (hub button
+demoted to "legacy: sync optics", still callable).
+
+Pages: /validation/screen (unit picker, Screen button -> run_screen "levels,reps," with the
+refusal codes -1..-5 explained, live refresh while running, history with per-test rows grouped by
+level, operator confirm for buzz/led, criteria editor, per-unit trend sparklines, fleet compare of
+one metric, export.csv, open record-upload jobs); /validation/screen/[sessionId] (full rows +
+empty-slot background traces per assay run); /validation/assay-run (new group: unit + scanned
+barcodes or picked recent runs; groups table with per-member bead index per lane, result, stage
+err/hits, validity; add/remove/refresh/override/archive; criteria editor; compare A/B);
+/validation/assay-run/[groupId]; /validation/assay-run/compare. Evaluation in
+src/lib/server/assay-run/evaluate.ts: per member lane metrics from the record's `analysis` block
+(f3_w3pre/f3_w4pre/f3_baseline/f3_test, f7_over_f3_test) or recomputed from readings with the
+Cortisol 6.1 scan-group index ranges; bead index = f3_baseline / f3_w4pre by default (criteria-
+configurable); lane C validity rule; stage check per run; group pass/fail -> group.evaluation +
+spu.validation.assay_run (groups.ts). Hub (/validation): Screen + Assay run columns, min sweep
+gradient on the mag cell, legacy optics as a note; release text 4/4. SPU detail: four modality
+cards, links to Screen / Assay run, optics history labelled legacy. Runs pages: labels + links.
+Layout nav: Screen, Assay Run, Optical (R&D).
+
+Docs: docs/particle-webhooks-screen.md — the five Particle Console webhooks, criteria docs, ops
+checklist, and the exact device->BIMS contract.
+
+Not done / stubs: no automatic re-evaluation of assay-run groups when a cartridge record lands
+(refresh button or evaluateAssayRunGroup on open); no device-side resend command for a chunk job
+with holes (jobs are listed; the device must run the upload again); sonic sessions not linked to a
+screen session. `npm run check`: 10 errors / 439 warnings (baseline 10 / 437; the two warnings are
+a11y/label hints on the new pages).
