@@ -19665,3 +19665,14 @@ the marker). ReagentBatchRecord gains fillLotSelectedAt (fill lot comment: optio
 simply cannot resolve a cartridge with no fill lot — expected; opt in when the run belongs to a curve set.
 Files: ReagentWizard/ReagentPreparation/SetupConfirmation.svelte, (robots)/reagent-filling/+page.server.ts,
 reagent-wizard.ts, models/reagent-batch-record.ts. npm run check: 13 errors = master baseline.
+
+================================================================================
+2026-10-13 — master — DEPLOY: opt-in fill defaults (Research, no fill lot)
+================================================================================
+Deployment: production — bioscale-operations-system-mongodb.vercel.app (Vercel GitHub integration; per-deployment
+  URL + dpl id in the Vercel dashboard, brevitest team scope)
+Source: branch master @ commit 604b51a6 (merge of feat/fill-assay-is-the-assay cba022a9)
+Retrieve this exact code: git checkout master at commit 604b51a6
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: the fill screen defaults to Research (no assay) and "No fill lot"; assigning an
+  assay or a fill lot is opt-in. Follows c295ba92 (fill-time assay ownership, tube step retired).
