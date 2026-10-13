@@ -19519,3 +19519,18 @@ ship — the sim robots would otherwise show on the production Robots page.
 
 Check: svelte-check 14 errors (all pre-existing on master); vite build on the
 merged tree — see below.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-nji6shgaw-brevitest.vercel.app
+Source: branch feat/robot-overhaul @ commit 7801d596
+Retrieve this exact code: git checkout feat/robot-overhaul at commit 7801d596
+  (or: git log feat/robot-overhaul --oneline to find it if the branch has since moved on)
+What this deployment is for: the final build (master merged in, simulator removed) — PR #90.
+Smoke (unauthenticated curl; 302 → /login or 401 means the route exists and is gated):
+  /login -> 200 
+  /manufacturing/cart-mfg/robots -> 302 https://bioscale-operations-system-mongodb-nji6shgaw-brevitest.vercel.app/login
+  /manufacturing/cart-mfg/wax-filling?robot=x -> 302 https://bioscale-operations-system-mongodb-nji6shgaw-brevitest.vercel.app/login
+  /manufacturing/cart-mfg/reagent-filling?robot=x -> 302 https://bioscale-operations-system-mongodb-nji6shgaw-brevitest.vercel.app/login
+  /manufacturing/cart-mfg/robots/history -> 302 https://bioscale-operations-system-mongodb-nji6shgaw-brevitest.vercel.app/login
+  /api/manufacturing/reagent-well-issues?robot=x -> 401 
+  /manufacturing/cart-mfg/opentrons -> 302 https://bioscale-operations-system-mongodb-nji6shgaw-brevitest.vercel.app/login
+
