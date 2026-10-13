@@ -258,10 +258,13 @@ export async function loadReagentWizard(locals: App.Locals, robotId: string) {
 			: { hasActiveRun: false, stage: null, assayTypeName: null, assayTypeId: null, isResearch: false, cartridgeCount: 0, runStartTime: null, runEndTime: null, opentronsRunId: null, opentronsRunFinalStatus: null, protocolParameters: null, startInterrupted: null };
 
 		// Serialize cartridges
-		const cartridges = (activeRun?.cartridgesFilled ?? []).map((cf: any) => ({
+		// deckPosition: runs loaded before 2026-10-08 stored 0 for every cart (the
+		// grid never sent a position); scans are dense in deck order, so the index
+		// is the position for those. New loads carry the real position.
+		const cartridges = (activeRun?.cartridgesFilled ?? []).map((cf: any, i: number) => ({
 			id: cf.cartridgeId ?? '',
 			cartridgeId: cf.cartridgeId ?? '',
-			deckPosition: cf.deckPosition ?? null,
+			deckPosition: Number(cf.deckPosition) >= 1 ? Number(cf.deckPosition) : i + 1,
 			inspectionStatus: cf.inspectionStatus ?? 'Pending',
 			inspectionReason: cf.inspectionReason ?? null,
 			inspectedBy: cf.inspectedBy?.username ?? null,

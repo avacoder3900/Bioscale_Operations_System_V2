@@ -25,6 +25,7 @@ import {
 	moveSection,
 	updateFrontMatter,
 	updateMetadata,
+	updateSection,
 	type Actor
 } from '$lib/server/services/device-assembly-wi';
 import { makeDeviceWiImageStore } from '$lib/server/services/device-assembly-wi-images';
@@ -345,7 +346,21 @@ export const actions: Actions = {
 		requirePermission(locals.user, 'spu:write');
 		await connectDB();
 		const form = await request.formData();
-		return run(() => updateMetadata(actor(locals), { title: str(form.get('title')), assemblyNumber: str(form.get('assemblyNumber')) }), (r) => `${r.summary} — now ${r.label}`);
+		return run(() => updateMetadata(actor(locals), { title: str(form.get('title')), documentNumber: str(form.get('documentNumber')), assemblyNumber: str(form.get('assemblyNumber')) }), (r) => `${r.summary} — now ${r.label}`);
+	},
+
+	updateSection: async ({ request, locals }) => {
+		requirePermission(locals.user, 'spu:write');
+		await connectDB();
+		const form = await request.formData();
+		const sectionNumber = num(form.get('sectionNumber'));
+		if (sectionNumber == null) return fail(400, { error: 'Section is required' });
+		const patch: any = {};
+		if (form.has('title')) patch.title = str(form.get('title'));
+		if (form.has('tabLabel')) patch.tabLabel = str(form.get('tabLabel'));
+		if (form.has('notesHtml')) patch.notesHtml = str(form.get('notesHtml'));
+		if (form.has('materialsHtml')) patch.materialsHtml = str(form.get('materialsHtml'));
+		return run(() => updateSection(actor(locals), sectionNumber, patch), (r) => `${r.summary} — now ${r.label}`);
 	},
 
 	relinkParts: async ({ locals }) => {

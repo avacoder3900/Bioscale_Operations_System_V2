@@ -1,4 +1,4 @@
-import { DeviceAssemblyWI, WorkInstructionImage, PartDefinition, AuditLog } from '$lib/server/db/models/index.js';
+import { DeviceAssemblyWI, DeviceAssemblyWISnapshot, WorkInstructionImage, PartDefinition, AuditLog } from '$lib/server/db/models/index.js';
 import { generateId } from '$lib/server/db/utils.js';
 import {
 	parseDeviceAssemblyWI,
@@ -25,7 +25,7 @@ export type RevisionInput = {
 	changeType:
 		| 'import' | 'section_rename' | 'step_add' | 'step_edit' | 'step_delete' | 'step_move'
 		| 'image_add' | 'image_remove' | 'image_edit' | 'material_add' | 'material_edit' | 'material_remove'
-		| 'metadata_edit' | 'section_add' | 'section_delete' | 'section_move' | 'front_matter_edit';
+		| 'metadata_edit' | 'section_add' | 'section_delete' | 'section_move' | 'front_matter_edit' | 'revert';
 	summary: string;
 	location?: { sectionNumber?: number | null; sectionTitle?: string | null; stepNumber?: number | null; stepId?: string | null };
 	before?: unknown;
@@ -34,6 +34,16 @@ export type RevisionInput = {
 
 export function sectionLabel(section: { type: string; number: number }): string {
 	return section.type === 'setup' ? 'Setup' : `Sub-Assembly ${section.number}`;
+}
+
+/** Text shown on the section's tab: custom tabLabel if set, else the positional label. */
+export function tabLabel(section: { type: string; number: number; tabLabel?: string | null }): string {
+	return section.tabLabel?.trim() || sectionLabel(section);
+}
+
+/** There is one SPU Assembly WI; find it regardless of its (editable) document number. */
+function wiQuery() {
+	return DeviceAssemblyWI.findOne({}).sort({ createdAt: 1 });
 }
 
 export function versionLabel(version: number): string {
@@ -68,7 +78,7 @@ export function mongoImageStore(wiId: string | null, uploadedBy: string | null):
 // ───────────────────────────── reads ─────────────────────────────
 
 export async function getDeviceAssemblyWI(): Promise<any | null> {
-	const doc = await DeviceAssemblyWI.findOne({ documentNumber: DEVICE_WI_DOCUMENT_NUMBER }).lean();
+	const doc = await wiQuery().lean();
 	return doc ? JSON.parse(JSON.stringify(doc)) : null;
 }
 
@@ -166,7 +176,7 @@ export async function importDeviceAssemblyWI(
 		parserVersion: parsed.parserVersion,
 		warnings: parsed.warnings
 	};
-	const existing = await DeviceAssemblyWI.findOne({ documentNumber: DEVICE_WI_DOCUMENT_NUMBER });
+	const existing = await wiQuery();
 	const stepCount = countSteps(sections);
 	const summaryTail = `${sections.length} sections, ${stepCount} steps, ${parsed.imageCount} images`;
 
@@ -261,8 +271,10 @@ export async function mutateDeviceAssemblyWI(
 	actor: Actor,
 	mutate: (doc: any) => RevisionInput | Promise<RevisionInput>
 ): Promise<{ version: number; label: string; summary: string }> {
-	const doc = await DeviceAssemblyWI.findOne({ documentNumber: DEVICE_WI_DOCUMENT_NUMBER });
+	const doc = await wiQuery();
 	if (!doc) throw new Error('No SPU Assembly Work Instruction has been imported yet');
+	// Make sure the state we are about to change is restorable.
+	await ensureSnapshot(doc);
 	const rev = await mutate(doc);
 	const nextVersion = (doc.currentVersion ?? 0) + 1;
 	const now = new Date();
@@ -289,8 +301,56 @@ export async function mutateDeviceAssemblyWI(
 	doc.markModified('sections');
 	doc.markModified('frontMatter');
 	await doc.save();
+	await ensureSnapshot(doc);
 	await audit(String(doc._id), 'UPDATE', actor, { event: rev.changeType, version: nextVersion, summary: rev.summary, location: rev.location ?? null });
 	return { version: nextVersion, label: versionLabel(nextVersion), summary: rev.summary };
+}
+
+/** Write the full-content snapshot for the document's current version if none exists yet. */
+async function ensureSnapshot(doc: any) {
+	const version = doc.currentVersion ?? 0;
+	const exists = await DeviceAssemblyWISnapshot.exists({ wiId: String(doc._id), version });
+	if (exists) return;
+	const plain = typeof doc.toObject === 'function' ? doc.toObject() : doc;
+	await DeviceAssemblyWISnapshot.create({
+		_id: generateId(),
+		wiId: String(doc._id),
+		version,
+		label: versionLabel(version),
+		title: plain.title,
+		documentNumber: plain.documentNumber,
+		assemblyNumber: plain.assemblyNumber,
+		status: plain.status,
+		frontMatter: JSON.parse(JSON.stringify(plain.frontMatter ?? null)),
+		sections: JSON.parse(JSON.stringify(plain.sections ?? [])),
+		takenAt: new Date()
+	});
+}
+
+export async function listSnapshots(wiId: string): Promise<{ version: number; label: string; takenAt: Date }[]> {
+	const rows = await DeviceAssemblyWISnapshot.find({ wiId }).select('version label takenAt').sort({ version: -1 }).lean();
+	return rows.map((r: any) => ({ version: r.version, label: r.label, takenAt: r.takenAt }));
+}
+
+/** Restore the document content (sections, front matter, title/numbers) to an earlier version. Recorded as a new revision. */
+export function revertToVersion(actor: Actor, version: number, reason?: string) {
+	return mutateDeviceAssemblyWI(actor, async (doc) => {
+		const snap: any = await DeviceAssemblyWISnapshot.findOne({ wiId: String(doc._id), version }).lean();
+		if (!snap) {
+			const have = await listSnapshots(String(doc._id));
+			throw new Error(`No snapshot for v${version}. Restorable versions: ${have.map((h) => h.label).join(', ') || 'none yet'}`);
+		}
+		if (version === doc.currentVersion) throw new Error(`The document is already at v${version}`);
+		const before = { version: doc.currentVersion, title: doc.title, sections: doc.sections.map((s: any) => ({ number: s.number, title: s.title, steps: s.steps.length })) };
+		doc.title = snap.title || doc.title;
+		doc.documentNumber = snap.documentNumber || doc.documentNumber;
+		doc.assemblyNumber = snap.assemblyNumber ?? doc.assemblyNumber;
+		if (snap.status) doc.status = snap.status;
+		doc.frontMatter = snap.frontMatter ?? doc.frontMatter;
+		doc.sections = snap.sections ?? [];
+		const after = { restoredVersion: version, sections: doc.sections.map((s: any) => ({ number: s.number, title: s.title, steps: s.steps.length })) };
+		return { changeType: 'revert', summary: `Restored content to v${version}${reason ? ` — ${reason}` : ''} (was v${before.version})`, before, after };
+	});
 }
 
 function requireSection(doc: any, sectionNumber: number) {
@@ -696,7 +756,7 @@ export function updateFrontMatter(actor: Actor, patch: FrontMatterPatch) {
 	});
 }
 
-export function updateMetadata(actor: Actor, patch: { title?: string; assemblyNumber?: string; status?: 'draft' | 'active' | 'retired' }) {
+export function updateMetadata(actor: Actor, patch: { title?: string; assemblyNumber?: string; status?: 'draft' | 'active' | 'retired'; documentNumber?: string }) {
 	return mutateDeviceAssemblyWI(actor, (doc) => {
 		const before: Record<string, unknown> = {};
 		const after: Record<string, unknown> = {};
@@ -704,7 +764,100 @@ export function updateMetadata(actor: Actor, patch: { title?: string; assemblyNu
 		if (patch.title != null && patch.title.trim() && patch.title.trim() !== doc.title) { before.title = doc.title; doc.title = patch.title.trim(); after.title = doc.title; changed.push('title'); }
 		if (patch.assemblyNumber != null && patch.assemblyNumber.trim() !== (doc.assemblyNumber ?? '')) { before.assemblyNumber = doc.assemblyNumber; doc.assemblyNumber = patch.assemblyNumber.trim(); after.assemblyNumber = doc.assemblyNumber; changed.push('assembly number'); }
 		if (patch.status && patch.status !== doc.status) { before.status = doc.status; doc.status = patch.status; after.status = patch.status; changed.push('status'); }
+		if (patch.documentNumber != null && patch.documentNumber.trim() && patch.documentNumber.trim() !== doc.documentNumber) { before.documentNumber = doc.documentNumber; doc.documentNumber = patch.documentNumber.trim(); after.documentNumber = doc.documentNumber; changed.push('document number'); }
 		if (!changed.length) throw new Error('No changes to save');
 		return { changeType: 'metadata_edit', summary: `Edited document ${changed.join(', ')}`, before, after };
+	});
+}
+
+// ───────────────────────────── section fields, bulk step ops, copy ─────────────────────────────
+
+export function updateSection(actor: Actor, sectionNumber: number, patch: { title?: string; tabLabel?: string | null; notesHtml?: string; materialsHtml?: string }) {
+	return mutateDeviceAssemblyWI(actor, (doc) => {
+		const section = requireSection(doc, sectionNumber);
+		const before: Record<string, unknown> = {};
+		const after: Record<string, unknown> = {};
+		const changed: string[] = [];
+		if (patch.title != null && patch.title.trim() && patch.title.trim() !== section.title) { before.title = section.title; section.title = patch.title.trim(); after.title = section.title; changed.push('title'); }
+		if (patch.tabLabel !== undefined) {
+			const next = (patch.tabLabel ?? '').trim();
+			if (next !== (section.tabLabel ?? '')) { before.tabLabel = section.tabLabel ?? ''; section.tabLabel = next; after.tabLabel = next; changed.push(next ? `tab label → "${next}"` : 'tab label reset to default'); }
+		}
+		if (patch.notesHtml != null) { const html = sanitizeHtml(patch.notesHtml); if (html !== (section.notesHtml ?? '')) { before.notesHtml = section.notesHtml; section.notesHtml = html; after.notesHtml = html; changed.push('notes'); } }
+		if (patch.materialsHtml != null) { const html = sanitizeHtml(patch.materialsHtml); if (html !== (section.materialsHtml ?? '')) { before.materialsHtml = section.materialsHtml; section.materialsHtml = html; after.materialsHtml = html; changed.push('materials table'); } }
+		if (!changed.length) throw new Error('No changes to save');
+		return { changeType: 'section_rename', summary: `Edited ${sectionLabel(section)} (${changed.join(', ')})`, location: where(section), before, after };
+	});
+}
+
+function pickSteps(section: any, refs: { stepIds?: string[]; stepNumbers?: number[]; from?: number | null; to?: number | null }): any[] {
+	const ids = new Set(refs.stepIds ?? []);
+	const nums = new Set(refs.stepNumbers ?? []);
+	if (refs.from != null || refs.to != null) {
+		const a = refs.from ?? 1;
+		const b = refs.to ?? section.steps.length;
+		for (let n = Math.min(a, b); n <= Math.max(a, b); n++) nums.add(n);
+	}
+	const picked = section.steps.filter((s: any) => ids.has(s._id) || nums.has(s.stepNumber));
+	if (!picked.length) throw new Error(`No matching steps in ${sectionLabel(section)} (it has ${section.steps.length})`);
+	return picked;
+}
+
+/** Move several steps at once (by numbers, a from–to range, or ids) to another section, keeping their order. */
+export function moveSteps(actor: Actor, fromSection: number, refs: { stepIds?: string[]; stepNumbers?: number[]; from?: number | null; to?: number | null }, toSection: number, toPosition: number | null) {
+	return mutateDeviceAssemblyWI(actor, (doc) => {
+		const src = requireSection(doc, fromSection);
+		const dst = requireSection(doc, toSection);
+		const picked = pickSteps(src, refs);
+		const pickedIds = new Set(picked.map((s: any) => s._id));
+		const fromNumbers = picked.map((s: any) => s.stepNumber);
+		src.steps = src.steps.filter((s: any) => !pickedIds.has(s._id));
+		if (src !== dst) renumber(src);
+		const idx = toPosition == null ? dst.steps.length : Math.max(0, Math.min(dst.steps.length, toPosition - 1));
+		dst.steps.splice(idx, 0, ...picked);
+		renumber(dst);
+		const first = picked[0].stepNumber, last = picked[picked.length - 1].stepNumber;
+		return {
+			changeType: 'step_move',
+			summary: `Moved ${picked.length} steps (${sectionLabel(src)} ${fromNumbers[0]}–${fromNumbers[fromNumbers.length - 1]}) to ${sectionLabel(dst)} steps ${first}–${last}`,
+			location: where(dst, picked[0]),
+			before: { sectionNumber: src.number, stepNumbers: fromNumbers },
+			after: { sectionNumber: dst.number, stepNumbers: picked.map((s: any) => s.stepNumber) }
+		};
+	});
+}
+
+export function deleteSteps(actor: Actor, sectionNumber: number, refs: { stepIds?: string[]; stepNumbers?: number[]; from?: number | null; to?: number | null }) {
+	return mutateDeviceAssemblyWI(actor, (doc) => {
+		const section = requireSection(doc, sectionNumber);
+		const picked = pickSteps(section, refs);
+		const ids = new Set(picked.map((s: any) => s._id));
+		const snapshot = JSON.parse(JSON.stringify(picked));
+		section.steps = section.steps.filter((s: any) => !ids.has(s._id));
+		renumber(section);
+		return {
+			changeType: 'step_delete',
+			summary: `Deleted ${picked.length} steps from ${sectionLabel(section)} (were ${snapshot.map((s: any) => s.stepNumber).join(', ')})`,
+			location: where(section),
+			before: snapshot,
+			after: null
+		};
+	});
+}
+
+/** Duplicate a step (text, images, materials) into a section; the copy gets new ids. */
+export function copyStep(actor: Actor, fromSection: number, stepId: string, toSection: number, toPosition: number | null) {
+	return mutateDeviceAssemblyWI(actor, (doc) => {
+		const src = requireSection(doc, fromSection);
+		const dst = requireSection(doc, toSection);
+		const step = requireStep(src, stepId);
+		const clone = JSON.parse(JSON.stringify(step));
+		clone._id = generateId();
+		clone.images = (clone.images ?? []).map((im: any) => ({ ...im, _id: generateId() }));
+		clone.materials = (clone.materials ?? []).map((m: any) => ({ ...m, _id: generateId() }));
+		const idx = toPosition == null ? dst.steps.length : Math.max(0, Math.min(dst.steps.length, toPosition - 1));
+		dst.steps.splice(idx, 0, clone);
+		renumber(dst);
+		return { changeType: 'step_add', summary: `Copied ${stepRef(src, step)} to ${stepRef(dst, clone)}`, location: where(dst, clone), before: null, after: { copiedFrom: { sectionNumber: src.number, stepNumber: step.stepNumber }, stepId: clone._id } };
 	});
 }

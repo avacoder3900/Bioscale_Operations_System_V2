@@ -53,6 +53,7 @@ const sectionSchema = new Schema({
 	type: { type: String, enum: ['setup', 'subassembly'], default: 'subassembly' },
 	number: { type: Number, required: true },           // 0 = setup, 1..N = Sub-Assembly N
 	title: { type: String, default: '' },               // e.g. "Bottom (Pulley, Rail, Wi-Fi, etc.)"
+	tabLabel: { type: String, default: '' },            // optional custom tab text; '' = "Sub-Assembly N" / "Setup"
 	notesHtml: { type: String, default: '' },           // section-level notes from the doc
 	materialsHtml: { type: String, default: '' },       // "Materials:" table preceding the steps (setup)
 	steps: { type: [stepSchema], default: [] }
@@ -67,7 +68,7 @@ const revisionSchema = new Schema({
 		enum: [
 			'import', 'section_rename', 'step_add', 'step_edit', 'step_delete', 'step_move',
 			'image_add', 'image_remove', 'image_edit', 'material_add', 'material_edit', 'material_remove',
-			'metadata_edit', 'section_add', 'section_delete', 'section_move', 'front_matter_edit'
+			'metadata_edit', 'section_add', 'section_delete', 'section_move', 'front_matter_edit', 'revert'
 		],
 		required: true
 	},

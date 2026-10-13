@@ -590,7 +590,10 @@ def run(protocol: protocol_api.ProtocolContext):
         _TIP_SWAP_REQ = '/data/ot2-bridge/tip-swap-request.json'
 
         def take_tip_swap_request():
-            """Return the requested mode ('rack' | 'hand') and consume the file, else None."""
+            """Return the requested mode ('rack' | 'hand' | 'bump') and consume the file, else None.
+            'bump' (2026-10-12) = the operator knocked the robot: home the gantry first
+            (steps may be lost), then re-probe the SAME tip and carry on at the very
+            well that was next. No tip change, nothing skipped."""
             if protocol.is_simulating():
                 return None
             try:
@@ -607,7 +610,7 @@ def run(protocol: protocol_api.ProtocolContext):
                     _os.remove(_TIP_SWAP_REQ)
                 except Exception:
                     pass
-                return 'hand' if mode == 'hand' else 'rack'
+                return mode if mode in ('hand', 'bump') else 'rack'
             except Exception:
                 return None
 
@@ -1006,6 +1009,14 @@ def run(protocol: protocol_api.ProtocolContext):
             new one on while the API keeps modelling a tip (so the tip length stays
             right) — then re-probe either way and return the new adjust."""
             protocol.comment(f'TIP SWAP requested from BIMS ({mode}) — will continue at well {at_well}.')
+            if mode == 'bump':
+                # Robot was bumped: the gantry may have lost steps, so home before
+                # anything else (Z lifts first, then XY — safe from any position),
+                # then re-probe the tip we still have. The caller has already
+                # homed + blown out if this was mid-trip (see the dispense loop).
+                protocol.comment('BUMP RECOVERY: homing gantry, then re-calibrating the current tip.')
+                protocol.home()
+                return pick_up_and_calibrate_tip(pick_up=False)
             if mode == 'hand':
                 _cx, _cy, _cz = protocol.params.cal_x, protocol.params.cal_y, protocol.params.z_cal
                 pipette.move_to(types.Location(types.Point(x=_cx, y=_cy, z=_cz + 60), carriage), force_direct=True, speed=20)
@@ -1163,6 +1174,11 @@ def run(protocol: protocol_api.ProtocolContext):
 
                     # Blow out remaining liquid back into source tube. After a mid-trip
                     # swap request this is what gives the un-dispensed reagent back.
+                    # BUMP: home BEFORE going back to the tube — if the gantry lost
+                    # steps, a blow-out at the old frame could hit the rack rim.
+                    if swap_at is not None and swap_at[1] == 'bump':
+                        protocol.comment('BUMP RECOVERY: homing before returning to the source tube.')
+                        protocol.home()
                     pipette.blow_out(location=source_well.bottom(2.4))
 
                     # Update remaining source volume (only subtract what was actually dispensed)

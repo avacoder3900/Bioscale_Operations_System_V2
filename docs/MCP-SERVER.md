@@ -146,7 +146,7 @@ curve happens on the research Curves page with a note; the tool refuses and says
 Authoring doctrine is embedded in the tool descriptions: catalog → validate → find cartridges → preview →
 save draft → activate → attach to assay. See research-v2 `docs/prds/DOMAIN-30-ANALYSIS-V3.md`.
 
-## SPU Assembly Work Instruction tools (v3.10.0)
+## SPU Assembly Work Instruction tools (v3.11.0)
 
 full edit + inventory surface for
 SPU → SPU Assembly WI so changes can be made from Claude chat. Steps are addressed as
@@ -165,7 +165,12 @@ DHR fields), `device_wi_add_step`, `device_wi_delete_step` (confirmed), `device_
 `device_wi_add_material` (document syntax "Name (PT-SPU-000) x1"), `device_wi_update_material`
 (incl. fixing part numbers), `device_wi_remove_material`, `device_wi_relink_parts`,
 `device_wi_pull_materials` (preview → confirm → deduct via the shared inventory consumption path),
-`device_wi_import` (re-parse a .docx URL, confirmed). Backed by `/api/agent/device-assembly/**`
+`device_wi_import` (re-parse a .docx URL, confirmed), `device_wi_update_section` (tab text / title /
+notes / materials table — tabs default to "Sub-Assembly N" but can be renamed), `device_wi_move_steps` /
+`device_wi_delete_steps` (ranges or lists, one revision), `device_wi_copy_step`, `device_wi_revert`
+(restore any earlier version from the per-version snapshots in `device_assembly_wi_snapshots`;
+recorded as a new revision). Goal: every change visible on the SPU Assembly WI page can be made
+from chat without a code change. Backed by `/api/agent/device-assembly/**`
 (`GET /`, `GET /step`, `POST /mutate {op}`, `POST /pull`, `GET /revisions`, `GET /pulls`).
 
 ## Adding a tool

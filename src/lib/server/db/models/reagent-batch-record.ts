@@ -156,7 +156,14 @@ const reagentBatchRecordSchema = new Schema({
 		issue: { type: String, enum: REAGENT_WELL_ISSUES },
 		note: String,
 		loggedBy: operatorRef,
-		loggedAt: Date
+		loggedAt: Date,
+		// Set from the Deck Calibration Studio once the deck has been corrected
+		// for this entry (2026-10-09). Resolved entries drop off the Studio's
+		// open list so the next run's notes start from a blank slate; the row
+		// itself is kept (it is the DHR for that cartridge).
+		resolvedAt: Date,
+		resolvedBy: operatorRef,
+		resolvedNote: String
 	}],
 
 	finalizedAt: Date, voidedAt: Date, voidReason: String,

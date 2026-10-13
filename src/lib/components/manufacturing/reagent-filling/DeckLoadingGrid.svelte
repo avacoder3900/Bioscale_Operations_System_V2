@@ -11,6 +11,14 @@
 	} from '$lib/opentrons/fill-bridge-jobs';
 	interface CartridgeScan {
 		cartridgeId: string;
+		/**
+		 * Deck position 1–24 (SCAN_ORDER[slotIndex]). Set by denseScans() on
+		 * completion; the run record's cartridgesFilled[].deckPosition is read from
+		 * it. Until 2026-10-08 it was never sent, so every reagent cart was stored
+		 * at position 0 and the well tracker (which keys on position) had nothing
+		 * to enable.
+		 */
+		deckPosition?: number;
 	}
 
 	interface Props {
@@ -609,7 +617,11 @@
 	}
 
 	function denseScans(): CartridgeScan[] {
-		return scans.filter((s): s is CartridgeScan => s !== null);
+		const out: CartridgeScan[] = [];
+		scans.forEach((s, i) => {
+			if (s) out.push({ cartridgeId: s.cartridgeId, deckPosition: SCAN_ORDER[i] });
+		});
+		return out;
 	}
 
 	// SCAN-THEN-CHECK (ported from the wax grid, 2026-08-28). Every cartridge

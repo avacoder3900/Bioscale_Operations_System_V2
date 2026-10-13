@@ -7,6 +7,7 @@ import {
 	addStepImages, removeStepImage, updateStepImage, moveStepImage,
 	addMaterial, addMaterialFromText, updateMaterial, removeMaterial, relinkAllParts,
 	addSection, deleteSection, moveSection, updateFrontMatter, updateMetadata,
+	updateSection, moveSteps, deleteSteps, copyStep, revertToVersion,
 	importDeviceAssemblyWI, getDeviceAssemblyWI, sectionLabel
 } from '$lib/server/services/device-assembly-wi';
 import { makeDeviceWiImageStore } from '$lib/server/services/device-assembly-wi-images';
@@ -17,9 +18,9 @@ import type { RequestHandler } from './$types';
  * POST /api/agent/device-assembly/mutate — every revision-tracked change to the WI.
  * Body: { op, actor, ...params }. Every op bumps the version and records who/when/what.
  *
- * ops: add_section, delete_section, move_section, rename_section, set_section_notes,
- *      update_front_matter, update_metadata,
- *      update_step, add_step, delete_step, move_step,
+ * ops: add_section, delete_section, move_section, rename_section, set_section_notes, update_section,
+ *      update_front_matter, update_metadata, revert,
+ *      update_step, add_step, delete_step, move_step, move_steps, delete_steps, copy_step,
  *      add_image, remove_image, set_image_caption, reorder_image,
  *      add_material, update_material, remove_material, relink_parts, import
  */
@@ -86,10 +87,37 @@ export const POST: RequestHandler = async ({ request, fetch }) => {
 			if (Array.isArray(body.references)) patch.references = body.references.map(String);
 			return json({ success: true, data: await updateFrontMatter(actor, patch) });
 		}
+		if (op === 'update_section') {
+			const s = resolveSection(wi, body.section);
+			const patch: any = {};
+			if (body.title != null) patch.title = text(body.title);
+			if (body.tabLabel !== undefined) patch.tabLabel = body.tabLabel == null ? '' : text(body.tabLabel);
+			if (body.notesHtml != null) patch.notesHtml = String(body.notesHtml); else if (body.notes != null) patch.notesHtml = toHtml(text(body.notes));
+			if (body.materialsHtml != null) patch.materialsHtml = String(body.materialsHtml); else if (body.materials != null) patch.materialsHtml = toHtml(text(body.materials));
+			return json({ success: true, data: await updateSection(actor, s.number, patch) });
+		}
+		if (op === 'revert') {
+			const version = num(body.version);
+			if (version == null) throw error(400, 'version is required (e.g. 7 to restore v7)');
+			if (body.confirmed !== true) throw error(400, `confirmed must be true — tell the user this restores the whole document content to v${version} (recorded as a new revision) and get a yes`);
+			return json({ success: true, data: await revertToVersion(actor, version, body.reason ? text(body.reason) : undefined) });
+		}
+		if (op === 'move_steps' || op === 'delete_steps') {
+			const src = resolveSection(wi, body.section);
+			const refs = { stepIds: Array.isArray(body.stepIds) ? body.stepIds.map(String) : undefined, stepNumbers: Array.isArray(body.steps) ? body.steps.map(Number) : undefined, from: num(body.from), to: num(body.to) };
+			if (!refs.stepIds?.length && !refs.stepNumbers?.length && refs.from == null && refs.to == null) throw error(400, 'Give steps (list of numbers), or from/to (a range), or stepIds');
+			if (op === 'delete_steps') {
+				if (body.confirmed !== true) throw error(400, 'confirmed must be true — list the steps to the user and get a yes before deleting');
+				return json({ success: true, data: await deleteSteps(actor, src.number, refs) });
+			}
+			const dst = resolveSection(wi, body.toSection ?? src.number);
+			return json({ success: true, data: await moveSteps(actor, src.number, refs, dst.number, num(body.toPosition)) });
+		}
 		if (op === 'update_metadata') {
 			const patch: any = {};
 			if (body.title != null) patch.title = text(body.title);
 			if (body.assemblyNumber != null) patch.assemblyNumber = text(body.assemblyNumber);
+			if (body.documentNumber != null) patch.documentNumber = text(body.documentNumber);
 			if (body.status != null) { if (!['draft', 'active', 'retired'].includes(body.status)) throw error(400, 'status must be draft | active | retired'); patch.status = body.status; }
 			return json({ success: true, data: await updateMetadata(actor, patch) });
 		}
@@ -132,6 +160,10 @@ export const POST: RequestHandler = async ({ request, fetch }) => {
 			case 'move_step': {
 				const dst = resolveSection(wi, body.toSection ?? section.number);
 				return json({ success: true, data: { ...where, ...(await moveStep(actor, section.number, step._id, dst.number, num(body.toPosition))) } });
+			}
+			case 'copy_step': {
+				const dst = resolveSection(wi, body.toSection ?? section.number);
+				return json({ success: true, data: { ...where, ...(await copyStep(actor, section.number, step._id, dst.number, num(body.toPosition))) } }, { status: 201 });
 			}
 			case 'add_image': {
 				const img = await loadImageInput(body, fetch);

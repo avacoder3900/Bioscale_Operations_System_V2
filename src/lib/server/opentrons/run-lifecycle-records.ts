@@ -291,10 +291,12 @@ export async function finalizeReagentRun(runId: string, user: User, trigger: str
 				note: w.note ?? null, loggedBy: w.loggedBy ?? null, loggedAt: w.loggedAt ?? null
 			});
 		}
-		const bulkOps = run.cartridgesFilled.flatMap((cf: any) => {
+		const noPositions = (run.cartridgesFilled as any[]).every((cf: any) => !(Number(cf.deckPosition) >= 1));
+		const bulkOps = run.cartridgesFilled.flatMap((cf: any, i: number) => {
 			const stamp = {
 				'reagentFilling.runId': run._id,
-				'reagentFilling.wellIssues': issuesByPos.get(Number(cf.deckPosition)) ?? [],
+				// Runs loaded before 2026-10-08 stored position 0 for every cart; scans are dense in deck order.
+				'reagentFilling.wellIssues': issuesByPos.get(noPositions ? i + 1 : Number(cf.deckPosition)) ?? [],
 				'reagentFilling.robotId': run.robot?._id,
 				'reagentFilling.robotName': run.robot?.name,
 				'reagentFilling.assayType': isResearch ? null : run.assayType,

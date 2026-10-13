@@ -36,6 +36,10 @@ export interface HeatmapRunIssue {
 	note: string | null;
 	loggedBy: string | null;
 	loggedAt: string | null;
+	/** Stamped from the Deck Calibration Studio once the deck was corrected (master, 2026-10-09). */
+	resolvedAt: string | null;
+	resolvedBy: string | null;
+	resolvedNote: string | null;
 }
 
 export interface HeatmapRun {
@@ -115,7 +119,11 @@ export async function loadWellIssueHeatmap(opts: { days?: number | null; robotId
 					issue: String(w.issue),
 					note: w.note ?? null,
 					loggedBy: w.loggedBy?.username ?? null,
-					loggedAt: w.loggedAt ? new Date(w.loggedAt).toISOString() : null
+					loggedAt: w.loggedAt ? new Date(w.loggedAt).toISOString() : null,
+					// Stamped from the Deck Calibration Studio once the deck was corrected.
+					resolvedAt: w.resolvedAt ? new Date(w.resolvedAt).toISOString() : null,
+					resolvedBy: w.resolvedBy?.username ?? null,
+					resolvedNote: w.resolvedNote ?? null
 				}))
 			});
 		}
