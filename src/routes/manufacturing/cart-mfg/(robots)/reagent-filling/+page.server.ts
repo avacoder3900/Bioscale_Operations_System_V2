@@ -162,8 +162,10 @@ export const actions: Actions = {
 	},
 
 	/**
-	 * Record the fill lot for this run (replaces the old "reagent preparation" tube step, retired
-	 * 2026-10-13 — per-well tube records were vestigial; the fill lot carries the reagent lineage).
+	 * Record the fill-lot decision for this run (replaces the old "reagent preparation" tube step,
+	 * retired 2026-10-13 — per-well tube records were vestigial; the fill lot carries the reagent
+	 * lineage). The DEFAULT is no fill lot (empty fillLotId): tying a run to a fill lot is opt-in.
+	 * fillLotSelectedAt marks the step as done either way.
 	 */
 	selectFillLot: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
@@ -172,7 +174,13 @@ export const actions: Actions = {
 		const data = await request.formData();
 		const runId = data.get('runId') as string;
 		const fillLotId = ((data.get('fillLotId') as string | null) ?? '').trim();
-		if (!fillLotId) return fail(400, { error: 'A fill lot is required to fill. Open one (pick its reagent lot) and select it.' });
+		if (!runId) return fail(400, { error: 'Missing runId' });
+		if (!fillLotId) {
+			await ReagentBatchRecord.findByIdAndUpdate(runId, {
+				$set: { status: 'Loading', fillLotId: '', fillLotNumber: '', reagentLotId: '', reagentLotNumber: '', fillLotSelectedAt: new Date() }
+			});
+			return { success: true };
+		}
 		const fillLot = await FillLot.findById(fillLotId).lean() as any;
 		if (!fillLot || !fillLot.fillLotNumber || fillLot.status !== 'open') return fail(400, { error: 'Fill lot not found or closed' });
 		// A non-calibrated fill lot has no reagent lot on purpose (fills before the lot exists). Any other
@@ -185,7 +193,8 @@ export const actions: Actions = {
 			$set: {
 				status: 'Loading', fillLotId, fillLotNumber: fillLot.fillLotNumber,
 				reagentLotId: reagentLot ? String(reagentLot._id) : '',
-				reagentLotNumber: reagentLot ? reagentLot.lotNumber : NON_CALIBRATED_LOT_LABEL
+				reagentLotNumber: reagentLot ? reagentLot.lotNumber : NON_CALIBRATED_LOT_LABEL,
+				fillLotSelectedAt: new Date()
 			}
 		});
 

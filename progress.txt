@@ -19641,6 +19641,7 @@ npm run check: 13 errors = master baseline, none in changed files.
 
 ================================================================================
 2026-10-13 — master — DEPLOY: fill-time assay is the assay; tube step retired
+=========================================================================
 ================================================================================
 Deployment: production — bioscale-operations-system-mongodb.vercel.app (Vercel GitHub integration; per-deployment
   URL + dpl id in the Vercel dashboard, brevitest team scope)
@@ -19650,3 +19651,17 @@ Retrieve this exact code: git checkout master at commit c295ba92
 What this deployment is for: finalizeReagentRun stamps top-level assayId/assayName on production-filled
   cartridges (the fields the device + research app read); the reagent-prep tube step is gone (selectFillLot
   records the fill lot only). Research app main e0bdc81 (linking inherits/overrides/falls back) deployed first.
+=======
+2026-10-13 — feat/fill-assay-is-the-assay — fill defaults are opt-in: Research (no assay) and no fill lot
+================================================================================
+Jacob: "make sure that the default at filling is no assay and no fill lot, we have to opt in to that at filling."
+ReagentWizard: isResearchRun defaults to true (Setup buttons now read "Research — no assay (default)" /
+"Production — assign assay"). ReagentPreparation: the select starts on "No fill lot (default)" (the last-used
+lot is only flagged in the list, never preselected); a "None" card explains the run is filled without a fill
+lot / reagent lot; the submit reads "Fill with no fill lot" or "Fill on FL-…". selectFillLot accepts an empty
+fillLotId (clears fillLotId/fillLotNumber/reagentLotId/reagentLotNumber) and stamps fillLotSelectedAt on the
+run either way; the loader derives reagentPrepDone from fillLotSelectedAt || fillLotId (runs opened before
+the marker). ReagentBatchRecord gains fillLotSelectedAt (fill lot comment: optional). Research-side curves
+simply cannot resolve a cartridge with no fill lot — expected; opt in when the run belongs to a curve set.
+Files: ReagentWizard/ReagentPreparation/SetupConfirmation.svelte, (robots)/reagent-filling/+page.server.ts,
+reagent-wizard.ts, models/reagent-batch-record.ts. npm run check: 13 errors = master baseline.
