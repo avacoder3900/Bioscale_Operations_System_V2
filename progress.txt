@@ -19850,3 +19850,10 @@ removed; fetchStationSnapshot gained a quality param + AbortController timeout. 
 untouched (still MJPEG). Dev server on port 5176 for tablet/laptop testing before any deploy.
 `npm run check`: 13 errors / 427 warnings — same 13 as master; the two warnings on this page
 (videoEl non-reactive, data referenced locally) pre-date this change.
+Deployment: production — Vercel GitHub integration build of master (project
+  https://vercel.com/brevitest/bioscale-operations-system-mongodb, Deployments tab, commit 6a01fe0e)
+Source: branch master @ commit 6a01fe0e (fast-forward of fix/post-mortem-live-view-pull)
+Retrieve this exact code: git checkout master at commit 6a01fe0e
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: Post-Mortem Inspect live view pulls /snapshot.jpg one frame at a
+  time instead of the MJPEG push stream — tablet test of the freeze/fast-forward lag fix.
