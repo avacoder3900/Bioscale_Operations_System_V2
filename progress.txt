@@ -19676,3 +19676,19 @@ Retrieve this exact code: git checkout master at commit 604b51a6
   (or: git log master --oneline to find it if the branch has since moved on)
 What this deployment is for: the fill screen defaults to Research (no assay) and "No fill lot"; assigning an
   assay or a fill lot is opt-in. Follows c295ba92 (fill-time assay ownership, tube step retired).
+
+================================================================================
+2026-10-14 — fix/fill-cancel-button — Cancel run restored on the wax + reagent wizards (Setup/Loading stages)
+================================================================================
+Report: "can we also get a cancel option on the interface for reagent fills" — after B14's start got stuck
+(16:07Z: run created on the robot, answer lost → startIntent uncertain, page reloaded 5×, robot-server
+restarted; the orphan idle run was deleted by hand from the robot API). The stage header carrying Cancel Run /
+Preview / Reset was removed 2026-10-08 (beb2021a, robots overhaul) from BOTH wizards and nothing replaced it:
+outside the Running stage's "Abort Run" there was no way to cancel a fill run from the page, and a run stuck
+before Start could only be abandoned from the database.
+Fix: ReagentWizard + WaxWizard get a right-aligned "Cancel run" button on every active-run stage that is not
+Running (Running keeps Abort), with the original reason modal restored; reagent → stopRunViaLine('cancel')
+(direct or queue), wax → the existing handleCancelRun. run-lifecycle-records: the reagent cancel write now
+also $unsets startIntent so a cancelled run never carries a stale start. Server cancel already accepts a
+Loading-stage run and reverts scanned carts (reagent_filling → wax_filled).
+RLR tests 21/21; npm run check 16 = baseline.
