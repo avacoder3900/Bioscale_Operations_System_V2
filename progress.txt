@@ -19826,3 +19826,24 @@ Running (Running keeps Abort), with the original reason modal restored; reagent 
 also $unsets startIntent so a cancelled run never carries a stale start. Server cancel already accepts a
 Loading-stage run and reverts scanned carts (reagent_filling → wax_filled).
 RLR tests 21/21; npm run check 16 = baseline.
+2026-10-14 — fix/run-page-background-tab — fill pages keep their cadence in a background tab (wax "fails" while reagent runs)
+================================================================================
+Report: "why does wax filling start to fail when reagent is being run at the same time". Data (ot2_direct_calls,
+3 days): wax pages' status polling stalled ≥30 s 170 times; in 167 of them the OTHER robot's page was being
+polled at that moment, and the stalls cluster at 60 s (88) and 120 s (13) — Chrome's intensive throttling of a
+hidden tab (page timers once a minute). Separately, slow (>3 s) status reads on the wax robots are ~13× more
+frequent while a reagent run is in flight (WiFi contention; p99 189 ms → 1.4 s). The reagent run never touches
+the wax robot; the coupling is the operator's browser (one PC, two tabs) and the shared 2.4 GHz WiFi.
+Fix (code half; the WiFi half is Ethernet):
+- NEW src/lib/opentrons/unthrottled-timer.ts: setUnthrottledTimeout / sleep driven from an inline Web Worker
+  (exempt from background-tab throttling), plain setTimeout fallback outside a browser; onVisible() helper.
+- EmbeddedRunController: poll loop on the worker timer; resyncs immediately on visibilitychange→visible;
+  the "pause not acknowledged" warning now also requires ≥10 polls observed since the request (a tab that
+  slept through a minute no longer raises it); pollInFlight guard so a visibility resync can't double-poll.
+- ot2-protocol (start-sequence waits: maintenance-run conflict backoff, analysis poll, adopt loop),
+  fill-bridge-jobs (sweep/deck-scan follow) and bridge-client (job polling) default sleeps use the same timer.
+Operator guidance meanwhile: one browser WINDOW per robot page (a visible window is never throttled).
+Tests: unthrottled-timer.test.ts (4, fallback contract); test:unit 563 pass / 2 fail = sonic.test.ts (missing
+@audio/* packages locally, fails on master too). npm run check 16 = baseline. Not committed.
+Note: the uncommitted fix/robot-pages-heartbeat-health work (+ the 10-13 ops progress entries) is parked in
+git stash@{0} ("wip: fix/robot-pages-heartbeat-health") — pop it on that branch before continuing there.
