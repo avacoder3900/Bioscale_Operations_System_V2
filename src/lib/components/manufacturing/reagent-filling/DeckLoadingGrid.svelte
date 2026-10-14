@@ -760,21 +760,6 @@
 							autofocus
 						/>
 					</div>
-					{#if robotId}
-						<button
-							type="button"
-							onclick={scanDeckWithRobot}
-							disabled={deckScanInFlight}
-							class="mt-5 shrink-0 rounded border border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/15 px-3 py-2 text-xs font-bold text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/25 disabled:opacity-40"
-						>
-							{#if deckScanInFlight}
-								<span class="mr-1 inline-block h-3 w-3 animate-spin rounded-full border-2 border-current border-t-transparent align-[-2px]" aria-hidden="true"></span>
-								Robot scanning deck…
-							{:else}
-								Scan Deck with Robot
-							{/if}
-						</button>
-					{/if}
 				</div>
 				{#if deckScanError}
 					<p class="mt-2 text-xs text-red-300">{deckScanError}</p>
