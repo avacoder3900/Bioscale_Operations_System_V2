@@ -19734,6 +19734,43 @@ What this deployment is for: Robots page with fill setup inside each robot's pan
   user to try before any merge to master.
 
 ================================================================================
+2026-10-14 — master — DEPLOY: Robots page — fill setup inside each robot's panel
+================================================================================
+Deployment: production — bioscale-operations-system-mongodb.vercel.app (Vercel GitHub integration; this
+  build's per-deployment URL: bioscale-operations-system-mongodb-b5ezs3v9n-brevitest.vercel.app, brevitest team scope)
+Source: branch master @ commit 6c1d3f4b (merge of feat/robots-inline-setup 451bf319 + docs bbd8b302)
+Retrieve this exact code: git checkout master at commit 6c1d3f4b
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: Start wax / Start reagent open the setup wizard inside that robot's panel on
+  /manufacturing/cart-mfg/robots (?open=<robotId>:<process>, refresh-safe); a run in Setup/Loading is always
+  open in its panel; the panel flips to the live run in place. Standalone wax-filling / reagent-filling
+  pages kept ("Full page" in the panel header). Merged with the user's explicit "push to main you have my
+  permission"; origin/master had not moved since the branch was cut (6021243d), so the merge was clean.
+  svelte-check on the merge: 14 errors (= baseline). Smoke: /manufacturing/cart-mfg/robots → 302 /login, /login 200.
+
+================================================================================
+2026-10-14 — master — DEPLOY: wax Cancel Run button (setup page + inline Robots panel)
+================================================================================
+The user asked to "push cancel run button to main as well": the wax Cancel Run commit 1c39203e
+(feat/robot-overhaul, 2026-10-13, previewed but never merged — it landed after PR #90) is now on
+master as cherry-pick 50e17427. It restores the Cancel Run button + reason dialog in WaxWizard
+for an active run that is not yet Running (it had gone out with the stage-timeline header; uses
+the existing cancelRun action). One adjustment while picking: the gate is `mode !== 'run'` instead
+of `mode === 'setup'`, so the button also shows in the inline setup panel on the Robots page that
+shipped earlier today (6c1d3f4b); a RUNNING panel keeps Stop / Reset instead. The progress.txt
+hunk of 1c39203e was dropped (conflicting append) in favour of this entry. The REAGENT setup still
+has no Cancel Run (known follow-up from the robot overhaul; its showCancelModal state exists but
+nothing opens it).
+
+Deployment: production — bioscale-operations-system-mongodb.vercel.app (Vercel GitHub integration; this
+  build's per-deployment URL: bioscale-operations-system-mongodb-isgv4gqct-brevitest.vercel.app, brevitest team scope)
+Source: branch master @ commit 50e17427 (cherry-pick of feat/robot-overhaul 1c39203e)
+Retrieve this exact code: git checkout master at commit 50e17427
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: Cancel Run (with reason) on the wax setup page and in the wax inline setup
+  panel on /manufacturing/cart-mfg/robots. svelte-check: 14 errors (= baseline). Smoke: robots page → 302 /login.
+
+================================================================================
 2026-10-14 — feat/well-tracker-below-matrix — Well tracker: the issue picker opens below the deck
 ================================================================================
 The user reported that on the fill-mistake grid (the Well tracker on a running
