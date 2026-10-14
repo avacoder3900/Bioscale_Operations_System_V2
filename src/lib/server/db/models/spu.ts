@@ -54,7 +54,23 @@ const spuSchema = new Schema({
 		// Service-flag LED sync outcome (SPU-INV-08): last value pushed to the
 		// device and how the push went (synced|unlinked|unsupported|offline|error).
 		serviceFlag: Number, serviceFlagState: String,
-		serviceFlagSyncedAt: Date, serviceFlagError: String
+		serviceFlagSyncedAt: Date, serviceFlagError: String,
+		// Monitor-flag sync outcome (firmware v103, set_service("monitor:1|0")).
+		monitorFlag: Number, monitorFlagState: String,
+		monitorFlagSyncedAt: Date, monitorFlagError: String
+	},
+
+	// Device monitor mode: while enabled the unit uploads its session log on its
+	// own after every test / screen / error / boot (firmware v103) and the daily
+	// review cron asks Claude for a verdict (device_findings). role 'control'
+	// units supply the comparison numbers for the suspects.
+	monitoring: {
+		enabled: { type: Boolean, default: false },
+		role: { type: String, enum: ['suspect', 'control'], default: 'suspect' },
+		reason: String,
+		enabledAt: Date, enabledBy: operatorRef,
+		disabledAt: Date,
+		lastReviewAt: Date, lastReviewStatus: String, lastReviewId: String
 	},
 
 	validation: {

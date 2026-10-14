@@ -21,7 +21,7 @@
 import { json } from '@sveltejs/kit';
 import { connectDB, DeviceEvent, ParticleDevice, Spu, OpticalBlankRun, generateId } from '$lib/server/db';
 import { requireAgentApiKey } from '$lib/server/api-auth';
-import { syncServiceFlag } from '$lib/server/service-flag';
+import { syncServiceFlag, syncMonitorFlag } from '$lib/server/service-flag';
 import { parseTestPayload, parseTestRecordBuffer } from '$lib/server/test-payload';
 import { ingestScreenEvent, attachScreenRecord } from '$lib/server/screen/ingest';
 import { ingestSweepText } from '$lib/server/sweep/ingest';
@@ -251,7 +251,10 @@ export const POST: RequestHandler = async ({ request }) => {
 		const spu = (await Spu.findOne({ 'particleLink.particleDeviceId': deviceId })
 			.select('_id')
 			.lean()) as any;
-		if (spu) await syncServiceFlag(spu._id);
+		if (spu) {
+			await syncServiceFlag(spu._id);
+			await syncMonitorFlag(spu._id); // v103 monitor mode; no-op below firmware 103
+		}
 	}
 
 	return json({ success: true, event: eventType, deviceId, ...(blankRunId ? { blankRunId } : {}) });

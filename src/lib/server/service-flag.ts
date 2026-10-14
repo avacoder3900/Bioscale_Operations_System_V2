@@ -59,6 +59,67 @@ export async function syncServiceFlag(spuId: string): Promise<ServiceFlagResult>
 	}
 }
 
+/**
+ * Monitor flag (firmware v103): BIMS owns the policy — 1 while
+ * spu.monitoring.enabled, 0 otherwise. Pushed through the same set_service
+ * function as "monitor:1" / "monitor:0" so the device's cloud-function count
+ * stays put; read back from the monitor_flag variable. Pre-v103 firmware
+ * answers -1 to the monitor argument (bad argument) -> 'unsupported'.
+ */
+export async function syncMonitorFlag(spuId: string): Promise<ServiceFlagResult> {
+	try {
+		await connectDB();
+		const spu = (await Spu.findById(spuId).select('monitoring particleLink').lean()) as any;
+		if (!spu) return { state: 'error', message: 'SPU not found' };
+		const deviceId = spu.particleLink?.particleDeviceId;
+		if (!deviceId) return recordMonitor(spuId, { state: 'unlinked' });
+
+		const want: '0' | '1' = spu.monitoring?.enabled ? '1' : '0';
+		try {
+			const { return_value } = await callFunction(deviceId, 'set_service', `monitor:${want}`);
+			if (return_value === -1) return recordMonitor(spuId, { state: 'unsupported' });
+			if (return_value !== Number(want)) {
+				return recordMonitor(spuId, { state: 'error', message: `device returned ${return_value}` });
+			}
+			let v: any = null;
+			try {
+				v = await getVariable(deviceId, 'monitor_flag');
+			} catch {
+				// variable missing on older firmware; the function result already told us
+			}
+			return recordMonitor(spuId, { state: 'synced', value: (v?.result ?? Number(want)) as 0 | 1 });
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err);
+			if (/not found/i.test(msg)) return recordMonitor(spuId, { state: 'unsupported' });
+			if (/timed out|timeout|offline|not connected|abort/i.test(msg)) {
+				return recordMonitor(spuId, { state: 'offline' });
+			}
+			return recordMonitor(spuId, { state: 'error', message: msg });
+		}
+	} catch (err) {
+		return { state: 'error', message: err instanceof Error ? err.message : String(err) };
+	}
+}
+
+async function recordMonitor(spuId: string, r: ServiceFlagResult): Promise<ServiceFlagResult> {
+	try {
+		await Spu.updateOne(
+			{ _id: spuId },
+			{
+				$set: {
+					'particleLink.monitorFlag': r.state === 'synced' ? r.value : null,
+					'particleLink.monitorFlagState': r.state,
+					'particleLink.monitorFlagSyncedAt': new Date(),
+					'particleLink.monitorFlagError': r.state === 'error' ? r.message : null
+				}
+			}
+		);
+	} catch {
+		// Recording the outcome is itself best-effort.
+	}
+	return r;
+}
+
 async function record(spuId: string, r: ServiceFlagResult): Promise<ServiceFlagResult> {
 	try {
 		await Spu.updateOne(

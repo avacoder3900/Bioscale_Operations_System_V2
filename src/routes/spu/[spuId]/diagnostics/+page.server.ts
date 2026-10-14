@@ -1,12 +1,28 @@
-import { error } from '@sveltejs/kit';
-import { connectDB, Spu, DeviceLog, DeviceCrash, WebhookLog, DeviceEvent } from '$lib/server/db';
+import { error, fail } from '@sveltejs/kit';
+import { connectDB, Spu, DeviceLog, DeviceCrash, WebhookLog, DeviceFinding } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
-import type { PageServerLoad } from './$types';
+import { buildDeviceTimeline } from '$lib/server/device-timeline';
+import { syncMonitorFlag } from '$lib/server/service-flag';
+import { appendSpuJournal } from '$lib/server/spu-journal';
+import { reviewDevice, listMonitoredSpus } from '$lib/server/device-monitor-review';
+import type { Actions, PageServerLoad } from './$types';
 
-interface TimelineEntry {
-	timestamp: string;
-	source: 'firmware' | 'webhook' | 'crash' | 'event';
-	data: any;
+function monitoringView(spu: any) {
+	const m = spu.monitoring ?? {};
+	const pl = spu.particleLink ?? {};
+	return {
+		enabled: !!m.enabled,
+		role: m.role ?? 'suspect',
+		reason: m.reason ?? '',
+		enabledAt: m.enabledAt ?? null,
+		enabledBy: m.enabledBy?.username ?? null,
+		lastReviewAt: m.lastReviewAt ?? null,
+		lastReviewStatus: m.lastReviewStatus ?? null,
+		flag: pl.monitorFlag ?? null,
+		flagState: pl.monitorFlagState ?? null,
+		flagSyncedAt: pl.monitorFlagSyncedAt ?? null,
+		flagError: pl.monitorFlagError ?? null
+	};
 }
 
 export const load: PageServerLoad = async ({ params, url, locals }) => {
@@ -21,6 +37,8 @@ export const load: PageServerLoad = async ({ params, url, locals }) => {
 		return {
 			spu: { id: spu._id, udi: spu.udi },
 			particleDeviceId: null,
+			monitoring: monitoringView(spu),
+			findings: [],
 			timeline: [],
 			logs: [],
 			crashes: [],
@@ -40,165 +58,32 @@ export const load: PageServerLoad = async ({ params, url, locals }) => {
 	const dateFrom = from ? new Date(from) : defaultFrom;
 	const dateTo = to ? new Date(to + 'T23:59:59Z') : now;
 
-	const logFilter: Record<string, any> = { deviceId: particleDeviceId, uploadedAt: { $gte: dateFrom, $lte: dateTo } };
-	const crashFilter: Record<string, any> = { deviceId: particleDeviceId, detectedAt: { $gte: dateFrom, $lte: dateTo } };
-	const webhookFilter: Record<string, any> = { deviceId: particleDeviceId, timestamp: { $gte: dateFrom, $lte: dateTo } };
-	const eventFilter: Record<string, any> = { deviceId: particleDeviceId, createdAt: { $gte: dateFrom, $lte: dateTo } };
-
-	const [logs, crashes, webhookLogs, events, webhookTimeAgg] = await Promise.all([
-		DeviceLog.find(logFilter).sort({ uploadedAt: 1 }).lean(),
-		DeviceCrash.find(crashFilter).sort({ detectedAt: 1 }).lean(),
-		WebhookLog.find(webhookFilter).sort({ timestamp: 1 }).lean(),
-		DeviceEvent.find(eventFilter).sort({ createdAt: 1 }).lean(),
+	const [tl, webhookTimeAgg, totalCrashes, totalLogs, lastUploadDoc, findings] = await Promise.all([
+		buildDeviceTimeline(particleDeviceId, dateFrom, dateTo),
 		WebhookLog.aggregate([
 			{ $match: { deviceId: particleDeviceId, processingTimeMs: { $ne: null } } },
 			{ $group: { _id: null, avg: { $avg: '$processingTimeMs' } } }
-		])
+		]),
+		DeviceCrash.countDocuments({ deviceId: particleDeviceId }),
+		DeviceLog.countDocuments({ deviceId: particleDeviceId }),
+		DeviceLog.findOne({ deviceId: particleDeviceId }).sort({ uploadedAt: -1 }).select('uploadedAt').lean() as any,
+		// Findings are not date-filtered: the whole point is that they outlive the raw data.
+		DeviceFinding.find({ deviceId: particleDeviceId }).sort({ createdAt: -1 }).limit(200).lean() as any
 	]);
-
-	const totalCrashes = await DeviceCrash.countDocuments({ deviceId: particleDeviceId });
-	const totalLogs = await DeviceLog.countDocuments({ deviceId: particleDeviceId });
-	const lastUploadDoc = await DeviceLog.findOne({ deviceId: particleDeviceId }).sort({ uploadedAt: -1 }).select('uploadedAt').lean() as any;
 	const avgWebhookTimeMs = webhookTimeAgg[0]?.avg ? Math.round(webhookTimeAgg[0].avg) : null;
 
-	// Build unified timeline
-	const timeline: TimelineEntry[] = [];
-
-	// Group device_logs by bootCount to reconstruct continuous sessions.
-	// Multiple upload chunks share the same bootCount — they're not separate reboots.
-	// Only emit a session header when bootCount changes.
-	let lastBootCount: number | null = null;
-	let sessionLineCount = 0;
-	let sessionUploadCount = 0;
-
-	for (const log of logs as any[]) {
-		const uploadTime = new Date(log.uploadedAt).getTime();
-		const maxMs = log.logLines?.length > 0
-			? Math.max(...log.logLines.map((l: any) => l.ms ?? 0))
-			: 0;
-
-		// Per-chunk anchor: the last line in this chunk was written at ~uploadedAt,
-		// so the chunk's time origin is (uploadedAt - maxMs). Each line's wall-clock
-		// is then (uploadedAt - maxMs + line.ms). This correctly interleaves firmware
-		// lines with webhook/event timestamps that use server wall-clock time.
-		const chunkOrigin = uploadTime - maxMs;
-
-		// Emit session header only when bootCount changes (= real reboot)
-		if (log.bootCount !== lastBootCount) {
-			const displayName = log.deviceName || log.deviceId;
-			const fwLabel = log.firmwareVersion != null ? `v${log.firmwareVersion}` : 'unknown';
-			const bootLabel = log.bootCount != null ? `#${log.bootCount}` : 'unknown';
-
-			// Session header timestamp = earliest line in this chunk
-			const minMs = log.logLines?.length > 0
-				? Math.min(...log.logLines.map((l: any) => l.ms ?? 0))
-				: 0;
-
-			timeline.push({
-				timestamp: new Date(chunkOrigin + minMs).toISOString(),
-				source: 'firmware',
-				data: {
-					ms: 0,
-					message: `======== SESSION START ========\nBoot ${bootLabel} | ${displayName} | Firmware: ${fwLabel}`,
-					sessionId: log.sessionId,
-					isSessionHeader: true,
-					firmwareVersion: log.firmwareVersion,
-					bootCount: log.bootCount,
-					deviceName: log.deviceName,
-					uploadedAt: log.uploadedAt
-				}
-			});
-			lastBootCount = log.bootCount;
-			sessionLineCount = 0;
-			sessionUploadCount = 0;
-		}
-
-		sessionUploadCount++;
-
-		// Flatten log lines from this upload chunk into the timeline
-		if (log.logLines) {
-			for (const line of log.logLines) {
-				const ts = new Date(chunkOrigin + (line.ms || 0));
-
-				sessionLineCount++;
-				timeline.push({
-					timestamp: ts.toISOString(),
-					source: 'firmware',
-					data: { ms: line.ms, message: line.message, sessionId: log.sessionId }
-				});
-			}
-		}
-	}
-
-	// Webhook logs
-	for (const wh of webhookLogs as any[]) {
-		timeline.push({
-			timestamp: new Date(wh.timestamp).toISOString(),
-			source: 'webhook',
-			data: {
-				eventName: wh.eventName,
-				status: wh.response?.status ?? null,
-				processingTimeMs: wh.processingTimeMs ?? null,
-				errorMessage: wh.response?.errorMessage ?? null,
-				request: wh.request ?? null,
-				response: wh.response ?? null,
-				_id: wh._id
-			}
-		});
-	}
-
-	// Crashes
-	for (const cr of crashes as any[]) {
-		timeline.push({
-			timestamp: new Date(cr.detectedAt).toISOString(),
-			source: 'crash',
-			data: {
-				lastCheckpoint: cr.lastCheckpoint,
-				lastCheckpointName: cr.lastCheckpointName,
-				crashCategory: cr.crashCategory,
-				checkpointSequence: cr.checkpointSequence ?? [],
-				firmwareVersion: cr.firmwareVersion,
-				bootCount: cr.bootCount,
-				sessionLogId: cr.sessionLogId,
-				_id: cr._id
-			}
-		});
-	}
-
-	// Events
-	for (const ev of events as any[]) {
-		timeline.push({
-			timestamp: new Date(ev.createdAt).toISOString(),
-			source: 'event',
-			data: {
-				eventType: ev.eventType,
-				eventData: ev.eventData,
-				_id: ev._id
-			}
-		});
-	}
-
-	// Sort by timestamp descending (newest first)
-	timeline.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-
-	// Check if there's more data outside the window
-	const totalInWindow = timeline.length;
-	const hasMore = totalInWindow >= 500;
-
-	// Reverse tab data so newest appears first (queries are ascending for timeline stitching)
-	const logsDesc = [...logs].reverse();
-	const crashesDesc = [...crashes].reverse();
-	const webhookLogsDesc = [...webhookLogs].reverse();
-	const eventsDesc = [...events].reverse();
+	const hasMore = tl.timeline.length >= 500;
 
 	return {
 		spu: { id: spu._id, udi: spu.udi },
 		particleDeviceId,
-		timeline: JSON.parse(JSON.stringify(timeline)),
-		logs: JSON.parse(JSON.stringify(logsDesc)),
-		crashes: JSON.parse(JSON.stringify(crashesDesc)),
-		webhookLogs: JSON.parse(JSON.stringify(webhookLogsDesc)),
-		events: JSON.parse(JSON.stringify(eventsDesc)),
+		monitoring: monitoringView(spu),
+		findings: JSON.parse(JSON.stringify(findings)),
+		timeline: JSON.parse(JSON.stringify(tl.timeline)),
+		logs: JSON.parse(JSON.stringify([...tl.logs].reverse())),
+		crashes: JSON.parse(JSON.stringify([...tl.crashes].reverse())),
+		webhookLogs: JSON.parse(JSON.stringify([...tl.webhookLogs].reverse())),
+		events: JSON.parse(JSON.stringify([...tl.events].reverse())),
 		stats: {
 			totalLogs,
 			totalCrashes,
@@ -211,4 +96,74 @@ export const load: PageServerLoad = async ({ params, url, locals }) => {
 		},
 		hasMore
 	};
+};
+
+export const actions: Actions = {
+	// Turn monitor mode on/off for this unit. Writes the policy to the SPU, journals it,
+	// and pushes the flag to the device (best effort; the spark/status online handler and
+	// the Resync button retry it).
+	setMonitor: async ({ request, locals, params }) => {
+		requirePermission(locals.user, 'spu:write');
+		await connectDB();
+		const fd = await request.formData();
+		const enabled = fd.get('enabled') === '1';
+		const role = fd.get('role') === 'control' ? 'control' : 'suspect';
+		const reason = String(fd.get('reason') ?? '').trim().slice(0, 500);
+		const spu = await Spu.findById(params.spuId).select('udi monitoring').lean() as any;
+		if (!spu) return fail(404, { error: 'SPU not found' });
+
+		const actor = { _id: locals.user!._id, username: locals.user!.username };
+		const set: Record<string, any> = { 'monitoring.enabled': enabled, 'monitoring.role': role };
+		if (enabled) {
+			set['monitoring.reason'] = reason;
+			set['monitoring.enabledAt'] = new Date();
+			set['monitoring.enabledBy'] = actor;
+			set['monitoring.disabledAt'] = null;
+		} else {
+			set['monitoring.disabledAt'] = new Date();
+		}
+		await Spu.updateOne({ _id: params.spuId }, { $set: set });
+		await appendSpuJournal(
+			params.spuId,
+			enabled ? `Monitor mode ON (${role})${reason ? ` — ${reason}` : ''}` : 'Monitor mode OFF',
+			actor,
+			{ source: 'service', refKind: 'monitoring' }
+		);
+		const flag = await syncMonitorFlag(params.spuId);
+		return { monitorSaved: true, flag };
+	},
+
+	resyncMonitor: async ({ locals, params }) => {
+		requirePermission(locals.user, 'spu:write');
+		await connectDB();
+		const flag = await syncMonitorFlag(params.spuId);
+		return { monitorResynced: true, flag };
+	},
+
+	// Run the daily review for this unit now (last 24 h), without waiting for the cron.
+	reviewNow: async ({ locals, params }) => {
+		requirePermission(locals.user, 'spu:write');
+		const all = await listMonitoredSpus();
+		const me = all.find((s) => s._id === params.spuId);
+		if (!me) return fail(400, { error: 'Monitor mode is not enabled on this unit, or no device is linked.' });
+		const to = new Date();
+		const from = new Date(to.getTime() - 24 * 3600 * 1000);
+		const result = await reviewDevice(me, { from, to, controls: all.filter((s) => s.role === 'control') });
+		if (result.error) return fail(502, { error: result.error });
+		return { reviewed: true, review: { status: result.status, summary: result.summary, findingCount: result.findingCount, costUsd: result.costUsd } };
+	},
+
+	ackFinding: async ({ request, locals, params }) => {
+		requirePermission(locals.user, 'spu:write');
+		await connectDB();
+		const fd = await request.formData();
+		const id = String(fd.get('findingId') ?? '');
+		const resolve = fd.get('resolve') === '1';
+		if (!id) return fail(400, { error: 'findingId required' });
+		const actor = { _id: locals.user!._id, username: locals.user!.username };
+		const set: Record<string, any> = { acknowledgedAt: new Date(), acknowledgedBy: actor };
+		if (resolve) set.resolvedAt = new Date();
+		await DeviceFinding.updateOne({ _id: id, spuId: params.spuId }, { $set: set });
+		return { acknowledged: true };
+	}
 };
