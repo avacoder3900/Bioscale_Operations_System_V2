@@ -19799,3 +19799,17 @@ Retrieve this exact code: git checkout feat/well-tracker-below-matrix at commit 
   (or: git log feat/well-tracker-below-matrix --oneline to find it if the branch has since moved on)
 What this deployment is for: Well tracker on a running robot panel — tapping a well opens the
   issue picker below the deck (full width) instead of in a cramped right-hand column.
+
+================================================================================
+2026-10-14 — master — DEPLOY: Well tracker issue picker below the deck
+================================================================================
+Deployment: production — bioscale-operations-system-mongodb.vercel.app (Vercel GitHub integration;
+  per-deployment URL + dpl id in the Vercel dashboard, brevitest team scope — the status API lookup
+  was not available from this session)
+Source: branch master @ commit f0dfd5d2 (merge of PR #91, feat/well-tracker-below-matrix fb48f089)
+Retrieve this exact code: git checkout master at commit f0dfd5d2
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: on a running robot panel, tapping a well in the Well tracker opens the
+  issue picker below the deck, full width, instead of in a cramped right-hand column. Pre-merge
+  preview of the merge commit: bioscale-operations-system-mongodb-en948vhmq-brevitest.vercel.app
+  (login 200, /robots redirects to login unauthenticated). svelte-check: 14 errors (= baseline).
