@@ -42,12 +42,15 @@
 								? 'Wax settings'
 								: 'Reagent settings'
 	);
-	// Which robots have a LIVE run panel on the Robots page (from its load) —
-	// the board marks that process row "live".
+	// Which robots have a wizard open in their Robots-page panel (from its load)
+	// — the board marks that process row "live" (running) or "setup" (inline
+	// setup, 2026-10-14).
 	const openPanels = $derived.by(() => {
-		const out: Record<string, BoardProcess> = {};
-		for (const p of ($page.data.panels ?? []) as { robotId: string; process: BoardProcess | null; live?: boolean }[]) {
-			if (p.live && p.process) out[p.robotId] = p.process;
+		const out: Record<string, { process: BoardProcess; live: boolean }> = {};
+		for (const p of ($page.data.panels ?? []) as { robotId: string; process: BoardProcess | null; live?: boolean; kind?: string }[]) {
+			if (!p.process) continue;
+			if (p.live) out[p.robotId] = { process: p.process, live: true };
+			else if (p.kind === 'wax-setup' || p.kind === 'reagent-setup') out[p.robotId] = { process: p.process, live: false };
 		}
 		return out;
 	});

@@ -19676,3 +19676,51 @@ Retrieve this exact code: git checkout master at commit 604b51a6
   (or: git log master --oneline to find it if the branch has since moved on)
 What this deployment is for: the fill screen defaults to Research (no assay) and "No fill lot"; assigning an
   assay or a fill lot is opt-in. Follows c295ba92 (fill-time assay ownership, tube step retired).
+
+================================================================================
+2026-10-14 — feat/robots-inline-setup — Robots page: setup happens in the panel, no page change
+================================================================================
+The user asked for the Robots page to be restructured so that setting up a fill no
+longer leaves the page ("opening a new tab"), with nothing lost. Since round 6
+(2026-10-08) an idle robot's "Start wax" / "Start reagent" and a Setup/Loading
+robot's "Continue setup" were links to the wax-filling / reagent-filling pages;
+the Robots page itself only showed RUNNING wizards. Now every robot's panel on
+/manufacturing/cart-mfg/robots hosts its setup too:
+
+  • idle         → Start wax / Start reagent are buttons that open that robot's
+                   setup wizard IN its panel (goto to the same page with
+                   ?open=<robotId>:<process>, noScroll/keepFocus — a refresh keeps
+                   it open; "Close" in the panel header drops it while no run has
+                   been created yet, so the robot stays idle).
+  • Setup/Loading → the wizard is always open in the panel (it has a run).
+  • Running      → unchanged (run mode).
+  The panel header gains "Full page", which opens the old standalone setup page
+  for that robot — those pages (and their loads/actions) are untouched, so the
+  previous flow still exists one click away. A robot whose process the user may
+  not read keeps the old link-only "Continue … setup →" card.
+
+Implementation:
+  • src/lib/manufacturing/robot-panels.ts — OPEN_PARAM + parseOpen / serializeOpen /
+    withOpen / withoutOpen (the ?open= vocabulary; nanoid ids never contain ':' or ',').
+  • (robots)/robots/+page.server.ts — reads ?open=; new panel kinds 'wax-setup' /
+    'reagent-setup' carry the same loadWaxWizard / loadReagentWizard data the setup
+    pages load (gated by waxFilling:read / reagentFilling:read, as before). 'setup'
+    (link only) now occurs only when the user lacks that read permission.
+  • (robots)/robots/+page.svelte — renders <WaxWizard|ReagentWizard mode="panel">
+    for those kinds; Start buttons call goto instead of linking away; Close / Full
+    page in the header; amber border while a panel is in setup.
+  • WaxWizard / ReagentWizard — new mode 'panel': renders every stage like 'setup'
+    but, once the robot is Running, does NOT goto /robots; it only strips its own
+    ?open= entry via replaceState (no navigation, no extra load — the page's next
+    load already shows the live run in the same panel, and the entry must not
+    reopen setup after the run ends). The "Robot Busy → Go to … Filling" link
+    (which pointed at /robots) is hidden in panel mode since we are already there.
+  • (robots)/+layout.svelte + RobotBoard.svelte — openPanels now carries
+    { process, live }; the board's process row shows "live" for a running panel
+    and "setup" for an open setup panel.
+
+Checks: svelte-kit sync + svelte-check → 14 errors (= the pre-existing baseline,
+none in touched files); vite build → client + server bundles built; the adapter-vercel step afterwards died
+with a Node heap OOM on this machine (earlier sessions hit EBUSY at the same step —
+a local artefact, not a code problem; Vercel does the real build). Built in worktree
+../Bioscale_V2-wt-robots-inline from origin/master 6021243d.

@@ -6,8 +6,8 @@
   robot server, force the robot back to idle.
 
   Round 6: this board is status only. Below it, each robot's panel shows its
-  LIVE run (marked "live" on that process row here); setup happens on the
-  wax-filling / reagent-filling pages via the panel's Start buttons.
+  LIVE run or its SETUP (marked "live" / "setup" on that process row here);
+  setup opens in that same panel (inline setup, 2026-10-14).
 
   Health is polled every 10 s from /api/opentrons-lab/robots/health; run stages
   refresh whenever a wizard action invalidates the page data.
@@ -23,8 +23,8 @@
 
 	interface Props {
 		rows: RobotBoardRow[];
-		/** Robots with a live run panel on the Robots page, by process. */
-		openPanels?: Record<string, BoardProcess>;
+		/** Robots with a wizard open in their Robots-page panel, by process: live run or setup. */
+		openPanels?: Record<string, { process: BoardProcess; live: boolean }>;
 	}
 
 	let { rows, openPanels = {} }: Props = $props();
@@ -267,7 +267,8 @@
 </div>
 
 {#snippet processRow(row: RobotBoardRow, process: BoardProcess, run: BoardRun | null, other: BoardRun | null)}
-	{@const shown = openPanels[row.robotId] === process}
+	{@const open = openPanels[row.robotId]}
+	{@const shown = open?.process === process}
 	{@const blocked = !run && !!other}
 	<div
 		class="flex items-center gap-2 rounded border px-2.5 py-2 {shown
@@ -283,8 +284,8 @@
 				busy with {otherProcess(process)} filling
 			{/if}
 		</span>
-		{#if shown}
-			<span class="shrink-0 text-[10px] uppercase tracking-wider text-[var(--color-tron-cyan)]" title="{row.name}'s live run is in its panel below">live</span>
+		{#if shown && open}
+			<span class="shrink-0 text-[10px] uppercase tracking-wider text-[var(--color-tron-cyan)]" title={open.live ? `${row.name}'s live run is in its panel below` : `${row.name}'s ${processLabel(process).toLowerCase()} setup is open in its panel below`}>{open.live ? 'live' : 'setup'}</span>
 		{/if}
 	</div>
 {/snippet}
