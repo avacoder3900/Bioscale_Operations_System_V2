@@ -19,6 +19,8 @@
  */
 
 /** The daemon's queued job kinds (DIRECT_JOB_KINDS in ot2-bridge.py). */
+import { sleep as unthrottledSleep } from './unthrottled-timer';
+
 export const BRIDGE_JOB_KINDS = [
 	'sweep',
 	'deck_scan',
@@ -201,7 +203,7 @@ export function createBridgeClient(opts: BridgeClientOptions): BridgeClient {
 	const kinds = [...(opts.kinds ?? BRIDGE_TOKEN_KINDS)];
 	const marginS = opts.refreshMarginS ?? 60;
 	const nowMs = opts.nowMs ?? (() => Date.now());
-	const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+	const sleep = opts.sleep ?? unthrottledSleep;
 
 	let cached: { token: string; exp: number } | null = null;
 	let pending: Promise<string> | null = null;
