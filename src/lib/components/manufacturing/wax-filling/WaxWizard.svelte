@@ -6,8 +6,9 @@
 -->
 <script lang="ts">
 	import { enhance, deserialize } from '$app/forms';
-	import { goto, invalidateAll } from '$app/navigation';
+	import { goto, invalidateAll, replaceState } from '$app/navigation';
 	import { page } from '$app/stores';
+	import { withoutOpen } from '$lib/manufacturing/robot-panels';
 	import WaxPreparation from '$lib/components/manufacturing/wax-filling/WaxPreparation.svelte';
 	import DeckLoadingGrid from '$lib/components/manufacturing/wax-filling/DeckLoadingGrid.svelte';
 	import RunExecution from '$lib/components/manufacturing/wax-filling/RunExecution.svelte';
@@ -33,8 +34,8 @@
 	import type { RejectionReasonCode } from '$lib/server/db/schema';
 
 	interface Props {
-		/** setup = the wax-filling page (prep → scan → start; hands over to /robots once running); run = a Robots-page panel (Running stage only). */
-		mode?: 'setup' | 'run';
+		/** setup = the wax-filling page (prep → scan → start; hands over to /robots once running); panel = the same setup inside a Robots-page panel (2026-10-14: stays put, the panel flips to run mode once running); run = a Robots-page panel (Running stage only). */
+		mode?: 'setup' | 'run' | 'panel';
 		data: {
 			robotId: string;
 			robotName: string;
@@ -981,10 +982,19 @@
 	let runFinishedLocal = $state(false);
 	const runFinished = $derived(runFinishedLocal || !!data.runState.opentronsRunFinalStatus);
 
-	// The setup page hands over to the Robots page once the robot is running
-	// (2026-10-08): every running robot is watched there, side by side.
+	// The setup PAGE hands over to the Robots page once the robot is running
+	// (2026-10-08). A Robots-page setup PANEL (inline setup, 2026-10-14) stays
+	// where it is: it only drops its ?open= entry (no navigation, no reload —
+	// the page's next load already shows this robot's live run in the same
+	// panel, and the entry must not reopen setup once that run is over).
 	$effect(() => {
-		if (mode === 'setup' && !previewParam && effectiveStage === 'Running') void goto('/manufacturing/cart-mfg/robots');
+		if (mode === 'run' || previewParam || effectiveStage !== 'Running') return;
+		if (mode === 'setup') {
+			void goto('/manufacturing/cart-mfg/robots');
+			return;
+		}
+		const next = withoutOpen($page.url, data.robotId);
+		if (next) replaceState(next, $page.state);
 	});
 
 	// ── OT2-TAILNET-5 §7.1: this page's robot line for the run lifecycle ──────
@@ -1261,11 +1271,13 @@
 					This robot is currently running reagent filling{data.robotBlocked.runId ? ` (${data.robotBlocked.runId})` : ''}.
 					Complete or cancel the reagent run before starting wax filling.
 				</p>
+			{#if mode !== 'panel'}
 				<!-- eslint-disable svelte/no-navigation-without-resolve -->
 				<a href="/manufacturing/cart-mfg/robots" class="mt-3 inline-block rounded border border-amber-500/50 px-4 py-2 text-sm text-amber-300 hover:bg-amber-900/30">
 					Go to Reagent Filling
 				</a>
 				<!-- eslint-enable svelte/no-navigation-without-resolve -->
+			{/if}
 			</div>
 		</div>
 	{:else if !previewParam && !effectiveHasActiveRun}
@@ -1346,7 +1358,7 @@
 	{/if}
 
 	<!-- Stage content: always rendered (not destroyed during submission) -->
-	{#if displayStage && (mode === 'setup' || displayStage === 'Running')}
+	{#if displayStage && (mode !== 'run' || displayStage === 'Running')}
 	<div class="relative">
 		{#if submitting && !previewParam}
 			<div class="absolute inset-0 z-10 flex items-center justify-center rounded-lg bg-black/30">

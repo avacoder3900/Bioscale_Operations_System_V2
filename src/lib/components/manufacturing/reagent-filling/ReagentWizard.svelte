@@ -6,7 +6,8 @@
 -->
 <script lang="ts">
 	import { page } from '$app/stores';
-	import { goto, invalidateAll } from '$app/navigation';
+	import { withoutOpen } from '$lib/manufacturing/robot-panels';
+	import { goto, invalidateAll, replaceState } from '$app/navigation';
 	import SetupConfirmation from '$lib/components/manufacturing/reagent-filling/SetupConfirmation.svelte';
 	import ReagentPreparation from '$lib/components/manufacturing/reagent-filling/ReagentPreparation.svelte';
 	import DeckLoadingGrid from '$lib/components/manufacturing/reagent-filling/DeckLoadingGrid.svelte';
@@ -31,8 +32,8 @@
 	// REAGENT-TOPSEAL-IMPLICIT: there is no post-OT-2 queue. Run completion ends
 	// the run; top sealing is implicit; the next touch is the Reagent Inspect photo.
 
-	/** setup = the reagent-filling page (assay → prep → scan → start; hands over to /robots once running); run = a Robots-page panel (Running stage only). */
-	let { data, mode = 'setup' }: { data: ReagentWizardData; mode?: 'setup' | 'run' } = $props();
+	/** setup = the reagent-filling page (assay → prep → scan → start; hands over to /robots once running); panel = the same setup inside a Robots-page panel (2026-10-14: stays put, the panel flips to run mode once running); run = a Robots-page panel (Running stage only). */
+	let { data, mode = 'setup' }: { data: ReagentWizardData; mode?: 'setup' | 'run' | 'panel' } = $props();
 
 	// ROBOT-OVERHAUL round 2: this wizard renders on /robots (every robot side by
 	// side), so its actions post to their own route explicitly instead of '?/x'.
@@ -447,10 +448,19 @@
 	const displayStage = $derived(previewParam ? previewStage : viewStage);
 	const isPreviewOrPast = $derived(previewParam || isViewingPast);
 
-	// The setup page hands over to the Robots page once the robot is running
-	// (2026-10-08): every running robot is watched there, side by side.
+	// The setup PAGE hands over to the Robots page once the robot is running
+	// (2026-10-08). A Robots-page setup PANEL (inline setup, 2026-10-14) stays
+	// where it is: it only drops its ?open= entry (no navigation, no reload —
+	// the page's next load already shows this robot's live run in the same
+	// panel, and the entry must not reopen setup once that run is over).
 	$effect(() => {
-		if (mode === 'setup' && !previewParam && stage === 'Running') void goto('/manufacturing/cart-mfg/robots');
+		if (mode === 'run' || previewParam || stage !== 'Running') return;
+		if (mode === 'setup') {
+			void goto('/manufacturing/cart-mfg/robots');
+			return;
+		}
+		const next = withoutOpen($page.url, data.robotId);
+		if (next) replaceState(next, $page.state);
 	});
 
 	// Timeline bubbles (4): the Loading stage is split into "Barcode Scanning"
@@ -834,9 +844,11 @@
 				This robot is currently running wax filling{data.robotBlocked.runId ? ` (${data.robotBlocked.runId})` : ''}.
 				Complete or cancel the wax run before starting reagent filling.
 			</p>
+			{#if mode !== 'panel'}
 			<a href="/manufacturing/cart-mfg/robots" class="mt-3 inline-block rounded border border-amber-500/50 px-4 py-2 text-sm text-amber-300 hover:bg-amber-900/30">
 				Go to Wax Filling
 			</a>
+			{/if}
 		</div>
 	{:else if !previewParam && !stage}
 		<!-- No active run — show create run UI -->
