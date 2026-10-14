@@ -18943,6 +18943,11 @@ username.toLowerCase(), but usernames are stored as typed and login matches them
 username with capitals was never found (admin or not). Now a whole-name, case-insensitive match
 (same as machine-actor.ts). Affects every commit path: capture-to-board, replenish, the
 ready-scope checks. `npm run check`: 13 errors / 435 warnings — same as master, none in the file.
+Deployment: production — https://vercel.com/brevitest/bioscale-operations-system-mongodb/22x7GAVzfsW2EDyd8Y3VWYu1jrNw
+Source: branch master @ commit b302574e
+Retrieve this exact code: git checkout master at commit b302574e
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: kanban commit check accepts usernames with capitals ("Giovanni Victorio").
 
 ================================================================================
 2026-10-07 — feat/robot-overhaul — Robots: one page for all three OT-2s, wax AND reagent
@@ -19813,3 +19818,35 @@ What this deployment is for: on a running robot panel, tapping a well in the Wel
   issue picker below the deck, full width, instead of in a cramped right-hand column. Pre-merge
   preview of the merge commit: bioscale-operations-system-mongodb-en948vhmq-brevitest.vercel.app
   (login 200, /robots redirects to login unauthenticated). svelte-check: 14 errors (= baseline).
+
+================================================================================
+2026-10-14 — fix/post-mortem-live-view-pull — CV live-view lag: MJPEG push outruns the link; Post-Mortem now pulls
+================================================================================
+Symptom (tablets on Post-Mortem Inspect): static scene looks fine, then a moving hand freezes
+for a long beat, replays at high speed, then settles near real time. Traced the path: <img
+src=https://<pi>.ts.net/preview.mjpg> -> Tailscale Serve (TLS on 443, reverse proxy in tailscaled)
+-> aiohttp /preview.mjpg (services/bims-capture-agent/preview.py). The handler reads a frame,
+JPEG-encodes it and resp.write()s it every 1/fps s; it never drops a frame, and aiohttp's write
+only back-pressures once the transport buffer is full — the kernel socket buffer, tailscaled's
+proxy and netstack, WireGuard and the tablet's receive side hold several MB more. Browsers
+render multipart/x-mixed-replace in order and cannot skip ahead, so every unsent frame is lag
+that plays back as fast-forward once the link catches up. Measured from the laptop over
+Tailscale with the new scripts/mjpeg-arrival-probe.ts (mints a station JWT from MONGODB_URI,
+parses the multipart stream, logs per-frame gap/size/backlog): a STATIC 720p frame on CV
+Station 1 is ~161 KB at q80 (JPEG has no inter-frame compression, so static costs the same as
+motion) = ~19 Mbit/s at 15 fps; the link delivered 12.4 fps / 16.4 Mbit/s with 150-290 ms
+stalls followed by 20-40 ms bursts, backlog +1.4 s in 8 s. Repeats: q60 -> 13.6 fps (117 KB),
+fps8 -> 8.3 fps (kept up), fps10/q70 -> 5.0 fps during a worse Wi-Fi stretch (5.9 Mbit/s).
+So the lag is invisible until something moves; the burst is the buffered backlog draining.
+Fix (option 1 of the write-up, Post-Mortem Inspect only): the page no longer mounts the
+/preview.mjpg <img>. It PULLS instead — fetch /snapshot.jpg?q=75, decode it off-screen
+(Image.decode on an object URL), swap it into the <img>, then request the next; one frame in
+flight at a time, 50 ms floor (≤20 fps), 8 s per-request timeout. The next frame is always the
+newest, a slow link drops frames instead of queuing them, lag is bounded at ~one round trip.
+WebRTC fallback unchanged in spirit: no first frame in 8 s, or 8 failed fetches in a row
+(backoff 250 ms × n, 2 s cap). Old agents without /snapshot.jpg (Station 2) still land on
+WebRTC. Captures still use /snapshot.jpg at q92. mjpegUrl/mjpegImgEl/MJPEG_FPS/MJPEG_QUALITY
+removed; fetchStationSnapshot gained a quality param + AbortController timeout. /capture page
+untouched (still MJPEG). Dev server on port 5176 for tablet/laptop testing before any deploy.
+`npm run check`: 13 errors / 427 warnings — same 13 as master; the two warnings on this page
+(videoEl non-reactive, data referenced locally) pre-date this change.

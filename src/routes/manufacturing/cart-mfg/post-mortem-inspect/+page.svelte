@@ -10,8 +10,9 @@
 	 * cartridge status is NOT changed — it stays `completed`. Any model verdict is
 	 * advisory only (no scan-gated accept/reject here).
 	 * Capture/station plumbing mirrors /reagent-inspect (the proven implementation),
-	 * plus /capture's fast MJPEG view + /snapshot.jpg stills for Pi stations, with
-	 * automatic fallback to the WebRTC feed on agents that lack them.
+	 * plus a self-paced /snapshot.jpg live view for Pi stations (one frame in
+	 * flight, newest frame always wins — see the live-view notes below), with
+	 * automatic fallback to the WebRTC feed on agents that lack it.
 	 */
 	import { onMount, onDestroy } from 'svelte';
 	import { stationLockUrl, watchStationLock } from '$lib/station-device';
@@ -108,41 +109,112 @@
 	// Persistent "your station went offline" banner (separate from flash).
 	let stationDownAt = $state<{ name: string; at: number } | null>(null);
 
-	// ── Fast MJPEG view + clean snapshots, with WebRTC as the safety net ────
-	// Same pathway as /capture: the agent's /preview.mjpg is per-frame JPEG (no
-	// VP8 motion blockiness, ~35 ms vs ~260 ms lag) and /snapshot.jpg returns a
-	// camera frame that never went through the video encoder. Single-encoder
-	// rule: the Pi must never run VP8 + JPEG at once (dual encode browned out
-	// station 3's PSU), so WebRTC is only negotiated AFTER the MJPEG view has
-	// failed — onerror, or no first frame within MJPEG_FIRST_FRAME_MS. Older
-	// agents without these endpoints (e.g. station 2) land on WebRTC exactly
-	// as before.
+	// ── Self-paced live view + clean snapshots, with WebRTC as the safety net ─
+	// The agent's /preview.mjpg pushes a JPEG every 1/fps s and never drops
+	// one. JPEG has no inter-frame compression, so a static 720p frame costs
+	// the same ~160 KB as a moving one: ~19 Mbit/s at 15 fps, more than Pi
+	// Wi-Fi + Tailscale carry to a tablet. The unsent frames queued up in the
+	// socket, the Serve proxy and WireGuard (several MB), and a browser cannot
+	// skip ahead in a multipart stream — so the view froze, then fast-forwarded
+	// through the backlog (progress.txt 2026-10-14). Now the page PULLS: fetch
+	// /snapshot.jpg, decode it, show it, then ask for the next one. Exactly one
+	// frame is in flight, the next is always the newest, a slow link drops
+	// frames instead of queuing them, and lag is bounded at ~one round trip.
+	// Single-encoder rule still holds: the Pi must never run VP8 + JPEG at once
+	// (dual encode browned out station 3's PSU), so WebRTC is only negotiated
+	// AFTER the live view has failed — no first frame within
+	// LIVE_FIRST_FRAME_MS, or LIVE_MAX_FAILURES fetches in a row. Older agents
+	// without /snapshot.jpg (e.g. station 2) land on WebRTC exactly as before.
 	let stationToken = $state<string | null>(null);
 	let stationHostname = $state<string | null>(null);
 	let mjpegError = $state(false);
-	let mjpegImgEl = $state<HTMLImageElement | null>(null);
 	let mjpegWatchdog: ReturnType<typeof setTimeout> | null = null;
-	const MJPEG_FPS = 15;
-	const MJPEG_QUALITY = 80;
-	const MJPEG_FIRST_FRAME_MS = 8000;
+	// Object URL of the most recently decoded frame — what the <img> shows.
+	let liveSrc = $state<string | null>(null);
+	let liveLoopGen = 0; // bumped to stop a running loop
+	let liveFrames = 0; // frames shown by the current loop (first-frame watchdog)
+	const LIVE_Q = 75; // JPEG quality for the live view (captures use 92)
+	const LIVE_MIN_INTERVAL_MS = 50; // ≤20 fps even on a fast link
+	const LIVE_FIRST_FRAME_MS = 8000;
+	const LIVE_MAX_FAILURES = 8; // consecutive failed fetches before WebRTC
 	const WEBRTC_FALLBACK_WAIT_MS = 10_000;
-	const mjpegUrl = $derived(
-		stationToken && stationHostname
-			? `https://${stationHostname}/preview.mjpg?token=${encodeURIComponent(stationToken)}&fps=${MJPEG_FPS}&q=${MJPEG_QUALITY}`
-			: null
-	);
-	const mjpegShowing = $derived(!!selectedStationId && !mjpegError && !!mjpegUrl);
+	const mjpegShowing = $derived(!!selectedStationId && !mjpegError && !!stationToken && !!stationHostname);
 
 	function clearMjpegWatchdog() {
 		if (mjpegWatchdog) { clearTimeout(mjpegWatchdog); mjpegWatchdog = null; }
 	}
 
-	// Drop the MJPEG view for this station and bring the classic WebRTC feed up.
+	const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+	function stopLiveLoop() {
+		liveLoopGen++;
+		liveFrames = 0;
+		if (liveSrc) { URL.revokeObjectURL(liveSrc); liveSrc = null; }
+	}
+
+	// Arm the first-frame watchdog and start pulling frames. A station that
+	// neither errors nor paints (stalled proxy, half-open socket) must not
+	// leave the operator staring at a blank pane.
+	function startLiveLoop(stationId: string) {
+		stopLiveLoop();
+		clearMjpegWatchdog();
+		const gen = liveLoopGen;
+		mjpegWatchdog = setTimeout(() => {
+			mjpegWatchdog = null;
+			if (gen === liveLoopGen && liveFrames === 0 && !mjpegError) {
+				fallBackToWebRtc(`no frame within ${LIVE_FIRST_FRAME_MS} ms`);
+			}
+		}, LIVE_FIRST_FRAME_MS);
+		void runLiveLoop(gen, stationId);
+	}
+
+	async function runLiveLoop(gen: number, stationId: string) {
+		let failures = 0;
+		while (gen === liveLoopGen) {
+			const t0 = performance.now();
+			const blob = await fetchStationSnapshot(stationId, LIVE_Q);
+			if (gen !== liveLoopGen) return;
+			let shown = false;
+			if (blob) {
+				const url = URL.createObjectURL(blob);
+				// Decode off-screen first so the swap never paints a blank frame.
+				const pre = new Image();
+				pre.src = url;
+				try {
+					await pre.decode();
+					if (gen !== liveLoopGen) { URL.revokeObjectURL(url); return; }
+					const prev = liveSrc;
+					liveSrc = url;
+					if (prev) URL.revokeObjectURL(prev);
+					shown = true;
+				} catch {
+					URL.revokeObjectURL(url);
+				}
+			}
+			if (shown) {
+				failures = 0;
+				liveFrames++;
+				if (liveFrames === 1) clearMjpegWatchdog();
+				const slack = LIVE_MIN_INTERVAL_MS - (performance.now() - t0);
+				if (slack > 0) await sleep(slack);
+			} else {
+				failures++;
+				if (failures >= LIVE_MAX_FAILURES) {
+					fallBackToWebRtc(`${failures} snapshot fetches failed in a row`);
+					return;
+				}
+				await sleep(Math.min(2000, 250 * failures));
+			}
+		}
+	}
+
+	// Drop the live view for this station and bring the classic WebRTC feed up.
 	function fallBackToWebRtc(reason: string) {
 		clearMjpegWatchdog();
+		stopLiveLoop();
 		if (mjpegError) return;
 		mjpegError = true;
-		console.warn('[post-mortem-inspect] MJPEG fallback:', reason);
+		console.warn('[post-mortem-inspect] live view fallback:', reason);
 		flashBanner('info', 'Fast preview unavailable on this station — using the standard video feed.', 4000);
 		startWebRtcIfNeeded();
 	}
@@ -155,22 +227,6 @@
 			);
 		}
 	}
-
-	// Arm the first-frame watchdog whenever a new MJPEG URL starts showing: a
-	// stream that neither errors nor paints (stalled proxy, half-open socket)
-	// must not leave the operator staring at a blank pane.
-	$effect(() => {
-		const url = mjpegUrl;
-		clearMjpegWatchdog();
-		if (!url || mjpegError) return;
-		mjpegWatchdog = setTimeout(() => {
-			mjpegWatchdog = null;
-			if (mjpegUrl === url && !mjpegError && !(mjpegImgEl && mjpegImgEl.naturalWidth > 0)) {
-				fallBackToWebRtc(`no frame within ${MJPEG_FIRST_FRAME_MS} ms`);
-			}
-		}, MJPEG_FIRST_FRAME_MS);
-		return clearMjpegWatchdog;
-	});
 
 	async function waitForStream(ms: number): Promise<boolean> {
 		const until = Date.now() + ms;
@@ -224,15 +280,20 @@
 	}
 
 	// /snapshot.jpg — a clean camera frame. Returns null on any failure; the
-	// caller then falls back to the WebRTC feed.
-	async function fetchStationSnapshot(stationId: string): Promise<Blob | null> {
+	// caller then falls back to the WebRTC feed. `quality` is the agent's JPEG
+	// q (30..95): captures use the default 92, the live view a lighter LIVE_Q.
+	const SNAPSHOT_TIMEOUT_MS = 8000;
+	async function fetchStationSnapshot(stationId: string, quality = 92): Promise<Blob | null> {
 		const hostname = stationHostname;
 		if (!hostname) return null;
 		const attempt = async (token: string): Promise<Blob | null> => {
+			// A hung request must not stall the live loop or a capture forever.
+			const ctrl = new AbortController();
+			const timer = setTimeout(() => ctrl.abort(), SNAPSHOT_TIMEOUT_MS);
 			try {
 				const res = await fetch(
-					`https://${hostname}/snapshot.jpg?token=${encodeURIComponent(token)}&q=92`,
-					{ cache: 'no-store' }
+					`https://${hostname}/snapshot.jpg?token=${encodeURIComponent(token)}&q=${quality}`,
+					{ cache: 'no-store', signal: ctrl.signal }
 				);
 				if (!res.ok) {
 					console.warn('[post-mortem-inspect] snapshot failed: HTTP', res.status);
@@ -243,6 +304,8 @@
 			} catch (e) {
 				console.warn('[post-mortem-inspect] snapshot failed:', e);
 				return null;
+			} finally {
+				clearTimeout(timer);
 			}
 		};
 
@@ -567,7 +630,7 @@
 		stopStationWatch?.();
 		stopStationWatch = null;
 		clearMjpegWatchdog();
-		// Nulling these unmounts the MJPEG <img>, which closes its stream.
+		stopLiveLoop();
 		stationToken = null;
 		stationHostname = null;
 		mjpegError = false;
@@ -621,13 +684,14 @@
 			const tokBody = await tokRes.json();
 			token = tokBody.token;
 			if (!token) throw new Error('empty token');
-			// Starts the MJPEG view; WebRTC waits until it has failed.
+			// Starts the live view; WebRTC waits until it has failed.
 			mjpegError = false;
 			stationToken = token;
 			stationHostname = station.hostname;
 			snapshotToken = token;
 			snapshotTokenAt = Date.now();
 			startSnapshotRenewal(stationId);
+			startLiveLoop(stationId);
 		} catch (e) {
 			flashBanner('err', `Failed to fetch station token: ${e instanceof Error ? e.message : e}`);
 			selectedStationId = null;
@@ -1283,16 +1347,20 @@
 				</div>
 			{:else}
 				{#if mjpegShowing}
-					<!-- Fast MJPEG view. The <video> below stays mounted but hidden;
-					     it takes over (WebRTC) if this errors or never paints. -->
-					<img
-						bind:this={mjpegImgEl}
-						src={mjpegUrl}
-						alt="Live station preview"
-						class={fullscreen ? 'h-full w-full object-contain object-top' : 'aspect-video w-full rounded object-contain'}
-						onload={clearMjpegWatchdog}
-						onerror={() => fallBackToWebRtc('preview stream error')}
-					/>
+					<!-- Self-paced live view (one /snapshot.jpg in flight at a time). The
+					     <video> below stays mounted but hidden; it takes over (WebRTC) if
+					     this never gets a frame or keeps failing. -->
+					{#if liveSrc}
+						<img
+							src={liveSrc}
+							alt="Live station preview"
+							class={fullscreen ? 'h-full w-full object-contain object-top' : 'aspect-video w-full rounded object-contain'}
+						/>
+					{:else}
+						<div class="{fullscreen ? 'h-full w-full' : 'aspect-video w-full rounded'} flex items-center justify-center text-sm text-gray-400">
+							Connecting to station camera…
+						</div>
+					{/if}
 				{/if}
 				<!-- svelte-ignore a11y_media_has_caption -->
 				<video bind:this={videoEl} class="{fullscreen ? 'h-full w-full object-contain object-top' : 'aspect-video w-full rounded'} {mjpegShowing ? 'hidden' : ''}" playsinline autoplay muted></video>
