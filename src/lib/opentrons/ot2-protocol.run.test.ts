@@ -8,6 +8,10 @@ import { describe, it, expect, vi } from 'vitest';
 import {
 	runVerb,
 	verbRoute,
+	rtpMatches,
+	findCreatedRun,
+	CREATE_RUN_TIMEOUT_MS,
+	type SequenceVerb,
 	parseTipTracker,
 	parseFilledWells,
 	cartsFilledFromWells,
@@ -226,6 +230,17 @@ describe('run.create / run.list', () => {
 		expect(t.calls[0].body).toEqual({ data: { protocolId: 'p1', runTimeParameterValues: { cartridges: 12 } } });
 		await runVerb(t, 'run.create', { protocolId: 'p1', runTimeParameterValues: {} });
 		expect(t.calls[1].body).toEqual({ data: { protocolId: 'p1' } });
+		// A Pi 3 needs 15–30 s to create a run; the transport's 30 s default cut real creates off.
+		expect(t.calls[0].opts?.timeoutMs).toBe(CREATE_RUN_TIMEOUT_MS);
+		expect(CREATE_RUN_TIMEOUT_MS).toBeGreaterThanOrEqual(90_000);
+	});
+	it('create: no answer at all → 502 with noAnswer (the POST may have landed)', async () => {
+		const t = mockTransport(() => {
+			throw new Error('signal timed out');
+		});
+		const r = await runVerb(t, 'run.create', { protocolId: 'p1' });
+		expect(r.status).toBe(502);
+		expect(r.body).toMatchObject({ noAnswer: true });
 	});
 	it('create: robot error → the old message', async () => {
 		const t = mockTransport(() => jres(422, { errors: [{ detail: 'bad RTP' }] }));
@@ -385,6 +400,26 @@ describe('queue route + failover rules for the new verbs', () => {
 	});
 });
 
+describe('adopting a run after a lost create answer', () => {
+	it('rtpMatches: every requested value must appear with the same value; no list = nothing to check', () => {
+		const robot = [{ variableName: 'cartridges', value: 12 }, { variableName: 'wax', value: true }, { variableName: 'cal_x', value: 125.181 }];
+		expect(rtpMatches(robot, { cartridges: 12, wax: true })).toBe(true);
+		expect(rtpMatches(robot, { cartridges: 24 })).toBe(false);
+		expect(rtpMatches(robot, { missing: 1 })).toBe(false);
+		expect(rtpMatches(undefined, { cartridges: 12 })).toBe(true);
+	});
+	it('findCreatedRun waits for the run to appear, then checks protocol + RTP', async () => {
+		let lists = 0;
+		const verb: SequenceVerb = async (v) => {
+			if (v === 'run.list') return { status: 200, body: { current: lists++ < 2 ? null : { id: 'r1', status: 'idle', protocolId: 'p1' } } };
+			return { status: 200, body: { data: { runTimeParameters: [{ variableName: 'a', value: 1 }] } } };
+		};
+		const found = await findCreatedRun(verb, 'p1', { a: 1 }, { waitMs: 60_000, sleep: async () => {} });
+		expect(found).toEqual({ opentronsRunId: 'r1' });
+		expect(lists).toBe(3);
+	});
+});
+
 // ── the start sequence (one order for both lines) ──────────────────────────
 
 function startSteps(overrides: Partial<StartRunSteps> = {}, verbAnswers: Record<string, any> = {}) {
@@ -414,8 +449,11 @@ function startSteps(overrides: Partial<StartRunSteps> = {}, verbAnswers: Record<
 			if (v === 'run.ensureFresh') return { status: 200, body: { ok: true, detail: 'fresh' } };
 			if (v === 'run.create') return { status: 200, body: { opentronsRunId: 'run-1' } };
 			if (v === 'run.uploadProtocol') return { status: 200, body: { opentronsProtocolId: 'p-new', analysisStatus: 'completed' } };
+			if (v === 'run.list') return { status: 200, body: { currentRunId: null, current: null, runs: [] } };
 			return { status: 200, body: { ok: true } };
 		},
+		// No real waiting in tests: the lost-create adoption polls once and gives up.
+		adopt: { waitMs: 0, sleep: async () => {} },
 		...overrides
 	};
 	return { steps, log, confirms };
@@ -460,12 +498,41 @@ describe('startRunSequence', () => {
 		expect(log.at(-1)).toBe('confirm:failed');
 	});
 	it('create failure → the robot message; a lost answer keeps the intent (uncertain)', async () => {
-		const { steps, confirms } = startSteps({}, {
+		const { steps, confirms, log } = startSteps({}, {
 			'run.create': { status: 502, body: { message: 'Direct link lost' }, lineLost: true }
 		});
 		const r = await startRunSequence(steps);
 		expect(r).toMatchObject({ ok: false, error: 'Direct link lost' });
 		expect(confirms.at(-1)).toMatchObject({ phase: 'failed', stage: 'create', uncertain: true });
+		expect(log).toContain('run.list'); // it looked for the run before giving up
+	});
+	it('a lost create answer ADOPTS the idle run the robot made on our protocol with our RTP, then plays it', async () => {
+		const { steps, confirms, log } = startSteps({}, {
+			'run.create': { status: 502, body: { message: 'signal timed out', noAnswer: true } },
+			'run.list': { status: 200, body: { current: { id: 'run-late', status: 'idle', protocolId: 'p-cur' }, runs: [] } },
+			'run.get': { status: 200, body: { data: { id: 'run-late', status: 'idle', runTimeParameters: [{ variableName: 'a', value: 1 }] } } }
+		});
+		const r = await startRunSequence(steps);
+		expect(r).toMatchObject({ ok: true, opentronsRunId: 'run-late' });
+		expect(log).toEqual(['prepare', 'run.ensureFresh', 'run.create', 'run.list', 'run.get', 'confirm:created', 'run.action:play', 'confirm:played']);
+		expect(confirms[0]).toEqual({ phase: 'created', opentronsRunId: 'run-late', protocolId: 'p-cur' });
+		expect(log.filter((l) => l === 'run.create')).toHaveLength(1); // never a second POST /runs
+	});
+	it("a lost create answer does NOT adopt someone else's idle run (other RTP) or a running one", async () => {
+		for (const current of [
+			{ id: 'stale', status: 'idle', protocolId: 'p-cur', rtp: [{ variableName: 'a', value: 7 }] },
+			{ id: 'busy', status: 'running', protocolId: 'p-cur', rtp: [{ variableName: 'a', value: 1 }] },
+			{ id: 'other', status: 'idle', protocolId: 'p-other', rtp: [{ variableName: 'a', value: 1 }] }
+		]) {
+			const { steps, confirms } = startSteps({}, {
+				'run.create': { status: 502, body: { message: 'lost' }, lineLost: true },
+				'run.list': { status: 200, body: { current: { id: current.id, status: current.status, protocolId: current.protocolId }, runs: [] } },
+				'run.get': { status: 200, body: { data: { id: current.id, runTimeParameters: current.rtp } } }
+			});
+			const r = await startRunSequence(steps);
+			expect(r.ok).toBe(false);
+			expect(confirms.at(-1)).toMatchObject({ phase: 'failed', stage: 'create', uncertain: true });
+		}
 	});
 	it('play refused by the robot → the old wax message', async () => {
 		const { steps } = startSteps({}, { 'run.action': { status: 409, body: { ok: false, detail: 'door open', conflict: true } } });

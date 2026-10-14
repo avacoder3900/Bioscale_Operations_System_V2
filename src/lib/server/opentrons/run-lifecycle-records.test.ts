@@ -79,7 +79,11 @@ vi.mock('$lib/server/db', () => ({
 		updateOne: async (...args: any[]) => db.writes.push({ model: 'runRecord', op: 'updateOne', args })
 	}
 }));
-vi.mock('./proxy', () => ({ getRobot: async (id: string) => ({ _id: id, name: 'Robot 1 B14', ip: 'x' }), bridgeDeviceIdForRobot: () => 'ot2-b14-bridge' }));
+vi.mock('./proxy', () => ({
+	getRobot: async (id: string) => ({ _id: id, name: 'Robot 1 B14', ip: 'x' }),
+	bridgeDeviceIdForRobot: () => 'ot2-b14-bridge',
+	withRequester: (_u: unknown, fn: () => Promise<unknown>) => fn()
+}));
 vi.mock('./transport', () => ({ serverTransport: () => ({}) }));
 const gateMock = vi.hoisted(() => ({ ok: true }));
 vi.mock('./bridge-token', () => ({
