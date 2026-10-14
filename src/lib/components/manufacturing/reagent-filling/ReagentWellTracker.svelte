@@ -50,6 +50,9 @@
 	let note = $state('');
 	let busy = $state(false);
 	let error = $state('');
+	// The picker renders BELOW the deck; a tap on a top-row well could leave it
+	// off-screen, so bring it into view once it exists.
+	let pickerEl = $state<HTMLDivElement | undefined>();
 
 	const loaded = $derived(new Set(loadedPositions));
 	const active = $derived(new Set(activeWells));
@@ -81,6 +84,7 @@
 		selected = { position, well };
 		note = '';
 		error = '';
+		requestAnimationFrame(() => pickerEl?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }));
 	}
 
 	async function post(action: 'logWellIssue' | 'removeWellIssue', fields: Record<string, string>) {
@@ -162,7 +166,10 @@
 		</div>
 	</div>
 
-	<div class="grid gap-4 lg:grid-cols-[auto_1fr]">
+	<!-- One column: deck, then the picker, then the log. The picker used to sit in
+	     a right-hand column (lg:grid-cols-[auto_1fr]); inside a Robots-page panel
+	     (a third of the screen) that column was too narrow to read (2026-10-14). -->
+	<div class="space-y-4">
 		<!-- Deck: 8 rows × 3 carriers, same snake as the loading grid -->
 		<div class="overflow-x-auto">
 			<div class="mb-1 grid grid-cols-3 gap-2 text-center text-[10px] uppercase tracking-wide text-[var(--color-tron-text-secondary)]">
@@ -216,10 +223,10 @@
 			</div>
 		</div>
 
-		<!-- Right: picker (when a well is selected) + the running log -->
+		<!-- Below the deck: picker (when a well is selected) + the running log -->
 		<div class="min-w-0 space-y-3">
 			{#if selected && !readonly}
-				<div class="rounded-lg border border-[var(--color-tron-cyan)]/60 bg-[var(--color-tron-cyan)]/10 p-3">
+				<div bind:this={pickerEl} class="rounded-lg border border-[var(--color-tron-cyan)]/60 bg-[var(--color-tron-cyan)]/10 p-3">
 					<div class="flex items-center justify-between">
 						<div class="text-sm font-semibold" style="color: var(--color-tron-cyan)">
 							Cartridge #{selected.position} · well {selected.well} ({wellName(selected.well)})
@@ -230,7 +237,8 @@
 						<button type="button" class="text-xs text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]" onclick={() => (selected = null)}>Close</button>
 					</div>
 					<p class="mt-1 text-xs text-[var(--color-tron-text-secondary)]">What did you see?</p>
-					<div class="mt-2 grid grid-cols-2 gap-1.5 sm:grid-cols-4">
+					<!-- auto-fit: as many columns as the panel is wide, not the viewport -->
+					<div class="mt-2 grid grid-cols-[repeat(auto-fit,minmax(9rem,1fr))] gap-1.5">
 						{#each REAGENT_WELL_ISSUE_DEFS as d (d.code)}
 							<button
 								type="button"

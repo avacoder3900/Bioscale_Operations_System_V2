@@ -19732,3 +19732,26 @@ Retrieve this exact code: git checkout feat/robots-inline-setup at commit 451bf3
 What this deployment is for: Robots page with fill setup inside each robot's panel
   (Start wax / Start reagent open the wizard in place; no page change) — for the
   user to try before any merge to master.
+
+================================================================================
+2026-10-14 — feat/well-tracker-below-matrix — Well tracker: the issue picker opens below the deck
+================================================================================
+The user reported that on the fill-mistake grid (the Well tracker on a running
+robot panel) opening an error crammed its details to the side of the matrix,
+unreadable. Cause: ReagentWellTracker laid the deck and the picker/log out as
+`lg:grid-cols-[auto_1fr]`; on the Robots page each panel is up to a third of the
+screen, so at lg+ the 24-position deck took its full width and the picker (issue
+buttons, note, log) got the sliver that was left.
+
+Change (src/lib/components/manufacturing/reagent-filling/ReagentWellTracker.svelte
+only):
+  • the two-column grid is a single column (`space-y-4`): deck, then the
+    "What did you see?" picker, then "Logged this run" — all full width.
+  • the picker's issue buttons use `grid-cols-[repeat(auto-fit,minmax(9rem,1fr))]`
+    instead of `grid-cols-2 sm:grid-cols-4`, so the column count follows the panel
+    width rather than the viewport.
+  • picking a well scrolls the picker into view (block: nearest) since it now sits
+    under an up-to-8-row deck.
+No data or action changes. Built in worktree ../Bioscale_V2-wt-well-tracker from
+origin/master 6c1d3f4b. svelte-kit sync + svelte-check: 14 errors = the pre-existing
+baseline, none in the touched file.
