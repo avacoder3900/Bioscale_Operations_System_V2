@@ -19676,3 +19676,20 @@ Retrieve this exact code: git checkout master at commit 604b51a6
   (or: git log master --oneline to find it if the branch has since moved on)
 What this deployment is for: the fill screen defaults to Research (no assay) and "No fill lot"; assigning an
   assay or a fill lot is opt-in. Follows c295ba92 (fill-time assay ownership, tube step retired).
+
+================================================================================
+2026-10-14 — fix/studio-resolve-finalized-runs — Deck Calibration Studio: "Resolve" on fill issues never worked
+================================================================================
+Report: "i can't resolve fill errors on calibration page". The Studio's resolveWellIssues action stamps
+resolvedAt/By/Note on reagent_batch_records.wellIssues[] with updateOne + arrayFilters. Every run that has
+well-tracker entries is Completed and finalized (entries are logged DURING the run, and the run finalizes at
+completion — all 4 runs with open entries today have finalizedAt), so the sacred middleware
+(src/lib/server/db/middleware/sacred.ts) threw "Cannot modify a finalized sacred document" on every click:
+0 resolve audit rows ever, 14 open entries across DECK-001/003/004.
+Fix: sacred.ts gains an explicit opt-in query option `allowFinalized: true` (ALLOW_FINALIZED_OPTION), consumed
+in the pre-hook so the driver never sees it; documented as an ANNOTATION exception (no fact of the record
+changes; the write must create an AuditLog row — resolveWellIssues already does). Used only by
+deck-calibration/+page.server.ts resolveWellIssues. sacred.test.ts (5 cases: blocked, allowed when not
+finalized, opt-in passes + option removed, non-true value refused, deletes always blocked).
+npm run check 16 = baseline. Built in git worktree /Users/brevitest/github/bims-wt-studio-resolve (branch
+fix/studio-resolve-finalized-runs); not committed.
