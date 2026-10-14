@@ -19973,3 +19973,32 @@ Retrieve this exact code: git checkout feat/ot2-run-integrity-2 at commit af886a
   (or: git log feat/ot2-run-integrity-2 --oneline to find it if the branch has since moved on)
 What this deployment is for: OT2-TAILNET-6 S1–S5 (90 s create + adopt, double-start guard, probe-before-
   fallback + recovery under busy, stop polling after terminal, requestedBy on queue rows) — hardware test on R04.
+
+================================================================================
+2026-10-14 — test/fill-features — combined preview branch for the fill-page features
+================================================================================
+Integration branch off master (b2973920) so one Vercel preview carries every
+in-flight fill-page change together:
+  - fix/fill-cancel-button (37ae922a + a6bd2b84): reagent-wizard "Cancel run" on the
+    setup stages, and the standalone "Scan Deck with Robot" button removed from both
+    deck-loading grids (only "Scan deck + cartridges with robot" remains).
+  - fix/run-page-background-tab (5b1ed789): Web Worker timers so the run loop keeps
+    its cadence in a background tab.
+  - fix/robot-pages-heartbeat-health (3ac02588): robot pages read health from the
+    bridge heartbeat.
+  - feat/ot2-run-integrity-2 (af886a5f): 90 s run.create timeout, adopt-the-robot's-
+    run on a lost answer, start-intent guard, requestedBy on bridge commands.
+Conflicts resolved: WaxWizard kept master's own wax Cancel Run (50e17427) and dropped
+the branch's duplicate; EmbeddedRunController keeps both the pollInFlight reset and
+the post-terminal poll counter; progress.txt kept both sides everywhere.
+feat/reagent-bump-recovery is already in master and needed no merge.
+npm run check: 16 errors (baseline, unchanged). vitest opentrons/lifecycle/middleware:
+318 passed.
+
+Deployment: preview — Vercel GitHub integration, from the push of this branch
+Source: branch test/fill-features @ commit d8c621cc (merge of the four branches above)
+Retrieve this exact code: git checkout test/fill-features at commit d8c621cc
+  (or: git log test/fill-features --oneline to find it if the branch has since moved on)
+What this deployment is for: one preview to test the reagent Cancel run button, the
+  Scan-Deck button removal, background-tab polling, heartbeat health and the run-
+  integrity start fixes together before they go to master.
