@@ -19732,3 +19732,18 @@ Retrieve this exact code: git checkout feat/robots-inline-setup at commit 451bf3
 What this deployment is for: Robots page with fill setup inside each robot's panel
   (Start wax / Start reagent open the wizard in place; no page change) — for the
   user to try before any merge to master.
+
+================================================================================
+2026-10-14 — master — DEPLOY: Robots page — fill setup inside each robot's panel
+================================================================================
+Deployment: production — bioscale-operations-system-mongodb.vercel.app (Vercel GitHub integration; this
+  build's per-deployment URL: bioscale-operations-system-mongodb-b5ezs3v9n-brevitest.vercel.app, brevitest team scope)
+Source: branch master @ commit 6c1d3f4b (merge of feat/robots-inline-setup 451bf319 + docs bbd8b302)
+Retrieve this exact code: git checkout master at commit 6c1d3f4b
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: Start wax / Start reagent open the setup wizard inside that robot's panel on
+  /manufacturing/cart-mfg/robots (?open=<robotId>:<process>, refresh-safe); a run in Setup/Loading is always
+  open in its panel; the panel flips to the live run in place. Standalone wax-filling / reagent-filling
+  pages kept ("Full page" in the panel header). Merged with the user's explicit "push to main you have my
+  permission"; origin/master had not moved since the branch was cut (6021243d), so the merge was clean.
+  svelte-check on the merge: 14 errors (= baseline). Smoke: /manufacturing/cart-mfg/robots → 302 /login, /login 200.
