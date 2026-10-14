@@ -1298,7 +1298,7 @@ export async function stopConfirm(
 	}
 
 	if (action === 'cancel') {
-		await ReagentBatchRecord.findByIdAndUpdate(runId, { $set: { status: 'Cancelled', abortReason: reason, runEndTime: now } });
+		await ReagentBatchRecord.findByIdAndUpdate(runId, { $set: { status: 'Cancelled', abortReason: reason, runEndTime: now }, $unset: { startIntent: '' } });
 	} else {
 		await ReagentBatchRecord.findByIdAndUpdate(runId, {
 			$set: { status: 'Aborted', abortReason: reason, abortPhotoUrl: fields.photoUrl || undefined, runEndTime: now }

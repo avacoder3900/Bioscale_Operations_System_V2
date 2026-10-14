@@ -873,8 +873,23 @@
 			/>
 		</div>
 
-		<!-- The stage timeline header (Cancel Run / Preview / Reset to Deck Loading) was removed
+		<!-- The stage timeline header (Preview / Reset to Deck Loading) was removed
 		     2026-10-08: setup is linear on this page and the live run is watched on the Robots page. -->
+	{:else if !previewParam && stage && displayStage !== 'Running'}
+		<!-- Cancel is available on every setup stage. The old stage header carried it
+		     until 2026-10-08; without it a run stuck before Start (e.g. a start whose
+		     robot answer was lost) could only be abandoned from the database. -->
+		<div class="flex items-center justify-end">
+			<button
+				type="button"
+				onclick={() => { showCancelModal = true; }}
+				disabled={submitting}
+				class="rounded border border-red-500/50 px-3 py-1.5 text-xs font-semibold text-red-300 transition-colors hover:bg-red-900/30 disabled:opacity-50"
+				title="Cancel this run before it starts on the robot"
+			>
+				Cancel run
+			</button>
+		</div>
 	{/if}
 
 	<!-- Stage content: works for both normal mode and preview mode -->
@@ -1229,3 +1244,41 @@
 	{/if}
 
 </div>
+
+	<!-- Cancel Run Modal (restored 2026-10-14) -->
+	{#if showCancelModal}
+		<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+			<div class="mx-4 w-full max-w-md rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-6 shadow-xl">
+				<h3 class="text-lg font-semibold text-[var(--color-tron-text)]">Cancel Run</h3>
+				<p class="mt-2 text-sm text-[var(--color-tron-text-secondary)]">
+					Cancel run {data.activeRunId}? Scanned cartridges go back to their bucket; this cannot be undone.
+				</p>
+				<label class="mt-4 block">
+					<span class="text-sm font-medium text-[var(--color-tron-text-secondary)]">Reason</span>
+					<textarea
+						bind:value={cancelReason}
+						rows="3"
+						class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-3 py-2 text-sm text-[var(--color-tron-text)] placeholder-[var(--color-tron-text-secondary)] focus:border-[var(--color-tron-cyan)] focus:outline-none"
+						placeholder="Enter reason for cancellation..."
+					></textarea>
+				</label>
+				<div class="mt-4 flex justify-end gap-3">
+					<button
+						type="button"
+						onclick={() => { showCancelModal = false; cancelReason = ''; }}
+						class="rounded-lg border border-[var(--color-tron-border)] px-4 py-2 text-sm text-[var(--color-tron-text-secondary)] transition-colors hover:bg-[var(--color-tron-border)]/30"
+					>
+						Go Back
+					</button>
+					<button
+						type="button"
+						onclick={() => { showCancelModal = false; const reason = cancelReason.trim(); cancelReason = ''; void stopRunViaLine('cancel', { runId: data.activeRunId ?? '', reason }); }}
+						disabled={!cancelReason.trim() || submitting}
+						class="rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-red-700 disabled:opacity-50"
+					>
+						{submitting ? 'Cancelling...' : 'Confirm Cancel'}
+					</button>
+				</div>
+			</div>
+		</div>
+	{/if}

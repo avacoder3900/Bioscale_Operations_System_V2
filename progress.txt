@@ -19651,7 +19651,6 @@ Retrieve this exact code: git checkout master at commit c295ba92
 What this deployment is for: finalizeReagentRun stamps top-level assayId/assayName on production-filled
   cartridges (the fields the device + research app read); the reagent-prep tube step is gone (selectFillLot
   records the fill lot only). Research app main e0bdc81 (linking inherits/overrides/falls back) deployed first.
-=======
 2026-10-13 — feat/fill-assay-is-the-assay — fill defaults are opt-in: Research (no assay) and no fill lot
 ================================================================================
 Jacob: "make sure that the default at filling is no assay and no fill lot, we have to opt in to that at filling."
@@ -19813,3 +19812,17 @@ What this deployment is for: on a running robot panel, tapping a well in the Wel
   issue picker below the deck, full width, instead of in a cramped right-hand column. Pre-merge
   preview of the merge commit: bioscale-operations-system-mongodb-en948vhmq-brevitest.vercel.app
   (login 200, /robots redirects to login unauthenticated). svelte-check: 14 errors (= baseline).
+2026-10-14 — fix/fill-cancel-button — Cancel run restored on the wax + reagent wizards (Setup/Loading stages)
+================================================================================
+Report: "can we also get a cancel option on the interface for reagent fills" — after B14's start got stuck
+(16:07Z: run created on the robot, answer lost → startIntent uncertain, page reloaded 5×, robot-server
+restarted; the orphan idle run was deleted by hand from the robot API). The stage header carrying Cancel Run /
+Preview / Reset was removed 2026-10-08 (beb2021a, robots overhaul) from BOTH wizards and nothing replaced it:
+outside the Running stage's "Abort Run" there was no way to cancel a fill run from the page, and a run stuck
+before Start could only be abandoned from the database.
+Fix: ReagentWizard + WaxWizard get a right-aligned "Cancel run" button on every active-run stage that is not
+Running (Running keeps Abort), with the original reason modal restored; reagent → stopRunViaLine('cancel')
+(direct or queue), wax → the existing handleCancelRun. run-lifecycle-records: the reagent cancel write now
+also $unsets startIntent so a cancelled run never carries a stale start. Server cancel already accepts a
+Loading-stage run and reverts scanned carts (reagent_filling → wax_filled).
+RLR tests 21/21; npm run check 16 = baseline.
