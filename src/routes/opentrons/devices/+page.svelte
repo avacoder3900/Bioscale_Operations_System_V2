@@ -108,6 +108,7 @@
 							<div class="mt-0.5 flex items-center gap-3 text-xs text-[var(--color-tron-text-secondary)]">
 								<span>{robot.robotModel}</span>
 								<span>{robot.ip}:{robot.port}</span>
+								<span class="rounded px-1.5 py-0.5 {robot.healthStatus === 'busy' ? 'bg-amber-900/30 text-amber-300' : robot.healthStatus === 'hung' ? 'bg-red-900/30 text-red-400' : 'bg-green-900/30 text-green-400'}" title={robot.healthDetail}>{robot.healthLabel}</span>
 								{#if robot.robotSide}
 									<span class="rounded bg-[var(--color-tron-bg-secondary)] px-1.5 py-0.5">{robot.robotSide} side</span>
 								{/if}
@@ -169,7 +170,7 @@
 								{#if !robot.isActive}
 									<span class="rounded bg-red-900/30 px-1.5 py-0.5 text-red-400">Deactivated</span>
 								{:else}
-									<span class="rounded bg-red-900/30 px-1.5 py-0.5 text-red-400">Offline</span>
+									<span class="rounded bg-red-900/30 px-1.5 py-0.5 text-red-400" title={robot.healthDetail}>Offline</span>
 								{/if}
 							</div>
 						</div>

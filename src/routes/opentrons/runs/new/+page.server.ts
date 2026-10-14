@@ -1,6 +1,7 @@
 import { redirect } from '@sveltejs/kit';
 import { connectDB, OpentronsRobot } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
+import { getRobotsHealth, heartbeatFields } from '$lib/server/opentrons/health';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ url, locals }) => {
@@ -11,6 +12,7 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 	const preselectedProtocolId = url.searchParams.get('protocolId');
 
 	const robots = await OpentronsRobot.find({ isActive: true }).lean();
+	const health = await getRobotsHealth(robots.map((r: any) => ({ _id: String(r._id), name: r.name }))).catch(() => ({}) as Record<string, any>);
 
 	return {
 		preselectedRobotId,
@@ -19,7 +21,7 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 			robotId: r._id,
 			name: r.name ?? '',
 			ip: r.ip ?? '',
-			lastHealthOk: r.lastHealthOk ?? false
+			...heartbeatFields(health[String(r._id)])
 		})),
 		// OT2-TAILNET-5 S7: the preselected protocol + analysis are read in the
 		// browser (+page.ts) over the robot session.

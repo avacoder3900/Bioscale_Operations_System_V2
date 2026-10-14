@@ -1,6 +1,7 @@
 import { error, redirect } from '@sveltejs/kit';
 import { connectDB, OpentronsRobot } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
+import { getRobotsHealth, heartbeatFields } from '$lib/server/opentrons/health';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ params, locals }) => {
@@ -9,6 +10,8 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 	await connectDB();
 	const robot = await OpentronsRobot.findById(params.robotId).lean() as any;
 	if (!robot) error(404, 'Robot not found');
+	const health = await getRobotsHealth([{ _id: String(robot._id), name: robot.name }]).catch(() => ({}) as Record<string, any>);
+	const hb = heartbeatFields(health[String(robot._id)]);
 
 	// OT2-TAILNET-5 S7: live robot data (health, pipettes, runs) is read in the
 	// browser over the robot session (+page.ts) — Vercel can't reach the robot.
@@ -29,8 +32,8 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 			robotModel: robot.robotModel ?? 'OT-2',
 			robotSerial: robot.robotSerial ?? null,
 			isActive: robot.isActive ?? true,
-			lastHealthOk: robot.lastHealthOk ?? false,
-			lastHealthAt: robot.lastHealthAt ? new Date(robot.lastHealthAt).toISOString() : null,
+			// Bridge heartbeat (the robot record's lastHealthOk is a dead field).
+			...hb,
 			firmwareVersion: robot.firmwareVersion ?? null,
 			apiVersion: robot.apiVersion ?? null,
 			source: robot.source ?? 'manual'

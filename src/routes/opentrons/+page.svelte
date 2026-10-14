@@ -214,7 +214,7 @@
 						<option value="">Select a robot...</option>
 						{#each data.robots as robot (robot.robotId)}
 							<option value={robot.robotId}>
-								{robot.name} ({robot.ip}) {robot.lastHealthOk ? '' : '- offline'}
+								{robot.name} ({robot.ip}){robot.lastHealthOk ? (robot.healthStatus === 'busy' ? ' - ' + robot.healthLabel.toLowerCase() : '') : ' - offline'}
 							</option>
 						{/each}
 					</select>

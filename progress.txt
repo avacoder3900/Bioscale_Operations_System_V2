@@ -19847,3 +19847,57 @@ Tests: unthrottled-timer.test.ts (4, fallback contract); test:unit 563 pass / 2 
 @audio/* packages locally, fails on master too). npm run check 16 = baseline. Not committed.
 Note: the uncommitted fix/robot-pages-heartbeat-health work (+ the 10-13 ops progress entries) is parked in
 git stash@{0} ("wip: fix/robot-pages-heartbeat-health") — pop it on that branch before continuing there.
+2026-10-13 — ops — B14 off the network since Sunday: wrong WiFi profile + resolver DNSSEC; calibrator checked
+================================================================================
+Report: B14 unreachable (LAN, mDNS, Tailscale all silent ~2 h+; last daemon heartbeat 2026-10-12 06:34Z), and
+"is the tip calibrator on the WiFi". Reached B14 over its USB-B link to the lab iMac (en7, robot at
+169.254.134.36, SSH key works) after two power cycles did nothing.
+Causes found on the robot:
+1. Its only saved WiFi profile was Brevitest_WIFI (written 2026-10-13 14:37Z, PSK wrong: wpa auth_failures),
+   and the Fannin_WIFI profile was gone. Brevitest_WIFI is a hidden SSID on the same AP hardware; nobody uses
+   it. Fix: Fannin_WIFI profile re-created on B14 with the PSK read from R04's saved profile (nmcli), connected
+   at -47 dBm, same IP 172.16.202.117; Brevitest_WIFI DELETED at the user's request. Tailscale came back by
+   itself (direct path).
+2. DNS still dead after that: systemd-resolved "DNSSEC validation failed: missing-key" against the lab DNS
+   (10.10.2.2/.3, search linbeck.com) in DNSSEC=allow-downgrade mode, so every glibc lookup (python/requests
+   in the daemon) returned "Name or service not known" while busybox nslookup worked. R04 shows the SAME
+   resolvectl failure intermittently — this is the daemon's 3–19/day NameResolutionError lines in the audit.
+   Fix on B14: /etc/systemd/resolved.conf.d/90-bims-no-dnssec.conf ([Resolve] DNSSEC=no), written with a
+   remount rw / ro of the read-only root; survives reboots, NOT an Opentrons OS update (same exposure as the
+   tailscale unit). Heartbeat hb:ot2-b14-bridge resumed within 10 s. B07/R04 not changed yet (same fix applies).
+3. Tip calibrator: it is the deck's Particle Argon (Cartridge_Deck_GEN4_003, e00fce68fc3b72…) on B14's USB as
+   ttyACM1; over serial it answers 'C' (=-5.3:0.8) and 'I' (its id) — firmware alive, calibration works
+   without WiFi. Its Particle-cloud WiFi state could not be checked: the iMac's Particle CLI token (~/.particle,
+   CLI 3.11.3) is expired (`particle login` needed). New creds for Aquinas_Townpark were provided for it; not
+   applied (needs listening mode + USB to the iMac, or `particle serial wifi`). Robots stay on Fannin_WIFI.
+Memory: project-b14-wifi-dnssec-usb-recovery.
+
+2026-10-13 (cont.) — all three robots' resolvers fixed; the DECK-003 calibrator Argon re-provisioned to Fannin_WIFI
+- B07 had the same resolved DNSSEC failure PERSISTENTLY: on WiFi + Tailscale but no BIMS heartbeat for 34 h and
+  76,363 daemon warnings today. R04 intermittent. /etc/systemd/resolved.conf.d/90-bims-no-dnssec.conf now on
+  B07 and R04 too (remount rw/ro) + resolved/ot2-bridge restarts; heartbeats 3–9 s old on all three.
+  NOTE: R04's daemon was restarted while reagent run 15918f3f (started 17:03Z) was executing — robot-server
+  owns the run so it was untouched, but the check-for-live-run step was skipped; done on B07 only.
+- Calibrator Argon (e00fce68fc3b72…, DECK-003) was blinking green: its saved network was Brevitest_WIFI (same
+  morning change as B14). Listening-mode serial commands ('w','i') do NOT work on this firmware — the app loop
+  keeps running and answers 'C', eating Device OS's serial prompt. Fix path: Argon USB → lab iMac, particle-cli
+  3.43.0 (newest with engines.node >=16; installed under nvm node v20.20.2 — latest CLI needs Node 22), then
+  `particle wifi clear` + `wifi add --file` + it auto-joined: `wifi list` → Fannin_WIFI current, ch 11, −53 dBm.
+  No cloud login needed for the USB wifi commands (the stored cloud token is expired; `particle usb list` 401s).
+  Script left on B14 at /data/ot2-bridge/argon-wifi.py (listening-mode serial route; not usable on this firmware).
+
+================================================================================
+2026-10-13 — fix/robot-pages-heartbeat-health — /opentrons hub, devices list, device page, new-run page: "offline" came from a dead field
+================================================================================
+Report: "why does the robot say offline when it is currently running and on". Two different "Offline"s:
+the fill/connectivity pages read the bridge heartbeat (health.ts, stale > 60 s) — those were truthfully
+stale today while B07/B14's daemons could not reach BIMS (DNS, fixed earlier) — but the legacy robot pages
+rendered OpentronsRobot.lastHealthOk / lastHealthAt, which nothing writes any more (the server-side poller
+was retired with the Tailscale move); all three robot records have the field unset, so those pages said
+"offline" for every robot forever. (The /opentrons-clone pages have the same symptom for another reason:
+server-side fetch to the LAN IP from Vercel — out of scope here.)
+Fix: health.ts gains heartbeatFields(RobotHealth) → { lastHealthOk, lastHealthAt, healthStatus, healthLabel,
+healthDetail } derived from getRobotsHealth(); the four +page.server.ts loaders spread it in place of the dead
+fields (same prop names, so the .svelte pages keep working); the hub shows "- busy"/"- offline", the devices
+list shows the heartbeat label (Ready/Running/Busy/Engine hung) with the detail as a tooltip, new-run shows
+Running for a busy robot. health.test.ts (4 cases) added. npm run check 16 = baseline. Not committed.

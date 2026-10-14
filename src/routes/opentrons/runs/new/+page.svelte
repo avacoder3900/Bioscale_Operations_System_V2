@@ -127,7 +127,9 @@
 						<span class="text-xs text-[var(--color-tron-text-secondary)]">{robot.ip}</span>
 					</div>
 					{#if !robot.lastHealthOk}
-						<span class="text-xs text-red-400">Offline</span>
+						<span class="text-xs text-red-400" title={robot.healthDetail}>Offline</span>
+					{:else if robot.healthStatus === 'busy'}
+						<span class="text-xs text-amber-300" title={robot.healthDetail}>{robot.healthLabel}</span>
 					{/if}
 				</button>
 			{/each}

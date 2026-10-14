@@ -1,6 +1,7 @@
 import { redirect } from '@sveltejs/kit';
 import { connectDB, OpentronsRobot } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
+import { getRobotsHealth, heartbeatFields } from '$lib/server/opentrons/health';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
@@ -8,6 +9,9 @@ export const load: PageServerLoad = async ({ locals }) => {
 	requirePermission(locals.user, 'manufacturing:read');
 	await connectDB();
 	const robots = await OpentronsRobot.find({ isActive: true }).lean();
+	// Live status from the bridge heartbeat (health.ts) — the robot record's
+	// lastHealthOk is a dead field, see heartbeatFields().
+	const health = await getRobotsHealth(robots.map((r: any) => ({ _id: String(r._id), name: r.name }))).catch(() => ({}) as Record<string, any>);
 
 	const protocolRecords: any[] = [];
 	for (const robot of robots) {
@@ -32,7 +36,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 			robotId: r._id,
 			name: r.name ?? '',
 			ip: r.ip ?? '',
-			lastHealthOk: r.lastHealthOk ?? false
+			...heartbeatFields(health[String(r._id)])
 		})),
 		protocolRecords
 	};
