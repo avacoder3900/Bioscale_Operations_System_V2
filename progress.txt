@@ -19755,3 +19755,10 @@ only):
 No data or action changes. Built in worktree ../Bioscale_V2-wt-well-tracker from
 origin/master 6c1d3f4b. svelte-kit sync + svelte-check: 14 errors = the pre-existing
 baseline, none in the touched file.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-nf3p0e7uc-brevitest.vercel.app
+Source: branch feat/well-tracker-below-matrix @ commit 5850f8ba
+Retrieve this exact code: git checkout feat/well-tracker-below-matrix at commit 5850f8ba
+  (or: git log feat/well-tracker-below-matrix --oneline to find it if the branch has since moved on)
+What this deployment is for: Well tracker on a running robot panel — tapping a well opens the
+  issue picker below the deck (full width) instead of in a cramped right-hand column.
