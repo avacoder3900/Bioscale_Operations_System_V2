@@ -113,3 +113,33 @@ export async function getRobotsHealth(
 	);
 	return out;
 }
+
+/**
+ * The legacy robot pages (/opentrons hub, devices list, device page, new run)
+ * used to render `OpentronsRobot.lastHealthOk / lastHealthAt`, fields written
+ * by a server-side poller that was retired with the move to Tailscale — so every
+ * robot showed "offline" forever (2026-10-13). They now derive the same fields
+ * from the daemon heartbeat, the one source every other surface uses.
+ */
+export interface HeartbeatFields {
+	/** true = bridge heard within HEARTBEAT_STALE_MS and the robot server answered it. */
+	lastHealthOk: boolean;
+	/** ISO time of the newest heartbeat, or null if none was ever received. */
+	lastHealthAt: string | null;
+	healthStatus: RobotHealthStatus;
+	healthLabel: string;
+	healthDetail: string;
+}
+
+export function heartbeatFields(h: RobotHealth | undefined): HeartbeatFields {
+	if (!h) {
+		return { lastHealthOk: false, lastHealthAt: null, healthStatus: 'offline', healthLabel: 'Offline', healthDetail: 'No heartbeat' };
+	}
+	return {
+		lastHealthOk: h.bridgeOnline && h.serverOk,
+		lastHealthAt: h.lastBeatMsAgo == null ? null : new Date(Date.now() - h.lastBeatMsAgo).toISOString(),
+		healthStatus: h.status,
+		healthLabel: h.label,
+		healthDetail: h.detail
+	};
+}
