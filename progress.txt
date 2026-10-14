@@ -19724,3 +19724,11 @@ none in touched files); vite build → client + server bundles built; the adapte
 with a Node heap OOM on this machine (earlier sessions hit EBUSY at the same step —
 a local artefact, not a code problem; Vercel does the real build). Built in worktree
 ../Bioscale_V2-wt-robots-inline from origin/master 6021243d.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-h36tpinqp-brevitest.vercel.app
+Source: branch feat/robots-inline-setup @ commit 451bf319
+Retrieve this exact code: git checkout feat/robots-inline-setup at commit 451bf319
+  (or: git log feat/robots-inline-setup --oneline to find it if the branch has since moved on)
+What this deployment is for: Robots page with fill setup inside each robot's panel
+  (Start wax / Start reagent open the wizard in place; no page change) — for the
+  user to try before any merge to master.
