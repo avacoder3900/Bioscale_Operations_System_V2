@@ -20507,3 +20507,67 @@ sweep_progress), device monitor mode (spu.monitoring, /spu/monitor, Findings tab
 /api/cron/device-monitor-review) and the device_logs 1-year TTL. Firmware v102/v103 are not
 flashed yet; the pages work against existing data and the new webhooks are idle until a v102+
 unit publishes. Set CRON_SECRET and ANTHROPIC_API_KEY in Vercel before the first 07:30 UTC cron.
+
+================================================================================
+2026-10-15 — feat/consumer-ownership — Consumer cartridge ownership: BIMS side of the bioscale-app link (claims, clinics, invites, ownership report)
+================================================================================
+Goal: the consumer app (bioscale-app, same Atlas db `bioscale`) must show a person only the
+cartridges that are theirs, clinic staff must see their patients' results without ever
+touching BIMS, an account may claim a cartridge that was never shipped to it, and cartridges
+get an owner by being scanned with the phone camera in the app. Contract for both repos:
+docs/CONSUMER-OWNERSHIP.md (new).
+
+Design in one line: ownership is its OWN collection written by BIMS only — never a field on
+cartridge_records (sacred; the app reads it with the raw driver; brevitest-cloud owns the
+run-side fields). One open row per cartridge via partial unique index, same shape as custody.
+
+New models (src/lib/server/db/models, registered in index.ts):
+- cartridge-ownership.ts  → `cartridge_ownership` {cartridgeId, accountId|null, customerId|null,
+  subjectId|null, source shipment|claim|device|operator, matchedShipment, open, claimedBy/At,
+  releasedBy/At/Reason}. accountId = app_users._id (`provider:sub`), never an email.
+- customer-account.ts     → `customer_accounts` customer↔app account with role admin|staff|member.
+- consumer-invite.ts      → `consumer_invites` (sha256 token hash, 7-day expiry); separate from
+  invite_tokens, which make BIMS users.
+- consumer-claim-attempt.ts → `consumer_claim_attempts`, TTL 24 h, for the 30/hour rate limit.
+- app-user.ts, app-subject.ts → strict:false READ-ONLY mirrors of the app's `app_users` and
+  `subjects` (patient names are PHI; BIMS only labels the DHR card with them).
+
+Service: src/lib/server/consumer/ownership.ts. Pure `claimEligibility()` (unit-tested, 8 tests):
+refuse not-found / voided-scrapped-cancelled / QC cartridge (ShippingLot.qaqcReleases or
+usedForTestFill) / research `experiment` unless an `internal` customer / already open row /
+guessable sequential id (CART-000123) without a shipment match. UUID ids never need a shipment
+match (the "never shipped is fine" decision) — the match is RECORDED on the row and unmatched
+claims surface on the report. Also: claim (dup-key → already_owned), release, assignSubject,
+ownershipForShipment (ship hook), createInvite/acceptInvite (email must match), customerIdsFor.
+
+Consumer API (src/routes/api/consumer/*, auth = new CONSUMER_API_KEY via
+src/lib/server/consumer/api-auth.ts, timing-safe like the agent key, separate so it rotates
+alone): GET cartridges/[id] (safe preview: assay, expiry, stage, owned-but-never-by-whom,
+ownedByYou, eligible+reason) · POST claims · POST claims/release · POST claims/assign ·
+POST invites/accept · POST/GET invites (clinic admins invite colleagues from the app). Every
+write → audit_log.
+
+Hooks and UI:
+- shipping/+page.server.ts addCartridgeToPackage → ownershipForShipment(): customer with ONE
+  active app account → personal row; several (a clinic) → customer-scoped row with no patient
+  (the app's "unassigned" bin); none → no row.
+- customers/[id]: "App access" card — linked accounts (labelled from app_users), pending
+  invites, create invite (link shown once, `${BIOSCALE_APP_URL}/invite/<token>`), revoke
+  link/invite. Actions inviteApp / revokeInvite / revokeApp (customer:write).
+- cartridge-admin/dhr/[cartridgeId]: "Consumer ownership" card (current row + history) with
+  operator Release (reason required, cartridgeAdmin:write) and a link to the report.
+- cartridge-admin/ownership (new): report of open rows; default filter = claims with no
+  matching shipment (the mis-claim review queue).
+- .env.example: CONSUMER_API_KEY, BIOSCALE_APP_URL. Both must be set in Vercel for the
+  consumer app to claim anything — the app side carries BIMS_BASE_URL + BIMS_CONSUMER_API_KEY.
+
+Not touched: cartridge_records schema, hooks.server.ts, permissions registry (reuses
+customer:*/cartridgeAdmin:*/shipping:*).
+
+Checks: svelte-check 14 errors = pre-existing baseline (assembly/[sessionId], magnetometer,
+r2.ts, research-proxy, AskBimsWidget), 0 in new/changed files. vitest unit:
+src/lib/server/consumer/ownership.test.ts 8/8.
+
+Counterpart: bioscale-app branch feat/cartridge-ownership (scan page with camera +
+zxing-wasm, Patients page, invite accept, ownership-scoped results, RESULTS_SCOPE=all escape
+hatch for UI testers).

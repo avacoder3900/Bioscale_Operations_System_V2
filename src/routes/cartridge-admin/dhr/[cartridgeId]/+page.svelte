@@ -1,5 +1,7 @@
 <script lang="ts">
-	let { data } = $props();
+	import { enhance } from '$app/forms';
+
+	let { data, form } = $props();
 
 	let activePhaseFilter = $state('all');
 	let selectedPhoto = $state<any>(null);
@@ -171,6 +173,80 @@
 			</div>
 		{/if}
 	</div>
+
+	<!-- Consumer-app ownership (docs/CONSUMER-OWNERSHIP.md) -->
+	{#if data.ownership.current || data.ownership.history.length > 0}
+		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-4">
+			<div class="mb-3 flex items-center justify-between">
+				<h2 class="text-xs font-semibold uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Consumer ownership</h2>
+				<a href="/cartridge-admin/ownership" class="text-xs text-[var(--color-tron-cyan)] hover:underline">All ownership &rarr;</a>
+			</div>
+			{#if form?.error}
+				<p class="mb-2 text-sm text-[var(--color-tron-red)]">{form.error}</p>
+			{:else if form?.success}
+				<p class="mb-2 text-sm text-[var(--color-tron-green)]">{form.message}</p>
+			{/if}
+			{#if data.ownership.current}
+				{@const o = data.ownership.current}
+				<dl class="grid gap-3 text-sm sm:grid-cols-3">
+					<div>
+						<dt class="text-[var(--color-tron-text-secondary)]">Account</dt>
+						<dd class="text-[var(--color-tron-text)]">{o.accountEmail ?? (o.customerName ? 'clinic-owned' : '—')}{#if o.accountName}<span class="block text-xs text-[var(--color-tron-text-secondary)]">{o.accountName}</span>{/if}</dd>
+					</div>
+					<div>
+						<dt class="text-[var(--color-tron-text-secondary)]">Customer</dt>
+						<dd class="text-[var(--color-tron-text)]">{o.customerName ?? '—'}</dd>
+					</div>
+					<div>
+						<dt class="text-[var(--color-tron-text-secondary)]">Patient</dt>
+						<dd class="text-[var(--color-tron-text)]">{o.subjectName ?? (o.subjectId ? o.subjectId : o.customerName ? 'unassigned' : 'account holder')}</dd>
+					</div>
+					<div>
+						<dt class="text-[var(--color-tron-text-secondary)]">Source</dt>
+						<dd class="text-[var(--color-tron-text)]">
+							{o.source}
+							{#if o.source === 'claim'}
+								<span class={o.matchedShipment ? 'text-[var(--color-tron-green)]' : 'text-[var(--color-tron-yellow)]'}>
+									· {o.matchedShipment ? 'shipment matched' : 'no matching shipment'}
+								</span>
+							{/if}
+						</dd>
+					</div>
+					<div>
+						<dt class="text-[var(--color-tron-text-secondary)]">Since</dt>
+						<dd class="text-[var(--color-tron-text)]">{o.claimedAt ? new Date(o.claimedAt).toLocaleString() : '—'}{#if o.claimedBy}<span class="block text-xs text-[var(--color-tron-text-secondary)]">by {o.claimedBy}</span>{/if}</dd>
+					</div>
+				</dl>
+				<form method="POST" action="?/releaseOwnership" use:enhance class="mt-3 flex flex-wrap items-end gap-2">
+					<div class="min-w-[16rem] flex-1">
+						<label class="mb-1 block text-xs text-[var(--color-tron-text-secondary)]" for="releaseNote">Release ownership (reason required)</label>
+						<input id="releaseNote" name="note" required placeholder="e.g. claimed by the wrong account" class="tron-input w-full" />
+					</div>
+					<button type="submit" class="rounded border border-[var(--color-tron-red)] px-3 py-2 text-sm text-[var(--color-tron-red)] hover:bg-[var(--color-tron-red)]/10">Release</button>
+				</form>
+			{:else}
+				<p class="text-sm text-[var(--color-tron-text-secondary)]">No open ownership. Previously owned {data.ownership.history.length} time{data.ownership.history.length === 1 ? '' : 's'}.</p>
+			{/if}
+			{#if data.ownership.history.length > 1 || (data.ownership.history.length === 1 && !data.ownership.current)}
+				<details class="mt-3">
+					<summary class="cursor-pointer text-xs text-[var(--color-tron-text-secondary)]">History ({data.ownership.history.length})</summary>
+					<ul class="mt-2 space-y-1 text-xs text-[var(--color-tron-text-secondary)]">
+						{#each data.ownership.history as h (h.id)}
+							<li>
+								{h.claimedAt ? new Date(h.claimedAt).toLocaleString() : '—'} · {h.source} ·
+								{h.accountEmail ?? h.customerName ?? '—'}
+								{#if h.releasedAt}
+									· released {new Date(h.releasedAt).toLocaleString()} ({h.releaseReason}{h.releaseNote ? `: ${h.releaseNote}` : ''}{h.releasedBy ? ` by ${h.releasedBy}` : ''})
+								{:else}
+									· <span class="text-[var(--color-tron-green)]">open</span>
+								{/if}
+							</li>
+						{/each}
+					</ul>
+				</details>
+			{/if}
+		</div>
+	{/if}
 
 	<!-- Timing metrics (informational — cool time for wax, seal time for reagent) -->
 	{#if data.timings?.cool || data.timings?.seal}
