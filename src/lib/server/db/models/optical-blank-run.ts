@@ -31,6 +31,8 @@ const opticalBlankRunSchema = new Schema(
 		numberOfReadings: Number,
 		checksum: Number,
 		readings: Schema.Types.Mixed,
+		/** v101+ stage travel check parsed from the record tail (TASK-201). */
+		stageCheck: Schema.Types.Mixed,
 		publishedAt: Date,
 		receivedAt: { type: Date, default: () => new Date() }
 	},

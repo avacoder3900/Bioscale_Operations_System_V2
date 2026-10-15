@@ -1,6 +1,6 @@
 /**
  * Auto-enter validation (SPU-INV-12): recording ANY validation test result
- * (magnetometer, thermocouple, optics) flips the unit to 'validating' — the
+ * (screen, magnetometer, thermocouple, assay run; optics historically) flips the unit to 'validating' — the
  * evidence state follows the evidence, no manual status bookkeeping.
  *
  * Flips from draft / assembling / servicing (Jacob explicitly wants a test
@@ -15,7 +15,7 @@ const AUTO_FLIP_FROM = ['draft', 'assembling', 'servicing'];
 
 export async function autoEnterValidating(
 	spuId: string,
-	instrument: 'magnetometer' | 'thermocouple' | 'optics',
+	instrument: 'magnetometer' | 'thermocouple' | 'optics' | 'screen' | 'assay_run',
 	actor?: { _id?: string; username?: string }
 ): Promise<{ flipped: boolean; from?: string }> {
 	try {

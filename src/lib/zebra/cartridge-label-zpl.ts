@@ -61,10 +61,13 @@ export const ZT230_2X_075_DEFAULTS: ZebraLabelConfig = {
 	// Jacob measured QR left margins 1.88 mm (left label) vs 2.71 mm (right):
 	// col 1 origin sits 7 dots right of dot 0; pitch stays 188 → gap 31 dots.
 	columnGapIn: 0.153,
-	offsetX: 7,
-	// ^LT-8 clipped the A/B/C row above top-of-form; keep TOF and put the
-	// marks 1 mm down instead (see abcTop).
-	offsetY: 0,
+	// Re-dialled 2026-09-22 on a fresh roll (Jacob at the printer): the whole
+	// design sat 2.91 mm right / 1.78 mm low of the die-cut → 23 dots left,
+	// 14 dots up from the 2026-08-18 values (x +7, y 0). Negative x goes out
+	// as ^LS16, negative y as ^LT-14; alignment rows landed on the die-cut of
+	// both columns and held over a 20-label check.
+	offsetX: -16,
+	offsetY: -14,
 	qrMagnification: 3,
 	qrEcc: 'M',
 	abcMarks: true,
@@ -108,6 +111,14 @@ export interface LabelGeometry {
 	textTop: number;
 	textFont: number;
 	textLines: number;
+	/** Left edge of the UUID text block (dots from the label origin). */
+	textLeft: number;
+	/** Fixed advance per UUID character (dots, may be fractional). */
+	charPitch: number;
+	/** Narrower advance for '-' so it sits centred between its neighbours. */
+	hyphenPitch: number;
+	/** Extra right nudge applied to '-' only (dots). */
+	hyphenNudge: number;
 }
 
 const round = (n: number) => Math.round(n);
@@ -134,29 +145,43 @@ export function computeGeometry(cfg: ZebraLabelConfig): LabelGeometry {
 	const qrSize = qrModulesForUuid(cfg.qrEcc) * cfg.qrMagnification;
 	const qrCenterX = round(0.347 * dpi);
 	const qrLeft = Math.max(0, qrCenterX - Math.floor(qrSize / 2));
-	const qrTop = cfg.abcMarks ? abcTop + abcFont + 1 : round(0.04 * dpi);
+	// QR lifted 0.5 mm (4 dots @203) into the ABC→QR gap to buy the UDI text
+	// one more font notch (Jacob 2026-09-22). The marks' descenders don't
+	// reach that far, so nothing overlaps.
+	const qrLift = round(0.02 * dpi);
+	const qrTop = cfg.abcMarks ? abcTop + abcFont + 1 - qrLift : round(0.04 * dpi);
 
 	// Two text lines below the QR, sized to whatever height is left. If the
 	// QR is so large there is no room, the text is dropped rather than
 	// overrunning the label edge (which would print onto the next label).
-	// UUID text: ^A0 at 10 dots (0.05"), two lines, LEFT-ALIGNED at the QR's
-	// left edge. ^A0 is proportional, so centring made two different UUIDs
-	// start at visibly different x; left-aligning pins the start on every
-	// label (Jacob 2026-08-18). The text is an internal aid — the QR is what
-	// gets scanned — so 10 dots is deliberate ("that udi can be small").
+	// UUID text: ^A0 at 12 dots (0.06"), two lines of 18 characters. Every
+	// character is placed at its own fixed-pitch x (7.3 dots @203) rather than
+	// as one ^FB string: ^A0 is proportional and ZPL has no tracking command,
+	// so digits bled into each other and two UUIDs started at visibly
+	// different x. Fixed pitch pins every glyph to the same spot on every
+	// label and adds ~1.5 dots of air between digits. The '-' glyph is narrow,
+	// so it gets a 6.5-dot cell nudged 0.5 right to sit centred (Jacob
+	// 2026-09-22, dialled in over six prints; was 10 dots / one ^FB per line
+	// on 2026-08-18). The block starts 3 dots left of the QR so the last
+	// character of an all-digit line still ends inside the 150-dot label.
 	const textLines = cfg.humanReadable ? 2 : 0;
 	const textTop = qrTop + qrSize + 2;
 	const remaining = labelH - textTop - 2;
-	const textFont = round(0.05 * dpi);
+	const textFont = round(0.06 * dpi);
 	const fits = textLines > 0 && remaining >= textLines * round(textFont * 1.05);
 	const finalTextLines = fits ? textLines : 0;
+	const textLeft = Math.max(0, qrLeft - round(0.015 * dpi));
+	const charPitch = 0.036 * dpi;
+	const hyphenPitch = 0.032 * dpi;
+	const hyphenNudge = 0.0025 * dpi;
 
 	return {
 		labelW, labelH, gap, printWidth,
 		labelLength: labelH,
 		qrSize, qrLeft, qrTop,
 		abcTop, abcFont, abcLeft, abcSpacing,
-		textTop, textFont, textLines: finalTextLines
+		textTop, textFont, textLines: finalTextLines,
+		textLeft, charPitch, hyphenPitch, hyphenNudge
 	};
 }
 
@@ -209,12 +234,18 @@ function labelFields(code: string, cx: number, cfg: ZebraLabelConfig, g: LabelGe
 		const half = Math.ceil(code.length / 2);
 		const lines = [code.slice(0, half), code.slice(half)];
 		const lineH = round(g.textFont * 1.05);
+		const font = `^A0N,${g.textFont},${round(g.textFont * 0.9)}`;
 		for (let i = 0; i < lines.length; i++) {
-			// Left-aligned at the QR's left edge (^FB …,L) so the start x is the
-			// same on every label regardless of the UUID's character widths.
-			out.push(
-				`${fo(ox + g.qrLeft, oy + g.textTop + i * lineH)}^FB${g.labelW - g.qrLeft},1,0,L,0^A0N,${g.textFont},${round(g.textFont * 0.9)}^FD${lines[i]}^FS`
-			);
+			// One field per character at a fixed pitch (see computeGeometry) so
+			// every glyph lands at the same x on every label and digits never
+			// run together. Hyphens get a narrower cell.
+			const y = oy + g.textTop + i * lineH;
+			let x = ox + g.textLeft;
+			for (const ch of lines[i]) {
+				const hy = ch === '-';
+				out.push(`${fo(x + (hy ? g.hyphenNudge : 0), y)}${font}^FD${ch}^FS`);
+				x += hy ? g.hyphenPitch : g.charPitch;
+			}
 		}
 	}
 	return out.join('');

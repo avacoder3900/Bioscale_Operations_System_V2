@@ -137,9 +137,12 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 			assignmentCustomerId: s.assignment?.customer?._id ?? null,
 			qcStatus: s.qcStatus ?? 'pending',
 			validation: {
+				screen: s.validation?.screen ?? null,
 				magnetometer: s.validation?.magnetometer ?? null,
 				thermocouple: s.validation?.thermocouple ?? null,
+				assay_run: s.validation?.assay_run ?? null,
 				lux: s.validation?.lux ?? null,
+				// LEGACY (2026-10-13): optics is no longer a gate; shown for history only.
 				spectrophotometer: s.validation?.spectrophotometer ?? null,
 				status: s.validation?.status ?? 'pending'
 			},

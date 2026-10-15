@@ -40,8 +40,11 @@ const deviceLogSchema = new Schema({
 deviceLogSchema.index({ deviceId: 1, uploadedAt: -1 });
 deviceLogSchema.index({ hasCrash: 1, uploadedAt: -1 });
 deviceLogSchema.index({ sessionId: 1 }, { unique: true });
-// TTL: auto-delete after 30 days
-deviceLogSchema.index({ uploadedAt: 1 }, { expireAfterSeconds: 2592000 });
+// TTL: auto-delete after 1 year. The firmware log is the one diagnostic source nothing can regenerate,
+// and it is the smallest of the diagnostic collections (device_events / webhook_logs stay at 30 days).
+// Changing this value needs a collMod on the live index (done 2026-10-14 for the 1-year value);
+// mongoose autoIndex will not alter an existing TTL.
+deviceLogSchema.index({ uploadedAt: 1 }, { expireAfterSeconds: 365 * 24 * 3600 });
 
 applyImmutableMiddleware(deviceLogSchema);
 

@@ -1,10 +1,42 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
+	import { enhance } from '$app/forms';
 	import { TronCard, TronBadge, TronButton } from '$lib/components/ui';
 	import { getCheckpointName } from '$lib/checkpoint-codes';
 
-	let { data } = $props();
+	let { data, form } = $props();
+
+	// Monitor mode (firmware v103 + daily Claude review)
+	let monitorBusy = $state(false);
+	let showMonitorForm = $state(false);
+	let reviewBusy = $state(false);
+	function monitorFlagText(m: { flagState: string | null; flag: number | null; flagError: string | null }): { text: string; color: string } {
+		switch (m.flagState) {
+			case 'synced':
+				return m.flag === 1
+					? { text: 'Device uploading logs', color: 'var(--color-tron-green)' }
+					: { text: 'Device flag clear', color: 'var(--color-tron-text-secondary)' };
+			case 'offline': return { text: 'Pending — device offline', color: 'var(--color-tron-text-secondary)' };
+			case 'unsupported': return { text: 'Firmware < 103 — flag not pushed', color: 'var(--color-tron-yellow, #fbbf24)' };
+			case 'unlinked': return { text: 'No device linked', color: 'var(--color-tron-text-secondary)' };
+			case 'error': return { text: m.flagError ?? 'Sync error', color: 'var(--color-tron-red, #ef4444)' };
+			default: return { text: 'Not synced yet', color: 'var(--color-tron-text-secondary)' };
+		}
+	}
+	function verdictVariant(s: string | null): 'info' | 'success' | 'warning' | 'error' | 'neutral' {
+		switch (s) {
+			case 'healthy': return 'success';
+			case 'watch': return 'warning';
+			case 'suspect': case 'error': return 'error';
+			default: return 'neutral';
+		}
+	}
+	let reviews = $derived(data.findings.filter((f: any) => f.kind === 'daily_review'));
+	let findingsByReview = $derived(
+		data.findings.filter((f: any) => f.kind === 'review_finding').reduce((acc: Record<string, any[]>, f: any) => { (acc[f.reviewId] ??= []).push(f); return acc; }, {})
+	);
+	let openFindingCount = $derived(data.findings.filter((f: any) => f.kind === 'review_finding' && !f.resolvedAt).length);
 
 	let activeTab = $state('timeline');
 	let dateFrom = $state(data.dateRange?.from ?? '');
@@ -167,11 +199,68 @@
 					</span>
 				{/if}
 			{/if}
+			<a href="/spu/monitor" class="tron-text-muted hover:underline text-sm" style="color: var(--color-tron-cyan);">Monitor fleet</a>
 			<a href="/spu/{data.spu.id}" class="tron-text-muted hover:underline text-sm" style="color: var(--color-tron-cyan);">
 				← Back to SPU
 			</a>
 		</div>
 	</div>
+
+	{#if data.particleDeviceId}
+		<!-- Monitor mode -->
+		<TronCard>
+			<div class="flex flex-wrap items-center gap-3">
+				<span class="tron-text-muted text-xs font-medium uppercase">Monitor mode:</span>
+				<TronBadge variant={data.monitoring.enabled ? (data.monitoring.role === 'control' ? 'info' : 'warning') : 'neutral'}>
+					{data.monitoring.enabled ? `ON — ${data.monitoring.role}` : 'OFF'}
+				</TronBadge>
+				{#if data.monitoring.enabled}
+					<span class="text-xs" style="color: {monitorFlagText(data.monitoring).color};">{monitorFlagText(data.monitoring).text}</span>
+					{#if data.monitoring.reason}<span class="tron-text-muted text-xs">— {data.monitoring.reason}</span>{/if}
+					{#if data.monitoring.lastReviewStatus}
+						<span class="tron-text-muted text-xs">Last review:</span>
+						<TronBadge variant={verdictVariant(data.monitoring.lastReviewStatus)}>{data.monitoring.lastReviewStatus}</TronBadge>
+					{/if}
+				{/if}
+				<div class="ml-auto flex items-center gap-2">
+					{#if data.monitoring.enabled}
+						<form method="POST" action="?/reviewNow" use:enhance={() => { reviewBusy = true; return async ({ update }) => { reviewBusy = false; await update(); }; }}>
+							<TronButton type="submit" disabled={reviewBusy} style="min-height: 38px;">{reviewBusy ? 'Reviewing…' : 'Review now'}</TronButton>
+						</form>
+						<form method="POST" action="?/resyncMonitor" use:enhance={() => { monitorBusy = true; return async ({ update }) => { monitorBusy = false; await update(); }; }}>
+							<TronButton type="submit" disabled={monitorBusy} style="min-height: 38px;">Resync flag</TronButton>
+						</form>
+						<form method="POST" action="?/setMonitor" use:enhance={() => { monitorBusy = true; return async ({ update }) => { monitorBusy = false; await update(); }; }}>
+							<input type="hidden" name="enabled" value="0" />
+							<TronButton type="submit" disabled={monitorBusy} style="min-height: 38px;">Turn off</TronButton>
+						</form>
+					{:else if !showMonitorForm}
+						<TronButton type="button" variant="primary" onclick={() => (showMonitorForm = true)} style="min-height: 38px;">Turn on</TronButton>
+					{/if}
+				</div>
+			</div>
+			{#if showMonitorForm && !data.monitoring.enabled}
+				<form method="POST" action="?/setMonitor" use:enhance={() => { monitorBusy = true; return async ({ result, update }) => { monitorBusy = false; if (result.type === 'success') showMonitorForm = false; await update(); }; }} class="mt-3 flex flex-wrap items-center gap-3">
+					<input type="hidden" name="enabled" value="1" />
+					<select name="role" class="tron-input" style="min-height: 38px;">
+						<option value="suspect">Suspect (reviewed daily)</option>
+						<option value="control">Control (reference numbers for the suspects)</option>
+					</select>
+					<input name="reason" type="text" class="tron-input flex-1" placeholder="Why is this unit being watched?" maxlength="500" style="min-height: 38px;" />
+					<TronButton type="submit" variant="primary" disabled={monitorBusy} style="min-height: 38px;">{monitorBusy ? 'Saving…' : 'Enable'}</TronButton>
+					<TronButton type="button" onclick={() => (showMonitorForm = false)} style="min-height: 38px;">Cancel</TronButton>
+				</form>
+			{/if}
+			{#if form?.error}
+				<p class="text-xs mt-2" style="color: var(--color-tron-red, #ef4444);">{form.error}</p>
+			{:else if form?.review}
+				<p class="text-xs mt-2"><span class="font-medium">Review:</span> {form.review.status} — {form.review.summary} ({form.review.findingCount} finding(s){form.review.costUsd != null ? `, $${form.review.costUsd}` : ''})</p>
+			{:else if form?.flag}
+				<p class="tron-text-muted text-xs mt-2">Flag sync: {form.flag.state}{form.flag.state === 'error' ? ` — ${form.flag.message}` : ''}</p>
+			{/if}
+			<p class="tron-text-muted text-xs mt-2">While on, firmware v103 uploads the session log after every test, screen, error and boot (no 60 s polling). The 07:30 UTC review compares this unit with the control units and files findings in the Findings tab.</p>
+		</TronCard>
+	{/if}
 
 	{#if !data.particleDeviceId}
 		<TronCard>
@@ -237,7 +326,8 @@
 				{ id: 'logs', label: 'Session Logs', count: data.logs.length },
 				{ id: 'crashes', label: 'Crashes', count: data.crashes.length },
 				{ id: 'webhooks', label: 'Webhook Logs', count: data.webhookLogs.length },
-				{ id: 'events', label: 'Events', count: data.events.length }
+				{ id: 'events', label: 'Events', count: data.events.length },
+				{ id: 'findings', label: 'Findings', count: openFindingCount }
 			] as tab}
 				<button
 					onclick={() => activeTab = tab.id}
@@ -608,6 +698,59 @@
 								{/each}
 							</tbody>
 						</table>
+					</div>
+				{/if}
+			</TronCard>
+
+		<!-- ==================== FINDINGS TAB ==================== -->
+		{:else if activeTab === 'findings'}
+			<TronCard>
+				{#if reviews.length === 0}
+					<p class="tron-text-muted py-6 text-center text-sm">No reviews yet. Turn monitor mode on and press "Review now", or wait for the 07:30 UTC cron.</p>
+				{:else}
+					<div class="space-y-4">
+						{#each reviews as rv}
+							<div class="rounded border p-4" style="border-color: var(--color-tron-border);">
+								<div class="flex flex-wrap items-center gap-2">
+									<span class="font-mono text-sm">{rv.dayKey}</span>
+									<TronBadge variant={verdictVariant(rv.status)}>{rv.status}</TronBadge>
+									<span class="tron-text-muted text-xs">{rv.model ?? ''}{rv.costUsd != null ? ` · $${rv.costUsd}` : ''}{rv.inputCounts ? ` · ${rv.inputCounts.logLines ?? 0} log lines, ${rv.inputCounts.records ?? 0} runs, ${rv.inputCounts.webhooks ?? 0} hooks, ${rv.inputCounts.crashes ?? 0} crashes` : ''}</span>
+								</div>
+								<p class="text-sm mt-2">{rv.summary}</p>
+								{#if findingsByReview[rv._id]?.length}
+									<div class="mt-3 space-y-2">
+										{#each findingsByReview[rv._id] as f}
+											<div class="rounded border p-3" style="border-color: var(--color-tron-border); opacity: {f.resolvedAt ? 0.6 : 1};">
+												<div class="flex flex-wrap items-center gap-2">
+													<TronBadge variant={f.severity === 'error' ? 'error' : f.severity === 'warning' ? 'warning' : 'info'}>{f.severity}</TronBadge>
+													<span class="font-mono text-xs">{f.category}</span>
+													<span class="font-medium">{f.title}</span>
+													<span class="tron-text-muted text-xs">confidence {Math.round((f.confidence ?? 0) * 100)}%</span>
+													{#if f.resolvedAt}<TronBadge variant="neutral">resolved</TronBadge>{:else if f.acknowledgedAt}<TronBadge variant="neutral">acknowledged</TronBadge>{/if}
+													<div class="ml-auto flex gap-2">
+														{#if !f.acknowledgedAt}
+															<form method="POST" action="?/ackFinding" use:enhance><input type="hidden" name="findingId" value={f._id} /><TronButton type="submit" style="min-height: 32px;">Acknowledge</TronButton></form>
+														{/if}
+														{#if !f.resolvedAt}
+															<form method="POST" action="?/ackFinding" use:enhance><input type="hidden" name="findingId" value={f._id} /><input type="hidden" name="resolve" value="1" /><TronButton type="submit" style="min-height: 32px;">Resolve</TronButton></form>
+														{/if}
+													</div>
+												</div>
+												<p class="text-sm mt-1">{f.detail}</p>
+												<p class="text-xs mt-1" style="color: var(--color-tron-green);">→ {f.recommendation}</p>
+												{#if f.evidence?.length}
+													<ul class="mt-2 space-y-1">
+														{#each f.evidence as e}
+															<li class="font-mono text-xs tron-text-muted">[{e.source}{e.at ? ` ${formatDate(e.at)}` : ''}] {e.text}</li>
+														{/each}
+													</ul>
+												{/if}
+											</div>
+										{/each}
+									</div>
+								{/if}
+							</div>
+						{/each}
 					</div>
 				{/if}
 			</TronCard>

@@ -57,10 +57,14 @@
 
 	let { data, form }: Props = $props();
 
+	// Every step key ever stored on a run (2026-10-13: screen + assay_run joined,
+	// optical_confirmation retired but still rendered on old runs).
 	const STEP_LABELS: Record<string, string> = {
+		screen: 'Screen',
 		magnetometer: 'Magnetometer',
 		thermocouple: 'Thermocouple',
-		optical_confirmation: 'Optical Confirmation'
+		assay_run: 'Assay Run',
+		optical_confirmation: 'Optical Confirmation (legacy)'
 	};
 
 	let run = $derived(data.run);
@@ -108,6 +112,7 @@
 	function sessionHref(sessionId: string): string {
 		const s = data.sessionById[sessionId];
 		if (s?.type === 'mag') return `/validation/magnetometer/${sessionId}`;
+		if (s?.type === 'screen') return `/validation/screen/${sessionId}`;
 		if (s?.type === 'spec') return `/validation/spectrophotometer/${sessionId}`;
 		return `/validation/thermocouple/${sessionId}`;
 	}
@@ -376,6 +381,14 @@
 											{:else if step === 'magnetometer'}
 												<a href="/validation/magnetometer?udi={encodeURIComponent(member.udi)}&runId={run._id}" class="text-xs text-[var(--color-tron-orange)] hover:underline">
 													{cell.status === 'not_started' || cell.status === 'in_progress' ? 'Run test →' : 'Run again →'}
+												</a>
+											{:else if step === 'screen'}
+												<a href="/validation/screen?udi={encodeURIComponent(member.udi)}" class="text-xs text-[var(--color-tron-orange)] hover:underline">
+													{cell.status === 'not_started' || cell.status === 'in_progress' ? 'Screen →' : 'Screen again →'}
+												</a>
+											{:else if step === 'assay_run'}
+												<a href="/validation/assay-run?udi={encodeURIComponent(member.udi)}" class="text-xs text-[var(--color-tron-orange)] hover:underline">
+													{cell.status === 'not_started' || cell.status === 'in_progress' ? 'Open →' : 'New group →'}
 												</a>
 											{:else if step === 'optical_confirmation'}
 												<a href="/validation/optical-confirmation?udi={encodeURIComponent(member.udi)}&runId={run._id}" class="text-xs text-[var(--color-tron-orange)] hover:underline">

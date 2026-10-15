@@ -122,12 +122,14 @@
 		return phase === 0 ? 'New device' : `Post-service #${phase}`;
 	}
 
-	// The modalities that gate release (VALIDATION_INSTRUMENTS). Optical
-	// confirmation (`spectrophotometer`) was banked 2026-10-06; `validation.lux`
-	// exists in the schema but is never run. Both are deliberately excluded.
+	// The four modalities that make up SPU validation (2026-10-13 pipeline:
+	// screen → magnetometer / thermocouple → assay-run group). `validation.lux`
+	// is never run and `spectrophotometer` is legacy — both deliberately excluded.
 	const VALIDATION_TESTS = [
+		{ key: 'screen', name: 'Screen', icon: '🩺' },
 		{ key: 'magnetometer', name: 'Magnetometer', icon: '🧲' },
-		{ key: 'thermocouple', name: 'Thermocouple', icon: '🌡️' }
+		{ key: 'thermocouple', name: 'Thermocouple', icon: '🌡️' },
+		{ key: 'assay_run', name: 'Assay Run', icon: '🧪' }
 	] as const;
 
 	function isPassing(status: string | undefined): boolean {
@@ -143,6 +145,7 @@
 			const barcode = result?.results?.cartridgeBarcode;
 			return barcode ? `/validation/optical-confirmation/${barcode}` : null;
 		}
+		if (key === 'assay_run') return result?.groupId ? `/validation/assay-run/${result.groupId}` : null;
 		return result?.sessionId ? `/validation/${key}/${result.sessionId}` : null;
 	}
 
@@ -160,6 +163,16 @@
 		return r == null ? '—' : r.toFixed(2);
 	}
 	function measurement(key: string, r: any): { value: string; label: string } | null {
+		if (key === 'screen') {
+			const c = r?.results?.counts;
+			return c ? { value: `${c.pass} / ${c.fail} / ${c.warn}`, label: 'pass / fail / warn' } : null;
+		}
+		if (key === 'assay_run') {
+			const l = r?.results?.lanes;
+			return l
+				? { value: `${fmtRatio(l.A?.beadIndexMean)} / ${fmtRatio(l.B?.beadIndexMean)} / ${fmtRatio(l.C?.beadIndexMean)}`, label: `bead index A / B / C${r?.results?.beadIndexCv != null ? ` · CV ${r.results.beadIndexCv.toFixed(1)}%` : ''}` }
+				: null;
+		}
 		if (key === 'magnetometer') {
 			const z = zRange(r?.results);
 			return z ? { value: z, label: 'gauss range across all wells' } : null;
@@ -948,14 +961,16 @@
 				</h3>
 				<span class="flex flex-wrap items-center gap-3 text-sm">
 					<a href="/validation" class="hover:underline" style="color: var(--color-tron-cyan);">Validation Hub ↗</a>
+					<a href="/validation/screen?udi={encodeURIComponent(data.spu.udi)}" class="tron-text-muted hover:text-[var(--color-tron-cyan)] hover:underline">Screen</a>
 					<a href="/validation/magnetometer" class="tron-text-muted hover:text-[var(--color-tron-cyan)] hover:underline">Run mag</a>
 					<a href="/validation/thermocouple" class="tron-text-muted hover:text-[var(--color-tron-cyan)] hover:underline">Run thermo</a>
 					<a href="/validation/bench" class="tron-text-muted hover:text-[var(--color-tron-cyan)] hover:underline">Run bench</a>
 					<a href="/validation/blank" class="tron-text-muted hover:text-[var(--color-tron-cyan)] hover:underline">Blank runs</a>
+					<a href="/validation/assay-run?udi={encodeURIComponent(data.spu.udi)}" class="tron-text-muted hover:text-[var(--color-tron-cyan)] hover:underline">Assay run</a>
 				</span>
 			</div>
 
-			<div class="grid grid-cols-1 gap-3 md:grid-cols-2">
+			<div class="grid grid-cols-1 gap-3 md:grid-cols-4">
 				{#each validationRows as test (test.key)}
 					{@const result = test.result}
 					<div class="rounded-lg border p-3" style="border-color: {result?.status === 'passed' || result?.status === 'overridden' ? 'var(--color-tron-green)' : result?.status === 'failed' ? 'var(--color-tron-red)' : 'var(--color-tron-border)'}; background: {result?.status === 'passed' || result?.status === 'overridden' ? 'rgba(0,255,100,0.05)' : result?.status === 'failed' ? 'rgba(255,0,0,0.05)' : 'var(--color-tron-bg-secondary)'};">
@@ -1107,7 +1122,7 @@
 		     pass with no test behind it. -->
 		<TronCard>
 			<div class="mb-4 flex flex-wrap items-center justify-between gap-2">
-				<h3 class="tron-text-primary text-lg font-medium">Spectrophotometer Run History</h3>
+				<h3 class="tron-text-primary text-lg font-medium">Spectrophotometer Run History <span class="tron-text-muted text-xs font-normal">(legacy — optics is no longer a validation gate)</span></h3>
 				<span class="tron-text-muted text-xs">Optical Test Cartridge Log</span>
 			</div>
 			{#if data.opticalRuns?.length > 0}

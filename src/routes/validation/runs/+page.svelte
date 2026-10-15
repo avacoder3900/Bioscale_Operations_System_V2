@@ -30,8 +30,10 @@
 	}
 
 	const SHORT_STEP_LABELS: Record<string, string> = {
+		screen: 'Screen',
 		magnetometer: 'Mag',
 		thermocouple: 'Thermo',
+		assay_run: 'Assay',
 		optical_confirmation: 'Optical'
 	};
 

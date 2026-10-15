@@ -21,29 +21,44 @@
 		// Workflow order (2026-10-06): easiest, broadest checks first. Optical
 		// confirmation is banked — its pages still exist but are not linked here.
 		{
+			href: '/validation/screen',
+			label: '1 · Screen',
+			icon: 'M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z'
+		},
+		{
 			href: '/validation/bench',
-			label: '1 · Optical Bench',
+			label: '2 · Optical Bench',
 			icon: 'M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z M15 12a3 3 0 11-6 0 3 3 0 016 0z'
 		},
 		{
 			href: '/validation/sonic',
-			label: '2 · Sonic',
+			label: '3 · Sonic',
 			icon: 'M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2z'
 		},
 		{
 			href: '/validation/blank',
-			label: '3 · Blank Cartridge',
+			label: '4 · Blank Cartridge',
 			icon: 'M4 6a2 2 0 012-2h12a2 2 0 012 2v12a2 2 0 01-2 2H6a2 2 0 01-2-2V6z'
 		},
 		{
 			href: '/validation/magnetometer',
-			label: '4 · Magnetometer',
+			label: '5 · Magnetometer',
 			icon: 'M13 10V3L4 14h7v7l9-11h-7z'
 		},
 		{
 			href: '/validation/thermocouple',
-			label: '5 · Thermocouple',
+			label: '6 · Thermocouple',
 			icon: 'M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z'
+		},
+		{
+			href: '/validation/assay-run',
+			label: '7 · Assay Run',
+			icon: 'M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10'
+		},
+		{
+			href: '/validation/optical-confirmation',
+			label: 'Optical (R&D)',
+			icon: 'M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z M15 12a3 3 0 11-6 0 3 3 0 016 0z'
 		}
 	];
 

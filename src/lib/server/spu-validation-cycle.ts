@@ -1,31 +1,42 @@
 /**
- * Validation cycles (2026-09-10, per Jacob).
+ * Validation cycles (2026-09-10, per Jacob; instruments re-cut 2026-10-13).
  *
- * A unit's graded validations — magnetometer and thermocouple — only count
- * for the CURRENT cycle. Entering servicing starts a new cycle: the counter
- * drops to 0/3, the rollups on the unit record are cleared, and every
- * instrument has to pass again before the unit can be released.
+ * A unit's validations only count for the CURRENT cycle. Entering servicing
+ * starts a new cycle: the counter drops to 0/N, the rollups on the unit record
+ * are cleared, and every instrument has to pass again before the unit can be
+ * released.
+ *
+ * The instruments (screen pipeline, 2026-10-13):
+ *   screen        — the one-button SCREEN: self-test suite + laser blast + the
+ *                   real assay motion ×3 with the stage check (firmware v102)
+ *   magnetometer  — the magnet test (fixed-point read today, peaks sweep next)
+ *   thermocouple  — the heat-cart hold read by the thermocouple tool
+ *   assay_run     — a GROUP of real cartridges run on the unit (replaces the
+ *                   optical confirmation / degradation / blank gate)
+ * 'spectrophotometer' is LEGACY: rollups written before 2026-10-13 are kept on
+ * the unit record and still readable through cycleSummary().legacy, but it is
+ * no longer an instrument and earns no credit.
  *
  * `validationResetAt` marks the cycle start. Evidence recorded before it
- * (validation_sessions, optical cartridge runs) is kept as history but earns
- * no credit. Readers use cycleSummary(); writers that move a unit into
- * servicing call beginValidationCycle() (or spread validationCycleResetFields()
- * into a native $set when they must bypass Mongoose).
+ * (validation_sessions, cartridge groups) is kept as history but earns no
+ * credit. Readers use cycleSummary(); writers that move a unit into servicing
+ * call beginValidationCycle() (or spread validationCycleResetFields() into a
+ * native $set when they must bypass Mongoose).
  */
 import { Spu } from '$lib/server/db';
 import type { AutoVerdict } from './validation-autograde';
 
-/**
- * What gates release. Optical confirmation (`spectrophotometer`) was dropped
- * on 2026-10-06 (per Alejandro): it is an assay, not a device check, and is
- * banked until it is relevant again. Its rollup field stays on the Spu and the
- * optical-confirmation pages still exist — they are just not linked from the
- * validation section and no longer count toward release. To bring it back,
- * add 'spectrophotometer' here and its row back to VALIDATION_TESTS.
- */
-export const VALIDATION_INSTRUMENTS = ['magnetometer', 'thermocouple'] as const;
+export const VALIDATION_INSTRUMENTS = ['screen', 'magnetometer', 'thermocouple', 'assay_run'] as const;
 export type ValidationInstrument = (typeof VALIDATION_INSTRUMENTS)[number];
+export const LEGACY_VALIDATION_INSTRUMENTS = ['spectrophotometer'] as const;
 export type CycleStatus = 'pending' | 'passed' | 'failed' | 'overridden';
+
+export const INSTRUMENT_LABELS: Record<ValidationInstrument, string> = {
+	screen: 'Screen',
+	magnetometer: 'Magnetometer',
+	thermocouple: 'Thermocouple',
+	assay_run: 'Assay Run'
+};
 
 export function isPassed(status: string | null | undefined): boolean {
 	return status === 'passed' || status === 'overridden';
@@ -56,19 +67,23 @@ export interface CycleSummary {
 	passed: number;
 	total: number;
 	overall: 'pending' | 'passed' | 'failed';
+	/** The retired optics rollup, for history displays only. Never counted. */
+	legacy: { spectrophotometer: CycleStatus };
 }
 
+type RollupShape = { status?: string; completedAt?: Date | string | null };
+
 export function cycleSummary(spu: {
-	validation?: Partial<
-		Record<ValidationInstrument, { status?: string; completedAt?: Date | string | null }>
-	> | null;
+	validation?: Partial<Record<ValidationInstrument | 'spectrophotometer', RollupShape>> | null;
 	validationResetAt?: Date | string | null;
 }): CycleSummary {
 	const v = spu.validation ?? {};
 	const resetAt = spu.validationResetAt ?? null;
 	const statuses = {
+		screen: cycleStatus(v.screen, resetAt),
 		magnetometer: cycleStatus(v.magnetometer, resetAt),
-		thermocouple: cycleStatus(v.thermocouple, resetAt)
+		thermocouple: cycleStatus(v.thermocouple, resetAt),
+		assay_run: cycleStatus(v.assay_run, resetAt)
 	};
 	const all = Object.values(statuses);
 	const passed = all.filter(isPassed).length;
@@ -77,7 +92,13 @@ export function cycleSummary(spu: {
 		: all.some((s) => s === 'failed')
 			? 'failed'
 			: 'pending';
-	return { statuses, passed, total: VALIDATION_INSTRUMENTS.length, overall };
+	return {
+		statuses,
+		passed,
+		total: VALIDATION_INSTRUMENTS.length,
+		overall,
+		legacy: { spectrophotometer: cycleStatus(v.spectrophotometer, resetAt) }
+	};
 }
 
 /**
@@ -108,14 +129,18 @@ export function cycleSummary(spu: {
  *
  * Listed in WORKFLOW ORDER (2026-10-06): cheapest, broadest checks first, so a
  * bad unit is weeded out before the slower fixture tests. Optical
- * confirmation is banked — see VALIDATION_INSTRUMENTS.
+ * confirmation is banked — see VALIDATION_INSTRUMENTS. Screen (firmware v102)
+ * and Assay Run were added 2026-10-13 as the first and last gates.
  */
 export const VALIDATION_TESTS = [
+	{ key: 'screen', name: 'Screen', source: 'session', graded: true, auto: false, sessionTypes: ['screen'] },
 	{ key: 'bench', name: 'Optical Bench', source: 'session', graded: false, auto: true, sessionTypes: ['laser', 'dark', 'laser_scan'] },
 	{ key: 'sonic', name: 'Sonic Fingerprint', source: 'session', graded: false, auto: false, sessionTypes: ['sonic'] },
 	{ key: 'blank', name: 'Blank Cartridge', source: 'blankRun', graded: false, auto: true, sessionTypes: [] },
 	{ key: 'magnetometer', name: 'Magnetometer', source: 'session', graded: true, auto: false, sessionTypes: ['mag', 'magnetometer'] },
-	{ key: 'thermocouple', name: 'Thermocouple', source: 'session', graded: true, auto: false, sessionTypes: ['thermo'] }
+	{ key: 'thermocouple', name: 'Thermocouple', source: 'session', graded: true, auto: false, sessionTypes: ['thermo'] },
+	// Evidence is the cartridge group + the validation.assay_run rollup (no session type).
+	{ key: 'assay_run', name: 'Assay Run', source: 'session', graded: true, auto: false, sessionTypes: [] }
 ] as const;
 
 export type ValidationTestKey = (typeof VALIDATION_TESTS)[number]['key'];
@@ -250,8 +275,11 @@ export function validationCycleResetFields(at: Date): Record<string, unknown> {
 	return {
 		validationResetAt: at,
 		'validation.status': 'pending',
+		'validation.screen': { status: 'pending' },
 		'validation.magnetometer': { status: 'pending' },
 		'validation.thermocouple': { status: 'pending' },
+		'validation.assay_run': { status: 'pending' },
+		// Legacy slot: cleared too so a stale optics pass never reads as current.
 		'validation.spectrophotometer': { status: 'pending' }
 	};
 }
