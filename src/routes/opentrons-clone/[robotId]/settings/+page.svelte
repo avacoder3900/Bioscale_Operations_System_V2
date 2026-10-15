@@ -1,8 +1,15 @@
 <script lang="ts">
-	import { enhance } from '$app/forms';
-	import { invalidateAll } from '$app/navigation';
+	import { cloneForm, guardWrite, type CloneFormResult } from '../../clone-form';
+	import { cloneLine } from '../../clone-session';
+	import { settingsActions } from '../../clone-api';
 
-	let { data, form } = $props();
+	let { data } = $props();
+
+	// OT2-TAILNET-5 S10b: actions run in the browser over the robot session.
+	let form = $state<CloneFormResult>(null);
+	const line = $derived(cloneLine(data.robot._id));
+	const actions = $derived(guardWrite(data.canWrite, settingsActions(line)));
+	const onResult = (r: CloneFormResult) => (form = r);
 
 	function driftSeconds(iso: string | null): number | null {
 		if (!iso) return null;
@@ -55,7 +62,7 @@
 		<div><dt class="text-gray-400 text-xs">BIMS time</dt><dd class="font-mono">{new Date().toISOString()}</dd></div>
 		<div><dt class="text-gray-400 text-xs">Drift</dt><dd class={drift && drift > 60 ? 'text-amber-700' : ''}>{drift ?? '—'} s</dd></div>
 	</dl>
-	<form method="POST" action="?/systemTime" use:enhance={() => async ({ result }) => { if (result.type === 'success') await invalidateAll(); }} class="flex items-center gap-2">
+	<form method="POST" action="?/systemTime" use:cloneForm={{ actions, onResult }} class="flex items-center gap-2">
 		<input type="hidden" name="iso" value={new Date().toISOString()} />
 		<button
 			type="submit"
@@ -77,7 +84,7 @@
 	{#if data.errorRecoveryEnabled === null}
 		<p class="text-sm text-gray-500">Unavailable.</p>
 	{:else}
-		<form method="POST" action="?/errorRecovery" use:enhance={() => async ({ result }) => { if (result.type === 'success') await invalidateAll(); }}>
+		<form method="POST" action="?/errorRecovery" use:cloneForm={{ actions, onResult }}>
 			<input type="hidden" name="enabled" value={data.errorRecoveryEnabled ? 'false' : 'true'} />
 			<button
 				type="submit"
@@ -113,7 +120,7 @@
 							<form
 								method="POST"
 								action="?/updateSetting"
-								use:enhance={() => async ({ result }) => { if (result.type === 'success') await invalidateAll(); }}
+								use:cloneForm={{ actions, onResult }}
 								class="inline"
 							>
 								<input type="hidden" name="id" value={s.id} />
@@ -140,7 +147,7 @@
 	<p class="text-sm text-gray-600 mb-2">
 		Resets the selected categories to their factory defaults. Cannot be undone.
 	</p>
-	<form method="POST" action="?/resetSettings" use:enhance>
+	<form method="POST" action="?/resetSettings" use:cloneForm={{ actions, onResult }}>
 		<div class="grid grid-cols-1 md:grid-cols-2 gap-2 mb-3 text-sm">
 			{#each data.resetOptions as opt (opt.id)}
 				<label class="flex items-start gap-2 text-xs border rounded p-2">

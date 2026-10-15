@@ -148,7 +148,10 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 					width: W,
 					height: H,
 					'metadata.highlight': highlightMeta
-				}
+				},
+				// The old thumbnail shows the un-highlighted photo — drop it so
+				// photo lists fall back to the (boxed) full image.
+				$unset: { thumbnailPath: '' }
 			}
 		);
 

@@ -5,7 +5,7 @@ import { cycleSummary, inCurrentCycle, VALIDATION_INSTRUMENTS } from '$lib/serve
 import { isLegalTransition } from '$lib/server/spu-status';
 import { syncServiceFlag } from '$lib/server/service-flag';
 import { appendSpuJournal } from '$lib/server/spu-journal';
-import { syncOpticsValidation } from '$lib/server/services/optics-validation-sync';
+import { loadAutoVerdicts } from '$lib/server/validation-autograde-load';
 import type { Actions, PageServerLoad } from './$types';
 
 /**
@@ -16,6 +16,8 @@ import type { Actions, PageServerLoad } from './$types';
  *   Magnetometer  gauss at every point (fixed-position read) + min sweep gradient
  *   Thermocouple  mode temperature of the heat-cart hold
  *   Assay run     latest group's bead index per lane and CV
+ * Bench and blank are the auto-graded "does everything work" checks (master,
+ * 2026-10-06); they are shown but do not gate release.
  * Optics (spectrophotometer) is no longer a gate; its legacy rollup is shown
  * only as a note on units that still carry one.
  */
@@ -56,6 +58,10 @@ export const load: PageServerLoad = async ({ locals }) => {
 	const sweepBySpu = new Map<string, any>(latestSweeps.map((m: any) => [m._id, m]));
 	const screenBySpu = new Map<string, any>(latestScreens.map((m: any) => [m._id, m]));
 	const groupBySpu = new Map<string, any>(latestGroups.map((m: any) => [m._id, m]));
+	const autoChecks = await loadAutoVerdicts((spus as any[]).map((s) => ({ _id: String(s._id), udi: s.udi ?? null })));
+	/** A verdict only counts if its run is in the unit's current cycle. */
+	const inCycle = (c: { verdict: string; reasons: string[]; at: string | null } | null, resetAt: unknown) =>
+		c && inCurrentCycle(c.at, resetAt as Date | null) ? { verdict: c.verdict, reasons: c.reasons, at: c.at } : null;
 
 	// The mag wells grid: [{well, A, B, C}] of Z (gauss) values.
 	function magWells(raw: any): { well: number; A: number | null; B: number | null; C: number | null }[] | null {
@@ -104,6 +110,9 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 		const opt = v.spectrophotometer ?? {};
 		const overall = cycle.overall;
+		const auto = autoChecks.get(String(s._id));
+		const bench = inCycle(auto?.bench ?? null, s.validationResetAt);
+		const blank = inCycle(auto?.blank ?? null, s.validationResetAt);
 
 		// Most recent test of ANY modality — drives the default sort.
 		const times = [
@@ -115,7 +124,9 @@ export const load: PageServerLoad = async ({ locals }) => {
 			sweepCurrent?.at,
 			th.completedAt,
 			ar.completedAt,
-			groupLive?.at
+			groupLive?.at,
+			auto?.bench?.at,
+			auto?.blank?.at
 		]
 			.filter(Boolean)
 			.map((t: any) => new Date(t).getTime());
@@ -148,6 +159,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 				minGradient: sweepCurrent?.minGradient ?? null,
 				sweepSessionId: sweepCurrent?.sessionId ?? null
 			},
+			bench,
+			blank,
 			thermo: {
 				status: cycle.statuses.thermocouple,
 				mode: thermoMode,
@@ -182,38 +195,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 export const actions: Actions = {
 	/**
-	 * Legacy optics → SPU write-back. Retired from the gate on 2026-10-13 (the
-	 * assay run replaced optical confirmation); kept callable for the R&D pages
-	 * and for history. Writes only the legacy `validation.spectrophotometer`
-	 * slot, which no longer counts toward release.
-	 */
-	syncOptics: async ({ locals }) => {
-		requirePermission(locals.user, 'spu:write');
-		await connectDB();
-		const r = await syncOpticsValidation();
-		await AuditLog.create({
-			_id: generateId(),
-			tableName: 'spus',
-			recordId: 'fleet',
-			action: 'UPDATE',
-			newData: { opticsSync: { updated: r.updated, unchanged: r.unchanged.length, noReadings: r.skippedNoReadings.length } },
-			reason: 'Manual (legacy) optics → SPU sync from the validation hub',
-			changedBy: locals.user!.username ?? locals.user!._id,
-			changedAt: new Date()
-		});
-		return {
-			opticsSynced: true,
-			updated: r.updated.length,
-			unchanged: r.unchanged.length,
-			noReadings: r.skippedNoReadings.length,
-			passed: r.updated.filter((u) => u.status === 'passed').length,
-			failed: r.updated.filter((u) => u.status === 'failed').length
-		};
-	},
-
-	/**
-	 * Release a unit from the hub. Passing every instrument in the current
-	 * cycle is what qualifies a validating unit; pressing Release is the manual
+	 * Release a unit from the hub. Passing every instrument (screen, mag, thermo,
+	 * assay run) in the current cycle is what qualifies a validating unit; pressing Release is the manual
 	 * act that moves it (SPU-INV-07 doctrine).
 	 */
 	release: async ({ request, locals }) => {

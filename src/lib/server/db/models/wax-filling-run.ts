@@ -1,6 +1,25 @@
 import mongoose, { Schema } from 'mongoose';
 import { generateId } from '../utils.js';
 
+/**
+ * Crash-safe marker for the two-phase run start (OT2-TAILNET-5 §7.1). Written by
+ * the start prepare, cleared by the confirm; if the page dies in between, the
+ * load reconcile finds the robot's run (or rules it out) from this. createArgs
+ * holds the server-computed POST /runs arguments, so a confirm never trusts
+ * RTP values from the browser.
+ */
+const startIntentSchema = new Schema({
+	token: String,
+	requestedAt: Date,
+	requestedBy: { _id: String, username: String },
+	line: String, // 'queue' | 'tailnet'
+	opentronsRunId: String,
+	confirmedAt: Date,
+	createArgs: Schema.Types.Mixed,
+	resync: Schema.Types.Mixed,
+	uncertainAt: Date
+}, { _id: false });
+
 const waxFillingRunSchema = new Schema({
 	_id: { type: String, default: () => generateId() },
 	robot: { _id: String, name: String },
@@ -64,7 +83,9 @@ const waxFillingRunSchema = new Schema({
 	// is queryable by arm activity and vice-versa. Single ref by design —
 	// only one arm transfer per wax run for now; if the pilot expands to
 	// multiple transfers we'll widen this to an array.
-	armRunId: { type: String, index: true }
+	armRunId: { type: String, index: true },
+	// Two-phase start marker (OT2-TAILNET-5). Unset except while a start is in flight.
+	startIntent: { type: startIntentSchema, default: undefined },
 }, { timestamps: true });
 
 // Robot + deck are held through the filling-page-owned stages only.

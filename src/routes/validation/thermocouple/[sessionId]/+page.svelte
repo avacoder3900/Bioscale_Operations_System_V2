@@ -46,6 +46,17 @@
 				notes: string | null;
 				createdAt: string;
 			} | null;
+			/**
+			 * One entry per probe, present only for sessions uploaded from a
+			 * multi-channel file. Older sessions are null and fall back to the
+			 * single combined series below.
+			 */
+			channels?: Array<{
+				key: string;
+				label: string;
+				readings: ThermocoupleReading[];
+				stats: ThermocoupleStats | null;
+			}> | null;
 		};
 		form: { error?: string; success?: boolean; passed?: boolean } | null;
 	}
@@ -98,6 +109,23 @@
 	);
 	const minTemp = $derived(data.result?.processedData?.criteria?.minTemp);
 	const maxTemp = $derived(data.result?.processedData?.criteria?.maxTemp);
+
+	// Per-probe series. Null on single-probe sessions and on anything recorded
+	// before two-channel parsing, in which case the page shows the one series
+	// it always showed.
+	const channels = $derived(data.channels ?? null);
+
+	// One colour per probe, matching the palette the server-rendered channel
+	// charts already use.
+	const CHANNEL_COLORS = [
+		'var(--color-tron-cyan)',
+		'var(--color-tron-orange)',
+		'var(--color-tron-green)',
+		'var(--color-tron-purple)'
+	];
+	function channelColor(i: number): string {
+		return CHANNEL_COLORS[i % CHANNEL_COLORS.length];
+	}
 
 	function formatDate(dateStr: string): string {
 		return new Date(dateStr).toLocaleString();
@@ -217,6 +245,7 @@
 			interpretation={resultInterpretation}
 			failureReasons={resultFailureReasons}
 			readings={resultReadings}
+			{channels}
 			{minTemp}
 			{maxTemp}
 		/>
@@ -330,55 +359,90 @@
 					</div>
 				</div>
 
-				{#if resultStats}
+				{#snippet statTiles(stats: ThermocoupleStats)}
 					<div class="mt-4 grid grid-cols-2 gap-4 md:grid-cols-4">
-						{#if resultStats.mode !== undefined}
+						{#if stats.mode !== undefined}
 							<div class="rounded-lg border border-[var(--color-tron-cyan)]/30 bg-[var(--color-tron-bg-tertiary)] p-4 text-center">
 								<span class="tron-text-muted block text-xs uppercase">Mode</span>
-								<span class="tron-heading text-2xl font-bold">{fmtTemp(resultStats.mode)}</span>
+								<span class="tron-heading text-2xl font-bold">{fmtTemp(stats.mode)}</span>
 							</div>
 						{/if}
 						<div class="rounded-lg border border-[var(--color-tron-cyan)]/30 bg-[var(--color-tron-bg-tertiary)] p-4 text-center">
 							<span class="tron-text-muted block text-xs uppercase">Min</span>
-							<span class="tron-heading text-2xl font-bold">{fmtTemp(resultStats.min)}</span>
+							<span class="tron-heading text-2xl font-bold">{fmtTemp(stats.min)}</span>
 						</div>
 						<div class="rounded-lg border border-[var(--color-tron-cyan)]/30 bg-[var(--color-tron-bg-tertiary)] p-4 text-center">
 							<span class="tron-text-muted block text-xs uppercase">Max</span>
-							<span class="tron-heading text-2xl font-bold">{fmtTemp(resultStats.max)}</span>
+							<span class="tron-heading text-2xl font-bold">{fmtTemp(stats.max)}</span>
 						</div>
 						<div class="rounded-lg bg-[var(--color-tron-bg-tertiary)] p-4 text-center">
 							<span class="tron-text-muted block text-xs uppercase">Average</span>
-							<span class="tron-heading text-2xl font-bold">{fmtTemp(resultStats.average)}</span>
+							<span class="tron-heading text-2xl font-bold">{fmtTemp(stats.average)}</span>
 						</div>
 						<div class="rounded-lg bg-[var(--color-tron-bg-tertiary)] p-4 text-center">
 							<span class="tron-text-muted block text-xs uppercase">Std Dev</span>
-							<span class="tron-heading text-2xl font-bold">{resultStats.stdDev.toFixed(3)}</span>
+							<span class="tron-heading text-2xl font-bold">{stats.stdDev.toFixed(3)}</span>
 						</div>
-						{#if resultStats.cv !== undefined}
+						{#if stats.cv !== undefined}
 							<div class="rounded-lg bg-[var(--color-tron-bg-tertiary)] p-4 text-center">
 								<span class="tron-text-muted block text-xs uppercase">CV %</span>
-								<span class="tron-heading text-2xl font-bold">{resultStats.cv.toFixed(2)}%</span>
+								<span class="tron-heading text-2xl font-bold">{stats.cv.toFixed(2)}%</span>
 							</div>
 						{/if}
 						<div class="rounded-lg bg-[var(--color-tron-bg-tertiary)] p-4 text-center">
 							<span class="tron-text-muted block text-xs uppercase">Range</span>
-							<span class="tron-heading text-2xl font-bold">{fmtTemp(resultStats.range)}</span>
+							<span class="tron-heading text-2xl font-bold">{fmtTemp(stats.range)}</span>
 						</div>
 						<div class="rounded-lg bg-[var(--color-tron-bg-tertiary)] p-4 text-center">
 							<span class="tron-text-muted block text-xs uppercase">Readings</span>
-							<span class="tron-heading text-2xl font-bold">{resultStats.readingCount}</span>
+							<span class="tron-heading text-2xl font-bold">{stats.readingCount}</span>
 						</div>
 						<div class="rounded-lg bg-[var(--color-tron-bg-tertiary)] p-4 text-center">
 							<span class="tron-text-muted block text-xs uppercase">Duration</span>
-							<span class="tron-heading text-2xl font-bold">{formatDuration(resultStats.durationMs)}</span>
+							<span class="tron-heading text-2xl font-bold">{formatDuration(stats.durationMs)}</span>
 						</div>
 					</div>
-				{/if}
+				{/snippet}
 
-				{#if resultReadings.length > 0}
-					<div class="mt-4">
-						<ThermocoupleChart readings={resultReadings} showBands={false} />
-					</div>
+				{#if channels}
+					<!-- One probe, one block: its own numbers and its own chart. -->
+					{#each channels as channel, i (channel.key)}
+						<div class="mt-6">
+							<div class="flex items-center gap-2">
+								<span
+									class="inline-block h-3 w-3 rounded-full"
+									style="background: {channelColor(i)}"
+								></span>
+								<h4 class="tron-heading font-semibold">{channel.label}</h4>
+							</div>
+
+							{#if channel.stats}
+								{@render statTiles(channel.stats)}
+							{/if}
+
+							{#if channel.readings.length > 0}
+								<div class="mt-4">
+									<ThermocoupleChart
+										readings={channel.readings}
+										showBands={false}
+										title="{channel.label} — Temperature Over Time"
+										lineColor={channelColor(i)}
+										seriesLabel={channel.label}
+									/>
+								</div>
+							{/if}
+						</div>
+					{/each}
+				{:else}
+					{#if resultStats}
+						{@render statTiles(resultStats)}
+					{/if}
+
+					{#if resultReadings.length > 0}
+						<div class="mt-4">
+							<ThermocoupleChart readings={resultReadings} showBands={false} />
+						</div>
+					{/if}
 				{/if}
 
 				{#if form?.error}

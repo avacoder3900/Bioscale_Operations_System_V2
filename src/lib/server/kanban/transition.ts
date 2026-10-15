@@ -120,6 +120,9 @@ export async function transitionTask(opts: TransitionOptions) {
 
 	const dateField = STATUS_DATE_FIELD[to];
 	if (dateField) task[dateField] = now;
+	// Reopened (Done → back on the board): it isn't complete any more, so it must not
+	// count in cycle-time / throughput metrics until it is done again.
+	if (from === 'done' && to !== 'done') task.completedDate = null;
 	if (tierOf(to) === 2 && !task.committedAt) task.committedAt = now;
 
 	if (to === 'blocked') task.blockedReason = opts.reason!.trim();

@@ -31,24 +31,11 @@ function numParam(raw: string | null, fallback: number, lo: number, hi: number):
 	return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : fallback;
 }
 
-export type CalibrationStatus = 'calibrated' | 'uncalibrated' | 'unknown';
-
 export interface SpuContext {
 	deviceId: string | null;
 	deviceName: string | null;
 	spuId: string | null;
 	spuUdi: string | null;
-	calibration: CalibrationStatus;
-	/** Why we said what we said — an uncalibrated SPU must be explained, not just marked. */
-	calibrationReason: string;
-	factors: { A: number | null; B: number | null; C: number | null };
-	calibratedAt: string | null;
-	calibrationSetName: string | null;
-}
-
-function finiteOrNull(v: unknown): number | null {
-	const n = Number(v);
-	return Number.isFinite(n) ? n : null;
 }
 
 export const load: PageServerLoad = async ({ url, locals }) => {
@@ -108,7 +95,7 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 		.lean()) as any[];
 	const byId = new Map(docs.map((d) => [d._id as string, d]));
 
-	// 3. SPU + calibration, batched — one query regardless of group count.
+	// 3. SPU lookup, batched — one query regardless of group count.
 	// Both join paths verified at 32/32 against production: device.id -> the Particle
 	// device id, with device.name -> udi (uniquely indexed) as the fallback.
 	const deviceIds = [...new Set(docs.map((d) => d.device?.id).filter(Boolean))] as string[];
@@ -122,7 +109,7 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 						{ udi: { $in: deviceNames } }
 					]
 				})
-					.select('_id udi particleLink.particleDeviceId opticalCalibration')
+					.select('_id udi particleLink.particleDeviceId')
 					.lean()) as any[])
 			: [];
 
@@ -142,48 +129,11 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 			(deviceName ? spuByUdi.get(deviceName) : null) ??
 			null;
 
-		// opticalCalibration is written by the research app and is NOT declared on the
-		// BIMS Spu schema — readable only thanks to .lean(). BIMS never writes it.
-		const cal = spu?.opticalCalibration ?? null;
-		const factors = {
-			A: finiteOrNull(cal?.channels?.A?.factor),
-			B: finiteOrNull(cal?.channels?.B?.factor),
-			C: finiteOrNull(cal?.channels?.C?.factor)
-		};
-		const anyFactor = factors.A !== null || factors.B !== null || factors.C !== null;
-
-		// Three states, never two: rendering "no SPU linked" as "uncalibrated" is a lie.
-		let calibration: CalibrationStatus = 'unknown';
-		let calibrationReason: string;
-		if (!deviceId && !deviceName) {
-			calibrationReason =
-				'This cartridge record has no device block, so no SPU can be identified.';
-		} else if (!spu) {
-			calibrationReason = `No SPU record matches ${deviceName ?? deviceId} — calibration status is unknown.`;
-		} else if (!cal) {
-			calibrationReason = `${spu.udi} has no optical calibration on record.`;
-		} else if (anyFactor) {
-			calibration = 'calibrated';
-			calibrationReason =
-				`${spu.udi} calibration` +
-				(cal.setName ? ` set "${cal.setName}"` : '') +
-				(cal.setDate ? ` on ${new Date(cal.setDate).toLocaleDateString()}` : '') +
-				`. Factors A ${factors.A?.toFixed(3) ?? '—'} / B ${factors.B?.toFixed(3) ?? '—'} / C ${factors.C?.toFixed(3) ?? '—'} (not applied — this page shows raw F7/F3).`;
-		} else {
-			calibration = 'uncalibrated';
-			calibrationReason = `${spu.udi} has an optical calibration entry but no channel factors.`;
-		}
-
 		spuContext[d._id] = {
 			deviceId,
 			deviceName,
 			spuId: spu?._id ?? null,
-			spuUdi: spu?.udi ?? deviceName ?? null,
-			calibration,
-			calibrationReason,
-			factors,
-			calibratedAt: cal?.setDate ? new Date(cal.setDate).toISOString() : null,
-			calibrationSetName: cal?.setName ?? null
+			spuUdi: spu?.udi ?? deviceName ?? null
 		};
 	}
 

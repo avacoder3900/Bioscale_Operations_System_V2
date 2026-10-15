@@ -1,0 +1,415 @@
+{
+ "data": [
+  {
+   "id": "cmd-0001",
+   "key": "k1",
+   "commandType": "home",
+   "createdAt": "2026-09-20T15:00:00.000000+00:00",
+   "status": "succeeded",
+   "params": {},
+   "startedAt": "2026-09-20T15:00:00.100000+00:00",
+   "completedAt": "2026-09-20T15:00:00.200000+00:00",
+   "intent": "protocol",
+   "notes": []
+  },
+  {
+   "id": "cmd-0002",
+   "key": "k2",
+   "commandType": "loadPipette",
+   "createdAt": "2026-09-20T15:00:00.000000+00:00",
+   "status": "succeeded",
+   "params": {
+    "pipetteName": "p20_single_gen2",
+    "mount": "left"
+   },
+   "startedAt": "2026-09-20T15:00:00.100000+00:00",
+   "completedAt": "2026-09-20T15:00:00.200000+00:00",
+   "intent": "protocol",
+   "notes": []
+  },
+  {
+   "id": "cmd-0003",
+   "key": "k3",
+   "commandType": "comment",
+   "createdAt": "2026-09-20T15:00:00.000000+00:00",
+   "status": "succeeded",
+   "params": {
+    "message": "TIP TRACKER: starting from tip A37 (index 24)"
+   },
+   "startedAt": "2026-09-20T15:00:00.100000+00:00",
+   "completedAt": "2026-09-20T15:00:00.200000+00:00",
+   "intent": "protocol",
+   "notes": []
+  },
+  {
+   "id": "cmd-0004",
+   "key": "k4",
+   "commandType": "pickUpTip",
+   "createdAt": "2026-09-20T15:00:00.000000+00:00",
+   "status": "succeeded",
+   "params": {
+    "pipetteId": "p1",
+    "labwareId": "tr",
+    "wellName": "A1",
+    "wellLocation": {
+     "origin": "top",
+     "offset": {
+      "x": 0,
+      "y": 0,
+      "z": 0
+     }
+    }
+   },
+   "startedAt": "2026-09-20T15:00:00.100000+00:00",
+   "completedAt": "2026-09-20T15:00:00.200000+00:00",
+   "intent": "protocol",
+   "notes": []
+  },
+  {
+   "id": "cmd-0005",
+   "key": "k5",
+   "commandType": "aspirate",
+   "createdAt": "2026-09-20T15:00:00.000000+00:00",
+   "status": "succeeded",
+   "params": {
+    "volume": 20,
+    "flowRate": 7.6
+   },
+   "startedAt": "2026-09-20T15:00:00.100000+00:00",
+   "completedAt": "2026-09-20T15:00:00.200000+00:00",
+   "intent": "protocol",
+   "notes": []
+  },
+  {
+   "id": "cmd-0006",
+   "key": "k6",
+   "commandType": "comment",
+   "createdAt": "2026-09-20T15:00:00.000000+00:00",
+   "status": "succeeded",
+   "params": {
+    "message": "TIP TRACKER: consumed tip A37 \u2014 next tip will be A38 (index 25)"
+   },
+   "startedAt": "2026-09-20T15:00:00.100000+00:00",
+   "completedAt": "2026-09-20T15:00:00.200000+00:00",
+   "intent": "protocol",
+   "notes": []
+  },
+  {
+   "id": "cmd-0007",
+   "key": "k7",
+   "commandType": "dropTip",
+   "createdAt": "2026-09-20T15:00:00.000000+00:00",
+   "status": "succeeded",
+   "params": {
+    "pipetteId": "p1",
+    "labwareId": "trash"
+   },
+   "startedAt": "2026-09-20T15:00:00.100000+00:00",
+   "completedAt": "2026-09-20T15:00:00.200000+00:00",
+   "intent": "protocol",
+   "notes": []
+  },
+  {
+   "id": "cmd-0008",
+   "key": "k8",
+   "commandType": "pickUpTip",
+   "createdAt": "2026-09-20T15:00:00.000000+00:00",
+   "status": "succeeded",
+   "params": {
+    "pipetteId": "p1",
+    "labwareId": "tr",
+    "wellName": "A2",
+    "wellLocation": {
+     "origin": "top",
+     "offset": {
+      "x": 0,
+      "y": 0,
+      "z": 0
+     }
+    }
+   },
+   "startedAt": "2026-09-20T15:00:00.100000+00:00",
+   "completedAt": "2026-09-20T15:00:00.200000+00:00",
+   "intent": "protocol",
+   "notes": []
+  },
+  {
+   "id": "cmd-0009",
+   "key": "k9",
+   "commandType": "aspirate",
+   "createdAt": "2026-09-20T15:00:00.000000+00:00",
+   "status": "succeeded",
+   "params": {
+    "volume": 20,
+    "flowRate": 7.6
+   },
+   "startedAt": "2026-09-20T15:00:00.100000+00:00",
+   "completedAt": "2026-09-20T15:00:00.200000+00:00",
+   "intent": "protocol",
+   "notes": []
+  },
+  {
+   "id": "cmd-0010",
+   "key": "k10",
+   "commandType": "comment",
+   "createdAt": "2026-09-20T15:00:00.000000+00:00",
+   "status": "succeeded",
+   "params": {
+    "message": "TIP TRACKER: consumed tip A38 \u2014 next tip will be A39 (index 26)"
+   },
+   "startedAt": "2026-09-20T15:00:00.100000+00:00",
+   "completedAt": "2026-09-20T15:00:00.200000+00:00",
+   "intent": "protocol",
+   "notes": []
+  },
+  {
+   "id": "cmd-0011",
+   "key": "k11",
+   "commandType": "dropTip",
+   "createdAt": "2026-09-20T15:00:00.000000+00:00",
+   "status": "succeeded",
+   "params": {
+    "pipetteId": "p1",
+    "labwareId": "trash"
+   },
+   "startedAt": "2026-09-20T15:00:00.100000+00:00",
+   "completedAt": "2026-09-20T15:00:00.200000+00:00",
+   "intent": "protocol",
+   "notes": []
+  },
+  {
+   "id": "cmd-0012",
+   "key": "k12",
+   "commandType": "pickUpTip",
+   "createdAt": "2026-09-20T15:00:00.000000+00:00",
+   "status": "succeeded",
+   "params": {
+    "pipetteId": "p1",
+    "labwareId": "tr",
+    "wellName": "A3",
+    "wellLocation": {
+     "origin": "top",
+     "offset": {
+      "x": 0,
+      "y": 0,
+      "z": 0
+     }
+    }
+   },
+   "startedAt": "2026-09-20T15:00:00.100000+00:00",
+   "completedAt": "2026-09-20T15:00:00.200000+00:00",
+   "intent": "protocol",
+   "notes": []
+  },
+  {
+   "id": "cmd-0013",
+   "key": "k13",
+   "commandType": "aspirate",
+   "createdAt": "2026-09-20T15:00:00.000000+00:00",
+   "status": "succeeded",
+   "params": {
+    "volume": 20,
+    "flowRate": 7.6
+   },
+   "startedAt": "2026-09-20T15:00:00.100000+00:00",
+   "completedAt": "2026-09-20T15:00:00.200000+00:00",
+   "intent": "protocol",
+   "notes": []
+  },
+  {
+   "id": "cmd-0014",
+   "key": "k14",
+   "commandType": "comment",
+   "createdAt": "2026-09-20T15:00:00.000000+00:00",
+   "status": "succeeded",
+   "params": {
+    "message": "TIP TRACKER: consumed tip A39 \u2014 next tip will be A40 (index 27)"
+   },
+   "startedAt": "2026-09-20T15:00:00.100000+00:00",
+   "completedAt": "2026-09-20T15:00:00.200000+00:00",
+   "intent": "protocol",
+   "notes": []
+  },
+  {
+   "id": "cmd-0015",
+   "key": "k15",
+   "commandType": "dropTip",
+   "createdAt": "2026-09-20T15:00:00.000000+00:00",
+   "status": "succeeded",
+   "params": {
+    "pipetteId": "p1",
+    "labwareId": "trash"
+   },
+   "startedAt": "2026-09-20T15:00:00.100000+00:00",
+   "completedAt": "2026-09-20T15:00:00.200000+00:00",
+   "intent": "protocol",
+   "notes": []
+  },
+  {
+   "id": "cmd-0016",
+   "key": "k16",
+   "commandType": "pickUpTip",
+   "createdAt": "2026-09-20T15:00:00.000000+00:00",
+   "status": "succeeded",
+   "params": {
+    "pipetteId": "p1",
+    "labwareId": "tr",
+    "wellName": "A4",
+    "wellLocation": {
+     "origin": "top",
+     "offset": {
+      "x": 0,
+      "y": 0,
+      "z": 0
+     }
+    }
+   },
+   "startedAt": "2026-09-20T15:00:00.100000+00:00",
+   "completedAt": "2026-09-20T15:00:00.200000+00:00",
+   "intent": "protocol",
+   "notes": []
+  },
+  {
+   "id": "cmd-0017",
+   "key": "k17",
+   "commandType": "aspirate",
+   "createdAt": "2026-09-20T15:00:00.000000+00:00",
+   "status": "succeeded",
+   "params": {
+    "volume": 20,
+    "flowRate": 7.6
+   },
+   "startedAt": "2026-09-20T15:00:00.100000+00:00",
+   "completedAt": "2026-09-20T15:00:00.200000+00:00",
+   "intent": "protocol",
+   "notes": []
+  },
+  {
+   "id": "cmd-0018",
+   "key": "k18",
+   "commandType": "comment",
+   "createdAt": "2026-09-20T15:00:00.000000+00:00",
+   "status": "succeeded",
+   "params": {
+    "message": "TIP TRACKER: consumed tip A40 \u2014 next tip will be A41 (index 28)"
+   },
+   "startedAt": "2026-09-20T15:00:00.100000+00:00",
+   "completedAt": "2026-09-20T15:00:00.200000+00:00",
+   "intent": "protocol",
+   "notes": []
+  },
+  {
+   "id": "cmd-0019",
+   "key": "k19",
+   "commandType": "dropTip",
+   "createdAt": "2026-09-20T15:00:00.000000+00:00",
+   "status": "succeeded",
+   "params": {
+    "pipetteId": "p1",
+    "labwareId": "trash"
+   },
+   "startedAt": "2026-09-20T15:00:00.100000+00:00",
+   "completedAt": "2026-09-20T15:00:00.200000+00:00",
+   "intent": "protocol",
+   "notes": []
+  },
+  {
+   "id": "cmd-0020",
+   "key": "k20",
+   "commandType": "pickUpTip",
+   "createdAt": "2026-09-20T15:00:00.000000+00:00",
+   "status": "succeeded",
+   "params": {
+    "pipetteId": "p1",
+    "labwareId": "tr",
+    "wellName": "A5",
+    "wellLocation": {
+     "origin": "top",
+     "offset": {
+      "x": 0,
+      "y": 0,
+      "z": 0
+     }
+    }
+   },
+   "startedAt": "2026-09-20T15:00:00.100000+00:00",
+   "completedAt": "2026-09-20T15:00:00.200000+00:00",
+   "intent": "protocol",
+   "notes": []
+  },
+  {
+   "id": "cmd-0021",
+   "key": "k21",
+   "commandType": "aspirate",
+   "createdAt": "2026-09-20T15:00:00.000000+00:00",
+   "status": "succeeded",
+   "params": {
+    "volume": 20,
+    "flowRate": 7.6
+   },
+   "startedAt": "2026-09-20T15:00:00.100000+00:00",
+   "completedAt": "2026-09-20T15:00:00.200000+00:00",
+   "intent": "protocol",
+   "notes": []
+  },
+  {
+   "id": "cmd-0022",
+   "key": "k22",
+   "commandType": "comment",
+   "createdAt": "2026-09-20T15:00:00.000000+00:00",
+   "status": "succeeded",
+   "params": {
+    "message": "TIP TRACKER: consumed tip A41 \u2014 next tip will be A42 (index 29)"
+   },
+   "startedAt": "2026-09-20T15:00:00.100000+00:00",
+   "completedAt": "2026-09-20T15:00:00.200000+00:00",
+   "intent": "protocol",
+   "notes": []
+  },
+  {
+   "id": "cmd-0023",
+   "key": "k23",
+   "commandType": "dropTip",
+   "createdAt": "2026-09-20T15:00:00.000000+00:00",
+   "status": "succeeded",
+   "params": {
+    "pipetteId": "p1",
+    "labwareId": "trash"
+   },
+   "startedAt": "2026-09-20T15:00:00.100000+00:00",
+   "completedAt": "2026-09-20T15:00:00.200000+00:00",
+   "intent": "protocol",
+   "notes": []
+  },
+  {
+   "id": "cmd-0024",
+   "key": "k24",
+   "commandType": "comment",
+   "createdAt": "2026-09-20T15:00:00.000000+00:00",
+   "status": "succeeded",
+   "params": {
+    "message": "Run complete."
+   },
+   "startedAt": "2026-09-20T15:00:00.100000+00:00",
+   "completedAt": "2026-09-20T15:00:00.200000+00:00",
+   "intent": "protocol",
+   "notes": []
+  }
+ ],
+ "meta": {
+  "cursor": 0,
+  "totalLength": 24
+ },
+ "links": {
+  "current": {
+   "href": "/runs/run-fin/commands/cmd-0024",
+   "meta": {
+    "runId": "run-fin",
+    "commandId": "x",
+    "index": 23,
+    "key": "k",
+    "createdAt": "2026-09-20T15:00:00Z"
+   }
+  }
+ }
+}

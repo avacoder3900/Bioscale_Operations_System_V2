@@ -1,8 +1,15 @@
 <script lang="ts">
-	import { enhance } from '$app/forms';
-	import { invalidateAll } from '$app/navigation';
+	import { cloneForm, guardWrite, type CloneFormResult } from '../../clone-form';
+	import { cloneLine } from '../../clone-session';
+	import { protocolsActions } from '../../clone-api';
 
-	let { data, form } = $props();
+	let { data } = $props();
+
+	// OT2-TAILNET-5 S10b: actions run in the browser over the robot session.
+	let form = $state<CloneFormResult>(null);
+	const line = $derived(cloneLine(data.robot._id));
+	const actions = $derived(guardWrite(data.canWrite, protocolsActions(line)));
+	const onResult = (r: CloneFormResult) => (form = r);
 
 	let uploading = $state(false);
 
@@ -32,14 +39,7 @@
 		method="POST"
 		action="?/upload"
 		enctype="multipart/form-data"
-		use:enhance={() => {
-			uploading = true;
-			return async ({ result, update }) => {
-				uploading = false;
-				await update({ reset: true });
-				if (result.type === 'success') await invalidateAll();
-			};
-		}}
+		use:cloneForm={{ actions, onResult, onSubmit: () => { uploading = true; return () => (uploading = false); } }}
 		class="space-y-3 text-sm"
 	>
 		<div>
@@ -94,9 +94,7 @@
 							<form
 								method="POST"
 								action="?/delete"
-								use:enhance={() => async ({ result }) => {
-									if (result.type === 'success') await invalidateAll();
-								}}
+								use:cloneForm={{ actions, onResult }}
 								class="inline"
 							>
 								<input type="hidden" name="protocolId" value={p.id} />

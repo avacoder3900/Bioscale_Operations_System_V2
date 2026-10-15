@@ -1,12 +1,24 @@
 <script lang="ts">
-	import { enhance } from '$app/forms';
-	import { invalidateAll } from '$app/navigation';
+	import { cloneForm, guardWrite, type CloneFormResult } from '../../clone-form';
+	import { cloneLine } from '../../clone-session';
+	import { dataFilesActions, downloadFile, lookupClientData as lookupOnRobot } from '../../clone-api';
 
-	let { data, form } = $props();
+	let { data } = $props();
+
+	// OT2-TAILNET-5 S10b: actions run in the browser over the robot session.
+	let form = $state<CloneFormResult>(null);
+	const line = $derived(cloneLine(data.robot._id));
+	const actions = $derived(guardWrite(data.canWrite, dataFilesActions(line)));
+	const onResult = (r: CloneFormResult) => (form = r);
 
 	function fmtDate(iso: string | null | undefined): string {
 		if (!iso) return '—';
 		return new Date(iso).toLocaleString();
+	}
+
+	async function downloadDataFile(df: any) {
+		const err = await downloadFile(line, `/dataFiles/${encodeURIComponent(df.id)}/download`, df.name ?? df.id);
+		if (err) form = { error: `Download failed — ${err}` };
 	}
 
 	let clientKey = $state('');
@@ -18,14 +30,12 @@
 		lookupError = null;
 		if (!clientKey.trim()) return;
 		try {
-			const res = await fetch(
-				`/api/opentrons-clone/robots/${data.robot._id}/client-data/${encodeURIComponent(clientKey.trim())}`
-			);
-			if (!res.ok) {
+			const res = await lookupOnRobot(line, clientKey.trim());
+			if (res.status < 200 || res.status >= 300) {
 				lookupError = `HTTP ${res.status}`;
 				return;
 			}
-			lookupResult = JSON.stringify(await res.json(), null, 2);
+			lookupResult = JSON.stringify(res.body, null, 2);
 		} catch (e) {
 			lookupError = (e as Error).message;
 		}
@@ -51,10 +61,7 @@
 		method="POST"
 		action="?/uploadDataFile"
 		enctype="multipart/form-data"
-		use:enhance={() => async ({ result, update }) => {
-			await update({ reset: true });
-			if (result.type === 'success') await invalidateAll();
-		}}
+		use:cloneForm={{ actions, onResult }}
 		class="flex items-center gap-2 mb-4"
 	>
 		<input type="file" name="file" required class="text-sm" />
@@ -79,9 +86,8 @@
 						<td class="font-mono text-gray-500">{df.id}</td>
 						<td class="text-right">
 							<a
-								href={`/api/opentrons-clone/robots/${data.robot._id}/data-files/${df.id}/download`}
-								target="_blank"
-								rel="noopener"
+								href={`#${df.id}`}
+								onclick={(e) => { e.preventDefault(); void downloadDataFile(df); }}
 								class="text-blue-600 hover:underline mr-2"
 							>
 								download
@@ -89,7 +95,7 @@
 							<form
 								method="POST"
 								action="?/deleteDataFile"
-								use:enhance={() => async ({ result }) => { if (result.type === 'success') await invalidateAll(); }}
+								use:cloneForm={{ actions, onResult }}
 								class="inline"
 							>
 								<input type="hidden" name="id" value={df.id} />
@@ -124,7 +130,7 @@
 	<form
 		method="POST"
 		action="?/setClientData"
-		use:enhance={() => async ({ result }) => { if (result.type === 'success') await invalidateAll(); }}
+		use:cloneForm={{ actions, onResult }}
 		class="grid grid-cols-1 md:grid-cols-3 gap-2 mb-3"
 	>
 		<input name="key" placeholder="key" class="border rounded px-2 py-1 text-sm" required />
@@ -142,7 +148,7 @@
 	<form
 		method="POST"
 		action="?/deleteClientData"
-		use:enhance={() => async ({ result }) => { if (result.type === 'success') await invalidateAll(); }}
+		use:cloneForm={{ actions, onResult }}
 		class="flex items-center gap-2"
 	>
 		<input name="key" placeholder="key (blank = clear all)" class="border rounded px-2 py-1 text-sm flex-1" />

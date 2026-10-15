@@ -1,7 +1,24 @@
 <script lang="ts">
 	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
+	import type { RobotSession } from '$lib/opentrons/direct-client';
+	import {
+		deckScanOverBridge,
+		startSweepOverBridge,
+		followSweep,
+		controlSweepOverBridge,
+		type SweepRequest,
+		type SweepSnapshot
+	} from '$lib/opentrons/fill-bridge-jobs';
 	interface CartridgeScan {
 		cartridgeId: string;
+		/**
+		 * Deck position 1–24 (SCAN_ORDER[slotIndex]). Set by denseScans() on
+		 * completion; the run record's cartridgesFilled[].deckPosition is read from
+		 * it. Until 2026-10-08 it was never sent, so every reagent cart was stored
+		 * at position 0 and the well tracker (which keys on position) had nothing
+		 * to enable.
+		 */
+		deckPosition?: number;
 	}
 
 	interface Props {
@@ -22,9 +39,14 @@
 		robotId?: string | null;
 		// Optional run id used as contextRef on the scanner trigger.
 		runId?: string | null;
+		// The page's robot session (OT2-TAILNET-5 S6). When its bridge() is
+		// non-null the deck scan + sweeps run as daemon jobs over Tailscale
+		// ($lib/opentrons/fill-bridge-jobs); otherwise the calls below are the
+		// queue line, unchanged.
+		session?: RobotSession | null;
 	}
 
-	let { onComplete, readonly: isReadonly = false, focusPaused = false, robotId = null, runId = null, plannedCartridgeCount = null }: Props = $props();
+	let { onComplete, readonly: isReadonly = false, focusPaused = false, robotId = null, runId = null, plannedCartridgeCount = null, session = null }: Props = $props();
 
 	// 8 rows x 3 cols, vertical snake: Col1 down, Col2 up, Col3 down
 	const GRID_ROWS = [
@@ -145,19 +167,32 @@
 		deckScanInFlight = true;
 		deckScanError = '';
 		try {
-			const res = await fetch('/api/scanner/deck-scan', {
-				method: 'POST',
-				credentials: 'same-origin',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ robotId })
-			});
-			const body = await res.json().catch(() => ({}));
-			if (!res.ok || !body?.barcode) {
-				deckScanError = (body?.message ?? body?.error ?? `Deck scan failed (HTTP ${res.status})`).toString();
-				playBeep(false);
-				return;
+			const bridge = session?.bridge() ?? null;
+			let scannedDeck: string;
+			if (bridge) {
+				const r = await deckScanOverBridge(bridge, robotId);
+				if (!r.ok) {
+					deckScanError = r.error;
+					playBeep(false);
+					return;
+				}
+				scannedDeck = r.barcode;
+			} else {
+				const res = await fetch('/api/scanner/deck-scan', {
+					method: 'POST',
+					credentials: 'same-origin',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({ robotId })
+				});
+				const body = await res.json().catch(() => ({}));
+				if (!res.ok || !body?.barcode) {
+					deckScanError = (body?.message ?? body?.error ?? `Deck scan failed (HTTP ${res.status})`).toString();
+					playBeep(false);
+					return;
+				}
+				scannedDeck = String(body.barcode);
 			}
-			deckInput = String(body.barcode);
+			deckInput = scannedDeck;
 			await handleDeckKeydown(new KeyboardEvent('keydown', { key: 'Enter' }));
 		} catch (e) {
 			deckScanError = e instanceof Error ? e.message : String(e);
@@ -261,6 +296,8 @@
 	let sweepInFlight = $state(false);
 	let sweepProgress = $state<string | null>(null);
 	let currentSweepRunId = $state<string | null>(null);
+	// Tailnet line only: the /bridge job the current sweep runs as (null = queue).
+	let currentSweepJobId = $state<string | null>(null);
 	let sweepStatus = $state<'running' | 'paused' | 'cancelled' | 'completed' | 'errored' | null>(null);
 	let sweepLog = $state<SweepLogEntry[]>([]);
 	let slotsTotal = $state(0);
@@ -291,6 +328,12 @@
 		absorbedErrorSlots = new Set();
 
 		try {
+			const bridge = session?.bridge() ?? null;
+			if (bridge) {
+				await sweepOverBridge(bridge, { robotId, source: 'reagent_filling', contextRef: runId ?? undefined, maxSlots: cap }, 'Sweep failed', cap);
+				return;
+			}
+			currentSweepJobId = null;
 			const res = await fetch('/api/scanner/sweep', {
 				method: 'POST',
 				credentials: 'same-origin',
@@ -339,6 +382,12 @@
 		slotsDone = 0;
 		currentSlotIdx = null;
 		try {
+			const bridge = session?.bridge() ?? null;
+			if (bridge) {
+				await sweepOverBridge(bridge, { robotId, source: 'reagent_filling', contextRef: runId ?? undefined, slotIndices: slots }, 'Retry failed', slots.length);
+				return;
+			}
+			currentSweepJobId = null;
 			const res = await fetch('/api/scanner/sweep', {
 				method: 'POST',
 				credentials: 'same-origin',
@@ -378,6 +427,52 @@
 				break;
 			}
 
+			if (await absorbSweepSnapshot(state)) return;
+
+			await new Promise((r) => setTimeout(r, 500));
+		}
+		sweepInFlight = false;
+	}
+
+	/**
+	 * Tailnet line: prepare → /bridge submit → follow the job live, feeding each
+	 * snapshot through the same absorb step the queue poll uses. False = it
+	 * never started (the error is already shown).
+	 */
+	async function sweepOverBridge(
+		bridge: NonNullable<ReturnType<RobotSession['bridge']>>,
+		req: SweepRequest,
+		failLabel: string,
+		fallbackTotal: number
+	): Promise<boolean> {
+		const started = await startSweepOverBridge(bridge, req, { failLabel });
+		if (!started.ok) {
+			deckError = started.error;
+			playBeep(false);
+			sweepInFlight = false;
+			sweepStatus = null;
+			return false;
+		}
+		currentSweepRunId = started.sweepRunId;
+		currentSweepJobId = started.jobId;
+		slotsTotal = started.slotsTotal ?? fallbackTotal;
+		const done = await followSweep({
+			bridge,
+			sweepRunId: started.sweepRunId,
+			jobId: started.jobId,
+			slotsTotal,
+			onSnapshot: absorbSweepSnapshot
+		});
+		if (!done.ok) {
+			deckError = done.error;
+			sweepInFlight = false;
+		}
+		return true;
+	}
+
+	/** One sweep snapshot (the BIMS row or the /bridge job) into the grid. True = terminal, handled. */
+	async function absorbSweepSnapshot(state: SweepSnapshot | any): Promise<boolean> {
+		{
 			sweepStatus = state.status;
 			slotsDone = state.slotsDone ?? 0;
 			currentSlotIdx = state.currentSlotIndex ?? null;
@@ -436,17 +531,23 @@
 					playBeep(false);
 				}
 				setTimeout(() => { sweepProgress = null; }, 4000);
-				return;
+				return true;
 			}
-
-			await new Promise((r) => setTimeout(r, 500));
 		}
-		sweepInFlight = false;
+		return false;
 	}
 
 	async function sendSweepControl(action: 'pause' | 'resume' | 'cancel') {
 		if (!currentSweepRunId || controlBusy) return;
 		controlBusy = true;
+		const bridge = currentSweepJobId ? (session?.bridge() ?? null) : null;
+		if (bridge && currentSweepJobId) {
+			// Tailnet sweep: the /bridge job AND the SweepRun flags (fill-bridge-jobs).
+			const r = await controlSweepOverBridge(bridge, currentSweepRunId, currentSweepJobId, action);
+			if (!r.ok) deckError = r.error;
+			controlBusy = false;
+			return;
+		}
 		try {
 			const r = await fetch(`/api/scanner/sweep/${currentSweepRunId}`, {
 				method: 'POST',
@@ -516,7 +617,11 @@
 	}
 
 	function denseScans(): CartridgeScan[] {
-		return scans.filter((s): s is CartridgeScan => s !== null);
+		const out: CartridgeScan[] = [];
+		scans.forEach((s, i) => {
+			if (s) out.push({ cartridgeId: s.cartridgeId, deckPosition: SCAN_ORDER[i] });
+		});
+		return out;
 	}
 
 	// SCAN-THEN-CHECK (ported from the wax grid, 2026-08-28). Every cartridge

@@ -31,6 +31,13 @@
 			columnsNote?: string;
 			stats?: Stats;
 			series?: Array<{ timestamp: number; temperature: number }>;
+			/** One entry per probe in the uploaded file; a two-probe logger gives two. */
+			channels?: Array<{
+				key: string;
+				label: string;
+				stats: Stats;
+				series: Array<{ timestamp: number; temperature: number }>;
+			}>;
 			success?: boolean;
 			passed?: boolean;
 		} | null;
@@ -57,6 +64,20 @@
 	let uploaded = $derived(form?.uploaded ? form : null);
 	let stats = $derived(uploaded?.stats ?? null);
 	let series = $derived(uploaded?.series ?? []);
+	// Only worth splitting the display when the file actually held two probes.
+	let channels = $derived(
+		uploaded?.channels && uploaded.channels.length > 1 ? uploaded.channels : null
+	);
+
+	const CHANNEL_COLORS = [
+		'var(--color-tron-cyan)',
+		'var(--color-tron-orange)',
+		'var(--color-tron-green)',
+		'var(--color-tron-purple)'
+	];
+	function channelColor(i: number): string {
+		return CHANNEL_COLORS[i % CHANNEL_COLORS.length];
+	}
 	let uploadLabel = $derived(
 		isUploading ? 'Reading file...' : selectedSpu ? 'Upload for ' + selectedSpu.udi : 'Upload'
 	);
@@ -222,9 +243,7 @@
 			</div>
 		</div>
 
-		<!-- Stats Grid -->
-		<div class="tron-card p-6">
-			<h2 class="tron-heading mb-4 text-lg font-semibold">Statistics</h2>
+		{#snippet statsGrid(stats: Stats)}
 			<div class="grid grid-cols-2 gap-4 md:grid-cols-4">
 				<div class="rounded-lg border border-[var(--color-tron-cyan)]/30 bg-[var(--color-tron-bg-tertiary)] p-4 text-center">
 					<span class="tron-text-muted block text-xs uppercase">Mode</span>
@@ -263,12 +282,46 @@
 					<span class="tron-heading text-2xl font-bold">{formatDuration(stats.durationMs)}</span>
 				</div>
 			</div>
-		</div>
+		{/snippet}
 
-		<!-- Chart -->
-		<div>
-			<ThermocoupleChart readings={series} showBands={false} />
-		</div>
+		{#if channels}
+			<!-- Two probes, two sets of numbers and two charts. Averaging them
+			     into one would report a temperature neither probe read. -->
+			{#each channels as channel, i (channel.key)}
+				<div class="tron-card p-6">
+					<div class="mb-4 flex items-center gap-2">
+						<span
+							class="inline-block h-3 w-3 rounded-full"
+							style="background: {channelColor(i)}"
+						></span>
+						<h2 class="tron-heading text-lg font-semibold">
+							{channel.label} · Statistics
+						</h2>
+					</div>
+					{@render statsGrid(channel.stats)}
+				</div>
+
+				<div>
+					<ThermocoupleChart
+						readings={channel.series}
+						showBands={false}
+						title="{channel.label} — Temperature Over Time"
+						lineColor={channelColor(i)}
+						seriesLabel={channel.label}
+					/>
+				</div>
+			{/each}
+		{:else}
+			<div class="tron-card p-6">
+				<h2 class="tron-heading mb-4 text-lg font-semibold">Statistics</h2>
+				{@render statsGrid(stats)}
+			</div>
+
+			<!-- Chart -->
+			<div>
+				<ThermocoupleChart readings={series} showBands={false} />
+			</div>
+		{/if}
 
 		<!-- Verdict -->
 		<form

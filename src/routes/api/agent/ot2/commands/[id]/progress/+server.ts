@@ -22,6 +22,7 @@
 import { json, error } from '@sveltejs/kit';
 import { requireAgentApiKey } from '$lib/server/api-auth';
 import { connectDB, Ot2BridgeCommand, OpentronsScannerSweepRun } from '$lib/server/db';
+import { sweepProgressUpdate } from '../../../jobs/sweep-progress';
 import type { RequestHandler } from './$types';
 
 export const POST: RequestHandler = async ({ request, params }) => {
@@ -47,52 +48,10 @@ export const POST: RequestHandler = async ({ request, params }) => {
 		return json({ success: false, status: cmd.status, pauseRequested: false, cancelRequested: true }, { status: 409 });
 	}
 
-	const now = new Date();
-	const set: Record<string, unknown> = {};
-	const push: Record<string, unknown> = {};
-
-	if (typeof body?.slotsDone === 'number') set.slotsDone = body.slotsDone;
-	if (typeof body?.currentSlotIndex === 'number') set.currentSlotIndex = body.currentSlotIndex;
-	if (body?.scan && typeof body.scan.slotIndex === 'number') {
-		push.scans = {
-			slotIndex: body.scan.slotIndex,
-			barcode: String(body.scan.barcode ?? ''),
-			rawPayload: body.scan.rawPayload ?? null,
-			scannedAt: now,
-			x: body.scan.x, y: body.scan.y, z: body.scan.z,
-			attempts: body.scan.attempts ?? 1
-		};
-	}
-	if (body?.slotError && typeof body.slotError.slotIndex === 'number') {
-		push.errors = {
-			slotIndex: body.slotError.slotIndex,
-			message: String(body.slotError.message ?? 'scan failed').slice(0, 500),
-			recordedAt: now,
-			attempts: body.slotError.attempts ?? 1
-		};
-	}
-	if (Array.isArray(body?.log) && body.log.length > 0) {
-		push.log = {
-			$each: body.log.slice(0, 20).map((l: any) => ({
-				ts: now,
-				level: ['info', 'warn', 'error'].includes(l?.level) ? l.level : 'info',
-				message: String(l?.message ?? '').slice(0, 500),
-				slotIndex: typeof l?.slotIndex === 'number' ? l.slotIndex : undefined
-			}))
-		};
-	}
-
-	// Terminal update: the daemon finished (or aborted) the sweep — close out
-	// the SweepRun so the UI's poll sees a terminal status.
-	if (body?.final && ['completed', 'errored', 'cancelled'].includes(body.final.status)) {
-		set.status = body.final.status;
-		set.completedAt = now;
-		if (body.final.abortReason) set.abortReason = String(body.final.abortReason).slice(0, 500);
-	}
-
-	const update: Record<string, unknown> = {};
-	if (Object.keys(set).length) update.$set = set;
-	if (Object.keys(push).length) update.$push = push;
+	// The update itself is sweepProgressUpdate — the ONE mapping, shared with the
+	// tailnet-line sibling /api/agent/ot2/jobs/[jobId]/progress. It is the exact
+	// code that used to be inline here (progress.test.ts pins the documents).
+	const update = sweepProgressUpdate(body, new Date());
 
 	const run = Object.keys(update).length
 		? await OpentronsScannerSweepRun.findByIdAndUpdate(sweepRunId, update, { new: true })

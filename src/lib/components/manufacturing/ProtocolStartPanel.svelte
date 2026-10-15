@@ -44,6 +44,8 @@
 		min?: number;
 		max?: number;
 		unit?: string;
+		/** Enumerated values for a str/int/float RTP declared with `choices=` (rendered as a select). */
+		choices?: { displayName?: string; value: number | string }[];
 	}
 
 	interface ProtocolDef {
@@ -343,6 +345,21 @@
 								<span class="font-medium" style="color: var(--color-tron-text)">
 									{p.displayName ?? p.variableName}
 								</span>
+								{#if p.choices?.length}
+									<!-- Enumerated RTP (e.g. the reagent tube rack): a select, never free text. -->
+									<select
+										name="param_{p.variableName}"
+										value={String(paramValues[p.variableName])}
+										disabled={isReadonly}
+										onchange={(e) => setValue(p.variableName, (e.currentTarget as HTMLSelectElement).value)}
+										class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-black/40 px-2 py-1.5 text-sm"
+										style="color: var(--color-tron-text)"
+									>
+										{#each p.choices as c (String(c.value))}
+											<option value={String(c.value)}>{c.displayName ?? String(c.value)}</option>
+										{/each}
+									</select>
+								{:else}
 								<input
 									type="text"
 									name="param_{p.variableName}"
@@ -353,6 +370,7 @@
 									class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-black/40 px-2 py-1.5 font-mono text-sm"
 									style="color: var(--color-tron-text)"
 								/>
+								{/if}
 							</label>
 						{/if}
 					{/each}

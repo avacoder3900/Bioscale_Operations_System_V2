@@ -11,12 +11,23 @@ interface ParticleApiDevice {
 	name: string;
 	serial_number?: string;
 	platform_id: number;
-	firmware_version?: string;
+	// Product devices report this as a NUMBER (verified live: SPU 255 returns 97),
+	// which is the firmware's PRODUCT_VERSION. Declared string-only previously.
+	firmware_version?: number | string;
 	system_firmware_version?: string;
 	status: string;
 	last_heard: string | null;
 	last_ip_address?: string;
 	online: boolean;
+	// GET /v1/devices/:id returns BOTH `connected` and `online` (verified against
+	// the live API). Only `online` was declared, so any caller reading `connected`
+	// — the magnetometer poll endpoint does — failed to type-check even though it
+	// works at runtime.
+	connected: boolean;
+	/** True when the device is flagged for development in its product, which
+	 *  suppresses the product firmware being force-pushed back over a manual flash. */
+	development?: boolean;
+	firmware_updates_enabled?: boolean;
 }
 
 async function getAccessToken(): Promise<string> {

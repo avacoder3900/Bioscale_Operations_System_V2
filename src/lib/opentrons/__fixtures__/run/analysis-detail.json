@@ -1,0 +1,83 @@
+{
+ "data": {
+  "id": "an-new",
+  "status": "completed",
+  "result": "ok",
+  "errors": [],
+  "pipettes": [
+   {
+    "id": "p1",
+    "pipetteName": "p20_single_gen2",
+    "mount": "left"
+   }
+  ],
+  "labware": [
+   {
+    "id": "lw1",
+    "loadName": "gen4deck_v2",
+    "definitionUri": "bims/gen4deck_v2/3",
+    "location": {
+     "slotName": "1"
+    }
+   }
+  ],
+  "runTimeParameters": [
+   {
+    "variableName": "cartridges",
+    "type": "int",
+    "default": 24
+   }
+  ],
+  "commands": [
+   {
+    "commandType": "loadLabware",
+    "result": {
+     "labwareId": "lw1",
+     "definition": {
+      "parameters": {
+       "loadName": "gen4deck_v2"
+      },
+      "wells": {
+       "A1": {
+        "x": 10.5,
+        "y": 20.25,
+        "z": 3.0,
+        "depth": 5
+       },
+       "A2": {
+        "x": 19.5,
+        "y": 20.25,
+        "z": 3.0,
+        "depth": 5
+       }
+      }
+     }
+    }
+   },
+   {
+    "commandType": "loadLabware",
+    "result": {
+     "labwareId": "lw2",
+     "definition": {
+      "parameters": {
+       "loadName": "opentrons_96_tiprack_20ul"
+      },
+      "wells": {
+       "A1": {
+        "x": 1,
+        "y": 2,
+        "z": 3
+       }
+      }
+     }
+    }
+   },
+   {
+    "commandType": "loadPipette",
+    "result": {
+     "pipetteId": "p1"
+    }
+   }
+  ]
+ }
+}

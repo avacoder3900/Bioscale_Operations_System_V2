@@ -3,10 +3,47 @@ import { generateId } from '../utils.js';
 import { applySacredMiddleware } from '../middleware/sacred.js';
 
 const operatorRef = { _id: String, username: String };
+
+/**
+ * What an operator can tag a reagent well with during a run. Kept short and
+ * physical — these are the things you can SEE from beside the robot. Shared
+ * with the run-page tracker (labels live in $lib/manufacturing/reagent-well-issues).
+ */
+export const REAGENT_WELL_ISSUES = [
+	'no_fill',       // well stayed empty
+	'partial_fill',  // visibly short volume
+	'overfill',      // volume over the rim / pooled
+	'missed_hole',   // dispensed on the rim / next to the hole
+	'splash',        // droplets on the cartridge surface or wall
+	'bubble',        // air bubble in the well
+	'bent_tip',      // tip bent going in (fill suspect)
+	'other'
+] as const;
+export type ReagentWellIssue = (typeof REAGENT_WELL_ISSUES)[number];
+
 const correctionSchema = new Schema({
 	_id: { type: String, default: () => generateId() },
 	fieldPath: String, previousValue: Schema.Types.Mixed, correctedValue: Schema.Types.Mixed,
 	reason: String, correctedBy: operatorRef, correctedAt: Date, approvedBy: operatorRef, approvedAt: Date
+}, { _id: false });
+
+/**
+ * Crash-safe marker for the two-phase run start (OT2-TAILNET-5 §7.1). Written by
+ * the start prepare, cleared by the confirm; if the page dies in between, the
+ * load reconcile finds the robot's run (or rules it out) from this. createArgs
+ * holds the server-computed POST /runs arguments, so a confirm never trusts
+ * RTP values from the browser.
+ */
+const startIntentSchema = new Schema({
+	token: String,
+	requestedAt: Date,
+	requestedBy: { _id: String, username: String },
+	line: String, // 'queue' | 'tailnet'
+	opentronsRunId: String,
+	confirmedAt: Date,
+	createArgs: Schema.Types.Mixed,
+	resync: Schema.Types.Mixed,
+	uncertainAt: Date
 }, { _id: false });
 
 const reagentBatchRecordSchema = new Schema({
@@ -21,11 +58,21 @@ const reagentBatchRecordSchema = new Schema({
 	operator: operatorRef,
 	deckId: String,
 
+	// Historical only (retired 2026-10-13): runs no longer write per-well tube records; the fill
+	// lot / reagent lot on the run carry the reagent lineage. Kept so old runs still read.
 	tubeRecords: [{
 		_id: false,
 		wellPosition: Number, reagentName: String, sourceLotId: String,
 		transferTubeId: String, preparedAt: Date
 	}],
+	// DOMAIN-32: the research-app FILL LOT (fill_lots) picked at fill time — it carries the reagent lot.
+	// OPTIONAL (2026-10-13): the default is no fill lot; the operator opts in when the run belongs to a
+	// curve set. fillLotSelectedAt records that the step was decided, lot or none.
+	fillLotId: String,
+	fillLotNumber: String,
+	reagentLotId: String,
+	reagentLotNumber: String,
+	fillLotSelectedAt: Date,
 
 	setupTimestamp: Date, runStartTime: Date, runEndTime: Date,
 	// Set when the OT-2 finishes (completeRunFilling). Once present, the run
@@ -97,6 +144,33 @@ const reagentBatchRecordSchema = new Schema({
 		createdAt: Date
 	}],
 
+	// Per-well fill mistakes spotted by the operator while watching the run
+	// (2026-10-06). Calibration looks perfect in the Studio and the run still
+	// misses "here and there" — this is the log of exactly which deck position
+	// and which reagent well went wrong, so the misses can be charted by
+	// position across runs instead of remembered. Append-only; an entry can be
+	// removed by the operator who is watching (mis-tap), which is audited.
+	// `well` is the cartridge reagent well (2 beads, 3 tracer, 4 wash, 5
+	// elution) — the same numbering the protocol's well_2..well_5 RTPs use.
+	wellIssues: [{
+		_id: { type: String, default: () => generateId() },
+		deckPosition: Number,
+		cartridgeId: String,
+		well: Number,
+		reagentName: String,
+		issue: { type: String, enum: REAGENT_WELL_ISSUES },
+		note: String,
+		loggedBy: operatorRef,
+		loggedAt: Date,
+		// Set from the Deck Calibration Studio once the deck has been corrected
+		// for this entry (2026-10-09). Resolved entries drop off the Studio's
+		// open list so the next run's notes start from a blank slate; the row
+		// itself is kept (it is the DHR for that cartridge).
+		resolvedAt: Date,
+		resolvedBy: operatorRef,
+		resolvedNote: String
+	}],
+
 	finalizedAt: Date, voidedAt: Date, voidReason: String,
 	corrections: [correctionSchema],
 
@@ -127,7 +201,9 @@ const reagentBatchRecordSchema = new Schema({
 		after:  { nextTipIndex: Number, hostname: String, capturedAt: Date },
 		consumed: Number,
 		rackRefilledDuringRun: Boolean
-	}
+	},
+	// Two-phase start marker (OT2-TAILNET-5). Unset except while a start is in flight.
+	startIntent: { type: startIntentSchema, default: undefined },
 }, { timestamps: true });
 
 reagentBatchRecordSchema.index({ 'assayType._id': 1, status: 1 });

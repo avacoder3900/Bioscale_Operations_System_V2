@@ -6,15 +6,16 @@
  * Body: { pipetteId: string, labwareId: string, wellName: string, zOffsetMm?: number, minimumZHeight?: number }
  * minimumZHeight (deck mm) makes the move a safe arc — lift up, travel, descend.
  */
-import { json, error } from '@sveltejs/kit';
+import { error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { requirePermission } from '$lib/server/permissions';
 import { getRobot } from '$lib/server/opentrons/proxy';
-import { moveToWell } from '$lib/server/opentrons/maintenance';
+import { verbResponse } from '$lib/server/opentrons/transport';
 
-// Safe-arc move (lift ~80mm, travel, descend) can take longer than the default window.
 export const config = { maxDuration: 60 };
 
+// Validation + robot command + response shape live in $lib/opentrons/ot2-protocol
+// ('mx.moveToWell'), shared with the browser's tailnet line (OT2-TAILNET-4).
 export const POST: RequestHandler = async ({ params, locals, request }) => {
 	if (!locals.user) error(401, 'Not authenticated');
 	requirePermission(locals.user, 'manufacturing:write');
@@ -23,24 +24,5 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 	if (!robot) error(404, 'Robot not found');
 
 	const body = await request.json().catch(() => ({}) as any);
-	const pipetteId = body?.pipetteId;
-	const labwareId = body?.labwareId;
-	const wellName = body?.wellName;
-	const zOffsetMm = typeof body?.zOffsetMm === 'number' ? body.zOffsetMm : undefined;
-	const minimumZHeight = typeof body?.minimumZHeight === 'number' ? body.minimumZHeight : undefined;
-	// Tip-cal adjust folded into the well offset → a single fluid move to
-	// well+adjust (matches the protocol's well.top().move(adjust)), not move+jog.
-	const xOffsetMm = typeof body?.xOffsetMm === 'number' ? body.xOffsetMm : undefined;
-	const yOffsetMm = typeof body?.yOffsetMm === 'number' ? body.yOffsetMm : undefined;
-	if (!pipetteId || typeof pipetteId !== 'string') error(400, 'pipetteId required');
-	if (!labwareId || typeof labwareId !== 'string') error(400, 'labwareId required');
-	if (!wellName || typeof wellName !== 'string') error(400, 'wellName required');
-
-	try {
-		await moveToWell(robot, params.runId, pipetteId, labwareId, wellName, { zOffsetMm, minimumZHeight, xOffsetMm, yOffsetMm });
-		return json({ ok: true });
-	} catch (e) {
-		console.error('[API] move-to-well error:', e instanceof Error ? e.message : e);
-		error(502, e instanceof Error ? e.message : 'Failed to move to well');
-	}
+	return verbResponse(robot, 'mx.moveToWell', { ...body, runId: params.runId });
 };

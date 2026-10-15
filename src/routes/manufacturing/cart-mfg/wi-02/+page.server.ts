@@ -9,7 +9,6 @@ import {
 	connectDB, LotRecord, ProcessConfiguration,
 	ManufacturingMaterial, PartDefinition, AuditLog, generateId
 } from '$lib/server/db';
-import { recordTransaction } from '$lib/server/services/inventory-transaction';
 import { nanoid } from 'nanoid';
 import type { PageServerLoad, Actions } from './$types';
 
@@ -217,16 +216,9 @@ export const actions: Actions = {
 			}
 		});
 
-		// Record production of cut thermoseal strips
-		await recordTransaction({
-			transactionType: 'creation',
-			quantity,
-			manufacturingStep: 'cut_thermoseal',
-			manufacturingRunId: lotId,
-			operatorId: locals.user._id,
-			operatorUsername: locals.user.username,
-			notes: `WI-02 Cut Thermoseal lot ${lotId}: ${quantity} strips produced from roll ${lot.inputLots?.[0]?.barcode ?? 'unknown'}`
-		});
+		// No inventory transaction (2026-09-25): thermoseal is one roll-counted part
+		// that moves only at the bucket board's roll pull; cut strips are not
+		// inventory. The LotRecord above is the production record.
 
 		await AuditLog.create({
 			_id: generateId(),

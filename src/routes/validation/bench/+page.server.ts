@@ -1,78 +1,99 @@
 import { fail } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
-import { connectDB, Spu, ValidationSession, User, AuditLog, generateId } from '$lib/server/db';
-import { callFunction, getVariable } from '$lib/server/particle';
-import { appendSpuJournal } from '$lib/server/spu-journal';
+import { connectDB, Spu, ValidationSession, User } from '$lib/server/db';
+import {
+	BENCH,
+	BENCH_TYPES,
+	FIRMWARE_POSITION_LIMIT_UM,
+	FIRMWARE_MAX_SCAN_POINTS,
+	parseBenchType,
+	runBenchRead,
+	type BenchType
+} from '$lib/server/optical-bench';
+import { BENCH_CRITERIA, gradeBenchRead } from '$lib/server/validation-autograde';
+import { loadAutoVerdicts } from '$lib/server/validation-autograde-load';
 import type { Actions, PageServerLoad } from './$types';
 
-/**
- * Optical bench (2026-09-17 plan): cartridge-free reads. The stage carries the
- * sensors and the lasers are fixed, so at the right stage position each sensor
- * sits directly in its laser's beam.
- *
- *  - laser  — lasers on, all ten AS7341 bands + photodiode per channel
- *  - dark   — same read with the lasers off (ambient / leakage)
- *  - scan   — photodiode + clear vs. stage position, to FIND the laser position
- *
- * Firmware v96 exposes cloud functions `laser_read` / `dark_read` / `laser_scan`
- * (deferred to the device main loop; the function returns the seq the result
- * will carry) and parks the result JSON in the `optical_bench` variable. BIMS
- * calls the function, polls the variable until that seq shows up, and stores
- * the result as a validation session against the unit. Contract:
- * brevitest-device/firmware/Docs/V96_BLANK_SONIC_LASER_HANDOFF.md, Change 6.
- *
- * Every read parameter is FIXED (Jacob, 2026-09-17/18) — nothing on the page
- * chooses them. Position 39500 µm is OPTICAL_BENCH_LASER_POSITION in firmware
- * v96 (found on 0247; the physical stop is between 39500 and 40500 on a fresh
- * home) and OPTICAL_BENCH_POSITION_LIMIT caps any position / scan end there.
- * Gain 8, astep 999, atime 49 are the bench settings Jacob wants; the firmware's
- * own defaults are gain 1 / 999 / 49, so BIMS always sends the full explicit
- * argument string (the firmware's CSV parser stops at an empty field, so a
- * position can't be omitted while passing gain). The scan keeps its start /
- * end / step inputs — those are the one thing the operator actually varies.
- */
-/** Mirrors OPTICAL_BENCH_LASER_POSITION / OPTICAL_BENCH_POSITION_LIMIT in brevitest-firmware.h. */
-const FIRMWARE_LASER_POSITION_UM = 39500;
-const FIRMWARE_POSITION_LIMIT_UM = 39500;
-const FIRMWARE_MAX_SCAN_POINTS = 12;
-/** Fixed bench settings — sent on every call; the firmware's own defaults are gain 1 / astep 999 / atime 49. */
-const BENCH = { posUm: FIRMWARE_LASER_POSITION_UM, gain: 8, astep: 999, atime: 49 } as const;
-const BENCH_TYPES = ['laser', 'dark', 'laser_scan'] as const;
-type BenchType = (typeof BENCH_TYPES)[number];
-const FN: Record<BenchType, string> = { laser: 'laser_read', dark: 'dark_read', laser_scan: 'laser_scan' };
-const BANDS = ['f1', 'f2', 'f3', 'f4', 'f5', 'f6', 'f7', 'f8', 'clear', 'nir'] as const;
-const POLL_EVERY_MS = 1500;
-const POLL_MAX = 24; // 36 s — a re-home + move + three reads is well under that
+// Read logic, fixed settings and the firmware contract live in
+// $lib/server/optical-bench.ts (shared with the fleet-run endpoint).
+//
+// Auto-check (2026-10-06): every laser / dark read is graded on read by
+// gradeBenchRead(); a unit passes the bench when its latest laser read AND its
+// latest dark read both pass (validation-autograde.ts).
 
-function describeReturn(v: number): string | null {
-	if (v === -1) return 'The unit is busy (not idle). Wait for it to finish and try again.';
-	if (v === -2) return 'A cartridge is inserted. The bench reads need an empty slot.';
-	if (v === -3) return `The unit rejected the arguments (scan end above ${FIRMWARE_POSITION_LIMIT_UM} µm, more than ${FIRMWARE_MAX_SCAN_POINTS} scan points, or gain/astep/atime out of range).`;
-	if (v < 0) return `The unit returned ${v}.`;
-	return null;
-}
+const BATCHES_SHOWN = 8;
 
 export const load: PageServerLoad = async ({ locals }) => {
 	requirePermission(locals.user, 'spu:read');
 	await connectDB();
 
 	const spus = (await Spu.find({ status: { $ne: 'retired' }, 'particleLink.particleDeviceId': { $exists: true, $nin: [null, ''] } })
-		.select('_id udi status')
+		.select('_id udi status particleLink.particleDeviceId')
 		.sort({ udi: 1 })
 		.lean()) as any[];
 
-	const sessions = (await ValidationSession.find({ type: { $in: BENCH_TYPES } })
+	// Failed sessions only exist for fleet runs (so a batch lists every unit); the
+	// history table keeps showing readings only.
+	const sessions = (await ValidationSession.find({ type: { $in: BENCH_TYPES }, status: { $ne: 'failed' } })
 		.select('_id type spuId spuUdi userId createdAt rawData')
 		.sort({ createdAt: -1 })
 		.limit(60)
 		.lean()) as any[];
-	const userIds = [...new Set(sessions.map((s) => s.userId).filter(Boolean))];
+
+	// Fleet runs ("Run on all units"): every session the run created carries
+	// rawData.batchId. Newest batches first, every unit's row inside.
+	const batchIds = (
+		(await ValidationSession.aggregate([
+			{ $match: { type: { $in: [...BENCH_TYPES] }, 'rawData.batchId': { $exists: true } } },
+			{ $group: { _id: '$rawData.batchId', at: { $min: '$createdAt' } } },
+			{ $sort: { at: -1 } },
+			{ $limit: BATCHES_SHOWN }
+		])) as Array<{ _id: string; at: Date }>
+	).map((b) => b._id);
+	const batchSessions = batchIds.length
+		? ((await ValidationSession.find({ 'rawData.batchId': { $in: batchIds } })
+				.select('_id type spuId spuUdi userId createdAt status rawData')
+				.sort({ spuUdi: 1 })
+				.lean()) as any[])
+		: [];
+
+	const userIds = [...new Set([...sessions, ...batchSessions].map((s) => s.userId).filter(Boolean))];
 	const users = userIds.length ? ((await User.find({ _id: { $in: userIds } }, { username: 1 }).lean()) as any[]) : [];
 	const nameOf = new Map(users.map((u) => [u._id, u.username]));
+	const verdicts = await loadAutoVerdicts(spus.map((s) => ({ _id: String(s._id), udi: s.udi ?? null })));
+
+	const batches = batchIds.map((id) => {
+		const rows = batchSessions.filter((s) => s.rawData?.batchId === id);
+		const times = rows.map((s) => new Date(s.createdAt).getTime()).filter(Number.isFinite);
+		return {
+			id,
+			type: (rows[0]?.type ?? 'laser') as BenchType,
+			by: nameOf.get(rows[0]?.userId) ?? null,
+			startedAt: times.length ? new Date(Math.min(...times)).toISOString() : null,
+			finishedAt: times.length ? new Date(Math.max(...times)).toISOString() : null,
+			rows: rows.map((s) => ({
+				id: s._id as string,
+				spuId: (s.spuId ?? null) as string | null,
+				spuUdi: (s.spuUdi ?? null) as string | null,
+				ok: s.status !== 'failed',
+				error: (s.rawData?.error ?? null) as string | null,
+				at: s.createdAt ? new Date(s.createdAt).toISOString() : null,
+				result: s.status !== 'failed' ? (s.rawData ?? null) : null,
+				check: s.status !== 'failed' ? gradeBenchRead(s.type, s.rawData) : null
+			}))
+		};
+	});
 
 	return {
 		bench: { ...BENCH, positionLimitUm: FIRMWARE_POSITION_LIMIT_UM, maxScanPoints: FIRMWARE_MAX_SCAN_POINTS },
-		spus: spus.map((s) => ({ id: s._id, udi: s.udi, status: s.status })),
+		criteria: BENCH_CRITERIA,
+		spus: spus.map((s) => ({ id: s._id, udi: s.udi, status: s.status, deviceId: s.particleLink?.particleDeviceId ?? null })),
+		// Units with at least one laser/dark read, worst first.
+		units: spus
+			.map((s) => ({ id: s._id as string, udi: s.udi as string, check: verdicts.get(String(s._id))?.bench ?? null }))
+			.filter((u) => u.check)
+			.map((u) => ({ ...u, check: { verdict: u.check!.verdict, reasons: u.check!.reasons, at: u.check!.at } }))
+			.sort((a, b) => (a.check.verdict === b.check.verdict ? a.udi.localeCompare(b.udi) : a.check.verdict === 'fail' ? -1 : b.check.verdict === 'fail' ? 1 : a.check.verdict === 'incomplete' ? -1 : 1)),
 		history: sessions.map((s) => ({
 			id: s._id as string,
 			type: s.type as BenchType,
@@ -80,8 +101,10 @@ export const load: PageServerLoad = async ({ locals }) => {
 			spuUdi: (s.spuUdi ?? null) as string | null,
 			by: nameOf.get(s.userId) ?? null,
 			at: s.createdAt ? new Date(s.createdAt).toISOString() : null,
-			result: s.rawData ?? null
-		}))
+			result: s.rawData ?? null,
+			check: gradeBenchRead(s.type, s.rawData)
+		})),
+		batches: JSON.parse(JSON.stringify(batches))
 	};
 };
 
@@ -91,107 +114,22 @@ export const actions: Actions = {
 		await connectDB();
 
 		const form = await request.formData();
-		const spuId = form.get('spuId')?.toString() ?? '';
-		const typeRaw = form.get('type')?.toString() ?? 'laser';
-		const type = (BENCH_TYPES as readonly string[]).includes(typeRaw) ? (typeRaw as BenchType) : 'laser';
 		const num = (k: string, d: number) => {
 			const v = Number(form.get(k)?.toString() ?? '');
 			return Number.isFinite(v) ? v : d;
 		};
-		// Position, gain, astep and atime are fixed — see the header comment. They are
-		// kept in rawData so history rows and the journal line say what was used.
-		const { posUm: pos, gain, astep, atime } = BENCH;
-		const start = num('start', FIRMWARE_POSITION_LIMIT_UM - 4400);
-		const end = num('end', FIRMWARE_POSITION_LIMIT_UM);
-		const stepUm = num('stepUm', 400);
-
-		if (!spuId) return fail(400, { error: 'Pick a unit' });
-		if (type === 'laser_scan') {
-			if (stepUm <= 0 || start < 0 || end < start) return fail(400, { error: 'Scan needs start ≥ 0, end ≥ start and a positive step.' });
-			if (end > FIRMWARE_POSITION_LIMIT_UM) return fail(400, { error: `Scan end cannot exceed ${FIRMWARE_POSITION_LIMIT_UM} µm — the physical stop is just past it and the firmware refuses anything higher.` });
-			if (Math.floor((end - start) / stepUm) + 1 > FIRMWARE_MAX_SCAN_POINTS) return fail(400, { error: `At most ${FIRMWARE_MAX_SCAN_POINTS} scan points per channel — widen the step.` });
-		}
-		const spu = (await Spu.findById(spuId).select('udi particleLink.particleDeviceId').lean()) as any;
-		if (!spu?.particleLink?.particleDeviceId) return fail(400, { error: 'That unit has no Particle device linked' });
-		const deviceId = spu.particleLink.particleDeviceId as string;
-
-		// Always explicit: gain 8 is not the firmware default, and the CSV parser
-		// cannot skip the position field.
-		const arg =
-			type === 'laser_scan'
-				? [start, end, stepUm, gain, astep, atime].join(',')
-				: [pos, gain, astep, atime].join(',');
-
-		// 1. Trigger. The function returns the seq the result will carry.
-		let seq: number;
-		try {
-			const r = await callFunction(deviceId, FN[type], arg);
-			seq = Number(r.return_value);
-		} catch (err) {
-			const msg = err instanceof Error ? err.message : String(err);
-			if (/not found/i.test(msg)) {
-				return fail(400, { error: `The unit has no "${FN[type]}" function — it needs firmware v96.` });
-			}
-			return fail(502, { error: `Could not reach the unit: ${msg}` });
-		}
-		const why = describeReturn(seq);
-		if (why) return fail(400, { error: why });
-
-		// 2. Poll the variable until that seq shows up (or the device reports an error).
-		let result: any = null;
-		for (let i = 0; i < POLL_MAX; i++) {
-			await new Promise((r) => setTimeout(r, POLL_EVERY_MS));
-			try {
-				const v = await getVariable(deviceId, 'optical_bench');
-				const raw = typeof v?.result === 'string' ? v.result : '';
-				if (!raw) continue;
-				const parsed = JSON.parse(raw);
-				if (Number(parsed?.seq) === seq) {
-					result = parsed;
-					break;
-				}
-			} catch {
-				// transient — keep polling
-			}
-		}
-		if (!result) return fail(504, { error: `The unit accepted the request (seq ${seq}) but no result arrived within ${(POLL_MAX * POLL_EVERY_MS) / 1000} s. Check the device log.` });
-		if (result.error) return fail(400, { error: `The unit reported: ${result.error}` });
-
-		// 3. Store it against the unit as validation data.
-		const who = { _id: locals.user!._id, username: locals.user!.username };
-		const now = new Date();
-		const sessionId = generateId();
-		const rawData = { ...result, requested: { type, pos, gain, astep, atime, start, end, stepUm }, bands: BANDS };
-		await ValidationSession.create({
-			_id: sessionId,
-			type,
-			spuId,
-			spuUdi: spu.udi,
-			particleDeviceId: deviceId,
-			status: 'completed',
-			startedAt: now,
-			completedAt: now,
-			userId: who._id,
-			rawData,
-			results: [{ _id: generateId(), testType: type, rawData: result, processedData: null, passed: null, createdAt: now }]
-		});
-		await AuditLog.create({
-			_id: generateId(),
-			tableName: 'validation_sessions',
-			recordId: sessionId,
-			action: 'optical_bench_read',
-			newData: { spuId, spuUdi: spu.udi, type, seq, arg },
-			changedBy: who.username,
-			changedAt: now
-		});
-		const summary =
-			type === 'laser_scan'
-				? `Laser position scan ${start}–${end} µm (step ${stepUm})`
-				: `${type === 'dark' ? 'Dark read' : 'Laser-into-sensor read'} at ${result.pos ?? pos} µm, gain ${result.gain ?? gain}` +
-					(Array.isArray(result.ch) ? ` — pd A/B/C ${result.ch.map((c: any) => c.pd ?? '—').join('/')}` : '');
-		await appendSpuJournal(spuId, `Optical bench: ${summary}`, who, { source: 'validation', refKind: 'validation_session', refId: sessionId, refLabel: 'Optical bench' });
-
-		return { ran: true, type, sessionId, spuUdi: spu.udi, result };
+		const out = await runBenchRead(
+			{
+				spuId: form.get('spuId')?.toString() ?? '',
+				type: parseBenchType(form.get('type')?.toString()),
+				start: num('start', FIRMWARE_POSITION_LIMIT_UM - 4400),
+				end: num('end', FIRMWARE_POSITION_LIMIT_UM),
+				stepUm: num('stepUm', 400)
+			},
+			{ _id: locals.user!._id, username: locals.user!.username }
+		);
+		if (!out.ok) return fail(out.status, { error: out.error });
+		return { ran: true, type: out.type, sessionId: out.sessionId, spuUdi: out.spuUdi, result: out.result, check: gradeBenchRead(out.type, out.result) };
 	}
 };
 

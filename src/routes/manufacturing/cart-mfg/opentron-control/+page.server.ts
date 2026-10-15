@@ -1,11 +1,11 @@
 /**
- * Opentron Control hub — DEPRECATED (WAX-FLOW-STREAMLINE). The hub is retired;
- * entry points are the Wax Filling / Reagent Filling tabs. Any visit redirects
- * there. Sub-routes (scanner-positions teaching, per-run QC views) remain.
+ * Opentron Control hub — retired. The Robots page (ROBOT-OVERHAUL, 2026-10-07)
+ * is the one place to see and drive every OT-2 for wax and reagent filling.
+ * Sub-routes that are still tools (scanner-test, sweeps) remain.
  */
 import { redirect } from '@sveltejs/kit';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async () => {
-	redirect(302, '/manufacturing/cart-mfg/wax-filling');
+	redirect(308, '/manufacturing/cart-mfg/robots');
 };

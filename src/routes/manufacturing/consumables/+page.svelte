@@ -192,14 +192,6 @@
 								<td class="px-4 py-2.5 text-xs text-[var(--color-tron-text-secondary)]">{part.unitOfMeasure}</td>
 							</tr>
 						{/each}
-						{#if data.derived.individualBacks > 0}
-							<tr class="border-t-2 border-[var(--color-tron-cyan)]/30">
-								<td class="px-4 py-2.5 text-[var(--color-tron-cyan)]">Individual Backs (derived)</td>
-								<td class="px-4 py-2.5 text-xs text-[var(--color-tron-text-secondary)]">—</td>
-								<td class="px-4 py-2.5 text-right font-mono font-bold text-[var(--color-tron-cyan)]">{data.derived.individualBacks}</td>
-								<td class="px-4 py-2.5 text-xs text-[var(--color-tron-text-secondary)]">sheets × {data.derived.cartridgesPerSheet}</td>
-							</tr>
-						{/if}
 					</tbody>
 				</table>
 			</div>

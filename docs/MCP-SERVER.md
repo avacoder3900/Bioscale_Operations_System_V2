@@ -109,6 +109,77 @@ This replicates the full `/api/agent/**` machine surface except: `ask`/`transcri
 routes serving the in-app widget, not machine agents) and the OT-2/scanner long-poll daemon queues
 (not request/response shaped; the robot bridge keeps using them directly).
 
+## Research analysis tools (v3.12.0)
+
+v3.12.0 — non-calibrated fill lots: `research_fill_lot_create` takes `nonCalibrated: true` instead of a
+`reagentLotId` to open a fill lot with NO reagent lot ("non-calibrated reagent lot chemicals"). Most fills
+happen before a calibrated reagent lot exists (a lot takes several conjugations and chemistry calibrations
+first), so the BIMS fill screen offers the same choice in its "new fill lot" picker. Runs and cartridges on
+such a lot are stamped `reagentLotNumber: 'non-calibrated'` with an empty `reagentLotId`;
+`research_fill_lot_set_reagent_lot` (or the Curves page) sets the reagent lot later and restamps them.
+
+v3.8.0 — fill lots are explicit: `research_fill_lot_create` (W) opens one on a reagent lot;
+`research_fill_lot_assign_runs` (W) moves legacy robot runs into one. The BIMS fill screen now picks a
+FILL LOT (defaulting to the one used last, with an inline "new fill lot" that picks the reagent lot) and
+stamps `fillLotId`/`fillLotNumber` + `reagentLotId`/`reagentLotNumber` on the run and on every cartridge;
+finalize appends the run id to `fill_lots.runIds`.
+
+v3.7.0 adds DOMAIN-32 reagent-lot tools: `research_reagent_lot_list` / `_get` / `_create` (W),
+`research_inventory_originate` (W), `research_fill_lot_list`, `research_curve_set_list`,
+`research_fill_lot_set_reagent_lot` (W), and the human-only `research_fill_lot_assign_curve_set`.
+The fill screen now requires picking a research reagent lot (reagent_set_lots, read-only in BIMS)
+and stamps `reagentLotId` / `reagentLotNumber` on the run and on each cartridge's `reagentFilling`.
+
+The brevitest-research-v2 app owns the analysis engine (declarative analysis profiles, stored
+per-well results on `cartridge_records.analysis`, and 4PL calibration curves per reagent lot).
+BIMS exposes it through this same connector by proxying an allowlisted subset of the research agent
+API: `/api/agent/research/<path>` → `${RESEARCH_API_URL}/api/agent/<path>` for `analysis/*` and
+`calibration/*` only (`src/lib/server/research-proxy.ts`, route `src/routes/api/agent/research/[...path]`).
+Set `RESEARCH_API_URL` (and optionally `RESEARCH_AGENT_API_KEY`; falls back to `AGENT_API_KEY`).
+
+Read-only: `research_analysis_catalog`, `research_analysis_list_profiles`, `research_analysis_get_profile`,
+`research_analysis_validate_profile`, `research_analysis_find_cartridges`, `research_analysis_preview` (dry run),
+`research_analysis_view`, `research_calibration_list_lots`, `research_calibration_list_curves`,
+`research_calibration_get_curve`.
+
+Mutating (`actor` required, machine_activity audit via `machineWrite`; the research app records
+`agent:<actor>` on the document): `research_analysis_save_profile` (draft), `research_analysis_activate_profile`,
+`research_analysis_archive_profile`, `research_analysis_run` (confirmed gate), `research_assay_attach_profile`,
+`research_calibration_fit` (draft), `research_calibration_activate_curve`, `research_calibration_quantify`
+(confirmed gate). `research_calibration_activate_curve` is **human-only** (3.6.1): approving a lot's calibration
+curve happens on the research Curves page with a note; the tool refuses and says so. `research_calibration_list_runs`
+(3.6.1) shows the calibrator wells a fit would use. Everything else never touches manufacturing records.
+
+Authoring doctrine is embedded in the tool descriptions: catalog → validate → find cartridges → preview →
+save draft → activate → attach to assay. See research-v2 `docs/prds/DOMAIN-30-ANALYSIS-V3.md`.
+
+## SPU Assembly Work Instruction tools (v3.11.0)
+
+full edit + inventory surface for
+SPU → SPU Assembly WI so changes can be made from Claude chat. Steps are addressed as
+humans say them (`section` = "sub-assembly 2" / "setup", `step` = "2" / stepId / title phrase).
+Read: `device_wi_overview`, `device_wi_get_step` (one step, a section, or `q=` search),
+`device_wi_revisions` (vN / who / when / where / what, optional before-after), `device_wi_pull_history`.
+Write (each call = one new revision, attributed to `actor`): `device_wi_add_section` /
+`device_wi_delete_section` / `device_wi_move_section` (sub-assembly tabs are not fixed at five —
+create, remove, reorder them from chat; later ones renumber), `device_wi_update_front_matter`
+(purpose/scope/responsibilities/definitions/references/notes), `device_wi_update_metadata` (title,
+assembly number, status), `device_wi_rename_section`,
+`device_wi_set_section_notes`, `device_wi_update_step` (replace / append instructions, title, ESD,
+DHR fields), `device_wi_add_step`, `device_wi_delete_step` (confirmed), `device_wi_move_step`
+(between sub-assemblies — how the imported list gets divided), `device_wi_add_image` (url or base64),
+`device_wi_remove_image`, `device_wi_set_image_caption`, `device_wi_reorder_image`,
+`device_wi_add_material` (document syntax "Name (PT-SPU-000) x1"), `device_wi_update_material`
+(incl. fixing part numbers), `device_wi_remove_material`, `device_wi_relink_parts`,
+`device_wi_pull_materials` (preview → confirm → deduct via the shared inventory consumption path),
+`device_wi_import` (re-parse a .docx URL, confirmed), `device_wi_update_section` (tab text / title /
+notes / materials table — tabs default to "Sub-Assembly N" but can be renamed), `device_wi_move_steps` /
+`device_wi_delete_steps` (ranges or lists, one revision), `device_wi_copy_step`, `device_wi_revert`
+(restore any earlier version from the per-version snapshots in `device_assembly_wi_snapshots`;
+recorded as a new revision). Goal: every change visible on the SPU Assembly WI page can be made
+from chat without a code change. Backed by `/api/agent/device-assembly/**`
+(`GET /`, `GET /step`, `POST /mutate {op}`, `POST /pull`, `GET /revisions`, `GET /pulls`).
+
 ## Adding a tool
 
 Add a `server.registerTool(...)` block in `src/lib/server/mcp/bims-mcp.ts` that calls the relevant

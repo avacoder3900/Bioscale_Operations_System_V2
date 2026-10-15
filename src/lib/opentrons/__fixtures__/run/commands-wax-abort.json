@@ -1,0 +1,345 @@
+{
+ "commands": [
+  {
+   "id": "w-0001",
+   "key": "wk1",
+   "commandType": "dispense",
+   "status": "succeeded",
+   "params": {
+    "volume": 2.2
+   },
+   "intent": "protocol",
+   "createdAt": "2026-09-21T10:00:00Z"
+  },
+  {
+   "id": "w-0002",
+   "key": "wk2",
+   "commandType": "comment",
+   "status": "succeeded",
+   "params": {
+    "message": "Dispensed 2.2uL into well X2"
+   },
+   "intent": "protocol",
+   "createdAt": "2026-09-21T10:00:00Z"
+  },
+  {
+   "id": "w-0003",
+   "key": "wk3",
+   "commandType": "dispense",
+   "status": "succeeded",
+   "params": {
+    "volume": 2.2
+   },
+   "intent": "protocol",
+   "createdAt": "2026-09-21T10:00:00Z"
+  },
+  {
+   "id": "w-0004",
+   "key": "wk4",
+   "commandType": "comment",
+   "status": "succeeded",
+   "params": {
+    "message": "Dispensed 2.2uL into well X4"
+   },
+   "intent": "protocol",
+   "createdAt": "2026-09-21T10:00:00Z"
+  },
+  {
+   "id": "w-0005",
+   "key": "wk5",
+   "commandType": "dispense",
+   "status": "succeeded",
+   "params": {
+    "volume": 2.2
+   },
+   "intent": "protocol",
+   "createdAt": "2026-09-21T10:00:00Z"
+  },
+  {
+   "id": "w-0006",
+   "key": "wk6",
+   "commandType": "comment",
+   "status": "succeeded",
+   "params": {
+    "message": "Dispensed 2.2uL into well X6"
+   },
+   "intent": "protocol",
+   "createdAt": "2026-09-21T10:00:00Z"
+  },
+  {
+   "id": "w-0007",
+   "key": "wk7",
+   "commandType": "dispense",
+   "status": "succeeded",
+   "params": {
+    "volume": 2.2
+   },
+   "intent": "protocol",
+   "createdAt": "2026-09-21T10:00:00Z"
+  },
+  {
+   "id": "w-0008",
+   "key": "wk8",
+   "commandType": "comment",
+   "status": "succeeded",
+   "params": {
+    "message": "Dispensed 2.2uL into well X8"
+   },
+   "intent": "protocol",
+   "createdAt": "2026-09-21T10:00:00Z"
+  },
+  {
+   "id": "w-0009",
+   "key": "wk9",
+   "commandType": "dispense",
+   "status": "succeeded",
+   "params": {
+    "volume": 2.2
+   },
+   "intent": "protocol",
+   "createdAt": "2026-09-21T10:00:00Z"
+  },
+  {
+   "id": "w-0010",
+   "key": "wk10",
+   "commandType": "comment",
+   "status": "succeeded",
+   "params": {
+    "message": "Dispensed 2.2uL into well W2"
+   },
+   "intent": "protocol",
+   "createdAt": "2026-09-21T10:00:00Z"
+  },
+  {
+   "id": "w-0011",
+   "key": "wk11",
+   "commandType": "dispense",
+   "status": "succeeded",
+   "params": {
+    "volume": 2.2
+   },
+   "intent": "protocol",
+   "createdAt": "2026-09-21T10:00:00Z"
+  },
+  {
+   "id": "w-0012",
+   "key": "wk12",
+   "commandType": "comment",
+   "status": "succeeded",
+   "params": {
+    "message": "Dispensed 2.2uL into well W4"
+   },
+   "intent": "protocol",
+   "createdAt": "2026-09-21T10:00:00Z"
+  },
+  {
+   "id": "w-0013",
+   "key": "wk13",
+   "commandType": "dispense",
+   "status": "succeeded",
+   "params": {
+    "volume": 2.2
+   },
+   "intent": "protocol",
+   "createdAt": "2026-09-21T10:00:00Z"
+  },
+  {
+   "id": "w-0014",
+   "key": "wk14",
+   "commandType": "comment",
+   "status": "succeeded",
+   "params": {
+    "message": "Dispensed 2.2uL into well W6"
+   },
+   "intent": "protocol",
+   "createdAt": "2026-09-21T10:00:00Z"
+  },
+  {
+   "id": "w-0015",
+   "key": "wk15",
+   "commandType": "dispense",
+   "status": "succeeded",
+   "params": {
+    "volume": 2.2
+   },
+   "intent": "protocol",
+   "createdAt": "2026-09-21T10:00:00Z"
+  },
+  {
+   "id": "w-0016",
+   "key": "wk16",
+   "commandType": "comment",
+   "status": "succeeded",
+   "params": {
+    "message": "Dispensed 2.2uL into well W8"
+   },
+   "intent": "protocol",
+   "createdAt": "2026-09-21T10:00:00Z"
+  },
+  {
+   "id": "w-0017",
+   "key": "wk17",
+   "commandType": "dispense",
+   "status": "succeeded",
+   "params": {
+    "volume": 2.2
+   },
+   "intent": "protocol",
+   "createdAt": "2026-09-21T10:00:00Z"
+  },
+  {
+   "id": "w-0018",
+   "key": "wk18",
+   "commandType": "comment",
+   "status": "succeeded",
+   "params": {
+    "message": "Dispensed 2.2uL into well V2"
+   },
+   "intent": "protocol",
+   "createdAt": "2026-09-21T10:00:00Z"
+  },
+  {
+   "id": "w-0019",
+   "key": "wk19",
+   "commandType": "dispense",
+   "status": "succeeded",
+   "params": {
+    "volume": 2.2
+   },
+   "intent": "protocol",
+   "createdAt": "2026-09-21T10:00:00Z"
+  },
+  {
+   "id": "w-0020",
+   "key": "wk20",
+   "commandType": "comment",
+   "status": "succeeded",
+   "params": {
+    "message": "Dispensed 2.2uL into well V4"
+   },
+   "intent": "protocol",
+   "createdAt": "2026-09-21T10:00:00Z"
+  },
+  {
+   "id": "w-0021",
+   "key": "wk21",
+   "commandType": "dispense",
+   "status": "succeeded",
+   "params": {
+    "volume": 2.2
+   },
+   "intent": "protocol",
+   "createdAt": "2026-09-21T10:00:00Z"
+  },
+  {
+   "id": "w-0022",
+   "key": "wk22",
+   "commandType": "comment",
+   "status": "succeeded",
+   "params": {
+    "message": "Dispensed 2.2uL into well V6"
+   },
+   "intent": "protocol",
+   "createdAt": "2026-09-21T10:00:00Z"
+  },
+  {
+   "id": "w-0023",
+   "key": "wk23",
+   "commandType": "dispense",
+   "status": "succeeded",
+   "params": {
+    "volume": 2.2
+   },
+   "intent": "protocol",
+   "createdAt": "2026-09-21T10:00:00Z"
+  },
+  {
+   "id": "w-0024",
+   "key": "wk24",
+   "commandType": "comment",
+   "status": "succeeded",
+   "params": {
+    "message": "Dispensed 2.2uL into well V8"
+   },
+   "intent": "protocol",
+   "createdAt": "2026-09-21T10:00:00Z"
+  },
+  {
+   "id": "w-0025",
+   "key": "wk25",
+   "commandType": "comment",
+   "status": "succeeded",
+   "params": {
+    "message": "Dispensed 1.8uL into well U2"
+   },
+   "intent": "protocol",
+   "createdAt": "2026-09-21T10:00:00Z"
+  },
+  {
+   "id": "w-0026",
+   "key": "wk26",
+   "commandType": "comment",
+   "status": "succeeded",
+   "params": {
+    "message": "Dispensed 1.8uL into well U4"
+   },
+   "intent": "protocol",
+   "createdAt": "2026-09-21T10:00:00Z"
+  },
+  {
+   "id": "w-0027",
+   "key": "wk27",
+   "commandType": "comment",
+   "status": "succeeded",
+   "params": {
+    "message": "Dispensed 1.8uL into well U6"
+   },
+   "intent": "protocol",
+   "createdAt": "2026-09-21T10:00:00Z"
+  },
+  {
+   "id": "w-0028",
+   "key": "wk28",
+   "commandType": "comment",
+   "status": "succeeded",
+   "params": {
+    "message": "Dispensed 1.8uL into well U8"
+   },
+   "intent": "protocol",
+   "createdAt": "2026-09-21T10:00:00Z"
+  },
+  {
+   "id": "w-0029",
+   "key": "wk29",
+   "commandType": "comment",
+   "status": "succeeded",
+   "params": {
+    "message": "Dispensed 1.8uL into well T2"
+   },
+   "intent": "protocol",
+   "createdAt": "2026-09-21T10:00:00Z"
+  },
+  {
+   "id": "w-0030",
+   "key": "wk30",
+   "commandType": "comment",
+   "status": "succeeded",
+   "params": {
+    "message": "Dispensed 2.2uL into well X2"
+   },
+   "intent": "protocol",
+   "createdAt": "2026-09-21T10:00:00Z"
+  },
+  {
+   "id": "w-0031",
+   "key": "wk31",
+   "commandType": "comment",
+   "status": "succeeded",
+   "params": {
+    "message": "TIP TRACKER: consumed tip A1 \u2014 next tip will be A2 (index 1)"
+   },
+   "intent": "protocol",
+   "createdAt": "2026-09-21T10:00:00Z"
+  }
+ ]
+}

@@ -42,6 +42,12 @@ inventoryTransactionSchema.index({ spuId: 1 });
 inventoryTransactionSchema.index({ manufacturingStep: 1 });
 inventoryTransactionSchema.index({ manufacturingRunId: 1 });
 inventoryTransactionSchema.index({ transactionType: 1, performedAt: -1 });
+// "How much of this lot is left" = Σ consumption+scrap rows per lot. The bucket
+// board and the thermoseal FIFO lot picker both run that aggregate, over a set of
+// rows that grows by two per cartridge scanned in — so every scan made the next
+// one slower. This compound index covers the $match and the $sum, so the group
+// reads index keys and fetches no documents. Added 2026-09-25.
+inventoryTransactionSchema.index({ lotId: 1, transactionType: 1, quantity: 1 });
 
 applyImmutableMiddleware(inventoryTransactionSchema);
 

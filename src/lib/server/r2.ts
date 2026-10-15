@@ -17,21 +17,28 @@ import {
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { env } from '$env/dynamic/private';
+import { resolveR2AccountIdFromEnv } from './r2-account';
 
 let _client: S3Client | null = null;
 
 function getClient(): S3Client {
 	if (_client) return _client;
 
-	const accountId = env.R2_ACCOUNT_ID;
-	if (!accountId) throw new Error('R2_ACCOUNT_ID is not configured');
+	// The account ID becomes part of the TLS hostname; a value that is not the bare 32-hex
+	// Cloudflare account ID makes Cloudflare reject the handshake with TLS alert 40. The resolver
+	// salvages the ID from a malformed variable or from R2_PUBLIC_URL, and throws a readable
+	// error when it cannot. See r2-account.ts.
+	const accountId = resolveR2AccountIdFromEnv(env);
 
 	_client = new S3Client({
 		region: 'auto',
 		endpoint: `https://${accountId}.r2.cloudflarestorage.com`,
+		// Path-style keeps the bucket out of the hostname (<account>.r2.cloudflarestorage.com/<bucket>),
+		// so a bucket name with a dot can never produce a hostname Cloudflare has no certificate for.
+		forcePathStyle: true,
 		credentials: {
-			accessKeyId: env.R2_ACCESS_KEY_ID!,
-			secretAccessKey: env.R2_SECRET_ACCESS_KEY!
+			accessKeyId: (env.R2_ACCESS_KEY_ID ?? '').trim(),
+			secretAccessKey: (env.R2_SECRET_ACCESS_KEY ?? '').trim()
 		},
 		requestChecksumCalculation: 'WHEN_REQUIRED',
 		responseChecksumValidation: 'WHEN_REQUIRED'
@@ -41,7 +48,7 @@ function getClient(): S3Client {
 }
 
 function getBucket(): string {
-	const bucket = env.R2_BUCKET_NAME;
+	const bucket = (env.R2_BUCKET_NAME ?? '').trim();
 	if (!bucket) throw new Error('R2_BUCKET_NAME is not configured');
 	return bucket;
 }

@@ -23,14 +23,26 @@ import {
 	TipCalibratorFixture,
 	AuditLog,
 	generateId,
-	Equipment
+	Equipment,
+	ReagentBatchRecord
 } from '$lib/server/db';
+import { labwareWellsFor } from '$lib/manufacturing/reagent-well-issues';
+
+/** One run-page well-tracker entry, resolved onto this deck's labware wells. */
+type StudioIssueMark = {
+	runId: string; issueId: string; runAt: string | null;
+	resolvedAt: string | null; resolvedBy: string | null; resolvedNote: string | null;
+	deckPosition: number; well: number; reagentName: string | null;
+	issue: string; note: string | null; loggedBy: string | null; loggedAt: string | null;
+	labwareWells: string[];
+};
 import {
 	applyDeckEditBatch,
 	applyDeckEditsPerWell,
 	deckEditHistory
 } from '$lib/server/services/deck-calibration/apply-edit';
-import { getRobot, robotUploadProtocol } from '$lib/server/opentrons/proxy';
+import { getRobot, robotUploadProtocol, assembleProtocolUpload } from '$lib/server/opentrons/proxy';
+import { validUploadedResult, type UploadedProtocolResult } from '$lib/opentrons/ot2-protocol';
 // The single source of truth for "is this Z a height a pipette may be sent to".
 // Shared with the probe path (resolveCalibratorPoint) so the studio cannot save a
 // value the robot would then refuse to use — one window, one definition.
@@ -42,6 +54,7 @@ import {
 } from '$lib/server/services/deck-calibration/deck-versions';
 import { isDeckLoadName } from '$lib/server/services/deck-calibration/resolve';
 import { isHardenedRobot } from '$lib/server/services/deck-calibration/rollout';
+import { nextStudioTipWell } from '$lib/server/opentrons/tip-cursor';
 import { DeckVersion } from '$lib/server/db';
 import type { PageServerLoad, Actions } from './$types';
 
@@ -248,8 +261,69 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 				.lean()) as any)
 		: null;
 
+	// Fill-mistake marks from the reagent run-page well tracker (2026-10-08), for
+	// THIS deck, keyed by robot: the operator opens the Studio to fix the deck a
+	// run just misbehaved on, so the tracker entries are drawn on the holes they
+	// were logged against (deckPosition+well → the cartridge's three labware
+	// wells, see labwareWellsFor) and listed per cartridge position. Last 60 days
+	// — long enough to see a repeat, short enough that a fixed deck goes quiet.
+	const wellIssueMarks: Record<string, StudioIssueMark[]> = {};
+	if (kind === 'deck' && selected) {
+		try {
+			const deckEq = (await Equipment.find({ deckLoadName: selected }).select('_id').lean()) as any[];
+			const deckIds = deckEq.map((d) => String(d._id));
+			if (deckIds.length) {
+				const since = new Date(Date.now() - 60 * 86_400_000);
+				const runs = (await ReagentBatchRecord.find({
+					deckId: { $in: deckIds },
+					createdAt: { $gte: since },
+					'wellIssues.0': { $exists: true }
+				})
+					.select('_id robot runStartTime createdAt wellIssues')
+					.sort({ createdAt: -1 })
+					.lean()) as any[];
+				for (const r of runs) {
+					const rid = String(r.robot?._id ?? '');
+					if (!rid) continue;
+					const list = (wellIssueMarks[rid] ??= []);
+					for (const w of (r.wellIssues ?? []) as any[]) {
+						list.push({
+							runId: String(r._id),
+							issueId: String(w._id),
+							resolvedAt: w.resolvedAt ? new Date(w.resolvedAt).toISOString() : null,
+							resolvedBy: w.resolvedBy?.username ?? null,
+							resolvedNote: w.resolvedNote ?? null,
+							runAt: (r.runStartTime ?? r.createdAt) ? new Date(r.runStartTime ?? r.createdAt).toISOString() : null,
+							deckPosition: Number(w.deckPosition),
+							well: Number(w.well),
+							reagentName: w.reagentName ?? null,
+							issue: String(w.issue ?? 'other'),
+							note: w.note ?? null,
+							loggedBy: w.loggedBy?.username ?? null,
+							loggedAt: w.loggedAt ? new Date(w.loggedAt).toISOString() : null,
+							labwareWells: labwareWellsFor(Number(w.deckPosition), Number(w.well))
+						});
+					}
+				}
+			}
+		} catch (e) {
+			console.error('[deck-calibration] well-issue marks failed:', e instanceof Error ? e.message : e);
+		}
+	}
+
+	// Where the next fresh tip is on each robot's rack, per tip type — so a Studio
+	// pick-up aims at a position that still has a tip in it (see tip-cursor.ts).
+	const nextTipWells: Record<string, Record<'wax' | 'reagent', { well: string; source: string }>> = {};
+	for (const r of robots) {
+		try {
+			const [wax, reagent] = await Promise.all([nextStudioTipWell(r._id, 'wax'), nextStudioTipWell(r._id, 'reagent')]);
+			nextTipWells[r._id] = { wax: { well: wax.well, source: wax.source }, reagent: { well: reagent.well, source: reagent.source } };
+		} catch { /* display only */ }
+	}
+
 	return {
 		kind,
+		nextTipWells,
 		versions: JSON.parse(JSON.stringify(versions)),
 		liveVersion: selectedDef?.version ?? null,
 		lastPublishedVersion: selectedDef?.lastPublishedVersion ?? null,
@@ -262,11 +336,62 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		dimensions,
 		editedWells,
 		history: JSON.parse(JSON.stringify(history)),
-		calibrators: JSON.parse(JSON.stringify(calibrators))
+		calibrators: JSON.parse(JSON.stringify(calibrators)),
+		wellIssueMarks
 	};
 };
 
 export const actions: Actions = {
+	/**
+	 * Mark run-page well-tracker entries as addressed in the deck (2026-10-09).
+	 * `entries` is JSON [{runId, issueId}] — the Studio sends one hole group or
+	 * every open entry for the selected deck+robot. Stamps resolvedAt/By/Note on
+	 * each entry (kept, never deleted) so the open list goes blank for the next
+	 * run while the history stays. `reopen=true` clears the stamp (mis-click).
+	 */
+	resolveWellIssues: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'manufacturing:write');
+		const data = await request.formData();
+		const deckLoadName = (data.get('deckLoadName') as string)?.trim() || '';
+		const robotId = (data.get('robotId') as string)?.trim() || '';
+		const reopen = data.get('reopen')?.toString() === 'true';
+		const note = (data.get('note')?.toString() ?? '').trim().slice(0, 300);
+		let entries: { runId: string; issueId: string }[] = [];
+		try { entries = JSON.parse((data.get('entries') as string) || '[]'); } catch { /* fallthrough */ }
+		entries = entries.filter((e) => e && typeof e.runId === 'string' && typeof e.issueId === 'string');
+		if (!entries.length) return fail(400, { error: 'Nothing to resolve' });
+		await connectDB();
+		const now = new Date();
+		const byRun = new Map<string, string[]>();
+		for (const e of entries) (byRun.get(e.runId) ?? byRun.set(e.runId, []).get(e.runId)!).push(e.issueId);
+		let touched = 0;
+		for (const [runId, ids] of byRun) {
+			const res = await ReagentBatchRecord.updateOne(
+				{ _id: runId },
+				reopen
+					? { $unset: { 'wellIssues.$[w].resolvedAt': '', 'wellIssues.$[w].resolvedBy': '', 'wellIssues.$[w].resolvedNote': '' } }
+					: { $set: {
+						'wellIssues.$[w].resolvedAt': now,
+						'wellIssues.$[w].resolvedBy': { _id: locals.user._id, username: locals.user.username },
+						...(note ? { 'wellIssues.$[w].resolvedNote': note } : {})
+					} },
+				{ arrayFilters: [{ 'w._id': { $in: ids } }] }
+			);
+			touched += res.modifiedCount ?? 0;
+			await AuditLog.create({
+				_id: generateId(),
+				tableName: 'reagent_batch_records',
+				recordId: runId,
+				action: reopen ? 'reagent_well_issues_reopened' : 'reagent_well_issues_resolved',
+				newData: { issueIds: ids, deckLoadName, robotId, note: note || null },
+				changedAt: now,
+				changedBy: locals.user.username
+			});
+		}
+		return { success: true, action: 'resolveWellIssues', touched, reopen };
+	},
+
 	/** Apply one delta to a group of wells (the core group-calibration write). */
 	applyBatch: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
@@ -632,6 +757,9 @@ export const actions: Actions = {
 	 * which BIMS only has if a protocol was stored (OpentronProtocol.fileContent). If
 	 * none is stored, the corrected deck is still in Mongo + the lab-Mac mirror; the
 	 * operator just re-uploads the .py via Robots → Protocols and the deck rides along.
+	 *
+	 * The queue line's single action. The tailnet line (OT2-TAILNET-5 S4) runs the
+	 * same halves as ?/syncPrepare → 'run.uploadProtocol' in the browser → ?/syncConfirm.
 	 */
 	sync: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
@@ -646,99 +774,242 @@ export const actions: Actions = {
 		const robot = await getRobot(robotId);
 		if (!robot) return fail(404, { error: 'Robot not found' });
 
-		const types = which === 'wax' ? ['wax-filling'] : which === 'reagent' ? ['reagent-filling'] : ['wax-filling', 'reagent-filling'];
-		const results: { processType: string; ok: boolean; detail: string }[] = [];
-
-		// Freeze every deck carrying unpublished jog edits BEFORE uploading, so the
-		// bundle the robot receives is a numbered version we can name later, and so
-		// the definition arrives under a NEW namespace/loadName/version URI. That
-		// fresh identity is what stops a robot reusing a definition it already
-		// holds — Opentrons keys registered definitions to that triple, so pushing
-		// changed geometry at an unchanged version is how stale coordinates survive
-		// a "successful" sync.
-		// Gated per robot: bumping a deck's version changes the identity every robot
-		// resolves it by, so it only happens when syncing to an opted-in robot.
-		const dirty = isHardenedRobot(robot)
-			? ((await LabwareDefinition.find({ hasUnpublishedEdits: true })
-					.select('loadName')
-					.lean()) as any[])
-			: [];
-		const publishedVersions: { deckLoadName: string; version: number }[] = [];
-		for (const d of dirty.filter((x) => isDeckLoadName(String(x.loadName)))) {
-			try {
-				const r = await publishDeckVersion({
-					deckLoadName: String(d.loadName),
-					user: locals.user,
-					note: `sync to ${robot.name ?? robotId}`
-				});
-				if (r.published) publishedVersions.push({ deckLoadName: String(d.loadName), version: r.version });
-				results.push({ processType: String(d.loadName), ok: true, detail: r.detail });
-			} catch (e) {
-				results.push({
-					processType: String(d.loadName),
-					ok: false,
-					detail: `Could not freeze a version: ${e instanceof Error ? e.message : 'unknown'}`
-				});
-			}
-		}
+		const { types, results, publishedVersions } = await syncFreeze(robot, robotId, which, locals.user);
 
 		for (const pt of types) {
-			const proto = (await OpentronProtocol.findOne({ processType: pt, isActive: true }).sort({ createdAt: -1 }).lean()) as any;
-			if (!proto?.fileContent) {
-				results.push({ processType: pt, ok: false, detail: 'No stored protocol .py in BIMS — re-upload it via Robots → Protocols to push the corrected deck.' });
+			const proto = await storedSyncProtocol(pt);
+			if (!proto) {
+				results.push(noStoredProtocol(pt));
 				continue;
 			}
 			try {
 				const bytes = new TextEncoder().encode(proto.fileContent);
 				const uploaded = await robotUploadProtocol(robot, proto.fileName ?? `${pt}.py`, bytes);
-				await OpentronsRobot.updateOne({ _id: robotId }, { $pull: { protocols: { protocolType: pt } } });
-				await OpentronsRobot.updateOne(
-					{ _id: robotId },
-					{ $push: { protocols: {
-						_id: generateId(),
-						opentronsProtocolId: uploaded.opentronsProtocolId,
-						protocolName: proto.fileName ?? `${pt}.py`,
-						protocolType: pt,
-						parametersSchema: uploaded.parametersSchema ?? null,
-						analysisStatus: uploaded.analysisStatus,
-						labwareDefinitions: uploaded.labwareDefinitions ?? null,
-						pipettesRequired: uploaded.pipettesRequired ?? null,
-						uploadedBy: locals.user.username,
-						createdAt: new Date(),
-						updatedAt: new Date()
-					} } }
-				);
-				for (const pv of publishedVersions) {
-					await DeckVersion.updateOne(
-						{ deckLoadName: pv.deckLoadName, version: pv.version },
-						{
-							$push: {
-								publishedToRobots: {
-									robotId: String(robotId),
-									robotName: robot.name ?? null,
-									opentronsProtocolId: uploaded.opentronsProtocolId,
-									at: new Date()
-								}
-							}
-						}
-					);
-				}
+				await recordSyncUpload(robot, robotId, pt, proto.fileName ?? `${pt}.py`, uploaded, publishedVersions, locals.user.username);
 				results.push({ processType: pt, ok: true, detail: `Re-uploaded — analysis ${uploaded.analysisStatus}` });
 			} catch (e) {
 				results.push({ processType: pt, ok: false, detail: e instanceof Error ? e.message : 'Upload failed' });
 			}
 		}
 
-		await AuditLog.create({
-			_id: generateId(),
-			tableName: 'opentrons_robots',
-			recordId: robotId,
-			action: 'deck_calibration_sync',
-			newData: { which, results },
-			changedAt: new Date(),
-			changedBy: locals.user?.username
-		});
+		await auditSync(robotId, which, results, locals.user.username, 'queue');
+		return { success: true, action: 'sync', results };
+	},
 
+	/**
+	 * Sync, tailnet line, part 1 (DB only): freeze dirty decks (as Sync does) and
+	 * return one upload bundle per stored protocol. The browser uploads each with
+	 * 'run.uploadProtocol' over its robot session, then calls ?/syncConfirm.
+	 */
+	syncPrepare: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'manufacturing:write');
+		await connectDB();
+
+		const data = await request.formData();
+		const robotId = (data.get('robotId') as string)?.trim() || '';
+		const which = (data.get('which') as string)?.trim() || 'both';
+		if (!robotId) return fail(400, { error: 'Pick a robot to sync to' });
+		const robot = await getRobot(robotId);
+		if (!robot) return fail(404, { error: 'Robot not found' });
+
+		const { types, results, publishedVersions } = await syncFreeze(robot, robotId, which, locals.user);
+		const uploads: { processType: string; fileName: string; bundle: unknown }[] = [];
+		for (const pt of types) {
+			const proto = await storedSyncProtocol(pt);
+			if (!proto) {
+				results.push(noStoredProtocol(pt));
+				continue;
+			}
+			const fileName = proto.fileName ?? `${pt}.py`;
+			try {
+				uploads.push({ processType: pt, fileName, bundle: await assembleProtocolUpload(robot, fileName, proto.fileContent) });
+			} catch (e) {
+				results.push({ processType: pt, ok: false, detail: e instanceof Error ? e.message : 'Upload failed' });
+			}
+		}
+		return { success: true, action: 'syncPrepare', which, results, publishedVersions, uploads };
+	},
+
+	/**
+	 * Sync, tailnet line, part 2: record each upload the browser made (the robot's
+	 * protocols[] entry + the deck version's publishedToRobots) and the Sync AuditLog.
+	 * Only the upload results' shape is trusted from the browser.
+	 */
+	syncConfirm: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'manufacturing:write');
+		await connectDB();
+
+		const data = await request.formData();
+		const robotId = (data.get('robotId') as string)?.trim() || '';
+		const which = (data.get('which') as string)?.trim() || 'both';
+		if (!robotId) return fail(400, { error: 'Pick a robot to sync to' });
+		const robot = await getRobot(robotId);
+		if (!robot) return fail(404, { error: 'Robot not found' });
+
+		const parse = (k: string): any => {
+			try {
+				return JSON.parse((data.get(k) as string) ?? 'null');
+			} catch {
+				return null;
+			}
+		};
+		const priorRaw = parse('results');
+		const versionsRaw = parse('publishedVersions');
+		const uploadsRaw = parse('uploads');
+		if (!Array.isArray(priorRaw) || !Array.isArray(versionsRaw) || !Array.isArray(uploadsRaw)) {
+			return fail(400, { error: 'sync confirmation is malformed' });
+		}
+		const results: SyncResult[] = priorRaw
+			.filter((r: any) => r && typeof r.processType === 'string')
+			.slice(0, 50)
+			.map((r: any) => ({ processType: String(r.processType).slice(0, 200), ok: r.ok === true, detail: String(r.detail ?? '').slice(0, 2000) }));
+		const publishedVersions = versionsRaw
+			.filter((v: any) => v && typeof v.deckLoadName === 'string' && Number.isInteger(v.version))
+			.slice(0, 50)
+			.map((v: any) => ({ deckLoadName: String(v.deckLoadName), version: Number(v.version) }));
+		const allowed = syncTypes(which);
+
+		for (const u of uploadsRaw.slice(0, 4)) {
+			const pt = String(u?.processType ?? '');
+			if (!allowed.includes(pt)) continue;
+			const fileName = typeof u?.fileName === 'string' && u.fileName ? u.fileName.slice(0, 255) : `${pt}.py`;
+			if (typeof u?.error === 'string') {
+				results.push({ processType: pt, ok: false, detail: u.error.slice(0, 2000) });
+				continue;
+			}
+			const uploaded = validUploadedResult(u?.uploaded);
+			if (!uploaded) {
+				results.push({ processType: pt, ok: false, detail: 'upload result is malformed' });
+				continue;
+			}
+			try {
+				await recordSyncUpload(robot, robotId, pt, fileName, uploaded, publishedVersions, locals.user.username);
+				results.push({ processType: pt, ok: true, detail: `Re-uploaded — analysis ${uploaded.analysisStatus}` });
+			} catch (e) {
+				results.push({ processType: pt, ok: false, detail: e instanceof Error ? e.message : 'Upload failed' });
+			}
+		}
+
+		await auditSync(robotId, which, results, locals.user.username, 'tailnet');
 		return { success: true, action: 'sync', results };
 	}
 };
+
+// ── Sync halves (shared by the queue action and the tailnet prepare/confirm) ──
+
+type SyncResult = { processType: string; ok: boolean; detail: string };
+
+function syncTypes(which: string): string[] {
+	return which === 'wax' ? ['wax-filling'] : which === 'reagent' ? ['reagent-filling'] : ['wax-filling', 'reagent-filling'];
+}
+
+function noStoredProtocol(pt: string): SyncResult {
+	return {
+		processType: pt,
+		ok: false,
+		detail: 'No stored protocol .py in BIMS — re-upload it via Robots → Protocols to push the corrected deck.'
+	};
+}
+
+async function storedSyncProtocol(pt: string): Promise<{ fileName?: string; fileContent: string } | null> {
+	const proto = (await OpentronProtocol.findOne({ processType: pt, isActive: true }).sort({ createdAt: -1 }).lean()) as any;
+	return proto?.fileContent ? proto : null;
+}
+
+/**
+ * Freeze every deck carrying unpublished jog edits BEFORE uploading, so the
+ * bundle the robot receives is a numbered version we can name later, and so
+ * the definition arrives under a NEW namespace/loadName/version URI. That
+ * fresh identity is what stops a robot reusing a definition it already
+ * holds — Opentrons keys registered definitions to that triple, so pushing
+ * changed geometry at an unchanged version is how stale coordinates survive
+ * a "successful" sync.
+ * Gated per robot: bumping a deck's version changes the identity every robot
+ * resolves it by, so it only happens when syncing to an opted-in robot.
+ */
+async function syncFreeze(robot: any, robotId: string, which: string, user: any) {
+	const types = syncTypes(which);
+	const results: SyncResult[] = [];
+	const dirty = isHardenedRobot(robot)
+		? ((await LabwareDefinition.find({ hasUnpublishedEdits: true })
+				.select('loadName')
+				.lean()) as any[])
+		: [];
+	const publishedVersions: { deckLoadName: string; version: number }[] = [];
+	for (const d of dirty.filter((x) => isDeckLoadName(String(x.loadName)))) {
+		try {
+			const r = await publishDeckVersion({
+				deckLoadName: String(d.loadName),
+				user,
+				note: `sync to ${robot.name ?? robotId}`
+			});
+			if (r.published) publishedVersions.push({ deckLoadName: String(d.loadName), version: r.version });
+			results.push({ processType: String(d.loadName), ok: true, detail: r.detail });
+		} catch (e) {
+			results.push({
+				processType: String(d.loadName),
+				ok: false,
+				detail: `Could not freeze a version: ${e instanceof Error ? e.message : 'unknown'}`
+			});
+		}
+	}
+	return { types, results, publishedVersions };
+}
+
+/** Repoint the robot's entry for this process to the fresh upload + stamp the deck versions. */
+async function recordSyncUpload(
+	robot: any,
+	robotId: string,
+	pt: string,
+	fileName: string,
+	uploaded: UploadedProtocolResult,
+	publishedVersions: { deckLoadName: string; version: number }[],
+	username: string
+) {
+	await OpentronsRobot.updateOne({ _id: robotId }, { $pull: { protocols: { protocolType: pt } } });
+	await OpentronsRobot.updateOne(
+		{ _id: robotId },
+		{ $push: { protocols: {
+			_id: generateId(),
+			opentronsProtocolId: uploaded.opentronsProtocolId,
+			protocolName: fileName,
+			protocolType: pt,
+			parametersSchema: uploaded.parametersSchema ?? null,
+			analysisStatus: uploaded.analysisStatus,
+			labwareDefinitions: uploaded.labwareDefinitions ?? null,
+			pipettesRequired: uploaded.pipettesRequired ?? null,
+			uploadedBy: username,
+			createdAt: new Date(),
+			updatedAt: new Date()
+		} } }
+	);
+	for (const pv of publishedVersions) {
+		await DeckVersion.updateOne(
+			{ deckLoadName: pv.deckLoadName, version: pv.version },
+			{
+				$push: {
+					publishedToRobots: {
+						robotId: String(robotId),
+						robotName: robot.name ?? null,
+						opentronsProtocolId: uploaded.opentronsProtocolId,
+						at: new Date()
+					}
+				}
+			}
+		);
+	}
+}
+
+async function auditSync(robotId: string, which: string, results: SyncResult[], username: string, line: 'queue' | 'tailnet') {
+	await AuditLog.create({
+		_id: generateId(),
+		tableName: 'opentrons_robots',
+		recordId: robotId,
+		action: 'deck_calibration_sync',
+		newData: { which, results, line },
+		changedAt: new Date(),
+		changedBy: username
+	});
+}

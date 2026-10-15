@@ -26,6 +26,10 @@ import { parseTestPayload, parseTestRecordBuffer } from '$lib/server/test-payloa
 import { ingestScreenEvent, attachScreenRecord } from '$lib/server/screen/ingest';
 import { ingestSweepText } from '$lib/server/sweep/ingest';
 import { parseChunkEnvelope, storeChunk, assembleChunks, markJob, recordProgress } from '$lib/server/chunks';
+// master's sweep ingest (text envelopes, alias event names). The firmware publishes
+// mag_sweep_chunk BINARY, which only the chunk store above decodes, so this is
+// reached only for the alias spellings it accepts.
+import { handleSweepChunk, isSweepChunkEvent } from '$lib/server/validation/mag-sweep-ingest';
 import type { RequestHandler } from './$types';
 
 /** Strip an optional "bioscale/" prefix so both spellings route the same. */
@@ -152,6 +156,17 @@ export const POST: RequestHandler = async ({ request }) => {
 		});
 		await ParticleDevice.updateOne({ particleDeviceId: deviceId }, { $set: { lastHeardAt: at, status: 'online' } });
 		return json({ success: true, event: 'screen', deviceId, ...r });
+	}
+
+	// Magnetometer sweep chunks take their own path and return early. A sweep is
+	// far too large for one publish, so firmware v98 ships it as ~109 chunk events
+	// that must be buffered and reassembled before anything can be stored — that
+	// does not fit the one-event-one-DeviceEvent shape the rest of this handler
+	// has. The logic lives in $lib/server/validation/mag-sweep-ingest so this
+	// route stays small and mergeable.
+	if (isSweepChunkEvent(eventName)) {
+		const at = publishedAt ? new Date(publishedAt) : new Date();
+		return await handleSweepChunk(deviceId, eventData, at);
 	}
 
 	// Map Particle event names to our event types

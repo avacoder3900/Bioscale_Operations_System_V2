@@ -1,5 +1,10 @@
 <script lang="ts">
 	import { page } from '$app/stores';
+	import { onDestroy } from 'svelte';
+	import { invalidateAll } from '$app/navigation';
+	import TransportPill from '$lib/components/opentrons/TransportPill.svelte';
+	import type { RobotSessionState } from '$lib/opentrons/direct-client';
+	import { cloneLine, closeCloneLine } from './clone-session';
 
 	let { children, data } = $props<{ children: any; data?: { operatorAuthed?: boolean } }>();
 
@@ -8,6 +13,27 @@
 		const m = $page.url.pathname.match(/^\/opentrons-clone\/([^/]+)/);
 		return m ? m[1] : null;
 	});
+
+	// OT2-TAILNET-5 §7.8.6: the robot's line (direct over Tailscale / BIMS queue),
+	// the same session every page load and action on this robot uses.
+	let conn = $state<RobotSessionState | null>(null);
+	const sessionRobotId = $derived(robotId && !robotId.startsWith('operator-') && data?.operatorAuthed ? robotId : null);
+	$effect(() => {
+		const id = sessionRobotId;
+		if (!id) {
+			closeCloneLine();
+			conn = null;
+			return;
+		}
+		return cloneLine(id).session.subscribe((st) => (conn = st));
+	});
+	onDestroy(() => closeCloneLine());
+
+	async function retryDirect() {
+		if (!sessionRobotId) return;
+		const st = await cloneLine(sessionRobotId).session.retryDirect();
+		if (st.transport === 'direct') await invalidateAll();
+	}
 
 	const tabs = $derived(
 		robotId
@@ -29,6 +55,9 @@
 		<div class="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between">
 			<h1 class="text-lg font-semibold ot-heading">Opentrons Clone</h1>
 			<div class="flex items-center gap-3">
+				{#if sessionRobotId}
+					<TransportPill state={conn} onRetry={() => void retryDirect()} />
+				{/if}
 				<span class="text-xs ot-muted">In-BIMS clone of the Opentrons App</span>
 				{#if data?.operatorAuthed}
 					<form method="POST" action="/opentrons-clone/operator-logout">

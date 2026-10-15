@@ -5,6 +5,10 @@
 	 * (maintenance run, mirrors scanner-position teaching) + apply-offset-to-group.
 	 */
 	import { onDestroy } from 'svelte';
+	import { RobotSession, type RobotSessionState } from '$lib/opentrons/direct-client';
+	import { uploadBundle, sessionVerb, isStepError, type ProtocolUploadBundle } from '$lib/opentrons/ot2-protocol';
+	import { calibrateTipOverBridge } from '$lib/opentrons/studio-bridge-jobs';
+	import TransportPill from '$lib/components/opentrons/TransportPill.svelte';
 	import { goto, invalidateAll } from '$app/navigation';
 	import { deserialize } from '$app/forms';
 	import { page } from '$app/stores';
@@ -30,6 +34,66 @@
 		if (!selectedRobotId && robots.length) selectedRobotId = robots.find((r) => r.isActive)?._id ?? robots[0]._id;
 	});
 	const robot = $derived(robots.find((r) => r._id === selectedRobotId) ?? null);
+
+	// ── Fill-mistake marks from the reagent run-page well tracker (2026-10-08) ──
+	// Entries logged on runs that used THIS deck on the SELECTED robot (60 days),
+	// resolved to labware wells server-side. Drawn as red rings on the holes and
+	// listed per cartridge position below the deck, so the operator fixing the
+	// deck sees what the line actually saw go wrong at each hole.
+	type IssueMark = { runId: string; issueId: string; runAt: string | null; deckPosition: number; well: number; reagentName: string | null; issue: string; note: string | null; loggedBy: string | null; loggedAt: string | null; labwareWells: string[]; resolvedAt: string | null; resolvedBy: string | null; resolvedNote: string | null };
+	const allIssueMarks = $derived(((data.wellIssueMarks ?? {}) as Record<string, IssueMark[]>)[selectedRobotId] ?? []);
+	// OPEN entries drive the rings and the main table; resolved ones (addressed in
+	// the deck already — "Resolved" here) sit in a collapsed list so the next run's
+	// notes start from a blank slate without losing the history.
+	const issueMarks = $derived(allIssueMarks.filter((mk) => !mk.resolvedAt));
+	const resolvedMarks = $derived(allIssueMarks.filter((mk) => !!mk.resolvedAt));
+	const issueByWell = $derived.by(() => {
+		const m = new Map<string, IssueMark[]>();
+		for (const mk of issueMarks) for (const n of mk.labwareWells) { if (!m.has(n)) m.set(n, []); m.get(n)!.push(mk); }
+		return m;
+	});
+	type IssueGroup = { deckPosition: number; well: number; reagentName: string | null; labwareWells: string[]; marks: IssueMark[] };
+	function groupMarks(list: IssueMark[]): IssueGroup[] {
+		const g = new Map<string, IssueGroup>();
+		for (const mk of list) {
+			const k = `${mk.deckPosition}:${mk.well}`;
+			if (!g.has(k)) g.set(k, { deckPosition: mk.deckPosition, well: mk.well, reagentName: mk.reagentName, labwareWells: mk.labwareWells, marks: [] });
+			g.get(k)!.marks.push(mk);
+		}
+		return [...g.values()].sort((a, b) => b.marks.length - a.marks.length || a.deckPosition - b.deckPosition || a.well - b.well);
+	}
+	// Grouped per cartridge position + well for the panel, most-hit first.
+	const issueGroups = $derived(groupMarks(issueMarks));
+	const resolvedGroups = $derived(groupMarks(resolvedMarks));
+	let resolveNote = $state('');
+	let showResolved = $state(false);
+	/** Resolve (or reopen) a set of tracker entries for this deck + robot. */
+	async function resolveIssues(marks: IssueMark[], reopen = false) {
+		if (!marks.length || !selectedRobotId) return;
+		const r = await postAction('resolveWellIssues', {
+			deckLoadName: data.selected ?? '',
+			robotId: selectedRobotId,
+			entries: JSON.stringify(marks.map((mk) => ({ runId: mk.runId, issueId: mk.issueId }))),
+			note: reopen ? '' : resolveNote,
+			reopen: reopen ? 'true' : 'false'
+		});
+		if (r) { msg = reopen ? `Reopened ${r.touched ?? marks.length} entr${(r.touched ?? marks.length) === 1 ? 'y' : 'ies'}` : `Resolved ${r.touched ?? marks.length} entr${(r.touched ?? marks.length) === 1 ? 'y' : 'ies'} — they stay in the history below`; if (!reopen) resolveNote = ''; }
+	}
+	function issueLabelOf(code: string): string {
+		return ({ no_fill: 'No fill', partial_fill: 'Partial fill', overfill: 'Overfill', missed_hole: 'Missed the hole', splash: 'Splash', bubble: 'Bubble', bent_tip: 'Bent tip', other: 'Other' } as Record<string, string>)[code] ?? code;
+	}
+	function issueTitle(name: string): string {
+		const list = issueByWell.get(name);
+		if (!list?.length) return '';
+		const counts = new Map<string, number>();
+		for (const mk of list) counts.set(mk.issue, (counts.get(mk.issue) ?? 0) + 1);
+		return ` · FILL ISSUES: ${[...counts].map(([k, n]) => `${issueLabelOf(k)}×${n}`).join(', ')}`;
+	}
+	/** Put a group's three holes into the selection so they can be jogged/applied together. */
+	function selectIssueWells(names: string[], additive = false) {
+		const present = names.filter((n) => wellByName.has(n) && isActiveRole(n));
+		selection = additive ? new Set([...selection, ...present]) : new Set(present);
+	}
 
 	function pickDeck(loadName: string) {
 		const u = new URL($page.url);
@@ -474,8 +538,37 @@
 	async function syncToRobot() {
 		if (!selectedRobotId) { errMsg = 'Pick a robot'; return; }
 		if (!confirm(`Re-upload the ${syncWhich} protocol(s) to ${robot?.name} with the corrected deck?`)) return;
-		const r = await postAction('sync', { robotId: selectedRobotId, which: syncWhich });
+		const r = robotSession?.state.transport === 'direct' ? await syncOverSession(robotSession) : await postAction('sync', { robotId: selectedRobotId, which: syncWhich });
 		if (r) msg = (r.results ?? []).map((x: any) => `${x.processType}: ${x.ok ? '✓' : '✗'} ${x.detail}`).join(' · ');
+	}
+
+	/**
+	 * OT2-TAILNET-5 S4: Sync on the tailnet line. BIMS prepares the bundles
+	 * (?/syncPrepare, DB only), this browser uploads each straight to the robot
+	 * (the shared 'run.uploadProtocol' verb, long analysis wait included), and BIMS
+	 * records them (?/syncConfirm). Same records + AuditLog as ?/sync.
+	 */
+	async function syncOverSession(s: RobotSession) {
+		const prep = await postAction('syncPrepare', { robotId: selectedRobotId, which: syncWhich });
+		if (!prep) return null;
+		busy = true;
+		msg = 'Uploading to the robot over Tailscale…';
+		const uploads: Record<string, unknown>[] = [];
+		try {
+			for (const u of (prep.uploads ?? []) as { processType: string; fileName: string; bundle: ProtocolUploadBundle }[]) {
+				const up = await uploadBundle(sessionVerb(s), u.bundle).catch((e) => ({ error: e instanceof Error ? e.message : 'Upload failed' }));
+				uploads.push(isStepError(up) ? { processType: u.processType, fileName: u.fileName, error: up.error } : { processType: u.processType, fileName: u.fileName, uploaded: up });
+			}
+		} finally {
+			busy = false;
+		}
+		return postAction('syncConfirm', {
+			robotId: selectedRobotId,
+			which: syncWhich,
+			results: JSON.stringify(prep.results ?? []),
+			publishedVersions: JSON.stringify(prep.publishedVersions ?? []),
+			uploads: JSON.stringify(uploads)
+		});
 	}
 
 	// ── Maintenance-run jog (mirror scanner-position teaching) ───────────────────
@@ -519,8 +612,25 @@
 	// pre-edit deck, so "Move to hole" would use stale coords until the deck is reloaded.
 	let deckDirty = $state(false);
 
+	// OT2-TAILNET-4: one robot session per selected robot. Jog / move / position /
+	// home / drop-tip go on its line (direct over Tailscale when available); every
+	// other call is a plain BIMS fetch. Re-created when the robot changes.
+	let robotSession: RobotSession | null = null;
+	let robotConn = $state<RobotSessionState | null>(null);
+	$effect(() => {
+		const id = selectedRobotId;
+		if (!id) return;
+		const s = new RobotSession(id);
+		robotSession = s;
+		s.subscribe((st) => (robotConn = st));
+		void s.open();
+		return () => s.close();
+	});
+	const robotFetch = (path: string, init: RequestInit) =>
+		robotSession ? robotSession.fetchRoute(path, init) : fetch(path, init);
+
 	async function api(path: string, init?: RequestInit): Promise<any> {
-		const res = await fetch(path, { ...init, credentials: 'same-origin', headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) } });
+		const res = await robotFetch(path, { ...init, credentials: 'same-origin', headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) } });
 		const text = await res.text();
 		let body: any = null;
 		try { body = text ? JSON.parse(text) : null; } catch { body = text; }
@@ -928,6 +1038,16 @@
 	// (or the calibration Z) from desiredMount loaded the wrong definition and
 	// probed at the wrong depth. Starts null so nothing can proceed on a guess.
 	let tipProfile = $state<'wax' | 'reagent' | null>(null);
+	// Seed the rack position from where the robot's tracker / Studio cursor says the
+	// next FRESH tip is, whenever the robot or tip type changes. The operator can
+	// still overtype it (e.g. after refilling the rack → A1).
+	const suggestedTipWell = $derived(
+		tipProfile && selectedRobotId ? (data.nextTipWells?.[selectedRobotId]?.[tipProfile] ?? null) : null
+	);
+	$effect(() => {
+		const sw = suggestedTipWell;
+		if (sw?.well) tipWell = sw.well;
+	});
 	const tiprackForProfile = $derived(
 		tipProfile === 'wax'
 			? 'cosmasanddamian_96_tiprack_20ul'
@@ -1000,6 +1120,12 @@
 				await refreshPosition();
 			}
 			// Step 2 — travel, unless the operator already jogged onto the fixture.
+			// The probe runs from wherever the pipette IS (attached mode), so this
+			// decision must use the live position, not the last one this page saw.
+			// After a Swap tip the stored position was still the calibrator from
+			// before the swap → travel skipped → probe walked at the tip rack (R04,
+			// 2026-09-24). Always re-read before deciding.
+			await refreshPosition();
 			if (!pickedUpNow && atCalibratorNow()) {
 				msg = 'Already on the calibrator — probing from the jogged position…';
 			} else {
@@ -1014,7 +1140,17 @@
 			// applyCalibratorOverride lays it over the stored fixture axis by axis, so the
 			// probe happens at the live field values without writing a thing to Mongo.
 			// Its z is the PROBE Z -- the touch-off depth -- never the approach height.
-			const res = await api('/api/scanner/calibrate-tip', { method: 'POST', body: JSON.stringify({ robotId: selectedRobotId, deckLoadName: kind === 'deck' ? data.selected : null, mount: desiredMount, tipProfile, tipWell, runId, pipetteId, calibrator: { x: calX, y: calY, z: probeZNow } }) });
+			const calRequest = { robotId: selectedRobotId, deckLoadName: kind === 'deck' ? data.selected : null, mount: desiredMount, tipProfile, tipWell, runId, pipetteId, calibrator: { x: calX, y: calY, z: probeZNow } };
+			// OT2-TAILNET-5 S6: on the tailnet line (the session hands out a /bridge
+			// client) the probe runs as a daemon job from this browser — BIMS prepares
+			// and records it, progress comes live from the robot. null = the queue
+			// line, exactly as before.
+			const bridge = robotSession?.bridge() ?? null;
+			const res = bridge
+				? await calibrateTipOverBridge(bridge, calRequest, {
+						onProgress: (t) => (msg = `Calibrating tip on the fixture via Tailscale… ${t}`)
+					})
+				: await api('/api/scanner/calibrate-tip', { method: 'POST', body: JSON.stringify(calRequest) });
 			if (res?.adjust && typeof res.adjust.x === 'number') {
 				tipAdjust = { x: res.adjust.x, y: res.adjust.y };
 				// The probe moved the gantry and changed the applied adjust → any prior
@@ -1022,7 +1158,7 @@
 				nominal = null; refWell = null;
 				await refreshPosition();
 				msg = `Tip calibrated: adjust x=${tipAdjust.x} y=${tipAdjust.y}. Tip kept on; applied to every move-to while tuning. Move to a hole to set a fresh nominal.`;
-			} else { errMsg = 'Calibration returned no adjust'; }
+			} else { errMsg = (bridge && typeof res?.error === 'string' && res.error) || 'Calibration returned no adjust'; }
 		} catch (e) { errMsg = e instanceof Error ? e.message : String(e); } finally { busy = false; calibrating = false; }
 	}
 
@@ -1041,8 +1177,34 @@
 	// tip type and re-run without ever thinking about what is in slot 11. The rack
 	// comes from tiprackForProfile (the operator's explicit choice), not master's
 	// tiprackForMount, which inferred it from the mount.
+	// Next rack position after `w`, column-major (A1 → B1 … H1 → A2 …), wrapping
+	// after H12. The Studio never wrote back to the protocols' tip tracker, so a
+	// second pick-up in one session used to aim at the well it had just emptied.
+	function nextTipWell(w: string): string {
+		const m = /^([A-H])(\d{1,2})$/.exec(w.trim().toUpperCase());
+		if (!m) return 'A1';
+		const rowI = 'ABCDEFGH'.indexOf(m[1]);
+		let col = parseInt(m[2], 10);
+		if (rowI < 7) return `${'ABCDEFGH'[rowI + 1]}${col}`;
+		col = col >= 12 ? 1 : col + 1;
+		return `A${col}`;
+	}
+
+	/** Drop the modelled tip into the trash. Resolves false when the engine modelled none. */
+	async function doDropTip(): Promise<boolean> {
+		const res = await robotFetch(`/api/opentrons-lab/robots/${selectedRobotId}/maintenance/${runId}/drop-tip`, {
+			method: 'POST',
+			credentials: 'same-origin',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ pipetteId })
+		});
+		const body = await res.json().catch(() => ({}) as any);
+		if (!res.ok) throw new Error(body?.message || `HTTP ${res.status}`);
+		return !!body?.dropped;
+	}
+
 	async function doPickUp(allowRecover: boolean) {
-		const res = await fetch(
+		const res = await robotFetch(
 			`/api/opentrons-lab/robots/${selectedRobotId}/maintenance/${runId}/pick-up-tip`,
 			{
 				method: 'POST',
@@ -1051,8 +1213,21 @@
 				body: JSON.stringify({ pipetteId, tiprackLoadName: tiprackForProfile, slot: '11', tipWell })
 			}
 		);
-		if (res.ok) return;
+		if (res.ok) {
+			// The rack position is spent: aim the next pick-up at the next one (the
+			// server's cursor answer wins so a reload lands on the same position).
+			const ok = await res.json().catch(() => ({}) as any);
+			tipWell = ok?.nextTipWell || nextTipWell(tipWell);
+			return;
+		}
 		const body = await res.json().catch(() => ({}) as any);
+		if (res.status === 409 && body?.code === 'TIP_ALREADY_ATTACHED' && allowRecover) {
+			// The run still models a tip (typically one that was then swapped by hand).
+			// Drop it in the trash so the press can happen, then retry once.
+			msg = 'The run still had a tip modelled — dropping it in the trash first…';
+			await doDropTip();
+			return doPickUp(false);
+		}
 		if (res.status === 409 && body?.code === 'SLOT_OCCUPIED' && allowRecover) {
 			msg = 'Slot 11 had another rack loaded — reopening the run to free it…';
 			await stopMaintenance();
@@ -1071,6 +1246,9 @@
 		if (!tiprackForProfile) throw new Error('Pick the tip type first (p20/wax or p300/reagent) — it is not inferred from the mount');
 		await doPickUp(true);
 		hasTip = true;
+		// The pipette is now over the tip rack: refresh so "at calibrator?" checks
+		// and the position readout can't act on a pre-pick-up position.
+		await refreshPosition();
 		// Tip state just changed → any nominal taken without the tip is now a
 		// different frame. Force a fresh Move-to-hole before the next capture.
 		nominal = null; refWell = null;
@@ -1098,8 +1276,29 @@
 		clearMsg(); busy = true;
 		msg = 'Loading tiprack & picking up a tip…';
 		try {
+			const from = tipWell;
 			await doPickUpTip();
-			msg = `Picked up a tip (${tiprackForProfile} ${tipWell}). No calibration run — use "Calibrate tip" for that, or move to a hole.`;
+			msg = `Picked up a tip (${tiprackForProfile} ${from}). No calibration run — use "Calibrate tip" for that, or move to a hole.`;
+		} catch (e) { errMsg = e instanceof Error ? e.message : String(e); } finally { busy = false; }
+	}
+
+	// "Swap tip": drop the current tip in the trash and take the next fresh one from
+	// the rack, without a hand swap (2026-09-23). A hand-swapped tip is invisible to
+	// the engine, which is how "same Z, different depth" happened on B14 — this keeps
+	// the modelled tip and the real tip the same object. The probe adjust belongs to
+	// the old tip, so it is cleared: Calibrate tip again before teaching with it.
+	async function swapTipAction() {
+		if (!runId || !pipetteId) { errMsg = 'Open a maintenance run first'; return; }
+		if (!tiprackForProfile) { errMsg = 'Pick the tip type first (p20/wax or p300/reagent)'; return; }
+		clearMsg(); busy = true;
+		msg = 'Dropping the current tip in the trash…';
+		try {
+			const dropped = await doDropTip();
+			hasTip = false; tipAdjust = null; nominal = null; refWell = null;
+			const from = tipWell;
+			msg = dropped ? `Dropped. Picking up a fresh tip (${tiprackForProfile} ${from})…` : `No tip was modelled (a hand-fitted tip must come off by hand). Picking up ${tiprackForProfile} ${from}…`;
+			await doPickUpTip();
+			msg = `Fresh tip on (${tiprackForProfile} ${from}). Its bend is unknown — run "Calibrate tip" before capturing, or move to a hole to eyeball it.`;
 		} catch (e) { errMsg = e instanceof Error ? e.message : String(e); } finally { busy = false; }
 	}
 
@@ -1201,6 +1400,8 @@
 	onDestroy(() => {
 		if (runId) {
 			try {
+				// Page unload: a same-origin keepalive request to BIMS is what reliably
+				// survives the page closing, so this one close stays on the queue line.
 				fetch(`/api/opentrons-lab/robots/${selectedRobotId}/maintenance/${runId}`, { method: 'DELETE', credentials: 'same-origin', keepalive: true });
 			} catch { /* best-effort */ }
 		}
@@ -1251,6 +1452,7 @@
 			<select bind:value={selectedRobotId} class="mt-1 block rounded border border-[var(--color-tron-border)] bg-black/30 px-2 py-1.5 text-xs" style="color: var(--color-tron-text)">
 				{#each robots as r (r._id)}<option value={r._id}>{r.name}{r.isActive ? '' : ' (inactive)'}</option>{/each}
 			</select>
+			<span class="mt-1 block"><TransportPill state={robotConn} onRetry={() => void robotSession?.retryDirect()} /></span>
 		</label>
 		<!-- Mount lives here (2026-08-28), not in the JOG panel: it decides which
 		     PIPETTE the maintenance run loads, so it is a before-you-open-the-run
@@ -1372,7 +1574,14 @@
 								onpointerdown={(e) => { e.stopPropagation(); }}
 								onclick={(e) => { e.stopPropagation(); toggleWell(w.name, e.shiftKey || e.ctrlKey || e.metaKey); }}
 								role="button" tabindex="-1"
-							><title>{w.name} ({role}) — x {w.x.toFixed(2)} y {w.y.toFixed(2)} z {w.z.toFixed(2)}</title></circle>
+							><title>{w.name} ({role}) — x {w.x.toFixed(2)} y {w.y.toFixed(2)} z {w.z.toFixed(2)}{issueTitle(w.name)}</title></circle>
+						{/each}
+						<!-- Fill-mistake rings (reagent run-page well tracker), drawn over the dots. -->
+						{#each wells as w (`issue-${w.name}`)}
+							{@const n = issueByWell.get(w.name)?.length ?? 0}
+							{#if n > 0}
+								<circle cx={w.x} cy={cy(w.y)} r={wellR + 0.9} fill="none" stroke={n > 1 ? '#ef4444' : '#f87171'} stroke-width={n > 1 ? 0.6 : 0.4} style="pointer-events:none;" />
+							{/if}
 						{/each}
 						{#if boxRect}
 							<rect x={boxRect.x} y={boxRect.y} width={boxRect.w} height={boxRect.h} fill="rgba(0,255,255,0.12)" stroke="var(--color-tron-cyan)" stroke-width="0.4" />
@@ -1476,6 +1685,18 @@
 						</div>
 						{#if !tipProfile}
 							<p class="mt-1 text-[10px] text-amber-300/90">Pick the tip type — probe depth differs by 6.309 mm and is never guessed.</p>
+						{:else}
+							<!-- Rack position the next pick-up presses into. Seeded from the robot's
+							     tip tracker (last run) or the Studio's own cursor, whichever is newer,
+							     because A1 is usually long gone on a working rack. -->
+							<div class="mt-1 flex items-center gap-2 text-[10px]" style="color: var(--color-tron-text-secondary)">
+								<span>Pick from</span>
+								<input type="text" bind:value={tipWell} disabled={busy} class="w-12 rounded border border-[var(--color-tron-border)] bg-black/40 px-1 py-0.5 text-center font-mono text-[11px]" style="color: var(--color-tron-text)" title="Rack position of the next fresh tip (column-major: A1..H1, A2..). Overtype if the rack was reloaded." />
+								{#if suggestedTipWell}
+									<span title="Where the robot's last run ({suggestedTipWell.source === 'run' ? 'tip tracker' : suggestedTipWell.source}) says the next fresh tip is">next fresh: <span class="font-mono">{suggestedTipWell.well}</span> · {suggestedTipWell.source}</span>
+								{/if}
+								<button type="button" onclick={() => (tipWell = 'A1')} disabled={busy} class="rounded border border-[var(--color-tron-border)] px-1.5 py-0.5 hover:border-[var(--color-tron-cyan)]/60" title="Rack was refilled — start from A1 again">Refilled → A1</button>
+							</div>
 						{/if}
 					</div>
 					<!--
@@ -1517,6 +1738,9 @@
 						belief, and an operator recovering from a dropped or broken tip has to be
 						able to pick another one up without reopening the run.
 					-->
+					<button type="button" onclick={swapTipAction} disabled={!pipetteId || busy || !tipProfile} class="mt-1 w-full rounded border border-amber-400/50 bg-amber-900/15 px-2 py-1.5 text-[11px] font-semibold text-amber-200 hover:bg-amber-900/25 disabled:opacity-40" title="Drops the current tip in the trash, then picks the next fresh one from slot 11. Clears the probe adjust — Calibrate tip again before capturing.">
+						Swap tip — drop it, take a fresh one from the rack
+					</button>
 					<button type="button" onclick={pickUpTipAction} disabled={!pipetteId || busy || !tipProfile} class="mt-1 w-full rounded border border-[var(--color-tron-cyan)]/40 px-2 py-1.5 text-[11px] text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40" title="Just picks up a tip of the selected type from slot 11 — no travel to the calibrator, no probe.">
 						{hasTip ? 'Pick up tip (another one)' : 'Pick up tip (no probe)'}
 					</button>
@@ -1715,6 +1939,80 @@
 		</button>
 	</section>
 	</div>
+
+	<!-- Fill issues logged on this deck + robot (reagent run-page well tracker) -->
+	{#if kind === 'deck' && data.selected}
+		<section class="rounded-lg border {issueMarks.length ? 'border-red-500/40' : 'border-[var(--color-tron-border)]'} bg-[var(--color-tron-surface)] p-3">
+			<div class="mb-2 flex flex-wrap items-baseline justify-between gap-2">
+				<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">
+					Fill issues on this deck <span class="normal-case font-normal">— {robot?.name ?? 'robot'} · {data.selected} · last 60 days</span>
+				</h2>
+				{#if issueMarks.length}
+					<div class="flex flex-wrap items-center gap-2">
+						<span class="text-[11px] text-red-300">{issueMarks.length} open on {issueGroups.length} hole group{issueGroups.length === 1 ? '' : 's'} · red rings on the deck above</span>
+						<input type="text" bind:value={resolveNote} placeholder="what you changed (optional)" maxlength="300" class="rounded border border-[var(--color-tron-border)] bg-black/30 px-2 py-1 text-[11px]" style="color: var(--color-tron-text)" />
+						<button type="button" onclick={() => resolveIssues(issueMarks)} disabled={busy} class="rounded border border-emerald-500/50 bg-emerald-900/20 px-2 py-1 text-[11px] font-bold text-emerald-300 hover:bg-emerald-900/30 disabled:opacity-40" title="Mark every open entry on this deck + robot as addressed. They move to the resolved list; the next run starts from a blank slate.">✓ Resolve all open</button>
+					</div>
+				{/if}
+			</div>
+			{#if !issueMarks.length}
+				<p class="text-[11px]" style="color: var(--color-tron-text-secondary)">No open issues for this deck on {robot?.name ?? 'this robot'}{resolvedMarks.length ? ` — ${resolvedMarks.length} resolved (below)` : ''}. Operators tag mistakes on the reagent run page's well tracker; they show up here against the holes they hit until you resolve them.</p>
+			{:else}
+				<div class="overflow-x-auto">
+					<table class="w-full text-left text-[11px]">
+						<thead style="color: var(--color-tron-text-secondary)"><tr><th class="px-2 py-1">Cartridge</th><th class="px-2 py-1">Well</th><th class="px-2 py-1">Holes</th><th class="px-2 py-1">What was seen</th><th class="px-2 py-1">Notes</th><th class="px-2 py-1">Last</th><th class="px-2 py-1"></th></tr></thead>
+						<tbody style="color: var(--color-tron-text)">
+							{#each issueGroups as g (`${g.deckPosition}:${g.well}`)}
+								{@const counts = [...g.marks.reduce((m, mk) => m.set(mk.issue, (m.get(mk.issue) ?? 0) + 1), new Map<string, number>())]}
+								{@const notes = g.marks.filter((mk) => mk.note).map((mk) => mk.note)}
+								{@const last = g.marks.map((mk) => mk.loggedAt ?? '').sort().at(-1) || null}
+								<tr class="border-t border-[var(--color-tron-border)] align-top">
+									<td class="px-2 py-1 font-semibold">#{g.deckPosition} <span class="font-normal" style="color: var(--color-tron-text-secondary)">(carrier {Math.floor((g.deckPosition - 1) / 8) + 1})</span></td>
+									<td class="px-2 py-1">well {g.well}{g.reagentName ? ` · ${g.reagentName}` : ''}</td>
+									<td class="px-2 py-1 font-mono">{g.labwareWells.join(' ')}</td>
+									<td class="px-2 py-1 text-red-200">{counts.map(([k, n]) => `${issueLabelOf(k)}${n > 1 ? ` ×${n}` : ''}`).join(', ')}</td>
+									<td class="px-2 py-1" style="color: var(--color-tron-text-secondary)">{notes.length ? notes.join(' · ') : '—'}</td>
+									<td class="px-2 py-1" style="color: var(--color-tron-text-secondary)">{last ? new Date(last).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : ''}{g.marks[0]?.loggedBy ? ` · ${g.marks[0].loggedBy}` : ''}</td>
+									<td class="px-2 py-1 whitespace-nowrap">
+										<button type="button" onclick={(e) => selectIssueWells(g.labwareWells, e.shiftKey)} class="rounded border border-[var(--color-tron-border)] px-2 py-0.5 hover:border-[var(--color-tron-cyan)]" style="color: var(--color-tron-text)" title="Select these three holes (shift = add to the selection)">Select holes</button>
+										<button type="button" onclick={() => resolveIssues(g.marks)} disabled={busy} class="ml-1 rounded border border-emerald-500/50 bg-emerald-900/20 px-2 py-0.5 text-emerald-300 hover:bg-emerald-900/30 disabled:opacity-40" title="Addressed in the deck — move this hole group's entries to the resolved list">✓ Resolved</button>
+									</td>
+								</tr>
+							{/each}
+						</tbody>
+					</table>
+				</div>
+			{/if}
+			{#if resolvedMarks.length}
+				<div class="mt-2 border-t border-[var(--color-tron-border)] pt-2">
+					<button type="button" onclick={() => (showResolved = !showResolved)} class="text-[11px] underline-offset-2 hover:underline" style="color: var(--color-tron-text-secondary)">
+						{showResolved ? '▾' : '▸'} {resolvedMarks.length} resolved entr{resolvedMarks.length === 1 ? 'y' : 'ies'} on {resolvedGroups.length} hole group{resolvedGroups.length === 1 ? '' : 's'} (already addressed — kept for history)
+					</button>
+					{#if showResolved}
+						<div class="mt-1 overflow-x-auto">
+							<table class="w-full text-left text-[11px] opacity-80">
+								<thead style="color: var(--color-tron-text-secondary)"><tr><th class="px-2 py-1">Cartridge</th><th class="px-2 py-1">Well</th><th class="px-2 py-1">Holes</th><th class="px-2 py-1">What was seen</th><th class="px-2 py-1">Resolved</th><th class="px-2 py-1"></th></tr></thead>
+								<tbody style="color: var(--color-tron-text)">
+									{#each resolvedGroups as g (`r:${g.deckPosition}:${g.well}`)}
+										{@const counts = [...g.marks.reduce((m, mk) => m.set(mk.issue, (m.get(mk.issue) ?? 0) + 1), new Map<string, number>())]}
+										{@const lastRes = [...g.marks].sort((a, b) => (b.resolvedAt ?? '').localeCompare(a.resolvedAt ?? ''))[0]}
+										<tr class="border-t border-[var(--color-tron-border)] align-top">
+											<td class="px-2 py-1 font-semibold">#{g.deckPosition}</td>
+											<td class="px-2 py-1">well {g.well}{g.reagentName ? ` · ${g.reagentName}` : ''}</td>
+											<td class="px-2 py-1 font-mono">{g.labwareWells.join(' ')}</td>
+											<td class="px-2 py-1">{counts.map(([k, n]) => `${issueLabelOf(k)}${n > 1 ? ` ×${n}` : ''}`).join(', ')}</td>
+											<td class="px-2 py-1" style="color: var(--color-tron-text-secondary)">{lastRes?.resolvedAt ? new Date(lastRes.resolvedAt).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : ''}{lastRes?.resolvedBy ? ` · ${lastRes.resolvedBy}` : ''}{lastRes?.resolvedNote ? ` — ${lastRes.resolvedNote}` : ''}</td>
+											<td class="px-2 py-1 whitespace-nowrap"><button type="button" onclick={() => resolveIssues(g.marks, true)} disabled={busy} class="rounded border border-[var(--color-tron-border)] px-2 py-0.5 hover:border-amber-400" style="color: var(--color-tron-text)" title="Put this hole group back on the open list">Reopen</button></td>
+										</tr>
+									{/each}
+								</tbody>
+							</table>
+						</div>
+					{/if}
+				</div>
+			{/if}
+		</section>
+	{/if}
 
 	<!-- History -->
 	{#if data.history?.length}

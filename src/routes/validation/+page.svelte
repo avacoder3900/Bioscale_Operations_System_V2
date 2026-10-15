@@ -13,17 +13,6 @@
 			releasing = null;
 		};
 	}
-	let syncing = $state(false);
-	function syncHandler() {
-		syncing = true;
-		return async ({ update }: { update: () => Promise<void> }) => {
-			try {
-				await update();
-			} finally {
-				syncing = false;
-			}
-		};
-	}
 	function releaseBlockedReason(r: { status: string; passedCount: number; total: number }): string {
 		if (r.status !== 'validating') return `Only a validating unit can be released (this one is ${r.status})`;
 		return `${r.passedCount}/${r.total} validations passed this cycle — all ${r.total} must pass first`;
@@ -100,10 +89,17 @@
 		return 'neutral';
 	}
 
-	// Validation = how many of the three instruments have passed in the CURRENT
-	// cycle, rendered exactly like the inventory's pill. The cycle resets to
-	// 0/3 when a unit enters servicing (spu-validation-cycle.ts).
+	// Validation = how many of the graded instruments (mag + thermo) have passed
+	// in the CURRENT cycle, rendered exactly like the inventory's pill. The cycle
+	// resets to 0 when a unit enters servicing (spu-validation-cycle.ts).
 
+	/** Bench / blank auto-check cell: PASS / FAIL / INCOMPLETE, reasons on hover. */
+	function autoVariant(v: string | undefined): 'success' | 'error' | 'warning' | 'neutral' {
+		if (v === 'pass') return 'success';
+		if (v === 'fail') return 'error';
+		if (v === 'incomplete') return 'warning';
+		return 'neutral';
+	}
 	function fmtRatio(r: number | null): string {
 		return r == null ? '—' : r.toFixed(2);
 	}
@@ -111,17 +107,19 @@
 		return r == null ? '—' : r.toFixed(2);
 	}
 
-	// The four gates, then the tools that feed them (2026-10-13 pipeline:
-	// SCREEN → mag / thermo / sonic as separate tools → assay-run group).
+	// The validation workflow, in order (2026-10-06, screen + assay run added
+	// 2026-10-13): cheapest, broadest checks first so a bad unit is weeded out
+	// before the slower fixture tests. Screen, magnetometer, thermocouple and
+	// assay run gate release; bench, sonic and blank are checks on the way.
 	const LAUNCHERS = [
-		{ href: '/validation/screen', label: 'Screen', desc: 'One button: self-test suite, laser blast, assay motion ×3' },
-		{ href: '/validation/magnetometer', label: 'Magnetometer', desc: 'Gauss at every well; peaks sweep gradient' },
-		{ href: '/validation/thermocouple', label: 'Thermocouple', desc: 'Heat-cart hold read by the thermocouple tool' },
-		{ href: '/validation/assay-run', label: 'Assay Run', desc: 'A group of real cartridges on the unit — bead index, CV, stage check' },
-		{ href: '/validation/sonic', label: 'Sonic Fingerprint', desc: 'Upload a phone recording of the motion assay' },
-		{ href: '/validation/bench', label: 'Optical Bench (R&D)', desc: 'Laser-into-sensor and dark reads, no cartridge' },
-		{ href: '/validation/optical-confirmation', label: 'Optical Confirmation (R&D)', desc: 'No longer a gate — optics R&D only' },
-		{ href: '/validation/optical-confirmation/blank', label: 'Blank Cartridge (R&D)', desc: 'Instrument noise with the chemistry held constant' }
+		{ href: '/validation/screen', label: 'Screen', desc: 'One button, no cartridge: self-test suite, laser blast, assay motion ×3 with the stage check (firmware v102).' },
+		{ href: '/validation/bench', label: 'Optical Bench', desc: 'Empty slot, one click. Fails on a dead/weak laser, a dead sensor band, or light in the dark read.' },
+		{ href: '/validation/sonic', label: 'Sonic Fingerprint', desc: 'Phone recording of the motion assay. Fleet check: loudness against the fleet.' },
+		{ href: '/validation/blank', label: 'Blank Cartridge', desc: 'One reusable blank cart. Fails on a short run, a missing channel, or a laser that never came on.' },
+		{ href: '/validation/magnetometer', label: 'Magnetometer', desc: 'Fixture cartridge. Z (gauss) per well against the criteria range; peaks sweep gradient.' },
+		{ href: '/validation/thermocouple', label: 'Thermocouple', desc: 'Instrumented cartridge + logger. Upload the dataset for a verdict.' },
+		{ href: '/validation/assay-run', label: 'Assay Run', desc: 'A group of real cartridges on the unit — bead index, CV, stage check. Replaces optical confirmation.' },
+		{ href: '/validation/optical-confirmation', label: 'Optical Confirmation (R&D)', desc: 'No longer a gate — optics R&D only.' }
 	];
 </script>
 
@@ -134,46 +132,42 @@
 				picture lives.
 			</p>
 		</div>
-		<!-- Legacy: optics is no longer a gate (2026-10-13). The sync stays callable for history. -->
-		<form method="POST" action="?/syncOptics" use:enhance={syncHandler}>
-			<span title="LEGACY — writes each unit's latest optical run onto the retired validation.spectrophotometer slot. Does not count toward release.">
-				<button type="submit" class="tron-text-muted text-xs hover:underline" disabled={syncing}>
-					{syncing ? 'Syncing optics…' : 'legacy: sync optics'}
-				</button>
-			</span>
-		</form>
 	</div>
 
-	<!-- Launchers -->
-	<div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-		{#each LAUNCHERS as l (l.href)}
-			<a href={l.href} class="block">
-				<TronCard interactive>
-					<div class="font-medium text-[var(--color-tron-cyan)]">{l.label} →</div>
-					<div class="tron-text-muted mt-1 text-xs">{l.desc}</div>
-				</TronCard>
-			</a>
-		{/each}
+	<!-- Launchers, in workflow order. A unit that fails a step is fixed and
+	     re-run at that step (back to step 1 if it was opened up). -->
+	<div>
+		<div class="tron-text-muted mb-2 text-xs uppercase">Validation workflow — easiest first</div>
+		<div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+			{#each LAUNCHERS as l, i (l.href)}
+				<a href={l.href} class="block">
+					<TronCard interactive>
+						<div class="font-medium text-[var(--color-tron-cyan)]">
+							<span class="tron-text-muted mr-1 font-mono text-xs">{i + 1}</span>{l.label} →
+						</div>
+						<div class="tron-text-muted mt-1 text-xs">{l.desc}</div>
+					</TronCard>
+				</a>
+			{/each}
+		</div>
 	</div>
 
 	<!-- Fleet matrix -->
 	<TronCard>
 		<h3 class="tron-text-primary mb-3 text-lg font-medium">Fleet Matrix</h3>
 		<p class="tron-text-muted mb-4 text-xs">
-			Screen shows the latest screen's pass / fail / warn counts. Magnetometer shows the Z (gauss)
-			range — expand a row for every point — and the minimum sweep gradient when a sweep exists.
-			Thermocouple shows the mode of the temperature plot. Assay run shows the latest group's bead
-			index per lane and its CV. Only the current validation cycle counts — it resets to 0/4 when a
-			unit enters servicing. Most recently tested first. Retired units are hidden.
+			Screen shows the latest screen's pass / fail / warn counts. Bench and Blank are checked
+			automatically from the latest run — hover a FAIL for the reason. Magnetometer shows the Z
+			(gauss) range — expand a row for every point — and the minimum sweep gradient when a sweep
+			exists. Thermocouple shows the mode of the temperature plot. Assay run shows the latest
+			group's bead index per lane and its CV. Release needs screen, magnetometer, thermocouple and
+			assay run passed. Only the current validation cycle counts — it resets to 0/4 when a unit
+			enters servicing. Most recently tested first. Retired units are hidden.
 		</p>
 		{#if form?.error}
 			<p class="mb-3 text-sm text-[var(--color-tron-red)]">{form.error}</p>
 		{:else if form?.released}
 			<p class="mb-3 text-sm text-[var(--color-tron-cyan)]">{form.udi} released.</p>
-		{:else if form?.opticsSynced}
-			<p class="mb-3 text-sm text-[var(--color-tron-cyan)]">
-				Optics synced: {form.updated} unit{form.updated === 1 ? '' : 's'} updated ({form.passed} passed, {form.failed} failed), {form.unchanged} unchanged, {form.noReadings} with no run this cycle.
-			</p>
 		{/if}
 		<input
 			type="text"
@@ -204,6 +198,8 @@
 						<th class="py-2 pr-4 text-xs uppercase text-[var(--color-tron-text-secondary)]">Validation</th>
 						<th class="py-2 pr-4 text-xs uppercase text-[var(--color-tron-text-secondary)]">Lifecycle</th>
 						<th class="py-2 pr-4 text-xs uppercase text-[var(--color-tron-text-secondary)]">Screen</th>
+						<th class="py-2 pr-4 text-xs uppercase text-[var(--color-tron-text-secondary)]">Bench</th>
+						<th class="py-2 pr-4 text-xs uppercase text-[var(--color-tron-text-secondary)]">Blank</th>
 						<th class="py-2 pr-4 text-xs uppercase text-[var(--color-tron-text-secondary)]">Magnetometer (gauss)</th>
 						<th class="py-2 pr-4 text-xs uppercase text-[var(--color-tron-text-secondary)]">Thermo mode</th>
 						<th class="py-2 pr-4 text-xs uppercase text-[var(--color-tron-text-secondary)]">Assay run — bead index A / B / C</th>
@@ -253,6 +249,20 @@
 									<span class="tron-text-muted ml-2">—</span>
 								{/if}
 							</td>
+							{#each [r.bench, r.blank] as c, ci (ci)}
+								<td class="py-2.5 pr-4 whitespace-nowrap">
+									{#if c}
+										<span title={c.reasons.length ? c.reasons.join('\n') : 'All channels read'}>
+											<TronBadge variant={autoVariant(c.verdict)}>{c.verdict}</TronBadge>
+										</span>
+										{#if c.reasons.length}
+											<div class="mt-0.5 max-w-[14rem] truncate text-[10px] text-[var(--color-tron-red)]" title={c.reasons.join('\n')}>{c.reasons[0]}</div>
+										{/if}
+									{:else}
+										<span class="tron-text-muted text-xs">not run</span>
+									{/if}
+								</td>
+							{/each}
 							<td class="py-2.5 pr-4 whitespace-nowrap">
 								<TronBadge variant={badgeVariant(r.mag.status)}>{r.mag.status}</TronBadge>
 								{#if r.mag.zRange}

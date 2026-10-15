@@ -24,8 +24,8 @@ describe('SPU', () => {
     expect(pageKeys).toContain('batches');
   });
 
-  it('GET /spu/validation returns validation page', async () => {
-    const { status } = await getPageData('/spu/validation');
+  it('GET /validation returns validation page', async () => {
+    const { status } = await getPageData('/validation');
     expect(status).toBe(200);
   });
 

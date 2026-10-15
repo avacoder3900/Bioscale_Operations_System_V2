@@ -105,5 +105,6 @@ export interface HeartbeatRequest {
 }
 
 export type LockStationResponse =
-	| { ok: true }
+	// tookOverFrom: the claim displaced this holder (newest request wins).
+	| { ok: true; released?: boolean; tookOverFrom?: { username: string; since: string | Date } }
 	| { ok: false; heldBy: { username: string; since: string | Date } };

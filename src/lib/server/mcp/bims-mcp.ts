@@ -224,7 +224,7 @@ async function callAgentApi(
 export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 	// Version bump signals clients (claude.ai caches connector tool lists) that
 	// the toolset changed — bump on every tool add/remove/rename.
-	const server = new McpServer({ name: 'bims-operations', version: '3.5.1' });
+	const server = new McpServer({ name: 'bims-operations', version: '3.12.0' });
 
 	// ---------------------------------------------------------------- meta
 
@@ -1643,6 +1643,992 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 			inputSchema: z.object({ barcode: z.string().describe('The cartridge barcode.') })
 		},
 		async ({ barcode }) => callAgentApi(fetcher, `/api/agent/cartridge/${encodeURIComponent(barcode)}/photos`)
+	);
+
+	// ------------------------------------------- research analysis (proxied)
+	//
+	// brevitest-research-v2 owns the analysis engine: declarative analysis profiles
+	// (metrics/expressions/QC/views), stored per-well results on cartridge_records,
+	// and 4PL calibration curves per reagent lot. These tools proxy its
+	// /api/agent/analysis/* and /api/agent/calibration/* through
+	// /api/agent/research/* (allowlisted; RESEARCH_API_URL on BIMS).
+
+	const RESEARCH = '/api/agent/research';
+	const RESEARCH_AUTHORING_DOCTRINE =
+		'AUTHORING LOOP (follow exactly): 1) research_analysis_catalog once per session to learn bands, reducers, ' +
+		'window shapes, the expression grammar and two example profiles. 2) Draft the profile JSON with the ' +
+		'person; run research_analysis_validate_profile until it returns no issues. 3) research_analysis_find_cartridges ' +
+		'to pick 3-10 real run cartridges, then research_analysis_preview (dry run, nothing written) and show the table. ' +
+		'4) Only when the person is satisfied: research_analysis_save_profile (draft), research_analysis_activate_profile, ' +
+		'and research_assay_attach_profile so the device middleware runs it at upload time. Never activate or attach ' +
+		'without the person saying so. Profiles are versioned; active versions are immutable (save a new draft to change one).';
+
+	server.registerTool(
+		'research_analysis_catalog',
+		{ annotations: READ_ONLY,
+			description:
+				'Research app: everything needed to author an analysis profile — bands (f1..f8, clear, nir, temperature...), ' +
+				'reducers (sum, mean, median, sd, cv, min, max, first, last, count, slope), window shapes, the safe expression ' +
+				'grammar (arithmetic, comparisons, if/min/max/log..., cross-well `key@B`), QC rule semantics, ' +
+				'quantify options, the legacy outputs[] compat projection (keep f3_raw and f7/f3 for device-calibration and ' +
+				'calibrated-analysis), view column sources, and two complete example profiles. Call this first. ' + RESEARCH_AUTHORING_DOCTRINE
+		},
+		async () => callAgentApi(fetcher, `${RESEARCH}/analysis/catalog`)
+	);
+
+	server.registerTool(
+		'research_analysis_list_profiles',
+		{ annotations: READ_ONLY,
+			description:
+				'Research app: list analysis profiles (v2 declarative and legacy v1 shown converted) with status, version, ' +
+				'metric/expression keys and view keys. Filter by status: active | draft | archived | v1.',
+			inputSchema: z.object({ status: z.enum(['active', 'draft', 'archived', 'v1']).optional() })
+		},
+		async ({ status }) => callAgentApi(fetcher, `${RESEARCH}/analysis/profiles`, { query: { status } })
+	);
+
+	server.registerTool(
+		'research_analysis_get_profile',
+		{ annotations: READ_ONLY,
+			description: 'Research app: one analysis profile in full v2 form (scanGroups, metrics, expressions, qc, quantify, compat, views) plus its version history.',
+			inputSchema: z.object({ profileId: z.string().describe('analysis_profiles _id') })
+		},
+		async ({ profileId }) => callAgentApi(fetcher, `${RESEARCH}/analysis/profiles/${encodeURIComponent(profileId)}`)
+	);
+
+	server.registerTool(
+		'research_analysis_validate_profile',
+		{ annotations: READ_ONLY,
+			description:
+				'Research app: validate a profile document WITHOUT saving. Returns { valid, issues[] } where each issue has a ' +
+				'JSON path (e.g. expressions[2].expr) and a message. Iterate until issues is empty before saving.',
+			inputSchema: z.object({ profile: z.record(z.string(), z.unknown()).describe('The profile JSON (schemaVersion 2 is implied).') })
+		},
+		async ({ profile }) => callAgentApi(fetcher, `${RESEARCH}/analysis/validate`, { method: 'POST', body: { profile } })
+	);
+
+	server.registerTool(
+		'research_analysis_find_cartridges',
+		{ annotations: READ_ONLY,
+			description:
+				'Research app: discover run cartridges (with raw optical data) to preview or run a profile on. Filter by ' +
+				'assayId (8-char A+hex), experiment name, or lotId. Rows carry barcode, experiment/arm, run time, the resolved ' +
+				'reagent lot (lotId + lotSource: manual | tubeRecords | fillRun | none), per-well sample labels and the stored ' +
+				'analysis stamp (profile, version, schemaVersion). Use the barcodes as cartridgeIds in preview/run.',
+			inputSchema: z.object({
+				assayId: z.string().optional(),
+				experiment: z.string().optional().describe('Exact experiment name as stored on the cartridge.'),
+				lotId: z.string().optional(),
+				limit: z.number().int().min(1).max(500).optional()
+			})
+		},
+		async (args) => callAgentApi(fetcher, `${RESEARCH}/analysis/cartridges`, { query: args })
+	);
+
+	server.registerTool(
+		'research_analysis_preview',
+		{ annotations: READ_ONLY,
+			description:
+				'Research app: DRY RUN a profile (saved profileId or an inline unsaved profile) on cartridges selected by ' +
+				'cartridgeIds, experimentId (+armIndex, -1 = all arms) or lotId. Nothing is written. Returns per-cartridge ' +
+				'wells (metrics, expressions, qc flags, quant) and, if the profile has views, the rendered table (json or tsv). ' +
+				'Show the person the table and the errors[] list. Default limit 25.',
+			inputSchema: z.object({
+				profileId: z.string().optional(),
+				profile: z.record(z.string(), z.unknown()).optional().describe('Inline profile JSON instead of profileId.'),
+				cartridgeIds: z.array(z.string()).optional(),
+				experimentId: z.string().optional(),
+				armIndex: z.number().int().optional(),
+				lotId: z.string().optional(),
+				viewKey: z.string().optional(),
+				limit: z.number().int().min(1).max(500).optional(),
+				format: z.enum(['json', 'tsv']).optional()
+			})
+		},
+		async (args) => callAgentApi(fetcher, `${RESEARCH}/analysis/preview`, { method: 'POST', body: args })
+	);
+
+	server.registerTool(
+		'research_analysis_view',
+		{ annotations: READ_ONLY,
+			description:
+				'Research app: render a profile VIEW over STORED results (no recompute) for cartridgeIds / experimentId ' +
+				'(+armIndex) / lotId. Views join samples, analyte, SPU factor, reagent lot, photo tags. Pass format tsv for a ' +
+				'paste-ready sheet, or hand the json rows to export_data_file. Optional inline `view` renders an ad-hoc column list.',
+			inputSchema: z.object({
+				cartridgeIds: z.array(z.string()).optional(),
+				experimentId: z.string().optional(),
+				armIndex: z.number().int().optional(),
+				lotId: z.string().optional(),
+				profileId: z.string().optional(),
+				viewKey: z.string().optional(),
+				view: z.record(z.string(), z.unknown()).optional(),
+				format: z.enum(['json', 'tsv']).optional()
+			})
+		},
+		async (args) => callAgentApi(fetcher, `${RESEARCH}/analysis/view`, { method: 'POST', body: args })
+	);
+
+	server.registerTool(
+		'research_analysis_save_profile',
+		{ annotations: WRITE_TOOL,
+			description:
+				'Research app: save a profile as a DRAFT. Without profileId a new draft is created; with profileId the ' +
+				'existing DRAFT is replaced (active/archived profiles are immutable — create a new draft instead). The server ' +
+				'validates and returns issues[] on failure. ' + RESEARCH_AUTHORING_DOCTRINE,
+			inputSchema: z.object({
+				actor: ACTOR_FIELD,
+				profileId: z.string().optional(),
+				profile: z.record(z.string(), z.unknown())
+			})
+		},
+		async (args) =>
+			machineWrite('research_analysis_save_profile', (args as any).actor, (actor) =>
+				callAgentApi(fetcher, args.profileId ? `${RESEARCH}/analysis/profiles/${encodeURIComponent(args.profileId)}` : `${RESEARCH}/analysis/profiles`, {
+					method: 'POST',
+					body: { profile: args.profile, actor }
+				})
+			)
+	);
+
+	server.registerTool(
+		'research_analysis_activate_profile',
+		{ annotations: WRITE_TOOL,
+			description:
+				'Research app: activate a draft profile (bumps the version and snapshots the previous body) or convert a ' +
+				'legacy v1 profile to v2 in place with identical outputs. Confirm with the person first: active profiles are ' +
+				'what the device middleware runs.',
+			inputSchema: z.object({ actor: ACTOR_FIELD, profileId: z.string(), notes: z.string().optional() })
+		},
+		async (args) =>
+			machineWrite('research_analysis_activate_profile', (args as any).actor, (actor) =>
+				callAgentApi(fetcher, `${RESEARCH}/analysis/profiles/${encodeURIComponent(args.profileId)}/activate`, { method: 'POST', body: { actor, notes: args.notes } })
+			)
+	);
+
+	server.registerTool(
+		'research_analysis_archive_profile',
+		{ annotations: WRITE_TOOL,
+			description: 'Research app: archive a profile. Refused while any assay still has it attached (detach first).',
+			inputSchema: z.object({ actor: ACTOR_FIELD, profileId: z.string() })
+		},
+		async (args) =>
+			machineWrite('research_analysis_archive_profile', (args as any).actor, (actor) =>
+				callAgentApi(fetcher, `${RESEARCH}/analysis/profiles/${encodeURIComponent(args.profileId)}/archive`, { method: 'POST', body: { actor } })
+			)
+	);
+
+	server.registerTool(
+		'research_analysis_run',
+		{ annotations: WRITE_TOOL,
+			description:
+				'Research app: compute and PERSIST cartridge.analysis for cartridgeIds / experimentId (+armIndex) / lotId. ' +
+				'Without profileId each cartridge uses the profile attached to its assay. Overwrites the previous stored result ' +
+				'(raw data is never touched). WORKFLOW: preview first; then state "Run <profile> on <N> cartridges (<scope>). ' +
+				'Confirm?"; call with confirmed: true only after the person confirms.',
+			inputSchema: z.object({
+				actor: ACTOR_FIELD,
+				confirmed: z.boolean().describe('Must be true, only after the person confirmed the scope.'),
+				profileId: z.string().optional(),
+				cartridgeIds: z.array(z.string()).optional(),
+				experimentId: z.string().optional(),
+				armIndex: z.number().int().optional(),
+				lotId: z.string().optional(),
+				assayId: z.string().optional()
+			})
+		},
+		async (args) =>
+			machineWrite('research_analysis_run', (args as any).actor, (actor) => {
+				if (args.confirmed !== true) return Promise.resolve(toolError('confirmed must be true — ask the person to confirm the run scope first.'));
+				const { confirmed, ...rest } = args;
+				void confirmed;
+				return callAgentApi(fetcher, `${RESEARCH}/analysis/run`, { method: 'POST', body: { ...rest, actor } });
+			})
+	);
+
+	server.registerTool(
+		'research_assay_attach_profile',
+		{ annotations: WRITE_TOOL,
+			description:
+				'Research app: attach an ACTIVE profile to an assay (8-char A+hex assayId) so the device middleware computes ' +
+				'it at upload time, or detach with profileId null. Every future run of that assay stores this profile; ' +
+				'confirm with the person and name the assay and profile version in the confirmation.',
+			inputSchema: z.object({ actor: ACTOR_FIELD, assayId: z.string(), profileId: z.string().nullable() })
+		},
+		async (args) =>
+			machineWrite('research_assay_attach_profile', (args as any).actor, (actor) =>
+				callAgentApi(fetcher, `${RESEARCH}/analysis/assay/${encodeURIComponent(args.assayId)}/attach`, { method: 'POST', body: { profileId: args.profileId, actor } })
+			)
+	);
+
+	server.registerTool(
+		'research_calibration_list_lots',
+		{ annotations: READ_ONLY,
+			description:
+				'Research app: reagent lots seen on run cartridges for an assay or experiment, with cartridge counts, ' +
+				'calibrator-well counts (sample role = calibrator with a known concentration) and the experiments involved. ' +
+				'A lot needs >= 4 calibrator concentrations before a 4PL curve can be fit. lotSource tells where the lot id ' +
+				'came from (tubeRecords = scanned at reagent fill in BIMS; fillRun = fill-run proxy; manual; none).',
+			inputSchema: z.object({ assayId: z.string().optional(), experimentId: z.string().optional() })
+		},
+		async (args) => callAgentApi(fetcher, `${RESEARCH}/calibration/lots`, { query: args })
+	);
+
+	server.registerTool(
+		'research_calibration_list_runs',
+		{ annotations: READ_ONLY,
+			description:
+				'Research app: every calibrator well on a reagent lot for an assay, with the readout recomputed under the ' +
+				'assay profile, nominal concentration, QC pass/flags, SPU and factor, and whether the fit policy would include ' +
+				'it (and why not). Also returns the policy, the distinct levels, and meetsMinLevels. Call before ' +
+				'research_calibration_fit and present the table so the person sees exactly what a fit would use.',
+			inputSchema: z.object({ lotId: z.string(), assayId: z.string(), profileId: z.string().optional(), readout: z.string().optional() })
+		},
+		async (args) => callAgentApi(fetcher, `${RESEARCH}/calibration/runs`, { query: args })
+	);
+
+	server.registerTool(
+		'research_calibration_list_curves',
+		{ annotations: READ_ONLY,
+			description: 'Research app: list 4PL calibration curves (points omitted) filtered by lotId, assayId, analyteId, status (draft | active | superseded).',
+			inputSchema: z.object({ lotId: z.string().optional(), assayId: z.string().optional(), analyteId: z.string().optional(), status: z.enum(['draft', 'active', 'superseded']).optional() })
+		},
+		async (args) => callAgentApi(fetcher, `${RESEARCH}/calibration/curves`, { query: args })
+	);
+
+	server.registerTool(
+		'research_calibration_get_curve',
+		{ annotations: READ_ONLY,
+			description:
+				'Research app: one calibration curve in full — 4PL params (a, b, c=EC50, d), fit stats (r2, rmse, n, direction), ' +
+				'every calibrator point with back-calculated concentration and recovery %, and a sampled fitted line for charting. ' +
+				'PRESENTATION: show params, r2/rmse, then a table "Cartridge | Well | Sample | x | y | back-calc | recovery %" marking excluded points.',
+			inputSchema: z.object({ curveId: z.string() })
+		},
+		async ({ curveId }) => callAgentApi(fetcher, `${RESEARCH}/calibration/curves/${encodeURIComponent(curveId)}`)
+	);
+
+	server.registerTool(
+		'research_calibration_fit',
+		{ annotations: WRITE_TOOL,
+			description:
+				'Research app: fit a DRAFT 4PL curve for a reagent lot + assay from its calibrator wells (sample role ' +
+				'calibrator, known concentration). The readout defaults to the profile\'s quantify.readout. Nothing is ' +
+				'activated. WORKFLOW: research_calibration_list_lots to confirm >= 4 calibrator concentrations; fit; show ' +
+				'research_calibration_get_curve; if recovery looks bad, refit with `excluded` wells or weighting inverse_y2; ' +
+				'then ask before research_calibration_activate_curve.',
+			inputSchema: z.object({
+				actor: ACTOR_FIELD,
+				lotId: z.string(),
+				assayId: z.string(),
+				profileId: z.string().optional(),
+				readout: z.string().optional().describe('Metric or expression key used as y.'),
+				analyteId: z.string().optional(),
+				cartridgeIds: z.array(z.string()).optional().describe('Restrict to these calibrator cartridges.'),
+				excluded: z.array(z.object({ cartridgeId: z.string(), well: z.string() })).optional(),
+				weighting: z.enum(['none', 'inverse_y2']).optional(),
+				notes: z.string().optional()
+			})
+		},
+		async (args) =>
+			machineWrite('research_calibration_fit', (args as any).actor, (actor) =>
+				callAgentApi(fetcher, `${RESEARCH}/calibration/fit`, { method: 'POST', body: { ...args, actor } })
+			)
+	);
+
+	server.registerTool(
+		'research_calibration_activate_curve',
+		{ annotations: WRITE_TOOL,
+			description:
+				'HUMAN-ONLY. Approving a calibration curve as a reagent lot\'s active curve is a decision a person makes on the ' +
+				'research app Curves page (review calibrator wells, recovery, the previous curve overlay, then Approve with a ' +
+				'note). This tool always refuses; use it only to explain where the person approves. You may draft fits with ' +
+				'research_calibration_fit and read everything with research_calibration_list_runs / get_curve.',
+			inputSchema: z.object({ actor: ACTOR_FIELD, curveId: z.string() })
+		},
+		async (args) =>
+			machineWrite('research_calibration_activate_curve', (args as any).actor, (actor) =>
+				callAgentApi(fetcher, `${RESEARCH}/calibration/curves/${encodeURIComponent(args.curveId)}/activate`, { method: 'POST', body: { actor } })
+			)
+	);
+
+	server.registerTool(
+		'research_calibration_quantify',
+		{ annotations: WRITE_TOOL,
+			description:
+				'Research app: re-run analysis WITH quantification for every cartridge on a lot so unknowns pick up the ' +
+				'active curve (persists cartridge.analysis; raw data untouched). Returns a count of quant statuses ' +
+				'(ok, below_range, above_range, no_curve, no_lot, no_readout). State the lot and cartridge count and ask ' +
+				'"Confirm?" before calling with confirmed: true.',
+			inputSchema: z.object({ actor: ACTOR_FIELD, confirmed: z.boolean(), lotId: z.string(), assayId: z.string(), profileId: z.string().optional() })
+		},
+		async (args) =>
+			machineWrite('research_calibration_quantify', (args as any).actor, (actor) => {
+				if (args.confirmed !== true) return Promise.resolve(toolError('confirmed must be true — ask the person to confirm first.'));
+				const { confirmed, ...rest } = args;
+				void confirmed;
+				return callAgentApi(fetcher, `${RESEARCH}/calibration/quantify`, { method: 'POST', body: { ...rest, actor } });
+			})
+	);
+
+	// --------------------------------- research reagent lots / fill lots / curve sets (proxied, DOMAIN-32)
+	//
+	// Vocabulary: a REAGENT LOT is the set of inventory barcodes (qd630, qd480, beads required;
+	// buffer, wash, elution optional) filled into cartridges — created in the research app and
+	// picked on the BIMS fill screen. A FILL LOT is one fill run. A CURVE SET is one fill lot's
+	// calibration curves at different time points (days since fill). Quantification uses the
+	// fill lot's own curve set, or one a PERSON assigned (same reagent lot, or equal
+	// compatibility key = same qd630 + qd480 + beads barcodes).
+
+	server.registerTool(
+		'research_reagent_lot_list',
+		{ annotations: READ_ONLY,
+			description:
+				'Research app: list reagent lots (RL-YYYYMMDD-NNN) with their components (role → inventory barcode, ' +
+				'catalog name, manufacturer lot), compatibility key and status. Filter by assayId and status (active | retired).',
+			inputSchema: z.object({ assayId: z.string().optional(), status: z.enum(['active', 'retired']).optional() })
+		},
+		async (args) => callAgentApi(fetcher, `${RESEARCH}/reagent-lots`, { query: args })
+	);
+
+	server.registerTool(
+		'research_reagent_lot_get',
+		{ annotations: READ_ONLY,
+			description: 'Research app: one reagent lot with its inventory items resolved (concentration, expiry, status).',
+			inputSchema: z.object({ reagentLotId: z.string() })
+		},
+		async ({ reagentLotId }) => callAgentApi(fetcher, `${RESEARCH}/reagent-lots/${encodeURIComponent(reagentLotId)}`)
+	);
+
+	server.registerTool(
+		'research_reagent_lot_create',
+		{ annotations: WRITE_TOOL,
+			description:
+				'Research app: create a reagent lot from inventory barcodes. Roles qd630, qd480 and beads are REQUIRED; ' +
+				'buffer, wash and elution are optional. Each component is either an existing inventory barcode ' +
+				'({ role, inventoryId }) or a new inventory item originated from a catalog entry on the spot ' +
+				'({ role, originate: { catalogId, manufacturerLotId?, concentration? } }) — use research_inventory_originate ' +
+				'semantics; the research app generates the barcode. WORKFLOW: list the catalog/inventory first ' +
+				'(research reagent-catalog tools), show the person the six roles with what you will use, get a yes, then call. ' +
+				'The lot number is generated; it is stored and picked from a dropdown at fill time, never printed.',
+			inputSchema: z.object({
+				actor: ACTOR_FIELD,
+				assayId: z.string().describe('8-char A+hex assay id'),
+				name: z.string().optional(),
+				notes: z.string().optional(),
+				components: z.array(z.object({
+					role: z.enum(['qd630', 'qd480', 'beads', 'buffer', 'wash', 'elution']),
+					inventoryId: z.string().optional().describe('Existing reagent_inventory barcode'),
+					originate: z.object({ catalogId: z.string(), manufacturerLotId: z.string().optional(), concentration: z.number().optional(), concentrationUnit: z.string().optional(), barcode: z.string().optional() }).optional()
+				})).min(3)
+			})
+		},
+		async (args) =>
+			machineWrite('research_reagent_lot_create', (args as any).actor, (actor) =>
+				callAgentApi(fetcher, `${RESEARCH}/reagent-lots`, { method: 'POST', body: { ...args, actor } })
+			)
+	);
+
+	server.registerTool(
+		'research_inventory_originate',
+		{ annotations: WRITE_TOOL,
+			description:
+				'Research app: create a reagent inventory item straight from a catalog entry (no protocol execution). ' +
+				'Returns the new barcode. Use when a stock bottle exists physically but was never entered.',
+			inputSchema: z.object({ actor: ACTOR_FIELD, catalogId: z.string(), manufacturerLotId: z.string().optional(), concentration: z.number().optional(), concentrationUnit: z.string().optional(), barcode: z.string().optional(), notes: z.string().optional() })
+		},
+		async (args) =>
+			machineWrite('research_inventory_originate', (args as any).actor, (actor) =>
+				callAgentApi(fetcher, `${RESEARCH}/reagent-inventory/originate`, { method: 'POST', body: { ...args, actor } })
+			)
+	);
+
+	server.registerTool(
+		'research_fill_lot_list',
+		{ annotations: READ_ONLY,
+			description:
+				'Research app: fill lots for an assay (a fill lot = one reagent lot across any number of robot runs; rows with ' +
+				'legacyRun=true are single robot runs never moved into a lot) with fill date, reagent lot, runs, cartridges, standard wells and ' +
+				'levels, the curve set in use (own or assigned, with source) and its active curve + time point (days since ' +
+				'fill), borrow candidates with compatibility verdicts and reasons, and staleness/profile-drift flags. ' +
+				'PRESENTATION: one row per fill lot: "<fill id> · filled <date> · reagent lot <RL-…> · <n> carts · curve: <v@day> (<source>)".',
+			inputSchema: z.object({ assayId: z.string() })
+		},
+		async ({ assayId }) => callAgentApi(fetcher, `${RESEARCH}/calibration/fill-lots`, { query: { assayId } })
+	);
+
+	server.registerTool(
+		'research_fill_lot_create',
+		{ annotations: WRITE_TOOL,
+			description:
+				'Research app: OPEN a fill lot — one reagent lot plus a name (FL-YYYYMMDD-NNN). A fill lot is NOT one robot run: ' +
+				'the BIMS fill screen offers open fill lots, defaults to the one used last, and stamps the pick on every cartridge ' +
+				'of every run until the operator picks another. Open a new one when the reagent prep changes. ' +
+				'nonCalibrated: true (no reagentLotId) opens a fill lot with NO reagent lot — "non-calibrated reagent lot chemicals", ' +
+				'the normal case for fills done before a calibrated reagent lot exists; the reagent lot can be set on it later with ' +
+				'research_fill_lot_set_reagent_lot. Confirm reagent lot (or non-calibrated) and name with the person first.',
+			inputSchema: z.object({ actor: ACTOR_FIELD, reagentLotId: z.string().optional(), nonCalibrated: z.boolean().optional(), name: z.string().optional(), assayId: z.string().optional(), notes: z.string().optional() })
+				.refine((a) => !!a.reagentLotId || a.nonCalibrated === true, { message: 'reagentLotId or nonCalibrated: true is required' })
+		},
+		async (args) =>
+			machineWrite('research_fill_lot_create', (args as any).actor, (actor) =>
+				callAgentApi(fetcher, `${RESEARCH}/calibration/fill-lots`, { method: 'POST', body: { ...args, actor } })
+			)
+	);
+
+	server.registerTool(
+		'research_fill_lot_assign_runs',
+		{ annotations: WRITE_TOOL,
+			description:
+				'Research app: move robot runs (reagent_batch_records ids) into a fill lot — for runs filled before fill lots existed ' +
+				'("unassigned run" rows in research_fill_lot_list, whose id IS the run id). Stamps the fill lot and its reagent lot on ' +
+				'every cartridge of those runs. Refused when a run\'s current lot already has a curve set. Confirm with the person first.',
+			inputSchema: z.object({ actor: ACTOR_FIELD, fillLotId: z.string(), runIds: z.array(z.string()).min(1) })
+		},
+		async (args) =>
+			machineWrite('research_fill_lot_assign_runs', (args as any).actor, (actor) =>
+				callAgentApi(fetcher, `${RESEARCH}/calibration/fill-lots/${encodeURIComponent(args.fillLotId)}/assign-runs`, { method: 'POST', body: { runIds: args.runIds, actor } })
+			)
+	);
+
+	server.registerTool(
+		'research_curve_set_list',
+		{ annotations: READ_ONLY,
+			description: 'Research app: curve sets (one per fill lot + analyte) with their curves ordered by time point. Filter by assayId or fillLotId.',
+			inputSchema: z.object({ assayId: z.string().optional(), fillLotId: z.string().optional() })
+		},
+		async (args) => callAgentApi(fetcher, `${RESEARCH}/calibration/curve-sets`, { query: args })
+	);
+
+	server.registerTool(
+		'research_fill_lot_set_reagent_lot',
+		{ annotations: WRITE_TOOL,
+			description:
+				'Research app: set the reagent lot on a fill lot BY HAND. Only for fills made before the BIMS picker existed ' +
+				'(new fills get it at fill time). Refused once the fill lot has a curve set. Confirm the fill id and lot ' +
+				'number with the person first.',
+			inputSchema: z.object({ actor: ACTOR_FIELD, fillLotId: z.string(), reagentLotId: z.string() })
+		},
+		async (args) =>
+			machineWrite('research_fill_lot_set_reagent_lot', (args as any).actor, (actor) =>
+				callAgentApi(fetcher, `${RESEARCH}/calibration/fill-lots/${encodeURIComponent(args.fillLotId)}/reagent-lot`, { method: 'POST', body: { reagentLotId: args.reagentLotId, actor } })
+			)
+	);
+
+	server.registerTool(
+		'research_fill_lot_assign_curve_set',
+		{ annotations: WRITE_TOOL,
+			description:
+				'HUMAN-ONLY. Deciding that a fill lot quantifies against ANOTHER fill lot\'s curve set (same reagent lot, or ' +
+				'equal qd630/qd480/beads) is a person\'s decision made on the research Curves page with a note. This tool ' +
+				'always refuses; use research_fill_lot_list to show the candidates and their compatibility verdicts.',
+			inputSchema: z.object({ actor: ACTOR_FIELD, fillLotId: z.string(), curveSetId: z.string(), note: z.string() })
+		},
+		async (args) =>
+			machineWrite('research_fill_lot_assign_curve_set', (args as any).actor, (actor) =>
+				callAgentApi(fetcher, `${RESEARCH}/calibration/fill-lots/${encodeURIComponent(args.fillLotId)}/assign-curve-set`, { method: 'POST', body: { curveSetId: args.curveSetId, note: args.note, actor } })
+			)
+	);
+
+	// ------------------------------------------ device assembly work instruction
+
+	const WI_SECTION_FIELD = z
+		.string()
+		.describe('Which section: a sub-assembly number ("2", "sub-assembly 2", "SA2"), "setup" for the Cleaning & Setup block, or a unique word from the section title ("bottom").');
+	const WI_STEP_FIELD = z
+		.string()
+		.describe('Which step inside that section: the step number ("2", "step 2"), the stepId from device_wi_overview, or a unique phrase from the step title.');
+	const WI_MATERIAL_FIELD = z
+		.string()
+		.describe('Which material on the step: part number (PT-SPU-013), materialId, or a unique part of the name ("heater block").');
+	const WI_IMAGE_FIELD = z
+		.string()
+		.describe('Which image on the step: its position (1 = first photo as shown on the page), its imageId, or its url.');
+
+	const wiMutate = (op: string, args: any) =>
+		machineWrite(`device_wi_${op}`, args.actor, (actor) =>
+			callAgentApi(fetcher, '/api/agent/device-assembly/mutate', { method: 'POST', body: { ...args, op, actor } })
+		);
+
+	server.registerTool(
+		'device_wi_overview',
+		{ annotations: READ_ONLY,
+			description:
+				'The SPU Assembly Work Instruction (SPU → SPU Assembly WI): current revision (vN, who/when), front matter ' +
+				'(purpose/scope/responsibilities/definitions/references), every section (Setup + Sub-Assembly 1…N — add more with ' +
+				'device_wi_add_section; tabLabel = text on its tab, title = heading, both editable) with its step list (number, title, ESD flag, image and material counts, ' +
+				'stepId), part numbers not yet linked to the catalog, and the last 5 revisions. Call this first to find the ' +
+				'step a user is talking about ("step 2 in sub-assembly 2"), then device_wi_get_step for the full text/photos/materials.'
+		},
+		async () => callAgentApi(fetcher, '/api/agent/device-assembly')
+	);
+
+	server.registerTool(
+		'device_wi_get_step',
+		{ annotations: READ_ONLY,
+			description:
+				'Full detail of one step (instructions text + HTML, photos with positions/urls/captions, materials with per-device ' +
+				'quantity and live on-hand stock), or every step of a section when step is omitted, or a text search across all ' +
+				'steps with q. Use before editing so you can quote the current wording back to the user.',
+			inputSchema: z.object({
+				section: WI_SECTION_FIELD.optional(),
+				step: WI_STEP_FIELD.optional(),
+				q: z.string().optional().describe('Search titles, instructions and material names across all sections (e.g. "heater block").')
+			})
+		},
+		async (args) => callAgentApi(fetcher, '/api/agent/device-assembly/step', { query: args })
+	);
+
+	server.registerTool(
+		'device_wi_revisions',
+		{ annotations: READ_ONLY,
+			description:
+				'Revision history of the work instruction: one row per change with version label (vN), who, when, change type, ' +
+				'where (section/step) and summary; detail=true adds before/after snapshots. Filter by user, section, step or since-date. ' +
+				'Use to answer "what changed", "who edited step 5", "what version are we on".',
+			inputSchema: z.object({
+				limit: z.number().int().min(1).max(500).optional(),
+				user: z.string().optional().describe('Only changes by this BIMS username.'),
+				section: z.string().optional(),
+				step: z.string().optional().describe('Step number within the section.'),
+				since: z.string().optional().describe('ISO date — only changes on/after this.'),
+				detail: z.boolean().optional().describe('Include before/after snapshots (verbose).')
+			})
+		},
+		async ({ detail, ...rest }) => callAgentApi(fetcher, '/api/agent/device-assembly/revisions', { query: { ...rest, detail: detail ? 1 : undefined } })
+	);
+
+	server.registerTool(
+		'device_wi_pull_history',
+		{ annotations: READ_ONLY,
+			description:
+				'Ledger of materials pulled from inventory through the work instruction: when, who, section/step, part, quantity, ' +
+				'stock before → after, SPU serial. Filter by section, step, part, user or serial.',
+			inputSchema: z.object({
+				section: z.string().optional(),
+				step: z.string().optional(),
+				part: z.string().optional().describe('Part number or name fragment.'),
+				user: z.string().optional(),
+				serial: z.string().optional().describe('SPU serial fragment.'),
+				limit: z.number().int().min(1).max(500).optional()
+			})
+		},
+		async (args) => callAgentApi(fetcher, '/api/agent/device-assembly/pulls', { query: args })
+	);
+
+	server.registerTool(
+		'device_wi_add_section',
+		{ annotations: WRITE_TOOL,
+			description:
+				'Create a new sub-assembly tab ("add Sub-Assembly 6", "add a section called Enclosure after sub-assembly 2"). ' +
+				'Appends at the end unless position is given; later sub-assemblies renumber (default "Sub-Assembly N" titles follow). ' +
+				'Then fill it with device_wi_add_step / device_wi_move_step. Creates a new revision.',
+			inputSchema: z.object({
+				actor: ACTOR_FIELD,
+				title: z.string().optional().describe('Title shown on the tab (default "Sub-Assembly N").'),
+				position: z.number().int().min(1).optional().describe('Sub-assembly number the new section should take (omit = after the last one).'),
+				type: z.enum(['subassembly', 'setup']).optional().describe('"setup" recreates the Setup block if it was deleted; default subassembly.'),
+				notes: z.string().optional().describe('Section-level notes shown above its steps (plain text).')
+			})
+		},
+		async (args) => wiMutate('add_section', args)
+	);
+
+	server.registerTool(
+		'device_wi_delete_section',
+		{ annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
+			description:
+				'Remove a sub-assembly (or the Setup block). If it still has steps, pass moveStepsTo = the section that should ' +
+				'receive them (they are appended there), otherwise the call is refused. Later sub-assemblies renumber. Quote the ' +
+				'section title and step count back and get an explicit yes before calling with confirmed: true. Creates a new revision.',
+			inputSchema: z.object({
+				actor: ACTOR_FIELD,
+				section: WI_SECTION_FIELD,
+				moveStepsTo: WI_SECTION_FIELD.optional().describe('Where its steps go (required when the section is not empty).'),
+				confirmed: z.boolean().describe('Must be true, only after the user confirmed the deletion.')
+			})
+		},
+		async (args) => wiMutate('delete_section', args)
+	);
+
+	server.registerTool(
+		'device_wi_move_section',
+		{ annotations: WRITE_TOOL,
+			description: 'Reorder sub-assemblies: give a section a new number ("make Enclosure sub-assembly 2"). The others shift and renumber; Setup always stays first. Creates a new revision.',
+			inputSchema: z.object({ actor: ACTOR_FIELD, section: WI_SECTION_FIELD, toPosition: z.number().int().min(1).describe('New sub-assembly number.') })
+		},
+		async (args) => wiMutate('move_section', args)
+	);
+
+	server.registerTool(
+		'device_wi_update_front_matter',
+		{ annotations: WRITE_TOOL,
+			description:
+				'Edit the document front matter shown above the steps: purpose, scope, responsibilities, general notes (plain text; ' +
+				'blank lines = paragraphs, "- " = bullets), and the definitions / references lists (full replacement arrays). ' +
+				'Only the fields you pass change. Read current values from device_wi_overview.frontMatter first. Creates a new revision.',
+			inputSchema: z.object({
+				actor: ACTOR_FIELD,
+				purpose: z.string().optional(),
+				scope: z.string().optional(),
+				responsibilities: z.string().optional(),
+				generalNotes: z.string().optional(),
+				definitions: z.array(z.string()).optional().describe('e.g. ["ESD – Electro Static Discharge", …] — replaces the whole list.'),
+				references: z.array(z.string()).optional().describe('e.g. ["SOP-10 Non-Conforming Materials", …] — replaces the whole list.')
+			})
+		},
+		async (args) => wiMutate('update_front_matter', args)
+	);
+
+	server.registerTool(
+		'device_wi_update_metadata',
+		{ annotations: WRITE_TOOL,
+			description: 'Edit the document title, document number (WIMF-SPU-01), assembly number (AS-SPU-001) or status (draft | active | retired). Creates a new revision.',
+			inputSchema: z.object({ actor: ACTOR_FIELD, title: z.string().optional(), documentNumber: z.string().optional().describe('e.g. WIMF-SPU-01'), assemblyNumber: z.string().optional(), status: z.enum(['draft', 'active', 'retired']).optional() })
+		},
+		async (args) => wiMutate('update_metadata', args)
+	);
+
+	server.registerTool(
+		'device_wi_update_section',
+		{ annotations: WRITE_TOOL,
+			description:
+				'Edit a section\'s tab text, title, notes or materials table in one call. tabLabel is the text on the tab itself ' +
+				'(default "Sub-Assembly N" / "Setup"; pass "" to go back to the default), title is the heading under the tabs, ' +
+				'notes is the callout above the steps, materials is the section-level materials table (setup block). Only the ' +
+				'fields you pass change. Creates a new revision.',
+			inputSchema: z.object({
+				actor: ACTOR_FIELD,
+				section: WI_SECTION_FIELD,
+				tabLabel: z.string().optional().describe('Text shown on the tab. "" resets to "Sub-Assembly N".'),
+				title: z.string().optional().describe('Heading shown under the tabs.'),
+				notes: z.string().optional().describe('Plain text; blank lines = paragraphs, "- " = bullets.'),
+				materials: z.string().optional().describe('Plain text for the section materials table (one item per line).')
+			})
+		},
+		async (args) => wiMutate('update_section', args)
+	);
+
+	server.registerTool(
+		'device_wi_move_steps',
+		{ annotations: WRITE_TOOL,
+			description:
+				'Move SEVERAL steps at once to another sub-assembly, keeping their order ("move steps 20 to 30 of sub-assembly 1 ' +
+				'into sub-assembly 2", "put steps 3, 7 and 9 at the start of sub-assembly 3"). Give a from/to range or a list of ' +
+				'step numbers. Both sections renumber. This is the fast way to divide the long imported list. Creates one revision.',
+			inputSchema: z.object({
+				actor: ACTOR_FIELD,
+				section: WI_SECTION_FIELD.describe('Section the steps are in now.'),
+				from: z.number().int().min(1).optional().describe('First step number of a range.'),
+				to: z.number().int().min(1).optional().describe('Last step number of a range.'),
+				steps: z.array(z.number().int().min(1)).optional().describe('Explicit step numbers instead of a range.'),
+				toSection: WI_SECTION_FIELD.describe('Destination section.'),
+				toPosition: z.number().int().min(1).optional().describe('Step number the first moved step should take in the destination (omit = end).')
+			})
+		},
+		async (args) => wiMutate('move_steps', args)
+	);
+
+	server.registerTool(
+		'device_wi_delete_steps',
+		{ annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
+			description: 'Delete several steps at once (range or list) from a section; the rest renumber. List them to the user and get an explicit yes before calling with confirmed: true. Snapshots of the removed steps go into the revision. Creates one revision.',
+			inputSchema: z.object({
+				actor: ACTOR_FIELD,
+				section: WI_SECTION_FIELD,
+				from: z.number().int().min(1).optional(),
+				to: z.number().int().min(1).optional(),
+				steps: z.array(z.number().int().min(1)).optional(),
+				confirmed: z.boolean().describe('Must be true, only after the user confirmed.')
+			})
+		},
+		async (args) => wiMutate('delete_steps', args)
+	);
+
+	server.registerTool(
+		'device_wi_copy_step',
+		{ annotations: WRITE_TOOL,
+			description: 'Duplicate a step (text, photos, materials) into a section — the same or another one — at the end or at a position. Useful for repeated operations across sub-assemblies. Creates a new revision.',
+			inputSchema: z.object({
+				actor: ACTOR_FIELD,
+				section: WI_SECTION_FIELD,
+				step: WI_STEP_FIELD,
+				toSection: WI_SECTION_FIELD.optional().describe('Destination (omit = same section).'),
+				toPosition: z.number().int().min(1).optional().describe('Step number the copy should take (omit = end).')
+			})
+		},
+		async (args) => wiMutate('copy_step', args)
+	);
+
+	server.registerTool(
+		'device_wi_revert',
+		{ annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
+			description:
+				'Undo: restore the whole document content (all sections, steps, photos, materials, front matter, title) to an ' +
+				'earlier version ("undo the last change" = current version − 1; "go back to v7"). Recorded as a NEW revision, so ' +
+				'nothing is lost and it can itself be undone. device_wi_revisions lists restorableVersions. Explain what will change ' +
+				'(use the revision summaries between the two versions) and get a yes before calling with confirmed: true.',
+			inputSchema: z.object({
+				actor: ACTOR_FIELD,
+				version: z.number().int().min(1).describe('Version number to restore (e.g. 7 for v7).'),
+				reason: z.string().optional().describe('Why — goes into the revision summary.'),
+				confirmed: z.boolean().describe('Must be true, only after the user confirmed.')
+			})
+		},
+		async (args) => wiMutate('revert', args)
+	);
+
+	server.registerTool(
+		'device_wi_rename_section',
+		{ annotations: WRITE_TOOL,
+			description: 'Set a section\'s title — the heading shown under the tabs (e.g. give Sub-Assembly 2 the title "Enclosure & Electronics"). ' +
+				'By design the TAB itself always reads "Sub-Assembly N" (or "Setup"); the title is separate and this tool is how it is changed. ' +
+				'The number N is positional and only changes via device_wi_move_section. Creates a new revision.',
+			inputSchema: z.object({ actor: ACTOR_FIELD, section: WI_SECTION_FIELD, title: z.string().describe('New title.') })
+		},
+		async (args) => wiMutate('rename_section', args)
+	);
+
+	server.registerTool(
+		'device_wi_set_section_notes',
+		{ annotations: WRITE_TOOL,
+			description: 'Replace the section-level notes shown above a section\'s steps (e.g. "For all steps, visually verify form and fit…"). Plain text; blank lines = paragraphs. Creates a new revision.',
+			inputSchema: z.object({ actor: ACTOR_FIELD, section: WI_SECTION_FIELD, notes: z.string() })
+		},
+		async (args) => wiMutate('set_section_notes', args)
+	);
+
+	server.registerTool(
+		'device_wi_update_step',
+		{ annotations: WRITE_TOOL,
+			description:
+				'Edit one step\'s title, instructions, ESD flag or DHR serial-number fields. Pass `instructions` (plain text: blank ' +
+				'lines = paragraphs, "- " lines = bullets) to REPLACE the wording, or `appendInstructions` to add text after the ' +
+				'existing wording, or `instructionsHtml` for exact HTML. Only the fields you pass change. Read the step first ' +
+				'(device_wi_get_step) and confirm the new wording with the user. Every save is a new revision recorded with the actor.',
+			inputSchema: z.object({
+				actor: ACTOR_FIELD,
+				section: WI_SECTION_FIELD,
+				step: WI_STEP_FIELD,
+				title: z.string().optional(),
+				instructions: z.string().optional().describe('Replacement instructions, plain text.'),
+				appendInstructions: z.string().optional().describe('Text to add at the end of the current instructions.'),
+				instructionsHtml: z.string().optional().describe('Exact replacement HTML (p/ul/ol/strong/em only).'),
+				requiresEsd: z.boolean().optional(),
+				dhrFields: z.array(z.string()).optional().describe('Serial numbers the operator must record in the DHR at this step, e.g. ["Stepper Motor"].')
+			})
+		},
+		async (args) => wiMutate('update_step', args)
+	);
+
+	server.registerTool(
+		'device_wi_add_step',
+		{ annotations: WRITE_TOOL,
+			description:
+				'Insert a new step into a section — at the end, or right after a given step (afterStep). Following steps renumber. ' +
+				'Add materials/photos afterwards with device_wi_add_material / device_wi_add_image. Creates a new revision.',
+			inputSchema: z.object({
+				actor: ACTOR_FIELD,
+				section: WI_SECTION_FIELD,
+				title: z.string().describe('Short step title (first sentence of the instruction works well).'),
+				instructions: z.string().optional().describe('Plain text; blank lines = paragraphs, "- " lines = bullets.'),
+				afterStep: z.string().optional().describe('Insert after this step number (omit = end of section).'),
+				requiresEsd: z.boolean().optional()
+			})
+		},
+		async (args) => wiMutate('add_step', args)
+	);
+
+	server.registerTool(
+		'device_wi_delete_step',
+		{ annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
+			description:
+				'Delete a step (its text, photos and materials). Following steps renumber. Quote the step title back and get an ' +
+				'explicit yes before calling with confirmed: true. Recorded as a revision with a full snapshot of the removed step.',
+			inputSchema: z.object({ actor: ACTOR_FIELD, section: WI_SECTION_FIELD, step: WI_STEP_FIELD, confirmed: z.boolean().describe('Must be true, only after the user confirmed the deletion.') })
+		},
+		async (args) => wiMutate('delete_step', args)
+	);
+
+	server.registerTool(
+		'device_wi_move_step',
+		{ annotations: WRITE_TOOL,
+			description:
+				'Move a step to another sub-assembly and/or position ("move step 30 of sub-assembly 1 to sub-assembly 2", ' +
+				'"make step 7 the 3rd step"). Both sections renumber. This is how the long imported list gets divided into ' +
+				'Sub-Assemblies 2–5. Creates a new revision.',
+			inputSchema: z.object({
+				actor: ACTOR_FIELD,
+				section: WI_SECTION_FIELD,
+				step: WI_STEP_FIELD,
+				toSection: WI_SECTION_FIELD.optional().describe('Destination section (omit = same section).'),
+				toPosition: z.number().int().min(1).optional().describe('New step number in the destination (omit = end).')
+			})
+		},
+		async (args) => wiMutate('move_step', args)
+	);
+
+	server.registerTool(
+		'device_wi_add_image',
+		{ annotations: WRITE_TOOL,
+			description:
+				'Attach a photo to a step from a URL (any http(s) image, e.g. a BIMS cartridge/CV photo url or a link the user ' +
+				'pasted) or as base64. The image is stored (R2 or BIMS) and appended after the step\'s existing photos; optional ' +
+				'caption. Creates a new revision.',
+			inputSchema: z.object({
+				actor: ACTOR_FIELD,
+				section: WI_SECTION_FIELD,
+				step: WI_STEP_FIELD,
+				imageUrl: z.string().optional().describe('http(s) URL of the image.'),
+				imageBase64: z.string().optional().describe('Base64 image data (or a data: URI) when no URL is available.'),
+				contentType: z.string().optional().describe('e.g. image/png — required with raw base64.'),
+				caption: z.string().optional(),
+				alt: z.string().optional()
+			})
+		},
+		async (args) => wiMutate('add_image', args)
+	);
+
+	server.registerTool(
+		'device_wi_remove_image',
+		{ annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
+			description: 'Remove one photo from a step (by position as shown on the page, imageId, or url). Confirm with the user first. Creates a new revision.',
+			inputSchema: z.object({ actor: ACTOR_FIELD, section: WI_SECTION_FIELD, step: WI_STEP_FIELD, image: WI_IMAGE_FIELD })
+		},
+		async (args) => wiMutate('remove_image', args)
+	);
+
+	server.registerTool(
+		'device_wi_set_image_caption',
+		{ annotations: WRITE_TOOL,
+			description: 'Set or change the caption under one of a step\'s photos. Creates a new revision.',
+			inputSchema: z.object({ actor: ACTOR_FIELD, section: WI_SECTION_FIELD, step: WI_STEP_FIELD, image: WI_IMAGE_FIELD, caption: z.string(), alt: z.string().optional() })
+		},
+		async (args) => wiMutate('set_image_caption', args)
+	);
+
+	server.registerTool(
+		'device_wi_reorder_image',
+		{ annotations: WRITE_TOOL,
+			description: 'Move one of a step\'s photos one position earlier ("up") or later ("down"). Creates a new revision.',
+			inputSchema: z.object({ actor: ACTOR_FIELD, section: WI_SECTION_FIELD, step: WI_STEP_FIELD, image: WI_IMAGE_FIELD, direction: z.enum(['up', 'down']) })
+		},
+		async (args) => wiMutate('reorder_image', args)
+	);
+
+	server.registerTool(
+		'device_wi_add_material',
+		{ annotations: WRITE_TOOL,
+			description:
+				'Add a material/tool/aid/supply line to a step. Easiest: pass `text` in the document\'s own syntax, e.g. ' +
+				'"Heater Block (PT-SPU-013) x1", "Torx T10 Screwdriver (Manufacturing Aid)", "Kimwipes (Supply) x2" — kind, ' +
+				'part number, quantity and unit are parsed and the part is linked to the catalog automatically. Or pass the ' +
+				'fields explicitly. Parts (kind "part") are what inventory pulls deduct. Creates a new revision.',
+			inputSchema: z.object({
+				actor: ACTOR_FIELD,
+				section: WI_SECTION_FIELD,
+				step: WI_STEP_FIELD,
+				text: z.string().optional().describe('Document syntax line — preferred.'),
+				kind: z.enum(['part', 'tool', 'aid', 'supply']).optional(),
+				partNumber: z.string().optional().describe('PT-SPU-xxx / SBA-SPU-xxx / TOOL-SPU-xxx'),
+				name: z.string().optional(),
+				quantity: z.number().positive().optional().describe('Per device built (default 1).'),
+				unit: z.string().optional().describe('ea (default), mm, drops…'),
+				notes: z.string().optional()
+			})
+		},
+		async (args) => wiMutate('add_material', args)
+	);
+
+	server.registerTool(
+		'device_wi_update_material',
+		{ annotations: WRITE_TOOL,
+			description:
+				'Change a material line on a step: quantity, unit, name, kind, notes, whether it is deducted from inventory, or ' +
+				'its part number (re-links to the catalog — use this to fix "not in catalog" parts, e.g. SBA-SPU-001 → SBA-SPU-004). ' +
+				'Only the fields you pass change. Creates a new revision.',
+			inputSchema: z.object({
+				actor: ACTOR_FIELD,
+				section: WI_SECTION_FIELD,
+				step: WI_STEP_FIELD,
+				material: WI_MATERIAL_FIELD,
+				partNumber: z.string().optional(),
+				name: z.string().optional(),
+				quantity: z.number().positive().optional(),
+				unit: z.string().optional(),
+				kind: z.enum(['part', 'tool', 'aid', 'supply']).optional(),
+				notes: z.string().optional(),
+				deductFromInventory: z.boolean().optional()
+			})
+		},
+		async (args) => wiMutate('update_material', args)
+	);
+
+	server.registerTool(
+		'device_wi_remove_material',
+		{ annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
+			description: 'Remove a material/tool line from a step. Confirm with the user first. Creates a new revision.',
+			inputSchema: z.object({ actor: ACTOR_FIELD, section: WI_SECTION_FIELD, step: WI_STEP_FIELD, material: WI_MATERIAL_FIELD })
+		},
+		async (args) => wiMutate('remove_material', args)
+	);
+
+	server.registerTool(
+		'device_wi_relink_parts',
+		{ annotations: WRITE_TOOL,
+			description: 'Re-match every material\'s part number against the parts catalog (after parts were added/renumbered in BIMS). Reports how many linked / still unresolved. Creates a new revision.',
+			inputSchema: z.object({ actor: ACTOR_FIELD })
+		},
+		async (args) => wiMutate('relink_parts', args)
+	);
+
+	server.registerTool(
+		'device_wi_pull_materials',
+		{ annotations: WRITE_TOOL,
+			description:
+				'Deduct a step\'s materials from inventory ("I just did step 6 of sub-assembly 1 on SPU 212, take the parts out of ' +
+				'stock"). Each part becomes an immutable inventory consumption transaction attributed to the actor and linked to ' +
+				'the step, with stock before → after. You HAVE live write access to inventory through this tool.\n\n' +
+				'WORKFLOW: 1) call WITHOUT confirmed (or confirmed: false) → you get a preview listing every part, quantity ' +
+				'(quantityPerDevice × unitsBuilt) and on-hand count, plus any parts blocked because they are not linked to the ' +
+				'catalog. 2) Show the user that list as numbered rows "<n>. <partNumber> <name> — qty: <q>" and ask them to ' +
+				'confirm or give corrected quantities. 3) Call again with confirmed: true (and items with corrected quantities if ' +
+				'they changed any). Omit items to pull every linked part on the step; pass items to pull a subset or override ' +
+				'quantities. Never call with confirmed: true before the user approved. Report the result as part → previous → new stock.',
+			inputSchema: z.object({
+				actor: ACTOR_FIELD,
+				confirmed: z.boolean().optional().describe('false/omitted = preview only; true = deduct (only after user approval).'),
+				section: WI_SECTION_FIELD,
+				step: WI_STEP_FIELD,
+				unitsBuilt: z.number().int().min(1).optional().describe('How many devices this pull covers (default 1); per-device quantities are multiplied.'),
+				items: z
+					.array(z.object({
+						material: WI_MATERIAL_FIELD,
+						quantity: z.number().positive().optional().describe('Total to deduct (overrides quantityPerDevice × unitsBuilt).')
+					}))
+					.optional()
+					.describe('Subset / overrides. Omit to pull all catalog-linked parts on the step.'),
+				deviceSerial: z.string().optional().describe('SPU serial/barcode the parts went into, if the user mentions it.'),
+				notes: z.string().optional()
+			})
+		},
+		async (args) =>
+			machineWrite('device_wi_pull_materials', (args as any).actor, (actor) =>
+				callAgentApi(fetcher, '/api/agent/device-assembly/pull', { method: 'POST', body: { ...args, actor } })
+			)
+	);
+
+	server.registerTool(
+		'device_wi_import',
+		{ annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
+			description:
+				'Replace the whole work instruction by re-parsing a .docx at a URL (every section/step/material/photo is rebuilt; ' +
+				'manual edits since the last import are lost, though the revision history keeps the record). Only when the user ' +
+				'explicitly asks to re-import; confirm first. For a file on their computer, point them to the Upload .docx button on ' +
+				'the SPU Assembly WI page instead.',
+			inputSchema: z.object({ actor: ACTOR_FIELD, confirmed: z.boolean(), fileUrl: z.string().describe('http(s) URL of the .docx'), fileName: z.string().optional() })
+		},
+		async (args) => wiMutate('import', args)
 	);
 
 	return server;

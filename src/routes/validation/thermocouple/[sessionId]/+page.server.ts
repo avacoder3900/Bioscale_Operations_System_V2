@@ -36,6 +36,24 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 		}))
 		: null;
 
+	// Per-probe series + statistics, paired by key. Sessions recorded before
+	// two-channel parsing carry neither, and the page falls back to the single
+	// combined series for those.
+	const storedSeries: any[] = Array.isArray(thermoResult?.rawData?.channelSeries)
+		? thermoResult.rawData.channelSeries
+		: [];
+	const storedStats: any[] = Array.isArray(thermoResult?.processedData?.channelStats)
+		? thermoResult.processedData.channelStats
+		: [];
+	const channels = storedSeries.length > 1
+		? storedSeries.map((s: any) => ({
+			key: s.key,
+			label: s.label ?? s.key,
+			readings: Array.isArray(s.readings) ? s.readings : [],
+			stats: storedStats.find((st: any) => st.key === s.key)?.stats ?? null
+		}))
+		: null;
+
 	return {
 		session: {
 			id: session._id,
@@ -48,13 +66,19 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 		result: thermoResult ? {
 			id: thermoResult._id,
 			testType: thermoResult.testType,
-			rawData: thermoResult.rawData ?? null,
+			// `channelSeries` is dropped here: it is returned once, already
+			// paired with its statistics, as `channels` below. Sending it inside
+			// rawData as well would put every per-probe reading on the wire twice.
+			rawData: thermoResult.rawData
+				? (({ channelSeries, ...rest }: any) => rest)(thermoResult.rawData)
+				: null,
 			processedData: thermoResult.processedData ?? null,
 			passed: thermoResult.passed ?? null,
 			notes: thermoResult.notes ?? null,
 			createdAt: thermoResult.createdAt?.toISOString?.() ?? session.createdAt?.toISOString?.() ?? new Date().toISOString()
 		} : null,
-		channelCharts
+		channelCharts,
+		channels
 	};
 };
 

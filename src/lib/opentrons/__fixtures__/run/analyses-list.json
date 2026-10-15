@@ -1,0 +1,16 @@
+{
+ "data": [
+  {
+   "id": "an-old",
+   "status": "completed"
+  },
+  {
+   "id": "an-new",
+   "status": "completed"
+  }
+ ],
+ "meta": {
+  "cursor": 0,
+  "totalLength": 2
+ }
+}

@@ -13,7 +13,16 @@
  *
  * Scope a single robot:
  *   PRUNE_ROBOT=hidden-leaf.local npx tsx scripts/prune-robot-protocols.ts
+ *
+ * One robot over the tailnet (OT2-TAILNET-5 S9), from any tailnet machine:
+ *   ROBOT_HOST=https://ot2-b14.tailf65a70.ts.net npx tsx scripts/prune-robot-protocols.ts
+ * ROBOT_HOST targets exactly that robot (it wins over PRUNE_ROBOT; a bare
+ * host/IP still means http://<host>:31950). Unset = unchanged.
  */
+
+import robotHost from './ot2-robot-host.cjs';
+
+const { robotUrl, robotHostFromEnv } = robotHost;
 
 const ALL_ROBOTS = [
 	{ name: 'Robot 1 (muddy-water / B14)', host: 'muddy-water.local' },
@@ -22,11 +31,16 @@ const ALL_ROBOTS = [
 ];
 
 const APPLY = process.env.PRUNE_APPLY === '1';
-const SINGLE = process.env.PRUNE_ROBOT?.trim() || null;
-const ROBOTS = SINGLE ? ALL_ROBOTS.filter((r) => r.host === SINGLE) : ALL_ROBOTS;
+const ROBOT_HOST = robotHostFromEnv();
+const SINGLE = ROBOT_HOST ?? (process.env.PRUNE_ROBOT?.trim() || null);
+const ROBOTS = ROBOT_HOST
+	? [{ name: 'ROBOT_HOST', host: ROBOT_HOST }]
+	: SINGLE
+		? ALL_ROBOTS.filter((r) => r.host === SINGLE)
+		: ALL_ROBOTS;
 
 async function listProtocols(host: string): Promise<any[]> {
-	const res = await fetch(`http://${host}:31950/protocols`, {
+	const res = await fetch(robotUrl(host, '/protocols'), {
 		headers: { 'opentrons-version': '*' },
 		signal: AbortSignal.timeout(15_000)
 	});
@@ -35,7 +49,7 @@ async function listProtocols(host: string): Promise<any[]> {
 }
 
 async function deleteProtocol(host: string, id: string): Promise<{ ok: boolean; status: number }> {
-	const res = await fetch(`http://${host}:31950/protocols/${encodeURIComponent(id)}`, {
+	const res = await fetch(robotUrl(host, `/protocols/${encodeURIComponent(id)}`), {
 		method: 'DELETE',
 		headers: { 'opentrons-version': '*' },
 		signal: AbortSignal.timeout(15_000)
