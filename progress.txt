@@ -20604,3 +20604,10 @@ Changed: control/+page.svelte (both rate inputs value="10" -> "30") and
 control/+page.server.ts (both `|| '10'` fallbacks -> '30'). Nothing else.
 
 `npm run check`: 13 errors / 429 warnings on master after the screen-pipeline merge (a6a4dbd8), zero in touched files.
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit ebd942c9
+Retrieve this exact code: git checkout master at commit ebd942c9
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: Teleop and Record forms on the arm control page now default
+to 30 Hz; verify the field shows 30 and a blank submit still starts at 30.
