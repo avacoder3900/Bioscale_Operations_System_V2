@@ -109,10 +109,8 @@ def main() -> int:
         return 0
 
     backup = APP.with_suffix(".py.bak-gpio")
-    backup.write_text(original, encoding="utf-8", newline="
-")
-    APP.write_text(src, encoding="utf-8", newline="
-")
+    backup.write_text(original, encoding="utf-8", newline="\n")
+    APP.write_text(src, encoding="utf-8", newline="\n")
     print(f"\nwrote {APP} (backup at {backup.name}). Now: sudo systemctl restart robot-arm")
     return 0
 

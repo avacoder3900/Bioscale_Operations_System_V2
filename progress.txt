@@ -20611,3 +20611,57 @@ Retrieve this exact code: git checkout master at commit ebd942c9
   (or: git log master --oneline to find it if the branch has since moved on)
 What this deployment is for: Teleop and Record forms on the arm control page now default
 to 30 Hz; verify the field shows 30 and a blank submit still starts at 30.
+
+================================================================================
+2026-10-15 — feat/arm-solenoid-pulse — Solenoids (GPIO) card on the arm control page + Pi GPIO router
+================================================================================
+Operator ask: a button on /manufacturing/cart-mfg/robot-arm/control to pulse the
+cartridge-chute solenoids, named by BCM pin for now (17 and 27), with an editable
+pulse length like the Hz box. Default 1000 ms (long enough for a cartridge to fall
+clear, short enough for an intermittent-duty coil), hard-capped at 2000 ms on the Pi.
+The automatic between-loops drop sequence is explicitly NOT built; this is the manual
+version only.
+
+BIMS side (this repo):
+- robot-arm-client.ts: pulseGpio(), sequenceGpio(), gpioStatus() + GpioPulseResult /
+  GpioStatus types. Timeouts 6 s / 14 s sized to the longest allowed pulse/sequence.
+- control/+page.server.ts: actions pulseGpio (pin + pulse_ms) and pulseSequence
+  (pulse_ms + gap_ms, pins fixed [17, 27] in drop order). manufacturing:write, server-side
+  range checks (20-2000 ms pulse, 0-5000 ms gap, pin allow-list), AuditLog rows
+  robot_arm.gpio.pulse / robot_arm.gpio.sequence with resourceType robot_arm_gpio.
+  A Pi 404 is translated to "the arm Pi does not have the GPIO endpoints yet" so the
+  button explains itself before the Pi side is deployed; a Pi 409 reads as "pulse already
+  in progress".
+- control/+page.svelte: new SOLENOIDS (GPIO) section between the Teleop/Record/Replay row
+  and RUN TASK. One Pulse (ms) box (default 1000) feeding three buttons: Pulse GPIO 17,
+  Pulse GPIO 27, GPIO 17 then 27; a Gap (ms) box (default 500) used by the sequence only.
+  use:enhance with a busy flag so a second click cannot overlap the first (the Pi holds
+  the request open for the full pulse). Deliberately NOT disabled during an active arm
+  session — bench testing fires these while teleop runs.
+
+Pi side (robot-arm service; the live code lives only on arm-pi, so shipped here as files
+to copy over, and also applied to the stale vendored copy so the wiring is reviewable):
+- services/robot-arm/src/server/gpio.py (new): APIRouter /gpio/status, /gpio/pulse,
+  /gpio/sequence. Single owner of BCM 17/27 via gpiozero (lgpio backend; Pi 5). Lazy
+  claim, initial LOW, every on() paired with off() in a finally, asyncio.Lock serializes
+  pulses (second request -> 409; the 12 V supply cannot carry two inrushes at once per
+  this morning's bench finding), asyncio.sleep only so the 30 Hz loop is never blocked.
+  all_off() for e-stop/shutdown. Falls back to SIMULATED mode (state tracked, timing
+  honoured, simulated:true in every response) when gpiozero/pin factory is absent.
+  Allow-list and cap are env-tunable (SOLENOID_GPIO_PINS, SOLENOID_MAX_PULSE_MS).
+- services/robot-arm/scripts/install_gpio_router.py (new): idempotent 3-line patch to
+  app.py (import, include_router behind require_api_key, all_off() first in /e-stop),
+  with --check. Anchors verified against the vendored app.py.
+- Verified gpio.py in a scratch venv with FastAPI TestClient (simulated mode): 200 ms
+  pulse measured 207 ms wall, pins back to 0, bad pin 400, 5000 ms 422, [17,27] x150 ms
+  gap 100 -> 467 ms wall. Not yet run on the Pi.
+
+Deploy steps on arm-pi (not done yet, needs the operator at the bench):
+  scp gpio.py -> ~/robot-arm/src/server/, install_gpio_router.py -> ~/robot-arm/scripts/
+  cd ~/robot-arm && uv add gpiozero lgpio && python3 scripts/install_gpio_router.py
+  sudo systemctl restart robot-arm; curl /gpio/status should report simulated:false.
+
+Note: commit f0037d89 on this branch shipped install_gpio_router.py with a syntax error
+(a sed slip while adding newline="\n" to its write_text calls); fixed in the next commit.
+
+`npm run check`: 13 errors / 429 warnings = master baseline, zero in touched files.
