@@ -56,9 +56,11 @@ export interface ScreenRecordSummary {
 }
 
 function flattenRows(raw: ScreenSessionRaw): ScreenRow[] {
+	// Keys are "<lvl>_<part>" (written with a $set path, so no dot); sessions
+	// ingested before 2026-10-15 used "<lvl>.<part>" and still read fine.
 	const keys = Object.keys(raw.parts).sort((a, b) => {
-		const [la, pa] = a.split('.').map(Number);
-		const [lb, pb] = b.split('.').map(Number);
+		const [la, pa] = a.split(/[._]/).map(Number);
+		const [lb, pb] = b.split(/[._]/).map(Number);
 		return la - lb || pa - pb;
 	});
 	return keys.flatMap((k) => raw.parts[k]);
@@ -81,7 +83,7 @@ export function evaluateScreen(raw: ScreenSessionRaw, criteria: ScreenCriteria):
 	for (const lvl of [...lvls].sort()) {
 		const lr = rows.filter((r) => r.level === lvl);
 		const expected = raw.partsExpected[String(lvl)] ?? 0;
-		const got = Object.keys(raw.parts).filter((k) => k.startsWith(`${lvl}.`)).length;
+		const got = Object.keys(raw.parts).filter((k) => Number(k.split(/[._]/)[0]) === lvl).length;
 		levels[String(lvl)] = { name: SCREEN_LEVEL_NAMES[lvl] ?? `Level ${lvl}`, counts: countStatuses(lr), complete: expected > 0 && got >= expected };
 	}
 	// The summary closes the screen. An aborted screen still publishes its
@@ -111,40 +113,55 @@ export async function ingestScreenEvent(particleDeviceId: string, data: unknown,
 	const at = publishedAt ?? new Date();
 	const atIso = at.toISOString();
 
-	let session = (await ValidationSession.findOne({ type: 'screen', particleDeviceId, 'rawData.run': ev.run }).lean()) as any;
-	let raw: ScreenSessionRaw;
-	let sessionId: string;
+	if (!('rows' in ev) && ev.error) return { error: `device refused the screen: ${ev.error}` };
+
+	// Each event is applied with a targeted $set, never by writing rawData back
+	// whole: the level-3 event and the summary arrive one second apart, land in
+	// two serverless invocations, and a read-modify-write of rawData let the
+	// summary's invocation overwrite the level-3 part with its stale copy
+	// (first screen on 0255, 2026-10-15: the three ping failures vanished and
+	// the screen read as passed). Evaluation re-reads the document afterwards.
+	let session = (await ValidationSession.findOne({ type: 'screen', particleDeviceId, 'rawData.run': ev.run }).select('_id').lean()) as any;
 	if (!session) {
-		sessionId = generateId();
-		raw = { fw: ev.fw, run: ev.run, parts: {}, partsExpected: {}, summary: null, firstEventAt: atIso, lastEventAt: atIso };
-		await ValidationSession.create({
-			_id: sessionId,
-			type: 'screen',
-			spuId: spu?._id ?? null,
-			spuUdi: spu?.udi ?? null,
-			particleDeviceId,
-			status: 'running',
-			startedAt: at,
-			testRanAt: at,
-			rawData: raw,
-			results: []
-		});
-	} else {
-		sessionId = session._id;
-		raw = session.rawData as ScreenSessionRaw;
-		raw.parts = raw.parts ?? {};
-		raw.partsExpected = raw.partsExpected ?? {};
+		try {
+			await ValidationSession.create({
+				_id: generateId(),
+				type: 'screen',
+				spuId: spu?._id ?? null,
+				spuUdi: spu?.udi ?? null,
+				particleDeviceId,
+				status: 'running',
+				startedAt: at,
+				testRanAt: at,
+				rawData: { fw: ev.fw, run: ev.run, parts: {}, partsExpected: {}, summary: null, firstEventAt: atIso, lastEventAt: atIso } satisfies ScreenSessionRaw,
+				results: []
+			});
+		} catch {
+			/* a concurrent first event created it — fall through to the lookup */
+		}
+		session = (await ValidationSession.findOne({ type: 'screen', particleDeviceId, 'rawData.run': ev.run }).select('_id').lean()) as any;
+		if (!session) return { error: 'could not create the screen session' };
 	}
+	const sessionId: string = session._id;
+
+	const set: Record<string, unknown> = { 'rawData.lastEventAt': atIso };
+	if (ev.fw) set['rawData.fw'] = ev.fw;
 	if (!('rows' in ev)) {
-		if (ev.error) return { error: `device refused the screen: ${ev.error}` };
-		raw.summary = ev;
+		set['rawData.summary'] = ev;
 	} else {
-		raw.parts[`${ev.lvl}.${ev.part}`] = ev.rows;
-		raw.partsExpected[String(ev.lvl)] = Math.max(raw.partsExpected[String(ev.lvl)] ?? 0, ev.of);
+		// "_" not "." — a dot in a $set path would nest the part under the level.
+		set[`rawData.parts.${ev.lvl}_${ev.part}`] = ev.rows;
 	}
-	raw.fw = ev.fw || raw.fw;
-	raw.lastEventAt = atIso;
-	if (atIso < raw.firstEventAt) raw.firstEventAt = atIso;
+	await ValidationSession.updateOne({ _id: sessionId }, {
+		$set: set,
+		$min: { 'rawData.firstEventAt': atIso },
+		...('rows' in ev ? { $max: { [`rawData.partsExpected.${ev.lvl}`]: ev.of } } : {})
+	});
+
+	const fresh = (await ValidationSession.findById(sessionId).select('rawData').lean()) as any;
+	const raw = (fresh?.rawData ?? {}) as ScreenSessionRaw;
+	raw.parts = raw.parts ?? {};
+	raw.partsExpected = raw.partsExpected ?? {};
 
 	const criteria = await loadScreenCriteria();
 	const evaln = evaluateScreen(raw, criteria);
@@ -153,7 +170,6 @@ export async function ingestScreenEvent(particleDeviceId: string, data: unknown,
 		{ _id: sessionId },
 		{
 			$set: {
-				rawData: raw,
 				status,
 				completedAt: evaln.complete ? at : null,
 				overallPassed: evaln.overallPassed,

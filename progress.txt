@@ -20507,3 +20507,38 @@ sweep_progress), device monitor mode (spu.monitoring, /spu/monitor, Findings tab
 /api/cron/device-monitor-review) and the device_logs 1-year TTL. Firmware v102/v103 are not
 flashed yet; the pages work against existing data and the new webhooks are idle until a v102+
 unit publishes. Set CRON_SECRET and ANTHROPIC_API_KEY in Vercel before the first 07:30 UTC cron.
+
+================================================================================
+2026-10-15 — fix/screen-ingest-race — first real SCREEN (0255, fw v103): level-3 part lost to a write race; ping hook had no response topic
+================================================================================
+First screen on BT-M01-0000-0255 (session ZS2-35RFr2Mxjqz0E_GA-, 85 min, levels 0-3, 3 reps):
+levels 0-2 all pass (home error -100/-50/0 um, 0 limit hits, 276 readings and 49.46 m of
+stage travel per run, lasers ~780, heat hold 7/20). Level 3: all three pings timed out.
+
+Bug 1 (BIMS): screen/ingest.ts read rawData, mutated it in memory and wrote it back whole.
+The level-3 event and the summary arrived 1 s apart in two serverless invocations, so the
+summary's write overwrote the level-3 part and the screen was recorded as PASSED with
+65/0 instead of the device's 67/3/1. Fix: each event is applied with a targeted $set
+(rawData.parts.<lvl>_<part>, $max on partsExpected, $min on firstEventAt), then the doc is
+re-read and evaluated; the final update no longer writes rawData. Part keys are now
+"<lvl>_<part>" (a dot in a $set path would nest); readers accept both separators so the
+sessions ingested before today still evaluate. Session ZS2 was repaired by replaying the
+stored device_events row through the fixed ingest: now status failed, 3 failureReasons
+(Cloud round trip timeout x3), spu.validation.screen = failed. Truthful; a re-screen
+after the webhook fix below will replace it.
+
+Bug 2 (Particle, NOT fixed by code): webhooks created through the API get no responseTopic,
+so Particle never publishes a hook-response for bioscale/ping and the device waits 15 s
+three times. The Console-created blank-test hook has the default topic, which is why that
+path worked. Needs a manual edit in the Particle Console (or an approved script): set the
+bioscale/ping hook's Response Topic to the default
+{{{PARTICLE_DEVICE_ID}}}/hook-response/{{{PARTICLE_EVENT_NAME}}}. Also: Particle matches
+hook events by PREFIX, so the bioscale/screen hook already forwards bioscale/screen_record
+and the separate screen_record hook POSTed every chunk twice (duplicate device_events rows,
+harmless because the chunk store upserts) - delete it. scripts/create-screen-webhooks.ts
+updated to match (no screen_record hook; responseTopic on ping only).
+
+Also seen: device_logs had exactly one document before today - the device-log Lambda path
+works (the screen-end upload landed, 322 lines), it just is not used often.
+
+npm run check: 15 errors / 429 warnings, unchanged (none in these files).
