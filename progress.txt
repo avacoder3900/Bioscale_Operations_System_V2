@@ -20722,3 +20722,15 @@ Retrieve this exact code: git checkout master at commit 26a6b70f
 What this deployment is for: the SOLENOIDS (GPIO) card on the arm control page —
 Pulse GPIO 17 / 27 / 17-then-27 with an editable pulse length (default 1000 ms) against
 the GPIO router now live on arm-pi. Operator chose production over a login-gated preview.
+
+================================================================================
+2026-10-15 — master — DEPLOY: screen ingest write-race fix (fix/screen-ingest-race)
+================================================================================
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit 49448b9b
+Retrieve this exact code: git checkout master at commit 49448b9b
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: screen events are applied with targeted $set updates so a
+level part and the summary arriving in parallel can no longer lose each other; part keys
+"<lvl>_<part>". The Particle-side ping response topic still needs the Console edit noted
+in the fix/screen-ingest-race entry above.
