@@ -20681,3 +20681,11 @@ require_api_key, missing e-stop is informational) and was tested on a synthetic
 Pi-shaped app.py plus the vendored copy (no-op). Open: the Pi's app.py has no e-stop
 handler to hook, so today "stop" does not drop the solenoids - a pulse is at most 2 s
 anyway and the lock prevents stacking.
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit 26a6b70f (merge of feat/arm-solenoid-pulse, tip 0f4cd769)
+Retrieve this exact code: git checkout master at commit 26a6b70f
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: the SOLENOIDS (GPIO) card on the arm control page —
+Pulse GPIO 17 / 27 / 17-then-27 with an editable pulse length (default 1000 ms) against
+the GPIO router now live on arm-pi. Operator chose production over a login-gated preview.
