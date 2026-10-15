@@ -20571,3 +20571,11 @@ src/lib/server/consumer/ownership.test.ts 8/8.
 Counterpart: bioscale-app branch feat/cartridge-ownership (scan page with camera +
 zxing-wasm, Patients page, invite accept, ownership-scoped results, RESULTS_SCOPE=all escape
 hatch for UI testers).
+
+Deployment: preview — https://bioscale-operations-system-mongodb-ekr5ogtuj-brevitest.vercel.app
+Source: branch feat/consumer-ownership @ commit 16ca4cbb
+Retrieve this exact code: git checkout feat/consumer-ownership at commit 16ca4cbb
+  (or: git log feat/consumer-ownership --oneline to find it if the branch has since moved on)
+What this deployment is for: PR #92 — consumer cartridge ownership (consumer API, customer App
+access card, DHR ownership card, /cartridge-admin/ownership report). The consumer API answers
+401 until CONSUMER_API_KEY is set on the Vercel project.
