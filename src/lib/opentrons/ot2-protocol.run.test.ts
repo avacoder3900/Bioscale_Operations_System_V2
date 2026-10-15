@@ -534,6 +534,38 @@ describe('startRunSequence', () => {
 			expect(confirms.at(-1)).toMatchObject({ phase: 'failed', stage: 'create', uncertain: true });
 		}
 	});
+	it('RESUMES the idle run an earlier start created: run.get → confirm(created) → play; never a second POST /runs', async () => {
+		const prepared = { token: 'tok', processType: 'wax-filling' as const, protocolId: 'p-cur', expectedWells: {}, runTimeParameterValues: { a: 1 }, resumeRunId: 'run-old' };
+		const { steps, log, confirms } = startSteps(
+			{ prepare: async () => prepared },
+			{ 'run.get': { status: 200, body: { data: { id: 'run-old', status: 'idle' } } } }
+		);
+		const r = await startRunSequence(steps);
+		expect(r).toMatchObject({ ok: true, opentronsRunId: 'run-old' });
+		expect(log).toEqual(['run.ensureFresh', 'run.get', 'confirm:created', 'run.action:play', 'confirm:played']);
+		expect(confirms[0]).toEqual({ phase: 'created', opentronsRunId: 'run-old', protocolId: 'p-cur' });
+	});
+	it('a resume candidate the robot no longer lists idle (stopped, or gone) → a new run is created instead', async () => {
+		for (const answer of [{ status: 200, body: { data: { id: 'run-old', status: 'stopped' } } }, { status: 404, body: { message: 'not found' } }]) {
+			const prepared = { token: 'tok', processType: 'wax-filling' as const, protocolId: 'p-cur', expectedWells: {}, runTimeParameterValues: { a: 1 }, resumeRunId: 'run-old' };
+			const { steps, log } = startSteps({ prepare: async () => prepared }, { 'run.get': answer });
+			const r = await startRunSequence(steps);
+			expect(r).toMatchObject({ ok: true, opentronsRunId: 'run-1' });
+			expect(log).toEqual(['run.ensureFresh', 'run.get', 'run.create', 'confirm:created', 'run.action:play', 'confirm:played']);
+		}
+	});
+	it('after a re-sync the old run is on the OLD protocol: not resumed, a new run is created on the new one', async () => {
+		const prepared = { token: 'tok', processType: 'wax-filling' as const, protocolId: 'p-cur', expectedWells: {}, runTimeParameterValues: { a: 1 }, resumeRunId: 'run-old' };
+		const { steps, log } = startSteps(
+			{ prepare: async () => prepared },
+			{ 'run.ensureFresh': (a: any) => ({ status: 200, body: a.protocolId === 'p-new' ? { ok: true } : { ok: false, detail: 'moved' } }) }
+		);
+		const r = await startRunSequence(steps);
+		expect(r).toMatchObject({ ok: true, opentronsRunId: 'run-1' });
+		expect(log).not.toContain('run.get');
+		expect(log).toContain('run.uploadProtocol');
+		expect(log).toContain('run.create');
+	});
 	it('play refused by the robot → the old wax message', async () => {
 		const { steps } = startSteps({}, { 'run.action': { status: 409, body: { ok: false, detail: 'door open', conflict: true } } });
 		const r = await startRunSequence(steps);
