@@ -46,6 +46,7 @@ from typing import Optional
 
 import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException
+from . import gpio as solenoid_gpio
 from pydantic import BaseModel, Field
 
 from arm.driver import (
@@ -341,6 +342,7 @@ async def require_api_key(x_api_key: Optional[str] = Header(None)) -> None:
 
 
 app = FastAPI(title="bims-robot-arm", version=SERVICE_VERSION, lifespan=lifespan)
+app.include_router(solenoid_gpio.router, dependencies=[Depends(require_api_key)])
 
 
 # --- request / response models ---------------------------------------------
@@ -702,6 +704,7 @@ async def go_home() -> dict:
 
 @app.post("/e-stop", dependencies=[Depends(require_api_key)])
 async def e_stop() -> dict:
+    solenoid_gpio.all_off()  # drop every solenoid before touching the arm
     # E-stop should work even mid-session — cancel the session first.
     if state.active_session is not None and state.active_session.is_active():
         await asyncio.to_thread(state.active_session.stop)

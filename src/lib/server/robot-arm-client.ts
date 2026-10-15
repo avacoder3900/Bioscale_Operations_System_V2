@@ -189,6 +189,20 @@ export interface ArmPreflight {
 }
 
 // GET /tasks — the registry parsed from the Pi's src/config/tasks.yaml.
+export interface GpioPulseResult {
+	pins: number[];
+	ms: number;
+	gap_ms?: number;
+	simulated: boolean;
+	elapsed_ms: number;
+}
+
+export interface GpioStatus {
+	pins: Record<string, { state: number }>;
+	simulated: boolean;
+	busy: boolean;
+}
+
 export interface ArmTask {
 	name: string;
 	version?: string;
@@ -404,6 +418,16 @@ export const robotArm = {
 		robotArmFetch<ArmPreflight>('/health/preflight', { timeoutMs: opts.timeoutMs ?? 8000 }),
 
 	listTasks: () => robotArmFetch<{ tasks: ArmTask[] }>('/tasks'),
+
+	// Solenoid GPIO on the arm Pi (cartridge chute). The Pi owns the pins and
+	// serializes pulses; a 409 means a pulse is already in progress. Budgets
+	// cover the longest allowed pulse (2 s) and the longest sequence
+	// (2 pins x 2 s + 5 s gap) with headroom, under the 30 s adapter limit.
+	pulseGpio: (body: { pin: number; ms: number }) =>
+		robotArmFetch<GpioPulseResult>('/gpio/pulse', { method: 'POST', body, timeoutMs: 6000 }),
+	sequenceGpio: (body: { pins: number[]; ms: number; gap_ms: number }) =>
+		robotArmFetch<GpioPulseResult>('/gpio/sequence', { method: 'POST', body, timeoutMs: 14000 }),
+	gpioStatus: () => robotArmFetch<GpioStatus>('/gpio/status'),
 
 	// Task startup does hardware preflight on the Pi before returning, so it
 	// gets the same 15s allowance as the calibration calls above.
