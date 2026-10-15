@@ -18736,3 +18736,34 @@ Retrieve this exact code: git checkout feat/ot2-run-integrity-2 at commit af886a
   (or: git log feat/ot2-run-integrity-2 --oneline to find it if the branch has since moved on)
 What this deployment is for: OT2-TAILNET-6 S1–S5 (90 s create + adopt, double-start guard, probe-before-
   fallback + recovery under busy, stop polling after terminal, requestedBy on queue rows) — hardware test on R04.
+
+================================================================================
+2026-10-15 — fix/start-adopt-idle-run — a fill start resumes the robot run it already created instead of freezing
+================================================================================
+Symptom (reagent, B14/R04, 9 runs 10-07 … 10-15): the auto-start "creates a run
+but never starts it"; pressing Start then says "A previous start created robot
+run X that was never confirmed — reload the page so BIMS can reconcile"; the
+reload changes nothing; operators Cancel and start over.
+Root cause, from ot2_direct_calls + the robots' run lists: POST /runs answers in
+15–30 s on a Pi 3 and the browser gave up at 30 s ("signal timed out"), while the
+robot created the run anyway (e.g. B14 779231aa created 19:30:54Z, intent 19:30:53Z,
+timeout logged 19:31:26Z). The failed confirm kept the intent (uncertain); the next
+page load attached the run id; startPrepare then refused every start, and
+reconcileStartIntent deliberately left an idle run alone for 8 minutes ("a start
+may still be in flight") with no banner for 10 — a dead zone the operator could
+only leave by cancelling. The created run was stopped by the Cancel.
+Fix (on top of feat/ot2-run-integrity-2, whose 90 s create timeout + adopt-on-lost-
+answer removes the trigger for the common case):
+  - run-lifecycle-records.ts: startPrepare settles the previous intent itself
+    (calls reconcileStartIntent — no more "reload the page"), then
+    priorIntentDecision(): a created-but-never-played run is RESUMED when the
+    robot's current protocol + the requested RTP still match (carried into the new
+    intent + prepared.resumeRunId); refused only while a start may genuinely be in
+    flight (< START_INTENT_IN_FLIGHT_MS, now with the run id in the message) or a
+    lost create answer is < 15 s old; protocol/params changed → fresh create.
+    reconcileStartIntent never fails an idle run any more and shows
+    START_CREATED_NOT_STARTED_BANNER ("… press Start to start it") after 3 min.
+  - ot2-protocol.ts: startRunSequence, with prepared.resumeRunId and no re-sync,
+    does run.get → idle ? play that run : create a new one. No second POST /runs.
+Tests: +7 priorIntentDecision/sameRequestedRtp, +1 reconcile, +3 sequence (83 in
+the two files). npm run check: 16 errors (baseline).

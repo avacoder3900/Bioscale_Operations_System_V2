@@ -1332,6 +1332,12 @@ export interface StartPrepared {
 	expectedWells: ExpectedWells;
 	/** RTP values for protocolId's schema; null when there is no current entry. */
 	runTimeParameterValues: Record<string, unknown> | null;
+	/**
+	 * A robot run an earlier start created for this record on protocolId with
+	 * these parameters but never played. The sequence plays it instead of
+	 * creating a second run, if the robot still lists it idle.
+	 */
+	resumeRunId?: string | null;
 }
 
 export type StartConfirmObs =
@@ -1429,28 +1435,45 @@ export async function startRunSequence(s: StartRunSteps): Promise<SequenceResult
 		rtp = rec.runTimeParameterValues;
 	}
 
-	// 3. Create the OT-2 run.
+	// 3. The OT-2 run: resume the one an earlier start created and never played
+	//    (if the robot still has it idle), otherwise create one. After a re-sync
+	//    protocolId is the NEW upload and that run is on the old one: not resumed.
 	step('creating', 'active');
-	const c = await s.verb('run.create', { protocolId, runTimeParameterValues: rtp ?? {} });
-	let opentronsRunId = (c.body as any)?.opentronsRunId as string | undefined;
-	if (c.status !== 200 || !opentronsRunId) {
-		const message = bodyMsg(c, "Couldn't create run on robot");
-		const answerLost = c.lineLost === true || (c.body as any)?.noAnswer === true;
-		if (answerLost && typeof protocolId === 'string') {
-			// The POST may have landed (the robot keeps working after the client
-			// gives up). Look for the run it made for us before calling this failed —
-			// a second create would collide with it (RunConflictError) or double it.
-			step('creating', 'active', 'answer lost — checking the robot for the run it created…');
-			const found = await findCreatedRun(s.verb, protocolId, rtp ?? {}, s.adopt).catch(() => null);
-			if (found) opentronsRunId = found.opentronsRunId;
+	let opentronsRunId: string | undefined;
+	if (prepared.resumeRunId && protocolId === prepared.protocolId) {
+		const rid = prepared.resumeRunId;
+		step('creating', 'active', `checking run ${rid} the robot already created…`);
+		const g = await s.verb('run.get', { rid });
+		const st = String((g.body as any)?.data?.status ?? '').toLowerCase();
+		if (g.status === 200 && st === 'idle') {
+			opentronsRunId = rid;
+			step('creating', 'active', `resuming run ${rid} — created by an earlier start, never started`);
+		} else {
+			step('creating', 'active', `run ${rid} is ${st || 'gone'} on the robot — creating a new run`);
 		}
-		if (!opentronsRunId) {
-			step('creating', 'failed', message);
-			// The answer was lost but the POST may have landed: keep the start intent
-			// so the page's reconcile finds (or rules out) the robot run.
-			return failStart({ phase: 'failed', stage: 'create', message, uncertain: answerLost });
+	}
+	if (!opentronsRunId) {
+		const c = await s.verb('run.create', { protocolId, runTimeParameterValues: rtp ?? {} });
+		opentronsRunId = (c.body as any)?.opentronsRunId as string | undefined;
+		if (c.status !== 200 || !opentronsRunId) {
+			const message = bodyMsg(c, "Couldn't create run on robot");
+			const answerLost = c.lineLost === true || (c.body as any)?.noAnswer === true;
+			if (answerLost && typeof protocolId === 'string') {
+				// The POST may have landed (the robot keeps working after the client
+				// gives up). Look for the run it made for us before calling this failed —
+				// a second create would collide with it (RunConflictError) or double it.
+				step('creating', 'active', 'answer lost — checking the robot for the run it created…');
+				const found = await findCreatedRun(s.verb, protocolId, rtp ?? {}, s.adopt).catch(() => null);
+				if (found) opentronsRunId = found.opentronsRunId;
+			}
+			if (!opentronsRunId) {
+				step('creating', 'failed', message);
+				// The answer was lost but the POST may have landed: keep the start intent
+				// so the page's reconcile finds (or rules out) the robot run.
+				return failStart({ phase: 'failed', stage: 'create', message, uncertain: answerLost });
+			}
+			step('creating', 'active', `adopted run ${opentronsRunId} the robot created after the answer was lost`);
 		}
-		step('creating', 'active', `adopted run ${opentronsRunId} the robot created after the answer was lost`);
 	}
 	const created = await s.confirm(token, { phase: 'created', opentronsRunId, protocolId: protocolId as string });
 	if (isStepError(created)) {
