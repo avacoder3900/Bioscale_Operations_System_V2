@@ -229,6 +229,60 @@ function provenanceFromForm(data: FormData): {
 	};
 }
 
+// Solenoid GPIO (cartridge chute). BCM pin numbers, in drop order: 17 first,
+// then 27. These mirror the Pi's allow-list; the Pi is the enforcement point.
+const GPIO_PINS = [17, 27];
+const GPIO_PULSE_DEFAULT_MS = 1000;
+const GPIO_PULSE_MIN_MS = 20;
+const GPIO_PULSE_MAX_MS = 2000;
+const GPIO_GAP_MAX_MS = 5000;
+
+function parseGpioMs(raw: FormDataEntryValue | null, fallback: number): number | null {
+	const txt = raw?.toString().trim();
+	const n = txt ? parseInt(txt, 10) : fallback;
+	if (!Number.isFinite(n) || n < GPIO_PULSE_MIN_MS || n > GPIO_PULSE_MAX_MS) return null;
+	return n;
+}
+
+function parseGpioGap(raw: FormDataEntryValue | null): number | null {
+	const txt = raw?.toString().trim();
+	const n = txt ? parseInt(txt, 10) : 500;
+	if (!Number.isFinite(n) || n < 0 || n > GPIO_GAP_MAX_MS) return null;
+	return n;
+}
+
+function gpioStatus(err: unknown): number {
+	const msg = (err as Error).message ?? '';
+	return msg.includes('robot-arm 409') ? 409 : 502;
+}
+
+function gpioMessage(err: unknown): string {
+	const msg = (err as Error).message ?? 'unknown error';
+	if (msg.includes('robot-arm 404')) {
+		return 'The arm Pi does not have the GPIO endpoints yet - deploy the solenoid module to the robot-arm service and restart it.';
+	}
+	if (msg.includes('robot-arm 409')) return 'A solenoid pulse is already in progress on the Pi.';
+	return msg;
+}
+
+async function auditGpio(
+	user: { _id: string; username: string },
+	action: string,
+	details: Record<string, unknown>
+) {
+	await connectDB();
+	await AuditLog.create({
+		_id: generateId(),
+		action,
+		resourceType: 'robot_arm_gpio',
+		resourceId: ARM_DEVICE_ID,
+		userId: user._id,
+		username: user.username,
+		timestamp: new Date(),
+		details
+	});
+}
+
 export const actions: Actions = {
 	startTeleop: async ({ request, locals }) => {
 		if (!locals.user) return fail(401, { error: 'Unauthorized' });
@@ -346,6 +400,62 @@ export const actions: Actions = {
 		});
 
 		return { success: `task "${name}" started`, runId };
+	},
+
+	// Solenoid pulses on the arm Pi's GPIO (cartridge chute). Pins are named by
+	// BCM number for now; the Pi enforces the allow-list and the 2 s cap, so a
+	// tampered form cannot hold a coil on. Deliberately NOT gated on the arm
+	// session: manual testing fires these while teleop is running.
+	pulseGpio: async ({ request, locals }) => {
+		if (!locals.user) return fail(401, { error: 'Unauthorized' });
+		requirePermission(locals.user, 'manufacturing:write');
+		const data = await request.formData();
+		const pin = parseInt(data.get('pin')?.toString() || '', 10);
+		const ms = parseGpioMs(data.get('pulse_ms'), GPIO_PULSE_DEFAULT_MS);
+		if (!GPIO_PINS.includes(pin)) {
+			return fail(400, { error: `pin must be one of ${GPIO_PINS.join(', ')}` });
+		}
+		if (ms === null) {
+			return fail(400, { error: `pulse must be ${GPIO_PULSE_MIN_MS}-${GPIO_PULSE_MAX_MS} ms` });
+		}
+		try {
+			const result = await robotArm.pulseGpio({ pin, ms });
+			await auditGpio(locals.user, 'robot_arm.gpio.pulse', { pin, ms, simulated: result.simulated });
+			return {
+				success: `GPIO ${pin} pulsed for ${ms} ms${result.simulated ? ' (simulated - no GPIO on the Pi)' : ''}`
+			};
+		} catch (err) {
+			return fail(gpioStatus(err), { error: gpioMessage(err) });
+		}
+	},
+
+	// GPIO 17 then GPIO 27, each for pulse_ms, with gap_ms between. This is the
+	// manual version of the chute drop; the automatic between-loops version is
+	// deliberately not built yet.
+	pulseSequence: async ({ request, locals }) => {
+		if (!locals.user) return fail(401, { error: 'Unauthorized' });
+		requirePermission(locals.user, 'manufacturing:write');
+		const data = await request.formData();
+		const ms = parseGpioMs(data.get('pulse_ms'), GPIO_PULSE_DEFAULT_MS);
+		const gap = parseGpioGap(data.get('gap_ms'));
+		if (ms === null) {
+			return fail(400, { error: `pulse must be ${GPIO_PULSE_MIN_MS}-${GPIO_PULSE_MAX_MS} ms` });
+		}
+		if (gap === null) return fail(400, { error: `gap must be 0-${GPIO_GAP_MAX_MS} ms` });
+		try {
+			const result = await robotArm.sequenceGpio({ pins: GPIO_PINS, ms, gap_ms: gap });
+			await auditGpio(locals.user, 'robot_arm.gpio.sequence', {
+				pins: GPIO_PINS,
+				ms,
+				gap_ms: gap,
+				simulated: result.simulated
+			});
+			return {
+				success: `GPIO ${GPIO_PINS.join(' then ')} pulsed for ${ms} ms each, ${gap} ms apart${result.simulated ? ' (simulated - no GPIO on the Pi)' : ''}`
+			};
+		} catch (err) {
+			return fail(gpioStatus(err), { error: gpioMessage(err) });
+		}
 	},
 
 	// ARM-01 §7.7: stop is available to ANY manufacturing:write user, including

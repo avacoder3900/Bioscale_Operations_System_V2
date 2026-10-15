@@ -1,8 +1,22 @@
 <script lang="ts">
 	import RobotArmConnectionPanel from '$lib/components/RobotArmConnectionPanel.svelte';
 	import RobotArmControlBar from '$lib/components/RobotArmControlBar.svelte';
+	import { enhance } from '$app/forms';
 
 	let { data, form } = $props();
+
+	// Solenoid pulse controls. 1000 ms default: long enough for a cartridge to
+	// fall clear, short enough for an intermittent-duty coil. The Pi caps at 2000.
+	let pulseMs = $state(1000);
+	let gapMs = $state(500);
+	let gpioBusy = $state(false);
+	const gpioEnhance = () => {
+		gpioBusy = true;
+		return async ({ update }: { update: (opts?: { reset?: boolean }) => Promise<void> }) => {
+			await update({ reset: false });
+			gpioBusy = false;
+		};
+	};
 
 	// ARM-01 §7.4 — this build is accepted against dry-run only, so the Start
 	// control refuses to submit when the Pi reports live motion. The server
@@ -240,6 +254,101 @@
 					>
 				</form>
 			</div>
+
+			<!--
+				Solenoids on the arm Pi's GPIO (cartridge chute). Pins are named by BCM
+				number for now. One shared pulse length feeds all three buttons; the
+				sequence button adds a gap between the two pins. Not disabled during a
+				session on purpose: manual testing fires these while teleop runs.
+			-->
+			<section
+				class="rounded border p-3 sm:p-4"
+				style="border-color: var(--color-tron-border); background: var(--color-tron-surface);"
+			>
+				<h2 class="text-sm font-semibold tracking-wide" style="color: var(--color-tron-text)">
+					SOLENOIDS (GPIO)
+				</h2>
+				<p class="mt-1 text-xs" style="color: var(--color-tron-text-secondary)">
+					Energize a solenoid for the pulse length, then release. The Pi caps a pulse at 2000 ms.
+				</p>
+
+				<div class="mt-3 grid grid-cols-1 gap-4 md:grid-cols-[12rem_minmax(0,1fr)]">
+					<div class="space-y-3">
+						<label class="block text-xs" style="color: var(--color-tron-text-secondary)">
+							Pulse (ms)
+							<input
+								type="number"
+								bind:value={pulseMs}
+								min="20"
+								max="2000"
+								step="10"
+								class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-black/40 px-2 py-1 text-sm"
+								style="color: var(--color-tron-text)"
+							/>
+						</label>
+						<label class="block text-xs" style="color: var(--color-tron-text-secondary)">
+							Gap between pins (ms, sequence only)
+							<input
+								type="number"
+								bind:value={gapMs}
+								min="0"
+								max="5000"
+								step="50"
+								class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-black/40 px-2 py-1 text-sm"
+								style="color: var(--color-tron-text)"
+							/>
+						</label>
+					</div>
+
+					<div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
+						<form method="POST" action="?/pulseGpio" use:enhance={gpioEnhance}>
+							<input type="hidden" name="pin" value="17" />
+							<input type="hidden" name="pulse_ms" value={pulseMs} />
+							<button
+								type="submit"
+								disabled={!armReachable || gpioBusy}
+								class="min-h-[44px] w-full rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 px-3 py-1.5 text-sm font-medium transition-colors hover:bg-[var(--color-tron-cyan)]/20 disabled:cursor-not-allowed disabled:opacity-40"
+								style="color: var(--color-tron-cyan)"
+							>
+								Pulse GPIO 17
+							</button>
+						</form>
+						<form method="POST" action="?/pulseGpio" use:enhance={gpioEnhance}>
+							<input type="hidden" name="pin" value="27" />
+							<input type="hidden" name="pulse_ms" value={pulseMs} />
+							<button
+								type="submit"
+								disabled={!armReachable || gpioBusy}
+								class="min-h-[44px] w-full rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 px-3 py-1.5 text-sm font-medium transition-colors hover:bg-[var(--color-tron-cyan)]/20 disabled:cursor-not-allowed disabled:opacity-40"
+								style="color: var(--color-tron-cyan)"
+							>
+								Pulse GPIO 27
+							</button>
+						</form>
+						<form method="POST" action="?/pulseSequence" use:enhance={gpioEnhance}>
+							<input type="hidden" name="pulse_ms" value={pulseMs} />
+							<input type="hidden" name="gap_ms" value={gapMs} />
+							<button
+								type="submit"
+								disabled={!armReachable || gpioBusy}
+								class="min-h-[44px] w-full rounded px-3 py-1.5 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-40"
+								style="background: rgba(56,189,248,0.15); color: var(--color-tron-cyan); border: 1px solid var(--color-tron-cyan);"
+							>
+								GPIO 17 then 27
+							</button>
+						</form>
+					</div>
+				</div>
+				{#if gpioBusy}
+					<p class="mt-2 text-xs" style="color: #f59e0b">
+						Pulsing... the Pi holds the pin for the full length before answering.
+					</p>
+				{:else if !armReachable}
+					<p class="mt-2 text-xs" style="color: #f59e0b">
+						The arm Pi is unreachable, so the solenoids cannot be driven.
+					</p>
+				{/if}
+			</section>
 
 			<!-- ARM-01 S5 — run a named task from the Pi's registry -->
 			<section
