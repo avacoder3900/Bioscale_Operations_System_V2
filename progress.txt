@@ -20493,3 +20493,17 @@ npm run check: 15 errors / 429 warnings. None in files this branch touches — r
 sonic/decode.ts (@audio/decode-* modules), research-proxy.ts, AskBimsWidget,
 assembly/[sessionId], magnetometer/[sessionId] are all master's. Branch baseline before
 the merge was 10 / 439; the five new ones came in with master.
+
+================================================================================
+2026-10-14 — master — DEPLOY: screen pipeline + device monitor mode + device_logs 1-year TTL
+================================================================================
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit a6a4dbd8 (merge of feat/screen-pipeline 8fc8f704 + progress entry)
+Retrieve this exact code: git checkout master at commit a6a4dbd8
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: the SPU screen pipeline (screen + assay-run gates, /validation/screen,
+/validation/assay-run, webhook ingest for bioscale/screen, ping, screen_record, mag_sweep_chunk,
+sweep_progress), device monitor mode (spu.monitoring, /spu/monitor, Findings tab, daily
+/api/cron/device-monitor-review) and the device_logs 1-year TTL. Firmware v102/v103 are not
+flashed yet; the pages work against existing data and the new webhooks are idle until a v102+
+unit publishes. Set CRON_SECRET and ANTHROPIC_API_KEY in Vercel before the first 07:30 UTC cron.
