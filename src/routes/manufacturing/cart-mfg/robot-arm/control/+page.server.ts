@@ -234,7 +234,7 @@ export const actions: Actions = {
 		if (!locals.user) return fail(401, { error: 'Unauthorized' });
 		requirePermission(locals.user, 'manufacturing:write');
 		const data = await request.formData();
-		const rate = parseInt(data.get('rate_hz')?.toString() || '10', 10);
+		const rate = parseInt(data.get('rate_hz')?.toString() || '30', 10);
 		const dur = data.get('duration_s')?.toString();
 		try {
 			const result = await robotArm.startTeleop({
@@ -255,7 +255,7 @@ export const actions: Actions = {
 		const data = await request.formData();
 		const name = data.get('name')?.toString().trim();
 		if (!name) return fail(400, { error: 'name is required' });
-		const rate = parseInt(data.get('rate_hz')?.toString() || '10', 10);
+		const rate = parseInt(data.get('rate_hz')?.toString() || '30', 10);
 		const dur = data.get('duration_s')?.toString();
 		try {
 			const result = await robotArm.startRecord({

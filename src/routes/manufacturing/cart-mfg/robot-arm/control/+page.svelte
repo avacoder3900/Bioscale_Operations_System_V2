@@ -114,7 +114,7 @@
 						<input
 							type="number"
 							name="rate_hz"
-							value="10"
+							value="30"
 							min="1"
 							max="60"
 							class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-black/40 px-2 py-1 text-sm"
@@ -168,7 +168,7 @@
 						<input
 							type="number"
 							name="rate_hz"
-							value="10"
+							value="30"
 							min="1"
 							max="60"
 							class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-black/40 px-2 py-1 text-sm"

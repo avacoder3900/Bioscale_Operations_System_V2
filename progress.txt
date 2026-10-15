@@ -20507,3 +20507,100 @@ sweep_progress), device monitor mode (spu.monitoring, /spu/monitor, Findings tab
 /api/cron/device-monitor-review) and the device_logs 1-year TTL. Firmware v102/v103 are not
 flashed yet; the pages work against existing data and the new webhooks are idle until a v102+
 unit publishes. Set CRON_SECRET and ANTHROPIC_API_KEY in Vercel before the first 07:30 UTC cron.
+
+================================================================================
+2026-10-15 — master — arm-pi bench session: solenoid driver alongside the arm (no code changes)
+================================================================================
+Bench/ops session only; no repo code touched. Goal was to start testing the new
+two-channel solenoid driver (GPIO17/GPIO27 -> UCC27524 -> IRLZ44N, own 12 V supply,
+PCB ordered 2026-10-14) running side by side with the SO-ARM101 on arm-pi.
+
+Pi facts confirmed (recorded in session memory too): arm-pi is hostname alejandrospi3,
+a Raspberry Pi 5 Model B Rev 1.1, LAN 172.16.202.203 (DHCP) / Tailscale 100.103.204.105.
+User brevitest3 is in gpio, dialout, sudo. robot-arm.service runs as brevitest3 via
+`uv run --project ~/robot-arm --no-dev`, so service-side Python deps must be added to
+that uv project (system gpiozero/lgpio are present but invisible to it). No
+under-voltage throttling ever recorded (get_throttled=0x0).
+
+Arm bring-up problem and root cause: /health/preflight reported ok:false, leader
+BusLinker absent, with dmesg "usb 1-1: Device not responding to setup address ...
+error -71 ... unable to enumerate USB device" on every plug-in. Cause was operator
+error plus a flaky seat: the follower arm's 12 V had not been switched on, and the
+leader's USB connection did not enumerate until cables/ports were swapped. After both
+arms were powered and reseated, both boards enumerated (leader serial 5C4C125867 on
+ttyACM0, follower 5C4C126808 on ttyACM1, udev symlinks correct). The service only
+opens ports in lifespan(), so a `sudo systemctl restart robot-arm` was required before
+preflight went ok:true with both ports green and DRY_RUN=false.
+
+Solenoid prototype finding (breadboard module, not the ordered PCB): firing channel A
+or B individually and rapidly works. Firing both together rapidly lights the module's
+MOSFET LEDs (gate drive is fine) but neither solenoid pulls in until the command
+stops, then recovers after ~1 s. Consistent with the 12 V supply hitting its current
+limit on double inrush (hiccup recovery), or breadboard-contact voltage drop. Not a
+blocker since simultaneous fire is not planned; the PCB's 2200 uF bulk cap + screw
+terminals should change this behaviour. Worth checking supply rating against solenoid
+PULL-IN current (not holding current) before relying on it.
+
+Test plan agreed for the side-by-side runs: (1) solenoids alone with
+`journalctl -u robot-arm -f` open, (2) teleop alone for a 60 s baseline, (3) teleop
+180 s with solenoid pulses mid-move and while holding, watching for EIO/checksum
+errors or follower twitch that correlate with pulses. Ground rule: the solenoid board
+GND joins Pi GND at J2 pin 3 only; no second ground tie between the supplies.
+
+RESULT (14:01-14:04): all three stages run. Stage 2 teleop 60 s baseline and stage 3
+teleop with solenoid pulses mid-move and while holding both produced a journal with
+nothing but the HTTP request lines (teleop/start x2, sessions/stop). Zero serial
+errors, zero liveness-probe failures, no USB events, follower steady at each pulse.
+Conclusion: the solenoid driver (own 12 V, GND joined to Pi only at the header) and
+the arm coexist cleanly on arm-pi. Note the 2200 uF cap was already at the adapter
+terminal during the double-fire stall, so that stall is supply-limit or breadboard
+wiring drop, not something the PCB's cap will change; stagger paired fires ~50 ms in
+software if both channels are ever needed in one step.
+
+Next step for automated runs: move the two GPIO outputs into the robot-arm service
+(uv add gpiozero lgpio in ~/robot-arm; endpoints that /e-stop and /sessions/stop
+also de-energize) so a task can fire them at a verified pose. Standalone script
+~/solenoid_test.py on arm-pi remains for bench use.
+
+PRODUCTION ARM PANEL "fetch failed" -- root cause and fix (afternoon). The cart-mfg
+Robot Arm control page on production reported "Cannot reach the robot-arm Pi: fetch
+failed", last connected never. The device_events connection log (deviceId
+robot-arm-pi) had only two rows ever, both today, both "fetch failed", both with the
+correct base URL https://arm-pi.tailf65a70.ts.net -- so production BIMS had never once
+reached the arm since the log was added 2026-07-30. The Pi itself was healthy and
+reachable over LAN and over the tailnet the whole time, which is why every earlier
+"Funnel verified" note passed: those checks ran from tailnet-attached machines, and
+MagicDNS resolves the ts.net name to the tailnet IP, bypassing the public ingress.
+Forcing the public path (curl --resolve <name>:443:199.38.181.54) failed with TLS
+handshake reset from the laptop, from the Pi itself, from a third-party checker and
+from a phone on cellular, while Vercel logged fetch failed. tailscale funnel status
+said Funnel on throughout; netcheck was clean (UDP ok, DERP dfw 27 ms); tailscaled
+journal showed control-plane connections reset by peer several times after the
+10:50 reboot. Diagnosis: the node's Funnel registration never propagated to the
+ingress fleet after reboot. systemctl restart tailscaled did NOT fix it. What fixed
+it: `sudo tailscale funnel --https=443 off` then
+`sudo tailscale funnel --bg --https=443 http://127.0.0.1:8000` -- the public IPv4
+ingress answered 3/3 immediately after, from the Pi and from the laptop.
+Lesson: "Funnel on" in status is not proof of public reachability; verify with a
+--resolve curl to a 199.38.181.x ingress IP (or from a non-tailnet host), and after
+any arm-pi reboot toggle Funnel off/on if production shows fetch failed.
+
+`npm run check`: not run (no code changes this session).
+
+================================================================================
+2026-10-15 — master — arm control: teleop/record default rate 10 Hz -> 30 Hz
+================================================================================
+The Teleop and Record forms on /manufacturing/cart-mfg/robot-arm/control defaulted
+rate_hz to 10, and the two server actions fell back to 10 when the field was blank.
+The Pi service's own default (leader_follower.DEFAULT_RATE_HZ) is 30 and the whole
+driver/loop is designed around 30 Hz (single sync_read + sync_write per tick so six
+servos fit in 33 ms at 1 Mbps). The 10 had no recorded rationale — it came in with the
+first control page and was carried through the cart-mfg route move. At 10 Hz teleop
+updates the follower every 100 ms (visible steps), and recordings capture at 10 Hz and
+replay at that same cadence forever. Today's bench teleop ran at 30 Hz (curl with no
+rate_hz -> Pi default) with a clean journal, so 30 is proven on this hardware.
+
+Changed: control/+page.svelte (both rate inputs value="10" -> "30") and
+control/+page.server.ts (both `|| '10'` fallbacks -> '30'). Nothing else.
+
+`npm run check`: 13 errors / 429 warnings on master after the screen-pipeline merge (a6a4dbd8), zero in touched files.
