@@ -20451,3 +20451,45 @@ Retrieve this exact code: git checkout master at commit 6a01fe0e
   (or: git log master --oneline to find it if the branch has since moved on)
 What this deployment is for: Post-Mortem Inspect live view pulls /snapshot.jpg one frame at a
   time instead of the MJPEG push stream — tablet test of the freeze/fast-forward lag fix.
+
+================================================================================
+2026-10-14 — feat/screen-pipeline — merge origin/master (450 commits) into the screen pipeline; monitor mode + TTL ride along
+================================================================================
+The branch was cut 2026-09-18; master moved 450 commits since (optics banked 10/06,
+auto-graded bench + blank, workflow-ordered launchers, sonic analysis, master's own
+magnetometer sweep chunk ingest). Eight files conflicted and were hand-merged:
+
+- spu-validation-cycle.ts: VALIDATION_INSTRUMENTS = screen, magnetometer, thermocouple,
+  assay_run (the four gates). VALIDATION_TESTS (the SPU-page dots) gains screen first and
+  assay_run last next to master's bench / sonic / blank / mag / thermo, so the dots and the
+  hub count the same things.
+- validation/+page.server.ts + +page.svelte (hub): screen column AND master's bench / blank
+  auto-verdict columns; assay-run column; legacy optics note (fmtRatio restored). The
+  legacy "sync optics" action is gone — master dropped it 10/06 and its import with it.
+  Launchers in workflow order: Screen, Optical Bench, Sonic, Blank, Magnetometer,
+  Thermocouple, Assay Run, Optical Confirmation (R&D).
+- validation/+layout.svelte: nav renumbered 1 Screen .. 7 Assay Run, Optical (R&D) last;
+  HEAD's duplicate Bench / Sonic entries dropped (master already had them).
+- spu/[spuId]/+page.svelte: four modality cards; quick links add master's Run bench /
+  Blank runs next to Screen / Assay run.
+- api/particle/webhook: the chunk store ($lib/server/chunks) owns bioscale/mag_sweep_chunk
+  and screen_record — the firmware publishes both BINARY (ContentType::BINARY, arrives as a
+  data:…;base64 URL) which master's mag-sweep-ingest never decodes. master's
+  handleSweepChunk stays after it as the fallback for the alias spellings it accepts.
+  Duplicate syncServiceFlag / parseTestPayload imports from the merge removed.
+- models/index.ts: SonicIgnoreRule + SweepUpload (master) and ALL_STEP_LABELS (branch)
+  exported together.
+- progress.txt: both histories kept.
+
+Also on this branch since the last entry: device_logs TTL 30 d -> 1 y (499e7abe, live index
+updated via collMod), and device monitor mode (47f2f3fb: spu.monitoring, syncMonitorFlag
+for firmware v103, /spu/monitor fleet page, Findings tab, daily cron
+/api/cron/device-monitor-review at 07:30 UTC, device_findings collection, docs in
+docs/device-monitor-mode.md). Vercel needs CRON_SECRET and ANTHROPIC_API_KEY set
+(DEVICE_MONITOR_MODEL optional, default claude-sonnet-4-6) or the cron returns 401 /
+the review errors.
+
+npm run check: 15 errors / 429 warnings. None in files this branch touches — r2.ts,
+sonic/decode.ts (@audio/decode-* modules), research-proxy.ts, AskBimsWidget,
+assembly/[sessionId], magnetometer/[sessionId] are all master's. Branch baseline before
+the merge was 10 / 439; the five new ones came in with master.
