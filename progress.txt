@@ -20965,3 +20965,14 @@ Retrieve this exact code: git checkout feat/account-types at commit 735188d4
   (or: git log feat/account-types --oneline to find it if the branch has since moved on)
 What this deployment is for: account types + clinic enrollment on /app-accounts (smoke: /login 200,
 /app-accounts 302 → login). Merged to master as PR #96 on user's "merge".
+
+================================================================================
+2026-10-16 — feat/linked-cartridges-top — App Accounts: linked cartridges panel under Identity
+================================================================================
+PR #95 was merged at f25773bf before the panel-move commit (b59e7262) was pushed, so the move
+never reached master; PR #96 (account types) then edited the same page. Redid the move on
+current master: "Cartridges linked to this account" (with the Assign form) now sits directly
+under Identity, above Account type. Layout only. svelte-check 14 errors = baseline. PR #97.
+Note: bioscale-app main (fd785a5, PR #4 merge) shows Vercel "Deployment was blocked" — the
+GitHub merges are authored by Samantha Wolf, not a Vercel team member; redeploy main from the
+Vercel dashboard.
