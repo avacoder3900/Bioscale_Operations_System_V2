@@ -1,11 +1,13 @@
 import { error, fail, redirect } from '@sveltejs/kit';
-import { requirePermission } from '$lib/server/permissions';
+import { hasPermission, requirePermission } from '$lib/server/permissions';
 import {
 	connectDB, AppUser, AppSubject, AppAccountBlock, CustomerAccount, CartridgeOwnership, CartridgeRecord,
-	ConsumerClaimAttempt, ConsumerInvite, Customer
+	ConsumerInvite, Customer
 } from '$lib/server/db';
-import { linkAccountToCustomer, releaseOwnership, revokeCustomerLink } from '$lib/server/consumer/ownership';
-import { blockAccount, unblockAccount } from '$lib/server/consumer/accounts';
+import { assignOwnership, linkAccountToCustomer, releaseOwnership, revokeCustomerLink } from '$lib/server/consumer/ownership';
+import { blockAccount, deleteDevAccount, isDevAccountId, unblockAccount } from '$lib/server/consumer/accounts';
+import { mintViewAsToken, viewAsConfigured, viewAsUrl } from '$lib/server/consumer/view-as';
+import { CARTRIDGE_ID } from '$lib/server/consumer/http';
 import type { PageServerLoad, Actions } from './$types';
 
 const ROLES = new Set(['admin', 'staff', 'member']);
@@ -20,11 +22,10 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 	const user = (await AppUser.findById(accountId).lean()) as any;
 	if (!user) throw error(404, 'App account not found');
 
-	const [block, links, rows, attempts, invites, customers] = await Promise.all([
+	const [block, links, rows, invites, customers] = await Promise.all([
 		AppAccountBlock.findById(accountId).lean() as Promise<any>,
 		CustomerAccount.find({ accountId }).sort({ linkedAt: -1 }).lean() as Promise<any[]>,
 		CartridgeOwnership.find({ open: true, accountId }).sort({ claimedAt: -1 }).limit(500).lean() as Promise<any[]>,
-		ConsumerClaimAttempt.find({ accountId }).sort({ at: -1 }).limit(50).lean() as Promise<any[]>,
 		user.signInEmail
 			? ConsumerInvite.find({ email: String(user.signInEmail).toLowerCase() }).sort({ createdAt: -1 }).limit(20).lean() as Promise<any[]>
 			: [],
@@ -59,7 +60,8 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 		matchedShipment: Boolean(r.matchedShipment),
 		customerName: customerName(r.customerId ?? null),
 		subjectName: subjectName(r.subjectId ?? null),
-		claimedAt: r.claimedAt ? new Date(r.claimedAt).toISOString() : null
+		claimedAt: r.claimedAt ? new Date(r.claimedAt).toISOString() : null,
+		claimedBy: r.claimedBy?.label ?? null
 	});
 
 	return {
@@ -72,8 +74,12 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 			bioscaleEmail: user.bioscaleEmail ?? null,
 			verifiedAt: user.bioscaleEmailVerifiedAt ? new Date(user.bioscaleEmailVerifiedAt).toISOString() : null,
 			createdAt: user.createdAt ? new Date(user.createdAt).toISOString() : null,
-			lastSignInAt: user.lastSignInAt ? new Date(user.lastSignInAt).toISOString() : null
+			lastSignInAt: user.lastSignInAt ? new Date(user.lastSignInAt).toISOString() : null,
+			isDev: isDevAccountId(accountId),
+			devCreatedBy: user.devAccount?.createdBy?.username ?? null
 		},
+		viewAs: viewAsConfigured(),
+		canWrite: hasPermission(locals.user, 'customer:write'),
 		block: block ? { reason: block.reason, by: block.blockedBy?.username ?? null, at: new Date(block.blockedAt).toISOString() } : null,
 		links: links.map((l) => ({
 			id: l._id, customerId: l.customerId, customerName: customerName(l.customerId), role: l.role, status: l.status,
@@ -82,7 +88,6 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 		})),
 		owned: rows.map(shapeRow),
 		clinicOwned: clinicRows.map(shapeRow),
-		attempts: attempts.map((a) => ({ id: a._id, cartridgeId: a.cartridgeId ?? null, outcome: a.outcome, at: new Date(a.at).toISOString() })),
 		invites: invites.map((i) => ({
 			id: i._id, customerName: customerName(i.customerId), role: i.role, status: i.status,
 			expiresAt: new Date(i.expiresAt).toISOString(), createdBy: i.createdBy?.label ?? null
@@ -118,6 +123,28 @@ export const actions: Actions = {
 		return ok ? { success: true, message: 'Link revoked' } : fail(404, { error: 'Link not found' });
 	},
 
+	/** Give this account a cartridge: a personal ownership row with source 'operator'. */
+	assign: async ({ request, locals, params }) => {
+		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'customer:write');
+		await connectDB();
+		const accountId = decodeURIComponent(params.accountId);
+		const fd = await request.formData();
+		const cartridgeId = String(fd.get('cartridgeId') ?? '').trim();
+		if (!CARTRIDGE_ID.test(cartridgeId)) return fail(400, { error: 'Enter a cartridge id: the QR payload (a UUID) or a CART-000123 id' });
+		if (!(await AppUser.exists({ _id: accountId }))) return fail(404, { error: 'Account not found' });
+		const outcome = await assignOwnership({
+			cartridgeId,
+			accountId,
+			replace: fd.get('replace') === 'on',
+			note: String(fd.get('note') ?? '').trim() || null,
+			operator: operatorOf(locals)
+		});
+		if (!outcome.ok) return fail(outcome.reason === 'not_found' ? 404 : 409, { error: outcome.reasonText });
+		const caveat = outcome.matchedShipment ? '' : ' (no shipment to this account’s customers on record)';
+		return { success: true, message: `Cartridge ${cartridgeId} assigned to this account${caveat}` };
+	},
+
 	release: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
 		requirePermission(locals.user, 'customer:write');
@@ -147,6 +174,32 @@ export const actions: Actions = {
 		await connectDB();
 		const ok = await unblockAccount({ accountId: decodeURIComponent(params.accountId), operator: operatorOf(locals) });
 		return ok ? { success: true, message: 'Account unblocked' } : fail(404, { error: 'This account was not blocked' });
+	},
+
+	/**
+	 * Open the consumer app as this account (temporary developer door,
+	 * src/lib/server/consumer/view-as.ts). The browser follows the redirect
+	 * to the app, which verifies the two-minute token and starts the session.
+	 */
+	viewAs: async ({ locals, params }) => {
+		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'customer:write');
+		if (!viewAsConfigured()) return fail(503, { error: 'CONSUMER_API_KEY and BIOSCALE_APP_URL must be set before the app can be opened from BIMS' });
+		await connectDB();
+		const accountId = decodeURIComponent(params.accountId);
+		if (!(await AppUser.exists({ _id: accountId }))) return fail(404, { error: 'Account not found' });
+		const token = mintViewAsToken({ accountId, actor: operatorOf(locals).username });
+		redirect(303, viewAsUrl(token));
+	},
+
+	/** Remove a dev account (never a real one — those are blocked, not deleted). */
+	deleteDev: async ({ locals, params }) => {
+		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'customer:write');
+		await connectDB();
+		const outcome = await deleteDevAccount({ accountId: decodeURIComponent(params.accountId), operator: operatorOf(locals) });
+		if (!outcome.ok) return fail(400, { error: outcome.error });
+		redirect(303, '/app-accounts?removed=1');
 	}
 };
 

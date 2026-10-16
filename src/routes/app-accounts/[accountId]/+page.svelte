@@ -18,12 +18,13 @@
 			<div>
 				<h1 class="text-2xl font-bold text-[var(--color-tron-text)]">{a.name ?? a.email}</h1>
 				<p class="mt-1 text-sm text-[var(--color-tron-text-secondary)]">
-					{a.email} · <TronBadge variant="neutral">{a.provider}</TronBadge> · <span class="font-mono text-xs">{a.accountId}</span>
+					{a.email} · <TronBadge variant={a.isDev ? 'warning' : 'neutral'}>{a.provider}</TronBadge> · <span class="font-mono text-xs">{a.accountId}</span>
 				</p>
 			</div>
-			{#if data.block}
-				<TronBadge variant="error">blocked</TronBadge>
-			{/if}
+			<div class="flex items-center gap-2">
+				{#if a.isDev}<TronBadge variant="warning">dev account</TronBadge>{/if}
+				{#if data.block}<TronBadge variant="error">blocked</TronBadge>{/if}
+			</div>
 		</div>
 	</div>
 
@@ -42,11 +43,36 @@
 			<div><dt class="tron-text-muted">Results email</dt><dd class="tron-text-primary mt-1">{a.bioscaleEmail ?? '—'} {#if a.bioscaleEmail}<span class="text-xs {a.verifiedAt ? 'text-[var(--color-tron-green)]' : 'text-[var(--color-tron-yellow)]'}">{a.verifiedAt ? 'verified' : 'unverified'}</span>{/if}</dd></div>
 			<div><dt class="tron-text-muted">First sign-in</dt><dd class="tron-text-primary mt-1">{fmt(a.createdAt)}</dd></div>
 			<div><dt class="tron-text-muted">Last sign-in</dt><dd class="tron-text-primary mt-1">{fmt(a.lastSignInAt)}</dd></div>
+			{#if a.isDev}
+				<div><dt class="tron-text-muted">Dev account</dt><dd class="tron-text-primary mt-1">Created in BIMS{#if a.devCreatedBy} by {a.devCreatedBy}{/if}. No real person signs in to it.</dd></div>
+			{/if}
 		</dl>
 		<p class="tron-text-muted mt-3 text-xs">Profile fields are owned by the app; the person edits them there. BIMS manages what is below.</p>
 	</TronCard>
 
-	<!-- Block -->
+	<!-- View as (temporary developer door) -->
+	{#if data.canWrite}
+		<TronCard>
+			<h3 class="tron-text-primary mb-3 font-mono text-lg font-bold">Open the app as this account</h3>
+			<div class="flex flex-wrap items-center gap-3">
+				<!-- Plain form on purpose: the action answers with a redirect to the app, which the new tab follows. -->
+				<form method="POST" action="?/viewAs" target="_blank">
+					<TronButton type="submit" variant="primary" disabled={!data.viewAs}>Open the Bioscale app as {a.isDev ? 'this dev account' : 'this person'} &nearr;</TronButton>
+				</form>
+				<p class="tron-text-muted text-xs">
+					{#if !data.viewAs}
+						Needs CONSUMER_API_KEY and BIOSCALE_APP_URL on this BIMS deployment.
+					{:else if a.isDev}
+						Opens a normal 30-day session in a new tab: you can edit the profile, add patients, and see results exactly as a user would.
+					{:else}
+						Opens a read-only, 30-minute session in a new tab with a banner; nothing can be changed on the person's behalf. The sign-in is audit-logged.
+					{/if}
+				</p>
+			</div>
+		</TronCard>
+	{/if}
+
+	<!-- Block / remove -->
 	<TronCard>
 		<h3 class="tron-text-primary mb-3 font-mono text-lg font-bold">Access</h3>
 		{#if data.block}
@@ -63,6 +89,17 @@
 				<button type="submit" class="rounded border border-[var(--color-tron-red)] px-3 py-2 text-sm text-[var(--color-tron-red)] hover:bg-[var(--color-tron-red)]/10">Block</button>
 			</form>
 			<p class="tron-text-muted mt-2 text-xs">The app refuses the sign-in immediately. Nothing is deleted; unblocking restores everything.</p>
+		{/if}
+		{#if a.isDev}
+			<form
+				method="POST"
+				action="?/deleteDev"
+				class="mt-4 border-t border-[var(--color-tron-border)] pt-4"
+				onsubmit={(e) => { if (!confirm('Remove this dev account? Its cartridges are released and its customer links revoked.')) e.preventDefault(); }}
+			>
+				<button type="submit" class="rounded border border-[var(--color-tron-red)] px-3 py-2 text-sm text-[var(--color-tron-red)] hover:bg-[var(--color-tron-red)]/10">Remove dev account</button>
+				<span class="tron-text-muted ml-2 text-xs">Releases its cartridges, revokes its links and deletes the account. Real accounts can only be blocked.</span>
+			</form>
 		{/if}
 	</TronCard>
 
@@ -91,7 +128,7 @@
 			<TronButton type="submit" variant="primary">Link</TronButton>
 		</form>
 		{#if data.links.length === 0}
-			<p class="tron-text-muted py-2 text-center text-sm">Not linked to any customer. Shipments cannot be assigned to this account until it is.</p>
+			<p class="tron-text-muted py-2 text-center text-sm">Not linked to any customer. Shipments to a customer reach this account only once it is linked; cartridges can still be assigned below.</p>
 		{:else}
 			<div class="overflow-x-auto">
 				<table class="tron-table">
@@ -130,9 +167,9 @@
 							<td class="font-mono text-xs"><a href="/cartridge-admin/dhr/{r.cartridgeId}" class="text-[var(--color-tron-cyan)] hover:underline">{r.cartridgeId}</a>{#if r.status}<span class="tron-text-muted ml-1">({r.status})</span>{/if}</td>
 							<td class="text-sm">{r.assayName ?? '—'}</td>
 							<td class="text-sm whitespace-nowrap">{r.ranAt ? new Date(r.ranAt).toLocaleString() : '—'}</td>
-							<td><TronBadge variant={r.source === 'shipment' || r.matchedShipment ? 'success' : 'warning'}>{r.source}{r.source === 'claim' && !r.matchedShipment ? ' · unmatched' : ''}</TronBadge></td>
+							<td><TronBadge variant={r.source === 'shipment' || r.source === 'operator' || r.matchedShipment ? 'success' : 'warning'}>{r.source}{r.source === 'claim' && !r.matchedShipment ? ' · unmatched' : ''}</TronBadge></td>
 							{#if showOwner}<td class="text-sm">{r.customerName ?? '—'}{#if r.subjectName}<span class="tron-text-muted block text-xs">{r.subjectName}</span>{:else if r.customerName}<span class="tron-text-muted block text-xs">unassigned</span>{/if}</td>{/if}
-							<td class="text-sm whitespace-nowrap">{fmt(r.claimedAt)}</td>
+							<td class="text-sm whitespace-nowrap">{fmt(r.claimedAt)}{#if r.claimedBy}<span class="tron-text-muted block text-xs">by {r.claimedBy}</span>{/if}</td>
 							<td>
 								<form method="POST" action="?/release" use:enhance>
 									<input type="hidden" name="cartridgeId" value={r.cartridgeId} />
@@ -151,8 +188,20 @@
 			Cartridges linked to this account
 			<span class="ml-2 inline-block rounded-full bg-[var(--color-tron-cyan)] px-2 py-0.5 text-xs text-black">{data.owned.length}</span>
 		</h3>
+		<form method="POST" action="?/assign" use:enhance class="mb-4 flex flex-wrap items-end gap-2">
+			<div class="min-w-[18rem] flex-1">
+				<label class="tron-text-muted mb-1 block text-sm" for="assignCartridgeId">Assign a cartridge to this account</label>
+				<input id="assignCartridgeId" name="cartridgeId" required placeholder="Cartridge id — the QR payload (UUID) or CART-000123" class="tron-input w-full font-mono" autocomplete="off" spellcheck="false" />
+			</div>
+			<div class="min-w-[12rem]">
+				<label class="tron-text-muted mb-1 block text-sm" for="assignNote">Note (optional)</label>
+				<input id="assignNote" name="note" placeholder="e.g. order #1234" class="tron-input w-full" />
+			</div>
+			<label class="tron-text-muted flex items-center gap-1 pb-2 text-sm"><input type="checkbox" name="replace" /> replace current owner</label>
+			<TronButton type="submit" variant="primary">Assign</TronButton>
+		</form>
 		{#if data.owned.length === 0}
-			<p class="tron-text-muted py-2 text-center text-sm">None. They appear when the account scans a cartridge in the app or a shipment goes to its customer.</p>
+			<p class="tron-text-muted py-2 text-center text-sm">None. People do not scan cartridges in the app; assign one here, from the cartridge's DHR page, or let a shipment to the account's customer do it.</p>
 		{:else}
 			{@render cartridgeTable(data.owned, false)}
 		{/if}
@@ -168,38 +217,20 @@
 		</TronCard>
 	{/if}
 
-	<!-- Invites and attempts -->
-	<div class="grid gap-6 lg:grid-cols-2">
-		<TronCard>
-			<h3 class="tron-text-primary mb-3 font-mono text-lg font-bold">Invites to this email</h3>
-			{#if data.invites.length === 0}
-				<p class="tron-text-muted text-sm">None.</p>
-			{:else}
-				<ul class="space-y-1 text-sm">
-					{#each data.invites as i (i.id)}
-						<li class="flex items-center justify-between rounded border border-[var(--color-tron-border)] px-3 py-2">
-							<span>{i.customerName} <TronBadge variant="neutral">{i.role}</TronBadge></span>
-							<span class="tron-text-muted text-xs">{i.status} · expires {fmt(i.expiresAt)}{#if i.createdBy} · by {i.createdBy}{/if}</span>
-						</li>
-					{/each}
-				</ul>
-			{/if}
-		</TronCard>
-		<TronCard>
-			<h3 class="tron-text-primary mb-3 font-mono text-lg font-bold">Claim attempts (last 24 h)</h3>
-			{#if data.attempts.length === 0}
-				<p class="tron-text-muted text-sm">None.</p>
-			{:else}
-				<ul class="space-y-1 text-xs">
-					{#each data.attempts as t (t.id)}
-						<li class="flex justify-between gap-2 rounded border border-[var(--color-tron-border)] px-3 py-1.5">
-							<span class="font-mono">{t.cartridgeId ?? '—'}</span>
-							<span class={t.outcome === 'claimed' ? 'text-[var(--color-tron-green)]' : 'text-[var(--color-tron-yellow)]'}>{t.outcome}</span>
-							<span class="tron-text-muted whitespace-nowrap">{fmt(t.at)}</span>
-						</li>
-					{/each}
-				</ul>
-			{/if}
-		</TronCard>
-	</div>
+	<!-- Invites -->
+	<TronCard>
+		<h3 class="tron-text-primary mb-3 font-mono text-lg font-bold">Invites to this email</h3>
+		{#if data.invites.length === 0}
+			<p class="tron-text-muted text-sm">None.</p>
+		{:else}
+			<ul class="space-y-1 text-sm">
+				{#each data.invites as i (i.id)}
+					<li class="flex items-center justify-between rounded border border-[var(--color-tron-border)] px-3 py-2">
+						<span>{i.customerName} <TronBadge variant="neutral">{i.role}</TronBadge></span>
+						<span class="tron-text-muted text-xs">{i.status} · expires {fmt(i.expiresAt)}{#if i.createdBy} · by {i.createdBy}{/if}</span>
+					</li>
+				{/each}
+			</ul>
+		{/if}
+	</TronCard>
 </div>

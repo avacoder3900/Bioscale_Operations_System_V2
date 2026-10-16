@@ -191,7 +191,6 @@ export { CartridgeOwnership } from './cartridge-ownership.js';
 export { CustomerAccount, CUSTOMER_ACCOUNT_ROLES } from './customer-account.js';
 export type { CustomerAccountRole } from './customer-account.js';
 export { ConsumerInvite } from './consumer-invite.js';
-export { ConsumerClaimAttempt } from './consumer-claim-attempt.js';
 export { AppUser } from './app-user.js';
 export { AppSubject } from './app-subject.js';
 export { AppAccountBlock } from './app-account-block.js';

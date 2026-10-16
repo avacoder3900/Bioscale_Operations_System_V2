@@ -1,13 +1,15 @@
 <script lang="ts">
-	import { TronCard, TronBadge } from '$lib/components/ui';
+	import { enhance } from '$app/forms';
+	import { TronCard, TronBadge, TronButton } from '$lib/components/ui';
 
-	let { data } = $props();
+	let { data, form } = $props();
 
 	const FILTERS = [
 		{ key: 'all', label: 'All' },
 		{ key: 'unlinked', label: 'Not linked to a customer' },
 		{ key: 'clinic', label: 'Clinic roles' },
-		{ key: 'blocked', label: 'Blocked' }
+		{ key: 'blocked', label: 'Blocked' },
+		{ key: 'dev', label: 'Dev accounts' }
 	];
 	const fmt = (iso: string | null) => (iso ? new Date(iso).toLocaleString() : '—');
 	const pages = $derived(Math.max(1, Math.ceil(data.total / data.limit)));
@@ -30,6 +32,36 @@
 			{#if data.blockedTotal}· <span class="text-[var(--color-tron-red)]">{data.blockedTotal} blocked</span>{/if}
 		</p>
 	</div>
+
+	{#if form?.error}
+		<div class="rounded border border-[var(--color-tron-red)] bg-[rgba(255,51,102,0.1)] p-3"><p class="text-sm text-[var(--color-tron-red)]">{form.error}</p></div>
+	{:else if data.removed}
+		<div class="rounded border border-[var(--color-tron-green)] bg-[rgba(0,255,136,0.1)] p-3"><p class="text-sm text-[var(--color-tron-green)]">Dev account removed.</p></div>
+	{/if}
+
+	{#if data.canWrite}
+		<!-- Dev accounts: temporary (2026-10-16). Remove with consumer/accounts.ts dev-account section. -->
+		<TronCard>
+			<h3 class="tron-text-primary mb-1 font-mono text-lg font-bold">Create a dev account</h3>
+			<p class="tron-text-muted mb-3 text-xs">
+				An app account nobody signs in to. Assign cartridges to it, then open the app as it from its page to see the user's point of view. Remove it from the same page when done.
+			</p>
+			<form method="POST" action="?/createDev" use:enhance class="flex flex-wrap items-end gap-2">
+				<div>
+					<label class="tron-text-muted mb-1 block text-sm" for="devSlug">Id</label>
+					<div class="flex items-center gap-1">
+						<span class="tron-text-muted font-mono text-sm">dev:</span>
+						<input id="devSlug" name="slug" required pattern="[a-z0-9][a-z0-9-]{'{'}1,38{'}'}[a-z0-9]" placeholder="tester-1" class="tron-input w-40 font-mono" autocomplete="off" />
+					</div>
+				</div>
+				<div class="min-w-[14rem]">
+					<label class="tron-text-muted mb-1 block text-sm" for="devName">Display name</label>
+					<input id="devName" name="name" placeholder="Dev Tester" class="tron-input w-full" />
+				</div>
+				<TronButton type="submit" variant="primary">Create</TronButton>
+			</form>
+		</TronCard>
+	{/if}
 
 	<form method="GET" class="flex flex-wrap items-center gap-2">
 		<input name="q" value={data.q} placeholder="Search email, name or account id" class="tron-input min-w-[18rem] flex-1" />
@@ -82,7 +114,7 @@
 								</td>
 								<td class="font-mono">{r.owned}</td>
 								<td class="text-sm whitespace-nowrap">{fmt(r.lastSignInAt)}</td>
-								<td>{#if r.blocked}<TronBadge variant="error">blocked</TronBadge>{/if}</td>
+								<td>{#if r.dev}<TronBadge variant="warning">dev</TronBadge>{/if} {#if r.blocked}<TronBadge variant="error">blocked</TronBadge>{/if}</td>
 							</tr>
 						{/each}
 					</tbody>

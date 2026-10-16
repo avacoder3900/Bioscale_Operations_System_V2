@@ -4,10 +4,11 @@
 	let { data } = $props();
 
 	const FILTERS = [
-		{ key: 'unmatched', label: 'Unmatched claims' },
-		{ key: 'claims', label: 'All claims' },
+		{ key: 'all', label: 'All open' },
+		{ key: 'operator', label: 'Assigned by staff' },
 		{ key: 'shipment', label: 'From shipments' },
-		{ key: 'all', label: 'All open' }
+		{ key: 'claims', label: 'Legacy app claims' },
+		{ key: 'unmatched', label: 'Unmatched claims' }
 	];
 
 	const fmt = (iso: string | null) => (iso ? new Date(iso).toLocaleString() : '—');
@@ -23,8 +24,8 @@
 		</a>
 		<h1 class="mt-2 text-2xl font-bold text-[var(--color-tron-text)]">Consumer ownership</h1>
 		<p class="mt-1 text-sm text-[var(--color-tron-text-secondary)]">
-			Which app account or clinic each cartridge belongs to. {data.openTotal} open ·
-			<span class={data.unmatchedTotal ? 'text-[var(--color-tron-yellow)]' : ''}>{data.unmatchedTotal} claimed without a matching shipment</span>
+			Which app account or clinic each cartridge belongs to. Owners are set by staff (App Accounts, DHR) or by shipments. {data.openTotal} open{#if data.unmatchedTotal}
+				· <span class="text-[var(--color-tron-yellow)]">{data.unmatchedTotal} legacy app claim{data.unmatchedTotal === 1 ? '' : 's'} without a matching shipment</span>{/if}
 		</p>
 	</div>
 

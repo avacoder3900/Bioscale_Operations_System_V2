@@ -4,15 +4,16 @@ import type { PageServerLoad } from './$types';
 
 /**
  * Consumer ownership report (docs/CONSUMER-OWNERSHIP.md): every open ownership
- * row, with a filter for claims whose cartridge was not shipped to the
- * claiming account's customer — the review queue for mis-claims, since a
- * shipment match is recorded but not enforced.
+ * row — assigned by staff (App Accounts / DHR), by the ship-time hook, or by
+ * legacy app claims from before scan-in was removed (2026-10-16). The
+ * "unmatched" filter is the review queue for those legacy claims whose
+ * cartridge was never shipped to the claiming account's customer.
  */
 export const load: PageServerLoad = async ({ locals, url }) => {
 	requirePermission(locals.user, 'cartridgeAdmin:read');
 	await connectDB();
 
-	const filter = url.searchParams.get('filter') ?? 'unmatched';
+	const filter = url.searchParams.get('filter') ?? 'all';
 	const page = Math.max(1, Number(url.searchParams.get('page') ?? '1') || 1);
 	const limit = 50;
 
@@ -20,6 +21,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	if (filter === 'unmatched') { query.matchedShipment = false; query.source = 'claim'; }
 	else if (filter === 'claims') query.source = 'claim';
 	else if (filter === 'shipment') query.source = 'shipment';
+	else if (filter === 'operator') query.source = 'operator';
 
 	const [rows, total, counts] = await Promise.all([
 		CartridgeOwnership.find(query).sort({ claimedAt: -1 }).skip((page - 1) * limit).limit(limit).lean() as Promise<any[]>,

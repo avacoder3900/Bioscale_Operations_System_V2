@@ -3,7 +3,6 @@ import {
 	AuditLog,
 	CartridgeOwnership,
 	CartridgeRecord,
-	ConsumerClaimAttempt,
 	ConsumerInvite,
 	Customer,
 	CustomerAccount,
@@ -12,10 +11,12 @@ import {
 } from '$lib/server/db';
 
 /**
- * Consumer cartridge ownership — the one place that decides whether a
- * cartridge may be claimed by an app account and writes the ownership rows.
- * Called by the consumer API (src/routes/api/consumer/*), the ship-time hook
- * on the shipping page, and the operator actions on the DHR page.
+ * Consumer cartridge ownership — the one place that writes the ownership rows.
+ * Cartridges are assigned to app accounts in BIMS: by operators (App Accounts
+ * and DHR pages, assignOwnership) or by the ship-time hook on the shipping page
+ * (ownershipForShipment). The consumer API (src/routes/api/consumer/*) only
+ * moves a clinic cartridge between patients, releases, and handles invites;
+ * people never claim cartridges from the app (scan-in removed 2026-10-16).
  * Contract: docs/CONSUMER-OWNERSHIP.md.
  */
 
@@ -27,17 +28,13 @@ export type ClaimReason =
 	| 'qc_cartridge'
 	| 'research'
 	| 'already_owned'
-	| 'guessable_id_needs_match'
-	| 'rate_limited';
+	| 'guessable_id_needs_match';
 
 export type Stage = 'ready' | 'used' | 'expired' | 'unavailable';
 
 /** Sequential ids like CART-000123 are enumerable; UUIDs are not. */
 export const GUESSABLE_ID = /^[A-Z]{2,8}-\d{3,}$/;
 export const isGuessableId = (id: string) => GUESSABLE_ID.test(id);
-
-/** Claims per account per hour before the API refuses further attempts. */
-export const MAX_CLAIM_ATTEMPTS_PER_HOUR = 30;
 
 const UNAVAILABLE_STATUSES = new Set(['voided', 'scrapped', 'cancelled']);
 const IN_USE_STATUSES = new Set(['linked', 'underway', 'completed']);
@@ -103,176 +100,8 @@ export const REASON_TEXT: Record<ClaimReason, string> = {
 	qc_cartridge: 'This is a quality-control cartridge, not a test cartridge.',
 	research: 'This cartridge belongs to a research experiment.',
 	already_owned: 'This cartridge is already linked to an account.',
-	guessable_id_needs_match: 'This cartridge was not shipped to you. Check the code or contact support.',
-	rate_limited: 'Too many attempts. Try again in an hour.'
+	guessable_id_needs_match: 'This cartridge was not shipped to you. Check the code or contact support.'
 };
-
-const CARTRIDGE_FIELDS = {
-	status: 1, voidedAt: 1, experiment: 1, usedForTestFill: 1, expirationDate: 1,
-	assayName: 1, 'reagentFilling.assayType': 1, 'reagentFilling.expirationDate': 1,
-	'assayLoaded.assay': 1, 'shipping.customer': 1
-} as const;
-
-function assayNameOf(c: any): string | null {
-	return c?.assayName ?? c?.reagentFilling?.assayType?.name ?? c?.assayLoaded?.assay?.name ?? null;
-}
-
-function expiryOf(c: any): string | null {
-	const exp = c?.reagentFilling?.expirationDate ?? c?.expirationDate ?? null;
-	if (!exp) return null;
-	const d = new Date(exp);
-	return Number.isNaN(d.getTime()) ? null : d.toISOString();
-}
-
-async function isQcCartridge(cartridgeId: string): Promise<boolean> {
-	return Boolean(await ShippingLot.exists({ 'qaqcReleases.qaqcCartridgeIds': cartridgeId }));
-}
-
-async function allowsResearch(customerIds: string[]): Promise<boolean> {
-	if (!customerIds.length) return false;
-	return Boolean(await Customer.exists({ _id: { $in: customerIds }, customerType: 'internal' }));
-}
-
-export type LookupContext = { accountId: string; customerIds: string[] };
-
-export type LookupResult = {
-	found: boolean;
-	cartridgeId: string;
-	assayName: string | null;
-	expiresAt: string | null;
-	stage: Stage | null;
-	/** Someone (anyone) holds an open row. Never says who. */
-	owned: boolean;
-	/** The asking account, or one of its customers, holds the open row. */
-	ownedByYou: boolean;
-	matchedShipment: boolean;
-	/** Customer name is returned only when it is one of the asker's own. */
-	shipmentCustomer: { id: string; name: string } | null;
-	guessableId: boolean;
-	eligible: boolean;
-	reason: ClaimReason | null;
-	reasonText: string | null;
-};
-
-/** The safe preview the app shows before a claim is confirmed. */
-export async function lookupCartridge(cartridgeId: string, ctx: LookupContext): Promise<LookupResult> {
-	const cartridge = (await CartridgeRecord.findById(cartridgeId, CARTRIDGE_FIELDS).lean()) as any;
-	const base: LookupResult = {
-		found: Boolean(cartridge), cartridgeId, assayName: null, expiresAt: null, stage: null,
-		owned: false, ownedByYou: false, matchedShipment: false, shipmentCustomer: null,
-		guessableId: isGuessableId(cartridgeId), eligible: false, reason: 'not_found',
-		reasonText: REASON_TEXT.not_found
-	};
-	if (!cartridge) return base;
-
-	const [open, qc, research] = await Promise.all([
-		CartridgeOwnership.findOne({ cartridgeId, open: true }).lean() as Promise<any>,
-		isQcCartridge(cartridgeId),
-		allowsResearch(ctx.customerIds)
-	]);
-	const shipCustomerId: string | null = cartridge.shipping?.customer?._id ?? null;
-	const matched = Boolean(shipCustomerId && ctx.customerIds.includes(shipCustomerId));
-	const ownedByYou = Boolean(open && (
-		open.accountId === ctx.accountId || (open.customerId && ctx.customerIds.includes(open.customerId))
-	));
-	const verdict = claimEligibility({
-		cartridge, hasOpenOwnership: Boolean(open), isQcCartridge: qc, matchedShipment: matched, allowResearch: research
-	});
-	return {
-		...base,
-		assayName: assayNameOf(cartridge),
-		expiresAt: expiryOf(cartridge),
-		stage: stageOf(cartridge),
-		owned: Boolean(open),
-		ownedByYou,
-		matchedShipment: matched,
-		shipmentCustomer: matched ? { id: shipCustomerId!, name: cartridge.shipping?.customer?.name ?? '' } : null,
-		eligible: verdict.ok,
-		reason: verdict.ok ? null : verdict.reason,
-		reasonText: verdict.ok ? null : REASON_TEXT[verdict.reason]
-	};
-}
-
-export type ClaimInput = {
-	cartridgeId: string;
-	accountId: string;
-	accountLabel: string;
-	/** The account's active customer links — for shipment matching and clinic scoping. */
-	customerIds: string[];
-	/** For a clinic claim: which customer the cartridge is claimed under. */
-	customerId?: string | null;
-	/** For a clinic claim: the patient; null leaves it in the customer's unassigned bin. */
-	subjectId?: string | null;
-};
-
-export type ClaimOutcome =
-	| { ok: true; row: Record<string, unknown> }
-	| { ok: false; reason: ClaimReason; reasonText: string };
-
-async function recordAttempt(accountId: string, cartridgeId: string, outcome: string) {
-	await ConsumerClaimAttempt.create({ _id: generateId(), accountId, cartridgeId, outcome, at: new Date() });
-}
-
-export async function claimCartridge(input: ClaimInput): Promise<ClaimOutcome> {
-	const { cartridgeId, accountId } = input;
-	const since = new Date(Date.now() - 60 * 60 * 1000);
-	const attempts = await ConsumerClaimAttempt.countDocuments({ accountId, at: { $gte: since } });
-	if (attempts >= MAX_CLAIM_ATTEMPTS_PER_HOUR) {
-		await recordAttempt(accountId, cartridgeId, 'rate_limited');
-		return { ok: false, reason: 'rate_limited', reasonText: REASON_TEXT.rate_limited };
-	}
-	if (input.customerId && !input.customerIds.includes(input.customerId)) {
-		// A clinic claim must be under one of the claimer's own customers.
-		await recordAttempt(accountId, cartridgeId, 'guessable_id_needs_match');
-		return { ok: false, reason: 'guessable_id_needs_match', reasonText: REASON_TEXT.guessable_id_needs_match };
-	}
-
-	const look = await lookupCartridge(cartridgeId, { accountId, customerIds: input.customerIds });
-	if (!look.eligible) {
-		const reason = look.reason ?? 'not_found';
-		await recordAttempt(accountId, cartridgeId, reason);
-		return { ok: false, reason, reasonText: REASON_TEXT[reason] };
-	}
-
-	const now = new Date();
-	const cartridge = (await CartridgeRecord.findById(cartridgeId, { 'shipping.customer': 1 }).lean()) as any;
-	const clinic = Boolean(input.customerId);
-	const row = {
-		_id: generateId(),
-		cartridgeId,
-		// A clinic claim is owned by the customer (and optionally a patient); a
-		// personal claim is owned by the account itself.
-		accountId: clinic ? null : accountId,
-		customerId: input.customerId ?? null,
-		subjectId: input.subjectId ?? null,
-		source: 'claim' as const,
-		matchedShipment: look.matchedShipment,
-		shipmentCustomerId: cartridge?.shipping?.customer?._id ?? null,
-		open: true,
-		claimedAt: now,
-		claimedBy: { kind: 'account' as const, id: accountId, label: input.accountLabel }
-	};
-	try {
-		await CartridgeOwnership.create(row);
-	} catch (e: any) {
-		// Partial unique index: someone claimed it between lookup and insert.
-		if (e?.code === 11000) {
-			await recordAttempt(accountId, cartridgeId, 'already_owned');
-			return { ok: false, reason: 'already_owned', reasonText: REASON_TEXT.already_owned };
-		}
-		throw e;
-	}
-	await Promise.all([
-		recordAttempt(accountId, cartridgeId, 'claimed'),
-		AuditLog.create({
-			_id: generateId(),
-			tableName: 'cartridge_ownership', recordId: row._id, action: 'CLAIM',
-			changedBy: `app:${accountId}`, changedAt: now,
-			newData: { cartridgeId, accountId: row.accountId, customerId: row.customerId, subjectId: row.subjectId, matchedShipment: row.matchedShipment }
-		})
-	]);
-	return { ok: true, row: JSON.parse(JSON.stringify(row)) };
-}
 
 export type ReleaseInput = {
 	cartridgeId: string;
@@ -328,6 +157,102 @@ export async function assignSubject(input: AssignInput): Promise<{ ok: true } | 
 		oldData: { subjectId: open.subjectId }, newData: { subjectId: input.subjectId }
 	});
 	return { ok: true };
+}
+
+async function isQcCartridge(cartridgeId: string): Promise<boolean> {
+	return Boolean(await ShippingLot.exists({ 'qaqcReleases.qaqcCartridgeIds': cartridgeId }));
+}
+
+export type AssignReason = 'not_found' | 'voided' | 'qc_cartridge' | 'already_owned' | 'no_target';
+
+export const ASSIGN_REASON_TEXT: Record<AssignReason, string> = {
+	not_found: 'No cartridge with that id exists.',
+	voided: 'That cartridge was voided or scrapped and cannot be assigned.',
+	qc_cartridge: 'That is a quality-control cartridge, not a test cartridge.',
+	already_owned: 'That cartridge already belongs to an account. Tick "replace" to reassign it.',
+	no_target: 'Pick an account or a customer to assign the cartridge to.'
+};
+
+export type AssignOwnershipInput = {
+	cartridgeId: string;
+	/** Personal row: the app account that will see the cartridge. */
+	accountId?: string | null;
+	/** Clinic row: the customer whose unassigned bin receives it, optionally with a patient. */
+	customerId?: string | null;
+	subjectId?: string | null;
+	/** Close an existing open row first (releaseReason 'reassigned'). */
+	replace?: boolean;
+	note?: string | null;
+	operator: OperatorRef;
+};
+
+export type AssignOwnershipOutcome =
+	| { ok: true; rowId: string; matchedShipment: boolean }
+	| { ok: false; reason: AssignReason; reasonText: string };
+
+/**
+ * Operator assignment (BIMS App Accounts and DHR pages) — how a cartridge gets
+ * an owner now that people do not scan them in. Refuses cartridges that are
+ * voided or QC; research cartridges are allowed (the operator knows the
+ * experiment, and internal testers are the usual target). The shipment match
+ * is recorded for the ownership report, never enforced.
+ */
+export async function assignOwnership(input: AssignOwnershipInput): Promise<AssignOwnershipOutcome> {
+	const accountId = input.accountId?.trim() || null;
+	const customerId = input.customerId?.trim() || null;
+	if (!accountId && !customerId) return { ok: false, reason: 'no_target', reasonText: ASSIGN_REASON_TEXT.no_target };
+
+	const cartridge = (await CartridgeRecord.findById(input.cartridgeId, {
+		status: 1, voidedAt: 1, usedForTestFill: 1, 'shipping.customer': 1
+	}).lean()) as any;
+	if (!cartridge) return { ok: false, reason: 'not_found', reasonText: ASSIGN_REASON_TEXT.not_found };
+	if (stageOf(cartridge) === 'unavailable') return { ok: false, reason: 'voided', reasonText: ASSIGN_REASON_TEXT.voided };
+	if (cartridge.usedForTestFill || (await isQcCartridge(input.cartridgeId))) {
+		return { ok: false, reason: 'qc_cartridge', reasonText: ASSIGN_REASON_TEXT.qc_cartridge };
+	}
+
+	const actor: Actor = { kind: 'operator', id: input.operator._id, label: input.operator.username };
+	const open = (await CartridgeOwnership.findOne({ cartridgeId: input.cartridgeId, open: true }).select('_id').lean()) as any;
+	if (open) {
+		if (!input.replace) return { ok: false, reason: 'already_owned', reasonText: ASSIGN_REASON_TEXT.already_owned };
+		await releaseOwnership({
+			cartridgeId: input.cartridgeId, actor, reason: 'reassigned',
+			note: input.note || 'Reassigned by operator'
+		});
+	}
+
+	const shipCustomerId: string | null = cartridge.shipping?.customer?._id ?? null;
+	const matchedShipment = Boolean(shipCustomerId && (
+		customerId ? shipCustomerId === customerId : (await customerIdsFor(accountId!)).includes(shipCustomerId)
+	));
+	const now = new Date();
+	const row = {
+		_id: generateId(),
+		cartridgeId: input.cartridgeId,
+		accountId: customerId ? null : accountId,
+		customerId,
+		subjectId: customerId ? (input.subjectId?.trim() || null) : null,
+		source: 'operator' as const,
+		matchedShipment,
+		shipmentCustomerId: shipCustomerId,
+		open: true,
+		claimedAt: now,
+		claimedBy: actor
+	};
+	try {
+		await CartridgeOwnership.create(row);
+	} catch (e: any) {
+		// Partial unique index: another operator assigned it between the check and the insert.
+		if (e?.code === 11000) return { ok: false, reason: 'already_owned', reasonText: ASSIGN_REASON_TEXT.already_owned };
+		throw e;
+	}
+	await AuditLog.create({
+		_id: generateId(),
+		tableName: 'cartridge_ownership', recordId: row._id, action: 'ASSIGN_OWNERSHIP',
+		changedBy: input.operator.username, changedAt: now,
+		newData: { cartridgeId: row.cartridgeId, accountId: row.accountId, customerId: row.customerId, subjectId: row.subjectId, matchedShipment, replaced: Boolean(open), note: input.note ?? null }
+	});
+	return { ok: true, rowId: row._id, matchedShipment };
 }
 
 /**

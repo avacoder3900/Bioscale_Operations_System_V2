@@ -1,7 +1,8 @@
-import { redirect } from '@sveltejs/kit';
-import { requirePermission } from '$lib/server/permissions';
+import { fail, redirect } from '@sveltejs/kit';
+import { hasPermission, requirePermission } from '$lib/server/permissions';
 import { connectDB, AppUser, CustomerAccount, CartridgeOwnership, AppAccountBlock, Customer } from '$lib/server/db';
-import type { PageServerLoad } from './$types';
+import { createDevAccount, isDevAccountId } from '$lib/server/consumer/accounts';
+import type { PageServerLoad, Actions } from './$types';
 
 function escapeRegExp(s: string): string {
 	return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -63,11 +64,38 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 			customerId: l.customerId as string, name: customerName.get(l.customerId) ?? l.customerId, role: l.role as string
 		})),
 		owned: ownedCount.get(u._id as string) ?? 0,
-		blocked: blocked.has(u._id as string)
+		blocked: blocked.has(u._id as string),
+		dev: isDevAccountId(u._id as string)
 	}));
 	if (filter === 'unlinked') rows = rows.filter((r) => r.customers.length === 0);
 	else if (filter === 'clinic') rows = rows.filter((r) => r.customers.some((c) => c.role !== 'member'));
 	else if (filter === 'blocked') rows = rows.filter((r) => r.blocked);
+	else if (filter === 'dev') rows = rows.filter((r) => r.dev);
 
-	return { q, filter, page, limit, total, blockedTotal: blocked.size, rows };
+	return {
+		q, filter, page, limit, total, blockedTotal: blocked.size, rows,
+		removed: url.searchParams.has('removed'),
+		canWrite: hasPermission(locals.user, 'customer:write')
+	};
+};
+
+export const actions: Actions = {
+	/**
+	 * Create a dev account (temporary, see consumer/accounts.ts): an app
+	 * account nobody signs in to, opened from its page with "view as", so staff
+	 * can see the app from a user's point of view. Remove it from its page.
+	 */
+	createDev: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'customer:write');
+		await connectDB();
+		const fd = await request.formData();
+		const outcome = await createDevAccount({
+			slug: String(fd.get('slug') ?? ''),
+			name: String(fd.get('name') ?? ''),
+			operator: { _id: locals.user._id, username: locals.user.username ?? locals.user._id }
+		});
+		if (!outcome.ok) return fail(400, { error: outcome.error });
+		redirect(303, `/app-accounts/${encodeURIComponent(outcome.accountId)}`);
+	}
 };

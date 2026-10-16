@@ -3,7 +3,7 @@ import { requirePermission } from '$lib/server/permissions';
 import { connectDB, CartridgeRecord, CvImage, CvInspection, InventoryTransaction, ReceivingLot, ManufacturingSettings, CartridgeOwnership, Customer, AppUser, AppSubject } from '$lib/server/db';
 import { getR2Url } from '$lib/server/services/r2';
 import { getCartridgeTimings } from '$lib/utils/cartridge-timings';
-import { releaseOwnership } from '$lib/server/consumer/ownership';
+import { assignOwnership, releaseOwnership } from '$lib/server/consumer/ownership';
 import type { PageServerLoad, Actions } from './$types';
 
 /**
@@ -248,6 +248,30 @@ export const actions: Actions = {
 		});
 		if (!outcome.ok) return fail(404, { error: 'No open ownership on this cartridge' });
 		return { success: true, message: 'Ownership released' };
+	},
+
+	/**
+	 * Give this cartridge to an app account (by sign-in email or account id).
+	 * People do not scan cartridges in the app; this and the App Accounts page
+	 * are how a cartridge gets an owner besides the ship-time hook.
+	 */
+	assignOwnership: async ({ request, locals, params }) => {
+		requirePermission(locals.user, 'cartridgeAdmin:write');
+		await connectDB();
+		const fd = await request.formData();
+		const target = String(fd.get('account') ?? '').trim();
+		if (!target) return fail(400, { error: 'Enter the account’s sign-in email or account id' });
+		const account = (await AppUser.findOne({ $or: [{ _id: target }, { signInEmail: target.toLowerCase() }] }).select('_id signInEmail').lean()) as any;
+		if (!account) return fail(404, { error: `No app account matches "${target}". Accounts appear once the person has signed in to the app, or create a dev account under App Accounts.` });
+		const outcome = await assignOwnership({
+			cartridgeId: params.cartridgeId,
+			accountId: account._id,
+			replace: fd.get('replace') === 'on',
+			note: String(fd.get('assignNote') ?? '').trim() || null,
+			operator: { _id: locals.user!._id, username: locals.user!.username ?? locals.user!._id }
+		});
+		if (!outcome.ok) return fail(outcome.reason === 'not_found' ? 404 : 409, { error: outcome.reasonText });
+		return { success: true, message: `Assigned to ${account.signInEmail ?? account._id}${outcome.matchedShipment ? '' : ' (no matching shipment on record)'}` };
 	}
 };
 

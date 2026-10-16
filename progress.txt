@@ -20888,3 +20888,39 @@ cartridge had an ownership row, and nothing creates rows until the app is deploy
 BIMS keys or a shipment goes to a customer with a linked account. The card now renders on every
 DHR with an explicit "Not linked to any Bioscale app account" state and the link to the report,
 so the absence of an owner is visible rather than silent. svelte-check 14 errors = baseline.
+
+================================================================================
+2026-10-16 — feat/assigned-cartridges — Cartridges assigned in BIMS (no app scan-in) + dev accounts / "view as"
+================================================================================
+User direction: remove scan-in from the app; carts are assigned in BIMS (manually or at order /
+shipment time) and people receive cartridges already assigned to them. Also: a dev account to
+view the app from a user's point of view, removable later. Branch cut from feat/app-accounts
+(PR #94, still open) with origin/master merged in; app side is bioscale-app
+feat/assigned-cartridges, cut from feat/account-blocks (app PR #2, still open).
+
+BIMS
+- consumer/ownership.ts: new assignOwnership() — operator-created row (source 'operator'),
+  refuses not-found / voided / QC, optional replace (closes the old row as 'reassigned'),
+  matchedShipment recorded, audit ASSIGN_OWNERSHIP. Removed lookupCartridge/claimCartridge,
+  the rate limiter, POST /api/consumer/claims, GET /api/consumer/cartridges/:id and the
+  ConsumerClaimAttempt model (consumer_claim_attempts collection left in Atlas, unused; TTL
+  empties it). claimEligibility kept only for its unit tests.
+- /app-accounts/[accountId]: "Assign a cartridge" form (id, note, replace), "Open the Bioscale app
+  as this person" (viewAs action → 2-min HS256 token signed with CONSUMER_API_KEY →
+  BIOSCALE_APP_URL/auth/impersonate), "Remove dev account"; claim-attempts card dropped.
+- /app-accounts: "Create a dev account" (dev:<slug> row in app_users with devAccount marker —
+  the one BIMS write to that collection), "Dev accounts" filter, dev badge.
+- DHR ownership card: "Assign to an app account" by sign-in email or account id (reassign needs
+  the release-first checkbox). Ownership report: default filter All open, new "Assigned by staff".
+- New consumer/view-as.ts; consumer/accounts.ts createDevAccount / deleteDevAccount (refuses
+  non-dev ids: real accounts are blocked, never deleted). Contract doc + .env.example updated.
+App (bioscale-app)
+- Scan page, Scanner component, zxing-wasm, claim/release/lookup client + remote functions and
+  the "Remove from my tests" button removed; empty state says cartridges arrive assigned.
+- /auth/impersonate: real account → 30-min, non-refreshing, read-only session (impersonatedBy;
+  requireWritableUser on every remote command, profile save/send/cancel, verify link, invite
+  accept) with an amber banner + End view; dev: account with devAccount → normal session.
+Checks: BIMS svelte-check 14 errors = baseline, consumer vitest 8/8. App svelte-check 0 errors,
+eslint clean, vitest 40/40 (new impersonation.test.ts mints tokens the BIMS way), Playwright
+26/26, live smoke of /auth/impersonate (bad token 401, banner shown, profile save 403 under view).
+Not deployed. Needs CONSUMER_API_KEY + BIOSCALE_APP_URL (BIMS) and BIMS_CONSUMER_API_KEY (app).
