@@ -284,13 +284,11 @@ async function auditGpio(
 	await connectDB();
 	await AuditLog.create({
 		_id: generateId(),
+		tableName: 'robot_arm_gpio',
+		recordId: ARM_DEVICE_ID,
 		action,
-		resourceType: 'robot_arm_gpio',
-		resourceId: ARM_DEVICE_ID,
-		userId: user._id,
-		username: user.username,
-		timestamp: new Date(),
-		details
+		newData: { ...details, userId: user._id },
+		changedBy: user.username
 	});
 }
 
@@ -310,13 +308,11 @@ async function auditRecording(
 ) {
 	await AuditLog.create({
 		_id: generateId(),
+		tableName: 'robot_arm_deleted_recordings',
+		recordId: resourceId,
 		action,
-		resourceType: 'robot_arm_recording',
-		resourceId,
-		userId: user._id,
-		username: user.username,
-		timestamp: new Date(),
-		details
+		newData: { ...details, userId: user._id },
+		changedBy: user.username
 	});
 }
 
@@ -579,13 +575,11 @@ export const actions: Actions = {
 
 		await AuditLog.create({
 			_id: generateId(),
+			tableName: 'robot_arm_runs',
+			recordId: runId,
 			action: 'robot_arm.task.start',
-			resourceType: 'robot_arm_run',
-			resourceId: runId,
-			userId: locals.user._id,
-			username: locals.user.username,
-			timestamp: new Date(),
-			details: { task_name: name, lot_id: lot ?? null, dry_run: true }
+			newData: { task_name: name, lot_id: lot ?? null, dry_run: true, userId: locals.user._id },
+			changedBy: locals.user.username
 		});
 
 		return { success: `task "${name}" started`, runId };
@@ -669,13 +663,12 @@ export const actions: Actions = {
 			const result = await robotArm.stop();
 			await AuditLog.create({
 				_id: generateId(),
+				tableName: 'robot_arm_runs',
+				recordId: result.stopped_run_id ?? heldRunId ?? 'none',
 				action: 'robot_arm.session.stop',
-				resourceType: 'robot_arm_run',
-				resourceId: result.stopped_run_id ?? heldRunId ?? 'none',
-				userId: locals.user._id,
-				username: locals.user.username,
-				timestamp: new Date(),
-				details: {
+				changedBy: locals.user.username,
+				newData: {
+					userId: locals.user._id,
 					stopped_run_id: result.stopped_run_id ?? null,
 					held_by: heldBy,
 					stopped_by: locals.user.username,
