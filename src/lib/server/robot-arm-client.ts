@@ -95,6 +95,10 @@ export interface RecordingMeta {
 	meta?: RecordingSidecar | null;
 }
 
+export function recordingStem(name: string): string {
+	return name.replace(/\.jsonl$/i, '');
+}
+
 export interface RecordingExport {
 	name: string;
 	jsonl: string;
@@ -413,19 +417,21 @@ export const robotArm = {
 	// Recording trash (recordings_admin.py on the Pi). BIMS exports a recording
 	// to R2 before deleting it, and restores from R2 on recover. Bodies carry the
 	// whole JSONL, so these get more room than the 5s default.
+	// The live Pi lists recordings by file name ("x.jsonl"); its trash router
+	// wants the bare stem, so every wrapper strips the extension.
 	exportRecording: (name: string) =>
-		robotArmFetch<RecordingExport>(`/recordings/${encodeURIComponent(name)}/export`, {
+		robotArmFetch<RecordingExport>(`/recordings/${encodeURIComponent(recordingStem(name))}/export`, {
 			timeoutMs: 20000
 		}),
 	deleteRecording: (name: string) =>
-		robotArmFetch<{ deleted: string }>(`/recordings/${encodeURIComponent(name)}`, {
+		robotArmFetch<{ deleted: string }>(`/recordings/${encodeURIComponent(recordingStem(name))}`, {
 			method: 'DELETE',
 			timeoutMs: 10000
 		}),
 	restoreRecording: (body: RecordingExport) =>
 		robotArmFetch<{ restored: string }>('/recordings/restore', {
 			method: 'POST',
-			body,
+			body: { ...body, name: recordingStem(body.name) },
 			timeoutMs: 20000
 		}),
 	health: () => robotArmFetch<{ status: string; service: string; version: string }>('/health'),

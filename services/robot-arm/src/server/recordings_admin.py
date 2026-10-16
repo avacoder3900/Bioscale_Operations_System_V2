@@ -59,6 +59,9 @@ def _session_active() -> Optional[str]:
 
 
 def _paths(name: str) -> tuple[Path, Path]:
+    # The live Pi lists recordings by file name; accept "x.jsonl" as well as "x".
+    if name.lower().endswith(".jsonl"):
+        name = name[: -len(".jsonl")]
     if not name or name.startswith(".") or "/" in name or "\\" in name or "\x00" in name:
         raise HTTPException(status_code=400, detail=f"invalid recording name: {name!r}")
     base = RECORDINGS_DIR.resolve()
