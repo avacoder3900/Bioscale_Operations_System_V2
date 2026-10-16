@@ -20856,3 +20856,14 @@ access card, DHR ownership card, /cartridge-admin/ownership report). The consume
   BIMS_BASE_URL + BIMS_CONSUMER_API_KEY are set, so testers keep seeing everything until then.
 - Env still to set: BIMS `CONSUMER_API_KEY`, `BIOSCALE_APP_URL`; app `BIMS_BASE_URL`,
   `BIMS_CONSUMER_API_KEY` (same secret).
+
+================================================================================
+2026-10-16 — feat/ownership-card-always — DHR: Consumer ownership card always visible
+================================================================================
+PR #92 merged to master (5f2e873b) and deployed to production
+(https://bioscale-operations-system-mongodb-ln4gkel9v-brevitest.vercel.app). First question
+after the merge: "I'm not seeing it for cart 92563f75-…" — the card only rendered once a
+cartridge had an ownership row, and nothing creates rows until the app is deployed with the
+BIMS keys or a shipment goes to a customer with a linked account. The card now renders on every
+DHR with an explicit "Not linked to any Bioscale app account" state and the link to the report,
+so the absence of an owner is visible rather than silent. svelte-check 14 errors = baseline.

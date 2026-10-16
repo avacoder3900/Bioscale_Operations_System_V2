@@ -174,8 +174,8 @@
 		{/if}
 	</div>
 
-	<!-- Consumer-app ownership (docs/CONSUMER-OWNERSHIP.md) -->
-	{#if data.ownership.current || data.ownership.history.length > 0}
+	<!-- Consumer-app ownership (docs/CONSUMER-OWNERSHIP.md). Always shown, so the
+	     absence of an owner is visible rather than silent. -->
 		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-4">
 			<div class="mb-3 flex items-center justify-between">
 				<h2 class="text-xs font-semibold uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Consumer ownership</h2>
@@ -224,8 +224,10 @@
 					</div>
 					<button type="submit" class="rounded border border-[var(--color-tron-red)] px-3 py-2 text-sm text-[var(--color-tron-red)] hover:bg-[var(--color-tron-red)]/10">Release</button>
 				</form>
-			{:else}
+			{:else if data.ownership.history.length > 0}
 				<p class="text-sm text-[var(--color-tron-text-secondary)]">No open ownership. Previously owned {data.ownership.history.length} time{data.ownership.history.length === 1 ? '' : 's'}.</p>
+			{:else}
+				<p class="text-sm text-[var(--color-tron-text-secondary)]">Not linked to any Bioscale app account. A link is created when the cartridge is shipped to a customer with a linked account, or when someone scans it in the app.</p>
 			{/if}
 			{#if data.ownership.history.length > 1 || (data.ownership.history.length === 1 && !data.ownership.current)}
 				<details class="mt-3">
@@ -246,7 +248,7 @@
 				</details>
 			{/if}
 		</div>
-	{/if}
+
 
 	<!-- Timing metrics (informational — cool time for wax, seal time for reagent) -->
 	{#if data.timings?.cool || data.timings?.seal}
