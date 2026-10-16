@@ -212,37 +212,6 @@
 		</TronCard>
 	{/if}
 
-	<!-- Block / remove -->
-	<TronCard>
-		<h3 class="tron-text-primary mb-3 font-mono text-lg font-bold">Access</h3>
-		{#if data.block}
-			<p class="text-sm text-[var(--color-tron-red)]">Blocked {fmt(data.block.at)}{#if data.block.by} by {data.block.by}{/if}: {data.block.reason}</p>
-			<form method="POST" action="?/unblock" use:enhance class="mt-3">
-				<TronButton type="submit" variant="primary">Unblock</TronButton>
-			</form>
-		{:else}
-			<form method="POST" action="?/block" use:enhance class="flex flex-wrap items-end gap-2">
-				<div class="min-w-[16rem] flex-1">
-					<label class="tron-text-muted mb-1 block text-sm" for="blockReason">Block this account (reason required)</label>
-					<input id="blockReason" name="reason" required class="tron-input w-full" placeholder="e.g. duplicate account, abuse report" />
-				</div>
-				<button type="submit" class="rounded border border-[var(--color-tron-red)] px-3 py-2 text-sm text-[var(--color-tron-red)] hover:bg-[var(--color-tron-red)]/10">Block</button>
-			</form>
-			<p class="tron-text-muted mt-2 text-xs">The app refuses the sign-in immediately. Nothing is deleted; unblocking restores everything.</p>
-		{/if}
-		{#if a.isDev}
-			<form
-				method="POST"
-				action="?/deleteDev"
-				class="mt-4 border-t border-[var(--color-tron-border)] pt-4"
-				onsubmit={(e) => { if (!confirm('Remove this dev account? Its cartridges are released and its customer links revoked.')) e.preventDefault(); }}
-			>
-				<button type="submit" class="rounded border border-[var(--color-tron-red)] px-3 py-2 text-sm text-[var(--color-tron-red)] hover:bg-[var(--color-tron-red)]/10">Remove dev account</button>
-				<span class="tron-text-muted ml-2 text-xs">Releases its cartridges, revokes its links and deletes the account. Real accounts can only be blocked.</span>
-			</form>
-		{/if}
-	</TronCard>
-
 	<!-- Customers -->
 	<TronCard>
 		<h3 class="tron-text-primary mb-3 font-mono text-lg font-bold">
@@ -320,6 +289,37 @@
 					</li>
 				{/each}
 			</ul>
+		{/if}
+	</TronCard>
+
+	<!-- Block / remove -->
+	<TronCard>
+		<h3 class="tron-text-primary mb-3 font-mono text-lg font-bold">Access</h3>
+		{#if data.block}
+			<p class="text-sm text-[var(--color-tron-red)]">Blocked {fmt(data.block.at)}{#if data.block.by} by {data.block.by}{/if}: {data.block.reason}</p>
+			<form method="POST" action="?/unblock" use:enhance class="mt-3">
+				<TronButton type="submit" variant="primary">Unblock</TronButton>
+			</form>
+		{:else}
+			<form method="POST" action="?/block" use:enhance class="flex flex-wrap items-end gap-2">
+				<div class="min-w-[16rem] flex-1">
+					<label class="tron-text-muted mb-1 block text-sm" for="blockReason">Block this account (reason required)</label>
+					<input id="blockReason" name="reason" required class="tron-input w-full" placeholder="e.g. duplicate account, abuse report" />
+				</div>
+				<button type="submit" class="rounded border border-[var(--color-tron-red)] px-3 py-2 text-sm text-[var(--color-tron-red)] hover:bg-[var(--color-tron-red)]/10">Block</button>
+			</form>
+			<p class="tron-text-muted mt-2 text-xs">The app refuses the sign-in immediately. Nothing is deleted; unblocking restores everything.</p>
+		{/if}
+		{#if a.isDev}
+			<form
+				method="POST"
+				action="?/deleteDev"
+				class="mt-4 border-t border-[var(--color-tron-border)] pt-4"
+				onsubmit={(e) => { if (!confirm('Remove this dev account? Its cartridges are released and its customer links revoked.')) e.preventDefault(); }}
+			>
+				<button type="submit" class="rounded border border-[var(--color-tron-red)] px-3 py-2 text-sm text-[var(--color-tron-red)] hover:bg-[var(--color-tron-red)]/10">Remove dev account</button>
+				<span class="tron-text-muted ml-2 text-xs">Releases its cartridges, revokes its links and deletes the account. Real accounts can only be blocked.</span>
+			</form>
 		{/if}
 	</TronCard>
 </div>
