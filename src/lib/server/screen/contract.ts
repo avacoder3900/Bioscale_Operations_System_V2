@@ -196,6 +196,114 @@ export function screenTestLabel(id: string): string {
 	return rep ? `${label} · rep ${rep}` : label;
 }
 
+/**
+ * What each test measures and how the device judges it, for the full report
+ * table. Keyed by bare id (reps stripped) or by the run-row suffix. Mirrors
+ * brevitest-device Docs/SCREEN_TEST_CATALOG.md — keep the two in step.
+ */
+export const SCREEN_TEST_DOCS: Record<string, { what: string; rule: string }> = {
+	// level 0
+	fw: { what: 'Firmware version; note = Device OS version', rule: 'info' },
+	reset: { what: 'System.resetReason() code of the last boot', rule: 'warn if panic / watchdog / brownout / unknown' },
+	uptime: { what: 'Seconds since boot; note timeok/notime', rule: 'info' },
+	eeprom: { what: 'EEPROM firmware + data-format versions match, no stale running test', rule: 'fail on mismatch or stale uuid' },
+	fs: { what: 'Filesystem write/read probe; value = /cache file count', rule: 'fail if the probe fails' },
+	fs_val: { what: '/validation file count against the 50-file cap', rule: 'warn within 5 of the cap' },
+	fs_assay: { what: '/assay file count', rule: 'info' },
+	fs_sweep: { what: '/sweep file count', rule: 'info' },
+	assay: { what: 'Production assay BCODE present on disk (note = id)', rule: 'fail if missing' },
+	assay_son: { what: 'Sonic assay present on disk (note = id)', rule: 'warn if missing' },
+	mem: { what: 'Free RAM, bytes', rule: 'warn below 20000' },
+	detect: { what: 'Cartridge detector reads empty', rule: 'fail if a cartridge is inserted' },
+	limit0: { what: 'Limit switch state agrees with the stage counter (closed ⇔ position 0)', rule: 'warn if they disagree' },
+	therm: { what: 'Thermistor sanity: raw > 0 and 10–60 °C (value °C×10)', rule: 'fail outside; note raw0' },
+	specA: { what: 'Spectrometer A power-on + reset over I²C', rule: 'fail on bus error' },
+	specB: { what: 'Spectrometer B power-on + reset over I²C', rule: 'fail on bus error' },
+	specC: { what: 'Spectrometer C power-on + reset over I²C', rule: 'fail on bus error' },
+	pd0A: { what: 'Photodiode A dark floor, laser off', rule: 'info' },
+	pd0B: { what: 'Photodiode B dark floor, laser off', rule: 'info' },
+	pd0C: { what: 'Photodiode C dark floor, laser off', rule: 'info' },
+	radio: { what: 'Wi-Fi RSSI, dBm; note cloud / wifi / down', rule: 'fail if not cloud-connected, warn below −75 dBm' },
+	scanner: { what: 'Barcode scanner invoked once; value = result type; note code/nocode', rule: 'info' },
+	ble: { what: 'BLE scan device count; note magfound if the magnetometer tool answered', rule: 'info' },
+	// level 1
+	wake: { what: 'Motor wake shift: expected − measured home after wake, µm', rule: 'info; note notfound' },
+	home: { what: 'Home found; value = time to home, ms', rule: 'fail if the switch is not found' },
+	homerep: { what: 'Home repeatability: go to 21000 µm and re-home; value = error, µm', rule: 'fail not found, warn beyond ±150' },
+	travel: { what: 'Full travel to 39500 µm and back; value = home error, µm', rule: 'fail if clipped / not found, warn beyond ±150' },
+	lsrA: { what: 'Laser A into the photodiode at the bench position: pd − pd0', rule: 'fail below 50 or on sensor error' },
+	lsrB: { what: 'Laser B into the photodiode at the bench position: pd − pd0', rule: 'fail below 50 or on sensor error' },
+	lsrC: { what: 'Laser C into the photodiode at the bench position: pd − pd0', rule: 'fail below 50 or on sensor error' },
+	lsrA_c: { what: 'Spectrometer A clear band, laser on', rule: 'warn at 62000 (saturation)' },
+	lsrB_c: { what: 'Spectrometer B clear band, laser on', rule: 'warn at 62000 (saturation)' },
+	lsrC_c: { what: 'Spectrometer C clear band, laser on', rule: 'warn at 62000 (saturation)' },
+	lsrA_f1: { what: 'Spectrometer A F1 (405 nm), laser on', rule: 'info' },
+	lsrB_f1: { what: 'Spectrometer B F1 (405 nm), laser on', rule: 'info' },
+	lsrC_f1: { what: 'Spectrometer C F1 (405 nm), laser on', rule: 'info' },
+	lsrA_f7: { what: 'Spectrometer A F7, laser on', rule: 'info' },
+	lsrB_f7: { what: 'Spectrometer B F7, laser on', rule: 'info' },
+	lsrC_f7: { what: 'Spectrometer C F7, laser on', rule: 'info' },
+	drkA: { what: 'Clear band A, laser off, bench gain', rule: 'fail on sensor error' },
+	drkB: { what: 'Clear band B, laser off, bench gain', rule: 'fail on sensor error' },
+	drkC: { what: 'Clear band C, laser off, bench gain', rule: 'fail on sensor error' },
+	bgA: { what: 'Empty-slot background A: clear band at assay gain, laser off', rule: 'fail on sensor error' },
+	bgB: { what: 'Empty-slot background B: clear band at assay gain, laser off', rule: 'fail on sensor error' },
+	bgC: { what: 'Empty-slot background C: clear band at assay gain, laser off', rule: 'fail on sensor error' },
+	bgA_f7: { what: 'Background A, F7 band at assay gain', rule: 'info' },
+	bgB_f7: { what: 'Background B, F7 band at assay gain', rule: 'info' },
+	bgC_f7: { what: 'Background C, F7 band at assay gain', rule: 'info' },
+	spec_sat: { what: 'Any spectrometer saturated during the rep', rule: 'warn if yes' },
+	hits: { what: 'Mid-move limit-switch hits during the level', rule: 'fail if any' },
+	hits_first: { what: 'Position of the first mid-move hit, µm (only when hits > 0)', rule: 'info' },
+	travel_um: { what: 'Stage travel during this level (odometer), µm', rule: 'info' },
+	heat_cold: { what: 'Cold start: seconds to reach the target (only when the heater started > 5 °C below it)', rule: 'fail if not reached in 240 s' },
+	heat_start: { what: 'Heater temperature at the start of the hold, °C×10', rule: 'info' },
+	heat_over: { what: 'Overshoot above target on a cold start, °C×10', rule: 'info' },
+	heat_hold: { what: 'Max deviation from target over a 60 s hold, °C×10', rule: 'warn above 20 (2 °C)' },
+	heat_duty: { what: 'Mean heater power over the hold, %', rule: 'info' },
+	heat_off: { what: 'Heater commanded off for 30 s: temperature change, °C×10; note pinon', rule: 'fail if it rose more than 0.5 °C' },
+	buzz: { what: 'Buzzer sounded for 500 ms', rule: 'operator confirms in BIMS' },
+	led: { what: 'Status LED pattern shown', rule: 'operator confirms in BIMS' },
+	// level 3
+	cloud: { what: 'Emitted instead of a ping when the device is not cloud-connected', rule: 'fail (offline)' },
+	sub: { what: 'Hook-response subscription registered at boot', rule: 'fail if not' },
+	pending: { what: 'No cloud operation stuck in flight', rule: 'fail if one is' },
+	ping: { what: 'Publish bioscale/ping and wait for the BIMS hook-response with the nonce; value = round trip, ms', rule: 'fail on 15 s timeout or publish failure, warn above 5000' },
+	repo: { what: 'Assay repository check', rule: 'skipped (not built yet)' },
+	logup: { what: 'Session log upload queued for after the screen', rule: 'info' },
+	abort: { what: 'The screen was aborted; note = reason', rule: 'fail' }
+};
+
+const RUN_ROW_DOCS: Record<string, { what: string; rule: string }> = {
+	heat: { what: 'Seconds waited for the heater before the run', rule: 'warn if not ready within 300 s' },
+	assay: { what: 'Assay BCODE missing from disk', rule: 'fail' },
+	err: { what: 'End-of-test home error: expected − measured after the final home, µm', rule: 'fail not found, warn beyond ±150' },
+	hits: { what: 'Limit-switch hits during the run', rule: 'fail if any' },
+	first: { what: 'Position of the first hit, µm (−1 = none)', rule: 'info' },
+	home_ms: { what: 'Time of the final home, ms', rule: 'info' },
+	travel: { what: 'Stage travel during the run (odometer), µm', rule: 'info' },
+	dur_s: { what: 'Run duration, s', rule: 'info' },
+	hitms: { what: 'Hit count; note = hit times, ms', rule: 'info' },
+	temp: { what: 'Heater at the end of the run, °C×10', rule: 'info' },
+	reads: { what: 'Readings taken', rule: 'info' },
+	done: { what: 'Run completed (not cancelled)', rule: 'fail if cancelled' }
+};
+
+/** {what, rule} for any emitted id; unknown ids get an empty doc. */
+export function screenTestDoc(id: string): { what: string; rule: string } {
+	const m = /^run(\d+)_(.+)$/.exec(id);
+	if (m) return RUN_ROW_DOCS[m[2]] ?? { what: '', rule: '' };
+	return SCREEN_TEST_DOCS[baseTestId(id)] ?? SCREEN_TEST_DOCS[id] ?? { what: '', rule: '' };
+}
+
+/** Rep number carried by the id ("homerep2" → 2), or null. Run rows return the run index. */
+export function screenTestRep(id: string): number | null {
+	const m = /^run(\d+)_/.exec(id);
+	if (m) return Number(m[1]);
+	const base = baseTestId(id);
+	return base !== id ? Number(id.slice(base.length)) : null;
+}
+
 /** Parse one published event body (string or already-parsed object). Null when it is not a screen event. */
 export function parseScreenEvent(data: unknown): ScreenEvent | null {
 	let obj: any = data;

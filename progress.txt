@@ -20509,6 +20509,265 @@ flashed yet; the pages work against existing data and the new webhooks are idle 
 unit publishes. Set CRON_SECRET and ANTHROPIC_API_KEY in Vercel before the first 07:30 UTC cron.
 
 ================================================================================
+2026-10-15 — fix/screen-ingest-race — first real SCREEN (0255, fw v103): level-3 part lost to a write race; ping hook had no response topic
+=========================================================================First screen on BT-M01-0000-0255 (session ZS2-35RFr2Mxjqz0E_GA-, 85 min, levels 0-3, 3 reps):
+levels 0-2 all pass (home error -100/-50/0 um, 0 limit hits, 276 readings and 49.46 m of
+stage travel per run, lasers ~780, heat hold 7/20). Level 3: all three pings timed out.
+
+Bug 1 (BIMS): screen/ingest.ts read rawData, mutated it in memory and wrote it back whole.
+The level-3 event and the summary arrived 1 s apart in two serverless invocations, so the
+summary's write overwrote the level-3 part and the screen was recorded as PASSED with
+65/0 instead of the device's 67/3/1. Fix: each event is applied with a targeted $set
+(rawData.parts.<lvl>_<part>, $max on partsExpected, $min on firstEventAt), then the doc is
+re-read and evaluated; the final update no longer writes rawData. Part keys are now
+"<lvl>_<part>" (a dot in a $set path would nest); readers accept both separators so the
+sessions ingested before today still evaluate. Session ZS2 was repaired by replaying the
+stored device_events row through the fixed ingest: now status failed, 3 failureReasons
+(Cloud round trip timeout x3), spu.validation.screen = failed. Truthful; a re-screen
+after the webhook fix below will replace it.
+
+Bug 2 (Particle, NOT fixed by code): webhooks created through the API get no responseTopic,
+so Particle never publishes a hook-response for bioscale/ping and the device waits 15 s
+three times. The Console-created blank-test hook has the default topic, which is why that
+path worked. Needs a manual edit in the Particle Console (or an approved script): set the
+bioscale/ping hook's Response Topic to the default
+{{{PARTICLE_DEVICE_ID}}}/hook-response/{{{PARTICLE_EVENT_NAME}}}. Also: Particle matches
+hook events by PREFIX, so the bioscale/screen hook already forwards bioscale/screen_record
+and the separate screen_record hook POSTed every chunk twice (duplicate device_events rows,
+harmless because the chunk store upserts) - delete it. scripts/create-screen-webhooks.ts
+updated to match (no screen_record hook; responseTopic on ping only).
+
+Also seen: device_logs had exactly one document before today - the device-log Lambda path
+works (the screen-end upload landed, 322 lines), it just is not used often.
+
+npm run check: 15 errors / 429 warnings, unchanged (none in these files).
+=======
+2026-10-15 — master — arm-pi bench session: solenoid driver alongside the arm (no code changes)
+================================================================================
+Bench/ops session only; no repo code touched. Goal was to start testing the new
+two-channel solenoid driver (GPIO17/GPIO27 -> UCC27524 -> IRLZ44N, own 12 V supply,
+PCB ordered 2026-10-14) running side by side with the SO-ARM101 on arm-pi.
+
+Pi facts confirmed (recorded in session memory too): arm-pi is hostname alejandrospi3,
+a Raspberry Pi 5 Model B Rev 1.1, LAN 172.16.202.203 (DHCP) / Tailscale 100.103.204.105.
+User brevitest3 is in gpio, dialout, sudo. robot-arm.service runs as brevitest3 via
+`uv run --project ~/robot-arm --no-dev`, so service-side Python deps must be added to
+that uv project (system gpiozero/lgpio are present but invisible to it). No
+under-voltage throttling ever recorded (get_throttled=0x0).
+
+Arm bring-up problem and root cause: /health/preflight reported ok:false, leader
+BusLinker absent, with dmesg "usb 1-1: Device not responding to setup address ...
+error -71 ... unable to enumerate USB device" on every plug-in. Cause was operator
+error plus a flaky seat: the follower arm's 12 V had not been switched on, and the
+leader's USB connection did not enumerate until cables/ports were swapped. After both
+arms were powered and reseated, both boards enumerated (leader serial 5C4C125867 on
+ttyACM0, follower 5C4C126808 on ttyACM1, udev symlinks correct). The service only
+opens ports in lifespan(), so a `sudo systemctl restart robot-arm` was required before
+preflight went ok:true with both ports green and DRY_RUN=false.
+
+Solenoid prototype finding (breadboard module, not the ordered PCB): firing channel A
+or B individually and rapidly works. Firing both together rapidly lights the module's
+MOSFET LEDs (gate drive is fine) but neither solenoid pulls in until the command
+stops, then recovers after ~1 s. Consistent with the 12 V supply hitting its current
+limit on double inrush (hiccup recovery), or breadboard-contact voltage drop. Not a
+blocker since simultaneous fire is not planned; the PCB's 2200 uF bulk cap + screw
+terminals should change this behaviour. Worth checking supply rating against solenoid
+PULL-IN current (not holding current) before relying on it.
+
+Test plan agreed for the side-by-side runs: (1) solenoids alone with
+`journalctl -u robot-arm -f` open, (2) teleop alone for a 60 s baseline, (3) teleop
+180 s with solenoid pulses mid-move and while holding, watching for EIO/checksum
+errors or follower twitch that correlate with pulses. Ground rule: the solenoid board
+GND joins Pi GND at J2 pin 3 only; no second ground tie between the supplies.
+
+RESULT (14:01-14:04): all three stages run. Stage 2 teleop 60 s baseline and stage 3
+teleop with solenoid pulses mid-move and while holding both produced a journal with
+nothing but the HTTP request lines (teleop/start x2, sessions/stop). Zero serial
+errors, zero liveness-probe failures, no USB events, follower steady at each pulse.
+Conclusion: the solenoid driver (own 12 V, GND joined to Pi only at the header) and
+the arm coexist cleanly on arm-pi. Note the 2200 uF cap was already at the adapter
+terminal during the double-fire stall, so that stall is supply-limit or breadboard
+wiring drop, not something the PCB's cap will change; stagger paired fires ~50 ms in
+software if both channels are ever needed in one step.
+
+Next step for automated runs: move the two GPIO outputs into the robot-arm service
+(uv add gpiozero lgpio in ~/robot-arm; endpoints that /e-stop and /sessions/stop
+also de-energize) so a task can fire them at a verified pose. Standalone script
+~/solenoid_test.py on arm-pi remains for bench use.
+
+PRODUCTION ARM PANEL "fetch failed" -- root cause and fix (afternoon). The cart-mfg
+Robot Arm control page on production reported "Cannot reach the robot-arm Pi: fetch
+failed", last connected never. The device_events connection log (deviceId
+robot-arm-pi) had only two rows ever, both today, both "fetch failed", both with the
+correct base URL https://arm-pi.tailf65a70.ts.net -- so production BIMS had never once
+reached the arm since the log was added 2026-07-30. The Pi itself was healthy and
+reachable over LAN and over the tailnet the whole time, which is why every earlier
+"Funnel verified" note passed: those checks ran from tailnet-attached machines, and
+MagicDNS resolves the ts.net name to the tailnet IP, bypassing the public ingress.
+Forcing the public path (curl --resolve <name>:443:199.38.181.54) failed with TLS
+handshake reset from the laptop, from the Pi itself, from a third-party checker and
+from a phone on cellular, while Vercel logged fetch failed. tailscale funnel status
+said Funnel on throughout; netcheck was clean (UDP ok, DERP dfw 27 ms); tailscaled
+journal showed control-plane connections reset by peer several times after the
+10:50 reboot. Diagnosis: the node's Funnel registration never propagated to the
+ingress fleet after reboot. systemctl restart tailscaled did NOT fix it. What fixed
+it: `sudo tailscale funnel --https=443 off` then
+`sudo tailscale funnel --bg --https=443 http://127.0.0.1:8000` -- the public IPv4
+ingress answered 3/3 immediately after, from the Pi and from the laptop.
+Lesson: "Funnel on" in status is not proof of public reachability; verify with a
+--resolve curl to a 199.38.181.x ingress IP (or from a non-tailnet host), and after
+any arm-pi reboot toggle Funnel off/on if production shows fetch failed.
+
+`npm run check`: not run (no code changes this session).
+
+================================================================================
+2026-10-15 — master — arm control: teleop/record default rate 10 Hz -> 30 Hz
+================================================================================
+The Teleop and Record forms on /manufacturing/cart-mfg/robot-arm/control defaulted
+rate_hz to 10, and the two server actions fell back to 10 when the field was blank.
+The Pi service's own default (leader_follower.DEFAULT_RATE_HZ) is 30 and the whole
+driver/loop is designed around 30 Hz (single sync_read + sync_write per tick so six
+servos fit in 33 ms at 1 Mbps). The 10 had no recorded rationale — it came in with the
+first control page and was carried through the cart-mfg route move. At 10 Hz teleop
+updates the follower every 100 ms (visible steps), and recordings capture at 10 Hz and
+replay at that same cadence forever. Today's bench teleop ran at 30 Hz (curl with no
+rate_hz -> Pi default) with a clean journal, so 30 is proven on this hardware.
+
+Changed: control/+page.svelte (both rate inputs value="10" -> "30") and
+control/+page.server.ts (both `|| '10'` fallbacks -> '30'). Nothing else.
+
+`npm run check`: 13 errors / 429 warnings on master after the screen-pipeline merge (a6a4dbd8), zero in touched files.
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit ebd942c9
+Retrieve this exact code: git checkout master at commit ebd942c9
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: Teleop and Record forms on the arm control page now default
+to 30 Hz; verify the field shows 30 and a blank submit still starts at 30.
+
+================================================================================
+2026-10-15 — feat/arm-solenoid-pulse — Solenoids (GPIO) card on the arm control page + Pi GPIO router
+================================================================================
+Operator ask: a button on /manufacturing/cart-mfg/robot-arm/control to pulse the
+cartridge-chute solenoids, named by BCM pin for now (17 and 27), with an editable
+pulse length like the Hz box. Default 1000 ms (long enough for a cartridge to fall
+clear, short enough for an intermittent-duty coil), hard-capped at 2000 ms on the Pi.
+The automatic between-loops drop sequence is explicitly NOT built; this is the manual
+version only.
+
+BIMS side (this repo):
+- robot-arm-client.ts: pulseGpio(), sequenceGpio(), gpioStatus() + GpioPulseResult /
+  GpioStatus types. Timeouts 6 s / 14 s sized to the longest allowed pulse/sequence.
+- control/+page.server.ts: actions pulseGpio (pin + pulse_ms) and pulseSequence
+  (pulse_ms + gap_ms, pins fixed [17, 27] in drop order). manufacturing:write, server-side
+  range checks (20-2000 ms pulse, 0-5000 ms gap, pin allow-list), AuditLog rows
+  robot_arm.gpio.pulse / robot_arm.gpio.sequence with resourceType robot_arm_gpio.
+  A Pi 404 is translated to "the arm Pi does not have the GPIO endpoints yet" so the
+  button explains itself before the Pi side is deployed; a Pi 409 reads as "pulse already
+  in progress".
+- control/+page.svelte: new SOLENOIDS (GPIO) section between the Teleop/Record/Replay row
+  and RUN TASK. One Pulse (ms) box (default 1000) feeding three buttons: Pulse GPIO 17,
+  Pulse GPIO 27, GPIO 17 then 27; a Gap (ms) box (default 500) used by the sequence only.
+  use:enhance with a busy flag so a second click cannot overlap the first (the Pi holds
+  the request open for the full pulse). Deliberately NOT disabled during an active arm
+  session — bench testing fires these while teleop runs.
+
+Pi side (robot-arm service; the live code lives only on arm-pi, so shipped here as files
+to copy over, and also applied to the stale vendored copy so the wiring is reviewable):
+- services/robot-arm/src/server/gpio.py (new): APIRouter /gpio/status, /gpio/pulse,
+  /gpio/sequence. Single owner of BCM 17/27 via gpiozero (lgpio backend; Pi 5). Lazy
+  claim, initial LOW, every on() paired with off() in a finally, asyncio.Lock serializes
+  pulses (second request -> 409; the 12 V supply cannot carry two inrushes at once per
+  this morning's bench finding), asyncio.sleep only so the 30 Hz loop is never blocked.
+  all_off() for e-stop/shutdown. Falls back to SIMULATED mode (state tracked, timing
+  honoured, simulated:true in every response) when gpiozero/pin factory is absent.
+  Allow-list and cap are env-tunable (SOLENOID_GPIO_PINS, SOLENOID_MAX_PULSE_MS).
+- services/robot-arm/scripts/install_gpio_router.py (new): idempotent 3-line patch to
+  app.py (import, include_router behind require_api_key, all_off() first in /e-stop),
+  with --check. Anchors verified against the vendored app.py.
+- Verified gpio.py in a scratch venv with FastAPI TestClient (simulated mode): 200 ms
+  pulse measured 207 ms wall, pins back to 0, bad pin 400, 5000 ms 422, [17,27] x150 ms
+  gap 100 -> 467 ms wall. Not yet run on the Pi.
+
+Deploy steps on arm-pi (not done yet, needs the operator at the bench):
+  scp gpio.py -> ~/robot-arm/src/server/, install_gpio_router.py -> ~/robot-arm/scripts/
+  cd ~/robot-arm && uv add gpiozero lgpio && python3 scripts/install_gpio_router.py
+  sudo systemctl restart robot-arm; curl /gpio/status should report simulated:false.
+
+Note: commit f0037d89 on this branch shipped install_gpio_router.py with a syntax error
+(a sed slip while adding newline="\n" to its write_text calls); fixed in the next commit.
+
+`npm run check`: 13 errors / 429 warnings = master baseline, zero in touched files.
+
+Pi deployment result (16:30-16:45): gpio.py + installer copied to arm-pi by scp.
+`uv add gpiozero lgpio` first failed building lgpio (needs swig + liblgpio-dev; both
+were in fact already installed, the retry succeeded). The FIRST installer version broke
+app.py: the live Pi app.py uses a parenthesised multi-line `from fastapi import (...)`
+and the import was inserted inside the parentheses (SyntaxError, service down ~1 min);
+it also has NO `async def e_stop(` handler, so that hook does not apply there. Restored
+from app.py.bak-gpio and patched by hand: import after the whole import block, router
+registered at the END of the module with `_fastapi.Depends(require_api_key)`. Service
+came back `active`; GET /gpio/status -> pins 17/27 state 0, simulated:false, both lines
+claimed via gpiozero/lgpio on the Pi 5. The installer in this commit now does exactly
+that (multi-line import aware, end-of-module registration, refuses without
+require_api_key, missing e-stop is informational) and was tested on a synthetic
+Pi-shaped app.py plus the vendored copy (no-op). Open: the Pi's app.py has no e-stop
+handler to hook, so today "stop" does not drop the solenoids - a pulse is at most 2 s
+anyway and the lock prevents stacking.
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit 26a6b70f (merge of feat/arm-solenoid-pulse, tip 0f4cd769)
+Retrieve this exact code: git checkout master at commit 26a6b70f
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: the SOLENOIDS (GPIO) card on the arm control page —
+Pulse GPIO 17 / 27 / 17-then-27 with an editable pulse length (default 1000 ms) against
+the GPIO router now live on arm-pi. Operator chose production over a login-gated preview.
+
+================================================================================
+2026-10-15 — master — DEPLOY: screen ingest write-race fix (fix/screen-ingest-race)
+================================================================================
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit 49448b9b
+Retrieve this exact code: git checkout master at commit 49448b9b
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: screen events are applied with targeted $set updates so a
+level part and the summary arriving in parallel can no longer lose each other; part keys
+"<lvl>_<part>". The Particle-side ping response topic still needs the Console edit noted
+in the fix/screen-ingest-race entry above.
+
+================================================================================
+2026-10-15 — feat/screen-full-report — screen session page: the full report as one reviewable table + sign-off + per-session CSV
+================================================================================
+Jacob: the list in BIMS looked small next to the 171 rows the device sent. The grouped
+ScreenRowsTable did render every row, but read as five short lists with no meaning next
+to the numbers. Replaced on /validation/screen/[sessionId] with:
+
+- ScreenReportTable.svelte: ONE flat table, every row numbered in emission order, with
+  level, test label, id, rep, device/BIMS result, value, limit, time, note, and two new
+  columns "What it measures" / "Rule" (contract.ts SCREEN_TEST_DOCS + RUN_ROW_DOCS,
+  mirroring brevitest-device Docs/SCREEN_TEST_CATALOG.md). Status chips with counts,
+  "needs attention only", level select, free-text search, sticky header, "showing N of M",
+  fail/warn rows tinted. Operator buzz/led confirms still inline.
+- Review sign-off: validation_sessions.review {by, at, verdict accepted|rejected|rerun,
+  notes} (declared on the model - strict mode), actions review/clearReview in the
+  session +page.server.ts; rejected/rerun require a note; audit_log action screen_review;
+  SPU journal line. Does not change the device verdict or the unit rollup.
+- /validation/screen/[sessionId]/report.csv: that one screen, every row, same columns,
+  header lines with the session, counts and review state.
+- summarize.ts ScreenRowOut gains seq, base, rep, what, rule; summarizeSession returns
+  review. The unit-history compact table (ScreenRowsTable) is unchanged.
+
+npm run check: 15 errors / 429 warnings, unchanged.
+
+================================================================================
+2026-10-15 — master — DEPLOY: screen full report table + review sign-off (feat/screen-full-report)
+================================================================================
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit 02992383
+Retrieve this exact code: git checkout master at commit 02992383
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: /validation/screen/<sessionId> shows every screen row as one
+reviewable table with meaning + rule columns, a review sign-off, and report.csv.
 2026-10-15 — feat/consumer-ownership — Consumer cartridge ownership: BIMS side of the bioscale-app link (claims, clinics, invites, ownership report)
 ================================================================================
 Goal: the consumer app (bioscale-app, same Atlas db `bioscale`) must show a person only the

@@ -12,7 +12,15 @@ import * as dotenv from 'dotenv';
 dotenv.config();
 
 const PRODUCT = '32546';
-const EVENTS = ['bioscale/screen', 'bioscale/ping', 'bioscale/screen_record', 'bioscale/mag_sweep_chunk', 'bioscale/sweep_progress'];
+// Particle matches webhook event names by PREFIX: the 'bioscale/screen' hook already
+// forwards 'bioscale/screen_record', so a separate screen_record hook would POST every
+// chunk twice (it did, 2026-10-15). Only 'bioscale/ping' needs a response topic — the
+// device waits for the hook-response to time the round trip; hooks created through the
+// API get NO response topic unless one is given (the first screen's three pings timed
+// out for exactly that reason). The others must NOT have one: a hook-response per
+// chunk would cost a data op each and spam "Unknown webhook response" in the device log.
+const EVENTS = ['bioscale/screen', 'bioscale/ping', 'bioscale/mag_sweep_chunk', 'bioscale/sweep_progress'];
+const RESPONSE_TOPIC = '{{{PARTICLE_DEVICE_ID}}}/hook-response/{{{PARTICLE_EVENT_NAME}}}';
 const URL = 'https://bioscale-operations-system-mongodb.vercel.app/api/particle/webhook';
 
 async function main() {
@@ -34,7 +42,16 @@ async function main() {
 			console.log(`exists  ${event} -> ${existing.get(event)}`);
 			continue;
 		}
-		const body = { integration_type: 'Webhook', event, url: URL, requestType: 'POST', json: true, noDefaults: false, headers: { 'x-agent-api-key': apiKey } };
+		const body = {
+			integration_type: 'Webhook',
+			event,
+			url: URL,
+			requestType: 'POST',
+			json: true,
+			noDefaults: false,
+			headers: { 'x-agent-api-key': apiKey },
+			...(event === 'bioscale/ping' ? { responseTopic: RESPONSE_TOPIC } : {})
+		};
 		const r = await fetch(base, { method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
 		const j: any = await r.json().catch(() => ({}));
 		console.log(`${r.ok ? 'created' : 'FAILED '} ${event} -> ${j.id ?? j.error ?? JSON.stringify(j).slice(0, 200)}`);
