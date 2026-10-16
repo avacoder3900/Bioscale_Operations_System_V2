@@ -20976,3 +20976,43 @@ under Identity, above Account type. Layout only. svelte-check 14 errors = baseli
 Note: bioscale-app main (fd785a5, PR #4 merge) shows Vercel "Deployment was blocked" — the
 GitHub merges are authored by Samantha Wolf, not a Vercel team member; redeploy main from the
 Vercel dashboard.
+
+2026-10-16 — feat/arm-recordings-trash — Recordings On Pi: delete with 30-day recover
+================================================================================
+Morning diagnosis first (no code): BIMS showed "Cannot reach the robot arm" with
+`fetch failed` from 14:29 UTC. The robot-arm service was up on tailnet/LAN and the
+Funnel ingress answered a --resolve curl, but public DNS (8.8.8.8 / 1.1.1.1) returned
+NXDOMAIN for arm-pi.tailf65a70.ts.net, i.e. the Funnel registration was lost again.
+Operator re-registered Funnel; DNS resolves and preflight is ok:true. Follower BusLinker
+did not enumerate in either blue USB 3.0 port on the Pi 5 (worked there yesterday) but
+does in a black USB 2.0 port; likely a marginal cable/connector, keep it in the black port.
+
+Feature: the "Recordings on Pi" table on /manufacturing/cart-mfg/robot-arm/control is
+now "Recordings On Pi" with a trash icon per row and a "Recover Recordings (n)" toggle
+at the top that lists trashed recordings (deleted when/by whom, days left, Recover).
+- Delete order: export both files from the Pi -> upload one JSON {name, jsonl, meta} to
+  R2 at robot-arm/deleted-recordings/<id>.json -> write the trash row -> DELETE on the
+  Pi. Any earlier failure leaves the recording on the Pi; a Pi-side delete failure
+  removes the trash row again. Delete is disabled (and refused by the Pi, 409) while a
+  session is active.
+- Recover restores to the Pi under the original name, or <name>-recovered(-N) if taken.
+- No user can purge the trash. New daily cron /api/cron/purge-deleted-recordings
+  (05:00 UTC, vercel.json; CRON_SECRET / agent-key auth like the other crons) deletes
+  the R2 object and the row once expiresAt (deletedAt + 30 d) passes; failures retry
+  the next day. It never contacts the Pi.
+- Both actions need manufacturing:write and write AuditLog rows
+  (robot_arm.recording.delete / .recover, resourceType robot_arm_recording).
+Files: services/robot-arm/src/server/recordings_admin.py (new router: GET
+/recordings/{name}/export, DELETE /recordings/{name}, POST /recordings/restore),
+services/robot-arm/scripts/install_recordings_router.py (new, idempotent, reuses the
+GPIO installer's `_fastapi` import if present, binds `state` for the session check),
+src/lib/server/db/models/robot-arm-deleted-recording.ts (new, robot_arm_deleted_recordings),
+models/index.ts, src/lib/server/r2.ts (deleteFile), src/lib/server/robot-arm-client.ts
+(export/delete/restore wrappers), control/+page.server.ts (load trash, deleteRecording,
+recoverRecording actions), control/+page.svelte, src/routes/api/cron/
+purge-deleted-recordings/+server.ts (new), vercel.json.
+Verified: router exercised with FastAPI TestClient in a scratch venv (restore, 409 on
+overwrite, export, 400 on dot/separator names, 409 delete during a session, delete,
+404 after). Installer run twice on a copy of the vendored app.py (second run no-op).
+Pi install pending (operator SSH session).
+`npm run check`: 13 errors / 429 warnings = master baseline, zero in touched files.
