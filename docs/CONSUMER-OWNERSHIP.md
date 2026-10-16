@@ -23,6 +23,7 @@ document is the one place that says **who may write what**, and the shapes both 
 | Customer ↔ account link | `customer_accounts` | BIMS | `(customerId, accountId)` unique; `role` ∈ admin, staff, member; `status` ∈ active, revoked |
 | Invite | `consumer_invites` | BIMS | `tokenHash` (SHA-256; token shown once); `role`; 7-day expiry |
 | **Ownership** | `cartridge_ownership` | **BIMS only** | one **open** row per cartridge (partial unique index) |
+| Account type / clinic enrollment | `app_account_settings` | BIMS | `_id` = app_users._id; `accountType` ∈ individual, clinic, dev; `clinicAccountId` (individuals only). No row = individual, not enrolled |
 
 Read-only mirror models in BIMS: `AppUser` (`app_users`), `AppSubject` (`subjects`) — `strict: false`,
 never written — with one temporary exception: **dev accounts** (`dev:<slug>` rows in `app_users`) are
@@ -43,7 +44,9 @@ releasedAt, releasedBy, releaseReason: user|operator|reassigned|transfer, releas
 ```
 
 **Visibility rule (app):** an account sees a cartridge when the open row has `accountId == me`, or
-`customerId ∈ my active customer links`. Clinic roles additionally filter by `subjectId`.
+`accountId ∈ the individuals enrolled under me` (clinic type), or `customerId ∈ my active customer
+links`. A dev-type account sees every result. Clinic roles additionally filter by `subjectId`.
+See "Account types" below.
 
 ## How a row gets created
 
@@ -157,3 +160,32 @@ below is marked for removal in both codebases; nothing else depends on it.
 - **To remove the door:** BIMS — `view-as.ts`, the `viewAs` action/card, the dev-account section of
   `consumer/accounts.ts` and its forms. App — `impersonation.ts`, `routes/auth/impersonate`, the banner
   in `+layout.svelte`, `impersonatedBy` on the session and `requireWritableUser()`.
+
+## Account types (2026-10-16)
+
+Every app account has one of three types, set in BIMS on `/app-accounts/[accountId]` (dropdown,
+`customer:write`). BIMS writes `app_account_settings`; the app reads it on every request
+(`accessFor` in `src/lib/server/access.ts`) and never writes it. **No row means Individual**, so
+every new account starts as Individual without either side doing anything at sign-up.
+
+| Type | Sees in the app |
+| --- | --- |
+| **Individual** (default) | The cartridges assigned to it. |
+| **Clinic** | Its own cartridges, plus those of every Individual account enrolled under it. The home-page picker lists each enrolled person (`?view=account:<accountId>`). |
+| **Dev** | Every result in the app (the list is unscoped, like `RESULTS_SCOPE=all`, but only for this account). Granting or removing Dev needs a BIMS admin (`isAdmin`), because it exposes every user's results. |
+
+Enrollment: on an Individual account's page, **Enroll under a clinic** picks any Clinic-type account
+(moving it if already enrolled); **Remove from clinic** clears it. A Clinic account's page lists its
+enrolled accounts, each with *Remove from clinic*. Enrollment is optional. Rules (all in
+`src/lib/server/consumer/accounts.ts`): only Individuals can be enrolled; a Clinic that still has
+enrolled accounts cannot change type until they are removed; an Individual that becomes Clinic or
+Dev leaves its clinic. Every change writes an `audit_log` entry with `tableName:
+'app_account_settings'` (`SET_ACCOUNT_TYPE`, `ENROLL_IN_CLINIC`, `REMOVE_FROM_CLINIC`).
+
+Clinic and Dev visibility is read-only: the BIMS release/assign endpoints still check the original
+rule (own row or customer scope), so a clinic cannot release or move an enrolled person's cartridge.
+
+This sits beside the Customer-based clinic model above (customer links with admin/staff roles,
+patients as subjects), which is unchanged. The temporary `dev:<slug>` test logins are a different
+thing from the Dev *type*: they start as Individual like any account, and their list filter is
+labelled "Test logins (dev:)".

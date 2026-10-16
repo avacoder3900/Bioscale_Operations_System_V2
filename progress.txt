@@ -20924,3 +20924,44 @@ Checks: BIMS svelte-check 14 errors = baseline, consumer vitest 8/8. App svelte-
 eslint clean, vitest 40/40 (new impersonation.test.ts mints tokens the BIMS way), Playwright
 26/26, live smoke of /auth/impersonate (bad token 401, banner shown, profile save 403 under view).
 Not deployed. Needs CONSUMER_API_KEY + BIOSCALE_APP_URL (BIMS) and BIMS_CONSUMER_API_KEY (app).
+
+================================================================================
+2026-10-16 — feat/account-types — App account types (Individual / Clinic / Dev) + clinic enrollment
+================================================================================
+User direction: three Bioscale app account types. Every new account is Individual; staff change
+the type in BIMS from a dropdown on the account. Dev sees all user data in the app; Individual
+sees only its own carts; Clinic sees its own carts plus those of Individual accounts enrolled
+under it (e.g. a doctor's office viewing its patients). Enrollment is optional and can be
+removed in BIMS. App side is bioscale-app feat/account-types (from main).
+
+BIMS
+- New model AppAccountSetting (`app_account_settings`, _id = app_users._id): accountType,
+  clinicAccountId, enrolledAt/By, updatedAt/By. No row = individual, so nothing is written at
+  sign-up and the app never writes it.
+- consumer/accounts.ts: settingsFor/settingsForMany, enrolledUnder, clinicAccountIds,
+  setAccountType (Dev grant/removal needs isAdmin; a clinic with enrollees can't change type;
+  individual → clinic/dev drops its enrollment), enrollInClinic (individual → clinic-type only,
+  moves if enrolled elsewhere), removeFromClinic. Audit SET_ACCOUNT_TYPE / ENROLL_IN_CLINIC /
+  REMOVE_FROM_CLINIC. deleteDevAccount also clears settings and un-enrolls anyone under it.
+- /app-accounts/[accountId]: "Account type" card — type dropdown (Dev option admin-only),
+  enroll / move / remove-from-clinic for individuals, enrolled-accounts table with remove for
+  clinics. Actions setType, enroll, unenroll (customer:write).
+- /app-accounts: Type column (with the clinic an individual is enrolled under), filters Clinic
+  accounts / Enrolled in a clinic / Dev accounts; the old dev:<slug> filter renamed "Test logins
+  (dev:)" so it isn't confused with the Dev type.
+- docs/CONSUMER-OWNERSHIP.md: entity row, visibility rule, new "Account types" section.
+App (bioscale-app)
+- access.ts resolves accountType (+ enrolled accounts for clinics); DEV_BYPASS_ACCOUNT_TYPE for
+  local runs. ownership.ts canSee(): own / enrolled / customer rows, dev sees all; dev's default
+  list scope is all results; new view `account:<id>`. Owner kind 'account' labels an enrolled
+  person's (or, for dev, anyone's) test. Home picker shows for clinic/dev types with an
+  "Enrolled" group. Clinic/dev access is read-only — BIMS release/assign rules unchanged.
+Checks: BIMS svelte-check 14 errors = baseline. App svelte-check 0 errors, eslint clean, vitest
+45/45 (new ownership.test.ts, 5 tests), vite build ok, Playwright 26/26.
+Not deployed.
+Deployment: preview — https://bioscale-operations-system-mongodb-q9hrtbr77-brevitest.vercel.app
+Source: branch feat/account-types @ commit 735188d4
+Retrieve this exact code: git checkout feat/account-types at commit 735188d4
+  (or: git log feat/account-types --oneline to find it if the branch has since moved on)
+What this deployment is for: account types + clinic enrollment on /app-accounts (smoke: /login 200,
+/app-accounts 302 → login). Merged to master as PR #96 on user's "merge".

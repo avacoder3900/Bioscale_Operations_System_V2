@@ -1,7 +1,7 @@
 import { fail, redirect } from '@sveltejs/kit';
 import { hasPermission, requirePermission } from '$lib/server/permissions';
 import { connectDB, AppUser, CustomerAccount, CartridgeOwnership, AppAccountBlock, Customer } from '$lib/server/db';
-import { createDevAccount, isDevAccountId } from '$lib/server/consumer/accounts';
+import { createDevAccount, isDevAccountId, settingsForMany } from '$lib/server/consumer/accounts';
 import type { PageServerLoad, Actions } from './$types';
 
 function escapeRegExp(s: string): string {
@@ -37,13 +37,20 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	const blocked = new Set(blocks.map((b) => b._id as string));
 	const ids = users.map((u) => u._id as string);
 
-	const [links, owned] = await Promise.all([
+	const [links, owned, settings] = await Promise.all([
 		ids.length ? CustomerAccount.find({ accountId: { $in: ids }, status: 'active' }).select('accountId customerId role').lean() as Promise<any[]> : [],
 		ids.length ? CartridgeOwnership.aggregate([
 			{ $match: { accountId: { $in: ids }, open: true } },
 			{ $group: { _id: '$accountId', count: { $sum: 1 } } }
-		]) : []
+		]) : [],
+		settingsForMany(ids)
 	]);
+	const clinicIds = [...new Set([...settings.values()].map((s) => s.clinicAccountId).filter((id): id is string => Boolean(id)))];
+	const clinicUsers = clinicIds.length ? (await AppUser.find({ _id: { $in: clinicIds } }).select('signInEmail name').lean()) as any[] : [];
+	const clinicLabel = (id: string) => {
+		const u = clinicUsers.find((c) => c._id === id);
+		return u?.name ?? u?.signInEmail ?? id;
+	};
 	const customerIds = [...new Set(links.map((l) => l.customerId as string))];
 	const customers = customerIds.length
 		? (await Customer.find({ _id: { $in: customerIds } }).select('name').lean()) as any[]
@@ -65,12 +72,19 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		})),
 		owned: ownedCount.get(u._id as string) ?? 0,
 		blocked: blocked.has(u._id as string),
+		accountType: settings.get(u._id as string)?.accountType ?? 'individual',
+		clinic: settings.get(u._id as string)?.clinicAccountId
+			? { accountId: settings.get(u._id as string)!.clinicAccountId!, label: clinicLabel(settings.get(u._id as string)!.clinicAccountId!) }
+			: null,
 		dev: isDevAccountId(u._id as string)
 	}));
 	if (filter === 'unlinked') rows = rows.filter((r) => r.customers.length === 0);
 	else if (filter === 'clinic') rows = rows.filter((r) => r.customers.some((c) => c.role !== 'member'));
 	else if (filter === 'blocked') rows = rows.filter((r) => r.blocked);
 	else if (filter === 'dev') rows = rows.filter((r) => r.dev);
+	else if (filter === 'type-clinic') rows = rows.filter((r) => r.accountType === 'clinic');
+	else if (filter === 'type-dev') rows = rows.filter((r) => r.accountType === 'dev');
+	else if (filter === 'enrolled') rows = rows.filter((r) => r.clinic);
 
 	return {
 		q, filter, page, limit, total, blockedTotal: blocked.size, rows,

@@ -194,3 +194,5 @@ export { ConsumerInvite } from './consumer-invite.js';
 export { AppUser } from './app-user.js';
 export { AppSubject } from './app-subject.js';
 export { AppAccountBlock } from './app-account-block.js';
+export { AppAccountSetting, APP_ACCOUNT_TYPES } from './app-account-setting.js';
+export type { AppAccountType } from './app-account-setting.js';
