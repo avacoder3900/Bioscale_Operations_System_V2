@@ -11,7 +11,7 @@ import { connectDB } from '$lib/server/db/connection';
 import { AuditLog, DeviceEvent, generateId } from '$lib/server/db';
 import { RobotArmDataset, RobotArmDeletedRecording } from '$lib/server/db/models';
 import { requirePermission } from '$lib/server/permissions';
-import { robotArm, type RecordingExport } from '$lib/server/robot-arm-client';
+import { robotArm, recordingStem, type RecordingExport } from '$lib/server/robot-arm-client';
 import { uploadFile, downloadFile } from '$lib/server/r2';
 import { deriveArmHolder } from '$lib/server/robot-arm-lock';
 import type { Actions, PageServerLoad } from './$types';
@@ -332,6 +332,19 @@ export const actions: Actions = {
 		if (!name) return fail(400, { error: 'recording name is required' });
 		await connectDB();
 
+		// The live Pi's app.py has no module-level `state`, so its trash router
+		// cannot see sessions. Enforce "not while a session runs" here instead.
+		try {
+			const { active } = await robotArm.getActive();
+			if (active) {
+				return fail(409, {
+					error: `A ${active.kind} session is running. Stop it before deleting recordings.`
+				});
+			}
+		} catch (err) {
+			return fail(502, { error: `Cannot reach the arm: ${(err as Error).message}` });
+		}
+
 		let exported: RecordingExport;
 		try {
 			exported = await robotArm.exportRecording(name);
@@ -415,10 +428,11 @@ export const actions: Actions = {
 			return fail(502, { error: `Could not load the recovery copy: ${(err as Error).message}` });
 		}
 
+		const stem = recordingStem(row.name);
 		const candidates = [
-			row.name,
-			`${row.name}-recovered`,
-			...[2, 3, 4, 5].map((n) => `${row.name}-recovered-${n}`)
+			stem,
+			`${stem}-recovered`,
+			...[2, 3, 4, 5].map((n) => `${stem}-recovered-${n}`)
 		];
 		let restoredAs: string | null = null;
 		for (const candidate of candidates) {
@@ -453,7 +467,7 @@ export const actions: Actions = {
 		});
 		return {
 			success:
-				restoredAs === row.name
+				restoredAs === stem
 					? `"${row.name}" recovered to the Pi.`
 					: `"${row.name}" recovered to the Pi as "${restoredAs}" (the original name was taken).`
 		};

@@ -21023,3 +21023,20 @@ Retrieve this exact code: git checkout master at commit d046803c
   (or: git log master --oneline to find it if the branch has since moved on)
 What this deployment is for: Recordings On Pi trash icon + Recover Recordings (30-day
 R2 trash) and the daily purge-deleted-recordings cron. Pi router install pending.
+
+================================================================================
+2026-10-16 — fix/arm-recordings-name — recordings trash: Pi names carry .jsonl
+================================================================================
+Pi install of recordings_admin.py succeeded (installer applied, py_compile OK, service
+active, openapi lists /recordings/{name}, /{name}/export, /restore). First delete from
+BIMS failed: `robot-arm 404: recording not found: DeleteTest-20261016-203047.jsonl`.
+Root cause: the LIVE Pi's GET /recordings returns the file name (with .jsonl) as `name`,
+unlike the vendored list_recordings (stem), so the router looked for x.jsonl.jsonl.
+Fix (BIMS side, no Pi reinstall needed): recordingStem() in robot-arm-client.ts strips
+.jsonl in exportRecording/deleteRecording/restoreRecording; recover candidates are built
+from the stem. recordings_admin.py also now accepts either form (repo copy only; the Pi
+does not need it while BIMS strips).
+Also: the installer reported no module-level `state` on the Pi, so the Pi router cannot
+refuse deletes during a session. deleteRecording now checks /sessions/active first and
+returns 409 while a session runs.
+`npm run check`: 13 errors / 429 warnings = baseline, zero in touched files.
