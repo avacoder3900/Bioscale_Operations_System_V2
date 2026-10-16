@@ -50,6 +50,95 @@
 		<p class="tron-text-muted mt-3 text-xs">Profile fields are owned by the app; the person edits them there. BIMS manages what is below.</p>
 	</TronCard>
 
+	<!-- Account type and clinic enrollment (app_account_settings, written only by BIMS) -->
+	<TronCard>
+		<h3 class="tron-text-primary mb-3 font-mono text-lg font-bold">Account type</h3>
+		<form method="POST" action="?/setType" use:enhance class="flex flex-wrap items-end gap-2">
+			<div>
+				<label class="tron-text-muted mb-1 block text-sm" for="accountType">Type</label>
+				<select id="accountType" name="accountType" value={data.accountType} class="tron-input" disabled={!data.canWrite}>
+					<option value="individual">Individual</option>
+					<option value="clinic">Clinic</option>
+					<option value="dev" disabled={!data.isAdmin && data.accountType !== 'dev'}>Dev{data.isAdmin ? '' : ' (admin only)'}</option>
+				</select>
+			</div>
+			{#if data.canWrite}<TronButton type="submit" variant="primary">Save</TronButton>{/if}
+		</form>
+		<p class="tron-text-muted mt-2 text-xs">
+			{#if data.accountType === 'dev'}
+				<span class="text-[var(--color-tron-yellow)]">Dev: sees every user's results in the app.</span> Granting or removing Dev needs a BIMS admin.
+			{:else if data.accountType === 'clinic'}
+				Clinic: sees its own cartridges and those of every individual account enrolled under it.
+			{:else}
+				Individual (the default for every new account): sees only the cartridges assigned to it.
+			{/if}
+		</p>
+
+		{#if data.accountType === 'individual'}
+			<div class="mt-4 border-t border-[var(--color-tron-border)] pt-4">
+				<h4 class="tron-text-primary mb-2 text-sm font-semibold">Clinic</h4>
+				{#if data.clinic}
+					<div class="flex flex-wrap items-center gap-3 text-sm">
+						<span>Enrolled under <a href="/app-accounts/{encodeURIComponent(data.clinic.accountId)}" class="text-[var(--color-tron-cyan)] hover:underline">{data.clinic.label}</a>, which sees this account's results.</span>
+						{#if data.canWrite}
+							<form method="POST" action="?/unenroll" use:enhance>
+								<button type="submit" class="text-xs text-[var(--color-tron-red)] hover:underline">Remove from clinic</button>
+							</form>
+						{/if}
+					</div>
+				{:else}
+					<p class="tron-text-muted mb-2 text-sm">Not enrolled under a clinic (optional).</p>
+				{/if}
+				{#if data.canWrite && data.clinicOptions.length > 0}
+					<form method="POST" action="?/enroll" use:enhance class="mt-2 flex flex-wrap items-end gap-2">
+						<div class="min-w-[16rem] flex-1">
+							<label class="tron-text-muted mb-1 block text-sm" for="clinicAccountId">{data.clinic ? 'Move to another clinic' : 'Enroll under a clinic'}</label>
+							<select id="clinicAccountId" name="clinicAccountId" required class="tron-input w-full">
+								<option value="">Choose…</option>
+								{#each data.clinicOptions.filter((c) => c.accountId !== data.clinic?.accountId) as c (c.accountId)}<option value={c.accountId}>{c.label}</option>{/each}
+							</select>
+						</div>
+						<TronButton type="submit" variant="primary">{data.clinic ? 'Move' : 'Enroll'}</TronButton>
+					</form>
+				{:else if data.canWrite && !data.clinic}
+					<p class="tron-text-muted text-xs">No clinic accounts yet. Set an account's type to Clinic to enroll people under it.</p>
+				{/if}
+			</div>
+		{:else if data.accountType === 'clinic'}
+			<div class="mt-4 border-t border-[var(--color-tron-border)] pt-4">
+				<h4 class="tron-text-primary mb-2 text-sm font-semibold">
+					Enrolled accounts
+					<span class="ml-2 inline-block rounded-full bg-[var(--color-tron-cyan)] px-2 py-0.5 text-xs text-black">{data.enrolled.length}</span>
+				</h4>
+				{#if data.enrolled.length === 0}
+					<p class="tron-text-muted text-sm">Nobody yet. Enroll an individual account from its own page.</p>
+				{:else}
+					<div class="overflow-x-auto">
+						<table class="tron-table">
+							<thead><tr><th>Account</th><th>Cartridges</th><th></th></tr></thead>
+							<tbody>
+								{#each data.enrolled as e (e.accountId)}
+									<tr>
+										<td class="text-sm"><a href="/app-accounts/{encodeURIComponent(e.accountId)}" class="text-[var(--color-tron-cyan)] hover:underline">{e.label}</a></td>
+										<td class="font-mono">{e.owned}</td>
+										<td>
+											{#if data.canWrite}
+												<form method="POST" action="?/unenroll" use:enhance>
+													<input type="hidden" name="enrolledAccountId" value={e.accountId} />
+													<button type="submit" class="text-xs text-[var(--color-tron-red)] hover:underline">Remove from clinic</button>
+												</form>
+											{/if}
+										</td>
+									</tr>
+								{/each}
+							</tbody>
+						</table>
+					</div>
+				{/if}
+			</div>
+		{/if}
+	</TronCard>
+
 	<!-- View as (temporary developer door) -->
 	{#if data.canWrite}
 		<TronCard>

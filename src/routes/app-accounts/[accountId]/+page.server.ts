@@ -1,11 +1,14 @@
 import { error, fail, redirect } from '@sveltejs/kit';
-import { hasPermission, requirePermission } from '$lib/server/permissions';
+import { hasPermission, isAdmin, requirePermission } from '$lib/server/permissions';
 import {
 	connectDB, AppUser, AppSubject, AppAccountBlock, CustomerAccount, CartridgeOwnership, CartridgeRecord,
 	ConsumerInvite, Customer
 } from '$lib/server/db';
 import { assignOwnership, linkAccountToCustomer, releaseOwnership, revokeCustomerLink } from '$lib/server/consumer/ownership';
-import { blockAccount, deleteDevAccount, isDevAccountId, unblockAccount } from '$lib/server/consumer/accounts';
+import {
+	blockAccount, clinicAccountIds, deleteDevAccount, enrolledUnder, enrollInClinic, isDevAccountId, removeFromClinic,
+	setAccountType, settingsFor, unblockAccount
+} from '$lib/server/consumer/accounts';
 import { mintViewAsToken, viewAsConfigured, viewAsUrl } from '$lib/server/consumer/view-as';
 import { CARTRIDGE_ID } from '$lib/server/consumer/http';
 import type { PageServerLoad, Actions } from './$types';
@@ -22,15 +25,33 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 	const user = (await AppUser.findById(accountId).lean()) as any;
 	if (!user) throw error(404, 'App account not found');
 
-	const [block, links, rows, invites, customers] = await Promise.all([
+	const [block, links, rows, invites, customers, settings, enrolledIds, allClinicIds] = await Promise.all([
 		AppAccountBlock.findById(accountId).lean() as Promise<any>,
 		CustomerAccount.find({ accountId }).sort({ linkedAt: -1 }).lean() as Promise<any[]>,
 		CartridgeOwnership.find({ open: true, accountId }).sort({ claimedAt: -1 }).limit(500).lean() as Promise<any[]>,
 		user.signInEmail
 			? ConsumerInvite.find({ email: String(user.signInEmail).toLowerCase() }).sort({ createdAt: -1 }).limit(20).lean() as Promise<any[]>
 			: [],
-		Customer.find({ status: 'active' }).select('name customerType').sort({ name: 1 }).lean() as Promise<any[]>
+		Customer.find({ status: 'active' }).select('name customerType').sort({ name: 1 }).lean() as Promise<any[]>,
+		settingsFor(accountId),
+		enrolledUnder(accountId),
+		clinicAccountIds()
 	]);
+
+	// Account type and clinic enrollment (consumer/accounts.ts): names for the
+	// clinic picker, the clinic this account is enrolled under, and its enrollees.
+	const peopleIds = [...new Set([...allClinicIds, ...enrolledIds, ...(settings.clinicAccountId ? [settings.clinicAccountId] : [])])];
+	const [people, enrolledOwned] = await Promise.all([
+		peopleIds.length ? AppUser.find({ _id: { $in: peopleIds } }).select('signInEmail name').lean() as Promise<any[]> : [],
+		enrolledIds.length ? CartridgeOwnership.aggregate([
+			{ $match: { accountId: { $in: enrolledIds }, open: true } },
+			{ $group: { _id: '$accountId', count: { $sum: 1 } } }
+		]) : []
+	]);
+	const personLabel = (id: string) => {
+		const p = people.find((u) => u._id === id);
+		return p ? (p.name ? `${p.name} (${p.signInEmail ?? id})` : (p.signInEmail ?? id)) : id;
+	};
 
 	const customerIds = [...new Set([...links.map((l) => l.customerId), ...invites.map((i) => i.customerId), ...rows.map((r) => r.customerId)].filter(Boolean))];
 	const named = customerIds.length ? (await Customer.find({ _id: { $in: customerIds } }).select('name').lean()) as any[] : [];
@@ -79,6 +100,16 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 			devCreatedBy: user.devAccount?.createdBy?.username ?? null
 		},
 		viewAs: viewAsConfigured(),
+		accountType: settings.accountType,
+		clinic: settings.clinicAccountId ? { accountId: settings.clinicAccountId, label: personLabel(settings.clinicAccountId) } : null,
+		clinicOptions: allClinicIds.filter((id) => id !== accountId && people.some((u) => u._id === id))
+			.map((id) => ({ accountId: id, label: personLabel(id) }))
+			.sort((x, y) => x.label.localeCompare(y.label)),
+		enrolled: enrolledIds.map((id) => ({
+			accountId: id, label: personLabel(id),
+			owned: (enrolledOwned as any[]).find((o) => o._id === id)?.count ?? 0
+		})).sort((x, y) => x.label.localeCompare(y.label)),
+		isAdmin: isAdmin(locals.user),
 		canWrite: hasPermission(locals.user, 'customer:write'),
 		block: block ? { reason: block.reason, by: block.blockedBy?.username ?? null, at: new Date(block.blockedAt).toISOString() } : null,
 		links: links.map((l) => ({
@@ -99,6 +130,51 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 const operatorOf = (locals: App.Locals) => ({ _id: locals.user!._id, username: locals.user!.username ?? locals.user!._id });
 
 export const actions: Actions = {
+	/** Individual / Clinic / Dev. Dev (every user's results) needs a BIMS admin. */
+	setType: async ({ request, locals, params }) => {
+		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'customer:write');
+		await connectDB();
+		const accountId = decodeURIComponent(params.accountId);
+		if (!(await AppUser.exists({ _id: accountId }))) return fail(404, { error: 'Account not found' });
+		const fd = await request.formData();
+		const outcome = await setAccountType({
+			accountId, accountType: String(fd.get('accountType') ?? ''), operator: operatorOf(locals), isAdmin: isAdmin(locals.user)
+		});
+		return outcome.ok ? { success: true, message: outcome.message } : fail(400, { error: outcome.error });
+	},
+
+	/** Enroll this (individual) account under a clinic account. */
+	enroll: async ({ request, locals, params }) => {
+		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'customer:write');
+		await connectDB();
+		const accountId = decodeURIComponent(params.accountId);
+		if (!(await AppUser.exists({ _id: accountId }))) return fail(404, { error: 'Account not found' });
+		const fd = await request.formData();
+		const clinicAccountId = String(fd.get('clinicAccountId') ?? '');
+		if (!clinicAccountId) return fail(400, { error: 'Choose a clinic' });
+		const outcome = await enrollInClinic({ accountId, clinicAccountId, operator: operatorOf(locals) });
+		return outcome.ok ? { success: true, message: outcome.message } : fail(400, { error: outcome.error });
+	},
+
+	/**
+	 * Remove an account from its clinic: this account (no field), or one of
+	 * the accounts enrolled under this clinic (`enrolledAccountId`).
+	 */
+	unenroll: async ({ request, locals, params }) => {
+		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'customer:write');
+		await connectDB();
+		const accountId = decodeURIComponent(params.accountId);
+		const fd = await request.formData();
+		const enrolledAccountId = String(fd.get('enrolledAccountId') ?? '');
+		if (enrolledAccountId && (await settingsFor(enrolledAccountId)).clinicAccountId !== accountId)
+			return fail(404, { error: 'That account is not enrolled under this clinic' });
+		const outcome = await removeFromClinic({ accountId: enrolledAccountId || accountId, operator: operatorOf(locals) });
+		return outcome.ok ? { success: true, message: outcome.message } : fail(400, { error: outcome.error });
+	},
+
 	link: async ({ request, locals, params }) => {
 		if (!locals.user) redirect(302, '/login');
 		requirePermission(locals.user, 'customer:write');

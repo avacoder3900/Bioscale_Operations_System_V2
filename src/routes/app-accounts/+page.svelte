@@ -6,10 +6,13 @@
 
 	const FILTERS = [
 		{ key: 'all', label: 'All' },
+		{ key: 'type-clinic', label: 'Clinic accounts' },
+		{ key: 'enrolled', label: 'Enrolled in a clinic' },
+		{ key: 'type-dev', label: 'Dev accounts' },
 		{ key: 'unlinked', label: 'Not linked to a customer' },
-		{ key: 'clinic', label: 'Clinic roles' },
+		{ key: 'clinic', label: 'Customer clinic roles' },
 		{ key: 'blocked', label: 'Blocked' },
-		{ key: 'dev', label: 'Dev accounts' }
+		{ key: 'dev', label: 'Test logins (dev:)' }
 	];
 	const fmt = (iso: string | null) => (iso ? new Date(iso).toLocaleString() : '—');
 	const pages = $derived(Math.max(1, Math.ceil(data.total / data.limit)));
@@ -90,7 +93,7 @@
 			<div class="overflow-x-auto">
 				<table class="tron-table">
 					<thead>
-						<tr><th>Account</th><th>Sign-in</th><th>Customers</th><th>Cartridges</th><th>Last sign-in</th><th></th></tr>
+						<tr><th>Account</th><th>Type</th><th>Sign-in</th><th>Customers</th><th>Cartridges</th><th>Last sign-in</th><th></th></tr>
 					</thead>
 					<tbody>
 						{#each data.rows as r (r.accountId)}
@@ -101,6 +104,10 @@
 									{#if r.bioscaleEmail && r.bioscaleEmail !== r.email}
 										<span class="tron-text-muted block text-xs">results email: {r.bioscaleEmail} {r.verified ? '✓' : '(unverified)'}</span>
 									{/if}
+								</td>
+								<td class="text-sm">
+									<TronBadge variant={r.accountType === 'dev' ? 'warning' : r.accountType === 'clinic' ? 'info' : 'neutral'}>{r.accountType}</TronBadge>
+									{#if r.clinic}<span class="tron-text-muted block text-xs">clinic: <a href="/app-accounts/{encodeURIComponent(r.clinic.accountId)}" class="hover:underline">{r.clinic.label}</a></span>{/if}
 								</td>
 								<td><TronBadge variant="neutral">{r.provider}</TronBadge></td>
 								<td class="text-sm">
@@ -114,7 +121,7 @@
 								</td>
 								<td class="font-mono">{r.owned}</td>
 								<td class="text-sm whitespace-nowrap">{fmt(r.lastSignInAt)}</td>
-								<td>{#if r.dev}<TronBadge variant="warning">dev</TronBadge>{/if} {#if r.blocked}<TronBadge variant="error">blocked</TronBadge>{/if}</td>
+								<td>{#if r.dev}<TronBadge variant="warning">test login</TronBadge>{/if} {#if r.blocked}<TronBadge variant="error">blocked</TronBadge>{/if}</td>
 							</tr>
 						{/each}
 					</tbody>
