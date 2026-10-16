@@ -21065,3 +21065,9 @@ firm under teleop, with or without a cartridge, so the goal never reaches ~2234:
 clamp/mapping limit, not the 07-31 stall. Live Pi has no ~/.bims-arm; recordings dir
 on the Pi still to be located (affects recordings_admin.py's RECORDINGS_DIR fallback).
 `npm run check`: 13 errors / 429 warnings = baseline, zero in touched files.
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit 62e7af1c (merge of fix/arm-audit-shape)
+Retrieve this exact code: git checkout master at commit 62e7af1c
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: robot-arm audit rows keep operator + details.
