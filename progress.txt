@@ -21016,3 +21016,10 @@ overwrite, export, 400 on dot/separator names, 409 delete during a session, dele
 404 after). Installer run twice on a copy of the vendored app.py (second run no-op).
 Pi install pending (operator SSH session).
 `npm run check`: 13 errors / 429 warnings = master baseline, zero in touched files.
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit d046803c (merge of feat/arm-recordings-trash, tip bc4dee2c)
+Retrieve this exact code: git checkout master at commit d046803c
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: Recordings On Pi trash icon + Recover Recordings (30-day
+R2 trash) and the daily purge-deleted-recordings cron. Pi router install pending.
