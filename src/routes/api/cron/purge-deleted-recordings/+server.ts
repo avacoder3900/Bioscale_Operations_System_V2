@@ -2,7 +2,7 @@ import { json } from '@sveltejs/kit';
 import { env } from '$env/dynamic/private';
 import { connectDB, AuditLog } from '$lib/server/db';
 import { RobotArmDeletedRecording } from '$lib/server/db/models';
-import { deleteFile } from '$lib/server/r2';
+import { deleteViaWorker } from '$lib/server/services/r2';
 import { requireAgentApiKey } from '$lib/server/api-auth';
 import type { RequestHandler } from './$types';
 
@@ -33,7 +33,7 @@ async function runPurge(request: Request) {
 	const failed: { id: string; error: string }[] = [];
 	for (const row of expired) {
 		try {
-			await deleteFile(row.r2Key);
+			await deleteViaWorker(row.r2Key);
 			await RobotArmDeletedRecording.deleteOne({ _id: row._id });
 			purged.push(row._id);
 		} catch (err) {

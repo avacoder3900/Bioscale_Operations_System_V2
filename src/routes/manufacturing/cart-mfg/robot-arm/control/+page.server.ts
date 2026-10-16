@@ -12,7 +12,9 @@ import { AuditLog, DeviceEvent, generateId } from '$lib/server/db';
 import { RobotArmDataset, RobotArmDeletedRecording } from '$lib/server/db/models';
 import { requirePermission } from '$lib/server/permissions';
 import { robotArm, recordingStem, type RecordingExport } from '$lib/server/robot-arm-client';
-import { uploadFile, downloadFile } from '$lib/server/r2';
+// Via the Worker, not the S3 client: production's direct R2 credentials are
+// not valid, and the Worker is the path the rest of the app uploads through.
+import { uploadViaWorker, downloadViaWorker } from '$lib/server/services/r2';
 import { deriveArmHolder } from '$lib/server/robot-arm-lock';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -350,9 +352,9 @@ export const actions: Actions = {
 
 		const id = generateId();
 		const r2Key = `${RECORDING_TRASH_PREFIX}/${id}.json`;
-		const payload = new TextEncoder().encode(JSON.stringify(exported));
+		const payload = Buffer.from(JSON.stringify(exported), 'utf8');
 		try {
-			await uploadFile(r2Key, payload.buffer as ArrayBuffer, 'application/json');
+			await uploadViaWorker(payload, r2Key, 'application/json');
 		} catch (err) {
 			return fail(502, {
 				error: `Could not save a recovery copy of "${name}", so it was not deleted: ${(err as Error).message}`
@@ -418,8 +420,8 @@ export const actions: Actions = {
 
 		let exported: RecordingExport;
 		try {
-			const file = await downloadFile(row.r2Key);
-			exported = JSON.parse(await new Response(file.body).text());
+			const file = await downloadViaWorker(row.r2Key);
+			exported = JSON.parse(file.toString('utf8'));
 		} catch (err) {
 			return fail(502, { error: `Could not load the recovery copy: ${(err as Error).message}` });
 		}
