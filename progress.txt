@@ -20758,3 +20758,13 @@ to the numbers. Replaced on /validation/screen/[sessionId] with:
   review. The unit-history compact table (ScreenRowsTable) is unchanged.
 
 npm run check: 15 errors / 429 warnings, unchanged.
+
+================================================================================
+2026-10-15 — master — DEPLOY: screen full report table + review sign-off (feat/screen-full-report)
+================================================================================
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit 02992383
+Retrieve this exact code: git checkout master at commit 02992383
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: /validation/screen/<sessionId> shows every screen row as one
+reviewable table with meaning + rule columns, a review sign-off, and report.csv.
