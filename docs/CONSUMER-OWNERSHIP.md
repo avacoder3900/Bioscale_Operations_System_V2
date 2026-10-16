@@ -1,9 +1,12 @@
 # Consumer cartridge ownership — BIMS ↔ bioscale-app contract
 
-**Status:** built 2026-10-15 on `feat/consumer-ownership` (BIMS) and `feat/cartridge-ownership` (bioscale-app).
-**Decisions (2026-10-15):** clinic customers see their patients' results in the app and never use BIMS;
-an account may claim a cartridge that was never shipped to it; cartridges are scanned in with the
-phone camera and assigned an owner from the app.
+**Status:** built 2026-10-15 on `feat/consumer-ownership` (BIMS) and `feat/cartridge-ownership` (bioscale-app);
+scan-in removed and operator assignment added 2026-10-16 (`feat/assigned-cartridges` in both repos).
+**Decisions:** clinic customers see their patients' results in the app and never use BIMS (2026-10-15).
+**People never scan cartridges in the app (2026-10-16):** a cartridge is assigned to its owner in BIMS —
+by staff on the App Accounts or DHR pages, or automatically when it is shipped to a customer with a
+linked account — and the person receives a cartridge that is already theirs. The app-side claim flow and
+its BIMS endpoints are gone; rows with `source: 'claim'` are history from before that date.
 
 Both apps share one Atlas database (`bioscale`). BIMS owns a cartridge from birth through shipping;
 the brevitest-cloud Lambda owns the run-side fields (`rawData`, `analysis`, `statusUpdatedOn`);
@@ -20,10 +23,10 @@ document is the one place that says **who may write what**, and the shapes both 
 | Customer ↔ account link | `customer_accounts` | BIMS | `(customerId, accountId)` unique; `role` ∈ admin, staff, member; `status` ∈ active, revoked |
 | Invite | `consumer_invites` | BIMS | `tokenHash` (SHA-256; token shown once); `role`; 7-day expiry |
 | **Ownership** | `cartridge_ownership` | **BIMS only** | one **open** row per cartridge (partial unique index) |
-| Claim attempts | `consumer_claim_attempts` | BIMS | per-account rate limiting; TTL 24 h |
 
 Read-only mirror models in BIMS: `AppUser` (`app_users`), `AppSubject` (`subjects`) — `strict: false`,
-never written.
+never written — with one temporary exception: **dev accounts** (`dev:<slug>` rows in `app_users`) are
+created and deleted by BIMS; see "View as and dev accounts" below.
 
 ### `cartridge_ownership` row
 
@@ -47,21 +50,18 @@ releasedAt, releasedBy, releaseReason: user|operator|reassigned|transfer, releas
 1. **Shipment** (BIMS, `shipping` page `addCartridgeToPackage`): the package's customer has
    exactly one active account → personal row for that account; several accounts (a clinic) →
    customer-scoped row with no account/patient (the app's *unassigned* bin); none → no row.
-2. **Claim** (app → BIMS consumer API): the person scans or types the cartridge code; the app
-   previews it, then confirms. Personal claim → `accountId = me`; clinic claim →
-   `customerId = chosen clinic`, `subjectId = chosen patient or null`.
+2. **Operator** (BIMS, `assignOwnership` in `src/lib/server/consumer/ownership.ts`): staff type a
+   cartridge id on `/app-accounts/[accountId]` (personal row for that account) or an account's email
+   on the cartridge's DHR page. Refused when the cartridge does not exist, is voided/scrapped, or is a
+   QC cartridge (`ShippingLot.qaqcReleases.qaqcCartridgeIds` / `usedForTestFill`); research
+   cartridges are allowed. An existing open row is refused unless *replace* is ticked, which closes it
+   with `releaseReason: 'reassigned'` first. `matchedShipment` is recorded (shipment customer ∈ the
+   account's customers) for the report, never enforced. Audit action `ASSIGN_OWNERSHIP`.
 3. **Device** (reserved): brevitest-cloud stamping a paired reader's account at upload. Not built.
-4. **Operator** (BIMS DHR page): release only; operators do not create rows by hand.
-
-### Eligibility (`claimEligibility`, `src/lib/server/consumer/ownership.ts`)
-
-Refused, in order: cartridge not found · voided/scrapped/cancelled · QC cartridge
-(`ShippingLot.qaqcReleases.qaqcCartridgeIds` or `usedForTestFill`) · belongs to a research
-`experiment` (unless one of the claimer's customers has `customerType: 'internal'`) · already has an
-open row · **guessable id** (`CART-000123`-style) without a shipment match. UUID ids never need a
-shipment match — the decision that unshipped cartridges are claimable — but the match is recorded
-and unmatched claims appear on `/cartridge-admin/ownership`. A cartridge that already ran is
-claimable; its results become visible on claim. 30 attempts per account per hour, then 429.
+4. ~~**Claim**~~ (removed 2026-10-16): the app's scan/claim flow and the `POST /api/consumer/claims`
+   + `GET /api/consumer/cartridges/:id` endpoints are deleted, along with the `consumer_claim_attempts`
+   collection. `claimEligibility` stays in the service only for its unit tests and as the record of the
+   old rules; nothing calls it.
 
 ## Consumer API (BIMS, `src/routes/api/consumer/*`)
 
@@ -72,8 +72,6 @@ must (admin role for invites, scope for release/assign).
 
 | Call | Purpose |
 | --- | --- |
-| `GET /api/consumer/cartridges/:id?accountId=&customerIds=a,b` | Preview: assay, expiry, stage (ready/used/expired/unavailable), `owned` (never by whom), `ownedByYou`, `matchedShipment`, `eligible`, `reason` |
-| `POST /api/consumer/claims` `{cartridgeId, accountId, accountLabel, customerIds?, customerId?, subjectId?}` | Create the open row. 201 / 404 / 409 / 403 (guessable) / 429 |
 | `POST /api/consumer/claims/release` `{cartridgeId, accountId, accountLabel, customerIds?, note?}` | Close the row (only rows the account can see) |
 | `POST /api/consumer/claims/assign` `{cartridgeId, accountId, accountLabel, customerId, subjectId|null, customerIds}` | Move a clinic-owned cartridge between patients |
 | `POST /api/consumer/invites/accept` `{token, accountId, email}` | Link the account to the invite's customer; sign-in email must match the invited address |
@@ -94,11 +92,13 @@ Recommended Atlas user for the app: readWrite on those two, read on the rest.
    Send the link shown (valid 7 days, shown once).
 2. App: the admin signs in with the same email and opens the link → linked. From then on the admin
    invites staff and manages patients inside the app; BIMS is not involved.
-3. Shipments to that customer land in the clinic's unassigned bin; staff scan or pick them and
-   assign a patient.
+3. Shipments to that customer land in the clinic's unassigned bin; staff pick them on the Patients
+   page and assign a patient.
 
-A plain consumer needs no invite: they sign in and scan their kit. An invite with role *Member*
-links them to a Customer so that future shipments to that customer are theirs automatically.
+A plain consumer signs in and sees the cartridges that were assigned to them — by a shipment to
+their linked Customer, or by staff on App Accounts / DHR. They never scan anything. An invite with
+role *Member* links them to a Customer so that future shipments to that customer are theirs
+automatically.
 
 ## BIMS surfaces
 
@@ -110,3 +110,50 @@ links them to a Customer so that future shipments to that customer are theirs au
 
 BIMS: `CONSUMER_API_KEY`, `BIOSCALE_APP_URL`. App: `BIMS_BASE_URL`, `BIMS_CONSUMER_API_KEY`,
 `RESULTS_SCOPE` (`owned` default; `all` keeps the pre-ownership behaviour for UI testers).
+
+## Account management (BIMS `/app-accounts`, 2026-10-16)
+
+Developers and staff manage consumer accounts from BIMS, never from a special account in the
+app. The app has no administrator role and never will; everything an operator needs to do to an
+account is a write to a BIMS-owned collection.
+
+- `/app-accounts` — every `app_users` row (read-only mirror), searchable by email, name or id;
+  filters for accounts not linked to any customer, clinic roles, and blocked. Permission
+  `customer:read`.
+- `/app-accounts/[accountId]` — identity (read-only; the app owns the profile), **Access**
+  (block / unblock with a reason), **Customers** (link to a customer with a role, revoke),
+  cartridges linked to the account and those visible through its clinic roles (release), invites
+  sent to its email, claim attempts in the last 24 h. Writes need `customer:write`; every one is
+  audit-logged.
+- **Blocking**: BIMS writes `app_account_blocks` (`_id` = app_users._id, reason, blockedBy,
+  blockedAt). The app's `hooks.server.ts` looks the id up on every request and, if present, drops
+  the session and sends the person to `/login?blocked=1`. Nothing is deleted; unblocking deletes
+  the row and the account works again.
+- **Assigning cartridges** (2026-10-16): the account page has an *Assign a cartridge* form (cartridge
+  id, optional note, *replace current owner*); the DHR page has the mirror form (account email or id).
+  Both call `assignOwnership` — see "How a row gets created".
+
+## View as and dev accounts (temporary developer door, 2026-10-16)
+
+Built so staff can see the app from a user's point of view without a shared password. Everything
+below is marked for removal in both codebases; nothing else depends on it.
+
+- **View as** — on `/app-accounts/[accountId]`, *Open the Bioscale app as this person* (needs
+  `customer:write`, `CONSUMER_API_KEY` and `BIOSCALE_APP_URL`). BIMS mints a 2-minute HS256 JWT
+  signed with `CONSUMER_API_KEY` (`iss: bims`, `aud: bioscale-app`, `purpose: view-as`, `sub:
+  accountId`, `actor: username`; `src/lib/server/consumer/view-as.ts`) and redirects a new tab to the
+  app's `/auth/impersonate?token=`. The app verifies it (`src/lib/server/impersonation.ts`) and, for a
+  real person's account, issues a **read-only 30-minute session** (`impersonatedBy` in the session;
+  `requireWritableUser()` refuses every write; amber banner with *End view*). The sign-in is written to
+  the BIMS audit log by the action and announced by the banner.
+- **Dev accounts** — `/app-accounts` → *Create a dev account* writes an `app_users` row
+  `dev:<slug>` (`provider: dev`, sign-in email `<slug>@dev.bioscale.app`, `devAccount: {createdBy,
+  createdAt}`); this is the one place BIMS writes that collection. Nobody can sign in to it from the
+  app's login page; it is opened only through *view as*, which for a `dev:` account issues a **normal,
+  writable session** (there is no real person behind it) so profile edits, patients and results can
+  be tried end to end. Assign cartridges to it like any account. *Remove dev account* on its page
+  releases its cartridges, revokes its links, drops any block and deletes the row
+  (`deleteDevAccount`, refuses non-`dev:` ids).
+- **To remove the door:** BIMS — `view-as.ts`, the `viewAs` action/card, the dev-account section of
+  `consumer/accounts.ts` and its forms. App — `impersonation.ts`, `routes/auth/impersonate`, the banner
+  in `+layout.svelte`, `impersonatedBy` on the session and `requireWritableUser()`.

@@ -227,8 +227,23 @@
 			{:else if data.ownership.history.length > 0}
 				<p class="text-sm text-[var(--color-tron-text-secondary)]">No open ownership. Previously owned {data.ownership.history.length} time{data.ownership.history.length === 1 ? '' : 's'}.</p>
 			{:else}
-				<p class="text-sm text-[var(--color-tron-text-secondary)]">Not linked to any Bioscale app account. A link is created when the cartridge is shipped to a customer with a linked account, or when someone scans it in the app.</p>
+				<p class="text-sm text-[var(--color-tron-text-secondary)]">Not linked to any Bioscale app account. A link is created when the cartridge is shipped to a customer with a linked account, or when staff assign it below.</p>
 			{/if}
+			<!-- Operator assignment: people do not scan cartridges in the app. -->
+			<form method="POST" action="?/assignOwnership" use:enhance class="mt-3 flex flex-wrap items-end gap-2 border-t border-[var(--color-tron-border)] pt-3">
+				<div class="min-w-[16rem] flex-1">
+					<label class="mb-1 block text-xs text-[var(--color-tron-text-secondary)]" for="assignAccount">{data.ownership.current ? 'Reassign to an app account' : 'Assign to an app account'} (sign-in email or account id)</label>
+					<input id="assignAccount" name="account" required placeholder="person@example.com or dev:tester-1" class="tron-input w-full" autocomplete="off" spellcheck="false" />
+				</div>
+				<div class="min-w-[10rem]">
+					<label class="mb-1 block text-xs text-[var(--color-tron-text-secondary)]" for="assignNote">Note (optional)</label>
+					<input id="assignNote" name="assignNote" placeholder="e.g. order #1234" class="tron-input w-full" />
+				</div>
+				{#if data.ownership.current}
+					<label class="flex items-center gap-1 pb-2 text-xs text-[var(--color-tron-text-secondary)]"><input type="checkbox" name="replace" required /> release current owner first</label>
+				{/if}
+				<button type="submit" class="rounded border border-[var(--color-tron-cyan)] px-3 py-2 text-sm text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10">Assign</button>
+			</form>
 			{#if data.ownership.history.length > 1 || (data.ownership.history.length === 1 && !data.ownership.current)}
 				<details class="mt-3">
 					<summary class="cursor-pointer text-xs text-[var(--color-tron-text-secondary)]">History ({data.ownership.history.length})</summary>
