@@ -20976,3 +20976,9 @@ under Identity, above Account type. Layout only. svelte-check 14 errors = baseli
 Note: bioscale-app main (fd785a5, PR #4 merge) shows Vercel "Deployment was blocked" — the
 GitHub merges are authored by Samantha Wolf, not a Vercel team member; redeploy main from the
 Vercel dashboard.
+
+================================================================================
+2026-10-16 — feat/access-panel-bottom — App Accounts: Access panel moved to the bottom
+================================================================================
+On /app-accounts/[accountId] the Access panel (block / unblock, remove dev account) is now the
+last panel, after Invites. Layout only. svelte-check 14 errors = baseline.
