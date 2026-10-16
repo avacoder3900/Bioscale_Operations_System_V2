@@ -21047,3 +21047,21 @@ Retrieve this exact code: git checkout master at commit a664d6ed
   (or: git log master --oneline to find it if the branch has since moved on)
 What this deployment is for: recordings trash works against the live Pi's .jsonl names;
 delete refused while a session is active.
+
+================================================================================
+2026-10-16 — fix/arm-audit-shape — robot-arm audit rows use the real AuditLog schema
+================================================================================
+AuditLog's schema is tableName/recordId/action/oldData/newData/changedAt/changedBy
+(Mongoose strict), but the arm control page wrote resourceType/resourceId/userId/
+username/timestamp/details, so those fields were silently dropped and rows kept only
+{_id, action, changedAt}. Converted every write on control/+page.server.ts (recording
+delete/recover, GPIO pulse/sequence, task start, session stop) and the two older
+sync-zero writes on calibrate/+page.server.ts (capture/clear, flagged 2026-07-31) to
+tableName/recordId/newData/changedBy. No robot-arm route writes resourceType any more.
+Gripper investigation (no code yet): hand-moved positions show CLOSING = DECREASING
+ticks on both arms (leader 3209 open -> 2047 closed, follower 2464 open -> 2234 closed;
+sync-zero 2040 / 2238 is the closed pose). Follower stops short of closed and holds
+firm under teleop, with or without a cartridge, so the goal never reaches ~2234: a
+clamp/mapping limit, not the 07-31 stall. Live Pi has no ~/.bims-arm; recordings dir
+on the Pi still to be located (affects recordings_admin.py's RECORDINGS_DIR fallback).
+`npm run check`: 13 errors / 429 warnings = baseline, zero in touched files.
