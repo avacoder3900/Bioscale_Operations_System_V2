@@ -21040,3 +21040,10 @@ Also: the installer reported no module-level `state` on the Pi, so the Pi router
 refuse deletes during a session. deleteRecording now checks /sessions/active first and
 returns 409 while a session runs.
 `npm run check`: 13 errors / 429 warnings = baseline, zero in touched files.
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit a664d6ed (merge of fix/arm-recordings-name)
+Retrieve this exact code: git checkout master at commit a664d6ed
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: recordings trash works against the live Pi's .jsonl names;
+delete refused while a session is active.
