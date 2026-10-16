@@ -21071,3 +21071,28 @@ Source: branch master @ commit 62e7af1c (merge of fix/arm-audit-shape)
 Retrieve this exact code: git checkout master at commit 62e7af1c
   (or: git log master --oneline to find it if the branch has since moved on)
 What this deployment is for: robot-arm audit rows keep operator + details.
+
+================================================================================
+2026-10-16 — master — robot-arm recording trash: Pi recordings dir + R2 via Worker
+================================================================================
+Deleting a Pi recording failed in two stages.
+1. Pi: export 404 "recording not found". recordings_admin.py looked in
+   ~/.bims-arm/recordings (does not exist); the live Pi keeps recordings in
+   /home/brevitest3/robot-arm/datasets/. Fix (on the Pi, no code change):
+   BIMS_ARM_RECORDINGS_DIR=/home/brevitest3/robot-arm/datasets appended to
+   ~/robot-arm/.env (the unit's EnvironmentFile), then restart robot-arm.
+2. BIMS: R2 upload failed "Credential access key has length 24, should be 32" -
+   production R2_ACCESS_KEY_ID is not a valid R2 S3 key. The trash now uses the
+   Cloudflare Worker helpers (uploadViaWorker/downloadViaWorker/deleteViaWorker
+   in $lib/server/services/r2) like the rest of the app. Files:
+   robot-arm/control/+page.server.ts, api/cron/purge-deleted-recordings/+server.ts.
+   (Commit message also mentions the AuditLog shape; that part had already
+   shipped in f16b7d59 — this commit is only the Worker switch.)
+   The direct-S3 client ($lib/server/r2) is still used by COC/sonic/r2 files and
+   will fail the same way until R2_ACCESS_KEY_ID/R2_SECRET_ACCESS_KEY are fixed
+   in Vercel.
+`npm run check`: 13 errors / 429 warnings = baseline, zero in touched files.
+Deployment: production — via GitHub integration from push to master
+Source: branch master @ commit 228ae7d2
+Retrieve this exact code: git checkout master at commit 228ae7d2
+What this deployment is for: recording trash upload/recover/purge via R2 Worker
