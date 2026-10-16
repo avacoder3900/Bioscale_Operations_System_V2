@@ -50,6 +50,57 @@
 		<p class="tron-text-muted mt-3 text-xs">Profile fields are owned by the app; the person edits them there. BIMS manages what is below.</p>
 	</TronCard>
 
+	<!-- Cartridges -->
+	{#snippet cartridgeTable(rows: typeof data.owned, showOwner: boolean)}
+		<div class="overflow-x-auto">
+			<table class="tron-table">
+				<thead><tr><th>Cartridge</th><th>Assay</th><th>Run</th><th>Source</th>{#if showOwner}<th>Customer / patient</th>{/if}<th>Since</th><th></th></tr></thead>
+				<tbody>
+					{#each rows as r (r.id)}
+						<tr>
+							<td class="font-mono text-xs"><a href="/cartridge-admin/dhr/{r.cartridgeId}" class="text-[var(--color-tron-cyan)] hover:underline">{r.cartridgeId}</a>{#if r.status}<span class="tron-text-muted ml-1">({r.status})</span>{/if}</td>
+							<td class="text-sm">{r.assayName ?? '—'}</td>
+							<td class="text-sm whitespace-nowrap">{r.ranAt ? new Date(r.ranAt).toLocaleString() : '—'}</td>
+							<td><TronBadge variant={r.source === 'shipment' || r.source === 'operator' || r.matchedShipment ? 'success' : 'warning'}>{r.source}{r.source === 'claim' && !r.matchedShipment ? ' · unmatched' : ''}</TronBadge></td>
+							{#if showOwner}<td class="text-sm">{r.customerName ?? '—'}{#if r.subjectName}<span class="tron-text-muted block text-xs">{r.subjectName}</span>{:else if r.customerName}<span class="tron-text-muted block text-xs">unassigned</span>{/if}</td>{/if}
+							<td class="text-sm whitespace-nowrap">{fmt(r.claimedAt)}{#if r.claimedBy}<span class="tron-text-muted block text-xs">by {r.claimedBy}</span>{/if}</td>
+							<td>
+								<form method="POST" action="?/release" use:enhance>
+									<input type="hidden" name="cartridgeId" value={r.cartridgeId} />
+									<button type="submit" class="text-xs text-[var(--color-tron-red)] hover:underline">Release</button>
+								</form>
+							</td>
+						</tr>
+					{/each}
+				</tbody>
+			</table>
+		</div>
+	{/snippet}
+
+	<TronCard>
+		<h3 class="tron-text-primary mb-3 font-mono text-lg font-bold">
+			Cartridges linked to this account
+			<span class="ml-2 inline-block rounded-full bg-[var(--color-tron-cyan)] px-2 py-0.5 text-xs text-black">{data.owned.length}</span>
+		</h3>
+		<form method="POST" action="?/assign" use:enhance class="mb-4 flex flex-wrap items-end gap-2">
+			<div class="min-w-[18rem] flex-1">
+				<label class="tron-text-muted mb-1 block text-sm" for="assignCartridgeId">Assign a cartridge to this account</label>
+				<input id="assignCartridgeId" name="cartridgeId" required placeholder="Cartridge id — the QR payload (UUID) or CART-000123" class="tron-input w-full font-mono" autocomplete="off" spellcheck="false" />
+			</div>
+			<div class="min-w-[12rem]">
+				<label class="tron-text-muted mb-1 block text-sm" for="assignNote">Note (optional)</label>
+				<input id="assignNote" name="note" placeholder="e.g. order #1234" class="tron-input w-full" />
+			</div>
+			<label class="tron-text-muted flex items-center gap-1 pb-2 text-sm"><input type="checkbox" name="replace" /> replace current owner</label>
+			<TronButton type="submit" variant="primary">Assign</TronButton>
+		</form>
+		{#if data.owned.length === 0}
+			<p class="tron-text-muted py-2 text-center text-sm">None. People do not scan cartridges in the app; assign one here, from the cartridge's DHR page, or let a shipment to the account's customer do it.</p>
+		{:else}
+			{@render cartridgeTable(data.owned, false)}
+		{/if}
+	</TronCard>
+
 	<!-- Account type and clinic enrollment (app_account_settings, written only by BIMS) -->
 	<TronCard>
 		<h3 class="tron-text-primary mb-3 font-mono text-lg font-bold">Account type</h3>
@@ -242,57 +293,6 @@
 					</tbody>
 				</table>
 			</div>
-		{/if}
-	</TronCard>
-
-	<!-- Cartridges -->
-	{#snippet cartridgeTable(rows: typeof data.owned, showOwner: boolean)}
-		<div class="overflow-x-auto">
-			<table class="tron-table">
-				<thead><tr><th>Cartridge</th><th>Assay</th><th>Run</th><th>Source</th>{#if showOwner}<th>Customer / patient</th>{/if}<th>Since</th><th></th></tr></thead>
-				<tbody>
-					{#each rows as r (r.id)}
-						<tr>
-							<td class="font-mono text-xs"><a href="/cartridge-admin/dhr/{r.cartridgeId}" class="text-[var(--color-tron-cyan)] hover:underline">{r.cartridgeId}</a>{#if r.status}<span class="tron-text-muted ml-1">({r.status})</span>{/if}</td>
-							<td class="text-sm">{r.assayName ?? '—'}</td>
-							<td class="text-sm whitespace-nowrap">{r.ranAt ? new Date(r.ranAt).toLocaleString() : '—'}</td>
-							<td><TronBadge variant={r.source === 'shipment' || r.source === 'operator' || r.matchedShipment ? 'success' : 'warning'}>{r.source}{r.source === 'claim' && !r.matchedShipment ? ' · unmatched' : ''}</TronBadge></td>
-							{#if showOwner}<td class="text-sm">{r.customerName ?? '—'}{#if r.subjectName}<span class="tron-text-muted block text-xs">{r.subjectName}</span>{:else if r.customerName}<span class="tron-text-muted block text-xs">unassigned</span>{/if}</td>{/if}
-							<td class="text-sm whitespace-nowrap">{fmt(r.claimedAt)}{#if r.claimedBy}<span class="tron-text-muted block text-xs">by {r.claimedBy}</span>{/if}</td>
-							<td>
-								<form method="POST" action="?/release" use:enhance>
-									<input type="hidden" name="cartridgeId" value={r.cartridgeId} />
-									<button type="submit" class="text-xs text-[var(--color-tron-red)] hover:underline">Release</button>
-								</form>
-							</td>
-						</tr>
-					{/each}
-				</tbody>
-			</table>
-		</div>
-	{/snippet}
-
-	<TronCard>
-		<h3 class="tron-text-primary mb-3 font-mono text-lg font-bold">
-			Cartridges linked to this account
-			<span class="ml-2 inline-block rounded-full bg-[var(--color-tron-cyan)] px-2 py-0.5 text-xs text-black">{data.owned.length}</span>
-		</h3>
-		<form method="POST" action="?/assign" use:enhance class="mb-4 flex flex-wrap items-end gap-2">
-			<div class="min-w-[18rem] flex-1">
-				<label class="tron-text-muted mb-1 block text-sm" for="assignCartridgeId">Assign a cartridge to this account</label>
-				<input id="assignCartridgeId" name="cartridgeId" required placeholder="Cartridge id — the QR payload (UUID) or CART-000123" class="tron-input w-full font-mono" autocomplete="off" spellcheck="false" />
-			</div>
-			<div class="min-w-[12rem]">
-				<label class="tron-text-muted mb-1 block text-sm" for="assignNote">Note (optional)</label>
-				<input id="assignNote" name="note" placeholder="e.g. order #1234" class="tron-input w-full" />
-			</div>
-			<label class="tron-text-muted flex items-center gap-1 pb-2 text-sm"><input type="checkbox" name="replace" /> replace current owner</label>
-			<TronButton type="submit" variant="primary">Assign</TronButton>
-		</form>
-		{#if data.owned.length === 0}
-			<p class="tron-text-muted py-2 text-center text-sm">None. People do not scan cartridges in the app; assign one here, from the cartridge's DHR page, or let a shipment to the account's customer do it.</p>
-		{:else}
-			{@render cartridgeTable(data.owned, false)}
 		{/if}
 	</TronCard>
 
