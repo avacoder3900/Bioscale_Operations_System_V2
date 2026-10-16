@@ -20959,3 +20959,9 @@ App (bioscale-app)
 Checks: BIMS svelte-check 14 errors = baseline. App svelte-check 0 errors, eslint clean, vitest
 45/45 (new ownership.test.ts, 5 tests), vite build ok, Playwright 26/26.
 Not deployed.
+Deployment: preview — https://bioscale-operations-system-mongodb-q9hrtbr77-brevitest.vercel.app
+Source: branch feat/account-types @ commit 735188d4
+Retrieve this exact code: git checkout feat/account-types at commit 735188d4
+  (or: git log feat/account-types --oneline to find it if the branch has since moved on)
+What this deployment is for: account types + clinic enrollment on /app-accounts (smoke: /login 200,
+/app-accounts 302 → login). Merged to master as PR #96 on user's "merge".
