@@ -455,3 +455,46 @@ export async function customerIdsFor(accountId: string): Promise<string[]> {
 export async function isCustomerAdmin(accountId: string, customerId: string): Promise<boolean> {
 	return Boolean(await CustomerAccount.exists({ accountId, customerId, status: 'active', role: 'admin' }));
 }
+
+// ---------------------------------------------------------------------------
+// Account management (BIMS /app-accounts): link, revoke, block
+
+export type OperatorRef = { _id: string; username: string };
+
+/** Link an app account to a customer with a role (upsert; reactivates a revoked link). */
+export async function linkAccountToCustomer(input: {
+	accountId: string; customerId: string; role: 'admin' | 'staff' | 'member'; email: string | null; operator: OperatorRef;
+}): Promise<void> {
+	const now = new Date();
+	const actor: Actor = { kind: 'operator', id: input.operator._id, label: input.operator.username };
+	await CustomerAccount.updateOne(
+		{ customerId: input.customerId, accountId: input.accountId },
+		{
+			$set: { role: input.role, status: 'active', email: input.email, linkedBy: actor, linkedAt: now, revokedAt: null, revokedBy: null },
+			$setOnInsert: { _id: generateId() }
+		},
+		{ upsert: true }
+	);
+	await AuditLog.create({
+		_id: generateId(),
+		tableName: 'customer_accounts', recordId: `${input.customerId}:${input.accountId}`, action: 'LINK',
+		changedBy: input.operator.username, changedAt: now,
+		newData: { customerId: input.customerId, accountId: input.accountId, role: input.role }
+	});
+}
+
+export async function revokeCustomerLink(input: { linkId: string; operator: OperatorRef }): Promise<boolean> {
+	const now = new Date();
+	const actor: Actor = { kind: 'operator', id: input.operator._id, label: input.operator.username };
+	const res = await CustomerAccount.updateOne(
+		{ _id: input.linkId, status: 'active' },
+		{ $set: { status: 'revoked', revokedAt: now, revokedBy: actor } }
+	);
+	if (!res.matchedCount) return false;
+	await AuditLog.create({
+		_id: generateId(),
+		tableName: 'customer_accounts', recordId: input.linkId, action: 'REVOKE',
+		changedBy: input.operator.username, changedAt: now
+	});
+	return true;
+}

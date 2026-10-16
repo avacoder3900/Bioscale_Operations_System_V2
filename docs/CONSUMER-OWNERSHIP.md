@@ -110,3 +110,24 @@ links them to a Customer so that future shipments to that customer are theirs au
 
 BIMS: `CONSUMER_API_KEY`, `BIOSCALE_APP_URL`. App: `BIMS_BASE_URL`, `BIMS_CONSUMER_API_KEY`,
 `RESULTS_SCOPE` (`owned` default; `all` keeps the pre-ownership behaviour for UI testers).
+
+## Account management (BIMS `/app-accounts`, 2026-10-16)
+
+Developers and staff manage consumer accounts from BIMS, never from a special account in the
+app. The app has no administrator role and never will; everything an operator needs to do to an
+account is a write to a BIMS-owned collection.
+
+- `/app-accounts` — every `app_users` row (read-only mirror), searchable by email, name or id;
+  filters for accounts not linked to any customer, clinic roles, and blocked. Permission
+  `customer:read`.
+- `/app-accounts/[accountId]` — identity (read-only; the app owns the profile), **Access**
+  (block / unblock with a reason), **Customers** (link to a customer with a role, revoke),
+  cartridges linked to the account and those visible through its clinic roles (release), invites
+  sent to its email, claim attempts in the last 24 h. Writes need `customer:write`; every one is
+  audit-logged.
+- **Blocking**: BIMS writes `app_account_blocks` (`_id` = app_users._id, reason, blockedBy,
+  blockedAt). The app's `hooks.server.ts` looks the id up on every request and, if present, drops
+  the session and sends the person to `/login?blocked=1`. Nothing is deleted; unblocking deletes
+  the row and the account works again.
+- Not built: "view the app as this person". If it is ever needed it should be a short-lived
+  token minted by BIMS and honoured by the app for a read-only view, never a shared password.

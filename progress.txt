@@ -20856,3 +20856,24 @@ access card, DHR ownership card, /cartridge-admin/ownership report). The consume
   BIMS_BASE_URL + BIMS_CONSUMER_API_KEY are set, so testers keep seeing everything until then.
 - Env still to set: BIMS `CONSUMER_API_KEY`, `BIOSCALE_APP_URL`; app `BIMS_BASE_URL`,
   `BIMS_CONSUMER_API_KEY` (same secret).
+
+================================================================================
+2026-10-16 — feat/app-accounts — App Accounts: manage consumer-app accounts from BIMS
+================================================================================
+Decision: developers/staff manage Bioscale-app accounts from BIMS (staff logins, permissions,
+audit log) rather than from a superuser account inside the public consumer app, which has no
+admin role and never will. docs/CONSUMER-OWNERSHIP.md "Account management".
+
+- /app-accounts (customer:read): every app_users row (read-only mirror), search by email/name/id,
+  filters: not linked to a customer, clinic roles, blocked. Sidebar entry "App Accounts" under
+  Admin next to Customers.
+- /app-accounts/[accountId]: identity (read-only — the app owns the profile), Access (block /
+  unblock with a reason), Customers (link with role, revoke), cartridges linked to the account and
+  those visible through its clinic roles (operator release), invites to its email, claim attempts
+  in the last 24 h. Writes need customer:write and audit-log.
+- New model AppAccountBlock → `app_account_blocks` (_id = app_users._id, reason, blockedBy/At).
+  The app's hooks.server.ts checks it on every request (bioscale-app PR #2, branch
+  feat/account-blocks) and drops the session → /login?blocked=1.
+- Service: ownership.ts linkAccountToCustomer / revokeCustomerLink; consumer/accounts.ts
+  blockAccount / unblockAccount.
+Checks: svelte-check 14 errors = baseline, 0 in new files.
