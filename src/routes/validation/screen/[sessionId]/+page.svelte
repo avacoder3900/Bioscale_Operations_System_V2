@@ -1,9 +1,11 @@
 <script lang="ts">
+	import { enhance } from '$app/forms';
 	import { TronCard, TronBadge } from '$lib/components/ui';
-	import ScreenRowsTable from '$lib/components/validation/screen/ScreenRowsTable.svelte';
+	import ScreenReportTable from '$lib/components/validation/screen/ScreenReportTable.svelte';
 
-	let { data } = $props();
+	let { data, form } = $props();
 	const s = $derived(data.session);
+	let verdict = $state('accepted');
 	const when = (iso: string | null) => (iso ? new Date(iso).toLocaleString() : '—');
 	const CH_COLOR: Record<string, string> = { A: 'var(--color-tron-cyan)', B: 'var(--color-tron-orange)', C: 'var(--color-tron-purple)' };
 	const W = 640, H = 160, P = { l: 36, r: 8, t: 8, b: 20 };
@@ -53,8 +55,48 @@
 		</div>
 	{/if}
 
+	<!-- Review sign-off: a person read the full report and concluded something. -->
 	<TronCard>
-		<ScreenRowsTable rows={s.rows} levels={s.levels} sessionId={s.id} confirms={s.operatorConfirms} />
+		<div class="flex flex-wrap items-start justify-between gap-3">
+			<div>
+				<h3 class="tron-text-primary text-lg font-medium">Review</h3>
+				{#if s.review}
+					<p class="mt-1 text-sm">
+						<TronBadge variant={s.review.verdict === 'accepted' ? 'success' : s.review.verdict === 'rejected' ? 'error' : 'warning'}>{s.review.verdict}</TronBadge>
+						<span class="tron-text-muted ml-2">by {s.review.by?.username ?? '?'} · {when(s.review.at)}</span>
+					</p>
+					{#if s.review.notes}<p class="tron-text-muted mt-1 whitespace-pre-wrap text-sm">{s.review.notes}</p>{/if}
+				{:else}
+					<p class="tron-text-muted mt-1 text-sm">Not reviewed yet. Read the {s.rows.length} rows below, then sign off. The device's own verdict ({s.overallPassed === null ? 'pending' : s.overallPassed ? 'pass' : 'fail'}) is not changed by this; it records what a person concluded.</p>
+				{/if}
+				{#if form?.error}<p class="mt-2 text-sm text-[var(--color-tron-red)]">{form.error}</p>{/if}
+				{#if form?.reviewed}<p class="mt-2 text-sm text-[var(--color-tron-cyan)]">Recorded: {form.reviewed}.</p>{/if}
+			</div>
+			<form method="POST" action="?/review" use:enhance class="flex w-full max-w-xl flex-col gap-2 sm:w-auto">
+				<div class="flex flex-wrap gap-3 text-sm">
+					{#each [['accepted', 'Accept'], ['rejected', 'Reject'], ['rerun', 'Re-run']] as [v, label] (v)}
+						<label class="inline-flex items-center gap-1"><input type="radio" name="verdict" value={v} bind:group={verdict} /> {label}</label>
+					{/each}
+				</div>
+				<textarea name="notes" rows="2" class="tron-input w-full text-sm" placeholder={verdict === 'accepted' ? 'Notes (optional)' : 'Why? (required)'}></textarea>
+				<div class="flex gap-2">
+					<button type="submit" class="tron-btn-primary text-sm">{s.review ? 'Update review' : 'Sign off'}</button>
+					{#if s.review}
+						<button type="submit" formaction="?/clearReview" class="tron-text-muted text-sm hover:underline">clear</button>
+					{/if}
+				</div>
+			</form>
+		</div>
+	</TronCard>
+
+	<TronCard>
+		<h3 class="tron-text-primary mb-1 text-lg font-medium">Full report — every row the device sent</h3>
+		<p class="tron-text-muted mb-3 text-xs">
+			Rows are numbered in the order the device ran them. Repeated tests carry their rep number; level 2 rows carry
+			the run number. Values are raw device units (°C×10, µm, ms, counts) — hover a level number for its name,
+			and read the last two columns for what a row measures and how it is judged.
+		</p>
+		<ScreenReportTable rows={s.rows} levels={s.levels} sessionId={s.id} confirms={s.operatorConfirms} />
 	</TronCard>
 
 	{#if data.records.length}

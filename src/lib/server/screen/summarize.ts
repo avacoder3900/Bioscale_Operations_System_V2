@@ -4,11 +4,18 @@
  * there (the build fails on them, svelte-check does not catch it).
  */
 import { evaluateScreen, type ScreenSessionRaw } from './ingest';
-import type { ScreenCriteria } from './contract';
+import { screenTestDoc, screenTestRep, baseTestId, type ScreenCriteria } from './contract';
 
 export interface ScreenRowOut {
+	/** 1-based position in the device's emission order — the row number on the report. */
+	seq: number;
 	id: string;
+	/** Bare id with the rep stripped (run rows keep their run number). */
+	base: string;
+	rep: number | null;
 	label: string;
+	what: string;
+	rule: string;
 	level: number;
 	status: string;
 	deviceStatus: string;
@@ -16,6 +23,13 @@ export interface ScreenRowOut {
 	limit: number | null;
 	ms: number;
 	note: string | null;
+}
+
+export interface ScreenReview {
+	by: { _id: string; username: string } | null;
+	at: string | null;
+	verdict: 'accepted' | 'rejected' | 'rerun' | null;
+	notes: string | null;
 }
 
 export function summarizeSession(s: any, criteria: ScreenCriteria) {
@@ -46,10 +60,16 @@ export function summarizeSession(s: any, criteria: ScreenCriteria) {
 			stageCheck: r.stageCheck ?? null,
 			background: r.background ?? null
 		})),
-		rows: ev.rows.map(
-			(r): ScreenRowOut => ({
+		rows: ev.rows.map((r, i): ScreenRowOut => {
+			const doc = screenTestDoc(r.id);
+			return {
+				seq: i + 1,
 				id: r.id,
+				base: baseTestId(r.id),
+				rep: screenTestRep(r.id),
 				label: r.label,
+				what: doc.what,
+				rule: doc.rule,
 				level: r.level,
 				status: r.finalStatus,
 				deviceStatus: r.deviceStatus,
@@ -57,9 +77,12 @@ export function summarizeSession(s: any, criteria: ScreenCriteria) {
 				limit: r.limit ?? r.criterion?.max ?? r.criterion?.min ?? null,
 				ms: r.ms,
 				note: r.note
-			})
-		),
+			};
+		}),
 		override: s.override ?? null,
+		review: (s.review
+			? { by: s.review.by ?? null, at: s.review.at ? new Date(s.review.at).toISOString() : null, verdict: s.review.verdict ?? null, notes: s.review.notes ?? null }
+			: null) as ScreenReview | null,
 		operatorConfirms: (s.results ?? []).filter((r: any) => r.testType === 'operator_confirm').map((r: any) => ({ id: r.rawData?.id, passed: r.passed, by: r.notes, at: r.createdAt }))
 	};
 }

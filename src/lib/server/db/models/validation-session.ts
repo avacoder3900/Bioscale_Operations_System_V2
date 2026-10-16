@@ -65,6 +65,20 @@ const validationSessionSchema = new Schema({
 		default: null,
 		_id: false
 	},
+	// Screen sessions: a person's sign-off on the full report (2026-10-15).
+	// verdict: accepted (numbers reviewed, unit may proceed) · rejected (something
+	// in the rows is wrong even if the device passed) · rerun (inconclusive).
+	// Declared for the same strict-mode reason as fieldSummary above.
+	review: {
+		type: {
+			by: { _id: String, username: String },
+			at: Date,
+			verdict: { type: String, enum: ['accepted', 'rejected', 'rerun'] },
+			notes: String
+		},
+		default: null,
+		_id: false
+	},
 	createdAt: { type: Date, default: Date.now }
 }, { timestamps: false });
 

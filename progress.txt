@@ -20734,3 +20734,27 @@ What this deployment is for: screen events are applied with targeted $set update
 level part and the summary arriving in parallel can no longer lose each other; part keys
 "<lvl>_<part>". The Particle-side ping response topic still needs the Console edit noted
 in the fix/screen-ingest-race entry above.
+
+================================================================================
+2026-10-15 — feat/screen-full-report — screen session page: the full report as one reviewable table + sign-off + per-session CSV
+================================================================================
+Jacob: the list in BIMS looked small next to the 171 rows the device sent. The grouped
+ScreenRowsTable did render every row, but read as five short lists with no meaning next
+to the numbers. Replaced on /validation/screen/[sessionId] with:
+
+- ScreenReportTable.svelte: ONE flat table, every row numbered in emission order, with
+  level, test label, id, rep, device/BIMS result, value, limit, time, note, and two new
+  columns "What it measures" / "Rule" (contract.ts SCREEN_TEST_DOCS + RUN_ROW_DOCS,
+  mirroring brevitest-device Docs/SCREEN_TEST_CATALOG.md). Status chips with counts,
+  "needs attention only", level select, free-text search, sticky header, "showing N of M",
+  fail/warn rows tinted. Operator buzz/led confirms still inline.
+- Review sign-off: validation_sessions.review {by, at, verdict accepted|rejected|rerun,
+  notes} (declared on the model - strict mode), actions review/clearReview in the
+  session +page.server.ts; rejected/rerun require a note; audit_log action screen_review;
+  SPU journal line. Does not change the device verdict or the unit rollup.
+- /validation/screen/[sessionId]/report.csv: that one screen, every row, same columns,
+  header lines with the session, counts and review state.
+- summarize.ts ScreenRowOut gains seq, base, rep, what, rule; summarizeSession returns
+  review. The unit-history compact table (ScreenRowsTable) is unchanged.
+
+npm run check: 15 errors / 429 warnings, unchanged.
