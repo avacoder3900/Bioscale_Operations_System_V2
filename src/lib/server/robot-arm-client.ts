@@ -95,6 +95,12 @@ export interface RecordingMeta {
 	meta?: RecordingSidecar | null;
 }
 
+export interface RecordingExport {
+	name: string;
+	jsonl: string;
+	meta: RecordingSidecar | null;
+}
+
 interface ProvenanceFields {
 	lot_id?: string;
 	manufacturing_step?: string;
@@ -404,6 +410,24 @@ export const robotArm = {
 			body: { delta_steps, ...(speed !== undefined ? { speed } : {}) }
 		}),
 	listRecordings: () => robotArmFetch<{ recordings: RecordingMeta[] }>('/recordings'),
+	// Recording trash (recordings_admin.py on the Pi). BIMS exports a recording
+	// to R2 before deleting it, and restores from R2 on recover. Bodies carry the
+	// whole JSONL, so these get more room than the 5s default.
+	exportRecording: (name: string) =>
+		robotArmFetch<RecordingExport>(`/recordings/${encodeURIComponent(name)}/export`, {
+			timeoutMs: 20000
+		}),
+	deleteRecording: (name: string) =>
+		robotArmFetch<{ deleted: string }>(`/recordings/${encodeURIComponent(name)}`, {
+			method: 'DELETE',
+			timeoutMs: 10000
+		}),
+	restoreRecording: (body: RecordingExport) =>
+		robotArmFetch<{ restored: string }>('/recordings/restore', {
+			method: 'POST',
+			body,
+			timeoutMs: 20000
+		}),
 	health: () => robotArmFetch<{ status: string; service: string; version: string }>('/health'),
 
 	// Connection health for the ARM-01 panel. Enumerating serial ports is

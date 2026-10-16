@@ -9,9 +9,10 @@ import { fail, redirect } from '@sveltejs/kit';
 import { env } from '$env/dynamic/private';
 import { connectDB } from '$lib/server/db/connection';
 import { AuditLog, DeviceEvent, generateId } from '$lib/server/db';
-import { RobotArmDataset } from '$lib/server/db/models';
+import { RobotArmDataset, RobotArmDeletedRecording } from '$lib/server/db/models';
 import { requirePermission } from '$lib/server/permissions';
-import { robotArm } from '$lib/server/robot-arm-client';
+import { robotArm, type RecordingExport } from '$lib/server/robot-arm-client';
+import { uploadFile, downloadFile } from '$lib/server/r2';
 import { deriveArmHolder } from '$lib/server/robot-arm-lock';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -29,6 +30,11 @@ const ARM_HEARTBEAT_MS = 60 * 60 * 1000;
 // recently — kills Refresh-mashing and instantaneous flapping.
 const ARM_CHANGE_DEDUPE_MS = 30_000;
 const ARM_LOG_LIMIT = 20;
+
+// Recording trash. Deleted recordings are kept in R2 for this long, then the
+// purge-deleted-recordings cron removes them. Users cannot purge early.
+const RECORDING_TRASH_DAYS = 30;
+const RECORDING_TRASH_PREFIX = 'robot-arm/deleted-recordings';
 
 // Normalized to {value, error} rather than a union, so the page doesn't need
 // hand-written type guards to tell a session from an outage.
@@ -140,7 +146,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 	requirePermission(locals.user, 'manufacturing:read');
 	await connectDB();
 
-	const [activeResult, piRecordings, dbDatasets, preflightResult, tasks, holder, logRows] =
+	const [activeResult, piRecordings, dbDatasets, preflightResult, tasks, holder, logRows, trash] =
 		await Promise.all([
 			safeActive(),
 			safeRecordings(),
@@ -152,6 +158,10 @@ export const load: PageServerLoad = async ({ locals }) => {
 				.select('_id success errorMessage eventData createdAt')
 				.sort({ createdAt: -1 })
 				.limit(ARM_LOG_LIMIT)
+				.lean(),
+			RobotArmDeletedRecording.find({ recoveredAt: null, expiresAt: { $gt: new Date() } })
+				.select('_id name sizeBytes modified deletedBy deletedAt expiresAt')
+				.sort({ deletedAt: -1 })
 				.lean()
 		]);
 
@@ -199,6 +209,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 		activeError: activeResult.activeError,
 		piRecordings,
 		dbDatasets: JSON.parse(JSON.stringify(dbDatasets)),
+		deletedRecordings: JSON.parse(JSON.stringify(trash)),
 		preflight: preflightResult.preflight,
 		preflightError: preflightResult.preflightError,
 		// Surfaced so the panel can name the endpoint it failed to reach. Not a
@@ -283,7 +294,171 @@ async function auditGpio(
 	});
 }
 
+function recordingMessage(err: unknown): string {
+	const msg = (err as Error).message ?? 'unknown error';
+	if (msg.includes('robot-arm 404') && msg.includes('Not Found')) {
+		return 'The arm Pi does not have the recording trash endpoints yet - install recordings_admin.py on the Pi and restart the robot-arm service.';
+	}
+	return msg;
+}
+
+async function auditRecording(
+	user: { _id: string; username: string },
+	action: string,
+	resourceId: string,
+	details: Record<string, unknown>
+) {
+	await AuditLog.create({
+		_id: generateId(),
+		action,
+		resourceType: 'robot_arm_recording',
+		resourceId,
+		userId: user._id,
+		username: user.username,
+		timestamp: new Date(),
+		details
+	});
+}
+
 export const actions: Actions = {
+	// Move a recording from the Pi to the 30-day trash. Order matters: export
+	// from the Pi, upload to R2, write the trash row, and only then delete on the
+	// Pi. A failure at any earlier step leaves the recording where it was.
+	deleteRecording: async ({ request, locals }) => {
+		if (!locals.user) return fail(401, { error: 'Unauthorized' });
+		requirePermission(locals.user, 'manufacturing:write');
+		const data = await request.formData();
+		const name = data.get('name')?.toString();
+		if (!name) return fail(400, { error: 'recording name is required' });
+		await connectDB();
+
+		let exported: RecordingExport;
+		try {
+			exported = await robotArm.exportRecording(name);
+		} catch (err) {
+			return fail(502, { error: `Could not read "${name}" from the Pi: ${recordingMessage(err)}` });
+		}
+
+		const id = generateId();
+		const r2Key = `${RECORDING_TRASH_PREFIX}/${id}.json`;
+		const payload = new TextEncoder().encode(JSON.stringify(exported));
+		try {
+			await uploadFile(r2Key, payload.buffer as ArrayBuffer, 'application/json');
+		} catch (err) {
+			return fail(502, {
+				error: `Could not save a recovery copy of "${name}", so it was not deleted: ${(err as Error).message}`
+			});
+		}
+
+		const now = new Date();
+		const expiresAt = new Date(now.getTime() + RECORDING_TRASH_DAYS * 24 * 60 * 60 * 1000);
+		await RobotArmDeletedRecording.create({
+			_id: id,
+			name,
+			r2Key,
+			sizeBytes: new TextEncoder().encode(exported.jsonl).byteLength,
+			modified: data.get('modified')?.toString() || undefined,
+			meta: exported.meta ?? null,
+			deletedBy: { _id: locals.user._id, username: locals.user.username },
+			deletedAt: now,
+			expiresAt
+		});
+
+		try {
+			await robotArm.deleteRecording(name);
+		} catch (err) {
+			// The Pi still has it, so the trash row would be a duplicate. Drop it;
+			// the orphaned R2 object is harmless and tiny.
+			await RobotArmDeletedRecording.deleteOne({ _id: id });
+			const msg = (err as Error).message ?? '';
+			return fail(msg.includes('robot-arm 409') ? 409 : 502, {
+				error: `"${name}" was not deleted: ${recordingMessage(err)}`
+			});
+		}
+
+		await auditRecording(locals.user, 'robot_arm.recording.delete', id, {
+			name,
+			r2Key,
+			expiresAt: expiresAt.toISOString()
+		});
+		return {
+			success: `"${name}" moved to the trash. It can be recovered until ${expiresAt.toLocaleDateString()}.`
+		};
+	},
+
+	// Restore a trashed recording to the Pi. If the original name is taken, it
+	// comes back as <name>-recovered (then -recovered-2, ...).
+	recoverRecording: async ({ request, locals }) => {
+		if (!locals.user) return fail(401, { error: 'Unauthorized' });
+		requirePermission(locals.user, 'manufacturing:write');
+		const data = await request.formData();
+		const id = data.get('id')?.toString();
+		if (!id) return fail(400, { error: 'trash id is required' });
+		await connectDB();
+
+		const row = (await RobotArmDeletedRecording.findById(id).lean()) as {
+			_id: string;
+			name: string;
+			r2Key: string;
+			recoveredAt: Date | null;
+			expiresAt: Date;
+		} | null;
+		if (!row || row.recoveredAt || new Date(row.expiresAt) <= new Date()) {
+			return fail(404, { error: 'That recording is no longer in the trash.' });
+		}
+
+		let exported: RecordingExport;
+		try {
+			const file = await downloadFile(row.r2Key);
+			exported = JSON.parse(await new Response(file.body).text());
+		} catch (err) {
+			return fail(502, { error: `Could not load the recovery copy: ${(err as Error).message}` });
+		}
+
+		const candidates = [
+			row.name,
+			`${row.name}-recovered`,
+			...[2, 3, 4, 5].map((n) => `${row.name}-recovered-${n}`)
+		];
+		let restoredAs: string | null = null;
+		for (const candidate of candidates) {
+			try {
+				await robotArm.restoreRecording({ ...exported, name: candidate });
+				restoredAs = candidate;
+				break;
+			} catch (err) {
+				if (((err as Error).message ?? '').includes('robot-arm 409')) continue;
+				return fail(502, { error: `Could not restore "${row.name}": ${recordingMessage(err)}` });
+			}
+		}
+		if (!restoredAs) {
+			return fail(409, {
+				error: `"${row.name}" and its -recovered names are all taken on the Pi. Rename or delete one first.`
+			});
+		}
+
+		await RobotArmDeletedRecording.updateOne(
+			{ _id: id },
+			{
+				$set: {
+					recoveredAt: new Date(),
+					recoveredBy: { _id: locals.user._id, username: locals.user.username },
+					recoveredAs: restoredAs
+				}
+			}
+		);
+		await auditRecording(locals.user, 'robot_arm.recording.recover', id, {
+			name: row.name,
+			restoredAs
+		});
+		return {
+			success:
+				restoredAs === row.name
+					? `"${row.name}" recovered to the Pi.`
+					: `"${row.name}" recovered to the Pi as "${restoredAs}" (the original name was taken).`
+		};
+	},
+
 	startTeleop: async ({ request, locals }) => {
 		if (!locals.user) return fail(401, { error: 'Unauthorized' });
 		requirePermission(locals.user, 'manufacturing:write');
