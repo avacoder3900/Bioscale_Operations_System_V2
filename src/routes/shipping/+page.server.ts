@@ -1,6 +1,7 @@
 import { redirect } from '@sveltejs/kit';
 import { connectDB, ShippingLot, ShippingPackage, CartridgeRecord, Customer, AuditLog, generateId } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
+import { ownershipForShipment } from '$lib/server/consumer/ownership';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ locals, url }) => {
@@ -244,6 +245,15 @@ export const actions: Actions = {
 			changedAt: now,
 			newData: { status: 'shipped', 'shipping.packageId': packageId }
 		});
+
+		// Consumer-app ownership (docs/CONSUMER-OWNERSHIP.md): a customer with
+		// one linked app account owns the cartridge outright; a clinic with
+		// several gets it in its unassigned bin; no linked account, no row.
+		if (pkg?.customer?._id) {
+			await ownershipForShipment([cartridgeId], pkg.customer, {
+				kind: 'operator', id: locals.user._id, label: locals.user.username ?? locals.user._id
+			});
+		}
 
 		return { success: true };
 	},

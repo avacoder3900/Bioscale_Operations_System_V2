@@ -1,9 +1,49 @@
-import { error } from '@sveltejs/kit';
+import { error, fail } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
-import { connectDB, CartridgeRecord, CvImage, CvInspection, InventoryTransaction, ReceivingLot, ManufacturingSettings } from '$lib/server/db';
+import { connectDB, CartridgeRecord, CvImage, CvInspection, InventoryTransaction, ReceivingLot, ManufacturingSettings, CartridgeOwnership, Customer, AppUser, AppSubject } from '$lib/server/db';
 import { getR2Url } from '$lib/server/services/r2';
 import { getCartridgeTimings } from '$lib/utils/cartridge-timings';
-import type { PageServerLoad } from './$types';
+import { releaseOwnership } from '$lib/server/consumer/ownership';
+import type { PageServerLoad, Actions } from './$types';
+
+/**
+ * Consumer-app ownership rows for this cartridge (docs/CONSUMER-OWNERSHIP.md),
+ * labelled from the read-only mirrors of the app's collections. The patient
+ * name is PHI and is shown only here, to cartridgeAdmin:read holders.
+ */
+async function loadOwnership(cartridgeId: string) {
+	const rows = (await CartridgeOwnership.find({ cartridgeId }).sort({ claimedAt: -1 }).lean()) as any[];
+	if (!rows.length) return { current: null, history: [] };
+	const customerIds = [...new Set(rows.map((r) => r.customerId).filter(Boolean))];
+	const accountIds = [...new Set(rows.map((r) => r.accountId).filter(Boolean))];
+	const subjectIds = [...new Set(rows.map((r) => r.subjectId).filter(Boolean))];
+	const [customers, accounts, subjects] = await Promise.all([
+		customerIds.length ? Customer.find({ _id: { $in: customerIds } }).select('name').lean() as Promise<any[]> : [],
+		accountIds.length ? AppUser.find({ _id: { $in: accountIds } }).select('signInEmail name').lean() as Promise<any[]> : [],
+		subjectIds.length ? AppSubject.find({ _id: { $in: subjectIds } }).select('displayName').lean() as Promise<any[]> : []
+	]);
+	const name = (list: any[], id: string | null, key: string) => (id ? list.find((x) => x._id === id)?.[key] ?? null : null);
+	const shaped = rows.map((r) => ({
+		id: r._id,
+		open: Boolean(r.open),
+		source: r.source,
+		matchedShipment: Boolean(r.matchedShipment),
+		accountId: r.accountId ?? null,
+		accountEmail: name(accounts, r.accountId, 'signInEmail'),
+		accountName: name(accounts, r.accountId, 'name'),
+		customerId: r.customerId ?? null,
+		customerName: name(customers, r.customerId, 'name'),
+		subjectId: r.subjectId ?? null,
+		subjectName: name(subjects, r.subjectId, 'displayName'),
+		claimedAt: r.claimedAt ? new Date(r.claimedAt).toISOString() : null,
+		claimedBy: r.claimedBy?.label ?? null,
+		releasedAt: r.releasedAt ? new Date(r.releasedAt).toISOString() : null,
+		releasedBy: r.releasedBy?.label ?? null,
+		releaseReason: r.releaseReason ?? null,
+		releaseNote: r.releaseNote ?? null
+	}));
+	return { current: shaped.find((r) => r.open) ?? null, history: shaped };
+}
 
 export const load: PageServerLoad = async ({ locals, params }) => {
 	requirePermission(locals.user, 'cartridgeAdmin:read');
@@ -13,7 +53,7 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 	if (!cartridge) throw error(404, 'Cartridge not found');
 
 	// Parallel queries
-	const [images, inspections, transactions, settingsDoc] = await Promise.all([
+	const [images, inspections, transactions, settingsDoc, ownership] = await Promise.all([
 		CvImage.find({ 'cartridgeTag.cartridgeRecordId': params.cartridgeId })
 			.sort({ capturedAt: 1 })
 			.lean(),
@@ -23,7 +63,8 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 		InventoryTransaction.find({ cartridgeRecordId: params.cartridgeId })
 			.sort({ performedAt: 1 })
 			.lean(),
-		ManufacturingSettings.findById('default').lean()
+		ManufacturingSettings.findById('default').lean(),
+		loadOwnership(params.cartridgeId)
 	]);
 
 	// Informational-only timing metrics (cool time for wax, seal time for
@@ -188,8 +229,26 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 		)),
 		transactions: JSON.parse(JSON.stringify(transactions)),
 		linkedLots: JSON.parse(JSON.stringify(linkedLots)),
-		timings: JSON.parse(JSON.stringify(timings))
+		timings: JSON.parse(JSON.stringify(timings)),
+		ownership
 	};
+};
+
+export const actions: Actions = {
+	/** Operator override: close the open ownership row (the person loses access in the app). */
+	releaseOwnership: async ({ request, locals, params }) => {
+		requirePermission(locals.user, 'cartridgeAdmin:write');
+		await connectDB();
+		const fd = await request.formData();
+		const note = String(fd.get('note') ?? '').trim();
+		if (!note) return fail(400, { error: 'A reason is required to release ownership' });
+		const outcome = await releaseOwnership({
+			cartridgeId: params.cartridgeId, reason: 'operator', note,
+			actor: { kind: 'operator', id: locals.user!._id, label: locals.user!.username ?? locals.user!._id }
+		});
+		if (!outcome.ok) return fail(404, { error: 'No open ownership on this cartridge' });
+		return { success: true, message: 'Ownership released' };
+	}
 };
 
 export const config = { maxDuration: 60 };

@@ -184,3 +184,13 @@ export { BucketTransaction } from './bucket-transaction.js';
 export { OperatorBadge } from './operator-badge.js';
 export { Custody } from './custody.js';
 export { ThermosealRoll } from './thermoseal-roll.js';
+
+// Consumer-app ownership (docs/CONSUMER-OWNERSHIP.md): which app account / patient
+// a cartridge belongs to, and which accounts belong to which customer.
+export { CartridgeOwnership } from './cartridge-ownership.js';
+export { CustomerAccount, CUSTOMER_ACCOUNT_ROLES } from './customer-account.js';
+export type { CustomerAccountRole } from './customer-account.js';
+export { ConsumerInvite } from './consumer-invite.js';
+export { ConsumerClaimAttempt } from './consumer-claim-attempt.js';
+export { AppUser } from './app-user.js';
+export { AppSubject } from './app-subject.js';

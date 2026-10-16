@@ -211,6 +211,92 @@
 		{/if}
 	</TronCard>
 
+	<!-- Consumer-app access (docs/CONSUMER-OWNERSHIP.md) -->
+	<TronCard>
+		<h3 class="tron-text-primary mb-1 font-mono text-lg font-bold">
+			App access
+			<span class="ml-2 inline-block rounded-full bg-[var(--color-tron-cyan)] px-2 py-0.5 text-xs text-black">
+				{data.appAccess.accounts.length}
+			</span>
+		</h3>
+		<p class="tron-text-muted mb-4 text-sm">
+			Bioscale app accounts linked to this customer. One linked account owns every cartridge shipped here;
+			several (a clinic) see shipped cartridges in their unassigned bin and assign them to patients in the app.
+			{data.appAccess.ownedCartridges} cartridge{data.appAccess.ownedCartridges === 1 ? '' : 's'} currently owned.
+		</p>
+
+		{#if form?.inviteLink}
+			<div class="mb-4 rounded border border-[var(--color-tron-green)] bg-[rgba(0,255,136,0.08)] p-3">
+				<p class="text-sm text-[var(--color-tron-green)]">
+					Invite for <span class="font-mono">{form.inviteEmail}</span> — send them this link (valid 7 days, shown once):
+				</p>
+				<input readonly value={form.inviteLink} class="tron-input mt-2 w-full font-mono text-xs" onclick={(e) => (e.currentTarget as HTMLInputElement).select()} />
+			</div>
+		{/if}
+
+		<form method="POST" action="?/inviteApp" use:enhance class="mb-4 flex flex-wrap items-end gap-2">
+			<div class="min-w-[16rem] flex-1">
+				<label class="tron-text-muted mb-1 block text-sm" for="inviteEmail">Invite by email</label>
+				<input id="inviteEmail" name="email" type="email" required placeholder="person@example.com" class="tron-input w-full" />
+			</div>
+			<div>
+				<label class="tron-text-muted mb-1 block text-sm" for="inviteRole">Role</label>
+				<select id="inviteRole" name="role" class="tron-input">
+					<option value="member">Member (own tests)</option>
+					<option value="admin">Clinic admin</option>
+					<option value="staff">Clinic staff</option>
+				</select>
+			</div>
+			<TronButton type="submit" variant="primary">Create invite</TronButton>
+		</form>
+
+		{#if data.appAccess.accounts.length > 0}
+			<div class="overflow-x-auto">
+				<table class="tron-table">
+					<thead>
+						<tr><th>Account</th><th>Role</th><th>Linked</th><th>Last sign-in</th><th></th></tr>
+					</thead>
+					<tbody>
+						{#each data.appAccess.accounts as a (a.id)}
+							<tr>
+								<td class="text-sm">
+									{a.email}
+									{#if a.name}<span class="tron-text-muted block text-xs">{a.name}</span>{/if}
+								</td>
+								<td><TronBadge variant={a.role === 'admin' ? 'info' : 'neutral'}>{a.role}</TronBadge></td>
+								<td class="text-sm">{formatDate(a.linkedAt)}</td>
+								<td class="text-sm">{formatDate(a.lastSignInAt)}</td>
+								<td>
+									<form method="POST" action="?/revokeApp" use:enhance>
+										<input type="hidden" name="linkId" value={a.id} />
+										<button type="submit" class="text-xs text-[var(--color-tron-red)] hover:underline">Revoke</button>
+									</form>
+								</td>
+							</tr>
+						{/each}
+					</tbody>
+				</table>
+			</div>
+		{:else}
+			<p class="tron-text-muted py-2 text-center text-sm">No app accounts linked yet</p>
+		{/if}
+
+		{#if data.appAccess.invites.length > 0}
+			<h4 class="tron-text-muted mt-4 mb-2 text-xs font-semibold uppercase tracking-wider">Pending invites</h4>
+			<ul class="space-y-1">
+				{#each data.appAccess.invites as i (i.id)}
+					<li class="flex items-center justify-between rounded border border-[var(--color-tron-border)] px-3 py-2 text-sm">
+						<span>{i.email} <TronBadge variant="neutral">{i.role}</TronBadge> <span class="tron-text-muted text-xs">expires {formatDate(i.expiresAt)}</span></span>
+						<form method="POST" action="?/revokeInvite" use:enhance>
+							<input type="hidden" name="inviteId" value={i.id} />
+							<button type="submit" class="text-xs text-[var(--color-tron-red)] hover:underline">Revoke</button>
+						</form>
+					</li>
+				{/each}
+			</ul>
+		{/if}
+	</TronCard>
+
 	<!-- Notes -->
 	<TronCard>
 		<h3 class="tron-text-primary mb-4 font-mono text-lg font-bold">
