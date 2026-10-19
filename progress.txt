@@ -21239,3 +21239,11 @@ api/robot-arm/cameras/[name]/depth, api/agent/robot-arm/vision-check, robot-arm-
 npm run check: 14 errors = baseline, none in touched files. vitest: markers 14 + home 8 +
 url invariant = 49 pass. vite build: client + server bundles built (adapter trace OOM'd
 locally — Windows artefact). Not driven against the live arm or a depth camera.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-ei1ety7un-brevitest.vercel.app
+Source: branch feat/arm-marker-calibration @ commit fa54a216
+Retrieve this exact code: git checkout feat/arm-marker-calibration at commit fa54a216
+  (or: git log feat/arm-marker-calibration --oneline to find it if the branch has since moved on)
+What this deployment is for: ARM-04 Vision tab (marker registry, drag-to-calibrate, live
+  tracking, home check / return to home) for hardware testing before merge. Smoke: /login 200,
+  Vision tab 302 → login when signed out, agent vision-check 401 without key.
