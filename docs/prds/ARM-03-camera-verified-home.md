@@ -1,6 +1,6 @@
 # ARM-03 — Camera-verified HOME calibration on the Control page
 
-**Status:** built 2026-10-19 on `feat/arm-home-calibration`; not yet exercised against the live arm.
+**Status:** SUPERSEDED 2026-10-19 by [ARM-04](ARM-04-marker-vision-calibration.md) (sticker-marker tracking). Built 2026-10-19 on `feat/arm-home-calibration`; its code has been removed.
 
 ## 1. Problem
 
