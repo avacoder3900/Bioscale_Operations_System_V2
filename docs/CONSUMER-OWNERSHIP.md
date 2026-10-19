@@ -138,6 +138,11 @@ account is a write to a BIMS-owned collection.
   back to the sign-in email (`dataEmail()`). The sign-in email is not editable: the app rewrites it
   from the identity provider on every sign-in, and the account is keyed by `provider:sub`, not
   email. If the person later changes the address in the app, the app's own verification rules apply.
+- **Bulk assign** (2026-10-19): the account page's assign box is a textarea — scan cartridges one
+  after another (each scan lands on its own line; spaces, commas or semicolons also separate), up to
+  200 at a time. A token carrying a UUID (a QR URL) is reduced to it; duplicates are dropped. Each id
+  goes through `assignOwnership` on its own and the page lists the outcome per cartridge, so one bad
+  id never stops the rest.
 - **Assigning cartridges** (2026-10-16): the account page has an *Assign a cartridge* form (cartridge
   id, optional note, *replace current owner*); the DHR page has the mirror form (account email or id).
   Both call `assignOwnership` — see "How a row gets created".

@@ -21136,3 +21136,18 @@ request before commit — nothing of it shipped.)
 Files: src/lib/server/consumer/accounts.ts, src/routes/app-accounts/[accountId]/
 +page.server.ts + +page.svelte, src/lib/server/db/models/app-user.ts (comment),
 docs/CONSUMER-OWNERSHIP.md. npm run check: 14 errors = baseline, none in touched files.
+
+================================================================================
+2026-10-19 — feat/app-account-email — Bulk-assign cartridges to an app account by scanning
+================================================================================
+The "Assign a cartridge" input on /app-accounts/[accountId] is now a scan box (textarea):
+scan cartridge after cartridge — each scan lands on its own line — and one Assign assigns
+them all (max 200). Server (assign action) splits on newlines/spaces/commas/semicolons,
+reduces a token carrying a UUID (QR URL) to the UUID, drops duplicates, then runs each
+through assignOwnership individually; the page lists per-cartridge outcomes (assigned /
+not found / already owned / QC / voided / not a cartridge id) and keeps the box filled
+when nothing was assigned. Note and "replace current owner" apply to the whole batch.
+Live count of distinct ids next to the label and on the button.
+Files: src/routes/app-accounts/[accountId]/+page.server.ts + +page.svelte,
+docs/CONSUMER-OWNERSHIP.md. npm run check: 14 errors = baseline, none in touched files.
+Not driven against a live DB or a hardware scanner.
