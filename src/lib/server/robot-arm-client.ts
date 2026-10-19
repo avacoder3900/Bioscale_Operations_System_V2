@@ -457,6 +457,17 @@ export interface CameraStatus {
 	error: string | null;
 }
 
+// Depth at points, mirroring robot-arm/src/server/depth.py sample().
+export interface DepthSample {
+	available: boolean;
+	units: 'mm';
+	/** One entry per requested point; null = no valid depth there. */
+	depth_mm: (number | null)[];
+	/** e.g. "realsense:Intel RealSense L515 f1234567" */
+	source?: string | null;
+	reason?: string | null;
+}
+
 /**
  * Fetch raw (non-JSON) bytes from the Pi — currently only camera JPEGs.
  *
@@ -675,6 +686,39 @@ export const robotArm = {
 		robotArmFetchBytes(`/cameras/${encodeURIComponent(name)}/snapshot.jpg`, {
 			timeoutMs: 4000
 		}),
+
+	/**
+	 * Depth (lidar) at points of a camera's COLOUR frame (ARM-04). Points are
+	 * normalised [x, y] in 0..1 so the caller never needs the depth sensor's
+	 * own resolution; the Pi maps each one onto the depth image and returns the
+	 * median valid depth around it in millimetres (null where it has none).
+	 *
+	 * The route comes from services/robot-arm/src/server/depth.py, installed
+	 * onto the live Pi by scripts/install_depth_router.py. A Pi without it
+	 * answers FastAPI's bare 404 "Not Found" — that, and a camera with no depth
+	 * sensor, both come back as `available: false`, never as an error: depth
+	 * sharpens the marker check, it is not required for it.
+	 */
+	sampleDepth: async (name: string, points: [number, number][]): Promise<DepthSample> => {
+		try {
+			return await robotArmFetch<DepthSample>(`/cameras/${encodeURIComponent(name)}/depth/sample`, {
+				method: 'POST',
+				body: { points },
+				timeoutMs: 4000
+			});
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err);
+			if (/^robot-arm 404: Not Found/.test(msg)) {
+				return {
+					available: false,
+					units: 'mm',
+					depth_mm: points.map(() => null),
+					reason: 'The Pi has no depth route installed yet (services/robot-arm/scripts/install_depth_router.py).'
+				};
+			}
+			throw err;
+		}
+	},
 
 	/**
 	 * Exchange the API key for a short-lived, camera-only token the browser

@@ -21203,3 +21203,39 @@ Live count of distinct ids next to the label and on the button.
 Files: src/routes/app-accounts/[accountId]/+page.server.ts + +page.svelte,
 docs/CONSUMER-OWNERSHIP.md. npm run check: 14 errors = baseline, none in touched files.
 Not driven against a live DB or a hardware scanner.
+
+================================================================================
+2026-10-19 — feat/arm-marker-calibration — ARM-04: sticker-marker vision calibration replaces ARM-03
+================================================================================
+Rebuilt the arm camera calibration from the ground up (operator found ARM-03's whole-frame
+greyscale match unreliable). New Vision tab at /manufacturing/cart-mfg/robot-arm/vision:
+- Marker registry: operator-defined markers (name, optional free-text group, sticker colour,
+  notes); nothing predefined. robot_arm_markers; archived, never deleted.
+- Calibrate: freeze a frame, click/drag each registered marker onto its sticker (snap to
+  the nearest blob of the sticker colour, arrow-key nudge). Save uploads the exact frozen
+  JPEG; server samples each sticker's colour from it, reads depth at each marker and the
+  follower encoders (arm must be idle/parked at home). One active calibration per camera
+  in robot_arm_vision_calibrations; recalibrating supersedes (history kept) and starts
+  from the old spots, re-found on the new frame.
+- Live tracking in the browser on the snapshot proxy (same-origin → canvas pixels):
+  colour mask → 8-connected blobs → blob nearest the last position; overlay shows each
+  marker vs its calibrated ring; table of px position, offset, depth, Δdepth.
+  Verdicts ok/moved/depth_off/missing; all-same-shift of ≥3 markers → camera_moved.
+- Home check / Return to home (server-side, sharp decode, same tracking code) combine
+  encoder residuals with the markers: home / position_off / markers_off / both /
+  camera_moved / unverified. Agent API GET /api/agent/robot-arm/vision-check (no motion).
+- Depth: the live Pi has no depth route. Added services/robot-arm/src/server/depth.py
+  (RealSense via pyrealsense2, depth-only stream, colour→depth projection) +
+  scripts/install_depth_router.py; BIMS treats the Pi's 404 as "no depth" and checks on
+  the picture only. NOT installed on the Pi yet; camera model assumed RealSense.
+Removed ARM-03: robot-arm-home.ts, robot-arm-home-calibration model, the Control-page
+section + 4 actions (Control now links to Vision). Old collection left untouched, unread.
+Files: src/lib/robot-arm/{markers,home-calibration,frame-grab}.ts (+tests),
+src/lib/server/robot-arm-vision.ts, models robot-arm-marker.ts + robot-arm-vision-calibration.ts,
+src/lib/components/robot-arm/Vision{Stage,LiveTracker,CalibrationEditor,MarkerRegistry}.svelte,
+robot-arm/vision/+page.{server.ts,svelte}, +layout.svelte (tab), control/+page.{server.ts,svelte},
+api/robot-arm/cameras/[name]/depth, api/agent/robot-arm/vision-check, robot-arm-client.ts
+(sampleDepth), docs/prds/ARM-04-marker-vision-calibration.md (ARM-03 PRD marked superseded).
+npm run check: 14 errors = baseline, none in touched files. vitest: markers 14 + home 8 +
+url invariant = 49 pass. vite build: client + server bundles built (adapter trace OOM'd
+locally — Windows artefact). Not driven against the live arm or a depth camera.
