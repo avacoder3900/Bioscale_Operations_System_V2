@@ -21119,3 +21119,30 @@ Retrieve this exact code: git checkout master at commit 44ea635a
 What this deployment is for: ARM-03 camera-verified HOME calibration section on the
   Robot Arm Control page (calibrate / return to home / check / clear). First production
   exposure; not yet driven against the live arm — watch the first Calibrate + Return.
+
+================================================================================
+2026-10-19 — feat/arm-funnel-watchdog — self-healing Tailscale Funnel on arm-pi
+================================================================================
+Context: production BIMS lost the arm again today. 09:17 CDT reboot was the operator
+power-cycling the Pi (expected ~5 min outage; throttled=0x0; journal is not persistent
+so no previous-boot log). BIMS reconnected 14:27 UTC, then failed again 15:09 UTC:
+public DNS now resolves but the Funnel ingress refuses TLS (curl exit 35), and each of
+the two ingress IPs fails intermittently. Tailscale log shows `PollNetMap ... connection
+reset by peer` at 10:05 CDT (15:05 UTC), four minutes before the failure, i.e. the
+control-plane reconnect dropped the public ingress registration. Third occurrence
+(10-15, 10-16, 10-19); the fix each time was `tailscale funnel` off/on.
+
+Built services/robot-arm/scripts/funnel-watchdog/ (Pi-only, no BIMS change):
+- funnel-watchdog.sh: every run skips during a 10-min boot grace and when the arm
+  service is down locally; resolves the Funnel name via DNS-over-HTTPS (dns.google,
+  NOT the Pi's tailnet resolver, which bypasses the ingress) and skips if that is
+  unreachable; calls /health through EVERY public ingress IP. Any failure or no DNS
+  record = one strike; 2 consecutive strikes and no reset in the last 30 min ->
+  `tailscale funnel --https=443 off` + `--bg --https=443 http://127.0.0.1:8000`, then a
+  60 s re-check that is logged. Never restarts services, never moves the arm.
+- funnel-watchdog.service (oneshot, root) + .timer (OnBootSec=10min, every 5 min).
+- install.sh (strips CRLF, installs to /usr/local/bin + /etc/systemd/system, enables).
+- .gitattributes: *.timer eol=lf.
+Verified from the workstation with DRY_RUN=1 against the live Pi (LOCAL_URL pointed
+at arm-pi:8000): strike 1, strike 2 -> dry-run reset + re-check, counter reset, and a
+dead local URL leaves the Funnel alone. bash -n clean. Not yet installed on the Pi.
