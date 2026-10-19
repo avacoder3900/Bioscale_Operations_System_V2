@@ -21121,6 +21121,76 @@ What this deployment is for: ARM-03 camera-verified HOME calibration section on 
   exposure; not yet driven against the live arm — watch the first Calibrate + Return.
 
 ================================================================================
+2026-10-19 — feat/arm-funnel-watchdog — self-healing Tailscale Funnel on arm-pi
+================================================================================
+Context: production BIMS lost the arm again today. 09:17 CDT reboot was the operator
+power-cycling the Pi (expected ~5 min outage; throttled=0x0; journal is not persistent
+so no previous-boot log). BIMS reconnected 14:27 UTC, then failed again 15:09 UTC:
+public DNS now resolves but the Funnel ingress refuses TLS (curl exit 35), and each of
+the two ingress IPs fails intermittently. Tailscale log shows `PollNetMap ... connection
+reset by peer` at 10:05 CDT (15:05 UTC), four minutes before the failure, i.e. the
+control-plane reconnect dropped the public ingress registration. Third occurrence
+(10-15, 10-16, 10-19); the fix each time was `tailscale funnel` off/on.
+
+Built services/robot-arm/scripts/funnel-watchdog/ (Pi-only, no BIMS change):
+- funnel-watchdog.sh: every run skips during a 10-min boot grace and when the arm
+  service is down locally; resolves the Funnel name via DNS-over-HTTPS (dns.google,
+  NOT the Pi's tailnet resolver, which bypasses the ingress) and skips if that is
+  unreachable; calls /health through EVERY public ingress IP. Any failure or no DNS
+  record = one strike; 2 consecutive strikes and no reset in the last 30 min ->
+  `tailscale funnel --https=443 off` + `--bg --https=443 http://127.0.0.1:8000`, then a
+  60 s re-check that is logged. Never restarts services, never moves the arm.
+- funnel-watchdog.service (oneshot, root) + .timer (OnBootSec=10min, every 5 min).
+- install.sh (strips CRLF, installs to /usr/local/bin + /etc/systemd/system, enables).
+- .gitattributes: *.timer eol=lf.
+Verified from the workstation with DRY_RUN=1 against the live Pi (LOCAL_URL pointed
+at arm-pi:8000): strike 1, strike 2 -> dry-run reset + re-check, counter reset, and a
+dead local URL leaves the Funnel alone. bash -n clean. Not yet installed on the Pi.
+
+================================================================================
+2026-10-19 — feat/arm-quick-tunnel — second route to the arm (Cloudflare quick tunnel) + bounded retry
+================================================================================
+Diagnosis of today's 2 h outage (15:09-17:11 UTC): office uplink is Starlink (public IP
+98.97.84.21, AS14593; netcheck UDP true but MappingVariesByDestIP true = hard NAT), so the
+Funnel ingress can only reach the Pi through its DERP relay, and tailscaled logs
+`derp-9 (dfw) ... connection reset by peer` as often as every ~30 s. Ingress requests
+landing during a reset die mid-TLS (curl 35 / "unexpected eof"). Funnel off/on and a
+tailscaled restart did not help; it self-healed. Tailnet Lock is off (the
+invalid-packet-filter warning clears within the same second; noise). The funnel
+watchdog stays installed (fixes the 10-15 class) but cannot fix this class.
+
+Option B (operator has no Cloudflare account/domain, so a no-account quick tunnel):
+- Pi: services/robot-arm/scripts/arm-tunnel/ — arm_tunnel.py runs
+  `cloudflared tunnel --url http://127.0.0.1:8000`, parses the random trycloudflare URL,
+  waits for /health through it, POSTs it to BIMS, heartbeats every 5 min; exits (systemd
+  restarts) if cloudflared dies. arm-tunnel.service (User=brevitest3, Restart=always),
+  install.sh (installs cloudflared .deb, pulls ROBOT_ARM_API_KEY from the running
+  robot-arm process env or ~/robot-arm/.env into /etc/arm-tunnel.env mode 600).
+- BIMS: POST /api/robot-arm/tunnel (x-api-key == ROBOT_ARM_API_KEY, timing-safe; URL must
+  match https://<name>.trycloudflare.com since BIMS sends the key to it), new model
+  RobotArmEndpoint (robot_arm_endpoints, _id 'tunnel'), AuditLog row on URL change only.
+- robot-arm-client.ts: routes = [tunnel (if registered < 15 min ago), Funnel], last-good
+  route first. Option D bounded retry: max 3 attempts alternating routes, all inside the
+  caller's single timeoutMs budget (worst-case page time unchanged; a timeout does not
+  retry). GET retries on network errors and Cloudflare 502/503/504/530; POST/DELETE
+  (motion, GPIO, delete) only re-send when the failure was before the request could reach
+  the Pi (DNS/refused/connect-timeout/TLS-handshake drop, or Cloudflare 530). Also fixed:
+  a non-JSON error page made robotArmFetch throw "Unexpected token" instead of the status.
+  Control page shows/logs the route actually used (currentArmRoute()).
+Tests: new robot-arm-client.routes.test.ts (9 cases incl. "never re-send a POST that
+failed mid-request"); robot-arm suite 36/36. End-to-end on the office Starlink link: real
+cloudflared quick tunnel from the workstation to arm-pi:8000 + a local fake BIMS: URL
+parsed, /health through the tunnel 3/3, registration POST received.
+`npm run check`: 13 errors / 429 warnings = baseline, zero in touched files.
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit 649f4952 (merge of feat/arm-quick-tunnel)
+Retrieve this exact code: git checkout master at commit 649f4952
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: /api/robot-arm/tunnel registration + two-route robot-arm
+client with bounded retry. Verified unauthenticated POST -> 401. Pi arm-tunnel install pending.
+
+================================================================================
 2026-10-19 — feat/app-account-email — Change an app account's results email from BIMS
 ================================================================================
 /app-accounts/[accountId] Identity card gains "Change results email" (customer:write).

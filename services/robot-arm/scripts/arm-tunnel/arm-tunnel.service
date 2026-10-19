@@ -1,0 +1,14 @@
+[Unit]
+Description=Cloudflare quick tunnel for the robot-arm service (registers its URL with BIMS)
+After=network-online.target robot-arm.service
+Wants=network-online.target
+
+[Service]
+User=brevitest3
+EnvironmentFile=/etc/arm-tunnel.env
+ExecStart=/usr/bin/python3 /usr/local/bin/arm_tunnel.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
