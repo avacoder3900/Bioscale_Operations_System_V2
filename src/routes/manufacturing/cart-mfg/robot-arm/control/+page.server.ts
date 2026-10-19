@@ -6,12 +6,16 @@
  * pipeline; the run shows up in /manufacturing/cart-mfg/robot-arm/runs.
  */
 import { fail, redirect } from '@sveltejs/kit';
-import { env } from '$env/dynamic/private';
 import { connectDB } from '$lib/server/db/connection';
 import { AuditLog, DeviceEvent, generateId } from '$lib/server/db';
 import { RobotArmDataset, RobotArmDeletedRecording } from '$lib/server/db/models';
 import { requirePermission } from '$lib/server/permissions';
-import { robotArm, recordingStem, type RecordingExport } from '$lib/server/robot-arm-client';
+import {
+	robotArm,
+	recordingStem,
+	currentArmRoute,
+	type RecordingExport
+} from '$lib/server/robot-arm-client';
 // Via the Worker, not the S3 client: production's direct R2 credentials are
 // not valid, and the Worker is the path the rest of the app uploads through.
 import { uploadViaWorker, downloadViaWorker } from '$lib/server/services/r2';
@@ -124,7 +128,7 @@ async function recordConnection(
 				dryRun: preflight?.checks?.dry_run?.value ?? null,
 				leaderOk: preflight?.checks?.leader_port?.ok ?? null,
 				followerOk: preflight?.checks?.follower_port?.ok ?? null,
-				baseUrl: env.ROBOT_ARM_BASE_URL ?? null,
+				baseUrl: currentArmRoute(),
 				// The mechanism that observed this, deliberately NOT the user who was
 				// looking — a connection log should not become a surveillance log.
 				observedBy: 'control-page-load'
@@ -234,7 +238,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 		preflightError: preflightResult.preflightError,
 		// Surfaced so the panel can name the endpoint it failed to reach. Not a
 		// secret — the API key is what guards the Pi, and that never leaves here.
-		armBaseUrl: env.ROBOT_ARM_BASE_URL ?? null,
+		armBaseUrl: currentArmRoute(),
 		tasks,
 		holder,
 		currentUserId: locals.user._id,
