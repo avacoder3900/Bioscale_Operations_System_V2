@@ -21298,3 +21298,10 @@ deck-calibration/+page.server.ts resolveWellIssues. sacred.test.ts (5 cases: blo
 finalized, opt-in passes + option removed, non-true value refused, deletes always blocked).
 npm run check 16 = baseline. Built in git worktree /Users/brevitest/github/bims-wt-studio-resolve (branch
 fix/studio-resolve-finalized-runs); not committed.
+
+Deployment: production — Vercel GitHub integration, from the push of master
+Source: branch master @ commit 33538e38 (merge of fix/studio-resolve-finalized-runs f8d17854)
+Retrieve this exact code: git checkout master at commit 33538e38
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: Deck Calibration Studio can resolve well-tracker errors on
+  finalized reagent runs (all 57 open errors were on finalized records).
