@@ -71,17 +71,38 @@
 		}
 	}
 
-	function handleBlur() {
-		// Re-focus after a short delay (for barcode scanner workflows)
-		if (!disabled) {
-			setTimeout(() => inputElement?.focus(), 100);
-		}
+	/**
+	 * Focus went somewhere the user chose on purpose: a link (navigation), a
+	 * field they want to type in, or anything editable. Taking focus back from
+	 * those breaks the page — on /spu/[id] the "View Diagnostics" link sits far
+	 * below this box, and the old unconditional refocus scrolled the box back
+	 * into view between mousedown and mouseup, so the click never landed
+	 * (2026-10-19). Buttons are deliberately not in this list: on a bench the
+	 * next scan should still land here after pressing one.
+	 */
+	function keepsFocus(el: EventTarget | null): boolean {
+		const node = el as HTMLElement | null;
+		if (!node || node === inputElement) return false;
+		if (node.isContentEditable) return true;
+		return ['A', 'INPUT', 'TEXTAREA', 'SELECT'].includes(node.tagName);
+	}
+
+	function handleBlur(e: FocusEvent) {
+		// Re-focus after a short delay (for barcode scanner workflows), but only
+		// when focus did not move to a link or another field, and the window
+		// itself still has focus. Never scroll the page to do it.
+		if (disabled || keepsFocus(e.relatedTarget)) return;
+		setTimeout(() => {
+			if (disabled || !inputElement || !document.hasFocus()) return;
+			if (keepsFocus(document.activeElement)) return;
+			inputElement.focus({ preventScroll: true });
+		}, 100);
 	}
 
 	$effect(() => {
-		// Auto-focus on mount
-		if (inputElement && !disabled) {
-			inputElement.focus();
+		// Auto-focus on mount (and when re-enabled) without scrolling the page.
+		if (inputElement && !disabled && !keepsFocus(document.activeElement)) {
+			inputElement.focus({ preventScroll: true });
 		}
 	});
 </script>

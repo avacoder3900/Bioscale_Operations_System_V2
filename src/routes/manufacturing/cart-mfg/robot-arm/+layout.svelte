@@ -52,6 +52,12 @@
 			icon: 'M12 3v3m0 12v3M3 12h3m12 0h3m-3 0a6 6 0 11-12 0 6 6 0 0112 0z'
 		},
 		{
+			// ARM-04 — sticker-marker calibration, live tracking, home check.
+			href: `${BASE}/vision`,
+			label: 'Vision',
+			icon: 'M15 12a3 3 0 11-6 0 3 3 0 016 0zm-3-7C7 5 3.3 8.1 2 12c1.3 3.9 5 7 10 7s8.7-3.1 10-7c-1.3-3.9-5-7-10-7z'
+		},
+		{
 			href: `${BASE}/runs`,
 			label: 'Runs',
 			icon: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01'
