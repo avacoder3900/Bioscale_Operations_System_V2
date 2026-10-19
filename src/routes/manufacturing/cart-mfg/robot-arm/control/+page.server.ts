@@ -13,6 +13,13 @@ import { RobotArmDataset } from '$lib/server/db/models';
 import { requirePermission } from '$lib/server/permissions';
 import { robotArm } from '$lib/server/robot-arm-client';
 import { deriveArmHolder } from '$lib/server/robot-arm-lock';
+import {
+	captureHomeCalibration,
+	checkHome,
+	clearHomeCalibration,
+	loadHomeCalibration,
+	returnToHome
+} from '$lib/server/robot-arm-home';
 import type { Actions, PageServerLoad } from './$types';
 
 // Connection log. Recorded here rather than pushed by the Pi, because the event
@@ -126,6 +133,16 @@ async function recordConnection(
 	}
 }
 
+// Camera-verified home calibration (one Mongo record). Never throws: a Mongo
+// hiccup must not take the control page down with it.
+async function safeHomeCalibration() {
+	try {
+		return { homeCalibration: await loadHomeCalibration(), homeCalibrationError: null };
+	} catch (err) {
+		return { homeCalibration: null, homeCalibrationError: (err as Error).message };
+	}
+}
+
 async function safeTasks() {
 	try {
 		const res = await robotArm.listTasks();
@@ -140,7 +157,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 	requirePermission(locals.user, 'manufacturing:read');
 	await connectDB();
 
-	const [activeResult, piRecordings, dbDatasets, preflightResult, tasks, holder, logRows] =
+	const [activeResult, piRecordings, dbDatasets, preflightResult, tasks, holder, home, logRows] =
 		await Promise.all([
 			safeActive(),
 			safeRecordings(),
@@ -148,6 +165,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 			safePreflight(),
 			safeTasks(),
 			deriveArmHolder(),
+			safeHomeCalibration(),
 			DeviceEvent.find({ deviceId: ARM_DEVICE_ID, eventType: ARM_CONNECTION_EVENT })
 				.select('_id success errorMessage eventData createdAt')
 				.sort({ createdAt: -1 })
@@ -208,7 +226,9 @@ export const load: PageServerLoad = async ({ locals }) => {
 		holder,
 		currentUserId: locals.user._id,
 		connectionLog: JSON.parse(JSON.stringify(connectionLog)),
-		lastConnected
+		lastConnected,
+		homeCalibration: home.homeCalibration,
+		homeCalibrationError: home.homeCalibrationError
 	};
 };
 
@@ -455,6 +475,75 @@ export const actions: Actions = {
 			};
 		} catch (err) {
 			return fail(gpioStatus(err), { error: gpioMessage(err) });
+		}
+	},
+
+	// ── Camera-verified HOME calibration ──────────────────────────────────
+	// The operator places the arm at its zero (Jog tab, or torque off and by
+	// hand), then captures. The encoders AND the arm camera's view are stored,
+	// so a later return-to-home is verified by the picture, not only the
+	// servos' own report. Recalibrate only when the camera or the setup moves.
+	calibrateHome: async ({ request, locals }) => {
+		if (!locals.user) return fail(401, { error: 'Unauthorized' });
+		requirePermission(locals.user, 'manufacturing:write');
+		const data = await request.formData();
+		const cameraName = data.get('camera')?.toString().trim() || null;
+		const note = data.get('note')?.toString().trim() || null;
+		try {
+			const { summary, cameraWarning } = await captureHomeCalibration(
+				{ _id: locals.user._id, username: locals.user.username },
+				{ cameraName, note }
+			);
+			return {
+				success: cameraWarning
+					? `Home calibrated from the encoders. ${cameraWarning}`
+					: `Home calibrated with camera "${summary.cameraName}" as the reference.`,
+				homeResult: null
+			};
+		} catch (err) {
+			const msg = (err as Error).message;
+			return fail(msg.includes('busy') ? 409 : 502, { error: `Calibrate home failed: ${msg}` });
+		}
+	},
+
+	// The arm MOVES: one bounded jog per joint to the taught steps, then the
+	// encoders and the camera are checked. Any manufacturing:write user may
+	// send it; the Pi refuses while a session holds the bus.
+	returnHome: async ({ locals }) => {
+		if (!locals.user) return fail(401, { error: 'Unauthorized' });
+		requirePermission(locals.user, 'manufacturing:write');
+		try {
+			const r = await returnToHome({ _id: locals.user._id, username: locals.user.username });
+			const payload = { homeResult: r };
+			return r.assessment.verdict === 'home' ? { success: r.message, ...payload } : { warning: r.message, ...payload };
+		} catch (err) {
+			const msg = (err as Error).message;
+			const status = msg.includes('robot-arm 409') || msg.includes('busy') ? 409 : 502;
+			return fail(status, { error: `Return to home failed: ${msg}` });
+		}
+	},
+
+	// No motion: where is the arm relative to home, and does the camera agree?
+	checkHome: async ({ locals }) => {
+		if (!locals.user) return fail(401, { error: 'Unauthorized' });
+		requirePermission(locals.user, 'manufacturing:write');
+		try {
+			const r = await checkHome({ _id: locals.user._id, username: locals.user.username });
+			const payload = { homeResult: r };
+			return r.assessment.verdict === 'home' ? { success: r.message, ...payload } : { warning: r.message, ...payload };
+		} catch (err) {
+			return fail(502, { error: `Home check failed: ${(err as Error).message}` });
+		}
+	},
+
+	clearHome: async ({ locals }) => {
+		if (!locals.user) return fail(401, { error: 'Unauthorized' });
+		requirePermission(locals.user, 'manufacturing:write');
+		try {
+			const removed = await clearHomeCalibration({ _id: locals.user._id, username: locals.user.username });
+			return { success: removed ? 'Home calibration cleared.' : 'There was no home calibration to clear.', homeResult: null };
+		} catch (err) {
+			return fail(500, { error: (err as Error).message });
 		}
 	},
 

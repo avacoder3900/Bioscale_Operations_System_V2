@@ -20976,3 +20976,24 @@ under Identity, above Account type. Layout only. svelte-check 14 errors = baseli
 Note: bioscale-app main (fd785a5, PR #4 merge) shows Vercel "Deployment was blocked" — the
 GitHub merges are authored by Samantha Wolf, not a Vercel team member; redeploy main from the
 Vercel dashboard.
+
+================================================================================
+2026-10-19 — feat/arm-home-calibration — ARM-03: camera-verified HOME calibration on the arm Control page
+================================================================================
+New section at the top of /manufacturing/cart-mfg/robot-arm/control. Operator parks the
+arm at zero and presses Calibrate home: BIMS stores the follower encoder steps (servos
+1–5, GET /pose) plus the arm camera's view — a 32×24 greyscale signature and a thumbnail
+in Mongo (robot_arm_home_calibrations, one record 'default'), full frame to R2
+best-effort. Return to home: torque on, one bounded jog per joint to the taught steps
+(the live Pi has no absolute move route — only POST /servos/{id}/jog), settle, re-read,
+fresh frame scored against the signature (Pearson, brightness-invariant). Verdict = home
+/ position_off / camera_mismatch / both, with reference + current frames side by side and
+per-joint residuals. Check without moving does the verification alone. Recalibrate only
+when the camera or setup moves; Clear removes the record. All four actions audited;
+gated on arm reachable + nobody holding the bus; manufacturing:write.
+Files: src/lib/robot-arm/home-calibration.ts (+test, 11), src/lib/server/robot-arm-home.ts,
+src/lib/server/db/models/robot-arm-home-calibration.ts (+index export),
+control/+page.server.ts, control/+page.svelte, docs/prds/ARM-03-camera-verified-home.md.
+npm run check: no errors in the new files (repo baseline unchanged). vitest arm suites: 53.
+NOT driven against the live arm: local ROBOT_ARM_API_KEY is stale (401) and the Pi had a
+replay running; a hardware pass is the next step (see PRD §6).
