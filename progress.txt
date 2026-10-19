@@ -21111,3 +21111,11 @@ control/+page.server.ts, control/+page.svelte, docs/prds/ARM-03-camera-verified-
 npm run check: no errors in the new files (repo baseline unchanged). vitest arm suites: 53.
 NOT driven against the live arm: local ROBOT_ARM_API_KEY is stale (401) and the Pi had a
 replay running; a hardware pass is the next step (see PRD §6).
+
+Deployment: production — Vercel GitHub integration, from the push of master
+Source: branch master @ commit 44ea635a (merge of feat/arm-home-calibration f350a96b)
+Retrieve this exact code: git checkout master at commit 44ea635a
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: ARM-03 camera-verified HOME calibration section on the
+  Robot Arm Control page (calibrate / return to home / check / clear). First production
+  exposure; not yet driven against the live arm — watch the first Calibrate + Return.
