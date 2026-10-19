@@ -159,6 +159,50 @@ export async function unblockAccount(input: { accountId: string; operator: Opera
 }
 
 // ---------------------------------------------------------------------------
+// Results email (2026-10-19). The app keeps two addresses on `app_users`: the
+// sign-in email, which the identity provider supplies and the app rewrites on
+// every sign-in (so BIMS never edits it), and the Bioscale "results" email,
+// which the person can change on the app's account page — where any address
+// other than the sign-in email stays unverified until they open a link. Staff
+// setting it here vouch for the address, so it is written verified. Fields
+// follow bioscale-app src/lib/server/profile.ts; ensureProfile() spreads the
+// stored document, so they survive the next sign-in.
+
+const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/** Set (or, with an empty string, clear) an account's results email. */
+export async function setResultsEmail(input: { accountId: string; email: string; operator: OperatorRef }): Promise<Outcome> {
+	const { accountId, operator } = input;
+	const email = input.email.trim().toLowerCase();
+	if (email && (!EMAIL.test(email) || email.length > 254)) return { ok: false, error: 'That does not look like an email address' };
+	const user = (await AppUser.findById(accountId).select('bioscaleEmail bioscaleEmailVerifiedAt').lean()) as any;
+	if (!user) return { ok: false, error: 'Account not found' };
+	const previous = user.bioscaleEmail ?? null;
+	if ((email || null) === previous && (!email || user.bioscaleEmailVerifiedAt)) return { ok: true, message: 'No change' };
+	const now = new Date();
+	await AppUser.updateOne(
+		{ _id: accountId },
+		{
+			$set: {
+				bioscaleEmail: email || null,
+				bioscaleEmailVerifiedAt: email ? now : null,
+				pending: null,
+				updatedAt: now,
+				bioscaleEmailSetBy: email ? { ...operator, at: now } : null
+			}
+		}
+	);
+	await AuditLog.create({
+		_id: generateId(),
+		tableName: 'app_users', recordId: accountId, action: 'SET_RESULTS_EMAIL',
+		changedBy: operator.username, changedAt: now,
+		oldData: { bioscaleEmail: previous, verified: Boolean(user.bioscaleEmailVerifiedAt) },
+		newData: { bioscaleEmail: email || null, verified: Boolean(email) }
+	});
+	return { ok: true, message: email ? `Results email set to ${email} (verified by BIMS)` : 'Results email cleared — the sign-in email is used' };
+}
+
+// ---------------------------------------------------------------------------
 // Dev accounts (temporary, 2026-10-16): an app account that exists only so
 // staff can see the app from a user's point of view. Created and removed
 // from BIMS /app-accounts; opened through the "view as" door (view-as.ts),

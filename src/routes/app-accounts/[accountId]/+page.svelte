@@ -47,7 +47,20 @@
 				<div><dt class="tron-text-muted">Dev account</dt><dd class="tron-text-primary mt-1">Created in BIMS{#if a.devCreatedBy} by {a.devCreatedBy}{/if}. No real person signs in to it.</dd></div>
 			{/if}
 		</dl>
-		<p class="tron-text-muted mt-3 text-xs">Profile fields are owned by the app; the person edits them there. BIMS manages what is below.</p>
+		{#if data.canWrite}
+			<form method="POST" action="?/setEmail" use:enhance class="mt-4 flex flex-wrap items-end gap-2 border-t border-[var(--color-tron-border)] pt-4">
+				<div class="min-w-[16rem] flex-1">
+					<label class="tron-text-muted mb-1 block text-sm" for="resultsEmail">Change results email</label>
+					<input id="resultsEmail" name="email" type="email" value={a.bioscaleEmail ?? ''} class="tron-input w-full" placeholder={a.email || 'name@example.com'} />
+				</div>
+				<TronButton type="submit" variant="primary">Save email</TronButton>
+			</form>
+			<p class="tron-text-muted mt-2 text-xs">
+				Saved as verified — you are vouching for the address. Leave it empty to fall back to the sign-in email.
+				The sign-in email comes from {a.provider} and is refreshed by the app on every sign-in, so it can't be changed here.
+			</p>
+		{/if}
+		<p class="tron-text-muted mt-3 text-xs">Other profile fields are owned by the app; the person edits them there. BIMS manages what is below.</p>
 	</TronCard>
 
 	<!-- Cartridges -->

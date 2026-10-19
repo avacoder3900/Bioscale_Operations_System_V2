@@ -7,7 +7,7 @@ import {
 import { assignOwnership, linkAccountToCustomer, releaseOwnership, revokeCustomerLink } from '$lib/server/consumer/ownership';
 import {
 	blockAccount, clinicAccountIds, deleteDevAccount, enrolledUnder, enrollInClinic, isDevAccountId, removeFromClinic,
-	setAccountType, settingsFor, unblockAccount
+	setAccountType, setResultsEmail, settingsFor, unblockAccount
 } from '$lib/server/consumer/accounts';
 import { mintViewAsToken, viewAsConfigured, viewAsUrl } from '$lib/server/consumer/view-as';
 import { CARTRIDGE_ID } from '$lib/server/consumer/http';
@@ -130,6 +130,18 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 const operatorOf = (locals: App.Locals) => ({ _id: locals.user!._id, username: locals.user!.username ?? locals.user!._id });
 
 export const actions: Actions = {
+	/** Set or clear the results (Bioscale) email; written verified — staff vouch for it. */
+	setEmail: async ({ request, locals, params }) => {
+		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'customer:write');
+		await connectDB();
+		const fd = await request.formData();
+		const outcome = await setResultsEmail({
+			accountId: decodeURIComponent(params.accountId), email: String(fd.get('email') ?? ''), operator: operatorOf(locals)
+		});
+		return outcome.ok ? { success: true, message: outcome.message } : fail(400, { error: outcome.error });
+	},
+
 	/** Individual / Clinic / Dev. Dev (every user's results) needs a BIMS admin. */
 	setType: async ({ request, locals, params }) => {
 		if (!locals.user) redirect(302, '/login');
