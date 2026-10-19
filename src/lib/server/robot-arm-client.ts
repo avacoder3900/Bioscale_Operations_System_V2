@@ -2,8 +2,17 @@
 //
 // Set ROBOT_ARM_BASE_URL (e.g. http://arm-pi:8000) and ROBOT_ARM_API_KEY
 // in BIMS .env. The Pi-side env must have ROBOT_ARM_API_KEY matching.
+//
+// Two routes to the Pi (2026-10-19). The office uplink is Starlink and the
+// Pi's Tailscale relay connection is reset every ~30 s, so the Funnel at
+// ROBOT_ARM_BASE_URL fails for minutes-to-hours at a time. The Pi also runs a
+// Cloudflare quick tunnel and registers its (changing) URL in
+// robot_arm_endpoints via POST /api/robot-arm/tunnel. Requests go to whichever
+// route last worked, tunnel first by default, and fall over to the other.
 
 import { env } from '$env/dynamic/private';
+import { connectDB } from './db/connection';
+import { RobotArmEndpoint } from './db/models';
 
 interface FetchOptions {
 	method?: 'GET' | 'POST' | 'DELETE';
@@ -11,43 +20,162 @@ interface FetchOptions {
 	timeoutMs?: number;
 }
 
-function baseUrl(): string {
-	const url = env.ROBOT_ARM_BASE_URL;
-	if (!url) throw new Error('ROBOT_ARM_BASE_URL not set in env');
-	return url.replace(/\/$/, '');
+// The Pi heartbeats its tunnel URL every 5 min; a row older than this means the
+// tunnel (or the Pi) is gone, so don't waste the request budget on it.
+const TUNNEL_MAX_AGE_MS = 15 * 60 * 1000;
+const TUNNEL_CACHE_MS = 30_000;
+
+// Retry limit (option D). Attempts alternate between routes and all share the
+// caller's single timeoutMs budget, so a retry can never push a page past the
+// adapter's 30 s maxDuration.
+const MAX_ATTEMPTS = 3;
+const RETRY_BACKOFF_MS = 300;
+
+let tunnelCache: { url: string | null; at: number } | null = null;
+let lastGoodRoute: string | null = null;
+
+export function invalidateTunnelCache(): void {
+	tunnelCache = null;
+}
+
+async function tunnelUrl(): Promise<string | null> {
+	if (tunnelCache && Date.now() - tunnelCache.at < TUNNEL_CACHE_MS) return tunnelCache.url;
+	let url: string | null = null;
+	try {
+		await connectDB();
+		const row = (await RobotArmEndpoint.findById('tunnel').lean()) as {
+			url?: string;
+			registeredAt?: Date;
+		} | null;
+		if (row?.url && row.registeredAt && Date.now() - new Date(row.registeredAt).getTime() < TUNNEL_MAX_AGE_MS) {
+			url = row.url;
+		}
+	} catch {
+		// A DB hiccup must not take the arm down with it; use the Funnel alone.
+		url = null;
+	}
+	tunnelCache = { url, at: Date.now() };
+	return url;
+}
+
+async function armRoutes(): Promise<string[]> {
+	const routes: string[] = [];
+	const tunnel = await tunnelUrl();
+	if (tunnel) routes.push(tunnel);
+	const funnel = env.ROBOT_ARM_BASE_URL?.replace(/\/$/, '');
+	if (funnel) routes.push(funnel);
+	if (!routes.length) throw new Error('ROBOT_ARM_BASE_URL not set in env');
+	if (lastGoodRoute && routes.includes(lastGoodRoute)) {
+		routes.sort((a, b) => (a === lastGoodRoute ? -1 : b === lastGoodRoute ? 1 : 0));
+	}
+	return routes;
+}
+
+/** The route the last successful request in this instance used, for display/logs. */
+export function currentArmRoute(): string | null {
+	return lastGoodRoute ?? env.ROBOT_ARM_BASE_URL ?? null;
+}
+
+// Failed before the request could have reached the Pi, so even a motion or
+// GPIO command is safe to send again on another route. The Funnel's failure
+// mode (ingress drops the TLS handshake) lands here as ECONNRESET with this
+// message.
+function failedBeforeSend(err: unknown): boolean {
+	const cause = (err as { cause?: { code?: string; message?: string } })?.cause;
+	const code = cause?.code ?? '';
+	const msg = `${(err as Error)?.message ?? ''} ${cause?.message ?? ''}`;
+	return (
+		['ENOTFOUND', 'EAI_AGAIN', 'ECONNREFUSED', 'EHOSTUNREACH', 'ENETUNREACH', 'UND_ERR_CONNECT_TIMEOUT'].includes(code) ||
+		/before secure TLS connection was established/i.test(msg)
+	);
+}
+
+function isAbort(err: unknown): boolean {
+	return (err as Error)?.name === 'AbortError' || (err as Error)?.name === 'TimeoutError';
+}
+
+// Cloudflare's own error pages, not the Pi's answer. 530 means the tunnel had
+// no connection to the Pi at all, so the request never arrived and any method
+// may retry. 502-504 may have reached the Pi, so only reads retry on those.
+function routeFailed(res: Response, idempotent: boolean): boolean {
+	if (!res.headers.get('cf-ray')) return false;
+	if (res.status === 530) return true;
+	return idempotent && [502, 503, 504].includes(res.status);
+}
+
+async function armRequest(
+	path: string,
+	init: { method: string; headers: Record<string, string>; body?: string },
+	timeoutMs: number
+): Promise<Response> {
+	const idempotent = init.method === 'GET';
+	const routes = await armRoutes();
+	const deadline = Date.now() + timeoutMs;
+	let lastErr: unknown = new Error('fetch failed');
+
+	for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+		const remaining = deadline - Date.now();
+		if (remaining <= 0) break;
+		const base = routes[attempt % routes.length];
+		const controller = new AbortController();
+		const timer = setTimeout(() => controller.abort(), remaining);
+		try {
+			const res = await fetch(`${base}${path}`, { ...init, signal: controller.signal });
+			if (routeFailed(res, idempotent)) {
+				lastErr = new Error(`fetch failed (route ${new URL(base).host} returned ${res.status})`);
+				await res.body?.cancel().catch(() => {});
+				continue;
+			}
+			lastGoodRoute = base;
+			return res;
+		} catch (err) {
+			lastErr = err;
+			// A timeout spent the whole budget; a mid-request failure on a
+			// mutation may already have reached the Pi. Neither retries.
+			if (isAbort(err) || (!idempotent && !failedBeforeSend(err))) break;
+			if (lastGoodRoute === base) lastGoodRoute = null;
+			await new Promise((r) => setTimeout(r, Math.min(RETRY_BACKOFF_MS, Math.max(0, deadline - Date.now()))));
+		} finally {
+			clearTimeout(timer);
+		}
+	}
+	throw lastErr;
 }
 
 export async function robotArmFetch<T>(path: string, opts: FetchOptions = {}): Promise<T> {
 	const apiKey = env.ROBOT_ARM_API_KEY;
 	if (!apiKey) throw new Error('ROBOT_ARM_API_KEY not set in env');
 
-	const controller = new AbortController();
-	const timeout = setTimeout(() => controller.abort(), opts.timeoutMs ?? 5000);
-	try {
-		const res = await fetch(`${baseUrl()}${path}`, {
+	const res = await armRequest(
+		path,
+		{
 			method: opts.method ?? 'GET',
 			headers: {
 				'Content-Type': 'application/json',
 				'x-api-key': apiKey
 			},
-			body: opts.body ? JSON.stringify(opts.body) : undefined,
-			signal: controller.signal
-		});
-		const text = await res.text();
-		const data = text ? JSON.parse(text) : null;
-		if (!res.ok) {
-			const detail =
-				typeof data === 'object' && data && 'detail' in data
-					? (data as { detail: unknown }).detail
-					: text;
-			throw new Error(
-				`robot-arm ${res.status}: ${typeof detail === 'string' ? detail : JSON.stringify(detail)}`
-			);
-		}
-		return data as T;
-	} finally {
-		clearTimeout(timeout);
+			body: opts.body ? JSON.stringify(opts.body) : undefined
+		},
+		opts.timeoutMs ?? 5000
+	);
+	const text = await res.text();
+	let data: unknown = null;
+	try {
+		data = text ? JSON.parse(text) : null;
+	} catch {
+		// Proxy error pages (Cloudflare, Tailscale) are HTML; report the status, not a parse error.
+		if (res.ok) throw new Error(`robot-arm ${res.status}: response was not JSON`);
 	}
+	if (!res.ok) {
+		const detail =
+			typeof data === 'object' && data && 'detail' in data
+				? (data as { detail: unknown }).detail
+				: text.slice(0, 200);
+		throw new Error(
+			`robot-arm ${res.status}: ${typeof detail === 'string' ? detail : JSON.stringify(detail)}`
+		);
+	}
+	return data as T;
 }
 
 // Typed convenience wrappers for the Pi endpoints we use.
@@ -343,26 +471,20 @@ export async function robotArmFetchBytes(
 	const apiKey = env.ROBOT_ARM_API_KEY;
 	if (!apiKey) throw new Error('ROBOT_ARM_API_KEY not set in env');
 
-	const controller = new AbortController();
-	const timeout = setTimeout(() => controller.abort(), opts.timeoutMs ?? 5000);
-	try {
-		const res = await fetch(`${baseUrl()}${path}`, {
-			method: 'GET',
-			headers: { 'x-api-key': apiKey },
-			signal: controller.signal
-		});
-		if (!res.ok) {
-			// Error bodies from FastAPI are small JSON/text, safe to read as text.
-			const text = await res.text().catch(() => '');
-			throw new Error(`robot-arm ${res.status}: ${text.slice(0, 200)}`);
-		}
-		return {
-			bytes: await res.arrayBuffer(),
-			contentType: res.headers.get('content-type') ?? 'image/jpeg'
-		};
-	} finally {
-		clearTimeout(timeout);
+	const res = await armRequest(
+		path,
+		{ method: 'GET', headers: { 'x-api-key': apiKey } },
+		opts.timeoutMs ?? 5000
+	);
+	if (!res.ok) {
+		// Error bodies from FastAPI are small JSON/text, safe to read as text.
+		const text = await res.text().catch(() => '');
+		throw new Error(`robot-arm ${res.status}: ${text.slice(0, 200)}`);
 	}
+	return {
+		bytes: await res.arrayBuffer(),
+		contentType: res.headers.get('content-type') ?? 'image/jpeg'
+	};
 }
 
 export const robotArm = {
