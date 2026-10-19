@@ -62,6 +62,35 @@
 	function logTime(iso: string): string {
 		return new Date(iso).toLocaleString();
 	}
+
+	// ── Camera-verified HOME calibration ──────────────────────────────────
+	const home = $derived(data.homeCalibration ?? null);
+	// Motion and capture need the arm reachable and nobody on the bus.
+	const homeBlocked = $derived(!armReachable || data.holder != null || !!active);
+	const homeBlockReason = $derived(
+		!armReachable
+			? 'The arm is unreachable — check the connection panel.'
+			: data.holder != null || active
+				? 'The arm is running something — stop it before calibrating or returning home.'
+				: ''
+	);
+	const homeResult = $derived(form && 'homeResult' in form ? (form.homeResult as any) : null);
+	const homeJoints = $derived(home ? Object.entries(home.jointSteps as Record<string, number>).sort(([a], [b]) => Number(a) - Number(b)) : []);
+	let confirmRecalibrate = $state(false);
+
+	function verdictColor(verdict: string | null | undefined): string {
+		return verdict === 'home' ? '#4ade80' : verdict ? '#f59e0b' : 'var(--color-tron-text-secondary)';
+	}
+	function verdictLabel(verdict: string | null | undefined): string {
+		return (
+			{
+				home: 'AT HOME',
+				position_off: 'POSITION OFF',
+				camera_mismatch: 'CAMERA MISMATCH',
+				position_off_and_camera_mismatch: 'OFF + CAMERA MISMATCH'
+			} as Record<string, string>
+		)[verdict ?? ''] ?? '—';
+	}
 </script>
 
 <div class="mx-auto max-w-7xl space-y-6">
@@ -108,7 +137,11 @@
 				currentUserId={data.currentUserId}
 			/>
 
-			{#if form?.success}
+			{#if form && 'warning' in form && form.warning}
+				<div class="rounded border border-amber-500/40 bg-amber-900/10 p-3 text-sm text-amber-300">
+					{form.warning}
+				</div>
+			{:else if form?.success}
 				<div class="rounded border border-green-500/40 bg-green-900/10 p-3 text-sm text-green-300">
 					{form.success}
 					{#if 'runId' in form && form.runId}
@@ -124,6 +157,208 @@
 					{form.error}
 				</div>
 			{/if}
+
+			<!--
+				Arm Calibration — camera-verified HOME. Sits above the session
+				controls because it is the recovery path for "the arm did not come
+				back to home": the operator parks the arm at zero once, the camera
+				and the encoders remember it, and Return to home drives the arm back
+				to exactly that picture. Recalibrate only when the camera or the
+				setup is moved.
+			-->
+			<section
+				class="rounded border p-3 sm:p-4"
+				style="border-color: var(--color-tron-border); background: var(--color-tron-surface);"
+			>
+				<div class="flex flex-wrap items-start justify-between gap-3">
+					<div>
+						<h2 class="text-sm font-semibold tracking-wide" style="color: var(--color-tron-text)">
+							ARM CALIBRATION — HOME
+						</h2>
+						<p class="mt-1 text-xs" style="color: var(--color-tron-text-secondary)">
+							{#if home}
+								Calibrated {logTime(home.capturedAt)}
+								{#if home.capturedBy?.username}by {home.capturedBy.username}{/if}
+								{#if home.cameraName}· camera <span class="font-mono">{home.cameraName}</span>{:else}· encoders only (no camera reference){/if}
+								{#if home.note}· {home.note}{/if}
+							{:else}
+								Not calibrated. The arm has no camera-verified home yet.
+							{/if}
+						</p>
+					</div>
+					{#if home?.lastCheck}
+						<div class="text-right text-xs" style="color: var(--color-tron-text-secondary)">
+							Last {home.lastCheck.kind === 'return' ? 'return' : 'check'} {logTime(home.lastCheck.at)}
+							{#if home.lastCheck.by?.username}by {home.lastCheck.by.username}{/if}
+							<div class="font-semibold" style="color: {verdictColor(home.lastCheck.verdict)}">
+								{verdictLabel(home.lastCheck.verdict)}
+								{#if home.lastCheck.similarity != null}· camera {(home.lastCheck.similarity * 100).toFixed(0)}%{/if}
+								{#if home.lastCheck.residualMax != null}· {home.lastCheck.residualMax} steps{/if}
+							</div>
+						</div>
+					{/if}
+				</div>
+
+				{#if data.homeCalibrationError}
+					<p class="mt-2 text-xs text-red-300">Could not read the calibration: {data.homeCalibrationError}</p>
+				{/if}
+
+				<div class="mt-3 grid gap-4 md:grid-cols-[auto_minmax(0,1fr)]">
+					<!-- Reference picture (and the latest check beside it) -->
+					<div class="flex gap-3">
+						<figure class="w-[150px] shrink-0">
+							{#if home?.thumbnailDataUrl}
+								<img
+									src={home.thumbnailDataUrl}
+									alt="Camera reference captured at home"
+									class="w-full rounded border"
+									style="border-color: var(--color-tron-border)"
+								/>
+							{:else}
+								<div
+									class="flex aspect-[4/3] w-full items-center justify-center rounded border text-center text-[11px]"
+									style="border-color: var(--color-tron-border); color: var(--color-tron-text-secondary)"
+								>
+									no reference picture
+								</div>
+							{/if}
+							<figcaption class="mt-1 text-center text-[11px]" style="color: var(--color-tron-text-secondary)">
+								reference
+							</figcaption>
+						</figure>
+						{#if homeResult?.snapshotDataUrl}
+							<figure class="w-[150px] shrink-0">
+								<img
+									src={homeResult.snapshotDataUrl}
+									alt="Camera view during the last check"
+									class="w-full rounded border"
+									style="border-color: {verdictColor(homeResult.assessment?.verdict)}"
+								/>
+								<figcaption class="mt-1 text-center text-[11px]" style="color: {verdictColor(homeResult.assessment?.verdict)}">
+									now · {verdictLabel(homeResult.assessment?.verdict)}
+								</figcaption>
+							</figure>
+						{/if}
+					</div>
+
+					<div class="space-y-3 text-xs" style="color: var(--color-tron-text-secondary)">
+						{#if home}
+							<div class="flex flex-wrap gap-x-4 gap-y-1 font-mono">
+								{#each homeJoints as [sid, steps]}
+									<span>
+										J{sid} <span style="color: var(--color-tron-text)">{steps}</span>
+										{#if homeResult?.residuals && homeResult.residuals[sid] != null}
+											<span style="color: {Math.abs(homeResult.residuals[sid]) <= 12 ? '#4ade80' : '#f59e0b'}">
+												({homeResult.residuals[sid] > 0 ? '+' : ''}{homeResult.residuals[sid]})
+											</span>
+										{/if}
+									</span>
+								{/each}
+								{#if home.pose.x_mm != null}
+									<span>xyz <span style="color: var(--color-tron-text)">{home.pose.x_mm?.toFixed(0)}, {home.pose.y_mm?.toFixed(0)}, {home.pose.z_mm?.toFixed(0)} mm</span></span>
+								{/if}
+							</div>
+							{#if homeResult?.cameraWarning}
+								<p style="color: #f59e0b">{homeResult.cameraWarning}</p>
+							{/if}
+							{#if homeResult?.moved?.length}
+								<p>Moved: {homeResult.moved.map((m: { sid: number; delta: number }) => `J${m.sid} ${m.delta > 0 ? '+' : ''}${m.delta}`).join(', ')}</p>
+							{/if}
+
+							<div class="flex flex-wrap items-center gap-2">
+								<form method="POST" action="?/returnHome">
+									<button
+										type="submit"
+										disabled={homeBlocked}
+										class="min-h-[44px] rounded px-4 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-40"
+										style="background: rgba(56,189,248,0.15); color: var(--color-tron-cyan); border: 1px solid var(--color-tron-cyan);"
+										title="The arm will move to the calibrated home, then the camera verifies it"
+									>
+										Return to home
+									</button>
+								</form>
+								<form method="POST" action="?/checkHome">
+									<button
+										type="submit"
+										disabled={!armReachable}
+										class="min-h-[44px] rounded border px-4 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-40"
+										style="border-color: var(--color-tron-border); color: var(--color-tron-text)"
+										title="No motion: compare the encoders and the camera against the calibration"
+									>
+										Check without moving
+									</button>
+								</form>
+								{#if !confirmRecalibrate}
+									<button
+										type="button"
+										onclick={() => (confirmRecalibrate = true)}
+										disabled={homeBlocked}
+										class="min-h-[44px] rounded border px-4 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-40"
+										style="border-color: var(--color-tron-border); color: var(--color-tron-text-secondary)"
+									>
+										Recalibrate…
+									</button>
+								{/if}
+								<form method="POST" action="?/clearHome" onsubmit={(e) => { if (!confirm('Clear the home calibration? Return to home will be unavailable until you recalibrate.')) e.preventDefault(); }}>
+									<button
+										type="submit"
+										class="min-h-[44px] rounded px-3 text-xs disabled:opacity-40"
+										style="color: #f87171"
+									>
+										Clear
+									</button>
+								</form>
+							</div>
+							{#if homeBlocked}
+								<span class="block" style="color: #f59e0b">{homeBlockReason}</span>
+							{/if}
+						{/if}
+
+						{#if !home || confirmRecalibrate}
+							<form method="POST" action="?/calibrateHome" class="space-y-2 rounded border p-3" style="border-color: var(--color-tron-border); background: rgba(0,0,0,0.25)">
+								<ol class="list-decimal space-y-1 pl-4" style="color: var(--color-tron-text)">
+									<li>Return the arm to its zero position — use the <a href="/manufacturing/cart-mfg/robot-arm/jog" class="underline" style="color: var(--color-tron-cyan)">Jog</a> tab, or switch torque off and place it by hand.</li>
+									<li>Make sure the arm camera can see the arm and nothing is in the way.</li>
+									<li>Press <strong>Calibrate home</strong>. The encoders and the camera's picture are stored as the home reference.</li>
+								</ol>
+								<div class="flex flex-wrap items-end gap-2">
+									{#if (data.cameras ?? []).length > 1}
+										<label class="block text-xs" style="color: var(--color-tron-text-secondary)">
+											Camera
+											<select name="camera" class="mt-1 rounded border bg-black/40 px-2 py-1 text-sm" style="border-color: var(--color-tron-border); color: var(--color-tron-text)">
+												{#each data.cameras ?? [] as cam}
+													<option value={cam.name} selected={cam.name === home?.cameraName}>{cam.name}</option>
+												{/each}
+											</select>
+										</label>
+									{/if}
+									<label class="block grow text-xs" style="color: var(--color-tron-text-secondary)">
+										Note (optional)
+										<input name="note" placeholder="e.g. camera moved to new bracket" class="mt-1 w-full rounded border bg-black/40 px-2 py-1 text-sm" style="border-color: var(--color-tron-border); color: var(--color-tron-text)" />
+									</label>
+									<button
+										type="submit"
+										disabled={homeBlocked}
+										class="min-h-[44px] rounded px-4 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-40"
+										style="background: rgba(56,189,248,0.15); color: var(--color-tron-cyan); border: 1px solid var(--color-tron-cyan);"
+									>
+										{home ? 'Recalibrate home' : 'Calibrate home'}
+									</button>
+									{#if confirmRecalibrate}
+										<button type="button" onclick={() => (confirmRecalibrate = false)} class="min-h-[44px] px-2 text-xs" style="color: var(--color-tron-text-secondary)">cancel</button>
+									{/if}
+								</div>
+								{#if homeBlocked}
+									<span class="block text-xs" style="color: #f59e0b">{homeBlockReason}</span>
+								{/if}
+								{#if home}
+									<p class="text-[11px]" style="color: #f59e0b">Recalibrating replaces the current reference. Only needed if the camera or the arm's setup was moved.</p>
+								{/if}
+							</form>
+						{/if}
+					</div>
+				</div>
+			</section>
 
 			<!-- Teleop / Record / Replay — the controls used most, so they lead -->
 			<div class="grid grid-cols-1 gap-4 md:grid-cols-3">

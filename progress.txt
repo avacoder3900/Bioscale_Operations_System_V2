@@ -13080,7 +13080,6 @@ batch; every batch drained with no paper/ribbon/head flags and confirmed atomica
 (batch 22) Claude Code reaped the wrapper shell for low system memory; the node process itself
 survived and finished unattended — no batch was left reserved-but-printed.
 
-=======
 2026-09-18 — feat/thermocouple-two-channels — the parser averaged the two probes into one
 ================================================================================
 Alejandro: "the bims only displays one temperature and does not show the 2 channels."
@@ -16759,7 +16758,6 @@ between-channel 7.6%, within-channel 5.5%. Scratch: bias.cjs, bias2.cjs, build-l
 `npm run check`: not run.
 
 ================================================================================
-=======
 2026-09-24 — feat/research-analysis-mcp — research analysis + calibration MCP tools via proxy to brevitest-research-v2
 ================================================================================
 Research-v2 DOMAIN-30 (analysis v3) exposes /api/agent/analysis/* and /api/agent/calibration/*.
@@ -17142,7 +17140,6 @@ Not done / stubs: no automatic re-evaluation of assay-run groups when a cartridg
 with holes (jobs are listed; the device must run the upload again); sonic sessions not linked to a
 screen session. `npm run check`: 10 errors / 439 warnings (baseline 10 / 437; the two warnings are
 a11y/label hints on the new pages).
-=======
 2026-09-25 — master — DEPLOY: research analysis MCP tools (bims-operations 3.6.0)
 ================================================================================
 Source: branch master @ commit faea623d (cherry-pick of feat/research-analysis-mcp 61560f31 onto master)
@@ -20250,7 +20247,6 @@ Retrieve this exact code: git checkout master at commit c295ba92
 What this deployment is for: finalizeReagentRun stamps top-level assayId/assayName on production-filled
   cartridges (the fields the device + research app read); the reagent-prep tube step is gone (selectFillLot
   records the fill lot only). Research app main e0bdc81 (linking inherits/overrides/falls back) deployed first.
-=======
 2026-10-13 — feat/fill-assay-is-the-assay — fill defaults are opt-in: Research (no assay) and no fill lot
 ================================================================================
 Jacob: "make sure that the default at filling is no assay and no fill lot, we have to opt in to that at filling."
@@ -20541,7 +20537,6 @@ Also seen: device_logs had exactly one document before today - the device-log La
 works (the screen-end upload landed, 322 lines), it just is not used often.
 
 npm run check: 15 errors / 429 warnings, unchanged (none in these files).
-=======
 2026-10-15 — master — arm-pi bench session: solenoid driver alongside the arm (no code changes)
 ================================================================================
 Bench/ops session only; no repo code touched. Goal was to start testing the new
@@ -21096,3 +21091,23 @@ Deployment: production — via GitHub integration from push to master
 Source: branch master @ commit 228ae7d2
 Retrieve this exact code: git checkout master at commit 228ae7d2
 What this deployment is for: recording trash upload/recover/purge via R2 Worker
+================================================================================
+2026-10-19 — feat/arm-home-calibration — ARM-03: camera-verified HOME calibration on the arm Control page
+================================================================================
+New section at the top of /manufacturing/cart-mfg/robot-arm/control. Operator parks the
+arm at zero and presses Calibrate home: BIMS stores the follower encoder steps (servos
+1–5, GET /pose) plus the arm camera's view — a 32×24 greyscale signature and a thumbnail
+in Mongo (robot_arm_home_calibrations, one record 'default'), full frame to R2
+best-effort. Return to home: torque on, one bounded jog per joint to the taught steps
+(the live Pi has no absolute move route — only POST /servos/{id}/jog), settle, re-read,
+fresh frame scored against the signature (Pearson, brightness-invariant). Verdict = home
+/ position_off / camera_mismatch / both, with reference + current frames side by side and
+per-joint residuals. Check without moving does the verification alone. Recalibrate only
+when the camera or setup moves; Clear removes the record. All four actions audited;
+gated on arm reachable + nobody holding the bus; manufacturing:write.
+Files: src/lib/robot-arm/home-calibration.ts (+test, 11), src/lib/server/robot-arm-home.ts,
+src/lib/server/db/models/robot-arm-home-calibration.ts (+index export),
+control/+page.server.ts, control/+page.svelte, docs/prds/ARM-03-camera-verified-home.md.
+npm run check: no errors in the new files (repo baseline unchanged). vitest arm suites: 53.
+NOT driven against the live arm: local ROBOT_ARM_API_KEY is stale (401) and the Pi had a
+replay running; a hardware pass is the next step (see PRD §6).

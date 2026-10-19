@@ -140,6 +140,7 @@ export { RobotArmServo } from './robot-arm-servo.js';
 export { RobotArmRun } from './robot-arm-run.js';
 export { RobotArmDataset } from './robot-arm-dataset.js';
 export { RobotArmDeletedRecording } from './robot-arm-deleted-recording.js';
+export { RobotArmHomeCalibration } from './robot-arm-home-calibration.js';
 
 // Manufacturing Analytics
 export { ProcessAnalyticsEvent } from './process-analytics-event.js';
