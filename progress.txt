@@ -21182,3 +21182,10 @@ failed mid-request"); robot-arm suite 36/36. End-to-end on the office Starlink l
 cloudflared quick tunnel from the workstation to arm-pi:8000 + a local fake BIMS: URL
 parsed, /health through the tunnel 3/3, registration POST received.
 `npm run check`: 13 errors / 429 warnings = baseline, zero in touched files.
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit 649f4952 (merge of feat/arm-quick-tunnel)
+Retrieve this exact code: git checkout master at commit 649f4952
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: /api/robot-arm/tunnel registration + two-route robot-arm
+client with bounded retry. Verified unauthenticated POST -> 401. Pi arm-tunnel install pending.
