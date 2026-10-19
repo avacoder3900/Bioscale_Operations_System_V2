@@ -21189,3 +21189,44 @@ Retrieve this exact code: git checkout master at commit 649f4952
   (or: git log master --oneline to find it if the branch has since moved on)
 What this deployment is for: /api/robot-arm/tunnel registration + two-route robot-arm
 client with bounded retry. Verified unauthenticated POST -> 401. Pi arm-tunnel install pending.
+
+================================================================================
+2026-10-19 — feat/app-account-email — Change an app account's results email from BIMS
+================================================================================
+/app-accounts/[accountId] Identity card gains "Change results email" (customer:write).
+setResultsEmail (src/lib/server/consumer/accounts.ts) writes app_users.bioscaleEmail with
+bioscaleEmailVerifiedAt = now (staff vouch for it), clears the app's pending verification
+link and records bioscaleEmailSetBy; an empty value clears it so the app falls back to the
+sign-in email. Audited as SET_RESULTS_EMAIL. The sign-in email is deliberately NOT
+editable: the app rewrites it from the identity provider on every sign-in and accounts
+are keyed by provider:sub. Field names follow bioscale-app src/lib/server/profile.ts;
+its ensureProfile() spreads the stored doc, so the BIMS write survives the next sign-in.
+(Earlier the same session drafted a "delete app account" action; dropped at the user's
+request before commit — nothing of it shipped.)
+Files: src/lib/server/consumer/accounts.ts, src/routes/app-accounts/[accountId]/
++page.server.ts + +page.svelte, src/lib/server/db/models/app-user.ts (comment),
+docs/CONSUMER-OWNERSHIP.md. npm run check: 14 errors = baseline, none in touched files.
+
+================================================================================
+2026-10-19 — feat/app-account-email — Bulk-assign cartridges to an app account by scanning
+================================================================================
+The "Assign a cartridge" input on /app-accounts/[accountId] is now a scan box (textarea):
+scan cartridge after cartridge — each scan lands on its own line — and one Assign assigns
+them all (max 200). Server (assign action) splits on newlines/spaces/commas/semicolons,
+reduces a token carrying a UUID (QR URL) to the UUID, drops duplicates, then runs each
+through assignOwnership individually; the page lists per-cartridge outcomes (assigned /
+not found / already owned / QC / voided / not a cartridge id) and keeps the box filled
+when nothing was assigned. Note and "replace current owner" apply to the whole batch.
+Live count of distinct ids next to the label and on the button.
+Files: src/routes/app-accounts/[accountId]/+page.server.ts + +page.svelte,
+docs/CONSUMER-OWNERSHIP.md. npm run check: 14 errors = baseline, none in touched files.
+Not driven against a live DB or a hardware scanner.
+
+================================================================================
+2026-10-19 — feat/app-account-email — Results-email change removed again
+================================================================================
+At the user's request the "Change results email" feature (commit 4e22bd97, entry above) is
+reverted before it ever reached master: setResultsEmail, the setEmail action, the Identity
+card form, the app-user.ts comment and its CONSUMER-OWNERSHIP.md bullet are gone. BIMS is back
+to never writing app_users except for dev accounts. Bulk scan-assign (8a453ff6) stays.
+npm run check: see commit.
