@@ -15,8 +15,10 @@ import {
  * Cartridges are assigned to app accounts in BIMS: by operators (App Accounts
  * and DHR pages, assignOwnership) or by the ship-time hook on the shipping page
  * (ownershipForShipment). The consumer API (src/routes/api/consumer/*) only
- * moves a clinic cartridge between patients, releases, and handles invites;
- * people never claim cartridges from the app (scan-in removed 2026-10-16).
+ * moves a clinic cartridge between patients, releases, handles invites, and —
+ * since 2026-10-19 — lets a person scan a cartridge to link it to themselves
+ * as the first step of a test (claimForAccount, optionally overwriting
+ * another account's link).
  * Contract: docs/CONSUMER-OWNERSHIP.md.
  */
 
@@ -300,6 +302,112 @@ export async function ownershipForShipment(
 		newData: { cartridgeId: r.cartridgeId, accountId: r.accountId, customerId: r.customerId }
 	})));
 	return rows.length;
+}
+
+// ---------------------------------------------------------------------------
+// App scan-in (2026-10-19): "start a new test" opens with a scan of the cartridge
+
+/** A cartridge that has run on a device: its results belong to whoever owns it. */
+const RUN_STATUSES = new Set(['underway', 'completed']);
+
+async function allowsResearch(customerIds: string[]): Promise<boolean> {
+	if (!customerIds.length) return false;
+	return Boolean(await Customer.exists({ _id: { $in: customerIds }, customerType: 'internal' }));
+}
+
+export type AppClaimReason = Exclude<ClaimReason, 'already_owned'> | 'owned_by_other' | 'has_results';
+
+export const APP_CLAIM_TEXT: Record<AppClaimReason, string> = {
+	not_found: REASON_TEXT.not_found,
+	voided: REASON_TEXT.voided,
+	qc_cartridge: REASON_TEXT.qc_cartridge,
+	research: REASON_TEXT.research,
+	guessable_id_needs_match: REASON_TEXT.guessable_id_needs_match,
+	owned_by_other: 'This cartridge is already linked to someone else.',
+	has_results: 'This cartridge has already been used by someone else, so it cannot be moved to your account.'
+};
+
+export type AppClaimInput = {
+	cartridgeId: string;
+	accountId: string;
+	accountLabel: string;
+	/** The account's active customer links — for shipment matching and research access. */
+	customerIds: string[];
+	/** The person said yes to "link it to your own account?": close the other account's row first. */
+	overwrite: boolean;
+};
+
+export type AppClaimOutcome =
+	| { ok: true; status: 'linked' | 'already_yours' | 'overwritten'; rowId: string }
+	| { ok: false; reason: AppClaimReason; reasonText: string };
+
+/**
+ * Link a scanned cartridge to the scanning account (personal row, source
+ * 'claim'). Same eligibility as the pre-2026-10-16 claim (claimEligibility),
+ * with one change the app asked for: a cartridge linked to another account is
+ * refused with `owned_by_other` unless `overwrite` is set, in which case the
+ * other row is closed (releaseReason 'reassigned') and a new one opened.
+ * Overwrite never moves a cartridge that has already run — that would hand
+ * the other person's result to the scanner — and guessable sequential ids
+ * still need a shipment match.
+ */
+export async function claimForAccount(input: AppClaimInput): Promise<AppClaimOutcome> {
+	const { cartridgeId, accountId } = input;
+	const refuse = (reason: AppClaimReason): AppClaimOutcome => ({ ok: false, reason, reasonText: APP_CLAIM_TEXT[reason] });
+
+	const [cartridge, open, qc, research] = await Promise.all([
+		CartridgeRecord.findById(cartridgeId, {
+			status: 1, voidedAt: 1, usedForTestFill: 1, experiment: 1, 'shipping.customer': 1
+		}).lean() as Promise<any>,
+		CartridgeOwnership.findOne({ cartridgeId, open: true }).lean() as Promise<any>,
+		isQcCartridge(cartridgeId),
+		allowsResearch(input.customerIds)
+	]);
+	if (open && open.accountId === accountId) return { ok: true, status: 'already_yours', rowId: open._id };
+
+	const shipCustomerId: string | null = cartridge?.shipping?.customer?._id ?? null;
+	const matchedShipment = Boolean(shipCustomerId && input.customerIds.includes(shipCustomerId));
+	const verdict = claimEligibility({
+		cartridge, hasOpenOwnership: false, isQcCartridge: qc, matchedShipment, allowResearch: research
+	});
+	if (!verdict.ok) return refuse(verdict.reason as AppClaimReason);
+
+	const actor: Actor = { kind: 'account', id: accountId, label: input.accountLabel };
+	if (open) {
+		if (!input.overwrite) return refuse('owned_by_other');
+		if (cartridge.status && RUN_STATUSES.has(cartridge.status)) return refuse('has_results');
+		await releaseOwnership({ cartridgeId, actor, reason: 'reassigned', note: 'Overwritten by an app scan' });
+	}
+
+	const now = new Date();
+	const row = {
+		_id: generateId(),
+		cartridgeId,
+		accountId,
+		customerId: null,
+		subjectId: null,
+		source: 'claim' as const,
+		matchedShipment,
+		shipmentCustomerId: shipCustomerId,
+		open: true,
+		claimedAt: now,
+		claimedBy: actor
+	};
+	try {
+		await CartridgeOwnership.create(row);
+	} catch (e: any) {
+		// Partial unique index: someone else linked it between the check and the insert.
+		if (e?.code === 11000) return refuse('owned_by_other');
+		throw e;
+	}
+	await AuditLog.create({
+		_id: generateId(),
+		tableName: 'cartridge_ownership', recordId: row._id, action: 'CLAIM',
+		changedBy: `app:${accountId}`, changedAt: now,
+		oldData: open ? { accountId: open.accountId, customerId: open.customerId, subjectId: open.subjectId } : undefined,
+		newData: { cartridgeId, accountId, matchedShipment, overwritten: Boolean(open) }
+	});
+	return { ok: true, status: open ? 'overwritten' : 'linked', rowId: row._id };
 }
 
 // ---------------------------------------------------------------------------

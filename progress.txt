@@ -21203,3 +21203,19 @@ Live count of distinct ids next to the label and on the button.
 Files: src/routes/app-accounts/[accountId]/+page.server.ts + +page.svelte,
 docs/CONSUMER-OWNERSHIP.md. npm run check: 14 errors = baseline, none in touched files.
 Not driven against a live DB or a hardware scanner.
+================================================================================
+2026-10-19 — feat/app-scan-claim — App scan-in restored: claim endpoint with overwrite
+================================================================================
+The consumer app's "start a new test" now opens with a cartridge scan (app branch
+feat/scan-to-start, leo3linbeck/bioscale-app). This reverses the 2026-10-16 "people never
+scan in the app" decision at the user's request. New POST /api/consumer/claims →
+claimForAccount() in src/lib/server/consumer/ownership.ts: already the account's →
+already_yours (no write); else claimEligibility (not found / voided / QC / research unless
+internal customer / guessable id needs shipment match); another account's open row →
+409 owned_by_other, and with overwrite:true the old row is closed (reassigned) and a
+personal 'claim' row opened. Overwrite refused (has_results) for underway/completed
+cartridges so a scan cannot take someone else's result. Audit CLAIM with old owner.
+Files: src/lib/server/consumer/ownership.ts, src/routes/api/consumer/claims/+server.ts,
+src/lib/server/consumer/claim.test.ts (5 cases, mocked models), docs/CONSUMER-OWNERSHIP.md.
+vitest consumer suites 13/13. npm run check: 14 errors = baseline, none in touched files.
+Not driven against a live DB; app side verified with its in-memory store (e2e 56/56).
