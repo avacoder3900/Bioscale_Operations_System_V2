@@ -21203,3 +21203,23 @@ Live count of distinct ids next to the label and on the button.
 Files: src/routes/app-accounts/[accountId]/+page.server.ts + +page.svelte,
 docs/CONSUMER-OWNERSHIP.md. npm run check: 14 errors = baseline, none in touched files.
 Not driven against a live DB or a hardware scanner.
+================================================================================
+2026-10-19 — fix/scan-input-focus-steal — SPU page: "View Diagnostics" click never landed
+================================================================================
+Bug (Jacob, /spu/RqrSGEt1NkJ2gsbGpmSPA): clicking View Diagnostics "keeps pulling me back to
+the service input". Cause: ScanInput (shared bench scan box, used by ServiceScanCard on the
+SPU page) refocused itself 100 ms after EVERY blur with a scrolling focus(); the servicing card
+sits ~260 lines above the Diagnostics card, so the page scrolled back up between mousedown and
+mouseup and the click never fired. ServiceScanCard's pause only covered text fields, not links.
+Fix in src/lib/components/assembly/ScanInput.svelte: no refocus when focus moved to a link,
+input, textarea, select or contenteditable (checked on blur via relatedTarget and again after
+the delay via activeElement), none when the window lost focus, and every focus() is
+{ preventScroll: true }. Buttons still hand focus back so bench scanners keep working
+(assembly, accession, barcodes, servicing board, UnitStepView share the component).
+npm run check: 15 errors, none in the touched file. Verified by reading only; not clicked
+through in a browser.
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit 529a59db (fix/scan-input-focus-steal fast-forwarded into master)
+Retrieve this exact code: git checkout master at commit 529a59db
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: the ScanInput focus/scroll fix so links beside a scan box are clickable.
