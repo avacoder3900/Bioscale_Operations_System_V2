@@ -376,7 +376,13 @@ export const actions: Actions = {
 						'wellIssues.$[w].resolvedBy': { _id: locals.user._id, username: locals.user.username },
 						...(note ? { 'wellIssues.$[w].resolvedNote': note } : {})
 					} },
-				{ arrayFilters: [{ 'w._id': { $in: ids } }] }
+				// The run is finalized (issues are logged during the run; it finalizes
+				// at completion), so the sacred middleware would refuse this write and
+				// the button could never work. The stamp annotates the entry — who
+				// addressed it in the deck and when — and changes no fact of the run,
+				// so it opts in explicitly (sacred.ts ALLOW_FINALIZED_OPTION); the
+				// AuditLog row below is the record of that.
+				{ arrayFilters: [{ 'w._id': { $in: ids } }], allowFinalized: true } as any
 			);
 			touched += res.modifiedCount ?? 0;
 			await AuditLog.create({
