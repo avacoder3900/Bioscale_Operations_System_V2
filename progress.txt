@@ -21151,3 +21151,12 @@ Live count of distinct ids next to the label and on the button.
 Files: src/routes/app-accounts/[accountId]/+page.server.ts + +page.svelte,
 docs/CONSUMER-OWNERSHIP.md. npm run check: 14 errors = baseline, none in touched files.
 Not driven against a live DB or a hardware scanner.
+
+================================================================================
+2026-10-19 — feat/app-account-email — Results-email change removed again
+================================================================================
+At the user's request the "Change results email" feature (commit 4e22bd97, entry above) is
+reverted before it ever reached master: setResultsEmail, the setEmail action, the Identity
+card form, the app-user.ts comment and its CONSUMER-OWNERSHIP.md bullet are gone. BIMS is back
+to never writing app_users except for dev accounts. Bulk scan-assign (8a453ff6) stays.
+npm run check: see commit.

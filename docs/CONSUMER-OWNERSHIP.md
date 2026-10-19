@@ -132,12 +132,6 @@ account is a write to a BIMS-owned collection.
   blockedAt). The app's `hooks.server.ts` looks the id up on every request and, if present, drops
   the session and sends the person to `/login?blocked=1`. Nothing is deleted; unblocking deletes
   the row and the account works again.
-- **Results email** (2026-10-19): the Identity card has *Change results email*. It sets
-  `app_users.bioscaleEmail` with `bioscaleEmailVerifiedAt` = now (staff vouch for it), clears any
-  `pending` verification link and records `bioscaleEmailSetBy`; empty clears it, so the app falls
-  back to the sign-in email (`dataEmail()`). The sign-in email is not editable: the app rewrites it
-  from the identity provider on every sign-in, and the account is keyed by `provider:sub`, not
-  email. If the person later changes the address in the app, the app's own verification rules apply.
 - **Bulk assign** (2026-10-19): the account page's assign box is a textarea — scan cartridges one
   after another (each scan lands on its own line; spaces, commas or semicolons also separate), up to
   200 at a time. A token carrying a UUID (a QR URL) is reduced to it; duplicates are dropped. Each id
