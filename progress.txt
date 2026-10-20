@@ -21328,3 +21328,27 @@ renewal and isActive checks unchanged.
 TESTS: unit 615 pass / 1 fail (sonic decode — fails on master too); new 13-dashboard-counts contract test 2/2;
 01-auth login/logout pass; 10-cartridges path fixed (/cartridge-dashboard passes; the other /spu/* cases 404 on master
 too — routes moved). check 15 = baseline. NOT merged to master.
+
+================================================================================
+2026-10-19 — feat/voice-memos — VOICE-01: Voicenotes voice memos → BIMS → Claude digests (Kanban → Journal)
+================================================================================
+Jacob workshopped a Voicenotes → BIMS pipeline for spoken EOD / experiment memos (handoff doc
+voicenotes-webhook-handoff.md). Decisions in session: v1 is Jacob only; processing is manual ("process my
+EODs" in Claude over MCP); for the first ~week Claude writes DIGESTS ONLY (no kanban captures/proposals/
+updates from memos); people read a Claude-written digest grounded in BIMS context, not the transcript.
+Voicenotes' documented webhook payload is {event:"recording.created", timestamp, data:{id,title,transcript}}
+(no tags, no audio, no signing), so: per-person URL key, a tolerant parser, and a spoken-lead-in fallback
+("EOD…", "Experiment 358…") alongside the tag allowlist (eod, exp-*). Update events can create a memo (tagged
+after recording), edits move the old text to revisions[], deletes only flag. Step-0 raw capture is opt-in
+(VOICENOTES_CAPTURE_RAW=true, 14-day TTL) so the parser can be checked against the real payload.
+Files: models/voice-memo.ts (VoiceMemo, VoiceMemoDigest, VoiceMemoCapture) + index export;
+lib/server/voice-memos/{parse,keys,ingest,serialize,markdown}.ts (+ parse/keys/ingest/markdown tests, 43
+cases); routes/api/webhooks/voicenotes/+server.ts; routes/api/agent/voice-memos/{+server, [id], [id]/notes,
+mark-processed, digests, digests/[digestId]}; 6 MCP tools in bims-mcp.ts (server 3.12.0 → 3.13.0);
+routes/kanban/journal (+ Journal tab in KanbanNav; transcripts shown only to speaker/admin);
+scripts/voice-memos.ts (captures | memos | indexes | key); docs/VOICE-MEMOS.md (runbook).
+npm run check: 16 errors = baseline, none in touched files. Unit suite: 653 pass, 1 fail =
+sonic.test.ts "decode zeroes non-finite samples", which fails identically on clean master.
+Not run against a live DB or Voicenotes yet; journal page not browser-verified. Built in worktree
+..\Bioscale_Operations_System_V2-voice-memos. NOT merged / NOT deployed — Jacob deploys 2026-10-20 per
+docs/VOICE-MEMOS.md (set VOICENOTES_WEBHOOK_KEYS first; run `scripts/voice-memos.ts indexes`).
