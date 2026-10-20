@@ -31,6 +31,9 @@
 		emptyText?: string;
 	}
 
+	import RotatedFrame from './RotatedFrame.svelte';
+	import { cameraRotation } from '$lib/robot-arm/camera-rotation.svelte';
+
 	let { src, width, height, tags, alt = 'Camera frame', emptyText = 'No frame' }: Props = $props();
 
 	const w = $derived(width || 640);
@@ -47,9 +50,15 @@
 	};
 
 	const pts = (c: [number, number][]) => c.map(([x, y]) => `${x * w},${y * h}`).join(' ');
+
+	// The operator's view rotation (camera mounted on its side). The image and
+	// the outlines turn together inside RotatedFrame; each label is turned back
+	// about its tag centre so it reads upright and sits above the tag on screen.
+	const rot = $derived(cameraRotation.deg);
+	$effect(() => cameraRotation.restore());
 </script>
 
-<div class="relative w-full overflow-hidden rounded border bg-black" style="border-color: var(--color-tron-border); aspect-ratio: {w} / {h};">
+<RotatedFrame width={w} height={h} rotation={rot} class="rounded border bg-black" style="border-color: var(--color-tron-border);">
 	{#if src}
 		<img {src} {alt} class="absolute inset-0 h-full w-full select-none object-fill" draggable="false" />
 	{:else}
@@ -74,6 +83,7 @@
 				<text
 					x={at[0] * w}
 					y={at[1] * h - s * 8}
+					transform="rotate({-rot} {at[0] * w} {at[1] * h})"
 					text-anchor="middle"
 					font-size={s * 7}
 					fill={t.center ? '#fff' : sc}
@@ -85,4 +95,4 @@
 			{/if}
 		{/each}
 	</svg>
-</div>
+</RotatedFrame>

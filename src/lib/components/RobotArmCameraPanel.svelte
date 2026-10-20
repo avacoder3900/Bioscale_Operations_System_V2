@@ -26,6 +26,8 @@
 	 */
 	import { untrack } from 'svelte';
 	import type { CameraStatus } from '$lib/server/robot-arm-client';
+	import RotatedFrame from '$lib/components/robot-arm/RotatedFrame.svelte';
+	import { cameraRotation } from '$lib/robot-arm/camera-rotation.svelte';
 
 	interface Props {
 		cameras: CameraStatus[];
@@ -108,6 +110,32 @@
 				? `${selectedStatus.requested.width}x${selectedStatus.requested.height}`
 				: null
 	);
+
+	// Frame geometry for the rotated viewport. The <img>'s own decoded size is
+	// the truth (it follows a hardware.yaml change at once); the Pi's report
+	// covers the gap before the first frame, and an MJPEG stream whose load
+	// event never fires.
+	let naturalSize = $state<[number, number] | null>(null);
+	let frameDims = $derived.by((): [number, number] => {
+		if (naturalSize) return naturalSize;
+		const a = selectedStatus?.actual_size;
+		if (a && a.length >= 2) return [a[1], a[0]];
+		if (selectedStatus) return [selectedStatus.requested.width, selectedStatus.requested.height];
+		return [4, 3];
+	});
+	let quarterTurn = $derived(cameraRotation.deg === 90 || cameraRotation.deg === 270);
+	// The size menu sets the picture's long edge, so a camera on its side
+	// does not come out ~1.8x taller than the same size upright.
+	let viewportMaxWidth = $derived(
+		quarterTurn ? Math.round((SIZES[size] * frameDims[1]) / frameDims[0]) : SIZES[size]
+	);
+
+	$effect(() => cameraRotation.restore());
+	// Another camera has its own geometry; wait for its first frame.
+	$effect(() => {
+		void selected;
+		naturalSize = null;
+	});
 
 	function preload(url: string, timeoutMs?: number): Promise<void> {
 		return new Promise((resolve, reject) => {
@@ -430,23 +458,31 @@
 				<!-- Viewport -->
 				<div
 					class="relative overflow-hidden rounded border bg-black"
-					style="border-color: var(--color-tron-border); max-width: {SIZES[size]}px"
+					style="border-color: var(--color-tron-border); max-width: {viewportMaxWidth}px"
 				>
 					{#if displaySrc}
-						<!--
-							No crossorigin attribute: an <img> may load cross-origin
-							without CORS, and asking for it here would require the Pi
-							to send headers it does not, breaking direct mode outright.
-							We only display these pixels, never read them back.
-						-->
-						<img
-							src={displaySrc}
-							alt="Live view from arm camera {selected}"
-							class="block w-full transition-opacity"
-							class:opacity-40={stale || reconnecting}
-							referrerpolicy="no-referrer"
-							onerror={handleStreamError}
-						/>
+						<RotatedFrame width={frameDims[0]} height={frameDims[1]} rotation={cameraRotation.deg}>
+							<!--
+								No crossorigin attribute: an <img> may load cross-origin
+								without CORS, and asking for it here would require the Pi
+								to send headers it does not, breaking direct mode outright.
+								We only display these pixels, never read them back.
+							-->
+							<img
+								src={displaySrc}
+								alt="Live view from arm camera {selected}"
+								class="block h-full w-full object-fill transition-opacity"
+								class:opacity-40={stale || reconnecting}
+								referrerpolicy="no-referrer"
+								onload={(e) => {
+									const img = e.currentTarget as HTMLImageElement;
+									if (img.naturalWidth && img.naturalHeight) {
+										naturalSize = [img.naturalWidth, img.naturalHeight];
+									}
+								}}
+								onerror={handleStreamError}
+							/>
+						</RotatedFrame>
 					{:else}
 						<div
 							class="flex aspect-[4/3] w-full items-center justify-center text-xs"
@@ -556,6 +592,41 @@
 							<option value={key}>{key}</option>
 						{/each}
 					</select>
+
+					<!-- View-only: detection and coordinates keep the camera's own orientation. -->
+					<span class="inline-flex items-center gap-1">
+						<button
+							type="button"
+							onclick={cameraRotation.left}
+							title="Rotate the view 90° left"
+							aria-label="Rotate the view 90 degrees left"
+							class="rounded border px-2 py-1 transition-colors hover:bg-black/20"
+							style="border-color: var(--color-tron-border); color: var(--color-tron-cyan)"
+						>
+							⟲
+						</button>
+						<button
+							type="button"
+							onclick={cameraRotation.right}
+							title="Rotate the view 90° right"
+							aria-label="Rotate the view 90 degrees right"
+							class="rounded border px-2 py-1 transition-colors hover:bg-black/20"
+							style="border-color: var(--color-tron-border); color: var(--color-tron-cyan)"
+						>
+							⟳
+						</button>
+						{#if cameraRotation.deg !== 0}
+							<button
+								type="button"
+								onclick={cameraRotation.reset}
+								title="Back to the camera's own orientation"
+								class="rounded px-1 py-1 transition-colors hover:bg-black/20"
+								style="color: var(--color-tron-text-secondary)"
+							>
+								{cameraRotation.deg}°
+							</button>
+						{/if}
+					</span>
 
 					<button
 						type="button"

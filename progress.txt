@@ -21498,3 +21498,19 @@ Verified at 720p: stream 15.0 fps (90 frames/6 s) with depth streaming alongside
 "realsense" (fx 910.46), detect ~60 ms, tags 23/45/50/51 found; pose z vs D415 depth agree within 1 mm
 (45: 275/276, 50: 287/287, 51: 280/280), which validates the colour->depth mapping at 720p. Still missed:
 53 (cut off by the shorter 16:9 view) and the blue-box tag (behind cables). npm run check not run (Python only).
+
+================================================================================
+2026-10-20 — feat/arm-camera-rotate — arm camera view: rotate 90° left/right
+================================================================================
+Operator is remounting the D415 on its side (portrait), which makes the feed awkward to watch. View-only
+rotation, so frames, AprilTag detection, normalised coords, intrinsics and the depth mapping all keep the
+camera's own orientation (rotating on the Pi would have broken all of those).
+New src/lib/robot-arm/camera-rotation.svelte.ts: one module-level rotation (0/90/180/270), saved in
+localStorage (bims.armCamera.rotation.v1), restored from an $effect so SSR and first client render match.
+New src/lib/components/robot-arm/RotatedFrame.svelte: frame-aspect box turned by CSS; at 90/270 the outer box
+takes the swapped aspect (16:9 on its side lays out as 9:16), inner box sized in % of the outer.
+RobotArmCameraPanel.svelte: ⟲/⟳ buttons (+ "90°" chip to reset), image wrapped in RotatedFrame using the
+img's decoded size (fallback: Pi actual_size, then requested), size menu sets the long edge when sideways.
+VisionStage.svelte: image + tag outlines rotate together; labels counter-rotated about the tag centre so they
+read upright. npm run check: 14 errors, none in touched files (the 14th is research-proxy.ts from master).
+Not clicked through in a browser by me (no browser here); operator to confirm.
