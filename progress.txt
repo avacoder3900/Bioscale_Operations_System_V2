@@ -21389,3 +21389,20 @@ as contracttest, interleaved, 1 warmup + 5 samples, median TTFB.
   /                      1.69 s -> 0.94 s
   /cartridge-dashboard   1.18 s -> 0.76 s
 Live (mu7brrltq) = perf deployment within noise (0.86 vs 0.93 s). Atlas cache metrics still to check 2026-10-21.
+
+================================================================================
+2026-10-20 — feat/arm-recording-cleanup — step detection core (no UI yet)
+================================================================================
+Start of the recording clean-up feature (new tab, UI layout pending from Alejandro). Design rules from him:
+BIMS never smooths, filters or drops servo data; it only groups overlapping moves into numbered steps, and the
+operator decides what to delete and how far each servo moves. A threshold (servo steps, 0 allowed) decides
+what counts as a move.
+New src/lib/robot-arm/recording-steps.ts (pure, shared): parseRecording() reads the live Pi format
+(header / frame{t, leader, follower, goal} / footer, hardware/dual_arm.py v1; NOT the {t, positions} format in
+the vendored recordings.py, still accepted) and uses goal[] (what replay sends, dual_arm.py:533) as servo ids
+1..6. detectMoves(): a move = consecutive changes > threshold from the last settle point, same direction, gaps
+<= pauseS (0.25 s); reversal = new move; start found by walking back through the run (flat stretches < pauseS
+crossed) so slow sweeps start where they left the hold. groupIntoSteps(): overlapping moves share a step, max
+one move per servo per step. Moves carry raw from/to positions and frame indices.
+Tried on GioRealTest-20261016-210639 (83 s, 2490 frames, copied read-only from the Pi): threshold 0 -> 210
+steps / 459 moves; 5 -> 95 / 200; 10 -> 94 / 165; 20 -> 94 / 155. Tests: recording-steps.test.ts 12/12.
