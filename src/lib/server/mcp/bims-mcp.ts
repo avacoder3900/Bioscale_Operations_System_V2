@@ -224,7 +224,7 @@ async function callAgentApi(
 export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 	// Version bump signals clients (claude.ai caches connector tool lists) that
 	// the toolset changed — bump on every tool add/remove/rename.
-	const server = new McpServer({ name: 'bims-operations', version: '3.13.0' });
+	const server = new McpServer({ name: 'bims-operations', version: '3.14.0' });
 
 	// ---------------------------------------------------------------- meta
 
@@ -1985,6 +1985,78 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 		async (args) =>
 			machineWrite('research_assay_attach_profile', (args as any).actor, (actor) =>
 				callAgentApi(fetcher, `${RESEARCH}/analysis/assay/${encodeURIComponent(args.assayId)}/attach`, { method: 'POST', body: { profileId: args.profileId, actor } })
+			)
+	);
+
+	const EXPORT_PRESET_DOCTRINE =
+		'Export presets choose which STORED analysis columns the research processed export (green chart icon on the ' +
+		'experiment page) copies; they compute nothing. Built-ins: short, standard, comparison, maximal (read-only). ' +
+		'Custom preset = { key, name, description, columns }. columns is an ordered list of fixed column names, readout ' +
+		'keys (metric/expression keys such as f7_test, f7_over_f3_test), qc_<rule>, qc_<rule>_value, interp_<method>, ' +
+		'status_<method>, curve_<method>, and @group tokens (@descriptive, @readouts, @qcFeatures, @qcRules, ' +
+		'@qcRuleValues, @methods, @stage); research_export_preset_list returns the full vocabulary. WORKFLOW: list -> ' +
+		'draft columns with the person -> research_export_processed with `columns` to preview on a real experiment -> ' +
+		'research_export_preset_save only when the person agrees. Saved presets appear in the experiment page picker.';
+
+	server.registerTool(
+		'research_export_preset_list',
+		{ annotations: READ_ONLY,
+			description: 'Research app: every active processed-export preset (built-in + custom) with its column list, plus the column vocabulary (fixed columns, @group tokens). ' + EXPORT_PRESET_DOCTRINE
+		},
+		async () => callAgentApi(fetcher, `${RESEARCH}/export-presets`)
+	);
+
+	server.registerTool(
+		'research_export_processed',
+		{ annotations: READ_ONLY,
+			description:
+				'Research app: run the processed export for an experiment (armIndex -1 = every arm) with a saved preset key ' +
+				'or an unsaved `columns` list (preview). Returns { columns, totalRows, tsv } with at most maxRows rows ' +
+				'(default 50). Nothing is written. ' + EXPORT_PRESET_DOCTRINE,
+			inputSchema: z.object({
+				experimentId: z.string(),
+				armIndex: z.number().int().describe('Arm index, or -1 for every arm.'),
+				preset: z.string().optional().describe('Preset key (default standard).'),
+				columns: z.array(z.string()).optional().describe('Unsaved column list instead of a preset.'),
+				sampleIds: z.array(z.string()).optional(),
+				maxRows: z.number().int().min(0).max(2000).optional()
+			})
+		},
+		async (args) => callAgentApi(fetcher, `${RESEARCH}/processed-export`, { method: 'POST', body: args })
+	);
+
+	server.registerTool(
+		'research_export_preset_save',
+		{ annotations: WRITE_TOOL,
+			description:
+				'Research app: create or replace a CUSTOM processed-export preset (an archived key is revived). Built-in keys ' +
+				'are reserved. Key: 2-40 lowercase letters, digits or dashes. Preview with research_export_processed first and ' +
+				'confirm with the person. ' + EXPORT_PRESET_DOCTRINE,
+			inputSchema: z.object({
+				actor: ACTOR_FIELD,
+				key: z.string(),
+				name: z.string(),
+				description: z.string().optional(),
+				columns: z.array(z.string()).min(1)
+			})
+		},
+		async (args) =>
+			machineWrite('research_export_preset_save', (args as any).actor, (actor) => {
+				const { actor: _ignored, ...preset } = args;
+				void _ignored;
+				return callAgentApi(fetcher, `${RESEARCH}/export-presets`, { method: 'POST', body: { preset, actor } });
+			})
+	);
+
+	server.registerTool(
+		'research_export_preset_archive',
+		{ annotations: WRITE_TOOL,
+			description: 'Research app: archive a custom processed-export preset so it leaves the experiment page picker. Built-ins cannot be archived.',
+			inputSchema: z.object({ actor: ACTOR_FIELD, key: z.string() })
+		},
+		async (args) =>
+			machineWrite('research_export_preset_archive', (args as any).actor, (actor) =>
+				callAgentApi(fetcher, `${RESEARCH}/export-presets/${encodeURIComponent(args.key)}/archive`, { method: 'POST', body: { actor } })
 			)
 	);
 

@@ -16,7 +16,10 @@ describe('researchPathAllowed', () => {
 		'reagent-lots',
 		'reagent-lots/abc/retire',
 		'reagent-inventory/originate',
-		'calibration/fill-lots/run1/assign-curve-set'
+		'calibration/fill-lots/run1/assign-curve-set',
+		'export-presets',
+		'export-presets/qc-review/archive',
+		'processed-export'
 	])('allows %s', (p) => expect(researchPathAllowed(p)).toBe(true));
 
 	it.each([
@@ -28,6 +31,8 @@ describe('researchPathAllowed', () => {
 		'reagent-inventory/create',
 		'reagent-lotsx',
 		'reagent-inventory/originate-all',
+		'export-presetsx',
+		'processed-export-all',
 		'analysis/../users',
 		'analysis//profiles',
 		'analysis/profiles?x=1',
