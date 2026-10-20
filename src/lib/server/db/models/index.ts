@@ -143,6 +143,7 @@ export { RobotArmDeletedRecording } from './robot-arm-deleted-recording.js';
 export { RobotArmEndpoint } from './robot-arm-endpoint.js';
 export { RobotArmTag } from './robot-arm-tag.js';
 export { RobotArmTagCalibration } from './robot-arm-tag-calibration.js';
+export { RobotArmRecordingCleanup } from './robot-arm-recording-cleanup.js';
 
 // Manufacturing Analytics
 export { ProcessAnalyticsEvent } from './process-analytics-event.js';

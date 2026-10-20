@@ -76,6 +76,8 @@ export interface RecordingHeader {
 	rateHz?: number;
 	/** Index i names servo id i + 1. */
 	jointNames?: string[];
+	/** The header line exactly as recorded (neutrals, limits, scale, …). */
+	raw?: Record<string, unknown>;
 }
 
 export interface ParsedRecording {
@@ -104,7 +106,8 @@ export function parseRecording(jsonl: string): ParsedRecording {
 			header = {
 				version: typeof rec.version === 'string' ? rec.version : undefined,
 				rateHz: typeof rec.rate_hz === 'number' ? rec.rate_hz : undefined,
-				jointNames: Array.isArray(rec.joint_names) ? rec.joint_names.map(String) : undefined
+				jointNames: Array.isArray(rec.joint_names) ? rec.joint_names.map(String) : undefined,
+				raw: rec
 			};
 			continue;
 		}

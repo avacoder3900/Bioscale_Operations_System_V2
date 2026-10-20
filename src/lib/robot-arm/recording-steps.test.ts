@@ -124,7 +124,7 @@ describe('recordingToSteps', () => {
 			'{"event": "footer", "duration_s": 0.05, "frames": 2}'
 		].join('\n');
 		const { header, frames } = parseRecording(jsonl);
-		expect(header).toEqual({ version: '1', rateHz: 30, jointNames: ['shoulder_pan', 'gripper'] });
+		expect(header).toMatchObject({ version: '1', rateHz: 30, jointNames: ['shoulder_pan', 'gripper'] });
 		expect(frames).toEqual([
 			{ t: 0.0186, positions: { '1': 2047, '2': 2233 } },
 			{ t: 0.0516, positions: { '1': 2050, '2': 2230 } }

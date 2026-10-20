@@ -21578,3 +21578,35 @@ Simulated pull loop (q70, w480, new TLS connection per frame, so browsers do bet
 <=0.4 s lag; Tailscale 6.6 fps with ~0.15 s lag. npm run check: 14 errors, none in touched files.
 Also: Robot_Arm_Vision_Servo_Home_Context.md (repo root, 2f3ca436) for a future session on joining the Vision
 tag home with the servo encoder home.
+
+================================================================================
+2026-10-20 — feat/arm-recording-cleanup — Clean-up tab: step editor for recordings (operator-driven)
+================================================================================
+New Robot Arm tab "Clean-up" (/manufacturing/cart-mfg/robot-arm/cleanup). Alejandro's rule: the only
+automation is grouping overlapping servo moves into numbered steps; every other decision is the operator's.
+- Split: pick a Pi recording + threshold (steps) + pause; BIMS exports it, copies the raw goal frames into a
+  Mongo draft (robot_arm_recording_cleanups, new model RobotArmRecordingCleanup) and runs recording-steps.ts.
+  First draft = raw targets, raw step durations, recorded idle gap as each step's "then wait" (so playback
+  keeps the recording's timing until the operator changes it).
+- Editor (/cleanup/[id]): timeline with one lane per servo (raw trace grey, step bands cyan, operator's
+  from->to amber, zoom 1-16x) + playback strip; step cards with editable target / "moves by" delta, duration,
+  wait, label; delete/add servo, "own step" (pull a servo out into the next step), merge with next, insert,
+  reorder, delete step; undo/redo; start pose editable. Moves under 25 steps get a "small" tag (hint only).
+  Arm buttons: Read arm, targets from arm, arm -> start/end of step, start pose from arm / send arm there
+  (per-joint jogs <=300 steps, max 1500 per servo and 20 jogs per click, one correction pass, audited).
+- Save to Pi: compose a NEW recording (dual_arm.py v1: header with start pose as follower_neutral and the
+  source's limits/scale, one goal frame per tick, each step a straight line from->target over its duration,
+  waits as held frames, frames tagged `step`) and write it via POST /recordings/restore (409 = name taken).
+  Source recording never touched. Replay from the Control tab; Control's recordings list links "clean up".
+- Pi (arm-pi, outside the repo app.py): added read-only GET /servos (follower id/position/speed/load/voltage/
+  temperature/torque; leader not required; 409 while a session runs). Present_Speed/Present_Load registers
+  added to _feetech_bus.py. Backups *.bak-pre-servos. Same patch in services/robot-arm/scripts/
+  install_servos_route.py. This is also the route robotArm.listServos (Vision Save calibration on
+  feat/arm-depth-combined) expects; it did not exist on the Pi before.
+Files: src/lib/robot-arm/recording-cleanup.ts (+test), recording-steps.ts (header.raw), server/robot-arm-cleanup.ts,
+models/robot-arm-recording-cleanup.ts, robot-arm-client.ts (ServoState, listServos), components/robot-arm/
+CleanupTimeline.svelte, routes .../robot-arm/cleanup/**, +layout.svelte (tab), control/+page.svelte (link).
+Real data: GioCleanupRecording-20261020-180505 (113.8 s, 3394 frames) at threshold 10 -> 118 steps / 186 moves;
+composed recording re-parses, end pose within 3 steps of raw. Editor SSR-renders with it (118 cards).
+Tests: src/lib/robot-arm 53/53. npm run check: 13 errors, all pre-existing, none in these files. Local
+`npm run build` compiles client + server, then the Vercel adapter's tracing runs out of heap on this PC.

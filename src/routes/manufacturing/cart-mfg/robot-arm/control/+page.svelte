@@ -558,7 +558,15 @@
 							<tbody style="color: var(--color-tron-text)">
 								{#each data.piRecordings as r (r.path)}
 									<tr class="border-b border-[var(--color-tron-border)]/50 last:border-b-0">
-										<td class="px-3 py-2 font-mono">{r.name}</td>
+										<td class="px-3 py-2 font-mono">
+											{r.name}
+											<a
+												href={`/manufacturing/cart-mfg/robot-arm/cleanup?source=${encodeURIComponent(r.name)}`}
+												class="ml-2 font-sans text-[11px] hover:underline"
+												style="color: var(--color-tron-cyan)"
+												title="Split this recording into steps and clean it up">clean up</a
+											>
+										</td>
 										<td class="px-3 py-2" style="color: var(--color-tron-text-secondary)">
 											{(r.size_bytes / 1024).toFixed(1)} KB
 										</td>

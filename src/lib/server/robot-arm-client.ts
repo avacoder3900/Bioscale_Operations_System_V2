@@ -279,6 +279,19 @@ export interface ArmPose {
 	calibration: JogCalibration;
 }
 
+// GET /servos — raw follower state per servo (no IK needed). `load` is the
+// STS3215's signed present load (~±1000); `position` is the same raw encoder
+// step /pose reports as joint_steps.
+export interface ServoState {
+	id: number;
+	position: number;
+	speed: number;
+	load: number;
+	voltage: number;
+	temperature: number;
+	torque: boolean;
+}
+
 export interface JogCartesianResult {
 	requested: { dx_mm: number; dy_mm: number; dz_mm: number };
 	before: ArmPose;
@@ -560,6 +573,7 @@ export const robotArm = {
 	preflightReplay: (body: { source: string; tolerance_steps?: number }) =>
 		robotArmFetch<PreflightResult>('/replay/preflight', { method: 'POST', body }),
 	getPose: () => robotArmFetch<ArmPose>('/pose'),
+	listServos: () => robotArmFetch<ServoState[]>('/servos'),
 	jogCartesian: (body: {
 		dx_mm: number;
 		dy_mm: number;
