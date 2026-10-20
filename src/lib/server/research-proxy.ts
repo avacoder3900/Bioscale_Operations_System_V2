@@ -12,7 +12,7 @@ import { env } from '$env/dynamic/private';
  *   RESEARCH_API_URL         e.g. https://research.brevitest.com (no trailing slash)
  *   RESEARCH_AGENT_API_KEY   optional; falls back to AGENT_API_KEY (the apps share it today)
  */
-export const RESEARCH_ALLOWED_PREFIXES = ['analysis/', 'calibration/', 'reagent-lots', 'reagent-inventory/originate'] as const;
+export const RESEARCH_ALLOWED_PREFIXES = ['analysis/', 'calibration/', 'reagent-lots', 'reagent-inventory/originate', 'export-presets', 'processed-export'] as const;
 
 const SAFE_SEGMENT = /^[A-Za-z0-9_.-]+$/;
 
