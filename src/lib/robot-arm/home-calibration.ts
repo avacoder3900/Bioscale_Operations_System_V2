@@ -3,16 +3,16 @@
  *
  * The fail state this exists for: a task ends with the arm somewhere other
  * than home (a stalled servo, a stopped replay, a bump). The vision
- * calibration (ARM-04, $lib/robot-arm/markers) stores the follower's encoder
+ * calibration (ARM-05, $lib/robot-arm/apriltags) stores the follower's encoder
  * steps at the moment it was taken with the arm parked at home; a return to
- * home jogs each joint back to those steps, and the sticker markers then
+ * home jogs each joint back to those steps, and the AprilTags then
  * confirm — independently of the servos' own report — that every tracked
  * point really is back where it was.
  *
  * ARM-03's greyscale whole-frame signature lived here too; ARM-04 replaced it
- * with per-marker tracking, which says WHICH point is off and by how much.
+ * with per-marker tracking; ARM-05 swapped the stickers for AprilTags.
  */
-import type { VisionAssessment } from './markers';
+import type { VisionAssessment } from './apriltags';
 
 /** The positioning chain. Servo 6 (gripper) does not take part in home. */
 export const HOME_SERVO_IDS = [1, 2, 3, 4, 5] as const;

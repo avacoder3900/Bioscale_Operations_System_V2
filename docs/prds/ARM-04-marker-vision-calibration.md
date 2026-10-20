@@ -1,6 +1,6 @@
 # ARM-04 — Sticker-marker vision calibration, live tracking and home check
 
-**Status:** built 2026-10-19 on `feat/arm-marker-calibration`; not yet exercised against the live
+**Status:** SUPERSEDED 2026-10-20 by [ARM-05](ARM-05-apriltag-vision.md) (AprilTags replace the coloured stickers; this code is removed). Was built 2026-10-19 on `feat/arm-marker-calibration`; not yet exercised against the live
 arm or a depth camera. **Supersedes ARM-03** (camera-verified HOME via a whole-frame greyscale signature).
 
 ## 1. Why ARM-03 was rebuilt

@@ -1,9 +1,10 @@
 """
-Depth (lidar) for the robot-arm cameras — ARM-04 marker vision.
+Depth for the robot-arm cameras — written for ARM-04 marker vision; since
+ARM-05 (AprilTags) apriltags.py calls `_rs.sample()` directly to attach the
+D415's depth at each tag centre as a cross-check of the tag's pose.
 
-BIMS tracks coloured sticker markers in the colour frame served by
-cameras.py. To also check each marker's distance from the camera, it asks
-this router for the depth at the points where it found them. Points are
+Callers ask this router for the depth at points of the colour frame served by
+cameras.py. Points are
 NORMALISED [x, y] (0..1) on the colour frame, so BIMS never needs to know the
 depth sensor's own resolution or how it is aligned.
 

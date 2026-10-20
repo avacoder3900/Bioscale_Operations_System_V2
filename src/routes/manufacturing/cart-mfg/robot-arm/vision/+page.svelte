@@ -1,19 +1,18 @@
 <script lang="ts">
 	/**
-	 * Robot Arm — Vision tab (ARM-04).
+	 * Robot Arm — Vision tab (ARM-05, AprilTags).
 	 *
 	 * Top to bottom in the order an operator needs it: is the arm home (and if
 	 * not, send it back), where is everything right now, recalibrate, and the
-	 * marker registry. See docs/prds/ARM-04-marker-vision-calibration.md.
+	 * tag registry. See docs/prds/ARM-05-apriltag-vision.md.
 	 */
 	import { enhance } from '$app/forms';
-	import VisionStage, { type StageMarker } from '$lib/components/robot-arm/VisionStage.svelte';
+	import VisionStage, { type StageTag } from '$lib/components/robot-arm/VisionStage.svelte';
 	import VisionLiveTracker from '$lib/components/robot-arm/VisionLiveTracker.svelte';
-	import VisionCalibrationEditor from '$lib/components/robot-arm/VisionCalibrationEditor.svelte';
-	import VisionMarkerRegistry from '$lib/components/robot-arm/VisionMarkerRegistry.svelte';
-	import { rgbToHex } from '$lib/robot-arm/markers';
+	import VisionTagCalibrator from '$lib/components/robot-arm/VisionTagCalibrator.svelte';
+	import VisionTagRegistry from '$lib/components/robot-arm/VisionTagRegistry.svelte';
 	import { HOME_STEP_TOLERANCE } from '$lib/robot-arm/home-calibration';
-	import type { CalibrationSummary, HomeCheckResult, MarkerSummary } from '$lib/server/robot-arm-vision';
+	import type { CalibrationSummary, HomeCheckResult, TagSummary } from '$lib/server/robot-arm-vision';
 	import type { CameraStatus } from '$lib/server/robot-arm-client';
 
 	let { data, form } = $props();
@@ -21,7 +20,7 @@
 	const STORAGE_KEY = 'bims.armVision.camera.v1';
 
 	const cameras = $derived((data.cameras ?? []) as CameraStatus[]);
-	const markers = $derived((data.markers ?? []) as MarkerSummary[]);
+	const tags = $derived((data.tags ?? []) as TagSummary[]);
 	const calibrations = $derived((data.calibrations ?? []) as CalibrationSummary[]);
 	const history = $derived((data.history ?? []) as CalibrationSummary[]);
 
@@ -76,21 +75,29 @@
 	const VERDICT: Record<string, { label: string; color: string }> = {
 		home: { label: 'AT HOME', color: '#4ade80' },
 		position_off: { label: 'ENCODERS OFF', color: '#f59e0b' },
-		markers_off: { label: 'MARKERS OFF', color: '#f59e0b' },
+		markers_off: { label: 'TAGS OFF', color: '#f59e0b' },
 		position_off_and_markers_off: { label: 'NOT AT HOME', color: '#ef4444' },
 		camera_moved: { label: 'CAMERA MOVED', color: '#ef4444' },
 		unverified: { label: 'UNVERIFIED', color: 'var(--color-tron-text-secondary)' }
 	};
 	const verdict = (v: string | null | undefined) => VERDICT[v ?? ''] ?? { label: '—', color: 'var(--color-tron-text-secondary)' };
 
-	const referenceMarkers = $derived<StageMarker[]>(
-		(calibration?.placements ?? []).map((p) => ({ id: p.markerId, label: p.name, color: rgbToHex(p.color), x: p.x, y: p.y, status: 'placed' }))
+	const referenceTags = $derived<StageTag[]>(
+		(calibration?.tags ?? []).map((t) => ({ key: String(t.tagId), label: `${t.name} #${t.tagId}`, corners: t.corners, center: t.center, status: 'calibrated' }))
 	);
-	const resultMarkers = $derived<StageMarker[]>(
+	const resultTags = $derived<StageTag[]>(
 		calibration && shownResult?.vision
 			? shownResult.vision.markers.map((m) => {
-					const p = calibration.placements.find((q) => q.markerId === m.markerId);
-					return { id: m.markerId, label: m.name, color: p ? rgbToHex(p.color) : '#888', x: m.x, y: m.y, refX: p?.x ?? null, refY: p?.y ?? null, status: m.status };
+					const c = calibration.tags.find((t) => t.tagId === m.tagId);
+					return {
+						key: String(m.tagId),
+						label: `${m.name} #${m.tagId}`,
+						corners: m.corners,
+						center: m.center,
+						refCorners: c?.corners ?? null,
+						refCenter: c?.center ?? null,
+						status: m.status
+					};
 				})
 			: []
 	);
@@ -108,7 +115,7 @@
 		<div>
 			<h1 class="text-2xl font-bold" style="color: var(--color-tron-cyan)">Robot Arm — Vision</h1>
 			<p class="text-xs" style="color: var(--color-tron-text-secondary)">
-				Sticker markers on the arm and its surroundings, tracked by the camera — the backstop for an arm that did not return home.
+				AprilTags on the arm and its surroundings, located by the camera in mm — the backstop for an arm that did not return home.
 			</p>
 		</div>
 		<label class="text-xs" style="color: var(--color-tron-text-secondary)">
@@ -126,7 +133,7 @@
 	</div>
 
 	{#if data.camerasError}<p class="text-xs" style="color: #f59e0b">The Pi did not list its cameras: {data.camerasError}</p>{/if}
-	{#if data.markersError}<p class="text-xs text-red-300">{data.markersError}</p>{/if}
+	{#if data.tagsError}<p class="text-xs text-red-300">{data.tagsError}</p>{/if}
 	{#if data.calibrationsError}<p class="text-xs text-red-300">{data.calibrationsError}</p>{/if}
 
 	{#if flash?.error}
@@ -150,7 +157,9 @@
 				<p class="text-xs" style="color: var(--color-tron-text-secondary)">
 					{#if calibration}
 						Calibrated {when(calibration.capturedAt)}{calibration.capturedBy?.username ? ` by ${calibration.capturedBy.username}` : ''}
-						· {calibration.placements.length} marker(s) · {calibration.depthAvailable ? 'with depth' : 'picture only (no depth)'}
+						· {calibration.tags.length} tag(s) ({calibration.tags.filter((t) => t.role === 'fixed').length} fixed)
+						· {calibration.tolerances.positionMm} mm{calibration.tolerances.angleDeg > 0 ? ` / ${calibration.tolerances.angleDeg}°` : ''}
+						{#if calibration.intrinsicsSource === 'nominal'}· nominal intrinsics{/if}
 						· {calibration.jointSteps ? 'encoder home stored' : 'no encoder home'}
 						{#if calibration.note}· {calibration.note}{/if}
 					{:else}
@@ -170,13 +179,13 @@
 		{#if calibration}
 			<div class="mt-3 grid gap-4 md:grid-cols-2">
 				<figure>
-					<VisionStage src={calibration.thumbnailDataUrl} width={calibration.frameWidth} height={calibration.frameHeight} markers={referenceMarkers} alt="Calibration frame" />
+					<VisionStage src={calibration.thumbnailDataUrl} width={calibration.frameWidth} height={calibration.frameHeight} tags={referenceTags} alt="Calibration frame" />
 					<figcaption class="mt-1 text-center text-[11px]" style="color: var(--color-tron-text-secondary)">calibration (home)</figcaption>
 				</figure>
 				{#if shownResult}
 					{@const v = verdict(shownResult.home.verdict)}
 					<figure>
-						<VisionStage src={shownResult.snapshotDataUrl} width={calibration.frameWidth} height={calibration.frameHeight} markers={resultMarkers} alt="Camera frame at the check" emptyText="No camera frame for this check" />
+						<VisionStage src={shownResult.snapshotDataUrl} width={calibration.frameWidth} height={calibration.frameHeight} tags={resultTags} alt="Camera frame at the check" emptyText="No camera frame for this check" />
 						<figcaption class="mt-1 text-center text-[11px] font-semibold" style="color: {v.color}">now · {v.label}</figcaption>
 					</figure>
 				{:else}
@@ -212,7 +221,7 @@
 						onclick={(e) => { if (!confirm('The arm will MOVE to the calibrated home, one joint at a time. Is the path clear?')) e.preventDefault(); }}
 						class="min-h-[44px] rounded px-4 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-40"
 						style="background: rgba(245,158,11,0.15); color: #fbbf24; border: 1px solid #f59e0b;"
-						title={calibration.jointSteps ? 'Jog every joint back to the calibrated encoder steps, then verify with the markers' : 'This calibration has no encoder home'}
+						title={calibration.jointSteps ? 'Jog every joint back to the calibrated encoder steps, then verify with the tags' : 'This calibration has no encoder home'}
 					>
 						{homeBusy === 'return' ? 'Returning…' : 'Return to home'}
 					</button>
@@ -239,9 +248,9 @@
 
 	<VisionLiveTracker {camera} {calibration} />
 
-	<VisionCalibrationEditor {camera} {markers} {calibration} {blocked} {blockReason} />
+	<VisionTagCalibrator {camera} {tags} {calibration} {blocked} {blockReason} />
 
-	<VisionMarkerRegistry {markers} />
+	<VisionTagRegistry {tags} />
 
 	{#if history.length}
 		<section class="rounded border p-3 sm:p-4" style="border-color: var(--color-tron-border); background: var(--color-tron-surface);">
@@ -250,7 +259,7 @@
 				{#each history as h (h._id)}
 					<li>
 						<span class="font-mono">{h.cameraName}</span> · {when(h.capturedAt)}{h.capturedBy?.username ? ` by ${h.capturedBy.username}` : ''}
-						· {h.placements.length} marker(s){h.depthAvailable ? ' + depth' : ''}
+						· {h.tags.length} tag(s)
 						{#if h.supersededAt}· retired {when(h.supersededAt)}{/if}
 						{#if h.note}· {h.note}{/if}
 					</li>

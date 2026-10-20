@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { assessHome, planJogDeltas, residuals, HOME_STEP_TOLERANCE } from './home-calibration';
-import type { VisionAssessment } from './markers';
+import type { VisionAssessment } from './apriltags';
 
 const home = { '1': 2048, '2': 1500, '3': 2600, '4': 2048, '5': 2100 };
 
