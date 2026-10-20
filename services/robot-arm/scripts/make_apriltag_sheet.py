@@ -1,0 +1,140 @@
+#!/usr/bin/env python3
+"""
+Generate the printable AprilTag 36h11 sheet: calibration/apriltag-sheet.html.
+
+    uv run --no-dev python scripts/make_apriltag_sheet.py
+
+Every physical tag must carry a unique ID. To add tags, extend SIZES_MM or
+PER_SIZE and rerun; never reuse an ID that is already stuck somewhere.
+
+Sizes are the edge of the BLACK square (8 cells of the 10-cell 36h11 tag).
+Bigger tags read from further away. Detection wants 3+ pixels per cell; at
+1920x1080 the D415 colour camera sees ~0.7 mm per pixel per metre, so e.g.
+12 mm reads to ~0.7 m and 8 mm to ~0.45 m.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import cv2
+
+OUT = Path(__file__).resolve().parents[1] / "calibration" / "apriltag-sheet.html"
+
+# 9 tags per size, IDs handed out in order. No uses assigned: where each ID
+# ended up is recorded later, from a photo of the stuck-on tags.
+SIZES_MM = [40, 30, 20, 15, 12, 8]
+PER_SIZE = 9
+TAGS: list[tuple[float, list[int]]] = [
+    (size, list(range(i * PER_SIZE, (i + 1) * PER_SIZE))) for i, size in enumerate(SIZES_MM)
+]
+
+PAGE_W, PAGE_H = 190.0, 255.0  # inside letter with 10 mm margins
+HEADER_H = 22.0
+RULER_H = 14.0
+LABEL_H = 5.0
+
+DICT = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_APRILTAG_36h11)
+
+
+def tag_svg(tag_id: int, x: float, y: float, size: float) -> list[str]:
+    cells = cv2.aruco.generateImageMarker(DICT, tag_id, 8)
+    c = size / 8
+    out = []
+    for r in range(8):
+        for col in range(8):
+            if cells[r, col] == 0:
+                # 0.02 mm overlap so the printer never leaves hairlines between cells
+                out.append(f'<rect x="{x + col * c:.3f}" y="{y + r * c:.3f}" width="{c + 0.02:.3f}" height="{c + 0.02:.3f}"/>')
+    return out
+
+
+def header(page: int, pages: int) -> list[str]:
+    return [
+        f'<text x="0" y="6" font-size="5" font-weight="bold">Robot arm markers: AprilTag 36h11 (page {page} of {pages})</text>',
+        '<text x="0" y="11.5" font-size="3">Size = edge of the BLACK square. Keep the white border. Mount flat (cardstock / plastic backing).</text>',
+        '<text x="0" y="16" font-size="3">Each ID goes on ONE spot only.</text>',
+    ]
+
+
+def ruler(y: float) -> list[str]:
+    out = [f'<rect x="0" y="{y:.1f}" width="100" height="4" fill="none" stroke="#000" stroke-width="0.3"/>']
+    for mm in range(0, 101, 10):
+        out.append(f'<line x1="{mm}" y1="{y:.1f}" x2="{mm}" y2="{y + (4 if mm % 50 == 0 else 2.5):.1f}" stroke="#000" stroke-width="0.3"/>')
+    out.append(f'<text x="0" y="{y + 8:.1f}" font-size="3">0</text>')
+    out.append(f'<text x="47" y="{y + 8:.1f}" font-size="3">50 mm</text>')
+    out.append(f'<text x="93" y="{y + 8:.1f}" font-size="3">100 mm</text>')
+    out.append(f'<text x="108" y="{y + 3:.1f}" font-size="3">This bar must measure exactly 100 mm.</text>')
+    out.append(f'<text x="108" y="{y + 7.5:.1f}" font-size="3">If not, reprint at 100% / Actual size.</text>')
+    return out
+
+
+def layout() -> list[list[str]]:
+    pages: list[list[str]] = [[]]
+    y = HEADER_H
+    bottom = PAGE_H - RULER_H
+    for size, tags in TAGS:
+        pad = max(3.0 if size >= 10 else 3.6, size * 0.18)  # tiny tags need room for their label
+        cw = size + 2 * pad
+        ch = size + 2 * pad + LABEL_H
+        per_row = int(PAGE_W // cw)
+        rows = [tags[i:i + per_row] for i in range(0, len(tags), per_row)]
+        if y + 6 + ch * len(rows) > bottom:  # keep a size group on one page
+            pages.append([])
+            y = HEADER_H
+        pages[-1].append(f'<text x="0" y="{y + 4:.1f}" font-size="3.4" font-weight="bold">{size:g} mm</text>')
+        y += 6
+        for row in rows:
+            if y + ch > bottom:
+                pages.append([])
+                y = HEADER_H
+            for i, tag_id in enumerate(row):
+                x = i * cw
+                pages[-1].append(
+                    f'<rect x="{x:.2f}" y="{y:.2f}" width="{cw:.2f}" height="{ch:.2f}" fill="none" '
+                    'stroke="#999" stroke-width="0.2" stroke-dasharray="1.5 1"/>'
+                )
+                pages[-1] += tag_svg(tag_id, x + pad, y + pad, size)
+                ty = y + 2 * pad + size
+                fs = 2.6 if size >= 20 else 2.0 if size >= 12 else 1.7
+                pages[-1].append(f'<text x="{x + cw / 2:.2f}" y="{ty:.2f}" font-size="{fs}" text-anchor="middle" font-weight="bold">ID {tag_id} · {size:g} mm</text>')
+            y += ch
+        y += 3
+    return pages
+
+
+def main() -> None:
+    pages = layout()
+    svgs = []
+    for n, body in enumerate(pages, 1):
+        svgs.append(
+            f'<svg xmlns="http://www.w3.org/2000/svg" width="{PAGE_W:g}mm" height="{PAGE_H:g}mm" '
+            f'viewBox="0 0 {PAGE_W:g} {PAGE_H:g}" font-family="Arial" shape-rendering="crispEdges">\n'
+            + "\n".join(header(n, len(pages)) + body + ruler(PAGE_H - RULER_H + 4))
+            + "\n</svg>"
+        )
+    html = f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Arm AprilTags</title>
+<!-- Generated by scripts/make_apriltag_sheet.py; edit that, not this file. -->
+<style>
+@page {{ size: letter; margin: 10mm; }}
+html, body {{ margin: 0; background: #fff; color: #000; font-family: Arial, sans-serif; }}
+.screen-note {{ max-width: 190mm; margin: 6mm auto; font-size: 13px; line-height: 1.4; }}
+svg {{ display: block; margin: 0 auto; break-after: page; page-break-after: always; }}
+svg:last-of-type {{ break-after: auto; page-break-after: auto; }}
+@media print {{ .screen-note {{ display: none; }} }}
+</style></head><body>
+<div class="screen-note">
+<b>Print with scale 100% / "Actual size"</b> (never "Fit to page"), on <b>matte</b> paper or matte label stock, ideally with a
+<b>laser printer</b>. Many inkjet black inks are see-through to infrared, which this camera's depth sensor uses. Afterwards, check
+the 100 mm bar on each page with a ruler and write each tag's measured size on its back. Cut on the dashed lines and keep the white border.
+</div>
+{chr(10).join(svgs)}
+</body></html>
+"""
+    OUT.write_text(html, encoding="utf-8")
+    print(f"wrote {OUT} ({len(pages)} pages, {sum(len(t) for _, t in TAGS)} tags)")
+
+
+if __name__ == "__main__":
+    main()
