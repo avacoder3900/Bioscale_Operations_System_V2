@@ -21445,3 +21445,136 @@ crossed) so slow sweeps start where they left the hold. groupIntoSteps(): overla
 one move per servo per step. Moves carry raw from/to positions and frame indices.
 Tried on GioRealTest-20261016-210639 (83 s, 2490 frames, copied read-only from the Pi): threshold 0 -> 210
 steps / 459 moves; 5 -> 95 / 200; 10 -> 94 / 165; 20 -> 94 / 155. Tests: recording-steps.test.ts 12/12.
+================================================================================
+2026-10-20 — feat/arm-apriltag-sheet — printable AprilTag sheet for arm calibration (HTML + PDF)
+================================================================================
+Shared copy of the robot-arm AprilTag print sheet so Sam and others can print the same tags.
+New: services/robot-arm/scripts/make_apriltag_sheet.py (generator, uses cv2.aruco DICT_APRILTAG_36h11),
+services/robot-arm/calibration/apriltag-sheet.html (generated) and apriltag-sheet.pdf (headless-Edge print of
+the HTML, letter). 54 unique tags on 3 pages: 9 each at 40/30/20/15/12/8 mm (black-square edge), IDs 0-53 in
+order, labelled only "ID n · size"; no locations assigned yet (operator will photograph the stuck-on tags and
+say where each ID went). Print at 100% / Actual size on matte paper, laser preferred (inkjet black can be
+IR-transparent); each page has a 100 mm check bar. Note: the small sizes assume 1920x1080 colour, but the
+D415 is on a USB 2.0 link today (1080p only ~8 fps there; see CAMERA_STREAMING_HANDOFF.md). Nothing detects
+AprilTags yet. No TS changes, npm run check not needed.
+
+================================================================================
+2026-10-20 — feat/arm-apriltag-vision — ARM-05: AprilTags replace the colour-sticker arm vision (ARM-04)
+================================================================================
+Audit first (ARM-04 on master since fa54a216, never run on the arm; Giovanni's AprilTag 36h11 sheet on
+feat/arm-apriltag-sheet, merged into this branch with a progress.txt conflict resolved keeping both entries).
+Camera per Giovanni's CAMERA_STREAMING_HANDOFF.md: RealSense D415, colour 640x480@30 over USB 2.0. Operator:
+tags are at most 1 ft from the camera; detection to run on the Pi; Giovanni is not building it; write blind.
+Pi (no access from here, the Funnel timed out, no ssh key on this machine; NOT run):
+services/robot-arm/src/server/apriltags.py: POST /cameras/{name}/apriltags/detect + GET status. OpenCV aruco
+DICT_APRILTAG_36h11 (4.7+ and legacy API), subpix corners, solvePnP IPPE_SQUARE per tag with the D415 factory
+colour intrinsics via pyrealsense2 (fallback env APRILTAG_FX.., then a nominal D415 estimate), depth.py's
+_rs.sample at each centre as cross-check, frames from the service's own snapshot.jpg over loopback (cameras.py
+untouched). scripts/install_apriltag_router.py wires it into app.py like the depth installer.
+BIMS: src/lib/robot-arm/apriltags.ts (pure; sheet size map, 3-D helpers, camera-shift consensus over the fixed
+tags (shift undone before judging arm tags, a single knocked fixed tag is outvoted), per-tag ok/moved/missing in
+mm + degrees, registry-size rescale) + 15 tests. New models RobotArmTag (robot_arm_tags) and
+RobotArmTagCalibration (robot_arm_tag_calibrations); robot-arm-vision.ts rewritten (registry by tag ID, save =
+one fresh Pi detection with arm at home + encoders, check/return unchanged in shape). Client detectAprilTags
+replaces sampleDepth; new GET /api/robot-arm/cameras/[name]/apriltags proxy (manufacturing:read); agent
+vision-check returns tagId/role/offMm/offDeg/zMm/cameraShift. Vision tab: VisionStage draws tag outlines,
+VisionLiveTracker polls detections, VisionTagCalibrator (detect -> register unknown IDs inline -> save),
+VisionTagRegistry. Removed markers.ts(+tests), frame-grab.ts, the depth proxy route, VisionCalibrationEditor,
+VisionMarkerRegistry, the two ARM-04 models (their collections left in Mongo, unread).
+Docs: docs/prds/ARM-05-apriltag-vision.md (contract, install, size-vs-distance table); ARM-04 PRD marked superseded.
+Size note: at 640x480 (f ~615 px) and 1 ft the smallest reliable tag is ~12 mm, so 12-40 mm read, 8 mm needs
+1280x720 (my audit's earlier "~25 mm" was wrong: I had used the 1080p focal figure scaled the wrong way).
+npm run check: 14 errors, none in touched files (pre-existing r2, research-proxy x2, AskBims, assembly x8,
+magnetometer x2). Unit: robot-arm suites 60/60. vite build: client + server built; adapter trace OOM locally (Windows).
+Merged origin/master (Giovanni's feat/arm-camera-direct-30fps) at 41b1b830; check still 14 errors, robot-arm tests 81/81.
+Deployment: preview — https://bioscale-operations-system-mongodb-7hpzxlcvg-brevitest.vercel.app
+Source: branch feat/arm-apriltag-vision @ commit 41b1b830
+Retrieve this exact code: git checkout feat/arm-apriltag-vision at commit 41b1b830
+  (or: git log feat/arm-apriltag-vision --oneline to find it if the branch has since moved on)
+What this deployment is for: ARM-05 AprilTag Vision tab before merge (PR #105). Smoke: /login 200, Vision tab
+302 to login, apriltags proxy 401 and agent vision-check 401 without credentials. Pi route not installed yet.
+Deployment: production — https://bioscale-operations-system-mongodb-o03orguet-brevitest.vercel.app
+Source: branch master @ commit dcdf9262 (merge of PR #105, feat/arm-apriltag-vision @ 6ec46735)
+Retrieve this exact code: git checkout master at commit dcdf9262
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: ARM-05 AprilTag Vision tab live. Smoke on production: /login 200, Vision tab 302
+to login, apriltags proxy and agent vision-check 401 without credentials. Follow-up: Robot_Arm_Calibration_Context.md
+(repo root) condenses the arm calibration context for the next session.
+
+================================================================================
+2026-10-20 — feat/arm-apriltag-upscale-720p — AprilTag detection: 2x upscale, factory intrinsics file, 720p
+================================================================================
+Operator saw five clear tags and the Vision tab found none. Root cause: most stuck-on tags are the 8 mm IDs
+45-53, ~14-17 px across at 640x480, just under OpenCV aruco's floor (the context doc already says 8 mm needs
+720p). Measured on the live frame on arm-pi: 1x -> 0 tags; 1.5x/2x upscale -> 45, 50, 51, 53 (+4-7 ms);
+3x -> fewer; loosening DetectorParameters only added false/duplicate IDs.
+services/robot-arm/src/server/apriltags.py: detect on the frame enlarged by APRILTAG_UPSCALE (default 2,
+corners scaled back); factory intrinsics now also read from APRILTAG_INTRINSICS_FILE
+(calibrations/realsense_color_intrinsics.json, keyed WxH, source "realsense") since pyrealsense2 has no
+cp313 aarch64 wheel; depth cross-check maps tag centres into depth.py's 640x480 reference frame through the
+two factory intrinsics (720p = 640x480 scaled 3/2 with wider sides), null when either is unknown.
+New services/robot-arm/scripts/dump_realsense_intrinsics.py writes that JSON (run via
+`uv run --no-project --python 3.12 --with pyrealsense2`); on arm-pi it holds 424x240/640x480/1280x720/1920x1080.
+arm-pi (Pi-only config, backups *.bak-640x480 / .env.bak-pre-720p / apriltags.py.bak-pre-upscale):
+hardware.yaml cameras.external 1280x720 @ 15 fps for today (USB 2.0 cap; a USB 3 cable arrives 2026-10-21,
+then 1280x720@30 or 1080p@30 needs only hardware.yaml); APRILTAG_FX/FY/CX/CY commented out in .env.
+Verified at 720p: stream 15.0 fps (90 frames/6 s) with depth streaming alongside, intrinsics source
+"realsense" (fx 910.46), detect ~60 ms, tags 23/45/50/51 found; pose z vs D415 depth agree within 1 mm
+(45: 275/276, 50: 287/287, 51: 280/280), which validates the colour->depth mapping at 720p. Still missed:
+53 (cut off by the shorter 16:9 view) and the blue-box tag (behind cables). npm run check not run (Python only).
+
+================================================================================
+2026-10-20 — feat/arm-camera-rotate — arm camera view: rotate 90° left/right
+================================================================================
+Operator is remounting the D415 on its side (portrait), which makes the feed awkward to watch. View-only
+rotation, so frames, AprilTag detection, normalised coords, intrinsics and the depth mapping all keep the
+camera's own orientation (rotating on the Pi would have broken all of those).
+New src/lib/robot-arm/camera-rotation.svelte.ts: one module-level rotation (0/90/180/270), saved in
+localStorage (bims.armCamera.rotation.v1), restored from an $effect so SSR and first client render match.
+New src/lib/components/robot-arm/RotatedFrame.svelte: frame-aspect box turned by CSS; at 90/270 the outer box
+takes the swapped aspect (16:9 on its side lays out as 9:16), inner box sized in % of the outer.
+RobotArmCameraPanel.svelte: ⟲/⟳ buttons (+ "90°" chip to reset), image wrapped in RotatedFrame using the
+img's decoded size (fallback: Pi actual_size, then requested), size menu sets the long edge when sideways.
+VisionStage.svelte: image + tag outlines rotate together; labels counter-rotated about the tag centre so they
+read upright. npm run check: 14 errors, none in touched files (the 14th is research-proxy.ts from master).
+Not clicked through in a browser by me (no browser here); operator to confirm.
+
+================================================================================
+2026-10-20 — feat/arm-tag-edit — rename/edit a registered AprilTag from the Calibrate list
+================================================================================
+Operator asked how to rename tags after registering. Editing existed only behind the small "edit" link in the
+Tag Registry; the cyan tag name in Calibrate's detection list was plain text.
+VisionTagCalibrator.svelte: the registered name is now a button ("Wrist ▾") that opens the same form used to
+register a new ID (name, on arm/fixed, size, group), prefilled, posting ?/updateTag, plus "archive" (same
+form, formaction ?/archiveTag, confirm) and cancel. One form for both cases ({#key reg._id}), so register and
+edit cannot drift apart; it closes only on success, so a name clash stays open to fix.
+VisionTagRegistry.svelte: clicking a tag's name opens its edit row too.
+Bug fixed on the way: updateTag rewrites every field and neither edit form sent `notes`, so any edit wiped a
+tag's notes; both forms now carry it as a hidden field. Calibrations keep their own name snapshot by design
+(model comment), so home-check results show the old name until the next calibration. npm run check: 14 errors,
+none in touched files.
+
+================================================================================
+2026-10-20 — feat/arm-camera-pull-live — arm live view: pull frames like the CV stations, race Tailscale vs tunnel
+================================================================================
+Operator: arm live view "very laggy", like the CV stations used to be. Same cause as CV's 2026-10-14 fix: the
+panel's direct mode was a PUSH MJPEG stream through the Cloudflare tunnel. Measured from the office laptop at
+720p: Pi pushed 15 fps x ~95 KB (~11 Mbit/s), tunnel delivered 3.6 fps (~2.7 Mbit/s), so frames queued in
+sockets/proxies and the view fell seconds behind (a browser cannot skip ahead in multipart). Over the Pi's
+private Tailscale route the same stream arrived at the full 15 fps and a snapshot took ~0.1 s (tunnel 0.5-0.75 s).
+1. RobotArmCameraPanel.svelte: direct mode now PULLS snapshot.jpg one frame in flight (preload, swap, next;
+   capped by the direct fps menu; back-off; token re-minted before expiry and once on early failures; 6
+   failures -> proxy). Lag bounded at ~one round trip. Health strip shows the route and a measured fps; the
+   stale warning now uses the client clock in both modes. Save downloads a full-quality still.
+2. stream-url/+server.ts: response gains `origins` (kept `origin` = first, for old clients). ROBOT_ARM_BASE_URL
+   is listed ONLY when it is an https://<machine>.<tailnet>.ts.net origin (operator approved 2026-10-20); IPs,
+   LAN names, paths and look-alike domains are never published (tests). The panel races all origins with one
+   small frame (Promise.any) and keeps the first to load: tailnet viewers get Tailscale, others the tunnel.
+   stream-url tests 29/29 (+8), robot-arm 89/89.
+3. arm-pi (Pi-only, backup app.py.bak-pre-snapshot-q): /cameras/{name}/snapshot.jpg accepts ?q=30..95 and
+   ?w=160..1920 and re-encodes the latest frame (~10 ms); without them the stored frame is returned unchanged
+   (AprilTag detection, saves). 720p frame: 61 KB plain, 27 KB at q60/w960, 12 KB at q70/w480.
+Simulated pull loop (q70, w480, new TLS connection per frame, so browsers do better): tunnel 2.5 fps with
+<=0.4 s lag; Tailscale 6.6 fps with ~0.15 s lag. npm run check: 14 errors, none in touched files.
+Also: Robot_Arm_Vision_Servo_Home_Context.md (repo root, 2f3ca436) for a future session on joining the Vision
+tag home with the servo encoder home.

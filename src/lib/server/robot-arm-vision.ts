@@ -1,37 +1,35 @@
 /**
- * Robot arm — sticker-marker vision calibration (ARM-04): the I/O half.
+ * Robot arm — AprilTag vision calibration (ARM-05): the I/O half.
  *
- * Pure decisions live in $lib/robot-arm/markers (tracking, verdicts) and
- * $lib/robot-arm/home-calibration (jog plan, encoder residuals), both
- * unit-tested. This module owns the marker registry, turns a frozen frame +
- * the operator's placements into a calibration, and runs the server-side
- * check that answers "is every tracked point where it was at home?" — the
+ * Pure decisions live in $lib/robot-arm/apriltags (pose comparison, camera
+ * shift, verdicts) and $lib/robot-arm/home-calibration (jog plan, encoder
+ * residuals), both unit-tested. This module owns the tag registry, turns one
+ * detection with the arm parked at home into a calibration, and runs the
+ * server-side check that answers "is every tag where it was at home?" — the
  * backstop for a run that ends with the arm not back home.
  *
- * Pi calls (live arm-pi OpenAPI, 2026-10-19, plus the ARM-04 depth route):
- *   GET  /cameras/{name}/snapshot.jpg       frame to check against
- *   POST /cameras/{name}/depth/sample       depth at points (404 until installed)
+ * Pi calls:
+ *   POST /cameras/{name}/apriltags/detect   tags + poses (+ the frame); 404 until installed
  *   GET  /pose                              encoder steps, servos 1–5
  *   POST /torque, POST /servos/{id}/jog     return to home
  */
 import sharp from 'sharp';
 import { connectDB, AuditLog, generateId } from '$lib/server/db';
-import { RobotArmMarker, RobotArmVisionCalibration } from '$lib/server/db/models';
-import { robotArm } from './robot-arm-client';
+import { RobotArmTag, RobotArmTagCalibration } from '$lib/server/db/models';
+import { robotArm, type AprilTagDetectResponse } from './robot-arm-client';
 import {
-	assessMarkers,
+	assessTags,
 	describeVision,
-	hexToRgb,
-	isLowSaturation,
-	samplePatch,
-	trackAll,
-	DEFAULT_DEPTH_TOLERANCE_MM,
-	DEFAULT_POSITION_TOLERANCE,
-	type PixelImage,
-	type Placement,
-	type Rgb,
+	sheetSizeMm,
+	DEFAULT_TOLERANCES,
+	MAX_TAG_ID,
+	SHEET_MAX_ID,
+	type CalibratedTag,
+	type TagDetection,
+	type TagRole,
+	type Tolerances,
 	type VisionAssessment
-} from '$lib/robot-arm/markers';
+} from '$lib/robot-arm/apriltags';
 import {
 	assessHome,
 	planJogDeltas,
@@ -49,37 +47,39 @@ type User = { _id: string; username: string };
 const SETTLE_MS = 1500;
 /** Width of the stored thumbnails (data URLs in Mongo). */
 const THUMB_WIDTH = 480;
-/** Calibration frames above this are refused — a Pi snapshot is ~50–150 kB. */
-export const MAX_FRAME_BYTES = 3 * 1024 * 1024;
 
 // ── registry ─────────────────────────────────────────────────────────────
 
-export interface MarkerSummary {
+export interface TagSummary {
 	_id: string;
+	tagId: number;
+	sizeMm: number;
+	role: TagRole;
 	name: string;
 	group: string | null;
-	color: Rgb;
 	notes: string | null;
 	archived: boolean;
 	createdAt: string | null;
 }
 
-function markerSummary(d: any): MarkerSummary {
+function tagSummary(d: any): TagSummary {
 	return {
 		_id: String(d._id),
+		tagId: Number(d.tagId),
+		sizeMm: Number(d.sizeMm),
+		role: d.role === 'fixed' ? 'fixed' : 'arm',
 		name: d.name,
 		group: d.group ?? null,
-		color: { r: d.color?.r ?? 0, g: d.color?.g ?? 0, b: d.color?.b ?? 0 },
 		notes: d.notes ?? null,
 		archived: !!d.archivedAt,
 		createdAt: d.createdAt ? new Date(d.createdAt).toISOString() : null
 	};
 }
 
-export async function listMarkers(): Promise<MarkerSummary[]> {
+export async function listTags(): Promise<TagSummary[]> {
 	await connectDB();
-	const rows = await RobotArmMarker.find({}).sort({ archivedAt: 1, group: 1, name: 1 }).lean();
-	return (rows as any[]).map(markerSummary);
+	const rows = await RobotArmTag.find({}).sort({ archivedAt: 1, tagId: 1 }).lean();
+	return (rows as any[]).map(tagSummary);
 }
 
 async function audit(action: string, tableName: string, recordId: string, user: User, newData: Record<string, unknown>) {
@@ -94,62 +94,144 @@ async function audit(action: string, tableName: string, recordId: string, user: 
 	});
 }
 
-function cleanMarkerInput(input: { name?: string | null; group?: string | null; color?: string | null; notes?: string | null }) {
-	const name = (input.name ?? '').trim();
-	if (!name) throw new Error('A marker needs a name.');
-	if (name.length > 60) throw new Error('Marker names are limited to 60 characters.');
-	const color = hexToRgb(input.color ?? '');
-	if (!color) throw new Error('Pick the sticker colour.');
-	const group = (input.group ?? '').trim() || null;
-	const notes = (input.notes ?? '').trim() || null;
-	return { name, group, color, notes };
+export interface TagInput {
+	tagId?: string | number | null;
+	sizeMm?: string | number | null;
+	role?: string | null;
+	name?: string | null;
+	group?: string | null;
+	notes?: string | null;
 }
 
-async function assertNameFree(name: string, exceptId?: string) {
-	const clash = await RobotArmMarker.findOne({
+function cleanTagInput(input: TagInput) {
+	const tagId = Number(input.tagId);
+	if (!Number.isInteger(tagId) || tagId < 0 || tagId > MAX_TAG_ID) throw new Error(`Tag ID must be a whole number 0–${MAX_TAG_ID}.`);
+	const rawSize = input.sizeMm == null || input.sizeMm === '' ? sheetSizeMm(tagId) : Number(input.sizeMm);
+	if (rawSize == null) throw new Error(`Tag ${tagId} is not on the printed sheet (IDs 0–${SHEET_MAX_ID}); enter its size.`);
+	if (!Number.isFinite(rawSize) || rawSize < 1 || rawSize > 500) throw new Error('Tag size must be 1–500 mm (edge of the black square).');
+	const role: TagRole = input.role === 'fixed' ? 'fixed' : input.role === 'arm' ? 'arm' : (() => {
+		throw new Error('Say whether the tag is on the arm or fixed to the surroundings.');
+	})();
+	const name = (input.name ?? '').trim();
+	if (!name) throw new Error('A tag needs a name (where it is stuck).');
+	if (name.length > 60) throw new Error('Tag names are limited to 60 characters.');
+	const group = (input.group ?? '').trim() || null;
+	const notes = (input.notes ?? '').trim() || null;
+	return { tagId, sizeMm: Math.round(rawSize * 100) / 100, role, name, group, notes };
+}
+
+async function assertFree(tagId: number, name: string, exceptId?: string) {
+	const notMe = exceptId ? { _id: { $ne: exceptId } } : {};
+	const idClash = await RobotArmTag.findOne({ archivedAt: null, tagId, ...notMe }).select('name').lean();
+	if (idClash) throw new Error(`Tag ${tagId} is already registered as "${(idClash as any).name}". Each printed ID goes on one spot only.`);
+	const nameClash = await RobotArmTag.findOne({
 		archivedAt: null,
 		name: { $regex: `^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, $options: 'i' },
-		...(exceptId ? { _id: { $ne: exceptId } } : {})
+		...notMe
 	})
 		.select('_id')
 		.lean();
-	if (clash) throw new Error(`A marker called "${name}" already exists.`);
+	if (nameClash) throw new Error(`A tag called "${name}" already exists.`);
 }
 
-export async function createMarker(user: User, input: { name?: string | null; group?: string | null; color?: string | null; notes?: string | null }) {
+export async function createTag(user: User, input: TagInput) {
 	await connectDB();
-	const m = cleanMarkerInput(input);
-	await assertNameFree(m.name);
+	const t = cleanTagInput(input);
+	await assertFree(t.tagId, t.name);
 	const _id = generateId();
-	await RobotArmMarker.create({ _id, ...m, createdBy: { _id: user._id, username: user.username } });
-	await audit('robot_arm.marker.create', 'robot_arm_markers', _id, user, { ...m, lowSaturation: isLowSaturation(m.color) });
-	return { _id, ...m };
+	await RobotArmTag.create({ _id, ...t, createdBy: { _id: user._id, username: user.username } });
+	await audit('robot_arm.tag.create', 'robot_arm_tags', _id, user, t);
+	return { _id, ...t };
 }
 
-export async function updateMarker(user: User, id: string, input: { name?: string | null; group?: string | null; color?: string | null; notes?: string | null }) {
+export async function updateTag(user: User, id: string, input: TagInput) {
 	await connectDB();
-	const before = (await RobotArmMarker.findById(id).lean()) as any;
-	if (!before) throw new Error('Marker not found.');
-	const m = cleanMarkerInput(input);
-	await assertNameFree(m.name, id);
-	await RobotArmMarker.updateOne({ _id: id }, { $set: m });
-	await audit('robot_arm.marker.update', 'robot_arm_markers', id, user, {
-		before: { name: before.name, group: before.group, color: before.color, notes: before.notes },
-		after: m
+	const before = (await RobotArmTag.findById(id).lean()) as any;
+	if (!before) throw new Error('Tag not found.');
+	const t = cleanTagInput(input);
+	await assertFree(t.tagId, t.name, id);
+	await RobotArmTag.updateOne({ _id: id }, { $set: t });
+	await audit('robot_arm.tag.update', 'robot_arm_tags', id, user, {
+		before: { tagId: before.tagId, sizeMm: before.sizeMm, role: before.role, name: before.name, group: before.group, notes: before.notes },
+		after: t
 	});
-	return m;
+	return t;
 }
 
-export async function setMarkerArchived(user: User, id: string, archived: boolean) {
+export async function setTagArchived(user: User, id: string, archived: boolean) {
 	await connectDB();
-	const doc = (await RobotArmMarker.findById(id).lean()) as any;
-	if (!doc) throw new Error('Marker not found.');
-	if (!archived) await assertNameFree(doc.name, id);
-	await RobotArmMarker.updateOne(
+	const doc = (await RobotArmTag.findById(id).lean()) as any;
+	if (!doc) throw new Error('Tag not found.');
+	if (!archived) await assertFree(doc.tagId, doc.name, id);
+	await RobotArmTag.updateOne(
 		{ _id: id },
 		{ $set: archived ? { archivedAt: new Date(), archivedBy: { _id: user._id, username: user.username } } : { archivedAt: null, archivedBy: null } }
 	);
-	await audit(archived ? 'robot_arm.marker.archive' : 'robot_arm.marker.restore', 'robot_arm_markers', id, user, { name: doc.name });
+	await audit(archived ? 'robot_arm.tag.archive' : 'robot_arm.tag.restore', 'robot_arm_tags', id, user, { tagId: doc.tagId, name: doc.name });
+}
+
+// ── detection ────────────────────────────────────────────────────────────
+
+/** A detection annotated with the registry: what each tag is, if registered. */
+export interface DetectedTag extends TagDetection {
+	registered: { _id: string; name: string; group: string | null; role: TagRole } | null;
+}
+
+export interface DetectResult {
+	cameraName: string;
+	available: boolean;
+	reason: string | null;
+	detector: string | null;
+	width: number;
+	height: number;
+	intrinsics: { fx: number; fy: number; cx: number; cy: number; source: string } | null;
+	tags: DetectedTag[];
+	/** The JPEG the tags were found in, when asked for. */
+	frame: Buffer | null;
+}
+
+/**
+ * Sizes sent to the Pi: the registry's (as measured), falling back to the
+ * printed sheet's for unregistered IDs so a preview can still show distance.
+ */
+function sizeMap(active: TagSummary[]): Record<string, number> {
+	const sizes: Record<string, number> = {};
+	for (let id = 0; id <= SHEET_MAX_ID; id++) sizes[String(id)] = sheetSizeMm(id)!;
+	for (const t of active) sizes[String(t.tagId)] = t.sizeMm;
+	return sizes;
+}
+
+function toDetection(t: AprilTagDetectResponse['tags'][number]): TagDetection {
+	return {
+		id: t.id,
+		center: t.center,
+		corners: t.corners,
+		sizeMm: t.size_mm,
+		pose: t.pose ? { t: t.pose.t_mm, R: t.pose.R, reprojPx: t.pose.reproj_px ?? null } : null,
+		depthMm: typeof t.depth_mm === 'number' && t.depth_mm > 0 ? t.depth_mm : null
+	};
+}
+
+export async function detectTags(cameraName: string, o: { includeFrame?: boolean; registry?: TagSummary[] } = {}): Promise<DetectResult> {
+	if (!cameraName) throw new Error('No camera selected.');
+	const registry = (o.registry ?? (await listTags())).filter((t) => !t.archived);
+	const byTagId = new Map(registry.map((t) => [t.tagId, t]));
+	const r = await robotArm.detectAprilTags(cameraName, { tag_sizes_mm: sizeMap(registry), include_frame: !!o.includeFrame, depth: true });
+	const tags: DetectedTag[] = (r.tags ?? []).map((t) => {
+		const reg = byTagId.get(t.id);
+		return { ...toDetection(t), registered: reg ? { _id: reg._id, name: reg.name, group: reg.group, role: reg.role } : null };
+	});
+	return {
+		cameraName,
+		available: !!r.available,
+		reason: r.reason ?? null,
+		detector: r.detector ?? null,
+		width: r.frame?.width ?? 0,
+		height: r.frame?.height ?? 0,
+		intrinsics: r.intrinsics ? { fx: r.intrinsics.fx, fy: r.intrinsics.fy, cx: r.intrinsics.cx, cy: r.intrinsics.cy, source: r.intrinsics.source } : null,
+		tags,
+		frame: r.frame_jpeg_b64 ? Buffer.from(r.frame_jpeg_b64, 'base64') : null
+	};
 }
 
 // ── calibrations ─────────────────────────────────────────────────────────
@@ -163,10 +245,10 @@ export interface CalibrationSummary {
 	note: string | null;
 	frameWidth: number;
 	frameHeight: number;
+	intrinsicsSource: string | null;
 	thumbnailDataUrl: string | null;
-	placements: Placement[];
-	depthAvailable: boolean;
-	tolerances: { position: number; depthMm: number };
+	tags: CalibratedTag[];
+	tolerances: Tolerances;
 	jointSteps: JointSteps | null;
 	supersededAt: string | null;
 	lastCheck: {
@@ -176,7 +258,8 @@ export interface CalibrationSummary {
 		verdict: string;
 		visionVerdict: string | null;
 		residualMax: number | null;
-		markers: { markerId: string; name: string; status: string; distance: number | null; depthDeltaMm: number | null }[];
+		cameraShiftMm: number | null;
+		markers: { markerId: string; tagId: number; name: string; status: string; offMm: number | null; offDeg: number | null }[];
 	} | null;
 }
 
@@ -198,18 +281,27 @@ function calibrationSummary(doc: any, o: { withThumb: boolean }): CalibrationSum
 		note: doc.note ?? null,
 		frameWidth: doc.frameWidth,
 		frameHeight: doc.frameHeight,
+		intrinsicsSource: doc.intrinsics?.source ?? null,
 		thumbnailDataUrl: o.withThumb ? (doc.thumbnailDataUrl ?? null) : null,
-		placements: (doc.placements ?? []).map((p: any) => ({
-			markerId: p.markerId,
-			name: p.name,
-			group: p.group ?? null,
-			color: { r: p.color.r, g: p.color.g, b: p.color.b },
-			x: p.x,
-			y: p.y,
-			depthMm: p.depthMm ?? null
-		})),
-		depthAvailable: !!doc.depthAvailable,
-		tolerances: { position: doc.tolerances?.position ?? DEFAULT_POSITION_TOLERANCE, depthMm: doc.tolerances?.depthMm ?? DEFAULT_DEPTH_TOLERANCE_MM },
+		tags: (doc.tags ?? []).map(
+			(t: any): CalibratedTag => ({
+				markerId: t.markerId,
+				tagId: t.tagId,
+				name: t.name,
+				group: t.group ?? null,
+				role: t.role === 'fixed' ? 'fixed' : 'arm',
+				sizeMm: t.sizeMm,
+				center: [t.center[0], t.center[1]],
+				corners: (t.corners ?? []).map((c: number[]) => [c[0], c[1]] as [number, number]),
+				pose: t.pose?.t?.length === 3 && t.pose?.R?.length === 9 ? { t: [t.pose.t[0], t.pose.t[1], t.pose.t[2]], R: [...t.pose.R], reprojPx: t.pose.reprojPx ?? null } : null,
+				depthMm: t.depthMm ?? null
+			})
+		),
+		tolerances: {
+			positionMm: doc.tolerances?.positionMm ?? DEFAULT_TOLERANCES.positionMm,
+			angleDeg: doc.tolerances?.angleDeg ?? DEFAULT_TOLERANCES.angleDeg,
+			pixel: doc.tolerances?.pixel ?? DEFAULT_TOLERANCES.pixel
+		},
 		jointSteps: jointStepsOf(doc),
 		supersededAt: doc.supersededAt ? new Date(doc.supersededAt).toISOString() : null,
 		lastCheck: doc.lastCheck?.at
@@ -220,12 +312,14 @@ function calibrationSummary(doc: any, o: { withThumb: boolean }): CalibrationSum
 					verdict: String(doc.lastCheck.verdict ?? ''),
 					visionVerdict: doc.lastCheck.visionVerdict ?? null,
 					residualMax: doc.lastCheck.residualMax ?? null,
+					cameraShiftMm: doc.lastCheck.cameraShiftMm ?? null,
 					markers: (doc.lastCheck.markers ?? []).map((m: any) => ({
 						markerId: m.markerId,
+						tagId: m.tagId,
 						name: m.name,
 						status: m.status,
-						distance: m.distance ?? null,
-						depthDeltaMm: m.depthDeltaMm ?? null
+						offMm: m.offMm ?? null,
+						offDeg: m.offDeg ?? null
 					}))
 				}
 			: null
@@ -236,12 +330,8 @@ function calibrationSummary(doc: any, o: { withThumb: boolean }): CalibrationSum
 export async function loadCalibrations(): Promise<{ active: CalibrationSummary[]; history: CalibrationSummary[] }> {
 	await connectDB();
 	const [active, history] = await Promise.all([
-		RobotArmVisionCalibration.find({ status: 'active' }).sort({ capturedAt: -1 }).lean(),
-		RobotArmVisionCalibration.find({ status: 'superseded' })
-			.select('-thumbnailDataUrl')
-			.sort({ capturedAt: -1 })
-			.limit(10)
-			.lean()
+		RobotArmTagCalibration.find({ status: 'active' }).sort({ capturedAt: -1 }).lean(),
+		RobotArmTagCalibration.find({ status: 'superseded' }).select('-thumbnailDataUrl').sort({ capturedAt: -1 }).limit(10).lean()
 	]);
 	return {
 		active: (active as any[]).map((d) => calibrationSummary(d, { withThumb: true })),
@@ -249,51 +339,9 @@ export async function loadCalibrations(): Promise<{ active: CalibrationSummary[]
 	};
 }
 
-async function decodeFrame(buf: Buffer): Promise<PixelImage> {
-	const { data, info } = await sharp(buf).rotate().removeAlpha().raw().toBuffer({ resolveWithObject: true });
-	return { data, width: info.width, height: info.height, channels: 3 };
-}
-
 async function thumbnail(buf: Buffer): Promise<string> {
 	const t = await sharp(buf).rotate().resize({ width: THUMB_WIDTH, withoutEnlargement: true }).jpeg({ quality: 72 }).toBuffer();
 	return `data:image/jpeg;base64,${t.toString('base64')}`;
-}
-
-/**
- * One frame from the Pi camera. The Pi serves its worker's latest frame, so a
- * camera nobody is viewing may have none yet: one retry after a short wait
- * covers the worker spinning up.
- */
-async function grabFrame(cameraName: string): Promise<Buffer> {
-	let lastErr: unknown;
-	for (let attempt = 0; attempt < 2; attempt++) {
-		try {
-			const { bytes } = await robotArm.getCameraSnapshot(cameraName);
-			return Buffer.from(bytes);
-		} catch (e) {
-			lastErr = e;
-			await new Promise((r) => setTimeout(r, 1500));
-		}
-	}
-	throw new Error(
-		`no frame from camera "${cameraName}": ${lastErr instanceof Error ? lastErr.message : String(lastErr)}. ` +
-			'Open the camera panel so the feed is running, then try again.'
-	);
-}
-
-/** Depth at normalised points; never throws (depth is optional). */
-async function depthAt(cameraName: string, points: [number, number][]): Promise<{ depth: (number | null)[]; available: boolean; warning: string | null }> {
-	if (!points.length) return { depth: [], available: false, warning: null };
-	try {
-		const s = await robotArm.sampleDepth(cameraName, points);
-		const depth = points.map((_, i) => {
-			const v = s.depth_mm?.[i];
-			return typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : null;
-		});
-		return { depth, available: !!s.available, warning: s.available ? null : (s.reason ?? 'The camera reports no depth.') };
-	} catch (e) {
-		return { depth: points.map(() => null), available: false, warning: `Depth not read: ${e instanceof Error ? e.message : String(e)}` };
-	}
 }
 
 async function requireArmFree(): Promise<void> {
@@ -311,64 +359,69 @@ async function readJointSteps(): Promise<{ steps: JointSteps; pose: { x_mm: numb
 	return { steps, pose: { x_mm: p.x_mm, y_mm: p.y_mm, z_mm: p.z_mm } };
 }
 
-export interface PlacementInput {
-	markerId: string;
-	x: number;
-	y: number;
+function cleanTolerances(t?: { positionMm?: number | null; angleDeg?: number | null }): Tolerances {
+	const pos = t?.positionMm;
+	const ang = t?.angleDeg;
+	return {
+		positionMm: Number.isFinite(pos) && pos! > 0 && pos! <= 100 ? pos! : DEFAULT_TOLERANCES.positionMm,
+		angleDeg: Number.isFinite(ang) && ang! >= 0 && ang! <= 90 ? ang! : DEFAULT_TOLERANCES.angleDeg,
+		pixel: DEFAULT_TOLERANCES.pixel
+	};
 }
 
 /**
- * Save a calibration from the frame the operator placed markers on.
- *
- * The frame is the exact JPEG the browser froze (not a fresh grab), so every
- * placement is on the picture the operator actually saw. Colours are sampled
- * here, server-side, from that frame — they are what tracking matches from now
- * on. Depth and the encoders are read live: the operator is told to keep the
- * arm parked at home until the save completes.
+ * Save a calibration: one fresh detection on the Pi, with the arm parked at
+ * home. Every registered tag found is stored with its pose; unregistered tags
+ * are ignored (register them first to include them). The encoders are read
+ * in the same request and become the Return-to-home target.
  */
 export async function saveCalibration(
 	user: User,
-	o: {
-		cameraName: string;
-		frame: Buffer;
-		placements: PlacementInput[];
-		tolerances?: { position?: number | null; depthMm?: number | null };
-		note?: string | null;
-	}
+	o: { cameraName: string; tolerances?: { positionMm?: number | null; angleDeg?: number | null }; note?: string | null }
 ): Promise<{ summary: CalibrationSummary; warnings: string[] }> {
 	await connectDB();
 	if (!o.cameraName) throw new Error('No camera selected.');
-	if (!o.frame.length) throw new Error('No calibration frame was sent — freeze a frame first.');
-	if (o.frame.length > MAX_FRAME_BYTES) throw new Error('The calibration frame is too large.');
-	if (!o.placements.length) throw new Error('Place at least one marker before saving.');
-
-	const ids = o.placements.map((p) => p.markerId);
-	if (new Set(ids).size !== ids.length) throw new Error('A marker was placed twice.');
-	for (const p of o.placements) {
-		if (![p.x, p.y].every((v) => Number.isFinite(v) && v >= 0 && v <= 1)) throw new Error('A marker is outside the frame.');
-	}
-	const markers = (await RobotArmMarker.find({ _id: { $in: ids }, archivedAt: null }).lean()) as any[];
-	const byId = new Map(markers.map((m) => [String(m._id), m]));
-	const unknown = ids.filter((id) => !byId.has(id));
-	if (unknown.length) throw new Error('One or more placed markers are archived or no longer exist — reload the page.');
+	const registry = (await listTags()).filter((t) => !t.archived);
+	if (!registry.length) throw new Error('Register the tags first — none are in the registry.');
 
 	// The arm must be parked and idle: the encoders read now become "home".
 	await requireArmFree();
 
-	const warnings: string[] = [];
-	const img = await decodeFrame(o.frame);
-	const sampleR = Math.max(2, Math.round(img.width * 0.005));
-	const placements: Placement[] = o.placements.map((p) => {
-		const m = byId.get(p.markerId)!;
-		const sampled = samplePatch(img, p.x * img.width, p.y * img.height, sampleR) ?? m.color;
-		if (isLowSaturation(sampled)) warnings.push(`${m.name}: the sticker reads as nearly grey on camera, so it is tracked by brightness, not colour — expect it to be less reliable.`);
-		return { markerId: p.markerId, name: m.name, group: m.group ?? null, color: sampled, x: p.x, y: p.y, depthMm: null };
-	});
+	const det = await detectTags(o.cameraName, { includeFrame: true, registry });
+	if (!det.available) throw new Error(det.reason ?? 'the Pi could not detect tags');
+	if (!det.frame) throw new Error('the Pi did not return the frame it detected on');
 
-	const depth = await depthAt(o.cameraName, placements.map((p) => [p.x, p.y]));
-	placements.forEach((p, i) => (p.depthMm = depth.depth[i]));
-	if (depth.warning) warnings.push(`${depth.warning} Saved without depth; the check will use the picture only.`);
-	else if (depth.depth.some((d) => d == null)) warnings.push(`No depth reading at: ${placements.filter((p) => p.depthMm == null).map((p) => p.name).join(', ')}.`);
+	const warnings: string[] = [];
+	const byTagId = new Map(registry.map((t) => [t.tagId, t]));
+	const tags: CalibratedTag[] = det.tags
+		.filter((d) => byTagId.has(d.id))
+		.map((d) => {
+			const reg = byTagId.get(d.id)!;
+			return {
+				markerId: reg._id,
+				tagId: d.id,
+				name: reg.name,
+				group: reg.group,
+				role: reg.role,
+				sizeMm: reg.sizeMm,
+				center: d.center,
+				corners: d.corners,
+				pose: d.pose,
+				depthMm: d.depthMm
+			};
+		});
+	if (!tags.length) throw new Error(`none of the ${registry.length} registered tag(s) is visible — check the camera and lighting`);
+
+	const unregistered = det.tags.filter((d) => !byTagId.has(d.id)).map((d) => d.id);
+	if (unregistered.length) warnings.push(`Seen but not registered, so not calibrated: tag ${unregistered.join(', ')}.`);
+	const seen = new Set(tags.map((t) => t.tagId));
+	const unseen = registry.filter((t) => !seen.has(t.tagId));
+	if (unseen.length) warnings.push(`Registered but not visible, so not calibrated: ${unseen.map((t) => `${t.name} (tag ${t.tagId})`).join(', ')}.`);
+	const noPose = tags.filter((t) => !t.pose);
+	if (noPose.length) warnings.push(`No pose for ${noPose.map((t) => t.name).join(', ')} — checked on the picture only.`);
+	if (!tags.some((t) => t.role === 'fixed')) warnings.push('No fixed tag in view — a bumped camera cannot be told apart from the arm moving. Add a tag on the deck or the Opentron.');
+	if (!tags.some((t) => t.role === 'arm')) warnings.push('No arm tag in view — this calibration cannot say anything about the arm itself.');
+	if (det.intrinsics?.source === 'nominal') warnings.push('The Pi used nominal camera intrinsics (pyrealsense2 not available) — millimetres are approximate; movement is still caught.');
 
 	let jointSteps: JointSteps | null = null;
 	let pose: { x_mm: number; y_mm: number; z_mm: number } | null = null;
@@ -383,66 +436,61 @@ export async function saveCalibration(
 		// Worker path, not direct S3: production's direct R2 credentials are
 		// invalid (228ae7d2), and the Worker is what the rest of the app uses.
 		const { uploadViaWorker } = await import('./services/r2');
-		referenceImageKey = `robot-arm/vision-calibration/${o.cameraName}/${new Date().toISOString().replace(/[:.]/g, '-')}.jpg`;
-		await uploadViaWorker(o.frame, referenceImageKey, 'image/jpeg');
+		referenceImageKey = `robot-arm/tag-calibration/${o.cameraName}/${new Date().toISOString().replace(/[:.]/g, '-')}.jpg`;
+		await uploadViaWorker(det.frame, referenceImageKey, 'image/jpeg');
 	} catch (e) {
 		console.warn('[arm-vision] calibration frame not uploaded to R2:', e instanceof Error ? e.message : e);
 		referenceImageKey = null;
 	}
 
-	const position = o.tolerances?.position;
-	const depthMm = o.tolerances?.depthMm;
-	const tolerances = {
-		position: Number.isFinite(position) && position! > 0 && position! < 0.5 ? position! : DEFAULT_POSITION_TOLERANCE,
-		depthMm: Number.isFinite(depthMm) && depthMm! > 0 && depthMm! < 1000 ? depthMm! : DEFAULT_DEPTH_TOLERANCE_MM
-	};
-
+	const tolerances = cleanTolerances(o.tolerances);
 	const _id = generateId();
 	const now = new Date();
-	const previous = (await RobotArmVisionCalibration.find({ cameraName: o.cameraName, status: 'active' }).select('_id').lean()) as any[];
-	await RobotArmVisionCalibration.create({
+	const previous = (await RobotArmTagCalibration.find({ cameraName: o.cameraName, status: 'active' }).select('_id').lean()) as any[];
+	await RobotArmTagCalibration.create({
 		_id,
 		cameraName: o.cameraName,
 		status: 'active',
 		capturedAt: now,
 		capturedBy: { _id: user._id, username: user.username },
 		note: o.note ?? null,
-		frameWidth: img.width,
-		frameHeight: img.height,
-		thumbnailDataUrl: await thumbnail(o.frame),
+		frameWidth: det.width,
+		frameHeight: det.height,
+		intrinsics: det.intrinsics,
+		detector: det.detector,
+		thumbnailDataUrl: await thumbnail(det.frame),
 		referenceImageKey,
-		placements,
-		depthAvailable: depth.available,
+		tags,
 		tolerances,
 		jointSteps,
 		pose
 	});
 	if (previous.length) {
-		await RobotArmVisionCalibration.updateMany(
+		await RobotArmTagCalibration.updateMany(
 			{ _id: { $in: previous.map((p) => p._id) } },
 			{ $set: { status: 'superseded', supersededAt: now, supersededBy: _id } }
 		);
 	}
-	await audit('robot_arm.vision.calibrate', 'robot_arm_vision_calibrations', _id, user, {
+	await audit('robot_arm.vision.calibrate', 'robot_arm_tag_calibrations', _id, user, {
 		cameraName: o.cameraName,
-		placements: placements.map((p) => ({ markerId: p.markerId, name: p.name, x: p.x, y: p.y, depthMm: p.depthMm, color: p.color })),
-		frame: { width: img.width, height: img.height },
-		depthAvailable: depth.available,
+		tags: tags.map((t) => ({ tagId: t.tagId, name: t.name, role: t.role, sizeMm: t.sizeMm, t: t.pose?.t ?? null, depthMm: t.depthMm })),
+		frame: { width: det.width, height: det.height },
+		intrinsics: det.intrinsics,
 		tolerances,
 		jointSteps,
 		supersedes: previous.map((p) => p._id),
 		referenceImageKey,
 		warnings
 	});
-	const doc = await RobotArmVisionCalibration.findById(_id).lean();
+	const doc = await RobotArmTagCalibration.findById(_id).lean();
 	return { summary: calibrationSummary(doc, { withThumb: true }), warnings };
 }
 
 /** Retire the active calibration for a camera without replacing it. */
 export async function retireCalibration(user: User, id: string): Promise<boolean> {
 	await connectDB();
-	const res = await RobotArmVisionCalibration.updateOne({ _id: id, status: 'active' }, { $set: { status: 'superseded', supersededAt: new Date(), supersededBy: null } });
-	if (res.modifiedCount) await audit('robot_arm.vision.retire', 'robot_arm_vision_calibrations', id, user, {});
+	const res = await RobotArmTagCalibration.updateOne({ _id: id, status: 'active' }, { $set: { status: 'superseded', supersededAt: new Date(), supersededBy: null } });
+	if (res.modifiedCount) await audit('robot_arm.vision.retire', 'robot_arm_tag_calibrations', id, user, {});
 	return res.modifiedCount > 0;
 }
 
@@ -466,36 +514,32 @@ async function loadActive(cameraName?: string | null): Promise<any> {
 	await connectDB();
 	const q: Record<string, unknown> = { status: 'active' };
 	if (cameraName) q.cameraName = cameraName;
-	const doc = (await RobotArmVisionCalibration.findOne(q).sort({ capturedAt: -1 }).lean()) as any;
-	if (!doc) throw new Error('no vision calibration yet — park the arm at home and calibrate the markers first');
+	const doc = (await RobotArmTagCalibration.findOne(q).sort({ capturedAt: -1 }).lean()) as any;
+	if (!doc) throw new Error('no vision calibration yet — park the arm at home and calibrate the tags first');
 	return doc;
 }
 
-/** Track every calibrated marker in a fresh frame and compare with the calibration. */
+/** Detect every tag in a fresh frame and compare with the calibration. */
 async function visionCheck(doc: any): Promise<{ vision: VisionAssessment | null; snapshotDataUrl: string | null; warnings: string[] }> {
 	const summary = calibrationSummary(doc, { withThumb: false });
-	if (!summary.placements.length) return { vision: null, snapshotDataUrl: null, warnings: ['This calibration has no markers placed.'] };
-	const warnings: string[] = [];
-	let buf: Buffer;
+	if (!summary.tags.length) return { vision: null, snapshotDataUrl: null, warnings: ['This calibration has no tags.'] };
+	let det: DetectResult;
 	try {
-		buf = await grabFrame(summary.cameraName);
+		det = await detectTags(summary.cameraName, { includeFrame: true });
 	} catch (e) {
 		return { vision: null, snapshotDataUrl: null, warnings: [`Camera check skipped: ${e instanceof Error ? e.message : String(e)}`] };
 	}
-	const img = await decodeFrame(buf);
-	const observations = trackAll(img, summary.placements);
-	if (summary.depthAvailable) {
-		const found = observations.filter((o) => o.x != null && o.y != null);
-		const d = await depthAt(summary.cameraName, found.map((o) => [o.x!, o.y!]));
-		found.forEach((o, i) => (o.depthMm = d.depth[i]));
-		if (d.warning) warnings.push(`${d.warning} Checked on the picture only.`);
+	if (!det.available) return { vision: null, snapshotDataUrl: null, warnings: [`Camera check skipped: ${det.reason ?? 'no detection'}`] };
+	const warnings: string[] = [];
+	if (det.width !== summary.frameWidth || det.height !== summary.frameHeight) {
+		warnings.push(`The stream is ${det.width}×${det.height} but the calibration was ${summary.frameWidth}×${summary.frameHeight} — poses are compared in mm, picture offsets may read wrong; recalibrate at the new resolution.`);
 	}
-	const vision = assessMarkers(summary.placements, observations, summary.tolerances);
-	return { vision, snapshotDataUrl: await thumbnail(buf), warnings };
+	const vision = assessTags(summary.tags, det.tags, summary.tolerances);
+	return { vision, snapshotDataUrl: det.frame ? await thumbnail(det.frame) : null, warnings };
 }
 
-function homeMessage(home: HomeAssessment, vision: VisionAssessment | null, r: Residuals | null, frameWidth: number): string {
-	const v = vision ? describeVision(vision, frameWidth) : null;
+function homeMessage(home: HomeAssessment, vision: VisionAssessment | null, r: Residuals | null): string {
+	const v = vision ? describeVision(vision) : null;
 	switch (home.verdict) {
 		case 'home':
 			return [r ? `Encoders within ${r.max} steps of home.` : null, v].filter(Boolean).join(' ') || 'At home.';
@@ -504,9 +548,9 @@ function homeMessage(home: HomeAssessment, vision: VisionAssessment | null, r: R
 		case 'position_off':
 			return `Encoders are ${r?.max} steps from home on joint(s) ${r?.off.join(', ')} — the arm did not land. ${v ?? ''}`.trim();
 		case 'markers_off':
-			return `Encoders say home but the markers disagree. ${v}`;
+			return `Encoders say home but the tags disagree. ${v}`;
 		case 'position_off_and_markers_off':
-			return `Not at home: encoders ${r?.max} steps off and ${v ? v.charAt(0).toLowerCase() + v.slice(1) : 'the markers disagree.'}`;
+			return `Not at home: encoders ${r?.max} steps off and ${v ? v.charAt(0).toLowerCase() + v.slice(1) : 'the tags disagree.'}`;
 		case 'unverified':
 			return 'Nothing could be checked — no encoder target and no camera result.';
 	}
@@ -514,7 +558,8 @@ function homeMessage(home: HomeAssessment, vision: VisionAssessment | null, r: R
 
 async function recordCheck(doc: any, user: User, kind: 'check' | 'return' | 'agent', result: Omit<HomeCheckResult, 'message' | 'snapshotDataUrl'>, extra: Record<string, unknown>) {
 	const now = new Date();
-	await RobotArmVisionCalibration.updateOne(
+	const shift = result.vision?.cameraShift;
+	await RobotArmTagCalibration.updateOne(
 		{ _id: doc._id },
 		{
 			$set: {
@@ -525,22 +570,24 @@ async function recordCheck(doc: any, user: User, kind: 'check' | 'return' | 'age
 					verdict: result.home.verdict,
 					visionVerdict: result.vision?.verdict ?? null,
 					residualMax: result.home.residualMax != null && Number.isFinite(result.home.residualMax) ? result.home.residualMax : null,
-					markers: (result.vision?.markers ?? []).map((m) => ({ markerId: m.markerId, name: m.name, status: m.status, distance: m.distance, depthDeltaMm: m.depthDeltaMm }))
+					cameraShiftMm: shift?.compensated ? shift.mm : null,
+					markers: (result.vision?.markers ?? []).map((m) => ({ markerId: m.markerId, tagId: m.tagId, name: m.name, status: m.status, offMm: m.offMm, offDeg: m.offDeg }))
 				}
 			}
 		}
 	);
-	await audit(`robot_arm.vision.${kind}`, 'robot_arm_vision_calibrations', String(doc._id), user, {
+	await audit(`robot_arm.vision.${kind}`, 'robot_arm_tag_calibrations', String(doc._id), user, {
 		verdict: result.home.verdict,
 		visionVerdict: result.vision?.verdict ?? null,
-		markers: result.vision?.markers.map((m) => ({ name: m.name, status: m.status, distance: m.distance, depthDeltaMm: m.depthDeltaMm })),
+		cameraShift: shift ?? null,
+		markers: result.vision?.markers.map((m) => ({ tagId: m.tagId, name: m.name, status: m.status, offMm: m.offMm, offDeg: m.offDeg })),
 		residuals: result.residuals,
 		warnings: result.warnings,
 		...extra
 	});
 }
 
-/** No motion: are the encoders and every marker where they were at calibration? */
+/** No motion: are the encoders and every tag where they were at calibration? */
 export async function checkHome(user: User, o: { cameraName?: string | null; kind?: 'check' | 'agent' } = {}): Promise<HomeCheckResult> {
 	const doc = await loadActive(o.cameraName);
 	const target = jointStepsOf(doc);
@@ -558,15 +605,14 @@ export async function checkHome(user: User, o: { cameraName?: string | null; kin
 	const home = assessHome(r, cam.vision);
 	const result = { calibrationId: String(doc._id), cameraName: doc.cameraName, home, vision: cam.vision, residuals: r?.perJoint ?? null, warnings, moved: [] };
 	await recordCheck(doc, user, o.kind ?? 'check', result, {});
-	return { ...result, message: homeMessage(home, cam.vision, r, doc.frameWidth), snapshotDataUrl: cam.snapshotDataUrl };
+	return { ...result, message: homeMessage(home, cam.vision, r), snapshotDataUrl: cam.snapshotDataUrl };
 }
 
 /**
  * Return to home: torque on, one bounded jog per joint to the calibrated
- * encoder steps, settle, then verify with the encoders AND the markers.
+ * encoder steps, settle, then verify with the encoders AND the tags.
  * Refused while a session holds the bus. The move itself goes by the encoders
- * alone, so a moved camera does not stop it — it only makes the marker half of
- * the verdict `camera_moved`. The arm WILL move.
+ * alone, so a moved camera does not stop it. The arm WILL move.
  */
 export async function returnToHome(user: User, o: { cameraName?: string | null } = {}): Promise<HomeCheckResult> {
 	const doc = await loadActive(o.cameraName);
@@ -588,7 +634,7 @@ export async function returnToHome(user: User, o: { cameraName?: string | null }
 	const home = assessHome(r, cam.vision);
 	const result = { calibrationId: String(doc._id), cameraName: doc.cameraName, home, vision: cam.vision, residuals: r.perJoint, warnings: cam.warnings, moved };
 	await recordCheck(doc, user, 'return', result, { before: before.steps, after: after.steps, tolerance: HOME_STEP_TOLERANCE });
-	const msg = homeMessage(home, cam.vision, r, doc.frameWidth);
+	const msg = homeMessage(home, cam.vision, r);
 	return {
 		...result,
 		message: moved.length ? msg : `Arm was already within ${HOME_STEP_TOLERANCE} steps of home — nothing moved. ${msg}`,

@@ -470,15 +470,37 @@ export interface CameraStatus {
 	error: string | null;
 }
 
-// Depth at points, mirroring robot-arm/src/server/depth.py sample().
-export interface DepthSample {
+// AprilTag detection, mirroring robot-arm/src/server/apriltags.py (ARM-05).
+export interface AprilTagDetectRequest {
+	/** tag id → black-square edge, mm. Tags without a size come back with pose null. */
+	tag_sizes_mm?: Record<string, number>;
+	default_size_mm?: number | null;
+	include_frame?: boolean;
+	depth?: boolean;
+}
+
+export interface AprilTagDetectResponse {
 	available: boolean;
-	units: 'mm';
-	/** One entry per requested point; null = no valid depth there. */
-	depth_mm: (number | null)[];
-	/** e.g. "realsense:Intel RealSense L515 f1234567" */
-	source?: string | null;
-	reason?: string | null;
+	reason: string | null;
+	family?: string;
+	detector?: string;
+	frame?: { width: number; height: number };
+	intrinsics?: { fx: number; fy: number; cx: number; cy: number; dist?: number[]; source: 'realsense' | 'env' | 'nominal' };
+	tags: {
+		id: number;
+		/** Normalised [x, y]. */
+		center: [number, number];
+		/** Normalised, tag order TL, TR, BR, BL. */
+		corners: [number, number][];
+		size_mm: number | null;
+		/** Camera frame (x right, y down, z out of the lens): t in mm, R row-major. */
+		pose: { t_mm: [number, number, number]; R: number[]; reproj_px: number } | null;
+		depth_mm: number | null;
+		margin: number | null;
+	}[];
+	/** The exact JPEG the tags were found in, when include_frame was set. */
+	frame_jpeg_b64?: string;
+	elapsed_ms?: number;
 }
 
 /**
@@ -701,32 +723,31 @@ export const robotArm = {
 		}),
 
 	/**
-	 * Depth (lidar) at points of a camera's COLOUR frame (ARM-04). Points are
-	 * normalised [x, y] in 0..1 so the caller never needs the depth sensor's
-	 * own resolution; the Pi maps each one onto the depth image and returns the
-	 * median valid depth around it in millimetres (null where it has none).
+	 * Every AprilTag 36h11 tag in the camera's current frame (ARM-05), with its
+	 * pose in mm where the tag's size is given, the D415 depth at its centre
+	 * when depth.py is installed, and optionally the JPEG it was found in.
 	 *
-	 * The route comes from services/robot-arm/src/server/depth.py, installed
-	 * onto the live Pi by scripts/install_depth_router.py. A Pi without it
-	 * answers FastAPI's bare 404 "Not Found" — that, and a camera with no depth
-	 * sensor, both come back as `available: false`, never as an error: depth
-	 * sharpens the marker check, it is not required for it.
+	 * The route comes from services/robot-arm/src/server/apriltags.py, installed
+	 * onto the live Pi by scripts/install_apriltag_router.py. A Pi without it
+	 * answers FastAPI's bare 404 "Not Found"; that comes back as
+	 * `available: false` with a reason saying what to install. The Pi itself
+	 * also answers `available: false` (never an HTTP error) when it has no
+	 * frame or no OpenCV aruco.
 	 */
-	sampleDepth: async (name: string, points: [number, number][]): Promise<DepthSample> => {
+	detectAprilTags: async (name: string, req: AprilTagDetectRequest): Promise<AprilTagDetectResponse> => {
 		try {
-			return await robotArmFetch<DepthSample>(`/cameras/${encodeURIComponent(name)}/depth/sample`, {
+			return await robotArmFetch<AprilTagDetectResponse>(`/cameras/${encodeURIComponent(name)}/apriltags/detect`, {
 				method: 'POST',
-				body: { points },
-				timeoutMs: 4000
+				body: req,
+				timeoutMs: 8000
 			});
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
 			if (/^robot-arm 404: Not Found/.test(msg)) {
 				return {
 					available: false,
-					units: 'mm',
-					depth_mm: points.map(() => null),
-					reason: 'The Pi has no depth route installed yet (services/robot-arm/scripts/install_depth_router.py).'
+					tags: [],
+					reason: 'The Pi has no AprilTag route installed yet (services/robot-arm/scripts/install_apriltag_router.py).'
 				};
 			}
 			throw err;

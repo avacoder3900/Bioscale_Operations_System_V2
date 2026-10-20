@@ -141,8 +141,8 @@ export { RobotArmRun } from './robot-arm-run.js';
 export { RobotArmDataset } from './robot-arm-dataset.js';
 export { RobotArmDeletedRecording } from './robot-arm-deleted-recording.js';
 export { RobotArmEndpoint } from './robot-arm-endpoint.js';
-export { RobotArmMarker } from './robot-arm-marker.js';
-export { RobotArmVisionCalibration } from './robot-arm-vision-calibration.js';
+export { RobotArmTag } from './robot-arm-tag.js';
+export { RobotArmTagCalibration } from './robot-arm-tag-calibration.js';
 
 // Manufacturing Analytics
 export { ProcessAnalyticsEvent } from './process-analytics-event.js';
