@@ -21389,3 +21389,16 @@ as contracttest, interleaved, 1 warmup + 5 samples, median TTFB.
   /                      1.69 s -> 0.94 s
   /cartridge-dashboard   1.18 s -> 0.76 s
 Live (mu7brrltq) = perf deployment within noise (0.86 vs 0.93 s). Atlas cache metrics still to check 2026-10-21.
+
+================================================================================
+2026-10-20 — feat/arm-apriltag-sheet — printable AprilTag sheet for arm calibration (HTML + PDF)
+================================================================================
+Shared copy of the robot-arm AprilTag print sheet so Sam and others can print the same tags.
+New: services/robot-arm/scripts/make_apriltag_sheet.py (generator, uses cv2.aruco DICT_APRILTAG_36h11),
+services/robot-arm/calibration/apriltag-sheet.html (generated) and apriltag-sheet.pdf (headless-Edge print of
+the HTML, letter). 54 unique tags on 3 pages: 9 each at 40/30/20/15/12/8 mm (black-square edge), IDs 0-53 in
+order, labelled only "ID n · size"; no locations assigned yet (operator will photograph the stuck-on tags and
+say where each ID went). Print at 100% / Actual size on matte paper, laser preferred (inkjet black can be
+IR-transparent); each page has a 100 mm check bar. Note: the small sizes assume 1920x1080 colour, but the
+D415 is on a USB 2.0 link today (1080p only ~8 fps there; see CAMERA_STREAMING_HANDOFF.md). Nothing detects
+AprilTags yet. No TS changes, npm run check not needed.
