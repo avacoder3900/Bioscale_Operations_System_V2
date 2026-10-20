@@ -21416,3 +21416,32 @@ say where each ID went). Print at 100% / Actual size on matte paper, laser prefe
 IR-transparent); each page has a 100 mm check bar. Note: the small sizes assume 1920x1080 colour, but the
 D415 is on a USB 2.0 link today (1080p only ~8 fps there; see CAMERA_STREAMING_HANDOFF.md). Nothing detects
 AprilTags yet. No TS changes, npm run check not needed.
+
+================================================================================
+2026-10-20 — feat/arm-apriltag-vision — ARM-05: AprilTags replace the colour-sticker arm vision (ARM-04)
+================================================================================
+Audit first (ARM-04 on master since fa54a216, never run on the arm; Giovanni's AprilTag 36h11 sheet on
+feat/arm-apriltag-sheet, merged into this branch with a progress.txt conflict resolved keeping both entries).
+Camera per Giovanni's CAMERA_STREAMING_HANDOFF.md: RealSense D415, colour 640x480@30 over USB 2.0. Operator:
+tags are at most 1 ft from the camera; detection to run on the Pi; Giovanni is not building it; write blind.
+Pi (no access from here, the Funnel timed out, no ssh key on this machine; NOT run):
+services/robot-arm/src/server/apriltags.py: POST /cameras/{name}/apriltags/detect + GET status. OpenCV aruco
+DICT_APRILTAG_36h11 (4.7+ and legacy API), subpix corners, solvePnP IPPE_SQUARE per tag with the D415 factory
+colour intrinsics via pyrealsense2 (fallback env APRILTAG_FX.., then a nominal D415 estimate), depth.py's
+_rs.sample at each centre as cross-check, frames from the service's own snapshot.jpg over loopback (cameras.py
+untouched). scripts/install_apriltag_router.py wires it into app.py like the depth installer.
+BIMS: src/lib/robot-arm/apriltags.ts (pure; sheet size map, 3-D helpers, camera-shift consensus over the fixed
+tags (shift undone before judging arm tags, a single knocked fixed tag is outvoted), per-tag ok/moved/missing in
+mm + degrees, registry-size rescale) + 15 tests. New models RobotArmTag (robot_arm_tags) and
+RobotArmTagCalibration (robot_arm_tag_calibrations); robot-arm-vision.ts rewritten (registry by tag ID, save =
+one fresh Pi detection with arm at home + encoders, check/return unchanged in shape). Client detectAprilTags
+replaces sampleDepth; new GET /api/robot-arm/cameras/[name]/apriltags proxy (manufacturing:read); agent
+vision-check returns tagId/role/offMm/offDeg/zMm/cameraShift. Vision tab: VisionStage draws tag outlines,
+VisionLiveTracker polls detections, VisionTagCalibrator (detect -> register unknown IDs inline -> save),
+VisionTagRegistry. Removed markers.ts(+tests), frame-grab.ts, the depth proxy route, VisionCalibrationEditor,
+VisionMarkerRegistry, the two ARM-04 models (their collections left in Mongo, unread).
+Docs: docs/prds/ARM-05-apriltag-vision.md (contract, install, size-vs-distance table); ARM-04 PRD marked superseded.
+Size note: at 640x480 (f ~615 px) and 1 ft the smallest reliable tag is ~12 mm, so 12-40 mm read, 8 mm needs
+1280x720 (my audit's earlier "~25 mm" was wrong: I had used the 1080p focal figure scaled the wrong way).
+npm run check: 14 errors, none in touched files (pre-existing r2, research-proxy x2, AskBims, assembly x8,
+magnetometer x2). Unit: robot-arm suites 60/60. vite build: client + server built; adapter trace OOM locally (Windows).

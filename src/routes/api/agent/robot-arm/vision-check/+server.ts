@@ -1,10 +1,10 @@
 /**
- * ARM-04 — "is the arm back home?" for automation.
+ * ARM-05 — "is the arm back home?" for automation.
  *
  * The fail state this is the backstop for: a task or replay ends and the arm
  * did not return to home. A caller (a task runner, an agent) hits this after a
- * run; it reads the encoders, tracks every calibrated sticker marker in a
- * fresh frame (plus depth when the camera has it) and answers with one verdict.
+ * run; it reads the encoders, has the Pi find every calibrated AprilTag in a
+ * fresh frame (pose in mm, camera bumps undone via fixed tags) and answers with one verdict.
  * No motion — returning the arm is a human decision on the Vision tab.
  *
  *   GET /api/agent/robot-arm/vision-check[?camera=<name>]
@@ -27,16 +27,19 @@ export const GET: RequestHandler = async ({ request, url }) => {
 			calibrationId: r.calibrationId,
 			cameraName: r.cameraName,
 			visionVerdict: r.vision?.verdict ?? null,
+			cameraShift: r.vision?.cameraShift ?? null,
 			markers: (r.vision?.markers ?? []).map((m) => ({
 				markerId: m.markerId,
+				tagId: m.tagId,
 				name: m.name,
 				group: m.group,
+				role: m.role,
 				status: m.status,
-				x: m.x,
-				y: m.y,
-				distance: m.distance,
-				depthMm: m.depthMm,
-				depthDeltaMm: m.depthDeltaMm
+				offMm: m.offMm,
+				offDeg: m.offDeg,
+				center: m.center,
+				zMm: m.zMm,
+				depthMm: m.depthMm
 			})),
 			residuals: r.residuals,
 			warnings: r.warnings
