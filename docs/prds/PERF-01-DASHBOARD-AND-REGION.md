@@ -32,14 +32,14 @@ so it goes first within this PRD.
 ## Stories
 
 ### BM-01 — Run in iad1
-**Status:** pending · **Files:** `svelte.config.js`
+**Status:** done (2026-10-19, master 085deba4) · **Files:** `svelte.config.js`
 Change `regions: ['pdx1']` → `['iad1']` with a comment naming the Atlas region. Own commit, own
 deploy. **Cons:** on-prem devices on the Pacific coast gain a few ms to the Vercel edge; every DB
 RTT loses ~60 ms. Reversible in one line.
 **Acceptance:** `x-vercel-id` on production shows `iad1`; `/login` TTFB median recorded before/after.
 
 ### BM-02 — Dashboard counts without `$nin`
-**Status:** pending · **Files:** `src/routes/+page.server.ts`, `src/routes/cartridge-dashboard/+page.server.ts`, `src/lib/server/checkout-utils.ts` (new helper)
+**Status:** done (2026-10-19, branch perf/dashboard-and-region; helper is src/lib/server/checked-out-counts.ts) · **Files:** `src/routes/+page.server.ts`, `src/routes/cartridge-dashboard/+page.server.ts`, `src/lib/server/checkout-utils.ts` (new helper)
 - New helper `subtractCheckedOut(pipelineResults, checkedOutIds)` pattern: run each count/group
   query **without** `$nin` (index-only on `status`, `waxQc.status`, `reagentInspection.status`,
   `createdAt`, `reagentFilling.assayType._id`), then **one** aggregation over
@@ -61,14 +61,14 @@ and asserts equality for every key; output pasted into `progress.txt`.
 that the page returns in < 2 s locally. Fix the wrong path in `10-cartridges.test.ts:21`.
 
 ### BM-03 — Stop auditing `capture_stations` reads
-**Status:** pending · **Files:** wherever `AuditLog` is written with `tableName: 'capture_stations', action: 'READ'` (find via grep at implementation)
+**Status:** blocked — needs Jacob (2026-10-19): the rows are not reads. Every one is `reason: jwt_mint`, a 5-minute station token issued at `api/cv/stations/[id]/token` (8,292 in October, one user). Dropping the audit removes a credential-issuance trail; the cheaper fix is the client reusing its token until near expiry. · **Files:** wherever `AuditLog` is written with `tableName: 'capture_stations', action: 'READ'` (find via grep at implementation)
 Reads are not mutations; remove the audit write on the read path (or sample 1-in-100 if someone
 relies on it for presence). **Cons:** loses a "who looked at the station" trail — check the
 consumer first; if it is the kanban/capture polling, no one reads it.
 **Acceptance:** no new `capture_stations`/`READ` rows after deploy (checked next day).
 
 ### BM-04 — Tame the OT-2 run polling
-**Status:** pending · **Files:** `src/routes/opentrons-clone/[robotId]/runs/[runId]/+page.svelte` (and the `ot2_direct_calls` logger)
+**Status:** done (2026-10-19) — the 132k `run.get` rows came from EmbeddedRunController via direct-client.ts, not the clone run page; the trace now skips successful GETs · **Files:** `src/routes/opentrons-clone/[robotId]/runs/[runId]/+page.svelte` (and the `ot2_direct_calls` logger)
 The run page polls with `invalidateAll()` (reruns auth + every load) and each `run.get` is logged
 to Mongo. Change to `depends('ot2:run')` + `invalidate('ot2:run')`, and stop persisting `run.get`
 polls (keep errors and mutations). **Cons:** less diagnostic history for polls — the existing rows
@@ -76,7 +76,7 @@ are 98% identical `run.get` lines.
 **Acceptance:** polling a run page for 60 s produces 0 new `ot2_direct_calls` rows for `run.get`.
 
 ### BM-05 — Explicit index management
-**Status:** pending · **Files:** `src/lib/server/db/connection.ts`, new `scripts/ensure-indexes.ts`
+**Status:** done (2026-10-19) — report: all 156 models + permission_shadow_log already indexed in Atlas · **Files:** `src/lib/server/db/connection.ts`, new `scripts/ensure-indexes.ts`
 `autoIndex: false, autoCreate: false` in production; script calls `Model.createIndexes()` per
 model (per-model try/catch; import `PermissionShadowLog` from `route-policy.ts` explicitly; expect
 `IndexOptionsConflict` on changed TTLs and report them rather than fail). **Never** `syncIndexes()`
@@ -87,7 +87,7 @@ the script before merging.
 **Acceptance:** unit tests pass; cold start no longer issues `createIndexes` (verified locally once).
 
 ### BM-06 — One auth round trip
-**Status:** pending · **Files:** `src/lib/server/auth.ts`
+**Status:** done (2026-10-19) · **Files:** `src/lib/server/auth.ts`
 `Session.aggregate([$match _id, $lookup users, $unwind, $project -passwordHash])`; keep the
 expiry/inactive post-checks and the ≤15-day renewal write as they are. **Cons:** none; identical data.
 **Acceptance:** `01-auth.test.ts` passes.

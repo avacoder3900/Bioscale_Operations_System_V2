@@ -12,6 +12,13 @@ import mongoose from 'mongoose';
 // module reuse across warm invocations.
 let connPromise: Promise<typeof mongoose> | null = null;
 
+// ~155 models each fired createCollection + createIndexes on every cold start,
+// competing with the first requests for the 10-socket pool (PERF-01 BM-05).
+// Indexes are created deliberately: after adding a `schema.index()`, run
+// `npx tsx --tsconfig tsconfig.json scripts/ensure-indexes.ts --apply`.
+mongoose.set('autoIndex', false);
+mongoose.set('autoCreate', false);
+
 const CONNECT_OPTS: mongoose.ConnectOptions = {
 	// Atlas SRV DNS lookup + cold TLS handshake can exceed 5s on a cold start;
 	// 5s produced intermittent "Server selection timed out" 500s.

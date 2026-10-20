@@ -18,8 +18,8 @@ describe('Cartridges', () => {
     expect(status).toBe(200);
   });
 
-  it('GET /spu/cartridge-dashboard returns dashboard', async () => {
-    const { status } = await getPageData('/spu/cartridge-dashboard');
+  it('GET /cartridge-dashboard returns dashboard', async () => {
+    const { status } = await getPageData('/cartridge-dashboard');
     expect(status).toBe(200);
   });
 

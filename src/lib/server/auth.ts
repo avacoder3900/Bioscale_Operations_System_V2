@@ -26,11 +26,25 @@ export async function createSession(token: string, userId: string) {
 export async function validateSessionToken(token: string) {
 	await connectDB();
 	const sessionId = encodeHexLowerCase(sha256(new TextEncoder().encode(token)));
-	const session = await Session.findById(sessionId).lean();
+	// Session and its (fresh, never cached) user in one round trip (PERF-01 BM-06).
+	const [row] = await Session.aggregate([
+		{ $match: { _id: sessionId } },
+		{
+			$lookup: {
+				from: User.collection.collectionName,
+				localField: 'userId',
+				foreignField: '_id',
+				pipeline: [{ $project: { passwordHash: 0 } }],
+				as: 'user'
+			}
+		},
+		{ $set: { user: { $first: '$user' } } }
+	]);
 
-	if (!session) {
+	if (!row) {
 		return { session: null, user: null };
 	}
+	const { user, ...session } = row;
 
 	const sessionExpired = Date.now() >= new Date(session.expiresAt).getTime();
 	if (sessionExpired) {
@@ -46,8 +60,7 @@ export async function validateSessionToken(token: string) {
 		session.expiresAt = newExpiry;
 	}
 
-	const user = await User.findById(session.userId).select('-passwordHash').lean();
-	if (!user || !(user as any).isActive) {
+	if (!user || !user.isActive) {
 		await Session.deleteOne({ _id: session._id });
 		return { session: null, user: null };
 	}

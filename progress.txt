@@ -21305,3 +21305,26 @@ Retrieve this exact code: git checkout master at commit 33538e38
   (or: git log master --oneline to find it if the branch has since moved on)
 What this deployment is for: Deck Calibration Studio can resolve well-tracker errors on
   finalized reagent runs (all 57 open errors were on finalized records).
+
+2026-10-19 — PERF-01 BM-02, BM-04, BM-05, BM-06 (branch perf/dashboard-and-region) — resumed after a crash
+Cross-app plan: brevitest-research-v2/docs/prds/DOMAIN-37-PERF.md. BM-01 (iad1) already on master 085deba4.
+BM-02 dashboard counts without `$nin`: src/lib/server/checked-out-counts.ts (groupCountsExcluding: each spec runs on
+its index, one $facet aggregation over the checked-out ids, subtract; groups that reach 0 are dropped as $nin would),
+src/lib/server/dashboard-count-specs.ts (home + cartridge-dashboard specs in one place). Home: 12 cartridge aggregations
+routed through it; dead storageCounts block (2 aggregations, never rendered) and fridgeMap removed. cartridge-dashboard:
+10. recentActivity / expiringSoon / per-run QC keep $nin (sorted+limited / runId-indexed).
+VERIFIED read-only against production with scripts/verify-dashboard-counts.ts (110 checked-out ids): all 22 keys
+equal old vs new. cartridge-dashboard counts 3296 ms sequential old -> 437 ms new.
+BM-03 NOT done: capture_stations READ rows are all reason jwt_mint (station token issuance, 8,292 in Oct, one user);
+removing them drops a credential-issuance audit trail. Needs a decision; client token reuse is the likely fix.
+BM-04 the 132,284 ok `run.get` rows (99.6% of ot2_direct_calls in Oct) come from EmbeddedRunController's poll through
+src/lib/opentrons/direct-client.ts; record() skips successful GETs (failures + mutations still traced). New unit test;
+the verb-template test now uses a failed read.
+BM-05 mongoose.set autoIndex/autoCreate false in connection.ts; scripts/ensure-indexes.ts (report / --apply;
+PermissionShadowLog indexes mirrored since route-policy.ts can't load in a script). Report: 156/156 ok, nothing created.
+CLAUDE.md pitfall added.
+BM-06 validateSessionToken: Session.aggregate $match + $lookup users (passwordHash projected out) + $first; expiry,
+renewal and isActive checks unchanged.
+TESTS: unit 615 pass / 1 fail (sonic decode — fails on master too); new 13-dashboard-counts contract test 2/2;
+01-auth login/logout pass; 10-cartridges path fixed (/cartridge-dashboard passes; the other /spu/* cases 404 on master
+too — routes moved). check 15 = baseline. NOT merged to master.

@@ -2,8 +2,9 @@ import { redirect } from '@sveltejs/kit';
 import { connectDB, CartridgeRecord, Equipment, BackingLot, WaxFillingRun, ReagentBatchRecord } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
 import { getCheckedOutCartridgeIds } from '$lib/server/checkout-utils';
+import { groupCountsExcluding, totalOf } from '$lib/server/checked-out-counts';
+import { dashboardCountSpecs } from '$lib/server/dashboard-count-specs';
 import { buildPipeline } from '$lib/server/cartridge-pipeline';
-import { WAX_STAGE_STATUSES } from '$lib/shared/cartridge-wax-status';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
@@ -18,6 +19,9 @@ export const load: PageServerLoad = async ({ locals }) => {
 	const now = new Date();
 	const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
 	const thirtyDaysFromNow = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+	// Index-only counts minus the checked-out carts (PERF-01 BM-02); `$nin` on _id
+	// made each of these a full collection scan.
+	const counts = groupCountsExcluding(CartridgeRecord, dashboardCountSpecs(now), checkedOutIds);
 
 	const [
 		phaseCounts,
@@ -35,23 +39,13 @@ export const load: PageServerLoad = async ({ locals }) => {
 		recentReagentRuns
 	] = await Promise.all([
 		// Manufacturing pipeline phase counts
-		CartridgeRecord.aggregate([
-			{ $match: { status: { $ne: null }, _id: { $nin: checkedOutIds } } },
-			{ $group: { _id: '$status', count: { $sum: 1 } } },
-			{ $sort: { count: -1 } }
-		]),
-		CartridgeRecord.countDocuments({ status: { $ne: 'voided' }, _id: { $nin: checkedOutIds } }),
-		CartridgeRecord.countDocuments({ status: 'voided', _id: { $nin: checkedOutIds } }),
+		counts.then((c) => c.phaseCounts),
+		counts.then((c) => totalOf(c.totalMfg)),
+		counts.then((c) => totalOf(c.totalVoided)),
 		// Wax QC pass/fail
-		CartridgeRecord.aggregate([
-			{ $match: { 'waxQc.status': { $exists: true }, _id: { $nin: checkedOutIds } } },
-			{ $group: { _id: '$waxQc.status', count: { $sum: 1 } } }
-		]),
+		counts.then((c) => c.waxQc),
 		// Reagent inspection pass/fail
-		CartridgeRecord.aggregate([
-			{ $match: { 'reagentInspection.status': { $exists: true }, _id: { $nin: checkedOutIds } } },
-			{ $group: { _id: '$reagentInspection.status', count: { $sum: 1 } } }
-		]),
+		counts.then((c) => c.reagentInspection),
 		// Recent activity (last 20 updated)
 		CartridgeRecord.find({ _id: { $nin: checkedOutIds } })
 			.sort({ updatedAt: -1 })
@@ -68,13 +62,9 @@ export const load: PageServerLoad = async ({ locals }) => {
 		// Oven/heater equipment
 		Equipment.find({ equipmentType: 'oven', status: { $ne: 'offline' } }).lean().catch(() => []),
 		// Weekly production (created in last 7 days)
-		CartridgeRecord.countDocuments({ createdAt: { $gte: sevenDaysAgo }, _id: { $nin: checkedOutIds } }),
+		counts.then((c) => totalOf(c.weeklyProduction)),
 		// Assay type breakdown
-		CartridgeRecord.aggregate([
-			{ $match: { 'reagentFilling.assayType.name': { $exists: true }, _id: { $nin: checkedOutIds } } },
-			{ $group: { _id: '$reagentFilling.assayType.name', count: { $sum: 1 } } },
-			{ $sort: { count: -1 } }
-		]),
+		counts.then((c) => c.assayBreakdown),
 		// Last 7 days of wax + reagent runs — gives the dashboard a per-run
 		// activity view that links into /cartridge-admin?runId=... so the
 		// operator can see every cart in a run with its current state.
@@ -99,22 +89,10 @@ export const load: PageServerLoad = async ({ locals }) => {
 	// Legacy BackingLot aggregate buckets are still added per-oven until drained
 	// — nothing writes to BackingLot any more.
 	const [waxAcceptedCountsAgg, waxScrappedCountsAgg, reagentStorageCounts, backingCartOccupancyAgg, legacyOvenOccupancyAgg] = await Promise.all([
-		CartridgeRecord.aggregate([
-			{ $match: { 'waxStorage.location': { $exists: true }, status: { $in: [...WAX_STAGE_STATUSES] }, _id: { $nin: checkedOutIds } } },
-			{ $group: { _id: '$waxStorage.location', count: { $sum: 1 } } }
-		]),
-		CartridgeRecord.aggregate([
-			{ $match: { 'waxStorage.location': { $exists: true }, status: 'scrapped', _id: { $nin: checkedOutIds } } },
-			{ $group: { _id: '$waxStorage.location', count: { $sum: 1 } } }
-		]),
-		CartridgeRecord.aggregate([
-			{ $match: { 'storage.fridgeName': { $exists: true }, status: { $in: ['stored', 'reagent_filled'] }, _id: { $nin: checkedOutIds } } },
-			{ $group: { _id: '$storage.fridgeName', count: { $sum: 1 } } }
-		]),
-		CartridgeRecord.aggregate([
-			{ $match: { status: 'backing', _id: { $nin: checkedOutIds } } },
-			{ $group: { _id: '$backing.ovenLocationId', count: { $sum: 1 } } }
-		]),
+		counts.then((c) => c.waxStageByLocation),
+		counts.then((c) => c.scrappedByLocation),
+		counts.then((c) => c.reagentByFridge),
+		counts.then((c) => c.backingByOven),
 		BackingLot.aggregate([
 			{ $match: { status: { $in: ['in_oven', 'ready'] }, ovenLocationId: { $exists: true, $ne: null } } },
 			{ $group: { _id: '$ovenLocationId', count: { $sum: '$cartridgeCount' } } }
