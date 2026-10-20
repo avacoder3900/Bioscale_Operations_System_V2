@@ -20,9 +20,15 @@ interface FetchOptions {
 	timeoutMs?: number;
 }
 
-// The Pi heartbeats its tunnel URL every 5 min; a row older than this means the
-// tunnel (or the Pi) is gone, so don't waste the request budget on it.
+// The Pi heartbeats its tunnel URL every 5 min. A row older than this is
+// "stale": usually the tunnel (or the Pi) is gone, so it is no longer tried
+// first. But the heartbeat can fail while the tunnel itself is fine (2026-10-20:
+// the office DNS died, the Pi could not resolve BIMS for 8 h, and the arm showed
+// unreachable while its tunnel answered). So a stale row is still tried, last,
+// after the Funnel, up to TUNNEL_STALE_MAX_AGE_MS. A dead quick-tunnel URL fails
+// fast (NXDOMAIN or Cloudflare 530), so the cost is one quick failed attempt.
 const TUNNEL_MAX_AGE_MS = 15 * 60 * 1000;
+const TUNNEL_STALE_MAX_AGE_MS = 48 * 60 * 60 * 1000;
 const TUNNEL_CACHE_MS = 30_000;
 
 // Retry limit (option D). Attempts alternate between routes and all share the
@@ -31,39 +37,46 @@ const TUNNEL_CACHE_MS = 30_000;
 const MAX_ATTEMPTS = 3;
 const RETRY_BACKOFF_MS = 300;
 
-let tunnelCache: { url: string | null; at: number } | null = null;
+interface TunnelRoute {
+	url: string;
+	fresh: boolean;
+}
+
+let tunnelCache: { route: TunnelRoute | null; at: number } | null = null;
 let lastGoodRoute: string | null = null;
 
 export function invalidateTunnelCache(): void {
 	tunnelCache = null;
 }
 
-async function tunnelUrl(): Promise<string | null> {
-	if (tunnelCache && Date.now() - tunnelCache.at < TUNNEL_CACHE_MS) return tunnelCache.url;
-	let url: string | null = null;
+async function tunnelRoute(): Promise<TunnelRoute | null> {
+	if (tunnelCache && Date.now() - tunnelCache.at < TUNNEL_CACHE_MS) return tunnelCache.route;
+	let route: TunnelRoute | null = null;
 	try {
 		await connectDB();
 		const row = (await RobotArmEndpoint.findById('tunnel').lean()) as {
 			url?: string;
 			registeredAt?: Date;
 		} | null;
-		if (row?.url && row.registeredAt && Date.now() - new Date(row.registeredAt).getTime() < TUNNEL_MAX_AGE_MS) {
-			url = row.url;
+		const age = row?.registeredAt ? Date.now() - new Date(row.registeredAt).getTime() : Infinity;
+		if (row?.url && age < TUNNEL_STALE_MAX_AGE_MS) {
+			route = { url: row.url, fresh: age < TUNNEL_MAX_AGE_MS };
 		}
 	} catch {
 		// A DB hiccup must not take the arm down with it; use the Funnel alone.
-		url = null;
+		route = null;
 	}
-	tunnelCache = { url, at: Date.now() };
-	return url;
+	tunnelCache = { route, at: Date.now() };
+	return route;
 }
 
 async function armRoutes(): Promise<string[]> {
 	const routes: string[] = [];
-	const tunnel = await tunnelUrl();
-	if (tunnel) routes.push(tunnel);
+	const tunnel = await tunnelRoute();
+	if (tunnel?.fresh) routes.push(tunnel.url);
 	const funnel = env.ROBOT_ARM_BASE_URL?.replace(/\/$/, '');
 	if (funnel) routes.push(funnel);
+	if (tunnel && !tunnel.fresh) routes.push(tunnel.url);
 	if (!routes.length) throw new Error('ROBOT_ARM_BASE_URL not set in env');
 	if (lastGoodRoute && routes.includes(lastGoodRoute)) {
 		routes.sort((a, b) => (a === lastGoodRoute ? -1 : b === lastGoodRoute ? 1 : 0));
