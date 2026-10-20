@@ -21610,3 +21610,8 @@ Real data: GioCleanupRecording-20261020-180505 (113.8 s, 3394 frames) at thresho
 composed recording re-parses, end pose within 3 steps of raw. Editor SSR-renders with it (118 cards).
 Tests: src/lib/robot-arm 53/53. npm run check: 13 errors, all pre-existing, none in these files. Local
 `npm run build` compiles client + server, then the Vercel adapter's tracing runs out of heap on this PC.
+Deployment: production — https://vercel.com/brevitest/bioscale-operations-system-mongodb/6dWm5ML8Yqsr48wAnyMbdJyFke3M
+Source: branch feat/arm-recording-cleanup @ commit e823da3f (fast-forwarded to master)
+Retrieve this exact code: git checkout feat/arm-recording-cleanup at commit e823da3f
+  (or: git log feat/arm-recording-cleanup --oneline to find it if the branch has since moved on)
+What this deployment is for: Robot Arm Clean-up tab (recording -> editable steps -> new recording on the Pi)
