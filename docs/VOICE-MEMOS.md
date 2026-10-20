@@ -20,7 +20,7 @@ Claude + BIMS context  (board, tasks, SPUs, lots, runs)
 voice_memo_digests  →  /kanban/journal
 ```
 
-v1 scope (decided 2026-10-19): **one speaker (jacobq)**, **manual processing** ("process my EODs"
+v1 scope (decided 2026-10-19): **one speaker (jacob)**, **manual processing** ("process my EODs"
 in Claude), **digests only**: no kanban captures, proposals, or updates come from memos during
 the first ~week of collection. The digest tool's description tells Claude this.
 
@@ -43,7 +43,7 @@ the first ~week of collection. The digest tool's description tells Claude this.
 
 | Var | Value | Notes |
 |---|---|---|
-| `VOICENOTES_WEBHOOK_KEYS` | `jacobq:<secret>` | Comma-separated `username:secret`. Generate with `npx tsx scripts/voice-memos.ts key`. Required: without it every request is 401. |
+| `VOICENOTES_WEBHOOK_KEYS` | `jacob:<secret>` (BIMS username, not the Windows login) | Comma-separated `username:secret`. Generate with `npx tsx scripts/voice-memos.ts key`. Required: without it every request is 401. |
 | `VOICENOTES_CAPTURE_RAW` | `true` for Step 0, then remove | Saves every raw webhook body (including dropped personal notes) to `voice_memo_captures`, TTL 14 days. |
 | `VOICENOTES_TAGS` | optional, default `eod,exp-*` | Allowlisted tags; `*` suffix = prefix match. |
 | `VOICENOTES_SPOKEN_TRIGGERS` | optional, default on | `false` = only tags qualify. |
@@ -55,7 +55,7 @@ the first ~week of collection. The digest tool's description tells Claude this.
 2. **Indexes:** `npx tsx scripts/voice-memos.ts indexes` (idempotent). The unique index on
    `sourceNoteId` is the duplicate-delivery guard.
 3. **Check the URL** in a browser:
-   `https://<bims-domain>/api/webhooks/voicenotes?key=<secret>` → `{"ok":true,"speaker":"jacobq"}`.
+   `https://<bims-domain>/api/webhooks/voicenotes?key=<secret>` → `{"ok":true,"speaker":"jacob"}`.
 4. **Voicenotes:** profile → Integrations → Webhooks → Add Webhook. URL = the one above. Events:
    **Creating Notes**, **Updating Notes**, **Deleting Notes**.
 5. **Step 0, capture the real payload:** record

@@ -12,7 +12,7 @@
 import mongoose from 'mongoose';
 import * as dotenv from 'dotenv';
 import { randomBytes } from 'node:crypto';
-dotenv.config();
+dotenv.config({ quiet: true });
 
 const [cmd = 'captures', nArg] = process.argv.slice(2);
 const n = Math.max(1, parseInt(nArg ?? '5') || 5);

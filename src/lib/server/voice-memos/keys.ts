@@ -5,7 +5,7 @@
  * URL: /api/webhooks/voicenotes?key=<secret>. One key per person, so the key
  * itself says who is speaking — the payload is never trusted for identity.
  *
- *   VOICENOTES_WEBHOOK_KEYS = "jacobq:<secret>,someone:<secret2>"
+ *   VOICENOTES_WEBHOOK_KEYS = "jacob:<secret>,someone:<secret2>"
  *
  * Generate a secret with `node -e "console.log(require('crypto').randomBytes(24).toString('base64url'))"`.
  * Revoke one person by removing their entry. Keys are a webhook-only credential:
