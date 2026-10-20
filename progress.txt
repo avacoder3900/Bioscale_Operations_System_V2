@@ -21382,3 +21382,14 @@ Source: master @ commit a559fd61 (triggered automatically by GitHub integration,
 Retrieve this exact code: git checkout feat/voice-memos at commit a559fd61
   (or: git log master --oneline to find it if master has since moved on)
 What this deployment is for: picks up the corrected VOICENOTES_WEBHOOK_KEYS (+ CAPTURE_RAW=true for Step 0).
+2026-10-20 (later): first real webhook deliveries arrived. They authenticate as jacob, the payload is
+{event:"recording.created", timestamp, data:{id,title,transcript,tags:[],created_at}}, and the parser
+handles it unchanged. All 3 test notes were dropped: no tags, and Voicenotes writes the titles itself,
+so none started with EOD. No update events were seen after tagging. Per Jacob, the acceptance rule now
+includes "EOD"/"#EOD"/"end of day" ANYWHERE in the title (word-bounded; matchedBy 'title' added to the
+enum). fc43f536, merged with master 2d6ad349 → df2f5c3c. Voice-memo tests: 45 pass.
+svelte-check 14 errors, none in voice-memo files.
+Deployment: production — https://bioscale-operations-system-mongodb-32gbtqnpt-brevitest.vercel.app
+Source: master @ commit df2f5c3c (triggered automatically by GitHub integration, not local deploy)
+Retrieve this exact code: git checkout feat/voice-memos at commit df2f5c3c
+What this deployment is for: VOICE-01 title-anywhere EOD acceptance rule.
