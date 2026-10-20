@@ -21514,3 +21514,18 @@ img's decoded size (fallback: Pi actual_size, then requested), size menu sets th
 VisionStage.svelte: image + tag outlines rotate together; labels counter-rotated about the tag centre so they
 read upright. npm run check: 14 errors, none in touched files (the 14th is research-proxy.ts from master).
 Not clicked through in a browser by me (no browser here); operator to confirm.
+
+================================================================================
+2026-10-20 — feat/arm-tag-edit — rename/edit a registered AprilTag from the Calibrate list
+================================================================================
+Operator asked how to rename tags after registering. Editing existed only behind the small "edit" link in the
+Tag Registry; the cyan tag name in Calibrate's detection list was plain text.
+VisionTagCalibrator.svelte: the registered name is now a button ("Wrist ▾") that opens the same form used to
+register a new ID (name, on arm/fixed, size, group), prefilled, posting ?/updateTag, plus "archive" (same
+form, formaction ?/archiveTag, confirm) and cancel. One form for both cases ({#key reg._id}), so register and
+edit cannot drift apart; it closes only on success, so a name clash stays open to fix.
+VisionTagRegistry.svelte: clicking a tag's name opens its edit row too.
+Bug fixed on the way: updateTag rewrites every field and neither edit form sent `notes`, so any edit wiped a
+tag's notes; both forms now carry it as a hidden field. Calibrations keep their own name snapshot by design
+(model comment), so home-check results show the old name until the next calibration. npm run check: 14 errors,
+none in touched files.

@@ -25,7 +25,11 @@
 	let detecting = $state(false);
 	let detectError = $state<string | null>(null);
 	let saving = $state(false);
-	let registering = $state<number | null>(null);
+	// The detected tag whose form is open: "register" for a new ID, "edit"
+	// (opened by clicking its name) for a registered one. One form for both,
+	// so the two never drift apart.
+	let openId = $state<number | null>(null);
+	const toggle = (id: number) => (openId = openId === id ? null : id);
 
 	const byTagId = $derived(new Map(tags.filter((t) => !t.archived).map((t) => [t.tagId, t])));
 	const seenIds = $derived(new Set((det?.tags ?? []).map((t) => t.id)));
@@ -116,7 +120,14 @@
 							<div class="flex flex-wrap items-center gap-2">
 								<span class="font-mono" style="color: var(--color-tron-text)">#{d.id}</span>
 								{#if reg}
-									<span style="color: var(--color-tron-cyan)">{reg.name}</span>
+									<button
+										type="button"
+										onclick={() => toggle(d.id)}
+										title="Rename or edit this tag"
+										aria-expanded={openId === d.id}
+										class="underline decoration-dotted underline-offset-2 hover:decoration-solid"
+										style="color: var(--color-tron-cyan)">{reg.name} ▾</button
+									>
 									<span class="text-[10px] uppercase" style="color: var(--color-tron-text-secondary)">{reg.role} · {reg.sizeMm} mm</span>
 								{:else}
 									<span style="color: #f59e0b">not registered</span>
@@ -124,46 +135,71 @@
 								<span class="grow"></span>
 								<span class="font-mono" style="color: var(--color-tron-text-secondary)">{d.pose ? `${Math.round(d.pose.t[2])} mm away` : 'no pose'}</span>
 								{#if !reg}
-									<button type="button" class="underline" style="color: var(--color-tron-cyan)" onclick={() => (registering = registering === d.id ? null : d.id)}>register</button>
+									<button type="button" class="underline" style="color: var(--color-tron-cyan)" onclick={() => toggle(d.id)}>register</button>
 								{/if}
 							</div>
 							{#if tooSmall(d)}
 								<p class="mt-0.5" style="color: #f59e0b">Small for this distance — may drop out. Use a bigger tag here, or move it closer.</p>
 							{/if}
-							{#if registering === d.id && !reg}
-								<form
-									method="POST"
-									action="?/createTag"
-									use:enhance={() => async ({ update }) => {
-										await update({ reset: false });
-										registering = null;
-									}}
-									class="mt-2 grid gap-2 sm:grid-cols-2"
-								>
-									<input type="hidden" name="tagId" value={d.id} />
-									<label class="block" style="color: var(--color-tron-text-secondary)">
-										Name (where it is)
-										<input name="name" required maxlength="60" placeholder="e.g. Wrist" class={input} style={inputStyle} />
-									</label>
-									<label class="block" style="color: var(--color-tron-text-secondary)">
-										On
-										<select name="role" required class={input} style={inputStyle}>
-											<option value="arm">the arm</option>
-											<option value="fixed">something fixed (deck, Opentron…)</option>
-										</select>
-									</label>
-									<label class="block" style="color: var(--color-tron-text-secondary)">
-										Size mm (black square)
-										<input name="sizeMm" type="number" step="0.1" min="1" max="500" value={sheetSizeMm(d.id) ?? ''} required class={input} style={inputStyle} />
-									</label>
-									<label class="block" style="color: var(--color-tron-text-secondary)">
-										Group (optional)
-										<input name="group" list="arm-tag-groups" maxlength="40" class={input} style={inputStyle} />
-									</label>
-									<div class="sm:col-span-2">
-										<button type="submit" class="min-h-[32px] rounded px-3 text-xs font-semibold" style="color: #4ade80; border: 1px solid #4ade80;">Register tag {d.id}</button>
-									</div>
-								</form>
+							{#if openId === d.id}
+								<!-- Keyed on the registry row, so a just-registered tag's form
+								     re-renders as an edit form with the saved values. -->
+								{#key reg?._id}
+									<form
+										method="POST"
+										action={reg ? '?/updateTag' : '?/createTag'}
+										use:enhance={() => async ({ result, update }) => {
+											await update({ reset: false });
+											if (result.type === 'success') openId = null;
+										}}
+										class="mt-2 grid gap-2 sm:grid-cols-2"
+									>
+										<input type="hidden" name="tagId" value={d.id} />
+										{#if reg}
+											<input type="hidden" name="id" value={reg._id} />
+											<!-- Not edited here, but updateTag rewrites every field. -->
+											<input type="hidden" name="notes" value={reg.notes ?? ''} />
+										{/if}
+										<label class="block" style="color: var(--color-tron-text-secondary)">
+											Name (where it is)
+											<input name="name" required maxlength="60" placeholder="e.g. Wrist" value={reg?.name ?? ''} class={input} style={inputStyle} />
+										</label>
+										<label class="block" style="color: var(--color-tron-text-secondary)">
+											On
+											<select name="role" required class={input} style={inputStyle}>
+												<option value="arm" selected={reg?.role !== 'fixed'}>the arm</option>
+												<option value="fixed" selected={reg?.role === 'fixed'}>something fixed (deck, Opentron…)</option>
+											</select>
+										</label>
+										<label class="block" style="color: var(--color-tron-text-secondary)">
+											Size mm (black square)
+											<input name="sizeMm" type="number" step="0.1" min="1" max="500" value={reg?.sizeMm ?? sheetSizeMm(d.id) ?? ''} required class={input} style={inputStyle} />
+										</label>
+										<label class="block" style="color: var(--color-tron-text-secondary)">
+											Group (optional)
+											<input name="group" list="arm-tag-groups" maxlength="40" value={reg?.group ?? ''} class={input} style={inputStyle} />
+										</label>
+										<div class="flex flex-wrap items-center gap-3 sm:col-span-2">
+											<button type="submit" class="min-h-[32px] rounded px-3 text-xs font-semibold" style="color: #4ade80; border: 1px solid #4ade80;">
+												{reg ? `Save tag ${d.id}` : `Register tag ${d.id}`}
+											</button>
+											{#if reg}
+												<!-- Same form, archive action: it only reads `id`. -->
+												<button
+													type="submit"
+													formaction="?/archiveTag"
+													formnovalidate
+													onclick={(e) => {
+														if (!confirm(`Archive "${reg.name}" (#${d.id})? It can be restored from the Tag Registry.`)) e.preventDefault();
+													}}
+													class="text-xs underline"
+													style="color: var(--color-tron-text-secondary)">archive</button
+												>
+											{/if}
+											<button type="button" onclick={() => (openId = null)} class="text-xs" style="color: var(--color-tron-text-secondary)">cancel</button>
+										</div>
+									</form>
+								{/key}
 							{/if}
 						</li>
 					{/each}

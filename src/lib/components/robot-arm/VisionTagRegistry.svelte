@@ -94,6 +94,8 @@
 							{#if editingId === t._id}
 								<form method="POST" action="?/updateTag" use:enhance={keep} class="grid gap-2 sm:grid-cols-[5rem_5rem_minmax(0,1.3fr)_minmax(0,2fr)_minmax(0,1.5fr)_auto_auto] sm:items-end">
 									<input type="hidden" name="id" value={t._id} />
+									<!-- Not edited here, but updateTag rewrites every field. -->
+									<input type="hidden" name="notes" value={t.notes ?? ''} />
 									<input name="tagId" type="number" min="0" max={MAX_TAG_ID} required value={t.tagId} class={input} style={inputStyle} aria-label="Tag ID" />
 									<input name="sizeMm" type="number" step="0.1" min="1" max="500" required value={t.sizeMm} class={input} style={inputStyle} aria-label="Size mm" />
 									<select name="role" class={input} style={inputStyle} aria-label="On">
@@ -108,7 +110,13 @@
 							{:else}
 								<div class="flex flex-wrap items-center gap-2 text-sm">
 									<span class="font-mono" style="color: var(--color-tron-text-secondary)">#{t.tagId}</span>
-									<span style="color: var(--color-tron-text)">{t.name}</span>
+									<button
+										type="button"
+										onclick={() => (editingId = t._id)}
+										title="Rename or edit this tag"
+										class="hover:underline"
+										style="color: var(--color-tron-text)">{t.name}</button
+									>
 									<span class="text-xs" style="color: var(--color-tron-text-secondary)">{t.sizeMm} mm{t.group ? ` · ${t.group}` : ''}</span>
 									<span class="grow"></span>
 									<button type="button" onclick={() => (editingId = t._id)} class="text-xs underline" style="color: var(--color-tron-cyan)">edit</button>
