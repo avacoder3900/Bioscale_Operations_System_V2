@@ -21554,3 +21554,8 @@ Simulated pull loop (q70, w480, new TLS connection per frame, so browsers do bet
 <=0.4 s lag; Tailscale 6.6 fps with ~0.15 s lag. npm run check: 14 errors, none in touched files.
 Also: Robot_Arm_Vision_Servo_Home_Context.md (repo root, 2f3ca436) for a future session on joining the Vision
 tag home with the servo encoder home.
+Deployment: production — https://vercel.com/brevitest/bioscale-operations-system-mongodb/DmRVez2crfK7SorHDKu8Rjm5hpmG
+Source: branch master @ commit 7b722e86 (fast-forward from feat/arm-camera-pull-live; includes 2f3ca436 context doc)
+Retrieve this exact code: git checkout master at commit 7b722e86
+  (or: git log feat/arm-camera-pull-live --oneline)
+What this deployment is for: pull-based arm live view racing Tailscale vs the Cloudflare tunnel.
