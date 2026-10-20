@@ -21476,3 +21476,25 @@ Retrieve this exact code: git checkout master at commit dcdf9262
 What this deployment is for: ARM-05 AprilTag Vision tab live. Smoke on production: /login 200, Vision tab 302
 to login, apriltags proxy and agent vision-check 401 without credentials. Follow-up: Robot_Arm_Calibration_Context.md
 (repo root) condenses the arm calibration context for the next session.
+
+================================================================================
+2026-10-20 — feat/arm-apriltag-upscale-720p — AprilTag detection: 2x upscale, factory intrinsics file, 720p
+================================================================================
+Operator saw five clear tags and the Vision tab found none. Root cause: most stuck-on tags are the 8 mm IDs
+45-53, ~14-17 px across at 640x480, just under OpenCV aruco's floor (the context doc already says 8 mm needs
+720p). Measured on the live frame on arm-pi: 1x -> 0 tags; 1.5x/2x upscale -> 45, 50, 51, 53 (+4-7 ms);
+3x -> fewer; loosening DetectorParameters only added false/duplicate IDs.
+services/robot-arm/src/server/apriltags.py: detect on the frame enlarged by APRILTAG_UPSCALE (default 2,
+corners scaled back); factory intrinsics now also read from APRILTAG_INTRINSICS_FILE
+(calibrations/realsense_color_intrinsics.json, keyed WxH, source "realsense") since pyrealsense2 has no
+cp313 aarch64 wheel; depth cross-check maps tag centres into depth.py's 640x480 reference frame through the
+two factory intrinsics (720p = 640x480 scaled 3/2 with wider sides), null when either is unknown.
+New services/robot-arm/scripts/dump_realsense_intrinsics.py writes that JSON (run via
+`uv run --no-project --python 3.12 --with pyrealsense2`); on arm-pi it holds 424x240/640x480/1280x720/1920x1080.
+arm-pi (Pi-only config, backups *.bak-640x480 / .env.bak-pre-720p / apriltags.py.bak-pre-upscale):
+hardware.yaml cameras.external 1280x720 @ 15 fps for today (USB 2.0 cap; a USB 3 cable arrives 2026-10-21,
+then 1280x720@30 or 1080p@30 needs only hardware.yaml); APRILTAG_FX/FY/CX/CY commented out in .env.
+Verified at 720p: stream 15.0 fps (90 frames/6 s) with depth streaming alongside, intrinsics source
+"realsense" (fx 910.46), detect ~60 ms, tags 23/45/50/51 found; pose z vs D415 depth agree within 1 mm
+(45: 275/276, 50: 287/287, 51: 280/280), which validates the colour->depth mapping at 720p. Still missed:
+53 (cut off by the shorter 16:9 view) and the blue-box tag (behind cables). npm run check not run (Python only).

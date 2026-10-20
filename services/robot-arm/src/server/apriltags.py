@@ -33,30 +33,48 @@ That keeps this file independent of cameras.py internals.
 Intrinsics, best first:
     1. the RealSense colour stream profile at the frame's resolution (factory
        calibration, read through pyrealsense2 without opening a stream);
-    2. APRILTAG_FX / APRILTAG_FY / APRILTAG_CX / APRILTAG_CY env overrides;
-    3. a nominal D415 estimate (source "nominal") — fine for "did it move",
+    2. the same factory values from APRILTAG_INTRINSICS_FILE, keyed "WxH"
+       (source "realsense"). pyrealsense2 has no wheel for the arm Pi's Python
+       3.13, so scripts/dump_realsense_intrinsics.py writes this file once
+       from a throwaway Python 3.12; it covers every colour resolution, so a
+       hardware.yaml resolution change needs no further edits;
+    3. APRILTAG_FX / APRILTAG_FY / APRILTAG_CX / APRILTAG_CY env overrides;
+    4. a nominal D415 estimate (source "nominal") — fine for "did it move",
        not for absolute millimetres.
+
+Detection runs on the frame enlarged by APRILTAG_UPSCALE (default 2). Measured
+on arm-pi 2026-10-20 at 640x480: 8 mm tags ~15 px across were all missed at
+1x and all found at 1.5x/2x (+4-7 ms); 3x lost some again. Corners are
+scaled back, so everything returned is in the frame's own pixels.
 
 Depth: when depth.py is installed alongside, the D415's depth at each tag
 centre is attached (`depth_mm`) as an independent cross-check of `t_mm[2]`.
+depth.py's colour->depth map is fitted at 640x480 (COLOR_REF_W/H); other
+resolutions are a scaled, differently-cropped view of the same sensor, so
+centres are moved into that frame through the two factory intrinsics first,
+and left null when either is unknown rather than sampled at the wrong spot.
 
 Config (env, ~/robot-arm/.env):
     APRILTAG_SELF_URL      loopback base of this service (default http://127.0.0.1:8000)
+    APRILTAG_INTRINSICS_FILE  factory intrinsics JSON (default calibrations/realsense_color_intrinsics.json)
     APRILTAG_FX/FY/CX/CY   intrinsics override, pixels at the streamed resolution
+    APRILTAG_UPSCALE       detection enlargement factor, 1-4 (default 2)
     APRILTAG_REFINE        "subpix" (default), "apriltag" (slower, sharper) or "none"
     ROBOT_ARM_API_KEY      read to call the snapshot route (already set for the service)
 
 Deps on the Pi (inside the uv project): OpenCV >= 4.7 with the aruco module
 (`uv add opencv-python-headless` if `import cv2; cv2.aruco` fails) and numpy.
-NOT yet exercised against hardware (written 2026-10-20 without Pi access).
+Installed on arm-pi 2026-10-20 (OpenCV 4.13.0, D415 serial 353122063190).
 """
 
 from __future__ import annotations
 
 import base64
 import os
+import json
 import threading
 import time
+from pathlib import Path
 from typing import Dict, List, Optional
 
 import httpx
@@ -92,6 +110,7 @@ except Exception:  # pragma: no cover
 
 SELF_URL = os.environ.get("APRILTAG_SELF_URL", "http://127.0.0.1:8000").rstrip("/")
 REFINE = os.environ.get("APRILTAG_REFINE", "subpix").strip().lower()
+INTRINSICS_FILE = Path(os.environ.get("APRILTAG_INTRINSICS_FILE", "calibrations/realsense_color_intrinsics.json"))
 MAX_SIZES = 600  # 36h11 has 587 IDs
 
 
@@ -101,6 +120,9 @@ def _env_float(key: str) -> Optional[float]:
         return float(v) if v else None
     except ValueError:
         return None
+
+
+UPSCALE = min(4.0, max(1.0, _env_float("APRILTAG_UPSCALE") or 2.0))
 
 
 # ── detector ─────────────────────────────────────────────────────────────
@@ -159,11 +181,22 @@ def _realsense_intrinsics(w: int, h: int) -> Optional[dict]:
     return None
 
 
+def _file_intrinsics(w: int, h: int) -> Optional[dict]:
+    """Factory intrinsics saved by scripts/dump_realsense_intrinsics.py."""
+    try:
+        data = json.loads(INTRINSICS_FILE.read_text(encoding="utf-8"))
+        i = data["color"][f"{w}x{h}"]
+        return {"fx": float(i["fx"]), "fy": float(i["fy"]), "cx": float(i["cx"]), "cy": float(i["cy"]),
+                "dist": [float(c) for c in i.get("dist", [0.0] * 5)], "source": "realsense"}
+    except Exception:
+        return None
+
+
 def _intrinsics(w: int, h: int) -> dict:
     key = (w, h)
     if key in _intr_cache:
         return _intr_cache[key]
-    intr = _realsense_intrinsics(w, h)
+    intr = _realsense_intrinsics(w, h) or _file_intrinsics(w, h)
     if intr is None:
         fx, fy, cx, cy = (_env_float(k) for k in ("APRILTAG_FX", "APRILTAG_FY", "APRILTAG_CX", "APRILTAG_CY"))
         if fx and fy:
@@ -222,6 +255,29 @@ def _pose(corners, size: float, K, dist):
             "reproj_px": round(err, 3)}
 
 
+def _to_depth_ref(points: List[List[float]], w: int, h: int, intr: dict) -> Optional[List[List[float]]]:
+    """Normalised points of a w x h frame -> normalised points of depth.py's
+    reference colour frame (COLOR_REF_W x COLOR_REF_H, where its colour->depth
+    map was fitted). The D415's colour modes are scaled/cropped views of one
+    sensor, so a pixel maps across through the two factory intrinsics. None
+    when that can't be done exactly (no factory values at either size)."""
+    rw = int(getattr(_depth, "COLOR_REF_W", 640))
+    rh = int(getattr(_depth, "COLOR_REF_H", 480))
+    if (w, h) == (rw, rh):
+        return points
+    ref = _intrinsics(rw, rh)
+    if intr.get("source") != "realsense" or ref.get("source") != "realsense":
+        return None
+    out = []
+    for x, y in points:
+        u = (x * w - intr["cx"]) * ref["fx"] / intr["fx"] + ref["cx"]
+        v = (y * h - intr["cy"]) * ref["fy"] / intr["fy"] + ref["cy"]
+        # Not clamped: a 16:9 frame reaches past the 4:3 reference's sides,
+        # and depth.py's affine extends there (it nulls points off its image).
+        out.append([u / rw, v / rh])
+    return out
+
+
 def _detect(name: str, body: DetectRequest) -> dict:
     t0 = time.monotonic()
     jpeg = _grab_jpeg(name)
@@ -230,11 +286,16 @@ def _detect(name: str, body: DetectRequest) -> dict:
         raise RuntimeError("the snapshot could not be decoded")
     h, w = img.shape[:2]
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    if UPSCALE > 1.0:
+        gray = cv2.resize(gray, None, fx=UPSCALE, fy=UPSCALE, interpolation=cv2.INTER_CUBIC)
     # One detector object is shared; FastAPI runs sync routes on a thread
     # pool, so a live view and a home check can arrive together.
     with _detect_lock:
         label, detect = _get_detector()
         corners_list, ids, _rej = detect(gray)
+    # Back to the frame's own pixels: +0.5/-0.5 keeps pixel centres aligned
+    # under cv2.resize's half-pixel convention.
+    corners_list = [(c + 0.5) / UPSCALE - 0.5 for c in corners_list]
 
     intr = _intrinsics(w, h)
     K = np.array([[intr["fx"], 0, intr["cx"]], [0, intr["fy"], intr["cy"]], [0, 0, 1]], dtype=np.float64)
@@ -267,9 +328,11 @@ def _detect(name: str, body: DetectRequest) -> dict:
     if body.depth and tags and _depth is not None:
         try:
             if _depth._has_depth(name):
-                d = _depth._rs.sample([t["center"] for t in tags], 3)
-                for t, v in zip(tags, d):
-                    t["depth_mm"] = v
+                points = _to_depth_ref([t["center"] for t in tags], w, h, intr)
+                if points is not None:
+                    d = _depth._rs.sample(points, 3)
+                    for t, v in zip(tags, d):
+                        t["depth_mm"] = v
         except Exception:
             pass  # depth is a cross-check, never a reason to fail
 
