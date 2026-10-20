@@ -16,11 +16,13 @@ import { describe, it, expect, beforeEach, vi, afterAll } from 'vitest';
 
 // vi.mock factories are hoisted above the imports, so anything they close over
 // must be created with vi.hoisted.
-const { mockEnv, requirePermission, mintStreamToken } = vi.hoisted(() => ({
+const { mockEnv, requirePermission, mintStreamToken, tunnel } = vi.hoisted(() => ({
 	/** Mutable stand-in for SvelteKit's dynamic private env; reset per test. */
 	mockEnv: {} as Record<string, string | undefined>,
 	requirePermission: vi.fn(),
-	mintStreamToken: vi.fn()
+	mintStreamToken: vi.fn(),
+	/** The robot_arm_endpoints 'tunnel' row; null = none registered. */
+	tunnel: { row: null as { url: string; registeredAt: Date } | null, throws: false }
 }));
 
 vi.mock('$env/dynamic/private', () => ({ env: mockEnv }));
@@ -28,6 +30,19 @@ vi.mock('$env/dynamic/private', () => ({ env: mockEnv }));
 vi.mock('$lib/server/permissions', () => ({ requirePermission }));
 
 vi.mock('$lib/server/robot-arm-client', () => ({ robotArm: { mintStreamToken } }));
+
+vi.mock('$lib/server/db/connection', () => ({ connectDB: async () => {} }));
+
+vi.mock('$lib/server/db/models', () => ({
+	RobotArmEndpoint: {
+		findById: () => ({
+			lean: async () => {
+				if (tunnel.throws) throw new Error('db down');
+				return tunnel.row;
+			}
+		})
+	}
+}));
 
 import { GET } from './+server';
 
@@ -53,6 +68,8 @@ beforeEach(() => {
 	requirePermission.mockReset();
 	mintStreamToken.mockReset();
 	consoleError.mockClear();
+	tunnel.row = null;
+	tunnel.throws = false;
 });
 
 afterAll(() => {
@@ -101,6 +118,63 @@ describe('(a) ROBOT_ARM_PUBLIC_URL not configured', () => {
 		expect(body.origin).toBeUndefined();
 		expect(body.token).toBeUndefined();
 		expect(mintStreamToken).not.toHaveBeenCalled();
+	});
+});
+
+describe('(a2) ROBOT_ARM_PUBLIC_URL unset: fall back to the registered tunnel', () => {
+	const TUNNEL = 'https://liz-believes-liabilities-urge.trycloudflare.com';
+
+	it('publishes the registered tunnel origin with a fresh token', async () => {
+		tunnel.row = { url: TUNNEL, registeredAt: new Date() };
+		mintStreamToken.mockResolvedValue({ stream_token: 'cam-tok-tunnel' });
+
+		const res = await callGET();
+		const body = await res.json();
+
+		expect(body).toEqual({ available: true, origin: TUNNEL, token: 'cam-tok-tunnel', expiresInS: 900 });
+		expect(res.headers.get('cache-control')).toContain('no-store');
+	});
+
+	it('still uses a tunnel whose heartbeat is hours old (it may well be alive)', async () => {
+		tunnel.row = { url: TUNNEL, registeredAt: new Date(Date.now() - 8 * 60 * 60 * 1000) };
+		mintStreamToken.mockResolvedValue({ stream_token: 't' });
+
+		expect((await (await callGET()).json()).origin).toBe(TUNNEL);
+	});
+
+	it('ignores a tunnel registration older than 48 hours', async () => {
+		tunnel.row = { url: TUNNEL, registeredAt: new Date(Date.now() - 49 * 60 * 60 * 1000) };
+
+		const body = await (await callGET()).json();
+
+		expect(body.available).toBe(false);
+		expect(mintStreamToken).not.toHaveBeenCalled();
+	});
+
+	it('never publishes a stored URL that is not a trycloudflare.com origin', async () => {
+		tunnel.row = { url: PRIVATE_BASE_URL, registeredAt: new Date() };
+
+		const text = await (await callGET()).text();
+
+		expect(JSON.parse(text).available).toBe(false);
+		expect(text).not.toContain(PRIVATE_BASE_URL);
+	});
+
+	it('prefers ROBOT_ARM_PUBLIC_URL when both exist', async () => {
+		mockEnv.ROBOT_ARM_PUBLIC_URL = 'https://arm-pi.tailf65a70.ts.net';
+		tunnel.row = { url: TUNNEL, registeredAt: new Date() };
+		mintStreamToken.mockResolvedValue({ stream_token: 't' });
+
+		expect((await (await callGET()).json()).origin).toBe('https://arm-pi.tailf65a70.ts.net');
+	});
+
+	it('degrades to unavailable at 200 when the DB lookup fails', async () => {
+		tunnel.throws = true;
+
+		const res = await callGET();
+
+		expect(res.status).toBe(200);
+		expect((await res.json()).available).toBe(false);
 	});
 });
 

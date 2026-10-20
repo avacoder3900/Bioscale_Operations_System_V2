@@ -21391,6 +21391,45 @@ as contracttest, interleaved, 1 warmup + 5 samples, median TTFB.
 Live (mu7brrltq) = perf deployment within noise (0.86 vs 0.93 s). Atlas cache metrics still to check 2026-10-21.
 
 ================================================================================
+2026-10-20 — fix/arm-tunnel-stale-fallback — BIMS still tries the arm's tunnel when its heartbeat is overdue
+================================================================================
+Root cause of today's "arm unreachable": the office Wi-Fi (Fannin_WIFI) DNS servers 10.10.2.2/.3 died ~08:47 UTC
+while the Pi still had internet by IP. Tailscale forwarded the Pi's lookups to them, so arm-tunnel's 5-min
+heartbeat POST to BIMS failed ("Temporary failure in name resolution") for 8 h. BIMS ignores a tunnel row older
+than 15 min, the Funnel was also down (public ingress refusing TLS, exit 35), so BIMS had no route even though
+the Cloudflare tunnel itself answered /health 200. Pi fixed by the operator (sudo): tailscale --accept-dns=false
+and the wlan0 connection pinned to 1.1.1.1/8.8.8.8; tunnel re-registered 16:51 UTC.
+Code hardening (src/lib/server/robot-arm-client.ts): a tunnel row 15 min-48 h old is no longer dropped; it is
+tried LAST, after the Funnel (fresh rows still go first). Tests: robot-arm-client.routes.test.ts updated
+(stale tunnel tried after Funnel; >48 h ignored), 10/10 pass. npm run check: 13 errors, none in touched files
+(pre-existing on master).
+
+================================================================================
+2026-10-20 — feat/arm-camera-direct-30fps — arm camera: real 30 fps direct stream via the Cloudflare tunnel
+================================================================================
+Production's arm camera panel read "N frames via BIMS · requested 30 fps q80": ROBOT_ARM_PUBLIC_URL is not
+set in Vercel, so every viewer got the proxy slideshow (max 10 fps, one Vercel invocation per frame) even
+though the Pi streams 29-30 fps (measured on the Pi). No Vercel access to set the variable, so:
+- api/robot-arm/cameras/stream-url/+server.ts: falls back to the Pi's registered Cloudflare quick-tunnel
+  origin (robot_arm_endpoints 'tunnel') when ROBOT_ARM_PUBLIC_URL is unset. Approved relaxation of ARM-01 G0:
+  only a *.trycloudflare.com origin is published, rows >48 h old ignored, token stays camera-only and
+  short-lived, API key / private base URL never sent. DB errors degrade softly (available:false).
+- RobotArmCameraPanel.svelte: direct mode has its own fps menu (5/10/15/30, default 30, saved in
+  localStorage) passed to the Pi as stream.mjpg?fps=N (Pi's camera_stream already caps by it, read on the
+  Pi 2026-10-20). Proxy menu unchanged at 1/5/10.
+- services/robot-arm/CAMERA_STREAMING_HANDOFF.md: streaming write-up, updated with the above.
+Tests: stream-url/server.test.ts +6 tunnel cases, robot-arm-url-invariant still green (48/48). npm run check:
+13 errors, none in touched files (pre-existing on master).
+
+Deployment: production — https://vercel.com/brevitest/bioscale-operations-system-mongodb/6TtMuvqnxYmkuEno9LHNUrEksrXP
+Source: branch master @ commit 4a919ac6 (fast-forward from feat/arm-camera-direct-30fps)
+Retrieve this exact code: git checkout master at commit 4a919ac6
+  (or: git log feat/arm-camera-direct-30fps --oneline)
+What this deployment is for: 30 fps direct arm camera stream via the registered Cloudflare tunnel.
+Merged master into the branch first (progress.txt conflict only, both entries kept); stream-url tests 21/21,
+robot-arm tests 80/80, npm run check 13 errors (baseline). Logged here, not on master, to avoid a log-only push.
+
+================================================================================
 2026-10-20 — feat/arm-recording-cleanup — step detection core (no UI yet)
 ================================================================================
 Start of the recording clean-up feature (new tab, UI layout pending from Alejandro). Design rules from him:
