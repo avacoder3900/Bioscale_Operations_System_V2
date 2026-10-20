@@ -21462,3 +21462,10 @@ Size note: at 640x480 (f ~615 px) and 1 ft the smallest reliable tag is ~12 mm, 
 1280x720 (my audit's earlier "~25 mm" was wrong: I had used the 1080p focal figure scaled the wrong way).
 npm run check: 14 errors, none in touched files (pre-existing r2, research-proxy x2, AskBims, assembly x8,
 magnetometer x2). Unit: robot-arm suites 60/60. vite build: client + server built; adapter trace OOM locally (Windows).
+Merged origin/master (Giovanni's feat/arm-camera-direct-30fps) at 41b1b830; check still 14 errors, robot-arm tests 81/81.
+Deployment: preview — https://bioscale-operations-system-mongodb-7hpzxlcvg-brevitest.vercel.app
+Source: branch feat/arm-apriltag-vision @ commit 41b1b830
+Retrieve this exact code: git checkout feat/arm-apriltag-vision at commit 41b1b830
+  (or: git log feat/arm-apriltag-vision --oneline to find it if the branch has since moved on)
+What this deployment is for: ARM-05 AprilTag Vision tab before merge (PR #105). Smoke: /login 200, Vision tab
+302 to login, apriltags proxy 401 and agent vision-check 401 without credentials. Pi route not installed yet.
