@@ -21361,3 +21361,14 @@ Retrieve this exact code: git checkout feat/voice-memos at commit da16b9c3
   (or: git log master --oneline to find it if master has since moved on)
 What this deployment is for: VOICE-01 voice memo webhook, agent API, MCP tools, Kanban → Journal.
   Inert until VOICENOTES_WEBHOOK_KEYS is set in Vercel (every webhook call 401s without it).
+
+================================================================================
+2026-10-20 — PRODUCTION DEPLOY: PERF-01 BM-02/04/05/06 (master ff154378) — Opus 5.5 for Jacob
+================================================================================
+Jacob: "deploy all the code". perf/dashboard-and-region merged with master (VOICE-01 da16b9c3 + 1d8cd6f9; progress.txt
+conflict = both appended, kept both) then master fast-forwarded to ff154378.
+Pre-deploy: test:unit 658 pass / 1 fail (sonic decode non-finite samples — fails on master too); vite build clean
+(needed local npm install of @audio/decode-aac, already in lockfile); ensure-indexes report = 159/159 models ok
+(voice_memos indexes already exist, so autoIndex off does not leave them missing).
+Baseline /login TTFB 0.26–0.29 s median (public page, network-dominated: connect+TLS ~170 ms). Follow-up: Atlas cache /
+disk read metrics 2026-10-21, compare against the $nin era.
