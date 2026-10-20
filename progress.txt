@@ -21392,8 +21392,7 @@ Live (mu7brrltq) = perf deployment within noise (0.86 vs 0.93 s). Atlas cache me
 
 ================================================================================
 2026-10-20 — feat/arm-camera-direct-30fps — arm camera: real 30 fps direct stream via the Cloudflare tunnel
-================================================================================
-Production's arm camera panel read "N frames via BIMS · requested 30 fps q80": ROBOT_ARM_PUBLIC_URL is not
+=========================================================================Production's arm camera panel read "N frames via BIMS · requested 30 fps q80": ROBOT_ARM_PUBLIC_URL is not
 set in Vercel, so every viewer got the proxy slideshow (max 10 fps, one Vercel invocation per frame) even
 though the Pi streams 29-30 fps (measured on the Pi). No Vercel access to set the variable, so:
 - api/robot-arm/cameras/stream-url/+server.ts: falls back to the Pi's registered Cloudflare quick-tunnel
@@ -21406,3 +21405,19 @@ though the Pi streams 29-30 fps (measured on the Pi). No Vercel access to set th
 - services/robot-arm/CAMERA_STREAMING_HANDOFF.md: streaming write-up, updated with the above.
 Tests: stream-url/server.test.ts +6 tunnel cases, robot-arm-url-invariant still green (48/48). npm run check:
 13 errors, none in touched files (pre-existing on master).
+=======
+2026-10-20 — feat/arm-recording-cleanup — step detection core (no UI yet)
+================================================================================
+Start of the recording clean-up feature (new tab, UI layout pending from Alejandro). Design rules from him:
+BIMS never smooths, filters or drops servo data; it only groups overlapping moves into numbered steps, and the
+operator decides what to delete and how far each servo moves. A threshold (servo steps, 0 allowed) decides
+what counts as a move.
+New src/lib/robot-arm/recording-steps.ts (pure, shared): parseRecording() reads the live Pi format
+(header / frame{t, leader, follower, goal} / footer, hardware/dual_arm.py v1; NOT the {t, positions} format in
+the vendored recordings.py, still accepted) and uses goal[] (what replay sends, dual_arm.py:533) as servo ids
+1..6. detectMoves(): a move = consecutive changes > threshold from the last settle point, same direction, gaps
+<= pauseS (0.25 s); reversal = new move; start found by walking back through the run (flat stretches < pauseS
+crossed) so slow sweeps start where they left the hold. groupIntoSteps(): overlapping moves share a step, max
+one move per servo per step. Moves carry raw from/to positions and frame indices.
+Tried on GioRealTest-20261016-210639 (83 s, 2490 frames, copied read-only from the Pi): threshold 0 -> 210
+steps / 459 moves; 5 -> 95 / 200; 10 -> 94 / 165; 20 -> 94 / 155. Tests: recording-steps.test.ts 12/12.
