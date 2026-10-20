@@ -21469,3 +21469,10 @@ Retrieve this exact code: git checkout feat/arm-apriltag-vision at commit 41b1b8
   (or: git log feat/arm-apriltag-vision --oneline to find it if the branch has since moved on)
 What this deployment is for: ARM-05 AprilTag Vision tab before merge (PR #105). Smoke: /login 200, Vision tab
 302 to login, apriltags proxy 401 and agent vision-check 401 without credentials. Pi route not installed yet.
+Deployment: production — https://bioscale-operations-system-mongodb-o03orguet-brevitest.vercel.app
+Source: branch master @ commit dcdf9262 (merge of PR #105, feat/arm-apriltag-vision @ 6ec46735)
+Retrieve this exact code: git checkout master at commit dcdf9262
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: ARM-05 AprilTag Vision tab live. Smoke on production: /login 200, Vision tab 302
+to login, apriltags proxy and agent vision-check 401 without credentials. Follow-up: Robot_Arm_Calibration_Context.md
+(repo root) condenses the arm calibration context for the next session.
