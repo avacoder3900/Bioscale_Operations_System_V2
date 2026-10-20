@@ -19,8 +19,12 @@
  *     separate variables on purpose. The private one may be a LAN or
  *     tailnet-only address and stays server-side exactly as before; only an
  *     origin an operator has explicitly designated as public is ever sent out.
- *     Unset means unset — this route reports mode B unavailable rather than
- *     guessing an origin, and the panel keeps polling snapshots.
+ *     When it is unset, the only other origin ever published is the Pi's
+ *     Cloudflare quick-tunnel URL (robot_arm_endpoints 'tunnel', which the
+ *     Pi registers itself and which is already a public origin by
+ *     construction; approved 2026-10-20 so the live feed reaches 30 fps).
+ *     It must match *.trycloudflare.com. No usable origin means mode B is
+ *     unavailable, and the panel keeps polling snapshots.
  *
  *  2. It never sends ROBOT_ARM_API_KEY. What ships is a camera-scoped token
  *     that cannot move the arm and expires in minutes.
@@ -33,15 +37,41 @@ import { json, error } from '@sveltejs/kit';
 import { env } from '$env/dynamic/private';
 import { requirePermission } from '$lib/server/permissions';
 import { robotArm } from '$lib/server/robot-arm-client';
+import { connectDB } from '$lib/server/db/connection';
+import { RobotArmEndpoint } from '$lib/server/db/models';
 import type { RequestHandler } from './$types';
+
+const TUNNEL_URL_RE = /^https:\/\/[a-z0-9]+(?:-[a-z0-9]+)*\.trycloudflare\.com$/;
+// Generous on purpose: the Pi's heartbeat can fail while its tunnel still works
+// (office DNS outage, 2026-10-20), and a dead URL only costs the browser one
+// failed probe before it settles on the proxy feed.
+const TUNNEL_MAX_AGE_MS = 48 * 60 * 60 * 1000;
+
+async function registeredTunnelOrigin(): Promise<string | null> {
+	try {
+		await connectDB();
+		const row = (await RobotArmEndpoint.findById('tunnel').lean()) as {
+			url?: string;
+			registeredAt?: Date;
+		} | null;
+		if (!row?.url || !row.registeredAt || !TUNNEL_URL_RE.test(row.url)) return null;
+		if (Date.now() - new Date(row.registeredAt).getTime() > TUNNEL_MAX_AGE_MS) return null;
+		return row.url;
+	} catch {
+		return null;
+	}
+}
 
 export const GET: RequestHandler = async ({ locals }) => {
 	if (!locals.user) error(401, 'Not authenticated');
 	requirePermission(locals.user, 'manufacturing:read');
 
-	const publicUrl = env.ROBOT_ARM_PUBLIC_URL?.trim();
+	const publicUrl = env.ROBOT_ARM_PUBLIC_URL?.trim() || (await registeredTunnelOrigin());
 	if (!publicUrl) {
-		return json({ available: false, reason: 'ROBOT_ARM_PUBLIC_URL is not configured' });
+		return json({
+			available: false,
+			reason: 'ROBOT_ARM_PUBLIC_URL is not configured and no tunnel is registered'
+		});
 	}
 
 	try {

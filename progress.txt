@@ -21389,3 +21389,20 @@ as contracttest, interleaved, 1 warmup + 5 samples, median TTFB.
   /                      1.69 s -> 0.94 s
   /cartridge-dashboard   1.18 s -> 0.76 s
 Live (mu7brrltq) = perf deployment within noise (0.86 vs 0.93 s). Atlas cache metrics still to check 2026-10-21.
+
+================================================================================
+2026-10-20 — feat/arm-camera-direct-30fps — arm camera: real 30 fps direct stream via the Cloudflare tunnel
+================================================================================
+Production's arm camera panel read "N frames via BIMS · requested 30 fps q80": ROBOT_ARM_PUBLIC_URL is not
+set in Vercel, so every viewer got the proxy slideshow (max 10 fps, one Vercel invocation per frame) even
+though the Pi streams 29-30 fps (measured on the Pi). No Vercel access to set the variable, so:
+- api/robot-arm/cameras/stream-url/+server.ts: falls back to the Pi's registered Cloudflare quick-tunnel
+  origin (robot_arm_endpoints 'tunnel') when ROBOT_ARM_PUBLIC_URL is unset. Approved relaxation of ARM-01 G0:
+  only a *.trycloudflare.com origin is published, rows >48 h old ignored, token stays camera-only and
+  short-lived, API key / private base URL never sent. DB errors degrade softly (available:false).
+- RobotArmCameraPanel.svelte: direct mode has its own fps menu (5/10/15/30, default 30, saved in
+  localStorage) passed to the Pi as stream.mjpg?fps=N (Pi's camera_stream already caps by it, read on the
+  Pi 2026-10-20). Proxy menu unchanged at 1/5/10.
+- services/robot-arm/CAMERA_STREAMING_HANDOFF.md: streaming write-up, updated with the above.
+Tests: stream-url/server.test.ts +6 tunnel cases, robot-arm-url-invariant still green (48/48). npm run check:
+13 errors, none in touched files (pre-existing on master).
