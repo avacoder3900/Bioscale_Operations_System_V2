@@ -21423,3 +21423,18 @@ crossed) so slow sweeps start where they left the hold. groupIntoSteps(): overla
 one move per servo per step. Moves carry raw from/to positions and frame indices.
 Tried on GioRealTest-20261016-210639 (83 s, 2490 frames, copied read-only from the Pi): threshold 0 -> 210
 steps / 459 moves; 5 -> 95 / 200; 10 -> 94 / 165; 20 -> 94 / 155. Tests: recording-steps.test.ts 12/12.
+
+================================================================================
+2026-10-20 — master — merged PR #104 (fix/arm-tunnel-stale-fallback)
+================================================================================
+Merged with Alejandro's approval: BIMS still tries a stale (15 min-48 h) arm tunnel registration, after the
+Funnel. See the fix/arm-tunnel-stale-fallback entry above for root cause and tests.
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app (Vercel GitHub integration)
+Source: branch master @ commit 507dd71c
+Retrieve this exact code: git checkout master at commit 507dd71c
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: keep the robot arm reachable when the Pi's tunnel heartbeat fails (DNS outage).
+Local testing of feat/arm-camera-and-recording: dev server on http://localhost:5180 from worktree
+../Bioscale_arm-camera-and-recording. A node_modules junction to the main checkout broke the client bundle
+(Vite fs allow list rejected kit's client entry.js, so menus did not open); fixed with a real npm ci in the
+worktree.
