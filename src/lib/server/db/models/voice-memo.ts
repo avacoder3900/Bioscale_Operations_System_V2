@@ -61,7 +61,7 @@ const voiceMemoSchema = new Schema(
 		kind: { type: String, enum: ['eod', 'experiment'], required: true },
 		experimentRef: { type: String, default: null },
 		/** How the allowlist matched: a Voicenotes tag, or a spoken lead-in ("EOD …"). */
-		matchedBy: { type: String, enum: ['tag', 'spoken'], required: true },
+		matchedBy: { type: String, enum: ['tag', 'title', 'spoken'], required: true },
 
 		title: { type: String, default: null },
 		transcript: { type: String, default: '' },

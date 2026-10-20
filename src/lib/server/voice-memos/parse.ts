@@ -156,7 +156,7 @@ export function allowlistFromEnv(tagsVar?: string, spokenVar?: string): Allowlis
 export interface Classification {
 	kind: 'eod' | 'experiment';
 	experimentRef: string | null;
-	matchedBy: 'tag' | 'spoken';
+	matchedBy: 'tag' | 'title' | 'spoken';
 }
 
 function tagMatches(tag: string, pattern: string): boolean {
@@ -196,6 +196,11 @@ export function classify(note: ParsedVoicenote, cfg: AllowlistConfig): Classific
 		if (expTag) return { kind: 'experiment', experimentRef: experimentRefFromTag(expTag), matchedBy: 'tag' };
 		return { kind: 'eod', experimentRef: null, matchedBy: 'tag' };
 	}
+	// "EOD" (or "end of day", "#EOD") anywhere in the title is enough on its own (Jacob, 2026-10-20).
+	if (note.title && EOD_ANYWHERE.test(note.title)) return { kind: 'eod', experimentRef: null, matchedBy: 'title' };
 	if (!cfg.spokenTriggers) return null;
 	return spokenTrigger(note.title) ?? spokenTrigger(note.transcript);
 }
+
+// Word-bounded, so "geode" / "Theodore" / "period" never match.
+const EOD_ANYWHERE = /(?:^|[^a-z0-9])#?(?:e\.?\s?o\.?\s?d|end[\s-]+of[\s-]+(?:the[\s-]+)?day)(?![a-z0-9])/i;

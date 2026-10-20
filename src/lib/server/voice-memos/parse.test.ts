@@ -117,7 +117,7 @@ describe('classify', () => {
 	});
 
 	it('falls back to a spoken lead-in in the title, then the transcript', () => {
-		expect(classify({ ...base, title: 'EOD Oct 19' }, DEFAULT_ALLOWLIST)?.matchedBy).toBe('spoken');
+		expect(classify({ ...base, title: 'Monday', transcript: 'EOD. Today I…' }, DEFAULT_ALLOWLIST)?.matchedBy).toBe('spoken');
 		expect(classify({ ...base, title: 'Monday', transcript: 'Experiment 358 update' }, DEFAULT_ALLOWLIST)).toMatchObject({
 			kind: 'experiment',
 			experimentRef: '358'
@@ -125,7 +125,22 @@ describe('classify', () => {
 	});
 
 	it('spoken triggers can be turned off', () => {
-		expect(classify({ ...base, title: 'EOD' }, { ...DEFAULT_ALLOWLIST, spokenTriggers: false })).toBeNull();
+		expect(classify({ ...base, title: 'Monday', transcript: 'EOD' }, { ...DEFAULT_ALLOWLIST, spokenTriggers: false })).toBeNull();
+	});
+
+	it('EOD / end of day anywhere in the title is enough', () => {
+		const eod = { kind: 'eod', experimentRef: null, matchedBy: 'title' };
+		for (const title of ['EOD Oct 19', 'Monday EOD', 'Notes #EOD', 'e.o.d. wrap', 'Test note transcript for end of day', 'End-of-day recap']) {
+			expect(classify({ ...base, title }, DEFAULT_ALLOWLIST)).toEqual(eod);
+		}
+		// works even with spoken triggers off
+		expect(classify({ ...base, title: 'Friday EOD' }, { ...DEFAULT_ALLOWLIST, spokenTriggers: false })).toEqual(eod);
+	});
+
+	it('title rule is word-bounded', () => {
+		for (const title of ['Geode samples', 'Theodore call', 'Period review', 'Testing transcript with placeholder tasks and repeated filler text']) {
+			expect(classify({ ...base, title }, DEFAULT_ALLOWLIST)).toBeNull();
+		}
 	});
 });
 

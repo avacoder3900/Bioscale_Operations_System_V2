@@ -37,7 +37,7 @@ describe('ingestVoicenote', () => {
 		expect(await send(body)).toEqual({ outcome: 'created', memoId: 'id1' });
 		expect(await send(body)).toMatchObject({ outcome: 'unchanged' });
 		expect(state.memos).toHaveLength(1);
-		expect(state.memos[0]).toMatchObject({ kind: 'eod', matchedBy: 'spoken', speaker: jacob, transcript: 'EOD. Re-fit 358.' });
+		expect(state.memos[0]).toMatchObject({ kind: 'eod', matchedBy: 'title', speaker: jacob, transcript: 'EOD. Re-fit 358.' });
 		expect(state.audits.map((a) => a.action)).toEqual(['INSERT']);
 	});
 

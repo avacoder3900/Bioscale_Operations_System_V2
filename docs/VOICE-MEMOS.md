@@ -78,8 +78,10 @@ the first ~week of collection. The digest tool's description tells Claude this.
 
 ## Rules worth knowing
 
-- **Allowlist:** a note is stored only if it carries an allowed tag or opens with a spoken
-  lead-in: "EOD…", "E.O.D…", "End of day…" → `eod`; "Experiment 358…" / "Exp 358-B…" → `experiment`
+- **Allowlist:** a note is stored if it carries an allowed tag, **or its title contains "EOD" /
+  "#EOD" / "end of day" anywhere** (matchedBy `title`, added 2026-10-20 — Voicenotes writes the
+  title itself, so editing the title to add EOD also works via the update event), or it opens with
+  a spoken lead-in: "EOD…", "E.O.D…", "End of day…" → `eod`; "Experiment 358…" / "Exp 358-B…" → `experiment`
   (the ref must contain a digit). Voicenotes auto-titles from the first words, so starting the
   memo with "EOD" is enough even if tags never reach the webhook.
 - **Dropped notes** get 200 and are not stored. The only trace is a one-line log with no content.
