@@ -21529,3 +21529,8 @@ Bug fixed on the way: updateTag rewrites every field and neither edit form sent 
 tag's notes; both forms now carry it as a hidden field. Calibrations keep their own name snapshot by design
 (model comment), so home-check results show the old name until the next calibration. npm run check: 14 errors,
 none in touched files.
+Deployment: production — https://vercel.com/brevitest/bioscale-operations-system-mongodb/3cox7T2LWvym6qtv39n7WjEzY4WE
+Source: branch master @ commit 4d03a5c1 (fast-forward from feat/arm-tag-edit)
+Retrieve this exact code: git checkout master at commit 4d03a5c1
+  (or: git log feat/arm-tag-edit --oneline)
+What this deployment is for: rename/edit registered AprilTags from the Calibrate list.
