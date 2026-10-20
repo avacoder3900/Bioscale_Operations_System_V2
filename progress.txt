@@ -21329,3 +21329,12 @@ sonic.test.ts "decode zeroes non-finite samples", which fails identically on cle
 Not run against a live DB or Voicenotes yet; journal page not browser-verified. Built in worktree
 ..\Bioscale_Operations_System_V2-voice-memos. NOT merged / NOT deployed — Jacob deploys 2026-10-20 per
 docs/VOICE-MEMOS.md (set VOICENOTES_WEBHOOK_KEYS first; run `scripts/voice-memos.ts indexes`).
+2026-10-20: Jacob said "deploy all the code". master fast-forwarded 085deba4 → da16b9c3 (git push
+origin feat/voice-memos:master; master had not moved, no merge commit).
+Deployment: production — URL not captured (no Vercel/gh CLI in this session; see Vercel Deployments tab),
+  aliased to bioscale-operations-system-mongodb.vercel.app
+Source: master @ commit da16b9c3 (triggered automatically by GitHub integration, not local deploy)
+Retrieve this exact code: git checkout feat/voice-memos at commit da16b9c3
+  (or: git log master --oneline to find it if master has since moved on)
+What this deployment is for: VOICE-01 voice memo webhook, agent API, MCP tools, Kanban → Journal.
+  Inert until VOICENOTES_WEBHOOK_KEYS is set in Vercel (every webhook call 401s without it).
