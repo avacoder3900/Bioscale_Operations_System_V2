@@ -55,12 +55,21 @@ describe('robot-arm routes', () => {
 		expect(fetchMock.mock.calls.map((c) => c[0])).toEqual([`${TUNNEL}/health`, `${FUNNEL}/health`]);
 	});
 
-	it('ignores a stale tunnel registration', async () => {
-		tunnelRow = { url: TUNNEL, registeredAt: new Date(Date.now() - 60 * 60 * 1000) };
+	it('tries a stale tunnel registration last, after the Funnel', async () => {
+		// The Pi's heartbeat can fail while its tunnel is fine (office DNS outage, 2026-10-20).
+		tunnelRow = { url: TUNNEL, registeredAt: new Date(Date.now() - 8 * 60 * 60 * 1000) };
 		const { robotArmFetch } = await load();
-		fetchMock.mockResolvedValueOnce(ok({}));
-		await robotArmFetch('/health');
-		expect(fetchMock.mock.calls[0][0]).toBe(`${FUNNEL}/health`);
+		fetchMock.mockRejectedValueOnce(preConnectError()).mockResolvedValueOnce(ok({ a: 1 }));
+		await expect(robotArmFetch('/health')).resolves.toEqual({ a: 1 });
+		expect(fetchMock.mock.calls.map((c) => c[0])).toEqual([`${FUNNEL}/health`, `${TUNNEL}/health`]);
+	});
+
+	it('ignores a tunnel registration older than 48 hours', async () => {
+		tunnelRow = { url: TUNNEL, registeredAt: new Date(Date.now() - 49 * 60 * 60 * 1000) };
+		const { robotArmFetch } = await load();
+		fetchMock.mockRejectedValue(preConnectError());
+		await expect(robotArmFetch('/health')).rejects.toThrow('fetch failed');
+		expect(fetchMock.mock.calls.every((c) => c[0] === `${FUNNEL}/health`)).toBe(true);
 	});
 
 	it('re-sends a POST on another route only when it failed before sending', async () => {
