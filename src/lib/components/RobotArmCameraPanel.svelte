@@ -38,7 +38,11 @@
 	// Deliberately not `as const`: these are compared against and bound to
 	// values that arrive as plain number/string from localStorage and <select>,
 	// and a literal-union type here only produces cast noise at every use site.
+	// Proxy stays at <= 10 fps: every proxied frame is a Vercel invocation.
+	// Direct mode passes its choice to the Pi as stream.mjpg?fps=N (a cap on the
+	// Pi's own rate, which is 30 today), so higher rates cost BIMS nothing.
 	const FPS_OPTIONS: number[] = [1, 5, 10];
+	const DIRECT_FPS_OPTIONS: number[] = [5, 10, 15, 30];
 	const SIZES = { S: 320, M: 480, L: 640 };
 	type SizeKey = keyof typeof SIZES;
 	const SIZE_KEYS = Object.keys(SIZES) as SizeKey[];
@@ -54,6 +58,7 @@
 	// a one-shot seed captures an empty list on first paint and never recovers.
 	let selected = $state('');
 	let fps = $state<number>(5);
+	let directFps = $state<number>(30);
 	let size = $state<SizeKey>('M');
 	let collapsed = $state(false);
 	let paused = $state(false);
@@ -141,6 +146,9 @@
 			if (!raw) return;
 			const saved = JSON.parse(raw);
 			if (typeof saved.fps === 'number' && FPS_OPTIONS.includes(saved.fps)) fps = saved.fps;
+			if (typeof saved.directFps === 'number' && DIRECT_FPS_OPTIONS.includes(saved.directFps)) {
+				directFps = saved.directFps;
+			}
 			if (saved.size in SIZES) size = saved.size;
 			if (typeof saved.collapsed === 'boolean') collapsed = saved.collapsed;
 			// Remembered, not applied: the camera list may still be empty at this
@@ -166,7 +174,7 @@
 	});
 
 	$effect(() => {
-		const snapshot = JSON.stringify({ fps, size, collapsed, selected });
+		const snapshot = JSON.stringify({ fps, directFps, size, collapsed, selected });
 		try {
 			localStorage.setItem(STORAGE_KEY, snapshot);
 		} catch {
@@ -272,7 +280,7 @@
 		const c = cred;
 		displaySrc =
 			`${c.origin}/cameras/${encodeURIComponent(selected)}/stream.mjpg` +
-			`?token=${encodeURIComponent(c.token)}&t=${Date.now()}`;
+			`?token=${encodeURIComponent(c.token)}&fps=${directFps}&t=${Date.now()}`;
 
 		return () => {
 			// Clearing src is what actually closes the socket. Without this,
@@ -508,25 +516,35 @@
 					{/if}
 
 					<!--
-						This control sets the *polling* rate, so it does nothing in
-						direct mode, where the Pi pushes frames at its own pace.
-						Disabled rather than hidden: a knob that silently stops
-						working teaches the operator not to trust the panel.
+						Two rates, one per transport: proxy polls through BIMS (max 10),
+						direct asks the Pi to cap its stream (up to 30). Changing the
+						direct rate reopens the stream with the new cap.
 					-->
-					<select
-						bind:value={fps}
-						disabled={transport === 'direct'}
-						title={transport === 'direct'
-							? 'Streaming directly from the Pi — it controls the frame rate'
-							: 'How often BIMS fetches a new frame'}
-						class="rounded border px-2 py-1 disabled:opacity-50"
-						style="border-color: var(--color-tron-border); background: var(--color-tron-bg); color: var(--color-tron-text)"
-						aria-label="Frame rate"
-					>
-						{#each FPS_OPTIONS as option (option)}
-							<option value={option}>{option} fps</option>
-						{/each}
-					</select>
+					{#if transport === 'direct'}
+						<select
+							bind:value={directFps}
+							title="Frame rate the Pi streams directly to this browser"
+							class="rounded border px-2 py-1"
+							style="border-color: var(--color-tron-border); background: var(--color-tron-bg); color: var(--color-tron-text)"
+							aria-label="Frame rate"
+						>
+							{#each DIRECT_FPS_OPTIONS as option (option)}
+								<option value={option}>{option} fps</option>
+							{/each}
+						</select>
+					{:else}
+						<select
+							bind:value={fps}
+							title="How often BIMS fetches a new frame (direct streaming allows up to 30 fps)"
+							class="rounded border px-2 py-1"
+							style="border-color: var(--color-tron-border); background: var(--color-tron-bg); color: var(--color-tron-text)"
+							aria-label="Frame rate"
+						>
+							{#each FPS_OPTIONS as option (option)}
+								<option value={option}>{option} fps</option>
+							{/each}
+						</select>
+					{/if}
 
 					<select
 						bind:value={size}
@@ -576,7 +594,7 @@
 						<!-- No frame count here on purpose: the browser owns this
 						     connection and we genuinely cannot count its frames. A
 						     number we cannot measure would be worse than none. -->
-						direct stream
+						direct stream · up to {directFps} fps
 					{:else}
 						{frameCount} frame{frameCount === 1 ? '' : 's'} via BIMS
 					{/if}
