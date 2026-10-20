@@ -21372,7 +21372,6 @@ Pre-deploy: test:unit 658 pass / 1 fail (sonic decode non-finite samples — fai
 (voice_memos indexes already exist, so autoIndex off does not leave them missing).
 Baseline /login TTFB 0.26–0.29 s median (public page, network-dominated: connect+TLS ~170 ms). Follow-up: Atlas cache /
 disk read metrics 2026-10-21, compare against the $nin era.
-<<<<<<< Updated upstream
 2026-10-20 (later): VOICENOTES_WEBHOOK_KEYS fixed. The first value had been captured with dotenv's
 stdout banner; Jacob reset it by hand to jacob:<secret>. The BIMS username is `jacob`, not `jacobq`.
 Fix commit a559fd61: docs and keys.ts comment say jacob, and scripts/voice-memos.ts uses
@@ -21383,7 +21382,6 @@ Source: master @ commit a559fd61 (triggered automatically by GitHub integration,
 Retrieve this exact code: git checkout feat/voice-memos at commit a559fd61
   (or: git log master --oneline to find it if master has since moved on)
 What this deployment is for: picks up the corrected VOICENOTES_WEBHOOK_KEYS (+ CAPTURE_RAW=true for Step 0).
-=======
 
 2026-10-20 — PERF-01 measured in production (A/B, same DB, same minute) — Opus 5.5 for Jacob
 Method: vercel curl against pre-perf master (2t965hqyk, 1d8cd6f9) and perf (hhkvlpit6, ff154378), both iad1, logged in
@@ -21391,4 +21389,3 @@ as contracttest, interleaved, 1 warmup + 5 samples, median TTFB.
   /                      1.69 s -> 0.94 s
   /cartridge-dashboard   1.18 s -> 0.76 s
 Live (mu7brrltq) = perf deployment within noise (0.86 vs 0.93 s). Atlas cache metrics still to check 2026-10-21.
->>>>>>> Stashed changes
