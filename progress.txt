@@ -21514,3 +21514,8 @@ img's decoded size (fallback: Pi actual_size, then requested), size menu sets th
 VisionStage.svelte: image + tag outlines rotate together; labels counter-rotated about the tag centre so they
 read upright. npm run check: 14 errors, none in touched files (the 14th is research-proxy.ts from master).
 Not clicked through in a browser by me (no browser here); operator to confirm.
+Deployment: production — https://vercel.com/brevitest/bioscale-operations-system-mongodb/J7HcYSFp8XbQytCYSPk6VaBhn1ru
+Source: branch master @ commit b735e685 (fast-forward from feat/arm-camera-rotate; includes b1005e1f AprilTag upscale)
+Retrieve this exact code: git checkout master at commit b735e685
+  (or: git log feat/arm-camera-rotate --oneline)
+What this deployment is for: ⟲/⟳ view rotation for the arm camera panel and Vision tab.
