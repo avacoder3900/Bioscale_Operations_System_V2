@@ -200,3 +200,6 @@ export { AppSubject } from './app-subject.js';
 export { AppAccountBlock } from './app-account-block.js';
 export { AppAccountSetting, APP_ACCOUNT_TYPES } from './app-account-setting.js';
 export type { AppAccountType } from './app-account-setting.js';
+
+// Voice memos from the Voicenotes app (VOICE-01): records, Claude-written digests, step-0 raw capture.
+export { VoiceMemo, VoiceMemoDigest, VoiceMemoCapture } from './voice-memo.js';
