@@ -33,13 +33,14 @@ The ARM-03/04 Mongo collections (`robot_arm_home_calibrations`, `robot_arm_marke
 ## 3. Hardware facts
 
 - **Camera:** Intel RealSense **D415** on arm-pi (Raspberry Pi 5). Colour is `/dev/video4`, depth is `/dev/video0`.
-- **Link is USB 2.0.** Colour streams at **640×480 @ 30 fps** (720p maxes out at 15 fps, 1080p at 8). Fixing that needs a USB 3 port and cable.
-- Focal length at 640×480 ≈ **615 px**.
+- **Link is USB 3.0 since 2026-10-21** (5000M on bus 004; a USB 3 cable into a blue port). Colour streams at **1920×1080 @ 30 fps** (`hardware.yaml`, backup `.bak-720p15`). History: USB 2.0 capped colour at 640×480@30 / 720p@15 / 1080p@8, and the stream ran 640×480 until 2026-10-20, then 720p@15.
+- Focal length ≈ **1366 px at 1920×1080** (factory intrinsics file, `calibrations/realsense_color_intrinsics.json`); 910 px at 1280×720, 615 px at 640×480.
+- **Pi 5 has no fan.** At 1080p the service runs one core at ~85 % and the SoC sat at 74–77 °C (from 62 °C at 720p@15); throttling starts at 85 °C. A fan or heatsink is advisable before adding more vision load.
 - **Tags are at most 1 ft (~300 mm) from the camera** (operator, 2026-10-20).
 - **Tag sheet:** `services/robot-arm/calibration/apriltag-sheet.{html,pdf}`, generator `scripts/make_apriltag_sheet.py`.
   - IDs 0–53 in order, nine per size: **0–8: 40 mm, 9–17: 30, 18–26: 20, 27–35: 15, 36–44: 12, 45–53: 8** (edge of the black square).
   - Each ID goes on one spot only. Print at 100 % on matte paper, laser preferred.
-- **Smallest reliable tag** ≈ 24 × distance / focal length. At 1 ft and 640×480 that is **~12 mm**, so tags 12–40 mm read. The **8 mm tags need 1280×720**. Use 20–40 mm tags for fixed references; pose precision grows with size.
+- **Smallest reliable tag** ≈ 24 × distance / focal length. At 1 ft and 1920×1080 that is **~5 mm**, so every sheet size reads; the 8 mm tags are ~35 px across at 300 mm. (At 640×480 it was ~12 mm, and the 8 mm tags needed 1280×720.) Use 20–40 mm tags for fixed references; pose precision grows with size. Detection still runs on a 2× enlargement (`APRILTAG_UPSCALE`, ~135 ms per frame at 1080p incl. the grab; 1× found the same tags in ~25 ms on 2026-10-21, kept at 2× for tags farther than 1 ft).
 - **Pi camera code is not in this repo.** `~/robot-arm/src/server/cameras.py` and `src/config/hardware.yaml` live only on the Pi, and the Pi's `app.py` differs from the repo copy. Read the Pi's files before editing.
 
 ## 4. How ARM-05 works
@@ -123,6 +124,8 @@ Every mutation writes an AuditLog row (`robot_arm.tag.*`, `robot_arm.vision.*`).
 ## 6b. Animate tab (ARM-06, 2026-10-21)
 
 Not calibration, but it shares the arm and the recording pipeline. Poses captured by hand (torque off → move → *Save pose* → `POST /servos/hold`), move sets (poses + duration/easing/hold per keyframe), sequences (move sets + joins). BIMS renders a 30 Hz joint path (`src/lib/robot-arm/animation.ts`: minimum-jerk easing, Catmull-Rom/Hermite *flow*) and the Pi replays it as recording `animate-preview` with a lead-in from wherever the arm is. **Needs the Pi hold route** (`services/robot-arm/src/server/hold.py`, `scripts/install_hold_router.py`): a bare torque-on after hand-posing drives every servo back to its last goal. Full spec: [docs/prds/ARM-06-animate.md](docs/prds/ARM-06-animate.md).
+
+**Posing with the control arm (2026-10-21, PRD §8).** Hand-posed poses landed off because the unpowered follower sags; the preferred capture is now a Pi **teleop** session: follower torqued and tracking the leader. *Save pose* = `POST /sessions/stop` → settle → `GET /servos` → save → `POST /teleop/start` again; *Done* = stop (follower holds, leader limp). Never read `/servos` while a session runs — the driver is not thread-safe and that route has no bus guard; the Animate page skips its own servo read while any session is active. Runs tagged `manufacturing_step: animate-pose`. No new Pi route.
 
 ## 6c. Torque on/off on the camera card (2026-10-21)
 

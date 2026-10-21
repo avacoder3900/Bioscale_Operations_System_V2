@@ -3,12 +3,14 @@
  *
  * Pure decisions live in $lib/robot-arm/animation (easing, path rendering,
  * sequence flattening, the Pi's recording format), unit-tested. This module
- * owns the pose / move-set / sequence records, the by-hand capture flow, and
- * playback: render the path from where the arm is now, write it to the Pi as
- * a scratch recording, start a replay.
+ * owns the pose / move-set / sequence records, the two capture flows (with
+ * the control arm, or by hand), and playback: render the path from where
+ * the arm is now, write it to the Pi as a scratch recording, start a replay.
  *
  * Pi calls:
  *   GET  /servos                 follower positions + torque state
+ *   POST /teleop/start           follower tracks the control (leader) arm under torque
+ *   POST /sessions/stop          pause/stop that (the follower holds its last goal)
  *   POST /torque                 torque OFF so the operator can pose by hand
  *   POST /servos/hold            goal := present, torque ON (no jump) — hold.py
  *   POST /servos/{id}/jog        go to a pose (≤300 steps per jog); measure a pose's droop
@@ -175,6 +177,134 @@ export async function holdArm(user: User): Promise<HoldResult> {
 		await audit(user, 'robot_arm.animate.hold_failed', 'robot_arm_poses', 'arm', { error });
 		return { held: false, error };
 	}
+}
+
+// ── pose with the control (leader) arm ───────────────────────────────────
+//
+// Posing by hand needs torque OFF, so the follower sags under its own weight
+// and the encoders read the sagged position, not the one the operator meant;
+// and torque-on afterwards needs the hold route or the arm jumps. Posing with
+// the control arm avoids both: a teleop session snaps the follower's goal to
+// where it is, turns torque ON and then drives it to wherever the leader is,
+// so the follower is always powered and always where the operator put it.
+
+/** Stamped on the teleop runs the Animate tab starts, so the Runs tab can tell them apart. */
+export const LEADER_POSING_STEP = 'animate-pose';
+/** Teleop rate while posing; the follower only has to keep up with a hand. */
+const LEADER_POSING_RATE_HZ = 30;
+/** After a teleop stop the follower is still settling on its last goal; wait before reading it. */
+const SETTLE_MS = 400;
+
+export interface LeaderPosing {
+	runId: string;
+}
+
+function leaderMessage(err: unknown): string {
+	const msg = (err as Error).message ?? String(err);
+	if (/robot-arm 503/.test(msg) && /leader/i.test(msg)) {
+		return 'The Pi reports no control (leader) arm connected — check its USB and power on the Control tab.';
+	}
+	if (/robot-arm 409/.test(msg)) return `The Pi refused: ${msg}`;
+	return msg;
+}
+
+async function startTeleopForPosing(user: User, why: string): Promise<LeaderPosing> {
+	let started;
+	try {
+		started = await robotArm.startTeleop({ rate_hz: LEADER_POSING_RATE_HZ, triggered_by: opRef(user), manufacturing_step: LEADER_POSING_STEP });
+	} catch (err) {
+		throw new AnimateError(leaderMessage(err), 502);
+	}
+	await audit(user, 'robot_arm.animate.leader_posing_start', 'robot_arm_poses', 'arm', { runId: started.run_id, rateHz: LEADER_POSING_RATE_HZ, why });
+	return { runId: started.run_id };
+}
+
+/** Is the follower tracking the control arm right now (any teleop session, whoever started it)? */
+export async function leaderPosingActive(): Promise<LeaderPosing | null> {
+	const a = (await robotArm.getActive()).active;
+	return a?.kind === 'teleop' ? { runId: a.run_id } : null;
+}
+
+/**
+ * Pose with the control arm: start a teleop session. The follower snaps its
+ * goal to where it is, torque ON, then follows the leader (which goes limp)
+ * at 30 Hz. Poses are then taken with savePoseFromLeader; stopLeaderPosing
+ * ends it with the follower holding.
+ */
+export async function startLeaderPosing(user: User): Promise<LeaderPosing> {
+	await connectDB();
+	await requireIdle();
+	return startTeleopForPosing(user, 'start');
+}
+
+export interface LeaderPoseResult {
+	pose: PoseSummary;
+	/** The follower is following the control arm again (a new teleop run). */
+	resumed: boolean;
+	runId: string | null;
+	/** Why it is not following, when it is not. The follower holds the pose under torque either way. */
+	warning: string | null;
+}
+
+/**
+ * Save the follower's position while posing with the control arm. The Pi's
+ * driver is not thread-safe and the teleop thread owns the bus, so the bus
+ * is never read mid-session: stop the session (the follower keeps torque and
+ * its last goal, so it holds the pose), let it settle, read it, save, then
+ * start a fresh teleop so the operator can carry on to the next pose.
+ */
+export async function savePoseFromLeader(user: User, input: { name: unknown; notes?: unknown; resume: boolean }): Promise<LeaderPoseResult> {
+	await connectDB();
+	const name = cleanName(input.name, 'pose');
+	await assertPoseNameFree(name);
+	const posing = await leaderPosingActive();
+	if (!posing) throw new AnimateError('The follower is not following the control arm — press "Pose with the control arm" first.', 409);
+	try {
+		await robotArm.stop();
+	} catch (err) {
+		throw new AnimateError(`Could not pause the control arm: ${(err as Error).message}`, 502);
+	}
+	await new Promise((r) => setTimeout(r, SETTLE_MS));
+	const now = await readArm();
+	const _id = generateId();
+	await RobotArmPose.create({ _id, name, positions: now.positions, notes: cleanNotes(input.notes), createdBy: opRef(user) });
+	await audit(user, 'robot_arm.animate.pose_save', 'robot_arm_poses', _id, {
+		name,
+		positions: now.positions,
+		torqueOnAtCapture: now.torqueOn,
+		source: 'leader',
+		pausedRunId: posing.runId
+	});
+	let warning: string | null =
+		now.torqueOn === false ? 'The follower reports torque OFF, so it may not be holding the pose — press Hold (torque on) before moving on.' : null;
+	let resumed = false;
+	let runId: string | null = null;
+	if (input.resume) {
+		try {
+			runId = (await startTeleopForPosing(user, 'after pose_save')).runId;
+			resumed = true;
+		} catch (err) {
+			warning = [warning, `Saved, but the follower is no longer following the control arm: ${(err as Error).message} It is holding where it is.`]
+				.filter(Boolean)
+				.join(' ');
+		}
+	}
+	return { pose: poseSummary(await RobotArmPose.findById(_id).lean()), resumed, runId, warning };
+}
+
+/** Done posing: stop the teleop session. The follower keeps torque and holds its last goal; the leader stays limp. */
+export async function stopLeaderPosing(user: User): Promise<{ stoppedRunId: string | null }> {
+	await connectDB();
+	const posing = await leaderPosingActive();
+	if (!posing) return { stoppedRunId: null };
+	let stoppedRunId: string | null;
+	try {
+		stoppedRunId = (await robotArm.stop()).stopped_run_id ?? null;
+	} catch (err) {
+		throw new AnimateError(`Stop failed: ${(err as Error).message}`, 502);
+	}
+	await audit(user, 'robot_arm.animate.leader_posing_stop', 'robot_arm_poses', 'arm', { runId: stoppedRunId });
+	return { stoppedRunId };
 }
 
 // ── poses ────────────────────────────────────────────────────────────────
