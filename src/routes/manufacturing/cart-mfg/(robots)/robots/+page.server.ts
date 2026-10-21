@@ -20,13 +20,16 @@ import { hasPermission } from '$lib/server/permissions';
 import { OPEN_PARAM, parseOpen, type BoardProcess } from '$lib/manufacturing/robot-panels';
 import { loadWaxWizard, type WaxWizardData } from '$lib/server/manufacturing/wax-wizard';
 import { loadReagentWizard, type ReagentWizardData } from '$lib/server/manufacturing/reagent-wizard';
+import { connectDB, ReagentBatchRecord } from '$lib/server/db';
+import { POST_RUN_WELL_LOG_HOURS } from '$lib/manufacturing/reagent-well-issues';
 import type { PageServerLoad } from './$types';
 
 export const config = { maxDuration: 60 };
 
 type PanelBase = { robotId: string; robotName: string; process: BoardProcess | null; stage: string | null; live: boolean };
 export type RobotPanel =
-	| (PanelBase & { kind: 'idle'; process: null; live: false })
+	/** lastReagentRunFinishedAt: a Completed reagent run whose post-run well log is still open. */
+	| (PanelBase & { kind: 'idle'; process: null; live: false; lastReagentRunFinishedAt: string | null })
 	/** A run in setup whose wizard the user may not read — link to its page only. */
 	| (PanelBase & { kind: 'setup'; process: BoardProcess; live: false })
 	| (PanelBase & { kind: 'wax-setup'; process: 'wax'; live: false; data: WaxWizardData })
@@ -45,6 +48,7 @@ export const load: PageServerLoad = async ({ locals, parent, url }) => {
 		reagent: hasPermission(locals.user, 'reagentFilling:read')
 	};
 	const open = parseOpen(url.searchParams.get(OPEN_PARAM));
+	await connectDB();
 
 	const panels = await Promise.all(
 		board.map(async (row): Promise<RobotPanel> => {
@@ -79,7 +83,19 @@ export const load: PageServerLoad = async ({ locals, parent, url }) => {
 			// Idle: open only if the operator asked for it (?open=) and may read it.
 			const want = open[row.robotId];
 			if (want && may[want]) return setupPanel(want, null);
-			return { ...base, kind: 'idle', process: null, stage: null, live: false };
+			// Post-run well log: point the operator at the last reagent run while it is
+			// still open, so mistakes seen while unloading can be logged.
+			let lastReagentRunFinishedAt: string | null = null;
+			if (may.reagent) {
+				const since = new Date(Date.now() - POST_RUN_WELL_LOG_HOURS * 3_600_000);
+				const last = (await ReagentBatchRecord.findOne({ 'robot._id': row.robotId, status: 'Completed', finalizedAt: { $gte: since } })
+					.select('finalizedAt')
+					.sort({ finalizedAt: -1 })
+					.lean()
+					.catch(() => null)) as any;
+				if (last?.finalizedAt) lastReagentRunFinishedAt = new Date(last.finalizedAt).toISOString();
+			}
+			return { ...base, kind: 'idle', process: null, stage: null, live: false, lastReagentRunFinishedAt };
 		})
 	);
 

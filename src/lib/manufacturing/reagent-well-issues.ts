@@ -109,3 +109,41 @@ export function deckPositionOfWell(wellName: string): { deckPosition: number; we
 	const i = carrier === 1 ? Math.floor(rowIdx / 3) : Math.floor((23 - rowIdx) / 3);
 	return { deckPosition: carrier * 8 + i + 1, well };
 }
+
+/**
+ * Post-run well log (2026-10-21). Fill mistakes are often only seen when the
+ * cartridges come OFF the deck, after the robot has finished — and a succeeded
+ * run auto-finalizes the moment the .py ends. So a Completed run keeps its well
+ * log open for this long after it finished; entries logged then are mirrored
+ * onto the cartridge by the action (finalize already copied the earlier ones).
+ */
+export const POST_RUN_WELL_LOG_HOURS = 12;
+
+const CLOSED_STATUSES = new Set(['aborted', 'voided', 'cancelled']);
+
+export type WellLogWindow =
+	| { open: true; postRun: false }
+	| { open: true; postRun: true; closesAt: Date }
+	| { open: false; reason: string };
+
+/**
+ * Whether a run's well log accepts changes now. `postRun` = the run already
+ * finalized, so the cartridge copy must be updated too.
+ */
+export function wellLogWindow(
+	run: { status?: string | null; finalizedAt?: Date | string | null; runEndTime?: Date | string | null },
+	nowMs: number = Date.now()
+): WellLogWindow {
+	const status = String(run.status ?? '').toLowerCase();
+	if (CLOSED_STATUSES.has(status)) return { open: false, reason: `Run was ${status} — its well log is closed.` };
+	const finished = status === 'completed' || !!run.finalizedAt;
+	if (!finished) return { open: true, postRun: false };
+	const endRaw = run.finalizedAt ?? run.runEndTime ?? null;
+	const endMs = endRaw ? new Date(endRaw).getTime() : NaN;
+	if (!Number.isFinite(endMs)) return { open: false, reason: 'Run is finished and has no end time — log observations on Reagent Inspect.' };
+	const closesAt = new Date(endMs + POST_RUN_WELL_LOG_HOURS * 3_600_000);
+	if (nowMs > closesAt.getTime()) {
+		return { open: false, reason: `The well log closes ${POST_RUN_WELL_LOG_HOURS} h after the run — log later observations on Reagent Inspect.` };
+	}
+	return { open: true, postRun: true, closesAt };
+}

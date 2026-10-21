@@ -202,6 +202,16 @@
 				{:else}
 					<div class="space-y-2">
 						<p class="text-xs text-[var(--color-tron-text-secondary)]">Robot idle. Start a fill — the setup opens right here in this panel.</p>
+						{#if panel.kind === 'idle' && panel.lastReagentRunFinishedAt && data.may.reagent}
+							<button
+								type="button"
+								onclick={() => openSetup(panel.robotId, 'reagent')}
+								disabled={opening !== null}
+								class="min-h-[40px] w-full rounded-lg border border-amber-400/50 bg-amber-500/10 px-3 py-2 text-left text-xs font-medium text-amber-200 transition-colors hover:bg-amber-500/20 disabled:opacity-50"
+							>
+								Log fill mistakes from the last reagent run (finished {new Date(panel.lastReagentRunFinishedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}) →
+							</button>
+						{/if}
 						<div class="flex gap-2">
 							{#if data.may.wax}
 								<button type="button" onclick={() => openSetup(panel.robotId, 'wax')} disabled={opening !== null} class={startBtn}>

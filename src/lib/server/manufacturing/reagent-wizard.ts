@@ -17,7 +17,7 @@ import {
 	reconcileStartIntent,
 	setRunRecordStatus
 } from '$lib/server/opentrons/run-lifecycle-records';
-import type { ReagentWellIssueRow } from '$lib/manufacturing/reagent-well-issues';
+import { POST_RUN_WELL_LOG_HOURS, wellLogWindow, type ReagentWellIssueRow } from '$lib/manufacturing/reagent-well-issues';
 import { calibrationPreview as loadCalibrationPreview, type CalibrationPreview } from '$lib/server/opentrons/calibration-rtps';
 
 /** Map legacy status → UI stage */
@@ -75,8 +75,19 @@ function emptyReagentState(robotId: string, loadError?: string) {
 			capturedAt: string | null;
 		},
 		wellIssues: [] as ReagentWellIssueRow[],
-		calibrationPreview: null as CalibrationPreview | null
+		calibrationPreview: null as CalibrationPreview | null,
+		recentFinishedRun: null as RecentFinishedRun | null
 	};
+}
+
+/** The robot's last Completed run while its post-run well log is open (see wellLogWindow). */
+export interface RecentFinishedRun {
+	runId: string;
+	finishedAt: string;
+	closesAt: string;
+	wellIssues: ReagentWellIssueRow[];
+	cartridges: { cartridgeId: string; deckPosition: number }[];
+	activeWells: number[];
 }
 
 /** Run-page tracker rows, plain and ISO-dated (SvelteKit-serializable). */
@@ -276,6 +287,39 @@ export async function loadReagentWizard(locals: App.Locals, robotId: string) {
 		// Operator-logged per-well fill mistakes (run-page tracker).
 		const wellIssues = serializeWellIssues(activeRun?.wellIssues);
 
+		// Post-run well log (2026-10-21): with no active run, offer this robot's most
+		// recent Completed run while its well log is still open, so mistakes found
+		// while unloading the deck (after Done / a reload) can still be logged.
+		let recentFinishedRun: RecentFinishedRun | null = null;
+		if (!activeRun && robotId) {
+			const since = new Date(Date.now() - POST_RUN_WELL_LOG_HOURS * 3_600_000);
+			const last = (await ReagentBatchRecord.findOne({
+				'robot._id': robotId,
+				status: 'Completed',
+				finalizedAt: { $gte: since }
+			})
+				.select('status finalizedAt runEndTime cartridgesFilled wellIssues protocolParameters')
+				.sort({ finalizedAt: -1 })
+				.lean()
+				.catch(() => null)) as any;
+			const win = last ? wellLogWindow(last) : null;
+			if (last && win?.open && win.postRun) {
+				const p = (last.protocolParameters ?? {}) as Record<string, unknown>;
+				const on = [2, 3, 4, 5].filter((w) => p[`well_${w}`] !== false);
+				recentFinishedRun = {
+					runId: String(last._id),
+					finishedAt: new Date(last.finalizedAt ?? last.runEndTime).toISOString(),
+					closesAt: win.closesAt.toISOString(),
+					wellIssues: serializeWellIssues(last.wellIssues),
+					cartridges: (last.cartridgesFilled ?? []).map((cf: any, i: number) => ({
+						cartridgeId: String(cf.cartridgeId ?? ''),
+						deckPosition: Number(cf.deckPosition) >= 1 ? Number(cf.deckPosition) : i + 1
+					})),
+					activeWells: on.length ? on : [2, 3, 4, 5]
+				};
+			}
+		}
+
 		// Finalized ReagentLots eligible to feed cartridge fills, grouped by
 		// protocol slug. UI dropdown wire-up is pending (see TODO below) —
 		// the data is here so the picker can land without a second backend pass.
@@ -394,7 +438,8 @@ export async function loadReagentWizard(locals: App.Locals, robotId: string) {
 			opentronsRobotId: robotId,
 			lastTipState,
 			wellIssues,
-			calibrationPreview
+			calibrationPreview,
+			recentFinishedRun
 		};
 	} catch (err) {
 		console.error('[REAGENT-FILLING PAGE] Load error:', err instanceof Error ? err.message : err);

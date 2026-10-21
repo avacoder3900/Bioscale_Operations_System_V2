@@ -172,6 +172,25 @@
 		data.activeRunId;
 		wellIssuesLocal = null;
 	});
+	/**
+	 * Post-run well log (2026-10-21): the robot's last Completed run while its
+	 * well log is still open — mistakes are often only seen while unloading,
+	 * after the run finished or Done was pressed. Same tracker, that run's data.
+	 */
+	const recentRun = $derived(data.recentFinishedRun ?? null);
+	let recentIssuesLocal = $state<ReagentWellIssueRow[] | null>(null);
+	const recentIssues = $derived(recentIssuesLocal ?? recentRun?.wellIssues ?? []);
+	$effect(() => {
+		recentRun;
+		recentIssuesLocal = null;
+	});
+	const recentPositions = $derived((recentRun?.cartridges ?? []).map((c) => c.deckPosition).filter((n) => n >= 1 && n <= 24));
+	const recentCartByPosition = $derived.by(() => {
+		const m: Record<number, string> = {};
+		for (const c of recentRun?.cartridges ?? []) m[c.deckPosition] = c.cartridgeId;
+		return m;
+	});
+	const fmtTime = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 	const loadedPositions = $derived(
 		(data.cartridges ?? []).map((c: any) => Number(c.deckPosition)).filter((n: number) => n >= 1 && n <= 24)
 	);
@@ -864,6 +883,28 @@
 		</div>
 	{:else if !previewParam && !stage}
 		<!-- No active run — show create run UI -->
+		{#if recentRun}
+			<details open class="mb-4 rounded-lg border border-amber-500/40 bg-amber-900/10">
+				<summary class="cursor-pointer px-4 py-2 text-sm font-semibold text-amber-200">
+					Last run (finished {fmtTime(recentRun.finishedAt)}) — log fill mistakes found while unloading
+				</summary>
+				<div class="px-3 pb-3">
+					<p class="mb-2 text-xs text-[var(--color-tron-text-secondary)]">
+						Open until {fmtTime(recentRun.closesAt)}. Entries are added to the run and to each cartridge's fill record.
+					</p>
+					<ReagentWellTracker
+						actionUrl={act}
+						runId={recentRun.runId}
+						issues={recentIssues}
+						loadedPositions={recentPositions}
+						cartridgeByPosition={recentCartByPosition}
+						reagentNames={reagentNamesByWell}
+						activeWells={recentRun.activeWells}
+						onChange={(rows) => { recentIssuesLocal = rows; }}
+					/>
+				</div>
+			</details>
+		{/if}
 		<div class="space-y-4">
 			<h2 class="text-lg font-semibold text-[var(--color-tron-text)]">New Reagent Filling Run</h2>
 			<p class="text-sm text-[var(--color-tron-text-secondary)]">

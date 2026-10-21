@@ -31,6 +31,7 @@ import { isReagentEligible } from '$lib/shared/cartridge-wax-status';
 import {
 	REAGENT_WELL_ISSUE_CODES,
 	REAGENT_WELLS,
+	wellLogWindow,
 	type ReagentWellIssueRow
 } from '$lib/manufacturing/reagent-well-issues';
 import type { PageServerLoad, Actions } from './$types';
@@ -38,7 +39,6 @@ import type { PageServerLoad, Actions } from './$types';
 // Extend Vercel serverless timeout to 60s
 export const config = { maxDuration: 60 };
 
-const TERMINAL = new Set(['completed', 'aborted', 'voided', 'cancelled', 'Completed', 'Aborted', 'Cancelled']);
 
 /**
  * The reagent SETUP page (ROBOT-OVERHAUL round 6, 2026-10-08): assay → fill lot
@@ -609,8 +609,10 @@ export const actions: Actions = {
 	 * a deck position + reagent well. Written straight onto the run so it is
 	 * there on reload and for every browser watching the run; copied to the
 	 * cartridge at completion (finalizeReagentRun). Allowed while the run is
-	 * page-owned (Running, and Loading for a mistake noticed pre-start), not
-	 * after Done — post-completion observations belong on Reagent Inspect.
+	 * page-owned (Running, and Loading for a mistake noticed pre-start), and
+	 * since 2026-10-21 for POST_RUN_WELL_LOG_HOURS after a Completed run — the
+	 * mistakes are often only seen while unloading. Those post-run entries are
+	 * mirrored onto the cartridge here, since finalize already did its copy.
 	 */
 	logWellIssue: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
@@ -628,11 +630,10 @@ export const actions: Actions = {
 		if (!REAGENT_WELL_ISSUE_CODES.includes(issue)) return fail(400, { error: `Unknown issue "${issue}"` });
 
 		const run = await ReagentBatchRecord.findById(runId)
-			.select('status finalizedAt cartridgesFilled assayType').lean() as any;
+			.select('status finalizedAt runEndTime cartridgesFilled assayType').lean() as any;
 		if (!run) return fail(404, { error: 'Run not found' });
-		if (run.finalizedAt || TERMINAL.has(String(run.status))) {
-			return fail(400, { error: 'Run is finished — log post-run observations on Reagent Inspect.' });
-		}
+		const win = wellLogWindow(run);
+		if (!win.open) return fail(400, { error: win.reason });
 		const carts = (run.cartridgesFilled ?? []) as any[];
 		// Position match first; index fallback for runs loaded with position 0 (pre 2026-10-08).
 		const cart = carts.find((c: any) => Number(c.deckPosition) === deckPosition) ?? (carts.every((c) => !(Number(c.deckPosition) >= 1)) ? carts[deckPosition - 1] : undefined);
@@ -650,6 +651,22 @@ export const actions: Actions = {
 			loggedAt: new Date()
 		};
 		await ReagentBatchRecord.findByIdAndUpdate(runId, { $push: { wellIssues: entry } });
+		const postRun = win.postRun;
+		if (postRun && entry.cartridgeId) {
+			// Finalize already copied the run's list onto each cart; mirror this late
+			// entry onto its cart the same way (only the cart this run filled).
+			await CartridgeRecord.updateOne(
+				{ _id: entry.cartridgeId, 'reagentFilling.runId': runId },
+				{
+					$push: {
+						'reagentFilling.wellIssues': {
+							well, reagentName, issue, note: note || null,
+							loggedBy: entry.loggedBy, loggedAt: entry.loggedAt
+						}
+					}
+				}
+			);
+		}
 		await AuditLog.create({
 			_id: generateId(),
 			tableName: 'reagent_batch_records',
@@ -657,7 +674,7 @@ export const actions: Actions = {
 			action: 'reagent_well_issue_logged',
 			changedBy: locals.user.username,
 			changedAt: entry.loggedAt,
-			newData: { issueId: entry._id, deckPosition, well, issue, note: note || null, cartridgeId: entry.cartridgeId }
+			newData: { issueId: entry._id, deckPosition, well, issue, note: note || null, cartridgeId: entry.cartridgeId, postRun }
 		});
 		const fresh = await ReagentBatchRecord.findById(runId).select('wellIssues').lean() as any;
 		return { success: true, wellIssues: serializeWellIssues(fresh?.wellIssues) };
@@ -672,14 +689,20 @@ export const actions: Actions = {
 		const runId = data.get('runId')?.toString();
 		const issueId = data.get('issueId')?.toString();
 		if (!runId || !issueId) return fail(400, { error: 'Missing runId or issueId' });
-		const run = await ReagentBatchRecord.findById(runId).select('status finalizedAt wellIssues').lean() as any;
+		const run = await ReagentBatchRecord.findById(runId).select('status finalizedAt runEndTime wellIssues').lean() as any;
 		if (!run) return fail(404, { error: 'Run not found' });
-		if (run.finalizedAt || TERMINAL.has(String(run.status))) {
-			return fail(400, { error: 'Run is finished — its well log is locked.' });
-		}
+		const win = wellLogWindow(run);
+		if (!win.open) return fail(400, { error: win.reason });
 		const old = (run.wellIssues ?? []).find((w: any) => String(w._id) === issueId);
 		if (!old) return fail(404, { error: 'Entry not found (already removed?)' });
 		await ReagentBatchRecord.findByIdAndUpdate(runId, { $pull: { wellIssues: { _id: issueId } } });
+		if (win.postRun && old.cartridgeId) {
+			// The cart's copy has no _id; match the entry by when/where it was logged.
+			await CartridgeRecord.updateOne(
+				{ _id: old.cartridgeId, 'reagentFilling.runId': runId },
+				{ $pull: { 'reagentFilling.wellIssues': { loggedAt: old.loggedAt, well: old.well, issue: old.issue } } }
+			);
+		}
 		await AuditLog.create({
 			_id: generateId(),
 			tableName: 'reagent_batch_records',

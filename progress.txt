@@ -21730,3 +21730,18 @@ Tests: vitest server/opentrons + manufacturing + deck-calibration 105 passed; sv
 Deployment: production — via Vercel GitHub integration on push to master
 Source: branch fix/start-panel-deck-calibration, merged to master
 What this deployment is for: Start panel calibration Z matches what the robot gets
+
+================================================================================
+2026-10-21 — feat/post-run-well-log — well tracker stays open 12 h after a reagent run
+================================================================================
+Fill mistakes are often only seen while unloading the deck, but a succeeded run
+auto-finalizes the moment the .py ends, and logWellIssue then refused ("Run is
+finished"). New wellLogWindow(): a Completed run's well log stays open for
+POST_RUN_WELL_LOG_HOURS (12) after finalizedAt; aborted/voided/cancelled stay closed.
+Post-run log/remove also mirror onto CartridgeRecord.reagentFilling.wellIssues (finalize
+already copied the earlier entries). With no active run the reagent page shows "Last run —
+log fill mistakes found while unloading", and an idle robot panel offers a button to it.
+Tests: +7 wellLogWindow; vitest manufacturing/opentrons/robots 110 passed; svelte-check 16 (baseline).
+Deployment: production — via Vercel GitHub integration on push to master
+Source: branch feat/post-run-well-log, merged to master
+What this deployment is for: log reagent well mistakes after the run finishes
