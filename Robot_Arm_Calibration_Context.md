@@ -4,7 +4,7 @@ Condensed working context for the robot arm's camera calibration and home check.
 touching the Vision tab, the arm's vision code in BIMS, or the Pi's camera routes. Full spec:
 [docs/prds/ARM-05-apriltag-vision.md](docs/prds/ARM-05-apriltag-vision.md).
 
-_Last updated 2026-10-21 (ARM-05 merged 2026-10-20 as `dcdf9262`, PR #105; encoders via /servos 2026-10-21). The Pi already serves `/cameras/{name}/apriltags` (seen in its OpenAPI on 2026-10-21)._
+_Last updated 2026-10-21 (ARM-05 merged 2026-10-20 as `dcdf9262`, PR #105; encoders via /servos and ≤300-step home jogs 2026-10-21). The Pi already serves `/cameras/{name}/apriltags` (seen in its OpenAPI on 2026-10-21)._
 
 ## 1. Where things stand
 
@@ -61,7 +61,7 @@ The ARM-03/04 Mongo collections (`robot_arm_home_calibrations`, `robot_arm_marke
    - `camera_moved` is the verdict only when **no** fixed tag is in view and three or more tags all moved together.
 6. **Editing a tag's registry size after calibration doesn't read as movement:** detections are rescaled to the calibrated size, since translation scales linearly with tag size.
 7. **Home verdicts** (`home-calibration.ts`, unchanged since ARM-03/04): `home`, `position_off` (encoders), `markers_off` (tags), `position_off_and_markers_off`, `camera_moved`, `unverified`.
-8. **Return to home:** refuses while a session holds the arm. Then torque on, one jog per joint (servos 1–5) to the calibrated encoder steps (12-step tolerance ≈ 1°), settle 1.5 s, then the same check. The move goes by the encoders alone.
+8. **Return to home:** refuses while a session holds the arm, or when home is more than 20 jogs away. Then torque on and jog servos 1–5 to the calibrated encoder steps in **≤300-step jogs** (the Pi rejects bigger ones with a 400). A jog adds to the *present* position, which lags the goal, so it settles 0.8 s, re-reads and corrects (up to 2 correction passes, 20 jogs total). Home tolerance is 12 steps ≈ 1°. Then the same check. The move goes by the encoders alone.
    Encoder steps are read from `GET /servos` (raw per-servo `position`, no IK). `GET /pose` answers **501** on the current Pi server because inverse kinematics (ikpy + URDF) isn't ported, so it is only used, when it answers, to record the Cartesian pose (fixed 2026-10-21).
 
 ## 5. Pi route and install

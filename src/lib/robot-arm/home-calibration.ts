@@ -49,6 +49,32 @@ export function planJogDeltas(current: JointSteps, target: JointSteps, tolerance
 	return plan;
 }
 
+/** The Pi refuses a single jog bigger than this (manual_control.MAX_JOG_STEPS). */
+export const MAX_JOG_STEPS = 300;
+
+/**
+ * Jogs per Return to home, across all passes. Each jog is one round trip to
+ * the Pi; this keeps the move plus the camera check inside Vercel's 30 s.
+ */
+export const MAX_HOME_JOGS = 24;
+
+/**
+ * Split each joint's delta into jogs the Pi accepts (≤ `max` steps each), in
+ * joint order: J1 −1185 → −300, −300, −300, −285.
+ */
+export function chunkJogPlan(plan: JogPlanStep[], max = MAX_JOG_STEPS): JogPlanStep[] {
+	const out: JogPlanStep[] = [];
+	for (const { sid, delta } of plan) {
+		let left = delta;
+		while (left !== 0) {
+			const c = Math.max(-max, Math.min(max, left));
+			out.push({ sid, delta: c });
+			left -= c;
+		}
+	}
+	return out;
+}
+
 export interface Residuals {
 	perJoint: Record<string, number>;
 	max: number;
