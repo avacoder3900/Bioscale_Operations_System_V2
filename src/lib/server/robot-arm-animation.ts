@@ -13,28 +13,35 @@
  *   POST /sessions/stop          pause/stop that (the follower holds its last goal)
  *   POST /torque                 torque OFF so the operator can pose by hand
  *   POST /servos/hold            goal := present, torque ON (no jump) — hold.py
- *   POST /servos/{id}/jog        go to a pose (≤300 steps per jog)
+ *   POST /servos/{id}/jog        go to a pose (≤300 steps per jog); measure a pose's droop
  *   POST /recordings/restore     write the rendered path
  *   POST /replay/start           play it;  POST /sessions/stop  stop
  */
 import { connectDB, AuditLog, generateId } from '$lib/server/db';
 import { RobotArmMoveSet, RobotArmPose, RobotArmSequence } from '$lib/server/db/models';
-import { robotArm, type RecordingSidecar, type ServoState } from './robot-arm-client';
+import { recordingStem, robotArm, type RecordingSidecar, type ServoState } from './robot-arm-client';
 import { DEFAULT_JOINT_NAMES } from '$lib/robot-arm/recording-cleanup';
 import {
 	autoDurationS,
 	buildPath,
 	cleanAnimationName,
 	cleanKeyframes,
+	cleanOffsets,
 	composeAnimationJsonl,
 	flattenSequence,
 	isEasing,
+	keyframePositions,
+	nextTrim,
 	pathStats,
 	tooFast,
 	DEFAULT_RATE_HZ,
+	MAX_OFFSET_STEPS,
 	MAX_TRANSITION_S,
+	MAX_TRIM_STEPS,
 	MIN_TRANSITION_S,
 	SERVO_COUNT,
+	TRIM_DONE_STEPS,
+	TRIM_SERVOS,
 	type Easing,
 	type Keyframe,
 	type RenderedPath,
@@ -306,6 +313,9 @@ export interface PoseSummary {
 	_id: string;
 	name: string;
 	positions: number[];
+	/** Droop trim added to the goal when played (six entries), or null if never measured. */
+	trim: number[] | null;
+	trimMeasuredAt: string | null;
 	notes: string | null;
 	archived: boolean;
 	createdAt: string | null;
@@ -313,10 +323,13 @@ export interface PoseSummary {
 }
 
 function poseSummary(d: any): PoseSummary {
+	const trim = Array.isArray(d.trim) && d.trim.length === SERVO_COUNT ? d.trim.map(Number) : null;
 	return {
 		_id: String(d._id),
 		name: d.name,
 		positions: (d.positions ?? []).map(Number),
+		trim,
+		trimMeasuredAt: d.trimMeasuredAt ? new Date(d.trimMeasuredAt).toISOString() : null,
 		notes: d.notes ?? null,
 		archived: !!d.archivedAt,
 		createdAt: d.createdAt ? new Date(d.createdAt).toISOString() : null,
@@ -366,7 +379,11 @@ export async function updatePose(user: User, id: string, input: { name: unknown;
 	const name = cleanName(input.name, 'pose');
 	await assertPoseNameFree(name, id);
 	const set: Record<string, unknown> = { name, notes: cleanNotes(input.notes) };
-	if (input.fromArm) set.positions = (await readArm()).positions;
+	if (input.fromArm) {
+		set.positions = (await readArm()).positions;
+		// A droop trim was measured at the old position; it no longer applies.
+		Object.assign(set, { trim: [], trimMeasuredAt: null, trimMeasuredBy: null });
+	}
 	await RobotArmPose.updateOne({ _id: id }, { $set: set });
 	await audit(user, 'robot_arm.animate.pose_update', 'robot_arm_poses', id, { before: { name: before.name, notes: before.notes, positions: before.positions }, after: set });
 	return poseSummary(await RobotArmPose.findById(id).lean());
@@ -436,6 +453,99 @@ export async function goToPose(user: User, poseId: string): Promise<GoToResult> 
 	return { before: start.positions, after, jogs, residual };
 }
 
+// ── droop ────────────────────────────────────────────────────────────────
+
+/** Measuring droop only nudges the arm; it must already be at (or near) the pose. */
+const DROOP_NEAR_STEPS = 150;
+const DROOP_SETTLE_MS = 1200;
+const DROOP_MAX_ROUNDS = 4;
+
+export interface DroopResult {
+	trim: number[];
+	/** Pose − where the arm settled on the last round (≈0 when the trim works). */
+	residual: number[];
+	rounds: number;
+	done: boolean;
+	warnings: string[];
+}
+
+/**
+ * Why the claw ends up lower than the pose: replay writes each frame's goal
+ * and nothing else, and under gravity a loaded STS3215 settles a few to a few
+ * tens of steps SHORT of its goal (its position loop is proportional). A pose
+ * captured with the arm held in place is where the joints really were, so
+ * playing goal = pose lands every loaded joint short, on the gravity side.
+ * Go-to does not show it because its jogs are relative to the present
+ * position, which bakes the shortfall in by accident.
+ *
+ * Measure it: command goal = pose + trim on each servo (a jog of
+ * goal − present sets the goal exactly), let it settle, read where it
+ * stopped, add the shortfall to the trim, repeat until it lands within
+ * TRIM_DONE_STEPS. The trim is stored on the pose and added to the goal
+ * whenever the pose is played. The arm MOVES (a few steps) and ends holding
+ * the pose correctly.
+ */
+export async function measurePoseDroop(user: User, poseId: string): Promise<DroopResult> {
+	await connectDB();
+	const pose = (await RobotArmPose.findById(poseId).lean()) as any;
+	if (!pose) throw new AnimateError('Pose not found.', 404);
+	const target: number[] = pose.positions.map(Number);
+	await requireIdle();
+	let now = await readArm();
+	if (now.torqueOn === false) throw new AnimateError('Torque is off — turn torque on first; droop can only be measured while the arm holds itself up.', 409);
+	const far = TRIM_SERVOS.filter((sid) => Math.abs(target[sid - 1] - now.positions[sid - 1]) > DROOP_NEAR_STEPS);
+	if (far.length) throw new AnimateError(`The arm is not at "${pose.name}" (servo ${far.join(', ')} more than ${DROOP_NEAR_STEPS} steps away). Go to the pose first, then measure.`, 409);
+
+	let trim = new Array(SERVO_COUNT).fill(0);
+	let residual = new Array(SERVO_COUNT).fill(0);
+	let done = false;
+	let rounds = 0;
+	const history: { goal: number[]; settled: number[] }[] = [];
+	while (rounds < DROOP_MAX_ROUNDS) {
+		rounds++;
+		const goal = keyframePositions(target, null, trim);
+		for (const sid of TRIM_SERVOS) {
+			// A jog sets goal = present + delta, so this writes goal exactly — even a
+			// zero jog, which replaces whatever goal the servo had with "here".
+			const delta = goal[sid - 1] - now.positions[sid - 1];
+			try {
+				await robotArm.jogJoint(sid, delta);
+			} catch (err) {
+				throw new AnimateError(`Servo ${sid} did not take the measuring nudge: ${(err as Error).message}`, 502);
+			}
+		}
+		await new Promise((r) => setTimeout(r, DROOP_SETTLE_MS));
+		now = await readArm();
+		history.push({ goal, settled: now.positions });
+		const step = nextTrim(target, now.positions, trim);
+		residual = step.residual;
+		done = step.done;
+		trim = step.trim;
+		if (done) break;
+	}
+
+	const warnings: string[] = [];
+	for (const sid of TRIM_SERVOS) {
+		const r = residual[sid - 1];
+		if (Math.abs(r) > TRIM_DONE_STEPS && Math.abs(trim[sid - 1]) >= MAX_TRIM_STEPS)
+			warnings.push(`Servo ${sid} is still ${r} steps off with the trim at its ${MAX_TRIM_STEPS}-step limit — it may be stalled, blocked or overloaded rather than drooping.`);
+	}
+	if (!done && !warnings.length) warnings.push(`Did not settle within ${TRIM_DONE_STEPS} steps after ${rounds} rounds; the trim is the best found.`);
+
+	const stored = trim.some((t) => t !== 0) ? trim : [];
+	await RobotArmPose.updateOne({ _id: poseId }, { $set: { trim: stored, trimMeasuredAt: new Date(), trimMeasuredBy: opRef(user) } });
+	await audit(user, 'robot_arm.animate.pose_droop_measure', 'robot_arm_poses', poseId, { name: pose.name, positions: target, before: pose.trim ?? [], trim: stored, residual, rounds, done, history });
+	return { trim, residual, rounds, done, warnings };
+}
+
+export async function clearPoseDroop(user: User, poseId: string): Promise<void> {
+	await connectDB();
+	const pose = (await RobotArmPose.findById(poseId).lean()) as any;
+	if (!pose) throw new AnimateError('Pose not found.', 404);
+	await RobotArmPose.updateOne({ _id: poseId }, { $set: { trim: [], trimMeasuredAt: null, trimMeasuredBy: null } });
+	await audit(user, 'robot_arm.animate.pose_droop_clear', 'robot_arm_poses', poseId, { name: pose.name, before: pose.trim ?? [] });
+}
+
 // ── move sets ────────────────────────────────────────────────────────────
 
 export interface MoveSetSummary {
@@ -454,7 +564,12 @@ function moveSetSummary(d: any): MoveSetSummary {
 		_id: String(d._id),
 		name: d.name,
 		notes: d.notes ?? null,
-		keyframes: (d.keyframes ?? []).map((k: any): Keyframe => ({ poseId: String(k.poseId), holdS: Number(k.holdS ?? 0), durationS: Number(k.durationS ?? 1), easing: isEasing(k.easing) ? k.easing : 'ease' })),
+		keyframes: (d.keyframes ?? []).map((k: any): Keyframe => {
+			const out: Keyframe = { poseId: String(k.poseId), holdS: Number(k.holdS ?? 0), durationS: Number(k.durationS ?? 1), easing: isEasing(k.easing) ? k.easing : 'ease' };
+			const offsets = cleanOffsets(k.offsets, MAX_OFFSET_STEPS);
+			if (offsets) out.offsets = offsets;
+			return out;
+		}),
 		rateHz: Number(d.rateHz) || DEFAULT_RATE_HZ,
 		archived: !!d.archivedAt,
 		updatedAt: d.updatedAt ? new Date(d.updatedAt).toISOString() : null,
@@ -510,12 +625,17 @@ export async function setMoveSetArchived(user: User, id: string, archived: boole
 	await audit(user, archived ? 'robot_arm.animate.move_set_archive' : 'robot_arm.animate.move_set_restore', 'robot_arm_move_sets', id, { name: doc.name });
 }
 
-/** Keyframes with their poses' positions filled in; archived poses still resolve. */
+/**
+ * Keyframes with the positions the ARM is sent to: pose + the keyframe's
+ * timeline offsets + the pose's droop trim. Everything that resolves here
+ * goes to the Pi (play, save to Pi), so the trim always applies; the editors
+ * draw the path without it. Archived poses still resolve.
+ */
 export function resolveKeyframes(keyframes: Keyframe[], poses: Map<string, PoseSummary>): ResolvedKeyframe[] {
 	return keyframes.map((k, i) => {
 		const p = poses.get(k.poseId);
 		if (!p) throw new AnimateError(`Keyframe ${i + 1} refers to a pose that no longer exists.`);
-		return { ...k, name: p.name, positions: p.positions };
+		return { ...k, name: p.name, positions: keyframePositions(p.positions, k.offsets, p.trim) };
 	});
 }
 
@@ -692,10 +812,14 @@ async function writeAndPlay(user: User, o: { title: string; keyframes: ResolvedK
 	} catch (err) {
 		throw new AnimateError(`The Pi did not take the path: ${(err as Error).message}`, 502);
 	}
+	// Replay by the absolute path the Pi lists, exactly as the Control tab does:
+	// the live Pi's replay does not find a restored recording by bare name
+	// (seen 2026-10-21: "400: recording not found: animate-preview").
+	const source = await recordingPath(PREVIEW_RECORDING);
 	let runId: string;
 	try {
 		// The path starts where the arm is, so preflight (±50 steps of frame 0) passes by construction.
-		const started = await robotArm.startReplay({ source: PREVIEW_RECORDING, loops: 1, triggered_by: opRef(user), enforce_preflight: true, preflight_tolerance_steps: 50 });
+		const started = await robotArm.startReplay({ source, loops: 1, triggered_by: opRef(user), enforce_preflight: true, preflight_tolerance_steps: 50 });
 		runId = started.run_id;
 	} catch (err) {
 		const msg = (err as Error).message ?? String(err);
@@ -712,6 +836,24 @@ async function writeAndPlay(user: User, o: { title: string; keyframes: ResolvedK
 		maxStepsPerS: stats.maxStepsPerS
 	});
 	return { runId, durationS: path.durationS, leadInS, frames: out.frames, warnings };
+}
+
+/** The Pi's absolute path for a recording it just accepted; a clear error when it cannot see it. */
+async function recordingPath(name: string): Promise<string> {
+	let recordings;
+	try {
+		recordings = (await robotArm.listRecordings()).recordings ?? [];
+	} catch (err) {
+		throw new AnimateError(`Could not list the Pi's recordings after writing the path: ${(err as Error).message}`, 502);
+	}
+	const rec = recordings.find((r) => recordingStem(r.name) === name);
+	if (!rec?.path) {
+		throw new AnimateError(
+			`The Pi accepted "${name}" but does not list it among its recordings — its restore route is saving to a different folder than replay reads. On arm-pi, check BIMS_ARM_RECORDINGS_DIR for the service and recordings_admin.py.`,
+			502
+		);
+	}
+	return rec.path;
 }
 
 /** Play a move set from wherever the arm is now. The arm MOVES. */

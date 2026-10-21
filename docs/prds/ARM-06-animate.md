@@ -155,3 +155,45 @@ control arm is not connected (the Pi answers 503 "leader arm not connected", sho
 To verify on hardware: the follower moves to the leader on start (confirm the dialog warns about this);
 a saved pose matches the follower's position with the leader held still; the follower does not twitch
 across the stop → read → restart in *Save pose*; Runs shows the `animate-pose` runs closing.
+
+## 9. Timeline editing and the low claw (`feat/animate-timeline-joints`, 2026-10-21)
+
+**Joints on the timeline.** In the move-set editor every pose has a dot on every servo lane. Drag a
+dot up/down (Shift = fine; or focus it and use ↑/↓, Shift = 10 steps) to move that joint at that
+pose; drag the ◆ above a pose sideways to change when the arm arrives (the keyframe's `durationS`),
+and the ▮ to change its hold. The axis scales hold still while dragging. A selected keyframe also
+shows a joint table (pose / here / Δ / droop trim / goal sent) with exact number entry and *reset
+joints to the pose*. Joint edits are stored per keyframe as `offsets[6]` (steps added to the pose,
+≤ ±1000, omitted when all zero), so they change this move set only — the shared pose is untouched.
+`keyframePositions(pose, offsets, trim)` (pure) is the one place a keyframe becomes positions; the
+editors use pose + offsets, `resolveKeyframes` (everything sent to the Pi) adds the trim.
+
+**Why the claw ended up lower than the pose.** The Pi plays a path open-loop: each frame's goal is
+written and nothing else (`_replay_loop`). The STS3215's position loop is proportional, so a joint
+carrying the arm against gravity settles a few to a few tens of steps *short of its goal*
+(verified_move.py already allows 20 steps for this). Poses are captured with the arm held in place
+(torque off — the hold route is still not installed; every capture on 2026-10-21 logged
+`hold_failed`), i.e. at the real joint angles, so playing goal = pose leaves shoulder/elbow/wrist
+short on the gravity side and the claw low. *Go to pose* hides it because its jogs are relative to
+the present position, which bakes the shortfall in by accident.
+
+**Fix: measured droop trim per pose.** *Go to pose* then *Measure droop* (move-set editor, selected
+keyframe): with torque on and the arm within 150 steps of the pose on servos 1–5, BIMS sets each
+goal to pose + trim exactly (a jog of goal − present), waits 1.2 s, reads where it settled, adds the
+shortfall to the trim (`nextTrim`, pure), and repeats (≤ 4 rounds) until every servo is within 2
+steps. The gripper is never trimmed (its shortfall on a part is the grip). Trim is capped at ±50
+steps (`MAX_TRIM_STEPS`): more is a stalled/blocked joint, and it keeps a saved recording's first
+frame inside Control's ±50-step preflight. Stored on the pose (`trim`, `trimMeasuredAt/By`),
+cleared when the pose is re-captured from the arm, audited (`pose_droop_measure` with every round's
+goal/settled, `pose_droop_clear`). Play and Save to Pi add it to the goal; the arm ends holding the
+pose correctly after a measurement. Recordings already saved to the Pi do not change — save again.
+
+Not verified on the arm. Unmeasured poses play exactly as before. If droop varies a lot with the
+path into a pose (backlash: arriving from above vs below), measure after a *Go to* from the same
+side the move set arrives from.
+
+**With §8 (control-arm posing) the trim matters as much.** Teleop drives the follower goal to the
+leader, so the follower already sits one droop short when *Save pose* reads its encoders; the pose is
+where the operator saw the claw. Played back with goal = pose it would land a second droop lower. The
+measured trim makes goal = pose + droop, so the claw lands where it was when the pose was saved —
+whichever way the pose was captured.

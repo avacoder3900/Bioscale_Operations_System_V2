@@ -15,6 +15,14 @@ const robotArmPoseSchema = new Schema(
 		name: { type: String, required: true, trim: true },
 		/** Encoder steps, servo ids 1..6 at index 0..5. */
 		positions: { type: [Number], required: true },
+		/**
+		 * Droop trim: steps added to the goal when this pose is played, so the
+		 * arm ARRIVES at `positions` under gravity instead of settling short of
+		 * it. Measured on the arm (measurePoseDroop); empty = not measured.
+		 */
+		trim: { type: [Number], default: undefined },
+		trimMeasuredAt: { type: Date, default: null },
+		trimMeasuredBy: { type: operatorRef, default: null },
 		notes: { type: String, default: null },
 		createdBy: { type: operatorRef },
 		archivedAt: { type: Date, default: null }
