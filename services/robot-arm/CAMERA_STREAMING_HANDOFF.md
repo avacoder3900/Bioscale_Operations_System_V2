@@ -33,8 +33,9 @@ Answered 2026-10-20: production's panel footer reads "N frames via BIMS · reque
 ## How footage reaches BIMS today
 
 Camera: Intel RealSense D415 on arm-pi (Raspberry Pi 5). Colour = `/dev/video4` (raw YUYV, up to
-1920x1080), depth = `/dev/video0` (Z16, handled by `src/server/depth.py`). **Currently enumerated at
-USB 2.0 (480M).**
+1920x1080), depth = `/dev/video0` (Z16, handled by `src/server/depth.py`). Enumerated at USB 2.0 (480M)
+until 2026-10-21; **now USB 3.0 (5000M, bus 004)** with the new cable, and `hardware.yaml` is
+**1920x1080 @ 30 fps** (see "USB 3 update" below).
 
 The capture/stream code lives **only on the Pi**, not in this repo:
 `~/robot-arm/src/server/cameras.py` + `~/robot-arm/src/config/hardware.yaml` (camera picked by
@@ -64,15 +65,29 @@ The Vision tab tracker (`src/lib/components/robot-arm/VisionLiveTracker.svelte`,
 MJPEG costs ~5–10x the bandwidth of H.264 but has the lowest latency and no negotiation. For the arm
 the real limits are:
 
-- **USB 2.0:** raw YUYV 640x480@30 ≈ 18 MB/s (fits alongside depth); 1280x720@30 does not fit.
-  Fix: blue USB 3 port + USB 3 cable. **Conflict to resolve:** the AprilTag sheet
-  (`calibration/apriltag-sheet.html`, progress.txt 2026-10-20) assumes colour at 1920x1080, which is
-  ~124 MB/s at 30 fps — impossible on USB 2. Either USB 3, or capture 1080p at low fps for
-  calibration stills and stream 640x480@30 for the live view.
+- **USB 2.0 (resolved 2026-10-21):** raw YUYV 640x480@30 ≈ 18 MB/s fit; 1280x720@30 did not. The USB 3
+  cable fixed it: the D415 now offers 1280x720@30 and 1920x1080@30 (YUYV, ~124 MB/s at 1080p@30),
+  which is what the AprilTag sheet assumed.
 - **Network:** remote viewing goes over Tailscale Funnel / Cloudflare quick tunnel on Starlink;
   Funnel's DERP relay drops regularly (see progress.txt 2026-10-15..19). MJPEG@30 ≈ 1–3 MB/s/viewer.
 - **Pi 5 has no hardware H.264 encoder** (Pi 4 did). H.264/WebRTC would be CPU (software) encoded,
   and WebRTC through Starlink's hard NAT would need a TURN relay.
+
+## USB 3 update (2026-10-21)
+
+- `lsusb -t` shows the D415 at 5000M on bus 004. `hardware.yaml` `cameras.external` is now 1920x1080 @
+  30 fps q80 (backup `hardware.yaml.bak-720p15`). The v4l2 node negotiates 30 fps.
+- **The worker only published 15 fps at 1080p** with `CAP_PROP_BUFFERSIZE = 1`: while the capture thread
+  converts YUYV->BGR and JPEG-encodes a frame (~25 ms at 1080p), the driver has no free buffer, so every
+  other frame is dropped. `cameras.py` now sets 2 buffers (backup `cameras.py.bak-pre-buffer2`); the
+  backlog stays <= 1 frame. Measured rates after that change are in progress.txt (2026-10-21).
+- Per-frame costs on the Pi 5 at 1080p: JPEG encode q80 11 ms, decode 15 ms, `snapshot.jpg?q=70&w=960`
+  re-encode ~24 ms (40 KB), full-quality still 140 KB. uvicorn ~85 % of one core; SoC 74-77 C, no fan.
+- AprilTag detection at 1080p (6 live frames, 8 mm tags at ~300 mm = ~35 px): 1x finds the same tags as
+  2x (26 ms vs 97 ms detect). `APRILTAG_UPSCALE` stays 2 for tags farther away; drop it to 1.5 or 1 if
+  the Pi gets too hot.
+- BIMS needed no change: the panel's size menu asks for `?w=` <= 1920 and reads the frame size from
+  the Pi's status, and the intrinsics file already had the 1920x1080 entry.
 
 ## Recommended plan
 

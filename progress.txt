@@ -21624,6 +21624,31 @@ Retrieve this exact code: git checkout feat/arm-recording-cleanup at commit e823
 What this deployment is for: Robot Arm Clean-up tab (recording -> editable steps -> new recording on the Pi)
 
 ================================================================================
+2026-10-21 — feat/arm-camera-1080p — arm camera to 1920x1080 @ 30 fps over the new USB 3 cable (Pi config + worker buffer fix)
+================================================================================
+The USB 3 cable arrived and the D415 now enumerates at 5000M on bus 004 (`lsusb -t`); the colour node offers
+1280x720@30 and 1920x1080@30 (YUYV; USB 2.0 had capped them at 15 and 8). Operator asked to raise the feed's
+resolution for the AprilTags. Pi-only changes (nothing in BIMS needed: the panel asks for `?w=` <= 1920 and takes
+the frame size from the Pi's status; the intrinsics file already carried 1920x1080, fx 1365.7):
+1. hardware.yaml cameras.external 1280x720@15 -> 1920x1080@30 (backup hardware.yaml.bak-720p15), restarted while
+   no session was active. Status: actual_size [1920,1080], intrinsics source "realsense".
+2. Found: the worker published exactly 15 fps at 1080p although v4l2 negotiated 30. Cause: cameras.py set
+   CAP_PROP_BUFFERSIZE 1, so while the capture thread converts + JPEG-encodes a frame (~25 ms at 1080p) the driver
+   has no buffer for the next one and drops it. cameras.py now uses 2 buffers (backup cameras.py.bak-pre-buffer2);
+   backlog stays <= 1 frame. Applied on disk; the restart waited for the teleop session to end (see below).
+Measured on arm-pi at 1080p: full still 140 KB (2 ms), `?q=70&w=960` 40 KB (24 ms re-encode), JPEG encode 11 ms /
+decode 15 ms, uvicorn ~85 % of one core. AprilTag detect route 134-140 ms at the default 2x upscale (was 60 ms at
+720p), 9 tags incl. all the 8 mm ones (~35 px across at ~300 mm); pose z vs depth agree within ~5 mm. Sweep over 6
+live frames: 1x finds the same tags as 1.5x/2x (26 / 57 / 97 ms detect), so APRILTAG_UPSCALE stays 2 for distance
+margin but can drop to 1 if CPU/heat matter. Heat: the Pi 5 has no fan; SoC went 62 C (720p@15) -> 74-77 C at
+1080p@30 (throttle point 85 C; `get_throttled` 0xe0000 = past soft-temp events). Recommend a fan/heatsink.
+Docs: Robot_Arm_Calibration_Context.md §3, CAMERA_STREAMING_HANDOFF.md (USB 3 update), ARM-05 PRD §4 (1080p column).
+Branch catch-up: feat/arm-depth-combined's b964db12 (vision calibration relies on servos AND camera) now conflicts
+with Sam's six Return-to-home PRs (#107-#114) in 11 hunks of robot-arm-vision.ts plus home-calibration.ts/.test.ts
+and the tag-calibration model; merge aborted, left for a deliberate re-port. The depth zero-baseline panel
+(496b08e8 + the view-rotation commit e5b4feaf) also still lives only on that branch.
+
+================================================================================
 2026-10-21 — fix/arm-home-encoders-via-servos — Return to home failed: robot-arm 501 from GET /pose
 ================================================================================
 Operator hit "Return to home failed: robot-arm 501: Cartesian pose/jog requires the IK stack (ikpy + URDF + jog
