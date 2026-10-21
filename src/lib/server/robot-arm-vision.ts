@@ -33,14 +33,22 @@ import {
 } from '$lib/robot-arm/apriltags';
 import {
 	assessHome,
+	baseOutOfRange,
 	chunkJogPlan,
+	degToSteps,
 	planJogDeltas,
 	residuals,
+	stepsToDeg,
+	DEFAULT_HOMING,
+	GRIPPER_SERVO_ID,
 	HOME_SERVO_IDS,
 	HOME_STEP_TOLERANCE,
+	LIFT_SERVO_ID,
 	MAX_HOME_JOGS,
 	MAX_JOG_STEPS,
+	type BaseOutOfRange,
 	type HomeAssessment,
+	type HomingSettings,
 	type JointSteps,
 	type Residuals
 } from '$lib/robot-arm/home-calibration';
@@ -49,8 +57,10 @@ type User = { _id: string; username: string };
 
 /** Settle time after each pass of jogs before the encoders are re-read. */
 const SETTLE_MS = 800;
-/** One move pass plus up to two correction passes from a fresh read. */
+/** Per phase: one move pass plus up to two correction passes from a fresh read. */
 const HOME_PASSES = 3;
+/** One attempt stops starting new jogs after this, leaving room for the camera check in Vercel's 30 s. */
+const ATTEMPT_MOVE_BUDGET_MS = 20_000;
 /** Width of the stored thumbnails (data URLs in Mongo). */
 const THUMB_WIDTH = 480;
 
@@ -256,6 +266,7 @@ export interface CalibrationSummary {
 	tags: CalibratedTag[];
 	tolerances: Tolerances;
 	jointSteps: JointSteps | null;
+	homing: HomingSettings;
 	supersededAt: string | null;
 	lastCheck: {
 		at: string;
@@ -275,6 +286,15 @@ function jointStepsOf(doc: any): JointSteps | null {
 	const out: JointSteps = {};
 	for (const [k, v] of Object.entries(raw)) out[String(k)] = Number(v);
 	return out;
+}
+
+function homingOf(doc: any): HomingSettings {
+	const b = doc?.homing?.baseRangeSteps;
+	const g = doc?.homing?.gripperOpenSteps;
+	return {
+		baseRangeSteps: Number.isFinite(b) && b > 0 ? b : DEFAULT_HOMING.baseRangeSteps,
+		gripperOpenSteps: Number.isFinite(g) && g >= 0 ? g : DEFAULT_HOMING.gripperOpenSteps
+	};
 }
 
 function calibrationSummary(doc: any, o: { withThumb: boolean }): CalibrationSummary {
@@ -309,6 +329,7 @@ function calibrationSummary(doc: any, o: { withThumb: boolean }): CalibrationSum
 			pixel: doc.tolerances?.pixel ?? DEFAULT_TOLERANCES.pixel
 		},
 		jointSteps: jointStepsOf(doc),
+		homing: homingOf(doc),
 		supersededAt: doc.supersededAt ? new Date(doc.supersededAt).toISOString() : null,
 		lastCheck: doc.lastCheck?.at
 			? {
@@ -470,7 +491,9 @@ export async function saveCalibration(
 	const tolerances = cleanTolerances(o.tolerances);
 	const _id = generateId();
 	const now = new Date();
-	const previous = (await RobotArmTagCalibration.find({ cameraName: o.cameraName, status: 'active' }).select('_id').lean()) as any[];
+	const previous = (await RobotArmTagCalibration.find({ cameraName: o.cameraName, status: 'active' }).select('_id homing').lean()) as any[];
+	// Home settings are about the arm, not the picture: keep them across recalibrations.
+	const homing = homingOf(previous[0]);
 	await RobotArmTagCalibration.create({
 		_id,
 		cameraName: o.cameraName,
@@ -487,6 +510,7 @@ export async function saveCalibration(
 		tags,
 		tolerances,
 		jointSteps,
+		homing,
 		pose
 	});
 	if (previous.length) {
@@ -510,6 +534,25 @@ export async function saveCalibration(
 	return { summary: calibrationSummary(doc, { withThumb: true }), warnings };
 }
 
+/**
+ * Change the Return-to-home settings on a camera's active calibration:
+ * servo 1's safe range (± degrees of home) and how far the mouth opens.
+ */
+export async function updateHoming(user: User, id: string, input: { baseRangeDeg?: number | null; gripperOpenSteps?: number | null }): Promise<HomingSettings> {
+	await connectDB();
+	const doc = (await RobotArmTagCalibration.findOne({ _id: id, status: 'active' }).select('homing').lean()) as any;
+	if (!doc) throw new Error('That calibration is no longer active — reload the page.');
+	const deg = Number(input.baseRangeDeg);
+	if (!Number.isFinite(deg) || deg <= 0 || deg > 180) throw new Error('Servo 1 range must be between 0 and 180 degrees either side of home.');
+	const open = Number(input.gripperOpenSteps);
+	if (!Number.isInteger(open) || open < 0 || open > MAX_JOG_STEPS) throw new Error(`Mouth opening must be a whole number of steps, 0–${MAX_JOG_STEPS} (0 = don't open).`);
+	const before = homingOf(doc);
+	const after: HomingSettings = { baseRangeSteps: degToSteps(deg), gripperOpenSteps: open };
+	await RobotArmTagCalibration.updateOne({ _id: id }, { $set: { homing: after } });
+	await audit('robot_arm.vision.homing', 'robot_arm_tag_calibrations', id, user, { before, after });
+	return after;
+}
+
 /** Retire the active calibration for a camera without replacing it. */
 export async function retireCalibration(user: User, id: string): Promise<boolean> {
 	await connectDB();
@@ -530,8 +573,15 @@ export interface HomeCheckResult {
 	/** What the camera saw during this check. */
 	snapshotDataUrl: string | null;
 	warnings: string[];
-	/** Return only: the jogs that were sent. */
+	/** Return only: net steps sent per servo this attempt. */
 	moved: { sid: number; delta: number }[];
+	/** Return only: which attempt of the browser's loop this was (1-based). */
+	attempt?: number;
+	/** Return only: jogs sent this attempt. */
+	jogs?: number;
+	/** Return only: servo 1 was out of its safe range — nothing moved, torque dropped. */
+	frozen?: (BaseOutOfRange & { torqueOff: boolean }) | null;
+	elapsedMs?: number;
 }
 
 async function loadActive(cameraName?: string | null): Promise<any> {
@@ -577,6 +627,8 @@ function homeMessage(home: HomeAssessment, vision: VisionAssessment | null, r: R
 			return `Not at home: encoders ${r?.max} steps off and ${v ? v.charAt(0).toLowerCase() + v.slice(1) : 'the tags disagree.'}`;
 		case 'unverified':
 			return 'Nothing could be checked — no encoder target and no camera result.';
+		case 'frozen':
+			return 'Frozen: servo 1 is outside its safe range — return the arm to home by hand.';
 	}
 }
 
@@ -633,64 +685,130 @@ export async function checkHome(user: User, o: { cameraName?: string | null; kin
 }
 
 /**
- * Return to home: torque on, jog each joint to the calibrated encoder steps
- * in ≤300-step jogs (the Pi's cap), settle, re-read and correct, then verify
- * with the encoders AND the tags. Refused while a session holds the bus, and
- * when home is more than MAX_HOME_JOGS jogs away. The move itself goes by the
- * encoders alone, so a moved camera does not stop it. The arm WILL move.
+ * One Return-to-home ATTEMPT. The arm WILL move (unless it freezes).
+ *
+ * Order (operator spec, 2026-10-21):
+ *   0. Safety gate: servo 1 (base, "servo A") further than its safe range
+ *      from home → move NOTHING, drop torque so a person can walk the arm
+ *      home by hand, report `frozen`. (A head camera will handle this later.)
+ *   1. Open the mouth (servo 6, +gripperOpenSteps) to release the cartridge —
+ *      first attempt only, so repeats do not keep opening it.
+ *   2. Servo 2 (shoulder lift, "servo B") to home on its own.
+ *   3. All of servos 1–5 to home.
+ * Every move goes in ≤300-step jogs (the Pi's cap) with settle + re-read +
+ * correction passes, bounded by a jog budget and a time budget so one attempt
+ * plus the camera check fits Vercel's 30 s. The Vision tab repeats attempts
+ * until home, a freeze, no progress, or 90 s (shouldRetryHome).
+ * Refused while a session holds the bus.
  */
-export async function returnToHome(user: User, o: { cameraName?: string | null } = {}): Promise<HomeCheckResult> {
+export async function returnToHome(user: User, o: { cameraName?: string | null; attempt?: number } = {}): Promise<HomeCheckResult> {
+	const t0 = Date.now();
+	const attempt = Number.isInteger(o.attempt) && o.attempt! > 0 ? o.attempt! : 1;
 	const doc = await loadActive(o.cameraName);
 	const target = jointStepsOf(doc);
 	if (!target) throw new Error('this calibration has no encoder home (the arm could not be read when it was taken) — recalibrate with the arm parked at home');
+	const homing = homingOf(doc);
 	await requireArmFree();
 	const before = await readJointSteps();
-	const firstPass = chunkJogPlan(planJogDeltas(before.steps, target));
-	if (firstPass.length > MAX_HOME_JOGS) {
-		const far = planJogDeltas(before.steps, target).map((p) => `J${p.sid} ${p.delta > 0 ? '+' : ''}${p.delta}`).join(', ');
-		throw new Error(
-			`the arm is too far from home for one Return to home (${far} steps = ${firstPass.length} jogs of ≤${MAX_JOG_STEPS}, max ${MAX_HOME_JOGS}) — bring it closer with Jog or teleop first`
-		);
-	}
-	await robotArm.setTorque(true);
+	const base = { calibrationId: String(doc._id), cameraName: doc.cameraName, attempt };
 
-	// The Pi caps a jog at 300 steps, and a jog adds to the PRESENT position,
-	// which lags a goal just written — so chunked moves fall short. Jog, let
-	// it settle, re-read, and correct what is left (bounded by the jog budget).
+	// 0. Safety gate.
+	const out = baseOutOfRange(before.steps, target, homing.baseRangeSteps);
+	if (out) {
+		const warnings: string[] = [];
+		let torqueOff = false;
+		try {
+			await robotArm.setTorque(false);
+			torqueOff = true;
+		} catch (e) {
+			warnings.push(`Torque could NOT be turned off (${e instanceof Error ? e.message : String(e)}) — use the E-stop / Control tab before touching the arm.`);
+		}
+		const r = residuals(before.steps, target);
+		const home: HomeAssessment = { verdict: 'frozen', landed: false, markersOk: null, residualMax: r.max };
+		const frozen = { ...out, torqueOff };
+		const result = { ...base, home, vision: null, residuals: r.perJoint, warnings, moved: [], jogs: 0, frozen, elapsedMs: Date.now() - t0 };
+		await recordCheck(doc, user, 'return', result, { before: before.steps, frozen, homing });
+		return { ...result, message: frozenMessage(frozen), snapshotDataUrl: null };
+	}
+
+	await robotArm.setTorque(true);
 	const warnings: string[] = [];
 	const sent = new Map<number, number>();
 	let jogs = 0;
 	let current = before.steps;
-	for (let pass = 0; pass < HOME_PASSES; pass++) {
-		const chunks = pass === 0 ? firstPass : chunkJogPlan(planJogDeltas(current, target));
-		if (!chunks.length) break;
-		if (jogs + chunks.length > MAX_HOME_JOGS) {
-			warnings.push(`Stopped correcting after ${jogs} jogs (budget ${MAX_HOME_JOGS}); press Return to home again to finish.`);
-			break;
+	let budgetHit = false;
+
+	const jog = async (sid: number, delta: number) => {
+		try {
+			await robotArm.jogJoint(sid, delta);
+		} catch (e) {
+			throw new Error(`servo ${sid} jog failed after ${jogs} jog(s): ${e instanceof Error ? e.message : String(e)}`);
 		}
-		for (const c of chunks) {
-			try {
-				await robotArm.jogJoint(c.sid, c.delta);
-			} catch (e) {
-				throw new Error(`servo ${c.sid} jog failed after ${jogs} jog(s): ${e instanceof Error ? e.message : String(e)}`);
-			}
-			jogs++;
-			sent.set(c.sid, (sent.get(c.sid) ?? 0) + c.delta);
-		}
+		jogs++;
+		sent.set(sid, (sent.get(sid) ?? 0) + delta);
+	};
+	const settle = async () => {
 		await new Promise((res) => setTimeout(res, SETTLE_MS));
 		current = (await readJointSteps()).steps;
+	};
+	/** Jog `sids` to home: ≤300-step chunks, settle, re-read, correct; within both budgets. */
+	const phase = async (sids: readonly number[]) => {
+		for (let pass = 0; pass < HOME_PASSES && !budgetHit; pass++) {
+			const chunks = chunkJogPlan(planJogDeltas(current, target, HOME_STEP_TOLERANCE, sids));
+			if (!chunks.length) return;
+			for (const c of chunks) {
+				if (jogs >= MAX_HOME_JOGS || Date.now() - t0 > ATTEMPT_MOVE_BUDGET_MS) {
+					budgetHit = true;
+					break;
+				}
+				await jog(c.sid, c.delta);
+			}
+			await settle();
+		}
+	};
+
+	// 1. Open the mouth (first attempt only).
+	const g = String(GRIPPER_SERVO_ID);
+	if (attempt === 1 && homing.gripperOpenSteps > 0) {
+		if (Number.isFinite(current[g])) {
+			await jog(GRIPPER_SERVO_ID, Math.min(MAX_JOG_STEPS, homing.gripperOpenSteps));
+			await settle();
+		} else {
+			warnings.push('The mouth (servo 6) did not report a position, so it was not opened.');
+		}
 	}
+	// 2. Servo B, then 3. everything.
+	await phase([LIFT_SERVO_ID]);
+	await phase(HOME_SERVO_IDS);
+	if (budgetHit) warnings.push(`This attempt used its move budget (${jogs} jogs); the next attempt continues from here.`);
+
 	const moved = [...sent.entries()].sort(([a], [b]) => a - b).map(([sid, delta]) => ({ sid, delta }));
 	const r = residuals(current, target);
-	const cam = await visionCheck(doc);
-	warnings.push(...cam.warnings);
+	// The camera check is only worth its seconds once the encoders say home.
+	let cam: { vision: VisionAssessment | null; snapshotDataUrl: string | null; warnings: string[] } = { vision: null, snapshotDataUrl: null, warnings: [] };
+	if (!r.off.length) {
+		cam = await visionCheck(doc);
+		warnings.push(...cam.warnings);
+	}
 	const home = assessHome(r, cam.vision);
-	const result = { calibrationId: String(doc._id), cameraName: doc.cameraName, home, vision: cam.vision, residuals: r.perJoint, warnings, moved };
-	await recordCheck(doc, user, 'return', result, { before: before.steps, after: current, jogs, tolerance: HOME_STEP_TOLERANCE });
+	const result = { ...base, home, vision: cam.vision, residuals: r.perJoint, warnings, moved, jogs, frozen: null, elapsedMs: Date.now() - t0 };
+	await recordCheck(doc, user, 'return', result, { before: before.steps, after: current, jogs, attempt, tolerance: HOME_STEP_TOLERANCE });
 	const msg = homeMessage(home, cam.vision, r);
 	return {
 		...result,
 		message: moved.length ? msg : `Arm was already within ${HOME_STEP_TOLERANCE} steps of home — nothing moved. ${msg}`,
 		snapshotDataUrl: cam.snapshotDataUrl
 	};
+}
+
+function frozenMessage(f: BaseOutOfRange & { torqueOff: boolean }): string {
+	const where = Number.isFinite(f.offSteps)
+		? `${Math.abs(stepsToDeg(f.offSteps)).toFixed(0)}° ${f.offSteps > 0 ? 'one way' : 'the other way'} from home (${f.offSteps > 0 ? '+' : ''}${f.offSteps} steps)`
+		: 'at an unknown position (no reading)';
+	return (
+		`FROZEN: servo ${f.sid} (base) is ${where}, outside its ±${stepsToDeg(f.limitSteps).toFixed(0)}° safe range. Nothing moved. ` +
+		(f.torqueOff
+			? 'Torque is OFF so the arm can be moved by hand — return it to home by hand, then press Check without moving.'
+			: 'Torque could not be turned off — stop the arm from the Control tab before touching it.')
+	);
 }

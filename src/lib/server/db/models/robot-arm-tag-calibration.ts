@@ -86,6 +86,15 @@ const robotArmTagCalibrationSchema = new Schema(
 		},
 		/** servo id → encoder steps at home, servos 1–5; null when the arm could not be read. */
 		jointSteps: { type: Map, of: Number, default: null },
+		/**
+		 * Return-to-home settings: servo 1's safe range (± steps of home; beyond
+		 * it home freezes and drops torque) and how far the mouth opens first.
+		 * Editable on the Vision tab; carried forward to the next calibration.
+		 */
+		homing: {
+			baseRangeSteps: { type: Number, default: null },
+			gripperOpenSteps: { type: Number, default: null }
+		},
 		pose: { x_mm: Number, y_mm: Number, z_mm: Number },
 		supersededAt: { type: Date, default: null },
 		supersededBy: { type: String, default: null },

@@ -21658,3 +21658,19 @@ Source: branch master @ commit 1fdc71e8 (merge of PR #109)
 Retrieve this exact code: git checkout master at commit 1fdc71e8
   (or: git log master --oneline to find it if the branch has since moved on)
 What this deployment is for: Return to home in <=300-step jogs. Smoke: /login 200, Vision tab 302. Not yet re-tried on the arm.
+
+================================================================================
+2026-10-21 — feat/arm-home-sequence — Return to home: repeat until home (90 s), mouth -> servo 2 -> all, servo-1 freeze
+================================================================================
+Operator asks: (1) no more pressing Return to home repeatedly: repeat it until home, timing out after 1.5 min; (2) order:
+open the mouth to release the cartridge, then servo B home, then all joints; if servo A is outside its left/right range,
+freeze and drop torque so a technician returns the arm by hand. Answers: A = servo 1 (base), B = servo 2 (shoulder lift),
+range ±90° editable by hand, mouth +300 steps.
+home-calibration.ts: BASE/LIFT/GRIPPER servo ids, DEFAULT_HOMING {baseRangeSteps 1024, gripperOpenSteps 300}, HOME_LOOP_MS
+90 s, baseOutOfRange (missing reading also freezes), shouldRetryHome (stops on home/frozen/camera_moved/90 s/encoders home
+but tags off/no progress), planJogDeltas takes a servo subset, verdict frozen; MAX_HOME_JOGS 20 (was 24, docs said 20).
+robot-arm-vision.ts: returnToHome is one attempt (gate -> torque off + frozen; else torque on, mouth on attempt 1, servo 2
+phase, servos 1-5 phase; 20 jogs / 20 s budget; camera check only when encoders land). updateHoming + calibration
+`homing` field (carried forward on recalibrate). Vision tab: Return to home drives the attempt loop in the browser
+(fetch + deserialize, attempt n), Stop button, attempt/seconds status, FROZEN banner, Home settings form.
+npm run check: 14 errors, none in touched files. Unit: robot-arm suites 99/99. Not yet run on the arm.

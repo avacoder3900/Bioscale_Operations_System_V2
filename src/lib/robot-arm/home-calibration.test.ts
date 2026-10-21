@@ -1,8 +1,61 @@
 import { describe, expect, it } from 'vitest';
-import { assessHome, chunkJogPlan, planJogDeltas, residuals, HOME_STEP_TOLERANCE, MAX_JOG_STEPS } from './home-calibration';
+import {
+	assessHome,
+	baseOutOfRange,
+	chunkJogPlan,
+	degToSteps,
+	planJogDeltas,
+	residuals,
+	shouldRetryHome,
+	DEFAULT_HOMING,
+	HOME_LOOP_MS,
+	HOME_STEP_TOLERANCE,
+	LIFT_SERVO_ID,
+	MAX_JOG_STEPS
+} from './home-calibration';
 import type { VisionAssessment } from './apriltags';
 
 const home = { '1': 2048, '2': 1500, '3': 2600, '4': 2048, '5': 2100 };
+
+describe('home sequence', () => {
+	it('default servo-1 range is ±90° = ±1024 steps, mouth opens 300', () => {
+		expect(DEFAULT_HOMING).toEqual({ baseRangeSteps: 1024, gripperOpenSteps: 300 });
+		expect(degToSteps(45)).toBe(512);
+	});
+
+	it('servo 1 inside its range → null; outside either side → freeze with the offset', () => {
+		expect(baseOutOfRange({ ...home, '1': 2048 + 1024 }, home, 1024)).toBeNull();
+		expect(baseOutOfRange({ ...home, '1': 2048 - 1025 }, home, 1024)).toEqual({ sid: 1, offSteps: -1025, limitSteps: 1024 });
+		expect(baseOutOfRange({ ...home, '1': 2048 + 1500 }, home, 1024)?.offSteps).toBe(1500);
+	});
+
+	it('a missing servo-1 reading freezes rather than guessing', () => {
+		expect(baseOutOfRange({ ...home, '1': undefined as any }, home, 1024)).not.toBeNull();
+	});
+
+	it('servo B alone can be planned first', () => {
+		const cur = { ...home, '1': 2300, '2': 1100 };
+		expect(planJogDeltas(cur, home, HOME_STEP_TOLERANCE, [LIFT_SERVO_ID])).toEqual([{ sid: 2, delta: 400 }]);
+	});
+});
+
+describe('shouldRetryHome', () => {
+	const base = { elapsedMs: 10_000, residualMax: 200, previousResidualMax: null };
+	it('stops on home, freeze, moved camera and the 90 s limit', () => {
+		expect(shouldRetryHome({ ...base, verdict: 'home' }).retry).toBe(false);
+		expect(shouldRetryHome({ ...base, verdict: 'frozen' }).retry).toBe(false);
+		expect(shouldRetryHome({ ...base, verdict: 'camera_moved' }).retry).toBe(false);
+		expect(shouldRetryHome({ ...base, verdict: 'position_off', elapsedMs: HOME_LOOP_MS })).toEqual({ retry: false, reason: 'timed out' });
+	});
+	it('retries while the arm is getting closer', () => {
+		expect(shouldRetryHome({ ...base, verdict: 'position_off' }).retry).toBe(true);
+		expect(shouldRetryHome({ ...base, verdict: 'position_off', residualMax: 60, previousResidualMax: 200 }).retry).toBe(true);
+	});
+	it('stops when an attempt made no progress, or encoders are home but tags disagree', () => {
+		expect(shouldRetryHome({ ...base, verdict: 'position_off', residualMax: 199, previousResidualMax: 200 }).reason).toBe('not getting closer');
+		expect(shouldRetryHome({ ...base, verdict: 'markers_off', residualMax: 4 }).retry).toBe(false);
+	});
+});
 
 describe('chunkJogPlan', () => {
 	it('splits a big move into jogs the Pi accepts (≤300), keeping joint order and sign', () => {

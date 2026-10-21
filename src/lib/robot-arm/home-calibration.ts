@@ -36,9 +36,14 @@ export interface JogPlanStep {
  * within `tolerance`. Throws when a home joint is missing from either side —
  * a partial move to home is worse than no move.
  */
-export function planJogDeltas(current: JointSteps, target: JointSteps, tolerance = HOME_STEP_TOLERANCE): JogPlanStep[] {
+export function planJogDeltas(
+	current: JointSteps,
+	target: JointSteps,
+	tolerance = HOME_STEP_TOLERANCE,
+	sids: readonly number[] = HOME_SERVO_IDS
+): JogPlanStep[] {
 	const plan: JogPlanStep[] = [];
-	for (const sid of HOME_SERVO_IDS) {
+	for (const sid of sids) {
 		const cur = current[String(sid)];
 		const tgt = target[String(sid)];
 		if (!Number.isFinite(cur)) throw new Error(`servo ${sid}: no current position reported`);
@@ -53,10 +58,89 @@ export function planJogDeltas(current: JointSteps, target: JointSteps, tolerance
 export const MAX_JOG_STEPS = 300;
 
 /**
- * Jogs per Return to home, across all passes. Each jog is one round trip to
- * the Pi; this keeps the move plus the camera check inside Vercel's 30 s.
+ * Jogs per Return-to-home ATTEMPT, across all its passes. Each jog is one
+ * round trip to the Pi; this keeps one attempt plus the camera check inside
+ * Vercel's 30 s. The browser repeats attempts until home (HOME_LOOP_MS).
  */
-export const MAX_HOME_JOGS = 24;
+export const MAX_HOME_JOGS = 20;
+
+// ── the home sequence ────────────────────────────────────────────────────
+
+/** Servo A: base rotation (shoulder_pan). Outside its safe range, home freezes instead of moving. */
+export const BASE_SERVO_ID = 1;
+/** Servo B: shoulder lift. Homed on its own, right after the mouth opens, before the rest. */
+export const LIFT_SERVO_ID = 2;
+/** The mouth (gripper). Positive steps open it (teleop_keyboard.py: z = +1 = open). */
+export const GRIPPER_SERVO_ID = 6;
+
+export const STEPS_PER_REV = 4096;
+export const degToSteps = (deg: number) => Math.round((deg * STEPS_PER_REV) / 360);
+export const stepsToDeg = (steps: number) => (steps * 360) / STEPS_PER_REV;
+
+export interface HomingSettings {
+	/** Servo 1 may be at most this many steps either side of home; beyond it, freeze. */
+	baseRangeSteps: number;
+	/** How far the mouth opens (steps, positive = open) before the arm moves. 0 = skip. */
+	gripperOpenSteps: number;
+}
+
+/** ±90° on servo 1; mouth opens one max-size jog (~26°). */
+export const DEFAULT_HOMING: HomingSettings = { baseRangeSteps: degToSteps(90), gripperOpenSteps: MAX_JOG_STEPS };
+
+/** The browser stops repeating attempts after this long. */
+export const HOME_LOOP_MS = 90_000;
+
+export interface BaseOutOfRange {
+	sid: number;
+	/** current − home, steps (sign: which side). */
+	offSteps: number;
+	limitSteps: number;
+}
+
+/**
+ * Servo A's safety gate: if the base is further than `limitSteps` either side
+ * of home, Return to home must not move anything — the arm is somewhere
+ * the camera-less return cannot reason about (a future head camera will).
+ * A missing reading on either side also freezes: no guessing.
+ */
+export function baseOutOfRange(current: JointSteps, target: JointSteps, limitSteps: number): BaseOutOfRange | null {
+	const k = String(BASE_SERVO_ID);
+	const cur = current[k];
+	const tgt = target[k];
+	if (!Number.isFinite(cur) || !Number.isFinite(tgt)) return { sid: BASE_SERVO_ID, offSteps: Number.NaN, limitSteps };
+	const off = Math.round(cur - tgt);
+	return Math.abs(off) > limitSteps ? { sid: BASE_SERVO_ID, offSteps: off, limitSteps } : null;
+}
+
+/**
+ * Whether the browser should run another attempt. Stops on home, on a freeze
+ * or error, at the time limit, and when the arm stopped getting closer (two
+ * attempts in a row within a few steps of each other — a stalled joint will
+ * not be fixed by more of the same).
+ */
+export function shouldRetryHome(o: {
+	verdict: string;
+	elapsedMs: number;
+	residualMax: number | null;
+	previousResidualMax: number | null;
+	limitMs?: number;
+}): { retry: boolean; reason: string } {
+	if (o.verdict === 'home') return { retry: false, reason: 'home' };
+	if (o.verdict === 'frozen') return { retry: false, reason: 'frozen' };
+	if (o.verdict === 'camera_moved') return { retry: false, reason: 'the camera moved — recalibrate' };
+	if (o.elapsedMs >= (o.limitMs ?? HOME_LOOP_MS)) return { retry: false, reason: 'timed out' };
+	// Encoders home but tags off: moving again would not change anything.
+	if (o.residualMax != null && o.residualMax <= HOME_STEP_TOLERANCE) return { retry: false, reason: 'encoders are home; the tags disagree' };
+	if (
+		o.residualMax != null &&
+		o.previousResidualMax != null &&
+		Number.isFinite(o.residualMax) &&
+		o.residualMax >= o.previousResidualMax - 3
+	) {
+		return { retry: false, reason: 'not getting closer' };
+	}
+	return { retry: true, reason: '' };
+}
 
 /**
  * Split each joint's delta into jogs the Pi accepts (≤ `max` steps each), in
@@ -106,7 +190,9 @@ export type HomeVerdict =
 	| 'camera_moved'
 	| 'position_off_and_markers_off'
 	/** Neither side could be checked — never reported as home. */
-	| 'unverified';
+	| 'unverified'
+	/** Servo A out of its safe range: nothing moved, torque dropped, a person returns the arm. */
+	| 'frozen';
 
 export interface HomeAssessment {
 	verdict: HomeVerdict;

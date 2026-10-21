@@ -20,6 +20,7 @@ import {
 	returnToHome,
 	saveCalibration,
 	setTagArchived,
+	updateHoming,
 	updateTag,
 	type TagInput
 } from '$lib/server/robot-arm-vision';
@@ -143,6 +144,24 @@ export const actions: Actions = {
 		}
 	},
 
+	// Servo 1's safe range (± degrees of home) and how far the mouth opens.
+	updateHoming: async ({ request, locals }) => {
+		if (!locals.user) return fail(401, { error: 'Unauthorized' });
+		requirePermission(locals.user, 'manufacturing:write');
+		const d = await request.formData();
+		const id = field(d, 'id');
+		if (!id) return fail(400, { error: 'Calibration id missing.', scope: 'home' });
+		try {
+			const h = await updateHoming(who(locals), id, {
+				baseRangeDeg: Number(field(d, 'baseRangeDeg')),
+				gripperOpenSteps: Number(field(d, 'gripperOpenSteps'))
+			});
+			return { success: `Home settings saved: servo 1 range ±${Math.round((h.baseRangeSteps * 360) / 4096)}°, mouth opens ${h.gripperOpenSteps} steps.`, scope: 'home' };
+		} catch (err) {
+			return fail(400, { error: (err as Error).message, scope: 'home' });
+		}
+	},
+
 	retireCalibration: async ({ request, locals }) => {
 		if (!locals.user) return fail(401, { error: 'Unauthorized' });
 		requirePermission(locals.user, 'manufacturing:write');
@@ -171,9 +190,12 @@ export const actions: Actions = {
 	returnHome: async ({ request, locals }) => {
 		if (!locals.user) return fail(401, { error: 'Unauthorized' });
 		requirePermission(locals.user, 'manufacturing:write');
-		const cameraName = field(await request.formData(), 'camera');
+		const d = await request.formData();
+		const cameraName = field(d, 'camera');
+		// The Vision tab repeats this action until home (≤ 90 s); only attempt 1 opens the mouth.
+		const attempt = Number(field(d, 'attempt')) || 1;
 		try {
-			const r = await returnToHome(who(locals), { cameraName });
+			const r = await returnToHome(who(locals), { cameraName, attempt });
 			return { ...(r.home.verdict === 'home' ? { success: r.message } : { warning: r.message }), homeResult: r, scope: 'home' };
 		} catch (err) {
 			const msg = (err as Error).message;
