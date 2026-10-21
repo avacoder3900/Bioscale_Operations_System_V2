@@ -18,6 +18,7 @@ import {
 	setRunRecordStatus
 } from '$lib/server/opentrons/run-lifecycle-records';
 import type { ReagentWellIssueRow } from '$lib/manufacturing/reagent-well-issues';
+import { calibrationPreview as loadCalibrationPreview, type CalibrationPreview } from '$lib/server/opentrons/calibration-rtps';
 
 /** Map legacy status → UI stage */
 function toStage(status: string | null | undefined): string | null {
@@ -73,7 +74,8 @@ function emptyReagentState(robotId: string, loadError?: string) {
 			hostname: string | null;
 			capturedAt: string | null;
 		},
-		wellIssues: [] as ReagentWellIssueRow[]
+		wellIssues: [] as ReagentWellIssueRow[],
+		calibrationPreview: null as CalibrationPreview | null
 	};
 }
 
@@ -344,6 +346,25 @@ export async function loadReagentWizard(locals: App.Locals, robotId: string) {
 			}
 		}
 
+		// The calibrator values Start will inject (cal_x / cal_y / z_cal), so the Start
+		// panel shows the deck's saved probe Z instead of the protocol file default.
+		// Display only — Start re-reads them for the scanned deck. Never fails the page.
+		let calibrationPreview: CalibrationPreview | null = null;
+		if (robotId) {
+			try {
+				const runDeckId = (activeRun as any)?.deckId ?? null;
+				const lastDeckId = runDeckId
+					? null
+					: (((await ReagentBatchRecord.findOne({ 'robot._id': robotId, deckId: { $nin: [null, ''] } })
+							.select('deckId')
+							.sort({ createdAt: -1 })
+							.lean()) as any)?.deckId ?? null);
+				calibrationPreview = await loadCalibrationPreview(robotId, 'reagent-filling', runDeckId, lastDeckId);
+			} catch (e) {
+				console.error('[REAGENT-FILLING PAGE] calibration preview failed:', e instanceof Error ? e.message : e);
+			}
+		}
+
 		return {
 			robotId,
 			activeRunId: activeRun ? String(activeRun._id) : null,
@@ -372,7 +393,8 @@ export async function loadReagentWizard(locals: App.Locals, robotId: string) {
 			robotProtocols,
 			opentronsRobotId: robotId,
 			lastTipState,
-			wellIssues
+			wellIssues,
+			calibrationPreview
 		};
 	} catch (err) {
 		console.error('[REAGENT-FILLING PAGE] Load error:', err instanceof Error ? err.message : err);

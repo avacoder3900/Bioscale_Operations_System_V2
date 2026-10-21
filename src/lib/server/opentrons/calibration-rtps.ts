@@ -34,7 +34,7 @@
 // forces every global offset to zero, so there is nothing left to read.
 // TipCalibratorFixture is reached through loadCalibratorFixture, which owns the
 // per-robot → 'global' fallback order the wizard uses.
-import { connectDB } from '$lib/server/db';
+import { connectDB, Equipment } from '$lib/server/db';
 import {
 	DEFAULT_CALIBRATOR_XY,
 	loadCalibratorFixture,
@@ -175,4 +175,46 @@ export async function calibrationRtpValues(
 		}
 	}
 	return out;
+}
+
+/** The calibrator RTPs a Start panel shows read-only, and the deck they were read for. */
+export interface CalibrationPreview {
+	/** cal_x / cal_y / z_cal exactly as Start will inject them (empty when no fixture exists). */
+	values: Record<string, number>;
+	/** The deck these values belong to. */
+	deckId: string | null;
+	/** 'run' = the run's scanned deck; 'last-run' = this robot's last scanned deck (not scanned yet). */
+	deckSource: 'run' | 'last-run' | null;
+}
+
+/**
+ * What Start will inject for the calibrator point, for display BEFORE Start.
+ *
+ * The Start panel seeds its fields from the protocol file's defaults (z_cal 40.8),
+ * but Start overwrites cal_x / cal_y / z_cal with the deck's TipCalibratorFixture
+ * (calibrationRtpValues above). Showing the file default made operators think a
+ * saved probe Z had not taken (R04 / DECK-001, 2026-10-21). This runs the SAME
+ * lookup for the same deck, so the panel shows the number the robot will get.
+ *
+ * Before the deck scan the run has no deckId; the robot's most recently scanned
+ * deck is used and flagged 'last-run' — Start still re-reads the scanned deck.
+ */
+export async function calibrationPreview(
+	robotId: string,
+	processType: 'wax-filling' | 'reagent-filling',
+	deckId: string | null | undefined,
+	lastDeckId: string | null | undefined
+): Promise<CalibrationPreview> {
+	const pick = deckId ? { id: deckId, source: 'run' as const } : lastDeckId ? { id: lastDeckId, source: 'last-run' as const } : null;
+	let deck: { deckKey?: string | null; deckLoadName?: string | null } = {};
+	if (pick) {
+		await connectDB();
+		const eq = (await Equipment.findOne({ _id: pick.id, equipmentType: 'deck' }).select('particleDeviceId deckLoadName').lean()) as any;
+		if (eq) deck = { deckKey: eq.particleDeviceId ?? null, deckLoadName: eq.deckLoadName ?? null };
+	}
+	const schema = ['bims_native', 'cal_x', 'cal_y', 'z_cal'].map((variableName) => ({ variableName }));
+	const out = await calibrationRtpValues(robotId, processType, schema, deck);
+	const values: Record<string, number> = {};
+	for (const k of ['cal_x', 'cal_y', 'z_cal']) if (typeof out[k] === 'number') values[k] = out[k] as number;
+	return { values, deckId: pick?.id ?? null, deckSource: pick?.source ?? null };
 }
