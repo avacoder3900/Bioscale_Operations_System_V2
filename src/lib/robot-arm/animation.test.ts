@@ -38,10 +38,20 @@ describe('easing', () => {
 });
 
 describe('durations', () => {
-	it('minimum duration comes from the fastest servo', () => {
+	it('minimum duration comes from the fastest servo at the easing\'s peak speed', () => {
 		expect(minDurationS(A, A)).toBe(0);
-		expect(minDurationS(A, B)).toBe(0.2); // 300 steps / 2000 → 0.15 → floor 0.2
-		expect(minDurationS(A, [A[0] + 4000, ...A.slice(1)])).toBe(2);
+		expect(minDurationS(A, B, MAX_STEPS_PER_S, 'linear')).toBe(0.2); // 300 steps / 2000 → 0.15 → floor 0.2
+		expect(minDurationS(A, B)).toBe(0.3); // easy ease peaks at 1.875× average: 0.28 → 0.3
+		expect(minDurationS(A, B, MAX_STEPS_PER_S, 'in')).toBe(0.5); // cubic peaks at 3×: 0.45 → 0.5
+		expect(minDurationS(A, [A[0] + 4000, ...A.slice(1)], MAX_STEPS_PER_S, 'linear')).toBe(2);
+		expect(minDurationS(A, [A[0] + 4000, ...A.slice(1)])).toBe(3.8);
+	});
+	it('a path rendered at the minimum duration is not refused by pathStats', () => {
+		const far = [A[0] + 1500, ...A.slice(1)];
+		for (const easing of ['ease', 'linear', 'in', 'out'] as const) {
+			const d = minDurationS(A, far, MAX_STEPS_PER_S, easing);
+			expect(pathStats(buildPath([kf('A', A), kf('far', far, { durationS: d, easing })], { rateHz: 30 })).tooFast).toEqual([]);
+		}
 	});
 	it('auto duration is comfortable, not fast', () => {
 		expect(autoDurationS(A, B)).toBe(0.5); // 300 / 600
@@ -102,8 +112,10 @@ describe('buildPath', () => {
 
 	it('tooFast flags a transition the arm cannot make', () => {
 		const far = [A[0] + 3000, ...A.slice(1)];
-		expect(tooFast([kf('A', A), kf('far', far, { durationS: 0.5 })])).toEqual([{ index: 1, message: expect.stringContaining('at least 1.5 s') }]);
-		expect(tooFast([kf('A', A), kf('far', far, { durationS: 2 })])).toEqual([]);
+		// 3000 steps at easy ease: 3000 × 1.875 / 2000 = 2.81 → 2.9 s.
+		expect(tooFast([kf('A', A), kf('far', far, { durationS: 0.5 })])).toEqual([{ index: 1, message: expect.stringContaining('at least 2.9 s') }]);
+		expect(tooFast([kf('A', A), kf('far', far, { durationS: 2, easing: 'linear' })])).toEqual([]);
+		expect(tooFast([kf('A', A), kf('far', far, { durationS: 3 })])).toEqual([]);
 		const p = buildPath([kf('A', A), kf('far', far, { durationS: 0.5 })]);
 		expect(pathStats(p).tooFast).toEqual([1]);
 		expect(pathStats(p).maxStepsPerS[0]).toBeGreaterThan(MAX_STEPS_PER_S);
