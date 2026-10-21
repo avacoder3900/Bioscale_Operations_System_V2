@@ -6,12 +6,13 @@
 	 * not, send it back), where is everything right now, recalibrate, and the
 	 * tag registry. See docs/prds/ARM-05-apriltag-vision.md.
 	 */
-	import { enhance } from '$app/forms';
+	import { deserialize, enhance } from '$app/forms';
+	import { invalidateAll } from '$app/navigation';
 	import VisionStage, { type StageTag } from '$lib/components/robot-arm/VisionStage.svelte';
 	import VisionLiveTracker from '$lib/components/robot-arm/VisionLiveTracker.svelte';
 	import VisionTagCalibrator from '$lib/components/robot-arm/VisionTagCalibrator.svelte';
 	import VisionTagRegistry from '$lib/components/robot-arm/VisionTagRegistry.svelte';
-	import { HOME_STEP_TOLERANCE } from '$lib/robot-arm/home-calibration';
+	import { shouldRetryHome, stepsToDeg, HOME_LOOP_MS, HOME_STEP_TOLERANCE, MAX_JOG_STEPS } from '$lib/robot-arm/home-calibration';
 	import type { CalibrationSummary, HomeCheckResult, TagSummary } from '$lib/server/robot-arm-vision';
 	import type { CameraStatus } from '$lib/server/robot-arm-client';
 
@@ -59,18 +60,80 @@
 		!armReachable ? 'The arm is unreachable — check the connection on the Control tab.' : busy ? 'The arm is running something — stop it first.' : ''
 	);
 
-	const homeResult = $derived(form && 'homeResult' in form ? (form.homeResult as HomeCheckResult) : null);
+	// Return to home runs as a loop of attempts driven from here (each attempt is
+	// one server request, inside Vercel's 30 s); its latest result wins over the
+	// form's until another home action is submitted.
+	let loopResult = $state<HomeCheckResult | null>(null);
+	const formResult = $derived(form && 'homeResult' in form ? (form.homeResult as HomeCheckResult) : null);
+	const homeResult = $derived(loopResult ?? formResult);
 	const shownResult = $derived(homeResult && homeResult.cameraName === camera ? homeResult : null);
 	const flash = $derived(form as { success?: string; warning?: string; error?: string; warnings?: string[] } | null);
 
 	let homeBusy = $state<string | null>(null);
 	const homeEnhance = (kind: string) => () => {
 		homeBusy = kind;
+		loopResult = null;
+		loop = null;
 		return async ({ update }: { update: (o?: { reset?: boolean }) => Promise<void> }) => {
 			await update({ reset: false });
 			homeBusy = null;
 		};
 	};
+
+	let loop = $state<{ running: boolean; attempt: number; startedAt: number; stopping: boolean; outcome: string | null; error: string | null } | null>(null);
+	let tick = $state(Date.now());
+
+	/**
+	 * Return to home, repeated until the arm is home. Each attempt: (servo 1
+	 * safety gate) → open the mouth (attempt 1 only) → servo 2 home → all
+	 * joints home. Stops on home, a freeze, no progress, an error, Stop, or
+	 * when 90 s have passed (no new attempt starts after that).
+	 */
+	async function runReturnHome() {
+		if (!confirm('The arm will MOVE: open the mouth, bring the shoulder (servo 2) home, then every joint. Is the path clear?')) return;
+		homeBusy = 'return';
+		loopResult = null;
+		loop = { running: true, attempt: 0, startedAt: Date.now(), stopping: false, outcome: null, error: null };
+		const clock = setInterval(() => (tick = Date.now()), 500);
+		let previous: number | null = null;
+		try {
+			while (loop) {
+				loop.attempt++;
+				const fd = new FormData();
+				fd.set('camera', camera);
+				fd.set('attempt', String(loop.attempt));
+				const res = await fetch('?/returnHome', { method: 'POST', body: fd, headers: { 'x-sveltekit-action': 'true' } });
+				const r = deserialize(await res.text());
+				if (r.type === 'failure') {
+					loop.error = String((r.data as { error?: string } | undefined)?.error ?? 'Return to home failed.');
+					break;
+				}
+				if (r.type !== 'success' || !r.data?.homeResult) {
+					loop.error = r.type === 'error' ? `Return to home failed: ${r.error?.message ?? r.status}` : 'Unexpected response from the server.';
+					break;
+				}
+				const h = r.data.homeResult as HomeCheckResult;
+				loopResult = h;
+				const d = shouldRetryHome({ verdict: h.home.verdict, elapsedMs: Date.now() - loop.startedAt, residualMax: h.home.residualMax, previousResidualMax: previous });
+				previous = h.home.residualMax;
+				if (loop.stopping) {
+					loop.outcome = 'stopped by you';
+					break;
+				}
+				if (!d.retry) {
+					loop.outcome = d.reason;
+					break;
+				}
+			}
+		} catch (e) {
+			if (loop) loop.error = `Return to home failed: ${e instanceof Error ? e.message : String(e)}`;
+		} finally {
+			clearInterval(clock);
+			if (loop) loop.running = false;
+			homeBusy = null;
+			await invalidateAll();
+		}
+	}
 
 	const VERDICT: Record<string, { label: string; color: string }> = {
 		home: { label: 'AT HOME', color: '#4ade80' },
@@ -78,7 +141,8 @@
 		markers_off: { label: 'TAGS OFF', color: '#f59e0b' },
 		position_off_and_markers_off: { label: 'NOT AT HOME', color: '#ef4444' },
 		camera_moved: { label: 'CAMERA MOVED', color: '#ef4444' },
-		unverified: { label: 'UNVERIFIED', color: 'var(--color-tron-text-secondary)' }
+		unverified: { label: 'UNVERIFIED', color: 'var(--color-tron-text-secondary)' },
+		frozen: { label: 'FROZEN — RETURN BY HAND', color: '#ef4444' }
 	};
 	const verdict = (v: string | null | undefined) => VERDICT[v ?? ''] ?? { label: '—', color: 'var(--color-tron-text-secondary)' };
 
@@ -205,27 +269,54 @@
 					{/each}
 				</div>
 			{/if}
+			{#if shownResult?.frozen}
+				<div class="mt-3 rounded border border-red-500/60 bg-red-900/20 p-3 text-sm text-red-200">
+					<div class="font-semibold">FROZEN — return the arm to home by hand</div>
+					<div class="mt-1 text-xs">{shownResult.message}</div>
+				</div>
+			{/if}
+			{#if loop}
+				<p class="mt-2 text-xs" style="color: {loop.error ? '#fca5a5' : 'var(--color-tron-text-secondary)'}">
+					{#if loop.running}
+						Returning home: attempt {loop.attempt} · {Math.round(((tick - loop.startedAt) / 1000))} s of {HOME_LOOP_MS / 1000} s{loop.stopping ? ' · stopping after this attempt…' : ''}
+					{:else if loop.error}
+						{loop.error} (attempt {loop.attempt})
+					{:else}
+						Return to home finished after {loop.attempt} attempt(s): {loop.outcome}.
+					{/if}
+				</p>
+			{/if}
 			{#if shownResult?.moved?.length}
-				<p class="mt-1 text-xs" style="color: var(--color-tron-text-secondary)">Moved: {shownResult.moved.map((m) => `J${m.sid} ${m.delta > 0 ? '+' : ''}${m.delta}`).join(', ')}</p>
+				<p class="mt-1 text-xs" style="color: var(--color-tron-text-secondary)">Moved{shownResult.attempt ? ` (attempt ${shownResult.attempt})` : ''}: {shownResult.moved.map((m) => `J${m.sid} ${m.delta > 0 ? '+' : ''}${m.delta}`).join(', ')}</p>
 			{/if}
 			{#if shownResult?.warnings?.length}
 				<ul class="mt-1 space-y-0.5 text-xs" style="color: #f59e0b">{#each shownResult.warnings as w}<li>{w}</li>{/each}</ul>
 			{/if}
 
 			<div class="mt-3 flex flex-wrap items-center gap-2">
-				<form method="POST" action="?/returnHome" use:enhance={homeEnhance('return')}>
-					<input type="hidden" name="camera" value={camera} />
+				{#if loop?.running}
 					<button
-						type="submit"
+						type="button"
+						onclick={() => loop && (loop.stopping = true)}
+						disabled={loop.stopping}
+						class="min-h-[44px] rounded px-4 text-sm font-semibold disabled:opacity-40"
+						style="background: rgba(239,68,68,0.15); color: #fca5a5; border: 1px solid #ef4444;"
+						title="Stops after the attempt in progress (an attempt cannot be cut off mid-move)"
+					>
+						Stop returning
+					</button>
+				{:else}
+					<button
+						type="button"
+						onclick={runReturnHome}
 						disabled={blocked || !calibration.jointSteps || !!homeBusy}
-						onclick={(e) => { if (!confirm('The arm will MOVE to the calibrated home, one joint at a time. Is the path clear?')) e.preventDefault(); }}
 						class="min-h-[44px] rounded px-4 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-40"
 						style="background: rgba(245,158,11,0.15); color: #fbbf24; border: 1px solid #f59e0b;"
-						title={calibration.jointSteps ? 'Jog every joint back to the calibrated encoder steps, then verify with the tags' : 'This calibration has no encoder home'}
+						title={calibration.jointSteps ? 'Open the mouth, servo 2 home, then all joints home; repeats until home (max 90 s)' : 'This calibration has no encoder home'}
 					>
-						{homeBusy === 'return' ? 'Returning…' : 'Return to home'}
+						Return to home
 					</button>
-				</form>
+				{/if}
 				<form method="POST" action="?/checkHome" use:enhance={homeEnhance('check')}>
 					<input type="hidden" name="camera" value={camera} />
 					<button
@@ -243,6 +334,29 @@
 				</form>
 				{#if blocked}<span class="text-xs" style="color: #f59e0b">{blockReason}</span>{/if}
 			</div>
+
+			<details class="mt-3 text-xs" style="color: var(--color-tron-text-secondary)">
+				<summary class="cursor-pointer">
+					Home settings: servo 1 safe range ±{Math.round(stepsToDeg(calibration.homing.baseRangeSteps))}° · mouth opens {calibration.homing.gripperOpenSteps} steps
+				</summary>
+				<p class="mt-2 max-w-2xl">
+					If servo 1 (base) is further than this from home, Return to home moves nothing, turns torque OFF so a person can
+					walk the arm home by hand, and reports FROZEN. The mouth (servo 6) opens by this many steps first to release a
+					cartridge (0 = don't open). Kept when you recalibrate.
+				</p>
+				<form method="POST" action="?/updateHoming" use:enhance class="mt-2 flex flex-wrap items-end gap-3">
+					<input type="hidden" name="id" value={calibration._id} />
+					<label class="block">
+						Servo 1 range ± degrees
+						<input name="baseRangeDeg" type="number" min="1" max="180" step="1" required value={Math.round(stepsToDeg(calibration.homing.baseRangeSteps))} class="mt-1 block w-28 rounded border bg-black/40 px-2 py-1 text-sm" style="border-color: var(--color-tron-border); color: var(--color-tron-text)" />
+					</label>
+					<label class="block">
+						Mouth opens (steps, 0–{MAX_JOG_STEPS})
+						<input name="gripperOpenSteps" type="number" min="0" max={MAX_JOG_STEPS} step="1" required value={calibration.homing.gripperOpenSteps} class="mt-1 block w-28 rounded border bg-black/40 px-2 py-1 text-sm" style="border-color: var(--color-tron-border); color: var(--color-tron-text)" />
+					</label>
+					<button type="submit" class="min-h-[34px] rounded px-3 text-xs font-semibold" style="color: #4ade80; border: 1px solid #4ade80;">Save home settings</button>
+				</form>
+			</details>
 		{/if}
 	</section>
 
