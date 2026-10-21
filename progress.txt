@@ -21624,6 +21624,53 @@ Retrieve this exact code: git checkout feat/arm-recording-cleanup at commit e823
 What this deployment is for: Robot Arm Clean-up tab (recording -> editable steps -> new recording on the Pi)
 
 ================================================================================
+2026-10-21 — feat/arm-vision-servos-and-camera — re-port: vision calibration relies on servos AND camera (onto Sam's home flow)
+================================================================================
+feat/arm-depth-combined's b964db12 (2026-10-20) no longer merged: it conflicted in 11 hunks of robot-arm-vision.ts
+plus home-calibration.ts/.test.ts and the tag-calibration model with Sam's six Return-to-home PRs (#107-#114).
+Re-applied by hand on master instead of merging:
+- home-calibration.ts: SERVO_LOAD_HIGH/MARGIN/TEMP_HOT_C, ServoReading, StrainedJoint, strainedJoints(now,
+  baseline), unsteadyJoints(before, after); HomeAssessment.strained; assessHome needs BOTH sides (a missing side
+  or fixed-only tags -> 'unverified', never 'home'); 'frozen' kept. shouldRetryHome: encoders home + claw closed +
+  'unverified' stops with "the camera could not confirm it" (the loop would otherwise spin to 90 s).
+- robot-arm-vision.ts: readServos() (GET /servos with load/temp/voltage/torque, /pose fallback for steps) replaces
+  readJointSteps everywhere incl. Sam's settle/claw re-reads (lastReadings feeds the strain check); saveCalibration
+  reads the servos before AND after the detection, refuses if a joint moved > tolerance in between, requires an arm
+  tag in view, stores servos[]/servoSource/captureDriftSteps; checkHome/returnToHome pass strained joints; homeMessage
+  names a blocked joint (short of home + pushing hard) vs a broken/slipped printed part (encoders home, tags off);
+  frozen message unchanged; lastCheck.strained recorded.
+- Model: servos[], servoSource, captureDriftSteps, lastCheck.strained. Agent vision-check returns strained[].
+  Vision tab: per-joint "load N" at home and red "load now N" / "hot N°C". Calibrator copy updated.
+Tests: home-calibration +9 (25), robot-arm suites 90/90. npm run check: 13 errors (baseline 14), none in touched files.
+Not run on the arm. The depth zero-baseline panel (496b08e8 + e5b4feaf) still lives only on feat/arm-depth-combined.
+
+================================================================================
+2026-10-21 — feat/arm-vision-servos-and-camera — Pi heat: lazy JPEG encoding, GET /health/thermal, throttle warning in BIMS
+================================================================================
+Operator: the Pi only has the stock heatsinks, 80 C is close to alarming; warn in BIMS when the Pi is being throttled
+or held back for heat; spread the load; list cooling strategies.
+Found: at 1080p@30 the SoC reached 84 C with the firmware's soft temperature limit ACTIVE (vcgencmd 0xe0008), uvicorn
+85-100 % of a core; even 1080p@15 held 82-85 C because cameras.py colour-converted and JPEG-encoded every captured
+frame whether or not anyone watched (+ viewers' ?w= re-encodes decoded the full JPEG first).
+1. cameras.py (Pi; vendored copy now in services/robot-arm/src/server/cameras.py; backups cameras.py.bak-pre-buffer2):
+   CAP_PROP_CONVERT_RGB off, 2 driver buffers, the thread only copies the raw YUYV frame; _Frame converts and encodes
+   on first use, cached per frame (N viewers share one encode); _Frame.encode(q, w) resizes from BGR. app.py snapshot
+   route uses it (backup app.py.bak-lazy). Measured at 1080p@30: worker 29.8 fps; service 20-27 % of a core idle,
+   ~30 % with one viewer at 4-5 fps (was 85-100 %); `?q=70&w=960` 11 ms (was 24); SoC 84 -> 72 C in ~10 min with no
+   other change; detect still finds every tag (11). hardware.yaml back to 1920x1080 @ 30 (bak-1080p30 / bak-720p15 kept).
+2. thermal.py (Pi, installed via scripts/install_thermal_router.py, backup app.py.bak-thermal): GET /health/thermal ->
+   temp_c, level ok/warm/hot/critical (70/78/84 C or the live throttle flags), now[] / since_boot[] from
+   vcgencmd get_throttled, clock vs max, load, service_cpu_pct (os.times delta), fan_rpm (none), uptime.
+3. BIMS: robotArm.getThermal(); /api/robot-arm/thermal (manufacturing:read; logs a device_events row, deviceId
+   robot-arm-pi, eventType robot_arm.thermal, on level change and every 10 min while hot/critical — nothing while ok);
+   PiThermalChip.svelte in the camera card header on every arm tab (temp always; amber "hot"/"throttled"/"clock capped",
+   red pulsing "critical"/"soft temp limit"; tooltip with clock, service CPU, since-boot flags, what to do; polls 30 s
+   while visible, hides after 3 misses); arm +layout.server.ts fetches it best-effort (3 s, 404-tolerant).
+What BIMS cannot see: the kernel's critical trip (~110 C) powers the Pi off — that shows up as "arm unreachable" in the
+existing connection log, after a 'critical' thermal row. The Pi stops no services on its own.
+npm run check: 13 errors (baseline 14), none in touched files. robot-arm suites 90/90.
+
+================================================================================
 2026-10-21 — feat/arm-camera-1080p — arm camera to 1920x1080 @ 30 fps over the new USB 3 cable (Pi config + worker buffer fix)
 ================================================================================
 The USB 3 cable arrived and the D415 now enumerates at 5000M on bus 004 (`lsusb -t`); the colour node offers

@@ -81,8 +81,19 @@ the real limits are:
   converts YUYV->BGR and JPEG-encodes a frame (~25 ms at 1080p), the driver has no free buffer, so every
   other frame is dropped. `cameras.py` now sets 2 buffers (backup `cameras.py.bak-pre-buffer2`); the
   backlog stays <= 1 frame. Measured rates after that change are in progress.txt (2026-10-21).
-- Per-frame costs on the Pi 5 at 1080p: JPEG encode q80 11 ms, decode 15 ms, `snapshot.jpg?q=70&w=960`
-  re-encode ~24 ms (40 KB), full-quality still 140 KB. uvicorn ~85 % of one core; SoC 74-77 C, no fan.
+- Per-frame costs on the Pi 5 at 1080p: JPEG encode q80 11 ms, decode 15 ms, full-quality still 140 KB.
+  Encoding every captured frame put uvicorn at 85-100 % of a core and the SoC at 80-85 C with the
+  firmware's soft temperature limit active (passive heatsink only).
+- **Lazy encoding (same day):** `cameras.py` now stores the raw YUYV frame (OpenCV's RGB conversion
+  switched off, 2 driver buffers) and converts/encodes on first use, cached per frame; `_Frame.encode(q, w)`
+  resizes straight from the BGR frame and the Pi's snapshot route uses it (no decode of a full JPEG
+  first: `?q=70&w=960` went from 24 ms to 11 ms). Result at 1080p@30: worker 29.8 fps, service ~20-27 %
+  of a core with nobody watching, ~30 % with one viewer pulling 960-wide frames at 4-5 fps, SoC ~72 C
+  and falling (from 84). The vendored copy is `src/server/cameras.py` in this folder.
+- **Thermal route:** `src/server/thermal.py` (GET /health/thermal, installer
+  `scripts/install_thermal_router.py`) reports temp, `vcgencmd get_throttled` flags (now / since boot),
+  clock, load and the service's CPU. BIMS: `/api/robot-arm/thermal`, chip on the camera card
+  (`PiThermalChip.svelte`), episodes in `device_events` as `robot_arm.thermal`.
 - AprilTag detection at 1080p (6 live frames, 8 mm tags at ~300 mm = ~35 px): 1x finds the same tags as
   2x (26 ms vs 97 ms detect). `APRILTAG_UPSCALE` stays 2 for tags farther away; drop it to 1.5 or 1 if
   the Pi gets too hot.

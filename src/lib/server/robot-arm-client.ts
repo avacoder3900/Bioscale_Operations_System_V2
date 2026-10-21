@@ -483,6 +483,28 @@ export interface CameraStatus {
 	error: string | null;
 }
 
+// GET /health/thermal — mirrors robot-arm/src/server/thermal.py: SoC
+// temperature, the firmware's throttle flags (now / since boot), clock and
+// the service's own CPU use. `level` is the Pi's own summary.
+export interface ArmThermal {
+	temp_c: number | null;
+	level: 'ok' | 'warm' | 'hot' | 'critical';
+	throttled_hex: string | null;
+	/** Active right now: 'throttled' | 'freq_capped' | 'soft_temp_limit' | 'under_voltage'. */
+	now: string[];
+	/** Same names with `_occurred`: ever, since boot. */
+	since_boot: string[];
+	clock_mhz: number | null;
+	clock_max_mhz: number | null;
+	load_1m: number | null;
+	/** This service's CPU use since the previous sample, % of one core (threads add up). */
+	service_cpu_pct: number | null;
+	fan_rpm: number | null;
+	uptime_s: number | null;
+	thresholds: { warm_c: number; hot_c: number; critical_c: number };
+	sampled_at: number;
+}
+
 // AprilTag detection, mirroring robot-arm/src/server/apriltags.py (ARM-05).
 export interface AprilTagDetectRequest {
 	/** tag id → black-square edge, mm. Tags without a size come back with pose null. */
@@ -574,6 +596,8 @@ export const robotArm = {
 		robotArmFetch<PreflightResult>('/replay/preflight', { method: 'POST', body }),
 	getPose: () => robotArmFetch<ArmPose>('/pose'),
 	listServos: () => robotArmFetch<ServoState[]>('/servos'),
+	// sysfs + vcgencmd only; touches no bus. 404 until install_thermal_router.py has run on the Pi.
+	getThermal: (opts: { timeoutMs?: number } = {}) => robotArmFetch<ArmThermal>('/health/thermal', { timeoutMs: opts.timeoutMs ?? 3000 }),
 	jogCartesian: (body: {
 		dx_mm: number;
 		dy_mm: number;

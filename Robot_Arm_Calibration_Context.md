@@ -35,13 +35,13 @@ The ARM-03/04 Mongo collections (`robot_arm_home_calibrations`, `robot_arm_marke
 - **Camera:** Intel RealSense **D415** on arm-pi (Raspberry Pi 5). Colour is `/dev/video4`, depth is `/dev/video0`.
 - **Link is USB 3.0 since 2026-10-21** (5000M on bus 004; a USB 3 cable into a blue port). Colour streams at **1920×1080 @ 30 fps** (`hardware.yaml`, backup `.bak-720p15`). History: USB 2.0 capped colour at 640×480@30 / 720p@15 / 1080p@8, and the stream ran 640×480 until 2026-10-20, then 720p@15.
 - Focal length ≈ **1366 px at 1920×1080** (factory intrinsics file, `calibrations/realsense_color_intrinsics.json`); 910 px at 1280×720, 615 px at 640×480.
-- **Pi 5 has no fan.** At 1080p the service runs one core at ~85 % and the SoC sat at 74–77 °C (from 62 °C at 720p@15); throttling starts at 85 °C. A fan or heatsink is advisable before adding more vision load.
+- **Pi 5 has only a passive heatsink.** Encoding every 1080p frame ran one core at 85–100 % and the SoC reached 84 °C with the firmware's soft temperature limit active (2026-10-21). Since then `cameras.py` encodes lazily (the capture thread only copies the raw YUYV frame; colour conversion and JPEG happen on first use, cached per frame), so an unwatched 1080p@30 camera costs ~20–27 % of a core and the SoC sat at ~72 °C. `GET /health/thermal` (`src/server/thermal.py`) reports temperature, throttle flags, clock and service CPU; BIMS shows it as a chip on the camera card of every arm tab and logs hot/critical episodes to `device_events` (eventType `robot_arm.thermal`). The firmware throttles from 80 °C, hard-limits at 85 °C.
 - **Tags are at most 1 ft (~300 mm) from the camera** (operator, 2026-10-20).
 - **Tag sheet:** `services/robot-arm/calibration/apriltag-sheet.{html,pdf}`, generator `scripts/make_apriltag_sheet.py`.
   - IDs 0–53 in order, nine per size: **0–8: 40 mm, 9–17: 30, 18–26: 20, 27–35: 15, 36–44: 12, 45–53: 8** (edge of the black square).
   - Each ID goes on one spot only. Print at 100 % on matte paper, laser preferred.
 - **Smallest reliable tag** ≈ 24 × distance / focal length. At 1 ft and 1920×1080 that is **~5 mm**, so every sheet size reads; the 8 mm tags are ~35 px across at 300 mm. (At 640×480 it was ~12 mm, and the 8 mm tags needed 1280×720.) Use 20–40 mm tags for fixed references; pose precision grows with size. Detection still runs on a 2× enlargement (`APRILTAG_UPSCALE`, ~135 ms per frame at 1080p incl. the grab; 1× found the same tags in ~25 ms on 2026-10-21, kept at 2× for tags farther than 1 ft).
-- **Pi camera code is not in this repo.** `~/robot-arm/src/server/cameras.py` and `src/config/hardware.yaml` live only on the Pi, and the Pi's `app.py` differs from the repo copy. Read the Pi's files before editing.
+- **Pi camera code:** `services/robot-arm/src/server/cameras.py` is now a vendored copy of the Pi's (lazy-encoding version, 2026-10-21); `src/config/hardware.yaml` lives only on the Pi, and the Pi's `app.py` differs from the repo copy (its snapshot route calls `frame.encode(q, w)`; backup `app.py.bak-lazy`). Read the Pi's files before editing.
 
 ## 4. How ARM-05 works
 

@@ -12,6 +12,8 @@
  *     opens the bus. Capped at 3s here rather than the client default of 8s.
  *   - /cameras — cameras.py status() explicitly does not start workers and
  *     does not touch the servos.
+ *   - /health/thermal — sysfs + vcgencmd on the Pi; feeds the heat/throttle
+ *     chip on the camera card. 404 until the route is installed on the Pi.
  *
  * Everything else (getActive, getCalibration, getJointMap) stays in the child
  * loads where its budget is already accounted for. Deduplicating getActive
@@ -24,16 +26,17 @@
  */
 import { redirect } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
-import { robotArm, type ArmPreflight, type CameraStatus } from '$lib/server/robot-arm-client';
+import { robotArm, type ArmPreflight, type ArmThermal, type CameraStatus } from '$lib/server/robot-arm-client';
 import type { LayoutServerLoad } from './$types';
 
 export const load: LayoutServerLoad = async ({ locals }) => {
 	if (!locals.user) redirect(302, '/login');
 	requirePermission(locals.user, 'manufacturing:read');
 
-	const [preflightResult, camerasResult] = await Promise.allSettled([
+	const [preflightResult, camerasResult, thermalResult] = await Promise.allSettled([
 		robotArm.preflight({ timeoutMs: 3000 }),
-		robotArm.listCameras()
+		robotArm.listCameras(),
+		robotArm.getThermal({ timeoutMs: 3000 })
 	]);
 
 	const preflight: ArmPreflight | null =
@@ -65,6 +68,10 @@ export const load: LayoutServerLoad = async ({ locals }) => {
 				: 'Unreachable'
 			: null;
 
+	// Soft as well: a Pi without the thermal route (404) or a slow answer just
+	// means no chip until the client-side poll gets one.
+	const thermal: ArmThermal | null = thermalResult.status === 'fulfilled' ? thermalResult.value : null;
+
 	return {
 		arm: {
 			reachable: preflight !== null,
@@ -72,6 +79,7 @@ export const load: LayoutServerLoad = async ({ locals }) => {
 			error: armError
 		},
 		cameras,
-		camerasError
+		camerasError,
+		thermal
 	};
 };
