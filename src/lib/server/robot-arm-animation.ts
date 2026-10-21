@@ -17,7 +17,7 @@
  */
 import { connectDB, AuditLog, generateId } from '$lib/server/db';
 import { RobotArmMoveSet, RobotArmPose, RobotArmSequence } from '$lib/server/db/models';
-import { robotArm, type RecordingSidecar, type ServoState } from './robot-arm-client';
+import { recordingStem, robotArm, type RecordingSidecar, type ServoState } from './robot-arm-client';
 import { DEFAULT_JOINT_NAMES } from '$lib/robot-arm/recording-cleanup';
 import {
 	autoDurationS,
@@ -562,10 +562,14 @@ async function writeAndPlay(user: User, o: { title: string; keyframes: ResolvedK
 	} catch (err) {
 		throw new AnimateError(`The Pi did not take the path: ${(err as Error).message}`, 502);
 	}
+	// Replay by the absolute path the Pi lists, exactly as the Control tab does:
+	// the live Pi's replay does not find a restored recording by bare name
+	// (seen 2026-10-21: "400: recording not found: animate-preview").
+	const source = await recordingPath(PREVIEW_RECORDING);
 	let runId: string;
 	try {
 		// The path starts where the arm is, so preflight (±50 steps of frame 0) passes by construction.
-		const started = await robotArm.startReplay({ source: PREVIEW_RECORDING, loops: 1, triggered_by: opRef(user), enforce_preflight: true, preflight_tolerance_steps: 50 });
+		const started = await robotArm.startReplay({ source, loops: 1, triggered_by: opRef(user), enforce_preflight: true, preflight_tolerance_steps: 50 });
 		runId = started.run_id;
 	} catch (err) {
 		const msg = (err as Error).message ?? String(err);
@@ -582,6 +586,24 @@ async function writeAndPlay(user: User, o: { title: string; keyframes: ResolvedK
 		maxStepsPerS: stats.maxStepsPerS
 	});
 	return { runId, durationS: path.durationS, leadInS, frames: out.frames, warnings };
+}
+
+/** The Pi's absolute path for a recording it just accepted; a clear error when it cannot see it. */
+async function recordingPath(name: string): Promise<string> {
+	let recordings;
+	try {
+		recordings = (await robotArm.listRecordings()).recordings ?? [];
+	} catch (err) {
+		throw new AnimateError(`Could not list the Pi's recordings after writing the path: ${(err as Error).message}`, 502);
+	}
+	const rec = recordings.find((r) => recordingStem(r.name) === name);
+	if (!rec?.path) {
+		throw new AnimateError(
+			`The Pi accepted "${name}" but does not list it among its recordings — its restore route is saving to a different folder than replay reads. On arm-pi, check BIMS_ARM_RECORDINGS_DIR for the service and recordings_admin.py.`,
+			502
+		);
+	}
+	return rec.path;
 }
 
 /** Play a move set from wherever the arm is now. The arm MOVES. */

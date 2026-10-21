@@ -21768,3 +21768,13 @@ UI: Animate tab (layout tab added), /animate (playback bar, capture panel with t
 shaded, playhead) rendered client-side from the same engine; Playback class (playback.svelte.ts) polls ?/playback.
 Docs: docs/prds/ARM-06-animate.md; context doc §6b. npm run check: 14 errors, none in touched files. Unit: robot-arm
 suites pass incl. 13 new. Not yet run on the arm; hold route not installed.
+
+================================================================================
+2026-10-21 — fix/arm-animate-replay-path — Animate Play: "400: recording not found: animate-preview"
+================================================================================
+First Play on the arm: the Pi accepted the restore but /replay/start answered 400 recording not found. The Control tab
+replays by the absolute `path` from GET /recordings (its <option value={r.path}>), never by bare name; the live Pi's
+replay evidently does not resolve a restored recording by name even though the repo copy of recordings.py would.
+Fix (robot-arm-animation.ts): after the restore, list the Pi's recordings and replay by the listed path
+(recordingPath()); if the name is not listed, say so (restore folder != replay folder) instead of a bare 400.
+npm run check: 14 errors, none in touched files. Unit: robot-arm suites 113/113. Not yet re-tried on the arm.
