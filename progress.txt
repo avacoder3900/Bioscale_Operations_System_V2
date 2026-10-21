@@ -21635,7 +21635,12 @@ the frame size from the Pi's status; the intrinsics file already carried 1920x10
 2. Found: the worker published exactly 15 fps at 1080p although v4l2 negotiated 30. Cause: cameras.py set
    CAP_PROP_BUFFERSIZE 1, so while the capture thread converts + JPEG-encodes a frame (~25 ms at 1080p) the driver
    has no buffer for the next one and drops it. cameras.py now uses 2 buffers (backup cameras.py.bak-pre-buffer2);
-   backlog stays <= 1 frame. Applied on disk; the restart waited for the teleop session to end (see below).
+   backlog stays <= 1 frame. Restarted at 21:24Z once GET /sessions/active was null (a teleop session ran for
+   ~8 min in between; GET /servos answered 200 during it, so it is not a session gate). Result: worker 29.8 fps
+   at 1920x1080 (frames counter over 10 s), stream.mjpg on loopback 131 frames / 6 s, `?q=70&w=960` snapshot 20 ms.
+   Cost: uvicorn 70-100 % of one core, SoC 79-80 C over 2 min with one 1800 MHz throttle sample (Pi 5 soft limit
+   80 C, hard 85 C). Left at 1080p@30; fallback if it runs hot is `fps: 15` in hardware.yaml (camera's own 1080p@15
+   mode, halves the work; 720p@15 measured 62 C) or APRILTAG_UPSCALE=1.
 Measured on arm-pi at 1080p: full still 140 KB (2 ms), `?q=70&w=960` 40 KB (24 ms re-encode), JPEG encode 11 ms /
 decode 15 ms, uvicorn ~85 % of one core. AprilTag detect route 134-140 ms at the default 2x upscale (was 60 ms at
 720p), 9 tags incl. all the 8 mm ones (~35 px across at ~300 mm); pose z vs depth agree within ~5 mm. Sweep over 6
@@ -21647,6 +21652,10 @@ Branch catch-up: feat/arm-depth-combined's b964db12 (vision calibration relies o
 with Sam's six Return-to-home PRs (#107-#114) in 11 hunks of robot-arm-vision.ts plus home-calibration.ts/.test.ts
 and the tag-calibration model; merge aborted, left for a deliberate re-port. The depth zero-baseline panel
 (496b08e8 + the view-rotation commit e5b4feaf) also still lives only on that branch.
+Deployment: production — via Vercel GitHub integration on push to master (docs-only change in BIMS)
+Source: branch feat/arm-camera-1080p @ commit (see git log feat/arm-camera-1080p --oneline), fast-forwarded to master
+Retrieve this exact code: git checkout feat/arm-camera-1080p
+What this deployment is for: nothing user-visible in BIMS; the camera change itself lives on arm-pi (hardware.yaml + cameras.py)
 
 ================================================================================
 2026-10-21 — fix/arm-home-encoders-via-servos — Return to home failed: robot-arm 501 from GET /pose
