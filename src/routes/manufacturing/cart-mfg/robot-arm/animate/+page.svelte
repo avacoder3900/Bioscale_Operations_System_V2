@@ -212,7 +212,12 @@
 
 	<!-- POSES -->
 	<section class="rounded border p-3 sm:p-4" style="border-color: var(--color-tron-border); background: var(--color-tron-surface);">
-		<h2 class="text-sm font-semibold tracking-wide" style="color: var(--color-tron-text)">POSES</h2>
+		<details class="group">
+		<summary class="flex cursor-pointer list-none items-center gap-2 select-none [&::-webkit-details-marker]:hidden">
+			<span class="text-xs transition-transform group-open:rotate-90" style="color: var(--color-tron-text-secondary)">▶</span>
+			<h2 class="text-sm font-semibold tracking-wide" style="color: var(--color-tron-text)">POSES</h2>
+			<span class="text-xs" style="color: var(--color-tron-text-secondary)">({activePoses.length})</span>
+		</summary>
 		{#if !activePoses.length}
 			<p class="mt-2 text-xs" style="color: var(--color-tron-text-secondary)">No poses yet — capture one above.</p>
 		{/if}
@@ -260,6 +265,7 @@
 				</ul>
 			{/if}
 		{/if}
+		</details>
 	</section>
 
 	<!-- MOVE SETS -->

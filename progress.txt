@@ -21944,3 +21944,13 @@ Source: branch feat/animate-pose-with-leader @ commit ba4f6b40
 Retrieve this exact code: git checkout feat/animate-pose-with-leader at commit ba4f6b40
   (or: git log feat/animate-pose-with-leader --oneline to find it if the branch has since moved on)
 What this deployment is for: Animate tab capture panel — "Pose with the control arm" (teleop), Save pose, Done
+
+================================================================================
+2026-10-21 — feat/animate-pose-collapse — Animate: pose library is a collapsible drop-down
+================================================================================
+The POSES section on the robot-arm Animate tab (manufacturing/cart-mfg/robot-arm/animate/+page.svelte)
+is now a native <details> drop-down, collapsed by default so the long pose list no longer pushes Move
+Sets and Sequences off screen. The header shows a rotating chevron and the active pose count; edit /
+go to / archive and the archived-poses toggle all sit inside unchanged. <details> keeps its open state
+across use:enhance updates, so editing a pose does not snap it shut. UI-only, no server change.
+npm run check (svelte-check direct): 14 errors / 430 warnings = baseline, none in the Animate page.
