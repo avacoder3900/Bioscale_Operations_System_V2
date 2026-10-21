@@ -21669,6 +21669,10 @@ frame whether or not anyone watched (+ viewers' ?w= re-encodes decoded the full 
 What BIMS cannot see: the kernel's critical trip (~110 C) powers the Pi off — that shows up as "arm unreachable" in the
 existing connection log, after a 'critical' thermal row. The Pi stops no services on its own.
 npm run check: 13 errors (baseline 14), none in touched files. robot-arm suites 90/90.
+Deployment: production — via Vercel GitHub integration on push to master
+Source: branch feat/arm-vision-servos-and-camera @ commit e6ec9afc (+ merge 704a00ef), fast-forwarded to master
+Retrieve this exact code: git checkout master at commit 704a00ef
+What this deployment is for: servos+camera calibration re-port, and the Pi heat/throttle chip on the arm camera card
 
 ================================================================================
 2026-10-21 — feat/arm-camera-1080p — arm camera to 1920x1080 @ 30 fps over the new USB 3 cable (Pi config + worker buffer fix)
