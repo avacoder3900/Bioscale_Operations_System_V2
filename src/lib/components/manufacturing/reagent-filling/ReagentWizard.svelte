@@ -265,6 +265,18 @@
 	 */
 	const REAGENT_PARAM_DEFAULTS = Object.freeze({ use_tip_calibration: true });
 
+	/**
+	 * The deck's saved calibrator point (cal_x / cal_y / z_cal), shown read-only
+	 * ("auto"). Start overwrites these RTPs from the scanned deck's fixture no
+	 * matter what the form posts, so showing the protocol file default (z_cal 40.8)
+	 * misled operators into thinking a saved probe Z had not taken. Keyed on a
+	 * string so a reload with the same values keeps the panel's contextValues
+	 * identity stable (a new object would re-seed the form and wipe edits).
+	 */
+	const calKey = $derived(JSON.stringify(data.calibrationPreview?.values ?? {}));
+	const calReadonly = $derived(Object.keys(JSON.parse(calKey)));
+	const preScanContext = $derived(Object.freeze({ ...REAGENT_PARAM_DEFAULTS, ...JSON.parse(calKey) }));
+
 	// "Run again": complete the just-finished run (→ Completed, robot freed),
 	// then start a fresh run on the same robot reusing the same assay + protocol
 	// params — landing on barcode scanning. Mirrors the wax flow.
@@ -905,11 +917,20 @@
 				<p class="mt-1 text-xs text-[var(--color-tron-text-secondary)]">
 					Configure the reagent run now. Next you'll scan the reagent batch, then the deck + cartridges — the run starts automatically once the deck is scanned.
 				</p>
+				{#if data.calibrationPreview?.deckId && data.calibrationPreview.values.z_cal != null}
+					<p class="mt-1 text-xs" style="color: var(--color-tron-text-secondary)">
+						Tip-calibrator values marked <span class="text-amber-400">auto</span> are the saved point for
+						{data.calibrationPreview.deckId}{data.calibrationPreview.deckSource === 'last-run'
+							? ' (the last deck scanned on this robot; Start uses the deck you scan)'
+							: ''}.
+					</p>
+				{/if}
 			</div>
 			<ProtocolStartPanel
 				robot={{ _id: data.opentronsRobotId, name: data.robotId }}
 				protocols={data.robotProtocols}
-				contextValues={REAGENT_PARAM_DEFAULTS}
+				contextValues={preScanContext}
+				contextReadonly={calReadonly}
 				lastTipState={data.lastTipState}
 				submitting={submitting}
 				formAction={act('startRun')}
@@ -988,8 +1009,8 @@
 				<ProtocolStartPanel
 					robot={{ _id: data.opentronsRobotId, name: data.robotId }}
 					protocols={data.robotProtocols}
-					contextValues={{ ...REAGENT_PARAM_DEFAULTS, cartridges: data.cartridges.length }}
-					contextReadonly={['cartridges']}
+					contextValues={{ ...preScanContext, cartridges: data.cartridges.length }}
+					contextReadonly={['cartridges', ...calReadonly]}
 					lastTipState={data.lastTipState}
 					submitting={submitting}
 					formAction={act('startRun')}

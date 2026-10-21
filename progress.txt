@@ -21705,3 +21705,16 @@ robot_arm.vision.close_claw). Vision page: new ?/closeClaw action; runReturnHome
 the claw already closed or the arm froze (torque must stay off for the technician); status line shows "Closing the claw
 (final step)" then "Claw closed" / "Claw NOT confirmed closed: <why>". npm run check: 14 errors, none in touched files.
 Unit: robot-arm suites 100/100. Not yet run on the arm.
+2026-10-21 — fix/start-panel-deck-calibration — reagent Start panel shows the deck's saved calibrator point
+================================================================================
+The reagent Start panel seeded cal_x / cal_y / z_cal from the protocol file defaults
+(z_cal 40.8), while Start overwrites them from the scanned deck's TipCalibratorFixture.
+After R04 / DECK-001 zCalReagent was set to 39.8 (probe-only test: X hit 1.9mm, Y hit
+3.2mm; 40.8 missed Y), the panel still said 40.8. New calibrationPreview() runs the same
+lookup (calibrationRtpValues) for the run's deck, or the robot's last scanned deck before
+the scan, and the wizard shows those values read-only ("auto") with the deck named.
+Display only: Start behaviour is unchanged. Verified on R04: run ec1365f3 created with z_cal 39.8.
+Tests: vitest server/opentrons + manufacturing + deck-calibration 105 passed; svelte-check 16 (baseline).
+Deployment: production — via Vercel GitHub integration on push to master
+Source: branch fix/start-panel-deck-calibration, merged to master
+What this deployment is for: Start panel calibration Z matches what the robot gets
