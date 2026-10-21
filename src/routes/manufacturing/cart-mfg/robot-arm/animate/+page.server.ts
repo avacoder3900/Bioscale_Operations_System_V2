@@ -22,9 +22,12 @@ import {
 	poseByHand,
 	readArm,
 	savePoseFromArm,
+	savePoseFromLeader,
 	setMoveSetArchived,
 	setPoseArchived,
 	setSequenceArchived,
+	startLeaderPosing,
+	stopLeaderPosing,
 	stopPlayback,
 	updatePose,
 	AnimateError
@@ -35,12 +38,16 @@ export const load: PageServerLoad = async ({ locals }) => {
 	if (!locals.user) redirect(302, '/login');
 	requirePermission(locals.user, 'manufacturing:read');
 
-	const [poses, moveSets, sequences, arm, active, holder] = await Promise.all([
+	// The Pi's servo driver is not thread-safe and a running session owns the
+	// bus, so the follower is only read when nothing is running.
+	const active = await playbackActive().catch(() => null);
+	const [poses, moveSets, sequences, arm, holder] = await Promise.all([
 		listPoses().catch(() => null),
 		listMoveSets().catch(() => null),
 		listSequences().catch(() => null),
-		readArm().catch((e) => ({ error: (e as Error).message })),
-		playbackActive().catch(() => null),
+		active
+			? Promise.resolve({ error: active.kind === 'teleop' ? 'not read while the follower is following the control arm' : `not read while a ${active.kind} session is running` })
+			: readArm().catch((e) => ({ error: (e as Error).message })),
 		deriveArmHolder().catch(() => null)
 	]);
 
@@ -70,6 +77,47 @@ function failFrom(err: unknown, scope: string) {
 }
 
 export const actions: Actions = {
+	// The follower tracks the control (leader) arm under torque: no sag, no jump.
+	poseWithLeader: async ({ locals }) => {
+		if (!locals.user) return fail(401, { error: 'Unauthorized' });
+		requirePermission(locals.user, 'manufacturing:write');
+		try {
+			const r = await startLeaderPosing(who(locals));
+			return { success: 'The follower is following the control arm. Move it into a pose, name it and press Save pose; press Done when finished.', leaderRunId: r.runId, scope: 'capture' };
+		} catch (err) {
+			return failFrom(err, 'capture');
+		}
+	},
+
+	// Pause the follower where the control arm put it, read it, save, follow again.
+	saveLeaderPose: async ({ request, locals }) => {
+		if (!locals.user) return fail(401, { error: 'Unauthorized' });
+		requirePermission(locals.user, 'manufacturing:write');
+		const d = await request.formData();
+		try {
+			const r = await savePoseFromLeader(who(locals), { name: field(d, 'name'), notes: field(d, 'notes'), resume: field(d, 'resume') !== '0' });
+			return {
+				success: `Pose "${r.pose.name}" saved.${r.resumed ? ' Following the control arm again — move it to the next pose.' : ''}`,
+				warning: r.warning,
+				scope: 'capture'
+			};
+		} catch (err) {
+			return failFrom(err, 'capture');
+		}
+	},
+
+	// Done posing: the follower holds its last pose under torque; the control arm stays limp.
+	stopLeaderPosing: async ({ locals }) => {
+		if (!locals.user) return fail(401, { error: 'Unauthorized' });
+		requirePermission(locals.user, 'manufacturing:write');
+		try {
+			const r = await stopLeaderPosing(who(locals));
+			return { success: r.stoppedRunId ? 'Done. The follower is holding its last pose; the control arm is limp.' : 'The follower was not following the control arm.', scope: 'capture' };
+		} catch (err) {
+			return failFrom(err, 'capture');
+		}
+	},
+
 	// Torque OFF so the operator can move the arm. The arm sags.
 	poseByHand: async ({ locals }) => {
 		if (!locals.user) return fail(401, { error: 'Unauthorized' });

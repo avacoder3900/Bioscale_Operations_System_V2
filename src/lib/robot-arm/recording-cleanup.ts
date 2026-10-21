@@ -7,12 +7,28 @@
  * only thing this module decides is how a step is played back: every servo in
  * the step moves together, in a straight line from where it was to its target,
  * over the step's duration. Nothing is smoothed or dropped on the way.
+ *
+ * For a smooth version, `draftToAnimation` hands the same steps to the Animate
+ * engine (animation.ts): each step's end pose becomes a saved pose and the
+ * step's time and wait become a keyframe's duration and hold, so the operator
+ * can finish it in the Animate tab with easings and the rendered path.
  */
 import {
 	type RecordingHeader,
 	type ServoId,
 	type StepResult
 } from './recording-steps';
+import {
+	isEasing,
+	maxDelta,
+	minDurationS,
+	MAX_HOLD_S,
+	MAX_KEYFRAMES,
+	MAX_STEPS_PER_S,
+	MAX_TRANSITION_S,
+	MIN_TRANSITION_S,
+	type Easing
+} from './animation';
 
 export const SERVO_IDS: ServoId[] = [1, 2, 3, 4, 5, 6];
 export const DEFAULT_JOINT_NAMES = [
@@ -127,6 +143,99 @@ export function resolveSteps(draft: CleanDraft): { steps: ResolvedStep[]; durati
 		return out;
 	});
 	return { steps, durationS: t, end: pose };
+}
+
+// ── to the Animate tab ───────────────────────────────────────────────────
+
+export interface AnimationPose {
+	/** 'start' for the pose the replay begins from, else 'step N' plus the operator's label. */
+	label: string;
+	/** Encoder steps, servo ids 1..6 at index 0..5. */
+	positions: number[];
+	/** Step number this pose is the end of (0 = start pose). */
+	step: number;
+}
+
+export interface AnimationKeyframe {
+	/** Index into AnimationDraft.poses. */
+	pose: number;
+	/** Seconds for the move into the pose (the first keyframe's is ignored at render). */
+	durationS: number;
+	/** Seconds to stay there once reached. */
+	holdS: number;
+	easing: Easing;
+}
+
+export interface AnimationDraft {
+	poses: AnimationPose[];
+	keyframes: AnimationKeyframe[];
+	/** Step numbers whose moves added up to nothing; their time was folded into the previous hold. */
+	folded: number[];
+	/** Step numbers whose time was lengthened to the slowest the arm can do (MAX_STEPS_PER_S). */
+	lengthened: number[];
+}
+
+export const DEFAULT_ANIMATION_EASING: Easing = 'ease';
+
+/**
+ * The steps as Animate poses + keyframes. Pose 0 is the start pose, then one
+ * pose per step that moves something, at the step's end position for every
+ * servo (resolveSteps). Keyframe duration = the step's time, never shorter
+ * than the arm can physically do; hold = the step's pause. A step that ends
+ * where it started is not a pose: its time and pause extend the previous
+ * hold. Positions are the draft's; nothing is smoothed here — the Animate
+ * engine renders the easing between poses at play time.
+ */
+export function draftToAnimation(draft: CleanDraft, o: { easing?: unknown } = {}): AnimationDraft {
+	const easing: Easing = isEasing(o.easing) ? o.easing : DEFAULT_ANIMATION_EASING;
+	const start = SERVO_IDS.map((sid) => {
+		const v = draft.start[String(sid)];
+		if (!Number.isFinite(v)) throw new Error(`start pose has no position for servo ${sid}`);
+		return Math.round(v);
+	});
+	if (!draft.steps.length) throw new Error('there are no steps to animate');
+
+	const poses: AnimationPose[] = [{ label: 'start', positions: start, step: 0 }];
+	const keyframes: AnimationKeyframe[] = [{ pose: 0, durationS: 1, holdS: 0, easing }];
+	const folded: number[] = [];
+	const lengthened: number[] = [];
+
+	const { steps } = resolveSteps(draft);
+	for (const rs of steps) {
+		const prev = poses[poses.length - 1].positions;
+		const after = SERVO_IDS.map((sid, i) => {
+			const v = rs.after[String(sid)];
+			return Number.isFinite(v) ? Math.round(v) : prev[i];
+		});
+		const last = keyframes[keyframes.length - 1];
+		if (maxDelta(prev, after) === 0) {
+			last.holdS = Math.min(MAX_HOLD_S, roundTenth(last.holdS + rs.step.durationS + rs.step.pauseAfterS));
+			folded.push(rs.number);
+			continue;
+		}
+		const min = minDurationS(prev, after, MAX_STEPS_PER_S, easing);
+		if (min > MAX_TRANSITION_S) {
+			throw new Error(`step ${rs.number} moves too far for one keyframe (needs ${min} s, limit ${MAX_TRANSITION_S} s); split it in the editor`);
+		}
+		let durationS = Math.max(MIN_TRANSITION_S, roundTenth(rs.step.durationS));
+		if (durationS < min) {
+			durationS = min;
+			lengthened.push(rs.number);
+		}
+		durationS = Math.min(MAX_TRANSITION_S, durationS);
+		const label = rs.step.label.trim();
+		poses.push({ label: `step ${rs.number}${label ? ` ${label}` : ''}`, positions: after, step: rs.number });
+		keyframes.push({
+			pose: poses.length - 1,
+			durationS,
+			holdS: Math.min(MAX_HOLD_S, roundTenth(Math.max(0, rs.step.pauseAfterS))),
+			easing
+		});
+		if (keyframes.length > MAX_KEYFRAMES) {
+			throw new Error(`a move set holds at most ${MAX_KEYFRAMES} poses; this clean-up has more steps than that`);
+		}
+	}
+	return { poses, keyframes, folded, lengthened };
 }
 
 /** Throws with an operator-readable message when the draft cannot be saved. */

@@ -65,16 +65,17 @@ Env knobs: `APRILTAG_SELF_URL` (default `http://127.0.0.1:8000`), `APRILTAG_FX/F
 
 ## 4. Tag size vs distance
 
-The stream is 640×480 (USB 2.0 link; D415 colour f ≈ 615 px there). A 36h11 black square is 8 cells and
-the detector wants ~3 px/cell, so the smallest reliable tag is `24 × distance / f`:
+The stream is 1920×1080 since 2026-10-21 (USB 3 link; D415 colour f ≈ 1366 px there). It was 640×480
+(f ≈ 615) on USB 2.0 until 2026-10-20 and 1280×720 @ 15 fps for one day. A 36h11 black square is 8 cells
+and the detector wants ~3 px/cell, so the smallest reliable tag is `24 × distance / f`:
 
-| distance | min tag (640×480) | min tag (1280×720, f≈920) |
-|---|---|---|
-| 150 mm | 6 mm | 4 mm |
-| 300 mm (1 ft) | 12 mm | 8 mm |
+| distance | min tag (640×480) | min tag (1280×720, f≈920) | min tag (1920×1080, f≈1366) |
+|---|---|---|---|
+| 150 mm | 6 mm | 4 mm | 3 mm |
+| 300 mm (1 ft) | 12 mm | 8 mm | 5 mm |
 
-At ≤ 1 ft every sheet size from 12 mm up should read on today's stream; the 8 mm tags need 1280×720
-(USB 3, or a still-capture mode). The Calibrate preview flags any tag that is small for its distance.
+At ≤ 1 ft every sheet size reads at 1080p (the 8 mm tags are ~35 px across at 300 mm; measured
+2026-10-21). The Calibrate preview flags any tag that is small for its distance.
 Pose precision also grows with tag size: prefer the 20–40 mm tags for the fixed references.
 
 ## 5. Files

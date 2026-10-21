@@ -353,7 +353,10 @@ export async function dropTipInTrash(t: Ot2Transport, runId: string, pipetteId: 
 		{ pipetteId, addressableAreaName: 'fixedTrash', offset: { x: 0, y: 0, z: 0 }, alternateDropLocation: false },
 		{ waitUntilComplete: true, timeoutMs: 30_000 }
 	);
-	await sendMaintenanceCommand(t, runId, 'dropTipInPlace', { pipetteId }, { waitUntilComplete: true, timeoutMs: 30_000 });
+	// homeAfter: home the plunger after the eject, as the OT-2 Python API's
+	// drop_tip() does. The GEN2 ejector is driven by the plunger; left part-way
+	// down, the sleeve stops the next pick-up from seating the tip (Studio Swap tip).
+	await sendMaintenanceCommand(t, runId, 'dropTipInPlace', { pipetteId, homeAfter: true }, { waitUntilComplete: true, timeoutMs: 30_000 });
 }
 
 // ── maintenance-run lifecycle + labware (was maintenance.ts) ────────────────

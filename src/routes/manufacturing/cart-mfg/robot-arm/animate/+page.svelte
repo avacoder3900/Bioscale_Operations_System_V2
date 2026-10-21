@@ -2,8 +2,9 @@
 	/**
 	 * Robot Arm — Animate tab (ARM-06).
 	 *
-	 * Top to bottom: what is playing, capture a pose by hand, the pose
-	 * library, move sets, sequences. See docs/prds/ARM-06-animate.md.
+	 * Top to bottom: what is playing, capture a pose (with the control arm,
+	 * or by hand), the pose library, move sets, sequences. See
+	 * docs/prds/ARM-06-animate.md.
 	 */
 	import { enhance } from '$app/forms';
 	import { onDestroy } from 'svelte';
@@ -26,9 +27,19 @@
 	const posing = $derived(flash?.posing ?? armNow?.torqueOn === false);
 
 	const armReachable = $derived(!!data.arm?.reachable);
-	const busyElsewhere = $derived(data.holder != null || !!data.active);
-	const blocked = $derived(!armReachable || busyElsewhere);
-	const blockReason = $derived(!armReachable ? 'The arm is unreachable — check the connection on the Control tab.' : busyElsewhere ? 'The arm is running something — stop it first.' : '');
+	// A teleop session = the follower is following the control arm, whoever started it.
+	const leaderPosing = $derived((data.active as { kind?: string } | null)?.kind === 'teleop');
+	const busyElsewhere = $derived(!leaderPosing && (data.holder != null || !!data.active));
+	const blocked = $derived(!armReachable || busyElsewhere || leaderPosing);
+	const blockReason = $derived(
+		!armReachable
+			? 'The arm is unreachable — check the connection on the Control tab.'
+			: leaderPosing
+				? 'The follower is following the control arm — press Done first.'
+				: busyElsewhere
+					? 'The arm is running something — stop it first.'
+					: ''
+	);
 
 	const playback = new Playback();
 	onDestroy(() => playback.destroy());
@@ -85,7 +96,7 @@
 	<div>
 		<h1 class="text-2xl font-bold" style="color: var(--color-tron-cyan)">Robot Arm — Animate</h1>
 		<p class="text-xs" style="color: var(--color-tron-text-secondary)">
-			Pose the arm by hand and save poses; chain them into move sets with a hold and an easing per pose; chain move sets into sequences. BIMS tweens the smoothest path between poses and the Pi plays it.
+			Pose the arm with the control arm (or by hand) and save poses; chain them into move sets with a hold and an easing per pose; chain move sets into sequences. BIMS tweens the smoothest path between poses and the Pi plays it.
 		</p>
 	</div>
 
@@ -122,13 +133,14 @@
 	{/if}
 
 	<!-- CAPTURE -->
-	<section class="rounded border p-3 sm:p-4" style="border-color: {posing ? '#f59e0b' : 'var(--color-tron-border)'}; background: var(--color-tron-surface);">
+	<section class="rounded border p-3 sm:p-4" style="border-color: {leaderPosing ? '#4ade80' : posing ? '#f59e0b' : 'var(--color-tron-border)'}; background: var(--color-tron-surface);">
 		<div class="flex flex-wrap items-start justify-between gap-3">
 			<div>
 				<h2 class="text-sm font-semibold tracking-wide" style="color: var(--color-tron-text)">CAPTURE A POSE</h2>
 				<p class="max-w-2xl text-xs" style="color: var(--color-tron-text-secondary)">
-					<b>Pose by hand</b> turns torque off so you can move the arm. It will sag — support it. Move it into the pose, hold it there, type a name and press
-					<b>Save pose</b>: the position is read and torque comes back on without a jump. <b>Hold</b> turns torque on where the arm is without saving.
+					<b>Pose with the control arm</b> makes the follower track the control (leader) arm with torque on, so it never sags and the saved
+					position is where you put it. Move the control arm, name the pose, <b>Save pose</b>; repeat; <b>Done</b> when finished (the follower
+					keeps holding). Posing <b>by hand</b> turns torque off instead: the arm sags and poses can land off; it is kept for when the control arm is not connected.
 				</p>
 			</div>
 			<div class="text-right text-xs" style="color: var(--color-tron-text-secondary)">
@@ -141,34 +153,60 @@
 			</div>
 		</div>
 
-		{#if posing}
+		{#if leaderPosing}
+			<div class="mt-3 rounded border border-emerald-500/60 bg-emerald-900/15 p-3 text-sm text-emerald-200">
+				<b>Following the control arm.</b> The follower is powered and tracking it. Move the control arm into the pose, keep it still, then save. Saving pauses
+				the follower for a moment (it holds), reads it, then follows again.
+			</div>
+		{:else if posing}
 			<div class="mt-3 rounded border border-amber-500/60 bg-amber-900/15 p-3 text-sm text-amber-200">
 				<b>Torque is OFF.</b> Support the arm. Move it into the pose, keep holding it, then save.
 			</div>
 		{/if}
 
 		<div class="mt-3 flex flex-wrap items-end gap-3">
-			{#if !posing}
-				<form method="POST" action="?/poseByHand" use:enhance onsubmit={(e) => { if (!confirm('The arm will go LIMP (torque off). Are you supporting it?')) e.preventDefault(); }}>
-					<button type="submit" class={btn} style={amber} disabled={blocked}>Pose by hand (torque off)</button>
+			{#if leaderPosing}
+				<form method="POST" action="?/saveLeaderPose" use:enhance class="flex flex-wrap items-end gap-2">
+					<input type="hidden" name="resume" value="1" />
+					<label class="block text-xs" style="color: var(--color-tron-text-secondary)">
+						Pose name
+						<input name="name" required maxlength="80" placeholder="e.g. Over tray" class="{input} w-48" style={inputStyle} />
+					</label>
+					<label class="block text-xs" style="color: var(--color-tron-text-secondary)">
+						Notes (optional)
+						<input name="notes" maxlength="500" class="{input} w-56" style={inputStyle} />
+					</label>
+					<button type="submit" class={btn} style={green} disabled={!armReachable}>Save pose</button>
+				</form>
+				<form method="POST" action="?/stopLeaderPosing" use:enhance>
+					<button type="submit" class={btn} style={cyan} disabled={!armReachable} title="Stop following; the follower holds where it is">Done</button>
+				</form>
+			{:else}
+				{#if !posing}
+					<form method="POST" action="?/poseWithLeader" use:enhance onsubmit={(e) => { if (!confirm('The follower will move to wherever the control arm is now, then follow it. Is the control arm roughly matching the follower and is the path clear?')) e.preventDefault(); }}>
+						<button type="submit" class={btn} style={green} disabled={blocked}>Pose with the control arm</button>
+					</form>
+					<form method="POST" action="?/poseByHand" use:enhance onsubmit={(e) => { if (!confirm('The arm will go LIMP (torque off). Are you supporting it?')) e.preventDefault(); }}>
+						<button type="submit" class={btn} style={amber} disabled={blocked}>Pose by hand (torque off)</button>
+					</form>
+				{/if}
+				<form method="POST" action="?/savePose" use:enhance class="flex flex-wrap items-end gap-2">
+					<input type="hidden" name="hold" value={posing ? '1' : '0'} />
+					<label class="block text-xs" style="color: var(--color-tron-text-secondary)">
+						Pose name
+						<input name="name" required maxlength="80" placeholder="e.g. Over tray" class="{input} w-48" style={inputStyle} />
+					</label>
+					<label class="block text-xs" style="color: var(--color-tron-text-secondary)">
+						Notes (optional)
+						<input name="notes" maxlength="500" class="{input} w-56" style={inputStyle} />
+					</label>
+					<button type="submit" class={btn} style={green} disabled={!armReachable}>{posing ? 'Save pose (then torque on)' : 'Save pose from where the arm is'}</button>
+				</form>
+				<form method="POST" action="?/holdArm" use:enhance>
+					<button type="submit" class={btn} style={cyan} disabled={!armReachable} title="Torque on where the arm is, no jump">Hold (torque on)</button>
 				</form>
 			{/if}
-			<form method="POST" action="?/savePose" use:enhance class="flex flex-wrap items-end gap-2">
-				<input type="hidden" name="hold" value={posing ? '1' : '0'} />
-				<label class="block text-xs" style="color: var(--color-tron-text-secondary)">
-					Pose name
-					<input name="name" required maxlength="80" placeholder="e.g. Over tray" class="{input} w-48" style={inputStyle} />
-				</label>
-				<label class="block text-xs" style="color: var(--color-tron-text-secondary)">
-					Notes (optional)
-					<input name="notes" maxlength="500" class="{input} w-56" style={inputStyle} />
-				</label>
-				<button type="submit" class={btn} style={green} disabled={!armReachable}>{posing ? 'Save pose (then torque on)' : 'Save pose from where the arm is'}</button>
-			</form>
-			<form method="POST" action="?/holdArm" use:enhance>
-				<button type="submit" class={btn} style={cyan} disabled={!armReachable} title="Torque on where the arm is, no jump">Hold (torque on)</button>
-			</form>
-			{#if blocked}<span class="text-xs" style="color: #f59e0b">{blockReason}</span>{/if}
+			{#if blocked && !leaderPosing}<span class="text-xs" style="color: #f59e0b">{blockReason}</span>{/if}
 		</div>
 	</section>
 

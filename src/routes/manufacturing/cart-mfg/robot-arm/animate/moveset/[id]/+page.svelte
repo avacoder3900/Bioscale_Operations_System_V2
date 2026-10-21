@@ -7,7 +7,7 @@
 	import { enhance } from '$app/forms';
 	import { onDestroy } from 'svelte';
 	import AnimationCurves from '$lib/components/robot-arm/AnimationCurves.svelte';
-	import { buildPath, minDurationS, pathStats, tooFast, DEFAULT_RATE_HZ, EASINGS, MAX_HOLD_S, MAX_TRANSITION_S, MIN_TRANSITION_S, type Keyframe, type RenderedPath, type ResolvedKeyframe } from '$lib/robot-arm/animation';
+	import { buildPath, minDurationS, pathStats, tooFast, DEFAULT_RATE_HZ, EASINGS, MAX_HOLD_S, MAX_STEPS_PER_S, MAX_TRANSITION_S, MIN_TRANSITION_S, type Keyframe, type RenderedPath, type ResolvedKeyframe } from '$lib/robot-arm/animation';
 	import { DEFAULT_JOINT_NAMES } from '$lib/robot-arm/recording-cleanup';
 	import { Playback } from '$lib/robot-arm/playback.svelte';
 	import type { MoveSetSummary, PoseSummary } from '$lib/server/robot-arm-animation';
@@ -56,7 +56,7 @@
 	});
 	const stats = $derived(render.path ? pathStats(render.path) : null);
 	const problems = $derived(tooFast(resolved));
-	const minFor = (i: number) => (i > 0 && resolved[i - 1] && resolved[i] ? minDurationS(resolved[i - 1].positions, resolved[i].positions) : 0);
+	const minFor = (i: number) => (i > 0 && resolved[i - 1] && resolved[i] ? minDurationS(resolved[i - 1].positions, resolved[i].positions, MAX_STEPS_PER_S, resolved[i].easing) : 0);
 
 	const playback = new Playback();
 	onDestroy(() => playback.destroy());
