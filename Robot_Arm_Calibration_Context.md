@@ -124,6 +124,10 @@ Every mutation writes an AuditLog row (`robot_arm.tag.*`, `robot_arm.vision.*`).
 
 Not calibration, but it shares the arm and the recording pipeline. Poses captured by hand (torque off → move → *Save pose* → `POST /servos/hold`), move sets (poses + duration/easing/hold per keyframe), sequences (move sets + joins). BIMS renders a 30 Hz joint path (`src/lib/robot-arm/animation.ts`: minimum-jerk easing, Catmull-Rom/Hermite *flow*) and the Pi replays it as recording `animate-preview` with a lead-in from wherever the arm is. **Needs the Pi hold route** (`services/robot-arm/src/server/hold.py`, `scripts/install_hold_router.py`): a bare torque-on after hand-posing drives every servo back to its last goal. Full spec: [docs/prds/ARM-06-animate.md](docs/prds/ARM-06-animate.md).
 
+## 6c. Torque on/off on the camera card (2026-10-21)
+
+`src/lib/components/robot-arm/TorqueControl.svelte`, mounted in `RobotArmCameraPanel.svelte` (the arm layout), so it is on every Robot Arm tab, visible even with the picture collapsed. API `src/routes/api/robot-arm/torque/+server.ts`: GET reads `/servos` torque flags; POST `{enable}` → off = `/torque false`; on = `/servos/hold` (goal := present, then torque on) with a plain `/torque true` fallback that warns the servos drive to their last goal. Refused while a session owns the arm. Audit `robot_arm.torque.on/off`.
+
 ## 7. Access and gotchas
 
 - **Reaching the Pi:**
