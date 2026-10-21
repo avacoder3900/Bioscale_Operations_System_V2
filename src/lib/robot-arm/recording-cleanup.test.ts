@@ -3,11 +3,13 @@ import {
 	cleanRecordingName,
 	composeRecording,
 	draftFromSteps,
+	draftToAnimation,
 	resolveSteps,
 	validateDraft,
 	type CleanDraft
 } from './recording-cleanup';
 import { parseRecording, recordingToSteps, type RecordingFrame } from './recording-steps';
+import { buildPath, cleanKeyframes, minDurationS, pathStats, tooFast, MAX_STEPS_PER_S, type ResolvedKeyframe } from './animation';
 
 const START = { '1': 2000, '2': 900, '3': 3000, '4': 900, '5': 2000, '6': 2100 };
 
@@ -145,5 +147,67 @@ describe('draftFromSteps timing', () => {
 		expect(d.steps[0].pauseAfterS).toBeCloseTo(d.steps[1].raw!.tStart - d.steps[0].raw!.tEnd, 1);
 		expect(d.steps[0].pauseAfterS).toBeGreaterThan(0.5);
 		expect(d.steps[1].pauseAfterS).toBe(0);
+	});
+});
+
+describe('draftToAnimation', () => {
+	it('makes the start pose plus one pose per step, at the step end for every servo', () => {
+		const a = draftToAnimation(draft());
+		expect(a.poses.map((p) => p.label)).toEqual(['start', 'step 1 reach', 'step 2']);
+		expect(a.poses[0].positions).toEqual([2000, 900, 3000, 900, 2000, 2100]);
+		expect(a.poses[1].positions).toEqual([2300, 800, 3000, 900, 2000, 2100]);
+		// Servo 2 was not in step 2: it holds where step 1 left it.
+		expect(a.poses[2].positions).toEqual([2200, 800, 3000, 900, 2000, 2100]);
+		expect(a.poses.map((p) => p.step)).toEqual([0, 1, 2]);
+	});
+
+	it('copies each step time and pause into the keyframe duration and hold, easy ease by default', () => {
+		const a = draftToAnimation(draft());
+		expect(a.keyframes.map((k) => k.pose)).toEqual([0, 1, 2]);
+		expect(a.keyframes[1]).toMatchObject({ durationS: 1, holdS: 0, easing: 'ease' });
+		expect(a.keyframes[2]).toMatchObject({ durationS: 0.5, holdS: 0.2, easing: 'ease' });
+		expect(a.folded).toEqual([]);
+		expect(a.lengthened).toEqual([]);
+		// What the server stores passes the Animate tab's own validation.
+		expect(() => cleanKeyframes(a.keyframes.map((k) => ({ ...k, poseId: `p${k.pose}` })))).not.toThrow();
+	});
+
+	it('uses the easing asked for and falls back to easy ease for an unknown one', () => {
+		expect(draftToAnimation(draft(), { easing: 'flow' }).keyframes.every((k) => k.easing === 'flow')).toBe(true);
+		expect(draftToAnimation(draft(), { easing: 'bouncy' }).keyframes[1].easing).toBe('ease');
+	});
+
+	it('lengthens a step the arm cannot do in its time, and the rendered path then stays under the speed limit', () => {
+		const d = draft();
+		d.steps[0] = { id: 'fast', label: '', durationS: 0.1, pauseAfterS: 0, raw: null, moves: [{ servoId: 1, to: 3500, raw: null }] };
+		for (const easing of ['ease', 'linear', 'in'] as const) {
+			const a = draftToAnimation(d, { easing });
+			const min = minDurationS(a.poses[0].positions, a.poses[1].positions, MAX_STEPS_PER_S, easing);
+			expect(min).toBeGreaterThan(0.1);
+			expect(a.keyframes[1].durationS).toBe(min);
+			// Step 2 then brings servo 1 back 1300 steps in 0.5 s, which is also too fast.
+			expect(a.lengthened).toEqual([1, 2]);
+			expect(a.keyframes[2].durationS).toBe(minDurationS(a.poses[1].positions, a.poses[2].positions, MAX_STEPS_PER_S, easing));
+			const resolved: ResolvedKeyframe[] = a.keyframes.map((k) => ({ ...k, poseId: `p${k.pose}`, name: a.poses[k.pose].label, positions: a.poses[k.pose].positions }));
+			expect(pathStats(buildPath(resolved)).tooFast).toEqual([]);
+			expect(tooFast(resolved)).toEqual([]);
+		}
+	});
+
+	it('folds a step that moves nothing into the previous hold instead of making a pose', () => {
+		const d = draft();
+		d.steps.splice(1, 0, { id: 'wait', label: 'settle', durationS: 1, pauseAfterS: 0.5, raw: null, moves: [] });
+		const a = draftToAnimation(d);
+		expect(a.poses).toHaveLength(3);
+		expect(a.folded).toEqual([2]);
+		expect(a.keyframes[1].holdS).toBeCloseTo(1.5, 9);
+		expect(a.poses[2].label).toBe('step 3');
+	});
+
+	it('refuses a draft with no steps or without a full start pose', () => {
+		expect(() => draftToAnimation({ start: { ...START }, steps: [] })).toThrow(/no steps/);
+		const d = draft();
+		delete d.start['3'];
+		expect(() => draftToAnimation(d)).toThrow(/servo 3/);
 	});
 });

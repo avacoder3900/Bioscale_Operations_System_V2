@@ -15,7 +15,8 @@ import {
 	readArm,
 	resplitCleanup,
 	saveCleanup,
-	saveToPi
+	saveToPi,
+	sendToAnimate
 } from '$lib/server/robot-arm-cleanup';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -99,6 +100,24 @@ export const actions: Actions = {
 			if (payload) await saveCleanup(locals.user, params.id, payload);
 			const savedAs = await saveToPi(locals.user, params.id, data.get('name')?.toString() ?? '');
 			return { saved: true, savedAs };
+		} catch (err) {
+			return failed(err);
+		}
+	},
+
+	// Poses + a move set in the Animate tab from the steps on screen. Does not touch the arm.
+	toAnimate: async ({ request, locals, params }) => {
+		if (!locals.user) return fail(401, { error: 'Unauthorized' });
+		requirePermission(locals.user, 'manufacturing:write');
+		const data = await request.formData();
+		try {
+			const payload = data.get('payload')?.toString();
+			if (payload) await saveCleanup(locals.user, params.id, payload);
+			const animate = await sendToAnimate(locals.user, params.id, {
+				name: data.get('name')?.toString() ?? '',
+				easing: data.get('easing')?.toString() ?? ''
+			});
+			return { saved: true, animate };
 		} catch (err) {
 			return failed(err);
 		}

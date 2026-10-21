@@ -21768,3 +21768,29 @@ UI: Animate tab (layout tab added), /animate (playback bar, capture panel with t
 shaded, playhead) rendered client-side from the same engine; Playback class (playback.svelte.ts) polls ?/playback.
 Docs: docs/prds/ARM-06-animate.md; context doc §6b. npm run check: 14 errors, none in touched files. Unit: robot-arm
 suites pass incl. 13 new. Not yet run on the arm; hold route not installed.
+
+================================================================================
+2026-10-21 — feat/cleanup-to-animate — Clean-up tab: "Send to Animate" turns a cleaned recording into a smooth, adjustable move set
+================================================================================
+Operator asked that the Clean-up tab use the Animate engine so a recording ends up as a smoothed, cleaned-up file that can be
+adjusted in the Animate tab. Clean-up's own Save to Pi plays each step as a straight line and stops dead (composeRecording);
+Animate renders min-jerk easing between poses but only knew poses captured by hand. Bridge, pure first:
+draftToAnimation(draft, {easing}) in src/lib/robot-arm/recording-cleanup.ts — pose 0 = the draft's start pose, then one pose
+per step that moves something, at the step's end position for all six servos (resolveSteps, so a servo not in the step holds);
+keyframe duration = the step's time raised to minDurationS where the recording was faster than the arm (reported as
+`lengthened`), hold = the step's pause; a step whose moves add up to nothing is folded into the previous hold (`folded`).
+Server sendToAnimate (robot-arm-cleanup.ts): validates the saved draft, inserts RobotArmPose rows ("<name> · start",
+"<name> · step N <label>", "(2)"-suffixed if a live pose already has the name — the Animate tab enforces unique names),
+creates the RobotArmMoveSet with the clean-up's rateHz and an origin note, $pushes moveSets[] on the clean-up (new schema
+field), audits three rows (robot_arm.animate.pose_save_from_cleanup, robot_arm.animate.move_set_create,
+robot_arm.cleanup.send_to_animate). Page action ?/toAnimate saves what is on screen first (like saveToPi), then the editor
+navigates to /animate/moveset/[id]. UI: third card in the cleanup editor's bottom row (name, easing select from EASINGS,
+live preview of pose count / length / lengthened / folded from the draft on screen, links to move sets already made).
+Found and fixed while testing: the Animate engine's minDurationS used the AVERAGE speed (delta / 2000 steps/s) but play
+refuses a path by its per-frame PEAK (pathStats), and easy ease peaks at 1.875x average — so a move set at exactly the
+editor's "at least N s" was refused at play. minDurationS now takes the arrival easing and multiplies by peakSpeedFactor
+(ease/flow 1.875, in/out 3, linear 1); tooFast and the move-set editor's minFor pass the keyframe's easing; two existing
+expectations in animation.test.ts updated (0.2 -> 0.3 s for 300 steps; 'at least 1.5 s' -> '2.9 s' for 3000 steps) and a
+new test proves a path rendered at the minimum passes pathStats for every stop easing. Tests: +6 draftToAnimation, +1
+durations; robot-arm unit suites 83 passed. svelte-check 14 errors (baseline), none in touched files. Docs: ARM-06 PRD §3
+speed-limit note and new §7 "From the Clean-up tab". Not run against the arm or a live DB (no DB creds locally).
