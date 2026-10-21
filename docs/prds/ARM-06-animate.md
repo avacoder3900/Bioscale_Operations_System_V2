@@ -45,6 +45,10 @@ plays it as an ordinary recording.
   (zero tangent) if it is held, first/last, or if its own or the next pose's easing is not `flow`.
 - **Speed limits:** `MAX_STEPS_PER_S = 2000` (STS3215 no-load ≈ 4000) — a transition that needs more
   is flagged in the editor and refused at play. BIMS's own durations (lead-in, joins) use 600 steps/s.
+  Play checks the rendered path frame by frame, so the editor's "at least N s" (`minDurationS`) is
+  computed from the easing's **peak** speed, not its average: easy ease peaks at 1.875× the average,
+  cubic in/out at 3×, linear at 1× (`peakSpeedFactor`, fixed 2026-10-21 — before this the editor's
+  minimum for easy ease was ~half what play would accept).
 - **Output** is the Pi's recording JSONL: header (`rate_hz`, `joint_names`, `follower_neutral` =
   first frame), one `{"event":"frame","t","goal":[6]}` per frame, footer. The last frame is exactly
   the last pose. Limits: 200 keyframes, 600 s per path.
@@ -75,6 +79,7 @@ says so; BIMS never does a bare torque-on after a by-hand capture. (hold.py reac
 | `src/lib/components/robot-arm/AnimationCurves.svelte` | the path chart |
 | `src/routes/manufacturing/cart-mfg/robot-arm/animate/` | the tab: library + capture; `moveset/[id]`, `sequence/[id]` editors |
 | `services/robot-arm/src/server/hold.py`, `scripts/install_hold_router.py` | Pi route + installer |
+| `src/lib/robot-arm/recording-cleanup.ts` `draftToAnimation`, `src/lib/server/robot-arm-cleanup.ts` `sendToAnimate` | §7: a clean-up's steps as poses + a move set |
 
 Permissions: `manufacturing:read` to view, `manufacturing:write` for everything else. Every mutation
 and every play/stop writes an AuditLog row (`robot_arm.animate.*`).
@@ -89,3 +94,24 @@ and every play/stop writes an AuditLog row (`robot_arm.animate.*`).
 - The scratch `animate-preview` recording is overwritten on every Play; it shows in the Control tab's
   recording list — harmless, but it could be filtered there.
 - Gripper (servo 6) is animated like any joint; a closed-on-cartridge pose will squeeze at full torque.
+
+## 7. From the Clean-up tab (`feat/cleanup-to-animate`, 2026-10-21)
+
+The Clean-up tab's own *Save to Pi* plays each step as a straight line and stops dead. **Send to
+Animate** on a clean-up hands the same steps to this engine instead, so a recording ends up as a
+smooth, adjustable move set:
+
+- `draftToAnimation(draft, {easing})` (pure, `recording-cleanup.ts`, 6 tests): pose 0 is the draft's
+  start pose; every step that moves something becomes one pose at its end position for **all six**
+  servos (`resolveSteps`, so a servo not in the step holds). Keyframe `durationS` = the step's time,
+  raised to `minDurationS` (the 2000 steps/s ceiling) when the recording was faster than the arm can
+  go — those steps are reported as *lengthened*; `holdS` = the step's pause. A step whose moves add up
+  to nothing becomes hold time on the previous pose (*folded*). Easing is one choice for the whole set
+  (default easy ease), changed per pose afterwards in the editor. Limits: 200 keyframes, 60 s per move.
+- `sendToAnimate` (server) saves what is on screen first, then inserts the poses (`"<name> · start"`,
+  `"<name> · step N <label>"`, suffixed `(2)`… if a live pose already has that name), creates the move
+  set with the clean-up's `rateHz` and a note saying where it came from, records the link on the
+  clean-up (`moveSets[]`), and audits all three (`robot_arm.animate.pose_save_from_cleanup`,
+  `robot_arm.animate.move_set_create`, `robot_arm.cleanup.send_to_animate`). The clean-up draft and
+  the source recording are not changed. The page then opens the new move set's editor.
+- Nothing here touches the arm; play / save to Pi happen in the Animate tab as for any move set.

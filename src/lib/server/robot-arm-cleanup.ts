@@ -11,9 +11,13 @@
  *   3. Save to Pi: the draft becomes a NEW recording on the Pi (via the
  *      recording-restore route), replayable from the Control tab. The source
  *      recording is never modified.
+ *   3b. Send to Animate: the draft becomes poses + a move set in the Animate
+ *      tab (robot_arm_poses / robot_arm_move_sets), where the Animate engine
+ *      eases between the poses and the operator can keep adjusting. The
+ *      draft is not changed either.
  */
 import { connectDB, AuditLog, generateId } from '$lib/server/db';
-import { RobotArmRecordingCleanup } from '$lib/server/db/models';
+import { RobotArmMoveSet, RobotArmPose, RobotArmRecordingCleanup } from '$lib/server/db/models';
 import { robotArm, type RecordingSidecar, type ServoState } from '$lib/server/robot-arm-client';
 import { parseRecording, recordingToSteps, DEFAULT_PAUSE_S } from '$lib/robot-arm/recording-steps';
 import {
@@ -21,10 +25,13 @@ import {
 	cleanRecordingName,
 	composeRecording,
 	draftFromSteps,
+	draftToAnimation,
 	joints,
 	validateDraft,
+	type AnimationDraft,
 	type CleanDraft
 } from '$lib/robot-arm/recording-cleanup';
+import { DEFAULT_RATE_HZ } from '$lib/robot-arm/animation';
 
 interface User {
 	_id: string;
@@ -52,9 +59,13 @@ export class CleanupError extends Error {
 }
 
 async function audit(user: User, action: string, recordId: string, details: Record<string, unknown>) {
+	await auditRow(user, 'robot_arm_recording_cleanups', action, recordId, details);
+}
+
+async function auditRow(user: User, tableName: string, action: string, recordId: string, details: Record<string, unknown>) {
 	await AuditLog.create({
 		_id: generateId(),
-		tableName: 'robot_arm_recording_cleanups',
+		tableName,
 		recordId,
 		action,
 		newData: { ...details, userId: user._id },
@@ -192,6 +203,8 @@ export interface CleanupDoc extends CleanDraft {
 	thresholdSteps: number;
 	pauseS: number;
 	savedAs: { name: string; at: string; by?: User; frames?: number; durationS?: number }[];
+	/** Move sets made from this draft (Send to Animate), newest last. */
+	moveSets: { moveSetId: string; name: string; at: string; by?: User; poses?: number; keyframes?: number }[];
 	updatedAt: string;
 	updatedBy: User | null;
 	/** Display trace: times and goals per frame (thinned past MAX_TRACE_POINTS). */
@@ -228,6 +241,7 @@ export async function getCleanup(id: string): Promise<CleanupDoc | null> {
 			start: doc.start ?? {},
 			steps: doc.steps ?? [],
 			savedAs: doc.savedAs ?? [],
+			moveSets: doc.moveSets ?? [],
 			updatedAt: doc.updatedAt,
 			updatedBy: doc.updatedBy ?? null,
 			trace: {
@@ -457,4 +471,102 @@ export async function saveToPi(user: User, id: string, rawName: string) {
 		durationS: out.durationS
 	});
 	return { name: `${name}.jsonl`, frames: out.frames, durationS: out.durationS };
+}
+
+export interface SendToAnimateResult {
+	moveSetId: string;
+	name: string;
+	poses: number;
+	keyframes: number;
+	folded: number[];
+	lengthened: number[];
+}
+
+/** Move-set names are free text in the Animate tab; pose names must be unique among live poses. */
+const ANIMATE_NAME_MAX = 80;
+
+/**
+ * Turn the saved draft into a move set in the Animate tab: one saved pose for
+ * the start and for the end of every step that moves something, and a move
+ * set whose keyframes copy each step's time (lengthened to the arm's speed
+ * limit where needed) and pause. The Animate engine renders the easing
+ * between the poses; the operator adjusts the rest there. The draft is left
+ * as it is.
+ */
+export async function sendToAnimate(user: User, id: string, o: { name: unknown; easing: unknown }): Promise<SendToAnimateResult> {
+	await connectDB();
+	const doc = (await RobotArmRecordingCleanup.findOne({ _id: id, status: 'draft' }).lean()) as Record<string, any> | null;
+	if (!doc) throw new CleanupError('This clean-up no longer exists.', 404);
+	const draft = validateDraft({ start: doc.start, steps: doc.steps });
+	if (!draft.steps.length) throw new CleanupError('There are no steps to animate.');
+	let anim: AnimationDraft;
+	try {
+		anim = draftToAnimation(draft, { easing: o.easing });
+	} catch (err) {
+		throw new CleanupError((err as Error).message);
+	}
+	const fallback = String(doc.title || doc.sourceName || '').replace(/\.jsonl$/i, '');
+	const name = (String(o.name ?? '').trim() || fallback).slice(0, ANIMATE_NAME_MAX);
+	if (!name) throw new CleanupError('Give the move set a name.');
+
+	// The Animate tab refuses a second live pose with the same name (case-insensitive); suffix clashes.
+	const live = (await RobotArmPose.find({ archivedAt: null }).select('name').lean()) as { name: string }[];
+	const taken = new Set(live.map((p) => String(p.name).toLowerCase()));
+	const unique = (base: string) => {
+		let n = base.slice(0, ANIMATE_NAME_MAX);
+		for (let i = 2; taken.has(n.toLowerCase()); i++) {
+			const suffix = ` (${i})`;
+			n = base.slice(0, ANIMATE_NAME_MAX - suffix.length) + suffix;
+		}
+		taken.add(n.toLowerCase());
+		return n;
+	};
+
+	const now = new Date();
+	const source = String(doc.sourceName);
+	const poseDocs = anim.poses.map((p) => ({
+		_id: generateId(),
+		name: unique(`${name} · ${p.label}`),
+		positions: p.positions,
+		notes: p.step === 0 ? `Start pose of clean-up "${source}".` : `End of step ${p.step} of clean-up "${source}".`,
+		createdBy: opRef(user),
+		archivedAt: null
+	}));
+	await RobotArmPose.insertMany(poseDocs);
+	const keyframes = anim.keyframes.map((k) => ({
+		poseId: poseDocs[k.pose]._id,
+		holdS: k.holdS,
+		durationS: k.durationS,
+		easing: k.easing
+	}));
+	const moveSetId = generateId();
+	const notes = [
+		`From clean-up "${source}" (${draft.steps.length} steps). Each step's time and pause became the move into its pose and the hold; adjust them and the easing here.`,
+		anim.lengthened.length ? `Step${anim.lengthened.length > 1 ? 's' : ''} ${anim.lengthened.join(', ')} lengthened to the arm's speed limit.` : '',
+		anim.folded.length ? `Step${anim.folded.length > 1 ? 's' : ''} ${anim.folded.join(', ')} moved nothing and became hold time.` : ''
+	]
+		.filter(Boolean)
+		.join(' ')
+		.slice(0, 500);
+	await RobotArmMoveSet.create({
+		_id: moveSetId,
+		name,
+		notes,
+		keyframes,
+		rateHz: Number(doc.rateHz) || DEFAULT_RATE_HZ,
+		createdBy: opRef(user),
+		updatedBy: opRef(user)
+	});
+	await RobotArmRecordingCleanup.updateOne(
+		{ _id: id },
+		{
+			$push: { moveSets: { moveSetId, name, at: now, by: opRef(user), poses: poseDocs.length, keyframes: keyframes.length } },
+			$set: { updatedBy: opRef(user) }
+		}
+	);
+	const details = { cleanupId: id, sourceName: source, moveSetId, name, poses: poseDocs.length, keyframes: keyframes.length, folded: anim.folded, lengthened: anim.lengthened };
+	await auditRow(user, 'robot_arm_poses', 'robot_arm.animate.pose_save_from_cleanup', moveSetId, { ...details, poseIds: poseDocs.map((p) => p._id) });
+	await auditRow(user, 'robot_arm_move_sets', 'robot_arm.animate.move_set_create', moveSetId, details);
+	await audit(user, 'robot_arm.cleanup.send_to_animate', id, details);
+	return { moveSetId, name, poses: poseDocs.length, keyframes: keyframes.length, folded: anim.folded, lengthened: anim.lengthened };
 }
