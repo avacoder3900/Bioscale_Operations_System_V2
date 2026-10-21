@@ -21770,6 +21770,18 @@ Docs: docs/prds/ARM-06-animate.md; context doc §6b. npm run check: 14 errors, n
 suites pass incl. 13 new. Not yet run on the arm; hold route not installed.
 
 ================================================================================
+2026-10-21 — feat/arm-torque-on-camera-card — torque On/Off on the camera card of every Robot Arm tab
+================================================================================
+Operator: add turn torque on/off to every page of the robot arm, living on the camera card. The card is
+RobotArmCameraPanel.svelte in the arm +layout, so one control there follows the operator across tabs; placed right
+under the card header so it stays visible when the picture is collapsed. New TorqueControl.svelte (reads state on
+mount + after a change, no polling since each read is a bus read; confirm dialogs: OFF = arm goes limp, ON = holds or,
+without the hold route, moves to its last goal) and /api/robot-arm/torque (GET state from /servos torque flags; POST
+{enable}: off -> /torque false; on -> /servos/hold, falling back to a plain /torque true with a warning; 409 while a
+session owns the arm; AuditLog robot_arm.torque.on/off). Context doc §6c. npm run check: 14 errors, none in touched
+files; no warnings in the new files. Not yet tried on the arm.
+
+================================================================================
 2026-10-21 — feat/cleanup-to-animate — Clean-up tab: "Send to Animate" turns a cleaned recording into a smooth, adjustable move set
 ================================================================================
 Operator asked that the Clean-up tab use the Animate engine so a recording ends up as a smoothed, cleaned-up file that can be
@@ -21794,3 +21806,10 @@ expectations in animation.test.ts updated (0.2 -> 0.3 s for 300 steps; 'at least
 new test proves a path rendered at the minimum passes pathStats for every stop easing. Tests: +6 draftToAnimation, +1
 durations; robot-arm unit suites 83 passed. svelte-check 14 errors (baseline), none in touched files. Docs: ARM-06 PRD §3
 speed-limit note and new §7 "From the Clean-up tab". Not run against the arm or a live DB (no DB creds locally).
+Merged origin/master (PR #119, torque on the camera card) into the branch 2026-10-21; only progress.txt conflicted (both
+entries kept, above). PR #120.
+Deployment: preview — https://bioscale-operations-system-mongodb-jwjhyi5ks-brevitest.vercel.app
+Source: branch feat/cleanup-to-animate @ commit 9410f247
+Retrieve this exact code: git checkout feat/cleanup-to-animate at commit 9410f247
+  (or: git log feat/cleanup-to-animate --oneline to find it if the branch has since moved on)
+What this deployment is for: Clean-up editor's "Send to Animate" card and the minDurationS peak-speed fix in the move-set editor
