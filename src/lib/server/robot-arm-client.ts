@@ -588,6 +588,15 @@ export const robotArm = {
 			'/jog/reload-calibration',
 			{ method: 'POST' }
 		),
+	/**
+	 * Torque back on WITHOUT a jump (ARM-06): the Pi writes goal = present on
+	 * every servo, then enables torque — the driver's pause(). Used after the
+	 * operator posed the arm by hand with torque off; a bare setTorque(true)
+	 * would drive every servo back to its last goal. Route from
+	 * services/robot-arm/src/server/hold.py (scripts/install_hold_router.py).
+	 */
+	holdServos: () =>
+		robotArmFetch<{ held: boolean; positions: Record<string, number> }>('/servos/hold', { method: 'POST', timeoutMs: 8000 }),
 	setTorque: (enable: boolean) =>
 		robotArmFetch<{ enabled: boolean }>('/torque', { method: 'POST', body: { enable } }),
 	jogJoint: (sid: number, delta_steps: number, speed?: number) =>

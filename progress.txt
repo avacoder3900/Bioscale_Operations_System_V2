@@ -21745,3 +21745,26 @@ Tests: +7 wellLogWindow; vitest manufacturing/opentrons/robots 110 passed; svelt
 Deployment: production — via Vercel GitHub integration on push to master
 Source: branch feat/post-run-well-log, merged to master
 What this deployment is for: log reagent well mistakes after the run finishes
+
+================================================================================
+2026-10-21 — feat/arm-animate — ARM-06 Animate tab: poses by hand, move sets, sequences, smooth playback
+================================================================================
+Operator asked for an After Effects-style animation tab: physically pose the arm, save poses, tween the smoothest path
+between them, mix move sets into sequences. Audit: the Pi replays recordings (30 Hz `goal` frames) with no smoothing of
+its own and the Clean-up tab already writes recordings via /recordings/restore, so playback = render in BIMS -> restore
+-> /replay/start. Decision (operator): pose the FOLLOWER by hand with torque off. Finding: the Pi's /torque route and
+driver.set_torque_all do NOT snap goal to present, so torque-on after hand-posing would jump the arm to its last goal;
+driver.pause() has the right semantics but no route. New Pi route hold.py (POST /servos/hold) + install_hold_router.py,
+written blind; BIMS leaves torque OFF with a message if the route is missing — never a bare torque-on after capture.
+Pure engine src/lib/robot-arm/animation.ts (+13 tests): easings ease(min-jerk)/in/out/linear/flow (Catmull-Rom tangents
+in time + cubic Hermite through unheld flow poses), minDuration/autoDuration from MAX_STEPS_PER_S 2000 / AUTO 600,
+cleanKeyframes, buildPath with lead-in, pathStats, flattenSequence (joins auto-timed, same-pose merge), composeAnimationJsonl
+(Pi header/frame/footer). Models robot_arm_poses / robot_arm_move_sets / robot_arm_sequences. Server robot-arm-animation.ts:
+readArm, poseByHand, savePoseFromArm(+hold), holdArm, updatePose(+re-capture), goToPose (<=300-step jogs, 1500 max),
+move set / sequence CRUD, resolve*, playMoveSet/playSequence (lead-in from current, delete+restore `animate-preview`,
+replay with preflight 50), stopPlayback (stop + torque on retry), saveToPi (named recording, no lead-in). Client holdServos.
+UI: Animate tab (layout tab added), /animate (playback bar, capture panel with torque state, poses, move sets, sequences),
+/animate/moveset/[id] and /animate/sequence/[id] editors with AnimationCurves.svelte (per-servo lanes, pose ticks, holds
+shaded, playhead) rendered client-side from the same engine; Playback class (playback.svelte.ts) polls ?/playback.
+Docs: docs/prds/ARM-06-animate.md; context doc §6b. npm run check: 14 errors, none in touched files. Unit: robot-arm
+suites pass incl. 13 new. Not yet run on the arm; hold route not installed.
