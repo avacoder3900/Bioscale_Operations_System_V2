@@ -21816,6 +21816,8 @@ Source: branch feat/state-change-protected-warning @ commit e161117a
 Retrieve this exact code: git checkout feat/state-change-protected-warning at commit e161117a
   (or: git log feat/state-change-protected-warning --oneline to find it if the branch has since moved on)
 What this deployment is for: State Change page refuses, then confirms, moves of experiment-linked / app-owned carts (PR #115)
+
+================================================================================
 2026-10-21 — feat/arm-animate — ARM-06 Animate tab: poses by hand, move sets, sequences, smooth playback
 ================================================================================
 Operator asked for an After Effects-style animation tab: physically pose the arm, save poses, tween the smoothest path
