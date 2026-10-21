@@ -21891,8 +21891,12 @@ save to Pi) adds it to the goal. Recordings already on the Pi need saving again.
 Files: src/lib/robot-arm/animation.ts (+.test.ts, +9 tests: 22 in the file, 91 robot-arm),
 src/lib/server/robot-arm-animation.ts, models robot-arm-pose.ts / robot-arm-move-set.ts,
 src/lib/components/robot-arm/AnimationCurves.svelte, animate/moveset/[id]/+page.{svelte,server.ts},
-animate/sequence/[id]/+page.svelte, docs/prds/ARM-06-animate.md §8. svelte-check 14 errors
-(baseline). Not run on the arm.
+animate/sequence/[id]/+page.svelte, docs/prds/ARM-06-animate.md §9 (after #121's §8 — control-arm
+posing reads the follower one droop short too, so the trim covers both capture paths). svelte-check
+14 errors (baseline); vitest lib/robot-arm + lib/server 460 passed. Not run on the arm. PR #122.
+Also: PRs #118, #117, #115 all conflicted only in progress.txt (every branch appends at the end).
+Merged origin/master into each keeping both sides' entries, restored the ==== header bar the union
+merge dropped (#118, #115), checked each diff vs master is pure additions; all three mergeable.
 
 ================================================================================
 2026-10-21 — feat/animate-pose-with-leader — Animate: pose the follower with the control (leader) arm
