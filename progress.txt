@@ -21777,3 +21777,8 @@ Tests: vitest protected-carts 9 passed; svelte-check 14 errors (baseline, none i
 Caveat for the three reverted carts (118ad432…, 1f3ffb26…, 517adef9…): "linked" again but assayId
 is still blank — the device looks the assay up before a run, so they likely need a relink in
 the research app like the other two got.
+Deployment: preview — https://bioscale-operations-system-mongodb-hq3kxw3a5-brevitest.vercel.app
+Source: branch feat/state-change-protected-warning @ commit e161117a
+Retrieve this exact code: git checkout feat/state-change-protected-warning at commit e161117a
+  (or: git log feat/state-change-protected-warning --oneline to find it if the branch has since moved on)
+What this deployment is for: State Change page refuses, then confirms, moves of experiment-linked / app-owned carts (PR #115)
