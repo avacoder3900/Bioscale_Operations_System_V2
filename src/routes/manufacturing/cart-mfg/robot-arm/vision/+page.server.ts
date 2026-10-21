@@ -13,6 +13,7 @@ import { robotArm } from '$lib/server/robot-arm-client';
 import { deriveArmHolder } from '$lib/server/robot-arm-lock';
 import {
 	checkHome,
+	closeClaw,
 	createTag,
 	listTags,
 	loadCalibrations,
@@ -187,6 +188,22 @@ export const actions: Actions = {
 	// The arm MOVES: one bounded jog per joint to the calibrated encoder
 	// steps, then encoders + tags verify. The Pi refuses while a session
 	// holds the bus.
+	// Final step of every Return to home: close the claw (the arm MOVES —
+	// servo 6 only). The Vision tab calls this when its loop ends with the
+	// claw still open, and repeats it until closed.
+	closeClaw: async ({ request, locals }) => {
+		if (!locals.user) return fail(401, { error: 'Unauthorized' });
+		requirePermission(locals.user, 'manufacturing:write');
+		const cameraName = field(await request.formData(), 'camera');
+		try {
+			const r = await closeClaw(who(locals), { cameraName });
+			return { clawResult: r, scope: 'home' };
+		} catch (err) {
+			const msg = (err as Error).message;
+			return fail(msg.includes('robot-arm 409') || msg.includes('busy') ? 409 : 502, { error: `Closing the claw failed: ${msg}`, scope: 'home' });
+		}
+	},
+
 	returnHome: async ({ request, locals }) => {
 		if (!locals.user) return fail(401, { error: 'Unauthorized' });
 		requirePermission(locals.user, 'manufacturing:write');

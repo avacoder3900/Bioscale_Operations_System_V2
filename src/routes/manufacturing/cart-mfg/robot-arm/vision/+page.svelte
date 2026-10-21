@@ -80,20 +80,65 @@
 		};
 	};
 
-	let loop = $state<{ running: boolean; attempt: number; startedAt: number; stopping: boolean; outcome: string | null; error: string | null } | null>(null);
+	let loop = $state<{
+		running: boolean;
+		attempt: number;
+		startedAt: number;
+		stopping: boolean;
+		outcome: string | null;
+		error: string | null;
+		/** Final step in progress: closing the claw after the attempts ended. */
+		closing: boolean;
+		clawClosed: boolean;
+		clawError: string | null;
+		frozen: boolean;
+	} | null>(null);
 	let tick = $state(Date.now());
 
 	/**
 	 * Return to home, repeated until the arm is home. Each attempt: (servo 1
 	 * safety gate) → open the mouth (attempt 1 only) → servo 2 home → all
 	 * joints home -> close the claw. Stops when done, on a freeze, an error, Stop, or
-	 * when 90 s have passed (no new attempt starts after that).
+	 * when 90 s have passed (no new attempt starts after that). However it ends,
+	 * the LAST step is closing the mouth (closeClaw) unless it is already
+	 * closed — except after a freeze, where torque stays off for the technician.
 	 */
+	async function closeClawAtEnd() {
+		if (!loop) return;
+		loop.closing = true;
+		try {
+			// Each request closes for up to ~20 s; three is far more than a claw needs.
+			for (let i = 0; i < 3; i++) {
+				const fd = new FormData();
+				fd.set('camera', camera);
+				const res = await fetch('?/closeClaw', { method: 'POST', body: fd, headers: { 'x-sveltekit-action': 'true' } });
+				const r = deserialize(await res.text());
+				if (r.type === 'failure') {
+					loop.clawError = String((r.data as { error?: string } | undefined)?.error ?? 'Closing the claw failed.');
+					return;
+				}
+				if (r.type !== 'success') {
+					loop.clawError = r.type === 'error' ? `Closing the claw failed: ${r.error?.message ?? r.status}` : 'Unexpected response while closing the claw.';
+					return;
+				}
+				if ((r.data?.clawResult as { closed?: boolean } | undefined)?.closed) {
+					loop.clawClosed = true;
+					return;
+				}
+			}
+			loop.clawError = 'The claw did not reach its closed stop.';
+		} catch (e) {
+			loop.clawError = `Closing the claw failed: ${e instanceof Error ? e.message : String(e)}`;
+		} finally {
+			loop.closing = false;
+		}
+	}
+
 	async function runReturnHome() {
 		if (!confirm('The arm will MOVE until it is home: open the mouth, bring the shoulder (servo 2) home, then every joint, then close the claw. You can press Stop at any time. Is the path clear?')) return;
 		homeBusy = 'return';
 		loopResult = null;
-		loop = { running: true, attempt: 0, startedAt: Date.now(), stopping: false, outcome: null, error: null };
+		loop = { running: true, attempt: 0, startedAt: Date.now(), stopping: false, outcome: null, error: null, closing: false, clawClosed: false, clawError: null, frozen: false };
 		const clock = setInterval(() => (tick = Date.now()), 500);
 		try {
 			while (loop) {
@@ -113,6 +158,8 @@
 				}
 				const h = r.data.homeResult as HomeCheckResult;
 				loopResult = h;
+				loop.clawClosed = h.clawClosed === true;
+				loop.frozen = h.home.verdict === 'frozen';
 				const d = shouldRetryHome({ verdict: h.home.verdict, elapsedMs: Date.now() - loop.startedAt, residualMax: h.home.residualMax, clawClosed: h.clawClosed ?? null });
 				if (loop.stopping) {
 					loop.outcome = 'stopped by you';
@@ -126,6 +173,8 @@
 		} catch (e) {
 			if (loop) loop.error = `Return to home failed: ${e instanceof Error ? e.message : String(e)}`;
 		} finally {
+			// The final step, every time: close the mouth (not after a freeze).
+			if (loop && !loop.frozen && !loop.clawClosed) await closeClawAtEnd();
 			clearInterval(clock);
 			if (loop) loop.running = false;
 			homeBusy = null;
@@ -275,14 +324,21 @@
 			{/if}
 			{#if loop}
 				<p class="mt-2 text-xs" style="color: {loop.error ? '#fca5a5' : 'var(--color-tron-text-secondary)'}">
-					{#if loop.running}
-						Returning home: attempt {loop.attempt} · {Math.round(((tick - loop.startedAt) / 1000))} s of {HOME_LOOP_MS / 1000} s{loop.stopping ? ' · stopping after this attempt…' : ''}
+					{#if loop.closing}
+						Closing the claw (final step)…
+					{:else if loop.running}
+						Returning home: attempt {loop.attempt} · {Math.round(((tick - loop.startedAt) / 1000))} s of {HOME_LOOP_MS / 1000} s{loop.stopping ? ' · stopping after this attempt, then closing the claw…' : ''}
 					{:else if loop.error}
 						{loop.error} (attempt {loop.attempt})
 					{:else}
 						Return to home finished after {loop.attempt} attempt(s): {loop.outcome}.
 					{/if}
 				</p>
+				{#if !loop.running && !loop.frozen}
+					<p class="mt-0.5 text-xs" style="color: {loop.clawClosed ? '#4ade80' : '#fca5a5'}">
+						{loop.clawClosed ? 'Claw closed.' : `Claw NOT confirmed closed${loop.clawError ? `: ${loop.clawError}` : '.'}`}
+					</p>
+				{/if}
 			{/if}
 			{#if shownResult?.moved?.length}
 				<p class="mt-1 text-xs" style="color: var(--color-tron-text-secondary)">Moved{shownResult.attempt ? ` (attempt ${shownResult.attempt})` : ''}: {shownResult.moved.map((m) => `J${m.sid} ${m.delta > 0 ? '+' : ''}${m.delta}`).join(', ')}</p>

@@ -791,20 +791,17 @@ export async function returnToHome(user: User, o: { cameraName?: string | null; 
 	// 4. Last: close the claw completely — closing jogs until it stops moving
 	// (the closed stop), then ease off 1 step so the servo is not left pushing
 	// against the stop. Only once every joint is home.
+	// If this attempt ends before the joints land, the Vision tab still closes
+	// the claw afterwards (closeClaw) — the mouth is closed at the end every time.
 	let r = residuals(current, target);
 	let clawClosed: boolean | null = Number.isFinite(current[g]) ? false : null;
 	if (clawClosed === null) warnings.push('The claw (servo 6) did not report a position, so it was not closed.');
 	else if (!r.off.length) {
-		while (!outOfTime()) {
-			const was = current[g];
-			await jog(GRIPPER_SERVO_ID, -MAX_JOG_STEPS);
-			await settle();
-			if (Math.abs(current[g] - was) < CLAW_STALL_STEPS) {
-				await jog(GRIPPER_SERVO_ID, 1);
-				clawClosed = true;
-				break;
-			}
-		}
+		const c = await closeClawToStop(t0 + ATTEMPT_MOVE_BUDGET_MS);
+		jogs += c.jogs;
+		sent.set(GRIPPER_SERVO_ID, (sent.get(GRIPPER_SERVO_ID) ?? 0) + c.delta);
+		clawClosed = c.closed;
+		current = (await readJointSteps()).steps;
 		r = residuals(current, target);
 	}
 
@@ -824,6 +821,53 @@ export async function returnToHome(user: User, o: { cameraName?: string | null; 
 		message: moved.length ? msg : `Arm was already within ${HOME_STEP_TOLERANCE} steps of home — nothing moved. ${msg}`,
 		snapshotDataUrl: cam.snapshotDataUrl
 	};
+}
+
+/**
+ * Close the claw (servo 6) completely: −300-step jogs until one moves it less
+ * than CLAW_STALL_STEPS (the closed stop), then ease off 1 step so the servo
+ * is not left pushing against the stop. Stops at `deadline` (ms epoch) with
+ * closed=false; the caller tries again.
+ */
+async function closeClawToStop(deadline: number): Promise<{ closed: boolean; jogs: number; delta: number }> {
+	const pos = async () => {
+		const s = (await robotArm.listServos()).find((x) => x?.id === GRIPPER_SERVO_ID);
+		if (!s || !Number.isFinite(s.position)) throw new Error('the claw (servo 6) did not report a position');
+		return Number(s.position);
+	};
+	let jogs = 0;
+	let delta = 0;
+	let now = await pos();
+	while (Date.now() < deadline) {
+		await robotArm.jogJoint(GRIPPER_SERVO_ID, -MAX_JOG_STEPS);
+		jogs++;
+		delta -= MAX_JOG_STEPS;
+		await new Promise((res) => setTimeout(res, SETTLE_MS));
+		const next = await pos();
+		const movedBy = Math.abs(next - now);
+		now = next;
+		if (movedBy < CLAW_STALL_STEPS) {
+			await robotArm.jogJoint(GRIPPER_SERVO_ID, 1);
+			return { closed: true, jogs: jogs + 1, delta: delta + 1 };
+		}
+	}
+	return { closed: false, jogs, delta };
+}
+
+/**
+ * The final step of every Return to home: the Vision tab calls this when its
+ * loop ends with the claw still open (Stop pressed, 90 s cap, an error, or
+ * the joints never landed). Torque on, close to the stop. Not after a freeze —
+ * then torque stays off for the technician. Refused while a session holds
+ * the bus. One request ≤ ~20 s; the tab repeats it until closed.
+ */
+export async function closeClaw(user: User, o: { cameraName?: string | null } = {}): Promise<{ closed: boolean; jogs: number; message: string }> {
+	const doc = await loadActive(o.cameraName);
+	await requireArmFree();
+	await robotArm.setTorque(true);
+	const c = await closeClawToStop(Date.now() + ATTEMPT_MOVE_BUDGET_MS);
+	await audit('robot_arm.vision.close_claw', 'robot_arm_tag_calibrations', String(doc._id), user, { closed: c.closed, jogs: c.jogs, delta: c.delta });
+	return { ...c, message: c.closed ? 'Claw closed.' : 'Claw still closing…' };
 }
 
 function frozenMessage(f: BaseOutOfRange & { torqueOff: boolean }): string {
