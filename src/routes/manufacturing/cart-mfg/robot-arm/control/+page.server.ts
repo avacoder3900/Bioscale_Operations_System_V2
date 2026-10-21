@@ -667,6 +667,20 @@ export const actions: Actions = {
 
 		try {
 			const result = await robotArm.stop();
+			// Operator rule (2026-10-21): a cancelled run leaves the arm holding
+			// where it is, never limp. One retry: the Pi may still be releasing
+			// the session's bus when the first request lands.
+			let torqueOn = false;
+			let torqueError: string | null = null;
+			for (let i = 0; i < 2 && !torqueOn; i++) {
+				if (i) await new Promise((r) => setTimeout(r, 600));
+				try {
+					await robotArm.setTorque(true);
+					torqueOn = true;
+				} catch (e) {
+					torqueError = (e as Error).message;
+				}
+			}
 			await AuditLog.create({
 				_id: generateId(),
 				tableName: 'robot_arm_runs',
@@ -678,10 +692,15 @@ export const actions: Actions = {
 					stopped_run_id: result.stopped_run_id ?? null,
 					held_by: heldBy,
 					stopped_by: locals.user.username,
-					override: heldBy !== null && heldBy !== locals.user.username
+					override: heldBy !== null && heldBy !== locals.user.username,
+					torque_on: torqueOn,
+					torque_error: torqueOn ? null : torqueError
 				}
 			});
-			return { success: `stop signal sent (${result.stopped_run_id ?? 'no active session'})` };
+			const stopped = `stop signal sent (${result.stopped_run_id ?? 'no active session'})`;
+			return torqueOn
+				? { success: `${stopped}; torque re-enabled — the arm is holding its position.` }
+				: { warning: `${stopped}, but torque could NOT be re-enabled (${torqueError}) — the arm may be limp; enable torque before leaving it.` };
 		} catch (err) {
 			return fail(500, { error: (err as Error).message });
 		}

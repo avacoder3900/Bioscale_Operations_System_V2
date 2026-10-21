@@ -58,11 +58,10 @@ export function planJogDeltas(
 export const MAX_JOG_STEPS = 300;
 
 /**
- * Jogs per Return-to-home ATTEMPT, across all its passes. Each jog is one
- * round trip to the Pi; this keeps one attempt plus the camera check inside
- * Vercel's 30 s. The browser repeats attempts until home (HOME_LOOP_MS).
+ * Claw closing: it is closed when a closing jog moves it less than this —
+ * it has hit the cartridge-free stop. (There is no taught "closed" position.)
  */
-export const MAX_HOME_JOGS = 20;
+export const CLAW_STALL_STEPS = 6;
 
 // ── the home sequence ────────────────────────────────────────────────────
 
@@ -113,32 +112,28 @@ export function baseOutOfRange(current: JointSteps, target: JointSteps, limitSte
 }
 
 /**
- * Whether the browser should run another attempt. Stops on home, on a freeze
- * or error, at the time limit, and when the arm stopped getting closer (two
- * attempts in a row within a few steps of each other — a stalled joint will
- * not be fixed by more of the same).
+ * Whether the browser should send another attempt. One click keeps the arm
+ * returning until EVERYTHING is in place — joints home and the claw closed —
+ * with no jog limit; the operator can press Stop at any time. It only stops
+ * by itself on: done, a freeze, a moved camera (the picture is meaningless
+ * until recalibrated), encoders home + claw closed but the tags disagree
+ * (more moving would change nothing), or the 90 s cap.
  */
 export function shouldRetryHome(o: {
 	verdict: string;
 	elapsedMs: number;
 	residualMax: number | null;
-	previousResidualMax: number | null;
+	/** true = claw closed this run; false = not yet; null = no claw reading (not required). */
+	clawClosed: boolean | null;
 	limitMs?: number;
 }): { retry: boolean; reason: string } {
-	if (o.verdict === 'home') return { retry: false, reason: 'home' };
 	if (o.verdict === 'frozen') return { retry: false, reason: 'frozen' };
 	if (o.verdict === 'camera_moved') return { retry: false, reason: 'the camera moved — recalibrate' };
+	const clawDone = o.clawClosed !== false;
+	if (o.verdict === 'home' && clawDone) return { retry: false, reason: 'home, claw closed' };
 	if (o.elapsedMs >= (o.limitMs ?? HOME_LOOP_MS)) return { retry: false, reason: 'timed out' };
-	// Encoders home but tags off: moving again would not change anything.
-	if (o.residualMax != null && o.residualMax <= HOME_STEP_TOLERANCE) return { retry: false, reason: 'encoders are home; the tags disagree' };
-	if (
-		o.residualMax != null &&
-		o.previousResidualMax != null &&
-		Number.isFinite(o.residualMax) &&
-		o.residualMax >= o.previousResidualMax - 3
-	) {
-		return { retry: false, reason: 'not getting closer' };
-	}
+	const landed = o.residualMax != null && o.residualMax <= HOME_STEP_TOLERANCE;
+	if (landed && clawDone && o.verdict !== 'home') return { retry: false, reason: 'encoders are home; the tags disagree' };
 	return { retry: true, reason: '' };
 }
 

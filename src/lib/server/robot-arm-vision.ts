@@ -44,7 +44,7 @@ import {
 	HOME_SERVO_IDS,
 	HOME_STEP_TOLERANCE,
 	LIFT_SERVO_ID,
-	MAX_HOME_JOGS,
+	CLAW_STALL_STEPS,
 	MAX_JOG_STEPS,
 	type BaseOutOfRange,
 	type HomeAssessment,
@@ -57,8 +57,6 @@ type User = { _id: string; username: string };
 
 /** Settle time after each pass of jogs before the encoders are re-read. */
 const SETTLE_MS = 800;
-/** Per phase: one move pass plus up to two correction passes from a fresh read. */
-const HOME_PASSES = 3;
 /** One attempt stops starting new jogs after this, leaving room for the camera check in Vercel's 30 s. */
 const ATTEMPT_MOVE_BUDGET_MS = 20_000;
 /** Width of the stored thumbnails (data URLs in Mongo). */
@@ -581,6 +579,8 @@ export interface HomeCheckResult {
 	jogs?: number;
 	/** Return only: servo 1 was out of its safe range — nothing moved, torque dropped. */
 	frozen?: (BaseOutOfRange & { torqueOff: boolean }) | null;
+	/** Return only: the claw closed this attempt (null = no claw reading). */
+	clawClosed?: boolean | null;
 	elapsedMs?: number;
 }
 
@@ -695,10 +695,12 @@ export async function checkHome(user: User, o: { cameraName?: string | null; kin
  *      first attempt only, so repeats do not keep opening it.
  *   2. Servo 2 (shoulder lift, "servo B") to home on its own.
  *   3. All of servos 1–5 to home.
+ *   4. Close the claw completely (until it stops moving), once every joint is home.
  * Every move goes in ≤300-step jogs (the Pi's cap) with settle + re-read +
- * correction passes, bounded by a jog budget and a time budget so one attempt
- * plus the camera check fits Vercel's 30 s. The Vision tab repeats attempts
- * until home, a freeze, no progress, or 90 s (shouldRetryHome).
+ * correction passes — no jog limit. Each request only has a time slice so it
+ * plus the camera check fits Vercel's 30 s; the Vision tab sends the next
+ * attempt automatically until everything is home and the claw is closed, the
+ * operator presses Stop, a freeze, or 90 s (shouldRetryHome).
  * Refused while a session holds the bus.
  */
 export async function returnToHome(user: User, o: { cameraName?: string | null; attempt?: number } = {}): Promise<HomeCheckResult> {
@@ -751,13 +753,18 @@ export async function returnToHome(user: User, o: { cameraName?: string | null; 
 		await new Promise((res) => setTimeout(res, SETTLE_MS));
 		current = (await readJointSteps()).steps;
 	};
-	/** Jog `sids` to home: ≤300-step chunks, settle, re-read, correct; within both budgets. */
+	const outOfTime = () => Date.now() - t0 > ATTEMPT_MOVE_BUDGET_MS;
+	/**
+	 * Jog `sids` to home: ≤300-step chunks, settle, re-read, correct — as many
+	 * passes as it takes (no jog limit). Only this request's time slice ends it;
+	 * the browser's next attempt carries on from there.
+	 */
 	const phase = async (sids: readonly number[]) => {
-		for (let pass = 0; pass < HOME_PASSES && !budgetHit; pass++) {
+		while (!budgetHit) {
 			const chunks = chunkJogPlan(planJogDeltas(current, target, HOME_STEP_TOLERANCE, sids));
 			if (!chunks.length) return;
 			for (const c of chunks) {
-				if (jogs >= MAX_HOME_JOGS || Date.now() - t0 > ATTEMPT_MOVE_BUDGET_MS) {
+				if (outOfTime()) {
 					budgetHit = true;
 					break;
 				}
@@ -780,10 +787,28 @@ export async function returnToHome(user: User, o: { cameraName?: string | null; 
 	// 2. Servo B, then 3. everything.
 	await phase([LIFT_SERVO_ID]);
 	await phase(HOME_SERVO_IDS);
-	if (budgetHit) warnings.push(`This attempt used its move budget (${jogs} jogs); the next attempt continues from here.`);
+
+	// 4. Last: close the claw completely — closing jogs until it stops moving
+	// (the closed stop), then ease off 1 step so the servo is not left pushing
+	// against the stop. Only once every joint is home.
+	let r = residuals(current, target);
+	let clawClosed: boolean | null = Number.isFinite(current[g]) ? false : null;
+	if (clawClosed === null) warnings.push('The claw (servo 6) did not report a position, so it was not closed.');
+	else if (!r.off.length) {
+		while (!outOfTime()) {
+			const was = current[g];
+			await jog(GRIPPER_SERVO_ID, -MAX_JOG_STEPS);
+			await settle();
+			if (Math.abs(current[g] - was) < CLAW_STALL_STEPS) {
+				await jog(GRIPPER_SERVO_ID, 1);
+				clawClosed = true;
+				break;
+			}
+		}
+		r = residuals(current, target);
+	}
 
 	const moved = [...sent.entries()].sort(([a], [b]) => a - b).map(([sid, delta]) => ({ sid, delta }));
-	const r = residuals(current, target);
 	// The camera check is only worth its seconds once the encoders say home.
 	let cam: { vision: VisionAssessment | null; snapshotDataUrl: string | null; warnings: string[] } = { vision: null, snapshotDataUrl: null, warnings: [] };
 	if (!r.off.length) {
@@ -791,8 +816,8 @@ export async function returnToHome(user: User, o: { cameraName?: string | null; 
 		warnings.push(...cam.warnings);
 	}
 	const home = assessHome(r, cam.vision);
-	const result = { ...base, home, vision: cam.vision, residuals: r.perJoint, warnings, moved, jogs, frozen: null, elapsedMs: Date.now() - t0 };
-	await recordCheck(doc, user, 'return', result, { before: before.steps, after: current, jogs, attempt, tolerance: HOME_STEP_TOLERANCE });
+	const result = { ...base, home, vision: cam.vision, residuals: r.perJoint, warnings, moved, jogs, frozen: null, clawClosed, elapsedMs: Date.now() - t0 };
+	await recordCheck(doc, user, 'return', result, { before: before.steps, after: current, jogs, attempt, clawClosed, tolerance: HOME_STEP_TOLERANCE });
 	const msg = homeMessage(home, cam.vision, r);
 	return {
 		...result,

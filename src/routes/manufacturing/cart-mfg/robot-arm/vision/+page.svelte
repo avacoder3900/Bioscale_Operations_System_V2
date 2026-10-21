@@ -86,16 +86,15 @@
 	/**
 	 * Return to home, repeated until the arm is home. Each attempt: (servo 1
 	 * safety gate) → open the mouth (attempt 1 only) → servo 2 home → all
-	 * joints home. Stops on home, a freeze, no progress, an error, Stop, or
+	 * joints home -> close the claw. Stops when done, on a freeze, an error, Stop, or
 	 * when 90 s have passed (no new attempt starts after that).
 	 */
 	async function runReturnHome() {
-		if (!confirm('The arm will MOVE: open the mouth, bring the shoulder (servo 2) home, then every joint. Is the path clear?')) return;
+		if (!confirm('The arm will MOVE until it is home: open the mouth, bring the shoulder (servo 2) home, then every joint, then close the claw. You can press Stop at any time. Is the path clear?')) return;
 		homeBusy = 'return';
 		loopResult = null;
 		loop = { running: true, attempt: 0, startedAt: Date.now(), stopping: false, outcome: null, error: null };
 		const clock = setInterval(() => (tick = Date.now()), 500);
-		let previous: number | null = null;
 		try {
 			while (loop) {
 				loop.attempt++;
@@ -114,8 +113,7 @@
 				}
 				const h = r.data.homeResult as HomeCheckResult;
 				loopResult = h;
-				const d = shouldRetryHome({ verdict: h.home.verdict, elapsedMs: Date.now() - loop.startedAt, residualMax: h.home.residualMax, previousResidualMax: previous });
-				previous = h.home.residualMax;
+				const d = shouldRetryHome({ verdict: h.home.verdict, elapsedMs: Date.now() - loop.startedAt, residualMax: h.home.residualMax, clawClosed: h.clawClosed ?? null });
 				if (loop.stopping) {
 					loop.outcome = 'stopped by you';
 					break;
@@ -312,7 +310,7 @@
 						disabled={blocked || !calibration.jointSteps || !!homeBusy}
 						class="min-h-[44px] rounded px-4 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-40"
 						style="background: rgba(245,158,11,0.15); color: #fbbf24; border: 1px solid #f59e0b;"
-						title={calibration.jointSteps ? 'Open the mouth, servo 2 home, then all joints home; repeats until home (max 90 s)' : 'This calibration has no encoder home'}
+						title={calibration.jointSteps ? 'Open the mouth, servo 2 home, all joints home, close the claw; keeps going until done (Stop any time; max 90 s)' : 'This calibration has no encoder home'}
 					>
 						Return to home
 					</button>
