@@ -21768,3 +21768,15 @@ UI: Animate tab (layout tab added), /animate (playback bar, capture panel with t
 shaded, playhead) rendered client-side from the same engine; Playback class (playback.svelte.ts) polls ?/playback.
 Docs: docs/prds/ARM-06-animate.md; context doc §6b. npm run check: 14 errors, none in touched files. Unit: robot-arm
 suites pass incl. 13 new. Not yet run on the arm; hold route not installed.
+
+================================================================================
+2026-10-21 — feat/arm-torque-on-camera-card — torque On/Off on the camera card of every Robot Arm tab
+================================================================================
+Operator: add turn torque on/off to every page of the robot arm, living on the camera card. The card is
+RobotArmCameraPanel.svelte in the arm +layout, so one control there follows the operator across tabs; placed right
+under the card header so it stays visible when the picture is collapsed. New TorqueControl.svelte (reads state on
+mount + after a change, no polling since each read is a bus read; confirm dialogs: OFF = arm goes limp, ON = holds or,
+without the hold route, moves to its last goal) and /api/robot-arm/torque (GET state from /servos torque flags; POST
+{enable}: off -> /torque false; on -> /servos/hold, falling back to a plain /torque true with a warning; 409 while a
+session owns the arm; AuditLog robot_arm.torque.on/off). Context doc §6c. npm run check: 14 errors, none in touched
+files; no warnings in the new files. Not yet tried on the arm.

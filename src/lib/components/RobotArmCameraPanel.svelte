@@ -42,6 +42,7 @@
 	import type { CameraStatus } from '$lib/server/robot-arm-client';
 	import RotatedFrame from '$lib/components/robot-arm/RotatedFrame.svelte';
 	import { cameraRotation } from '$lib/robot-arm/camera-rotation.svelte';
+	import TorqueControl from './robot-arm/TorqueControl.svelte';
 
 	interface Props {
 		cameras: CameraStatus[];
@@ -573,6 +574,9 @@
 			{collapsed ? 'Show' : 'Hide'}
 		</button>
 	</div>
+
+	<!-- Torque on/off follows the operator to every tab; visible even when the picture is collapsed. -->
+	<TorqueControl {armReachable} />
 
 	{#if !collapsed}
 		<div class="px-3 pb-3">
