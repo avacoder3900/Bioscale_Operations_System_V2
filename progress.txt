@@ -21812,6 +21812,8 @@ replay evidently does not resolve a restored recording by name even though the r
 Fix (robot-arm-animation.ts): after the restore, list the Pi's recordings and replay by the listed path
 (recordingPath()); if the name is not listed, say so (restore folder != replay folder) instead of a bare 400.
 npm run check: 14 errors, none in touched files. Unit: robot-arm suites 113/113. Not yet re-tried on the arm.
+
+================================================================================
 2026-10-21 — feat/arm-torque-on-camera-card — torque On/Off on the camera card of every Robot Arm tab
 ================================================================================
 Operator: add turn torque on/off to every page of the robot arm, living on the camera card. The card is
