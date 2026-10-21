@@ -21615,3 +21615,15 @@ Source: branch feat/arm-recording-cleanup @ commit e823da3f (fast-forwarded to m
 Retrieve this exact code: git checkout feat/arm-recording-cleanup at commit e823da3f
   (or: git log feat/arm-recording-cleanup --oneline to find it if the branch has since moved on)
 What this deployment is for: Robot Arm Clean-up tab (recording -> editable steps -> new recording on the Pi)
+
+================================================================================
+2026-10-21 — fix/arm-home-encoders-via-servos — Return to home failed: robot-arm 501 from GET /pose
+================================================================================
+Operator hit "Return to home failed: robot-arm 501: Cartesian pose/jog requires the IK stack (ikpy + URDF + jog
+calibration), which has not been ported to this server yet". Root cause: robot-arm-vision.ts readJointSteps() read the
+encoders from GET /pose (inherited from ARM-03/04), and the current Pi server only answers that with IK. Fix: encoders
+now come from GET /servos (raw follower `position`, the same step /pose reports as joint_steps; robot-arm-cleanup.ts
+already reads it this way). /pose is kept only to record the Cartesian pose on a calibration, best-effort (null on 501).
+Touched: src/lib/server/robot-arm-vision.ts, Robot_Arm_Calibration_Context.md. The live Pi OpenAPI (reachable today)
+already lists /cameras/{name}/apriltags + /detect, so the ARM-05 route is installed. npm run check: 14 errors, none in
+touched files. Unit: robot-arm suites 90/90. A calibration saved while /pose was failing has no encoder home: recalibrate.

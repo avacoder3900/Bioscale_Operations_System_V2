@@ -10,7 +10,8 @@
  *
  * Pi calls:
  *   POST /cameras/{name}/apriltags/detect   tags + poses (+ the frame); 404 until installed
- *   GET  /pose                              encoder steps, servos 1–5
+ *   GET  /servos                            encoder steps, servos 1–5 (no IK)
+ *   GET  /pose                              Cartesian pose, record only (501 until IK is ported)
  *   POST /torque, POST /servos/{id}/jog     return to home
  */
 import sharp from 'sharp';
@@ -349,14 +350,32 @@ async function requireArmFree(): Promise<void> {
 	if (active) throw new Error(`the arm is busy (${active.kind} run ${active.run_id}) — stop it first`);
 }
 
-async function readJointSteps(): Promise<{ steps: JointSteps; pose: { x_mm: number; y_mm: number; z_mm: number } }> {
-	const p = await robotArm.getPose();
+/**
+ * Follower encoder steps from GET /servos — raw per-servo state, no IK.
+ * Not GET /pose: on the current Pi server /pose answers 501 until the IK
+ * stack (ikpy + URDF + jog calibration) is ported, and `position` here is the
+ * same raw step /pose reports as joint_steps.
+ */
+async function readJointSteps(): Promise<{ steps: JointSteps }> {
+	const servos = await robotArm.listServos();
 	const steps: JointSteps = {};
-	for (const [k, v] of Object.entries(p.joint_steps ?? {})) steps[String(k)] = Number(v);
+	for (const s of Array.isArray(servos) ? servos : []) {
+		if (Number.isFinite(s?.position)) steps[String(s.id)] = Number(s.position);
+	}
 	for (const sid of HOME_SERVO_IDS) {
 		if (!Number.isFinite(steps[String(sid)])) throw new Error(`the arm did not report a position for servo ${sid}`);
 	}
-	return { steps, pose: { x_mm: p.x_mm, y_mm: p.y_mm, z_mm: p.z_mm } };
+	return { steps };
+}
+
+/** Cartesian pose for the record only; null while the Pi has no IK (/pose → 501). */
+async function readCartesianPose(): Promise<{ x_mm: number; y_mm: number; z_mm: number } | null> {
+	try {
+		const p = await robotArm.getPose();
+		return [p.x_mm, p.y_mm, p.z_mm].every(Number.isFinite) ? { x_mm: p.x_mm, y_mm: p.y_mm, z_mm: p.z_mm } : null;
+	} catch {
+		return null;
+	}
 }
 
 function cleanTolerances(t?: { positionMm?: number | null; angleDeg?: number | null }): Tolerances {
@@ -424,9 +443,9 @@ export async function saveCalibration(
 	if (det.intrinsics?.source === 'nominal') warnings.push('The Pi used nominal camera intrinsics (pyrealsense2 not available) — millimetres are approximate; movement is still caught.');
 
 	let jointSteps: JointSteps | null = null;
-	let pose: { x_mm: number; y_mm: number; z_mm: number } | null = null;
+	const pose = await readCartesianPose();
 	try {
-		({ steps: jointSteps, pose } = await readJointSteps());
+		({ steps: jointSteps } = await readJointSteps());
 	} catch (e) {
 		warnings.push(`Arm encoders not read (${e instanceof Error ? e.message : String(e)}) — Return to home will be unavailable for this calibration.`);
 	}
