@@ -21637,3 +21637,15 @@ Retrieve this exact code: git checkout master at commit 5c7666d5
   (or: git log master --oneline to find it if the branch has since moved on)
 What this deployment is for: Return to home / Check / Save calibration read encoders via /servos. Smoke: /login 200,
 Vision tab 302. Not yet re-tried on the arm by the operator.
+
+================================================================================
+2026-10-21 — fix/arm-home-jog-chunks — Return to home failed: robot-arm 400 delta_steps capped at 300 per jog
+================================================================================
+After the /servos fix the operator got "robot-arm 400: delta_steps magnitude capped at 300 per jog (got -1185)".
+Root cause: returnToHome sent each joint's whole correction as ONE /servos/{id}/jog; the Pi caps a jog at 300 steps
+(manual_control.MAX_JOG_STEPS, already handled by robot-arm-cleanup.ts moveArm). Fix: home-calibration.ts gains
+chunkJogPlan (≤300-step jogs, joint order) + MAX_JOG_STEPS / MAX_HOME_JOGS (20); returnToHome jogs in chunks, settles
+0.8 s, re-reads /servos and corrects (≤2 correction passes, 20 jogs total, Vercel 30 s), refuses up front when home is
+more than 20 jogs away (names the joints). `moved` is now summed per joint. Touched: src/lib/robot-arm/home-calibration.ts
+(+2 tests), src/lib/server/robot-arm-vision.ts, Robot_Arm_Calibration_Context.md. npm run check: 14 errors, none in
+touched files. Unit: robot-arm suites 92/92.

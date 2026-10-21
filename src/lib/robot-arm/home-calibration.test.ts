@@ -1,8 +1,28 @@
 import { describe, expect, it } from 'vitest';
-import { assessHome, planJogDeltas, residuals, HOME_STEP_TOLERANCE } from './home-calibration';
+import { assessHome, chunkJogPlan, planJogDeltas, residuals, HOME_STEP_TOLERANCE, MAX_JOG_STEPS } from './home-calibration';
 import type { VisionAssessment } from './apriltags';
 
 const home = { '1': 2048, '2': 1500, '3': 2600, '4': 2048, '5': 2100 };
+
+describe('chunkJogPlan', () => {
+	it('splits a big move into jogs the Pi accepts (≤300), keeping joint order and sign', () => {
+		expect(chunkJogPlan([{ sid: 1, delta: -1185 }, { sid: 3, delta: 40 }, { sid: 4, delta: 600 }])).toEqual([
+			{ sid: 1, delta: -300 },
+			{ sid: 1, delta: -300 },
+			{ sid: 1, delta: -300 },
+			{ sid: 1, delta: -285 },
+			{ sid: 3, delta: 40 },
+			{ sid: 4, delta: 300 },
+			{ sid: 4, delta: 300 }
+		]);
+	});
+	it('every chunk is within the cap and they sum to the delta', () => {
+		const c = chunkJogPlan([{ sid: 2, delta: 1777 }]);
+		expect(c.every((s) => Math.abs(s.delta) <= MAX_JOG_STEPS)).toBe(true);
+		expect(c.reduce((n, s) => n + s.delta, 0)).toBe(1777);
+		expect(chunkJogPlan([])).toEqual([]);
+	});
+});
 
 describe('planJogDeltas', () => {
 	it('one delta per joint that is outside the tolerance, target − current', () => {

@@ -33,10 +33,13 @@ import {
 } from '$lib/robot-arm/apriltags';
 import {
 	assessHome,
+	chunkJogPlan,
 	planJogDeltas,
 	residuals,
 	HOME_SERVO_IDS,
 	HOME_STEP_TOLERANCE,
+	MAX_HOME_JOGS,
+	MAX_JOG_STEPS,
 	type HomeAssessment,
 	type JointSteps,
 	type Residuals
@@ -44,8 +47,10 @@ import {
 
 type User = { _id: string; username: string };
 
-/** Settle time after the last jog before the encoders and camera are re-read. */
-const SETTLE_MS = 1500;
+/** Settle time after each pass of jogs before the encoders are re-read. */
+const SETTLE_MS = 800;
+/** One move pass plus up to two correction passes from a fresh read. */
+const HOME_PASSES = 3;
 /** Width of the stored thumbnails (data URLs in Mongo). */
 const THUMB_WIDTH = 480;
 
@@ -628,31 +633,60 @@ export async function checkHome(user: User, o: { cameraName?: string | null; kin
 }
 
 /**
- * Return to home: torque on, one bounded jog per joint to the calibrated
- * encoder steps, settle, then verify with the encoders AND the tags.
- * Refused while a session holds the bus. The move itself goes by the encoders
- * alone, so a moved camera does not stop it. The arm WILL move.
+ * Return to home: torque on, jog each joint to the calibrated encoder steps
+ * in ≤300-step jogs (the Pi's cap), settle, re-read and correct, then verify
+ * with the encoders AND the tags. Refused while a session holds the bus, and
+ * when home is more than MAX_HOME_JOGS jogs away. The move itself goes by the
+ * encoders alone, so a moved camera does not stop it. The arm WILL move.
  */
 export async function returnToHome(user: User, o: { cameraName?: string | null } = {}): Promise<HomeCheckResult> {
 	const doc = await loadActive(o.cameraName);
 	const target = jointStepsOf(doc);
 	if (!target) throw new Error('this calibration has no encoder home (the arm could not be read when it was taken) — recalibrate with the arm parked at home');
 	await requireArmFree();
-	await robotArm.setTorque(true);
 	const before = await readJointSteps();
-	const plan = planJogDeltas(before.steps, target);
-	const moved: { sid: number; delta: number }[] = [];
-	for (const step of plan) {
-		await robotArm.jogJoint(step.sid, step.delta);
-		moved.push(step);
+	const firstPass = chunkJogPlan(planJogDeltas(before.steps, target));
+	if (firstPass.length > MAX_HOME_JOGS) {
+		const far = planJogDeltas(before.steps, target).map((p) => `J${p.sid} ${p.delta > 0 ? '+' : ''}${p.delta}`).join(', ');
+		throw new Error(
+			`the arm is too far from home for one Return to home (${far} steps = ${firstPass.length} jogs of ≤${MAX_JOG_STEPS}, max ${MAX_HOME_JOGS}) — bring it closer with Jog or teleop first`
+		);
 	}
-	if (moved.length) await new Promise((res) => setTimeout(res, SETTLE_MS));
-	const after = await readJointSteps();
-	const r = residuals(after.steps, target);
+	await robotArm.setTorque(true);
+
+	// The Pi caps a jog at 300 steps, and a jog adds to the PRESENT position,
+	// which lags a goal just written — so chunked moves fall short. Jog, let
+	// it settle, re-read, and correct what is left (bounded by the jog budget).
+	const warnings: string[] = [];
+	const sent = new Map<number, number>();
+	let jogs = 0;
+	let current = before.steps;
+	for (let pass = 0; pass < HOME_PASSES; pass++) {
+		const chunks = pass === 0 ? firstPass : chunkJogPlan(planJogDeltas(current, target));
+		if (!chunks.length) break;
+		if (jogs + chunks.length > MAX_HOME_JOGS) {
+			warnings.push(`Stopped correcting after ${jogs} jogs (budget ${MAX_HOME_JOGS}); press Return to home again to finish.`);
+			break;
+		}
+		for (const c of chunks) {
+			try {
+				await robotArm.jogJoint(c.sid, c.delta);
+			} catch (e) {
+				throw new Error(`servo ${c.sid} jog failed after ${jogs} jog(s): ${e instanceof Error ? e.message : String(e)}`);
+			}
+			jogs++;
+			sent.set(c.sid, (sent.get(c.sid) ?? 0) + c.delta);
+		}
+		await new Promise((res) => setTimeout(res, SETTLE_MS));
+		current = (await readJointSteps()).steps;
+	}
+	const moved = [...sent.entries()].sort(([a], [b]) => a - b).map(([sid, delta]) => ({ sid, delta }));
+	const r = residuals(current, target);
 	const cam = await visionCheck(doc);
+	warnings.push(...cam.warnings);
 	const home = assessHome(r, cam.vision);
-	const result = { calibrationId: String(doc._id), cameraName: doc.cameraName, home, vision: cam.vision, residuals: r.perJoint, warnings: cam.warnings, moved };
-	await recordCheck(doc, user, 'return', result, { before: before.steps, after: after.steps, tolerance: HOME_STEP_TOLERANCE });
+	const result = { calibrationId: String(doc._id), cameraName: doc.cameraName, home, vision: cam.vision, residuals: r.perJoint, warnings, moved };
+	await recordCheck(doc, user, 'return', result, { before: before.steps, after: current, jogs, tolerance: HOME_STEP_TOLERANCE });
 	const msg = homeMessage(home, cam.vision, r);
 	return {
 		...result,
