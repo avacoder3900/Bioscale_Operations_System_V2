@@ -21828,3 +21828,29 @@ svelte-check 16 (baseline).
 Deployment: production — via Vercel GitHub integration on push to master
 Source: branch fix/studio-swap-tip-home, merged to master
 What this deployment is for: Deck Calibration Studio Swap tip picks the new tip up fully
+
+================================================================================
+2026-10-21 — feat/animate-pose-with-leader — Animate: pose the follower with the control (leader) arm
+================================================================================
+Operator: poses saved from the Animate tab were landing in the wrong spot because the servos are not powered while
+posing by hand — torque off lets the follower sag, so the encoders read the sagged position, and torque-on afterwards
+jumps the arm unless the (uninstalled) hold route exists. Asked for posing with the control arm instead. The Pi already
+has what is needed: a teleop session (leader_follower.py _teleop_loop) snaps the follower's goal to present, torque ON,
+then drives it to the leader at rate_hz with the leader limp — powered the whole time, no sag, no jump, no new route.
+Bus-safety finding that shaped the design: driver.py is "not thread-safe — wrap calls in a lock at the server layer",
+the session thread owns the bus, and GET /servos in app.py bypasses state.lock entirely (unlike _with_follower), so a
+servo read during a session races the serial port. Therefore nothing reads the bus mid-session: savePoseFromLeader =
+assert name free → POST /sessions/stop (follower keeps torque + last goal, holds) → 400 ms settle → GET /servos → save
+pose (audit robot_arm.animate.pose_save, source 'leader') → POST /teleop/start again so the operator carries on; if the
+restart fails the pose is still saved and the warning says the follower is holding but no longer following.
+startLeaderPosing (requireIdle → /teleop/start {rate_hz 30, manufacturing_step 'animate-pose'}), leaderPosingActive
+(any teleop session counts), stopLeaderPosing (stop; follower holds, leader limp). 503 "leader arm not connected" is
+shown as "no control arm connected". Page actions ?/poseWithLeader, ?/saveLeaderPose, ?/stopLeaderPosing; load skips
+readArm while any session is active (same bus reason) and says so instead of the J1..J6 readout. Capture panel: green
+"Following the control arm" state with Save pose + Done; otherwise "Pose with the control arm" (primary, confirm dialog
+warns the follower moves to the leader first) and the by-hand flow kept as fallback with its sag caveat spelled out;
+go-to/play/by-hand disabled while following with a specific reason. Each teleop run shows in Runs tagged animate-pose
+and closes 'cancelled' (how the Pi reports a stopped teleop); N saves = N+1 short runs — accepted for traceability.
+Pre-existing hazard noted, not changed: the camera card's TorqueControl and /api/robot-arm/torque GET read /servos
+regardless of session state. Docs: ARM-06 PRD status, §2.1, new §8; context doc §6b. svelte-check 14 errors (baseline
+on this branch), none in touched files; robot-arm unit suites pass. Not run on the arm.

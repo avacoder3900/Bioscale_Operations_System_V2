@@ -1,7 +1,8 @@
 # ARM-06 — Animate: poses by hand, move sets, sequences
 
-**Status:** built 2026-10-21 on `feat/arm-animate`; not yet run on the arm. Needs one new Pi route
-(`POST /servos/hold`, §4) before the by-hand capture flow is safe to use.
+**Status:** built 2026-10-21 on `feat/arm-animate`; not yet run on the arm. The by-hand capture flow needs
+one new Pi route (`POST /servos/hold`, §4); posing **with the control arm** (§8, 2026-10-21) needs no new
+route and is the recommended way to capture poses.
 
 ## 1. What it is
 
@@ -13,12 +14,14 @@ plays it as an ordinary recording.
 
 ## 2. How it works
 
-1. **Capture.** *Pose by hand* drops torque on the follower (`POST /torque {enable:false}`); the arm
-   sags, so the operator supports it. They move it into the pose, keep holding it, name it and press
-   *Save pose*: BIMS reads the encoders (`GET /servos`), stores the six positions
-   (`robot_arm_poses`), then asks the Pi to **hold** (`POST /servos/hold`: goal := present on every
-   servo, then torque on) so the arm stays exactly where it is. *Hold* alone does the same without
-   saving. *Save pose from where the arm is* captures without dropping torque (e.g. after *go to*).
+1. **Capture.** Two ways. *Pose with the control arm* (§8, preferred): the follower tracks the leader
+   under torque, so it is always powered and where the operator put it. *Pose by hand* drops torque on
+   the follower (`POST /torque {enable:false}`); the arm sags, so the operator supports it. They move it
+   into the pose, keep holding it, name it and press *Save pose*: BIMS reads the encoders
+   (`GET /servos`), stores the six positions (`robot_arm_poses`), then asks the Pi to **hold**
+   (`POST /servos/hold`: goal := present on every servo, then torque on) so the arm stays exactly where
+   it is. *Hold* alone does the same without saving. *Save pose from where the arm is* captures
+   without dropping torque (e.g. after *go to*).
 2. **Poses** are reusable by id across move sets; *go to* drives the arm to one (≤300-step jogs);
    edit can re-capture a pose from the arm; archived, never deleted.
 3. **Move set** (`robot_arm_move_sets`): `[{poseId, durationS, easing, holdS}]`. The editor draws the
@@ -115,3 +118,40 @@ smooth, adjustable move set:
   `robot_arm.animate.move_set_create`, `robot_arm.cleanup.send_to_animate`). The clean-up draft and
   the source recording are not changed. The page then opens the new move set's editor.
 - Nothing here touches the arm; play / save to Pi happen in the Animate tab as for any move set.
+
+## 8. Posing with the control arm (`feat/animate-pose-with-leader`, 2026-10-21)
+
+**Problem.** Poses captured by hand were landing in the wrong place: with torque off the follower sags
+under its own weight, so the encoders read the sagged position rather than the one the operator meant,
+and torque-on afterwards jumps the arm unless the hold route is installed. The servos are never
+"active" while the pose is being set.
+
+**Fix.** Pose the follower through the control (leader) arm using the Pi's existing **teleop** session:
+on start it snaps the follower's goal to its present position, turns torque ON and then drives it to
+the leader's position at 30 Hz, with the leader limp. The follower is therefore powered the whole time
+and sits exactly where the operator put the leader; there is no sag and no jump. No new Pi route.
+
+Flow (`src/lib/server/robot-arm-animation.ts`, `animate/+page.server.ts`, capture panel):
+
+1. *Pose with the control arm* → `startLeaderPosing`: refuses while any session owns the arm, then
+   `POST /teleop/start {rate_hz: 30, manufacturing_step: "animate-pose"}`. The run shows in the Runs
+   tab tagged `animate-pose`; the arm-holder bar shows the operator. The panel turns green.
+2. *Save pose* → `savePoseFromLeader`. The Pi's driver is not thread-safe and the teleop thread owns
+   the serial bus (the plain `GET /servos` route has **no** bus guard, so reading mid-session would
+   corrupt packets). So: name is checked first, then `POST /sessions/stop` (the follower keeps torque
+   and its last goal — it holds), 400 ms settle, `GET /servos`, save `robot_arm_poses`
+   (audit `robot_arm.animate.pose_save` with `source: "leader"`), then a fresh `POST /teleop/start` so
+   the operator carries straight on. If the restart fails the pose is still saved and the follower is
+   still holding; the warning says so. Any teleop session counts as "following", whoever started it.
+3. *Done* → `stopLeaderPosing`: `POST /sessions/stop`; the follower holds under torque, the leader
+   stays limp (same end state as the Control tab's teleop). Go-to / Play / by-hand are disabled while
+   following; the page's own servo read is skipped while any session runs, for the same bus reason.
+
+Audit: `robot_arm.animate.leader_posing_start` / `leader_posing_stop` (one row per teleop run, so a
+posing session with N saves produces N+1 runs; each is a few seconds to minutes and ends `cancelled`,
+which is how the Pi reports a stopped teleop). Posing by hand is kept as the fallback for when the
+control arm is not connected (the Pi answers 503 "leader arm not connected", shown as such).
+
+To verify on hardware: the follower moves to the leader on start (confirm the dialog warns about this);
+a saved pose matches the follower's position with the leader held still; the follower does not twitch
+across the stop → read → restart in *Save pose*; Runs shows the `animate-pose` runs closing.
