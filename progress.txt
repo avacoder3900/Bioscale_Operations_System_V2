@@ -21768,3 +21768,9 @@ UI: Animate tab (layout tab added), /animate (playback bar, capture panel with t
 shaded, playhead) rendered client-side from the same engine; Playback class (playback.svelte.ts) polls ?/playback.
 Docs: docs/prds/ARM-06-animate.md; context doc §6b. npm run check: 14 errors, none in touched files. Unit: robot-arm
 suites pass incl. 13 new. Not yet run on the arm; hold route not installed.
+Deployment: production — https://bioscale-operations-system-mongodb-k8ensoa3w-brevitest.vercel.app
+Source: branch master @ commit dda0c439 (merge of PR #116, feat/arm-animate @ 7e6ae83a)
+Retrieve this exact code: git checkout master at commit dda0c439
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: the Animate tab live. Smoke: /manufacturing/cart-mfg/robot-arm/animate 302 to login when
+signed out. Not yet run on the arm; Pi hold route not installed.
