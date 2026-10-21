@@ -6,17 +6,21 @@
 	 * the arm layout cannot wipe unsaved edits.
 	 */
 	import { deserialize } from '$app/forms';
-	import { beforeNavigate, invalidateAll } from '$app/navigation';
+	import { beforeNavigate, goto, invalidateAll } from '$app/navigation';
 	import type { ActionResult } from '@sveltejs/kit';
 	import CleanupTimeline from '$lib/components/robot-arm/CleanupTimeline.svelte';
 	import {
+		DEFAULT_ANIMATION_EASING,
 		SERVO_IDS,
+		draftToAnimation,
 		newStepId,
 		resolveSteps,
 		roundTenth,
+		type AnimationDraft,
 		type CleanMove,
 		type CleanStep
 	} from '$lib/robot-arm/recording-cleanup';
+	import { EASINGS, type Easing } from '$lib/robot-arm/animation';
 	import { STEPS_PER_DEGREE } from '$lib/robot-arm/recording-steps';
 
 	let { data } = $props();
@@ -144,6 +148,38 @@
 			};
 			await invalidateAll();
 			piName = suggestedName();
+		}
+	}
+
+	// --- to the Animate tab ---------------------------------------------------
+	// Same steps, rendered by the Animate engine: poses + a move set the operator
+	// keeps adjusting there. Previewed here from the draft on screen.
+	let animateName = $state(initial.title || data.cleanup.sourceName.replace(/\.jsonl$/i, ''));
+	let animateEasing = $state<Easing>(DEFAULT_ANIMATION_EASING);
+	const animatePreview = $derived.by((): { draft: AnimationDraft | null; error: string | null } => {
+		if (!steps.length) return { draft: null, error: null };
+		try {
+			return { draft: draftToAnimation({ start, steps }, { easing: animateEasing }), error: null };
+		} catch (e) {
+			return { draft: null, error: (e as Error).message };
+		}
+	});
+	const animateDurationS = $derived(
+		animatePreview.draft ? animatePreview.draft.keyframes.reduce((t, k, i) => t + (i ? k.durationS : 0) + k.holdS, 0) : 0
+	);
+	const listSteps = (ns: number[]) => `Step${ns.length > 1 ? 's' : ''} ${ns.join(', ')}`;
+	async function sendToAnimate() {
+		if (!steps.length || animatePreview.error) return;
+		const json = JSON.stringify(snapshot());
+		const r = await run<{ animate: { moveSetId: string; name: string; poses: number; keyframes: number } }>('animate', 'toAnimate', {
+			payload: json,
+			name: animateName,
+			easing: animateEasing
+		});
+		if (r) {
+			savedJson = json;
+			notice = { kind: 'ok', text: `Made "${r.animate.name}" (${r.animate.poses} poses). Opening it in the Animate tab…` };
+			await goto(`${BASE}/animate/moveset/${r.animate.moveSetId}`);
 		}
 	}
 
@@ -676,8 +712,8 @@
 		{/if}
 	</section>
 
-	<!-- Save to Pi + re-split -->
-	<section class="grid gap-4 lg:grid-cols-2">
+	<!-- Save to Pi + send to Animate + re-split -->
+	<section class="grid gap-4 lg:grid-cols-3">
 		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4">
 			<h2 class="mb-1 text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Save to Pi</h2>
 			<p class="mb-3 text-[11px]" style="color: var(--color-tron-text-secondary)">
@@ -701,6 +737,61 @@
 						<li>
 							<span class="font-mono" style="color: var(--color-tron-text)">{s.name}</span>
 							· {new Date(s.at).toLocaleString()}{#if s.by} · {s.by.username}{/if}{#if s.durationS} · {s.durationS.toFixed(1)} s{/if}
+						</li>
+					{/each}
+				</ul>
+			{/if}
+		</div>
+
+		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4">
+			<h2 class="mb-1 text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Send to Animate</h2>
+			<p class="mb-3 text-[11px]" style="color: var(--color-tron-text-secondary)">
+				Makes a move set in the Animate tab from these steps: the start and the end of each step become saved
+				poses; a step's time becomes the move into its pose and its wait becomes the hold. Playback there eases
+				into every pose instead of moving in straight lines, and each pose, time and easing can still be changed.
+				This clean-up is not altered.
+			</p>
+			<div class="flex flex-wrap gap-2">
+				<input
+					bind:value={animateName}
+					placeholder="Move set name"
+					maxlength="80"
+					class="{inputCls} min-w-0 flex-1 py-1 font-sans text-sm"
+					style="color: var(--color-tron-text)"
+				/>
+				<select bind:value={animateEasing} class="{inputCls} py-1 font-sans text-sm" style="color: var(--color-tron-text)" title="How every move arrives at its pose; change per pose in the Animate tab">
+					{#each EASINGS as e (e.id)}
+						<option value={e.id} title={e.hint}>{e.label}</option>
+					{/each}
+				</select>
+				<button
+					type="button"
+					onclick={sendToAnimate}
+					disabled={busy !== null || !steps.length || !animateName.trim() || !!animatePreview.error}
+					class="rounded border border-[var(--color-tron-cyan)]/50 bg-cyan-900/10 px-3 py-1 text-sm font-medium text-[var(--color-tron-cyan)] transition-colors hover:bg-cyan-900/25 disabled:cursor-not-allowed disabled:opacity-40"
+				>
+					{busy === 'animate' ? 'Making…' : 'Send to Animate'}
+				</button>
+			</div>
+			{#if animatePreview.error}
+				<p class="mt-2 text-[11px] text-amber-300">{animatePreview.error}</p>
+			{:else if animatePreview.draft}
+				<p class="mt-2 text-[11px]" style="color: var(--color-tron-text-secondary)">
+					{animatePreview.draft.poses.length} poses · about {fmtS(animateDurationS)} before easing.
+					{#if animatePreview.draft.lengthened.length}
+						{listSteps(animatePreview.draft.lengthened)} will be slowed to the arm's speed limit.
+					{/if}
+					{#if animatePreview.draft.folded.length}
+						{listSteps(animatePreview.draft.folded)} move nothing and become hold time.
+					{/if}
+				</p>
+			{/if}
+			{#if data.cleanup.moveSets?.length}
+				<ul class="mt-3 space-y-0.5 text-[11px]" style="color: var(--color-tron-text-secondary)">
+					{#each [...data.cleanup.moveSets].reverse() as m (m.moveSetId)}
+						<li>
+							<a href="{BASE}/animate/moveset/{m.moveSetId}" class="underline decoration-dotted hover:text-[var(--color-tron-cyan)]" style="color: var(--color-tron-text)">{m.name}</a>
+							· {new Date(m.at).toLocaleString()}{#if m.by} · {m.by.username}{/if}{#if m.poses} · {m.poses} poses{/if}
 						</li>
 					{/each}
 				</ul>

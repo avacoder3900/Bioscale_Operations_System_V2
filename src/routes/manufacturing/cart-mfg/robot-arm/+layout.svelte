@@ -64,6 +64,12 @@
 			icon: 'M4 6h16M4 12h10M4 18h6m9-5l-3 3 3 3m-3-3h5'
 		},
 		{
+			// ARM-06 — pose animation: poses by hand, move sets, sequences.
+			href: `${BASE}/animate`,
+			label: 'Animate',
+			icon: 'M5 4l10 8-10 8V4zm12 0h2v16h-2V4z'
+		},
+		{
 			href: `${BASE}/runs`,
 			label: 'Runs',
 			icon: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01'

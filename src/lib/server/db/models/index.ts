@@ -144,6 +144,9 @@ export { RobotArmEndpoint } from './robot-arm-endpoint.js';
 export { RobotArmTag } from './robot-arm-tag.js';
 export { RobotArmTagCalibration } from './robot-arm-tag-calibration.js';
 export { RobotArmRecordingCleanup } from './robot-arm-recording-cleanup.js';
+export { RobotArmPose } from './robot-arm-pose.js';
+export { RobotArmMoveSet } from './robot-arm-move-set.js';
+export { RobotArmSequence } from './robot-arm-sequence.js';
 
 // Manufacturing Analytics
 export { ProcessAnalyticsEvent } from './process-analytics-event.js';

@@ -60,6 +60,11 @@ const robotArmRecordingCleanupSchema = new Schema(
 			type: [new Schema({ name: String, at: Date, by: operatorRef, frames: Number, durationS: Number }, { _id: false })],
 			default: []
 		},
+		/** Move sets made from this draft for the Animate tab (robot_arm_move_sets). The draft itself is not changed. */
+		moveSets: {
+			type: [new Schema({ moveSetId: String, name: String, at: Date, by: operatorRef, poses: Number, keyframes: Number }, { _id: false })],
+			default: []
+		},
 		createdBy: { type: operatorRef },
 		updatedBy: { type: operatorRef }
 	},

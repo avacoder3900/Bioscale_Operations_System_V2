@@ -128,6 +128,15 @@ describe('maintenance verbs', () => {
 		const bad = robot(() => okCmd({}));
 		expect(await runVerb(bad.t, 'mx.position', { runId: 'm', pipetteId: 'p' })).toEqual({ status: 502, body: { message: 'Robot did not return a position' } });
 	});
+	it('drop-tip moves over the trash, then ejects and homes the plunger', async () => {
+		const { t, calls } = robot(() => okCmd());
+		const r = await runVerb(t, 'mx.dropTip', { runId: 'm', pipetteId: 'p' });
+		expect(r).toEqual({ status: 200, body: { dropped: true } });
+		expect(calls.map((c) => c.body?.data?.commandType)).toEqual(['moveToAddressableAreaForDropTip', 'dropTipInPlace']);
+		// Without homeAfter the GEN2 ejector sleeve can stay part-way down and the
+		// next pick-up cannot seat the tip (Studio Swap tip).
+		expect(calls[1].body.data.params).toEqual({ pipetteId: 'p', homeAfter: true });
+	});
 	it('drop-tip with no tip modelled → 200 {dropped:false}', async () => {
 		const { t } = robot(() => res(201, { data: { status: 'failed', error: { detail: 'Pipette does not have a tip' } } }));
 		const r = await runVerb(t, 'mx.dropTip', { runId: 'm', pipetteId: 'p' });

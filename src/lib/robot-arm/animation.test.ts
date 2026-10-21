@@ -1,0 +1,158 @@
+import { describe, expect, it } from 'vitest';
+import {
+	autoDurationS,
+	buildPath,
+	cleanKeyframes,
+	composeAnimationJsonl,
+	ease,
+	flattenSequence,
+	minDurationS,
+	pathStats,
+	tooFast,
+	MAX_STEPS_PER_S,
+	type ResolvedKeyframe
+} from './animation';
+
+const A = [2048, 1500, 2600, 2048, 2100, 1800];
+const B = [2348, 1700, 2400, 2048, 2100, 1800];
+const C = [2648, 1900, 2200, 2248, 2300, 2100];
+
+function kf(name: string, positions: number[], o: Partial<ResolvedKeyframe> = {}): ResolvedKeyframe {
+	return { poseId: name, name, positions, holdS: 0, durationS: 1, easing: 'ease', ...o };
+}
+
+const speeds = (goal: number[][], rate: number, s: number) => goal.slice(1).map((g, i) => (g[s] - goal[i][s]) * rate);
+
+describe('easing', () => {
+	it('every easing goes 0 → 1 and stays inside', () => {
+		for (const e of ['ease', 'linear', 'in', 'out', 'flow'] as const) {
+			expect(ease(e, 0)).toBe(0);
+			expect(ease(e, 1)).toBe(1);
+			expect(ease(e, 0.5)).toBeGreaterThan(0);
+			expect(ease(e, 0.5)).toBeLessThan(1);
+		}
+		expect(ease('ease', 0.5)).toBeCloseTo(0.5, 9);
+		expect(ease('in', 0.5)).toBeLessThan(0.5);
+		expect(ease('out', 0.5)).toBeGreaterThan(0.5);
+	});
+});
+
+describe('durations', () => {
+	it('minimum duration comes from the fastest servo at the easing\'s peak speed', () => {
+		expect(minDurationS(A, A)).toBe(0);
+		expect(minDurationS(A, B, MAX_STEPS_PER_S, 'linear')).toBe(0.2); // 300 steps / 2000 → 0.15 → floor 0.2
+		expect(minDurationS(A, B)).toBe(0.3); // easy ease peaks at 1.875× average: 0.28 → 0.3
+		expect(minDurationS(A, B, MAX_STEPS_PER_S, 'in')).toBe(0.5); // cubic peaks at 3×: 0.45 → 0.5
+		expect(minDurationS(A, [A[0] + 4000, ...A.slice(1)], MAX_STEPS_PER_S, 'linear')).toBe(2);
+		expect(minDurationS(A, [A[0] + 4000, ...A.slice(1)])).toBe(3.8);
+	});
+	it('a path rendered at the minimum duration is not refused by pathStats', () => {
+		const far = [A[0] + 1500, ...A.slice(1)];
+		for (const easing of ['ease', 'linear', 'in', 'out'] as const) {
+			const d = minDurationS(A, far, MAX_STEPS_PER_S, easing);
+			expect(pathStats(buildPath([kf('A', A), kf('far', far, { durationS: d, easing })], { rateHz: 30 })).tooFast).toEqual([]);
+		}
+	});
+	it('auto duration is comfortable, not fast', () => {
+		expect(autoDurationS(A, B)).toBe(0.5); // 300 / 600
+	});
+	it('cleanKeyframes rejects bad input and defaults the easing', () => {
+		expect(cleanKeyframes([{ poseId: 'p', holdS: 1.26, durationS: 2, easing: 'bogus' }])).toEqual([{ poseId: 'p', holdS: 1.3, durationS: 2, easing: 'ease' }]);
+		expect(() => cleanKeyframes([{ poseId: '', durationS: 1 }])).toThrow(/no pose/);
+		expect(() => cleanKeyframes([{ poseId: 'p', durationS: 0.05 }])).toThrow(/duration/);
+	});
+});
+
+describe('buildPath', () => {
+	it('one segment with easy ease: starts at A, ends exactly at B, settles (slow at both ends)', () => {
+		const p = buildPath([kf('A', A), kf('B', B, { durationS: 2 })], { rateHz: 30 });
+		expect(p.goal[0]).toEqual(A);
+		expect(p.goal[p.goal.length - 1]).toEqual(B);
+		expect(p.durationS).toBe(2);
+		expect(p.t.length).toBe(61);
+		const v = speeds(p.goal, 30, 0);
+		expect(Math.abs(v[0])).toBeLessThan(Math.abs(v[30]));
+		expect(Math.abs(v[v.length - 1])).toBeLessThan(Math.abs(v[30]));
+		// monotone on the servo that moves
+		for (let i = 1; i < p.goal.length; i++) expect(p.goal[i][0]).toBeGreaterThanOrEqual(p.goal[i - 1][0]);
+	});
+
+	it('a hold keeps the pose flat for its whole length', () => {
+		const p = buildPath([kf('A', A), kf('B', B, { durationS: 1, holdS: 1 }), kf('C', C, { durationS: 1 })], { rateHz: 10 });
+		expect(p.durationS).toBe(3);
+		for (let i = 10; i <= 20; i++) expect(p.goal[i]).toEqual(B);
+		expect(p.markers.map((m) => m.t)).toEqual([0, 1, 3]);
+	});
+
+	it('flow carries velocity through the middle pose; ease stops there', () => {
+		const stop = buildPath([kf('A', A), kf('B', B, { durationS: 1 }), kf('C', C, { durationS: 1 })], { rateHz: 30 });
+		const flow = buildPath([kf('A', A), kf('B', B, { durationS: 1, easing: 'flow' }), kf('C', C, { durationS: 1, easing: 'flow' })], { rateHz: 30 });
+		const vStop = speeds(stop.goal, 30, 0);
+		const vFlow = speeds(flow.goal, 30, 0);
+		// frame 30 is the arrival at B
+		expect(Math.abs(vStop[29])).toBeLessThan(40);
+		expect(Math.abs(vFlow[29])).toBeGreaterThan(200);
+		expect(flow.goal[30]).toEqual(B); // still passes exactly through the pose
+		expect(flow.goal[flow.goal.length - 1]).toEqual(C);
+	});
+
+	it('a lead-in starts where the arm is and tweens to the first pose', () => {
+		const now = [2000, 1400, 2700, 2048, 2100, 1800];
+		const p = buildPath([kf('A', A), kf('B', B, { durationS: 1 })], { rateHz: 10, leadIn: { from: now } });
+		expect(p.goal[0]).toEqual(now);
+		expect(p.markers[0]).toMatchObject({ kind: 'lead-in', index: -1, t: 0 });
+		expect(p.markers[1]).toMatchObject({ label: 'A', t: autoDurationS(now, A) });
+		expect(p.goal[p.goal.length - 1]).toEqual(B);
+	});
+
+	it('no lead-in when the arm is already at the first pose', () => {
+		const p = buildPath([kf('A', A), kf('B', B)], { rateHz: 10, leadIn: { from: A } });
+		expect(p.markers[0]).toMatchObject({ kind: 'pose', label: 'A', t: 0 });
+	});
+
+	it('tooFast flags a transition the arm cannot make', () => {
+		const far = [A[0] + 3000, ...A.slice(1)];
+		// 3000 steps at easy ease: 3000 × 1.875 / 2000 = 2.81 → 2.9 s.
+		expect(tooFast([kf('A', A), kf('far', far, { durationS: 0.5 })])).toEqual([{ index: 1, message: expect.stringContaining('at least 2.9 s') }]);
+		expect(tooFast([kf('A', A), kf('far', far, { durationS: 2, easing: 'linear' })])).toEqual([]);
+		expect(tooFast([kf('A', A), kf('far', far, { durationS: 3 })])).toEqual([]);
+		const p = buildPath([kf('A', A), kf('far', far, { durationS: 0.5 })]);
+		expect(pathStats(p).tooFast).toEqual([1]);
+		expect(pathStats(p).maxStepsPerS[0]).toBeGreaterThan(MAX_STEPS_PER_S);
+	});
+});
+
+describe('sequences', () => {
+	it('joins move sets with an automatic transition into the next set', () => {
+		const flat = flattenSequence([
+			{ name: 'wave', keyframes: [kf('A', A), kf('B', B, { durationS: 1 })], join: { durationS: null, easing: 'ease' } },
+			{ name: 'bow', keyframes: [kf('C', C), kf('A', A, { durationS: 2 })], join: { durationS: null, easing: 'ease' } }
+		]);
+		expect(flat.map((k) => k.name)).toEqual(['wave · A', 'wave · B', 'bow · C', 'bow · A']);
+		expect(flat[2].durationS).toBe(autoDurationS(B, C));
+		expect((flat[2] as any).kind).toBe('join');
+		const p = buildPath(flat, { rateHz: 10 });
+		expect(p.markers.map((m) => m.kind)).toEqual(['pose', 'pose', 'join', 'pose']);
+	});
+	it('a set that starts where the last ended just extends the hold', () => {
+		const flat = flattenSequence([
+			{ name: 'x', keyframes: [kf('A', A), kf('B', B, { holdS: 1 })], join: { durationS: null, easing: 'ease' } },
+			{ name: 'y', keyframes: [kf('B', B, { holdS: 0.5 }), kf('C', C)], join: { durationS: null, easing: 'ease' } }
+		]);
+		expect(flat.length).toBe(3);
+		expect(flat[1].holdS).toBe(1.5);
+	});
+});
+
+describe('composeAnimationJsonl', () => {
+	it('writes the Pi recording format with the first frame as neutral', () => {
+		const p = buildPath([kf('A', A), kf('B', B, { durationS: 1 })], { rateHz: 10 });
+		const out = composeAnimationJsonl(p, { jointNames: ['a', 'b', 'c', 'd', 'e', 'f'], title: 'test', now: new Date('2026-10-21T00:00:00Z') });
+		const lines = out.jsonl.trim().split('\n').map((l) => JSON.parse(l));
+		expect(lines[0]).toMatchObject({ event: 'header', rate_hz: 10, follower_neutral: A, animated: 'test' });
+		expect(lines[1]).toEqual({ event: 'frame', t: 0, goal: A });
+		expect(lines[lines.length - 2]).toEqual({ event: 'frame', t: 1, goal: B });
+		expect(lines[lines.length - 1]).toEqual({ event: 'footer', duration_s: 1, frames: 11 });
+		expect(out.frames).toBe(11);
+	});
+});

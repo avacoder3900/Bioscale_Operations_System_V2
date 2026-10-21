@@ -666,8 +666,26 @@
 			loadedWells = null;
 			liveX = liveY = liveZ = null;
 			if (!pipetteId) errMsg = 'Maintenance run opened but no pipette loaded — jog/move will fail until a pipette is configured.';
-			else msg = `Connected. pipette ${pipetteName} on ${pipetteMount}. If a tip is still on the pipette from an earlier session, remove it by hand before moving — a fresh session assumes a bare nozzle.`;
+			else {
+				// Closing the previous run HALTS the OT-2, and nothing re-homes it: the
+				// next pick-up then pressed from a stale Z, stopped short of the tip and
+				// hit the +Z hard limit on the way up (B07, 2026-10-21, Swap tip after a
+				// reopen). Re-reference Z and the plungers on every open — both move up
+				// or into the body, so this is safe even with a tip still on.
+				msg = 'Connected — homing Z and plungers so positions are trustworthy…';
+				await homeZAndPlungers();
+				msg = `Connected. pipette ${pipetteName} on ${pipetteMount}. If a tip is still on the pipette from an earlier session, remove it by hand before moving — a fresh session assumes a bare nozzle.`;
+			}
 		} catch (e) { errMsg = e instanceof Error ? e.message : String(e); } finally { connecting = false; }
+	}
+
+	/** Home both Z axes and both plungers (not X/Y — that is the slow full home). Throws. */
+	async function homeZAndPlungers(): Promise<void> {
+		if (!runId) return;
+		await api(`/api/opentrons-lab/robots/${selectedRobotId}/maintenance/${runId}/home`, {
+			method: 'POST',
+			body: JSON.stringify({ axes: ['leftZ', 'rightZ', 'leftPlunger', 'rightPlunger'] })
+		});
 	}
 
 	// Reopen the run so it re-registers the corrected deck from Mongo — the only
@@ -1295,6 +1313,10 @@
 		try {
 			const dropped = await doDropTip();
 			hasTip = false; tipAdjust = null; nominal = null; refWell = null;
+			// Re-reference Z before the press: a pick-up from a stale Z stops short of
+			// the tip (see startMaintenance). Cheap next to a mis-seated tip.
+			msg = 'Dropped. Homing Z before the pick-up…';
+			await homeZAndPlungers();
 			const from = tipWell;
 			msg = dropped ? `Dropped. Picking up a fresh tip (${tiprackForProfile} ${from})…` : `No tip was modelled (a hand-fitted tip must come off by hand). Picking up ${tiprackForProfile} ${from}…`;
 			await doPickUpTip();
