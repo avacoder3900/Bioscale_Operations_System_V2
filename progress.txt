@@ -21853,4 +21853,9 @@ go-to/play/by-hand disabled while following with a specific reason. Each teleop 
 and closes 'cancelled' (how the Pi reports a stopped teleop); N saves = N+1 short runs — accepted for traceability.
 Pre-existing hazard noted, not changed: the camera card's TorqueControl and /api/robot-arm/torque GET read /servos
 regardless of session state. Docs: ARM-06 PRD status, §2.1, new §8; context doc §6b. svelte-check 14 errors (baseline
-on this branch), none in touched files; robot-arm unit suites pass. Not run on the arm.
+on this branch), none in touched files; robot-arm unit suites pass. Not run on the arm. PR #121.
+Deployment: preview — https://bioscale-operations-system-mongodb-odvj7h8es-brevitest.vercel.app
+Source: branch feat/animate-pose-with-leader @ commit ba4f6b40
+Retrieve this exact code: git checkout feat/animate-pose-with-leader at commit ba4f6b40
+  (or: git log feat/animate-pose-with-leader --oneline to find it if the branch has since moved on)
+What this deployment is for: Animate tab capture panel — "Pose with the control arm" (teleop), Save pose, Done
