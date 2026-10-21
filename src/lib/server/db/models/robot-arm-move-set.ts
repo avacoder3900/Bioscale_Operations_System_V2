@@ -13,7 +13,9 @@ const keyframeSchema = new Schema(
 		poseId: { type: String, required: true },
 		holdS: { type: Number, default: 0 },
 		durationS: { type: Number, default: 1 },
-		easing: { type: String, enum: ['ease', 'linear', 'in', 'out', 'flow'], default: 'ease' }
+		easing: { type: String, enum: ['ease', 'linear', 'in', 'out', 'flow'], default: 'ease' },
+		/** Per-servo steps on top of the pose for this keyframe only (timeline edits). */
+		offsets: { type: [Number], default: undefined }
 	},
 	{ _id: false }
 );

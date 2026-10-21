@@ -54,6 +54,16 @@ export const MAX_KEYFRAMES = 200;
 /** One rendered path (a sequence) may not be longer than this. */
 export const MAX_PATH_S = 600;
 
+/** A timeline edit may move one joint at most this far from its pose. */
+export const MAX_OFFSET_STEPS = 1000;
+/**
+ * Droop trim (pose.trim) is capped here. Under gravity an STS3215 settles a
+ * few to a few tens of steps short of its goal; much more than this is not
+ * droop but a stalled or blocked joint, and a large trim would also push the
+ * first frame of a saved recording past Control's ±50-step replay preflight.
+ */
+export const MAX_TRIM_STEPS = 50;
+
 export interface Keyframe {
 	poseId: string;
 	/** Seconds to stay at the pose once reached. */
@@ -61,6 +71,11 @@ export interface Keyframe {
 	/** Seconds the move INTO this pose takes (ignored for the first keyframe). */
 	durationS: number;
 	easing: Easing;
+	/**
+	 * Per-servo steps added to the pose for this keyframe only — what dragging
+	 * a joint on the timeline edits. Absent when every joint is at its pose.
+	 */
+	offsets?: number[];
 }
 
 export interface ResolvedKeyframe extends Keyframe {
@@ -78,6 +93,8 @@ export interface PathMarker {
 	/** Index in the keyframe list the path was built from (−1 for the lead-in origin). */
 	index: number;
 	holdS: number;
+	/** Where every servo is at this marker (what the timeline's joint dots show). */
+	positions: number[];
 }
 
 export interface RenderedPath {
@@ -182,8 +199,60 @@ export function cleanKeyframes(input: unknown): Keyframe[] {
 		if (!Number.isFinite(durationS) || durationS < MIN_TRANSITION_S || durationS > MAX_TRANSITION_S)
 			throw new Error(`keyframe ${i + 1}: duration must be ${MIN_TRANSITION_S}–${MAX_TRANSITION_S} s`);
 		const easing = isEasing(k?.easing) ? k.easing : 'ease';
-		return { poseId, holdS: roundTenth(holdS), durationS: roundTenth(durationS), easing };
+		const out: Keyframe = { poseId, holdS: roundTenth(holdS), durationS: roundTenth(durationS), easing };
+		const offsets = cleanOffsets(k?.offsets, MAX_OFFSET_STEPS);
+		if (offsets) out.offsets = offsets;
+		return out;
 	});
+}
+
+/**
+ * Six whole-step offsets each within ±limit, or null when there are none
+ * (missing, not a list, or all zero) — so an untouched keyframe stores nothing.
+ */
+export function cleanOffsets(input: unknown, limit: number): number[] | null {
+	if (!Array.isArray(input) || input.length !== SERVO_COUNT) return null;
+	const out = input.map((v) => {
+		const n = Math.round(Number(v));
+		return Number.isFinite(n) ? Math.max(-limit, Math.min(limit, n)) : 0;
+	});
+	return out.some((v) => v !== 0) ? out : null;
+}
+
+/**
+ * Where a keyframe sends the arm: the pose, plus the keyframe's timeline
+ * offsets, plus (for what is written to the Pi) the pose's droop trim.
+ * Clamped to the encoder range.
+ */
+export function keyframePositions(pose: number[], offsets?: number[] | null, trim?: number[] | null): number[] {
+	return pose.map((p, s) => clampStep(p + (offsets?.[s] ?? 0) + (trim?.[s] ?? 0)));
+}
+
+// ── droop ────────────────────────────────────────────────────────────────
+
+/**
+ * Servos whose droop is measured and trimmed: base, shoulder, elbow, wrist
+ * flex, wrist roll. Not the gripper — its "shortfall" when closed on a part is
+ * the grip itself, and trimming it would only squeeze harder.
+ */
+export const TRIM_SERVOS = [1, 2, 3, 4, 5];
+/** A measurement is done when every trimmed servo settles this close to the pose. */
+export const TRIM_DONE_STEPS = 2;
+
+/**
+ * One step of the droop measurement. The arm was commanded to `pose + trim`
+ * and settled at `present`; whatever it is still short of the pose is added
+ * to the trim, so next time the goal leads the pose by what gravity takes
+ * off it. Returns the new trim and the residual (pose − present) it used.
+ */
+export function nextTrim(pose: number[], present: number[], trim: number[]): { trim: number[]; residual: number[]; done: boolean } {
+	const residual = pose.map((p, s) => (TRIM_SERVOS.includes(s + 1) ? p - present[s] : 0));
+	const done = residual.every((r) => Math.abs(r) <= TRIM_DONE_STEPS);
+	const next = trim.map((t, s) => {
+		if (!TRIM_SERVOS.includes(s + 1)) return 0;
+		return done ? t : Math.max(-MAX_TRIM_STEPS, Math.min(MAX_TRIM_STEPS, t + residual[s]));
+	});
+	return { trim: next, residual, done };
 }
 
 export interface KeyframeProblem {
@@ -310,7 +379,7 @@ export function buildPath(kfs: ResolvedKeyframe[], o: BuildOptions = {}): Render
 		goal[goal.length - 1] = nodes[nodes.length - 1].positions.map(clampStep);
 	}
 
-	const markers: PathMarker[] = nodes.map((nd, i) => ({ t: round4(arrive[i]), label: nd.label, kind: nd.kind, index: nd.index, holdS: nd.holdS }));
+	const markers: PathMarker[] = nodes.map((nd, i) => ({ t: round4(arrive[i]), label: nd.label, kind: nd.kind, index: nd.index, holdS: nd.holdS, positions: nd.positions.map(clampStep) }));
 	return { rateHz: rate, t: tOut, goal, markers, durationS: round4(total) };
 }
 

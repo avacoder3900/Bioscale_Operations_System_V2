@@ -7,7 +7,7 @@
 	import { enhance } from '$app/forms';
 	import { onDestroy } from 'svelte';
 	import AnimationCurves from '$lib/components/robot-arm/AnimationCurves.svelte';
-	import { autoDurationS, buildPath, flattenSequence, pathStats, tooFast, EASINGS, MAX_TRANSITION_S, MIN_TRANSITION_S, type Easing, type RenderedPath, type ResolvedKeyframe, type SequenceItem } from '$lib/robot-arm/animation';
+	import { autoDurationS, buildPath, flattenSequence, keyframePositions, pathStats, tooFast, EASINGS, MAX_TRANSITION_S, MIN_TRANSITION_S, type Easing, type RenderedPath, type ResolvedKeyframe, type SequenceItem } from '$lib/robot-arm/animation';
 	import { DEFAULT_JOINT_NAMES } from '$lib/robot-arm/recording-cleanup';
 	import { Playback } from '$lib/robot-arm/playback.svelte';
 	import type { MoveSetSummary, PoseSummary, SequenceItemRecord, SequenceSummary } from '$lib/server/robot-arm-animation';
@@ -43,7 +43,7 @@
 		for (const k of ms.keyframes) {
 			const p = poseById.get(k.poseId);
 			if (!p) return null;
-			out.push({ ...k, name: p.name, positions: p.positions });
+			out.push({ ...k, name: p.name, positions: keyframePositions(p.positions, k.offsets) });
 		}
 		return out;
 	}

@@ -3,13 +3,17 @@ import {
 	autoDurationS,
 	buildPath,
 	cleanKeyframes,
+	cleanOffsets,
 	composeAnimationJsonl,
 	ease,
 	flattenSequence,
+	keyframePositions,
 	minDurationS,
+	nextTrim,
 	pathStats,
 	tooFast,
 	MAX_STEPS_PER_S,
+	MAX_TRIM_STEPS,
 	type ResolvedKeyframe
 } from './animation';
 
@@ -154,5 +158,62 @@ describe('composeAnimationJsonl', () => {
 		expect(lines[lines.length - 2]).toEqual({ event: 'frame', t: 1, goal: B });
 		expect(lines[lines.length - 1]).toEqual({ event: 'footer', duration_s: 1, frames: 11 });
 		expect(out.frames).toBe(11);
+	});
+});
+
+describe('timeline offsets', () => {
+	it('cleanOffsets keeps six whole steps within the limit and drops all-zero', () => {
+		expect(cleanOffsets([1.4, -2.6, 0, 0, 0, 5000], 1000)).toEqual([1, -3, 0, 0, 0, 1000]);
+		expect(cleanOffsets([0, 0, 0, 0, 0, 0], 1000)).toBeNull();
+		expect(cleanOffsets([1, 2], 1000)).toBeNull();
+		expect(cleanOffsets(undefined, 1000)).toBeNull();
+	});
+	it('cleanKeyframes keeps offsets only when something moved', () => {
+		const [a, b] = cleanKeyframes([
+			{ poseId: 'p', durationS: 1, offsets: [0, 12, 0, 0, 0, 0] },
+			{ poseId: 'q', durationS: 1, offsets: [0, 0, 0, 0, 0, 0] }
+		]);
+		expect(a.offsets).toEqual([0, 12, 0, 0, 0, 0]);
+		expect('offsets' in b).toBe(false);
+	});
+	it('keyframePositions adds offsets and trim, clamped to the encoder', () => {
+		expect(keyframePositions([100, 2000, 4090, 0, 0, 0], [0, 30, 10, -5, 0, 0], [0, 12, 0, 0, 0, 0])).toEqual([100, 2042, 4095, 0, 0, 0]);
+		expect(keyframePositions(A)).toEqual(A);
+	});
+	it('markers carry each pose position, so the timeline can draw its dots', () => {
+		const p = buildPath([kf('A', A), kf('B', B)], { rateHz: 10 });
+		expect(p.markers.map((m) => m.positions)).toEqual([A, B]);
+	});
+});
+
+describe('droop trim', () => {
+	const pose = [2000, 2400, 2400, 1200, 540, 2250];
+	it('adds the shortfall to the trim on servos 1–5, never the gripper', () => {
+		const settled = [2000, 2388, 2409, 1197, 540, 2200];
+		const r = nextTrim(pose, settled, [0, 0, 0, 0, 0, 0]);
+		expect(r.residual).toEqual([0, 12, -9, 3, 0, 0]);
+		expect(r.trim).toEqual([0, 12, -9, 3, 0, 0]);
+		expect(r.done).toBe(false);
+	});
+	it('converges: a second round that lands on the pose keeps the trim', () => {
+		const r = nextTrim(pose, [2000, 2399, 2401, 1200, 541, 2210], [0, 12, -9, 3, 0, 0]);
+		expect(r.done).toBe(true);
+		expect(r.trim).toEqual([0, 12, -9, 3, 0, 0]);
+	});
+	it('is capped, so a blocked joint cannot run away', () => {
+		const r = nextTrim(pose, [2000, 2300, 2400, 1200, 540, 2250], [0, 40, 0, 0, 0, 0]);
+		expect(r.trim[1]).toBe(MAX_TRIM_STEPS);
+	});
+	it('a simulated sagging servo lands on the pose once trimmed', () => {
+		// Proportional position loop under a constant load: settles `sag` short of its goal.
+		const sag = [0, 14, -8, 5, 0, 0];
+		const settle = (goal: number[]) => goal.map((g, s) => g - sag[s]);
+		let trim = [0, 0, 0, 0, 0, 0];
+		for (let round = 0; round < 4; round++) {
+			const r = nextTrim(pose, settle(keyframePositions(pose, null, trim)), trim);
+			trim = r.trim;
+			if (r.done) break;
+		}
+		expect(settle(keyframePositions(pose, null, trim)).slice(0, 5)).toEqual(pose.slice(0, 5));
 	});
 });
