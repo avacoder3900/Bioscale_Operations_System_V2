@@ -21745,3 +21745,35 @@ Tests: +7 wellLogWindow; vitest manufacturing/opentrons/robots 110 passed; svelt
 Deployment: production — via Vercel GitHub integration on push to master
 Source: branch feat/post-run-well-log, merged to master
 What this deployment is for: log reagent well mistakes after the run finishes
+
+================================================================================
+2026-10-21 — feat/state-change-protected-warning — State Change warns before moving experiment-linked or app-owned carts
+================================================================================
+Root cause of the 2026-10-20 "Chris's carts became reagent_filled" report: not a system
+path. The audit log shows jacob's State Change batch at 17:27 UTC moved five carts of
+experiment "374 - 10_14_26 - Exploration - Carts for John, Chris, and Riley" (all assigned
+to app account google:100574594052410538378 on 10-19) from linked → reagent_filled; two
+were re-linked in the research app a minute later with the Cortisol 6.1 assay, three were
+left at reagent_filled until Samantha reverted them on 10-21 18:28 UTC. The device Lambda
+only runs carts at linked/underway, so those three could not start a test. finalizeReagentRun
+never touches linked carts (PRE_REAGENT_STATUSES guard); the consumer app only reads status;
+the ownership module writes a separate collection. State Change was the only writer and it
+allowed any → any with no warning.
+Fix: new src/lib/server/manufacturing/protected-carts.ts — findProtectedCarts() flags a cart
+that is linked to an experiment (`experiment` set), at a test-side status (linked / underway /
+completed), or has an open cartridge_ownership row (account name/email or customer name
+resolved for display). The changeState action calls it before writing anything: if any scanned
+cart is protected and `confirmProtected` is not set, it returns `{needsConfirm, protected}` and
+writes nothing. The page shows an amber panel listing each cart with why, with "Drop these from
+the batch" (removes them from the box) and "Change anyway (reason required)" which resubmits
+with confirmProtected=on; the server also refuses the confirmed batch without a reason. Editing
+the box or the target voids the confirmation. Overrides are recorded: the cart note gets
+"overrode: <reasons>", the state_change audit row gets `protectedOverride` {status, experiment,
+arm, accountId, customerId}, and carts on the bucket path get an extra
+`state_change_protected_override` row. Ownership rows are never touched by the page.
+Files: src/lib/server/manufacturing/protected-carts.ts (+ .test.ts, 9 tests),
+src/routes/manufacturing/cart-mfg/state-change/+page.server.ts, +page.svelte.
+Tests: vitest protected-carts 9 passed; svelte-check 14 errors (baseline, none in changed files).
+Caveat for the three reverted carts (118ad432…, 1f3ffb26…, 517adef9…): "linked" again but assayId
+is still blank — the device looks the assay up before a run, so they likely need a relink in
+the research app like the other two got.
