@@ -21627,3 +21627,13 @@ already reads it this way). /pose is kept only to record the Cartesian pose on a
 Touched: src/lib/server/robot-arm-vision.ts, Robot_Arm_Calibration_Context.md. The live Pi OpenAPI (reachable today)
 already lists /cameras/{name}/apriltags + /detect, so the ARM-05 route is installed. npm run check: 14 errors, none in
 touched files. Unit: robot-arm suites 90/90. A calibration saved while /pose was failing has no encoder home: recalibrate.
+Deployment: preview — https://bioscale-operations-system-mongodb-ov7804hsj-brevitest.vercel.app
+Source: branch fix/arm-home-encoders-via-servos @ commit 2eef02a5
+Retrieve this exact code: git checkout fix/arm-home-encoders-via-servos at commit 2eef02a5
+What this deployment is for: PR #107 check before merge. Smoke: /login 200, Vision tab 302, agent check 401.
+Deployment: production — https://bioscale-operations-system-mongodb-eibray6yz-brevitest.vercel.app
+Source: branch master @ commit 5c7666d5 (merge of PR #107)
+Retrieve this exact code: git checkout master at commit 5c7666d5
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: Return to home / Check / Save calibration read encoders via /servos. Smoke: /login 200,
+Vision tab 302. Not yet re-tried on the arm by the operator.
