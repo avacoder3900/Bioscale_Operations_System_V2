@@ -763,7 +763,13 @@ export class RobotSession {
 		this.set({ usedVia: next });
 	}
 
+	/**
+	 * Mutations and failures are traced; a successful read is not. Run-status polls
+	 * (`run.get` every few seconds) were 99.6% of ot2_direct_calls — 132k identical
+	 * rows in October — and told nobody anything (PERF-01 BM-04).
+	 */
 	private record(row: Omit<DirectCallRow, 'sessionId'>) {
+		if (row.ok && row.method === 'GET') return;
 		this.log.push({ sessionId: this.sessionId, ...row });
 		if (this.log.length >= 50) void this.flush();
 	}

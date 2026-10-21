@@ -12,20 +12,36 @@
 	 *   proxy  — snapshot-polling through a BIMS route. Works for any viewer
 	 *            that can reach BIMS, including a phone on cellular with no
 	 *            tailnet. This is the floor, and it is never removed.
-	 *   direct — one MJPEG connection straight to the Pi's public origin. Real
-	 *            video instead of stills, at one connection instead of one
-	 *            request per frame. Requires the viewer to reach the Pi.
+	 *   direct — frames PULLED straight from the Pi, one in flight at a time:
+	 *            fetch snapshot.jpg, show it, ask for the next. Same method as
+	 *            the CV stations' live view (post-mortem-inspect, 2026-10-14).
+	 *            Requires the viewer to reach one of the Pi's origins.
+	 *
+	 * Why pull and not the MJPEG stream (2026-10-20, measured at 720p): the Pi
+	 * pushed ~11 Mbit/s, the Cloudflare tunnel carried ~2.7, and the unsent
+	 * frames queued in sockets and proxies. A browser cannot skip ahead in a
+	 * multipart stream, so the view fell seconds behind. Pulling drops frames
+	 * instead of queuing them, so lag is bounded at about one round trip.
+	 * Live frames ask the Pi for a lighter re-encode (?q=&w=); Save and
+	 * AprilTag detection still get full quality.
+	 *
+	 * Origins are raced: the Pi's Tailscale name (peer-to-peer for a viewer
+	 * on the tailnet, ~0.1 s/frame) and its Cloudflare tunnel (~0.6 s). The
+	 * first to answer wins, so tailnet viewers get the fast route and
+	 * everyone else still gets a picture.
 	 *
 	 * Direct is attempted, not assumed: we probe first and fall back to proxy
 	 * on any failure, including later ones. A feed that quietly degrades to
 	 * stills is a much better outcome than a feed that stops.
 	 *
-	 * In proxy mode frames are preloaded into a detached Image before being
+	 * In both modes frames are preloaded into a detached Image before being
 	 * swapped in, so a slow or failed frame leaves the previous one on screen
 	 * instead of flashing an empty box.
 	 */
 	import { untrack } from 'svelte';
 	import type { CameraStatus } from '$lib/server/robot-arm-client';
+	import RotatedFrame from '$lib/components/robot-arm/RotatedFrame.svelte';
+	import { cameraRotation } from '$lib/robot-arm/camera-rotation.svelte';
 
 	interface Props {
 		cameras: CameraStatus[];
@@ -38,7 +54,11 @@
 	// Deliberately not `as const`: these are compared against and bound to
 	// values that arrive as plain number/string from localStorage and <select>,
 	// and a literal-union type here only produces cast noise at every use site.
+	// Proxy stays at <= 10 fps: every proxied frame is a Vercel invocation.
+	// Direct mode's choice is a cap on the pull loop; the link sets the real
+	// rate (one frame in flight), and frames never touch BIMS.
 	const FPS_OPTIONS: number[] = [1, 5, 10];
+	const DIRECT_FPS_OPTIONS: number[] = [5, 10, 15, 30];
 	const SIZES = { S: 320, M: 480, L: 640 };
 	type SizeKey = keyof typeof SIZES;
 	const SIZE_KEYS = Object.keys(SIZES) as SizeKey[];
@@ -50,10 +70,18 @@
 	// frames. A frozen image that reads as live is the dangerous failure here.
 	const STALE_AFTER_MS = 3000;
 
+	// Direct-mode live frames: a lighter JPEG than the stored one, sized to
+	// what is on screen (the CV stations use q75 for the same reason).
+	const LIVE_Q = 70;
+	// Consecutive failed direct frames before giving up on the route.
+	const DIRECT_MAX_FAILURES = 6;
+	const DIRECT_FRAME_TIMEOUT_MS = 6000;
+
 	// Resolved by the reconcile effect below, never seeded from `cameras` here:
 	// a one-shot seed captures an empty list on first paint and never recovers.
 	let selected = $state('');
 	let fps = $state<number>(5);
+	let directFps = $state<number>(30);
 	let size = $state<SizeKey>('M');
 	let collapsed = $state(false);
 	let paused = $state(false);
@@ -70,7 +98,13 @@
 	// Starts at 'proxy' so the feed works before negotiation finishes, and so
 	// every failure path has somewhere safe to land.
 	let transport = $state<'proxy' | 'direct'>('proxy');
-	let cred = $state<{ origin: string; token: string } | null>(null);
+	let cred = $state<{ origin: string; token: string; expiresAt: number } | null>(null);
+	// Which raced origin won, for the health strip.
+	let route = $state<'tailnet' | 'tunnel' | 'public' | null>(null);
+	// Recent frame times, for a measured (not requested) frame rate.
+	let frameTimes: number[] = [];
+	let measuredFps = $state<number | null>(null);
+	let isFullscreen = $state(false);
 	// Plain variable, not $state, on purpose: this is control flow for an
 	// effect that also reads it, and a reactive flag there re-triggers the very
 	// effect that sets it.
@@ -81,18 +115,8 @@
 	// Only meaningful while we are actually asking for frames. A deliberately
 	// paused feed is not stale, and labelling it "stale" would train the
 	// operator to ignore the one warning that matters.
-	// In direct mode we hand the socket to the browser and never see individual
-	// frames, so a client-side clock cannot detect a frozen picture. Fall back
-	// to the Pi's own staleness flag, which is computed at the source. It only
-	// refreshes when layout data does, so it is slower to notice than the
-	// polling path — but a late warning beats inventing a client-side one from
-	// numbers we do not have.
-	let stale = $derived(
-		running &&
-			(transport === 'direct'
-				? !!selectedStatus?.stale
-				: lastFrameAt !== null && now - lastFrameAt > STALE_AFTER_MS)
-	);
+	// Both transports now see every frame land, so one client-side clock covers both.
+	let stale = $derived(running && lastFrameAt !== null && now - lastFrameAt > STALE_AFTER_MS);
 	let reconnecting = $derived(failures > 0);
 
 	// Server-reported geometry, e.g. [480, 640, 3] -> "640x480".
@@ -103,6 +127,32 @@
 				? `${selectedStatus.requested.width}x${selectedStatus.requested.height}`
 				: null
 	);
+
+	// Frame geometry for the rotated viewport. The <img>'s own decoded size is
+	// the truth (it follows a hardware.yaml change at once); the Pi's report
+	// covers the gap before the first frame, and an MJPEG stream whose load
+	// event never fires.
+	let naturalSize = $state<[number, number] | null>(null);
+	let frameDims = $derived.by((): [number, number] => {
+		if (naturalSize) return naturalSize;
+		const a = selectedStatus?.actual_size;
+		if (a && a.length >= 2) return [a[1], a[0]];
+		if (selectedStatus) return [selectedStatus.requested.width, selectedStatus.requested.height];
+		return [4, 3];
+	});
+	let quarterTurn = $derived(cameraRotation.deg === 90 || cameraRotation.deg === 270);
+	// The size menu sets the picture's long edge, so a camera on its side
+	// does not come out ~1.8x taller than the same size upright.
+	let viewportMaxWidth = $derived(
+		quarterTurn ? Math.round((SIZES[size] * frameDims[1]) / frameDims[0]) : SIZES[size]
+	);
+
+	$effect(() => cameraRotation.restore());
+	// Another camera has its own geometry; wait for its first frame.
+	$effect(() => {
+		void selected;
+		naturalSize = null;
+	});
 
 	function preload(url: string, timeoutMs?: number): Promise<void> {
 		return new Promise((resolve, reject) => {
@@ -141,6 +191,9 @@
 			if (!raw) return;
 			const saved = JSON.parse(raw);
 			if (typeof saved.fps === 'number' && FPS_OPTIONS.includes(saved.fps)) fps = saved.fps;
+			if (typeof saved.directFps === 'number' && DIRECT_FPS_OPTIONS.includes(saved.directFps)) {
+				directFps = saved.directFps;
+			}
 			if (saved.size in SIZES) size = saved.size;
 			if (typeof saved.collapsed === 'boolean') collapsed = saved.collapsed;
 			// Remembered, not applied: the camera list may still be empty at this
@@ -166,7 +219,7 @@
 	});
 
 	$effect(() => {
-		const snapshot = JSON.stringify({ fps, size, collapsed, selected });
+		const snapshot = JSON.stringify({ fps, directFps, size, collapsed, selected });
 		try {
 			localStorage.setItem(STORAGE_KEY, snapshot);
 		} catch {
@@ -224,24 +277,32 @@
 					// available:false is a settled answer (no public origin
 					// configured, or the Pi cannot mint) — retrying cannot change
 					// it, so stop rather than burn attempts.
-					if (cancelled || !body?.available || !body.origin || !body.token) return;
-
-					const origin = String(body.origin);
+					if (cancelled || !body?.available || !body.token) return;
+					const origins: string[] = Array.isArray(body.origins)
+						? body.origins.map(String)
+						: body.origin
+							? [String(body.origin)]
+							: [];
+					if (!origins.length) return;
 					const token = String(body.token);
 
-					// Probe with snapshot.jpg, not the stream. A terminating image
-					// has a dependable load event and can be timed out; an <img>
-					// pointed at multipart/x-mixed-replace has neither, so using
-					// the stream itself as its own reachability test cannot
-					// distinguish "works" from "still waiting".
-					await preload(
-						`${origin}/cameras/${encodeURIComponent(name)}/snapshot.jpg` +
-							`?token=${encodeURIComponent(token)}&t=${Date.now()}`,
-						PROBE_TIMEOUT_MS
+					// Race every origin with one small live frame; the first to
+					// load wins. On the tailnet the Pi's ts.net name answers in
+					// ~0.1 s and beats the tunnel; off it, the tunnel answers and
+					// the ts.net probe just loses (or fails) in the background.
+					const origin = await Promise.any(
+						origins.map((o) =>
+							preload(liveFrameUrl(o, name, token), PROBE_TIMEOUT_MS).then(() => o)
+						)
 					);
 					if (cancelled) return;
 
-					cred = { origin, token };
+					cred = {
+						origin,
+						token,
+						expiresAt: Date.now() + Number(body.expiresInS ?? 900) * 1000
+					};
+					route = routeOf(origin);
 					transport = 'direct';
 					// Client-side frame stats describe the polling loop and mean
 					// nothing for a streamed connection. Clear them rather than
@@ -249,6 +310,8 @@
 					frameCount = 0;
 					lastFrameAt = null;
 					failures = 0;
+					frameTimes = [];
+					measuredFps = null;
 					return;
 				} catch {
 					// Unreachable, blocked, slow, or an expired token. Never log the
@@ -266,30 +329,148 @@
 		};
 	});
 
-	// --- direct mode: one long-lived connection ------------------------------
-	$effect(() => {
-		if (transport !== 'direct' || !cred || !selected || !running) return;
-		const c = cred;
-		displaySrc =
-			`${c.origin}/cameras/${encodeURIComponent(selected)}/stream.mjpg` +
-			`?token=${encodeURIComponent(c.token)}&t=${Date.now()}`;
+	// --- direct mode: pull one frame at a time --------------------------------
+	function routeOf(origin: string): 'tailnet' | 'tunnel' | 'public' {
+		if (/\.ts\.net$/.test(origin)) return 'tailnet';
+		if (/\.trycloudflare\.com$/.test(origin)) return 'tunnel';
+		return 'public';
+	}
 
+	// The frame's own width is SIZES[size] on screen, rotated or not (see
+	// viewportMaxWidth), times the display's pixel density. Fullscreen gets
+	// the full frame. A Pi build without q/w ignores them.
+	function liveWidth(): number | null {
+		if (isFullscreen) return null;
+		const dpr = typeof window === 'undefined' ? 1 : window.devicePixelRatio || 1;
+		return Math.max(320, Math.min(1920, Math.round(SIZES[size] * dpr)));
+	}
+
+	function liveFrameUrl(origin: string, name: string, token: string): string {
+		const w = liveWidth();
+		return (
+			`${origin}/cameras/${encodeURIComponent(name)}/snapshot.jpg` +
+			`?token=${encodeURIComponent(token)}&q=${LIVE_Q}${w ? `&w=${w}` : ''}&t=${Date.now()}`
+		);
+	}
+
+	// Full-quality still for Save (no q/w), whichever transport is live.
+	let saveHref = $derived(
+		transport === 'direct' && cred && selected
+			? `${cred.origin}/cameras/${encodeURIComponent(selected)}/snapshot.jpg?token=${encodeURIComponent(cred.token)}`
+			: displaySrc
+	);
+
+	function noteFrame() {
+		const t = Date.now();
+		frameCount += 1;
+		lastFrameAt = t;
+		frameTimes.push(t);
+		if (frameTimes.length > 20) frameTimes.shift();
+		measuredFps =
+			frameTimes.length >= 2
+				? Math.round(((frameTimes.length - 1) * 10000) / (t - frameTimes[0])) / 10
+				: null;
+	}
+
+	// Re-mint before the camera token runs out (the Pi's default is 15 min),
+	// keeping the origin that won the race as long as it is still offered.
+	async function refreshToken(): Promise<boolean> {
+		try {
+			const res = await fetch('/api/robot-arm/cameras/stream-url');
+			if (!res.ok) return false;
+			const body = await res.json();
+			const c = untrack(() => cred);
+			if (!body?.available || !body.token || !c) return false;
+			const offered: string[] = Array.isArray(body.origins)
+				? body.origins.map(String)
+				: [String(body.origin)];
+			if (!offered.includes(c.origin)) return false;
+			cred = {
+				origin: c.origin,
+				token: String(body.token),
+				expiresAt: Date.now() + Number(body.expiresInS ?? 900) * 1000
+			};
+			return true;
+		} catch {
+			return false;
+		}
+	}
+
+	$effect(() => {
+		const name = selected;
+		const active = running;
+		const minInterval = 1000 / directFps;
+		if (transport !== 'direct' || !name || !active) return;
+
+		let cancelled = false;
+		let timer: ReturnType<typeof setTimeout>;
+		// Local on purpose, as in the proxy loop: reading reactive state in
+		// here would re-run this effect for every frame it shows.
+		let localFailures = 0;
+
+		async function tick() {
+			if (cancelled) return;
+			const before = untrack(() => cred);
+			if (!before) return;
+			if (before.expiresAt - Date.now() < 60_000) await refreshToken();
+			const c = untrack(() => cred);
+			if (cancelled || !c) return;
+			const t0 = Date.now();
+			const url = liveFrameUrl(c.origin, name, c.token);
+			try {
+				await preload(url, DIRECT_FRAME_TIMEOUT_MS);
+				if (cancelled) return;
+				displaySrc = url;
+				noteFrame();
+				localFailures = 0;
+				failures = 0;
+			} catch {
+				if (cancelled) return;
+				localFailures += 1;
+				failures = localFailures;
+				// The usual quiet cause is an aged-out token: re-mint once early.
+				if (localFailures === 2) await refreshToken();
+				if (localFailures >= DIRECT_MAX_FAILURES) {
+					fallBackToProxy();
+					return;
+				}
+			}
+			// One frame in flight; the next request starts when this one lands,
+			// no sooner than the fps cap allows. Back off on failure.
+			const delay =
+				localFailures > 0
+					? Math.min(500 * localFailures, 3000)
+					: Math.max(0, minInterval - (Date.now() - t0));
+			timer = setTimeout(tick, delay);
+		}
+
+		tick();
 		return () => {
-			// Clearing src is what actually closes the socket. Without this,
-			// "pause" would stop the picture while the Pi kept encoding and
-			// sending frames — the camera would still be powered and busy.
-			displaySrc = null;
+			cancelled = true;
+			clearTimeout(timer);
 		};
 	});
 
-	// Any error on a direct stream — a drop, or a token that aged out — sends
-	// us back to the transport that always works.
-	function handleStreamError() {
+	function fallBackToProxy() {
 		if (transport !== 'direct') return;
 		transport = 'proxy';
 		cred = null;
-		displaySrc = null;
+		route = null;
+		measuredFps = null;
+		frameTimes = [];
 	}
+
+	// Frames are preloaded before display, so an <img> error here means the
+	// route itself broke; go back to the transport that always works.
+	function handleStreamError() {
+		fallBackToProxy();
+	}
+
+	$effect(() => {
+		const onFs = () => (isFullscreen = !!document.fullscreenElement);
+		document.addEventListener('fullscreenchange', onFs);
+		return () => document.removeEventListener('fullscreenchange', onFs);
+	});
 
 	// --- the polling loop ---------------------------------------------------
 	$effect(() => {
@@ -312,8 +493,7 @@
 				await preload(url);
 				if (cancelled) return;
 				displaySrc = url;
-				frameCount += 1;
-				lastFrameAt = Date.now();
+				noteFrame();
 				localFailures = 0;
 				failures = 0;
 			} catch {
@@ -422,23 +602,31 @@
 				<!-- Viewport -->
 				<div
 					class="relative overflow-hidden rounded border bg-black"
-					style="border-color: var(--color-tron-border); max-width: {SIZES[size]}px"
+					style="border-color: var(--color-tron-border); max-width: {viewportMaxWidth}px"
 				>
 					{#if displaySrc}
-						<!--
-							No crossorigin attribute: an <img> may load cross-origin
-							without CORS, and asking for it here would require the Pi
-							to send headers it does not, breaking direct mode outright.
-							We only display these pixels, never read them back.
-						-->
-						<img
-							src={displaySrc}
-							alt="Live view from arm camera {selected}"
-							class="block w-full transition-opacity"
-							class:opacity-40={stale || reconnecting}
-							referrerpolicy="no-referrer"
-							onerror={handleStreamError}
-						/>
+						<RotatedFrame width={frameDims[0]} height={frameDims[1]} rotation={cameraRotation.deg}>
+							<!--
+								No crossorigin attribute: an <img> may load cross-origin
+								without CORS, and asking for it here would require the Pi
+								to send headers it does not, breaking direct mode outright.
+								We only display these pixels, never read them back.
+							-->
+							<img
+								src={displaySrc}
+								alt="Live view from arm camera {selected}"
+								class="block h-full w-full object-fill transition-opacity"
+								class:opacity-40={stale || reconnecting}
+								referrerpolicy="no-referrer"
+								onload={(e) => {
+									const img = e.currentTarget as HTMLImageElement;
+									if (img.naturalWidth && img.naturalHeight) {
+										naturalSize = [img.naturalWidth, img.naturalHeight];
+									}
+								}}
+								onerror={handleStreamError}
+							/>
+						</RotatedFrame>
 					{:else}
 						<div
 							class="flex aspect-[4/3] w-full items-center justify-center text-xs"
@@ -508,25 +696,35 @@
 					{/if}
 
 					<!--
-						This control sets the *polling* rate, so it does nothing in
-						direct mode, where the Pi pushes frames at its own pace.
-						Disabled rather than hidden: a knob that silently stops
-						working teaches the operator not to trust the panel.
+						Two rates, one per transport: proxy polls through BIMS (max 10),
+						direct asks the Pi to cap its stream (up to 30). Changing the
+						direct rate reopens the stream with the new cap.
 					-->
-					<select
-						bind:value={fps}
-						disabled={transport === 'direct'}
-						title={transport === 'direct'
-							? 'Streaming directly from the Pi — it controls the frame rate'
-							: 'How often BIMS fetches a new frame'}
-						class="rounded border px-2 py-1 disabled:opacity-50"
-						style="border-color: var(--color-tron-border); background: var(--color-tron-bg); color: var(--color-tron-text)"
-						aria-label="Frame rate"
-					>
-						{#each FPS_OPTIONS as option (option)}
-							<option value={option}>{option} fps</option>
-						{/each}
-					</select>
+					{#if transport === 'direct'}
+						<select
+							bind:value={directFps}
+							title="Most frames per second to pull straight from the Pi (the connection may allow fewer)"
+							class="rounded border px-2 py-1"
+							style="border-color: var(--color-tron-border); background: var(--color-tron-bg); color: var(--color-tron-text)"
+							aria-label="Frame rate"
+						>
+							{#each DIRECT_FPS_OPTIONS as option (option)}
+								<option value={option}>{option} fps</option>
+							{/each}
+						</select>
+					{:else}
+						<select
+							bind:value={fps}
+							title="How often BIMS fetches a new frame (direct streaming allows up to 30 fps)"
+							class="rounded border px-2 py-1"
+							style="border-color: var(--color-tron-border); background: var(--color-tron-bg); color: var(--color-tron-text)"
+							aria-label="Frame rate"
+						>
+							{#each FPS_OPTIONS as option (option)}
+								<option value={option}>{option} fps</option>
+							{/each}
+						</select>
+					{/if}
 
 					<select
 						bind:value={size}
@@ -539,6 +737,41 @@
 						{/each}
 					</select>
 
+					<!-- View-only: detection and coordinates keep the camera's own orientation. -->
+					<span class="inline-flex items-center gap-1">
+						<button
+							type="button"
+							onclick={cameraRotation.left}
+							title="Rotate the view 90° left"
+							aria-label="Rotate the view 90 degrees left"
+							class="rounded border px-2 py-1 transition-colors hover:bg-black/20"
+							style="border-color: var(--color-tron-border); color: var(--color-tron-cyan)"
+						>
+							⟲
+						</button>
+						<button
+							type="button"
+							onclick={cameraRotation.right}
+							title="Rotate the view 90° right"
+							aria-label="Rotate the view 90 degrees right"
+							class="rounded border px-2 py-1 transition-colors hover:bg-black/20"
+							style="border-color: var(--color-tron-border); color: var(--color-tron-cyan)"
+						>
+							⟳
+						</button>
+						{#if cameraRotation.deg !== 0}
+							<button
+								type="button"
+								onclick={cameraRotation.reset}
+								title="Back to the camera's own orientation"
+								class="rounded px-1 py-1 transition-colors hover:bg-black/20"
+								style="color: var(--color-tron-text-secondary)"
+							>
+								{cameraRotation.deg}°
+							</button>
+						{/if}
+					</span>
+
 					<button
 						type="button"
 						onclick={() => (paused = !paused)}
@@ -548,9 +781,9 @@
 						{paused ? 'Resume' : 'Pause'}
 					</button>
 
-					{#if displaySrc}
+					{#if saveHref}
 						<a
-							href={displaySrc}
+							href={saveHref}
 							download="arm-{selected}-{new Date().toISOString().replace(/[:.]/g, '-')}.jpg"
 							class="rounded border px-2 py-1 transition-colors hover:bg-black/20"
 							style="border-color: var(--color-tron-border); color: var(--color-tron-cyan)"
@@ -573,12 +806,11 @@
 				<div class="mt-2 text-[11px]" style="color: var(--color-tron-text-secondary)">
 					{#if reportedSize}{reportedSize} · {/if}
 					{#if transport === 'direct'}
-						<!-- No frame count here on purpose: the browser owns this
-						     connection and we genuinely cannot count its frames. A
-						     number we cannot measure would be worse than none. -->
-						direct stream
+						direct from the Pi ({route === 'tailnet' ? 'Tailscale' : route === 'tunnel' ? 'Cloudflare tunnel' : 'public'})
+						· {measuredFps ?? '…'} fps of max {directFps}
 					{:else}
-						{frameCount} frame{frameCount === 1 ? '' : 's'} via BIMS
+						{frameCount} frame{frameCount === 1 ? '' : 's'} via BIMS{#if measuredFps}
+							· {measuredFps} fps{/if}
 					{/if}
 					{#if selectedStatus}
 						· requested {selectedStatus.requested.fps} fps q{selectedStatus.requested.quality}

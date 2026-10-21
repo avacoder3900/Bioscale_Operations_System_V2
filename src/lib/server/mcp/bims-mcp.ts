@@ -224,7 +224,7 @@ async function callAgentApi(
 export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 	// Version bump signals clients (claude.ai caches connector tool lists) that
 	// the toolset changed — bump on every tool add/remove/rename.
-	const server = new McpServer({ name: 'bims-operations', version: '3.12.0' });
+	const server = new McpServer({ name: 'bims-operations', version: '3.14.0' });
 
 	// ---------------------------------------------------------------- meta
 
@@ -1212,6 +1212,133 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 			callAgentApi(fetcher, `/api/agent/operations/kanban/plans/${encodeURIComponent(planId)}`)
 	);
 
+	// ---- VOICE-01: voice memos (Voicenotes app → webhook → voice_memos) ----------
+	// Memos are records: no delete, no transcript edits. What people read is the
+	// digest Claude writes from them, shown at /kanban/journal.
+
+	server.registerTool(
+		'voice_memos_list',
+		{ annotations: READ_ONLY,
+			description:
+				'List spoken voice memos (end-of-day wrap-ups, experiment notes) recorded in the Voicenotes app. ' +
+				'Default: UNPROCESSED memos only (no digest yet), oldest first. Transcripts over 800 chars are truncated ' +
+				'(transcriptTruncated: true) — use voice_memos_get for the full text before summarizing. ' +
+				'Start of a "process my EODs" pass: call this, then voice_memos_get each memo, then voice_memo_digest_write.',
+			inputSchema: z.object({
+				processed: z.enum(['false', 'true', 'all']).optional().describe("Default 'false' = only memos with no digest yet."),
+				speaker: z.string().optional().describe('BIMS username.'),
+				kind: z.enum(['eod', 'experiment']).optional(),
+				tag: z.string().optional(),
+				experimentRef: z.string().optional().describe('e.g. "358" for memos tagged exp-358 or opening "Experiment 358…".'),
+				since: z.string().optional().describe('ISO date/time, on recordedAt.'),
+				until: z.string().optional().describe('ISO date/time, on recordedAt.'),
+				limit: z.number().int().min(1).max(100).optional()
+			})
+		},
+		async (args) => callAgentApi(fetcher, '/api/agent/voice-memos', { query: args })
+	);
+
+	server.registerTool(
+		'voice_memos_get',
+		{ annotations: READ_ONLY,
+			description:
+				'One voice memo in full: complete transcript, tags, speaker, recordedAt, annotations, digests it feeds, and ' +
+				'revisions (earlier transcripts, if it was edited in Voicenotes). Accepts the BIMS memo id or the Voicenotes note id. ' +
+				'raw=true adds the verbatim webhook payload (for debugging the parser).',
+			inputSchema: z.object({ id: z.string(), raw: z.boolean().optional() })
+		},
+		async ({ id, raw }) =>
+			callAgentApi(fetcher, `/api/agent/voice-memos/${encodeURIComponent(id)}`, { query: { raw: raw ? 'true' : undefined } })
+	);
+
+	server.registerTool(
+		'voice_memo_digest_write',
+		{ annotations: WRITE_TOOL,
+			description:
+				'File a readable digest of one or more voice memos — this is what people read on Kanban → Journal, NOT the ' +
+				'transcript. Marks every cited memo processed. ' +
+				'BEFORE WRITING, ground it in BIMS: look up what the speaker refers to — kanban_board_snapshot / the task ' +
+				'(link tasks as [TASK-184 title](/kanban/task/<_id>)), get_spu_status for devices, research_reagent_lot_list / ' +
+				'research_fill_lot_list / research_calibration_list_runs for lots and experiments, find_test_results for runs. ' +
+				'Write for a teammate who was not there: what got done, what was learned (numbers as spoken), what is blocked and ' +
+				'on what, what is next. Short sections + bullets. Never invent facts the memo and BIMS do not support; mark ' +
+				'anything you could not resolve as "(unresolved: …)". ' +
+				'COLLECTION PERIOD (until the user says otherwise): digests only. Do NOT capture, propose, or update kanban ' +
+				'items from memos unless the user explicitly asks in this conversation. ' +
+				'One digest per speaker per day is the norm (date = the day the memos were recorded, US Central). To rewrite a ' +
+				'digest, pass replacesDigestId — the old version is kept as superseded. Markdown supports #/##/### headings, ' +
+				'- bullets, 1. lists, **bold**, *italic*, `code`, and [text](/path or https://…) links.',
+			inputSchema: z.object({
+				date: z.string().describe('YYYY-MM-DD the memos cover.'),
+				title: z.string().describe('One line, e.g. "Oct 19 — Jacob: 358 drift re-fit, SPU-0247 magnet".'),
+				summary: z.string().describe('The digest, markdown.'),
+				memoIds: z.array(z.string()).min(1).describe('Every memo this digest summarizes (BIMS memo ids).'),
+				linkedKanbanIds: z.array(z.string()).optional().describe('Kanban task _ids the digest discusses (reference only — nothing is changed on them).'),
+				replacesDigestId: z.string().optional().describe('Rewrite: the current digest this supersedes.'),
+				actor: ACTOR_FIELD
+			})
+		},
+		async (args) =>
+			machineWrite('voice_memo_digest_write', args.actor, (actor) =>
+				callAgentApi(fetcher, '/api/agent/voice-memos/digests', { method: 'POST', body: { ...args, actor } })
+			)
+	);
+
+	server.registerTool(
+		'voice_memo_digests_list',
+		{ annotations: READ_ONLY,
+			description:
+				'Earlier voice memo digests, newest first (current versions only unless includeSuperseded). Read the last few ' +
+				'before writing a new one so recurring threads ("still waiting on the magnet") are told as continuations.',
+			inputSchema: z.object({
+				since: z.string().optional().describe('YYYY-MM-DD'),
+				until: z.string().optional().describe('YYYY-MM-DD'),
+				includeSuperseded: z.boolean().optional(),
+				limit: z.number().int().min(1).max(60).optional()
+			})
+		},
+		async ({ includeSuperseded, ...rest }) =>
+			callAgentApi(fetcher, '/api/agent/voice-memos/digests', {
+				query: { ...rest, includeSuperseded: includeSuperseded ? 'true' : undefined }
+			})
+	);
+
+	server.registerTool(
+		'voice_memos_mark_processed',
+		{ annotations: WRITE_TOOL,
+			description:
+				'Mark memos processed WITHOUT a digest — for test notes, duplicates, or memos with nothing to report. ' +
+				'(voice_memo_digest_write already marks its memos.) Idempotent. Optional note is appended to each memo.',
+			inputSchema: z.object({
+				memoIds: z.array(z.string()).min(1),
+				linkedKanbanIds: z.array(z.string()).optional(),
+				note: z.string().optional().describe('Why — e.g. "test note".'),
+				actor: ACTOR_FIELD
+			})
+		},
+		async (args) =>
+			machineWrite('voice_memos_mark_processed', args.actor, (actor) =>
+				callAgentApi(fetcher, '/api/agent/voice-memos/mark-processed', { method: 'POST', body: { ...args, actor } })
+			)
+	);
+
+	server.registerTool(
+		'voice_memos_annotate',
+		{ annotations: WRITE_TOOL,
+			description:
+				'Append a note to a voice memo (a correction, "transcription misheard 385 as 358", context). The transcript ' +
+				'itself is never edited.',
+			inputSchema: z.object({ id: z.string().describe('BIMS memo id.'), text: z.string(), actor: ACTOR_FIELD })
+		},
+		async ({ id, text, actor }) =>
+			machineWrite('voice_memos_annotate', actor, (resolved) =>
+				callAgentApi(fetcher, `/api/agent/voice-memos/${encodeURIComponent(id)}/notes`, {
+					method: 'POST',
+					body: { text, actor: resolved }
+				})
+			)
+	);
+
 	server.registerTool(
 		'kanban_disposition',
 		{ annotations: WRITE_TOOL,
@@ -1858,6 +1985,78 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 		async (args) =>
 			machineWrite('research_assay_attach_profile', (args as any).actor, (actor) =>
 				callAgentApi(fetcher, `${RESEARCH}/analysis/assay/${encodeURIComponent(args.assayId)}/attach`, { method: 'POST', body: { profileId: args.profileId, actor } })
+			)
+	);
+
+	const EXPORT_PRESET_DOCTRINE =
+		'Export presets choose which STORED analysis columns the research processed export (green chart icon on the ' +
+		'experiment page) copies; they compute nothing. Built-ins: short, standard, comparison, maximal (read-only). ' +
+		'Custom preset = { key, name, description, columns }. columns is an ordered list of fixed column names, readout ' +
+		'keys (metric/expression keys such as f7_test, f7_over_f3_test), qc_<rule>, qc_<rule>_value, interp_<method>, ' +
+		'status_<method>, curve_<method>, and @group tokens (@descriptive, @readouts, @qcFeatures, @qcRules, ' +
+		'@qcRuleValues, @methods, @stage); research_export_preset_list returns the full vocabulary. WORKFLOW: list -> ' +
+		'draft columns with the person -> research_export_processed with `columns` to preview on a real experiment -> ' +
+		'research_export_preset_save only when the person agrees. Saved presets appear in the experiment page picker.';
+
+	server.registerTool(
+		'research_export_preset_list',
+		{ annotations: READ_ONLY,
+			description: 'Research app: every active processed-export preset (built-in + custom) with its column list, plus the column vocabulary (fixed columns, @group tokens). ' + EXPORT_PRESET_DOCTRINE
+		},
+		async () => callAgentApi(fetcher, `${RESEARCH}/export-presets`)
+	);
+
+	server.registerTool(
+		'research_export_processed',
+		{ annotations: READ_ONLY,
+			description:
+				'Research app: run the processed export for an experiment (armIndex -1 = every arm) with a saved preset key ' +
+				'or an unsaved `columns` list (preview). Returns { columns, totalRows, tsv } with at most maxRows rows ' +
+				'(default 50). Nothing is written. ' + EXPORT_PRESET_DOCTRINE,
+			inputSchema: z.object({
+				experimentId: z.string(),
+				armIndex: z.number().int().describe('Arm index, or -1 for every arm.'),
+				preset: z.string().optional().describe('Preset key (default standard).'),
+				columns: z.array(z.string()).optional().describe('Unsaved column list instead of a preset.'),
+				sampleIds: z.array(z.string()).optional(),
+				maxRows: z.number().int().min(0).max(2000).optional()
+			})
+		},
+		async (args) => callAgentApi(fetcher, `${RESEARCH}/processed-export`, { method: 'POST', body: args })
+	);
+
+	server.registerTool(
+		'research_export_preset_save',
+		{ annotations: WRITE_TOOL,
+			description:
+				'Research app: create or replace a CUSTOM processed-export preset (an archived key is revived). Built-in keys ' +
+				'are reserved. Key: 2-40 lowercase letters, digits or dashes. Preview with research_export_processed first and ' +
+				'confirm with the person. ' + EXPORT_PRESET_DOCTRINE,
+			inputSchema: z.object({
+				actor: ACTOR_FIELD,
+				key: z.string(),
+				name: z.string(),
+				description: z.string().optional(),
+				columns: z.array(z.string()).min(1)
+			})
+		},
+		async (args) =>
+			machineWrite('research_export_preset_save', (args as any).actor, (actor) => {
+				const { actor: _ignored, ...preset } = args;
+				void _ignored;
+				return callAgentApi(fetcher, `${RESEARCH}/export-presets`, { method: 'POST', body: { preset, actor } });
+			})
+	);
+
+	server.registerTool(
+		'research_export_preset_archive',
+		{ annotations: WRITE_TOOL,
+			description: 'Research app: archive a custom processed-export preset so it leaves the experiment page picker. Built-ins cannot be archived.',
+			inputSchema: z.object({ actor: ACTOR_FIELD, key: z.string() })
+		},
+		async (args) =>
+			machineWrite('research_export_preset_archive', (args as any).actor, (actor) =>
+				callAgentApi(fetcher, `${RESEARCH}/export-presets/${encodeURIComponent(args.key)}/archive`, { method: 'POST', body: { actor } })
 			)
 	);
 

@@ -227,3 +227,4 @@ npx tsx scripts/seed.ts # Seed test data
 - **Don't skip audit logging** — every mutation gets an AuditLog entry
 - **Don't forget `_id: false` on subdocument arrays** — Mongoose auto-adds ObjectId `_id` to every subdocument unless you opt out. ObjectId breaks SvelteKit serialization. Use `_id: false` for data-only subdocs, or `_id: { type: String, default: () => generateId() }` for trackable subdocs.
 - **Don't skip `requirePermission()`** — every load function and action needs it. See [SECURITY.md](SECURITY.md).
+- **Indexes are not created on boot** — `autoIndex`/`autoCreate` are off (PERF-01 BM-05). After adding a `schema.index()` or a model, run `npx tsx --tsconfig tsconfig.json scripts/ensure-indexes.ts` (report) then `--apply`. Never `syncIndexes()`: shared collections carry research-app indexes BIMS does not declare.

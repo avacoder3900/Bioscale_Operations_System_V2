@@ -139,6 +139,11 @@ export { RobotArm } from './robot-arm.js';
 export { RobotArmServo } from './robot-arm-servo.js';
 export { RobotArmRun } from './robot-arm-run.js';
 export { RobotArmDataset } from './robot-arm-dataset.js';
+export { RobotArmDeletedRecording } from './robot-arm-deleted-recording.js';
+export { RobotArmEndpoint } from './robot-arm-endpoint.js';
+export { RobotArmTag } from './robot-arm-tag.js';
+export { RobotArmTagCalibration } from './robot-arm-tag-calibration.js';
+export { RobotArmRecordingCleanup } from './robot-arm-recording-cleanup.js';
 
 // Manufacturing Analytics
 export { ProcessAnalyticsEvent } from './process-analytics-event.js';
@@ -196,3 +201,6 @@ export { AppSubject } from './app-subject.js';
 export { AppAccountBlock } from './app-account-block.js';
 export { AppAccountSetting, APP_ACCOUNT_TYPES } from './app-account-setting.js';
 export type { AppAccountType } from './app-account-setting.js';
+
+// Voice memos from the Voicenotes app (VOICE-01): records, Claude-written digests, step-0 raw capture.
+export { VoiceMemo, VoiceMemoDigest, VoiceMemoCapture } from './voice-memo.js';

@@ -18,6 +18,22 @@
 		};
 	};
 
+	// Recording trash. Delete moves a recording to R2 for 30 days; Recover
+	// brings it back to the Pi. Only the daily cron removes trash permanently.
+	let showTrash = $state(false);
+	let recordingBusy = $state(false);
+	const deletedRecordings = $derived(data.deletedRecordings ?? []);
+	const recordingEnhance = () => {
+		recordingBusy = true;
+		return async ({ update }: { update: (opts?: { reset?: boolean }) => Promise<void> }) => {
+			await update({ reset: false });
+			recordingBusy = false;
+		};
+	};
+	function daysLeft(iso: string): number {
+		return Math.max(0, Math.ceil((new Date(iso).getTime() - Date.now()) / 86_400_000));
+	}
+
 	// ARM-01 §7.4 — this build is accepted against dry-run only, so the Start
 	// control refuses to submit when the Pi reports live motion. The server
 	// re-checks at submit time; this is the UI half of the same gate.
@@ -46,6 +62,7 @@
 	function logTime(iso: string): string {
 		return new Date(iso).toLocaleString();
 	}
+
 </script>
 
 <div class="mx-auto max-w-7xl space-y-6">
@@ -92,7 +109,11 @@
 				currentUserId={data.currentUserId}
 			/>
 
-			{#if form?.success}
+			{#if form && 'warning' in form && form.warning}
+				<div class="rounded border border-amber-500/40 bg-amber-900/10 p-3 text-sm text-amber-300">
+					{form.warning}
+				</div>
+			{:else if form?.success}
 				<div class="rounded border border-green-500/40 bg-green-900/10 p-3 text-sm text-green-300">
 					{form.success}
 					{#if 'runId' in form && form.runId}
@@ -108,6 +129,19 @@
 					{form.error}
 				</div>
 			{/if}
+
+			<!--
+				Home recovery moved to the Vision tab (ARM-04): sticker markers tracked
+				by the camera replaced ARM-03's whole-frame picture check.
+			-->
+			<a
+				href="/manufacturing/cart-mfg/robot-arm/vision"
+				class="flex flex-wrap items-center justify-between gap-2 rounded border px-3 py-2 text-xs transition-colors hover:border-[var(--color-tron-cyan)]"
+				style="border-color: var(--color-tron-border); background: var(--color-tron-surface); color: var(--color-tron-text-secondary);"
+			>
+				<span><span class="font-semibold" style="color: var(--color-tron-text)">Arm not back home?</span> Check it against the camera markers, or send it home, on the Vision tab.</span>
+				<span style="color: var(--color-tron-cyan)">Vision →</span>
+			</a>
 
 			<!-- Teleop / Record / Replay — the controls used most, so they lead -->
 			<div class="grid grid-cols-1 gap-4 md:grid-cols-3">
@@ -422,14 +456,85 @@
 				{/if}
 			</section>
 
-			<!-- Recordings table -->
+			<!-- Recordings table, with the 30-day trash -->
 			<section>
-				<h2
-					class="mb-2 text-sm font-bold uppercase tracking-wider"
-					style="color: var(--color-tron-text-secondary)"
-				>
-					Recordings on Pi ({data.piRecordings.length})
-				</h2>
+				<div class="mb-2 flex flex-wrap items-center justify-between gap-2">
+					<h2
+						class="text-sm font-bold uppercase tracking-wider"
+						style="color: var(--color-tron-text-secondary)"
+					>
+						Recordings On Pi ({data.piRecordings.length})
+					</h2>
+					<button
+						type="button"
+						onclick={() => (showTrash = !showTrash)}
+						class="min-h-[36px] rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 px-3 py-1 text-xs font-medium transition-colors hover:bg-[var(--color-tron-cyan)]/20"
+						style="color: var(--color-tron-cyan)"
+						aria-expanded={showTrash}
+					>
+						{showTrash ? 'Hide' : 'Recover Recordings'} ({deletedRecordings.length})
+					</button>
+				</div>
+
+				{#if showTrash}
+					<div
+						class="mb-3 overflow-hidden rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)]"
+					>
+						<p
+							class="border-b border-[var(--color-tron-border)] px-3 py-2 text-xs"
+							style="color: var(--color-tron-text-secondary)"
+						>
+							Deleted recordings are kept for 30 days, then removed automatically.
+						</p>
+						{#if deletedRecordings.length === 0}
+							<p class="px-3 py-2 text-xs" style="color: var(--color-tron-text-secondary)">
+								Nothing in the trash.
+							</p>
+						{:else}
+							<table class="w-full text-xs">
+								<thead
+									class="border-b border-[var(--color-tron-border)] text-left uppercase tracking-wider"
+									style="color: var(--color-tron-text-secondary)"
+								>
+									<tr>
+										<th class="px-3 py-2">Name</th>
+										<th class="px-3 py-2">Deleted</th>
+										<th class="px-3 py-2">Days left</th>
+										<th class="px-3 py-2"></th>
+									</tr>
+								</thead>
+								<tbody style="color: var(--color-tron-text)">
+									{#each deletedRecordings as t (t._id)}
+										<tr class="border-b border-[var(--color-tron-border)]/50 last:border-b-0">
+											<td class="px-3 py-2 font-mono">{t.name}</td>
+											<td class="px-3 py-2" style="color: var(--color-tron-text-secondary)">
+												{new Date(t.deletedAt).toLocaleString()}
+												{#if t.deletedBy?.username}· {t.deletedBy.username}{/if}
+											</td>
+											<td class="px-3 py-2" style="color: var(--color-tron-text-secondary)">
+												{daysLeft(t.expiresAt)}
+											</td>
+											<td class="px-3 py-2 text-right">
+												<form method="POST" action="?/recoverRecording" use:enhance={recordingEnhance}>
+													<input type="hidden" name="id" value={t._id} />
+													<button
+														type="submit"
+														disabled={!armReachable || recordingBusy}
+														class="rounded border border-[var(--color-tron-cyan)]/50 px-2 py-1 text-xs transition-colors hover:bg-[var(--color-tron-cyan)]/20 disabled:cursor-not-allowed disabled:opacity-40"
+														style="color: var(--color-tron-cyan)"
+													>
+														Recover
+													</button>
+												</form>
+											</td>
+										</tr>
+									{/each}
+								</tbody>
+							</table>
+						{/if}
+					</div>
+				{/if}
+
 				{#if data.piRecordings.length === 0}
 					<p class="text-sm" style="color: var(--color-tron-text-secondary)">
 						No recordings on the Pi yet.
@@ -447,17 +552,54 @@
 									<th class="px-3 py-2">Name</th>
 									<th class="px-3 py-2">Size</th>
 									<th class="px-3 py-2">Modified</th>
+									<th class="w-10 px-3 py-2"><span class="sr-only">Delete</span></th>
 								</tr>
 							</thead>
 							<tbody style="color: var(--color-tron-text)">
 								{#each data.piRecordings as r (r.path)}
 									<tr class="border-b border-[var(--color-tron-border)]/50 last:border-b-0">
-										<td class="px-3 py-2 font-mono">{r.name}</td>
+										<td class="px-3 py-2 font-mono">
+											{r.name}
+											<a
+												href={`/manufacturing/cart-mfg/robot-arm/cleanup?source=${encodeURIComponent(r.name)}`}
+												class="ml-2 font-sans text-[11px] hover:underline"
+												style="color: var(--color-tron-cyan)"
+												title="Split this recording into steps and clean it up">clean up</a
+											>
+										</td>
 										<td class="px-3 py-2" style="color: var(--color-tron-text-secondary)">
 											{(r.size_bytes / 1024).toFixed(1)} KB
 										</td>
 										<td class="px-3 py-2" style="color: var(--color-tron-text-secondary)">
 											{new Date(r.modified).toLocaleString()}
+										</td>
+										<td class="px-3 py-1 text-right">
+											<form
+												method="POST"
+												action="?/deleteRecording"
+												use:enhance={recordingEnhance}
+												onsubmit={(e) => {
+													if (!confirm(`Delete "${r.name}"? It can be recovered for 30 days.`)) e.preventDefault();
+												}}
+											>
+												<input type="hidden" name="name" value={r.name} />
+												<input type="hidden" name="modified" value={r.modified} />
+												<button
+													type="submit"
+													disabled={!!active || recordingBusy}
+													title={active ? 'Stop the active session before deleting' : `Delete ${r.name}`}
+													aria-label="Delete {r.name}"
+													class="inline-flex h-8 w-8 items-center justify-center rounded transition-colors hover:bg-red-500/15 disabled:cursor-not-allowed disabled:opacity-40"
+													style="color: #ef4444"
+												>
+													<svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+														<path d="M3 6h18" />
+														<path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+														<path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+														<path d="M10 11v6M14 11v6" />
+													</svg>
+												</button>
+											</form>
 										</td>
 									</tr>
 								{/each}

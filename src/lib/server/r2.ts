@@ -12,6 +12,7 @@ import {
 	S3Client,
 	PutObjectCommand,
 	GetObjectCommand,
+	DeleteObjectCommand,
 	HeadObjectCommand,
 	ListObjectsV2Command
 } from '@aws-sdk/client-s3';
@@ -90,6 +91,13 @@ export async function downloadFile(
 		contentType: res.ContentType ?? 'application/octet-stream',
 		size: res.ContentLength ?? 0
 	};
+}
+
+export async function deleteFile(key: string): Promise<void> {
+	const client = getClient();
+	const bucket = getBucket();
+
+	await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
 }
 
 export async function getFileInfo(

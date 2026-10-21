@@ -165,6 +165,34 @@ describe('direct sessions', () => {
 	});
 });
 
+describe('direct-call trace volume (PERF-01 BM-04)', () => {
+	it('a successful read is not traced; a failed read and a mutation are', async () => {
+		const posted: any[] = [];
+		let runGetStatus = 200;
+		const ff = fakeFetch((url, init) => {
+			if (url.endsWith('/connection')) return connTailnet();
+			if (url === `${DIRECT}/health`) return res(200, {});
+			if (url.endsWith('/direct-calls')) {
+				posted.push(...JSON.parse(String(init?.body)).calls);
+				return res(200, {});
+			}
+			if (url.endsWith('/runs/r1') && (init?.method ?? 'GET') === 'GET') return res(runGetStatus, {});
+			return res(201, {});
+		});
+		const s = new RobotSession('b14', { ...opts, fetchImpl: ff.f });
+		await s.open();
+		await s.call('run.get', { rid: 'r1' });
+		runGetStatus = 500;
+		await s.call('run.get', { rid: 'r1' });
+		await s.call('run.action', { rid: 'r1', action: 'play' });
+		await s.flush();
+		expect(posted.map((c) => [c.verb, c.ok])).toEqual([
+			['run.get', false],
+			['run.action', true]
+		]);
+	});
+});
+
 describe('fetchRoute (pages that already call BIMS routes)', () => {
 	it('maps the maintenance routes to verbs; anything else stays a plain BIMS fetch', () => {
 		expect(routeToVerb('/api/opentrons-lab/robots/b14/maintenance/m1/jog', 'POST')).toEqual({ robotId: 'b14', runId: 'm1', verb: 'mx.jog' });
@@ -384,7 +412,8 @@ describe('robotFetch', () => {
 	});
 
 	it('the /direct-calls verb is a path template, ≤ 40 chars', async () => {
-		const { s, posted } = await session(() => res(200, {}));
+		// A failed read: successful reads are not traced (BM-04).
+		const { s, posted } = await session(() => res(503, {}));
 		await s.robotFetch('/runs/3f2a9c1e-77aa-4b1d-9d7e-000000000001/commands?pageLength=10');
 		await s.flush();
 		expect(posted[0].calls[0].verb).toBe('raw:GET /runs/:id/commands');

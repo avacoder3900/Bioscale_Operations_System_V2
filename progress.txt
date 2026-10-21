@@ -13080,7 +13080,6 @@ batch; every batch drained with no paper/ribbon/head flags and confirmed atomica
 (batch 22) Claude Code reaped the wrapper shell for low system memory; the node process itself
 survived and finished unattended — no batch was left reserved-but-printed.
 
-=======
 2026-09-18 — feat/thermocouple-two-channels — the parser averaged the two probes into one
 ================================================================================
 Alejandro: "the bims only displays one temperature and does not show the 2 channels."
@@ -16759,7 +16758,6 @@ between-channel 7.6%, within-channel 5.5%. Scratch: bias.cjs, bias2.cjs, build-l
 `npm run check`: not run.
 
 ================================================================================
-=======
 2026-09-24 — feat/research-analysis-mcp — research analysis + calibration MCP tools via proxy to brevitest-research-v2
 ================================================================================
 Research-v2 DOMAIN-30 (analysis v3) exposes /api/agent/analysis/* and /api/agent/calibration/*.
@@ -17142,7 +17140,6 @@ Not done / stubs: no automatic re-evaluation of assay-run groups when a cartridg
 with holes (jobs are listed; the device must run the upload again); sonic sessions not linked to a
 screen session. `npm run check`: 10 errors / 439 warnings (baseline 10 / 437; the two warnings are
 a11y/label hints on the new pages).
-=======
 2026-09-25 — master — DEPLOY: research analysis MCP tools (bims-operations 3.6.0)
 ================================================================================
 Source: branch master @ commit faea623d (cherry-pick of feat/research-analysis-mcp 61560f31 onto master)
@@ -20250,7 +20247,6 @@ Retrieve this exact code: git checkout master at commit c295ba92
 What this deployment is for: finalizeReagentRun stamps top-level assayId/assayName on production-filled
   cartridges (the fields the device + research app read); the reagent-prep tube step is gone (selectFillLot
   records the fill lot only). Research app main e0bdc81 (linking inherits/overrides/falls back) deployed first.
-=======
 2026-10-13 — feat/fill-assay-is-the-assay — fill defaults are opt-in: Research (no assay) and no fill lot
 ================================================================================
 Jacob: "make sure that the default at filling is no assay and no fill lot, we have to opt in to that at filling."
@@ -20541,7 +20537,6 @@ Also seen: device_logs had exactly one document before today - the device-log La
 works (the screen-end upload landed, 322 lines), it just is not used often.
 
 npm run check: 15 errors / 429 warnings, unchanged (none in these files).
-=======
 2026-10-15 — master — arm-pi bench session: solenoid driver alongside the arm (no code changes)
 ================================================================================
 Bench/ops session only; no repo code touched. Goal was to start testing the new
@@ -20982,3 +20977,720 @@ Vercel dashboard.
 ================================================================================
 On /app-accounts/[accountId] the Access panel (block / unblock, remove dev account) is now the
 last panel, after Invites. Layout only. svelte-check 14 errors = baseline.
+
+================================================================================
+2026-10-16 — feat/arm-recordings-trash — Recordings On Pi: delete with 30-day recover
+================================================================================
+Morning diagnosis first (no code): BIMS showed "Cannot reach the robot arm" with
+`fetch failed` from 14:29 UTC. The robot-arm service was up on tailnet/LAN and the
+Funnel ingress answered a --resolve curl, but public DNS (8.8.8.8 / 1.1.1.1) returned
+NXDOMAIN for arm-pi.tailf65a70.ts.net, i.e. the Funnel registration was lost again.
+Operator re-registered Funnel; DNS resolves and preflight is ok:true. Follower BusLinker
+did not enumerate in either blue USB 3.0 port on the Pi 5 (worked there yesterday) but
+does in a black USB 2.0 port; likely a marginal cable/connector, keep it in the black port.
+
+Feature: the "Recordings on Pi" table on /manufacturing/cart-mfg/robot-arm/control is
+now "Recordings On Pi" with a trash icon per row and a "Recover Recordings (n)" toggle
+at the top that lists trashed recordings (deleted when/by whom, days left, Recover).
+- Delete order: export both files from the Pi -> upload one JSON {name, jsonl, meta} to
+  R2 at robot-arm/deleted-recordings/<id>.json -> write the trash row -> DELETE on the
+  Pi. Any earlier failure leaves the recording on the Pi; a Pi-side delete failure
+  removes the trash row again. Delete is disabled (and refused by the Pi, 409) while a
+  session is active.
+- Recover restores to the Pi under the original name, or <name>-recovered(-N) if taken.
+- No user can purge the trash. New daily cron /api/cron/purge-deleted-recordings
+  (05:00 UTC, vercel.json; CRON_SECRET / agent-key auth like the other crons) deletes
+  the R2 object and the row once expiresAt (deletedAt + 30 d) passes; failures retry
+  the next day. It never contacts the Pi.
+- Both actions need manufacturing:write and write AuditLog rows
+  (robot_arm.recording.delete / .recover, resourceType robot_arm_recording).
+Files: services/robot-arm/src/server/recordings_admin.py (new router: GET
+/recordings/{name}/export, DELETE /recordings/{name}, POST /recordings/restore),
+services/robot-arm/scripts/install_recordings_router.py (new, idempotent, reuses the
+GPIO installer's `_fastapi` import if present, binds `state` for the session check),
+src/lib/server/db/models/robot-arm-deleted-recording.ts (new, robot_arm_deleted_recordings),
+models/index.ts, src/lib/server/r2.ts (deleteFile), src/lib/server/robot-arm-client.ts
+(export/delete/restore wrappers), control/+page.server.ts (load trash, deleteRecording,
+recoverRecording actions), control/+page.svelte, src/routes/api/cron/
+purge-deleted-recordings/+server.ts (new), vercel.json.
+Verified: router exercised with FastAPI TestClient in a scratch venv (restore, 409 on
+overwrite, export, 400 on dot/separator names, 409 delete during a session, delete,
+404 after). Installer run twice on a copy of the vendored app.py (second run no-op).
+Pi install pending (operator SSH session).
+`npm run check`: 13 errors / 429 warnings = master baseline, zero in touched files.
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit d046803c (merge of feat/arm-recordings-trash, tip bc4dee2c)
+Retrieve this exact code: git checkout master at commit d046803c
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: Recordings On Pi trash icon + Recover Recordings (30-day
+R2 trash) and the daily purge-deleted-recordings cron. Pi router install pending.
+
+================================================================================
+2026-10-16 — fix/arm-recordings-name — recordings trash: Pi names carry .jsonl
+================================================================================
+Pi install of recordings_admin.py succeeded (installer applied, py_compile OK, service
+active, openapi lists /recordings/{name}, /{name}/export, /restore). First delete from
+BIMS failed: `robot-arm 404: recording not found: DeleteTest-20261016-203047.jsonl`.
+Root cause: the LIVE Pi's GET /recordings returns the file name (with .jsonl) as `name`,
+unlike the vendored list_recordings (stem), so the router looked for x.jsonl.jsonl.
+Fix (BIMS side, no Pi reinstall needed): recordingStem() in robot-arm-client.ts strips
+.jsonl in exportRecording/deleteRecording/restoreRecording; recover candidates are built
+from the stem. recordings_admin.py also now accepts either form (repo copy only; the Pi
+does not need it while BIMS strips).
+Also: the installer reported no module-level `state` on the Pi, so the Pi router cannot
+refuse deletes during a session. deleteRecording now checks /sessions/active first and
+returns 409 while a session runs.
+`npm run check`: 13 errors / 429 warnings = baseline, zero in touched files.
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit a664d6ed (merge of fix/arm-recordings-name)
+Retrieve this exact code: git checkout master at commit a664d6ed
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: recordings trash works against the live Pi's .jsonl names;
+delete refused while a session is active.
+
+================================================================================
+2026-10-16 — fix/arm-audit-shape — robot-arm audit rows use the real AuditLog schema
+================================================================================
+AuditLog's schema is tableName/recordId/action/oldData/newData/changedAt/changedBy
+(Mongoose strict), but the arm control page wrote resourceType/resourceId/userId/
+username/timestamp/details, so those fields were silently dropped and rows kept only
+{_id, action, changedAt}. Converted every write on control/+page.server.ts (recording
+delete/recover, GPIO pulse/sequence, task start, session stop) and the two older
+sync-zero writes on calibrate/+page.server.ts (capture/clear, flagged 2026-07-31) to
+tableName/recordId/newData/changedBy. No robot-arm route writes resourceType any more.
+Gripper investigation (no code yet): hand-moved positions show CLOSING = DECREASING
+ticks on both arms (leader 3209 open -> 2047 closed, follower 2464 open -> 2234 closed;
+sync-zero 2040 / 2238 is the closed pose). Follower stops short of closed and holds
+firm under teleop, with or without a cartridge, so the goal never reaches ~2234: a
+clamp/mapping limit, not the 07-31 stall. Live Pi has no ~/.bims-arm; recordings dir
+on the Pi still to be located (affects recordings_admin.py's RECORDINGS_DIR fallback).
+`npm run check`: 13 errors / 429 warnings = baseline, zero in touched files.
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit 62e7af1c (merge of fix/arm-audit-shape)
+Retrieve this exact code: git checkout master at commit 62e7af1c
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: robot-arm audit rows keep operator + details.
+
+================================================================================
+2026-10-16 — master — robot-arm recording trash: Pi recordings dir + R2 via Worker
+================================================================================
+Deleting a Pi recording failed in two stages.
+1. Pi: export 404 "recording not found". recordings_admin.py looked in
+   ~/.bims-arm/recordings (does not exist); the live Pi keeps recordings in
+   /home/brevitest3/robot-arm/datasets/. Fix (on the Pi, no code change):
+   BIMS_ARM_RECORDINGS_DIR=/home/brevitest3/robot-arm/datasets appended to
+   ~/robot-arm/.env (the unit's EnvironmentFile), then restart robot-arm.
+2. BIMS: R2 upload failed "Credential access key has length 24, should be 32" -
+   production R2_ACCESS_KEY_ID is not a valid R2 S3 key. The trash now uses the
+   Cloudflare Worker helpers (uploadViaWorker/downloadViaWorker/deleteViaWorker
+   in $lib/server/services/r2) like the rest of the app. Files:
+   robot-arm/control/+page.server.ts, api/cron/purge-deleted-recordings/+server.ts.
+   (Commit message also mentions the AuditLog shape; that part had already
+   shipped in f16b7d59 — this commit is only the Worker switch.)
+   The direct-S3 client ($lib/server/r2) is still used by COC/sonic/r2 files and
+   will fail the same way until R2_ACCESS_KEY_ID/R2_SECRET_ACCESS_KEY are fixed
+   in Vercel.
+`npm run check`: 13 errors / 429 warnings = baseline, zero in touched files.
+Deployment: production — via GitHub integration from push to master
+Source: branch master @ commit 228ae7d2
+Retrieve this exact code: git checkout master at commit 228ae7d2
+What this deployment is for: recording trash upload/recover/purge via R2 Worker
+================================================================================
+2026-10-19 — feat/arm-home-calibration — ARM-03: camera-verified HOME calibration on the arm Control page
+================================================================================
+New section at the top of /manufacturing/cart-mfg/robot-arm/control. Operator parks the
+arm at zero and presses Calibrate home: BIMS stores the follower encoder steps (servos
+1–5, GET /pose) plus the arm camera's view — a 32×24 greyscale signature and a thumbnail
+in Mongo (robot_arm_home_calibrations, one record 'default'), full frame to R2
+best-effort. Return to home: torque on, one bounded jog per joint to the taught steps
+(the live Pi has no absolute move route — only POST /servos/{id}/jog), settle, re-read,
+fresh frame scored against the signature (Pearson, brightness-invariant). Verdict = home
+/ position_off / camera_mismatch / both, with reference + current frames side by side and
+per-joint residuals. Check without moving does the verification alone. Recalibrate only
+when the camera or setup moves; Clear removes the record. All four actions audited;
+gated on arm reachable + nobody holding the bus; manufacturing:write.
+Files: src/lib/robot-arm/home-calibration.ts (+test, 11), src/lib/server/robot-arm-home.ts,
+src/lib/server/db/models/robot-arm-home-calibration.ts (+index export),
+control/+page.server.ts, control/+page.svelte, docs/prds/ARM-03-camera-verified-home.md.
+npm run check: no errors in the new files (repo baseline unchanged). vitest arm suites: 53.
+NOT driven against the live arm: local ROBOT_ARM_API_KEY is stale (401) and the Pi had a
+replay running; a hardware pass is the next step (see PRD §6).
+
+Deployment: production — Vercel GitHub integration, from the push of master
+Source: branch master @ commit 44ea635a (merge of feat/arm-home-calibration f350a96b)
+Retrieve this exact code: git checkout master at commit 44ea635a
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: ARM-03 camera-verified HOME calibration section on the
+  Robot Arm Control page (calibrate / return to home / check / clear). First production
+  exposure; not yet driven against the live arm — watch the first Calibrate + Return.
+
+================================================================================
+2026-10-19 — feat/arm-funnel-watchdog — self-healing Tailscale Funnel on arm-pi
+================================================================================
+Context: production BIMS lost the arm again today. 09:17 CDT reboot was the operator
+power-cycling the Pi (expected ~5 min outage; throttled=0x0; journal is not persistent
+so no previous-boot log). BIMS reconnected 14:27 UTC, then failed again 15:09 UTC:
+public DNS now resolves but the Funnel ingress refuses TLS (curl exit 35), and each of
+the two ingress IPs fails intermittently. Tailscale log shows `PollNetMap ... connection
+reset by peer` at 10:05 CDT (15:05 UTC), four minutes before the failure, i.e. the
+control-plane reconnect dropped the public ingress registration. Third occurrence
+(10-15, 10-16, 10-19); the fix each time was `tailscale funnel` off/on.
+
+Built services/robot-arm/scripts/funnel-watchdog/ (Pi-only, no BIMS change):
+- funnel-watchdog.sh: every run skips during a 10-min boot grace and when the arm
+  service is down locally; resolves the Funnel name via DNS-over-HTTPS (dns.google,
+  NOT the Pi's tailnet resolver, which bypasses the ingress) and skips if that is
+  unreachable; calls /health through EVERY public ingress IP. Any failure or no DNS
+  record = one strike; 2 consecutive strikes and no reset in the last 30 min ->
+  `tailscale funnel --https=443 off` + `--bg --https=443 http://127.0.0.1:8000`, then a
+  60 s re-check that is logged. Never restarts services, never moves the arm.
+- funnel-watchdog.service (oneshot, root) + .timer (OnBootSec=10min, every 5 min).
+- install.sh (strips CRLF, installs to /usr/local/bin + /etc/systemd/system, enables).
+- .gitattributes: *.timer eol=lf.
+Verified from the workstation with DRY_RUN=1 against the live Pi (LOCAL_URL pointed
+at arm-pi:8000): strike 1, strike 2 -> dry-run reset + re-check, counter reset, and a
+dead local URL leaves the Funnel alone. bash -n clean. Not yet installed on the Pi.
+
+================================================================================
+2026-10-19 — feat/arm-quick-tunnel — second route to the arm (Cloudflare quick tunnel) + bounded retry
+================================================================================
+Diagnosis of today's 2 h outage (15:09-17:11 UTC): office uplink is Starlink (public IP
+98.97.84.21, AS14593; netcheck UDP true but MappingVariesByDestIP true = hard NAT), so the
+Funnel ingress can only reach the Pi through its DERP relay, and tailscaled logs
+`derp-9 (dfw) ... connection reset by peer` as often as every ~30 s. Ingress requests
+landing during a reset die mid-TLS (curl 35 / "unexpected eof"). Funnel off/on and a
+tailscaled restart did not help; it self-healed. Tailnet Lock is off (the
+invalid-packet-filter warning clears within the same second; noise). The funnel
+watchdog stays installed (fixes the 10-15 class) but cannot fix this class.
+
+Option B (operator has no Cloudflare account/domain, so a no-account quick tunnel):
+- Pi: services/robot-arm/scripts/arm-tunnel/ — arm_tunnel.py runs
+  `cloudflared tunnel --url http://127.0.0.1:8000`, parses the random trycloudflare URL,
+  waits for /health through it, POSTs it to BIMS, heartbeats every 5 min; exits (systemd
+  restarts) if cloudflared dies. arm-tunnel.service (User=brevitest3, Restart=always),
+  install.sh (installs cloudflared .deb, pulls ROBOT_ARM_API_KEY from the running
+  robot-arm process env or ~/robot-arm/.env into /etc/arm-tunnel.env mode 600).
+- BIMS: POST /api/robot-arm/tunnel (x-api-key == ROBOT_ARM_API_KEY, timing-safe; URL must
+  match https://<name>.trycloudflare.com since BIMS sends the key to it), new model
+  RobotArmEndpoint (robot_arm_endpoints, _id 'tunnel'), AuditLog row on URL change only.
+- robot-arm-client.ts: routes = [tunnel (if registered < 15 min ago), Funnel], last-good
+  route first. Option D bounded retry: max 3 attempts alternating routes, all inside the
+  caller's single timeoutMs budget (worst-case page time unchanged; a timeout does not
+  retry). GET retries on network errors and Cloudflare 502/503/504/530; POST/DELETE
+  (motion, GPIO, delete) only re-send when the failure was before the request could reach
+  the Pi (DNS/refused/connect-timeout/TLS-handshake drop, or Cloudflare 530). Also fixed:
+  a non-JSON error page made robotArmFetch throw "Unexpected token" instead of the status.
+  Control page shows/logs the route actually used (currentArmRoute()).
+Tests: new robot-arm-client.routes.test.ts (9 cases incl. "never re-send a POST that
+failed mid-request"); robot-arm suite 36/36. End-to-end on the office Starlink link: real
+cloudflared quick tunnel from the workstation to arm-pi:8000 + a local fake BIMS: URL
+parsed, /health through the tunnel 3/3, registration POST received.
+`npm run check`: 13 errors / 429 warnings = baseline, zero in touched files.
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit 649f4952 (merge of feat/arm-quick-tunnel)
+Retrieve this exact code: git checkout master at commit 649f4952
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: /api/robot-arm/tunnel registration + two-route robot-arm
+client with bounded retry. Verified unauthenticated POST -> 401. Pi arm-tunnel install pending.
+================================================================================
+2026-10-19 — feat/app-account-email — Bulk-assign cartridges to an app account by scanning
+================================================================================
+The "Assign a cartridge" input on /app-accounts/[accountId] is now a scan box (textarea):
+scan cartridge after cartridge — each scan lands on its own line — and one Assign assigns
+them all (max 200). Server (assign action) splits on newlines/spaces/commas/semicolons,
+reduces a token carrying a UUID (QR URL) to the UUID, drops duplicates, then runs each
+through assignOwnership individually; the page lists per-cartridge outcomes (assigned /
+not found / already owned / QC / voided / not a cartridge id) and keeps the box filled
+when nothing was assigned. Note and "replace current owner" apply to the whole batch.
+Live count of distinct ids next to the label and on the button.
+Files: src/routes/app-accounts/[accountId]/+page.server.ts + +page.svelte,
+docs/CONSUMER-OWNERSHIP.md. npm run check: 14 errors = baseline, none in touched files.
+Not driven against a live DB or a hardware scanner.
+
+================================================================================
+2026-10-19 — feat/arm-marker-calibration — ARM-04: sticker-marker vision calibration replaces ARM-03
+================================================================================
+Rebuilt the arm camera calibration from the ground up (operator found ARM-03's whole-frame
+greyscale match unreliable). New Vision tab at /manufacturing/cart-mfg/robot-arm/vision:
+- Marker registry: operator-defined markers (name, optional free-text group, sticker colour,
+  notes); nothing predefined. robot_arm_markers; archived, never deleted.
+- Calibrate: freeze a frame, click/drag each registered marker onto its sticker (snap to
+  the nearest blob of the sticker colour, arrow-key nudge). Save uploads the exact frozen
+  JPEG; server samples each sticker's colour from it, reads depth at each marker and the
+  follower encoders (arm must be idle/parked at home). One active calibration per camera
+  in robot_arm_vision_calibrations; recalibrating supersedes (history kept) and starts
+  from the old spots, re-found on the new frame.
+- Live tracking in the browser on the snapshot proxy (same-origin → canvas pixels):
+  colour mask → 8-connected blobs → blob nearest the last position; overlay shows each
+  marker vs its calibrated ring; table of px position, offset, depth, Δdepth.
+  Verdicts ok/moved/depth_off/missing; all-same-shift of ≥3 markers → camera_moved.
+- Home check / Return to home (server-side, sharp decode, same tracking code) combine
+  encoder residuals with the markers: home / position_off / markers_off / both /
+  camera_moved / unverified. Agent API GET /api/agent/robot-arm/vision-check (no motion).
+- Depth: the live Pi has no depth route. Added services/robot-arm/src/server/depth.py
+  (RealSense via pyrealsense2, depth-only stream, colour→depth projection) +
+  scripts/install_depth_router.py; BIMS treats the Pi's 404 as "no depth" and checks on
+  the picture only. NOT installed on the Pi yet; camera model assumed RealSense.
+Removed ARM-03: robot-arm-home.ts, robot-arm-home-calibration model, the Control-page
+section + 4 actions (Control now links to Vision). Old collection left untouched, unread.
+Files: src/lib/robot-arm/{markers,home-calibration,frame-grab}.ts (+tests),
+src/lib/server/robot-arm-vision.ts, models robot-arm-marker.ts + robot-arm-vision-calibration.ts,
+src/lib/components/robot-arm/Vision{Stage,LiveTracker,CalibrationEditor,MarkerRegistry}.svelte,
+robot-arm/vision/+page.{server.ts,svelte}, +layout.svelte (tab), control/+page.{server.ts,svelte},
+api/robot-arm/cameras/[name]/depth, api/agent/robot-arm/vision-check, robot-arm-client.ts
+(sampleDepth), docs/prds/ARM-04-marker-vision-calibration.md (ARM-03 PRD marked superseded).
+npm run check: 14 errors = baseline, none in touched files. vitest: markers 14 + home 8 +
+url invariant = 49 pass. vite build: client + server bundles built (adapter trace OOM'd
+locally — Windows artefact). Not driven against the live arm or a depth camera.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-ei1ety7un-brevitest.vercel.app
+Source: branch feat/arm-marker-calibration @ commit fa54a216
+Retrieve this exact code: git checkout feat/arm-marker-calibration at commit fa54a216
+  (or: git log feat/arm-marker-calibration --oneline to find it if the branch has since moved on)
+What this deployment is for: ARM-04 Vision tab (marker registry, drag-to-calibrate, live
+  tracking, home check / return to home) for hardware testing before merge. Smoke: /login 200,
+  Vision tab 302 → login when signed out, agent vision-check 401 without key.
+================================================================================
+2026-10-19 — fix/scan-input-focus-steal — SPU page: "View Diagnostics" click never landed
+================================================================================
+Bug (Jacob, /spu/RqrSGEt1NkJ2gsbGpmSPA): clicking View Diagnostics "keeps pulling me back to
+the service input". Cause: ScanInput (shared bench scan box, used by ServiceScanCard on the
+SPU page) refocused itself 100 ms after EVERY blur with a scrolling focus(); the servicing card
+sits ~260 lines above the Diagnostics card, so the page scrolled back up between mousedown and
+mouseup and the click never fired. ServiceScanCard's pause only covered text fields, not links.
+Fix in src/lib/components/assembly/ScanInput.svelte: no refocus when focus moved to a link,
+input, textarea, select or contenteditable (checked on blur via relatedTarget and again after
+the delay via activeElement), none when the window lost focus, and every focus() is
+{ preventScroll: true }. Buttons still hand focus back so bench scanners keep working
+(assembly, accession, barcodes, servicing board, UnitStepView share the component).
+npm run check: 15 errors, none in the touched file. Verified by reading only; not clicked
+through in a browser.
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit 529a59db (fix/scan-input-focus-steal fast-forwarded into master)
+Retrieve this exact code: git checkout master at commit 529a59db
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: the ScanInput focus/scroll fix so links beside a scan box are clickable.
+================================================================================
+2026-10-19 — feat/app-scan-claim — App scan-in restored: claim endpoint with overwrite
+================================================================================
+The consumer app's "start a new test" now opens with a cartridge scan (app branch
+feat/scan-to-start, leo3linbeck/bioscale-app). This reverses the 2026-10-16 "people never
+scan in the app" decision at the user's request. New POST /api/consumer/claims →
+claimForAccount() in src/lib/server/consumer/ownership.ts: already the account's →
+already_yours (no write); else claimEligibility (not found / voided / QC / research unless
+internal customer / guessable id needs shipment match); another account's open row →
+409 owned_by_other, and with overwrite:true the old row is closed (reassigned) and a
+personal 'claim' row opened. Overwrite refused (has_results) for underway/completed
+cartridges so a scan cannot take someone else's result. Audit CLAIM with old owner.
+Files: src/lib/server/consumer/ownership.ts, src/routes/api/consumer/claims/+server.ts,
+src/lib/server/consumer/claim.test.ts (5 cases, mocked models), docs/CONSUMER-OWNERSHIP.md.
+vitest consumer suites 13/13. npm run check: 14 errors = baseline, none in touched files.
+Not driven against a live DB; app side verified with its in-memory store (e2e 56/56).
+2026-10-14 — fix/studio-resolve-finalized-runs — Deck Calibration Studio: "Resolve" on fill issues never worked
+================================================================================
+Report: "i can't resolve fill errors on calibration page". The Studio's resolveWellIssues action stamps
+resolvedAt/By/Note on reagent_batch_records.wellIssues[] with updateOne + arrayFilters. Every run that has
+well-tracker entries is Completed and finalized (entries are logged DURING the run, and the run finalizes at
+completion — all 4 runs with open entries today have finalizedAt), so the sacred middleware
+(src/lib/server/db/middleware/sacred.ts) threw "Cannot modify a finalized sacred document" on every click:
+0 resolve audit rows ever, 14 open entries across DECK-001/003/004.
+Fix: sacred.ts gains an explicit opt-in query option `allowFinalized: true` (ALLOW_FINALIZED_OPTION), consumed
+in the pre-hook so the driver never sees it; documented as an ANNOTATION exception (no fact of the record
+changes; the write must create an AuditLog row — resolveWellIssues already does). Used only by
+deck-calibration/+page.server.ts resolveWellIssues. sacred.test.ts (5 cases: blocked, allowed when not
+finalized, opt-in passes + option removed, non-true value refused, deletes always blocked).
+npm run check 16 = baseline. Built in git worktree /Users/brevitest/github/bims-wt-studio-resolve (branch
+fix/studio-resolve-finalized-runs); not committed.
+
+Deployment: production — Vercel GitHub integration, from the push of master
+Source: branch master @ commit 33538e38 (merge of fix/studio-resolve-finalized-runs f8d17854)
+Retrieve this exact code: git checkout master at commit 33538e38
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: Deck Calibration Studio can resolve well-tracker errors on
+  finalized reagent runs (all 57 open errors were on finalized records).
+
+2026-10-19 — PERF-01 BM-02, BM-04, BM-05, BM-06 (branch perf/dashboard-and-region) — resumed after a crash
+Cross-app plan: brevitest-research-v2/docs/prds/DOMAIN-37-PERF.md. BM-01 (iad1) already on master 085deba4.
+BM-02 dashboard counts without `$nin`: src/lib/server/checked-out-counts.ts (groupCountsExcluding: each spec runs on
+its index, one $facet aggregation over the checked-out ids, subtract; groups that reach 0 are dropped as $nin would),
+src/lib/server/dashboard-count-specs.ts (home + cartridge-dashboard specs in one place). Home: 12 cartridge aggregations
+routed through it; dead storageCounts block (2 aggregations, never rendered) and fridgeMap removed. cartridge-dashboard:
+10. recentActivity / expiringSoon / per-run QC keep $nin (sorted+limited / runId-indexed).
+VERIFIED read-only against production with scripts/verify-dashboard-counts.ts (110 checked-out ids): all 22 keys
+equal old vs new. cartridge-dashboard counts 3296 ms sequential old -> 437 ms new.
+BM-03 NOT done: capture_stations READ rows are all reason jwt_mint (station token issuance, 8,292 in Oct, one user);
+removing them drops a credential-issuance audit trail. Needs a decision; client token reuse is the likely fix.
+BM-04 the 132,284 ok `run.get` rows (99.6% of ot2_direct_calls in Oct) come from EmbeddedRunController's poll through
+src/lib/opentrons/direct-client.ts; record() skips successful GETs (failures + mutations still traced). New unit test;
+the verb-template test now uses a failed read.
+BM-05 mongoose.set autoIndex/autoCreate false in connection.ts; scripts/ensure-indexes.ts (report / --apply;
+PermissionShadowLog indexes mirrored since route-policy.ts can't load in a script). Report: 156/156 ok, nothing created.
+CLAUDE.md pitfall added.
+BM-06 validateSessionToken: Session.aggregate $match + $lookup users (passwordHash projected out) + $first; expiry,
+renewal and isActive checks unchanged.
+TESTS: unit 615 pass / 1 fail (sonic decode — fails on master too); new 13-dashboard-counts contract test 2/2;
+01-auth login/logout pass; 10-cartridges path fixed (/cartridge-dashboard passes; the other /spu/* cases 404 on master
+too — routes moved). check 15 = baseline. NOT merged to master.
+
+================================================================================
+2026-10-19 — feat/voice-memos — VOICE-01: Voicenotes voice memos → BIMS → Claude digests (Kanban → Journal)
+================================================================================
+Jacob workshopped a Voicenotes → BIMS pipeline for spoken EOD / experiment memos (handoff doc
+voicenotes-webhook-handoff.md). Decisions in session: v1 is Jacob only; processing is manual ("process my
+EODs" in Claude over MCP); for the first ~week Claude writes DIGESTS ONLY (no kanban captures/proposals/
+updates from memos); people read a Claude-written digest grounded in BIMS context, not the transcript.
+Voicenotes' documented webhook payload is {event:"recording.created", timestamp, data:{id,title,transcript}}
+(no tags, no audio, no signing), so: per-person URL key, a tolerant parser, and a spoken-lead-in fallback
+("EOD…", "Experiment 358…") alongside the tag allowlist (eod, exp-*). Update events can create a memo (tagged
+after recording), edits move the old text to revisions[], deletes only flag. Step-0 raw capture is opt-in
+(VOICENOTES_CAPTURE_RAW=true, 14-day TTL) so the parser can be checked against the real payload.
+Files: models/voice-memo.ts (VoiceMemo, VoiceMemoDigest, VoiceMemoCapture) + index export;
+lib/server/voice-memos/{parse,keys,ingest,serialize,markdown}.ts (+ parse/keys/ingest/markdown tests, 43
+cases); routes/api/webhooks/voicenotes/+server.ts; routes/api/agent/voice-memos/{+server, [id], [id]/notes,
+mark-processed, digests, digests/[digestId]}; 6 MCP tools in bims-mcp.ts (server 3.12.0 → 3.13.0);
+routes/kanban/journal (+ Journal tab in KanbanNav; transcripts shown only to speaker/admin);
+scripts/voice-memos.ts (captures | memos | indexes | key); docs/VOICE-MEMOS.md (runbook).
+npm run check: 16 errors = baseline, none in touched files. Unit suite: 653 pass, 1 fail =
+sonic.test.ts "decode zeroes non-finite samples", which fails identically on clean master.
+Not run against a live DB or Voicenotes yet; journal page not browser-verified. Built in worktree
+..\Bioscale_Operations_System_V2-voice-memos. NOT merged / NOT deployed — Jacob deploys 2026-10-20 per
+docs/VOICE-MEMOS.md (set VOICENOTES_WEBHOOK_KEYS first; run `scripts/voice-memos.ts indexes`).
+2026-10-20: Jacob said "deploy all the code". master fast-forwarded 085deba4 → da16b9c3 (git push
+origin feat/voice-memos:master; master had not moved, no merge commit).
+Deployment: production — URL not captured (no Vercel/gh CLI in this session; see Vercel Deployments tab),
+  aliased to bioscale-operations-system-mongodb.vercel.app
+Source: master @ commit da16b9c3 (triggered automatically by GitHub integration, not local deploy)
+Retrieve this exact code: git checkout feat/voice-memos at commit da16b9c3
+  (or: git log master --oneline to find it if master has since moved on)
+What this deployment is for: VOICE-01 voice memo webhook, agent API, MCP tools, Kanban → Journal.
+  Inert until VOICENOTES_WEBHOOK_KEYS is set in Vercel (every webhook call 401s without it).
+
+================================================================================
+2026-10-20 — PRODUCTION DEPLOY: PERF-01 BM-02/04/05/06 (master ff154378) — Opus 5.5 for Jacob
+================================================================================
+Jacob: "deploy all the code". perf/dashboard-and-region merged with master (VOICE-01 da16b9c3 + 1d8cd6f9; progress.txt
+conflict = both appended, kept both) then master fast-forwarded to ff154378.
+Pre-deploy: test:unit 658 pass / 1 fail (sonic decode non-finite samples — fails on master too); vite build clean
+(needed local npm install of @audio/decode-aac, already in lockfile); ensure-indexes report = 159/159 models ok
+(voice_memos indexes already exist, so autoIndex off does not leave them missing).
+Baseline /login TTFB 0.26–0.29 s median (public page, network-dominated: connect+TLS ~170 ms). Follow-up: Atlas cache /
+disk read metrics 2026-10-21, compare against the $nin era.
+2026-10-20 (later): VOICENOTES_WEBHOOK_KEYS fixed. The first value had been captured with dotenv's
+stdout banner; Jacob reset it by hand to jacob:<secret>. The BIMS username is `jacob`, not `jacobq`.
+Fix commit a559fd61: docs and keys.ts comment say jacob, and scripts/voice-memos.ts uses
+dotenv.config({ quiet: true }) so `key` prints only the secret. Voice-memo indexes created on Atlas
+via `scripts/voice-memos.ts indexes`. GET /api/webhooks/voicenotes?key=… → {"ok":true,"speaker":"jacob"}.
+Deployment: production — https://bioscale-operations-system-mongodb-umwj6vajm-brevitest.vercel.app
+Source: master @ commit a559fd61 (triggered automatically by GitHub integration, not local deploy)
+Retrieve this exact code: git checkout feat/voice-memos at commit a559fd61
+  (or: git log master --oneline to find it if master has since moved on)
+What this deployment is for: picks up the corrected VOICENOTES_WEBHOOK_KEYS (+ CAPTURE_RAW=true for Step 0).
+
+2026-10-20 — PERF-01 measured in production (A/B, same DB, same minute) — Opus 5.5 for Jacob
+Method: vercel curl against pre-perf master (2t965hqyk, 1d8cd6f9) and perf (hhkvlpit6, ff154378), both iad1, logged in
+as contracttest, interleaved, 1 warmup + 5 samples, median TTFB.
+  /                      1.69 s -> 0.94 s
+  /cartridge-dashboard   1.18 s -> 0.76 s
+Live (mu7brrltq) = perf deployment within noise (0.86 vs 0.93 s). Atlas cache metrics still to check 2026-10-21.
+
+================================================================================
+2026-10-20 — fix/arm-tunnel-stale-fallback — BIMS still tries the arm's tunnel when its heartbeat is overdue
+================================================================================
+Root cause of today's "arm unreachable": the office Wi-Fi (Fannin_WIFI) DNS servers 10.10.2.2/.3 died ~08:47 UTC
+while the Pi still had internet by IP. Tailscale forwarded the Pi's lookups to them, so arm-tunnel's 5-min
+heartbeat POST to BIMS failed ("Temporary failure in name resolution") for 8 h. BIMS ignores a tunnel row older
+than 15 min, the Funnel was also down (public ingress refusing TLS, exit 35), so BIMS had no route even though
+the Cloudflare tunnel itself answered /health 200. Pi fixed by the operator (sudo): tailscale --accept-dns=false
+and the wlan0 connection pinned to 1.1.1.1/8.8.8.8; tunnel re-registered 16:51 UTC.
+Code hardening (src/lib/server/robot-arm-client.ts): a tunnel row 15 min-48 h old is no longer dropped; it is
+tried LAST, after the Funnel (fresh rows still go first). Tests: robot-arm-client.routes.test.ts updated
+(stale tunnel tried after Funnel; >48 h ignored), 10/10 pass. npm run check: 13 errors, none in touched files
+(pre-existing on master).
+
+================================================================================
+2026-10-20 — feat/arm-camera-direct-30fps — arm camera: real 30 fps direct stream via the Cloudflare tunnel
+================================================================================
+Production's arm camera panel read "N frames via BIMS · requested 30 fps q80": ROBOT_ARM_PUBLIC_URL is not
+set in Vercel, so every viewer got the proxy slideshow (max 10 fps, one Vercel invocation per frame) even
+though the Pi streams 29-30 fps (measured on the Pi). No Vercel access to set the variable, so:
+- api/robot-arm/cameras/stream-url/+server.ts: falls back to the Pi's registered Cloudflare quick-tunnel
+  origin (robot_arm_endpoints 'tunnel') when ROBOT_ARM_PUBLIC_URL is unset. Approved relaxation of ARM-01 G0:
+  only a *.trycloudflare.com origin is published, rows >48 h old ignored, token stays camera-only and
+  short-lived, API key / private base URL never sent. DB errors degrade softly (available:false).
+- RobotArmCameraPanel.svelte: direct mode has its own fps menu (5/10/15/30, default 30, saved in
+  localStorage) passed to the Pi as stream.mjpg?fps=N (Pi's camera_stream already caps by it, read on the
+  Pi 2026-10-20). Proxy menu unchanged at 1/5/10.
+- services/robot-arm/CAMERA_STREAMING_HANDOFF.md: streaming write-up, updated with the above.
+Tests: stream-url/server.test.ts +6 tunnel cases, robot-arm-url-invariant still green (48/48). npm run check:
+13 errors, none in touched files (pre-existing on master).
+
+Deployment: production — https://vercel.com/brevitest/bioscale-operations-system-mongodb/6TtMuvqnxYmkuEno9LHNUrEksrXP
+Source: branch master @ commit 4a919ac6 (fast-forward from feat/arm-camera-direct-30fps)
+Retrieve this exact code: git checkout master at commit 4a919ac6
+  (or: git log feat/arm-camera-direct-30fps --oneline)
+What this deployment is for: 30 fps direct arm camera stream via the registered Cloudflare tunnel.
+Merged master into the branch first (progress.txt conflict only, both entries kept); stream-url tests 21/21,
+robot-arm tests 80/80, npm run check 13 errors (baseline). Logged here, not on master, to avoid a log-only push.
+
+================================================================================
+2026-10-20 — feat/arm-recording-cleanup — step detection core (no UI yet)
+================================================================================
+Start of the recording clean-up feature (new tab, UI layout pending from Alejandro). Design rules from him:
+BIMS never smooths, filters or drops servo data; it only groups overlapping moves into numbered steps, and the
+operator decides what to delete and how far each servo moves. A threshold (servo steps, 0 allowed) decides
+what counts as a move.
+New src/lib/robot-arm/recording-steps.ts (pure, shared): parseRecording() reads the live Pi format
+(header / frame{t, leader, follower, goal} / footer, hardware/dual_arm.py v1; NOT the {t, positions} format in
+the vendored recordings.py, still accepted) and uses goal[] (what replay sends, dual_arm.py:533) as servo ids
+1..6. detectMoves(): a move = consecutive changes > threshold from the last settle point, same direction, gaps
+<= pauseS (0.25 s); reversal = new move; start found by walking back through the run (flat stretches < pauseS
+crossed) so slow sweeps start where they left the hold. groupIntoSteps(): overlapping moves share a step, max
+one move per servo per step. Moves carry raw from/to positions and frame indices.
+Tried on GioRealTest-20261016-210639 (83 s, 2490 frames, copied read-only from the Pi): threshold 0 -> 210
+steps / 459 moves; 5 -> 95 / 200; 10 -> 94 / 165; 20 -> 94 / 155. Tests: recording-steps.test.ts 12/12.
+================================================================================
+2026-10-20 — feat/arm-apriltag-sheet — printable AprilTag sheet for arm calibration (HTML + PDF)
+================================================================================
+Shared copy of the robot-arm AprilTag print sheet so Sam and others can print the same tags.
+New: services/robot-arm/scripts/make_apriltag_sheet.py (generator, uses cv2.aruco DICT_APRILTAG_36h11),
+services/robot-arm/calibration/apriltag-sheet.html (generated) and apriltag-sheet.pdf (headless-Edge print of
+the HTML, letter). 54 unique tags on 3 pages: 9 each at 40/30/20/15/12/8 mm (black-square edge), IDs 0-53 in
+order, labelled only "ID n · size"; no locations assigned yet (operator will photograph the stuck-on tags and
+say where each ID went). Print at 100% / Actual size on matte paper, laser preferred (inkjet black can be
+IR-transparent); each page has a 100 mm check bar. Note: the small sizes assume 1920x1080 colour, but the
+D415 is on a USB 2.0 link today (1080p only ~8 fps there; see CAMERA_STREAMING_HANDOFF.md). Nothing detects
+AprilTags yet. No TS changes, npm run check not needed.
+
+================================================================================
+2026-10-20 — feat/arm-apriltag-vision — ARM-05: AprilTags replace the colour-sticker arm vision (ARM-04)
+================================================================================
+Audit first (ARM-04 on master since fa54a216, never run on the arm; Giovanni's AprilTag 36h11 sheet on
+feat/arm-apriltag-sheet, merged into this branch with a progress.txt conflict resolved keeping both entries).
+Camera per Giovanni's CAMERA_STREAMING_HANDOFF.md: RealSense D415, colour 640x480@30 over USB 2.0. Operator:
+tags are at most 1 ft from the camera; detection to run on the Pi; Giovanni is not building it; write blind.
+Pi (no access from here, the Funnel timed out, no ssh key on this machine; NOT run):
+services/robot-arm/src/server/apriltags.py: POST /cameras/{name}/apriltags/detect + GET status. OpenCV aruco
+DICT_APRILTAG_36h11 (4.7+ and legacy API), subpix corners, solvePnP IPPE_SQUARE per tag with the D415 factory
+colour intrinsics via pyrealsense2 (fallback env APRILTAG_FX.., then a nominal D415 estimate), depth.py's
+_rs.sample at each centre as cross-check, frames from the service's own snapshot.jpg over loopback (cameras.py
+untouched). scripts/install_apriltag_router.py wires it into app.py like the depth installer.
+BIMS: src/lib/robot-arm/apriltags.ts (pure; sheet size map, 3-D helpers, camera-shift consensus over the fixed
+tags (shift undone before judging arm tags, a single knocked fixed tag is outvoted), per-tag ok/moved/missing in
+mm + degrees, registry-size rescale) + 15 tests. New models RobotArmTag (robot_arm_tags) and
+RobotArmTagCalibration (robot_arm_tag_calibrations); robot-arm-vision.ts rewritten (registry by tag ID, save =
+one fresh Pi detection with arm at home + encoders, check/return unchanged in shape). Client detectAprilTags
+replaces sampleDepth; new GET /api/robot-arm/cameras/[name]/apriltags proxy (manufacturing:read); agent
+vision-check returns tagId/role/offMm/offDeg/zMm/cameraShift. Vision tab: VisionStage draws tag outlines,
+VisionLiveTracker polls detections, VisionTagCalibrator (detect -> register unknown IDs inline -> save),
+VisionTagRegistry. Removed markers.ts(+tests), frame-grab.ts, the depth proxy route, VisionCalibrationEditor,
+VisionMarkerRegistry, the two ARM-04 models (their collections left in Mongo, unread).
+Docs: docs/prds/ARM-05-apriltag-vision.md (contract, install, size-vs-distance table); ARM-04 PRD marked superseded.
+Size note: at 640x480 (f ~615 px) and 1 ft the smallest reliable tag is ~12 mm, so 12-40 mm read, 8 mm needs
+1280x720 (my audit's earlier "~25 mm" was wrong: I had used the 1080p focal figure scaled the wrong way).
+npm run check: 14 errors, none in touched files (pre-existing r2, research-proxy x2, AskBims, assembly x8,
+magnetometer x2). Unit: robot-arm suites 60/60. vite build: client + server built; adapter trace OOM locally (Windows).
+Merged origin/master (Giovanni's feat/arm-camera-direct-30fps) at 41b1b830; check still 14 errors, robot-arm tests 81/81.
+Deployment: preview — https://bioscale-operations-system-mongodb-7hpzxlcvg-brevitest.vercel.app
+Source: branch feat/arm-apriltag-vision @ commit 41b1b830
+Retrieve this exact code: git checkout feat/arm-apriltag-vision at commit 41b1b830
+  (or: git log feat/arm-apriltag-vision --oneline to find it if the branch has since moved on)
+What this deployment is for: ARM-05 AprilTag Vision tab before merge (PR #105). Smoke: /login 200, Vision tab
+302 to login, apriltags proxy 401 and agent vision-check 401 without credentials. Pi route not installed yet.
+Deployment: production — https://bioscale-operations-system-mongodb-o03orguet-brevitest.vercel.app
+Source: branch master @ commit dcdf9262 (merge of PR #105, feat/arm-apriltag-vision @ 6ec46735)
+Retrieve this exact code: git checkout master at commit dcdf9262
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: ARM-05 AprilTag Vision tab live. Smoke on production: /login 200, Vision tab 302
+to login, apriltags proxy and agent vision-check 401 without credentials. Follow-up: Robot_Arm_Calibration_Context.md
+(repo root) condenses the arm calibration context for the next session.
+
+================================================================================
+2026-10-20 — feat/arm-apriltag-upscale-720p — AprilTag detection: 2x upscale, factory intrinsics file, 720p
+================================================================================
+Operator saw five clear tags and the Vision tab found none. Root cause: most stuck-on tags are the 8 mm IDs
+45-53, ~14-17 px across at 640x480, just under OpenCV aruco's floor (the context doc already says 8 mm needs
+720p). Measured on the live frame on arm-pi: 1x -> 0 tags; 1.5x/2x upscale -> 45, 50, 51, 53 (+4-7 ms);
+3x -> fewer; loosening DetectorParameters only added false/duplicate IDs.
+services/robot-arm/src/server/apriltags.py: detect on the frame enlarged by APRILTAG_UPSCALE (default 2,
+corners scaled back); factory intrinsics now also read from APRILTAG_INTRINSICS_FILE
+(calibrations/realsense_color_intrinsics.json, keyed WxH, source "realsense") since pyrealsense2 has no
+cp313 aarch64 wheel; depth cross-check maps tag centres into depth.py's 640x480 reference frame through the
+two factory intrinsics (720p = 640x480 scaled 3/2 with wider sides), null when either is unknown.
+New services/robot-arm/scripts/dump_realsense_intrinsics.py writes that JSON (run via
+`uv run --no-project --python 3.12 --with pyrealsense2`); on arm-pi it holds 424x240/640x480/1280x720/1920x1080.
+arm-pi (Pi-only config, backups *.bak-640x480 / .env.bak-pre-720p / apriltags.py.bak-pre-upscale):
+hardware.yaml cameras.external 1280x720 @ 15 fps for today (USB 2.0 cap; a USB 3 cable arrives 2026-10-21,
+then 1280x720@30 or 1080p@30 needs only hardware.yaml); APRILTAG_FX/FY/CX/CY commented out in .env.
+Verified at 720p: stream 15.0 fps (90 frames/6 s) with depth streaming alongside, intrinsics source
+"realsense" (fx 910.46), detect ~60 ms, tags 23/45/50/51 found; pose z vs D415 depth agree within 1 mm
+(45: 275/276, 50: 287/287, 51: 280/280), which validates the colour->depth mapping at 720p. Still missed:
+53 (cut off by the shorter 16:9 view) and the blue-box tag (behind cables). npm run check not run (Python only).
+
+================================================================================
+2026-10-20 — feat/arm-camera-rotate — arm camera view: rotate 90° left/right
+================================================================================
+Operator is remounting the D415 on its side (portrait), which makes the feed awkward to watch. View-only
+rotation, so frames, AprilTag detection, normalised coords, intrinsics and the depth mapping all keep the
+camera's own orientation (rotating on the Pi would have broken all of those).
+New src/lib/robot-arm/camera-rotation.svelte.ts: one module-level rotation (0/90/180/270), saved in
+localStorage (bims.armCamera.rotation.v1), restored from an $effect so SSR and first client render match.
+New src/lib/components/robot-arm/RotatedFrame.svelte: frame-aspect box turned by CSS; at 90/270 the outer box
+takes the swapped aspect (16:9 on its side lays out as 9:16), inner box sized in % of the outer.
+RobotArmCameraPanel.svelte: ⟲/⟳ buttons (+ "90°" chip to reset), image wrapped in RotatedFrame using the
+img's decoded size (fallback: Pi actual_size, then requested), size menu sets the long edge when sideways.
+VisionStage.svelte: image + tag outlines rotate together; labels counter-rotated about the tag centre so they
+read upright. npm run check: 14 errors, none in touched files (the 14th is research-proxy.ts from master).
+Not clicked through in a browser by me (no browser here); operator to confirm.
+
+================================================================================
+2026-10-20 — feat/arm-tag-edit — rename/edit a registered AprilTag from the Calibrate list
+================================================================================
+Operator asked how to rename tags after registering. Editing existed only behind the small "edit" link in the
+Tag Registry; the cyan tag name in Calibrate's detection list was plain text.
+VisionTagCalibrator.svelte: the registered name is now a button ("Wrist ▾") that opens the same form used to
+register a new ID (name, on arm/fixed, size, group), prefilled, posting ?/updateTag, plus "archive" (same
+form, formaction ?/archiveTag, confirm) and cancel. One form for both cases ({#key reg._id}), so register and
+edit cannot drift apart; it closes only on success, so a name clash stays open to fix.
+VisionTagRegistry.svelte: clicking a tag's name opens its edit row too.
+Bug fixed on the way: updateTag rewrites every field and neither edit form sent `notes`, so any edit wiped a
+tag's notes; both forms now carry it as a hidden field. Calibrations keep their own name snapshot by design
+(model comment), so home-check results show the old name until the next calibration. npm run check: 14 errors,
+none in touched files.
+
+================================================================================
+2026-10-20 — feat/arm-camera-pull-live — arm live view: pull frames like the CV stations, race Tailscale vs tunnel
+================================================================================
+Operator: arm live view "very laggy", like the CV stations used to be. Same cause as CV's 2026-10-14 fix: the
+panel's direct mode was a PUSH MJPEG stream through the Cloudflare tunnel. Measured from the office laptop at
+720p: Pi pushed 15 fps x ~95 KB (~11 Mbit/s), tunnel delivered 3.6 fps (~2.7 Mbit/s), so frames queued in
+sockets/proxies and the view fell seconds behind (a browser cannot skip ahead in multipart). Over the Pi's
+private Tailscale route the same stream arrived at the full 15 fps and a snapshot took ~0.1 s (tunnel 0.5-0.75 s).
+1. RobotArmCameraPanel.svelte: direct mode now PULLS snapshot.jpg one frame in flight (preload, swap, next;
+   capped by the direct fps menu; back-off; token re-minted before expiry and once on early failures; 6
+   failures -> proxy). Lag bounded at ~one round trip. Health strip shows the route and a measured fps; the
+   stale warning now uses the client clock in both modes. Save downloads a full-quality still.
+2. stream-url/+server.ts: response gains `origins` (kept `origin` = first, for old clients). ROBOT_ARM_BASE_URL
+   is listed ONLY when it is an https://<machine>.<tailnet>.ts.net origin (operator approved 2026-10-20); IPs,
+   LAN names, paths and look-alike domains are never published (tests). The panel races all origins with one
+   small frame (Promise.any) and keeps the first to load: tailnet viewers get Tailscale, others the tunnel.
+   stream-url tests 29/29 (+8), robot-arm 89/89.
+3. arm-pi (Pi-only, backup app.py.bak-pre-snapshot-q): /cameras/{name}/snapshot.jpg accepts ?q=30..95 and
+   ?w=160..1920 and re-encodes the latest frame (~10 ms); without them the stored frame is returned unchanged
+   (AprilTag detection, saves). 720p frame: 61 KB plain, 27 KB at q60/w960, 12 KB at q70/w480.
+Simulated pull loop (q70, w480, new TLS connection per frame, so browsers do better): tunnel 2.5 fps with
+<=0.4 s lag; Tailscale 6.6 fps with ~0.15 s lag. npm run check: 14 errors, none in touched files.
+Also: Robot_Arm_Vision_Servo_Home_Context.md (repo root, 2f3ca436) for a future session on joining the Vision
+tag home with the servo encoder home.
+
+================================================================================
+2026-10-20 — feat/arm-recording-cleanup — Clean-up tab: step editor for recordings (operator-driven)
+================================================================================
+New Robot Arm tab "Clean-up" (/manufacturing/cart-mfg/robot-arm/cleanup). Alejandro's rule: the only
+automation is grouping overlapping servo moves into numbered steps; every other decision is the operator's.
+- Split: pick a Pi recording + threshold (steps) + pause; BIMS exports it, copies the raw goal frames into a
+  Mongo draft (robot_arm_recording_cleanups, new model RobotArmRecordingCleanup) and runs recording-steps.ts.
+  First draft = raw targets, raw step durations, recorded idle gap as each step's "then wait" (so playback
+  keeps the recording's timing until the operator changes it).
+- Editor (/cleanup/[id]): timeline with one lane per servo (raw trace grey, step bands cyan, operator's
+  from->to amber, zoom 1-16x) + playback strip; step cards with editable target / "moves by" delta, duration,
+  wait, label; delete/add servo, "own step" (pull a servo out into the next step), merge with next, insert,
+  reorder, delete step; undo/redo; start pose editable. Moves under 25 steps get a "small" tag (hint only).
+  Arm buttons: Read arm, targets from arm, arm -> start/end of step, start pose from arm / send arm there
+  (per-joint jogs <=300 steps, max 1500 per servo and 20 jogs per click, one correction pass, audited).
+- Save to Pi: compose a NEW recording (dual_arm.py v1: header with start pose as follower_neutral and the
+  source's limits/scale, one goal frame per tick, each step a straight line from->target over its duration,
+  waits as held frames, frames tagged `step`) and write it via POST /recordings/restore (409 = name taken).
+  Source recording never touched. Replay from the Control tab; Control's recordings list links "clean up".
+- Pi (arm-pi, outside the repo app.py): added read-only GET /servos (follower id/position/speed/load/voltage/
+  temperature/torque; leader not required; 409 while a session runs). Present_Speed/Present_Load registers
+  added to _feetech_bus.py. Backups *.bak-pre-servos. Same patch in services/robot-arm/scripts/
+  install_servos_route.py. This is also the route robotArm.listServos (Vision Save calibration on
+  feat/arm-depth-combined) expects; it did not exist on the Pi before.
+Files: src/lib/robot-arm/recording-cleanup.ts (+test), recording-steps.ts (header.raw), server/robot-arm-cleanup.ts,
+models/robot-arm-recording-cleanup.ts, robot-arm-client.ts (ServoState, listServos), components/robot-arm/
+CleanupTimeline.svelte, routes .../robot-arm/cleanup/**, +layout.svelte (tab), control/+page.svelte (link).
+Real data: GioCleanupRecording-20261020-180505 (113.8 s, 3394 frames) at threshold 10 -> 118 steps / 186 moves;
+composed recording re-parses, end pose within 3 steps of raw. Editor SSR-renders with it (118 cards).
+Tests: src/lib/robot-arm 53/53. npm run check: 13 errors, all pre-existing, none in these files. Local
+`npm run build` compiles client + server, then the Vercel adapter's tracing runs out of heap on this PC.
+Deployment: production — https://vercel.com/brevitest/bioscale-operations-system-mongodb/6dWm5ML8Yqsr48wAnyMbdJyFke3M
+Source: branch feat/arm-recording-cleanup @ commit e823da3f (fast-forwarded to master)
+Retrieve this exact code: git checkout feat/arm-recording-cleanup at commit e823da3f
+  (or: git log feat/arm-recording-cleanup --oneline to find it if the branch has since moved on)
+What this deployment is for: Robot Arm Clean-up tab (recording -> editable steps -> new recording on the Pi)
+
+================================================================================
+2026-10-21 — fix/arm-home-encoders-via-servos — Return to home failed: robot-arm 501 from GET /pose
+================================================================================
+Operator hit "Return to home failed: robot-arm 501: Cartesian pose/jog requires the IK stack (ikpy + URDF + jog
+calibration), which has not been ported to this server yet". Root cause: robot-arm-vision.ts readJointSteps() read the
+encoders from GET /pose (inherited from ARM-03/04), and the current Pi server only answers that with IK. Fix: encoders
+now come from GET /servos (raw follower `position`, the same step /pose reports as joint_steps; robot-arm-cleanup.ts
+already reads it this way). /pose is kept only to record the Cartesian pose on a calibration, best-effort (null on 501).
+Touched: src/lib/server/robot-arm-vision.ts, Robot_Arm_Calibration_Context.md. The live Pi OpenAPI (reachable today)
+already lists /cameras/{name}/apriltags + /detect, so the ARM-05 route is installed. npm run check: 14 errors, none in
+touched files. Unit: robot-arm suites 90/90. A calibration saved while /pose was failing has no encoder home: recalibrate.
+Deployment: preview — https://bioscale-operations-system-mongodb-ov7804hsj-brevitest.vercel.app
+Source: branch fix/arm-home-encoders-via-servos @ commit 2eef02a5
+Retrieve this exact code: git checkout fix/arm-home-encoders-via-servos at commit 2eef02a5
+What this deployment is for: PR #107 check before merge. Smoke: /login 200, Vision tab 302, agent check 401.
+Deployment: production — https://bioscale-operations-system-mongodb-eibray6yz-brevitest.vercel.app
+Source: branch master @ commit 5c7666d5 (merge of PR #107)
+Retrieve this exact code: git checkout master at commit 5c7666d5
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: Return to home / Check / Save calibration read encoders via /servos. Smoke: /login 200,
+Vision tab 302. Not yet re-tried on the arm by the operator.
+
+================================================================================
+2026-10-21 — fix/arm-home-jog-chunks — Return to home failed: robot-arm 400 delta_steps capped at 300 per jog
+================================================================================
+After the /servos fix the operator got "robot-arm 400: delta_steps magnitude capped at 300 per jog (got -1185)".
+Root cause: returnToHome sent each joint's whole correction as ONE /servos/{id}/jog; the Pi caps a jog at 300 steps
+(manual_control.MAX_JOG_STEPS, already handled by robot-arm-cleanup.ts moveArm). Fix: home-calibration.ts gains
+chunkJogPlan (≤300-step jogs, joint order) + MAX_JOG_STEPS / MAX_HOME_JOGS (20); returnToHome jogs in chunks, settles
+0.8 s, re-reads /servos and corrects (≤2 correction passes, 20 jogs total, Vercel 30 s), refuses up front when home is
+more than 20 jogs away (names the joints). `moved` is now summed per joint. Touched: src/lib/robot-arm/home-calibration.ts
+(+2 tests), src/lib/server/robot-arm-vision.ts, Robot_Arm_Calibration_Context.md. npm run check: 14 errors, none in
+touched files. Unit: robot-arm suites 92/92.
+Deployment: preview — https://bioscale-operations-system-mongodb-b9dkvmzxc-brevitest.vercel.app
+Source: branch fix/arm-home-jog-chunks @ commit 9a34f7d6
+Retrieve this exact code: git checkout fix/arm-home-jog-chunks at commit 9a34f7d6
+What this deployment is for: PR #109 check before merge (Vercel took ~10 min to start it). Smoke: /login 200, Vision 302, agent 401.
+Deployment: production — https://bioscale-operations-system-mongodb-17kdlem2r-brevitest.vercel.app
+Source: branch master @ commit 1fdc71e8 (merge of PR #109)
+Retrieve this exact code: git checkout master at commit 1fdc71e8
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: Return to home in <=300-step jogs. Smoke: /login 200, Vision tab 302. Not yet re-tried on the arm.
+
+================================================================================
+2026-10-21 — feat/arm-home-sequence — Return to home: repeat until home (90 s), mouth -> servo 2 -> all, servo-1 freeze
+================================================================================
+Operator asks: (1) no more pressing Return to home repeatedly: repeat it until home, timing out after 1.5 min; (2) order:
+open the mouth to release the cartridge, then servo B home, then all joints; if servo A is outside its left/right range,
+freeze and drop torque so a technician returns the arm by hand. Answers: A = servo 1 (base), B = servo 2 (shoulder lift),
+range ±90° editable by hand, mouth +300 steps.
+home-calibration.ts: BASE/LIFT/GRIPPER servo ids, DEFAULT_HOMING {baseRangeSteps 1024, gripperOpenSteps 300}, HOME_LOOP_MS
+90 s, baseOutOfRange (missing reading also freezes), shouldRetryHome (stops on home/frozen/camera_moved/90 s/encoders home
+but tags off/no progress), planJogDeltas takes a servo subset, verdict frozen; MAX_HOME_JOGS 20 (was 24, docs said 20).
+robot-arm-vision.ts: returnToHome is one attempt (gate -> torque off + frozen; else torque on, mouth on attempt 1, servo 2
+phase, servos 1-5 phase; 20 jogs / 20 s budget; camera check only when encoders land). updateHoming + calibration
+`homing` field (carried forward on recalibrate). Vision tab: Return to home drives the attempt loop in the browser
+(fetch + deserialize, attempt n), Stop button, attempt/seconds status, FROZEN banner, Home settings form.
+npm run check: 14 errors, none in touched files. Unit: robot-arm suites 99/99. Not yet run on the arm.
+
+================================================================================
+2026-10-21 — feat/arm-home-until-done — Return to home: one click until done, no jog limit, claw closes last; torque on after Stop
+================================================================================
+Operator, after PR #111 (merged by the operator): keep returning until everything is in place, do not limit jogs, the user
+can stop manually but must not click again; last step closes the claw completely. Mid-turn: re-enable torque when a run is cancelled.
+home-calibration.ts: MAX_HOME_JOGS removed; CLAW_STALL_STEPS 6; shouldRetryHome now takes clawClosed and stops only on
+done (home + claw closed), frozen, camera_moved, encoders home + claw closed but tags off, or 90 s (the no-progress stop is gone).
+robot-arm-vision.ts returnToHome: phases loop until their joints are home (no pass/jog cap; only the ~20 s per-request time
+slice ends one), then closes the claw (-300 jogs until <6 steps moved, ease off +1), result.clawClosed. Vision tab passes
+clawClosed to the loop; confirm/tooltip text updated. control/+page.server.ts stop: setTorque(true) after /sessions/stop
+(one retry after 600 ms), audit torque_on/torque_error, warning flash when it fails. Context doc §4.8/§4.9 updated.
+npm run check: 14 errors, none in touched files. Unit: robot-arm suites 100/100. Not yet run on the arm.

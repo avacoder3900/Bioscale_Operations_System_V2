@@ -1,0 +1,9 @@
+[Unit]
+Description=Tailscale Funnel watchdog for the robot-arm service
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/funnel-watchdog.sh
+TimeoutStartSec=180

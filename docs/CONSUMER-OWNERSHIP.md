@@ -3,10 +3,11 @@
 **Status:** built 2026-10-15 on `feat/consumer-ownership` (BIMS) and `feat/cartridge-ownership` (bioscale-app);
 scan-in removed and operator assignment added 2026-10-16 (`feat/assigned-cartridges` in both repos).
 **Decisions:** clinic customers see their patients' results in the app and never use BIMS (2026-10-15).
-**People never scan cartridges in the app (2026-10-16):** a cartridge is assigned to its owner in BIMS —
-by staff on the App Accounts or DHR pages, or automatically when it is shipped to a customer with a
-linked account — and the person receives a cartridge that is already theirs. The app-side claim flow and
-its BIMS endpoints are gone; rows with `source: 'claim'` are history from before that date.
+~~**People never scan cartridges in the app (2026-10-16)**~~ — **reversed 2026-10-19:** a cartridge is
+still assigned in BIMS (App Accounts / DHR, or at shipment), but "start a new test" in the app now opens
+with a scan of the cartridge, which links it to the person (`POST /api/consumer/claims`, rule 4 below).
+A cartridge linked to another account asks the person to confirm, then overwrites that link
+(branches `feat/app-scan-claim` in BIMS, `feat/scan-to-start` in the app).
 
 Both apps share one Atlas database (`bioscale`). BIMS owns a cartridge from birth through shipping;
 the brevitest-cloud Lambda owns the run-side fields (`rawData`, `analysis`, `statusUpdatedOn`);
@@ -61,10 +62,16 @@ See "Account types" below.
    with `releaseReason: 'reassigned'` first. `matchedShipment` is recorded (shipment customer ∈ the
    account's customers) for the report, never enforced. Audit action `ASSIGN_OWNERSHIP`.
 3. **Device** (reserved): brevitest-cloud stamping a paired reader's account at upload. Not built.
-4. ~~**Claim**~~ (removed 2026-10-16): the app's scan/claim flow and the `POST /api/consumer/claims`
-   + `GET /api/consumer/cartridges/:id` endpoints are deleted, along with the `consumer_claim_attempts`
-   collection. `claimEligibility` stays in the service only for its unit tests and as the record of the
-   old rules; nothing calls it.
+4. **Claim** (app scan, restored 2026-10-19 — `claimForAccount`): the app's `/test/scan` step posts
+   the scanned id. Already the account's own → `200 already_yours`, nothing written. Otherwise
+   `claimEligibility` applies (not found, voided, QC, research unless an internal customer, guessable
+   `CART-000123` ids need a shipment match). An open row of another account (or a clinic row) →
+   `409 owned_by_other`; the app asks "overwrite and link it to your own account?" and re-posts with
+   `overwrite: true`, which closes that row (`releaseReason: 'reassigned'`) and opens a personal row
+   (`source: 'claim'`). Overwrite is refused (`409 has_results`) when the cartridge is `underway` or
+   `completed`, so a scan can never take someone else's result. Audit action `CLAIM`, with the old
+   owner in `oldData`. No rate limit or `consumer_claim_attempts` log (both stayed removed); the
+   lookup endpoint `GET /api/consumer/cartridges/:id` is not restored.
 
 ## Consumer API (BIMS, `src/routes/api/consumer/*`)
 
@@ -75,6 +82,7 @@ must (admin role for invites, scope for release/assign).
 
 | Call | Purpose |
 | --- | --- |
+| `POST /api/consumer/claims` `{cartridgeId, accountId, accountLabel, customerIds?, overwrite?}` | Link a scanned cartridge to the account (rule 4). 200/201 `{ok, status: already_yours\|linked\|overwritten}`; 409 `owned_by_other` / `has_results`; 404/409/403 other refusals |
 | `POST /api/consumer/claims/release` `{cartridgeId, accountId, accountLabel, customerIds?, note?}` | Close the row (only rows the account can see) |
 | `POST /api/consumer/claims/assign` `{cartridgeId, accountId, accountLabel, customerId, subjectId|null, customerIds}` | Move a clinic-owned cartridge between patients |
 | `POST /api/consumer/invites/accept` `{token, accountId, email}` | Link the account to the invite's customer; sign-in email must match the invited address |
@@ -99,7 +107,8 @@ Recommended Atlas user for the app: readWrite on those two, read on the rest.
    page and assign a patient.
 
 A plain consumer signs in and sees the cartridges that were assigned to them — by a shipment to
-their linked Customer, or by staff on App Accounts / DHR. They never scan anything. An invite with
+their linked Customer, or by staff on App Accounts / DHR — or that they scanned when starting a
+test (rule 4). An invite with
 role *Member* links them to a Customer so that future shipments to that customer are theirs
 automatically.
 
@@ -132,6 +141,11 @@ account is a write to a BIMS-owned collection.
   blockedAt). The app's `hooks.server.ts` looks the id up on every request and, if present, drops
   the session and sends the person to `/login?blocked=1`. Nothing is deleted; unblocking deletes
   the row and the account works again.
+- **Bulk assign** (2026-10-19): the account page's assign box is a textarea — scan cartridges one
+  after another (each scan lands on its own line; spaces, commas or semicolons also separate), up to
+  200 at a time. A token carrying a UUID (a QR URL) is reduced to it; duplicates are dropped. Each id
+  goes through `assignOwnership` on its own and the page lists the outcome per cartridge, so one bad
+  id never stops the rest.
 - **Assigning cartridges** (2026-10-16): the account page has an *Assign a cartridge* form (cartridge
   id, optional note, *replace current owner*); the DHR page has the mirror form (account email or id).
   Both call `assignOwnership` — see "How a row gets created".

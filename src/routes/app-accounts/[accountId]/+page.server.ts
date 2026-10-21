@@ -127,6 +127,20 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 	};
 };
 
+const MAX_BULK_ASSIGN = 200;
+const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+
+/**
+ * Cartridge ids from scanner input: split on newlines, spaces, commas or
+ * semicolons; a token that carries a UUID (e.g. a QR URL) is reduced to it;
+ * duplicates dropped, order kept.
+ */
+function parseScannedIds(raw: string): string[] {
+	const ids = raw.split(/[\s,;]+/).map((t) => t.trim()).filter(Boolean)
+		.map((t) => t.match(UUID)?.[0].toLowerCase() ?? t);
+	return [...new Set(ids)];
+}
+
 const operatorOf = (locals: App.Locals) => ({ _id: locals.user!._id, username: locals.user!.username ?? locals.user!._id });
 
 export const actions: Actions = {
@@ -199,26 +213,40 @@ export const actions: Actions = {
 		return ok ? { success: true, message: 'Link revoked' } : fail(404, { error: 'Link not found' });
 	},
 
-	/** Give this account a cartridge: a personal ownership row with source 'operator'. */
+	/**
+	 * Give this account one or more cartridges: a personal ownership row with
+	 * source 'operator' each. `cartridgeIds` holds whatever the scanner typed —
+	 * one id per line (or separated by spaces/commas); each is assigned on its
+	 * own, so one bad id does not stop the rest.
+	 */
 	assign: async ({ request, locals, params }) => {
 		if (!locals.user) redirect(302, '/login');
 		requirePermission(locals.user, 'customer:write');
 		await connectDB();
 		const accountId = decodeURIComponent(params.accountId);
 		const fd = await request.formData();
-		const cartridgeId = String(fd.get('cartridgeId') ?? '').trim();
-		if (!CARTRIDGE_ID.test(cartridgeId)) return fail(400, { error: 'Enter a cartridge id: the QR payload (a UUID) or a CART-000123 id' });
+		const ids = parseScannedIds(String(fd.get('cartridgeIds') ?? fd.get('cartridgeId') ?? ''));
+		if (!ids.length) return fail(400, { error: 'Scan or enter at least one cartridge id' });
+		if (ids.length > MAX_BULK_ASSIGN) return fail(400, { error: `At most ${MAX_BULK_ASSIGN} cartridges at a time — you entered ${ids.length}` });
 		if (!(await AppUser.exists({ _id: accountId }))) return fail(404, { error: 'Account not found' });
-		const outcome = await assignOwnership({
-			cartridgeId,
-			accountId,
-			replace: fd.get('replace') === 'on',
-			note: String(fd.get('note') ?? '').trim() || null,
-			operator: operatorOf(locals)
-		});
-		if (!outcome.ok) return fail(outcome.reason === 'not_found' ? 404 : 409, { error: outcome.reasonText });
-		const caveat = outcome.matchedShipment ? '' : ' (no shipment to this account’s customers on record)';
-		return { success: true, message: `Cartridge ${cartridgeId} assigned to this account${caveat}` };
+		const replace = fd.get('replace') === 'on';
+		const note = String(fd.get('note') ?? '').trim() || null;
+		const operator = operatorOf(locals);
+		const results: { cartridgeId: string; ok: boolean; text: string }[] = [];
+		for (const cartridgeId of ids) {
+			if (!CARTRIDGE_ID.test(cartridgeId)) {
+				results.push({ cartridgeId, ok: false, text: 'Not a cartridge id' });
+				continue;
+			}
+			const outcome = await assignOwnership({ cartridgeId, accountId, replace, note, operator });
+			results.push(outcome.ok
+				? { cartridgeId, ok: true, text: outcome.matchedShipment ? 'Assigned' : 'Assigned (no shipment to this account’s customers on record)' }
+				: { cartridgeId, ok: false, text: outcome.reasonText });
+		}
+		const assigned = results.filter((r) => r.ok).length;
+		const failed = results.length - assigned;
+		const message = `${assigned} of ${results.length} cartridge${results.length === 1 ? '' : 's'} assigned${failed ? ` — ${failed} not assigned, see below` : ''}`;
+		return assigned ? { success: true, message, results } : fail(409, { error: message, results });
 	},
 
 	release: async ({ request, locals }) => {

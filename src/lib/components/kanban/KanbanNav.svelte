@@ -19,6 +19,8 @@
 		{ href: '/kanban/roadmap', label: 'Roadmap' },
 		{ href: '/spu/cleaning', label: 'Cleaning', requires: 'cleaning' },
 		{ href: '/kanban/plans', label: 'Plans' },
+		// VOICE-01: Claude-written digests of spoken EOD / experiment memos.
+		{ href: '/kanban/journal', label: 'Journal' },
 		{ href: '/kanban/flow', label: 'Flow' },
 		{ href: '/kanban/policy', label: 'Policy' },
 		{ href: '/kanban/archived', label: 'Archive' }

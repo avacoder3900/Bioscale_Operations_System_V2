@@ -7,11 +7,12 @@ import {
 	OpentronsRobot, WaxFillingRun, ReagentBatchRecord, AssayDefinition, PartDefinition
 } from '$lib/server/db';
 import { getCheckedOutCartridgeIds } from '$lib/server/checkout-utils';
+import { groupCountsExcluding, totalOf } from '$lib/server/checked-out-counts';
+import { homeCountSpecs } from '$lib/server/dashboard-count-specs';
 import { buildPipeline } from '$lib/server/cartridge-pipeline';
 import { isSpuStatus, isLegalTransition } from '$lib/server/spu-status';
 import { syncServiceFlag } from '$lib/server/service-flag';
 import { WAX_FILLING_ACTIVE } from '$lib/server/manufacturing/run-statuses';
-import { WAX_STAGE_STATUSES } from '$lib/shared/cartridge-wax-status';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals, url }) => {
@@ -148,28 +149,21 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 				const cdNow = new Date();
 				const sevenDaysAgo = new Date(cdNow.getTime() - 7 * 24 * 60 * 60 * 1000);
 				const thirtyDaysFromNow = new Date(cdNow.getTime() + 30 * 24 * 60 * 60 * 1000);
-				let storageCounts: any[] = [];
+				// Index-only counts minus the checked-out carts (PERF-01 BM-02); `$nin` on _id
+				// made each of these a full collection scan.
+				const counts = groupCountsExcluding(CartridgeRecord, homeCountSpecs(cdNow), checkedOutIds);
+				const countRows = (key: keyof Awaited<typeof counts>) => counts.then((c) => c[key]).catch(() => []);
 
 				const [
 					phaseCounts, totalMfg, totalVoided, waxQcCounts, reagentInspCounts,
 					recentCartridges, expiringCartridges, fridges, ovens, weeklyProduction,
 					assayBreakdown
 				] = await Promise.all([
-					CartridgeRecord.aggregate([
-						{ $match: { status: { $ne: null }, _id: { $nin: checkedOutIds } } },
-						{ $group: { _id: '$status', count: { $sum: 1 } } },
-						{ $sort: { count: -1 } }
-					]).catch(() => []),
-					CartridgeRecord.countDocuments({ status: { $ne: 'voided' }, _id: { $nin: checkedOutIds } }).catch(() => 0),
-					CartridgeRecord.countDocuments({ status: 'voided', _id: { $nin: checkedOutIds } }).catch(() => 0),
-					CartridgeRecord.aggregate([
-						{ $match: { 'waxQc.status': { $exists: true }, _id: { $nin: checkedOutIds } } },
-						{ $group: { _id: '$waxQc.status', count: { $sum: 1 } } }
-					]).catch(() => []),
-					CartridgeRecord.aggregate([
-						{ $match: { 'reagentInspection.status': { $exists: true }, _id: { $nin: checkedOutIds } } },
-						{ $group: { _id: '$reagentInspection.status', count: { $sum: 1 } } }
-					]).catch(() => []),
+					countRows('phaseCounts'),
+					countRows('totalMfg').then(totalOf),
+					countRows('totalVoided').then(totalOf),
+					countRows('waxQc'),
+					countRows('reagentInspection'),
 					CartridgeRecord.find({ _id: { $nin: checkedOutIds } }).sort({ updatedAt: -1 }).limit(15).lean().catch(() => []),
 					CartridgeRecord.find({
 						'reagentFilling.expirationDate': { $lte: thirtyDaysFromNow, $gte: cdNow },
@@ -178,32 +172,10 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 					}).sort({ 'reagentFilling.expirationDate': 1 }).limit(10).lean().catch(() => []),
 					Equipment.find({ equipmentType: 'fridge', status: { $ne: 'offline' } }).lean().catch(() => []),
 					Equipment.find({ equipmentType: 'oven', status: { $ne: 'offline' } }).lean().catch(() => []),
-					CartridgeRecord.countDocuments({ createdAt: { $gte: sevenDaysAgo }, _id: { $nin: checkedOutIds } }).catch(() => 0),
-					CartridgeRecord.aggregate([
-						{ $match: { 'reagentFilling.assayType.name': { $exists: true }, _id: { $nin: checkedOutIds } } },
-						{ $group: { _id: '$reagentFilling.assayType.name', count: { $sum: 1 } } },
-						{ $sort: { count: -1 } }
-					]).catch(() => [])
+					countRows('weeklyProduction').then(totalOf),
+					countRows('assayBreakdown')
 				]);
 
-				storageCounts = await (async () => {
-					const [waxCounts, reagentCounts] = await Promise.all([
-						CartridgeRecord.aggregate([
-							{ $match: { 'waxStorage.location': { $exists: true }, status: { $in: [...WAX_STAGE_STATUSES] }, _id: { $nin: checkedOutIds } } },
-							{ $group: { _id: '$waxStorage.location', count: { $sum: 1 } } }
-						]),
-						CartridgeRecord.aggregate([
-							{ $match: { 'storage.fridgeName': { $exists: true }, status: 'stored', _id: { $nin: checkedOutIds } } },
-							{ $group: { _id: '$storage.fridgeName', count: { $sum: 1 } } }
-						])
-					]);
-					const merged = new Map<string, number>();
-					for (const s of [...waxCounts as any[], ...reagentCounts as any[]]) {
-						merged.set(s._id, (merged.get(s._id) ?? 0) + s.count);
-					}
-					return Array.from(merged.entries()).map(([k, v]) => ({ _id: k, count: v }));
-				})();
-				const fridgeMap = new Map((fridges as any[]).map((f: any) => [f.barcode ?? f.name ?? String(f._id), f.name ?? f.barcode ?? String(f._id)]));
 				// Map from barcode/name key → actual _id for detail links
 				const fridgeIdMap = new Map((fridges as any[]).map((f: any) => [f.barcode ?? f.name ?? String(f._id), String(f._id)]));
 
@@ -227,20 +199,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 					// /equipment/activity and /inventory/fridge-storage so capacity utilisation
 					// is consistent.
 					(async () => {
-						const [waxCounts, scrappedCounts, storedCounts] = await Promise.all([
-							CartridgeRecord.aggregate([
-								{ $match: { status: { $in: [...WAX_STAGE_STATUSES] }, 'waxStorage.location': { $exists: true }, _id: { $nin: checkedOutIds } } },
-								{ $group: { _id: '$waxStorage.location', count: { $sum: 1 } } }
-							]),
-							CartridgeRecord.aggregate([
-								{ $match: { status: 'scrapped', 'waxStorage.location': { $exists: true }, _id: { $nin: checkedOutIds } } },
-								{ $group: { _id: '$waxStorage.location', count: { $sum: 1 } } }
-							]),
-							CartridgeRecord.aggregate([
-								{ $match: { status: 'stored', 'storage.fridgeName': { $exists: true }, _id: { $nin: checkedOutIds } } },
-								{ $group: { _id: '$storage.fridgeName', count: { $sum: 1 } } }
-							])
-						]);
+						const { waxStageByLocation: waxCounts, scrappedByLocation: scrappedCounts, storedByFridge: storedCounts } = await counts;
 						const merged = new Map<string, number>();
 						for (const c of [...waxCounts as any[], ...scrappedCounts as any[], ...storedCounts as any[]]) {
 							merged.set(c._id, (merged.get(c._id) ?? 0) + c.count);
@@ -251,17 +210,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 					WaxFillingRun.find({ status: { $in: WAX_FILLING_ACTIVE } }).select('robot status').lean(),
 					AssayDefinition.find({ isActive: true, hidden: { $ne: true } }).select('name skuCode').lean(),
 					BomItem.find({ isActive: true, partNumber: { $regex: /^CRT-/ } }).select('partNumber name unitCost').lean(),
-					CartridgeRecord.aggregate([
-						{ $match: { createdAt: { $gte: sevenDaysAgo }, _id: { $nin: checkedOutIds } } },
-						{ $group: {
-							_id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } },
-							count: { $sum: 1 },
-							passed: { $sum: { $cond: [{ $eq: ['$qcStatus', 'passed'] }, 1, 0] } },
-							failed: { $sum: { $cond: [{ $eq: ['$qcStatus', 'failed'] }, 1, 0] } },
-							pending: { $sum: { $cond: [{ $in: ['$qcStatus', ['pending', null]] }, 1, 0] } }
-						}},
-						{ $sort: { _id: 1 } }
-					]),
+					counts.then((c) => c.dailyThroughput),
 					WaxFillingRun.find().sort({ createdAt: -1 }).limit(5).lean(),
 					ReagentBatchRecord.find().sort({ createdAt: -1 }).limit(5).lean(),
 					Equipment.aggregate([
@@ -273,10 +222,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 					console.error('[DASHBOARD] enriched queries failed:', enrichErr instanceof Error ? enrichErr.message : enrichErr);
 				}
 
-				const assayFillCounts = await CartridgeRecord.aggregate([
-					{ $match: { 'reagentFilling.assayType._id': { $exists: true }, _id: { $nin: checkedOutIds } } },
-					{ $group: { _id: '$reagentFilling.assayType._id', count: { $sum: 1 } } }
-				]);
+				const assayFillCounts = await countRows('assayFills');
 				const assayFillMap = new Map((assayFillCounts as any[]).map((a: any) => [a._id, a.count]));
 				const busyRobotIds = new Set((activeWaxRuns as any[]).map((r: any) => r.robot?._id));
 				const dayMap = new Map((dailyThroughputAgg as any[]).map((d: any) => [d._id, { count: d.count, passed: d.passed ?? 0, failed: d.failed ?? 0, pending: d.pending ?? 0 }]));
@@ -297,11 +243,6 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 					waxQc: qcMap(waxQcCounts as any[]),
 					reagentInspection: qcMap(reagentInspCounts as any[]),
 					assayBreakdown: (assayBreakdown as any[]).map((a: any) => ({ name: a._id, count: a.count })),
-					storageDistribution: (storageCounts as any[]).map((s: any) => ({
-						locationId: s._id,
-						locationName: fridgeMap.get(s._id) ?? s._id,
-						count: s.count
-					})),
 					expiringCount: expiringCartridges.length,
 					expiringSoon: (expiringCartridges as any[]).map((c: any) => ({
 						id: c._id,

@@ -7,6 +7,11 @@
 	const fmt = (iso: string | null) => (iso ? new Date(iso).toLocaleString() : '—');
 	const a = $derived(data.account);
 	const activeLinks = $derived(data.links.filter((l) => l.status === 'active'));
+
+	// Bulk assign: what the scanner has typed so far, and how many distinct ids
+	// that is (same split as the server's parseScannedIds).
+	let scanned = $state('');
+	const scannedCount = $derived(new Set(scanned.split(/[\s,;]+/).filter(Boolean)).size);
 </script>
 
 <svelte:head><title>{a.email || a.accountId} · App accounts · BIMS</title></svelte:head>
@@ -82,18 +87,49 @@
 			Cartridges linked to this account
 			<span class="ml-2 inline-block rounded-full bg-[var(--color-tron-cyan)] px-2 py-0.5 text-xs text-black">{data.owned.length}</span>
 		</h3>
-		<form method="POST" action="?/assign" use:enhance class="mb-4 flex flex-wrap items-end gap-2">
+		<form
+			method="POST"
+			action="?/assign"
+			use:enhance={() => async ({ result, update }) => {
+				await update({ reset: false });
+				if (result.type === 'success') scanned = '';
+			}}
+			class="mb-4 flex flex-wrap items-end gap-2"
+		>
 			<div class="min-w-[18rem] flex-1">
-				<label class="tron-text-muted mb-1 block text-sm" for="assignCartridgeId">Assign a cartridge to this account</label>
-				<input id="assignCartridgeId" name="cartridgeId" required placeholder="Cartridge id — the QR payload (UUID) or CART-000123" class="tron-input w-full font-mono" autocomplete="off" spellcheck="false" />
+				<label class="tron-text-muted mb-1 block text-sm" for="assignCartridgeIds">
+					Assign cartridges to this account — scan one after another, each lands on its own line
+					{#if scannedCount}<span class="ml-1 text-[var(--color-tron-cyan)]">({scannedCount} cartridge{scannedCount === 1 ? '' : 's'})</span>{/if}
+				</label>
+				<textarea
+					id="assignCartridgeIds"
+					name="cartridgeIds"
+					bind:value={scanned}
+					required
+					rows="4"
+					placeholder={'Scan or type cartridge ids — the QR payload (UUID) or CART-000123, one per line'}
+					class="tron-input w-full font-mono"
+					autocomplete="off"
+					spellcheck="false"
+				></textarea>
 			</div>
 			<div class="min-w-[12rem]">
 				<label class="tron-text-muted mb-1 block text-sm" for="assignNote">Note (optional)</label>
 				<input id="assignNote" name="note" placeholder="e.g. order #1234" class="tron-input w-full" />
 			</div>
 			<label class="tron-text-muted flex items-center gap-1 pb-2 text-sm"><input type="checkbox" name="replace" /> replace current owner</label>
-			<TronButton type="submit" variant="primary">Assign</TronButton>
+			<TronButton type="submit" variant="primary">Assign{scannedCount > 1 ? ` ${scannedCount}` : ''}</TronButton>
 		</form>
+		{#if form?.results?.length}
+			<ul class="mb-4 space-y-1 text-sm">
+				{#each form.results as r (r.cartridgeId)}
+					<li class="flex flex-wrap gap-2">
+						<span class="font-mono">{r.cartridgeId}</span>
+						<span class={r.ok ? 'text-[var(--color-tron-green)]' : 'text-[var(--color-tron-red)]'}>{r.text}</span>
+					</li>
+				{/each}
+			</ul>
+		{/if}
 		{#if data.owned.length === 0}
 			<p class="tron-text-muted py-2 text-center text-sm">None. People do not scan cartridges in the app; assign one here, from the cartridge's DHR page, or let a shipment to the account's customer do it.</p>
 		{:else}

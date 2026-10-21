@@ -78,13 +78,11 @@ export const actions: Actions = {
 			});
 			await AuditLog.create({
 				_id: generateId(),
+				tableName: 'robot_arm_calibration',
+				recordId: 'sync_zero',
 				action: 'robot_arm.calibrate.capture',
-				resourceType: 'robot_arm_calibration',
-				resourceId: 'sync_zero',
-				userId: locals.user._id,
-				username: locals.user.username,
-				timestamp: new Date(),
-				details: {
+				changedBy: locals.user.username,
+				newData: {
 					captured_at: record.captured_at,
 					leader_positions: record.leader_positions,
 					follower_positions: record.follower_positions
@@ -104,13 +102,11 @@ export const actions: Actions = {
 			const res = await robotArm.clearCalibration();
 			await AuditLog.create({
 				_id: generateId(),
+				tableName: 'robot_arm_calibration',
+				recordId: 'sync_zero',
 				action: 'robot_arm.calibrate.clear',
-				resourceType: 'robot_arm_calibration',
-				resourceId: 'sync_zero',
-				userId: locals.user._id,
-				username: locals.user.username,
-				timestamp: new Date(),
-				details: { removed: res.removed }
+				changedBy: locals.user.username,
+				newData: { removed: res.removed }
 			});
 			return res.removed
 				? { success: 'Saved sync zero cleared. Teleop will lock neutrals at GO.' }
