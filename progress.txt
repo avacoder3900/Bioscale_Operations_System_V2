@@ -21813,3 +21813,18 @@ Source: branch feat/cleanup-to-animate @ commit 9410f247
 Retrieve this exact code: git checkout feat/cleanup-to-animate at commit 9410f247
   (or: git log feat/cleanup-to-animate --oneline to find it if the branch has since moved on)
 What this deployment is for: Clean-up editor's "Send to Animate" card and the minDurationS peak-speed fix in the move-set editor
+
+================================================================================
+2026-10-21 — fix/studio-swap-tip-home — Studio Swap tip seats the new tip (home after reopen/drop)
+================================================================================
+B07 2026-10-21 20:38–20:40Z: the Studio closed its maintenance run (DELETE halts the OT-2:
+"Recovering from halt"), opened a new one and went straight to drop + pick-up with no home.
+The pick-up pressed from a stale Z, stopped short of the tip and hit "ALARM: Hard limit +Z"
+retracting to Z151.15. Fixes: (1) startMaintenance homes leftZ/rightZ/plungers on every open
+(covers Reload deck and the SLOT_OCCUPIED reopen); (2) Swap tip homes Z + plungers between the
+drop and the pick-up; (3) dropTipInPlace sends homeAfter: true (OT-2 drop_tip() default), so the
+GEN2 ejector sleeve is fully up before the next press. +1 test; vitest opentrons 304 passed;
+svelte-check 16 (baseline).
+Deployment: production — via Vercel GitHub integration on push to master
+Source: branch fix/studio-swap-tip-home, merged to master
+What this deployment is for: Deck Calibration Studio Swap tip picks the new tip up fully
