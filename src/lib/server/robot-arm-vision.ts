@@ -10,9 +10,13 @@
  *
  * Pi calls:
  *   POST /cameras/{name}/apriltags/detect   tags + poses (+ the frame); 404 until installed
- *   GET  /servos                            encoder steps, servos 1–5 (no IK)
+ *   GET  /servos                            encoder steps + load/temp/voltage/torque per servo (no IK)
  *   GET  /pose                              Cartesian pose, record only (501 until IK is ported)
  *   POST /torque, POST /servos/{id}/jog     return to home
+ *
+ * Calibration and checks rely on BOTH the servos and the camera: a save needs
+ * a servo read on each side of the camera capture (and the two must agree),
+ * and "home" needs the encoders and the arm tags to agree.
  */
 import sharp from 'sharp';
 import { connectDB, AuditLog, generateId } from '$lib/server/db';
@@ -39,6 +43,8 @@ import {
 	planJogDeltas,
 	residuals,
 	stepsToDeg,
+	strainedJoints,
+	unsteadyJoints,
 	DEFAULT_HOMING,
 	GRIPPER_SERVO_ID,
 	HOME_SERVO_IDS,
@@ -50,7 +56,9 @@ import {
 	type HomeAssessment,
 	type HomingSettings,
 	type JointSteps,
-	type Residuals
+	type Residuals,
+	type ServoReading,
+	type StrainedJoint
 } from '$lib/robot-arm/home-calibration';
 
 type User = { _id: string; username: string };
@@ -264,6 +272,8 @@ export interface CalibrationSummary {
 	tags: CalibratedTag[];
 	tolerances: Tolerances;
 	jointSteps: JointSteps | null;
+	/** Servo state at home (load/temp are null when only /pose could be read). */
+	servos: ServoReading[];
 	homing: HomingSettings;
 	supersededAt: string | null;
 	lastCheck: {
@@ -275,6 +285,7 @@ export interface CalibrationSummary {
 		residualMax: number | null;
 		cameraShiftMm: number | null;
 		markers: { markerId: string; tagId: number; name: string; status: string; offMm: number | null; offDeg: number | null }[];
+		strained: StrainedJoint[];
 	} | null;
 }
 
@@ -284,6 +295,32 @@ function jointStepsOf(doc: any): JointSteps | null {
 	const out: JointSteps = {};
 	for (const [k, v] of Object.entries(raw)) out[String(k)] = Number(v);
 	return out;
+}
+
+function numOrNull(v: unknown): number | null {
+	return typeof v === 'number' && Number.isFinite(v) ? v : null;
+}
+
+function servosOf(doc: any): ServoReading[] {
+	return (doc.servos ?? []).map(
+		(s: any): ServoReading => ({
+			sid: Number(s.sid),
+			steps: Number(s.steps),
+			load: numOrNull(s.load),
+			temperatureC: numOrNull(s.temperatureC),
+			voltage: numOrNull(s.voltage),
+			torque: typeof s.torque === 'boolean' ? s.torque : null
+		})
+	);
+}
+
+function strainedOf(list: any[] | undefined): StrainedJoint[] {
+	return (list ?? []).map((s: any) => ({
+		sid: Number(s.sid),
+		load: numOrNull(s.load),
+		temperatureC: numOrNull(s.temperatureC),
+		reason: s.reason === 'hot' ? 'hot' : 'high_load'
+	}));
 }
 
 function homingOf(doc: any): HomingSettings {
@@ -327,6 +364,7 @@ function calibrationSummary(doc: any, o: { withThumb: boolean }): CalibrationSum
 			pixel: doc.tolerances?.pixel ?? DEFAULT_TOLERANCES.pixel
 		},
 		jointSteps: jointStepsOf(doc),
+		servos: servosOf(doc),
 		homing: homingOf(doc),
 		supersededAt: doc.supersededAt ? new Date(doc.supersededAt).toISOString() : null,
 		lastCheck: doc.lastCheck?.at
@@ -345,7 +383,8 @@ function calibrationSummary(doc: any, o: { withThumb: boolean }): CalibrationSum
 						status: m.status,
 						offMm: m.offMm ?? null,
 						offDeg: m.offDeg ?? null
-					}))
+					})),
+					strained: strainedOf(doc.lastCheck.strained)
 				}
 			: null
 	};
@@ -374,22 +413,63 @@ async function requireArmFree(): Promise<void> {
 	if (active) throw new Error(`the arm is busy (${active.kind} run ${active.run_id}) — stop it first`);
 }
 
-/**
- * Follower encoder steps from GET /servos — raw per-servo state, no IK.
- * Not GET /pose: on the current Pi server /pose answers 501 until the IK
- * stack (ikpy + URDF + jog calibration) is ported, and `position` here is the
- * same raw step /pose reports as joint_steps.
- */
-async function readJointSteps(): Promise<{ steps: JointSteps }> {
-	const servos = await robotArm.listServos();
-	const steps: JointSteps = {};
-	for (const s of Array.isArray(servos) ? servos : []) {
-		if (Number.isFinite(s?.position)) steps[String(s.id)] = Number(s.position);
-	}
+interface ServoRead {
+	steps: JointSteps;
+	readings: ServoReading[];
+	/** Which Pi route answered: /servos carries load/temp, /pose only steps. */
+	source: 'servos' | 'pose';
+}
+
+function requireHomeJoints(steps: JointSteps): void {
 	for (const sid of HOME_SERVO_IDS) {
 		if (!Number.isFinite(steps[String(sid)])) throw new Error(`the arm did not report a position for servo ${sid}`);
 	}
-	return { steps };
+}
+
+/**
+ * Read the follower: GET /servos — raw per-servo state (steps + load/temp/
+ * voltage/torque), no IK — falling back to GET /pose (steps only) when
+ * /servos fails. On the current Pi /pose answers 501 until the IK stack is
+ * ported, so the fallback rarely helps, but both report the same raw encoder
+ * step. Throws when neither gives all of servos 1–5.
+ */
+async function readServos(): Promise<ServoRead> {
+	let servosErr: unknown;
+	try {
+		const list = await robotArm.listServos();
+		if (!Array.isArray(list)) throw new Error('response was not a list');
+		const readings: ServoReading[] = list
+			.filter((s) => Number.isFinite(Number(s?.id)) && Number.isFinite(Number(s?.position)))
+			.map((s) => ({
+				sid: Number(s.id),
+				steps: Number(s.position),
+				load: numOrNull(s.load),
+				temperatureC: numOrNull(s.temperature),
+				voltage: numOrNull(s.voltage),
+				torque: typeof s.torque === 'boolean' ? s.torque : null
+			}));
+		const steps: JointSteps = {};
+		for (const r of readings) steps[String(r.sid)] = r.steps;
+		requireHomeJoints(steps);
+		return { steps, readings, source: 'servos' };
+	} catch (e) {
+		servosErr = e;
+	}
+	try {
+		const p = await robotArm.getPose();
+		const steps: JointSteps = {};
+		for (const [k, v] of Object.entries(p.joint_steps ?? {})) steps[String(k)] = Number(v);
+		requireHomeJoints(steps);
+		const readings: ServoReading[] = Object.entries(steps).map(([k, v]) => ({ sid: Number(k), steps: v, load: null, temperatureC: null, voltage: null, torque: null }));
+		return { steps, readings, source: 'pose' };
+	} catch (e) {
+		const msg = (x: unknown) => (x instanceof Error ? x.message : String(x));
+		throw new Error(`the servos could not be read (GET /servos: ${msg(servosErr)}; GET /pose: ${msg(e)})`);
+	}
+}
+
+function strainText(s: StrainedJoint[]): string {
+	return s.map((j) => (j.reason === 'hot' ? `J${j.sid} is hot (${j.temperatureC} °C)` : `J${j.sid} is pushing hard (load ${j.load})`)).join(', ');
 }
 
 /** Cartesian pose for the record only; null while the Pi has no IK (/pose → 501). */
@@ -413,10 +493,19 @@ function cleanTolerances(t?: { positionMm?: number | null; angleDeg?: number | n
 }
 
 /**
- * Save a calibration: one fresh detection on the Pi, with the arm parked at
- * home. Every registered tag found is stored with its pose; unregistered tags
- * are ignored (register them first to include them). The encoders are read
- * in the same request and become the Return-to-home target.
+ * Save a calibration with the arm parked at home. It relies on the servos AND
+ * the camera; if either cannot be read, nothing is saved.
+ *
+ *   1. Read the servos (steps, plus load/temp when /servos answers).
+ *   2. One fresh AprilTag detection on the Pi.
+ *   3. Read the servos again. If any joint moved past the home tolerance
+ *      between the two reads, the frame and the encoders do not describe the
+ *      same pose — refused.
+ *
+ * Every registered tag found is stored with its pose (unregistered tags are
+ * ignored; register them first). At least one arm tag must be in view. The
+ * encoder steps become the Return-to-home target, and the servo loads the
+ * baseline that later checks compare against.
  */
 export async function saveCalibration(
 	user: User,
@@ -430,9 +519,24 @@ export async function saveCalibration(
 	// The arm must be parked and idle: the encoders read now become "home".
 	await requireArmFree();
 
+	// Servos on both sides of the camera capture, so they describe the frame.
+	const servoErr = (e: unknown) => new Error(`${e instanceof Error ? e.message : String(e)} — a calibration needs the servos as well as the camera`);
+	const before = await readServos().catch((e) => {
+		throw servoErr(e);
+	});
 	const det = await detectTags(o.cameraName, { includeFrame: true, registry });
 	if (!det.available) throw new Error(det.reason ?? 'the Pi could not detect tags');
 	if (!det.frame) throw new Error('the Pi did not return the frame it detected on');
+	const servos = await readServos().catch((e) => {
+		throw servoErr(e);
+	});
+	const unsteady = unsteadyJoints(before.steps, servos.steps);
+	if (unsteady.length) {
+		throw new Error(
+			`the arm moved while the camera was capturing (joint ${unsteady.map((sid) => `${sid}: ${before.steps[String(sid)]} → ${servos.steps[String(sid)]}`).join(', ')} steps) — let it settle at home and save again`
+		);
+	}
+	const captureDriftSteps = Math.max(0, ...HOME_SERVO_IDS.map((sid) => Math.abs(servos.steps[String(sid)] - before.steps[String(sid)])));
 
 	const warnings: string[] = [];
 	const byTagId = new Map(registry.map((t) => [t.tagId, t]));
@@ -454,6 +558,9 @@ export async function saveCalibration(
 			};
 		});
 	if (!tags.length) throw new Error(`none of the ${registry.length} registered tag(s) is visible — check the camera and lighting`);
+	if (!tags.some((t) => t.role === 'arm')) {
+		throw new Error('no arm tag is in view — the camera half of the calibration would say nothing about the arm. Register a tag on the arm, or bring one into view');
+	}
 
 	const unregistered = det.tags.filter((d) => !byTagId.has(d.id)).map((d) => d.id);
 	if (unregistered.length) warnings.push(`Seen but not registered, so not calibrated: tag ${unregistered.join(', ')}.`);
@@ -463,16 +570,16 @@ export async function saveCalibration(
 	const noPose = tags.filter((t) => !t.pose);
 	if (noPose.length) warnings.push(`No pose for ${noPose.map((t) => t.name).join(', ')} — checked on the picture only.`);
 	if (!tags.some((t) => t.role === 'fixed')) warnings.push('No fixed tag in view — a bumped camera cannot be told apart from the arm moving. Add a tag on the deck or the Opentron.');
-	if (!tags.some((t) => t.role === 'arm')) warnings.push('No arm tag in view — this calibration cannot say anything about the arm itself.');
 	if (det.intrinsics?.source === 'nominal') warnings.push('The Pi used nominal camera intrinsics (pyrealsense2 not available) — millimetres are approximate; movement is still caught.');
-
-	let jointSteps: JointSteps | null = null;
-	const pose = await readCartesianPose();
-	try {
-		({ steps: jointSteps } = await readJointSteps());
-	} catch (e) {
-		warnings.push(`Arm encoders not read (${e instanceof Error ? e.message : String(e)}) — Return to home will be unavailable for this calibration.`);
+	if (servos.source === 'pose') warnings.push('Servo load and temperature were not available (GET /servos failed, steps came from /pose) — checks will catch a missed position but cannot say a joint is blocked.');
+	const strainedAtHome = strainedJoints(servos.readings);
+	if (strainedAtHome.length) {
+		warnings.push(`At home, ${strainText(strainedAtHome)}. Make sure nothing is pressing on the arm — saved as the baseline anyway.`);
 	}
+
+	const jointSteps: JointSteps = {};
+	for (const sid of HOME_SERVO_IDS) jointSteps[String(sid)] = servos.steps[String(sid)];
+	const pose = await readCartesianPose();
 
 	let referenceImageKey: string | null = null;
 	try {
@@ -508,6 +615,9 @@ export async function saveCalibration(
 		tags,
 		tolerances,
 		jointSteps,
+		servos: servos.readings,
+		servoSource: servos.source,
+		captureDriftSteps,
 		homing,
 		pose
 	});
@@ -524,6 +634,9 @@ export async function saveCalibration(
 		intrinsics: det.intrinsics,
 		tolerances,
 		jointSteps,
+		servos: servos.readings,
+		servoSource: servos.source,
+		captureDriftSteps,
 		supersedes: previous.map((p) => p._id),
 		referenceImageKey,
 		warnings
@@ -614,21 +727,35 @@ async function visionCheck(doc: any): Promise<{ vision: VisionAssessment | null;
 	return { vision, snapshotDataUrl: det.frame ? await thumbnail(det.frame) : null, warnings };
 }
 
-function homeMessage(home: HomeAssessment, vision: VisionAssessment | null, r: Residuals | null): string {
+/**
+ * The verdict in words, naming the likely failure: a joint short of home that
+ * is also pushing hard is blocked (a rigid object, or it cannot extend); the
+ * encoders at home with the arm tags elsewhere means the servo turned but the
+ * arm did not follow (a broken or slipped printed part).
+ */
+function homeMessage(home: HomeAssessment, vision: VisionAssessment | null, r: Residuals | null, ctx: { hasTarget: boolean }): string {
 	const v = vision ? describeVision(vision) : null;
+	const offStrained = r ? home.strained.filter((s) => r.off.includes(s.sid)) : [];
+	const blocked = offStrained.length ? ` ${strainText(offStrained)} — something is blocking it (a rigid object in the way, or the joint cannot fully extend). Clear it before moving the arm again.` : '';
+	const note = home.strained.length && !offStrained.length ? ` Note: ${strainText(home.strained)}.` : '';
 	switch (home.verdict) {
 		case 'home':
-			return [r ? `Encoders within ${r.max} steps of home.` : null, v].filter(Boolean).join(' ') || 'At home.';
+			return `At home: encoders within ${r?.max} steps and the arm tags agree. ${v ?? ''}${note}`.trim();
 		case 'camera_moved':
 			return v ?? 'The camera has moved — recalibrate.';
 		case 'position_off':
-			return `Encoders are ${r?.max} steps from home on joint(s) ${r?.off.join(', ')} — the arm did not land. ${v ?? ''}`.trim();
+			return `Encoders are ${r?.max} steps from home on joint(s) ${r?.off.join(', ')} — the arm did not land.${blocked} ${v ?? ''}${note}`.trim();
 		case 'markers_off':
-			return `Encoders say home but the tags disagree. ${v}`;
+			return `${home.landed ? 'Encoders say home but the tags disagree — the servos turned but the arm is not where they say: look for a broken or slipped 3D-printed part, a loose servo horn, or a tag that came loose.' : 'The tags disagree with home.'} ${v}${note}`.trim();
 		case 'position_off_and_markers_off':
-			return `Not at home: encoders ${r?.max} steps off and ${v ? v.charAt(0).toLowerCase() + v.slice(1) : 'the tags disagree.'}`;
-		case 'unverified':
-			return 'Nothing could be checked — no encoder target and no camera result.';
+			return `Not at home: encoders ${r?.max} steps off and ${v ? v.charAt(0).toLowerCase() + v.slice(1) : 'the tags disagree.'}${blocked}${note}`;
+		case 'unverified': {
+			const missing: string[] = [];
+			if (home.landed === null) missing.push(ctx.hasTarget ? 'the servos could not be read' : 'this calibration has no encoder home (recalibrate)');
+			if (home.markersOk === null) missing.push(vision ? 'no arm tag was tracked' : 'the camera check did not run');
+			const ok = [home.landed ? `encoders within ${r?.max} steps` : null, home.markersOk ? 'arm tags agree' : null].filter(Boolean).join(', ');
+			return `Not confirmed as home — ${missing.join(' and ')}. Home needs both the servos and the camera.${ok ? ` (Checked: ${ok}.)` : ''}${note}`;
+		}
 		case 'frozen':
 			return 'Frozen: servo 1 is outside its safe range — return the arm to home by hand.';
 	}
@@ -649,7 +776,8 @@ async function recordCheck(doc: any, user: User, kind: 'check' | 'return' | 'age
 					visionVerdict: result.vision?.verdict ?? null,
 					residualMax: result.home.residualMax != null && Number.isFinite(result.home.residualMax) ? result.home.residualMax : null,
 					cameraShiftMm: shift?.compensated ? shift.mm : null,
-					markers: (result.vision?.markers ?? []).map((m) => ({ markerId: m.markerId, tagId: m.tagId, name: m.name, status: m.status, offMm: m.offMm, offDeg: m.offDeg }))
+					markers: (result.vision?.markers ?? []).map((m) => ({ markerId: m.markerId, tagId: m.tagId, name: m.name, status: m.status, offMm: m.offMm, offDeg: m.offDeg })),
+					strained: result.home.strained
 				}
 			}
 		}
@@ -660,30 +788,36 @@ async function recordCheck(doc: any, user: User, kind: 'check' | 'return' | 'age
 		cameraShift: shift ?? null,
 		markers: result.vision?.markers.map((m) => ({ tagId: m.tagId, name: m.name, status: m.status, offMm: m.offMm, offDeg: m.offDeg })),
 		residuals: result.residuals,
+		strained: result.home.strained,
 		warnings: result.warnings,
 		...extra
 	});
 }
 
-/** No motion: are the encoders and every tag where they were at calibration? */
+/**
+ * No motion: are the encoders and every tag where they were at calibration?
+ * Both are read; a side that cannot be read makes the verdict "unverified".
+ */
 export async function checkHome(user: User, o: { cameraName?: string | null; kind?: 'check' | 'agent' } = {}): Promise<HomeCheckResult> {
 	const doc = await loadActive(o.cameraName);
 	const target = jointStepsOf(doc);
 	const warnings: string[] = [];
 	let r: Residuals | null = null;
-	if (target) {
-		try {
-			r = residuals((await readJointSteps()).steps, target);
-		} catch (e) {
-			warnings.push(`Encoders not read: ${e instanceof Error ? e.message : String(e)}`);
-		}
+	let strained: StrainedJoint[] = [];
+	if (!target) warnings.push('This calibration has no encoder home — recalibrate with the arm parked at home.');
+	try {
+		const now = await readServos();
+		if (target) r = residuals(now.steps, target);
+		strained = strainedJoints(now.readings, servosOf(doc));
+	} catch (e) {
+		warnings.push(`Servos not read: ${e instanceof Error ? e.message : String(e)}`);
 	}
 	const cam = await visionCheck(doc);
 	warnings.push(...cam.warnings);
-	const home = assessHome(r, cam.vision);
+	const home = assessHome(r, cam.vision, strained);
 	const result = { calibrationId: String(doc._id), cameraName: doc.cameraName, home, vision: cam.vision, residuals: r?.perJoint ?? null, warnings, moved: [] };
 	await recordCheck(doc, user, o.kind ?? 'check', result, {});
-	return { ...result, message: homeMessage(home, cam.vision, r), snapshotDataUrl: cam.snapshotDataUrl };
+	return { ...result, message: homeMessage(home, cam.vision, r, { hasTarget: !!target }), snapshotDataUrl: cam.snapshotDataUrl };
 }
 
 /**
@@ -716,7 +850,8 @@ export async function returnToHome(
 	if (!target) throw new Error('this calibration has no encoder home (the arm could not be read when it was taken) — recalibrate with the arm parked at home');
 	const homing = homingOf(doc);
 	await requireArmFree();
-	const before = await readJointSteps();
+	const before = await readServos();
+	let lastReadings = before.readings;
 	const base = { calibrationId: String(doc._id), cameraName: doc.cameraName, attempt };
 
 	// 0. Safety gate.
@@ -731,7 +866,7 @@ export async function returnToHome(
 			warnings.push(`Torque could NOT be turned off (${e instanceof Error ? e.message : String(e)}) — use the E-stop / Control tab before touching the arm.`);
 		}
 		const r = residuals(before.steps, target);
-		const home: HomeAssessment = { verdict: 'frozen', landed: false, markersOk: null, residualMax: r.max };
+		const home: HomeAssessment = { verdict: 'frozen', landed: false, markersOk: null, residualMax: r.max, strained: strainedJoints(before.readings, servosOf(doc)) };
 		const frozen = { ...out, torqueOff };
 		const result = { ...base, home, vision: null, residuals: r.perJoint, warnings, moved: [], jogs: 0, frozen, elapsedMs: Date.now() - t0 };
 		await recordCheck(doc, user, 'return', result, { before: before.steps, frozen, homing });
@@ -756,7 +891,9 @@ export async function returnToHome(
 	};
 	const settle = async () => {
 		await new Promise((res) => setTimeout(res, SETTLE_MS));
-		current = (await readJointSteps()).steps;
+		const read = await readServos();
+		current = read.steps;
+		lastReadings = read.readings;
 	};
 	const outOfTime = () => Date.now() - t0 > ATTEMPT_MOVE_BUDGET_MS;
 	// Stop returning: the Vision tab writes this loop's runId to the
@@ -819,7 +956,9 @@ export async function returnToHome(
 		jogs += c.jogs;
 		sent.set(GRIPPER_SERVO_ID, (sent.get(GRIPPER_SERVO_ID) ?? 0) + c.delta);
 		clawClosed = c.closed;
-		current = (await readJointSteps()).steps;
+		const read = await readServos();
+		current = read.steps;
+		lastReadings = read.readings;
 		r = residuals(current, target);
 	}
 
@@ -830,10 +969,10 @@ export async function returnToHome(
 		cam = await visionCheck(doc);
 		warnings.push(...cam.warnings);
 	}
-	const home = assessHome(r, cam.vision);
+	const home = assessHome(r, cam.vision, strainedJoints(lastReadings, servosOf(doc)));
 	const result = { ...base, home, vision: cam.vision, residuals: r.perJoint, warnings, moved, jogs, frozen: null, clawClosed, stopped, elapsedMs: Date.now() - t0 };
 	await recordCheck(doc, user, 'return', result, { before: before.steps, after: current, jogs, attempt, clawClosed, stopped, tolerance: HOME_STEP_TOLERANCE });
-	const msg = homeMessage(home, cam.vision, r);
+	const msg = homeMessage(home, cam.vision, r, { hasTarget: true });
 	return {
 		...result,
 		message: moved.length ? msg : `Arm was already within ${HOME_STEP_TOLERANCE} steps of home — nothing moved. ${msg}`,

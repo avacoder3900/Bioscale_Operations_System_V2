@@ -8,7 +8,8 @@
  * No motion — returning the arm is a human decision on the Vision tab.
  *
  *   GET /api/agent/robot-arm/vision-check[?camera=<name>]
- *   200 { verdict: 'home' | 'position_off' | 'markers_off' | 'camera_moved' | …, ok, message, markers[], residuals, warnings }
+ *   200 { verdict: 'home' | 'position_off' | 'markers_off' | 'camera_moved' | 'unverified' | …, ok, message, markers[], residuals, strained[], warnings }
+ *   ok is true only when the encoders AND the arm tags both say home; either side missing → 'unverified'.
  *   404 no calibration; 502 the arm/camera could not be reached
  */
 import { json } from '@sveltejs/kit';
@@ -42,6 +43,7 @@ export const GET: RequestHandler = async ({ request, url }) => {
 				depthMm: m.depthMm
 			})),
 			residuals: r.residuals,
+			strained: r.home.strained,
 			warnings: r.warnings
 		});
 	} catch (err) {

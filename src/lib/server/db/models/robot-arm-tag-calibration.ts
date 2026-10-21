@@ -7,7 +7,8 @@ import mongoose, { Schema } from 'mongoose';
  * Taken with the arm parked at home: one detection on the Pi, keeping every
  * registered tag it found — where it is on the picture, its pose relative to
  * the camera (mm, rotation), and the D415's depth to it when available. Plus
- * the follower's encoder steps at that moment, the target for Return to home.
+ * the follower's encoder steps (and load/temperature) read on both sides of
+ * that frame, the target for Return to home. A save needs both servos and camera.
  *
  * One `active` calibration per camera. Recalibrating supersedes the previous
  * one (kept for history, never edited).
@@ -55,6 +56,29 @@ const resultSchema = new Schema(
 	{ _id: false }
 );
 
+/** One servo at home, as the Pi reported it (load/temp/voltage/torque null when only /pose answered). */
+const servoReadingSchema = new Schema(
+	{
+		sid: { type: Number, required: true },
+		steps: { type: Number, required: true },
+		load: { type: Number, default: null },
+		temperatureC: { type: Number, default: null },
+		voltage: { type: Number, default: null },
+		torque: { type: Boolean, default: null }
+	},
+	{ _id: false }
+);
+
+const strainedSchema = new Schema(
+	{
+		sid: Number,
+		load: Number,
+		temperatureC: Number,
+		reason: String // 'high_load' | 'hot'
+	},
+	{ _id: false }
+);
+
 const robotArmTagCalibrationSchema = new Schema(
 	{
 		_id: { type: String, required: true },
@@ -84,8 +108,17 @@ const robotArmTagCalibrationSchema = new Schema(
 			angleDeg: { type: Number, required: true },
 			pixel: { type: Number, required: true }
 		},
-		/** servo id → encoder steps at home, servos 1–5; null when the arm could not be read. */
+		/**
+		 * servo id → encoder steps at home, servos 1–5. Required since the save
+		 * relies on servos + camera; null only on calibrations taken before that.
+		 */
 		jointSteps: { type: Map, of: Number, default: null },
+		/** Every servo at home, read right after the frame; the load baseline for checks. */
+		servos: { type: [servoReadingSchema], default: [] },
+		/** 'servos' (GET /servos, with load/temp) or 'pose' (GET /pose, steps only). */
+		servoSource: { type: String, default: null },
+		/** Largest encoder change between the reads before and after the frame (≤ HOME_STEP_TOLERANCE). */
+		captureDriftSteps: { type: Number, default: null },
 		/**
 		 * Return-to-home settings: servo 1's safe range (± steps of home; beyond
 		 * it home freezes and drops torque) and how far the mouth opens first.
@@ -108,7 +141,8 @@ const robotArmTagCalibrationSchema = new Schema(
 			visionVerdict: String,
 			residualMax: Number,
 			cameraShiftMm: Number,
-			markers: [resultSchema]
+			markers: [resultSchema],
+			strained: [strainedSchema]
 		}
 	},
 	{ minimize: false }

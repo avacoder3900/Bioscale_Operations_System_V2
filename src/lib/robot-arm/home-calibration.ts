@@ -9,6 +9,11 @@
  * confirm — independently of the servos' own report — that every tracked
  * point really is back where it was.
  *
+ * Neither side is trusted alone. The servos can say "home" while a broken
+ * 3D-printed link or a slipped horn leaves the arm elsewhere (tags catch it);
+ * the camera can miss a joint that is short of its target because something
+ * rigid is in the way (encoders and load catch it). "home" needs both.
+ *
  * ARM-03's greyscale whole-frame signature lived here too; ARM-04 replaced it
  * with per-marker tracking; ARM-05 swapped the stickers for AprilTags.
  */
@@ -133,6 +138,7 @@ export function shouldRetryHome(o: {
 	if (o.verdict === 'home' && clawDone) return { retry: false, reason: 'home, claw closed' };
 	if (o.elapsedMs >= (o.limitMs ?? HOME_LOOP_MS)) return { retry: false, reason: 'timed out' };
 	const landed = o.residualMax != null && o.residualMax <= HOME_STEP_TOLERANCE;
+	if (landed && clawDone && o.verdict === 'unverified') return { retry: false, reason: 'encoders are home; the camera could not confirm it' };
 	if (landed && clawDone && o.verdict !== 'home') return { retry: false, reason: 'encoders are home; the tags disagree' };
 	return { retry: true, reason: '' };
 }
@@ -178,41 +184,124 @@ export function residuals(current: JointSteps, target: JointSteps, tolerance = H
 	return { perJoint, max, off };
 }
 
+// ── servo state ──────────────────────────────────────────────────────────
+
+/**
+ * |load| at or above this counts as a servo working hard (out of ~1000).
+ * Same threshold as the Pi's /arm/health HEALTH_LOAD_HIGH.
+ */
+export const SERVO_LOAD_HIGH = 600;
+/**
+ * A joint is only called strained when its load is also this much above what
+ * it held at home — a joint that carries the arm's weight at home anyway
+ * should not read as blocked on every check.
+ */
+export const SERVO_LOAD_MARGIN = 150;
+/** Same as the Pi's HEALTH_TEMP_HOT_C; the STS3215 derates above ~60 °C. */
+export const SERVO_TEMP_HOT_C = 55;
+
+/** One servo as the Pi reported it. Telemetry is null when only steps were readable. */
+export interface ServoReading {
+	sid: number;
+	steps: number;
+	load: number | null;
+	temperatureC: number | null;
+	voltage: number | null;
+	torque: boolean | null;
+}
+
+export interface StrainedJoint {
+	sid: number;
+	load: number | null;
+	temperatureC: number | null;
+	reason: 'high_load' | 'hot';
+}
+
+/**
+ * Home joints that are pushing hard or running hot. `baseline` is what the
+ * same servos read at calibration; a joint's load must exceed both the
+ * absolute threshold and its home load by the margin.
+ */
+export function strainedJoints(now: ServoReading[], baseline: ServoReading[] | null = null): StrainedJoint[] {
+	const out: StrainedJoint[] = [];
+	for (const sid of HOME_SERVO_IDS) {
+		const s = now.find((x) => x.sid === sid);
+		if (!s) continue;
+		const homeLoad = baseline?.find((x) => x.sid === sid)?.load;
+		const load = s.load;
+		if (load != null && Math.abs(load) >= SERVO_LOAD_HIGH && (homeLoad == null || Math.abs(load) >= Math.abs(homeLoad) + SERVO_LOAD_MARGIN)) {
+			out.push({ sid, load, temperatureC: s.temperatureC, reason: 'high_load' });
+		} else if (s.temperatureC != null && s.temperatureC >= SERVO_TEMP_HOT_C) {
+			out.push({ sid, load, temperatureC: s.temperatureC, reason: 'hot' });
+		}
+	}
+	return out;
+}
+
+/**
+ * Home joints whose encoders changed by more than `tolerance` between two
+ * reads (or are missing from either) — the arm moved while the camera was
+ * capturing, so the frame and the encoders do not describe the same pose.
+ */
+export function unsteadyJoints(before: JointSteps, after: JointSteps, tolerance = HOME_STEP_TOLERANCE): number[] {
+	const out: number[] = [];
+	for (const sid of HOME_SERVO_IDS) {
+		const a = before[String(sid)];
+		const b = after[String(sid)];
+		if (!Number.isFinite(a) || !Number.isFinite(b) || Math.abs(b - a) > tolerance) out.push(sid);
+	}
+	return out;
+}
+
+// ── verdict ──────────────────────────────────────────────────────────────
+
 export type HomeVerdict =
 	| 'home'
 	| 'position_off'
 	| 'markers_off'
 	| 'camera_moved'
 	| 'position_off_and_markers_off'
-	/** Neither side could be checked — never reported as home. */
+	/**
+	 * Nothing is wrong on the side(s) that could be checked, but at least one
+	 * side is missing (no encoder home, encoders unreadable, camera down, or no
+	 * arm tag tracked). Never reported as home: home needs both.
+	 */
 	| 'unverified'
 	/** Servo A out of its safe range: nothing moved, torque dropped, a person returns the arm. */
 	| 'frozen';
 
 export interface HomeAssessment {
 	verdict: HomeVerdict;
-	/** Every home joint within tolerance (null = the calibration stored no encoder steps). */
+	/** Every home joint within tolerance (null = no encoder target or no reading). */
 	landed: boolean | null;
-	/** Every marker at its calibrated spot (null = no vision check ran). */
+	/**
+	 * Every tag at its calibrated spot, with at least one arm tag tracked
+	 * (null = no vision check ran, or only fixed tags were tracked — those say
+	 * nothing about the arm).
+	 */
 	markersOk: boolean | null;
 	residualMax: number | null;
+	/** Home joints pushing hard or running hot (informational; explains a miss). */
+	strained: StrainedJoint[];
 }
 
 /**
- * Combine encoders and markers into one verdict. Either side may be absent
- * (no encoders captured; camera unavailable) — the verdict is then the other
- * side's alone. A camera that moved trumps everything: neither the picture nor
- * the arm check means anything until it is recalibrated.
+ * Combine encoders and tags into one verdict. Any disagreement is reported;
+ * "home" needs BOTH sides to have been checked and to agree. A missing side
+ * gives "unverified", never "home". A camera that moved trumps everything:
+ * neither the picture nor the arm check means anything until it is
+ * recalibrated. ("frozen" is decided before any of this, by baseOutOfRange.)
  */
-export function assessHome(r: Residuals | null, vision: VisionAssessment | null): HomeAssessment {
+export function assessHome(r: Residuals | null, vision: VisionAssessment | null, strained: StrainedJoint[] = []): HomeAssessment {
 	const landed = r ? r.off.length === 0 && Number.isFinite(r.max) : null;
-	const markersOk = vision && vision.verdict !== 'no_markers' ? vision.verdict === 'ok' : null;
+	const armTracked = !!vision?.markers?.some((m) => m.role === 'arm');
+	const markersOk = !vision || vision.verdict === 'no_markers' ? null : vision.verdict === 'off' ? false : vision.verdict === 'ok' && armTracked ? true : null;
 	let verdict: HomeVerdict;
 	if (vision?.verdict === 'camera_moved') verdict = 'camera_moved';
 	else if (landed === false && markersOk === false) verdict = 'position_off_and_markers_off';
 	else if (landed === false) verdict = 'position_off';
 	else if (markersOk === false) verdict = 'markers_off';
-	else if (landed === null && markersOk === null) verdict = 'unverified';
-	else verdict = 'home';
-	return { verdict, landed, markersOk, residualMax: r ? r.max : null };
+	else if (landed === true && markersOk === true) verdict = 'home';
+	else verdict = 'unverified';
+	return { verdict, landed, markersOk, residualMax: r ? r.max : null, strained };
 }

@@ -2,8 +2,10 @@
 	/**
 	 * ARM-05 — calibrate. With the arm parked at home: detect, register any
 	 * tag the camera sees that is not in the registry yet (right here, by its
-	 * ID), then save. Saving runs one fresh detection on the server and stores
-	 * every registered tag's pose plus the arm's encoder steps.
+	 * ID), then save. Saving reads the servos, runs one fresh detection on the
+	 * server, reads the servos again, and stores every registered tag's pose
+	 * plus the arm's encoder steps and loads. It needs both: no servo read, an
+	 * arm that moved during the capture, or no arm tag in view → not saved.
 	 */
 	import { enhance } from '$app/forms';
 	import VisionStage, { type StageTag } from './VisionStage.svelte';
@@ -84,8 +86,9 @@
 		<div>
 			<h2 class="text-sm font-semibold tracking-wide" style="color: var(--color-tron-text)">CALIBRATE</h2>
 			<p class="max-w-2xl text-xs" style="color: var(--color-tron-text-secondary)">
-				Park the arm at home first. Detect, register any new tag the camera finds, then save — that frame becomes home.
-				Recalibrate whenever a tag is moved or added. A bumped camera does not need a recalibration if fixed tags are in view.
+				Park the arm at home first. Detect, register any new tag the camera finds, then save — that frame and the servo positions read on
+				either side of it become home. Saving needs both: the servos must answer, hold still during the capture, and at least one arm tag
+				must be in view. Recalibrate whenever a tag is moved or added. A bumped camera does not need a recalibration if fixed tags are in view.
 			</p>
 		</div>
 		<button
@@ -244,7 +247,7 @@
 			disabled={blocked || saving || !camera || !byTagId.size}
 			class="min-h-[40px] rounded px-4 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-40"
 			style="background: rgba(74,222,128,0.12); color: #4ade80; border: 1px solid #4ade80;"
-			title={byTagId.size ? 'Detect once more on the server and save every registered tag in view as home' : 'Register tags first'}
+			title={byTagId.size ? 'Read the servos, detect once more on the server, read the servos again, and save both as home' : 'Register tags first'}
 		>
 			{saving ? 'Saving…' : 'Save calibration (arm is at home)'}
 		</button>
