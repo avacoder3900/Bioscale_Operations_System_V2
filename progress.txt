@@ -21649,3 +21649,12 @@ chunkJogPlan (≤300-step jogs, joint order) + MAX_JOG_STEPS / MAX_HOME_JOGS (20
 more than 20 jogs away (names the joints). `moved` is now summed per joint. Touched: src/lib/robot-arm/home-calibration.ts
 (+2 tests), src/lib/server/robot-arm-vision.ts, Robot_Arm_Calibration_Context.md. npm run check: 14 errors, none in
 touched files. Unit: robot-arm suites 92/92.
+Deployment: preview — https://bioscale-operations-system-mongodb-b9dkvmzxc-brevitest.vercel.app
+Source: branch fix/arm-home-jog-chunks @ commit 9a34f7d6
+Retrieve this exact code: git checkout fix/arm-home-jog-chunks at commit 9a34f7d6
+What this deployment is for: PR #109 check before merge (Vercel took ~10 min to start it). Smoke: /login 200, Vision 302, agent 401.
+Deployment: production — https://bioscale-operations-system-mongodb-17kdlem2r-brevitest.vercel.app
+Source: branch master @ commit 1fdc71e8 (merge of PR #109)
+Retrieve this exact code: git checkout master at commit 1fdc71e8
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: Return to home in <=300-step jogs. Smoke: /login 200, Vision tab 302. Not yet re-tried on the arm.
