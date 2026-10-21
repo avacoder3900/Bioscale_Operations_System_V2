@@ -21864,6 +21864,41 @@ Source: branch fix/studio-swap-tip-home, merged to master
 What this deployment is for: Deck Calibration Studio Swap tip picks the new tip up fully
 
 ================================================================================
+2026-10-21 — feat/animate-timeline-joints — Animate: drag joints on the timeline; droop trim fixes the low claw
+================================================================================
+Two asks: adjust joint movement directly on the timeline, and the claw ending up lower than the
+target pose.
+
+Timeline: AnimationCurves.svelte gained an editable mode (move-set editor). Every pose has a dot on
+every servo lane — drag up/down (Shift = fine, or ↑/↓ with focus) to move that joint at that pose;
+◆ above a pose drags the arrival time (durationS), ▮ drags the hold. Axis ranges freeze during a
+drag. The selected keyframe gets a joint table (pose / here / Δ / droop trim / goal sent) with exact
+entry and a reset. Stored per keyframe as offsets[6] on robot_arm_move_sets.keyframes (this move set
+only; the shared pose is not changed). keyframePositions() in animation.ts is the single
+pose→positions step; the sequence editor's preview uses it too.
+
+Low claw — root cause: replay is open-loop (each frame's goal written, nothing else) and a loaded
+STS3215 settles short of its goal under gravity (proportional position loop; verified_move.py
+already allows ~20 steps). Poses are captured with the arm held in place by hand (the hold route is
+still not installed — every capture today audited hold_failed), so playing goal = pose leaves the
+loaded joints short on the gravity side. Go to pose masks it because its jogs are relative to the
+present position. Fix: per-pose droop trim measured on the arm — Go to pose, then Measure droop
+(selected keyframe panel): sets goal = pose + trim exactly via jogs, waits 1.2 s, adds the shortfall
+(nextTrim, pure), ≤ 4 rounds until within 2 steps; servos 1–5 only, capped ±50 steps. Stored on
+robot_arm_poses (trim, trimMeasuredAt/By), cleared on re-capture, audited. resolveKeyframes (play +
+save to Pi) adds it to the goal. Recordings already on the Pi need saving again.
+
+Files: src/lib/robot-arm/animation.ts (+.test.ts, +9 tests: 22 in the file, 91 robot-arm),
+src/lib/server/robot-arm-animation.ts, models robot-arm-pose.ts / robot-arm-move-set.ts,
+src/lib/components/robot-arm/AnimationCurves.svelte, animate/moveset/[id]/+page.{svelte,server.ts},
+animate/sequence/[id]/+page.svelte, docs/prds/ARM-06-animate.md §9 (after #121's §8 — control-arm
+posing reads the follower one droop short too, so the trim covers both capture paths). svelte-check
+14 errors (baseline); vitest lib/robot-arm + lib/server 460 passed. Not run on the arm. PR #122.
+Also: PRs #118, #117, #115 all conflicted only in progress.txt (every branch appends at the end).
+Merged origin/master into each keeping both sides' entries, restored the ==== header bar the union
+merge dropped (#118, #115), checked each diff vs master is pure additions; all three mergeable.
+
+================================================================================
 2026-10-21 — feat/animate-pose-with-leader — Animate: pose the follower with the control (leader) arm
 ================================================================================
 Operator: poses saved from the Animate tab were landing in the wrong spot because the servos are not powered while
