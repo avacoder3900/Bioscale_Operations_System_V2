@@ -4,7 +4,7 @@ Condensed working context for the robot arm's camera calibration and home check.
 touching the Vision tab, the arm's vision code in BIMS, or the Pi's camera routes. Full spec:
 [docs/prds/ARM-05-apriltag-vision.md](docs/prds/ARM-05-apriltag-vision.md).
 
-_Last updated 2026-10-21 (ARM-05 merged 2026-10-20 as `dcdf9262`, PR #105; on 2026-10-21 encoders via /servos, ≤300-step jogs, then the sequenced, repeating Return to home with the servo-1 freeze). The Pi already serves `/cameras/{name}/apriltags` (seen in its OpenAPI on 2026-10-21)._
+_Last updated 2026-10-21 (ARM-05 merged 2026-10-20 as `dcdf9262`, PR #105; on 2026-10-21 encoders via /servos, ≤300-step jogs, then the sequenced, repeating Return to home with the servo-1 freeze; Animate tab ARM-06 added 2026-10-21). The Pi already serves `/cameras/{name}/apriltags` (seen in its OpenAPI on 2026-10-21)._
 
 ## 1. Where things stand
 
@@ -119,6 +119,10 @@ GET  /cameras/{name}/apriltags   → status + intrinsics
 
 **Permissions:** viewing needs `manufacturing:read`. Calibrate, check, return to home and the registry need `manufacturing:write`.
 Every mutation writes an AuditLog row (`robot_arm.tag.*`, `robot_arm.vision.*`).
+
+## 6b. Animate tab (ARM-06, 2026-10-21)
+
+Not calibration, but it shares the arm and the recording pipeline. Poses captured by hand (torque off → move → *Save pose* → `POST /servos/hold`), move sets (poses + duration/easing/hold per keyframe), sequences (move sets + joins). BIMS renders a 30 Hz joint path (`src/lib/robot-arm/animation.ts`: minimum-jerk easing, Catmull-Rom/Hermite *flow*) and the Pi replays it as recording `animate-preview` with a lead-in from wherever the arm is. **Needs the Pi hold route** (`services/robot-arm/src/server/hold.py`, `scripts/install_hold_router.py`): a bare torque-on after hand-posing drives every servo back to its last goal. Full spec: [docs/prds/ARM-06-animate.md](docs/prds/ARM-06-animate.md).
 
 ## 7. Access and gotchas
 
