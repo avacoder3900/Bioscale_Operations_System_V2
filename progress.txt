@@ -20972,6 +20972,13 @@ Note: bioscale-app main (fd785a5, PR #4 merge) shows Vercel "Deployment was bloc
 GitHub merges are authored by Samantha Wolf, not a Vercel team member; redeploy main from the
 Vercel dashboard.
 
+================================================================================
+2026-10-16 — feat/access-panel-bottom — App Accounts: Access panel moved to the bottom
+================================================================================
+On /app-accounts/[accountId] the Access panel (block / unblock, remove dev account) is now the
+last panel, after Invites. Layout only. svelte-check 14 errors = baseline.
+
+================================================================================
 2026-10-16 — feat/arm-recordings-trash — Recordings On Pi: delete with 30-day recover
 ================================================================================
 Morning diagnosis first (no code): BIMS showed "Cannot reach the robot arm" with
