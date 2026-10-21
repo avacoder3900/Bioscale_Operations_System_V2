@@ -21674,3 +21674,16 @@ phase, servos 1-5 phase; 20 jogs / 20 s budget; camera check only when encoders 
 `homing` field (carried forward on recalibrate). Vision tab: Return to home drives the attempt loop in the browser
 (fetch + deserialize, attempt n), Stop button, attempt/seconds status, FROZEN banner, Home settings form.
 npm run check: 14 errors, none in touched files. Unit: robot-arm suites 99/99. Not yet run on the arm.
+
+================================================================================
+2026-10-21 — feat/arm-home-until-done — Return to home: one click until done, no jog limit, claw closes last; torque on after Stop
+================================================================================
+Operator, after PR #111 (merged by the operator): keep returning until everything is in place, do not limit jogs, the user
+can stop manually but must not click again; last step closes the claw completely. Mid-turn: re-enable torque when a run is cancelled.
+home-calibration.ts: MAX_HOME_JOGS removed; CLAW_STALL_STEPS 6; shouldRetryHome now takes clawClosed and stops only on
+done (home + claw closed), frozen, camera_moved, encoders home + claw closed but tags off, or 90 s (the no-progress stop is gone).
+robot-arm-vision.ts returnToHome: phases loop until their joints are home (no pass/jog cap; only the ~20 s per-request time
+slice ends one), then closes the claw (-300 jogs until <6 steps moved, ease off +1), result.clawClosed. Vision tab passes
+clawClosed to the loop; confirm/tooltip text updated. control/+page.server.ts stop: setTorque(true) after /sessions/stop
+(one retry after 600 ms), audit torque_on/torque_error, warning flash when it fails. Context doc §4.8/§4.9 updated.
+npm run check: 14 errors, none in touched files. Unit: robot-arm suites 100/100. Not yet run on the arm.

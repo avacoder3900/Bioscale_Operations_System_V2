@@ -40,20 +40,25 @@ describe('home sequence', () => {
 });
 
 describe('shouldRetryHome', () => {
-	const base = { elapsedMs: 10_000, residualMax: 200, previousResidualMax: null };
-	it('stops on home, freeze, moved camera and the 90 s limit', () => {
-		expect(shouldRetryHome({ ...base, verdict: 'home' }).retry).toBe(false);
+	const base = { elapsedMs: 10_000, residualMax: 200, clawClosed: false };
+	it('done only when home AND the claw is closed', () => {
+		expect(shouldRetryHome({ ...base, verdict: 'home', residualMax: 3, clawClosed: true })).toEqual({ retry: false, reason: 'home, claw closed' });
+		expect(shouldRetryHome({ ...base, verdict: 'home', residualMax: 3, clawClosed: false }).retry).toBe(true);
+		// No claw reading at all: the claw is not required.
+		expect(shouldRetryHome({ ...base, verdict: 'home', residualMax: 3, clawClosed: null }).retry).toBe(false);
+	});
+	it('stops on freeze, moved camera and the 90 s limit', () => {
 		expect(shouldRetryHome({ ...base, verdict: 'frozen' }).retry).toBe(false);
 		expect(shouldRetryHome({ ...base, verdict: 'camera_moved' }).retry).toBe(false);
 		expect(shouldRetryHome({ ...base, verdict: 'position_off', elapsedMs: HOME_LOOP_MS })).toEqual({ retry: false, reason: 'timed out' });
 	});
-	it('retries while the arm is getting closer', () => {
+	it('keeps going while not home, however slowly — no jog or progress limit', () => {
 		expect(shouldRetryHome({ ...base, verdict: 'position_off' }).retry).toBe(true);
-		expect(shouldRetryHome({ ...base, verdict: 'position_off', residualMax: 60, previousResidualMax: 200 }).retry).toBe(true);
+		expect(shouldRetryHome({ ...base, verdict: 'position_off', residualMax: 199 }).retry).toBe(true);
 	});
-	it('stops when an attempt made no progress, or encoders are home but tags disagree', () => {
-		expect(shouldRetryHome({ ...base, verdict: 'position_off', residualMax: 199, previousResidualMax: 200 }).reason).toBe('not getting closer');
-		expect(shouldRetryHome({ ...base, verdict: 'markers_off', residualMax: 4 }).retry).toBe(false);
+	it('stops when encoders are home and the claw closed but the tags disagree', () => {
+		expect(shouldRetryHome({ ...base, verdict: 'markers_off', residualMax: 4, clawClosed: true }).reason).toBe('encoders are home; the tags disagree');
+		expect(shouldRetryHome({ ...base, verdict: 'markers_off', residualMax: 4, clawClosed: false }).retry).toBe(true);
 	});
 });
 
