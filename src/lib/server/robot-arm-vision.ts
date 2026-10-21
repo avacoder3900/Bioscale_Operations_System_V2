@@ -581,6 +581,8 @@ export interface HomeCheckResult {
 	frozen?: (BaseOutOfRange & { torqueOff: boolean }) | null;
 	/** Return only: the claw closed this attempt (null = no claw reading). */
 	clawClosed?: boolean | null;
+	/** Return only: this attempt ended early because the operator pressed Stop returning. */
+	stopped?: boolean;
 	elapsedMs?: number;
 }
 
@@ -703,7 +705,10 @@ export async function checkHome(user: User, o: { cameraName?: string | null; kin
  * operator presses Stop, a freeze, or 90 s (shouldRetryHome).
  * Refused while a session holds the bus.
  */
-export async function returnToHome(user: User, o: { cameraName?: string | null; attempt?: number } = {}): Promise<HomeCheckResult> {
+export async function returnToHome(
+	user: User,
+	o: { cameraName?: string | null; attempt?: number; runId?: string | null } = {}
+): Promise<HomeCheckResult> {
 	const t0 = Date.now();
 	const attempt = Number.isInteger(o.attempt) && o.attempt! > 0 ? o.attempt! : 1;
 	const doc = await loadActive(o.cameraName);
@@ -754,13 +759,24 @@ export async function returnToHome(user: User, o: { cameraName?: string | null; 
 		current = (await readJointSteps()).steps;
 	};
 	const outOfTime = () => Date.now() - t0 > ATTEMPT_MOVE_BUDGET_MS;
+	// Stop returning: the Vision tab writes this loop's runId to the
+	// calibration (requestHomeStop); checked before every jog, so the attempt
+	// ends within one jog and the tab can close the mouth straight away.
+	let stopped = false;
+	const stopRequested = async () => {
+		if (stopped) return true;
+		if (!o.runId) return false;
+		const s = (await RobotArmTagCalibration.findById(doc._id).select('homeStopRunId').lean()) as any;
+		stopped = s?.homeStopRunId === o.runId;
+		return stopped;
+	};
 	/**
 	 * Jog `sids` to home: ≤300-step chunks, settle, re-read, correct — as many
-	 * passes as it takes (no jog limit). Only this request's time slice ends it;
-	 * the browser's next attempt carries on from there.
+	 * passes as it takes (no jog limit). Only this request's time slice (or
+	 * Stop) ends it; the browser's next attempt carries on from there.
 	 */
 	const phase = async (sids: readonly number[]) => {
-		while (!budgetHit) {
+		while (!budgetHit && !stopped) {
 			const chunks = chunkJogPlan(planJogDeltas(current, target, HOME_STEP_TOLERANCE, sids));
 			if (!chunks.length) return;
 			for (const c of chunks) {
@@ -768,6 +784,7 @@ export async function returnToHome(user: User, o: { cameraName?: string | null; 
 					budgetHit = true;
 					break;
 				}
+				if (await stopRequested()) break;
 				await jog(c.sid, c.delta);
 			}
 			await settle();
@@ -776,7 +793,7 @@ export async function returnToHome(user: User, o: { cameraName?: string | null; 
 
 	// 1. Open the mouth (first attempt only).
 	const g = String(GRIPPER_SERVO_ID);
-	if (attempt === 1 && homing.gripperOpenSteps > 0) {
+	if (attempt === 1 && homing.gripperOpenSteps > 0 && !(await stopRequested())) {
 		if (Number.isFinite(current[g])) {
 			await jog(GRIPPER_SERVO_ID, Math.min(MAX_JOG_STEPS, homing.gripperOpenSteps));
 			await settle();
@@ -795,8 +812,9 @@ export async function returnToHome(user: User, o: { cameraName?: string | null; 
 	// the claw afterwards (closeClaw) — the mouth is closed at the end every time.
 	let r = residuals(current, target);
 	let clawClosed: boolean | null = Number.isFinite(current[g]) ? false : null;
+	if (stopped) warnings.push('Stopped by you — the arm stays where it is; closing the mouth next.');
 	if (clawClosed === null) warnings.push('The claw (servo 6) did not report a position, so it was not closed.');
-	else if (!r.off.length) {
+	else if (!r.off.length && !stopped) {
 		const c = await closeClawToStop(t0 + ATTEMPT_MOVE_BUDGET_MS);
 		jogs += c.jogs;
 		sent.set(GRIPPER_SERVO_ID, (sent.get(GRIPPER_SERVO_ID) ?? 0) + c.delta);
@@ -808,19 +826,31 @@ export async function returnToHome(user: User, o: { cameraName?: string | null; 
 	const moved = [...sent.entries()].sort(([a], [b]) => a - b).map(([sid, delta]) => ({ sid, delta }));
 	// The camera check is only worth its seconds once the encoders say home.
 	let cam: { vision: VisionAssessment | null; snapshotDataUrl: string | null; warnings: string[] } = { vision: null, snapshotDataUrl: null, warnings: [] };
-	if (!r.off.length) {
+	if (!r.off.length && !stopped) {
 		cam = await visionCheck(doc);
 		warnings.push(...cam.warnings);
 	}
 	const home = assessHome(r, cam.vision);
-	const result = { ...base, home, vision: cam.vision, residuals: r.perJoint, warnings, moved, jogs, frozen: null, clawClosed, elapsedMs: Date.now() - t0 };
-	await recordCheck(doc, user, 'return', result, { before: before.steps, after: current, jogs, attempt, clawClosed, tolerance: HOME_STEP_TOLERANCE });
+	const result = { ...base, home, vision: cam.vision, residuals: r.perJoint, warnings, moved, jogs, frozen: null, clawClosed, stopped, elapsedMs: Date.now() - t0 };
+	await recordCheck(doc, user, 'return', result, { before: before.steps, after: current, jogs, attempt, clawClosed, stopped, tolerance: HOME_STEP_TOLERANCE });
 	const msg = homeMessage(home, cam.vision, r);
 	return {
 		...result,
 		message: moved.length ? msg : `Arm was already within ${HOME_STEP_TOLERANCE} steps of home — nothing moved. ${msg}`,
 		snapshotDataUrl: cam.snapshotDataUrl
 	};
+}
+
+/**
+ * Stop returning: mark this loop (runId) as stopped on the camera's active
+ * calibration. The attempt in progress sees it before its next jog and ends;
+ * the Vision tab then closes the mouth.
+ */
+export async function requestHomeStop(user: User, o: { cameraName?: string | null; runId: string }): Promise<void> {
+	if (!o.runId || o.runId.length > 64) throw new Error('Stop request is missing its run id.');
+	const doc = await loadActive(o.cameraName);
+	await RobotArmTagCalibration.updateOne({ _id: doc._id }, { $set: { homeStopRunId: o.runId } });
+	await audit('robot_arm.vision.return_stop', 'robot_arm_tag_calibrations', String(doc._id), user, { runId: o.runId });
 }
 
 /**

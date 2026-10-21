@@ -18,13 +18,22 @@
 	interface Props {
 		camera: string;
 		calibration: CalibrationSummary | null;
+		/**
+		 * True while Return to home runs: the live view is switched OFF and
+		 * cannot be started, so its polling never competes with the arm's
+		 * requests to the Pi.
+		 */
+		suspended?: boolean;
 	}
 
-	let { camera, calibration }: Props = $props();
+	let { camera, calibration, suspended = false }: Props = $props();
 
 	const RATE_OPTIONS = [0.5, 1, 2];
 
 	let running = $state(false);
+	$effect(() => {
+		if (suspended) running = false;
+	});
 	let rate = $state(1);
 	let det = $state<LiveDetection | null>(null);
 	let error = $state<string | null>(null);
@@ -118,15 +127,19 @@
 			</label>
 			<button
 				type="button"
-				disabled={!calibration}
+				disabled={!calibration || suspended}
 				onclick={() => (running = !running)}
 				class="min-h-[40px] rounded px-4 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-40"
 				style="background: {running ? 'rgba(239,68,68,0.15)' : 'rgba(56,189,248,0.15)'}; color: {running ? '#fca5a5' : 'var(--color-tron-cyan)'}; border: 1px solid {running ? '#ef4444' : 'var(--color-tron-cyan)'};"
+				title={suspended ? 'Off while the arm returns home' : ''}
 			>
 				{running ? 'Stop' : 'Start live view'}
 			</button>
 		</div>
 	</div>
+	{#if suspended}
+		<p class="mt-2 text-xs" style="color: #f59e0b">Live tags are off while the arm returns home — start them again once it finishes.</p>
+	{/if}
 
 	{#if !calibration}
 		<p class="mt-3 text-xs" style="color: var(--color-tron-text-secondary)">

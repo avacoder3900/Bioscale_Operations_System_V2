@@ -95,6 +95,8 @@ const robotArmTagCalibrationSchema = new Schema(
 			baseRangeSteps: { type: Number, default: null },
 			gripperOpenSteps: { type: Number, default: null }
 		},
+		/** Run id of a Return-to-home loop the operator stopped; the attempt in progress checks it before every jog. */
+		homeStopRunId: { type: String, default: null },
 		pose: { x_mm: Number, y_mm: Number, z_mm: Number },
 		supersededAt: { type: Date, default: null },
 		supersededBy: { type: String, default: null },

@@ -92,6 +92,8 @@
 		clawClosed: boolean;
 		clawError: string | null;
 		frozen: boolean;
+		/** Sent with every attempt; Stop marks it on the server so the attempt in progress ends before its next jog. */
+		runId: string;
 	} | null>(null);
 	let tick = $state(Date.now());
 
@@ -134,11 +136,30 @@
 		}
 	}
 
+	/**
+	 * Stop returning: tell the server so the attempt in progress ends before
+	 * its next jog (not after its whole ~20 s slice); the loop then closes the
+	 * mouth as its final step. Marked locally first, so even if this request
+	 * fails no further attempt starts.
+	 */
+	async function stopReturning() {
+		if (!loop?.running || loop.stopping) return;
+		loop.stopping = true;
+		const fd = new FormData();
+		fd.set('camera', camera);
+		fd.set('runId', loop.runId);
+		try {
+			await fetch('?/stopReturn', { method: 'POST', body: fd, headers: { 'x-sveltekit-action': 'true' } });
+		} catch {
+			/* the local flag still ends the loop after this attempt */
+		}
+	}
+
 	async function runReturnHome() {
 		if (!confirm('The arm will MOVE until it is home: open the mouth, bring the shoulder (servo 2) home, then every joint, then close the claw. You can press Stop at any time. Is the path clear?')) return;
 		homeBusy = 'return';
 		loopResult = null;
-		loop = { running: true, attempt: 0, startedAt: Date.now(), stopping: false, outcome: null, error: null, closing: false, clawClosed: false, clawError: null, frozen: false };
+		loop = { running: true, attempt: 0, startedAt: Date.now(), stopping: false, outcome: null, error: null, closing: false, clawClosed: false, clawError: null, frozen: false, runId: crypto.randomUUID() };
 		const clock = setInterval(() => (tick = Date.now()), 500);
 		try {
 			while (loop) {
@@ -146,6 +167,7 @@
 				const fd = new FormData();
 				fd.set('camera', camera);
 				fd.set('attempt', String(loop.attempt));
+				fd.set('runId', loop.runId);
 				const res = await fetch('?/returnHome', { method: 'POST', body: fd, headers: { 'x-sveltekit-action': 'true' } });
 				const r = deserialize(await res.text());
 				if (r.type === 'failure') {
@@ -327,7 +349,7 @@
 					{#if loop.closing}
 						Closing the claw (final step)…
 					{:else if loop.running}
-						Returning home: attempt {loop.attempt} · {Math.round(((tick - loop.startedAt) / 1000))} s of {HOME_LOOP_MS / 1000} s{loop.stopping ? ' · stopping after this attempt, then closing the claw…' : ''}
+						Returning home: attempt {loop.attempt} · {Math.round(((tick - loop.startedAt) / 1000))} s of {HOME_LOOP_MS / 1000} s{loop.stopping ? ' · stopping (after the current jog), then closing the mouth…' : ''}
 					{:else if loop.error}
 						{loop.error} (attempt {loop.attempt})
 					{:else}
@@ -351,11 +373,11 @@
 				{#if loop?.running}
 					<button
 						type="button"
-						onclick={() => loop && (loop.stopping = true)}
+						onclick={stopReturning}
 						disabled={loop.stopping}
 						class="min-h-[44px] rounded px-4 text-sm font-semibold disabled:opacity-40"
 						style="background: rgba(239,68,68,0.15); color: #fca5a5; border: 1px solid #ef4444;"
-						title="Stops after the attempt in progress (an attempt cannot be cut off mid-move)"
+						title="Stops within one jog, then closes the mouth"
 					>
 						Stop returning
 					</button>
@@ -414,7 +436,7 @@
 		{/if}
 	</section>
 
-	<VisionLiveTracker {camera} {calibration} />
+	<VisionLiveTracker {camera} {calibration} suspended={!!loop?.running} />
 
 	<VisionTagCalibrator {camera} {tags} {calibration} {blocked} {blockReason} />
 

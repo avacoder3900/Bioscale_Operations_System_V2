@@ -17,6 +17,7 @@ import {
 	createTag,
 	listTags,
 	loadCalibrations,
+	requestHomeStop,
 	retireCalibration,
 	returnToHome,
 	saveCalibration,
@@ -188,6 +189,20 @@ export const actions: Actions = {
 	// The arm MOVES: one bounded jog per joint to the calibrated encoder
 	// steps, then encoders + tags verify. The Pi refuses while a session
 	// holds the bus.
+	// Stop returning: the attempt in progress ends before its next jog; the
+	// Vision tab then closes the mouth.
+	stopReturn: async ({ request, locals }) => {
+		if (!locals.user) return fail(401, { error: 'Unauthorized' });
+		requirePermission(locals.user, 'manufacturing:write');
+		const d = await request.formData();
+		try {
+			await requestHomeStop(who(locals), { cameraName: field(d, 'camera'), runId: field(d, 'runId') ?? '' });
+			return { stopRequested: true, scope: 'home' };
+		} catch (err) {
+			return fail(400, { error: (err as Error).message, scope: 'home' });
+		}
+	},
+
 	// Final step of every Return to home: close the claw (the arm MOVES —
 	// servo 6 only). The Vision tab calls this when its loop ends with the
 	// claw still open, and repeats it until closed.
@@ -211,8 +226,9 @@ export const actions: Actions = {
 		const cameraName = field(d, 'camera');
 		// The Vision tab repeats this action until home (≤ 90 s); only attempt 1 opens the mouth.
 		const attempt = Number(field(d, 'attempt')) || 1;
+		const runId = field(d, 'runId');
 		try {
-			const r = await returnToHome(who(locals), { cameraName, attempt });
+			const r = await returnToHome(who(locals), { cameraName, attempt, runId });
 			return { ...(r.home.verdict === 'home' ? { success: r.message } : { warning: r.message }), homeResult: r, scope: 'home' };
 		} catch (err) {
 			const msg = (err as Error).message;

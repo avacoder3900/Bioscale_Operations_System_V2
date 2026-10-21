@@ -21705,3 +21705,15 @@ robot_arm.vision.close_claw). Vision page: new ?/closeClaw action; runReturnHome
 the claw already closed or the arm froze (torque must stay off for the technician); status line shows "Closing the claw
 (final step)" then "Claw closed" / "Claw NOT confirmed closed: <why>". npm run check: 14 errors, none in touched files.
 Unit: robot-arm suites 100/100. Not yet run on the arm.
+
+================================================================================
+2026-10-21 — feat/arm-home-stop-now — Stop returning acts within one jog, then closes the mouth; live tags off during return
+================================================================================
+Operator: if the user presses Stop returning, close the mouth; also turn live tags off so they cannot break Return to home.
+PR #113 already closed the mouth after Stop, but only after the attempt in progress finished (up to ~20 s). Now: the Vision
+tab gives each loop a runId; Stop posts ?/stopReturn (requestHomeStop -> calibration.homeStopRunId, audit
+robot_arm.vision.return_stop); returnToHome checks it before every jog and ends early (no in-attempt claw close or camera
+check; result.stopped), then the tab's finally closes the mouth. VisionLiveTracker gains `suspended`: while the return
+loop runs the live view is switched off and its Start button locked, with a note. Touched: robot-arm-vision.ts,
+robot-arm-tag-calibration.ts (homeStopRunId), vision/+page.server.ts, vision/+page.svelte, VisionLiveTracker.svelte, context doc.
+npm run check: 14 errors, none in touched files. Unit: robot-arm suites 100/100. Not yet run on the arm.
