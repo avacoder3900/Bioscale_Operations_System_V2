@@ -126,6 +126,7 @@
 					<button type="button" class={btn} style={red} onclick={() => playback.stop()} disabled={playback.busy}>Stop</button>
 				{/if}
 			</div>
+			{#if playback.settled}<p class="mt-1 text-xs" style="color: var(--color-tron-text-secondary)">{playback.settled}</p>{/if}
 			{#if playback.warnings.length}
 				<ul class="mt-1 list-disc pl-5 text-xs" style="color: #f59e0b">{#each playback.warnings as w}<li>{w}</li>{/each}</ul>
 			{/if}

@@ -27,7 +27,15 @@ const robotArmSequenceSchema = new Schema(
 		items: { type: [itemSchema], default: [] },
 		createdBy: { type: operatorRef },
 		updatedBy: { type: operatorRef },
-		lastPlay: { at: Date, by: operatorRef, runId: String, durationS: Number },
+		lastPlay: {
+			at: Date,
+			by: operatorRef,
+			runId: String,
+			durationS: Number,
+			/** Where the play leaves the arm (last keyframe, without droop trim) — settleAfterPlay. */
+			end: { poseId: String, target: { type: [Number], default: undefined } },
+			settledAt: { type: Date, default: null }
+		},
 		savedAs: {
 			type: [new Schema({ name: String, at: Date, by: operatorRef, frames: Number, durationS: Number }, { _id: false })],
 			default: []

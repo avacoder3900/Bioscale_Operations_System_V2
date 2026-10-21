@@ -197,3 +197,30 @@ leader, so the follower already sits one droop short when *Save pose* reads its 
 where the operator saw the claw. Played back with goal = pose it would land a second droop lower. The
 measured trim makes goal = pose + droop, so the claw lands where it was when the pose was saved —
 whichever way the pose was captured.
+
+## 10. Droop correction is automatic (`feat/animate-auto-droop`, 2026-10-21)
+
+Replaces §9's *Measure droop* button: nobody has to approve or start the correction. The same settle
+pass (`settleAtPose`: goal := target + trim on servos 1–5 via jogs, wait 1.2 s, add the shortfall,
+≤ 4 rounds, ±50 cap) now runs by itself whenever the arm is known to be sitting at a pose:
+
+- **End of every Go to pose.** It replaces go-to's old blind correction pass, so the arm ends *on*
+  the pose (corrected for gravity) and the pose's trim is learned. Falls back to the plain pass if a
+  joint is still > 150 steps away (stalled); the gripper gets its own final jog.
+- **End of every Play that finishes on its own** (not after Stop). `writeAndPlay` stores
+  `lastPlay.end = {poseId, target}` (last keyframe, pose + offsets, no trim) and `settledAt: null`;
+  when the page's playback poll sees the session end it calls `?/settle` (all three Animate pages),
+  and `settleAfterPlay` claims the play once (`settledAt`), checks the arm is idle and near the
+  target, settles it there and learns that pose's trim. The result shows under the playback line.
+- **Poses never visited** play with an *estimated* trim: `estimateTrim` (pure, 4 tests) weights
+  every learned pose within 400 steps on the gravity servos 2–4 by inverse distance (falling to zero
+  at the radius); nothing near → untrimmed. The editor shows learned vs estimated. The settle pass
+  starts from the learned or estimated trim, so a known pose settles in one round.
+
+Each learned trim is re-checked every time the arm stops at that pose, so it tracks load or wear.
+Audit: `robot_arm.animate.pose_droop_settle` (reason `go_to` / `play_end`, `startedFrom`, every
+round's goal/settled) and `pose_droop_skip`. *Forget correction* (clearPoseDroop) stays.
+
+Limits: mid-play poses are only corrected by the trim learned earlier (the Pi owns the bus during a
+replay, so BIMS cannot read or nudge mid-path); recordings replayed from the Control tab are not
+settled afterwards; recordings saved to the Pi keep the trims they were saved with. Not run on the arm.

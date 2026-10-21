@@ -29,7 +29,15 @@ const robotArmMoveSetSchema = new Schema(
 		rateHz: { type: Number, default: 30 },
 		createdBy: { type: operatorRef },
 		updatedBy: { type: operatorRef },
-		lastPlay: { at: Date, by: operatorRef, runId: String, durationS: Number },
+		lastPlay: {
+			at: Date,
+			by: operatorRef,
+			runId: String,
+			durationS: Number,
+			/** Where the play leaves the arm (last keyframe, without droop trim) — settleAfterPlay. */
+			end: { poseId: String, target: { type: [Number], default: undefined } },
+			settledAt: { type: Date, default: null }
+		},
 		archivedAt: { type: Date, default: null }
 	},
 	{ timestamps: true, minimize: false }

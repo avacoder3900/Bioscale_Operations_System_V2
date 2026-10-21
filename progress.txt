@@ -21928,3 +21928,19 @@ Source: branch feat/animate-pose-with-leader @ commit ba4f6b40
 Retrieve this exact code: git checkout feat/animate-pose-with-leader at commit ba4f6b40
   (or: git log feat/animate-pose-with-leader --oneline to find it if the branch has since moved on)
 What this deployment is for: Animate tab capture panel — "Pose with the control arm" (teleop), Save pose, Done
+
+================================================================================
+2026-10-21 — feat/animate-auto-droop — Animate droop correction is automatic (no Measure droop button)
+================================================================================
+User: make pose correction automatic instead of something the user has to approve. The settle pass
+from PR #122 (goal := target + trim via jogs, settle, add the shortfall, servos 1–5, ±50) now runs by
+itself whenever the arm is known to sit at a pose: at the end of every Go to pose (replacing go-to's
+blind correction pass — the arm ends on the pose and the trim is learned) and at the end of every
+Play that finishes on its own (lastPlay.end {poseId, target} + settledAt; Playback calls ?/settle on
+all three Animate pages; settleAfterPlay claims the run once, checks idle + within 150 steps). Poses
+never visited play with estimateTrim (inverse-distance over learned poses within 400 steps on servos
+2–4). Manual Measure droop action/button removed; Forget correction kept. Files:
+src/lib/robot-arm/animation.ts (+4 tests), playback.svelte.ts, src/lib/server/robot-arm-animation.ts,
+move-set/sequence models (lastPlay.end/settledAt), the three animate +page.server.ts and their
++page.svelte, ARM-06 PRD §10. svelte-check 14 errors (baseline); vitest lib/robot-arm + lib/server
+463 passed (sonic leave-one-out failed once, passes 3/3 alone — flaky, untouched). Not run on the arm.

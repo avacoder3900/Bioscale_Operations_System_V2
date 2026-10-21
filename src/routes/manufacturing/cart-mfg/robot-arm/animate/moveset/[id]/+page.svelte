@@ -10,6 +10,7 @@
 	import {
 		buildPath,
 		cleanOffsets,
+		estimateTrim,
 		keyframePositions,
 		minDurationS,
 		pathStats,
@@ -91,6 +92,13 @@
 	}
 	function resetOffsets(i: number) {
 		if (kfs[i]) delete kfs[i].offsets;
+	}
+	// Droop correction the server will add: learned on the arm, else estimated from nearby learned poses (same rule as resolveKeyframes).
+	const trimSamples = $derived(poses.filter((p) => !p.archived && p.trim).map((p) => ({ positions: p.positions, trim: p.trim as number[] })));
+	function droopFor(p: PoseSummary): { trim: number[] | null; how: 'learned' | 'estimated' | null } {
+		if (p.trim) return { trim: p.trim, how: 'learned' };
+		const e = estimateTrim(p.positions, trimSamples);
+		return { trim: e, how: e ? 'estimated' : null };
 	}
 	const sel = $derived(selected != null && kfs[selected] ? { i: selected, k: kfs[selected], pose: poseById.get(kfs[selected].poseId) ?? null } : null);
 	const render = $derived.by((): { path: RenderedPath | null; error: string | null } => {
@@ -176,6 +184,7 @@
 				{#if sel.k.offsets}<button type="button" class="text-xs underline" style="color: var(--color-tron-text-secondary)" onclick={() => resetOffsets(sel.i)}>reset joints to the pose</button>{/if}
 			</div>
 			{#if p}
+				{@const droop = droopFor(p)}
 				<div class="overflow-x-auto">
 					<table class="w-full text-xs">
 						<thead>
@@ -184,7 +193,7 @@
 								<th class="py-1 pr-2 font-medium">Pose</th>
 								<th class="py-1 pr-2 font-medium">Here</th>
 								<th class="py-1 pr-2 font-medium">Δ</th>
-								<th class="py-1 pr-2 font-medium" title="Added to the goal when played so the arm arrives here under gravity">Droop trim</th>
+								<th class="py-1 pr-2 font-medium" title="Added to the goal when played so the arm arrives here under gravity. Learned automatically.">Droop correction</th>
 								<th class="py-1 font-medium" title="What is sent to the arm">Goal sent</th>
 							</tr>
 						</thead>
@@ -197,8 +206,8 @@
 									<td class="py-1 pr-2 font-mono">{base}</td>
 									<td class="py-1 pr-2"><input type="number" step="1" min="0" max={ENCODER_MAX} value={here} onchange={(e) => setJoint(sel.i, s + 1, clamp(Math.round(Number(e.currentTarget.value)), 0, ENCODER_MAX))} class="{input} w-24 font-mono" style={inputStyle} /></td>
 									<td class="py-1 pr-2 font-mono" style="color: {off ? '#fbbf24' : 'var(--color-tron-text-secondary)'}">{off > 0 ? '+' : ''}{off}</td>
-									<td class="py-1 pr-2 font-mono" style="color: var(--color-tron-text-secondary)">{p.trim ? `${p.trim[s] > 0 ? '+' : ''}${p.trim[s]}` : '—'}</td>
-									<td class="py-1 font-mono">{keyframePositions(p.positions, sel.k.offsets, p.trim)[s]}</td>
+									<td class="py-1 pr-2 font-mono" style="color: var(--color-tron-text-secondary)">{droop.trim ? `${droop.trim[s] > 0 ? '+' : ''}${droop.trim[s]}` : '—'}</td>
+									<td class="py-1 font-mono">{keyframePositions(p.positions, sel.k.offsets, droop.trim)[s]}</td>
 								</tr>
 							{/each}
 						</tbody>
@@ -209,19 +218,15 @@
 						<input type="hidden" name="poseId" value={p._id} />
 						<button type="submit" class="min-h-[34px] rounded px-3 text-sm font-semibold disabled:opacity-40" style={cyan} disabled={blocked}>Go to pose</button>
 					</form>
-					<form method="POST" action="?/measureDroop" use:enhance onsubmit={(e) => { if (!confirm(`Measure droop at "${p.name}"? The arm must already be at the pose (Go to pose first); it will move a few steps and end holding the pose.`)) e.preventDefault(); }}>
-						<input type="hidden" name="poseId" value={p._id} />
-						<button type="submit" class="min-h-[34px] rounded px-3 text-sm font-semibold disabled:opacity-40" style={amber} disabled={blocked}>Measure droop</button>
-					</form>
 					{#if p.trim}
 						<form method="POST" action="?/clearDroop" use:enhance>
 							<input type="hidden" name="poseId" value={p._id} />
-							<button type="submit" class="text-xs underline" style="color: var(--color-tron-text-secondary)">clear trim</button>
+							<button type="submit" class="text-xs underline" style="color: var(--color-tron-text-secondary)">forget correction</button>
 						</form>
 					{/if}
 					<span class="text-[11px]" style="color: var(--color-tron-text-secondary)">
-						{#if p.trimMeasuredAt}Trim measured {new Date(p.trimMeasuredAt).toLocaleString()}.{:else}Droop not measured — under load the arm settles a little short of this pose (the claw ends low).{/if}
-						The pose and its trim are shared by every move set that uses it; timeline Δ is this move set's only.
+						{#if droop.how === 'learned'}Droop correction learned {p.trimMeasuredAt ? new Date(p.trimMeasuredAt).toLocaleString() : ''}; it is re-checked every time the arm stops at this pose.{:else if droop.how === 'estimated'}Droop correction estimated from nearby poses; learned exactly the first time the arm stops here (Go to pose, or the end of a play).{:else}No droop correction yet — learned automatically the first time the arm stops here (Go to pose, or the end of a play).{/if}
+						The pose and its correction are shared by every move set that uses it; timeline Δ is this move set's only.
 					</span>
 				</div>
 			{/if}
@@ -234,6 +239,7 @@
 			{:else if playback.error}{playback.error}
 			{:else}Playback {playback.outcome}.{/if}
 		</p>
+		{#if playback.settled}<p class="text-xs" style="color: var(--color-tron-text-secondary)">{playback.settled}</p>{/if}
 		{#if playback.warnings.length}<ul class="list-disc pl-5 text-xs" style="color: #f59e0b">{#each playback.warnings as w}<li>{w}</li>{/each}</ul>{/if}
 	{/if}
 
@@ -268,7 +274,7 @@
 							</select>
 							{#if !p}<span class="ml-1 text-red-300">missing pose</span>{/if}
 							{#if k.offsets}<span class="ml-1" style="color: #fbbf24" title="Joints moved on the timeline">◆ adjusted</span>{/if}
-							{#if p?.trim}<span class="ml-1" style="color: var(--color-tron-text-secondary)" title="Droop trim measured for this pose">trim</span>{/if}
+							{#if p?.trim}<span class="ml-1" style="color: var(--color-tron-text-secondary)" title="Droop correction learned for this pose">droop ✓</span>{/if}
 						</td>
 						<td class="py-1 pr-2">
 							{#if i === 0}

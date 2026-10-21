@@ -81,6 +81,11 @@ export interface Keyframe {
 export interface ResolvedKeyframe extends Keyframe {
 	name: string;
 	positions: number[];
+	/**
+	 * Where the arm should END UP at this keyframe (pose + offsets) when
+	 * `positions` also carries a droop trim; absent when they are the same.
+	 */
+	target?: number[];
 }
 
 export type MarkerKind = 'pose' | 'lead-in' | 'join';
@@ -253,6 +258,50 @@ export function nextTrim(pose: number[], present: number[], trim: number[]): { t
 		return done ? t : Math.max(-MAX_TRIM_STEPS, Math.min(MAX_TRIM_STEPS, t + residual[s]));
 	});
 	return { trim: next, residual, done };
+}
+
+/** A pose measured on the arm: its positions and the trim that made it land. */
+export interface TrimSample {
+	positions: number[];
+	trim: number[];
+}
+
+/**
+ * Servos whose angle decides how much gravity pulls on the arm: shoulder lift,
+ * elbow, wrist flex (ids 2–4). Base yaw and wrist roll turn the arm about a
+ * vertical / its own axis and barely change the load, so poses are compared
+ * on these three only.
+ */
+const GRAVITY_SERVOS = [2, 3, 4];
+/** A measured pose further than this (steps, on the gravity servos) says nothing about another. */
+export const TRIM_ESTIMATE_RADIUS = 400;
+
+/**
+ * Droop trim for a pose that has not been measured, from the poses that have.
+ * Droop is a smooth function of the arm's shape (how far each link sticks
+ * out), so nearby measured poses predict it: inverse-distance weighting over
+ * every sample within TRIM_ESTIMATE_RADIUS on the gravity servos. A sample at
+ * the same shape returns its own trim. Null when nothing is close enough —
+ * then the pose plays untrimmed until it is visited.
+ */
+export function estimateTrim(positions: number[], samples: TrimSample[]): number[] | null {
+	let wSum = 0;
+	const acc = new Array(SERVO_COUNT).fill(0);
+	for (const s of samples) {
+		if (s.trim.length !== SERVO_COUNT || s.positions.length !== SERVO_COUNT) continue;
+		let d2 = 0;
+		for (const sid of GRAVITY_SERVOS) d2 += (positions[sid - 1] - s.positions[sid - 1]) ** 2;
+		const d = Math.sqrt(d2);
+		if (d > TRIM_ESTIMATE_RADIUS) continue;
+		if (d < 1) return s.trim.map((t, i) => (TRIM_SERVOS.includes(i + 1) ? t : 0));
+		// Falls to zero at the radius, so a sample does not switch on and off abruptly.
+		const w = (1 / d ** 2) * (1 - d / TRIM_ESTIMATE_RADIUS);
+		wSum += w;
+		for (let i = 0; i < SERVO_COUNT; i++) acc[i] += w * s.trim[i];
+	}
+	if (!wSum) return null;
+	const out = acc.map((v, i) => (TRIM_SERVOS.includes(i + 1) ? Math.max(-MAX_TRIM_STEPS, Math.min(MAX_TRIM_STEPS, Math.round(v / wSum))) : 0));
+	return out.some((v) => v !== 0) ? out : null;
 }
 
 export interface KeyframeProblem {

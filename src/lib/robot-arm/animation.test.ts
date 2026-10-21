@@ -6,6 +6,7 @@ import {
 	cleanOffsets,
 	composeAnimationJsonl,
 	ease,
+	estimateTrim,
 	flattenSequence,
 	keyframePositions,
 	minDurationS,
@@ -215,5 +216,28 @@ describe('droop trim', () => {
 			if (r.done) break;
 		}
 		expect(settle(keyframePositions(pose, null, trim)).slice(0, 5)).toEqual(pose.slice(0, 5));
+	});
+});
+
+describe('estimateTrim (unvisited poses borrow from learned ones)', () => {
+	const learned = { positions: [2000, 2400, 2400, 1200, 540, 2250], trim: [0, 12, -8, 4, 0, 0] };
+	const far = { positions: [2000, 900, 3000, 1000, 540, 2250], trim: [0, -6, 2, 0, 0, 0] };
+	it('a pose at the same shape gets that trim, whatever the base and gripper', () => {
+		expect(estimateTrim([1000, 2400, 2400, 1200, 100, 1000], [learned, far])).toEqual([0, 12, -8, 4, 0, 0]);
+	});
+	it('a nearby pose gets a trim close to its neighbour; a far one is not used', () => {
+		const e = estimateTrim([2000, 2450, 2380, 1220, 540, 2250], [learned, far])!;
+		expect(e).toEqual([0, 12, -8, 4, 0, 0]);
+	});
+	it('nothing within the radius → null (plays untrimmed until visited)', () => {
+		expect(estimateTrim([2000, 1600, 1600, 2400, 540, 2250], [learned, far])).toBeNull();
+		expect(estimateTrim(learned.positions, [])).toBeNull();
+	});
+	it('between two learned poses it blends, nearer weighs more', () => {
+		const a = { positions: [0, 2000, 2000, 2000, 0, 0], trim: [0, 20, 0, 0, 0, 0] };
+		const b = { positions: [0, 2200, 2000, 2000, 0, 0], trim: [0, 0, 0, 0, 0, 0] };
+		const e = estimateTrim([0, 2050, 2000, 2000, 0, 0], [a, b])!;
+		expect(e[1]).toBeGreaterThan(10);
+		expect(e[1]).toBeLessThan(20);
 	});
 });
