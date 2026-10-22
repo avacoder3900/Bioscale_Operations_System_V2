@@ -25,6 +25,7 @@ import {
 	type SourceRecording
 } from '$lib/server/robot-arm-cleanup';
 import { cleanRecordingName } from '$lib/robot-arm/recording-cleanup';
+import { SMOOTHING_OFF } from '$lib/robot-arm/recording-smooth';
 import {
 	alignWith,
 	applyOverlay,
@@ -247,5 +248,14 @@ export async function overlayToCleanup(
 		rawGoal: result.goal
 	};
 	const stem = (n: string) => n.replace(/\.jsonl$/i, '');
-	return insertCleanup(user, { source, split, overlay, title: `${stem(smooth.name)} + ${stem(precise.name)}` });
+	// Smoothing starts OFF (operator preference, 2026-10-22: smoothing is opt-in everywhere). Note that with it off,
+	// Save to Pi plays the steps as straight lines; turn smoothing on *from the recording* in the Smoothing card to keep
+	// the overlay's curves.
+	return insertCleanup(user, {
+		source,
+		split,
+		overlay,
+		title: `${stem(smooth.name)} + ${stem(precise.name)}`,
+		smoothing: SMOOTHING_OFF
+	});
 }

@@ -57,8 +57,42 @@ const robotArmRecordingCleanupSchema = new Schema(
 		start: { type: Map, of: Number, default: {} },
 		steps: { type: [stepSchema], default: [] },
 		savedAs: {
-			type: [new Schema({ name: String, at: Date, by: operatorRef, frames: Number, durationS: Number }, { _id: false })],
+			type: [
+				new Schema(
+					{
+						name: String,
+						at: Date,
+						by: operatorRef,
+						frames: Number,
+						durationS: Number,
+						/** The smoothing it was saved with; null = the steps as straight lines. */
+						smoothing: { type: Schema.Types.Mixed, default: null },
+						/** This save replaced an earlier file of the same name from this clean-up. */
+						replaced: { type: Boolean, default: false }
+					},
+					{ _id: false }
+				)
+			],
 			default: []
+		},
+		/**
+		 * Path smoothing for Save to Pi (src/lib/robot-arm/recording-smooth.ts). Kept so the operator
+		 * can come back, move the sliders and save again. Absent / enabled:false = the steps as
+		 * straight lines (what every clean-up did before 2026-10-22).
+		 */
+		smoothing: {
+			type: new Schema(
+				{
+					enabled: { type: Boolean, default: false },
+					source: { type: String, enum: ['recording', 'steps'], default: 'recording' },
+					windowS: Number,
+					strength: Number,
+					keepStops: Boolean,
+					servos: { type: [Number], default: undefined }
+				},
+				{ _id: false }
+			),
+			default: null
 		},
 		/** Move sets made from this draft for the Animate tab (robot_arm_move_sets). The draft itself is not changed. */
 		moveSets: {

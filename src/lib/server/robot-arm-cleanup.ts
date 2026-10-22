@@ -10,7 +10,10 @@
  *      check it on the real arm.
  *   3. Save to Pi: the draft becomes a NEW recording on the Pi (via the
  *      recording-restore route), replayable from the Control tab. The source
- *      recording is never modified.
+ *      recording is never modified. With smoothing on (recording-smooth.ts,
+ *      the clean-up's `smoothing` settings), the file is the smoothed path of
+ *      the recording or of the steps; otherwise the steps as straight lines.
+ *      Re-saving under a name this clean-up saved before can replace that file.
  *   3b. Send to Animate: the draft becomes poses + a move set in the Animate
  *      tab (robot_arm_poses / robot_arm_move_sets), where the Animate engine
  *      eases between the poses and the operator can keep adjusting. The
@@ -33,6 +36,13 @@ import {
 } from '$lib/robot-arm/recording-cleanup';
 import { DEFAULT_RATE_HZ } from '$lib/robot-arm/animation';
 import { seriesFromFrames, type OverlayOptions } from '$lib/robot-arm/recording-overlay';
+import {
+	SMOOTHING_OFF,
+	composeSmoothedRecording,
+	smoothSeries,
+	validateSmoothOptions,
+	type SmoothOptions
+} from '$lib/robot-arm/recording-smooth';
 
 interface User {
 	_id: string;
@@ -141,11 +151,11 @@ export interface CleanupOverlayInfo extends OverlayOptions {
 /** Split a Pi recording into a new draft. Returns the draft id. */
 export async function createCleanup(
 	user: User,
-	o: { sourceName: string; thresholdSteps: unknown; pauseS?: unknown }
+	o: { sourceName: string; thresholdSteps: unknown; pauseS?: unknown; smooth?: boolean }
 ): Promise<string> {
 	const split = cleanSplit(o.thresholdSteps, o.pauseS ?? DEFAULT_PAUSE_S);
 	const source = await readSourceRecording(o.sourceName);
-	return insertCleanup(user, { source, split });
+	return insertCleanup(user, { source, split, smoothing: o.smooth ? validateSmoothOptions({}) : SMOOTHING_OFF });
 }
 
 /**
@@ -155,7 +165,14 @@ export async function createCleanup(
  */
 export async function insertCleanup(
 	user: User,
-	o: { source: SourceRecording; split: { thresholdSteps: number; pauseS: number }; overlay?: CleanupOverlayInfo; title?: string }
+	o: {
+		source: SourceRecording;
+		split: { thresholdSteps: number; pauseS: number };
+		overlay?: CleanupOverlayInfo;
+		title?: string;
+		/** Smoothing to start with; without it Save to Pi writes the steps as straight lines. */
+		smoothing?: SmoothOptions;
+	}
 ): Promise<string> {
 	const { source, split } = o;
 	const result = recordingToSteps(framesFromRaw(source.rawT, source.rawGoal), split);
@@ -181,6 +198,7 @@ export async function insertCleanup(
 		start: draft.start,
 		steps: draft.steps,
 		overlay: o.overlay ?? null,
+		smoothing: o.smoothing ?? SMOOTHING_OFF,
 		createdBy: opRef(user),
 		updatedBy: opRef(user)
 	});
@@ -189,7 +207,8 @@ export async function insertCleanup(
 		...split,
 		steps: draft.steps.length,
 		frames: source.rawT.length,
-		...(o.overlay ? { overlay: o.overlay } : {})
+		...(o.overlay ? { overlay: o.overlay } : {}),
+		smoothing: o.smoothing ?? SMOOTHING_OFF
 	});
 	return id;
 }
@@ -233,11 +252,13 @@ export interface CleanupDoc extends CleanDraft {
 	jointNames: string[];
 	thresholdSteps: number;
 	pauseS: number;
-	savedAs: { name: string; at: string; by?: User; frames?: number; durationS?: number }[];
+	savedAs: { name: string; at: string; by?: User; frames?: number; durationS?: number; smoothing?: SmoothOptions | null; replaced?: boolean }[];
 	/** Move sets made from this draft (Send to Animate), newest last. */
 	moveSets: { moveSetId: string; name: string; at: string; by?: User; poses?: number; keyframes?: number }[];
 	/** Set when the frames are an overlay: the pilot's positions on the animated sourceName (robot-arm-overlay.ts). */
 	overlay: CleanupOverlayInfo | null;
+	/** Smoothing settings (off for clean-ups made before smoothing existed). */
+	smoothing: SmoothOptions;
 	updatedAt: string;
 	updatedBy: User | null;
 	/** Display trace: times and goals per frame (thinned past MAX_TRACE_POINTS). */
@@ -276,6 +297,7 @@ export async function getCleanup(id: string): Promise<CleanupDoc | null> {
 			savedAs: doc.savedAs ?? [],
 			moveSets: doc.moveSets ?? [],
 			overlay: doc.overlay ?? null,
+			smoothing: validateSmoothOptions(doc.smoothing ?? undefined, SMOOTHING_OFF),
 			updatedAt: doc.updatedAt,
 			updatedBy: doc.updatedBy ?? null,
 			trace: {
@@ -292,7 +314,7 @@ export async function getCleanup(id: string): Promise<CleanupDoc | null> {
 
 /** Save the operator's edits. `payload` is the editor's JSON ({title, start, steps}). */
 export async function saveCleanup(user: User, id: string, payload: string): Promise<CleanDraft> {
-	let parsed: { title?: unknown; start?: unknown; steps?: unknown };
+	let parsed: { title?: unknown; start?: unknown; steps?: unknown; smoothing?: unknown };
 	try {
 		parsed = JSON.parse(payload);
 	} catch {
@@ -305,15 +327,32 @@ export async function saveCleanup(user: User, id: string, payload: string): Prom
 		throw new CleanupError((err as Error).message);
 	}
 	const title = typeof parsed.title === 'string' ? parsed.title.trim().slice(0, 120) : undefined;
+	let smoothing: SmoothOptions | undefined;
+	if (parsed.smoothing !== undefined) {
+		try {
+			smoothing = validateSmoothOptions(parsed.smoothing, SMOOTHING_OFF);
+		} catch (err) {
+			throw new CleanupError((err as Error).message);
+		}
+	}
 	await connectDB();
 	const res = await RobotArmRecordingCleanup.updateOne(
 		{ _id: id, status: 'draft' },
-		{ $set: { start: draft.start, steps: draft.steps, ...(title !== undefined ? { title } : {}), updatedBy: opRef(user) } }
+		{
+			$set: {
+				start: draft.start,
+				steps: draft.steps,
+				...(title !== undefined ? { title } : {}),
+				...(smoothing ? { smoothing } : {}),
+				updatedBy: opRef(user)
+			}
+		}
 	);
 	if (!res.matchedCount) throw new CleanupError('This clean-up no longer exists.', 404);
 	await audit(user, 'robot_arm.cleanup.save', id, {
 		steps: draft.steps.length,
-		moves: draft.steps.reduce((n, s) => n + s.moves.length, 0)
+		moves: draft.steps.reduce((n, s) => n + s.moves.length, 0),
+		...(smoothing ? { smoothing } : {})
 	});
 	return draft;
 }
@@ -457,20 +496,50 @@ export async function moveArm(user: User, id: string, label: string, targets: Re
 	return { before, after, jogs, residual };
 }
 
-/** Write the saved draft to the Pi as a new recording. */
-export async function saveToPi(user: User, id: string, rawName: string) {
+/**
+ * Write the saved draft to the Pi as a new recording: the smoothed path when
+ * the clean-up's smoothing is on (of the recording or of the steps), else the
+ * steps as straight lines. `replace` re-saves over a name this clean-up saved
+ * before (the old file is deleted first); any other existing name is refused.
+ */
+export async function saveToPi(user: User, id: string, rawName: string, o: { replace?: boolean } = {}) {
 	const name = cleanRecordingName(rawName);
 	if (!name) throw new CleanupError('Name: letters, numbers, spaces, - _ . only (max 100).');
 	await connectDB();
 	const doc = (await RobotArmRecordingCleanup.findOne({ _id: id, status: 'draft' }).lean()) as Record<string, any> | null;
 	if (!doc) throw new CleanupError('This clean-up no longer exists.', 404);
 	const draft = validateDraft({ start: doc.start, steps: doc.steps });
-	if (!draft.steps.length) throw new CleanupError('There are no steps to save.');
-	const out = composeRecording(draft, {
-		sourceHeader: doc.sourceHeader ?? null,
-		sourceName: doc.sourceName,
-		rateHz: doc.rateHz
-	});
+	const smoothing = validateSmoothOptions(doc.smoothing ?? undefined, SMOOTHING_OFF);
+	const useSteps = !smoothing.enabled || smoothing.source === 'steps';
+	if (useSteps && !draft.steps.length) throw new CleanupError('There are no steps to save.');
+	const fileName = `${name}.jsonl`;
+	const ours = (doc.savedAs ?? []).some((e: { name: string }) => e.name === fileName);
+	if (o.replace && !ours) throw new CleanupError(`"${fileName}" was not saved from this clean-up, so it cannot be replaced from here.`);
+
+	const stepsOut = useSteps
+		? composeRecording(draft, { sourceHeader: doc.sourceHeader ?? null, sourceName: doc.sourceName, rateHz: doc.rateHz })
+		: null;
+	let out: { jsonl: string; frames: number; durationS: number };
+	let smoothSummary: Record<string, unknown> | null = null;
+	if (!smoothing.enabled) {
+		out = stepsOut!;
+	} else {
+		const src =
+			smoothing.source === 'steps'
+				? seriesFromFrames(parseRecording(stepsOut!.jsonl).frames)
+				: { t: doc.rawT as number[], goal: doc.rawGoal as number[][] };
+		if (src.t.length < 2) throw new CleanupError('There is nothing to smooth.');
+		const r = smoothSeries(src, smoothing);
+		out = composeSmoothedRecording(src.t, r.goal, {
+			header: doc.sourceHeader ?? null,
+			sourceName: doc.sourceName,
+			options: smoothing,
+			jointNames: doc.jointNames?.length ? doc.jointNames : joints(null),
+			rateHz: doc.rateHz,
+			cleanupId: id
+		});
+		smoothSummary = { stops: r.stops.length, peakSpeed: r.peakSpeed, sourcePeakSpeed: r.sourcePeakSpeed, servos: r.servos };
+	}
 	const now = new Date();
 	// Extra keys ride along in the Pi's sidecar so a replayed file says where it came from.
 	const meta: RecordingSidecar & Record<string, unknown> = {
@@ -480,31 +549,57 @@ export async function saveToPi(user: User, id: string, rawName: string) {
 		started_at_iso: now.toISOString(),
 		rate_hz: doc.rateHz,
 		cleaned_from: doc.sourceName,
-		cleanup_id: id
+		cleanup_id: id,
+		...(smoothing.enabled ? { smoothed: smoothing } : {})
 	};
+	if (o.replace) {
+		try {
+			await robotArm.deleteRecording(fileName);
+		} catch (err) {
+			const msg = (err as Error).message ?? '';
+			if (!msg.includes('robot-arm 404')) throw new CleanupError(`Could not replace "${fileName}" on the Pi: ${msg}`, 502);
+		}
+	}
 	try {
-		await robotArm.restoreRecording({
-			name,
-			jsonl: out.jsonl,
-			meta
-		});
+		await robotArm.restoreRecording({ name, jsonl: out.jsonl, meta });
 	} catch (err) {
 		const msg = (err as Error).message ?? '';
-		if (msg.includes('robot-arm 409')) throw new CleanupError(`"${name}" already exists on the Pi. Pick another name.`, 409);
-		throw new CleanupError(`The Pi did not take the recording: ${msg}`, 502);
+		if (msg.includes('robot-arm 409')) {
+			throw new CleanupError(
+				ours
+					? `"${fileName}" already exists on the Pi. Tick "Replace it" to update it, or pick another name.`
+					: `"${fileName}" already exists on the Pi. Pick another name.`,
+				409
+			);
+		}
+		throw new CleanupError(
+			o.replace
+				? `The old "${fileName}" was removed but the Pi did not take the new one: ${msg}. Save again.`
+				: `The Pi did not take the recording: ${msg}`,
+			502
+		);
 	}
-	await RobotArmRecordingCleanup.updateOne(
-		{ _id: id },
-		{ $push: { savedAs: { name: `${name}.jsonl`, at: now, by: opRef(user), frames: out.frames, durationS: out.durationS } } }
-	);
+	const entry = {
+		name: fileName,
+		at: now,
+		by: opRef(user),
+		frames: out.frames,
+		durationS: out.durationS,
+		smoothing: smoothing.enabled ? smoothing : null,
+		replaced: !!o.replace
+	};
+	await RobotArmRecordingCleanup.updateOne({ _id: id }, { $push: { savedAs: entry } });
 	await audit(user, 'robot_arm.cleanup.save_to_pi', id, {
-		name: `${name}.jsonl`,
+		name: fileName,
 		sourceName: doc.sourceName,
 		steps: draft.steps.length,
 		frames: out.frames,
-		durationS: out.durationS
+		durationS: out.durationS,
+		smoothing: smoothing.enabled ? smoothing : null,
+		...(smoothSummary ? { smoothResult: smoothSummary } : {}),
+		replaced: !!o.replace
 	});
-	return { name: `${name}.jsonl`, frames: out.frames, durationS: out.durationS };
+	return { name: fileName, frames: out.frames, durationS: out.durationS, smoothed: smoothing.enabled, replaced: !!o.replace };
 }
 
 export interface SendToAnimateResult {

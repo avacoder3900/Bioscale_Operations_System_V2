@@ -11,6 +11,8 @@
 	// Same defaults as the server's (load.defaults); 10 steps ignores leader-hand tremor.
 	let thresholdSteps = $state(10);
 	let pauseS = $state(0.25);
+	// Off unless ticked (operator preference, 2026-10-22): smoothing is opt-in. The card on the next page turns it on later.
+	let smooth = $state(false);
 	let busy = $state(false);
 
 	$effect(() => {
@@ -43,9 +45,10 @@
 			New clean-up
 		</h2>
 		<p class="mb-3 text-xs" style="color: var(--color-tron-text-secondary)">
-			Splits a recording into numbered steps: servo moves that overlap in time share a step. That is all it
-			does. Nothing is smoothed or removed; you decide what each step keeps, where each servo ends up and how
-			long it takes. The original recording on the Pi is never changed.
+			Splits a recording into numbered steps: servo moves that overlap in time share a step, so you can decide
+			what each step keeps, where each servo ends up and how long it takes. With <em>Smooth automatically</em>,
+			Save to Pi writes the recording's path smoothed — hand tremor out, stops kept where the pilot held still —
+			with sliders to adjust it on the next page, and again later. The original recording on the Pi is never changed.
 		</p>
 
 		{#if data.recordingsError}
@@ -54,7 +57,7 @@
 			</p>
 		{/if}
 
-		<form method="POST" action="?/create" use:enhance={createEnhance} class="grid gap-3 sm:grid-cols-[1fr_auto_auto_auto] sm:items-end">
+		<form method="POST" action="?/create" use:enhance={createEnhance} class="grid gap-3 sm:grid-cols-[1fr_auto_auto_auto_auto] sm:items-end">
 			<label class="block text-xs" style="color: var(--color-tron-text-secondary)">
 				Recording on the Pi
 				<select
@@ -95,6 +98,10 @@
 					class="mt-1 w-28 rounded border border-[var(--color-tron-border)] bg-black/40 px-2 py-1.5 text-sm"
 					style="color: var(--color-tron-text)"
 				/>
+			</label>
+			<label class="flex items-center gap-1.5 pb-2 text-xs" style="color: var(--color-tron-text-secondary)" title="Save to Pi writes a smoothed path: tremor removed, stops kept where the pilot held still. You can change the smoothing with sliders on the next page, and later.">
+				<input name="smooth" type="checkbox" bind:checked={smooth} class="accent-cyan-400" />
+				<span style="color: var(--color-tron-text)">Smooth automatically</span>
 			</label>
 			<button
 				type="submit"

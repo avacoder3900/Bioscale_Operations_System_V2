@@ -22654,6 +22654,53 @@ request (200, 39 KB, 1.0 s incl. warm-up) flipped it to {state running, 1920x108
 npm run check: 13 errors = baseline, none in touched files.
 
 ================================================================================
+2026-10-22 — feat/cleanup-smoothing — Clean-up smoothing: Save to Pi writes a smoothed path, adjustable later with sliders
+================================================================================
+Operator asked whether putting a file through Clean-up does anything. On its own it does not: it only splits a
+recording into steps, and Save to Pi plays each step as a straight line and stops dead (no smoothing, and on an
+overlay it flattens the curves). They asked for automatic smoothing and for a smoothed recording to be editable after
+the fact with sliders.
+Built: src/lib/robot-arm/recording-smooth.ts (14 tests): findStops (every smoothed servo within a 12-step band for
+>= 0.3 s), smoothSeries (anchors = first/last frame + the middle of each stop at its median, half a window left free at
+each inner stop edge so moves ease in and out; three passes of a centred moving average totalling windowS, re-pinning
+after each; strength blend; per-servo opt-out), validateSmoothOptions, composeSmoothedRecording (source header +
+smoothed provenance, t from 0, clamped to follower limits). Clean-up model gains `smoothing` and savedAs[].smoothing /
+.replaced. robot-arm-cleanup.ts: createCleanup takes `smooth` (defaults), insertCleanup stores smoothing, getCleanup
+returns it (off for older clean-ups), saveCleanup saves it from the editor payload, saveToPi writes the smoothed path
+of the recording (every raw frame) or of the steps when on, else the straight-line steps as before, and with
+`replace` deletes then rewrites a file this clean-up saved before (any other name is refused). Overlay -> clean-up
+starts smoothed from the recording, so its curves survive Save to Pi. Editor: Smoothing card under the timeline
+(on/off, source radios, window and strength sliders, keep stops exact, servo ticks, live OverlayChart source vs
+smoothed from the same pure function, stops / peak speed / largest change), Save to Pi text by mode, "Replace it"
+when the name is one saved from here, "update <last file> instead", saved list shows smoothing and replaced. Smoothing
+is saved with the draft but kept out of Undo. New-clean-up form: "Smooth automatically" (default on). OverlayChart:
+pilot line optional, legend labels configurable. Docs: docs/prds/ARM-08-cleanup-smoothing.md, context doc line.
+Tests: robot-arm unit suites 7 files, 153 passed. svelte-check 14 errors / 432 warnings (baseline). vite build OK.
+Not run against the arm, a live Pi or a live DB.
+Deployment: preview — https://bioscale-operations-system-mongodb-r0hw64819-brevitest.vercel.app
+Source: branch feat/cleanup-smoothing @ commit b15ca38c
+Retrieve this exact code: git checkout feat/cleanup-smoothing at commit b15ca38c
+  (or: git log feat/cleanup-smoothing --oneline to find it if the branch has since moved on)
+What this deployment is for: Clean-up Smoothing card, Smooth automatically, Replace it (PR #129); smoke: /login 200, cleanup 302 to login.
+PR: https://github.com/avacoder3900/Bioscale_Operations_System_V2/pull/129
+
+================================================================================
+2026-10-22 — feat/cleanup-smoothing — Smoothing is opt-in: off by default on new clean-ups and overlays
+================================================================================
+Alejandro: "make the smoothing added to Clean-up an option? I would prefer it off, but do not want to
+erase any work." Nothing removed: the Smoothing card, sliders, keep-stops, Replace it and the stored
+per-clean-up settings all stay. Only the defaults changed:
+  - cleanup/+page.svelte: "Smooth automatically" starts unticked (`smooth = $state(false)`); ticking it
+    still creates the clean-up with smoothing on at the defaults.
+  - robot-arm-overlay.ts: an overlay opened as a clean-up now starts with `SMOOTHING_OFF` instead of the
+    defaults. Trade-off noted in the code and PRD: with smoothing off, Save to Pi plays the steps as
+    straight lines, which flattens an overlay's curves — turn smoothing on *from the recording* in the
+    card to keep them.
+  - DEFAULT_SMOOTH_OPTIONS (enabled: true) is unchanged: it is "the settings when smoothing is turned
+    on", and createCleanup's `smooth ? validateSmoothOptions({}) : SMOOTHING_OFF` relies on that.
+Docs: ARM-08 §automatic, Robot_Arm_Calibration_Context.md line. Tests: recording-smooth 14 passed.
+svelte-check: 14 errors / 432 warnings (baseline).
+================================================================================
 2026-10-22 — feat/animate-redo — Animate redo: live sliders, absolute moves, torque kept on, servo temps
 ================================================================================
 The operator asked to redo the Animate protocol: (1) no file names everywhere, (2) posing with the control arm

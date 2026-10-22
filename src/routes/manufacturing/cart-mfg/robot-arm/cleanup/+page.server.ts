@@ -42,7 +42,8 @@ export const actions: Actions = {
 			id = await createCleanup(locals.user, {
 				sourceName: data.get('sourceName')?.toString() ?? '',
 				thresholdSteps: data.get('thresholdSteps')?.toString() ?? '',
-				pauseS: data.get('pauseS')?.toString() ?? ''
+				pauseS: data.get('pauseS')?.toString() ?? '',
+				smooth: data.get('smooth')?.toString() === 'on'
 			});
 		} catch (err) {
 			if (err instanceof CleanupError) return fail(err.status, { error: err.message });
