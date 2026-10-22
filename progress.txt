@@ -22485,3 +22485,19 @@ Retrieve this exact code: git checkout feat/overlay-stretch at commit c6b87061
   (or: git log feat/overlay-stretch --oneline to find it if the branch has since moved on)
 What this deployment is for: Overlay "Line up by: Stretch to fit" on the Clean-up tab (PR #128); smoke: /login 200, cleanup/overlay 302 to login.
 PR: https://github.com/avacoder3900/Bioscale_Operations_System_V2/pull/128
+
+================================================================================
+2026-10-22 — master — MERGE feat/overlay-stretch (PR #128, 4f3026da)
+================================================================================
+PR #128 merged into master at 19:20 UTC via the GitHub API as merge commit 4f3026da, after the operator said "push to
+main". Brings the Overlay's "Line up by: Stretch to fit" (ARM-07 section 5): the animation's moving part laid evenly
+over the pilot's moving part by time, so recordings of different lengths overlay without the warping squeezing the
+pilot line flat; "Follow the motion" (the warping) kept as an option with a warning. 8 files, +399 / -68. Branch was
+merged with master 2a6d5736 first (ee0df0dd; only progress.txt conflicted: master's camera-note correction kept, the
+note it corrects dropped). robot-arm unit suites 139 passed; svelte-check 14 errors (baseline). Not run on the arm.
+Deployment: production — https://bioscale-operations-system-mongodb-427xpbhic-brevitest.vercel.app
+Source: branch master @ commit 4f3026da (Merge pull request #128 from avacoder3900/feat/overlay-stretch)
+Retrieve this exact code: git checkout 4f3026da
+  (or: git log master --oneline --merges | grep "#128" to find it)
+What this deployment is for: Overlay "Stretch to fit" in production. Smoke 2026-10-22: /login 200,
+/manufacturing/cart-mfg/robot-arm/cleanup/overlay 302 to login.
