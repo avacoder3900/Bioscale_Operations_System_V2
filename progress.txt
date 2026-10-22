@@ -21637,6 +21637,10 @@ Operator: the Vision tab's Live Tags kept saying MOVED without showing which mea
 - Agent vision-check returns `over` per marker.
 Tests: apriltags +1 (16): over = ['mm'], ['deg'], ['mm','deg'], ['px'], [] with angle check off. robot-arm 99/99.
 npm run check: 13 errors = baseline, none in touched files.
+Deployment: production — via Vercel GitHub integration on push to master
+Source: branch feat/arm-live-tags-over-red @ commit 0859f9f2, fast-forwarded to master
+Retrieve this exact code: git checkout master at commit 0859f9f2
+What this deployment is for: Live Tags table marks the off mm / off deg / off px number that makes a tag MOVED in red
 
 ================================================================================
 2026-10-21 — feat/arm-vision-servos-and-camera — re-port: vision calibration relies on servos AND camera (onto Sam's home flow)
