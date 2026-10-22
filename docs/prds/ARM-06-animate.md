@@ -169,7 +169,7 @@ joints to the pose*. Joint edits are stored per keyframe as `offsets[6]` (steps 
 editors use pose + offsets, `resolveKeyframes` (everything sent to the Pi) adds the trim.
 
 **Why the claw ended up lower than the pose.** The Pi plays a path open-loop: each frame's goal is
-written and nothing else (`_replay_loop`). The STS3215's position loop is proportional, so a joint
+written and nothing else (`replay_session` in the Pi's `src/hardware/dual_arm.py`). The STS3215's position loop is proportional, so a joint
 carrying the arm against gravity settles a few to a few tens of steps *short of its goal*
 (verified_move.py already allows 20 steps for this). Poses are captured with the arm held in place
 (torque off — the hold route is still not installed; every capture on 2026-10-21 logged
@@ -236,10 +236,18 @@ lands one droop short. The learned trim (§10) fixes poses the arm has stopped a
 poses only get an estimate, and BIMS cannot read or nudge the arm mid-path: the Pi owns the serial bus
 for the whole replay.
 
-**Fix: the replay loop itself settles.** `services/robot-arm/src/arm/replay_settle.py` +
-`scripts/install_replay_settle.py` (written blind — the live Pi's session class is in `dual_arm.py`,
-not in this repo; the installer finds the class by `def _replay_loop`, warns on each attribute name it
-cannot find, and inserts `replay_settle.install(<Class>)` into app.py). The replacement `_replay_loop`:
+**Fix: the replay loop itself settles.** `services/robot-arm/src/hardware/replay_settle.py` +
+`scripts/install_replay_settle.py`. Re-ported 2026-10-22 against the live Pi (the first draft assumed
+a session class with `_replay_loop`; the Pi has none): replay is the module-level
+`replay_session(arms, source_path, loops, stop_event)` in `src/hardware/dual_arm.py`, run by
+`src/server/sessions.py` in a worker thread with the run id on the logging context, over a
+`FeetechBus` with per-servo `read(sid, "Present_Position")` / `write(sid, "Goal_Position", v)`.
+`replay_session_settling` is a drop-in with the same signature and behaviour (header check,
+`replay.start/loop/stop` events, torque off→on, ramp to `follower_neutral`, torque off at the end);
+`install()` rebinds the name inside `src.server.sessions`, and the installer adds the two lines to
+app.py after refusing on any layout mismatch. Simulated against a sagging fake bus
+(`scripts/simulate_replay_settle.py`: plain recordings produce the original's exact writes; flagged
+poses converge; stop mid-replay; blocked joint caps the offset; install is idempotent). The loop:
 
 - plays frames exactly as before (goal arrays or the old `positions{}`; header/footer skipped), one
   write per frame at its time;
@@ -250,9 +258,10 @@ cannot find, and inserts `replay_settle.install(<Class>)` into app.py). The repl
   ≤ 8 rounds);
 - carries the offset into the following frames (gravity feed-forward for the move) until the next
   settle point re-learns it;
-- emits one `replay.settle` session event at the end: per settle point `frame, t, pose, target, goal,
-  written, present, residual, rounds, ok`, plus the carried offset. The webhook appends it to the
-  `robot_arm_runs` row like any event.
+- logs one `replay.settle` run event at the end (through `arms.logger.log_event`, so the Pi's
+  `_forward_to_bims` handler posts it like every session event): per settle point `frame, t, pose,
+  target, goal, written, present, residual, rounds, ok, loop`, plus the carried offset. The webhook
+  appends it to the `robot_arm_runs` row with the record as `payload`.
 
 Recordings without flags play exactly as before (no reads). Control-tab replays of Animate recordings
 saved after this change are settled too, since the flags are in the file.
@@ -266,10 +275,10 @@ those frames. Markers now carry `poseId`/`target`. `settleAfterPlay` first looks
 it fall back to §10's own settle. The playback line reports per pose "on target (n rounds)" or
 "still k steps off when the hold ran out — give it a longer hold".
 
-**On the Pi:** copy `replay_settle.py` to `src/arm/`, run `python3 scripts/install_replay_settle.py`
-(`--check` first), `sudo systemctl restart robot-arm`. Test: give a pose a 1 s hold, Play, watch the
-claw land and stay; the run in Mongo gains a `replay.settle` event. If the installer warns about
-attribute names, edit the five `self.*` references at the top of `_replay_loop_settling`.
+**On the Pi:** copy `replay_settle.py` to `src/hardware/`, run `python3 scripts/install_replay_settle.py`
+(`--check` first; it refuses on a layout mismatch), then with `/sessions/active` null
+`sudo systemctl restart robot-arm` (backup `app.py.bak-replay-settle`). Test: give a pose a 1 s hold,
+Play, watch the claw land and stay; the run in Mongo gains a `replay.settle` event.
 
-Not run on the arm. Open: `SETTLE_WAIT_S` 0.25 s assumes the servo stops within that; a slow joint
+Installed on arm-pi 2026-10-22 (see progress.txt); not yet played on the arm. Open: `SETTLE_WAIT_S` 0.25 s assumes the servo stops within that; a slow joint
 may need 0.4 s. A hold shorter than ~0.5 s gives one round at most.
