@@ -37,6 +37,45 @@
 	} | null>(null);
 	let errMsg = $state<string | null>(null);
 
+	// Protected carts (2026-10-21): the server refuses the first submit when any
+	// scanned cart is linked to an experiment, at a test-side status, or owned by
+	// an app account, and sends the list back instead. The operator drops them
+	// from the batch or confirms — with a reason — and the batch is resent with
+	// `confirmProtected`. Editing the box or the target voids the confirmation.
+	type ProtectedCart = {
+		barcode: string;
+		status: string;
+		experiment: string | null;
+		arm: string | null;
+		owner: { accountId: string | null; accountLabel: string | null; customerId: string | null; customerName: string | null } | null;
+		reasons: string[];
+	};
+	let protectedList = $state<ProtectedCart[] | null>(null);
+	let confirmProtected = $state(false);
+	let reasonEl = $state<HTMLInputElement | null>(null);
+	$effect(() => {
+		// Any change to what is being submitted invalidates a confirmation.
+		void text; void target;
+		confirmProtected = false;
+		protectedList = null;
+	});
+
+	function dropProtected() {
+		const drop = new Set((protectedList ?? []).map((p) => p.barcode));
+		text = codesInBox.filter((c) => !drop.has(c)).join('\n');
+		boxEl?.focus();
+	}
+
+	function changeAnyway() {
+		if (!reason.trim()) {
+			errMsg = 'Give a reason before changing carts that are linked to an experiment or an app account.';
+			reasonEl?.focus();
+			return;
+		}
+		confirmProtected = true;
+		void changeState();
+	}
+
 	// Badge (2026-10-05): a cart entering or leaving a bucket pass is a badge-gated
 	// bucket step. Scanned into its own box, or into the cart box — a BDG- code
 	// there is the badge, not a cart (the server routes it the same way).
@@ -70,6 +109,7 @@
 			if (isBackedTarget && noBucket) fd.set('noBucket', 'on');
 			if (clearReagentFill) fd.set('clearReagentFill', 'on');
 			if (reason.trim()) fd.set('reason', reason.trim());
+			if (confirmProtected) fd.set('confirmProtected', 'on');
 			const res = await fetch('?/changeState', {
 				method: 'POST',
 				body: fd,
@@ -85,6 +125,15 @@
 			}
 			if (r.type === 'error') { errMsg = r.error?.message ?? 'Failed'; return; }
 			const d = (r as any).data ?? {};
+			if (d.needsConfirm) {
+				// Nothing was written. Show the list; the box stays as scanned.
+				result = null;
+				protectedList = d.protected ?? [];
+				confirmProtected = false;
+				return;
+			}
+			protectedList = null;
+			confirmProtected = false;
 			result = {
 				target: d.target ?? target,
 				changed: d.changed ?? [],
@@ -190,6 +239,7 @@
 			Reason (optional — goes on the note + audit entry)
 		</span>
 		<input
+			bind:this={reasonEl}
 			bind:value={reason}
 			placeholder="e.g. re-work batch, test fill, scrapped after drop"
 			class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-black/40 px-3 py-2 text-sm"
@@ -255,6 +305,49 @@
 			Clear
 		</button>
 	</div>
+
+	{#if protectedList?.length}
+		<section class="space-y-3 rounded-lg border border-amber-500/50 bg-amber-900/20 p-3 text-xs text-amber-100">
+			<p class="text-sm font-semibold text-amber-300">
+				⚠ Nothing changed — {protectedList.length} of {scanned.length} scanned cart{scanned.length === 1 ? ' is' : 's are'} linked to an experiment or an app account.
+			</p>
+			<p class="text-amber-200/90">
+				Moving {protectedList.length === 1 ? 'it' : 'them'} to <span class="font-mono">{target}</span> takes the cart away from whoever is about to test it:
+				the device only runs carts at <span class="font-mono">linked</span> / <span class="font-mono">underway</span>, and the owner keeps seeing it in the app.
+				Drop {protectedList.length === 1 ? 'it' : 'them'} from the batch, or give a reason and change anyway.
+			</p>
+			<ul class="max-h-48 space-y-1.5 overflow-y-auto font-mono">
+				{#each protectedList as p (p.barcode)}
+					<li>
+						<div>{p.barcode} <span class="opacity-70">({p.status} → {target})</span></div>
+						<ul class="ml-4 list-disc font-sans text-amber-200/80">
+							{#each p.reasons as why (why)}
+								<li>{why}</li>
+							{/each}
+						</ul>
+					</li>
+				{/each}
+			</ul>
+			<div class="flex flex-wrap items-center gap-2 pt-1">
+				<button
+					type="button"
+					onclick={dropProtected}
+					disabled={busy}
+					class="rounded border border-amber-400/60 px-3 py-2 text-xs font-semibold text-amber-200 hover:bg-amber-500/20 disabled:opacity-40"
+				>
+					Drop {protectedList.length === 1 ? 'it' : `these ${protectedList.length}`} from the batch
+				</button>
+				<button
+					type="button"
+					onclick={changeAnyway}
+					disabled={busy}
+					class="rounded bg-amber-600 px-3 py-2 text-xs font-semibold text-black hover:bg-amber-500 disabled:opacity-40"
+				>
+					Change anyway (reason required)
+				</button>
+			</div>
+		</section>
+	{/if}
 
 	{#if result}
 		<section class="space-y-3 rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3">
