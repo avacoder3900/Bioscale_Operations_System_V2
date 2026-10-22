@@ -22856,3 +22856,33 @@ pose, with a selector.
 svelte-check: 13 errors / 432 warnings (one below the 14 baseline after today's merges). No Pi change.
 Noted for next: the shoulder is laggy under the jog fallback (live Pi has no POST /servos/{id}/move),
 see the following entry.
+
+Deployment: production — https://bioscale-operations-system-mongodb-1cyr5kwfy-brevitest.vercel.app
+Source: branch master @ commit e6143b00 (merge of feat/arm-slider-origin ef7461b1)
+Retrieve this exact code: git checkout master at commit e6143b00
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: Animate reference marker above the sliders (Home by default, selector, hover values, ↺).
+  GitHub deployment 7264885092 success 22:07 UTC.
+
+================================================================================
+2026-10-22 — master — arm-pi: POST /servos/{id}/move installed (absolute goal); fixes the laggy shoulder under the jog fallback
+================================================================================
+Alejandro, moving the shoulder with the new sliders: "very laggy, I have to press −10 about 3 times before
+it moves", and the note said "This Pi has no absolute move route; using jogs". Cause: the live arm-pi only
+had /servos/{id}/jog (goal = present + delta). A loaded shoulder rests 20–30 steps BELOW its goal, so each
+−10 from the slider became a jog measured from the sagged reading: the first presses only lifted it back to
+where it already was. BIMS's moveJoint (/servos/{id}/move, absolute) had been getting 404 since the redo.
+  - services/robot-arm/src/server/move.py (new): APIRouter with POST /servos/{servo_id}/move
+    {position, speed?, role?} → {id, joint, role, present, goal, delta, clamped}. Mirrors
+    manual_control.jog_joint (connect/disconnect, EEPROM angle-limit clamp, goal written BEFORE torque on,
+    Goal_Speed only when asked) but the goal is the number asked for. Refuses |goal − present| > 1000.
+    `bus_free` hook = app.py's _require_bus_free (single-owner bus), set by the installer.
+  - services/robot-arm/scripts/install_move_router.py (new): same shape as install_thermal_router.py —
+    import line after `from fastapi import`, `pi_move.bus_free = _require_bus_free` + include_router under
+    require_api_key at the end of app.py; refuses without require_api_key / _require_bus_free. Backup
+    app.py.bak-move.
+  - On arm-pi (17:0x CDT): copied both, --check, apply, import test in the service venv, /sessions/active
+    null → systemctl restart robot-arm, health 200, POST /servos/2/move {position: 875 (= present)} →
+    {"present":875,"goal":875,"delta":0}. No motion. BIMS needs no change (robotArm.moveJoint already
+    sends {position}); the "no absolute move route" note disappears on the next slider move.
+Not yet tried by hand: a real −10 on the shoulder through the sliders (expect it to move on the first press).
