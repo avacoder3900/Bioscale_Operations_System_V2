@@ -22248,3 +22248,15 @@ Source: branch feat/animate-pose-jog @ commit 4e06049c (master d2d0aa09 merged i
 Retrieve this exact code: git checkout feat/animate-pose-jog at commit 4e06049c
 What this deployment is for: pre-merge build of PR #125; smoke: /login 200, /api/robot-arm/animate/jog 401 without a session, Animate page 302 to login.
 Merge to master via the API was blocked by the auto-mode classifier [Merge Without Review]; waiting on the user to allow it.
+
+================================================================================
+2026-10-22 — docs/arm-animate-droop-context — Handoff context for the Animate droop / low-claw work
+================================================================================
+Robot_Arm_Animate_Droop_Context.md (repo root, beside the calibration and vision context docs):
+where #122 (merged), #123 and #124 (open, #124 stacked on #123) stand; the root cause (open-loop
+replay + STS3215 droop; poses store the follower reading, teleop record stores the leader command,
+so teleop has no anti-sag command); the three fix layers; how to verify without the arm; the Pi
+facts (arm-pi 172.16.202.203, user brevitest3, Funnel arm-pi.tailf65a70.ts.net, live code diverged
+from the vendored copy, dev PC's WiFi cannot reach the lab VLAN); the install/test order for
+replay_settle.py; code map; gotchas (PRD §10 numbering collision with #125, progress.txt union
+merges dropping ==== bars). No code change. No password in the doc.
