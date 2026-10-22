@@ -21647,6 +21647,10 @@ wrong branch picked 21/200 at 10° tilt, 64/200 at 20°, 36/200 at 35°; the alt
 Tests: apriltags 23 (+7: spin vs tilt split, tilt-only never moved, ambiguity resolve / leave alone / fixed-tag vote /
 no-ref / rescale alt). robot-arm suites 106/106. npm run check: 13 errors = baseline, none in touched files.
 Pi restart gated on /sessions/active == null (a teleop session was running; watcher restarts and runs one detect).
+Deployment: production — via Vercel GitHub integration on push to master
+Source: branch feat/arm-tag-spin-tilt @ commit 74883874, merged with Sam's a61c1364 as b56a13df on master
+Retrieve this exact code: git checkout master at commit b56a13df
+What this deployment is for: Live Tags judges spin only, shows tilt as advisory, and no longer flaps on the planar-pose flip
 
 ================================================================================
 2026-10-22 — feat/arm-live-tags-over-red — Live Tags: the number over tolerance turns red
