@@ -7,7 +7,9 @@ Pi. Read this before touching droop/trim code in BIMS or the replay loop on the 
 Sibling docs: [Robot_Arm_Calibration_Context.md](Robot_Arm_Calibration_Context.md),
 [Robot_Arm_Vision_Servo_Home_Context.md](Robot_Arm_Vision_Servo_Home_Context.md).
 
-_Written 2026-10-22 from the 2026-10-21/22 session. Nothing in §3–§5 has been run on the arm yet._
+_Written 2026-10-22 from the 2026-10-21/22 session; §1, §4–§6 corrected the same afternoon after the Pi was
+read over SSH and the Pi half was re-ported and installed (feat/animate-replay-settle @ 4b63d04b). Nothing has
+been **played** on the arm yet._
 
 ## 1. Where things stand
 
@@ -21,7 +23,9 @@ _Written 2026-10-22 from the 2026-10-21/22 session. Nothing in §3–§5 has bee
 User merges PRs themselves. The user's decision on 2026-10-22 was **option C** (close the loop on
 the Pi), so #124 is the path forward; #123 remains the fallback when the Pi route is not installed.
 
-**Blocked on:** reaching the Pi over SSH to confirm five attribute names and install the route (§5).
+**No longer blocked:** the Pi was read over SSH on 2026-10-22, the five assumed names did not exist (the Pi
+has no session class at all), the module was re-ported against the real layout and installed on arm-pi at
+13:07 CDT. What remains is the on-arm test (§5 step 4) and the hold route (§5 step 3).
 
 ## 2. The problem, exactly (what was found)
 
@@ -60,8 +64,8 @@ the untrimmed `target` on the `ResolvedKeyframe`.
    no active session; `settleAfterPlay` claims the run once and settles. Unvisited poses play with
    `estimateTrim(positions, samples)` (inverse-distance over learned poses within 400 steps on servos
    2–4). Audit `pose_droop_settle` (reason `go_to`/`play_end`, every round), `pose_droop_skip`.
-3. **Closed loop on the Pi (#124).** `services/robot-arm/src/arm/replay_settle.py` is a drop-in
-   `_replay_loop`: plays frames as before, but at frames flagged `"settle": true` it writes the goal,
+3. **Closed loop on the Pi (#124).** `services/robot-arm/src/hardware/replay_settle.py` provides
+   `replay_session_settling`, a drop-in for the Pi's module-level `replay_session` (see §5 for the real layout): plays frames as before, but at frames flagged `"settle": true` it writes the goal,
    waits `SETTLE_WAIT_S` 0.25 s, reads, adds the shortfall to a per-servo offset (±50), rewrites,
    repeats until within 2 steps or the hold window ends (next differing frame − 0.12 s; last frame
    2.5 s; ≤ 8 rounds), carries the offset into the following frames, and emits one `replay.settle`
@@ -83,45 +87,58 @@ the whole replay — so layers 1–2 only correct poses the arm has *stopped* at
 - Types: `node node_modules/@sveltejs/kit/svelte-kit.js sync && node node_modules/svelte-check/bin/svelte-check --threshold error --output machine`
   → baseline **14 errors**, none in robot-arm files. Portable Node lives in
   `%LOCALAPPDATA%\Temp\n22\node-v22.12.0-win-arm64`; there is no `npm` and no Python on the dev PC.
-- The Pi module has **never been executed** (no Python here). Read it twice before installing.
+- The Pi module: `python3 services/robot-arm/scripts/simulate_replay_settle.py` (pure Python, sagging fake bus;
+  also runs in the Pi's venv). It covers plain replay = original writes, convergence, loops, stop, blocked joint,
+  idempotent install. Passing as of 4b63d04b. Still not *played* on the arm.
 
 ## 5. The Pi: what to do next, in order
 
-Facts: hostname `arm-pi`, LAN IP **172.16.202.203** (per the user, 2026-10-22), user `brevitest3`
-(password: ask the user; it is not stored in the repo), Funnel `https://arm-pi.tailf65a70.ts.net`
-(`/health` → `{"status":"ok","service":"robot-arm","version":"0.1.0"}` — note the live service string
-differs from the vendored `app.py`'s `bims-robot-arm`: the Pi's code has diverged from the repo).
-Service: `systemctl … robot-arm`; code assumed under `~/robot-arm/src/{arm,server}`.
+Facts (read over SSH 2026-10-22): hostname `alejandrospi3`, Tailscale `arm-pi` **100.103.204.105** (works from
+any Wi-Fi), LAN IP 192.168.1.231 on the preferred Wi-Fi `Aquinas_Townpark` (Fannin_WIFI is the fallback; the
+172.16.202.203 address in older notes is stale). User `brevitest3`, key auth from the user's workstation
+(`ssh -i ~/.ssh/id_ed25519_armpi brevitest3@100.103.204.105`). Funnel `https://arm-pi.tailf65a70.ts.net`.
+Service `robot-arm` (systemd, `uv run --project ~/robot-arm`, WorkingDirectory `~/robot-arm`, venv
+`~/robot-arm/.venv/bin/python`). **Restart only when `GET /sessions/active` is `{"active": null}`** — a restart
+kills a running teleop/replay.
 
-Reachability: the dev PC on the `linbeck.com` WiFi (`172.16.202.97/23`) **cannot** reach the Pi or the
-OT-2s (`.117/.123/.124`) — different VLAN or client isolation. Use the lab Mac, or join the tailnet
-(`tailf65a70.ts.net`) and use the Tailscale IP. A password-capable client without `sshpass`/`plink`:
-`ssh2` for Node (download the tgz of `ssh2`, `asn1`, `safer-buffer`, `bcrypt-pbkdf`, `tweetnacl` from
-the npm registry and untar into a `node_modules`; `npm` is absent on the dev PC).
+**Real layout (the draft's assumptions were wrong):**
+- There is **no `src/arm/`** and **no session class / `_replay_loop`**. Code is `src/hardware/` (`dual_arm.py`,
+  `arm_driver.py`, `_feetech_bus.py`) and `src/server/` (`app.py`, `sessions.py`, …); the vendored
+  `services/robot-arm/src/arm/leader_follower.py` in this repo is a different, older tree.
+- Replay is the module-level `replay_session(arms, source_path, loops, stop_event)` in `src/hardware/dual_arm.py`.
+  `src/server/sessions.py` imports it **by name** and runs it in a worker thread with the run id on the logging
+  context (`set_current_run_id`), so `arms.logger.log_event(...)` from inside reaches BIMS as a run event
+  (`app.py _forward_to_bims` → `BimsClient` → `/api/robot-arm/webhook`, which stores the record as `payload`).
+- The bus is `arms.follower`, a `FeetechBus` with `read(sid, "Present_Position")` / `write(sid, "Goal_Position",
+  v)`, one servo at a time. There is no `sync_read_positions` / `sync_write_positions`.
+- Recordings live in `~/robot-arm/datasets/`; `GET /recordings` lists `path` as `datasets/<name>.jsonl` and
+  `/replay/start` takes that path (relative to the working directory).
 
-1. **Read first, change nothing:**
-   ```
-   ls ~/robot-arm/src/arm ~/robot-arm/src/server; systemctl cat robot-arm | grep -E "ExecStart|WorkingDirectory"
-   grep -n "^class \|def _replay_loop\|def _emit\|self\.follower\b\|self\.source\b\|self\.loops\b\|self\._cancel\b" ~/robot-arm/src/arm/dual_arm.py
-   grep -n "^from arm\|^import arm\|include_router\|install(" ~/robot-arm/src/server/app.py
-   grep -n "def sync_read_positions\|def sync_write_positions" ~/robot-arm/src/arm/driver.py
-   ```
-   `replay_settle._replay_loop_settling` relies on `self.follower`, `self.source`, `self.loops`,
-   `self._cancel` (threading.Event) and `self._emit(suffix, extra)`, and on the driver's
-   `sync_read_positions()` / `sync_write_positions(dict)`. If any name differs, edit the five
-   references at the top of that function and push the fix to #124 before installing.
-2. **Install:** copy `replay_settle.py` into `src/arm/`; `python3 scripts/install_replay_settle.py --check`,
-   then without `--check` (it finds the session class by `def _replay_loop`, warns on missing names,
-   inserts `from arm import replay_settle as _replay_settle` + `_replay_settle.install(<Class>)` into
-   `app.py`, keeps `app.py.bak-replay-settle`); `sudo systemctl restart robot-arm`; confirm `/health`.
-3. **Also still pending from 2026-10-21:** the hold route (`src/server/hold.py`,
-   `scripts/install_hold_router.py`, PRD §4). Without it, by-hand capture leaves torque off.
-4. **Test on the arm (user present, path clear):** in a move set give one pose a **1 s hold** (a stop
-   with no hold gives the Pi no window), Play, watch the claw land and stay. Check: the run in
-   `robot_arm_runs` gained a `replay.settle` event; the playback line under Play says per pose "on
-   target (n rounds)" or "still k steps off when the hold ran out"; `robot_arm_poses.trim` updated;
-   audit `pose_droop_from_replay`. If residuals oscillate, raise `SETTLE_WAIT_S` to 0.4.
-5. **Re-save** any recording already on the Pi (Save to Pi) — old files keep the trims they had.
+**Done 2026-10-22 13:07 CDT (feat/animate-replay-settle @ 4b63d04b):**
+1. `src/hardware/replay_settle.py` copied to the Pi, `scripts/install_replay_settle.py` + `simulate_replay_settle.py`
+   to `~/robot-arm/scripts/`. Simulation passes in the Pi venv; rebinding verified against the real
+   `src.server.sessions` (before `src.hardware.dual_arm.replay_session`, after
+   `src.hardware.replay_settle.replay_session_settling`, same signature).
+2. Installer `--check` then apply: app.py lines 59–60 now `from src.hardware import replay_settle as
+   _replay_settle` / `_replay_settle.install()` (backup `app.py.bak-replay-settle`). Service restarted with no
+   session active; `/health` ok, startup log clean. Recordings without settle flags play exactly as before, so
+   nothing changes for the Control tab until the BIMS half of #124 is merged and a move set is re-saved.
+
+**Still to do:**
+3. **Hold route** (`src/server/hold.py`, `scripts/install_hold_router.py`, PRD §4) is still not installed — every
+   by-hand capture audits `hold_failed`. Same procedure: copy to `src/server/`, run the installer, restart when idle.
+4. **Test on the arm (user present, path clear):** merge #123 + #124 (BIMS half), then in a move set give one pose a
+   **1 s hold** (a stop with no hold gives the Pi no window), Play, watch the claw land and stay. Check: the run in
+   `robot_arm_runs` gained a `replay.settle` event; the playback line under Play says per pose "on target (n
+   rounds)" or "still k steps off when the hold ran out"; `robot_arm_poses.trim` updated; audit
+   `pose_droop_from_replay`. If residuals oscillate, raise `SETTLE_WAIT_S` to 0.4.
+5. **Re-save** any recording already on the Pi (Save to Pi) — old files have no settle flags.
+6. **Camera, seen right after the 13:07 restart:** the RealSense colour node `/dev/video4` disappeared (only
+   video0/1/2 depth/IR remain; dmesg `uvcvideo 4-1:1.4: Failed to resubmit video URB (-1)`; `/cameras` reports
+   device null). Unrelated to the module; needs a USB re-enumeration or a cable replug, then confirm `/cameras`
+   shows `running: true` at 1920x1080.
+
+To roll back: `cp ~/robot-arm/src/server/app.py.bak-replay-settle ~/robot-arm/src/server/app.py` and restart when idle.
 
 ## 6. Code map
 
@@ -133,7 +150,7 @@ the npm registry and untar into a `node_modules`; `npm` is absent on the dev PC)
 | `src/lib/components/robot-arm/AnimationCurves.svelte` | timeline: joint dots (drag/arrow keys), ◆ arrival, ▮ hold handles |
 | `animate/+page.server.ts`, `animate/{moveset,sequence}/[id]/+page.server.ts` | `goToPose`, `clearDroop`, `settle` actions |
 | models `robot-arm-pose.ts` (`trim`, `trimMeasuredAt/By`), `robot-arm-move-set.ts` (`keyframes.offsets`, `lastPlay.end/settledAt`), `robot-arm-sequence.ts` | |
-| `services/robot-arm/src/arm/replay_settle.py`, `scripts/install_replay_settle.py` | the Pi half (#124) |
+| `services/robot-arm/src/hardware/replay_settle.py`, `scripts/install_replay_settle.py`, `scripts/simulate_replay_settle.py` | the Pi half (#124): drop-in `replay_session_settling`, layout-checking installer, fake-bus simulation |
 | `src/routes/api/robot-arm/webhook/+server.ts` | unchanged; `replay.settle` lands there as an ordinary run event |
 
 Audit actions: `robot_arm.animate.pose_droop_measure` (#122), `pose_droop_settle`, `pose_droop_skip`
