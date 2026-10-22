@@ -98,7 +98,9 @@ export const actions: Actions = {
 			// Save the editor's current state first, so the Pi gets what is on screen.
 			const payload = data.get('payload')?.toString();
 			if (payload) await saveCleanup(locals.user, params.id, payload);
-			const savedAs = await saveToPi(locals.user, params.id, data.get('name')?.toString() ?? '');
+			const savedAs = await saveToPi(locals.user, params.id, data.get('name')?.toString() ?? '', {
+				replace: data.get('replace')?.toString() === 'on'
+			});
 			return { saved: true, savedAs };
 		} catch (err) {
 			return failed(err);

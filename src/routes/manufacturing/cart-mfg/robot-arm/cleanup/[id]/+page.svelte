@@ -9,9 +9,11 @@
 	import { beforeNavigate, goto, invalidateAll } from '$app/navigation';
 	import type { ActionResult } from '@sveltejs/kit';
 	import CleanupTimeline from '$lib/components/robot-arm/CleanupTimeline.svelte';
+	import OverlayChart from '$lib/components/robot-arm/OverlayChart.svelte';
 	import {
 		DEFAULT_ANIMATION_EASING,
 		SERVO_IDS,
+		composeRecording,
 		draftToAnimation,
 		newStepId,
 		resolveSteps,
@@ -21,7 +23,14 @@
 		type CleanStep
 	} from '$lib/robot-arm/recording-cleanup';
 	import { EASINGS, type Easing } from '$lib/robot-arm/animation';
-	import { STEPS_PER_DEGREE } from '$lib/robot-arm/recording-steps';
+	import { STEPS_PER_DEGREE, parseRecording } from '$lib/robot-arm/recording-steps';
+	import { seriesFromFrames } from '$lib/robot-arm/recording-overlay';
+	import {
+		MAX_SMOOTH_WINDOW_S,
+		SMOOTH_SOURCES,
+		smoothSeries,
+		type SmoothOptions
+	} from '$lib/robot-arm/recording-smooth';
 
 	let { data } = $props();
 
@@ -40,12 +49,16 @@
 	let title = $state(initial.title);
 	let start = $state<Record<string, number>>(initial.start);
 	let steps = $state<CleanStep[]>(initial.steps);
-	let savedJson = $state(JSON.stringify(initial));
+	// Smoothing settings: saved with Save / Save to Pi, not part of Undo (every slider move would be an entry).
+	const smoothingFromData = (): SmoothOptions => JSON.parse(JSON.stringify(data.cleanup.smoothing));
+	let smoothing = $state<SmoothOptions>(smoothingFromData());
+	const payloadJson = () => JSON.stringify({ ...snapshot(), smoothing: $state.snapshot(smoothing) });
+	let savedJson = $state(JSON.stringify({ ...initial, smoothing: smoothingFromData() }));
 	let undoStack = $state<string[]>([]);
 	let redoStack = $state<string[]>([]);
 
 	const snapshot = (): Snapshot => $state.snapshot({ title, start, steps }) as Snapshot;
-	const currentJson = $derived(JSON.stringify({ title, start, steps }));
+	const currentJson = $derived(JSON.stringify({ title, start, steps, smoothing }));
 	const dirty = $derived(currentJson !== savedJson);
 
 	function restore(json: string) {
@@ -119,7 +132,7 @@
 
 	// --- save --------------------------------------------------------------
 	async function save() {
-		const json = JSON.stringify(snapshot());
+		const json = payloadJson();
 		const ok = await run<{ saved: boolean }>('save', 'save', { payload: json });
 		if (ok) {
 			savedJson = json;
@@ -127,28 +140,65 @@
 		}
 	}
 
+	const stemOf = (n: string) => n.replace(/\.jsonl$/i, '');
 	function suggestedName() {
-		const stem = data.cleanup.sourceName.replace(/\.jsonl$/i, '');
+		const stem = stemOf(data.cleanup.sourceName);
 		const n = data.cleanup.savedAs.length;
-		return `${stem}-clean${n ? `-${n + 1}` : ''}`;
+		return `${stem}-${smoothing.enabled ? 'smooth' : 'clean'}${n ? `-${n + 1}` : ''}`;
 	}
 	let piName = $state(suggestedName());
+	/** Names this clean-up already saved to the Pi (stems): saving under one again can replace it. */
+	const ownNames = $derived(new Set(data.cleanup.savedAs.map((e) => stemOf(e.name))));
+	const lastSaved = $derived(data.cleanup.savedAs.at(-1) ?? null);
+	let replace = $state(false);
+	const nameIsOurs = $derived(ownNames.has(piName.trim()));
+	const needsSteps = $derived(!smoothing.enabled || smoothing.source === 'steps');
+	function useLastName() {
+		if (!lastSaved) return;
+		piName = stemOf(lastSaved.name);
+		replace = true;
+	}
 	async function saveToPi() {
-		if (!steps.length) return;
-		const json = JSON.stringify(snapshot());
-		const r = await run<{ savedAs: { name: string; frames: number; durationS: number } }>('pi', 'saveToPi', {
+		if (needsSteps && !steps.length) return;
+		if (replace && nameIsOurs && !confirm(`Replace "${piName.trim()}.jsonl" on the Pi with this version? The old file is deleted first.`)) return;
+		const json = payloadJson();
+		const r = await run<{ savedAs: { name: string; frames: number; durationS: number; smoothed: boolean; replaced: boolean } }>('pi', 'saveToPi', {
 			payload: json,
-			name: piName
+			name: piName,
+			replace: replace && nameIsOurs ? 'on' : ''
 		});
 		if (r) {
 			savedJson = json;
+			const what = r.savedAs.smoothed ? 'smoothed' : 'steps as straight lines';
 			notice = {
 				kind: 'ok',
-				text: `Saved on the Pi as "${r.savedAs.name}" (${r.savedAs.frames} frames, ${r.savedAs.durationS.toFixed(1)} s). Replay it from the Control tab.`
+				text: `${r.savedAs.replaced ? 'Replaced' : 'Saved'} on the Pi as "${r.savedAs.name}" (${what}; ${r.savedAs.frames} frames, ${r.savedAs.durationS.toFixed(1)} s). Replay it from the Control tab.`
 			};
 			await invalidateAll();
-			piName = suggestedName();
+			if (!r.savedAs.replaced) piName = suggestedName();
+			replace = false;
 		}
+	}
+
+	// --- smoothing preview --------------------------------------------------
+	// The same pure smoothing the server saves with, on the recording's trace (thinned past
+	// 6000 frames for display; the server uses every frame) or on the steps as Save to Pi renders them.
+	const smoothSource = $derived.by(() => {
+		if (smoothing.source === 'steps') {
+			if (!steps.length) return null;
+			try {
+				const out = composeRecording({ start, steps }, { sourceHeader: null, sourceName: '', rateHz: data.cleanup.rateHz });
+				return seriesFromFrames(parseRecording(out.jsonl).frames);
+			} catch {
+				return null;
+			}
+		}
+		return { t: data.cleanup.trace.t, goal: data.cleanup.trace.goal };
+	});
+	const smoothPreview = $derived(smoothing.enabled && smoothSource && smoothing.servos.length ? smoothSeries(smoothSource, smoothing) : null);
+	const servoOn = $derived(SERVO_IDS.map((sid) => smoothing.servos.includes(sid)));
+	function toggleServo(sid: number, on: boolean) {
+		smoothing.servos = on ? [...new Set([...smoothing.servos, sid])].sort((a, b) => a - b) : smoothing.servos.filter((x) => x !== sid);
 	}
 
 	// --- to the Animate tab ---------------------------------------------------
@@ -170,7 +220,7 @@
 	const listSteps = (ns: number[]) => `Step${ns.length > 1 ? 's' : ''} ${ns.join(', ')}`;
 	async function sendToAnimate() {
 		if (!steps.length || animatePreview.error) return;
-		const json = JSON.stringify(snapshot());
+		const json = payloadJson();
 		const r = await run<{ animate: { moveSetId: string; name: string; poses: number; keyframes: number } }>('animate', 'toAnimate', {
 			payload: json,
 			name: animateName,
@@ -197,7 +247,7 @@
 			await invalidateAll();
 			const fresh = fromData();
 			restore(JSON.stringify(fresh));
-			savedJson = JSON.stringify(fresh);
+			savedJson = JSON.stringify({ ...fresh, smoothing: $state.snapshot(smoothing) });
 			undoStack = [];
 			redoStack = [];
 			selectedId = null;
@@ -444,6 +494,101 @@
 			{selectedId}
 			onselect={select}
 		/>
+	</section>
+
+	<!-- Smoothing: what Save to Pi writes when on; the settings are kept, so this can be re-tuned and re-saved later -->
+	<section class="rounded-lg border bg-[var(--color-tron-surface)] p-4 {smoothing.enabled ? 'border-[var(--color-tron-cyan)]/50' : 'border-[var(--color-tron-border)]'}">
+		<div class="flex flex-wrap items-start justify-between gap-3">
+			<div class="min-w-0 flex-1">
+				<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Smoothing</h2>
+				<p class="mt-1 text-[11px]" style="color: var(--color-tron-text-secondary)">
+					Takes the hand tremor out of the path and eases into and out of every stop, keeping the stops where the pilot
+					held still. Save to Pi writes the smoothed path when this is on. The settings are saved with the clean-up:
+					come back any time, move the sliders, and save again (tick <em>Replace it</em> to update the same file).
+				</p>
+			</div>
+			<label class="flex items-center gap-2 text-sm" style="color: var(--color-tron-text)">
+				<input type="checkbox" bind:checked={smoothing.enabled} class="h-4 w-4 accent-cyan-400" />
+				Smooth when saving to the Pi
+			</label>
+		</div>
+
+		{#if smoothing.enabled}
+			<div class="mt-3 grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
+				<div class="space-y-3 text-xs" style="color: var(--color-tron-text-secondary)">
+					<div class="flex flex-wrap gap-x-4 gap-y-1">
+						<span class="font-semibold uppercase tracking-wider">Smooth</span>
+						{#each SMOOTH_SOURCES as src (src.id)}
+							<label class="flex items-center gap-1.5" title={src.hint}>
+								<input type="radio" name="smooth-source" value={src.id} bind:group={smoothing.source} class="accent-cyan-400" />
+								<span style="color: var(--color-tron-text)">{src.label}</span>
+							</label>
+						{/each}
+					</div>
+					<label class="block">
+						<span class="flex justify-between"><span>Smoothing window</span><span class="font-mono" style="color: var(--color-tron-text)">{smoothing.windowS.toFixed(1)} s</span></span>
+						<input type="range" min="0" max={MAX_SMOOTH_WINDOW_S} step="0.1" bind:value={smoothing.windowS} class="mt-1 w-full accent-cyan-400" />
+						<span class="text-[11px]">Wider = smoother and slower to change direction. Around 0.3–1 s takes out tremor and keeps the shape.</span>
+					</label>
+					<label class="block">
+						<span class="flex justify-between"><span>Strength</span><span class="font-mono" style="color: var(--color-tron-text)">{Math.round(smoothing.strength * 100)}%</span></span>
+						<input
+							type="range"
+							min="0"
+							max="100"
+							step="5"
+							value={Math.round(smoothing.strength * 100)}
+							oninput={(e) => (smoothing.strength = Number((e.currentTarget as HTMLInputElement).value) / 100)}
+							class="mt-1 w-full accent-cyan-400"
+						/>
+						<span class="text-[11px]">100% = fully smoothed; lower blends back toward the source.</span>
+					</label>
+					<label class="flex items-center gap-1.5" title="Every stretch where the arm held still for 0.3 s or more is pinned to where it was held, so smoothing never shortens a reach.">
+						<input type="checkbox" bind:checked={smoothing.keepStops} class="accent-cyan-400" />
+						<span style="color: var(--color-tron-text)">Keep stops exact</span>
+					</label>
+					<div>
+						Servos to smooth
+						<div class="mt-1 grid grid-cols-3 gap-1">
+							{#each SERVO_IDS as sid, i (sid)}
+								<label class="flex items-center gap-1 rounded border border-[var(--color-tron-border)] px-1.5 py-1 text-[11px]" title={names[i]}>
+									<input type="checkbox" checked={servoOn[i]} onchange={(e) => toggleServo(sid, (e.currentTarget as HTMLInputElement).checked)} class="accent-cyan-400" />
+									<span class="font-mono text-cyan-400">{sid}</span>
+									<span class="truncate">{names[i]}</span>
+								</label>
+							{/each}
+						</div>
+					</div>
+					{#if smoothPreview}
+						<p class="text-[11px]">
+							{smoothPreview.stops.length} stop{smoothPreview.stops.length === 1 ? '' : 's'} kept. Fastest servo
+							{smoothPreview.sourcePeakSpeed} → <strong style="color: var(--color-tron-text)">{smoothPreview.peakSpeed}</strong> steps/s.
+							Largest change:
+							{smoothPreview.servos.filter((x) => x.smoothed).map((x) => `${names[x.servoId - 1]} ${x.maxChange}`).join(', ')} steps.
+						</p>
+					{:else if smoothing.source === 'steps' && !steps.length}
+						<p class="text-[11px] text-amber-300">There are no steps to smooth.</p>
+					{:else if !smoothing.servos.length}
+						<p class="text-[11px] text-amber-300">Tick at least one servo.</p>
+					{/if}
+					{#if dirty}
+						<p class="text-[11px] text-amber-300">Unsaved — Save or Save to Pi keeps these settings.</p>
+					{/if}
+				</div>
+				<div class="min-w-0">
+					{#if smoothPreview && smoothSource}
+						<OverlayChart
+							t={smoothSource.t}
+							smooth={smoothSource.goal}
+							result={smoothPreview.goal}
+							jointNames={names}
+							corrected={servoOn}
+							labels={{ smooth: smoothing.source === 'steps' ? 'your steps' : 'recorded', pilot: '', result: 'smoothed' }}
+						/>
+					{/if}
+				</div>
+			</div>
+		{/if}
 	</section>
 
 	<!-- Start pose -->
@@ -727,19 +872,38 @@
 		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4">
 			<h2 class="mb-1 text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Save to Pi</h2>
 			<p class="mb-3 text-[11px]" style="color: var(--color-tron-text-secondary)">
-				Writes a new recording on the Pi: each step moves its servos together in a straight line over its
-				time, then waits. Replay it from the Control tab like any recording. The original stays as it is.
+				{#if smoothing.enabled}
+					Writes a recording on the Pi: {smoothing.source === 'steps' ? 'your steps' : 'the recording'}, smoothed with the
+					settings in the Smoothing card above. Replay it from the Control tab like any recording. The original stays as
+					it is.
+				{:else}
+					Writes a new recording on the Pi: each step moves its servos together in a straight line over its
+					time, then waits. Turn on smoothing above for a smooth path instead. Replay it from the Control tab. The
+					original stays as it is.
+				{/if}
 			</p>
 			<div class="flex gap-2">
 				<input bind:value={piName} class="{inputCls} min-w-0 flex-1 py-1 font-sans text-sm" style="color: var(--color-tron-text)" />
 				<button
 					type="button"
 					onclick={saveToPi}
-					disabled={!armReachable || busy !== null || !steps.length || !piName.trim()}
+					disabled={!armReachable || busy !== null || (needsSteps && !steps.length) || !piName.trim()}
 					class="rounded border border-emerald-500/50 bg-emerald-900/10 px-3 py-1 text-sm font-medium text-emerald-300 transition-colors hover:bg-emerald-900/25 disabled:cursor-not-allowed disabled:opacity-40"
 				>
-					{busy === 'pi' ? 'Saving…' : 'Save to Pi'}
+					{busy === 'pi' ? 'Saving…' : replace && nameIsOurs ? 'Replace on Pi' : 'Save to Pi'}
 				</button>
+			</div>
+			<div class="mt-2 flex flex-wrap items-center gap-3 text-[11px]" style="color: var(--color-tron-text-secondary)">
+				{#if nameIsOurs}
+					<label class="flex items-center gap-1.5" title="This clean-up saved a recording with this name before. Replace deletes it on the Pi and writes this version.">
+						<input type="checkbox" bind:checked={replace} class="accent-emerald-400" />
+						<span style="color: var(--color-tron-text)">Replace it</span> (saved from here before)
+					</label>
+				{:else if lastSaved}
+					<button type="button" class="underline decoration-dotted hover:text-[var(--color-tron-cyan)]" onclick={useLastName}>
+						update {lastSaved.name} instead
+					</button>
+				{/if}
 			</div>
 			{#if data.cleanup.savedAs.length}
 				<ul class="mt-3 space-y-0.5 text-[11px]" style="color: var(--color-tron-text-secondary)">
@@ -747,6 +911,7 @@
 						<li>
 							<span class="font-mono" style="color: var(--color-tron-text)">{s.name}</span>
 							· {new Date(s.at).toLocaleString()}{#if s.by} · {s.by.username}{/if}{#if s.durationS} · {s.durationS.toFixed(1)} s{/if}
+							· {#if s.smoothing}smoothed {s.smoothing.windowS} s, {Math.round(s.smoothing.strength * 100)}%{:else}straight lines{/if}{#if s.replaced} · replaced{/if}
 						</li>
 					{/each}
 				</ul>
