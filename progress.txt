@@ -3456,6 +3456,8 @@ Source: branch master @ commit 4a0fca2af (merge of PR #19, feat/stream-view-filt
 Retrieve this exact code: git checkout master at commit 4a0fca2af
 What this deployment is for: /cv/stream View filter (Top/Bottom/Untagged) + per-card view
 badge, making the barcode-backfilled view tags browsable.
+
+================================================================================
 2026-07-08 — master (working tree) — R04 reagent "not running" = calibrator log-flood at particle-ID read; robust-ID fix + R04 deploy script
 ================================================================================
 Operator report: reagent test fill on R04 "not running". Diagnosis from the robot's own run record
@@ -3568,7 +3570,8 @@ What this deployment is for: ships the Deck Calibration "Align selection → anc
 
 ================================================================================
 2026-07-09 — feat/cartridge-induct — deliberate cartridge induct recovered at /cv/induct
-=========================================================================Recovered the induct capability that died in the cartridge-first refactor
+================================================================================
+Recovered the induct capability that died in the cartridge-first refactor
 (398f02c2e), redesigned as a deliberate flow instead of the old any-scan
 auto-create: new /cv/induct page (CV nav "Induct") where the operator picks
 what the cartridge should be ready for — Wax inspection (status wax_stored),
@@ -4125,6 +4128,7 @@ log table and covers row checkboxes (blocked selecting an 8th row).
 
 ================================================================================
 2026-07-30 — feat/optical-group-comparison — optical confirmation: compare groups
+================================================================================
 of SPUs against each other, robust median/MAD outliers
 ================================================================================
 Extends optical-confirmation validation from "analyze one ad-hoc list of
@@ -4244,6 +4248,8 @@ Retrieve this exact code: git checkout feat/optical-group-comparison at commit e
 What this deployment is for: reviewing group-vs-group optical comparison — name a
   checked selection as a group on the log, then compare groups per well with
   median/MAD outlier flagging, a strip plot, and CSV export.
+
+================================================================================
 2026-07-09 — data fix — deck-001 (R04) cartridge 8 left reverted: A2/A4/A6/A8 restored
 ================================================================================
 Operator asked to revert "cartridge 8 on the left" (deck-001, R04) in the Studio. History
@@ -5020,7 +5026,8 @@ What this deployment is for: today's known-good calibration is restorable foreve
 
 ================================================================================
 2026-07-29 — feat/mcp-live — Remote MCP server at /api/mcp (wraps the agent API; kanban-first tool surface)
-=========================================================================Converted the BIMS agent REST API into a remote MCP server that Claude Desktop /
+================================================================================
+Converted the BIMS agent REST API into a remote MCP server that Claude Desktop /
 claude.ai / Claude-in-Chrome custom connectors can reach. Supersedes the localhost-only
 services/bims-mcp prototype (left in place): the endpoint now lives INSIDE the SvelteKit
 app, so it deploys with every push at a public HTTPS URL (custom connectors dial in from
@@ -5207,6 +5214,8 @@ Still outstanding (story S0, deliberately not done in this commit): the three Pi
 misconfigurations listed in the entry above. Restarting the robot-arm service has a
 physical-motion consequence (the Pi's .env says DRY_RUN=false), so that work is held
 for explicit approval rather than bundled into a deploy.
+
+================================================================================
 2026-07-30 — master — Operator was right: Studio tip-cal probed at the WRONG HEIGHT (38.5 park vs the fill's 40.8) — fixed fleet-wide
 ================================================================================
 Operator kept insisting the calibrator z difference between the Studio (38.5) and the reagent fill
@@ -5233,6 +5242,7 @@ What this deployment is for: Studio Calibrate-tip and fill probes contact the ca
 
 ================================================================================
 2026-07-30 — fix/mag-test-run-time — magnetometer shows when the test RAN, not
+================================================================================
 when the data was pulled
 ================================================================================
 "Fetch Results" on /validation/magnetometer reads the magnet_validation Particle
@@ -5320,6 +5330,8 @@ Retrieve this exact code: git checkout fix/mag-test-run-time at commit 35d1d792
 What this deployment is for: confirming Fetch Results reports the device's own
   test time rather than the poll time, that stale reads are called out, and that
   magnetometer history is populated again.
+
+================================================================================
 2026-07-30 — feat/arm-pi-connection — Pi-side arm bring-up completed; preview rebuilt to pick up corrected ROBOT_ARM_BASE_URL
 ================================================================================
 This deploy carries NO new BIMS code. Its only purpose was to produce a fresh preview
@@ -6235,6 +6247,7 @@ Future flag (not done): slim sweep-command payloads (9KB avg); move cartridge ph
 of cartridge_records (35KB avg docs).
 npm run check: 11 errors — unchanged baseline.
 
+================================================================================
 2026-07-31 — master — optics by SPU/device/date: device.name linkage (MCP v2.7.0)
 ================================================================================
 Alejandro pasted a connector-Claude response claiming optics was unreachable ("no saved
@@ -6358,6 +6371,7 @@ promise; unknown-time projects enter as milestones or spikes, never as themselve
 PRDs: docs/prds/KB2-11-workflow-templates.md, KB2-12-sizing-doctrine-process-ux.md.
 npm run check: 11 errors — unchanged baseline.
 
+================================================================================
 2026-07-31 — master — one-Z-per-cell magnetometer everywhere + stale-session steering
 ================================================================================
 Alejandro: magnetometer responses show "3 values per box" (the assistant formats raw
@@ -6446,8 +6460,11 @@ will exist or be true when this is done, and how you'd verify it. Outcome, not s
   change in practice, script kept for any stragglers.
 npm run check: 11 errors — unchanged baseline.
 
+================================================================================
 2026-08-03 — master — Queue page: horizontal single-lane board, capture removed, renamed Queue
+================================================================================
 2026-08-03 — master — Queue page: min-order banner removed; supply panel hidden when no targets
+================================================================================
 
 ================================================================================
 2026-08-03 - master - KB2-13 supply loops: autopilot supply cards straight to ready (MCP v2.13.0)
@@ -6486,7 +6503,9 @@ AND the pull window (pullable at any rank); they join the bottom of the ready ra
   updated; server version 2.12.0 -> 2.13.0.
 npm run check: 11 errors - unchanged baseline (r2.ts, AskBimsWidget, assembly, parts).
 
+================================================================================
 2026-08-03 — master — Queue page: subtitle line removed
+================================================================================
 
 ================================================================================
 2026-08-03 — feat/perm-01-hot-fixes — Permissions rewrite kickoff: PRD series + hot security fixes
@@ -7339,6 +7358,7 @@ again (elapsed demoted to a secondary line), still robot-driven for completion.
 
 ================================================================================
 2026-08-13 — feat/magnetometer-stage-calibration — SPU magnetometer stage
+================================================================================
 calibration tool + live stage position during moves
 ================================================================================
 Alejandro: "try to recover work on the magnetometer calibration feature for the
@@ -7667,6 +7687,8 @@ Verification status:
            tracking numbers, typed task links, Tier 1 tag autocomplete).
   note:    pre-existing tasks still have no tracking number — backfill is a
            separate /px-off ID-keyed pass, not done here.
+
+================================================================================
 2026-08-17 — feat/wax-status-simplify — WAX-SIMPLIFY-1..3: wax_stored dropped, reject-only wax inspection, reagent gate widened
 ================================================================================
 Jacob's decisions (conversation 2026-08-17): (1) wax_stored is redundant — "if they have been
@@ -7745,6 +7767,7 @@ dry run. 227 wax_stored → wax_filled, 196 wax_qc → wax_filled (priorStatus +
 cart, changedBy 'migration:wax-simplify'), 0 standing targets touched. Wax-stage counts now:
 wax_filled=440, wax_ready=330. Re-run dry: 0/0/0. The deploy-day runbook above is COMPLETE.
 
+================================================================================
 2026-08-17 — jq/barcode-scanning — Zebra ZT230 cartridge barcode printing via Browser Print
 ================================================================================
 New branch + worktree (..\Bioscale_Operations_System_V2-jq-barcode-scanning) for a run of
@@ -8034,6 +8057,7 @@ Source: branch master @ commit 87450841
 Retrieve this exact code: git checkout master at commit 87450841
 What this deployment is for: "Start at cartridge 16" with 9 scanned cartridges runs 16..24 instead of an empty run.
 
+================================================================================
 2026-08-18 — jq/barcode-scanning → master — ZT230 final calibration (ruler-measured), 100-label live run clean, session notes
 ================================================================================
 Full narrative of the bench session (setup gotchas, every calibration step and why,
@@ -8681,6 +8705,8 @@ so the client never polls; the page shows a neutral "Capture only — CV inferen
 off for reagent inspect for now" notice instead of the deploy-status banner. Photo still
 advances reagent_filled → reagent_qc; the scan-gated human verdict is unchanged. To re-enable,
 remove 'reagent_filled' from the set. npm run check: 11 errors / 434 warnings — baseline.
+
+================================================================================
 2026-08-19 — feat/robot-arm-movement-tests — unblock BIMS robot-arm movement tests
 ================================================================================
 Two-part fix: get the replacement leader BusLinker recognised, then make BIMS
@@ -9375,6 +9401,7 @@ clamp horizon. npm run check: 11/434 baseline.
 
 ================================================================================
 2026-08-21 — feat/spu-mfg-tabs — SPU Mfg gets a section tab strip (Assembly / Work
+================================================================================
 Instructions / Validation), consolidated out of the left nav
 ================================================================================
 SPU Mfg was a bare page while Cart Mfg (/manufacturing/cart-mfg) had a proper tab
@@ -10414,6 +10441,8 @@ Verified reachable: GET /spu/cleaning -> 302 /login (cookie auth, as expected).
 NOT verified in-app: nobody has logged in, created an area, or signed off an
 occurrence. Zero cleaning_areas exist yet, so the calendar renders empty until
 someone adds an area - that is the first thing to do when testing.
+
+================================================================================
 2026-08-27 — master — reagent partial-fill sweep: server-side clamp (tab-state loss made it sweep 24 again)
 ================================================================================
 Recurrence of the 08-24 bug, witnessed on R04 (20 selected, 24 swept at 18:49Z) while B07 swept 20
@@ -10818,6 +10847,7 @@ Deployment: production — Vercel auto-deploy from master push
 Source: branch master @ this commit
 What this deployment is for: teaching a rim now stores the rim.
 
+================================================================================
 2026-08-31 — feat/spu-servicing-ui-master — servicing short ID fix + barcode assignment UI committed
 ================================================================================
 Two fixes on the SPU servicing branch, both from a session that died before committing.
@@ -11247,7 +11277,9 @@ Source: branch feat/kanban-capture-modes @ the KB2-39 commit above (git log feat
 Retrieve this exact code: git checkout feat/kanban-capture-modes at that commit
 What this deployment is for: QA of KB2-39 — Tier 1 By-chain view + Process-chain walk, roadmap chain rails, plan ↔ chain link, task-page chain context.
 
+================================================================================
 2026-09-01 — feat/kanban-capture-modes — KB2-39 browser QA fixes (local dev server + Chrome)
+================================================================================
 Browser QA earned its keep again (see the KB2-35 lesson): (1) /kanban/roadmap threw
 "$$props.pinned.map is not a function" — the roadmap load inserted deriveChains() in the MIDDLE
 of the Promise.all array while destructuring it as the LAST element, so `pinned` received the
@@ -11557,6 +11589,8 @@ finalizedAt never set + Delete-SPU button bypasses sacred middleware (source of 
 session spuIds); lux/location/corrections are dead schema branches. Analysis only — no app code
 changed. Fix order proposed in the doc (audit-trail one-liner first; append-whitelist sacred
 middleware before ever setting finalizedAt).
+
+================================================================================
 2026-09-02 — feat/thermo-manual-verdict — thermocouple step: operator Pass/Fail is the verdict
 ================================================================================
 The thermocouple step on the validation run detail (/validation/runs/[runId], reached
@@ -11894,6 +11928,8 @@ priority demotion. Six-step bench acceptance checklist included (0243/0250).
 Governance model now complete on paper: servicing (board scan) and release are the only human-set
 statuses; everything else automatic (SPU-INV-12); once v92 flashes, the device itself enforces
 "no customer tests until a human releases."
+
+================================================================================
 2026-09-04 — fix/thermo-stale-upload-state — thermocouple upload: stale readings could be saved against the wrong SPU
 ================================================================================
 Root cause of a real data-integrity incident found while investigating "SPU 257 thermocouple
@@ -12434,6 +12470,7 @@ status linked, priorStatus wax_filled, backing + waxFilling blocks intact, 4 BCO
 npm run check: 10/435 — baseline.
 ================================================================================
 2026-09-10 — fix/duplicate-timestamp-keys-blank-validation-pages — session pages blanked by
+================================================================================
 duplicate reading timestamps
 ================================================================================
 Opening a thermocouple session from the run log rendered a blank page. On a hard refresh the page
@@ -12468,6 +12505,8 @@ Deployment: production — building from the GitHub push to master (Vercel dashb
 Source: branch master @ commit fbe1f585 (squash merge of PR #50)
 Retrieve this exact code: git checkout master at commit fbe1f585
 What this deployment is for: thermocouple/magnetometer session pages no longer blank on open
+
+================================================================================
 2026-09-10 — feat/spu-tweaks — optical assign adopts manufacturing-state cartridges
 =========================================================================
 Deployment: production — building from the GitHub push to master (Vercel dashboard, commit below)
@@ -12596,6 +12635,8 @@ Deployment: production — building from the GitHub push to master (Vercel dashb
 Source: branch master @ commit 4f219b7f (squash merge of PR #51)
 Retrieve this exact code: git checkout master at commit 4f219b7f
 What this deployment is for: fleet matrix sortable by unit number, date sort still the default
+
+================================================================================
 2026-09-10 — feat/spu-tweaks — optical group detail: replicate toggle, device exclusion, fitted Gaussian
 =========================================================================
 Deployment: production — building from the GitHub push to master (Vercel dashboard, commit below)
@@ -12959,7 +13000,8 @@ What this deployment is for: bench page with all four read settings fixed
 
 ================================================================================
 2026-09-18 — feat/spu-tweaks — optical QC analysis session (read-only) + one group-membership data fix
-=========================================================================No code changed. Read-only analysis of production optical data, delivered as two private
+================================================================================
+No code changed. Read-only analysis of production optical data, delivered as two private
 Claude artifacts: the 9_10 optical confirmation group (per unit+channel: direct-laser F1,
 blank-cartridge ΣF1–F8, F7/F3 per replicate) and the 9_18 optical degradation group
 (F7/F3 for each of the 10 repeat scans per unit+channel, plus laser / blank / dark reads).
@@ -13080,6 +13122,7 @@ batch; every batch drained with no paper/ribbon/head flags and confirmed atomica
 (batch 22) Claude Code reaped the wrapper shell for low system memory; the node process itself
 survived and finished unattended — no batch was left reserved-but-printed.
 
+================================================================================
 2026-09-18 — feat/thermocouple-two-channels — the parser averaged the two probes into one
 ================================================================================
 Alejandro: "the bims only displays one temperature and does not show the 2 channels."
@@ -14006,6 +14049,7 @@ Deployment: production — Vercel auto-deploy from the master push
 Source: branch master @ this commit
 What this deployment is for: the wax parameters form on B07 displays the 3.5 mm floor it will run.
 
+================================================================================
 2026-09-24 — master — magnetometer SPU-vs-SPU comparison + sweep viewer
 ================================================================================
 Three new routes, all additive. Nothing existing was modified.
@@ -16354,6 +16398,8 @@ Retrieve this exact code: git checkout feat/bucket-system at commit 1590a96b
   (or: git log feat/bucket-system --oneline to find it if the branch has since moved on)
 What this deployment is for: the helper line under Move to oven. Smoke: /login 200; buckets 302.
 Build status: success (GitHub deployment 6670000921, both projects).
+
+================================================================================
 2026-09-25 — master — BIMS refuses sweep peaks measured from a dead BLE link
 ================================================================================
 SPU 239 swept to SWPEND rows=7840 good=6615 and BIMS showed it as an ordinary
@@ -16657,7 +16703,8 @@ No code changed in this entry. npm run check: n/a.
 
 ================================================================================
 2026-09-22 — feat/spu-tweaks — cortisol curve experiment analysis: zero-well correction, per-device/per-channel 4PL (read-only)
-=========================================================================No code changes. Lot A67AC662-42032565330 ("Algorithm adjustment time point 1"): 6 devices x 7
+================================================================================
+No code changes. Lot A67AC662-42032565330 ("Algorithm adjustment time point 1"): 6 devices x 7
 concentrations (500/300/200/100/20/10/0 from quantityA/B/C), wells A/B at concentration, C at
 zero on every cartridge. Published a private artifact ("Per-Device Cortisol Curves", 2 revisions):
 fleet 4PL, per-device 4PL panels, per-channel 4PL panels with throughput relation.
@@ -16774,7 +16821,8 @@ npm run test:unit: 174 pass. npm run check: 11 errors — unchanged from feat/sp
 
 ================================================================================
 2026-09-25 — feat/research-analysis-mcp — SONIC-0000002..0000011 validation-tool labels printed (ZT230, USB)
-=========================================================================Jacob asked for a batch of unique SONIC- barcodes. Read the runbook (docs/ZEBRA-ZT230-BARCODE-PRINTING.md),
+================================================================================
+Jacob asked for a batch of unique SONIC- barcodes. Read the runbook (docs/ZEBRA-ZT230-BARCODE-PRINTING.md),
 the v96 handoff (brevitest-device Docs/V96_BLANK_SONIC_LASER_HANDOFF.md: 13-char SONIC-NNNNNNN, prefix
 classified by firmware, 7 digits free text, nothing minted/recorded in BIMS) and the 2026-09-17 entry
 (SONIC-0000001 layout). Browser Print 1.3.2 saw 52j150301773 (usb) at once.
@@ -17140,6 +17188,8 @@ Not done / stubs: no automatic re-evaluation of assay-run groups when a cartridg
 with holes (jobs are listed; the device must run the upload again); sonic sessions not linked to a
 screen session. `npm run check`: 10 errors / 439 warnings (baseline 10 / 437; the two warnings are
 a11y/label hints on the new pages).
+
+================================================================================
 2026-09-25 — master — DEPLOY: research analysis MCP tools (bims-operations 3.6.0)
 ================================================================================
 Source: branch master @ commit faea623d (cherry-pick of feat/research-analysis-mcp 61560f31 onto master)
@@ -17658,6 +17708,8 @@ Retrieve this exact code: git checkout feat/badge-system at commit 55809e9e
   (or: git log feat/badge-system --oneline to find it if the branch has since moved on)
 What this deployment is for: the admin-only "Badge required" link sits beside "Wax filling →" in
 the bucket board header.
+
+================================================================================
 2026-09-29 — feat/post-mortem-tablet-ui → master — Post-Mortem Inspect: tablet (touch) layout
 ================================================================================
 Tablets are being introduced as single-purpose Post-Mortem Inspect stations (browser pointed at the
@@ -18063,6 +18115,8 @@ Retrieve this exact code: git checkout feat/badge-gated-steps at commit aa8206aa
   (or: git log feat/badge-gated-steps --oneline to find it if the branch has since moved on)
 What this deployment is for: PR #71 — badge asked for at scan-in, discards and Move to oven; not at
 mint or start-pass. Needs an issued badge (Badge Portal) to click through the three gates.
+
+================================================================================
 2026-09-30 — feat/post-mortem-tablet-fullscreen → master — Post-Mortem Inspect: tablet fullscreen mode
 ================================================================================
 Third layout for Post-Mortem Inspect (desktop → tablet/touch → fullscreen), requested after tablet
@@ -18505,6 +18559,8 @@ Source: branch master @ commit 404db137c
 Retrieve this exact code: git checkout master at commit 404db137c
   (or: git log master --oneline to find it if the branch has since moved on)
 What this deployment is for: OT-2 tailnet transport + /bridge jobs + run-integrity fixes (inert until enabled).
+
+================================================================================
 2026-10-02 — feat/find-cart-bucket-pills — Buckets: Find a cart shows the bucket nickname + colour-coded pills
 ================================================================================
 Branched from feat/drop-pressed-stage @ b3f74612 (stacked: it needs that branch's isBucketStatus /
@@ -18881,6 +18937,8 @@ trim/clip defaults 1 s with typed values; test on the local dev server, no deplo
     vs real DB/R2 in a scratch GridFS bucket (deleted). Thresholds are first guesses — calibrate with references.
 npm run check: 13 errors / 434 warnings = master baseline, none in sonic files.
 Not deployed (user: test on local dev server first).
+
+================================================================================
 2026-10-05 — feat/sonic-fingerprint-analysis — Sonic compare = the "SPU Sonic Fingerprints" report; batch upload
 ================================================================================
 User: wants a page like the SPU Sonic Fingerprints artifact (all units' sonic data compared with
@@ -18912,6 +18970,7 @@ Retrieve this exact code: git checkout feat/sonic-fingerprint-analysis at commit
 What this deployment is for: artifact-style sonic compare report (pick SPUs → generate) + batch
 upload with the unit read from each file name.
 
+================================================================================
 2026-10-05 — feat/badge-per-pass — one badge per pass on the bucket board
 ================================================================================
 User: "Do not save badge info in the scan in window between scans. Each pass should require a fresh
@@ -19198,6 +19257,8 @@ Source: branch feat/optical-bench-run-all @ commit ee5968b2c
 Retrieve this exact code: git checkout feat/optical-bench-run-all at commit ee5968b2c
   (or: git log feat/optical-bench-run-all --oneline to find it if the branch has since moved on)
 What this deployment is for: try "Run on all units" on /validation/bench before merging.
+
+================================================================================
 2026-10-06 — feat/reagent-well-tracker — reagent fills: per-well mistake tracker on the run page + history heatmap
 ================================================================================
 Alejandro: "everything looks good during calibration, however whenever we do the actual fills
@@ -19255,6 +19316,8 @@ Deployment: production — Vercel GitHub integration build of master
 Source: branch master @ commit d3c83e12 (merge of feat/wax-reject-visual-only)
 Retrieve this exact code: git checkout master at commit d3c83e12
 What this deployment is for: Wax Reject usable without a camera (reason-gated visual rejects); dashboard shows rejected count.
+
+================================================================================
 2026-10-06 — feat/validation-autograde — validation workflow: bench + blank auto-graded, optics banked, sonic fleet compare
 ================================================================================
 The validation section is reorganised as a workflow, easiest/broadest check first:
@@ -19903,6 +19966,8 @@ Retrieve this exact code: git checkout feat/robot-overhaul at commit 8f6a2bca
 What this deployment is for: round 7 — the trimmed run controller card (line · status · Play/Pause/Stop).
 Smoke (unauthenticated curl; 302 → /login means the route exists and is gated):
   /manufacturing/cart-mfg/robots -> 302 https://bioscale-operations-system-mongodb-pis28gtzc-brevitest.vercel.app/login
+
+================================================================================
 2026-10-06 — master — production deployment: PR #87 (sections / front matter / metadata from chat, MCP 3.10.0)
 ================================================================================
 PR #87 (feat/wi-sections-via-chat → master) merged by pdaga-sudo at 2026-10-06 22:03 UTC.
@@ -20247,6 +20312,8 @@ Retrieve this exact code: git checkout master at commit c295ba92
 What this deployment is for: finalizeReagentRun stamps top-level assayId/assayName on production-filled
   cartridges (the fields the device + research app read); the reagent-prep tube step is gone (selectFillLot
   records the fill lot only). Research app main e0bdc81 (linking inherits/overrides/falls back) deployed first.
+
+================================================================================
 2026-10-13 — feat/fill-assay-is-the-assay — fill defaults are opt-in: Research (no assay) and no fill lot
 ================================================================================
 Jacob: "make sure that the default at filling is no assay and no fill lot, we have to opt in to that at filling."
@@ -20506,7 +20573,8 @@ unit publishes. Set CRON_SECRET and ANTHROPIC_API_KEY in Vercel before the first
 
 ================================================================================
 2026-10-15 — fix/screen-ingest-race — first real SCREEN (0255, fw v103): level-3 part lost to a write race; ping hook had no response topic
-=========================================================================First screen on BT-M01-0000-0255 (session ZS2-35RFr2Mxjqz0E_GA-, 85 min, levels 0-3, 3 reps):
+================================================================================
+First screen on BT-M01-0000-0255 (session ZS2-35RFr2Mxjqz0E_GA-, 85 min, levels 0-3, 3 reps):
 levels 0-2 all pass (home error -100/-50/0 um, 0 limit hits, 276 readings and 49.46 m of
 stage travel per run, lasers ~780, heat hold 7/20). Level 3: all three pings timed out.
 
@@ -20537,6 +20605,8 @@ Also seen: device_logs had exactly one document before today - the device-log La
 works (the screen-end upload landed, 322 lines), it just is not used often.
 
 npm run check: 15 errors / 429 warnings, unchanged (none in these files).
+
+================================================================================
 2026-10-15 — master — arm-pi bench session: solenoid driver alongside the arm (no code changes)
 ================================================================================
 Bench/ops session only; no repo code touched. Goal was to start testing the new
@@ -20763,6 +20833,8 @@ Retrieve this exact code: git checkout master at commit 02992383
   (or: git log master --oneline to find it if the branch has since moved on)
 What this deployment is for: /validation/screen/<sessionId> shows every screen row as one
 reviewable table with meaning + rule columns, a review sign-off, and report.csv.
+
+================================================================================
 2026-10-15 — feat/consumer-ownership — Consumer cartridge ownership: BIMS side of the bioscale-app link (claims, clinics, invites, ownership report)
 ================================================================================
 Goal: the consumer app (bioscale-app, same Atlas db `bioscale`) must show a person only the
@@ -21290,6 +21362,8 @@ Files: src/lib/server/consumer/ownership.ts, src/routes/api/consumer/claims/+ser
 src/lib/server/consumer/claim.test.ts (5 cases, mocked models), docs/CONSUMER-OWNERSHIP.md.
 vitest consumer suites 13/13. npm run check: 14 errors = baseline, none in touched files.
 Not driven against a live DB; app side verified with its in-memory store (e2e 56/56).
+
+================================================================================
 2026-10-14 — fix/studio-resolve-finalized-runs — Deck Calibration Studio: "Resolve" on fill issues never worked
 ================================================================================
 Report: "i can't resolve fill errors on calibration page". The Studio's resolveWellIssues action stamps
@@ -21313,7 +21387,9 @@ Retrieve this exact code: git checkout master at commit 33538e38
 What this deployment is for: Deck Calibration Studio can resolve well-tracker errors on
   finalized reagent runs (all 57 open errors were on finalized records).
 
+================================================================================
 2026-10-19 — PERF-01 BM-02, BM-04, BM-05, BM-06 (branch perf/dashboard-and-region) — resumed after a crash
+================================================================================
 Cross-app plan: brevitest-research-v2/docs/prds/DOMAIN-37-PERF.md. BM-01 (iad1) already on master 085deba4.
 BM-02 dashboard counts without `$nin`: src/lib/server/checked-out-counts.ts (groupCountsExcluding: each spec runs on
 its index, one $facet aggregation over the checked-out ids, subtract; groups that reach 0 are dropped as $nin would),
@@ -21390,7 +21466,9 @@ Retrieve this exact code: git checkout feat/voice-memos at commit a559fd61
   (or: git log master --oneline to find it if master has since moved on)
 What this deployment is for: picks up the corrected VOICENOTES_WEBHOOK_KEYS (+ CAPTURE_RAW=true for Step 0).
 
+================================================================================
 2026-10-20 — PERF-01 measured in production (A/B, same DB, same minute) — Opus 5.5 for Jacob
+================================================================================
 Method: vercel curl against pre-perf master (2t965hqyk, 1d8cd6f9) and perf (hhkvlpit6, ff154378), both iad1, logged in
 as contracttest, interleaved, 1 warmup + 5 samples, median TTFB.
   /                      1.69 s -> 0.94 s
@@ -21854,6 +21932,8 @@ check; result.stopped), then the tab's finally closes the mouth. VisionLiveTrack
 loop runs the live view is switched off and its Start button locked, with a note. Touched: robot-arm-vision.ts,
 robot-arm-tag-calibration.ts (homeStopRunId), vision/+page.server.ts, vision/+page.svelte, VisionLiveTracker.svelte, context doc.
 npm run check: 14 errors, none in touched files. Unit: robot-arm suites 100/100. Not yet run on the arm.
+
+================================================================================
 2026-10-21 — fix/start-panel-deck-calibration — reagent Start panel shows the deck's saved calibrator point
 ================================================================================
 The reagent Start panel seeded cal_x / cal_y / z_cal from the protocol file defaults
@@ -22455,6 +22535,56 @@ and 13:43:53, when a BIMS viewer opened the page and the stream started (1920x10
 errors). The "only video0/1/2" listing was my own `head -8` on an alphabetically sorted node list (video19-23 sorted
 before video3-5). The dmesg "Failed to resubmit video URB" line is at 3886 s uptime = 12:32 CDT, the thermal-install
 restart tearing down the old stream; benign. No USB action needed.
+
+================================================================================
+2026-10-22 — master — MERGE docs/arm-animate-droop-context (PR #127, a71a90a9)
+================================================================================
+PR #127 merged into master at 18:13 UTC as merge commit a71a90a9 (first parent 1aa7cbeb). Brings
+Robot_Arm_Animate_Droop_Context.md (repo root): the handoff context for the Animate droop / low-claw work: where
+#122-#125 stood, the root cause (open-loop replay + STS3215 droop), the fix layers, the Pi facts and install order for
+replay_settle, gotchas. 2 files, +190. Docs only. Branch was merged with master 1aa7cbeb first (a0ffb997; progress.txt
+conflict resolved, the PRD section-numbering note updated: Jog is ARM-06 section 12).
+Deployment: production — https://bioscale-operations-system-mongodb-fz9hejpl2-brevitest.vercel.app
+Source: branch master @ commit a71a90a9 (Merge pull request #127 from avacoder3900/docs/arm-animate-droop-context)
+Retrieve this exact code: git checkout a71a90a9
+  (or: git log master --oneline --merges | grep "#127" to find it)
+What this deployment is for: docs only; same app code as 1aa7cbeb.
+
+================================================================================
+2026-10-22 — master — MERGE feat/state-change-protected-warning (PR #115, 76adaf94)
+================================================================================
+PR #115 merged into master at 18:14 UTC as merge commit 76adaf94 (first parent a71a90a9). Brings the State Change
+guard (feature entry 2026-10-21 above): findProtectedCarts flags carts linked to an experiment, at linked / underway /
+completed, or with an open cartridge_ownership row; the page lists them and requires "drop these" or "change anyway"
+with a reason; overrides are recorded on the cart note and in the audit rows. 5 files, +377 / -3
+(protected-carts.ts + 9 tests, state-change +page.server.ts / +page.svelte). Branch was merged with master first
+(7cad525d, 9cd733d9 restored the bar that merge dropped). svelte-check 14 errors (baseline at the branch).
+Deployment: production — https://bioscale-operations-system-mongodb-12p43yawl-brevitest.vercel.app
+Source: branch master @ commit 76adaf94 (Merge pull request #115 from avacoder3900/feat/state-change-protected-warning)
+Retrieve this exact code: git checkout 76adaf94
+  (or: git log master --oneline --merges | grep "#115" to find it)
+What this deployment is for: State Change warns before moving experiment-linked or app-owned carts, in production.
+
+================================================================================
+2026-10-22 — master — MERGE feat/animate-replay-settle (PR #124, 7348c389; includes PR #123 feat/animate-auto-droop)
+================================================================================
+PR #124 merged into master at 18:21 UTC as merge commit 7348c389 (first parent 76adaf94). Its head f2f660c8 contained
+PR #123's branch (b353b91d), so GitHub closed #123 as merged at the same moment; there is no separate #123 merge
+commit. Brings both droop layers: #123 (ARM-06 section 10) runs the droop settle automatically at the end of every
+Go to pose and every Play, with an estimate for unvisited poses, and removes the Measure droop button; #124 (section
+11) closes the loop on the Pi: services/robot-arm/src/hardware/replay_settle.py settles the arm on each held pose
+during replay (re-ported onto the Pi's real layout and installed on arm-pi 2026-10-22, 4b63d04b), BIMS flags the
+settle frames and learns trims from the replay.settle event. With the BIMS half now on master, recordings saved from
+Animate carry settle flags. 20 files, +1312 / -105. Branches were merged with master first (#124: 02988a9d, 212f24d7,
+then f2f660c8 folding in #123's merge so the two could merge in either order; #123: b353b91d). Conflicts there:
+animation tests (both suites kept), robot-arm-animation.ts imports, the moveset page (Measure droop stays removed, the
+#125 jog link kept), ARM-06 PRD (Jog renumbered to section 12), progress.txt. svelte-check 14 errors (baseline);
+robot-arm vitest 169 passed (#124) / 165 (#123). Not run on the arm from BIMS yet.
+Deployment: production — https://bioscale-operations-system-mongodb-mx7yo3g8o-brevitest.vercel.app
+Source: branch master @ commit 7348c389 (Merge pull request #124 from avacoder3900/feat/animate-replay-settle)
+Retrieve this exact code: git checkout 7348c389
+  (or: git log master --oneline --merges | grep "#124" to find it)
+What this deployment is for: automatic droop correction + closed-loop replay on the Animate tab, in production.
 
 ================================================================================
 2026-10-22 — feat/overlay-stretch — Overlay: "Stretch to fit" lines up recordings of different lengths
