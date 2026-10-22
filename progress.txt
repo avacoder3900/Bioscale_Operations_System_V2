@@ -22448,9 +22448,13 @@ venv (before src.hardware.dual_arm.replay_session, after src.hardware.replay_set
 signature), installer --check then apply (app.py lines 59-60), robot-arm restarted with /sessions/active null,
 /health ok, no startup errors. Not yet played on the arm. Recordings on the Pi have no settle flags until the BIMS
 half of this PR is merged, so Control-tab replays behave as before.
-Seen after that restart: the RealSense colour node (/dev/video4) is gone — only video0/1/2 (depth/IR) are listed,
-dmesg shows "uvcvideo 4-1:1.4: Failed to resubmit video URB (-1)", /cameras reports device null. The D415 is still on
-USB bus 004. Not caused by this module (the service start is clean); needs a USB re-enumeration or a cable replug.
+CORRECTION (14:10 CDT): the "colour node gone after the restart" alarm logged here earlier was a misdiagnosis.
+/cameras reports device null and running false until the FIRST snapshot/stream request, because CameraManager.get()
+starts the worker lazily and status() deliberately never starts it; nobody viewed the arm between the 13:07 restart
+and 13:43:53, when a BIMS viewer opened the page and the stream started (1920x1080@30, 43k frames by 14:08, no
+errors). The "only video0/1/2" listing was my own `head -8` on an alphabetically sorted node list (video19-23 sorted
+before video3-5). The dmesg "Failed to resubmit video URB" line is at 3886 s uptime = 12:32 CDT, the thermal-install
+restart tearing down the old stream; benign. No USB action needed.
 
 ================================================================================
 2026-10-22 — feat/overlay-stretch — Overlay: "Stretch to fit" lines up recordings of different lengths
