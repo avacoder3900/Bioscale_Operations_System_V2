@@ -79,7 +79,11 @@ vi.mock('$lib/server/db', () => ({
 		updateOne: async (...args: any[]) => db.writes.push({ model: 'runRecord', op: 'updateOne', args })
 	}
 }));
-vi.mock('./proxy', () => ({ getRobot: async (id: string) => ({ _id: id, name: 'Robot 1 B14', ip: 'x' }), bridgeDeviceIdForRobot: () => 'ot2-b14-bridge' }));
+vi.mock('./proxy', () => ({
+	getRobot: async (id: string) => ({ _id: id, name: 'Robot 1 B14', ip: 'x' }),
+	bridgeDeviceIdForRobot: () => 'ot2-b14-bridge',
+	withRequester: (_u: unknown, fn: () => Promise<unknown>) => fn()
+}));
 vi.mock('./transport', () => ({ serverTransport: () => ({}) }));
 const gateMock = vi.hoisted(() => ({ ok: true }));
 vi.mock('./bridge-token', () => ({
@@ -113,7 +117,11 @@ import {
 	validFilledWells,
 	validFinalStatus,
 	validRunId,
-	START_INTENT_CLEAR_MS
+	priorIntentDecision,
+	sameRequestedRtp,
+	START_INTENT_CLEAR_MS,
+	START_INTENT_IN_FLIGHT_MS,
+	START_CREATED_NOT_STARTED_BANNER
 } from './run-lifecycle-records';
 
 const USER = { _id: 'u1', username: 'alejandro' };
@@ -362,6 +370,21 @@ describe('reconcileStartIntent (load)', () => {
 		runVerbMock.fn = null;
 	});
 
+	it('an OLD created-but-never-played run is kept for the next Start to resume, with a banner (never failed on load)', async () => {
+		const createdAt = new Date(Date.now() - START_INTENT_IN_FLIGHT_MS - 1000).toISOString();
+		runVerbMock.fn = async () => ({
+			status: 200,
+			body: { runs: [{ id: 'ot-5', status: 'idle', protocolId: 'p1', createdAt }], current: { id: 'ot-5', status: 'idle', protocolId: 'p1', createdAt } }
+		});
+		const run = runWith({ requestedAt: new Date(createdAt), opentronsRunId: 'ot-5' });
+		db.wax.set('W4', run);
+		const r = await reconcileStartIntent('wax', run, USER);
+		expect(r).toEqual({ changed: false, banner: START_CREATED_NOT_STARTED_BANNER });
+		expect(db.audits).toHaveLength(0);
+		expect(db.writes.some((w) => w.args?.[1]?.$unset)).toBe(false);
+		runVerbMock.fn = null;
+	});
+
 	it('an old intent with no robot run is cleared with an audit row', async () => {
 		runVerbMock.fn = async () => ({ status: 200, body: { runs: [], current: null } });
 		const run = runWith({ requestedAt: new Date(Date.now() - START_INTENT_CLEAR_MS - 1000) });
@@ -369,6 +392,52 @@ describe('reconcileStartIntent (load)', () => {
 		expect(r).toEqual({ changed: true, banner: null });
 		expect(db.audits[0]).toMatchObject({ action: 'start_intent_cleared', tableName: 'wax_filling_runs' });
 		runVerbMock.fn = null;
+	});
+});
+
+describe('priorIntentDecision (a new Start vs the previous start intent)', () => {
+	const now = Date.now();
+	const cur = { opentronsProtocolId: 'p1', runTimeParameterValues: { a: 1, b: 'x' } };
+	const old = new Date(now - START_INTENT_IN_FLIGHT_MS - 1000);
+	const young = new Date(now - 10_000);
+	const withRun = (requestedAt: Date, extra: Doc = {}) => ({
+		token: 't',
+		requestedAt,
+		requestedBy: { username: 'sam' },
+		opentronsRunId: 'ot-9',
+		createArgs: { protocolId: 'p1', runTimeParameterValues: { a: 1, b: 'x' } },
+		...extra
+	});
+
+	it('no intent → fresh', () => {
+		expect(priorIntentDecision(undefined, now, cur)).toEqual({ kind: 'fresh' });
+	});
+	it('created-but-not-played and young → refused: that start may still be between create and play', () => {
+		const d = priorIntentDecision(withRun(young), now, cur);
+		expect(d).toMatchObject({ kind: 'refuse', status: 409 });
+		expect((d as any).message).toMatch(/robot run ot-9 created 10 s ago by sam/);
+	});
+	it('created-but-not-played, old, same protocol + parameters → RESUME that run (no second POST /runs)', () => {
+		expect(priorIntentDecision(withRun(old), now, cur)).toEqual({ kind: 'resume', opentronsRunId: 'ot-9' });
+	});
+	it('created-but-not-played, old, but the protocol or the parameters changed → fresh (that run is stale)', () => {
+		expect(priorIntentDecision(withRun(old), now, { ...cur, opentronsProtocolId: 'p2' })).toEqual({ kind: 'fresh' });
+		expect(priorIntentDecision(withRun(old), now, { ...cur, runTimeParameterValues: { a: 2, b: 'x' } })).toEqual({ kind: 'fresh' });
+		expect(priorIntentDecision(withRun(old), now, null)).toEqual({ kind: 'fresh' });
+	});
+	it('a lost create answer not yet ruled in or out → refused with "try again in a few seconds"', () => {
+		const d = priorIntentDecision({ token: 't', requestedAt: old, uncertainAt: new Date() }, now, cur);
+		expect(d).toMatchObject({ kind: 'refuse', status: 409 });
+		expect((d as any).message).toMatch(/try again in a few seconds/);
+	});
+	it('no run id: young → refused (in flight); old → fresh', () => {
+		expect(priorIntentDecision({ token: 't', requestedAt: young }, now, cur)).toMatchObject({ kind: 'refuse' });
+		expect(priorIntentDecision({ token: 't', requestedAt: old }, now, cur)).toEqual({ kind: 'fresh' });
+	});
+	it('sameRequestedRtp compares every key by value, both ways', () => {
+		expect(sameRequestedRtp({ a: 1, b: 'x' }, { b: 'x', a: '1' })).toBe(true);
+		expect(sameRequestedRtp({ a: 1 }, { a: 1, b: true })).toBe(false);
+		expect(sameRequestedRtp(undefined, {})).toBe(true);
 	});
 });
 
