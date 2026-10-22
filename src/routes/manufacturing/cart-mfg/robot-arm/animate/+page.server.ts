@@ -29,6 +29,7 @@ import {
 } from '$lib/server/robot-arm-animation';
 import { failFrom, field, sharedAnimateActions, who } from '$lib/server/robot-arm-animate-actions';
 import { activeVerifiedRun, listPoseCalibrations } from '$lib/server/robot-arm-verified';
+import { homeStepsByCamera } from '$lib/server/robot-arm-vision';
 import { friendlyName } from '$lib/robot-arm/animation';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -51,6 +52,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 		listPoseCalibrations().catch(() => []),
 		activeVerifiedRun().catch(() => null)
 	]);
+	// Home per camera (Vision tab calibration): the pose editor's default reference marker.
+	const homeSteps = await homeStepsByCamera().catch(() => ({}));
 
 	return {
 		poses: JSON.parse(JSON.stringify(poses ?? [])),
@@ -62,7 +65,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 		active,
 		holder: JSON.parse(JSON.stringify(holder ?? null)),
 		poseCalibrations: JSON.parse(JSON.stringify(poseCalibrations)),
-		verifiedRun: JSON.parse(JSON.stringify(verifiedRun ?? null))
+		verifiedRun: JSON.parse(JSON.stringify(verifiedRun ?? null)),
+		homeSteps
 	};
 };
 

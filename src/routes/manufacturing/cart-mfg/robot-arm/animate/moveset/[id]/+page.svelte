@@ -67,6 +67,8 @@
 		const c = calFor(poseId);
 		return !!c && !c.stale;
 	};
+	const homeSteps = $derived((data.homeSteps ?? {}) as Record<string, (number | null)[]>);
+	const home = $derived(homeSteps[camera] ?? Object.values(homeSteps)[0] ?? null);
 	const vr = new VerifiedRun();
 	vr.onend = () => void invalidateAll();
 	onDestroy(() => vr.destroy());
@@ -304,7 +306,7 @@
 		<div class="space-y-3">
 			{#if selPose}
 				{#key selPose._id}
-					<PoseEditor pose={selPose} allPoses={poses} arm={armNow} {armReachable} {blocked} {blockReason} ongoto={goTo} />
+					<PoseEditor pose={selPose} allPoses={poses} arm={armNow} {armReachable} {blocked} {blockReason} ongoto={goTo} {home} />
 					<PoseCameraCard pose={selPose} {camera} cameras={cameraNames} oncamera={setCamera} calibration={calFor(selPose._id)} arm={armNow} {armReachable} {blocked} {blockReason} ongoto={goTo} />
 				{/key}
 				<p class="text-[11px]" style={muted}>Saving a pose changes it in every move set that uses it. "Save as new" makes a new pose and uses it for this step.</p>

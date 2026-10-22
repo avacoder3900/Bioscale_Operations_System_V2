@@ -22835,3 +22835,24 @@ What this deployment is for: Animate redo (live sliders, absolute goals, torque 
   tolerances, ◎ Play verified). GitHub deployment 7264502675 status success 21:47 UTC; smoke: /login 200,
   /manufacturing/cart-mfg/robot-arm/animate 302 → /login. Intermediate production deploys for 7b5ba70d and
   877c8af5 were superseded within two minutes.
+
+================================================================================
+2026-10-22 — feat/arm-slider-origin — Animate: the green dot is a reference marker (Home by default), not "arm now"
+================================================================================
+Alejandro, first hands-on with the redone Animate tab: after a few -10 presses he no longer knew the
+servo's original value and wanted the green dot above the slider to tell him (hover preferred); and with
+Live on the dot "just follows the slider — that sucks": it should stay above Home, later above the previous
+pose, with a selector.
+  - PoseEditor.svelte: the dot now sits on a chosen REFERENCE, never on the live reading. "marker" select in
+    the header: Home (default; the Vision tab's active calibration, servos 1-5 + gripper when it was read),
+    "When this editor opened" (first arm read of this editor, kept for the whole edit — a reload starts a
+    new one), or any saved pose (the "previous pose" case, picked by hand for now). Hover the dot: the
+    reference's value, where the arm really is now, and the opened value when different. Beside each
+    number box: "● <reference>" in words and a ↺ that sets the slider back to it (and, live, moves the arm).
+    Without a home calibration the marker falls back to "when opened". Slider ranges include the reference.
+  - robot-arm-vision.ts homeStepsByCamera(): home as a 6-entry steps list per camera from the active
+    tag calibrations. Animate library + move-set page loads pass `homeSteps`; the pages hand the editor
+    the chosen camera's home (else any camera's).
+svelte-check: 13 errors / 432 warnings (one below the 14 baseline after today's merges). No Pi change.
+Noted for next: the shoulder is laggy under the jog fallback (live Pi has no POST /servos/{id}/move),
+see the following entry.
