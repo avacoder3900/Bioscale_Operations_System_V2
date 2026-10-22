@@ -22647,7 +22647,8 @@ colour node matches) | error. `running` kept. Measured in the Pi venv: first sta
 snapshot/stream request, and a status poll is now a cached file read.
 BIMS: CameraStatus.state (optional, older cameras.py lacks it); RobotArmCameraPanel's idle note names the device,
 says "No colour camera found" on absent, and shows the worker error on error.
-Pi: new cameras.py copied in at 14:25 CDT but the service was NOT restarted — an operator was running replay /
-record sessions on the arm (replay 14:28, record 14:29). The running service still serves the old status shape
-until `sudo systemctl restart robot-arm` with /sessions/active null. The BIMS side is backwards compatible either way.
+Pi: new cameras.py copied in at 14:25 CDT; restart held while an operator ran replay / record sessions (14:28-14:30).
+Restarted 14:36 CDT once the operator said the arm was free and /sessions/active was null: first status after boot
+{device /dev/video4, state idle, running false, frames 0}; still idle 6 s later (nobody watching); one snapshot
+request (200, 39 KB, 1.0 s incl. warm-up) flipped it to {state running, 1920x1080, stale false}. Lazy start intact.
 npm run check: 13 errors = baseline, none in touched files.
