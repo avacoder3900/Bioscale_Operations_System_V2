@@ -395,7 +395,7 @@
 				</p>
 				{#if data.cleanup.overlay}
 					<p class="mt-1 text-[11px]" style="color: var(--color-tron-text-secondary)">
-						Overlay at {Math.round(data.cleanup.overlay.strength * 100)}% strength, {data.cleanup.overlay.windowS} s window, cap
+						Overlay lined up by {data.cleanup.overlay.align === 'stretch' ? 'stretch to fit' : 'follow the motion'}, at {Math.round(data.cleanup.overlay.strength * 100)}% strength, {data.cleanup.overlay.windowS} s window, cap
 						{data.cleanup.overlay.maxOffset} steps, servos {data.cleanup.overlay.servos.join(', ')}; the pilot's path sat
 						{Math.round(data.cleanup.overlay.fit)} steps from the animation on average. The grey trace below is the overlaid
 						recording, not either source.
