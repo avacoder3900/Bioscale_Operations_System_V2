@@ -22455,3 +22455,23 @@ and 13:43:53, when a BIMS viewer opened the page and the stream started (1920x10
 errors). The "only video0/1/2" listing was my own `head -8` on an alphabetically sorted node list (video19-23 sorted
 before video3-5). The dmesg "Failed to resubmit video URB" line is at 3886 s uptime = 12:32 CDT, the thermal-install
 restart tearing down the old stream; benign. No USB action needed.
+
+================================================================================
+2026-10-22 — master — arm camera status is honest while idle: `state` + resolved device, no sensor power
+================================================================================
+Follow-up to the retracted "camera dropout" note above: GET /cameras said device null / running false after every
+service restart until the first viewer, because the worker starts lazily and status() never starts it. Operator
+chose "make status honest" over pre-starting the camera (heat) or a BIMS-side nudge.
+Pi cameras.py (vendored services/robot-arm/src/server/cameras.py; Pi backup cameras.py.bak-pre-state):
+resolve_device(spec, probe=False) stops after sysfs + v4l2-ctl and never opens a node with OpenCV; the worker's
+peek_device() resolves once that way and caches it (re-tried every 30 s only while nothing was found); status()
+reports `device` even while idle and a new `state`: running | idle (node found, worker not started) | absent (no
+colour node matches) | error. `running` kept. Measured in the Pi venv: first status 66 ms (v4l2-ctl), cached
+0.02 ms, worker thread not started. Temperature implication: none — the stream is still only started by a
+snapshot/stream request, and a status poll is now a cached file read.
+BIMS: CameraStatus.state (optional, older cameras.py lacks it); RobotArmCameraPanel's idle note names the device,
+says "No colour camera found" on absent, and shows the worker error on error.
+Pi: new cameras.py copied in at 14:25 CDT but the service was NOT restarted — an operator was running replay /
+record sessions on the arm (replay 14:28, record 14:29). The running service still serves the old status shape
+until `sudo systemctl restart robot-arm` with /sessions/active null. The BIMS side is backwards compatible either way.
+npm run check: 13 errors = baseline, none in touched files.

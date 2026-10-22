@@ -472,7 +472,10 @@ export interface JointMapStatus {
 // Every field here is reported by the Pi; none of it is inferred or persisted.
 export interface CameraStatus {
 	name: string;
+	/** Resolved V4L2 node even while idle (cameras.py peek_device, sysfs only). */
 	device: string | null;
+	/** idle = node found, worker not started (starts on the first snapshot/stream request, never on a status poll). Absent on a cameras.py older than 2026-10-22. */
+	state?: 'running' | 'idle' | 'absent' | 'error';
 	running: boolean;
 	requested: { width: number; height: number; fps: number; quality: number };
 	/** [h, w, channels] of the last decoded frame; null before the first frame. */

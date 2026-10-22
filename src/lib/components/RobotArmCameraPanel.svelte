@@ -684,7 +684,13 @@
 
 				{#if selectedStatus && !selectedStatus.running && frameCount === 0}
 					<p class="mt-2 text-[11px]" style="color: var(--color-tron-text-secondary)">
-						Camera worker was idle at page load. Requesting frames starts it — give it a moment.
+						{#if selectedStatus.state === 'absent'}
+							No colour camera found on the Pi (nothing matches the configured device).
+						{:else if selectedStatus.state === 'error' && selectedStatus.error}
+							Camera worker stopped: {selectedStatus.error}
+						{:else}
+							Camera worker was idle at page load{selectedStatus.device ? ` (${selectedStatus.device})` : ''}. Requesting frames starts it — give it a moment.
+						{/if}
 					</p>
 				{/if}
 

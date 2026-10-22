@@ -78,6 +78,7 @@ _COLOUR_FORMATS = ("YUYV", "MJPG", "RGB3", "BGR3", "NV12", "YU12")
 # stopped producing (camera unplugged, USB reset, driver wedged). We
 # surface that to callers rather than serving a frozen image, because a
 # frozen frame during arm motion is actively dangerous to trust.
+_PEEK_TTL_S = 30.0
 _STALE_AFTER_S = 5.0
 
 
@@ -205,7 +206,7 @@ def _node_formats(device: str) -> list[str]:
     return re.findall(r"'(\w{4})'", out)
 
 
-def resolve_device(spec: CameraSpec) -> str | None:
+def resolve_device(spec: CameraSpec, probe: bool = True) -> str | None:
     """Pick the V4L2 node for ``spec``, preferring an explicit device.
 
     Order of preference:
@@ -214,6 +215,10 @@ def resolve_device(spec: CameraSpec) -> str | None:
     2. The first node advertising a colour FOURCC, optionally filtered by
        ``spec.match`` against the V4L2 card name.
     3. ``None`` — no camera. Callers surface this rather than guessing.
+
+    ``probe=False`` (status reporting) stops after sysfs + v4l2-ctl and
+    never opens a node with OpenCV: a status poll must not power the
+    sensor, however often BIMS asks.
     """
     if spec.device and Path(spec.device).exists():
         return spec.device
@@ -231,7 +236,7 @@ def resolve_device(spec: CameraSpec) -> str | None:
 
     # v4l2-ctl unavailable: fall back to probing each node with OpenCV and
     # keeping the first that yields a real 3-channel frame.
-    if cv2 is not None:
+    if probe and cv2 is not None:
         for device, _card in candidates:
             if _probe_colour(device):
                 return device
@@ -273,6 +278,13 @@ class _CameraWorker:
         self._device: str | None = None
         self._error: str | None = None
         self._started_at: float | None = None
+        # Device the spec resolves to, found WITHOUT starting the worker, so
+        # status can say "idle at /dev/video4" instead of "device null"
+        # before the first viewer (2026-10-22: that null was misread as a
+        # USB dropout). Re-checked every _PEEK_TTL_S while nothing was found,
+        # so a camera plugged in later shows up.
+        self._peeked: str | None = None
+        self._peeked_at: float | None = None
 
     # -- lifecycle ---------------------------------------------------
 
@@ -416,13 +428,39 @@ class _CameraWorker:
         with self._lock:
             return self._latest
 
+    def peek_device(self) -> str | None:
+        """The node this worker would open, read from sysfs/v4l2-ctl only.
+
+        Cached once found (the RealSense keeps its node for the life of the
+        boot); re-resolved at most every _PEEK_TTL_S while None.
+        """
+        now = time.time()
+        if self._peeked is None and (self._peeked_at is None or now - self._peeked_at > _PEEK_TTL_S):
+            self._peeked = resolve_device(self.spec, probe=False)
+            self._peeked_at = now
+        return self._peeked
+
     def status(self) -> dict[str, Any]:
         frame = self.latest
         age = None if frame is None else round(time.time() - frame.captured_at, 3)
+        running = bool(self._thread is not None and self._thread.is_alive())
+        device = self._device if running and self._device else self.peek_device()
+        if running:
+            state = "running"
+        elif self._error:
+            state = "error"
+        elif device:
+            state = "idle"
+        else:
+            state = "absent"
         return {
             "name": self.spec.name,
-            "device": self._device,
-            "running": bool(self._thread is not None and self._thread.is_alive()),
+            "device": device,
+            # idle = found a node, worker not started yet (it starts on the
+            # first snapshot/stream request, never on a status poll);
+            # absent = no colour node matches the spec; error = see `error`.
+            "state": state,
+            "running": running,
             "requested": {
                 "width": self.spec.width,
                 "height": self.spec.height,
