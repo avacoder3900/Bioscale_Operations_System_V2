@@ -168,7 +168,7 @@ export function requireCool(now: ArmNow): string[] {
 	return h.hot.length ? [`Running warm: ${h.hot.map((sid) => `servo ${sid} ${now.temps[sid - 1]} °C`).join(', ')}.`] : [];
 }
 
-async function requireIdle() {
+export async function requireIdle() {
 	let active;
 	try {
 		active = (await robotArm.getActive()).active;
@@ -184,7 +184,7 @@ async function requireIdle() {
  * was. Turning it on drives each servo back to its last goal — the pose the
  * session left it at — so this is a small lift back, not a jump. One retry.
  */
-async function torqueBackOn(): Promise<{ ok: boolean; error: string | null }> {
+export async function torqueBackOn(): Promise<{ ok: boolean; error: string | null }> {
 	let error: string | null = null;
 	for (let i = 0; i < 2; i++) {
 		if (i) await sleep(300);
@@ -460,7 +460,7 @@ export interface PoseSummary {
 	createdBy: { username?: string } | null;
 }
 
-function poseSummary(d: any): PoseSummary {
+export function poseSummary(d: any): PoseSummary {
 	const basis: PoseBasis = d.basis === 'goal' ? 'goal' : 'reading';
 	const trim = basis === 'reading' && Array.isArray(d.trim) && d.trim.length === SERVO_COUNT ? d.trim.map(Number) : null;
 	return {
@@ -1063,11 +1063,20 @@ function render(keyframes: ResolvedKeyframe[], from: number[] | null, rateHz: nu
 	}
 }
 
-type PlayKind = 'move_set' | 'sequence' | 'pose';
+export type PlayKind = 'move_set' | 'sequence' | 'pose';
 const PLAY_MODEL = { move_set: RobotArmMoveSet, sequence: RobotArmSequence, pose: RobotArmPose } as Record<PlayKind, typeof RobotArmMoveSet>;
 const PLAY_TABLE: Record<PlayKind, string> = { move_set: 'robot_arm_move_sets', sequence: 'robot_arm_sequences', pose: 'robot_arm_poses' };
 
-async function writeAndPlay(user: User, o: { title: string; keyframes: ResolvedKeyframe[]; rateHz: number; kind: PlayKind; id: string }): Promise<PlayResult> {
+/**
+ * Render `keyframes` from where the arm is, write the path to the Pi and
+ * start the replay. Play, Go to pose and (ARM-09) each chunk of a verified
+ * run come through here. `lastPlay: false` leaves the source record's
+ * lastPlay alone (a verified run keeps its own record and never settles).
+ */
+export async function writeAndPlay(
+	user: User,
+	o: { title: string; keyframes: ResolvedKeyframe[]; rateHz: number; kind: PlayKind; id: string; lastPlay?: boolean; auditAction?: string; auditExtra?: Record<string, unknown> }
+): Promise<PlayResult> {
 	if (!o.keyframes.length) throw new AnimateError('Nothing to play — add poses first.');
 	await requireIdle();
 	const now = await readArm();
@@ -1114,8 +1123,9 @@ async function writeAndPlay(user: User, o: { title: string; keyframes: ResolvedK
 	// Where the play leaves the arm, so the page can settle it there afterwards (afterPlay).
 	const last = o.keyframes[o.keyframes.length - 1];
 	const end = { poseId: last.poseId, target: last.target ?? last.positions };
-	await PLAY_MODEL[o.kind].updateOne({ _id: o.id }, { $set: { lastPlay: { at: new Date(), by: opRef(user), runId, durationS: path.durationS, end, settledAt: null } } });
-	await audit(user, o.kind === 'pose' ? 'robot_arm.animate.go_to_pose' : `robot_arm.animate.play_${o.kind}`, PLAY_TABLE[o.kind], o.id, {
+	if (o.lastPlay !== false) await PLAY_MODEL[o.kind].updateOne({ _id: o.id }, { $set: { lastPlay: { at: new Date(), by: opRef(user), runId, durationS: path.durationS, end, settledAt: null } } });
+	await audit(user, o.auditAction ?? (o.kind === 'pose' ? 'robot_arm.animate.go_to_pose' : `robot_arm.animate.play_${o.kind}`), PLAY_TABLE[o.kind], o.id, {
+		...(o.auditExtra ?? {}),
 		runId,
 		durationS: path.durationS,
 		leadInS,

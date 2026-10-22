@@ -24,6 +24,7 @@
  *
  * Positions are encoder steps, servo ids 1..6 at array index 0..5.
  */
+import { cleanToleranceOverride } from './verified-poses';
 
 export const SERVO_COUNT = 6;
 export const ENCODER_MAX = 4095;
@@ -100,6 +101,13 @@ export interface Keyframe {
 	 * a joint on the timeline edits. Absent when every joint is at its pose.
 	 */
 	offsets?: number[];
+	/**
+	 * ARM-09 verified runs: camera check at this step. true = must be checked,
+	 * false = never, absent = checked when the pose has a reference.
+	 */
+	verify?: boolean;
+	/** ARM-09: this step's tolerances on top of the pose reference's. */
+	tolerances?: { positionMm?: number | null; angleDeg?: number | null; steps?: number | null };
 }
 
 export interface ResolvedKeyframe extends Keyframe {
@@ -243,6 +251,9 @@ export function cleanKeyframes(input: unknown): Keyframe[] {
 		const out: Keyframe = { poseId, holdS: roundTenth(holdS), durationS: roundTenth(durationS), easing };
 		const offsets = cleanOffsets(k?.offsets, MAX_OFFSET_STEPS);
 		if (offsets) out.offsets = offsets;
+		if (k?.verify === true || k?.verify === false) out.verify = k.verify;
+		const tol = cleanToleranceOverride(k?.tolerances);
+		if (tol) out.tolerances = tol;
 		return out;
 	});
 }

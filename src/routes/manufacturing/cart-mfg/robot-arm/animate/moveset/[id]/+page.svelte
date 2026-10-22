@@ -7,8 +7,15 @@
 	 */
 	import { enhance } from '$app/forms';
 	import { invalidateAll } from '$app/navigation';
-	import { onDestroy } from 'svelte';
+	import { onDestroy, onMount } from 'svelte';
 	import PoseEditor from '$lib/components/robot-arm/PoseEditor.svelte';
+	import PoseCameraCard from '$lib/components/robot-arm/PoseCameraCard.svelte';
+	import VerifiedRunPanel from '$lib/components/robot-arm/VerifiedRunPanel.svelte';
+	import { VerifiedRun } from '$lib/robot-arm/verified-run.svelte';
+	import { loadChosenCamera, pickCamera, saveChosenCamera } from '$lib/robot-arm/arm-camera';
+	import { verifyWanted, MAX_ANGLE_DEG, MAX_POSITION_MM, MAX_TOLERANCE_STEPS } from '$lib/robot-arm/verified-poses';
+	import type { PoseCalibrationSummary, VerifiedRunSummary } from '$lib/server/robot-arm-verified';
+	import type { CameraStatus } from '$lib/server/robot-arm-client';
 	import {
 		buildPath,
 		friendlyName,
@@ -46,8 +53,49 @@
 	playback.onend = () => void invalidateAll();
 	onDestroy(() => playback.destroy());
 
-	const blocked = $derived(!armReachable || data.holder != null || !!data.active || playback.running || playback.busy);
-	const blockReason = $derived(!armReachable ? 'The arm is unreachable.' : playback.running || playback.busy ? 'The arm is playing.' : data.active || data.holder ? 'The arm is running something — stop it first.' : '');
+	// ARM-09: pose camera references, per-step verification, the verified run.
+	const poseCals = $derived((data.poseCalibrations ?? []) as PoseCalibrationSummary[]);
+	const cameraNames = $derived([...new Set([...((data.cameras ?? []) as CameraStatus[]).map((c) => c.name), ...poseCals.map((c) => c.cameraName)])]);
+	let chosenCamera = $state<string | null>(null);
+	const camera = $derived(pickCamera(cameraNames, chosenCamera, poseCals.map((c) => c.cameraName)));
+	function setCamera(n: string) {
+		chosenCamera = n;
+		saveChosenCamera(n);
+	}
+	const calFor = (poseId: string): PoseCalibrationSummary | null => poseCals.find((c) => c.poseId === poseId && c.cameraName === camera) ?? null;
+	const hasRef = (poseId: string) => {
+		const c = calFor(poseId);
+		return !!c && !c.stale;
+	};
+	const vr = new VerifiedRun();
+	vr.onend = () => void invalidateAll();
+	onDestroy(() => vr.destroy());
+	onMount(() => {
+		chosenCamera = loadChosenCamera();
+		const r = data.verifiedRun as VerifiedRunSummary | null;
+		if (r?.status === 'running') void vr.resume(r._id);
+	});
+	const verifyMode = (k: Keyframe): 'auto' | 'on' | 'off' => (k.verify === true ? 'on' : k.verify === false ? 'off' : 'auto');
+	function setVerify(k: Keyframe, mode: string) {
+		if (mode === 'on') k.verify = true;
+		else if (mode === 'off') k.verify = false;
+		else delete k.verify;
+	}
+	function setTol(k: Keyframe, key: 'positionMm' | 'angleDeg' | 'steps', raw: string) {
+		const v = raw.trim() === '' ? null : Number(raw);
+		const next = { ...(k.tolerances ?? {}) };
+		if (v == null || !Number.isFinite(v)) delete next[key];
+		else next[key] = key === 'steps' ? Math.round(v) : Math.round(v * 10) / 10;
+		if (Object.keys(next).length) k.tolerances = next;
+		else delete k.tolerances;
+	}
+	function playVerified() {
+		if (!camera) return;
+		if (confirm(`Verified run: the arm will MOVE through "${friendlyName(moveSet.name)}" step by step, checking each verified pose with camera ${camera}. A failed check stops it. Is the path clear?`)) void vr.start('move_set', moveSet._id, camera);
+	}
+
+	const blocked = $derived(!armReachable || data.holder != null || !!data.active || playback.running || playback.busy || vr.active || vr.busy);
+	const blockReason = $derived(!armReachable ? 'The arm is unreachable.' : playback.running || playback.busy ? 'The arm is playing.' : vr.active || vr.busy ? 'A verified run is in progress.' : data.active || data.holder ? 'The arm is running something — stop it first.' : '');
 
 	// Local copy of the keyframes; Save posts it as JSON.
 	let name = $state('');
@@ -67,6 +115,8 @@
 		if (selected == null && kfs.length) selected = 0;
 	});
 	const dirty = $derived(JSON.stringify(kfs) + name + notes !== saved);
+	// ARM-09: at least one step would be checked (its own flag, or a reference exists for the camera).
+	const anyVerified = $derived(kfs.some((k) => verifyWanted(k.verify, hasRef(k.poseId))));
 
 	// "Save as new" in the editor while a keyframe is selected: that keyframe now uses the new pose.
 	let lastCreated = '';
@@ -149,6 +199,9 @@
 				<button type="button" class={btn} style={amber} disabled={blocked || dirty || !kfs.length || problems.length > 0 || !!heat?.tooHot.length}
 					title={dirty ? 'Save first' : 'From where the arm is, through every pose'}
 					onclick={() => { if (confirm(`The arm will MOVE through "${friendlyName(moveSet.name)}" from where it is. Is the path clear?`)) playback.play('play', {}, friendlyName(moveSet.name)); }}>▶ Play</button>
+				<button type="button" class={btn} style={green} disabled={blocked || dirty || !kfs.length || problems.length > 0 || !!heat?.tooHot.length || !camera || !anyVerified}
+					title={dirty ? 'Save first' : !camera ? 'No camera' : !anyVerified ? 'No step has a camera reference — capture one below' : `Step by step; each verified pose checked with ${camera}. A failed check stops the run.`}
+					onclick={playVerified}>◎ Play verified</button>
 			{/if}
 		</div>
 	</div>
@@ -165,6 +218,7 @@
 		{#if playback.settled}<p class="text-xs" style={muted}>{playback.settled}</p>{/if}
 		{#if playback.warnings.length}<p class="text-xs" style="color: #f59e0b">{playback.warnings.join(' ')}</p>{/if}
 	{/if}
+	<VerifiedRunPanel {vr} />
 
 	<div class="grid gap-4 lg:grid-cols-[24rem_minmax(0,1fr)]">
 		<!-- keyframes -->
@@ -183,6 +237,9 @@
 							<button type="button" class="min-w-0 flex-1 truncate text-left text-sm" style="color: {p ? 'var(--color-tron-text)' : '#fca5a5'}" onclick={() => (selected = i)} title={p?.name}>
 								{p ? friendlyName(p.name) : 'missing pose'}{p?.archived ? ' (archived)' : ''}
 							</button>
+							{#if verifyWanted(k.verify, hasRef(k.poseId))}
+								<span class="text-[10px]" style="color: {hasRef(k.poseId) ? '#4ade80' : '#ef4444'}" title={hasRef(k.poseId) ? `Checked with the camera in a verified run (${camera})` : calFor(k.poseId)?.stale ? 'Verification on, but the reference is stale — retake it' : 'Verification on, but this pose has no camera reference — capture one or set the check to off'}>◎</span>
+							{/if}
 							<button type="button" onclick={() => move(i, -1)} class="px-1 text-xs" style="color: var(--color-tron-cyan)" title="Earlier">▲</button>
 							<button type="button" onclick={() => move(i, 1)} class="px-1 text-xs" style="color: var(--color-tron-cyan)" title="Later">▼</button>
 							<button type="button" onclick={() => remove(i)} class="px-1 text-xs text-red-300" title="Remove">✕</button>
@@ -206,6 +263,19 @@
 								<label>Hold (s)<input type="number" step="0.1" min="0" max={MAX_HOLD_S} value={k.holdS} oninput={(e) => (k.holdS = clamp(Number(e.currentTarget.value), 0, MAX_HOLD_S))} class="{input} mt-1 w-full" style={inputStyle} /></label>
 							</div>
 							{#if i > 0 && k.durationS < min}<p class="mt-1 text-[11px] text-red-300">Too fast for this move — at least {min} s.</p>{/if}
+							<!-- ARM-09: this step's camera check and its own tolerances (blank = the pose reference's) -->
+							<div class="mt-2 grid grid-cols-4 gap-2 text-[11px]" style={muted}>
+								<label>Camera check
+									<select value={verifyMode(k)} onchange={(e) => setVerify(k, e.currentTarget.value)} class="{input} mt-1 w-full" style={inputStyle} title="auto = checked when the pose has a reference for the camera">
+										<option value="auto">auto{calFor(k.poseId) ? ' (on)' : ' (off)'}</option>
+										<option value="on">on</option>
+										<option value="off">off</option>
+									</select>
+								</label>
+								<label>mm<input type="number" step="0.1" min="0.1" max={MAX_POSITION_MM} value={k.tolerances?.positionMm ?? ''} placeholder={String(calFor(k.poseId)?.tolerances.positionMm ?? '')} oninput={(e) => setTol(k, 'positionMm', e.currentTarget.value)} class="{input} mt-1 w-full font-mono" style={inputStyle} /></label>
+								<label>spin °<input type="number" step="0.1" min="0" max={MAX_ANGLE_DEG} value={k.tolerances?.angleDeg ?? ''} placeholder={String(calFor(k.poseId)?.tolerances.angleDeg ?? '')} oninput={(e) => setTol(k, 'angleDeg', e.currentTarget.value)} class="{input} mt-1 w-full font-mono" style={inputStyle} /></label>
+								<label>steps<input type="number" step="1" min="1" max={MAX_TOLERANCE_STEPS} value={k.tolerances?.steps ?? ''} placeholder={String(calFor(k.poseId)?.tolerances.steps ?? '')} oninput={(e) => setTol(k, 'steps', e.currentTarget.value)} class="{input} mt-1 w-full font-mono" style={inputStyle} /></label>
+							</div>
 							{#if k.offsets}
 								<p class="mt-1 text-[11px]" style="color: #fbbf24">
 									This step was adjusted on the old timeline (the arm goes slightly off the pose here).
@@ -235,6 +305,7 @@
 			{#if selPose}
 				{#key selPose._id}
 					<PoseEditor pose={selPose} allPoses={poses} arm={armNow} {armReachable} {blocked} {blockReason} ongoto={goTo} />
+					<PoseCameraCard pose={selPose} {camera} cameras={cameraNames} oncamera={setCamera} calibration={calFor(selPose._id)} arm={armNow} {armReachable} {blocked} {blockReason} ongoto={goTo} />
 				{/key}
 				<p class="text-[11px]" style={muted}>Saving a pose changes it in every move set that uses it. "Save as new" makes a new pose and uses it for this step.</p>
 				{#if selPose.trim}

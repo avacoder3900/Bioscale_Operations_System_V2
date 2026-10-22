@@ -28,6 +28,7 @@ import {
 	updatePose
 } from '$lib/server/robot-arm-animation';
 import { failFrom, field, sharedAnimateActions, who } from '$lib/server/robot-arm-animate-actions';
+import { activeVerifiedRun, listPoseCalibrations } from '$lib/server/robot-arm-verified';
 import { friendlyName } from '$lib/robot-arm/animation';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -38,14 +39,17 @@ export const load: PageServerLoad = async ({ locals }) => {
 	// The Pi's servo driver is not thread-safe and a running session owns the
 	// bus, so the follower is only read when nothing is running.
 	const active = await playbackActive().catch(() => null);
-	const [poses, moveSets, sequences, arm, holder] = await Promise.all([
+	const [poses, moveSets, sequences, arm, holder, poseCalibrations, verifiedRun] = await Promise.all([
 		listPoses().catch(() => null),
 		listMoveSets().catch(() => null),
 		listSequences().catch(() => null),
 		active
 			? Promise.resolve({ error: active.kind === 'teleop' ? 'not read while the follower is following the control arm' : `not read while a ${active.kind} session is running` })
 			: readArm().catch((e) => ({ error: (e as Error).message })),
-		deriveArmHolder().catch(() => null)
+		deriveArmHolder().catch(() => null),
+		// ARM-09: every pose's active camera reference (no pictures) and a verified run still in progress (page reload resumes it).
+		listPoseCalibrations().catch(() => []),
+		activeVerifiedRun().catch(() => null)
 	]);
 
 	return {
@@ -56,7 +60,9 @@ export const load: PageServerLoad = async ({ locals }) => {
 		armNow: 'error' in arm ? null : JSON.parse(JSON.stringify({ positions: arm.positions, temps: arm.temps, torqueOn: arm.torqueOn })),
 		armNowError: 'error' in arm ? arm.error : null,
 		active,
-		holder: JSON.parse(JSON.stringify(holder ?? null))
+		holder: JSON.parse(JSON.stringify(holder ?? null)),
+		poseCalibrations: JSON.parse(JSON.stringify(poseCalibrations)),
+		verifiedRun: JSON.parse(JSON.stringify(verifiedRun ?? null))
 	};
 };
 

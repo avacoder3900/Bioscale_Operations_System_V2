@@ -5,8 +5,15 @@
 	 * Play, Stop, Save to Pi.
 	 */
 	import { enhance } from '$app/forms';
-	import { onDestroy } from 'svelte';
+	import { invalidateAll } from '$app/navigation';
+	import { onDestroy, onMount } from 'svelte';
 	import AnimationCurves from '$lib/components/robot-arm/AnimationCurves.svelte';
+	import VerifiedRunPanel from '$lib/components/robot-arm/VerifiedRunPanel.svelte';
+	import { VerifiedRun } from '$lib/robot-arm/verified-run.svelte';
+	import { loadChosenCamera, pickCamera, saveChosenCamera } from '$lib/robot-arm/arm-camera';
+	import { verifyWanted } from '$lib/robot-arm/verified-poses';
+	import type { PoseCalibrationSummary, VerifiedRunSummary } from '$lib/server/robot-arm-verified';
+	import type { CameraStatus } from '$lib/server/robot-arm-client';
 	import { autoDurationS, buildPath, flattenSequence, friendlyName, keyframePositions, pathStats, tooFast, EASINGS, MAX_TRANSITION_S, MIN_TRANSITION_S, type Easing, type RenderedPath, type ResolvedKeyframe, type SequenceItem } from '$lib/robot-arm/animation';
 	import { DEFAULT_JOINT_NAMES } from '$lib/robot-arm/recording-cleanup';
 	import { Playback } from '$lib/robot-arm/playback.svelte';
@@ -72,6 +79,27 @@
 	const playback = new Playback();
 	onDestroy(() => playback.destroy());
 
+	// ARM-09: the verified run (step by step, each verified pose checked with the camera).
+	const poseCals = $derived((data.poseCalibrations ?? []) as PoseCalibrationSummary[]);
+	const cameraNames = $derived([...new Set([...((data.cameras ?? []) as CameraStatus[]).map((c) => c.name), ...poseCals.map((c) => c.cameraName)])]);
+	let chosenCamera = $state<string | null>(null);
+	const camera = $derived(pickCamera(cameraNames, chosenCamera, poseCals.map((c) => c.cameraName)));
+	const hasRef = (poseId: string) => poseCals.some((c) => c.poseId === poseId && c.cameraName === camera && !c.stale);
+	const anyVerified = $derived(flat.some((k) => verifyWanted(k.verify, hasRef(k.poseId))));
+	const vr = new VerifiedRun();
+	vr.onend = () => void invalidateAll();
+	onDestroy(() => vr.destroy());
+	onMount(() => {
+		chosenCamera = loadChosenCamera();
+		const r = data.verifiedRun as VerifiedRunSummary | null;
+		if (r?.status === 'running') void vr.resume(r._id);
+	});
+	function playVerified() {
+		if (!camera) return;
+		if (confirm(`Verified run: the arm will MOVE through "${friendlyName(sequence.name)}" step by step, checking each verified pose with camera ${camera}. A failed check stops it. Is the path clear?`)) void vr.start('sequence', sequence._id, camera);
+	}
+	const blockedAll = $derived(blocked || vr.active || vr.busy);
+
 	function add() {
 		if (!addId) return;
 		items = [...items, { moveSetId: addId, joinDurationS: null, joinEasing: 'ease' }];
@@ -127,6 +155,7 @@
 		{#if playback.settled}<p class="text-xs" style="color: var(--color-tron-text-secondary)">{playback.settled}</p>{/if}
 		{#if playback.warnings.length}<ul class="list-disc pl-5 text-xs" style="color: #f59e0b">{#each playback.warnings as w}<li>{w}</li>{/each}</ul>{/if}
 	{/if}
+	<VerifiedRunPanel {vr} />
 
 	<form method="POST" action="?/save" use:enhance class="space-y-3 rounded border p-3 sm:p-4" style="border-color: var(--color-tron-border); background: var(--color-tron-surface);">
 		<input type="hidden" name="items" value={JSON.stringify(items)} />
@@ -200,9 +229,18 @@
 		{#if playback.running}
 			<button type="button" class={btn} style={red} onclick={() => playback.stop()} disabled={playback.busy}>Stop</button>
 		{:else}
-			<button type="button" class={btn} style={amber} disabled={blocked || dirty || !flat.length || problems.length > 0 || playback.busy}
+			<button type="button" class={btn} style={amber} disabled={blockedAll || dirty || !flat.length || problems.length > 0 || playback.busy}
 				title={dirty ? 'Save first' : 'Tween from where the arm is to the first pose, then play the whole sequence'}
 				onclick={() => { if (confirm(`The arm will MOVE through "${sequence.name}" from where it is. Is the path clear?`)) playback.play('play', {}, friendlyName(sequence.name)); }}>Play on the arm</button>
+			<button type="button" class={btn} style={green} disabled={blockedAll || dirty || !flat.length || problems.length > 0 || !camera || !anyVerified}
+				title={dirty ? 'Save first' : !camera ? 'No camera' : !anyVerified ? 'No pose in this sequence has a camera reference' : `Step by step; each verified pose checked with ${camera}. A failed check stops the run.`}
+				onclick={playVerified}>◎ Play verified</button>
+			<label class="flex items-center gap-1 text-xs" style="color: var(--color-tron-text-secondary)">camera
+				<select value={camera} onchange={(e) => { chosenCamera = e.currentTarget.value; saveChosenCamera(e.currentTarget.value); }} class="{input} py-0.5 text-xs" style={inputStyle} aria-label="Camera">
+					{#each cameraNames as n (n)}<option value={n}>{n}</option>{/each}
+					{#if !cameraNames.length}<option value="">no camera</option>{/if}
+				</select>
+			</label>
 		{/if}
 		<form method="POST" action="?/saveToPi" use:enhance class="flex items-end gap-2">
 			<label class="block text-xs" style="color: var(--color-tron-text-secondary)">Save on the Pi as recording<input name="recordingName" required maxlength="100" value={friendlyName(sequence.name)} class="{input} mt-1 block w-56" style={inputStyle} /></label>
