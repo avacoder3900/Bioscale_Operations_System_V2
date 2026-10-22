@@ -22332,3 +22332,15 @@ Retrieve this exact code: git checkout 5db9c5d6
 What this deployment is for: Clean-up tab Overlay page in production. Smoke 2026-10-22: /login 200,
 /manufacturing/cart-mfg/robot-arm/cleanup/overlay 302 to login, /api/robot-arm/animate/jog 401 without a session.
 Follow-up: f41dbfd5 put these merge/production lines inside the two feature entries; this commit moves them here.
+
+================================================================================
+2026-10-22 — docs/arm-animate-droop-context — Handoff context for the Animate droop / low-claw work
+================================================================================
+Robot_Arm_Animate_Droop_Context.md (repo root, beside the calibration and vision context docs):
+where #122 (merged), #123 and #124 (open, #124 stacked on #123) stand; the root cause (open-loop
+replay + STS3215 droop; poses store the follower reading, teleop record stores the leader command,
+so teleop has no anti-sag command); the three fix layers; how to verify without the arm; the Pi
+facts (arm-pi 172.16.202.203, user brevitest3, Funnel arm-pi.tailf65a70.ts.net, live code diverged
+from the vendored copy, dev PC's WiFi cannot reach the lab VLAN); the install/test order for
+replay_settle.py; code map; gotchas (PRD §10 numbering collision with #125, progress.txt union
+merges dropping ==== bars). No code change. No password in the doc.
