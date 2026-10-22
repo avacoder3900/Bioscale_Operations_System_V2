@@ -14,10 +14,17 @@
  * from the pilot's recording only how far their command was from the
  * animation's at each point of the motion:
  *
- *   1. Line the two up in time (`alignRecordings`): subsequence dynamic time
- *      warping on all six joints, the animated recording as the query, so it
- *      does not matter that the pilot was slower, paused elsewhere, or had
- *      lead-in and lead-out motion the animation does not.
+ *   1. Line the two up in time (`alignWith`), one of two ways:
+ *      - stretch (`stretchRecordings`, the default): the same motion at a
+ *        different overall speed. The animation's moving part is stretched
+ *        or shrunk uniformly onto the pilot's moving part (still time at the
+ *        start and end of each can be ignored), so the whole pilot path is
+ *        used, start to end.
+ *      - follow (`alignRecordings`): subsequence dynamic time warping on all
+ *        six joints, the animated recording as the query, for a pilot who
+ *        paused or sped up in places, or recorded extra motion around it.
+ *        It can squeeze the animation onto a short stretch of the pilot's
+ *        recording when the two paths differ a lot.
  *   2. For every animated frame, offset = pilot's goal (at the matched
  *      moment) − animated goal.
  *   3. Smooth that offset over a time window, cap it, scale it by a strength,
@@ -38,7 +45,30 @@ export interface Series {
 	goal: number[][];
 }
 
+export type AlignMode = 'stretch' | 'follow';
+
+export const ALIGN_MODES: { id: AlignMode; label: string; hint: string }[] = [
+	{
+		id: 'stretch',
+		label: 'Stretch to fit',
+		hint: 'Same moves at a different overall speed: the shorter recording is stretched evenly to the length of the longer one'
+	},
+	{
+		id: 'follow',
+		label: 'Follow the motion',
+		hint: 'The pilot paused or sped up in places: each moment of the animation is matched to the most similar moment of the pilot'
+	}
+];
+
+export function isAlignMode(v: unknown): v is AlignMode {
+	return v === 'stretch' || v === 'follow';
+}
+
 export interface OverlayOptions {
+	/** How the two recordings are lined up in time. */
+	align: AlignMode;
+	/** Stretch only: line up the moving parts, ignoring still time at the start and end of each recording. */
+	trimIdle: boolean;
 	/** How much of the pilot's offset to apply, 0..1. */
 	strength: number;
 	/** Seconds the offset is averaged over (centred). 0 = none. */
@@ -50,6 +80,8 @@ export interface OverlayOptions {
 }
 
 export const DEFAULT_OVERLAY_OPTIONS: OverlayOptions = {
+	align: 'stretch',
+	trimIdle: true,
 	strength: 1,
 	windowS: 1,
 	servos: [1, 2, 3, 4, 5, 6],
@@ -61,8 +93,15 @@ export const MAX_MAX_OFFSET = 1000;
 export const MAX_ALIGN_SAMPLES = 1200;
 /** Mean joint distance after alignment above which the two recordings probably are not the same motion. */
 export const POOR_FIT_STEPS = 150;
+/** Still time: a frame within this many steps (every joint) of the first / last frame is not yet / no longer moving. */
+export const IDLE_STEPS = 10;
 
 export interface Alignment {
+	mode: AlignMode;
+	/** Stretch only: pilot active duration ÷ animation active duration (>1 = the pilot was slower). */
+	stretch: number | null;
+	/** Animated frames whose motion was lined up (the rest map to the pilot's first / last moving frame). */
+	smoothSpan: { from: number; to: number };
 	/** Thinning factor the warping was computed at (1 = every frame). */
 	every: number;
 	/** For every animated frame, the pilot frame it lines up with (fractional, non-decreasing). */
@@ -183,32 +222,113 @@ export function alignRecordings(smooth: Series, precise: Series): Alignment {
 	for (let k = 0; k < n; k++) matchThin.push(cnt[k] ? sum[k] / cnt[k] : (matchThin[k - 1] ?? 0));
 
 	const match: number[] = [];
-	const aligned: number[][] = [];
-	const offset: number[][] = [];
-	let fitSum = 0;
 	for (let f = 0; f < smooth.goal.length; f++) {
 		const pos = f / every;
 		const k = Math.min(n - 1, Math.floor(pos));
 		const next = Math.min(n - 1, k + 1);
 		const mt = matchThin[k] + (matchThin[next] - matchThin[k]) * (pos - k);
-		const pf = Math.min(precise.goal.length - 1, Math.max(0, mt * every));
-		match.push(pf);
-		const row = rowAt(precise.goal, pf);
-		aligned.push(row);
-		offset.push(row.map((v, s) => v - smooth.goal[f][s]));
-		fitSum += dist(row, smooth.goal[f]);
+		match.push(Math.min(precise.goal.length - 1, Math.max(0, mt * every)));
 	}
-	return {
+	return finish('follow', smooth, precise, match, {
 		every,
-		match,
-		aligned,
-		offset,
-		fit: fitSum / smooth.goal.length,
+		stretch: null,
+		smoothSpan: { from: 0, to: smooth.goal.length - 1 },
 		span: {
 			from: Math.round((jStart - 1) * every),
 			to: Math.min(precise.goal.length - 1, Math.round((jEnd - 1) * every))
 		}
+	});
+}
+
+/** The pilot's rows at the matched frames, the offsets and the fit. */
+function finish(
+	mode: AlignMode,
+	smooth: Series,
+	precise: Series,
+	match: number[],
+	rest: { every: number; stretch: number | null; smoothSpan: { from: number; to: number }; span: { from: number; to: number } }
+): Alignment {
+	const aligned: number[][] = [];
+	const offset: number[][] = [];
+	let fitSum = 0;
+	for (let f = 0; f < smooth.goal.length; f++) {
+		const row = rowAt(precise.goal, match[f]);
+		aligned.push(row);
+		offset.push(row.map((v, s) => v - smooth.goal[f][s]));
+		fitSum += dist(row, smooth.goal[f]);
+	}
+	return { mode, ...rest, match, aligned, offset, fit: fitSum / smooth.goal.length };
+}
+
+/**
+ * The frames where a recording is moving: from the first frame that has
+ * left the first frame's pose by more than `idleSteps` on some joint, to
+ * the last frame not yet within `idleSteps` of the last frame's pose (each
+ * widened by one frame, so the move's first and last frames are included).
+ * A recording that never moves gives its whole length.
+ */
+export function activeSpan(s: Series, idleSteps = IDLE_STEPS): { from: number; to: number } {
+	const n = s.goal.length;
+	const first = s.goal[0];
+	const last = s.goal[n - 1];
+	const far = (a: number[], b: number[]) => {
+		for (let j = 0; j < SERVO_COUNT; j++) if (Math.abs(a[j] - b[j]) > idleSteps) return true;
+		return false;
 	};
+	let from = 0;
+	while (from < n - 1 && !far(s.goal[from], first)) from++;
+	let to = n - 1;
+	while (to > 0 && !far(s.goal[to], last)) to--;
+	if (from >= n - 1 || to <= 0 || to < from) return { from: 0, to: n - 1 };
+	return { from: Math.max(0, from - 1), to: Math.min(n - 1, to + 1) };
+}
+
+/**
+ * Stretch alignment: the animation's moving part laid evenly over the
+ * pilot's moving part, by time. Animated time u ∈ [0, 1] across its span
+ * maps to the pilot time at the same fraction of the pilot's span; still
+ * frames before / after the animation's span map to the pilot's first /
+ * last moving frame. With `trimIdle` off, both whole recordings are the
+ * spans. Every pilot frame in the span is used, in order, at a constant
+ * rate — the shorter recording is stretched, the longer one shrunk.
+ */
+export function stretchRecordings(smooth: Series, precise: Series, o: { trimIdle?: boolean } = {}): Alignment {
+	if (smooth.goal.length < 2) throw new Error('the animated recording has fewer than 2 frames');
+	if (precise.goal.length < 2) throw new Error("the pilot's recording has fewer than 2 frames");
+	const trim = o.trimIdle ?? true;
+	const sSpan = trim ? activeSpan(smooth) : { from: 0, to: smooth.goal.length - 1 };
+	const pSpan = trim ? activeSpan(precise) : { from: 0, to: precise.goal.length - 1 };
+	const sT0 = smooth.t[sSpan.from];
+	const sT1 = smooth.t[sSpan.to];
+	const pT0 = precise.t[pSpan.from];
+	const pT1 = precise.t[pSpan.to];
+	const sDur = sT1 - sT0;
+	const pDur = pT1 - pT0;
+	// Pilot frame index at a pilot time, fractional (times are increasing).
+	let k = pSpan.from;
+	const frameAt = (tp: number) => {
+		while (k < pSpan.to && precise.t[k + 1] <= tp) k++;
+		while (k > pSpan.from && precise.t[k] > tp) k--;
+		const a = precise.t[k];
+		const b = precise.t[Math.min(k + 1, precise.t.length - 1)];
+		return b > a ? k + Math.max(0, Math.min(1, (tp - a) / (b - a))) : k;
+	};
+	const match: number[] = [];
+	for (let f = 0; f < smooth.goal.length; f++) {
+		const u = sDur > 0 ? Math.max(0, Math.min(1, (smooth.t[f] - sT0) / sDur)) : 0;
+		match.push(Math.min(pSpan.to, frameAt(pT0 + u * pDur)));
+	}
+	return finish('stretch', smooth, precise, match, {
+		every: 1,
+		stretch: sDur > 0 ? pDur / sDur : null,
+		smoothSpan: sSpan,
+		span: pSpan
+	});
+}
+
+/** Line the two recordings up the way the options say. */
+export function alignWith(smooth: Series, precise: Series, o: Pick<OverlayOptions, 'align' | 'trimIdle'>): Alignment {
+	return o.align === 'follow' ? alignRecordings(smooth, precise) : stretchRecordings(smooth, precise, { trimIdle: o.trimIdle });
 }
 
 function thin(goal: number[][], every: number): number[][] {
@@ -352,7 +472,10 @@ export function validateOverlayOptions(raw: unknown): OverlayOptions {
 		if (servos.some((s) => !Number.isInteger(s) || s < 1 || s > SERVO_COUNT)) throw new Error('Servos must be 1–6.');
 		if (!servos.length) throw new Error('Pick at least one servo to correct.');
 	}
-	return { strength: Math.round(strength * 100) / 100, windowS: Math.round(windowS * 10) / 10, servos, maxOffset };
+	const align = o.align === undefined ? DEFAULT_OVERLAY_OPTIONS.align : o.align;
+	if (!isAlignMode(align)) throw new Error('Line up by must be "stretch" or "follow".');
+	const trimIdle = o.trimIdle === undefined ? DEFAULT_OVERLAY_OPTIONS.trimIdle : o.trimIdle === true || o.trimIdle === 'true';
+	return { align, trimIdle, strength: Math.round(strength * 100) / 100, windowS: Math.round(windowS * 10) / 10, servos, maxOffset };
 }
 
 export interface ComposeOverlayOptions {
@@ -397,6 +520,8 @@ export function composeOverlayRecording(
 			overlay: {
 				animated: o.smoothName,
 				pilot: o.preciseName,
+				align: o.options.align,
+				trim_idle: o.options.trimIdle,
 				strength: o.options.strength,
 				window_s: o.options.windowS,
 				servos: o.options.servos,

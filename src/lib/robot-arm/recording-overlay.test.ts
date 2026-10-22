@@ -1,7 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import {
 	DEFAULT_OVERLAY_OPTIONS,
+	activeSpan,
 	alignRecordings,
+	alignWith,
+	stretchRecordings,
 	applyOverlay,
 	composeOverlayRecording,
 	movingAverage,
@@ -219,5 +222,99 @@ describe('composeOverlayRecording', () => {
 		expect(Math.max(...parsed.frames.map((f) => f.positions['1']))).toBe(2200);
 		expect(parsed.frames[0].positions['2']).toBe(920);
 		expect(out.durationS).toBeCloseTo(smooth.t[smooth.t.length - 1] - 5, 3);
+	});
+});
+
+/** The pilot doing the same moves uniformly slower (or faster), standing still before and after, with tremor. */
+function stillThenPiloted(base: Series, offset: number[], o: { stretch: number; leadS: number; tailS: number; tremor?: number }): Series {
+	let seed = 11;
+	const rnd = () => {
+		seed = (seed * 1103515245 + 12345) % 2147483648;
+		return seed / 2147483648 - 0.5;
+	};
+	const tremor = o.tremor ?? 3;
+	const t: number[] = [];
+	const goal: number[][] = [];
+	let tick = 0;
+	const push = (row: number[]) => {
+		t.push(tick / RATE);
+		goal.push(row.map((v, j) => Math.round(v + offset[j] + rnd() * 2 * tremor)));
+		tick += 1;
+	};
+	for (let k = 0; k < o.leadS * RATE; k++) push(base.goal[0]);
+	const n = base.goal.length;
+	const m = Math.round(n * o.stretch);
+	for (let k = 0; k < m; k++) {
+		const pos = (k / (m - 1)) * (n - 1);
+		const i = Math.min(n - 2, Math.floor(pos));
+		push(base.goal[i].map((v, j) => v + (base.goal[i + 1][j] - v) * (pos - i)));
+	}
+	for (let k = 0; k < o.tailS * RATE; k++) push(base.goal[n - 1]);
+	return { t, goal };
+}
+const spread = (rows: number[][], j: number) => Math.max(...rows.map((r) => r[j])) - Math.min(...rows.map((r) => r[j]));
+
+describe('stretchRecordings', () => {
+	it('lays a 1.7x slower pilot run over the animation evenly and recovers the offset', () => {
+		const smooth = animated();
+		const precise = stillThenPiloted(smooth, OFFSET, { stretch: 1.7, leadS: 2, tailS: 1.5 });
+		const a = stretchRecordings(smooth, precise);
+		expect(a.mode).toBe('stretch');
+		expect(a.stretch).toBeGreaterThan(1.6);
+		expect(a.stretch).toBeLessThan(1.8);
+		// The still lead-in and tail are skipped; the whole moving part of the pilot is used.
+		expect(precise.t[a.span.from]).toBeGreaterThan(1.8);
+		expect(precise.t[a.span.to]).toBeLessThan(precise.t[precise.t.length - 1] - 1.3);
+		// The amber line moves as far as the grey one (no squeezing).
+		for (const j of [0, 1, 2, 3, 5]) expect(spread(a.aligned, j) / spread(smooth.goal, j)).toBeGreaterThan(0.95);
+		const r = applyOverlay(smooth, a, { ...DEFAULT_OVERLAY_OPTIONS, windowS: 0 });
+		for (let j = 0; j < 6; j++) expect(Math.abs(r.servos[j].median - OFFSET[j])).toBeLessThanOrEqual(4);
+		expect(a.fit).toBeLessThan(80);
+	});
+
+	it('shrinks a faster pilot run the same way', () => {
+		const smooth = animated(2, 1);
+		const precise = stillThenPiloted(smooth, OFFSET, { stretch: 0.6, leadS: 1, tailS: 1 });
+		const a = stretchRecordings(smooth, precise);
+		expect(a.stretch).toBeGreaterThan(0.5);
+		expect(a.stretch).toBeLessThan(0.7);
+		const r = applyOverlay(smooth, a, { ...DEFAULT_OVERLAY_OPTIONS, windowS: 0 });
+		for (let j = 0; j < 6; j++) expect(Math.abs(r.servos[j].median - OFFSET[j])).toBeLessThanOrEqual(4);
+	});
+
+	it('without ignoring still time, a pause before the pilot started shifts the whole match', () => {
+		const smooth = animated();
+		const precise = stillThenPiloted(smooth, OFFSET, { stretch: 1.3, leadS: 4, tailS: 0 });
+		const trimmed = stretchRecordings(smooth, precise, { trimIdle: true });
+		const whole = stretchRecordings(smooth, precise, { trimIdle: false });
+		expect(whole.span.from).toBe(0);
+		expect(whole.fit).toBeGreaterThan(trimmed.fit * 2);
+	});
+
+	it('alignWith picks the mode', () => {
+		const smooth = animated();
+		const precise = stillThenPiloted(smooth, OFFSET, { stretch: 1.5, leadS: 1, tailS: 1 });
+		expect(alignWith(smooth, precise, { align: 'stretch', trimIdle: true }).mode).toBe('stretch');
+		expect(alignWith(smooth, precise, { align: 'follow', trimIdle: true }).mode).toBe('follow');
+	});
+});
+
+describe('activeSpan', () => {
+	it('finds where a recording starts and stops moving', () => {
+		const s: Series = { t: [0, 1, 2, 3, 4, 5], goal: [0, 0, 50, 100, 100, 100].map((v) => [v, 0, 0, 0, 0, 0]) };
+		// frame 1 = last still frame before the move, frame 3 = first frame at the end pose
+		expect(activeSpan(s)).toEqual({ from: 1, to: 3 });
+	});
+	it('gives the whole recording when nothing moves', () => {
+		const s: Series = { t: [0, 1, 2], goal: [POSES[0], POSES[0], POSES[0]] };
+		expect(activeSpan(s)).toEqual({ from: 0, to: 2 });
+	});
+});
+
+describe('validateOverlayOptions (line-up)', () => {
+	it('defaults to stretch with still time ignored; reads the form values', () => {
+		expect(validateOverlayOptions({})).toMatchObject({ align: 'stretch', trimIdle: true });
+		expect(validateOverlayOptions({ align: 'follow', trimIdle: 'false' })).toMatchObject({ align: 'follow', trimIdle: false });
+		expect(() => validateOverlayOptions({ align: 'warp' })).toThrow(/stretch/);
 	});
 });

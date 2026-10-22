@@ -1,20 +1,24 @@
 <script lang="ts">
 	/**
-	 * Overlay: the pilot's positions on an animated recording. The server lines
-	 * the two recordings up (load); the settings are applied here from the
-	 * same pure module the server saves with, so the chart and the table show
-	 * exactly what Save will write.
+	 * Overlay: the pilot's positions on an animated recording. The server reads
+	 * both recordings (load); the alignment and the settings are applied here
+	 * from the same pure module the server saves with, so the chart and the
+	 * table show exactly what Save will write.
 	 */
 	import { deserialize } from '$app/forms';
 	import { goto } from '$app/navigation';
 	import type { ActionResult } from '@sveltejs/kit';
 	import OverlayChart from '$lib/components/robot-arm/OverlayChart.svelte';
 	import {
+		ALIGN_MODES,
 		DEFAULT_OVERLAY_OPTIONS,
 		MAX_MAX_OFFSET,
 		MAX_WINDOW_S,
 		POOR_FIT_STEPS,
+		alignWith,
 		applyOverlay,
+		type AlignMode,
+		type Alignment,
 		type OverlayOptions
 	} from '$lib/robot-arm/recording-overlay';
 	import { SERVO_IDS, DEFAULT_JOINT_NAMES } from '$lib/robot-arm/recording-cleanup';
@@ -53,11 +57,15 @@
 	}
 
 	// --- settings ------------------------------------------------------------------
+	let alignMode = $state<AlignMode>(DEFAULT_OVERLAY_OPTIONS.align);
+	let trimIdle = $state(DEFAULT_OVERLAY_OPTIONS.trimIdle);
 	let strengthPct = $state(Math.round(DEFAULT_OVERLAY_OPTIONS.strength * 100));
 	let windowS = $state(DEFAULT_OVERLAY_OPTIONS.windowS);
 	let maxOffset = $state(DEFAULT_OVERLAY_OPTIONS.maxOffset);
 	let servoOn = $state<boolean[]>(SERVO_IDS.map((sid) => DEFAULT_OVERLAY_OPTIONS.servos.includes(sid)));
 	const options = $derived<OverlayOptions>({
+		align: alignMode,
+		trimIdle,
 		strength: Math.max(0, Math.min(1, strengthPct / 100)),
 		windowS: Math.max(0, Math.min(MAX_WINDOW_S, Number(windowS) || 0)),
 		servos: SERVO_IDS.filter((_, i) => servoOn[i]),
@@ -67,12 +75,24 @@
 
 	const ov = $derived(data.overlay);
 	const names = $derived(ov?.smooth.jointNames?.length ? ov.smooth.jointNames : DEFAULT_JOINT_NAMES);
-	const preview = $derived.by(() => {
-		if (!ov) return null;
-		if (!options.servos.length) return null;
-		return applyOverlay({ t: ov.t, goal: ov.goal }, { offset: ov.offset }, options);
+	// Recomputed only when the pair or the line-up settings change, not on every slider move.
+	const lined = $derived.by((): { a: Alignment | null; error: string | null } => {
+		if (!ov) return { a: null, error: null };
+		try {
+			return { a: alignWith({ t: ov.t, goal: ov.goal }, { t: ov.pilotT, goal: ov.pilotGoal }, { align: alignMode, trimIdle }), error: null };
+		} catch (e) {
+			return { a: null, error: (e as Error).message };
+		}
 	});
-	const poorFit = $derived(!!ov && ov.fit > POOR_FIT_STEPS);
+	const al = $derived(lined.a);
+	const preview = $derived.by(() => {
+		if (!ov || !al) return null;
+		if (!options.servos.length) return null;
+		return applyOverlay({ t: ov.t, goal: ov.goal }, al, options);
+	});
+	const poorFit = $derived(!!al && al.fit > POOR_FIT_STEPS);
+	const pilotS = (i: number) => (ov ? ov.pilotT[i] - ov.pilotT[0] : 0);
+	const smoothS = (i: number) => (ov ? ov.t[i] - ov.t[0] : 0);
 	const cappedTotal = $derived(preview ? preview.servos.reduce((n, s) => n + s.capped, 0) : 0);
 
 	// --- actions --------------------------------------------------------------------
@@ -204,8 +224,9 @@
 			</button>
 		</div>
 		<p class="mt-2 text-[11px]" style="color: var(--color-tron-text-secondary)">
-			Both recordings must be of the same motion in the same order. The pilot may be slower, pause elsewhere, and
-			start or finish somewhere else — the alignment finds where the animation fits in the pilot's recording.
+			Both recordings must be of the same motion in the same order. They can take different times: by default the
+			shorter one is stretched evenly to the length of the longer one (Stretch to fit), from when each starts moving
+			to when it stops. If the pilot paused or sped up in places, switch to Follow the motion below.
 		</p>
 
 		{#if data.overlayError}
@@ -227,19 +248,50 @@
 		{/if}
 	</section>
 
-	{#if ov && preview}
+	{#if lined.error}
+		<p class="rounded border border-red-500/40 bg-red-900/10 p-3 text-xs text-red-300">Could not line the recordings up: {lined.error}</p>
+	{/if}
+	{#if ov && al && preview}
 		<!-- What lined up -->
 		<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4">
+			<div class="mb-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs" style="color: var(--color-tron-text-secondary)">
+				<span class="font-semibold uppercase tracking-wider">Line up by</span>
+				{#each ALIGN_MODES as m (m.id)}
+					<label class="flex items-center gap-1.5" title={m.hint}>
+						<input type="radio" name="align" value={m.id} bind:group={alignMode} class="accent-cyan-400" />
+						<span style="color: var(--color-tron-text)">{m.label}</span>
+					</label>
+				{/each}
+				{#if alignMode === 'stretch'}
+					<label class="flex items-center gap-1.5" title="Line up from when each recording starts moving to when it stops, so a pause before or after the motion does not shift the stretch">
+						<input type="checkbox" bind:checked={trimIdle} class="accent-cyan-400" />
+						<span style="color: var(--color-tron-text)">Ignore still time at the start and end</span>
+					</label>
+				{/if}
+			</div>
 			<p class="text-xs" style="color: var(--color-tron-text-secondary)">
 				<span class="font-mono" style="color: var(--color-tron-text)">{ov.smooth.name}</span>
 				({ov.smooth.frames} frames, {fmtS(ov.smooth.durationS)}{#if ov.smooth.animated}, from move set “{ov.smooth.animated}”{/if})
 				lined up with
 				<span class="font-mono" style="color: var(--color-tron-text)">{ov.precise.name}</span>
-				({ov.precise.frames} frames, {fmtS(ov.precise.durationS)}), using its {fmtS(ov.span.fromS)}–{fmtS(ov.span.toS)}.
+				({ov.precise.frames} frames, {fmtS(ov.precise.durationS)}).
+				{#if al.mode === 'stretch'}
+					The animation's {fmtS(smoothS(al.smoothSpan.from))}–{fmtS(smoothS(al.smoothSpan.to))} is laid evenly over the pilot's
+					{fmtS(pilotS(al.span.from))}–{fmtS(pilotS(al.span.to))}{#if al.stretch}
+						— the pilot took <strong style="color: var(--color-tron-text)">{al.stretch.toFixed(2)}×</strong> as long{/if}.
+				{:else}
+					The animation matched the pilot's {fmtS(pilotS(al.span.from))}–{fmtS(pilotS(al.span.to))}.
+				{/if}
 				After lining up the pilot's path sits
-				<strong style="color: var(--color-tron-text)">{ov.fit.toFixed(0)} steps</strong> from the animation on average
+				<strong style="color: var(--color-tron-text)">{al.fit.toFixed(0)} steps</strong> from the animation on average
 				(all six joints together; that distance includes the offset being corrected).
 			</p>
+			{#if al.mode === 'follow' && ov.pilotT.length > 1 && pilotS(al.span.to) - pilotS(al.span.from) < 0.5 * (ov.pilotT[ov.pilotT.length - 1] - ov.pilotT[0])}
+				<p class="mt-2 rounded border border-amber-500/40 bg-amber-900/10 p-2 text-xs text-amber-300">
+					Follow the motion used less than half of the pilot's recording, so the amber line may be squeezed flat. If
+					the two recordings are the same moves at different speeds, use Stretch to fit.
+				</p>
+			{/if}
 			{#if poorFit}
 				<p class="mt-2 rounded border border-amber-500/40 bg-amber-900/10 p-2 text-xs text-amber-300">
 					That is a long way apart (more than {POOR_FIT_STEPS} steps). These two recordings may not be the same
@@ -247,7 +299,7 @@
 				</p>
 			{/if}
 			<div class="mt-3">
-				<OverlayChart t={ov.t} smooth={ov.goal} pilot={ov.aligned} result={preview.goal} jointNames={names} corrected={servoOn} />
+				<OverlayChart t={ov.t} smooth={ov.goal} pilot={al.aligned} result={preview.goal} jointNames={names} corrected={servoOn} />
 			</div>
 		</section>
 
@@ -381,7 +433,7 @@
 				</p>
 			</div>
 		</section>
-	{:else if ov && !preview}
+	{:else if ov && al && !preview}
 		<p class="rounded border border-amber-500/40 bg-amber-900/10 p-3 text-xs text-amber-300">Tick at least one servo to correct.</p>
 	{/if}
 </div>

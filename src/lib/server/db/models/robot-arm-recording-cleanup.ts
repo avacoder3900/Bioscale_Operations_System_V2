@@ -74,6 +74,9 @@ const robotArmRecordingCleanupSchema = new Schema(
 			type: new Schema(
 				{
 					preciseName: { type: String, required: true },
+					/** 'stretch' (uniform time scaling) or 'follow' (dynamic time warping); absent on overlays made before 2026-10-22's stretch. */
+					align: { type: String, default: 'follow' },
+					trimIdle: { type: Boolean, default: false },
 					strength: Number,
 					windowS: Number,
 					servos: { type: [Number], default: [] },

@@ -22455,3 +22455,33 @@ and 13:43:53, when a BIMS viewer opened the page and the stream started (1920x10
 errors). The "only video0/1/2" listing was my own `head -8` on an alphabetically sorted node list (video19-23 sorted
 before video3-5). The dmesg "Failed to resubmit video URB" line is at 3886 s uptime = 12:32 CDT, the thermal-install
 restart tearing down the old stream; benign. No USB action needed.
+
+================================================================================
+2026-10-22 — feat/overlay-stretch — Overlay: "Stretch to fit" lines up recordings of different lengths
+================================================================================
+Operator lined up an animated "half" with a teleop "half" of the same motion and the amber (pilot) line came
+out nearly straight. Cause: the overlay only had subsequence dynamic time warping, which may map many animated
+frames onto one pilot frame; when the paths differ it is cheaper to squeeze the whole animation onto a short,
+nearly still stretch of the pilot's recording than to follow it. Reproduced with synthetic paths (pilot covering
+less than the animation, or moving 60% as far: amber moved ~0.5x the grey, an unmoved joint went flat). The
+operator wants the shorter path stretched or the longer shrunk so the two overlay.
+Built: recording-overlay.ts gains stretchRecordings (the animation's moving part laid evenly over the pilot's
+moving part by time; every pilot frame in it used once, in order) and activeSpan (moving part = last frame within
+10 steps of the first pose to the first frame within 10 steps of the last pose); alignWith picks stretch (default)
+or follow; OverlayOptions gain align + trimIdle (validated; recorded in the saved header overlay.align/trim_idle and
+on a clean-up's overlay, schema default 'follow' for older ones). Alignment moved into the browser: the preview
+sends both recordings' frames, the page aligns on pair/line-up change only; saves send align/trimIdle so the server
+recomputes the same thing; the 20 000-frame preview limit now covers the pilot's recording too. Page: "Line up by"
+radios above the chart (Stretch to fit / Follow the motion), "Ignore still time at the start and end", the two
+spans and the stretch factor, and a warning when Follow used less than half of the pilot's recording. Clean-up
+editor header names the line-up mode. PRD ARM-07 section 2 step 1 and new section 5.
+Tests: +7 (stretch 1.7x slower with still lead-in/tail recovers the offset within 4 steps and keeps the amber
+spread >= 95% of the grey; 0.6x faster; still time not ignored shifts the match; alignWith; activeSpan x2;
+validate). robot-arm unit suites 6 files, 139 passed. svelte-check 14 errors (baseline), no warnings in touched
+files. Not run against the arm or a live Pi.
+Deployment: preview — https://bioscale-operations-system-mongodb-6lcx84gzy-brevitest.vercel.app
+Source: branch feat/overlay-stretch @ commit c6b87061
+Retrieve this exact code: git checkout feat/overlay-stretch at commit c6b87061
+  (or: git log feat/overlay-stretch --oneline to find it if the branch has since moved on)
+What this deployment is for: Overlay "Line up by: Stretch to fit" on the Clean-up tab (PR #128); smoke: /login 200, cleanup/overlay 302 to login.
+PR: https://github.com/avacoder3900/Bioscale_Operations_System_V2/pull/128

@@ -1,6 +1,6 @@
 # ARM-07 — Clean-up overlay: the pilot's positions on an animated recording
 
-**Status:** built 2026-10-22 on `feat/cleanup-overlay`; not yet run against the arm or a live Pi. No new Pi
+**Status:** built 2026-10-22 on `feat/cleanup-overlay` (stretch to fit: `feat/overlay-stretch`, §5); not yet run against the arm or a live Pi. No new Pi
 route — it reads and writes recordings through the routes the Clean-up tab already uses.
 
 ## 1. The problem
@@ -19,11 +19,20 @@ The operator wants both: the timing and curves of the animated recording, the po
 **Clean-up tab → Overlay** (`cleanup/overlay?smooth=<animated>&precise=<teleop>`). Pick an animated recording
 (timing and smoothness) and a pilot's recording of the same motion (positions). BIMS:
 
-1. **Lines them up in time.** Subsequence dynamic time warping on all six joints, the animated recording as
-   the query: it must be matched whole and in order, but may start and end anywhere in the pilot's
-   recording, so the pilot may be slower, pause elsewhere, and have lead-in / lead-out motion the animation
-   does not. Long recordings are thinned to ≤ 1200 samples for the warping and the match is interpolated
-   back to every animated frame.
+1. **Lines them up in time**, one of two ways (*Line up by*, above the chart; §5):
+   - **Stretch to fit** (default, added 2026-10-22 on `feat/overlay-stretch`): the same moves at a different
+     overall speed. The animation's moving part is laid evenly over the pilot's moving part, by time, so the
+     shorter recording is stretched and the longer one shrunk; every pilot frame in its moving part is used,
+     in order. *Ignore still time at the start and end* (default on) finds each recording's moving part:
+     from the last frame within 10 steps (every joint) of the first pose to the first frame within 10 steps
+     of the last pose. The page shows the two spans and the stretch factor (pilot time ÷ animation time).
+   - **Follow the motion**: subsequence dynamic time warping on all six joints, the animated recording as the
+     query: it must be matched whole and in order, but may start and end anywhere in the pilot's recording,
+     so the pilot may pause or speed up in places, and have lead-in / lead-out motion the animation does not.
+     Long recordings are thinned to ≤ 1200 samples for the warping and the match is interpolated back to every
+     animated frame. When the two paths differ, it can squeeze the animation onto a short stretch of the
+     pilot's recording and flatten the amber line; the page warns when it used less than half of the pilot's
+     recording.
 2. **Takes the offset.** For every animated frame, offset = pilot's goal at the matched moment − animated
    goal, per servo.
 3. **Applies it.** The offset is averaged over a window (default 1 s, so tremor and the pilot's detours
@@ -53,8 +62,8 @@ Two ways out, both leaving the sources untouched:
 
 | File | Role |
 |---|---|
-| `src/lib/robot-arm/recording-overlay.ts` (+ `.test.ts`, 17 tests) | pure: `seriesFromFrames`, `alignRecordings` (subsequence DTW), `applyOverlay`, `validateOverlayOptions`, `composeOverlayRecording` |
-| `src/lib/server/robot-arm-overlay.ts` | read both recordings off the Pi, preview, save to Pi, open as clean-up; `classifyRecording` (animated / teleop / clean-up / overlay from the sidecar) |
+| `src/lib/robot-arm/recording-overlay.ts` (+ `.test.ts`, 24 tests) | pure: `seriesFromFrames`, `stretchRecordings` + `activeSpan` (stretch to fit), `alignRecordings` (subsequence DTW), `alignWith` (picks one), `applyOverlay`, `validateOverlayOptions`, `composeOverlayRecording` |
+| `src/lib/server/robot-arm-overlay.ts` | read both recordings off the Pi, preview (both recordings' frames go to the browser, which lines them up), save to Pi, open as clean-up; `classifyRecording` (animated / teleop / clean-up / overlay from the sidecar) |
 | `src/lib/server/robot-arm-cleanup.ts` | `readSourceRecording` / `insertCleanup` split out of `createCleanup`; `overlay` on the clean-up doc |
 | `src/lib/server/db/models/robot-arm-recording-cleanup.ts` | `overlay` subdocument (null for a plain clean-up) |
 | `src/lib/components/robot-arm/OverlayChart.svelte` | the three-line lanes |
@@ -78,3 +87,24 @@ Permissions: `manufacturing:read` to preview, `manufacturing:write` to save. Not
 - First hardware test: animate a move set and save it to the Pi; teleop the same motion and record it;
   overlay them; replay the result from Control and check the claw height at each pose against the teleop
   replay. Then try *Open as a clean-up → Send to Animate* and play the move set.
+
+## 5. Stretch to fit (`feat/overlay-stretch`, 2026-10-22)
+
+**Problem.** The first try on real recordings (an animated "half" against a teleop "half" of the same motion,
+the pilot slower) gave a nearly straight amber line. The two paths took different times and differed enough
+that the warping found it cheaper to map the whole animation onto a short, nearly still stretch of the
+pilot's recording than to follow it. Reproduced with synthetic paths: when the pilot covers less than the
+animation or moves much less far, the amber line moves about half as far as the grey one, and a joint the
+pilot never moved goes flat.
+
+**What the operator wanted:** the shorter path stretched, or the longer one shrunk, so the two lie on top of
+each other. So *Line up by* now has **Stretch to fit**, the default: uniform time scaling of the moving parts
+(§2 step 1). It cannot squeeze: every pilot frame of the moving part is used once, in order, at a constant
+rate. *Follow the motion* (the warping) stays for a pilot who paused or sped up mid-motion.
+
+**How.** The alignment moved into the browser. The preview now sends both recordings' frames
+(`pilotT` / `pilotGoal`), and the page runs `alignWith` when the pair or the line-up settings change, not on
+every slider move. Save to Pi and Open as a clean-up send `align` and `trimIdle` with the other settings, so
+the server recomputes the same thing. Both are recorded: in the saved recording's header (`overlay.align`,
+`overlay.trim_idle`) and on a clean-up's `overlay` (overlays made before this read as `follow`). The
+20 000-frame preview limit now applies to the pilot's recording too.
