@@ -22243,3 +22243,8 @@ Retrieve this exact code: git checkout feat/animate-pose-jog at commit 7618f243
   (or: git log feat/animate-pose-jog --oneline to find it if the branch has since moved on)
 What this deployment is for: the PR #125 build to test the Jog panel on — the arm page, Animate tab, jog a pose; svelte-check after the merge 14 errors (baseline).
 (The docs commit that adds these lines deploys the same code again; not logged separately.)
+Deployment: preview — https://bioscale-operations-system-mongodb-f2v5ftv6t-brevitest.vercel.app
+Source: branch feat/animate-pose-jog @ commit 4e06049c (master d2d0aa09 merged in; only progress.txt conflicted)
+Retrieve this exact code: git checkout feat/animate-pose-jog at commit 4e06049c
+What this deployment is for: pre-merge build of PR #125; smoke: /login 200, /api/robot-arm/animate/jog 401 without a session, Animate page 302 to login.
+Merge to master via the API was blocked by the auto-mode classifier [Merge Without Review]; waiting on the user to allow it.
