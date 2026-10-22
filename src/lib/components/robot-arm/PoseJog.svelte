@@ -1,6 +1,6 @@
 <script lang="ts">
 	/**
-	 * ARM-06 §10 — adjust a pose by jogging the real arm.
+	 * ARM-06 §12 — adjust a pose by jogging the real arm.
 	 *
 	 * One row per servo: the pose's value, where the arm is now (live), the
 	 * difference, and −/+ buttons that move that joint by the chosen step.

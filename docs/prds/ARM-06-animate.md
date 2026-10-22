@@ -169,7 +169,7 @@ joints to the pose*. Joint edits are stored per keyframe as `offsets[6]` (steps 
 editors use pose + offsets, `resolveKeyframes` (everything sent to the Pi) adds the trim.
 
 **Why the claw ended up lower than the pose.** The Pi plays a path open-loop: each frame's goal is
-written and nothing else (`_replay_loop`). The STS3215's position loop is proportional, so a joint
+written and nothing else (`replay_session` in the Pi's `src/hardware/dual_arm.py`). The STS3215's position loop is proportional, so a joint
 carrying the arm against gravity settles a few to a few tens of steps *short of its goal*
 (verified_move.py already allows 20 steps for this). Poses are captured with the arm held in place
 (torque off — the hold route is still not installed; every capture on 2026-10-21 logged
@@ -198,7 +198,92 @@ where the operator saw the claw. Played back with goal = pose it would land a se
 measured trim makes goal = pose + droop, so the claw lands where it was when the pose was saved —
 whichever way the pose was captured.
 
-## 10. Jog: adjust a pose on the real arm, live (`feat/animate-pose-jog`, 2026-10-22)
+## 10. Droop correction is automatic (`feat/animate-auto-droop`, 2026-10-21)
+
+Replaces §9's *Measure droop* button: nobody has to approve or start the correction. The same settle
+pass (`settleAtPose`: goal := target + trim on servos 1–5 via jogs, wait 1.2 s, add the shortfall,
+≤ 4 rounds, ±50 cap) now runs by itself whenever the arm is known to be sitting at a pose:
+
+- **End of every Go to pose.** It replaces go-to's old blind correction pass, so the arm ends *on*
+  the pose (corrected for gravity) and the pose's trim is learned. Falls back to the plain pass if a
+  joint is still > 150 steps away (stalled); the gripper gets its own final jog.
+- **End of every Play that finishes on its own** (not after Stop). `writeAndPlay` stores
+  `lastPlay.end = {poseId, target}` (last keyframe, pose + offsets, no trim) and `settledAt: null`;
+  when the page's playback poll sees the session end it calls `?/settle` (all three Animate pages),
+  and `settleAfterPlay` claims the play once (`settledAt`), checks the arm is idle and near the
+  target, settles it there and learns that pose's trim. The result shows under the playback line.
+- **Poses never visited** play with an *estimated* trim: `estimateTrim` (pure, 4 tests) weights
+  every learned pose within 400 steps on the gravity servos 2–4 by inverse distance (falling to zero
+  at the radius); nothing near → untrimmed. The editor shows learned vs estimated. The settle pass
+  starts from the learned or estimated trim, so a known pose settles in one round.
+
+Each learned trim is re-checked every time the arm stops at that pose, so it tracks load or wear.
+Audit: `robot_arm.animate.pose_droop_settle` (reason `go_to` / `play_end`, `startedFrom`, every
+round's goal/settled) and `pose_droop_skip`. *Forget correction* (clearPoseDroop) stays.
+
+Limits: mid-play poses are only corrected by the trim learned earlier (the Pi owns the bus during a
+replay, so BIMS cannot read or nudge mid-path); recordings replayed from the Control tab are not
+settled afterwards; recordings saved to the Pi keep the trims they were saved with. Not run on the arm.
+
+## 11. Closed-loop replay on the Pi (`feat/animate-replay-settle`, 2026-10-22)
+
+**Why §9/§10 are not enough.** Investigation (2026-10-22): teleop and replay send the *same* servo
+commands — both snap goal to present, torque on, then write goals open-loop; neither corrects sag.
+Teleop only *looks* sag-free because the operator closes the loop by eye (lifting the leader until
+the follower's claw is right) and *record* saves the leader (the command), so replay reproduces the
+sag that was already baked in. Animate saves the follower's encoder reading (the result), so replay
+lands one droop short. The learned trim (§10) fixes poses the arm has stopped at, but mid-sequence
+poses only get an estimate, and BIMS cannot read or nudge the arm mid-path: the Pi owns the serial bus
+for the whole replay.
+
+**Fix: the replay loop itself settles.** `services/robot-arm/src/hardware/replay_settle.py` +
+`scripts/install_replay_settle.py`. Re-ported 2026-10-22 against the live Pi (the first draft assumed
+a session class with `_replay_loop`; the Pi has none): replay is the module-level
+`replay_session(arms, source_path, loops, stop_event)` in `src/hardware/dual_arm.py`, run by
+`src/server/sessions.py` in a worker thread with the run id on the logging context, over a
+`FeetechBus` with per-servo `read(sid, "Present_Position")` / `write(sid, "Goal_Position", v)`.
+`replay_session_settling` is a drop-in with the same signature and behaviour (header check,
+`replay.start/loop/stop` events, torque off→on, ramp to `follower_neutral`, torque off at the end);
+`install()` rebinds the name inside `src.server.sessions`, and the installer adds the two lines to
+app.py after refusing on any layout mismatch. Simulated against a sagging fake bus
+(`scripts/simulate_replay_settle.py`: plain recordings produce the original's exact writes; flagged
+poses converge; stop mid-replay; blocked joint caps the offset; install is idempotent). The loop:
+
+- plays frames exactly as before (goal arrays or the old `positions{}`; header/footer skipped), one
+  write per frame at its time;
+- at a frame flagged `"settle": true` it writes the goal, waits 0.25 s, reads the follower, adds the
+  shortfall (servos 1–5, never the gripper) to a per-servo **offset** (±50 cap), writes goal + offset,
+  and repeats until every servo is within 2 steps or the hold window runs out (window = until the
+  next frame whose goal differs, −0.12 s, so the next move leaves on time; the last frame gets 2.5 s;
+  ≤ 8 rounds);
+- carries the offset into the following frames (gravity feed-forward for the move) until the next
+  settle point re-learns it;
+- logs one `replay.settle` run event at the end (through `arms.logger.log_event`, so the Pi's
+  `_forward_to_bims` handler posts it like every session event): per settle point `frame, t, pose,
+  target, goal, written, present, residual, rounds, ok, loop`, plus the carried offset. The webhook
+  appends it to the `robot_arm_runs` row with the record as `payload`.
+
+Recordings without flags play exactly as before (no reads). Control-tab replays of Animate recordings
+saved after this change are settled too, since the flags are in the file.
+
+**BIMS side.** `settleFrames(path)` (pure, 4 tests) flags the arrival frame of every held pose and
+the last frame (a stop that is not held has no window); `composeAnimationJsonl` writes `settle`,
+`pose` (id) and `target` (pose + offsets, no trim — so the Pi reports droop against the real pose) on
+those frames. Markers now carry `poseId`/`target`. `settleAfterPlay` first looks for the run's
+`replay.settle` event (waits ≤ 3 s for the webhook), learns each pose's trim from `written − target`
+(`trimFromSettle`, audited `pose_droop_from_replay`) and moves nothing; only without the event does
+it fall back to §10's own settle. The playback line reports per pose "on target (n rounds)" or
+"still k steps off when the hold ran out — give it a longer hold".
+
+**On the Pi:** copy `replay_settle.py` to `src/hardware/`, run `python3 scripts/install_replay_settle.py`
+(`--check` first; it refuses on a layout mismatch), then with `/sessions/active` null
+`sudo systemctl restart robot-arm` (backup `app.py.bak-replay-settle`). Test: give a pose a 1 s hold,
+Play, watch the claw land and stay; the run in Mongo gains a `replay.settle` event.
+
+Installed on arm-pi 2026-10-22 (see progress.txt); not yet played on the arm. Open: `SETTLE_WAIT_S` 0.25 s assumes the servo stops within that; a slow joint
+may need 0.4 s. A hold shorter than ~0.5 s gives one round at most.
+
+## 12. Jog: adjust a pose on the real arm, live (`feat/animate-pose-jog`, 2026-10-22)
 
 **Problem.** Fixing a pose that was a little off meant changing numbers (timeline dots, the joint
 table) and then playing the move set — a render, a scratch recording on the Pi, a replay — to see

@@ -18,7 +18,8 @@ const robotArmPoseSchema = new Schema(
 		/**
 		 * Droop trim: steps added to the goal when this pose is played, so the
 		 * arm ARRIVES at `positions` under gravity instead of settling short of
-		 * it. Measured on the arm (measurePoseDroop); empty = not measured.
+		 * it. Learned automatically on the arm (settleAtPose, at the end of Go to
+		 * pose and of every Play); empty = not learned yet (an estimate is used).
 		 */
 		trim: { type: [Number], default: undefined },
 		trimMeasuredAt: { type: Date, default: null },

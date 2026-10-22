@@ -12,6 +12,7 @@ import {
 	createMoveSet,
 	createSequence,
 	goToPose,
+	goToMessage,
 	holdArm,
 	listMoveSets,
 	listPoses,
@@ -19,6 +20,7 @@ import {
 	playMoveSet,
 	playSequence,
 	playbackActive,
+	settleAfterPlay,
 	poseByHand,
 	readArm,
 	recapturePose,
@@ -213,8 +215,7 @@ export const actions: Actions = {
 		if (!id) return fail(400, { error: 'Pose id missing.', scope: 'poses' });
 		try {
 			const r = await goToPose(who(locals), id);
-			const worst = Math.max(...r.residual.map(Math.abs));
-			return { success: `At the pose (${r.jogs} jog(s), worst servo ${worst} step(s) off).`, scope: 'poses' };
+			return { success: goToMessage(r), scope: 'poses' };
 		} catch (err) {
 			return failFrom(err, 'poses');
 		}
@@ -306,6 +307,19 @@ export const actions: Actions = {
 			return { stop: await stopPlayback(who(locals)) };
 		} catch (err) {
 			return failFrom(err, 'play');
+		}
+	},
+
+	// Automatic, after a play finishes on its own: the arm MOVES a few steps onto the last pose.
+	settle: async ({ request, locals }) => {
+		if (!locals.user) return fail(401, { error: 'Unauthorized' });
+		requirePermission(locals.user, 'manufacturing:write');
+		const runId = (await request.formData()).get('runId')?.toString();
+		if (!runId) return fail(400, { error: 'No run.' });
+		try {
+			return { settle: await settleAfterPlay(who(locals), runId) };
+		} catch (err) {
+			return failFrom(err, 'playback');
 		}
 	},
 

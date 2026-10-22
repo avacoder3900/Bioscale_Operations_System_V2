@@ -1,6 +1,6 @@
 /**
  * Animate — jog one joint of the follower live, and read the arm back
- * (ARM-06 §10). Used by the Animate tab's jog panel, which calls it on
+ * (ARM-06 §12). Used by the Animate tab's jog panel, which calls it on
  * every button press and polls it for the live positions, so it is a
  * JSON route rather than a page action: a page action would re-run the
  * whole page load (library + servo read) on every nudge.

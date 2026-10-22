@@ -2,7 +2,7 @@
 import { error, fail, redirect } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
 import { deriveArmHolder } from '$lib/server/robot-arm-lock';
-import { clearPoseDroop, getMoveSet, goToPose, listPoses, measurePoseDroop, playMoveSet, playbackActive, saveToPi, setMoveSetArchived, stopPlayback, updateMoveSet, AnimateError } from '$lib/server/robot-arm-animation';
+import { clearPoseDroop, getMoveSet, goToMessage, goToPose, listPoses, playMoveSet, playbackActive, settleAfterPlay, saveToPi, setMoveSetArchived, stopPlayback, updateMoveSet, AnimateError } from '$lib/server/robot-arm-animation';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals, params }) => {
@@ -69,6 +69,19 @@ export const actions: Actions = {
 		}
 	},
 
+	// Automatic, after a play finishes on its own: the arm MOVES a few steps onto the last pose.
+	settle: async ({ request, locals }) => {
+		if (!locals.user) return fail(401, { error: 'Unauthorized' });
+		requirePermission(locals.user, 'manufacturing:write');
+		const runId = (await request.formData()).get('runId')?.toString();
+		if (!runId) return fail(400, { error: 'No run.' });
+		try {
+			return { settle: await settleAfterPlay(who(locals), runId) };
+		} catch (err) {
+			return failFrom(err);
+		}
+	},
+
 	playback: async ({ locals }) => {
 		if (!locals.user) return fail(401, { error: 'Unauthorized' });
 		requirePermission(locals.user, 'manufacturing:read');
@@ -79,32 +92,14 @@ export const actions: Actions = {
 		}
 	},
 
-	// The arm MOVES (≤ ~1500 steps per servo, by jogs).
+	// The arm MOVES (≤ ~1500 steps per servo, by jogs), then settles on the pose and learns its droop.
 	goToPose: async ({ request, locals }) => {
 		if (!locals.user) return fail(401, { error: 'Unauthorized' });
 		requirePermission(locals.user, 'manufacturing:write');
 		const id = field(await request.formData(), 'poseId');
 		if (!id) return fail(400, { error: 'No pose.' });
 		try {
-			const r = await goToPose(who(locals), id);
-			const off = r.residual.map((v, i) => (Math.abs(v) > 5 ? `servo ${i + 1} ${v > 0 ? '+' : ''}${v}` : null)).filter(Boolean);
-			return { success: `At the pose after ${r.jogs} jog(s).${off.length ? ` Still off: ${off.join(', ')}.` : ''}` };
-		} catch (err) {
-			return failFrom(err);
-		}
-	},
-
-	// The arm MOVES a few steps, and ends holding the pose.
-	measureDroop: async ({ request, locals }) => {
-		if (!locals.user) return fail(401, { error: 'Unauthorized' });
-		requirePermission(locals.user, 'manufacturing:write');
-		const id = field(await request.formData(), 'poseId');
-		if (!id) return fail(400, { error: 'No pose.' });
-		try {
-			const r = await measurePoseDroop(who(locals), id);
-			const trim = r.trim.map((v, i) => (v ? `servo ${i + 1} ${v > 0 ? '+' : ''}${v}` : null)).filter(Boolean);
-			const msg = trim.length ? `Droop trim saved: ${trim.join(', ')} (${r.rounds} round(s)). Play now adds it to this pose's goal.` : `No droop at this pose (${r.rounds} round(s)).`;
-			return { success: msg + (r.warnings.length ? ' ' + r.warnings.join(' ') : '') };
+			return { success: goToMessage(await goToPose(who(locals), id)) };
 		} catch (err) {
 			return failFrom(err);
 		}

@@ -22086,6 +22086,41 @@ Retrieve this exact code: git checkout feat/animate-pose-with-leader at commit b
 What this deployment is for: Animate tab capture panel — "Pose with the control arm" (teleop), Save pose, Done
 
 ================================================================================
+2026-10-21 — feat/animate-auto-droop — Animate droop correction is automatic (no Measure droop button)
+================================================================================
+User: make pose correction automatic instead of something the user has to approve. The settle pass
+from PR #122 (goal := target + trim via jogs, settle, add the shortfall, servos 1–5, ±50) now runs by
+itself whenever the arm is known to sit at a pose: at the end of every Go to pose (replacing go-to's
+blind correction pass — the arm ends on the pose and the trim is learned) and at the end of every
+Play that finishes on its own (lastPlay.end {poseId, target} + settledAt; Playback calls ?/settle on
+all three Animate pages; settleAfterPlay claims the run once, checks idle + within 150 steps). Poses
+never visited play with estimateTrim (inverse-distance over learned poses within 400 steps on servos
+2–4). Manual Measure droop action/button removed; Forget correction kept. Files:
+src/lib/robot-arm/animation.ts (+4 tests), playback.svelte.ts, src/lib/server/robot-arm-animation.ts,
+move-set/sequence models (lastPlay.end/settledAt), the three animate +page.server.ts and their
++page.svelte, ARM-06 PRD §10. svelte-check 14 errors (baseline); vitest lib/robot-arm + lib/server
+463 passed (sonic leave-one-out failed once, passes 3/3 alone — flaky, untouched). Not run on the arm.
+
+================================================================================
+2026-10-22 — feat/animate-replay-settle — Closed-loop replay on the Pi: the arm settles ON each held pose
+================================================================================
+User asked what teleop does that Animate does not, to stop sagging in animated sequences. Finding:
+nothing — teleop and replay send the same open-loop goal writes; teleop looks sag-free because the
+operator closes the loop by eye and *record* saves the leader (command), while Animate saves the
+follower's reading (result), so replay lands one droop short. User chose option C: close the loop on
+the Pi, since only the replay loop owns the bus mid-path.
+Pi (written blind, live session class is dual_arm.py): services/robot-arm/src/arm/replay_settle.py
+replaces the session's _replay_loop — same frame playback, but at frames flagged "settle" it
+read/adjust/writes (servos 1–5, ±50 offset, 2-step tolerance) within the hold window, carries the
+offset forward, and emits one replay.settle run event with per-pose written/present/residual.
+scripts/install_replay_settle.py finds the class, warns on attribute names, patches app.py.
+BIMS: settleFrames + trimFromSettle (animation.ts, +4 tests → 99 in robot-arm), compose writes
+settle/pose/target on the arrival of each held pose and the last frame; markers carry poseId/target;
+settleAfterPlay learns trims from the replay.settle event (waits ≤3 s for the webhook) and only falls
+back to #123's arm-moving settle when the event is absent; playback line reports per-pose outcome.
+Stacked on feat/animate-auto-droop (#123). PRD §11. svelte-check 14 (baseline). Not run on the arm.
+
+================================================================================
 2026-10-22 — fix/studio-reload-drops-tip — Reload deck no longer crashes the tip
 ================================================================================
 Reload deck (and Disconnect) close the maintenance run and open a new one. Closing does not
@@ -22381,3 +22416,38 @@ facts (arm-pi 172.16.202.203, user brevitest3, Funnel arm-pi.tailf65a70.ts.net, 
 from the vendored copy, dev PC's WiFi cannot reach the lab VLAN); the install/test order for
 replay_settle.py; code map; gotchas (PRD §10 numbering collision with #125, progress.txt union
 merges dropping ==== bars). No code change. No password in the doc.
+
+================================================================================
+2026-10-22 — feat/animate-replay-settle — re-port of the Pi half against the real arm-pi layout; installed on the Pi
+================================================================================
+The 12:00 draft (a970dd8f) was written blind and assumed a session class with `_replay_loop` under src/arm/
+plus a driver with sync_read_positions / sync_write_positions. Read over SSH (Tailscale 100.103.204.105): the Pi has
+no src/arm; replay is the module-level `replay_session(arms, source_path, loops, stop_event)` in
+src/hardware/dual_arm.py, called by src/server/sessions.py (imported by name) in a worker thread with the run id on
+the logging context; the bus is a FeetechBus with per-servo read(sid, "Present_Position") / write(sid,
+"Goal_Position", v); events go through arms.logger.log_event -> app.py _forward_to_bims -> BIMS webhook, which stores
+the record as payload (so payload.settle / payload.carry hold). Sam's installer would have refused ("cannot find the
+session class").
+Re-port (same `replay.settle` contract, BIMS side untouched):
+- services/robot-arm/src/hardware/replay_settle.py (moved from src/arm/): `replay_session_settling` is a drop-in for
+  dual_arm.replay_session — header check, replay.start/loop/stop events, torque off->on, ramp to follower_neutral
+  (first goal if the header has none), per-servo goal writes, torque off in finally — plus the settle pass at flagged
+  frames over read()/write() built on the FeetechBus; stop_event.wait replaces time.sleep so Stop acts within one
+  frame; `replay.settle` is logged inside the run before replay.stop (entries gain `loop`). `install()` rebinds
+  `replay_session` inside src.server.sessions (idempotent, keeps replay_session_original).
+- scripts/install_replay_settle.py: checks dual_arm.py / _feetech_bus.py / sessions.py for the names the port relies
+  on and refuses on any mismatch; inserts the two lines after `from src.server.sessions import SessionManager`;
+  backup app.py.bak-replay-settle.
+- scripts/simulate_replay_settle.py (new, pure Python): sagging fake bus. Plain recordings produce the original's exact
+  write sequence and no reads; flagged poses converge within 2 steps (carry = droop, gripper untouched, contract
+  fields present); two loops reuse the carry; stop mid-replay ends promptly with torque off; a blocked joint caps the
+  offset at 50 with ok=false; install is idempotent. Passes on the dev PC and in the Pi's service venv.
+- docs/prds/ARM-06-animate.md §11 rewritten for the real layout.
+Installed on arm-pi 13:07 CDT: module + scripts copied, rebinding verified against the real src.server.sessions in the
+venv (before src.hardware.dual_arm.replay_session, after src.hardware.replay_settle.replay_session_settling, same
+signature), installer --check then apply (app.py lines 59-60), robot-arm restarted with /sessions/active null,
+/health ok, no startup errors. Not yet played on the arm. Recordings on the Pi have no settle flags until the BIMS
+half of this PR is merged, so Control-tab replays behave as before.
+Seen after that restart: the RealSense colour node (/dev/video4) is gone — only video0/1/2 (depth/IR) are listed,
+dmesg shows "uvcvideo 4-1:1.4: Failed to resubmit video URB (-1)", /cameras reports device null. The D415 is still on
+USB bus 004. Not caused by this module (the service start is clean); needs a USB re-enumeration or a cable replug.

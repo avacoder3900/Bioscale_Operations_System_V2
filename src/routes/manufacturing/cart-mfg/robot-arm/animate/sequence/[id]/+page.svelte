@@ -124,6 +124,7 @@
 			{:else if playback.error}{playback.error}
 			{:else}Playback {playback.outcome}.{/if}
 		</p>
+		{#if playback.settled}<p class="text-xs" style="color: var(--color-tron-text-secondary)">{playback.settled}</p>{/if}
 		{#if playback.warnings.length}<ul class="list-disc pl-5 text-xs" style="color: #f59e0b">{#each playback.warnings as w}<li>{w}</li>{/each}</ul>{/if}
 	{/if}
 

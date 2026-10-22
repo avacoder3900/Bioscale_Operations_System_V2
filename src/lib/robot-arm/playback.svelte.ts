@@ -5,7 +5,11 @@
  * starts a replay; this class keeps the result, polls `?/playback` until the
  * Pi reports no active session, and estimates the playhead from the clock
  * (the Pi does not report progress). Each Animate page exposes the same
- * `playback` and `stop` actions, so one helper serves all three.
+ * `playback`, `stop` and `settle` actions, so one helper serves all three.
+ *
+ * When a play finishes on its own, the helper calls `settle` by itself: the
+ * server nudges the arm onto the last pose and learns that pose's droop
+ * correction (settleAfterPlay). Not after Stop — the arm is mid-path then.
  */
 import { deserialize } from '$app/forms';
 
@@ -28,6 +32,8 @@ export class Playback {
 	error = $state<string | null>(null);
 	warnings = $state<string[]>([]);
 	outcome = $state<string | null>(null);
+	/** What the automatic settle after the play did (or why it skipped). */
+	settled = $state<string | null>(null);
 	busy = $state(false);
 	private timer: ReturnType<typeof setInterval> | null = null;
 
@@ -47,6 +53,7 @@ export class Playback {
 		this.busy = true;
 		this.error = null;
 		this.outcome = null;
+		this.settled = null;
 		this.warnings = [];
 		try {
 			const r = await this.action(action, fields);
@@ -83,7 +90,10 @@ export class Playback {
 		this.polling = true;
 		try {
 			const r = await this.action('playback', {});
-			if (r.type === 'success' && r.data && (r.data as { active?: unknown }).active === null) this.finish('finished');
+			if (r.type === 'success' && r.data && (r.data as { active?: unknown }).active === null) {
+				this.finish('finished');
+				void this.settle();
+			}
 		} catch {
 			/* keep polling */
 		} finally {
@@ -106,6 +116,35 @@ export class Playback {
 			this.error = `Stop failed: ${e instanceof Error ? e.message : String(e)}`;
 		} finally {
 			this.busy = false;
+		}
+	}
+
+	/** Automatic: correct the arm onto the last pose and learn its droop. */
+	private async settle() {
+		const runId = this.runId;
+		if (!runId) return;
+		this.settled = 'Correcting for droop at the last pose…';
+		try {
+			const r = await this.action('settle', { runId });
+			type PiPose = { poseName: string; trim: number[]; residual: number[]; rounds: number; ok: boolean };
+			type Settle = { poseName: string; skipped: string | null; pi: { poses: PiPose[] } | null; droop: { trim: number[]; rounds: number; warnings: string[] } | null };
+			const s = r.type === 'success' ? (r.data as { settle?: Settle } | undefined)?.settle : null;
+			if (!s) this.settled = r.type === 'failure' ? `Droop correction failed: ${String((r.data as { error?: string } | undefined)?.error ?? '')}` : null;
+			else if (s.skipped) this.settled = `Droop correction skipped: ${s.skipped}.`;
+			else if (s.pi) {
+				// The Pi settled each held pose during the replay (closed-loop route); nothing moved afterwards.
+				const parts = s.pi.poses.map((p) => {
+					const worst = p.residual.length ? Math.max(...p.residual.map(Math.abs)) : 0;
+					return `"${p.poseName}" ${p.ok ? `on target (${p.rounds} round${p.rounds === 1 ? '' : 's'})` : `still ${worst} step(s) off when the hold ran out`}`;
+				});
+				const missed = s.pi.poses.filter((p) => !p.ok).length;
+				this.settled = `Settled on the arm during the play: ${parts.join('; ')}. Corrections learned for the next play.${missed ? ' Give the poses that missed a longer hold.' : ''}`;
+			} else if (s.droop) {
+				const t = s.droop.trim.map((v, i) => (v ? `servo ${i + 1} ${v > 0 ? '+' : ''}${v}` : null)).filter(Boolean);
+				this.settled = `Settled on "${s.poseName}"${t.length ? ` — droop correction ${t.join(', ')}` : ' — no droop'} (learned; used from the next play).` + (s.droop.warnings.length ? ' ' + s.droop.warnings.join(' ') : '');
+			}
+		} catch (e) {
+			this.settled = `Droop correction failed: ${e instanceof Error ? e.message : String(e)}`;
 		}
 	}
 
