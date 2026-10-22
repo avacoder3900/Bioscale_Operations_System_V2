@@ -693,18 +693,37 @@
 	async function reloadDeckIntoRun() {
 		if (!runId) { errMsg = 'No run open'; return; }
 		clearMsg();
+		const hadTip = hasTip;
 		msg = 'Reloading corrected deck into the run…';
 		await stopMaintenance();
 		await startMaintenance();
-		if (!errMsg) msg = 'Reloaded — the run now uses your corrected deck. Move to a hole to verify.';
+		if (!errMsg) {
+			msg = hadTip
+				? 'Reloaded with your corrected deck. The tip went to the trash first (a new run cannot see it) — press "Calibrate tip" for a fresh, zeroed tip, then move to a hole to verify.'
+				: 'Reloaded — the run now uses your corrected deck. Move to a hole to verify.';
+		}
 	}
 	async function stopMaintenance() {
 		if (!runId) return;
 		busy = true;
+		// A new run cannot know a tip is on: it models a bare nozzle, so every
+		// Move-to-hole parks the NOZZLE 2mm over the hole and the real tip (~50mm
+		// longer) drives into the deck — the crash after "Reload deck" (R04 / B07,
+		// 2026-10-21). Closing the run does NOT drop the tip, so drop a modelled tip
+		// in the trash first. Best effort: the run still closes if this fails.
+		if (hasTip && pipetteId) {
+			try {
+				msg = 'Dropping the tip in the trash before closing the run…';
+				await doDropTip();
+				hasTip = false;
+			} catch (e) {
+				errMsg = `Could not drop the tip before closing (${e instanceof Error ? e.message : String(e)}) — take it off by hand before moving in the next session.`;
+			}
+		}
 		try { await api(`/api/opentrons-lab/robots/${selectedRobotId}/maintenance/${runId}`, { method: 'DELETE' }); }
 		catch (e) { errMsg = e instanceof Error ? e.message : String(e); }
-		// Closing the run drops the tip and clears the session → reset ALL tip/frame
-		// state so a stale tipAdjust or nominal can't leak into the next session.
+		// Reset ALL tip/frame state so a stale tipAdjust or nominal can't leak into
+		// the next session.
 		finally { runId = null; pipetteId = null; pipetteMount = null; pipetteName = null; loadedLabwareId = null; liveX = liveY = liveZ = null; hasTip = false; tipAdjust = null; nominal = null; refWell = null; slotOrigin = null; loadedWells = null; busy = false; }
 	}
 	async function homeRobot() {
