@@ -88,7 +88,9 @@ describe('assessTags', () => {
 		expect(a.verdict).toBe('off');
 		const t = a.markers.find((m) => m.tagId === 20)!;
 		expect(t.status).toBe('moved');
+		expect(t.over).toEqual(['mm']);
 		expect(t.offMm).toBeCloseTo(8, 6);
+		expect(a.markers.filter((m) => m.tagId !== 20).every((m) => m.over.length === 0)).toBe(true);
 		expect(describeVision(a)).toContain('Tag 20 8.0 mm');
 	});
 
@@ -97,7 +99,15 @@ describe('assessTags', () => {
 		const turned = { ...seen(c), pose: { t: c.pose!.t, R: axisAngle([1, 0, 0], 12), reprojPx: 0.2 } };
 		const a = assessTags(all, all.map((x) => (x.tagId === c.tagId ? turned : seen(x))));
 		expect(a.markers.find((m) => m.tagId === c.tagId)!.offDeg).toBeCloseTo(12, 6);
+		expect(a.markers.find((m) => m.tagId === c.tagId)!.over).toEqual(['deg']);
 		expect(a.verdict).toBe('off');
+	});
+
+	it('moved AND turned names both measurements', () => {
+		const c = arm[0];
+		const both = { ...seen(c), pose: { t: [c.pose!.t[0] + 9, c.pose!.t[1], c.pose!.t[2]] as Vec3, R: axisAngle([1, 0, 0], 12), reprojPx: 0.2 } };
+		const a = assessTags(all, all.map((x) => (x.tagId === c.tagId ? both : seen(x))));
+		expect(a.markers.find((m) => m.tagId === c.tagId)!.over).toEqual(['mm', 'deg']);
 	});
 
 	it('angleDeg 0 disables the angle check', () => {
@@ -105,6 +115,7 @@ describe('assessTags', () => {
 		const turned = { ...seen(c), pose: { t: c.pose!.t, R: axisAngle([1, 0, 0], 12), reprojPx: 0.2 } };
 		const a = assessTags(all, all.map((x) => (x.tagId === c.tagId ? turned : seen(x))), { ...DEFAULT_TOLERANCES, angleDeg: 0 });
 		expect(a.verdict).toBe('ok');
+		expect(a.markers.find((m) => m.tagId === c.tagId)!.over).toEqual([]);
 	});
 
 	it('a bumped camera is measured on the fixed tags and undone', () => {
@@ -158,6 +169,8 @@ describe('assessTags', () => {
 		const off = assessTags([c], [{ id: c.tagId, center: [0.55, 0.5], corners: [], sizeMm: null, pose: null, depthMm: null }]);
 		expect(off.verdict).toBe('off');
 		expect(off.markers[0].offMm).toBeNull();
+		expect(off.markers[0].over).toEqual(['px']);
+		expect(ok.markers[0].over).toEqual([]);
 	});
 
 	it('a registry size edit since calibration does not read as movement', () => {

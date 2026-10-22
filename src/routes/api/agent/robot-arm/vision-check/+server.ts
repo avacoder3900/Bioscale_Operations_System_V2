@@ -36,6 +36,7 @@ export const GET: RequestHandler = async ({ request, url }) => {
 				group: m.group,
 				role: m.role,
 				status: m.status,
+				over: m.over,
 				offMm: m.offMm,
 				offDeg: m.offDeg,
 				center: m.center,

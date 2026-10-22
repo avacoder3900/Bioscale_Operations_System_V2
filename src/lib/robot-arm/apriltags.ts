@@ -235,6 +235,9 @@ export function estimateCameraShift(
 
 export type TagStatus = 'ok' | 'moved' | 'missing';
 
+/** Which measurement put a tag over tolerance: distance, turn, or picture distance (no pose). */
+export type OverTolerance = 'mm' | 'deg' | 'px';
+
 export interface TagAssessment {
 	markerId: string;
 	tagId: number;
@@ -242,6 +245,13 @@ export interface TagAssessment {
 	group: string | null;
 	role: TagRole;
 	status: TagStatus;
+	/**
+	 * The measurements that made it `moved`, so the UI can point at the number
+	 * that is over tolerance: 'mm' (further than positionMm), 'deg' (turned
+	 * more than angleDeg), 'px' (picture fallback without a pose). Empty when
+	 * ok or missing.
+	 */
+	over: OverTolerance[];
 	/** Off from home, mm (after undoing a camera shift); null without pose. */
 	offMm: number | null;
 	/** Turned from home, degrees; null without pose. */
@@ -291,23 +301,25 @@ export function assessTags(cal: CalibratedTag[], detections: TagDetection[], tol
 		const d = now.get(c.tagId);
 		const base = { markerId: c.markerId, tagId: c.tagId, name: c.name, group: c.group, role: c.role };
 		if (!d) {
-			return { ...base, status: 'missing', offMm: null, offDeg: null, offPx: null, center: null, corners: null, zMm: null, depthMm: null };
+			return { ...base, status: 'missing', over: [], offMm: null, offDeg: null, offPx: null, center: null, corners: null, zMm: null, depthMm: null };
 		}
 		const offPx = Math.hypot(d.center[0] - c.center[0], d.center[1] - c.center[1]);
 		let offMm: number | null = null;
 		let offDeg: number | null = null;
-		let ok: boolean;
+		const over: OverTolerance[] = [];
 		if (c.pose && d.pose) {
 			const delta = poseDelta(compose(M, rigidOf(c.pose)), rigidOf(d.pose));
 			offMm = delta.mm;
 			offDeg = delta.deg;
-			ok = within(delta, tol);
-		} else {
-			ok = offPx <= tol.pixel;
+			if (delta.mm > tol.positionMm) over.push('mm');
+			if (tol.angleDeg > 0 && delta.deg > tol.angleDeg) over.push('deg');
+		} else if (offPx > tol.pixel) {
+			over.push('px');
 		}
 		return {
 			...base,
-			status: ok ? 'ok' : 'moved',
+			status: over.length ? 'moved' : 'ok',
+			over,
 			offMm,
 			offDeg,
 			offPx,

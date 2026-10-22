@@ -21624,6 +21624,21 @@ Retrieve this exact code: git checkout feat/arm-recording-cleanup at commit e823
 What this deployment is for: Robot Arm Clean-up tab (recording -> editable steps -> new recording on the Pi)
 
 ================================================================================
+2026-10-22 — feat/arm-live-tags-over-red — Live Tags: the number over tolerance turns red
+================================================================================
+Operator: the Vision tab's Live Tags kept saying MOVED without showing which measurement caused it.
+- apriltags.ts: TagAssessment.over: ('mm' | 'deg' | 'px')[] — the measurements that made the tag `moved`
+  (further than positionMm, turned more than angleDeg, or — without a pose on either side — picture distance
+  over the pixel fraction). status is now derived from `over` (same decisions as before; `within` still used
+  by the camera-shift RANSAC). Empty when ok or missing.
+- VisionLiveTracker.svelte: the off mm / off ° cell is red (#f87171, bold, tooltip naming the tolerance) when it
+  is the one over tolerance; an "off px" column appears only when some tag was judged on picture distance
+  (shown as % of frame width, red when over). Header tooltips state the red threshold; footer legend line.
+- Agent vision-check returns `over` per marker.
+Tests: apriltags +1 (16): over = ['mm'], ['deg'], ['mm','deg'], ['px'], [] with angle check off. robot-arm 99/99.
+npm run check: 13 errors = baseline, none in touched files.
+
+================================================================================
 2026-10-21 — feat/arm-vision-servos-and-camera — re-port: vision calibration relies on servos AND camera (onto Sam's home flow)
 ================================================================================
 feat/arm-depth-combined's b964db12 (2026-10-20) no longer merged: it conflicted in 11 hunks of robot-arm-vision.ts
