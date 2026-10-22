@@ -58,6 +58,7 @@ async function logEpisode(t: ArmThermal): Promise<void> {
 			clockMaxMhz: t.clock_max_mhz,
 			serviceCpuPct: t.service_cpu_pct,
 			load1m: t.load_1m,
+			ssid: t.network?.ssid ?? null,
 			throttledHex: t.throttled_hex
 		}
 	});

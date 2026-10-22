@@ -22178,3 +22178,27 @@ Merge onto 89c7a35f: only progress.txt conflicted (kept both). vitest opentrons 
 Deployment: production — via Vercel GitHub integration on push to master
 Source: branch master @ this merge commit
 What this deployment is for: fill starts no longer freeze on an idle, already-created robot run
+
+================================================================================
+2026-10-22 — feat/arm-wifi-chip — Pi Wi-Fi next to the temperature on the arm camera card; Aquinas_Townpark preferred
+================================================================================
+Operator found the arm Pi on the "wrong" Wi-Fi and asked (1) to set the default network and (2) to print the Wi-Fi
+the Pi is using beside the temperature readout on the Robot Arm camera card. The Pi has two saved networks, NM
+profiles `Aquinas` (SSID Aquinas_Townpark) and `netplan-wlan0-Fannin_WIFI`; it was on Aquinas at priority 20 vs
+Fannin's 10. First set Fannin to 100, then the operator reversed the decision: Aquinas_Townpark is the more reliable
+one and is now PREFERRED (autoconnect-priority 100), Fannin_WIFI the fallback (10); both autoconnect, both carry DNS
+1.1.1.1/8.8.8.8 with ignore-auto-dns. Fannin_WIFI was not in the Pi's scan at the time, so no reconnect happened; NM
+only re-picks on reconnect. Done over SSH via Tailscale (100.103.204.105), Pi LAN IP on Aquinas is 192.168.1.231.
+Pi: thermal.py (vendored copy services/robot-arm/src/server/thermal.py; Pi backup thermal.py.bak-pre-wifi) adds
+`network` to GET /health/thermal: {iface, ssid, connection, signal_pct, freq_mhz, ip, expected_ssid, source} read
+with nmcli as the service user (no root: `dev show` + the cached scan list, --rescan no), cached 15 s so the 30 s
+BIMS poll never stacks nmcli calls; nmcli failures give ssid null + source "unavailable: ...". expected_ssid comes
+from ARM_WIFI_EXPECTED_SSID in ~/robot-arm/.env (set to Aquinas_Townpark). Dry-run in the service venv, then
+installed and robot-arm restarted at 12:31 CDT with /sessions/active null; /health/thermal now returns the block
+(Aquinas_Townpark, 65 %, 5765 MHz, 192.168.1.231) and the camera is back at 1920x1080@30.
+BIMS: ArmNetwork type (robot-arm-client.ts; ArmThermal.network optional so an older thermal.py still works);
+PiThermalChip.svelte renders a second chip right after the temperature one: "Wi-Fi <ssid> · <signal>%", muted when
+it matches expected_ssid, amber "wrong network" when it does not (tooltip says how to reconnect), red "No Wi-Fi"
+when not associated, "Wi-Fi ?" when nmcli could not be read; tooltip carries profile, signal/band, LAN IP. The
+thermal episode rows in device_events now record ssid. No new route, no poll change.
+npm run check: 13 errors = baseline (all magnetometer/[sessionId]), none in touched files.
