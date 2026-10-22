@@ -22237,6 +22237,9 @@ PR: https://github.com/avacoder3900/Bioscale_Operations_System_V2/pull/125
 Follow-up commit: PoseJog.svelte seeds live/torque from the sync effect instead of the prop initialiser (clears two state_referenced_locally warnings); vite build client+server OK (post-build adapter stage OOMs on Windows, known artefact).
 Deployment: preview — https://bioscale-operations-system-mongodb-eyt6syj0b-brevitest.vercel.app
 Source: branch feat/animate-pose-jog @ commit c0a74cc1 (warning fix + progress lines; same feature code as b71873bb)
+Retrieve this exact code: git checkout feat/animate-pose-jog at commit c0a74cc1
+  (or: git log feat/animate-pose-jog --oneline to find it if the branch has since moved on)
+What this deployment is for: the PoseJog warning fix on top of the Jog panel (PR #125)
 Deployment: preview — https://bioscale-operations-system-mongodb-9ywuqyscv-brevitest.vercel.app
 Source: branch feat/animate-pose-jog @ commit 7618f243 (origin/master merged in: only progress.txt conflicted; opentrons changes from master, none of the arm files)
 Retrieve this exact code: git checkout feat/animate-pose-jog at commit 7618f243
@@ -22246,14 +22249,10 @@ What this deployment is for: the PR #125 build to test the Jog panel on — the 
 Deployment: preview — https://bioscale-operations-system-mongodb-f2v5ftv6t-brevitest.vercel.app
 Source: branch feat/animate-pose-jog @ commit 4e06049c (master d2d0aa09 merged in; only progress.txt conflicted)
 Retrieve this exact code: git checkout feat/animate-pose-jog at commit 4e06049c
+  (or: git log feat/animate-pose-jog --oneline to find it if the branch has since moved on)
 What this deployment is for: pre-merge build of PR #125; smoke: /login 200, /api/robot-arm/animate/jog 401 without a session, Animate page 302 to login.
-Merge to master via the API was first blocked by the auto-mode classifier [Merge Without Review]; the user then allowed it.
-Merged: PR #125 -> master 2026-10-22 17:43 UTC, merge commit d149581e.
-Deployment: production — https://bioscale-operations-system-mongodb-k255akhdx-brevitest.vercel.app
-Source: branch master @ commit d149581e (Merge pull request #125 from feat/animate-pose-jog)
-Retrieve this exact code: git checkout d149581e
-  (or: git log master --oneline --merges | grep "#125")
-What this deployment is for: Animate tab Jog panel in production; smoke: /login 200, /api/robot-arm/animate/jog 401 without a session.
+Merge to master via the API was blocked by the auto-mode classifier [Merge Without Review] at first; PR #125 was merged
+later (see "master — MERGE feat/animate-pose-jog (PR #125)" below).
 
 ================================================================================
 2026-10-22 — feat/cleanup-overlay — Clean-up tab: overlay a pilot's teleop recording on an animated one (ARM-07)
@@ -22295,11 +22294,41 @@ What this deployment is for: Clean-up tab Overlay page (cleanup/overlay) — pil
 Deployment: preview — https://bioscale-operations-system-mongodb-gqryeynal-brevitest.vercel.app
 Source: branch feat/cleanup-overlay @ commit 421437fc (origin/master d149581e merged in; only progress.txt conflicted, both kept)
 Retrieve this exact code: git checkout feat/cleanup-overlay at commit 421437fc
+  (or: git log feat/cleanup-overlay --oneline to find it if the branch has since moved on)
 What this deployment is for: pre-merge build of PR #126; smoke: /login 200, /manufacturing/cart-mfg/robot-arm/cleanup/overlay 302 to login. svelte-check 14 (baseline), robot-arm tests 124 passed.
-PR: https://github.com/avacoder3900/Bioscale_Operations_System_V2/pull/126
-Merged: PR #126 -> master 2026-10-22 17:56 UTC via the GitHub API, merge commit 5db9c5d6.
+PR: https://github.com/avacoder3900/Bioscale_Operations_System_V2/pull/126 (merged, see "master — MERGE feat/cleanup-overlay (PR #126)" below)
+
+================================================================================
+2026-10-22 — master — MERGE feat/animate-pose-jog (PR #125, d149581e)
+================================================================================
+PR #125 merged into master at 17:43 UTC as merge commit d149581e (first parent d2d0aa09, the arm Wi-Fi chip push).
+Brings the Animate tab Jog panel (ARM-06 §10): adjust a pose by jogging the real arm live, Save into pose / Save as
+new pose; PoseJog.svelte, jogArm + jogChunks (robot-arm-animation.ts, animation.ts), JSON route
+api/robot-arm/animate/jog. 10 files, +585 / -5. Branch was merged with master d2d0aa09 before the PR (4e06049c, only
+progress.txt conflicted); svelte-check 14 errors (baseline), vitest animation 23 passed. No new Pi route. Not run on
+the arm. The first merge attempt through the API was blocked by the auto-mode classifier [Merge Without Review].
+Deployment: production — https://bioscale-operations-system-mongodb-k255akhdx-brevitest.vercel.app
+Source: branch master @ commit d149581e (Merge pull request #125 from avacoder3900/feat/animate-pose-jog)
+Retrieve this exact code: git checkout d149581e
+  (or: git log master --oneline --merges | grep "#125" to find it)
+What this deployment is for: Animate tab Jog panel in production. Smoke 2026-10-22: /login 200,
+/api/robot-arm/animate/jog 401 without a session.
+
+================================================================================
+2026-10-22 — master — MERGE feat/cleanup-overlay (PR #126, 5db9c5d6)
+================================================================================
+PR #126 merged into master at 17:56 UTC via the GitHub API as merge commit 5db9c5d6 (first parent d149581e, the PR #125
+merge), after the operator said "push to main". Brings the Clean-up tab Overlay (ARM-07): subsequence-DTW a pilot's
+teleop recording onto an animated one so the result keeps the animation's timing and curves with the pilot's
+sag-compensated positions; Save to Pi or Open as a clean-up. recording-overlay.ts (+17 tests), robot-arm-overlay.ts,
+cleanup/overlay page, OverlayChart.svelte, clean-up model field `overlay`, docs/prds/ARM-07-cleanup-overlay.md.
+13 files, +1751 / -38. Branch was merged with master d149581e before the PR (421437fc, only progress.txt conflicted,
+both entries kept); svelte-check 14 errors (baseline), robot-arm unit suites 124 passed. Nothing touches the arm; not
+run against a live Pi or DB.
 Deployment: production — https://bioscale-operations-system-mongodb-3k54qchqe-brevitest.vercel.app
-Source: branch master @ commit 5db9c5d6 (Merge pull request #126 from feat/cleanup-overlay)
+Source: branch master @ commit 5db9c5d6 (Merge pull request #126 from avacoder3900/feat/cleanup-overlay)
 Retrieve this exact code: git checkout 5db9c5d6
-  (or: git log master --oneline --merges | grep "#126")
-What this deployment is for: Clean-up tab Overlay page in production; smoke: /login 200, /manufacturing/cart-mfg/robot-arm/cleanup/overlay 302 to login.
+  (or: git log master --oneline --merges | grep "#126" to find it)
+What this deployment is for: Clean-up tab Overlay page in production. Smoke 2026-10-22: /login 200,
+/manufacturing/cart-mfg/robot-arm/cleanup/overlay 302 to login, /api/robot-arm/animate/jog 401 without a session.
+Follow-up: f41dbfd5 put these merge/production lines inside the two feature entries; this commit moves them here.
