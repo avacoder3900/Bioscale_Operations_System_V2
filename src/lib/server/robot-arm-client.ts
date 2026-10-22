@@ -651,6 +651,19 @@ export const robotArm = {
 			method: 'POST',
 			body: { delta_steps, ...(speed !== undefined ? { speed } : {}) }
 		}),
+	/**
+	 * Set one servo's goal to an ABSOLUTE position (Animate's live sliders).
+	 * Unlike jogJoint (goal = wherever the servo is right now + delta) the
+	 * result does not depend on where the arm happened to be, so the same
+	 * value always sends the servo to the same place. No speed is sent: the
+	 * Goal_Speed register persists on the servo and would slow later replays.
+	 * 409 when that servo's torque is off.
+	 */
+	moveJoint: (sid: number, position: number) =>
+		robotArmFetch<{ id: number; goal: number }>(`/servos/${sid}/move`, {
+			method: 'POST',
+			body: { position: Math.round(position) }
+		}),
 	listRecordings: () => robotArmFetch<{ recordings: RecordingMeta[] }>('/recordings'),
 	// Recording trash (recordings_admin.py on the Pi). BIMS exports a recording
 	// to R2 before deleting it, and restores from R2 on recover. Bodies carry the

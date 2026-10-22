@@ -5,7 +5,11 @@ import {
 	cleanKeyframes,
 	cleanOffsets,
 	composeAnimationJsonl,
+	axisTicks,
 	ease,
+	friendlyName,
+	heatCheck,
+	heatLevel,
 	estimateTrim,
 	flattenSequence,
 	jogChunks,
@@ -13,7 +17,10 @@ import {
 	minDurationS,
 	nextTrim,
 	pathStats,
+	poseGroup,
 	settleFrames,
+	sliderRange,
+	stepToward,
 	tooFast,
 	trimFromSettle,
 	MAX_STEPS_PER_S,
@@ -157,7 +164,7 @@ describe('composeAnimationJsonl', () => {
 		const p = buildPath([kf('A', A), kf('B', B, { durationS: 1 })], { rateHz: 10 });
 		const out = composeAnimationJsonl(p, { jointNames: ['a', 'b', 'c', 'd', 'e', 'f'], title: 'test', now: new Date('2026-10-21T00:00:00Z') });
 		const lines = out.jsonl.trim().split('\n').map((l) => JSON.parse(l));
-		expect(lines[0]).toMatchObject({ event: 'header', rate_hz: 10, follower_neutral: A, animated: 'test' });
+		expect(lines[0]).toMatchObject({ event: 'header', rate_hz: 10, follower_neutral: A, animated: 'test', hold_at_end: true });
 		expect(lines[1]).toEqual({ event: 'frame', t: 0, goal: A });
 		expect(lines[lines.length - 2]).toEqual({ event: 'frame', t: 1, goal: B, settle: true, pose: 'B', target: B });
 		expect(lines[lines.length - 1]).toEqual({ event: 'footer', duration_s: 1, frames: 11 });
@@ -184,6 +191,12 @@ describe('settle flags for the closed-loop replay', () => {
 		const trimmed = kf('A', [2048, 1512, 2592, 2048, 2100, 1800], { target: A });
 		const p = buildPath([trimmed], { rateHz: 10 });
 		expect(settleFrames(p)[0].target).toEqual(A);
+	});
+	it('a goal pose (settle: false) is never flagged — it is played exactly as commanded', () => {
+		const p = buildPath([kf('A', A, { holdS: 1, settle: false }), kf('B', B, { durationS: 1, settle: false })], { rateHz: 10 });
+		expect(settleFrames(p)).toEqual([]);
+		const mixed = buildPath([kf('A', A, { holdS: 1, settle: false }), kf('B', B, { durationS: 1 })], { rateHz: 10 });
+		expect(settleFrames(mixed).map((f) => f.pose)).toEqual(['B']);
 	});
 	it('trimFromSettle: written − target on servos 1–5, capped, gripper ignored', () => {
 		expect(trimFromSettle([2048, 1514, 2591, 2051, 2100, 1900], A)).toEqual([0, 14, -9, 3, 0, 0]);
@@ -282,5 +295,47 @@ describe('jog', () => {
 		expect(jogChunks(0)).toEqual([]);
 		expect(jogChunks(7.9)).toEqual([7]);
 		expect(jogChunks(25, 10)).toEqual([10, 10, 5]);
+	});
+});
+
+describe('servo temperature', () => {
+	it('levels at 48 / 55 / 65 °C; missing readings are ok', () => {
+		expect([30, 48, 55, 64, 65, null].map(heatLevel)).toEqual(['ok', 'warm', 'hot', 'hot', 'stop', 'ok']);
+	});
+	it('heatCheck lists the servos too hot to move and the hottest reading', () => {
+		expect(heatCheck([40, 66, 56, null, 30, 70])).toEqual({ tooHot: [2, 6], hot: [3], maxC: 70 });
+		expect(heatCheck([null, null])).toEqual({ tooHot: [], hot: [], maxC: null });
+	});
+});
+
+describe('friendly names', () => {
+	it('drops the .jsonl extension and the recording timestamp', () => {
+		expect(friendlyName('telop3-20261022-191057 + anihalf')).toBe('telop3 + anihalf');
+		expect(friendlyName('grab_20261021_143302.jsonl')).toBe('grab');
+		expect(friendlyName('Over tray')).toBe('Over tray');
+		expect(friendlyName('20261021-143302')).toBe('20261021-143302');
+	});
+	it('poseGroup splits "<group> · <label>"', () => {
+		expect(poseGroup('Cleanedup grab · step 49')).toEqual({ group: 'Cleanedup grab', label: 'step 49' });
+		expect(poseGroup('rec-20261022-191057.jsonl · start')).toEqual({ group: 'rec', label: 'start' });
+		expect(poseGroup('hover')).toEqual({ group: null, label: 'hover' });
+	});
+});
+
+describe('sliders', () => {
+	it('sliderRange pads the used travel and stays inside the encoder', () => {
+		expect(sliderRange([2000, 2200])).toEqual({ min: 1500, max: 2700 });
+		expect(sliderRange([100, 3000])).toEqual({ min: 0, max: 3400 });
+		expect(sliderRange([4000])).toEqual({ min: 2895, max: 4095 });
+		expect(sliderRange([])).toEqual({ min: 0, max: 4095 });
+	});
+	it('axisTicks are round numbers inside the range', () => {
+		expect(axisTicks(1500, 2700)).toEqual([1600, 1800, 2000, 2200, 2400, 2600]);
+		expect(axisTicks(0, 4095)).toEqual([0, 1000, 2000, 3000, 4000]);
+	});
+	it('stepToward caps each live move', () => {
+		expect(stepToward(2000, 2100, 150)).toBe(2100);
+		expect(stepToward(2000, 2500, 150)).toBe(2150);
+		expect(stepToward(2000, 1000, 150)).toBe(1850);
 	});
 });

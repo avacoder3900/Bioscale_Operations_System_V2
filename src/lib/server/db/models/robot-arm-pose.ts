@@ -3,9 +3,10 @@ import mongoose, { Schema } from 'mongoose';
 /**
  * Robot arm — a saved pose (ARM-06 Animate).
  *
- * Captured from the follower's encoders while the operator held the arm in
- * position by hand. Reused across move sets by id; archived, never deleted,
- * so a move set that references it keeps working.
+ * Set with the live sliders (each slider drives one servo on the real arm),
+ * or captured from the follower while it follows the control arm. Reused
+ * across move sets by id; archived, never deleted, so a move set that
+ * references it keeps working.
  */
 const operatorRef = new Schema({ _id: { type: String }, username: { type: String } }, { _id: false });
 
@@ -15,6 +16,17 @@ const robotArmPoseSchema = new Schema(
 		name: { type: String, required: true, trim: true },
 		/** Encoder steps, servo ids 1..6 at index 0..5. */
 		positions: { type: [Number], required: true },
+		/**
+		 * What `positions` are (2026-10-22 redo):
+		 *   goal    — the goals the operator set with the live sliders. Played
+		 *             back exactly; the arm lands where it sat while being posed
+		 *             (same goal, same sag). No droop trim, no settling.
+		 *   reading — encoder readings (control-arm capture, older poses). The
+		 *             arm sits a droop short of a reading when it is used as a
+		 *             goal, so these keep the trim / settle machinery below.
+		 * Missing = reading (every pose saved before the redo).
+		 */
+		basis: { type: String, enum: ['goal', 'reading'], default: 'reading' },
 		/**
 		 * Droop trim: steps added to the goal when this pose is played, so the
 		 * arm ARRIVES at `positions` under gravity instead of settling short of
@@ -26,6 +38,15 @@ const robotArmPoseSchema = new Schema(
 		trimMeasuredBy: { type: operatorRef, default: null },
 		notes: { type: String, default: null },
 		createdBy: { type: operatorRef },
+		/** The last Go to pose (played like a one-pose move set); afterPlay finds it by runId. */
+		lastPlay: {
+			at: Date,
+			by: operatorRef,
+			runId: String,
+			durationS: Number,
+			end: { poseId: String, target: { type: [Number], default: undefined } },
+			settledAt: { type: Date, default: null }
+		},
 		archivedAt: { type: Date, default: null }
 	},
 	{ timestamps: true }

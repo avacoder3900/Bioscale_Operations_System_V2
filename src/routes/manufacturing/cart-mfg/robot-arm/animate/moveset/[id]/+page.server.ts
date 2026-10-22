@@ -1,8 +1,9 @@
-/** Robot Arm — Animate (ARM-06): the move-set editor. */
+/** Robot Arm — Animate (ARM-06): the move-set editor (keyframes + the pose editor for the selected one). */
 import { error, fail, redirect } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
 import { deriveArmHolder } from '$lib/server/robot-arm-lock';
-import { clearPoseDroop, getMoveSet, goToMessage, goToPose, listPoses, playMoveSet, playbackActive, settleAfterPlay, saveToPi, setMoveSetArchived, stopPlayback, updateMoveSet, AnimateError } from '$lib/server/robot-arm-animation';
+import { clearPoseDroop, getMoveSet, listPoses, playMoveSet, playbackActive, readArm, saveToPi, setMoveSetArchived, updateMoveSet } from '$lib/server/robot-arm-animation';
+import { failFrom, field, sharedAnimateActions, who } from '$lib/server/robot-arm-animate-actions';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals, params }) => {
@@ -10,26 +11,20 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 	requirePermission(locals.user, 'manufacturing:read');
 	const [moveSet, poses, active, holder] = await Promise.all([getMoveSet(params.id), listPoses(), playbackActive().catch(() => null), deriveArmHolder().catch(() => null)]);
 	if (!moveSet) error(404, 'Move set not found');
+	// Never read the servo bus while a session owns it.
+	const arm = active ? null : await readArm().catch(() => null);
 	return {
 		moveSet: JSON.parse(JSON.stringify(moveSet)),
 		poses: JSON.parse(JSON.stringify(poses)),
+		armNow: arm ? JSON.parse(JSON.stringify({ positions: arm.positions, temps: arm.temps, torqueOn: arm.torqueOn })) : null,
 		active,
 		holder: JSON.parse(JSON.stringify(holder ?? null))
 	};
 };
 
-function who(locals: App.Locals) {
-	return { _id: locals.user!._id, username: locals.user!.username };
-}
-function field(d: FormData, k: string): string | null {
-	return d.get(k)?.toString() ?? null;
-}
-function failFrom(err: unknown) {
-	const e = err as AnimateError;
-	return fail(e instanceof AnimateError ? e.status : 400, { error: e.message });
-}
-
 export const actions: Actions = {
+	...sharedAnimateActions,
+
 	save: async ({ request, locals, params }) => {
 		if (!locals.user) return fail(401, { error: 'Unauthorized' });
 		requirePermission(locals.user, 'manufacturing:write');
@@ -54,52 +49,6 @@ export const actions: Actions = {
 		requirePermission(locals.user, 'manufacturing:write');
 		try {
 			return { play: await playMoveSet(who(locals), params.id) };
-		} catch (err) {
-			return failFrom(err);
-		}
-	},
-
-	stop: async ({ locals }) => {
-		if (!locals.user) return fail(401, { error: 'Unauthorized' });
-		requirePermission(locals.user, 'manufacturing:write');
-		try {
-			return { stop: await stopPlayback(who(locals)) };
-		} catch (err) {
-			return failFrom(err);
-		}
-	},
-
-	// Automatic, after a play finishes on its own: the arm MOVES a few steps onto the last pose.
-	settle: async ({ request, locals }) => {
-		if (!locals.user) return fail(401, { error: 'Unauthorized' });
-		requirePermission(locals.user, 'manufacturing:write');
-		const runId = (await request.formData()).get('runId')?.toString();
-		if (!runId) return fail(400, { error: 'No run.' });
-		try {
-			return { settle: await settleAfterPlay(who(locals), runId) };
-		} catch (err) {
-			return failFrom(err);
-		}
-	},
-
-	playback: async ({ locals }) => {
-		if (!locals.user) return fail(401, { error: 'Unauthorized' });
-		requirePermission(locals.user, 'manufacturing:read');
-		try {
-			return { active: await playbackActive() };
-		} catch (err) {
-			return fail(502, { error: (err as Error).message });
-		}
-	},
-
-	// The arm MOVES (≤ ~1500 steps per servo, by jogs), then settles on the pose and learns its droop.
-	goToPose: async ({ request, locals }) => {
-		if (!locals.user) return fail(401, { error: 'Unauthorized' });
-		requirePermission(locals.user, 'manufacturing:write');
-		const id = field(await request.formData(), 'poseId');
-		if (!id) return fail(400, { error: 'No pose.' });
-		try {
-			return { success: goToMessage(await goToPose(who(locals), id)) };
 		} catch (err) {
 			return failFrom(err);
 		}
