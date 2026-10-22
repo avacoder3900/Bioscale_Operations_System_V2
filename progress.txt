@@ -21647,6 +21647,10 @@ wrong branch picked 21/200 at 10° tilt, 64/200 at 20°, 36/200 at 35°; the alt
 Tests: apriltags 23 (+7: spin vs tilt split, tilt-only never moved, ambiguity resolve / leave alone / fixed-tag vote /
 no-ref / rescale alt). robot-arm suites 106/106. npm run check: 13 errors = baseline, none in touched files.
 Pi restart gated on /sessions/active == null (a teleop session was running; watcher restarts and runs one detect).
+Pi restarted 11:56:54 CDT once the teleop session ended. Live detect found 0 tags: the camera is pointing at the floor
+(snapshot shows carpet + desk edge), so it needs re-aiming before a real-tag check. End-to-end verified instead by pushing
+a synthetic tilted 36h11 tag through the installed module's _detect: tag found, pose.alt present; 8 mm tag at 300 mm
+reproj 0.19-0.25 px vs alt 0.25-0.36 px (coin toss, as the rule says); 30 mm tag 0.21 vs 1.41 px (alt rightly ignored).
 Deployment: production — via Vercel GitHub integration on push to master
 Source: branch feat/arm-tag-spin-tilt @ commit 74883874, merged with Sam's a61c1364 as b56a13df on master
 Retrieve this exact code: git checkout master at commit b56a13df
