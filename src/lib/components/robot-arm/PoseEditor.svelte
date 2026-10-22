@@ -48,9 +48,11 @@
 		/** Play a Go to for this pose (the page owns playback). */
 		ongoto?: (pose: PoseSummary) => void;
 		onclose?: () => void;
+		/** Home as encoder steps (servo 1..6; null where unknown), from the Vision tab's calibration — the default reference marker. */
+		home?: (number | null)[] | null;
 	}
 
-	let { pose, allPoses, arm, armReachable, blocked, blockReason, ongoto, onclose }: Props = $props();
+	let { pose, allPoses, arm, armReachable, blocked, blockReason, ongoto, onclose, home = null }: Props = $props();
 
 	/** Largest move per live request; the servo covers this in a few tens of ms. */
 	const LIVE_STEP = 120;
@@ -65,6 +67,23 @@
 	let values = $state<number[]>([...(pose?.positions ?? arm?.positions ?? new Array(SERVO_COUNT).fill(2048))]);
 	// svelte-ignore state_referenced_locally
 	let armPos = $state<number[] | null>(arm?.positions ?? null);
+	/**
+	 * Where the arm was when this editor opened (first read), kept for the
+	 * whole edit — after a few −10s the operator asked "what was it before?"
+	 * (2026-10-22). One of the reference-marker choices; a page reload
+	 * starts a new one.
+	 */
+	// svelte-ignore state_referenced_locally
+	let opened = $state<number[] | null>(arm?.positions ? [...arm.positions] : null);
+	/**
+	 * The reference marker (green dot) above each slider. It used to be
+	 * "where the arm is", which just follows the slider once Live is on —
+	 * useless. Now it stays on a chosen reference: Home (default, from the
+	 * Vision tab calibration), where the arm was when the editor opened, or
+	 * any saved pose (e.g. the previous step). Hover the dot for the numbers;
+	 * ↺ puts the slider (and, live, the arm) back to it.
+	 */
+	let refChoice = $state<'home' | 'opened' | string>('home');
 	// svelte-ignore state_referenced_locally
 	let temps = $state<(number | null)[]>(arm?.temps ?? new Array(SERVO_COUNT).fill(null));
 	// svelte-ignore state_referenced_locally
@@ -86,13 +105,33 @@
 		if (a && a !== seenArm) {
 			seenArm = a;
 			armPos = a.positions;
+			if (!opened) opened = [...a.positions];
 			temps = a.temps;
 			torqueOn = a.torqueOn;
 		}
 	});
 
+	// Reference marker: which values the green dot sits on.
+	const refOptions = $derived.by(() => {
+		const out: { id: string; label: string; values: (number | null)[] | null }[] = [];
+		out.push({ id: 'home', label: home ? 'Home' : 'Home (no calibration yet)', values: home });
+		out.push({ id: 'opened', label: 'When this editor opened', values: opened });
+		for (const p of allPoses.filter((p) => !p.archived && p._id !== pose?._id)) out.push({ id: p._id, label: friendlyName(p.name), values: p.positions });
+		return out;
+	});
+	// Home is the default; without a home calibration, fall back to where the arm was when the editor opened.
+	$effect(() => {
+		if (refChoice === 'home' && !home && opened) refChoice = 'opened';
+	});
+	const ref = $derived(refOptions.find((o) => o.id === refChoice) ?? refOptions[0]);
+	const refValues = $derived(ref?.values ?? null);
+	const refValue = (s: number): number | null => {
+		const v = refValues?.[s];
+		return typeof v === 'number' && Number.isFinite(v) ? v : null;
+	};
+
 	const ranges = $derived(
-		SERVOS.map((s) => sliderRange([...allPoses.filter((p) => !p.archived).map((p) => p.positions[s]), ...(armPos ? [armPos[s]] : []), values[s]]))
+		SERVOS.map((s) => sliderRange([...allPoses.filter((p) => !p.archived).map((p) => p.positions[s]), ...(armPos ? [armPos[s]] : []), ...(refValue(s) != null ? [refValue(s)!] : []), values[s]]))
 	);
 	const dirty = $derived(!!pose && values.some((v, i) => v !== pose.positions[i]));
 	const offBy = $derived(armPos ? Math.max(...values.map((v, i) => Math.abs(v - armPos![i]))) : Infinity);
@@ -129,6 +168,7 @@
 			activeKind = body.active?.kind ?? null;
 			if (Array.isArray(body.positions)) {
 				armPos = body.positions;
+				if (!opened) opened = [...body.positions];
 				temps = body.temps ?? temps;
 				torqueOn = typeof body.torqueOn === 'boolean' ? body.torqueOn : null;
 			}
@@ -267,6 +307,12 @@
 			<button type="button" class="text-xs underline disabled:opacity-40" style="color: var(--color-tron-text-secondary)" disabled={!canLive} onclick={startFromArm} title="Set the sliders to where the arm is and go live">start from the arm</button>
 		{/if}
 		{#if onclose}<button type="button" class="text-xs underline" style="color: var(--color-tron-text-secondary)" onclick={() => { live = false; onclose?.(); }}>close</button>{/if}
+		<label class="flex w-full items-center gap-1 text-[11px] sm:w-auto" style="color: var(--color-tron-text-secondary)" title="The green dot above each slider stays on this reference; hover a dot for its number and where the arm really is">
+			<span class="inline-block h-2 w-2 rounded-full" style="background: #4ade80"></span> marker
+			<select bind:value={refChoice} class="{input} py-0.5 text-[11px]" style={inputStyle} aria-label="Reference marker">
+				{#each refOptions as o (o.id)}<option value={o.id} disabled={!o.values}>{o.label}</option>{/each}
+			</select>
+		</label>
 	</div>
 
 	{#if why}
@@ -297,8 +343,8 @@
 						{#if pose}
 							<span class="absolute -translate-x-1/2 text-[10px] leading-none" style="left: {pct(pose.positions[s], s)}%; color: var(--color-tron-text-secondary)" title="Saved: {pose.positions[s]}">▼</span>
 						{/if}
-						{#if armPos}
-							<span class="absolute top-1 h-2 w-2 -translate-x-1/2 rounded-full" style="left: {pct(armPos[s], s)}%; background: #4ade80" title="Arm now: {armPos[s]}"></span>
+						{#if refValue(s) != null}
+							<span class="absolute top-1 h-2 w-2 -translate-x-1/2 rounded-full" style="left: {pct(refValue(s)!, s)}%; background: #4ade80" title="{ref.label}: {refValue(s)}{armPos ? ` · arm now: ${armPos[s]}` : ''}{opened && opened[s] !== refValue(s) ? ` · when this editor opened: ${opened[s]}` : ''}"></span>
 						{/if}
 					</div>
 					<input
@@ -339,6 +385,13 @@
 					<button type="button" class={nudge} style={nudgeStyle} onclick={() => setValue(s, values[s] + 1)} aria-label="plus 1">+1</button>
 					<button type="button" class={nudge} style={nudgeStyle} onclick={() => setValue(s, values[s] + 10)} aria-label="plus 10">+10</button>
 					<span class="ml-1 w-14 text-right font-mono text-[10px]" style="color: var(--color-tron-text-secondary)" title="Angle from the servo's centre">{deg(values[s])}°</span>
+					{#if refValue(s) != null}
+						<!-- the reference marker's value in words, and a way back to it -->
+						<span class="ml-2 font-mono text-[10px]" style="color: {values[s] === refValue(s) ? 'var(--color-tron-text-secondary)' : '#4ade80'}" title="{ref.label}: {refValue(s)}{armPos ? ` · arm now: ${armPos[s]}` : ''}">● {refValue(s)}</span>
+						{#if values[s] !== refValue(s)}
+							<button type="button" class="{nudge} w-7" style={nudgeStyle} onclick={() => setValue(s, refValue(s)!)} title="Back to {refValue(s)} ({ref.label})" aria-label="back to the reference value">↺</button>
+						{/if}
+					{/if}
 				</div>
 			</div>
 		{/each}

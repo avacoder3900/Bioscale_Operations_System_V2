@@ -54,6 +54,9 @@
 		saveChosenCamera(n);
 	}
 	const calFor = (poseId: string): PoseCalibrationSummary | null => poseCals.find((c) => c.poseId === poseId && c.cameraName === camera) ?? null;
+	// Home (Vision tab calibration) for the chosen camera, else any camera's: the editor's default reference marker.
+	const homeSteps = $derived((data.homeSteps ?? {}) as Record<string, (number | null)[]>);
+	const home = $derived(homeSteps[camera] ?? Object.values(homeSteps)[0] ?? null);
 	const vr = new VerifiedRun();
 	vr.onend = () => void invalidateAll();
 	onDestroy(() => vr.destroy());
@@ -268,6 +271,7 @@
 					{blockReason}
 					ongoto={goTo}
 					onclose={editPose ? () => (editing = 'new') : undefined}
+					{home}
 				/>
 				{#if editPose}
 					<PoseCameraCard pose={editPose} {camera} cameras={cameraNames} oncamera={setCamera} calibration={calFor(editPose._id)} arm={armNow} {armReachable} {blocked} {blockReason} ongoto={goTo} />

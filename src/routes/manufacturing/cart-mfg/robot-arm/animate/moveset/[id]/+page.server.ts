@@ -5,6 +5,7 @@ import { deriveArmHolder } from '$lib/server/robot-arm-lock';
 import { clearPoseDroop, getMoveSet, listPoses, playMoveSet, playbackActive, readArm, saveToPi, setMoveSetArchived, updateMoveSet } from '$lib/server/robot-arm-animation';
 import { failFrom, field, sharedAnimateActions, who } from '$lib/server/robot-arm-animate-actions';
 import { activeVerifiedRun, listPoseCalibrations } from '$lib/server/robot-arm-verified';
+import { homeStepsByCamera } from '$lib/server/robot-arm-vision';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals, params }) => {
@@ -19,6 +20,7 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 		activeVerifiedRun().catch(() => null)
 	]);
 	if (!moveSet) error(404, 'Move set not found');
+	const homeSteps = await homeStepsByCamera().catch(() => ({}));
 	// Never read the servo bus while a session owns it.
 	const arm = active ? null : await readArm().catch(() => null);
 	return {
@@ -28,7 +30,8 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 		active,
 		holder: JSON.parse(JSON.stringify(holder ?? null)),
 		poseCalibrations: JSON.parse(JSON.stringify(poseCalibrations)),
-		verifiedRun: JSON.parse(JSON.stringify(verifiedRun ?? null))
+		verifiedRun: JSON.parse(JSON.stringify(verifiedRun ?? null)),
+		homeSteps
 	};
 };
 

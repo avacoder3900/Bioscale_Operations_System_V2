@@ -410,6 +410,25 @@ function calibrationSummary(doc: any, o: { withThumb: boolean }): CalibrationSum
 	};
 }
 
+/**
+ * Home as encoder steps per camera, servo ids 1..6 at index 0..5 (gripper
+ * from the servo readings when present, else null), from each camera's
+ * active calibration. The Animate pose editor draws it as the reference
+ * marker above the sliders (ARM-09 follow-up, 2026-10-22).
+ */
+export async function homeStepsByCamera(): Promise<Record<string, (number | null)[]>> {
+	await connectDB();
+	const docs = (await RobotArmTagCalibration.find({ status: 'active' }).select('cameraName jointSteps servos').lean()) as any[];
+	const out: Record<string, (number | null)[]> = {};
+	for (const d of docs) {
+		const steps = jointStepsOf(d);
+		if (!steps) continue;
+		const gripper = (d.servos ?? []).find((s: any) => Number(s.sid) === GRIPPER_SERVO_ID);
+		out[d.cameraName] = [1, 2, 3, 4, 5].map((sid) => (Number.isFinite(steps[String(sid)]) ? steps[String(sid)] : null)).concat([gripper && Number.isFinite(Number(gripper.steps)) ? Number(gripper.steps) : null]);
+	}
+	return out;
+}
+
 /** Active calibration per camera (with thumbnails) and the recent history (without). */
 export async function loadCalibrations(): Promise<{ active: CalibrationSummary[]; history: CalibrationSummary[] }> {
 	await connectDB();
