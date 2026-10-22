@@ -237,6 +237,9 @@
 	const joints = $derived(
 		calibration?.jointSteps ? Object.entries(calibration.jointSteps).sort(([a], [b]) => Number(a) - Number(b)) : []
 	);
+	/** Load each servo held at home (null when only /pose could be read). */
+	const homeLoad = (sid: string) => calibration?.servos?.find((s) => String(s.sid) === sid)?.load ?? null;
+	const strainedNow = (sid: string) => shownResult?.home.strained?.find((s) => String(s.sid) === sid) ?? null;
 
 	function when(iso: string): string {
 		return new Date(iso).toLocaleString();
@@ -291,7 +294,7 @@
 					{#if calibration}
 						Calibrated {when(calibration.capturedAt)}{calibration.capturedBy?.username ? ` by ${calibration.capturedBy.username}` : ''}
 						· {calibration.tags.length} tag(s) ({calibration.tags.filter((t) => t.role === 'fixed').length} fixed)
-						· {calibration.tolerances.positionMm} mm{calibration.tolerances.angleDeg > 0 ? ` / ${calibration.tolerances.angleDeg}°` : ''}
+						· {calibration.tolerances.positionMm} mm{calibration.tolerances.angleDeg > 0 ? ` / ${calibration.tolerances.angleDeg}° spin` : ''}
 						{#if calibration.intrinsicsSource === 'nominal'}· nominal intrinsics{/if}
 						· {calibration.jointSteps ? 'encoder home stored' : 'no encoder home'}
 						{#if calibration.note}· {calibration.note}{/if}
@@ -332,8 +335,12 @@
 				<div class="mt-3 flex flex-wrap gap-x-4 gap-y-1 font-mono text-xs" style="color: var(--color-tron-text-secondary)">
 					{#each joints as [sid, steps]}
 						{@const res = shownResult?.residuals?.[sid]}
+						{@const load = homeLoad(sid)}
+						{@const strain = strainedNow(sid)}
 						<span>J{sid} <span style="color: var(--color-tron-text)">{steps}</span>
 							{#if res != null}<span style="color: {Math.abs(res) <= HOME_STEP_TOLERANCE ? '#4ade80' : '#f59e0b'}">({res > 0 ? '+' : ''}{res})</span>{/if}
+							{#if load != null}<span title="load held at home">· load {load}</span>{/if}
+							{#if strain}<span style="color: #ef4444">{strain.reason === 'hot' ? `hot ${strain.temperatureC}°C` : `load now ${strain.load}`}</span>{/if}
 						</span>
 					{/each}
 				</div>

@@ -43,14 +43,18 @@
 	import RotatedFrame from '$lib/components/robot-arm/RotatedFrame.svelte';
 	import { cameraRotation } from '$lib/robot-arm/camera-rotation.svelte';
 	import TorqueControl from './robot-arm/TorqueControl.svelte';
+	import PiThermalChip from './robot-arm/PiThermalChip.svelte';
+	import type { ArmThermal } from '$lib/server/robot-arm-client';
 
 	interface Props {
 		cameras: CameraStatus[];
 		camerasError: string | null;
 		armReachable: boolean;
+		/** The Pi's temperature / throttle state at page load; the chip polls from there. */
+		thermal?: ArmThermal | null;
 	}
 
-	let { cameras, camerasError, armReachable }: Props = $props();
+	let { cameras, camerasError, armReachable, thermal = null }: Props = $props();
 
 	// Deliberately not `as const`: these are compared against and bound to
 	// values that arrive as plain number/string from localStorage and <select>,
@@ -563,6 +567,8 @@
 					title="Paused"
 				></span>
 			{/if}
+			<!-- Pi heat / throttling: visible on every arm tab, collapsed or not. -->
+			<PiThermalChip initial={thermal} {armReachable} />
 		</div>
 		<button
 			type="button"

@@ -21,7 +21,7 @@
 import { json, error } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
 import { connectDB, AuditLog, generateId } from '$lib/server/db';
-import { getRobot, robotGet, robotPost, robotPatch, robotPut, robotDelete } from './proxy';
+import { getRobot, robotGet, robotPost, robotPatch, robotPut, robotDelete, withRequester } from './proxy';
 
 export const RELAY_METHODS = ['GET', 'POST', 'PATCH', 'PUT', 'DELETE'] as const;
 export type RelayMethod = (typeof RELAY_METHODS)[number];
@@ -130,7 +130,7 @@ export async function handleRelay(event: {
 	const robot = await getRobot(params.id);
 	if (!robot) error(404, 'Robot not found');
 
-	const r = await relayToRobot(robot, req);
+	const r = await withRequester(locals.user.username, () => relayToRobot(robot, req));
 
 	if (isMutating(req.method)) {
 		await connectDB();

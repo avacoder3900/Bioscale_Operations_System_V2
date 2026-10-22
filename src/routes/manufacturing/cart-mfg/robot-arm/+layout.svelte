@@ -19,7 +19,7 @@
 	import type { Snippet } from 'svelte';
 	import { page } from '$app/stores';
 	import RobotArmCameraPanel from '$lib/components/RobotArmCameraPanel.svelte';
-	import type { CameraStatus, ArmPreflight } from '$lib/server/robot-arm-client';
+	import type { CameraStatus, ArmPreflight, ArmThermal } from '$lib/server/robot-arm-client';
 
 	interface Props {
 		children: Snippet;
@@ -27,6 +27,8 @@
 			arm: { reachable: boolean; preflight: ArmPreflight | null; error: string | null };
 			cameras: CameraStatus[];
 			camerasError: string | null;
+			/** Pi heat / throttle state at load (null: unreachable or route not installed). */
+			thermal: ArmThermal | null;
 		};
 	}
 
@@ -185,6 +187,7 @@
 					cameras={data.cameras}
 					camerasError={data.camerasError}
 					armReachable={data.arm.reachable}
+					thermal={data.thermal}
 				/>
 			</div>
 		</div>

@@ -218,6 +218,7 @@
 						<input type="hidden" name="poseId" value={p._id} />
 						<button type="submit" class="min-h-[34px] rounded px-3 text-sm font-semibold disabled:opacity-40" style={cyan} disabled={blocked}>Go to pose</button>
 					</form>
+					<a href="/manufacturing/cart-mfg/robot-arm/animate?jog={p._id}" class="text-xs underline" style="color: var(--color-tron-cyan)" title="Nudge the real arm joint by joint and save the result into this pose">jog the pose live</a>
 					{#if p.trim}
 						<form method="POST" action="?/clearDroop" use:enhance>
 							<input type="hidden" name="poseId" value={p._id} />

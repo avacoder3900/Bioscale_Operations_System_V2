@@ -32,6 +32,7 @@ import {
 	type CleanDraft
 } from '$lib/robot-arm/recording-cleanup';
 import { DEFAULT_RATE_HZ } from '$lib/robot-arm/animation';
+import { seriesFromFrames, type OverlayOptions } from '$lib/robot-arm/recording-overlay';
 
 interface User {
 	_id: string;
@@ -77,7 +78,7 @@ function opRef(user: User) {
 	return { _id: user._id, username: user.username };
 }
 
-function cleanSplit(thresholdSteps: unknown, pauseS: unknown) {
+export function cleanSplit(thresholdSteps: unknown, pauseS: unknown) {
 	const th = Number(thresholdSteps);
 	const ps = Number(pauseS);
 	if (!Number.isFinite(th) || th < 0 || th > 500) throw new CleanupError('Threshold must be 0–500 steps.');
@@ -92,73 +93,103 @@ function framesFromRaw(rawT: number[], rawGoal: number[][]) {
 	}));
 }
 
+/** A Pi recording read and parsed, every frame with all six servos (the last known value fills a gap). */
+export interface SourceRecording {
+	name: string;
+	header: Record<string, unknown> | null;
+	rateHz: number;
+	jointNames: string[];
+	rawT: number[];
+	rawGoal: number[][];
+}
+
+/** Read a recording off the Pi. Throws a CleanupError the operator can read. */
+export async function readSourceRecording(name: string): Promise<SourceRecording> {
+	if (!name) throw new CleanupError('Pick a recording.');
+	let exported;
+	try {
+		exported = await robotArm.exportRecording(name);
+	} catch (err) {
+		throw new CleanupError(`Could not read "${name}" from the Pi: ${(err as Error).message}`, 502);
+	}
+	let parsed;
+	try {
+		parsed = parseRecording(exported.jsonl);
+	} catch (err) {
+		throw new CleanupError(`"${name}" is not a readable recording: ${(err as Error).message}`);
+	}
+	const series = seriesFromFrames(parsed.frames);
+	if (series.t.length < 2) throw new CleanupError(`"${name}" has no frames with all six servos.`);
+	return {
+		name,
+		header: parsed.header?.raw ?? null,
+		rateHz: parsed.header?.rateHz ?? 30,
+		jointNames: joints(parsed.header),
+		rawT: series.t,
+		rawGoal: series.goal
+	};
+}
+
+/** Where a clean-up's frames came from when they are an overlay (robot-arm-overlay.ts), not a recording as such. */
+export interface CleanupOverlayInfo extends OverlayOptions {
+	/** The pilot's (teleop) recording the positions were taken from; the clean-up's sourceName is the animated one. */
+	preciseName: string;
+	/** Mean joint distance after alignment, steps. */
+	fit: number;
+}
+
 /** Split a Pi recording into a new draft. Returns the draft id. */
 export async function createCleanup(
 	user: User,
 	o: { sourceName: string; thresholdSteps: unknown; pauseS?: unknown }
 ): Promise<string> {
 	const split = cleanSplit(o.thresholdSteps, o.pauseS ?? DEFAULT_PAUSE_S);
-	if (!o.sourceName) throw new CleanupError('Pick a recording.');
+	const source = await readSourceRecording(o.sourceName);
+	return insertCleanup(user, { source, split });
+}
 
-	let exported;
-	try {
-		exported = await robotArm.exportRecording(o.sourceName);
-	} catch (err) {
-		throw new CleanupError(`Could not read "${o.sourceName}" from the Pi: ${(err as Error).message}`, 502);
-	}
-	let parsed;
-	try {
-		parsed = parseRecording(exported.jsonl);
-	} catch (err) {
-		throw new CleanupError(`"${o.sourceName}" is not a readable recording: ${(err as Error).message}`);
-	}
-
-	// Every frame needs all six servos; carry the last known value over a gap.
-	const rawT: number[] = [];
-	const rawGoal: number[][] = [];
-	let last: number[] | null = null;
-	for (const f of parsed.frames) {
-		const row = SERVO_IDS.map((sid, j) => {
-			const v = f.positions[String(sid)];
-			return typeof v === 'number' ? v : (last?.[j] ?? NaN);
-		});
-		if (row.some((v) => !Number.isFinite(v))) continue;
-		rawT.push(f.t);
-		rawGoal.push(row);
-		last = row;
-	}
-	if (rawT.length < 2) throw new CleanupError(`"${o.sourceName}" has no frames with all six servos.`);
-
-	const result = recordingToSteps(framesFromRaw(rawT, rawGoal), split);
+/**
+ * A new draft from frames already in hand: the split (the only automatic
+ * part) and the row. `overlay` says the frames are an overlay of two
+ * recordings rather than `source` as recorded.
+ */
+export async function insertCleanup(
+	user: User,
+	o: { source: SourceRecording; split: { thresholdSteps: number; pauseS: number }; overlay?: CleanupOverlayInfo; title?: string }
+): Promise<string> {
+	const { source, split } = o;
+	const result = recordingToSteps(framesFromRaw(source.rawT, source.rawGoal), split);
 	const draft = draftFromSteps(result);
 
 	const pi = await robotArm.listRecordings().catch(() => null);
-	const meta = pi?.recordings.find((r) => r.name === o.sourceName) ?? null;
+	const meta = pi?.recordings.find((r) => r.name === source.name) ?? null;
 
 	await connectDB();
 	const id = generateId();
 	await RobotArmRecordingCleanup.create({
 		_id: id,
-		title: o.sourceName.replace(/\.jsonl$/i, ''),
-		sourceName: o.sourceName,
+		title: (o.title ?? source.name).replace(/\.jsonl$/i, ''),
+		sourceName: source.name,
 		sourceModified: meta?.modified ?? null,
 		sourceSizeBytes: meta?.size_bytes ?? null,
-		sourceHeader: parsed.header?.raw ?? null,
-		rateHz: parsed.header?.rateHz ?? 30,
-		jointNames: joints(parsed.header),
-		rawT,
-		rawGoal,
+		sourceHeader: source.header,
+		rateHz: source.rateHz,
+		jointNames: source.jointNames,
+		rawT: source.rawT,
+		rawGoal: source.rawGoal,
 		...split,
 		start: draft.start,
 		steps: draft.steps,
+		overlay: o.overlay ?? null,
 		createdBy: opRef(user),
 		updatedBy: opRef(user)
 	});
 	await audit(user, 'robot_arm.cleanup.create', id, {
-		sourceName: o.sourceName,
+		sourceName: source.name,
 		...split,
 		steps: draft.steps.length,
-		frames: rawT.length
+		frames: source.rawT.length,
+		...(o.overlay ? { overlay: o.overlay } : {})
 	});
 	return id;
 }
@@ -205,6 +236,8 @@ export interface CleanupDoc extends CleanDraft {
 	savedAs: { name: string; at: string; by?: User; frames?: number; durationS?: number }[];
 	/** Move sets made from this draft (Send to Animate), newest last. */
 	moveSets: { moveSetId: string; name: string; at: string; by?: User; poses?: number; keyframes?: number }[];
+	/** Set when the frames are an overlay: the pilot's positions on the animated sourceName (robot-arm-overlay.ts). */
+	overlay: CleanupOverlayInfo | null;
 	updatedAt: string;
 	updatedBy: User | null;
 	/** Display trace: times and goals per frame (thinned past MAX_TRACE_POINTS). */
@@ -242,6 +275,7 @@ export async function getCleanup(id: string): Promise<CleanupDoc | null> {
 			steps: doc.steps ?? [],
 			savedAs: doc.savedAs ?? [],
 			moveSets: doc.moveSets ?? [],
+			overlay: doc.overlay ?? null,
 			updatedAt: doc.updatedAt,
 			updatedBy: doc.updatedBy ?? null,
 			trace: {

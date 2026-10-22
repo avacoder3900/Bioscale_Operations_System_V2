@@ -6,8 +6,12 @@ import {
 	describeVision,
 	estimateCameraShift,
 	invert,
+	isAmbiguous,
+	matMul,
 	minTagSizeMm,
+	resolvePose,
 	rotationAngleDeg,
+	splitRotationDeg,
 	sheetSizeMm,
 	DEFAULT_TOLERANCES,
 	IDENTITY,
@@ -88,23 +92,49 @@ describe('assessTags', () => {
 		expect(a.verdict).toBe('off');
 		const t = a.markers.find((m) => m.tagId === 20)!;
 		expect(t.status).toBe('moved');
+		expect(t.over).toEqual(['mm']);
 		expect(t.offMm).toBeCloseTo(8, 6);
+		expect(a.markers.filter((m) => m.tagId !== 20).every((m) => m.over.length === 0)).toBe(true);
 		expect(describeVision(a)).toContain('Tag 20 8.0 mm');
 	});
 
-	it('a turned tag is off by angle even in place', () => {
+	it('a tag spun about its normal is off by angle even in place', () => {
 		const c = arm[0];
-		const turned = { ...seen(c), pose: { t: c.pose!.t, R: axisAngle([1, 0, 0], 12), reprojPx: 0.2 } };
+		const turned = { ...seen(c), pose: { t: c.pose!.t, R: axisAngle([0, 0, 1], 12), reprojPx: 0.2 } };
 		const a = assessTags(all, all.map((x) => (x.tagId === c.tagId ? turned : seen(x))));
-		expect(a.markers.find((m) => m.tagId === c.tagId)!.offDeg).toBeCloseTo(12, 6);
+		const m = a.markers.find((m) => m.tagId === c.tagId)!;
+		expect(m.offDeg).toBeCloseTo(12, 6);
+		expect(m.offTiltDeg).toBeCloseTo(0, 6);
+		expect(m.over).toEqual(['deg']);
 		expect(a.verdict).toBe('off');
+		expect(describeVision(a)).toContain('12.0° spin');
+	});
+
+	it('tilt alone is reported but never judged', () => {
+		const c = arm[0];
+		const tilted = { ...seen(c), pose: { t: c.pose!.t, R: axisAngle([1, 0, 0], 40), reprojPx: 0.2 } };
+		const a = assessTags(all, all.map((x) => (x.tagId === c.tagId ? tilted : seen(x))));
+		const m = a.markers.find((m) => m.tagId === c.tagId)!;
+		expect(m.offTiltDeg).toBeCloseTo(40, 6);
+		expect(m.offDeg).toBeCloseTo(0, 6);
+		expect(m.over).toEqual([]);
+		expect(m.status).toBe('ok');
+		expect(a.verdict).toBe('ok');
+	});
+
+	it('moved AND spun names both measurements', () => {
+		const c = arm[0];
+		const both = { ...seen(c), pose: { t: [c.pose!.t[0] + 9, c.pose!.t[1], c.pose!.t[2]] as Vec3, R: axisAngle([0, 0, 1], 12), reprojPx: 0.2 } };
+		const a = assessTags(all, all.map((x) => (x.tagId === c.tagId ? both : seen(x))));
+		expect(a.markers.find((m) => m.tagId === c.tagId)!.over).toEqual(['mm', 'deg']);
 	});
 
 	it('angleDeg 0 disables the angle check', () => {
 		const c = arm[0];
-		const turned = { ...seen(c), pose: { t: c.pose!.t, R: axisAngle([1, 0, 0], 12), reprojPx: 0.2 } };
+		const turned = { ...seen(c), pose: { t: c.pose!.t, R: axisAngle([0, 0, 1], 12), reprojPx: 0.2 } };
 		const a = assessTags(all, all.map((x) => (x.tagId === c.tagId ? turned : seen(x))), { ...DEFAULT_TOLERANCES, angleDeg: 0 });
 		expect(a.verdict).toBe('ok');
+		expect(a.markers.find((m) => m.tagId === c.tagId)!.over).toEqual([]);
 	});
 
 	it('a bumped camera is measured on the fixed tags and undone', () => {
@@ -158,6 +188,83 @@ describe('assessTags', () => {
 		const off = assessTags([c], [{ id: c.tagId, center: [0.55, 0.5], corners: [], sizeMm: null, pose: null, depthMm: null }]);
 		expect(off.verdict).toBe('off');
 		expect(off.markers[0].offMm).toBeNull();
+		expect(off.markers[0].over).toEqual(['px']);
+		expect(ok.markers[0].over).toEqual([]);
+	});
+
+	it('splitRotationDeg separates spin about the normal from tilt of it', () => {
+		const swingThenTwist = matMul(axisAngle([1, 0, 0], 30), axisAngle([0, 0, 1], 20));
+		expect(splitRotationDeg(swingThenTwist).spinDeg).toBeCloseTo(20, 6);
+		expect(splitRotationDeg(swingThenTwist).tiltDeg).toBeCloseTo(30, 6);
+		const twistThenSwing = matMul(axisAngle([0, 0, 1], -20), axisAngle([0, 1, 0], 30));
+		expect(splitRotationDeg(twistThenSwing).spinDeg).toBeCloseTo(20, 6);
+		expect(splitRotationDeg(twistThenSwing).tiltDeg).toBeCloseTo(30, 6);
+		expect(splitRotationDeg(I)).toEqual({ spinDeg: 0, tiltDeg: 0 });
+	});
+
+	describe('planar-pose ambiguity', () => {
+		// Calibrated: tag tilted 20° toward the camera. Live: the solver picked the
+		// mirrored branch (tilted 20° away, i.e. 40° off) but offers the right one as alt.
+		const c = cal(30, 'arm', [60, 0, 300], axisAngle([1, 0, 0], 20));
+		const mirrored = axisAngle([1, 0, 0], -20);
+		const live = (altReproj: number | null): TagDetection => ({
+			id: 30,
+			center: c.center,
+			corners: [],
+			sizeMm: 30,
+			pose: { t: c.pose!.t, R: mirrored, reprojPx: 0.3, alt: { t: c.pose!.t, R: c.pose!.R, reprojPx: altReproj } },
+			depthMm: null
+		});
+
+		it('a near-equal alternative that agrees with the calibration is taken', () => {
+			expect(isAmbiguous(live(0.35).pose!)).toBe(true);
+			const r = resolvePose(live(0.35).pose!, { R: c.pose!.R, t: c.pose!.t });
+			expect(r.flipped).toBe(true);
+			expect(r.ambiguous).toBe(true);
+			const a = assessTags([c], [live(0.35)]);
+			expect(a.markers[0].offTiltDeg).toBeCloseTo(0, 6);
+			expect(a.markers[0].flipped).toBe(true);
+			expect(a.markers[0].ambiguous).toBe(true);
+		});
+
+		it('a clearly worse alternative is left alone; the tilt shows but does not judge', () => {
+			expect(isAmbiguous(live(3).pose!)).toBe(false);
+			const a = assessTags([c], [live(3)]);
+			expect(a.markers[0].flipped).toBe(false);
+			expect(a.markers[0].ambiguous).toBe(false);
+			expect(a.markers[0].offTiltDeg).toBeCloseTo(40, 6);
+			expect(a.markers[0].status).toBe('ok');
+		});
+
+		it('a flipped fixed tag does not pull the camera-shift estimate', () => {
+			const fixedTilted = cal(2, 'fixed', [-80, 0, 300], axisAngle([1, 0, 0], 20));
+			const cals = [fixedTilted, ...all.filter((x) => x.tagId !== 2)];
+			const dets = cals.map((x) =>
+				x.tagId === 2
+					? { ...seen(x), pose: { t: x.pose!.t, R: mirrored, reprojPx: 0.3, alt: { t: x.pose!.t, R: x.pose!.R, reprojPx: 0.32 } } }
+					: seen(x)
+			);
+			const a = assessTags(cals, dets);
+			expect(a.verdict).toBe('ok');
+			expect(a.cameraShift?.compensated).toBe(false);
+		});
+
+		it('no alternative or no reference: the solver pick stands', () => {
+			const plain = { ...live(0.35), pose: { t: c.pose!.t, R: mirrored, reprojPx: 0.3 } };
+			expect(resolvePose(plain.pose, { R: c.pose!.R, t: c.pose!.t }).flipped).toBe(false);
+			expect(resolvePose(live(0.35).pose!, null).flipped).toBe(false);
+		});
+
+		it('rescaleToSize scales the alternative too', () => {
+			// Solved with 20 mm instead of the calibrated 30: both translations are 2/3 of the truth.
+			const k = 20 / 30;
+			const t3: Vec3 = [c.pose!.t[0] * k, c.pose!.t[1] * k, c.pose!.t[2] * k];
+			const l = live(0.35);
+			const d: TagDetection = { ...l, sizeMm: 20, pose: { ...l.pose!, t: t3, alt: { ...l.pose!.alt!, t: t3 } } };
+			const a = assessTags([c], [d]);
+			expect(a.markers[0].flipped).toBe(true);
+			expect(a.markers[0].offMm).toBeCloseTo(0, 6);
+		});
 	});
 
 	it('a registry size edit since calibration does not read as movement', () => {
