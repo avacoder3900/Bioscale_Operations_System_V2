@@ -12,6 +12,7 @@
  *    (default) picks bridge on Vercel, direct elsewhere.
  */
 
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { connectDB, OpentronsRobot, Ot2BridgeCommand, ScannerEvent, generateId, LabwareDefinition } from '$lib/server/db';
 import { labwareNamesReferencedBy } from './labware-refs';
 import { isHardenedRobot, rolloutNote } from '$lib/server/services/deck-calibration/rollout';
@@ -35,6 +36,18 @@ export function bridgeDeviceIdForRobot(robot: { name?: string; bridgeDeviceId?: 
 	return slot ? `ot2-${slot}-bridge` : 'unknown-bridge';
 }
 
+/**
+ * Who asked for the queue command being built. Queue rows used to carry no
+ * `requestedBy`, so a browser tab polling a finished run through the queue for
+ * three days (2026-10-07, R04) could not be traced to a machine or a person.
+ * Routes wrap their robot calls in withRequester(); bridgeFetch reads it.
+ */
+const requesterStore = new AsyncLocalStorage<string>();
+export function withRequester<T>(username: string | null | undefined, fn: () => Promise<T>): Promise<T> {
+	return username ? requesterStore.run(username, fn) : fn();
+}
+export const currentRequester = (): string | null => requesterStore.getStore() ?? null;
+
 const BRIDGE_POLL_MS = 100;
 const BRIDGE_TIMEOUT_MS = 30_000; // parity with the direct robotFetch abort
 
@@ -56,7 +69,8 @@ async function bridgeFetch(
 		deviceId,
 		kind: 'http',
 		request: { method, path, body: body ?? null },
-		ttlMs: BRIDGE_TIMEOUT_MS
+		ttlMs: BRIDGE_TIMEOUT_MS,
+		requestedBy: currentRequester()
 	});
 
 	const deadline = Date.now() + BRIDGE_TIMEOUT_MS;
@@ -263,7 +277,8 @@ async function bridgeUpload(robot: any, fileName: string, fileB64: string, labwa
 		deviceId,
 		kind: 'upload_protocol',
 		payload: { fileName, fileB64, labware },
-		ttlMs: UPLOAD_BRIDGE_TIMEOUT_MS
+		ttlMs: UPLOAD_BRIDGE_TIMEOUT_MS,
+		requestedBy: currentRequester()
 	});
 
 	const deadline = Date.now() + UPLOAD_BRIDGE_TIMEOUT_MS;

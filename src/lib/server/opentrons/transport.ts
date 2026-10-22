@@ -5,7 +5,7 @@
  */
 import { json } from '@sveltejs/kit';
 import { runVerb, maintenanceRecordFor, type Ot2Transport, type Ot2Verb } from '$lib/opentrons/ot2-protocol';
-import { robotGet, robotPost, robotDelete, robotPostMultipart } from './proxy';
+import { robotGet, robotPost, robotDelete, robotPostMultipart, withRequester } from './proxy';
 import { applyMaintenanceRecord } from './maintenance-records';
 
 export function serverTransport(robot: { ip: string; port?: number | null }): Ot2Transport {
@@ -35,7 +35,7 @@ export async function verbResponse(
 	args: Record<string, unknown>,
 	user?: { username: string }
 ): Promise<Response> {
-	const r = await runVerb(serverTransport(robot), verb, args);
+	const r = await withRequester(user?.username, () => runVerb(serverTransport(robot), verb, args));
 	if (r.status >= 500) console.error(`[API] ${verb} error:`, (r.body as any)?.message ?? (r.body as any)?.detail);
 	const rec = maintenanceRecordFor(verb, args, r);
 	if (rec) {

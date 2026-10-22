@@ -62,6 +62,15 @@
 	let pollFailures = $state(0);
 	let actionInFlight = $state<string | null>(null);
 	let terminalFired = $state(false);
+	/**
+	 * Polls taken since the run reached a terminal status. A few more confirm the
+	 * final state settled; then the loop stops. It used to run forever: a tab left
+	 * open on a finished run kept one robot request per tick going for days —
+	 * on the queue line that is a Vercel function + a Mongo command + the daemon's
+	 * single worker, each tick (10,000 rows in 36 h from one tab, 2026-10-07).
+	 */
+	let postTerminalPolls = 0;
+	const POST_TERMINAL_POLLS = 3;
 	// Auto-resume the initial "confirm off-deck labware" pause so operators don't
 	// click resume at the start of the wax/reagent protocol. Fires once.
 	let autoResumedInitial = $state(false);
@@ -159,6 +168,10 @@
 	}
 
 	function schedulePoll() {
+		if (terminalFired && postTerminalPolls >= POST_TERMINAL_POLLS) {
+			pollHandle = null;
+			return;
+		}
 		const every = conn?.transport === 'direct' ? Math.min(pollMs, DIRECT_POLL_MS) : pollMs;
 		if (!destroyed) pollHandle = setTimeout(poll, every);
 	}
@@ -230,7 +243,9 @@
 				? `Robot status has not answered for ${pollFailures} checks — the bridge may be busy or down`
 				: err instanceof Error ? err.message : 'Failed to reach robot';
 		}
-		// Keep polling even after terminal so the operator sees the final state.
+		// A few more polls after terminal so the operator sees the settled final
+		// state; then stop (see postTerminalPolls).
+		if (terminalFired) postTerminalPolls += 1;
 		schedulePoll();
 	}
 
