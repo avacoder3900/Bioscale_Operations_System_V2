@@ -22211,3 +22211,8 @@ window, cap, servo ticks), per-servo table (median/range of the raw offset, appl
 Clean-up list. Nothing touches the arm. Docs: docs/prds/ARM-07-cleanup-overlay.md, context doc section 6b line.
 Tests: robot-arm unit suites 6 files, 123 passed. svelte-check 14 errors (baseline), none in touched files. Not run
 against the arm, a live Pi or a live DB.
+Deployment: preview — https://bioscale-operations-system-mongodb-id8g5961i-brevitest.vercel.app
+Source: branch feat/cleanup-overlay @ commit 56056137
+Retrieve this exact code: git checkout feat/cleanup-overlay at commit 56056137
+  (or: git log feat/cleanup-overlay --oneline to find it if the branch has since moved on)
+What this deployment is for: Clean-up tab Overlay page (cleanup/overlay) — pilot positions on an animated recording; PR #126
