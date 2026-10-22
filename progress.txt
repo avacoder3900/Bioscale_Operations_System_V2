@@ -22652,3 +22652,40 @@ Restarted 14:36 CDT once the operator said the arm was free and /sessions/active
 {device /dev/video4, state idle, running false, frames 0}; still idle 6 s later (nobody watching); one snapshot
 request (200, 39 KB, 1.0 s incl. warm-up) flipped it to {state running, 1920x1080, stale false}. Lazy start intact.
 npm run check: 13 errors = baseline, none in touched files.
+
+================================================================================
+2026-10-22 — feat/animate-redo — Animate redo: live sliders, absolute moves, torque kept on, servo temps
+================================================================================
+The operator asked to redo the Animate protocol: (1) no file names everywhere, (2) posing with the control arm
+must not turn torque off when a pose is taken, (3) temperature checks on the servos, (5) a slider per servo with
+an axis, the arm following the slider live, so posing is just jogging; and asked why a pose pulled up often
+lands off ("is it not taking the earlier poses into account?"). Full write-up: docs/prds/ARM-06-animate.md §13.
+Root causes (from production audit rows via the Recent Audit Entries query, and the code):
+- every control-arm save logged torqueOnAtCapture: false (7/7). The live Pi writes follower torque OFF when a
+  teleop session stops, so stop → 400 ms "settle" → read was really 400 ms of sag, then a read of the sagged arm.
+  The replay loop drops torque at the end of every play too. Hold route never installed (38 hold_failed rows).
+- Go to pose chained RELATIVE jogs (goal = present + 300) back to back while the arm was still moving, so where it
+  stopped depended on where it started. Answer to the question: poses are absolute and must stay absolute; the
+  arm was being SENT there relatively. Go to is now a one-pose play (absolute path from the arm, 1 s hold).
+Built: PoseEditor.svelte (sliders + axis + saved ▼ / arm ● markers + per-servo °C; Live drives each servo via
+the Pi's existing POST /servos/{id}/move, ≤120 steps per request, one request at a time, poll paused while
+sending; jog fallback on 404). Slider poses store goals (pose.basis 'goal') and play exactly (no trim, no Pi
+settle flag); captured poses stay 'reading' with the old trim/settle. stopTeleopHolding = stop + torque on;
+afterPlay (was settleAfterPlay) restores torque first; replay_settle.py keeps torque on for hold_at_end
+headers (simulator §6 added, all checks pass) — NOT yet copied to arm-pi. readArm returns temps; requireCool
+refuses motion at ≥ 65 °C, warns ≥ 55. UI: one-screen Animate tab, friendlyName (strips .jsonl + timestamps,
+display only), grouped pose library, pose-by-hand and the Jog panel removed, move-set editor = keyframe list +
+pose editor (curves removed), Save to Pi under "More". Shared actions: src/lib/server/robot-arm-animate-actions.ts.
+API route animate/jog → animate/live.
+Files: animation.ts (+test), robot-arm-animation.ts, robot-arm-animate-actions.ts (new), robot-arm-client.ts
+(moveJoint), robot-arm-pose.ts (basis, lastPlay), playback.svelte.ts, PoseEditor.svelte (new), PoseJog.svelte
+(deleted), api/robot-arm/animate/live (was jog), the three animate pages, replay_settle.py + simulator, PRD §13.
+Checks: svelte-check 14 errors, all in the pre-existing files (r2, research-proxy ×2, AskBims, assembly ×8,
+magnetometer ×2), none in touched files; vitest src/lib 798 passed; vite build client + server OK. Not run on
+the arm — PRD §13 "To verify on the arm". PR #130.
+Deployment: preview — https://bioscale-operations-system-mongodb-9f79xyucs-brevitest.vercel.app
+Source: branch feat/animate-redo @ commit 7acf9c0d
+Retrieve this exact code: git checkout feat/animate-redo at commit 7acf9c0d
+  (or: git log feat/animate-redo --oneline to find it if the branch has since moved on)
+What this deployment is for: try the redone Animate tab (live sliders, go-to as a play, temperatures). Smoke:
+/login 200, /manufacturing/cart-mfg/robot-arm/animate 302 to login, /api/robot-arm/animate/live 401 unauthenticated.
