@@ -3,13 +3,17 @@
 	 * Robot Arm — Animate tab (ARM-06).
 	 *
 	 * Top to bottom: what is playing, capture a pose (with the control arm,
-	 * or by hand), the pose library, move sets, sequences. See
-	 * docs/prds/ARM-06-animate.md.
+	 * or by hand), jog (adjust a pose on the real arm, live), the pose
+	 * library, move sets, sequences. See docs/prds/ARM-06-animate.md.
+	 * `?jog=<poseId>` opens the jog panel on that pose (linked from the
+	 * move-set editor).
 	 */
 	import { enhance } from '$app/forms';
-	import { onDestroy } from 'svelte';
+	import { page } from '$app/state';
+	import { onDestroy, onMount } from 'svelte';
 	import { buildPath, flattenSequence, DEFAULT_RATE_HZ, type ResolvedKeyframe } from '$lib/robot-arm/animation';
 	import { Playback } from '$lib/robot-arm/playback.svelte';
+	import PoseJog from '$lib/components/robot-arm/PoseJog.svelte';
 	import type { ArmNow, MoveSetSummary, PoseSummary, SequenceSummary } from '$lib/server/robot-arm-animation';
 
 	let { data, form } = $props();
@@ -46,6 +50,17 @@
 
 	let editingPose = $state<string | null>(null);
 	let showArchived = $state(false);
+	// Jog panel: 'free' = no target pose; a pose id = adjust that pose; null = closed.
+	let jogTarget = $state<string | null>(null);
+	const jogPose = $derived(jogTarget && jogTarget !== 'free' ? (poseById.get(jogTarget) ?? null) : null);
+	onMount(() => {
+		const q = page.url.searchParams.get('jog');
+		if (q) jogTarget = q === 'free' || poseById.has(q) ? q : null;
+	});
+	// A pose archived or missing while its panel is open closes the panel.
+	$effect(() => {
+		if (jogTarget && jogTarget !== 'free' && !poseById.has(jogTarget)) jogTarget = null;
+	});
 
 	function resolve(ms: MoveSetSummary): ResolvedKeyframe[] | null {
 		const out: ResolvedKeyframe[] = [];
@@ -205,10 +220,20 @@
 				<form method="POST" action="?/holdArm" use:enhance>
 					<button type="submit" class={btn} style={cyan} disabled={!armReachable} title="Torque on where the arm is, no jump">Hold (torque on)</button>
 				</form>
+				{#if !posing && jogTarget !== 'free'}
+					<button type="button" class={btn} style={cyan} disabled={blocked} title="Nudge each joint a few steps at a time and save the result as a pose" onclick={() => (jogTarget = 'free')}>Jog the arm</button>
+				{/if}
 			{/if}
 			{#if blocked && !leaderPosing}<span class="text-xs" style="color: #f59e0b">{blockReason}</span>{/if}
 		</div>
 	</section>
+
+	<!-- JOG -->
+	{#if jogTarget}
+		{#key jogTarget}
+			<PoseJog pose={jogPose} initial={armNow} {armReachable} blocked={blocked || posing} blockReason={posing ? 'Torque is off — press Hold (torque on) first.' : blockReason} onclose={() => (jogTarget = null)} />
+		{/key}
+	{/if}
 
 	<!-- POSES -->
 	<section class="rounded border p-3 sm:p-4" style="border-color: var(--color-tron-border); background: var(--color-tron-surface);">
@@ -238,6 +263,7 @@
 								<input type="hidden" name="id" value={p._id} />
 								<button type="submit" class="text-xs underline" style="color: #fbbf24" disabled={blocked || posing}>go to</button>
 							</form>
+							<button type="button" onclick={() => (jogTarget = jogTarget === p._id ? null : p._id)} class="text-xs underline" style="color: {jogTarget === p._id ? '#fbbf24' : 'var(--color-tron-cyan)'}" title="Adjust this pose by jogging the arm, live">{jogTarget === p._id ? 'jogging' : 'jog'}</button>
 							<button type="button" onclick={() => (editingPose = p._id)} class="text-xs underline" style="color: var(--color-tron-cyan)">edit</button>
 							<form method="POST" action="?/archivePose" use:enhance>
 								<input type="hidden" name="id" value={p._id} />

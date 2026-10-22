@@ -22057,3 +22057,24 @@ Complements fix/studio-swap-tip-home (home Z after reopen). svelte-check 16 (bas
 Deployment: production — via Vercel GitHub integration on push to master
 Source: branch fix/studio-reload-drops-tip, merged to master
 What this deployment is for: Deck Calibration Studio Reload deck without tip crashes
+
+================================================================================
+2026-10-22 — feat/animate-pose-jog — Animate: adjust a pose by jogging the real arm, live
+================================================================================
+Operator asked for a jog protocol in the posing system: nudge a pose on the arm and see the result at
+once, instead of editing numbers and saving/playing a recording to check. Built on origin/master in
+worktree ../Bioscale_V2-wt-pose-jog. New Jog panel on the Animate tab (PoseJog.svelte): per-servo
+row with the pose value, "Arm now" from the encoders, the difference and −/+ buttons for a chosen
+step (1–100 or typed, ≤1000); flow is Go to pose → nudge → Save into pose (overwrites positions,
+keeps name/notes, clears the droop trim, audits pose_recapture) or Save as new pose. Each pose row has
+"jog"; the capture bar has "Jog the arm" (free jog → new pose); the move-set editor's selected
+keyframe links to /animate?jog=<poseId>. Server: jogArm (robot-arm-animation.ts) refuses while a
+session owns the arm, sends ≤300-step pieces (jogChunks, pure, tested) to the Pi's existing
+POST /servos/{sid}/jog, settles 250 ms, reads /servos back and audits robot_arm.animate.jog; JSON
+route api/robot-arm/animate/jog (GET live read, null while a session runs; POST jog) so a press does
+not re-run the page load. Presses queue per servo and add up. No new Pi route. PRD ARM-06 §10.
+Files: src/lib/robot-arm/animation.ts (+test), src/lib/server/robot-arm-animation.ts,
+src/routes/api/robot-arm/animate/jog/+server.ts, src/lib/components/robot-arm/PoseJog.svelte,
+animate/+page.svelte + +page.server.ts (savePoseFromJog), animate/moveset/[id]/+page.svelte (link),
+docs/prds/ARM-06-animate.md. svelte-check 14 errors (all pre-existing: r2.ts, research-proxy ×2,
+AskBimsWidget, assembly/[sessionId] ×8, magnetometer ×2); vitest animation 23 passed. Not run on the arm.
