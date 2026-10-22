@@ -133,10 +133,10 @@ kills a running teleop/replay.
    rounds)" or "still k steps off when the hold ran out"; `robot_arm_poses.trim` updated; audit
    `pose_droop_from_replay`. If residuals oscillate, raise `SETTLE_WAIT_S` to 0.4.
 5. **Re-save** any recording already on the Pi (Save to Pi) — old files have no settle flags.
-6. **Camera, seen right after the 13:07 restart:** the RealSense colour node `/dev/video4` disappeared (only
-   video0/1/2 depth/IR remain; dmesg `uvcvideo 4-1:1.4: Failed to resubmit video URB (-1)`; `/cameras` reports
-   device null). Unrelated to the module; needs a USB re-enumeration or a cable replug, then confirm `/cameras`
-   shows `running: true` at 1920x1080.
+6. **Camera note (not a problem):** right after a service restart `/cameras` reports `device: null, running:
+   false` until the first snapshot/stream request — the worker starts lazily and the status route never starts
+   it. It is not a dropout; open the arm page in BIMS (or request `snapshot.jpg`) and it comes up. A `Failed to
+   resubmit video URB` line in dmesg at a restart is the old process tearing down its stream.
 
 To roll back: `cp ~/robot-arm/src/server/app.py.bak-replay-settle ~/robot-arm/src/server/app.py` and restart when idle.
 
