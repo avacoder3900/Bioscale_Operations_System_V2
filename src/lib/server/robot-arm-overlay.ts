@@ -25,6 +25,7 @@ import {
 	type SourceRecording
 } from '$lib/server/robot-arm-cleanup';
 import { cleanRecordingName } from '$lib/robot-arm/recording-cleanup';
+import { validateSmoothOptions } from '$lib/robot-arm/recording-smooth';
 import {
 	alignWith,
 	applyOverlay,
@@ -247,5 +248,12 @@ export async function overlayToCleanup(
 		rawGoal: result.goal
 	};
 	const stem = (n: string) => n.replace(/\.jsonl$/i, '');
-	return insertCleanup(user, { source, split, overlay, title: `${stem(smooth.name)} + ${stem(precise.name)}` });
+	// Smoothing on from the recording, so the clean-up's Save to Pi keeps the overlay's curves (steps would be straight lines).
+	return insertCleanup(user, {
+		source,
+		split,
+		overlay,
+		title: `${stem(smooth.name)} + ${stem(precise.name)}`,
+		smoothing: validateSmoothOptions({})
+	});
 }

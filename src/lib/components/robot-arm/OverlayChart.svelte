@@ -8,17 +8,21 @@
 	 *
 	 * A lane whose servo is not being corrected shows the pilot's line dimmed
 	 * and the result on top of the animation.
+	 *
+	 * Also used by the Clean-up smoothing preview: no pilot line, and the
+	 * legend says source / smoothed (labels).
 	 */
 	interface Props {
 		t: number[];
 		smooth: number[][];
-		pilot: number[][];
+		pilot?: number[][] | null;
 		result: number[][];
 		jointNames: string[];
 		corrected: boolean[];
+		labels?: { smooth: string; pilot: string; result: string };
 	}
 
-	let { t, smooth, pilot, result, jointNames, corrected }: Props = $props();
+	let { t, smooth, pilot = null, result, jointNames, corrected, labels = { smooth: 'animated', pilot: 'pilot, lined up in time', result: 'result' } }: Props = $props();
 
 	const LANE_H = 52;
 	const W = 1000;
@@ -37,7 +41,7 @@
 		servoIdx.map((j) => {
 			let lo = Infinity;
 			let hi = -Infinity;
-			for (const series of [smooth, pilot, result]) {
+			for (const series of pilot ? [smooth, pilot, result] : [smooth, result]) {
 				for (let i = 0; i < series.length; i += every) {
 					lo = Math.min(lo, series[i][j]);
 					hi = Math.max(hi, series[i][j]);
@@ -64,7 +68,7 @@
 		return pts.join(' ');
 	}
 	const smoothPaths = $derived(servoIdx.map((j) => path(smooth, j)));
-	const pilotPaths = $derived(servoIdx.map((j) => path(pilot, j)));
+	const pilotPaths = $derived(pilot ? servoIdx.map((j) => path(pilot, j)) : null);
 	const resultPaths = $derived(servoIdx.map((j) => path(result, j)));
 
 	function fmtS(s: number) {
@@ -84,9 +88,9 @@
 <div class="space-y-2">
 	<div class="flex items-center justify-between gap-2 text-[11px]" style="color: var(--color-tron-text-secondary)">
 		<div class="flex flex-wrap items-center gap-3">
-			<span class="flex items-center gap-1"><span class="inline-block h-0.5 w-4 bg-slate-400"></span> animated</span>
-			<span class="flex items-center gap-1"><span class="inline-block h-0.5 w-4 bg-amber-400"></span> pilot, lined up in time</span>
-			<span class="flex items-center gap-1"><span class="inline-block h-0.5 w-4 bg-cyan-400"></span> result</span>
+			<span class="flex items-center gap-1"><span class="inline-block h-0.5 w-4 bg-slate-400"></span> {labels.smooth}</span>
+			{#if pilot}<span class="flex items-center gap-1"><span class="inline-block h-0.5 w-4 bg-amber-400"></span> {labels.pilot}</span>{/if}
+			<span class="flex items-center gap-1"><span class="inline-block h-0.5 w-4 bg-cyan-400"></span> {labels.result}</span>
 		</div>
 		<div class="flex items-center gap-1">
 			zoom
@@ -122,7 +126,7 @@
 					{#each servoIdx as j (j)}
 						<line x1="0" x2={W} y1={(j + 1) * LANE_H} y2={(j + 1) * LANE_H} stroke="rgba(255,255,255,0.08)" />
 						<polyline points={smoothPaths[j]} fill="none" stroke="#94a3b8" stroke-width="1.2" vector-effect="non-scaling-stroke" />
-						<polyline points={pilotPaths[j]} fill="none" stroke="#fbbf24" stroke-width="1" stroke-opacity={corrected[j] ? 0.9 : 0.35} vector-effect="non-scaling-stroke" />
+						{#if pilotPaths}<polyline points={pilotPaths[j]} fill="none" stroke="#fbbf24" stroke-width="1" stroke-opacity={corrected[j] ? 0.9 : 0.35} vector-effect="non-scaling-stroke" />{/if}
 						<polyline points={resultPaths[j]} fill="none" stroke="#22d3ee" stroke-width="1.4" vector-effect="non-scaling-stroke" />
 					{/each}
 				</svg>

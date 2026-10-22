@@ -22651,3 +22651,28 @@ Pi: new cameras.py copied in at 14:25 CDT but the service was NOT restarted — 
 record sessions on the arm (replay 14:28, record 14:29). The running service still serves the old status shape
 until `sudo systemctl restart robot-arm` with /sessions/active null. The BIMS side is backwards compatible either way.
 npm run check: 13 errors = baseline, none in touched files.
+
+================================================================================
+2026-10-22 — feat/cleanup-smoothing — Clean-up smoothing: Save to Pi writes a smoothed path, adjustable later with sliders
+================================================================================
+Operator asked whether putting a file through Clean-up does anything. On its own it does not: it only splits a
+recording into steps, and Save to Pi plays each step as a straight line and stops dead (no smoothing, and on an
+overlay it flattens the curves). They asked for automatic smoothing and for a smoothed recording to be editable after
+the fact with sliders.
+Built: src/lib/robot-arm/recording-smooth.ts (14 tests): findStops (every smoothed servo within a 12-step band for
+>= 0.3 s), smoothSeries (anchors = first/last frame + the middle of each stop at its median, half a window left free at
+each inner stop edge so moves ease in and out; three passes of a centred moving average totalling windowS, re-pinning
+after each; strength blend; per-servo opt-out), validateSmoothOptions, composeSmoothedRecording (source header +
+smoothed provenance, t from 0, clamped to follower limits). Clean-up model gains `smoothing` and savedAs[].smoothing /
+.replaced. robot-arm-cleanup.ts: createCleanup takes `smooth` (defaults), insertCleanup stores smoothing, getCleanup
+returns it (off for older clean-ups), saveCleanup saves it from the editor payload, saveToPi writes the smoothed path
+of the recording (every raw frame) or of the steps when on, else the straight-line steps as before, and with
+`replace` deletes then rewrites a file this clean-up saved before (any other name is refused). Overlay -> clean-up
+starts smoothed from the recording, so its curves survive Save to Pi. Editor: Smoothing card under the timeline
+(on/off, source radios, window and strength sliders, keep stops exact, servo ticks, live OverlayChart source vs
+smoothed from the same pure function, stops / peak speed / largest change), Save to Pi text by mode, "Replace it"
+when the name is one saved from here, "update <last file> instead", saved list shows smoothing and replaced. Smoothing
+is saved with the draft but kept out of Undo. New-clean-up form: "Smooth automatically" (default on). OverlayChart:
+pilot line optional, legend labels configurable. Docs: docs/prds/ARM-08-cleanup-smoothing.md, context doc line.
+Tests: robot-arm unit suites 7 files, 153 passed. svelte-check 14 errors / 432 warnings (baseline). vite build OK.
+Not run against the arm, a live Pi or a live DB.
