@@ -502,7 +502,24 @@ export interface ArmThermal {
 	fan_rpm: number | null;
 	uptime_s: number | null;
 	thresholds: { warm_c: number; hot_c: number; critical_c: number };
+	/** Which Wi-Fi the Pi is on (nmcli on the Pi). Absent from a thermal.py older than 2026-10-22. */
+	network?: ArmNetwork | null;
 	sampled_at: number;
+}
+
+export interface ArmNetwork {
+	iface: string;
+	/** null when the interface is up but not associated, or nmcli could not be read (see source). */
+	ssid: string | null;
+	/** NetworkManager connection profile name (e.g. netplan-wlan0-Fannin_WIFI). */
+	connection: string | null;
+	signal_pct: number | null;
+	freq_mhz: number | null;
+	ip: string | null;
+	/** ARM_WIFI_EXPECTED_SSID in the Pi's .env; the chip turns amber when ssid differs. */
+	expected_ssid: string | null;
+	/** 'nmcli', or 'unavailable: <reason>'. */
+	source: string | null;
 }
 
 // AprilTag detection, mirroring robot-arm/src/server/apriltags.py (ARM-05).

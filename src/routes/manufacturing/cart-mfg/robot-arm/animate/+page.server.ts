@@ -21,6 +21,7 @@ import {
 	playbackActive,
 	poseByHand,
 	readArm,
+	recapturePose,
 	savePoseFromArm,
 	savePoseFromLeader,
 	setMoveSetArchived,
@@ -172,6 +173,21 @@ export const actions: Actions = {
 			return { success: `Pose "${p.name}" updated${field(d, 'fromArm') === '1' ? ' from the arm' : ''}.`, scope: 'poses' };
 		} catch (err) {
 			return failFrom(err, 'poses');
+		}
+	},
+
+	// End of a jog: the pose becomes where the arm is now (name/notes kept, trim cleared).
+	savePoseFromJog: async ({ request, locals }) => {
+		if (!locals.user) return fail(401, { error: 'Unauthorized' });
+		requirePermission(locals.user, 'manufacturing:write');
+		const id = field(await request.formData(), 'id');
+		if (!id) return fail(400, { error: 'Pose id missing.', scope: 'jog' });
+		try {
+			const r = await recapturePose(who(locals), id);
+			const changed = r.moved.map((m, i) => (m ? `J${i + 1} ${m > 0 ? '+' : ''}${m}` : null)).filter(Boolean);
+			return { success: `Pose "${r.pose.name}" updated from the arm${changed.length ? ` (${changed.join(', ')})` : ' (unchanged)'}.`, scope: 'jog' };
+		} catch (err) {
+			return failFrom(err, 'jog');
 		}
 	},
 

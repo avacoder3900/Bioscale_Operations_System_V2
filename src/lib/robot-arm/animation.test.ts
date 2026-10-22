@@ -7,6 +7,7 @@ import {
 	composeAnimationJsonl,
 	ease,
 	flattenSequence,
+	jogChunks,
 	keyframePositions,
 	minDurationS,
 	nextTrim,
@@ -215,5 +216,17 @@ describe('droop trim', () => {
 			if (r.done) break;
 		}
 		expect(settle(keyframePositions(pose, null, trim)).slice(0, 5)).toEqual(pose.slice(0, 5));
+	});
+});
+
+describe('jog', () => {
+	it('splits a jog into same-sign pieces the Pi accepts, remainder last', () => {
+		expect(jogChunks(10)).toEqual([10]);
+		expect(jogChunks(300)).toEqual([300]);
+		expect(jogChunks(650)).toEqual([300, 300, 50]);
+		expect(jogChunks(-650)).toEqual([-300, -300, -50]);
+		expect(jogChunks(0)).toEqual([]);
+		expect(jogChunks(7.9)).toEqual([7]);
+		expect(jogChunks(25, 10)).toEqual([10, 10, 5]);
 	});
 });
