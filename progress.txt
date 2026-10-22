@@ -22202,3 +22202,8 @@ it matches expected_ssid, amber "wrong network" when it does not (tooltip says h
 when not associated, "Wi-Fi ?" when nmcli could not be read; tooltip carries profile, signal/band, LAN IP. The
 thermal episode rows in device_events now record ssid. No new route, no poll change.
 npm run check: 13 errors = baseline (all magnetometer/[sessionId]), none in touched files.
+Deployment: production — via Vercel GitHub integration on push to master
+Source: branch feat/arm-wifi-chip @ commit 6e6e133c, fast-forwarded to master
+Retrieve this exact code: git checkout master at commit 6e6e133c
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: "Wi-Fi <ssid> · <signal>%" chip beside the Pi temperature on every Robot Arm tab's camera card
