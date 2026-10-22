@@ -11,7 +11,8 @@
 	// Same defaults as the server's (load.defaults); 10 steps ignores leader-hand tremor.
 	let thresholdSteps = $state(10);
 	let pauseS = $state(0.25);
-	let smooth = $state(true);
+	// Off unless ticked (operator preference, 2026-10-22): smoothing is opt-in. The card on the next page turns it on later.
+	let smooth = $state(false);
 	let busy = $state(false);
 
 	$effect(() => {

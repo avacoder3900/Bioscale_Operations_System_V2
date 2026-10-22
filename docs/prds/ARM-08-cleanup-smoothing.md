@@ -32,10 +32,12 @@ writes the smoothed path instead of the straight-line steps.
 The same pure function (`smoothSeries`) runs in the browser for the preview and on the server for the save; the
 preview uses the recording's display trace (thinned past 6000 frames), the save uses every frame.
 
-**Automatic.** The new-clean-up form has *Smooth automatically* (ticked by default): the clean-up is created with
-smoothing on at the defaults, so Save to Pi writes a smoothed recording with no step editing. An overlay opened as a
-clean-up (ARM-07) starts with smoothing on from the recording too, so its curves survive Save to Pi. Clean-ups made
-before this keep the old behaviour (smoothing off) until it is turned on.
+**Automatic.** The new-clean-up form has *Smooth automatically* — **unticked by default** (2026-10-22: the operator
+prefers smoothing as an opt-in; it was ticked when first built). Ticked, the clean-up is created with smoothing on at
+the defaults, so Save to Pi writes a smoothed recording with no step editing. An overlay opened as a clean-up (ARM-07)
+also starts with smoothing off; with it off, Save to Pi plays the steps as straight lines, so turn smoothing on *from
+the recording* in the Smoothing card to keep the overlay's curves. Clean-ups made before this keep the old behaviour
+(smoothing off) until it is turned on.
 
 **After the fact.** The settings are stored on the clean-up (`smoothing`), saved with *Save* and *Save to Pi*, and
 restored when the page is opened again. Move the sliders and save again: under a new name, or under a name this
