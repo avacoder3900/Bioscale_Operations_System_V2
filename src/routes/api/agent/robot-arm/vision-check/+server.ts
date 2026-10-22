@@ -39,6 +39,9 @@ export const GET: RequestHandler = async ({ request, url }) => {
 				over: m.over,
 				offMm: m.offMm,
 				offDeg: m.offDeg,
+				offTiltDeg: m.offTiltDeg,
+				ambiguous: m.ambiguous,
+				flipped: m.flipped,
 				center: m.center,
 				zMm: m.zMm,
 				depthMm: m.depthMm

@@ -15,13 +15,24 @@ import mongoose, { Schema } from 'mongoose';
  */
 const operatorRef = new Schema({ _id: { type: String }, username: { type: String } }, { _id: false });
 
+/** The solver's other planar pose (IPPE gives two for a square tag), kept so the ambiguity is on record. */
+const altPoseSchema = new Schema(
+	{
+		t: { type: [Number], required: true },
+		R: { type: [Number], required: true },
+		reprojPx: { type: Number, default: null }
+	},
+	{ _id: false }
+);
+
 const poseSchema = new Schema(
 	{
 		/** Tag centre in the camera frame, mm. */
 		t: { type: [Number], required: true },
 		/** 3×3 rotation, row-major. */
 		R: { type: [Number], required: true },
-		reprojPx: { type: Number, default: null }
+		reprojPx: { type: Number, default: null },
+		alt: { type: altPoseSchema, default: null }
 	},
 	{ _id: false }
 );
@@ -51,7 +62,12 @@ const resultSchema = new Schema(
 		name: String,
 		status: String,
 		offMm: Number,
-		offDeg: Number
+		/** Spin about the tag's normal (judged). */
+		offDeg: Number,
+		/** Tilt of the normal (advisory). */
+		offTiltDeg: Number,
+		/** The two planar poses fit about equally; tilt was a coin toss. */
+		ambiguous: Boolean
 	},
 	{ _id: false }
 );

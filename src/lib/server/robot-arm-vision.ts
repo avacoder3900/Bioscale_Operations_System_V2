@@ -229,7 +229,14 @@ function toDetection(t: AprilTagDetectResponse['tags'][number]): TagDetection {
 		center: t.center,
 		corners: t.corners,
 		sizeMm: t.size_mm,
-		pose: t.pose ? { t: t.pose.t_mm, R: t.pose.R, reprojPx: t.pose.reproj_px ?? null } : null,
+		pose: t.pose
+			? {
+					t: t.pose.t_mm,
+					R: t.pose.R,
+					reprojPx: t.pose.reproj_px ?? null,
+					alt: t.pose.alt ? { t: t.pose.alt.t_mm, R: t.pose.alt.R, reprojPx: t.pose.alt.reproj_px ?? null } : null
+				}
+			: null,
 		depthMm: typeof t.depth_mm === 'number' && t.depth_mm > 0 ? t.depth_mm : null
 	};
 }
@@ -284,7 +291,7 @@ export interface CalibrationSummary {
 		visionVerdict: string | null;
 		residualMax: number | null;
 		cameraShiftMm: number | null;
-		markers: { markerId: string; tagId: number; name: string; status: string; offMm: number | null; offDeg: number | null }[];
+		markers: { markerId: string; tagId: number; name: string; status: string; offMm: number | null; offDeg: number | null; offTiltDeg: number | null; ambiguous: boolean }[];
 		strained: StrainedJoint[];
 	} | null;
 }
@@ -354,7 +361,18 @@ function calibrationSummary(doc: any, o: { withThumb: boolean }): CalibrationSum
 				sizeMm: t.sizeMm,
 				center: [t.center[0], t.center[1]],
 				corners: (t.corners ?? []).map((c: number[]) => [c[0], c[1]] as [number, number]),
-				pose: t.pose?.t?.length === 3 && t.pose?.R?.length === 9 ? { t: [t.pose.t[0], t.pose.t[1], t.pose.t[2]], R: [...t.pose.R], reprojPx: t.pose.reprojPx ?? null } : null,
+				pose:
+					t.pose?.t?.length === 3 && t.pose?.R?.length === 9
+						? {
+								t: [t.pose.t[0], t.pose.t[1], t.pose.t[2]],
+								R: [...t.pose.R],
+								reprojPx: t.pose.reprojPx ?? null,
+								alt:
+									t.pose.alt?.t?.length === 3 && t.pose.alt?.R?.length === 9
+										? { t: [t.pose.alt.t[0], t.pose.alt.t[1], t.pose.alt.t[2]], R: [...t.pose.alt.R], reprojPx: t.pose.alt.reprojPx ?? null }
+										: null
+							}
+						: null,
 				depthMm: t.depthMm ?? null
 			})
 		),
@@ -382,7 +400,9 @@ function calibrationSummary(doc: any, o: { withThumb: boolean }): CalibrationSum
 						name: m.name,
 						status: m.status,
 						offMm: m.offMm ?? null,
-						offDeg: m.offDeg ?? null
+						offDeg: m.offDeg ?? null,
+						offTiltDeg: m.offTiltDeg ?? null,
+						ambiguous: m.ambiguous === true
 					})),
 					strained: strainedOf(doc.lastCheck.strained)
 				}
@@ -776,7 +796,16 @@ async function recordCheck(doc: any, user: User, kind: 'check' | 'return' | 'age
 					visionVerdict: result.vision?.verdict ?? null,
 					residualMax: result.home.residualMax != null && Number.isFinite(result.home.residualMax) ? result.home.residualMax : null,
 					cameraShiftMm: shift?.compensated ? shift.mm : null,
-					markers: (result.vision?.markers ?? []).map((m) => ({ markerId: m.markerId, tagId: m.tagId, name: m.name, status: m.status, offMm: m.offMm, offDeg: m.offDeg })),
+					markers: (result.vision?.markers ?? []).map((m) => ({
+						markerId: m.markerId,
+						tagId: m.tagId,
+						name: m.name,
+						status: m.status,
+						offMm: m.offMm,
+						offDeg: m.offDeg,
+						offTiltDeg: m.offTiltDeg,
+						ambiguous: m.ambiguous
+					})),
 					strained: result.home.strained
 				}
 			}
@@ -786,7 +815,7 @@ async function recordCheck(doc: any, user: User, kind: 'check' | 'return' | 'age
 		verdict: result.home.verdict,
 		visionVerdict: result.vision?.verdict ?? null,
 		cameraShift: shift ?? null,
-		markers: result.vision?.markers.map((m) => ({ tagId: m.tagId, name: m.name, status: m.status, offMm: m.offMm, offDeg: m.offDeg })),
+		markers: result.vision?.markers.map((m) => ({ tagId: m.tagId, name: m.name, status: m.status, offMm: m.offMm, offDeg: m.offDeg, offTiltDeg: m.offTiltDeg, ambiguous: m.ambiguous })),
 		residuals: result.residuals,
 		strained: result.home.strained,
 		warnings: result.warnings,

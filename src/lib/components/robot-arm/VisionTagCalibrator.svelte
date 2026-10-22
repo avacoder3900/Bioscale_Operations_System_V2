@@ -235,7 +235,7 @@
 			<input name="positionMm" type="number" step="0.5" min="0.5" max="100" value={calibration?.tolerances.positionMm ?? DEFAULT_TOLERANCES.positionMm} class="{input} w-28" style={inputStyle} />
 		</label>
 		<label class="block text-xs" style="color: var(--color-tron-text-secondary)">
-			Angle tolerance (°, 0 = off)
+			<span title="Rotation about the tag's own normal. Tilt is shown live but never judged (its direction is ambiguous for a small tag seen head-on).">Spin tolerance (°, 0 = off)</span>
 			<input name="angleDeg" type="number" step="0.5" min="0" max="90" value={calibration?.tolerances.angleDeg ?? DEFAULT_TOLERANCES.angleDeg} class="{input} w-28" style={inputStyle} />
 		</label>
 		<label class="block min-w-[12rem] flex-1 text-xs" style="color: var(--color-tron-text-secondary)">

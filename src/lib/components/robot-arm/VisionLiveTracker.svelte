@@ -7,7 +7,13 @@
 	 * and how far off it is in mm and degrees after undoing any camera shift
 	 * the fixed tags reveal. A MOVED tag's offending number (the one over
 	 * tolerance) is red, so the operator sees at a glance whether it slid,
-	 * turned, or (without a pose) only moved on the picture.
+	 * spun, or (without a pose) only moved on the picture.
+	 *
+	 * The angle is split: "spin" (about the tag's own normal) is judged;
+	 * "tilt" (of the normal) is advisory only, because a small square tag
+	 * seen nearly head-on has two poses that fit its corners equally and the
+	 * tilt can flip by twice the viewing angle between frames. A "?" after
+	 * the tilt marks such a coin-toss frame.
 	 *
 	 * Runs only while switched on and the tab is visible: each poll is a
 	 * request through BIMS to the Pi.
@@ -194,7 +200,8 @@
 							<th class="py-1 pr-2 font-medium">Tag</th>
 							<th class="py-1 pr-2 font-medium">Status</th>
 							<th class="py-1 pr-2 text-right font-medium" title="Distance from home after undoing any camera shift. Red = over {tolMm} mm.">off mm</th>
-							<th class="py-1 pr-2 text-right font-medium" title={tolDeg > 0 ? `Turned from home. Red = over ${tolDeg}°.` : 'Turned from home (not checked).'}>off °</th>
+							<th class="py-1 pr-2 text-right font-medium" title={tolDeg > 0 ? `Spin about the tag's own normal. Red = over ${tolDeg}°.` : 'Spin about the tag\'s own normal (not checked).'}>spin °</th>
+							<th class="py-1 pr-2 text-right font-medium" title="Tilt of the tag's normal from home. Advisory only: a square tag seen nearly head-on has two poses that fit its corners equally, so tilt can flip by twice the viewing angle. ? = that coin toss this frame.">tilt °</th>
 							{#if anyPx}<th class="py-1 pr-2 text-right font-medium" title="Picture distance, % of frame width; used when a tag has no pose. Red = over {(calibration.tolerances.pixel * 100).toFixed(1)} %.">off px</th>{/if}
 							<th class="py-1 text-right font-medium">dist mm</th>
 						</tr>
@@ -210,7 +217,8 @@
 								</td>
 								<td class="py-1 pr-2 font-semibold" style="color: {STATUS_COLOR[st]}">{STATUS_LABEL[st]}</td>
 								<td class="py-1 pr-2 text-right font-mono {a?.over.includes('mm') ? 'font-semibold' : ''}" style="color: {cellColor(a, 'mm')}" title={a?.over.includes('mm') ? `Over the ${tolMm} mm tolerance: this is why the tag reads MOVED` : ''}>{fmt(a?.offMm)}</td>
-								<td class="py-1 pr-2 text-right font-mono {a?.over.includes('deg') ? 'font-semibold' : ''}" style="color: {cellColor(a, 'deg')}" title={a?.over.includes('deg') ? `Over the ${tolDeg}° tolerance: this is why the tag reads MOVED` : ''}>{fmt(a?.offDeg)}</td>
+								<td class="py-1 pr-2 text-right font-mono {a?.over.includes('deg') ? 'font-semibold' : ''}" style="color: {cellColor(a, 'deg')}" title={a?.over.includes('deg') ? `Over the ${tolDeg}° spin tolerance: this is why the tag reads MOVED` : ''}>{fmt(a?.offDeg)}</td>
+								<td class="py-1 pr-2 text-right font-mono" style="color: var(--color-tron-text-secondary)" title={a?.ambiguous ? `Two poses fit this tag's corners about equally this frame${a.flipped ? '; the one agreeing with the calibration was taken' : ''}. Tilt is not judged.` : 'Tilt is not judged.'}>{fmt(a?.offTiltDeg)}{a?.ambiguous ? '?' : ''}</td>
 								{#if anyPx}<td class="py-1 pr-2 text-right font-mono {a?.over.includes('px') ? 'font-semibold' : ''}" style="color: {cellColor(a, 'px')}" title={a?.over.includes('px') ? 'No pose on this tag, so it is judged on picture distance, and that is over tolerance' : ''}>{a?.offPx != null ? (a.offPx * 100).toFixed(1) + ' %' : '—'}</td>{/if}
 								<td class="py-1 text-right font-mono" style="color: var(--color-tron-text)" title={a?.depthMm != null ? `D415 depth ${Math.round(a.depthMm)} mm` : ''}>
 									{a?.zMm != null ? Math.round(a.zMm) : '—'}{#if a?.depthMm != null}<span style="color: var(--color-tron-text-secondary)"> ({Math.round(a.depthMm)})</span>{/if}
@@ -222,6 +230,7 @@
 				<p class="mt-2 text-[11px]" style="color: var(--color-tron-text-secondary)">
 					Tolerance {calibration.tolerances.positionMm} mm{calibration.tolerances.angleDeg > 0 ? `, ${calibration.tolerances.angleDeg}°` : ' (angle not checked)'}.
 					A <span style="color: {OVER_COLOR}">red</span> number is the one over tolerance that makes its tag MOVED.
+					Tilt is advisory: a square seen nearly head-on has two poses that fit its corners equally, so tilt can flip by twice the viewing angle (a "?" marks that coin toss; the pose agreeing with the calibration is used).
 					Distance is from the tag pose; (brackets) = the D415's depth reading, as a cross-check.
 					{#if calibration.intrinsicsSource === 'nominal'}Nominal intrinsics — mm are approximate.{/if}
 				</p>

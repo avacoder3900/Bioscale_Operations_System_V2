@@ -528,8 +528,11 @@ export interface AprilTagDetectResponse {
 		/** Normalised, tag order TL, TR, BR, BL. */
 		corners: [number, number][];
 		size_mm: number | null;
-		/** Camera frame (x right, y down, z out of the lens): t in mm, R row-major. */
-		pose: { t_mm: [number, number, number]; R: number[]; reproj_px: number } | null;
+		/**
+		 * Camera frame (x right, y down, z out of the lens): t in mm, R row-major.
+		 * `alt` is the solver's other planar pose (toward/away ambiguity) when it has one.
+		 */
+		pose: { t_mm: [number, number, number]; R: number[]; reproj_px: number; alt?: { t_mm: [number, number, number]; R: number[]; reproj_px: number } | null } | null;
 		depth_mm: number | null;
 		margin: number | null;
 	}[];

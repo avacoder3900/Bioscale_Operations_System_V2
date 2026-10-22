@@ -50,11 +50,27 @@ export type Vec3 = [number, number, number];
 /** 3×3 rotation, row-major. */
 export type Mat3 = number[];
 
+/** The solver's other planar pose for a square tag (see TagPose.alt). */
+export interface AltPose {
+	t: Vec3;
+	R: Mat3;
+	reprojPx: number | null;
+}
+
 /** Tag in the camera frame (x right, y down, z out of the lens), mm. */
 export interface TagPose {
 	t: Vec3;
 	R: Mat3;
 	reprojPx: number | null;
+	/**
+	 * The solver's other solution. A square seen nearly head-on has two
+	 * poses that fit its corners almost equally — tilted toward or away from
+	 * the camera — and the Pi returns both (IPPE). When `alt.reprojPx` is
+	 * close to `reprojPx` the solver's pick was a coin toss and the tilt can
+	 * flip by twice the viewing angle between frames; `resolvePose` then
+	 * takes whichever agrees with the calibration. Absent on older data.
+	 */
+	alt?: AltPose | null;
 }
 
 export type TagRole = 'fixed' | 'arm';
@@ -86,7 +102,11 @@ export interface CalibratedTag {
 export interface Tolerances {
 	/** A tag further than this from its home position (mm) is off. */
 	positionMm: number;
-	/** A tag turned more than this (degrees) is off. 0 = angle not checked. */
+	/**
+	 * A tag spun about its own normal more than this (degrees) is off.
+	 * 0 = angle not checked. Tilt of the normal is reported but never judged
+	 * (see splitRotationDeg).
+	 */
 	angleDeg: number;
 	/** Fallback when a pose is missing on either side: fraction of frame width. */
 	pixel: number;
@@ -142,6 +162,24 @@ export function rotationAngleDeg(R: Mat3): number {
 	return (Math.acos(Math.max(-1, Math.min(1, c))) * 180) / Math.PI;
 }
 
+/**
+ * Split a relative rotation (R_calᵀ · R_now, i.e. the tag's new axes in its
+ * calibrated frame) into spin about the tag's normal and tilt of that normal.
+ *
+ * Spin is what the four corners measure well. Tilt comes from foreshortening,
+ * which is second-order in corner noise, and for a small tag seen nearly
+ * head-on it has two solutions that fit the corners equally (toward / away
+ * from the camera), so a single frame can read 2× the viewing angle off.
+ * Only spin is judged against the tolerance; tilt is shown as advice.
+ */
+export function splitRotationDeg(R: Mat3): { spinDeg: number; tiltDeg: number } {
+	// Third column = the tag's normal now, in the calibrated tag frame; its z is cos(tilt).
+	const tilt = Math.acos(Math.max(-1, Math.min(1, R[8])));
+	// Twist about z of the swing–twist decomposition.
+	const spin = Math.atan2(R[3] - R[1], R[0] + R[4]);
+	return { spinDeg: (Math.abs(spin) * 180) / Math.PI, tiltDeg: (tilt * 180) / Math.PI };
+}
+
 /** Rotation by `deg` about axis (unit) — used by tests and the camera-shift check. */
 export function axisAngle(axis: Vec3, deg: number): Mat3 {
 	const n = Math.hypot(...axis) || 1;
@@ -161,13 +199,46 @@ function rigidOf(p: TagPose): Rigid {
 	return { R: p.R, t: p.t };
 }
 
-/** How far `now` is from `expected`: translation mm and rotation degrees. */
-export function poseDelta(expected: Rigid, now: Rigid): { mm: number; deg: number } {
-	return { mm: dist3(expected.t, now.t), deg: rotationAngleDeg(matMul(transpose(expected.R), now.R)) };
+/**
+ * How far `now` is from `expected`: translation mm, the full rotation angle,
+ * and that rotation split into spin (judged) and tilt (advisory).
+ */
+export function poseDelta(expected: Rigid, now: Rigid): { mm: number; deg: number; spinDeg: number; tiltDeg: number } {
+	const rel = matMul(transpose(expected.R), now.R);
+	return { mm: dist3(expected.t, now.t), deg: rotationAngleDeg(rel), ...splitRotationDeg(rel) };
 }
 
-function within(d: { mm: number; deg: number }, tol: Tolerances): boolean {
-	return d.mm <= tol.positionMm && (tol.angleDeg <= 0 || d.deg <= tol.angleDeg);
+function within(d: { mm: number; spinDeg: number }, tol: Tolerances): boolean {
+	return d.mm <= tol.positionMm && (tol.angleDeg <= 0 || d.spinDeg <= tol.angleDeg);
+}
+
+// ── planar-pose ambiguity ────────────────────────────────────────────────
+
+/** `alt` is a coin toss when its reprojection error is within ratio × chosen + px. */
+export const AMBIGUITY_RATIO = 2;
+export const AMBIGUITY_PX = 0.25;
+
+/** The solver's two poses fit the corners about equally: its pick means nothing. */
+export function isAmbiguous(p: TagPose): boolean {
+	if (!p.alt) return false;
+	if (p.alt.reprojPx == null || p.reprojPx == null) return true;
+	return p.alt.reprojPx <= p.reprojPx * AMBIGUITY_RATIO + AMBIGUITY_PX;
+}
+
+/**
+ * Choose between the solver's pose and its alternative. Only when the two
+ * are ambiguous, and only by which tilt agrees with `ref` (the calibrated
+ * pose): the two branches share position and spin, so this never hides a
+ * real move or spin — it only stops the tilt flapping. A real tilt of the
+ * arm cannot be told from a flip in that case anyway, which is why tilt is
+ * advisory. Without a reference the solver's pick stands.
+ */
+export function resolvePose(p: TagPose, ref: Rigid | null): { pose: Rigid; flipped: boolean; ambiguous: boolean } {
+	const ambiguous = isAmbiguous(p);
+	if (!ambiguous || !ref || !p.alt) return { pose: rigidOf(p), flipped: false, ambiguous };
+	const tilt = (R: Mat3) => splitRotationDeg(matMul(transpose(ref.R), R)).tiltDeg;
+	const flipped = tilt(p.alt.R) < tilt(p.R);
+	return { pose: flipped ? { R: p.alt.R, t: p.alt.t } : rigidOf(p), flipped, ambiguous };
 }
 
 // ── camera shift ─────────────────────────────────────────────────────────
@@ -247,15 +318,21 @@ export interface TagAssessment {
 	status: TagStatus;
 	/**
 	 * The measurements that made it `moved`, so the UI can point at the number
-	 * that is over tolerance: 'mm' (further than positionMm), 'deg' (turned
+	 * that is over tolerance: 'mm' (further than positionMm), 'deg' (spun
 	 * more than angleDeg), 'px' (picture fallback without a pose). Empty when
 	 * ok or missing.
 	 */
 	over: OverTolerance[];
 	/** Off from home, mm (after undoing a camera shift); null without pose. */
 	offMm: number | null;
-	/** Turned from home, degrees; null without pose. */
+	/** Spun about its own normal from home, degrees (judged); null without pose. */
 	offDeg: number | null;
+	/** Tilt of its normal from home, degrees (advisory only); null without pose. */
+	offTiltDeg: number | null;
+	/** The Pi's two planar poses fit the corners about equally: the tilt is a coin toss. */
+	ambiguous: boolean;
+	/** The alternative pose was used because it agrees with the calibration. */
+	flipped: boolean;
 	/** Picture displacement, fraction of frame width (not shift-compensated). */
 	offPx: number | null;
 	/** Where it is now on the picture (normalised); null = not seen. */
@@ -294,25 +371,46 @@ export interface VisionAssessment {
 export function assessTags(cal: CalibratedTag[], detections: TagDetection[], tol: Tolerances = DEFAULT_TOLERANCES): VisionAssessment {
 	// Calibrated sizes win over today's registry: a size edit must not look like the arm moving.
 	const calSize = new Map(cal.map((c) => [c.tagId, c.sizeMm]));
-	const now = new Map(detections.map((d) => [d.id, rescaleToSize(d, calSize.get(d.id))]));
+	const seen = new Map(detections.map((d) => [d.id, rescaleToSize(d, calSize.get(d.id))]));
+	// Settle each tag's planar-pose ambiguity against its calibrated pose first,
+	// so neither the camera-shift vote nor the per-tag delta sees a flipped tilt.
+	const resolved = new Map<number, { d: TagDetection; flipped: boolean; ambiguous: boolean }>();
+	for (const c of cal) {
+		const d = seen.get(c.tagId);
+		if (!d) continue;
+		if (!d.pose) {
+			resolved.set(c.tagId, { d, flipped: false, ambiguous: false });
+			continue;
+		}
+		const r = resolvePose(d.pose, c.pose ? rigidOf(c.pose) : null);
+		resolved.set(c.tagId, {
+			d: r.flipped ? { ...d, pose: { ...d.pose, t: r.pose.t, R: r.pose.R } } : d,
+			flipped: r.flipped,
+			ambiguous: r.ambiguous
+		});
+	}
+	const now = new Map([...resolved].map(([id, r]) => [id, r.d]));
 	const { M, shift } = estimateCameraShift(cal, now, tol);
 
 	const markers: TagAssessment[] = cal.map((c) => {
-		const d = now.get(c.tagId);
+		const r = resolved.get(c.tagId);
+		const d = r?.d;
 		const base = { markerId: c.markerId, tagId: c.tagId, name: c.name, group: c.group, role: c.role };
-		if (!d) {
-			return { ...base, status: 'missing', over: [], offMm: null, offDeg: null, offPx: null, center: null, corners: null, zMm: null, depthMm: null };
+		if (!d || !r) {
+			return { ...base, status: 'missing', over: [], offMm: null, offDeg: null, offTiltDeg: null, ambiguous: false, flipped: false, offPx: null, center: null, corners: null, zMm: null, depthMm: null };
 		}
 		const offPx = Math.hypot(d.center[0] - c.center[0], d.center[1] - c.center[1]);
 		let offMm: number | null = null;
 		let offDeg: number | null = null;
+		let offTiltDeg: number | null = null;
 		const over: OverTolerance[] = [];
 		if (c.pose && d.pose) {
 			const delta = poseDelta(compose(M, rigidOf(c.pose)), rigidOf(d.pose));
 			offMm = delta.mm;
-			offDeg = delta.deg;
+			offDeg = delta.spinDeg;
+			offTiltDeg = delta.tiltDeg;
 			if (delta.mm > tol.positionMm) over.push('mm');
-			if (tol.angleDeg > 0 && delta.deg > tol.angleDeg) over.push('deg');
+			if (tol.angleDeg > 0 && delta.spinDeg > tol.angleDeg) over.push('deg');
 		} else if (offPx > tol.pixel) {
 			over.push('px');
 		}
@@ -322,6 +420,9 @@ export function assessTags(cal: CalibratedTag[], detections: TagDetection[], tol
 			over,
 			offMm,
 			offDeg,
+			offTiltDeg,
+			ambiguous: r.ambiguous,
+			flipped: r.flipped,
 			offPx,
 			center: d.center,
 			corners: d.corners,
@@ -349,7 +450,9 @@ export function assessTags(cal: CalibratedTag[], detections: TagDetection[], tol
 export function rescaleToSize(d: TagDetection, sizeMm: number | undefined): TagDetection {
 	if (!d.pose || !sizeMm || !d.sizeMm || d.sizeMm === sizeMm) return d;
 	const k = sizeMm / d.sizeMm;
-	return { ...d, sizeMm, pose: { ...d.pose, t: [d.pose.t[0] * k, d.pose.t[1] * k, d.pose.t[2] * k] } };
+	const scale = (t: Vec3): Vec3 => [t[0] * k, t[1] * k, t[2] * k];
+	const alt = d.pose.alt ? { ...d.pose.alt, t: scale(d.pose.alt.t) } : d.pose.alt;
+	return { ...d, sizeMm, pose: { ...d.pose, t: scale(d.pose.t), alt } };
 }
 
 /** No fixed tag to measure it: ≥3 tags all moved, by nearly the same 3-D vector. */
@@ -386,7 +489,7 @@ export function describeVision(a: VisionAssessment): string {
 				m.status === 'missing'
 					? `${m.name} (tag ${m.tagId}) not found`
 					: m.offMm != null
-						? `${m.name} ${m.offMm.toFixed(1)} mm${m.offDeg != null && m.offDeg >= 1 ? ` / ${m.offDeg.toFixed(1)}°` : ''} off`
+						? `${m.name} ${m.offMm.toFixed(1)} mm${m.offDeg != null && m.offDeg >= 1 ? ` / ${m.offDeg.toFixed(1)}° spin` : ''} off`
 						: `${m.name} off on the picture`
 			);
 			const more = bad.length > 4 ? `, +${bad.length - 4} more` : '';

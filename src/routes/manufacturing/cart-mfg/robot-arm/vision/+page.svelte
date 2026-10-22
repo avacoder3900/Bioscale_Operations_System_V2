@@ -294,7 +294,7 @@
 					{#if calibration}
 						Calibrated {when(calibration.capturedAt)}{calibration.capturedBy?.username ? ` by ${calibration.capturedBy.username}` : ''}
 						· {calibration.tags.length} tag(s) ({calibration.tags.filter((t) => t.role === 'fixed').length} fixed)
-						· {calibration.tolerances.positionMm} mm{calibration.tolerances.angleDeg > 0 ? ` / ${calibration.tolerances.angleDeg}°` : ''}
+						· {calibration.tolerances.positionMm} mm{calibration.tolerances.angleDeg > 0 ? ` / ${calibration.tolerances.angleDeg}° spin` : ''}
 						{#if calibration.intrinsicsSource === 'nominal'}· nominal intrinsics{/if}
 						· {calibration.jointSteps ? 'encoder home stored' : 'no encoder home'}
 						{#if calibration.note}· {calibration.note}{/if}

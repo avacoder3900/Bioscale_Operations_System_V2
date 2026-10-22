@@ -21624,6 +21624,31 @@ Retrieve this exact code: git checkout feat/arm-recording-cleanup at commit e823
 What this deployment is for: Robot Arm Clean-up tab (recording -> editable steps -> new recording on the Pi)
 
 ================================================================================
+2026-10-22 — feat/arm-tag-spin-tilt — AprilTag angle: judge spin only, settle the planar-pose flip against the calibration
+================================================================================
+Operator: Live Tags angle error is usually 0.5–6° but sometimes 28–70°. Cause: solvePnP IPPE_SQUARE on a small square
+seen nearly head-on has two poses that fit the corners almost equally (tilted toward / away from the camera); corner
+noise picks a different one per frame, and the flip reads as twice the viewing angle. The full rotation angle
+(acos((trace−1)/2)) mixed that unreliable tilt with the well-measured in-plane spin.
+Measured on the Pi's OpenCV 4.13 (synthetic 8 mm tag at 300 mm, 1080p intrinsics, 0.3 px corner noise, 200 trials):
+wrong branch picked 21/200 at 10° tilt, 64/200 at 20°, 36/200 at 35°; the alternative's reprojection error was within
+2× + 0.25 px of the chosen one in 200/200 — the solver's pick means nothing there.
+- Pi apriltags.py (vendored + installed, backup apriltags.py.bak-pre-alt): _pose uses cv2.solvePnPGeneric and returns
+  the lower-reprojection pose with the other as pose.alt {t_mm, R, reproj_px}.
+- apriltags.ts: TagPose.alt; splitRotationDeg(R_rel) → spin (twist about the tag normal) and tilt (angle between
+  normals); poseDelta returns both; `within` and the 'deg' tolerance now judge SPIN only; isAmbiguous / resolvePose pick
+  the branch whose tilt agrees with the calibrated pose when ambiguous (the two branches share position and spin, so
+  nothing real is hidden); assessTags resolves every tag before the camera-shift vote; TagAssessment gains offTiltDeg,
+  ambiguous, flipped; offDeg is now the spin. rescaleToSize scales alt too. describeVision says "° spin".
+- Model: pose.alt stored at calibration; lastCheck.markers offTiltDeg/ambiguous. Client type, toDetection, summary
+  mapping, audit, agent vision-check updated. VisionLiveTracker: columns off mm / spin ° / tilt ° (advisory, "?" on a
+  coin-toss frame) / off px (only when needed) / dist; calibrator label "Spin tolerance"; Home Check shows "° spin".
+- Docs: Robot_Arm_Calibration_Context.md §4/§notes, ARM-05 PRD.
+Tests: apriltags 23 (+7: spin vs tilt split, tilt-only never moved, ambiguity resolve / leave alone / fixed-tag vote /
+no-ref / rescale alt). robot-arm suites 106/106. npm run check: 13 errors = baseline, none in touched files.
+Pi restart gated on /sessions/active == null (a teleop session was running; watcher restarts and runs one detect).
+
+================================================================================
 2026-10-22 — feat/arm-live-tags-over-red — Live Tags: the number over tolerance turns red
 ================================================================================
 Operator: the Vision tab's Live Tags kept saying MOVED without showing which measurement caused it.

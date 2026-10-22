@@ -55,7 +55,7 @@ The ARM-03/04 Mongo collections (`robot_arm_home_calibrations`, `robot_arm_marke
 3. **Calibrate**, with the arm parked at home: *Detect tags* outlines every tag in view, and you can register unknown IDs inline. *Save* runs one fresh detection on the server.
    - It stores every registered tag's pose, plus the follower's encoder steps (the Return-to-home target).
    - One `active` calibration per camera (`robot_arm_tag_calibrations`); older ones are kept as `superseded` history.
-4. **Check:** each tag now is compared with home in **mm and degrees**. Angle tolerance 0 means the angle isn't checked. A tag without a pose falls back to picture distance (1.5 % of frame width).
+4. **Check:** each tag now is compared with home in **mm and degrees of spin** (rotation about the tag's own normal). Tilt of the normal is shown but never judged: a square seen nearly head-on has two poses that fit its corners equally (toward / away from the camera), the Pi returns both (`pose.alt`), and BIMS takes the one agreeing with the calibration when their reprojection errors are close (`resolvePose`; a `?` after the live tilt marks such a frame). Angle tolerance 0 means spin isn't checked. A tag without a pose falls back to picture distance (1.5 % of frame width).
 5. **Camera bumps are undone, not just flagged.**
    - Each fixed tag proposes a camera motion M = P_now · P_cal⁻¹. The proposal most fixed tags agree with wins, so one knocked fixed tag is outvoted.
    - If that motion is beyond tolerance, it is removed before the arm tags are judged, and the message says "camera shifted ~X mm, recalibrate when convenient".
@@ -100,7 +100,7 @@ GET  /cameras/{name}/apriltags   → status + intrinsics
 - `snapshot.jpg` accepts `x-api-key` over loopback (the key is read from `ROBOT_ARM_API_KEY`).
 - cameras.py doesn't rotate or flip frames (if it does, the intrinsics are wrong).
 - The service listens on `127.0.0.1:8000` (override with `APRILTAG_SELF_URL`).
-- If small tags show pose flips (large angle jumps), set the angle tolerance to 0.
+- Large angle jumps (28–70°) on small tags were the planar-pose flip; since 2026-10-22 only spin is judged and the flip is settled against the calibration, so the angle tolerance can stay on. The Live Tags table colours the number over tolerance red.
 
 ## 6. Code map (BIMS)
 
@@ -115,7 +115,7 @@ GET  /cameras/{name}/apriltags   → status + intrinsics
 | `src/routes/manufacturing/cart-mfg/robot-arm/vision/` | Vision tab: home check, live view, calibrate, registry |
 | `src/lib/components/robot-arm/Vision{Stage,LiveTracker,TagCalibrator,TagRegistry}.svelte` | Tab components |
 | `src/routes/api/robot-arm/cameras/[name]/apriltags/+server.ts` | Browser → Pi detection proxy (`manufacturing:read`) |
-| `src/routes/api/agent/robot-arm/vision-check/+server.ts` | Agent check, no motion: verdict, per-tag `offMm/offDeg/zMm`, `cameraShift` |
+| `src/routes/api/agent/robot-arm/vision-check/+server.ts` | Agent check, no motion: verdict, per-tag `offMm/offDeg` (spin) `/offTiltDeg/ambiguous/zMm`, `cameraShift` |
 | `services/robot-arm/src/server/{apriltags,depth}.py`, `scripts/install_{apriltag,depth}_router.py` | Pi routes and installers |
 
 **Permissions:** viewing needs `manufacturing:read`. Calibrate, check, return to home and the registry need `manufacturing:write`.
