@@ -22078,3 +22078,10 @@ src/routes/api/robot-arm/animate/jog/+server.ts, src/lib/components/robot-arm/Po
 animate/+page.svelte + +page.server.ts (savePoseFromJog), animate/moveset/[id]/+page.svelte (link),
 docs/prds/ARM-06-animate.md. svelte-check 14 errors (all pre-existing: r2.ts, research-proxy ×2,
 AskBimsWidget, assembly/[sessionId] ×8, magnetometer ×2); vitest animation 23 passed. Not run on the arm.
+Deployment: preview — https://bioscale-operations-system-mongodb-8msd8rxit-brevitest.vercel.app
+Source: branch feat/animate-pose-jog @ commit b71873bb
+Retrieve this exact code: git checkout feat/animate-pose-jog at commit b71873bb
+  (or: git log feat/animate-pose-jog --oneline to find it if the branch has since moved on)
+What this deployment is for: Animate tab Jog panel — adjust a pose by jogging the arm live (PR #125)
+PR: https://github.com/avacoder3900/Bioscale_Operations_System_V2/pull/125
+Follow-up commit: PoseJog.svelte seeds live/torque from the sync effect instead of the prop initialiser (clears two state_referenced_locally warnings); vite build client+server OK (post-build adapter stage OOMs on Windows, known artefact).

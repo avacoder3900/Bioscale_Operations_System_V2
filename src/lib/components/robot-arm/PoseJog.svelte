@@ -34,8 +34,9 @@
 
 	const STEPS = [1, 5, 10, 25, 50, 100];
 	let step = $state(10);
-	let live = $state<number[] | null>(initial?.positions ?? null);
-	let torqueOn = $state<boolean | null>(initial?.torqueOn ?? null);
+	// Filled from `initial` by the sync effect below, then by jogs and the poll.
+	let live = $state<number[] | null>(null);
+	let torqueOn = $state<boolean | null>(null);
 	let activeKind = $state<string | null>(null);
 	let note = $state<string | null>(null);
 	let noteKind = $state<'ok' | 'warn' | 'error'>('ok');
