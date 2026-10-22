@@ -22886,3 +22886,11 @@ where it already was. BIMS's moveJoint (/servos/{id}/move, absolute) had been ge
     {"present":875,"goal":875,"delta":0}. No motion. BIMS needs no change (robotArm.moveJoint already
     sends {position}); the "no absolute move route" note disappears on the next slider move.
 Not yet tried by hand: a real −10 on the shoulder through the sliders (expect it to move on the first press).
+
+Deployment: production — https://bioscale-operations-system-mongodb-3g0jdi7qe-brevitest.vercel.app
+Source: branch master @ commit c4ab74f6
+Retrieve this exact code: git checkout master at commit c4ab74f6
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: no BIMS change — the commit adds the Pi's move.py + installer and this log.
+  GitHub deployment 7264952767 success. (The push of this entry triggers one more docs-only deploy; not
+  logged separately.)
