@@ -18,7 +18,7 @@
  *   POST /replay/start           play it;  POST /sessions/stop  stop
  */
 import { connectDB, AuditLog, generateId } from '$lib/server/db';
-import { RobotArmMoveSet, RobotArmPose, RobotArmSequence } from '$lib/server/db/models';
+import { RobotArmMoveSet, RobotArmPose, RobotArmRun, RobotArmSequence } from '$lib/server/db/models';
 import { robotArm, type RecordingSidecar, type ServoState } from './robot-arm-client';
 import { DEFAULT_JOINT_NAMES } from '$lib/robot-arm/recording-cleanup';
 import {
@@ -35,6 +35,7 @@ import {
 	nextTrim,
 	pathStats,
 	tooFast,
+	trimFromSettle,
 	DEFAULT_RATE_HZ,
 	MAX_OFFSET_STEPS,
 	MAX_TRANSITION_S,
@@ -576,18 +577,69 @@ async function settleAtPose(user: User, pose: any, target: number[], now: ArmNow
 	return { trim, residual, rounds, done, startedFrom, warnings };
 }
 
+/** One settled pose, as the Pi's closed-loop replay reported it (replay_settle.py). */
+export interface PiSettledPose {
+	poseName: string;
+	t: number;
+	/** The droop trim learned from what the Pi had to write to land there. */
+	trim: number[];
+	/** Target − where the arm was on the Pi's last read. */
+	residual: number[];
+	rounds: number;
+	/** Landed within tolerance before the hold ran out. */
+	ok: boolean;
+}
+
 export interface SettleResult {
 	poseName: string;
 	droop: DroopResult | null;
+	/** Set when the Pi settled the poses itself during the replay; BIMS then only learns from it. */
+	pi: { poses: PiSettledPose[] } | null;
 	/** Why nothing was done (the arm is left as the replay left it). */
 	skipped: string | null;
 }
 
+/** How long to wait for the Pi's `replay.settle` webhook event after the session ends. */
+const PI_SETTLE_WAIT_MS = 1000;
+const PI_SETTLE_WAIT_TRIES = 3;
+
 /**
- * Called by the page when a Play finished on its own (not stopped): the arm
- * is holding the last keyframe, so settle it onto its target and learn that
- * pose's droop. Runs once per play; skips (and says why) when the arm is not
- * where the play should have left it.
+ * The Pi's closed-loop replay (PRD §11) settles the arm on every held pose
+ * and the last one, and reports each as a `replay.settle` run event. Learn
+ * the poses' trims from it — no arm movement needed — or null when the run
+ * has no such event (route not installed, or nothing was flagged).
+ */
+async function learnFromPiSettle(user: User, runId: string): Promise<PiSettledPose[] | null> {
+	let ev: any = null;
+	for (let i = 0; i < PI_SETTLE_WAIT_TRIES && !ev; i++) {
+		if (i) await new Promise((r) => setTimeout(r, PI_SETTLE_WAIT_MS));
+		const run = (await RobotArmRun.findOne({ runId }).select('events').lean()) as any;
+		ev = run?.events?.find((e: any) => e?.type === 'replay.settle') ?? null;
+	}
+	const entries: any[] = Array.isArray(ev?.payload?.settle) ? ev.payload.settle : [];
+	if (!entries.length) return null;
+	const out: PiSettledPose[] = [];
+	for (const e of entries) {
+		const poseId = typeof e?.pose === 'string' ? e.pose : null;
+		const trim = trimFromSettle(e?.written, e?.target);
+		if (!poseId || !trim) continue;
+		const pose = (await RobotArmPose.findById(poseId).lean()) as any;
+		if (!pose) continue;
+		const stored = trim.some((v) => v !== 0) ? trim : [];
+		await RobotArmPose.updateOne({ _id: poseId }, { $set: { trim: stored, trimMeasuredAt: new Date(), trimMeasuredBy: opRef(user) } });
+		await audit(user, 'robot_arm.animate.pose_droop_from_replay', 'robot_arm_poses', poseId, { name: pose.name, runId, before: pose.trim ?? [], trim: stored, residual: e.residual, rounds: e.rounds, ok: !!e.ok, t: e.t });
+		out.push({ poseName: pose.name, t: Number(e.t) || 0, trim, residual: Array.isArray(e.residual) ? e.residual.map(Number) : [], rounds: Number(e.rounds) || 0, ok: !!e.ok });
+	}
+	return out.length ? out : null;
+}
+
+/**
+ * Called by the page when a Play finished on its own (not stopped). If the
+ * Pi settled the poses during the replay (closed-loop route installed), only
+ * learn from its report; otherwise the arm is holding the last keyframe, so
+ * settle it onto its target here and learn that pose's droop. Runs once per
+ * play; skips (and says why) when the arm is not where the play should have
+ * left it.
  */
 export async function settleAfterPlay(user: User, runId: string): Promise<SettleResult> {
 	await connectDB();
@@ -599,21 +651,23 @@ export async function settleAfterPlay(user: User, runId: string): Promise<Settle
 		doc = (await RobotArmSequence.findOne(q).lean()) as any;
 	}
 	const end = doc?.lastPlay?.end;
-	if (!doc || !end?.poseId || !Array.isArray(end.target)) return { poseName: '', droop: null, skipped: 'nothing to settle for this play' };
+	if (!doc || !end?.poseId || !Array.isArray(end.target)) return { poseName: '', droop: null, pi: null, skipped: 'nothing to settle for this play' };
 	// Claim it first so a double call (two tabs, a retry) settles once.
 	const claim = await model.updateOne({ _id: doc._id, 'lastPlay.runId': runId, 'lastPlay.settledAt': null }, { $set: { 'lastPlay.settledAt': new Date() } });
-	if (!claim.modifiedCount) return { poseName: '', droop: null, skipped: 'already settled' };
+	if (!claim.modifiedCount) return { poseName: '', droop: null, pi: null, skipped: 'already settled' };
+	const fromPi = await learnFromPiSettle(user, runId);
+	if (fromPi) return { poseName: fromPi[fromPi.length - 1].poseName, droop: null, pi: { poses: fromPi }, skipped: null };
 	const pose = (await RobotArmPose.findById(end.poseId).lean()) as any;
-	if (!pose) return { poseName: '', droop: null, skipped: 'the last pose no longer exists' };
+	if (!pose) return { poseName: '', droop: null, pi: null, skipped: 'the last pose no longer exists' };
 	try {
 		await requireIdle();
 		const now = await readArm();
 		const droop = await settleAtPose(user, pose, end.target.map(Number), now, 'play_end');
-		return { poseName: pose.name, droop, skipped: null };
+		return { poseName: pose.name, droop, pi: null, skipped: null };
 	} catch (err) {
 		const skipped = (err as Error).message;
 		await audit(user, 'robot_arm.animate.pose_droop_skip', 'robot_arm_poses', String(pose._id), { name: pose.name, reason: 'play_end', runId, skipped });
-		return { poseName: pose.name, droop: null, skipped };
+		return { poseName: pose.name, droop: null, pi: null, skipped };
 	}
 }
 

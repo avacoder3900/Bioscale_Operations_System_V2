@@ -100,6 +100,10 @@ export interface PathMarker {
 	holdS: number;
 	/** Where every servo is at this marker (what the timeline's joint dots show). */
 	positions: number[];
+	/** The pose this marker arrives at (none for the lead-in origin). */
+	poseId?: string;
+	/** Where the arm should end up here without any droop trim (pose + offsets); see ResolvedKeyframe.target. */
+	target?: number[];
 }
 
 export interface RenderedPath {
@@ -330,6 +334,8 @@ interface Node {
 	label: string;
 	kind: MarkerKind;
 	index: number;
+	poseId?: string;
+	target?: number[];
 }
 
 export interface BuildOptions {
@@ -356,16 +362,16 @@ export function buildPath(kfs: ResolvedKeyframe[], o: BuildOptions = {}): Render
 		const d = maxDelta(from, first.positions) ? (o.leadIn.durationS ?? autoDurationS(from, first.positions)) : 0;
 		if (d > 0) {
 			nodes.push({ positions: from, holdS: 0, durationS: 0, easing: 'ease', label: 'start (arm now)', kind: 'lead-in', index: -1 });
-			nodes.push({ positions: first.positions, holdS: first.holdS, durationS: d, easing: 'ease', label: first.name, kind: 'pose', index: 0 });
+			nodes.push({ positions: first.positions, holdS: first.holdS, durationS: d, easing: 'ease', label: first.name, kind: 'pose', index: 0, poseId: first.poseId, target: first.target });
 		} else {
-			nodes.push({ positions: first.positions, holdS: first.holdS, durationS: 0, easing: 'ease', label: first.name, kind: 'pose', index: 0 });
+			nodes.push({ positions: first.positions, holdS: first.holdS, durationS: 0, easing: 'ease', label: first.name, kind: 'pose', index: 0, poseId: first.poseId, target: first.target });
 		}
 	} else {
-		nodes.push({ positions: kfs[0].positions, holdS: kfs[0].holdS, durationS: 0, easing: 'ease', label: kfs[0].name, kind: 'pose', index: 0 });
+		nodes.push({ positions: kfs[0].positions, holdS: kfs[0].holdS, durationS: 0, easing: 'ease', label: kfs[0].name, kind: 'pose', index: 0, poseId: kfs[0].poseId, target: kfs[0].target });
 	}
 	for (let i = 1; i < kfs.length; i++) {
 		const k = kfs[i];
-		nodes.push({ positions: k.positions, holdS: k.holdS, durationS: k.durationS, easing: k.easing, label: k.name, kind: (k as any).kind === 'join' ? 'join' : 'pose', index: i });
+		nodes.push({ positions: k.positions, holdS: k.holdS, durationS: k.durationS, easing: k.easing, label: k.name, kind: (k as any).kind === 'join' ? 'join' : 'pose', index: i, poseId: k.poseId, target: k.target });
 	}
 
 	// Timing.
@@ -428,7 +434,16 @@ export function buildPath(kfs: ResolvedKeyframe[], o: BuildOptions = {}): Render
 		goal[goal.length - 1] = nodes[nodes.length - 1].positions.map(clampStep);
 	}
 
-	const markers: PathMarker[] = nodes.map((nd, i) => ({ t: round4(arrive[i]), label: nd.label, kind: nd.kind, index: nd.index, holdS: nd.holdS, positions: nd.positions.map(clampStep) }));
+	const markers: PathMarker[] = nodes.map((nd, i) => ({
+		t: round4(arrive[i]),
+		label: nd.label,
+		kind: nd.kind,
+		index: nd.index,
+		holdS: nd.holdS,
+		positions: nd.positions.map(clampStep),
+		...(nd.poseId ? { poseId: nd.poseId } : {}),
+		...(nd.target ? { target: nd.target.map(clampStep) } : {})
+	}));
 	return { rateHz: rate, t: tOut, goal, markers, durationS: round4(total) };
 }
 
@@ -505,9 +520,51 @@ export interface ComposeOptions {
 	extras?: Record<string, unknown>;
 }
 
+/** What a settle-flagged frame carries, so the Pi can settle there and echo the pose back. */
+export interface SettleFlag {
+	frame: number;
+	pose: string;
+	target: number[];
+}
+
+/**
+ * Frames where the Pi's closed-loop replay (services/robot-arm/src/arm/
+ * replay_settle.py) should settle the arm ON the pose: the arrival at every
+ * held pose (the hold is the time it has to do it in) and the last frame.
+ * Only poses can be settled — the lead-in origin has none — and a stop that
+ * is not held gives the Pi no window, so it is left alone.
+ */
+export function settleFrames(p: RenderedPath): SettleFlag[] {
+	const last = p.goal.length - 1;
+	const out = new Map<number, SettleFlag>();
+	p.markers.forEach((m, i) => {
+		if (!m.poseId) return;
+		const isLast = i === p.markers.length - 1;
+		if (m.holdS <= 0 && !isLast) return;
+		const frame = isLast && m.holdS <= 0 ? last : Math.min(last, Math.round(m.t * p.rateHz));
+		out.set(frame, { frame, pose: m.poseId, target: m.target ?? m.positions });
+	});
+	return [...out.values()].sort((a, b) => a.frame - b.frame);
+}
+
+/**
+ * The droop trim a pose needs, from what the Pi's settle pass ended up
+ * writing to land on `target`: written − target on servos 1–5, capped.
+ * Null when the Pi reported nothing usable.
+ */
+export function trimFromSettle(written: unknown, target: unknown): number[] | null {
+	if (!Array.isArray(written) || !Array.isArray(target) || written.length !== SERVO_COUNT || target.length !== SERVO_COUNT) return null;
+	return written.map((w, i) => {
+		const d = Number(w) - Number(target[i]);
+		if (!Number.isFinite(d) || !TRIM_SERVOS.includes(i + 1)) return 0;
+		return Math.max(-MAX_TRIM_STEPS, Math.min(MAX_TRIM_STEPS, Math.round(d)));
+	});
+}
+
 /** The dense path as a recording the Pi replays (header / frame / footer JSONL). */
 export function composeAnimationJsonl(p: RenderedPath, o: ComposeOptions): { jsonl: string; frames: number; durationS: number } {
 	const lines: string[] = [];
+	const flags = new Map(settleFrames(p).map((f) => [f.frame, f]));
 	lines.push(
 		JSON.stringify({
 			...(o.extras ?? {}),
@@ -520,7 +577,10 @@ export function composeAnimationJsonl(p: RenderedPath, o: ComposeOptions): { jso
 			animated: o.title
 		})
 	);
-	for (let i = 0; i < p.goal.length; i++) lines.push(JSON.stringify({ event: 'frame', t: p.t[i], goal: p.goal[i] }));
+	for (let i = 0; i < p.goal.length; i++) {
+		const f = flags.get(i);
+		lines.push(JSON.stringify(f ? { event: 'frame', t: p.t[i], goal: p.goal[i], settle: true, pose: f.pose, target: f.target } : { event: 'frame', t: p.t[i], goal: p.goal[i] }));
+	}
 	lines.push(JSON.stringify({ event: 'footer', duration_s: p.durationS, frames: p.goal.length }));
 	return { jsonl: lines.join('\n') + '\n', frames: p.goal.length, durationS: p.durationS };
 }

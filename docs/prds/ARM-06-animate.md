@@ -224,3 +224,52 @@ round's goal/settled) and `pose_droop_skip`. *Forget correction* (clearPoseDroop
 Limits: mid-play poses are only corrected by the trim learned earlier (the Pi owns the bus during a
 replay, so BIMS cannot read or nudge mid-path); recordings replayed from the Control tab are not
 settled afterwards; recordings saved to the Pi keep the trims they were saved with. Not run on the arm.
+
+## 11. Closed-loop replay on the Pi (`feat/animate-replay-settle`, 2026-10-22)
+
+**Why §9/§10 are not enough.** Investigation (2026-10-22): teleop and replay send the *same* servo
+commands — both snap goal to present, torque on, then write goals open-loop; neither corrects sag.
+Teleop only *looks* sag-free because the operator closes the loop by eye (lifting the leader until
+the follower's claw is right) and *record* saves the leader (the command), so replay reproduces the
+sag that was already baked in. Animate saves the follower's encoder reading (the result), so replay
+lands one droop short. The learned trim (§10) fixes poses the arm has stopped at, but mid-sequence
+poses only get an estimate, and BIMS cannot read or nudge the arm mid-path: the Pi owns the serial bus
+for the whole replay.
+
+**Fix: the replay loop itself settles.** `services/robot-arm/src/arm/replay_settle.py` +
+`scripts/install_replay_settle.py` (written blind — the live Pi's session class is in `dual_arm.py`,
+not in this repo; the installer finds the class by `def _replay_loop`, warns on each attribute name it
+cannot find, and inserts `replay_settle.install(<Class>)` into app.py). The replacement `_replay_loop`:
+
+- plays frames exactly as before (goal arrays or the old `positions{}`; header/footer skipped), one
+  write per frame at its time;
+- at a frame flagged `"settle": true` it writes the goal, waits 0.25 s, reads the follower, adds the
+  shortfall (servos 1–5, never the gripper) to a per-servo **offset** (±50 cap), writes goal + offset,
+  and repeats until every servo is within 2 steps or the hold window runs out (window = until the
+  next frame whose goal differs, −0.12 s, so the next move leaves on time; the last frame gets 2.5 s;
+  ≤ 8 rounds);
+- carries the offset into the following frames (gravity feed-forward for the move) until the next
+  settle point re-learns it;
+- emits one `replay.settle` session event at the end: per settle point `frame, t, pose, target, goal,
+  written, present, residual, rounds, ok`, plus the carried offset. The webhook appends it to the
+  `robot_arm_runs` row like any event.
+
+Recordings without flags play exactly as before (no reads). Control-tab replays of Animate recordings
+saved after this change are settled too, since the flags are in the file.
+
+**BIMS side.** `settleFrames(path)` (pure, 4 tests) flags the arrival frame of every held pose and
+the last frame (a stop that is not held has no window); `composeAnimationJsonl` writes `settle`,
+`pose` (id) and `target` (pose + offsets, no trim — so the Pi reports droop against the real pose) on
+those frames. Markers now carry `poseId`/`target`. `settleAfterPlay` first looks for the run's
+`replay.settle` event (waits ≤ 3 s for the webhook), learns each pose's trim from `written − target`
+(`trimFromSettle`, audited `pose_droop_from_replay`) and moves nothing; only without the event does
+it fall back to §10's own settle. The playback line reports per pose "on target (n rounds)" or
+"still k steps off when the hold ran out — give it a longer hold".
+
+**On the Pi:** copy `replay_settle.py` to `src/arm/`, run `python3 scripts/install_replay_settle.py`
+(`--check` first), `sudo systemctl restart robot-arm`. Test: give a pose a 1 s hold, Play, watch the
+claw land and stay; the run in Mongo gains a `replay.settle` event. If the installer warns about
+attribute names, edit the five `self.*` references at the top of `_replay_loop_settling`.
+
+Not run on the arm. Open: `SETTLE_WAIT_S` 0.25 s assumes the servo stops within that; a slow joint
+may need 0.4 s. A hold shorter than ~0.5 s gives one round at most.

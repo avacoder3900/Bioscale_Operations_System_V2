@@ -126,10 +126,20 @@ export class Playback {
 		this.settled = 'Correcting for droop at the last pose…';
 		try {
 			const r = await this.action('settle', { runId });
-			const s = r.type === 'success' ? (r.data as { settle?: { poseName: string; skipped: string | null; droop: { trim: number[]; rounds: number; warnings: string[] } | null } } | undefined)?.settle : null;
+			type PiPose = { poseName: string; trim: number[]; residual: number[]; rounds: number; ok: boolean };
+			type Settle = { poseName: string; skipped: string | null; pi: { poses: PiPose[] } | null; droop: { trim: number[]; rounds: number; warnings: string[] } | null };
+			const s = r.type === 'success' ? (r.data as { settle?: Settle } | undefined)?.settle : null;
 			if (!s) this.settled = r.type === 'failure' ? `Droop correction failed: ${String((r.data as { error?: string } | undefined)?.error ?? '')}` : null;
 			else if (s.skipped) this.settled = `Droop correction skipped: ${s.skipped}.`;
-			else if (s.droop) {
+			else if (s.pi) {
+				// The Pi settled each held pose during the replay (closed-loop route); nothing moved afterwards.
+				const parts = s.pi.poses.map((p) => {
+					const worst = p.residual.length ? Math.max(...p.residual.map(Math.abs)) : 0;
+					return `"${p.poseName}" ${p.ok ? `on target (${p.rounds} round${p.rounds === 1 ? '' : 's'})` : `still ${worst} step(s) off when the hold ran out`}`;
+				});
+				const missed = s.pi.poses.filter((p) => !p.ok).length;
+				this.settled = `Settled on the arm during the play: ${parts.join('; ')}. Corrections learned for the next play.${missed ? ' Give the poses that missed a longer hold.' : ''}`;
+			} else if (s.droop) {
 				const t = s.droop.trim.map((v, i) => (v ? `servo ${i + 1} ${v > 0 ? '+' : ''}${v}` : null)).filter(Boolean);
 				this.settled = `Settled on "${s.poseName}"${t.length ? ` — droop correction ${t.join(', ')}` : ' — no droop'} (learned; used from the next play).` + (s.droop.warnings.length ? ' ' + s.droop.warnings.join(' ') : '');
 			}

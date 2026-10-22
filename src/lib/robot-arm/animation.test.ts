@@ -12,7 +12,9 @@ import {
 	minDurationS,
 	nextTrim,
 	pathStats,
+	settleFrames,
 	tooFast,
+	trimFromSettle,
 	MAX_STEPS_PER_S,
 	MAX_TRIM_STEPS,
 	type ResolvedKeyframe
@@ -156,9 +158,37 @@ describe('composeAnimationJsonl', () => {
 		const lines = out.jsonl.trim().split('\n').map((l) => JSON.parse(l));
 		expect(lines[0]).toMatchObject({ event: 'header', rate_hz: 10, follower_neutral: A, animated: 'test' });
 		expect(lines[1]).toEqual({ event: 'frame', t: 0, goal: A });
-		expect(lines[lines.length - 2]).toEqual({ event: 'frame', t: 1, goal: B });
+		expect(lines[lines.length - 2]).toEqual({ event: 'frame', t: 1, goal: B, settle: true, pose: 'B', target: B });
 		expect(lines[lines.length - 1]).toEqual({ event: 'footer', duration_s: 1, frames: 11 });
 		expect(out.frames).toBe(11);
+	});
+});
+
+describe('settle flags for the closed-loop replay', () => {
+	it('flags the arrival at every held pose and the last frame, never the lead-in', () => {
+		const p = buildPath([kf('A', A, { holdS: 0.5 }), kf('B', B, { durationS: 1 }), kf('C', C, { durationS: 1, holdS: 1 })], { rateHz: 10, leadIn: { from: [2000, 1500, 2600, 2048, 2100, 1800], durationS: 1 } });
+		const flags = settleFrames(p);
+		// A is reached after the 1 s lead-in (frame 10), C after 1 + 0.5 + 1 + 1 = 3.5 s (frame 35); B is a stop that is not held.
+		expect(flags.map((f) => [f.frame, f.pose])).toEqual([
+			[10, 'A'],
+			[35, 'C']
+		]);
+		expect(flags[1].target).toEqual(C);
+	});
+	it('the last frame is flagged even when it is not held', () => {
+		const p = buildPath([kf('A', A), kf('B', B, { durationS: 1 })], { rateHz: 10 });
+		expect(settleFrames(p)).toEqual([{ frame: 10, pose: 'B', target: B }]);
+	});
+	it('a trimmed keyframe flags its untrimmed target, so the Pi reports droop against the real pose', () => {
+		const trimmed = kf('A', [2048, 1512, 2592, 2048, 2100, 1800], { target: A });
+		const p = buildPath([trimmed], { rateHz: 10 });
+		expect(settleFrames(p)[0].target).toEqual(A);
+	});
+	it('trimFromSettle: written − target on servos 1–5, capped, gripper ignored', () => {
+		expect(trimFromSettle([2048, 1514, 2591, 2051, 2100, 1900], A)).toEqual([0, 14, -9, 3, 0, 0]);
+		expect(trimFromSettle([2048, 1700, 2600, 2048, 2100, 1800], A)![1]).toBe(MAX_TRIM_STEPS);
+		expect(trimFromSettle([1, 2], A)).toBeNull();
+		expect(trimFromSettle(undefined, A)).toBeNull();
 	});
 });
 

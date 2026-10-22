@@ -21944,3 +21944,22 @@ src/lib/robot-arm/animation.ts (+4 tests), playback.svelte.ts, src/lib/server/ro
 move-set/sequence models (lastPlay.end/settledAt), the three animate +page.server.ts and their
 +page.svelte, ARM-06 PRD §10. svelte-check 14 errors (baseline); vitest lib/robot-arm + lib/server
 463 passed (sonic leave-one-out failed once, passes 3/3 alone — flaky, untouched). Not run on the arm.
+
+================================================================================
+2026-10-22 — feat/animate-replay-settle — Closed-loop replay on the Pi: the arm settles ON each held pose
+================================================================================
+User asked what teleop does that Animate does not, to stop sagging in animated sequences. Finding:
+nothing — teleop and replay send the same open-loop goal writes; teleop looks sag-free because the
+operator closes the loop by eye and *record* saves the leader (command), while Animate saves the
+follower's reading (result), so replay lands one droop short. User chose option C: close the loop on
+the Pi, since only the replay loop owns the bus mid-path.
+Pi (written blind, live session class is dual_arm.py): services/robot-arm/src/arm/replay_settle.py
+replaces the session's _replay_loop — same frame playback, but at frames flagged "settle" it
+read/adjust/writes (servos 1–5, ±50 offset, 2-step tolerance) within the hold window, carries the
+offset forward, and emits one replay.settle run event with per-pose written/present/residual.
+scripts/install_replay_settle.py finds the class, warns on attribute names, patches app.py.
+BIMS: settleFrames + trimFromSettle (animation.ts, +4 tests → 99 in robot-arm), compose writes
+settle/pose/target on the arrival of each held pose and the last frame; markers carry poseId/target;
+settleAfterPlay learns trims from the replay.settle event (waits ≤3 s for the webhook) and only falls
+back to #123's arm-moving settle when the event is absent; playback line reports per-pose outcome.
+Stacked on feat/animate-auto-droop (#123). PRD §11. svelte-check 14 (baseline). Not run on the arm.
