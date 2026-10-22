@@ -22206,3 +22206,11 @@ Retrieve this exact code: git checkout feat/animate-pose-jog at commit b71873bb
 What this deployment is for: Animate tab Jog panel — adjust a pose by jogging the arm live (PR #125)
 PR: https://github.com/avacoder3900/Bioscale_Operations_System_V2/pull/125
 Follow-up commit: PoseJog.svelte seeds live/torque from the sync effect instead of the prop initialiser (clears two state_referenced_locally warnings); vite build client+server OK (post-build adapter stage OOMs on Windows, known artefact).
+Deployment: preview — https://bioscale-operations-system-mongodb-eyt6syj0b-brevitest.vercel.app
+Source: branch feat/animate-pose-jog @ commit c0a74cc1 (warning fix + progress lines; same feature code as b71873bb)
+Deployment: preview — https://bioscale-operations-system-mongodb-9ywuqyscv-brevitest.vercel.app
+Source: branch feat/animate-pose-jog @ commit 7618f243 (origin/master merged in: only progress.txt conflicted; opentrons changes from master, none of the arm files)
+Retrieve this exact code: git checkout feat/animate-pose-jog at commit 7618f243
+  (or: git log feat/animate-pose-jog --oneline to find it if the branch has since moved on)
+What this deployment is for: the PR #125 build to test the Jog panel on — the arm page, Animate tab, jog a pose; svelte-check after the merge 14 errors (baseline).
+(The docs commit that adds these lines deploys the same code again; not logged separately.)
