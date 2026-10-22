@@ -13,7 +13,8 @@
  *   POST /sessions/stop          pause/stop that (the follower holds its last goal)
  *   POST /torque                 torque OFF so the operator can pose by hand
  *   POST /servos/hold            goal := present, torque ON (no jump) — hold.py
- *   POST /servos/{id}/jog        go to a pose (≤300 steps per jog); measure a pose's droop
+ *   POST /servos/{id}/jog        go to a pose (≤300 steps per jog); measure a pose's droop;
+ *                                nudge one joint live while adjusting a pose (jogArm)
  *   POST /recordings/restore     write the rendered path
  *   POST /replay/start           play it;  POST /sessions/stop  stop
  */
@@ -30,11 +31,14 @@ import {
 	composeAnimationJsonl,
 	flattenSequence,
 	isEasing,
+	jogChunks,
 	keyframePositions,
 	nextTrim,
 	pathStats,
 	tooFast,
 	DEFAULT_RATE_HZ,
+	JOG_CHUNK_STEPS,
+	MAX_JOG_STEPS,
 	MAX_OFFSET_STEPS,
 	MAX_TRANSITION_S,
 	MAX_TRIM_STEPS,
@@ -54,7 +58,7 @@ type User = { _id: string; username: string };
 /** Scratch recording every Play writes on the Pi (overwritten each time). */
 export const PREVIEW_RECORDING = 'animate-preview';
 /** The Pi caps one jog at 300 steps. */
-const JOG_CHUNK = 300;
+const JOG_CHUNK = JOG_CHUNK_STEPS;
 /** Go-to-pose refuses bigger per-servo moves. */
 const MAX_GOTO_STEPS = 1500;
 const GOTO_DEADBAND = 3;
@@ -396,6 +400,95 @@ export async function setPoseArchived(user: User, id: string, archived: boolean)
 	if (!archived) await assertPoseNameFree(doc.name, id);
 	await RobotArmPose.updateOne({ _id: id }, { $set: { archivedAt: archived ? new Date() : null } });
 	await audit(user, archived ? 'robot_arm.animate.pose_archive' : 'robot_arm.animate.pose_restore', 'robot_arm_poses', id, { name: doc.name });
+}
+
+// ── jog (adjust a pose live) ─────────────────────────────────────────────
+//
+// Editing a pose used to mean changing numbers and playing a recording to
+// see the result. Jogging moves one joint of the real arm by a few steps
+// at a time, under torque, so the operator watches the claw land where
+// they want it and then saves what the encoders read. The Pi's per-servo
+// jog route refuses while a session owns the bus and while torque is off,
+// so there is nothing new to install.
+
+/** Let the servo reach its new goal before the encoders are read back. */
+const JOG_SETTLE_MS = 250;
+
+export interface JogResult {
+	sid: number;
+	delta: number;
+	/** Goal the servo now holds (present + delta, clamped to the encoder). */
+	goal: number;
+	/** All six positions after a short settle. */
+	positions: number[];
+	torqueOn: boolean | null;
+	chunks: number;
+}
+
+/**
+ * Nudge one servo by `delta` steps (±MAX_JOG_STEPS, sent in ≤300-step
+ * pieces) and read the arm back. Torque must be on; refused while a session
+ * owns the arm. The arm MOVES.
+ */
+export async function jogArm(user: User, input: { sid: unknown; delta: unknown }): Promise<JogResult> {
+	await connectDB();
+	const sid = Number(input.sid);
+	const delta = Math.trunc(Number(input.delta));
+	if (!Number.isInteger(sid) || sid < 1 || sid > SERVO_COUNT) throw new AnimateError(`Servo must be 1..${SERVO_COUNT}.`);
+	if (!Number.isFinite(delta) || delta === 0) throw new AnimateError('Jog by a non-zero number of steps.');
+	if (Math.abs(delta) > MAX_JOG_STEPS) throw new AnimateError(`One jog is limited to ±${MAX_JOG_STEPS} steps.`);
+	await requireIdle();
+	const pieces = jogChunks(delta, JOG_CHUNK);
+	let goal = NaN;
+	let chunks = 0;
+	for (const piece of pieces) {
+		try {
+			goal = (await robotArm.jogJoint(sid, piece)).goal;
+		} catch (err) {
+			const msg = (err as Error).message ?? String(err);
+			if (/robot-arm 409/.test(msg)) {
+				throw new AnimateError(/torque/i.test(msg) ? `Torque is off on servo ${sid} — press Hold (torque on) first.` : `The arm is busy: ${msg}`, 409);
+			}
+			throw new AnimateError(`Servo ${sid} jog failed${chunks ? ` after ${chunks} of ${pieces.length} pieces` : ''}: ${msg}`, 502);
+		}
+		chunks++;
+	}
+	await new Promise((r) => setTimeout(r, JOG_SETTLE_MS));
+	const now = await readArm();
+	await audit(user, 'robot_arm.animate.jog', 'robot_arm_servos', 'follower', { sid, delta, goal, positions: now.positions, chunks });
+	return { sid, delta, goal, positions: now.positions, torqueOn: now.torqueOn, chunks };
+}
+
+export interface RecaptureResult {
+	pose: PoseSummary;
+	before: number[];
+	/** New − old, per servo. */
+	moved: number[];
+}
+
+/**
+ * Overwrite a pose's positions with where the arm is now — the end of a jog
+ * session. Name and notes stay; a droop trim measured at the old position no
+ * longer applies and is cleared. Refused while a session owns the bus (the
+ * Pi's plain servo read has no guard of its own).
+ */
+export async function recapturePose(user: User, id: string): Promise<RecaptureResult> {
+	await connectDB();
+	const before = (await RobotArmPose.findById(id).lean()) as any;
+	if (!before) throw new AnimateError('Pose not found.', 404);
+	if (before.archivedAt) throw new AnimateError('That pose is archived — restore it first.');
+	await requireIdle();
+	const now = await readArm();
+	const old: number[] = (before.positions ?? []).map(Number);
+	await RobotArmPose.updateOne({ _id: id }, { $set: { positions: now.positions, trim: [], trimMeasuredAt: null, trimMeasuredBy: null } });
+	await audit(user, 'robot_arm.animate.pose_recapture', 'robot_arm_poses', id, {
+		name: before.name,
+		before: old,
+		after: now.positions,
+		torqueOnAtCapture: now.torqueOn,
+		clearedTrim: Array.isArray(before.trim) && before.trim.length ? before.trim : null
+	});
+	return { pose: poseSummary(await RobotArmPose.findById(id).lean()), before: old, moved: now.positions.map((p, i) => p - (old[i] ?? p)) };
 }
 
 export interface GoToResult {
