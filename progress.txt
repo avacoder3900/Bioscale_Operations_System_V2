@@ -22286,3 +22286,7 @@ Source: branch feat/cleanup-overlay @ commit 56056137
 Retrieve this exact code: git checkout feat/cleanup-overlay at commit 56056137
   (or: git log feat/cleanup-overlay --oneline to find it if the branch has since moved on)
 What this deployment is for: Clean-up tab Overlay page (cleanup/overlay) — pilot positions on an animated recording; PR #126
+Deployment: preview — https://bioscale-operations-system-mongodb-gqryeynal-brevitest.vercel.app
+Source: branch feat/cleanup-overlay @ commit 421437fc (origin/master d149581e merged in; only progress.txt conflicted, both kept)
+Retrieve this exact code: git checkout feat/cleanup-overlay at commit 421437fc
+What this deployment is for: pre-merge build of PR #126; smoke: /login 200, /manufacturing/cart-mfg/robot-arm/cleanup/overlay 302 to login. svelte-check 14 (baseline), robot-arm tests 124 passed.
