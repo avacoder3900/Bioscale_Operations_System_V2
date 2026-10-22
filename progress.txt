@@ -22237,6 +22237,9 @@ PR: https://github.com/avacoder3900/Bioscale_Operations_System_V2/pull/125
 Follow-up commit: PoseJog.svelte seeds live/torque from the sync effect instead of the prop initialiser (clears two state_referenced_locally warnings); vite build client+server OK (post-build adapter stage OOMs on Windows, known artefact).
 Deployment: preview — https://bioscale-operations-system-mongodb-eyt6syj0b-brevitest.vercel.app
 Source: branch feat/animate-pose-jog @ commit c0a74cc1 (warning fix + progress lines; same feature code as b71873bb)
+Retrieve this exact code: git checkout feat/animate-pose-jog at commit c0a74cc1
+  (or: git log feat/animate-pose-jog --oneline to find it if the branch has since moved on)
+What this deployment is for: the PoseJog warning fix on top of the Jog panel (PR #125)
 Deployment: preview — https://bioscale-operations-system-mongodb-9ywuqyscv-brevitest.vercel.app
 Source: branch feat/animate-pose-jog @ commit 7618f243 (origin/master merged in: only progress.txt conflicted; opentrons changes from master, none of the arm files)
 Retrieve this exact code: git checkout feat/animate-pose-jog at commit 7618f243
@@ -22246,8 +22249,89 @@ What this deployment is for: the PR #125 build to test the Jog panel on — the 
 Deployment: preview — https://bioscale-operations-system-mongodb-f2v5ftv6t-brevitest.vercel.app
 Source: branch feat/animate-pose-jog @ commit 4e06049c (master d2d0aa09 merged in; only progress.txt conflicted)
 Retrieve this exact code: git checkout feat/animate-pose-jog at commit 4e06049c
+  (or: git log feat/animate-pose-jog --oneline to find it if the branch has since moved on)
 What this deployment is for: pre-merge build of PR #125; smoke: /login 200, /api/robot-arm/animate/jog 401 without a session, Animate page 302 to login.
-Merge to master via the API was blocked by the auto-mode classifier [Merge Without Review]; waiting on the user to allow it.
+Merge to master via the API was blocked by the auto-mode classifier [Merge Without Review] at first; PR #125 was merged
+later (see "master — MERGE feat/animate-pose-jog (PR #125)" below).
+
+================================================================================
+2026-10-22 — feat/cleanup-overlay — Clean-up tab: overlay a pilot's teleop recording on an animated one (ARM-07)
+================================================================================
+Operator asked for a clean-up option that maps the smoothness of an animated recording onto the position precision of a
+teleop recording: animated move sets sag (open-loop replay, goal = the follower reading, loaded joints settle short), teleop
+does not because the pilot subconsciously pushes the leader past the sag — so the teleop goals carry the compensation and
+the animated file carries the timing and curves. Overlay = keep the animated recording's frames, add the pilot's offset.
+Pure first, src/lib/robot-arm/recording-overlay.ts (17 tests): seriesFromFrames (six positions per frame, last known value
+over a gap — the loop createCleanup had inline); alignRecordings = subsequence dynamic time warping on all six joints with
+the animated recording as the query (open beginning and end, so the pilot may be slower, pause elsewhere and have lead-in/
+lead-out at other poses), thinned to <=1200 samples for the warp and interpolated back to every animated frame; the per-
+frame offset = pilot goal at the matched moment - animated goal; applyOverlay = centred moving average over windowS
+(default 1 s), cap at +-maxOffset (default 150, capped frames counted), x strength (default 100%), per-servo opt-out,
+rounded and clamped; validateOverlayOptions; composeOverlayRecording = the animated header + `overlay {animated, pilot,
+strength, window_s, servos, max_offset}`, frames re-based to t=0, clamped to follower_min/max. The alignment test injects a
+known per-joint offset into a 1.7x slower, jittery copy with 2 s lead-in and 1 s tail at a different pose and recovers it
+within 3 steps; a >1000-frame case exercises the thinning.
+Server src/lib/server/robot-arm-overlay.ts: classifyRecording (animated / teleop / clean-up / overlay from the sidecar),
+previewOverlay (reads both off the Pi, aligns, hands the browser t/goal/aligned/offset + fit + span; nothing stored),
+saveOverlayToPi (recomputes with the settings sent, restoreRecording with sidecar overlaid_from/position_reference/overlay,
+audit robot_arm.cleanup.overlay_save_to_pi on robot_arm_recordings), overlayToCleanup (a clean-up draft whose rawGoal is
+the overlay, title "<animated> + <pilot>"). robot-arm-cleanup.ts: createCleanup split into readSourceRecording +
+insertCleanup (same behaviour), cleanSplit exported, CleanupOverlayInfo; model gains `overlay` (preciseName + settings +
+fit, null for a plain clean-up); getCleanup returns it; the editor header says "with the positions of X laid over it".
+Page src/routes/manufacturing/cart-mfg/robot-arm/cleanup/overlay (?smooth=&precise=): two pickers (animated first in one,
+teleop first in the other), fit line with a >150-step warning, OverlayChart.svelte (grey animated / amber pilot lined up in
+time / cyan result, one lane per servo), settings applied in the browser from the same pure module (strength slider,
+window, cap, servo ticks), per-servo table (median/range of the raw offset, applied mean/min/max, capped), Save to Pi
+(name "<animated>-pilot") and "Open as a clean-up" (threshold default 2: no tremor in an animated file). Link card on the
+Clean-up list. Nothing touches the arm. Docs: docs/prds/ARM-07-cleanup-overlay.md, context doc section 6b line.
+Tests: robot-arm unit suites 6 files, 123 passed. svelte-check 14 errors (baseline), none in touched files. Not run
+against the arm, a live Pi or a live DB.
+Deployment: preview — https://bioscale-operations-system-mongodb-id8g5961i-brevitest.vercel.app
+Source: branch feat/cleanup-overlay @ commit 56056137
+Retrieve this exact code: git checkout feat/cleanup-overlay at commit 56056137
+  (or: git log feat/cleanup-overlay --oneline to find it if the branch has since moved on)
+What this deployment is for: Clean-up tab Overlay page (cleanup/overlay) — pilot positions on an animated recording; PR #126
+Deployment: preview — https://bioscale-operations-system-mongodb-gqryeynal-brevitest.vercel.app
+Source: branch feat/cleanup-overlay @ commit 421437fc (origin/master d149581e merged in; only progress.txt conflicted, both kept)
+Retrieve this exact code: git checkout feat/cleanup-overlay at commit 421437fc
+  (or: git log feat/cleanup-overlay --oneline to find it if the branch has since moved on)
+What this deployment is for: pre-merge build of PR #126; smoke: /login 200, /manufacturing/cart-mfg/robot-arm/cleanup/overlay 302 to login. svelte-check 14 (baseline), robot-arm tests 124 passed.
+PR: https://github.com/avacoder3900/Bioscale_Operations_System_V2/pull/126 (merged, see "master — MERGE feat/cleanup-overlay (PR #126)" below)
+
+================================================================================
+2026-10-22 — master — MERGE feat/animate-pose-jog (PR #125, d149581e)
+================================================================================
+PR #125 merged into master at 17:43 UTC as merge commit d149581e (first parent d2d0aa09, the arm Wi-Fi chip push).
+Brings the Animate tab Jog panel (ARM-06 §10): adjust a pose by jogging the real arm live, Save into pose / Save as
+new pose; PoseJog.svelte, jogArm + jogChunks (robot-arm-animation.ts, animation.ts), JSON route
+api/robot-arm/animate/jog. 10 files, +585 / -5. Branch was merged with master d2d0aa09 before the PR (4e06049c, only
+progress.txt conflicted); svelte-check 14 errors (baseline), vitest animation 23 passed. No new Pi route. Not run on
+the arm. The first merge attempt through the API was blocked by the auto-mode classifier [Merge Without Review].
+Deployment: production — https://bioscale-operations-system-mongodb-k255akhdx-brevitest.vercel.app
+Source: branch master @ commit d149581e (Merge pull request #125 from avacoder3900/feat/animate-pose-jog)
+Retrieve this exact code: git checkout d149581e
+  (or: git log master --oneline --merges | grep "#125" to find it)
+What this deployment is for: Animate tab Jog panel in production. Smoke 2026-10-22: /login 200,
+/api/robot-arm/animate/jog 401 without a session.
+
+================================================================================
+2026-10-22 — master — MERGE feat/cleanup-overlay (PR #126, 5db9c5d6)
+================================================================================
+PR #126 merged into master at 17:56 UTC via the GitHub API as merge commit 5db9c5d6 (first parent d149581e, the PR #125
+merge), after the operator said "push to main". Brings the Clean-up tab Overlay (ARM-07): subsequence-DTW a pilot's
+teleop recording onto an animated one so the result keeps the animation's timing and curves with the pilot's
+sag-compensated positions; Save to Pi or Open as a clean-up. recording-overlay.ts (+17 tests), robot-arm-overlay.ts,
+cleanup/overlay page, OverlayChart.svelte, clean-up model field `overlay`, docs/prds/ARM-07-cleanup-overlay.md.
+13 files, +1751 / -38. Branch was merged with master d149581e before the PR (421437fc, only progress.txt conflicted,
+both entries kept); svelte-check 14 errors (baseline), robot-arm unit suites 124 passed. Nothing touches the arm; not
+run against a live Pi or DB.
+Deployment: production — https://bioscale-operations-system-mongodb-3k54qchqe-brevitest.vercel.app
+Source: branch master @ commit 5db9c5d6 (Merge pull request #126 from avacoder3900/feat/cleanup-overlay)
+Retrieve this exact code: git checkout 5db9c5d6
+  (or: git log master --oneline --merges | grep "#126" to find it)
+What this deployment is for: Clean-up tab Overlay page in production. Smoke 2026-10-22: /login 200,
+/manufacturing/cart-mfg/robot-arm/cleanup/overlay 302 to login, /api/robot-arm/animate/jog 401 without a session.
+Follow-up: f41dbfd5 put these merge/production lines inside the two feature entries; this commit moves them here.
 
 ================================================================================
 2026-10-22 — docs/arm-animate-droop-context — Handoff context for the Animate droop / low-claw work

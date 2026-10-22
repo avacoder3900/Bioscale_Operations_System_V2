@@ -18,7 +18,7 @@ been **played** on the arm yet._
 | #122 | `feat/animate-timeline-joints` | **merged** 2026-10-21 | Drag joints on the timeline (per-keyframe `offsets[6]`); per-pose droop trim with a manual *Measure droop* button |
 | #123 | `feat/animate-auto-droop` | open | Droop correction runs by itself (end of Go to pose, end of every Play); unvisited poses get an estimate; *Measure droop* button removed |
 | #124 | `feat/animate-replay-settle` | open, **stacked on #123** | Closed-loop replay on the Pi: the replay loop settles the arm ON each held pose; BIMS learns trims from its report |
-| #125 | `feat/animate-pose-jog` | merged 2026-10-22 (another session) | Live pose jog panel. Appended PRD §10 — collides with #123's §10 (see §7) |
+| #125 | `feat/animate-pose-jog` | merged 2026-10-22 (another session) | Live pose jog panel. Its PRD section is now §12 (renumbered when master was merged into #124; see §7) |
 
 User merges PRs themselves. The user's decision on 2026-10-22 was **option C** (close the loop on
 the Pi), so #124 is the path forward; #123 remains the fallback when the Pi route is not installed.
@@ -158,9 +158,10 @@ Audit actions: `robot_arm.animate.pose_droop_measure` (#122), `pose_droop_settle
 
 ## 7. Gotchas
 
-- **PRD numbering collision:** master's §10 is now *Jog* (#125); #123 adds its own §10 "Droop
-  correction is automatic" and #124 adds §11. When merging #123/#124 into master, renumber theirs to
-  §11/§12 and fix the cross-references (`§10`/`§11`) in this file and in `progress.txt` entries.
+- **PRD numbering (resolved 2026-10-22):** #125 and #123 both added a §10. When master was merged into
+  #124 (02988a9d) the droop sections kept their numbers (§10 automatic droop, §11 closed-loop replay) and
+  *Jog* (#125) became **§12**; PoseJog.svelte and the jog API route comments point at §12. Cross-references
+  to §10/§11 in this file and in `progress.txt` mean the droop sections.
 - `progress.txt` conflicts on every PR (all branches append at the end). Resolve with
   `git merge-file --union`, then **check the `====` header bars**: the union merge drops the bar
   shared by two adjacent entries (seen on #118, #115, #122).

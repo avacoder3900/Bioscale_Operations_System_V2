@@ -111,6 +111,29 @@
 		</p>
 	</section>
 
+	<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4">
+		<div class="flex flex-wrap items-center justify-between gap-3">
+			<div class="min-w-0">
+				<h2 class="mb-1 text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">
+					Overlay a pilot's recording on an animated one
+				</h2>
+				<p class="text-xs" style="color: var(--color-tron-text-secondary)">
+					An animated recording plays smoothly but its joints settle short of each pose under load. A teleop
+					recording of the same motion has the pilot's corrections for that baked in. The overlay lines the two
+					up in time and gives the animation the pilot's positions — the result can be saved to the Pi as it
+					is, or opened as a clean-up and sent to Animate.
+				</p>
+			</div>
+			<a
+				href={`${BASE}/overlay`}
+				class="rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 px-4 py-2 text-sm font-medium transition-colors hover:bg-[var(--color-tron-cyan)]/20"
+				style="color: var(--color-tron-cyan)"
+			>
+				Pick two recordings →
+			</a>
+		</div>
+	</section>
+
 	<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)]">
 		<div class="border-b border-[var(--color-tron-border)] px-4 py-3">
 			<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">

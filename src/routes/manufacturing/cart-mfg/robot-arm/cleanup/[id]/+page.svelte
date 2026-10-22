@@ -386,11 +386,21 @@
 					style="color: var(--color-tron-text)"
 				/>
 				<p class="mt-1 text-xs" style="color: var(--color-tron-text-secondary)">
-					From <span class="font-mono">{data.cleanup.sourceName}</span> ({data.cleanup.trace.frames} frames,
+					From <span class="font-mono">{data.cleanup.sourceName}</span>{#if data.cleanup.overlay}
+						with the positions of <span class="font-mono">{data.cleanup.overlay.preciseName}</span> laid over it{/if}
+					({data.cleanup.trace.frames} frames,
 					{fmtS(data.cleanup.trace.durationS)}) · split at {data.cleanup.thresholdSteps} steps / {data.cleanup.pauseS} s ·
 					<strong style="color: var(--color-tron-text)">{steps.length} steps, {moveCount} moves</strong>, plays in
 					<strong style="color: var(--color-tron-text)">{fmtS(resolved.durationS)}</strong>
 				</p>
+				{#if data.cleanup.overlay}
+					<p class="mt-1 text-[11px]" style="color: var(--color-tron-text-secondary)">
+						Overlay at {Math.round(data.cleanup.overlay.strength * 100)}% strength, {data.cleanup.overlay.windowS} s window, cap
+						{data.cleanup.overlay.maxOffset} steps, servos {data.cleanup.overlay.servos.join(', ')}; the pilot's path sat
+						{Math.round(data.cleanup.overlay.fit)} steps from the animation on average. The grey trace below is the overlaid
+						recording, not either source.
+					</p>
+				{/if}
 			</div>
 			<div class="flex items-center gap-2">
 				<button type="button" class={btnCls} onclick={undo} disabled={!undoStack.length} title="Undo">↶ Undo</button>
