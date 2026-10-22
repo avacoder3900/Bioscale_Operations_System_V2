@@ -22039,3 +22039,17 @@ Source: branch feat/animate-pose-with-leader @ commit ba4f6b40
 Retrieve this exact code: git checkout feat/animate-pose-with-leader at commit ba4f6b40
   (or: git log feat/animate-pose-with-leader --oneline to find it if the branch has since moved on)
 What this deployment is for: Animate tab capture panel — "Pose with the control arm" (teleop), Save pose, Done
+
+================================================================================
+2026-10-22 — fix/studio-reload-drops-tip — Reload deck no longer crashes the tip
+================================================================================
+Reload deck (and Disconnect) close the maintenance run and open a new one. Closing does not
+drop the tip, and a new run models a bare nozzle, so Move to hole parked the NOZZLE 2mm over
+the hole and the physical tip (~50mm) drove into the deck (R04 21:32–21:34Z and B07 20:39Z on
+2026-10-21: halt, then "Out of bounds move Z too low", then the swap pick-up hit +Z). Now
+stopMaintenance drops a modelled tip in the trash before closing (best effort, with a warning to
+remove it by hand on failure); Reload deck tells the operator to Calibrate tip for a fresh one.
+Complements fix/studio-swap-tip-home (home Z after reopen). svelte-check 16 (baseline); vitest opentrons 218 passed.
+Deployment: production — via Vercel GitHub integration on push to master
+Source: branch fix/studio-reload-drops-tip, merged to master
+What this deployment is for: Deck Calibration Studio Reload deck without tip crashes
