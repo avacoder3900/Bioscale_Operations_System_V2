@@ -213,11 +213,16 @@ return { items: JSON.parse(JSON.stringify(items)) };
 
 ## Validation Commands
 ```bash
-npm run check          # TypeScript + Svelte type checking
-npm run build          # Production build
+npm run check          # TypeScript + Svelte type checking — the gate before every commit
 npm run test:contracts # Run 84 contract tests against running app
 npx tsx scripts/seed.ts # Seed test data
 ```
+
+**Do not run a local production build (`npm run build` / `vite build`) as a pre-commit gate.** Decided by
+Alejandro 2026-10-22: it takes 10+ minutes on the Windows workstations and dies in Node's default 4 GB heap
+during the Vercel adapter step, and it was never a requirement here. Vercel builds every push on Linux (preview
+for branches, production for `master`) and the result shows on the PR checks; that is the build check. The gate
+is `npm run check` plus the unit tests that cover the change.
 
 ## Common Pitfalls
 - **Don't use ObjectId** — all `_id` fields are nanoid strings
