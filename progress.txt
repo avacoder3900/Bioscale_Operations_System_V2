@@ -22756,3 +22756,54 @@ small UI follow-through:
 Clarified to the operator in chat: the "home once, then apply each pose as a delta" behaviour Sam
 described was the old Go to pose (relative jogs, goal = present + delta); it was removed in this redo.
 svelte-check: 14 errors / 432 warnings (baseline). No Pi change.
+
+================================================================================
+2026-10-22 — feat/animate-verified-poses — ARM-09: verified poses — each step is absolute goals, then a camera + AprilTag check against the pose's own reference
+================================================================================
+Alejandro, after the ARM-06 redo: scrap the old "home once, then each pose as a delta" idea and use the
+home-calibration logic (servos move, then camera + AprilTags verify) for EACH step of an animation. Get the
+follower to each pose, verify by eye, capture a picture as that pose's calibration, use it on future runs.
+After a failed read: list ideas, do not build them — error and stop the run. Tolerances (mm, angle) are set
+AFTER the calibration photo, per step as well. Poses must be a list of absolute values along the timeline,
+like the Live positions on the Vision tab, never deltas. Spec: docs/prds/ARM-09-verified-poses.md.
+
+Built on top of feat/animate-redo (PR #130; poses already absolute goals there). No Pi change — the
+detection route, replay and servo reads it uses all exist on arm-pi.
+
+  - Pure (src/lib/robot-arm/verified-poses.ts, 15 tests): step tolerances {positionMm 5, angleDeg 5, steps 15}
+    with clean/override/effective; verifyWanted (keyframe flag, else "has a reference"); planChunks (chunks end
+    at every verified step; last chunk ends at the last step); nearPose/worstOffset (80 steps, servos 1-5);
+    assessStep (pass needs BOTH encoders and tags read and agreeing; a missing side is `unverified`, never a
+    pass); describeStep; advanceCursor; AFTER_FAILURE_IDEAS (six candidates, documented only).
+  - Models: robot_arm_pose_calibrations (one active per pose per camera: tags with 3-D poses, encoder steps,
+    thumbnail, R2 frame key, the pose's goals at capture → `stale` when the pose is edited later, tolerances,
+    lastCheck); robot_arm_verified_runs (steps, chunks, cursor, each chunk's Pi run id, one result per check
+    with the camera snapshot, failure). Move-set keyframes gain `verify` (auto/on/off) and a `tolerances`
+    override; cleanKeyframes validates both. Indexes: ensure-indexes --apply created 2+2 (and, found missing,
+    the five ARM-05/06 indexes nobody had applied: robot_arm_tags, _tag_calibrations, _poses, _move_sets,
+    _sequences).
+  - Server (src/lib/server/robot-arm-verified.ts): calibratePose (arm must be within 80 steps of the pose's
+    goals — "Go to pose first"; servos read, one detection with frame, servos read again, refused if a joint
+    moved > 15 steps; needs ≥ 1 arm tag; warns without a fixed tag; supersedes the previous reference, keeps
+    its tolerances), checkPose (no motion; residuals so the tolerances can be set above the jitter),
+    setPoseTolerances, retirePoseCalibration, listPoseCalibrations/getPoseCalibration; startVerifiedRun
+    (resolves the move set / sequence / pose, refuses a verified step without a reference or with a stale one,
+    plans the chunks), verifiedRunNext (play: writeAndPlay of the chunk from where the arm is, lastPlay untouched;
+    playing: Pi idle = chunk over, a foreign session = error; verify: torque back on if dropped, 0.8 s settle,
+    encoders + detection judged with the step's tolerances, camera shift undone on the fixed tags; pass → next
+    chunk / passed; FAIL → status failed, torque on, nothing retries), stopVerifiedRun. Every start/step/
+    outcome audited. robot-arm-animation.ts: writeAndPlay exported with lastPlay/audit options; requireIdle,
+    torqueBackOn, poseSummary exported. robot-arm-vision.ts: readServos, thumbnail exported.
+  - Actions (robot-arm-animate-actions.ts, shared by the three Animate pages; the sequence page now spreads
+    them too): poseCalibration, calibratePose, checkPose, setPoseTolerances, retirePoseCalibration,
+    verifiedStart/Next/Stop/Run.
+  - Browser: verified-run.svelte.ts drives a run one request at a time (waits out each chunk's length, then
+    polls each second; resume() picks a running run back up after a reload). arm-camera.ts shares the chosen
+    camera with the Vision tab. PoseCameraCard.svelte (under the pose editor on the library and move-set
+    pages): Go to pose → Capture reference, the picture with tags outlined, tolerance form, Check now with the
+    residuals per joint and per tag, retire. VerifiedRunPanel.svelte: chunk/step progress, ✓/✗ per step, the
+    failure and the camera at the last check, Stop. Pages: ◎ Play verified on library rows, the move-set
+    editor (per-step Camera check auto/on/off + mm/°/steps override, a ◎ marker per step) and the sequence
+    editor (+ camera picker).
+Checks: vitest src/lib/robot-arm 7 files / 162 passed; svelte-check 14 errors / 432 warnings (baseline);
+vite build: not waited for — the first attempt hit Node's 4 GB heap limit on this Windows laptop in the packaging step (a known environmental crash, see 2026-10 entries); svelte-check + unit tests are the gate here and Vercel builds the push on Linux. NOT run on the arm — see PRD §6 for the six things to try first.

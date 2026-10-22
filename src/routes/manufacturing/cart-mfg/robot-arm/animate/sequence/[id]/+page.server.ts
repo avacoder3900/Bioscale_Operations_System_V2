@@ -3,19 +3,31 @@ import { error, fail, redirect } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
 import { deriveArmHolder } from '$lib/server/robot-arm-lock';
 import { getSequence, listMoveSets, listPoses, playSequence, playbackActive, afterPlay, saveToPi, setSequenceArchived, stopPlayback, updateSequence, AnimateError } from '$lib/server/robot-arm-animation';
+import { sharedAnimateActions } from '$lib/server/robot-arm-animate-actions';
+import { activeVerifiedRun, listPoseCalibrations } from '$lib/server/robot-arm-verified';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals, params }) => {
 	if (!locals.user) redirect(302, '/login');
 	requirePermission(locals.user, 'manufacturing:read');
-	const [sequence, moveSets, poses, active, holder] = await Promise.all([getSequence(params.id), listMoveSets(), listPoses(), playbackActive().catch(() => null), deriveArmHolder().catch(() => null)]);
+	const [sequence, moveSets, poses, active, holder, poseCalibrations, verifiedRun] = await Promise.all([
+		getSequence(params.id),
+		listMoveSets(),
+		listPoses(),
+		playbackActive().catch(() => null),
+		deriveArmHolder().catch(() => null),
+		listPoseCalibrations().catch(() => []),
+		activeVerifiedRun().catch(() => null)
+	]);
 	if (!sequence) error(404, 'Sequence not found');
 	return {
 		sequence: JSON.parse(JSON.stringify(sequence)),
 		moveSets: JSON.parse(JSON.stringify(moveSets)),
 		poses: JSON.parse(JSON.stringify(poses)),
 		active,
-		holder: JSON.parse(JSON.stringify(holder ?? null))
+		holder: JSON.parse(JSON.stringify(holder ?? null)),
+		poseCalibrations: JSON.parse(JSON.stringify(poseCalibrations)),
+		verifiedRun: JSON.parse(JSON.stringify(verifiedRun ?? null))
 	};
 };
 
@@ -31,6 +43,9 @@ function failFrom(err: unknown) {
 }
 
 export const actions: Actions = {
+	// ARM-09 verified run actions (verifiedStart/Next/Stop/Run, pose references); this page's own play/stop/settle/playback below win.
+	...sharedAnimateActions,
+
 	save: async ({ request, locals, params }) => {
 		if (!locals.user) return fail(401, { error: 'Unauthorized' });
 		requirePermission(locals.user, 'manufacturing:write');

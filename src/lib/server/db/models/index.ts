@@ -147,6 +147,8 @@ export { RobotArmRecordingCleanup } from './robot-arm-recording-cleanup.js';
 export { RobotArmPose } from './robot-arm-pose.js';
 export { RobotArmMoveSet } from './robot-arm-move-set.js';
 export { RobotArmSequence } from './robot-arm-sequence.js';
+export { RobotArmPoseCalibration } from './robot-arm-pose-calibration.js';
+export { RobotArmVerifiedRun } from './robot-arm-verified-run.js';
 
 // Manufacturing Analytics
 export { ProcessAnalyticsEvent } from './process-analytics-event.js';

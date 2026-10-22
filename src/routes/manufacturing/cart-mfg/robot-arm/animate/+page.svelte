@@ -14,7 +14,13 @@
 	import { buildPath, flattenSequence, friendlyName, heatCheck, heatLevel, poseGroup, DEFAULT_RATE_HZ, SERVO_TEMP_STOP_C, type ResolvedKeyframe } from '$lib/robot-arm/animation';
 	import { Playback } from '$lib/robot-arm/playback.svelte';
 	import PoseEditor from '$lib/components/robot-arm/PoseEditor.svelte';
+	import PoseCameraCard from '$lib/components/robot-arm/PoseCameraCard.svelte';
+	import VerifiedRunPanel from '$lib/components/robot-arm/VerifiedRunPanel.svelte';
+	import { VerifiedRun } from '$lib/robot-arm/verified-run.svelte';
+	import { loadChosenCamera, pickCamera, saveChosenCamera } from '$lib/robot-arm/arm-camera';
 	import type { MoveSetSummary, PoseSummary, SequenceSummary } from '$lib/server/robot-arm-animation';
+	import type { PoseCalibrationSummary, VerifiedRunSummary } from '$lib/server/robot-arm-verified';
+	import type { CameraStatus } from '$lib/server/robot-arm-client';
 
 	let { data, form } = $props();
 
@@ -38,7 +44,30 @@
 	playback.onend = () => void invalidateAll();
 	onDestroy(() => playback.destroy());
 
-	const blocked = $derived(!armReachable || busyElsewhere || following || playback.running || playback.busy);
+	// ARM-09: pose camera references and the verified run. The camera is the one remembered from the Vision tab.
+	const poseCals = $derived((data.poseCalibrations ?? []) as PoseCalibrationSummary[]);
+	const cameraNames = $derived([...new Set([...((data.cameras ?? []) as CameraStatus[]).map((c) => c.name), ...poseCals.map((c) => c.cameraName)])]);
+	let chosenCamera = $state<string | null>(null);
+	const camera = $derived(pickCamera(cameraNames, chosenCamera, poseCals.map((c) => c.cameraName)));
+	function setCamera(n: string) {
+		chosenCamera = n;
+		saveChosenCamera(n);
+	}
+	const calFor = (poseId: string): PoseCalibrationSummary | null => poseCals.find((c) => c.poseId === poseId && c.cameraName === camera) ?? null;
+	const vr = new VerifiedRun();
+	vr.onend = () => void invalidateAll();
+	onDestroy(() => vr.destroy());
+	onMount(() => {
+		chosenCamera = loadChosenCamera();
+		const r = data.verifiedRun as VerifiedRunSummary | null;
+		if (r?.status === 'running') void vr.resume(r._id);
+	});
+	function verified(kind: 'move_set' | 'sequence', id: string, name: string) {
+		if (!camera) return;
+		if (confirm(`Verified run: the arm will MOVE through "${friendlyName(name)}" step by step, checking each verified pose with camera ${camera}. A failed check stops it. Is the path clear?`)) void vr.start(kind, id, camera);
+	}
+
+	const blocked = $derived(!armReachable || busyElsewhere || following || playback.running || playback.busy || vr.active || vr.busy);
 	const blockReason = $derived(
 		!armReachable
 			? 'The arm is unreachable — check the connection on the Control tab.'
@@ -46,9 +75,11 @@
 				? 'The follower is following the control arm — press Done first.'
 				: playback.running || playback.busy
 					? 'The arm is playing.'
-					: busyElsewhere
-						? 'The arm is running something — stop it first.'
-						: ''
+					: vr.active || vr.busy
+						? 'A verified run is in progress.'
+						: busyElsewhere
+							? 'The arm is running something — stop it first.'
+							: ''
 	);
 
 	// Which pose is in the editor: an id, or 'new'.
@@ -182,6 +213,8 @@
 		<div class="rounded border border-green-500/40 bg-green-900/10 p-3 text-sm text-green-300">{flash.success}</div>
 	{/if}
 
+	<VerifiedRunPanel {vr} />
+
 	<!-- playback -->
 	{#if playback.running || playback.busy || playback.outcome || playback.error}
 		<div class="{card} flex flex-wrap items-center gap-3 text-sm" style="border-color: {playback.running ? '#4ade80' : 'var(--color-tron-border)'}; background: var(--color-tron-surface);">
@@ -236,6 +269,9 @@
 					ongoto={goTo}
 					onclose={editPose ? () => (editing = 'new') : undefined}
 				/>
+				{#if editPose}
+					<PoseCameraCard pose={editPose} {camera} cameras={cameraNames} oncamera={setCamera} calibration={calFor(editPose._id)} arm={armNow} {armReachable} {blocked} {blockReason} ongoto={goTo} />
+				{/if}
 			{/key}
 		</div>
 
@@ -260,6 +296,7 @@
 					{:else}
 						<div class="flex items-center gap-1 px-1.5 py-1">
 							<button type="button" class="min-w-0 flex-1 truncate text-left text-sm" style="color: var(--color-tron-text)" title={p.notes ?? p.name} onclick={() => (editing = p._id)}>{label}</button>
+							{#if calFor(p._id)}<span class="text-[10px]" style="color: {calFor(p._id)?.stale ? '#fbbf24' : '#4ade80'}" title={calFor(p._id)?.stale ? 'Camera reference is stale (pose edited since) — retake' : `Camera reference for ${camera}`}>◎</span>{/if}
 							<button type="button" class="px-1 text-xs disabled:opacity-30" style="color: #fbbf24" title="Go to this pose" disabled={blocked || !!heat?.tooHot.length} onclick={() => goTo(p)}>▶</button>
 							<details class="relative">
 								<summary class="cursor-pointer list-none px-1 text-xs" style={muted} title="More">⋯</summary>
@@ -329,6 +366,9 @@
 							<button type="button" class="px-1 text-xs disabled:opacity-30" style="color: #fbbf24" title="Play on the arm"
 								disabled={blocked || !!heat?.tooHot.length || (ms ? !ms.keyframes.length : !sq!.items.length)}
 								onclick={() => play(isSets ? 'playMoveSet' : 'playSequence', r._id, r.name)}>▶</button>
+							<button type="button" class="px-1 text-xs disabled:opacity-30" style="color: #4ade80" title="Verified run: step by step, each verified pose checked with the camera ({camera || 'no camera'})"
+								disabled={blocked || !camera || !!heat?.tooHot.length || (ms ? !ms.keyframes.length : !sq!.items.length)}
+								onclick={() => verified(isSets ? 'move_set' : 'sequence', r._id, r.name)}>◎</button>
 						</li>
 					{/each}
 				</ul>

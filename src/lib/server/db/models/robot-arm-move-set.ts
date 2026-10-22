@@ -15,7 +15,15 @@ const keyframeSchema = new Schema(
 		durationS: { type: Number, default: 1 },
 		easing: { type: String, enum: ['ease', 'linear', 'in', 'out', 'flow'], default: 'ease' },
 		/** Per-servo steps on top of the pose for this keyframe only (timeline edits). */
-		offsets: { type: [Number], default: undefined }
+		offsets: { type: [Number], default: undefined },
+		/**
+		 * ARM-09: camera check at this step in a verified run. true = must be
+		 * checked (the run refuses to start without a reference), false = never,
+		 * absent = checked when the pose has a reference for the camera.
+		 */
+		verify: { type: Boolean, default: undefined },
+		/** ARM-09: this step's tolerances on top of the pose reference's (absent fields keep the reference's). */
+		tolerances: { type: new Schema({ positionMm: Number, angleDeg: Number, steps: Number }, { _id: false }), default: undefined }
 	},
 	{ _id: false }
 );

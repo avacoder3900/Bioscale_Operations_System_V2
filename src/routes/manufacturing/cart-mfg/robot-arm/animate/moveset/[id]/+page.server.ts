@@ -4,12 +4,20 @@ import { requirePermission } from '$lib/server/permissions';
 import { deriveArmHolder } from '$lib/server/robot-arm-lock';
 import { clearPoseDroop, getMoveSet, listPoses, playMoveSet, playbackActive, readArm, saveToPi, setMoveSetArchived, updateMoveSet } from '$lib/server/robot-arm-animation';
 import { failFrom, field, sharedAnimateActions, who } from '$lib/server/robot-arm-animate-actions';
+import { activeVerifiedRun, listPoseCalibrations } from '$lib/server/robot-arm-verified';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals, params }) => {
 	if (!locals.user) redirect(302, '/login');
 	requirePermission(locals.user, 'manufacturing:read');
-	const [moveSet, poses, active, holder] = await Promise.all([getMoveSet(params.id), listPoses(), playbackActive().catch(() => null), deriveArmHolder().catch(() => null)]);
+	const [moveSet, poses, active, holder, poseCalibrations, verifiedRun] = await Promise.all([
+		getMoveSet(params.id),
+		listPoses(),
+		playbackActive().catch(() => null),
+		deriveArmHolder().catch(() => null),
+		listPoseCalibrations().catch(() => []),
+		activeVerifiedRun().catch(() => null)
+	]);
 	if (!moveSet) error(404, 'Move set not found');
 	// Never read the servo bus while a session owns it.
 	const arm = active ? null : await readArm().catch(() => null);
@@ -18,7 +26,9 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 		poses: JSON.parse(JSON.stringify(poses)),
 		armNow: arm ? JSON.parse(JSON.stringify({ positions: arm.positions, temps: arm.temps, torqueOn: arm.torqueOn })) : null,
 		active,
-		holder: JSON.parse(JSON.stringify(holder ?? null))
+		holder: JSON.parse(JSON.stringify(holder ?? null)),
+		poseCalibrations: JSON.parse(JSON.stringify(poseCalibrations)),
+		verifiedRun: JSON.parse(JSON.stringify(verifiedRun ?? null))
 	};
 };
 

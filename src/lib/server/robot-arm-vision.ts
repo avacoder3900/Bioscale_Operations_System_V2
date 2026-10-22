@@ -423,7 +423,7 @@ export async function loadCalibrations(): Promise<{ active: CalibrationSummary[]
 	};
 }
 
-async function thumbnail(buf: Buffer): Promise<string> {
+export async function thumbnail(buf: Buffer): Promise<string> {
 	const t = await sharp(buf).rotate().resize({ width: THUMB_WIDTH, withoutEnlargement: true }).jpeg({ quality: 72 }).toBuffer();
 	return `data:image/jpeg;base64,${t.toString('base64')}`;
 }
@@ -433,7 +433,7 @@ async function requireArmFree(): Promise<void> {
 	if (active) throw new Error(`the arm is busy (${active.kind} run ${active.run_id}) — stop it first`);
 }
 
-interface ServoRead {
+export interface ServoRead {
 	steps: JointSteps;
 	readings: ServoReading[];
 	/** Which Pi route answered: /servos carries load/temp, /pose only steps. */
@@ -453,7 +453,7 @@ function requireHomeJoints(steps: JointSteps): void {
  * ported, so the fallback rarely helps, but both report the same raw encoder
  * step. Throws when neither gives all of servos 1–5.
  */
-async function readServos(): Promise<ServoRead> {
+export async function readServos(): Promise<ServoRead> {
 	let servosErr: unknown;
 	try {
 		const list = await robotArm.listServos();
