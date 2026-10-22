@@ -19,6 +19,8 @@ Checks:
      claimed as ok for poses never reached.
   4. The offset is capped at MAX_OFFSET on a blocked joint and the result
      says ok = False.
+  6. A header with hold_at_end (BIMS Animate) keeps torque ON at the end,
+     whether the replay finished or was stopped.
 
 Pure Python, no serial, no Pi packages. Also runnable on the dev PC.
 """
@@ -93,9 +95,12 @@ class FakeArms:
                 self.follower.write(i + 1, "Goal_Position", int(v))
 
 
-def recording(path: Path, poses: list[tuple[list[int], float, bool, str | None]], rate_hz: float = 50.0) -> None:
+def recording(path: Path, poses: list[tuple[list[int], float, bool, str | None]], rate_hz: float = 50.0, hold_at_end: bool = False) -> None:
     """poses: (goal[6], hold_s, settle?, pose_id). Each pose holds for hold_s frames at rate_hz."""
-    lines = [{"event": "header", "version": "1", "rate_hz": rate_hz, "follower_neutral": poses[0][0]}]
+    header = {"event": "header", "version": "1", "rate_hz": rate_hz, "follower_neutral": poses[0][0]}
+    if hold_at_end:
+        header["hold_at_end"] = True
+    lines = [header]
     t = 0.0
     for goal, hold_s, flag, pose in poses:
         n = max(1, int(hold_s * rate_hz))
@@ -197,6 +202,26 @@ def main() -> None:
     e = ev["settle"][0]
     check(e["ok"] is False and abs(e["written"][1] - A[1]) == rs.MAX_OFFSET, f"blocked: offset capped at +/-{rs.MAX_OFFSET}, ok=False (written {e['written'][1]} vs goal {A[1]})")
     check([k for k, _ in arms.logger.events][-1] == "replay.stop", "blocked: replay completed")
+
+    # 6. hold_at_end: torque stays on at the end (finished or stopped); the last goal is the last frame
+    p = tmp / "hold.jsonl"
+    recording(p, [(A, 0.04, False, None), (B, 0.04, False, None)], hold_at_end=True)
+    bus = FakeBus(droop)
+    arms = FakeArms(bus)
+    rs.replay_session_settling(arms, p, loops=1, stop_event=threading.Event())
+    torque = [(s, v) for s, n, v in bus.writes if n == "Torque_Enable"]
+    check(torque == [(s, 0) for s in range(1, 7)] + [(s, 1) for s in range(1, 7)], "hold: torque off/on at the start only, never off at the end")
+    check(goal_writes(bus)[-6:] == [(s, v) for s, v in zip(range(1, 7), B)], "hold: last goal is the last frame, so the arm holds it")
+    check(dict(arms.logger.events)["replay.stop"].get("held") is True, "hold: replay.stop says held")
+    p = tmp / "hold-long.jsonl"
+    recording(p, [(A, 0.3, False, None), (B, 3.0, False, None)], hold_at_end=True)
+    bus = FakeBus(droop)
+    arms = FakeArms(bus)
+    stop = threading.Event()
+    threading.Timer(0.15, stop.set).start()
+    rs.replay_session_settling(arms, p, loops=1, stop_event=stop)
+    torque = [(s, v) for s, n, v in bus.writes if n == "Torque_Enable"]
+    check(torque[-6:] == [(s, 1) for s in range(1, 7)], "hold: stopped mid-replay, torque still on")
 
     # 5. install() rebinds the name in a stand-in sessions module
     import types

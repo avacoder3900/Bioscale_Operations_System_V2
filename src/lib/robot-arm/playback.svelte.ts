@@ -6,10 +6,12 @@
  * Pi reports no active session, and estimates the playhead from the clock
  * (the Pi does not report progress). Each Animate page exposes the same
  * `playback`, `stop` and `settle` actions, so one helper serves all three.
+ * Go to pose is a one-pose play and runs through here too.
  *
- * When a play finishes on its own, the helper calls `settle` by itself: the
- * server nudges the arm onto the last pose and learns that pose's droop
- * correction (settleAfterPlay). Not after Stop — the arm is mid-path then.
+ * When a play finishes on its own, the helper calls `settle` by itself
+ * (afterPlay on the server): torque straight back on if the Pi dropped it,
+ * and, for a captured (reading) pose at the end, the droop correction. Not
+ * after Stop — the arm is mid-path then. `onend` lets the page refresh.
  */
 import { deserialize } from '$app/forms';
 
@@ -35,6 +37,8 @@ export class Playback {
 	/** What the automatic settle after the play did (or why it skipped). */
 	settled = $state<string | null>(null);
 	busy = $state(false);
+	/** Called once a play has ended and the after-play step is done (or after Stop). */
+	onend: (() => void) | null = null;
 	private timer: ReturnType<typeof setInterval> | null = null;
 
 	readonly elapsedS = $derived(this.running ? Math.max(0, (this.now - this.startedAt) / 1000) : 0);
@@ -112,6 +116,7 @@ export class Playback {
 				const s = r.data.stop as { torqueOn: boolean; error: string | null };
 				this.finish(s.torqueOn ? 'stopped — the arm is holding its position' : `stopped, but torque could NOT be re-enabled (${s.error}) — the arm may be limp`);
 			} else this.finish('stopped');
+			this.onend?.();
 		} catch (e) {
 			this.error = `Stop failed: ${e instanceof Error ? e.message : String(e)}`;
 		} finally {
@@ -119,18 +124,27 @@ export class Playback {
 		}
 	}
 
-	/** Automatic: correct the arm onto the last pose and learn its droop. */
+	/** Automatic, after a play ends: torque back on, then droop correction for captured poses. */
 	private async settle() {
 		const runId = this.runId;
 		if (!runId) return;
-		this.settled = 'Correcting for droop at the last pose…';
+		this.settled = 'Holding the last pose…';
 		try {
 			const r = await this.action('settle', { runId });
 			type PiPose = { poseName: string; trim: number[]; residual: number[]; rounds: number; ok: boolean };
-			type Settle = { poseName: string; skipped: string | null; pi: { poses: PiPose[] } | null; droop: { trim: number[]; rounds: number; warnings: string[] } | null };
+			type Settle = {
+				poseName: string;
+				skipped: string | null;
+				pi: { poses: PiPose[] } | null;
+				droop: { trim: number[]; rounds: number; warnings: string[] } | null;
+				torqueRestored: boolean;
+				torqueError: string | null;
+			};
 			const s = r.type === 'success' ? (r.data as { settle?: Settle } | undefined)?.settle : null;
-			if (!s) this.settled = r.type === 'failure' ? `Droop correction failed: ${String((r.data as { error?: string } | undefined)?.error ?? '')}` : null;
-			else if (s.skipped) this.settled = `Droop correction skipped: ${s.skipped}.`;
+			const torque = s?.torqueError ? `Torque could NOT be turned back on (${s.torqueError}) — the arm may be limp. ` : '';
+			if (!s) this.settled = r.type === 'failure' ? String((r.data as { error?: string } | undefined)?.error ?? '') : null;
+			else if (s.skipped === 'nothing to settle for this play' || s.skipped === 'already settled' || (!s.skipped && !s.pi && !s.droop)) this.settled = torque || null;
+			else if (s.skipped) this.settled = `${torque}Droop correction skipped: ${s.skipped}.`;
 			else if (s.pi) {
 				// The Pi settled each held pose during the replay (closed-loop route); nothing moved afterwards.
 				const parts = s.pi.poses.map((p) => {
@@ -144,8 +158,9 @@ export class Playback {
 				this.settled = `Settled on "${s.poseName}"${t.length ? ` — droop correction ${t.join(', ')}` : ' — no droop'} (learned; used from the next play).` + (s.droop.warnings.length ? ' ' + s.droop.warnings.join(' ') : '');
 			}
 		} catch (e) {
-			this.settled = `Droop correction failed: ${e instanceof Error ? e.message : String(e)}`;
+			this.settled = `After-play check failed: ${e instanceof Error ? e.message : String(e)}`;
 		}
+		this.onend?.();
 	}
 
 	private finish(outcome: string) {

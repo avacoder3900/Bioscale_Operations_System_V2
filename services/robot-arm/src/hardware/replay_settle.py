@@ -34,7 +34,9 @@ does not have):
   * `replay_session_settling` below is a drop-in with the same signature and
     the same behaviour (header check, replay.start / loop / stop events,
     torque off→on, ramp to `follower_neutral`, per-frame goal writes, torque
-    off at the end) plus the settle pass at flagged frames.
+    off at the end) plus the settle pass at flagged frames. Exception: a
+    header with `"hold_at_end": true` (BIMS Animate) keeps torque ON at the
+    end, so the arm holds the last pose instead of sagging off it.
   * The bus is `arms.follower` (FeetechBus): `read(sid, "Present_Position")`
     and `write(sid, "Goal_Position", steps)`, one servo at a time.
   * `install()` rebinds the name `replay_session` inside
@@ -299,9 +301,13 @@ def replay_session_settling(
                 )
             except Exception as exc:  # the webhook must never fail the replay
                 print(f"[replay_settle] settle event not logged: {exc}")
-        if arms.follower is not None:
+        # BIMS Animate recordings ask to keep holding (header `hold_at_end`,
+        # 2026-10-22): dropping torque here let the arm sag off the last pose
+        # every time, so it never ended where the move set put it. The last
+        # goal written is the last frame, so torque-on simply holds it.
+        if arms.follower is not None and not header.get("hold_at_end"):
             arms._write_all_torque(arms.follower, 0)
-    arms.logger.log_event("replay.stop", {"settled": len(results)})
+    arms.logger.log_event("replay.stop", {"settled": len(results), "held": bool(header.get("hold_at_end"))})
 
 
 def install() -> dict[str, Any]:

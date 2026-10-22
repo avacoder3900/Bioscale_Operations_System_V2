@@ -1,5 +1,7 @@
 # ARM-06 — Animate: poses by hand, move sets, sequences
 
+> **2026-10-22 redo — read §13 first.** Poses are now made with live sliders and stored as goals; Go to pose is a one-pose play; posing by hand (§2.1, §4) and the Jog panel (§12) are gone; torque is put back on after every session; servo temperatures gate every motion.
+
 **Status:** built 2026-10-21 on `feat/arm-animate`; not yet run on the arm. The by-hand capture flow needs
 one new Pi route (`POST /servos/hold`, §4); posing **with the control arm** (§8, 2026-10-21) needs no new
 route and is the recommended way to capture poses.
@@ -318,3 +320,97 @@ Not verified on the arm. To check: jog ±10 on the wrist and confirm the arm mov
 row's *Arm now* tracks it; rapid clicks land as their sum; a jog with torque off is refused with the
 Hold hint; *Save into pose* updates the pose row and the editor table; the Runs tab shows nothing
 (jogs are not sessions).
+
+## 13. Redo: live sliders, absolute moves, torque kept on (`feat/animate-redo`, 2026-10-22)
+
+**What the operator asked for.** (1) Clean up the UI so file names are not everywhere; (2) posing with
+the control arm must not turn torque off when a pose is taken; (3) temperature checks on the servos;
+(5) instead of the editable line graphs, a clear slider per servo with an axis, and the arm follows the
+slider live while a pose is edited, so posing is just jogging; and the question: *when pulling up a
+pose the arm often does not end up in the right spot — is it because it does not take into account the
+poses before it?*
+
+**Root causes found (production audit rows + code).**
+
+- *Torque off on a control-arm save.* Every pose saved with the control arm before this change logged
+  `torqueOnAtCapture: false` (7 of 7 on 2026-10-21/22). The live Pi writes follower torque OFF when a
+  teleop session stops, so `savePoseFromLeader`'s stop → 400 ms "settle" → read was really stop →
+  400 ms of sagging → read the sagged arm. The live replay loop does the same at the end of every play
+  (`replay_settle.py`'s `finally`, mirrored from `dual_arm.replay_session`), so the arm went limp at the
+  end of every Play too. The hold route (§4) was never installed (38 `hold_failed` rows).
+- *Go to pose landing off.* Go to was a chain of RELATIVE jogs — the Pi's jog sets
+  `goal = present + delta` — fired back to back while the arm was still moving. Each jog was measured
+  from wherever the arm happened to be at that instant (mid-move, or sagged), so where it stopped
+  depended on where it started and how it got there. That is the history dependence the operator saw.
+  The answer to the question: poses are absolute positions and should stay that way (relative,
+  cumulative moves would add up their errors); what was wrong was that the arm was *sent* there
+  relatively.
+- *Poses stored readings, not commands.* A pose was the encoder reading; played as a goal the arm sat a
+  droop short of it. §9–§11 grew up to compensate.
+
+**Fixes.**
+
+- **Absolute everywhere.** Go to pose is now a one-pose play: the same rendered path (lead-in from the
+  arm at 600 steps/s, then a 1 s hold) the Pi replays for a move set, so every servo gets absolute goals
+  and the arm ends in the same place whatever it did before. The live sliders use the Pi's existing
+  `POST /servos/{id}/move` (absolute goal; `robotArm.moveJoint`), falling back to a jog of
+  `goal − present` from a read taken at rest if an older Pi answers 404. No Goal_Speed is ever written
+  (the register persists and would slow later replays).
+- **Goal poses.** A pose made or saved with the sliders stores the goals the arm was given
+  (`pose.basis = 'goal'`). Played back it gets the same goals, so it lands where the operator saw it
+  (same goal, same sag) — no droop trim and no Pi settling (`ResolvedKeyframe.settle = false`;
+  `settleFrames` skips it). Older poses and control-arm captures are `reading` (the default) and keep
+  the §9–§11 trim/settle machinery. Saving a reading pose from the sliders turns it into a goal pose and
+  clears its trim.
+- **Torque never left off.** After a teleop stop (save or Done) BIMS turns torque straight back on
+  (`stopTeleopHolding`): the last goal is still the leader's position, so the follower lifts back onto it
+  and the 500 ms settle reads it under torque. After every play / go-to, `afterPlay` (was
+  `settleAfterPlay`) turns torque back on first if the replay dropped it. On the Pi,
+  `replay_settle.py` now keeps torque ON at the end when the recording header says `hold_at_end: true`
+  (every Animate recording does) — finished or stopped; simulated (`simulate_replay_settle.py` §6).
+  **Needs copying onto arm-pi** (same install as §11: copy `replay_settle.py` to `src/hardware/`,
+  restart with no session active); until then BIMS's torque-on after play covers it with a brief dip.
+  *Torque on* (status bar, only when torque is off) uses the hold route if present, else a plain
+  torque-on (servos return to their last goal — confirmed in a dialog). Posing by hand (torque off) is
+  removed: the sliders replace it and it was the one flow where a plain torque-on could jump.
+- **Temperatures.** `readArm` now returns each servo's temperature (already in `GET /servos`). Levels
+  (`heatLevel`): warm ≥ 48 °C, hot ≥ 55 °C (the Pi's own arm-health thresholds), stop ≥ 65 °C (the
+  STS3215 cuts its own torque near 70). Every motion — play, go-to, follow the control arm, each live
+  slider move — reads the arm first and is refused at ≥ 65 °C (`requireCool`); hot servos come back as
+  warnings. The status bar shows the hottest servo; the editor shows each servo's temperature, live.
+- **The pose editor** (`PoseEditor.svelte`, replaces `PoseJog.svelte` and the move-set editor's
+  editable curves): one row per servo — name, temperature, a slider with an axis of round step values
+  under it, ▼ the saved value and ● where the arm is, −10/−1/+1/+10, the number, the angle from centre.
+  The slider range is the travel the saved poses and the arm actually use, padded ±400 (min 1200 wide)
+  — `sliderRange`. *Live* needs the arm within 80 steps of the sliders (Go to pose first, or *start
+  from the arm*, which also writes the arm's position as its goal so the two agree). Then every slider
+  change is sent, one request at a time, in pieces of ≤ 120 steps from the last goal sent
+  (`stepToward`); the server refuses any single goal > 600 steps from the arm (`MAX_LIVE_STEP`). The arm
+  read is polled every 1.5 s only while nothing is being sent, and a move waits for a read in flight —
+  the Pi's `GET /servos` has no bus lock. *Save pose* / *Save as new* save the slider values (goals).
+  Per-move requests are not audited; the save that ends an edit is (`pose_edit` with before/after).
+- **UI.** The Animate tab is one screen: status (torque, hottest servo), the control-arm strip ("Follow
+  the control arm" for rough posing), the editor, and the pose library beside it — names shown through
+  `friendlyName` (no `.jsonl`, no recording timestamps; stored names unchanged), poses made together
+  ("<group> · <label>", e.g. a clean-up sent here) folded under their group, no raw numbers or notes
+  inline (notes are the tooltip), rename/archive behind ⋯. Move sets and sequences are compact lists with
+  ▶. The move-set editor is the keyframe list (timing/easing/hold for the selected step) beside the pose
+  editor for that step; "Save as new" there swaps the step to the new pose. Old timeline offsets still
+  play and can be dropped per step; Save to Pi and archive moved under "More". The sequence page keeps
+  its read-only path chart, with friendly names.
+
+**Files.** `src/lib/robot-arm/animation.ts` (+ tests: settle flag, heat, names, sliders),
+`src/lib/server/robot-arm-animation.ts` (liveMove, createPose / setPosePositions, goToPose as a play,
+stopTeleopHolding, afterPlay, requireCool), `src/lib/server/robot-arm-animate-actions.ts` (actions shared
+by the library and move-set pages), `src/routes/api/robot-arm/animate/live/+server.ts` (was `jog`),
+`src/lib/components/robot-arm/PoseEditor.svelte`, the three Animate pages, `playback.svelte.ts`,
+`robot-arm-pose.ts` (`basis`, `lastPlay`), `robot-arm-client.ts` (`moveJoint`),
+`services/robot-arm/src/hardware/replay_settle.py` + simulator.
+
+**To verify on the arm.** (1) Follow the control arm, save a pose: the audit row shows
+`torqueOnAtCapture: true` and the arm does not visibly drop. (2) Open a pose, Go to pose twice from two
+different starting positions: the arm ends at the same place both times. (3) Live: drag the shoulder
+slider; the arm follows within a fraction of a second; ● tracks it. If the Pi answers 404 on `/move`
+the note says so (jog fallback). (4) Temperatures show per servo; a play is refused when one reads
+≥ 65 °C. (5) After copying `replay_settle.py`: a play ends with torque on and `replay.stop` says
+`held: true`.

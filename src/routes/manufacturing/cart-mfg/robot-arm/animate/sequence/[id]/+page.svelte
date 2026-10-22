@@ -7,7 +7,7 @@
 	import { enhance } from '$app/forms';
 	import { onDestroy } from 'svelte';
 	import AnimationCurves from '$lib/components/robot-arm/AnimationCurves.svelte';
-	import { autoDurationS, buildPath, flattenSequence, keyframePositions, pathStats, tooFast, EASINGS, MAX_TRANSITION_S, MIN_TRANSITION_S, type Easing, type RenderedPath, type ResolvedKeyframe, type SequenceItem } from '$lib/robot-arm/animation';
+	import { autoDurationS, buildPath, flattenSequence, friendlyName, keyframePositions, pathStats, tooFast, EASINGS, MAX_TRANSITION_S, MIN_TRANSITION_S, type Easing, type RenderedPath, type ResolvedKeyframe, type SequenceItem } from '$lib/robot-arm/animation';
 	import { DEFAULT_JOINT_NAMES } from '$lib/robot-arm/recording-cleanup';
 	import { Playback } from '$lib/robot-arm/playback.svelte';
 	import type { MoveSetSummary, PoseSummary, SequenceItemRecord, SequenceSummary } from '$lib/server/robot-arm-animation';
@@ -105,7 +105,7 @@
 	<div class="flex flex-wrap items-center justify-between gap-3">
 		<div>
 			<a href="/manufacturing/cart-mfg/robot-arm/animate" class="text-xs underline" style="color: var(--color-tron-text-secondary)">← Animate</a>
-			<h1 class="text-xl font-bold" style="color: var(--color-tron-cyan)">Sequence: {sequence.name}</h1>
+			<h1 class="text-xl font-bold" style="color: var(--color-tron-cyan)">{friendlyName(sequence.name)}</h1>
 		</div>
 		<div class="text-xs" style="color: var(--color-tron-text-secondary)">
 			{#if stats}{stats.durationS.toFixed(1)} s · {stats.frames} frames · fastest servo {Math.max(...stats.maxStepsPerS)} steps/s{/if}
@@ -152,7 +152,7 @@
 						<td class="py-1 pr-2 font-mono" style="color: var(--color-tron-text-secondary)">{i + 1}</td>
 						<td class="py-1 pr-2">
 							<select bind:value={it.moveSetId} class={input} style={inputStyle}>
-								{#each activeMoveSets as m (m._id)}<option value={m._id}>{m.name} ({m.keyframes.length} poses)</option>{/each}
+								{#each activeMoveSets as m (m._id)}<option value={m._id}>{friendlyName(m.name)} ({m.keyframes.length} poses)</option>{/each}
 							</select>
 							{#if r?.missing}<span class="ml-1 text-red-300">missing or empty move set</span>{/if}
 						</td>
@@ -186,7 +186,7 @@
 			<label class="block text-xs" style="color: var(--color-tron-text-secondary)">Add move set
 				<select bind:value={addId} class="{input} mt-1 block w-56" style={inputStyle}>
 					<option value="">choose…</option>
-					{#each activeMoveSets as m (m._id)}<option value={m._id}>{m.name}</option>{/each}
+					{#each activeMoveSets as m (m._id)}<option value={m._id}>{friendlyName(m.name)}</option>{/each}
 				</select>
 			</label>
 			<button type="button" onclick={add} disabled={!addId} class="min-h-[34px] rounded px-3 text-sm font-semibold disabled:opacity-40" style={cyan}>Add</button>
@@ -202,13 +202,13 @@
 		{:else}
 			<button type="button" class={btn} style={amber} disabled={blocked || dirty || !flat.length || problems.length > 0 || playback.busy}
 				title={dirty ? 'Save first' : 'Tween from where the arm is to the first pose, then play the whole sequence'}
-				onclick={() => { if (confirm(`The arm will MOVE through "${sequence.name}" from where it is. Is the path clear?`)) playback.play('play', {}, sequence.name); }}>Play on the arm</button>
+				onclick={() => { if (confirm(`The arm will MOVE through "${sequence.name}" from where it is. Is the path clear?`)) playback.play('play', {}, friendlyName(sequence.name)); }}>Play on the arm</button>
 		{/if}
 		<form method="POST" action="?/saveToPi" use:enhance class="flex items-end gap-2">
-			<label class="block text-xs" style="color: var(--color-tron-text-secondary)">Save on the Pi as recording<input name="recordingName" required maxlength="100" value={sequence.name} class="{input} mt-1 block w-56" style={inputStyle} /></label>
+			<label class="block text-xs" style="color: var(--color-tron-text-secondary)">Save on the Pi as recording<input name="recordingName" required maxlength="100" value={friendlyName(sequence.name)} class="{input} mt-1 block w-56" style={inputStyle} /></label>
 			<button type="submit" class="min-h-[34px] rounded px-3 text-sm font-semibold disabled:opacity-40" style={cyan} disabled={dirty || !flat.length}>Save to Pi</button>
 		</form>
-		{#if sequence.savedAs.length}<span class="text-xs" style="color: var(--color-tron-text-secondary)">last saved as {sequence.savedAs[sequence.savedAs.length - 1].name}</span>{/if}
+		{#if sequence.savedAs.length}<span class="text-xs" style="color: var(--color-tron-text-secondary)">saved on the Pi</span>{/if}
 		<span class="grow"></span>
 		<form method="POST" action="?/archive" use:enhance onsubmit={(e) => { if (!confirm('Archive this sequence?')) e.preventDefault(); }}>
 			<button type="submit" class="text-xs underline" style="color: var(--color-tron-text-secondary)">archive</button>

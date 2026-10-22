@@ -3,20 +3,30 @@
  *
  * Pure decisions live in $lib/robot-arm/animation (easing, path rendering,
  * sequence flattening, the Pi's recording format), unit-tested. This module
- * owns the pose / move-set / sequence records, the two capture flows (with
- * the control arm, or by hand), and playback: render the path from where
- * the arm is now, write it to the Pi as a scratch recording, start a replay.
+ * owns the pose / move-set / sequence records, posing (live sliders, or the
+ * control arm), and playback: render the path from where the arm is now,
+ * write it to the Pi as a scratch recording, start a replay.
+ *
+ * The 2026-10-22 redo (PRD §13) in one paragraph: every move is ABSOLUTE.
+ * A pose made with the sliders stores the goals the operator set, and the
+ * arm is always sent to a pose as a rendered path of absolute goals (Go to
+ * pose is a one-pose play), so it ends in the same place whatever it did
+ * before. The old Go to chained relative jogs (goal = present + 300) fired
+ * while the arm was still moving, so where it stopped depended on where it
+ * started. Torque is never left off: the Pi drops follower torque when a
+ * session stops, so BIMS turns it straight back on (the servos return to
+ * their last goal, which is the pose).
  *
  * Pi calls:
- *   GET  /servos                 follower positions + torque state
+ *   GET  /servos                 follower positions, temperatures, torque state
+ *   POST /servos/{id}/move       live slider: one servo to an absolute goal
+ *   POST /servos/{id}/jog        fallback for /move on an older Pi; droop settle
  *   POST /teleop/start           follower tracks the control (leader) arm under torque
- *   POST /sessions/stop          pause/stop that (the follower holds its last goal)
- *   POST /torque                 torque OFF so the operator can pose by hand
- *   POST /servos/hold            goal := present, torque ON (no jump) — hold.py
- *   POST /servos/{id}/jog        go to a pose (≤300 steps per jog); measure a pose's droop;
- *                                nudge one joint live while adjusting a pose (jogArm)
+ *   POST /sessions/stop          stop that / a play
+ *   POST /torque                 torque back ON after a session dropped it
+ *   POST /servos/hold            goal := present, torque ON (no jump) — hold.py, if installed
  *   POST /recordings/restore     write the rendered path
- *   POST /replay/start           play it;  POST /sessions/stop  stop
+ *   POST /replay/start           play it
  */
 import { connectDB, AuditLog, generateId } from '$lib/server/db';
 import { RobotArmMoveSet, RobotArmPose, RobotArmRun, RobotArmSequence } from '$lib/server/db/models';
@@ -28,9 +38,11 @@ import {
 	cleanAnimationName,
 	cleanKeyframes,
 	cleanOffsets,
+	cleanPositions,
 	estimateTrim,
 	composeAnimationJsonl,
 	flattenSequence,
+	heatCheck,
 	isEasing,
 	jogChunks,
 	keyframePositions,
@@ -39,13 +51,15 @@ import {
 	tooFast,
 	trimFromSettle,
 	DEFAULT_RATE_HZ,
+	ENCODER_MAX,
 	JOG_CHUNK_STEPS,
-	MAX_JOG_STEPS,
+	MAX_LIVE_STEP,
 	MAX_OFFSET_STEPS,
 	MAX_TRANSITION_S,
 	MAX_TRIM_STEPS,
 	MIN_TRANSITION_S,
 	SERVO_COUNT,
+	SERVO_TEMP_STOP_C,
 	TRIM_DONE_STEPS,
 	TRIM_SERVOS,
 	type Easing,
@@ -58,13 +72,12 @@ import {
 
 type User = { _id: string; username: string };
 
-/** Scratch recording every Play writes on the Pi (overwritten each time). */
+/** Scratch recording every Play / Go to writes on the Pi (overwritten each time). */
 export const PREVIEW_RECORDING = 'animate-preview';
 /** The Pi caps one jog at 300 steps. */
 const JOG_CHUNK = JOG_CHUNK_STEPS;
-/** Go-to-pose refuses bigger per-servo moves. */
-const MAX_GOTO_STEPS = 1500;
-const GOTO_DEADBAND = 3;
+/** Go to pose holds the pose this long at the end (time for the Pi to settle a reading pose). */
+const GOTO_HOLD_S = 1;
 
 export class AnimateError extends Error {
 	constructor(
@@ -88,6 +101,7 @@ async function audit(user: User, action: string, tableName: string, recordId: st
 }
 
 const opRef = (u: User) => ({ _id: u._id, username: u.username });
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 function cleanName(raw: unknown, what: string): string {
 	const name = String(raw ?? '').trim();
@@ -105,6 +119,8 @@ function cleanNotes(raw: unknown): string | null {
 
 export interface ArmNow {
 	positions: number[];
+	/** °C per servo (index = id − 1); null where the Pi did not report one. */
+	temps: (number | null)[];
 	/** All six torque-on; null when the Pi does not report it. */
 	torqueOn: boolean | null;
 	servos: ServoState[];
@@ -116,7 +132,7 @@ function servoMessage(err: unknown): string {
 	return msg;
 }
 
-/** Follower positions (servo 1..6) and torque state. Read-only, no session needed. */
+/** Follower positions (servo 1..6), temperatures and torque state. Read-only, no session needed. */
 export async function readArm(): Promise<ArmNow> {
 	let servos: ServoState[];
 	try {
@@ -126,14 +142,30 @@ export async function readArm(): Promise<ArmNow> {
 	}
 	if (!Array.isArray(servos) || !servos.length) throw new AnimateError('The follower reported no servos.', 502);
 	const positions: number[] = [];
+	const temps: (number | null)[] = [];
 	for (let sid = 1; sid <= SERVO_COUNT; sid++) {
 		const s = servos.find((x) => x?.id === sid);
 		if (!s || !Number.isFinite(s.position)) throw new AnimateError(`Servo ${sid} did not report a position.`, 502);
 		positions.push(Math.round(s.position));
+		temps.push(Number.isFinite(s.temperature) ? Number(s.temperature) : null);
 	}
 	const torques = servos.filter((s) => s.id >= 1 && s.id <= SERVO_COUNT).map((s) => s.torque);
 	const torqueOn = torques.every((t) => typeof t === 'boolean') ? torques.every(Boolean) : null;
-	return { positions, torqueOn, servos };
+	return { positions, temps, torqueOn, servos };
+}
+
+/**
+ * Refuse to start a motion when a servo is at or above SERVO_TEMP_STOP_C:
+ * the STS3215 cuts its own torque at ~70 °C, and a joint that quits mid-move
+ * drops the arm. Hot-but-allowed servos come back as warnings.
+ */
+export function requireCool(now: ArmNow): string[] {
+	const h = heatCheck(now.temps);
+	if (h.tooHot.length) {
+		const list = h.tooHot.map((sid) => `servo ${sid} ${now.temps[sid - 1]} °C`).join(', ');
+		throw new AnimateError(`Too hot to move: ${list} (limit ${SERVO_TEMP_STOP_C} °C). Let the arm rest with torque on, or power it down, until it cools.`, 409);
+	}
+	return h.hot.length ? [`Running warm: ${h.hot.map((sid) => `servo ${sid} ${now.temps[sid - 1]} °C`).join(', ')}.`] : [];
 }
 
 async function requireIdle() {
@@ -147,16 +179,23 @@ async function requireIdle() {
 }
 
 /**
- * Pose by hand: drop torque so the operator can move the follower. The arm
- * sags — the operator supports it. Ends with savePoseFromArm or holdArm.
+ * Torque back on after a session ended. The Pi's teleop and (older) replay
+ * loops write torque OFF when they stop, which lets the arm sag off where it
+ * was. Turning it on drives each servo back to its last goal — the pose the
+ * session left it at — so this is a small lift back, not a jump. One retry.
  */
-export async function poseByHand(user: User): Promise<ArmNow> {
-	await connectDB();
-	await requireIdle();
-	const before = await readArm();
-	await robotArm.setTorque(false);
-	await audit(user, 'robot_arm.animate.pose_by_hand', 'robot_arm_poses', 'arm', { positions: before.positions });
-	return { ...before, torqueOn: false };
+async function torqueBackOn(): Promise<{ ok: boolean; error: string | null }> {
+	let error: string | null = null;
+	for (let i = 0; i < 2; i++) {
+		if (i) await sleep(300);
+		try {
+			await robotArm.setTorque(true);
+			return { ok: true, error: null };
+		} catch (e) {
+			error = (e as Error).message;
+		}
+	}
+	return { ok: false, error };
 }
 
 export interface HoldResult {
@@ -166,41 +205,119 @@ export interface HoldResult {
 }
 
 /**
- * Torque back on where the arm is, with no jump. Needs the Pi's hold route;
- * without it, torque stays OFF (a bare torque-on would throw the arm back to
- * its last goal) and the operator is told what to install.
+ * Torque on. Prefers the Pi's hold route (goal := present first, so nothing
+ * moves); without it (404 — never installed on arm-pi as of 2026-10-22) a
+ * plain torque-on sends each servo to its last goal, which after a play or a
+ * control-arm session is where the arm already is. The page warns before
+ * calling this.
  */
 export async function holdArm(user: User): Promise<HoldResult> {
 	await connectDB();
+	await requireIdle();
 	try {
 		const r = await robotArm.holdServos();
-		await audit(user, 'robot_arm.animate.hold', 'robot_arm_poses', 'arm', { positions: r.positions });
+		await audit(user, 'robot_arm.animate.hold', 'robot_arm_poses', 'arm', { positions: r.positions, via: 'hold' });
 		return { held: !!r.held, error: r.held ? null : 'The Pi did not confirm the hold.' };
 	} catch (err) {
 		const msg = (err as Error).message ?? String(err);
-		const error = /robot-arm 404/.test(msg)
-			? 'The Pi has no POST /servos/hold route yet (services/robot-arm/scripts/install_hold_router.py). Torque is still OFF — support the arm; do not re-enable torque from the Control tab unless the arm is back where it was.'
-			: `Torque is still OFF: ${msg}`;
-		await audit(user, 'robot_arm.animate.hold_failed', 'robot_arm_poses', 'arm', { error });
-		return { held: false, error };
+		if (!/robot-arm 404/.test(msg)) return { held: false, error: `Torque is still OFF: ${msg}` };
 	}
+	const t = await torqueBackOn();
+	await audit(user, 'robot_arm.animate.hold', 'robot_arm_poses', 'arm', { via: 'torque', ok: t.ok, error: t.error });
+	return { held: t.ok, error: t.ok ? null : `Torque is still OFF: ${t.error}` };
+}
+
+// ── live sliders ─────────────────────────────────────────────────────────
+//
+// Each slider drives one servo of the real arm to an ABSOLUTE goal, so
+// posing is just moving sliders and watching the arm. The browser sends at
+// most a short step from its last goal per request (stepToward) and only one
+// request at a time, which also keeps the Pi's non-thread-safe bus to one
+// caller: every request reads the arm first (temperature, torque, how far the
+// move is) and then writes the goals.
+
+export interface LiveResult {
+	/** Goals written, by servo id. */
+	goals: Record<number, number>;
+	/** The arm as read just before the goals were written. */
+	positions: number[];
+	temps: (number | null)[];
+	torqueOn: boolean | null;
+	warnings: string[];
+	/** 'move' = absolute goal route; 'jog' = older Pi without it (goal = present + delta). */
+	via: 'move' | 'jog';
+}
+
+/** Set by the first 404 from /servos/{id}/move; the jog fallback is used from then on. */
+let moveRouteMissing = false;
+
+/**
+ * Send servos to absolute goals (live slider). Refused while a session owns
+ * the arm, when torque is off, when a servo is too hot, or when a goal is
+ * more than MAX_LIVE_STEP from where the servo is (a slider is never that
+ * far ahead of the arm). The arm MOVES. Not audited per move — the pose
+ * save that ends an edit is.
+ */
+export async function liveMove(input: { goals: unknown }): Promise<LiveResult> {
+	const raw = input.goals && typeof input.goals === 'object' ? (input.goals as Record<string, unknown>) : null;
+	if (!raw) throw new AnimateError('goals must be { servoId: position }.');
+	const goals: Record<number, number> = {};
+	for (const [k, v] of Object.entries(raw)) {
+		const sid = Number(k);
+		const pos = Math.round(Number(v));
+		if (!Number.isInteger(sid) || sid < 1 || sid > SERVO_COUNT) throw new AnimateError(`Servo must be 1..${SERVO_COUNT}.`);
+		if (!Number.isFinite(pos)) throw new AnimateError(`Servo ${sid}: position is not a number.`);
+		goals[sid] = Math.max(0, Math.min(ENCODER_MAX, pos));
+	}
+	if (!Object.keys(goals).length) throw new AnimateError('Nothing to move.');
+	await requireIdle();
+	const now = await readArm();
+	if (now.torqueOn === false) throw new AnimateError('Torque is off — press Torque on first.', 409);
+	const warnings = requireCool(now);
+	for (const [k, pos] of Object.entries(goals)) {
+		const sid = Number(k);
+		const d = pos - now.positions[sid - 1];
+		if (Math.abs(d) > MAX_LIVE_STEP) throw new AnimateError(`Servo ${sid} is ${Math.abs(d)} steps from that value — more than ${MAX_LIVE_STEP} in one move. Use Go to pose for big moves.`, 409);
+	}
+	let via: LiveResult['via'] = moveRouteMissing ? 'jog' : 'move';
+	for (const [k, pos] of Object.entries(goals)) {
+		const sid = Number(k);
+		try {
+			if (via === 'move') {
+				try {
+					await robotArm.moveJoint(sid, pos);
+					continue;
+				} catch (err) {
+					if (!/robot-arm 404/.test((err as Error).message ?? '')) throw err;
+					moveRouteMissing = true;
+					via = 'jog';
+				}
+			}
+			// Older Pi: a jog of (goal − present) from the read just taken. Exact while the
+			// arm is at rest, which a slider-paced edit almost always is.
+			for (const piece of jogChunks(pos - now.positions[sid - 1], JOG_CHUNK)) await robotArm.jogJoint(sid, piece);
+		} catch (err) {
+			const msg = (err as Error).message ?? String(err);
+			if (/robot-arm 409/.test(msg)) throw new AnimateError(/torque/i.test(msg) ? `Torque is off on servo ${sid} — press Torque on first.` : `The arm is busy: ${msg}`, 409);
+			throw new AnimateError(`Servo ${sid} did not move: ${msg}`, 502);
+		}
+	}
+	return { goals, positions: now.positions, temps: now.temps, torqueOn: now.torqueOn, warnings, via };
 }
 
 // ── pose with the control (leader) arm ───────────────────────────────────
 //
-// Posing by hand needs torque OFF, so the follower sags under its own weight
-// and the encoders read the sagged position, not the one the operator meant;
-// and torque-on afterwards needs the hold route or the arm jumps. Posing with
-// the control arm avoids both: a teleop session snaps the follower's goal to
-// where it is, turns torque ON and then drives it to wherever the leader is,
-// so the follower is always powered and always where the operator put it.
+// A teleop session snaps the follower's goal to where it is, turns torque ON
+// and then drives it to wherever the leader is, so the follower is powered
+// and where the operator put it. Good for getting roughly into a pose fast;
+// the sliders finish it.
 
 /** Stamped on the teleop runs the Animate tab starts, so the Runs tab can tell them apart. */
 export const LEADER_POSING_STEP = 'animate-pose';
 /** Teleop rate while posing; the follower only has to keep up with a hand. */
 const LEADER_POSING_RATE_HZ = 30;
-/** After a teleop stop the follower is still settling on its last goal; wait before reading it. */
-const SETTLE_MS = 400;
+/** After the stop + torque-on the follower is still lifting back onto its last goal; wait before reading it. */
+const SETTLE_MS = 500;
 
 export interface LeaderPosing {
 	runId: string;
@@ -241,7 +358,25 @@ export async function leaderPosingActive(): Promise<LeaderPosing | null> {
 export async function startLeaderPosing(user: User): Promise<LeaderPosing> {
 	await connectDB();
 	await requireIdle();
+	requireCool(await readArm());
 	return startTeleopForPosing(user, 'start');
+}
+
+/**
+ * Stop the teleop session and put torque straight back on. The Pi writes
+ * torque OFF on the follower when teleop stops (every control-arm save before
+ * 2026-10-22 logged torqueOnAtCapture: false — the arm was read after sagging
+ * for 400 ms). The last goal is still the leader's position, so torque-on
+ * brings the follower back up onto it.
+ */
+async function stopTeleopHolding(): Promise<{ stoppedRunId: string | null; torque: { ok: boolean; error: string | null } }> {
+	let stoppedRunId: string | null;
+	try {
+		stoppedRunId = (await robotArm.stop()).stopped_run_id ?? null;
+	} catch (err) {
+		throw new AnimateError(`Could not stop following the control arm: ${(err as Error).message}`, 502);
+	}
+	return { stoppedRunId, torque: await torqueBackOn() };
 }
 
 export interface LeaderPoseResult {
@@ -249,41 +384,39 @@ export interface LeaderPoseResult {
 	/** The follower is following the control arm again (a new teleop run). */
 	resumed: boolean;
 	runId: string | null;
-	/** Why it is not following, when it is not. The follower holds the pose under torque either way. */
+	/** Why it is not following, when it is not. */
 	warning: string | null;
 }
 
 /**
  * Save the follower's position while posing with the control arm. The Pi's
- * driver is not thread-safe and the teleop thread owns the bus, so the bus
- * is never read mid-session: stop the session (the follower keeps torque and
- * its last goal, so it holds the pose), let it settle, read it, save, then
- * start a fresh teleop so the operator can carry on to the next pose.
+ * driver is not thread-safe and the teleop thread owns the bus, so it is
+ * never read mid-session: stop (torque straight back on), let it settle on
+ * the leader's last position, read it, save, then start a fresh teleop so the
+ * operator carries on. The pose is a READING (droop-corrected when played).
  */
 export async function savePoseFromLeader(user: User, input: { name: unknown; notes?: unknown; resume: boolean }): Promise<LeaderPoseResult> {
 	await connectDB();
 	const name = cleanName(input.name, 'pose');
 	await assertPoseNameFree(name);
 	const posing = await leaderPosingActive();
-	if (!posing) throw new AnimateError('The follower is not following the control arm — press "Pose with the control arm" first.', 409);
-	try {
-		await robotArm.stop();
-	} catch (err) {
-		throw new AnimateError(`Could not pause the control arm: ${(err as Error).message}`, 502);
-	}
-	await new Promise((r) => setTimeout(r, SETTLE_MS));
+	if (!posing) throw new AnimateError('The follower is not following the control arm — press "Follow the control arm" first.', 409);
+	const stop = await stopTeleopHolding();
+	await sleep(SETTLE_MS);
 	const now = await readArm();
 	const _id = generateId();
-	await RobotArmPose.create({ _id, name, positions: now.positions, notes: cleanNotes(input.notes), createdBy: opRef(user) });
+	await RobotArmPose.create({ _id, name, positions: now.positions, basis: 'reading', notes: cleanNotes(input.notes), createdBy: opRef(user) });
 	await audit(user, 'robot_arm.animate.pose_save', 'robot_arm_poses', _id, {
 		name,
 		positions: now.positions,
+		basis: 'reading',
 		torqueOnAtCapture: now.torqueOn,
+		torqueRestored: stop.torque.ok,
+		temps: now.temps,
 		source: 'leader',
 		pausedRunId: posing.runId
 	});
-	let warning: string | null =
-		now.torqueOn === false ? 'The follower reports torque OFF, so it may not be holding the pose — press Hold (torque on) before moving on.' : null;
+	let warning: string | null = !stop.torque.ok || now.torqueOn === false ? `Torque could not be turned back on (${stop.torque.error ?? 'the servos report it off'}), so the pose may be low — check it.` : null;
 	let resumed = false;
 	let runId: string | null = null;
 	if (input.resume) {
@@ -291,62 +424,63 @@ export async function savePoseFromLeader(user: User, input: { name: unknown; not
 			runId = (await startTeleopForPosing(user, 'after pose_save')).runId;
 			resumed = true;
 		} catch (err) {
-			warning = [warning, `Saved, but the follower is no longer following the control arm: ${(err as Error).message} It is holding where it is.`]
-				.filter(Boolean)
-				.join(' ');
+			warning = [warning, `Saved, but the follower is no longer following the control arm: ${(err as Error).message} It is holding where it is.`].filter(Boolean).join(' ');
 		}
 	}
 	return { pose: poseSummary(await RobotArmPose.findById(_id).lean()), resumed, runId, warning };
 }
 
-/** Done posing: stop the teleop session. The follower keeps torque and holds its last goal; the leader stays limp. */
-export async function stopLeaderPosing(user: User): Promise<{ stoppedRunId: string | null }> {
+/** Done posing: stop the teleop session and keep the follower holding (torque back on). */
+export async function stopLeaderPosing(user: User): Promise<{ stoppedRunId: string | null; torqueOn: boolean; error: string | null }> {
 	await connectDB();
 	const posing = await leaderPosingActive();
-	if (!posing) return { stoppedRunId: null };
-	let stoppedRunId: string | null;
-	try {
-		stoppedRunId = (await robotArm.stop()).stopped_run_id ?? null;
-	} catch (err) {
-		throw new AnimateError(`Stop failed: ${(err as Error).message}`, 502);
-	}
-	await audit(user, 'robot_arm.animate.leader_posing_stop', 'robot_arm_poses', 'arm', { runId: stoppedRunId });
-	return { stoppedRunId };
+	if (!posing) return { stoppedRunId: null, torqueOn: true, error: null };
+	const r = await stopTeleopHolding();
+	await audit(user, 'robot_arm.animate.leader_posing_stop', 'robot_arm_poses', 'arm', { runId: r.stoppedRunId, torqueOn: r.torque.ok, error: r.torque.error });
+	return { stoppedRunId: r.stoppedRunId, torqueOn: r.torque.ok, error: r.torque.error };
 }
 
 // ── poses ────────────────────────────────────────────────────────────────
+
+export type PoseBasis = 'goal' | 'reading';
 
 export interface PoseSummary {
 	_id: string;
 	name: string;
 	positions: number[];
-	/** Droop trim added to the goal when played (six entries), or null if never measured. */
+	/** goal = set with the sliders, played exactly; reading = encoder capture, droop-corrected. */
+	basis: PoseBasis;
+	/** Droop trim added to the goal when played (six entries), or null if never measured. Reading poses only. */
 	trim: number[] | null;
 	trimMeasuredAt: string | null;
 	notes: string | null;
 	archived: boolean;
 	createdAt: string | null;
+	updatedAt: string | null;
 	createdBy: { username?: string } | null;
 }
 
 function poseSummary(d: any): PoseSummary {
-	const trim = Array.isArray(d.trim) && d.trim.length === SERVO_COUNT ? d.trim.map(Number) : null;
+	const basis: PoseBasis = d.basis === 'goal' ? 'goal' : 'reading';
+	const trim = basis === 'reading' && Array.isArray(d.trim) && d.trim.length === SERVO_COUNT ? d.trim.map(Number) : null;
 	return {
 		_id: String(d._id),
 		name: d.name,
 		positions: (d.positions ?? []).map(Number),
+		basis,
 		trim,
 		trimMeasuredAt: d.trimMeasuredAt ? new Date(d.trimMeasuredAt).toISOString() : null,
 		notes: d.notes ?? null,
 		archived: !!d.archivedAt,
 		createdAt: d.createdAt ? new Date(d.createdAt).toISOString() : null,
+		updatedAt: d.updatedAt ? new Date(d.updatedAt).toISOString() : null,
 		createdBy: d.createdBy ?? null
 	};
 }
 
 export async function listPoses(): Promise<PoseSummary[]> {
 	await connectDB();
-	const rows = await RobotArmPose.find({}).sort({ archivedAt: 1, createdAt: -1 }).lean();
+	const rows = await RobotArmPose.find({}).select('-lastPlay').sort({ archivedAt: 1, createdAt: -1 }).lean();
 	return (rows as any[]).map(poseSummary);
 }
 
@@ -361,38 +495,74 @@ async function assertPoseNameFree(name: string, exceptId?: string) {
 	if (clash) throw new AnimateError(`A pose called "${name}" already exists.`);
 }
 
+function positionsOrThrow(raw: unknown): number[] {
+	try {
+		return cleanPositions(raw);
+	} catch (e) {
+		throw new AnimateError((e as Error).message);
+	}
+}
+
 /**
- * Save the follower's current position as a pose, then (when `hold`) bring
- * torque back on without a jump. The pose is saved even if the hold fails —
- * the arm is still in it.
+ * A new pose from the sliders: `positions` are the goals the operator set
+ * (basis goal). Without positions, the arm's encoders are read instead
+ * (basis reading) — "save where the arm is".
  */
-export async function savePoseFromArm(user: User, input: { name: unknown; notes?: unknown; hold: boolean }): Promise<{ pose: PoseSummary; hold: HoldResult | null }> {
+export async function createPose(user: User, input: { name: unknown; notes?: unknown; positions?: unknown }): Promise<PoseSummary> {
 	await connectDB();
 	const name = cleanName(input.name, 'pose');
 	await assertPoseNameFree(name);
-	const now = await readArm();
+	let positions: number[];
+	let basis: PoseBasis;
+	let temps: (number | null)[] | null = null;
+	if (input.positions != null) {
+		positions = positionsOrThrow(input.positions);
+		basis = 'goal';
+	} else {
+		await requireIdle();
+		const now = await readArm();
+		positions = now.positions;
+		temps = now.temps;
+		basis = 'reading';
+	}
 	const _id = generateId();
-	await RobotArmPose.create({ _id, name, positions: now.positions, notes: cleanNotes(input.notes), createdBy: opRef(user) });
-	await audit(user, 'robot_arm.animate.pose_save', 'robot_arm_poses', _id, { name, positions: now.positions, torqueOnAtCapture: now.torqueOn });
-	const hold = input.hold ? await holdArm(user) : null;
-	const doc = await RobotArmPose.findById(_id).lean();
-	return { pose: poseSummary(doc), hold };
+	await RobotArmPose.create({ _id, name, positions, basis, notes: cleanNotes(input.notes), createdBy: opRef(user) });
+	await audit(user, 'robot_arm.animate.pose_save', 'robot_arm_poses', _id, { name, positions, basis, source: basis === 'goal' ? 'sliders' : 'arm', ...(temps ? { temps } : {}) });
+	return poseSummary(await RobotArmPose.findById(_id).lean());
 }
 
-export async function updatePose(user: User, id: string, input: { name: unknown; notes?: unknown; fromArm?: boolean }): Promise<PoseSummary> {
+/**
+ * Save the sliders into an existing pose. It becomes a goal pose: played
+ * exactly as set, so any droop trim (which only made sense for a reading) is
+ * dropped. Every move set using the pose follows.
+ */
+export async function setPosePositions(user: User, id: string, raw: unknown): Promise<{ pose: PoseSummary; moved: number[] }> {
+	await connectDB();
+	const before = (await RobotArmPose.findById(id).lean()) as any;
+	if (!before) throw new AnimateError('Pose not found.', 404);
+	if (before.archivedAt) throw new AnimateError('That pose is archived — restore it first.');
+	const positions = positionsOrThrow(raw);
+	const old: number[] = (before.positions ?? []).map(Number);
+	await RobotArmPose.updateOne({ _id: id }, { $set: { positions, basis: 'goal', trim: [], trimMeasuredAt: null, trimMeasuredBy: null } });
+	await audit(user, 'robot_arm.animate.pose_edit', 'robot_arm_poses', id, {
+		name: before.name,
+		before: old,
+		after: positions,
+		beforeBasis: before.basis ?? 'reading',
+		clearedTrim: Array.isArray(before.trim) && before.trim.length ? before.trim : null
+	});
+	return { pose: poseSummary(await RobotArmPose.findById(id).lean()), moved: positions.map((p, i) => p - (old[i] ?? p)) };
+}
+
+export async function updatePose(user: User, id: string, input: { name: unknown; notes?: unknown }): Promise<PoseSummary> {
 	await connectDB();
 	const before = (await RobotArmPose.findById(id).lean()) as any;
 	if (!before) throw new AnimateError('Pose not found.', 404);
 	const name = cleanName(input.name, 'pose');
 	await assertPoseNameFree(name, id);
-	const set: Record<string, unknown> = { name, notes: cleanNotes(input.notes) };
-	if (input.fromArm) {
-		set.positions = (await readArm()).positions;
-		// A droop trim was measured at the old position; it no longer applies.
-		Object.assign(set, { trim: [], trimMeasuredAt: null, trimMeasuredBy: null });
-	}
+	const set = { name, notes: cleanNotes(input.notes) };
 	await RobotArmPose.updateOne({ _id: id }, { $set: set });
-	await audit(user, 'robot_arm.animate.pose_update', 'robot_arm_poses', id, { before: { name: before.name, notes: before.notes, positions: before.positions }, after: set });
+	await audit(user, 'robot_arm.animate.pose_update', 'robot_arm_poses', id, { before: { name: before.name, notes: before.notes }, after: set });
 	return poseSummary(await RobotArmPose.findById(id).lean());
 }
 
@@ -405,178 +575,20 @@ export async function setPoseArchived(user: User, id: string, archived: boolean)
 	await audit(user, archived ? 'robot_arm.animate.pose_archive' : 'robot_arm.animate.pose_restore', 'robot_arm_poses', id, { name: doc.name });
 }
 
-// ── jog (adjust a pose live) ─────────────────────────────────────────────
-//
-// Editing a pose used to mean changing numbers and playing a recording to
-// see the result. Jogging moves one joint of the real arm by a few steps
-// at a time, under torque, so the operator watches the claw land where
-// they want it and then saves what the encoders read. The Pi's per-servo
-// jog route refuses while a session owns the bus and while torque is off,
-// so there is nothing new to install.
-
-/** Let the servo reach its new goal before the encoders are read back. */
-const JOG_SETTLE_MS = 250;
-
-export interface JogResult {
-	sid: number;
-	delta: number;
-	/** Goal the servo now holds (present + delta, clamped to the encoder). */
-	goal: number;
-	/** All six positions after a short settle. */
-	positions: number[];
-	torqueOn: boolean | null;
-	chunks: number;
-}
-
 /**
- * Nudge one servo by `delta` steps (±MAX_JOG_STEPS, sent in ≤300-step
- * pieces) and read the arm back. Torque must be on; refused while a session
- * owns the arm. The arm MOVES.
+ * Go to a pose: played like a one-pose move set — a smooth path of absolute
+ * goals from where the arm is, ending held on the pose — so it lands in the
+ * same place whatever the arm did before. Returns the play for the page's
+ * playback poll; the page's afterPlay puts torque back on (older Pi) and,
+ * for a reading pose, learns its droop. The arm MOVES.
  */
-export async function jogArm(user: User, input: { sid: unknown; delta: unknown }): Promise<JogResult> {
+export async function goToPose(user: User, poseId: string): Promise<PlayResult> {
 	await connectDB();
-	const sid = Number(input.sid);
-	const delta = Math.trunc(Number(input.delta));
-	if (!Number.isInteger(sid) || sid < 1 || sid > SERVO_COUNT) throw new AnimateError(`Servo must be 1..${SERVO_COUNT}.`);
-	if (!Number.isFinite(delta) || delta === 0) throw new AnimateError('Jog by a non-zero number of steps.');
-	if (Math.abs(delta) > MAX_JOG_STEPS) throw new AnimateError(`One jog is limited to ±${MAX_JOG_STEPS} steps.`);
-	await requireIdle();
-	const pieces = jogChunks(delta, JOG_CHUNK);
-	let goal = NaN;
-	let chunks = 0;
-	for (const piece of pieces) {
-		try {
-			goal = (await robotArm.jogJoint(sid, piece)).goal;
-		} catch (err) {
-			const msg = (err as Error).message ?? String(err);
-			if (/robot-arm 409/.test(msg)) {
-				throw new AnimateError(/torque/i.test(msg) ? `Torque is off on servo ${sid} — press Hold (torque on) first.` : `The arm is busy: ${msg}`, 409);
-			}
-			throw new AnimateError(`Servo ${sid} jog failed${chunks ? ` after ${chunks} of ${pieces.length} pieces` : ''}: ${msg}`, 502);
-		}
-		chunks++;
-	}
-	await new Promise((r) => setTimeout(r, JOG_SETTLE_MS));
-	const now = await readArm();
-	await audit(user, 'robot_arm.animate.jog', 'robot_arm_servos', 'follower', { sid, delta, goal, positions: now.positions, chunks });
-	return { sid, delta, goal, positions: now.positions, torqueOn: now.torqueOn, chunks };
-}
-
-export interface RecaptureResult {
-	pose: PoseSummary;
-	before: number[];
-	/** New − old, per servo. */
-	moved: number[];
-}
-
-/**
- * Overwrite a pose's positions with where the arm is now — the end of a jog
- * session. Name and notes stay; a droop trim measured at the old position no
- * longer applies and is cleared. Refused while a session owns the bus (the
- * Pi's plain servo read has no guard of its own).
- */
-export async function recapturePose(user: User, id: string): Promise<RecaptureResult> {
-	await connectDB();
-	const before = (await RobotArmPose.findById(id).lean()) as any;
-	if (!before) throw new AnimateError('Pose not found.', 404);
-	if (before.archivedAt) throw new AnimateError('That pose is archived — restore it first.');
-	await requireIdle();
-	const now = await readArm();
-	const old: number[] = (before.positions ?? []).map(Number);
-	await RobotArmPose.updateOne({ _id: id }, { $set: { positions: now.positions, trim: [], trimMeasuredAt: null, trimMeasuredBy: null } });
-	await audit(user, 'robot_arm.animate.pose_recapture', 'robot_arm_poses', id, {
-		name: before.name,
-		before: old,
-		after: now.positions,
-		torqueOnAtCapture: now.torqueOn,
-		clearedTrim: Array.isArray(before.trim) && before.trim.length ? before.trim : null
-	});
-	return { pose: poseSummary(await RobotArmPose.findById(id).lean()), before: old, moved: now.positions.map((p, i) => p - (old[i] ?? p)) };
-}
-
-export interface GoToResult {
-	before: number[];
-	after: number[];
-	jogs: number;
-	/** Target − where each servo ended up. */
-	residual: number[];
-	/** The automatic droop settle at the end (null if it could not run — see warnings). */
-	droop: DroopResult | null;
-	warnings: string[];
-}
-
-/**
- * Drive the follower to a pose with per-joint jogs (≤300 steps each, servos
- * in id order so the gripper goes last), then settle it ON the pose: the
- * automatic droop pass (settleAtPose) corrects servos 1–5 for gravity and
- * learns the pose's trim as it does. Torque must be on. The arm MOVES.
- */
-export async function goToPose(user: User, poseId: string): Promise<GoToResult> {
-	await connectDB();
-	const pose = (await RobotArmPose.findById(poseId).lean()) as any;
+	const pose = (await RobotArmPose.findById(poseId).select('-lastPlay').lean()) as any;
 	if (!pose) throw new AnimateError('Pose not found.', 404);
-	const target: number[] = pose.positions.map(Number);
-	await requireIdle();
-	const start = await readArm();
-	if (start.torqueOn === false) throw new AnimateError('Torque is off — press Hold (torque on) first.', 409);
-	for (let i = 0; i < SERVO_COUNT; i++) {
-		if (Math.abs(target[i] - start.positions[i]) > MAX_GOTO_STEPS) {
-			throw new AnimateError(`Servo ${i + 1} would move ${target[i] - start.positions[i]} steps (more than ${MAX_GOTO_STEPS}). Bring the arm closer with Jog first.`);
-		}
-	}
-	let jogs = 0;
-	const jogToward = async (from: number[], servos: number[]) => {
-		for (const sid of servos) {
-			const i = sid - 1;
-			let remaining = target[i] - from[i];
-			while (Math.abs(remaining) > GOTO_DEADBAND) {
-				const chunk = Math.max(-JOG_CHUNK, Math.min(JOG_CHUNK, remaining));
-				try {
-					await robotArm.jogJoint(sid, chunk);
-				} catch (err) {
-					throw new AnimateError(`Servo ${sid} jog failed after ${jogs} jogs: ${(err as Error).message}`, 502);
-				}
-				jogs++;
-				remaining -= chunk;
-			}
-		}
-	};
-	const all = Array.from({ length: SERVO_COUNT }, (_, i) => i + 1);
-	await jogToward(start.positions, all);
-	await new Promise((r) => setTimeout(r, 600));
-	let now = await readArm();
-	const warnings: string[] = [];
-	let droop: DroopResult | null = null;
-	try {
-		droop = await settleAtPose(user, pose, target, now, 'go_to');
-		now = await readArm();
-		warnings.push(...droop.warnings);
-	} catch (err) {
-		// Not near enough to settle (a joint stalled on the way): fall back to one plain correction pass.
-		warnings.push(`Droop correction skipped: ${(err as Error).message}.`);
-		await jogToward(now.positions, all);
-		await new Promise((r) => setTimeout(r, 600));
-		now = await readArm();
-	}
-	// The gripper is not part of the droop pass; one more jog if it is still off.
-	const g = SERVO_COUNT - 1;
-	if (Math.abs(target[g] - now.positions[g]) > GOTO_DEADBAND + 3) {
-		await jogToward(now.positions, [SERVO_COUNT]);
-		await new Promise((r) => setTimeout(r, 400));
-		now = await readArm();
-	}
-	const after = now.positions;
-	const residual = target.map((t, i) => t - after[i]);
-	await audit(user, 'robot_arm.animate.go_to_pose', 'robot_arm_poses', poseId, { name: pose.name, before: start.positions, after, jogs, trim: droop?.trim ?? null });
-	return { before: start.positions, after, jogs, residual, droop, warnings };
-}
-
-/** One line for the operator: where Go to pose ended and what the droop pass did. */
-export function goToMessage(r: GoToResult): string {
-	const worst = Math.max(...r.residual.map(Math.abs));
-	const t = r.droop?.trim.map((v, i) => (v ? `servo ${i + 1} ${v > 0 ? '+' : ''}${v}` : null)).filter(Boolean) ?? [];
-	const droop = r.droop ? (t.length ? ` Droop correction ${t.join(', ')} learned for this pose.` : ' No droop at this pose.') : '';
-	return `At the pose (${r.jogs} jog(s), worst servo ${worst} step(s) off).${droop}${r.warnings.length ? ' ' + r.warnings.join(' ') : ''}`;
+	const summary = poseSummary(pose);
+	const keyframes = resolveKeyframes([{ poseId, holdS: GOTO_HOLD_S, durationS: 1, easing: 'ease' }], new Map([[poseId, summary]]), await trimSamples());
+	return writeAndPlay(user, { title: summary.name, keyframes, rateHz: DEFAULT_RATE_HZ, kind: 'pose', id: poseId });
 }
 
 // ── droop (automatic) ────────────────────────────────────────────────────
@@ -599,7 +611,7 @@ export interface DroopResult {
 
 /** Every live pose with a learned trim, as samples for estimateTrim. */
 async function trimSamples(exceptId?: string): Promise<TrimSample[]> {
-	const rows = (await RobotArmPose.find({ 'trim.5': { $exists: true }, archivedAt: null }).select('_id positions trim').lean()) as any[];
+	const rows = (await RobotArmPose.find({ 'trim.5': { $exists: true }, archivedAt: null, basis: { $ne: 'goal' } }).select('_id positions trim').lean()) as any[];
 	return rows.filter((d) => String(d._id) !== exceptId).map((d) => ({ positions: d.positions.map(Number), trim: d.trim.map(Number) }));
 }
 
@@ -717,7 +729,8 @@ async function learnFromPiSettle(user: User, runId: string): Promise<PiSettledPo
 		const trim = trimFromSettle(e?.written, e?.target);
 		if (!poseId || !trim) continue;
 		const pose = (await RobotArmPose.findById(poseId).lean()) as any;
-		if (!pose) continue;
+		// Goal poses are never flagged; one edited into a goal pose since the play learns nothing.
+		if (!pose || pose.basis === 'goal') continue;
 		const stored = trim.some((v) => v !== 0) ? trim : [];
 		await RobotArmPose.updateOne({ _id: poseId }, { $set: { trim: stored, trimMeasuredAt: new Date(), trimMeasuredBy: opRef(user) } });
 		await audit(user, 'robot_arm.animate.pose_droop_from_replay', 'robot_arm_poses', poseId, { name: pose.name, runId, before: pose.trim ?? [], trim: stored, residual: e.residual, rounds: e.rounds, ok: !!e.ok, t: e.t });
@@ -726,41 +739,72 @@ async function learnFromPiSettle(user: User, runId: string): Promise<PiSettledPo
 	return out.length ? out : null;
 }
 
+export interface AfterPlayResult extends SettleResult {
+	/** Torque was off when the play ended (older Pi replay) and was turned back on. */
+	torqueRestored: boolean;
+	torqueError: string | null;
+	/** The arm right after, for the page's sliders and temperatures (null if it could not be read). */
+	arm: ArmNow | null;
+}
+
 /**
- * Called by the page when a Play finished on its own (not stopped). If the
- * Pi settled the poses during the replay (closed-loop route installed), only
- * learn from its report; otherwise the arm is holding the last keyframe, so
- * settle it onto its target here and learn that pose's droop. Runs once per
- * play; skips (and says why) when the arm is not where the play should have
- * left it.
+ * Called by the page when a Play or Go to finished on its own (not stopped).
+ * First, torque: a Pi replay without `hold_at_end` support writes torque OFF
+ * at the end and the arm sags off the last pose — put it straight back on
+ * (the last goal is the last frame, so it lifts back onto the pose). Then,
+ * for a READING pose at the end only: if the Pi settled poses during the
+ * replay, learn their trims from its report; else settle the arm onto the
+ * target here and learn it. Goal poses need neither — they were played
+ * exactly as set. Runs once per play.
  */
-export async function settleAfterPlay(user: User, runId: string): Promise<SettleResult> {
+export async function afterPlay(user: User, runId: string): Promise<AfterPlayResult> {
 	await connectDB();
-	const q = { 'lastPlay.runId': runId, 'lastPlay.settledAt': null };
-	let model: typeof RobotArmMoveSet = RobotArmMoveSet;
-	let doc = (await RobotArmMoveSet.findOne(q).lean()) as any;
-	if (!doc) {
-		model = RobotArmSequence;
-		doc = (await RobotArmSequence.findOne(q).lean()) as any;
-	}
-	const end = doc?.lastPlay?.end;
-	if (!doc || !end?.poseId || !Array.isArray(end.target)) return { poseName: '', droop: null, pi: null, skipped: 'nothing to settle for this play' };
-	// Claim it first so a double call (two tabs, a retry) settles once.
-	const claim = await model.updateOne({ _id: doc._id, 'lastPlay.runId': runId, 'lastPlay.settledAt': null }, { $set: { 'lastPlay.settledAt': new Date() } });
-	if (!claim.modifiedCount) return { poseName: '', droop: null, pi: null, skipped: 'already settled' };
-	const fromPi = await learnFromPiSettle(user, runId);
-	if (fromPi) return { poseName: fromPi[fromPi.length - 1].poseName, droop: null, pi: { poses: fromPi }, skipped: null };
-	const pose = (await RobotArmPose.findById(end.poseId).lean()) as any;
-	if (!pose) return { poseName: '', droop: null, pi: null, skipped: 'the last pose no longer exists' };
+	const base = { torqueRestored: false, torqueError: null as string | null, arm: null as ArmNow | null };
+	// Torque first, whatever else happens: a limp arm is the worst end state.
 	try {
 		await requireIdle();
 		const now = await readArm();
+		if (now.torqueOn === false) {
+			const t = await torqueBackOn();
+			base.torqueRestored = t.ok;
+			base.torqueError = t.ok ? null : t.error;
+			await audit(user, 'robot_arm.animate.torque_after_play', 'robot_arm_runs', runId, { ok: t.ok, error: t.error, positions: now.positions });
+			if (t.ok) await sleep(400);
+		}
+		base.arm = await readArm();
+	} catch (err) {
+		base.torqueError = (err as Error).message;
+	}
+	const q = { 'lastPlay.runId': runId, 'lastPlay.settledAt': null };
+	const models = [RobotArmMoveSet, RobotArmSequence, RobotArmPose] as (typeof RobotArmMoveSet)[];
+	let model: typeof RobotArmMoveSet | null = null;
+	let doc: any = null;
+	for (const m of models) {
+		doc = await m.findOne(q).select('_id lastPlay').lean();
+		if (doc) {
+			model = m;
+			break;
+		}
+	}
+	const end = doc?.lastPlay?.end;
+	if (!doc || !model || !end?.poseId || !Array.isArray(end.target)) return { ...base, poseName: '', droop: null, pi: null, skipped: 'nothing to settle for this play' };
+	// Claim it first so a double call (two tabs, a retry) settles once.
+	const claim = await model.updateOne({ _id: doc._id, 'lastPlay.runId': runId, 'lastPlay.settledAt': null }, { $set: { 'lastPlay.settledAt': new Date() } });
+	if (!claim.modifiedCount) return { ...base, poseName: '', droop: null, pi: null, skipped: 'already settled' };
+	const fromPi = await learnFromPiSettle(user, runId);
+	if (fromPi) return { ...base, poseName: fromPi[fromPi.length - 1].poseName, droop: null, pi: { poses: fromPi }, skipped: null };
+	const pose = (await RobotArmPose.findById(end.poseId).select('-lastPlay').lean()) as any;
+	if (!pose) return { ...base, poseName: '', droop: null, pi: null, skipped: 'the last pose no longer exists' };
+	if (pose.basis === 'goal') return { ...base, poseName: pose.name, droop: null, pi: null, skipped: null };
+	try {
+		await requireIdle();
+		const now = base.arm ?? (await readArm());
 		const droop = await settleAtPose(user, pose, end.target.map(Number), now, 'play_end');
-		return { poseName: pose.name, droop, pi: null, skipped: null };
+		return { ...base, arm: await readArm().catch(() => base.arm), poseName: pose.name, droop, pi: null, skipped: null };
 	} catch (err) {
 		const skipped = (err as Error).message;
 		await audit(user, 'robot_arm.animate.pose_droop_skip', 'robot_arm_poses', String(pose._id), { name: pose.name, reason: 'play_end', runId, skipped });
-		return { poseName: pose.name, droop: null, pi: null, skipped };
+		return { ...base, poseName: pose.name, droop: null, pi: null, skipped };
 	}
 }
 
@@ -864,6 +908,8 @@ export function resolveKeyframes(keyframes: Keyframe[], poses: Map<string, PoseS
 	return keyframes.map((k, i) => {
 		const p = poses.get(k.poseId);
 		if (!p) throw new AnimateError(`Keyframe ${i + 1} refers to a pose that no longer exists.`);
+		// A goal pose is played exactly as set: no trim, and the Pi must not settle it.
+		if (p.basis === 'goal') return { ...k, name: p.name, positions: keyframePositions(p.positions, k.offsets), settle: false };
 		let trim = p.trim;
 		if (!trim) {
 			if (!estimates.has(p._id)) estimates.set(p._id, estimateTrim(p.positions, samples));
@@ -876,7 +922,7 @@ export function resolveKeyframes(keyframes: Keyframe[], poses: Map<string, PoseS
 }
 
 async function posesById(ids: string[]): Promise<Map<string, PoseSummary>> {
-	const rows = await RobotArmPose.find({ _id: { $in: [...new Set(ids)] } }).lean();
+	const rows = await RobotArmPose.find({ _id: { $in: [...new Set(ids)] } }).select('-lastPlay').lean();
 	return new Map((rows as any[]).map((d) => [String(d._id), poseSummary(d)]));
 }
 
@@ -1017,14 +1063,18 @@ function render(keyframes: ResolvedKeyframe[], from: number[] | null, rateHz: nu
 	}
 }
 
-async function writeAndPlay(user: User, o: { title: string; keyframes: ResolvedKeyframe[]; rateHz: number; kind: 'move_set' | 'sequence'; id: string }): Promise<PlayResult> {
+type PlayKind = 'move_set' | 'sequence' | 'pose';
+const PLAY_MODEL = { move_set: RobotArmMoveSet, sequence: RobotArmSequence, pose: RobotArmPose } as Record<PlayKind, typeof RobotArmMoveSet>;
+const PLAY_TABLE: Record<PlayKind, string> = { move_set: 'robot_arm_move_sets', sequence: 'robot_arm_sequences', pose: 'robot_arm_poses' };
+
+async function writeAndPlay(user: User, o: { title: string; keyframes: ResolvedKeyframe[]; rateHz: number; kind: PlayKind; id: string }): Promise<PlayResult> {
 	if (!o.keyframes.length) throw new AnimateError('Nothing to play — add poses first.');
 	await requireIdle();
 	const now = await readArm();
-	if (now.torqueOn === false) throw new AnimateError('Torque is off — press Hold (torque on) first.', 409);
+	if (now.torqueOn === false) throw new AnimateError('Torque is off — press Torque on first.', 409);
+	const warnings: string[] = requireCool(now);
 	const path = render(o.keyframes, now.positions, o.rateHz);
 	const stats = pathStats(path);
-	const warnings: string[] = [];
 	if (stats.tooFast.length) throw new AnimateError(`Servo(s) ${stats.tooFast.join(', ')} would move faster than the arm can — lengthen the transitions marked too fast.`);
 	for (const p of tooFast(o.keyframes)) warnings.push(p.message);
 	const leadInS = path.markers[0]?.kind === 'lead-in' ? (path.markers[1]?.t ?? 0) : 0;
@@ -1061,17 +1111,17 @@ async function writeAndPlay(user: User, o: { title: string; keyframes: ResolvedK
 		const msg = (err as Error).message ?? String(err);
 		throw new AnimateError(msg.includes('409') ? `The Pi refused to start: ${msg}` : `Replay did not start: ${msg}`, 502);
 	}
-	const model = o.kind === 'move_set' ? RobotArmMoveSet : RobotArmSequence;
-	// Where the play leaves the arm, so the page can settle it there afterwards (settleAfterPlay).
+	// Where the play leaves the arm, so the page can settle it there afterwards (afterPlay).
 	const last = o.keyframes[o.keyframes.length - 1];
 	const end = { poseId: last.poseId, target: last.target ?? last.positions };
-	await model.updateOne({ _id: o.id }, { $set: { lastPlay: { at: new Date(), by: opRef(user), runId, durationS: path.durationS, end, settledAt: null } } });
-	await audit(user, `robot_arm.animate.play_${o.kind}`, o.kind === 'move_set' ? 'robot_arm_move_sets' : 'robot_arm_sequences', o.id, {
+	await PLAY_MODEL[o.kind].updateOne({ _id: o.id }, { $set: { lastPlay: { at: new Date(), by: opRef(user), runId, durationS: path.durationS, end, settledAt: null } } });
+	await audit(user, o.kind === 'pose' ? 'robot_arm.animate.go_to_pose' : `robot_arm.animate.play_${o.kind}`, PLAY_TABLE[o.kind], o.id, {
 		runId,
 		durationS: path.durationS,
 		leadInS,
 		frames: out.frames,
 		from: now.positions,
+		temps: now.temps,
 		maxStepsPerS: stats.maxStepsPerS
 	});
 	return { runId, durationS: path.durationS, leadInS, frames: out.frames, warnings };

@@ -1,47 +1,53 @@
 <script lang="ts">
 	/**
-	 * ARM-06 — move-set editor: keyframes (pose, arrival duration, easing,
-	 * hold) with the rendered path drawn live from the pure engine, Play,
-	 * Stop and Save to Pi.
+	 * ARM-06 — move-set editor (redone 2026-10-22, PRD §13): the keyframe list
+	 * (pose, how long the move into it takes, easing, hold) and, for the
+	 * selected keyframe, the pose editor — sliders that drive the real arm
+	 * live. Play, Stop and Save as a recording on the Pi.
 	 */
 	import { enhance } from '$app/forms';
+	import { invalidateAll } from '$app/navigation';
 	import { onDestroy } from 'svelte';
-	import AnimationCurves from '$lib/components/robot-arm/AnimationCurves.svelte';
+	import PoseEditor from '$lib/components/robot-arm/PoseEditor.svelte';
 	import {
 		buildPath,
-		cleanOffsets,
-		estimateTrim,
+		friendlyName,
+		heatCheck,
 		keyframePositions,
 		minDurationS,
 		pathStats,
-		roundTenth,
 		tooFast,
 		DEFAULT_RATE_HZ,
 		EASINGS,
-		ENCODER_MAX,
 		MAX_HOLD_S,
-		MAX_OFFSET_STEPS,
 		MAX_STEPS_PER_S,
 		MAX_TRANSITION_S,
 		MIN_TRANSITION_S,
 		type Keyframe,
-		type RenderedPath,
 		type ResolvedKeyframe
 	} from '$lib/robot-arm/animation';
-	import { DEFAULT_JOINT_NAMES } from '$lib/robot-arm/recording-cleanup';
 	import { Playback } from '$lib/robot-arm/playback.svelte';
 	import type { MoveSetSummary, PoseSummary } from '$lib/server/robot-arm-animation';
 
 	let { data, form } = $props();
 
+	type ArmRead = { positions: number[]; temps: (number | null)[]; torqueOn: boolean | null };
 	const moveSet = $derived(data.moveSet as MoveSetSummary);
 	const poses = $derived((data.poses ?? []) as PoseSummary[]);
 	const poseById = $derived(new Map(poses.map((p) => [p._id, p])));
 	const activePoses = $derived(poses.filter((p) => !p.archived));
+	const armNow = $derived((data.armNow ?? null) as ArmRead | null);
 
-	const flash = $derived(form as { success?: string; error?: string } | null);
+	const flash = $derived(form as { success?: string; error?: string; createdPoseId?: string } | null);
 	const armReachable = $derived(!!data.arm?.reachable);
-	const blocked = $derived(!armReachable || data.holder != null || !!data.active);
+	const heat = $derived(armNow ? heatCheck(armNow.temps) : null);
+
+	const playback = new Playback();
+	playback.onend = () => void invalidateAll();
+	onDestroy(() => playback.destroy());
+
+	const blocked = $derived(!armReachable || data.holder != null || !!data.active || playback.running || playback.busy);
+	const blockReason = $derived(!armReachable ? 'The arm is unreachable.' : playback.running || playback.busy ? 'The arm is playing.' : data.active || data.holder ? 'The arm is running something — stop it first.' : '');
 
 	// Local copy of the keyframes; Save posts it as JSON.
 	let name = $state('');
@@ -51,19 +57,28 @@
 	let selected = $state<number | null>(null);
 	let addPoseId = $state('');
 	$effect(() => {
-		// Only when the SAVED move set changed: a reload after Go to / Measure
-		// droop must not throw away unsaved timeline edits.
+		// Only when the SAVED move set changed: a reload after a pose save must not throw away unsaved keyframe edits.
 		const key = JSON.stringify(moveSet.keyframes) + moveSet.name + (moveSet.notes ?? '');
 		if (key === saved) return;
 		name = moveSet.name;
 		notes = moveSet.notes ?? '';
 		kfs = moveSet.keyframes.map((k) => ({ ...k, ...(k.offsets ? { offsets: [...k.offsets] } : {}) }));
 		saved = key;
+		if (selected == null && kfs.length) selected = 0;
 	});
 	const dirty = $derived(JSON.stringify(kfs) + name + notes !== saved);
 
-	// The editor draws where each keyframe sends the arm by design (pose +
-	// timeline offsets); a pose's droop trim is added only to what is sent.
+	// "Save as new" in the editor while a keyframe is selected: that keyframe now uses the new pose.
+	let lastCreated = '';
+	$effect(() => {
+		const id = flash?.createdPoseId;
+		if (id && id !== lastCreated && selected != null && kfs[selected] && poseById.has(id)) {
+			lastCreated = id;
+			kfs[selected].poseId = id;
+			delete kfs[selected].offsets;
+		}
+	});
+
 	const resolved = $derived.by((): ResolvedKeyframe[] => {
 		const out: ResolvedKeyframe[] = [];
 		for (const k of kfs) {
@@ -72,37 +87,8 @@
 		}
 		return out;
 	});
-
-	// ── timeline edits ──
-	function setJoint(i: number, servo: number, value: number) {
-		const k = kfs[i];
-		const p = k && poseById.get(k.poseId);
-		if (!p) return;
-		const offsets = k.offsets ? [...k.offsets] : new Array(6).fill(0);
-		offsets[servo - 1] = value - p.positions[servo - 1];
-		const clean = cleanOffsets(offsets, MAX_OFFSET_STEPS);
-		if (clean) k.offsets = clean;
-		else delete k.offsets;
-	}
-	function setDuration(i: number, s: number) {
-		if (i > 0 && kfs[i]) kfs[i].durationS = roundTenth(clamp(s, MIN_TRANSITION_S, MAX_TRANSITION_S));
-	}
-	function setHold(i: number, s: number) {
-		if (kfs[i]) kfs[i].holdS = roundTenth(clamp(s, 0, MAX_HOLD_S));
-	}
-	function resetOffsets(i: number) {
-		if (kfs[i]) delete kfs[i].offsets;
-	}
-	// Droop correction the server will add: learned on the arm, else estimated from nearby learned poses (same rule as resolveKeyframes).
-	const trimSamples = $derived(poses.filter((p) => !p.archived && p.trim).map((p) => ({ positions: p.positions, trim: p.trim as number[] })));
-	function droopFor(p: PoseSummary): { trim: number[] | null; how: 'learned' | 'estimated' | null } {
-		if (p.trim) return { trim: p.trim, how: 'learned' };
-		const e = estimateTrim(p.positions, trimSamples);
-		return { trim: e, how: e ? 'estimated' : null };
-	}
-	const sel = $derived(selected != null && kfs[selected] ? { i: selected, k: kfs[selected], pose: poseById.get(kfs[selected].poseId) ?? null } : null);
-	const render = $derived.by((): { path: RenderedPath | null; error: string | null } => {
-		if (!resolved.length) return { path: null, error: null };
+	const render = $derived.by(() => {
+		if (!resolved.length) return { path: null, error: null as string | null };
 		try {
 			return { path: buildPath(resolved, { rateHz: moveSet.rateHz || DEFAULT_RATE_HZ }), error: null };
 		} catch (e) {
@@ -112,14 +98,13 @@
 	const stats = $derived(render.path ? pathStats(render.path) : null);
 	const problems = $derived(tooFast(resolved));
 	const minFor = (i: number) => (i > 0 && resolved[i - 1] && resolved[i] ? minDurationS(resolved[i - 1].positions, resolved[i].positions, MAX_STEPS_PER_S, resolved[i].easing) : 0);
-
-	const playback = new Playback();
-	onDestroy(() => playback.destroy());
+	const selPose = $derived(selected != null && kfs[selected] ? (poseById.get(kfs[selected].poseId) ?? null) : null);
 
 	function add() {
 		if (!addPoseId) return;
 		kfs = [...kfs, { poseId: addPoseId, holdS: 0.5, durationS: 1.5, easing: 'ease' }];
 		selected = kfs.length - 1;
+		addPoseId = '';
 	}
 	function move(i: number, d: number) {
 		const j = i + d;
@@ -131,213 +116,151 @@
 	}
 	function remove(i: number) {
 		kfs = kfs.filter((_, k) => k !== i);
-		selected = null;
+		selected = kfs.length ? Math.min(i, kfs.length - 1) : null;
+	}
+	function goTo(p: PoseSummary) {
+		if (confirm(`The arm will MOVE to "${friendlyName(p.name)}". Is the path clear?`)) void playback.play('goToPose', { id: p._id }, `Go to ${friendlyName(p.name)}`);
 	}
 	const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, Number.isFinite(v) ? v : lo));
 
 	const input = 'rounded border bg-black/40 px-2 py-1 text-sm';
 	const inputStyle = 'border-color: var(--color-tron-border); color: var(--color-tron-text)';
-	const btn = 'min-h-[40px] rounded px-4 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-40';
+	const btn = 'min-h-[38px] rounded px-4 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-40';
 	const cyan = 'background: rgba(56,189,248,0.15); color: var(--color-tron-cyan); border: 1px solid var(--color-tron-cyan);';
 	const amber = 'background: rgba(245,158,11,0.15); color: #fbbf24; border: 1px solid #f59e0b;';
 	const green = 'background: rgba(74,222,128,0.12); color: #4ade80; border: 1px solid #4ade80;';
 	const red = 'background: rgba(239,68,68,0.15); color: #fca5a5; border: 1px solid #ef4444;';
+	const card = 'rounded border p-3 sm:p-4';
+	const cardStyle = 'border-color: var(--color-tron-border); background: var(--color-tron-surface);';
+	const muted = 'color: var(--color-tron-text-secondary)';
 </script>
 
 <div class="mx-auto max-w-7xl space-y-4">
-	<div class="flex flex-wrap items-center justify-between gap-3">
+	<div class="flex flex-wrap items-end justify-between gap-3">
 		<div>
-			<a href="/manufacturing/cart-mfg/robot-arm/animate" class="text-xs underline" style="color: var(--color-tron-text-secondary)">← Animate</a>
-			<h1 class="text-xl font-bold" style="color: var(--color-tron-cyan)">Move set: {moveSet.name}</h1>
+			<a href="/manufacturing/cart-mfg/robot-arm/animate" class="text-xs underline" style={muted}>← Animate</a>
+			<h1 class="text-xl font-bold" style="color: var(--color-tron-cyan)">{friendlyName(moveSet.name)}</h1>
 		</div>
-		<div class="text-xs" style="color: var(--color-tron-text-secondary)">
-			{#if stats}{stats.durationS.toFixed(1)} s · {stats.frames} frames @ {moveSet.rateHz} Hz · fastest servo {Math.max(...stats.maxStepsPerS)} steps/s{/if}
+		<div class="flex flex-wrap items-center gap-2">
+			{#if stats}<span class="text-xs" style={muted}>{stats.durationS.toFixed(1)} s</span>{/if}
+			{#if playback.running}
+				<button type="button" class={btn} style={red} onclick={() => playback.stop()} disabled={playback.busy}>Stop</button>
+			{:else}
+				<button type="button" class={btn} style={amber} disabled={blocked || dirty || !kfs.length || problems.length > 0 || !!heat?.tooHot.length}
+					title={dirty ? 'Save first' : 'From where the arm is, through every pose'}
+					onclick={() => { if (confirm(`The arm will MOVE through "${friendlyName(moveSet.name)}" from where it is. Is the path clear?`)) playback.play('play', {}, friendlyName(moveSet.name)); }}>▶ Play</button>
+			{/if}
 		</div>
 	</div>
 
 	{#if flash?.error}<div class="rounded border border-red-500/40 bg-red-900/10 p-3 text-sm text-red-300">{flash.error}</div>
 	{:else if flash?.success}<div class="rounded border border-green-500/40 bg-green-900/10 p-3 text-sm text-green-300">{flash.success}</div>{/if}
 	{#if render.error}<div class="rounded border border-red-500/40 bg-red-900/10 p-3 text-sm text-red-300">{render.error}</div>{/if}
-
-	<AnimationCurves
-		path={render.path}
-		jointNames={DEFAULT_JOINT_NAMES}
-		playheadS={playback.running ? Math.max(0, playback.elapsedS - playback.leadInS) : null}
-		selectedIndex={selected}
-		onselect={(i) => (selected = i)}
-		editable={!playback.running}
-		onjoint={setJoint}
-		onduration={setDuration}
-		onhold={setHold}
-	/>
-	<p class="text-[11px]" style="color: var(--color-tron-text-secondary)">
-		Drag a dot up or down to move that joint at that pose (Shift = fine; or click it and use ↑/↓, Shift = 10 steps). Drag a ◆ sideways to change when the arm arrives, a ▮ to change the hold. Changes apply to this move set only — the saved pose is not touched — and need Save.
-	</p>
-
-	{#if sel}
-		{@const p = sel.pose}
-		<div class="space-y-2 rounded border p-3 sm:p-4" style="border-color: var(--color-tron-border); background: var(--color-tron-surface);">
-			<div class="flex flex-wrap items-center gap-2">
-				<h2 class="text-sm font-semibold" style="color: var(--color-tron-cyan)">#{sel.i + 1} · {p?.name ?? 'missing pose'}</h2>
-				{#if sel.k.offsets}<span class="rounded px-1.5 text-[11px]" style={amber}>adjusted on the timeline</span>{/if}
-				<span class="grow"></span>
-				{#if sel.k.offsets}<button type="button" class="text-xs underline" style="color: var(--color-tron-text-secondary)" onclick={() => resetOffsets(sel.i)}>reset joints to the pose</button>{/if}
-			</div>
-			{#if p}
-				{@const droop = droopFor(p)}
-				<div class="overflow-x-auto">
-					<table class="w-full text-xs">
-						<thead>
-							<tr class="text-left" style="color: var(--color-tron-text-secondary)">
-								<th class="py-1 pr-2 font-medium">Servo</th>
-								<th class="py-1 pr-2 font-medium">Pose</th>
-								<th class="py-1 pr-2 font-medium">Here</th>
-								<th class="py-1 pr-2 font-medium">Δ</th>
-								<th class="py-1 pr-2 font-medium" title="Added to the goal when played so the arm arrives here under gravity. Learned automatically.">Droop correction</th>
-								<th class="py-1 font-medium" title="What is sent to the arm">Goal sent</th>
-							</tr>
-						</thead>
-						<tbody>
-							{#each p.positions as base, s (s)}
-								{@const off = sel.k.offsets?.[s] ?? 0}
-								{@const here = keyframePositions(p.positions, sel.k.offsets)[s]}
-								<tr class="border-t" style="border-color: var(--color-tron-border)">
-									<td class="py-1 pr-2" style="color: var(--color-tron-text-secondary)">{s + 1} {DEFAULT_JOINT_NAMES[s] ?? ''}</td>
-									<td class="py-1 pr-2 font-mono">{base}</td>
-									<td class="py-1 pr-2"><input type="number" step="1" min="0" max={ENCODER_MAX} value={here} onchange={(e) => setJoint(sel.i, s + 1, clamp(Math.round(Number(e.currentTarget.value)), 0, ENCODER_MAX))} class="{input} w-24 font-mono" style={inputStyle} /></td>
-									<td class="py-1 pr-2 font-mono" style="color: {off ? '#fbbf24' : 'var(--color-tron-text-secondary)'}">{off > 0 ? '+' : ''}{off}</td>
-									<td class="py-1 pr-2 font-mono" style="color: var(--color-tron-text-secondary)">{droop.trim ? `${droop.trim[s] > 0 ? '+' : ''}${droop.trim[s]}` : '—'}</td>
-									<td class="py-1 font-mono">{keyframePositions(p.positions, sel.k.offsets, droop.trim)[s]}</td>
-								</tr>
-							{/each}
-						</tbody>
-					</table>
-				</div>
-				<div class="flex flex-wrap items-center gap-2">
-					<form method="POST" action="?/goToPose" use:enhance onsubmit={(e) => { if (!confirm(`The arm will MOVE to "${p.name}". Is the path clear?`)) e.preventDefault(); }}>
-						<input type="hidden" name="poseId" value={p._id} />
-						<button type="submit" class="min-h-[34px] rounded px-3 text-sm font-semibold disabled:opacity-40" style={cyan} disabled={blocked}>Go to pose</button>
-					</form>
-					<a href="/manufacturing/cart-mfg/robot-arm/animate?jog={p._id}" class="text-xs underline" style="color: var(--color-tron-cyan)" title="Nudge the real arm joint by joint and save the result into this pose">jog the pose live</a>
-					{#if p.trim}
-						<form method="POST" action="?/clearDroop" use:enhance>
-							<input type="hidden" name="poseId" value={p._id} />
-							<button type="submit" class="text-xs underline" style="color: var(--color-tron-text-secondary)">forget correction</button>
-						</form>
-					{/if}
-					<span class="text-[11px]" style="color: var(--color-tron-text-secondary)">
-						{#if droop.how === 'learned'}Droop correction learned {p.trimMeasuredAt ? new Date(p.trimMeasuredAt).toLocaleString() : ''}; it is re-checked every time the arm stops at this pose.{:else if droop.how === 'estimated'}Droop correction estimated from nearby poses; learned exactly the first time the arm stops here (Go to pose, or the end of a play).{:else}No droop correction yet — learned automatically the first time the arm stops here (Go to pose, or the end of a play).{/if}
-						The pose and its correction are shared by every move set that uses it; timeline Δ is this move set's only.
-					</span>
-				</div>
-			{/if}
-		</div>
-	{/if}
-
 	{#if playback.running || playback.outcome || playback.error}
 		<p class="text-sm" style="color: {playback.error ? '#fca5a5' : playback.running ? '#4ade80' : 'var(--color-tron-text-secondary)'}">
-			{#if playback.running}PLAYING · {playback.elapsedS.toFixed(0)} / {playback.durationS.toFixed(1)} s{playback.leadInS ? ` (lead-in ${playback.leadInS} s first)` : ''}
+			{#if playback.running}▶ {playback.title} · {playback.elapsedS.toFixed(0)} / {playback.durationS.toFixed(1)} s
 			{:else if playback.error}{playback.error}
-			{:else}Playback {playback.outcome}.{/if}
+			{:else}{playback.title} — {playback.outcome}.{/if}
 		</p>
-		{#if playback.settled}<p class="text-xs" style="color: var(--color-tron-text-secondary)">{playback.settled}</p>{/if}
-		{#if playback.warnings.length}<ul class="list-disc pl-5 text-xs" style="color: #f59e0b">{#each playback.warnings as w}<li>{w}</li>{/each}</ul>{/if}
+		{#if playback.settled}<p class="text-xs" style={muted}>{playback.settled}</p>{/if}
+		{#if playback.warnings.length}<p class="text-xs" style="color: #f59e0b">{playback.warnings.join(' ')}</p>{/if}
 	{/if}
 
-	<form method="POST" action="?/save" use:enhance class="space-y-3 rounded border p-3 sm:p-4" style="border-color: var(--color-tron-border); background: var(--color-tron-surface);">
-		<input type="hidden" name="keyframes" value={JSON.stringify(kfs)} />
-		<div class="flex flex-wrap items-end gap-3">
-			<label class="block text-xs" style="color: var(--color-tron-text-secondary)">Name<input name="name" bind:value={name} required maxlength="80" class="{input} mt-1 block w-56" style={inputStyle} /></label>
-			<label class="block min-w-[14rem] flex-1 text-xs" style="color: var(--color-tron-text-secondary)">Notes<input name="notes" bind:value={notes} maxlength="500" class="{input} mt-1 block w-full" style={inputStyle} /></label>
-		</div>
+	<div class="grid gap-4 lg:grid-cols-[24rem_minmax(0,1fr)]">
+		<!-- keyframes -->
+		<form method="POST" action="?/save" use:enhance={() => async ({ update }) => { await update({ reset: false }); }} class="{card} space-y-3 self-start" style={cardStyle}>
+			<input type="hidden" name="keyframes" value={JSON.stringify(kfs)} />
+			<input type="hidden" name="notes" value={notes} />
+			<label class="block text-xs" style={muted}>Name<input name="name" bind:value={name} required maxlength="80" class="{input} mt-1 block w-full" style={inputStyle} /></label>
 
-		<table class="w-full text-xs">
-			<thead>
-				<tr class="text-left" style="color: var(--color-tron-text-secondary)">
-					<th class="py-1 pr-2 font-medium">#</th>
-					<th class="py-1 pr-2 font-medium">Pose</th>
-					<th class="py-1 pr-2 font-medium">Arrive in (s)</th>
-					<th class="py-1 pr-2 font-medium">Easing</th>
-					<th class="py-1 pr-2 font-medium">Hold (s)</th>
-					<th class="py-1 font-medium"></th>
-				</tr>
-			</thead>
-			<tbody>
+			<ol class="space-y-1">
 				{#each kfs as k, i (i)}
 					{@const p = poseById.get(k.poseId)}
 					{@const min = minFor(i)}
-					<tr class="border-t" style="border-color: var(--color-tron-border); background: {selected === i ? 'rgba(56,189,248,0.08)' : 'transparent'}" onclick={() => (selected = i)}>
-						<td class="py-1 pr-2 font-mono" style="color: var(--color-tron-text-secondary)">{i + 1}</td>
-						<td class="py-1 pr-2">
-							<select bind:value={k.poseId} class={input} style={inputStyle}>
-								{#if p?.archived}<option value={p._id}>{p.name} (archived)</option>{/if}
-								{#each activePoses as ap (ap._id)}<option value={ap._id}>{ap.name}</option>{/each}
-							</select>
-							{#if !p}<span class="ml-1 text-red-300">missing pose</span>{/if}
-							{#if k.offsets}<span class="ml-1" style="color: #fbbf24" title="Joints moved on the timeline">◆ adjusted</span>{/if}
-							{#if p?.trim}<span class="ml-1" style="color: var(--color-tron-text-secondary)" title="Droop correction learned for this pose">droop ✓</span>{/if}
-						</td>
-						<td class="py-1 pr-2">
-							{#if i === 0}
-								<span style="color: var(--color-tron-text-secondary)">start</span>
-							{:else}
-								<input type="number" step="0.1" min={MIN_TRANSITION_S} max={MAX_TRANSITION_S} value={k.durationS} oninput={(e) => (k.durationS = clamp(Number(e.currentTarget.value), MIN_TRANSITION_S, MAX_TRANSITION_S))} class="{input} w-20" style="{inputStyle}; {k.durationS < min ? 'border-color: #ef4444' : ''}" />
-								{#if min}<span class="ml-1" style="color: {k.durationS < min ? '#fca5a5' : 'var(--color-tron-text-secondary)'}">min {min}</span>{/if}
+					<li class="rounded border p-2" style="border-color: {selected === i ? 'var(--color-tron-cyan)' : 'var(--color-tron-border)'}; background: {selected === i ? 'rgba(56,189,248,0.06)' : 'transparent'}">
+						<div class="flex items-center gap-2">
+							<span class="w-5 font-mono text-xs" style={muted}>{i + 1}</span>
+							<button type="button" class="min-w-0 flex-1 truncate text-left text-sm" style="color: {p ? 'var(--color-tron-text)' : '#fca5a5'}" onclick={() => (selected = i)} title={p?.name}>
+								{p ? friendlyName(p.name) : 'missing pose'}{p?.archived ? ' (archived)' : ''}
+							</button>
+							<button type="button" onclick={() => move(i, -1)} class="px-1 text-xs" style="color: var(--color-tron-cyan)" title="Earlier">▲</button>
+							<button type="button" onclick={() => move(i, 1)} class="px-1 text-xs" style="color: var(--color-tron-cyan)" title="Later">▼</button>
+							<button type="button" onclick={() => remove(i)} class="px-1 text-xs text-red-300" title="Remove">✕</button>
+						</div>
+						{#if p}
+							<!-- The six absolute goals this step sends (servo 1..6). The timeline is this list of values, never a change from the step before. -->
+							<div class="mt-0.5 pl-7 font-mono text-[11px] tabular-nums" style={muted} title="Absolute encoder goals, servo 1 to 6 — edit them with the number boxes on the right">
+								{keyframePositions(p.positions, k.offsets).join(' · ')}
+							</div>
+						{/if}
+						{#if selected === i}
+							<div class="mt-2 grid grid-cols-3 gap-2 text-[11px]" style={muted}>
+								<label>Move in (s)
+									{#if i === 0}<span class="mt-1 block py-1">start</span>
+									{:else}<input type="number" step="0.1" min={MIN_TRANSITION_S} max={MAX_TRANSITION_S} value={k.durationS} oninput={(e) => (k.durationS = clamp(Number(e.currentTarget.value), MIN_TRANSITION_S, MAX_TRANSITION_S))} class="{input} mt-1 w-full" style="{inputStyle}; {k.durationS < min ? 'border-color: #ef4444' : ''}" />{/if}
+								</label>
+								<label>Easing
+									{#if i === 0}<span class="mt-1 block py-1">—</span>
+									{:else}<select bind:value={k.easing} class="{input} mt-1 w-full" style={inputStyle} title={EASINGS.find((e) => e.id === k.easing)?.hint}>{#each EASINGS as e (e.id)}<option value={e.id}>{e.label}</option>{/each}</select>{/if}
+								</label>
+								<label>Hold (s)<input type="number" step="0.1" min="0" max={MAX_HOLD_S} value={k.holdS} oninput={(e) => (k.holdS = clamp(Number(e.currentTarget.value), 0, MAX_HOLD_S))} class="{input} mt-1 w-full" style={inputStyle} /></label>
+							</div>
+							{#if i > 0 && k.durationS < min}<p class="mt-1 text-[11px] text-red-300">Too fast for this move — at least {min} s.</p>{/if}
+							{#if k.offsets}
+								<p class="mt-1 text-[11px]" style="color: #fbbf24">
+									This step was adjusted on the old timeline (the arm goes slightly off the pose here).
+									<button type="button" class="underline" onclick={() => delete k.offsets}>use the pose as is</button>
+								</p>
 							{/if}
-						</td>
-						<td class="py-1 pr-2">
-							{#if i === 0}
-								<span style="color: var(--color-tron-text-secondary)">—</span>
-							{:else}
-								<select bind:value={k.easing} class={input} style={inputStyle} title={EASINGS.find((e) => e.id === k.easing)?.hint}>
-									{#each EASINGS as e (e.id)}<option value={e.id}>{e.label}</option>{/each}
-								</select>
-							{/if}
-						</td>
-						<td class="py-1 pr-2"><input type="number" step="0.1" min="0" max={MAX_HOLD_S} value={k.holdS} oninput={(e) => (k.holdS = clamp(Number(e.currentTarget.value), 0, MAX_HOLD_S))} class="{input} w-20" style={inputStyle} /></td>
-						<td class="py-1 text-right whitespace-nowrap">
-							<button type="button" onclick={() => move(i, -1)} class="px-1" style="color: var(--color-tron-cyan)" title="Up">▲</button>
-							<button type="button" onclick={() => move(i, 1)} class="px-1" style="color: var(--color-tron-cyan)" title="Down">▼</button>
-							<button type="button" onclick={() => remove(i)} class="px-1 text-red-300" title="Remove">✕</button>
-						</td>
-					</tr>
+						{:else}
+							<div class="mt-0.5 pl-7 text-[11px]" style={muted}>{i === 0 ? 'start' : `${k.durationS} s ${EASINGS.find((e) => e.id === k.easing)?.label.toLowerCase()}`}{k.holdS ? ` · hold ${k.holdS} s` : ''}</div>
+						{/if}
+					</li>
 				{/each}
-			</tbody>
-		</table>
-		{#if !kfs.length}<p class="text-xs" style="color: var(--color-tron-text-secondary)">No poses yet — add one below. The first pose is where the move set starts; Play tweens the arm there first.</p>{/if}
-		{#if problems.length}<ul class="list-disc pl-5 text-xs text-red-300">{#each problems as pr}<li>{pr.message}</li>{/each}</ul>{/if}
+			</ol>
+			{#if !kfs.length}<p class="text-xs" style={muted}>No poses yet — add one below.</p>{/if}
 
-		<div class="flex flex-wrap items-end gap-2">
-			<label class="block text-xs" style="color: var(--color-tron-text-secondary)">Add pose
-				<select bind:value={addPoseId} class="{input} mt-1 block w-56" style={inputStyle}>
-					<option value="">choose…</option>
-					{#each activePoses as ap (ap._id)}<option value={ap._id}>{ap.name}</option>{/each}
+			<div class="flex items-center gap-2">
+				<select bind:value={addPoseId} class="{input} min-w-0 flex-1" style={inputStyle} aria-label="Add pose">
+					<option value="">Add a pose…</option>
+					{#each activePoses as ap (ap._id)}<option value={ap._id}>{friendlyName(ap.name)}</option>{/each}
 				</select>
-			</label>
-			<button type="button" onclick={add} disabled={!addPoseId} class="min-h-[34px] rounded px-3 text-sm font-semibold disabled:opacity-40" style={cyan}>Add</button>
-			<span class="grow"></span>
-			<button type="submit" class={btn} style={green} disabled={!dirty}>{dirty ? 'Save changes' : 'Saved'}</button>
-		</div>
-		<p class="text-[11px]" style="color: var(--color-tron-text-secondary)">
-			Easy ease settles into each pose; Flow through keeps moving through a pose that is not held (both its arrival and the next pose's must be Flow). Hold waits at the pose. Shaded bands on the chart are holds.
-		</p>
-	</form>
+				<button type="button" onclick={add} disabled={!addPoseId} class="rounded px-3 py-1 text-sm font-semibold disabled:opacity-40" style={cyan}>Add</button>
+			</div>
+			<button type="submit" class="{btn} w-full" style={green} disabled={!dirty}>{dirty ? 'Save move set' : 'Saved'}</button>
+		</form>
 
-	<div class="flex flex-wrap items-center gap-2 rounded border p-3 sm:p-4" style="border-color: var(--color-tron-border); background: var(--color-tron-surface);">
-		{#if playback.running}
-			<button type="button" class={btn} style={red} onclick={() => playback.stop()} disabled={playback.busy}>Stop</button>
-		{:else}
-			<button type="button" class={btn} style={amber} disabled={blocked || dirty || !kfs.length || problems.length > 0 || playback.busy}
-				title={dirty ? 'Save first' : 'Tween from where the arm is to the first pose, then play'}
-				onclick={() => { if (confirm(`The arm will MOVE through "${moveSet.name}" from where it is. Is the path clear?`)) playback.play('play', {}, moveSet.name); }}>Play on the arm</button>
-		{/if}
-		<form method="POST" action="?/saveToPi" use:enhance class="flex items-end gap-2">
-			<label class="block text-xs" style="color: var(--color-tron-text-secondary)">Save on the Pi as recording<input name="recordingName" required maxlength="100" value={moveSet.name} class="{input} mt-1 block w-56" style={inputStyle} /></label>
-			<button type="submit" class="min-h-[34px] rounded px-3 text-sm font-semibold disabled:opacity-40" style={cyan} disabled={dirty || !kfs.length}>Save to Pi</button>
-		</form>
-		<span class="grow"></span>
-		<form method="POST" action="?/archive" use:enhance onsubmit={(e) => { if (!confirm('Archive this move set?')) e.preventDefault(); }}>
-			<button type="submit" class="text-xs underline" style="color: var(--color-tron-text-secondary)">archive</button>
-		</form>
+		<!-- pose editor for the selected keyframe -->
+		<div class="space-y-3">
+			{#if selPose}
+				{#key selPose._id}
+					<PoseEditor pose={selPose} allPoses={poses} arm={armNow} {armReachable} {blocked} {blockReason} ongoto={goTo} />
+				{/key}
+				<p class="text-[11px]" style={muted}>Saving a pose changes it in every move set that uses it. "Save as new" makes a new pose and uses it for this step.</p>
+				{#if selPose.trim}
+					<form method="POST" action="?/clearDroop" use:enhance class="text-[11px]" style={muted}>
+						<input type="hidden" name="poseId" value={selPose._id} />
+						This captured pose has a learned droop correction. <button type="submit" class="underline">forget it</button>
+					</form>
+				{/if}
+			{:else}
+				<div class={card} style={cardStyle}><p class="text-sm" style={muted}>Select a step to edit its pose.</p></div>
+			{/if}
+
+			<details class="{card} text-sm" style={cardStyle}>
+				<summary class="cursor-pointer text-xs" style={muted}>More: save as a recording on the Pi, archive</summary>
+				<div class="mt-3 flex flex-wrap items-end gap-2">
+					<form method="POST" action="?/saveToPi" use:enhance class="flex flex-wrap items-end gap-2">
+						<label class="block text-xs" style={muted}>Recording name<input name="recordingName" required maxlength="100" value={friendlyName(moveSet.name)} class="{input} mt-1 block w-56" style={inputStyle} /></label>
+						<button type="submit" class="rounded px-3 py-1.5 text-sm font-semibold disabled:opacity-40" style={cyan} disabled={dirty || !kfs.length}>Save to Pi</button>
+					</form>
+					<span class="grow"></span>
+					<form method="POST" action="?/archive" use:enhance onsubmit={(e) => { if (!confirm('Archive this move set?')) e.preventDefault(); }}>
+						<button type="submit" class="text-xs underline" style={muted}>archive move set</button>
+					</form>
+				</div>
+				<p class="mt-2 text-[11px]" style={muted}>A recording on the Pi can be replayed from the Control tab and used in tasks.</p>
+			</details>
+		</div>
 	</div>
 </div>

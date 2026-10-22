@@ -110,6 +110,12 @@ export interface ResolvedKeyframe extends Keyframe {
 	 * `positions` also carries a droop trim; absent when they are the same.
 	 */
 	target?: number[];
+	/**
+	 * false = the pose is a set of commanded goals (made with the sliders), so
+	 * the Pi plays it exactly and never "settles" it; anything else = the pose
+	 * is an encoder reading and the Pi may settle onto it (settleFrames).
+	 */
+	settle?: boolean;
 }
 
 export type MarkerKind = 'pose' | 'lead-in' | 'join';
@@ -128,6 +134,8 @@ export interface PathMarker {
 	poseId?: string;
 	/** Where the arm should end up here without any droop trim (pose + offsets); see ResolvedKeyframe.target. */
 	target?: number[];
+	/** false = a goal pose; the Pi must not settle here (ResolvedKeyframe.settle). */
+	settle?: boolean;
 }
 
 export interface RenderedPath {
@@ -360,6 +368,7 @@ interface Node {
 	index: number;
 	poseId?: string;
 	target?: number[];
+	settle?: boolean;
 }
 
 export interface BuildOptions {
@@ -380,23 +389,24 @@ export function buildPath(kfs: ResolvedKeyframe[], o: BuildOptions = {}): Render
 	for (const k of kfs) if (k.positions.length !== SERVO_COUNT) throw new Error(`${k.name}: pose has ${k.positions.length} positions, not ${SERVO_COUNT}`);
 
 	const nodes: Node[] = [];
-	if (o.leadIn && o.leadIn.from.length === SERVO_COUNT) {
-		const from = o.leadIn.from;
-		const first = kfs[0];
-		const d = maxDelta(from, first.positions) ? (o.leadIn.durationS ?? autoDurationS(from, first.positions)) : 0;
-		if (d > 0) {
-			nodes.push({ positions: from, holdS: 0, durationS: 0, easing: 'ease', label: 'start (arm now)', kind: 'lead-in', index: -1 });
-			nodes.push({ positions: first.positions, holdS: first.holdS, durationS: d, easing: 'ease', label: first.name, kind: 'pose', index: 0, poseId: first.poseId, target: first.target });
-		} else {
-			nodes.push({ positions: first.positions, holdS: first.holdS, durationS: 0, easing: 'ease', label: first.name, kind: 'pose', index: 0, poseId: first.poseId, target: first.target });
-		}
-	} else {
-		nodes.push({ positions: kfs[0].positions, holdS: kfs[0].holdS, durationS: 0, easing: 'ease', label: kfs[0].name, kind: 'pose', index: 0, poseId: kfs[0].poseId, target: kfs[0].target });
-	}
-	for (let i = 1; i < kfs.length; i++) {
-		const k = kfs[i];
-		nodes.push({ positions: k.positions, holdS: k.holdS, durationS: k.durationS, easing: k.easing, label: k.name, kind: (k as any).kind === 'join' ? 'join' : 'pose', index: i, poseId: k.poseId, target: k.target });
-	}
+	const poseNode = (k: ResolvedKeyframe, index: number, durationS: number, easing: Easing): Node => ({
+		positions: k.positions,
+		holdS: k.holdS,
+		durationS,
+		easing,
+		label: k.name,
+		kind: (k as any).kind === 'join' ? 'join' : 'pose',
+		index,
+		poseId: k.poseId,
+		target: k.target,
+		...(k.settle === false ? { settle: false } : {})
+	});
+	const first = kfs[0];
+	const from = o.leadIn && o.leadIn.from.length === SERVO_COUNT ? o.leadIn.from : null;
+	const leadS = from && maxDelta(from, first.positions) ? (o.leadIn?.durationS ?? autoDurationS(from, first.positions)) : 0;
+	if (from && leadS > 0) nodes.push({ positions: from, holdS: 0, durationS: 0, easing: 'ease', label: 'start (arm now)', kind: 'lead-in', index: -1 });
+	nodes.push(poseNode(first, 0, leadS, 'ease'));
+	for (let i = 1; i < kfs.length; i++) nodes.push(poseNode(kfs[i], i, kfs[i].durationS, kfs[i].easing));
 
 	// Timing.
 	const arrive: number[] = [];
@@ -466,7 +476,8 @@ export function buildPath(kfs: ResolvedKeyframe[], o: BuildOptions = {}): Render
 		holdS: nd.holdS,
 		positions: nd.positions.map(clampStep),
 		...(nd.poseId ? { poseId: nd.poseId } : {}),
-		...(nd.target ? { target: nd.target.map(clampStep) } : {})
+		...(nd.target ? { target: nd.target.map(clampStep) } : {}),
+		...(nd.settle === false ? { settle: false } : {})
 	}));
 	return { rateHz: rate, t: tOut, goal, markers, durationS: round4(total) };
 }
@@ -562,7 +573,8 @@ export function settleFrames(p: RenderedPath): SettleFlag[] {
 	const last = p.goal.length - 1;
 	const out = new Map<number, SettleFlag>();
 	p.markers.forEach((m, i) => {
-		if (!m.poseId) return;
+		// Goal poses are played exactly as commanded; settling would push the arm past where the operator saw it.
+		if (!m.poseId || m.settle === false) return;
 		const isLast = i === p.markers.length - 1;
 		if (m.holdS <= 0 && !isLast) return;
 		const frame = isLast && m.holdS <= 0 ? last : Math.min(last, Math.round(m.t * p.rateHz));
@@ -598,7 +610,10 @@ export function composeAnimationJsonl(p: RenderedPath, o: ComposeOptions): { jso
 			rate_hz: p.rateHz,
 			joint_names: o.jointNames,
 			follower_neutral: p.goal[0],
-			animated: o.title
+			animated: o.title,
+			// replay_settle.py keeps torque on at the end when it sees this, so the
+			// arm holds the last pose instead of going limp (older Pi code ignores it).
+			hold_at_end: true
 		})
 	);
 	for (let i = 0; i < p.goal.length; i++) {
@@ -613,3 +628,128 @@ export function cleanAnimationName(name: string): string | null {
 	const n = name.trim();
 	return /^[A-Za-z0-9 _.-]{1,100}$/.test(n) ? n : null;
 }
+
+// ── servo temperature ────────────────────────────────────────────────────
+
+/**
+ * STS3215 temperatures (°C, from GET /servos). The Pi's own arm-health check
+ * calls 48 warm and 55 hot (the servo derates above ~60); the servo's
+ * firmware cuts out at 70 by default. BIMS refuses to start a motion at
+ * SERVO_TEMP_STOP_C so a hot joint is never the one that quits mid-move.
+ */
+export const SERVO_TEMP_WARM_C = 48;
+export const SERVO_TEMP_HOT_C = 55;
+export const SERVO_TEMP_STOP_C = 65;
+
+export type HeatLevel = 'ok' | 'warm' | 'hot' | 'stop';
+
+export function heatLevel(tempC: number | null | undefined): HeatLevel {
+	if (tempC == null || !Number.isFinite(tempC)) return 'ok';
+	if (tempC >= SERVO_TEMP_STOP_C) return 'stop';
+	if (tempC >= SERVO_TEMP_HOT_C) return 'hot';
+	if (tempC >= SERVO_TEMP_WARM_C) return 'warm';
+	return 'ok';
+}
+
+/** Servos (ids) at or above the stop temperature, and the hottest reading. */
+export function heatCheck(temps: (number | null)[]): { tooHot: number[]; hot: number[]; maxC: number | null } {
+	const tooHot: number[] = [];
+	const hot: number[] = [];
+	let maxC: number | null = null;
+	temps.forEach((t, i) => {
+		if (t == null || !Number.isFinite(t)) return;
+		maxC = maxC == null ? t : Math.max(maxC, t);
+		const lvl = heatLevel(t);
+		if (lvl === 'stop') tooHot.push(i + 1);
+		else if (lvl === 'hot') hot.push(i + 1);
+	});
+	return { tooHot, hot, maxC };
+}
+
+// ── names ────────────────────────────────────────────────────────────────
+
+/**
+ * A name as the operator should read it. Poses and move sets made from
+ * recordings carry the recording's file name ("telop3-20261022-191057.jsonl");
+ * the extension and the timestamp say nothing on screen. Stored names are not
+ * changed — this is display only. Falls back to the raw name if stripping
+ * would leave nothing.
+ */
+export function friendlyName(name: string): string {
+	const raw = String(name ?? '');
+	const out = raw
+		.replace(/\.jsonl\b/gi, '')
+		.replace(/[-_ ]?\d{8}[-_T]?\d{4,6}(?:Z)?/g, '')
+		.replace(/[-_]{2,}/g, '-')
+		.replace(/\s{2,}/g, ' ')
+		.replace(/^[\s\-_·]+|[\s\-_·]+$/g, '')
+		.trim();
+	return out || raw.trim();
+}
+
+/**
+ * Poses made together (a clean-up sent to Animate) are named "<group> · <label>".
+ * Split that so the library can show them under one heading.
+ */
+export function poseGroup(name: string): { group: string | null; label: string } {
+	const i = name.indexOf(' · ');
+	if (i <= 0) return { group: null, label: friendlyName(name) };
+	return { group: friendlyName(name.slice(0, i)), label: friendlyName(name.slice(i + 3)) };
+}
+
+// ── sliders ──────────────────────────────────────────────────────────────
+
+/** Encoder steps → degrees of joint rotation (4096 steps per turn). */
+export const DEG_PER_STEP = 360 / (ENCODER_MAX + 1);
+
+/**
+ * The range a servo's slider covers: every value the arm has been seen at for
+ * that servo (saved poses, the arm now), padded either side, inside the
+ * encoder. A full 0–4095 slider is too coarse to pose with; this keeps the
+ * travel the arm actually uses under the operator's thumb. At least `minSpan` wide.
+ */
+export function sliderRange(values: number[], pad = 400, minSpan = 1200): { min: number; max: number } {
+	const v = values.filter((x) => Number.isFinite(x));
+	if (!v.length) return { min: 0, max: ENCODER_MAX };
+	let min = Math.min(...v) - pad;
+	let max = Math.max(...v) + pad;
+	if (max - min < minSpan) {
+		const mid = (min + max) / 2;
+		min = mid - minSpan / 2;
+		max = mid + minSpan / 2;
+	}
+	min = Math.max(0, min);
+	max = Math.min(ENCODER_MAX, max);
+	// Clamped against an end and now too narrow: widen toward the other end.
+	if (max - min < minSpan) {
+		if (min === 0) max = Math.min(ENCODER_MAX, minSpan);
+		else min = Math.max(0, ENCODER_MAX - minSpan);
+	}
+	return { min: Math.round(min), max: Math.round(max) };
+}
+
+/** Evenly spaced, round axis ticks between min and max (inclusive ends). */
+export function axisTicks(min: number, max: number, target = 6): number[] {
+	const span = max - min;
+	if (span <= 0) return [min];
+	const raw = span / target;
+	const mag = 10 ** Math.floor(Math.log10(raw));
+	const step = [1, 2, 5, 10].map((m) => m * mag).find((s) => s >= raw) ?? 10 * mag;
+	const out: number[] = [];
+	for (let v = Math.ceil(min / step) * step; v <= max; v += step) out.push(v);
+	return out;
+}
+
+/**
+ * Live slider moves: the arm is sent the slider's value in pieces of at most
+ * `maxStep` from the last goal sent, so a fast drag across the slider becomes
+ * a quick series of short moves rather than one full-speed slam.
+ */
+export function stepToward(from: number, to: number, maxStep: number): number {
+	const d = to - from;
+	if (Math.abs(d) <= maxStep) return to;
+	return from + Math.sign(d) * maxStep;
+}
+
+/** Largest single live move the server accepts (slider pieces are well under this). */
+export const MAX_LIVE_STEP = 600;

@@ -2,7 +2,7 @@
 import { error, fail, redirect } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
 import { deriveArmHolder } from '$lib/server/robot-arm-lock';
-import { getSequence, listMoveSets, listPoses, playSequence, playbackActive, settleAfterPlay, saveToPi, setSequenceArchived, stopPlayback, updateSequence, AnimateError } from '$lib/server/robot-arm-animation';
+import { getSequence, listMoveSets, listPoses, playSequence, playbackActive, afterPlay, saveToPi, setSequenceArchived, stopPlayback, updateSequence, AnimateError } from '$lib/server/robot-arm-animation';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals, params }) => {
@@ -77,7 +77,7 @@ export const actions: Actions = {
 		const runId = (await request.formData()).get('runId')?.toString();
 		if (!runId) return fail(400, { error: 'No run.' });
 		try {
-			return { settle: await settleAfterPlay(who(locals), runId) };
+			return { settle: JSON.parse(JSON.stringify(await afterPlay(who(locals), runId))) };
 		} catch (err) {
 			return failFrom(err);
 		}
