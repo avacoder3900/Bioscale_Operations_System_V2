@@ -22247,7 +22247,13 @@ Deployment: preview — https://bioscale-operations-system-mongodb-f2v5ftv6t-bre
 Source: branch feat/animate-pose-jog @ commit 4e06049c (master d2d0aa09 merged in; only progress.txt conflicted)
 Retrieve this exact code: git checkout feat/animate-pose-jog at commit 4e06049c
 What this deployment is for: pre-merge build of PR #125; smoke: /login 200, /api/robot-arm/animate/jog 401 without a session, Animate page 302 to login.
-Merge to master via the API was blocked by the auto-mode classifier [Merge Without Review]; waiting on the user to allow it.
+Merge to master via the API was first blocked by the auto-mode classifier [Merge Without Review]; the user then allowed it.
+Merged: PR #125 -> master 2026-10-22 17:43 UTC, merge commit d149581e.
+Deployment: production — https://bioscale-operations-system-mongodb-k255akhdx-brevitest.vercel.app
+Source: branch master @ commit d149581e (Merge pull request #125 from feat/animate-pose-jog)
+Retrieve this exact code: git checkout d149581e
+  (or: git log master --oneline --merges | grep "#125")
+What this deployment is for: Animate tab Jog panel in production; smoke: /login 200, /api/robot-arm/animate/jog 401 without a session.
 
 ================================================================================
 2026-10-22 — feat/cleanup-overlay — Clean-up tab: overlay a pilot's teleop recording on an animated one (ARM-07)
@@ -22290,3 +22296,10 @@ Deployment: preview — https://bioscale-operations-system-mongodb-gqryeynal-bre
 Source: branch feat/cleanup-overlay @ commit 421437fc (origin/master d149581e merged in; only progress.txt conflicted, both kept)
 Retrieve this exact code: git checkout feat/cleanup-overlay at commit 421437fc
 What this deployment is for: pre-merge build of PR #126; smoke: /login 200, /manufacturing/cart-mfg/robot-arm/cleanup/overlay 302 to login. svelte-check 14 (baseline), robot-arm tests 124 passed.
+PR: https://github.com/avacoder3900/Bioscale_Operations_System_V2/pull/126
+Merged: PR #126 -> master 2026-10-22 17:56 UTC via the GitHub API, merge commit 5db9c5d6.
+Deployment: production — https://bioscale-operations-system-mongodb-3k54qchqe-brevitest.vercel.app
+Source: branch master @ commit 5db9c5d6 (Merge pull request #126 from feat/cleanup-overlay)
+Retrieve this exact code: git checkout 5db9c5d6
+  (or: git log master --oneline --merges | grep "#126")
+What this deployment is for: Clean-up tab Overlay page in production; smoke: /login 200, /manufacturing/cart-mfg/robot-arm/cleanup/overlay 302 to login.
