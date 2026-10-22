@@ -22475,3 +22475,9 @@ Tests: +7 (stretch 1.7x slower with still lead-in/tail recovers the offset withi
 spread >= 95% of the grey; 0.6x faster; still time not ignored shifts the match; alignWith; activeSpan x2;
 validate). robot-arm unit suites 6 files, 139 passed. svelte-check 14 errors (baseline), no warnings in touched
 files. Not run against the arm or a live Pi.
+Deployment: preview — https://bioscale-operations-system-mongodb-6lcx84gzy-brevitest.vercel.app
+Source: branch feat/overlay-stretch @ commit c6b87061
+Retrieve this exact code: git checkout feat/overlay-stretch at commit c6b87061
+  (or: git log feat/overlay-stretch --oneline to find it if the branch has since moved on)
+What this deployment is for: Overlay "Line up by: Stretch to fit" on the Clean-up tab (PR #128); smoke: /login 200, cleanup/overlay 302 to login.
+PR: https://github.com/avacoder3900/Bioscale_Operations_System_V2/pull/128
