@@ -8,6 +8,7 @@ import {
 	ease,
 	estimateTrim,
 	flattenSequence,
+	jogChunks,
 	keyframePositions,
 	minDurationS,
 	nextTrim,
@@ -269,5 +270,17 @@ describe('estimateTrim (unvisited poses borrow from learned ones)', () => {
 		const e = estimateTrim([0, 2050, 2000, 2000, 0, 0], [a, b])!;
 		expect(e[1]).toBeGreaterThan(10);
 		expect(e[1]).toBeLessThan(20);
+	});
+});
+
+describe('jog', () => {
+	it('splits a jog into same-sign pieces the Pi accepts, remainder last', () => {
+		expect(jogChunks(10)).toEqual([10]);
+		expect(jogChunks(300)).toEqual([300]);
+		expect(jogChunks(650)).toEqual([300, 300, 50]);
+		expect(jogChunks(-650)).toEqual([-300, -300, -50]);
+		expect(jogChunks(0)).toEqual([]);
+		expect(jogChunks(7.9)).toEqual([7]);
+		expect(jogChunks(25, 10)).toEqual([10, 10, 5]);
 	});
 });

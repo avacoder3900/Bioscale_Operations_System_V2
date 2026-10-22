@@ -273,3 +273,39 @@ attribute names, edit the five `self.*` references at the top of `_replay_loop_s
 
 Not run on the arm. Open: `SETTLE_WAIT_S` 0.25 s assumes the servo stops within that; a slow joint
 may need 0.4 s. A hold shorter than ~0.5 s gives one round at most.
+
+## 12. Jog: adjust a pose on the real arm, live (`feat/animate-pose-jog`, 2026-10-22)
+
+**Problem.** Fixing a pose that was a little off meant changing numbers (timeline dots, the joint
+table) and then playing the move set — a render, a scratch recording on the Pi, a replay — to see
+whether the claw now landed right. There was no way to nudge the arm and watch.
+
+**Fix.** A **Jog** panel on the Animate tab. Every pose row has *jog*; the capture bar has *Jog the
+arm* (no target pose). The panel shows one row per servo — the pose's value, *Arm now* from the
+encoders, the difference, and −/+ buttons for the chosen step (1/5/10/25/50/100 or typed, ≤ 1000) —
+and the flow is *Go to pose* → nudge joints, watching the arm and the camera → *Save into pose*
+(or *Save as new pose*). The move-set editor's selected keyframe links to it (*jog the pose live*,
+`/animate?jog=<poseId>`).
+
+How it moves (`jogArm` in `src/lib/server/robot-arm-animation.ts`; route
+`src/routes/api/robot-arm/animate/jog/+server.ts`, session-authenticated, `manufacturing:write`):
+each press POSTs `{sid, delta}`; the server refuses while any session owns the arm (409) and sends
+the delta to the Pi's existing `POST /servos/{sid}/jog` in ≤ 300-step pieces (`jogChunks`, pure,
+tested); the Pi itself refuses with 409 when that servo's torque is off, shown as "press Hold first".
+After a 250 ms settle the server reads `GET /servos` and returns all six positions, so the row shows
+where the arm really is — not the goal. Presses on one servo queue and add up into one request
+(the row moves at once; the encoder read corrects it). `GET` on the same route gives the live read
+for the panel's 2 s poll (off while a session runs — the plain servo read has no bus guard — and the
+poll is a checkbox). Every jog is audited (`robot_arm.animate.jog`, with the positions read back).
+**No new Pi route.**
+
+*Save into pose* (`?/savePoseFromJog` → `recapturePose`) overwrites the pose's positions with the
+encoders, keeps name and notes, **clears the droop trim** (measured at the old position; §9) and
+audits `pose_recapture` with before/after. Every move set that uses the pose follows, as with any
+pose edit; timeline offsets in a move set stay relative to the new pose. *Save as new pose* is the
+ordinary `?/savePose` without the hold. Nothing in the move-set editor itself changed.
+
+Not verified on the arm. To check: jog ±10 on the wrist and confirm the arm moves at once and the
+row's *Arm now* tracks it; rapid clicks land as their sum; a jog with torque off is refused with the
+Hold hint; *Save into pose* updates the pose row and the editor table; the Runs tab shows nothing
+(jogs are not sessions).

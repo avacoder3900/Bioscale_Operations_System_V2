@@ -65,6 +65,25 @@ const robotArmRecordingCleanupSchema = new Schema(
 			type: [new Schema({ moveSetId: String, name: String, at: Date, by: operatorRef, poses: Number, keyframes: Number }, { _id: false })],
 			default: []
 		},
+		/**
+		 * Set when rawT/rawGoal are an OVERLAY (src/lib/robot-arm/recording-overlay.ts): the animated
+		 * recording `sourceName` with the positions of the pilot's recording `preciseName` laid over it,
+		 * with the settings it was made with. Null for a clean-up of a recording as recorded.
+		 */
+		overlay: {
+			type: new Schema(
+				{
+					preciseName: { type: String, required: true },
+					strength: Number,
+					windowS: Number,
+					servos: { type: [Number], default: [] },
+					maxOffset: Number,
+					fit: Number
+				},
+				{ _id: false }
+			),
+			default: null
+		},
 		createdBy: { type: operatorRef },
 		updatedBy: { type: operatorRef }
 	},

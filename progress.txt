@@ -21624,6 +21624,109 @@ Retrieve this exact code: git checkout feat/arm-recording-cleanup at commit e823
 What this deployment is for: Robot Arm Clean-up tab (recording -> editable steps -> new recording on the Pi)
 
 ================================================================================
+2026-10-22 — feat/arm-tag-spin-tilt — AprilTag angle: judge spin only, settle the planar-pose flip against the calibration
+================================================================================
+Operator: Live Tags angle error is usually 0.5–6° but sometimes 28–70°. Cause: solvePnP IPPE_SQUARE on a small square
+seen nearly head-on has two poses that fit the corners almost equally (tilted toward / away from the camera); corner
+noise picks a different one per frame, and the flip reads as twice the viewing angle. The full rotation angle
+(acos((trace−1)/2)) mixed that unreliable tilt with the well-measured in-plane spin.
+Measured on the Pi's OpenCV 4.13 (synthetic 8 mm tag at 300 mm, 1080p intrinsics, 0.3 px corner noise, 200 trials):
+wrong branch picked 21/200 at 10° tilt, 64/200 at 20°, 36/200 at 35°; the alternative's reprojection error was within
+2× + 0.25 px of the chosen one in 200/200 — the solver's pick means nothing there.
+- Pi apriltags.py (vendored + installed, backup apriltags.py.bak-pre-alt): _pose uses cv2.solvePnPGeneric and returns
+  the lower-reprojection pose with the other as pose.alt {t_mm, R, reproj_px}.
+- apriltags.ts: TagPose.alt; splitRotationDeg(R_rel) → spin (twist about the tag normal) and tilt (angle between
+  normals); poseDelta returns both; `within` and the 'deg' tolerance now judge SPIN only; isAmbiguous / resolvePose pick
+  the branch whose tilt agrees with the calibrated pose when ambiguous (the two branches share position and spin, so
+  nothing real is hidden); assessTags resolves every tag before the camera-shift vote; TagAssessment gains offTiltDeg,
+  ambiguous, flipped; offDeg is now the spin. rescaleToSize scales alt too. describeVision says "° spin".
+- Model: pose.alt stored at calibration; lastCheck.markers offTiltDeg/ambiguous. Client type, toDetection, summary
+  mapping, audit, agent vision-check updated. VisionLiveTracker: columns off mm / spin ° / tilt ° (advisory, "?" on a
+  coin-toss frame) / off px (only when needed) / dist; calibrator label "Spin tolerance"; Home Check shows "° spin".
+- Docs: Robot_Arm_Calibration_Context.md §4/§notes, ARM-05 PRD.
+Tests: apriltags 23 (+7: spin vs tilt split, tilt-only never moved, ambiguity resolve / leave alone / fixed-tag vote /
+no-ref / rescale alt). robot-arm suites 106/106. npm run check: 13 errors = baseline, none in touched files.
+Pi restart gated on /sessions/active == null (a teleop session was running; watcher restarts and runs one detect).
+Pi restarted 11:56:54 CDT once the teleop session ended. Live detect found 0 tags: the camera is pointing at the floor
+(snapshot shows carpet + desk edge), so it needs re-aiming before a real-tag check. End-to-end verified instead by pushing
+a synthetic tilted 36h11 tag through the installed module's _detect: tag found, pose.alt present; 8 mm tag at 300 mm
+reproj 0.19-0.25 px vs alt 0.25-0.36 px (coin toss, as the rule says); 30 mm tag 0.21 vs 1.41 px (alt rightly ignored).
+Deployment: production — via Vercel GitHub integration on push to master
+Source: branch feat/arm-tag-spin-tilt @ commit 74883874, merged with Sam's a61c1364 as b56a13df on master
+Retrieve this exact code: git checkout master at commit b56a13df
+What this deployment is for: Live Tags judges spin only, shows tilt as advisory, and no longer flaps on the planar-pose flip
+
+================================================================================
+2026-10-22 — feat/arm-live-tags-over-red — Live Tags: the number over tolerance turns red
+================================================================================
+Operator: the Vision tab's Live Tags kept saying MOVED without showing which measurement caused it.
+- apriltags.ts: TagAssessment.over: ('mm' | 'deg' | 'px')[] — the measurements that made the tag `moved`
+  (further than positionMm, turned more than angleDeg, or — without a pose on either side — picture distance
+  over the pixel fraction). status is now derived from `over` (same decisions as before; `within` still used
+  by the camera-shift RANSAC). Empty when ok or missing.
+- VisionLiveTracker.svelte: the off mm / off ° cell is red (#f87171, bold, tooltip naming the tolerance) when it
+  is the one over tolerance; an "off px" column appears only when some tag was judged on picture distance
+  (shown as % of frame width, red when over). Header tooltips state the red threshold; footer legend line.
+- Agent vision-check returns `over` per marker.
+Tests: apriltags +1 (16): over = ['mm'], ['deg'], ['mm','deg'], ['px'], [] with angle check off. robot-arm 99/99.
+npm run check: 13 errors = baseline, none in touched files.
+Deployment: production — via Vercel GitHub integration on push to master
+Source: branch feat/arm-live-tags-over-red @ commit 0859f9f2, fast-forwarded to master
+Retrieve this exact code: git checkout master at commit 0859f9f2
+What this deployment is for: Live Tags table marks the off mm / off deg / off px number that makes a tag MOVED in red
+
+================================================================================
+2026-10-21 — feat/arm-vision-servos-and-camera — re-port: vision calibration relies on servos AND camera (onto Sam's home flow)
+================================================================================
+feat/arm-depth-combined's b964db12 (2026-10-20) no longer merged: it conflicted in 11 hunks of robot-arm-vision.ts
+plus home-calibration.ts/.test.ts and the tag-calibration model with Sam's six Return-to-home PRs (#107-#114).
+Re-applied by hand on master instead of merging:
+- home-calibration.ts: SERVO_LOAD_HIGH/MARGIN/TEMP_HOT_C, ServoReading, StrainedJoint, strainedJoints(now,
+  baseline), unsteadyJoints(before, after); HomeAssessment.strained; assessHome needs BOTH sides (a missing side
+  or fixed-only tags -> 'unverified', never 'home'); 'frozen' kept. shouldRetryHome: encoders home + claw closed +
+  'unverified' stops with "the camera could not confirm it" (the loop would otherwise spin to 90 s).
+- robot-arm-vision.ts: readServos() (GET /servos with load/temp/voltage/torque, /pose fallback for steps) replaces
+  readJointSteps everywhere incl. Sam's settle/claw re-reads (lastReadings feeds the strain check); saveCalibration
+  reads the servos before AND after the detection, refuses if a joint moved > tolerance in between, requires an arm
+  tag in view, stores servos[]/servoSource/captureDriftSteps; checkHome/returnToHome pass strained joints; homeMessage
+  names a blocked joint (short of home + pushing hard) vs a broken/slipped printed part (encoders home, tags off);
+  frozen message unchanged; lastCheck.strained recorded.
+- Model: servos[], servoSource, captureDriftSteps, lastCheck.strained. Agent vision-check returns strained[].
+  Vision tab: per-joint "load N" at home and red "load now N" / "hot N°C". Calibrator copy updated.
+Tests: home-calibration +9 (25), robot-arm suites 90/90. npm run check: 13 errors (baseline 14), none in touched files.
+Not run on the arm. The depth zero-baseline panel (496b08e8 + e5b4feaf) still lives only on feat/arm-depth-combined.
+
+================================================================================
+2026-10-21 — feat/arm-vision-servos-and-camera — Pi heat: lazy JPEG encoding, GET /health/thermal, throttle warning in BIMS
+================================================================================
+Operator: the Pi only has the stock heatsinks, 80 C is close to alarming; warn in BIMS when the Pi is being throttled
+or held back for heat; spread the load; list cooling strategies.
+Found: at 1080p@30 the SoC reached 84 C with the firmware's soft temperature limit ACTIVE (vcgencmd 0xe0008), uvicorn
+85-100 % of a core; even 1080p@15 held 82-85 C because cameras.py colour-converted and JPEG-encoded every captured
+frame whether or not anyone watched (+ viewers' ?w= re-encodes decoded the full JPEG first).
+1. cameras.py (Pi; vendored copy now in services/robot-arm/src/server/cameras.py; backups cameras.py.bak-pre-buffer2):
+   CAP_PROP_CONVERT_RGB off, 2 driver buffers, the thread only copies the raw YUYV frame; _Frame converts and encodes
+   on first use, cached per frame (N viewers share one encode); _Frame.encode(q, w) resizes from BGR. app.py snapshot
+   route uses it (backup app.py.bak-lazy). Measured at 1080p@30: worker 29.8 fps; service 20-27 % of a core idle,
+   ~30 % with one viewer at 4-5 fps (was 85-100 %); `?q=70&w=960` 11 ms (was 24); SoC 84 -> 72 C in ~10 min with no
+   other change; detect still finds every tag (11). hardware.yaml back to 1920x1080 @ 30 (bak-1080p30 / bak-720p15 kept).
+2. thermal.py (Pi, installed via scripts/install_thermal_router.py, backup app.py.bak-thermal): GET /health/thermal ->
+   temp_c, level ok/warm/hot/critical (70/78/84 C or the live throttle flags), now[] / since_boot[] from
+   vcgencmd get_throttled, clock vs max, load, service_cpu_pct (os.times delta), fan_rpm (none), uptime.
+3. BIMS: robotArm.getThermal(); /api/robot-arm/thermal (manufacturing:read; logs a device_events row, deviceId
+   robot-arm-pi, eventType robot_arm.thermal, on level change and every 10 min while hot/critical — nothing while ok);
+   PiThermalChip.svelte in the camera card header on every arm tab (temp always; amber "hot"/"throttled"/"clock capped",
+   red pulsing "critical"/"soft temp limit"; tooltip with clock, service CPU, since-boot flags, what to do; polls 30 s
+   while visible, hides after 3 misses); arm +layout.server.ts fetches it best-effort (3 s, 404-tolerant).
+What BIMS cannot see: the kernel's critical trip (~110 C) powers the Pi off — that shows up as "arm unreachable" in the
+existing connection log, after a 'critical' thermal row. The Pi stops no services on its own.
+npm run check: 13 errors (baseline 14), none in touched files. robot-arm suites 90/90.
+Deployment: production — via Vercel GitHub integration on push to master
+Source: branch feat/arm-vision-servos-and-camera @ commit e6ec9afc (+ merge 704a00ef), fast-forwarded to master
+Retrieve this exact code: git checkout master at commit 704a00ef
+What this deployment is for: servos+camera calibration re-port, and the Pi heat/throttle chip on the arm camera card
+
+================================================================================
 2026-10-21 — feat/arm-camera-1080p — arm camera to 1920x1080 @ 30 fps over the new USB 3 cable (Pi config + worker buffer fix)
 ================================================================================
 The USB 3 cable arrived and the D415 now enumerates at 5000M on bus 004 (`lsusb -t`); the colour node offers
@@ -21802,6 +21905,22 @@ UI: Animate tab (layout tab added), /animate (playback bar, capture panel with t
 shaded, playhead) rendered client-side from the same engine; Playback class (playback.svelte.ts) polls ?/playback.
 Docs: docs/prds/ARM-06-animate.md; context doc §6b. npm run check: 14 errors, none in touched files. Unit: robot-arm
 suites pass incl. 13 new. Not yet run on the arm; hold route not installed.
+Deployment: production — https://bioscale-operations-system-mongodb-k8ensoa3w-brevitest.vercel.app
+Source: branch master @ commit dda0c439 (merge of PR #116, feat/arm-animate @ 7e6ae83a)
+Retrieve this exact code: git checkout master at commit dda0c439
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: the Animate tab live. Smoke: /manufacturing/cart-mfg/robot-arm/animate 302 to login when
+signed out. Not yet run on the arm; Pi hold route not installed.
+
+================================================================================
+2026-10-21 — fix/arm-animate-replay-path — Animate Play: "400: recording not found: animate-preview"
+================================================================================
+First Play on the arm: the Pi accepted the restore but /replay/start answered 400 recording not found. The Control tab
+replays by the absolute `path` from GET /recordings (its <option value={r.path}>), never by bare name; the live Pi's
+replay evidently does not resolve a restored recording by name even though the repo copy of recordings.py would.
+Fix (robot-arm-animation.ts): after the restore, list the Pi's recordings and replay by the listed path
+(recordingPath()); if the name is not listed, say so (restore folder != replay folder) instead of a bare 400.
+npm run check: 14 errors, none in touched files. Unit: robot-arm suites 113/113. Not yet re-tried on the arm.
 
 ================================================================================
 2026-10-21 — feat/arm-torque-on-camera-card — torque On/Off on the camera card of every Robot Arm tab
@@ -21963,3 +22082,288 @@ settle/pose/target on the arrival of each held pose and the last frame; markers 
 settleAfterPlay learns trims from the replay.settle event (waits ≤3 s for the webhook) and only falls
 back to #123's arm-moving settle when the event is absent; playback line reports per-pose outcome.
 Stacked on feat/animate-auto-droop (#123). PRD §11. svelte-check 14 (baseline). Not run on the arm.
+
+================================================================================
+2026-10-22 — fix/studio-reload-drops-tip — Reload deck no longer crashes the tip
+================================================================================
+Reload deck (and Disconnect) close the maintenance run and open a new one. Closing does not
+drop the tip, and a new run models a bare nozzle, so Move to hole parked the NOZZLE 2mm over
+the hole and the physical tip (~50mm) drove into the deck (R04 21:32–21:34Z and B07 20:39Z on
+2026-10-21: halt, then "Out of bounds move Z too low", then the swap pick-up hit +Z). Now
+stopMaintenance drops a modelled tip in the trash before closing (best effort, with a warning to
+remove it by hand on failure); Reload deck tells the operator to Calibrate tip for a fresh one.
+Complements fix/studio-swap-tip-home (home Z after reopen). svelte-check 16 (baseline); vitest opentrons 218 passed.
+Deployment: production — via Vercel GitHub integration on push to master
+Source: branch fix/studio-reload-drops-tip, merged to master
+What this deployment is for: Deck Calibration Studio Reload deck without tip crashes
+
+================================================================================
+2026-10-07 — master — AUDIT: OT-2 connection ecosystem in the Tailscale era (no code change)
+================================================================================
+Read-only audit of every BIMS <-> OT-2 line five days after Tailscale became the default for all three
+robots: the five TAILNET PRDs vs. what shipped, direct-client / ot2-protocol / run-lifecycle-records /
+proxy / relay / health, the daemon (ot2-bridge.py 1.2), the scanner integrations, Mongo traffic for the
+last 36 h, curl timings over the tailnet from imac-1, and SSH to all three robots over the LAN.
+Written up in docs/OT2-TAILNET-CONNECTION-AUDIT-2026-10-07.md (findings, measurements, a ranked fix list).
+Headlines:
+- Transport is fine: robot API over Tailscale = 70 ms with a kept-alive HTTP/2 connection (LAN 60-70 ms);
+  only the first TLS handshake costs 350 ms on the Pi. Large reads (360 KB) identical LAN vs tailnet.
+- ALL THREE robots are on WiFi (eth0 down on B07/R04/B14, -48..-50 dBm). run.get spikes to 12-13 s and
+  the daemon's reports to Vercel time out 3-19 times/day per robot. Ethernet is the #1 fix.
+- Today's R04 "hang" reconstructed (UTC): run.create takes 15-30 s on a Pi 3 (10 of 19 in 14 d > 25 s)
+  against a 30 s browser timeout; the start sequence ran TWICE (no `submitting` guard in
+  startRunWithCapturedParams on either fill page; startPrepare overwrites an unconfirmed intent that has
+  no run id yet) -> two concurrent POST /runs -> RunConflict 500 -> "Failed to fetch" -> sticky queue
+  fallback; recovery then blocked ~30 min (= BRIDGE_BUSY_MAX_AGE_MS) by a stale bridge-job busy entry;
+  operator force-reset x2, restart robot-server x2, power-cycled R04 at 16:36:36Z.
+- A browser tab open since 10-04 21:11Z has been polling a wax run that FINISHED 10-05 through the queue
+  (~10k ot2_bridge_commands in 36 h, 6,093 handled by R04's daemon today), interleaved with real work on
+  the daemon's single worker. EmbeddedRunController polls forever after terminal; queue commands carry no
+  requestedBy, so the machine cannot be identified from Mongo.
+- SSH to a robot over its tailnet IP hangs: Tailscale SSH (RunSSH: true) intercepts port 22 and fails on
+  busybox ("getent not found"). Use the LAN IP or `tailscale set --ssh=false`.
+- Stale shapes: 30 s bridge-sized timeouts everywhere, three auto-resume implementations, trigger_loop
+  polling Vercel 2x/s per robot for a feature /bridge/scan replaced, /connection re-read every 5 s per page,
+  page-load reconciles still via the queue, health pill Mongo-only, lab-Mac scanner-bridge docs.
+- From first principles: the run supervisor belongs in the daemon (durable, on the robot, now reachable
+  over the tailnet), with the browser as a viewer; TAILNET-5 did this for sweeps/deck-scan but not for the
+  run lifecycle, which is where today's failures live. Not required to fix today's problems: an 8-step
+  incremental list is in the doc (Ethernet; create timeout 90 s + adopt the robot's run; double-start
+  guard; busy never blocks recovery; stop polling after terminal + stamp requestedBy; per-line timeouts;
+  daemon read-only lane + retire trigger_loop; Tailscale SSH off).
+No npm run check (no source change). Nothing changed on robots or in Mongo.
+
+================================================================================
+2026-10-07 — feat/ot2-run-integrity-2 — OT2-TAILNET-6: run-integrity fixes from the connection audit (S1–S5)
+================================================================================
+Branch off master (71897356). PRD: docs/prds/OT2-TAILNET-6-RUN-INTEGRITY-2.md; evidence in
+docs/OT2-TAILNET-CONNECTION-AUDIT-2026-10-07.md. No robot or Mongo change. Not committed/pushed yet.
+- S1 ot2-protocol.ts: CREATE_RUN_TIMEOUT_MS = 90 s on POST /runs (Pi 3 needs 15–30 s; the 30 s default cut
+  real creates off). A thrown POST answers 502 {noAnswer:true}. startRunSequence: on a lost answer, NEW
+  findCreatedRun() polls run.list for up to 60 s and adopts the CURRENT run only if idle + our protocol +
+  runTimeParameters match (rtpMatches); otherwise the start stays `uncertain` for the load reconcile as before.
+  StartRunSteps.adopt = test seams (waitMs/sleep).
+- S2 double-start: `if (submitting) return` at the top of startRunWithCapturedParams on wax + reagent pages;
+  run-lifecycle-records.startPrepare refuses (409, names the requester) a prior intent younger than
+  START_INTENT_IN_FLIGHT_MS (3 min) that has no run id and is not uncertain — it used to overwrite it.
+- S3 direct-client.ts: tryRecover no longer blocked by `busy` (busy gates motion only; a stale bridge-job busy
+  pinned today's R04 run to the queue for 30 min). New lineReallyDown(): before a fallback, probe /health;
+  robot answers → retry-safe verb repeated once directly, NO_RETRY verb / raw mutation → 502 {noAnswer:true},
+  line kept; only a failed probe falls back (a CORS-less robot 500 used to look like a dead tunnel).
+- S4 EmbeddedRunController: stops polling 3 ticks after a terminal status (a tab polled a finished run
+  through the queue ~10k times in 36 h).
+- S5 requestedBy on queue commands: proxy.withRequester() (AsyncLocalStorage) read by bridgeFetch/bridgeUpload;
+  set in transport.verbResponse, relay.handleRelay, runs/[rid] GET + actions POST (now pass locals.user), and
+  the load reconcile ("<user> (reconcile)").
+Tests: direct-client (+3), ot2-protocol.run (+4 incl. adoption/no-adoption matrix), relay/RLR/other proxy
+mocks gain withRequester. npm run test:unit 557 pass / 1 fail = sonic.test.ts (missing @audio/decode-wav in
+this environment, unrelated). npm run check 16 errors = master baseline, none in touched files.
+Next (S6, separate): per-line poll/action timeouts in the controller; connectivity page shows per-robot queue
+load + requesters; daemon read-only lane + trigger_loop retirement; Ethernet on R04/B14 (hardware).
+
+Committed af886a5f and pushed (branch new on origin) — the Vercel GitHub integration builds the preview.
+Deployment: preview — <take the URL from the Vercel dashboard, Deployments tab, branch feat/ot2-run-integrity-2>
+Source: branch feat/ot2-run-integrity-2 @ commit af886a5f
+Retrieve this exact code: git checkout feat/ot2-run-integrity-2 at commit af886a5f
+  (or: git log feat/ot2-run-integrity-2 --oneline to find it if the branch has since moved on)
+What this deployment is for: OT2-TAILNET-6 S1–S5 (90 s create + adopt, double-start guard, probe-before-
+  fallback + recovery under busy, stop polling after terminal, requestedBy on queue rows) — hardware test on R04.
+
+================================================================================
+2026-10-15 — fix/start-adopt-idle-run — a fill start resumes the robot run it already created instead of freezing
+================================================================================
+Symptom (reagent, B14/R04, 9 runs 10-07 … 10-15): the auto-start "creates a run
+but never starts it"; pressing Start then says "A previous start created robot
+run X that was never confirmed — reload the page so BIMS can reconcile"; the
+reload changes nothing; operators Cancel and start over.
+Root cause, from ot2_direct_calls + the robots' run lists: POST /runs answers in
+15–30 s on a Pi 3 and the browser gave up at 30 s ("signal timed out"), while the
+robot created the run anyway (e.g. B14 779231aa created 19:30:54Z, intent 19:30:53Z,
+timeout logged 19:31:26Z). The failed confirm kept the intent (uncertain); the next
+page load attached the run id; startPrepare then refused every start, and
+reconcileStartIntent deliberately left an idle run alone for 8 minutes ("a start
+may still be in flight") with no banner for 10 — a dead zone the operator could
+only leave by cancelling. The created run was stopped by the Cancel.
+Fix (on top of feat/ot2-run-integrity-2, whose 90 s create timeout + adopt-on-lost-
+answer removes the trigger for the common case):
+  - run-lifecycle-records.ts: startPrepare settles the previous intent itself
+    (calls reconcileStartIntent — no more "reload the page"), then
+    priorIntentDecision(): a created-but-never-played run is RESUMED when the
+    robot's current protocol + the requested RTP still match (carried into the new
+    intent + prepared.resumeRunId); refused only while a start may genuinely be in
+    flight (< START_INTENT_IN_FLIGHT_MS, now with the run id in the message) or a
+    lost create answer is < 15 s old; protocol/params changed → fresh create.
+    reconcileStartIntent never fails an idle run any more and shows
+    START_CREATED_NOT_STARTED_BANNER ("… press Start to start it") after 3 min.
+  - ot2-protocol.ts: startRunSequence, with prepared.resumeRunId and no re-sync,
+    does run.get → idle ? play that run : create a new one. No second POST /runs.
+Tests: +7 priorIntentDecision/sameRequestedRtp, +1 reconcile, +3 sequence (83 in
+the two files). npm run check: 16 errors (baseline).
+
+================================================================================
+2026-10-22 — master — MERGE fix/start-adopt-idle-run (ffa55706) + its base feat/ot2-run-integrity-2 (af886a5f)
+================================================================================
+A fill Start after an interrupted start now plays the robot run that start already created
+(when it is still idle and the protocol/params match) instead of refusing with "reload the
+page so BIMS can reconcile"; the page shows "press Start to start it" after 3 minutes. Also
+brings OT2-TAILNET-6 run-integrity fixes S1–S5 (af886a5f), which the fix is built on.
+Trigger: R04 reagent fills 2026-10-20 created runs that were never played (played by hand).
+Merge onto 89c7a35f: only progress.txt conflicted (kept both). vitest opentrons + server/opentrons
++ manufacturing: 16 files, 323 passed. svelte-check 16 (baseline), none in touched files.
+Deployment: production — via Vercel GitHub integration on push to master
+Source: branch master @ this merge commit
+What this deployment is for: fill starts no longer freeze on an idle, already-created robot run
+
+================================================================================
+2026-10-22 — feat/arm-wifi-chip — Pi Wi-Fi next to the temperature on the arm camera card; Aquinas_Townpark preferred
+================================================================================
+Operator found the arm Pi on the "wrong" Wi-Fi and asked (1) to set the default network and (2) to print the Wi-Fi
+the Pi is using beside the temperature readout on the Robot Arm camera card. The Pi has two saved networks, NM
+profiles `Aquinas` (SSID Aquinas_Townpark) and `netplan-wlan0-Fannin_WIFI`; it was on Aquinas at priority 20 vs
+Fannin's 10. First set Fannin to 100, then the operator reversed the decision: Aquinas_Townpark is the more reliable
+one and is now PREFERRED (autoconnect-priority 100), Fannin_WIFI the fallback (10); both autoconnect, both carry DNS
+1.1.1.1/8.8.8.8 with ignore-auto-dns. Fannin_WIFI was not in the Pi's scan at the time, so no reconnect happened; NM
+only re-picks on reconnect. Done over SSH via Tailscale (100.103.204.105), Pi LAN IP on Aquinas is 192.168.1.231.
+Pi: thermal.py (vendored copy services/robot-arm/src/server/thermal.py; Pi backup thermal.py.bak-pre-wifi) adds
+`network` to GET /health/thermal: {iface, ssid, connection, signal_pct, freq_mhz, ip, expected_ssid, source} read
+with nmcli as the service user (no root: `dev show` + the cached scan list, --rescan no), cached 15 s so the 30 s
+BIMS poll never stacks nmcli calls; nmcli failures give ssid null + source "unavailable: ...". expected_ssid comes
+from ARM_WIFI_EXPECTED_SSID in ~/robot-arm/.env (set to Aquinas_Townpark). Dry-run in the service venv, then
+installed and robot-arm restarted at 12:31 CDT with /sessions/active null; /health/thermal now returns the block
+(Aquinas_Townpark, 65 %, 5765 MHz, 192.168.1.231) and the camera is back at 1920x1080@30.
+BIMS: ArmNetwork type (robot-arm-client.ts; ArmThermal.network optional so an older thermal.py still works);
+PiThermalChip.svelte renders a second chip right after the temperature one: "Wi-Fi <ssid> · <signal>%", muted when
+it matches expected_ssid, amber "wrong network" when it does not (tooltip says how to reconnect), red "No Wi-Fi"
+when not associated, "Wi-Fi ?" when nmcli could not be read; tooltip carries profile, signal/band, LAN IP. The
+thermal episode rows in device_events now record ssid. No new route, no poll change.
+npm run check: 13 errors = baseline (all magnetometer/[sessionId]), none in touched files.
+Deployment: production — via Vercel GitHub integration on push to master
+Source: branch feat/arm-wifi-chip @ commit 6e6e133c, fast-forwarded to master
+Retrieve this exact code: git checkout master at commit 6e6e133c
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: "Wi-Fi <ssid> · <signal>%" chip beside the Pi temperature on every Robot Arm tab's camera card
+
+================================================================================
+2026-10-22 — feat/animate-pose-jog — Animate: adjust a pose by jogging the real arm, live
+================================================================================
+Operator asked for a jog protocol in the posing system: nudge a pose on the arm and see the result at
+once, instead of editing numbers and saving/playing a recording to check. Built on origin/master in
+worktree ../Bioscale_V2-wt-pose-jog. New Jog panel on the Animate tab (PoseJog.svelte): per-servo
+row with the pose value, "Arm now" from the encoders, the difference and −/+ buttons for a chosen
+step (1–100 or typed, ≤1000); flow is Go to pose → nudge → Save into pose (overwrites positions,
+keeps name/notes, clears the droop trim, audits pose_recapture) or Save as new pose. Each pose row has
+"jog"; the capture bar has "Jog the arm" (free jog → new pose); the move-set editor's selected
+keyframe links to /animate?jog=<poseId>. Server: jogArm (robot-arm-animation.ts) refuses while a
+session owns the arm, sends ≤300-step pieces (jogChunks, pure, tested) to the Pi's existing
+POST /servos/{sid}/jog, settles 250 ms, reads /servos back and audits robot_arm.animate.jog; JSON
+route api/robot-arm/animate/jog (GET live read, null while a session runs; POST jog) so a press does
+not re-run the page load. Presses queue per servo and add up. No new Pi route. PRD ARM-06 §10.
+Files: src/lib/robot-arm/animation.ts (+test), src/lib/server/robot-arm-animation.ts,
+src/routes/api/robot-arm/animate/jog/+server.ts, src/lib/components/robot-arm/PoseJog.svelte,
+animate/+page.svelte + +page.server.ts (savePoseFromJog), animate/moveset/[id]/+page.svelte (link),
+docs/prds/ARM-06-animate.md. svelte-check 14 errors (all pre-existing: r2.ts, research-proxy ×2,
+AskBimsWidget, assembly/[sessionId] ×8, magnetometer ×2); vitest animation 23 passed. Not run on the arm.
+Deployment: preview — https://bioscale-operations-system-mongodb-8msd8rxit-brevitest.vercel.app
+Source: branch feat/animate-pose-jog @ commit b71873bb
+Retrieve this exact code: git checkout feat/animate-pose-jog at commit b71873bb
+  (or: git log feat/animate-pose-jog --oneline to find it if the branch has since moved on)
+What this deployment is for: Animate tab Jog panel — adjust a pose by jogging the arm live (PR #125)
+PR: https://github.com/avacoder3900/Bioscale_Operations_System_V2/pull/125
+Follow-up commit: PoseJog.svelte seeds live/torque from the sync effect instead of the prop initialiser (clears two state_referenced_locally warnings); vite build client+server OK (post-build adapter stage OOMs on Windows, known artefact).
+Deployment: preview — https://bioscale-operations-system-mongodb-eyt6syj0b-brevitest.vercel.app
+Source: branch feat/animate-pose-jog @ commit c0a74cc1 (warning fix + progress lines; same feature code as b71873bb)
+Retrieve this exact code: git checkout feat/animate-pose-jog at commit c0a74cc1
+  (or: git log feat/animate-pose-jog --oneline to find it if the branch has since moved on)
+What this deployment is for: the PoseJog warning fix on top of the Jog panel (PR #125)
+Deployment: preview — https://bioscale-operations-system-mongodb-9ywuqyscv-brevitest.vercel.app
+Source: branch feat/animate-pose-jog @ commit 7618f243 (origin/master merged in: only progress.txt conflicted; opentrons changes from master, none of the arm files)
+Retrieve this exact code: git checkout feat/animate-pose-jog at commit 7618f243
+  (or: git log feat/animate-pose-jog --oneline to find it if the branch has since moved on)
+What this deployment is for: the PR #125 build to test the Jog panel on — the arm page, Animate tab, jog a pose; svelte-check after the merge 14 errors (baseline).
+(The docs commit that adds these lines deploys the same code again; not logged separately.)
+Deployment: preview — https://bioscale-operations-system-mongodb-f2v5ftv6t-brevitest.vercel.app
+Source: branch feat/animate-pose-jog @ commit 4e06049c (master d2d0aa09 merged in; only progress.txt conflicted)
+Retrieve this exact code: git checkout feat/animate-pose-jog at commit 4e06049c
+  (or: git log feat/animate-pose-jog --oneline to find it if the branch has since moved on)
+What this deployment is for: pre-merge build of PR #125; smoke: /login 200, /api/robot-arm/animate/jog 401 without a session, Animate page 302 to login.
+Merge to master via the API was blocked by the auto-mode classifier [Merge Without Review] at first; PR #125 was merged
+later (see "master — MERGE feat/animate-pose-jog (PR #125)" below).
+
+================================================================================
+2026-10-22 — feat/cleanup-overlay — Clean-up tab: overlay a pilot's teleop recording on an animated one (ARM-07)
+================================================================================
+Operator asked for a clean-up option that maps the smoothness of an animated recording onto the position precision of a
+teleop recording: animated move sets sag (open-loop replay, goal = the follower reading, loaded joints settle short), teleop
+does not because the pilot subconsciously pushes the leader past the sag — so the teleop goals carry the compensation and
+the animated file carries the timing and curves. Overlay = keep the animated recording's frames, add the pilot's offset.
+Pure first, src/lib/robot-arm/recording-overlay.ts (17 tests): seriesFromFrames (six positions per frame, last known value
+over a gap — the loop createCleanup had inline); alignRecordings = subsequence dynamic time warping on all six joints with
+the animated recording as the query (open beginning and end, so the pilot may be slower, pause elsewhere and have lead-in/
+lead-out at other poses), thinned to <=1200 samples for the warp and interpolated back to every animated frame; the per-
+frame offset = pilot goal at the matched moment - animated goal; applyOverlay = centred moving average over windowS
+(default 1 s), cap at +-maxOffset (default 150, capped frames counted), x strength (default 100%), per-servo opt-out,
+rounded and clamped; validateOverlayOptions; composeOverlayRecording = the animated header + `overlay {animated, pilot,
+strength, window_s, servos, max_offset}`, frames re-based to t=0, clamped to follower_min/max. The alignment test injects a
+known per-joint offset into a 1.7x slower, jittery copy with 2 s lead-in and 1 s tail at a different pose and recovers it
+within 3 steps; a >1000-frame case exercises the thinning.
+Server src/lib/server/robot-arm-overlay.ts: classifyRecording (animated / teleop / clean-up / overlay from the sidecar),
+previewOverlay (reads both off the Pi, aligns, hands the browser t/goal/aligned/offset + fit + span; nothing stored),
+saveOverlayToPi (recomputes with the settings sent, restoreRecording with sidecar overlaid_from/position_reference/overlay,
+audit robot_arm.cleanup.overlay_save_to_pi on robot_arm_recordings), overlayToCleanup (a clean-up draft whose rawGoal is
+the overlay, title "<animated> + <pilot>"). robot-arm-cleanup.ts: createCleanup split into readSourceRecording +
+insertCleanup (same behaviour), cleanSplit exported, CleanupOverlayInfo; model gains `overlay` (preciseName + settings +
+fit, null for a plain clean-up); getCleanup returns it; the editor header says "with the positions of X laid over it".
+Page src/routes/manufacturing/cart-mfg/robot-arm/cleanup/overlay (?smooth=&precise=): two pickers (animated first in one,
+teleop first in the other), fit line with a >150-step warning, OverlayChart.svelte (grey animated / amber pilot lined up in
+time / cyan result, one lane per servo), settings applied in the browser from the same pure module (strength slider,
+window, cap, servo ticks), per-servo table (median/range of the raw offset, applied mean/min/max, capped), Save to Pi
+(name "<animated>-pilot") and "Open as a clean-up" (threshold default 2: no tremor in an animated file). Link card on the
+Clean-up list. Nothing touches the arm. Docs: docs/prds/ARM-07-cleanup-overlay.md, context doc section 6b line.
+Tests: robot-arm unit suites 6 files, 123 passed. svelte-check 14 errors (baseline), none in touched files. Not run
+against the arm, a live Pi or a live DB.
+Deployment: preview — https://bioscale-operations-system-mongodb-id8g5961i-brevitest.vercel.app
+Source: branch feat/cleanup-overlay @ commit 56056137
+Retrieve this exact code: git checkout feat/cleanup-overlay at commit 56056137
+  (or: git log feat/cleanup-overlay --oneline to find it if the branch has since moved on)
+What this deployment is for: Clean-up tab Overlay page (cleanup/overlay) — pilot positions on an animated recording; PR #126
+Deployment: preview — https://bioscale-operations-system-mongodb-gqryeynal-brevitest.vercel.app
+Source: branch feat/cleanup-overlay @ commit 421437fc (origin/master d149581e merged in; only progress.txt conflicted, both kept)
+Retrieve this exact code: git checkout feat/cleanup-overlay at commit 421437fc
+  (or: git log feat/cleanup-overlay --oneline to find it if the branch has since moved on)
+What this deployment is for: pre-merge build of PR #126; smoke: /login 200, /manufacturing/cart-mfg/robot-arm/cleanup/overlay 302 to login. svelte-check 14 (baseline), robot-arm tests 124 passed.
+PR: https://github.com/avacoder3900/Bioscale_Operations_System_V2/pull/126 (merged, see "master — MERGE feat/cleanup-overlay (PR #126)" below)
+
+================================================================================
+2026-10-22 — master — MERGE feat/animate-pose-jog (PR #125, d149581e)
+================================================================================
+PR #125 merged into master at 17:43 UTC as merge commit d149581e (first parent d2d0aa09, the arm Wi-Fi chip push).
+Brings the Animate tab Jog panel (ARM-06 §10): adjust a pose by jogging the real arm live, Save into pose / Save as
+new pose; PoseJog.svelte, jogArm + jogChunks (robot-arm-animation.ts, animation.ts), JSON route
+api/robot-arm/animate/jog. 10 files, +585 / -5. Branch was merged with master d2d0aa09 before the PR (4e06049c, only
+progress.txt conflicted); svelte-check 14 errors (baseline), vitest animation 23 passed. No new Pi route. Not run on
+the arm. The first merge attempt through the API was blocked by the auto-mode classifier [Merge Without Review].
+Deployment: production — https://bioscale-operations-system-mongodb-k255akhdx-brevitest.vercel.app
+Source: branch master @ commit d149581e (Merge pull request #125 from avacoder3900/feat/animate-pose-jog)
+Retrieve this exact code: git checkout d149581e
+  (or: git log master --oneline --merges | grep "#125" to find it)
+What this deployment is for: Animate tab Jog panel in production. Smoke 2026-10-22: /login 200,
+/api/robot-arm/animate/jog 401 without a session.
+
+================================================================================
+2026-10-22 — master — MERGE feat/cleanup-overlay (PR #126, 5db9c5d6)
+================================================================================
+PR #126 merged into master at 17:56 UTC via the GitHub API as merge commit 5db9c5d6 (first parent d149581e, the PR #125
+merge), after the operator said "push to main". Brings the Clean-up tab Overlay (ARM-07): subsequence-DTW a pilot's
+teleop recording onto an animated one so the result keeps the animation's timing and curves with the pilot's
+sag-compensated positions; Save to Pi or Open as a clean-up. recording-overlay.ts (+17 tests), robot-arm-overlay.ts,
+cleanup/overlay page, OverlayChart.svelte, clean-up model field `overlay`, docs/prds/ARM-07-cleanup-overlay.md.
+13 files, +1751 / -38. Branch was merged with master d149581e before the PR (421437fc, only progress.txt conflicted,
+both entries kept); svelte-check 14 errors (baseline), robot-arm unit suites 124 passed. Nothing touches the arm; not
+run against a live Pi or DB.
+Deployment: production — https://bioscale-operations-system-mongodb-3k54qchqe-brevitest.vercel.app
+Source: branch master @ commit 5db9c5d6 (Merge pull request #126 from avacoder3900/feat/cleanup-overlay)
+Retrieve this exact code: git checkout 5db9c5d6
+  (or: git log master --oneline --merges | grep "#126" to find it)
+What this deployment is for: Clean-up tab Overlay page in production. Smoke 2026-10-22: /login 200,
+/manufacturing/cart-mfg/robot-arm/cleanup/overlay 302 to login, /api/robot-arm/animate/jog 401 without a session.
+Follow-up: f41dbfd5 put these merge/production lines inside the two feature entries; this commit moves them here.

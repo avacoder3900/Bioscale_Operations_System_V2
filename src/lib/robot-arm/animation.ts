@@ -64,6 +64,30 @@ export const MAX_OFFSET_STEPS = 1000;
  */
 export const MAX_TRIM_STEPS = 50;
 
+// ── jog ──────────────────────────────────────────────────────────────────
+
+/** The Pi takes one jog of at most this many steps; longer moves are chunked. */
+export const JOG_CHUNK_STEPS = 300;
+/** One jog request (one button press or typed value) moves one servo at most this far. */
+export const MAX_JOG_STEPS = 1000;
+
+/**
+ * Split a jog into the ≤`chunk`-step pieces the Pi accepts, same sign, in
+ * order; the last piece carries the remainder. Zero → no pieces.
+ */
+export function jogChunks(delta: number, chunk = JOG_CHUNK_STEPS): number[] {
+	const d = Math.trunc(delta);
+	if (!Number.isFinite(d) || d === 0) return [];
+	const out: number[] = [];
+	let remaining = d;
+	while (remaining !== 0) {
+		const piece = Math.max(-chunk, Math.min(chunk, remaining));
+		out.push(piece);
+		remaining -= piece;
+	}
+	return out;
+}
+
 export interface Keyframe {
 	poseId: string;
 	/** Seconds to stay at the pose once reached. */

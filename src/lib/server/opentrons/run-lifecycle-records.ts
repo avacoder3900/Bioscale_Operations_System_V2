@@ -54,7 +54,7 @@ import {
 	type Line,
 	type StepError
 } from '$lib/opentrons/ot2-protocol';
-import { getRobot, bridgeDeviceIdForRobot } from './proxy';
+import { getRobot, bridgeDeviceIdForRobot, withRequester } from './proxy';
 import { serverTransport } from './transport';
 import { bridgeJobGate } from './bridge-token';
 import { calibrationRtpValues } from './calibration-rtps';
@@ -113,7 +113,16 @@ export const START_INTENT_BANNER_MS = 10 * 60_000;
 export const START_INTENT_CLEAR_MS = 8 * 60_000;
 /** A create whose answer was lost is ruled out once the robot lists no such run this long after. */
 export const START_INTENT_UNCERTAIN_CLEAR_MS = 15_000;
+/**
+ * A prepare younger than this with no run id yet is a start still between its
+ * prepare and its create. A second prepare used to overwrite it silently: both
+ * sequences then POSTed /runs, the robot raised RunConflictError, and one run
+ * was orphaned (2026-10-07, R04, twice). Now the second start is refused.
+ */
+export const START_INTENT_IN_FLIGHT_MS = 3 * 60_000;
 export const START_INTERRUPTED_BANNER = 'start interrupted — check robot';
+/** Shown while a created-but-never-started robot run waits for the operator to press Start. */
+export const START_CREATED_NOT_STARTED_BANNER = 'a robot run was created but never started — press Start to start it';
 
 // ── validation of browser-reported robot observations ──────────────────────
 
@@ -610,6 +619,72 @@ async function startContext(
  * opentronsProtocolId is intentionally NOT trusted — a page loaded before a
  * Sync would post the older upload.
  */
+export type PriorIntentDecision =
+	| { kind: 'fresh' }
+	| { kind: 'resume'; opentronsRunId: string }
+	| { kind: 'refuse'; status: number; message: string };
+
+/** The same run-time parameter request? (both sides are what BIMS asked the robot for) */
+export function sameRequestedRtp(a: unknown, b: unknown): boolean {
+	const A = (a && typeof a === 'object' ? a : {}) as Record<string, unknown>;
+	const B = (b && typeof b === 'object' ? b : {}) as Record<string, unknown>;
+	for (const k of new Set([...Object.keys(A), ...Object.keys(B)])) if (String(A[k]) !== String(B[k])) return false;
+	return true;
+}
+
+/**
+ * What a new start does with the run's previous start intent (after the load
+ * reconcile has had its say). A robot run that was created but never played is
+ * RESUMED — this start plays it instead of orphaning it — when the robot's
+ * current protocol and the parameters are still the ones it was created with.
+ *
+ * Why: run.create on a Pi 3 takes 15–30 s and the browser used to give up at
+ * 30 s; the robot made the run anyway. Every such start then blocked with
+ * "reload the page so BIMS can reconcile", and the reconcile left an idle run
+ * alone for 8 min (a start could still be in flight), so the operator's only
+ * way out was Cancel + start over (B14/R04, 2026-10-07 … 10-15, 9 runs).
+ */
+export function priorIntentDecision(
+	prior: any,
+	now: number,
+	current: { opentronsProtocolId: string; runTimeParameterValues: Record<string, unknown> | null } | null
+): PriorIntentDecision {
+	if (!prior?.token) return { kind: 'fresh' };
+	const ageMs = now - new Date(prior.requestedAt ?? 0).getTime();
+	const who = prior.requestedBy?.username ? ` by ${prior.requestedBy.username}` : '';
+	const refuse = (message: string): PriorIntentDecision => ({ kind: 'refuse', status: 409, message });
+	if (prior.opentronsRunId && !prior.confirmedAt) {
+		if (ageMs >= 0 && ageMs < START_INTENT_IN_FLIGHT_MS) {
+			return refuse(
+				`A start is still in progress on this run (robot run ${prior.opentronsRunId} created ${Math.round(ageMs / 1000)} s ago${who}) — wait for it to finish, or try again in a few minutes if it never does.`
+			);
+		}
+		const ca = (prior.createArgs ?? {}) as { protocolId?: string; runTimeParameterValues?: unknown };
+		if (current && ca.protocolId === current.opentronsProtocolId && sameRequestedRtp(ca.runTimeParameterValues, current.runTimeParameterValues)) {
+			return { kind: 'resume', opentronsRunId: String(prior.opentronsRunId) };
+		}
+		// The robot's protocol or the parameters changed since: that run is stale, make a new one.
+		return { kind: 'fresh' };
+	}
+	if (prior.uncertainAt) {
+		return refuse("A previous start lost the robot's answer while creating the run and BIMS could not yet rule it in or out — try again in a few seconds.");
+	}
+	if (ageMs >= 0 && ageMs < START_INTENT_IN_FLIGHT_MS) {
+		return refuse(`A start is already in progress on this run (requested ${Math.round(ageMs / 1000)} s ago${who}) — wait for it to finish, or reload the page if it never does.`);
+	}
+	return { kind: 'fresh' };
+}
+
+/**
+ * Start PREPARE: guards, deck binding, the robot's current protocol entry, the
+ * expected (live) wells and the RTP values; writes startIntent. The posted
+ * opentronsProtocolId is intentionally NOT trusted — a page loaded before a
+ * Sync would post the older upload.
+ *
+ * A previous start that reached the robot is settled HERE (the operator used to
+ * be told to reload for that): its run is confirmed, resumed or ruled out, and
+ * only a start that may genuinely still be in flight is refused.
+ */
 export async function startPrepare(
 	kind: FillKind,
 	form: FormData,
@@ -618,18 +693,17 @@ export async function startPrepare(
 ): Promise<{ prepared: StartPrepared; ctx: StartContext } | ActionFail> {
 	const ctx = await startContext(kind, form, user, { writeTestFillAudit: true });
 	if (isActionFail(ctx)) return ctx;
-	const prior = ctx.run.startIntent;
-	if (prior?.opentronsRunId && !prior.confirmedAt) {
-		return actionFail(
-			409,
-			`A previous start created robot run ${prior.opentronsRunId} that was never confirmed — reload the page so BIMS can reconcile it before starting again.`
-		);
-	}
-	if (prior?.uncertainAt) {
-		return actionFail(
-			409,
-			"A previous start lost the robot's answer while creating the run — reload the page so BIMS can check the robot before starting again."
-		);
+	let run: any = ctx.run;
+	let prior = run.startIntent;
+	if (prior?.token && (prior.opentronsRunId || prior.uncertainAt)) {
+		const rec = await reconcileStartIntent(kind, run, user);
+		if (rec.changed) {
+			run = (await model(kind).findById(ctx.runId).lean()) as any;
+			prior = run?.startIntent;
+			if (['Running', 'running'].includes(String(run?.status))) {
+				return actionFail(409, `This run is already running on the robot (run ${run.opentronsRunId}) — reload the page.`);
+			}
+		}
 	}
 	const processType = K[kind].processType;
 	const current = await currentProtocolEntry(ctx.robotId, processType);
@@ -646,6 +720,13 @@ export async function startPrepare(
 			deckGeometry: ctx.deckBinding ?? null
 		};
 	}
+	const decision = priorIntentDecision(
+		prior,
+		Date.now(),
+		current ? { opentronsProtocolId: current.opentronsProtocolId, runTimeParameterValues } : null
+	);
+	if (decision.kind === 'refuse') return actionFail(decision.status, decision.message);
+	const resumeRunId = decision.kind === 'resume' ? decision.opentronsRunId : null;
 	const token = generateId();
 	await model(kind).updateOne(
 		{ _id: ctx.runId },
@@ -656,13 +737,15 @@ export async function startPrepare(
 					requestedAt: new Date(),
 					requestedBy: { _id: user._id, username: user.username },
 					line,
-					...(createArgs ? { createArgs } : {})
+					...(createArgs ? { createArgs } : {}),
+					// Carried forward: the sequence plays this run instead of creating one.
+					...(resumeRunId ? { opentronsRunId: resumeRunId } : {})
 				}
 			}
 		}
 	);
 	return {
-		prepared: { token, processType, protocolId: current?.opentronsProtocolId ?? null, expectedWells, runTimeParameterValues },
+		prepared: { token, processType, protocolId: current?.opentronsProtocolId ?? null, expectedWells, runTimeParameterValues, resumeRunId },
 		ctx
 	};
 }
@@ -1371,7 +1454,7 @@ export async function reconcileStartIntent(kind: FillKind, run: any, user: User)
 		const createArgs = intent.createArgs as { protocolId?: string } | undefined;
 		const robot = await getRobot(run.robot?._id);
 		if (!robot) return { changed: false, banner: banner() };
-		const list = await runVerb(serverTransport(robot), 'run.list', {});
+		const list = await withRequester(`${user.username} (reconcile)`, () => runVerb(serverTransport(robot), 'run.list', {}));
 		if (list.status !== 200) return { changed: false, banner: banner() };
 		const body = list.body as { runs: Array<{ id: string; status: string | null; protocolId: string | null; createdAt: string | null }>; current: any };
 		const requestedAt = new Date(intent.requestedAt ?? 0).getTime();
@@ -1388,26 +1471,19 @@ export async function reconcileStartIntent(kind: FillKind, run: any, user: User)
 				await startConfirm(kind, runId, intent.token, { phase: 'created', opentronsRunId: mine.id, protocolId: createArgs.protocolId }, user, line);
 			}
 			const idle = String(mine.status ?? '').toLowerCase() === 'idle';
-			if (idle && age <= START_INTENT_CLEAR_MS) {
-				// Created and not played YET: a start may still be between its create
-				// and its play right now. Record the run id only; never fail a start
-				// that can still finish (its own `played` confirm would then be refused).
-				return { changed: !intent.opentronsRunId, banner: banner() };
+			if (idle) {
+				// Created and never played. Young: a start may still be between its
+				// create and its play right now — leave it alone (its own `played`
+				// confirm would otherwise be refused). Older: that start is dead; the
+				// run id STAYS on the intent so the next Start resumes (plays) this run
+				// instead of creating a second one — see priorIntentDecision. It used
+				// to be failed here after 8 min, with the robot run left idle.
+				return {
+					changed: !intent.opentronsRunId,
+					banner: age > START_INTENT_IN_FLIGHT_MS ? START_CREATED_NOT_STARTED_BANNER : banner()
+				};
 			}
-			if (!idle) {
-				await startConfirm(kind, runId, intent.token, { phase: 'played', opentronsRunId: mine.id }, user, line);
-			} else {
-				// Created but never played: the start stopped there. Same outcome as a
-				// play failure — the run stays in Loading and the operator starts again.
-				await startConfirm(
-					kind,
-					runId,
-					intent.token,
-					{ phase: 'failed', stage: 'play', message: 'start interrupted before play (reconciled on load)', opentronsRunId: mine.id },
-					user,
-					line
-				);
-			}
+			await startConfirm(kind, runId, intent.token, { phase: 'played', opentronsRunId: mine.id }, user, line);
 			await AuditLog.create({
 				_id: generateId(),
 				tableName: K[kind].table,

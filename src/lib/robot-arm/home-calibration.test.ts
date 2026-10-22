@@ -7,9 +7,14 @@ import {
 	planJogDeltas,
 	residuals,
 	shouldRetryHome,
+	strainedJoints,
+	unsteadyJoints,
 	DEFAULT_HOMING,
 	HOME_LOOP_MS,
 	HOME_STEP_TOLERANCE,
+	SERVO_LOAD_HIGH,
+	SERVO_LOAD_MARGIN,
+	type ServoReading,
 	LIFT_SERVO_ID,
 	MAX_JOG_STEPS
 } from './home-calibration';
@@ -118,23 +123,77 @@ describe('residuals', () => {
 describe('assessHome', () => {
 	const ok = residuals(home, home);
 	const off = residuals({ ...home, '2': 1400 }, home);
-	const vision = (verdict: VisionAssessment['verdict']) => ({ verdict }) as VisionAssessment;
+	const vision = (verdict: VisionAssessment['verdict'], roles: ('arm' | 'fixed')[] = ['arm', 'fixed']) =>
+		({ verdict, markers: roles.map((role) => ({ role })) }) as VisionAssessment;
 
-	it('home needs the encoders AND the markers, when both exist', () => {
+	it('home needs the encoders AND the tags', () => {
 		expect(assessHome(ok, vision('ok')).verdict).toBe('home');
 		expect(assessHome(ok, vision('off')).verdict).toBe('markers_off');
 		expect(assessHome(off, vision('ok')).verdict).toBe('position_off');
 		expect(assessHome(off, vision('off')).verdict).toBe('position_off_and_markers_off');
 	});
-	it('either side alone decides when the other is absent', () => {
-		expect(assessHome(null, vision('ok'))).toMatchObject({ verdict: 'home', landed: null, markersOk: true });
+	it('one side alone is never home: a missing side gives unverified, a failing side still reports', () => {
+		expect(assessHome(null, vision('ok'))).toMatchObject({ verdict: 'unverified', landed: null, markersOk: true });
+		expect(assessHome(ok, null)).toMatchObject({ verdict: 'unverified', landed: true, markersOk: null });
+		expect(assessHome(ok, vision('no_markers'))).toMatchObject({ verdict: 'unverified', markersOk: null });
 		expect(assessHome(off, null)).toMatchObject({ verdict: 'position_off', markersOk: null });
-		expect(assessHome(ok, vision('no_markers'))).toMatchObject({ verdict: 'home', markersOk: null });
+		expect(assessHome(null, vision('off')).verdict).toBe('markers_off');
 		expect(assessHome(null, null).verdict).toBe('unverified');
-		expect(assessHome(null, vision('no_markers')).verdict).toBe('unverified');
+	});
+	it('fixed tags alone say nothing about the arm', () => {
+		expect(assessHome(ok, vision('ok', ['fixed']))).toMatchObject({ verdict: 'unverified', markersOk: null });
+		expect(assessHome(ok, vision('off', ['fixed'])).verdict).toBe('markers_off');
 	});
 	it('a moved camera overrides everything', () => {
 		expect(assessHome(ok, vision('camera_moved')).verdict).toBe('camera_moved');
 		expect(assessHome(off, vision('camera_moved')).verdict).toBe('camera_moved');
+	});
+	it('carries strained joints through without changing the verdict', () => {
+		const s = [{ sid: 2, load: 800, temperatureC: 40, reason: 'high_load' as const }];
+		expect(assessHome(off, vision('ok'), s)).toMatchObject({ verdict: 'position_off', strained: s });
+		expect(assessHome(ok, vision('ok')).strained).toEqual([]);
+	});
+});
+
+describe('strainedJoints', () => {
+	const reading = (sid: number, load: number | null, temperatureC: number | null = 35): ServoReading => ({
+		sid,
+		steps: 2048,
+		load,
+		temperatureC,
+		voltage: 12.3,
+		torque: true
+	});
+
+	it('flags high load and hot servos on the home joints only', () => {
+		const now = [reading(1, 50), reading(2, -SERVO_LOAD_HIGH), reading(3, 100, 60), reading(6, 990)];
+		expect(strainedJoints(now)).toEqual([
+			{ sid: 2, load: -SERVO_LOAD_HIGH, temperatureC: 35, reason: 'high_load' },
+			{ sid: 3, load: 100, temperatureC: 60, reason: 'hot' }
+		]);
+	});
+	it('a joint that already carried that load at home is not strained', () => {
+		const baseline = [reading(2, 640)];
+		expect(strainedJoints([reading(2, 700)], baseline)).toEqual([]);
+		expect(strainedJoints([reading(2, 640 + SERVO_LOAD_MARGIN)], baseline)).toHaveLength(1);
+	});
+	it('no telemetry → nothing flagged', () => {
+		expect(strainedJoints([reading(2, null, null)])).toEqual([]);
+	});
+});
+
+describe('unsteadyJoints', () => {
+	it('joints that moved past the tolerance between two reads, or are missing', () => {
+		expect(unsteadyJoints(home, home)).toEqual([]);
+		expect(unsteadyJoints(home, { ...home, '2': 1500 + HOME_STEP_TOLERANCE })).toEqual([]);
+		expect(unsteadyJoints(home, { ...home, '2': 1500 + HOME_STEP_TOLERANCE + 1, '5': undefined as any })).toEqual([2, 5]);
+	});
+});
+
+describe('shouldRetryHome: unverified with encoders home', () => {
+	it('stops — more jogs would not make the camera confirm', () => {
+		const r = shouldRetryHome({ verdict: 'unverified', elapsedMs: 1000, residualMax: 3, clawClosed: true });
+		expect(r.retry).toBe(false);
+		expect(r.reason).toContain('could not confirm');
 	});
 });

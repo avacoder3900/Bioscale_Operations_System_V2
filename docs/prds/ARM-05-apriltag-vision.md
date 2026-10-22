@@ -24,7 +24,7 @@ A tag carries its own ID and, with its printed size and the camera intrinsics, g
    registered can be registered right there by its ID. *Save* runs one fresh detection server-side and
    stores every registered tag's pose, plus the follower's encoder steps (Return-to-home target).
    Unregistered/unseen tags, no fixed tag, no arm tag, and nominal intrinsics are reported as warnings.
-4. **Check:** each tag now vs home in **mm and degrees** (defaults 5 mm / 5°, set per calibration; angle 0 =
+4. **Check:** each tag now vs home in **mm and degrees of spin** about the tag's normal; tilt is advisory (defaults 5 mm / 5°, set per calibration; angle 0 =
    not checked). Without a pose on either side, picture offset (1.5 % of width) is the fallback.
 5. **Camera bumps are undone, not just reported.** Each fixed tag proposes the camera motion
    M = P_now·P_cal⁻¹; the proposal most fixed tags agree with wins (a single knocked fixed tag is outvoted
@@ -34,7 +34,7 @@ A tag carries its own ID and, with its printed size and the camera intrinsics, g
 6. **Home verdicts are unchanged** (`home_calibration.ts`): `home`, `position_off`, `markers_off`,
    `position_off_and_markers_off`, `camera_moved`, `unverified`. Automation:
    `GET /api/agent/robot-arm/vision-check[?camera=]` (agent key, no motion) now returns per tag `tagId`,
-   `role`, `offMm`, `offDeg`, `zMm`, `depthMm`, and `cameraShift`.
+   `role`, `offMm`, `offDeg` (spin), `offTiltDeg`, `ambiguous`, `over`, `zMm`, `depthMm`, and `cameraShift`.
 7. A registry size edit after calibration does not read as movement: detections are rescaled to the
    calibrated size before comparison (translation is linear in tag size).
 
@@ -102,8 +102,12 @@ collections (`robot_arm_markers`, `robot_arm_vision_calibrations`) are left unto
 
 - Everything Pi-side: cv2 version/aruco on the Pi, that `snapshot.jpg` accepts `x-api-key` over loopback,
   and that cameras.py does not rotate/flip frames (the intrinsics would then not match).
-- Real tolerances: watch the live view with the arm parked and set mm/° above the jitter. Small tags can
-  flip pose (planar ambiguity) and show large angle jumps; if that happens set angle tolerance to 0.
+- Real tolerances: watch the live view with the arm parked and set mm/° above the jitter. Small tags
+  flip pose (planar ambiguity: two tilts fit the corners equally) and used to show 28–70° jumps. Since
+  2026-10-22 the Pi returns both poses (`pose.alt` with its own `reproj_px`), BIMS takes the one agreeing
+  with the calibration when the errors are close, and only spin about the tag's normal is judged; tilt is
+  shown with a `?` on coin-toss frames. On the Pi's own OpenCV, an 8 mm tag at 300 mm with 0.3 px corner
+  noise picked the wrong branch in 10–32 % of frames at 10–35° of tilt.
 - Map each stuck-on ID to its spot (from Giovanni's photo) and register them.
 - Vercel budget: Return to home = active check + torque + pose + ≤5 jogs + 1.5 s settle + pose + one
   detection (frame included, ~50–100 kB) — same order as ARM-04.

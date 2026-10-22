@@ -483,6 +483,45 @@ export interface CameraStatus {
 	error: string | null;
 }
 
+// GET /health/thermal — mirrors robot-arm/src/server/thermal.py: SoC
+// temperature, the firmware's throttle flags (now / since boot), clock and
+// the service's own CPU use. `level` is the Pi's own summary.
+export interface ArmThermal {
+	temp_c: number | null;
+	level: 'ok' | 'warm' | 'hot' | 'critical';
+	throttled_hex: string | null;
+	/** Active right now: 'throttled' | 'freq_capped' | 'soft_temp_limit' | 'under_voltage'. */
+	now: string[];
+	/** Same names with `_occurred`: ever, since boot. */
+	since_boot: string[];
+	clock_mhz: number | null;
+	clock_max_mhz: number | null;
+	load_1m: number | null;
+	/** This service's CPU use since the previous sample, % of one core (threads add up). */
+	service_cpu_pct: number | null;
+	fan_rpm: number | null;
+	uptime_s: number | null;
+	thresholds: { warm_c: number; hot_c: number; critical_c: number };
+	/** Which Wi-Fi the Pi is on (nmcli on the Pi). Absent from a thermal.py older than 2026-10-22. */
+	network?: ArmNetwork | null;
+	sampled_at: number;
+}
+
+export interface ArmNetwork {
+	iface: string;
+	/** null when the interface is up but not associated, or nmcli could not be read (see source). */
+	ssid: string | null;
+	/** NetworkManager connection profile name (e.g. netplan-wlan0-Fannin_WIFI). */
+	connection: string | null;
+	signal_pct: number | null;
+	freq_mhz: number | null;
+	ip: string | null;
+	/** ARM_WIFI_EXPECTED_SSID in the Pi's .env; the chip turns amber when ssid differs. */
+	expected_ssid: string | null;
+	/** 'nmcli', or 'unavailable: <reason>'. */
+	source: string | null;
+}
+
 // AprilTag detection, mirroring robot-arm/src/server/apriltags.py (ARM-05).
 export interface AprilTagDetectRequest {
 	/** tag id → black-square edge, mm. Tags without a size come back with pose null. */
@@ -506,8 +545,11 @@ export interface AprilTagDetectResponse {
 		/** Normalised, tag order TL, TR, BR, BL. */
 		corners: [number, number][];
 		size_mm: number | null;
-		/** Camera frame (x right, y down, z out of the lens): t in mm, R row-major. */
-		pose: { t_mm: [number, number, number]; R: number[]; reproj_px: number } | null;
+		/**
+		 * Camera frame (x right, y down, z out of the lens): t in mm, R row-major.
+		 * `alt` is the solver's other planar pose (toward/away ambiguity) when it has one.
+		 */
+		pose: { t_mm: [number, number, number]; R: number[]; reproj_px: number; alt?: { t_mm: [number, number, number]; R: number[]; reproj_px: number } | null } | null;
 		depth_mm: number | null;
 		margin: number | null;
 	}[];
@@ -574,6 +616,8 @@ export const robotArm = {
 		robotArmFetch<PreflightResult>('/replay/preflight', { method: 'POST', body }),
 	getPose: () => robotArmFetch<ArmPose>('/pose'),
 	listServos: () => robotArmFetch<ServoState[]>('/servos'),
+	// sysfs + vcgencmd only; touches no bus. 404 until install_thermal_router.py has run on the Pi.
+	getThermal: (opts: { timeoutMs?: number } = {}) => robotArmFetch<ArmThermal>('/health/thermal', { timeoutMs: opts.timeoutMs ?? 3000 }),
 	jogCartesian: (body: {
 		dx_mm: number;
 		dy_mm: number;

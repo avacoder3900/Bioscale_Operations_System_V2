@@ -13,7 +13,8 @@ Endpoints (auth is applied by app.py when the router is included):
     POST /cameras/{name}/apriltags/detect   {tag_sizes_mm?, default_size_mm?, include_frame?, depth?}
         -> {available, reason, family, detector, frame: {width, height},
             intrinsics: {fx, fy, cx, cy, dist, source},
-            tags: [{id, center, corners, size_mm, pose: {t_mm, R, reproj_px} | null,
+            tags: [{id, center, corners, size_mm,
+                    pose: {t_mm, R, reproj_px, alt: {t_mm, R, reproj_px} | null} | null,
                     depth_mm, margin}],
             frame_jpeg_b64?, elapsed_ms}
 
@@ -24,6 +25,14 @@ the tag in the camera frame (OpenCV convention: x right, y down, z out of the
 lens): `t_mm` the tag centre, `R` the 3x3 rotation row-major. Pose needs the
 tag's printed size (edge of the BLACK square): BIMS sends its registry's sizes
 in `tag_sizes_mm`; a tag with no known size comes back with pose null.
+
+Planar-pose ambiguity: a square seen nearly head-on has TWO poses that fit
+its corners almost equally (tilted toward or away from the camera); IPPE
+computes both. `pose` is the lower-reprojection one, `pose.alt` the other,
+each with its own `reproj_px`. When the two errors are close the choice is a
+coin toss and the tilt can flip by twice the viewing angle between frames —
+BIMS settles it against the calibration (apriltags.ts resolvePose) and judges
+only spin about the tag's normal. Position and spin agree between the two.
 
 Frames: this module does NOT open the camera. cameras.py owns the colour
 device (and differs between the Pi and the repo), so frames are fetched from
@@ -241,18 +250,26 @@ class DetectRequest(BaseModel):
 
 
 def _pose(corners, size: float, K, dist):
+    """Both IPPE poses of the square: the lower-reprojection one, with the other as `alt`."""
     s = size / 2.0
     # SOLVEPNP_IPPE_SQUARE wants exactly this order, matching aruco's corners.
     obj = np.array([[-s, s, 0], [s, s, 0], [s, -s, 0], [-s, -s, 0]], dtype=np.float64)
-    ok, rvec, tvec = cv2.solvePnP(obj, corners.astype(np.float64), K, dist, flags=cv2.SOLVEPNP_IPPE_SQUARE)
-    if not ok:
+    pts = corners.astype(np.float64)
+    n, rvecs, tvecs, _ = cv2.solvePnPGeneric(obj, pts, K, dist, flags=cv2.SOLVEPNP_IPPE_SQUARE)
+    if not n:
         return None
-    proj, _ = cv2.projectPoints(obj, rvec, tvec, K, dist)
-    err = float(np.sqrt(np.mean(np.sum((proj.reshape(-1, 2) - corners) ** 2, axis=1))))
-    R, _ = cv2.Rodrigues(rvec)
-    return {"t_mm": [round(float(v), 2) for v in tvec.reshape(3)],
-            "R": [round(float(v), 6) for v in R.reshape(9)],
-            "reproj_px": round(err, 3)}
+    sols = []
+    for rvec, tvec in zip(rvecs, tvecs):
+        proj, _ = cv2.projectPoints(obj, rvec, tvec, K, dist)
+        err = float(np.sqrt(np.mean(np.sum((proj.reshape(-1, 2) - pts) ** 2, axis=1))))
+        R, _ = cv2.Rodrigues(rvec)
+        sols.append((err, {"t_mm": [round(float(v), 2) for v in tvec.reshape(3)],
+                           "R": [round(float(v), 6) for v in R.reshape(9)],
+                           "reproj_px": round(err, 3)}))
+    sols.sort(key=lambda e: e[0])
+    best = sols[0][1]
+    best["alt"] = sols[1][1] if len(sols) > 1 else None
+    return best
 
 
 def _to_depth_ref(points: List[List[float]], w: int, h: int, intr: dict) -> Optional[List[List[float]]]:
