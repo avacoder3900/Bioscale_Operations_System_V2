@@ -2,11 +2,11 @@
  * Overlay (Clean-up tab) — server side. The pilot's positions on an animated
  * recording; the maths is in src/lib/robot-arm/recording-overlay.ts.
  *
- * Nothing is stored for a preview: the page reads both recordings off the Pi,
- * lines them up, and hands the browser the animated frames, the pilot's
- * aligned frames and the raw offsets, so the settings (strength, window,
- * servos, cap) are applied there without a round trip. Saving reads the Pi
- * again and recomputes with the settings sent — the alignment is
+ * Nothing is stored for a preview: the page reads both recordings off the Pi
+ * and hands the browser both sets of frames; the alignment (stretch or
+ * follow) and the settings (strength, window, servos, cap) are applied there
+ * from the same pure module, without a round trip. Saving reads the Pi again
+ * and recomputes with the settings sent — both alignments are
  * deterministic, so what was on screen is what gets written.
  *
  * Two ways out: a NEW recording on the Pi (the animated recording's timing
@@ -26,7 +26,7 @@ import {
 } from '$lib/server/robot-arm-cleanup';
 import { cleanRecordingName } from '$lib/robot-arm/recording-cleanup';
 import {
-	alignRecordings,
+	alignWith,
 	applyOverlay,
 	composeOverlayRecording,
 	validateOverlayOptions,
@@ -39,7 +39,7 @@ interface User {
 	username: string;
 }
 
-/** Frames the browser is given to preview; a longer animated recording is refused (600 s at 30 Hz is the Animate limit anyway). */
+/** Frames the browser is given to preview, per recording; a longer one is refused (600 s at 30 Hz is the Animate limit anyway). */
 const MAX_PREVIEW_FRAMES = 20000;
 
 export type RecordingKind = 'animated' | 'teleop' | 'cleaned' | 'overlay' | 'other';
@@ -90,13 +90,9 @@ export interface OverlayPreview {
 	/** The animated recording's frames. */
 	t: number[];
 	goal: number[][];
-	/** The pilot's goal lined up with each animated frame, and the raw offset (aligned − goal). */
-	aligned: number[][];
-	offset: number[][];
-	/** Mean joint distance after alignment (steps); and the stretch of the pilot's recording that was used. */
-	fit: number;
-	span: { fromS: number; toS: number };
-	every: number;
+	/** The pilot's recording's frames (lined up in the browser, alignWith). */
+	pilotT: number[];
+	pilotGoal: number[][];
 }
 
 function pair(smoothName: string, preciseName: string) {
@@ -107,24 +103,25 @@ function pair(smoothName: string, preciseName: string) {
 async function readBoth(smoothName: string, preciseName: string): Promise<{ smooth: SourceRecording; precise: SourceRecording }> {
 	pair(smoothName, preciseName);
 	const [smooth, precise] = await Promise.all([readSourceRecording(smoothName), readSourceRecording(preciseName)]);
-	if (smooth.rawT.length > MAX_PREVIEW_FRAMES) {
-		throw new CleanupError(`"${smoothName}" has ${smooth.rawT.length} frames; the overlay handles up to ${MAX_PREVIEW_FRAMES}.`);
+	for (const r of [smooth, precise]) {
+		if (r.rawT.length > MAX_PREVIEW_FRAMES) {
+			throw new CleanupError(`"${r.name}" has ${r.rawT.length} frames; the overlay handles up to ${MAX_PREVIEW_FRAMES}.`);
+		}
 	}
 	return { smooth, precise };
 }
 
-function align(smooth: SourceRecording, precise: SourceRecording) {
+function align(smooth: SourceRecording, precise: SourceRecording, options: OverlayOptions) {
 	try {
-		return alignRecordings({ t: smooth.rawT, goal: smooth.rawGoal }, { t: precise.rawT, goal: precise.rawGoal });
+		return alignWith({ t: smooth.rawT, goal: smooth.rawGoal }, { t: precise.rawT, goal: precise.rawGoal }, options);
 	} catch (err) {
 		throw new CleanupError(`Could not line the recordings up: ${(err as Error).message}`);
 	}
 }
 
-/** Both recordings read and lined up, for the page. */
+/** Both recordings read, for the page to line up. */
 export async function previewOverlay(smoothName: string, preciseName: string): Promise<OverlayPreview> {
 	const { smooth, precise } = await readBoth(smoothName, preciseName);
-	const a = align(smooth, precise);
 	const header = (smooth.header ?? {}) as Record<string, unknown>;
 	return JSON.parse(
 		JSON.stringify({
@@ -143,11 +140,8 @@ export async function previewOverlay(smoothName: string, preciseName: string): P
 			},
 			t: smooth.rawT,
 			goal: smooth.rawGoal,
-			aligned: a.aligned.map((row) => row.map((v) => Math.round(v * 10) / 10)),
-			offset: a.offset.map((row) => row.map((v) => Math.round(v * 10) / 10)),
-			fit: Math.round(a.fit * 10) / 10,
-			span: { fromS: precise.rawT[a.span.from] - precise.rawT[0], toS: precise.rawT[a.span.to] - precise.rawT[0] },
-			every: a.every
+			pilotT: precise.rawT,
+			pilotGoal: precise.rawGoal
 		})
 	);
 }
@@ -169,7 +163,7 @@ function parseOptions(raw: string): OverlayOptions {
 async function compute(smoothName: string, preciseName: string, rawOptions: string) {
 	const options = parseOptions(rawOptions);
 	const { smooth, precise } = await readBoth(smoothName, preciseName);
-	const a = align(smooth, precise);
+	const a = align(smooth, precise, options);
 	const result = applyOverlay({ t: smooth.rawT, goal: smooth.rawGoal }, a, options);
 	return { options, smooth, precise, fit: Math.round(a.fit * 10) / 10, result };
 }
