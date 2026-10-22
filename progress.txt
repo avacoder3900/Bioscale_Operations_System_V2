@@ -22807,3 +22807,31 @@ detection route, replay and servo reads it uses all exist on arm-pi.
     editor (+ camera picker).
 Checks: vitest src/lib/robot-arm 7 files / 162 passed; svelte-check 14 errors / 432 warnings (baseline);
 vite build: not waited for — the first attempt hit Node's 4 GB heap limit on this Windows laptop in the packaging step (a known environmental crash, see 2026-10 entries); svelte-check + unit tests are the gate here and Vercel builds the push on Linux. NOT run on the arm — see PRD §6 for the six things to try first.
+
+================================================================================
+2026-10-22 — master — MERGE: PR #129 (smoothing opt-in), #130 (Animate redo + number entries), #131 (ARM-09 verified poses); production deployed
+================================================================================
+Alejandro: "Merge them to master. When I want to see changes, I will always want you to merge to master
+and push and do everything to get this visible on the BIMS address." Merged in dependency order with
+merge commits (gh pr merge --merge):
+  - PR #129 feat/cleanup-smoothing → 7b5ba70d (Sam's ARM-08 smoothing, with 4510b831 making it opt-in / off by default).
+  - PR #130 feat/animate-redo → 877c8af5 (Sam's ARM-06 §13 redo, with 43e8af8d: six absolute goals per step row,
+    number boxes apply on Enter). Conflict with #129 in progress.txt (both appended) resolved on the branch
+    by keeping both entries (ab44e920).
+  - PR #131 feat/animate-verified-poses → 4c8042d2 (ARM-09). Retargeted from feat/animate-redo to master
+    after #130 merged; conflict in Robot_Arm_Calibration_Context.md (ARM-08 vs ARM-09 paragraph in the
+    same spot) resolved by keeping both, ARM-08 first (a41d5f0e). progress.txt merged clean.
+Also on master today: b30d74f5 CLAUDE.md — no local production build as a pre-commit gate (Alejandro:
+"it takes a long time and we never had it before"); the gate is npm run check + unit tests, Vercel builds
+every push.
+Not run on the arm: everything in #130 §13 "to verify" and ARM-09 PRD §6 still needs a live try.
+
+Deployment: production — https://bioscale-operations-system-mongodb-1aje85znc-brevitest.vercel.app
+Source: branch master @ commit 4c8042d2
+Retrieve this exact code: git checkout master at commit 4c8042d2
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: Animate redo (live sliders, absolute goals, torque kept on, servo temps, per-step
+  value readout), Clean-up smoothing as an opt-in, ARM-09 verified poses (camera reference per pose, per-step
+  tolerances, ◎ Play verified). GitHub deployment 7264502675 status success 21:47 UTC; smoke: /login 200,
+  /manufacturing/cart-mfg/robot-arm/animate 302 → /login. Intermediate production deploys for 7b5ba70d and
+  877c8af5 were superseded within two minutes.
