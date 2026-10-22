@@ -322,15 +322,19 @@
 				<div class="col-span-2 flex items-center gap-1 sm:col-span-1">
 					<button type="button" class={nudge} style={nudgeStyle} onclick={() => setValue(s, values[s] - 10)} aria-label="minus 10">−10</button>
 					<button type="button" class={nudge} style={nudgeStyle} onclick={() => setValue(s, values[s] - 1)} aria-label="minus 1">−1</button>
+					<!-- Exact entry: type a step value and press Enter (or leave the box) to apply it; the slider follows. -->
 					<input
 						type="number"
 						min="0"
 						max={ENCODER_MAX}
+						step="1"
 						value={values[s]}
-						onchange={(e) => setValue(s, Math.round(Number(e.currentTarget.value)))}
-						class="{input} w-20 text-center font-mono"
+						onchange={(e) => { setValue(s, Math.round(Number(e.currentTarget.value))); e.currentTarget.value = String(values[s]); }}
+						onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); e.currentTarget.blur(); } }}
+						class="{input} w-24 text-center font-mono tabular-nums"
 						style={inputStyle}
-						aria-label="{JOINT_LABELS[s]} value"
+						aria-label="{JOINT_LABELS[s]} value (steps)"
+						title="Absolute encoder goal, 0–{ENCODER_MAX}. Enter applies it."
 					/>
 					<button type="button" class={nudge} style={nudgeStyle} onclick={() => setValue(s, values[s] + 1)} aria-label="plus 1">+1</button>
 					<button type="button" class={nudge} style={nudgeStyle} onclick={() => setValue(s, values[s] + 10)} aria-label="plus 10">+10</button>

@@ -187,6 +187,12 @@
 							<button type="button" onclick={() => move(i, 1)} class="px-1 text-xs" style="color: var(--color-tron-cyan)" title="Later">▼</button>
 							<button type="button" onclick={() => remove(i)} class="px-1 text-xs text-red-300" title="Remove">✕</button>
 						</div>
+						{#if p}
+							<!-- The six absolute goals this step sends (servo 1..6). The timeline is this list of values, never a change from the step before. -->
+							<div class="mt-0.5 pl-7 font-mono text-[11px] tabular-nums" style={muted} title="Absolute encoder goals, servo 1 to 6 — edit them with the number boxes on the right">
+								{keyframePositions(p.positions, k.offsets).join(' · ')}
+							</div>
+						{/if}
 						{#if selected === i}
 							<div class="mt-2 grid grid-cols-3 gap-2 text-[11px]" style={muted}>
 								<label>Move in (s)

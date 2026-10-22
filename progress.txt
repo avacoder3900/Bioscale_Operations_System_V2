@@ -22689,3 +22689,23 @@ Retrieve this exact code: git checkout feat/animate-redo at commit 7acf9c0d
   (or: git log feat/animate-redo --oneline to find it if the branch has since moved on)
 What this deployment is for: try the redone Animate tab (live sliders, go-to as a play, temperatures). Smoke:
 /login 200, /manufacturing/cart-mfg/robot-arm/animate 302 to login, /api/robot-arm/animate/live 401 unauthenticated.
+
+================================================================================
+2026-10-22 — feat/animate-redo — Animate: every step shows its six absolute goals; number boxes apply on Enter
+================================================================================
+Alejandro, reviewing the redo: the sliders must have number entries next to them ("I would hate for it
+to be imprecise... something that can be edited and executed precisely"), and a move set must be a
+list of absolute servo values along the timeline, like the Live positions on the Vision tab — never a
+delta from the previous pose, so an early error cannot creep into later poses.
+
+Both already hold in this branch (poses are `basis: goal` absolute encoder values, Go to pose and
+Play send absolute goals per frame, the relative-jog chain is gone — see ARM-06 §13), so this is a
+small UI follow-through:
+  - moveset/[id]/+page.svelte: every step row prints its six absolute goals (servo 1..6, with the
+    step's old timeline offsets applied if it has any) under the pose name, so the keyframe list reads
+    as the list of values the arm will be sent.
+  - PoseEditor.svelte: the per-servo number box (0–4095, whole steps) applies on Enter as well as on
+    blur, re-renders the clamped value, and is a little wider. The slider follows the typed number.
+Clarified to the operator in chat: the "home once, then apply each pose as a delta" behaviour Sam
+described was the old Go to pose (relative jogs, goal = present + delta); it was removed in this redo.
+svelte-check: 14 errors / 432 warnings (baseline). No Pi change.
