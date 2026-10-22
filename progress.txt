@@ -22676,3 +22676,9 @@ is saved with the draft but kept out of Undo. New-clean-up form: "Smooth automat
 pilot line optional, legend labels configurable. Docs: docs/prds/ARM-08-cleanup-smoothing.md, context doc line.
 Tests: robot-arm unit suites 7 files, 153 passed. svelte-check 14 errors / 432 warnings (baseline). vite build OK.
 Not run against the arm, a live Pi or a live DB.
+Deployment: preview — https://bioscale-operations-system-mongodb-r0hw64819-brevitest.vercel.app
+Source: branch feat/cleanup-smoothing @ commit b15ca38c
+Retrieve this exact code: git checkout feat/cleanup-smoothing at commit b15ca38c
+  (or: git log feat/cleanup-smoothing --oneline to find it if the branch has since moved on)
+What this deployment is for: Clean-up Smoothing card, Smooth automatically, Replace it (PR #129); smoke: /login 200, cleanup 302 to login.
+PR: https://github.com/avacoder3900/Bioscale_Operations_System_V2/pull/129
