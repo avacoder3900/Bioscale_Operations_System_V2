@@ -22970,3 +22970,12 @@ home button in the vision page."
   - docs/prds/ARM-09-verified-poses.md §2 and §6 updated.
 Checks: vitest src/lib/robot-arm 8 files / 177 passed; svelte-check 13 errors / 432 warnings (baseline).
 
+Deployment: production — https://bioscale-operations-system-mongodb-83x3di0g3-brevitest.vercel.app
+Source: branch master @ commit 05e6f922 (cherry-pick of edaf6910, which had landed on feat/arm-live-tags-depth-delta because
+  another session had switched the shared checkout's branch; master is pushed from ../Bioscale_V2-wt-master from now on)
+Retrieve this exact code: git checkout master at commit 05e6f922
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: camera tolerance default 10 mm, one definition for Calibrate home and verified poses.
+  GitHub deployment 7280278478 success. Note: 08337860 (bus-lock retry) never got its own production deploy on
+  Vercel (commit status stayed "pending"); it went live inside the 2026-10-23 14:04 UTC production deploy of 5f5b3034.
+
