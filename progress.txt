@@ -23032,5 +23032,11 @@ disagree" rules so those messages keep priority. The 90 s limit stays for an arm
 40 steps. The "home" verdict itself still needs 12 steps; this does not loosen the home check, it only
 decides when to give up jogging and close. Overrides (clawAfterMs, clawToleranceSteps) exist for tests /
 later tuning. Vision page comment updated.
-Checks: vitest src/lib/robot-arm 8 files / 184 passed; svelte-check 14 errors / 432 warnings (baseline).
+Checks: vitest src/lib/robot-arm 8 files / 178 passed; svelte-check 14 errors / 432 warnings (baseline).
 
+
+Deployment: production — https://bioscale-operations-system-mongodb-fqh3uj0q6-brevitest.vercel.app
+Source: branch master @ commit d9301ede
+Retrieve this exact code: git checkout master at commit d9301ede
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: Return to home closes the claw once within 40 steps for 5 s. GitHub deployment 7281131700 success.
