@@ -358,6 +358,15 @@ export interface TagAssessment {
 	 * Null when either side has no depth.
 	 */
 	offDepthMm: number | null;
+	/**
+	 * Where this tag's distance came from for the judgment: 'depth' = the
+	 * D415's range at the tag centre on both sides (the pose was slid along
+	 * its sight line to that distance), 'image' = the pose's own z from the
+	 * tag's size on the picture. Null without a pose.
+	 */
+	zSource: 'depth' | 'image' | null;
+	/** The pose's own (image-derived) z, mm — for comparison when depth drives the judgment. */
+	imageZMm: number | null;
 }
 
 export type VisionVerdict = 'ok' | 'off' | 'camera_moved' | 'no_markers';
@@ -373,6 +382,43 @@ export interface VisionAssessment {
 	extraTagIds: number[];
 }
 
+// ── depth as distance ────────────────────────────────────────────────────
+
+export interface AssessOptions {
+	/**
+	 * Use the D415's depth at the tag centre as the tag's distance (default
+	 * true). The image pose's z comes from the tag's size on the picture and
+	 * on an 8 mm tag jitters by several mm per half-pixel of corner noise;
+	 * the sensor's range does not (measured on arm-pi 2026-10-23: ~1 mm,
+	 * no drift). The pose's translation is slid along its sight line to the
+	 * depth, so x/y keep the picture's precision; rotation is untouched.
+	 * Per tag, depth is used only when BOTH the calibration and the
+	 * detection have a reading that agrees with the image z within
+	 * DEPTH_Z_GATE — otherwise that tag is judged on the image on both
+	 * sides, never mixed.
+	 */
+	depthZ?: boolean;
+}
+
+/** A depth reading further than this fraction of the image z from it is not the tag (e.g. the surface behind its edge). */
+export const DEPTH_Z_GATE = 0.25;
+
+/** This side has a depth reading that plausibly belongs to the tag. */
+export function depthUsable(pose: TagPose | null, depthMm: number | null): pose is TagPose {
+	if (!pose || depthMm == null || !(depthMm > 0) || !(pose.t[2] > 0)) return false;
+	return Math.abs(depthMm - pose.t[2]) <= DEPTH_Z_GATE * pose.t[2];
+}
+
+/** The pose slid along its sight line so its z is `depthMm` (alt too; rotation unchanged). */
+export function atDepth(pose: TagPose, depthMm: number): TagPose {
+	const slide = (t: Vec3): Vec3 => {
+		if (!(t[2] > 0)) return t;
+		const k = depthMm / t[2];
+		return [t[0] * k, t[1] * k, depthMm];
+	};
+	return { ...pose, t: slide(pose.t), alt: pose.alt ? { ...pose.alt, t: slide(pose.alt.t) } : pose.alt };
+}
+
 /**
  * Compare the tags seen now with the calibration. A tag is `moved` when,
  * after undoing any camera shift the fixed tags reveal, it is further than
@@ -384,14 +430,29 @@ export interface VisionAssessment {
  * fixed tag was visible — and at least three tags all moved together. With
  * fixed tags in view a camera bump is measured and compensated instead.
  */
-export function assessTags(cal: CalibratedTag[], detections: TagDetection[], tol: Tolerances = DEFAULT_TOLERANCES): VisionAssessment {
+export function assessTags(cal: CalibratedTag[], detections: TagDetection[], tol: Tolerances = DEFAULT_TOLERANCES, opts: AssessOptions = {}): VisionAssessment {
 	// Calibrated sizes win over today's registry: a size edit must not look like the arm moving.
 	const calSize = new Map(cal.map((c) => [c.tagId, c.sizeMm]));
 	const seen = new Map(detections.map((d) => [d.id, rescaleToSize(d, calSize.get(d.id))]));
+	const imageZ = new Map([...seen].map(([id, d]) => [id, d.pose ? d.pose.t[2] : null]));
+	// Depth as distance: per tag, both sides or neither (see AssessOptions.depthZ).
+	const depthZ = opts.depthZ !== false;
+	const zSource = new Map<number, 'depth' | 'image'>();
+	const calUsed = cal.map((c) => {
+		const d = seen.get(c.tagId);
+		if (!d?.pose || !c.pose) return c;
+		if (depthZ && depthUsable(c.pose, c.depthMm) && depthUsable(d.pose, d.depthMm)) {
+			zSource.set(c.tagId, 'depth');
+			seen.set(c.tagId, { ...d, pose: atDepth(d.pose, d.depthMm!) });
+			return { ...c, pose: atDepth(c.pose, c.depthMm!) };
+		}
+		zSource.set(c.tagId, 'image');
+		return c;
+	});
 	// Settle each tag's planar-pose ambiguity against its calibrated pose first,
 	// so neither the camera-shift vote nor the per-tag delta sees a flipped tilt.
 	const resolved = new Map<number, { d: TagDetection; flipped: boolean; ambiguous: boolean }>();
-	for (const c of cal) {
+	for (const c of calUsed) {
 		const d = seen.get(c.tagId);
 		if (!d) continue;
 		if (!d.pose) {
@@ -406,14 +467,14 @@ export function assessTags(cal: CalibratedTag[], detections: TagDetection[], tol
 		});
 	}
 	const now = new Map([...resolved].map(([id, r]) => [id, r.d]));
-	const { M, shift } = estimateCameraShift(cal, now, tol);
+	const { M, shift } = estimateCameraShift(calUsed, now, tol);
 
-	const markers: TagAssessment[] = cal.map((c) => {
+	const markers: TagAssessment[] = calUsed.map((c) => {
 		const r = resolved.get(c.tagId);
 		const d = r?.d;
 		const base = { markerId: c.markerId, tagId: c.tagId, name: c.name, group: c.group, role: c.role };
 		if (!d || !r) {
-			return { ...base, status: 'missing', over: [], offMm: null, offDeg: null, offTiltDeg: null, ambiguous: false, flipped: false, offPx: null, center: null, corners: null, zMm: null, depthMm: null, offDepthMm: null };
+			return { ...base, status: 'missing', over: [], offMm: null, offDeg: null, offTiltDeg: null, ambiguous: false, flipped: false, offPx: null, center: null, corners: null, zMm: null, depthMm: null, offDepthMm: null, zSource: null, imageZMm: null };
 		}
 		const offPx = Math.hypot(d.center[0] - c.center[0], d.center[1] - c.center[1]);
 		let offMm: number | null = null;
@@ -444,7 +505,9 @@ export function assessTags(cal: CalibratedTag[], detections: TagDetection[], tol
 			corners: d.corners,
 			zMm: d.pose ? d.pose.t[2] : null,
 			depthMm: d.depthMm,
-			offDepthMm: d.depthMm != null && c.depthMm != null ? d.depthMm - c.depthMm : null
+			offDepthMm: d.depthMm != null && c.depthMm != null ? d.depthMm - c.depthMm : null,
+			zSource: d.pose ? (zSource.get(c.tagId) ?? 'image') : null,
+			imageZMm: imageZ.get(c.tagId) ?? null
 		};
 	});
 
@@ -458,7 +521,7 @@ export function assessTags(cal: CalibratedTag[], detections: TagDetection[], tol
 	let verdict: VisionVerdict;
 	if (!markers.length) verdict = 'no_markers';
 	else if (okCount === markers.length) verdict = 'ok';
-	else if (!shift && looksLikeCameraShift(cal, now, markers, tol)) verdict = 'camera_moved';
+	else if (!shift && looksLikeCameraShift(calUsed, now, markers, tol)) verdict = 'camera_moved';
 	else verdict = 'off';
 	return { verdict, markers, okCount, movedCount, missingCount, cameraShift: shift, extraTagIds };
 }
