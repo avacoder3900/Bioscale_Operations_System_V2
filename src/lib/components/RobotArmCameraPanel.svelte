@@ -67,6 +67,14 @@
 	const SIZES = { S: 320, M: 480, L: 640 };
 	type SizeKey = keyof typeof SIZES;
 	const SIZE_KEYS = Object.keys(SIZES) as SizeKey[];
+	// Pixels requested from the Pi, separate from the size drawn on screen.
+	// 'fit' = just enough for the drawn size (times pixel ratio): light frames
+	// for a live glance. 'full' = the camera's whole frame (1920x1080 at the
+	// stored quality 80, ~140 KB vs ~27 KB) at the same drawn size, so zooming
+	// in or going fullscreen shows real pixels (Alejandro, 2026-10-23: "I
+	// definitely want it to be full resolution when zooming in").
+	const RESOLUTIONS = { fit: 'fit', full: 'full' } as const;
+	type ResolutionKey = keyof typeof RESOLUTIONS;
 	const STORAGE_KEY = 'bims.armCamera.v1';
 
 	// A frame older than this is called out. The Pi has its own staleness
@@ -88,6 +96,7 @@
 	let fps = $state<number>(5);
 	let directFps = $state<number>(30);
 	let size = $state<SizeKey>('M');
+	let resolution = $state<ResolutionKey>('fit');
 	let collapsed = $state(false);
 	let paused = $state(false);
 
@@ -200,6 +209,7 @@
 				directFps = saved.directFps;
 			}
 			if (saved.size in SIZES) size = saved.size;
+			if (saved.resolution in RESOLUTIONS) resolution = saved.resolution;
 			if (typeof saved.collapsed === 'boolean') collapsed = saved.collapsed;
 			// Remembered, not applied: the camera list may still be empty at this
 			// point. The reconcile effect applies it once we know what exists.
@@ -224,7 +234,7 @@
 	});
 
 	$effect(() => {
-		const snapshot = JSON.stringify({ fps, directFps, size, collapsed, selected });
+		const snapshot = JSON.stringify({ fps, directFps, size, resolution, collapsed, selected });
 		try {
 			localStorage.setItem(STORAGE_KEY, snapshot);
 		} catch {
@@ -342,19 +352,23 @@
 	}
 
 	// The frame's own width is SIZES[size] on screen, rotated or not (see
-	// viewportMaxWidth), times the display's pixel density. Fullscreen gets
-	// the full frame. A Pi build without q/w ignores them.
+	// viewportMaxWidth), times the display's pixel density. Fullscreen and
+	// resolution 'full' get the whole frame. A Pi build without q/w ignores them.
 	function liveWidth(): number | null {
-		if (isFullscreen) return null;
+		if (isFullscreen || resolution === 'full') return null;
 		const dpr = typeof window === 'undefined' ? 1 : window.devicePixelRatio || 1;
 		return Math.max(320, Math.min(1920, Math.round(SIZES[size] * dpr)));
 	}
 
 	function liveFrameUrl(origin: string, name: string, token: string): string {
 		const w = liveWidth();
+		// No q/w at all for the full frame: the Pi then serves the JPEG it
+		// already holds for that frame (quality 80, shared by every viewer and
+		// by Save), so 'full' costs the Pi nothing extra to encode.
+		const sizing = w ? `&q=${LIVE_Q}&w=${w}` : '';
 		return (
 			`${origin}/cameras/${encodeURIComponent(name)}/snapshot.jpg` +
-			`?token=${encodeURIComponent(token)}&q=${LIVE_Q}${w ? `&w=${w}` : ''}&t=${Date.now()}`
+			`?token=${encodeURIComponent(token)}${sizing}&t=${Date.now()}`
 		);
 	}
 
@@ -747,6 +761,7 @@
 
 					<select
 						bind:value={size}
+						title="How large the picture is drawn"
 						class="rounded border px-2 py-1"
 						style="border-color: var(--color-tron-border); background: var(--color-tron-bg); color: var(--color-tron-text)"
 						aria-label="Size"
@@ -754,6 +769,17 @@
 						{#each SIZE_KEYS as key (key)}
 							<option value={key}>{key}</option>
 						{/each}
+					</select>
+
+					<select
+						bind:value={resolution}
+						title="Pixels fetched from the camera. fit = enough for the drawn size (light frames). full = the whole 1920x1080 frame at the same drawn size, about 5x the bandwidth, so zooming in or fullscreen shows real pixels. No extra work for the Pi either way."
+						class="rounded border px-2 py-1"
+						style="border-color: var(--color-tron-border); background: var(--color-tron-bg); color: {resolution === 'full' ? 'var(--color-tron-cyan)' : 'var(--color-tron-text)'}"
+						aria-label="Resolution"
+					>
+						<option value="fit">fit</option>
+						<option value="full">full res</option>
 					</select>
 
 					<!-- View-only: detection and coordinates keep the camera's own orientation. -->

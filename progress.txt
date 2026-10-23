@@ -2907,6 +2907,22 @@ UI-only, no server change. npm run check: 11-error baseline (0 new in deck-calib
 Reaches operators only after the stale prod alias is promoted to master.
 
 ================================================================================
+2026-10-23 — feat/arm-vision-raw-frames — Arm camera panel: "full res" option, same drawn size, real pixels when zooming
+================================================================================
+Alejandro asked whether the camera-settings values reach both the detector's image and the BIMS picture (yes:
+they are UVC controls in the sensor, one raw frame feeds both; only compression differs), whether raw frames
+should replace the JPEGs in BIMS (no: a 1080p YUYV frame is 4.1 MB and browsers cannot show it; PNG is ~10x the
+CPU of JPEG; the live JPEG costs the Pi ~11 ms per viewed frame and the detector no longer touches it), and
+then: "is the image on BIMS not full resolution? I definitely want it to be full resolution when zooming in."
+Found: the direct-mode live view asked the Pi for SIZES[size] x devicePixelRatio pixels (M = 480 CSS px ->
+480-960 px) at q70; only fullscreen fetched the whole frame. The proxy path already fetched the stored full
+frame. Fix (RobotArmCameraPanel.svelte): a "Resolution" menu beside Size — fit (as before) / full res (no q/w,
+so the Pi serves the quality-80 1920x1080 JPEG it already holds for that frame, shared with Save; ~140 KB vs
+~27 KB per frame, no extra encode). The picture stays at the chosen drawn size; browser zoom and fullscreen
+show real pixels. Remembered per browser (bims.armCamera.v1 resolution). Footer keeps showing the delivered
+frame size. npm run check: 13 errors / 432 warnings, none in touched files.
+
+================================================================================
 2026-10-23 — feat/arm-vision-raw-frames — Animate: move-set "verified" circle showed green with zero camera references
 ================================================================================
 Alejandro: the move sets at the bottom of the Animate page show green circles as if calibrated with the camera,
