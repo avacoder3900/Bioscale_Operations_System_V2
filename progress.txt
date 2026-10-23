@@ -23448,6 +23448,7 @@ servo id before each temperature with a space, like "1: 25  2: 35". PiThermalChi
 tooltip says the format. Colours and per-servo tooltips unchanged.
 npm run check: 13 errors / 432 warnings, none in touched files (baseline 13).
 Deployment: production — via Vercel GitHub integration on the push to master
-Source: branch fix/arm-servo-row-reason @ commit 31ce5b91
-Retrieve this exact code: git checkout fix/arm-servo-row-reason at commit 31ce5b91
+Source: branch fix/arm-servo-row-reason @ commit 5c005ff5
+Retrieve this exact code: git checkout fix/arm-servo-row-reason at commit 5c005ff5
 What this deployment is for: Servos line on the Arm Camera card reads "Servos 1: 28 2: 27 3: 26 4: 27 5: 28 6: 30 °C".
+(Correction: the previous entry first named 31ce5b91, a docs commit; the format change is 5c005ff5. The check gate in the commit chain tripped on the 13 baseline errors, so the code commit ran one step late.)

@@ -146,7 +146,7 @@
 		].join('\n');
 	}
 	let servoRowTitle = $derived(
-		`Follower servo temperatures, left to right = servo 1 … ${joints.length}. Warm ≥ ${warmC} °C, hot ≥ ${hotC} °C (the STS3215 derates above ~60 °C). Hover a number for that servo's name, load and voltage.`
+		`Follower servo temperatures as "servo id: °C". Warm ≥ ${warmC} °C, hot ≥ ${hotC} °C (the STS3215 derates above ~60 °C). Hover a number for that servo's name, load and voltage.`
 	);
 
 	async function poll(): Promise<void> {
@@ -250,14 +250,14 @@
 	<!-- Line 3: every follower servo's temperature, servo 1 first. -->
 	<div class="flex flex-wrap items-center gap-1.5">
 		<span
-			class="inline-flex shrink-0 items-center gap-1.5 rounded px-1.5 py-0.5 font-mono text-[11px] leading-tight {servoLevel === 'hot' ? 'animate-pulse' : ''}"
+			class="inline-flex shrink-0 flex-wrap items-center gap-x-2 gap-y-0.5 rounded px-1.5 py-0.5 font-mono text-[11px] leading-tight {servoLevel === 'hot' ? 'animate-pulse' : ''}"
 			style="color: {servoRowColor}; border: 1px solid {servoLevel === 'ok' ? 'var(--color-tron-border)' : servoRowColor}; background: {servoLevel === 'ok' ? 'transparent' : 'rgba(0,0,0,0.25)'}"
 			title={servoRowTitle}
 			aria-live={servoLevel === 'hot' ? 'polite' : 'off'}
 		>
 			<span>Servos</span>
 			{#each joints as j (j.id)}
-				<span style="color: {servoColor(j.temperature)}" title={servoTitle(j)}>{j.temperature}</span>
+				<span class="whitespace-nowrap" style="color: {servoColor(j.temperature)}" title={servoTitle(j)}>{j.id}: {j.temperature}</span>
 			{/each}
 			<span>°C</span>
 		</span>
