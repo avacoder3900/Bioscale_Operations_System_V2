@@ -19,12 +19,20 @@
 	import type { Snippet } from 'svelte';
 	import { page } from '$app/stores';
 	import RobotArmCameraPanel from '$lib/components/RobotArmCameraPanel.svelte';
+	import RobotArmConnectionPanel from '$lib/components/RobotArmConnectionPanel.svelte';
 	import type { CameraStatus, ArmPreflight, ArmThermal } from '$lib/server/robot-arm-client';
 
 	interface Props {
 		children: Snippet;
 		data: {
-			arm: { reachable: boolean; preflight: ArmPreflight | null; error: string | null };
+			arm: {
+				reachable: boolean;
+				preflight: ArmPreflight | null;
+				error: string | null;
+				baseUrl: string | null;
+				/** ISO timestamp of the most recent successful reach, from the connection log. */
+				lastConnected: string | null;
+			};
 			cameras: CameraStatus[];
 			camerasError: string | null;
 			/** Pi heat / throttle state at load (null: unreachable or route not installed). */
@@ -86,6 +94,27 @@
 	let dryRun = $derived(data.arm.preflight?.checks?.dry_run?.value ?? null);
 	let version = $derived(data.arm.preflight?.version ?? null);
 	let diagnosis = $derived(data.arm.preflight?.diagnosis ?? null);
+
+	// ARM CONNECTION panel sits above the camera in the right rail. It can be
+	// hidden to give the camera the full rail; the choice is a per-browser
+	// convenience, remembered so it survives a reload.
+	const CONNECTION_HIDDEN_KEY = 'robot-arm:connection-panel-hidden';
+	let connectionHidden = $state(false);
+	$effect(() => {
+		try {
+			connectionHidden = localStorage.getItem(CONNECTION_HIDDEN_KEY) === '1';
+		} catch {
+			/* storage unavailable — default to shown */
+		}
+	});
+	function setConnectionHidden(hidden: boolean) {
+		connectionHidden = hidden;
+		try {
+			localStorage.setItem(CONNECTION_HIDDEN_KEY, hidden ? '1' : '0');
+		} catch {
+			/* ignore */
+		}
+	}
 </script>
 
 <div class="space-y-4">
@@ -182,7 +211,26 @@
 			{@render children()}
 		</div>
 		<div class="xl:order-2">
-			<div class="xl:sticky xl:top-4">
+			<div class="space-y-4 xl:sticky xl:top-4">
+				{#if connectionHidden}
+					<button
+						type="button"
+						onclick={() => setConnectionHidden(false)}
+						class="flex w-full items-center justify-between rounded border px-3 py-2 text-xs"
+						style="border-color: var(--color-tron-border); background: var(--color-tron-surface); color: var(--color-tron-text-secondary)"
+					>
+						<span class="font-semibold tracking-wide">ARM CONNECTION</span>
+						<span style="color: var(--color-tron-cyan)">Show</span>
+					</button>
+				{:else}
+					<RobotArmConnectionPanel
+						preflight={data.arm.preflight}
+						preflightError={data.arm.error}
+						baseUrl={data.arm.baseUrl}
+						lastConnected={data.arm.lastConnected}
+						onhide={() => setConnectionHidden(true)}
+					/>
+				{/if}
 				<RobotArmCameraPanel
 					cameras={data.cameras}
 					camerasError={data.camerasError}

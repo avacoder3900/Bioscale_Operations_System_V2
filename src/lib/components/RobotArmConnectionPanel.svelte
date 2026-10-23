@@ -32,7 +32,8 @@
 		preflightError = null,
 		baseUrl = null,
 		lastConnected = null,
-		variant = 'full'
+		variant = 'full',
+		onhide
 	}: {
 		preflight?: Preflight | null;
 		preflightError?: string | null;
@@ -45,6 +46,8 @@
 		 * same derived state below so they can never disagree.
 		 */
 		variant?: 'full' | 'compact';
+		/** When given, the full panel shows a Hide button that calls this. */
+		onhide?: () => void;
 	} = $props();
 
 	let refreshing = $state(false);
@@ -139,15 +142,28 @@
 		<h2 class="text-sm font-semibold tracking-wide" style="color: var(--color-tron-text)">
 			ARM CONNECTION
 		</h2>
-		<button
-			type="button"
-			onclick={refresh}
-			disabled={refreshing}
-			class="min-h-[44px] rounded border px-3 text-xs disabled:opacity-50"
-			style="border-color: var(--color-tron-border); color: var(--color-tron-text-secondary)"
-		>
-			{refreshing ? 'Refreshing…' : 'Refresh'}
-		</button>
+		<div class="flex items-center gap-2">
+			<button
+				type="button"
+				onclick={refresh}
+				disabled={refreshing}
+				class="min-h-[44px] rounded border px-3 text-xs disabled:opacity-50"
+				style="border-color: var(--color-tron-border); color: var(--color-tron-text-secondary)"
+			>
+				{refreshing ? 'Refreshing…' : 'Refresh'}
+			</button>
+			{#if onhide}
+				<button
+					type="button"
+					onclick={onhide}
+					class="min-h-[44px] rounded border px-3 text-xs"
+					style="border-color: var(--color-tron-border); color: var(--color-tron-text-secondary)"
+					title="Hide the arm connection panel"
+				>
+					Hide
+				</button>
+			{/if}
+		</div>
 	</div>
 
 	<div class="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2">
