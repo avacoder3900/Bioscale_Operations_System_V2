@@ -112,7 +112,15 @@ export interface Tolerances {
 	pixel: number;
 }
 
-export const DEFAULT_TOLERANCES: Tolerances = { positionMm: 5, angleDeg: 5, pixel: 0.015 };
+/**
+ * THE tolerance defaults for every camera check: the Vision tab's home
+ * calibration (Calibrate home) and each pose's reference for verified runs
+ * (ARM-09, which derives DEFAULT_STEP_TOLERANCES from this). Change them
+ * here only. positionMm 5 → 10 on 2026-10-23 (Alejandro): tag positions
+ * shift several mm between frames with the arm completely still, so 5 mm
+ * tripped on jitter; tighten again once the pose estimate is steadier.
+ */
+export const DEFAULT_TOLERANCES: Tolerances = { positionMm: 10, angleDeg: 5, pixel: 0.015 };
 
 // ── 3-D helpers ──────────────────────────────────────────────────────────
 

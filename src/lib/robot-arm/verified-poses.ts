@@ -14,7 +14,7 @@
  * verified-poses.test.ts. The I/O half is $lib/server/robot-arm-verified.
  */
 import { residuals, HOME_SERVO_IDS, type JointSteps, type Residuals } from './home-calibration';
-import type { VisionAssessment } from './apriltags';
+import { DEFAULT_TOLERANCES, type VisionAssessment } from './apriltags';
 
 // ── tolerances ───────────────────────────────────────────────────────────
 
@@ -26,7 +26,8 @@ export interface StepTolerances {
 	steps: number;
 }
 
-export const DEFAULT_STEP_TOLERANCES: StepTolerances = { positionMm: 5, angleDeg: 5, steps: 15 };
+/** Camera halves come from apriltags.DEFAULT_TOLERANCES — the same defaults as Calibrate home on the Vision tab; only the encoder half is ours. */
+export const DEFAULT_STEP_TOLERANCES: StepTolerances = { positionMm: DEFAULT_TOLERANCES.positionMm, angleDeg: DEFAULT_TOLERANCES.angleDeg, steps: 15 };
 export const MAX_POSITION_MM = 100;
 export const MAX_ANGLE_DEG = 90;
 export const MAX_TOLERANCE_STEPS = 300;

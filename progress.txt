@@ -22952,3 +22952,21 @@ Deployment: production — via Vercel GitHub integration on push to master
 Source: branch feat/arm-live-tags-depth-delta @ the commit after 08337860 (git log feat/arm-live-tags-depth-delta --oneline), fast-forwarded to master
 Retrieve this exact code: git checkout feat/arm-live-tags-depth-delta
 What this deployment is for: Vision tab > Live Tags shows Δdepth beside off mm, to judge whether the D415 depth is steadier than the image distance on the 8 mm tags (#53).
+================================================================================
+2026-10-23 — master — Camera tolerance default 5 → 10 mm, one definition for Calibrate home and verified poses
+================================================================================
+Alejandro: "Change the position mm tolerance default value to be 10 mm. In the future, I'd wish for this
+to be more accurate, but the fact is that the values shift a lot even in normal static conditions. And have
+these default values pull from the same definition ... as the default values for our existing Calibrate
+home button in the vision page."
+  - src/lib/robot-arm/apriltags.ts DEFAULT_TOLERANCES is now THE place: { positionMm: 10, angleDeg: 5,
+    pixel: 0.015 } with a comment saying so and why (5 mm tripped on the few-mm jitter of a still arm).
+    Calibrate home already used it (cleanTolerances / calibrationSummary / the Vision form placeholders).
+  - src/lib/robot-arm/verified-poses.ts DEFAULT_STEP_TOLERANCES now derives its camera halves from
+    DEFAULT_TOLERANCES (positionMm, angleDeg) and keeps only the encoder half (steps: 15) as its own.
+    New pose references and the ARM-09 tolerance form therefore start at 10 mm / 5°. Existing saved
+    calibrations keep the numbers stored on them (edit them on the card / Vision tab).
+  - apriltags.test.ts: the two "moved" cases now move a tag 15 mm (past the new default) instead of 8-9.
+  - docs/prds/ARM-09-verified-poses.md §2 and §6 updated.
+Checks: vitest src/lib/robot-arm 8 files / 177 passed; svelte-check 13 errors / 432 warnings (baseline).
+
