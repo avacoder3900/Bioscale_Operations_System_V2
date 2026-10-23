@@ -107,6 +107,7 @@
 	});
 
 	const fmt = (v: number | null | undefined, d = 1) => (v == null ? '—' : v.toFixed(d));
+	const fmtSigned = (v: number | null | undefined, d = 1) => (v == null ? '—' : (v > 0 ? '+' : '') + v.toFixed(d));
 	const OVER_COLOR = '#f87171';
 	/** Red when this measurement is the one that made the tag MOVED. */
 	const cellColor = (a: { over: string[] } | undefined, which: 'mm' | 'deg' | 'px') => (a?.over.includes(which) ? OVER_COLOR : 'var(--color-tron-text)');
@@ -200,6 +201,7 @@
 							<th class="py-1 pr-2 font-medium">Tag</th>
 							<th class="py-1 pr-2 font-medium">Status</th>
 							<th class="py-1 pr-2 text-right font-medium" title="Distance from home after undoing any camera shift. Red = over {tolMm} mm.">off mm</th>
+							<th class="py-1 pr-2 text-right font-medium" title="D415 depth now minus depth at calibration (signed, + = further from the camera). The sensor's own range reading, independent of the tag's size on the picture: compare its steadiness with off mm on a small tag. Not judged.">Δdepth mm</th>
 							<th class="py-1 pr-2 text-right font-medium" title={tolDeg > 0 ? `Spin about the tag's own normal. Red = over ${tolDeg}°.` : 'Spin about the tag\'s own normal (not checked).'}>spin °</th>
 							<th class="py-1 pr-2 text-right font-medium" title="Tilt of the tag's normal from home. Advisory only: a square tag seen nearly head-on has two poses that fit its corners equally, so tilt can flip by twice the viewing angle. ? = that coin toss this frame.">tilt °</th>
 							{#if anyPx}<th class="py-1 pr-2 text-right font-medium" title="Picture distance, % of frame width; used when a tag has no pose. Red = over {(calibration.tolerances.pixel * 100).toFixed(1)} %.">off px</th>{/if}
@@ -217,6 +219,7 @@
 								</td>
 								<td class="py-1 pr-2 font-semibold" style="color: {STATUS_COLOR[st]}">{STATUS_LABEL[st]}</td>
 								<td class="py-1 pr-2 text-right font-mono {a?.over.includes('mm') ? 'font-semibold' : ''}" style="color: {cellColor(a, 'mm')}" title={a?.over.includes('mm') ? `Over the ${tolMm} mm tolerance: this is why the tag reads MOVED` : ''}>{fmt(a?.offMm)}</td>
+								<td class="py-1 pr-2 text-right font-mono" style="color: var(--color-tron-text-secondary)" title={a?.offDepthMm != null ? `D415 depth ${Math.round(a.depthMm!)} mm now vs ${Math.round(a.depthMm! - a.offDepthMm)} mm at calibration` : a?.status === 'missing' ? '' : 'No depth reading on one side (closer than the D415 minimum range, or no return)'}>{fmtSigned(a?.offDepthMm)}</td>
 								<td class="py-1 pr-2 text-right font-mono {a?.over.includes('deg') ? 'font-semibold' : ''}" style="color: {cellColor(a, 'deg')}" title={a?.over.includes('deg') ? `Over the ${tolDeg}° spin tolerance: this is why the tag reads MOVED` : ''}>{fmt(a?.offDeg)}</td>
 								<td class="py-1 pr-2 text-right font-mono" style="color: var(--color-tron-text-secondary)" title={a?.ambiguous ? `Two poses fit this tag's corners about equally this frame${a.flipped ? '; the one agreeing with the calibration was taken' : ''}. Tilt is not judged.` : 'Tilt is not judged.'}>{fmt(a?.offTiltDeg)}{a?.ambiguous ? '?' : ''}</td>
 								{#if anyPx}<td class="py-1 pr-2 text-right font-mono {a?.over.includes('px') ? 'font-semibold' : ''}" style="color: {cellColor(a, 'px')}" title={a?.over.includes('px') ? 'No pose on this tag, so it is judged on picture distance, and that is over tolerance' : ''}>{a?.offPx != null ? (a.offPx * 100).toFixed(1) + ' %' : '—'}</td>{/if}
@@ -232,6 +235,7 @@
 					A <span style="color: {OVER_COLOR}">red</span> number is the one over tolerance that makes its tag MOVED.
 					Tilt is advisory: a square seen nearly head-on has two poses that fit its corners equally, so tilt can flip by twice the viewing angle (a "?" marks that coin toss; the pose agreeing with the calibration is used).
 					Distance is from the tag pose; (brackets) = the D415's depth reading, as a cross-check.
+					Δdepth is that depth reading now minus at calibration (+ = further away); it comes from the sensor, not the tag's size on the picture, and is not judged.
 					{#if calibration.intrinsicsSource === 'nominal'}Nominal intrinsics — mm are approximate.{/if}
 				</p>
 			</div>

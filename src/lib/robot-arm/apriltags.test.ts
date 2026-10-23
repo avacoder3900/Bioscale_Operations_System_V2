@@ -75,6 +75,22 @@ describe('3-D helpers', () => {
 });
 
 describe('assessTags', () => {
+	it('reports the D415 depth change (now minus calibration) without judging it', () => {
+		const c = { ...cal(53, 'arm', [10, 5, 300]), depthMm: 301.5 };
+		const d = { ...seen(c), depthMm: 305.0 };
+		const a = assessTags([c], [d]);
+		expect(a.markers[0].offDepthMm).toBeCloseTo(3.5, 6);
+		expect(a.markers[0].status).toBe('ok');
+		// 40 mm nearer by depth alone is still not a verdict: the column is diagnostic.
+		const near = assessTags([c], [{ ...seen(c), depthMm: 261.5 }]);
+		expect(near.markers[0].offDepthMm).toBeCloseTo(-40, 6);
+		expect(near.markers[0].status).toBe('ok');
+		// Null when either side has no depth, and for a missing tag.
+		expect(assessTags([c], [seen(c)]).markers[0].offDepthMm).toBeNull();
+		expect(assessTags([cal(53, 'arm', [10, 5, 300])], [d]).markers[0].offDepthMm).toBeNull();
+		expect(assessTags([c], []).markers[0].offDepthMm).toBeNull();
+	});
+
 	const fixed = [cal(0, 'fixed', [-80, 40, 300]), cal(1, 'fixed', [90, 50, 310]), cal(2, 'fixed', [0, 80, 290])];
 	const arm = [cal(20, 'arm', [10, -20, 250]), cal(21, 'arm', [-30, -10, 260])];
 	const all = [...fixed, ...arm];

@@ -44,7 +44,8 @@ export const GET: RequestHandler = async ({ request, url }) => {
 				flipped: m.flipped,
 				center: m.center,
 				zMm: m.zMm,
-				depthMm: m.depthMm
+				depthMm: m.depthMm,
+				offDepthMm: m.offDepthMm
 			})),
 			residuals: r.residuals,
 			strained: r.home.strained,

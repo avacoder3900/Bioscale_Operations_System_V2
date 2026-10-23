@@ -22920,3 +22920,35 @@ open the same port and interleave packets. Sessions were never involved (_requir
     can: the poll and the capture's reads now queue.
 svelte-check 13 errors / 432 warnings (baseline). Committed by path only: another session is editing
 ARM-05 PRD / VisionLiveTracker / apriltags.ts in this checkout at the same time; those are not mine.
+
+================================================================================
+2026-10-23 — feat/arm-live-tags-depth-delta — Live Tags: Δdepth column (D415 depth now minus at calibration) beside off mm
+================================================================================
+Alejandro: the Live Tags numbers jump too much, Joint 5 #53 in particular; can the IR depth be used for the
+distance instead of the image analysis? Findings: the D415 depth IS already sampled at every tag centre on
+each detection (apriltags.py -> depth.py _rs.sample) and shown as the grey bracketed number in "dist mm",
+but nothing judges it: off mm / ok-moved come from the solvePnP pose of the four corners alone. #53 is an
+8 mm tag (sheet row 45-53), ~36 px across at ~300 mm at 1080p; the pose's z scales with the tag's pixel
+size, so half a pixel of corner noise is ~4 mm of z while the same half pixel is ~0.1 mm sideways — off mm
+(a 3-D distance) is almost entirely image-z jitter. The 2026-10-21 bench notes agree (pose z vs depth ~5 mm
+apart at 1080p on the 8 mm tags; 1 mm at 720p on the bigger ones). Depth cannot replace the image (no tag
+identity, no x/y, no spin) but can replace z. Step 1, this branch: make the comparison visible so the
+operator can watch whether the sensor's range holds steady while off mm wanders. Step 2 (not built): fuse
+depth as z with x/y re-projected through the intrinsics, behind a per-calibration toggle.
+  - src/lib/robot-arm/apriltags.ts: TagAssessment.offDepthMm = detection depthMm - calibrated depthMm
+    (signed, + = further from the camera; null when either side has no depth or the tag is missing).
+    Diagnostic only: not judged, not camera-shift compensated. The calibration already stores depthMm per
+    tag at home, so no recalibration and no Pi change is needed.
+  - VisionLiveTracker.svelte: "Δdepth mm" column right after "off mm" (tooltip: now vs at calibration;
+    "no depth on one side" hint when null — closer than the D415's ~250 mm minimum at 640x480, or no return);
+    legend sentence.
+  - Agent GET /api/agent/robot-arm/vision-check: markers[].offDepthMm. ARM-05 PRD §6 lists it.
+  - Tests: apriltags.test.ts new case (delta 3.5 / -40 still ok, nulls); verified-poses.test.ts fixture
+    gains the field. Robot-arm suites 177/177.
+npm run check: 13 errors / 432 warnings, none in touched files (baseline 13; the 14th was my fixture miss, fixed).
+Branch note: another session committed 08337860 (servo-bus lock, its own entry above) onto this checkout
+while it was on this branch, so master receives both when this branch is fast-forwarded.
+Deployment: production — via Vercel GitHub integration on push to master
+Source: branch feat/arm-live-tags-depth-delta @ the commit after 08337860 (git log feat/arm-live-tags-depth-delta --oneline), fast-forwarded to master
+Retrieve this exact code: git checkout feat/arm-live-tags-depth-delta
+What this deployment is for: Vision tab > Live Tags shows Δdepth beside off mm, to judge whether the D415 depth is steadier than the image distance on the 8 mm tags (#53).

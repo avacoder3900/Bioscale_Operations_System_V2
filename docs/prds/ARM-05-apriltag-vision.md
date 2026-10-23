@@ -34,7 +34,8 @@ A tag carries its own ID and, with its printed size and the camera intrinsics, g
 6. **Home verdicts are unchanged** (`home_calibration.ts`): `home`, `position_off`, `markers_off`,
    `position_off_and_markers_off`, `camera_moved`, `unverified`. Automation:
    `GET /api/agent/robot-arm/vision-check[?camera=]` (agent key, no motion) now returns per tag `tagId`,
-   `role`, `offMm`, `offDeg` (spin), `offTiltDeg`, `ambiguous`, `over`, `zMm`, `depthMm`, and `cameraShift`.
+   `role`, `offMm`, `offDeg` (spin), `offTiltDeg`, `ambiguous`, `over`, `zMm`, `depthMm`, `offDepthMm` (D415 depth
+   now minus at calibration, diagnostic, not judged), and `cameraShift`.
 7. A registry size edit after calibration does not read as movement: detections are rescaled to the
    calibrated size before comparison (translation is linear in tag size).
 

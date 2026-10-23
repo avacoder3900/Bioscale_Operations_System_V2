@@ -34,7 +34,8 @@ function tag(role: 'arm' | 'fixed', status: TagAssessment['status']): TagAssessm
 		center: status === 'missing' ? null : [0.5, 0.5],
 		corners: null,
 		zMm: 300,
-		depthMm: null
+		depthMm: null,
+		offDepthMm: null
 	};
 }
 

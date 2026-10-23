@@ -342,6 +342,14 @@ export interface TagAssessment {
 	zMm: number | null;
 	/** D415 depth at the tag now, mm — independent cross-check of zMm. */
 	depthMm: number | null;
+	/**
+	 * Depth now minus depth at calibration, mm (signed; + = further from the
+	 * camera). The D415's own range reading, independent of the tag's pixel
+	 * size, so it does not jitter with corner noise the way zMm does on a
+	 * small tag. Diagnostic for now: not judged, not camera-shift compensated.
+	 * Null when either side has no depth.
+	 */
+	offDepthMm: number | null;
 }
 
 export type VisionVerdict = 'ok' | 'off' | 'camera_moved' | 'no_markers';
@@ -397,7 +405,7 @@ export function assessTags(cal: CalibratedTag[], detections: TagDetection[], tol
 		const d = r?.d;
 		const base = { markerId: c.markerId, tagId: c.tagId, name: c.name, group: c.group, role: c.role };
 		if (!d || !r) {
-			return { ...base, status: 'missing', over: [], offMm: null, offDeg: null, offTiltDeg: null, ambiguous: false, flipped: false, offPx: null, center: null, corners: null, zMm: null, depthMm: null };
+			return { ...base, status: 'missing', over: [], offMm: null, offDeg: null, offTiltDeg: null, ambiguous: false, flipped: false, offPx: null, center: null, corners: null, zMm: null, depthMm: null, offDepthMm: null };
 		}
 		const offPx = Math.hypot(d.center[0] - c.center[0], d.center[1] - c.center[1]);
 		let offMm: number | null = null;
@@ -427,7 +435,8 @@ export function assessTags(cal: CalibratedTag[], detections: TagDetection[], tol
 			center: d.center,
 			corners: d.corners,
 			zMm: d.pose ? d.pose.t[2] : null,
-			depthMm: d.depthMm
+			depthMm: d.depthMm,
+			offDepthMm: d.depthMm != null && c.depthMm != null ? d.depthMm - c.depthMm : null
 		};
 	});
 
