@@ -23075,3 +23075,39 @@ BIMS's /api/robot-arm/torque POST therefore always took the plain `/torque true`
   Animate capture's holdArm likewise. The warning disappears on the next torque-on.
 Committed on master by path (two Pi files + this log); the main checkout has another session's uncommitted
 Live Tags / ARM-05 edits which are not mine. No npm run check needed (no TypeScript/Svelte touched).
+
+================================================================================
+2026-10-23 — feat/arm-live-tags-depth-delta — Depth is the distance: AprilTag positions use the D415 depth, image z only as fallback
+================================================================================
+Alejandro watched the Δdepth column from the previous entry on the live arm: "much more consistent, moving
+about 1 millimeter every couple of seconds, and not drifting far away at all" while the image-derived off mm
+kept changing. Asked to use the depth instead. Built in the pure module, so every consumer (Live Tags, home
+check, agent vision-check, ARM-09 verified poses) gets it:
+  - src/lib/robot-arm/apriltags.ts: assessTags(cal, det, tol, opts?) with opts.depthZ (default true). Per
+    tag, when BOTH the calibration and the detection have a depth reading that agrees with their image z
+    within DEPTH_Z_GATE (25 %: a reading further off is the surface behind the tag's edge, not the tag), each
+    pose is slid along its sight line to its depth (atDepth: t *= depth / t.z, alt too, rotation untouched),
+    BEFORE resolvePose, the camera-shift vote and the per-tag delta. x/y keep the picture's precision; only
+    the noisy z is replaced. Otherwise that tag is judged on the image on both sides — never mixed, so a
+    depth dropout on one frame cannot read as a jump. TagAssessment gains zSource ('depth' | 'image' | null)
+    and imageZMm (the pose's own z, for comparison); zMm is the distance actually used.
+  - VisionLiveTracker.svelte: "dist mm" shows the used distance with a grey "D" when depth drove it, or
+    "(depth)" in brackets when a reading existed but could not be used; tooltips say which and why; legend
+    rewritten. Δdepth column stays (raw sensor change).
+  - Agent GET /api/agent/robot-arm/vision-check: markers[].zSource, imageZMm. ARM-05 PRD §6 fields + new §8;
+    Robot_Arm_Calibration_Context.md §1 depth bullet.
+  - Tests (apriltags.test.ts, "depth as distance"): image z 12 mm off with depth steady -> ok, off < 0.5 mm,
+    and the same frame with depthZ:false reads 12 mm moved; a real 14 mm move shows through depth; fallback to
+    the image when either side lacks depth or depth is 420 vs image 300; a 20 mm camera bump measured on
+    depth-driven fixed tags is still compensated before the arm tag is judged. verified-poses.test.ts fixture
+    gains the two fields. Robot-arm suites 181/181.
+Calibrations saved before depth was streaming carry depthMm null and simply keep the image behaviour; the
+current home calibration has depth for every tag (the Δdepth column showed values), so no recalibration.
+npm run check: 13 errors / 432 warnings, none in touched files (baseline 13).
+Branch note: another session committed edaf6910 (camera tolerance default 10 mm) onto this checkout while it
+was on this branch; master had meanwhile moved on (hold route, claw close, slider limits), so this lands via a
+merge commit rather than a fast-forward.
+Deployment: production — via Vercel GitHub integration on the merge to master
+Source: branch feat/arm-live-tags-depth-delta @ the commit after edaf6910 (git log feat/arm-live-tags-depth-delta --oneline)
+Retrieve this exact code: git checkout feat/arm-live-tags-depth-delta
+What this deployment is for: Vision tab > Live Tags (and the home check / verified poses) judge tag position on the D415 depth; #53 on joint 5 should stop flapping.

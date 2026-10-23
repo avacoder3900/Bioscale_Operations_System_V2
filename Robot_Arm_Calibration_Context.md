@@ -48,7 +48,7 @@ The ARM-03/04 Mongo collections (`robot_arm_home_calibrations`, `robot_arm_marke
 1. **Detection is on the Pi.** `apriltags.py` takes the frame from the service's own `snapshot.jpg` over
    loopback (it never opens the camera), then runs OpenCV aruco with `DICT_APRILTAG_36h11` and sub-pixel corners.
    - For each tag, `solvePnP` (IPPE_SQUARE) gives its position and rotation. The camera intrinsics come from the D415's factory calibration via pyrealsense2; the fallbacks are `APRILTAG_FX/FY/CX/CY` env vars, then a nominal estimate (`source: nominal`).
-   - The D415 depth at each tag centre (from depth.py) is attached as a cross-check.
+   - The D415 depth at each tag centre (from depth.py) is attached — and since 2026-10-23 it IS the tag's distance when both the calibration and the frame have a reading within 25 % of the image z: BIMS slides each pose along its sight line to its depth before judging (`assessTags` `depthZ`, default on; Live Tags marks it `D`). The image z scales with the tag's pixel size and jitters several mm on the 8 mm tags; the depth held to ~1 mm live. Without depth on both sides the tag is judged on the image on both sides.
 2. **Registry** (`robot_arm_tags`): one row per tag with ID (unique among active tags), size in mm (defaults to the sheet's size for that ID), role and name/group.
    - Role is `arm` or `fixed` (deck, Opentron).
    - Tags are archived, never deleted.
