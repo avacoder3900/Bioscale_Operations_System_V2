@@ -23321,3 +23321,30 @@ Source: branch master @ commit c705f397
 Retrieve this exact code: git checkout master at commit c705f397
 What this deployment is for: first production build since 10:01; carries the raw-frames vision work, camera
 presets, and the ARM CONNECTION panel in the Robot Arm right rail above the camera (ea4cae32) with Hide/Show.
+
+
+================================================================================
+2026-10-23 — feat/arm-servo-temps — Servo temperatures on the Arm Camera card; header on three lines
+================================================================================
+Alejandro: report each servo's temperature alongside the Pi's on the Arm Camera card, and the Wi-Fi
+"Aquinas_Townpark" chip was crowding the title — line break after ARM CAMERA and after the Wi-Fi report.
+  - RobotArmCameraPanel.svelte: the header is now three lines inside one padded block: ARM CAMERA + status
+    dot (+ Hide/Show at the right), then the Pi temperature and Wi-Fi chips, then the servo row.
+  - PiThermalChip.svelte: renders two rows instead of inline spans. New servo row: "Servos 38 41 40 44 39 37
+    °C", servo 1 first, each number amber from the Pi's warm threshold (48 °C) and red from hot (55 °C; the
+    STS3215 derates above ~60), the row border following the hottest; hover a number for that servo's load,
+    voltage, torque and flags, hover the row for the thresholds. Polls once on mount as well as every 30 s,
+    because the layout load deliberately never reads the servo bus. Three missed polls clear the row.
+  - /api/robot-arm/thermal: the same GET now also calls the Pi's existing GET /arm/health (list_states +
+    get_torques over the bus) with Promise.allSettled and returns servos / servosError beside thermal. A 503
+    while the follower is disconnected just means no servo row; thermal logging unchanged.
+  - robot-arm-client.ts: ArmHealth / ArmJointHealth types mirroring app.py arm_health(), getHealth().
+No Pi change: /arm/health has existed since the first health work. The ARM CONNECTION panel sits above all
+of this in the rail (ea4cae32).
+npm run check: 13 errors / 432 warnings, none in touched files (baseline 13).
+Branch note: new branch off origin/master in the main checkout (the other session's feat/arm-vision-raw-frames
+was left alone); master fast-forwarded from the master worktree.
+Deployment: production — via Vercel GitHub integration on the push to master
+Source: branch feat/arm-servo-temps @ commit 7bad01bf
+Retrieve this exact code: git checkout feat/arm-servo-temps at commit 7bad01bf
+What this deployment is for: Arm Camera card shows ARM CAMERA, then Pi °C + Wi-Fi, then every servo's °C on its own line.
