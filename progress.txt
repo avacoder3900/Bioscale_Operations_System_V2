@@ -23135,3 +23135,6 @@ Retrieve this exact code: git checkout feat/arm-live-tags-depth-delta
 What this deployment is for: Vision tab > Live Tags (and the home check / verified poses) judge tag position on the D415 depth; #53 on joint 5 should stop flapping.
 2026-10-23 — master — Return to home: aim past a joint that stalls short (carry), and close the claw server-side from attempt 2
 =========================================================================
+Follow-up (same morning): servo 1 EEPROM angle limits read as [718, 3317] via the move route's new
+`limits` field (move.py returns [lo, hi]; reinstalled on arm-pi, idle-gated restart, health 200) — home 1991 is
+well inside, so the 39-step shortfall is steady-state error under load, not a clamp. The carry fix is the right remedy.

@@ -92,6 +92,8 @@ def move_joint(servo_id: int, position: int, speed: int | None = None, role: str
         "goal": goal,
         "delta": goal - present,
         "clamped": goal != position,
+        # The servo's EEPROM angle limits, so a goal that keeps "landing short" can be told from one the servo refuses.
+        "limits": [lo, hi],
     }
 
 
