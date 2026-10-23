@@ -18,8 +18,13 @@
 	 * Why fixed settings: on auto, the sensor picks a long shutter under lab
 	 * light (motion blur when the arm moves) and a high gain (noise on tag
 	 * edges), and both drift frame to frame. Fixing them costs the Pi nothing.
+	 *
+	 * Presets (robot_arm_camera_presets): named sets of values with the
+	 * lighting they were taken under, so a setting that worked under one light
+	 * can be found and re-applied. The camera's own defaults are the first one.
 	 */
 	import type { CameraControl, CameraControlsResponse } from '$lib/server/robot-arm-client';
+	import type { PresetSummary } from '$lib/server/robot-arm-camera-presets';
 
 	interface Props {
 		camera: string;
@@ -39,6 +44,16 @@
 	/** The camera's answer per control after a write (a rejection reason, or '✓'). */
 	let notes = $state<Record<string, string>>({});
 	let open = $state(true);
+
+	let presets = $state<PresetSummary[]>([]);
+	let presetId = $state('');
+	let presetBusy = $state(false);
+	let presetError = $state<string | null>(null);
+	let presetMsg = $state<string | null>(null);
+	let showSave = $state(false);
+	let newName = $state('');
+	let newConditions = $state('');
+	let newNotes = $state('');
 
 	const GROUPS: { title: string; ids: string[] }[] = [
 		{ title: 'Exposure', ids: ['auto_exposure', 'exposure_time_absolute', 'exposure_dynamic_framerate', 'gain'] },
@@ -70,9 +85,80 @@
 		return out;
 	});
 	const savedCount = $derived(Object.keys(resp?.saved ?? {}).length);
+	const selectedPreset = $derived(presets.find((p) => p._id === presetId) ?? null);
+	/** Presets whose every value equals the camera's current value. */
+	const matchingPresetIds = $derived.by(() => {
+		const cur = new Map(controls.map((c) => [c.id, c.value]));
+		return new Set(presets.filter((p) => Object.entries(p.values).every(([k, v]) => cur.get(k) === v)).map((p) => p._id));
+	});
+	const presetLabel = (p: PresetSummary) => `${p.name}${p.conditions ? ` — ${p.conditions}` : ''}${p.kind === 'camera-default' ? ' (camera defaults)' : ''}`;
 	const changedFromDefault = $derived(controls.filter((c) => c.value != null && c.default != null && c.value !== c.default).length);
 
 	const url = () => `/api/robot-arm/cameras/${encodeURIComponent(camera)}/controls`;
+	const presetsUrl = () => `/api/robot-arm/cameras/${encodeURIComponent(camera)}/presets`;
+
+	async function loadPresets(): Promise<void> {
+		if (!camera) return;
+		try {
+			const res = await fetch(presetsUrl(), { cache: 'no-store' });
+			if (!res.ok) throw new Error(`HTTP ${res.status}`);
+			presets = ((await res.json()) as { presets: PresetSummary[] }).presets;
+			if (!presets.some((p) => p._id === presetId)) presetId = presets[0]?._id ?? '';
+			presetError = null;
+		} catch (e) {
+			presetError = e instanceof Error ? e.message : 'Could not read the presets';
+		}
+	}
+
+	async function presetPost(body: Record<string, unknown>): Promise<{ preset?: PresetSummary; result?: CameraControlsResponse } | null> {
+		presetBusy = true;
+		presetError = null;
+		presetMsg = null;
+		try {
+			const res = await fetch(presetsUrl(), { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+			const data = (await res.json().catch(() => null)) as { preset?: PresetSummary; result?: CameraControlsResponse; message?: string } | null;
+			if (!res.ok) throw new Error(data?.message ?? `HTTP ${res.status}`);
+			return data;
+		} catch (e) {
+			presetError = e instanceof Error ? e.message : 'Preset action failed';
+			return null;
+		} finally {
+			presetBusy = false;
+		}
+	}
+
+	async function applyPreset(): Promise<void> {
+		const p = selectedPreset;
+		if (!p) return;
+		const data = await presetPost({ apply: p._id });
+		if (!data) return;
+		const rejected = Object.entries(data.result?.rejected ?? {});
+		presetMsg = rejected.length ? `Applied "${p.name}"; the camera refused ${rejected.map(([k, why]) => `${k} (${why})`).join(', ')}` : `Applied "${p.name}"`;
+		await load();
+		await loadPresets();
+	}
+
+	async function savePreset(): Promise<void> {
+		const data = await presetPost({ save: { name: newName, conditions: newConditions || null, notes: newNotes || null } });
+		if (!data?.preset) return;
+		presetMsg = `Saved "${data.preset.name}" with the camera's current ${Object.keys(data.preset.values).length} values`;
+		showSave = false;
+		newName = '';
+		newConditions = '';
+		newNotes = '';
+		await loadPresets();
+		presetId = data.preset._id;
+	}
+
+	async function archivePreset(): Promise<void> {
+		const p = selectedPreset;
+		if (!p || !confirm(`Archive the preset "${p.name}"? It stays in the history and can be restored.`)) return;
+		const data = await presetPost({ archive: p._id });
+		if (data) {
+			presetMsg = `Archived "${p.name}"`;
+			await loadPresets();
+		}
+	}
 
 	async function load(): Promise<void> {
 		if (!camera) return;
@@ -183,6 +269,7 @@
 		drafts = {};
 		notes = {};
 		if (armReachable && camera) void load();
+		if (camera) void loadPresets();
 	});
 </script>
 
@@ -218,6 +305,54 @@
 					Reset all to camera defaults
 				</button>
 				{#if error}<span class="text-red-300">{error}</span>{/if}
+			</div>
+
+			<div class="mt-3 rounded border p-2 text-xs" style="border-color: var(--color-tron-border); background: rgba(0,0,0,0.15);">
+				<div class="flex flex-wrap items-center gap-2">
+					<span class="font-medium" style="color: var(--color-tron-text)">Presets</span>
+					<select bind:value={presetId} disabled={presetBusy || !presets.length} class="min-w-[16rem] max-w-full rounded border bg-black/40 px-2 py-1 disabled:opacity-40" style="border-color: var(--color-tron-border); color: var(--color-tron-text)" aria-label="Camera preset">
+						{#if !presets.length}<option value="">No presets saved yet</option>{/if}
+						{#each presets as p (p._id)}
+							<option value={p._id}>{presetLabel(p)}{matchingPresetIds.has(p._id) ? ' ✓' : ''}</option>
+						{/each}
+					</select>
+					<button type="button" onclick={() => void applyPreset()} disabled={presetBusy || !selectedPreset || !resp?.available} class="min-h-[34px] rounded px-3 font-semibold disabled:opacity-40" style="color: var(--color-tron-cyan); border: 1px solid var(--color-tron-cyan);" title={selectedPreset ? `Write ${Object.keys(selectedPreset.values).length} values to the camera and remember them on the Pi` : ''}>
+						Apply
+					</button>
+					<button type="button" onclick={() => (showSave = !showSave)} disabled={presetBusy || !resp?.available} class="min-h-[34px] rounded px-3 font-semibold disabled:opacity-40" style="color: var(--color-tron-text); border: 1px solid var(--color-tron-border);">
+						{showSave ? 'Cancel' : 'Save current as…'}
+					</button>
+					{#if selectedPreset}
+						<button type="button" onclick={() => void archivePreset()} disabled={presetBusy} class="min-h-[34px] rounded px-2 disabled:opacity-40" style="color: var(--color-tron-text-secondary); border: 1px solid var(--color-tron-border);" title="Archive this preset (kept in history)">Archive</button>
+					{/if}
+					{#if presetBusy}<span style="color: var(--color-tron-text-secondary)">Working…</span>{/if}
+					{#if presetMsg}<span style="color: #4ade80">{presetMsg}</span>{/if}
+					{#if presetError}<span class="text-red-300">{presetError}</span>{/if}
+				</div>
+				{#if selectedPreset}
+					<p class="mt-1" style="color: var(--color-tron-text-secondary)">
+						{#if matchingPresetIds.has(selectedPreset._id)}The camera is on these values now.{:else}Differs from the camera now: {Object.entries(selectedPreset.values).filter(([k, v]) => byId.get(k)?.value !== v).map(([k, v]) => `${k.replace(/_/g, ' ')} ${byId.get(k)?.value ?? '?'} → ${v}`).join(', ') || '—'}.{/if}
+						{#if selectedPreset.notes} {selectedPreset.notes}{/if}
+						Saved {selectedPreset.createdAt ? new Date(selectedPreset.createdAt).toLocaleDateString() : ''}{selectedPreset.createdBy?.username ? ` by ${selectedPreset.createdBy.username}` : ''}{selectedPreset.lastAppliedAt ? `; last applied ${new Date(selectedPreset.lastAppliedAt).toLocaleString()}` : ''}.
+					</p>
+				{/if}
+				{#if showSave}
+					<form class="mt-2 flex flex-wrap items-end gap-2" onsubmit={(e) => { e.preventDefault(); void savePreset(); }}>
+						<label class="block" style="color: var(--color-tron-text-secondary)">
+							Name
+							<input bind:value={newName} required maxlength="120" placeholder="e.g. Blinds open, manual 8 ms" class="mt-1 block w-64 rounded border bg-black/40 px-2 py-1" style="border-color: var(--color-tron-border); color: var(--color-tron-text)" />
+						</label>
+						<label class="block" style="color: var(--color-tron-text-secondary)">
+							Lighting / conditions
+							<input bind:value={newConditions} maxlength="500" placeholder="e.g. Shared office, blinds open, afternoon" class="mt-1 block w-72 rounded border bg-black/40 px-2 py-1" style="border-color: var(--color-tron-border); color: var(--color-tron-text)" />
+						</label>
+						<label class="block" style="color: var(--color-tron-text-secondary)">
+							Notes
+							<input bind:value={newNotes} maxlength="500" class="mt-1 block w-56 rounded border bg-black/40 px-2 py-1" style="border-color: var(--color-tron-border); color: var(--color-tron-text)" />
+						</label>
+						<button type="submit" disabled={presetBusy || !newName.trim()} class="min-h-[34px] rounded px-3 font-semibold disabled:opacity-40" style="color: #4ade80; border: 1px solid #4ade80;">Save the camera's current values</button>
+					</form>
+				{/if}
 			</div>
 
 			{#if resp?.available}

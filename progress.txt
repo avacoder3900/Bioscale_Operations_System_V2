@@ -2907,6 +2907,36 @@ UI-only, no server change. npm run check: 11-error baseline (0 new in deck-calib
 Reaches operators only after the stale prod alias is promoted to master.
 
 ================================================================================
+2026-10-23 — feat/arm-vision-raw-frames — Camera setting presets; first one = the camera's defaults, "Shared Office with Blinds Open"
+================================================================================
+Alejandro, after the camera settings panel shipped: "keep track of the default values, and in the name mention
+something about Shared Office with Blinds Open". Built named presets so every set of camera values is saved with
+the lighting it was taken under and can be re-applied later:
+- Model robot-arm-camera-preset.ts (collection robot_arm_camera_presets): cameraName, name, conditions (the
+  lighting/scene), notes, kind camera-default|operator, values (control -> raw value), controls (the camera's
+  range/default/flag report at capture time, so the preset still reads true if the driver changes), device,
+  createdBy, lastApplied*, archived* (archived, never deleted). Index {cameraName, archivedAt, createdAt};
+  ensure-indexes: 166 models ok.
+- $lib/server/robot-arm-camera-presets.ts: listPresets, savePreset (values omitted = capture the camera's current
+  values + control report from the Pi), applyPreset (robotArm.setCameraControls with persist, records
+  lastApplied), archivePreset; cleanPresetInput (pure; name required <= 120, control names ^[a-z0-9_]+$, whole
+  numbers); every write audit-logged (robot_arm.camera_preset.save/apply/archive/restore).
+- API /api/robot-arm/cameras/[name]/presets: GET (?archived=1), POST {save}|{apply}|{archive}|{restore};
+  validation -> 400 with the message, Pi failures -> 502 without upstream text. Tests 8/8.
+- CameraControlsPanel.svelte: Presets row — select (name — conditions, "(camera defaults)", a check mark when
+  the camera is on exactly those values), Apply, "Save current as…" (name, lighting/conditions, notes; saves the
+  camera's current values), Archive; the selected preset shows which controls differ from the camera now.
+- scripts/robot-arm-camera-preset.ts: save a preset straight into Mongo from a values JSON (+ optional saved
+  controls report), for the first preset and for values captured on the Pi directly.
+Seeded (Mongo, id 5CQbcajnqswJxpHpxNeYc): "Camera defaults — Shared Office with Blinds Open", kind
+camera-default, conditions "Shared office, blinds open, daylight through the window (2026-10-23 afternoon)",
+the 14 factory defaults as v4l2 reports them on arm-pi (auto_exposure 3, exposure_time_absolute 166, gain 64,
+white_balance_automatic 1, white_balance_temperature 4600, sharpness 50, gamma 300, contrast 50, saturation 64,
+brightness 0, hue 0, backlight_compensation 0, power_line_frequency 3, exposure_dynamic_framerate 0) with their
+ranges. Note: these are the sensor's defaults, not what auto exposure settled on under that light — UVC does not
+report the live auto value, so a tuned manual preset for that room is still to be saved from the panel.
+
+================================================================================
 2026-10-23 — feat/arm-vision-raw-frames — AprilTags on raw frames, AprilTag corner refinement, frame averaging, camera controls, depth 480p/720p
 ================================================================================
 Alejandro: "is there a way to further increase the quality of the camera feed... for the images being used for

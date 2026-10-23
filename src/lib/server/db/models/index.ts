@@ -141,6 +141,7 @@ export { RobotArmRun } from './robot-arm-run.js';
 export { RobotArmDataset } from './robot-arm-dataset.js';
 export { RobotArmDeletedRecording } from './robot-arm-deleted-recording.js';
 export { RobotArmEndpoint } from './robot-arm-endpoint.js';
+export { RobotArmCameraPreset } from './robot-arm-camera-preset.js';
 export { RobotArmTag } from './robot-arm-tag.js';
 export { RobotArmTagCalibration } from './robot-arm-tag-calibration.js';
 export { RobotArmRecordingCleanup } from './robot-arm-recording-cleanup.js';
