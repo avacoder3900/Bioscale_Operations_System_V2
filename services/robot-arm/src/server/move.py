@@ -11,8 +11,9 @@ absolute goal the servo is told the number on the slider and that is that.
 Mirrors manual_control.jog_joint exactly in everything but the arithmetic:
 same connect/disconnect, same EEPROM angle-limit clamp, goal written BEFORE
 torque is enabled (the servo latches a stale goal otherwise), Goal_Speed
-only when asked. Refuses a goal further than MAX_MOVE_STEPS from the
-present position: a slider move is small; big moves are for replay.
+only when asked. No distance limit (operator decision 2026-10-23: a typed
+value is where the joint goes); the only bounds are 0..4095 and the servo's
+own EEPROM angle limits.
 
 Installed on the Pi by scripts/install_move_router.py (after
 install_bus_lock.py: bus_lock.py must be next to app.py): it includes the
@@ -39,11 +40,6 @@ from src.server.bus_lock import BUS_LOCK
 from src.server.manual_control import _ROLES, _connected_arms
 
 router = APIRouter(tags=["servos"])
-
-# Largest |goal − present| accepted in one request. BIMS sends ≤ 120 per
-# slider step and its server refuses > 600 (MAX_LIVE_STEP); this is the
-# hard stop on the Pi for anything else that finds the route.
-MAX_MOVE_STEPS = 1000
 
 # The app's "a session owns the bus" check, set by the installer
 # (`pi_move.bus_free = _require_bus_free`). None = no gate (tests).
@@ -73,11 +69,6 @@ def move_joint(servo_id: int, position: int, speed: int | None = None, role: str
             raise RuntimeError(
                 f"{role.capitalize()} motor {servo_id} did not respond to a position read. "
                 "Check the 12V supply and BusLinker connection."
-            )
-        if abs(position - present) > MAX_MOVE_STEPS:
-            raise ValueError(
-                f"goal {position} is {abs(position - present)} steps from the present position {present}; "
-                f"at most {MAX_MOVE_STEPS} per move. Use replay for large moves."
             )
         lo = bus.read(servo_id, "Min_Angle_Limit")
         hi = bus.read(servo_id, "Max_Angle_Limit")

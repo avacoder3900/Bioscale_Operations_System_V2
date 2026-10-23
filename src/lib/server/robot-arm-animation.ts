@@ -53,7 +53,6 @@ import {
 	DEFAULT_RATE_HZ,
 	ENCODER_MAX,
 	JOG_CHUNK_STEPS,
-	MAX_LIVE_STEP,
 	MAX_OFFSET_STEPS,
 	MAX_TRANSITION_S,
 	MAX_TRIM_STEPS,
@@ -253,10 +252,12 @@ let moveRouteMissing = false;
 
 /**
  * Send servos to absolute goals (live slider). Refused while a session owns
- * the arm, when torque is off, when a servo is too hot, or when a goal is
- * more than MAX_LIVE_STEP from where the servo is (a slider is never that
- * far ahead of the arm). The arm MOVES. Not audited per move — the pose
- * save that ends an edit is.
+ * the arm, when torque is off, or when a servo is too hot. No distance
+ * limit: a typed value is where the joint goes (operator decision
+ * 2026-10-23 — the 600-step cap refused "Servo 1 is 693 steps from that
+ * value"; the only bounds left are the encoder range and the servo's own
+ * EEPROM angle limits on the Pi). The arm MOVES. Not audited per move —
+ * the pose save that ends an edit is.
  */
 export async function liveMove(input: { goals: unknown }): Promise<LiveResult> {
 	const raw = input.goals && typeof input.goals === 'object' ? (input.goals as Record<string, unknown>) : null;
@@ -274,11 +275,6 @@ export async function liveMove(input: { goals: unknown }): Promise<LiveResult> {
 	const now = await readArm();
 	if (now.torqueOn === false) throw new AnimateError('Torque is off — press Torque on first.', 409);
 	const warnings = requireCool(now);
-	for (const [k, pos] of Object.entries(goals)) {
-		const sid = Number(k);
-		const d = pos - now.positions[sid - 1];
-		if (Math.abs(d) > MAX_LIVE_STEP) throw new AnimateError(`Servo ${sid} is ${Math.abs(d)} steps from that value — more than ${MAX_LIVE_STEP} in one move. Use Go to pose for big moves.`, 409);
-	}
 	let via: LiveResult['via'] = moveRouteMissing ? 'jog' : 'move';
 	for (const [k, pos] of Object.entries(goals)) {
 		const sid = Number(k);

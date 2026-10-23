@@ -384,8 +384,10 @@ poses before it?*
   The slider range is the travel the saved poses and the arm actually use, padded ±400 (min 1200 wide)
   — `sliderRange`. *Live* needs the arm within 80 steps of the sliders (Go to pose first, or *start
   from the arm*, which also writes the arm's position as its goal so the two agree). Then every slider
-  change is sent, one request at a time, in pieces of ≤ 120 steps from the last goal sent
-  (`stepToward`); the server refuses any single goal > 600 steps from the arm (`MAX_LIVE_STEP`). The arm
+  change is sent, one request at a time, as the servo's absolute goal — the whole distance. (Until
+  2026-10-23 it went in ≤ 120-step pieces and the server refused any goal > 600 steps from the arm; the
+  operator removed both: "if I want to move the joint to a specific value, it should move to that
+  specific value". The only bounds left are 0..4095 and the servo's EEPROM angle limits on the Pi.) The arm
   read is polled every 1.5 s only while nothing is being sent, and a move waits for a read in flight —
   the Pi's `GET /servos` has no bus lock. *Save pose* / *Save as new* save the slider values (goals).
   Per-move requests are not audited; the save that ends an edit is (`pose_edit` with before/after).

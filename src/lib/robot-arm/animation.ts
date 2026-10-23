@@ -752,9 +752,10 @@ export function axisTicks(min: number, max: number, target = 6): number[] {
 }
 
 /**
- * Live slider moves: the arm is sent the slider's value in pieces of at most
- * `maxStep` from the last goal sent, so a fast drag across the slider becomes
- * a quick series of short moves rather than one full-speed slam.
+ * Clamp a move toward `to` to at most `maxStep` from `from`. No longer used
+ * by the live sliders (2026-10-23: the operator wants a typed value to be
+ * exactly where the joint goes, with no step limit); kept for callers that
+ * pace a move themselves.
  */
 export function stepToward(from: number, to: number, maxStep: number): number {
 	const d = to - from;
@@ -762,5 +763,3 @@ export function stepToward(from: number, to: number, maxStep: number): number {
 	return from + Math.sign(d) * maxStep;
 }
 
-/** Largest single live move the server accepts (slider pieces are well under this). */
-export const MAX_LIVE_STEP = 600;

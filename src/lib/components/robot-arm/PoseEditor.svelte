@@ -8,8 +8,10 @@
 	 * saved are the goals the arm was given, so playing the pose later sends
 	 * the same goals and the arm lands in the same place.
 	 *
-	 * One request at a time: a fast drag becomes a short series of moves of at
-	 * most LIVE_STEP from the last goal sent (stepToward), and the arm read
+	 * One request at a time: each request sends every changed slider's value
+	 * as the servo's absolute goal — the whole distance, no pieces and no step
+	 * limit (operator decision 2026-10-23: "if I want to move the joint to a
+	 * specific value, it should move to that specific value"). The arm read
 	 * (positions, temperatures, torque) is polled only while nothing is being
 	 * sent — the Pi's servo bus must never see two callers at once.
 	 */
@@ -20,7 +22,6 @@
 		friendlyName,
 		heatLevel,
 		sliderRange,
-		stepToward,
 		DEG_PER_STEP,
 		ENCODER_MAX,
 		SERVO_COUNT,
@@ -54,8 +55,6 @@
 
 	let { pose, allPoses, arm, armReachable, blocked, blockReason, ongoto, onclose, home = null }: Props = $props();
 
-	/** Largest move per live request; the servo covers this in a few tens of ms. */
-	const LIVE_STEP = 120;
 	/** "The arm is at these values" — loaded joints sit a few tens of steps short of their goal. */
 	const AT_POSE_STEPS = 80;
 	const POLL_MS = 1500;
@@ -200,9 +199,8 @@
 			while (live) {
 				const goals: Record<number, number> = {};
 				SERVOS.forEach((s) => {
-					const from = sent[s] ?? armPos?.[s] ?? values[s];
 					if (sent[s] === values[s]) return;
-					goals[s + 1] = stepToward(from, values[s], LIVE_STEP);
+					goals[s + 1] = values[s];
 				});
 				if (!Object.keys(goals).length) break;
 				const res = await fetch('/api/robot-arm/animate/live', {

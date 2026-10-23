@@ -22979,3 +22979,29 @@ What this deployment is for: camera tolerance default 10 mm, one definition for 
   GitHub deployment 7280278478 success. Note: 08337860 (bus-lock retry) never got its own production deploy on
   Vercel (commit status stayed "pending"); it went live inside the 2026-10-23 14:04 UTC production deploy of 5f5b3034.
 
+================================================================================
+2026-10-23 — master — No step limit on live slider moves (BIMS 600-step refusal, 120-step pieces, Pi 1000-step cap all removed)
+================================================================================
+Alejandro hit "Servo 1 is 693 steps from that value — more than 600 in one move. Use Go to pose for big
+moves." and ruled: no step limit on movements, ever — a typed value is where the joint goes.
+Where the limits were and why they existed:
+  - BIMS liveMove refused any goal > 600 steps from the arm's present position (MAX_LIVE_STEP). Rationale in
+    the redo: the sliders were meant to send ≤ 120-step pieces, so a bigger gap meant the arm had fallen
+    behind or the page was stale; with the Pi's old jog fallback a large relative jog could also land
+    wrong. Both reasons are gone now that the Pi has the absolute move route.
+  - PoseEditor sent each change in ≤ 120-step pieces (stepToward) so a fast drag was a series of short
+    moves instead of one full-speed slam. Pacing, not a destination limit — but it is why the goal could
+    run ahead of the arm and trip the 600 check.
+  - Pi move.py refused |goal − present| > 1000 (my own belt-and-braces cap from last night).
+  - Pi jog route still caps one jog at 300 steps (Sam's original: bounds a typo'd delta to a few degrees).
+    Left alone: BIMS chunks jogs itself (jogChunks) and the live sliders no longer use jogs on this Pi.
+Changes: robot-arm-animation.ts liveMove — distance check and MAX_LIVE_STEP import removed; animation.ts —
+MAX_LIVE_STEP removed, stepToward kept (tested) but unused by the sliders; PoseEditor.svelte — sends the
+slider value itself as the goal, no pieces; services/robot-arm/src/server/move.py — MAX_MOVE_STEPS removed
+(bounds left: 0..4095 and the servo's EEPROM angle limits), copied to arm-pi, /sessions/active null →
+restart, health 200, zero-delta move on servo 2 → 200. docs/prds/ARM-06-animate.md §13 updated.
+What still bounds a move: the servo's own EEPROM limits, torque-off / too-hot / session refusals, and
+Play's speed check (MAX_STEPS_PER_S) which is about path speed, not slider moves. A big slider jump now
+moves at the servo's full speed — that is the operator's call.
+Checks: vitest src/lib/robot-arm 8 files / 177 passed; svelte-check 14 errors / 432 warnings (baseline).
+
