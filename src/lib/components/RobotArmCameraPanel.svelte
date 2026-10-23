@@ -531,8 +531,10 @@
 	class="rounded-lg border"
 	style="border-color: var(--color-tron-border); background: var(--color-tron-surface)"
 >
-	<!-- Header: always visible, so a collapsed panel still reports health -->
-	<div class="flex items-center justify-between gap-2 px-3 py-2">
+	<!-- Header: always visible, so a collapsed panel still reports health.
+	     Three lines: ARM CAMERA + status; Pi heat and Wi-Fi; servo temperatures. -->
+	<div class="space-y-1.5 px-3 py-2">
+	<div class="flex items-center justify-between gap-2">
 		<div class="flex items-center gap-2 min-w-0">
 			<svg
 				class="h-4 w-4 shrink-0"
@@ -567,8 +569,6 @@
 					title="Paused"
 				></span>
 			{/if}
-			<!-- Pi heat / throttling: visible on every arm tab, collapsed or not. -->
-			<PiThermalChip initial={thermal} {armReachable} />
 		</div>
 		<button
 			type="button"
@@ -579,6 +579,9 @@
 		>
 			{collapsed ? 'Show' : 'Hide'}
 		</button>
+	</div>
+	<!-- Pi heat / Wi-Fi, then servo temperatures, each on its own line: visible on every arm tab, collapsed or not. -->
+	<PiThermalChip initial={thermal} {armReachable} />
 	</div>
 
 	<!-- Torque on/off follows the operator to every tab; visible even when the picture is collapsed. -->

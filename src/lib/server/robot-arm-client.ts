@@ -510,6 +510,36 @@ export interface ArmThermal {
 	sampled_at: number;
 }
 
+// GET /arm/health — mirrors app.py arm_health(): every follower servo with
+// the Pi's own derived flags. Reads the serial bus (list_states + get_torques),
+// so it is polled from the browser, never from a layout load.
+export interface ArmJointHealth {
+	id: number;
+	position: number;
+	load: number;
+	speed: number;
+	voltage: number;
+	/** °C as the STS3215 reports it (whole degrees). */
+	temperature: number;
+	torque: boolean;
+	/** 'hot' | 'warm' | 'high_load' | 'undervolt' | 'overvolt' | 'torque_off'. */
+	flags: string[];
+}
+
+export interface ArmHealth {
+	overall: 'ok' | 'warn' | 'fault';
+	joints: ArmJointHealth[];
+	leader_alive: boolean;
+	follower_alive: boolean;
+	thresholds: {
+		temp_warm_c: number;
+		temp_hot_c: number;
+		load_high: number;
+		voltage_low: number;
+		voltage_high: number;
+	};
+}
+
 export interface ArmNetwork {
 	iface: string;
 	/** null when the interface is up but not associated, or nmcli could not be read (see source). */
@@ -719,6 +749,8 @@ export const robotArm = {
 		}
 	},
 	getThermal: (opts: { timeoutMs?: number } = {}) => robotArmFetch<ArmThermal>('/health/thermal', { timeoutMs: opts.timeoutMs ?? 3000 }),
+	// Per-servo temperature / load / voltage with the Pi's flags. Touches the bus. 503 while the follower is not connected.
+	getHealth: (opts: { timeoutMs?: number } = {}) => robotArmFetch<ArmHealth>('/arm/health', { timeoutMs: opts.timeoutMs ?? 4000 }),
 	jogCartesian: (body: {
 		dx_mm: number;
 		dy_mm: number;

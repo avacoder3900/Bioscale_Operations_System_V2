@@ -1,7 +1,8 @@
 /**
  * Arm Pi thermal state, for the camera card on every Robot Arm tab.
  *
- *   GET → { thermal: ArmThermal | null, installed: boolean, error: string | null }
+ *   GET → { thermal: ArmThermal | null, installed: boolean, error: string | null,
+ *           servos: ArmHealth | null, servosError: string | null }
  *
  * Reads GET /health/thermal on the Pi (services/robot-arm/src/server/thermal.py):
  * SoC temperature, the firmware's throttle flags (throttled / clock capped /
@@ -17,11 +18,18 @@
  * while the Pi is simply ok, so /devices (which lists events unfiltered) is
  * not buried. Never throws for a missing or unreachable Pi: the card just
  * shows nothing.
+ *
+ * Since 2026-10-23 the same poll also carries GET /arm/health from the Pi:
+ * each follower servo's temperature (the STS3215 derates above ~60 °C; the
+ * Pi flags warm ≥ 48, hot ≥ 55), so the camera card can show the motors'
+ * heat beside the Pi's. That call reads the serial bus, which is why it is
+ * here (a 30 s browser poll) and not in the layout load. It fails soft too:
+ * a 503 while the follower is disconnected just means no servo row.
  */
 import { error, json } from '@sveltejs/kit';
 import { connectDB, DeviceEvent } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
-import { robotArm, type ArmThermal } from '$lib/server/robot-arm-client';
+import { robotArm, type ArmHealth, type ArmThermal } from '$lib/server/robot-arm-client';
 import type { RequestHandler } from './$types';
 
 const ARM_DEVICE_ID = 'robot-arm-pi';
@@ -68,18 +76,33 @@ export const GET: RequestHandler = async ({ locals }) => {
 	if (!locals.user) error(401, 'Not authenticated');
 	requirePermission(locals.user, 'manufacturing:read');
 	const headers = { 'Cache-Control': 'no-store' };
-	let thermal: ArmThermal;
-	try {
-		thermal = await robotArm.getThermal({ timeoutMs: 3000 });
-	} catch (err) {
+	const [thermalResult, healthResult] = await Promise.allSettled([
+		robotArm.getThermal({ timeoutMs: 3000 }),
+		robotArm.getHealth({ timeoutMs: 4000 })
+	]);
+
+	const servos: ArmHealth | null = healthResult.status === 'fulfilled' ? healthResult.value : null;
+	const servosError =
+		healthResult.status === 'rejected'
+			? healthResult.reason instanceof Error
+				? healthResult.reason.message
+				: String(healthResult.reason)
+			: null;
+
+	if (thermalResult.status === 'rejected') {
+		const err = thermalResult.reason;
 		const msg = err instanceof Error ? err.message : String(err);
 		// 404: the Pi has not had scripts/install_thermal_router.py run yet.
-		return json({ thermal: null, installed: !/robot-arm 404/.test(msg), error: msg }, { headers });
+		return json(
+			{ thermal: null, installed: !/robot-arm 404/.test(msg), error: msg, servos, servosError },
+			{ headers }
+		);
 	}
+	const thermal: ArmThermal = thermalResult.value;
 	try {
 		await logEpisode(thermal);
 	} catch (err) {
 		console.warn('[arm-thermal] episode not logged:', err instanceof Error ? err.message : err);
 	}
-	return json({ thermal, installed: true, error: null }, { headers });
+	return json({ thermal, installed: true, error: null, servos, servosError }, { headers });
 };
