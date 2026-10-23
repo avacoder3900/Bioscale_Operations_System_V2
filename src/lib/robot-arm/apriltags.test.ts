@@ -102,16 +102,17 @@ describe('assessTags', () => {
 		expect(a.cameraShift?.compensated).toBe(false);
 	});
 
-	it('an arm tag that moved 8 mm is reported, others ok', () => {
-		const dets = all.map((c) => (c.tagId === 20 ? seen(c, IDENTITY, shiftBy([8, 0, 0])) : seen(c)));
+	// 15 mm: past the 10 mm default (DEFAULT_TOLERANCES, shared with Calibrate home; 5 → 10 on 2026-10-23).
+	it('an arm tag that moved 15 mm is reported, others ok', () => {
+		const dets = all.map((c) => (c.tagId === 20 ? seen(c, IDENTITY, shiftBy([15, 0, 0])) : seen(c)));
 		const a = assessTags(all, dets);
 		expect(a.verdict).toBe('off');
 		const t = a.markers.find((m) => m.tagId === 20)!;
 		expect(t.status).toBe('moved');
 		expect(t.over).toEqual(['mm']);
-		expect(t.offMm).toBeCloseTo(8, 6);
+		expect(t.offMm).toBeCloseTo(15, 6);
 		expect(a.markers.filter((m) => m.tagId !== 20).every((m) => m.over.length === 0)).toBe(true);
-		expect(describeVision(a)).toContain('Tag 20 8.0 mm');
+		expect(describeVision(a)).toContain('Tag 20 15.0 mm');
 	});
 
 	it('a tag spun about its normal is off by angle even in place', () => {
@@ -140,7 +141,7 @@ describe('assessTags', () => {
 
 	it('moved AND spun names both measurements', () => {
 		const c = arm[0];
-		const both = { ...seen(c), pose: { t: [c.pose!.t[0] + 9, c.pose!.t[1], c.pose!.t[2]] as Vec3, R: axisAngle([0, 0, 1], 12), reprojPx: 0.2 } };
+		const both = { ...seen(c), pose: { t: [c.pose!.t[0] + 15, c.pose!.t[1], c.pose!.t[2]] as Vec3, R: axisAngle([0, 0, 1], 12), reprojPx: 0.2 } };
 		const a = assessTags(all, all.map((x) => (x.tagId === c.tagId ? both : seen(x))));
 		expect(a.markers.find((m) => m.tagId === c.tagId)!.over).toEqual(['mm', 'deg']);
 	});

@@ -37,8 +37,9 @@ Two of those were already true after the redo (ARM-06 §13) and are restated her
    The arm must be within 80 steps of the pose's goals on servos 1–5 (the pose editor's own "at pose" rule) or
    capture is refused with "Go to pose first" — the reference must describe what a play lands, not what the sliders
    were nudged to.
-2. **Tolerances after the photo.** Each reference carries position mm (default 5), spin ° (5; 0 = not judged) and
-   encoder steps (15). *Check now* re-detects without moving and shows the live residuals per joint and per tag, so
+2. **Tolerances after the photo.** Each reference carries position mm, spin ° (0 = not judged) and encoder steps
+   (15). The camera defaults are the SAME constants as Calibrate home on the Vision tab (`DEFAULT_TOLERANCES` in
+   `apriltags.ts`: 10 mm / 5° since 2026-10-23 — 5 mm tripped on the few-mm jitter of a still arm). *Check now* re-detects without moving and shows the live residuals per joint and per tag, so
    the numbers are set above the real jitter. A move-set step can override any of the three (blank = the pose's).
 3. **Which steps are checked.** Each keyframe has *Camera check*: auto (checked when the pose has a reference for the
    camera), on (the run refuses to start without a reference, or with a stale one), off. A reference is **stale**
@@ -103,7 +104,7 @@ never waits inside a request for the arm to move.
    at more poses than one on the base).
 2. Animate → a pose → Go to pose → Capture reference: the card shows the picture with the tags outlined, the encoder
    steps, and a VERIFIED POSE badge. Check now with the arm still: expect `ON THE POSE` with encoders within a few
-   steps and tags well under 5 mm; set the tolerances just above what several checks show.
+   steps and tags inside the 10 mm default; set the tolerances just above what several checks show.
 3. Move set with two or three referenced poses → ◎ Play verified: the panel shows each chunk moving, then "Checking
    …", then ✓ per step; PASSED at the end. `robot_arm_verified_runs` has the run with one result per verified step.
 4. Nudge one pose's goals by 100 steps in the editor and save (the reference goes STALE): ◎ Play verified refuses
