@@ -23295,3 +23295,29 @@ Source: branch feat/arm-vision-raw-frames @ the commit titled "feat(robot-arm): 
 Retrieve this exact code: git checkout feat/arm-vision-raw-frames at that commit
 What this deployment is for: Robot Arm page right rail shows ARM CONNECTION above Arm Camera on every tab with a Hide/Show toggle; Control tab no longer carries its own copy.
 Master commit: ea4cae32 (cherry-pick of f845ebd2 on feat/arm-vision-raw-frames); production deploys from this push.
+
+
+================================================================================
+2026-10-23 — master — fix: every production deploy since 11:35 had failed (non-handler exports in two +server.ts)
+================================================================================
+Alejandro did not see the ARM CONNECTION panel in the rail and asked whether it reached master. It had, but
+production was still the 10:01 build (f4ce5009): Vercel's status on GitHub showed "Deployment has failed" for
+every master commit from 813d6b02 (the raw-frames merge) through 62de3463. Vercel itself cannot be logged into
+from here, so the GitHub commit statuses (gh api .../commits/<sha>/status) were the signal.
+Root cause: src/routes/api/robot-arm/cameras/[name]/controls/+server.ts exported parseControlsBody, and
+src/routes/api/robot-arm/depth/config/+server.ts exported DEPTH_MODES, DEPTH_FPS and parseDepthConfigBody, so
+their server.test.ts files could import them. SvelteKit only allows request handlers (GET/POST/... ) and
+`_`-prefixed names as value exports from a +server.ts, and it enforces that in the production build's
+analyse step — `npm run check` does not see it, which is why the 13-error baseline looked fine all morning.
+Fix (c705f397 on master, cherry-picked to feat/arm-vision-raw-frames as 00ce572a): the parsers and the
+mode/fps tables moved to a sibling body.ts in each route folder; +server.ts imports them; the tests import
+from ./body. Route behaviour unchanged. vitest src/routes/api/robot-arm: 4 files / 55 passed.
+npm run check (master worktree): 14 errors / 432 warnings; the 14th is AskBimsWidget.svelte 1047 (not touched
+by this fix or the arm work). None in touched files.
+Lesson for the no-local-build rule: a non-handler export from a route file is the one build failure the check
+gate cannot catch; grep `^export` in +server.ts / +page.server.ts before pushing route files with tests.
+Deployment: production — via Vercel GitHub integration, "Deployment has completed" at 12:18
+Source: branch master @ commit c705f397
+Retrieve this exact code: git checkout master at commit c705f397
+What this deployment is for: first production build since 10:01; carries the raw-frames vision work, camera
+presets, and the ARM CONNECTION panel in the Robot Arm right rail above the camera (ea4cae32) with Hide/Show.
