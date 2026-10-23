@@ -94,6 +94,20 @@ export const DEFAULT_HOMING: HomingSettings = { baseRangeSteps: degToSteps(90), 
 /** The browser stops repeating attempts after this long. */
 export const HOME_LOOP_MS = 90_000;
 
+/**
+ * "Close enough to close the claw" (2026-10-23, Alejandro with Sam's OK):
+ * once this much of the loop has passed and every home joint is within
+ * CLAW_CLOSE_TOLERANCE steps, stop jogging and close the claw. Before this
+ * the claw only closed once every joint was within HOME_STEP_TOLERANCE
+ * (12 steps, ~1°); a joint hovering at 13–30 steps (shoulder sag, jitter)
+ * kept the loop jogging for the full 90 s with the mouth open. The claw
+ * closing was never a stall risk in itself — it closes to its stop with
+ * stall detection (CLAW_STALL_STEPS) — the delay was only this ordering.
+ */
+export const CLAW_CLOSE_AFTER_MS = 5_000;
+/** ~3.5° per joint. The "home" verdict itself still needs HOME_STEP_TOLERANCE. */
+export const CLAW_CLOSE_TOLERANCE = 40;
+
 export interface BaseOutOfRange {
 	sid: number;
 	/** current − home, steps (sign: which side). */
@@ -131,6 +145,9 @@ export function shouldRetryHome(o: {
 	/** true = claw closed this run; false = not yet; null = no claw reading (not required). */
 	clawClosed: boolean | null;
 	limitMs?: number;
+	/** Override CLAW_CLOSE_AFTER_MS / CLAW_CLOSE_TOLERANCE (tests). */
+	clawAfterMs?: number;
+	clawToleranceSteps?: number;
 }): { retry: boolean; reason: string } {
 	if (o.verdict === 'frozen') return { retry: false, reason: 'frozen' };
 	if (o.verdict === 'camera_moved') return { retry: false, reason: 'the camera moved — recalibrate' };
@@ -140,6 +157,12 @@ export function shouldRetryHome(o: {
 	const landed = o.residualMax != null && o.residualMax <= HOME_STEP_TOLERANCE;
 	if (landed && clawDone && o.verdict === 'unverified') return { retry: false, reason: 'encoders are home; the camera could not confirm it' };
 	if (landed && clawDone && o.verdict !== 'home') return { retry: false, reason: 'encoders are home; the tags disagree' };
+	// Close enough, long enough: stop jogging; the page closes the claw next (closeClaw) if it is still open.
+	const near = o.residualMax != null && o.residualMax <= (o.clawToleranceSteps ?? CLAW_CLOSE_TOLERANCE);
+	if (near && o.elapsedMs >= (o.clawAfterMs ?? CLAW_CLOSE_AFTER_MS)) {
+		const where = `encoders within ${o.residualMax} step(s) of home after ${Math.round(o.elapsedMs / 1000)} s`;
+		return { retry: false, reason: clawDone ? where : `${where} — closing the claw` };
+	}
 	return { retry: true, reason: '' };
 }
 

@@ -48,7 +48,8 @@ describe('shouldRetryHome', () => {
 	const base = { elapsedMs: 10_000, residualMax: 200, clawClosed: false };
 	it('done only when home AND the claw is closed', () => {
 		expect(shouldRetryHome({ ...base, verdict: 'home', residualMax: 3, clawClosed: true })).toEqual({ retry: false, reason: 'home, claw closed' });
-		expect(shouldRetryHome({ ...base, verdict: 'home', residualMax: 3, clawClosed: false }).retry).toBe(true);
+		// Home with the claw open: within the first 5 s another attempt closes it; after that the page closes it (see below).
+		expect(shouldRetryHome({ ...base, verdict: 'home', residualMax: 3, clawClosed: false, elapsedMs: 2_000 }).retry).toBe(true);
 		// No claw reading at all: the claw is not required.
 		expect(shouldRetryHome({ ...base, verdict: 'home', residualMax: 3, clawClosed: null }).retry).toBe(false);
 	});
@@ -61,9 +62,26 @@ describe('shouldRetryHome', () => {
 		expect(shouldRetryHome({ ...base, verdict: 'position_off' }).retry).toBe(true);
 		expect(shouldRetryHome({ ...base, verdict: 'position_off', residualMax: 199 }).retry).toBe(true);
 	});
+	it('close enough for long enough: stops jogging so the claw can close (2026-10-23)', () => {
+		// 25 steps off (> HOME_STEP_TOLERANCE, < CLAW_CLOSE_TOLERANCE) after 5 s: stop, close the claw.
+		const r = shouldRetryHome({ ...base, verdict: 'position_off', residualMax: 25, clawClosed: false, elapsedMs: 5_000 });
+		expect(r.retry).toBe(false);
+		expect(r.reason).toBe('encoders within 25 step(s) of home after 5 s — closing the claw');
+		// Same, claw already closed: just stop.
+		expect(shouldRetryHome({ ...base, verdict: 'position_off', residualMax: 25, clawClosed: true, elapsedMs: 6_000 }).reason).toBe('encoders within 25 step(s) of home after 6 s');
+		// Not yet 5 s, or too far off: keep going.
+		expect(shouldRetryHome({ ...base, verdict: 'position_off', residualMax: 25, clawClosed: false, elapsedMs: 4_900 }).retry).toBe(true);
+		expect(shouldRetryHome({ ...base, verdict: 'position_off', residualMax: 41, clawClosed: false, elapsedMs: 30_000 }).retry).toBe(true);
+		// Home verdict with the claw still open after 5 s: stop and let the page close it.
+		expect(shouldRetryHome({ ...base, verdict: 'home', residualMax: 3, clawClosed: false, elapsedMs: 5_000 }).retry).toBe(false);
+		// Overrides.
+		expect(shouldRetryHome({ ...base, verdict: 'position_off', residualMax: 25, clawClosed: false, elapsedMs: 1_000, clawAfterMs: 1_000 }).retry).toBe(false);
+		expect(shouldRetryHome({ ...base, verdict: 'position_off', residualMax: 25, clawClosed: false, elapsedMs: 9_000, clawToleranceSteps: 20 }).retry).toBe(true);
+	});
 	it('stops when encoders are home and the claw closed but the tags disagree', () => {
 		expect(shouldRetryHome({ ...base, verdict: 'markers_off', residualMax: 4, clawClosed: true }).reason).toBe('encoders are home; the tags disagree');
-		expect(shouldRetryHome({ ...base, verdict: 'markers_off', residualMax: 4, clawClosed: false }).retry).toBe(true);
+		// Claw still open within the first 5 s: another attempt closes it; after 5 s the page does (see 'close enough').
+		expect(shouldRetryHome({ ...base, verdict: 'markers_off', residualMax: 4, clawClosed: false, elapsedMs: 2_000 }).retry).toBe(true);
 	});
 });
 

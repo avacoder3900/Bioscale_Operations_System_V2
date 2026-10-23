@@ -100,9 +100,11 @@
 	/**
 	 * Return to home, repeated until the arm is home. Each attempt: (servo 1
 	 * safety gate) → open the mouth (attempt 1 only) → servo 2 home → all
-	 * joints home -> close the claw. Stops when done, on a freeze, an error, Stop, or
-	 * when 90 s have passed (no new attempt starts after that). However it ends,
-	 * the LAST step is closing the mouth (closeClaw) unless it is already
+	 * joints home -> close the claw. Stops when done, on a freeze, an error, Stop,
+	 * once every joint has been within CLAW_CLOSE_TOLERANCE (40 steps) for
+	 * CLAW_CLOSE_AFTER_MS (5 s) — "close enough, close the claw" (2026-10-23) —
+	 * or when 90 s have passed (no new attempt starts after that). However it
+	 * ends, the LAST step is closing the mouth (closeClaw) unless it is already
 	 * closed — except after a freeze, where torque stays off for the technician.
 	 */
 	async function closeClawAtEnd() {

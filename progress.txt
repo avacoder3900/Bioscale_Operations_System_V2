@@ -23011,3 +23011,26 @@ Source: branch master @ commit 709609bc
 Retrieve this exact code: git checkout master at commit 709609bc
   (or: git log master --oneline to find it if the branch has since moved on)
 What this deployment is for: no step limit on live slider moves. GitHub deployment 7280534491 success.
+
+================================================================================
+2026-10-23 — master — Return to home: close the claw once every joint is within 40 steps for 5 s (was: only within 12 steps, else keep jogging up to 90 s)
+================================================================================
+Alejandro: with most servos home, Return to home left the gripper open; Sam said the ordering was deliberate
+(stall safety) but OK to make faster; asked either for the checks + looser tolerances or "shorten the amount
+of time the gripper has before pausing for 90 seconds, maybe to about 5 seconds".
+What gated the claw (robot-arm-vision.ts returnToHome, step 4): servo 6 reports a position; the loop was not
+stopped; EVERY joint 1-5 within HOME_STEP_TOLERANCE = 12 steps (~1°) of home; attempt time budget left.
+Closing itself is stall-SAFE: jog -300 until a jog moves < 6 steps (CLAW_STALL_STEPS), then +1 to ease off.
+So the delay was only the ordering: a joint hovering at 13-30 steps (shoulder sag, jitter) kept
+shouldRetryHome retrying for the full 90 s (HOME_LOOP_MS) with the mouth open; only then did the page's
+closeClawAtEnd close it.
+Change (home-calibration.ts, pure, +1 test block / 26 passed): CLAW_CLOSE_AFTER_MS = 5 s, CLAW_CLOSE_TOLERANCE
+= 40 steps (~3.5°). shouldRetryHome: once elapsed ≥ 5 s and residualMax ≤ 40, stop retrying — reason
+"encoders within N step(s) of home after T s — closing the claw"; the Vision page's existing final step
+(closeClaw) then closes the mouth. Checked AFTER the "home + claw closed" / "encoders home but tags
+disagree" rules so those messages keep priority. The 90 s limit stays for an arm that never gets within
+40 steps. The "home" verdict itself still needs 12 steps; this does not loosen the home check, it only
+decides when to give up jogging and close. Overrides (clawAfterMs, clawToleranceSteps) exist for tests /
+later tuning. Vision page comment updated.
+Checks: vitest src/lib/robot-arm 8 files / 184 passed; svelte-check 14 errors / 432 warnings (baseline).
+
