@@ -23433,3 +23433,17 @@ Deployment: production — via Vercel GitHub integration on the push to master
 Source: branch fix/arm-servo-row-reason @ commit 5a4f7736
 Retrieve this exact code: git checkout fix/arm-servo-row-reason at commit 5a4f7736
 What this deployment is for: the Servos line on the Arm Camera card shows the Pi's reason (arm power / follower USB) instead of disappearing.
+
+
+================================================================================
+2026-10-23 — fix/arm-servo-row-reason — Servos line format: "1: 28  2: 27 …"
+================================================================================
+Alejandro powered the arm (Pi /servos back to 200: 1: 28 2: 27 3: 26 4: 27 5: 28 6: 30 °C) and asked for the
+servo id before each temperature with a space, like "1: 25  2: 35". PiThermalChip.svelte: each reading is now
+"{id}: {temperature}" (no-wrap), pairs separated by a wider gap, the chip wraps if the rail is narrow; row
+tooltip says the format. Colours and per-servo tooltips unchanged.
+npm run check: 13 errors / 432 warnings, none in touched files (baseline 13).
+Deployment: production — via Vercel GitHub integration on the push to master
+Source: branch fix/arm-servo-row-reason @ commit 31ce5b91
+Retrieve this exact code: git checkout fix/arm-servo-row-reason at commit 31ce5b91
+What this deployment is for: Servos line on the Arm Camera card reads "Servos 1: 28 2: 27 3: 26 4: 27 5: 28 6: 30 °C".
