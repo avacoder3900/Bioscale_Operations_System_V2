@@ -23364,3 +23364,23 @@ Deployment: production — via Vercel GitHub integration on the push to master
 Source: branch feat/arm-servo-temps @ commit 7bad01bf
 Retrieve this exact code: git checkout feat/arm-servo-temps at commit 7bad01bf
 What this deployment is for: Arm Camera card shows ARM CAMERA, then Pi °C + Wi-Fi, then every servo's °C on its own line.
+
+
+================================================================================
+2026-10-23 — feat/arm-servo-temps — fix: servo row read /servos, not /arm/health (404 on the Pi)
+================================================================================
+Alejandro saw the Pi and Wi-Fi lines but no servo temperatures. Direct check against ROBOT_ARM_BASE_URL:
+GET /arm/health → 404. The Pi's /openapi.json says it serves the "SO-ARM101 robot-arm server" 0.1.0 whose
+routes are added by services/robot-arm/scripts/install_*_router.py; the repo's app.py (where arm_health lives,
+f7286449) is not what runs there. GET /servos is served and already returns id, name, position, speed, load,
+voltage, temperature, torque per servo (37/35/36/37/37/… °C at the time).
+  - /api/robot-arm/thermal: reads robotArmFetch('/servos', 4 s) instead of getHealth; returns servos:
+    ServoState[] | null. Doc comment says to check /openapi.json on the Pi before relying on a route.
+  - PiThermalChip.svelte: joints from the ServoState array; warm 48 / hot 55 °C constants (app.py's
+    HEALTH_TEMP_WARM_C / _HOT_C); tooltip shows the servo's name (shoulder_pan …), load, voltage, torque.
+  - robot-arm-client.ts: ArmHealth / ArmJointHealth / getHealth removed; ServoState gains optional name.
+No Pi change. npm run check: 13 errors / 432 warnings, none in touched files (baseline 13).
+Deployment: production — via Vercel GitHub integration on the push to master
+Source: branch feat/arm-servo-temps @ commit 50f24b36
+Retrieve this exact code: git checkout feat/arm-servo-temps at commit 50f24b36
+What this deployment is for: the Servos °C line on the Arm Camera card actually fills in on the live Pi.
