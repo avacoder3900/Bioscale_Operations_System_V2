@@ -37,8 +37,11 @@
 	let { camera, calibration, suspended = false }: Props = $props();
 
 	const RATE_OPTIONS = [0.5, 1, 2];
+	/** Distinct captures the Pi averages each tag over per answer (2026-10-23). */
+	const FRAME_OPTIONS = [1, 3, 5];
 
 	let running = $state(false);
+	let frames = $state(1);
 	$effect(() => {
 		if (suspended) running = false;
 	});
@@ -84,7 +87,7 @@
 				const t0 = performance.now();
 				if (document.visibilityState === 'visible') {
 					try {
-						const d = await fetchDetections(cam, ctrl.signal);
+						const d = await fetchDetections(cam, ctrl.signal, frames);
 						if (stopped) break;
 						det = d;
 						lastAt = Date.now();
@@ -135,6 +138,12 @@
 			</p>
 		</div>
 		<div class="flex items-center gap-2">
+			<label class="text-xs" style="color: var(--color-tron-text-secondary)" title="Frames the Pi averages each tag's corners over before answering. 1 = live; 3 or 5 = steadier numbers for a parked arm (each frame ~0.15 s). The jitter column shows what was averaged away.">
+				frames
+				<select bind:value={frames} class="ml-1 rounded border bg-black/40 px-1 py-0.5 text-xs" style="border-color: var(--color-tron-border); color: var(--color-tron-text)">
+					{#each FRAME_OPTIONS as f}<option value={f}>{f}</option>{/each}
+				</select>
+			</label>
 			<label class="text-xs" style="color: var(--color-tron-text-secondary)">
 				per s
 				<select bind:value={rate} class="ml-1 rounded border bg-black/40 px-1 py-0.5 text-xs" style="border-color: var(--color-tron-border); color: var(--color-tron-text)">
@@ -206,6 +215,7 @@
 							<th class="py-1 pr-2 text-right font-medium" title="Tilt of the tag's normal from home. Advisory only: a square tag seen nearly head-on has two poses that fit its corners equally, so tilt can flip by twice the viewing angle. ? = that coin toss this frame.">tilt °</th>
 							{#if anyPx}<th class="py-1 pr-2 text-right font-medium" title="Picture distance, % of frame width; used when a tag has no pose. Red = over {(calibration.tolerances.pixel * 100).toFixed(1)} %.">off px</th>{/if}
 							<th class="py-1 text-right font-medium" title="Distance from the camera used for the judgment. D = the D415 depth (the pose slid along its sight line to it); (brackets) = a depth reading that could not be used this frame, so the image distance was.">dist mm</th>
+							{#if (det?.framesUsed ?? 1) > 1}<th class="py-1 pl-2 text-right font-medium" title="Corner noise the Pi averaged away: mean standard deviation of the tag's 8 corner coordinates across the {det?.framesUsed} frames, in pixels. The 2026-10-23 baseline on a parked scene was 0.10-0.35 px per tag.">jitter px</th>{/if}
 						</tr>
 					</thead>
 					<tbody>
@@ -226,6 +236,10 @@
 								<td class="py-1 text-right font-mono" style="color: var(--color-tron-text)" title={a?.zSource === 'depth' ? `D415 depth drives this tag's position; the image pose alone put it at ${a.imageZMm != null ? Math.round(a.imageZMm) : '?'} mm` : a?.zSource === 'image' ? (a.depthMm != null ? `Image distance; the D415 depth (${Math.round(a.depthMm)} mm) was not usable on both sides this frame` : 'Image distance; no D415 depth for this tag') : ''}>
 									{a?.zMm != null ? Math.round(a.zMm) : '—'}{#if a?.zSource === 'depth'}<span style="color: var(--color-tron-text-secondary)"> D</span>{:else if a?.zSource === 'image' && a?.depthMm != null}<span style="color: var(--color-tron-text-secondary)"> ({Math.round(a.depthMm)})</span>{/if}
 								</td>
+								{#if (det?.framesUsed ?? 1) > 1}
+									{@const d = det?.tags.find((t) => t.id === c.tagId)}
+									<td class="py-1 pl-2 text-right font-mono" style="color: var(--color-tron-text-secondary)" title={d?.framesSeen != null ? `Seen in ${d.framesSeen} of ${det?.framesUsed} frames` : ''}>{d?.jitterPx != null ? d.jitterPx.toFixed(2) : '—'}</td>
+								{/if}
 							</tr>
 						{/each}
 					</tbody>
@@ -236,6 +250,7 @@
 					Tilt is advisory: a square seen nearly head-on has two poses that fit its corners equally, so tilt can flip by twice the viewing angle (a "?" marks that coin toss; the pose agreeing with the calibration is used).
 					Distance marked D is the D415's depth: when both the calibration and this frame have a reading for a tag, its pose is slid along its sight line to that depth, so off mm no longer jitters with the tag's size on the picture. Without depth on both sides the tag falls back to the image distance; (brackets) = the unused depth reading.
 					Δdepth is the depth reading now minus at calibration (+ = further away).
+					{#if det?.frameSource}Detected on {det.frameSource === 'raw' ? 'the sensor\'s own pixels' : 'a decoded JPEG (older Pi software)'}{(det.framesUsed ?? 1) > 1 ? `, corners averaged over ${det.framesUsed} frames` : ''}.{/if}
 					{#if calibration.intrinsicsSource === 'nominal'}Nominal intrinsics — mm are approximate.{/if}
 				</p>
 			</div>

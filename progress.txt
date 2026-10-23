@@ -2907,6 +2907,83 @@ UI-only, no server change. npm run check: 11-error baseline (0 new in deck-calib
 Reaches operators only after the stale prod alias is promoted to master.
 
 ================================================================================
+2026-10-23 — feat/arm-vision-raw-frames — AprilTags on raw frames, AprilTag corner refinement, frame averaging, camera controls, depth 480p/720p
+================================================================================
+Alejandro: "is there a way to further increase the quality of the camera feed... for the images being used for
+data analysis? BIMS can stay compressed if the Pi stays cool; I want as high quality as possible for reading
+values and before any angle calculations." Options laid out; he picked raw frames (1), fixed camera settings
+with number boxes beside sliders bounded by the REAL device limits (3), AprilTag's own corner refinement +
+averaging (4, "accuracy and temperature are what I worry about most"), and a depth 480p/720p toggle to test (6).
+Rejected q95 JPEG (costs CPU); tag sizes are his to change by printing.
+
+Found: every detection decoded the Pi's own quality-80 JPEG (apriltags.py fetched /snapshot.jpg over loopback)
+— a lossy image plus an encode+decode per detect; corner refinement was OpenCV's generic sub-pixel; nothing set
+exposure/gain (full auto); depth.py on the Pi was NOT the vendored file (the Pi reads Z16 over v4l2-ctl at
+848x480 with a measured colour->depth affine; the repo copy was an unexercised pyrealsense2 version).
+
+Pi (vendored in services/robot-arm/src/server, installed with new scripts/install_vision_quality.py which
+refuses to replace a Pi file whose md5 it does not know; backups *.bak-pre-raw, app.py.bak-camera-controls):
+1. cameras.py: _Frame.gray() = the YUYV luma plane itself (the sensor's own samples); _CameraWorker.wait_frame
+   (optionally newer than a seq, so averaging sees distinct captures); cameras.current() registry so sibling
+   routers reach the workers without importing app.py; saved UVC controls re-applied on every device open.
+2. apriltags.py: _grab() takes the raw frame through cameras.current() (loopback JPEG only as fallback;
+   frame_source in every answer); JPEG only when include_frame; APRILTAG_REFINE default "apriltag"; `frames`
+   1..10 averages each tag's corners over distinct frames before solvePnP and returns frames_seen + jitter_px
+   (mean sd of the 8 corner coords, px); refine/upscale/frames_used in the answer.
+3. camera_controls.py (NEW): GET/POST /cameras/{name}/controls (+ /reset). Parses `v4l2-ctl --list-ctrls-menus`
+   so min/max/step/default/flags/menu come from the camera; validates against them; writes with auto switches
+   going to manual first and back to auto last (UVC answers EACCES for a gated control — on the D415 gain and
+   exposure_dynamic_framerate are gated by auto_exposure without an `inactive` flag); reads back every write;
+   persists to calibrations/camera_controls.json. Verified on arm-pi: inactive/gated rejections name the switch,
+   out-of-range and off-step values rejected with the reason, reset restores all 14 controls with nothing rejected,
+   apply_saved re-applies the set. Camera left at defaults, saved set empty.
+4. depth.py: re-vendored from the Pi, then: Geometry (480p 848x480 / 720p 1280x720, fps 6/15/30) switchable at
+   runtime via GET/POST /depth/config (remembered in calibrations/depth_config.json; env DEPTH_MODE/DEPTH_FPS as
+   defaults); the affine scaled per axis (1280/848, 720/480); status adds mode, measured_fps, frame_bytes,
+   child_pid, child_cpu_pct (the v4l2-ctl reader). Probe at 720p: tags land on the same surfaces as 480p (±1 mm)
+   EXCEPT tag 48, where the 720p depth image has holes over the tag and the few valid pixels were the background
+   (420 vs 381 mm). _sample_points now returns null when < 30 % of the window is valid or p90-p10 > 20 mm, and
+   scales the radius with the mode; verified: 720p tag 48 -> null (BIMS falls back to the image), 480p -> 381.
+5. scripts/measure_tag_jitter.py: the measurement below, for any future camera/detector change.
+
+Measured on arm-pi, arm parked at home, sunlight, 1080p, upscale 2, 30 detects each
+(corner sd = mean sd of the 8 corner coordinates, px; z = solvePnP distance with every tag as 8 mm, so relative):
+  before (JPEG q80, subpix):            corner sd 0.10-0.35 px | z sd 0.25-4.25 mm | depth sd 0-0.46 mm | 143 ms/detect
+  after  (raw, apriltag refine):        corner sd 0.04-0.07 px | z sd 0.06-0.69 mm | depth sd 0-0.44 mm | 582 ms/detect
+  after + frames=5:                     corner sd 0.04-0.06 px | z sd 0.02-0.31 mm | jitter_px 0.03-0.06   | 2.84 s/detect
+  upscale 1.5 (apriltag refine):        443 ms, but #48 seen 7/15 frames
+  upscale 1:                            256 ms, but #46 7/15, #47 13/15, #48 8/15, #53 1/15  -> upscale stays 2
+  depth 480p vs 720p (15 detects):      both 15.0 fps; reader CPU 1.0 % vs 1.6 %; depth sd <= 0.5 mm in both;
+                                        720p not clearly steadier on the 8 mm tags in this scene (1 mm quantised).
+Heat: SoC 47 -> 54 C after 30 detects at ~1.2/s (service ~85-100 % of a core while detecting), 59 C after the
+frames=5 run; idle 45-46 C. Live Tags at 1/s with the new detector is ~60 % of a core while it runs. A follow-up
+if that matters: find tags at 1x and run the 2x refinement only inside each tag's region.
+
+BIMS:
+- robot-arm-client.ts: AprilTagDetectRequest.frames; refine/upscale/frame_source/frames_used and per-tag
+  frames_seen/jitter_px; CameraControl/CameraControlsResponse/DepthStreamStatus/DepthConfig; getCameraControls,
+  setCameraControls, resetCameraControls, getDepthConfig, setDepthConfig.
+- robot-arm-vision.ts: detectTags({frames}); CALIBRATION_FRAMES 5 (saveCalibration), CHECK_FRAMES 3 (home
+  check); DetectResult.frameSource/framesUsed; TagDetection.jitterPx/framesSeen (apriltags.ts, optional).
+- API: /api/robot-arm/cameras/[name]/controls GET/POST (POST manufacturing:write, body shape-checked, Pi does
+  the range check, AuditLog robot_arm.camera_controls.set/reset, 404 -> installed:false), /api/robot-arm/depth/config
+  GET/POST (audited); apriltags proxy accepts ?frames= and returns frameSource/framesUsed. Tests: controls 11,
+  depth config 7; robot-arm suites 199/199.
+- Vision tab: CameraControlsPanel.svelte (per control: slider with the camera's min/max/step + number box +
+  unit/ms readout + default marker + per-control reset; menus/bools; inactive controls say so and offer "Take
+  manual control"; Remember on the Pi; Reset all; rejections shown beside the control), DepthStreamPanel.svelte
+  (480p/720p radio, fps, remember; measured fps, reader CPU, frame size, Pi temp + service CPU polled while open),
+  VisionLiveTracker: frames select 1/3/5, jitter px column when > 1, frame-source note.
+- CAMERA_STREAMING_HANDOFF.md: section for Sam on the depth.py changes (Sam owns depth/calibration).
+npm run check: 13 errors / 432 warnings, none in touched files (baseline 13).
+Deployment: production — via Vercel GitHub integration on the merge to master
+Source: branch feat/arm-vision-raw-frames @ commit 641ea926
+Retrieve this exact code: git checkout feat/arm-vision-raw-frames at commit 641ea926
+  (or: git log feat/arm-vision-raw-frames --oneline to find it if the branch has since moved on)
+What this deployment is for: Vision tab > Camera settings + Depth stream panels, Live Tags frames/jitter; the Pi side
+(raw-frame detection, controls route, depth switch) is already installed on arm-pi and needs this BIMS to drive it.
+
+================================================================================
 2026-07-01 — Quick Reagent Fill Test page (self-service test-cart prep)
 ================================================================================
 PRD: docs/prds/QUICK-REAGENT-FILL-TEST.md

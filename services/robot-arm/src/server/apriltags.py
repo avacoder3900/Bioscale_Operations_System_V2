@@ -34,10 +34,25 @@ coin toss and the tilt can flip by twice the viewing angle between frames —
 BIMS settles it against the calibration (apriltags.ts resolvePose) and judges
 only spin about the tag's normal. Position and spin agree between the two.
 
-Frames: this module does NOT open the camera. cameras.py owns the colour
-device (and differs between the Pi and the repo), so frames are fetched from
-the service's own snapshot route over loopback — the same JPEG BIMS would get.
-That keeps this file independent of cameras.py internals.
+Frames (2026-10-23): detection runs on the RAW frame. cameras.py registers
+its CameraManager (cameras.current()); this module takes the worker's latest
+frame and reads the luma plane straight out of the YUYV buffer
+(_Frame.gray()), so the detector sees the sensor's own pixels: no JPEG
+quality-80 artefacts around the tag edges that sub-pixel corner refinement
+works on, and no encode + decode per detect (that pair was ~26 ms of the
+~140 ms a 1080p detect cost, and heat on a fanless Pi 5). The JPEG is only
+produced when the caller asks for the picture (include_frame). If cameras.py
+is not importable (older Pi), frames fall back to the service's own snapshot
+route over loopback as before; `frame_source` in every answer says which.
+
+Averaging (2026-10-23): `frames` (1..10, default 1) detects on that many
+DISTINCT consecutive captures and averages each tag's corners over the
+frames it was seen in before solving its pose; `frames_seen` and
+`jitter_px` (mean standard deviation of the 8 corner coordinates across
+those frames, in pixels) come back per tag, so a caller can see the noise it
+is averaging away. Noise in a stationary tag's corners is the main source of
+pose jitter, so a parked arm (home check, calibration, verified pose) should
+ask for 3-5 frames; a live view keeps 1.
 
 Intrinsics, best first:
     1. the RealSense colour stream profile at the frame's resolution (factory
@@ -56,6 +71,12 @@ on arm-pi 2026-10-20 at 640x480: 8 mm tags ~15 px across were all missed at
 1x and all found at 1.5x/2x (+4-7 ms); 3x lost some again. Corners are
 scaled back, so everything returned is in the frame's own pixels.
 
+Corner refinement defaults to AprilTag's own method (APRILTAG_REFINE=apriltag,
+since 2026-10-23): slower than OpenCV's generic sub-pixel search but it is
+the refinement the tag family was designed with and gives the steadiest
+corners. Detection is occasional (a check, a calibration, a live view at
+1-2 fps), so the extra milliseconds cost nothing measurable in heat.
+
 Depth: when depth.py is installed alongside, the D415's depth at each tag
 centre is attached (`depth_mm`) as an independent cross-check of `t_mm[2]`.
 depth.py's colour->depth map is fitted at 640x480 (COLOR_REF_W/H); other
@@ -68,7 +89,7 @@ Config (env, ~/robot-arm/.env):
     APRILTAG_INTRINSICS_FILE  factory intrinsics JSON (default calibrations/realsense_color_intrinsics.json)
     APRILTAG_FX/FY/CX/CY   intrinsics override, pixels at the streamed resolution
     APRILTAG_UPSCALE       detection enlargement factor, 1-4 (default 2)
-    APRILTAG_REFINE        "subpix" (default), "apriltag" (slower, sharper) or "none"
+    APRILTAG_REFINE        "apriltag" (default, sharpest), "subpix" (faster) or "none"
     ROBOT_ARM_API_KEY      read to call the snapshot route (already set for the service)
 
 Deps on the Pi (inside the uv project): OpenCV >= 4.7 with the aruco module
@@ -117,8 +138,13 @@ try:  # optional: depth cross-check from depth.py (ARM-04)
 except Exception:  # pragma: no cover
     _depth = None  # type: ignore
 
+try:  # raw frames straight from the capture worker (cameras.current())
+    from . import cameras as _cameras  # type: ignore
+except Exception:  # pragma: no cover
+    _cameras = None  # type: ignore
+
 SELF_URL = os.environ.get("APRILTAG_SELF_URL", "http://127.0.0.1:8000").rstrip("/")
-REFINE = os.environ.get("APRILTAG_REFINE", "subpix").strip().lower()
+REFINE = os.environ.get("APRILTAG_REFINE", "apriltag").strip().lower()
 INTRINSICS_FILE = Path(os.environ.get("APRILTAG_INTRINSICS_FILE", "calibrations/realsense_color_intrinsics.json"))
 MAX_SIZES = 600  # 36h11 has 587 IDs
 
@@ -224,6 +250,49 @@ def _intrinsics(w: int, h: int) -> dict:
 
 # ── frames ───────────────────────────────────────────────────────────────
 
+class _Grab:
+    """One captured frame as the detector wants it: the grey image plus
+    enough to hand the picture back on request."""
+
+    __slots__ = ("gray", "w", "h", "seq", "source", "_frame", "_jpeg")
+
+    def __init__(self, gray, seq, source, frame=None, jpeg: Optional[bytes] = None) -> None:
+        self.gray = gray
+        self.h, self.w = gray.shape[:2]
+        self.seq = seq
+        self.source = source  # "raw" | "jpeg"
+        self._frame = frame
+        self._jpeg = jpeg
+
+    def jpeg(self) -> bytes:
+        if self._jpeg is None and self._frame is not None:
+            self._jpeg = self._frame.jpeg  # camera's configured quality; display only
+        return self._jpeg or b""
+
+
+def _grab(name: str, after_seq: Optional[int] = None, timeout_s: float = 5.0) -> _Grab:
+    """The camera's newest frame (newer than ``after_seq`` when given).
+
+    Raw path through cameras.current(); loopback-JPEG fallback otherwise."""
+    mgr = _cameras.current() if _cameras is not None else None
+    if mgr is not None:
+        worker = mgr.get(name)
+        if worker is None:
+            raise RuntimeError(f"no camera named {name!r}")
+        frame = worker.wait_frame(timeout_s, after_seq)
+        if frame is None:
+            st = worker.status()
+            raise RuntimeError(f"no frame from camera {name!r}: {st.get('error') or 'camera not producing'}")
+        return _Grab(frame.gray(), frame.seq, "raw", frame=frame)
+    if after_seq is not None:
+        time.sleep(0.04)  # a frame interval, so consecutive grabs differ
+    jpeg = _grab_jpeg(name)
+    img = cv2.imdecode(np.frombuffer(jpeg, dtype=np.uint8), cv2.IMREAD_GRAYSCALE)
+    if img is None:
+        raise RuntimeError("the snapshot could not be decoded")
+    return _Grab(img, None, "jpeg", jpeg=jpeg)
+
+
 def _grab_jpeg(name: str) -> bytes:
     key = os.environ.get("ROBOT_ARM_API_KEY", "")
     headers = {"x-api-key": key} if key else {}
@@ -247,6 +316,8 @@ class DetectRequest(BaseModel):
     default_size_mm: Optional[float] = Field(None, gt=0, lt=1000)
     include_frame: bool = False
     depth: bool = True
+    # Distinct consecutive frames to average each tag's corners over (see module doc).
+    frames: int = Field(1, ge=1, le=10)
 
 
 def _pose(corners, size: float, K, dist):
@@ -295,14 +366,8 @@ def _to_depth_ref(points: List[List[float]], w: int, h: int, intr: dict) -> Opti
     return out
 
 
-def _detect(name: str, body: DetectRequest) -> dict:
-    t0 = time.monotonic()
-    jpeg = _grab_jpeg(name)
-    img = cv2.imdecode(np.frombuffer(jpeg, dtype=np.uint8), cv2.IMREAD_COLOR)
-    if img is None:
-        raise RuntimeError("the snapshot could not be decoded")
-    h, w = img.shape[:2]
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+def _detect_frame(gray) -> tuple[str, Dict[int, "np.ndarray"]]:
+    """Run the detector on one grey frame -> (detector label, {tag id: 4x2 corners in frame px})."""
     if UPSCALE > 1.0:
         gray = cv2.resize(gray, None, fx=UPSCALE, fy=UPSCALE, interpolation=cv2.INTER_CUBIC)
     # One detector object is shared; FastAPI runs sync routes on a thread
@@ -310,61 +375,100 @@ def _detect(name: str, body: DetectRequest) -> dict:
     with _detect_lock:
         label, detect = _get_detector()
         corners_list, ids, _rej = detect(gray)
-    # Back to the frame's own pixels: +0.5/-0.5 keeps pixel centres aligned
-    # under cv2.resize's half-pixel convention.
-    corners_list = [(c + 0.5) / UPSCALE - 0.5 for c in corners_list]
+    found: Dict[int, "np.ndarray"] = {}
+    if ids is not None:
+        for c, tid in zip(corners_list, ids.reshape(-1)):
+            # Back to the frame's own pixels: +0.5/-0.5 keeps pixel centres
+            # aligned under cv2.resize's half-pixel convention.
+            found[int(tid)] = ((c + 0.5) / UPSCALE - 0.5).reshape(4, 2).astype(np.float64)
+    return label, found
 
-    intr = _intrinsics(w, h)
+
+def _sample_depth(name: str, found: Dict[int, "np.ndarray"], w: int, h: int, intr: dict) -> Dict[int, float]:
+    """D415 depth at each found tag's centre, {id: mm}; empty when depth is unavailable."""
+    out: Dict[int, float] = {}
+    if _depth is None or not found:
+        return out
+    try:
+        if not _depth._has_depth(name):
+            return out
+        ids = sorted(found)
+        centres = [[float(found[i].mean(axis=0)[0]) / w, float(found[i].mean(axis=0)[1]) / h] for i in ids]
+        points = _to_depth_ref(centres, w, h, intr)
+        if points is None:
+            return out
+        for tid, v in zip(ids, _depth._rs.sample(points, 3)):
+            if v is not None:
+                out[tid] = float(v)
+    except Exception:
+        pass  # depth is a cross-check, never a reason to fail
+    return out
+
+
+def _detect(name: str, body: DetectRequest) -> dict:
+    t0 = time.monotonic()
+    n = max(1, int(body.frames or 1))
+    per_frame: List[Dict[int, "np.ndarray"]] = []
+    depth_per_frame: List[Dict[int, float]] = []
+    grab: Optional[_Grab] = None
+    label = ""
+    intr: Optional[dict] = None
+    for _ in range(n):
+        grab = _grab(name, after_seq=grab.seq if grab is not None else None)
+        label, found = _detect_frame(grab.gray)
+        per_frame.append(found)
+        if intr is None:
+            intr = _intrinsics(grab.w, grab.h)
+        depth_per_frame.append(_sample_depth(name, found, grab.w, grab.h, intr) if body.depth else {})
+    assert grab is not None and intr is not None
+    w, h = grab.w, grab.h
     K = np.array([[intr["fx"], 0, intr["cx"]], [0, intr["fy"], intr["cy"]], [0, 0, 1]], dtype=np.float64)
     dist = np.array(intr["dist"], dtype=np.float64)
 
     tags = []
-    if ids is not None:
-        for c, tid in zip(corners_list, ids.reshape(-1)):
-            pts = c.reshape(4, 2).astype(np.float64)
-            tid = int(tid)
-            size = body.tag_sizes_mm.get(str(tid), body.default_size_mm)
-            pose = None
-            if size and size > 0:
-                try:
-                    pose = _pose(pts, float(size), K, dist)
-                except Exception:
-                    pose = None
-            cx, cy = pts.mean(axis=0)
-            tags.append({
-                "id": tid,
-                "center": [round(float(cx) / w, 5), round(float(cy) / h, 5)],
-                "corners": [[round(float(x) / w, 5), round(float(y) / h, 5)] for x, y in pts],
-                "size_mm": float(size) if size else None,
-                "pose": pose,
-                "depth_mm": None,
-                "margin": None,
-            })
-    tags.sort(key=lambda t: t["id"])
-
-    if body.depth and tags and _depth is not None:
-        try:
-            if _depth._has_depth(name):
-                points = _to_depth_ref([t["center"] for t in tags], w, h, intr)
-                if points is not None:
-                    d = _depth._rs.sample(points, 3)
-                    for t, v in zip(tags, d):
-                        t["depth_mm"] = v
-        except Exception:
-            pass  # depth is a cross-check, never a reason to fail
+    for tid in sorted(set().union(*per_frame)):
+        obs = [f[tid] for f in per_frame if tid in f]
+        stack = np.stack(obs)  # frames x 4 x 2
+        pts = stack.mean(axis=0)
+        # Mean standard deviation of the 8 corner coordinates across frames (px).
+        jitter = float(stack.std(axis=0).mean()) if len(obs) > 1 else None
+        size = body.tag_sizes_mm.get(str(tid), body.default_size_mm)
+        pose = None
+        if size and size > 0:
+            try:
+                pose = _pose(pts, float(size), K, dist)
+            except Exception:
+                pose = None
+        cx, cy = pts.mean(axis=0)
+        depths = [d[tid] for d in depth_per_frame if tid in d]
+        tags.append({
+            "id": tid,
+            "center": [round(float(cx) / w, 5), round(float(cy) / h, 5)],
+            "corners": [[round(float(x) / w, 5), round(float(y) / h, 5)] for x, y in pts],
+            "size_mm": float(size) if size else None,
+            "pose": pose,
+            "depth_mm": round(float(np.median(depths)), 1) if depths else None,
+            "margin": None,
+            "frames_seen": len(obs),
+            "jitter_px": round(jitter, 3) if jitter is not None else None,
+        })
 
     out = {
         "available": True,
         "reason": None,
         "family": "tag36h11",
         "detector": label,
+        "refine": REFINE,
+        "upscale": UPSCALE,
         "frame": {"width": w, "height": h},
+        "frame_source": grab.source,
+        "frames_used": n,
         "intrinsics": intr,
         "tags": tags,
         "elapsed_ms": round((time.monotonic() - t0) * 1000),
     }
     if body.include_frame:
-        out["frame_jpeg_b64"] = base64.b64encode(jpeg).decode("ascii")
+        out["frame_jpeg_b64"] = base64.b64encode(grab.jpeg()).decode("ascii")
     return out
 
 
@@ -375,11 +479,10 @@ def apriltag_status(name: str):
         return {"available": False, "reason": _IMPORT_ERROR, "detector": None, "intrinsics": None}
     label, _ = _get_detector()
     try:
-        jpeg = _grab_jpeg(name)
-        img = cv2.imdecode(np.frombuffer(jpeg, dtype=np.uint8), cv2.IMREAD_COLOR)
-        h, w = img.shape[:2]
-        return {"available": True, "reason": None, "detector": label, "frame": {"width": w, "height": h},
-                "intrinsics": _intrinsics(w, h), "depth": _depth is not None}
+        g = _grab(name)
+        return {"available": True, "reason": None, "detector": label, "refine": REFINE, "upscale": UPSCALE,
+                "frame": {"width": g.w, "height": g.h}, "frame_source": g.source,
+                "intrinsics": _intrinsics(g.w, g.h), "depth": _depth is not None}
     except Exception as e:
         return {"available": False, "reason": str(e), "detector": label, "intrinsics": None}
 

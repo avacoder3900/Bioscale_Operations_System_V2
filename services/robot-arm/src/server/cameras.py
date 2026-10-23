@@ -51,6 +51,23 @@ the frame object. Consumers pay for exactly the frames they take:
 nobody watching = a few percent of a core; one BIMS viewer pulling
 ``snapshot.jpg?w=960`` at 5 fps = five small encodes a second; AprilTag
 detection = one full-quality encode per detect.
+
+Raw frames for analysis (2026-10-23)
+------------------------------------
+``_Frame.gray()`` hands out the luma plane straight from the YUYV buffer
+(every other byte), so AprilTag detection works on the sensor's own pixels
+instead of decoding a quality-80 JPEG of them: no compression artefacts
+around tag edges, and no encode + decode per detect. apriltags.py reaches
+the worker through :func:`current` (the CameraManager registers itself);
+``_CameraWorker.wait_frame`` waits for a frame, or for the next distinct
+one, so a multi-frame average sees N different captures.
+
+Camera controls (2026-10-23)
+----------------------------
+Exposure, gain, white balance and the rest are UVC controls on the colour
+node. camera_controls.py owns reading/writing them (v4l2-ctl) and the saved
+set; the worker re-applies that set every time it (re)opens the device, so a
+replug or a service restart does not fall back to auto exposure.
 """
 
 from __future__ import annotations
@@ -100,7 +117,7 @@ class _Frame:
     to first use and cached, so an unwatched camera costs almost nothing
     and N viewers of one frame share one encode (see module docstring)."""
 
-    __slots__ = ("_raw", "_fmt", "_quality", "seq", "captured_at", "shape", "_lock", "_bgr", "_jpeg")
+    __slots__ = ("_raw", "_fmt", "_quality", "seq", "captured_at", "shape", "_lock", "_bgr", "_gray", "_jpeg")
 
     def __init__(self, raw: Any, fmt: str, quality: int, seq: int, captured_at: float, shape: tuple[int, int]) -> None:
         self._raw = raw
@@ -111,7 +128,37 @@ class _Frame:
         self.shape = shape  # (width, height)
         self._lock = threading.Lock()
         self._bgr: Any = None
+        self._gray: Any = None
         self._jpeg: bytes | None = None
+
+    def gray(self) -> Any:
+        """The frame as a single-channel luma array (computed once).
+
+        From a YUYV capture this is the Y plane itself — the sensor's own
+        luminance samples with nothing recompressed or interpolated — which
+        is what the AprilTag detector should see. If the colour conversion
+        already happened (a viewer got here first) it falls back to a
+        BGR->grey conversion of that, which differs by rounding only.
+        """
+        with self._lock:
+            if self._gray is None:
+                raw = self._raw
+                if raw is not None and self._fmt == "yuyv":
+                    w, h = self.shape
+                    if raw.ndim == 2:
+                        raw = raw.reshape(h, w, 2)
+                    self._gray = raw[:, :, 0].copy()  # contiguous Y plane
+                elif raw is not None:
+                    self._gray = cv2.cvtColor(raw, cv2.COLOR_BGR2GRAY)
+            gray = self._gray
+        if gray is None:  # raw already consumed by bgr()
+            img = self.bgr()
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            with self._lock:
+                if self._gray is None:
+                    self._gray = gray
+                gray = self._gray
+        return gray
 
     def bgr(self) -> Any:
         """The frame as a BGR array (converted once)."""
@@ -359,6 +406,15 @@ class _CameraWorker:
             cap.read()
         self._device = device
         self._error = None
+        # Re-apply the operator's saved UVC controls (exposure, gain, white
+        # balance...) on every open: a replug or restart otherwise silently
+        # returns the sensor to auto exposure. Optional module; never fatal.
+        try:
+            from . import camera_controls  # type: ignore
+
+            camera_controls.apply_saved(self.spec.name, device)
+        except Exception:
+            pass
         return cap
 
     @staticmethod
@@ -427,6 +483,29 @@ class _CameraWorker:
     def latest(self) -> _Frame | None:
         with self._lock:
             return self._latest
+
+    @property
+    def device(self) -> str | None:
+        """The V4L2 node the running worker holds (None until opened)."""
+        return self._device
+
+    def wait_frame(self, timeout_s: float = 5.0, after_seq: int | None = None) -> _Frame | None:
+        """The latest frame, waiting up to ``timeout_s`` for one to exist.
+
+        With ``after_seq`` the frame must be NEWER than that sequence
+        number, so a caller averaging several frames gets N distinct
+        captures rather than the same slot N times. None on timeout
+        (camera absent, worker still opening, or producer stopped).
+        """
+        self.start()  # idempotent; a detector may be the first consumer
+        deadline = time.time() + timeout_s
+        while True:
+            frame = self.latest
+            if frame is not None and (after_seq is None or frame.seq > after_seq):
+                return frame
+            if time.time() >= deadline:
+                return None
+            time.sleep(0.01)
 
     def peek_device(self) -> str | None:
         """The node this worker would open, read from sysfs/v4l2-ctl only.
@@ -497,6 +576,19 @@ class _CameraWorker:
             time.sleep(interval)
 
 
+_managers: list["CameraManager"] = []
+
+
+def current() -> "CameraManager | None":
+    """The CameraManager app.py built (the newest, if several exist).
+
+    Lets sibling routers (apriltags.py, camera_controls.py) reach the live
+    workers without importing app.py — which imports them, so that would be
+    circular — and without app.py having to pass anything in.
+    """
+    return _managers[-1] if _managers else None
+
+
 class CameraManager:
     """Registry of configured cameras. Workers start lazily on first use."""
 
@@ -505,6 +597,12 @@ class CameraManager:
         self._lock = threading.Lock()
         for spec in specs or []:
             self._workers[spec.name] = _CameraWorker(spec)
+        _managers.append(self)
+
+    def peek(self, name: str) -> _CameraWorker | None:
+        """The worker by name WITHOUT starting it (status / controls)."""
+        with self._lock:
+            return self._workers.get(name)
 
     @classmethod
     def from_config(cls, config: dict[str, Any] | None) -> "CameraManager":

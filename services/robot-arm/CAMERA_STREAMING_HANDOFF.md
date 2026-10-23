@@ -118,3 +118,33 @@ the real limits are:
 - The Pi's `app.py` differs from the copy vendored in this repo; read the Pi's files before editing.
 - Public reachability: `https://arm-pi.tailf65a70.ts.net` (Funnel) or the Cloudflare tunnel URL the
   `arm-tunnel` service registers with BIMS. "Funnel on" in status is not proof it works publicly.
+
+## Vision quality update (2026-10-23, branch `feat/arm-vision-raw-frames`) — note for Sam
+
+depth.py on the Pi CHANGED (backup `src/server/depth.py.bak-pre-raw`; the vendored copy in this folder is
+now the Pi's file, re-vendored from the Pi first — the old vendored pyrealsense2 version was never what ran):
+- Stream mode switch at runtime: `GET/POST /depth/config` with `mode` 480p (848x480, as before) or 720p
+  (1280x720) and `fps` 6/15/30; remembered in `calibrations/depth_config.json`, env `DEPTH_MODE`/`DEPTH_FPS`
+  as defaults. BIMS Vision tab → "Depth stream" panel. The colour→depth affine (your 848x480 fit) is scaled
+  per axis for 720p; probed on the sheet tags it lands on the same surfaces (±1 mm) in both modes.
+- `_sample_points` now refuses a window with < 30 % valid returns or a > 20 mm spread (p90−p10) and returns
+  null (BIMS falls back to the image z). Reason: at 720p the D415 leaves holes over some tag faces that
+  480p's decimation fills; the old median of the few valid pixels read the background (tag 48: 420 mm vs
+  its real 381). The sampling radius is given in 848x480 px and scaled with the mode.
+- Status (`/depth/status`, `/depth/config`) adds `mode`, `measured_fps`, `frame_bytes`, `child_pid`,
+  `child_cpu_pct` (the v4l2-ctl reader). Measured 2026-10-23: both modes hold 15.0 fps; reader CPU 1.0 %
+  (480p) vs 1.6 % (720p); depth sd on parked tags ≤ 0.5 mm in both. 720p was not clearly steadier on the
+  8 mm tags in this scene.
+
+Also on the Pi (installer `scripts/install_vision_quality.py`, run with `--check` first):
+- cameras.py: `_Frame.gray()` (raw YUYV luma), `wait_frame()`, `cameras.current()`, saved UVC controls
+  re-applied on every device open.
+- apriltags.py: detects on the raw frame (no JPEG round trip), `APRILTAG_REFINE` default `apriltag`,
+  `frames` (1..10) averaging with per-tag `jitter_px`/`frames_seen`. Measured on a parked scene at 1080p,
+  upscale 2: corner sd 0.10–0.35 px → 0.04–0.07 px; image-z sd 0.25–4.25 mm → 0.06–0.69 mm (→ 0.02–0.31 mm
+  with frames=5). Cost: ~580 ms per detect (was 143). Upscale 1.5 / 1 are faster (443 / 256 ms) but miss the
+  8 mm tags (#46/47/48/53) in up to half the frames with this refinement, so 2 stays.
+- camera_controls.py (new): `GET/POST /cameras/{name}/controls`, device-reported ranges; BIMS Vision tab →
+  "Camera settings". Saved set `calibrations/camera_controls.json`.
+- `scripts/measure_tag_jitter.py`: the before/after measurement; run it on the Pi before and after any
+  camera or detector change.
