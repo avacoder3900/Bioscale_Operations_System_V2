@@ -5,8 +5,9 @@ import mongoose, { Schema } from 'mongoose';
  *
  * Set with the live sliders (each slider drives one servo on the real arm),
  * or captured from the follower while it follows the control arm. Reused
- * across move sets by id; archived, never deleted, so a move set that
- * references it keeps working.
+ * across move sets by id; archived rather than deleted, so a move set that
+ * references it keeps working. Only an archived pose no move set uses can be
+ * deleted for good (deleteArchivedPoses; the audit entry keeps a copy).
  */
 const operatorRef = new Schema({ _id: { type: String }, username: { type: String } }, { _id: false });
 

@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import {
 	autoDurationS,
 	buildPath,
+	bulkPoseMessage,
 	cleanKeyframes,
+	cleanPoseIds,
 	cleanOffsets,
 	composeAnimationJsonl,
 	axisTicks,
@@ -17,7 +19,9 @@ import {
 	minDurationS,
 	nextTrim,
 	pathStats,
+	planPoseDelete,
 	poseGroup,
+	POSE_BULK_MAX,
 	settleFrames,
 	sliderRange,
 	stepToward,
@@ -337,5 +341,43 @@ describe('sliders', () => {
 		expect(stepToward(2000, 2100, 150)).toBe(2100);
 		expect(stepToward(2000, 2500, 150)).toBe(2150);
 		expect(stepToward(2000, 1000, 150)).toBe(1850);
+	});
+});
+
+describe('cleanPoseIds', () => {
+	it('trims, drops blanks and de-duplicates in order', () => {
+		expect(cleanPoseIds([' a ', 'b', '', 'a', null, 'c'])).toEqual(['a', 'b', 'c']);
+	});
+	it('refuses an empty selection and one over the cap', () => {
+		expect(() => cleanPoseIds([])).toThrow(/No poses/);
+		expect(() => cleanPoseIds(Array.from({ length: POSE_BULK_MAX + 1 }, (_, i) => `p${i}`))).toThrow(/At most/);
+	});
+});
+
+describe('planPoseDelete', () => {
+	const poses = [
+		{ _id: 'live', name: 'Live', archived: false },
+		{ _id: 'free', name: 'Free', archived: true },
+		{ _id: 'used', name: 'Used', archived: true }
+	];
+	it('deletes only archived poses no move set uses', () => {
+		const plan = planPoseDelete(['live', 'free', 'used', 'gone'], poses, [{ name: 'Pick', poseIds: ['used', 'used', 'live'] }]);
+		expect(plan.deletable).toEqual(['free']);
+		expect(plan.skipped.map((s) => [s.id, s.reason])).toEqual([
+			['live', 'not archived — archive it first'],
+			['used', 'used by move set "Pick"'],
+			['gone', 'not found']
+		]);
+	});
+	it('names at most three move sets', () => {
+		const sets = ['A', 'B', 'C', 'D', 'E'].map((name) => ({ name, poseIds: ['used'] }));
+		expect(planPoseDelete(['used'], poses, sets).skipped[0].reason).toBe('used by move set "A", "B", "C" and 2 more');
+	});
+});
+
+describe('bulkPoseMessage', () => {
+	it('counts and lists what was skipped', () => {
+		expect(bulkPoseMessage('Archived', 1, [])).toBe('Archived 1 pose.');
+		expect(bulkPoseMessage('Deleted', 2, [{ id: 'x', name: 'Used', reason: 'used by move set "Pick"' }])).toBe('Deleted 2 poses. Skipped 1: "Used" (used by move set "Pick").');
 	});
 });

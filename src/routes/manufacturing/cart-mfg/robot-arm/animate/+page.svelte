@@ -6,11 +6,15 @@
 	 * follows the sliders. Above it, the control arm for quick rough posing.
 	 * Right: the pose library (click a pose to edit it). Below: move sets
 	 * and sequences. `?edit=<poseId>` opens that pose in the editor.
+	 * "select" in the library ticks many poses to archive at once; the
+	 * archived list restores many, or deletes unused ones for good.
 	 */
 	import { enhance } from '$app/forms';
 	import { invalidateAll } from '$app/navigation';
 	import { page } from '$app/state';
+	import type { SubmitFunction } from '@sveltejs/kit';
 	import { onDestroy, onMount } from 'svelte';
+	import { SvelteSet } from 'svelte/reactivity';
 	import { buildPath, flattenSequence, friendlyName, heatCheck, heatLevel, poseGroup, DEFAULT_RATE_HZ, SERVO_TEMP_STOP_C, type ResolvedKeyframe } from '$lib/robot-arm/animation';
 	import { Playback } from '$lib/robot-arm/playback.svelte';
 	import PoseEditor from '$lib/components/robot-arm/PoseEditor.svelte';
@@ -132,6 +136,50 @@
 	});
 	let renaming = $state<string | null>(null);
 	let showArchived = $state(false);
+
+	// Select mode: tick live poses to archive them; archived ones are ticked to restore or delete for good.
+	let selecting = $state(false);
+	const picked = new SvelteSet<string>();
+	const pickedArchived = new SvelteSet<string>();
+	const archivedPoses = $derived(poses.filter((p) => p.archived));
+	const pickedLive = $derived(activePoses.filter((p) => picked.has(p._id)).map((p) => p._id));
+	const pickedOld = $derived(archivedPoses.filter((p) => pickedArchived.has(p._id)).map((p) => p._id));
+	// How many move sets (archived ones too) use each pose: those poses can be restored but never deleted.
+	const setsUsing = $derived.by(() => {
+		const n = new Map<string, number>();
+		for (const ms of moveSets) for (const id of new Set(ms.keyframes.map((k) => k.poseId))) n.set(id, (n.get(id) ?? 0) + 1);
+		return n;
+	});
+	const pickedDeletable = $derived(pickedOld.filter((id) => !setsUsing.has(id)));
+	function toggle(set: SvelteSet<string>, id: string) {
+		if (set.has(id)) set.delete(id);
+		else set.add(id);
+	}
+	function toggleAll(set: SvelteSet<string>, ids: string[]) {
+		const all = ids.every((id) => set.has(id));
+		for (const id of ids) {
+			if (all) set.delete(id);
+			else set.add(id);
+		}
+	}
+	function setSelecting(on: boolean) {
+		selecting = on;
+		renaming = null;
+		picked.clear();
+	}
+	const clearAfter =
+		(set: SvelteSet<string>): SubmitFunction =>
+		() =>
+		async ({ result, update }) => {
+			await update();
+			if (result.type === 'success') set.clear();
+		};
+	function confirmDelete(e: SubmitEvent) {
+		const n = pickedDeletable.length;
+		const kept = pickedOld.length - n;
+		const msg = `Delete ${n} archived pose${n === 1 ? '' : 's'} for good? This cannot be undone from this page. Their camera references are retired; the audit log keeps a copy of each pose.${kept ? `\n\n${kept} selected pose${kept === 1 ? ' is' : 's are'} used by a move set and will be kept.` : ''}`;
+		if (!confirm(msg)) e.preventDefault();
+	}
 
 	const heat = $derived(armNow ? heatCheck(armNow.temps) : null);
 
@@ -303,9 +351,25 @@
 		<aside class={card} style={cardStyle}>
 			<div class="flex items-center justify-between">
 				<h2 class="text-sm font-semibold tracking-wide" style="color: var(--color-tron-text)">Poses</h2>
-				<button type="button" class="text-xs underline" style="color: var(--color-tron-cyan)" onclick={() => (editing = 'new')}>+ new</button>
+				<div class="flex items-center gap-3">
+					{#if activePoses.length || selecting}
+						<button type="button" class="text-xs underline" style={selecting ? 'color: var(--color-tron-cyan)' : muted} onclick={() => setSelecting(!selecting)}>{selecting ? 'done' : 'select'}</button>
+					{/if}
+					<button type="button" class="text-xs underline" style="color: var(--color-tron-cyan)" onclick={() => (editing = 'new')}>+ new</button>
+				</div>
 			</div>
 			{#if !activePoses.length}<p class="mt-2 text-xs" style={muted}>No poses yet.</p>{/if}
+			{#if selecting && activePoses.length}
+				<div class="mt-2 flex flex-wrap items-center gap-2 rounded border px-2 py-1.5 text-xs" style="border-color: var(--color-tron-border)">
+					<span style="color: var(--color-tron-text)">{pickedLive.length} selected</span>
+					<button type="button" class="underline" style="color: var(--color-tron-cyan)" onclick={() => toggleAll(picked, activePoses.map((p) => p._id))}>{pickedLive.length === activePoses.length ? 'none' : 'all'}</button>
+					<span class="grow"></span>
+					<form method="POST" action="?/archivePoses" use:enhance={clearAfter(picked)}>
+						{#each pickedLive as id (id)}<input type="hidden" name="id" value={id} />{/each}
+						<button type="submit" class="rounded px-2 py-0.5 font-semibold disabled:cursor-not-allowed disabled:opacity-40" style={amber} disabled={!pickedLive.length}>Archive{pickedLive.length ? ` ${pickedLive.length}` : ''}</button>
+					</form>
+				</div>
+			{/if}
 
 			{#snippet poseRow(p: PoseSummary, label: string)}
 				<li class="group rounded" style="background: {editing === p._id ? 'rgba(56,189,248,0.12)' : 'transparent'}">
@@ -317,6 +381,11 @@
 							<button type="submit" class="text-xs" style="color: #4ade80">save</button>
 							<button type="button" class="text-xs" style={muted} onclick={() => (renaming = null)}>✕</button>
 						</form>
+					{:else if selecting}
+						<label class="flex cursor-pointer items-center gap-2 px-1.5 py-1">
+							<input type="checkbox" checked={picked.has(p._id)} onchange={() => toggle(picked, p._id)} />
+							<span class="min-w-0 flex-1 truncate text-sm" style="color: var(--color-tron-text)" title={p.notes ?? p.name}>{label}</span>
+						</label>
 					{:else}
 						<div class="flex items-center gap-1 px-1.5 py-1">
 							<button type="button" class="min-w-0 flex-1 truncate text-left text-sm" style="color: var(--color-tron-text)" title={p.notes ?? p.name} onclick={() => (editing = p._id)}>{label}</button>
@@ -342,20 +411,42 @@
 			</ul>
 			{#each grouped.groups as [g, list] (g)}
 				<details class="mt-2" open={list.some((p) => p._id === editing)}>
-					<summary class="cursor-pointer text-xs font-semibold" style={muted}>{g} <span class="font-normal">· {list.length}</span></summary>
+					<summary class="cursor-pointer text-xs font-semibold" style={muted}>
+						{g} <span class="font-normal">· {list.length}</span>
+						{#if selecting}
+							<button type="button" class="ml-2 font-normal underline" style="color: var(--color-tron-cyan)" onclick={(e) => { e.preventDefault(); toggleAll(picked, list.map((p) => p._id)); }}>{list.every((p) => picked.has(p._id)) ? 'none' : 'all'}</button>
+						{/if}
+					</summary>
 					<ul class="mt-1 space-y-0.5 pl-2">
 						{#each list as p (p._id)}{@render poseRow(p, poseGroup(p.name).label)}{/each}
 					</ul>
 				</details>
 			{/each}
 
-			{#if poses.some((p) => p.archived)}
-				<button type="button" onclick={() => (showArchived = !showArchived)} class="mt-3 text-xs underline" style={muted}>{showArchived ? 'Hide' : 'Show'} archived</button>
+			{#if archivedPoses.length}
+				<button type="button" onclick={() => (showArchived = !showArchived)} class="mt-3 text-xs underline" style={muted}>{showArchived ? 'Hide' : 'Show'} archived · {archivedPoses.length}</button>
 				{#if showArchived}
+					<div class="mt-1 flex flex-wrap items-center gap-2 text-xs" style={muted}>
+						<button type="button" class="underline" style="color: var(--color-tron-cyan)" onclick={() => toggleAll(pickedArchived, archivedPoses.map((p) => p._id))}>{pickedOld.length === archivedPoses.length ? 'none' : 'all'}</button>
+						<span class="grow"></span>
+						<form method="POST" action="?/archivePoses" use:enhance={clearAfter(pickedArchived)}>
+							<input type="hidden" name="restore" value="1" />
+							{#each pickedOld as id (id)}<input type="hidden" name="id" value={id} />{/each}
+							<button type="submit" class="underline disabled:cursor-not-allowed disabled:opacity-40" style="color: var(--color-tron-cyan)" disabled={!pickedOld.length}>restore{pickedOld.length ? ` ${pickedOld.length}` : ''}</button>
+						</form>
+						<form method="POST" action="?/deletePoses" use:enhance={clearAfter(pickedArchived)} onsubmit={confirmDelete}>
+							{#each pickedDeletable as id (id)}<input type="hidden" name="id" value={id} />{/each}
+							<button type="submit" class="rounded px-2 py-0.5 font-semibold disabled:cursor-not-allowed disabled:opacity-40" style={red} disabled={!pickedDeletable.length}
+								title={pickedOld.length && !pickedDeletable.length ? 'Every selected pose is used by a move set — remove it from the move set first' : 'Delete the selected archived poses for good'}>Delete{pickedDeletable.length ? ` ${pickedDeletable.length}` : ''} for good</button>
+						</form>
+					</div>
 					<ul class="mt-1 space-y-1 text-xs" style={muted}>
-						{#each poses.filter((p) => p.archived) as p (p._id)}
+						{#each archivedPoses as p (p._id)}
+							{@const sets = setsUsing.get(p._id) ?? 0}
 							<li class="flex items-center gap-2">
-								<span class="truncate">{friendlyName(p.name)}</span>
+								<input type="checkbox" checked={pickedArchived.has(p._id)} onchange={() => toggle(pickedArchived, p._id)} aria-label="Select {friendlyName(p.name)}" />
+								<span class="min-w-0 flex-1 truncate">{friendlyName(p.name)}</span>
+								{#if sets}<span class="shrink-0 text-[10px]" title="Used by {sets} move set{sets === 1 ? '' : 's'}: it can be restored, not deleted">in {sets} set{sets === 1 ? '' : 's'}</span>{/if}
 								<form method="POST" action="?/archivePose" use:enhance><input type="hidden" name="id" value={p._id} /><input type="hidden" name="restore" value="1" /><button type="submit" class="underline" style="color: var(--color-tron-cyan)">restore</button></form>
 							</li>
 						{/each}

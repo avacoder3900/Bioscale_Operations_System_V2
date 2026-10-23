@@ -12,6 +12,7 @@ import { deriveArmHolder } from '$lib/server/robot-arm-lock';
 import {
 	createMoveSet,
 	createSequence,
+	deleteArchivedPoses,
 	listMoveSets,
 	listPoses,
 	listSequences,
@@ -22,15 +23,17 @@ import {
 	savePoseFromLeader,
 	setMoveSetArchived,
 	setPoseArchived,
+	setPosesArchived,
 	setSequenceArchived,
 	startLeaderPosing,
 	stopLeaderPosing,
-	updatePose
+	updatePose,
+	type PoseBulkResult
 } from '$lib/server/robot-arm-animation';
 import { failFrom, field, sharedAnimateActions, who } from '$lib/server/robot-arm-animate-actions';
 import { activeVerifiedRun, listPoseCalibrations } from '$lib/server/robot-arm-verified';
 import { homeStepsByCamera } from '$lib/server/robot-arm-vision';
-import { friendlyName } from '$lib/robot-arm/animation';
+import { bulkPoseMessage, friendlyName } from '$lib/robot-arm/animation';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
@@ -69,6 +72,13 @@ export const load: PageServerLoad = async ({ locals }) => {
 		homeSteps
 	};
 };
+
+/** Nothing done → an error; some skipped → a warning; else success. */
+function bulkFlash(verb: string, r: PoseBulkResult) {
+	const message = bulkPoseMessage(verb, r.done.length, r.skipped);
+	if (!r.done.length && r.skipped.length) return fail(409, { error: message });
+	return r.skipped.length ? { warning: message } : { success: message };
+}
 
 export const actions: Actions = {
 	...sharedAnimateActions,
@@ -134,6 +144,31 @@ export const actions: Actions = {
 		try {
 			await setPoseArchived(who(locals), id, field(d, 'restore') !== '1');
 			return { success: field(d, 'restore') === '1' ? 'Pose restored.' : 'Pose archived. Move sets that use it keep working.' };
+		} catch (err) {
+			return failFrom(err);
+		}
+	},
+
+	// The pose library's Select mode: many `id` fields at once.
+	archivePoses: async ({ request, locals }) => {
+		if (!locals.user) return fail(401, { error: 'Unauthorized' });
+		requirePermission(locals.user, 'manufacturing:write');
+		const d = await request.formData();
+		const restore = field(d, 'restore') === '1';
+		try {
+			return bulkFlash(restore ? 'Restored' : 'Archived', await setPosesArchived(who(locals), d.getAll('id'), !restore));
+		} catch (err) {
+			return failFrom(err);
+		}
+	},
+
+	// For good: archived poses no move set uses. The browser confirms first.
+	deletePoses: async ({ request, locals }) => {
+		if (!locals.user) return fail(401, { error: 'Unauthorized' });
+		requirePermission(locals.user, 'manufacturing:write');
+		const d = await request.formData();
+		try {
+			return bulkFlash('Deleted', await deleteArchivedPoses(who(locals), d.getAll('id')));
 		} catch (err) {
 			return failFrom(err);
 		}

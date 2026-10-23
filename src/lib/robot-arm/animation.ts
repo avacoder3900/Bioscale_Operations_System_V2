@@ -708,6 +708,60 @@ export function poseGroup(name: string): { group: string | null; label: string }
 	return { group: friendlyName(name.slice(0, i)), label: friendlyName(name.slice(i + 3)) };
 }
 
+// ── bulk pose actions ────────────────────────────────────────────────────
+
+/** At most this many poses in one bulk archive / restore / delete. */
+export const POSE_BULK_MAX = 200;
+
+/** Pose ids from a bulk form (FormData.getAll): trimmed, de-duplicated, in order. */
+export function cleanPoseIds(raw: unknown[]): string[] {
+	const ids = [...new Set(raw.map((v) => String(v ?? '').trim()).filter(Boolean))];
+	if (!ids.length) throw new Error('No poses selected.');
+	if (ids.length > POSE_BULK_MAX) throw new Error(`At most ${POSE_BULK_MAX} poses at a time.`);
+	return ids;
+}
+
+export interface PoseSkip {
+	id: string;
+	name: string;
+	reason: string;
+}
+
+/**
+ * Which of the selected poses may be deleted for good: only archived ones
+ * that no move set uses. Archived move sets count too — they can be
+ * restored, and a move set with a missing pose can no longer play or save.
+ */
+export function planPoseDelete(
+	ids: string[],
+	poses: { _id: string; name: string; archived: boolean }[],
+	moveSets: { name: string; poseIds: string[] }[]
+): { deletable: string[]; skipped: PoseSkip[] } {
+	const byId = new Map(poses.map((p) => [p._id, p]));
+	const usedBy = new Map<string, string[]>();
+	for (const ms of moveSets) for (const id of new Set(ms.poseIds)) usedBy.set(id, [...(usedBy.get(id) ?? []), ms.name]);
+	const deletable: string[] = [];
+	const skipped: PoseSkip[] = [];
+	for (const id of ids) {
+		const p = byId.get(id);
+		if (!p) skipped.push({ id, name: id, reason: 'not found' });
+		else if (!p.archived) skipped.push({ id, name: p.name, reason: 'not archived — archive it first' });
+		else if (usedBy.has(id)) {
+			const sets = usedBy.get(id)!.map((n) => `"${friendlyName(n)}"`);
+			skipped.push({ id, name: p.name, reason: `used by move set ${sets.slice(0, 3).join(', ')}${sets.length > 3 ? ` and ${sets.length - 3} more` : ''}` });
+		} else deletable.push(id);
+	}
+	return { deletable, skipped };
+}
+
+/** One line for the page: what a bulk action did and what it left alone. */
+export function bulkPoseMessage(verb: string, done: number, skipped: PoseSkip[]): string {
+	const head = `${verb} ${done} pose${done === 1 ? '' : 's'}.`;
+	if (!skipped.length) return head;
+	const list = skipped.slice(0, 5).map((s) => `"${friendlyName(s.name)}" (${s.reason})`);
+	return `${head} Skipped ${skipped.length}: ${list.join('; ')}${skipped.length > 5 ? `; and ${skipped.length - 5} more` : ''}.`;
+}
+
 // ── sliders ──────────────────────────────────────────────────────────────
 
 /** Encoder steps → degrees of joint rotation (4096 steps per turn). */

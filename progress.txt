@@ -23388,3 +23388,24 @@ Deployment: production â€” via Vercel GitHub integration on the push to mas
 Source: branch feat/arm-servo-temps @ commit 50f24b36
 Retrieve this exact code: git checkout feat/arm-servo-temps at commit 50f24b36
 What this deployment is for: the Servos Â°C line on the Arm Camera card actually fills in on the live Pi.
+
+
+================================================================================
+2026-10-23 - feat/pose-bulk-select - Animate pose library: select many poses to archive, restore or delete for good
+================================================================================
+Asked for a select tool to mass-delete poses. Poses were only ever archived (one at a time, the "..." menu);
+Alejandro chose bulk archive plus a permanent delete. Not deployed; not run against a database or the arm.
+  - Pose library: "select" toggles checkboxes on every pose (per group "all"/"none" too), and an
+    "Archive N" bar. Show archived now lists a count, a checkbox per pose, "restore N" and
+    "Delete N for good" (browser confirm). A pose used by any move set, archived sets included, is tagged
+    "in N sets" and is never sent for deletion.
+  - robot-arm-animation.ts: setPosesArchived (each pose through setPoseArchived, so restores still refuse a
+    taken name and every pose keeps its own audit entry) and deleteArchivedPoses (archived + unused only;
+    deleteOne filtered on archivedAt so a restore from another tab wins; the pose's active camera references
+    are superseded, not removed; audit robot_arm.animate.pose_delete carries the whole pose).
+  - lib/robot-arm/animation.ts: cleanPoseIds (de-dupe, cap 200), planPoseDelete, bulkPoseMessage + tests.
+  - animate/+page.server.ts: archivePoses / deletePoses actions (manufacturing:write); nothing done -> 409,
+    some skipped -> warning listing why.
+  - robot-arm-pose.ts doc comment: no longer "never deleted".
+npm run check: 14 errors / 432 warnings, none in touched files (baseline 14 on origin/master 7702e19f).
+Unit: 227 robot-arm tests pass (animation.test.ts 44, 6 new).
