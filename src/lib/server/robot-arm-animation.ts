@@ -29,7 +29,7 @@
  *   POST /replay/start           play it
  */
 import { connectDB, AuditLog, generateId } from '$lib/server/db';
-import { RobotArmMoveSet, RobotArmPose, RobotArmRun, RobotArmSequence } from '$lib/server/db/models';
+import { RobotArmMoveSet, RobotArmPose, RobotArmPoseCalibration, RobotArmRun, RobotArmSequence } from '$lib/server/db/models';
 import { recordingStem, robotArm, type RecordingSidecar, type ServoState } from './robot-arm-client';
 import { DEFAULT_JOINT_NAMES } from '$lib/robot-arm/recording-cleanup';
 import {
@@ -38,8 +38,11 @@ import {
 	cleanAnimationName,
 	cleanKeyframes,
 	cleanOffsets,
+	cleanPoseIds,
 	cleanPositions,
 	estimateTrim,
+	planPoseDelete,
+	type PoseSkip,
 	composeAnimationJsonl,
 	flattenSequence,
 	heatCheck,
@@ -569,6 +572,83 @@ export async function setPoseArchived(user: User, id: string, archived: boolean)
 	if (!archived) await assertPoseNameFree(doc.name, id);
 	await RobotArmPose.updateOne({ _id: id }, { $set: { archivedAt: archived ? new Date() : null } });
 	await audit(user, archived ? 'robot_arm.animate.pose_archive' : 'robot_arm.animate.pose_restore', 'robot_arm_poses', id, { name: doc.name });
+}
+
+export interface PoseBulkResult {
+	done: string[];
+	skipped: PoseSkip[];
+}
+
+function poseIdsOrThrow(raw: unknown[]): string[] {
+	try {
+		return cleanPoseIds(raw);
+	} catch (e) {
+		throw new AnimateError((e as Error).message);
+	}
+}
+
+/**
+ * Archive (or restore) many poses: each goes through setPoseArchived, so a
+ * restore still refuses a name that is taken (two archived "Home" poses
+ * restore one) and every pose gets its own audit entry. Poses already in
+ * the asked state are left alone.
+ */
+export async function setPosesArchived(user: User, rawIds: unknown[], archived: boolean): Promise<PoseBulkResult> {
+	await connectDB();
+	const ids = poseIdsOrThrow(rawIds);
+	const docs = (await RobotArmPose.find({ _id: { $in: ids } }).select('_id name archivedAt').lean()) as any[];
+	const byId = new Map(docs.map((d) => [String(d._id), d]));
+	const out: PoseBulkResult = { done: [], skipped: [] };
+	for (const id of ids) {
+		const d = byId.get(id);
+		if (!d) {
+			out.skipped.push({ id, name: id, reason: 'not found' });
+			continue;
+		}
+		if (!!d.archivedAt === archived) continue;
+		try {
+			await setPoseArchived(user, id, archived);
+			out.done.push(id);
+		} catch (err) {
+			if (!(err instanceof AnimateError)) throw err;
+			out.skipped.push({ id, name: d.name, reason: err.message });
+		}
+	}
+	return out;
+}
+
+/**
+ * Delete archived poses for good. Only poses no move set uses (planPoseDelete);
+ * each pose's active camera references are retired (kept, as history), and
+ * the audit entry carries the whole pose so it can be put back by hand.
+ */
+export async function deleteArchivedPoses(user: User, rawIds: unknown[]): Promise<PoseBulkResult> {
+	await connectDB();
+	const ids = poseIdsOrThrow(rawIds);
+	const [docs, sets] = (await Promise.all([
+		RobotArmPose.find({ _id: { $in: ids } }).select('-lastPlay').lean(),
+		RobotArmMoveSet.find({ 'keyframes.poseId': { $in: ids } }).select('name keyframes.poseId').lean()
+	])) as [any[], any[]];
+	const plan = planPoseDelete(
+		ids,
+		docs.map((d) => ({ _id: String(d._id), name: d.name, archived: !!d.archivedAt })),
+		sets.map((s) => ({ name: s.name, poseIds: (s.keyframes ?? []).map((k: any) => String(k.poseId)) }))
+	);
+	const byId = new Map(docs.map((d) => [String(d._id), d]));
+	const out: PoseBulkResult = { done: [], skipped: plan.skipped };
+	for (const id of plan.deletable) {
+		const pose = byId.get(id);
+		// Still archived: a restore from another tab since the plan wins.
+		const res = await RobotArmPose.deleteOne({ _id: id, archivedAt: { $ne: null } });
+		if (!res.deletedCount) {
+			out.skipped.push({ id, name: pose.name, reason: 'restored meanwhile' });
+			continue;
+		}
+		const refs = await RobotArmPoseCalibration.updateMany({ poseId: id, status: 'active' }, { $set: { status: 'superseded', supersededAt: new Date(), supersededBy: null } });
+		await audit(user, 'robot_arm.animate.pose_delete', 'robot_arm_poses', id, { name: pose.name, pose: JSON.parse(JSON.stringify(pose)), referencesRetired: refs.modifiedCount });
+		out.done.push(id);
+	}
+	return out;
 }
 
 /**
