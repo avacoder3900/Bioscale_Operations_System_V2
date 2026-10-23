@@ -23040,3 +23040,38 @@ Source: branch master @ commit d9301ede
 Retrieve this exact code: git checkout master at commit d9301ede
   (or: git log master --oneline to find it if the branch has since moved on)
 What this deployment is for: Return to home closes the claw once within 40 steps for 5 s. GitHub deployment 7281131700 success.
+
+================================================================================
+2026-10-23 — master — arm-pi: POST /servos/hold installed (torque on without a jump); clears the "Pi has no hold route" warning
+================================================================================
+Alejandro, turning torque on from the Arm Camera card (visible on every Robot Arm tab): "The Pi has no hold
+route (scripts/install_hold_router.py), so torque was switched on plainly — each servo drives to its last
+commanded position." Cause: the hold route was written blind on 2026-10-21 and never installed, and it
+could not have been — hold.py reached into app.py for `_follower`, `_with_follower` and `state`, none of
+which exist on the Pi's app.py (checked over SSH: no such names), so even wired in it would have 500'd.
+BIMS's /api/robot-arm/torque POST therefore always took the plain `/torque true` fallback and warned.
+  - services/robot-arm/src/server/hold.py (rewritten on the Pi's real layout, same shape as move.py):
+    APIRouter POST /servos/hold → {held, positions{sid: steps}, already_on[], failed_ids[]}. Uses
+    manual_control._connected_arms(require_leader=False), reads Present_Position per servo, writes
+    Goal_Position := present BEFORE Torque_Enable 1 (same ordering as jog_joint), all under BUS_LOCK so it
+    queues behind GET /servos instead of double-opening the port. A servo whose torque is ALREADY on keeps
+    its goal (rewriting it to the sagged present would let a loaded joint drop a few steps) and is listed in
+    already_on. 503 only when no servo answers; partial failure → failed_ids like /torque. `bus_free` hook =
+    app.py's _require_bus_free, set by the installer (single-owner bus: 409 during a session).
+  - services/robot-arm/scripts/install_hold_router.py: brought to the move-installer shape — import
+    `from . import hold as pi_hold` after `from fastapi import`, `pi_hold.bus_free = _require_bus_free` +
+    include_router under require_api_key at the end of app.py; refuses without require_api_key /
+    _require_bus_free / bus_lock.py / manual_control.py; refuses if the old `servo_hold` lines are present.
+    Backup app.py.bak-hold.
+  - On arm-pi (09:45 CDT, over Tailscale from the workstation): scp both, --check, apply (app.py now ends with
+    the pi_move and pi_hold blocks), py_compile OK, import in the service venv OK (`~/.local/bin/uv run
+    --project ~/robot-arm --no-dev` — uv is not on the non-login PATH), /sessions/active {"active":null} →
+    sudo systemctl restart robot-arm, /health 200 after 1 s. GET /servos: all six torque on at
+    1952/876/3014/898/447/2149. POST /servos/hold → 200 {"held":true, already_on:[1..6], failed_ids:[]},
+    GET /servos afterwards identical, journal clean. The goal-write path (torque off → hold) was NOT exercised
+    on hardware: dropping torque remotely with nobody at the arm could let a joint sag. It is the same
+    bus.write pair jog_joint uses; first real use is the next hand-posed capture or torque-on from the card.
+  BIMS needs no change: the torque endpoint already prefers /servos/hold and only warns on a 404; the
+  Animate capture's holdArm likewise. The warning disappears on the next torque-on.
+Committed on master by path (two Pi files + this log); the main checkout has another session's uncommitted
+Live Tags / ARM-05 edits which are not mine. No npm run check needed (no TypeScript/Svelte touched).
