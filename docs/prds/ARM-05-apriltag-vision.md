@@ -35,7 +35,14 @@ A tag carries its own ID and, with its printed size and the camera intrinsics, g
    `position_off_and_markers_off`, `camera_moved`, `unverified`. Automation:
    `GET /api/agent/robot-arm/vision-check[?camera=]` (agent key, no motion) now returns per tag `tagId`,
    `role`, `offMm`, `offDeg` (spin), `offTiltDeg`, `ambiguous`, `over`, `zMm`, `depthMm`, `offDepthMm` (D415 depth
-   now minus at calibration, diagnostic, not judged), and `cameraShift`.
+   now minus at calibration), `zSource` (`depth` | `image`), `imageZMm`, and `cameraShift`.
+8. **Depth is the distance** (2026-10-23, `assessTags` option `depthZ`, default on): the image pose's z scales with
+   the tag's pixel size and on an 8 mm tag jitters by several mm per half-pixel of corner noise; the D415's range at
+   the tag centre does not (~1 mm, no drift, measured live). Per tag, when both the calibration and the detection
+   carry a depth reading within 25 % of their image z (`DEPTH_Z_GATE`), each pose is slid along its sight line to
+   its depth (x/y keep the picture's precision, rotation untouched) before the camera-shift vote and the delta.
+   Otherwise that tag is judged on the image on both sides — never mixed. Live Tags marks a depth-driven
+   distance with `D`.
 7. A registry size edit after calibration does not read as movement: detections are rescaled to the
    calibrated size before comparison (translation is linear in tag size).
 

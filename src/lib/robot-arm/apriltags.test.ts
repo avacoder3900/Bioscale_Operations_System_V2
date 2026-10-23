@@ -75,20 +75,71 @@ describe('3-D helpers', () => {
 });
 
 describe('assessTags', () => {
-	it('reports the D415 depth change (now minus calibration) without judging it', () => {
+	it('reports the D415 depth change (now minus calibration)', () => {
 		const c = { ...cal(53, 'arm', [10, 5, 300]), depthMm: 301.5 };
 		const d = { ...seen(c), depthMm: 305.0 };
 		const a = assessTags([c], [d]);
 		expect(a.markers[0].offDepthMm).toBeCloseTo(3.5, 6);
 		expect(a.markers[0].status).toBe('ok');
-		// 40 mm nearer by depth alone is still not a verdict: the column is diagnostic.
-		const near = assessTags([c], [{ ...seen(c), depthMm: 261.5 }]);
-		expect(near.markers[0].offDepthMm).toBeCloseTo(-40, 6);
-		expect(near.markers[0].status).toBe('ok');
 		// Null when either side has no depth, and for a missing tag.
 		expect(assessTags([c], [seen(c)]).markers[0].offDepthMm).toBeNull();
 		expect(assessTags([cal(53, 'arm', [10, 5, 300])], [d]).markers[0].offDepthMm).toBeNull();
 		expect(assessTags([c], []).markers[0].offDepthMm).toBeNull();
+	});
+
+	describe('depth as distance', () => {
+		// An 8 mm tag at home: depth says 300 on both sides, the image pose jitters.
+		const c = { ...cal(53, 'arm', [30, -15, 300]), depthMm: 300 };
+
+		it('slides both poses along their sight lines to the depth, so image-z jitter is not movement', () => {
+			// Image pose 12 mm further away (x/y scaled with it, as a size error does); depth unchanged.
+			const d = { ...seen(c), pose: { t: [31.2, -15.6, 312] as Vec3, R: I, reprojPx: 0.2 }, depthMm: 300.4 };
+			const m = assessTags([c], [d]).markers[0];
+			expect(m.zSource).toBe('depth');
+			expect(m.zMm).toBeCloseTo(300.4, 6);
+			expect(m.imageZMm).toBeCloseTo(312, 6);
+			expect(m.offMm!).toBeLessThan(0.5);
+			expect(m.status).toBe('ok');
+			// The same frame judged on the image alone reads 12 mm off.
+			const img = assessTags([c], [d], DEFAULT_TOLERANCES, { depthZ: false }).markers[0];
+			expect(img.zSource).toBe('image');
+			expect(img.offMm!).toBeCloseTo(Math.hypot(1.2, 0.6, 12), 6);
+			expect(img.status).toBe('moved');
+		});
+
+		it('a real move shows in depth too', () => {
+			const d = { ...seen(c, IDENTITY, shiftBy([0, 0, 14])), depthMm: 314 };
+			const m = assessTags([c], [d]).markers[0];
+			expect(m.zSource).toBe('depth');
+			expect(m.offMm!).toBeCloseTo(14, 6);
+			expect(m.status).toBe('moved');
+			expect(m.over).toEqual(['mm']);
+		});
+
+		it('falls back to the image on both sides when either lacks depth or the reading is not the tag', () => {
+			const d = { ...seen(c, IDENTITY, shiftBy([0, 0, 8])), depthMm: null };
+			expect(assessTags([c], [d]).markers[0]).toMatchObject({ zSource: 'image', zMm: 308, offMm: 8 });
+			const noCalDepth = { ...c, depthMm: null };
+			expect(assessTags([noCalDepth], [{ ...d, depthMm: 308 }]).markers[0]).toMatchObject({ zSource: 'image', offMm: 8 });
+			// Depth 420 against an image z of 300 is the bench behind the tag's edge, not the tag.
+			const behind = assessTags([c], [{ ...seen(c), depthMm: 420 }]).markers[0];
+			expect(behind).toMatchObject({ zSource: 'image', zMm: 300, offMm: 0 });
+			expect(behind.offDepthMm).toBeCloseTo(120, 6);
+		});
+
+		it('a camera bump measured on depth-driven fixed tags is still undone before the arm tag is judged', () => {
+			const fixedA = { ...cal(0, 'fixed', [-80, 40, 400]), depthMm: 400 };
+			const fixedB = { ...cal(1, 'fixed', [90, 40, 420]), depthMm: 420 };
+			const fixedC = { ...cal(2, 'fixed', [0, -60, 380]), depthMm: 380 };
+			const arm = { ...cal(53, 'arm', [30, -15, 300]), depthMm: 300 };
+			const bump = shiftBy([0, 0, 20]);
+			const dets = [fixedA, fixedB, fixedC, arm].map((x) => ({ ...seen(x, bump), depthMm: x.depthMm! + 20 }));
+			const a = assessTags([fixedA, fixedB, fixedC, arm], dets);
+			expect(a.cameraShift?.compensated).toBe(true);
+			expect(a.cameraShift?.mm).toBeCloseTo(20, 4);
+			expect(a.markers.map((m) => m.status)).toEqual(['ok', 'ok', 'ok', 'ok']);
+			expect(a.markers.every((m) => m.zSource === 'depth')).toBe(true);
+		});
 	});
 
 	const fixed = [cal(0, 'fixed', [-80, 40, 300]), cal(1, 'fixed', [90, 50, 310]), cal(2, 'fixed', [0, 80, 290])];

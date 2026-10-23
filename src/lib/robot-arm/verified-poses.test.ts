@@ -35,7 +35,9 @@ function tag(role: 'arm' | 'fixed', status: TagAssessment['status']): TagAssessm
 		corners: null,
 		zMm: 300,
 		depthMm: null,
-		offDepthMm: null
+		offDepthMm: null,
+		zSource: 'image',
+		imageZMm: 300
 	};
 }
 
