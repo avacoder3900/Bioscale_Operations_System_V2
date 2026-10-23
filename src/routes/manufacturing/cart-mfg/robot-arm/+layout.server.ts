@@ -14,6 +14,9 @@
  *     does not touch the servos.
  *   - /health/thermal — sysfs + vcgencmd on the Pi; feeds the heat/throttle
  *     chip on the camera card. 404 until the route is installed on the Pi.
+ *   - one Mongo findOne on `device_events`, only while the arm is down, so the
+ *     ARM CONNECTION panel in the right rail can still say when it last worked.
+ *     The connection log itself is still written by the Control tab's load.
  *
  * Everything else (getActive, getCalibration, getJointMap) stays in the child
  * loads where its budget is already accounted for. Deduplicating getActive
@@ -25,8 +28,16 @@
  * the Runs tab, which reads Mongo and does not need the arm at all.
  */
 import { redirect } from '@sveltejs/kit';
+import { connectDB } from '$lib/server/db/connection';
+import { DeviceEvent } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
-import { robotArm, type ArmPreflight, type ArmThermal, type CameraStatus } from '$lib/server/robot-arm-client';
+import {
+	robotArm,
+	currentArmRoute,
+	type ArmPreflight,
+	type ArmThermal,
+	type CameraStatus
+} from '$lib/server/robot-arm-client';
 import type { LayoutServerLoad } from './$types';
 
 export const load: LayoutServerLoad = async ({ locals }) => {
@@ -72,11 +83,38 @@ export const load: LayoutServerLoad = async ({ locals }) => {
 	// means no chip until the client-side poll gets one.
 	const thermal: ArmThermal | null = thermalResult.status === 'fulfilled' ? thermalResult.value : null;
 
+	// "Last connected" for the ARM CONNECTION panel. Up: this request is the
+	// proof. Down: the newest success row in the connection log the Control tab
+	// writes (see recordConnection there). Soft — telemetry never 500s the tabs.
+	let lastConnected: string | null = null;
+	if (preflight !== null) {
+		lastConnected = new Date().toISOString();
+	} else {
+		try {
+			await connectDB();
+			const row = await DeviceEvent.findOne({
+				deviceId: 'robot-arm-pi',
+				eventType: 'robot_arm.connection',
+				success: true
+			})
+				.select('createdAt')
+				.sort({ createdAt: -1 })
+				.lean();
+			lastConnected = row ? new Date(row.createdAt as Date).toISOString() : null;
+		} catch {
+			lastConnected = null;
+		}
+	}
+
 	return {
 		arm: {
 			reachable: preflight !== null,
 			preflight,
-			error: armError
+			error: armError,
+			// Operator-facing diagnostic text, no key in it: the single most useful
+			// string when the arm is misconfigured.
+			baseUrl: currentArmRoute(),
+			lastConnected
 		},
 		cameras,
 		camerasError,

@@ -185,30 +185,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 	);
 	const connectionLog = (written ? [written, ...logRows] : logRows) as ConnectionRow[];
 
-	// Fold in what THIS request just observed. Reading "last connected" straight
-	// off the newest success row would report an hour-old timestamp next to a
-	// green ONLINE dot, because a steady arm only writes a heartbeat row hourly.
-	let lastConnected: string | null = null;
-	if (up) {
-		lastConnected = new Date().toISOString();
-	} else {
-		const recent = connectionLog.find((r) => r.success);
-		if (recent) {
-			lastConnected = new Date(recent.createdAt).toISOString();
-		} else {
-			// Down, and no success inside the fetched window — look further back
-			// rather than claiming it has never connected.
-			const older = await DeviceEvent.findOne({
-				deviceId: ARM_DEVICE_ID,
-				eventType: ARM_CONNECTION_EVENT,
-				success: true
-			})
-				.select('createdAt')
-				.sort({ createdAt: -1 })
-				.lean();
-			lastConnected = older ? new Date(older.createdAt).toISOString() : null;
-		}
-	}
+	// "Last connected" and the base URL are no longer returned here: the ARM
+	// CONNECTION panel moved to the Robot Arm layout, which derives them itself.
 
 	return {
 		active: activeResult.active,
@@ -218,14 +196,10 @@ export const load: PageServerLoad = async ({ locals }) => {
 		deletedRecordings: JSON.parse(JSON.stringify(trash)),
 		preflight: preflightResult.preflight,
 		preflightError: preflightResult.preflightError,
-		// Surfaced so the panel can name the endpoint it failed to reach. Not a
-		// secret — the API key is what guards the Pi, and that never leaves here.
-		armBaseUrl: currentArmRoute(),
 		tasks,
 		holder,
 		currentUserId: locals.user._id,
-		connectionLog: JSON.parse(JSON.stringify(connectionLog)),
-		lastConnected
+		connectionLog: JSON.parse(JSON.stringify(connectionLog))
 	};
 };
 

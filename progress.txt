@@ -23263,3 +23263,34 @@ Source: branch master @ commit 1f6a7f99 (merge carrying d8663b65)
 Retrieve this exact code: git checkout master at commit 1f6a7f99
   (or: git log master --oneline to find it if the branch has since moved on)
 What this deployment is for: Return to home overshoot carry for a stuck joint; claw closes server-side from attempt 2. GitHub deployment 7281471298 success.
+
+
+================================================================================
+2026-10-23 — feat/arm-vision-raw-frames — ARM CONNECTION panel moves to the Robot Arm right rail, above the camera, with Hide
+================================================================================
+Alejandro: the ARM CONNECTION panel should sit above the always-visible Arm Camera panel on the right of
+the Robot Arm page, have a Hide button, and leave the Control (Remote Control) page. Done:
+  - +layout.server.ts (robot-arm): the shared load now also returns arm.baseUrl (currentArmRoute()) and
+    arm.lastConnected. Up: this request's timestamp. Down: one Mongo findOne for the newest successful
+    robot_arm.connection row in device_events, wrapped so telemetry can never 500 the tabs. The connection
+    log itself is still written only by the Control tab's load (recordConnection), unchanged.
+  - +layout.svelte (robot-arm): RobotArmConnectionPanel renders in the right rail above RobotArmCameraPanel
+    on every tab (Control, Jog, Calibrate, Vision, Clean-up, Animate, Runs). Hide collapses it to a one-line
+    "ARM CONNECTION · Show" button so the camera gets the full rail; the choice is kept in localStorage
+    (robot-arm:connection-panel-hidden), try/catch guarded, default shown.
+  - RobotArmConnectionPanel.svelte: optional onhide prop; when given, a Hide button appears beside Refresh in
+    the full variant. Compact variant untouched.
+  - control/+page.svelte: both copies removed (the lg:hidden compact line and the desktop aside), and the
+    two-column lg:grid that only existed to hold the aside is gone, so the controls take the full width of
+    the layout's main column. Comment notes where the panel went. The task-start block reason still says
+    "check the connection panel", which is now always on screen.
+  - control/+page.server.ts: armBaseUrl and lastConnected (and the look-further-back query) dropped from the
+    return; nothing else there changed.
+npm run check: 13 errors / 432 warnings, none in touched files (baseline 13).
+Branch note: another session has uncommitted camera-preset work in this checkout (CameraControlsPanel,
+models/index.ts, robot-arm-camera-preset*). Committed by path only; those files were not touched. The branch
+tip was already contained in master, so this lands on master as a cherry-pick from the master worktree.
+Deployment: production — via Vercel GitHub integration on the push to master
+Source: branch feat/arm-vision-raw-frames @ the commit titled "feat(robot-arm): ARM CONNECTION panel in the layout right rail above the camera, with Hide" (git log feat/arm-vision-raw-frames --oneline), cherry-picked onto master
+Retrieve this exact code: git checkout feat/arm-vision-raw-frames at that commit
+What this deployment is for: Robot Arm page right rail shows ARM CONNECTION above Arm Camera on every tab with a Hide/Show toggle; Control tab no longer carries its own copy.
