@@ -28,7 +28,9 @@
 	 * bus, so the servo row has nothing until the first poll); the server side
 	 * logs Pi episodes to device_events. The Pi rows render nothing when the
 	 * Pi is unreachable or the thermal route is not installed on it; the servo
-	 * row renders nothing while the follower is disconnected.
+	 * row says why when the Pi answers but the servos do not (arm power off,
+	 * follower USB unplugged: the Pi's /servos 503 carries the reason), and
+	 * renders nothing only when there is no information at all.
 	 */
 	import { onMount } from 'svelte';
 	import type { ArmThermal, ServoState } from '$lib/server/robot-arm-client';
@@ -46,6 +48,8 @@
 	let failures = $state(0);
 	let servos = $state<ServoState[] | null>(null);
 	let servoFailures = $state(0);
+	/** The Pi's reason when it answered but the servos did not (e.g. "No follower motor answered…"). */
+	let servosError = $state<string | null>(null);
 
 	const FLAG_TEXT: Record<string, string> = {
 		throttled: 'throttled',
@@ -166,6 +170,14 @@
 			if (body.servos?.length) {
 				servos = body.servos;
 				servoFailures = 0;
+				servosError = null;
+			} else if (body.servosError) {
+				// The Pi answered and said why (arm power off, follower USB gone):
+				// that is current fact, so drop the old numbers now, not after
+				// three polls, and show the reason instead.
+				servos = null;
+				servoFailures = 0;
+				servosError = body.servosError;
 			} else {
 				servoFailures++;
 			}
@@ -175,8 +187,25 @@
 		}
 		// Three misses in a row: the Pi is off or unreachable; stop showing a stale number.
 		if (failures >= 3) thermal = null;
-		if (servoFailures >= 3) servos = null;
+		if (servoFailures >= 3) {
+			servos = null;
+			servosError = null;
+		}
 	}
+
+	// Short label for the common servo failures; the full Pi message is the tooltip.
+	let servoErrorLabel = $derived.by(() => {
+		if (!servosError) return '';
+		if (/No follower motor answered/i.test(servosError)) return 'Servos: no answer · arm power or follower USB';
+		if (/follower arm not connected/i.test(servosError)) return 'Servos: follower not connected';
+		if (/robot-arm 5\d\d/.test(servosError)) return 'Servos: Pi could not read the bus';
+		return 'Servos: unavailable';
+	});
+	let servoErrorTitle = $derived(
+		servosError
+			? `${servosError.replace(/^robot-arm \d+:\s*/, '')}\nThe Pi is up (its own temperature is above) but no servo answered on the follower bus. Usually the arm's 12 V supply is off or the servo chain is unplugged from the BusLinker. Re-checks every 30 s.`
+			: ''
+	);
 
 	onMount(() => {
 		if (!armReachable) return;
@@ -231,6 +260,18 @@
 				<span style="color: {servoColor(j.temperature)}" title={servoTitle(j)}>{j.temperature}</span>
 			{/each}
 			<span>°C</span>
+		</span>
+	</div>
+{:else if servosError}
+	<!-- Line 3 when the Pi answered but the servos did not: say why instead of showing nothing. -->
+	<div class="flex flex-wrap items-center gap-1.5">
+		<span
+			class="shrink-0 rounded px-1.5 py-0.5 font-mono text-[11px] leading-tight"
+			style="color: #f59e0b; border: 1px solid #f59e0b; background: rgba(0,0,0,0.25)"
+			title={servoErrorTitle}
+			aria-live="polite"
+		>
+			{servoErrorLabel}
 		</span>
 	</div>
 {/if}
