@@ -23409,3 +23409,7 @@ Alejandro chose bulk archive plus a permanent delete. Not deployed; not run agai
   - robot-arm-pose.ts doc comment: no longer "never deleted".
 npm run check: 14 errors / 432 warnings, none in touched files (baseline 14 on origin/master 7702e19f).
 Unit: 227 robot-arm tests pass (animation.test.ts 44, 6 new).
+Deployment: production - via Vercel GitHub integration on the push to master (https://vercel.com/brevitest/bioscale-operations-system-mongodb/2turyLpF7JvHLp84T1GCcRMazcks)
+Source: branch feat/pose-bulk-select @ commit 64357683 (merged to master as e3de47f8)
+Retrieve this exact code: git checkout feat/pose-bulk-select at commit 64357683
+What this deployment is for: Animate pose library select mode - bulk archive / restore, delete unused archived poses for good.
