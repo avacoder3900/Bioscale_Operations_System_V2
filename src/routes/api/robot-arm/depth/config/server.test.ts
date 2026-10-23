@@ -14,7 +14,8 @@ vi.mock('$lib/server/permissions', () => ({ requirePermission }));
 vi.mock('$lib/server/robot-arm-client', () => ({ robotArm: pi }));
 vi.mock('$lib/server/db', () => ({ connectDB: vi.fn(), AuditLog: audit, generateId: () => 'id1' }));
 
-import { GET, POST, parseDepthConfigBody } from './+server';
+import { GET, POST } from './+server';
+import { parseDepthConfigBody } from './body';
 
 const user = { _id: 'u1', username: 'alejandro' };
 const cfg = {

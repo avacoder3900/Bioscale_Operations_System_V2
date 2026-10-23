@@ -21,34 +21,10 @@ import { connectDB, AuditLog, generateId } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
 import { robotArm } from '$lib/server/robot-arm-client';
 import type { RequestHandler } from './$types';
-
-export const DEPTH_MODES = ['480p', '720p'] as const;
-export const DEPTH_FPS = [6, 15, 30] as const;
-export type DepthMode = (typeof DEPTH_MODES)[number];
-
-export interface DepthConfigBody {
-	mode?: DepthMode;
-	fps?: number;
-	persist: boolean;
-}
-
-/** Shape-check the POST body; throws a SvelteKit 400 with the reason. */
-export function parseDepthConfigBody(raw: unknown): DepthConfigBody {
-	if (!raw || typeof raw !== 'object') error(400, 'Body must be a JSON object');
-	const b = raw as Record<string, unknown>;
-	const out: DepthConfigBody = { persist: b.persist === undefined ? true : b.persist === true };
-	if (b.mode !== undefined) {
-		if (typeof b.mode !== 'string' || !(DEPTH_MODES as readonly string[]).includes(b.mode)) error(400, `mode must be one of ${DEPTH_MODES.join(', ')}`);
-		out.mode = b.mode as DepthMode;
-	}
-	if (b.fps !== undefined) {
-		const n = typeof b.fps === 'string' ? Number(b.fps) : b.fps;
-		if (typeof n !== 'number' || !(DEPTH_FPS as readonly number[]).includes(n)) error(400, `fps must be one of ${DEPTH_FPS.join(', ')}`);
-		out.fps = n;
-	}
-	if (out.mode === undefined && out.fps === undefined) error(400, 'Nothing to change: give mode and/or fps');
-	return out;
-}
+// Body parsing and the mode/fps tables live in ./body.ts: SvelteKit only
+// allows request handlers (and `_`-prefixed names) as exports from a
+// +server.ts, and the production build fails on anything else.
+import { parseDepthConfigBody } from './body';
 
 const NOT_INSTALLED = 'The Pi has no depth config route yet (services/robot-arm/scripts/install_vision_quality.py).';
 
