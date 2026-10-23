@@ -2920,7 +2920,12 @@ frame. Fix (RobotArmCameraPanel.svelte): a "Resolution" menu beside Size — fit
 so the Pi serves the quality-80 1920x1080 JPEG it already holds for that frame, shared with Save; ~140 KB vs
 ~27 KB per frame, no extra encode). The picture stays at the chosen drawn size; browser zoom and fullscreen
 show real pixels. Remembered per browser (bims.armCamera.v1 resolution). Footer keeps showing the delivered
-frame size. npm run check: 13 errors / 432 warnings, none in touched files.
+frame size. npm run check: none in touched files (14 errors in the fresh worktree: baseline 13 + one unrelated
+research-proxy.ts env-type error because the worktree has no .env).
+Deployment: production — via Vercel GitHub integration on the merge to master
+Source: branch feat/arm-vision-raw-frames @ commit b289e588, merged to master as 306db5f5
+Retrieve this exact code: git checkout feat/arm-vision-raw-frames at commit b289e588
+What this deployment is for: arm camera card > Resolution menu (fit / full res) beside Size.
 
 ================================================================================
 2026-10-23 — feat/arm-vision-raw-frames — Animate: move-set "verified" circle showed green with zero camera references
