@@ -23409,3 +23409,27 @@ Alejandro chose bulk archive plus a permanent delete. Not deployed; not run agai
   - robot-arm-pose.ts doc comment: no longer "never deleted".
 npm run check: 14 errors / 432 warnings, none in touched files (baseline 14 on origin/master 7702e19f).
 Unit: 227 robot-arm tests pass (animation.test.ts 44, 6 new).
+
+
+================================================================================
+2026-10-23 — fix/arm-servo-row-reason — Servos line explains itself when the motors do not answer
+================================================================================
+Alejandro: still no servo temperatures on the line under Pi °C + Wi-Fi. Investigated against the Pi directly:
+GET /servos → 503 {"detail":"No follower motor answered. Check the arm's power supply and the follower
+BusLinker USB connection."} five times in a row (~0.65 s each), while /health/thermal, /sessions/active
+(none) and /ports/status (follower BusLinker present, not in use) were fine. An hour earlier the same call
+returned every servo at 12.4–12.7 V. So the arm's 12 V supply is off (or the servo chain is unplugged from
+the BusLinker) — the production code (7702e19f, /servos-based) is doing what it should; it just showed nothing.
+  - PiThermalChip.svelte: keeps servosError from /api/robot-arm/thermal. When the Pi answers with a reason,
+    the stale numbers go immediately and an amber chip takes the line: "Servos: no answer · arm power or
+    follower USB" (other 5xx: "Servos: Pi could not read the bus"; follower not connected: its own text).
+    Tooltip = the Pi's message plus what to check. Numbers come back on the next 30 s poll once motors answer.
+    Three failed polls with no reason (Pi unreachable) still clear the line entirely.
+Also noticed: the main checkout's local feat/arm-servo-temps had been moved back to 2c1110ec by another
+session; origin and master still have 50f24b36/7e2b4ee6, so nothing was lost. This fix is a new branch off
+origin/master (e3de47f8).
+npm run check: 13 errors / 432 warnings, none in touched files (baseline 13).
+Deployment: production — via Vercel GitHub integration on the push to master
+Source: branch fix/arm-servo-row-reason @ commit 5a4f7736
+Retrieve this exact code: git checkout fix/arm-servo-row-reason at commit 5a4f7736
+What this deployment is for: the Servos line on the Arm Camera card shows the Pi's reason (arm power / follower USB) instead of disappearing.
