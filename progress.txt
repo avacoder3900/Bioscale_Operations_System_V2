@@ -23075,6 +23075,13 @@ BIMS's /api/robot-arm/torque POST therefore always took the plain `/torque true`
   Animate capture's holdArm likewise. The warning disappears on the next torque-on.
 Committed on master by path (two Pi files + this log); the main checkout has another session's uncommitted
 Live Tags / ARM-05 edits which are not mine. No npm run check needed (no TypeScript/Svelte touched).
+Deployment: production — https://bioscale-operations-system-mongodb-619si9p2o-brevitest.vercel.app
+Source: branch master @ commit 1f6a7f99 (merge that carries 742ce2e3; 742ce2e3 itself got only a preview,
+  https://bioscale-operations-system-mongodb-fx44d1ban.vercel.app, GitHub deployment 7281272310)
+Retrieve this exact code: git checkout master at commit 742ce2e3
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: no BIMS change — the commit adds the Pi's working hold.py + installer and this log.
+  GitHub deployment 7281471298 success 15:00 UTC.
 
 ================================================================================
 Alejandro: "It stalled for too long still." Audit rows (robot_arm.vision.return) for the 09:49 CDT run:
