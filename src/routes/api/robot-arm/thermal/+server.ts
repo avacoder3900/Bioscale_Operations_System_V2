@@ -2,7 +2,7 @@
  * Arm Pi thermal state, for the camera card on every Robot Arm tab.
  *
  *   GET → { thermal: ArmThermal | null, installed: boolean, error: string | null,
- *           servos: ArmHealth | null, servosError: string | null }
+ *           servos: ServoState[] | null, servosError: string | null }
  *
  * Reads GET /health/thermal on the Pi (services/robot-arm/src/server/thermal.py):
  * SoC temperature, the firmware's throttle flags (throttled / clock capped /
@@ -19,17 +19,20 @@
  * not buried. Never throws for a missing or unreachable Pi: the card just
  * shows nothing.
  *
- * Since 2026-10-23 the same poll also carries GET /arm/health from the Pi:
- * each follower servo's temperature (the STS3215 derates above ~60 °C; the
- * Pi flags warm ≥ 48, hot ≥ 55), so the camera card can show the motors'
- * heat beside the Pi's. That call reads the serial bus, which is why it is
- * here (a 30 s browser poll) and not in the layout load. It fails soft too:
- * a 503 while the follower is disconnected just means no servo row.
+ * Since 2026-10-23 the same poll also carries GET /servos from the Pi: each
+ * follower servo's temperature (with load and voltage), so the camera card
+ * can show the motors' heat beside the Pi's. /servos and not /arm/health:
+ * the Pi runs the SO-ARM101 server whose routes come from the install_*
+ * scripts, and /arm/health (repo app.py) is not among them (404 on
+ * 2026-10-23; check GET /openapi.json on the Pi before relying on a route).
+ * Reading /servos touches the serial bus, which is why it is here (a 30 s
+ * browser poll) and not in the layout load. It fails soft too: a 503 while
+ * the follower is disconnected just means no servo row.
  */
 import { error, json } from '@sveltejs/kit';
 import { connectDB, DeviceEvent } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
-import { robotArm, type ArmHealth, type ArmThermal } from '$lib/server/robot-arm-client';
+import { robotArm, robotArmFetch, type ArmThermal, type ServoState } from '$lib/server/robot-arm-client';
 import type { RequestHandler } from './$types';
 
 const ARM_DEVICE_ID = 'robot-arm-pi';
@@ -78,10 +81,11 @@ export const GET: RequestHandler = async ({ locals }) => {
 	const headers = { 'Cache-Control': 'no-store' };
 	const [thermalResult, healthResult] = await Promise.allSettled([
 		robotArm.getThermal({ timeoutMs: 3000 }),
-		robotArm.getHealth({ timeoutMs: 4000 })
+		robotArmFetch<ServoState[]>('/servos', { timeoutMs: 4000 })
 	]);
 
-	const servos: ArmHealth | null = healthResult.status === 'fulfilled' ? healthResult.value : null;
+	const servos: ServoState[] | null =
+		healthResult.status === 'fulfilled' && Array.isArray(healthResult.value) ? healthResult.value : null;
 	const servosError =
 		healthResult.status === 'rejected'
 			? healthResult.reason instanceof Error

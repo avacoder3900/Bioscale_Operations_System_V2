@@ -17,11 +17,11 @@
 	 * switched between its saved networks and BIMS could only say "unreachable".
 	 *
 	 * Below those, on its own line, each follower servo's temperature from the
-	 * same poll (GET /arm/health on the Pi): one number per servo in id order,
-	 * amber at the Pi's warm threshold (48 °C), red at hot (55 °C; the STS3215
-	 * derates above ~60). Hover a number for that servo's load, voltage,
-	 * torque and flags. Added 2026-10-23 so motor heat is visible next to the
-	 * Pi's on every tab.
+	 * same poll (GET /servos on the Pi): one number per servo in id order,
+	 * amber from 48 °C, red from 55 °C (the thresholds the repo's app.py uses
+	 * for /arm/health; the STS3215 derates above ~60). Hover a number for that
+	 * servo's name, load, voltage and torque. Added 2026-10-23 so motor heat
+	 * is visible next to the Pi's on every tab.
 	 *
 	 * Polls /api/robot-arm/thermal every 30 s while the tab is visible, and
 	 * once right away (the layout load deliberately does not read the servo
@@ -31,7 +31,7 @@
 	 * row renders nothing while the follower is disconnected.
 	 */
 	import { onMount } from 'svelte';
-	import type { ArmHealth, ArmThermal } from '$lib/server/robot-arm-client';
+	import type { ArmThermal, ServoState } from '$lib/server/robot-arm-client';
 
 	interface Props {
 		initial: ArmThermal | null;
@@ -44,7 +44,7 @@
 	let thermal = $state<ArmThermal | null>(initial);
 	let installed = $state(initial !== null);
 	let failures = $state(0);
-	let servos = $state<ArmHealth | null>(null);
+	let servos = $state<ServoState[] | null>(null);
 	let servoFailures = $state(0);
 
 	const FLAG_TEXT: Record<string, string> = {
@@ -120,11 +120,12 @@
 		return lines.filter(Boolean).join('\n');
 	});
 
-	// Servo temperatures, in servo-id order. Colour per servo against the Pi's
-	// own thresholds; the row's border follows the hottest one.
-	let joints = $derived([...(servos?.joints ?? [])].sort((a, b) => a.id - b.id));
-	let warmC = $derived(servos?.thresholds.temp_warm_c ?? 48);
-	let hotC = $derived(servos?.thresholds.temp_hot_c ?? 55);
+	// Servo temperatures, in servo-id order. Colour per servo; the row's border
+	// follows the hottest one. Thresholds match HEALTH_TEMP_WARM_C / _HOT_C in
+	// services/robot-arm/src/server/app.py.
+	let joints = $derived([...(servos ?? [])].sort((a, b) => a.id - b.id));
+	const warmC = 48;
+	const hotC = 55;
 	function servoColor(t: number): string {
 		return t >= hotC ? '#ef4444' : t >= warmC ? '#f59e0b' : 'var(--color-tron-text)';
 	}
@@ -133,26 +134,15 @@
 		return max >= hotC ? 'hot' : max >= warmC ? 'warm' : 'ok';
 	});
 	let servoRowColor = $derived(servoLevel === 'hot' ? '#ef4444' : servoLevel === 'warm' ? '#f59e0b' : 'var(--color-tron-text-secondary)');
-	const JOINT_FLAG_TEXT: Record<string, string> = {
-		hot: 'hot',
-		warm: 'warm',
-		high_load: 'high load',
-		undervolt: 'under-voltage',
-		overvolt: 'over-voltage',
-		torque_off: 'torque off'
-	};
-	function servoTitle(j: ArmHealth['joints'][number]): string {
-		const flags = j.flags.filter((f) => f !== 'torque_off').map((f) => JOINT_FLAG_TEXT[f] ?? f);
+	function servoTitle(j: ServoState): string {
+		const heat = j.temperature >= hotC ? ' (hot)' : j.temperature >= warmC ? ' (warm)' : '';
 		return [
-			`Servo ${j.id}: ${j.temperature} °C`,
-			`Load ${j.load}, ${j.voltage.toFixed(1)} V, torque ${j.torque ? 'on' : 'off'}`,
-			flags.length ? `Flags: ${flags.join(', ')}` : null
-		]
-			.filter(Boolean)
-			.join('\n');
+			`Servo ${j.id}${j.name ? ` ${j.name}` : ''}: ${j.temperature} °C${heat}`,
+			`Load ${j.load}, ${j.voltage.toFixed(1)} V, torque ${j.torque ? 'on' : 'off'}`
+		].join('\n');
 	}
 	let servoRowTitle = $derived(
-		`Follower servo temperatures, left to right = servo 1 … ${joints.length}. Warm ≥ ${warmC} °C, hot ≥ ${hotC} °C (the STS3215 derates above ~60 °C). Hover a number for that servo's load, voltage and flags.`
+		`Follower servo temperatures, left to right = servo 1 … ${joints.length}. Warm ≥ ${warmC} °C, hot ≥ ${hotC} °C (the STS3215 derates above ~60 °C). Hover a number for that servo's name, load and voltage.`
 	);
 
 	async function poll(): Promise<void> {
@@ -163,7 +153,7 @@
 				thermal: ArmThermal | null;
 				installed: boolean;
 				error: string | null;
-				servos?: ArmHealth | null;
+				servos?: ServoState[] | null;
 				servosError?: string | null;
 			};
 			installed = body.installed;
@@ -173,7 +163,7 @@
 			} else {
 				failures++;
 			}
-			if (body.servos && body.servos.joints?.length) {
+			if (body.servos?.length) {
 				servos = body.servos;
 				servoFailures = 0;
 			} else {
