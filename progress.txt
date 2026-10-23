@@ -2933,7 +2933,12 @@ camera-default, conditions "Shared office, blinds open, daylight through the win
 the 14 factory defaults as v4l2 reports them on arm-pi (auto_exposure 3, exposure_time_absolute 166, gain 64,
 white_balance_automatic 1, white_balance_temperature 4600, sharpness 50, gamma 300, contrast 50, saturation 64,
 brightness 0, hue 0, backlight_compensation 0, power_line_frequency 3, exposure_dynamic_framerate 0) with their
-ranges. Note: these are the sensor's defaults, not what auto exposure settled on under that light — UVC does not
+ranges.
+Deployment: production — via Vercel GitHub integration on the merge to master
+Source: branch feat/arm-vision-raw-frames @ commit cd3f6ecc, merged to master as 9e4229bc
+Retrieve this exact code: git checkout feat/arm-vision-raw-frames at commit cd3f6ecc
+What this deployment is for: Vision tab > Camera settings > Presets row, seeded with the camera-defaults preset.
+Note: these are the sensor's defaults, not what auto exposure settled on under that light — UVC does not
 report the live auto value, so a tuned manual preset for that room is still to be saved from the panel.
 
 ================================================================================
