@@ -2977,7 +2977,7 @@ BIMS:
 - CAMERA_STREAMING_HANDOFF.md: section for Sam on the depth.py changes (Sam owns depth/calibration).
 npm run check: 13 errors / 432 warnings, none in touched files (baseline 13).
 Deployment: production — via Vercel GitHub integration on the merge to master
-Source: branch feat/arm-vision-raw-frames @ commit 641ea926
+Source: branch feat/arm-vision-raw-frames @ commit 641ea926, merged to master as 813d6b02 (Alejandro: "Can you just push it")
 Retrieve this exact code: git checkout feat/arm-vision-raw-frames at commit 641ea926
   (or: git log feat/arm-vision-raw-frames --oneline to find it if the branch has since moved on)
 What this deployment is for: Vision tab > Camera settings + Depth stream panels, Live Tags frames/jitter; the Pi side
