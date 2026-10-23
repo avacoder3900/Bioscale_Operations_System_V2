@@ -37,7 +37,9 @@ import {
 } from '$lib/robot-arm/apriltags';
 import {
 	assessHome,
+	aimWithCarry,
 	baseOutOfRange,
+	carryAfterPass,
 	chunkJogPlan,
 	degToSteps,
 	planJogDeltas,
@@ -50,6 +52,7 @@ import {
 	HOME_SERVO_IDS,
 	HOME_STEP_TOLERANCE,
 	LIFT_SERVO_ID,
+	CLAW_CLOSE_TOLERANCE,
 	CLAW_STALL_STEPS,
 	MAX_JOG_STEPS,
 	type BaseOutOfRange,
@@ -959,11 +962,20 @@ export async function returnToHome(
 	 * Jog `sids` to home: ≤300-step chunks, settle, re-read, correct — as many
 	 * passes as it takes (no jog limit). Only this request's time slice (or
 	 * Stop) ends it; the browser's next attempt carries on from there.
+	 * A joint that stalls short of home (2026-10-23: the base rested 39 steps
+	 * short of its goal, pass after pass) is aimed PAST home by what it keeps
+	 * falling short by (carryAfterPass, capped) — the droop trim's remedy.
+	 * The carry lives for this attempt only; the next attempt starts fresh.
 	 */
+	const carry: Record<string, number> = {};
 	const phase = async (sids: readonly number[]) => {
 		while (!budgetHit && !stopped) {
-			const chunks = chunkJogPlan(planJogDeltas(current, target, HOME_STEP_TOLERANCE, sids));
+			// Which joints still need to move is judged against HOME; where they are sent is home + carry.
+			const need = planJogDeltas(current, target, HOME_STEP_TOLERANCE, sids).map((p) => p.sid);
+			if (!need.length) return;
+			const chunks = chunkJogPlan(planJogDeltas(current, aimWithCarry(target, carry), 0, need));
 			if (!chunks.length) return;
+			const prev = current;
 			for (const c of chunks) {
 				if (outOfTime()) {
 					budgetHit = true;
@@ -973,6 +985,7 @@ export async function returnToHome(
 				await jog(c.sid, c.delta);
 			}
 			await settle();
+			Object.assign(carry, carryAfterPass(prev, current, target, carry, { sids }));
 		}
 	};
 
@@ -999,7 +1012,10 @@ export async function returnToHome(
 	let clawClosed: boolean | null = Number.isFinite(current[g]) ? false : null;
 	if (stopped) warnings.push('Stopped by you — the arm stays where it is; closing the mouth next.');
 	if (clawClosed === null) warnings.push('The claw (servo 6) did not report a position, so it was not closed.');
-	else if (!r.off.length && !stopped) {
+	// Close when every joint is home — or, from the second attempt on, when every joint is within
+	// CLAW_CLOSE_TOLERANCE: the server-side half of "close enough, close the claw" (2026-10-23), so a
+	// Vision tab still running the older loop also gets the mouth closed within ~25 s.
+	else if ((!r.off.length || (attempt >= 2 && r.max <= CLAW_CLOSE_TOLERANCE)) && !stopped) {
 		const c = await closeClawToStop(t0 + ATTEMPT_MOVE_BUDGET_MS);
 		jogs += c.jogs;
 		sent.set(GRIPPER_SERVO_ID, (sent.get(GRIPPER_SERVO_ID) ?? 0) + c.delta);

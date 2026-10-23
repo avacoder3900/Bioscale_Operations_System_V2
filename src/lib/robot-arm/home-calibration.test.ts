@@ -7,6 +7,9 @@ import {
 	planJogDeltas,
 	residuals,
 	shouldRetryHome,
+	carryAfterPass,
+	aimWithCarry,
+	MAX_CARRY_STEPS,
 	strainedJoints,
 	unsteadyJoints,
 	DEFAULT_HOMING,
@@ -41,6 +44,33 @@ describe('home sequence', () => {
 	it('servo B alone can be planned first', () => {
 		const cur = { ...home, '1': 2300, '2': 1100 };
 		expect(planJogDeltas(cur, home, HOME_STEP_TOLERANCE, [LIFT_SERVO_ID])).toEqual([{ sid: 2, delta: 400 }]);
+	});
+});
+
+describe('carryAfterPass / aimWithCarry (overshoot for a joint that stalls short)', () => {
+	const target = { '1': 1991, '2': 875, '3': 3015, '4': 897, '5': 446 };
+	it('a joint that did not move and is still off gets its residual carried; the aim moves past the target', () => {
+		const prev = { '1': 1952, '2': 875, '3': 3015, '4': 897, '5': 446 };
+		const cur = { '1': 1952, '2': 875, '3': 3015, '4': 897, '5': 446 };
+		const c1 = carryAfterPass(prev, cur, target, {});
+		expect(c1).toEqual({ '1': 39 });
+		expect(aimWithCarry(target, c1)['1']).toBe(2030);
+		// Still stuck next pass: the carry grows, up to the cap.
+		const c2 = carryAfterPass(cur, cur, target, c1);
+		expect(c2['1']).toBe(78);
+		let c = c2;
+		for (let i = 0; i < 10; i++) c = carryAfterPass(cur, cur, target, c);
+		expect(c['1']).toBe(MAX_CARRY_STEPS);
+	});
+	it('a joint that moved, or is within tolerance, keeps its carry', () => {
+		const prev = { '1': 1800, '2': 875, '3': 3015, '4': 897, '5': 446 };
+		const cur = { '1': 1952, '2': 880, '3': 3015, '4': 897, '5': 446 };
+		expect(carryAfterPass(prev, cur, target, { '1': 10 })).toEqual({ '1': 10 });
+	});
+	it('negative residuals carry negative; the aim never leaves the encoder range', () => {
+		const prev = { '1': 1991, '2': 900, '3': 3015, '4': 897, '5': 446 };
+		expect(carryAfterPass(prev, prev, target, {})).toEqual({ '2': -25 });
+		expect(aimWithCarry({ '1': 4090 }, { '1': 150 })['1']).toBe(4095);
 	});
 });
 

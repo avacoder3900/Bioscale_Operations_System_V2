@@ -23075,3 +23075,28 @@ BIMS's /api/robot-arm/torque POST therefore always took the plain `/torque true`
   Animate capture's holdArm likewise. The warning disappears on the next torque-on.
 Committed on master by path (two Pi files + this log); the main checkout has another session's uncommitted
 Live Tags / ARM-05 edits which are not mine. No npm run check needed (no TypeScript/Svelte touched).
+
+================================================================================
+2026-10-23 — master — Return to home: aim past a joint that stalls short (carry), and close the claw server-side from attempt 2
+================================================================================
+Alejandro: "It stalled for too long still." Audit rows (robot_arm.vision.return) for the 09:49 CDT run:
+five attempts of ~22 s, 32 jogs each; J2-J5 within 1-14 steps; J1 (base) at 1952 every attempt against a
+home of 1991 — 39 short — before AND after each attempt, in both the 09:36 and 09:49 runs. The jog loop
+sends goal = present + 39 = 1991 each pass; the servo settles at 1952 again (steady-state error under the
+base's load). Re-sending the same goal can never move it, so the loop ran out the 90 s. Two more things:
+the 09:45 production deploy of the 5 s rule was 4 min old, so the open Vision tab was still running the
+previous loop (the rule is browser-side; a tab reload picks up the new one), and 39 happened to sit just
+inside the 40-step tolerance, so with the new tab it would have stopped after attempt 1 anyway.
+  - home-calibration.ts: STUCK_STEPS = 6, MAX_CARRY_STEPS = 150; aimWithCarry(target, carry) and
+    carryAfterPass(prev, current, target, carry): a joint still off by > HOME_STEP_TOLERANCE that moved
+    < 6 steps in the last pass gets its residual added to a per-joint carry (capped ±150, ~13°, so a
+    joint against a real obstacle is not driven ever harder). 3 new tests (29 in the file).
+  - robot-arm-vision.ts returnToHome.phase: which joints still need to move is judged against home; where
+    they are SENT is home + carry (planJogDeltas with tolerance 0 on the needed joints). Carry is per
+    attempt. Expected on the base: pass 1 → 1952 (stuck) → carry 39 → pass 2 aims 2030 → lands ~1991.
+  - returnToHome step 4: the claw also closes in-attempt from attempt 2 on when every joint is within
+    CLAW_CLOSE_TOLERANCE (40) — the server-side half of yesterday's rule, so a stale tab (old loop) still
+    gets the mouth closed within ~25 s.
+Not hardware-verified yet: next Return to home will show whether J1 lands (the audit row's after.J1).
+Checks: vitest home-calibration 29 passed; svelte-check 14 errors / 432 warnings (baseline).
+

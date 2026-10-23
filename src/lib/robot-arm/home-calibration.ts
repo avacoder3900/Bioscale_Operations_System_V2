@@ -63,6 +63,58 @@ export function planJogDeltas(
 export const MAX_JOG_STEPS = 300;
 
 /**
+ * Overshoot for a joint that stalls short of home (2026-10-23). Seen on the
+ * base (servo 1): told to go to 1991 it rests at 1952 every time — a 39-step
+ * steady-state error under load — and each new jog of +39 just re-sends the
+ * same goal, so 32 jogs per attempt moved it nothing. The remedy is the
+ * droop trim's: command PAST the target by what it keeps falling short by.
+ * After a pass, a joint that moved less than STUCK_STEPS and is still off
+ * gets its residual added to a per-joint carry (capped at MAX_CARRY_STEPS,
+ * ~13°, so a joint against a real obstacle is not driven ever harder);
+ * the next pass aims at target + carry.
+ */
+export const STUCK_STEPS = 6;
+export const MAX_CARRY_STEPS = 150;
+
+/** Target with each joint's carry added, clamped to the encoder range. */
+export function aimWithCarry(target: JointSteps, carry: Record<string, number>): JointSteps {
+	const out: JointSteps = {};
+	for (const [k, v] of Object.entries(target)) out[k] = Math.max(0, Math.min(4095, v + (carry[k] ?? 0)));
+	return out;
+}
+
+/**
+ * The carry for the next pass: for each home joint that is still off by more
+ * than `tolerance` and moved less than `stuckSteps` during the last pass,
+ * add its residual (target − current) to the carry, capped. Joints that
+ * moved, or that are within tolerance, keep their carry as it is.
+ */
+export function carryAfterPass(
+	prev: JointSteps,
+	current: JointSteps,
+	target: JointSteps,
+	carry: Record<string, number>,
+	o: { tolerance?: number; stuckSteps?: number; maxCarry?: number; sids?: readonly number[] } = {}
+): Record<string, number> {
+	const tol = o.tolerance ?? HOME_STEP_TOLERANCE;
+	const stuck = o.stuckSteps ?? STUCK_STEPS;
+	const cap = o.maxCarry ?? MAX_CARRY_STEPS;
+	const out = { ...carry };
+	for (const sid of o.sids ?? HOME_SERVO_IDS) {
+		const k = String(sid);
+		const cur = current[k];
+		const was = prev[k];
+		const tgt = target[k];
+		if (![cur, was, tgt].every(Number.isFinite)) continue;
+		const residual = Math.round(tgt - cur);
+		if (Math.abs(residual) <= tol) continue;
+		if (Math.abs(cur - was) >= stuck) continue;
+		out[k] = Math.max(-cap, Math.min(cap, (out[k] ?? 0) + residual));
+	}
+	return out;
+}
+
+/**
  * Claw closing: it is closed when a closing jog moves it less than this —
  * it has hit the cartridge-free stop. (There is no taught "closed" position.)
  */
