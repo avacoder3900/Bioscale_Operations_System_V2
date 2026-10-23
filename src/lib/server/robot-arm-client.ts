@@ -620,6 +620,23 @@ export const robotArm = {
 	getPose: () => robotArmFetch<ArmPose>('/pose'),
 	listServos: () => robotArmFetch<ServoState[]>('/servos'),
 	// sysfs + vcgencmd only; touches no bus. 404 until install_thermal_router.py has run on the Pi.
+	/**
+	 * listServos with one retry on a 5xx after a short pause. The Pi's
+	 * one-shot routes used to open the serial port concurrently (two GET
+	 * /servos in the same instant → pyserial "multiple access on port" → 500,
+	 * seen 2026-10-22 while capturing a pose reference during the editor's
+	 * poll). The Pi now serialises them (bus_lock.py); this covers a Pi
+	 * without that installed and any other one-off bus hiccup.
+	 */
+	listServosRetry: async (): Promise<ServoState[]> => {
+		try {
+			return await robotArm.listServos();
+		} catch (err) {
+			if (!/robot-arm 5\d\d/.test((err as Error).message ?? '')) throw err;
+			await new Promise((r) => setTimeout(r, 400));
+			return robotArm.listServos();
+		}
+	},
 	getThermal: (opts: { timeoutMs?: number } = {}) => robotArmFetch<ArmThermal>('/health/thermal', { timeoutMs: opts.timeoutMs ?? 3000 }),
 	jogCartesian: (body: {
 		dx_mm: number;

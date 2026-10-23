@@ -22894,3 +22894,29 @@ Retrieve this exact code: git checkout master at commit c4ab74f6
 What this deployment is for: no BIMS change — the commit adds the Pi's move.py + installer and this log.
   GitHub deployment 7264952767 success. (The push of this entry triggers one more docs-only deploy; not
   logged separately.)
+
+================================================================================
+2026-10-22 — master — arm-pi: one lock for the servo bus across the one-shot routes (fixes "GET /servos 500" while capturing a pose reference)
+================================================================================
+Alejandro, capturing a pose's camera reference: "the servos could not be read (GET /servos: robot-arm 500:
+Internal Server Error; GET /pose: 501 ...) — a reference needs the servos as well as the camera". Pi journal
+at 17:13:03: the Animate editor's 1.5 s GET /servos poll (one Vercel IP) and the capture's own GET /servos
+(another) hit the BusLinker in the same second; pyserial: "device reports readiness to read but returned no
+data (device disconnected or multiple access on port?)". Root cause: manual_control's one-shot routes each
+open/close the serial port with no lock, and FastAPI runs sync routes on a thread pool, so two at once
+open the same port and interleave packets. Sessions were never involved (_require_bus_free keeps them apart).
+  - services/robot-arm/src/server/bus_lock.py (new): BUS_LOCK (RLock), locked() decorator (idempotent),
+    wrap_module(mod, names); MANUAL_FUNCTIONS (set_torque, jog_joint, replay_preflight, read_servos) and
+    CALIBRATION_FUNCTIONS (capture, clear, status, capture_pose, delete_pose, clear_map, map_status).
+  - services/robot-arm/scripts/install_bus_lock.py (new): one idempotent edit to app.py after
+    `from src.server import manual_control as manual`: import bus_lock, wrap manual and calib. Backup
+    app.py.bak-bus-lock. The modules themselves are untouched.
+  - move.py: the move runs under BUS_LOCK too (import from bus_lock; install_bus_lock is a prerequisite).
+  - BIMS (belt and braces for a Pi without the lock): robotArm.listServosRetry — one retry 400 ms after a
+    5xx; used by robot-arm-vision.ts readServos and robot-arm-animation.ts readArm.
+  - On arm-pi: installed (app.py lines 56-58), app.py compiles, /sessions/active null → restart, health 200;
+    8 parallel GET /servos → all 200; 4 parallel GET /servos + POST /servos/2/move {position: present}
+    at once → all 200, delta 0; zero 500s in the log. The exact collision that failed the capture no longer
+    can: the poll and the capture's reads now queue.
+svelte-check 13 errors / 432 warnings (baseline). Committed by path only: another session is editing
+ARM-05 PRD / VisionLiveTracker / apriltags.ts in this checkout at the same time; those are not mine.

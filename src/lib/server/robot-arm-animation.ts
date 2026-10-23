@@ -136,7 +136,7 @@ function servoMessage(err: unknown): string {
 export async function readArm(): Promise<ArmNow> {
 	let servos: ServoState[];
 	try {
-		servos = await robotArm.listServos();
+		servos = await robotArm.listServosRetry();
 	} catch (err) {
 		throw new AnimateError(`Could not read the follower: ${servoMessage(err)}`, 502);
 	}

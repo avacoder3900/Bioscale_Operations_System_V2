@@ -475,7 +475,7 @@ function requireHomeJoints(steps: JointSteps): void {
 export async function readServos(): Promise<ServoRead> {
 	let servosErr: unknown;
 	try {
-		const list = await robotArm.listServos();
+		const list = await robotArm.listServosRetry();
 		if (!Array.isArray(list)) throw new Error('response was not a list');
 		const readings: ServoReading[] = list
 			.filter((s) => Number.isFinite(Number(s?.id)) && Number.isFinite(Number(s?.position)))

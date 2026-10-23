@@ -14,10 +14,12 @@ torque is enabled (the servo latches a stale goal otherwise), Goal_Speed
 only when asked. Refuses a goal further than MAX_MOVE_STEPS from the
 present position: a slider move is small; big moves are for replay.
 
-Installed on the Pi by scripts/install_move_router.py: it copies this file
-next to app.py and includes the router under require_api_key, with the
-same single-owner bus gate the jog route uses (`bus_free` is set by the
-installer's include line so this module does not import app.py).
+Installed on the Pi by scripts/install_move_router.py (after
+install_bus_lock.py: bus_lock.py must be next to app.py): it includes the
+router under require_api_key, with the same single-owner bus gate the jog
+route uses (`bus_free` is set by the installer's include line so this
+module does not import app.py). The move itself runs under BUS_LOCK, so it
+never opens the port while GET /servos or another one-shot route has it.
 
     curl -H "x-api-key: $KEY" -H 'content-type: application/json' \
          -d '{"position": 2048}' localhost:8000/servos/2/move
@@ -33,6 +35,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from src.hardware.dual_arm import JOINT_NAMES, NUM_MOTORS
+from src.server.bus_lock import BUS_LOCK
 from src.server.manual_control import _ROLES, _connected_arms
 
 router = APIRouter(tags=["servos"])
@@ -107,7 +110,8 @@ def move_servo(servo_id: int, body: MoveOneRequest) -> dict[str, Any]:
     if bus_free is not None:
         bus_free()
     try:
-        return move_joint(servo_id=servo_id, position=body.position, speed=body.speed, role=body.role)
+        with BUS_LOCK:
+            return move_joint(servo_id=servo_id, position=body.position, speed=body.speed, role=body.role)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
