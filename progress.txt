@@ -23294,3 +23294,4 @@ Deployment: production — via Vercel GitHub integration on the push to master
 Source: branch feat/arm-vision-raw-frames @ the commit titled "feat(robot-arm): ARM CONNECTION panel in the layout right rail above the camera, with Hide" (git log feat/arm-vision-raw-frames --oneline), cherry-picked onto master
 Retrieve this exact code: git checkout feat/arm-vision-raw-frames at that commit
 What this deployment is for: Robot Arm page right rail shows ARM CONNECTION above Arm Camera on every tab with a Hide/Show toggle; Control tab no longer carries its own copy.
+Master commit: ea4cae32 (cherry-pick of f845ebd2 on feat/arm-vision-raw-frames); production deploys from this push.
