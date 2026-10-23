@@ -23005,3 +23005,9 @@ Play's speed check (MAX_STEPS_PER_S) which is about path speed, not slider moves
 moves at the servo's full speed — that is the operator's call.
 Checks: vitest src/lib/robot-arm 8 files / 177 passed; svelte-check 14 errors / 432 warnings (baseline).
 
+
+Deployment: production — https://bioscale-operations-system-mongodb-q2t4ut9i5-brevitest.vercel.app
+Source: branch master @ commit 709609bc
+Retrieve this exact code: git checkout master at commit 709609bc
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: no step limit on live slider moves. GitHub deployment 7280534491 success.
