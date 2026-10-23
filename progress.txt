@@ -2907,6 +2907,22 @@ UI-only, no server change. npm run check: 11-error baseline (0 new in deck-calib
 Reaches operators only after the stale prod alias is promoted to master.
 
 ================================================================================
+2026-10-23 — feat/arm-vision-raw-frames — Animate: move-set "verified" circle showed green with zero camera references
+================================================================================
+Alejandro: the move sets at the bottom of the Animate page show green circles as if calibrated with the camera,
+but only two poses have references and no move set does. Checked the DB (robot_arm_pose_calibrations vs
+robot_arm_move_sets.keyframes): active references exist for exactly "1, Base Move Left" and "2, Shoulder Up"
+(camera external); every move set — demo, trial 2, trial 3, Cleanedup grab, trial 7, anihalf, telop3+anihalf —
+has 0/N referenced poses. Nothing was mislabelled in the data.
+Cause: the ◎ on a move-set/sequence row is the "Verified run" ACTION button, hard-coloured green, while the
+same ◎ in the pose list is a STATUS (green = reference, amber = stale). Same glyph, same colour, two meanings.
+The server would have refused the run anyway ("No step is verified").
+Fix (animate/+page.svelte): coverage(ms|sequence) counts keyframe poses with a reference for the chosen camera
+(and how many are stale); the button now reads "◎ ok/total", green only when every pose is covered, amber when
+some (or stale), muted and disabled when none, with a title that says what to capture. Sequences count across
+their move sets. npm run check: 13 errors / 432 warnings, none in touched files.
+
+================================================================================
 2026-10-23 — feat/arm-vision-raw-frames — Camera setting presets; first one = the camera's defaults, "Shared Office with Blinds Open"
 ================================================================================
 Alejandro, after the camera settings panel shipped: "keep track of the default values, and in the name mention

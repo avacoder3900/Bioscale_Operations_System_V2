@@ -54,6 +54,26 @@
 		saveChosenCamera(n);
 	}
 	const calFor = (poseId: string): PoseCalibrationSummary | null => poseCals.find((c) => c.poseId === poseId && c.cameraName === camera) ?? null;
+	/**
+	 * How many of a set's (or a sequence's) steps have a camera reference for
+	 * the chosen camera, and how many of those are stale. The Verified run
+	 * button is coloured by this, so a green circle on a row means "every step
+	 * is covered", not merely "you may press this" (2026-10-23: all rows read
+	 * green while no move set had a single reference).
+	 */
+	function coverage(ms: MoveSetSummary | null, sq: SequenceSummary | null): { ok: number; stale: number; total: number } {
+		const sets = ms ? [ms] : (sq?.items ?? []).map((i) => moveSetById.get(i.moveSetId)).filter((m): m is MoveSetSummary => !!m);
+		let ok = 0;
+		let stale = 0;
+		let total = 0;
+		for (const m of sets)
+			for (const k of m.keyframes) {
+				total++;
+				const c = calFor(k.poseId);
+				if (c) c.stale ? stale++ : ok++;
+			}
+		return { ok, stale, total };
+	}
 	// Home (Vision tab calibration) for the chosen camera, else any camera's: the editor's default reference marker.
 	const homeSteps = $derived((data.homeSteps ?? {}) as Record<string, (number | null)[]>);
 	const home = $derived(homeSteps[camera] ?? Object.values(homeSteps)[0] ?? null);
@@ -362,6 +382,8 @@
 					{#each rows as r (r._id)}
 						{@const ms = isSets ? (r as MoveSetSummary) : null}
 						{@const sq = isSets ? null : (r as SequenceSummary)}
+						{@const cov = coverage(ms, sq)}
+						{@const covColor = cov.total && cov.ok === cov.total ? '#4ade80' : cov.ok + cov.stale > 0 ? '#fbbf24' : 'var(--color-tron-text-secondary)'}
 						<li class="flex items-center gap-2 rounded px-1.5 py-1 text-sm">
 							<a href="/manufacturing/cart-mfg/robot-arm/animate/{isSets ? 'moveset' : 'sequence'}/{r._id}" class="min-w-0 flex-1 truncate" style="color: var(--color-tron-cyan)" title={r.name}>{friendlyName(r.name)}</a>
 							<span class="shrink-0 text-xs" style={muted}>
@@ -370,9 +392,12 @@
 							<button type="button" class="px-1 text-xs disabled:opacity-30" style="color: #fbbf24" title="Play on the arm"
 								disabled={blocked || !!heat?.tooHot.length || (ms ? !ms.keyframes.length : !sq!.items.length)}
 								onclick={() => play(isSets ? 'playMoveSet' : 'playSequence', r._id, r.name)}>▶</button>
-							<button type="button" class="px-1 text-xs disabled:opacity-30" style="color: #4ade80" title="Verified run: step by step, each verified pose checked with the camera ({camera || 'no camera'})"
-								disabled={blocked || !camera || !!heat?.tooHot.length || (ms ? !ms.keyframes.length : !sq!.items.length)}
-								onclick={() => verified(isSets ? 'move_set' : 'sequence', r._id, r.name)}>◎</button>
+							<button type="button" class="px-1 font-mono text-xs disabled:opacity-30" style="color: {covColor}"
+								title={cov.ok + cov.stale === 0
+									? `No pose in this ${isSets ? 'set' : 'sequence'} has a camera reference for ${camera || 'the camera'} — open a pose and capture one (camera card → Capture) before a verified run`
+									: `Verified run with ${camera}: ${cov.ok} of ${cov.total} poses have a reference${cov.stale ? `, ${cov.stale} stale (pose edited since; retake)` : ''}. Steps without one are played unchecked.`}
+								disabled={blocked || !camera || !!heat?.tooHot.length || cov.ok + cov.stale === 0}
+								onclick={() => verified(isSets ? 'move_set' : 'sequence', r._id, r.name)}>◎ {cov.ok}/{cov.total}</button>
 						</li>
 					{/each}
 				</ul>
