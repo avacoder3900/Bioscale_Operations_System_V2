@@ -10,6 +10,8 @@
 	import { invalidateAll } from '$app/navigation';
 	import VisionStage, { type StageTag } from '$lib/components/robot-arm/VisionStage.svelte';
 	import VisionLiveTracker from '$lib/components/robot-arm/VisionLiveTracker.svelte';
+	import CameraControlsPanel from '$lib/components/robot-arm/CameraControlsPanel.svelte';
+	import DepthStreamPanel from '$lib/components/robot-arm/DepthStreamPanel.svelte';
 	import VisionTagCalibrator from '$lib/components/robot-arm/VisionTagCalibrator.svelte';
 	import VisionTagRegistry from '$lib/components/robot-arm/VisionTagRegistry.svelte';
 	import { shouldRetryHome, stepsToDeg, HOME_LOOP_MS, HOME_STEP_TOLERANCE, MAX_JOG_STEPS } from '$lib/robot-arm/home-calibration';
@@ -444,6 +446,10 @@
 	</section>
 
 	<VisionLiveTracker {camera} {calibration} suspended={!!loop?.running} />
+
+	<CameraControlsPanel {camera} {armReachable} />
+
+	<DepthStreamPanel {armReachable} />
 
 	<VisionTagCalibrator {camera} {tags} {calibration} {blocked} {blockReason} />
 

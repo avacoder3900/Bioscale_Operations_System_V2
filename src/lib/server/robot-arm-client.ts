@@ -532,6 +532,8 @@ export interface AprilTagDetectRequest {
 	default_size_mm?: number | null;
 	include_frame?: boolean;
 	depth?: boolean;
+	/** Distinct consecutive frames to average each tag's corners over (1..10; the Pi's default is 1). */
+	frames?: number;
 }
 
 export interface AprilTagDetectResponse {
@@ -539,7 +541,13 @@ export interface AprilTagDetectResponse {
 	reason: string | null;
 	family?: string;
 	detector?: string;
+	/** Corner refinement in use: 'apriltag' (default since 2026-10-23), 'subpix' or 'none'. */
+	refine?: string;
+	upscale?: number;
 	frame?: { width: number; height: number };
+	/** 'raw' = detected on the sensor's own luma (cameras.current()); 'jpeg' = decoded from the snapshot route (older Pi). */
+	frame_source?: 'raw' | 'jpeg';
+	frames_used?: number;
 	intrinsics?: { fx: number; fy: number; cx: number; cy: number; dist?: number[]; source: 'realsense' | 'env' | 'nominal' };
 	tags: {
 		id: number;
@@ -555,10 +563,83 @@ export interface AprilTagDetectResponse {
 		pose: { t_mm: [number, number, number]; R: number[]; reproj_px: number; alt?: { t_mm: [number, number, number]; R: number[]; reproj_px: number } | null } | null;
 		depth_mm: number | null;
 		margin: number | null;
+		/** Frames (of frames_used) this tag was seen in; absent from a Pi before 2026-10-23. */
+		frames_seen?: number;
+		/** Mean standard deviation of the 8 corner coordinates across those frames, px; null with one frame. */
+		jitter_px?: number | null;
 	}[];
 	/** The exact JPEG the tags were found in, when include_frame was set. */
 	frame_jpeg_b64?: string;
 	elapsed_ms?: number;
+}
+
+// UVC camera controls, mirroring robot-arm/src/server/camera_controls.py.
+// Every range here is what the camera itself reports through v4l2-ctl; BIMS
+// never invents a limit.
+export interface CameraControl {
+	/** v4l2 control name, e.g. exposure_time_absolute. */
+	id: string;
+	type: 'int' | 'bool' | 'menu';
+	min: number | null;
+	max: number | null;
+	step: number | null;
+	default: number | null;
+	value: number | null;
+	/** Menu label of the current value, when the control is a menu. */
+	value_label: string | null;
+	/** v4l2 flags, e.g. 'inactive' while an auto switch gates this control. */
+	flags: string[];
+	/** Menu index → label, for menu controls. */
+	menu: Record<string, string> | null;
+	/** Unit of the raw value ('x100 us', 'K', ...) or ''. */
+	unit: string;
+	hint: string;
+}
+
+export interface CameraControlsResponse {
+	available: boolean;
+	reason: string | null;
+	camera: string;
+	device: string | null;
+	source: string;
+	controls: CameraControl[];
+	/** The set re-applied by the Pi on every device open (calibrations/camera_controls.json). */
+	saved: Record<string, number>;
+	saved_file: string;
+	applied?: string[];
+	rejected?: Record<string, string>;
+}
+
+// Depth stream mode, mirroring depth.py GET/POST /depth/config (2026-10-23).
+export interface DepthStreamStatus {
+	device: string | null;
+	running: boolean;
+	mode: string;
+	width: number;
+	height: number;
+	fps: number;
+	measured_fps: number | null;
+	frame_bytes: number;
+	frames: number;
+	last_frame_age_s: number | null;
+	stale: boolean;
+	child_pid: number | null;
+	/** The v4l2-ctl reader child's CPU since the previous status read, % of one core. */
+	child_cpu_pct: number | null;
+	error: string | null;
+}
+
+export interface DepthConfig {
+	mode: '480p' | '720p';
+	width: number;
+	height: number;
+	fps: number;
+	modes: Record<string, [number, number]>;
+	fps_choices: number[];
+	persisted: boolean;
+	file: string;
+	status: DepthStreamStatus;
+	changed?: boolean;
 }
 
 /**
@@ -872,5 +953,28 @@ export const robotArm = {
 		robotArmFetch<{ stream_token?: string; stream_token_expires_in_s?: number }>(
 			'/cameras/auth',
 			{ method: 'POST', timeoutMs: 4000 }
-		)
+		),
+
+	// --- Camera controls + depth stream mode (2026-10-23) -------------------
+	//
+	// camera_controls.py and the depth.py config routes are installed by
+	// scripts/install_vision_quality.py. A Pi without them answers 404, which
+	// the BIMS routes turn into `installed: false` rather than an error.
+	getCameraControls: (name: string) =>
+		robotArmFetch<CameraControlsResponse>(`/cameras/${encodeURIComponent(name)}/controls`, { timeoutMs: 6000 }),
+	setCameraControls: (name: string, set: Record<string, number>, persist = true) =>
+		robotArmFetch<CameraControlsResponse>(`/cameras/${encodeURIComponent(name)}/controls`, {
+			method: 'POST',
+			body: { set, persist },
+			timeoutMs: 8000
+		}),
+	resetCameraControls: (name: string, persist = true) =>
+		robotArmFetch<CameraControlsResponse>(`/cameras/${encodeURIComponent(name)}/controls/reset`, {
+			method: 'POST',
+			body: { persist },
+			timeoutMs: 8000
+		}),
+	getDepthConfig: () => robotArmFetch<DepthConfig>('/depth/config', { timeoutMs: 4000 }),
+	setDepthConfig: (body: { mode?: '480p' | '720p'; fps?: number; persist?: boolean }) =>
+		robotArmFetch<DepthConfig>('/depth/config', { method: 'POST', body, timeoutMs: 8000 })
 };

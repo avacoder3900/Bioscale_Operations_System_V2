@@ -83,6 +83,10 @@ export interface TagDetection {
 	sizeMm: number | null;
 	pose: TagPose | null;
 	depthMm: number | null;
+	/** Mean std of the 8 corner coordinates over the frames averaged on the Pi, px (null with one frame or an older Pi). */
+	jitterPx?: number | null;
+	/** Frames this tag was seen in, of those the Pi averaged. */
+	framesSeen?: number | null;
 }
 
 /** One registered tag as stored in a calibration. */
