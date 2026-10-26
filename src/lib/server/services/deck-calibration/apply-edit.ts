@@ -84,7 +84,19 @@ const DECK_FLOOR_Z = 0;
  * hole to a Z the operator did not ask for is how a tip ends up somewhere nobody
  * predicted.
  */
-function belowDeckFloor(after: Vec3, def: any): string | null {
+export function belowDeckFloor(after: Vec3, def: any): string | null {
+	// X/Y below 0 is not a position the robot can disagree with — it is a
+	// definition it refuses to load at all. Opentrons' labware schema requires
+	// 0 ≤ x and 0 ≤ y, and the upload bundles the WHOLE library, so one hole at
+	// y = -0.5 on one deck failed every protocol upload on every robot
+	// (2026-10-26 ~19:49Z: deck-004 A-row shifted -1 Y; B07 and R04 could not
+	// start until it was restored). Refuse the edit, name the hole, keep the
+	// rest of the selection untouched (the batch callers are all-or-nothing).
+	for (const k of ['x', 'y'] as const) {
+		if (after[k] < 0) {
+			return `${k} ${after[k].toFixed(2)}mm is below 0 — the robot rejects the whole labware definition at upload ("could not be read as a labware definition"), which blocks every start on every robot. Move the group by less, or re-teach from a hole further from the edge.`;
+		}
+	}
 	if (!(after.z < DECK_FLOOR_Z)) return null;
 	const h = Number(def?.definition?.dimensions?.zDimension);
 	const deck = Number.isFinite(h) && h > 0 ? `${h}mm-tall deck` : 'deck';
