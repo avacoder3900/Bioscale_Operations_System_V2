@@ -20,6 +20,7 @@
 import { json, error } from '@sveltejs/kit';
 import { requireAgentApiKey } from '$lib/server/api-auth';
 import { connectDB, ScannerEvent } from '$lib/server/db';
+import { sampleHeartbeatLink } from '$lib/server/services/robot-link/heartbeat-sample';
 import type { RequestHandler } from './$types';
 
 const VALID_TYPES = new Set(['scan', 'heartbeat', 'error', 'trigger_consumed']);
@@ -54,19 +55,29 @@ export const POST: RequestHandler = async ({ request }) => {
 	// ever read the latest heartbeat per device, so the shape is unchanged.
 	if (eventType === 'heartbeat') {
 		const hbId = `hb:${deviceId}`;
-		await ScannerEvent.updateOne(
+		const metadata = body?.metadata && typeof body.metadata === 'object' ? body.metadata : undefined;
+		// Same one-doc upsert; findOneAndUpdate (new:false) hands back the doc it
+		// replaced so the heartbeat age at receipt costs no extra read.
+		const prev = (await ScannerEvent.findOneAndUpdate(
 			{ _id: hbId },
 			{
 				$set: {
 					deviceId,
 					eventType: 'heartbeat',
 					source,
-					metadata: body?.metadata && typeof body.metadata === 'object' ? body.metadata : undefined,
+					metadata,
 					receivedAt: now
 				}
 			},
-			{ upsert: true }
-		);
+			{ upsert: true, new: false, projection: { receivedAt: 1 } }
+		).lean()) as { receivedAt?: Date } | null;
+		const prevReceivedAt = prev?.receivedAt ? new Date(prev.receivedAt) : null;
+
+		// OT2-LOG-1 L2a: ≤ 1 connectivity sample per minute from metadata.link.
+		// Never fails the heartbeat (the sampler catches its own errors).
+		const { sampled, ageMs } = await sampleHeartbeatLink({ deviceId, metadata, now, prevReceivedAt });
+		console.log('[robot-link] hb', JSON.stringify({ deviceId, ageMs, sampled }));
+
 		return json({ success: true, eventId: hbId, receivedAt: now });
 	}
 

@@ -127,6 +127,8 @@ export { ManufacturingMaterialTransaction } from './manufacturing-material-trans
 export { DeviceLog } from './device-log.js';
 export { DeviceCrash } from './device-crash.js';
 export { WebhookLog } from './webhook-log.js';
+export { RobotLinkSample } from './robot-link-sample.js';
+export { RobotLinkDaily } from './robot-link-daily.js';
 
 // CV / Computer Vision
 export { CvProject } from './cv-project.js';

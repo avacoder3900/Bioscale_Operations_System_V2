@@ -54,6 +54,12 @@ export const POST: RequestHandler = async ({ request }) => {
 		{ $set: { status: 'expired', error: 'Not claimed by bridge daemon within ttlMs', completedAt: now } }
 	);
 
+	// OT2-LOG-1 L2c: one structured line per poll — how long the daemon was
+	// held and whether a command went out. Logging only.
+	const pollStartedAt = Date.now();
+	const logPoll = (delivered: boolean) =>
+		console.log('[robot-link] poll', JSON.stringify({ deviceId, waitedMs: Date.now() - pollStartedAt, delivered }));
+
 	const deadline = Date.now() + waitMs;
 	do {
 		const doc = await Ot2BridgeCommand.findOneAndUpdate(
@@ -63,6 +69,7 @@ export const POST: RequestHandler = async ({ request }) => {
 		).lean() as any;
 
 		if (doc) {
+			logPoll(true);
 			return json({
 				success: true,
 				command: JSON.parse(JSON.stringify({
@@ -77,5 +84,6 @@ export const POST: RequestHandler = async ({ request }) => {
 		await sleep(RECHECK_MS);
 	} while (Date.now() < deadline);
 
+	logPoll(false);
 	return json({ success: true, command: null });
 };
