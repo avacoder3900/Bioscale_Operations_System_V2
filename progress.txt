@@ -23599,3 +23599,11 @@ AGENTS.md; CLAUDE.md pitfalls +3. scripts/imac-linkmon.py + scripts/launchd/com.
 No Pi change yet (daemon telemetry L3 in progress). npm run check: 16 errors / 432 warnings
 (baseline 16); vitest src/lib/opentrons 239/239, src/lib/server/opentrons +
 services/deck-calibration 128/128.
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app (GitHub integration, master fast-forwarded)
+Source: branch feat/ot2-wired-1 @ commit 427debc3 (code) — this progress commit is the deploy commit
+Retrieve this exact code: git checkout feat/ot2-wired-1 at commit 427debc3
+What this deployment is for: CALIB-5 per-robot rack offsets live (R04 tip-rack offset injected at its
+next wax start; Studio per-robot rack panel), health pill from live heartbeat, background-tab cadence,
+docs/agent set. Pushed at Jacob's request 2026-10-26 ~20:30Z ("push through all these changes") while
+B07 and R04 were idle. Rollback: git revert the merge range or redeploy 0d7b7d44; offsets default to 0.
