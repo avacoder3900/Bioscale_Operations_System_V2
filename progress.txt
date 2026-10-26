@@ -23550,3 +23550,23 @@ Tests: unthrottled-timer.test.ts (4, fallback contract); test:unit 563 pass / 2 
 @audio/* packages locally, fails on master too). npm run check 16 = baseline. Not committed.
 Note: the uncommitted fix/robot-pages-heartbeat-health work (+ the 10-13 ops progress entries) is parked in
 git stash@{0} ("wip: fix/robot-pages-heartbeat-health") — pop it on that branch before continuing there.
+
+================================================================================
+2026-10-26 — feat/ot2-wired-1 — OT2-WIRED-1 plan + CALIB-5 PRD; merged the two 2026-10-14 fixes (heartbeat health pill, background-tab cadence)
+================================================================================
+Docs: docs/prds/OT2-WIRED-1-PLAN.md (wired-first connectivity via the lab iMac as gateway, connection
+logging with 50 d retention and no alerts, honest-path code changes, per-robot rack offsets, agent docs)
+and docs/prds/CALIB-5-PER-ROBOT-RACK-OFFSETS.md (robot x rack definition x slot offsets applied as
+protocol RTPs -> set_offset in the fill and as maintenance-run labware_offsets in the Studio; migration
+table for today's shared-definition edits). Both approved by Jacob in chat 2026-10-26.
+Merges: origin/fix/robot-pages-heartbeat-health (3ac02588) and origin/fix/run-page-background-tab
+(5b1ed789) onto master @ 0d7b7d44. Conflicts: progress.txt (both entries kept) and one hunk in
+src/lib/components/manufacturing/EmbeddedRunController.svelte where TAILNET-6 S5's post-terminal poll
+counter met the branch's pollInFlight flag — resolved by keeping both (count post-terminal polls, then
+clear pollInFlight, then schedulePoll()).
+Root-cause context for CALIB-5: 2026-10-26 16:04:54Z +2/+5 on cosmasanddamian_96_tiprack_20ul (R04
+selected) reached B07 by run_start_auto_resync at 16:34 and broke B07's rack pick-ups (first probe
+"X limit switch not reached within 5mm" on E1, F1; hand-seated tips). Rack definitions are shared
+across robots; the Studio's robotId on the edit is audit-only.
+No Pi change. npm run check: 16 errors / 432 warnings, none in touched files (baseline 16 on
+origin/master 0d7b7d44). Unit tests src/lib/opentrons: 9 files, 233 passed.
