@@ -23570,3 +23570,32 @@ selected) reached B07 by run_start_auto_resync at 16:34 and broke B07's rack pic
 across robots; the Studio's robotId on the edit is audit-only.
 No Pi change. npm run check: 16 errors / 432 warnings, none in touched files (baseline 16 on
 origin/master 0d7b7d44). Unit tests src/lib/opentrons: 9 files, 233 passed.
+
+================================================================================
+2026-10-26 — feat/ot2-wired-1 — CALIB-5 built (S1–S5) and migration applied; OT2-LOG-1 PRD; docs/agent set
+================================================================================
+CALIB-5 per-robot rack offsets: model robot_labware_offsets (robot x definition URI x slot,
+capped history), service rack-offsets.ts (get/list/save/revert + rackOffsetRtpValues), RTPs
+tiprack_offset_x/y/z + tuberack_offset_x/y/z injected at startPrepare next to the calibrator RTPs
+and recorded on OpentronsRunRecord.labwareOffsets; both .py files declare the six RTPs and pass
+them to set_offset() for slots 10/11 (engine-runner verified: run-level offsets equal the RTPs;
+defaults 0 = unchanged); Studio applies the robot's offset to maintenance-run loads/pick-ups on
+both lines, kind=tip follows the tip profile's rack, rack Apply/Shift/Set write the robot's row
+(shared definition refused for racks), offset panel + revert.
+PRODUCTION DATA (2026-10-26 ~20:20Z, scripts/migrate-rack-offsets.ts --apply): shared
+cosmas_and_damian_drybath_tuberack restored to the 2026-10-14 geometry (A1 36.5/73/67.25) from
+the 19:22Z -3/0/+2 edit; R04 offset on cosmasanddamian_96_tiprack_20ul = (+2, +4, 0) (its
+working state today); B07 drybath row 0 with the note. scripts/refresh-stored-protocols.ts
+--apply (~20:35Z): opentrons_protocols.fileContent for wax (54ba0c8b -> 7285a094) and reagent
+(cfa0637f -> 88ada0ab) now carry the CALIB-5 .py; robots pick it up at the next auto re-sync
+(wax: the drybath wells changed, so every robot's next wax start) or Sync (reagent).
+Root cause recorded in docs/prds/CALIB-5-PER-ROBOT-RACK-OFFSETS.md §1 (shared rack definitions;
+R04's +2/+5 reached B07 by run_start_auto_resync at 16:34Z).
+Docs: docs/prds/OT2-LOG-1-CONNECTION-JOURNAL.md (logging design, 50 d, no alerts);
+docs/agent/{README,SYSTEM-MAP,CONNECTION-ARCHITECTURE,INVARIANTS,RUNBOOK-CONNECTIVITY-TRIAGE,
+RUNBOOK-CALIBRATION-AND-RACK-DRIFT,DATA-DICTIONARY,DECISIONS,IMPROVEMENT-LOOP}.md linked from
+AGENTS.md; CLAUDE.md pitfalls +3. scripts/imac-linkmon.py + scripts/launchd/com.bims.linkmon.plist
+(OT2-LOG-1 L4, not yet installed: needs the ingest route deployed).
+No Pi change yet (daemon telemetry L3 in progress). npm run check: 16 errors / 432 warnings
+(baseline 16); vitest src/lib/opentrons 239/239, src/lib/server/opentrons +
+services/deck-calibration 128/128.

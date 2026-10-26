@@ -1,0 +1,13 @@
+# Runbook — connectivity triage (read-only until step 6)
+
+All robot reads use header `Opentrons-Version: 3` on port 31950. Addresses: SYSTEM-MAP.md. Times are UTC.
+
+1. **Is the robot up at all?** `curl -s -m 6 -H 'Opentrons-Version: 3' http://<ip>:31950/health` over each path you can reach (wired from the iMac, WiFi/LAN, tailnet). A path that answers in < 150 ms is fine; > 1 s or timeouts on one path only = that path.
+2. **What is it doing?** `GET /runs` (last entries: status, createdAt, completedAt, `current`), `GET /maintenance_runs/current_run` (a Studio session holds one; `idle` + labware = someone is in the Studio). Do not stop or home anything the operator did not ask for.
+3. **Which interface, which route?** `GET /networking/status` (wlan0/eth0 state, ipAddress, gateway). Over SSH (read-only): `ip route show`, `nmcli -t -f NAME,DEVICE,STATE con show`, `/data/tailscale/tailscale status --json` (Self.Relay empty = direct; a DERP name = relayed), `journalctl -u ot2-bridge -p warning -n 20 --no-pager`.
+4. **History.** `robot_link_samples` (MCP "Robot link samples", filter robotId + at__gte): heartbeat gaps, loss per path, relay minutes, daemon version. Before OT2-LOG-1 landed: `scripts`-style ad-hoc monitor (`ping -c 10 -i 0.5` per path + `/health` timing → CSV) from the iMac.
+5. **BIMS side.** MCP "Recent Audit Entries" with `parameters` `{action, changedAt__gte}`: `bridge_job_result` (ok/error per daemon job, line), `start_intent_cleared`, `force_reset_to_idle`, `restart_robot_server`, `run_start_auto_resync`. `ot2_direct_calls` (3 d) for the browser line's latencies and errors. The heartbeat doc `scanner_events` `hb:<deviceId>` has `receivedAt` + `metadata.link`.
+6. **Act, in this order, and say what you are doing.** (a) nothing on a robot mid-run; (b) a stuck idle run: stop via `POST /runs/<id>/actions {"data":{"actionType":"stop"}}` then home all axes through a maintenance run (`POST /maintenance_runs`, `POST …/commands?waitUntilComplete=true {"data":{"commandType":"home","params":{"axes":[…]}}}`, `DELETE …`); (c) daemon restart over SSH: `systemctl restart ot2-bridge` between runs; (d) network profile changes (`nmcli con up wired` / `wired-linklocal`) only with the operator aware, one robot at a time, verify `/networking/status` + heartbeat after each.
+7. **Record.** Add the incident to `progress.txt` with the chain of timestamps; if a definition, fixture or offset turned out to be involved, open the calibration runbook.
+
+Known false positives: "did not come back after restart" (90 s wait vs 2–3 min boot); "offline" during a protocol upload/analysis on a Pi 3; relay fallback for a minute after a path change.

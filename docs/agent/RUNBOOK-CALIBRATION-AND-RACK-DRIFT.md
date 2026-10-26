@@ -1,0 +1,15 @@
+# Runbook — "the tip lands off" / "NO TIP DETECTED" / Studio and fill disagree
+
+Work from the robot's own record of what it ran; never from what the UI shows. Times UTC.
+
+1. **What geometry did the run actually carry?** For the current run: `GET /runs/<id>/loaded_labware_definitions` (A1 of the deck, the tip rack, the tube rack). For any upload: `GET /protocols/<id>/analyses/<aid>` → every `loadLabware` command's `result.definition`. Compare uploads over time (`GET /protocols` lists createdAt) to see *when* a rack or deck moved.
+2. **What did the probe say?** `GET /runs/<id>/commands?cursor=0&pageLength=600` (and `cursor=600`): comments `Offset calibration: x=.. y=..` (bend string), `pickUpTip <well>`, `NO TIP DETECTED (attempt n: X limit switch not reached within 5mm)`, `Tip calibration OK: adjust x=.. y=..`, `REJECTED (adjust … exceeds max_tip_adjust)`, `TIP SWAP`. Compare the adjust with the robot's normal band (SYSTEM-MAP). A first probe that misses after a *rack* pick-up and passes after a hand-seated tip = the rack is in the wrong place, not the deck.
+3. **Who moved what?** MCP "Recent Audit Entries": `deck_calibration_edit_batch` (recordId = load name, delta, wells, robotId — note robotId is only a label for shared racks), `save_calibrator` (fixture position / probe Z), `save_rack_offset` / `revert_rack_offset` (CALIB-5), `run_start_auto_resync` (its `reason` names the labware whose bundled A1 ≠ current). Line the timestamps up against the uploads from step 1.
+4. **Decide which frame is wrong.**
+   - Studio "Move to hole" perfect, pick-up or fill off → different rack definitions (dropdown vs tip profile) or a rack edit that reached the robot (INVARIANTS 1, 4).
+   - Studio with "Calibrate tip" matches the fill; Studio without it does not → the deck is tip-neutral and fine; teach only with the probe active (INVARIANTS 5).
+   - adjust far outside the band on a fresh tip, or missing switches at the fixture → fixture moved / probe Z wrong (`tip_calibrator_fixtures`, `save_calibrator` history), or `cal_x/cal_y` fell back to defaults because the fixture row holds 0.
+   - every hole off by a constant on one robot only → per-robot rack offset (racks) or that deck's definition (decks), never the shared rack definition.
+5. **Fix in the right place.** Racks: `robot_labware_offsets` for that robot (Studio kind=tip/tube "Apply offset", or `saveRackOffset`). Decks: the deck's own definition in the Studio with Calibrate tip active, then let the next run start re-sync. Fixture: Studio calibrator panel (approach Z vs probe Z are different fields). Protocol: refresh `opentrons_protocols.fileContent` (`scripts/refresh-stored-protocols.ts`) then Sync.
+6. **Verify like the fill does.** Studio: Calibrate tip → Move to hole on a wax hole (e.g. X2) → look → Capture. Or the protocol's `run_calibration_check` RTP. Then one real run and read step 2 again.
+7. **Record** the before/after geometry (A1 values) and the adjust band in `progress.txt`; update SYSTEM-MAP if a "normal" number changed.

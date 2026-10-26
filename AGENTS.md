@@ -60,6 +60,8 @@ All planning docs are in `docs/migration/`:
 - `prds/` — 11 domain PRDs with stories and acceptance criteria
 - `HANDOFF-V2-REWRITE.md` — v2 design decisions from Jacob
 
+Robot side (OT-2 fills, daemon, Studio, connectivity): start at `docs/agent/README.md` — system map, invariants, triage runbooks, data dictionary, decision log, improvement loop. Read `docs/agent/INVARIANTS.md` before touching labware definitions, calibration, run start, the daemon or the Studio.
+
 ## Testing
 - Contract tests: `npm run test:contracts` (84 tests, database-agnostic HTTP-level)
 - Tests hit the running app via fetch — no DB imports
