@@ -118,11 +118,32 @@ def sample_robot(robot):
     }
 
 
+def _ssl_context():
+    """python.org builds on macOS ship without a CA bundle; fall back to the system file."""
+    import ssl
+    ctx = ssl.create_default_context()
+    try:
+        ctx.load_default_certs()
+    except Exception:
+        pass
+    if not ctx.get_ca_certs():
+        for cafile in ('/etc/ssl/cert.pem', '/private/etc/ssl/cert.pem'):
+            if os.path.exists(cafile):
+                return ssl.create_default_context(cafile=cafile)
+    return ctx
+
+
+_SSL = None
+
+
 def post_samples(cfg, samples):
+    global _SSL
+    if _SSL is None:
+        _SSL = _ssl_context()
     body = json.dumps({'samples': samples}).encode()
     req = urllib.request.Request(cfg['BIMS_BASE_URL'].rstrip('/') + '/api/agent/robot-link/samples', data=body,
                                  headers={'Content-Type': 'application/json', 'x-api-key': cfg['AGENT_API_KEY']}, method='POST')
-    with urllib.request.urlopen(req, timeout=20) as resp:
+    with urllib.request.urlopen(req, timeout=20, context=_SSL) as resp:
         return json.loads(resp.read() or b'{}')
 
 
